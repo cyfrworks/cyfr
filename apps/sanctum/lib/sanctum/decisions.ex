@@ -27,6 +27,16 @@ defmodule Sanctum.Decisions do
   for an overload the writer cap refused), not a log line alone. Audit is
   not a reaction, so none of these reaches the bus.
 
+  ## What is stored
+
+  Every text a decision and its request-log row store passes through
+  `Prima.Sanitizer` here, at the one place both are written: the
+  operation's name and action, the refusal's sentence, a failure's text,
+  and the row's input and output (`Sanctum.RequestLog`). A credential a
+  caller put in an action's name, or that a sentence quotes, is stored as
+  the placeholder in both, so the row and its decision agree; the refusal
+  a caller is answered is its own and unchanged.
+
   ## Unknown outcomes
 
   A decision with no completion has an unknown outcome, never a success:
@@ -120,10 +130,13 @@ defmodule Sanctum.Decisions do
   An operation name as a decision stores it: a name that is not a string
   names nothing, and the columns hold 255 characters on PostgreSQL, so a
   longer name — a guest's own — is cut rather than costing the record.
+  It is sanitized before it is cut, so no cut leaves part of a
+  credential the whole would have redacted.
   """
   @spec bounded(term()) :: String.t() | nil
   def bounded(value) when is_binary(value),
-    do: value |> String.codepoints() |> Enum.take(255) |> Enum.join()
+    do:
+      value |> Prima.Sanitizer.sanitize() |> String.codepoints() |> Enum.take(255) |> Enum.join()
 
   def bounded(_value), do: nil
 
@@ -171,6 +184,7 @@ defmodule Sanctum.Decisions do
 
   def open(ctx, %Decision{} = decision, projection)
       when (is_nil(ctx) or is_struct(ctx, Context)) and is_map(projection) do
+    decision = stored(decision)
     appended = append(ctx, decision, projection)
     emit(decision)
 
@@ -291,7 +305,7 @@ defmodule Sanctum.Decisions do
         _class -> :failed
       end
 
-    text = Map.get(completion, :error_text) || refusal.message
+    text = Prima.Sanitizer.sanitize(Map.get(completion, :error_text) || refusal.message)
     {record(outcome, refusal.class, completion), {:error, text}}
   end
 
@@ -300,6 +314,17 @@ defmodule Sanctum.Decisions do
       completion: outcome,
       completion_class: class,
       duration_ms: Map.get(completion, :duration_ms)
+    }
+  end
+
+  # The decision's texts as they are stored, and as its row and its event
+  # read them (`Prima.Sanitizer`).
+  defp stored(%Decision{} = decision) do
+    %{
+      decision
+      | tool: Prima.Sanitizer.sanitize(decision.tool),
+        action: Prima.Sanitizer.sanitize(decision.action),
+        reason: Prima.Sanitizer.sanitize(decision.reason)
     }
   end
 

@@ -361,6 +361,41 @@ defmodule Emissary.Web.MCPConfirmationRepeatTest do
   # A malformed value
   # ---------------------------------------------------------------------------
 
+  describe "the spelling the plug admits" do
+    # A notification carries no id, so only the confirmation's spelling is
+    # checked: the grammar is `Prima.CredentialShape`'s.
+    defp metadata(value) do
+      Plug.Test.conn(:post, "/mcp")
+      |> Map.put(:body_params, %{
+        "jsonrpc" => "2.0",
+        "method" => "notifications/probe",
+        "params" => %{"_meta" => %{@key => value}}
+      })
+      |> Emissary.Web.Plugs.MCPRequestMetadata.call([])
+    end
+
+    test "a minted confirmation secret is admitted, and a near miss is refused" do
+      secret = Prima.CredentialShape.mint(:confirmation_secret)
+
+      admitted = metadata(secret)
+      refute admitted.halted
+      assert admitted.assigns.mcp_confirmation_id == secret
+
+      for near <- [
+            binary_part(secret, 0, byte_size(secret) - 1),
+            secret <> "A",
+            String.upcase(binary_part(secret, 0, 4)) <>
+              binary_part(secret, 4, byte_size(secret) - 4),
+            binary_part(secret, 0, byte_size(secret) - 1) <> "+"
+          ] do
+        refused = metadata(near)
+        assert refused.halted
+        assert refused.status == 400
+        refute refused.resp_body =~ near
+      end
+    end
+  end
+
   describe "a _meta value not spelled as a secret" do
     test "is refused -32602 at 400 before any handler runs, unechoed, and opens nothing",
          %{token: token, ctx: ctx, user: user} do

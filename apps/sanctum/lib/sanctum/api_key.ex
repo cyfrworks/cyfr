@@ -46,13 +46,6 @@ defmodule Sanctum.ApiKey do
 
   alias Sanctum.Context
 
-  # Key type prefixes
-  @key_prefixes %{
-    application: "cyfr_pk_",
-    service: "cyfr_sk_",
-    admin: "cyfr_ak_"
-  }
-
   @valid_key_types [:application, :service, :admin]
 
   # Default scopes applied when none are specified
@@ -705,10 +698,12 @@ defmodule Sanctum.ApiKey do
   def looks_like_key?(key) when is_binary(key), do: detect_key_type(key) != :unknown
   def looks_like_key?(_), do: false
 
-  defp detect_key_type("cyfr_pk_" <> _), do: :application
-  defp detect_key_type("cyfr_sk_" <> _), do: :service
-  defp detect_key_type("cyfr_ak_" <> _), do: :admin
-  defp detect_key_type(_), do: :unknown
+  defp detect_key_type(key) do
+    # The prefixes are the credential shapes' (`Prima.CredentialShape`).
+    Enum.find_value(Prima.CredentialShape.api_key_prefixes(), :unknown, fn {type, prefix} ->
+      if String.starts_with?(key, prefix), do: type
+    end)
+  end
 
   # ============================================================================
   # Scope normalization & validation
@@ -734,11 +729,7 @@ defmodule Sanctum.ApiKey do
   # Internal
   # ============================================================================
 
-  defp generate_key(type) do
-    prefix = Map.fetch!(@key_prefixes, type)
-    random = :crypto.strong_rand_bytes(24) |> Base.url_encode64(padding: false)
-    prefix <> random
-  end
+  defp generate_key(type), do: Prima.CredentialShape.mint({:api_key, type})
 
   defp hash_key(key), do: :crypto.hash(:sha256, key)
 

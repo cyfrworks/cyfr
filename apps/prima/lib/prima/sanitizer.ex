@@ -7,6 +7,10 @@ defmodule Prima.Sanitizer do
 
   Recursively traverses maps and lists, redacting any values whose
   keys match known sensitive patterns (passwords, tokens, API keys, etc.).
+  A second layer recognises a credential by its value, whatever key it is
+  under: every string, at any depth, has each credential of a shape the
+  platform issues (`Prima.CredentialShape`) replaced, whole or embedded in
+  longer text.
 
   Used by MCP request logging and any other context where user input
   may contain secrets that should not be persisted.
@@ -58,6 +62,8 @@ defmodule Prima.Sanitizer do
   # error, and `t` is a short name for anything.
   @exact_raw_sensitive_keys ~w(_t _session)
 
+  @placeholder "[REDACTED]"
+
   @camel_case_boundary ~r/([a-z0-9])([A-Z])/
   @token_separator ~r/[^a-z0-9]+/
 
@@ -93,11 +99,17 @@ defmodule Prima.Sanitizer do
   def filter_parameters,
     do: @sensitive_keys ++ @exact_sensitive_keys ++ @exact_raw_sensitive_keys
 
+  @doc "What a redacted value is replaced with: `\"[REDACTED]\"`."
+  @spec placeholder() :: String.t()
+  def placeholder, do: @placeholder
+
   @doc """
-  Sanitize data by redacting values under sensitive keys.
+  Sanitize data by redacting values under sensitive keys, and credentials
+  by their shape wherever they appear.
 
   Recursively traverses maps and lists. Keys matching known sensitive
-  patterns are replaced with `"[REDACTED]"`.
+  patterns are replaced with `"[REDACTED]"`, and so is each credential of
+  a `Prima.CredentialShape` shape inside any string value.
 
   ## Examples
 
@@ -106,6 +118,9 @@ defmodule Prima.Sanitizer do
 
       iex> Prima.Sanitizer.sanitize(%{"nested" => %{"api_key" => "abc123"}})
       %{"nested" => %{"api_key" => "[REDACTED]"}}
+
+      iex> Prima.Sanitizer.sanitize(%{"note" => "use whsec_" <> String.duplicate("x", 32) <> " here"})
+      %{"note" => "use [REDACTED] here"}
   """
   @spec sanitize(term()) :: term()
   # Structs are traversed field-by-field and rebuilt, so one carrying a
@@ -123,7 +138,7 @@ defmodule Prima.Sanitizer do
     data
     |> Enum.map(fn {key, value} ->
       if sensitive_key?(key) do
-        {key, "[REDACTED]"}
+        {key, @placeholder}
       else
         {key, sanitize(value)}
       end
@@ -139,7 +154,7 @@ defmodule Prima.Sanitizer do
   # This redacts credential headers such as {"authorization", "Bearer ..."}.
   # Structs are handled by the preceding clause.
   def sanitize({key, value}) when is_binary(key) or is_atom(key) do
-    if sensitive_key?(key), do: {key, "[REDACTED]"}, else: {key, sanitize(value)}
+    if sensitive_key?(key), do: {key, @placeholder}, else: {key, sanitize(value)}
   end
 
   def sanitize(data) when is_tuple(data) do
@@ -148,6 +163,10 @@ defmodule Prima.Sanitizer do
     |> Enum.map(&sanitize/1)
     |> List.to_tuple()
   end
+
+  # Keys are left as they are: only values are rewritten, so two keys can
+  # never collapse into one.
+  def sanitize(data) when is_binary(data), do: Prima.CredentialShape.redact(data, @placeholder)
 
   def sanitize(data), do: data
 

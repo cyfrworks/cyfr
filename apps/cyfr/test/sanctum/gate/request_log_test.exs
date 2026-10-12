@@ -1,6 +1,44 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
+defmodule Sanctum.Gate.RequestLogTest.Patterned do
+  @moduledoc false
+  # A tool whose argument declares a format: its runs tell the process
+  # registered as `:request_log_patterned_observer`.
+  @behaviour Prima.Provider
+
+  def tool, do: "patterned_probe"
+
+  @impl true
+  def service, do: "probe"
+
+  @impl true
+  def tools do
+    [
+      Prima.Operation.tool([
+        Prima.Operation.new(
+          "patterned_probe",
+          "look",
+          "Look a reference up",
+          [
+            Prima.Arg.new("reference", :string, required: true, pattern: "^ref-[0-9]{1,8}$"),
+            Prima.Arg.new("count", :integer),
+            Prima.Arg.new("label", :string)
+          ],
+          kind: :read,
+          planes: [:external, :in_chain]
+        )
+      ])
+    ]
+  end
+
+  @impl true
+  def handle(_tool, _ctx, %{"action" => "look"}) do
+    send(:request_log_patterned_observer, :ran)
+    {:ok, %{"found" => true}}
+  end
+end
+
 defmodule Sanctum.Gate.RequestLogTest do
   @moduledoc """
   The request log's rows as projections of admission decisions: a
@@ -509,6 +547,406 @@ defmodule Sanctum.Gate.RequestLogTest do
           ] do
         assert {:error, :no_athanor} = RequestLog.list(reader, request_id: ctx.request_id)
       end
+    end
+  end
+
+  # No shipped operation declares a `pattern:`; the probe does.
+  describe "a refused call's arguments" do
+    setup do
+      Process.register(self(), :request_log_patterned_observer)
+      :ok
+    end
+
+    defp patterned(ctx, args) do
+      Sanctum.Catalog.with_providers([__MODULE__.Patterned], fn ->
+        Sanctum.Catalog.call_external(
+          __MODULE__.Patterned.tool(),
+          ctx,
+          Map.put(args, "action", "look")
+        )
+      end)
+    end
+
+    defp granting(tool_action) do
+      node = "formula:local.request-log-probe"
+
+      graph = %{
+        "canonical" => "jcs-1",
+        "nodes" => %{
+          node => %{
+            "limits" => %{
+              "timeout" => "1m",
+              "max_memory_bytes" => 67_108_864,
+              "max_request_size" => 1_048_576,
+              "max_response_size" => 5_242_880,
+              "rate_limit" => %{"requests" => 10_000, "window" => "1m"},
+              "max_concurrent_tasks" => 10,
+              "batch_timeout" => "1m"
+            },
+            "edges" => %{"@ingress" => %{"tools" => [tool_action]}}
+          }
+        }
+      }
+
+      {:ok, blob} = Prima.Authority.Blob.parse(graph)
+
+      {:ok, authority} =
+        Prima.Authority.root(
+          %{
+            profile_id: "prof-request-log",
+            consent_id: "consent-request-log",
+            source_ref: node,
+            kind: :owner,
+            invoke_mode: :open_inert,
+            activation: %{node => "sha256:request-log"}
+          },
+          blob,
+          ceiling: Sanctum.Policy.Ceiling.platform_ceiling()
+        )
+
+      authority
+    end
+
+    defp patterned_rows(ctx) do
+      import Ecto.Query, only: [from: 2]
+
+      Arca.Repo.all(
+        from(l in Arca.Schemas.McpLog,
+          where: l.athanor_id == ^ctx.athanor_id and l.tool == "patterned_probe"
+        )
+      )
+    end
+
+    defp patterned_decisions(ctx) do
+      import Ecto.Query, only: [from: 2]
+
+      Arca.Repo.all(
+        from(d in Arca.Schemas.DecisionLog,
+          where: d.athanor_id == ^ctx.athanor_id and d.tool == "patterned_probe"
+        )
+      )
+    end
+
+    test "a value failing its declared pattern is refused before the handler, and its row " <>
+           "holds the placeholder and no fragment of it",
+         %{ctx: ctx} do
+      canary = "canary" <> Integer.to_string(System.unique_integer([:positive]))
+      value = "ref-" <> canary <> " and more"
+
+      assert {:error, %Prima.Refusal{class: :invalid_argument, stage: :admission} = refusal} =
+               patterned(ctx, %{"reference" => value, "label" => "kept"})
+
+      assert refusal.message =~ "Field 'reference' does not match the required pattern"
+      refute inspect(refusal) =~ canary
+      refute_received :ran
+
+      assert [row] = patterned_rows(ctx)
+      assert row.status == "error"
+      assert row.refusal_class == "invalid_argument"
+
+      assert decode_json(row.input) == %{
+               "action" => "look",
+               "reference" => "[REDACTED]",
+               "label" => "kept"
+             }
+
+      assert [decision] = patterned_decisions(ctx)
+      assert decision.admission == "refused"
+      assert decision.refusal_class == "invalid_argument"
+
+      for stored <- [row, decision],
+          column <- Map.values(Map.from_struct(stored)),
+          is_binary(column),
+          do: refute(column =~ canary)
+    end
+
+    test "each argument is judged by its own declaration", %{ctx: ctx} do
+      assert {:error, %Prima.Refusal{class: :invalid_argument}} =
+               patterned(ctx, %{"reference" => "ref-42", "count" => "many", "label" => "kept"})
+
+      refute_received :ran
+      assert [row] = patterned_rows(ctx)
+
+      assert decode_json(row.input) == %{
+               "action" => "look",
+               "reference" => "ref-42",
+               "count" => "[REDACTED]",
+               "label" => "kept"
+             }
+    end
+
+    test "in a chain, a value failing its declared pattern is withheld from the refused row",
+         %{ctx: ctx} do
+      canary = "canary" <> Integer.to_string(System.unique_integer([:positive]))
+      guest = Sanctum.Context.enter_guest(%{ctx | origin: :programmatic})
+
+      assert {:error, %Prima.Refusal{class: :invalid_argument} = refusal} =
+               Sanctum.Catalog.with_providers([__MODULE__.Patterned], fn ->
+                 Sanctum.Gate.call_in_chain(
+                   __MODULE__.Patterned.tool(),
+                   guest,
+                   %{"action" => "look", "reference" => canary, "label" => "kept"},
+                   granting("patterned_probe.look"),
+                   lineage: Cyfr.Test.AttemptFixtures.lineage!(guest)
+                 )
+               end)
+
+      refute inspect(refusal) =~ canary
+      refute_received :ran
+
+      assert [row] = patterned_rows(ctx)
+      assert row.status == "error"
+      assert %{"reference" => "[REDACTED]", "label" => "kept"} = decode_json(row.input)
+      assert [%{admission: "refused", plane: "in_chain"}] = patterned_decisions(ctx)
+      refute row.input =~ canary
+    end
+
+    test "an admitted call's row holds the values its declarations admitted", %{ctx: ctx} do
+      assert {:ok, %{"found" => true}} = patterned(ctx, %{"reference" => "ref-7", "count" => 2})
+      assert_received :ran
+
+      assert [row] = patterned_rows(ctx)
+      assert decode_json(row.input) == %{"action" => "look", "reference" => "ref-7", "count" => 2}
+    end
+  end
+
+  # The recording point sanitizes every text both rows store: a caller's
+  # action name, a refusal's sentence quoting it, a failure's text.
+  describe "the texts a decision and its row store" do
+    setup do
+      Process.register(self(), :request_log_patterned_observer)
+      {:ok, key: Prima.CredentialShape.mint({:api_key, :service})}
+    end
+
+    test "an unknown action named with a credential leaves it in neither row, and the " <>
+           "caller's refusal is its own",
+         %{ctx: ctx, key: key} do
+      assert {:error, %Prima.Refusal{} = refusal} =
+               Sanctum.Catalog.with_providers([__MODULE__.Patterned], fn ->
+                 Sanctum.Catalog.call_external(__MODULE__.Patterned.tool(), ctx, %{
+                   "action" => key
+                 })
+               end)
+
+      assert refusal.message =~ key
+
+      assert [row] = patterned_rows(ctx)
+      assert row.action == "[REDACTED]"
+      assert row.error =~ "[REDACTED]"
+      assert [decision] = patterned_decisions(ctx)
+      assert decision.action == row.action
+      assert decision.reason == row.error
+
+      for stored <- [row, decision],
+          column <- Map.values(Map.from_struct(stored)),
+          is_binary(column),
+          do: refute(column =~ key)
+    end
+
+    test "a decision opened and closed with a credential in its texts stores none", %{
+      ctx: ctx,
+      key: key
+    } do
+      refused =
+        decision(ctx,
+          action: key,
+          admission: :refused,
+          refusal_class: :not_found,
+          reason: "Unknown action: storage.#{key}"
+        )
+
+      :ok = Decisions.open(ctx, refused, %{input: %{"action" => key}})
+
+      admitted = decision(ctx)
+      :ok = Decisions.open(ctx, admitted, %{input: %{}})
+
+      :ok =
+        Decisions.close(ctx, admitted.call_id, %{
+          result: {:error, {:internal, "upstream said #{key}"}},
+          error_text: "upstream said #{key}"
+        })
+
+      for call_id <- [refused.call_id, admitted.call_id],
+          stored <- [row(call_id), stored(call_id)],
+          column <- Map.values(Map.from_struct(stored)),
+          is_binary(column),
+          do: refute(column =~ key)
+
+      assert row(refused.call_id).action == "[REDACTED]"
+      assert row(refused.call_id).error == "Unknown action: storage.[REDACTED]"
+      assert stored(refused.call_id).reason == row(refused.call_id).error
+      assert row(admitted.call_id).error == "upstream said [REDACTED]"
+    end
+
+    test "a method a caller named with a credential is stored redacted", %{ctx: ctx, key: key} do
+      ctx = %{ctx | call_id: Decisions.call_id!(nil)}
+      message = %Prima.MCP.Message{type: :request, id: 1, method: key, params: %{}}
+
+      assert {:error, :method_not_found, _message} = Emissary.MCP.Router.dispatch(ctx, message)
+
+      assert %Arca.Schemas.McpLog{status: "error", method: "[REDACTED]"} =
+               stored_row = row(ctx.call_id)
+
+      assert %Arca.Schemas.DecisionLog{} = stored(ctx.call_id)
+
+      for column <- Map.values(Map.from_struct(stored_row)),
+          is_binary(column),
+          do: refute(column =~ key)
+    end
+
+    test "a completion's routing label is stored redacted", %{ctx: ctx, key: key} do
+      admitted = decision(ctx)
+      :ok = Decisions.open(ctx, admitted, %{input: %{}})
+
+      :ok =
+        Decisions.close(ctx, admitted.call_id, %{
+          result: {:ok, %{}},
+          routed_to: "external:" <> key <> ":lookup"
+        })
+
+      assert %Arca.Schemas.McpLog{status: "success", routed_to: "external:[REDACTED]:lookup"} =
+               row(admitted.call_id)
+    end
+
+    test "every text column a row is built from carries no credential, whichever caller " <>
+           "supplied it",
+         %{ctx: ctx, key: key} do
+      texts = fn columns -> for {_, value} <- columns, is_binary(value), do: value end
+
+      refused =
+        decision(ctx,
+          tool: key,
+          action: key,
+          admission: :refused,
+          refusal_class: :not_found,
+          reason: "Unknown action: #{key}"
+        )
+
+      opened = Sanctum.RequestLog.opened(ctx, refused, %{method: key, input: %{"x" => key}})
+      assert opened.method == "[REDACTED]"
+      for text <- texts.(opened), do: refute(text =~ key)
+
+      pending = Sanctum.RequestLog.opened(ctx, decision(ctx), %{method: key})
+      assert pending.status == "pending"
+      for text <- texts.(pending), do: refute(text =~ key)
+
+      failed = Sanctum.RequestLog.closed({:error, "upstream said #{key}"}, %{routed_to: key})
+      assert failed.error == "upstream said [REDACTED]"
+      assert failed.routed_to == "[REDACTED]"
+
+      succeeded =
+        Sanctum.RequestLog.closed(
+          {:ok, %{"content" => [%{"type" => "text", "text" => key}]}},
+          %{routed_to: "external:#{key}:lookup", duration_ms: 3}
+        )
+
+      assert succeeded.duration_ms == 3
+      for text <- texts.(succeeded), do: refute(text =~ key)
+
+      string_columns =
+        for field <- Arca.Schemas.McpLog.__schema__(:fields),
+            Arca.Schemas.McpLog.__schema__(:type, field) == :string,
+            do: field
+
+      covered = Map.keys(opened) ++ Map.keys(failed) ++ Map.keys(succeeded)
+      assert string_columns -- covered == [:athanor_id]
+    end
+
+    test "credentials run together in a refusal's reason reach neither the decision nor the row",
+         %{ctx: ctx, key: key} do
+      refused =
+        decision(ctx,
+          admission: :refused,
+          refusal_class: :not_found,
+          reason: "Unknown action: " <> key <> key
+        )
+
+      :ok = Decisions.open(ctx, refused, %{input: %{}})
+
+      assert row(refused.call_id).error == stored(refused.call_id).reason
+      assert row(refused.call_id).error == "Unknown action: [REDACTED][REDACTED]"
+      refute stored(refused.call_id).reason =~ key
+    end
+
+    test "an MCP method holding credentials run together stores neither", %{ctx: ctx, key: key} do
+      ctx = %{ctx | call_id: Decisions.call_id!(nil)}
+      message = %Prima.MCP.Message{type: :request, id: 1, method: key <> key, params: %{}}
+
+      assert {:error, :method_not_found, _message} = Emissary.MCP.Router.dispatch(ctx, message)
+
+      assert %Arca.Schemas.McpLog{status: "error", method: "[REDACTED][REDACTED]"} =
+               row(ctx.call_id)
+
+      assert %Arca.Schemas.DecisionLog{} = stored(ctx.call_id)
+    end
+
+    test "a name cut to its column is sanitized whole first" do
+      key = Prima.CredentialShape.mint(:webhook_secret)
+      name = String.duplicate("a", 240) <> key
+
+      refute Decisions.bounded(name) =~ binary_part(key, 0, 15)
+      assert Decisions.bounded(name) == String.duplicate("a", 240) <> "[REDACTED]"
+    end
+  end
+
+  # Each minter draws from `Prima.CredentialShape`, so what it issues is
+  # what the request log recognises under any key.
+  describe "the credentials the platform mints" do
+    test "every API-key type, the webhook secret and the confirmation secret have their " <>
+           "declared shape and reach no row",
+         %{ctx: ctx} do
+      issuer = Sanctum.TestContext.issuer!(ctx)
+
+      api_keys =
+        for {type, _prefix} <- Prima.CredentialShape.api_key_prefixes() do
+          opts = %{name: "shape-#{type}", type: type, scope: []}
+
+          confirmed =
+            Sanctum.TestContext.confirmed(issuer, :credential_issuance, %{
+              operation: "key.create",
+              arguments: opts,
+              resource: opts.name
+            })
+
+          {:ok, %{api_key: key}} = Sanctum.ApiKey.create(confirmed, opts)
+          {{:api_key, type}, key}
+        end
+
+      assert {:error, {:confirmation_required, %{id: secret}}} =
+               Sanctum.ApiKey.create(issuer, %{name: "unproven", scope: []})
+
+      minted = [{:confirmation_secret, secret}, {:webhook_secret, webhook_secret!(issuer)}]
+
+      for {kind, credential} <- api_keys ++ minted do
+        assert Prima.CredentialShape.match?(kind, credential), inspect(kind)
+
+        decision = decision(ctx)
+
+        :ok =
+          Decisions.open(ctx, decision, %{
+            input: %{"action" => "get", "path" => "/notes/#{credential}.txt"}
+          })
+
+        assert decode_json(row(decision.call_id).input)["path"] == "/notes/[REDACTED].txt"
+      end
+    end
+
+    defp webhook_secret!(ctx) do
+      Sanctum.TestContext.ready!(ctx.athanor_id)
+      component = "shape-target-#{System.unique_integer([:positive])}"
+      Sanctum.Test.ComponentHelpers.register_test_component(component, "1.0.0", "formula", %{})
+      target = "f:local.#{component}"
+      profile = Sanctum.Test.ConsentFixtures.bindable_profile(ctx, target, origins: [:webhook])
+
+      {:ok, %{secret: secret}} =
+        Sanctum.TestContext.create_webhook(ctx, %{
+          name: "shape-hook",
+          target_ref: target,
+          profile_id: profile,
+          replay_protection: "none"
+        })
+
+      secret
     end
   end
 

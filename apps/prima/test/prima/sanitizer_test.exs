@@ -9,6 +9,12 @@ defmodule Prima.SanitizerTest.Credentialed do
   defstruct [:id, :sanctum_token]
 end
 
+# A struct with no sensitive field name: only the value layer reaches it.
+defmodule Prima.SanitizerTest.Note do
+  @moduledoc false
+  defstruct [:text]
+end
+
 defmodule Prima.SanitizerTest do
   use ExUnit.Case, async: true
 
@@ -378,6 +384,144 @@ defmodule Prima.SanitizerTest do
         assert Enum.any?(Prima.Sanitizer.filter_parameters(), &String.contains?(key, &1)),
                "#{key} must be reachable by Phoenix's substring match"
       end
+    end
+  end
+
+  # The second layer: a credential recognised by its value, under any key.
+  describe "a credential by its shape" do
+    alias Prima.CredentialShape
+
+    test "each shape is replaced under an innocent key, whole or embedded, at any depth" do
+      for {kind, credential} <- credentials() do
+        data = %{
+          "note" => credential,
+          "nested" => %{
+            "deeper" => [%{"text" => "use #{credential} to call"}, {"pair", "(#{credential})"}],
+            "twice" => "#{credential},#{credential}"
+          },
+          "struct" => %Prima.SanitizerTest.Note{text: "/files/#{credential}"},
+          "count" => 3
+        }
+
+        assert Sanitizer.sanitize(data) == %{
+                 "note" => "[REDACTED]",
+                 "nested" => %{
+                   "deeper" => [%{"text" => "use [REDACTED] to call"}, {"pair", "([REDACTED])"}],
+                   "twice" => "[REDACTED],[REDACTED]"
+                 },
+                 "struct" => %Prima.SanitizerTest.Note{text: "/files/[REDACTED]"},
+                 "count" => 3
+               },
+               "#{inspect(kind)} was not replaced"
+      end
+    end
+
+    test "a run without its prefix, of another length or alphabet, stays readable" do
+      header = CredentialShape.signed_token_header()
+      signature = CredentialShape.signed_token_signature_length()
+
+      prefixed =
+        for {_kind, prefix, length} <- CredentialShape.prefixed(),
+            text <- [
+              prefix <> run(length - 1),
+              prefix <> run(length + 1),
+              # A longer malformed run is not its valid-length head.
+              prefix <> run(length) <> "-tail",
+              prefix <> run(length - 1) <> "+",
+              prefix <> "!" <> run(length - 1),
+              String.upcase(prefix) <> run(length),
+              run(length),
+              "the #{prefix} prefix, named in prose"
+            ],
+            do: text
+
+      signed = [
+        signed(48, signature - 1),
+        signed(48, signature + 1),
+        signed(48, signature) <> "x",
+        header <> ".." <> run(signature),
+        String.downcase(header) <> "." <> run(48) <> "." <> run(signature),
+        run(43),
+        run(32)
+      ]
+
+      ordinary = [
+        "internationalization_configuration_value",
+        "sha256:" <> Base.encode16(:crypto.hash(:sha256, "x"), case: :lower),
+        Base.url_encode64(:crypto.hash(:sha256, "x"), padding: false),
+        "frm_" <> run(20),
+        "https://example.com/hooks/wh_" <> run(24)
+      ]
+
+      for text <- prefixed ++ signed ++ ordinary do
+        assert Sanitizer.sanitize(%{"note" => [text]}) == %{"note" => [text]},
+               "#{inspect(text)} was redacted"
+      end
+    end
+
+    test "a key is never rewritten, so no two keys collapse into one" do
+      [{_kind, credential} | _] = credentials()
+
+      assert Sanitizer.sanitize(%{credential => "value", "other" => credential}) ==
+               %{credential => "value", "other" => "[REDACTED]"}
+    end
+
+    # Every candidate reads a bounded span after its prefix, so text dense
+    # with candidates costs work in proportion to its length. Twice the
+    # text may cost at most three times the reductions (linear is two; a
+    # rescan of the rest of the text per candidate is four).
+    test "recognition is linear in the text, however dense its candidates" do
+      header = CredentialShape.signed_token_header()
+
+      units =
+        Enum.map(CredentialShape.prefixed(), &elem(&1, 1)) ++
+          [header <> ".", header <> "." <> String.duplicate("A", 900) <> "."]
+
+      for unit <- units do
+        cost = fn bytes ->
+          text = String.duplicate(unit, div(bytes, byte_size(unit)))
+          Sanitizer.sanitize(%{"note" => text})
+          reductions(fn -> Sanitizer.sanitize(%{"note" => text}) end)
+        end
+
+        small = cost.(16_384)
+        large = cost.(32_768)
+
+        assert large < 3 * small,
+               "#{inspect(binary_part(unit, 0, min(byte_size(unit), 12)))}: " <>
+                 "#{small} reductions for 16 KiB, #{large} for 32 KiB"
+      end
+    end
+
+    test "the placeholder is the key-name layer's" do
+      assert Sanitizer.placeholder() == "[REDACTED]"
+      assert Sanitizer.sanitize(%{"password" => "x"}) == %{"password" => Sanitizer.placeholder()}
+    end
+
+    # One credential of every shape: each prefixed kind as its minter draws
+    # it, and a signed token of the declared form.
+    defp credentials do
+      minted =
+        for {kind, _prefix, _length} <- CredentialShape.prefixed(),
+            do: {kind, CredentialShape.mint(kind)}
+
+      [{:signed_token, signed(48, CredentialShape.signed_token_signature_length())} | minted]
+    end
+
+    defp signed(payload, signature),
+      do: CredentialShape.signed_token_header() <> "." <> run(payload) <> "." <> run(signature)
+
+    defp reductions(fun) do
+      {:reductions, before} = :erlang.process_info(self(), :reductions)
+      fun.()
+      {:reductions, now} = :erlang.process_info(self(), :reductions)
+      now - before
+    end
+
+    # `length` base64url characters.
+    defp run(length) do
+      bytes = :crypto.strong_rand_bytes(length)
+      binary_part(Base.url_encode64(bytes, padding: false), 0, length)
     end
   end
 end

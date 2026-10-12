@@ -38,9 +38,18 @@ defmodule Sanctum.RequestLog do
 
   ## Sensitive Data
 
-  Input parameters are sanitized to redact passwords, secrets, tokens and
-  API keys before they are stored, and so is the structure inside a
-  result's text blocks.
+  Input parameters are sanitized before they are stored, and so is the
+  structure inside a result's text blocks (`Prima.Sanitizer`): values
+  under sensitive key names are redacted, and so is every credential of a
+  shape the platform issues wherever a string carries it, whatever its
+  key. A refused call's row also holds no argument its declaration
+  refuses (`Sanctum.Catalog`). The decision a row projects, and a
+  completion's text, reach it already sanitized (`Sanctum.Decisions`), so
+  a row's action and error are its decision's. Every text column the row
+  stores passes the same redaction once more here, as the columns are
+  built (`opened/3`, `closed/2`): a method a caller named, a completion's
+  routing label, or any column added later, carries no credential of a
+  shape the platform issues, whichever caller supplied it.
   """
 
   alias Prima.Decision
@@ -83,6 +92,7 @@ defmodule Sanctum.RequestLog do
           error: decision.reason
         })
     end
+    |> redacted_texts()
   end
 
   def opened(_ctx, %Decision{}, projection) when is_map(projection), do: nil
@@ -117,11 +127,24 @@ defmodule Sanctum.RequestLog do
   def closed({:ok, output}, meta) when is_map(meta) do
     %{status: "success", output: encode_json(sanitize_output(output))}
     |> labelled(meta, [:duration_ms, :routed_to])
+    |> redacted_texts()
   end
 
   def closed({:error, text}, meta) when is_binary(text) and is_map(meta) do
     %{status: "error", error: text}
     |> labelled(meta, [:duration_ms, :routed_to])
+    |> redacted_texts()
+  end
+
+  # The one place every text column of a row passes, whoever supplied the
+  # text: a caller's method, a completion's routing label, a decision's
+  # texts. Only strings are touched, so the clock and the counts stay what
+  # they are, and a column already sanitized is unchanged.
+  defp redacted_texts(columns) when is_map(columns) do
+    Map.new(columns, fn
+      {key, value} when is_binary(value) -> {key, Prima.Sanitizer.sanitize(value)}
+      pair -> pair
+    end)
   end
 
   defp labelled(columns, meta, keys) do
@@ -148,10 +171,12 @@ defmodule Sanctum.RequestLog do
   # The tools/call wire shape re-encodes the tool's structured result as an
   # opaque JSON string under `"content"[]."text"`. Key-based redaction cannot
   # see inside a string, so a credential a tool legitimately returns to its
-  # caller (a created API key, a webhook secret, a session token) would be
-  # persisted verbatim. Decode each text block that parses as JSON, sanitize
-  # the structure, and re-encode; prose text passes through untouched. The
-  # client response is built before logging and is never affected.
+  # caller under a sensitive key (a session token, or any credential whose
+  # value has no recognisable shape) would be persisted verbatim. Decode
+  # each text block that parses as JSON, sanitize the structure, and
+  # re-encode; prose text is sanitized as any string is, by value shape
+  # alone. The client response is built before logging and is never
+  # affected.
   defp sanitize_output(nil), do: nil
 
   defp sanitize_output(%{"content" => blocks} = output) when is_list(blocks) do

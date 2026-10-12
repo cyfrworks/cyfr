@@ -47,7 +47,6 @@ defmodule Sanctum.Webhook do
   alias Sanctum.Consent.Components
   alias Sanctum.Context
 
-  @secret_random_bytes 24
   @slug_random_bytes 18
 
   @max_input_template_bytes 16 * 1024
@@ -837,13 +836,7 @@ defmodule Sanctum.Webhook do
     end)
   end
 
-  defp generate_secret do
-    secret =
-      "whsec_" <>
-        (:crypto.strong_rand_bytes(@secret_random_bytes) |> Base.url_encode64(padding: false))
-
-    {:ok, secret}
-  end
+  defp generate_secret, do: {:ok, Prima.CredentialShape.mint(:webhook_secret)}
 
   defp generate_slug do
     "wh_" <> (:crypto.strong_rand_bytes(@slug_random_bytes) |> Base.url_encode64(padding: false))

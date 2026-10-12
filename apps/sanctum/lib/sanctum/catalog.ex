@@ -1241,6 +1241,7 @@ defmodule Sanctum.Catalog do
       parent_call_id: if(in_chain?, do: parent_call_id(Keyword.get(opts, :lineage))),
       plane: if(in_chain?, do: :in_chain, else: :external),
       tool: bounded(name),
+      name: name,
       inserted_at: inserted_at,
       recorded?: Sanctum.Decisions.recorded?(name, action),
       projection: %{method: Keyword.get(opts, :method) || "tools/call", input: logged_args}
@@ -1287,8 +1288,50 @@ defmodule Sanctum.Catalog do
   # The call refused before any work ran: its decision recorded, the
   # refusal answered.
   defp refused(opts, args, %Prima.Refusal{} = refusal) do
-    decide(Keyword.fetch!(opts, :audit), :refused, action_of(args), refusal)
+    audit = opts |> Keyword.fetch!(:audit) |> undeclared_withheld()
+    decide(audit, :refused, action_of(args), refusal)
     {:refused, {:error, refusal}}
+  end
+
+  # A refused call's row holds no argument its own declaration refuses:
+  # each top-level argument the operation declares whose value fails that
+  # declaration, as the cast checks it (`Prima.Arg.cast/2`), is the
+  # sanitizer's placeholder, so a malformed value — whatever it carries —
+  # never reaches the log. An argument the operation does not declare, and
+  # a tool the catalog does not hold, are left to the row's sanitizer
+  # (`Sanctum.RequestLog`), as every input is.
+  defp undeclared_withheld(%{projection: %{input: input} = projection} = audit)
+       when is_map(input) do
+    case declared_args(audit.name, input) do
+      declared when map_size(declared) == 0 ->
+        audit
+
+      declared ->
+        input = Map.new(input, fn {key, value} -> {key, withheld(declared, key, value)} end)
+        %{audit | projection: %{projection | input: input}}
+    end
+  end
+
+  defp undeclared_withheld(audit), do: audit
+
+  defp declared_args(name, input) do
+    action = input["action"] || input[:action]
+
+    with {:ok, {_module, %{operations: operations}}} <- lookup(name),
+         %Operation{args: args} <- Enum.find(operations, &(&1.action == action)) do
+      Map.new(args, &{&1.name, &1})
+    else
+      _ -> %{}
+    end
+  end
+
+  defp withheld(declared, key, value) do
+    with %Prima.Arg{} = arg <- Map.get(declared, key),
+         {:error, _message} <- Prima.Arg.cast([arg], %{key => value}) do
+      Prima.Sanitizer.placeholder()
+    else
+      _ -> value
+    end
   end
 
   # An admitted call `Sanctum.Decisions.recorded?/2` leaves out (discovery,

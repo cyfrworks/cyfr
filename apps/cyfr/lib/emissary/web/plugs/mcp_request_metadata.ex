@@ -42,7 +42,6 @@ defmodule Emissary.Web.Plugs.MCPRequestMetadata do
   alias Prima.MCP.Protocol
 
   @confirmation_id_key "cyfr/confirmationId"
-  @confirmation_id ~r/\Acnf_[A-Za-z0-9_-]{43}\z/
 
   @doc "The request metadata key a `tools/call` repeats a sensitive change under."
   @spec confirmation_id_key() :: String.t()
@@ -81,7 +80,7 @@ defmodule Emissary.Web.Plugs.MCPRequestMetadata do
         conn
 
       {:ok, id} when is_binary(id) ->
-        if Regex.match?(@confirmation_id, id),
+        if Prima.CredentialShape.match?(:confirmation_secret, id),
           do: assign(conn, :mcp_confirmation_id, id),
           else: refuse_confirmation_id(conn)
 

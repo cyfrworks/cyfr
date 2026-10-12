@@ -133,8 +133,6 @@ defmodule Sanctum.Consent.Authz do
 
   require Logger
 
-  # The bytes of a confirmation's secret: 256 random bits.
-  @secret_bytes 32
   # The bytes of the asker's name, at most.
   @asker_name_bytes 255
 
@@ -685,7 +683,7 @@ defmodule Sanctum.Consent.Authz do
   defp ask(_ctx, _asked, :consume), do: {:error, :invalid_request}
 
   defp ask(ctx, {action, change, preview, epoch}, _mode) do
-    secret = "cnf_" <> Prima.Identity.Encoding.b64(:crypto.strong_rand_bytes(@secret_bytes))
+    secret = Prima.CredentialShape.mint(:confirmation_secret)
 
     with {:ok, seconds} <- confirmation_seconds(),
          {:ok, record} <-

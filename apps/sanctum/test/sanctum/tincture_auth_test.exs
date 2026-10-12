@@ -744,6 +744,40 @@ defmodule Sanctum.TinctureAuthTest do
     Arca.ControlPlane.record(:lost)
   end
 
+  # `Prima.CredentialShape` pins `Plug.Crypto`'s signed form, whose header
+  # the library keeps private: every credential minted here is held to it,
+  # so the pin cannot drift from what is issued.
+  describe "the signed credentials' shape" do
+    setup do
+      Arca.Cache.init()
+      settings!(3_600, 900)
+      user = frame_person!()
+      {_session, ctx} = session_ctx!(user)
+      {:ok, source: ctx}
+    end
+
+    test "every asset, frame and validation credential is a signed token the sanitizer redacts",
+         %{source: ctx} do
+      {:ok, %{credential: asset}} = TinctureAuth.mint_asset_credential(ctx, @digest)
+
+      {:ok, %{credential: live}} =
+        TinctureAuth.mint_frame_credential(ctx, @tincture, @digest, 1, frame_id())
+
+      {:ok, %{credential: validation}} =
+        TinctureAuth.mint_validation_credential(ctx, @tincture, @digest, 1, frame_id())
+
+      for credential <- [asset, live, validation] do
+        assert Prima.CredentialShape.match?(:signed_token, credential)
+
+        [_header, payload, _signature] = String.split(credential, ".")
+        assert byte_size(payload) <= Prima.CredentialShape.signed_token_payload_max()
+
+        assert Prima.Sanitizer.sanitize(%{"path" => "/_s/#{credential}/index.html"}) ==
+                 %{"path" => "/_s/[REDACTED]/index.html"}
+      end
+    end
+  end
+
   defp framed_context(frame) do
     Context.build(
       user_id: "usr_framed",

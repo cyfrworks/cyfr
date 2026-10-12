@@ -34,6 +34,10 @@ defmodule Prima.EffectsTest do
     Prima.Caps => {:primitive, [:code, :persistent_term]},
     Prima.UUID7 => {:id, [:entropy, :wall_clock]},
     Prima.Hex => {:id, [:entropy]},
+    # The credential grammar draws the random part of what it defines, so
+    # the shape the sanitizer recognises and the shape the minters issue
+    # cannot drift; its one draw is `drawn/2`.
+    Prima.CredentialShape => {:id, [:entropy]},
     Prima.MacEnvelope => {:encryption_iv, [:entropy]},
     Prima.LocusBackends => {:encryption_iv, [:entropy]},
     Prima.WorkerAuth => {:encryption_iv, [:entropy]},
@@ -55,7 +59,11 @@ defmodule Prima.EffectsTest do
   # The stateless effects, each pinned to the functions allowed it.
   @wall_clock_pins [{Prima.UUID7, {:generate, 0}}]
 
-  @id_entropy_pins [{Prima.UUID7, {:generate_at, 1}}, {Prima.Hex, {:short, 0}}]
+  @id_entropy_pins [
+    {Prima.UUID7, {:generate_at, 1}},
+    {Prima.Hex, {:short, 0}},
+    {Prima.CredentialShape, {:drawn, 2}}
+  ]
 
   # The default IV of each seal.
   @iv_entropy_pins [
@@ -212,7 +220,7 @@ defmodule Prima.EffectsTest do
       assert pinned(findings, :wall_clock) == @wall_clock_pins
     end
 
-    test "entropy is drawn only by the identifier generators and the seals' default IVs",
+    test "entropy is drawn only by the identifier and credential generators and the seals' default IVs",
          %{findings: findings} do
       assert pinned(findings, :entropy) == Enum.sort(@id_entropy_pins ++ @iv_entropy_pins)
     end

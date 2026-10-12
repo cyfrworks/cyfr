@@ -485,6 +485,44 @@ defmodule Compendium.CanvasTest do
       assert %FrameCredential{state: "active"} = Arca.Repo.get(FrameCredential, unspent.id)
     end
 
+    test "a bearer in a plain-string argument reaches no request-log row, whole or embedded",
+         %{ctx: ctx} do
+      v1 = write!(ctx)
+      trial = trial!(ctx, v1)
+      gate = Sanctum.TestContext.via(ctx, :prism)
+      args = %{"action" => "activate", "canvas" => @name, "version" => v1, "outcome" => "tree"}
+
+      # Each is refused as no frame id, after admission: the row is written.
+      for frame <- [trial.bearer, "trial " <> trial.bearer <> " ended"] do
+        assert {:error, {:invalid_argument, sentence}} =
+                 Sanctum.Gate.call_external("canvas", gate, Map.put(args, "frame", frame))
+
+        refute sentence =~ trial.bearer
+      end
+
+      rows =
+        Arca.Repo.all(
+          from(l in Arca.Schemas.McpLog,
+            where: l.athanor_id == ^@athanor and l.tool == "canvas" and l.action == "activate"
+          )
+        )
+
+      assert length(rows) == 2
+
+      assert rows |> Enum.map(&Jason.decode!(&1.input)["frame"]) |> Enum.sort() ==
+               ["[REDACTED]", "trial [REDACTED] ended"]
+
+      assert Enum.all?(rows, &(Jason.decode!(&1.input)["canvas"] == @name))
+
+      for row <- rows,
+          value <- Map.values(Map.from_struct(row)),
+          is_binary(value),
+          fragment <- String.split(trial.bearer, "."),
+          do: refute(value =~ fragment)
+
+      assert %FrameCredential{state: "active"} = Arca.Repo.get(FrameCredential, trial.id)
+    end
+
     test "the refusals of the credential's spend are the operation's", %{ctx: ctx} do
       v1 = write!(ctx)
       trial = trial!(ctx, v1)
