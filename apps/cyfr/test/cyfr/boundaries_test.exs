@@ -2693,8 +2693,11 @@ defmodule Cyfr.BoundariesTest.CompilerPlants do
   touched. That build outlives the run, so the paths Mix records in it
   must stay valid across runs: `MIX_DEPS_PATH` names the checkout's `deps`,
   which every run shares, where a copy's `deps` would be removed with the
-  copy and leave the recorded links dangling. A test checks that every such
-  link resolves after the unplanted compile.
+  copy and leave the recorded links dangling. A reused build whose links
+  dangle anyway, from a cache restore or from an earlier version of this
+  module, is removed and rebuilt from cold before the unplanted compile,
+  since its links point into a copy that is gone. A test checks that every
+  such link resolves after the unplanted compile.
   """
 
   use ExUnit.Case, async: false
@@ -2710,6 +2713,10 @@ defmodule Cyfr.BoundariesTest.CompilerPlants do
 
     copy_tree!(copy)
     on_exit(fn -> File.rm_rf!(copy) end)
+
+    # The forced compile below does not rewrite a dependency's links, so a
+    # reused build with a dangling one is removed before it.
+    remove_stale_build!(Path.join(@root, "_build/boundary_plant"))
 
     # The unplanted tree compiles clean, so a failure below is its plant's.
     {output, status} = compile(copy, "cyfr", [])
@@ -2975,12 +2982,37 @@ defmodule Cyfr.BoundariesTest.CompilerPlants do
   end
 
   # A dangling link is still a link: it is listed with lstat and its target
-  # is resolved here, so the existence check follows it.
+  # is resolved here, so the existence check follows it. A build with no lib
+  # has no links, and is not stale.
   defp dependency_links(build) do
-    for dep <- File.ls!(Path.join(build, "lib")),
+    deps =
+      case File.ls(Path.join(build, "lib")) do
+        {:ok, names} -> names
+        {:error, _reason} -> []
+      end
+
+    for dep <- deps,
         entry <- ["include", "src"],
         link = Path.join([build, "lib", dep, entry]),
         match?({:ok, %File.Stat{type: :symlink}}, File.lstat(link)),
         do: {link, Path.expand(File.read_link!(link), Path.dirname(link))}
+  end
+
+  # A reused build with a dangling link comes from a cache or from an earlier
+  # version of this module, and its links point into a copy that is gone. It
+  # is removed, so the compile after it starts from cold. The message carries
+  # the count only: the paths belong to the gone copy.
+  defp remove_stale_build!(build) do
+    dangling =
+      for {link, target} <- dependency_links(build), not File.exists?(target), do: link
+
+    if dangling != [] do
+      IO.puts(
+        :stderr,
+        "boundary plants: removed the reused build, which had #{length(dangling)} dangling dependency links; compiling from cold"
+      )
+
+      File.rm_rf!(build)
+    end
   end
 end
