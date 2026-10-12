@@ -102,6 +102,33 @@ defmodule Aqua.SeedContractTest do
     assert destructive_on_roles == [], Enum.join(destructive_on_roles, "\n")
   end
 
+  test "no shipped role declares execution.run — a role launches nothing" do
+    # Every launch asks and a role has no card to raise, so the key has no
+    # effect on a role at any value, and the `aqua` door refuses it
+    # (`Compendium.AquaAgent.validate_tool_policy/2`). The shipped soul's
+    # own `execution.run` is what lets it launch, and stays.
+    roles = for agent <- seed_agents(), agent.name != Compendium.AquaPath.soul_name(), do: agent
+
+    names = Enum.map(roles, & &1.name)
+    assert "artisan" in names and "builder" in names
+
+    declaring = for role <- roles, Map.has_key?(role.tool_policy, "execution.run"), do: role.name
+    assert declaring == [], "roles declaring execution.run: #{Enum.join(declaring, ", ")}"
+
+    refused =
+      for role <- roles,
+          {:error, {:tool_policy_no_effect, key}} <-
+            [
+              Compendium.AquaAgent.validate_tool_policy(
+                role.tool_policy,
+                Compendium.AquaAgent.role_type()
+              )
+            ],
+          do: "#{role.name}: #{key}"
+
+    assert refused == [], Enum.join(refused, "\n")
+  end
+
   test "a UI event is auto or absent, never ask" do
     asking =
       for {name, key, mode} <- seed_policy(),

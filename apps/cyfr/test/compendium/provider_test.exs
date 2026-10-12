@@ -1560,6 +1560,136 @@ defmodule Compendium.ProviderTest do
       assert err_msg(msg) =~ "Invalid tool_policy key"
     end
 
+    test "the door refuses execution.run on a role at any value, with why it has no effect",
+         %{ctx: ctx} do
+      sentence =
+        "execution.run has no effect on a role — a role launches nothing and every " <>
+          "launch asks; leave it out"
+
+      # A whole policy on update or create, at any value.
+      for mode <- ["auto", "ask", "never"] do
+        policy = %{"build.compile" => "auto", "execution.run" => mode}
+
+        assert {:error, {:invalid_argument, ^sentence}} =
+                 Provider.handle("aqua", ctx, %{
+                   "action" => "update",
+                   "name" => "builder",
+                   "tool_policy" => policy
+                 })
+
+        assert {:error, {:invalid_argument, ^sentence}} =
+                 Provider.handle("aqua", ctx, %{
+                   "action" => "create",
+                   "name" => "launcher",
+                   "tool_policy" => policy
+                 })
+      end
+
+      # A patch that adds the key, at either value a patch may carry.
+      for mode <- ["auto", "ask"] do
+        assert {:error, {:invalid_argument, ^sentence}} =
+                 Provider.handle("aqua", ctx, %{
+                   "action" => "update",
+                   "name" => "builder",
+                   "tool_policy_patch" => %{"execution.run" => mode}
+                 })
+      end
+
+      {:ok, result} = Provider.handle("aqua", ctx, %{"action" => "get", "name" => "builder"})
+      refute Map.has_key?(result.tool_policy, "execution.run")
+
+      # Nothing was created either.
+      assert {:error, _} =
+               Provider.handle("aqua", ctx, %{"action" => "get", "name" => "launcher"})
+
+      # A role written before the door refused the key keeps loading, and a
+      # patch that removes it is how it leaves.
+      :ok =
+        Arca.put(
+          Sanctum.Context.actor(ctx),
+          Compendium.AquaPath.agent_file("builder"),
+          Compendium.AquaAgent.serialize(%{
+            name: "builder",
+            title: "builder",
+            description: "",
+            disabled: false,
+            catalyst_ref: nil,
+            model: nil,
+            tool_policy: %{"build.compile" => "auto", "execution.run" => "auto"},
+            prompt: "# builder"
+          })
+        )
+
+      assert {:ok, _} =
+               Provider.handle("aqua", ctx, %{
+                 "action" => "update",
+                 "name" => "builder",
+                 "tool_policy_patch" => %{"execution.run" => nil}
+               })
+
+      {:ok, result} = Provider.handle("aqua", ctx, %{"action" => "get", "name" => "builder"})
+      assert result.tool_policy == %{"build.compile" => "auto"}
+
+      # The soul's own key is still the soul's to write.
+      assert {:ok, _} =
+               Provider.handle("aqua", ctx, %{
+                 "action" => "update",
+                 "name" => "aqua",
+                 "tool_policy_patch" => %{"execution.run" => "ask"}
+               })
+    end
+
+    test "a patch of another key on a role copy that still holds execution.run is refused until it leaves",
+         %{ctx: ctx} do
+      # A role copied in before the door refused the key: the door checks
+      # the policy the patch leaves behind, so the copy's own key is named.
+      :ok =
+        Arca.put(
+          Sanctum.Context.actor(ctx),
+          Compendium.AquaPath.agent_file("builder"),
+          Compendium.AquaAgent.serialize(%{
+            name: "builder",
+            title: "builder",
+            description: "",
+            disabled: false,
+            catalyst_ref: nil,
+            model: nil,
+            tool_policy: %{"build.compile" => "auto", "execution.run" => "auto"},
+            prompt: "# builder"
+          })
+        )
+
+      assert {:error,
+              {:invalid_argument,
+               "execution.run has no effect on a role — a role launches nothing and every " <>
+                 "launch asks; leave it out"}} =
+               Provider.handle("aqua", ctx, %{
+                 "action" => "update",
+                 "name" => "builder",
+                 "tool_policy_patch" => %{"files.read" => "auto"}
+               })
+
+      {:ok, result} = Provider.handle("aqua", ctx, %{"action" => "get", "name" => "builder"})
+      assert result.tool_policy == %{"build.compile" => "auto", "execution.run" => "auto"}
+    end
+
+    test "a patch value outside ask, auto and null is the patch's own refusal, whatever the key",
+         %{ctx: ctx} do
+      # The patch's shape is checked before any policy is merged, so a
+      # role's execution.run at an unknown value is refused as a patch value.
+      assert {:error,
+              {:invalid_argument,
+               ~s{tool_policy_patch: "execution.run" must be ask, auto or null}}} =
+               Provider.handle("aqua", ctx, %{
+                 "action" => "update",
+                 "name" => "builder",
+                 "tool_policy_patch" => %{"execution.run" => "never"}
+               })
+
+      {:ok, result} = Provider.handle("aqua", ctx, %{"action" => "get", "name" => "builder"})
+      refute Map.has_key?(result.tool_policy, "execution.run")
+    end
+
     test "update accepts ask/auto and the bare native_search key", %{ctx: ctx} do
       assert {:ok, _} =
                Provider.handle("aqua", ctx, %{

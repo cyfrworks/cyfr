@@ -275,13 +275,15 @@ defmodule Compendium.AquaAgent do
 
   @typedoc """
   Why a `tool_policy` is refused: not a map at all, a key that is neither
-  `tool.action`, `tool.*` nor `native_search`, or a value that is neither
-  `"ask"` nor `"auto"`.
+  `tool.action`, `tool.*` nor `native_search`, a value that is neither
+  `"ask"` nor `"auto"`, or (at a write door only, `validate_tool_policy/2`)
+  a key that has no effect on the agent that would hold it.
   """
   @type tool_policy_error ::
           :tool_policy_not_a_map
           | {:tool_policy_invalid_key, term()}
           | {:tool_policy_invalid_value, String.t(), term()}
+          | {:tool_policy_no_effect, String.t()}
 
   @doc """
   Check a `tool_policy` map against the grammar the runtime reads: every
@@ -310,12 +312,16 @@ defmodule Compendium.AquaAgent do
   top of it. A door refuses what a person must not be able to write: a
   UI event held at anything but `auto`, an automatic destructive or
   external action on any agent, a `tool.*` glob at `auto` whose actions
-  include one of those, and an `ask` on a role (a cloned role's answer is
-  a tool result, not a turn — it has no card to raise).
+  include one of those, an `ask` on a role (a cloned role's answer is
+  a tool result, not a turn — it has no card to raise), and, at any value,
+  a key that has no effect on a role (`{:tool_policy_no_effect, key}`):
+  `execution.run`, because a role launches nothing and every launch asks.
 
-  The parser keeps grammar only, so a hand-edited file still loads; the
-  assistant's runtime ceiling demotes whatever loaded anyway, so a file
-  written past this door reaches the guest already demoted.
+  The parser keeps grammar only, so a hand-edited file still loads, and a
+  role copied into an athanor before its shipped version dropped
+  `execution.run` loads with the key it has no use for; the assistant's
+  runtime ceiling demotes whatever loaded anyway, so a file written past
+  this door reaches the guest already demoted.
 
   An action's kind is the gate's classification (`Sanctum.Catalog.tool_kind/2`:
   a virtual hand's from `Sanctum.VirtualTools`, `:external` for a
@@ -323,17 +329,36 @@ defmodule Compendium.AquaAgent do
   `Sanctum.VirtualTools.auto_permitted_kind?/1` admits may be `auto`, and an
   action whose kind is unknown is left to that ceiling.
 
-  `:ok`, a typed grammar refusal, or `{:error, sentence}` — the sentence
-  is the person's.
+  `:ok`, a typed refusal, or `{:error, sentence}` — the sentence is the
+  person's. A key with no effect on a role is refused at any value, the
+  grammar's own value rule included.
   """
   @spec validate_tool_policy(term(), String.t()) ::
           :ok | {:error, tool_policy_error() | String.t()}
   def validate_tool_policy(policy, agent_type) do
-    with :ok <- check_tool_policy(policy),
+    with :ok <- check_effect(policy, agent_type),
+         :ok <- check_tool_policy(policy),
          :ok <- check_auto_only(policy) do
       check_authored(policy, agent_type)
     end
   end
+
+  # Keys that have no effect on a role at any value. A launch always asks
+  # (the runtime ceiling holds `execution.run` at ask however it is
+  # written) and a cloned role has no card to raise, so a role launches
+  # nothing. Checked ahead of the grammar's value rule and the role's `ask`
+  # rule, so whatever the key is held at, the refusal names why it is there
+  # for nothing rather than how to hold it.
+  @no_effect_on_roles ["execution.run"]
+
+  defp check_effect(policy, @role_type) when is_map(policy) do
+    case Enum.find(@no_effect_on_roles, &Map.has_key?(policy, &1)) do
+      nil -> :ok
+      key -> {:error, {:tool_policy_no_effect, key}}
+    end
+  end
+
+  defp check_effect(_policy, _agent_type), do: :ok
 
   defp check_authored(policy, agent_type) do
     role? = agent_type == @role_type

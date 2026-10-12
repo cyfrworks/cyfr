@@ -14,7 +14,6 @@ tool_policy:
   component.pull: auto
   component.search: auto
   component.setup_plan: auto
-  execution.run: auto
   files.edit: auto
   files.grep: auto
   files.list: auto
@@ -240,7 +239,6 @@ input validation and tool access control.
     "entry": "dist/index.html",
     "build": { "tool": "vite" },
     "icon": "🎮",
-    "window": { "width": 1280, "height": 720, "resizable": true },
     "frame": { "capabilities": ["pointer_lock", "fullscreen", "audio_autoplay"] }
   },
   "dependencies": {

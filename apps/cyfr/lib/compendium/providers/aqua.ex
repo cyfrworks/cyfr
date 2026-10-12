@@ -1153,10 +1153,10 @@ defmodule Compendium.Providers.Aqua do
   # the grammar the file parser applies, so nothing this door admits can
   # fail to parse back, and then what a person may WRITE — no automatic
   # destructive or external action on any agent, no `ask` on a role (a
-  # cloned role has no card to raise), no UI event held at ask. The parser
-  # keeps grammar only, so a hand-edited file still loads and the runtime
-  # ceiling demotes what this door would have refused. An absent argument
-  # leaves the policy alone (`apply_updates/2`).
+  # cloned role has no card to raise), no key a role has no use for, no UI
+  # event held at ask. The parser keeps grammar only, so a hand-edited file
+  # still loads and the runtime ceiling demotes what this door would have
+  # refused. An absent argument leaves the policy alone (`apply_updates/2`).
   defp validate_tool_policy(nil, _type), do: :ok
 
   defp validate_tool_policy(policy, type) do
@@ -1173,6 +1173,11 @@ defmodule Compendium.Providers.Aqua do
   defp tool_policy_message({:tool_policy_invalid_value, key, value}),
     do:
       "Invalid tool_policy value #{inspect(value)} for #{inspect(key)} — use \"ask\" or \"auto\""
+
+  defp tool_policy_message({:tool_policy_no_effect, key}),
+    do:
+      "#{key} has no effect on a role — a role launches nothing and every launch asks; " <>
+        "leave it out"
 
   defp tool_policy_message({:tool_policy_invalid_key, key}),
     do:

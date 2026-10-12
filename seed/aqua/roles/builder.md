@@ -14,7 +14,6 @@ tool_policy:
   component.pull: auto
   component.search: auto
   component.setup_plan: auto
-  execution.run: auto
   files.edit: auto
   files.grep: auto
   files.list: auto

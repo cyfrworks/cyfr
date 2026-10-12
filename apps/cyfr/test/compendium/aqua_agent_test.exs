@@ -185,6 +185,38 @@ defmodule Compendium.AquaAgentTest do
                AquaAgent.validate_tool_policy(%{"files.write" => "ask"}, AquaAgent.soul_type())
     end
 
+    test "a role holds no execution.run at any value — a role launches nothing" do
+      # Every launch asks, and a role has no card to raise, so the key is
+      # what has no effect, whatever it is held at; the refusal says so
+      # ahead of the role's `ask` rule and the grammar's value rule.
+      for mode <- ["auto", "ask", "never"] do
+        assert {:error, {:tool_policy_no_effect, "execution.run"}} =
+                 AquaAgent.validate_tool_policy(
+                   %{"files.read" => "auto", "execution.run" => mode},
+                   AquaAgent.role_type()
+                 )
+      end
+
+      # The soul's own `execution.run` is what lets it launch at all, and a
+      # value outside the vocabulary there is still the grammar's refusal.
+      assert :ok =
+               AquaAgent.validate_tool_policy(%{"execution.run" => "ask"}, AquaAgent.soul_type())
+
+      assert {:error, {:tool_policy_invalid_value, "execution.run", "never"}} =
+               AquaAgent.validate_tool_policy(
+                 %{"execution.run" => "never"},
+                 AquaAgent.soul_type()
+               )
+
+      assert {:error, :tool_policy_not_a_map} =
+               AquaAgent.validate_tool_policy("auto", AquaAgent.role_type())
+
+      # The parser keeps grammar only: a role copied in before its shipped
+      # version dropped the key still loads.
+      assert {:ok, %{tool_policy: %{"execution.run" => "auto"}}} =
+               AquaAgent.parse("artisan", with_policy("  execution.run: auto\n"))
+    end
+
     test "a role's delegation glob and the search gate pass" do
       assert :ok =
                AquaAgent.validate_tool_policy(
