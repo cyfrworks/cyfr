@@ -41,11 +41,68 @@
 #
 # Postgres needs CYFR_DATABASE_URL pointing at an EXISTING database with no
 # schema in it, as a role that may create databases: the third case creates
-# `<database>_cell` and `<database>_restore` beside it (dropping any left by
-# an earlier run) and drops them when it ends. The dump and the restore run
-# in the postgres:16 image, with this host's network. Set
+# two databases beside it, named for this run (`pg_run_database`), and drops
+# them when it ends; it drops no database it did not create, so runs that
+# share one server and one URL leave each other's alone. A run killed before
+# its cleanup leaves its two behind, under its own names. The dump and the
+# restore run in the postgres:16 image, with this host's network. Set
 # RELEASE_BOOT_SKIP_BUILD=1 to reuse the release a previous run built, and
-# RELEASE_BOOT_KEEP=1 to keep the scratch directory and its logs.
+# RELEASE_BOOT_KEEP=1 to keep the scratch directory, its logs and the
+# databases.
+
+# The PostgreSQL client the restore case runs, the server's own major.
+PG_IMAGE="postgres:16"
+CREATED_DATABASES=()
+# This run among the runs sharing a server: its process id and eight random
+# hex digits.
+RUN_ID="$$_$(od -An -N4 -tx1 /dev/urandom | tr -d ' \n')"
+
+# A PostgreSQL client command in the postgres image, on this host's network.
+pg() {
+  docker run --rm --network host -e PGOPTIONS=--client-min-messages=warning "$PG_IMAGE" "$@"
+}
+
+# CYFR_DATABASE_URL with its database renamed to `$1`.
+pg_url() {
+  local base="${CYFR_DATABASE_URL%%\?*}" query=""
+  [ "$base" = "$CYFR_DATABASE_URL" ] || query="?${CYFR_DATABASE_URL#*\?}"
+  echo "${base%/*}/$1$query"
+}
+
+# The name of this run's database for `$1` (cell, restore):
+# `<database>_<run>_$1`, the name CYFR_DATABASE_URL holds cut so the whole
+# fits in 63 bytes. PostgreSQL truncates a longer identifier without an
+# error, which could make two of this run's names, or another run's, one.
+pg_run_database() {
+  local LC_ALL=C base suffix="_${RUN_ID}_$1"
+  base="$(basename "${CYFR_DATABASE_URL%%\?*}")"
+  echo "${base:0:$((63 - ${#suffix}))}$suffix"
+}
+
+# Creates the database `$1` and records it as this run's. CREATE fails on a
+# name that exists, so the run never takes over, and never drops, a
+# database it did not create.
+pg_fresh_database() {
+  local name="$1"
+  pg psql -v ON_ERROR_STOP=1 -q "$CYFR_DATABASE_URL" -c "CREATE DATABASE \"$name\"" \
+    || fail "could not create the database $name beside the one CYFR_DATABASE_URL names"
+  CREATED_DATABASES+=("$name")
+}
+
+# Drops the databases this run created. The drop is forced: a server that
+# outlived its stop still holds its database, and forcing ends that
+# server's sessions, which only this run has.
+pg_drop_created() {
+  local name
+  for name in ${CREATED_DATABASES[@]+"${CREATED_DATABASES[@]}"}; do
+    pg psql -q "$CYFR_DATABASE_URL" -c "DROP DATABASE IF EXISTS \"$name\" WITH (FORCE)" >/dev/null 2>&1 || true
+  done
+}
+
+# Sourced (tests/release-boot/names-test.sh), the script defines the
+# functions above and runs nothing.
+if [ "${BASH_SOURCE[0]}" != "$0" ]; then return 0; fi
+
 set -euo pipefail
 
 ADAPTER="${1:-}"
@@ -62,46 +119,17 @@ WORK="$(mktemp -d "${TMPDIR:-/tmp}/cyfr-release-boot-XXXXXX")"
 source "$(cd "$(dirname "$0")" && pwd)/release.sh"
 cd "$ROOT"
 
-# The PostgreSQL client the restore case runs, the server's own major.
-PG_IMAGE="postgres:16"
-CREATED_DATABASES=()
-
-# A PostgreSQL client command in the postgres image, on this host's network.
-pg() {
-  docker run --rm --network host -e PGOPTIONS=--client-min-messages=warning "$PG_IMAGE" "$@"
-}
-
-# CYFR_DATABASE_URL with its database renamed to `$1`.
-pg_url() {
-  local base="${CYFR_DATABASE_URL%%\?*}" query=""
-  [ "$base" = "$CYFR_DATABASE_URL" ] || query="?${CYFR_DATABASE_URL#*\?}"
-  echo "${base%/*}/$1$query"
-}
-
-pg_fresh_database() {
-  local name="$1"
-  pg psql -v ON_ERROR_STOP=1 -q "$CYFR_DATABASE_URL" \
-    -c "DROP DATABASE IF EXISTS \"$name\"" -c "CREATE DATABASE \"$name\"" \
-    || fail "could not create the database $name beside the one CYFR_DATABASE_URL names"
-  CREATED_DATABASES+=("$name")
-}
-
 # The scratch directory holds the cells' keys and databases, and the
 # PostgreSQL databases the run created sit beside the one CYFR_DATABASE_URL
 # names, so both go even when a stop fails. `server_stop` ends in `fail`,
 # an `exit`, when a listener outlives its stop, and an exit inside this
 # trap would end it before the removals, so the stop runs in a subshell,
 # whose exit ends only that subshell; the stop's failure still fails the
-# run. A server that outlived its stop still holds its database, so the
-# drop is forced: it ends that server's sessions, which only this run has.
+# run.
 cleanup() {
   local code=$?
   ( server_stop ) || [ "$code" -ne 0 ] || code=1
-  if [ "${RELEASE_BOOT_KEEP:-}" != 1 ]; then
-    for name in ${CREATED_DATABASES[@]+"${CREATED_DATABASES[@]}"}; do
-      pg psql -q "$CYFR_DATABASE_URL" -c "DROP DATABASE IF EXISTS \"$name\" WITH (FORCE)" >/dev/null 2>&1 || true
-    done
-  fi
+  [ "${RELEASE_BOOT_KEEP:-}" = 1 ] || pg_drop_created
   if [ "${RELEASE_BOOT_KEEP:-}" = 1 ]; then
     echo "kept $WORK"
   else
@@ -188,7 +216,7 @@ step "a cell of its own, with its keyring kept apart from its deployment file"
 ORIGIN="$WORK/origin"
 ORIGIN_URL=""
 if [ "$ADAPTER" = postgres ]; then
-  ORIGIN_DB="$(basename "${CYFR_DATABASE_URL%%\?*}")_cell"
+  ORIGIN_DB="$(pg_run_database cell)"
   pg_fresh_database "$ORIGIN_DB"
   ORIGIN_URL="$(pg_url "$ORIGIN_DB")"
 fi
@@ -264,7 +292,7 @@ cp -R "$ROOT/seed" "$COPY/seed"
 if [ "$ADAPTER" = sqlite ]; then
   cp -R "$ORIGIN/db" "$COPY/db"
 else
-  RESTORE_DB="$(basename "${CYFR_DATABASE_URL%%\?*}")_restore"
+  RESTORE_DB="$(pg_run_database restore)"
   pg_fresh_database "$RESTORE_DB"
   pg pg_dump --format=custom --no-owner "$ORIGIN_URL" >"$WORK/cell.dump" ||
     fail "the cell's database did not dump"

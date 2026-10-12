@@ -25,6 +25,12 @@ uid's memory or home) reads
   file's, a directory's or a symlink's), a symlink's target and a regular
   file's contents;
 
+each observer's exit status and account checked (`memory_verdict`,
+`home_verdict`): an observer that fails, a home walk that does not
+finish and a mapping that could not be read for any reason but the
+kernel's own refusal (`kernel_omission`) fail the canary, and every
+mapping not read is listed with the verdict;
+
 and then the attempt is killed, so the service reports the runner's exit.
 The canary appears in none of these, nor in the container's log (the
 service's, with each runner's output), the exit report, the attach
@@ -48,10 +54,12 @@ Usage: tests/locus-runtime-image/canary.py IMAGE
 import http.server
 import json
 import os
+import re
 import secrets
 import shutil
 import subprocess
 import sys
+import tempfile
 import threading
 
 sys.dont_write_bytecode = True
@@ -78,35 +86,75 @@ BOOT_S = 60
 MIN_DUMP_BYTES = 32 << 20
 
 # Every readable mapping of process $1, as /proc/$1/maps lists it, written
-# to stdout; what was read is counted on stderr. A mapping the kernel will
-# not read whole (a guard page, a device) is skipped and not counted.
+# to stdout. On stderr, one line for each readable mapping dd could not
+# read, `omitted RANGE PERMS PATH` while the process still maps it and
+# `vanished RANGE PERMS PATH` once it does not (the process unmapped or
+# shrank it during the dump: whatever it still maps readable within the
+# range is read again), then the account: `regions=` mappings read whole,
+# `bytes=` every byte dd wrote (a partial read's and a second read's too),
+# `unreadable=` mappings not mapped readable (guard pages among them),
+# never read, and the two counts of lines. A process that is gone at the
+# start or the end, or a dd that reports no byte count, exits non-zero.
 DUMP_MEMORY = r"""
 pid=$1
-regions=0
-bytes=0
-while read -r range perms _rest; do
-  case "$perms" in r*) ;; *) continue ;; esac
+maps=$(cat /proc/$pid/maps) || { echo "no process $pid" >&2; exit 3; }
+exec 3>&1
+regions=0 bytes=0 unreadable=0 omitted=0 vanished=0
+# Bytes $1 to $2 of the process to fd 3, the observer's stdout, adding what
+# dd wrote to `bytes`; dd's report and status go to this capture. Fails as
+# dd does.
+read_range() {
+  report=$(dd if=/proc/$pid/mem bs=1048576 iflag=skip_bytes,count_bytes skip=$1 count=$(($2 - $1)) 2>&1 >&3; echo "status=$?")
+  copied=$(printf '%s\n' "$report" | sed -n 's/^\([0-9][0-9]*\) bytes.*/\1/p')
+  [ -n "$copied" ] || { echo "dd reported no byte count at $1" >&2; exit 4; }
+  bytes=$((bytes + copied))
+  [ "${report##*status=}" = 0 ]
+}
+while read -r range perms _offset _device _inode path; do
+  case "$perms" in r*) ;; *) unreadable=$((unreadable + 1)); continue ;; esac
   start=$((0x${range%-*}))
   end=$((0x${range#*-}))
-  if dd if=/proc/$pid/mem bs=1048576 iflag=skip_bytes,count_bytes skip=$start count=$((end - start)) 2>/dev/null; then
+  if read_range "$start" "$end"; then
     regions=$((regions + 1))
-    bytes=$((bytes + end - start))
+  elif grep -q "^$range " /proc/$pid/maps; then
+    omitted=$((omitted + 1)); echo "omitted $range $perms $path" >&2
+  else
+    vanished=$((vanished + 1)); echo "vanished $range $perms $path" >&2
+    while read -r now now_perms _rest; do
+      case "$now_perms" in r*) ;; *) continue ;; esac
+      from=$((0x${now%-*})); to=$((0x${now#*-}))
+      [ "$from" -lt "$end" ] && [ "$to" -gt "$start" ] || continue
+      [ "$from" -ge "$start" ] || from=$start
+      [ "$to" -le "$end" ] || to=$end
+      read_range "$from" "$to" || :
+    done < /proc/$pid/maps
   fi
-done < /proc/$pid/maps
-echo "regions=$regions bytes=$bytes" >&2
+done <<EOF
+$maps
+EOF
+cat /proc/$pid/maps > /dev/null || { echo "process $pid ended during the dump" >&2; exit 5; }
+echo "regions=$regions bytes=$bytes unreadable=$unreadable omitted=$omitted vanished=$vanished" >&2
 """
+
+# The kernel's own pages that /proc/PID/mem refuses to read although they
+# are mapped readable (`kernel_omission`).
+KERNEL_PAGES = ("[vvar]", "[vvar_vclock]", "[vsyscall]")
 
 # Every entry under the home $1, recursively, written to stdout: each
 # entry's path, which names every file, directory and symlink; each
 # symlink's target; and each regular file's contents. A symlink is read,
 # never followed. On stderr, the counts of regular files, symlinks and
-# entries, or that there is no such home.
+# entries and nothing else; a walk or a read that fails says so on stderr
+# and exits non-zero.
 DUMP_HOME = r"""
 [ -d "$1" ] || { echo "no home $1" >&2; exit 3; }
-find "$1" -mindepth 1 2>/dev/null
-find "$1" -type l -exec readlink {} \; 2>/dev/null
-find "$1" -type f -exec cat {} + 2>/dev/null
-echo "files=$(find "$1" -type f | wc -l) links=$(find "$1" -type l | wc -l) entries=$(find "$1" -mindepth 1 | wc -l)" >&2
+find "$1" -mindepth 1 || exit 4
+find "$1" -type l -printf '%l\n' || exit 5
+find "$1" -type f -exec cat -- {} + || exit 6
+files=$(find "$1" -type f -printf x) || exit 7
+links=$(find "$1" -type l -printf x) || exit 7
+entries=$(find "$1" -mindepth 1 -printf x) || exit 7
+echo "files=${#files} links=${#links} entries=${#entries}" >&2
 """
 
 # The positive control's plants in the home $1: a directory named $2
@@ -176,7 +224,9 @@ class Reflector:
             daemon_threads = True
             allow_reuse_address = True
 
-        self.server = Server(("0.0.0.0", 0), Handler)
+        # Loopback: the control plane, on this machine, makes the attached
+        # request (control_plane.py), and nothing else needs to reach it.
+        self.server = Server(("127.0.0.1", 0), Handler)
         self.port = self.server.server_address[1]
         self.thread = threading.Thread(target=self.server.serve_forever, kwargs={"poll_interval": 0.05}, daemon=True)
         self.thread.start()
@@ -191,29 +241,99 @@ class Reflector:
         self.thread.join(5)
 
 
-def scan(stack, script, arg, needles):
-    """`script` run with `arg` by the privileged observer, its output searched as it streams for each needle:
-    answers each needle's count, the bytes read and what the script counted on stderr."""
-    command = ["docker", "exec", "--privileged", stack.container, "sh", "-c", script, "sh", str(arg)]
-    found = {needle: 0 for needle in needles}
+def count_stream(chunks, needles):
+    """Each needle's count over the bytes of `chunks` taken together, as `bytes.count` gives it over the whole, and
+    the bytes read, keeping only a window of the stream: the previous chunk's last bytes, one fewer than the
+    longest needle, before the next chunk. A needle across the boundary between two chunks is then whole in the
+    window. A needle's search in a window resumes after its last counted match, so a match is counted once
+    although its bytes stay in the window, and matches never overlap."""
     keep = max(len(needle) for needle in needles) - 1
+    found = dict.fromkeys(needles, 0)
+    # The stream offset each needle's search resumes at.
+    resume = dict.fromkeys(needles, 0)
     total = 0
     tail = b""
-    with subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE) as process:
-        while True:
-            chunk = process.stdout.read(1 << 20)
-            if not chunk:
-                break
-            total += len(chunk)
-            # A needle across two chunks is found in the window; one wholly
-            # inside the kept tail was already counted, and the tail is
-            # shorter than any needle.
-            window = tail + chunk
-            for needle in needles:
-                found[needle] += window.count(needle)
-            tail = window[-keep:] if keep else b""
-        said = process.stderr.read().decode(errors="replace").strip()
-    return found, total, said
+    for chunk in chunks:
+        offset = total - len(tail)
+        window = tail + chunk
+        total += len(chunk)
+        for needle in found:
+            at = window.find(needle, max(resume[needle] - offset, 0))
+            while at != -1:
+                found[needle] += 1
+                resume[needle] = offset + at + len(needle)
+                at = window.find(needle, at + len(needle))
+        tail = window[-keep:] if keep else b""
+    return found, total
+
+
+def scan(stack, script, arg, needles):
+    """`script` run with `arg` by the privileged observer, as `observe` answers it."""
+    return observe(["docker", "exec", "--privileged", stack.container, "sh", "-c", script, "sh", str(arg)], needles)
+
+
+def observe(command, needles, chunk_size=1 << 20):
+    """`command` run, its output searched as it streams for each needle: answers each needle's count, the bytes
+    read, what it said on stderr, each needle shown as `<value>`, and its exit status, read once it has exited."""
+    # stderr to a file, so a long account cannot fill a pipe the observer then blocks on.
+    with tempfile.TemporaryFile() as errors:
+        with subprocess.Popen(command, stdout=subprocess.PIPE, stderr=errors) as process:
+            found, total = count_stream(iter(lambda: process.stdout.read(chunk_size), b""), needles)
+            status = process.wait()
+        errors.seek(0)
+        said = errors.read().decode(errors="replace").strip()
+    for needle in needles:
+        said = said.replace(needle.decode(errors="replace"), "<value>")
+    return found, total, said, status
+
+
+def kernel_omission(path):
+    """Whether /proc/PID/mem refuses, of its own accord, a mapping of `path` mapped readable: the kernel's own
+    pages and a device's mapping."""
+    return path in KERNEL_PAGES or path.startswith("/dev/")
+
+
+def memory_verdict(status, total, said):
+    """What is wrong with a memory dump, by its observer's `status`, the `total` bytes it wrote and what it `said`
+    (DUMP_MEMORY), and the mappings it did not read: the observer exited non-zero, its account is missing, its
+    lines do not add up to its counts, its bytes are not the bytes read or fewer than MIN_DUMP_BYTES, or it could
+    not read a mapping still mapped that is not a `kernel_omission`. Answers (problems, the mappings not read)."""
+    problems = []
+    if status != 0:
+        problems.append(f"the observer exited {status}")
+    lines = [line.strip() for line in said.splitlines()]
+    account = re.fullmatch(r"regions=(\d+) bytes=(\d+) unreadable=(\d+) omitted=(\d+) vanished=(\d+)",
+                           lines[-1]) if lines else None
+    if account is None:
+        return problems + ["the observer gave no account of what it read"], []
+    _regions, claimed, _unreadable, omitted, vanished = (int(n) for n in account.groups())
+    listed = [re.fullmatch(r"(omitted|vanished) (\S+) (\S+) ?(.*)", line) for line in lines[:-1]]
+    for line, entry in zip(lines[:-1], listed):
+        if entry is None:
+            problems.append(f"the observer said: {line}")
+    listed = [entry for entry in listed if entry]
+    for kind, count in (("omitted", omitted), ("vanished", vanished)):
+        if sum(1 for entry in listed if entry[1] == kind) != count:
+            problems.append(f"the observer counted {count} {kind} mappings but listed others")
+    if claimed != total:
+        problems.append(f"the observer counted {claimed} bytes but wrote {total}")
+    if total < MIN_DUMP_BYTES:
+        problems.append(f"the dump read {total} bytes, fewer than {MIN_DUMP_BYTES}")
+    for entry in listed:
+        if entry[1] == "omitted" and not kernel_omission(entry[4]):
+            problems.append(f"the observer could not read {entry[0]}")
+    return problems, [entry[0] for entry in listed]
+
+
+def home_verdict(status, said):
+    """What is wrong with a home dump, by its observer's `status` and what it `said` (DUMP_HOME): the walk is whole
+    only if the observer exited 0 and said its counts and nothing else."""
+    problems = []
+    if status != 0:
+        problems.append(f"the observer exited {status}")
+    if not re.fullmatch(r"files=\d+ links=\d+ entries=\d+", said):
+        problems.append(f"the observer said: {said}")
+    return problems
 
 
 def recorded_attach(plane, execution_id):
@@ -308,15 +428,20 @@ def where(value, seen):
 
 
 def dumped(label, seen):
-    """The dumps read what they claim: the runner's memory and the service's are whole VMs, and the home's entries
-    were walked (that the walk finds what a home holds is the positive control's)."""
+    """The dumps read what they claim: the runner's memory and the service's are whole VMs, every mapping not read
+    named, and the home's entries were walked to the end (that the walk finds what a home holds is the positive
+    control's)."""
     for name in ("runner_memory", "service_memory"):
-        _found, total, said = seen[name]
-        expect(total >= MIN_DUMP_BYTES and said.startswith("regions="),
-               f"{label}: the {name.replace('_', ' ')} dump read {total} bytes ({said})", said)
-    _found, total, said = seen["home"]
-    expect(said.startswith("files="),
-           f"{label}: the runner's home dump read {total} bytes of its entries' names, links and files ({said})", said)
+        _found, total, said, status = seen[name]
+        problems, omissions = memory_verdict(status, total, said)
+        account = said.splitlines()[-1] if said else ""
+        expect(problems == [],
+               f"{label}: the {name.replace('_', ' ')} dump read {total} bytes ({account}); not read: "
+               f"{', '.join(omissions) or 'nothing'}", {"problems": problems, "said": said})
+    _found, total, said, status = seen["home"]
+    expect(home_verdict(status, said) == [],
+           f"{label}: the runner's home dump read {total} bytes of its entries' names, links and files ({said})",
+           {"problems": home_verdict(status, said), "said": said})
 
 
 def run_credential_canary(stack, plane, reflector):
@@ -385,12 +510,12 @@ def check_positive_control(planted, plants, seen):
     found = where(planted, seen)
     count = seen["runner_memory"][0][planted.encode()]
     print(f"positive-control record: the value planted in {FIELD} was found {count} times in runner "
-          f"{seen['runner']['runner']}'s {seen['runner_memory'][1]} bytes of memory ({seen['runner_memory'][2]}); "
-          f"found in: {', '.join(found)}", flush=True)
+          f"{seen['runner']['runner']}'s {seen['runner_memory'][1]} bytes of memory "
+          f"({seen['runner_memory'][2].splitlines()[-1]}); found in: {', '.join(found)}", flush=True)
     expect(count > 0 and {"attach_answer", "events", "output"} <= set(found),
            f"{label}: the dump of its runner's memory finds the planted value, as do the attach answer, the event and "
            "the output: the canary check reads what it claims to", found)
-    home_found, _total, said = seen["home"]
+    home_found, _total, said, _status = seen["home"]
     for kind, value in plants.items():
         expect(home_found[value.encode()] > 0,
                f"{label}: the runner's home dump finds the value planted as a {kind} ({said})")

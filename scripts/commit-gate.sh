@@ -9,7 +9,11 @@
 #   static    SQLite test compile and forced dev compile (warnings as
 #             errors, so every Boundary declaration is checked), format,
 #             credo, ops.gen.cli --check, cyfr.gen.configuration_guide
-#             --check, dialyzer, then the full SQLite suite in N partitions
+#             --check, the console's JavaScript tests, CI's built-SDK and
+#             built-toolkit checks (their scripts read from test.yml), the
+#             release-boot names test and the canary's own checks (neither
+#             needs a database or an image), dialyzer, then the full SQLite
+#             suite in N partitions
 #   postgres  PostgreSQL test compile, then the given test paths (default:
 #             the storage set) in one partition; with --close the whole
 #             suite in N partitions, started once the SQLite suite's
@@ -20,10 +24,12 @@
 #   islands   prima, arca and sanctum compiled and tested from a copy that
 #             holds only what CI gives them, once the SQLite suite's
 #             partitions have exited; locus with --close
-# With --close the static leg also forces the test rebuild on both
-# adapters. Image suites, the S3 suite, the Go checks, the security
-# scanners and the benchmark are not part of this gate: a closing record
-# names each of those with its own result.
+# Every gate forces the test rebuild on both adapters. Not part of this
+# gate, so a closing record names each with its own result: the model
+# catalysts' tests, the seed guests' builds and stamps, the partition
+# scripts' own tests, the image suites, the S3 suite, the release boots,
+# the browser harness and its proofs, the seed and configuration guards,
+# the Go checks, the license and security scanners, and the benchmark.
 # Without -n a suite runs in eight partitions on a host of sixteen cores
 # or more (two schedulers each) and in four on a smaller one. A PostgreSQL
 # partition holds twenty connections, so the server allows twenty times
@@ -71,7 +77,7 @@ TIMEOUT_BIN=$(command -v timeout || command -v gtimeout || true)
 deadline_for() {
   if [ -n "${GATE_STEP_DEADLINE:-}" ]; then echo "$GATE_STEP_DEADLINE"; return; fi
   case "$1" in
-    fossils|format|credo|opsgen|confguide|island_compile|island_test) echo 600 ;;
+    fossils|format|credo|opsgen|confguide|js_suite|sdk_bundle|toolkit_bundle|boot_names|canary_checks|island_compile|island_test) echo 600 ;;
     compile_*|boundary_plants) echo 1200 ;;
     # A first run builds the PLT.
     dialyzer) echo 2400 ;;
@@ -102,17 +108,33 @@ step() {
 }
 
 leg_static() {
-  step static compile_sqlite_test env CYFR_DATABASE=sqlite MIX_ENV=test mix compile --warnings-as-errors || return 1
+  # Both test builds are forced on every gate. A module stores the
+  # signatures it infers from the remote functions it calls, and Mix
+  # recompiles it only when a compile-time or export dependency changes,
+  # so an incremental build keeps a caller's stale signatures: the gate
+  # would then fail on a type warning that is not the commit's, or pass
+  # without one the commit has.
+  step static compile_sqlite_test env CYFR_DATABASE=sqlite MIX_ENV=test mix compile --force --warnings-as-errors || return 1
   # Forced: incremental state can keep a Boundary declaration the tree no
   # longer has, and a plain compile only warns.
   step static compile_sqlite_dev env CYFR_DATABASE=sqlite MIX_ENV=dev mix compile --force --warnings-as-errors || return 1
-  if $CLOSE; then
-    step static compile_sqlite_force env CYFR_DATABASE=sqlite MIX_ENV=test mix compile --warnings-as-errors --force || return 1
-  fi
   step static format mix format --check-formatted || return 1
   step static credo mix credo --only=warning || return 1
   step static opsgen mix ops.gen.cli --check || return 1
   step static confguide mix cyfr.gen.configuration_guide --check || return 1
+  step static js_suite apps/cyfr/assets/test/run.sh || return 1
+  # Each rebuilds its bundle into the checkout and fails when the tracked
+  # file is not the build, as CI's test job runs it.
+  local sdk="$LOGDIR/static.sdk_bundle.sh" toolkit="$LOGDIR/static.toolkit_bundle.sh"
+  if ! ci_step "The built SDK is its source's" > "$sdk" ||
+    ! ci_step "The built toolkit is its source's" > "$toolkit"; then
+    echo "ci_steps=1" >> "$LOGDIR/static.summary"
+    return 1
+  fi
+  step static sdk_bundle env CYFR_DATABASE=sqlite MIX_ENV=test bash "$sdk" || return 1
+  step static toolkit_bundle env CYFR_DATABASE=sqlite MIX_ENV=test bash "$toolkit" || return 1
+  step static boot_names bash tests/release-boot/names-test.sh || return 1
+  step static canary_checks python3 -I tests/locus-runtime-image/canary_test.py || return 1
   step static dialyzer mix dialyzer || return 1
   # The Boundary plants: each writes a forbidden edge into a copy of the tree
   # and force-compiles it, so they run once here and never in the partitions.
@@ -122,9 +144,9 @@ leg_static() {
 
 leg_postgres() {
   export MIX_BUILD_PATH=_build/test_pg
-  step postgres compile_pg_test env CYFR_DATABASE=postgres MIX_ENV=test mix compile --warnings-as-errors || return 1
+  # Forced for the stale inferred signatures leg_static names.
+  step postgres compile_pg_test env CYFR_DATABASE=postgres MIX_ENV=test mix compile --force --warnings-as-errors || return 1
   if $CLOSE; then
-    step postgres compile_pg_force env CYFR_DATABASE=postgres MIX_ENV=test mix compile --warnings-as-errors --force || return 1
     # One adapter's suite has the host at a time: the PostgreSQL suite's
     # partitions start once the SQLite suite's have exited.
     await_leg postgres static || return 1
@@ -134,20 +156,25 @@ leg_postgres() {
   fi
 }
 
-# The vocabulary job's script is CI's, read from the workflow so the two
-# cannot drift. macOS git grep -E ignores \b, so there the patterns run
-# as PCRE, which reads them the same way.
-leg_vocab() {
-  local script="$LOGDIR/vocab.sh"
-  python3 - .github/workflows/test.yml > "$script" <<'PY' || return 1
+# The script of test.yml's step named $1, as CI runs it, on stdout: read
+# from the workflow, so the gate's copy and CI's cannot drift.
+ci_step() {
+  python3 - .github/workflows/test.yml "$1" <<'PY'
 import sys, yaml
 wf = yaml.safe_load(open(sys.argv[1]))
 for job in wf["jobs"].values():
     for s in job.get("steps", []):
-        if s.get("name") == "Tier A/B fossil patterns must be absent":
+        if s.get("name") == sys.argv[2]:
             print("set -e"); print(s["run"]); sys.exit(0)
-sys.exit("vocabulary step not found in test.yml")
+sys.exit(f"step {sys.argv[2]!r} not found in test.yml")
 PY
+}
+
+# The vocabulary job's script is CI's. macOS git grep -E ignores \b, so
+# there the patterns run as PCRE, which reads them the same way.
+leg_vocab() {
+  local script="$LOGDIR/vocab.sh"
+  ci_step "Tier A/B fossil patterns must be absent" > "$script" || return 1
   if [ "$(uname -s)" = Darwin ]; then sed -i '' 's/git grep -InE/git grep -InP/' "$script"; fi
   step vocab fossils bash "$script"
 }

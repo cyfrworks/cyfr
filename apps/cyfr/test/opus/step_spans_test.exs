@@ -10,8 +10,8 @@ defmodule Opus.StepSpansTest do
   printed table. Each of the bench's steps makes exactly one request to
   its upstream, with the key attached in `attached` mode and without it in
   `pinned`; the stub makes it for the bench's line, whole or after a
-  display name, and for no other chat; and the upstream is stopped however
-  a run ends.
+  display name, and for no other chat; the upstream is stopped however a
+  run ends; and a run with no git on PATH answers its commit as unknown.
   """
 
   use ExUnit.Case, async: false
@@ -171,6 +171,32 @@ defmodule Opus.StepSpansTest do
 
     assert Application.get_env(:arca, :base_path) == base_path
     assert Application.get_env(:arca, :seed_path) == seed_path
+  end
+
+  # PATH is the OS process's, so it is restored by the test's own exit and,
+  # should the test process be killed first, by its `on_exit`.
+  test "a run with no git on PATH answers its commit as unknown and stops its upstream" do
+    path = System.get_env("PATH")
+    on_exit(fn -> System.put_env("PATH", path) end)
+
+    empty =
+      Path.join(System.tmp_dir!(), "step_bench_no_git_#{System.unique_integer([:positive])}")
+
+    File.mkdir_p!(empty)
+    on_exit(fn -> File.rm_rf!(empty) end)
+
+    report =
+      try do
+        System.put_env("PATH", empty)
+        assert System.find_executable("git") == nil
+        StepBench.run(steps: 1, warmup: 0, mode: :pinned)
+      after
+        System.put_env("PATH", path)
+      end
+
+    assert report.commit == "unknown (no git on PATH)"
+    assert StepBench.render(report) =~ ~r/^commit: unknown \(no git on PATH\)$/m
+    refute Process.alive?(report.upstream), "the run without git left its upstream running"
   end
 
   test "a clock emits admission, first delta and completion once, and only after the guest starts" do

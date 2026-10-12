@@ -319,8 +319,8 @@ jobs:
   cluster:
     name: One cell on two members (Postgres and MinIO)
     runs-on: ubuntu-latest
-    # Phase 7.4 is one cell on several members, and a cluster flag is not
-    # evidence of it. This job runs the two-node suite: two `:peer` nodes,
+    # One cell runs on several members, and a cluster flag is not evidence
+    # of it. This job runs the two-node suite: two `:peer` nodes,
     # each running the whole application against one Postgres and one
     # object store, under every refusal CYFR_CLUSTER=1 names. Every other
     # job in this workflow runs one node, so nothing else here can tell a
@@ -714,7 +714,7 @@ jobs:
           trivyignores: .trivyignore.yaml
 
   locus-runtime-image:
-    name: Runtime image (runner kills, memory bound, settlement, cleanup)
+    name: Runtime image (runner kills, memory bound, settlement, cleanup, credential canary)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
@@ -776,6 +776,11 @@ jobs:
       # homes, groups, memory and CPU show it.
       - name: Runner kills, memory bound, settlement and cleanup
         run: python3 tests/locus-runtime-image/runners.py cyfr-locus:runtime
+      # The canary's own checks, without the image: the streamed count
+      # against a whole-buffer count across chunk boundaries, and the
+      # observer verdicts against observers that fail.
+      - name: The credential canary's own checks
+        run: python3 -I tests/locus-runtime-image/canary_test.py
       # The credential canary (tests/locus-runtime-image/canary.py): a hostile
       # catalyst names its connection on a request to an upstream that
       # reflects it, and the scripted control plane attaches a canary value;
@@ -964,6 +969,10 @@ jobs:
           restore-keys: ${{ runner.os }}-mix-release-boot-${{ matrix.db }}-${{ steps.beam.outputs.elixir-version }}-${{ steps.beam.outputs.otp-version }}-
       - name: Install dependencies
         run: mix deps.get
+      # The runner's own database names, against a docker stub: two runs on
+      # one URL name and drop disjoint databases. No database is needed.
+      - name: Each run names and drops databases of its own
+        run: bash tests/release-boot/names-test.sh
       - name: Boot the release against a fresh ${{ matrix.db }} database
         run: tests/release-boot/boot.sh ${{ matrix.db }}
 
@@ -980,7 +989,7 @@ jobs:
   # Chromium's virtual authenticator, so its passkey steps run in Chromium
   # alone.
   browser:
-    name: Browser harness (Chromium, Firefox and WebKit; instance-entry, approval and file-offer proofs on Chromium)
+    name: Browser harness (Chromium, Firefox and WebKit; instance-entry, approval and file-offer proofs on Chromium; the canvas proof)
     runs-on: ubuntu-latest
     # Serial browser checks share one release build. The instance-entry,
     # approval and file-offer proofs run in Chromium at both viewports, and
@@ -1011,7 +1020,7 @@ jobs:
         run: mix deps.get
       - name: The frame-facts experiment
         run: tests/browser/run.sh
-      - name: The SDK's JavaScript tests
+      - name: The console's JavaScript tests (the SDK, the canvas toolkit, the canvas, the carrier and the system layer)
         run: apps/cyfr/assets/test/run.sh
       - name: Build the Locus builds image for the tincture proof
         run: docker build -f Dockerfile.locus -t cyfr-locus:tincture-proof .

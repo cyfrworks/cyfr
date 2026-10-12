@@ -267,15 +267,23 @@ defmodule Cyfr.Test.StepBench do
   end
 
   # The checkout the bench runs from, so every result names its code.
+  # `System.cmd/3` raises when the executable is missing, so git is looked
+  # up first.
   defp commit do
-    with {head, 0} <- System.cmd("git", ["rev-parse", "HEAD"], stderr_to_stdout: true),
-         {changes, 0} <-
-           System.cmd("git", ["status", "--porcelain", "--untracked-files=no"],
-             stderr_to_stdout: true
-           ) do
-      String.trim(head) <> if(changes == "", do: "", else: " with uncommitted changes")
-    else
-      _ -> "unknown (not a git checkout)"
+    case System.find_executable("git") do
+      nil ->
+        "unknown (no git on PATH)"
+
+      git ->
+        with {head, 0} <- System.cmd(git, ["rev-parse", "HEAD"], stderr_to_stdout: true),
+             {changes, 0} <-
+               System.cmd(git, ["status", "--porcelain", "--untracked-files=no"],
+                 stderr_to_stdout: true
+               ) do
+          String.trim(head) <> if(changes == "", do: "", else: " with uncommitted changes")
+        else
+          _ -> "unknown (not a git checkout)"
+        end
     end
   end
 
