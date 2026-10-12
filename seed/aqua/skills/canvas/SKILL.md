@@ -32,14 +32,21 @@ connection, no component, no action.
    person bound, with their result shapes and actions.
 2. Write the module: its default export takes the `canvas` object.
    `canvas.stream(name, subject, onEvent)` opens a declared stream (subject
-   `null` for a stream that takes none), and `canvas.render(tree)` draws a
-   tree; render again whenever what you show changes.
+   `null` for a stream that takes none) and answers a promise that rejects
+   when the open is refused; catch it, since a rejection left unhandled
+   fails the canvas. `canvas.render(tree)` draws a tree; render again
+   whenever what you show changes.
 3. `canvas(action: "write", name: "...", module: "...", streams: [...])` —
    `streams` lists every stream the module opens, each `{"name": ...}` or
    `{"name": "feed.results", "subject": "<feed name>"}`. Each write is the
    next version, whole; nothing is ever edited in place.
 4. For a new canvas, `layout(action: "get")` and then `layout.edit` with
-   the canvas added, from the revision `get` answered.
+   the canvas added, from the revision `get` answered. `write` answers a
+   `reference` pinned to the version it wrote, and the layout refuses a
+   pinned reference: it names the canvas without its version and follows
+   each version written after it. Drop the version:
+   `tincture:local.weather:0.1.0` is added as
+   `{"id": "weather", "tincture": "tincture:local.weather", "postures": {}}`.
 
 `canvas(action: "versions", canvas: "...")` answers which version is
 working, which is kept, and which validation last failed.
@@ -57,8 +64,9 @@ element, field or value refuses the whole tree.
   `relative`|`date`|`datetime`)
 - `list` (`items`), `table` (`columns` of `{key, title}`, `rows`), `chart`
   (`kind` `line`|`bar`|`candle`, `series` of `{name, points}`)
-- `image` (`src`, a path inside the version or a PNG, JPEG or WebP `data:`
-  URL; `alt`), `surface` (`id`, `width`, `height`), `spacer`
+- `image` (`src`, a PNG, JPEG or WebP `data:` URL, since a written canvas
+  holds only its manifest and its module; `alt`), `surface` (`id`,
+  `width`, `height`), `spacer`
 - `control` (`effect`, `tone`, `size`): the effect is
   `{"open": "<tincture reference>"}` or
   `{"press": {"feed": "<feed name>", "action": "<action name>"}}`. The
@@ -70,21 +78,30 @@ element, field or value refuses the whole tree.
 
 ```js
 export default function (canvas) {
-  const runs = []
+  let runs = []
+  let seen = new Set()
   const draw = () =>
     canvas.render({
       type: "stack",
       children: [
         {type: "text", value: "Recent runs", weight: "strong"},
-        {type: "list", items: runs.map((run) => ({type: "text", value: run.reference}))}
+        {type: "list", items: runs.map((run) => ({type: "text", value: `${run.reference} ${run.kind}`}))}
       ]
     })
 
   draw()
   canvas.stream("runs.changes", null, (event) => {
-    runs.unshift(event.data)
-    runs.length = Math.min(runs.length, 20)
+    // A change racing the stream's refresh can arrive twice: take it once
+    // per run and kind, and show each run as its last change.
+    const change = event.data
+    const key = change.execution_id + "\n" + change.kind
+    if (seen.has(key)) return
+    seen.add(key)
+    runs = [change, ...runs.filter((run) => run.execution_id !== change.execution_id)].slice(0, 20)
+    if (seen.size > 512) seen = new Set(runs.map((run) => run.execution_id + "\n" + run.kind))
     draw()
+  }).catch(() => {
+    // A refused open leaves what is drawn.
   })
 }
 ```

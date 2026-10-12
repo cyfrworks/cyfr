@@ -207,6 +207,61 @@ defmodule Aqua.SeedContractTest do
     for taught <- ["canvas.catalog", "feed.list", "layout.edit"], do: assert(body =~ taught)
   end
 
+  # `canvas.write` answers a reference pinned to the version it wrote, and
+  # the layout refuses a pinned reference, so the scroll's step that adds a
+  # canvas to the layout names it without its version; a written canvas
+  # holds only its manifest and its module, so an image it shows is a
+  # `data:` URL.
+  test "the canvas scroll adds a written canvas to the layout by its versionless reference" do
+    body = canvas_scroll()
+    [step] = Regex.run(~r/^4\. .*?(?=\n\n)/ms, body)
+
+    assert step =~ "layout.edit"
+    assert step =~ "pinned"
+
+    # The step's own example: the canvas entry it adds is the write's
+    # pinned reference with the version dropped, and the layout takes it,
+    # where it refuses the pinned one.
+    [pinned] = Regex.run(~r/`(tincture:[^`]+:[0-9][^`]*)`/, step, capture: :all_but_first)
+    [entry] = Regex.run(~r/`(\{"id".*?\})`/, step, capture: :all_but_first)
+    entry = Jason.decode!(entry)
+
+    assert {:ok, %Prima.ComponentRef{version: version} = parsed} =
+             Prima.ComponentRef.parse(pinned)
+
+    assert is_binary(version)
+    assert entry["tincture"] == Prima.ComponentRef.to_string(%{parsed | version: nil})
+
+    layout = &Prima.Layout.validate(%{"version" => 2, "canvases" => [&1]})
+    assert {:ok, _} = layout.(entry)
+    assert {:error, _} = layout.(%{entry | "tincture" => pinned})
+
+    [image] = Regex.run(~r/^- `image` .*?(?=\n- )/ms, body)
+    refute image =~ "inside the version"
+    assert image =~ "`data:`"
+  end
+
+  # An unhandled rejection fails a canvas into safe mode, so the scroll's
+  # example catches a refused open, and takes a change once per run and
+  # kind, as the seed canvas does (assets/test/canvas/canvas_skill.test.mjs
+  # runs it).
+  test "the canvas scroll's example catches a refused stream and takes each change once" do
+    [example] = Regex.run(~r/```js\n(.*?)```/s, canvas_scroll(), capture: :all_but_first)
+    [stream] = Regex.run(~r/canvas\.stream\("runs\.changes".*\n  \}\)\.catch\(/s, example)
+
+    assert stream =~ ~s(change.execution_id + "\\n" + change.kind)
+    assert stream =~ "seen.has("
+  end
+
+  defp canvas_scroll do
+    {:ok, _meta, body} =
+      Compendium.AquaAgent.parse_frontmatter(
+        File.read!(Path.join([@seed, "skills", "canvas", "SKILL.md"]))
+      )
+
+    body
+  end
+
   # A feed is the person's: the soul reads them on its own and asks before
   # it binds or removes one, and binding is external in kind, so no policy
   # could make it automatic.
