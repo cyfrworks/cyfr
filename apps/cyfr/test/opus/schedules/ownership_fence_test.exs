@@ -847,13 +847,19 @@ defmodule Opus.Schedules.OwnershipFenceTest do
 
       # It comes again two ticks and a second after it fired, asked by
       # nothing: the pass re-armed its timer between the two instants, so
-      # the timer is due that period after one of them (a millisecond is
-      # allowed for the timer's rounding).
+      # the timer is due that period after one of them. Its remaining time
+      # is read between two clock reads and each bound is held with the
+      # read on its own side, so a stall between the reads widens the
+      # bracket and never narrows it (a millisecond is allowed for the
+      # timer's rounding).
       state = :sys.get_state(scheduler)
       assert state.standing_ref != first
-      due = System.monotonic_time(:millisecond) + Process.read_timer(state.standing_ref)
+      before = System.monotonic_time(:millisecond)
+      left = Process.read_timer(state.standing_ref)
+      after_read = System.monotonic_time(:millisecond)
       period = 2 * @tick_ms + Arca.ControlPlane.margin_ms()
-      assert due >= fired_at + period - 1 and due <= returned_at + period
+      assert after_read + left >= fired_at + period - 1
+      assert before + left <= returned_at + period
 
       wait_until(
         fn ->
