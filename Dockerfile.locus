@@ -68,7 +68,7 @@ COPY apps/locus/keeper/ ./
 RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/cyfr-locus .
 
 # ---- Stage 1: release build ----
-FROM hexpm/elixir:1.20.4-erlang-29.1.1-debian-bookworm-20261005 AS relbuilder
+FROM hexpm/elixir:1.20.4-erlang-29.1.1-debian-trixie-20261005 AS relbuilder
 
 RUN apt-get update && apt-get install -y \
     build-essential \
@@ -111,7 +111,7 @@ COPY wit/ wit/
 RUN mix do compile --no-listeners + release locus --no-compile
 
 # ---- Stage 2: toolchain runtime ----
-FROM debian:bookworm-slim
+FROM debian:trixie-slim
 
 LABEL org.opencontainers.image.source="https://github.com/cyfrworks/cyfr"
 LABEL org.opencontainers.image.licenses="Apache-2.0"

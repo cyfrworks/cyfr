@@ -2,7 +2,7 @@
 # (parser directive above must be the first line; needed for COPY --parents)
 
 # ---- Stage 1: Builder ----
-FROM hexpm/elixir:1.20.4-erlang-29.1.1-debian-bookworm-20261005 AS builder
+FROM hexpm/elixir:1.20.4-erlang-29.1.1-debian-trixie-20261005 AS builder
 
 RUN apt-get update && apt-get install -y \
     build-essential \
@@ -48,7 +48,7 @@ RUN mix compile && mix assets.deploy && mix release cyfr
 # ---- Stage 2: Runner ----
 # Runtime libraries, locales and service user. Build toolchains are provided
 # by Dockerfile.locus.
-FROM debian:bookworm-slim AS runner
+FROM debian:trixie-slim AS runner
 
 RUN apt-get update && apt-get upgrade -y && apt-get install -y \
     libstdc++6 \
