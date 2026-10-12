@@ -11,7 +11,7 @@ import {marked} from "../../vendor/marked.esm.js"
 import DOMPurify from "../../vendor/purify.es.mjs"
 import hljs from "../../vendor/highlight.min.js"
 
-// Configure marked renderer once (v15 API: marked.use, not new Renderer)
+// Configure marked's renderer once, through marked.use.
 let markedConfigured = false
 function ensureMarkedConfig() {
   if (markedConfigured) return
@@ -37,10 +37,16 @@ function ensureMarkedConfig() {
   })
 }
 
-function renderMarkdownToHTML(raw) {
+// The configured parse step: marked's HTML with highlighted code and links
+// that open apart, before the sanitizer. Its output is never put in the
+// page; renderMarkdownToHTML sanitizes it first.
+export function parseMarkdown(raw) {
   ensureMarkedConfig()
-  const html = marked.parse(raw)
-  return DOMPurify.sanitize(html, {
+  return marked.parse(raw)
+}
+
+function renderMarkdownToHTML(raw) {
+  return DOMPurify.sanitize(parseMarkdown(raw), {
     ALLOWED_TAGS: [
       "h1","h2","h3","h4","h5","h6","p","br","hr","blockquote",
       "ul","ol","li","a","strong","em","del","code","pre",

@@ -16,7 +16,9 @@ runs on the image's own Node. `package-lock.json` pins it with its
 integrity hash and `npm ci --ignore-scripts` installs it, so no binary is
 fetched at test time. `apps/cyfr/assets` has no JavaScript toolchain of its
 own to share. `playwright_run` (`harness.sh`) runs an experiment in the
-image, pinned by digest, on the host's network.
+image, pinned by digest, on the host's network, with `apps/cyfr/assets`
+mounted read-only at `/assets` for an experiment that loads the console's
+own modules (`tests/markdown-proof/`).
 
 ## One cell: `cyfr.test`
 
@@ -146,14 +148,16 @@ server before the browsers start, so the run fails naming the cell.
 
 Every proof the harness serves, with its shape. The `browser` job of
 `.github/workflows/test.yml` runs each one, in this order, on the release
-the frame-facts experiment built (`RELEASE_BOOT_SKIP_BUILD=1`). A passkey
-ceremony is Chromium's alone, whose virtual authenticator a proof drives,
-so a proof that needs one runs its passkey steps in Chromium. Each proof's
-own README holds its steps and its record.
+the frame-facts experiment built (`RELEASE_BOOT_SKIP_BUILD=1`), but the
+markdown proof, which starts no release. A passkey ceremony is Chromium's
+alone, whose virtual authenticator a proof drives, so a proof that needs
+one runs its passkey steps in Chromium. Each proof's own README holds its
+steps and its record.
 
 | Proof | Directory | Shape | Browsers |
 |---|---|---|---|
 | frame facts | `tests/browser/` (`run.sh`) | one cell, `cyfr.test` | Chromium, Firefox and WebKit |
+| markdown | `tests/markdown-proof/` | no release: a page of its own, `markdown.test`, serving the console's markdown hook from `/assets` | Chromium |
 | tincture | `tests/tincture-proof/` | one cell, `cyfr.test` | Chromium, Firefox and WebKit |
 | containment (the hostile frame) | `tests/hostile-frame-proof/` | one cell, `cyfr.test` | Chromium, Firefox and WebKit; the prompt and pointer-lock attempts in Chromium's full build alone |
 | pairing | `tests/pairing-proof/` | one home, `home.test` | Chromium |

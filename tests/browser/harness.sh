@@ -214,7 +214,8 @@ browser_rows() {
 # ---------------------------------------------------------------------------
 
 # Run the experiment `$2` of the directory tests/`$1` in the Playwright
-# image, with `$3...` as its arguments; OUT is mounted at /out. The
+# image, with `$3...` as its arguments; OUT is mounted at /out, and the
+# console's assets (apps/cyfr/assets) read-only at /assets. The
 # experiment's directory is copied beside tests/browser, so it imports the
 # harness's library as ../browser/lib.mjs, and Playwright through it. Once
 # the run has an authority, it is mounted at /authority and every browser
@@ -234,7 +235,8 @@ playwright_run() {
   fi
   docker run --rm --network host --ipc=host \
     -u "$(id -u):$(id -g)" -e HOME=/tmp -e npm_config_update_notifier=false \
-    -v "$ROOT/tests:/tests:ro" -v "$OUT:/out" ${trust[@]+"${trust[@]}"} \
+    -v "$ROOT/tests:/tests:ro" -v "$ROOT/apps/cyfr/assets:/assets:ro" -v "$OUT:/out" \
+    ${trust[@]+"${trust[@]}"} \
     "$PLAYWRIGHT_IMAGE" \
     sh -c 'set -e
            mkdir -p /tmp/tests

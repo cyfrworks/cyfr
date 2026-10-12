@@ -1023,8 +1023,12 @@ jobs:
         run: mix deps.get
       - name: The frame-facts experiment
         run: tests/browser/run.sh
-      - name: The console's JavaScript tests (the SDK, the canvas toolkit, the canvas, the carrier and the system layer)
+      - name: The console's JavaScript tests (the SDK, the canvas toolkit, the canvas, the carrier, the system layer and the markdown hook's parse step)
         run: apps/cyfr/assets/test/run.sh
+      # The markdown hook's output after DOMPurify, which needs a browser's
+      # DOM (tests/markdown-proof/README.md). It starts no release.
+      - name: The markdown proof (Chromium)
+        run: tests/markdown-proof/run.sh
       - name: Build the Locus builds image for the tincture proof
         run: docker build -f Dockerfile.locus -t cyfr-locus:tincture-proof .
       - name: The tincture proof
