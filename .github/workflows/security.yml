@@ -121,7 +121,7 @@ jobs:
         # Every nonzero exit fails: a finding (3), a scanner panic and any
         # other tool failure alike, since a scan that did not complete is not
         # clean coverage.
-        run: bash ../../scripts/security-scan.sh govulncheck ./...
+        run: bash "$GITHUB_WORKSPACE/scripts/security-scan.sh" govulncheck ./...
 
   security-scan-harness:
     name: Security Scan Wrapper Tests
