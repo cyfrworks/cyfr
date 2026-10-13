@@ -563,6 +563,29 @@ defmodule Sanctum.Consent.LoaderTest do
                Prima.Authority.Blob.clamp(blob, Sanctum.Policy.Ceiling.platform_ceiling())
     end
 
+    test "clamps to the platform ceiling, whatever ceiling its options name", %{ctx: ctx} do
+      profile = profile_summary()
+      consent = consent()
+      seed(ctx, profile, consent)
+      live = live_for(consent.activation)
+
+      {:ok, blob} = Loader.admitted_blob(ctx, profile, head!(ctx, profile))
+
+      # One budget id for both, so the two roots are comparable whole.
+      plain = Loader.load_root(ctx, profile, live: live, budget_id: "bgt_ceiling")
+
+      assert {:ok, %Authority{policy: carried}, _stamp} = plain
+
+      assert carried ==
+               Prima.Authority.Blob.clamp(blob, Sanctum.Policy.Ceiling.platform_ceiling())
+
+      assert Loader.load_root(ctx, profile,
+               live: live,
+               budget_id: "bgt_ceiling",
+               ceiling: %{max_concurrent_tasks: 1}
+             ) == plain
+    end
+
     test "leaves the run's own origin to load_root/3", %{ctx: ctx} do
       profile = profile_summary()
       consent = consent()

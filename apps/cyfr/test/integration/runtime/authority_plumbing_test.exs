@@ -3,10 +3,10 @@
 
 defmodule Locus.Runtime.AuthorityPlumbingTest do
   # Verify the authority a run is dispatched with is the one its runner is
-  # handed at its attach, read on the suite's wire, and that
-  # authority_required fails closed at admission, with nothing attached.
-  # The runtime's own re-check of authority_required is
-  # `Locus.Runtime.EngineTest`'s, in the runtime's suite.
+  # handed at its attach, read on the suite's wire, and that a run without
+  # one fails closed at admission, with nothing attached. The runtime's own
+  # refusal of a run without an authority is `Locus.Runtime.EngineTest`'s,
+  # in the runtime's suite.
   use ExUnit.Case, async: false
 
   alias Cyfr.Test.TwoServices
@@ -70,7 +70,7 @@ defmodule Locus.Runtime.AuthorityPlumbingTest do
 
   # math.wasm is a core module, not a Component Model binary, so every run
   # here fails at component compile. That is irrelevant: its runner attaches,
-  # and the required-check runs, before compilation is attempted.
+  # and the authority check runs, before compilation is attempted.
 
   test "an :authority passed to a dispatched run reaches its runner as its assignment carries it",
        %{ctx: ctx} do
@@ -95,31 +95,5 @@ defmodule Locus.Runtime.AuthorityPlumbingTest do
 
     assert message =~ "without an authority is not a thing"
     refute attached?()
-  end
-
-  test "authority_required without an authority fails closed, executing nothing", %{ctx: ctx} do
-    assert {:error, message} =
-             Opus.Dispatch.run(ctx, @test_ref, %{"a" => 1, "b" => 2},
-               type: :reagent,
-               authority_required: true
-             )
-
-    assert message =~ "without an authority"
-    refute attached?()
-  end
-
-  test "authority_required with an authority proceeds to its runner", %{ctx: ctx} do
-    authority = Prima.Authority.zero()
-    execution_id = "exec_auth_plumb_#{System.unique_integer([:positive])}"
-
-    _result =
-      Opus.Dispatch.run(ctx, @test_ref, %{"a" => 1, "b" => 2},
-        type: :reagent,
-        execution_id: execution_id,
-        authority: authority,
-        authority_required: true
-      )
-
-    assert TwoServices.entered(execution_id) == as_assigned(authority)
   end
 end
