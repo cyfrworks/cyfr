@@ -388,13 +388,12 @@ defmodule CyfrWeb.Plugs.AuthenticateTest do
       assert conn.status == 401
     end
 
+    # The case's conn carries the test person's bearer, which no Sanctum
+    # credential matches and only the provider ConnCase configures claims,
+    # so the request proceeds — the plug does not pre-empt it.
+    @tag auth: :person
     test "an unclaimed bearer is left to a configured auth provider", %{conn: conn} do
-      # The provider in this file's setup accepts any caller, so the request
-      # proceeds — the plug does not pre-empt it.
-      conn =
-        conn
-        |> put_req_header("authorization", "Bearer a-token-only-the-provider-knows")
-        |> Authenticate.call([])
+      conn = Authenticate.call(conn, [])
 
       refute conn.halted
       assert conn.assigns[:context].authenticated
