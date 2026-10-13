@@ -55,10 +55,8 @@ Usage: tests/builder-image/memory.py IMAGE [--measure] [keeper|javascript|rust|t
 
 import json
 import os
-import shutil
 import subprocess
 import sys
-import tempfile
 import threading
 import time
 
@@ -66,6 +64,8 @@ sys.dont_write_bytecode = True
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from stack import HOME_ROOT, POOL_FIRST, POOL_LAST, RELEASE_UID, Stack, expect, run, tincture  # noqa: E402
+# stack puts tests/, which holds the shared plumbing, on the path.
+import imagesuite  # noqa: E402
 
 MIB = 1 << 20
 # A build nothing else ends is ended by this deadline.
@@ -515,7 +515,9 @@ def test_build(stack, case, limit, measure):
 
 
 def main(image, measure, cases):
-    canary = tempfile.mkdtemp(prefix="locus-builds-memory-")
+    # Registered for removal at exit as soon as it exists, so a signal
+    # before the `try` leaves no directory behind.
+    canary = imagesuite.temporary_directory("locus-builds-memory-")
     stack = Stack("locus-builds-memory", image, canary)
     try:
         for case in cases:
@@ -529,7 +531,7 @@ def main(image, measure, cases):
                 test_build(stack, case, int(limit), measure)
     finally:
         stack.down()
-        shutil.rmtree(canary, ignore_errors=True)
+        imagesuite.remove_directory(canary)
 
 
 if __name__ == "__main__":

@@ -2,7 +2,8 @@
 # Copyright 2026 CYFR Works Inc.
 """CYFR's host API as the runtime image tests script it: the host routes
 `Prima.WorkerWire` names, served on the host machine where the container
-reaches them as `host.docker.internal`, each request verified as CYFR
+reaches them as `host.docker.internal`, bound to that name's address alone
+(the default bridge's gateway), each request verified as CYFR
 verifies it (`Prima.WorkerAuth`: a runner's call under the attempt's call
 key, its sealed body opened and its answer sealed back; a worker service's
 plain report under the service's dispatch key) under the tests' own root,
@@ -34,7 +35,8 @@ that routes, frames or overrides it (the rosters of
 and a host outside the connection's are each refused as one sealed
 `guest_error` naming the request's `call_id`. Otherwise the rule is
 applied, the request is made to the local upstream (this machine, at the
-URL's port, the URL's host kept for `Host`), the value is masked out of
+address the upstream's listener binds, `upstream_host`, and the URL's port,
+the URL's host kept for `Host`), the value is masked out of
 the answer's header values and body, and the answer is streamed back as
 `Prima.WorkerAuth` frames sealed for the call id, chunked under
 `application/vnd.cyfr.frames`, the `end` last. Its record names the
@@ -61,13 +63,20 @@ import json
 import os
 import secrets as random
 import socket
+import sys
 import threading
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
 
-import worker_auth as auth
+# tests/, which holds the image suites' shared plumbing.
+_TESTS = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if _TESTS not in sys.path:
+    sys.path.append(_TESTS)
+
+import imagesuite  # noqa: E402
+import worker_auth as auth  # noqa: E402
 
 DROP = object()
 LEASE_MS = 60_000
@@ -114,6 +123,12 @@ class ControlPlane:
         # issues names, what its address is, and what every host call of
         # those attempts must present to be answered here.
         self.member = "cyfr@test#" + self.boot
+        # The address the plane listens on, read when it first serves, and
+        # the one it makes an attached request to: a listener reached by the
+        # plane alone binds the loopback; one a container reaches as well
+        # binds the gateway, and its case names that address here.
+        self.host = None
+        self.upstream_host = "127.0.0.1"
         self.port = port
         self.lock = threading.Condition()
         self.requests = []
@@ -166,7 +181,9 @@ class ControlPlane:
             daemon_threads = True
             allow_reuse_address = True
 
-        self.server = Server(("0.0.0.0", self.port), Handler)
+        if self.host is None:
+            self.host = imagesuite.bridge_gateway()
+        self.server = Server((self.host, self.port), Handler)
         self.port = self.server.server_address[1]
         self.thread = threading.Thread(target=self.server.serve_forever, kwargs={"poll_interval": 0.05}, daemon=True)
         self.thread.start()
@@ -462,7 +479,7 @@ class ControlPlane:
             seq += 1
 
         try:
-            upstream = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
+            upstream = http.client.HTTPConnection(self.upstream_host, port, timeout=10)
             upstream.putrequest(args["method"], target, skip_host=True, skip_accept_encoding=True)
             upstream.putheader("Host", f"{host}:{port}")
             for name, header_value in headers:

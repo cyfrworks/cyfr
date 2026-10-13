@@ -34,6 +34,9 @@ its own, `writable-cgroups=true`), the Compose plugin, the image under test
 built from Dockerfile.locus and named as the suites' one argument, and the
 golang:1.27.2-alpine image for the residue canary. A missing prerequisite
 fails the suite; nothing is skipped.
+
+The command runner, the teardown on a signal and the part of the Stack that
+does not depend on the service come from tests/imagesuite.py.
 """
 
 import base64
@@ -42,17 +45,22 @@ import hmac
 import json
 import os
 import secrets
-import shutil
 import socket
-import subprocess
 import sys
-import tempfile
 import time
 import urllib.error
 import urllib.request
 
+sys.dont_write_bytecode = True
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.abspath(os.path.join(HERE, "..", ".."))
+if os.path.join(ROOT, "tests") not in sys.path:
+    sys.path.append(os.path.join(ROOT, "tests"))
+
+import imagesuite  # noqa: E402
+from imagesuite import PROJECT_PREFIX, run  # noqa: E402
+
+imagesuite.stop_on_signals()
 
 with open(os.path.join(ROOT, "tests", "fixtures", "locus_roles.json"), encoding="utf-8") as _roles:
     _TABLE = json.load(_roles)
@@ -64,9 +72,6 @@ if ROLE is None:
 
 SERVICE = ROLE["service"]
 PORT = ROLE["port"]
-# Prefixed to every compose project and container of a run, for a host that
-# tells one run's Docker objects from another's by name.
-PROJECT_PREFIX = os.environ.get("STACK_PROJECT_PREFIX", "")
 POOL_FIRST, POOL_LAST = ROLE["first_uid"], ROLE["last_uid"]
 RELEASE_UID = RELEASE["uid"]
 RELEASE_USER = RELEASE["user"]
@@ -96,13 +101,6 @@ WINDOW_MS = WIRE["window_ms"]
 def pool_user(uid):
     """The name the image gives a backend uid: the role's user prefix and the uid's two-digit ordinal in the pool (Dockerfile.locus)."""
     return f"{ROLE['user_prefix']}{uid - POOL_FIRST + 1:02d}"
-
-
-def run(*args, check=True, env=None, timeout=None):
-    result = subprocess.run(args, capture_output=True, text=True, env=env, timeout=timeout)
-    if check and result.returncode != 0:
-        sys.exit(f"FAIL: {' '.join(args)} exited {result.returncode}\n{result.stdout}\n{result.stderr}")
-    return result
 
 
 def expect(condition, message, detail=None):
@@ -549,9 +547,8 @@ class Controller:
 
 def build_canary():
     """Builds tests/fixtures/residue-canary.go for Linux on this host's architecture."""
-    out = tempfile.mkdtemp(prefix="cyfr-canary-")
     # The read-only fixture mount must be traversable by pooled backend uids.
-    os.chmod(out, 0o755)
+    out = imagesuite.temporary_directory("cyfr-canary-", 0o755)
     run(
         "docker", "run", "--rm", "--name", f"{PROJECT_PREFIX}cyfr-canary-build-{os.getpid()}",
         "-v", f"{os.path.join(ROOT, 'tests', 'fixtures')}:/src:ro", "-v", f"{out}:/out",
@@ -573,17 +570,14 @@ def require_docker():
                  "writable-cgroups=true, which bounds every backend, needs Docker Engine 28 or later on cgroup v2")
 
 
-class Stack:
+class Stack(imagesuite.Stack):
     def __init__(self, project, image, canary_dir=None):
-        self.project = PROJECT_PREFIX + project
+        super().__init__(project)
         self.image = image
         self.canary_dir = canary_dir or HERE
         # The backends key of this run: compose gives it to the service as
         # LOCUS_BACKENDS_KEY, from the name cyfr's .env holds it under.
         self.key = secrets.token_bytes(32)
-        self.project_dir = tempfile.mkdtemp(prefix=f"{self.project}-")
-        # The rest of the stack's definition names a project .env.
-        open(os.path.join(self.project_dir, ".env"), "w").close()
         self.base = None
         self.container = None
         self.pool = f"{POOL_FIRST}-{POOL_LAST}"
@@ -630,12 +624,6 @@ class Stack:
 
     def logs(self):
         return self.compose("logs", "--no-color", SERVICE, check=False).stdout
-
-    def down(self):
-        if os.environ.get("CI"):
-            print(self.logs())
-        self.compose("down", "--volumes", "--remove-orphans", check=False)
-        shutil.rmtree(self.project_dir, ignore_errors=True)
 
     def exec(self, script, user=None, target=None):
         user_args = ["-u", user] if user else []
