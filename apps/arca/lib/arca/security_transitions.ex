@@ -59,21 +59,27 @@ defmodule Arca.SecurityTransitions do
   ## Lock order
 
   Every transition, and every credential issuance, takes its row locks in
-  one order: any global cap lock the operation needs, people sorted by id,
-  athanors sorted by id, then memberships, invitations and follows, then
-  cached identity heads, then sessions, then API keys, then frame
-  credentials, then paired clients, then device certificates, pairing
-  invitations, passkeys and pending confirmations, then instance entry
-  audiences, then file offers by offer and file name (`Arca.FileOffers`).
+  one order: people sorted by id, athanors sorted by id, then
+  memberships, invitations and follows, then cached identity heads, then
+  sessions, then API keys, then frame credentials, then paired clients,
+  then device certificates, pairing invitations, passkeys and pending
+  confirmations, then instance entry audiences, then file offers by offer
+  and file name (`Arca.FileOffers`).
   A writer of a membership row naming a person takes the person's lock
   first (`Arca.Members`), so a seat or a claim racing a leave or a denial
   waits for it, or it for them; a file offer is written under its two
   people's locks and its athanor's, shared, so it waits for a denial or
   an archive holding them, and either sees an offer that landed first.
-  A transition taking only a suffix of that order
-  never goes back for an earlier lock. On PostgreSQL the order is the deadlock
-  rule; on SQLite the write lock every transaction takes at entry is the
-  lock and the order is code order (`Arca.Repo.locking_transaction/2`).
+  An allow and a reopen, which count the server's active athanors for
+  their caller, take the server-wide census lock (`Arca.AthanorCensus`)
+  after their row locks and right before the caller's policy, as a mint
+  takes it after the people it holds. After it they write only the rows
+  they hold and the credentials, clients and invitations that hang off
+  them, which no holder of the census lock locks before taking it. A
+  transition taking only a suffix of that order never goes back for an
+  earlier lock. On PostgreSQL the order is the deadlock rule; on SQLite
+  the write lock every transaction takes at entry is the lock and the
+  order is code order (`Arca.Repo.locking_transaction/2`).
 
   A denial computes the athanors it touches from the person's memberships,
   locks them, then locks the memberships and computes the set again, and
@@ -133,6 +139,7 @@ defmodule Arca.SecurityTransitions do
   alias Arca.QueryHelpers
 
   alias Arca.{
+    AthanorCensus,
     DeviceCertificates,
     FrameCredentials,
     PairedClients,
@@ -682,6 +689,7 @@ defmodule Arca.SecurityTransitions do
            :ok <- personal_present(user, athanors),
            athanor = athanors[user.personal_athanor_id],
            seats = lock_seats(user_id, athanor),
+           :ok <- AthanorCensus.lock(),
            :ok <-
              decide(verify, %{
                transition: :allow_user,
@@ -829,6 +837,7 @@ defmodule Arca.SecurityTransitions do
   defp unarchive(athanor_id, verify) do
     result =
       with {:ok, athanor} <- lock_athanor(athanor_id),
+           :ok <- AthanorCensus.lock(),
            :ok <-
              decide(verify, %{
                transition: :unarchive_athanor,
