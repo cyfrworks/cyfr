@@ -4,8 +4,8 @@
 """The image suites' shared plumbing, without Docker: a suite that TERM or INT
 stops tears its stacks and temporary directories down, a second signal does
 not cut that teardown short, the runtime suite's namespace prerequisite
-refuses the hosts it names and passes the others, and no entry script leaves
-`__pycache__` under tests/.
+refuses the hosts it names and passes the others, and no entry script writes
+bytecode for anything under tests/, whatever cache is already there.
 
 Usage: python3 -I tests/imagesuite_test.py
 """
@@ -62,10 +62,6 @@ if body == "guarded":
 elif body == "bare":
     time.sleep(60)
 """
-
-
-def pycaches():
-    return set(glob.glob(os.path.join(TESTS, "**", "__pycache__"), recursive=True))
 
 
 class Teardown(unittest.TestCase):
@@ -171,8 +167,17 @@ class NamespacePrerequisite(unittest.TestCase):
 
 
 class Bytecode(unittest.TestCase):
-    def test_no_entry_script_writes_pycache(self):
-        before = pycaches()
+    def test_no_entry_script_writes_bytecode(self):
+        # Under `-X pycache_prefix` Python reads and writes every bytecode
+        # cache below a fresh directory and ignores the __pycache__
+        # directories beside the sources, so a stale cache under tests/ (an
+        # empty directory, or a valid .pyc) neither hides a write nor answers
+        # an import. A .pyc below the directory's copy of tests/ is one an
+        # entry script wrote; the standard library's land elsewhere in it.
+        prefix = tempfile.mkdtemp(prefix="imagesuite-test-pycache-")
+        self.addCleanup(shutil.rmtree, prefix, True)
+        mirror = os.path.join(prefix, TESTS.lstrip(os.sep))
+        ran = set()
         for suite in SUITES:
             for script in sorted(glob.glob(os.path.join(TESTS, suite, "*.py"))):
                 with open(script) as f:
@@ -181,13 +186,17 @@ class Bytecode(unittest.TestCase):
                 # The script's own module code runs, its siblings' imports
                 # among it, and its __main__ block does not.
                 result = subprocess.run(
-                    [sys.executable, "-I", "-c", "import runpy, sys; runpy.run_path(sys.argv[1], run_name='imported')", script],
+                    [sys.executable, "-I", "-X", f"pycache_prefix={prefix}", "-c",
+                     "import runpy, sys; runpy.run_path(sys.argv[1], run_name='imported')", script],
                     capture_output=True, text=True, timeout=60)
                 self.assertEqual(result.returncode, 0, f"{script}\n{result.stderr}")
-        written = pycaches() - before
-        for path in written:
-            shutil.rmtree(path, ignore_errors=True)
-        self.assertEqual(sorted(written), [])
+                ran.add(suite)
+                written = sorted(os.path.relpath(path, mirror)
+                                 for path in glob.glob(os.path.join(mirror, "**", "*.pyc"), recursive=True))
+                self.assertEqual(written, [], f"{os.path.relpath(script, TESTS)} wrote bytecode")
+        # Each suite's entry scripts ran, so a glob that matched nothing
+        # does not pass the case.
+        self.assertEqual(ran, set(SUITES))
 
 
 if __name__ == "__main__":

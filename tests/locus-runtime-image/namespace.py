@@ -52,12 +52,12 @@ runner's own uid, outside that namespace, may not):
   every process of the reused cgroup root, or its refusal names each pid
   it could not move with the write's error); its runners are isolated.
 
-The suite needs a host that allows unprivileged user namespaces, and fails
-before its first step on one that does not: where user.max_user_namespaces
-is 0, or where kernel.apparmor_restrict_unprivileged_userns is 1 and
-Docker's default AppArmor profile, which allows them then, is not in force
-(`docker info` lists no `name=apparmor` security option). The
-service steps sign their requests with the scripted control plane's keys
+The suite needs a host that allows unprivileged user namespaces. It fails
+before its first step on the two refusals it reads: where
+user.max_user_namespaces is 0, or where
+kernel.apparmor_restrict_unprivileged_userns is 1 and Docker's default
+AppArmor profile, which allows them then, is not in force (`docker info`
+lists no `name=apparmor` security option). The service steps sign their requests with the scripted control plane's keys
 (control_plane.py); none of them needs the service to reach it.
 
 Usage: tests/locus-runtime-image/namespace.py IMAGE [STEP]...

@@ -18,7 +18,7 @@ measurement.
 |---|---|
 | `runners.py` | runners ended at their bounds, settlement and cleanup, the relay, pinned egress, attached requests and the shipped model catalysts' requests, the queue age of a fresh runner, and `memory.py`'s cases |
 | `memory.py` | every runner in a memory group of its own at the service's bound, and no runner at all without `writable-cgroups=true`; `--measure` prints each workload's group peak |
-| `namespace.py` | each runner in a user and network namespace of its own, with no route out; it fails first on a host that refuses unprivileged user namespaces |
+| `namespace.py` | each runner in a user and network namespace of its own, with no route out; it fails before its first step where `user.max_user_namespaces` is 0, or where `kernel.apparmor_restrict_unprivileged_userns` is 1 and `docker info` lists no `name=apparmor` security option |
 | `canary.py` | the credential canary: a credential CYFR attaches to a guest's request reaches neither the runner nor the worker service |
 
 The suites share `stack.py` (the service under compose, and the
