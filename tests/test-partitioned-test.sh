@@ -205,10 +205,12 @@ exits_within() {
 }
 # stop_runner PID SIGNAL BOUND OUT: signals the runner and fails with a
 # reason unless it exits within BOUND seconds with the signal's status,
-# which its terminal line, the last line of OUT, repeats.
+# which its terminal line, the last line of OUT, repeats. The runner traps
+# HUP, INT and TERM; any other signal kills it once its EXIT trap has
+# written 1.
 stop_runner() {
   local pid=$1 signal=$2 bound=$3 out=$4 expected
-  case "$signal" in TERM) expected=143 ;; INT) expected=130 ;; esac
+  case "$signal" in HUP) expected=129 ;; INT) expected=130 ;; TERM) expected=143 ;; *) expected=1 ;; esac
   kill -"$signal" "$pid"
   if ! exits_within "$pid" "$bound"; then
     kill -KILL "$pid" 2>/dev/null || :
@@ -216,7 +218,10 @@ stop_runner() {
     fail "the runner did not end within ${bound}s of $signal"
   fi
   if wait "$pid"; then stop_status=0; else stop_status=$?; fi
-  [ "$stop_status" = "$expected" ] || fail "$signal ended the run with $stop_status"
+  case "$signal" in
+    HUP|INT|TERM) [ "$stop_status" = "$expected" ] ;;
+    *) [ "$stop_status" != 0 ] ;;
+  esac || fail "$signal ended the run with $stop_status"
   [ "$(tail -n 1 "$out")" = "_EXIT=$pid $expected" ] || fail "$signal left the terminal line $(tail -n 1 "$out")"
 }
 # Waits up to a minute for FILE to exist.
@@ -722,9 +727,10 @@ CYFR_TEST_CORES=6 "${clean[@]}" bash "$runner" -n 2 >"$scratch/flags" 2>&1 || fa
 [ "$(grep -c '^test	+S 3:3 +SDcpu 3 +SDio 16 ' "$TRACE/erl-flags")" = 2 ] || fail "a partition did not see its share: $(grep '^test' "$TRACE/erl-flags")"
 
 # A partition's grandchild in a process group of its own dies with the run,
-# on TERM and on INT. A background command of a shell without job control
-# starts with INT ignored, and Bash cannot trap a signal ignored at its
-# start, so the runner starts with INT's default restored.
+# on TERM, INT, HUP and an untrapped USR1. A background command of a shell
+# without job control starts with INT ignored, a nohup one with HUP, and
+# Bash cannot trap a signal ignored at its start, so the runner starts with
+# their defaults restored.
 await_lines() {
   local i
   for ((i=0; i<600; i++)); do
@@ -733,9 +739,9 @@ await_lines() {
   done
   fail "$1 never reached $2 lines"
 }
-for signal in TERM INT; do
+for signal in TERM INT HUP USR1; do
   : > "$TRACE/grandchildren"
-  GRANDCHILD=1 "${clean[@]}" perl -e '$SIG{INT} = "DEFAULT"; exec @ARGV or die' bash "$runner" -n 2 >"$scratch/cancel-$signal" 2>&1 &
+  GRANDCHILD=1 "${clean[@]}" perl -e '$SIG{INT} = $SIG{HUP} = "DEFAULT"; exec @ARGV or die' bash "$runner" -n 2 >"$scratch/cancel-$signal" 2>&1 &
   cancel=$!
   await_lines "$TRACE/grandchildren" 2
   stop_runner "$cancel" "$signal" 60 "$scratch/cancel-$signal"

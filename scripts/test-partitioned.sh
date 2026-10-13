@@ -13,9 +13,10 @@
 #
 # Stdout begins `_START=<pid>` and ends `_EXIT=<pid> <status>`, unless the
 # heavy-check that runs it (HEAVY_CHECK_HELD) writes them. The status is 0
-# passed, 1 a check failed, 64 usage, 69 a missing prerequisite, 130 INT,
-# 143 TERM. Every child runs contained (scripts/lib/contain.sh), so none
-# outlives the run, even when the runner itself is killed.
+# passed, 1 a check failed, 64 usage, 69 a missing prerequisite, 129 HUP,
+# 130 INT, 143 TERM, and 1 for another signal. Every child runs contained
+# (scripts/lib/contain.sh), so none outlives the run, even when the runner
+# itself is killed.
 set -uo pipefail
 
 PARTITIONS=4
@@ -47,6 +48,7 @@ out_dir=
 registry_owned=false
 finishing=false
 started=()
+completed=false
 # none: no partition started; pending: started, not yet merged; running;
 # done; failed.
 merge_state=none
@@ -62,7 +64,10 @@ group_pid=()
 finish() {
   local result=$? i drops=
   trap - EXIT
-  trap '' INT TERM
+  trap '' INT TERM HUP
+  # An untrapped signal runs this trap with $? at 0 and then kills the
+  # shell: only a main path that reached its end reports 0.
+  if [ "$result" = 0 ] && [ "$completed" != true ]; then result=1; fi
   exec 2>&3
   finishing=true
   if declare -F contain_stop_all >/dev/null; then
@@ -122,6 +127,7 @@ finish() {
   exit "$result"
 }
 trap finish EXIT
+trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
@@ -798,4 +804,5 @@ if [ "$skipped" -gt 0 ]; then
 else
   echo "==> $PARTITIONS partitions, $ADAPTER, $((SECONDS - start))s wall, exit $status"
 fi
+completed=true
 exit "$status"
