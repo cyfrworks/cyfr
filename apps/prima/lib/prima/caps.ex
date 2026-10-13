@@ -61,7 +61,6 @@ defmodule Prima.Caps do
     :max_pairs_per_person,
     :max_members_per_group,
     :max_threads_per_athanor,
-    :mint_per_hour,
     :athanor_storage_bytes
   ]
 
@@ -75,7 +74,6 @@ defmodule Prima.Caps do
           | :max_pairs_per_person
           | :max_members_per_group
           | :max_threads_per_athanor
-          | :mint_per_hour
           | :athanor_storage_bytes
 
   @typedoc """

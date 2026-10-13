@@ -307,7 +307,7 @@ defmodule Cyfr.Platform.Settings.Roster do
     "max_external_servers_per_athanor" =>
       "External MCP servers one athanor may register; unset, 1,000, and 0 removes the ceiling.",
     "mint_per_hour" =>
-      "Personal athanors minted per hour: how fast strangers can arrive through an open door. Unset, no cap.",
+      "Personal athanors minted per hour: how fast strangers can arrive through an open door. Unset, no bound; 0 is refused, so `CYFR_MINT_PER_HOUR=0` stops the boot rather than turning the bound off.",
     "athanor_storage_bytes" =>
       "Bytes one athanor may hold, its whole tree including its copies of the shipped bundle. Unset, no cap.",
     "opus_max_concurrent" =>
@@ -409,7 +409,6 @@ defmodule Cyfr.Platform.Settings.Roster do
         "servers",
         :cyfr
       ),
-      cap(:mint_per_hour, "CYFR_MINT_PER_HOUR", nil, "athanors"),
       %Entry{
         key: "athanor_storage_bytes",
         app: :sanctum,
@@ -483,6 +482,21 @@ defmodule Cyfr.Platform.Settings.Roster do
         requests(),
         :rate_limits
       ),
+      # The one rate limit that refuses a stale value: it is the security
+      # bound on how fast strangers are minted an athanor, and a store that
+      # cannot answer must not open the door. It is not a capacity cap, so
+      # 0 is refused rather than read as off.
+      %Entry{
+        key: "mint_per_hour",
+        app: :sanctum,
+        variable: "CYFR_MINT_PER_HOUR",
+        type: :integer,
+        default: nil,
+        validator: whole(1..1_000_000, "athanors"),
+        group: :rate_limits,
+        scope: :live,
+        stale: :refuse
+      },
 
       # ——— per-member stream limits ———
       limit(

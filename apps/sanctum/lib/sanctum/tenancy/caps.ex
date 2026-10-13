@@ -5,21 +5,24 @@ defmodule Sanctum.Tenancy.Caps do
   @moduledoc """
   The public-door caps: how many athanors a server holds, how many groups a
   person may create, how many DMs a person may hold open, how many members
-  a group may hold, how many threads an athanor may hold, how many
-  personal athanors may be minted per hour, and how many bytes an athanor
-  may store.
+  a group may hold, how many threads an athanor may hold, and how many
+  bytes an athanor may store.
 
   Each cap is a platform setting of the same name, read on every check
   through `Arca.PlatformSettings.effective/1`, so a cap an operator sets
   refuses the next creation over it with no restart (`CYFR_MAX_ATHANORS`,
   `CYFR_MAX_GROUPS_PER_PERSON`, `CYFR_MAX_PAIRS_PER_PERSON`,
-  `CYFR_MAX_MEMBERS_PER_GROUP`, `CYFR_MAX_THREADS_PER_ATHANOR`,
-  `CYFR_MINT_PER_HOUR` and `CYFR_ATHANOR_STORAGE_BYTES` pin them). A `nil`
-  or `0` cap is off. A private box needs none of them; a `*` server sets
-  them — and a default install therefore has NO total-byte ceiling on
-  authenticated guest writes (only the per-call `max_request_size` and the
-  per-scope file backstop): an operator exposing the box sets the storage
-  cap deliberately.
+  `CYFR_MAX_MEMBERS_PER_GROUP`, `CYFR_MAX_THREADS_PER_ATHANOR` and
+  `CYFR_ATHANOR_STORAGE_BYTES` pin them). A `nil` or `0` cap is off. A
+  private box needs none of them; a `*` server sets them — and a default
+  install therefore has NO total-byte ceiling on authenticated guest
+  writes (only the per-call `max_request_size` and the per-scope file
+  backstop): an operator exposing the box sets the storage cap
+  deliberately.
+
+  How fast personal athanors are minted (`CYFR_MINT_PER_HOUR`) is a rate
+  bound, not a cap: `Sanctum.Provisioning` reads it, and only unset leaves
+  it unbounded.
 
   A cap whose value the store cannot answer refuses like a count that
   cannot be taken: `{:error, {:cap_unverifiable, key}}`, or
@@ -73,7 +76,6 @@ defmodule Sanctum.Tenancy.Caps do
           | :max_pairs_per_person
           | :max_members_per_group
           | :max_threads_per_athanor
-          | :mint_per_hour
           | :athanor_storage_bytes
 
   @keys [
@@ -82,7 +84,6 @@ defmodule Sanctum.Tenancy.Caps do
     :max_pairs_per_person,
     :max_members_per_group,
     :max_threads_per_athanor,
-    :mint_per_hour,
     :athanor_storage_bytes
   ]
 
