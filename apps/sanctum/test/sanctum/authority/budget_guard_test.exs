@@ -20,7 +20,7 @@ defmodule Sanctum.Authority.BudgetGuardTest do
     test_pid = self()
 
     holder =
-      spawn(fn ->
+      spawn_holder(fn ->
         # A synchronous call: when it returns the registration is recorded,
         # so the signal below is proof, not a guess. Sleeping "long enough"
         # for it instead is what made this test's ordering a coin flip.
@@ -52,7 +52,7 @@ defmodule Sanctum.Authority.BudgetGuardTest do
     test_pid = self()
 
     holder =
-      spawn(fn ->
+      spawn_holder(fn ->
         BudgetGuard.guard(budget)
         :ok = BudgetGuard.release(budget, self())
         send(test_pid, :released)
@@ -83,13 +83,34 @@ defmodule Sanctum.Authority.BudgetGuardTest do
     assert BudgetCounter.snapshot(budget).in_flight == 0
   end
 
+  # A holder the test drives, killed when the test ends whether or not it
+  # passed: an unlinked holder outlives a failed assertion otherwise. The
+  # cleanup returns once the holder is gone and the guard has handled its
+  # death, so no compensation is left running behind the test.
+  defp spawn_holder(fun) do
+    pid = spawn(fun)
+
+    on_exit(fn ->
+      ref = Process.monitor(pid)
+      Process.exit(pid, :kill)
+
+      receive do
+        {:DOWN, ^ref, :process, ^pid, _reason} -> :ok
+      end
+
+      :sys.get_state(BudgetGuard)
+    end)
+
+    pid
+  end
+
   # A process that guards one charged slot and waits.
   defp holding!(budget) do
     :ok = BudgetCounter.try_acquire(budget)
     test_pid = self()
 
     holder =
-      spawn(fn ->
+      spawn_holder(fn ->
         BudgetGuard.guard(budget)
         send(test_pid, :guarded)
 
@@ -108,7 +129,7 @@ defmodule Sanctum.Authority.BudgetGuardTest do
       from = holding!(budget)
 
       to =
-        spawn(fn ->
+        spawn_holder(fn ->
           receive do
             :never -> :ok
           end

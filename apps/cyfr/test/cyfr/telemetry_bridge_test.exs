@@ -631,11 +631,15 @@ defmodule Cyfr.TelemetryBridgeTest do
     end
   end
 
+  # The bridge's handlers run in the emitting process, this one, and the
+  # PubSub dispatch sends from it: once `:telemetry.execute/3` returns,
+  # every message the event put on a topic this test hears is already in
+  # its mailbox, and nothing is left in flight to wait for.
   defp flush do
     receive do
       _ -> flush()
     after
-      50 -> :ok
+      0 -> :ok
     end
   end
 end

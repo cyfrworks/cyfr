@@ -35,6 +35,35 @@ defmodule Emissary.External.ProxyTest do
     end
   end
 
+  @probe_attempts 3
+
+  # The keeper's state at a call's attempt-ending write, which the probe
+  # reads from inside that write (`Cyfr.Test.KeeperProbe`). `:unknown` is
+  # no evidence either way, and a later look says nothing about that write:
+  # the call is made again, a fresh write, up to the bound, and the failure
+  # at the bound names the inconclusive observations.
+  defp assert_keeper_suspended(call_once) do
+    inconclusive =
+      Enum.reduce_while(1..@probe_attempts, [], fn attempt, inconclusive ->
+        call_once.()
+        assert_received {:attempt_ended, state}
+        refute_received {:attempt_ended, _}
+
+        case state do
+          :suspended -> {:halt, :suspended}
+          :unknown -> {:cont, [attempt | inconclusive]}
+          other -> flunk("the keeper was #{inspect(other)} at the call's attempt-ending write")
+        end
+      end)
+
+    if inconclusive != :suspended do
+      flunk(
+        "the probe saw the keeper settle at none of #{@probe_attempts} attempt-ending writes: " <>
+          "attempts #{inconclusive |> Enum.reverse() |> Enum.join(", ")} each answered :unknown"
+      )
+    end
+  end
+
   # The outbound calls' own rows, apart from the chains that made them.
   defp tool_calls do
     import Ecto.Query
@@ -422,10 +451,26 @@ defmodule Emissary.External.ProxyTest do
   defmodule AnsweringServer do
     use GenServer
 
+    # Unlinked, as the supervisor's own servers are, so it is stopped when
+    # the test ends, passing or not: its registration never outlives the
+    # test that made it.
     def start(ctx, server, answer) do
       config = Emissary.External.Servers.server_config(server, ctx)
       digest = Emissary.External.ServerSupervisor.config_digest(config)
-      GenServer.start(__MODULE__, {server.name, ctx.athanor_id, digest, answer})
+
+      with {:ok, pid} <-
+             GenServer.start(__MODULE__, {server.name, ctx.athanor_id, digest, answer}) do
+        ExUnit.Callbacks.on_exit(fn ->
+          ref = Process.monitor(pid)
+          Process.exit(pid, :kill)
+
+          receive do
+            {:DOWN, ^ref, :process, ^pid, _reason} -> :ok
+          end
+        end)
+
+        {:ok, pid}
+      end
     end
 
     @impl true
@@ -625,15 +670,14 @@ defmodule Emissary.External.ProxyTest do
          %{ctx: ctx, server: server} do
       {:ok, pid} = __MODULE__.AnsweringServer.start(ctx, server, %{"content" => []})
       answers = [{%{"content" => []}, :ok}, {{:refuse, "quota exhausted"}, :error}]
-      calls = for {answer, kind} <- answers, do: {answer, kind, chained(ctx, %{})}
       Cyfr.Test.KeeperProbe.watch()
 
-      for {answer, kind, args} <- calls do
+      for {answer, kind} <- answers do
         :sys.replace_state(pid, fn _ -> answer end)
-        assert {^kind, _} = call("kept:probe", ctx, args, :in_chain)
 
-        assert_received {:attempt_ended, :suspended}
-        refute_received {:attempt_ended, _}
+        assert_keeper_suspended(fn ->
+          assert {^kind, _} = call("kept:probe", ctx, chained(ctx, %{}), :in_chain)
+        end)
       end
 
       GenServer.stop(pid)

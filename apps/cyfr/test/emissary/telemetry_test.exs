@@ -15,6 +15,23 @@ defmodule Emissary.TelemetryTest do
     :ok
   end
 
+  # Telemetry handlers are global and this module runs async, so another
+  # test's request or decision would reach a plain handler too. A handler
+  # runs in the process that emits, and this one passes on only what the
+  # test itself emitted, as `:telemetry_test` shapes it. Its id is its own
+  # reference, detached when the test ends, passing or not.
+  defp attach(events) do
+    ref = make_ref()
+    :ok = :telemetry.attach_many(ref, events, &__MODULE__.forward/4, {self(), ref})
+    on_exit(fn -> :telemetry.detach(ref) end)
+    ref
+  end
+
+  @doc false
+  def forward(event, measurements, metadata, {test, ref}) do
+    if self() == test, do: send(test, {event, ref, measurements, metadata})
+  end
+
   describe "telemetry metrics definition" do
     # No protocol-session lifecycle counter is exposed.
     test "no metric is declared without an emitter behind it" do
@@ -72,7 +89,7 @@ defmodule Emissary.TelemetryTest do
         [:cyfr, :sanctum, :decision, :lost]
       ]
 
-      ref = :telemetry_test.attach_event_handlers(self(), events)
+      ref = attach(events)
 
       admitted =
         Prima.Decision.new(
@@ -103,7 +120,7 @@ defmodule Emissary.TelemetryTest do
 
   describe "request telemetry events" do
     test "request telemetry event is emitted on tool call" do
-      ref = :telemetry_test.attach_event_handlers(self(), [[:cyfr, :emissary, :request]])
+      ref = attach([[:cyfr, :emissary, :request]])
 
       # Emit a request telemetry event directly (simulating what mcp_controller does)
       start_time = System.monotonic_time()
@@ -122,7 +139,7 @@ defmodule Emissary.TelemetryTest do
     end
 
     test "request telemetry includes tool in metadata when present" do
-      ref = :telemetry_test.attach_event_handlers(self(), [[:cyfr, :emissary, :request]])
+      ref = attach([[:cyfr, :emissary, :request]])
 
       :telemetry.execute(
         [:cyfr, :emissary, :request],
@@ -135,7 +152,7 @@ defmodule Emissary.TelemetryTest do
     end
 
     test "request telemetry emitted on error with status :error" do
-      ref = :telemetry_test.attach_event_handlers(self(), [[:cyfr, :emissary, :request]])
+      ref = attach([[:cyfr, :emissary, :request]])
 
       :telemetry.execute(
         [:cyfr, :emissary, :request],
@@ -149,7 +166,7 @@ defmodule Emissary.TelemetryTest do
     end
 
     test "request telemetry includes duration measurement" do
-      ref = :telemetry_test.attach_event_handlers(self(), [[:cyfr, :emissary, :request]])
+      ref = attach([[:cyfr, :emissary, :request]])
 
       expected_duration = 12345
 
@@ -164,7 +181,7 @@ defmodule Emissary.TelemetryTest do
     end
 
     test "request telemetry for resources/read includes tool as resources" do
-      ref = :telemetry_test.attach_event_handlers(self(), [[:cyfr, :emissary, :request]])
+      ref = attach([[:cyfr, :emissary, :request]])
 
       :telemetry.execute(
         [:cyfr, :emissary, :request],

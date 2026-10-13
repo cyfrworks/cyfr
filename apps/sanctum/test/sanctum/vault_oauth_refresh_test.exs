@@ -87,6 +87,39 @@ defmodule Sanctum.VaultOAuthRefreshTest do
     counter
   end
 
+  # Killed when the test ends, passing or not, and gone before the
+  # cleanup registered ahead of it runs.
+  defp kill_on_exit(pid) do
+    on_exit(fn ->
+      ref = Process.monitor(pid)
+      Process.exit(pid, :kill)
+
+      receive do
+        {:DOWN, ^ref, :process, ^pid, _reason} -> :ok
+      end
+    end)
+  end
+
+  # A caller that lost the entry's Registry race monitors the leader's
+  # task from a task of the refresh lock's own; `leader` is the caller
+  # awaiting that task, which monitors it too.
+  defp follower?(owner, leader) do
+    case Process.info(owner, :monitored_by) do
+      {:monitored_by, watchers} ->
+        Enum.any?(watchers, &(is_pid(&1) and &1 != leader and refresh_lock_task?(&1)))
+
+      nil ->
+        false
+    end
+  end
+
+  defp refresh_lock_task?(pid) do
+    case Process.info(pid, :current_stacktrace) do
+      {:current_stacktrace, frames} -> Enum.any?(frames, &(elem(&1, 0) == RefreshLock))
+      nil -> false
+    end
+  end
+
   describe "entry-keyed single flight" do
     test "an expired caller joins an in-flight refresh on the entry key and returns its result",
          %{ctx: ctx} do
@@ -94,13 +127,20 @@ defmodule Sanctum.VaultOAuthRefreshTest do
       counter = attach_attempt_counter()
       lock_key = {:vault_oauth_refresh, ctx.athanor_id, entry.id}
 
-      # A "leader" already refreshing this entry: holds the entry lock,
-      # writes the refreshed bundle back, returns its token.
+      # A "leader" already refreshing this entry: holds the entry lock until
+      # the test lets it go, writes the refreshed bundle back, returns its
+      # token.
       leader =
         Task.async(fn ->
           RefreshLock.run(
             lock_key,
             fn ->
+              receive do
+                :go -> :ok
+              after
+                5_000 -> :ok
+              end
+
               Process.sleep(200)
               reseal_valid(ctx, entry, "tok-refreshed")
               {:ok, "tok-refreshed"}
@@ -109,12 +149,31 @@ defmodule Sanctum.VaultOAuthRefreshTest do
           )
         end)
 
-      # Let the leader win the Registry race deterministically.
-      Process.sleep(50)
+      # The leader wins the Registry race before the reader asks.
+      Prima.Test.Wait.wait_until(
+        fn -> Registry.lookup(Sanctum.OAuth.RefreshRegistry, lock_key) != [] end,
+        2_000,
+        "the leader's registration in the refresh lock's Registry"
+      )
 
-      # The reader sees the expired bundle, follows on the same key, and
-      # rechecks the row the leader wrote — no provider POST happens.
-      assert {:ok, "tok-refreshed"} = VaultReader.oauth_token(ctx, resource, "google", @dispense)
+      # The leader's lock is held by the refresh lock's own unlinked task.
+      [{owner, _}] = Registry.lookup(Sanctum.OAuth.RefreshRegistry, lock_key)
+      kill_on_exit(owner)
+
+      # The reader sees the expired bundle and follows on the same key while
+      # the leader still holds it; only then does the leader go on.
+      reader = Task.async(fn -> VaultReader.oauth_token(ctx, resource, "google", @dispense) end)
+
+      Prima.Test.Wait.wait_until(
+        fn -> follower?(owner, leader.pid) end,
+        2_000,
+        "the reader following the leader on the entry key"
+      )
+
+      send(owner, :go)
+
+      # It rechecks the row the leader wrote: no provider POST happens.
+      assert {:ok, "tok-refreshed"} = Task.await(reader, 5_000)
       assert {:ok, "tok-refreshed"} = Task.await(leader, 5_000)
       assert :counters.get(counter, 1) == 0
     end

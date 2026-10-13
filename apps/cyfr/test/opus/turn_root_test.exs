@@ -376,6 +376,19 @@ defmodule Opus.TurnRootTest do
     end
   end
 
+  # Killed when the test ends, passing or not, and gone before the
+  # cleanup registered ahead of it runs.
+  defp kill_on_exit(pid) do
+    on_exit(fn ->
+      ref = Process.monitor(pid)
+      Process.exit(pid, :kill)
+
+      receive do
+        {:DOWN, ^ref, :process, ^pid, _reason} -> :ok
+      end
+    end)
+  end
+
   # The lease keepers linked to this process.
   defp keepers do
     {:links, links} = Process.info(self(), :links)
@@ -401,6 +414,7 @@ defmodule Opus.TurnRootTest do
         Process.sleep(:infinity)
       end)
 
+    kill_on_exit(holder)
     assert_receive {:claimed, claim}, 10_000
     assert roots() == before + 1
 
@@ -416,8 +430,7 @@ defmodule Opus.TurnRootTest do
 
     assert_receive {:DOWN, ^ref, :process, ^holder, {:lease_lost, id}}, 5_000
     assert id == claim.execution_id
-    Process.sleep(50)
-    assert roots() == before
+    wait_until(fn -> roots() == before end, 2_000, "the slots' monitor released the slot")
   end
 
   test "a resumed root that loses its lease exits its holder, and its slot is released", %{
@@ -775,9 +788,22 @@ defmodule Opus.TurnRootTest do
     assert adopted.attempt == taken.attempt
     assert roots() == before + 1
     assert Process.alive?(adopted.keeper)
-    Process.sleep(120)
+
     # The keeper renews the successor's lease, not the predecessor's.
+    %{lease_until: adopted_until} =
+      ExecutionAttempts.get(Sanctum.Context.actor(ctx), taken.attempt)
+
+    wait_until(
+      fn ->
+        %{lease_until: renewed} = ExecutionAttempts.get(Sanctum.Context.actor(ctx), taken.attempt)
+        DateTime.compare(renewed, adopted_until) == :gt
+      end,
+      2_000,
+      "the keeper's renewal of the successor's lease"
+    )
+
     assert %{state: "running"} = ExecutionAttempts.get(Sanctum.Context.actor(ctx), taken.attempt)
+    assert %{state: "lapsed"} = ExecutionAttempts.get(Sanctum.Context.actor(ctx), claim.attempt)
     assert Process.alive?(self())
 
     {:ok, _} =

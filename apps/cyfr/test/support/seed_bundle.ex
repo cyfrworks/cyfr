@@ -13,41 +13,12 @@ defmodule Cyfr.Test.SeedBundle do
 
   @doc "Point `:seed_path` at an empty temp tree until the test exits."
   @spec isolate!() :: String.t()
-  def isolate! do
-    dir = Path.join(System.tmp_dir!(), "seed_isolate_#{System.unique_integer([:positive])}")
-    File.mkdir_p!(dir)
-    previous = Application.get_env(:arca, :seed_path)
-    Application.put_env(:arca, :seed_path, dir)
-
-    ExUnit.Callbacks.on_exit(fn ->
-      if previous,
-        do: Application.put_env(:arca, :seed_path, previous),
-        else: Application.delete_env(:arca, :seed_path)
-
-      File.rm_rf!(dir)
-    end)
-
-    dir
-  end
+  def isolate!, do: seed_tree!("seed_isolate", &File.mkdir_p!/1)
 
   @doc "Copy `source` into a private tree and point `:seed_path` at it until the test exits."
   @spec isolate_from!(String.t()) :: String.t()
-  def isolate_from!(source) when is_binary(source) do
-    dir = Path.join(System.tmp_dir!(), "seed_isolate_#{System.unique_integer([:positive])}")
-    File.cp_r!(source, dir)
-    previous = Application.get_env(:arca, :seed_path)
-    Application.put_env(:arca, :seed_path, dir)
-
-    ExUnit.Callbacks.on_exit(fn ->
-      if previous,
-        do: Application.put_env(:arca, :seed_path, previous),
-        else: Application.delete_env(:arca, :seed_path)
-
-      File.rm_rf!(dir)
-    end)
-
-    dir
-  end
+  def isolate_from!(source) when is_binary(source),
+    do: seed_tree!("seed_isolate", &File.cp_r!(source, &1))
 
   @type unit :: %{
           name: String.t(),
@@ -123,23 +94,33 @@ defmodule Cyfr.Test.SeedBundle do
   @doc "Lay the tree, set `:seed_path` to it, and answer its path."
   @spec lay!([String.t()]) :: String.t()
   def lay!(catalysts) when is_list(catalysts) do
-    dir = Path.join(System.tmp_dir!(), "seed_bundle_#{System.unique_integer([:positive])}")
-    File.mkdir_p!(dir)
-    File.cp_r!(Path.join(@repo_seed, "aqua"), Path.join(dir, "aqua"))
+    seed_tree!("seed_bundle", fn dir ->
+      File.mkdir_p!(dir)
+      File.cp_r!(Path.join(@repo_seed, "aqua"), Path.join(dir, "aqua"))
 
-    for name <- catalysts do
-      versions =
-        [@repo_seed, "components", "catalysts", "local", name, "*"]
-        |> Path.join()
-        |> Prima.Test.SourceTree.files!()
-        |> Enum.map(&Path.basename/1)
-        |> Compendium.Semver.sort_desc()
+      for name <- catalysts do
+        versions =
+          [@repo_seed, "components", "catalysts", "local", name, "*"]
+          |> Path.join()
+          |> Prima.Test.SourceTree.files!()
+          |> Enum.map(&Path.basename/1)
+          |> Compendium.Semver.sort_desc()
 
-      version = hd(versions)
-      src = Path.join([@repo_seed, "components", "catalysts", "local", name, version])
-      dest = Path.join([dir, "components", "catalysts", "local", name, version])
-      copy_unit!(src, dest)
-    end
+        version = hd(versions)
+        src = Path.join([@repo_seed, "components", "catalysts", "local", name, version])
+        dest = Path.join([dir, "components", "catalysts", "local", name, version])
+        copy_unit!(src, dest)
+      end
+    end)
+  end
+
+  # A tree of this test's own, filled by `fill`, and `:seed_path` pointed at
+  # it until the test exits. Its removal is registered before anything is
+  # written, so a fill that fails part-way leaves nothing behind.
+  defp seed_tree!(prefix, fill) do
+    dir = temp_dir(prefix)
+    ExUnit.Callbacks.on_exit(fn -> File.rm_rf!(dir) end)
+    fill.(dir)
 
     previous = Application.get_env(:arca, :seed_path)
     Application.put_env(:arca, :seed_path, dir)
@@ -148,8 +129,6 @@ defmodule Cyfr.Test.SeedBundle do
       if previous,
         do: Application.put_env(:arca, :seed_path, previous),
         else: Application.delete_env(:arca, :seed_path)
-
-      File.rm_rf!(dir)
     end)
 
     dir
@@ -165,5 +144,12 @@ defmodule Cyfr.Test.SeedBundle do
       File.mkdir_p!(Path.dirname(target))
       File.cp!(file, target)
     end)
+  end
+
+  # `System.unique_integer/1` starts over identically in every fresh VM, so
+  # it alone names the same directory for two direct runs of one checkout.
+  defp temp_dir(prefix) do
+    suffix = Base.encode16(:crypto.strong_rand_bytes(8), case: :lower)
+    Path.join(System.tmp_dir!(), "#{prefix}_#{System.unique_integer([:positive])}_#{suffix}")
   end
 end

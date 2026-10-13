@@ -75,6 +75,19 @@ defmodule Arca.RateWindowsTest do
     if :atomics.get(gate, 1) == 0, do: spin_until_open(gate)
   end
 
+  # Killed when the test ends, passing or not, and gone before the
+  # cleanup registered ahead of it runs.
+  defp kill_on_exit(pid) do
+    on_exit(fn ->
+      ref = Process.monitor(pid)
+      Process.exit(pid, :kill)
+
+      receive do
+        {:DOWN, ^ref, :process, ^pid, _reason} -> :ok
+      end
+    end)
+  end
+
   describe "the window" do
     test "the first claim opens it and the cap is what it admits", %{
       actor: actor,
@@ -236,6 +249,7 @@ defmodule Arca.RateWindowsTest do
           Process.sleep(:infinity)
         end)
 
+      kill_on_exit(claimer)
       assert_receive {:claimed, {:ok, 2}}, 5_000
       Process.exit(claimer, :kill)
 
