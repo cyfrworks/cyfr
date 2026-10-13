@@ -742,8 +742,9 @@ const TAIL = 4;
 // plainly or escaped inside JSON, to its closing quote or the text's end.
 // A served prefix's or a host page's asset credential (`/_s/…`,
 // `/_c/v1/…`), whole or cut short, becomes `[credential]`, a signed token
-// `[signed token]`, and a bearer's credential MARKER. Applied again, it
-// changes nothing.
+// `[signed token]`, and a bearer's credential MARKER. None of those three
+// values takes a backslash, so a value before an escaped quote leaves the
+// escape, and JSON text stays JSON. Applied again, it changes nothing.
 export function redact(text, secrets = []) {
   let out = String(text);
   for (const secret of secrets) {
@@ -759,10 +760,10 @@ export function redact(text, secrets = []) {
   return out
     .replace(KEYED, `$1${MARKER}`)
     .replace(ATTRIBUTE, `$1${MARKER}`)
-    .replace(/\/_s\/(?!\[credential\])[^/"'\s]+/g, "/_s/[credential]")
-    .replace(/\/_c\/v1\/(?!\[credential\])[^/"'\s]+/g, "/_c/v1/[credential]")
+    .replace(/\/_s\/(?!\[credential\])[^/"'\s\\]+/g, "/_s/[credential]")
+    .replace(/\/_c\/v1\/(?!\[credential\])[^/"'\s\\]+/g, "/_c/v1/[credential]")
     .replace(/SFMyNTY\.[A-Za-z0-9_\-.]*/g, "[signed token]")
-    .replace(/(Bearer\s+)(?!\[secret\])[^\s"']+/gi, `$1${MARKER}`);
+    .replace(/(Bearer\s+)(?!\[secret\])[^\s"'\\]+/gi, `$1${MARKER}`);
 }
 
 // The tokens a page holds as its frames are written, each a value a reply

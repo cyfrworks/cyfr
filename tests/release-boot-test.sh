@@ -80,6 +80,7 @@ REL="$BUILD_PATH/rel/cyfr"
 case "$1" in
   record) release_source >"$BUILD_PATH/release-source" ;;
   reuse) RELEASE_BOOT_SKIP_BUILD=1 release_build ;;
+  build) PATH="$DRIVE_SCRATCH/bin:$PATH" release_build ;;
   start)
     READY_TIMEOUT="$2"
     server_start "$DRIVE_SCRATCH/cell"
@@ -96,7 +97,7 @@ drive() { DRIVE_SCRATCH="$scratch" DRIVE_CHECKOUT="$root" bash "$scratch/drive.s
 # --- the reuse key -----------------------------------------------------------
 
 tree="$scratch/tree"
-mkdir -p "$tree" "$scratch/build/rel/cyfr/bin"
+mkdir -p "$tree" "$scratch/build/rel/cyfr/bin" "$scratch/bin"
 printf '#!/bin/sh\nexit 0\n' >"$scratch/build/rel/cyfr/bin/cyfr"
 chmod +x "$scratch/build/rel/cyfr/bin/cyfr"
 git -C "$tree" init -q
@@ -105,6 +106,9 @@ git -C "$tree" config user.name test
 printf 'one\n' >"$tree/a.txt"
 printf 'two\n' >"$tree/b.txt"
 printf 'ignored/\n' >"$tree/.gitignore"
+# One of the build's own tracked outputs (mix assets.deploy's .gz files).
+mkdir -p "$tree/apps/cyfr/priv/static"
+printf 'User-agent: *\n' | gzip -n -1 >"$tree/apps/cyfr/priv/static/robots.txt.gz"
 git -C "$tree" add -A
 git -C "$tree" commit -qm base
 
@@ -131,7 +135,15 @@ printf 'new\n' >"$tree/c.txt"
 refused "an untracked file" "tree (built from"
 rm "$tree/c.txt"
 reused "the tree again after the untracked file went"
-pass "an untracked file changes the key"
+printf 'first\n' >"$tree/c.txt"
+drive record
+reused "a tree holding an untracked file"
+printf 'second\n' >"$tree/c.txt"
+refused "an untracked file's content rewritten under its path" "tree (built from"
+rm "$tree/c.txt"
+drive record
+reused "the tree again after the untracked file went"
+pass "an untracked file, and its content, change the key"
 
 printf 'changed\n' >>"$tree/a.txt"
 refused "a modified tracked file" "tree (built from"
@@ -167,9 +179,44 @@ refused "a record of two lines" "release-source is malformed"
 refused "a record of four lines" "release-source is malformed"
 sed 's/^tree=.*/tree=not-a-digest/' "$scratch/record" >"$scratch/build/release-source"
 refused "a record with no digest" "release-source is malformed"
+sed 's/^head=.*/head=not-a-commit/' "$scratch/record" >"$scratch/build/release-source"
+refused "a record with no commit" "release-source is malformed"
+sed 's/^adapter=.*/adapter=mysql/' "$scratch/record" >"$scratch/build/release-source"
+refused "a record naming no adapter of the release's" "release-source is malformed"
 cp "$scratch/record" "$scratch/build/release-source"
 reused "the record restored"
 pass "a missing or malformed record is refused"
+
+# A stand-in `mix`: assets.deploy rewrites the tracked .gz as the real one
+# does (the same content, other bytes: another compression level), and `release` leaves a release;
+# with STUB_MIX=edit, a developer's save lands on a.txt while it builds.
+cat >"$scratch/bin/mix" <<'SH'
+#!/usr/bin/env bash
+case "$1" in
+  assets.deploy) printf 'User-agent: *\n' | gzip -n -9 >apps/cyfr/priv/static/robots.txt.gz ;;
+  release)
+    mkdir -p "$MIX_BUILD_PATH/rel/cyfr/bin"
+    printf '#!/bin/sh\nexit 0\n' >"$MIX_BUILD_PATH/rel/cyfr/bin/cyfr"
+    chmod +x "$MIX_BUILD_PATH/rel/cyfr/bin/cyfr"
+    [ "${STUB_MIX:-}" != edit ] || printf 'saved while the release built\n' >>a.txt
+    ;;
+esac
+exit 0
+SH
+chmod +x "$scratch/bin/mix"
+[ "$(STUB_MIX=edit status_of drive build)" = 1 ] || { cat "$scratch/out" >&2; fail "a release built around a mid-build edit was recorded"; }
+has "the tree changed while the sqlite release built" "a mid-build edit: the refusal says the tree changed"
+[ ! -e "$scratch/build/release-source" ] || fail "a release built around a mid-build edit left a record"
+refused "the release built around a mid-build edit" "release-source is missing"
+git -C "$tree" checkout -q -- a.txt apps/cyfr/priv/static/robots.txt.gz
+pass "a tracked file edited while the release builds leaves the release unrecorded"
+
+[ "$(status_of drive build)" = 0 ] || { cat "$scratch/out" >&2; fail "a build that rewrote only its own .gz output was not recorded"; }
+git -C "$tree" diff --quiet -- apps/cyfr/priv/static/robots.txt.gz && fail "the stand-in build rewrote no .gz"
+[ -s "$scratch/build/release-source" ] || fail "a build that rewrote only its own .gz output left no record"
+reused "the release whose build rewrote its own .gz output"
+git -C "$tree" checkout -q -- apps/cyfr/priv/static/robots.txt.gz
+pass "a build that rewrites only its own tracked .gz output is recorded and reused"
 
 # --- the readiness window ------------------------------------------------------
 
@@ -333,6 +380,29 @@ const forms = redact('src="/_s/Cred/x" "/_c/v1/Cred/y" SFMyNTY.a.b Bearer z know
 for (const marker of ["/_s/[credential]/", "/_c/v1/[credential]/", "[signed token]", `Bearer ${MARKER}`, ` ${MARKER}`]) {
   if (!forms.includes(marker)) failures.push(`the marker ${marker} is not in ${JSON.stringify(forms)}`);
 }
+// JSON text stays JSON: a masked value before an escaped quote keeps the
+// escape. The approval record's resolved policy (escaped JSON holding the
+// attach template) and an asset address inside a string, written as the
+// approval proof writes its record (`recordText`, indented) and as the
+// hostile-frame proof's brief and the canvas proof's record are read back
+// (`JSON.parse(redact(JSON.stringify(x)))`).
+const shapes = {
+  approval: { resolved_policy: JSON.stringify({ attach: { in: "header", name: "Authorization", template: "Bearer {value}" } }) },
+  asset: { m: 'loaded "/_s/Cred99" and stopped', host: 'framed "/_c/v1/HostCred" too' },
+  brief: { src: "/_s/Cred", frame: JSON.stringify({ src: "/_s/Cred", auth: "Bearer tok" }) },
+};
+for (const [name, value] of Object.entries(shapes)) {
+  for (const indent of [2, undefined]) {
+    const out = redact(JSON.stringify(value, null, indent), []);
+    try {
+      JSON.parse(out);
+    } catch (error) {
+      failures.push(`the ${name} shape${indent ? ", indented," : ""} is no longer JSON once redacted: ${out.replace(/\s+/g, " ")} (${error.message})`);
+    }
+    for (const kept of ["Cred99", "HostCred", "/_s/Cred", "Bearer tok"]) if (out.includes(kept)) failures.push(`the ${name} shape kept ${kept}: ${out}`);
+  }
+}
+
 // What a proof asserts on is not a secret, and stays: a key that only ends
 // in a secret-named key's name is not one.
 const plain = '{"name":"proof-game","reproof":"kept-1357","suite":"canvas","path":"/t/@person/local/proof-game","held":true}';

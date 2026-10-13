@@ -62,14 +62,23 @@ fail() {
 # (RELEASE_BOOT_SKIP_BUILD=1) is refused unless the tree is still that
 # one: a proof never runs a release that is not the source it checks. The
 # record is written once the build has finished, so the build's own output
-# is part of the tree it names, as it is when a later proof reuses it.
+# is part of the tree it names, as it is when a later proof reuses it. The
+# tree is read before the build as well, and the release is recorded only
+# when nothing but the build's own tracked outputs (RELEASE_BUILD_OUTPUTS)
+# changed while it built: an edit saved mid-build may postdate the
+# compile, so a release built around it names no tree and is not kept for
+# reuse.
+RELEASE_BUILD_OUTPUTS=':(exclude,glob)apps/cyfr/priv/static/**/*.gz'
 release_build() {
+  local before after
   if [ "${RELEASE_BOOT_SKIP_BUILD:-}" = "1" ] && [ -x "$REL/bin/cyfr" ]; then
     release_source_matches
     step "reusing the $ADAPTER release at $REL"
   else
     step "building the cyfr release for $ADAPTER (MIX_ENV=prod, as Dockerfile builds it)"
     rm -f "$BUILD_PATH/release-source"
+    before="$(release_source "$RELEASE_BUILD_OUTPUTS")" ||
+      fail "the checkout's tree could not be read before the $ADAPTER release built"
     (
       cd "$ROOT" || exit 1
       export MIX_ENV=prod MIX_BUILD_PATH="$BUILD_PATH" CYFR_DATABASE="$ADAPTER"
@@ -79,6 +88,10 @@ release_build() {
         mix release cyfr --overwrite
     ) || fail "the $ADAPTER release did not build"
     [ -x "$REL/bin/cyfr" ] || fail "no release at $REL/bin/cyfr"
+    after="$(release_source "$RELEASE_BUILD_OUTPUTS")" ||
+      fail "the checkout's tree could not be read after the $ADAPTER release built"
+    [ "$before" = "$after" ] ||
+      fail "the tree changed while the $ADAPTER release built, beyond the .gz files mix assets.deploy writes under apps/cyfr/priv/static, so the release is not recorded for reuse; build it again once the tree holds still"
     release_source >"$BUILD_PATH/release-source.part" &&
       mv "$BUILD_PATH/release-source.part" "$BUILD_PATH/release-source" ||
       fail "the release's source could not be recorded"
@@ -92,14 +105,16 @@ release_build() {
 # git does not ignore, so a source file not yet added changes it too. Each
 # part is hashed apart and named, so no two trees share a text. A file
 # that vanishes between the listing and its read counts as vanished, and a
-# symlink as its target, never its target's content.
+# symlink as its target, never its target's content. Pathspecs `$@` narrow
+# the difference from HEAD (`release_build` leaves the build's own outputs
+# out); with none, the whole tree.
 release_source() {
   local head tree
   head="$(git -C "$ROOT" rev-parse --verify HEAD)" || return 1
   tree="$(
     set -o pipefail
     cd "$ROOT" || exit 1
-    diff="$(git diff HEAD --binary --no-ext-diff --no-textconv --no-color | sha256sum)" || exit 1
+    diff="$(git diff HEAD --binary --no-ext-diff --no-textconv --no-color -- . "$@" | sha256sum)" || exit 1
     untracked="$(mktemp "${TMPDIR:-/tmp}/cyfr-release-source-XXXXXX")" || exit 1
     trap 'rm -f "$untracked"' EXIT
     git ls-files -z --others --exclude-standard >"$untracked" || exit 1
