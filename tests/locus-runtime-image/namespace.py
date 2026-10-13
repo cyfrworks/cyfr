@@ -52,7 +52,11 @@ runner's own uid, outside that namespace, may not):
   every process of the reused cgroup root, or its refusal names each pid
   it could not move with the write's error); its runners are isolated.
 
-The suite needs a host that allows unprivileged user namespaces. The
+The suite needs a host that allows unprivileged user namespaces, and fails
+before its first step on one that does not: where user.max_user_namespaces
+is 0, or where kernel.apparmor_restrict_unprivileged_userns is 1 and
+Docker's default AppArmor profile, which allows them then, is not in force
+(`docker info` lists no `name=apparmor` security option). The
 service steps sign their requests with the scripted control plane's keys
 (control_plane.py); none of them needs the service to reach it.
 
@@ -70,9 +74,12 @@ import sys
 import tempfile
 import threading
 
-from control_plane import ControlPlane
-from stack import (HOME_ROOT, POOL_FIRST, POOL_LAST, PROFILE, ROLE, RUN_DIR, SERVICE, SERVICE_UID, SERVICE_USER, Stack,
-                   expect, run, wait_until)
+sys.dont_write_bytecode = True
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+from control_plane import ControlPlane  # noqa: E402
+from stack import (HOME_ROOT, POOL_FIRST, POOL_LAST, PROFILE, ROLE, RUN_DIR, SERVICE, SERVICE_UID, SERVICE_USER,  # noqa: E402
+                   Stack, expect, run, wait_until)
 
 IMAGE_PROFILE = "/etc/cyfr/keeper.json"
 STEPS = ("refusals", "connect", "relay", "spawn", "cgroup", "network", "descriptors", "kill", "reuse", "restart")
@@ -94,10 +101,41 @@ def prerequisites(image):
     shipped = run("docker", "run", "--rm", "--entrypoint", "cat", image, IMAGE_PROFILE, check=False).stdout
     with open(PROFILE) as f:
         expect(json.loads(shipped or "null") == json.load(f), f"the image carries {PROFILE} as {IMAGE_PROFILE}")
-    for sysctl in ("user/max_user_namespaces", "kernel/apparmor_restrict_unprivileged_userns"):
-        path = os.path.join("/proc/sys", sysctl)
-        value = open(path).read().strip() if os.path.exists(path) else "absent"
-        print(f"host: {sysctl.replace('/', '.')} = {value}", flush=True)
+    limit, restrict = read_sysctl("user.max_user_namespaces"), read_sysctl("kernel.apparmor_restrict_unprivileged_userns")
+    options = docker_security_options()
+    print(f"host: user.max_user_namespaces = {limit}", flush=True)
+    print(f"host: kernel.apparmor_restrict_unprivileged_userns = {restrict}", flush=True)
+    print(f"host: docker security options {options}", flush=True)
+    refusal = userns_refusal(limit, restrict, options)
+    if refusal:
+        sys.exit(f"FAIL: prerequisite missing: {refusal}")
+
+
+def read_sysctl(name):
+    """A sysctl's value as /proc/sys holds it, or `absent` where this kernel has none."""
+    path = os.path.join("/proc/sys", *name.split("."))
+    return open(path).read().strip() if os.path.exists(path) else "absent"
+
+
+def docker_security_options():
+    """The daemon's security options as `docker info` lists them, `name=apparmor` among them where its profile is in force."""
+    return json.loads(run("docker", "info", "--format", "{{json .SecurityOptions}}").stdout or "null") or []
+
+
+def userns_refusal(limit, restrict, options):
+    """Why a host with these values refuses the runners their user namespaces, or None where it allows them.
+
+    `limit` and `restrict` are user.max_user_namespaces and
+    kernel.apparmor_restrict_unprivileged_userns as `read_sysctl` reads
+    them, `options` the daemon's security options."""
+    if limit == "0":
+        return ("user.max_user_namespaces is 0: the kernel creates no user namespace, "
+                "and every runner is cloned into one")
+    apparmor = any(option == "name=apparmor" or option.startswith("name=apparmor,") for option in options)
+    if restrict == "1" and not apparmor:
+        return ("kernel.apparmor_restrict_unprivileged_userns is 1 and docker info lists no name=apparmor security option: "
+                "without Docker's default AppArmor profile the kernel refuses the runners' user namespaces")
+    return None
 
 
 class IsolatedStack(Stack):

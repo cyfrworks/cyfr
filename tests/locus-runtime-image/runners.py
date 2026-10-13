@@ -113,7 +113,7 @@ import memory  # noqa: E402
 import worker_auth as auth  # noqa: E402
 from control_plane import DROP, RESERVED_HEADERS, ZERO_AUTHORITY, ControlPlane  # noqa: E402
 from stack import (  # noqa: E402
-    HOME_ROOT, KEEPER_CAPS, POOL_FIRST, POOL_LAST, ROOT, SERVICE, SERVICE_UID, Stack, StatusSampler, expect, run, wait_until,
+    KEEPER_CAPS, POOL_FIRST, POOL_LAST, ROOT, SERVICE, SERVICE_UID, Stack, StatusSampler, expect, run, wait_until,
 )
 
 FIXTURES = {
@@ -289,10 +289,15 @@ def since(stack, plane, execution_id, t):
 
 class Origin:
     """The harness's own HTTP listener, the one address a pin names: every
-    connection it accepts and every request it answers is recorded."""
+    connection it accepts and every request it answers is recorded.
 
-    def __init__(self):
+    A runner's pinned request reaches it from the container, so it binds
+    `host`, the default bridge's gateway the control plane binds, and no
+    other address."""
+
+    def __init__(self, host):
         origin = self
+        self.host = host
         self.lock = threading.Lock()
         self.connections = []
         self.requests = []
@@ -325,7 +330,7 @@ class Origin:
             daemon_threads = True
             allow_reuse_address = True
 
-        self.server = Server(("0.0.0.0", 0), Handler)
+        self.server = Server((host, 0), Handler)
         self.port = self.server.server_address[1]
         self.thread = threading.Thread(target=self.server.serve_forever, kwargs={"poll_interval": 0.05}, daemon=True)
         self.thread.start()
@@ -384,7 +389,9 @@ class Provider:
             daemon_threads = True
             allow_reuse_address = True
 
-        self.server = Server(("0.0.0.0", 0), Handler)
+        # Loopback: only the control plane, on this machine, makes a request
+        # to it (`made_at`).
+        self.server = Server(("127.0.0.1", 0), Handler)
         self.port = self.server.server_address[1]
         self.thread = threading.Thread(target=self.server.serve_forever, kwargs={"poll_interval": 0.05}, daemon=True)
         self.thread.start()
@@ -494,7 +501,7 @@ def test_pinned_egress(stack, plane):
     nowhere else, and a refused pin opens no connection."""
     gateway = stack.host_gateway()
     expect(gateway is not None, f"the container reaches this machine at {gateway}", stack.exec("getent ahostsv4 host.docker.internal").stdout)
-    origin = Origin()
+    origin = Origin(plane.host)
     plane.egress(EGRESS_HOSTS["fetch"], gateway)
     plane.egress(EGRESS_HOSTS["denied"], "denied")
     plane.egress(EGRESS_HOSTS["metadata"], "metadata")
@@ -552,7 +559,7 @@ def test_attached_fetch(stack, plane):
     with the value the plane attached, and nothing of the value reaches
     the runner; a credential header beside the connection is refused in the
     runner; a vault read of the attached field is refused as such."""
-    origin = Origin()
+    origin = Origin(plane.host)
     # The egress case's athanor: its idle runner runs these attempts, so the
     # case holds no runner of its own and leaves the pool's uids as the
     # cases after it find them.
@@ -569,6 +576,8 @@ def test_attached_fetch(stack, plane):
         expect(closes[0]["op"] == "complete", f"{what}: the guest answered, and its attempt closed completed", closes[0])
         return closes[0]["args"]["outcome"]["output"]
 
+    # The plane makes the attached request at the address the listener binds.
+    upstream, plane.upstream_host = plane.upstream_host, origin.host
     try:
         attempt = plane.mint(stack.boot, "catalyst", REFS["attached"], WASM["attached"], request, athanor, 30_000,
                              authority=ATTACHED_AUTHORITY, attached=attached)
@@ -612,6 +621,7 @@ def test_attached_fetch(stack, plane):
         logged = json.dumps(plane.requests, default=str)
         expect(value not in logged, "the plane's record names the connection and the URL, and never the value")
     finally:
+        plane.upstream_host = upstream
         origin.stop()
 
 
@@ -699,7 +709,7 @@ def test_shipped_model_attached_request(stack, plane):
 def test_relay_window(stack, plane):
     """An answer past one credit window of the relay reaches the guest whole."""
     gateway = stack.host_gateway()
-    origin = Origin()
+    origin = Origin(plane.host)
     plane.egress(EGRESS_HOSTS["fetch"], gateway)
     try:
         url = f"http://{EGRESS_HOSTS['fetch']}:{origin.port}/window"
@@ -895,7 +905,7 @@ def test_late_child_refused(stack, plane):
     code, answer = stack.kill(parent["execution_id"])
     expect(answer == {"v": 1, "ok": True}, "the parent is killed while its admission is pending", answer)
     exited = exit_reports(plane, parent, 15)
-    gone = wait_gone(stack, runner, stack.release_grace_ms / 1000 + 10, "the parent's runner process to be gone")
+    wait_gone(stack, runner, stack.release_grace_ms / 1000 + 10, "the parent's runner process to be gone")
     expect(exited and exited[0]["report"]["service"] == SERVICE and exited[0]["args"]["runner"] == runner["runner"],
            "detection: the service reported the parent's runner exited holding the parent's attempt", plane.seen("runner_exited"))
 
