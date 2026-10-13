@@ -130,6 +130,38 @@ commit delete
 run "$seed_guard" "$base"
 check refused "$v1/caf$(printf '\303\251').txt"
 
+label="seed-guard refuses an added file with a non-ASCII name in an existing version"
+seed_repo
+printf 'x\n' > "$v1/caf$(printf '\303\251').txt"
+commit "add with a non-ASCII name"
+run "$seed_guard" "$base"
+check refused "$v1/caf$(printf '\303\251').txt"
+
+# A version directory whose name carries a byte that is not valid UTF-8,
+# under a UTF-8 locale as on GitHub's runners. Under C every byte is a
+# character and the case would prove nothing, so the locale is checked to
+# be in effect first: there a bracket expression does not match the byte.
+label="seed-guard refuses a deletion and an addition in a version whose directory name is not valid UTF-8 under C.UTF-8"
+new_repo
+v8=seed/components/catalysts/local/caf$(printf '\351')/1.0.0
+mkdir -p "$v8"
+printf 'one\n' > "$v8/a.txt"
+printf 'two\n' > "$v8/b.txt"
+commit base
+base=$(git rev-parse HEAD)
+git rm -q "$v8/b.txt"
+printf 'new\n' > "$v8/c.txt"
+commit "delete and add"
+if LC_ALL=C.UTF-8 bash -c '[[ $1 =~ ^[^/]$ ]]' _ "$(printf '\351')"; then
+  code=-1
+  echo "the C.UTF-8 locale is not in effect on this host" > "$scratch/err"
+  : > "$scratch/out"
+  fail "$label"
+else
+  LC_ALL=C.UTF-8 run "$seed_guard" "$base"
+  if refused "$v8/b.txt" && has_err "$v8/c.txt"; then pass "$label"; else fail "$label"; fi
+fi
+
 label="seed-guard accepts a whole new version directory"
 seed_repo
 mkdir -p seed/components/catalysts/local/demo/1.0.2
@@ -142,6 +174,15 @@ label="seed-guard accepts a deleted whole version while another stays tracked"
 seed_repo
 git rm -q -r "$v1"
 commit retire
+run "$seed_guard" "$base"
+check accepted
+
+# With rename detection the move pairs the two versions as a rename and
+# reads as a change inside a shipped version.
+label="seed-guard accepts retiring a version while shipping a new one with the same content"
+seed_repo
+git mv "$v1" seed/components/catalysts/local/demo/1.0.2
+commit "retire 1.0.0, ship 1.0.2"
 run "$seed_guard" "$base"
 check accepted
 
@@ -184,6 +225,9 @@ usage_case
 label="seed-guard exits 64 with an extra argument"
 run "$seed_guard" "$base" HEAD
 usage_case
+label="seed-guard exits 64 with usage only when given -h"
+run "$seed_guard" -h
+if ! has_err "is not a commit"; then usage_case; else fail "$label"; fi
 
 # --- scripts/ci/config-seam.sh ---
 

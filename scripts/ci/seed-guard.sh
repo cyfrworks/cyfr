@@ -18,6 +18,7 @@ set -euo pipefail
 usage() { echo "usage: $0 BASE" >&2; }
 
 [ "$#" -eq 1 ] || { usage; exit 64; }
+case $1 in -h | --help) usage; exit 64 ;; esac
 
 # Pathspecs and tree lookups are relative to the root, so a run from a
 # subdirectory gives the root's result.
@@ -40,13 +41,23 @@ if [ -z "$(git ls-tree -r --name-only HEAD -- seed/components | head -n 1)" ]; t
 fi
 
 # The version directory of a path: its first six segments, or the whole
-# path when it has fewer. Bash's regex matches a newline in a name too.
+# path when it has fewer. The split is on the byte "/" by parameter
+# expansion, not a regex: under a UTF-8 locale a regex bracket expression
+# does not match a byte that is not valid UTF-8, and the whole path would
+# come back as the version directory. A newline in a name stays inside its
+# segment.
 version_dir() {
-  if [[ $1 =~ ^([^/]*/){5}[^/]* ]]; then
-    printf '%s' "${BASH_REMATCH[0]}"
-  else
-    printf '%s' "$1"
-  fi
+  local rest=$1 dir='' i
+  for i in 1 2 3 4 5; do
+    case $rest in
+      */*)
+        dir+=${rest%%/*}/
+        rest=${rest#*/}
+        ;;
+      *) break ;;
+    esac
+  done
+  printf '%s' "$dir${rest%%/*}"
 }
 
 # Reads `git diff --name-status -z` and prints each offending path.
