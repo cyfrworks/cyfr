@@ -5,7 +5,9 @@ defmodule Prima.Test.TimingFormatterTest do
   @moduledoc """
   `Prima.Test.TimingFormatter` writes one `test` row per test, one `module`
   row per module and one `run` row per suite, and refuses to start without
-  its directory; `scripts/test-timings.exs` reads what it wrote.
+  its directory. It reaches nothing outside this application, which is
+  also tested alone; the analysis that reads the rows is checked at the
+  umbrella level (`Cyfr.TestTimingsScriptTest`).
 
   The suite it formats is a tiny one, run here through `ExUnit.run/0` with
   this formatter alone, no after-suite callbacks and no failures record:
@@ -18,7 +20,6 @@ defmodule Prima.Test.TimingFormatterTest do
   use ExUnit.Case, async: false
 
   @env "CYFR_TEST_TIMINGS_DIR"
-  @script Path.expand("../../../../scripts/test-timings.exs", __DIR__)
 
   setup do
     previous = System.get_env(@env)
@@ -106,9 +107,7 @@ defmodule Prima.Test.TimingFormatterTest do
     |> Enum.map(&String.split(&1, "\t"))
   end
 
-  defp script(args), do: System.cmd("elixir", [@script | args], stderr_to_stdout: true)
-
-  test "writes a row per test, per module and per run, and the analysis reads them", %{dir: dir} do
+  test "writes a row per test, per module and per run", %{dir: dir} do
     outer = Enum.sort(Application.get_all_env(:ex_unit))
     {async, sync} = define_inner_suite()
     System.put_env(@env, dir)
@@ -160,25 +159,6 @@ defmodule Prima.Test.TimingFormatterTest do
     assert [["prima", run_us, load]] = for(["run" | fields] <- rows, do: fields)
     assert String.to_integer(run_us) > 0
     assert load == "-"
-
-    for command <- [["summary", dir], ["modules", dir], ["weights", dir]] do
-      assert {_output, 0} = script(command)
-    end
-
-    {weights, 0} = script(["weights", dir])
-
-    assert [[seconds, ^file]] =
-             weights |> String.split("\n", trim: true) |> Enum.map(&String.split(&1, "\t"))
-
-    assert seconds =~ ~r/^\d+\.\d$/
-
-    empty = Path.join(dir, "empty")
-    File.mkdir_p!(empty)
-
-    for command <- [["summary", empty], ["modules", empty], ["weights", empty]] do
-      assert {_output, status} = script(command)
-      assert status != 0
-    end
   end
 
   test "refuses to start without an absolute directory" do
