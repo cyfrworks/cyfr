@@ -63,8 +63,10 @@
 # decimal digits, as the containment library takes) gives every step that
 # one deadline. Each leg is this script run in a session of its own, so a
 # gate that is killed outright still has its legs and their steps stopped
-# by their watchdogs. Stopping the gate (INT, TERM) stops its legs, each
-# leg its steps first, and the gate exits 130 or 143.
+# by their watchdogs. Stopping the gate (INT, TERM, HUP) stops its legs,
+# each leg its steps first, and the gate exits 130, 143 or 129. Its exit
+# line says 0 only when the whole run completed and passed; a gate ended
+# by any other signal reports 1.
 set -uo pipefail
 
 usage() { echo "usage: $0 [-l LOGDIR] [-n N] [--close] [-- PostgreSQL test paths]"; }
@@ -467,13 +469,18 @@ TERMINAL=false
 [ -n "${HEAVY_CHECK_HELD:-}" ] || TERMINAL=true
 STARTED=false
 OWNER=false
+# Set only by the run's last line. Bash runs the EXIT trap for a signal
+# the gate does not trap (USR1, say) with $? at 0 and then dies of it, so
+# 0 is reported only for a run that reached its end.
+COMPLETED=false
 # Every exit path after option parsing: whatever still runs is stopped,
 # the registry swept and removed when this gate made it, and the
 # `_EXIT=` line written last.
 gate_exit() {
   local s=$?
   trap - EXIT
-  trap '' INT TERM
+  trap '' INT TERM HUP
+  [ "$s" -ne 0 ] || $COMPLETED || s=1
   contain_stop_all 240 || { [ "$s" -ne 0 ] || s=1; }
   if $OWNER; then
     contain_sweep_registry 240 || { [ "$s" -ne 0 ] || s=1; }
@@ -483,7 +490,7 @@ gate_exit() {
   exit "$s"
 }
 gate_signal() {
-  trap '' INT TERM
+  trap '' INT TERM HUP
   echo '==> gate interrupted, stopping its legs' >&2
   contain_stop_all 240 >/dev/null || :
   exit "$1"
@@ -491,6 +498,7 @@ gate_signal() {
 trap gate_exit EXIT
 trap 'gate_signal 130' INT
 trap 'gate_signal 143' TERM
+trap 'gate_signal 129' HUP
 if $TERMINAL; then echo "_START=$$"; STARTED=true; fi
 
 case "${GATE_STEP_DEADLINE:-1}" in
@@ -615,4 +623,5 @@ for leg in static postgres cluster islands; do
 done
 if [ "$status" -eq 0 ]; then verdict=passed; else verdict=FAILED; fi
 echo "==> gate $verdict in $((SECONDS - start))s, logs in $LOGDIR"
+COMPLETED=true
 exit "$status"

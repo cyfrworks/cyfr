@@ -99,8 +99,9 @@ chmod +x "$scratch/bin/mix"
 
 # start_gate NAME [VAR=value...] -- GATE ARGS...: starts the gate as every
 # harness test starts a wrapper (C1), as the leader of a session of its
-# own, with SIGINT at its default (an asynchronous command starts with it
-# ignored, and a shell cannot trap a signal ignored at its start). Its
+# own, with SIGINT and SIGHUP at their defaults (an asynchronous command
+# starts with SIGINT ignored, a caller may have HUP ignored, and a shell
+# cannot trap a signal ignored at its start). Its
 # stdout and stderr go to $scratch/NAME.out and .err, its trace to
 # $scratch/NAME.trace, and its pid to $gate_pid.
 start_gate() {
@@ -109,7 +110,7 @@ start_gate() {
   while [ "$1" != -- ]; do vars+=("$1"); shift; done
   shift
   mkdir -p "$scratch/$name.trace"
-  contain_start -g 60 perl -e '$SIG{INT} = "DEFAULT"; exec @ARGV or die "exec $ARGV[0]: $!\n"' \
+  contain_start -g 60 perl -e '$SIG{INT} = $SIG{HUP} = "DEFAULT"; exec @ARGV or die "exec $ARGV[0]: $!\n"' \
     env -u HEAVY_CHECK_HELD -u CONTAIN_REGISTRY -u CONTAIN_CLOSE_FDS -u CONTAIN_HOLD_FDS \
     TRACE="$scratch/$name.trace" PATH="$scratch/bin:$PATH" CYFR_DATABASE_URL='postgres://u:p@host/base' \
     ${vars[@]+"${vars[@]}"} bash "$@" >"$scratch/$name.out" 2>"$scratch/$name.err" </dev/null
@@ -411,6 +412,24 @@ gate_status "$i"; [ "$gate_rc" = 130 ] || fail 'a gate given INT did not exit 13
 framed int "$i" 130
 dead "$held" || fail 'a step outlived a gate given INT'
 echo 'ok: INT'
+
+# --- HUP, and a signal the gate does not trap --------------------------------------
+# HUP stops the gate as TERM does, with 129. USR1 is not trapped: Bash runs
+# the EXIT trap with $? at 0 and then dies of it, and the exit line must
+# still not say 0.
+for spec in hup:HUP:129:129 usr1:USR1:1:138; do
+  IFS=: read -r name sig line want <<<"$spec"
+  start_gate "$name" STUB_HOLD=sqlite_test_compile -- "$gate" -n 2 -l "$scratch/$name.log"
+  p=$gate_pid
+  until_true 60 test -s "$scratch/$name.trace/held.sqlite_test_compile" || fail "the $sig case's step never started: $(cat "$scratch/$name.err")"
+  held=$(cat "$scratch/$name.trace/held.sqlite_test_compile")
+  alive "$held" || fail "the held step was not running before the $sig"
+  kill -"$sig" "$p"
+  gate_status "$p"; [ "$gate_rc" = "$want" ] || fail "a gate given $sig exited $gate_rc, not $want"
+  framed "$name" "$p" "$line"
+  dead "$held" || fail "a step outlived a gate given $sig"
+done
+echo 'ok: HUP, and an untrapped USR1 not reported as success'
 
 # --- SIGKILL: the watchdogs stop every leg and step ------------------------------
 start_gate kill STUB_HOLD='sqlite_test_compile postgres_test_compile' -- "$gate" -n 2 -l "$scratch/kill.log"
