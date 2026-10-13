@@ -1,0 +1,55 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 CYFR Works Inc.
+
+# Set up Erlang and Elixir and restore and save the Mix caches. The caller
+# checks the repository out first. Each caller passes a cache-key-prefix of
+# its own: a prefix shared with another job, or one that is a prefix of
+# another's, lets one job restore a cache the other built.
+name: Set up Elixir
+description: Set up Erlang and Elixir at the pinned versions and cache deps, and _build unless build-cache is false
+inputs:
+  cache-key-prefix:
+    description: The caller's own cache key segment, distinct from every other job's
+    required: true
+  build-cache:
+    description: "'true' caches _build with deps; 'false' caches deps alone"
+    required: false
+    default: 'true'
+runs:
+  using: composite
+  steps:
+    - name: Check the inputs
+      shell: bash
+      env:
+        PREFIX: ${{ inputs.cache-key-prefix }}
+        BUILD_CACHE: ${{ inputs.build-cache }}
+      run: |
+        if [ -z "$PREFIX" ]; then
+          echo "::error::setup-elixir needs a cache-key-prefix"
+          exit 1
+        fi
+        case "$BUILD_CACHE" in
+          true|false) ;;
+          *) echo "::error::setup-elixir build-cache must be 'true' or 'false', got '$BUILD_CACHE'"; exit 1 ;;
+        esac
+    - uses: erlef/setup-beam@54075bcc5e249e4758d363f27d099f55d843f124 # v1
+      id: beam
+      with:
+        otp-version: '29'
+        elixir-version: '1.20.4'
+    - name: Cache deps and build
+      if: inputs.build-cache == 'true'
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: |
+          deps
+          _build
+        key: ${{ runner.os }}-${{ inputs.cache-key-prefix }}-${{ steps.beam.outputs.elixir-version }}-${{ steps.beam.outputs.otp-version }}-${{ hashFiles('mix.lock') }}
+        restore-keys: ${{ runner.os }}-${{ inputs.cache-key-prefix }}-${{ steps.beam.outputs.elixir-version }}-${{ steps.beam.outputs.otp-version }}-
+    - name: Cache deps
+      if: inputs.build-cache == 'false'
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: deps
+        key: ${{ runner.os }}-${{ inputs.cache-key-prefix }}-${{ steps.beam.outputs.elixir-version }}-${{ steps.beam.outputs.otp-version }}-${{ hashFiles('mix.lock') }}
+        restore-keys: ${{ runner.os }}-${{ inputs.cache-key-prefix }}-${{ steps.beam.outputs.elixir-version }}-${{ steps.beam.outputs.otp-version }}-
