@@ -303,6 +303,13 @@ selection "$plant" > "$scratch/plant.txt" || fail 'the selection failed on the p
   fail "the planted selection is wrong: $(tr '\n' ' ' < "$scratch/plant.txt")"
 echo 'ok: the PostgreSQL selection'
 
+# --- a whole gate that passes ------------------------------------------------------
+run_gate pass -- "$gate" -n 2 -l "$scratch/pass.log"
+[ "$gate_rc" = 0 ] || fail "a gate whose every step passes exited $gate_rc: $(cat "$scratch/pass.err")"
+framed pass "$gate_pid" 0
+has_line '^==> gate passed in ' "$scratch/pass.out" || fail "a passing gate did not report its verdict: $(cat "$scratch/pass.out")"
+echo 'ok: a whole gate that passes'
+
 # --- a whole gate: a stalled island, build paths, the pg leg, the framing --------
 # Started by a relative path from another directory; the caller's build
 # path is the PostgreSQL one. The arca island's tests stall with a

@@ -469,9 +469,9 @@ TERMINAL=false
 [ -n "${HEAVY_CHECK_HELD:-}" ] || TERMINAL=true
 STARTED=false
 OWNER=false
-# Set only by the run's last line. Bash runs the EXIT trap for a signal
-# the gate does not trap (USR1, say) with $? at 0 and then dies of it, so
-# 0 is reported only for a run that reached its end.
+# Set only by the last line of a run that passed. Bash runs the EXIT trap
+# for a signal the gate does not trap (USR1, say) with $? at 0 and then
+# dies of it, so 0 is reported only for a run that reached its end with 0.
 COMPLETED=false
 # Every exit path after option parsing: whatever still runs is stopped,
 # the registry swept and removed when this gate made it, and the
@@ -623,5 +623,5 @@ for leg in static postgres cluster islands; do
 done
 if [ "$status" -eq 0 ]; then verdict=passed; else verdict=FAILED; fi
 echo "==> gate $verdict in $((SECONDS - start))s, logs in $LOGDIR"
-COMPLETED=true
+[ "$status" -ne 0 ] || COMPLETED=true
 exit "$status"
