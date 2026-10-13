@@ -17,6 +17,7 @@ on:
       - 'LICENSES/**'
       - 'mix.exs'
       - 'Dockerfile.locus'
+      - 'apps/cyfr/assets/js/**'
       - '.github/workflows/license-lint.yml'
   push:
     branches: [main]
@@ -31,10 +32,21 @@ on:
       - 'LICENSES/**'
       - 'mix.exs'
       - 'Dockerfile.locus'
+      - 'apps/cyfr/assets/js/**'
+      - '.github/workflows/license-lint.yml'
+  workflow_call:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: license-lint-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   spdx-headers:
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 

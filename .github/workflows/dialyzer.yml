@@ -11,6 +11,9 @@ on:
       - 'mix.exs'
       - 'mix.lock'
       - '.dialyzer_ignore.exs'
+      - 'config/**'
+      - 'apps/*/mix.exs'
+      - '.github/actions/**'
       - '.github/workflows/dialyzer.yml'
   pull_request:
     paths:
@@ -18,9 +21,16 @@ on:
       - 'mix.exs'
       - 'mix.lock'
       - '.dialyzer_ignore.exs'
+      - 'config/**'
+      - 'apps/*/mix.exs'
+      - '.github/actions/**'
       - '.github/workflows/dialyzer.yml'
+  workflow_call:
 permissions:
   contents: read
+concurrency:
+  group: dialyzer-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 env:
   MIX_ENV: dev
   ERL_CRASH_DUMP_SECONDS: 0
@@ -33,28 +43,13 @@ jobs:
   dialyzer:
     name: Specs agree with the code
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: erlef/setup-beam@54075bcc5e249e4758d363f27d099f55d843f124 # v1
-        id: beam
+      # The PLTs live under _build (mix.exs), so this cache carries them.
+      - uses: ./.github/actions/setup-elixir
         with:
-          otp-version: '29'
-          elixir-version: '1.20.4'
-      - name: Cache deps and build
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: |
-            deps
-            _build
-          key: ${{ runner.os }}-dialyzer-mix-${{ steps.beam.outputs.elixir-version }}-${{ steps.beam.outputs.otp-version }}-${{ hashFiles('mix.lock') }}
-          restore-keys: ${{ runner.os }}-dialyzer-mix-${{ steps.beam.outputs.elixir-version }}-${{ steps.beam.outputs.otp-version }}-
-      # Cache the PLT by OTP, Elixir and dependency versions.
-      - name: Cache PLT
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: _build/plts
-          key: ${{ runner.os }}-plt-${{ steps.beam.outputs.elixir-version }}-${{ steps.beam.outputs.otp-version }}-${{ hashFiles('mix.lock') }}
-          restore-keys: ${{ runner.os }}-plt-${{ steps.beam.outputs.elixir-version }}-${{ steps.beam.outputs.otp-version }}-
+          cache-key-prefix: dialyzer
       - run: mix deps.get
       - run: mix compile --warnings-as-errors
       - name: Build PLT
