@@ -209,6 +209,8 @@ defmodule Opus.Providers.TinctureTest do
   end
 
   describe "over /mcp" do
+    @describetag auth: :person
+
     defp mcp(conn, id, method, params) do
       conn
       |> put_req_header("content-type", "application/json")
@@ -226,7 +228,7 @@ defmodule Opus.Providers.TinctureTest do
       # A refusal the handler made is the call's failed result, with its
       # sentence and no term.
       assert %{"result" => %{"isError" => true, "content" => [%{"text" => text}]}} =
-               mcp(build_conn(), 2, "tools/call", %{
+               mcp(authenticate_as(build_conn()), 2, "tools/call", %{
                  "name" => "tincture",
                  "arguments" => args("invoke_protected")
                })

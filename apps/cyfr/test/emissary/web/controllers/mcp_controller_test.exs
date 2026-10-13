@@ -4,6 +4,8 @@
 defmodule Emissary.Web.MCPControllerTest do
   use Emissary.Web.ConnCase, async: false
 
+  @moduletag auth: :person
+
   describe "POST /mcp - tool calls" do
     test "lists available tools", %{conn: conn} do
       conn =
@@ -1221,13 +1223,11 @@ defmodule Emissary.Web.MCPControllerTest do
     end
   end
 
-  defmodule AnonymousAuthProvider do
-    @moduledoc false
-    # An auth provider IS configured, but this caller presented no credential.
-    def current_user(_conn), do: nil
-  end
-
   describe "subscriptions/listen gating" do
+    # The test auth provider is configured, but this caller presents no
+    # credential.
+    @describetag auth: :none
+
     setup do
       ctx = Sanctum.TestContext.issuer!(Sanctum.TestContext.local())
 
@@ -1238,8 +1238,6 @@ defmodule Emissary.Web.MCPControllerTest do
     end
 
     test "an uncredentialed caller cannot hold a stream open", %{conn: conn} do
-      Application.put_env(:sanctum, :auth_provider, AnonymousAuthProvider)
-
       conn =
         conn
         |> put_req_header("content-type", "application/json")
@@ -1257,8 +1255,6 @@ defmodule Emissary.Web.MCPControllerTest do
 
     test "the uncredentialed listen is one recorded refusal, rendered once", %{conn: conn} do
       import Ecto.Query, only: [from: 2]
-
-      Application.put_env(:sanctum, :auth_provider, AnonymousAuthProvider)
 
       conn =
         conn

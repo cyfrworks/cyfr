@@ -14,6 +14,8 @@ defmodule Emissary.IntegrationTest do
   """
   use Emissary.Web.ConnCase, async: false
 
+  @moduletag auth: :person
+
   alias Emissary.MCP
 
   describe "an ordinary request, end to end" do
@@ -158,14 +160,7 @@ defmodule Emissary.IntegrationTest do
     test "request telemetry emitted on tool call", %{conn: conn} do
       ref = :telemetry_test.attach_event_handlers(self(), [[:cyfr, :emissary, :request]])
 
-      # Drain initialize telemetry
-      receive do
-        {[:cyfr, :emissary, :request], ^ref, _, _} -> :ok
-      after
-        100 -> :ok
-      end
-
-      # Make tool call
+      # The tool call is the first request on the connection.
       _tool_conn =
         conn
         |> recycle()

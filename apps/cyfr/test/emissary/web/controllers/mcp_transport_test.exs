@@ -87,6 +87,7 @@ defmodule Emissary.Web.MCPTransportTest do
     # stand-in for the work publishes two steps on the request's topic the
     # connection subscribed to, so both are waiting when the pump starts —
     # progress that arrives before the task's result.
+    @tag auth: :person
     test "progress reported during the call is written before the response", %{conn: conn} do
       conn_pid = self()
       :ok = :sys.suspend(Emissary.TaskSupervisor)
@@ -125,6 +126,8 @@ defmodule Emissary.Web.MCPTransportTest do
   end
 
   describe "subscriptions/listen" do
+    @describetag auth: :person
+
     # The acknowledgment must come first and must carry the subscription id: on
     # stdio one channel multiplexes every subscription, so without it a client
     # cannot tell which stream a later notification belongs to.
