@@ -48,11 +48,11 @@
 //
 // Usage: node proof.mjs HOMES_FILE SEGMENT DESKTOP_COOKIE PHONE_COOKIE OUT_DIR
 
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { HANDHELD, measure as measureScreen, unmet } from "../browser/handheld.mjs";
 import {
-  launchBrowser, percentiles, readHomes, signedIn, sleep, startProxy, virtualAuthenticator, waitFor,
+  ask as askRunSh, launchBrowser, percentiles, readHomes, signedIn, sleep, startProxy, virtualAuthenticator, waitFor,
 } from "../browser/lib.mjs";
 
 const [homesFile, segment, desktopCookie, phoneCookie, outDir] = process.argv.slice(2);
@@ -77,20 +77,8 @@ function row(step, held, what, detail) {
   return !!held;
 }
 
-// The home's part of a step, asked of run.sh.
-let asked = 0;
-async function ask(request, timeoutMs = 90_000) {
-  const id = ++asked;
-  const answer = join(outDir, `answer-${id}.json`);
-  writeFileSync(join(outDir, `ask-${id}.part`), JSON.stringify(request));
-  renameSync(join(outDir, `ask-${id}.part`), join(outDir, `ask-${id}.json`));
-  const deadline = Date.now() + timeoutMs;
-  while (!existsSync(answer)) {
-    if (Date.now() > deadline) throw new Error(`run.sh never answered ${request.op}`);
-    await sleep(100);
-  }
-  return JSON.parse(readFileSync(answer, "utf8"));
-}
+// The home's part of a step, asked of run.sh (lib.mjs `ask`).
+const ask = (request, options) => askRunSh(request, { outDir, timeoutMs: 90_000, ...options });
 
 // ---------------------------------------------------------------------------
 // The glass's device channel, watched from inside its own page

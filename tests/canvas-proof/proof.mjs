@@ -41,10 +41,13 @@
 //        (NARROWING may be empty; HOST_CLASS is a class of BUDGET_MS)
 //    or: node proof.mjs --check-record RECORD_JSON [SECRETS_JSON]
 
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { hostname, cpus } from "node:os";
 import { createSocket } from "node:dgram";
+// Its asks and redaction only: lib.mjs loads without Playwright's library,
+// so the record check runs without a browser.
+import { ask as askRunSh, redact as redactKnown } from "../browser/lib.mjs";
 
 // Each step and the browsers it runs on, in the record's order.
 const ALL = ["chromium", "firefox", "webkit"];
@@ -100,18 +103,9 @@ const FORGED = "forged-by-neighbour";
 const record = { steps: {}, browsers: {}, measurement: {} };
 const secrets = [];
 
-// Credentials a browser's sentence or an address may carry: the served
-// prefix's and the host page's asset credential, whole or cut short, any
-// signed token, a bearer, and every secret this run knew.
-function redact(text) {
-  let out = String(text);
-  for (const s of secrets) if (s) out = out.split(s).join("[secret]");
-  return out
-    .replace(/\/_s\/(?!\[credential\])[^/"'\s]+/g, "/_s/[credential]")
-    .replace(/\/_c\/v1\/(?!\[credential\])[^/"'\s]+/g, "/_c/v1/[credential]")
-    .replace(/SFMyNTY\.[A-Za-z0-9_\-.]*/g, "[signed token]")
-    .replace(/(Bearer\s+)(?!\[secret\])[^\s"']+/gi, "$1[secret]");
-}
+// Credentials a browser's sentence or an address may carry, and every
+// secret this run knew (lib.mjs `redact`).
+const redact = (text) => redactKnown(text, secrets);
 
 const redacted = (value) => JSON.parse(redact(JSON.stringify(value === undefined ? null : value)));
 
@@ -246,22 +240,10 @@ const hasObservation = (value) =>
 
 // ---- asks of run.sh ------------------------------------------------------------
 
-let asked = 0;
 let OUT = null;
 let sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-async function ask(request, { timeoutMs = 60_000 } = {}) {
-  const id = ++asked;
-  const answer = join(OUT, `answer-${id}.json`);
-  writeFileSync(join(OUT, `ask-${id}.part`), JSON.stringify(request));
-  renameSync(join(OUT, `ask-${id}.part`), join(OUT, `ask-${id}.json`));
-  const deadline = Date.now() + timeoutMs;
-  while (!existsSync(answer)) {
-    if (Date.now() > deadline) throw new Error(`run.sh never answered ${request.op} within ${timeoutMs} ms`);
-    await sleep(100);
-  }
-  return JSON.parse(readFileSync(answer, "utf8"));
-}
+const ask = (request, options) => askRunSh(request, { outDir: OUT, timeoutMs: 60_000, ...options });
 
 const OK = (answer) => answer && typeof answer === "object" && answer.ok && typeof answer.ok === "object";
 

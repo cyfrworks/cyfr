@@ -42,11 +42,12 @@
 // Usage: node proof.mjs HOMES_FILE SEGMENT COOKIE OUT_DIR VIEWPORT
 
 import { createHash, randomBytes } from "node:crypto";
-import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { launchBrowser, readHomes, sleep, startProxy, virtualAuthenticator, waitFor } from "../browser/lib.mjs";
-// The grant proof's redaction, read where the harness mounts the tree.
-import { MARKER, pageTokens, recordText, redact, redactFrames } from "/tests/grant-proof/redact.mjs";
+import {
+  ask as askRunSh, launchBrowser, MARKER, pageTokens, readHomes, recordText, redact, redactFrames, sleep, startProxy,
+  virtualAuthenticator, waitFor,
+} from "../browser/lib.mjs";
 
 const [homesFile, segment, cookie, outDir, viewportName] = process.argv.slice(2);
 if (!homesFile || !segment || !cookie || !outDir || !viewportName) {
@@ -457,21 +458,7 @@ function row(step, held, what, detail) {
 }
 
 const answers = [];
-let asked = 0;
-async function ask(request, timeoutMs = 240_000) {
-  const id = ++asked;
-  const answer = join(outDir, `answer-${id}.json`);
-  writeFileSync(join(outDir, `ask-${id}.part`), JSON.stringify(request));
-  renameSync(join(outDir, `ask-${id}.part`), join(outDir, `ask-${id}.json`));
-  const deadline = Date.now() + timeoutMs;
-  while (!existsSync(answer)) {
-    if (Date.now() > deadline) throw new Error(`run.sh never answered ${request.op}`);
-    await sleep(100);
-  }
-  const text = readFileSync(answer, "utf8");
-  answers.push(text);
-  return JSON.parse(text);
-}
+const ask = (request, options) => askRunSh(request, { outDir, timeoutMs: 240_000, answers, ...options });
 
 const MATERIAL = () => [...KEYS, ...KEYS.map(sha256), ...ENTRIES.map(typedDigest)];
 const holdsKey = (text) => MATERIAL().some((secret) => String(text).includes(secret));
@@ -1312,7 +1299,7 @@ async function main() {
     const failed = rows.length !== STEPS.length || !rows.every((r) => r.held);
     if (failed) {
       // The screenshot, unless the page could show a key she typed: then it
-      // is withheld, and the record says so with redact.mjs's marker.
+      // is withheld, and the record says so with lib.mjs's MARKER.
       const screenshot = { secret_on_page: secretOnPage };
       if (secretOnPage) {
         screenshot.withheld = `${MARKER}: withheld, since the page could show a key she typed`;

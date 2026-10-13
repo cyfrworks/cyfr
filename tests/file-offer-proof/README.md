@@ -53,7 +53,9 @@ Each step is one row; the proof fails when a row does not hold, and stops at
 the first row a later one rests on. The sender offers three files, one
 offer each: `alpha.txt` (1,536 bytes), `beta.txt` (2,560) and `gamma.txt`
 (3,584). Every count is the whole tree of the person's own athanor, as the
-storage cap walks it.
+storage cap walks it. The sender slug of the default folder
+`data/inbox/<sender slug>` is the sender's namespace when it is one storage
+path segment, and their person id otherwise.
 
 **What is hashed, and when.** A snapshot *holds its original* when the
 fixture, reading as the sender everything stored under the offer's
@@ -129,21 +131,3 @@ sends no request to a provider. No live provider account or credentials,
 TLS bypass, endpoint parameter or new resolver/transport override is used.
 This is an explicit test-coverage limitation, not a claim that the
 composition passed.
-
-## Record
-
-Recorded on 2026-10-05 on `p1` by `run.sh`, Chromium 153, at both
-viewports. The sender had no namespace, so the sender slug was their
-person id.
-
-| Step | `desktop` | `720x720` | What the record shows |
-|---|---|---|---|
-| `picker` | held | held | each of the sender's three pickers listed Rae Recipient alone |
-| `offered` | held | held | three rows `offered`; after each offer, every snapshot so far hashed to its original: `alpha.txt` `b6d628673ede7905cfa1bafe0d8807a1df93734328bbf6e226e31d958d116eea`, `beta.txt` `f2b8499b5481c39886e85474503463a3fa60d18b1a1f79e9257cf8d77ff0b5a8`, `gamma.txt` `c70c40a8fe3917a75f75cf6f5257226db186f9ccf74a1f69037b7bc3223b471d`, 1,536, 2,560 and 3,584 bytes; the sender's usage +1,536, +2,560, +3,584 |
-| `notice` | held | held | each offer in the recipient's Inbox with the default folder, the topbar counting 1, 2, then 3 offers, visible; the same document throughout |
-| `edited` | held | held | reopened, `alpha.txt` read the edit; all three snapshots still hashed to their originals; the sender's usage −512 |
-| `withdrawn` | held | held | all three snapshots hashed to their originals just before; the row `withdrawn`; the recipient's count 2; nothing stored under its snapshot after; the sender's usage −3,584 |
-| `accepted` | held | held | `alpha.txt`'s and `beta.txt`'s snapshots hashed to their originals just before; one receipt, `completed`, at `data/inbox/<sender's person id>/<offer id>/alpha.txt`; its bytes' SHA-256 `b6d628673ede7905cfa1bafe0d8807a1df93734328bbf6e226e31d958d116eea`, the original's, not the edit's `62c3cb03041e6a6c56709c670a5e6e3325d602e6f24e7fe793710d75ea682e1a`; the sender's usage −1,536, the recipient's +1,536; no custody copy left |
-| `declined` | held | held | `beta.txt`'s snapshot hashed to its original just before; the row `declined`; the Inbox empty and the count gone; nothing stored under its snapshot after; the sender's usage −2,560; the inbox folder held the accepted offer's folder alone |
-| `outsider` | held | held | nothing on the outsider's page at any of nine reads; the edited picker was answered "You share no athanor with usr_… — an offer goes to someone you share an athanor with", and nothing was written |
-| `storage` | held | held | the sender ended −512 from the start, the recipient +1,536 and the outsider unchanged, with no snapshot or custody copy left |

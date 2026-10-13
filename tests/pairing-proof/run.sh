@@ -34,27 +34,18 @@ OUT="${PROOF_OUT:-$WORK/out}"
 CERT_SECONDS="${PAIRING_PROOF_CERT_SECONDS:-20}"
 PROOF_PID=""
 
-# The proof's own container, found by the output directory only this run
-# mounts: stopping the subshell that started it leaves `docker run` and its
-# container behind.
-stop_proof_container() {
-  local ids
-  ids="$(docker ps -q --filter "volume=$OUT" 2>/dev/null || true)"
-  if [ -n "$ids" ]; then
-    # shellcheck disable=SC2086
-    docker stop -t 5 $ids >/dev/null 2>&1 || true
-  fi
-}
-
 # The scratch directory holds the run's authority key, so it goes even
 # when a stop fails. `server_stop` ends in `fail`, an `exit`, when a
 # listener outlives its stop, and an exit inside this trap would end it
 # before the removal, so the stop runs in a subshell, whose exit ends only
-# that subshell; the stop's failure still fails the run.
+# that subshell; the stop's failure still fails the run. The asks and
+# answers go on every exit, a kept or outside PROOF_OUT included; the
+# record stays.
 cleanup() {
   local code=$?
   [ -n "$PROOF_PID" ] && kill "$PROOF_PID" 2>/dev/null || true
   stop_proof_container
+  rm -f "$OUT"/ask-* "$OUT"/answer-*
   ( server_stop ) || [ "$code" -ne 0 ] || code=1
   if [ "${RELEASE_BOOT_KEEP:-}" = 1 ]; then
     echo "kept $WORK"
@@ -64,8 +55,6 @@ cleanup() {
   exit "$code"
 }
 trap cleanup EXIT
-
-field() { printf '%s' "$1" | python3 -c "import json, sys; print(json.load(sys.stdin)['$2'])"; }
 
 release_build
 
@@ -95,33 +84,24 @@ answer="$(server_fixture "$CELL" console "$desktop_token" settings/set \
   "{\"key\":\"device_cert_seconds\",\"value\":\"$CERT_SECONDS\"}")"
 printf '%s' "$answer" | grep -q '"ok"' || fail "device_cert_seconds was not set: $answer"
 
-# Each step the proof asks for, answered once.
-answer_asks() {
-  local ask id op answer arguments
-  for ask in "$OUT"/ask-*.json; do
-    [ -e "$ask" ] || continue
-    id="${ask##*/ask-}"
-    id="${id%.json}"
-    [ -e "$OUT/answer-$id.json" ] && continue
-    op="$(python3 -c "import json, sys; print(json.load(open(sys.argv[1]))['op'])" "$ask")"
-    case "$op" in
-      passkey_options)
-        answer="$(server_fixture "$CELL" console "$phone_token" passkey/register '{}')"
-        ;;
-      passkey_register)
-        arguments="$(python3 -c "import json, sys; print(json.dumps({'credential': json.load(open(sys.argv[1]))['credential']}))" "$ask")"
-        answer="$(server_fixture "$CELL" console "$phone_token" passkey/register "$arguments")"
-        ;;
-      vault_names)
-        answer="$(server_fixture "$CELL" console "$desktop_token" vault/list '{}' |
-          python3 -c "import json, sys; a = json.load(sys.stdin); print(json.dumps({'names': sorted(e['name'] for e in a.get('ok', {}).get('entries', []))} if 'ok' in a else a))")"
-        ;;
-      *) fail "the proof asked for '$op', which this script does not do" ;;
-    esac
-    [ -n "$answer" ] || answer='{"error":"the fixture answered nothing"}'
-    printf '%s\n' "$answer" >"$OUT/answer-$id.part"
-    mv "$OUT/answer-$id.part" "$OUT/answer-$id.json"
-  done
+# Each step the proof asks for (harness.sh `answer_asks`).
+answer_ask() {
+  local ask="$1" op arguments
+  op="$(asked "$ask" op)"
+  case "$op" in
+    passkey_options)
+      ANSWER="$(server_fixture "$CELL" console "$phone_token" passkey/register '{}')"
+      ;;
+    passkey_register)
+      arguments="$(python3 -c "import json, sys; print(json.dumps({'credential': json.load(open(sys.argv[1]))['credential']}))" "$ask")"
+      ANSWER="$(server_fixture "$CELL" console "$phone_token" passkey/register "$arguments")"
+      ;;
+    vault_names)
+      ANSWER="$(server_fixture "$CELL" console "$desktop_token" vault/list '{}' |
+        python3 -c "import json, sys; a = json.load(sys.stdin); print(json.dumps({'names': sorted(e['name'] for e in a.get('ok', {}).get('entries', []))} if 'ok' in a else a))")"
+      ;;
+    *) fail "the proof asked for '$op', which this script does not do" ;;
+  esac
 }
 
 step "the pairing proof in Chromium, in $PLAYWRIGHT_IMAGE"
@@ -129,15 +109,7 @@ mkdir -p "$OUT"
 rm -f "$OUT"/ask-* "$OUT"/answer-*
 playwright_run pairing-proof proof.mjs /authority/homes.json "$segment" "$desktop_cookie" "$phone_cookie" /out &
 PROOF_PID=$!
-while kill -0 "$PROOF_PID" 2>/dev/null; do
-  answer_asks
-  sleep 0.2
-done
-set +e
-wait "$PROOF_PID"
-status=$?
-set -e
-PROOF_PID=""
+proof_await answer_ask
 
 echo "the record: $OUT/pairing-proof.json and $OUT/pairing-proof.md"
-exit "$status"
+exit "$PROOF_STATUS"

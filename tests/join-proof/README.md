@@ -80,70 +80,12 @@ kit line or a confirmation's secret is deleted once read.
 | `directory_down` | with `dir.test` down, H keeps the person's work within its bound and pauses protected work past it (`identity_stale`): the person's page at H lands on the sign-in page, which says why; the same session's page works again once the directory answers |
 | `cross_site` | every request one home received from another home's page, in every browser and step, carried `sec-fetch-site: cross-site` |
 
+H's retirements in `rotate` and `retired` are each observed by loading a
+page, so each includes up to one page load past the moment of retirement;
+the steps allow H's freshness bound plus 30 s and plus 40 s. LiveView keeps
+its reload counters in `localStorage` (keys ending `consecutive-reloads`),
+which are no list of homes, and `forged_completion` allows A's storage
+those keys alone.
+
 An externally operated directory is not provided: both directories here
 are disposable writers the run starts, which prove no hosted service.
-
-## Record
-
-Recorded on 2026-10-03 on `p1` by `run.sh`, against the SQLite `cyfr`
-release 0.5.8 built from this tree, in the harness's Playwright image
-of that day (`v1.63.0-noble`,
-`mcr.microsoft.com/playwright@sha256:eff16c30e6f3f4af0a03fa4b706120d5e9b0891c344a27d64559aff5900a4a27`):
-
-| Step | Chromium 153.0.8010.12 | Firefox 155.0 | WebKit 26.6 |
-|---|---|---|---|
-| `home` | held | Chromium only | Chromium only |
-| `hub` | held | Chromium only | Chromium only |
-| `sign_in` | held | held | held |
-| `resolution` | held | Chromium only | Chromium only |
-| `second_profile` | held | held | held |
-| `crafted` | held | Chromium only | Chromium only |
-| `copied_session` | held | Chromium only | Chromium only |
-| `dropped_callback` | held | Chromium only | Chromium only |
-| `closed_hops` | held | Chromium only | Chromium only |
-| `forged_completion` | held | Chromium only | Chromium only |
-| `h_passkey` | held | Chromium only | Chromium only |
-| `a_passkey_at_h` | held | Chromium only | Chromium only |
-| `phone` | held | Chromium only | Chromium only |
-| `renewal` | held | Chromium only | Chromium only |
-| `thread` | held | Chromium only | Chromium only |
-| `removal` | held | Chromium only | Chromium only |
-| `rotate` | held | Chromium only | Chromium only |
-| `recertify` | held | Chromium only | Chromium only |
-| `tabs` | held | Chromium only | Chromium only |
-| `lost_home` | held | Chromium only | Chromium only |
-| `restore` | held | Chromium only | Chromium only |
-| `retired` | held | Chromium only | Chromium only |
-| `admin_again` | held | Chromium only | Chromium only |
-| `viewport` | held | Chromium only | Chromium only |
-| `directory_down` | held | Chromium only | Chromium only |
-| `cross_site` | held | held | held |
-
-What the run measured:
-
-- Every sign-in admitted once, with the same code shown at both homes;
-  in Firefox and WebKit A's confirmation was given on the Chromium glass.
-  No origin's storage held a list of homes; Firefox kept two keys in A's
-  `localStorage`, `/carry-consecutive-reloads` and
-  `/login-consecutive-reloads`, which are LiveView's reload counters.
-- H read the person six times at `dir.test` and never at `dir2.test`.
-- The phone's two renewals at A answered 200, each after its CORS
-  preflight, `cross-site`, with origin `https://h.test` and no cookie.
-- H retired the old-key sessions 18.2 s after the rotation and 20 s
-  after the restore completed, against its 20 s freshness bound; each is
-  observed by loading a page, so it includes up to one page load past the
-  moment of retirement, and the steps allow the bound plus 30 s and 40 s.
-  What the recovery retired was there to retire: the H passkey, then
-  `revoked`, and the pairing its session left waiting, then `voided`.
-- With `dir.test` down, H kept the person's work within its bound and,
-  asked again 42.1 s after the directory went down, paused protected work
-  (`identity_stale`): the person's page at H landed on `/login`, which
-  said "Your identity could not be confirmed fresh with its directory
-  just now; try again shortly."; the same session's page worked again
-  16.2 s after the directory answered.
-- Cross-home requests, every one `cross-site`: 101 from Chromium, 16 from
-  Firefox, 16 from WebKit.
-- At 720×720 the glass's screens, the revocation's request on the glass
-  among them, the certify panel and the consent prompt had no control
-  under 24×24 CSS px, no text under 12 px and no overflow. A2's page
-  visited on the way, measured and not held, had none either.

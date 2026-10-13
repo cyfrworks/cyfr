@@ -28,7 +28,7 @@
 # fetching dependencies.
 # A failed run also leaves prism-grant.png and prism-grant-frames.json: the
 # page, and its last socket frames with every value the proof knows to be
-# secret replaced (redact.mjs).
+# secret replaced (tests/browser/lib.mjs `redact`).
 # The record, grant-proof.json and grant-proof.md, is written under the
 # same rule.
 set -euo pipefail
@@ -51,15 +51,6 @@ OUT="${PROOF_OUT:-$WORK/out}"
 PROOF_PID=""
 NAME=grant-probe
 REF="tincture:local.$NAME"
-
-stop_proof_container() {
-  local ids
-  ids="$(docker ps -q --filter "volume=$OUT" 2>/dev/null || true)"
-  if [ -n "$ids" ]; then
-    # shellcheck disable=SC2086
-    docker stop -t 5 $ids >/dev/null 2>&1 || true
-  fi
-}
 
 # The scratch directory holds the run's authority key, so it goes even
 # when a stop fails. `server_stop` ends in `fail`, an `exit`, when a
@@ -84,23 +75,17 @@ cleanup() {
 }
 trap cleanup EXIT
 
-field() { printf '%s' "$1" | python3 -c "import json, sys; print(json.load(sys.stdin)['$2'])"; }
-
 # The proof's fixture inside the running server, as `bin/cyfr rpc`.
 grant_fixture() {
-  local args="" arg
-  for arg in "$@"; do
-    args="$args\"$(printf '%s' "$arg" | sed 's/[\\"]/\\&/g')\","
-  done
-  cell_cyfr "$CELL" rpc \
-    "{answer, _} = Code.eval_file(\"$HERE/fixture.exs\"); IO.puts(answer.([${args%,}]))" \
-    | sed -n 's/^GRANT=//p' | tail -1
+  cell_fixture "$CELL" "$HERE/fixture.exs" GRANT "$@"
 }
 
 release_build
 
 step "the command line, built from apps/codex"
-(cd "$ROOT/apps/codex" && GOFLAGS=-mod=mod go build -o "$WORK/cyfr" .) || fail "the CLI did not build"
+# -mod=readonly: the build reads go.mod and go.sum as they are and never
+# rewrites them.
+(cd "$ROOT/apps/codex" && go build -mod=readonly -o "$WORK/cyfr" .) || fail "the CLI did not build"
 
 step "the run's authority and the home home.test"
 browser_authority
@@ -126,42 +111,30 @@ printf '%s' "$published" | grep -q '"version":"1.0.0"' || fail "grant-probe was 
 filed="$(grant_fixture file "$user_id" data/probe/notes/today.md)"
 printf '%s' "$filed" | grep -q 'data/probe/notes' || fail "the probe's folder was not written: $filed"
 
-# Each step the proof asks for, answered once.
-answer_asks() {
-  local ask id op answer decisions
-  for ask in "$OUT"/ask-*.json; do
-    [ -e "$ask" ] || continue
-    id="${ask##*/ask-}"
-    id="${id%.json}"
-    [ -e "$OUT/answer-$id.json" ] && continue
-    op="$(python3 -c "import json, sys; print(json.load(open(sys.argv[1]))['op'])" "$ask")"
-    case "$op" in
-      head) answer="$(grant_fixture head "$user_id" "$REF")" ;;
-      plan) answer="$(grant_fixture plan "$token" "$REF")" ;;
-      admit) answer="$(grant_fixture admit "$user_id" "$REF")" ;;
-      publish)
-        version="$(python3 -c "import json, sys; print(json.load(open(sys.argv[1]))['version'])" "$ask")"
-        variant="$(python3 -c "import json, sys; print(json.load(open(sys.argv[1]))['variant'])" "$ask")"
-        answer="$(grant_fixture publish "$user_id" "$HERE/tinctures/$NAME" "$NAME" "$version" "$variant")"
-        ;;
-      revoke)
-        profile_id="$(python3 -c "import json, sys; print(json.load(open(sys.argv[1]))['profile_id'])" "$ask")"
-        answer="$(grant_fixture revoke "$user_id" "$token" "$profile_id" "$REF")"
-        ;;
-      cli_preview)
-        # The command line's preview of exactly the decisions the proof
-        # names, over /mcp with the person's session as its credential.
-        decisions="$(python3 -c "import json, sys; print(json.dumps({'action': 'preview', 'decisions': json.load(open(sys.argv[1]))['decisions']}))" "$ask")"
-        answer="$(CYFR_TOKEN="$token" HOME="$WORK/cli-home" "$WORK/cyfr" call profile "$decisions" \
-          --url "http://127.0.0.1:$PORT_HOME" --json 2>"$OUT/cli-$id.err" || true)"
-        [ -n "$answer" ] || answer="{\"error\":$(python3 -c "import json, sys; print(json.dumps(open(sys.argv[1]).read()))" "$OUT/cli-$id.err")}"
-        ;;
-      *) fail "the proof asked for '$op', which this script does not do" ;;
-    esac
-    [ -n "$answer" ] || answer='{"error":"the fixture answered nothing"}'
-    printf '%s\n' "$answer" >"$OUT/answer-$id.part"
-    mv "$OUT/answer-$id.part" "$OUT/answer-$id.json"
-  done
+# Each step the proof asks for (harness.sh `answer_asks`).
+answer_ask() {
+  local ask="$1" id="$2" op decisions
+  op="$(asked "$ask" op)"
+  case "$op" in
+    head) ANSWER="$(grant_fixture head "$user_id" "$REF")" ;;
+    plan) ANSWER="$(grant_fixture plan "$token" "$REF")" ;;
+    admit) ANSWER="$(grant_fixture admit "$user_id" "$REF")" ;;
+    publish)
+      ANSWER="$(grant_fixture publish "$user_id" "$HERE/tinctures/$NAME" "$NAME" "$(asked "$ask" version)" "$(asked "$ask" variant)")"
+      ;;
+    revoke)
+      ANSWER="$(grant_fixture revoke "$user_id" "$token" "$(asked "$ask" profile_id)" "$REF")"
+      ;;
+    cli_preview)
+      # The command line's preview of exactly the decisions the proof
+      # names, over /mcp with the person's session as its credential.
+      decisions="$(python3 -c "import json, sys; print(json.dumps({'action': 'preview', 'decisions': json.load(open(sys.argv[1]))['decisions']}))" "$ask")"
+      ANSWER="$(CYFR_TOKEN="$token" HOME="$WORK/cli-home" "$WORK/cyfr" call profile "$decisions" \
+        --url "http://127.0.0.1:$PORT_HOME" --json 2>"$OUT/cli-$id.err" || true)"
+      [ -n "$ANSWER" ] || ANSWER="{\"error\":$(python3 -c "import json, sys; print(json.dumps(open(sys.argv[1]).read()))" "$OUT/cli-$id.err")}"
+      ;;
+    *) fail "the proof asked for '$op', which this script does not do" ;;
+  esac
 }
 
 step "the grant proof in Chromium, in $PLAYWRIGHT_IMAGE"
@@ -169,15 +142,7 @@ mkdir -p "$OUT" "$WORK/cli-home"
 rm -f "$OUT"/ask-* "$OUT"/answer-*
 playwright_run grant-proof proof.mjs /authority/homes.json "$segment" "$cookie" /out &
 PROOF_PID=$!
-while kill -0 "$PROOF_PID" 2>/dev/null; do
-  answer_asks
-  sleep 0.2
-done
-set +e
-wait "$PROOF_PID"
-status=$?
-set -e
-PROOF_PID=""
+proof_await answer_ask
 
 echo "the record: $OUT/grant-proof.json and $OUT/grant-proof.md"
-exit "$status"
+exit "$PROOF_STATUS"

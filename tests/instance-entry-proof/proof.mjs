@@ -42,9 +42,9 @@
 // Usage: node proof.mjs HOMES_FILE ADMIN_SEGMENT ADMIN_COOKIE OUT_DIR VIEWPORT
 
 import { createHash, randomBytes } from "node:crypto";
-import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { launchBrowser, readHomes, sleep, startProxy, virtualAuthenticator } from "../browser/lib.mjs";
+import { ask as askRunSh, launchBrowser, readHomes, startProxy, virtualAuthenticator } from "../browser/lib.mjs";
 
 const [homesFile, adminSegment, adminCookie, outDir, viewportName] = process.argv.slice(2);
 if (!homesFile || !adminSegment || !adminCookie || !outDir || !viewportName) {
@@ -405,21 +405,7 @@ function row(step, held, what, detail) {
 }
 
 const answers = [];
-let asked = 0;
-async function ask(request, timeoutMs = 240_000) {
-  const id = ++asked;
-  const answer = join(outDir, `answer-${id}.json`);
-  writeFileSync(join(outDir, `ask-${id}.part`), JSON.stringify(request));
-  renameSync(join(outDir, `ask-${id}.part`), join(outDir, `ask-${id}.json`));
-  const deadline = Date.now() + timeoutMs;
-  while (!existsSync(answer)) {
-    if (Date.now() > deadline) throw new Error(`run.sh never answered ${request.op}`);
-    await sleep(100);
-  }
-  const text = readFileSync(answer, "utf8");
-  answers.push(text);
-  return JSON.parse(text);
-}
+const ask = (request, options) => askRunSh(request, { outDir, timeoutMs: 240_000, answers, ...options });
 
 const MATERIAL = () => [...KEYS, ...KEYS.map(sha256), typedDigest(AI), typedDigest(MAIL)];
 const holdsKey = (text) => MATERIAL().some((secret) => String(text).includes(secret));

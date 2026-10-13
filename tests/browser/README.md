@@ -1,4 +1,4 @@
-# The browser harness and its record
+# The browser harness
 
 The harness starts `cyfr` releases as `tests/release-boot/` starts one
 (`tests/release-boot/release.sh`), on SQLite unless a proof names
@@ -13,12 +13,28 @@ The harness is JavaScript. The Playwright images carry the browsers but not
 Playwright's library: the Python image's `playwright` wheel ships a Node
 driver binary, while `playwright-core` from npm is JavaScript alone and
 runs on the image's own Node. `package-lock.json` pins it with its
-integrity hash and `npm ci --ignore-scripts` installs it, so no binary is
-fetched at test time. `apps/cyfr/assets` has no JavaScript toolchain of its
-own to share. `playwright_run` (`harness.sh`) runs an experiment in the
-image, pinned by digest, on the host's network, with `apps/cyfr/assets`
-mounted read-only at `/assets` for an experiment that loads the console's
-own modules (`tests/markdown-proof/`).
+integrity hash, and `npm ci --ignore-scripts` installs it once per
+lockfile, into a cache under `_build/browser-node-modules/<hash>` keyed by
+the SHA-256 of `package-lock.json` and the image, so no binary is fetched
+at test time. `apps/cyfr/assets` has no JavaScript toolchain of its own to
+share. `playwright_run` (`harness.sh`) runs an experiment in the image,
+pinned by digest, on the host's network, with `--shm-size=1g`, since
+Chromium and Firefox keep their shared memory in `/dev/shm`, whose Docker
+default of 64 MB is too small. It mounts the cache read-only at
+`/node_modules`, and `apps/cyfr/assets` read-only at `/assets` for an
+experiment that loads the console's own modules (`tests/markdown-proof/`).
+
+A proof asks its `run.sh` for the server's part of a step through its
+output directory: `ask()` (`lib.mjs`) writes `ask-N.json` and waits for
+`answer-N.json`, and the loop that answers it is `harness.sh`'s, which
+removes each ask file once it has answered it.
+
+**Redaction.** Every proof redacts with the one redaction `lib.mjs`
+exports (`redact`, `redactFrames`, `recordText`, `pageTokens`, `MARKER`).
+A known secret, a value under a secret-named key or attribute, and a
+bearer become `[secret]`; an asset credential becomes `/_s/[credential]`
+or `/_c/v1/[credential]`; an `SFMyNTY.` signed token becomes
+`[signed token]`.
 
 ## One cell: `cyfr.test`
 
@@ -151,8 +167,8 @@ Every proof the harness serves, with its shape. The `browser` job of
 the frame-facts experiment built (`RELEASE_BOOT_SKIP_BUILD=1`), but the
 markdown proof, which starts no release. A passkey ceremony is Chromium's
 alone, whose virtual authenticator a proof drives, so a proof that needs
-one runs its passkey steps in Chromium. Each proof's own README holds its
-steps and its record.
+one runs its passkey steps in Chromium. Each proof's own README holds how
+to run it and its steps.
 
 | Proof | Directory | Shape | Browsers |
 |---|---|---|---|
@@ -179,12 +195,6 @@ would send. File acceptance really copies bytes. Their READMEs name the
 executing evidence separately; none proves the complete shipped model
 artifact → production attachment → local provider composition.
 
-## The record
-
-The rest of this file is the harness's dated record: the browser matrix,
-the frame facts the frame rules were frozen against, the host the image
-suites ran on, and their results.
-
 ## Browser matrix
 
 The browsers `mcr.microsoft.com/playwright:v1.64.0-noble` ships, pinned as
@@ -199,21 +209,19 @@ in `harness.sh`, driven by `playwright-core` 1.64.0:
 
 ## Frame facts the rules were frozen against
 
-The first record: a page the harness's proxy answered on the server's own
-origin, where the Prism shell frames tinctures from, held `frame-probe`'s `/t/` page in `<iframe sandbox="allow-scripts">`
-as the shell does, and the probe (`tinctures/frame-probe/probe.js`) made
-nine attempts from inside it, under the policy the `/t/` route served
-before the frame's rules: its CSP was
+The facts below hold for a page the harness's proxy answers on the
+server's own origin, where the Prism shell frames tinctures from, holding
+`frame-probe`'s `/t/` page in `<iframe sandbox="allow-scripts">` as the
+shell does, with the probe (`tinctures/frame-probe/probe.js`) making nine
+attempts from inside it, under the policy the `/t/` route served before the
+frame's rules: its CSP was
 `default-src 'self'; script-src 'self' 'nonce-…'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'self'`,
 and its assets answer `access-control-allow-origin: *`. Every browser reaches
 the server through the harness's proxy under the name `cyfr.test`; the
 proxy answers only the framing page and the 302s of the redirect attempt
-(no `/t/` route redirects today) and forwards the rest unchanged. The
-document's origin is `null` in all three browsers.
-
-Recorded on 2026-09-26 on the host below; `frame-facts.json`, written by
-each run, holds every request, message, CSP report and console line behind
-a row.
+(no `/t/` route redirects) and forwards the rest unchanged. The
+document's origin is `null` in all three browsers. Each column names the
+browser version the facts were observed in.
 
 | Attempt | Chromium 153 | Firefox 155 | WebKit 26.6 |
 |---|---|---|---|
@@ -253,10 +261,12 @@ from inside it. Every browser reaches the server through the harness's proxy
 302s of the redirect attempt (no tincture route redirects) and forwards the
 rest unchanged. The document's origin is `null` in all three browsers.
 
-Recorded on 2026-09-26 on the host below, each browser seeing the shell at
-`/a/@release-proof/tinctures` frame `/t/@release-proof/local/frame-probe`;
-`frame-facts.json`, written by each run, holds every request, message, CSP
-report and console line behind a row.
+Each browser sees the shell at `/a/@release-proof/tinctures` frame
+`/t/@release-proof/local/frame-probe`. The experiment asserts no outcome:
+it fails only when an attempt cannot be observed, and `frame-facts.json`,
+written by each run, holds every request, message, CSP report and console
+line behind a row. Each column names the browser version the facts were
+observed in.
 
 | Attempt | Chromium 153 | Firefox 155 | WebKit 26.6 |
 |---|---|---|---|
@@ -279,71 +289,3 @@ workers and WebAssembly run because the policy opens them; forms are closed
 by the sandbox and `form-action 'none'`; messages to the parent arrive with
 origin `"null"`, so the shell tells its frames apart by the port it handed
 each, never by origin.
-
-## Host
-
-The verification host of this record:
-
-| Fact | Value |
-|---|---|
-| Name | `p1` |
-| System | Ubuntu 26.04.1 LTS, kernel 7.0.0-34-generic, 16 cores, 60 GiB |
-| Docker | Engine 29.1.3, cgroup v2, Compose 2.40.3 |
-| `user.max_user_namespaces` | 249429 |
-| `kernel.apparmor_restrict_unprivileged_userns` | 1 (unprivileged user namespaces are confined by AppArmor) |
-| `kernel.unprivileged_userns_clone` | 1 |
-| Container to host | refused: ufw is enabled with its default INPUT policy, so a container cannot reach a listener on this host through the bridge gateway |
-
-Because of the last row the worker-runners suite, whose scripted control
-plane listens on the host, ran on a Docker-in-Docker host on `p1`: the
-`docker:29-dind` image (inner engine 29.8.1, cgroup v2, `cgroupfs` driver)
-in a privileged container, same kernel and so the same user-namespace
-settings, whose containers reach a listener inside it through the inner
-bridge.
-
-## Image suites and acceptance runs
-
-Run on `p1` on 2026-09-26 against images built from this tree
-(`Dockerfile.locus`, `Dockerfile`), each as
-`.github/workflows/test.yml` invokes it; counts are the suites' `ok:` lines.
-The Trivy scans of those jobs were not run here.
-
-| Suite | Result |
-|---|---|
-| builder-image: `scripts/builder-smoke.py` | pass, 22 |
-| builder-image: `isolation.py` (the pooled uids named for their service) | pass, 34 |
-| builder-image: `memory.py` | pass, 41 |
-| builder-image: `headroom.py` | pass, 11 |
-| locus-backends-image: `e2e.py`, the scripted controller and `cyfr` as the controller | pass, 83 |
-| locus-backends-image: `isolation.py` (the pooled uids named for their service) | pass, 92 |
-| locus-backends-image: `refusals.py` | pass, 35 |
-| locus-backends-image: `residue.py` | pass, 29 |
-| locus-backends-image: `memory.py` | pass, 25 and 26 in two runs (its status polls print a line each) |
-| locus-runtime-image: `runners.py` (the egress enforcement cases), on `p1` | fail after 8: the pinned-egress case's guest cannot reach the harness's listener (the ufw row above) |
-| locus-runtime-image: `runners.py`, on the Docker-in-Docker host | 86 pass, including every pinned-egress, kill, taint, stream, late-child and control-plane-cut case; then fail: after the case that kills the service's VM, the restarted container's cyfr-locus reports "memory bounds are unavailable … processes remain in /sys/fs/cgroup" and starts no runner, so the pool never refills and the memory cases after it do not run. A harness artefact: the case polled the container with `docker exec` while it restarted in place, and runc's processes entering it for the exec sat in the reused cgroup root, in the host's pid namespace, when the new keeper drained it, listed there as pid 0. The case now lists processes from the host (`docker top`) across the restart, and the keeper's drain skips an entry of another pid namespace and waits between its passes |
-| locus-runtime-image: `runners.py` and `namespace.py`, native engine, harness in a container on a shared network | pass: 172 and 28, the service-death case and the restart step among them |
-| browser: `run.sh` | pass, every attempt observed in every browser |
-| tincture proof: `tests/tincture-proof/run.sh` | pass in every browser (its README holds the record) |
-| release-boot: `boot.sh sqlite`, with the backup round trip | pass |
-| release-boot: `boot.sh postgres`, with the backup round trip | pass |
-| s3-minio: `--only s3_integration` against `pgsty/minio` (RELEASE.2026-08-04T00-00-00Z) | pass, 35 of 35 |
-| `scripts/test-partitioned.sh -n 4 -a sqlite apps/cyfr/test` | 5259 of 5260; the one failure is the resolver-dependent `nonexistent.test` case of `Locus.Runtime.HttpHandlerEnforcementTest`, which fails on this host on every tree; no new ownership line |
-| the same on PostgreSQL (`_build/test_pg`) | 5259 of 5260, the same one failure; no new ownership line |
-
-## The harness's two shapes
-
-Run on `p1` on 2026-09-29 against the `cyfr` release built from this tree
-for each adapter, the browser runs on SQLite, with the browsers of the
-matrix above. The fault runs are the smoke's own (`MULTI_HOME_SMOKE_FAULT`)
-and must fail.
-
-| Run | Result |
-|---|---|
-| multi-home smoke: `tests/multi-home-smoke/run.sh` | pass: 35 of 35 checks held, every check in Chromium, Firefox and WebKit and the passkey in Chromium |
-| the smoke with `MULTI_HOME_SMOKE_FAULT=unsigned` | fails, as it must: every browser refused `beta.test` (Chromium `net::ERR_CERT_AUTHORITY_INVALID`, Firefox `SEC_ERROR_UNKNOWN_ISSUER`, WebKit "Unacceptable TLS certificate"), and the 22 checks that need beta failed |
-| the smoke with `MULTI_HOME_SMOKE_FAULT=silent` | fails, as it must, before any browser starts: "the cell beta does not answer on its hostname beta.test (127.0.0.1:4412): connect ECONNREFUSED 127.0.0.1:4412" |
-| browser: `run.sh` | pass, every attempt observed in every browser |
-| tincture proof: `tests/tincture-proof/run.sh`, with a Locus image built from this tree | pass in every browser |
-| containment proof: `tests/hostile-frame-proof/run.sh` | pass, every attempt held its column in every browser |
-| release-boot: `boot.sh sqlite`, with the backup round trip | pass |
-| release-boot: `boot.sh postgres`, with the backup round trip | pass |

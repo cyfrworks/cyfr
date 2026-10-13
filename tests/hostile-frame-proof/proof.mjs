@@ -36,11 +36,11 @@
 // Usage: node proof.mjs SERVER_URL SEGMENT COOKIE OUT_DIR PUBLIC_NEIGHBOUR_PATH
 
 import { request } from "node:http";
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
-  ATTACKER, BROWSERS, SITE, awaitFrame, chromium, firefox, launch, launchBrowser, openShell, signedIn, sleep,
-  startProxy, startReceiver, waitFor, webkit,
+  ATTACKER, BROWSERS, SITE, ask as askRunSh, awaitFrame, chromium, firefox, launch, launchBrowser, openShell, redact,
+  signedIn, sleep, startProxy, startReceiver, waitFor, webkit,
 } from "../browser/lib.mjs";
 
 const TYPES = { chromium, firefox, webkit };
@@ -110,7 +110,6 @@ function check(condition, browser, phase, name, what, detail) {
   return condition;
 }
 
-const redact = (text) => String(text).replace(/\/_s\/[^/]+/g, "/_s/…");
 const brief = (result) => {
   const { violations, body, ...rest } = result || {};
   const directives = [...new Set((violations || []).map((v) => v.directive))];
@@ -409,21 +408,8 @@ async function frameRequestRefused(server, path, cookie) {
 // ---------------------------------------------------------------------------
 
 // The server's part of a step, asked of run.sh through the output
-// directory: `request` written as ask-N.json, its answer read from
-// answer-N.json.
-let asked = 0;
-async function ask(outDir, request, timeoutMs = 90_000) {
-  const id = ++asked;
-  const answer = join(outDir, `answer-${id}.json`);
-  writeFileSync(join(outDir, `ask-${id}.part`), JSON.stringify(request));
-  renameSync(join(outDir, `ask-${id}.part`), join(outDir, `ask-${id}.json`));
-  const deadline = Date.now() + timeoutMs;
-  while (!existsSync(answer)) {
-    if (Date.now() > deadline) throw new Error(`run.sh never answered ${JSON.stringify(request)}`);
-    await sleep(100);
-  }
-  return JSON.parse(readFileSync(answer, "utf8"));
-}
+// directory `outDir` (lib.mjs `ask`).
+const ask = (outDir, request) => askRunSh(request, { outDir, timeoutMs: 90_000 });
 
 // In the shell's own document, before any of its scripts: every time a
 // dialog is shown modally, which prompt it holds and whether the document
