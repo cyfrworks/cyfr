@@ -15,7 +15,9 @@ defmodule Arca.Adapters.S3MinioTest do
   `mix test --only s3_integration` against a MinIO
   container. `Arca.Test.S3Env` names the store, with defaults for that
   container, so the same suite runs against another S3-compatible store
-  by environment alone. Locally:
+  by environment alone. Every key lives under this run's prefix
+  (`Arca.Test.S3Env.run_prefix/1`), which the suite deletes on exit, so
+  two runs against one bucket never meet. Locally:
 
       docker run -d -p 9000:9000 -e MINIO_ROOT_USER=cyfrtest \\
         -e MINIO_ROOT_PASSWORD=cyfrtest123 minio/minio server /data
@@ -27,12 +29,19 @@ defmodule Arca.Adapters.S3MinioTest do
   @moduletag :s3_integration
 
   alias Arca.Adapters.S3
+  alias Arca.Test.S3Env
 
   setup_all do
-    previous = Arca.Test.S3Env.configure!()
-    :ok = Arca.Test.S3Env.create_bucket!()
+    prefix = S3Env.run_prefix("minio")
+    previous = S3Env.configure!(prefix: prefix)
+    :ok = S3Env.create_bucket!()
+    guard = S3Env.guard!(prefix)
 
-    on_exit(fn -> Arca.Test.S3Env.restore(previous) end)
+    on_exit(fn ->
+      S3Env.restore(previous)
+      S3Env.clean!(guard)
+    end)
+
     :ok
   end
 
@@ -108,8 +117,6 @@ defmodule Arca.Adapters.S3MinioTest do
     # them out of SignedHeaders, or mis-encodes the key beside them, is a
     # 403 only a real service answers. The parity suite
     # (`Arca.AppendParityTest`) runs the races against this service.
-    :ok = S3.delete_tree(actor, ["data", "cond"])
-
     for name <- ["plain", "with space", "plus+plus", "文件名", "📁unit"] do
       key = ["data", "cond", name]
 
@@ -134,9 +141,6 @@ defmodule Arca.Adapters.S3MinioTest do
   end
 
   test "list_prefix/2 answers what was written: a tree, one object, nothing", %{actor: actor} do
-    # The bucket outlives a run; start from nothing whatever the last one left.
-    :ok = S3.delete_tree(actor, ["data", "reg"])
-    :ok = S3.delete_tree(actor, ["data", "reg-other"])
     {:ok, _} = S3.put_if_none_match(actor, ["data", "reg", "u1"], "1")
 
     {:ok, _} =
@@ -161,14 +165,22 @@ defmodule Arca.Adapters.S3MinioTest do
 
   test "a configured key prefix scopes every object", %{actor: actor} do
     prev = Application.fetch_env!(:arca, :s3)
-    Application.put_env(:arca, :s3, Keyword.put(prev, :prefix, "tenants/it"))
+    nested = prev[:prefix] <> "/tenants/it"
     on_exit(fn -> Application.put_env(:arca, :s3, prev) end)
 
+    Application.put_env(:arca, :s3, Keyword.put(prev, :prefix, nested))
     assert :ok = S3.put(actor, ["data", "prefixed.txt"], "p")
     assert {:ok, "p"} = S3.get(actor, ["data", "prefixed.txt"])
+    assert [key] = S3Env.keys(nested)
+    assert String.ends_with?(key, "/data/prefixed.txt")
 
     # Without the prefix the object is elsewhere in the bucket.
     Application.put_env(:arca, :s3, prev)
     assert {:error, :not_found} = S3.get(actor, ["data", "prefixed.txt"])
+
+    Application.put_env(:arca, :s3, Keyword.put(prev, :prefix, nested))
+    assert :ok = S3.delete(actor, ["data", "prefixed.txt"])
+    assert [] = S3Env.keys(nested)
+    Application.put_env(:arca, :s3, prev)
   end
 end
