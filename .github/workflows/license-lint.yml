@@ -4,35 +4,39 @@ name: License Lint
 # FSL-1.1-Apache-2.0; all other source uses Apache-2.0. The Locus image
 # is Apache-2.0 alone, so the apps it releases reach no FSL file.
 
+# Each paths list is exactly what the steps read: the first step's
+# `git ls-files` patterns (a git pathspec `*` crosses `/`), and the second
+# step's Dockerfile, root and app mix.exs and its whole-tree grep of
+# apps/locus and apps/prima.
 on:
   pull_request:
     paths:
       - '**/*.ex'
       - '**/*.exs'
-      - 'apps/codex/**'
-      - 'apps/locus/keeper/**'
-      - 'tests/locus-backends-image/**'
-      - 'tests/fixtures/*.go'
-      - 'wit/**'
-      - 'LICENSES/**'
-      - 'mix.exs'
+      - 'apps/codex/**/*.go'
+      - 'tests/locus-backends-image/**/*.py'
+      - 'tests/locus-backends-image/**/*.mjs'
+      - 'tests/fixtures/**/*.go'
+      - 'wit/**/*.wit'
+      - 'apps/cyfr/assets/js/**/*.js'
       - 'Dockerfile.locus'
-      - 'apps/cyfr/assets/js/**'
+      - 'apps/locus/**'
+      - 'apps/prima/**'
       - '.github/workflows/license-lint.yml'
   push:
     branches: [main]
     paths:
       - '**/*.ex'
       - '**/*.exs'
-      - 'apps/codex/**'
-      - 'apps/locus/keeper/**'
-      - 'tests/locus-backends-image/**'
-      - 'tests/fixtures/*.go'
-      - 'wit/**'
-      - 'LICENSES/**'
-      - 'mix.exs'
+      - 'apps/codex/**/*.go'
+      - 'tests/locus-backends-image/**/*.py'
+      - 'tests/locus-backends-image/**/*.mjs'
+      - 'tests/fixtures/**/*.go'
+      - 'wit/**/*.wit'
+      - 'apps/cyfr/assets/js/**/*.js'
       - 'Dockerfile.locus'
-      - 'apps/cyfr/assets/js/**'
+      - 'apps/locus/**'
+      - 'apps/prima/**'
       - '.github/workflows/license-lint.yml'
   workflow_call:
 
