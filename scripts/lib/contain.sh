@@ -16,9 +16,12 @@
 #       pipe closes without the caller having retired it, because the
 #       caller exited or was killed, the watchdog runs contain_stop on the
 #       session with GRACE_S (default 30); started from the registry's
-#       owner it then also runs contain_sweep_registry with GRACE_S. Then
-#       it exits and releases the held descriptors. The session id is
-#       appended to $CONTAIN_REGISTRY when that names a file.
+#       owner, or a subshell of it, it then also runs
+#       contain_sweep_registry with GRACE_S, but only once the owner shell
+#       itself is gone, so a subshell that dies leaves the owner's other
+#       sessions alone. Then it exits and releases the held descriptors.
+#       The session id is appended to $CONTAIN_REGISTRY when that names a
+#       file.
 #       Returns 0; 64 on usage, a non-numeric descriptor list or no free
 #       slot; 69 when neither setsid (util-linux) nor perl is on PATH, and
 #       the caller then exits 69; 1 when the pipe cannot be opened.
@@ -47,9 +50,11 @@
 #   contain_registry_create
 #       Creates the registry as a private file (mode 0600), exports
 #       CONTAIN_REGISTRY and marks this shell, in a variable it does not
-#       export, as the owner whose watchdogs sweep. With CONTAIN_REGISTRY
-#       already set it does nothing and returns 64: the shell is a nested
-#       wrapper, which appends to the outer registry and never sweeps it.
+#       export, as the owner whose watchdogs sweep. The owner is the
+#       shell's $$, so a wrapper calls it from its main shell, never from
+#       a subshell. With CONTAIN_REGISTRY already set it does nothing and
+#       returns 64: the shell is a nested wrapper, which appends to the
+#       outer registry and never sweeps it.
 #
 # Every stop and wait function sets CONTAIN_SURVIVORS to the pids that
 # outlived KILL, space-separated, and empty when the stop was clean.
@@ -62,14 +67,17 @@
 # session. A process that calls setsid() itself is outside every contained
 # session and is never stopped.
 #
-# Watchdog pipes take one slot each of 64 fixed descriptors from
-# CONTAIN_FD_BASE (default 20, so 20-83; at least 10). A slot is freed
-# once its session is confirmed empty, and then the caller retires its
-# watchdog by writing `done` to the pipe and closing it, so no watchdog
-# acts on a reused session id. Callers keep their own descriptors out of the range. A child
-# the caller starts outside contain_start inherits the pipes, and while it
-# lives a watchdog whose caller died cannot fire: a long-lived child is
-# started with contain_start.
+# Watchdog pipes are FIFOs whose paths are removed once both ends are
+# open. Each takes one slot of 64 fixed descriptors from CONTAIN_FD_BASE
+# (default 20, so 20-83; at least 10); opening one also uses, for a
+# moment, the first free descriptor above the range. A slot is freed once
+# its session is confirmed empty, and then the caller retires its watchdog
+# by writing `done` to the pipe and closing it, so no watchdog acts on a
+# reused session id. Callers keep their own descriptors out of the range.
+# A child the caller starts outside contain_start inherits the pipes, and
+# while it lives a watchdog whose caller died cannot fire: a long-lived
+# child is started with contain_start. The watchdog is not the caller's
+# child; the leader is, so a bare `wait` waits for every live session.
 
 if ! declare -F contain_start >/dev/null 2>&1; then
   case ${BASH_SOURCE[0]} in
@@ -125,10 +133,13 @@ _contain_alive() {
 }
 
 # Sets _contain_m to the live processes of session $1, space-separated.
+# pgrep and pkill are called by name, never through `command`: under
+# set -e Bash 3.2 exits when `command` runs a program that fails, even
+# inside `|| :`.
 _contain_members() {
   local out p IFS=$' \t\n'
   _contain_m=
-  out=$(command pgrep -s "$1" 2>/dev/null) || :
+  out=$(pgrep -s "$1" 2>/dev/null) || :
   for p in $out; do
     case $p in ''|*[!0-9]*) continue ;; esac
     if _contain_alive "$p"; then _contain_m="$_contain_m $p"; fi
@@ -181,7 +192,7 @@ _contain_retire() {
     if [ "${_contain_slot_pid[$i]:-}" = "$1" ]; then
       fd=${_contain_slot_fd[$i]:-}
       case $fd in ''|*[!0-9]*) ;; *)
-        (trap '' PIPE; eval "printf 'done\n' >&$fd") 2>/dev/null || :
+        eval "printf 'done\n' >&$fd" 2>/dev/null || :
         eval "exec $fd>&-" 2>/dev/null || :
       esac
       _contain_slot_pid[$i]=
@@ -218,7 +229,7 @@ _contain_stop_phases() {
   for p in "$@"; do
     _contain_members "$p"
     if [ -n "$_contain_m" ]; then
-      command pkill -TERM -s "$p" 2>/dev/null || :
+      pkill -TERM -s "$p" 2>/dev/null || :
       any=1
     fi
   done
@@ -233,7 +244,7 @@ _contain_stop_phases() {
   for p in "$@"; do
     _contain_members "$p"
     if [ -n "$_contain_m" ]; then
-      command pkill -KILL -s "$p" 2>/dev/null || :
+      pkill -KILL -s "$p" 2>/dev/null || :
       any=1
     fi
   done
@@ -295,18 +306,45 @@ _contain_child() {
     'printf "%s\n" "$$" >&'"$fd"'; exec '"$fd"'>&-; exec "$@"' contain-leader "$@"
 }
 
-# The process substitution side of contain_start: its standard input is
-# the read end of the pipe.
+# Starts the watchdog of slot descriptor $1. The pipe is a FIFO: Bash 3.2
+# leaves an open descriptor unchanged under `exec N> >(...)`. The caller
+# opens it read-write, so the open never blocks and the read end opened
+# next finds a writer at once; the path is gone before the watchdog runs,
+# and the caller's descriptor is its only writer. The watchdog is a
+# grandchild, so a bare `wait` in the caller never waits for it.
+_contain_open_pipe() {
+  local fd=$1 dir tmp
+  dir=$(umask 077 && mktemp -d "${TMPDIR:-/tmp}/contain.XXXXXX" 2>/dev/null) || return 1
+  if ! mkfifo "$dir/w" 2>/dev/null || ! eval "exec $fd<>\"\$dir/w\""; then
+    rm -rf "$dir"
+    return 1
+  fi
+  tmp=$((_contain_b + 64))
+  while [ -e "/dev/fd/$tmp" ] && [ "$tmp" -lt $((_contain_b + 320)) ]; do tmp=$((tmp + 1)); done
+  if [ -e "/dev/fd/$tmp" ] || ! eval "exec $tmp<\"\$dir/w\""; then
+    eval "exec $fd>&-" 2>/dev/null || :
+    rm -rf "$dir"
+    return 1
+  fi
+  rm -rf "$dir"
+  eval "(_contain_watchdog_exec 0<&$tmp &)"
+  eval "exec $tmp<&-"
+}
+
+# The watchdog's exec; its standard input is the read end of the pipe.
 _contain_watchdog_exec() {
   exec "${_contain_setsid[@]}" "$BASH" --posix "$_contain_lib" __contain_watchdog \
     "$_contain_w_grace" "$_contain_w_owner" "$_contain_b" "${CONTAIN_HOLD_FDS:-}" \
     "${CONTAIN_REGISTRY:-}" "$$" >/dev/null 2>&1
 }
 
-# The watchdog: GRACE OWNER BASE HOLD_FDS REGISTRY CALLER. It holds only
-# the read end of its pipe and the held descriptors. The first line is the
-# session id the leader wrote; `done` retires it; end of file after the id
-# means the caller is gone.
+# The watchdog: GRACE OWNER BASE HOLD_FDS REGISTRY CALLER, where OWNER is
+# the registry owner's pid when the caller is that shell or a subshell of
+# it, else 0. It holds only the read end of its pipe and the held
+# descriptors. The first line is the session id the leader wrote; `done`
+# retires it; end of file after the id means the caller is gone. It sweeps
+# the registry only once the owner itself is gone too: a subshell of the
+# owner that dies leaves the owner's other sessions to the owner.
 _contain_watch() {
   local grace=$1 owner=$2 base=$3 hold=$4 registry=$5 f n sid= line
   trap '' INT TERM HUP
@@ -324,7 +362,7 @@ _contain_watch() {
     [ "$line" != done ] || return 0
   done
   contain_stop "$sid" "$grace" || :
-  if [ "$owner" = 1 ] && [ -n "$registry" ]; then
+  if _contain_pid_ok "$owner" && [ -n "$registry" ] && ! _contain_alive "$owner"; then
     CONTAIN_REGISTRY=$registry contain_sweep_registry "$grace" || :
   fi
   return 0
@@ -380,16 +418,14 @@ contain_start() {
   fd=$((_contain_b + i))
   _contain_w_grace=$grace
   _contain_w_owner=0
-  if [ -n "${_contain_registry_owner:-}" ] && [ -n "${CONTAIN_REGISTRY:-}" ]; then _contain_w_owner=1; fi
+  if [ -n "${_contain_registry_owner:-}" ] && [ -n "${CONTAIN_REGISTRY:-}" ]; then
+    _contain_w_owner=$_contain_registry_owner
+  fi
 
   # With job control on, the child would lead a process group of its own
   # and setsid would fork, so the pid known here would not be the session.
   case $- in *m*) m=1; set +m ;; esac
-  # Bash puts a process substitution's own descriptor at the highest free
-  # one up to 63 and closes it afterwards; the slot is taken first so that
-  # descriptor is never the slot's.
-  if ! eval "exec $fd>/dev/null" || ! eval "exec $fd> >(_contain_watchdog_exec)"; then
-    eval "exec $fd>&-" 2>/dev/null || :
+  if ! _contain_open_pipe "$fd"; then
     if [ -n "$m" ]; then set -m; fi
     echo 'contain_start: could not start the watchdog' >&2
     return 1
@@ -500,7 +536,7 @@ contain_registry_create() {
   chmod 600 "$file" || { rm -f "$file"; return 1; }
   CONTAIN_REGISTRY=$file
   export CONTAIN_REGISTRY
-  _contain_registry_owner=1
+  _contain_registry_owner=$$
   export -n _contain_registry_owner 2>/dev/null || :
   return 0
 }

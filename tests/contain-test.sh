@@ -383,19 +383,19 @@ st=0; contain_wait 12345 || st=$?; r="$r wait-no-deadline=$st"
 echo "$r survived" > "$S/c14.result"
 EOF
 # Its own session: pkill -s 0 or pgrep -s '' would end it.
-"${clean_env[@]}" setsid bash "$S/c14.sh"
+"${clean_env[@]}" setsid bash "$S/c14.sh" || :
 want=' stop[]=64 wait[]=64 stop[0]=64 wait[0]=64 stop[abc]=64 wait[abc]=64 stop_all[]=64 stop_all[abc]=64 wait-no-deadline=64 survived'
 [ "$(cat "$S/c14.result" 2>/dev/null)" = "$want" ] || fail "got '$(cat "$S/c14.result" 2>/dev/null || echo 'nothing: the shell was killed')'"
 
 # --- 15: set -eu -------------------------------------------------------------
 begin '15 the library runs sourced under set -eu'
-out=$("${clean_env[@]}" bash -eu -o pipefail -c '. "$LIB"; contain_start true; contain_wait $CONTAIN_PID 5; contain_stop_all 1; contain_sweep_registry 1; echo reached')
+out=$("${clean_env[@]}" bash -eu -o pipefail -c '. "$LIB"; contain_start true; contain_wait $CONTAIN_PID 5; contain_stop_all 1; contain_sweep_registry 1; echo reached') || :
 [ "$out" = reached ] || fail "got '$out'"
 
 # --- 16: the perl fallback ----------------------------------------------------
 begin '16 without setsid, perl starts the session leader and the watchdog'
 mkdir "$S/bin16"
-for tool in bash sleep pgrep pkill kill cat perl ps tr; do ln -s "$(type -P "$tool")" "$S/bin16/$tool"; done
+for tool in bash sleep pgrep pkill kill cat perl ps tr mktemp mkfifo rm; do ln -s "$(type -P "$tool")" "$S/bin16/$tool"; done
 caller c16 <<EOF
 hash -r
 contain_start -g 2 $(forever c16.leader ignore)
@@ -531,5 +531,68 @@ until_true 30 test -s "$S/c20.second" || fail 'contain_stop_all did not return'
 [ "$(cat "$S/c20.second")" = '0 []' ] || fail "a clean stop after it got '$(cat "$S/c20.second")', not '0 []'"
 until_true 10 no_watchdog_of "$(cat "$S/c20.caller")" || fail 'the watchdog stayed after a clean stop'
 kill_child "$fake"
+
+# --- 21: a bare stop under set -eu ---------------------------------------------
+begin '21 a bare contain_stop_all of a live TERM-ignoring session under set -eu reaches its next line'
+out=$("${clean_env[@]}" bash -eu -o pipefail -c '. "$LIB"
+  contain_start -g 1 bash -c '"'"'trap "" TERM; echo $$ > "$S/c21.leader.pid"; while :; do sleep 0.2; done'"'"'
+  until [ -s "$S/c21.leader.pid" ]; do sleep 0.1; done
+  kill -0 "$(cat "$S/c21.leader.pid")" && echo alive > "$S/c21.seen"
+  contain_stop_all 1
+  echo reached') || :
+[ "$(cat "$S/c21.seen" 2>/dev/null)" = alive ] || fail 'the session was not running when it was stopped'
+[ "$out" = reached ] || fail "got '$out'"
+dead "$(pid_of c21.leader)" || fail 'the session outlived contain_stop_all'
+
+# --- 22: a second registry ---------------------------------------------------
+begin '22 a second contain_registry_create returns 64 and changes nothing'
+mkdir "$S/tmp22"
+caller c22 <<'EOF'
+TMPDIR=$S/tmp22
+contain_registry_create
+first=$CONTAIN_REGISTRY
+echo 12345 >> "$first"
+st=0; contain_registry_create || st=$?
+nested=$(bash -c '. "$LIB"; st=0; contain_registry_create || st=$?; echo "$st $CONTAIN_REGISTRY"')
+mark=$(bash -c 'echo "${_contain_registry_owner:-unexported}"')
+echo "$st $([ "$CONTAIN_REGISTRY" = "$first" ] && echo same || echo changed) $(stat -c %a "$first") $(cat "$first")" > "$S/c22.result"
+echo "$nested" > "$S/c22.nested"
+echo "$mark" > "$S/c22.mark"
+ls "$S/tmp22" | wc -l | tr -d ' ' > "$S/c22.files"
+echo "$first" > "$S/c22.registry"
+EOF
+run c22
+[ "$(cat "$S/c22.result")" = '64 same 600 12345' ] || fail "the owner's second call got '$(cat "$S/c22.result")', not '64 same 600 12345'"
+[ "$(cat "$S/c22.nested")" = "64 $(cat "$S/c22.registry")" ] || fail "a nested shell's call got '$(cat "$S/c22.nested")'"
+[ "$(cat "$S/c22.mark")" = unexported ] || fail 'the owner mark reached a child process'
+[ "$(cat "$S/c22.files")" = 1 ] || fail "$(cat "$S/c22.files") registries were created, not 1"
+
+# --- 23: a subshell of the owner ---------------------------------------------
+begin "23 a subshell of the owner that dies leaves the owner's live sessions alone"
+caller c23 <<'EOF'
+contain_registry_create
+echo "$CONTAIN_REGISTRY" > "$S/c23.registry"
+contain_start -g 1 bash -c 'trap "" TERM; echo $$ > "$S/c23.sibling.pid"; while :; do sleep 0.2; done'
+(
+  contain_start -g 1 bash -c 'echo $$ > "$S/c23.sub.pid"; exec sleep 300'
+  until [ -s "$S/c23.sub.pid" ]; do sleep 0.1; done
+  read -r me _ </proc/self/stat
+  kill -KILL "$me"
+) || :
+until [ -e "$S/c23.go" ]; do sleep 0.1; done 2>/dev/null
+contain_stop_all 1
+rm -f "$CONTAIN_REGISTRY"
+EOF
+run_bg c23
+sibling=$(pid_of c23.sibling); sub=$(pid_of c23.sub)
+owner=$(cat "$S/c23.caller")
+alive "$sibling" || fail "the owner's session was not running"
+until_true $((1 + 15 + 2)) dead "$sub" || fail "the subshell's watchdog did not stop the subshell's session"
+# The subshell's watchdog has finished once only the sibling's remains.
+until_true 30 eval '[ "$(watchdogs_of "$owner" | wc -l)" = 1 ]' || fail "the subshell's watchdog did not exit"
+alive "$owner" || fail 'the owner died'
+alive "$sibling" || fail "the subshell's watchdog swept the live owner's registry"
+touch "$S/c23.go"
+until_true 30 dead "$sibling" || fail 'the owner did not stop its session'
 
 echo 'contain tests passed'
