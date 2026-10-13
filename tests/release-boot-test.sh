@@ -293,6 +293,7 @@ const cases = [
   ...SECRET_KEYS.map((key) => ({ text: `{"${key}":"v-${key}-1234"}`, secrets: [], hidden: [`v-${key}-1234`] })),
   { text: '[\\"phx\\",{\\"session\\":\\"escaped-session-5678\\"}]', secrets: [], hidden: ["escaped-session-5678"] },
   { text: '{"plan_token":"cut-short-plan-tok', secrets: [], hidden: ["cut-short-plan-tok"] },
+  { text: '{"proof":"preview-proof-2468"}', secrets: [], hidden: ["preview-proof-2468"] },
   ...SECRET_ATTRIBUTES.map((a) => ({ text: `<div ${a}="attr-${a}-9876">`, secrets: [], hidden: [`attr-${a}-9876`] })),
   { text: '<div data-phx-session=\\"escaped-attr-4321\\">', secrets: [], hidden: ["escaped-attr-4321"] },
   { text: 'src="/_s/AbC-123_xyz/local/n/1.0.0/dist/index.html"', secrets: [], hidden: ["AbC-123_xyz"] },
@@ -332,8 +333,9 @@ const forms = redact('src="/_s/Cred/x" "/_c/v1/Cred/y" SFMyNTY.a.b Bearer z know
 for (const marker of ["/_s/[credential]/", "/_c/v1/[credential]/", "[signed token]", `Bearer ${MARKER}`, ` ${MARKER}`]) {
   if (!forms.includes(marker)) failures.push(`the marker ${marker} is not in ${JSON.stringify(forms)}`);
 }
-// What a proof asserts on is not a secret, and stays.
-const plain = '{"name":"proof-game","path":"/t/@person/local/proof-game","held":true}';
+// What a proof asserts on is not a secret, and stays: a key that only ends
+// in a secret-named key's name is not one.
+const plain = '{"name":"proof-game","reproof":"kept-1357","suite":"canvas","path":"/t/@person/local/proof-game","held":true}';
 if (redact(plain, []) !== plain) failures.push(`a record with no secret is written ${JSON.stringify(redact(plain, []))}`);
 
 for (const f of failures) console.error(`FAIL: ${f}`);

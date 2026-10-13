@@ -1753,7 +1753,7 @@ async function main() {
   const host = { name: hostname(), cpu: (cpus()[0] || {}).model || "unknown", cores: cpus().length, class: hostClass };
   const date = new Date().toISOString().slice(0, 10);
   Object.assign(record, {
-    proof: "canvas",
+    suite: "canvas",
     viewport: viewportName, posture: viewport.posture, device: viewport.device,
     adapter: "sqlite", executed_runs: 0, feed_results: "fixed",
     date, host,

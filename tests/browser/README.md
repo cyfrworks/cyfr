@@ -7,7 +7,10 @@ image ships. Its shell side is `harness.sh`, sourced after `release.sh`;
 its browser side is `lib.mjs`, which each experiment imports as
 `../browser/lib.mjs`. It serves a proof in one of two shapes: one cell
 under the name `cyfr.test` over plain HTTP, or several homes, each a cell
-on a hostname of its own, over HTTPS.
+on a hostname of its own, over HTTPS. The proofs start no object store; a
+cell keeps its storage on its own disk. The S3 checks run against the
+MinIO image `.github/workflows/test.yml` pins by digest, in its `s3-minio`
+job's "Start MinIO" step.
 
 The harness is JavaScript. The Playwright images carry the browsers but not
 Playwright's library: the Python image's `playwright` wheel ships a Node
