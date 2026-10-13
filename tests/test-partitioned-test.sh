@@ -321,6 +321,7 @@ stop_runner "$cancel" TERM 120 "$scratch/cancel"
 sleeper=$(cat "$TRACE/sleeper")
 if kill -0 "$sleeper" 2>/dev/null; then fail 'cancelled child survived'; fi
 cancel_dir=$(sed -n 's/^==> logs and disposable resources kept: //p' "$scratch/cancel")
+[ -n "$cancel_dir" ] || fail 'a cancelled run did not name the directory it kept'
 [ ! -f "$cancel_dir/p1/database-created" ] || fail 'cancelled run database was not cleaned'
 
 # More than one partition: each started partition is given every Mix
@@ -648,6 +649,7 @@ for adapter in sqlite postgres; do
     for ((i=0;i<50;i++)); do kill -0 "$sleeper" 2>/dev/null || break; sleep 0.02; done
     if kill -0 "$sleeper" 2>/dev/null; then fail "cancelled $dependency descendant survived"; fi
     kept=$(sed -n 's/^==> logs and disposable resources kept: //p' "$account")
+    [ -n "$kept" ] || fail "$dependency cancellation did not name the directory it kept"
     [ ! -e "$kept/p1/database-created" ] || fail "$dependency cancellation retained database"
     [ ! -e "$kept/p1.env" ] || fail "$dependency cancellation retained environment"
     echo "$adapter-cancel-$dependency passed (exit $result)"

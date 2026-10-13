@@ -37,6 +37,11 @@ case "$ADAPTER" in sqlite|postgres) ;; *) echo 'adapter must be sqlite or postgr
 
 held=${HEAVY_CHECK_HELD:-}
 [ -n "$held" ] || echo "_START=$$"
+# Descriptor 3 keeps the runner's own standard error: a signal can end the
+# run inside a call that discards it (contain_wait waits under
+# 2>/dev/null), and finish then speaks through 3. No child keeps it.
+exec 3>&2
+CONTAIN_CLOSE_FDS="${CONTAIN_CLOSE_FDS:+$CONTAIN_CLOSE_FDS }3"
 
 out_dir=
 registry_owned=false
@@ -58,6 +63,7 @@ finish() {
   local result=$? i drops=
   trap - EXIT
   trap '' INT TERM
+  exec 2>&3
   finishing=true
   if declare -F contain_stop_all >/dev/null; then
     # The partitions first, all at once; the drops depend on them.
