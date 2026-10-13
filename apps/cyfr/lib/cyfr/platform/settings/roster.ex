@@ -307,7 +307,7 @@ defmodule Cyfr.Platform.Settings.Roster do
     "max_external_servers_per_athanor" =>
       "External MCP servers one athanor may register; unset, 1,000, and 0 removes the ceiling.",
     "mint_per_hour" =>
-      "Personal athanors minted per hour: how fast strangers can arrive through an open door. Unset, no bound; 0 is refused, so `CYFR_MINT_PER_HOUR=0` stops the boot rather than turning the bound off.",
+      "Personal athanors minted per hour: how fast strangers can arrive through an open door. Unset, no bound; 0 is refused, so `CYFR_MINT_PER_HOUR=0` stops the boot rather than turning the bound off. A stored value outside 1 to 1,000,000 refuses every stranger's mint as unavailable, while operators still mint their own, until the setting is reset.",
     "athanor_storage_bytes" =>
       "Bytes one athanor may hold, its whole tree including its copies of the shipped bundle. Unset, no cap.",
     "opus_max_concurrent" =>

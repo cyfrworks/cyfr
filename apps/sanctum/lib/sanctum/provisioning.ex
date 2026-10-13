@@ -989,13 +989,14 @@ defmodule Sanctum.Provisioning do
     end
   end
 
-  # An operator's own athanor is minted past the server caps
-  # (`Athanors.create_for_operator/1`): they are named in
+  # An operator's own athanor is minted past the server caps and the mint
+  # rate (`Athanors.create_for_operator/1`): they are named in
   # `CYFR_PLATFORM_ADMIN_EMAILS` rather than arriving, and a server at
-  # capacity must still admit the person who can act on it. Everyone else
-  # is a stranger arriving and is capped — `CYFR_MINT_PER_HOUR` is exactly
-  # how fast that may happen, and `mint_allowed/0` is its only enforcement,
-  # so a refusal here must reach the door rather than being swallowed.
+  # capacity, or holding a mint rate it cannot use, must still admit the
+  # person who can act on it. Everyone else is a stranger arriving, held to
+  # the caps and to the mint rate — `CYFR_MINT_PER_HOUR` bounds how fast
+  # strangers may arrive, and `mint_allowed/0` is its only enforcement, so
+  # a refusal here must reach the door rather than being swallowed.
   defp mint_personal(%{id: user_id} = user) do
     name = personal_name(user)
 
@@ -1061,7 +1062,7 @@ defmodule Sanctum.Provisioning do
 
       {:ok, invalid} ->
         Logger.warning(
-          "[Sanctum.Provisioning] mint_per_hour holds #{inspect(invalid)}, outside " <>
+          "[Provisioning] mint_per_hour holds #{inspect(invalid)}, outside " <>
             "#{inspect(@mint_per_hour_range)}; refusing mints until it is corrected"
         )
 
@@ -1069,13 +1070,13 @@ defmodule Sanctum.Provisioning do
 
       {:error, :unavailable} ->
         Logger.warning(
-          "[Sanctum.Provisioning] mint_per_hour could not be read; refusing mints until it answers"
+          "[Provisioning] mint_per_hour could not be read; refusing mints until it answers"
         )
 
         mint_unverifiable()
 
       {:error, reason} when reason in [:uninstalled, :unknown_key] ->
-        raise "[Sanctum.Provisioning] mint_per_hour cannot be read: the setting is #{reason}"
+        raise "[Provisioning] mint_per_hour cannot be read: the setting is #{reason}"
     end
   end
 
@@ -1089,7 +1090,7 @@ defmodule Sanctum.Provisioning do
 
       {:error, reason} ->
         Logger.warning(
-          "[Sanctum.Provisioning] mint_per_hour count failed: #{inspect(reason)}; " <>
+          "[Provisioning] mint_per_hour count failed: #{inspect(reason)}; " <>
             "refusing mints until it answers"
         )
 

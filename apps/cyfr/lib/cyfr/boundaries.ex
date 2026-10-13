@@ -424,7 +424,9 @@ defmodule Cyfr.Boundaries do
           "and for the bridge's announcements. " <>
           "`Sanctum.Provisioning` is the run gate's readiness question: `Opus.run_root/5` " <>
           "asks whether the athanor is filled before it admits a run, as a turn does, " <>
-          "and the fill is asked for when it is not. " <>
+          "and the fill is asked for when it is not. The settings roster reads the " <>
+          "mint rate's bounds there (`mint_per_hour_range/0`), the one definition its " <>
+          "validator and the mint's own check share. " <>
           "`Sanctum.Network` is `Opus.Host.Egress`'s one resolution of a guest's " <>
           "outbound host, which it pins under the attempt's authority. " <>
           "`Sanctum.TinctureAccess` is that invocation's reread of the tincture it " <>
@@ -1403,6 +1405,7 @@ defmodule Cyfr.Boundaries do
       holding: 2,
       lost: 1,
       mark_filled: 1,
+      mint_per_hour_range: 0,
       ready: 1,
       record_failure: 4,
       release: 2,

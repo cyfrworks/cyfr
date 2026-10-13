@@ -471,6 +471,13 @@ defmodule Cyfr.PlatformSettingsRosterTest do
 
       assert entry.doc =~ "Unset, no bound"
       assert entry.doc =~ "0 is refused"
+
+      # The guide row tells operators what a stored value outside the bounds
+      # does; the bounds it names are the enforcer's.
+      assert Sanctum.Provisioning.mint_per_hour_range() == 1..1_000_000
+      assert entry.doc =~ "A stored value outside 1 to 1,000,000 refuses every stranger's mint"
+      refute entry.doc =~ "meant off"
+      assert entry.doc =~ "operators still mint their own, until the setting is reset"
       refute entry.doc =~ ~r/no cap|turns the cap off|removes the ceiling/
 
       for {good, value} <- [{1, 1}, {"1", 1}, {1_000_000, 1_000_000}, {"1000000", 1_000_000}] do
@@ -489,6 +496,11 @@ defmodule Cyfr.PlatformSettingsRosterTest do
 
       assert Roster.read(entry, fn "CYFR_MINT_PER_HOUR" -> nil end) == {:ok, nil}
       assert Roster.read(entry, fn "CYFR_MINT_PER_HOUR" -> "30" end) == {:ok, 30}
+
+      # The bounds are `Sanctum.Provisioning`'s, the mint's own check, and the
+      # host's export roster lists the call that reads them.
+      provisioning = Cyfr.Boundaries.sanctum_exports()["Sanctum.Provisioning"]
+      assert {:mint_per_hour_range, 0} in provisioning
     end
 
     test "the recovery reserve is below the log quota, and a pair not both held is not checked" do
