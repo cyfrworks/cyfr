@@ -146,7 +146,15 @@ for spec in zero:0 long:1234567; do
   [ ! -e "$scratch/deadline-$name.log" ] || fail "a refused step deadline ${spec#*:} made its log directory"
   no_mix_ran "deadline-$name" || fail "a refused step deadline ${spec#*:} started a leg"
 done
-echo 'ok: step deadlines out of range'
+# Six digits pass the deadline guard: a regular file as the log directory
+# is then what refuses the gate, with its own reason.
+echo text > "$scratch/deadline-six.file"
+run_gate deadline-six GATE_STEP_DEADLINE=999999 -- "$gate" -l "$scratch/deadline-six.file"
+[ "$gate_rc" = 64 ] || fail "a six-digit step deadline with a file as the log directory exited $gate_rc"
+framed deadline-six "$gate_pid" 64
+no_line 'GATE_STEP_DEADLINE' "$scratch/deadline-six.err" || fail "the six-digit step deadline 999999 was refused: $(cat "$scratch/deadline-six.err")"
+has_line 'the log directory .* is not a directory' "$scratch/deadline-six.err" || fail "a six-digit step deadline did not reach the log directory check: $(cat "$scratch/deadline-six.err")"
+echo 'ok: step deadlines out of range, and six digits accepted'
 
 # --- the log directory ---------------------------------------------------------
 echo text > "$scratch/a-file"
@@ -230,6 +238,26 @@ for spec in fd64:64:CONTAIN_FD_BASE=x "path69:69:PATH=$scratch/nosetsid"; do
   no_mix_ran "$name" || fail 'a refused island phase ran Mix'
 done
 echo 'ok: a leg run alone: an unreadable selection, refused island phases'
+
+# --- a whole gate whose island phases are refused ---------------------------------
+# The refusal reaches the islands leg alone: bash sources BASH_ENV with the
+# script's own arguments, so only `--leg islands` takes the bad descriptor
+# base or the PATH without setsid and perl, while the install, the other
+# legs and their steps start as usual. The gate exits with the refusal,
+# through its mapping of each leg's status.
+for spec in fd64:64:'CONTAIN_FD_BASE=x' "path69:69:PATH='$scratch/nosetsid'"; do
+  name=${spec%%:*}; rest=${spec#*:}; want=${rest%%:*}
+  printf 'case "${1:-}:${2:-}" in --leg:islands) %s ;; esac\n' "${rest#*:}" > "$scratch/$name.bash_env"
+  run_gate "whole-$name" BASH_ENV="$scratch/$name.bash_env" -- "$gate" -n 2 -l "$scratch/whole-$name.log"
+  [ "$gate_rc" = "$want" ] || fail "a gate whose island phases were refused with $want exited $gate_rc: $(cat "$scratch/whole-$name.err")"
+  framed "whole-$name" "$gate_pid" "$want"
+  for leg in static postgres vocab; do
+    has_line "^==> $leg +ok " "$scratch/whole-$name.out" || fail "the $leg leg did not pass beside refused islands: $(cat "$scratch/whole-$name.out")"
+  done
+  has_line "^==> islands +FAILED .*prima_refused=$want" "$scratch/whole-$name.out" || fail "the refused islands were not reported: $(cat "$scratch/whole-$name.out")"
+  no_line '/island_' "$scratch/whole-$name.trace/mix.calls" || fail 'a refused island phase ran Mix'
+done
+echo 'ok: a whole gate whose island phases are refused exits with the refusal'
 
 # --- the PostgreSQL selection ----------------------------------------------------
 selection() { (cd "$1" && . "$gate" && pg_selection); }
