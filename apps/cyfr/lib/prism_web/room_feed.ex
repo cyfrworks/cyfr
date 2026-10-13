@@ -58,20 +58,4 @@ defmodule PrismWeb.RoomFeed do
   end
 
   def label(_), do: ""
-
-  @doc "The room as `Aqua.room_excerpt/2` takes it."
-  @spec excerpt_room(map()) :: %{
-          required(:athanor_id) => String.t(),
-          required(:thread_id) => String.t(),
-          optional(:title) => String.t() | nil,
-          optional(:athanor) => String.t() | nil
-        }
-  def excerpt_room(%{"athanor_id" => athanor_id, "thread_id" => thread_id} = room) do
-    %{
-      athanor_id: athanor_id,
-      thread_id: thread_id,
-      title: room["title"],
-      athanor: room["athanor"]
-    }
-  end
 end

@@ -62,8 +62,6 @@ defmodule PrismWeb do
     quote do
       use Phoenix.Controller, formats: [:html, :json]
 
-      use Gettext, backend: PrismWeb.Gettext
-
       import Plug.Conn
 
       unquote(verified_routes())
@@ -113,8 +111,6 @@ defmodule PrismWeb do
       import Phoenix.HTML
 
       import PrismWeb.CoreComponents
-
-      use Gettext, backend: PrismWeb.Gettext
 
       unquote(verified_routes())
     end
