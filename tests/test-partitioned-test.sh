@@ -21,8 +21,12 @@ cleanup() {
     while IFS= read -r directory; do
       case "$directory" in /tmp/cyfr-t.*|/private/tmp/cyfr-t.*)
         rm -rf "$directory"
+        # The test ends by showing that no run directory it made remains.
+        if [ -e "$directory" ]; then
+          echo "FAIL: the run directory $directory remains" >&2
+          result=1
+        fi
         if [ -n "${CYFR_RUNNER_TEST_EVIDENCE:-}" ]; then
-          [ ! -e "$directory" ] || result=1
           printf '%s\t%s\n' "$directory" "$([ ! -e "$directory" ] && echo absent || echo present)" >> "$CYFR_RUNNER_TEST_EVIDENCE/cleanup.tsv"
         fi ;;
       esac
@@ -48,6 +52,7 @@ cat > "$scratch/bin/mix" <<'FAKE'
 set -eu
 printf '%s\n' "$1 ${!#}" >> "$TRACE/mix-calls"
 printf '%s\t%s\n' "$1" "${ERL_FLAGS:-}" >> "$TRACE/erl-flags"
+printf '%s\t%s\n' "$1" "${MIX_BUILD_PATH-unset}" >> "$TRACE/build-paths"
 [ "${MIX_OS_CONCURRENCY_LOCK:-}" = 0 ] || printf '%s\n' "$1 ${!#}" >> "$TRACE/mix-calls-with-build-lock"
 # The assignment: `mix run --no-start --no-compile HELPER assign DIR COUNT
 # TABLE REQUIRED FAILED -- NAMES...` writes DIR/assign/p1..pCOUNT, each the
@@ -114,6 +119,13 @@ case "$1" in
       if [ "${DIAGNOSTIC_MULTI:-0}" = 1 ] && [ "$MIX_TEST_PARTITION" = 2 ]; then exit 2; fi
       exit "${DIAGNOSTIC_EXIT:-7}"
     fi
+    if [ "${RECORD_AND_WAIT:-0}" = 1 ]; then
+      "$REAL_ELIXIR" -e 'File.write!(Path.join(System.fetch_env!("CYFR_TEST_RUN_ROOT"), "failures"), :erlang.term_to_binary({1, %{{StubTest, :"test stub"} => "/stub_test.exs"}}))'
+      touch "$TRACE/recorded-$MIX_TEST_PARTITION"
+      while [ ! -e "$TRACE/release" ]; do sleep 0.1; done
+      echo 'Result: 1 test, 1 failure'
+      exit 2
+    fi
     if [ "${TERM_RESISTANT:-0}" = 1 ]; then
       trap '' TERM
       echo "$$" >> "$TRACE/resistant-leaders"
@@ -174,6 +186,45 @@ chmod +x "$scratch/bin/mix" "$scratch/bin/elixir"
 fail() { echo "FAIL: $*" >&2; exit 1; }
 refuses() { if "${clean[@]}" bash "$runner" "$@" >"$scratch/refusal" 2>&1; then fail "accepted $*"; fi; }
 status_of() { if "$@" >"$scratch/status" 2>&1; then echo 0; else echo "$?"; fi; }
+# Whether child PID $1 exits within $2 seconds; an exited child that is not
+# yet waited for is a zombie, which kill -0 still finds.
+exits_within() {
+  local i state
+  for ((i=0; i<$2*10; i++)); do
+    if [ -r "/proc/$1/stat" ]; then
+      read -r state 2>/dev/null <"/proc/$1/stat" || return 0
+      state=${state##*) }
+    else
+      state=$(ps -o stat= -p "$1" 2>/dev/null) || return 0
+      state=${state// /}
+    fi
+    case "$state" in ''|Z*|X*) return 0 ;; esac
+    sleep 0.1
+  done
+  return 1
+}
+# stop_runner PID SIGNAL BOUND OUT: signals the runner and fails with a
+# reason unless it exits within BOUND seconds with the signal's status,
+# which its terminal line, the last line of OUT, repeats.
+stop_runner() {
+  local pid=$1 signal=$2 bound=$3 out=$4 expected
+  case "$signal" in TERM) expected=143 ;; INT) expected=130 ;; esac
+  kill -"$signal" "$pid"
+  if ! exits_within "$pid" "$bound"; then
+    kill -KILL "$pid" 2>/dev/null || :
+    wait "$pid" 2>/dev/null || :
+    fail "the runner did not end within ${bound}s of $signal"
+  fi
+  if wait "$pid"; then stop_status=0; else stop_status=$?; fi
+  [ "$stop_status" = "$expected" ] || fail "$signal ended the run with $stop_status"
+  [ "$(tail -n 1 "$out")" = "_EXIT=$pid $expected" ] || fail "$signal left the terminal line $(tail -n 1 "$out")"
+}
+# Waits up to a minute for FILE to exist.
+await_file() {
+  local i
+  for ((i=0; i<600; i++)); do [ -e "$1" ] && return 0; sleep 0.1; done
+  fail "$1 never appeared"
+}
 refuses -n
 refuses -a
 refuses -n 0
@@ -266,8 +317,7 @@ WAIT_CHILD=1 "${clean[@]}" bash "$runner" -n 1 -a postgres >"$scratch/cancel" 2>
 cancel=$!
 for ((i=0;i<200;i++)); do [ -f "$TRACE/ready" ] && break; sleep 0.05; done
 [ -f "$TRACE/ready" ] || fail 'child never started'
-kill -TERM "$cancel"
-if wait "$cancel"; then fail 'cancellation succeeded'; fi
+stop_runner "$cancel" TERM 120 "$scratch/cancel"
 sleeper=$(cat "$TRACE/sleeper")
 if kill -0 "$sleeper" 2>/dev/null; then fail 'cancelled child survived'; fi
 cancel_dir=$(sed -n 's/^==> logs and disposable resources kept: //p' "$scratch/cancel")
@@ -590,10 +640,9 @@ for adapter in sqlite postgres; do
     report_cancel=$!
     for ((i=0;i<200;i++)); do [ -f "$TRACE/diagnostic-ready" ] && break; sleep 0.05; done
     [ -f "$TRACE/diagnostic-ready" ] || fail "$dependency reporting dependency never started"
-    kill -TERM "$report_cancel"
-    if wait "$report_cancel"; then result=0; else result=$?; fi
+    stop_runner "$report_cancel" TERM 60 "$account"
     report_cancel=
-    [ "$result" = 143 ] || fail "$dependency reporting cancellation exited $result"
+    result=$stop_status
     printf '%s\n' "$result" > "$scratch/cases/$adapter-cancel-$dependency.exit"
     sleeper=$(cat "$TRACE/diagnostic-sleeper")
     for ((i=0;i<50;i++)); do kill -0 "$sleeper" 2>/dev/null || break; sleep 0.02; done
@@ -687,9 +736,7 @@ for signal in TERM INT; do
   GRANDCHILD=1 "${clean[@]}" perl -e '$SIG{INT} = "DEFAULT"; exec @ARGV or die' bash "$runner" -n 2 >"$scratch/cancel-$signal" 2>&1 &
   cancel=$!
   await_lines "$TRACE/grandchildren" 2
-  kill -"$signal" "$cancel"
-  if wait "$cancel"; then result=0; else result=$?; fi
-  case "$signal" in TERM) [ "$result" = 143 ] ;; INT) [ "$result" = 130 ] ;; esac || fail "$signal ended the run with $result"
+  stop_runner "$cancel" "$signal" 60 "$scratch/cancel-$signal"
   while read -r grandchild; do
     if kill -0 "$grandchild" 2>/dev/null; then fail "a partition's grandchild outlived $signal"; fi
   done < "$TRACE/grandchildren"
@@ -723,10 +770,8 @@ TERM_RESISTANT=1 "${clean[@]}" bash "$runner" -n 8 >"$scratch/resistant" 2>&1 &
 resistant=$!
 await_lines "$TRACE/resistant-leaders" 8
 sent=$SECONDS
-kill -TERM "$resistant"
-if wait "$resistant"; then result=0; else result=$?; fi
+stop_runner "$resistant" TERM 60 "$scratch/resistant"
 took=$((SECONDS - sent))
-[ "$result" = 143 ] || fail "TERM ended the resistant run with $result"
 [ "$took" -le 50 ] || fail "stopping eight resistant partitions took ${took}s"
 while read -r leader; do
   if kill -0 "$leader" 2>/dev/null; then fail 'a TERM-resistant partition leader survived'; fi
@@ -751,6 +796,56 @@ for ((i=1; i<=8; i++)); do
   [ ! -e "$hung_dir/p$i.env" ] || fail "partition $i's environment survived its hung drop"
 done
 echo "eight hung drops stopped ${took}s after the partitions ended"
+
+# The build path (C7): PostgreSQL's own without an explicit one, Mix's
+# default for SQLite, and an explicit one kept on both.
+for adapter in sqlite postgres; do
+  case "$adapter" in sqlite) expected=unset ;; postgres) expected=_build/test_pg ;; esac
+  : > "$TRACE/build-paths"
+  "${clean[@]}" -u MIX_BUILD_PATH bash "$runner" -n 1 -a "$adapter" >"$scratch/build-path" 2>&1 || fail "the $adapter build-path run failed"
+  [ "$(cut -f2 "$TRACE/build-paths" | sort -u)" = "$expected" ] || fail "$adapter ran Mix with $(cut -f2 "$TRACE/build-paths" | sort -u | tr '\n' ' ')"
+  : > "$TRACE/build-paths"
+  "${clean[@]}" MIX_BUILD_PATH=_build/custom bash "$runner" -n 1 -a "$adapter" >"$scratch/build-path" 2>&1 || fail "the explicit $adapter build-path run failed"
+  [ "$(cut -f2 "$TRACE/build-paths" | sort -u)" = _build/custom ] || fail "$adapter replaced an explicit build path: $(cut -f2 "$TRACE/build-paths" | sort -u | tr '\n' ' ')"
+done
+
+# A stopped run does not merge: its partitions never reached their ends,
+# so the canonical record stays as it was, and the runner says so.
+canonical="$scratch/work/_build/test/test_failures"
+record_sum() { cksum < "$canonical" 2>/dev/null || echo absent; }
+before=$(record_sum)
+rm -f "$TRACE/release" "$TRACE/recorded-1"
+RECORD_AND_WAIT=1 "${clean[@]}" bash "$runner" -n 1 >"$scratch/stopped" 2>&1 &
+stopped=$!
+await_file "$TRACE/recorded-1"
+stop_runner "$stopped" TERM 60 "$scratch/stopped"
+[ "$(record_sum)" = "$before" ] || fail 'a stopped run merged its failures record'
+grep -qx '==> the failures record was left unmerged: the run stopped before its partitions ended' "$scratch/stopped" ||
+  fail 'a stopped run did not say its failures record was left unmerged'
+
+# A merge stopped part-way leaves the canonical record whole, and the
+# runner says the merge did not complete. The merge waits on the record's
+# lock, held here.
+rm -f "$TRACE/release" "$TRACE/recorded-1" "$TRACE/locked"
+mkdir -p "$(dirname "$canonical")"
+RECORD_AND_WAIT=1 "${clean[@]}" bash "$runner" -n 1 >"$scratch/unmerged" 2>&1 &
+unmerged=$!
+await_file "$TRACE/recorded-1"
+unmerged_dir=$(tail -n 1 "$TRACE/prepared")
+flock "$canonical.lock" sh -c 'touch "$TRACE/locked"; exec sleep 120' &
+holder=$!
+await_file "$TRACE/locked"
+touch "$TRACE/release"
+for ((i=0; i<600; i++)); do pgrep -f "failures-merge $unmerged_dir" >/dev/null && break; sleep 0.1; done
+pgrep -f "failures-merge $unmerged_dir" >/dev/null || fail 'the merge never started'
+sleep 1
+stop_runner "$unmerged" TERM 60 "$scratch/unmerged"
+kill "$holder" 2>/dev/null || :
+wait "$holder" 2>/dev/null || :
+[ "$(record_sum)" = "$before" ] || fail 'a stopped merge changed the failures record'
+grep -qx '==> the failures record merge did not complete; the canonical record was left as it was' "$scratch/unmerged" ||
+  fail 'a stopped merge was not reported'
+if grep -q 'left unmerged' "$scratch/unmerged"; then fail 'a started merge was reported as never started'; fi
 
 # --- real Mix: the failures record and the split ----------------------------
 # A two-application umbrella with no dependencies, its failures record
@@ -830,6 +925,9 @@ toy_run() {
   else
     toy_status=$?
   fi
+  # The real elixir records nothing in $TRACE/prepared; the run's own
+  # account names the directory it kept, which cleanup then removes.
+  sed -n 's/^==> logs and disposable resources kept: //p' "$out" >> "$TRACE/prepared"
   printf '%s\n' "toy $* -> $toy_status"
 }
 # The canonical record's test names, sorted: "a b", or "-" when empty.
@@ -896,6 +994,12 @@ toy_run "$scratch/toy-11" -n 2 -- --warnings-as-errors apps/one/test apps/two/te
 [ "$(toy_files 1)$(toy_files 2)" = 'a_test.exs d_test.exs b_test.exs c_test.exs ' ] || fail "a directory and files were split as $(toy_files 1)/ $(toy_files 2)"
 toy_run "$scratch/toy-12" -n 2 -- apps/one/lib
 [ "$toy_status" = 1 ] && grep -qx '==> no test file in the named paths' "$scratch/toy-12" || fail 'a path without a test file did not fail'
+# A ./ name and an absolute one with a line are the units their relative
+# spellings make.
+toy_run "$scratch/toy-paths" -n 2 -- --warnings-as-errors ./apps/one/test/c_test.exs "$toy/apps/one/test/d_test.exs:3"
+[ "$toy_status" = 0 ] || fail "the ./ and absolute names failed with $toy_status"
+[ "$(sort "$toy_trace")" = "1 --no-compile --warnings-as-errors apps/one/test/c_test.exs
+2 --no-compile --warnings-as-errors apps/one/test/d_test.exs:3" ] || fail "the ./ and absolute names were given as $(sort "$toy_trace")"
 # The table: absent, equal weights in path order; named but missing, or
 # malformed, refused.
 unset CYFR_TEST_WEIGHTS

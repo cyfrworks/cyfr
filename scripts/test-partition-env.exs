@@ -418,8 +418,9 @@ defmodule Cyfr.TestPartitionEnv do
   defp named(apps, names, checkout) do
     {units, misnamed, outside} =
       Enum.reduce(names, {[], [], []}, fn name, {units, misnamed, outside} ->
-        {[file], _} = ExUnit.Filters.parse_paths([name])
-        suffix = String.replace_prefix(name, file, "")
+        # The `:line` suffixes come off the name as given: `./`, absolute
+        # and `..` spellings name the same file as its relative one.
+        [file, suffix] = Regex.run(~r/\A(.*?)((?::[0-9]+)*)\z/s, name, capture: :all_but_first)
         relative = file |> Path.expand(checkout) |> Path.relative_to(checkout)
 
         case Enum.find(apps, fn {path, _} -> owns?(path, relative) end) do

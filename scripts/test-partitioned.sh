@@ -42,15 +42,18 @@ out_dir=
 registry_owned=false
 finishing=false
 started=()
-merged=true
+# none: no partition started; pending: started, not yet merged; running;
+# done; failed.
+merge_state=none
 weights_table=
 weights_required=false
 group_status=()
 group_pid=()
 
-# Stops every child, folds the partitions' failures records into the
-# canonical one, drops the partitions' databases, and writes the terminal
-# line with the status the runner exits with.
+# Stops every child, drops the partitions' databases, and writes the
+# terminal line with the status the runner exits with. A run stopped before
+# its failures records were merged leaves the canonical record as it was:
+# its partitions never reached their ends, so they have nothing to add.
 finish() {
   local result=$? i drops=
   trap - EXIT
@@ -62,7 +65,12 @@ finish() {
       echo "==> processes survived KILL: $CONTAIN_SURVIVORS" >&2
       result=1
     fi
-    if [ "$merged" = false ]; then merge_failures || result=1; fi
+    case "$merge_state" in
+      pending) echo '==> the failures record was left unmerged: the run stopped before its partitions ended' >&2 ;;
+      running)
+        echo '==> the failures record merge did not complete; the canonical record was left as it was' >&2
+        [ "$result" != 0 ] || result=1 ;;
+    esac
     if [ -n "$out_dir" ]; then
       for ((i=1; i<=PARTITIONS; i++)); do
         if [ -f "$out_dir/p$i/database-created" ]; then drops="$drops $i"; fi
@@ -407,16 +415,21 @@ group_wait() {
   contain_stop_all "$grace"
 }
 
-# Folds every started partition's failures record into the canonical one.
+# Folds every started partition's failures record into the canonical one,
+# which the helper replaces whole, by a rename.
 merge_failures() {
   local i list=
-  merged=true
+  merge_state=running
   for ((i=1; i<=PARTITIONS; i++)); do
     if [ "${started[$i]:-false}" = true ]; then list="$list $i"; fi
   done
   # shellcheck disable=SC2086
-  contained_wait 120 30 'the failures record merge' merge_records $list ||
-    { echo 'the failures record could not be merged; `--failed` may rerun the wrong tests' >&2; return 1; }
+  if ! contained_wait 120 30 'the failures record merge' merge_records $list; then
+    merge_state=failed
+    echo 'the failures record could not be merged; `--failed` may rerun the wrong tests' >&2
+    return 1
+  fi
+  merge_state=done
 }
 
 # --- the run -----------------------------------------------------------------
@@ -693,7 +706,7 @@ fi
 
 start=$SECONDS
 partition_pid=()
-merged=false
+merge_state=pending
 for ((i=1; i<=PARTITIONS; i++)); do
   [ "${started[$i]}" = true ] || continue
   if [ "$PARTITIONS" -gt 1 ]; then

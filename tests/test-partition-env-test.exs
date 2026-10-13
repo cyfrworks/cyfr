@@ -297,6 +297,26 @@ defmodule Cyfr.TestPartitionEnvTest do
     assert read_record(canonical) == {1, %{@c => "/c"}}
   end
 
+  test "the merge replaces the record whole, by a rename", %{root: root} do
+    canonical = Path.join(root, "_build/test/test_failures")
+    File.mkdir_p!(Path.dirname(canonical))
+    File.write!(canonical, record(%{@a => "/a"}))
+    %{inode: before} = File.stat!(canonical)
+    run = partition_run(root, "renamed", 1, [{1, %{@a => "/a", @b => "/b"}}])
+    Env.failures_merge!(run, [1], root)
+    # A new file took the old one's name: a reader never sees a part of it.
+    refute File.stat!(canonical).inode == before
+    refute File.exists?(canonical <> ".partial")
+    assert read_record(canonical) == {1, %{@a => "/a", @b => "/b"}}
+
+    # A merge that cannot write its new record leaves the old one whole.
+    old = File.read!(canonical)
+    File.mkdir_p!(canonical <> ".partial")
+    run = partition_run(root, "unwritable", 1, [{1, %{@c => "/c"}}])
+    assert_raise File.Error, fn -> Env.failures_merge!(run, [1], root) end
+    assert File.read!(canonical) == old
+  end
+
   test "a merge waits for the lock another holder has", %{root: root} do
     canonical = Path.join(root, "_build/test/test_failures")
     run = partition_run(root, "locked", 1, [{1, %{@a => "/a"}}])
