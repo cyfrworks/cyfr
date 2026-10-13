@@ -42,7 +42,10 @@ defmodule Emissary.Web.ExecutionEventsControllerTest do
 
     @tag auth: :none
     test "no credential is a 401", %{conn: conn} do
-      conn = get(conn, "/api/executions/#{admit!(Sanctum.TestContext.local()).id}/events")
+      exec = admit!(Sanctum.TestContext.local())
+      terminal!(exec)
+
+      conn = get(conn, "/api/executions/#{exec.id}/events")
 
       assert json_response(conn, 401)["code"] == "unauthenticated"
       assert get_resp_header(conn, "www-authenticate") == ["Bearer"]

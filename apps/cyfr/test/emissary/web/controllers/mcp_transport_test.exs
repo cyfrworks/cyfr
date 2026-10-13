@@ -49,6 +49,7 @@ defmodule Emissary.Web.MCPTransportTest do
     # A `progressToken` is an opt-in to *receiving* progress, not a demand for a
     # stream. Opening one commits `200`, and the choice of body shape is the
     # server's — so a call that reports nothing is answered the cheap way.
+    @tag auth: :person
     test "a progressToken alone does not open a stream", %{conn: conn} do
       conn =
         conn
@@ -68,6 +69,7 @@ defmodule Emissary.Web.MCPTransportTest do
     # rejection unreachable, and this revision leans on those: an unimplemented
     # method MUST answer 404, and a dual-era client reads the status to tell a
     # modern server from a legacy one.
+    @tag auth: :person
     test "an unimplemented method still answers 404 when progress was requested",
          %{conn: conn} do
       conn =
@@ -458,6 +460,7 @@ defmodule Emissary.Web.MCPTransportTest do
       assert Progress.notification(theirs) == :ignore
     end
 
+    @tag auth: :person
     test "a streamed request leaves no subscription and no token behind", %{conn: conn} do
       conn_pid = self()
       :ok = :sys.suspend(Emissary.TaskSupervisor)
@@ -511,8 +514,11 @@ defmodule Emissary.Web.MCPTransportTest do
         Process.sleep(10)
         publish_when_listening(conn_pid, phases, deadline - 1)
 
+      # Only an authenticated caller subscribes a progress topic, so a test
+      # that lost its credential fails here instead of passing vacuously.
       true ->
         :sys.resume(Emissary.TaskSupervisor)
+        raise "the connection subscribed no progress topic"
     end
   end
 

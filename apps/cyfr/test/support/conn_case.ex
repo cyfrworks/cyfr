@@ -57,13 +57,31 @@ defmodule CyfrWeb.ConnCase do
     )
   end
 
-  setup tags do
-    if tags[:async] and Map.has_key?(tags, :auth) do
+  @doc """
+  The `conn` a test's tags ask for: the test person's bearer under
+  `auth: :person`, a bare conn under `auth: :none` or no tag. It raises
+  for `auth` on an async test and for any other `auth` value, before the
+  setup touches the sandbox or the auth provider.
+  """
+  @spec conn_for(map()) :: Plug.Conn.t()
+  def conn_for(tags) when is_map(tags) do
+    if tags[:async] == true and Map.has_key?(tags, :auth) do
       raise ArgumentError,
             "`auth` is tagged on an async test: the auth provider is global " <>
               "application environment, so only a sync test may authenticate"
     end
 
+    conn = Phoenix.ConnTest.build_conn()
+
+    case tags[:auth] do
+      :person -> authenticate_as(conn)
+      none when none in [nil, :none] -> conn
+      other -> raise ArgumentError, "unknown `auth` tag #{inspect(other)}: use :person or :none"
+    end
+  end
+
+  setup tags do
+    conn = conn_for(tags)
     Cyfr.Test.Sandbox.setup!(tags)
 
     # The test auth provider claims only the bearer `authenticate_as/2`
@@ -81,17 +99,6 @@ defmodule CyfrWeb.ConnCase do
       on_exit(fn -> Application.delete_env(:sanctum, :auth_provider) end)
     end
 
-    conn = Phoenix.ConnTest.build_conn()
-
-    case tags[:auth] do
-      :person ->
-        {:ok, conn: authenticate_as(conn)}
-
-      none when none in [nil, :none] ->
-        {:ok, conn: conn}
-
-      other ->
-        raise ArgumentError, "unknown `auth` tag #{inspect(other)}: use :person or :none"
-    end
+    {:ok, conn: conn}
   end
 end
