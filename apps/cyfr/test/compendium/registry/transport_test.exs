@@ -17,6 +17,9 @@ defmodule Compendium.Registry.TransportTest do
   alias Compendium.OCI.Errors
   alias Compendium.Registry.Transport
 
+  # The backoff base as this build compiled it (`Compendium.Transport.Retry`).
+  @base_ms Application.compile_env(:cyfr, :transport_retry_base_ms, 500)
+
   # Resolvable and inside the test private-egress allowlist; the Req stub
   # answers before anything is actually dialled.
   @url "http://127.0.0.1:9/v1/thing"
@@ -73,11 +76,14 @@ defmodule Compendium.Registry.TransportTest do
       assert attempts() == 1
     end
 
-    test "a 5xx does replay a GET" do
+    test "a 5xx does replay a GET, after each attempt's backoff" do
       stub(fn conn -> Plug.Conn.send_resp(conn, 503, "unavailable") end)
 
-      assert {:error, %Errors{}} = Transport.request(:get, @url, [], nil)
+      {elapsed_us, result} = :timer.tc(fn -> Transport.request(:get, @url, [], nil) end)
+
+      assert {:error, %Errors{}} = result
       assert attempts() == 3
+      assert elapsed_us >= (@base_ms + @base_ms * 2) * 1_000
     end
   end
 
@@ -107,9 +113,10 @@ defmodule Compendium.Registry.TransportTest do
 
       {elapsed_us, _} = :timer.tc(fn -> Transport.request(:get, @url, [], nil) end)
 
-      # Two backoffs before giving up; the header's 1s dominates the 500ms
-      # exponential default, so the floor is 2s rather than 1.5s.
-      assert elapsed_us >= 2_000_000
+      # Two waits before giving up, each the longer of the header's second
+      # and that attempt's backoff from the compiled base.
+      floor_ms = Enum.sum(for attempt <- 0..1, do: max(1_000, @base_ms * Integer.pow(2, attempt)))
+      assert elapsed_us >= floor_ms * 1_000
     end
   end
 

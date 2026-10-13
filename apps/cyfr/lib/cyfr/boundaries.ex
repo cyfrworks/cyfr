@@ -1845,6 +1845,12 @@ defmodule Cyfr.Boundaries do
     # lets the sandboxed suite boot omit `Cyfr.Bootstrap`
     # (`Cyfr.Application.bootstrap_skipped?/2`).
     bootstrap_skip_permitted: :seam,
+    # Compiled in by `config/test.exs` alone, shortening the transports'
+    # retry backoff base (`Compendium.Transport.Retry`); never read at runtime.
+    transport_retry_base_ms: :seam,
+    # Compiled in by `config/test.exs` alone, shortening one directory
+    # request's bound (`Sanctum.Directory.Client`); never read at runtime.
+    directory_request_ms: :seam,
     # Compiled in by the test configurations alone — `config/test.exs` and,
     # for the standalone build, `apps/sanctum/config/config.exs` — as
     # `:allow_tenancy_resolver_override` is; it lets a fixture hand an

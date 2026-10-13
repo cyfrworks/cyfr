@@ -29,13 +29,17 @@ defmodule Sanctum.Directory.ClientTest do
 
   @hosts ~w(dir-a.test dir-b.test loopback.test metadata.test)
 
+  # The bound on one directory request, as this build compiled it
+  # (`config/test.exs` shortens it).
+  @request_ms Application.compile_env(:sanctum, :directory_request_ms, 10_000)
+
   setup_all do
     %{tls: DirectoryServer.tls(@hosts)}
   end
 
   setup tags do
     Arca.Test.Sandbox.setup!(tags)
-    Prima.RateLimiter.reset()
+    Prima.Test.RateLimiter.reset!()
     targets = Application.fetch_env(:sanctum, :private_egress_targets)
 
     # The test directories are on loopback, which the operator lists by
@@ -55,7 +59,7 @@ defmodule Sanctum.Directory.ClientTest do
       end
 
       :persistent_term.erase({Resolver, :observer})
-      Prima.RateLimiter.reset()
+      Prima.Test.RateLimiter.reset!()
     end)
 
     # The logs the scripted directories serve, by identifier.
@@ -381,7 +385,7 @@ defmodule Sanctum.Directory.ClientTest do
       assert {:error, :timeout} = Client.resolve(alice.identifier, genesis(alice), opts(ctx))
 
       elapsed = System.monotonic_time(:millisecond) - started
-      assert elapsed >= 9_000 and elapsed < 15_000
+      assert elapsed >= @request_ms * 9 / 10 and elapsed < @request_ms + 5_000
       assert cached_row(alice.identifier) == nil
     end
   end

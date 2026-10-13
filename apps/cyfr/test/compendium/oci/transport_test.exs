@@ -15,6 +15,9 @@ defmodule Compendium.OCI.TransportTest do
   alias Compendium.OCI.Errors
   alias Compendium.OCI.Transport
 
+  # The backoff base as this build compiled it (`Compendium.Transport.Retry`).
+  @base_ms Application.compile_env(:cyfr, :transport_retry_base_ms, 500)
+
   @url "http://127.0.0.1:9/v2/testns/thing/blobs/uploads/"
   @registry "oci.test"
   @repository "testns/thing"
@@ -66,11 +69,14 @@ defmodule Compendium.OCI.TransportTest do
     assert attempts() == 1
   end
 
-  test "a 5xx GET is retried to the budget" do
+  test "a 5xx GET is retried to the budget, after each attempt's backoff" do
     stub(fn conn -> Plug.Conn.send_resp(conn, 502, "bad gateway") end)
 
-    assert {:error, %Errors{}} = request(:get)
+    {elapsed_us, result} = :timer.tc(fn -> request(:get) end)
+
+    assert {:error, %Errors{}} = result
     assert attempts() == 3
+    assert elapsed_us >= (@base_ms + @base_ms * 2) * 1_000
   end
 
   test "a 5xx POST is not replayed — the server may have acted" do

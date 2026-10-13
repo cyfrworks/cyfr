@@ -45,15 +45,31 @@ end
 root = Locus.Runtime.Test.ScriptedHost.root()
 {:ok, worker_key} = Prima.WorkerAuth.worker_key(root, Locus.Runtime.Test.ScriptedHost.service())
 
-Locus.Runtime.Test.Env.merge(
-  service_id: Locus.Runtime.Test.ScriptedHost.service(),
-  service_key: Base.encode16(worker_key, case: :lower),
-  host_url: "http://127.0.0.1:9",
-  bind: "127.0.0.1",
-  port: 0,
-  keeper: :direct,
-  pool_size: 1
-)
+replaced =
+  Locus.Runtime.Test.Env.merge(
+    service_id: Locus.Runtime.Test.ScriptedHost.service(),
+    service_key: Base.encode16(worker_key, case: :lower),
+    host_url: "http://127.0.0.1:9",
+    bind: "127.0.0.1",
+    port: 0,
+    keeper: :direct,
+    pool_size: 1
+  )
+
+# These settings are this suite's, not the VM's: once Locus's suite ends,
+# the runtime role's keyword goes back to the value they replaced, so a
+# later suite in this VM (cyfr's, which wires the service itself) does not
+# inherit a pool of one. `after_suite` callbacks accumulate across the
+# apps of one VM, so the restore runs once, after this suite.
+restore_key = {:locus_test_helper, :runtime_restored}
+:persistent_term.erase(restore_key)
+
+ExUnit.after_suite(fn _ ->
+  unless :persistent_term.get(restore_key, false) do
+    :persistent_term.put(restore_key, true)
+    Locus.Runtime.Test.Env.restore(replaced)
+  end
+end)
 
 # The umbrella starts the application before this helper runs (and another
 # suite in this VM may have given the service other credentials): the

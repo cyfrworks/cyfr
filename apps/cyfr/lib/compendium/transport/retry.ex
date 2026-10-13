@@ -26,7 +26,9 @@ defmodule Compendium.Transport.Retry do
       fault. Never retried.
   """
 
-  @base_delay_ms 500
+  # Compiled in: `config/test.exs` shortens it so the suite's retries do
+  # not wait out a production backoff. Never read at runtime.
+  @base_delay_ms Application.compile_env(:cyfr, :transport_retry_base_ms, 500)
   @max_retry_after_ms 30_000
 
   # A retry of these cannot create a second effect, so an ambiguous

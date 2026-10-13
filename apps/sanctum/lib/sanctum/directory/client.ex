@@ -85,7 +85,9 @@ defmodule Sanctum.Directory.Client do
   alias Prima.Identity.{Encoding, Entry, RecoverRequest, State}
 
   @path "/directory/v1"
-  @request_ms 10_000
+  # Compiled in: `config/test.exs` shortens it so the suite's unanswered
+  # requests do not wait out a production bound. Never read at runtime.
+  @request_ms Application.compile_env(:sanctum, :directory_request_ms, 10_000)
   @operation_ms 30_000
   @max_pages 1_000
   @page_entries 100

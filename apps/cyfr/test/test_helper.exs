@@ -22,14 +22,11 @@ end
 # :boundary_plant is the Boundary compiler's planted violations
 # (`Cyfr.BoundariesTest.CompilerPlants`): each is a forced compile of a
 # copy of the tree, run once by the gate's static leg.
+# The other adapter's tests are excluded too (`Arca.Test.Adapter`).
 ExUnit.configure(
-  exclude: [
-    :cluster,
-    :s3_integration,
-    :public_dns,
-    :benchmark,
-    :boundary_plant | toolchain_excludes
-  ]
+  exclude:
+    [:cluster, :s3_integration, :public_dns, :benchmark, :boundary_plant] ++
+      toolchain_excludes ++ Arca.Test.Adapter.exclusions()
 )
 
 # The suite runs from the umbrella root, where the runtime's worker service is
@@ -42,8 +39,10 @@ Cyfr.Test.RuntimeService.wire!()
 # The Locus builds service is up beside them too, serving builds on a
 # loopback port of its own once given its key; a test that builds points
 # this server at it (`Cyfr.Test.LocusService.configure!/0`), and the build
-# crosses the build wire as a deployment's does. It stops serving when the
-# suite ends, so Locus's own suite, in this VM, finds it as it started.
+# crosses the build wire as a deployment's does. An umbrella run takes the
+# apps in dependency order (prima, arca, locus, sanctum, cyfr), so Locus's
+# own suite has run in this VM before this one; the service stops serving
+# when this suite ends, leaving Locus as this suite found it.
 Cyfr.Test.LocusService.serve!()
 ExUnit.after_suite(fn _ -> Cyfr.Test.LocusService.stop!() end)
 
@@ -52,35 +51,11 @@ ExUnit.after_suite(fn _ -> Cyfr.Test.LocusService.stop!() end)
 # one through `Cyfr.Test.Settings.put/2`.
 Cyfr.Test.Settings.install!()
 
-# Owned by the test-runner process so it outlives every test and no two
-# tests race to create it. `Prima.Test.SourceTree` fills it lazily; see that
-# module for why the architecture tests need to stop re-reading the tree.
-Prima.Test.SourceTree.ensure_table()
-
-# The tmp storage roots configured in config/test.exs: the tenant root, and
-# the seed tree with an empty bundle plus a copy of the shipped AQUA
-# template (template reads stay real without the suite touching the repo's
-# own seed/).
-base_path = Application.fetch_env!(:arca, :base_path)
-File.mkdir_p!(base_path)
-
-seed_path = Application.fetch_env!(:arca, :seed_path)
-File.mkdir_p!(Path.join(seed_path, "components"))
-File.cp_r!(Path.expand("../../../seed/aqua", __DIR__), Path.join(seed_path, "aqua"))
-
-# A suite database built from a different schema would run stale, since the
-# baseline still reads as applied; refuse it before any test touches it.
-Ecto.Adapters.SQL.Sandbox.unboxed_run(Arca.Repo, &Arca.SchemaFingerprint.verify!/0)
-
-# Every connection is lent by a test's sandbox owner, and never taken by a
-# process on its own: in the pool's default automatic mode a process no
-# test allowed (the decision log's writer, spawned from an asynchronous
-# test) is handed a real connection and its rows commit for the tests
-# after it to see.
-Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, :manual)
-
-# The athanor rows the fixtures name by hand, committed once for the run.
-Sanctum.TestContext.seed_athanors!()
+# The storage roots (with a copy of the shipped AQUA template in the
+# throwaway seed tree, so template reads stay real without the suite
+# touching the repo's own seed/), the schema check, the sandbox mode and
+# the seeded athanors, as every database app's suite has them.
+Arca.Test.SuiteBoot.boot!(seed: &Sanctum.TestContext.seed_athanors!/0, seed_templates: ["aqua"])
 
 # The suite must never write into the repo's own trees: every storage root —
 # the suite DB and the seed tree included — is under tmp (config/test.exs),
@@ -111,14 +86,6 @@ ExUnit.after_suite(fn _ ->
       System.at_exit(fn _ -> exit({:shutdown, 1}) end)
     end
   end
-
-  # The run's tmp roots do not accumulate across runs. Only the two this
-  # helper made are removed, as they were named at the start: tests point
-  # both keys elsewhere while they run, the repository's own seed/ among
-  # those places, and a run stopped mid-test would remove whatever the key
-  # named at that moment.
-  File.rm_rf(base_path)
-  File.rm_rf(seed_path)
 end)
 
 ExUnit.start()

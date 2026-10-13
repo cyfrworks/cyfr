@@ -35,7 +35,13 @@ defmodule Cyfr.Test.RuntimeService do
 
   # The service is a sibling application, not a dependency: CYFR names it
   # here as the suite's, never in its own code.
-  @compile {:no_warn_undefined, [Locus.Runtime.Credentials, Locus.Runtime.WorkerService]}
+  @compile {:no_warn_undefined,
+            [
+              Locus.Runtime.Credentials,
+              Locus.Runtime.RunnerPool,
+              Locus.Runtime.Settings,
+              Locus.Runtime.WorkerService
+            ]}
 
   @service "wrk_local"
 
@@ -61,16 +67,19 @@ defmodule Cyfr.Test.RuntimeService do
         do: TwoServices.serve_wire!(host_url()).url,
         else: host_url()
 
-    # Everything the service's credentials are read from, spelled here so
-    # the suite does not depend on what another suite in this VM (the
-    # runtime's own, which serves a scripted host) left in the application
-    # env. The rest of `config :locus, :runtime` (the keeper) stays.
+    # Everything the service's credentials and its pool are read from,
+    # spelled here so the suite does not depend on what another suite in
+    # this VM (the runtime's own, which serves a scripted host on a pool of
+    # one) left in the application env: the pool is Locus's default
+    # whichever app ran first. The rest of `config :locus, :runtime` (the
+    # keeper) stays.
     env = [
       service_id: @service,
       service_key: Base.encode16(worker_key, case: :lower),
       host_url: reached,
       bind: "127.0.0.1",
-      port: 0
+      port: 0,
+      pool_size: default_pool_size()
     ]
 
     runtime = Application.get_env(:locus, :runtime, [])
@@ -84,6 +93,17 @@ defmodule Cyfr.Test.RuntimeService do
     endpoint = endpoint()
     Application.put_env(:cyfr, :locus_runtime_workers, [endpoint])
     endpoint
+  end
+
+  @doc "Locus's default pool size, which `wire!/1` gives the service (`Locus.Runtime.Settings`)."
+  @spec default_pool_size() :: pos_integer()
+  def default_pool_size, do: Locus.Runtime.Settings.default(:pool_size)
+
+  @doc "The pool size the running service's runner pool holds, read from the pool itself."
+  @spec pool_size() :: pos_integer()
+  def pool_size do
+    %{settings: %{pool_size: size}} = :sys.get_state(Locus.Runtime.RunnerPool)
+    size
   end
 
   @doc "The base URL of CYFR's host API listener, where the suite's wire forwards."

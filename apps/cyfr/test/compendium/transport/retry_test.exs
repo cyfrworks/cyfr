@@ -6,6 +6,10 @@ defmodule Compendium.Transport.RetryTest do
 
   alias Compendium.Transport.Retry
 
+  # The backoff base as this build compiled it (500 ms in a release;
+  # `config/test.exs` shortens it).
+  @base_ms Application.compile_env(:cyfr, :transport_retry_base_ms, 500)
+
   describe "classify/1" do
     test "429 retries for any method; 5xx only for idempotent ones" do
       assert Retry.classify({:status, 429}) == :retry_always
@@ -64,9 +68,9 @@ defmodule Compendium.Transport.RetryTest do
     end
   end
 
-  test "backoff/1 doubles from 500ms" do
-    assert Retry.backoff(0) == 500
-    assert Retry.backoff(1) == 1_000
-    assert Retry.backoff(2) == 2_000
+  test "backoff/1 doubles from the compiled base" do
+    assert Retry.backoff(0) == @base_ms
+    assert Retry.backoff(1) == @base_ms * 2
+    assert Retry.backoff(2) == @base_ms * 4
   end
 end

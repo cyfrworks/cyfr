@@ -13,6 +13,13 @@ config :cyfr, CyfrWeb.Endpoint,
   secret_key_base: "test-secret-key-base-minimum-64-characters-long-for-testing-only",
   server: false
 
+# The transports' retry backoff base and one directory request's bound,
+# compiled in (`Compendium.Transport.Retry`, `Sanctum.Directory.Client`):
+# shortened so a test of a retry or an unanswered request does not wait
+# out a production delay.
+config :cyfr, transport_retry_base_ms: 5
+config :sanctum, directory_request_ms: 500
+
 # The origin an absolute URL falls back to, the endpoint's own above.
 config :sanctum, :fallback_origin, "http://localhost:4002"
 
@@ -64,6 +71,23 @@ test_run_root =
       System.tmp_dir!(),
       "cyfr_test_#{:erlang.phash2(Path.expand("."))}_#{System.pid()}_" <>
         "#{Base.encode16(:crypto.strong_rand_bytes(12), case: :lower)}_p#{test_partition}"
+    )
+
+# Mix's failures record (what `--failed` reruns), one path for every app
+# of a VM rather than the build path of whichever app ran first: under the
+# runner each partition's own file in its run root, and for a direct Mix
+# run the build's canonical file.
+umbrella_root = Path.expand("..", __DIR__)
+
+config :ex_unit,
+  failures_manifest_path:
+    if(System.get_env("CYFR_TEST_RUN_ROOT"),
+      do: Path.join(test_run_root, "failures"),
+      else:
+        Path.join(
+          Path.expand(System.get_env("MIX_BUILD_PATH") || "_build/test", umbrella_root),
+          "test_failures"
+        )
     )
 
 case Cyfr.ConfigEnv.DatabaseChoice.choice!() do
