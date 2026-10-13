@@ -10,7 +10,9 @@
 #              timing bounds, so it runs alone.
 #   scoped     (-s) named test paths in one partition. Up to three run
 #              side by side, each on a third of the cores, and never
-#              beside an exclusive check.
+#              beside an exclusive check. The command's own grammar
+#              decides what fits a scoped slot: it sees
+#              HEAVY_CHECK_HELD=scoped and refuses what does not.
 # A queued exclusive check goes ahead of scoped runs that arrive after it.
 #
 # HOLD (default 2700 s) bounds how long the command may keep the host:
@@ -18,11 +20,29 @@
 # therefore takes the host once per repetition, and the checks queued
 # behind it run in between. QUEUE (default 7200 s) bounds the wait for
 # the host: at the deadline the command has not run and the exit is 75.
-# Otherwise the exit is the command's own.
+# INT and TERM stop the command and exit 130 and 143. Otherwise the exit
+# is the command's own.
+#
+# The command runs contained (scripts/lib/contain.sh) as the leader of a
+# session of its own, without the lock descriptors, and every session
+# started under it is listed in a registry this script owns. Before the
+# host is handed on, the command's session and every session in the
+# registry are stopped, within HEAVY_CHECK_GRACE (default 300 s) plus
+# 15 s each. If this script is killed outright, the watchdog keeps the
+# host until the same sessions are stopped. A process that outlives KILL
+# turns a 0 into 1 and is waited for up to 60 s more before the host is
+# handed on; the last stderr line names any that remain.
+#
+# Stdout carries two lines that frame the run, after option parsing:
+# `_START=<pid>` first and `_EXIT=<pid> <status>` last, on its own line,
+# where pid is this script's. scripts/await-task.sh reads them. A check
+# started inside a check runs its command in place and writes neither.
 #
 # Lines beginning `==> heavy-check:` on stderr say what the check is
 # queued behind, when it starts and how it ended; scripts/await-task.sh
 # reads them so a wait's deadline does not run while the check is queued.
+# A `NAME=value` word of the command is shown as `NAME=…` there and in the
+# holder's record.
 set -uo pipefail
 
 MODE=exclusive; HOLD=2700; QUEUE=7200
@@ -48,30 +68,9 @@ done
 
 say() { echo "==> heavy-check: $*" >&2; }
 
-# A scoped slot is a third of the host. A gate or a suite wider than one
-# partition takes all of it, whatever flag it was started with.
-if [ "$MODE" = scoped ]; then
-  one_partition() { echo 'a scoped run is one partition: scripts/test-partitioned.sh -n 1 ... paths' >&2; exit 64; }
-  runner=false; count_next=false
-  for argument in "$@"; do
-    case "$argument" in
-      */commit-gate.sh|commit-gate.sh) echo 'the gate is an exclusive check: drop -s' >&2; exit 64 ;;
-    esac
-    if $count_next; then
-      [ "$argument" = 1 ] || one_partition
-      count_next=false; runner=false
-    elif $runner; then
-      case "$argument" in -n|--partitions) count_next=true ;; *) one_partition ;; esac
-    else
-      case "$argument" in */test-partitioned.sh|test-partitioned.sh) runner=true ;; esac
-    fi
-  done
-  # Named last, the runner takes its default count.
-  if $runner; then one_partition; fi
-fi
-
 # A check started by a check already holds the host through its parent,
-# and the parent's deadline covers it.
+# and the parent's deadline covers it. It writes no line: the parent's
+# frame the run.
 case "${HEAVY_CHECK_HELD:-}" in
   '') ;;
   exclusive) exec "$@" ;;
@@ -81,16 +80,116 @@ case "${HEAVY_CHECK_HELD:-}" in
   *) echo 'HEAVY_CHECK_HELD is not a mode this script set' >&2; exit 64 ;;
 esac
 
+queued_at=$SECONDS
+ran_at=
+record=
+wrote_record=false
+owner=false
+queue_pid=
+cmd=
+survivors=
+
+# The command's words for a line another check reads or a kept file: a
+# NAME=value word, such as a database URL handed through env, is shown as
+# NAME=… so its value never leaves this check.
+redacted() {
+  local word name out=
+  for word in "$@"; do
+    case "$word" in
+      [A-Za-z_]*=*)
+        name=${word%%=*}
+        case "$name" in *[!A-Za-z0-9_]*) ;; *) word="$name=…" ;; esac ;;
+    esac
+    out="$out${out:+ }$word"
+  done
+  printf '%s' "$out"
+}
+
+alive() {
+  local s
+  if [ -r "/proc/$1/stat" ]; then
+    read -r s 2>/dev/null <"/proc/$1/stat" || return 1
+    s=${s##*) }
+  else
+    s=$(ps -o stat= -p "$1" 2>/dev/null) || return 1
+    s=${s// /}
+  fi
+  case "$s" in ''|Z*|X*|x*) return 1 ;; esac
+}
+
+# Every exit after this point passes here, and only here is `_EXIT=`
+# written. In order: the command is stopped if it still runs, every
+# session in the registry is swept, survivors are waited for, then the
+# registry and the holder's record go, and the host is released by the
+# exit itself.
+on_exit() {
+  local status=$? p left waited
+  trap '' INT TERM
+  trap - EXIT
+  exec 1>&5 2>&6
+  if [ -n "$queue_pid" ]; then kill -TERM "$queue_pid" 2>/dev/null || :; fi
+  if [ -n "$cmd" ]; then
+    contain_stop "$cmd" "$GRACE" || :
+    survivors="$survivors $CONTAIN_SURVIVORS"
+    cmd=
+  fi
+  if $owner; then
+    contain_sweep_registry "$GRACE" || :
+    survivors="$survivors $CONTAIN_SURVIVORS"
+  fi
+  survivors=$(echo $survivors)
+  if [ -n "$survivors" ]; then
+    [ "$status" != 0 ] || status=1
+    say "outlived KILL: $survivors; waiting up to 60s before the host is handed on"
+    waited=0
+    while :; do
+      left=
+      for p in $survivors; do alive "$p" && left="$left $p"; done
+      survivors=${left# }
+      [ -n "$survivors" ] && [ "$waited" -lt 600 ] || break
+      sleep 0.1
+      waited=$((waited + 1))
+    done
+  fi
+  if $owner; then rm -f "$CONTAIN_REGISTRY"; fi
+  if $wrote_record; then rm -f "$record"; fi
+  if [ -n "$ran_at" ]; then
+    say "exit $status after $((SECONDS - ran_at))s (queued $((ran_at - queued_at))s)"
+  fi
+  if [ -n "$survivors" ]; then say "still alive after KILL and 60s: $survivors"; fi
+  printf '\n_EXIT=%s %s\n' "$$" "$status"
+  exit "$status"
+}
+on_signal() {
+  trap '' INT TERM
+  exec 1>&5 2>&6
+  if [ -n "$cmd" ]; then say "interrupted: stopping the command"; else say 'interrupted'; fi
+  exit "$1"
+}
+
+# A trap runs under whatever redirection the interrupted command had, such
+# as the library's `2>/dev/null` around its waits, so the traps write
+# through these copies of the streams this script was given.
+exec 5>&1 6>&2
+printf '_START=%s\n' "$$"
+trap on_exit EXIT
+trap 'on_signal 130' INT
+trap 'on_signal 143' TERM
+
+here=${BASH_SOURCE[0]%/*}
+[ "$here" != "${BASH_SOURCE[0]}" ] || here=.
+# shellcheck source=lib/contain.sh
+. "$here/lib/contain.sh" || { echo "cannot load $here/lib/contain.sh" >&2; exit 69; }
 command -v flock >/dev/null 2>&1 || { echo 'flock is required (util-linux; on macOS: brew install flock)' >&2; exit 69; }
 
 LOCK=${HEAVY_CHECK_LOCK:-/tmp/cyfr-heavy-check.lock}
 SLOTS=3
-GRACE=${HEAVY_CHECK_GRACE:-30}
+# Above the gate's own stop of its legs (255 s at most), so a stopped
+# gate cleans up before this script stops what remains.
+GRACE=${HEAVY_CHECK_GRACE:-300}
 case "$GRACE" in ''|*[!0-9]*) echo 'HEAVY_CHECK_GRACE is decimal seconds' >&2; exit 64 ;; esac
+[ "${#GRACE}" -le 6 ] || { echo 'HEAVY_CHECK_GRACE is at most 999999 seconds' >&2; exit 64; }
 umask 077
-queued_at=$SECONDS
-record=
-child=
 
 # The holder's record: who, since when, for how long at most, running what.
 holders() {
@@ -133,11 +232,17 @@ announce() {
 # check passes it on the way in, and an exclusive one keeps it until it
 # has the host. The host's file is the one `flock <lock> command` takes,
 # so a caller that still uses flock directly is excluded like any other.
+# The wait runs in the background and is waited for by pid, because Bash
+# defers a trapped INT or TERM until a foreground command ends.
 take() {
-  local fd=$1 how=$2
+  local fd=$1 how=$2 status=0
   if flock -n "$how" "$fd"; then return 0; fi
   announce
-  flock -w "$(queue_left)" "$how" "$fd" || gave_up
+  flock -w "$(queue_left)" "$how" "$fd" &
+  queue_pid=$!
+  wait "$queue_pid" || status=$?
+  queue_pid=
+  [ "$status" = 0 ] || gave_up
 }
 
 if [ "$MODE" = scoped ]; then
@@ -163,36 +268,17 @@ take 8 -x
 if [ "$MODE" = scoped ]; then take 9 -s; else take 9 -x; fi
 flock -u 8
 
-cleanup_record() { [ -n "$record" ] && rm -f "$record"; }
-stop_child() {
-  [ -n "$child" ] || return 0
-  kill -TERM -- "-$child" 2>/dev/null || kill -TERM "$child" 2>/dev/null || :
-  local waited=0
-  while kill -0 -- "-$child" 2>/dev/null && [ "$waited" -lt $((GRACE * 5)) ]; do
-    sleep 0.2
-    waited=$((waited + 1))
-  done
-  # What ignored the request is ended, including a group of its own that
-  # a descendant made, which shares the command's session.
-  if command -v pkill >/dev/null 2>&1 && [ "$own_session" = true ]; then pkill -KILL -s "$child" 2>/dev/null || :; fi
-  kill -KILL -- "-$child" 2>/dev/null || :
-}
-on_signal() {
-  local status=$1
-  trap '' INT TERM
-  say "interrupted: stopping the command"
-  stop_child
-  wait "$child" 2>/dev/null
-  cleanup_record
-  exit "$status"
-}
-trap 'on_signal 130' INT
-trap 'on_signal 143' TERM
-trap cleanup_record EXIT
-
 ran_at=$SECONDS
-printf 'pid=%s mode=%s since=%s hold=%ss command=%s\n' "$$" "$MODE" "$(date '+%Y-%m-%dT%H:%M:%S%z')" "$HOLD" "$*" > "$record"
-say "running ($MODE) after $((ran_at - queued_at))s queued: $*"
+wrote_record=true
+printf 'pid=%s mode=%s since=%s hold=%ss command=%s\n' "$$" "$MODE" "$(date '+%Y-%m-%dT%H:%M:%S%z')" "$HOLD" "$(redacted "$@")" > "$record"
+say "running ($MODE) after $((ran_at - queued_at))s queued: $(redacted "$@")"
+
+# The outermost check owns the registry. One started by a wrapper that
+# already keeps a registry appends to that one and leaves it to its owner.
+if [ -z "${CONTAIN_REGISTRY:-}" ]; then
+  contain_registry_create || { echo 'cannot create the containment registry' >&2; exit 1; }
+  owner=true
+fi
 
 # The server refuses a CYFR_ name it does not declare, so what this script
 # hands the command is named outside that prefix, or inside the test
@@ -204,31 +290,24 @@ if [ "$MODE" = scoped ]; then
   export CYFR_TEST_CORES="$share"
 fi
 
-# The command runs with the lock descriptors closed, so nothing it leaves
-# behind can keep the host, and as the leader of its own session, so every
-# process it starts can be found when the deadline comes.
-own_session=false
-if command -v setsid >/dev/null 2>&1; then
-  own_session=true
-  setsid "$@" 7>&- 8>&- 9>&- <&0 &
-else
-  set -m
-  "$@" 7>&- 8>&- 9>&- <&0 &
-fi
-child=$!
+# The command never holds the lock descriptors, so nothing it leaves
+# behind can keep the host. The watchdog holds them instead, so a check
+# killed outright keeps the host until its command's sessions are gone.
+CONTAIN_CLOSE_FDS="7 8 9"
+CONTAIN_HOLD_FDS="7 8 9"
+export -n CONTAIN_CLOSE_FDS CONTAIN_HOLD_FDS
+contain_start -g "$GRACE" "$@"
+status=$?
+[ "$status" = 0 ] || exit "$status"
+cmd=$CONTAIN_PID
 
-expired=false
-while kill -0 "$child" 2>/dev/null; do
-  if [ $((SECONDS - ran_at)) -ge "$HOLD" ]; then
-    expired=true
-    say "hold deadline after ${HOLD}s: stopping the command"
-    stop_child
-    break
-  fi
-  sleep 0.2
-done
-wait "$child" 2>/dev/null; status=$?
-$expired && status=124
-child=
-say "exit $status after $((SECONDS - ran_at))s (queued $((ran_at - queued_at))s)"
+contain_wait "$cmd" "$HOLD" "$GRACE"
+status=$?
+cmd=
+survivors="$survivors $CONTAIN_SURVIVORS"
+# A command that exits 124 by itself before its hold is not reported as
+# stopped.
+if [ "$status" = 124 ] && [ $((SECONDS - ran_at)) -ge "$HOLD" ]; then
+  say "hold deadline after ${HOLD}s: the command was stopped"
+fi
 exit "$status"
