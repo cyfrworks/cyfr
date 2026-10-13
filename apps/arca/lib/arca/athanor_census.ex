@@ -24,6 +24,13 @@ defmodule Arca.AthanorCensus do
   athanor a transition locks), and no row is locked after it that another
   holder of the lock takes before it.
 
+  Under the SQL sandbox a test's writes run inside one transaction that
+  lasts the whole test, so a test that mints, reopens or allows holds the
+  lock until it ends, and async tests that do so wait for each other on
+  PostgreSQL. A test must not mint both inside its sandbox and on a
+  connection of its own (`unboxed_run`): the second waits on the first
+  until the test ends.
+
   Internal to the Arca boundary: it is not exported, so only Arca's own
   writers take it.
   """
