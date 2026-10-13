@@ -13,12 +13,12 @@ defmodule Arca.StandaloneWriteTest do
 
   use ExUnit.Case, async: false
 
+  import Arca.Test.Adapter, only: [sqlite?: 0]
   import Ecto.Query, only: [from: 2]
 
   alias Arca.Schemas.CellLease
   alias Ecto.Changeset
 
-  @sqlite? Arca.Repo.adapter() == Ecto.Adapters.SQLite3
   # `Arca.Repo`'s longest wait inside the driver for one attempt, and the
   # write that takes the lock.
   @quantum "PRAGMA busy_timeout = 100"
@@ -91,10 +91,10 @@ defmodule Arca.StandaloneWriteTest do
       end)
 
     {lock_step, [insert, update, delete, "commit"]} =
-      Enum.split(issued, if(@sqlite?, do: 4, else: 1))
+      Enum.split(issued, if(sqlite?(), do: 4, else: 1))
 
     assert lock_step ==
-             if(@sqlite?, do: ["begin", @quantum, @lock, pool_wait()], else: ["begin"])
+             if(sqlite?(), do: ["begin", @quantum, @lock, pool_wait()], else: ["begin"])
 
     assert insert =~ ~r/^INSERT INTO "cell_leases"/
     assert update =~ ~r/^UPDATE "cell_leases"/
@@ -132,7 +132,7 @@ defmodule Arca.StandaloneWriteTest do
     {{:error, changeset}, issued} = statements(fn -> Arca.Repo.insert(duplicate) end)
     assert {"has already been taken", _meta} = changeset.errors[:node]
 
-    if @sqlite? do
+    if sqlite?() do
       assert ["begin", @quantum, @lock, _pool, insert, "rollback"] = issued
       assert insert =~ ~r/^INSERT INTO "cell_leases"/
     end
@@ -183,7 +183,7 @@ defmodule Arca.StandaloneWriteTest do
   # On SQLite the transaction of the one statement: the lock step, the
   # statement, the commit. On PostgreSQL the statement alone.
   defp assert_one_statement(issued, statement) do
-    if @sqlite? do
+    if sqlite?() do
       pool = pool_wait()
       assert ["begin", @quantum, @lock, ^pool, issued_statement, "commit"] = issued
       assert issued_statement =~ statement
@@ -196,7 +196,7 @@ defmodule Arca.StandaloneWriteTest do
   defp pool_wait, do: "PRAGMA busy_timeout = #{Arca.Repo.busy_timeout_ms()}"
 
   # The name each adapter reports for a second row under one node.
-  defp node_constraint, do: if(@sqlite?, do: "cell_leases_node_index", else: "cell_leases_pkey")
+  defp node_constraint, do: if(sqlite?(), do: "cell_leases_node_index", else: "cell_leases_pkey")
 
   defp lease(node) do
     now = DateTime.utc_now()
@@ -249,9 +249,8 @@ defmodule Arca.StandaloneWriteLockTest do
   alias Ecto.Adapters.SQL.Sandbox
   alias Exqlite.Sqlite3
 
-  if Arca.Repo.adapter() != Ecto.Adapters.SQLite3 do
-    @moduletag skip: "SQLite's one write lock; PostgreSQL locks rows"
-  end
+  # SQLite's one write lock; PostgreSQL locks rows.
+  @moduletag :sqlite
 
   # A lock-wait deadline short enough to run out inside a case.
   @short_ms 300
@@ -668,21 +667,12 @@ defmodule Arca.StandaloneWriteLockTest do
       # Every writer waits for that lock: its lock step was told busy.
       await(fn -> Enum.all?(writers, &:ets.member(waiting, &1.pid)) end)
 
-      released = System.monotonic_time(:millisecond)
       send(renewer, :go)
       {answer, took} = Task.await(renewal, 60_000)
-      landed = System.monotonic_time(:millisecond) - released
 
       for writer <- writers, do: send(writer.pid, :stop)
-      writes = Enum.flat_map(writers, &Task.await(&1, 60_000))
+      for writer <- writers, do: Task.await(writer, 60_000)
       :telemetry.detach(handler)
-      refused = for {:busy, ms} <- writes, do: ms
-
-      IO.puts(
-        "standalone burst: a renewal holding the lock landed #{landed} ms after #{@writers} " <>
-          "standalone writers waited for it (#{took} ms in all, deadline #{@busy_timeout_ms} ms); " <>
-          "#{length(writes)} writes, #{length(refused)} refused busy"
-      )
 
       assert {:ok, _slot} = answer
       assert took < @busy_timeout_ms, "the renewal took #{took} ms"

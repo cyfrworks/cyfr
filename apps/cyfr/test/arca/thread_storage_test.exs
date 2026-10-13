@@ -368,11 +368,13 @@ defmodule Arca.ThreadStorageRaceTest do
   use ExUnit.Case, async: false
 
   import Ecto.Query, only: [from: 2]
+  import Arca.Test.Adapter, only: [postgres?: 0]
 
   alias Arca.PlatformSettings, as: Store
   alias Arca.QueryHelpers
   alias Arca.Schemas.{Athanor, Thread, ThreadSubscription}
   alias Arca.Test.Actor
+  alias Arca.Test.LockWait
   alias Arca.ThreadStorage, as: Threads
   alias Ecto.Adapters.SQL.Sandbox
 
@@ -442,7 +444,7 @@ defmodule Arca.ThreadStorageRaceTest do
 
         for _ <- creators do
           assert_receive {:backend, backend}, 15_000
-          await_lock_wait(backend)
+          LockWait.await_lock_wait!(backend, [], timeout_ms: 10_000)
         end
 
         release(holder)
@@ -464,8 +466,6 @@ defmodule Arca.ThreadStorageRaceTest do
   end
 
   defp unboxed(fun), do: Sandbox.unboxed_run(Arca.Repo, fun)
-
-  defp postgres?, do: Arca.Repo.adapter() == Ecto.Adapters.Postgres
 
   # Run `lock` in a transaction of its own and hold it open until
   # `release/1`.
@@ -498,25 +498,5 @@ defmodule Arca.ThreadStorageRaceTest do
   defp backend_pid do
     %{rows: [[pid]]} = Arca.Repo.query!("SELECT pg_backend_pid()")
     pid
-  end
-
-  # Holds until `pid`'s backend waits on a lock: an observed state, bounded
-  # by `tries`, never a timing.
-  defp await_lock_wait(pid, tries \\ 500)
-
-  defp await_lock_wait(_pid, 0), do: flunk("the waiting backend never waited on a lock")
-
-  defp await_lock_wait(pid, tries) do
-    %{rows: rows} =
-      unboxed(fn ->
-        Arca.Repo.query!("SELECT wait_event_type FROM pg_stat_activity WHERE pid = $1", [pid])
-      end)
-
-    if rows == [["Lock"]] do
-      :ok
-    else
-      Process.sleep(20)
-      await_lock_wait(pid, tries - 1)
-    end
   end
 end

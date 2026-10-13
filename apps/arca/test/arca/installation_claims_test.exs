@@ -339,9 +339,11 @@ defmodule Arca.InstallationClaimsRaceTest do
   use ExUnit.Case, async: false
 
   import Ecto.Query
+  import Arca.Test.Adapter, only: [postgres?: 0]
 
   alias Arca.{ControlPlane, IdentityAttempts, InstallationClaims, Users}
   alias Arca.Schemas.{CellLease, ExternalIdentity, IdentityAttempt, InstallationClaim, User}
+  alias Arca.Test.LockWait
   alias Ecto.Adapters.SQL.Sandbox
 
   @slot_keys [
@@ -352,7 +354,6 @@ defmodule Arca.InstallationClaimsRaceTest do
 
   defp unboxed(fun), do: Sandbox.unboxed_run(Arca.Repo, fun)
   defp server, do: Prima.Actor.system()
-  defp postgres?, do: Arca.Repo.adapter() == Ecto.Adapters.Postgres
   defp digest(seed), do: Prima.Digest.sha256("#{seed}-#{System.unique_integer([:positive])}")
 
   setup do
@@ -417,39 +418,9 @@ defmodule Arca.InstallationClaimsRaceTest do
     if postgres?(), do: hd(hd(Arca.Repo.query!("SELECT pg_backend_pid()").rows))
   end
 
-  # On PostgreSQL, `backend` is blocked on a row lock, in a statement
-  # naming every one of `fragments`.
-  defp await_wait!(backend, fragments, tries \\ 250) do
-    [[type, event, query]] =
-      unboxed(fn ->
-        Arca.Repo.query!(
-          "SELECT wait_event_type, wait_event, query FROM pg_stat_activity WHERE pid = $1",
-          [backend]
-        ).rows
-      end)
-
-    cond do
-      type == "Lock" and Enum.all?(fragments, &String.contains?(query, &1)) ->
-        :ok
-
-      tries == 0 ->
-        flunk(
-          "backend #{backend} is not waiting at #{inspect(fragments)}: #{type} #{event} #{query}"
-        )
-
-      true ->
-        retry_wait!(backend, fragments, tries)
-    end
-  end
-
-  defp retry_wait!(backend, fragments, tries) do
-    Process.sleep(20)
-    await_wait!(backend, fragments, tries - 1)
-  end
-
   # The waiter blocks where the order row is locked.
   defp assert_waits_on_order!(task, backend) do
-    if postgres?(), do: await_wait!(backend, [~s("server_meta"), "FOR UPDATE"])
+    if postgres?(), do: LockWait.await_lock_wait!(backend, [~s("server_meta"), "FOR UPDATE"])
     refute Task.yield(task, 300), "the waiter decided while the other side held the order row"
   end
 

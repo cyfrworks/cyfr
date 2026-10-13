@@ -178,9 +178,11 @@ defmodule Arca.RecordSinkRevisionRaceTest do
   use ExUnit.Case, async: false
 
   import ExUnit.CaptureLog
+  import Arca.Test.Adapter, only: [postgres?: 0]
 
   alias Arca.ConsentStorage
   alias Arca.RecordSink
+  alias Arca.Test.LockWait
   alias Ecto.Adapters.SQL.Sandbox
 
   @ingress "reagent:local.sink-race|@ingress|default"
@@ -216,7 +218,7 @@ defmodule Arca.RecordSinkRevisionRaceTest do
         profile = "prof_sink_race_#{System.unique_integer([:positive])}"
 
         {:ok, _} =
-          Arca.ProfileStorage.put(%{
+          Arca.Test.Writers.put_profile(%{
             id: profile,
             athanor_id: athanor,
             source_ref: "reagent:local.sink-race",
@@ -269,7 +271,7 @@ defmodule Arca.RecordSinkRevisionRaceTest do
         # The batch holds a row the revision locks: the revision waits on it.
         if postgres?() do
           assert_receive {:backend, backend}, 15_000
-          await_lock_wait(backend)
+          LockWait.await_lock_wait!(backend, [], timeout_ms: 10_000)
         else
           refute Task.yield(revision, 300), "the revision did not wait for the batch"
         end
@@ -334,29 +336,6 @@ defmodule Arca.RecordSinkRevisionRaceTest do
     %{rows: [[pid]]} = Arca.Repo.query!("SELECT pg_backend_pid()")
     pid
   end
-
-  # Holds until `pid`'s backend waits on a lock: an observed state, bounded
-  # by `tries`, never a timing. Only PostgreSQL shows one; SQLite's
-  # immediate transaction waits for the one writer and has none to show.
-  defp await_lock_wait(pid, tries \\ 500)
-
-  defp await_lock_wait(_pid, 0), do: flunk("the waiting backend never waited on a lock")
-
-  defp await_lock_wait(pid, tries) do
-    %{rows: rows} =
-      unboxed(fn ->
-        Arca.Repo.query!("SELECT wait_event_type FROM pg_stat_activity WHERE pid = $1", [pid])
-      end)
-
-    if rows == [["Lock"]] do
-      :ok
-    else
-      Process.sleep(20)
-      await_lock_wait(pid, tries - 1)
-    end
-  end
-
-  defp postgres?, do: Arca.Repo.adapter() == Ecto.Adapters.Postgres
 
   defp actor(athanor), do: Prima.Actor.in_athanor(athanor)
   defp unboxed(fun), do: Sandbox.unboxed_run(Arca.Repo, fun)

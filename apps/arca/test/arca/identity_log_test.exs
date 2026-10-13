@@ -369,9 +369,11 @@ defmodule Arca.IdentityLogRaceTest do
   use ExUnit.Case, async: false
 
   import Ecto.Query
+  import Arca.Test.Adapter, only: [postgres?: 0]
 
   alias Arca.{ControlPlane, IdentityLog}
   alias Arca.Schemas.{CellLease, IdentityLogEntry, ServerMeta}
+  alias Arca.Test.LockWait
   alias Ecto.Adapters.SQL.Sandbox
 
   @slot_keys [
@@ -386,7 +388,6 @@ defmodule Arca.IdentityLogRaceTest do
 
   defp unboxed(fun), do: Sandbox.unboxed_run(Arca.Repo, fun)
   defp server, do: Prima.Actor.system()
-  defp postgres?, do: Arca.Repo.adapter() == Ecto.Adapters.Postgres
   defp digest(seed), do: Prima.Digest.sha256("#{seed}-#{System.unique_integer()}")
 
   setup do
@@ -457,41 +458,6 @@ defmodule Arca.IdentityLogRaceTest do
   # The connection's backend, on PostgreSQL, for the test to watch it wait.
   defp backend do
     if postgres?(), do: hd(hd(Arca.Repo.query!("SELECT pg_backend_pid()").rows))
-  end
-
-  # On PostgreSQL, `backend` is blocked on a lock, at the gate (`:gate`) or
-  # in a statement naming every one of `fragments`.
-  defp await_wait!(backend, at, tries \\ 250) do
-    [[type, event, query]] =
-      unboxed(fn ->
-        Arca.Repo.query!(
-          "SELECT wait_event_type, wait_event, query FROM pg_stat_activity WHERE pid = $1",
-          [backend]
-        ).rows
-      end)
-
-    waiting? =
-      type == "Lock" and
-        case at do
-          :gate -> event == "advisory"
-          fragments -> event != "advisory" and Enum.all?(fragments, &String.contains?(query, &1))
-        end
-
-    cond do
-      waiting? ->
-        :ok
-
-      tries == 0 ->
-        flunk("backend #{backend} is not waiting at #{inspect(at)}: #{type} #{event} #{query}")
-
-      true ->
-        retry_wait!(backend, at, tries)
-    end
-  end
-
-  defp retry_wait!(backend, at, tries) do
-    Process.sleep(20)
-    await_wait!(backend, at, tries - 1)
   end
 
   # A trigger that holds a connection which set `arca_test.gate` before
@@ -624,10 +590,13 @@ defmodule Arca.IdentityLogRaceTest do
         install_gate!("identity_log_entries", "INSERT", "STATEMENT")
         gate = close_gate!()
         {first, holding} = appender(identifier, genesis.entry_hash, true)
-        await_wait!(holding, :gate)
+
+        LockWait.await_lock_wait!(holding, [~s(INSERT INTO "identity_log_entries")],
+          event: "advisory"
+        )
 
         {second, waiting} = appender(identifier, genesis.entry_hash, false)
-        await_wait!(waiting, [~s("server_meta")])
+        LockWait.await_lock_wait!(waiting, [~s("server_meta")])
 
         refute Task.yield(second, 300),
                "the second append decided while the first held the usage row"

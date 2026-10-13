@@ -1162,7 +1162,6 @@ defmodule Arca.MembersLockTest do
     assert seated == user.id
   end
 
-  @tag :postgres
   test "a seat, a claim and a grant each wait for whoever holds the person", %{user: user} do
     # An identifier invitation and its claim are fenced by the member's
     # slot; no claimant runs here, so none is held and none is asked for.
@@ -1248,10 +1247,7 @@ defmodule Arca.MembersLockTest do
 
   # SQLite takes its one write lock as the transaction starts, before the
   # closure, so there is no row lock to observe.
-  if Arca.Repo.adapter() != Ecto.Adapters.Postgres do
-    @tag skip: "PostgreSQL row locks"
-  end
-
+  @tag :postgres
   test "a reserve: closure runs with the person's and the athanor's rows locked", %{user: user} do
     n = System.unique_integer([:positive])
 

@@ -583,9 +583,11 @@ defmodule Arca.DirectoryHeadsRaceTest do
   use ExUnit.Case, async: false
 
   import Ecto.Query
+  import Arca.Test.Adapter, only: [postgres?: 0]
 
   alias Arca.{ControlPlane, DirectoryHeads, PersonIdentities, SessionStorage}
   alias Arca.Schemas.{CellLease, DirectoryHead, ExternalIdentity, PersonIdentity, Session, User}
+  alias Arca.Test.LockWait
   alias Ecto.Adapters.SQL.Sandbox
 
   @slot_keys [
@@ -598,7 +600,6 @@ defmodule Arca.DirectoryHeadsRaceTest do
 
   defp unboxed(fun), do: Sandbox.unboxed_run(Arca.Repo, fun)
   defp server, do: Prima.Actor.system()
-  defp postgres?, do: Arca.Repo.adapter() == Ecto.Adapters.Postgres
   defp digest(seed), do: Prima.Digest.sha256("#{seed}-#{System.unique_integer()}")
 
   setup do
@@ -697,41 +698,6 @@ defmodule Arca.DirectoryHeadsRaceTest do
   # The connection's backend, on PostgreSQL, for the test to watch it wait.
   defp backend do
     if postgres?(), do: hd(hd(Arca.Repo.query!("SELECT pg_backend_pid()").rows))
-  end
-
-  # On PostgreSQL, `backend` is blocked on a lock, at the gate (`:gate`) or
-  # in a statement naming every one of `fragments`.
-  defp await_wait!(backend, at, tries \\ 250) do
-    [[type, event, query]] =
-      unboxed(fn ->
-        Arca.Repo.query!(
-          "SELECT wait_event_type, wait_event, query FROM pg_stat_activity WHERE pid = $1",
-          [backend]
-        ).rows
-      end)
-
-    waiting? =
-      type == "Lock" and
-        case at do
-          :gate -> event == "advisory"
-          fragments -> event != "advisory" and Enum.all?(fragments, &String.contains?(query, &1))
-        end
-
-    cond do
-      waiting? ->
-        :ok
-
-      tries == 0 ->
-        flunk("backend #{backend} is not waiting at #{inspect(at)}: #{type} #{event} #{query}")
-
-      true ->
-        retry_wait!(backend, at, tries)
-    end
-  end
-
-  defp retry_wait!(backend, at, tries) do
-    Process.sleep(20)
-    await_wait!(backend, at, tries - 1)
   end
 
   # A trigger that holds a connection which set `arca_test.gate` before
@@ -857,7 +823,7 @@ defmodule Arca.DirectoryHeadsRaceTest do
       end)
 
     assert_receive {:advancer, pid}, 5_000
-    if postgres?(), do: await_wait!(pid, [~s("users"), "FOR UPDATE"])
+    if postgres?(), do: LockWait.await_lock_wait!(pid, [~s("users"), "FOR UPDATE"])
     refute Task.yield(advancer, 300), "the advance retired while a session bound the old epoch"
 
     send(issuer.pid, :go)
@@ -866,11 +832,8 @@ defmodule Arca.DirectoryHeadsRaceTest do
     refute unboxed(fn -> Arca.Repo.exists?(where(Session, token_hash: ^hash)) end)
   end
 
-  if Arca.Repo.adapter() != Ecto.Adapters.Postgres do
-    @tag skip:
-           "the advance has no pause point but a PostgreSQL trigger; SQLite's write lock orders it"
-  end
-
+  # The advance has no pause point but a PostgreSQL trigger; SQLite's write lock orders it.
+  @tag :postgres
   test "a session waiting behind the advance reads the new epoch and is refused", %{
     user_id: user_id,
     identifier: identifier,
@@ -890,7 +853,7 @@ defmodule Arca.DirectoryHeadsRaceTest do
       end)
 
     assert_receive {:advancer, advancing}, 5_000
-    await_wait!(advancing, :gate)
+    LockWait.await_lock_wait!(advancing, [~s(UPDATE "directory_heads")], event: "advisory")
     hash = :crypto.strong_rand_bytes(32)
 
     issuer =
@@ -902,7 +865,7 @@ defmodule Arca.DirectoryHeadsRaceTest do
       end)
 
     assert_receive {:issuer, issuing}, 5_000
-    await_wait!(issuing, [~s("users"), "FOR UPDATE"])
+    LockWait.await_lock_wait!(issuing, [~s("users"), "FOR UPDATE"])
     refute Task.yield(issuer, 300), "the session bound an epoch the advance was retiring"
 
     open_gate!(gate)
@@ -965,7 +928,7 @@ defmodule Arca.DirectoryHeadsRaceTest do
       end)
 
     assert_receive {:sweeper, sweeping}, 5_000
-    if postgres?(), do: await_wait!(sweeping, [~s(DELETE FROM "directory_heads")])
+    if postgres?(), do: LockWait.await_lock_wait!(sweeping, [~s(DELETE FROM "directory_heads")])
     refute Task.yield(sweeper, 300), "the sweep went ahead of a refresh holding the head"
 
     send(refresher.pid, :go)

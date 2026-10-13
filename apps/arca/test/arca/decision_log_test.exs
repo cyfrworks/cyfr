@@ -445,30 +445,26 @@ defmodule Arca.DecisionLogBudgetTest do
   # Linked, so a failing assertion takes the lock down with the test.
   defp hold_write_lock(parent) do
     spawn_link(fn ->
-      case Arca.Repo.adapter() do
-        Ecto.Adapters.SQLite3 ->
-          Arca.Repo.checkout(
-            fn ->
-              Arca.Repo.query!("BEGIN IMMEDIATE", [], log: false)
-              send(parent, :locked)
-              receive do: (:release -> :ok)
-              Arca.Repo.query!("ROLLBACK", [], log: false)
-            end,
-            timeout: :infinity
-          )
+      if Arca.Test.Adapter.sqlite?() do
+        Arca.Repo.checkout(
+          fn ->
+            Arca.Repo.query!("BEGIN IMMEDIATE", [], log: false)
+            send(parent, :locked)
+            receive do: (:release -> :ok)
+            Arca.Repo.query!("ROLLBACK", [], log: false)
+          end,
+          timeout: :infinity
+        )
+      else
+        Arca.Repo.transaction(
+          fn ->
+            Arca.Repo.query!("LOCK TABLE decision_logs IN ACCESS EXCLUSIVE MODE", [], log: false)
 
-        _postgres ->
-          Arca.Repo.transaction(
-            fn ->
-              Arca.Repo.query!("LOCK TABLE decision_logs IN ACCESS EXCLUSIVE MODE", [],
-                log: false
-              )
-
-              send(parent, :locked)
-              receive do: (:release -> :ok)
-            end,
-            timeout: :infinity
-          )
+            send(parent, :locked)
+            receive do: (:release -> :ok)
+          end,
+          timeout: :infinity
+        )
       end
 
       send(parent, :released)
@@ -513,18 +509,16 @@ defmodule Arca.DecisionLogBudgetTest do
 
     elapsed = System.monotonic_time(:millisecond) - started
 
-    case Arca.Repo.adapter() do
-      Ecto.Adapters.SQLite3 ->
-        # Less than the commit slack was left at the lock step, so it
-        # raised before any attempt: no lock quantum, no pause, and long
-        # before the busy timeout.
-        assert {:raised, %Arca.Repo.BusyTimeoutError{}} = result
-        assert elapsed < 300, "refused after #{elapsed} ms"
-
-      _postgres ->
-        # The option is SQLite's; a transaction that touches no locked
-        # table runs as it would.
-        assert {:ok, :ok} = result
+    if Arca.Test.Adapter.sqlite?() do
+      # Less than the commit slack was left at the lock step, so it
+      # raised before any attempt: no lock quantum, no pause, and long
+      # before the busy timeout.
+      assert {:raised, %Arca.Repo.BusyTimeoutError{}} = result
+      assert elapsed < 300, "refused after #{elapsed} ms"
+    else
+      # The option is SQLite's; a transaction that touches no locked
+      # table runs as it would.
+      assert {:ok, :ok} = result
     end
 
     send(blocker, :release)
@@ -560,7 +554,7 @@ defmodule Arca.DecisionLogBudgetTest do
     # lock, bounded by the driver's lock wait. On PostgreSQL the pool closed
     # its connection at the deadline and it ended with the answer.
     late = for pid <- writers(self()), do: Process.monitor(pid)
-    if Arca.Repo.adapter() == Ecto.Adapters.SQLite3, do: assert(late != [])
+    if Arca.Test.Adapter.sqlite?(), do: assert(late != [])
 
     send(blocker, :release)
     assert_receive :released, 5_000
@@ -659,6 +653,9 @@ defmodule Arca.DecisionLogBudgetTest do
        %{call_id: call_id, actor: actor} do
     ids = for i <- 1..40, do: "#{call_id}_#{i}"
     on_exit(fn -> delete_rows(ids) end)
+    # A failing case still drains its writers before their rows go and the
+    # shared state is put back.
+    on_exit(fn -> await(fn -> DecisionLog.writers() == 0 end, 60_000) end)
     blocker = hold_write_lock(self())
     assert_receive :locked, 5_000
     sampler = spawn_link(fn -> sampling([]) end)
@@ -703,6 +700,13 @@ defmodule Arca.DecisionLogBudgetTest do
        %{call_id: call_id, actor: actor} do
     killed_id = call_id <> "_killed"
     on_exit(fn -> delete_rows([killed_id]) end)
+    # The writers have finished before their rows go and the shared state
+    # is put back, whether the case passed or not; a writer still waiting
+    # then is answered at its budget.
+    on_exit(fn ->
+      await(fn -> DecisionLog.writers() == 0 end, DecisionLog.budget_ms() + 5_000)
+    end)
+
     blocker = hold_write_lock(self())
     assert_receive :locked, 5_000
     test = self()
@@ -711,6 +715,8 @@ defmodule Arca.DecisionLogBudgetTest do
       spawn(fn -> send(test, {:answered, DecisionLog.append(actor, decision(call_id))}) end)
 
     killed = spawn(fn -> DecisionLog.append(actor, decision(killed_id)) end)
+    # Neither caller starts a writer once the drain has begun.
+    on_exit(fn -> for caller <- [answered, killed], do: Process.exit(caller, :kill) end)
     await(fn -> writers(answered) != [] and writers(killed) != [] end)
     [first] = writers(answered)
     [second] = writers(killed)
@@ -722,30 +728,26 @@ defmodule Arca.DecisionLogBudgetTest do
     assert_receive {:DOWN, ^ref, :process, ^killed, :killed}
     assert Process.alive?(second)
 
-    case Arca.Repo.adapter() do
-      Ecto.Adapters.SQLite3 ->
-        # A caller answered `:timeout` at its budget: both writers still
-        # wait for the lock, holding their slots, and write once it goes.
-        assert_receive {:answered, {:error, %AuditFailure{kind: :timeout}}}, 5_000
-        assert Process.alive?(first) and Process.alive?(second)
-        assert DecisionLog.writers() == 2
-        send(blocker, :release)
-        assert_receive :released, 5_000
-        for ref <- refs, do: assert_receive({:DOWN, ^ref, :process, _, _}, 30_000)
-        assert rows(call_id) == 1 and rows(killed_id) == 1
-
-      _postgres ->
-        # Their database work returns at their deadline, the caller's
-        # budget, when the pool closes the connection they waited on; their
-        # slots go with it, and nothing was written.
-        assert_receive {:answered, {:error, %AuditFailure{kind: :timeout}}}, 5_000
-        for ref <- refs, do: assert_receive({:DOWN, ^ref, :process, _, _}, 5_000)
-        send(blocker, :release)
-        assert_receive :released, 5_000
-        assert rows(call_id) == 0 and rows(killed_id) == 0
+    if Arca.Test.Adapter.sqlite?() do
+      # A caller answered `:timeout` at its budget: both writers still
+      # wait for the lock, holding their slots, and write once it goes.
+      assert_receive {:answered, {:error, %AuditFailure{kind: :timeout}}}, 5_000
+      assert Process.alive?(first) and Process.alive?(second)
+      assert DecisionLog.writers() == 2
+      send(blocker, :release)
+      assert_receive :released, 5_000
+      for ref <- refs, do: assert_receive({:DOWN, ^ref, :process, _, _}, 30_000)
+      assert rows(call_id) == 1 and rows(killed_id) == 1
+    else
+      # Their database work returns at their deadline, the caller's
+      # budget, when the pool closes the connection they waited on; their
+      # slots go with it, and nothing was written.
+      assert_receive {:answered, {:error, %AuditFailure{kind: :timeout}}}, 5_000
+      for ref <- refs, do: assert_receive({:DOWN, ^ref, :process, _, _}, 5_000)
+      send(blocker, :release)
+      assert_receive :released, 5_000
+      assert rows(call_id) == 0 and rows(killed_id) == 0
     end
-
-    await(fn -> DecisionLog.writers() == 0 end)
   end
 
   test "a writer asked to stop, as at shutdown, finishes its write first",
@@ -784,116 +786,116 @@ defmodule Arca.DecisionLogBudgetTest do
     assert at.(Arca.WriteTurn) < at.(Arca.DecisionLog.Writers)
   end
 
-  if Arca.Repo.adapter() == Ecto.Adapters.SQLite3 do
-    test "a writer killed in its native call frees its slot at its exit",
-         %{call_id: call_id, actor: actor} do
-      blocker = hold_write_lock(self())
-      assert_receive :locked, 5_000
+  @tag :sqlite
+  test "a writer killed in its native call frees its slot at its exit",
+       %{call_id: call_id, actor: actor} do
+    blocker = hold_write_lock(self())
+    assert_receive :locked, 5_000
 
-      caller = Task.async(fn -> DecisionLog.append(actor, decision(call_id)) end)
-      await(fn -> writers(caller.pid) != [] end)
-      [writer] = writers(caller.pid)
-      await(fn -> stepping?(writer) end)
-      Process.exit(writer, :kill)
+    caller = Task.async(fn -> DecisionLog.append(actor, decision(call_id)) end)
+    await(fn -> writers(caller.pid) != [] end)
+    [writer] = writers(caller.pid)
+    await(fn -> stepping?(writer) end)
+    Process.exit(writer, :kill)
 
-      # Its slot is free at once, though its lock wait may still be running
-      # inside the driver.
-      await(fn -> DecisionLog.writers() == 0 end, 100)
-      assert {:error, %AuditFailure{kind: :unavailable}} = Task.await(caller, :infinity)
+    # Its slot is free at once, though its lock wait may still be running
+    # inside the driver.
+    await(fn -> DecisionLog.writers() == 0 end, 100)
+    assert {:error, %AuditFailure{kind: :unavailable}} = Task.await(caller, :infinity)
 
-      send(blocker, :release)
-      assert_receive :released, 5_000
-      assert rows(call_id) == 0
-    end
+    send(blocker, :release)
+    assert_receive :released, 5_000
+    assert rows(call_id) == 0
+  end
 
-    test "a dead writer's connection is lent again only once its disconnect has finished" do
-      name = :"dead_writer_pool_#{System.unique_integer([:positive])}"
+  @tag :sqlite
+  test "a dead writer's connection is lent again only once its disconnect has finished" do
+    name = :"dead_writer_pool_#{System.unique_integer([:positive])}"
 
-      start_supervised!(
-        Supervisor.child_spec(
-          {Arca.Repo,
-           name: name,
-           pool_size: 1,
-           pool: DBConnection.ConnectionPool,
-           connection_listeners: [self()]},
-          id: name
-        )
+    start_supervised!(
+      Supervisor.child_spec(
+        {Arca.Repo,
+         name: name,
+         pool_size: 1,
+         pool: DBConnection.ConnectionPool,
+         connection_listeners: [self()]},
+        id: name
       )
+    )
 
-      assert_receive {:connected, _conn}, 5_000
-      test = self()
-      statement = long_statement(1_500)
+    assert_receive {:connected, _conn}, 5_000
+    test = self()
+    statement = long_statement(1_500)
 
-      writer =
-        spawn(fn ->
-          Arca.Repo.put_dynamic_repo(name)
+    writer =
+      spawn(fn ->
+        Arca.Repo.put_dynamic_repo(name)
 
-          Arca.Repo.checkout(
-            fn ->
-              send(test, :running)
-              Arca.Repo.query!(statement, [], log: false, timeout: :infinity)
-            end,
-            timeout: :infinity
+        Arca.Repo.checkout(
+          fn ->
+            send(test, :running)
+            Arca.Repo.query!(statement, [], log: false, timeout: :infinity)
+          end,
+          timeout: :infinity
+        )
+      end)
+
+    # Killed in its one native call, the statement it is stepping.
+    assert_receive :running, 5_000
+    await(fn -> stepping?(writer) end)
+    Process.exit(writer, :kill)
+
+    Task.start_link(fn ->
+      Arca.Repo.put_dynamic_repo(name)
+      Arca.Repo.checkout(fn -> send(test, :lent) end, timeout: 15_000)
+    end)
+
+    # The pool lends the one connection only after the dead writer's
+    # native call has returned and the driver has closed it, and the
+    # connection has come back: the pool reports each before it lends it,
+    # so they arrive in the order they happened. At most one native call
+    # outlives its writer per connection.
+    assert arrivals(3) == [:disconnected, :connected, :lent]
+  end
+
+  defp arrivals(0), do: []
+
+  defp arrivals(n) do
+    receive do
+      {:disconnected, _conn} -> [:disconnected | arrivals(n - 1)]
+      {:connected, _conn} -> [:connected | arrivals(n - 1)]
+      :lent -> [:lent | arrivals(n - 1)]
+    after
+      30_000 -> flunk("the pool reported nothing more")
+    end
+  end
+
+  # Inside the driver running a statement: stepping it, not preparing it.
+  defp stepping?(pid) do
+    case Process.info(pid, :current_function) do
+      {:current_function, {Exqlite.Sqlite3NIF, step, _arity}} -> step in [:step, :multi_step]
+      _elsewhere -> false
+    end
+  end
+
+  # A statement that runs inside the driver for about `ms`: a recursive
+  # count that inserts nothing, sized from a measured one.
+  defp long_statement(ms) do
+    Task.async(fn ->
+      {us, _} =
+        :timer.tc(fn ->
+          Arca.Repo.query!(
+            "WITH RECURSIVE c(x) AS (SELECT 1 UNION ALL SELECT x + 1 FROM c WHERE x < 500000) " <>
+              "SELECT count(*) FROM c WHERE x < 0"
           )
         end)
 
-      # Killed in its one native call, the statement it is stepping.
-      assert_receive :running, 5_000
-      await(fn -> stepping?(writer) end)
-      Process.exit(writer, :kill)
+      rows = max(ms * div(500_000 * 1_000, max(us, 1)), 1_000)
 
-      Task.start_link(fn ->
-        Arca.Repo.put_dynamic_repo(name)
-        Arca.Repo.checkout(fn -> send(test, :lent) end, timeout: 15_000)
-      end)
-
-      # The pool lends the one connection only after the dead writer's
-      # native call has returned and the driver has closed it, and the
-      # connection has come back: the pool reports each before it lends it,
-      # so they arrive in the order they happened. At most one native call
-      # outlives its writer per connection.
-      assert arrivals(3) == [:disconnected, :connected, :lent]
-    end
-
-    defp arrivals(0), do: []
-
-    defp arrivals(n) do
-      receive do
-        {:disconnected, _conn} -> [:disconnected | arrivals(n - 1)]
-        {:connected, _conn} -> [:connected | arrivals(n - 1)]
-        :lent -> [:lent | arrivals(n - 1)]
-      after
-        30_000 -> flunk("the pool reported nothing more")
-      end
-    end
-
-    # Inside the driver running a statement: stepping it, not preparing it.
-    defp stepping?(pid) do
-      case Process.info(pid, :current_function) do
-        {:current_function, {Exqlite.Sqlite3NIF, step, _arity}} -> step in [:step, :multi_step]
-        _elsewhere -> false
-      end
-    end
-
-    # A statement that runs inside the driver for about `ms`: a recursive
-    # count that inserts nothing, sized from a measured one.
-    defp long_statement(ms) do
-      Task.async(fn ->
-        {us, _} =
-          :timer.tc(fn ->
-            Arca.Repo.query!(
-              "WITH RECURSIVE c(x) AS (SELECT 1 UNION ALL SELECT x + 1 FROM c WHERE x < 500000) " <>
-                "SELECT count(*) FROM c WHERE x < 0"
-            )
-          end)
-
-        rows = max(ms * div(500_000 * 1_000, max(us, 1)), 1_000)
-
-        "WITH RECURSIVE c(x) AS (SELECT 1 UNION ALL SELECT x + 1 FROM c WHERE x < #{rows}) " <>
-          "SELECT count(*) FROM c WHERE x < 0"
-      end)
-      |> Task.await(:infinity)
-    end
+      "WITH RECURSIVE c(x) AS (SELECT 1 UNION ALL SELECT x + 1 FROM c WHERE x < #{rows}) " <>
+        "SELECT count(*) FROM c WHERE x < 0"
+    end)
+    |> Task.await(:infinity)
   end
 
   defp decision(call_id) do

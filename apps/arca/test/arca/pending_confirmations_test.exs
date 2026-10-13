@@ -715,6 +715,7 @@ defmodule Arca.PendingConfirmationsRaceTest do
   use ExUnit.Case, async: false
 
   import Ecto.Query
+  import Arca.Test.Adapter, only: [postgres?: 0]
 
   alias Arca.{ControlPlane, PairedClients, PendingConfirmations, SecurityTransitions}
 
@@ -729,6 +730,7 @@ defmodule Arca.PendingConfirmationsRaceTest do
     User
   }
 
+  alias Arca.Test.LockWait
   alias Ecto.Adapters.SQL.Sandbox
 
   @slot_keys [
@@ -741,7 +743,6 @@ defmodule Arca.PendingConfirmationsRaceTest do
 
   defp unboxed(fun), do: Sandbox.unboxed_run(Arca.Repo, fun)
   defp server, do: Prima.Actor.system()
-  defp postgres?, do: Arca.Repo.adapter() == Ecto.Adapters.Postgres
 
   setup do
     hold_slot!()
@@ -864,41 +865,6 @@ defmodule Arca.PendingConfirmationsRaceTest do
     if postgres?(), do: hd(hd(Arca.Repo.query!("SELECT pg_backend_pid()").rows))
   end
 
-  # On PostgreSQL, `backend` is blocked on a lock, at the gate (`:gate`) or
-  # in a statement naming every one of `fragments`.
-  defp await_wait!(backend, at, tries \\ 250) do
-    [[type, event, query]] =
-      unboxed(fn ->
-        Arca.Repo.query!(
-          "SELECT wait_event_type, wait_event, query FROM pg_stat_activity WHERE pid = $1",
-          [backend]
-        ).rows
-      end)
-
-    waiting? =
-      type == "Lock" and
-        case at do
-          :gate -> event == "advisory"
-          fragments -> event != "advisory" and Enum.all?(fragments, &String.contains?(query, &1))
-        end
-
-    cond do
-      waiting? ->
-        :ok
-
-      tries == 0 ->
-        flunk("backend #{backend} is not waiting at #{inspect(at)}: #{type} #{event} #{query}")
-
-      true ->
-        retry_wait!(backend, at, tries)
-    end
-  end
-
-  defp retry_wait!(backend, at, tries) do
-    Process.sleep(20)
-    await_wait!(backend, at, tries - 1)
-  end
-
   # A trigger that holds a connection which set `arca_test.gate` before
   # `table`'s next UPDATE statement, until the test opens the gate.
   defp install_gate!(table) do
@@ -988,7 +954,7 @@ defmodule Arca.PendingConfirmationsRaceTest do
           end)
 
         assert_receive {:denier, pid}, 5_000
-        await_wait!(pid, :gate)
+        LockWait.await_lock_wait!(pid, [~s(UPDATE "device_certificates")], event: "advisory")
         {denier, fn -> open_gate!(gate) end}
       else
         denier =
@@ -1025,7 +991,7 @@ defmodule Arca.PendingConfirmationsRaceTest do
       end)
 
     assert_receive {:confirmer, pid}, 5_000
-    if postgres?(), do: await_wait!(pid, [~s("paired_clients"), "FOR UPDATE"])
+    if postgres?(), do: LockWait.await_lock_wait!(pid, [~s("paired_clients"), "FOR UPDATE"])
     refute Task.yield(confirmer, 300), "the confirm decided while the denial held its client"
 
     release.()
@@ -1037,11 +1003,8 @@ defmodule Arca.PendingConfirmationsRaceTest do
              unboxed(fn -> Arca.Repo.get!(PendingConfirmation, record.id) end)
   end
 
-  if Arca.Repo.adapter() != Ecto.Adapters.Postgres do
-    @tag skip:
-           "the denial has no pause point here but a PostgreSQL trigger; SQLite's write lock orders it"
-  end
-
+  # The denial has no pause point here but a PostgreSQL trigger; SQLite's write lock orders it.
+  @tag :postgres
   test "a denial and a confirm through a passkey take the passkey before the record", %{
     actor: actor,
     user_id: user_id,
@@ -1113,7 +1076,7 @@ defmodule Arca.PendingConfirmationsRaceTest do
       end)
 
     assert_receive {:denier, pid}, 5_000
-    await_wait!(pid, :gate)
+    LockWait.await_lock_wait!(pid, [~s(UPDATE "pairing_invitations")], event: "advisory")
 
     confirmer =
       Task.async(fn ->

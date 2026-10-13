@@ -1019,9 +1019,11 @@ defmodule Arca.Providers.FilesRaceTest do
   use ExUnit.Case, async: false
 
   import Ecto.Query, only: [from: 2]
+  import Arca.Test.Adapter, only: [postgres?: 0]
 
   alias Arca.Providers.Files, as: Tool
   alias Arca.Schemas.{Athanor, FileOffer, FileReceipt}
+  alias Arca.Test.LockWait
   alias Ecto.Adapters.SQL.Sandbox
 
   # Listed out of filename order, so the rows' order in the table is not
@@ -1190,34 +1192,12 @@ defmodule Arca.Providers.FilesRaceTest do
   # side has decided nothing while the rows are held.
   defp await_waiting!(side, task, backend, recipient, offer_id) do
     cond do
-      postgres?() -> await_lock!(backend, [~s(FROM "file_offers"), "FOR UPDATE"])
+      postgres?() -> LockWait.await_lock_wait!(backend, [~s(FROM "file_offers"), "FOR UPDATE"])
       side == :accept -> await_custody!(recipient, offer_id)
       true -> :ok
     end
 
     refute Task.yield(task, 300), "#{side} decided while the offer's rows were held"
-  end
-
-  defp await_lock!(backend, fragments, tries \\ 250) do
-    [[type, event, query]] =
-      unboxed(fn ->
-        Arca.Repo.query!(
-          "SELECT wait_event_type, wait_event, query FROM pg_stat_activity WHERE pid = $1",
-          [backend]
-        ).rows
-      end)
-
-    cond do
-      type == "Lock" and Enum.all?(fragments, &String.contains?(query, &1)) ->
-        :ok
-
-      tries == 0 ->
-        flunk("backend #{backend} is not waiting at #{inspect(fragments)}: #{type} #{event}")
-
-      true ->
-        Process.sleep(20)
-        await_lock!(backend, fragments, tries - 1)
-    end
   end
 
   defp await_custody!(recipient, offer_id, tries \\ 250) do
@@ -1295,8 +1275,6 @@ defmodule Arca.Providers.FilesRaceTest do
     {:ok, _} = Arca.Members.seat(seat, %{user_id: user_id, added_by: "test"})
     :ok
   end
-
-  defp postgres?, do: Arca.Repo.adapter() == Ecto.Adapters.Postgres
 
   defp backend do
     if postgres?(), do: hd(hd(Arca.Repo.query!("SELECT pg_backend_pid()").rows))

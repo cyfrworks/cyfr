@@ -684,10 +684,12 @@ defmodule Arca.ScheduleOccurrencesTakeoverTest do
   use ExUnit.Case, async: false
 
   import Ecto.Query, only: [from: 2]
+  import Arca.Test.Adapter, only: [postgres?: 0]
 
   alias Arca.{ControlPlane, CronSchedule, ScheduleOccurrences}
   alias Arca.Schemas.{CellLease, ScheduleOccurrence}
   alias Arca.Schemas.CronSchedule, as: ScheduleRow
+  alias Arca.Test.LockWait
   alias Ecto.Adapters.SQL.Sandbox
 
   # Short enough to run out while the case waits; the setup is done under
@@ -854,7 +856,7 @@ defmodule Arca.ScheduleOccurrencesTakeoverTest do
         end)
 
       assert_receive {:backend, backend}, 15_000
-      await_lock_wait(backend)
+      LockWait.await_lock_wait!(backend, [], timeout_ms: 10_000)
       taken_over!(slot)
       release(holder, then)
       Task.await(writer, 30_000)
@@ -912,8 +914,6 @@ defmodule Arca.ScheduleOccurrencesTakeoverTest do
 
   defp unboxed(fun), do: Sandbox.unboxed_run(Arca.Repo, fun)
 
-  defp postgres?, do: Arca.Repo.adapter() == Ecto.Adapters.Postgres
-
   # Run `lock` in a transaction of its own and hold it open until
   # `release/2`, which runs its `then` in that transaction before it
   # commits.
@@ -946,25 +946,5 @@ defmodule Arca.ScheduleOccurrencesTakeoverTest do
   defp backend_pid do
     %{rows: [[pid]]} = Arca.Repo.query!("SELECT pg_backend_pid()")
     pid
-  end
-
-  # Holds until `pid`'s backend waits on a lock: an observed state, bounded
-  # by `tries`, never a timing.
-  defp await_lock_wait(pid, tries \\ 500)
-
-  defp await_lock_wait(_pid, 0), do: flunk("the stale write never waited on a lock")
-
-  defp await_lock_wait(pid, tries) do
-    %{rows: rows} =
-      unboxed(fn ->
-        Arca.Repo.query!("SELECT wait_event_type FROM pg_stat_activity WHERE pid = $1", [pid])
-      end)
-
-    if rows == [["Lock"]] do
-      :ok
-    else
-      Process.sleep(20)
-      await_lock_wait(pid, tries - 1)
-    end
   end
 end

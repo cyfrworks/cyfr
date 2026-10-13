@@ -1168,36 +1168,32 @@ defmodule Sanctum.Tenancy.MembersTest do
   defp fail_on!(table, event) do
     name = "mem_fail_#{table}_#{String.downcase(event)}"
 
-    case Arca.Repo.adapter() do
-      Ecto.Adapters.SQLite3 ->
-        Arca.Repo.query!(
-          "CREATE TRIGGER #{name} BEFORE #{event} ON #{table} " <>
-            "BEGIN SELECT RAISE(ABORT, 'injected #{event} failure'); END"
-        )
+    if Arca.Test.Adapter.sqlite?() do
+      Arca.Repo.query!(
+        "CREATE TRIGGER #{name} BEFORE #{event} ON #{table} " <>
+          "BEGIN SELECT RAISE(ABORT, 'injected #{event} failure'); END"
+      )
+    else
+      Arca.Repo.query!(
+        "CREATE FUNCTION #{name}() RETURNS trigger LANGUAGE plpgsql AS " <>
+          "$$ BEGIN RAISE EXCEPTION 'injected #{event} failure'; END $$"
+      )
 
-      _postgres ->
-        Arca.Repo.query!(
-          "CREATE FUNCTION #{name}() RETURNS trigger LANGUAGE plpgsql AS " <>
-            "$$ BEGIN RAISE EXCEPTION 'injected #{event} failure'; END $$"
-        )
-
-        Arca.Repo.query!(
-          "CREATE TRIGGER #{name} BEFORE #{event} ON #{table} " <>
-            "FOR EACH ROW EXECUTE FUNCTION #{name}()"
-        )
+      Arca.Repo.query!(
+        "CREATE TRIGGER #{name} BEFORE #{event} ON #{table} " <>
+          "FOR EACH ROW EXECUTE FUNCTION #{name}()"
+      )
     end
 
     {name, table}
   end
 
   defp clear_failure!({name, table}) do
-    case Arca.Repo.adapter() do
-      Ecto.Adapters.SQLite3 ->
-        Arca.Repo.query!("DROP TRIGGER #{name}")
-
-      _postgres ->
-        Arca.Repo.query!("DROP TRIGGER #{name} ON #{table}")
-        Arca.Repo.query!("DROP FUNCTION #{name}()")
+    if Arca.Test.Adapter.sqlite?() do
+      Arca.Repo.query!("DROP TRIGGER #{name}")
+    else
+      Arca.Repo.query!("DROP TRIGGER #{name} ON #{table}")
+      Arca.Repo.query!("DROP FUNCTION #{name}()")
     end
   end
 end
@@ -1223,8 +1219,10 @@ defmodule Sanctum.Tenancy.MembersCapRaceTest do
   use ExUnit.Case, async: false
 
   import Ecto.Query, only: [from: 2]
+  import Arca.Test.Adapter, only: [postgres?: 0]
 
   alias Arca.PlatformSettings, as: Store
+  alias Arca.Test.LockWait
   alias Ecto.Adapters.SQL.Sandbox
 
   @key "max_members_per_group"
@@ -1322,7 +1320,7 @@ defmodule Sanctum.Tenancy.MembersCapRaceTest do
 
         for _ <- adders do
           assert_receive {:backend, backend}, 15_000
-          await_lock_wait(backend)
+          LockWait.await_lock_wait!(backend, [], timeout_ms: 10_000)
         end
 
         release(holder)
@@ -1340,8 +1338,6 @@ defmodule Sanctum.Tenancy.MembersCapRaceTest do
   end
 
   defp unboxed(fun), do: Sandbox.unboxed_run(Arca.Repo, fun)
-
-  defp postgres?, do: Arca.Repo.adapter() == Ecto.Adapters.Postgres
 
   # Run `lock` in a transaction of its own and hold it open until
   # `release/1`.
@@ -1373,25 +1369,5 @@ defmodule Sanctum.Tenancy.MembersCapRaceTest do
   defp backend_pid do
     %{rows: [[pid]]} = Arca.Repo.query!("SELECT pg_backend_pid()")
     pid
-  end
-
-  # Holds until `pid`'s backend waits on a lock: an observed state, bounded
-  # by `tries`, never a timing.
-  defp await_lock_wait(pid, tries \\ 500)
-
-  defp await_lock_wait(_pid, 0), do: flunk("the waiting backend never waited on a lock")
-
-  defp await_lock_wait(pid, tries) do
-    %{rows: rows} =
-      unboxed(fn ->
-        Arca.Repo.query!("SELECT wait_event_type FROM pg_stat_activity WHERE pid = $1", [pid])
-      end)
-
-    if rows == [["Lock"]] do
-      :ok
-    else
-      Process.sleep(20)
-      await_lock_wait(pid, tries - 1)
-    end
   end
 end
