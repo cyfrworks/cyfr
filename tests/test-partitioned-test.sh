@@ -32,15 +32,37 @@ cleanup() {
   return "$result"
 }
 trap cleanup EXIT
-mkdir -p "$scratch/bin" "$scratch/tmp" "$scratch/trace"
+mkdir -p "$scratch/bin" "$scratch/tmp" "$scratch/trace" "$scratch/work"
 export TMPDIR="$scratch/tmp" TRACE="$scratch/trace"
+real_path=$PATH
 export PATH="$scratch/bin:$PATH"
+# The runner seeds and merges the failures record of the checkout it runs
+# in, so every run here is in a scratch directory, never this checkout.
+cd "$scratch/work"
+# Each runner starts as an outermost wrapper; the test's own processes stay
+# in the session and registry of the check that runs this file.
+clean=(env -u HEAVY_CHECK_HELD -u CONTAIN_REGISTRY -u CONTAIN_CLOSE_FDS -u CONTAIN_HOLD_FDS)
 export ERL_FLAGS='+S 2:2 +SDcpu 2 +SDio 2'
 cat > "$scratch/bin/mix" <<'FAKE'
 #!/usr/bin/env bash
 set -eu
 printf '%s\n' "$1 ${!#}" >> "$TRACE/mix-calls"
+printf '%s\t%s\n' "$1" "${ERL_FLAGS:-}" >> "$TRACE/erl-flags"
 [ "${MIX_OS_CONCURRENCY_LOCK:-}" = 0 ] || printf '%s\n' "$1 ${!#}" >> "$TRACE/mix-calls-with-build-lock"
+# The assignment: `mix run --no-start --no-compile HELPER assign DIR COUNT
+# TABLE REQUIRED FAILED -- NAMES...` writes DIR/assign/p1..pCOUNT, each the
+# partition's units, NUL-terminated. This one deals the named paths round
+# robin, or one unit to every partition when none is named.
+if [ "$1" = run ] && [ "${5:-}" = assign ]; then
+  dir=$6 count=$7
+  shift 11
+  if [ "$#" -eq 0 ]; then for ((p=1; p<=count; p++)); do set -- "$@" "stub_${p}_test.exs"; done; fi
+  mkdir -p "$dir/assign"
+  for ((p=1; p<=count; p++)); do : > "$dir/assign/p$p"; done
+  p=0
+  for unit in "$@"; do printf '%s\0' "$unit" >> "$dir/assign/p$((p % count + 1))"; p=$((p + 1)); done
+  exit 0
+fi
 case "$1" in
   compile)
     if [ "${DIAGNOSTIC_PHASE:-}" = compile ]; then
@@ -64,6 +86,11 @@ case "$1" in
         if [ "${PENDING_CREATE:-0}" = 1 ]; then touch "$CYFR_TEST_RUN_ROOT/database-create-pending"; fi ;;
 
       drop)
+        if [ "${HANG_DROP:-0}" = 1 ]; then
+          trap '' TERM
+          echo "$$" >> "$TRACE/drop-leaders"
+          while :; do sleep 1; done
+        fi
         [ "${NOOP_DROP:-0}" != 1 ] || exit 0
         echo "$CYFR_DATABASE_URL" >> "$TRACE/dropped"
         [ "${FAIL_CLEANUP:-0}" != 1 ] || exit 9
@@ -87,6 +114,24 @@ case "$1" in
       if [ "${DIAGNOSTIC_MULTI:-0}" = 1 ] && [ "$MIX_TEST_PARTITION" = 2 ]; then exit 2; fi
       exit "${DIAGNOSTIC_EXIT:-7}"
     fi
+    if [ "${TERM_RESISTANT:-0}" = 1 ]; then
+      trap '' TERM
+      echo "$$" >> "$TRACE/resistant-leaders"
+      while :; do sleep 1; done
+    fi
+    if [ "${GRANDCHILD:-0}" = 1 ]; then
+      # A grandchild in a process group of its own.
+      set -m
+      sleep 1000 &
+      echo "$!" >> "$TRACE/grandchildren"
+      set +m
+      wait
+    fi
+    if [ -n "${EMPTY_RUN:-}" ]; then
+      echo 'There are no tests to run'
+      [ "$EMPTY_RUN" != crash ] || echo '** (RuntimeError) the suite did not load'
+      exit 0
+    fi
     if [ "${WAIT_CHILD:-0}" = 1 ]; then
       sleep 1000 &
       echo "$!" > "$TRACE/sleeper"
@@ -99,7 +144,8 @@ case "$1" in
       echo LAST-FAILURE-LINE
       exit 7
     fi
-    echo 'Result: 1 test, 0 failures' ;;
+    echo 'Result: 1 test, 0 failures'
+    date +%s >> "$TRACE/tests-ended" ;;
   *) exit 88 ;;
 esac
 FAKE
@@ -126,7 +172,8 @@ exec "$REAL_ELIXIR" "$@"
 FAKE_ELIXIR
 chmod +x "$scratch/bin/mix" "$scratch/bin/elixir"
 fail() { echo "FAIL: $*" >&2; exit 1; }
-refuses() { if bash "$runner" "$@" >"$scratch/refusal" 2>&1; then fail "accepted $*"; fi; }
+refuses() { if "${clean[@]}" bash "$runner" "$@" >"$scratch/refusal" 2>&1; then fail "accepted $*"; fi; }
+status_of() { if "$@" >"$scratch/status" 2>&1; then echo 0; else echo "$?"; fi; }
 refuses -n
 refuses -a
 refuses -n 0
@@ -141,27 +188,27 @@ CYFR_TEST_CORES=0 refuses -n 1
 CYFR_TEST_CORES=many refuses -n 1
 
 # A caller's share of the cores sizes the partitions in place of the machine's.
-CYFR_TEST_CORES=6 bash "$runner" -n 2 >"$scratch/share" 2>&1 || fail 'a run on a share of the cores failed'
+CYFR_TEST_CORES=6 "${clean[@]}" bash "$runner" -n 2 >"$scratch/share" 2>&1 || fail 'a run on a share of the cores failed'
 grep -q '^==> compiling once (sqlite, 2 partitions, 3 schedulers each)$' "$scratch/share" || fail 'a share of the cores did not size the partitions'
 rm -f "$TRACE"/cyfr-t.*-p*
 
 # /bin/bash is Bash 3.2 on macOS; this specifically exercises empty "$@".
-/bin/bash "$runner" -n 2 >"$scratch/success" 2>&1
+"${clean[@]}" /bin/bash "$runner" -n 2 >"$scratch/success" 2>&1
 [ "$(find "$TRACE" -name 'cyfr-t.*-p*' -type f | wc -l | tr -d ' ')" = 2 ] || fail 'missing empty-argument partitions'
 for trace in "$TRACE"/cyfr-t.*-p*; do
   [ ! -e "$(sed -n '2p' "$trace")" ] || fail 'successful resources survived cleanup'
 done
 
 export CYFR_DATABASE_URL='postgres://u:do-not-print@host/base?ssl=true'
-bash "$runner" -n 2 -a postgres >"$scratch/a" 2>&1 &
+"${clean[@]}" bash "$runner" -n 2 -a postgres >"$scratch/a" 2>&1 &
 a=$!
-bash "$runner" -n 2 -a postgres >"$scratch/b" 2>&1 &
+"${clean[@]}" bash "$runner" -n 2 -a postgres >"$scratch/b" 2>&1 &
 b=$!
 wait "$a"; wait "$b"
 [ "$(sort -u "$TRACE/dropped" | wc -l | tr -d ' ')" = 4 ] || fail 'simultaneous runs reused databases'
 if grep -q 'do-not-print' "$scratch/a" "$scratch/b"; then fail 'credentials printed'; fi
 if grep -q '/base?' "$TRACE/dropped"; then fail 'base database dropped'; fi
-CYFR_CLUSTER_DATABASE_URL='postgres://u:p@host/cluster_base' bash "$runner" -n 1 -a postgres -- --only cluster >"$scratch/cluster" 2>&1
+CYFR_CLUSTER_DATABASE_URL='postgres://u:p@host/cluster_base' "${clean[@]}" bash "$runner" -n 1 -a postgres -- --only cluster >"$scratch/cluster" 2>&1
 cluster_trace=$(grep -l '^cluster$' "$TRACE"/*)
 [ "$(sed -n '3p' "$cluster_trace")" = "$(sed -n '4p' "$cluster_trace")" ] || fail 'cluster peers use different database'
 
@@ -201,21 +248,21 @@ noop_dir=$(sed -n 's/^==> logs and disposable resources kept: //p' "$scratch/ref
 [ -s "$noop_dir/p1/database-created" ] || fail 'no-op cleanup erased ownership evidence'
 
 # An inherited library switch cannot disable operational helper execution.
-CYFR_TEST_PARTITION_ENV_LIBRARY=1 bash "$runner" -n 1 -a postgres >"$scratch/library" 2>&1
+CYFR_TEST_PARTITION_ENV_LIBRARY=1 "${clean[@]}" bash "$runner" -n 1 -a postgres >"$scratch/library" 2>&1
 if grep -q '/base?' "$TRACE/dropped"; then fail 'library switch exposed base database'; fi
 
 # The parent may use a long TMPDIR with a trailing slash; socket fixtures
 # still need a short canonical path, with no doubled separator.
 long_tmp="$scratch/$(printf '%090d' 0)/tmp/"
 mkdir -p "$long_tmp"
-TMPDIR="$long_tmp" bash "$runner" -n 1 >"$scratch/long" 2>&1
+TMPDIR="$long_tmp" "${clean[@]}" bash "$runner" -n 1 >"$scratch/long" 2>&1
 for trace in "$TRACE"/cyfr-t.*-p*; do
   tmp=$(sed -n '1p' "$trace")
   [ "${#tmp}" -lt 50 ] || fail 'partition temp path leaves no room for UNIX socket names'
   case "$tmp" in *//*) fail 'noncanonical doubled path separator' ;; esac
 done
 
-WAIT_CHILD=1 bash "$runner" -n 1 -a postgres >"$scratch/cancel" 2>&1 &
+WAIT_CHILD=1 "${clean[@]}" bash "$runner" -n 1 -a postgres >"$scratch/cancel" 2>&1 &
 cancel=$!
 for ((i=0;i<200;i++)); do [ -f "$TRACE/ready" ] && break; sleep 0.05; done
 [ -f "$TRACE/ready" ] || fail 'child never started'
@@ -226,34 +273,23 @@ if kill -0 "$sleeper" 2>/dev/null; then fail 'cancelled child survived'; fi
 cancel_dir=$(sed -n 's/^==> logs and disposable resources kept: //p' "$scratch/cancel")
 [ ! -f "$cancel_dir/p1/database-created" ] || fail 'cancelled run database was not cleaned'
 
-# Mix splits test files per application and refuses a partition the named
-# paths give no file. Here apps/one's paths hold two test files (a helper
-# and a dot-directory's file are not tests) and apps/two's one, so four
-# partitions run as two: the first with both applications' paths, the
-# second with apps/one's alone, and the last two not at all. An option, its
-# value and a missing path reach every started partition unchanged.
+# More than one partition: each started partition is given every Mix
+# argument but the paths, then its own units; a partition left with none
+# is not started. The stub deals two named paths to partitions 1 and 2.
 tree="$scratch/tree"
-mkdir -p "$tree/apps/one/test/deep" "$tree/apps/one/test/.hidden" "$tree/apps/two/test" "$tree/apps/three/test"
-touch "$tree/apps/one/test/a_test.exs" "$tree/apps/one/test/deep/b_test.exs" "$tree/apps/one/test/test_helper.exs" \
-  "$tree/apps/one/test/.hidden/c_test.exs" "$tree/apps/two/test/only_test.exs" "$tree/apps/three/test/test_helper.exs"
-(cd "$tree" && bash "$runner" -n 4 -- --warnings-as-errors --only sparse apps/one/test ./apps/two/test/only_test.exs:12 \
-  apps/one/test/deep/b_test.exs:3 apps/two/missing_test.exs) >"$scratch/sparse" 2>&1 || fail 'sparse partitions failed'
+mkdir -p "$tree/apps/one/test" "$tree/apps/two/test"
+touch "$tree/apps/one/test/a_test.exs" "$tree/apps/two/test/only_test.exs"
+(cd "$tree" && "${clean[@]}" bash "$runner" -n 4 -- --warnings-as-errors --only sparse apps/one/test ./apps/two/test/only_test.exs:12) \
+  >"$scratch/sparse" 2>&1 || fail 'sparse partitions failed'
 partitions_with() { grep -lxF -- "$1" "$TRACE"/cyfr-t.*-p* 2>/dev/null | sed 's/.*-p//' | sort | tr '\n' ' '; }
-[ "$(partitions_with apps/one/test)" = '1 2 ' ] || fail "apps/one reached partitions $(partitions_with apps/one/test)"
-[ "$(partitions_with apps/one/test/deep/b_test.exs:3)" = '1 2 ' ] || fail 'a named file of apps/one missed its partitions'
-[ "$(partitions_with ./apps/two/test/only_test.exs:12)" = '1 ' ] || fail 'apps/two reached a partition its one file does not fall to'
-[ "$(partitions_with apps/two/missing_test.exs)" = '1 2 ' ] || fail 'a missing path did not pass through'
-[ "$(partitions_with sparse)" = '1 2 ' ] || fail 'an option value did not pass through'
+[ "$(partitions_with apps/one/test)" = '1 ' ] || fail "apps/one reached partitions $(partitions_with apps/one/test)"
+[ "$(partitions_with ./apps/two/test/only_test.exs:12)" = '2 ' ] || fail 'a named file missed its partition'
+[ "$(partitions_with sparse)" = '1 2 ' ] || fail 'an option value did not reach every started partition'
 for n in 3 4; do
   grep -A1 -x "==> partition $n/4" "$scratch/sparse" | grep -q 'not started' || fail "partition $n's account does not say it was not started"
 done
 grep -q '^==> 4 partitions (2 not started: ' "$scratch/sparse" || fail 'the run does not count the partitions it did not start'
 grep -q 'exit 0$' "$scratch/sparse" || fail 'a run with partitions not started did not pass'
-
-# A named path that holds no test file is every partition's, so Mix says
-# so as it would.
-(cd "$tree" && bash "$runner" -n 2 -- apps/three/test) >"$scratch/empty-app" 2>&1 || fail 'the empty-application run failed'
-[ "$(partitions_with apps/three/test)" = '1 2 ' ] || fail 'a path with no test file was withheld from a partition'
 # Every Mix process of a run has Mix's build lock off.
 [ -s "$TRACE/mix-calls" ] || fail 'no Mix call was traced'
 [ ! -e "$TRACE/mix-calls-with-build-lock" ] || fail "Mix ran with its build lock on: $(sort -u "$TRACE/mix-calls-with-build-lock" | tr '\n' ' ')"
@@ -320,8 +356,9 @@ chmod +x "$scratch/bin/git" "$scratch/bin/awk"
 # A genuine missing-command PATH retains the preparation VM and shell tools,
 # without a git executable. All links and fixtures belong to this test.
 mkdir "$scratch/no-git-bin"
-for tool in bash sh dirname basename mktemp nproc sysctl grep head tail sed sort wc tr cat rm \
-  sleep cmp find mkdir awk readlink uname cut expr getconf cp; do
+for tool in bash sh env dirname basename mktemp nproc sysctl grep head tail sed sort wc tr cat rm \
+  sleep cmp find mkdir awk readlink uname cut expr getconf cp date \
+  setsid pgrep pkill ps mkfifo chmod flock; do
   executable=$(command -v "$tool" || :)
   [ -z "$executable" ] || ln -s "$executable" "$scratch/no-git-bin/$tool"
 done
@@ -340,7 +377,7 @@ report_case() {
   printf '%s\n' "adapter=$adapter phase=$phase partitions=$parts expected=$expected" > "$scratch/cases/$case_name.command"
   cp "$scratch/diagnostic-input" "$scratch/cases/$case_name.input"
   if (cd "$fixture" && DIAGNOSTIC_PHASE="$phase" DIAGNOSTIC_INPUT="$scratch/diagnostic-input" \
-      bash "$runner" -n "$parts" -a "$adapter" -- --warnings-as-errors "$@") >"$account" 2>&1; then
+      "${clean[@]}" bash "$runner" -n "$parts" -a "$adapter" -- --warnings-as-errors "$@") >"$account" 2>&1; then
     result=0
   else
     result=$?
@@ -549,7 +586,7 @@ for adapter in sqlite postgres; do
     (cd "$standalone" && DIAGNOSTIC_GIT="$([ "$dependency" = git ] && echo wait || echo normal)" \
       DIAGNOSTIC_AWK="$([ "$dependency" = awk ] && echo wait || echo normal)" \
       DIAGNOSTIC_PHASE=test DIAGNOSTIC_INPUT="$scratch/diagnostic-input" \
-      exec bash "$runner" -n 1 -a "$adapter" -- --warnings-as-errors) >"$account" 2>&1 &
+      exec "${clean[@]}" bash "$runner" -n 1 -a "$adapter" -- --warnings-as-errors) >"$account" 2>&1 &
     report_cancel=$!
     for ((i=0;i<200;i++)); do [ -f "$TRACE/diagnostic-ready" ] && break; sleep 0.05; done
     [ -f "$TRACE/diagnostic-ready" ] || fail "$dependency reporting dependency never started"
@@ -567,4 +604,316 @@ for adapter in sqlite postgres; do
     echo "$adapter-cancel-$dependency passed (exit $result)"
   done
 done
+# --- containment, the terminal lines and admission -------------------------
+
+# lines_of OUT ARGS...: the runner in the background, so its pid is known.
+lines_of() {
+  local out=$1
+  shift
+  "${clean[@]}" bash "$runner" "$@" >"$out" 2>"$out.err" &
+  lines_pid=$!
+  if wait "$lines_pid"; then lines_status=0; else lines_status=$?; fi
+}
+lines_of "$scratch/lines" -n 1
+[ "$(head -n 1 "$scratch/lines")" = "_START=$lines_pid" ] || fail 'stdout does not begin with _START=<pid>'
+[ "$(tail -n 1 "$scratch/lines")" = "_EXIT=$lines_pid 0" ] || fail 'stdout does not end with _EXIT=<pid> 0'
+[ "$(grep -cE '^_(START|EXIT)=' "$scratch/lines")" = 2 ] || fail 'a run wrote more than two terminal lines'
+FAIL_CLEANUP=1 lines_of "$scratch/lines" -n 1 -a postgres
+[ "$lines_status" = 1 ] || fail "a run whose cleanup failed exited $lines_status"
+grep -q '^==> 1 partitions, postgres, .*, exit 0$' "$scratch/lines" || fail 'the summary does not report the status before cleanup'
+[ "$(tail -n 1 "$scratch/lines")" = "_EXIT=$lines_pid 1" ] || fail 'the terminal line does not carry the status cleanup set'
+lines_of "$scratch/lines" -n 2 -a postgres -- --only cluster
+{ [ "$lines_status" = 64 ] && [ "$(head -n 1 "$scratch/lines")" = "_START=$lines_pid" ] &&
+  [ "$(tail -n 1 "$scratch/lines")" = "_EXIT=$lines_pid 64" ]; } || fail 'a refusal after the options lacks its terminal lines'
+lines_of "$scratch/lines" -n 0
+{ [ "$lines_status" = 64 ] && [ ! -s "$scratch/lines" ]; } || fail 'an invalid -n wrote terminal lines'
+for mode in exclusive scoped; do
+  "${clean[@]}" HEAVY_CHECK_HELD=$mode bash "$runner" -n 1 >"$scratch/held" 2>&1 || fail "a run held $mode failed"
+  if grep -qE '_(START|EXIT)=' "$scratch/held"; then fail "terminal lines written under HEAVY_CHECK_HELD=$mode"; fi
+done
+
+# Scoped admission: a resolved count above one is refused before anything
+# is prepared.
+scoped() { status_of "${clean[@]}" HEAVY_CHECK_HELD=scoped bash "$runner" "$@"; }
+before=$(cat "$TRACE/prepared" "$TRACE/mix-calls" | wc -l)
+[ "$(scoped -n 4)" = 64 ] || fail 'a scoped run took four partitions'
+[ "$(scoped -n 1 -n 4)" = 64 ] || fail 'a scoped run took the last -n of four'
+[ "$(scoped -a sqlite -n 4)" = 64 ] || fail 'a scoped run took four partitions after -a'
+[ "$(scoped)" = 64 ] || fail 'a scoped run took the default count'
+[ "$(cat "$TRACE/prepared" "$TRACE/mix-calls" | wc -l)" = "$before" ] || fail 'a refused scoped run prepared or reached Mix'
+[ "$(scoped -a sqlite -n 1)" = 0 ] || fail 'a scoped run refused one partition'
+[ "$(scoped -n 4 -n 1)" = 0 ] || fail 'a scoped run refused a last -n of one'
+
+# --stale cannot be merged across partitions; the slot bound; a missing path.
+before=$(grep -c '^compile ' "$TRACE/mix-calls")
+[ "$(status_of "${clean[@]}" bash "$runner" -n 2 -- --stale)" = 64 ] || fail '--stale ran in two partitions'
+[ "$(status_of "${clean[@]}" bash "$runner" -n 33)" = 64 ] || fail 'thirty-three partitions were admitted'
+for parts in 1 2; do
+  [ "$(status_of "${clean[@]}" bash "$runner" -n "$parts" -- --seed 0 apps/no/such_test.exs:3)" = 64 ] ||
+    fail "a missing path was not refused with $parts partitions"
+  grep -q 'no such test path: apps/no/such_test.exs:3' "$scratch/status" || fail 'the refusal does not name the path'
+done
+[ "$(grep -c '^compile ' "$TRACE/mix-calls")" = "$before" ] || fail 'a refused run compiled'
+[ "$(status_of "${clean[@]}" bash "$runner" -n 1 -- --stale)" = 0 ] || fail '--stale in one partition was refused'
+
+# A zero exit without Result: is a failure, unless Mix said the --failed or
+# --stale selection is empty and nothing that means otherwise.
+[ "$(EMPTY_RUN=1 status_of "${clean[@]}" bash "$runner" -n 1 -- --failed)" = 0 ] || fail 'a valid empty rerun failed'
+grep -q 'no test to run: the --failed or --stale selection is empty' "$scratch/status" || fail 'the empty rerun was not named'
+[ "$(EMPTY_RUN=1 status_of "${clean[@]}" bash "$runner" -n 1)" = 1 ] || fail 'an empty run without --failed passed'
+grep -q 'NO RESULT' "$scratch/status" || fail 'an empty run without --failed was not called NO RESULT'
+[ "$(EMPTY_RUN=crash status_of "${clean[@]}" bash "$runner" -n 1 -- --failed)" = 1 ] || fail 'an empty rerun that raised passed'
+
+# The compile takes every core of the run's share; a partition its part.
+: > "$TRACE/erl-flags"
+CYFR_TEST_CORES=6 "${clean[@]}" bash "$runner" -n 2 >"$scratch/flags" 2>&1 || fail 'the scheduler run failed'
+[ "$(grep -c '^compile	+S 6:6 +SDcpu 6 +SDio 16 ' "$TRACE/erl-flags")" = 1 ] || fail "the compile did not see six cores: $(grep '^compile' "$TRACE/erl-flags")"
+[ "$(grep -c '^test	+S 3:3 +SDcpu 3 +SDio 16 ' "$TRACE/erl-flags")" = 2 ] || fail "a partition did not see its share: $(grep '^test' "$TRACE/erl-flags")"
+
+# A partition's grandchild in a process group of its own dies with the run,
+# on TERM and on INT. A background command of a shell without job control
+# starts with INT ignored, and Bash cannot trap a signal ignored at its
+# start, so the runner starts with INT's default restored.
+await_lines() {
+  local i
+  for ((i=0; i<600; i++)); do
+    [ "$(wc -l < "$1" 2>/dev/null || echo 0)" -ge "$2" ] && return 0
+    sleep 0.1
+  done
+  fail "$1 never reached $2 lines"
+}
+for signal in TERM INT; do
+  : > "$TRACE/grandchildren"
+  GRANDCHILD=1 "${clean[@]}" perl -e '$SIG{INT} = "DEFAULT"; exec @ARGV or die' bash "$runner" -n 2 >"$scratch/cancel-$signal" 2>&1 &
+  cancel=$!
+  await_lines "$TRACE/grandchildren" 2
+  kill -"$signal" "$cancel"
+  if wait "$cancel"; then result=0; else result=$?; fi
+  case "$signal" in TERM) [ "$result" = 143 ] ;; INT) [ "$result" = 130 ] ;; esac || fail "$signal ended the run with $result"
+  while read -r grandchild; do
+    if kill -0 "$grandchild" 2>/dev/null; then fail "a partition's grandchild outlived $signal"; fi
+  done < "$TRACE/grandchildren"
+done
+
+# The runner SIGKILLed: its watchdogs stop every partition, its directory
+# is kept, and the next run names it.
+: > "$TRACE/grandchildren"
+GRANDCHILD=1 "${clean[@]}" bash "$runner" -n 2 >"$scratch/killed" 2>&1 &
+killed=$!
+await_lines "$TRACE/grandchildren" 2
+killed_dir=$(tail -n 1 "$TRACE/prepared")
+kill -KILL "$killed"
+wait "$killed" 2>/dev/null || :
+for ((i=0; i<300; i++)); do
+  live=false
+  while read -r grandchild; do kill -0 "$grandchild" 2>/dev/null && live=true; done < "$TRACE/grandchildren"
+  [ "$live" = true ] || break
+  sleep 0.1
+done
+[ "$live" = false ] || fail 'a partition outlived its SIGKILLed runner'
+[ -e "$killed_dir/p1.env" ] || fail 'the killed run did not keep its directory'
+"${clean[@]}" bash "$runner" -n 1 >"$scratch/after-kill" 2>&1 || fail 'the run after a killed one failed'
+grep -qF "a stopped run kept its directory and its partitions' disposable database URLs: $killed_dir" "$scratch/after-kill" ||
+  fail 'the next run did not name the killed run'
+
+# Eight TERM-resistant partition leaders are stopped together: within C1's
+# 45 s bound for `contain_stop_all 30`, not one after another (8 x 30 s).
+: > "$TRACE/resistant-leaders"
+TERM_RESISTANT=1 "${clean[@]}" bash "$runner" -n 8 >"$scratch/resistant" 2>&1 &
+resistant=$!
+await_lines "$TRACE/resistant-leaders" 8
+sent=$SECONDS
+kill -TERM "$resistant"
+if wait "$resistant"; then result=0; else result=$?; fi
+took=$((SECONDS - sent))
+[ "$result" = 143 ] || fail "TERM ended the resistant run with $result"
+[ "$took" -le 50 ] || fail "stopping eight resistant partitions took ${took}s"
+while read -r leader; do
+  if kill -0 "$leader" 2>/dev/null; then fail 'a TERM-resistant partition leader survived'; fi
+done < "$TRACE/resistant-leaders"
+echo "eight resistant partitions stopped in ${took}s"
+
+# Eight hanging drops are stopped together, within 70 s (45 + 10 + 15) of
+# the partitions' end, and every environment file goes.
+: > "$TRACE/drop-leaders"
+: > "$TRACE/tests-ended"
+if HANG_DROP=1 "${clean[@]}" bash "$runner" -n 8 -a postgres >"$scratch/hung-drops" 2>&1; then fail 'a run whose drops hung passed'; else result=$?; fi
+took=$(( $(date +%s) - $(sort -n "$TRACE/tests-ended" | tail -n 1) ))
+[ "$result" = 1 ] || fail "the hung drops ended the run with $result"
+[ "$(wc -l < "$TRACE/drop-leaders")" = 8 ] || fail 'not every drop started'
+[ "$took" -le 75 ] || fail "eight hung drops took ${took}s after the partitions ended"
+while read -r leader; do
+  if kill -0 "$leader" 2>/dev/null; then fail 'a hung drop survived'; fi
+done < "$TRACE/drop-leaders"
+hung_dir=$(sed -n 's/^==> logs and disposable resources kept: //p' "$scratch/hung-drops")
+[ -d "$hung_dir" ] || fail 'the hung drops kept no directory'
+for ((i=1; i<=8; i++)); do
+  [ ! -e "$hung_dir/p$i.env" ] || fail "partition $i's environment survived its hung drop"
+done
+echo "eight hung drops stopped ${took}s after the partitions ended"
+
+# --- real Mix: the failures record and the split ----------------------------
+# A two-application umbrella with no dependencies, its failures record
+# configured as config/test.exs configures CYFR's, run through a `mix` that
+# records each partition's arguments and runs the real one.
+toy="$scratch/toy"
+mkdir -p "$toy/config" "$scratch/realbin"
+cat > "$toy/mix.exs" <<'TOY'
+defmodule Toy.MixProject do
+  use Mix.Project
+  def project, do: [apps_path: "apps", apps: [:one, :two], version: "0.1.0", deps: []]
+end
+TOY
+cat > "$toy/config/config.exs" <<'TOY'
+import Config
+
+umbrella_root = Path.expand("..", __DIR__)
+
+config :ex_unit,
+  failures_manifest_path:
+    if(System.get_env("CYFR_TEST_RUN_ROOT"),
+      do: Path.join(System.get_env("CYFR_TEST_RUN_ROOT"), "failures"),
+      else:
+        Path.join(
+          Path.expand(System.get_env("MIX_BUILD_PATH") || "_build/test", umbrella_root),
+          "test_failures"
+        )
+    )
+TOY
+for app in one two; do
+  mkdir -p "$toy/apps/$app/lib" "$toy/apps/$app/test"
+  module=One
+  [ "$app" = one ] || module=Two
+  ignore=
+  [ "$app" = one ] || ignore=', test_ignore_filters: [&String.starts_with?(&1, "test/cluster/support/")]'
+  cat > "$toy/apps/$app/mix.exs" <<TOY
+defmodule $module.MixProject do
+  use Mix.Project
+  def project, do: [app: :$app, version: "0.1.0", build_path: "../../_build", config_path: "../../config/config.exs", deps_path: "../../deps", lockfile: "../../mix.lock", elixirc_paths: ["lib"]$ignore]
+end
+TOY
+  echo "defmodule $module do end" > "$toy/apps/$app/lib/$app.ex"
+  echo 'ExUnit.start()' > "$toy/apps/$app/test/test_helper.exs"
+done
+# A and B fail until their files exist; C, D and E pass.
+for test in a:one b:two; do
+  name=${test%%:*} app=${test#*:}
+  printf 'defmodule %sTest do\n  use ExUnit.Case\n  test "%s", do: assert(File.exists?(Path.expand("../../../fix_%s", __DIR__)))\nend\n' \
+    "$(printf '%s' "$name" | tr a-z A-Z)" "$name" "$name" > "$toy/apps/$app/test/${name}_test.exs"
+done
+printf 'defmodule CTest do\n  use ExUnit.Case\n  test "c", do: assert(true)\nend\n' > "$toy/apps/one/test/c_test.exs"
+printf 'defmodule DTest do\n  use ExUnit.Case\n  test "d", do: assert(true)\nend\n' > "$toy/apps/one/test/d_test.exs"
+mkdir -p "$toy/apps/two/test/sub" "$toy/apps/two/test/cluster/support"
+printf 'defmodule ETest do\n  use ExUnit.Case\n  test "e", do: assert(true)\nend\n' > "$toy/apps/two/test/sub/e_test.exs"
+# The copy of CYFR's cluster support: under a test path, matched by no load
+# filter, ignored by the application's ignore filter, so never a test and
+# never misnamed.
+printf 'raise "support loaded as a test"\n' > "$toy/apps/two/test/cluster/support/peer.exs"
+real_mix=$(PATH=$real_path command -v mix)
+toy_trace="$scratch/toy-trace"
+cat > "$scratch/realbin/mix" <<SHIM
+#!/usr/bin/env bash
+if [ "\$1" = test ]; then printf '%s\n' "\${MIX_TEST_PARTITION:-?} \${*:2}" >> "$toy_trace"; fi
+exec "$real_mix" "\$@"
+SHIM
+chmod +x "$scratch/realbin/mix"
+weights="$scratch/weights.tsv"
+printf '# the toy umbrella\n10\tapps/one/test/a_test.exs\n9\tapps/two/test/b_test.exs\n1\tapps/one/test/c_test.exs\n1\tapps/one/test/d_test.exs\n1\tapps/two/test/sub/e_test.exs\n' > "$weights"
+
+# toy_run OUT ARGS...: the runner in the toy umbrella; sets toy_status.
+toy_run() {
+  local out=$1
+  shift
+  : > "$toy_trace"
+  if (cd "$toy" && PATH="$scratch/realbin:$real_path" "${clean[@]}" -u MIX_BUILD_PATH bash "$runner" "$@") >"$out" 2>&1; then
+    toy_status=0
+  else
+    toy_status=$?
+  fi
+  printf '%s\n' "toy $* -> $toy_status"
+}
+# The canonical record's test names, sorted: "a b", or "-" when empty.
+toy_record() {
+  (cd "$toy" && PATH=$real_path elixir -e '
+    {1, record} = "_build/test/test_failures" |> File.read!() |> :erlang.binary_to_term()
+    names = record |> Map.keys() |> Enum.map(fn {_, name} -> String.trim_leading(to_string(name), "test ") end)
+    IO.puts(if names == [], do: "-", else: names |> Enum.sort() |> Enum.join(" "))')
+}
+# The test files partition $1 was given, sorted, space-separated.
+toy_files() {
+  grep "^$1 " "$toy_trace" | tr ' ' '\n' | grep '_test\.exs' | sed 's|.*/||' | sort | tr '\n' ' ' || :
+}
+
+export CYFR_TEST_WEIGHTS="$weights"
+toy_run "$scratch/toy-1" -n 2 -- --warnings-as-errors
+[ "$toy_status" = 1 ] || fail 'the toy run with two failing tests passed'
+[ "$(toy_record)" = 'a b' ] || fail "the record after the first run is $(toy_record)"
+[ "$(toy_files 1)" = 'a_test.exs d_test.exs ' ] || fail "partition 1 had $(toy_files 1)"
+[ "$(toy_files 2)" = 'b_test.exs c_test.exs e_test.exs ' ] || fail "partition 2 had $(toy_files 2)"
+toy_run "$scratch/toy-2" -n 2 -- --warnings-as-errors --failed
+[ "$toy_status" = 1 ] || fail 'the rerun of two failing tests passed'
+{ [ "$(toy_files 1)" = 'a_test.exs ' ] && [ "$(toy_files 2)" = 'b_test.exs ' ]; } || fail "--failed assigned $(toy_files 1)/ $(toy_files 2)"
+[ "$(grep -c '^Result: 0/1 passed' "$scratch/toy-2")" = 2 ] || fail 'the rerun did not run A and B'
+[ "$(toy_record)" = 'a b' ] || fail "the record after the rerun is $(toy_record)"
+touch "$toy/fix_a"
+toy_run "$scratch/toy-3" -n 2 -- --warnings-as-errors --failed
+[ "$toy_status" = 1 ] || fail 'the rerun with B failing passed'
+{ [ "$(toy_files 1)" = 'a_test.exs ' ] && [ "$(toy_files 2)" = 'b_test.exs ' ]; } || fail 'the rerun after fixing A did not run A and B'
+[ "$(toy_record)" = b ] || fail "the record after fixing A is $(toy_record)"
+touch "$toy/fix_b"
+toy_run "$scratch/toy-4" -n 2 -- --warnings-as-errors --failed
+[ "$toy_status" = 0 ] || fail 'the rerun after fixing B failed'
+{ [ "$(toy_files 1)" = 'b_test.exs ' ] && [ "$(toy_files 2)" = '' ]; } || fail "the rerun after fixing B ran $(toy_files 1)/ $(toy_files 2)"
+[ "$(toy_record)" = - ] || fail "the record after fixing B is $(toy_record)"
+toy_run "$scratch/toy-5" -n 2 -- --warnings-as-errors --failed
+[ "$toy_status" = 0 ] || fail 'the empty rerun failed'
+grep -qx '==> no partition started: the failures record names no test' "$scratch/toy-5" || fail 'the empty rerun was not named'
+grep -q '^==> 2 partitions (2 not started: ' "$scratch/toy-5" || fail 'the empty rerun did not count its partitions as not started'
+[ ! -s "$toy_trace" ] || fail 'the empty rerun started a partition'
+toy_run "$scratch/toy-6" -n 1 -- --warnings-as-errors --failed
+[ "$toy_status" = 0 ] || fail 'the empty one-partition rerun failed'
+grep -q 'There are no tests to run' "$scratch/toy-6" || grep -q 'no test to run' "$scratch/toy-6" || fail 'the one-partition rerun ran tests'
+[ "$(cat "$toy_trace")" = '1 --no-compile --warnings-as-errors --failed' ] || fail "one partition was given $(cat "$toy_trace")"
+toy_run "$scratch/toy-7" -n 2 -- --only nosuchtag
+[ "$toy_status" = 1 ] || fail '--only selecting nothing passed'
+grep -qx '==> the --only or --name-pattern selection ran no test' "$scratch/toy-7" || fail 'the empty --only selection was not named'
+
+# The split: every file once, the same twice, the heaviest first, nothing
+# of the ignored support; one partition passes its arguments through.
+toy_run "$scratch/toy-8" -n 2 -- --warnings-as-errors
+[ "$toy_status" = 0 ] || fail 'the passing toy run failed'
+first=$(cat "$toy_trace")
+[ "$(toy_files 1)$(toy_files 2)" = 'a_test.exs d_test.exs b_test.exs c_test.exs e_test.exs ' ] || fail 'the split is not the weighted one'
+[ "$(grep -o '[a-z_/]*_test\.exs' "$toy_trace" | sort | uniq -d)" = '' ] || fail 'a file was assigned twice'
+if grep -q 'cluster/support' "$toy_trace"; then fail 'an ignored file was assigned'; fi
+toy_run "$scratch/toy-9" -n 2 -- --warnings-as-errors
+[ "$(cat "$toy_trace")" = "$first" ] || fail 'the same inputs were split differently'
+toy_run "$scratch/toy-10" -n 1 -- --warnings-as-errors --seed 0 apps/one/test
+[ "$(cat "$toy_trace")" = '1 --no-compile --warnings-as-errors --seed 0 apps/one/test' ] || fail "one partition was given $(cat "$toy_trace")"
+# A directory and a file outside it, and a file inside it: each file once.
+toy_run "$scratch/toy-11" -n 2 -- --warnings-as-errors apps/one/test apps/two/test/b_test.exs apps/one/test/c_test.exs
+[ "$toy_status" = 0 ] || fail 'the directory-and-files run failed'
+[ "$(toy_files 1)$(toy_files 2)" = 'a_test.exs d_test.exs b_test.exs c_test.exs ' ] || fail "a directory and files were split as $(toy_files 1)/ $(toy_files 2)"
+toy_run "$scratch/toy-12" -n 2 -- apps/one/lib
+[ "$toy_status" = 1 ] && grep -qx '==> no test file in the named paths' "$scratch/toy-12" || fail 'a path without a test file did not fail'
+# The table: absent, equal weights in path order; named but missing, or
+# malformed, refused.
+unset CYFR_TEST_WEIGHTS
+toy_run "$scratch/toy-13" -n 2 -- --warnings-as-errors
+[ "$(toy_files 1)" = 'a_test.exs d_test.exs e_test.exs ' ] || fail "equal weights gave partition 1 $(toy_files 1)"
+[ "$(toy_files 2)" = 'b_test.exs c_test.exs ' ] || fail "equal weights gave partition 2 $(toy_files 2)"
+CYFR_TEST_WEIGHTS="$scratch/absent.tsv" toy_run "$scratch/toy-14" -n 2
+[ "$toy_status" = 64 ] || fail 'a missing named table was not refused'
+printf '10 apps/one/test/a_test.exs\n' > "$scratch/malformed.tsv"
+CYFR_TEST_WEIGHTS="$scratch/malformed.tsv" toy_run "$scratch/toy-15" -n 2
+[ "$toy_status" = 64 ] || fail 'a malformed table was not refused'
+# A misnamed file under test/ warns, and fails under --warnings-as-errors.
+touch "$toy/apps/one/test/oops_tests.exs"
+toy_run "$scratch/toy-16" -n 2
+[ "$toy_status" = 0 ] && grep -q '^==> test files that neither the load nor the ignore filters classify:' "$scratch/toy-16" ||
+  fail 'a misnamed file did not warn'
+toy_run "$scratch/toy-17" -n 2 -- --warnings-as-errors
+[ "$toy_status" = 1 ] && grep -qx '==> refused under --warnings-as-errors, as Mix refuses them' "$scratch/toy-17" ||
+  fail 'a misnamed file passed under --warnings-as-errors'
+rm "$toy/apps/one/test/oops_tests.exs"
 echo 'partition runner tests passed'

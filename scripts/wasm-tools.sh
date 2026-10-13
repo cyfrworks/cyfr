@@ -52,7 +52,7 @@ name="wasm-tools-$VERSION-$arch-linux"
 work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
 
-curl --proto '=https' --tlsv1.2 -sSfL -o "$work/$name.tar.gz" \
+curl --proto '=https' --tlsv1.2 -sSfL --max-time 120 --connect-timeout 20 -o "$work/$name.tar.gz" \
   "https://github.com/bytecodealliance/wasm-tools/releases/download/v$VERSION/$name.tar.gz"
 echo "$sha  $work/$name.tar.gz" | sha256sum -c --quiet -
 tar -xzf "$work/$name.tar.gz" -C "$work"
