@@ -25,7 +25,9 @@ cleanup() {
   rm -rf "$scratch"
 }
 trap cleanup EXIT
-unset GATE_STEP_DEADLINE MIX_TEST_PARTITION
+# The gate's own environment is what each case gives it: an exporting
+# shell would otherwise change the build-path assertions.
+unset GATE_STEP_DEADLINE MIX_TEST_PARTITION MIX_ENV CYFR_DATABASE MIX_BUILD_PATH
 fail() { echo "FAIL: $*" >&2; exit 1; }
 # A bounded wait on an observable condition: `until_true 10 test -e file`.
 until_true() {
@@ -132,10 +134,19 @@ no_line '^_(START|EXIT)=' "$scratch/scoped.out" || fail 'a refused scoped gate w
 no_mix_ran scoped || fail 'a refused scoped gate ran Mix'
 echo 'ok: scoped refusal'
 
-# --- a zero step deadline ------------------------------------------------------
-run_gate zero GATE_STEP_DEADLINE=0 -- "$gate" -l "$scratch/zero.log"; [ "$gate_rc" = 64 ] || fail 'the gate accepted a zero step deadline'
-framed zero "$gate_pid" 64
-echo 'ok: zero step deadline'
+# --- step deadlines the containment library cannot take ------------------------
+# Zero, and seven digits where contain_wait takes six: refused with 64
+# before the log directory, the install or any leg.
+for spec in zero:0 long:1234567; do
+  name=${spec%%:*}
+  run_gate "deadline-$name" GATE_STEP_DEADLINE="${spec#*:}" -- "$gate" -l "$scratch/deadline-$name.log"
+  [ "$gate_rc" = 64 ] || fail "the gate accepted the step deadline ${spec#*:}: $gate_rc"
+  framed "deadline-$name" "$gate_pid" 64
+  has_line 'GATE_STEP_DEADLINE must be' "$scratch/deadline-$name.err" || fail "the step deadline ${spec#*:} was refused without its reason"
+  [ ! -e "$scratch/deadline-$name.log" ] || fail "a refused step deadline ${spec#*:} made its log directory"
+  no_mix_ran "deadline-$name" || fail "a refused step deadline ${spec#*:} started a leg"
+done
+echo 'ok: step deadlines out of range'
 
 # --- the log directory ---------------------------------------------------------
 echo text > "$scratch/a-file"
@@ -179,6 +190,46 @@ framed nosetsid "$gate_pid" 69
 has_line 'needs setsid' "$scratch/nosetsid.err" || fail "a gate without setsid or perl gave no reason: $(cat "$scratch/nosetsid.err")"
 no_mix_ran nosetsid || fail 'a gate without setsid or perl went on to the legs'
 echo 'ok: a refused start'
+
+# --- a leg run alone ----------------------------------------------------------------
+# start_leg NAME LEG [VAR=value...]: the leg as the gate starts it, with a
+# fresh log directory and the gate's options in its environment.
+start_leg() {
+  local name=$1 leg=$2
+  shift 2
+  mkdir -p "$scratch/$name.log"
+  start_gate "$name" GATE_LEG_LOGDIR="$scratch/$name.log" GATE_LEG_PARTS=2 GATE_LEG_CLOSE=false "$@" -- "$gate" --leg "$leg"
+}
+# A selection git cannot read fails the postgres leg after its compile,
+# with its marker, and no test runs.
+start_leg pgread postgres GIT_DIR=/nonexistent
+gate_status "$gate_pid"
+[ "$gate_rc" = 1 ] || fail "a postgres leg whose selection could not be read exited $gate_rc"
+[ "$(tr '\n' ' ' < "$scratch/pgread.log/postgres.summary")" = 'compile_pg_test=0 pg_selection_read=1 ' ] ||
+  fail "an unreadable selection was not recorded: $(tr '\n' ' ' < "$scratch/pgread.log/postgres.summary")"
+[ -e "$scratch/pgread.log/postgres.done" ] || fail 'the postgres leg left no marker after an unreadable selection'
+[ "$(awk -F'|' '{ print $6 }' "$scratch/pgread.trace/mix.calls")" = 'compile --force --warnings-as-errors' ] ||
+  fail "the postgres leg ran more than its compile: $(tr '\n' ' ' < "$scratch/pgread.trace/mix.calls")"
+no_line '^_(START|EXIT)=' "$scratch/pgread.out" || fail 'a leg wrote a terminal line'
+# An island phase the containment library refuses ends the leg with the
+# refusal, as a refused step does: 64 on a bad descriptor base, 69 with
+# neither setsid nor perl. The static leg's marker is there, so the
+# islands start at once.
+for spec in fd64:64:CONTAIN_FD_BASE=x "path69:69:PATH=$scratch/nosetsid"; do
+  name=${spec%%:*}; rest=${spec#*:}; want=${rest%%:*}
+  mkdir -p "$scratch/$name.log"
+  : > "$scratch/$name.log/static.done"
+  start_leg "$name" islands "${rest#*:}"
+  gate_status "$gate_pid"
+  [ "$gate_rc" = "$want" ] || fail "an islands leg whose phase was refused with $want exited $gate_rc: $(cat "$scratch/$name.err")"
+  for isl in prima arca sanctum; do
+    has_line "^${isl}_refused=$want\$" "$scratch/$name.log/islands.summary" || fail "the refused $isl island was not recorded: $(tr '\n' ' ' < "$scratch/$name.log/islands.summary")"
+  done
+  [ -e "$scratch/$name.log/islands.done" ] || fail 'the islands leg left no marker after a refused phase'
+  [ -z "$(find "$scratch/$name.log" -maxdepth 1 -name 'island_*')" ] || fail "a refused island's copy was left behind"
+  no_mix_ran "$name" || fail 'a refused island phase ran Mix'
+done
+echo 'ok: a leg run alone: an unreadable selection, refused island phases'
 
 # --- the PostgreSQL selection ----------------------------------------------------
 selection() { (cd "$1" && . "$gate" && pg_selection); }

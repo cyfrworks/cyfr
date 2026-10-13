@@ -52,14 +52,16 @@
 # partition holds twenty connections, so the server allows twenty times
 # the count and the cluster suite's besides: 400 on the verification host.
 # -l names a log directory that does not exist yet or is empty; anything
-# else is refused with 64 before any leg starts. Without -l the gate makes
-# a fresh one.
+# else is refused with 64 before any leg starts. A relative LOGDIR
+# resolves against the caller's directory. Without -l the gate makes a
+# fresh one.
 # Every step runs in a session of its own (scripts/lib/contain.sh) under a
 # deadline, several times what it takes on a quiet host: a step that
 # reaches it is stopped with everything it started, recorded as
 # `name=124`, and fails its leg, so a stalled check ends the gate instead
-# of keeping the host. GATE_STEP_DEADLINE=SECONDS gives every step that one
-# deadline. Each leg is this script run in a session of its own, so a
+# of keeping the host. GATE_STEP_DEADLINE=SECONDS (positive, at most six
+# decimal digits, as the containment library takes) gives every step that
+# one deadline. Each leg is this script run in a session of its own, so a
 # gate that is killed outright still has its legs and their steps stopped
 # by their watchdogs. Stopping the gate (INT, TERM) stops its legs, each
 # leg its steps first, and the gate exits 130 or 143.
@@ -242,6 +244,9 @@ island_phase() {
     fi
   else
     status=$?
+    # The leg reads this back and exits with the refusal, as a refused
+    # step makes it.
+    echo "${name}_refused=$status" >> "$LOGDIR/islands.summary"
     echo "==> islands.$name could not start its $phase phase: $(tail -n 1 "$ISLAND_LOG")" >&2
   fi
   return "$status"
@@ -340,6 +345,9 @@ leg_islands() {
   if $CLOSE; then
     run_islands 'locus apps/prima apps/locus tests/fixtures config/locus_runtime.exs' || status=1
   fi
+  # An island runs in a subshell of the leg, so its refused start comes
+  # back through the summary.
+  [ -n "$REFUSED" ] || REFUSED=$(sed -n 's/^[a-z_]*_refused=//p' "$LOGDIR/islands.summary" 2>/dev/null | head -n 1)
   return $status
 }
 
@@ -419,14 +427,15 @@ if [ "${1:-}" = --leg ]; then
   [ -d "$LOGDIR" ] || { echo 'a leg runs only under the gate' >&2; exit 64; }
   cd "$ROOT" || exit 1
   unset MIX_BUILD_PATH
+  # The gate stops a leg with TERM, through contain_stop_all. A leg starts
+  # as an asynchronous child with SIGINT ignored, so it cannot trap INT.
   leg_signal() {
-    trap '' INT TERM
+    trap '' TERM
     stop_islands
     contain_stop_all 180 >/dev/null || :
-    exit "$1"
+    exit 143
   }
-  trap 'leg_signal 130' INT
-  trap 'leg_signal 143' TERM
+  trap leg_signal TERM
   "leg_$leg"; s=$?
   : > "$LOGDIR/$leg.done"
   if [ -n "$REFUSED" ]; then exit "$REFUSED"; fi
@@ -484,7 +493,9 @@ trap 'gate_signal 130' INT
 trap 'gate_signal 143' TERM
 if $TERMINAL; then echo "_START=$$"; STARTED=true; fi
 
-case "${GATE_STEP_DEADLINE:-1}" in ''|*[!0-9]*|0*) echo 'GATE_STEP_DEADLINE must be positive decimal seconds' >&2; exit 64 ;; esac
+case "${GATE_STEP_DEADLINE:-1}" in
+  ''|*[!0-9]*|0*|???????*) echo 'GATE_STEP_DEADLINE must be positive decimal seconds, at most six digits' >&2; exit 64 ;;
+esac
 
 # A log directory holds this run's logs alone, so the verdict reads
 # nothing an earlier run left.
