@@ -804,5 +804,6 @@ if [ "$skipped" -gt 0 ]; then
 else
   echo "==> $PARTITIONS partitions, $ADAPTER, $((SECONDS - start))s wall, exit $status"
 fi
-completed=true
+# Only a passing main path may report 0.
+[ "$status" != 0 ] || completed=true
 exit "$status"
