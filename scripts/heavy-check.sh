@@ -20,8 +20,8 @@
 # therefore takes the host once per repetition, and the checks queued
 # behind it run in between. QUEUE (default 7200 s) bounds the wait for
 # the host: at the deadline the command has not run and the exit is 75.
-# INT and TERM stop the command and exit 130 and 143. Otherwise the exit
-# is the command's own.
+# HUP, INT and TERM stop the command and exit 129, 130 and 143. Otherwise
+# the exit is the command's own.
 #
 # The command runs contained (scripts/lib/contain.sh) as the leader of a
 # session of its own, without the lock descriptors, and every session
@@ -30,19 +30,23 @@
 # registry are stopped, within HEAVY_CHECK_GRACE (default 300 s) plus
 # 15 s each. If this script is killed outright, the watchdog keeps the
 # host until the same sessions are stopped. A process that outlives KILL
-# turns a 0 into 1 and is waited for up to 60 s more before the host is
-# handed on; the last stderr line names any that remain.
+# turns a 0 into 1: this script waits up to 60 s more for it, its last
+# stderr line names any that remain, and the watchdog then keeps the host
+# for up to HEAVY_CHECK_GRACE plus 15 s more while it stops them again.
 #
 # Stdout carries two lines that frame the run, after option parsing:
 # `_START=<pid>` first and `_EXIT=<pid> <status>` last, on its own line,
 # where pid is this script's. scripts/await-task.sh reads them. A check
 # started inside a check runs its command in place and writes neither.
+# The line says 0 only when the command's own 0 was the end of the run:
+# an exit any other way, such as a signal Bash dies of after the EXIT
+# trap, says 128 + the signal's number where it is known, else 1.
 #
 # Lines beginning `==> heavy-check:` on stderr say what the check is
 # queued behind, when it starts and how it ended; scripts/await-task.sh
 # reads them so a wait's deadline does not run while the check is queued.
 # A `NAME=value` word of the command is shown as `NAME=…` there and in the
-# holder's record.
+# holder's record, and a URL's userinfo in any word as `[redacted]`.
 set -uo pipefail
 
 MODE=exclusive; HOLD=2700; QUEUE=7200
@@ -88,10 +92,13 @@ owner=false
 queue_pid=
 cmd=
 survivors=
+finished=false
 
 # The command's words for a line another check reads or a kept file: a
 # NAME=value word, such as a database URL handed through env, is shown as
-# NAME=… so its value never leaves this check.
+# NAME=…, and the userinfo of a URL in any other word, such as
+# --url=postgres://user:secret@host, as scheme://[redacted]@, so neither
+# value leaves this check.
 redacted() {
   local word name out=
   for word in "$@"; do
@@ -102,7 +109,7 @@ redacted() {
     esac
     out="$out${out:+ }$word"
   done
-  printf '%s' "$out"
+  printf '%s' "$out" | sed -E 's#([A-Za-z][A-Za-z0-9+.-]*://)[^/@[:space:]]*@#\1[redacted]@#g'
 }
 
 alive() {
@@ -121,12 +128,14 @@ alive() {
 # written. In order: the command is stopped if it still runs, every
 # session in the registry is swept, survivors are waited for, then the
 # registry and the holder's record go, and the host is released by the
-# exit itself.
+# exit itself. A 0 that is not the main path's own end is the status of
+# whatever ran last before a signal Bash dies of, so it is reported as 1.
 on_exit() {
   local status=$? p left waited
-  trap '' INT TERM
+  trap '' HUP INT TERM
   trap - EXIT
-  exec 1>&5 2>&6
+  exec 1>&"$saved_out" 2>&"$saved_err"
+  if [ "$status" = 0 ] && ! $finished; then status=1; fi
   if [ -n "$queue_pid" ]; then kill -TERM "$queue_pid" 2>/dev/null || :; fi
   if [ -n "$cmd" ]; then
     contain_stop "$cmd" "$GRACE" || :
@@ -161,18 +170,21 @@ on_exit() {
   exit "$status"
 }
 on_signal() {
-  trap '' INT TERM
-  exec 1>&5 2>&6
+  trap '' HUP INT TERM
+  exec 1>&"$saved_out" 2>&"$saved_err"
   if [ -n "$cmd" ]; then say "interrupted: stopping the command"; else say 'interrupted'; fi
   exit "$1"
 }
 
 # A trap runs under whatever redirection the interrupted command had, such
 # as the library's `2>/dev/null` around its waits, so the traps write
-# through these copies of the streams this script was given.
-exec 5>&1 6>&2
+# through these copies of the streams this script was given. Bash places
+# them at 10 or above, clear of the caller's own low descriptors, and the
+# command never holds them.
+exec {saved_out}>&1 {saved_err}>&2
 printf '_START=%s\n' "$$"
 trap on_exit EXIT
+trap 'on_signal 129' HUP
 trap 'on_signal 130' INT
 trap 'on_signal 143' TERM
 
@@ -189,6 +201,16 @@ SLOTS=3
 GRACE=${HEAVY_CHECK_GRACE:-300}
 case "$GRACE" in ''|*[!0-9]*) echo 'HEAVY_CHECK_GRACE is decimal seconds' >&2; exit 64 ;; esac
 [ "${#GRACE}" -le 6 ] || { echo 'HEAVY_CHECK_GRACE is at most 999999 seconds' >&2; exit 64; }
+# The library's watchdog pipes start at CONTAIN_FD_BASE and would replace
+# a saved stream placed there. A base the library refuses is left to it.
+fd_base=${CONTAIN_FD_BASE:-20}
+case "$fd_base" in ''|*[!0-9]*) ;; *)
+  if [ "${#fd_base}" -le 4 ] && [ "$((10#$fd_base))" -ge 10 ] &&
+    { [ "$saved_out" -ge "$((10#$fd_base))" ] || [ "$saved_err" -ge "$((10#$fd_base))" ]; }; then
+    echo "no descriptor is free below CONTAIN_FD_BASE ($fd_base) for this script's own streams" >&2
+    exit 64
+  fi ;;
+esac
 umask 077
 
 # The holder's record: who, since when, for how long at most, running what.
@@ -293,7 +315,9 @@ fi
 # The command never holds the lock descriptors, so nothing it leaves
 # behind can keep the host. The watchdog holds them instead, so a check
 # killed outright keeps the host until its command's sessions are gone.
-CONTAIN_CLOSE_FDS="7 8 9"
+# The command does not hold the saved streams either, so its descriptors
+# are its caller's.
+CONTAIN_CLOSE_FDS="7 8 9 $saved_out $saved_err"
 CONTAIN_HOLD_FDS="7 8 9"
 export -n CONTAIN_CLOSE_FDS CONTAIN_HOLD_FDS
 contain_start -g "$GRACE" "$@"
@@ -310,4 +334,5 @@ survivors="$survivors $CONTAIN_SURVIVORS"
 if [ "$status" = 124 ] && [ $((SECONDS - ran_at)) -ge "$HOLD" ]; then
   say "hold deadline after ${HOLD}s: the command was stopped"
 fi
+[ "$status" != 0 ] || finished=true
 exit "$status"

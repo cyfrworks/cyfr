@@ -26,8 +26,13 @@ export TMPDIR="$scratch/tmp"
 export HEAVY_CHECK_LOCK="$scratch/lock" HEAVY_CHECK_GRACE=1
 clean=(env -u HEAVY_CHECK_HELD -u CONTAIN_REGISTRY -u CONTAIN_CLOSE_FDS -u CONTAIN_HOLD_FDS)
 hc=("${clean[@]}" bash "$check")
-# A command started in the background ignores INT unless it is reset first.
-with_int=(python3 -I -c 'import os, signal, sys; signal.signal(signal.SIGINT, signal.SIG_DFL); os.execvp(sys.argv[1], sys.argv[1:])')
+# A signal ignored on entry cannot be trapped: a command started in the
+# background ignores INT, and one started under nohup ignores HUP, unless
+# the signal is reset first.
+defaulted=(python3 -I -c 'import os, signal, sys; signal.signal(getattr(signal, "SIG" + sys.argv[1]), signal.SIG_DFL); os.execvp(sys.argv[2], sys.argv[2:])')
+with_int=("${defaulted[@]}" INT)
+with_hup=("${defaulted[@]}" HUP)
+with_usr1=("${defaulted[@]}" USR1)
 
 started=()
 # A check is asked to stop, so it stops its command, before anything is
@@ -143,6 +148,20 @@ trap '' TERM
 echo $$ > "$1"
 while :; do sleep 0.2; done
 STUBBORN
+# fdprobe OUT: writes each open descriptor and what it names, opening none
+# of its own until the list is taken.
+cat > "$scratch/fdprobe" <<'FDPROBE'
+import os, sys
+fds = []
+for fd in range(1024):
+    try:
+        os.fstat(fd)
+    except OSError:
+        continue
+    fds.append("%d %s" % (fd, os.readlink("/proc/self/fd/%d" % fd)))
+with open(sys.argv[1], "w") as out:
+    out.write("\n".join(fds) + "\n")
+FDPROBE
 chmod +x "$scratch/hold" "$scratch/probe" "$scratch/stubborn"
 hold="$scratch/hold"
 probe="$scratch/probe"
@@ -189,10 +208,19 @@ t_result() {
 
 # The frame carries the check's own pid, the one its starter knows, and a
 # command whose last write ends without a newline does not glue onto it.
+# A passing run's line says 0: the success path is checked, not assumed.
 t_frame() {
+  local p s=0
+  "${hc[@]}" -- true >"$scratch/pass.out" 2>"$scratch/pass.err" &
+  p=$!; started+=("$p")
+  wait "$p" || s=$?
+  [ "$s" = 0 ] || fail "a passing check exited $s"
+  ran "$scratch/pass.err" || fail 'the passing check did not run as an outermost check'
+  framed "$scratch/pass.out" 0 "$p" || fail "a passing check was not framed by _EXIT=$p 0: $(tr '\n' '|' < "$scratch/pass.out")"
+  [ "$(AWAIT_POLL_SECONDS=1 AWAIT_PID=$p status_of bash "$await" "$scratch/pass.out" '' 10)" = 0 ] || fail 'the waiter did not answer a passing check 0'
+  s=0
   "${hc[@]}" -- sh -c 'printf unterminated; exit 3' >"$scratch/frame.out" 2>"$scratch/frame.err" &
-  local p=$! s=0
-  started+=("$p")
+  p=$!; started+=("$p")
   wait "$p" || s=$?
   [ "$s" = 3 ] || fail "exited $s"
   framed "$scratch/frame.out" 3 "$p" || fail "not framed by pid $p: $(tr '\n' '|' < "$scratch/frame.out")"
@@ -213,6 +241,31 @@ t_roster() {
   body "$scratch/env-raw" | sed 's/=.*//' > "$scratch/env-inside"
   added=$(grep -vxF -f "$scratch/env-before" "$scratch/env-inside" | LC_ALL=C sort | tr '\n' ' ')
   [ "$added" = 'CONTAIN_REGISTRY HEAVY_CHECK_HELD ' ] || fail "an exclusive check added: $added"
+}
+
+# The command's descriptors are its caller's: the lock descriptors and the
+# script's own copies of its streams are closed in it, and a caller's 5, 6
+# and 12 reach it unshadowed.
+t_fds() {
+  local p=(python3 -I "$scratch/fdprobe")
+  "${p[@]}" "$scratch/fds-direct" 5>"$scratch/five" 6>"$scratch/six" 12</dev/null >"$scratch/fd.out" 2>"$scratch/fd.err" ||
+    fail 'the probe failed on its own'
+  "${hc[@]}" -- "${p[@]}" "$scratch/fds-checked" 5>"$scratch/five" 6>"$scratch/six" 12</dev/null >"$scratch/fd.out" 2>"$scratch/fd.err" ||
+    fail "the checked probe failed: $(tail -n 2 "$scratch/fd.err")"
+  ran "$scratch/fd.err" || fail 'did not run as an outermost check'
+  has_line "^5 $scratch/five\$" "$scratch/fds-direct" || fail "the control did not see the caller's 5: $(tr '\n' '|' < "$scratch/fds-direct")"
+  [ "$(cat "$scratch/fds-checked")" = "$(cat "$scratch/fds-direct")" ] ||
+    fail "the command's descriptors differ from its caller's: $(tr '\n' '|' < "$scratch/fds-checked") against $(tr '\n' '|' < "$scratch/fds-direct")"
+}
+
+# The library's watchdog pipes start at CONTAIN_FD_BASE: a caller that
+# leaves no descriptor free below it is refused before the command runs.
+t_fd_base() {
+  [ "$(status_of "${hc[@]}" -- touch "$scratch/fd-base-ran" 10</dev/null 11</dev/null 12</dev/null 13</dev/null 14</dev/null \
+    15</dev/null 16</dev/null 17</dev/null 18</dev/null 19</dev/null)" = 64 ] || fail 'ran with its streams saved in the watchdog range'
+  framed "$scratch/out" 64 || fail "the refusal was not framed: $(tr '\n' '|' < "$scratch/out")"
+  has_line '^no descriptor is free below CONTAIN_FD_BASE \(20\)' "$scratch/err" || fail 'did not say why'
+  [ ! -e "$scratch/fd-base-ran" ] || fail 'the refused command ran'
 }
 
 # The library is found beside the script, wherever it is started from.
@@ -242,15 +295,18 @@ t_exclusive() {
 # A NAME=value word of the command never reaches another check or a file.
 t_redaction() {
   local a b
-  "${hc[@]}" -- env CYFR_DATABASE_URL=postgres://u:secret@h/db "$hold" "$scratch/release-r" >/dev/null 2>"$scratch/r1.err" &
+  # The hold script reads only its first argument; the URLs ride along.
+  "${hc[@]}" -- env CYFR_DATABASE_URL=postgres://u:secret@h/db "$hold" "$scratch/release-r" \
+    --url=postgres://u:secret2@h/db https://secret3@h/x >/dev/null 2>"$scratch/r1.err" &
   a=$!; started+=("$a")
   until_true 10 test -s "$scratch/lock.holder" || fail 'the holder left no record'
   ! grep -q secret "$scratch/lock.holder" || fail "the holder's record carries the value: $(cat "$scratch/lock.holder")"
-  has_line '^pid=[0-9]+ .* command=env CYFR_DATABASE_URL=… ' "$scratch/lock.holder" || fail "the record lost the name: $(cat "$scratch/lock.holder")"
+  has_line '^pid=[0-9]+ .* command=env CYFR_DATABASE_URL=… .* --url=postgres://\[redacted\]@h/db https://\[redacted\]@h/x$' "$scratch/lock.holder" ||
+    fail "the record lost the name or the URLs' shape: $(cat "$scratch/lock.holder")"
   "${hc[@]}" -- true >/dev/null 2>"$scratch/r2.err" &
   b=$!; started+=("$b")
   until_true 10 has_line '^==> heavy-check: queued \(exclusive\) behind:' "$scratch/r2.err" || fail 'the second check did not queue'
-  has_line '^==> heavy-check:   pid=[0-9]+ .*command=env CYFR_DATABASE_URL=… ' "$scratch/r2.err" || fail 'the queued check did not name the holder'
+  has_line '^==> heavy-check:   pid=[0-9]+ .*command=env CYFR_DATABASE_URL=… .* --url=postgres://\[redacted\]@h/db ' "$scratch/r2.err" || fail 'the queued check did not name the holder'
   touch "$scratch/release-r"; wait "$a"; wait "$b"
   ! grep -q secret "$scratch/r1.err" "$scratch/r2.err" || fail "the value reached a check's stderr"
 }
@@ -372,6 +428,25 @@ signal_running() {
 }
 t_term() { signal_running TERM 143; }
 t_int() { signal_running INT 130 "${with_int[@]}"; }
+t_hup() { signal_running HUP 129 "${with_hup[@]}"; }
+
+# A signal Bash dies of after the EXIT trap leaves the trap a 0 that is not
+# the command's: the line is not 0, the command is stopped and the host is
+# freed.
+t_usr1() {
+  local i s=0
+  "${with_usr1[@]}" "${hc[@]}" -- sh -c "sleep 120 & echo \$! > $scratch/usr1.pid; wait" >"$scratch/u.out" 2>"$scratch/u.err" &
+  i=$!; started+=("$i")
+  until_true 10 test -s "$scratch/usr1.pid" || fail 'the check to signal did not start'
+  ran "$scratch/u.err" || fail 'did not run as an outermost check'
+  kill -USR1 "$i"
+  wait "$i" || s=$?
+  [ "$s" != 0 ] || fail 'a check given USR1 exited 0'
+  dead "$(cat "$scratch/usr1.pid")" || fail "the command's child was alive when the check exited"
+  framed "$scratch/u.out" 1 "$i" || fail "not framed by pid $i with 1: $(tr '\n' '|' < "$scratch/u.out")"
+  [ "$(AWAIT_POLL_SECONDS=1 AWAIT_PID=$i status_of bash "$await" "$scratch/u.out" '' 10)" = 1 ] || fail 'the waiter did not answer 1'
+  [ ! -e "$scratch/lock.holder" ] || fail 'left its holder record'
+}
 
 # --- stopping a queued check: the wait for the host does not defer it ----------
 # signal_queued MODE SIGNAL STATUS [LAUNCHER...]
@@ -406,6 +481,7 @@ signal_queued() {
 }
 t_term_queued() { signal_queued exclusive TERM 143; }
 t_int_queued() { signal_queued exclusive INT 130 "${with_int[@]}"; }
+t_hup_queued() { signal_queued exclusive HUP 129 "${with_hup[@]}"; }
 t_term_queued_scoped() { signal_queued scoped TERM 143; }
 
 # --- refusals after the start line are framed too -------------------------------
@@ -687,9 +763,9 @@ t_await_queue() {
 }
 
 cases=(
-  usage admission nested result frame roster elsewhere
+  usage admission nested result frame roster fds fd_base elsewhere
   exclusive redaction flock_direct scoped precedence
-  hold hold_frame queue term int term_queued int_queued term_queued_scoped refusals
+  hold hold_frame queue term int hup usr1 term_queued int_queued hup_queued term_queued_scoped refusals
   leftover sigkill nested_session registry_nested survivor survivor_remains
   await_result await_died await_line await_nested await_bare await_reused await_explicit
   await_statuses await_usage await_zombie await_queue
