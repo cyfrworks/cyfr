@@ -112,9 +112,9 @@ defmodule Sanctum.Provisioning do
   # own `fun`.
   @keeper_key {__MODULE__, :keeper}
 
-  # The mint rate bounds the roster accepts (`CYFR_MINT_PER_HOUR`, whose
-  # validator is `Cyfr.Platform.Settings.Roster`'s, a layer above). A
-  # stored value outside them refuses every mint.
+  # The one definition of the bounds a mint rate may hold:
+  # `mint_per_hour_range/0` hands it to the roster's validator, and a
+  # stored value outside it refuses every mint.
   @mint_per_hour_range 1..1_000_000
 
   @typedoc "The claim an attempt holds while it fills an athanor."
@@ -1035,6 +1035,14 @@ defmodule Sanctum.Provisioning do
 
   defp record_personal(%{personal_athanor_id: id} = user, %{id: id}), do: {:ok, user}
   defp record_personal(user, athanor), do: Users.set_personal_athanor(user, athanor.id)
+
+  @doc """
+  The bounds a mint rate (`CYFR_MINT_PER_HOUR`, the `mint_per_hour`
+  setting) may hold: the roster refuses a value outside them, so 0 is
+  never read as off, and a stored value outside them refuses every mint.
+  """
+  @spec mint_per_hour_range() :: Range.t()
+  def mint_per_hour_range, do: @mint_per_hour_range
 
   # The mint rate is a security bound on the personal athanors minted in
   # the last hour, not a capacity cap: unset is no bound and counts

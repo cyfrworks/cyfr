@@ -492,7 +492,7 @@ defmodule Cyfr.Platform.Settings.Roster do
         variable: "CYFR_MINT_PER_HOUR",
         type: :integer,
         default: nil,
-        validator: whole(1..1_000_000, "athanors"),
+        validator: whole(Sanctum.Provisioning.mint_per_hour_range(), "athanors"),
         group: :rate_limits,
         scope: :live,
         stale: :refuse

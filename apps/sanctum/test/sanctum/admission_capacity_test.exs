@@ -160,6 +160,31 @@ defmodule Sanctum.AdmissionCapacityTest do
                Prima.Refusal.classify({:cap_unverifiable, :mint_per_hour})
     end
 
+    # The fail-closed counterpart of a server at capacity still admitting
+    # its operator: the operator's mint bypasses the rate check whole, so
+    # an invalid stored bound that refuses every stranger never locks out
+    # the person who can correct it.
+    test "an invalid stored bound refuses a stranger but still mints the operator's own" do
+      n = System.unique_integer([:positive])
+      email = "cap#{n}@example.com"
+      previous = Application.get_env(:sanctum, :platform_admin_emails, [])
+      Application.put_env(:sanctum, :platform_admin_emails, [email])
+      on_exit(fn -> Application.put_env(:sanctum, :platform_admin_emails, previous) end)
+
+      mint_rate!(0)
+      stranger = stranger!(n + 1)
+
+      capture_log(fn ->
+        assert {:error, {:cap_unverifiable, :mint_per_hour}} =
+                 Provisioning.ensure_personal_athanor(stranger)
+      end)
+
+      assert {:ok, user} = SignIn.admitted(info(n), :admin)
+      assert {:ok, own} = Athanors.get_by_owner(user.id)
+      assert own.kind == "person"
+      assert Members.member?(user.id, own.id)
+    end
+
     test "a bound the store cannot answer refuses" do
       mint_rate!(5)
       user = stranger!(System.unique_integer([:positive]))
