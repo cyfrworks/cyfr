@@ -375,12 +375,8 @@ defmodule Arca.AppendParityTest do
       prefix = S3Env.run_prefix("parity")
       previous = S3Env.configure!(prefix: prefix)
       :ok = S3Env.create_bucket!()
-      guard = S3Env.guard!(prefix)
-
-      on_exit(fn ->
-        S3Env.restore(previous)
-        S3Env.clean!(guard)
-      end)
+      on_exit(fn -> S3Env.restore(previous) end)
+      S3Env.guard!(prefix)
 
       {:ok, actor: Arca.Test.Actor.local(), dir: ["data", "parity"]}
     end

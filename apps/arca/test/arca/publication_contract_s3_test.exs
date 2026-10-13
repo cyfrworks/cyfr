@@ -32,12 +32,8 @@ defmodule Arca.PublicationContractS3Test do
     prefix = S3Env.run_prefix("publication")
     previous = S3Env.configure!(prefix: prefix)
     :ok = S3Env.create_bucket!()
-    guard = S3Env.guard!(prefix)
-
-    on_exit(fn ->
-      S3Env.restore(previous)
-      S3Env.clean!(guard)
-    end)
+    on_exit(fn -> S3Env.restore(previous) end)
+    S3Env.guard!(prefix)
 
     :ok
   end

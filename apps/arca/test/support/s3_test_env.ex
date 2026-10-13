@@ -33,12 +33,12 @@ defmodule Arca.Test.S3Env do
   Every suite writes under `run_prefix/1`, `"<suite>/<digest>"`, whose
   digest is unique to one checkout, run and partition, so two runs against
   one bucket never meet and a suite deletes only what its own run wrote.
-  `guard!/1` and `clean!/1` bracket a suite: the first records the keys
-  outside every run prefix, the second deletes the suite's prefix through
-  `delete_prefix!/1` and fails when anything outside it changed or anything
-  under it remains. They sign their own requests, as `create_bucket!/0`
-  does, because the adapter builds every key under an actor's segments and
-  cannot list the bucket root.
+  `guard!/2` brackets a suite: it records the keys outside every run
+  prefix and registers `clean!/1` in the suite's `on_exit`, which deletes
+  the suite's prefix through `delete_prefix!/1` and fails when anything
+  outside it changed or anything under it remains. They sign their own
+  requests, as `create_bucket!/0` does, because the adapter builds every
+  key under an actor's segments and cannot list the bucket root.
   """
 
   @defaults %{
@@ -84,7 +84,7 @@ defmodule Arca.Test.S3Env do
   """
   @spec run_prefix(String.t(), String.t()) :: String.t()
   def run_prefix(suite, root) when is_binary(suite) and is_binary(root) do
-    unless Regex.match?(~r/^[a-z]+$/, suite),
+    unless Regex.match?(~r/\A[a-z]+\z/, suite),
       do: raise(ArgumentError, "a suite name is lowercase letters only, got: #{inspect(suite)}")
 
     digest = :sha256 |> :crypto.hash(root) |> Base.encode16(case: :lower) |> binary_part(0, 16)
@@ -198,12 +198,14 @@ defmodule Arca.Test.S3Env do
   Delete every key under `prefix/`. Only a run prefix, `"<suite>/<digest>"`,
   is accepted: a blank prefix or one without a digest is refused before any
   request, because it would reach keys another run or another suite owns.
+  A listed key outside `prefix/` is not deleted, so a store that ignores
+  the listing's `prefix` parameter cannot empty the bucket.
   """
   @spec delete_prefix!(String.t()) :: :ok
   def delete_prefix!(prefix) do
     run_prefix!(prefix)
 
-    for key <- keys(prefix) do
+    for key <- keys(prefix), String.starts_with?(key, prefix <> "/") do
       case signed!(:delete, encode_key(key), "") do
         %{status: status} when status in [200, 204, 404] ->
           :ok
@@ -217,15 +219,22 @@ defmodule Arca.Test.S3Env do
   end
 
   @doc """
-  Start watching the bucket for a suite that writes under `prefix`: record
-  the keys outside every run prefix, then put two markers under `prefix`,
-  so `clean!/1` always has something to delete and more than one page to
-  read. Answers what `clean!/1` takes.
+  Watch the bucket for a suite that writes under `prefix`, from its
+  `setup_all` or `setup`: record the keys outside every run prefix,
+  register `clean!/1` through `register` (the suite's `on_exit` unless a
+  caller passes its own), then put two markers under `prefix`, so
+  `clean!/1` always has something to delete and more than one page to
+  read. The cleanup is registered before the first marker, so a marker
+  that fails to land leaves nothing behind. Answers what `clean!/1` takes.
   """
-  @spec guard!(String.t()) :: %{prefix: String.t(), outside: MapSet.t(String.t())}
-  def guard!(prefix) do
+  @spec guard!(String.t(), ((-> term()) -> term())) :: %{
+          prefix: String.t(),
+          outside: MapSet.t(String.t())
+        }
+  def guard!(prefix, register \\ &ExUnit.Callbacks.on_exit/1) do
     run_prefix!(prefix)
-    outside = outside(keys(""))
+    guard = %{prefix: prefix, outside: outside(keys(""))}
+    register.(fn -> clean!(guard) end)
 
     for marker <- ["1", "2"] do
       case signed!(:put, encode_key("#{prefix}/guard/#{marker}"), "") do
@@ -237,14 +246,14 @@ defmodule Arca.Test.S3Env do
       end
     end
 
-    %{prefix: prefix, outside: outside}
+    guard
   end
 
   @doc """
-  Delete the guarded prefix and check what the run left, for a suite's
-  `on_exit`, which runs whether or not its tests passed. It fails when the
-  keys outside every run prefix differ from what `guard!/1` recorded, when
-  a key remains under the prefix, or when the prefix read one key per page
+  Delete the guarded prefix and check what the run left, from the suite's
+  `on_exit` that `guard!/2` registers, which runs whether or not its tests
+  passed. It fails when the keys outside every run prefix differ from what
+  `guard!/2` recorded, when a key remains under the prefix, or when the prefix read one key per page
   differs from the prefix read whole. Keys under another run's prefix are
   not compared: a concurrent run writes there.
   """
@@ -290,7 +299,7 @@ defmodule Arca.Test.S3Env do
     do: keys |> Enum.reject(&Regex.match?(~r"^[a-z]+/[0-9a-f]{16}/", &1)) |> MapSet.new()
 
   defp run_prefix!(prefix) do
-    unless is_binary(prefix) and Regex.match?(~r"^[a-z]+/[0-9a-f]{16}$", prefix),
+    unless is_binary(prefix) and Regex.match?(~r"\A[a-z]+/[0-9a-f]{16}\z", prefix),
       do: raise(ArgumentError, "not a run prefix: #{inspect(prefix)}")
 
     :ok

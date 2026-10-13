@@ -26,8 +26,8 @@ defmodule Arca.Test.S3EnvTest do
       assert a != b
       assert String.starts_with?(a, "minio/")
       assert String.starts_with?(b, "minio/")
-      assert a =~ ~r"^[a-z]+/[0-9a-f]{16}$"
-      assert b =~ ~r"^[a-z]+/[0-9a-f]{16}$"
+      assert a =~ ~r"\A[a-z]+/[0-9a-f]{16}\z"
+      assert b =~ ~r"\A[a-z]+/[0-9a-f]{16}\z"
       assert S3Env.run_prefix("minio", "/tmp/cyfr-t.aaaaaa/p2") != a
     end
 
@@ -40,7 +40,7 @@ defmodule Arca.Test.S3EnvTest do
 
       System.delete_env("CYFR_TEST_RUN_ROOT")
       direct = S3Env.run_prefix("parity")
-      assert direct =~ ~r"^[a-z]+/[0-9a-f]{16}$"
+      assert direct =~ ~r"\A[a-z]+/[0-9a-f]{16}\z"
       assert direct != S3Env.run_prefix("parity", "/tmp/cyfr-t.cccccc/p3")
 
       answers =
@@ -52,7 +52,7 @@ defmodule Arca.Test.S3EnvTest do
     end
 
     test "a suite name outside the shape is refused" do
-      for suite <- ["", "Minio", "s3", "a/b"] do
+      for suite <- ["", "Minio", "s3", "a/b", "minio\n"] do
         assert_raise ArgumentError, fn -> S3Env.run_prefix(suite, "/tmp/root") end
       end
     end
@@ -89,7 +89,15 @@ defmodule Arca.Test.S3EnvTest do
     end
 
     test "a blank prefix or one without a digest is refused before any request" do
-      for prefix <- ["", "   ", "minio", "minio/", "minio/not-a-digest", "/0123456789abcdef"] do
+      for prefix <- [
+            "",
+            "   ",
+            "minio",
+            "minio/",
+            "minio/not-a-digest",
+            "/0123456789abcdef",
+            "minio/0123456789abcdef\n"
+          ] do
         assert_raise ArgumentError, fn -> S3Env.delete_prefix!(prefix) end
       end
 
@@ -128,7 +136,7 @@ defmodule Arca.Test.S3EnvTest do
       peer = "parity/fedcba9876543210"
       put_keys(store, ["cluster-1/old", "#{peer}/x"])
 
-      guard = S3Env.guard!(prefix)
+      guard = S3Env.guard!(prefix, &hold/1)
 
       assert Enum.sort(keys(store)) == [
                "cluster-1/old",
@@ -148,7 +156,7 @@ defmodule Arca.Test.S3EnvTest do
     test "the guard fails when a key outside every run prefix changed", %{store: store} do
       prefix = "minio/0123456789abcdef"
       put_keys(store, ["cluster-1/old"])
-      guard = S3Env.guard!(prefix)
+      guard = S3Env.guard!(prefix, &hold/1)
 
       put_keys(store, ["data/sig/plain.txt"])
 
@@ -159,9 +167,20 @@ defmodule Arca.Test.S3EnvTest do
       refute Enum.any?(keys(store), &String.starts_with?(&1, prefix <> "/"))
     end
 
+    test "the guard fails when a key outside every run prefix was deleted", %{store: store} do
+      prefix = "minio/0123456789abcdef"
+      put_keys(store, ["cluster-1/old", "publication/1790362542/x"])
+      guard = S3Env.guard!(prefix, &hold/1)
+
+      Agent.update(store, &%{&1 | keys: MapSet.delete(&1.keys, "cluster-1/old")})
+
+      error = assert_raise ExUnit.AssertionError, fn -> S3Env.clean!(guard) end
+      assert error.message =~ ~s(removed ["cluster-1/old"])
+    end
+
     test "the guard fails when a key under its prefix survives the cleanup", %{store: store} do
       prefix = "minio/0123456789abcdef"
-      guard = S3Env.guard!(prefix)
+      guard = S3Env.guard!(prefix, &hold/1)
       Agent.update(store, &%{&1 | drop: false})
 
       error = assert_raise ExUnit.AssertionError, fn -> S3Env.clean!(guard) end
@@ -170,11 +189,55 @@ defmodule Arca.Test.S3EnvTest do
 
     test "the guard fails when its markers are gone", %{store: store} do
       prefix = "minio/0123456789abcdef"
-      guard = S3Env.guard!(prefix)
+      guard = S3Env.guard!(prefix, &hold/1)
       Agent.update(store, &%{&1 | keys: MapSet.delete(&1.keys, "#{prefix}/guard/2")})
 
       error = assert_raise ExUnit.AssertionError, fn -> S3Env.clean!(guard) end
       assert error.message =~ "markers are missing under #{prefix}"
+    end
+
+    test "the cleanup deletes only under its prefix when the store ignores the prefix",
+         %{store: store} do
+      prefix = "minio/0123456789abcdef"
+      put_keys(store, ["cluster-1/old", "#{prefix}/a", "#{prefix}-other/x"])
+      Agent.update(store, &Map.put(&1, :ignore_prefix, true))
+
+      assert :ok = S3Env.delete_prefix!(prefix)
+
+      assert Enum.sort(keys(store)) == ["cluster-1/old", "#{prefix}-other/x"]
+
+      assert Enum.filter(drain(), &String.starts_with?(&1, "DELETE")) == [
+               "DELETE /cyfr-test/#{prefix}/a?"
+             ]
+    end
+
+    test "the guard registers its cleanup before it writes a marker", %{store: store} do
+      prefix = "minio/0123456789abcdef"
+      Agent.update(store, &Map.put(&1, :refuse, "#{prefix}/guard/2"))
+
+      assert_raise RuntimeError, ~r/could not put a marker/, fn ->
+        S3Env.guard!(prefix, &hold/1)
+      end
+
+      assert [{:cleanup, cleanup} | after_cleanup] =
+               Enum.drop_while(mailbox(), &(elem(&1, 0) == :request))
+
+      assert {:request, "PUT", "/cyfr-test/#{prefix}/guard/1", ""} in after_cleanup
+      assert Enum.sort(keys(store)) == ["#{prefix}/guard/1"]
+
+      # The marker that landed is deleted by the cleanup the failed guard left.
+      assert_raise ExUnit.AssertionError, ~r/markers are missing/, cleanup
+      assert keys(store) == []
+    end
+  end
+
+  defp hold(cleanup), do: send(self(), {:cleanup, cleanup})
+
+  defp mailbox do
+    receive do
+      message -> [message | mailbox()]
+    after
+      0 -> []
     end
   end
 
@@ -195,8 +258,9 @@ defmodule Arca.Test.S3EnvTest do
   end
 
   # ListObjectsV2 with `max-keys` paging, where the token is the last key
-  # read; PUT; and DELETE, which keeps the key when `drop` is false.
-  # Path-style only.
+  # read, and which lists the whole bucket when `ignore_prefix` is set; PUT,
+  # which answers 500 for the key `refuse` names; and DELETE, which keeps
+  # the key when `drop` is false. Path-style only.
   defp serve(conn, store) do
     "/" <> path = conn.request_path
     key = path |> String.replace_prefix(@bucket, "") |> String.trim_leading("/") |> URI.decode()
@@ -206,8 +270,12 @@ defmodule Arca.Test.S3EnvTest do
         list(conn, store)
 
       {"PUT", key} ->
-        Agent.update(store, &%{&1 | keys: MapSet.put(&1.keys, key)})
-        Plug.Conn.send_resp(conn, 200, "")
+        if Agent.get(store, &Map.get(&1, :refuse)) == key do
+          Plug.Conn.send_resp(conn, 500, "refused")
+        else
+          Agent.update(store, &%{&1 | keys: MapSet.put(&1.keys, key)})
+          Plug.Conn.send_resp(conn, 200, "")
+        end
 
       {"DELETE", key} ->
         Agent.update(store, fn
@@ -221,9 +289,9 @@ defmodule Arca.Test.S3EnvTest do
 
   defp list(conn, store) do
     params = URI.decode_query(conn.query_string)
-    prefix = Map.get(params, "prefix", "")
-    max = params |> Map.get("max-keys", "1000") |> String.to_integer()
     state = Agent.get(store, & &1)
+    prefix = if state[:ignore_prefix], do: "", else: Map.get(params, "prefix", "")
+    max = params |> Map.get("max-keys", "1000") |> String.to_integer()
     # A fixed token answers the first page again, as a broken store would.
     after_key = if Map.has_key?(state, :token), do: nil, else: params["continuation-token"]
 
