@@ -305,8 +305,9 @@ defmodule Emissary.Router do
         get "/health/ready", HealthController, :ready, metadata: %{auth: :public_health}
       end
 
-      # Execution event SSE stream. Ownership is verified in the controller, on the
-      # context `Plugs.Authenticate` resolved, before any event flows.
+      # Execution event SSE stream. The controller reads the execution within the
+      # caller's athanor and requires `storage_read`, on the context
+      # `Plugs.Authenticate` resolved, before any event flows.
       scope "/api", Emissary.Web do
         pipe_through :authenticated_api
 

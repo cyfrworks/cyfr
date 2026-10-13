@@ -16,6 +16,15 @@ defmodule CyfrWeb.ConnCase do
   PostgreSQL, you can even run database tests asynchronously
   by setting `use CyfrWeb.ConnCase, async: true`, although
   this option is not recommended for other databases.
+
+  ## Authentication
+
+  A request is authenticated only when it carries a credential. A sync
+  test or module tagged `auth: :person` gets a `conn` that carries the
+  test person's bearer (`authenticate_as/2`); `auth: :none` or no tag
+  gives a bare `conn`, which reaches the plug as an anonymous caller.
+  `auth` on an async test raises, because the provider that reads the
+  bearer is global application environment.
   """
 
   use ExUnit.CaseTemplate
@@ -34,11 +43,49 @@ defmodule CyfrWeb.ConnCase do
     end
   end
 
+  @doc """
+  Puts the test person's bearer on `conn`, with `overrides` merged into
+  the person's context (`Emissary.TestAuthProvider.bearer/1`). It replaces
+  any Authorization header, and `recycle/1` carries it to the next request.
+  """
+  @spec authenticate_as(Plug.Conn.t(), keyword()) :: Plug.Conn.t()
+  def authenticate_as(%Plug.Conn{} = conn, overrides \\ []) do
+    Plug.Conn.put_req_header(
+      conn,
+      "authorization",
+      "Bearer " <> Emissary.TestAuthProvider.bearer(overrides)
+    )
+  end
+
+  @doc """
+  The `conn` a test's tags ask for: the test person's bearer under
+  `auth: :person`, a bare conn under `auth: :none` or no tag. It raises
+  for `auth` on an async test and for any other `auth` value, before the
+  setup touches the sandbox or the auth provider.
+  """
+  @spec conn_for(map()) :: Plug.Conn.t()
+  def conn_for(tags) when is_map(tags) do
+    if tags[:async] == true and Map.has_key?(tags, :auth) do
+      raise ArgumentError,
+            "`auth` is tagged on an async test: the auth provider is global " <>
+              "application environment, so only a sync test may authenticate"
+    end
+
+    conn = Phoenix.ConnTest.build_conn()
+
+    case tags[:auth] do
+      :person -> authenticate_as(conn)
+      none when none in [nil, :none] -> conn
+      other -> raise ArgumentError, "unknown `auth` tag #{inspect(other)}: use :person or :none"
+    end
+  end
+
   setup tags do
+    conn = conn_for(tags)
     Cyfr.Test.Sandbox.setup!(tags)
 
-    # Set test auth provider so sessions get authenticated: true.
-    # Tests that need unauthenticated contexts can override per-test.
+    # The test auth provider claims only the bearer `authenticate_as/2`
+    # puts on a conn, so a bare conn stays anonymous.
     # Global app env is not concurrency-safe, so only sync tests get the
     # provider (the async ConnCase users don't touch auth). On exit, restore
     # the test-env BASELINE (unset — config/test.exs sets no :auth_provider)
@@ -52,6 +99,6 @@ defmodule CyfrWeb.ConnCase do
       on_exit(fn -> Application.delete_env(:sanctum, :auth_provider) end)
     end
 
-    {:ok, conn: Phoenix.ConnTest.build_conn()}
+    {:ok, conn: conn}
   end
 end

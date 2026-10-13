@@ -388,16 +388,66 @@ defmodule CyfrWeb.Plugs.AuthenticateTest do
       assert conn.status == 401
     end
 
+    # The case's conn carries the test person's bearer, which no Sanctum
+    # credential matches and only the provider ConnCase configures claims,
+    # so the request proceeds — the plug does not pre-empt it.
+    @tag auth: :person
     test "an unclaimed bearer is left to a configured auth provider", %{conn: conn} do
-      # The provider in this file's setup accepts any caller, so the request
-      # proceeds — the plug does not pre-empt it.
-      conn =
-        conn
-        |> put_req_header("authorization", "Bearer a-token-only-the-provider-knows")
-        |> Authenticate.call([])
+      conn = Authenticate.call(conn, [])
 
       refute conn.halted
       assert conn.assigns[:context].authenticated
+    end
+  end
+
+  describe "call/2 — the ConnCase's test provider" do
+    test "a bearer the test provider does not claim is refused, not served", %{conn: conn} do
+      for bearer <- ["a-token-nobody-knows", "cyfr-test-actor.not-base64!", "cyfr-test-actor."] do
+        conn =
+          conn
+          |> put_req_header("authorization", "Bearer " <> bearer)
+          |> Authenticate.call([])
+
+        assert conn.halted, "#{bearer} was served"
+        assert conn.status == 401
+        assert get_resp_header(conn, "www-authenticate") == ["Bearer"]
+      end
+    end
+
+    test "the test person holds the person permissions, never the wildcard", %{conn: conn} do
+      conn = conn |> authenticate_as() |> Authenticate.call([])
+
+      refute conn.halted
+
+      assert Enum.sort(conn.assigns.context.permissions) ==
+               Enum.sort(Sanctum.Context.person_permissions())
+    end
+
+    test "an override is merged into the test person", %{conn: conn} do
+      conn = conn |> authenticate_as(email: "override@example.com") |> Authenticate.call([])
+
+      refute conn.halted
+      assert conn.assigns.context.email == "override@example.com"
+    end
+
+    test "the case's conn carries the bearer only under `auth: :person`" do
+      assert get_req_header(conn_for(%{async: false, auth: :person}), "authorization") ==
+               ["Bearer " <> Emissary.TestAuthProvider.bearer()]
+
+      assert get_req_header(conn_for(%{async: false, auth: :none}), "authorization") == []
+      assert get_req_header(conn_for(%{async: false}), "authorization") == []
+    end
+
+    test "`auth` tagged on an async test raises" do
+      assert_raise ArgumentError, ~r/async test/, fn ->
+        conn_for(%{async: true, auth: :person})
+      end
+    end
+
+    test "an unknown `auth` value raises" do
+      assert_raise ArgumentError, ~r/unknown `auth` tag :admin/, fn ->
+        conn_for(%{async: false, auth: :admin})
+      end
     end
   end
 

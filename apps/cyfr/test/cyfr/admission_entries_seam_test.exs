@@ -19,6 +19,8 @@ defmodule Cyfr.AdmissionEntriesSeamTest do
   # Flips rate limits, ownership standing and scheduler configuration.
   use Emissary.Web.ConnCase, async: false
 
+  @moduletag auth: :person
+
   import Ecto.Query, only: [from: 2]
   import Prima.Test.Wait
 
@@ -31,7 +33,7 @@ defmodule Cyfr.AdmissionEntriesSeamTest do
   @entries Boundaries.admission_entries()
 
   setup do
-    Prima.RateLimiter.reset()
+    Prima.Test.RateLimiter.reset!()
 
     keys = [
       cyfr: :tincture_rate_limit_max,
@@ -48,7 +50,7 @@ defmodule Cyfr.AdmissionEntriesSeamTest do
       end
 
       Arca.ControlPlane.record(:unclaimed)
-      Prima.RateLimiter.reset()
+      Prima.Test.RateLimiter.reset!()
     end)
 
     {:ok, ctx: Sanctum.TestContext.local()}
@@ -288,7 +290,7 @@ defmodule Cyfr.AdmissionEntriesSeamTest do
   def mcp_rate_limited(conn, _ctx) do
     Cyfr.Test.Settings.put("mcp_rate_limit_max", 1)
     Cyfr.Test.Settings.put("mcp_rate_limit_window_ms", 60_000)
-    Prima.RateLimiter.reset()
+    Prima.Test.RateLimiter.reset!()
 
     first = mcp_call(conn, "system", %{"action" => "status"})
     assert first.status == 200
@@ -371,7 +373,7 @@ defmodule Cyfr.AdmissionEntriesSeamTest do
 
   def tincture_rate_limited(conn, _ctx) do
     Application.put_env(:cyfr, :tincture_rate_limit_max, 1)
-    Prima.RateLimiter.reset()
+    Prima.Test.RateLimiter.reset!()
     path = "/t/test/local/" <> unique("no-such-tincture")
 
     _first = get(conn, path)
@@ -446,7 +448,7 @@ defmodule Cyfr.AdmissionEntriesSeamTest do
 
   def webhook_rate_limited(conn, ctx) do
     Cyfr.Test.Settings.put("webhook_per_ip_rate_limit_max", 1)
-    Prima.RateLimiter.reset()
+    Prima.Test.RateLimiter.reset!()
     %{slug: slug, secret: secret} = hook!(ctx, %{replay_protection: "none"})
 
     _first = post_signed(conn, slug, secret, ~s({}))
