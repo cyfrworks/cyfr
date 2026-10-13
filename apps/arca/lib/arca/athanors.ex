@@ -154,13 +154,15 @@ defmodule Arca.Athanors do
   a mint that trips a cap leaves no athanor row and no membership.
 
   The caller's decisions arrive as functions, run in this order with the
-  transaction open:
+  transaction open, with the census lock taken between the first two:
 
     * `:hold` — the person ids whose `users` rows are held for the length
       of the transaction. Held in sorted order, so two mints naming the
       same two people cannot deadlock, and held before anything is
       counted, so two mints by one person cannot both pass a per-person
       cap.
+    * the census lock (`Arca.AthanorCensus.lock/0`), so two mints by
+      different people cannot both count the server's last place free.
     * `:guards` — zero-arity functions answering `:ok` or
       `{:error, reason}`. The caps live above this layer; what they read
       is counted here, and they are asked with the rows already held.
@@ -181,6 +183,7 @@ defmodule Arca.Athanors do
     Arca.Repo.Errors.with_db_rescue("Arca.Athanors.mint", fn ->
       Arca.Repo.transaction(fn ->
         with :ok <- hold_people(hold),
+             :ok <- Arca.AthanorCensus.lock(),
              :ok <- run_guards(guards),
              {:ok, attrs} <- attrs_fun.(),
              {:ok, athanor} <- do_insert(attrs),

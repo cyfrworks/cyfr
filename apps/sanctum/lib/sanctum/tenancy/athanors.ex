@@ -38,14 +38,24 @@ defmodule Sanctum.Tenancy.Athanors do
   @doc """
   Insert an athanor. `attrs` must carry `:kind`, `:name`, `:slug` and
   `:created_by`; a person athanor also `:owner_user_id`. `:id` defaults to a
-  fresh `ath_` id. The server-wide cap on athanors applies.
+  fresh `ath_` id. The server-wide cap on athanors applies, counted in the
+  transaction that inserts the row with the owner's row held
+  (`Arca.Athanors.mint/2`), so two creations at the server's last place
+  cannot both land.
   """
   @spec create(map()) :: {:ok, athanor()} | {:error, term()}
   def create(attrs) do
-    with :ok <- Caps.check_counted(:max_athanors, &count/0) do
-      Arca.Athanors.insert(server(), Map.new(attrs))
-    end
+    attrs = Map.new(attrs)
+
+    Arca.Athanors.mint(server(),
+      hold: owner(attrs),
+      guards: [fn -> Caps.check_counted(:max_athanors, &count/0) end],
+      attrs: fn -> {:ok, attrs} end
+    )
   end
+
+  defp owner(%{owner_user_id: user_id}) when is_binary(user_id), do: [user_id]
+  defp owner(_attrs), do: []
 
   @doc """
   Mint an athanor for a person the server admits as its operator, exempt
@@ -544,7 +554,9 @@ defmodule Sanctum.Tenancy.Athanors do
   # An archived athanor freed its place against the server cap when it
   # closed; taking the place back has to ask for it, or archiving and
   # reopening would be the way past `CYFR_MAX_ATHANORS`. The count runs
-  # inside the transition, with the athanor locked.
+  # inside the transition, with the athanor locked and the census lock
+  # held (`Arca.AthanorCensus`), so a reopen and a mint at the last place
+  # cannot both land.
   defp reopenable(%{athanor: %{roster: "frozen"}}), do: {:error, :frozen_is_final}
 
   defp reopenable(%{athanor: %{status: "archived"}}),
