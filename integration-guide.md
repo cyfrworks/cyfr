@@ -1290,6 +1290,10 @@ What a cell changes for a client and an operator:
   its budget reservations and charges, and its storage cap.
 - **Ingress rate limits are each member's too.** The ceiling that sees
   the whole cell is the reverse proxy's; set it there.
+- **An upgrade stops the whole cell.** Stop every member, upgrade, then
+  start them, so two releases never run side by side in one cell. The
+  server does not refuse a member whose release differs from the live
+  members' today, so the operator's stop is the only guard.
 
 ### Execution workers
 
