@@ -4,10 +4,11 @@
 defmodule Locus.Runtime.EngineTest do
   @moduledoc """
   The runtime's own authority check, in the VM that runs a component: a
-  run given no authority raises before anything compiles, whatever else
-  its options say, and one given an authority goes on to compile. That a
-  dispatched run's runner is handed the authority it was dispatched with
-  is `Locus.Runtime.AuthorityPlumbingTest`'s, in CYFR's suite.
+  run given no authority, or anything but one, raises before anything
+  compiles, whatever else its options say, and one given an authority
+  goes on to compile. That a dispatched run's runner is handed the
+  authority it was dispatched with is `Locus.Runtime.AuthorityPlumbingTest`'s,
+  in CYFR's suite.
   """
 
   use ExUnit.Case, async: true
@@ -30,10 +31,16 @@ defmodule Locus.Runtime.EngineTest do
   end
 
   test "no option lets a run without an authority through" do
-    # `authority_required: false` once opted a run out of the check; the
-    # option no longer exists, and passing it changes nothing.
+    # No option opts a run out of the check: one asking to, such as
+    # `authority_required: false`, is refused all the same.
     assert_raise ArgumentError, ~r/an opts filter dropped it/, fn ->
       Locus.Runtime.Engine.execute_component(<<0, 1, 2, 3>>, %{}, authority_required: false)
+    end
+  end
+
+  test "the runtime refuses a run whose authority is not an authority" do
+    assert_raise ArgumentError, ~r/an opts filter dropped it/, fn ->
+      Locus.Runtime.Engine.execute_component(<<0, 1, 2, 3>>, %{}, authority: false)
     end
   end
 end

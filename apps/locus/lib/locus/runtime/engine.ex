@@ -89,7 +89,8 @@ defmodule Locus.Runtime.Engine do
     when `wasm` is a function
   - `:max_memory_bytes` - Memory limit. Defaults to 64MB.
   - `:authority` - The `Prima.Authority` this execution runs under; required:
-    a run without one raises `ArgumentError` before anything compiles
+    a run without one, or with anything else in its place, raises
+    `ArgumentError` before anything compiles
   - `:execution_id` - The admitted execution
   - `:host` - The attached `Locus.Runtime.HostClient` of the execution's attempt:
     the guest's `emit`, OAuth tokens, storage, HTTP rate checks and egress
@@ -130,23 +131,21 @@ defmodule Locus.Runtime.Engine do
     # Admission refuses a run without an authority; this is the last guard:
     # a runtime reached without one dies rather than run on ambient
     # permissions.
-    if is_nil(authority) do
+    if not match?(%Prima.Authority{}, authority) do
       raise ArgumentError,
             "execution requires an authority but none reached the runtime " <>
               "— an opts filter dropped it"
     end
 
-    if authority do
-      :telemetry.execute(
-        [:cyfr, :locus, :runtime, :engine, :authority_entered],
-        %{},
-        %{
-          authority: authority,
-          execution_id: execution_id,
-          reference: reference
-        }
-      )
-    end
+    :telemetry.execute(
+      [:cyfr, :locus, :runtime, :engine, :authority_entered],
+      %{},
+      %{
+        authority: authority,
+        execution_id: execution_id,
+        reference: reference
+      }
+    )
 
     max_memory = Keyword.get(opts, :max_memory_bytes, @default_max_memory_bytes)
 
