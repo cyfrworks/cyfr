@@ -57,8 +57,9 @@ defmodule Cyfr.PlatformSettingsRosterTest do
   defp mfa?(_other), do: false
 
   # Caps that gate a creation, the security windows and the directory's
-  # mode and quotas refuse a stale value; rate limits, stream limits and
-  # cache bounds serve one.
+  # mode and quotas refuse a stale value, and so does the mint rate, the
+  # security bound on how fast strangers are minted an athanor; the other
+  # rate limits, stream limits and cache bounds serve one.
   @refuse ~w(max_athanors max_groups_per_person max_pairs_per_person max_members_per_group
              max_threads_per_athanor max_schedules_per_athanor max_feeds_per_athanor
              max_external_servers_per_athanor mint_per_hour athanor_storage_bytes session_ttl_hours
@@ -454,6 +455,52 @@ defmodule Cyfr.PlatformSettingsRosterTest do
       for bad <- ["on", "Writer", "", nil, 1] do
         assert serve.validator.(bad) == {:error, "must be one of off, writer, mirror"}
       end
+    end
+
+    # The mint rate is a rate bound, not a capacity cap: unset is the only
+    # way it is off, and 0 is refused at the boot like any invalid security
+    # value rather than read as off.
+    test "the mint rate is a rate limit that refuses 0 and a stale value" do
+      {:ok, entry} = Roster.fetch("mint_per_hour")
+
+      assert {entry.app, entry.variable, entry.type, entry.default} ==
+               {:sanctum, "CYFR_MINT_PER_HOUR", :integer, nil}
+
+      assert {entry.group, entry.scope, entry.stale, entry.config, entry.apply} ==
+               {:rate_limits, :live, :refuse, nil, nil}
+
+      assert entry.doc =~ "Unset, no bound"
+      assert entry.doc =~ "0 is refused"
+
+      # The guide row tells operators what a stored value outside the bounds
+      # does; the bounds it names are the enforcer's.
+      assert Sanctum.Provisioning.mint_per_hour_range() == 1..1_000_000
+      assert entry.doc =~ "A stored value outside 1 to 1,000,000 refuses every stranger's mint"
+      refute entry.doc =~ "meant off"
+      assert entry.doc =~ "operators still mint their own, until the setting is reset"
+      refute entry.doc =~ ~r/no cap|turns the cap off|removes the ceiling/
+
+      for {good, value} <- [{1, 1}, {"1", 1}, {1_000_000, 1_000_000}, {"1000000", 1_000_000}] do
+        assert entry.validator.(good) == {:ok, value}
+      end
+
+      for bad <- [0, "0", -1, "-1", "", "1.5", 1.5, 1_000_001, "1000001", "ten", nil, :x] do
+        assert entry.validator.(bad) ==
+                 {:error, "must be a whole number of athanors from 1 to 1000000"},
+               inspect(bad)
+      end
+
+      assert Roster.read(entry, fn "CYFR_MINT_PER_HOUR" -> "0" end) ==
+               {:error,
+                "CYFR_MINT_PER_HOUR=\"0\" must be a whole number of athanors from 1 to 1000000."}
+
+      assert Roster.read(entry, fn "CYFR_MINT_PER_HOUR" -> nil end) == {:ok, nil}
+      assert Roster.read(entry, fn "CYFR_MINT_PER_HOUR" -> "30" end) == {:ok, 30}
+
+      # The bounds are `Sanctum.Provisioning`'s, the mint's own check, and the
+      # host's export roster lists the call that reads them.
+      provisioning = Cyfr.Boundaries.sanctum_exports()["Sanctum.Provisioning"]
+      assert {:mint_per_hour_range, 0} in provisioning
     end
 
     test "the recovery reserve is below the log quota, and a pair not both held is not checked" do

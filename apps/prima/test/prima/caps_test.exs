@@ -185,10 +185,13 @@ defmodule Prima.CapsTest do
              :max_pairs_per_person,
              :max_members_per_group,
              :max_threads_per_athanor,
-             :mint_per_hour,
              :athanor_storage_bytes
            ]
 
     assert Enum.uniq(Caps.keys()) == Caps.keys()
+
+    # The mint rate is a rate bound that `Sanctum.Provisioning` reads, not
+    # a ceiling: no cap answers for it.
+    refute :mint_per_hour in Caps.keys()
   end
 end

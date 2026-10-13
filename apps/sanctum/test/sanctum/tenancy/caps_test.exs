@@ -14,7 +14,7 @@ defmodule Sanctum.Tenancy.CapsTest do
   @moduledoc """
   The public-door caps: off unless set, and when set, enforced where each
   applies — athanors per server, groups per person, members per group,
-  mints per hour, bytes per athanor. Each is a platform setting, set here
+  bytes per athanor. Each is a platform setting, set here
   as an operator's write leaves it and read on the next check, and a cap
   the store cannot answer refuses.
   """
@@ -155,45 +155,6 @@ defmodule Sanctum.Tenancy.CapsTest do
 
     assert {:error, {:limit_reached, :max_groups_per_person, 1}} =
              Athanors.create_group(uid, "Second")
-  end
-
-  test "mint_per_hour bounds personal athanors minted per hour" do
-    put_caps(mint_per_hour: 0)
-    n = System.unique_integer([:positive])
-
-    {:ok, user} =
-      Sanctum.Tenancy.Users.upsert_from_provider(%{
-        id: "github|https://github.com|mint-#{n}",
-        provider: "github",
-        email: "mint#{n}@example.com",
-        verified: true
-      })
-
-    {:ok, user} = Sanctum.Tenancy.Users.set_namespace(user, "mint#{n}")
-    # a cap of 0 reads as off (nil), so the mint goes through
-    assert {:ok, _} = Sanctum.Provisioning.ensure_personal_athanor(user)
-
-    put_caps(mint_per_hour: 1)
-    n2 = n + 1
-
-    {:ok, user2} =
-      Sanctum.Tenancy.Users.upsert_from_provider(%{
-        id: "github|https://github.com|mint-#{n2}",
-        provider: "github",
-        email: "mint#{n2}@example.com",
-        verified: true
-      })
-
-    {:ok, user2} = Sanctum.Tenancy.Users.set_namespace(user2, "mint#{n2}")
-    # one was minted this hour already (above)
-    assert {:error, {:limit_reached, :mint_per_hour, 1}} =
-             Sanctum.Provisioning.ensure_personal_athanor(user2)
-
-    # Groups people create do not draw on the mint budget: the cap measures
-    # person athanors, so a member's `athanor.create` cannot starve sign-ins.
-    put_caps(mint_per_hour: 2)
-    {:ok, _} = Athanors.create_group(user.id, "Not a mint")
-    assert {:ok, _} = Sanctum.Provisioning.ensure_personal_athanor(user2)
   end
 
   test "athanor_storage_bytes is one check for every writer" do
