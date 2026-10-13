@@ -595,4 +595,22 @@ alive "$sibling" || fail "the subshell's watchdog swept the live owner's registr
 touch "$S/c23.go"
 until_true 30 dead "$sibling" || fail 'the owner did not stop its session'
 
+# --- 24: a bare wait ---------------------------------------------------------
+begin '24 a bare wait in the calling shell returns once the contained leader exits'
+# The watchdog is not the caller's child: were it, this wait would last as
+# long as the watchdog, which outlives the leader until it is retired.
+caller c24 <<'EOF'
+contain_start -g 1 bash -c 'echo $$ > "$S/c24.leader.pid"; sleep 2'
+t=$SECONDS
+wait
+echo $((SECONDS - t)) > "$S/c24.took"
+contain_wait "$CONTAIN_PID" 5 1 || :
+EOF
+run_bg c24
+leader=$(pid_of c24.leader)
+until_true 10 test -s "$S/c24.took" || fail 'the bare wait did not return after the leader exited'
+dead "$leader" || fail 'the bare wait returned while the leader ran'
+[ "$(cat "$S/c24.took")" -le 3 ] || fail "the bare wait took $(cat "$S/c24.took")s for a 2 s leader"
+until_true 10 no_watchdog_of "$(cat "$S/c24.caller")" || fail 'the watchdog stayed after the session was retired'
+
 echo 'contain tests passed'
