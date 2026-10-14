@@ -1086,7 +1086,7 @@ defmodule Cyfr.DocsDriftTest do
   # vectors' (`Prima.WitResponse`'s test reads the same file), wherever
   # component-guide spells it: the Error: lines of `cyfr:http/fetch` and
   # `cyfr:storage/files`, and the Invoke Error Types, whose table names the
-  # fallback's type. The error types themselves are held to their producers
+  # fallback's type and the member a setup_required error carries besides. The error types themselves are held to their producers
   # by the fetch error check above. The `model/chat@1` refusal, with its
   # `provider` member, is a model catalyst's own result, not this envelope.
   test "component-guide's error envelope and its fallback type are the guest error vectors'" do
@@ -1096,7 +1096,9 @@ defmodule Cyfr.DocsDriftTest do
       |> File.read!()
       |> Jason.decode!()
 
-    %{"member" => member, "fields" => [type, message]} = vectors["envelope"]
+    %{"member" => member, "fields" => [type, message], "setup_member" => setup_member} =
+      vectors["envelope"]
+
     guide = File.read!(Path.join(@repo_root, "component-guide.md"))
 
     section = fn heading ->
@@ -1127,6 +1129,9 @@ defmodule Cyfr.DocsDriftTest do
 
     assert invoke =~ ~r/^\| `#{fallback}` \| A tool's result could not be encoded as JSON \|$/m,
            "component-guide.md's Invoke Error Types have no #{fallback} row"
+
+    assert invoke =~ ~r/^\| `setup_required` \| .* — includes `#{setup_member}` field \|$/m,
+           "component-guide.md's setup_required row does not name its #{setup_member} member"
   end
 
   test "the guides' tincture-block keys are ones the code actually reads" do

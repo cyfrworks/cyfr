@@ -8,7 +8,9 @@ defmodule Prima.MCP.WireVectorsTest do
   revision and the `_meta` keys, the routing headers every request case
   carries, every header value encoded to its header and decoded back, each
   refused sentinel refused, the error codes by name, and every consent
-  error produced as its whole response and decoded from it.
+  error produced as its whole response and decoded from it. Every case
+  is matched whole, so a case of another shape fails rather than going
+  unread.
   """
 
   use ExUnit.Case, async: true
@@ -19,6 +21,23 @@ defmodule Prima.MCP.WireVectorsTest do
   @vectors Path.expand("../../../../../tests/fixtures/mcp_wire.json", __DIR__)
            |> File.read!()
            |> Jason.decode!()
+
+  # A section's cases, each held to its shape: a case missing a member, or
+  # carrying a stray one, fails here instead of being skipped by a pattern.
+  defp cases!(section, count, required, optional \\ []) do
+    cases = Map.fetch!(@vectors, section)
+    assert length(cases) == count, "#{section} holds #{length(cases)} cases, not #{count}"
+
+    for vector <- cases do
+      assert is_map(vector), "#{section}: #{inspect(vector)} is not a case"
+      keys = Map.keys(vector)
+
+      assert required -- keys == [] and keys -- (required ++ optional) == [],
+             "#{section}: #{inspect(vector)} is not a case of #{inspect(required)}"
+
+      vector
+    end
+  end
 
   test "the revision is the vectors' and the only one supported" do
     version = @vectors["protocol_version"]
@@ -44,20 +63,24 @@ defmodule Prima.MCP.WireVectorsTest do
   end
 
   test "every header value encodes to its header and its header decodes back" do
-    for %{"why" => why, "value" => value, "header" => header} <- @vectors["header_values"] do
+    for vector <- cases!("header_values", 8, ~w(why value header)) do
+      %{"why" => why, "value" => value, "header" => header} = vector
       assert Protocol.encode_header_value(value) == header, why
       assert Protocol.decode_header_value(header) == {:ok, value}, why
     end
   end
 
   test "a sentinel whose payload does not decode is refused" do
-    for %{"why" => why, "header" => header} <- @vectors["header_refused"] do
+    for vector <- cases!("header_refused", 4, ~w(why header)) do
+      %{"why" => why, "header" => header} = vector
       assert Protocol.decode_header_value(header) == :error, why
     end
   end
 
   test "every request carries its case's routing headers" do
-    for %{"why" => why, "request" => request, "headers" => headers} <- @vectors["named_subject"] do
+    for vector <- cases!("named_subject", 9, ~w(why request headers)) do
+      %{"why" => why, "request" => request, "headers" => headers} = vector
+
       name =
         case Protocol.named_subject(request) do
           nil -> nil
@@ -70,6 +93,7 @@ defmodule Prima.MCP.WireVectorsTest do
 
   test "every code name answers its code, CYFR's table is exactly the vectors', and an unknown name the fallback" do
     %{"jsonrpc" => jsonrpc, "cyfr" => cyfr, "fallback_code" => fallback} = @vectors["error_codes"]
+    assert {map_size(jsonrpc), map_size(cyfr)} == {8, 17}
 
     for {name, code} <- Map.merge(jsonrpc, cyfr) do
       assert Message.code?(String.to_existing_atom(name)), name
@@ -85,6 +109,7 @@ defmodule Prima.MCP.WireVectorsTest do
 
   test "the consent tags are the five signals, each answered with its own code" do
     tags = @vectors["consent_tags"]
+    assert length(tags) == 5
 
     assert Enum.map(ConsentSignal.tags(), &Atom.to_string/1) == tags
 
@@ -95,13 +120,17 @@ defmodule Prima.MCP.WireVectorsTest do
   end
 
   test "every consent error is produced as its whole response" do
-    cases = Enum.reject(@vectors["consent_errors"], & &1["data_stripped"])
+    cases =
+      "consent_errors"
+      |> cases!(5, ~w(why tag response), ~w(payload data_stripped))
+      |> Enum.reject(& &1["data_stripped"])
 
     # confirmation_required's error is confirmation.json's alone; every
     # other tag is a case here, once.
     assert Enum.map(cases, & &1["tag"]) == @vectors["consent_tags"] -- ["confirmation_required"]
 
-    for %{"why" => why, "tag" => tag, "payload" => payload, "response" => response} <- cases do
+    for vector <- cases do
+      %{"why" => why, "tag" => tag, "payload" => payload, "response" => response} = vector
       signal = {String.to_existing_atom(tag), payload}
       assert ConsentSignal.signal?(signal), why
 
@@ -119,7 +148,8 @@ defmodule Prima.MCP.WireVectorsTest do
   end
 
   test "every consent error response decodes as the error it carries" do
-    for %{"why" => why, "response" => response} <- @vectors["consent_errors"] do
+    for vector <- cases!("consent_errors", 5, ~w(why tag response), ~w(payload data_stripped)) do
+      %{"why" => why, "response" => response} = vector
       expected = %Message{type: :error, id: response["id"], error: response["error"]}
 
       assert Message.decode(response) == {:ok, expected}, why

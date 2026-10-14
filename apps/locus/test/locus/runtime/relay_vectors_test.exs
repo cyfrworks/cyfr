@@ -65,9 +65,21 @@ defmodule Locus.Runtime.RelayVectorsTest do
 
   defp headers(headers), do: Enum.map(headers, &List.to_tuple/1)
 
-  defp refusals(receiver) do
-    cases = Enum.filter(@vectors["refusals"], &(&1["receiver"] == receiver))
-    assert cases != [], "the vectors carry no refusal the #{receiver} receives"
+  # The refusals `receiver` receives: every refusal names a receiver, the
+  # service or the runner, and its frame, so none goes unread; `count` is
+  # how many it receives.
+  defp refusals(receiver, count) do
+    refusals = @vectors["refusals"]
+    assert length(refusals) == 13
+
+    for refusal <- refusals do
+      assert %{"why" => _, "receiver" => side, "after" => after_frames, "reason" => _} = refusal
+      assert side in ["service", "runner"] and is_integer(after_frames), inspect(refusal)
+      assert Enum.count(~w(json json_fill encoded_hex), &Map.has_key?(refusal, &1)) == 1
+    end
+
+    cases = Enum.filter(refusals, &(&1["receiver"] == receiver))
+    assert length(cases) == count, "the #{receiver} receives #{length(cases)} refusals"
     cases
   end
 
@@ -115,7 +127,9 @@ defmodule Locus.Runtime.RelayVectorsTest do
     defp stop_reason(%{"reason" => reason}), do: String.to_existing_atom(reason)
 
     test "closes the channel for every refusal the service receives, naming its reason" do
-      for %{"why" => why, "after" => after_frames} = refusal <- refusals("service") do
+      for refusal <- refusals("service", 8) do
+        %{"why" => why, "after" => after_frames} = refusal
+
         # Every refusal a service receives is of a runner's first frame,
         # decided before any host call is made.
         assert after_frames == 0, why
@@ -320,7 +334,8 @@ defmodule Locus.Runtime.RelayVectorsTest do
     end
 
     test "closes the channel for every refusal the runner receives, after the exchange's frames before it" do
-      for %{"why" => why, "after" => after_frames} = refusal <- refusals("runner") do
+      for refusal <- refusals("runner", 5) do
+        %{"why" => why, "after" => after_frames} = refusal
         endpoint = runner_end!()
         played = play(endpoint, 0, after_frames)
 
