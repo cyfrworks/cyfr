@@ -228,6 +228,7 @@ defmodule Cyfr.TestPartitionEnvTest do
       assert read_record(Path.join(run, file)) == {1, %{}}
     end
 
+    File.mkdir_p!(Path.dirname(canonical))
     File.write!(canonical, record(%{@a => "/a_test.exs"}))
     Env.failures_seed!(run, 2, root)
 

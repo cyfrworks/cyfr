@@ -356,11 +356,11 @@ cancel_dir=$(sed -n 's/^==> logs and disposable resources kept: //p' "$scratch/c
 tree="$scratch/tree"
 mkdir -p "$tree/apps/one/test" "$tree/apps/two/test"
 touch "$tree/apps/one/test/a_test.exs" "$tree/apps/two/test/only_test.exs"
-(cd "$tree" && "${clean[@]}" bash "$runner" -n 4 -- --warnings-as-errors --only sparse apps/one/test ./apps/two/test/only_test.exs:12) \
+(cd "$tree" && "${clean[@]}" bash "$runner" -n 4 -- --warnings-as-errors --only sparse apps/one/test ./apps/two/test/only_test.exs) \
   >"$scratch/sparse" 2>&1 || fail 'sparse partitions failed'
 partitions_with() { grep -lxF -- "$1" "$TRACE"/cyfr-t.*-p* 2>/dev/null | sed 's/.*-p//' | sort | tr '\n' ' '; }
 [ "$(partitions_with apps/one/test)" = '1 ' ] || fail "apps/one reached partitions $(partitions_with apps/one/test)"
-[ "$(partitions_with ./apps/two/test/only_test.exs:12)" = '2 ' ] || fail 'a named file missed its partition'
+[ "$(partitions_with ./apps/two/test/only_test.exs)" = '2 ' ] || fail 'a named file missed its partition'
 [ "$(partitions_with sparse)" = '1 2 ' ] || fail 'an option value did not reach every started partition'
 for n in 3 4; do
   grep -A1 -x "==> partition $n/4" "$scratch/sparse" | grep -q 'not started' || fail "partition $n's account does not say it was not started"
@@ -904,8 +904,9 @@ hold_record_lock() {
 release_record_lock() {
   kill "$holder" 2>/dev/null || :
   wait "$holder" 2>/dev/null || :
-  flock -n "$canonical.lock" true || fail "the test's lock holder left the record's lock held"
 }
+# Once nothing else may hold the record's lock, it is free.
+record_lock_free() { flock -n "$canonical.lock" true || fail "the record's lock is still held: $1"; }
 
 # The run waits for the record's lock: held, the seed waits, and the run
 # ends only once it is released.
@@ -920,6 +921,7 @@ sleep 1
 alive "$lock_wait" || fail 'the run did not wait for the record lock'
 release_record_lock
 if wait "$lock_wait"; then :; else fail "the run that waited for the record lock failed: $(tail -n 3 "$scratch/lock-wait")"; fi
+record_lock_free 'after the run that waited for it'
 
 # A merge stopped part-way leaves the canonical record whole, and the
 # runner says the merge did not complete. The merge waits on the record's
@@ -938,6 +940,7 @@ sleep 1
 stop_runner "$unmerged" TERM 60 "$scratch/unmerged"
 if pgrep -f -- "$canonical.lock" >/dev/null; then fail "a stopped merge left a process waiting for the record lock: $(pgrep -af -- "$canonical.lock")"; fi
 release_record_lock
+record_lock_free "the test's holder left it held"
 [ "$(record_sum)" = "$before" ] || fail 'a stopped merge changed the failures record'
 grep -qx '==> the failures record merge did not complete; the canonical record was left as it was' "$scratch/unmerged" ||
   fail 'a stopped merge was not reported'
@@ -1092,9 +1095,9 @@ toy_run "$scratch/toy-12" -n 2 -- apps/one/lib
 [ "$toy_status" = 1 ] && grep -qx '==> no test file in the named paths' "$scratch/toy-12" || fail 'a path without a test file did not fail'
 # A ./ name and an absolute one with a line are the units their relative
 # spellings make.
-toy_run "$scratch/toy-paths" -n 2 -- --warnings-as-errors ./apps/one/test/c_test.exs "$toy/apps/one/test/d_test.exs:3"
+toy_run "$scratch/toy-paths" -n 2 -- --warnings-as-errors ./apps/one/test/c_test.exs:3 "$toy/apps/one/test/d_test.exs:3"
 [ "$toy_status" = 0 ] || fail "the ./ and absolute names failed with $toy_status"
-[ "$(sort "$toy_trace")" = "1 --no-compile --warnings-as-errors apps/one/test/c_test.exs
+[ "$(sort "$toy_trace")" = "1 --no-compile --warnings-as-errors apps/one/test/c_test.exs:3
 2 --no-compile --warnings-as-errors apps/one/test/d_test.exs:3" ] || fail "the ./ and absolute names were given as $(sort "$toy_trace")"
 # The table: absent, equal weights in path order; named but missing, or
 # malformed, refused.
