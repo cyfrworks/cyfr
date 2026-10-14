@@ -323,7 +323,12 @@ run_gate pass -- "$gate" -n 2 -l "$scratch/pass.log"
 [ "$gate_rc" = 0 ] || fail "a gate whose every step passes exited $gate_rc: $(cat "$scratch/pass.err")"
 framed pass "$gate_pid" 0
 has_line '^==> gate passed in ' "$scratch/pass.out" || fail "a passing gate did not report its verdict: $(cat "$scratch/pass.out")"
-echo 'ok: a whole gate that passes'
+# Every suite the gate runs reported a result, so a gate whose partitions
+# ran nothing cannot pass here.
+for suite in static.sqlite_suite postgres.pg_tests islands.prima islands.arca islands.sanctum; do
+  has_line "^    ${suite//./\\.}: .*Result: " "$scratch/pass.out" || fail "the passing gate's $suite reported no result: $(cat "$scratch/pass.out")"
+done
+echo 'ok: a whole gate that passes, every suite with a result'
 
 # --- a whole gate: a stalled island, build paths, the pg leg, the framing --------
 # Started by a relative path from another directory; the caller's build
