@@ -53,13 +53,19 @@ case "$(cargo component --version 2>/dev/null)" in
 esac
 [ -d "$(rustc --print sysroot)/lib/rustlib/$target" ] || refuse "rustc's $target target"
 
+cargo_home="$(cd "${CARGO_HOME:-$HOME/.cargo}" 2>/dev/null && pwd -P)" ||
+  refuse "a Cargo home at ${CARGO_HOME:-$HOME/.cargo}"
+
 out="$(cd "$3" && pwd -P)"
 root="$(cd "$(dirname "$0")/../../../../.." && pwd -P)"
-work="$(cd "$(mktemp -d)" && pwd -P)"
-cargo_home="$(cd "${CARGO_HOME:-$HOME/.cargo}" && pwd -P)"
-trap 'rm -rf "$work"' EXIT
+# The trap is in place before the scratch directory exists, so no exit
+# after mktemp leaves it behind.
+work=""
+trap '[ -z "$work" ] || rm -rf "$work"' EXIT
 trap 'exit 143' TERM
 trap 'exit 130' INT
+work="$(mktemp -d)"
+work="$(cd "$work" && pwd -P)"
 
 mkdir -p "$work/src"
 cp "$out/src/lib.rs" "$work/src/lib.rs"

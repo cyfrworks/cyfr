@@ -30,6 +30,8 @@ case "${1:-}" in
     ;;
 esac
 
+# The legacy text syntax stays refused whatever the caller exported.
+unset WAST_STRICT_COMPONENT_INDICES
 wasm_tools="$root/_tools/wasm-tools"
 pinned="$("$root/scripts/wasm-tools.sh" version)"
 case "$("$wasm_tools" --version 2>/dev/null)" in
