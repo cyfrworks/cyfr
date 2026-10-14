@@ -14,11 +14,13 @@ INSTALL_SH="$REPO_ROOT/scripts/install.sh"
 failures=0
 
 # Run a snippet in a subshell that sources install.sh in test mode.
-# $1 = description, $2 = expected exit (0 or nonzero via "fail"), $3 = snippet
+# $1 = description, $2 = expected exit (0 or nonzero via "fail"), $3 = snippet,
+# $4 = optional text the output must contain, which pins the refusal reached
 run_case() {
     desc="$1"
     expect="$2"
     snippet="$3"
+    message="${4:-}"
 
     output="$(
         sh -c "
@@ -31,14 +33,43 @@ run_case() {
     code=$?
 
     if [ "$expect" = "ok" ] && [ "$code" -eq 0 ]; then
-        printf 'PASS: %s\n' "$desc"
+        reason=""
     elif [ "$expect" = "fail" ] && [ "$code" -ne 0 ]; then
+        reason=""
+    else
+        reason="exit=$code, expected $expect"
+    fi
+
+    if [ -z "$reason" ] && [ -n "$message" ]; then
+        case "$output" in
+            *"$message"*) ;;
+            *) reason="output lacks \"$message\"" ;;
+        esac
+    fi
+
+    if [ -z "$reason" ]; then
         printf 'PASS: %s\n' "$desc"
     else
-        printf 'FAIL: %s (exit=%s, expected %s)\n' "$desc" "$code" "$expect"
+        printf 'FAIL: %s (%s)\n' "$desc" "$reason"
         printf '%s\n' "$output" | sed 's/^/    /'
         failures=$((failures + 1))
     fi
+}
+
+# Print the first executable named $1 on PATH. `command -v` would name a
+# shell builtin such as printf instead of its file.
+find_tool() {
+    saved_ifs="$IFS"
+    IFS=:
+    for dir in $PATH; do
+        if [ -n "$dir" ] && [ -f "$dir/$1" ] && [ -x "$dir/$1" ]; then
+            IFS="$saved_ifs"
+            printf '%s\n' "$dir/$1"
+            return 0
+        fi
+    done
+    IFS="$saved_ifs"
+    return 1
 }
 
 fixture="$(mktemp -d)"
@@ -73,9 +104,23 @@ run_case "missing checksum line fails closed" fail \
 # Restore checksums.txt
 printf '%s  cyfr_test.tar.gz\n' "$sum" > "$fixture/checksums.txt"
 
+# verify_checksum reads checksums.txt with grep and awk before it looks for a
+# sha tool, so this case's PATH keeps those and lacks only sha256sum and
+# shasum; an empty PATH would stop at "no checksum found" instead.
+no_sha_path="$fixture/no-sha-path"
+mkdir "$no_sha_path"
+for tool in sh grep awk cat printf; do
+    if ! tool_file="$(find_tool "$tool")"; then
+        printf 'install-verify-test: %s is not on PATH\n' "$tool" >&2
+        exit 1
+    fi
+    ln -s "$tool_file" "$no_sha_path/$tool"
+done
+
 run_case "missing sha tool fails closed" fail \
-    "PATH='/nonexistent'
-     verify_checksum '$fixture' 'cyfr_test.tar.gz'"
+    "PATH='$no_sha_path'
+     verify_checksum '$fixture' 'cyfr_test.tar.gz'" \
+    "sha256sum or shasum is required"
 
 run_case "CYFR_INSECURE_SKIP_VERIFY=1 bypasses with a warning" ok \
     "CYFR_INSECURE_SKIP_VERIFY=1
