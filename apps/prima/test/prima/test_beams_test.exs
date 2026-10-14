@@ -12,12 +12,13 @@ defmodule Prima.Test.BeamsTest do
 
   alias Prima.Test.Beams
 
-  @moduletag :tmp_dir
+  setup do
+    dir = Path.join(System.tmp_dir!(), "test_beams_#{System.unique_integer([:positive])}")
+    on_exit(fn -> File.rm_rf!(dir) end)
 
-  setup %{tmp_dir: tmp_dir} do
     # A checkout whose own path holds `/lib/`, as one under `/var/lib/` does.
-    root = Path.join(tmp_dir, "var/lib/checkout")
-    ebin = Path.join(tmp_dir, "ebin")
+    root = Path.join(dir, "var/lib/checkout")
+    ebin = Path.join(dir, "ebin")
     File.mkdir_p!(ebin)
     {:ok, root: root, ebin: ebin}
   end
