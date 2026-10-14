@@ -178,9 +178,9 @@ defmodule Cyfr.TransactionClosureScopeTest do
   defp heads({name, _meta, ctx}) when is_atom(name) and is_atom(ctx), do: [{name, 0}]
   defp heads(_other), do: []
 
-  # `alias A.B`, `alias A.B, as: C` and `alias A.{B, C}` in `body`, with
-  # or without options such as `warn: false`, as short name to full name,
-  # over the aliases of `scope`.
+  # `alias A.B`, `alias A.B, as: C`, `alias A.{B, C}` and `alias
+  # __MODULE__` in `body`, with or without options such as `warn: false`,
+  # as short name to full name, over the aliases of `scope`.
   defp aliases(body, scope) do
     {_ast, acc} =
       Macro.prewalk(body, scope.aliases, fn
@@ -195,19 +195,15 @@ defmodule Cyfr.TransactionClosureScopeTest do
           {node, acc}
 
         {:alias, _, [{:__aliases__, _, parts} = target | opts]} = node, acc ->
-          short =
-            case opts do
-              [kw] when is_list(kw) ->
-                case Keyword.get(kw, :as) do
-                  {:__aliases__, _, [as]} -> as
-                  _none -> List.last(parts)
-                end
-
-              [] ->
-                List.last(parts)
-            end
-
+          short = short_name(opts, List.last(parts))
           {node, Map.put(acc, short, resolve(target, %{scope | aliases: acc}))}
+
+        # `alias __MODULE__, as: Me` names the module itself.
+        {:alias, _, [{:__MODULE__, _, _} = target | opts]} = node, acc ->
+          short =
+            short_name(opts, scope.name |> String.split(".") |> List.last() |> String.to_atom())
+
+          {node, Map.put(acc, short, resolve(target, scope))}
 
         node, acc ->
           {node, acc}
@@ -215,6 +211,16 @@ defmodule Cyfr.TransactionClosureScopeTest do
 
     acc
   end
+
+  # The name an alias is written under: its `as:`, or else `default`.
+  defp short_name([kw], default) when is_list(kw) do
+    case Keyword.get(kw, :as) do
+      {:__aliases__, _, [as]} -> as
+      _none -> default
+    end
+  end
+
+  defp short_name([], default), do: default
 
   # `import A.B` and `import :mod` in `body`, with their `only:` and
   # `except:` lists, as `{module, only, except}`.
@@ -660,6 +666,19 @@ defmodule Cyfr.TransactionClosureScopeTest do
       """
 
       assert [{"planted.ex", 2, :also, "calls Phoenix.PubSub.broadcast (Planted, line 4)"}] =
+               scan([{"planted.ex", source}]).refused
+    end
+
+    test "is refused through a call to its own module by an alias of it" do
+      source = """
+      defmodule Planted do
+        alias __MODULE__, as: Me
+        def write(actor, row), do: Arca.Users.mint(actor, row, also: fn row -> Me.announce(row) end)
+        def announce(row), do: :ssl.connect(row.host, 443, [])
+      end
+      """
+
+      assert [{"planted.ex", 3, :also, "calls :ssl.connect (Planted, line 4)"}] =
                scan([{"planted.ex", source}]).refused
     end
 
