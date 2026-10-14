@@ -20,6 +20,8 @@ defmodule Emissary.External.ServerSseTest do
   """
   use ExUnit.Case, async: false
 
+  import Prima.Test.Wait, only: [wait_until: 2]
+
   alias Emissary.External.Server
 
   setup tags do
@@ -112,6 +114,8 @@ defmodule Emissary.External.ServerSseTest do
     caller = spawn(fn -> Server.call_tool(pid, "probe", %{}) end)
 
     assert_receive {:upstream_held, upstream}, 10_000
+    # A failed assertion below still lets the held upstream go.
+    on_exit(fn -> send(upstream, :release) end)
     assert [task_pid] = Map.keys(:sys.get_state(pid).in_flight)
     task_ref = Process.monitor(task_pid)
 
@@ -120,15 +124,5 @@ defmodule Emissary.External.ServerSseTest do
     wait_until(fn -> :sys.get_state(pid).in_flight == %{} end, 10_000)
     send(upstream, :release)
     Bypass.pass(bypass)
-  end
-
-  defp wait_until(fun, timeout) do
-    deadline = System.monotonic_time(:millisecond) + timeout
-
-    unless fun.() do
-      if System.monotonic_time(:millisecond) > deadline, do: flunk("condition not met in time")
-      Process.sleep(20)
-      wait_until(fun, timeout)
-    end
   end
 end

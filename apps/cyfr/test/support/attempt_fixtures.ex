@@ -199,13 +199,6 @@ defmodule Cyfr.Test.AttemptFixtures do
   def stored, do: [grant: :stored, verify: &Sanctum.ExecutionStanding.verify/1]
 
   @doc """
-  The grant options of a retirement — a failure, a cancel, a lapse: the
-  stamp its attempt stores, whether or not it still stands.
-  """
-  @spec retiring() :: keyword()
-  def retiring, do: [grant: :stored, verify: &Sanctum.ExecutionStanding.stamp_only/1]
-
-  @doc """
   The host-stamped lineage of an in-chain call from a real execution: a
   root admitted in `ctx`'s athanor under its standing grant and with its
   origin, answered as `Sanctum.Gate.call_in_chain/5`'s `:lineage` — the
@@ -423,7 +416,7 @@ defmodule Cyfr.Test.AttemptFixtures do
       Prima.Authority.Blob.binding_key(source, Prima.Authority.Blob.ingress_key(), nil)
 
     {:ok, profile} =
-      Arca.ProfileStorage.put(%{
+      Arca.Test.Writers.put_profile(%{
         athanor_id: ctx.athanor_id,
         source_ref: source,
         kind: "owner",

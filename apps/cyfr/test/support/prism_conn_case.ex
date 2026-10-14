@@ -251,18 +251,6 @@ defmodule PrismWeb.ConnCase do
   end
 
   @doc """
-  Mount `path` as an authenticated LiveView, asserting the mount succeeded.
-  Returns `{view, html}`. A macro because `live/2` needs the caller's
-  `@endpoint`.
-  """
-  defmacro live_authenticated(conn, path) do
-    quote do
-      {:ok, view, _mount_html} = live(unquote(conn), unquote(path))
-      {view, PrismWeb.ConnCase.settled_render(view)}
-    end
-  end
-
-  @doc """
   The page path for an athanor: `/a/<route>` + `suffix`. Takes an athanor, a
   route string (for a test that names one without seating anybody), or
   nothing — which is the athanor `log_in_user/3` seated this test's person
@@ -312,6 +300,30 @@ defmodule PrismWeb.ConnCase do
     case Phoenix.LiveViewTest.find_live_child(view, "topbar") do
       nil -> html
       child -> Phoenix.LiveViewTest.render(child) && Phoenix.LiveViewTest.render(view)
+    end
+  end
+
+  @doc """
+  Reload the tincture registry against the database as it now stands. The
+  registry is one server-wide process, so it is allowed the test's checkout
+  while the test holds one; from an `on_exit` callback, after the test's own
+  checkout is gone, its reload runs on a checkout lent to it alone.
+  """
+  def reload_registry do
+    registry = Process.whereis(Prism.TinctureRegistry)
+
+    case Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo) do
+      :ok ->
+        try do
+          Ecto.Adapters.SQL.Sandbox.allow(Arca.Repo, self(), registry)
+          :ok = Prism.TinctureRegistry.reload()
+        after
+          Ecto.Adapters.SQL.Sandbox.checkin(Arca.Repo)
+        end
+
+      {:already, _} ->
+        Ecto.Adapters.SQL.Sandbox.allow(Arca.Repo, self(), registry)
+        :ok = Prism.TinctureRegistry.reload()
     end
   end
 end

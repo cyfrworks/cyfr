@@ -46,26 +46,6 @@ defmodule PrismWeb.ShellFrameTest do
     {:ok, conn: conn, user: user, athanor: athanor, ctx: ctx}
   end
 
-  # The registry is one server-wide process; after the test's own checkout
-  # is gone its reload runs on a checkout lent to it alone.
-  defp reload_registry do
-    registry = Process.whereis(Prism.TinctureRegistry)
-
-    case Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo) do
-      :ok ->
-        try do
-          Ecto.Adapters.SQL.Sandbox.allow(Arca.Repo, self(), registry)
-          :ok = Prism.TinctureRegistry.reload()
-        after
-          Ecto.Adapters.SQL.Sandbox.checkin(Arca.Repo)
-        end
-
-      {:already, _} ->
-        Ecto.Adapters.SQL.Sandbox.allow(Arca.Repo, self(), registry)
-        :ok = Prism.TinctureRegistry.reload()
-    end
-  end
-
   # A tincture version in the athanor's tree and its component row, with
   # `frame` as its `tincture.frame` block. Answers the row's release digest.
   defp tincture!(ctx, name, frame \\ %{}) do

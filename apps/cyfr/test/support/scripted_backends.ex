@@ -104,7 +104,6 @@ defmodule Cyfr.Test.ScriptedBackends do
   end
 
   def set(%{agent: agent}, key, value), do: Agent.update(agent, &Map.put(&1, key, value))
-  def get(%{agent: agent}, key), do: Agent.get(agent, &Map.fetch!(&1, key))
 
   @doc "What the owner of `server` reports: its state and rev."
   def readiness(%{agent: agent}, server, state, rev),

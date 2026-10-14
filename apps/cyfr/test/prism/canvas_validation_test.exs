@@ -52,24 +52,6 @@ defmodule Prism.CanvasValidationTest do
     {:ok, conn: conn, user: user, athanor: athanor, ctx: ctx}
   end
 
-  defp reload_registry do
-    registry = Process.whereis(Prism.TinctureRegistry)
-
-    case Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo) do
-      :ok ->
-        try do
-          Ecto.Adapters.SQL.Sandbox.allow(Arca.Repo, self(), registry)
-          :ok = Prism.TinctureRegistry.reload()
-        after
-          Ecto.Adapters.SQL.Sandbox.checkin(Arca.Repo)
-        end
-
-      {:already, _} ->
-        Ecto.Adapters.SQL.Sandbox.allow(Arca.Repo, self(), registry)
-        :ok = Prism.TinctureRegistry.reload()
-    end
-  end
-
   # A canvas version laid in the athanor's tree with its component row.
   defp canvas!(ctx, name, version) do
     manifest = %{

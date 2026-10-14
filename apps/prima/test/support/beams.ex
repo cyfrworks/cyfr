@@ -13,6 +13,9 @@ defmodule Prima.Test.Beams do
   `Code.compile_string/1` returns.
   """
 
+  # The umbrella root this module is compiled in: `apps/prima/test/support`.
+  @root Path.expand("../../../..", __DIR__)
+
   @typedoc "A function another module reaches: `{module, function, arity}`."
   @type reach :: {module(), atom(), arity()}
 
@@ -50,18 +53,28 @@ defmodule Prima.Test.Beams do
   end
 
   @doc """
-  Whether the beam at `path` was compiled from a `lib/` source. The test
-  build compiles `test/support` into the same ebin; a support module is
-  not the application, and its reaches are the suite's.
+  Whether the beam at `path` was compiled from an application's `lib/`
+  source: `apps/<app>/lib/` under the umbrella `root`. The test build
+  compiles `test/support` into the same ebin; a support module is not the
+  application, and its reaches are the suite's. The source is read
+  relative to `root`, so a checkout under a directory such as `/var/lib/`
+  does not make every beam a `lib/` one.
   """
-  @spec production?(Path.t()) :: boolean()
-  def production?(path) do
+  @spec production?(Path.t(), Path.t()) :: boolean()
+  def production?(path, root \\ @root) do
     case :beam_lib.chunks(String.to_charlist(path), [:compile_info]) do
       {:ok, {_mod, [compile_info: info]}} ->
-        info |> Keyword.get(:source, ~c"") |> to_string() |> String.contains?("/lib/")
+        info |> Keyword.get(:source, ~c"") |> to_string() |> lib_source?(root)
 
       _ ->
         false
+    end
+  end
+
+  defp lib_source?(source, root) do
+    case source |> Path.relative_to(root) |> Path.split() do
+      ["apps", _app, "lib" | _] -> true
+      _ -> false
     end
   end
 

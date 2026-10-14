@@ -3,8 +3,10 @@
 
 # The facade roster: for each foundation and domain root, the facade
 # modules its Boundary `exports` must hold beyond the additions
-# `Cyfr.BoundaryDeclarationsTest` rosters with their reasons. Generated
-# from the tree at `a9dddcfb`; a change to a facade's exports is made here
+# `Cyfr.BoundaryDeclarationsTest` rosters with their reasons. That test
+# (`apps/cyfr/test/cyfr/boundary_declarations_test.exs`) is its one reader,
+# and it fails when a root's declared exports differ from this list plus
+# its additions, so a change to a facade's exports is made here, by hand,
 # in the same change.
 %{
   "Arca" => [

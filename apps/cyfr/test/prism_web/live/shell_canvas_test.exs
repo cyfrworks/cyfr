@@ -55,24 +55,6 @@ defmodule PrismWeb.ShellCanvasTest do
     {:ok, conn: conn, user: user, athanor: athanor, ctx: ctx}
   end
 
-  defp reload_registry do
-    registry = Process.whereis(Prism.TinctureRegistry)
-
-    case Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo) do
-      :ok ->
-        try do
-          Ecto.Adapters.SQL.Sandbox.allow(Arca.Repo, self(), registry)
-          :ok = Prism.TinctureRegistry.reload()
-        after
-          Ecto.Adapters.SQL.Sandbox.checkin(Arca.Repo)
-        end
-
-      {:already, _} ->
-        Ecto.Adapters.SQL.Sandbox.allow(Arca.Repo, self(), registry)
-        :ok = Prism.TinctureRegistry.reload()
-    end
-  end
-
   # ---- what the athanor holds -----------------------------------------------
 
   # A tincture version laid in the athanor's tree with its component row:
