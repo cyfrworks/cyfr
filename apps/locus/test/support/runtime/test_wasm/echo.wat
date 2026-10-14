@@ -1,13 +1,13 @@
+;; SPDX-License-Identifier: Apache-2.0
+;; Copyright 2026 CYFR Works Inc.
+;;
 ;; A reagent whose `compute` answers its input unchanged: the JSON it was
 ;; given is the JSON it returns, so a run of it completes with a known
 ;; output. The canonical ABI of `cyfr:reagent/compute@0.1.0`: the export
 ;; takes the string's pointer and length and answers a pointer to a return
 ;; area holding the result string's pointer and length.
 ;;
-;; To regenerate:
-;;   wat2wasm echo.wat -o echo.core.wasm
-;;   wasm-tools component embed ../../../../../wit/reagent --world reagent echo.core.wasm -o echo.embedded.wasm
-;;   wasm-tools component new echo.embedded.wasm -o echo.wasm
+;; Built by build.sh (README.md).
 (module
   (memory (export "memory") 1)
   (global $heap (mut i32) (i32.const 1024))

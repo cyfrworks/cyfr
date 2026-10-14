@@ -36,15 +36,15 @@ CYFR's, and the worker image's `tests/locus-runtime-image/runners.py` and
 ## Rebuilding
 
 The binaries are checked in. `build.sh` builds each from its `.wat` with
-the pinned `wasm-tools` alone, `_tools/wasm-tools` at the version
-`scripts/wasm-tools.sh` pins (1.261.0), which it installs first: a core
-module is parsed, stripped of its custom sections, given its world's WIT
-from `wit/` and made a component; a `.wat` that is a whole component is
-parsed as it stands. The component records the version of the tool that
-made it, so another version gives other bytes. `build.sh --check`
-compares a fresh build with what is checked in, and
-`scripts/check-test-wasm.sh` runs it. Rebuild whenever a `.wat` changes
-or the pin moves, and record what the build prints below:
+`_tools/wasm-tools` at the version `scripts/wasm-tools.sh` pins, and
+nothing else, and refuses a missing or other `wasm-tools`, naming
+`scripts/wasm-tools.sh install _tools`: a core module is parsed, stripped
+of its custom sections, given its world's WIT from `wit/` and made a
+component; a `.wat` that is a whole component is parsed as it stands. The
+component records the version of the tool that made it, so another version
+gives other bytes. `build.sh --check` compares a fresh build with what is
+checked in, and `scripts/check-test-wasm.sh` runs it. Rebuild whenever a
+`.wat` changes or the pin moves, and record what the build prints below:
 `Locus.Runtime.StoreLimitsTest` holds each file to its digest, so a source
 changed without a rebuild fails.
 

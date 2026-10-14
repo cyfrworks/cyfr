@@ -18,8 +18,15 @@
 #   build-fixture.sh NAME WIT_KIND OUT_DIR --check    build and compare with
 #                                                     the checked-in binary
 #
-# Requires the toolchain the fixture's README.md names.
+# Requires the toolchain below, which each fixture's README.md names, and
+# refuses a missing or other one by name. Exit 0 built or identical; 1 the
+# binary differs; 2 usage; 69 the toolchain is missing or not the pinned
+# one.
 set -euo pipefail
+
+rustc_version=1.93.0
+cargo_component_version=0.21.1
+target=wasm32-wasip2
 
 usage() { echo "usage: $0 NAME WIT_KIND OUT_DIR [--check]" >&2; exit 2; }
 
@@ -34,11 +41,25 @@ case "${4:-}" in
   *) usage ;;
 esac
 
+refuse() { echo "build-fixture.sh needs $1" >&2; exit 69; }
+command -v mix >/dev/null || refuse "mix, which writes the canonical Cargo.toml"
+case "$(rustc --version 2>/dev/null)" in
+  "rustc $rustc_version "*) ;;
+  *) refuse "rustc $rustc_version" ;;
+esac
+case "$(cargo component --version 2>/dev/null)" in
+  "cargo-component"*" $cargo_component_version"*) ;;
+  *) refuse "cargo-component $cargo_component_version" ;;
+esac
+[ -d "$(rustc --print sysroot)/lib/rustlib/$target" ] || refuse "rustc's $target target"
+
 out="$(cd "$3" && pwd -P)"
 root="$(cd "$(dirname "$0")/../../../../.." && pwd -P)"
 work="$(cd "$(mktemp -d)" && pwd -P)"
 cargo_home="$(cd "${CARGO_HOME:-$HOME/.cargo}" && pwd -P)"
 trap 'rm -rf "$work"' EXIT
+trap 'exit 143' TERM
+trap 'exit 130' INT
 
 mkdir -p "$work/src"
 cp "$out/src/lib.rs" "$work/src/lib.rs"
@@ -49,9 +70,9 @@ cp -R "$root/wit/$kind" "$work/wit"
   "File.write!(System.fetch_env!(\"CARGO_TOML\"), Prima.CargoToml.template(:$kind))" >&2)
 
 (cd "$work" && RUSTFLAGS="--remap-path-prefix=$work=/${name//_/-} --remap-path-prefix=$cargo_home=/cargo" \
-  cargo component build --release --target wasm32-wasip2 --locked >&2)
+  cargo component build --release --target "$target" --locked >&2)
 
-built="$work/target/wasm32-wasip2/release/cyfr_component.wasm"
+built="$work/target/$target/release/cyfr_component.wasm"
 digest() { shasum -a 256 "$1" | cut -d' ' -f1; }
 
 if [ "${4:-}" = --check ]; then

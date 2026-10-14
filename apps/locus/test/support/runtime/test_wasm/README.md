@@ -15,27 +15,17 @@ WebAssembly text it is built from.
 
 ## Rebuilding
 
-Each binary is built with the pinned `wasm-tools` alone,
-`_tools/wasm-tools` at the version `scripts/wasm-tools.sh` pins. A core
+`build.sh` builds each binary from its `.wat` with `_tools/wasm-tools` at
+the version `scripts/wasm-tools.sh` pins, and nothing else, and writes
+CYFR's copy of `math.wasm` with Locus's; it refuses a missing or other
+`wasm-tools`, naming `scripts/wasm-tools.sh install _tools`. A core
 module is parsed and stripped of its custom sections; `echo` and `spin`
 are then given the reagent world's WIT and made components, which record
-the version of the tool that made them. From the repository root, after
-changing a `.wat` (the commands in `echo.wat` and `spin.wat` name an
-earlier toolchain):
+the version of the tool that made them. Rebuild whenever a `.wat` changes
+or the pin moves; `build.sh --check` compares a fresh build with what is
+checked in, and `scripts/check-test-wasm.sh` runs it.
 
 ```sh
-scripts/wasm-tools.sh install _tools
-d=apps/locus/test/support/runtime/test_wasm
-_tools/wasm-tools parse "$d/math.wat" | _tools/wasm-tools strip --all -o "$d/math.wasm"
-cp "$d/math.wasm" apps/cyfr/test/support/test_wasm/math.wasm
-t=$(mktemp -d)
-for name in echo spin; do
-  _tools/wasm-tools parse "$d/$name.wat" | _tools/wasm-tools strip --all -o "$t/$name.core.wasm"
-  _tools/wasm-tools component embed wit/reagent --world reagent "$t/$name.core.wasm" -o "$t/$name.embedded.wasm"
-  _tools/wasm-tools component new "$t/$name.embedded.wasm" -o "$d/$name.wasm"
-done
-rm -r "$t"
+apps/locus/test/support/runtime/test_wasm/build.sh           # build and write
+apps/locus/test/support/runtime/test_wasm/build.sh --check   # compare only
 ```
-
-`scripts/check-test-wasm.sh` builds each afresh and fails naming any
-binary that is not its source's build.

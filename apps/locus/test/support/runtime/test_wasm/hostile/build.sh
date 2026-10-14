@@ -3,8 +3,8 @@
 # Copyright 2026 CYFR Works Inc.
 #
 # Build each guest of this directory from its .wat, in a scratch
-# directory, with the pinned `_tools/wasm-tools` alone (installed first by
-# scripts/wasm-tools.sh): a core module parsed and stripped of its custom
+# directory, with `_tools/wasm-tools` at the version scripts/wasm-tools.sh
+# pins, and nothing else: a core module parsed and stripped of its custom
 # sections, its world's WIT embedded and the component made; or, for a
 # guest whose `.wat` is a whole component (`text`), parsed as it stands.
 # The component records the version of the tool that made it, so the
@@ -14,12 +14,13 @@
 #   build.sh            build, write each .wasm, print the digests README.md
 #                       records
 #   build.sh --check    build and compare with the checked-in binaries
+#
+# Exit 0 built or identical; 1 a binary differs; 2 usage; 69
+# `_tools/wasm-tools` is missing or not the pinned version.
 set -euo pipefail
 
 here="$(cd "$(dirname "$0")" && pwd -P)"
 root="$(cd "$here/../../../../../../.." && pwd -P)"
-work="$(mktemp -d)"
-trap 'rm -rf "$work"' EXIT
 
 case "${1:-}" in
   --check | "") ;;
@@ -29,8 +30,15 @@ case "${1:-}" in
     ;;
 esac
 
-"$root/scripts/wasm-tools.sh" install "$root/_tools"
 wasm_tools="$root/_tools/wasm-tools"
+pinned="$("$root/scripts/wasm-tools.sh" version)"
+case "$("$wasm_tools" --version 2>/dev/null)" in
+  "wasm-tools $pinned "*) ;;
+  *)
+    echo "$wasm_tools is not wasm-tools $pinned, the version scripts/wasm-tools.sh pins: run scripts/wasm-tools.sh install _tools" >&2
+    exit 69
+    ;;
+esac
 
 # Each guest and the world it is a component of, or `text`.
 guests="extra_memory:reagent wide_table:reagent grower:reagent vault_probe:catalyst attached_header_probe:catalyst credential_canary:catalyst trapper:reagent async_lift:text sync_lift:text gc_alloc:text exception_throw:text externref_table:text"
@@ -48,6 +56,11 @@ for file in "$here"/*.wat "$here"/*.wasm; do
       ;;
   esac
 done
+
+work="$(mktemp -d)"
+trap 'rm -rf "$work"' EXIT
+trap 'exit 143' TERM
+trap 'exit 130' INT
 
 for entry in $guests; do
   name="${entry%%:*}"
