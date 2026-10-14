@@ -48,7 +48,7 @@ case "$(rustc --version 2>/dev/null)" in
   *) refuse "rustc $rustc_version" ;;
 esac
 case "$(cargo component --version 2>/dev/null)" in
-  "cargo-component"*" $cargo_component_version"*) ;;
+  "cargo-component"*" $cargo_component_version" | "cargo-component"*" $cargo_component_version "*) ;;
   *) refuse "cargo-component $cargo_component_version" ;;
 esac
 [ -d "$(rustc --print sysroot)/lib/rustlib/$target" ] || refuse "rustc's $target target"
