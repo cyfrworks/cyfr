@@ -18,8 +18,8 @@
 #   build-fixture.sh NAME WIT_KIND OUT_DIR --check    build and compare with
 #                                                     the checked-in binary
 #
-# Requires the toolchain below, which each fixture's README.md names, and
-# refuses a missing or other one by name. Exit 0 built or identical; 1 the
+# Requires the toolchain below, the one pin of it, and refuses a missing
+# or other one by name. Exit 0 built or identical; 1 the
 # binary differs; 2 usage; 69 the toolchain is missing or not the pinned
 # one.
 set -euo pipefail

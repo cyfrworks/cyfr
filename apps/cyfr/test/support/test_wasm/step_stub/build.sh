@@ -10,6 +10,6 @@
 #                       README.md records
 #   build.sh --check    build and compare with the checked-in binary
 #
-# Requires the toolchain README.md names.
+# Requires the toolchain build-fixture.sh pins.
 here="$(dirname "$0")"
 exec "$here/../build-fixture.sh" step_stub catalyst "$here" "$@"
