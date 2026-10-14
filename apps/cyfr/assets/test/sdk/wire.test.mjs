@@ -2,6 +2,7 @@
 // Copyright 2026 CYFR Works Inc.
 
 import assert from "node:assert/strict"
+import {readFileSync} from "node:fs"
 import {describe, test} from "node:test"
 
 import {
@@ -18,6 +19,11 @@ import {
   sseParser
 } from "../../js/sdk/wire.js"
 import {credentialOf, fixture} from "./support.mjs"
+
+// The tincture URL grammar `Prima.TinctureWire`'s test reads too.
+const tinctureUrls = JSON.parse(
+  readFileSync(new URL("../../../../../tests/fixtures/component_refs.json", import.meta.url), "utf8")
+).tincture_urls
 
 describe("the wire agrees with the fixture", () => {
   test("version, bearer header and routes", () => {
@@ -137,12 +143,24 @@ describe("what does not decode", () => {
 })
 
 describe("a public page's identity", () => {
-  test("is read from a /t/ path, decoded", () => {
-    assert.deepEqual(publicIdentity("/t/home/local/weather/index.html"), {
-      athanor: "home",
-      publisher: "local",
-      name: "weather"
-    })
+  test("is every public vector's tincture, read from its path and from a page under it", () => {
+    assert.ok(tinctureUrls.public.length > 0)
+
+    for (const {athanor, publisher, name, path} of tinctureUrls.public) {
+      assert.deepEqual(publicIdentity(path), {athanor, publisher, name}, path)
+      assert.deepEqual(publicIdentity(`${path}/index.html`), {athanor, publisher, name}, path)
+    }
+  })
+
+  test("is none for any served-file vector, whatever it parses as", () => {
+    assert.ok(tinctureUrls.served.length > 0)
+
+    for (const {path} of tinctureUrls.served) {
+      assert.equal(publicIdentity(path), null, path)
+    }
+  })
+
+  test("is decoded: an escaped athanor and a publisher with dots", () => {
     assert.deepEqual(publicIdentity("/t/%40alice/stripe.com/pay-desk"), {
       athanor: "@alice",
       publisher: "stripe.com",
@@ -152,7 +170,6 @@ describe("a public page's identity", () => {
 
   test("is none for any other path", () => {
     for (const path of [
-      "/_s/SFMyNTY.c2lnbmVk/local/weather/1.0.0/index.html",
       "/t/home/local",
       "/t//local/weather",
       "/t/home/Local/weather",

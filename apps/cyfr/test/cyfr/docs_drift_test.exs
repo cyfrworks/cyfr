@@ -1082,6 +1082,58 @@ defmodule Cyfr.DocsDriftTest do
            "component-guide.md's fetch error types lack #{inspect(answered -- documented)}"
   end
 
+  # The envelope a host function answers a guest's error with is the shared
+  # vectors' (`Prima.WitResponse`'s test reads the same file), wherever
+  # component-guide spells it: the Error: lines of `cyfr:http/fetch` and
+  # `cyfr:storage/files`, and the Invoke Error Types, whose table names the
+  # fallback's type and the member a setup_required error carries besides. The error types themselves are held to their producers
+  # by the fetch error check above. The `model/chat@1` refusal, with its
+  # `provider` member, is a model catalyst's own result, not this envelope.
+  test "component-guide's error envelope and its fallback type are the guest error vectors'" do
+    vectors =
+      @repo_root
+      |> Path.join("tests/fixtures/guest_error.json")
+      |> File.read!()
+      |> Jason.decode!()
+
+    %{"member" => member, "fields" => [type, message], "setup_member" => setup_member} =
+      vectors["envelope"]
+
+    guide = File.read!(Path.join(@repo_root, "component-guide.md"))
+
+    section = fn heading ->
+      case Regex.run(~r/^#{Regex.escape(heading)}.*?(?=^##)/ms, guide) do
+        [text] -> text
+        nil -> flunk("component-guide.md has no #{heading} section")
+      end
+    end
+
+    envelope = ~r/\{"#{member}": \{"#{type}": "[a-z_|.]+", "#{message}": "\.\.\."\}\}/
+
+    for heading <- ["### `cyfr:http/fetch`", "### `cyfr:storage/files`"] do
+      assert [[line]] =
+               Regex.scan(~r/^Error: `(.*)`/m, section.(heading), capture: :all_but_first),
+             "component-guide.md's #{heading} has no single Error: line"
+
+      assert line =~ ~r/\A#{envelope.source}\z/,
+             "component-guide.md's #{heading} spells an error as #{line}"
+    end
+
+    invoke = section.("### Invoke Error Types")
+
+    assert invoke =~
+             ~r/^Errors returned by `invoke::call`\/`invoke::spawn` as `#{envelope.source}`:$/m,
+           "component-guide.md's Invoke Error Types do not spell the vectors' envelope"
+
+    fallback = vectors["fallback"]["answer"][member][type]
+
+    assert invoke =~ ~r/^\| `#{fallback}` \| A tool's result could not be encoded as JSON \|$/m,
+           "component-guide.md's Invoke Error Types have no #{fallback} row"
+
+    assert invoke =~ ~r/^\| `setup_required` \| .* — includes `#{setup_member}` field \|$/m,
+           "component-guide.md's setup_required row does not name its #{setup_member} member"
+  end
+
   test "the guides' tincture-block keys are ones the code actually reads" do
     # Documented tincture keys must match validator and consumer support.
     documented_only = ~w(sandbox)

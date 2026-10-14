@@ -1,0 +1,179 @@
+{
+  "comment": "The vectors pinning the MCP wire CYFR's server and its CLI speak: Prima's codec (Prima.MCP.Protocol, Prima.MCP.Message) is the definition, and the CLI's client (apps/codex/internal/mcp) is held to it. Every request declares `protocol_version` in its params._meta under the `meta` keys, there being no handshake, and a server answers `supported`; the keys CYFR adds (progressToken, cyfr/confirmationId) are cyfr's own and pinned in cyfr's tests. A request mirrors its method into the Mcp-Method header and its named subject into Mcp-Name: `named_subject` cases are a request in and the headers it carries out, Mcp-Name absent (null) for a method that names no subject and present, encoded, for one that names an empty one. A header value travels as itself when it is non-empty visible ASCII with no surrounding whitespace that does not start with the sentinel, and otherwise as =?base64?<standard base64 with padding>?=: `header_values` cases are a value and its header, which decodes back to the value, and `header_refused` are headers whose sentinel does not decode. `error_codes` are the JSON-RPC codes by name, the specification's and CYFR's; a code name no table knows answers `fallback_code`. `consent_tags` name the consent signals, each answered with its CYFR code, and a `consent_errors` case is a signal (`tag`, `payload`) and the whole JSON-RPC error `response` it is answered as: its message the signal's sentence and its data {\"tag\", \"payload\"}. confirmation_required's error is tests/fixtures/confirmation.json's `signal.mcp`, defined there alone. A client reads the tag from data, and from the code when a proxy stripped data (`data_stripped`). Each side plays the directions it implements: Prima's test (apps/prima/test/prima/mcp/wire_vectors_test.exs) encodes and decodes header values, derives the routing headers, answers every code and produces and decodes every consent error; the CLI's test (apps/codex/internal/mcp/wire_vectors_test.go) declares the version and keys, encodes header values, derives the routing headers and reads every consent error and the auth code.",
+  "version": 1,
+  "protocol_version": "2026-07-28",
+  "supported": ["2026-07-28"],
+  "meta": {
+    "protocol_version": "io.modelcontextprotocol/protocolVersion",
+    "client_info": "io.modelcontextprotocol/clientInfo",
+    "client_capabilities": "io.modelcontextprotocol/clientCapabilities",
+    "server_info": "io.modelcontextprotocol/serverInfo"
+  },
+  "header_values": [
+    {"why": "a plain tool name", "value": "weather.get", "header": "weather.get"},
+    {"why": "a URI with a space travels as itself: a space is visible ASCII inside the value", "value": "file:///notes/a b.txt", "header": "file:///notes/a b.txt"},
+    {"why": "an empty value", "value": "", "header": "=?base64??="},
+    {"why": "surrounding whitespace", "value": " padded ", "header": "=?base64?IHBhZGRlZCA=?="},
+    {"why": "characters outside ASCII, as UTF-8", "value": "météo.get", "header": "=?base64?bcOpdMOpby5nZXQ=?="},
+    {"why": "a value that itself starts with the sentinel", "value": "=?base64?abc?=", "header": "=?base64?PT9iYXNlNjQ/YWJjPz0=?="},
+    {"why": "a control character", "value": "tab\there", "header": "=?base64?dGFiCWhlcmU=?="},
+    {"why": "DEL is outside visible ASCII", "value": "del\u007f", "header": "=?base64?ZGVsfw==?="}
+  ],
+  "header_refused": [
+    {"why": "a payload outside base64", "header": "=?base64?!!!?="},
+    {"why": "base64 without its padding", "header": "=?base64?YQ?="},
+    {"why": "no closing ?=", "header": "=?base64?YWJj"},
+    {"why": "text after the closing ?=", "header": "=?base64?YWJj?=x"}
+  ],
+  "named_subject": [
+    {
+      "why": "tools/call names its tool",
+      "request": {"method": "tools/call", "params": {"name": "weather.get", "arguments": {}}},
+      "headers": {"Mcp-Method": "tools/call", "Mcp-Name": "weather.get"}
+    },
+    {
+      "why": "a tool name outside ASCII travels in the sentinel",
+      "request": {"method": "tools/call", "params": {"name": "météo.get", "arguments": {"city": "Lyon"}}},
+      "headers": {"Mcp-Method": "tools/call", "Mcp-Name": "=?base64?bcOpdMOpby5nZXQ=?="}
+    },
+    {
+      "why": "resources/read names its URI",
+      "request": {"method": "resources/read", "params": {"uri": "cyfr://athanor/home/notes"}},
+      "headers": {"Mcp-Method": "resources/read", "Mcp-Name": "cyfr://athanor/home/notes"}
+    },
+    {
+      "why": "tools/list names no subject",
+      "request": {"method": "tools/list", "params": {}},
+      "headers": {"Mcp-Method": "tools/list", "Mcp-Name": null}
+    },
+    {
+      "why": "server/discover names no subject",
+      "request": {"method": "server/discover", "params": {}},
+      "headers": {"Mcp-Method": "server/discover", "Mcp-Name": null}
+    },
+    {
+      "why": "a tools/call whose name is not a string names no subject",
+      "request": {"method": "tools/call", "params": {"name": 7}},
+      "headers": {"Mcp-Method": "tools/call", "Mcp-Name": null}
+    },
+    {
+      "why": "a resources/read with no URI names no subject",
+      "request": {"method": "resources/read", "params": {"name": "notes"}},
+      "headers": {"Mcp-Method": "resources/read", "Mcp-Name": null}
+    },
+    {
+      "why": "an empty tool name is a subject still, sent encoded, since a server refuses a tools/call without Mcp-Name",
+      "request": {"method": "tools/call", "params": {"name": "", "arguments": {}}},
+      "headers": {"Mcp-Method": "tools/call", "Mcp-Name": "=?base64??="}
+    },
+    {
+      "why": "prompts/get names no subject: the server implements no prompts",
+      "request": {"method": "prompts/get", "params": {"name": "summarize"}},
+      "headers": {"Mcp-Method": "prompts/get", "Mcp-Name": null}
+    }
+  ],
+  "error_codes": {
+    "jsonrpc": {
+      "parse_error": -32700,
+      "invalid_request": -32600,
+      "method_not_found": -32601,
+      "invalid_params": -32602,
+      "internal_error": -32603,
+      "resource_not_found": -32002,
+      "header_mismatch": -32020,
+      "unsupported_protocol_version": -32022
+    },
+    "cyfr": {
+      "auth_required": -33001,
+      "auth_invalid": -33002,
+      "insufficient_permissions": -33004,
+      "internal": -33100,
+      "conflict": -33101,
+      "not_owner": -33102,
+      "unavailable": -33103,
+      "corrupt": -33104,
+      "timeout": -33105,
+      "uncertain": -33106,
+      "rate_limited": -33304,
+      "request_cancelled": -33305,
+      "setup_required": -33501,
+      "consent_required": -33502,
+      "consent_conflict": -33503,
+      "restart_required": -33504,
+      "confirmation_required": -33505
+    },
+    "fallback_code": -32603
+  },
+  "consent_tags": ["setup_required", "consent_required", "consent_conflict", "restart_required", "confirmation_required"],
+  "consent_errors": [
+    {
+      "why": "setup_required naming the node and its need",
+      "tag": "setup_required",
+      "payload": {"need": "api_key", "node_ref": "catalyst:local.claude:1.4.0"},
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 3,
+        "error": {
+          "code": -33501,
+          "message": "Setup required: catalyst:local.claude:1.4.0 needs a vault entry for \"api_key\" — grant it a profile first",
+          "data": {"tag": "setup_required", "payload": {"need": "api_key", "node_ref": "catalyst:local.claude:1.4.0"}}
+        }
+      }
+    },
+    {
+      "why": "consent_required carrying its detail",
+      "tag": "consent_required",
+      "payload": {"detail": "egress to api.example.com was added"},
+      "response": {
+        "jsonrpc": "2.0",
+        "id": "req-7",
+        "error": {
+          "code": -33502,
+          "message": "Consent required: egress to api.example.com was added",
+          "data": {"tag": "consent_required", "payload": {"detail": "egress to api.example.com was added"}}
+        }
+      }
+    },
+    {
+      "why": "consent_conflict",
+      "tag": "consent_conflict",
+      "payload": {},
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 4,
+        "error": {
+          "code": -33503,
+          "message": "Consent conflict: the consent changed while deciding — re-run the grant",
+          "data": {"tag": "consent_conflict", "payload": {}}
+        }
+      }
+    },
+    {
+      "why": "restart_required",
+      "tag": "restart_required",
+      "payload": {"ref": "formula:local.digest:1.0.0"},
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 5,
+        "error": {
+          "code": -33504,
+          "message": "Approved — re-run the command to continue (the in-flight run was stopped)",
+          "data": {"tag": "restart_required", "payload": {"ref": "formula:local.digest:1.0.0"}}
+        }
+      }
+    },
+    {
+      "why": "a consent error whose data a proxy stripped: the code names the tag",
+      "tag": "consent_required",
+      "data_stripped": true,
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 8,
+        "error": {
+          "code": -33502,
+          "message": "Consent required: permissions changed since they were approved — review and re-grant"
+        }
+      }
+    }
+  ]
+}
