@@ -39,8 +39,10 @@ defmodule Sanctum.Gate.AdmissionLatencyTest do
   @moduledoc """
   The admission overhead of a call to a provider that does nothing, per
   scenario, as percentiles, written to
-  `/tmp/cyfr-admission-latency/<phase>/<adapter>.json`
-  (`ADMISSION_LATENCY_PHASE`, default `current`).
+  `admission-latency/<phase>/<adapter>.json` under the run's root
+  (`CYFR_TEST_RUN_ROOT`), or under a directory of its own in the system's
+  temporary directory for a direct Mix run (`ADMISSION_LATENCY_PHASE`,
+  default `current`). The summary printed at the end names the file.
 
   Six scenarios. Four enter as a wire client does, through the MCP
   endpoint in-process (`Phoenix.ConnTest`, no network), so every plug in
@@ -341,7 +343,7 @@ defmodule Sanctum.Gate.AdmissionLatencyTest do
       "throughput" => %{"memo_hit_warm_c16_admissions_per_s" => throughput}
     }
 
-    dir = Path.join("/tmp/cyfr-admission-latency", phase())
+    dir = Path.join(report_root(), phase())
     File.mkdir_p!(dir)
     path = Path.join(dir, "#{adapter}.json")
     File.write!(path, Jason.encode_to_iodata!(report, pretty: true))
@@ -819,6 +821,18 @@ defmodule Sanctum.Gate.AdmissionLatencyTest do
   end
 
   defp phase, do: System.get_env("ADMISSION_LATENCY_PHASE", "current")
+
+  # A fixed path would be one file for every checkout and run on the host.
+  defp report_root do
+    case System.get_env("CYFR_TEST_RUN_ROOT") do
+      root when is_binary(root) and root != "" ->
+        Path.join(root, "admission-latency")
+
+      _ ->
+        suffix = Base.encode16(:crypto.strong_rand_bytes(8), case: :lower)
+        Path.join(System.tmp_dir!(), "cyfr-admission-latency-#{suffix}")
+    end
+  end
 
   defp commit do
     case System.cmd("git", ["rev-parse", "HEAD"], stderr_to_stdout: true) do

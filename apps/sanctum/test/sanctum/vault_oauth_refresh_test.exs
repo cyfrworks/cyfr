@@ -87,6 +87,130 @@ defmodule Sanctum.VaultOAuthRefreshTest do
     counter
   end
 
+  # The refresh lock runs each call in an unlinked task of its own, which a
+  # failed test would leave running past the sandbox. Registered as soon as
+  # `caller` exists, before anything waits on it: the caller is stopped
+  # first, so it starts nothing more, then every refresh task begun on its
+  # behalf, however far it got. `register` is ExUnit's `on_exit/1` for a
+  # test; a case run in a process of its own hands its cleanup back with it.
+  defp stop_on_exit(caller, register \\ &on_exit/1),
+    do: register.(fn -> stop_refresh_work(caller) end)
+
+  defp stop_refresh_work(caller, supervisor \\ Sanctum.OAuth.RefreshTaskSupervisor) do
+    kill_and_await(caller)
+
+    Prima.Test.Wait.wait_until(
+      fn -> stop_refresh_tasks(caller, supervisor) == [] end,
+      2_000,
+      "every refresh task to show whether #{inspect(caller)} started it"
+    )
+  end
+
+  # Stops the refresh tasks `caller` started and answers those that show no
+  # owner yet. A task names its callers once it has read its start message.
+  # Before that its owner shows in one of three places, read in one snapshot:
+  # the monitor it puts on the owner as its first act, the owner's `:DOWN`
+  # once the owner is gone (which the task's signal handling queues even
+  # while it is not scheduled), or the owner's start message waiting to be
+  # read. A task showing none has not run yet, and is looked at again
+  # rather than left to start after the test. A task whose owner is another
+  # process is never touched.
+  defp stop_refresh_tasks(caller, supervisor) do
+    for {_, task, _, _} <- Supervisor.which_children(supervisor),
+        is_pid(task),
+        owner <- [refresh_task_owner(task, caller)],
+        owner != :other,
+        reduce: [] do
+      unresolved ->
+        if owner == :caller do
+          kill_and_await(task)
+          unresolved
+        else
+          [task | unresolved]
+        end
+    end
+  end
+
+  defp refresh_task_owner(task, caller) do
+    case Process.info(task, [:dictionary, :monitors, :messages]) do
+      [dictionary: dictionary, monitors: monitors, messages: messages] ->
+        case List.keyfind(dictionary, :"$callers", 0) do
+          {_, callers} -> if caller in callers, do: :caller, else: :other
+          nil -> owner_before_start(caller, monitors, messages)
+        end
+
+      # Gone already: nothing of it can run after the test.
+      nil ->
+        :other
+    end
+  end
+
+  defp owner_before_start(caller, monitors, messages) do
+    monitored = for {:process, pid} <- monitors, is_pid(pid), do: pid
+    gone = for {:DOWN, _ref, :process, pid, _reason} <- messages, is_pid(pid), do: pid
+    starting = for {pid, _ref, _reply_to, _callers, _mfa} <- messages, is_pid(pid), do: pid
+    owners = monitored ++ gone ++ starting
+
+    cond do
+      caller in owners -> :caller
+      owners != [] -> :other
+      true -> :unknown
+    end
+  end
+
+  # What a case run in a process of its own registered as its cleanup.
+  defp registered_cleanups do
+    receive do
+      {:cleanup, cleanup} -> [cleanup | registered_cleanups()]
+    after
+      0 -> []
+    end
+  end
+
+  defp refresh_tasks_of(caller) do
+    for {_, task, _, _} <- Supervisor.which_children(Sanctum.OAuth.RefreshTaskSupervisor),
+        is_pid(task),
+        refresh_task_owner(task, caller) == :caller,
+        do: task
+  end
+
+  # Suspended by the test process, so every one is resumed in its `after`.
+  defp freeze(frozen, pid) do
+    true = :erlang.suspend_process(pid)
+    :ets.insert(frozen, {pid})
+  end
+
+  defp kill_and_await(pid) do
+    ref = Process.monitor(pid)
+    Process.exit(pid, :kill)
+
+    receive do
+      {:DOWN, ^ref, :process, ^pid, _reason} -> :ok
+    after
+      2_000 -> flunk("#{inspect(pid)} was killed and had not exited after 2000ms")
+    end
+  end
+
+  # A caller that lost the entry's Registry race monitors the leader's
+  # task from a task of the refresh lock's own; `leader` is the caller
+  # awaiting that task, which monitors it too.
+  defp follower?(owner, leader) do
+    case Process.info(owner, :monitored_by) do
+      {:monitored_by, watchers} ->
+        Enum.any?(watchers, &(is_pid(&1) and &1 != leader and refresh_lock_task?(&1)))
+
+      nil ->
+        false
+    end
+  end
+
+  defp refresh_lock_task?(pid) do
+    case Process.info(pid, :current_stacktrace) do
+      {:current_stacktrace, frames} -> Enum.any?(frames, &(elem(&1, 0) == RefreshLock))
+      nil -> false
+    end
+  end
+
   describe "entry-keyed single flight" do
     test "an expired caller joins an in-flight refresh on the entry key and returns its result",
          %{ctx: ctx} do
@@ -94,13 +218,20 @@ defmodule Sanctum.VaultOAuthRefreshTest do
       counter = attach_attempt_counter()
       lock_key = {:vault_oauth_refresh, ctx.athanor_id, entry.id}
 
-      # A "leader" already refreshing this entry: holds the entry lock,
-      # writes the refreshed bundle back, returns its token.
+      # A "leader" already refreshing this entry: holds the entry lock until
+      # the test lets it go, writes the refreshed bundle back, returns its
+      # token.
       leader =
         Task.async(fn ->
           RefreshLock.run(
             lock_key,
             fn ->
+              receive do
+                :go -> :ok
+              after
+                5_000 -> :ok
+              end
+
               Process.sleep(200)
               reseal_valid(ctx, entry, "tok-refreshed")
               {:ok, "tok-refreshed"}
@@ -109,12 +240,33 @@ defmodule Sanctum.VaultOAuthRefreshTest do
           )
         end)
 
-      # Let the leader win the Registry race deterministically.
-      Process.sleep(50)
+      stop_on_exit(leader.pid)
 
-      # The reader sees the expired bundle, follows on the same key, and
-      # rechecks the row the leader wrote — no provider POST happens.
-      assert {:ok, "tok-refreshed"} = VaultReader.oauth_token(ctx, resource, "google", @dispense)
+      # The leader wins the Registry race before the reader asks.
+      Prima.Test.Wait.wait_until(
+        fn -> Registry.lookup(Sanctum.OAuth.RefreshRegistry, lock_key) != [] end,
+        2_000,
+        "the leader's registration in the refresh lock's Registry"
+      )
+
+      # The leader's lock is held by the refresh lock's own unlinked task.
+      [{owner, _}] = Registry.lookup(Sanctum.OAuth.RefreshRegistry, lock_key)
+
+      # The reader sees the expired bundle and follows on the same key while
+      # the leader still holds it; only then does the leader go on.
+      reader = Task.async(fn -> VaultReader.oauth_token(ctx, resource, "google", @dispense) end)
+      stop_on_exit(reader.pid)
+
+      Prima.Test.Wait.wait_until(
+        fn -> follower?(owner, leader.pid) end,
+        2_000,
+        "the reader following the leader on the entry key"
+      )
+
+      send(owner, :go)
+
+      # It rechecks the row the leader wrote: no provider POST happens.
+      assert {:ok, "tok-refreshed"} = Task.await(reader, 5_000)
       assert {:ok, "tok-refreshed"} = Task.await(leader, 5_000)
       assert :counters.get(counter, 1) == 0
     end
@@ -131,6 +283,168 @@ defmodule Sanctum.VaultOAuthRefreshTest do
                Sanctum.Vault.OAuth.dispense(actor(ctx), entry, @expired, "google", @scopes)
 
       assert :counters.get(counter, 1) == 0
+    end
+  end
+
+  describe "the refresh lock's tasks after a failed case" do
+    test "a case that dies at a failed bounded wait leaves no refresh task once its cleanup has run",
+         %{ctx: ctx} do
+      lock_key = {:vault_oauth_refresh, ctx.athanor_id, Prima.UUID7.generate_id("vlt")}
+      test = self()
+
+      # The test's own cleanup, registered before the case runs: the case is
+      # stopped first, then the refresh work of every leader it started. A
+      # leader records itself before it starts any.
+      {:ok, leaders} = Agent.start(fn -> [] end)
+
+      on_exit(fn ->
+        for leader <- Agent.get(leaders, & &1), do: stop_refresh_work(leader)
+        Agent.stop(leaders)
+      end)
+
+      {case_pid, ref} =
+        spawn_monitor(fn ->
+          # The leader holds the entry lock in the refresh lock's own
+          # unlinked task until it is told to go, which never happens here.
+          leader =
+            Task.async(fn ->
+              me = self()
+              Agent.update(leaders, &[me | &1])
+
+              RefreshLock.run(
+                lock_key,
+                fn ->
+                  receive do
+                    :go -> {:ok, "never"}
+                  after
+                    5_000 -> {:ok, "never"}
+                  end
+                end,
+                fn -> :stale end
+              )
+            end)
+
+          stop_on_exit(leader.pid, &send(test, {:cleanup, &1}))
+          send(test, {:leader, leader.pid})
+
+          Prima.Test.Wait.wait_until(
+            fn -> Registry.lookup(Sanctum.OAuth.RefreshRegistry, {:never, lock_key}) != [] end,
+            100,
+            "a registration nobody makes"
+          )
+        end)
+
+      on_exit(fn -> kill_and_await(case_pid) end)
+      assert_receive {:leader, leader}, 2_000
+
+      assert_receive {:DOWN, ^ref, :process, ^case_pid, {%ExUnit.AssertionError{}, _stack}},
+                     5_000
+
+      # As ExUnit runs a dead case's cleanup: everything it registered.
+      for cleanup <- registered_cleanups(), do: cleanup.()
+
+      assert refresh_tasks_of(leader) == []
+    end
+
+    @tag timeout: 20_000
+    test "a task frozen before its callers and its owner monitor is stopped as its caller's, and another process's is left alone" do
+      # A supervisor of this test's own, and high priority with one online
+      # scheduler, so a normal-priority newborn task cannot run before it is
+      # suspended: its start message is queued and it has neither put its
+      # callers nor monitored its owner.
+      supervisor =
+        start_supervised!(
+          Supervisor.child_spec({Task.Supervisor, [spawn_opt: [priority: :high]]},
+            id: :frozen_task_supervisor
+          )
+        )
+
+      for module <- [
+            Task,
+            Task.Supervisor,
+            Task.Supervised,
+            DynamicSupervisor,
+            GenServer,
+            Process
+          ],
+          do: Code.ensure_loaded!(module)
+
+      test = self()
+
+      # Restored by on_exit as well as by the `after` below, and registered
+      # before the change: ExUnit kills a test that times out, and its
+      # `after` never runs.
+      previous_online = :erlang.system_info(:schedulers_online)
+      on_exit(fn -> :erlang.system_flag(:schedulers_online, previous_online) end)
+      :erlang.system_flag(:schedulers_online, 1)
+      frozen = :ets.new(:frozen_tasks, [:public])
+
+      try do
+        previous_priority = Process.flag(:priority, :high)
+
+        {caller, task, foreign} =
+          try do
+            caller =
+              :erlang.spawn_opt(
+                fn ->
+                  task = Task.Supervisor.async_nolink(supervisor, fn -> :ran end)
+                  send(test, {:started, task.pid})
+
+                  receive do
+                    :never -> :ok
+                  end
+                end,
+                priority: :high
+              )
+
+            # Unlinked, so it outlives a failed case unless it is killed.
+            on_exit(fn -> Process.exit(caller, :kill) end)
+
+            task =
+              receive do
+                {:started, pid} -> pid
+              after
+                2_000 -> nil
+              end
+
+            if task, do: freeze(frozen, task)
+
+            foreign = Task.Supervisor.async_nolink(supervisor, fn -> :foreign_ran end)
+            freeze(frozen, foreign.pid)
+            {caller, task, foreign}
+          after
+            Process.flag(:priority, previous_priority)
+          end
+
+        assert is_pid(task), "the caller's task was never started"
+
+        # Refuses a snapshot taken after the task monitored its owner: the
+        # start message must be all there is.
+        for pid <- [task, foreign.pid] do
+          assert [dictionary: dictionary, monitors: monitors, messages: messages] =
+                   Process.info(pid, [:dictionary, :monitors, :messages])
+
+          refute List.keymember?(dictionary, :"$callers", 0),
+                 "staging failed: #{inspect(pid)} already put its callers"
+
+          assert monitors == [], "staging failed: #{inspect(pid)} already monitors its owner"
+          assert messages != [], "staging failed: #{inspect(pid)} has no start message"
+        end
+
+        stop_refresh_work(caller, supervisor)
+
+        refute Process.alive?(caller)
+        refute Process.alive?(task), "the caller's frozen task outlived its cleanup"
+        assert Process.alive?(foreign.pid), "cleanup stopped a task another process started"
+
+        :erlang.resume_process(foreign.pid)
+        :ets.delete(frozen, foreign.pid)
+        assert Task.await(foreign, 2_000) == :foreign_ran
+      after
+        for {pid} <- :ets.tab2list(frozen), Process.alive?(pid), do: :erlang.resume_process(pid)
+        :ets.delete(frozen)
+        :erlang.system_flag(:schedulers_online, previous_online)
+      end
     end
   end
 

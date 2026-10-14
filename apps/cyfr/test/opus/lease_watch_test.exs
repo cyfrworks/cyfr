@@ -27,6 +27,19 @@ defmodule Opus.LeaseWatchTest do
     {:ok, ctx: ctx, id: execution.id, attempt: attempt.attempt}
   end
 
+  # Killed when the test ends, passing or not, and gone before the
+  # cleanup registered ahead of it runs.
+  defp kill_on_exit(pid) do
+    on_exit(fn ->
+      ref = Process.monitor(pid)
+      Process.exit(pid, :kill)
+
+      receive do
+        {:DOWN, ^ref, :process, ^pid, _reason} -> :ok
+      end
+    end)
+  end
+
   # A holder blocked in a call, watched with a fast tick.
   defp holder!(id, attempt, opts \\ []) do
     parent = self()
@@ -46,6 +59,8 @@ defmodule Opus.LeaseWatchTest do
         end
       end)
 
+    # Unlinked, so a failed assertion would leave it waiting for a release.
+    kill_on_exit(pid)
     assert_receive {:watching, watch}
     {pid, ref, watch}
   end
@@ -144,10 +159,11 @@ defmodule Opus.LeaseWatchTest do
 
   test "a watch its holder stopped leaves the holder alone", %{id: id, attempt: attempt} do
     {pid, ref, watch} = holder!(id, attempt)
+    keeper = Process.monitor(watch)
     send(pid, :stop_watch)
-    Process.sleep(100)
-    refute Process.alive?(watch)
-    refute_received {:DOWN, ^ref, :process, _, _}
+    assert_receive {:DOWN, ^keeper, :process, ^watch, :killed}, 2_000
+    # The keeper's exit reaches a still-linked holder alongside its DOWN.
+    refute_receive {:DOWN, ^ref, :process, _, _}, 100
     assert Process.alive?(pid)
     send(pid, :release)
   end

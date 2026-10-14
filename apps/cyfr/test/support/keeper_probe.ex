@@ -8,19 +8,28 @@ defmodule Cyfr.Test.KeeperProbe do
   `watch/0` reports `{:attempt_ended, state}` to the calling process for
   each write that ends an attempt (the `execution_attempts` update that
   sets `ended_at`) made by a process with a lease keeper linked to it,
-  read from inside that write: `:suspended` or `:renewing`. A keeper still
-  renewing there can renew again before its holder stops it, and that
-  renewal finds the attempt ended and exits the holder `{:lease_lost, _}`
-  after its work is done (`Opus.LeaseWatch`). A write by a process
-  with no keeper races no renewal and is not reported.
+  read from inside that write: `:suspended`, `:renewing` or `:unknown`. A
+  keeper still renewing there can renew again before its holder stops it,
+  and that renewal finds the attempt ended and exits the holder
+  `{:lease_lost, _}` after its work is done (`Opus.LeaseWatch`). A write
+  by a process with no keeper races no renewal and is not reported.
+
+  Each answer but `:unknown` is something seen: the keeper in its
+  suspended wait, or blocked in its renewing wait or inside a renewal.
+  A keeper that answered a suspend runs on into its suspended wait, so
+  until it is seen in one of those the probe looks again. `:unknown` is a
+  keeper seen in none of them within the bound: a failure to observe,
+  never evidence of a renewal.
 
   Every process's writes are read, so it belongs in a module that is not
   `async`. The watch ends with the test.
   """
 
   @event [:arca, :repo, :query]
-  # A keeper answers a suspend before it enters its suspended wait.
-  @settle_ms 500
+  # A keeper answers a suspend before it enters its suspended wait; a
+  # loaded host can leave it unscheduled in between. A keeper seen settles
+  # the answer at once, so the bound is spent only on one that is not.
+  @settle_ms 2_000
 
   @doc "Report every attempt-ending write until the test ends."
   @spec watch() :: :ok
@@ -57,17 +66,37 @@ defmodule Cyfr.Test.KeeperProbe do
   defp state(keeper), do: state(keeper, System.monotonic_time(:millisecond) + @settle_ms)
 
   defp state(keeper, deadline) do
-    cond do
-      Process.info(keeper, :current_function) ==
-          {:current_function, {Opus.LeaseWatch, :suspended, 2}} ->
+    case observe(keeper) do
+      :settling ->
+        if System.monotonic_time(:millisecond) >= deadline do
+          :unknown
+        else
+          Process.sleep(1)
+          state(keeper, deadline)
+        end
+
+      seen ->
+        seen
+    end
+  end
+
+  # One snapshot of the keeper. Waiting in `loop/2` is a keeper no suspend
+  # reached; running there is one that may be on its way to `suspended/2`.
+  defp observe(keeper) do
+    case Process.info(keeper, [:current_function, :status, :current_stacktrace]) do
+      [current_function: {Opus.LeaseWatch, :suspended, 2}, status: _, current_stacktrace: _] ->
         :suspended
 
-      System.monotonic_time(:millisecond) >= deadline ->
+      [current_function: {Opus.LeaseWatch, :loop, 2}, status: :waiting, current_stacktrace: _] ->
         :renewing
 
-      true ->
-        Process.sleep(1)
-        state(keeper, deadline)
+      [current_function: _, status: _, current_stacktrace: frames] ->
+        if Enum.any?(frames, &match?({Opus.LeaseWatch, :renew, 2, _}, &1)),
+          do: :renewing,
+          else: :settling
+
+      nil ->
+        :unknown
     end
   end
 end

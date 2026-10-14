@@ -285,8 +285,7 @@ defmodule Sanctum.CredentialRetirementTest do
       hash = Session.token_hash(session.token)
       Cyfr.Bus.subscribe_global(Cyfr.Bus.sessions())
 
-      handler =
-        attach([[:cyfr, :sanctum, :caller, :invalidated], [:cyfr, :sanctum, :athanor, :archived]])
+      attach([[:cyfr, :sanctum, :caller, :invalidated], [:cyfr, :sanctum, :athanor, :archived]])
 
       assert {:ok, denied} = Users.deny(user)
       assert denied.status == "denied"
@@ -298,7 +297,6 @@ defmodule Sanctum.CredentialRetirementTest do
       assert_receive {:telemetry, [:cyfr, :sanctum, :caller, :invalidated], %{hash: ^hash}}
       assert_receive {:telemetry, [:cyfr, :sanctum, :athanor, :archived], %{athanor_id: own_id}}
       assert own_id == own.id
-      :telemetry.detach(handler)
     end
 
     test "a failed denial announces nothing and leaves the person's credentials standing" do
@@ -306,8 +304,7 @@ defmodule Sanctum.CredentialRetirementTest do
       {session, _ctx} = signed_in!(user)
       Cyfr.Bus.subscribe_global(Cyfr.Bus.sessions())
 
-      handler =
-        attach([[:cyfr, :sanctum, :caller, :invalidated], [:cyfr, :sanctum, :athanor, :archived]])
+      attach([[:cyfr, :sanctum, :caller, :invalidated], [:cyfr, :sanctum, :athanor, :archived]])
 
       failure = fail_session_delete!()
 
@@ -320,7 +317,6 @@ defmodule Sanctum.CredentialRetirementTest do
       assert {:ok, _} = Session.load(session.token, surface: :console)
 
       clear!(failure)
-      :telemetry.detach(handler)
     end
 
     test "a repeated denial answers the denied person and moves no generation" do
@@ -370,7 +366,7 @@ defmodule Sanctum.CredentialRetirementTest do
       nil
     )
 
-    handler
+    on_exit(fn -> :telemetry.detach(handler) end)
   end
 
   defp fail_session_delete! do
@@ -441,10 +437,14 @@ defmodule Sanctum.CredentialRetirementLockTest do
   defp uniq, do: System.unique_integer([:positive])
 
   test "a session minted from a context read before the denial is refused after it" do
-    {user, own, identity} =
-      unboxed(fn ->
-        n = uniq()
+    n = uniq()
 
+    # Registered before anything commits: a setup that fails part-way
+    # still removes what it wrote, found by the names it gave them.
+    on_exit(fn -> unboxed(fn -> cleanup!(n) end) end)
+
+    {user, _own, identity} =
+      unboxed(fn ->
         {:ok, user} =
           Users.upsert_from_provider(%{
             id: "github|https://github.com|race-#{n}",
@@ -479,7 +479,6 @@ defmodule Sanctum.CredentialRetirementLockTest do
         {user, own, identity}
       end)
 
-    on_exit(fn -> unboxed(fn -> cleanup!(user.id, own.id) end) end)
     test = self()
 
     denier =
@@ -497,8 +496,10 @@ defmodule Sanctum.CredentialRetirementLockTest do
         end)
       end)
 
+    kill_on_exit(denier.pid)
     assert_receive :denial_holds, 5_000
     issuer = Task.async(fn -> unboxed(fn -> Session.create(identity) end) end)
+    kill_on_exit(issuer.pid)
     refute Task.yield(issuer, 300), "the session was decided while the denial held the person"
 
     send(denier.pid, :go)
@@ -508,13 +509,40 @@ defmodule Sanctum.CredentialRetirementLockTest do
     refute unboxed(fn -> Arca.Repo.exists?(where(Arca.Schemas.Session, user_id: ^user.id)) end)
   end
 
-  defp cleanup!(user_id, athanor_id) do
-    Arca.Repo.delete_all(where(Arca.Schemas.Membership, user_id: ^user_id))
-    Arca.Repo.delete_all(where(Arca.Schemas.Membership, athanor_id: ^athanor_id))
-    Arca.Repo.delete_all(where(Arca.Schemas.Session, user_id: ^user_id))
-    Arca.Repo.delete_all(where(Arca.Schemas.ApiKey, created_by: ^user_id))
-    Arca.Repo.delete_all(where(Arca.Schemas.ExternalIdentity, user_id: ^user_id))
-    Arca.Repo.delete_all(where(Arca.Schemas.User, id: ^user_id))
-    Arca.Repo.delete_all(where(Arca.Schemas.Athanor, id: ^athanor_id))
+  # Killed when the test ends, passing or not, and gone before the
+  # cleanup registered ahead of it runs.
+  defp kill_on_exit(pid) do
+    on_exit(fn ->
+      ref = Process.monitor(pid)
+      Process.exit(pid, :kill)
+
+      receive do
+        {:DOWN, ^ref, :process, ^pid, _reason} -> :ok
+      end
+    end)
+  end
+
+  defp cleanup!(n) do
+    identity = "github|https://github.com|race-#{n}"
+
+    user_ids =
+      Arca.Repo.all(
+        from(i in Arca.Schemas.ExternalIdentity, where: i.key == ^identity, select: i.user_id)
+      ) ++
+        Arca.Repo.all(
+          from(u in Arca.Schemas.User, where: u.email == ^"race#{n}@example.com", select: u.id)
+        )
+
+    athanor_ids =
+      Arca.Repo.all(from(a in Arca.Schemas.Athanor, where: a.slug == ^"race-#{n}", select: a.id))
+
+    Arca.Repo.delete_all(where(Arca.Schemas.Membership, [m], m.user_id in ^user_ids))
+    Arca.Repo.delete_all(where(Arca.Schemas.Membership, [m], m.athanor_id in ^athanor_ids))
+    Arca.Repo.delete_all(where(Arca.Schemas.Session, [s], s.user_id in ^user_ids))
+    Arca.Repo.delete_all(where(Arca.Schemas.ApiKey, [k], k.created_by in ^user_ids))
+    Arca.Repo.delete_all(where(Arca.Schemas.ExternalIdentity, [i], i.user_id in ^user_ids))
+    Arca.Repo.delete_all(where(Arca.Schemas.PersonIdentity, [p], p.user_id in ^user_ids))
+    Arca.Repo.delete_all(where(Arca.Schemas.User, [u], u.id in ^user_ids))
+    Arca.Repo.delete_all(where(Arca.Schemas.Athanor, [a], a.id in ^athanor_ids))
   end
 end

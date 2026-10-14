@@ -69,6 +69,12 @@ defmodule Cyfr.CellTest do
     :ok
   end
 
+  # Under the test's supervisor, so a failing case still stops it before
+  # the sandbox and the standing records go; temporary, so a claimant that
+  # exits is never restarted in its place.
+  defp start_cell!(opts),
+    do: start_supervised!(Supervisor.child_spec({Cell, opts}, restart: :temporary))
+
   defp claim_enabled(enabled) do
     previous = Application.get_env(:arca, :control_plane_claim_enabled)
     Application.put_env(:arca, :control_plane_claim_enabled, enabled)
@@ -94,15 +100,14 @@ defmodule Cyfr.CellTest do
     test "a member takes its slot at start and gives it back at stop", %{node: node} do
       claim_enabled(true)
 
-      {:ok, pid} =
-        Cell.start_link(name: nil, node_name: node, lease_ms: 60_000, renew_ms: 60_000)
+      start_cell!(name: nil, node_name: node, lease_ms: 60_000, renew_ms: 60_000)
 
       assert ControlPlane.held?()
       assert {:ok, generation} = ControlPlane.generation()
       assert {:ok, %{node: ^node, owner: owner}} = ControlPlane.held()
       assert owner == me()
 
-      :ok = GenServer.stop(pid)
+      :ok = stop_supervised(Cell)
       refute ControlPlane.held?()
       assert ControlPlane.generation() == {:error, :unavailable}
       assert ControlPlane.held() == :none
@@ -117,8 +122,7 @@ defmodule Cyfr.CellTest do
     test "a member believes it holds for less than its row lives", %{node: node} do
       claim_enabled(true)
 
-      {:ok, pid} =
-        Cell.start_link(name: nil, node_name: node, lease_ms: 60_000, renew_ms: 60_000)
+      start_cell!(name: nil, node_name: node, lease_ms: 60_000, renew_ms: 60_000)
 
       {:held, deadline} = :persistent_term.get(@standing_key)
       believes_ms = deadline - System.monotonic_time(:millisecond)
@@ -127,7 +131,7 @@ defmodule Cyfr.CellTest do
       row_ms = DateTime.diff(row.lease_until, Arca.ServerMetaStorage.now!(), :millisecond)
 
       assert believes_ms < row_ms
-      :ok = GenServer.stop(pid)
+      :ok = stop_supervised(Cell)
     end
 
     test "a renew tick after a lapse wins the slot back", %{node: node} do
@@ -136,7 +140,9 @@ defmodule Cyfr.CellTest do
       # The tick is driven here rather than waited for: the member's own
       # timer is set beyond every case in this file, so a tick happens
       # when a case makes one and at no other moment.
-      {:ok, pid} = Cell.start_link(name: nil, node_name: node, lease_ms: 60_000, renew_ms: 60_000)
+      pid =
+        start_cell!(name: nil, node_name: node, lease_ms: 60_000, renew_ms: 60_000)
+
       assert ControlPlane.held?()
 
       # The member's countdown ran out — a database it could not reach for
@@ -150,14 +156,16 @@ defmodule Cyfr.CellTest do
       assert ControlPlane.held?()
       assert {:ok, %{generation: 1, fence: 2}} = ControlPlane.held()
 
-      :ok = GenServer.stop(pid)
+      :ok = stop_supervised(Cell)
     end
 
     test "a member taken over by a successor admits nothing and does not take a live slot back",
          %{node: node} do
       claim_enabled(true)
 
-      {:ok, pid} = Cell.start_link(name: nil, node_name: node, lease_ms: 60_000, renew_ms: 60_000)
+      pid =
+        start_cell!(name: nil, node_name: node, lease_ms: 60_000, renew_ms: 60_000)
+
       assert {:ok, mine} = ControlPlane.held()
 
       # The interleaving is made: the row goes past its lease and a
@@ -183,7 +191,7 @@ defmodule Cyfr.CellTest do
       refute ControlPlane.held?()
       assert {:ok, %{owner: "boot-successor"}} = ControlPlane.slot(node)
 
-      :ok = GenServer.stop(pid)
+      :ok = stop_supervised(Cell)
     end
 
     test "a successor's take is refused while the predecessor's lease stands", %{node: node} do
@@ -201,7 +209,7 @@ defmodule Cyfr.CellTest do
       assert {:ok, _} = ControlPlane.take(node, "boot-killed", 300)
 
       started = System.monotonic_time(:millisecond)
-      {:ok, pid} = Cell.start_link(name: nil, node_name: node, lease_ms: 60_000, renew_ms: 60_000)
+      start_cell!(name: nil, node_name: node, lease_ms: 60_000, renew_ms: 60_000)
       waited = System.monotonic_time(:millisecond) - started
 
       assert waited >= 250
@@ -209,7 +217,7 @@ defmodule Cyfr.CellTest do
       assert {:ok, %{owner: owner}} = ControlPlane.held()
       assert owner == me()
 
-      :ok = GenServer.stop(pid)
+      :ok = stop_supervised(Cell)
     end
 
     test "a member that finds a live peer refuses to boot without the cluster flag", %{node: node} do
@@ -242,13 +250,13 @@ defmodule Cyfr.CellTest do
       assert {:ok, _} = ControlPlane.take(peer, "boot-gone", 300)
 
       started = System.monotonic_time(:millisecond)
-      {:ok, pid} = Cell.start_link(name: nil, node_name: node, lease_ms: 60_000, renew_ms: 60_000)
+      start_cell!(name: nil, node_name: node, lease_ms: 60_000, renew_ms: 60_000)
       waited = System.monotonic_time(:millisecond) - started
 
       assert waited >= 250
       assert ControlPlane.held?()
 
-      :ok = GenServer.stop(pid)
+      :ok = stop_supervised(Cell)
     end
 
     @tag :capture_log
@@ -335,7 +343,7 @@ defmodule Cyfr.CellTest do
       assert Cell.owner_of(subject) == {:error, :no_roster}
       refute Cell.mine?(subject)
 
-      {:ok, pid} = Cell.start_link(name: nil, lease_ms: 60_000, renew_ms: 60_000)
+      pid = start_cell!(name: nil, lease_ms: 60_000, renew_ms: 60_000)
 
       # The only live slot is this member's, so every subject proposes it.
       assert Cell.roster() == [here]
@@ -350,7 +358,7 @@ defmodule Cyfr.CellTest do
       assert Enum.sort(Cell.roster()) == Enum.sort([here, peer])
       assert Cell.mine?(subject) == (Cell.owner_of(subject) == {:ok, here})
 
-      :ok = GenServer.stop(pid)
+      :ok = stop_supervised(Cell)
       assert Cell.roster() == []
       refute Cell.mine?(subject)
     end
@@ -474,15 +482,14 @@ defmodule Cyfr.CellTest do
     test "a cluster member boots once every condition holds", %{node: node} do
       claim_enabled(true)
 
-      {:ok, pid} =
-        Cell.start_link(
-          name: nil,
-          node_name: node,
-          cluster: true,
-          facts: fn -> @cell_facts end,
-          lease_ms: 60_000,
-          renew_ms: 60_000
-        )
+      start_cell!(
+        name: nil,
+        node_name: node,
+        cluster: true,
+        facts: fn -> @cell_facts end,
+        lease_ms: 60_000,
+        renew_ms: 60_000
+      )
 
       assert ControlPlane.held?()
       assert {:ok, _generation} = ControlPlane.generation()
@@ -492,7 +499,7 @@ defmodule Cyfr.CellTest do
       assert {:held, deadline} = :persistent_term.get(@standing_key)
       assert is_integer(deadline)
 
-      :ok = GenServer.stop(pid)
+      :ok = stop_supervised(Cell)
     end
 
     test "a cluster member that misses one condition refuses to boot", %{node: node} do
@@ -523,21 +530,20 @@ defmodule Cyfr.CellTest do
       peer = node <> "-peer"
       assert {:ok, _} = ControlPlane.take(peer, "boot-peer", 60_000)
 
-      {:ok, pid} =
-        Cell.start_link(
-          name: nil,
-          node_name: node,
-          cluster: true,
-          facts: fn -> @cell_facts end,
-          lease_ms: 60_000,
-          renew_ms: 60_000
-        )
+      start_cell!(
+        name: nil,
+        node_name: node,
+        cluster: true,
+        facts: fn -> @cell_facts end,
+        lease_ms: 60_000,
+        renew_ms: 60_000
+      )
 
       assert ControlPlane.held?()
       assert peer in Cell.roster()
       assert node in Cell.roster()
 
-      :ok = GenServer.stop(pid)
+      :ok = stop_supervised(Cell)
     end
   end
 

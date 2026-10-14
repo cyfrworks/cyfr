@@ -76,6 +76,31 @@ defmodule Cyfr.BootstrapTest do
     Enum.any?(rows, &(&1.scope == "platform"))
   end
 
+  # Killed when the test ends, passing or not, and gone before the
+  # cleanup registered ahead of it runs.
+  defp kill_on_exit(pid) do
+    on_exit(fn ->
+      ref = Process.monitor(pid)
+      Process.exit(pid, :kill)
+
+      receive do
+        {:DOWN, ^ref, :process, ^pid, _reason} -> :ok
+      end
+    end)
+  end
+
+  # A boot that found the claim held sleeps between its attempts.
+  defp waiting?(pid) do
+    case Process.info(pid, :current_stacktrace) do
+      {:current_stacktrace, frames} ->
+        Enum.any?(frames, &match?({Process, :sleep, _, _}, &1)) and
+          Enum.any?(frames, &match?({Cyfr.Bootstrap, _, _, _}, &1))
+
+      nil ->
+        false
+    end
+  end
+
   test "a platform row the env list no longer names loses its scope and its sessions", %{
     key: key
   } do
@@ -162,9 +187,14 @@ defmodule Cyfr.BootstrapTest do
       Application.put_env(:sanctum, :platform_admin_emails, [])
 
       {:ok, peer} = JobClaims.claim("bootstrap", key, "member-b", 60_000)
-      spawn(fn -> Process.sleep(300) && JobClaims.release(peer) end)
+      boot = Task.async(fn -> Cyfr.Bootstrap.run(key: key, owner: "member-a", wait_ms: 5_000) end)
+      kill_on_exit(boot.pid)
 
-      assert :ok = Cyfr.Bootstrap.run(key: key, owner: "member-a", wait_ms: 5_000)
+      # The peer gives the claim up only once this member is in its wait.
+      wait_until(fn -> waiting?(boot.pid) end, 2_000, "the boot's wait on the peer's claim")
+      :ok = JobClaims.release(peer)
+
+      assert :ok = Task.await(boot, 5_000)
       refute platform?(dropped.id)
       assert {:ok, %{owner: "member-a"}} = JobClaims.read("bootstrap", key)
     end

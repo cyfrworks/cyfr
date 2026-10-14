@@ -248,7 +248,13 @@ defmodule Cyfr.Test.StepBench do
   end
 
   defp with_athanor_env(fun) do
-    run_dir = Path.join(System.tmp_dir!(), "step_bench_#{System.unique_integer([:positive])}")
+    # `System.unique_integer/1` starts over identically in every fresh VM:
+    # the random suffix keeps two direct runs of one checkout apart.
+    suffix = Base.encode16(:crypto.strong_rand_bytes(8), case: :lower)
+
+    run_dir =
+      Path.join(System.tmp_dir!(), "step_bench_#{System.unique_integer([:positive])}_#{suffix}")
+
     keys = [:base_path, :seed_path]
     previous = Map.new(keys, &{&1, Application.get_env(:arca, &1)})
 
