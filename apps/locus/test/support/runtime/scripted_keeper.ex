@@ -26,9 +26,8 @@ defmodule Locus.Runtime.Test.ScriptedKeeper do
   of the pool's keeper options, or to none.
 
   Each runner has a relay stream too: `read_relay/1` answers what the
-  service wrote on it, `write_relay/2` makes the runner write on it and
-  `end_relay/1` ends it from the runner's side; `relay_closed?/1` says
-  whether the service ended it.
+  service wrote on it and `write_relay/2` makes the runner write on it;
+  `relay_closed?/1` says whether the service ended it.
 
   `relayed!/2` routes an attempt's client as a runner's is routed, for a
   test that runs runner code in this VM: through a runner's end of a relay
@@ -138,10 +137,6 @@ defmodule Locus.Runtime.Test.ScriptedKeeper do
   @doc "Make runner `spawn` write `data` on its relay."
   @spec write_relay(map(), iodata()) :: :ok
   def write_relay(%{runner: runner}, data), do: GenServer.call(runner, {:relay_out, data})
-
-  @doc "End runner `spawn`'s relay from its side."
-  @spec end_relay(map()) :: :ok
-  def end_relay(%{runner: runner}), do: GenServer.call(runner, :relay_end)
 
   @doc "Whether the service ended runner `spawn`'s relay."
   @spec relay_closed?(map()) :: boolean()
@@ -329,11 +324,6 @@ defmodule Locus.Runtime.Test.ScriptedKeeper do
 
     def handle_call({:relay_out, data}, _from, state) do
       notify(state, {:relay, IO.iodata_to_binary(data)})
-      {:reply, :ok, state}
-    end
-
-    def handle_call(:relay_end, _from, state) do
-      notify(state, :relay_closed)
       {:reply, :ok, state}
     end
 

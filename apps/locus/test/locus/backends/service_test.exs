@@ -23,6 +23,8 @@ defmodule Locus.Backends.ServiceTest do
 
   use ExUnit.Case, async: false
 
+  import Prima.Test.Wait
+
   alias Locus.Backends.{Backend, Owners, Service}
   alias Prima.LocusBackends, as: LB
   alias Prima.MCP.Protocol, as: MCPProtocol
@@ -300,14 +302,6 @@ defmodule Locus.Backends.ServiceTest do
     assert answer.headers["x-cyfr-boot"] == @boot
   end
 
-  defp wait_until(check, attempts \\ 200) do
-    cond do
-      check.() -> :ok
-      attempts == 0 -> flunk("condition never held")
-      true -> Process.sleep(25) && wait_until(check, attempts - 1)
-    end
-  end
-
   # ————— routes —————
 
   describe "the routes" do
@@ -571,14 +565,17 @@ defmodule Locus.Backends.ServiceTest do
     wanted = min(bytes, LB.stderr_tail_bytes())
     named = messages |> Enum.flat_map(&synced_backends/1) |> length()
 
-    wait_until(fn ->
-      children = DynamicSupervisor.which_children(ctx.supervisor)
+    wait_until(
+      fn ->
+        children = DynamicSupervisor.which_children(ctx.supervisor)
 
-      length(children) == named and
-        Enum.all?(children, fn {_, pid, _, _} ->
-          byte_size(Backend.status(pid).stderr_tail) >= wanted
-        end)
-    end)
+        length(children) == named and
+          Enum.all?(children, fn {_, pid, _, _} ->
+            byte_size(Backend.status(pid).stderr_tail) >= wanted
+          end)
+      end,
+      5_000
+    )
   end
 
   defp synced_backends(%{"route" => "control", "body" => body}) do
@@ -827,9 +824,12 @@ defmodule Locus.Backends.ServiceTest do
 
       status = %{type: :status, owners: [%{athanor: @athanor, server: @server}]}
 
-      wait_until(fn ->
-        match?(%{"owners" => [%{"state" => "running"}]}, json(control(ctx, status)))
-      end)
+      wait_until(
+        fn ->
+          match?(%{"owners" => [%{"state" => "running"}]}, json(control(ctx, status)))
+        end,
+        5_000
+      )
 
       tools = json(invoke(ctx, mcp("tools/list")))["result"]["tools"]
       assert Enum.map(tools, & &1["name"]) == ["probe__echo", "probe__secret"]
@@ -867,7 +867,7 @@ defmodule Locus.Backends.ServiceTest do
       refute text =~ token
 
       # The status's stderr tail, as the backend wrote it, masked.
-      wait_until(fn -> control(ctx, status).body =~ "secret PROBE_TOKEN" end)
+      wait_until(fn -> control(ctx, status).body =~ "secret PROBE_TOKEN" end, 5_000)
       body = control(ctx, status).body
       assert body =~ "secret PROBE_TOKEN=[REDACTED]"
       refute body =~ token

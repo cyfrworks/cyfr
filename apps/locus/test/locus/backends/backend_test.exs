@@ -21,6 +21,8 @@ defmodule Locus.Backends.BackendTest do
 
   use ExUnit.Case, async: false
 
+  import Prima.Test.Wait
+
   alias Locus.Backends.Backend
   alias Locus.Test.FakeKeeper
 
@@ -64,16 +66,8 @@ defmodule Locus.Backends.BackendTest do
     backend
   end
 
-  defp wait_until(check, attempts \\ 200) do
-    cond do
-      check.() -> :ok
-      attempts == 0 -> flunk("condition never held")
-      true -> Process.sleep(50) && wait_until(check, attempts - 1)
-    end
-  end
-
   defp wait_status(backend, status),
-    do: wait_until(fn -> Backend.status(backend).status == status end)
+    do: wait_until(fn -> Backend.status(backend).status == status end, 10_000)
 
   defp starts(backend) do
     tail = Backend.status(backend).stderr_tail
@@ -115,7 +109,7 @@ defmodule Locus.Backends.BackendTest do
       assert "[REDACTED]" ==
                backend |> Backend.call_tool("secret", %{"name" => "PROBE_TOKEN"}) |> text()
 
-      wait_until(fn -> Backend.status(backend).stderr_tail =~ "secret PROBE_TOKEN" end)
+      wait_until(fn -> Backend.status(backend).stderr_tail =~ "secret PROBE_TOKEN" end, 10_000)
       tail = Backend.status(backend).stderr_tail
       assert tail =~ "secret PROBE_TOKEN=[REDACTED]"
       refute tail =~ @token
@@ -154,7 +148,11 @@ defmodule Locus.Backends.BackendTest do
       assert {:error, {:tool_error, sentence}} = Backend.call_tool(backend, "flood", %{})
       assert sentence == "backend 'probe' call failed: exited code=null signal=SIGKILL"
 
-      wait_until(fn -> match?(%{status: :ready, restarts: 1}, Backend.status(backend)) end)
+      wait_until(
+        fn -> match?(%{status: :ready, restarts: 1}, Backend.status(backend)) end,
+        10_000
+      )
+
       assert starts(backend) == 2
       assert text(Backend.call_tool(backend, "echo", %{})) == "{}"
     end
@@ -165,9 +163,12 @@ defmodule Locus.Backends.BackendTest do
       backend = start_backend(supervisor, [])
 
       for restarts <- 0..2 do
-        wait_until(fn ->
-          match?(%{status: :ready, restarts: ^restarts}, Backend.status(backend))
-        end)
+        wait_until(
+          fn ->
+            match?(%{status: :ready, restarts: ^restarts}, Backend.status(backend))
+          end,
+          10_000
+        )
 
         assert {:error, {:tool_error, "backend 'probe' call failed: exited code=3 signal=null"}} =
                  Backend.call_tool(backend, "crash", %{})
@@ -194,7 +195,7 @@ defmodule Locus.Backends.BackendTest do
       assert :ok = Backend.retire_idle(backend)
       assert %{status: :idle, tools: 2} = Backend.status(backend)
       assert length(Backend.list_tools(backend)) == 2
-      wait_until(fn -> not alive?(os_pid) end)
+      wait_until(fn -> not alive?(os_pid) end, 10_000)
 
       assert text(Backend.call_tool(backend, "echo", %{"n" => 1})) == ~s({"n":1})
       assert %{status: :ready, restarts: 0} = Backend.status(backend)
@@ -226,7 +227,7 @@ defmodule Locus.Backends.BackendTest do
       os_pid = :sys.get_state(backend).handle.pid
 
       assert :ok = Backend.stop(backend, 1_000)
-      wait_until(fn -> not alive?(os_pid) end)
+      wait_until(fn -> not alive?(os_pid) end, 10_000)
 
       assert %{status: :stopped, tools: 0} = Backend.status(backend)
 
@@ -270,9 +271,12 @@ defmodule Locus.Backends.BackendTest do
             keeper_opts(keeper)
         )
 
-      wait_until(fn ->
-        Enum.any?(FakeKeeper.requests(fake), &(&1["type"] == "spawn"))
-      end)
+      wait_until(
+        fn ->
+          Enum.any?(FakeKeeper.requests(fake), &(&1["type"] == "spawn"))
+        end,
+        10_000
+      )
 
       [spawn] = Enum.filter(FakeKeeper.requests(fake), &(&1["type"] == "spawn"))
       assert spawn["pool"] == "backends"
@@ -282,7 +286,11 @@ defmodule Locus.Backends.BackendTest do
       refute Map.has_key?(spawn, "control")
 
       assert :ok = Backend.stop(backend, 0)
-      wait_until(fn -> Enum.any?(FakeKeeper.requests(fake), &(&1["type"] == "release")) end)
+
+      wait_until(
+        fn -> Enum.any?(FakeKeeper.requests(fake), &(&1["type"] == "release")) end,
+        10_000
+      )
     end
 
     @tag :requires_node

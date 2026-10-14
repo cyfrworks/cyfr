@@ -15,7 +15,7 @@ defmodule Locus.Runtime.RunnerTest do
 
   use ExUnit.Case, async: false
 
-  import Locus.Runtime.Test.Wait
+  import Prima.Test.Wait
 
   alias Prima.{Assignment, RunnerControl}
   alias Locus.Runtime.Test.{ScriptedHost, ScriptedKeeper}
@@ -144,11 +144,24 @@ defmodule Locus.Runtime.RunnerTest do
 
     ScriptedHost.script(host, "fetch_artifact", fn _args, _caller ->
       send(test, {:held, self()})
-
-      receive do
-        :go -> {:ok, Base.encode64(bytes)}
-      end
+      held_until_go(test, {:ok, Base.encode64(bytes)})
     end)
+  end
+
+  # A held answer, given once the test sends `:go`; the request ends
+  # unanswered when the test process ends first, so a failed assertion
+  # leaves no connection for the host's shutdown to wait out.
+  defp held_until_go(test, answer) do
+    monitor = Process.monitor(test)
+
+    receive do
+      :go ->
+        Process.demonitor(monitor, [:flush])
+        answer
+
+      {:DOWN, ^monitor, :process, _pid, _reason} ->
+        :drop
+    end
   end
 
   defp child!(host, opts) do
@@ -286,9 +299,11 @@ defmodule Locus.Runtime.RunnerTest do
          host: host,
          service: service
        } do
+    test = self()
+
     ScriptedHost.script(host, "fail", fn _args, _caller ->
-      Process.sleep(30_000)
-      {:ok, "held"}
+      send(test, {:held, self()})
+      held_until_go(test, {:ok, "held"})
     end)
 
     attempt = spin!(host, timeout_ms: 300)
@@ -298,5 +313,7 @@ defmodule Locus.Runtime.RunnerTest do
     assert held == attempt.attempt
     assert_receive {:halted, {:watchdog, id}}, 5_000
     assert id == attempt.execution_id
+    assert_receive {:held, fail}, 5_000
+    send(fail, :go)
   end
 end

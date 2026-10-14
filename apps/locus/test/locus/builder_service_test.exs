@@ -21,6 +21,8 @@ defmodule Locus.BuilderServiceTest do
   # Serves on the application's build slots and, in places, as its keeper.
   use ExUnit.Case, async: false
 
+  import Prima.Test.Wait
+
   alias Prima.{BuilderProtocol, Slots}
   alias Locus.Test.{FakeKeeper, Wire}
 
@@ -30,14 +32,6 @@ defmodule Locus.BuilderServiceTest do
 
   setup do
     {:ok, port: Wire.serve!()}
-  end
-
-  defp wait_until(check, attempts \\ 200) do
-    cond do
-      check.() -> :ok
-      attempts == 0 -> flunk("condition never held")
-      true -> Process.sleep(50) && wait_until(check, attempts - 1)
-    end
   end
 
   defp refused(port, request_or_body, opts \\ []) do
@@ -84,10 +78,13 @@ defmodule Locus.BuilderServiceTest do
   end
 
   defp pids_in(file) do
-    wait_until(fn ->
-      match?({:ok, text} when byte_size(text) > 0, File.read(file)) and
-        length(String.split(File.read!(file), "\n", trim: true)) == 2
-    end)
+    wait_until(
+      fn ->
+        match?({:ok, text} when byte_size(text) > 0, File.read(file)) and
+          length(String.split(File.read!(file), "\n", trim: true)) == 2
+      end,
+      10_000
+    )
 
     String.split(File.read!(file), "\n", trim: true)
   end
@@ -466,7 +463,7 @@ defmodule Locus.BuilderServiceTest do
       assert result.diagnostics ==
                Enum.map(progress, fn {:progress, stage, message} -> "#{stage}: #{message}" end)
 
-      wait_until(fn -> match?(%{active: 0, holders: []}, Slots.status(@slots)) end)
+      wait_until(fn -> match?(%{active: 0, holders: []}, Slots.status(@slots)) end, 10_000)
     end
 
     test "and exits non-zero is failed with its status, its log among the diagnostics", %{
@@ -476,7 +473,7 @@ defmodule Locus.BuilderServiceTest do
       assert {:refusal, {:failed, {:status, status}}, diagnostics} = List.last(lines)
       assert status != 0
       assert "output: no such module" in diagnostics
-      wait_until(fn -> match?(%{active: 0}, Slots.status(@slots)) end)
+      wait_until(fn -> match?(%{active: 0}, Slots.status(@slots)) end, 10_000)
     end
 
     test "and writes a log without end answers a log within the wire's bound", %{port: port} do
@@ -526,8 +523,8 @@ defmodule Locus.BuilderServiceTest do
       assert System.monotonic_time(:millisecond) - started < 20_000
 
       # The shell the build ran and the child it started are both gone.
-      for os_pid <- pids_in(file), do: wait_until(fn -> not alive?(os_pid) end)
-      wait_until(fn -> match?(%{active: 0}, Slots.status(@slots)) end)
+      for os_pid <- pids_in(file), do: wait_until(fn -> not alive?(os_pid) end, 10_000)
+      wait_until(fn -> match?(%{active: 0}, Slots.status(@slots)) end, 10_000)
     end
 
     test "whose client leaves is ended within a bound, and its slot goes back", %{port: port} do
@@ -545,8 +542,8 @@ defmodule Locus.BuilderServiceTest do
       left = System.monotonic_time(:millisecond)
       Wire.close(conn)
 
-      for os_pid <- os_pids, do: wait_until(fn -> not alive?(os_pid) end)
-      wait_until(fn -> match?(%{active: 0, holders: []}, Slots.status(@slots)) end)
+      for os_pid <- os_pids, do: wait_until(fn -> not alive?(os_pid) end, 10_000)
+      wait_until(fn -> match?(%{active: 0, holders: []}, Slots.status(@slots)) end, 10_000)
       assert System.monotonic_time(:millisecond) - left < 10_000
 
       # The slot is there for the next build.
@@ -574,7 +571,7 @@ defmodule Locus.BuilderServiceTest do
 
       # The bound it was ended at is the one its spawn asked for.
       assert [%{"pool" => "build", "memory_bytes" => 268_435_456}] = spawns(fake)
-      wait_until(fn -> match?(%{active: 0}, Slots.status(@slots)) end)
+      wait_until(fn -> match?(%{active: 0}, Slots.status(@slots)) end, 10_000)
     end
 
     test "a build killed for any other reason is failed with its signal", %{port: port} do
@@ -597,7 +594,7 @@ defmodule Locus.BuilderServiceTest do
       # It asked for the bound, and ran nothing when it could not have it.
       assert [%{"memory_bytes" => 268_435_456}] = spawns(fake)
       assert FakeKeeper.requests(fake) == spawns(fake)
-      wait_until(fn -> match?(%{active: 0}, Slots.status(@slots)) end)
+      wait_until(fn -> match?(%{active: 0}, Slots.status(@slots)) end, 10_000)
     end
 
     test "a pool with no uid free answers capacity", %{port: port} do
@@ -614,12 +611,12 @@ defmodule Locus.BuilderServiceTest do
 
       conn = Wire.open(port, @build, body, [{"x-cyfr-auth", Wire.header(body)}])
       assert {200, conn} = Wire.status(conn)
-      wait_until(fn -> spawns(fake) != [] end)
+      wait_until(fn -> spawns(fake) != [] end, 10_000)
       :ok = FakeKeeper.close(fake)
 
       conn = await_line(conn, fn line -> match?({:refusal, {:unavailable, _}, _}, line) end)
       Wire.close(conn)
-      wait_until(fn -> match?(%{active: 0}, Slots.status(@slots)) end)
+      wait_until(fn -> match?(%{active: 0}, Slots.status(@slots)) end, 10_000)
     end
   end
 

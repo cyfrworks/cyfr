@@ -25,16 +25,9 @@ defmodule Locus.DirectLauncherTest do
   use ExUnit.Case, async: true
 
   import Locus.Test.ProcessFamily
+  import Prima.Test.Wait
 
   alias Locus.DirectLauncher
-
-  defp wait_until(check, attempts \\ 200) do
-    cond do
-      check.() -> :ok
-      attempts == 0 -> flunk("condition never held")
-      true -> Process.sleep(50) && wait_until(check, attempts - 1)
-    end
-  end
 
   defp alive?(os_pid) do
     {_out, status} = System.cmd("kill", ["-0", os_pid], stderr_to_stdout: true)
@@ -63,10 +56,13 @@ defmodule Locus.DirectLauncherTest do
   end
 
   defp left_in(file) do
-    wait_until(fn ->
-      match?({:ok, _}, File.read(file)) and
-        length(String.split(File.read!(file), "\n", trim: true)) == 3
-    end)
+    wait_until(
+      fn ->
+        match?({:ok, _}, File.read(file)) and
+          length(String.split(File.read!(file), "\n", trim: true)) == 3
+      end,
+      10_000
+    )
 
     [shell, child, home] = String.split(File.read!(file), "\n", trim: true)
     {[shell, child], home}
@@ -125,7 +121,7 @@ defmodule Locus.DirectLauncherTest do
     assert System.monotonic_time(:millisecond) - started < 10_000
 
     {os_pids, home} = left_in(file)
-    for os_pid <- os_pids, do: wait_until(fn -> not alive?(os_pid) end)
+    for os_pid <- os_pids, do: wait_until(fn -> not alive?(os_pid) end, 10_000)
     refute File.exists?(home)
   end
 
@@ -140,7 +136,7 @@ defmodule Locus.DirectLauncherTest do
     :ok = Locus.Executor.cancel(runner)
     assert_receive {:answer, {:error, :cancelled}}, 10_000
 
-    for os_pid <- os_pids, do: wait_until(fn -> not alive?(os_pid) end)
+    for os_pid <- os_pids, do: wait_until(fn -> not alive?(os_pid) end, 10_000)
     refute File.exists?(home)
   end
 
@@ -159,9 +155,9 @@ defmodule Locus.DirectLauncherTest do
 
     Process.exit(caller, :kill)
 
-    for os_pid <- os_pids, do: wait_until(fn -> not alive?(os_pid) end)
-    wait_until(fn -> not File.exists?(home) end)
-    wait_until(fn -> not File.exists?(Path.dirname(home)) end)
+    for os_pid <- os_pids, do: wait_until(fn -> not alive?(os_pid) end, 10_000)
+    wait_until(fn -> not File.exists?(home) end, 10_000)
+    wait_until(fn -> not File.exists?(Path.dirname(home)) end, 10_000)
   end
 
   describe "a long-lived process" do
@@ -277,8 +273,8 @@ defmodule Locus.DirectLauncherTest do
 
       Process.exit(owner, :kill)
 
-      for os_pid <- os_pids, do: wait_until(fn -> not alive?(os_pid) end)
-      wait_until(fn -> not File.exists?(home) end)
+      for os_pid <- os_pids, do: wait_until(fn -> not alive?(os_pid) end, 10_000)
+      wait_until(fn -> not File.exists?(home) end, 10_000)
     end
   end
 
@@ -338,12 +334,15 @@ defmodule Locus.DirectLauncherTest do
       spec = %{argv: ["/bin/sh", "-c", script], env: %{}, pool: "runner", control: true}
       {:ok, handle} = DirectLauncher.spawn([janitor: janitor, strand_reader: true], spec)
       reader = "/bin/cat " <> Path.join(handle.home, "stderr")
-      wait_until(fn -> readers(reader) != [] end)
+      wait_until(fn -> readers(reader) != [] end, 10_000)
       [os_pid] = readers(reader)
 
       # On Linux the kernel says where it waits: for a writer of the fifo.
       if File.exists?("/proc/#{os_pid}/wchan") do
-        wait_until(fn -> File.read("/proc/#{os_pid}/wchan") == {:ok, "wait_for_partner"} end)
+        wait_until(
+          fn -> File.read("/proc/#{os_pid}/wchan") == {:ok, "wait_for_partner"} end,
+          10_000
+        )
       end
 
       {handle, os_pid}
@@ -369,7 +368,7 @@ defmodule Locus.DirectLauncherTest do
     end
 
     defp reader_gone!(os_pid) do
-      wait_until(fn -> not running?(os_pid) end)
+      wait_until(fn -> not running?(os_pid) end, 10_000)
       refute running?(os_pid), "the stderr reader #{os_pid} outlived its runner"
     end
 
@@ -401,7 +400,7 @@ defmodule Locus.DirectLauncherTest do
       assert_receive {:stranded, {handle, reader}}, 10_000
       Process.exit(owner, :kill)
 
-      wait_until(fn -> not File.exists?(handle.home) end)
+      wait_until(fn -> not File.exists?(handle.home) end, 10_000)
       reader_gone!(reader)
     end
 
@@ -422,7 +421,7 @@ defmodule Locus.DirectLauncherTest do
       {:ok, handle} = DirectLauncher.spawn([janitor: name], spec)
       child = handle.server
 
-      wait_until(fn -> :sys.get_state(janitor).runners[child].reader_os_pid == nil end)
+      wait_until(fn -> :sys.get_state(janitor).runners[child].reader_os_pid == nil end, 10_000)
       assert running?(handle.pid)
 
       :ok = DirectLauncher.release([], handle, 0)
@@ -443,16 +442,27 @@ defmodule Locus.DirectLauncherTest do
     # A home as a runner's lays it out, and a reader of its fifo as the
     # launcher starts one, with no runner ever opening the fifo to write:
     # the reader waits in its open, which is where a runner ended before
-    # its shell opened the fifo leaves it.
+    # its shell opened the fifo leaves it. Whatever the test leaves, the
+    # reader is killed and seen gone, then the home removed, when it ends.
     defp stranded_reader! do
       home =
         Path.join(System.tmp_dir!(), "locus_spawn_test_#{System.unique_integer([:positive])}")
 
-      log = Path.join(home, "stderr")
       File.mkdir_p!(home)
+      on_exit(fn -> File.rm_rf!(home) end)
+      log = Path.join(home, "stderr")
       {_out, 0} = System.cmd("mkfifo", ["-m", "600", log])
       reader = Port.open({:spawn_executable, "/bin/cat"}, [:binary, :stream, :eof, args: [log]])
       {:os_pid, os_pid} = Port.info(reader, :os_pid)
+
+      on_exit(fn ->
+        if running?(os_pid),
+          do:
+            System.cmd("/bin/kill", ["-KILL", Integer.to_string(os_pid)], stderr_to_stdout: true)
+
+        assert_gone([os_pid])
+      end)
+
       {home, reader, os_pid}
     end
 

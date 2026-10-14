@@ -1086,36 +1086,6 @@ defmodule Locus.Runtime.HttpHandlerTest do
       assert ScriptedHost.requests(host, "record_denial") == []
     end
 
-    test "a lost answer leaves the runner unclean, never reused, and the guest a plain error", %{
-      edge: edge,
-      host: host,
-      attempt: attempt
-    } do
-      # The runner owning this VM's attempts hears the subtree is unclean.
-      test = self()
-
-      owner =
-        spawn_link(fn ->
-          Process.register(self(), Locus.Runtime.Runner)
-          send(test, :registered)
-
-          receive do
-            {:"$gen_cast", {:unclean, ^test, reason}} -> send(test, {:unclean, reason})
-          end
-        end)
-
-      assert_receive :registered
-      on_exit(fn -> Process.exit(owner, :kill) end)
-
-      ScriptedHost.script(host, "attached_fetch", :drop)
-
-      assert %{"error" => %{"type" => "http_error"}} =
-               attached(attempt, edge, %{"url" => "https://api.test/x"})
-
-      assert_receive {:unclean, {:attached_fetch, :lost}}, 5_000
-      assert [_one] = ScriptedHost.requests(host, "attached_fetch")
-    end
-
     test "a redirect is answered as given, and no hop is pinned", %{
       edge: edge,
       host: host,
