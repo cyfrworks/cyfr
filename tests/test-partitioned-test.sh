@@ -839,13 +839,13 @@ for adapter in sqlite postgres; do
   nested=$!
   await_lines "$TRACE/resistant-leaders" 2
   stop_runner "$nested" TERM 60 "$scratch/nested-$adapter"
-  while read -r leader; do
-    if alive "$leader"; then fail "a partition leader outlived its nested $adapter runner"; fi
-  done < "$TRACE/resistant-leaders"
   if [ "$adapter" = postgres ]; then
     [ "$(sort -u "$TRACE/drop-saw")" = none ] && [ "$(wc -l < "$TRACE/drop-saw")" = 2 ] ||
       fail "a drop ran beside a live partition: $(tr '\n' ' ' < "$TRACE/drop-saw")"
   fi
+  while read -r leader; do
+    if alive "$leader"; then fail "a partition leader outlived its nested $adapter runner"; fi
+  done < "$TRACE/resistant-leaders"
 done
 [ -s "$scratch/nested-registry" ] || fail 'the nested runner did not register its sessions'
 
