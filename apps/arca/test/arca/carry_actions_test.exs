@@ -283,7 +283,7 @@ defmodule Arca.CarryActionsTest do
       assert first =~ "carry_actions"
       assert Enum.any?(rest, &match?({"carry_actions", _}, &1))
 
-      if Arca.Repo.adapter() == Ecto.Adapters.Postgres do
+      if Arca.Test.Adapter.postgres?() do
         assert first =~ "FOR UPDATE"
         assert {"carry_actions", locked} = Enum.find(rest, &match?({"carry_actions", _}, &1))
         assert locked =~ "FOR UPDATE"
@@ -474,9 +474,11 @@ defmodule Arca.CarryActionsRaceTest do
   use ExUnit.Case, async: false
 
   import Ecto.Query
+  import Arca.Test.Adapter, only: [postgres?: 0]
 
   alias Arca.{CarryActions, ControlPlane, Users}
   alias Arca.Schemas.{CarryAction, CellLease, ExternalIdentity, User}
+  alias Arca.Test.LockWait
   alias Ecto.Adapters.SQL.Sandbox
 
   @slot_keys [
@@ -487,7 +489,6 @@ defmodule Arca.CarryActionsRaceTest do
 
   defp unboxed(fun), do: Sandbox.unboxed_run(Arca.Repo, fun)
   defp server, do: Prima.Actor.system()
-  defp postgres?, do: Arca.Repo.adapter() == Ecto.Adapters.Postgres
   defp digest(seed), do: Prima.Digest.sha256("#{seed}-#{System.unique_integer()}")
 
   setup do
@@ -562,36 +563,6 @@ defmodule Arca.CarryActionsRaceTest do
     if postgres?(), do: hd(hd(Arca.Repo.query!("SELECT pg_backend_pid()").rows))
   end
 
-  # On PostgreSQL, `backend` is blocked on a lock, in a statement naming
-  # every one of `fragments`.
-  defp await_wait!(backend, fragments, tries \\ 250) do
-    [[type, event, query]] =
-      unboxed(fn ->
-        Arca.Repo.query!(
-          "SELECT wait_event_type, wait_event, query FROM pg_stat_activity WHERE pid = $1",
-          [backend]
-        ).rows
-      end)
-
-    cond do
-      type == "Lock" and Enum.all?(fragments, &String.contains?(query, &1)) ->
-        :ok
-
-      tries == 0 ->
-        flunk(
-          "backend #{backend} is not waiting at #{inspect(fragments)}: #{type} #{event} #{query}"
-        )
-
-      true ->
-        retry_wait!(backend, fragments, tries)
-    end
-  end
-
-  defp retry_wait!(backend, fragments, tries) do
-    Process.sleep(20)
-    await_wait!(backend, fragments, tries - 1)
-  end
-
   test "an exact retry racing the first answers the receipt it recorded", %{user_id: user_id} do
     test = self()
 
@@ -634,7 +605,7 @@ defmodule Arca.CarryActionsRaceTest do
       end)
 
     assert_receive {:retry, pid}, 5_000
-    if postgres?(), do: await_wait!(pid, [~s(INSERT INTO "carry_actions")])
+    if postgres?(), do: LockWait.await_lock_wait!(pid, [~s(INSERT INTO "carry_actions")])
     refute Task.yield(retry, 300), "the retry decided while the first held its receipt"
 
     send(first.pid, :go)

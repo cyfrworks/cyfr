@@ -354,6 +354,7 @@ defmodule Arca.PairingInvitationsRaceTest do
   use ExUnit.Case, async: false
 
   import Ecto.Query
+  import Arca.Test.Adapter, only: [postgres?: 0]
 
   alias Arca.{ControlPlane, DeviceCertificates, Members, PairedClients, PairingInvitations, Users}
 
@@ -368,6 +369,7 @@ defmodule Arca.PairingInvitationsRaceTest do
     User
   }
 
+  alias Arca.Test.LockWait
   alias Ecto.Adapters.SQL.Sandbox
 
   @slot_keys [
@@ -380,7 +382,6 @@ defmodule Arca.PairingInvitationsRaceTest do
 
   defp unboxed(fun), do: Sandbox.unboxed_run(Arca.Repo, fun)
   defp server, do: Prima.Actor.system()
-  defp postgres?, do: Arca.Repo.adapter() == Ecto.Adapters.Postgres
   defp admits(_locked), do: :ok
 
   setup do
@@ -473,43 +474,8 @@ defmodule Arca.PairingInvitationsRaceTest do
     if postgres?(), do: hd(hd(Arca.Repo.query!("SELECT pg_backend_pid()").rows))
   end
 
-  # On PostgreSQL, `backend` is blocked on a lock, at the gate (`:gate`) or
-  # in a statement naming every one of `fragments`.
-  defp await_wait!(backend, at, tries \\ 250) do
-    [[type, event, query]] =
-      unboxed(fn ->
-        Arca.Repo.query!(
-          "SELECT wait_event_type, wait_event, query FROM pg_stat_activity WHERE pid = $1",
-          [backend]
-        ).rows
-      end)
-
-    waiting? =
-      type == "Lock" and
-        case at do
-          :gate -> event == "advisory"
-          fragments -> event != "advisory" and Enum.all?(fragments, &String.contains?(query, &1))
-        end
-
-    cond do
-      waiting? ->
-        :ok
-
-      tries == 0 ->
-        flunk("backend #{backend} is not waiting at #{inspect(at)}: #{type} #{event} #{query}")
-
-      true ->
-        retry_wait!(backend, at, tries)
-    end
-  end
-
-  defp retry_wait!(backend, at, tries) do
-    Process.sleep(20)
-    await_wait!(backend, at, tries - 1)
-  end
-
   defp assert_waits!(task, backend, fragments) do
-    if postgres?(), do: await_wait!(backend, fragments)
+    if postgres?(), do: LockWait.await_lock_wait!(backend, fragments)
     refute Task.yield(task, 300), "the waiter decided while the other side held its lock"
   end
 
@@ -544,18 +510,24 @@ defmodule Arca.PairingInvitationsRaceTest do
     end)
   end
 
+  # The gate's key is held in a transaction the holder keeps open until
+  # `open_gate!/1`. A holder that dies with its case is mid-transaction, so
+  # its connection is closed rather than lent again, and the key goes with
+  # it: a session lock would stay held on the pooled connection.
   defp close_gate! do
     test = self()
 
     holder =
       Task.async(fn ->
         unboxed(fn ->
-          Arca.Repo.query!("SELECT pg_advisory_lock($1)", [@gate])
-          send(test, :gate_closed)
-
-          receive do
-            :open -> Arca.Repo.query!("SELECT pg_advisory_unlock($1)", [@gate])
-          end
+          Arca.Repo.transaction(
+            fn ->
+              Arca.Repo.query!("SELECT pg_advisory_xact_lock($1)", [@gate])
+              send(test, :gate_closed)
+              receive do: (:open -> :ok)
+            end,
+            timeout: :infinity
+          )
         end)
       end)
 
@@ -714,11 +686,8 @@ defmodule Arca.PairingInvitationsRaceTest do
     assert clients(actor) == 1
   end
 
-  if Arca.Repo.adapter() != Ecto.Adapters.Postgres do
-    @tag skip:
-           "the revocation has no pause point but a PostgreSQL trigger; SQLite's write lock orders it"
-  end
-
+  # The revocation has no pause point but a PostgreSQL trigger; SQLite's write lock orders it.
+  @tag :postgres
   test "a redemption waiting behind a revocation reads it revoked", %{
     actor: actor,
     membership: membership
@@ -737,7 +706,7 @@ defmodule Arca.PairingInvitationsRaceTest do
       end)
 
     assert_receive {:revoker, revoking}, 5_000
-    await_wait!(revoking, :gate)
+    LockWait.await_lock_wait!(revoking, [~s(UPDATE "pairing_invitations")], event: "advisory")
     {second, pid} = redemption(actor, hash)
     assert_waits!(second, pid, [~s("pairing_invitations"), "FOR UPDATE"])
 

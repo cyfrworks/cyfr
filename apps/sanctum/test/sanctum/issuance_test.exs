@@ -34,12 +34,12 @@ defmodule Sanctum.IssuanceTest do
   setup tags do
     Arca.Cache.init()
     Arca.Test.Sandbox.setup!(tags)
-    Prima.RateLimiter.reset()
+    Prima.Test.RateLimiter.reset!()
 
     public_url = Application.get_env(:sanctum, :public_url)
 
     on_exit(fn ->
-      Prima.RateLimiter.reset()
+      Prima.Test.RateLimiter.reset!()
 
       if public_url,
         do: Application.put_env(:sanctum, :public_url, public_url),
@@ -1037,7 +1037,7 @@ defmodule Sanctum.IssuanceTest do
       assert Enum.at(sources, locked - 1) == "paired_clients"
       assert Enum.at(sources, locked - 2) == "memberships"
 
-      if Arca.Repo.adapter() == Ecto.Adapters.Postgres do
+      if Arca.Test.Adapter.postgres?() do
         for at <- [locked - 1, locked] do
           {source, query} = Enum.at(statements, at)
           assert query =~ "FOR UPDATE", "#{source} is not locked: #{query}"
@@ -1336,6 +1336,7 @@ defmodule Sanctum.IssuanceRaceTest do
   use ExUnit.Case, async: false
 
   import Ecto.Query, only: [from: 2, where: 2]
+  import Arca.Test.Adapter, only: [postgres?: 0]
 
   alias Arca.Schemas.{
     ApiKey,
@@ -1352,7 +1353,6 @@ defmodule Sanctum.IssuanceRaceTest do
   alias Sanctum.{DeviceCerts, Issuance, Person}
 
   defp unboxed(fun), do: Sandbox.unboxed_run(Arca.Repo, fun)
-  defp postgres?, do: Arca.Repo.adapter() == Ecto.Adapters.Postgres
 
   setup do
     Arca.Cache.init()

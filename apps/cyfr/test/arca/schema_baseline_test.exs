@@ -23,6 +23,8 @@ defmodule Arca.SchemaBaselineTest do
 
   use ExUnit.Case, async: false
 
+  import Arca.Test.Adapter, only: [sqlite?: 0]
+
   require Arca.Repo.Errors
 
   @migration Path.expand("../../../arca/priv/repo/migrations/*_baseline.exs", __DIR__)
@@ -587,8 +589,6 @@ defmodule Arca.SchemaBaselineTest do
 
   # --------------------------------------------------------------------------
   # Adapter-aware introspection
-
-  defp sqlite?, do: Cyfr.RuntimeConfig.repo_adapter() == Ecto.Adapters.SQLite3
 
   defp index_names(table) do
     rows =

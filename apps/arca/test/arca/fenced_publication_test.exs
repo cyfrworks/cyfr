@@ -640,162 +640,148 @@ defmodule Arca.FencedPublicationLockTest do
   end
 
   test "a takeover while the publication waits on the lease row is refused", ctx do
-    postgres(fn ->
-      slot = unboxed(fn -> slot!(ctx.node) end)
-      staged = unboxed(fn -> stage!(ctx.actor, "v1") end)
+    slot = unboxed(fn -> slot!(ctx.node) end)
+    staged = unboxed(fn -> stage!(ctx.actor, "v1") end)
 
-      taker =
-        holding(fn ->
-          Arca.Repo.update_all(from(l in CellLease, where: l.node == ^ctx.node),
-            set: [owner: ctx.node <> "#boot_b", generation: slot.generation + 1, fence: 2]
-          )
-        end)
+    taker =
+      holding(fn ->
+        Arca.Repo.update_all(from(l in CellLease, where: l.node == ^ctx.node),
+          set: [owner: ctx.node <> "#boot_b", generation: slot.generation + 1, fence: 2]
+        )
+      end)
 
-      publisher = Task.async(fn -> unboxed(fn -> publish(ctx, staged, 0, slot) end) end)
-      refute Task.yield(publisher, 300), "the publication passed a lease row a takeover held"
+    publisher = Task.async(fn -> unboxed(fn -> publish(ctx, staged, 0, slot) end) end)
+    refute Task.yield(publisher, 300), "the publication passed a lease row a takeover held"
 
-      release(taker)
-      assert {:error, :not_owner} = Task.await(publisher, 25_000)
-      assert :not_found = unboxed(fn -> FencedPublication.document(ctx.actor, ctx.key) end)
-    end)
+    release(taker)
+    assert {:error, :not_owner} = Task.await(publisher, 25_000)
+    assert :not_found = unboxed(fn -> FencedPublication.document(ctx.actor, ctx.key) end)
   end
 
   test "a member's publications share its lease row, and a writer of the row waits for them",
        ctx do
-    postgres(fn ->
-      slot = unboxed(fn -> slot!(ctx.node) end)
-      staged = unboxed(fn -> stage!(ctx.actor, "v1") end)
+    slot = unboxed(fn -> slot!(ctx.node) end)
+    staged = unboxed(fn -> stage!(ctx.actor, "v1") end)
 
-      verifier =
-        holding(fn -> Arca.ControlPlane.verify_held(slot) end, &Arca.Repo.locking_transaction/1)
+    verifier =
+      holding(fn -> Arca.ControlPlane.verify_held(slot) end, &Arca.Repo.locking_transaction/1)
 
-      # Another publication of the same member does not wait behind it.
-      assert {:ok, 1} =
-               Task.await(
-                 Task.async(fn -> unboxed(fn -> publish(ctx, staged, 0, slot) end) end),
-                 5_000
-               )
+    # Another publication of the same member does not wait behind it.
+    assert {:ok, 1} =
+             Task.await(
+               Task.async(fn -> unboxed(fn -> publish(ctx, staged, 0, slot) end) end),
+               5_000
+             )
 
-      # The claimant's renew does.
-      renewer =
-        Task.async(fn ->
-          unboxed(fn ->
-            Arca.Repo.update_all(from(l in CellLease, where: l.node == ^ctx.node),
-              set: [fence: 2]
-            )
-          end)
+    # The claimant's renew does.
+    renewer =
+      Task.async(fn ->
+        unboxed(fn ->
+          Arca.Repo.update_all(from(l in CellLease, where: l.node == ^ctx.node),
+            set: [fence: 2]
+          )
         end)
+      end)
 
-      refute Task.yield(renewer, 300), "a renew wrote a lease row a publication held"
-      release(verifier)
-      assert {1, _} = Task.await(renewer, 25_000)
-    end)
+    refute Task.yield(renewer, 300), "a renew wrote a lease row a publication held"
+    release(verifier)
+    assert {1, _} = Task.await(renewer, 25_000)
   end
 
   test "a reservation that runs out while the publication waits is refused :expired", ctx do
-    postgres(fn ->
-      slot = unboxed(fn -> slot!(ctx.node) end)
-      staged = unboxed(fn -> stage!(ctx.actor, "v1") end)
-      unboxed(fn -> expires_in!(staged, 200) end)
+    slot = unboxed(fn -> slot!(ctx.node) end)
+    staged = unboxed(fn -> stage!(ctx.actor, "v1") end)
+    unboxed(fn -> expires_in!(staged, 200) end)
 
-      renewer =
-        holding(fn ->
-          Arca.Repo.update_all(from(l in CellLease, where: l.node == ^ctx.node), set: [fence: 2])
-        end)
+    renewer =
+      holding(fn ->
+        Arca.Repo.update_all(from(l in CellLease, where: l.node == ^ctx.node), set: [fence: 2])
+      end)
 
-      publisher = Task.async(fn -> unboxed(fn -> publish(ctx, staged, 0, slot) end) end)
-      refute Task.yield(publisher, 400)
+    publisher = Task.async(fn -> unboxed(fn -> publish(ctx, staged, 0, slot) end) end)
+    refute Task.yield(publisher, 400)
 
-      release(renewer)
-      assert {:error, :expired} = Task.await(publisher, 25_000)
+    release(renewer)
+    assert {:error, :expired} = Task.await(publisher, 25_000)
 
-      # Unpublished and past its reservation: the sweep's to reclaim.
-      assert {:ok, 1} =
-               unboxed(fn -> Arca.Retention.FencedStaging.prune(ctx.actor, 1, false) end)
+    # Unpublished and past its reservation: the sweep's to reclaim.
+    assert {:ok, 1} =
+             unboxed(fn -> Arca.Retention.FencedStaging.prune(ctx.actor, 1, false) end)
 
-      assert nil == unboxed(fn -> Arca.Repo.get(StorageStaging, staged) end)
-    end)
+    assert nil == unboxed(fn -> Arca.Repo.get(StorageStaging, staged) end)
   end
 
   test "the sweep never reclaims an attempt a live publication holds", ctx do
-    postgres(fn ->
-      slot = unboxed(fn -> slot!(ctx.node) end)
-      first = unboxed(fn -> stage!(ctx.actor, "v1") end)
-      assert {:ok, 1} = unboxed(fn -> publish(ctx, first, 0, slot) end)
+    slot = unboxed(fn -> slot!(ctx.node) end)
+    first = unboxed(fn -> stage!(ctx.actor, "v1") end)
+    assert {:ok, 1} = unboxed(fn -> publish(ctx, first, 0, slot) end)
 
-      second = unboxed(fn -> stage!(ctx.actor, "v2") end)
-      unboxed(fn -> expires_in!(second, 300) end)
+    second = unboxed(fn -> stage!(ctx.actor, "v2") end)
+    unboxed(fn -> expires_in!(second, 300) end)
 
-      # The document row held, so the publication claims the attempt and
-      # then waits at its publishing statement.
-      holder =
-        holding(fn ->
-          from(d in FencedDocument,
-            where: d.athanor_id == ^ctx.actor.athanor_id and d.key == ^ctx.key
-          )
-          |> Arca.QueryHelpers.for_update()
-          |> Arca.Repo.one()
-        end)
+    # The document row held, so the publication claims the attempt and
+    # then waits at its publishing statement.
+    holder =
+      holding(fn ->
+        from(d in FencedDocument,
+          where: d.athanor_id == ^ctx.actor.athanor_id and d.key == ^ctx.key
+        )
+        |> Arca.QueryHelpers.for_update()
+        |> Arca.Repo.one()
+      end)
 
-      publisher = Task.async(fn -> unboxed(fn -> publish(ctx, second, 1, slot) end) end)
-      refute Task.yield(publisher, 500)
+    publisher = Task.async(fn -> unboxed(fn -> publish(ctx, second, 1, slot) end) end)
+    refute Task.yield(publisher, 500)
 
-      # The attempt has run out on the clock while the publication holds it.
-      sweeper =
-        Task.async(fn ->
-          unboxed(fn -> Arca.Retention.FencedStaging.prune(ctx.actor, 1, false) end)
-        end)
+    # The attempt has run out on the clock while the publication holds it.
+    sweeper =
+      Task.async(fn ->
+        unboxed(fn -> Arca.Retention.FencedStaging.prune(ctx.actor, 1, false) end)
+      end)
 
-      refute Task.yield(sweeper, 300), "the sweep claimed an attempt a publication held"
+    refute Task.yield(sweeper, 300), "the sweep claimed an attempt a publication held"
 
-      release(holder)
-      assert {:ok, 2} = Task.await(publisher, 25_000)
-      assert {:ok, 0} = Task.await(sweeper, 25_000)
+    release(holder)
+    assert {:ok, 2} = Task.await(publisher, 25_000)
+    assert {:ok, 0} = Task.await(sweeper, 25_000)
 
-      assert %StorageStaging{state: "published"} =
-               unboxed(fn -> Arca.Repo.get!(StorageStaging, second) end)
+    assert %StorageStaging{state: "published"} =
+             unboxed(fn -> Arca.Repo.get!(StorageStaging, second) end)
 
-      assert {:ok, "v2"} = Arca.get(ctx.actor, ["staging", second])
-    end)
+    assert {:ok, "v2"} = Arca.get(ctx.actor, ["staging", second])
   end
 
   test "a publication past its budget rolls back and leaves the slot as it was", ctx do
-    postgres(fn ->
-      slot = unboxed(fn -> slot!(ctx.node) end)
-      staged = unboxed(fn -> stage!(ctx.actor, "v1") end)
-      held = Arca.ControlPlane.held()
+    slot = unboxed(fn -> slot!(ctx.node) end)
+    staged = unboxed(fn -> stage!(ctx.actor, "v1") end)
+    held = Arca.ControlPlane.held()
 
-      renewer =
-        holding(fn ->
-          Arca.Repo.update_all(from(l in CellLease, where: l.node == ^ctx.node), set: [fence: 2])
-        end)
+    renewer =
+      holding(fn ->
+        Arca.Repo.update_all(from(l in CellLease, where: l.node == ^ctx.node), set: [fence: 2])
+      end)
 
-      publisher = Task.async(fn -> unboxed(fn -> publish(ctx, staged, 0, slot) end) end)
-      Process.sleep(FencedPublication.budget_ms() + 200)
-      release(renewer)
+    publisher = Task.async(fn -> unboxed(fn -> publish(ctx, staged, 0, slot) end) end)
+    Process.sleep(FencedPublication.budget_ms() + 200)
+    release(renewer)
 
-      assert {:error, :budget} = Task.await(publisher, 25_000)
-      assert :not_found = unboxed(fn -> FencedPublication.document(ctx.actor, ctx.key) end)
+    assert {:error, :budget} = Task.await(publisher, 25_000)
+    assert :not_found = unboxed(fn -> FencedPublication.document(ctx.actor, ctx.key) end)
 
-      assert %StorageStaging{state: "reserved"} =
-               unboxed(fn -> Arca.Repo.get!(StorageStaging, staged) end)
+    assert %StorageStaging{state: "reserved"} =
+             unboxed(fn -> Arca.Repo.get!(StorageStaging, staged) end)
 
-      assert %CellLease{owner: owner, generation: generation} =
-               unboxed(fn -> Arca.Repo.get!(CellLease, ctx.node) end)
+    assert %CellLease{owner: owner, generation: generation} =
+             unboxed(fn -> Arca.Repo.get!(CellLease, ctx.node) end)
 
-      assert {owner, generation} == {slot.owner, slot.generation}
-      assert Arca.ControlPlane.held() == held
+    assert {owner, generation} == {slot.owner, slot.generation}
+    assert Arca.ControlPlane.held() == held
 
-      # The slot still holds: the next publication lands.
-      assert {:ok, 1} = unboxed(fn -> publish(ctx, staged, 0, slot) end)
-    end)
+    # The slot still holds: the next publication lands.
+    assert {:ok, 1} = unboxed(fn -> publish(ctx, staged, 0, slot) end)
   end
 
   # ---- helpers ---------------------------------------------------------------
-
-  defp postgres(fun) do
-    if Arca.Repo.adapter() == Ecto.Adapters.SQLite3, do: :ok, else: fun.()
-  end
 
   # Run `write` in a transaction of its own and hold it open until
   # `release/1`.

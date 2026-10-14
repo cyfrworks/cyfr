@@ -2776,7 +2776,9 @@ defmodule Sanctum.Consent.CommitRebindRaceTest do
   use ExUnit.Case, async: false
 
   import Ecto.Query
+  import Arca.Test.Adapter, only: [postgres?: 0]
 
+  alias Arca.Test.LockWait
   alias Sanctum.Consent.Commit
   alias Sanctum.Consent.Plan
 
@@ -2955,7 +2957,7 @@ defmodule Sanctum.Consent.CommitRebindRaceTest do
     # The entry is held by the revision: the rebind waits on it.
     if postgres?() do
       assert_receive {:backend, backend}, 15_000
-      await_lock_wait(backend)
+      LockWait.await_lock_wait!(backend, [], timeout_ms: 10_000)
     else
       refute Task.yield(rebinder, 300), "the rebind landed inside the revision"
     end
@@ -2987,27 +2989,4 @@ defmodule Sanctum.Consent.CommitRebindRaceTest do
     %{rows: [[pid]]} = Arca.Repo.query!("SELECT pg_backend_pid()")
     pid
   end
-
-  # Holds until `pid`'s backend waits on a lock: an observed state, bounded
-  # by `tries`, never a timing. Only PostgreSQL shows one; SQLite's
-  # immediate transaction waits for the one writer and has none to show.
-  defp await_lock_wait(pid, tries \\ 500)
-
-  defp await_lock_wait(_pid, 0), do: flunk("the waiting backend never waited on a lock")
-
-  defp await_lock_wait(pid, tries) do
-    %{rows: rows} =
-      unboxed(fn ->
-        Arca.Repo.query!("SELECT wait_event_type FROM pg_stat_activity WHERE pid = $1", [pid])
-      end)
-
-    if rows == [["Lock"]] do
-      :ok
-    else
-      Process.sleep(20)
-      await_lock_wait(pid, tries - 1)
-    end
-  end
-
-  defp postgres?, do: Arca.Repo.adapter() == Ecto.Adapters.Postgres
 end

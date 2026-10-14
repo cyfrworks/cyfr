@@ -139,7 +139,7 @@ defmodule Arca.ExecutionTest do
       id = "exec_call_#{System.unique_integer([:positive])}"
 
       {:ok, _row} =
-        Execution.record_start(%{
+        Arca.Test.Writers.record_start(%{
           id: id,
           reference: "catalyst:local.call:1.0.0",
           user_id: "user_test",
@@ -305,7 +305,7 @@ defmodule Arca.ExecutionTest do
   describe "child_by_key/3" do
     defp start!(attrs) do
       {:ok, row} =
-        Execution.record_start(
+        Arca.Test.Writers.record_start(
           Map.merge(
             %{
               reference: "catalyst:local.child:1.0.0",
@@ -346,8 +346,8 @@ defmodule Arca.ExecutionTest do
     end
 
     test "one key admits one child per parent; the same key elsewhere is another child" do
-      parent = start!(%{id: "exec_p_#{System.unique_integer([:positive])}"})
-      sibling = start!(%{id: "exec_p_#{System.unique_integer([:positive])}"})
+      parent = admitted!(%{id: "exec_p_#{System.unique_integer([:positive])}"})
+      sibling = admitted!(%{id: "exec_p_#{System.unique_integer([:positive])}"})
 
       _first =
         start!(%{
@@ -356,21 +356,15 @@ defmodule Arca.ExecutionTest do
           child_key: "ck_dup"
         })
 
-      assert {:error, :duplicate_child_key} =
-               Execution.record_start(%{
-                 id: "exec_c_#{System.unique_integer([:positive])}",
-                 reference: "catalyst:local.child:1.0.0",
-                 user_id: "user_test",
-                 athanor_id: @athanor,
-                 started_at: DateTime.utc_now(),
-                 status: "running",
-                 component_type: "catalyst",
-                 parent_execution_id: parent.id,
-                 child_key: "ck_dup"
-               })
+      duplicate = "exec_c_#{System.unique_integer([:positive])}"
 
-      assert %{id: _} =
-               start!(%{
+      assert {:error, :duplicate_child_key} =
+               admit_child(%{id: duplicate, parent_execution_id: parent.id, child_key: "ck_dup"})
+
+      refute Arca.Repo.get(Row, duplicate)
+
+      assert {:ok, %{execution: %{child_key: "ck_dup"}}} =
+               admit_child(%{
                  id: "exec_c_#{System.unique_integer([:positive])}",
                  parent_execution_id: sibling.id,
                  child_key: "ck_dup"
@@ -385,27 +379,46 @@ defmodule Arca.ExecutionTest do
     end
 
     test "a malformed key, or a key without a parent, is refused before any write" do
-      base = %{
-        id: "exec_c_#{System.unique_integer([:positive])}",
-        reference: "catalyst:local.child:1.0.0",
-        user_id: "user_test",
-        athanor_id: @athanor,
-        started_at: DateTime.utc_now(),
-        status: "running",
-        component_type: "catalyst"
-      }
+      parent = admitted!(%{id: "exec_p_#{System.unique_integer([:positive])}"})
+      malformed = "exec_c_#{System.unique_integer([:positive])}"
 
       assert {:error, {:invalid, errors}} =
-               Execution.record_start(
-                 Map.merge(base, %{parent_execution_id: "exec_p", child_key: "no key"})
-               )
+               admit_child(%{id: malformed, parent_execution_id: parent.id, child_key: "no key"})
 
       assert Map.has_key?(errors, :child_key)
+      refute Arca.Repo.get(Row, malformed)
+
+      orphan = "exec_c_#{System.unique_integer([:positive])}"
 
       assert {:error, {:invalid, errors}} =
-               Execution.record_start(Map.put(base, :child_key, "ck_orphan"))
+               admit_child(%{id: orphan, origin: :programmatic, child_key: "ck_orphan"})
 
       assert Map.has_key?(errors, :parent_execution_id)
+      refute Arca.Repo.get(Row, orphan)
+    end
+
+    # A root admitted with an attempt under the athanor's grant: a child
+    # admitted under it inherits that stamp.
+    defp admitted!(attrs) do
+      {:ok, %{execution: row}} =
+        admit_child(Map.merge(%{origin: :programmatic}, attrs))
+
+      row
+    end
+
+    defp admit_child(attrs) do
+      Execution.admit(
+        Map.merge(
+          %{
+            reference: "catalyst:local.child:1.0.0",
+            user_id: "user_test",
+            athanor_id: @athanor,
+            component_type: "catalyst"
+          },
+          attrs
+        ),
+        Arca.Test.Actor.standing(@athanor)
+      )
     end
   end
 
@@ -416,7 +429,7 @@ defmodule Arca.ExecutionTest do
       now = DateTime.utc_now()
 
       {:ok, _} =
-        Execution.record_start(%{
+        Arca.Test.Writers.record_start(%{
           id: parent_id,
           reference: "formula:local.test:1.0.0",
           user_id: "user_test",
@@ -427,7 +440,7 @@ defmodule Arca.ExecutionTest do
         })
 
       {:ok, _} =
-        Execution.record_start(%{
+        Arca.Test.Writers.record_start(%{
           id: child_id,
           reference: "catalyst:local.child:1.0.0",
           user_id: "user_test",
@@ -449,7 +462,7 @@ defmodule Arca.ExecutionTest do
       now = DateTime.utc_now()
 
       {:ok, _} =
-        Execution.record_start(%{
+        Arca.Test.Writers.record_start(%{
           id: parent_id,
           reference: "formula:local.test:1.0.0",
           user_id: "user_test",
@@ -460,7 +473,7 @@ defmodule Arca.ExecutionTest do
         })
 
       {:ok, _} =
-        Execution.record_start(%{
+        Arca.Test.Writers.record_start(%{
           id: child_id,
           reference: "catalyst:local.child:1.0.0",
           user_id: "user_test",
@@ -481,7 +494,7 @@ defmodule Arca.ExecutionTest do
       }
 
       {:ok, _} =
-        Execution.record_complete(
+        Arca.Test.Writers.record_complete(
           actor,
           child_id,
           %{completed_at: now, duration_ms: 100, status: "completed"},
@@ -539,7 +552,7 @@ defmodule Arca.ExecutionTest do
       now = DateTime.utc_now()
 
       {:ok, _} =
-        Execution.record_start(%{
+        Arca.Test.Writers.record_start(%{
           id: id,
           reference: "catalyst:local.test:1.0.0",
           user_id: "user_test",
@@ -559,7 +572,7 @@ defmodule Arca.ExecutionTest do
       }
 
       {:ok, _} =
-        Execution.record_complete(
+        Arca.Test.Writers.record_complete(
           actor,
           id,
           %{completed_at: now, duration_ms: 100, status: "completed"},
@@ -738,7 +751,7 @@ defmodule Arca.ExecutionTest do
       id = "exec_by_profile_#{System.unique_integer([:positive])}"
 
       {:ok, row} =
-        Execution.record_start(
+        Arca.Test.Writers.record_start(
           Map.merge(
             %{
               id: id,
@@ -990,11 +1003,13 @@ defmodule Arca.ExecutionTakeoverTest do
   use ExUnit.Case, async: false
 
   import Ecto.Query, only: [from: 2]
+  import Arca.Test.Adapter, only: [postgres?: 0]
 
   alias Arca.{ControlPlane, CronSchedule, ScheduleOccurrences}
   alias Arca.Schemas.{CellLease, ExecutionAttempt, ScheduleOccurrence}
   alias Arca.Schemas.CronSchedule, as: ScheduleRow
   alias Arca.Schemas.Execution, as: Row
+  alias Arca.Test.LockWait
   alias Ecto.Adapters.SQL.Sandbox
 
   # Short enough to run out while the case waits; the setup is done under
@@ -1161,7 +1176,7 @@ defmodule Arca.ExecutionTakeoverTest do
         end)
 
       assert_receive {:backend, backend}, 15_000
-      await_lock_wait(backend)
+      LockWait.await_lock_wait!(backend, [], timeout_ms: 10_000)
       taken_over!(slot)
       release(holder)
       Task.await(writer, 30_000)
@@ -1218,8 +1233,6 @@ defmodule Arca.ExecutionTakeoverTest do
 
   defp unboxed(fun), do: Sandbox.unboxed_run(Arca.Repo, fun)
 
-  defp postgres?, do: Arca.Repo.adapter() == Ecto.Adapters.Postgres
-
   # Run `lock` in a transaction of its own and hold it open until
   # `release/1`.
   defp holding(lock) do
@@ -1251,25 +1264,5 @@ defmodule Arca.ExecutionTakeoverTest do
   defp backend_pid do
     %{rows: [[pid]]} = Arca.Repo.query!("SELECT pg_backend_pid()")
     pid
-  end
-
-  # Holds until `pid`'s backend waits on a lock: an observed state, bounded
-  # by `tries`, never a timing.
-  defp await_lock_wait(pid, tries \\ 500)
-
-  defp await_lock_wait(_pid, 0), do: flunk("the stale admission never waited on a lock")
-
-  defp await_lock_wait(pid, tries) do
-    %{rows: rows} =
-      unboxed(fn ->
-        Arca.Repo.query!("SELECT wait_event_type FROM pg_stat_activity WHERE pid = $1", [pid])
-      end)
-
-    if rows == [["Lock"]] do
-      :ok
-    else
-      Process.sleep(20)
-      await_lock_wait(pid, tries - 1)
-    end
   end
 end

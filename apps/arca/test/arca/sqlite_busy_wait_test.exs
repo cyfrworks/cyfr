@@ -24,9 +24,7 @@ defmodule Arca.SqliteBusyWaitTest do
   alias Ecto.Adapters.SQL.Sandbox
   alias Exqlite.Sqlite3
 
-  if Arca.Repo.adapter() != Ecto.Adapters.SQLite3 do
-    @moduletag skip: "SQLite's one write lock; PostgreSQL locks rows"
-  end
+  @moduletag :sqlite
 
   # `Arca.Repo`'s longest wait inside the driver for one attempt.
   @quantum_ms 100

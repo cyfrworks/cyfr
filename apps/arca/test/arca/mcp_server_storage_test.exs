@@ -542,46 +542,44 @@ defmodule Arca.McpServerStorageRaceTest do
 
   test "a raise that read the older revision waits, then is refused, and the winner's raise stands",
        %{actor: actor, node: node} do
-    if Arca.Repo.adapter() != Ecto.Adapters.SQLite3 do
-      {:ok, _slot} = unboxed(fn -> Arca.ControlPlane.take(node, node <> "#boot_a", 60_000) end)
+    {:ok, _slot} = unboxed(fn -> Arca.ControlPlane.take(node, node <> "#boot_a", 60_000) end)
 
-      {:ok, %{id: id}} =
+    {:ok, %{id: id}} =
+      unboxed(fn ->
+        McpServerStorage.insert(actor, %{cap: 0, name: "raced", url: "https://x.com/mcp"})
+      end)
+
+    test = self()
+
+    # The winner raises inside a transaction held open, so the row stays
+    # locked at its new revision until it commits.
+    winner =
+      Task.async(fn ->
         unboxed(fn ->
-          McpServerStorage.insert(actor, %{cap: 0, name: "raced", url: "https://x.com/mcp"})
-        end)
+          Arca.Repo.transaction(fn ->
+            raised = McpServerStorage.bump_epoch(actor, id)
+            send(test, {:holding, raised})
 
-      test = self()
-
-      # The winner raises inside a transaction held open, so the row stays
-      # locked at its new revision until it commits.
-      winner =
-        Task.async(fn ->
-          unboxed(fn ->
-            Arca.Repo.transaction(fn ->
-              raised = McpServerStorage.bump_epoch(actor, id)
-              send(test, {:holding, raised})
-
-              receive do
-                :commit -> raised
-              end
-            end)
+            receive do
+              :commit -> raised
+            end
           end)
         end)
+      end)
 
-      assert_receive {:holding, {:ok, %{epoch: 2, revision: 1}}}, 5_000
+    assert_receive {:holding, {:ok, %{epoch: 2, revision: 1}}}, 5_000
 
-      # The loser reads the committed row — revision 0 — and waits on the
-      # winner's lock at its publishing statement.
-      loser = Task.async(fn -> unboxed(fn -> McpServerStorage.bump_epoch(actor, id) end) end)
-      refute Task.yield(loser, 300), "the loser published past the winner's lock"
+    # The loser reads the committed row — revision 0 — and waits on the
+    # winner's lock at its publishing statement.
+    loser = Task.async(fn -> unboxed(fn -> McpServerStorage.bump_epoch(actor, id) end) end)
+    refute Task.yield(loser, 300), "the loser published past the winner's lock"
 
-      send(winner.pid, :commit)
-      assert {:ok, {:ok, %{epoch: 2}}} = Task.await(winner, 25_000)
-      assert {:error, :stale} = Task.await(loser, 25_000)
+    send(winner.pid, :commit)
+    assert {:ok, {:ok, %{epoch: 2}}} = Task.await(winner, 25_000)
+    assert {:error, :stale} = Task.await(loser, 25_000)
 
-      assert {:ok, %{epoch: 2, revision: 1}} =
-               unboxed(fn -> McpServerStorage.get_by_id(actor, id) end)
-    end
+    assert {:ok, %{epoch: 2, revision: 1}} =
+             unboxed(fn -> McpServerStorage.get_by_id(actor, id) end)
   end
 end
 
@@ -601,9 +599,11 @@ defmodule Arca.McpServerStorageCapRaceTest do
   use ExUnit.Case, async: false
 
   import Ecto.Query, only: [from: 2]
+  import Arca.Test.Adapter, only: [postgres?: 0]
 
   alias Arca.McpServerStorage
   alias Arca.Schemas.{Athanor, McpServer}
+  alias Arca.Test.LockWait
   alias Ecto.Adapters.SQL.Sandbox
 
   @cap 3
@@ -651,7 +651,7 @@ defmodule Arca.McpServerStorageCapRaceTest do
 
         for _ <- creators do
           assert_receive {:backend, backend}, 15_000
-          await_lock_wait(backend)
+          LockWait.await_lock_wait!(backend, [], timeout_ms: 10_000)
         end
 
         release(holder)
@@ -665,8 +665,6 @@ defmodule Arca.McpServerStorageCapRaceTest do
     assert {:ok, rows} = unboxed(fn -> McpServerStorage.list(actor) end)
     assert length(rows) == @cap
   end
-
-  defp postgres?, do: Arca.Repo.adapter() == Ecto.Adapters.Postgres
 
   # Run `lock` in a transaction of its own and hold it open until
   # `release/1`.
@@ -699,25 +697,5 @@ defmodule Arca.McpServerStorageCapRaceTest do
   defp backend_pid do
     %{rows: [[pid]]} = Arca.Repo.query!("SELECT pg_backend_pid()")
     pid
-  end
-
-  # Holds until `pid`'s backend waits on a lock: an observed state, bounded
-  # by `tries`, never a timing.
-  defp await_lock_wait(pid, tries \\ 500)
-
-  defp await_lock_wait(_pid, 0), do: flunk("a create never waited on the athanor's lock")
-
-  defp await_lock_wait(pid, tries) do
-    %{rows: rows} =
-      unboxed(fn ->
-        Arca.Repo.query!("SELECT wait_event_type FROM pg_stat_activity WHERE pid = $1", [pid])
-      end)
-
-    if rows == [["Lock"]] do
-      :ok
-    else
-      Process.sleep(20)
-      await_lock_wait(pid, tries - 1)
-    end
   end
 end

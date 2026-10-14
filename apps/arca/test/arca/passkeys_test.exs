@@ -506,9 +506,11 @@ defmodule Arca.PasskeysRaceTest do
   use ExUnit.Case, async: false
 
   import Ecto.Query
+  import Arca.Test.Adapter, only: [postgres?: 0]
 
   alias Arca.{ControlPlane, Passkeys, PersonIdentities, Users}
   alias Arca.Schemas.{CellLease, ExternalIdentity, Passkey, PersonIdentity, User}
+  alias Arca.Test.LockWait
   alias Ecto.Adapters.SQL.Sandbox
 
   @slot_keys [
@@ -519,7 +521,6 @@ defmodule Arca.PasskeysRaceTest do
 
   defp unboxed(fun), do: Sandbox.unboxed_run(Arca.Repo, fun)
   defp server, do: Prima.Actor.system()
-  defp postgres?, do: Arca.Repo.adapter() == Ecto.Adapters.Postgres
 
   setup do
     hold_slot!()
@@ -623,36 +624,6 @@ defmodule Arca.PasskeysRaceTest do
     if postgres?(), do: hd(hd(Arca.Repo.query!("SELECT pg_backend_pid()").rows))
   end
 
-  # On PostgreSQL, `backend` is blocked on a lock, in a statement naming
-  # every one of `fragments`.
-  defp await_wait!(backend, fragments, tries \\ 250) do
-    [[type, event, query]] =
-      unboxed(fn ->
-        Arca.Repo.query!(
-          "SELECT wait_event_type, wait_event, query FROM pg_stat_activity WHERE pid = $1",
-          [backend]
-        ).rows
-      end)
-
-    cond do
-      type == "Lock" and Enum.all?(fragments, &String.contains?(query, &1)) ->
-        :ok
-
-      tries == 0 ->
-        flunk(
-          "backend #{backend} is not waiting at #{inspect(fragments)}: #{type} #{event} #{query}"
-        )
-
-      true ->
-        retry_wait!(backend, fragments, tries)
-    end
-  end
-
-  defp retry_wait!(backend, fragments, tries) do
-    Process.sleep(20)
-    await_wait!(backend, fragments, tries - 1)
-  end
-
   # The callers' check, as they make it under the lock: the person keeps
   # a door or an active passkey.
   defp keeps_a_way_in(user_id) do
@@ -694,7 +665,7 @@ defmodule Arca.PasskeysRaceTest do
       end)
 
     assert_receive {:revoker, pid}, 5_000
-    if postgres?(), do: await_wait!(pid, [~s(FROM "users"), "FOR UPDATE"])
+    if postgres?(), do: LockWait.await_lock_wait!(pid, [~s(FROM "users"), "FOR UPDATE"])
     refute Task.yield(revoker, 300), "the revocation decided while the unlinking held the person"
 
     send(unlinker.pid, :go)

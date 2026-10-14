@@ -1614,8 +1614,11 @@ defmodule Arca.FileOffersLockOrderTest do
 
   require Ecto.Query
 
+  import Arca.Test.Adapter, only: [postgres?: 0]
+
   alias Arca.FileOffers
   alias Arca.FileOffersTest.Store
+  alias Arca.Test.LockWait
   alias Ecto.Adapters.SQL.Sandbox
 
   setup do
@@ -1968,26 +1971,9 @@ defmodule Arca.FileOffersLockOrderTest do
     assert_receive {^tag, pid}, 15_000
 
     if postgres?() do
-      await_lock_wait(pid)
+      LockWait.await_lock_wait!(pid, [], timeout_ms: 10_000)
     else
       refute Task.yield(task, 300), "#{tag} ran past the held write lock"
-    end
-  end
-
-  defp await_lock_wait(pid, tries \\ 500)
-  defp await_lock_wait(_pid, 0), do: flunk("the backend never waited on a lock")
-
-  defp await_lock_wait(pid, tries) do
-    %{rows: rows} =
-      unboxed(fn ->
-        Arca.Repo.query!("SELECT wait_event_type FROM pg_stat_activity WHERE pid = $1", [pid])
-      end)
-
-    if rows == [["Lock"]] do
-      :ok
-    else
-      Process.sleep(20)
-      await_lock_wait(pid, tries - 1)
     end
   end
 
@@ -2133,35 +2119,7 @@ defmodule Arca.FileOffersLockOrderTest do
   # every fragment, bounded.
   defp await_lock!(tag, fragments) do
     assert_receive {^tag, pid}, 15_000
-    await_statement_lock(pid, fragments, 500)
-  end
-
-  defp await_statement_lock(pid, fragments, 0),
-    do: flunk("backend #{pid} never waited on a lock at #{inspect(fragments)}")
-
-  defp await_statement_lock(pid, fragments, tries) do
-    %{rows: rows} =
-      unboxed(fn ->
-        Arca.Repo.query!(
-          "SELECT wait_event_type, query FROM pg_stat_activity WHERE pid = $1",
-          [pid]
-        )
-      end)
-
-    case rows do
-      [["Lock", query]] when is_binary(query) ->
-        if Enum.all?(fragments, &String.contains?(query, &1)),
-          do: :ok,
-          else: retry_statement_lock(pid, fragments, tries)
-
-      _other ->
-        retry_statement_lock(pid, fragments, tries)
-    end
-  end
-
-  defp retry_statement_lock(pid, fragments, tries) do
-    Process.sleep(20)
-    await_statement_lock(pid, fragments, tries - 1)
+    LockWait.await_lock_wait!(pid, fragments, timeout_ms: 10_000)
   end
 
   # The tagged backend either waiting on a lock or finished, bounded.
@@ -2220,6 +2178,5 @@ defmodule Arca.FileOffersLockOrderTest do
     user
   end
 
-  defp postgres?, do: Arca.Repo.adapter() == Ecto.Adapters.Postgres
   defp unboxed(fun), do: Sandbox.unboxed_run(Arca.Repo, fun)
 end

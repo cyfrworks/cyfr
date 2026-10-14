@@ -369,9 +369,11 @@ defmodule Arca.IdentityLogRaceTest do
   use ExUnit.Case, async: false
 
   import Ecto.Query
+  import Arca.Test.Adapter, only: [postgres?: 0]
 
   alias Arca.{ControlPlane, IdentityLog}
   alias Arca.Schemas.{CellLease, IdentityLogEntry, ServerMeta}
+  alias Arca.Test.LockWait
   alias Ecto.Adapters.SQL.Sandbox
 
   @slot_keys [
@@ -386,7 +388,6 @@ defmodule Arca.IdentityLogRaceTest do
 
   defp unboxed(fun), do: Sandbox.unboxed_run(Arca.Repo, fun)
   defp server, do: Prima.Actor.system()
-  defp postgres?, do: Arca.Repo.adapter() == Ecto.Adapters.Postgres
   defp digest(seed), do: Prima.Digest.sha256("#{seed}-#{System.unique_integer()}")
 
   setup do
@@ -459,41 +460,6 @@ defmodule Arca.IdentityLogRaceTest do
     if postgres?(), do: hd(hd(Arca.Repo.query!("SELECT pg_backend_pid()").rows))
   end
 
-  # On PostgreSQL, `backend` is blocked on a lock, at the gate (`:gate`) or
-  # in a statement naming every one of `fragments`.
-  defp await_wait!(backend, at, tries \\ 250) do
-    [[type, event, query]] =
-      unboxed(fn ->
-        Arca.Repo.query!(
-          "SELECT wait_event_type, wait_event, query FROM pg_stat_activity WHERE pid = $1",
-          [backend]
-        ).rows
-      end)
-
-    waiting? =
-      type == "Lock" and
-        case at do
-          :gate -> event == "advisory"
-          fragments -> event != "advisory" and Enum.all?(fragments, &String.contains?(query, &1))
-        end
-
-    cond do
-      waiting? ->
-        :ok
-
-      tries == 0 ->
-        flunk("backend #{backend} is not waiting at #{inspect(at)}: #{type} #{event} #{query}")
-
-      true ->
-        retry_wait!(backend, at, tries)
-    end
-  end
-
-  defp retry_wait!(backend, at, tries) do
-    Process.sleep(20)
-    await_wait!(backend, at, tries - 1)
-  end
-
   # A trigger that holds a connection which set `arca_test.gate` before
   # `table`'s next `event` statement (`level` "STATEMENT") or at its next
   # row, once the row is locked (`level` "ROW"), until the test opens the
@@ -526,18 +492,24 @@ defmodule Arca.IdentityLogRaceTest do
     end)
   end
 
+  # The gate's key is held in a transaction the holder keeps open until
+  # `open_gate!/1`. A holder that dies with its case is mid-transaction, so
+  # its connection is closed rather than lent again, and the key goes with
+  # it: a session lock would stay held on the pooled connection.
   defp close_gate! do
     test = self()
 
     holder =
       Task.async(fn ->
         unboxed(fn ->
-          Arca.Repo.query!("SELECT pg_advisory_lock($1)", [@gate])
-          send(test, :gate_closed)
-
-          receive do
-            :open -> Arca.Repo.query!("SELECT pg_advisory_unlock($1)", [@gate])
-          end
+          Arca.Repo.transaction(
+            fn ->
+              Arca.Repo.query!("SELECT pg_advisory_xact_lock($1)", [@gate])
+              send(test, :gate_closed)
+              receive do: (:open -> :ok)
+            end,
+            timeout: :infinity
+          )
         end)
       end)
 
@@ -624,10 +596,13 @@ defmodule Arca.IdentityLogRaceTest do
         install_gate!("identity_log_entries", "INSERT", "STATEMENT")
         gate = close_gate!()
         {first, holding} = appender(identifier, genesis.entry_hash, true)
-        await_wait!(holding, :gate)
+
+        LockWait.await_lock_wait!(holding, [~s(INSERT INTO "identity_log_entries")],
+          event: "advisory"
+        )
 
         {second, waiting} = appender(identifier, genesis.entry_hash, false)
-        await_wait!(waiting, [~s("server_meta")])
+        LockWait.await_lock_wait!(waiting, [~s("server_meta")])
 
         refute Task.yield(second, 300),
                "the second append decided while the first held the usage row"
@@ -658,5 +633,79 @@ defmodule Arca.IdentityLogRaceTest do
 
     assert {:ok, [_genesis, %{seq: 1}]} =
              unboxed(fn -> IdentityLog.entries(server(), identifier) end)
+  end
+
+  # A case whose lock wait times out dies with the gate closed; the gate's
+  # key goes with its holder, so no later case finds it held.
+  @tag :postgres
+  test "a case that dies at a timed-out wait leaves the gate's key free" do
+    idle = unboxed(fn -> backend() end)
+
+    {case_pid, ref} =
+      spawn_monitor(fn ->
+        _gate = close_gate!()
+        LockWait.await_lock_wait!(idle, ["never issued"], timeout_ms: 100)
+      end)
+
+    assert_receive {:DOWN, ^ref, :process, ^case_pid, {%ExUnit.AssertionError{}, _stack}}, 5_000
+
+    Prima.Test.Wait.wait_until(
+      fn -> gate_holders() == [] end,
+      5_000,
+      "the gate's key released once its case died"
+    )
+
+    # Free to take, and given back on the same connection.
+    assert {[[true]], [[true]]} =
+             unboxed(fn ->
+               {Arca.Repo.query!("SELECT pg_try_advisory_lock($1)", [@gate]).rows,
+                Arca.Repo.query!("SELECT pg_advisory_unlock($1)", [@gate]).rows}
+             end)
+  end
+
+  # Advisory keys are per database, and the server runs other checkouts'
+  # and partitions' databases, where a run of this file holds the same key:
+  # that holder is another run's, never one of this database's.
+  @tag :postgres
+  test "the gate's key held in another database is no holder in this one" do
+    other =
+      start_supervised!(
+        {Postgrex,
+         Arca.Repo.config()
+         |> Keyword.take([:hostname, :port, :username, :password, :socket_dir, :ssl])
+         |> Keyword.merge(database: "postgres", pool_size: 1)}
+      )
+
+    # The case holds the key there itself, on its one connection: another
+    # run holding it there is waited for, never counted on, so no release
+    # elsewhere can race the check below.
+    Postgrex.query!(other, "SET lock_timeout = '5s'", [])
+    Postgrex.query!(other, "SELECT pg_advisory_lock($1)", [@gate])
+    %Postgrex.Result{rows: [[own]]} = Postgrex.query!(other, "SELECT pg_backend_pid()", [])
+
+    assert [[^own]] =
+             Postgrex.query!(
+               other,
+               "SELECT l.pid FROM pg_locks l JOIN pg_database d ON d.oid = l.database " <>
+                 "WHERE d.datname = 'postgres' AND l.locktype = 'advisory' AND l.granted " <>
+                 "AND l.classid = 0 AND l.objid = $1 AND l.objsubid = 1",
+               [@gate]
+             ).rows
+
+    assert gate_holders() == []
+  end
+
+  # The backends holding the gate's key in this database (a one-argument
+  # advisory key: the high half in classid, the low half in objid,
+  # objsubid 1).
+  defp gate_holders do
+    unboxed(fn ->
+      Arca.Repo.query!(
+        "SELECT pid FROM pg_locks WHERE locktype = 'advisory' AND granted " <>
+          "AND database = (SELECT oid FROM pg_database WHERE datname = current_database()) " <>
+          "AND classid = 0 AND objid = $1 AND objsubid = 1",
+        [@gate]
+      ).rows
+    end)
   end
 end

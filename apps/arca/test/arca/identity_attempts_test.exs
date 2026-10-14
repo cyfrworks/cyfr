@@ -456,7 +456,7 @@ defmodule Arca.IdentityAttemptsTest do
                {"person_identities", "UPDATE"}
              ]
 
-      if Arca.Repo.adapter() == Ecto.Adapters.Postgres do
+      if Arca.Test.Adapter.postgres?() do
         assert [{"users", lock}] = Enum.filter(statements, &(elem(&1, 0) == "users"))
         assert lock =~ "FOR UPDATE", "the person's row is not locked: #{lock}"
       end
@@ -1045,9 +1045,11 @@ defmodule Arca.IdentityAttemptsRaceTest do
   use ExUnit.Case, async: false
 
   import Ecto.Query
+  import Arca.Test.Adapter, only: [postgres?: 0]
 
   alias Arca.{ControlPlane, IdentityAttempts, PersonIdentities, Users}
   alias Arca.Schemas.{CellLease, ExternalIdentity, IdentityAttempt, PersonIdentity, User}
+  alias Arca.Test.LockWait
   alias Ecto.Adapters.SQL.Sandbox
 
   @slot_keys [
@@ -1058,7 +1060,6 @@ defmodule Arca.IdentityAttemptsRaceTest do
 
   defp unboxed(fun), do: Sandbox.unboxed_run(Arca.Repo, fun)
   defp server, do: Prima.Actor.system()
-  defp postgres?, do: Arca.Repo.adapter() == Ecto.Adapters.Postgres
 
   setup do
     hold_slot!()
@@ -1146,36 +1147,6 @@ defmodule Arca.IdentityAttemptsRaceTest do
     if postgres?(), do: hd(hd(Arca.Repo.query!("SELECT pg_backend_pid()").rows))
   end
 
-  # On PostgreSQL, `backend` is blocked on a lock, in a statement naming
-  # every one of `fragments`.
-  defp await_wait!(backend, fragments, tries \\ 250) do
-    [[type, event, query]] =
-      unboxed(fn ->
-        Arca.Repo.query!(
-          "SELECT wait_event_type, wait_event, query FROM pg_stat_activity WHERE pid = $1",
-          [backend]
-        ).rows
-      end)
-
-    cond do
-      type == "Lock" and Enum.all?(fragments, &String.contains?(query, &1)) ->
-        :ok
-
-      tries == 0 ->
-        flunk(
-          "backend #{backend} is not waiting at #{inspect(fragments)}: #{type} #{event} #{query}"
-        )
-
-      true ->
-        retry_wait!(backend, fragments, tries)
-    end
-  end
-
-  defp retry_wait!(backend, fragments, tries) do
-    Process.sleep(20)
-    await_wait!(backend, fragments, tries - 1)
-  end
-
   defp enrollment(user_id, genesis) do
     hex = Prima.Digest.sha256_hex(genesis)
 
@@ -1222,7 +1193,7 @@ defmodule Arca.IdentityAttemptsRaceTest do
       end)
 
     assert_receive {:second, pid}, 5_000
-    if postgres?(), do: await_wait!(pid, [~s(INSERT INTO "identity_attempts")])
+    if postgres?(), do: LockWait.await_lock_wait!(pid, [~s(INSERT INTO "identity_attempts")])
     refute Task.yield(second, 300), "the second enrollment decided while the first held its index"
 
     send(opener.pid, :go)
@@ -1266,7 +1237,7 @@ defmodule Arca.IdentityAttemptsRaceTest do
       end)
 
     assert_receive {:abandon, pid}, 5_000
-    if postgres?(), do: await_wait!(pid, [~s(FROM "users"), "FOR UPDATE"])
+    if postgres?(), do: LockWait.await_lock_wait!(pid, [~s(FROM "users"), "FOR UPDATE"])
     refute Task.yield(abandon, 300), "the abandonment decided while the person's row was held"
 
     assert %{phase: "staged"} =

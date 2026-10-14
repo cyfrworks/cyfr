@@ -378,7 +378,7 @@ defmodule Sanctum.Consent.AuthzTest do
 
       assert held, "no hold of the device before its record: #{inspect(statements)}"
 
-      if Arca.Repo.adapter() == Ecto.Adapters.Postgres do
+      if Arca.Test.Adapter.postgres?() do
         for {source, query} <- held, do: assert(query =~ "FOR UPDATE", "#{source}: #{query}")
       end
     end
@@ -1316,7 +1316,7 @@ defmodule Sanctum.Consent.AuthzTest do
       # PostgreSQL's column holds 255 characters, well inside the preview's
       # bound, so only SQLite stores a name the preview cannot hold.
       names =
-        if Arca.Repo.adapter() == Ecto.Adapters.Postgres,
+        if Arca.Test.Adapter.postgres?(),
           do: [{String.duplicate("n", 255), :name}],
           else: [{String.duplicate("n", bound), :name}, {String.duplicate("n", bound + 1), :id}]
 
@@ -1367,16 +1367,14 @@ defmodule Sanctum.Consent.AuthzRaceTest do
     User
   }
 
+  alias Arca.Test.LockWait
   alias Ecto.Adapters.SQL.Sandbox
   alias Prima.DeviceCert
   alias Sanctum.{DeviceCerts, Person}
   alias Sanctum.Consent.Authz
 
-  if Arca.Repo.adapter() != Ecto.Adapters.Postgres do
-    @moduletag skip:
-                 "SQLite has one writer: a transaction holds the write lock from its start, " <>
-                   "so the change and the revocation never interleave there"
-  end
+  # SQLite's one writer holds the write lock from a transaction's start: the two never interleave.
+  @moduletag :postgres
 
   @change %{operation: "oauth.set_client", arguments: %{provider: "raced"}, resource: "raced"}
 
@@ -1627,30 +1625,6 @@ defmodule Sanctum.Consent.AuthzRaceTest do
 
   defp backend, do: hd(hd(Arca.Repo.query!("SELECT pg_backend_pid()").rows))
 
-  # `backend` is blocked on a lock in a statement naming every one of
-  # `fragments`.
-  defp await_wait!(backend, fragments, tries \\ 250) do
-    [[type, query]] =
-      unboxed(fn ->
-        Arca.Repo.query!(
-          "SELECT wait_event_type, query FROM pg_stat_activity WHERE pid = $1",
-          [backend]
-        ).rows
-      end)
-
-    cond do
-      type == "Lock" and Enum.all?(fragments, &String.contains?(query, &1)) ->
-        :ok
-
-      tries == 0 ->
-        flunk("backend #{backend} is not waiting at #{inspect(fragments)}: #{type} #{query}")
-
-      true ->
-        Process.sleep(20)
-        await_wait!(backend, fragments, tries - 1)
-    end
-  end
-
   test "a revocation holding the client first refuses the change, which waited for it: nothing is written",
        %{ctx: ctx, client_id: client_id, athanor_id: athanor_id} do
     test = self()
@@ -1679,7 +1653,7 @@ defmodule Sanctum.Consent.AuthzRaceTest do
 
     # The change read the device standing, then waits on the client the
     # revocation holds.
-    await_wait!(changing, [~s("paired_clients"), "FOR UPDATE"])
+    LockWait.await_lock_wait!(changing, [~s("paired_clients"), "FOR UPDATE"])
 
     send(revoking, :release)
     assert {:ok, %{standing: "revoked"}} = Task.await(revoker, 25_000)
@@ -1711,7 +1685,7 @@ defmodule Sanctum.Consent.AuthzRaceTest do
       end)
 
     assert_receive {:revoker, revoking}, 5_000
-    await_wait!(revoking, [~s("paired_clients"), "FOR UPDATE"])
+    LockWait.await_lock_wait!(revoking, [~s("paired_clients"), "FOR UPDATE"])
 
     send(changing, :release)
     assert {:ok, :written} = Task.await(changer, 25_000)

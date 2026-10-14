@@ -25,6 +25,7 @@ defmodule Arca.CredentialIssuanceTest do
   use ExUnit.Case, async: false
 
   import Ecto.Query
+  import Arca.Test.Adapter, only: [postgres?: 0]
 
   alias Arca.Schemas.{
     ApiKey,
@@ -43,6 +44,7 @@ defmodule Arca.CredentialIssuanceTest do
 
   alias Arca.SecurityTransitions
   alias Arca.SecurityTransitions.Issuance
+  alias Arca.Test.LockWait
   alias Ecto.Adapters.SQL.Sandbox
 
   # Where a vault entry written here may go, as the canonical text a row holds.
@@ -57,7 +59,6 @@ defmodule Arca.CredentialIssuanceTest do
   defp unboxed(fun), do: Sandbox.unboxed_run(Arca.Repo, fun)
   defp server, do: Prima.Actor.system()
   defp admit, do: fn _rows -> :ok end
-  defp postgres?, do: Arca.Repo.adapter() == Ecto.Adapters.Postgres
 
   setup do
     n = System.unique_integer([:positive])
@@ -464,30 +465,6 @@ defmodule Arca.CredentialIssuanceTest do
     if postgres?(), do: hd(hd(Arca.Repo.query!("SELECT pg_backend_pid()").rows))
   end
 
-  # On PostgreSQL, `backend` is blocked on a lock in a statement naming
-  # every one of `fragments`.
-  defp await_wait!(backend, fragments, tries \\ 250) do
-    [[type, query]] =
-      unboxed(fn ->
-        Arca.Repo.query!(
-          "SELECT wait_event_type, query FROM pg_stat_activity WHERE pid = $1",
-          [backend]
-        ).rows
-      end)
-
-    cond do
-      type == "Lock" and Enum.all?(fragments, &String.contains?(query, &1)) ->
-        :ok
-
-      tries == 0 ->
-        flunk("backend #{backend} is not waiting at #{inspect(fragments)}: #{type} #{query}")
-
-      true ->
-        Process.sleep(20)
-        await_wait!(backend, fragments, tries - 1)
-    end
-  end
-
   describe "a paired device's issuance" do
     test "reads a revocation of its client that commits before it reaches the client, and is refused",
          %{user_id: user_id, athanor_id: athanor_id, seat_id: seat_id} do
@@ -553,7 +530,7 @@ defmodule Arca.CredentialIssuanceTest do
         end)
 
       assert_receive {:revoker, pid}, 5_000
-      if postgres?(), do: await_wait!(pid, [~s("paired_clients"), "FOR UPDATE"])
+      if postgres?(), do: LockWait.await_lock_wait!(pid, [~s("paired_clients"), "FOR UPDATE"])
       refute Task.yield(revoker, 300), "the revocation decided while the issuance held the client"
 
       send(issuer.pid, :go)
@@ -766,7 +743,7 @@ defmodule Arca.CredentialIssuanceTest do
         end)
 
       assert_receive {:revoker, pid}, 5_000
-      if postgres?(), do: await_wait!(pid, [~s("paired_clients"), "FOR UPDATE"])
+      if postgres?(), do: LockWait.await_lock_wait!(pid, [~s("paired_clients"), "FOR UPDATE"])
 
       refute Task.yield(revoker, 300),
              "the revocation decided while the invitation held the client"
@@ -990,7 +967,7 @@ defmodule Arca.CredentialIssuanceSandboxTest do
       # and the identity row read last, under the person's lock.
       assert Enum.map(statements, &elem(&1, 0)) == sources
 
-      if Arca.Repo.adapter() == Ecto.Adapters.Postgres do
+      if Arca.Test.Adapter.postgres?() do
         for {source, query} <- Enum.take(statements, 5) do
           assert query =~ "FOR UPDATE", "#{source} is not locked: #{query}"
         end
@@ -1129,7 +1106,7 @@ defmodule Arca.CredentialIssuanceSandboxTest do
       # each read under the person's lock that a head's advance takes first.
       assert Enum.map(statements, &elem(&1, 0)) == sources
 
-      if Arca.Repo.adapter() == Ecto.Adapters.Postgres do
+      if Arca.Test.Adapter.postgres?() do
         for {source, query} <- Enum.take(statements, 5) do
           assert query =~ "FOR UPDATE", "#{source} is not locked: #{query}"
         end
