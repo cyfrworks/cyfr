@@ -124,6 +124,24 @@ defmodule Emissary.MCP.SubscriptionsTest do
                decisions(ctx.request_id)
     end
 
+    # The open is the decision: the stream's frames are deliveries under
+    # its grant, each translated as the transport translates it.
+    test "the facts a stream carries are no decisions", %{ctx: ctx} do
+      ctx = %{ctx | request_id: Prima.UUID7.request_id()}
+      assert {:ok, _, [_grant]} = Subscriptions.listen(ctx, %{"toolsListChanged" => true})
+
+      for _ <- 1..3 do
+        changed(Context.actor(ctx))
+        assert_receive %Cyfr.Bus.McpServers{kind: :changed} = fact, 500
+        assert Subscriptions.backlog() == :ok
+
+        assert {:ok, "notifications/tools/list_changed", %{}} =
+                 Subscriptions.notification_for(fact)
+      end
+
+      assert [%{tool: "stream:mcp_servers.changes"}] = decisions(ctx.request_id)
+    end
+
     test "nothing requested is nothing admitted", %{ctx: ctx} do
       ctx = %{ctx | request_id: Prima.UUID7.request_id()}
       assert {:ok, %{}, []} = Subscriptions.listen(ctx, %{"promptsListChanged" => true})

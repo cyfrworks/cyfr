@@ -44,6 +44,38 @@ defmodule Sanctum.Gate.CatalogTest.Counting do
   end
 end
 
+defmodule Sanctum.Gate.CatalogTest.Witnessing do
+  @moduledoc false
+  # Reads the decision log for its own call while it runs, and tells the
+  # process registered as `:catalog_counting_observer` what it found: the
+  # decision a call is admitted under is written before its work starts.
+  @behaviour Prima.Provider
+
+  def tool, do: "decision_witness"
+
+  @impl true
+  def service, do: "probe"
+
+  @impl true
+  def tools do
+    [
+      Prima.Operation.tool([
+        Prima.Operation.new("decision_witness", "look", "Read its own decision", [],
+          kind: :write,
+          planes: [:external, :in_chain]
+        )
+      ])
+    ]
+  end
+
+  @impl true
+  def handle(_tool, ctx, %{"action" => "look"}) do
+    seen = Arca.DecisionLog.get(Sanctum.Context.actor(ctx), ctx.call_id)
+    send(:catalog_counting_observer, {:witnessed, ctx.call_id, seen})
+    {:ok, %{"looked" => true}}
+  end
+end
+
 defmodule Sanctum.Gate.CatalogTest do
   @moduledoc """
   Tests for the operation table and its gate.
@@ -993,7 +1025,7 @@ defmodule Sanctum.Gate.CatalogTest do
   end
 
   describe "each call is one recorded decision" do
-    alias Sanctum.Gate.CatalogTest.Counting
+    alias Sanctum.Gate.CatalogTest.{Counting, Witnessing}
 
     setup do
       Process.register(self(), :catalog_counting_observer)
@@ -1054,6 +1086,26 @@ defmodule Sanctum.Gate.CatalogTest do
 
         assert %{status: "success", id: ^call_id, method: "tools/call"} =
                  Arca.Repo.get(Arca.Schemas.McpLog, call_id)
+      end)
+    end
+
+    test "the decision is recorded before the work runs, and completed only after it" do
+      Catalog.with_providers([Witnessing], fn ->
+        ctx = Sanctum.TestContext.local()
+        call_id = Prima.UUID7.generate_id("call")
+
+        assert {:ok, %{"looked" => true}} =
+                 Catalog.call_external(Witnessing.tool(), ctx, %{"action" => "look"},
+                   call_id: call_id
+                 )
+
+        # What the handler read while it ran: admitted, and not yet done.
+        assert_received {:witnessed, ^call_id, {:ok, seen}}
+        assert seen.admission == :admitted
+        assert seen.completion == nil
+        assert seen.duration_ms == nil
+
+        assert {:ok, %{completion: :succeeded}} = decision(ctx, call_id)
       end)
     end
 
