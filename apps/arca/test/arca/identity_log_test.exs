@@ -663,12 +663,44 @@ defmodule Arca.IdentityLogRaceTest do
              end)
   end
 
-  # The backends holding the gate's key (a one-argument advisory key: the
-  # high half in classid, the low half in objid, objsubid 1).
+  # Advisory keys are per database, and the server runs other checkouts'
+  # and partitions' databases, where a run of this file holds the same key:
+  # that holder is another run's, never one of this database's.
+  @tag :postgres
+  test "the gate's key held in another database is no holder in this one" do
+    other =
+      start_supervised!(
+        {Postgrex,
+         Arca.Repo.config()
+         |> Keyword.take([:hostname, :port, :username, :password, :socket_dir, :ssl])
+         |> Keyword.merge(database: "postgres", pool_size: 1)}
+      )
+
+    # Taken here, or already held there by another run: either way the
+    # key is held in a database that is not this one.
+    %Postgrex.Result{rows: [[_taken]]} =
+      Postgrex.query!(other, "SELECT pg_try_advisory_lock($1)", [@gate])
+
+    assert [[_held]] =
+             Postgrex.query!(
+               other,
+               "SELECT 1 FROM pg_locks l JOIN pg_database d ON d.oid = l.database " <>
+                 "WHERE d.datname = 'postgres' AND l.locktype = 'advisory' AND l.granted " <>
+                 "AND l.classid = 0 AND l.objid = $1 AND l.objsubid = 1 LIMIT 1",
+               [@gate]
+             ).rows
+
+    assert gate_holders() == []
+  end
+
+  # The backends holding the gate's key in this database (a one-argument
+  # advisory key: the high half in classid, the low half in objid,
+  # objsubid 1).
   defp gate_holders do
     unboxed(fn ->
       Arca.Repo.query!(
         "SELECT pid FROM pg_locks WHERE locktype = 'advisory' AND granted " <>
+          "AND database = (SELECT oid FROM pg_database WHERE datname = current_database()) " <>
           "AND classid = 0 AND objid = $1 AND objsubid = 1",
         [@gate]
       ).rows
