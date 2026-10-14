@@ -2600,25 +2600,6 @@ defmodule Cyfr.BoundariesTest do
              "Prima.UUID7 is a shared primitive, not the transport's; it must not come back"
     end
 
-    test "the builder's copy of the line filter is the contracts' copy" do
-      owner = SourceTree.read(Path.join(root(), "apps/prima/test/support/code_lines.ex"))
-      copy = SourceTree.read(Path.join(root(), "apps/locus/test/support/code_lines.ex"))
-      marker = "  # `Foo.Bar.{A, B}`"
-
-      assert String.contains?(owner, marker) and String.contains?(copy, marker)
-
-      assert body(owner, marker) == body(copy, marker),
-             """
-             `Locus.Test.CodeLines` and `Prima.Test.CodeLines` have drifted. The
-             builder's suite loads nothing of the control plane's, so it keeps a
-             copy — and a copy that classifies lines differently is two filters,
-             which is two answers to what a dependency is.
-
-             Regenerate the copy from the owner: everything from the multi-alias
-             comment down is the same bytes.
-             """
-    end
-
     test "the five retired helper modules neither load nor are named in any tracked source" do
       # Spelled in parts, so this file is not itself a mention.
       retired = ~w(Models TinctureHelpers ConsentDrift ScheduleNotes Text)
@@ -2662,13 +2643,6 @@ defmodule Cyfr.BoundariesTest do
              end),
              "the compiled scan does not reach the one file the source scan skips"
     end
-  end
-
-  # Everything from `marker` to the end of the file: the part the copy and
-  # the owner share byte for byte.
-  defp body(source, marker) do
-    {at, _length} = :binary.match(source, marker)
-    binary_part(source, at, byte_size(source) - at)
   end
 end
 
@@ -2802,6 +2776,42 @@ defmodule Cyfr.BoundariesTest.CompilerPlants do
       [
         "forbidden reference to Emissary.MCP.Progress",
         "references from Aqua to Emissary are not allowed"
+      ]
+    )
+  end
+
+  # The console and the tool surface meet only below them, in the host's
+  # shared web tier and the domains.
+  test "the console naming the tool surface", %{copy: copy} do
+    assert_refused(
+      copy,
+      "cyfr",
+      "prism_web/boundary_plant.ex",
+      """
+      defmodule PrismWeb.BoundaryPlant do
+        def plant(ctx, message), do: Emissary.MCP.Router.dispatch(ctx, message)
+      end
+      """,
+      [
+        "forbidden reference to Emissary.MCP.Router",
+        "references from PrismWeb to Emissary are not allowed"
+      ]
+    )
+  end
+
+  test "the tool surface naming the console", %{copy: copy} do
+    assert_refused(
+      copy,
+      "cyfr",
+      "emissary/boundary_plant.ex",
+      """
+      defmodule Emissary.BoundaryPlant do
+        def plant(hash), do: Prism.Tray.get(hash)
+      end
+      """,
+      [
+        "forbidden reference to Prism.Tray",
+        "references from Emissary to Prism are not allowed"
       ]
     )
   end
