@@ -105,11 +105,14 @@ defmodule Sanctum.VaultOAuthRefreshTest do
   end
 
   # Stops the refresh tasks `caller` started and answers those that show no
-  # owner yet. A task names its callers once it has read its start message;
-  # before that it monitors the process that started it, which is the first
-  # thing it does. A task showing neither has not run yet, and is looked at
-  # again rather than left to start after the test. A task that names or
-  # monitors another process is never touched.
+  # owner yet. A task names its callers once it has read its start message.
+  # Before that its owner shows in one of three places, read in one snapshot:
+  # the monitor it puts on the owner as its first act, the owner's `:DOWN`
+  # once the owner is gone (which the task's signal handling queues even
+  # while it is not scheduled), or the owner's start message waiting to be
+  # read. A task showing none has not run yet, and is looked at again
+  # rather than left to start after the test. A task whose owner is another
+  # process is never touched.
   defp stop_refresh_tasks(caller) do
     for {_, task, _, _} <- Supervisor.which_children(Sanctum.OAuth.RefreshTaskSupervisor),
         is_pid(task),
@@ -127,19 +130,29 @@ defmodule Sanctum.VaultOAuthRefreshTest do
   end
 
   defp refresh_task_owner(task, caller) do
-    case Process.info(task, [:dictionary, :monitors]) do
-      [dictionary: dictionary, monitors: monitors] ->
-        owners = for {:process, pid} <- monitors, is_pid(pid), do: pid
-
+    case Process.info(task, [:dictionary, :monitors, :messages]) do
+      [dictionary: dictionary, monitors: monitors, messages: messages] ->
         case List.keyfind(dictionary, :"$callers", 0) do
           {_, callers} -> if caller in callers, do: :caller, else: :other
-          nil when owners == [] -> :unknown
-          nil -> if caller in owners, do: :caller, else: :other
+          nil -> owner_before_start(caller, monitors, messages)
         end
 
       # Gone already: nothing of it can run after the test.
       nil ->
         :other
+    end
+  end
+
+  defp owner_before_start(caller, monitors, messages) do
+    monitored = for {:process, pid} <- monitors, is_pid(pid), do: pid
+    gone = for {:DOWN, _ref, :process, pid, _reason} <- messages, is_pid(pid), do: pid
+    starting = for {pid, _ref, _reply_to, _callers, _mfa} <- messages, is_pid(pid), do: pid
+    owners = monitored ++ gone ++ starting
+
+    cond do
+      caller in owners -> :caller
+      owners != [] -> :other
+      true -> :unknown
     end
   end
 
