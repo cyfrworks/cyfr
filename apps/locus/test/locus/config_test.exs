@@ -837,8 +837,10 @@ defmodule Locus.RuntimeConfigFileTest do
   @cleared ~w(CYFR_DATABASE_URL CYFR_CRYPTO_KEYRING CYFR_LOCUS_RUNTIME_ROOT CYFR_LOCUS_BUILDS_KEY
               CYFR_LOCUS_BACKENDS_KEY) ++ Locus.Config.variables()
 
+  # Every name `set` assigns is restored as well, so one no roster
+  # declares does not outlive its test.
   defp with_env(set, fun) do
-    previous = Map.new(@cleared, &{&1, System.get_env(&1)})
+    previous = Map.new(@cleared ++ Map.keys(set), &{&1, System.get_env(&1)})
 
     try do
       Enum.each(@cleared, &System.delete_env/1)
@@ -945,6 +947,24 @@ defmodule Locus.RuntimeConfigFileTest do
 
       refute error.message =~ planted
     end)
+
+    # A misspelt name under a node's prefix is not ignored: the file hands
+    # the whole environment to the guard, which refuses it by name.
+    set = %{
+      "LOCUS_RUNTIME_KEY" => @key_hex,
+      "LOCUS_RUNTIME_HOST_API_URL" => "http://cyfr:4300",
+      "LOCUS_RUNTIME_POOL_SIZ" => "4"
+    }
+
+    with_env(set, fn ->
+      assert_raise RuntimeError,
+                   ~r/\[Locus\] FATAL: .*LOCUS_RUNTIME_POOL_SIZ is not a variable the locus release reads/s,
+                   fn ->
+                     Config.Reader.read!(@config_file, env: :prod, imports: :disabled)
+                   end
+    end)
+
+    assert System.get_env("LOCUS_RUNTIME_POOL_SIZ") == nil
   end
 
   test "log_formatter names Prima.JsonFormatter once the format is json" do
