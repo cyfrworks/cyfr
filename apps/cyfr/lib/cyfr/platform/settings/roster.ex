@@ -240,7 +240,7 @@ defmodule Cyfr.Platform.Settings.Roster do
     {"CYFR_S3_SECRET_ACCESS_KEY",
      "The object store's secret access key, with `CYFR_STORAGE=s3`."},
     {"CYFR_SECRET_KEY_BASE",
-     "The key base that signs sessions and derives the at-rest key (`openssl rand -base64 48`), which `cyfr init` mints; a restored data directory needs the same value."},
+     "The key base that signs sessions (`openssl rand -base64 48`), which `cyfr init` mints. Production requires it, and a value that is blank or shorter than 64 bytes refuses the boot. Unless `CYFR_CRYPTO_KEYRING` is set, the at-rest keyring derives from it, so a new key leaves everything sealed under the old one unreadable and a restored data directory needs the same value."},
     {"CYFR_SEED_PATH",
      "The seed tree read in place: the component bundle under `components/` and the AQUA template under `aqua/` (default `seed`; the image sets its own)."},
     {"CYFR_SESSION_SALT",

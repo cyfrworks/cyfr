@@ -396,7 +396,7 @@ cyfr up          # starts cyfr + locus-runtime + locus-builds + locus-backends (
 git clone https://github.com/cyfrworks/cyfr && cd cyfr
 cp .env.example .env
 # edit .env:
-#   CYFR_SECRET_KEY_BASE — `openssl rand -base64 48`
+#   CYFR_SECRET_KEY_BASE — `openssl rand -base64 48` (at least 64 bytes; a blank or shorter value refuses the boot)
 #   CYFR_HOST            — your domain (or "localhost")
 #   CYFR_PLATFORM_ADMIN_EMAILS — your email (platform admin; required to access the instance)
 #   CYFR_BEHIND_PROXY    — true for TLS (caddy) mode, false for direct

@@ -464,6 +464,47 @@ defmodule Cyfr.ApplicationTest do
     |> Enum.reverse()
   end
 
+  describe "derive_keyring!/1" do
+    # The configured key base is held to the rule runtime.exs holds
+    # CYFR_SECRET_KEY_BASE to, with the same sentence, so an operator who
+    # follows this refusal is not refused again at the next boot.
+    defp keyring_refusal(key_base) do
+      Exception.message(
+        assert_raise(RuntimeError, fn -> Cyfr.Application.derive_keyring!(key_base) end)
+      )
+    end
+
+    test "refuses a missing key base as runtime.exs does" do
+      assert {:error, rule} = Cyfr.RuntimeConfig.check_secret_key_base(nil)
+      assert rule =~ "CYFR_SECRET_KEY_BASE is missing"
+      assert keyring_refusal(nil) =~ "cannot derive :crypto_keyring: " <> rule
+    end
+
+    for {label, key_base, reason} <- [
+          {"blank", "   ", "is blank"},
+          {"63 bytes", "short-key-base-" <> String.duplicate("q", 47) <> "!",
+           "is shorter than 64 bytes"}
+        ] do
+      test "refuses a #{label} key base as runtime.exs does, without the value" do
+        key_base = unquote(key_base)
+        assert {:error, rule} = Cyfr.RuntimeConfig.check_secret_key_base(key_base)
+        assert rule =~ "CYFR_SECRET_KEY_BASE #{unquote(reason)}"
+
+        message = keyring_refusal(key_base)
+        assert message =~ "cannot derive :crypto_keyring: " <> rule
+        refute String.contains?(message, key_base)
+      end
+    end
+
+    test "derives the one default key from a key base of 64 bytes" do
+      key_base = String.duplicate("k", 63) <> "!"
+      master = :crypto.hash(:sha256, "cyfr-cipher-keyring|" <> key_base)
+
+      assert Cyfr.Application.derive_keyring!(key_base) ==
+               %{primary: "default", keys: %{"default" => master}}
+    end
+  end
+
   describe "parse_keyring_env!/1" do
     defp keyring_json(keys, primary) do
       Jason.encode!(%{

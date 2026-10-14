@@ -34,6 +34,10 @@ defmodule Cyfr.RuntimeConfig do
   @default_host_api_port 4300
   @service_id ~r/\Awrk_[A-Za-z0-9_-]{1,64}\z/
 
+  # The fewest bytes a key base holds: what Plug's cookie store requires
+  # of the endpoint's, held for every use of it (`check_secret_key_base/1`).
+  @secret_key_base_bytes 64
+
   @doc """
   Resolve the auth provider module from the environment.
 
@@ -279,6 +283,34 @@ defmodule Cyfr.RuntimeConfig do
   @doc "The rate window (ms) both tincture ingress surfaces share."
   @spec tincture_rate_window_ms() :: pos_integer()
   def tincture_rate_window_ms, do: 60_000
+
+  @doc """
+  Check a key base: `CYFR_SECRET_KEY_BASE` as `config/runtime.exs` reads
+  it, and the configured `:sanctum, :secret_key_base` the at-rest keyring
+  derives from. Refused when missing, blank after trimming, or shorter
+  than #{@secret_key_base_bytes} bytes, the least Plug's cookie store
+  accepts. The length is `byte_size` of the value as given, never
+  trimmed: the keyring and the salts hash its exact bytes. The message
+  names the variable and the reason, never the value.
+  """
+  @spec check_secret_key_base(term()) :: :ok | {:error, String.t()}
+  def check_secret_key_base(key_base) when is_binary(key_base) do
+    cond do
+      String.trim(key_base) == "" ->
+        {:error, secret_key_base_refusal("is blank")}
+
+      byte_size(key_base) < @secret_key_base_bytes ->
+        {:error, secret_key_base_refusal("is shorter than #{@secret_key_base_bytes} bytes")}
+
+      true ->
+        :ok
+    end
+  end
+
+  def check_secret_key_base(_missing), do: {:error, secret_key_base_refusal("is missing")}
+
+  defp secret_key_base_refusal(reason),
+    do: "CYFR_SECRET_KEY_BASE #{reason}; generate one with `openssl rand -base64 48`"
 
   @doc """
   Resolve the filesystem roots from the environment (release runtime):

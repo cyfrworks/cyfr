@@ -348,12 +348,21 @@ if config_env() != :test do
   headless? = env_bool.("CYFR_HEADLESS", false)
   config :cyfr, :headless, headless?
 
-  # CYFR_SECRET_KEY_BASE overrides the configured key. Required and nonblank
-  # in production; dev/test may use the key from their config files.
+  # CYFR_SECRET_KEY_BASE overrides the configured key. Required in
+  # production; dev may use the key from its config file. Empty is unset,
+  # as for every other setting here. A set value that is blank after
+  # trimming, or shorter than 64 bytes, refuses the boot in development as
+  # in production (`Cyfr.RuntimeConfig.check_secret_key_base/1`), so a
+  # short key fails here and not at the first session.
+  # This is the one read: the at-rest keyring, the endpoint and the
+  # derived salts all take the key base it accepts, byte for byte.
   env_key_base = env_str.("CYFR_SECRET_KEY_BASE", nil)
 
   if env_key_base do
-    config :sanctum, :secret_key_base, env_key_base
+    case Cyfr.RuntimeConfig.check_secret_key_base(env_key_base) do
+      :ok -> config :sanctum, :secret_key_base, env_key_base
+      {:error, message} -> raise "[Cyfr] FATAL: #{message}"
+    end
   end
 
   # Apply origin and proxy settings in every environment. Extra MCP origins
