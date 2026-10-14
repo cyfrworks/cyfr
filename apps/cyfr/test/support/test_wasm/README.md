@@ -1,24 +1,18 @@
-# Test WASM Files
+<!-- SPDX-License-Identifier: Apache-2.0 -->
+<!-- Copyright 2026 CYFR Works Inc. -->
 
-This directory contains pre-compiled WASM binaries for testing the runtime's execution.
+# Test WASM files
 
-## Files
+CYFR's suite's WebAssembly fixtures.
 
-- `sum.wasm` - Simple function that adds two i32 integers
-- More test files will be added as needed
+| File | Is |
+|---|---|
+| `math.wasm` | a byte copy of the runtime suite's `apps/locus/test/support/runtime/test_wasm/math.wasm`, which that directory's `build.sh` writes with it from the `math.wat` there |
+| `chat_fixture/` | a `model/chat@1` catalyst that plays the script its request carries, built from Rust; its README says how |
+| `step_stub/` | a `model/chat@1` catalyst that answers at once, for timing the host's path of a model step, built from Rust; its README says how |
+| `build-fixture.sh` | builds a Rust fixture: `chat_fixture/build.sh`, `step_stub/build.sh` and `apps/cyfr/test/integration/runtime/support/test_wasm/nested_probe/build.sh` each call it with their name, world and directory, and keep their `--check` |
 
-## Source
-
-The WASM files are generated from WAT (WebAssembly Text) format.
-
-### sum.wat
-```wat
-(module
-  (func $sum (param $a i32) (param $b i32) (result i32)
-    local.get $a
-    local.get $b
-    i32.add)
-  (export "sum" (func $sum)))
-```
-
-To regenerate: `wat2wasm sum.wat -o sum.wasm`
+`scripts/check-test-wasm.sh` checks that `math.wasm` is a fresh build of
+Locus's `math.wat` and that each Rust fixture is its source's build
+(`--wat-only` skips the Rust builds, for a host without their toolchain).
+`build-fixture.sh` refuses a missing or other toolchain, naming it.

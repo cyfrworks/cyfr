@@ -17,6 +17,6 @@
   (core instance $i (instantiate $m))
   (func $compute (param "input" string) (result string)
     (canon lift (core func $i "compute")
-      (memory $i "memory") (realloc (func $i "cabi_realloc"))))
+      (memory (core memory $i "memory")) (realloc (core func $i "cabi_realloc"))))
   (instance $compute-instance (export "compute" (func $compute)))
   (export "cyfr:reagent/compute@0.1.0" (instance $compute-instance)))

@@ -46,13 +46,10 @@ formula `Cargo.toml` (`Prima.CargoToml.template(:formula)`) and the formula
 world's WIT (`wit/formula`), builds it `--locked` to `Cargo.lock` with
 `cargo component build --release --target wasm32-wasip2`, and remaps the
 scratch directory and the Cargo home out of the paths rustc embeds, so the
-bytes carry nothing of where they were built. The toolchain:
-
-```
-rustc 1.93.0 (254b59607 2026-01-19)
-cargo-component 0.21.1
-targets wasm32-wasip1 wasm32-wasip2
-```
+bytes carry nothing of where they were built. `build.sh` runs
+`apps/cyfr/test/support/test_wasm/build-fixture.sh`, the one pin of the
+toolchain (rustc, its `wasm32-wasip2` target and cargo-component), which
+refuses a missing or other one by name.
 
 It reads crates.io for the crates `Cargo.lock` names. If the probe's
 version ever changes, update `SELF_REF` in `src/lib.rs` and `@probe_ref` in

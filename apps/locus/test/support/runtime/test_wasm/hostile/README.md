@@ -10,12 +10,13 @@ of the credential CYFR attaches for it, that trap, or that use a feature
 the runtime refuses (`Prima.ComponentFeatures`). Each `.wat` says what it
 does; the tests that run them are `Locus.Runtime.StoreLimitsTest`,
 `Locus.Runtime.TrapTest`, `Locus.Runtime.ComponentFeaturesTest` and
-`Locus.Runtime.VaultDenialTest` in this suite, `Prima.ComponentFeaturesTest`
-in Prima's,
+`Locus.Runtime.VaultDenialTest` in this suite,
 `Locus.Runtime.MemoryBoundTest`, `Locus.Runtime.SecretAuditTest`,
-`Locus.Runtime.AttachedFetchTest`, `Opus.Schedules.SchedulerTest` and
-`CyfrWeb.WebhookFlowIntegrationTest` in CYFR's, and the worker image's
-`tests/locus-runtime-image/runners.py` and `tests/locus-runtime-image/canary.py`.
+`Locus.Runtime.AttachedFetchTest`, `Locus.Runtime.FormulaHandlerTest`,
+`Opus.Schedules.SchedulerTest`, `CyfrWeb.WebhookFlowIntegrationTest`,
+`Aqua.LaunchTest` and `Compendium.ComponentFeaturesAdmissionTest` in
+CYFR's, and the worker image's `tests/locus-runtime-image/runners.py` and
+`tests/locus-runtime-image/canary.py`.
 
 | Guest | World | Does |
 |---|---|---|
@@ -35,13 +36,17 @@ in Prima's,
 ## Rebuilding
 
 The binaries are checked in. `build.sh` builds each from its `.wat` with
-wabt `wat2wasm` 1.0.41 and `wasm-tools` 1.244.0 (the component embeds the
-latter's version, so another version gives other bytes), against the WIT
-under `wit/`, or, for a `.wat` that is a whole component, with
-`wasm-tools parse` 1.244.0 alone; `build.sh --check` compares a fresh build with what is
-checked in. Rebuild whenever a `.wat` changes and record what the build
-prints below: `Locus.Runtime.StoreLimitsTest` holds each file to its digest, so a
-source changed without a rebuild fails.
+`_tools/wasm-tools` at the version `scripts/wasm-tools.sh` pins, and
+nothing else, and refuses a missing or other `wasm-tools`, naming
+`scripts/wasm-tools.sh install _tools`: a core module is parsed, stripped
+of its custom sections, given its world's WIT from `wit/` and made a
+component; a `.wat` that is a whole component is parsed as it stands. The
+component records the version of the tool that made it, so another version
+gives other bytes. `build.sh --check` compares a fresh build with what is
+checked in, and `scripts/check-test-wasm.sh` runs it. Rebuild whenever a
+`.wat` changes or the pin moves, and record what the build prints below:
+`Locus.Runtime.StoreLimitsTest` holds each file to its digest, so a source
+changed without a rebuild fails.
 
 ```sh
 apps/locus/test/support/runtime/test_wasm/hostile/build.sh           # build and write
@@ -50,27 +55,27 @@ apps/locus/test/support/runtime/test_wasm/hostile/build.sh --check   # compare o
 
 ```text
 extra_memory.wat           sha256:4f77c1473bee65d056d60911c661e41eca27ba08644869da6bb0b55f3e5cf62e
-extra_memory.wasm          sha256:906871b6f762ce5a99737c1575dd02e4797306371cd06ca89105be36b21f31d5
+extra_memory.wasm          sha256:219eb7033c8f9a328e05b441441eef8f9aa75fdd09714ff2320530b6486eafdb
 wide_table.wat             sha256:4f824339d5fdd1f86bd8cecc419518ba38b43982331b2231606fe3760c051937
-wide_table.wasm            sha256:d2fb6afac827c8ed10c71ab98dcc2c55f00215421004e0a7876ee950a087711d
+wide_table.wasm            sha256:c859d1b0b879e6cc3e6e9c0a0a7a45f0c9f0a2adae1b1becaac8d6bb8466e17c
 grower.wat                 sha256:4653562e719e9cf0afeeeb492eb5258d0f398b175877ca30b0ba0abf762f577c
-grower.wasm                sha256:f915f13a65d49810417abfe67ae5dec31c1ffe6ffbde40167d6f0247646e5e7b
+grower.wasm                sha256:7e7b1f9a6a4046af9c317f34230e8ddc49dba8fe2e37cd3920ba856f5745fead
 vault_probe.wat            sha256:4b110e1e10e335a559a97e1ad7067dd94f868c204603e53fbcb2158ac2e63f31
-vault_probe.wasm           sha256:eb637d8910fca67b2c6b20644560394275604776e3e9b81a32c3c0a7f2566b91
+vault_probe.wasm           sha256:2bdd667749cf8cf6379d58e09c8a64694825bf8eac7758be365406950b0f6b8e
 attached_header_probe.wat  sha256:15557a58c237f2afc8cedf7aea4ac107575a25b06a1cb37d145074168468b468
-attached_header_probe.wasm sha256:f2fa5a4dfa9937d1d80f0f15424ba525f9f1a9765c058796d95c786f73a8caa4
+attached_header_probe.wasm sha256:e437e51b231f7619fdb6fe7a9c3ffc2d63631f69c97b76b5a4f231a415c2c341
 credential_canary.wat      sha256:1a6454ba0eb640603d8e19e53798ab1b40f651857c2bd79c78ae983ed2d2022d
-credential_canary.wasm     sha256:bc0c6317f5c45b2463367c8a3aa458587c1de16a7f15ed469f5d3b03c3a95a92
+credential_canary.wasm     sha256:a060410f737ba9418beab64d568ecd17e95424909e99cca86e021a64e1baa0e1
 trapper.wat                sha256:bd87bb0835163c620f3b0b67ec482798faace66aec66781581285421392c94f9
-trapper.wasm               sha256:b42c1ec4dcff293ffb06f22e35695d4130f6bf82c24ea6ad42bf82721ceafaf4
-async_lift.wat             sha256:bb1bbaa1ae295984a1d78c3504283ef0b91a86743bbec79558723775a3552e8a
+trapper.wasm               sha256:6c0709e585eb71f180c8f0386324aec45d4cd19db13ddc41e76ebdc7c1e1eb8c
+async_lift.wat             sha256:c990b80ab5dc7f5ae6051c16e3722f8e402b38b123f385f63785302a8f470e8f
 async_lift.wasm            sha256:e1429137b0c6056577d31a5bff20be298e28a0690ef1259e393d34e345273c39
-sync_lift.wat              sha256:ff90f37864595b5009a679233a8c2953cdf047cc3342a45599443d67093a7c41
+sync_lift.wat              sha256:83a4419d4e24ab767b75cfe637a0e8a765533ffcd142b500c535074a58ca7df9
 sync_lift.wasm             sha256:a225d550f65257c943f0ee51eed2a24a5ed3266db81c122acd28daa9c84d7845
-gc_alloc.wat               sha256:184f7eca4b64af69202edb6553d4b45b593293261d28995bfd0f71b5f5e8c25e
+gc_alloc.wat               sha256:0eac783a3c84b3ba341a745f5cf3410fc31b18faaeae2e83a32be17c0472e9e8
 gc_alloc.wasm              sha256:ca09d8c97e10c7c5528d00da279debd1c5a35a064c1000666d1412af533ee0c8
-exception_throw.wat        sha256:5e556011d0548442fe7f9027e3b1471d2b69317e365a2a99aef8a1cd5cacedb2
+exception_throw.wat        sha256:557fad0ae8479152bfddd68c3f6ecd1d728cac41cbc12017dfa888b78eb87f64
 exception_throw.wasm       sha256:f558999c8ca27b298dae43ed58d7f7d53062a160edf399dc6168bd1ec655aaba
-externref_table.wat        sha256:d6f1c6ffaf04c91c10115ce4956565406e55da097035708c7806e493c67846ec
+externref_table.wat        sha256:f730a802a33e7ce0bb6b0aa070662d9b4818138b6fec3328ec4c99193aa83bc6
 externref_table.wasm       sha256:63c8f0725b2704e0ca504d9f6a69414999bb8c722b98d30a3df47d5709e09b62
 ```

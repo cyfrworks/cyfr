@@ -32,7 +32,7 @@ defmodule Locus.Runtime.TrapTest do
   # trap, whether its import raised or answered a result the interface
   # does not take: wasmtime's message is the guest's backtrace alone.
   @failed "Error during function excecution: error while executing at wasm backtrace:\n" <>
-            "    0:    0x21b - <unknown>!<wasm function 0>\n" <>
+            "    0:    0x21c - wit-component:shim!indirect-cyfr:vault/read@0.1.0-get\n" <>
             "    1:     0xf1 - <unknown>!<wasm function 2>\n" <>
             "    2:    0x11c - <unknown>!<wasm function 3>"
 
