@@ -69,6 +69,21 @@ case "$PWD" in
     [ "${MIX_OS_CONCURRENCY_LOCK:-}" = 0 ] || echo "$PWD $1" >> "$TRACE/island-with-build-lock" ;;
   *) key="${CYFR_DATABASE:-none}_${MIX_ENV:-dev}_$1" ;;
 esac
+# The runner's assignment, as T03's tests stand in for it: `mix run
+# --no-start --no-compile HELPER assign DIR COUNT TABLE REQUIRED FAILED --
+# NAMES...` writes DIR/assign/p1..pCOUNT, each the partition's units,
+# NUL-terminated, dealing the named paths round robin, or one unit to
+# every partition when none is named.
+if [ "$1" = run ] && [ "${5:-}" = assign ]; then
+  dir=$6 count=$7
+  shift 11
+  if [ "$#" -eq 0 ]; then for ((p=1; p<=count; p++)); do set -- "$@" "stub_${p}_test.exs"; done; fi
+  mkdir -p "$dir/assign"
+  for ((p=1; p<=count; p++)); do : > "$dir/assign/p$p"; done
+  p=0
+  for unit in "$@"; do printf '%s\0' "$unit" >> "$dir/assign/p$((p % count + 1))"; p=$((p + 1)); done
+  exit 0
+fi
 case " ${STUB_STALL:-} " in *" $key "*)
   sleep 300 & echo "$!" > "$TRACE/grandchild.$key"
   echo "$$" > "$TRACE/stalled.$key"
@@ -465,7 +480,7 @@ echo 'ok: SIGKILL'
 # in the registry heavy-check owns, which it leaves in place.
 ( umask 077 && : > "$scratch/registry-e" )
 start_gate e HEAVY_CHECK_HELD=exclusive CONTAIN_REGISTRY="$scratch/registry-e" STUB_HOLD=sqlite_test_compile \
-  -- "$gate" -n 2 -l "$scratch/e.log" -- apps/arca/test
+  -- "$gate" -n 2 -l "$scratch/e.log" -- apps/arca/test apps/sanctum/test/sanctum/issuance_test.exs
 e=$gate_pid
 until_true 60 test -s "$scratch/e.trace/held.sqlite_test_compile" || fail "the dead-leg case's step never started: $(cat "$scratch/e.err")"
 static_leg=$(pgrep -P "$e" -f -- '--leg static' | head -n 1)
@@ -480,14 +495,19 @@ has_line '^==> islands +FAILED .*await_static=1' "$scratch/e.out" || fail 'the w
 no_line '^_(START|EXIT)=' "$scratch/e.out" || fail 'a gate under heavy-check wrote a terminal line'
 [ -f "$scratch/registry-e" ] || fail "a nested gate removed heavy-check's registry"
 grep -qxF "$static_leg" "$scratch/registry-e" || fail "a nested gate did not record its legs in heavy-check's registry"
-[ "$(cat "$scratch/e.log/postgres.pg_selection.txt")" = apps/arca/test ] || fail 'the given PostgreSQL paths did not replace the selection'
-has_line '^pg_selection=1$' "$scratch/e.log/postgres.summary" || fail 'the given PostgreSQL paths were not counted'
-has_line '^    postgres\.pg_selection: 1 paths handed to the runner' "$scratch/e.out" || fail 'the report did not count the given PostgreSQL paths'
+[ "$(tr '\n' ' ' < "$scratch/e.log/postgres.pg_selection.txt")" = 'apps/arca/test apps/sanctum/test/sanctum/issuance_test.exs ' ] ||
+  fail 'the given PostgreSQL paths did not replace the selection'
+has_line '^pg_selection=2$' "$scratch/e.log/postgres.summary" || fail 'the given PostgreSQL paths were not counted'
+has_line '^    postgres\.pg_selection: 2 paths handed to the runner' "$scratch/e.out" || fail 'the report did not count the given PostgreSQL paths'
 pg_runs=$(partition_runs "$scratch/e.trace/mix.calls" postgres)
 [ "$(partitions_of "$scratch/e.trace/mix.calls" postgres)" = '1 2 ' ] || fail "the given PostgreSQL paths did not run in two partitions: $pg_runs"
-# Every path the partitions were given lies under the one given.
-[ -z "$(printf '%s\n' "$pg_runs" | awk -F'|' '{ print $6 }' | tr ' ' '\n' | grep -E '^apps/' | grep -vE '^apps/arca/test(/|$)')" ] ||
+# Every path the partitions were given lies under the ones given, and
+# each given path reached a partition.
+pg_paths=$(printf '%s\n' "$pg_runs" | awk -F'|' '{ print $6 }' | tr ' ' '\n' | grep -E '^apps/' || :)
+[ -z "$(printf '%s\n' "$pg_paths" | grep -vE '^(apps/arca/test(/|$)|apps/sanctum/test/sanctum/issuance_test\.exs$)')" ] ||
   fail "the postgres leg ran paths outside the given ones: $pg_runs"
+printf '%s\n' "$pg_paths" | grep -qE '^apps/arca/test(/|$)' && printf '%s\n' "$pg_paths" | grep -qxF apps/sanctum/test/sanctum/issuance_test.exs ||
+  fail "a given PostgreSQL path reached no partition: $pg_runs"
 echo 'ok: a leg that dies without its marker, the terminal lines under heavy-check, given PostgreSQL paths'
 
 echo 'commit gate tests passed'
