@@ -5,6 +5,8 @@ defmodule Prima.SlotsTest do
   # Every test starts its own instance, so nothing here is node-global.
   use ExUnit.Case, async: true
 
+  import Prima.Test.Wait, only: [wait_until: 1]
+
   alias Prima.Slots
 
   @moduletag :capture_log
@@ -1071,24 +1073,5 @@ defmodule Prima.SlotsTest do
     ref = Process.monitor(pid)
     Process.exit(pid, :kill)
     assert_receive {:DOWN, ^ref, :process, ^pid, :killed}, 5_000
-  end
-
-  defp wait_until(fun, timeout \\ 2_000) do
-    deadline = System.monotonic_time(:millisecond) + timeout
-    poll(fun, deadline, timeout)
-  end
-
-  defp poll(fun, deadline, timeout) do
-    cond do
-      fun.() ->
-        :ok
-
-      System.monotonic_time(:millisecond) >= deadline ->
-        flunk("waited #{timeout}ms for a condition which never held")
-
-      true ->
-        Process.sleep(10)
-        poll(fun, deadline, timeout)
-    end
   end
 end

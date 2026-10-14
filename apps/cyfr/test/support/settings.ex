@@ -76,30 +76,13 @@ defmodule Cyfr.Test.Settings do
     Store.invalidate(key)
   end
 
-  @doc """
-  Read `key` once and age its cached value past the cache's lifetime, so
-  the next read asks the store again.
-  """
+  @doc "Age `key`'s cached value past its lifetime (`Sanctum.Test.Settings.expire/1`)."
   @spec expire(String.t()) :: :ok
-  def expire(key) when is_binary(key) do
-    {:ok, _value} = Store.effective(key)
-    cache = {Store, :value, key}
-    {value, _read_at} = :persistent_term.get(cache)
-    :persistent_term.put(cache, {value, System.monotonic_time(:millisecond) - Store.ttl_ms() - 1})
-  end
+  defdelegate expire(key), to: Sanctum.Test.Settings
 
-  @doc """
-  Make the store unable to answer for the rest of the calling test, by
-  renaming its table inside the test's own sandbox transaction, which the
-  sandbox rolls back. On PostgreSQL the next failed statement ends the
-  transaction, so a test does this last among its database steps.
-  """
+  @doc "Make the store unable to answer (`Sanctum.Test.Settings.break_store!/0`)."
   @spec break_store!() :: :ok
-  def break_store! do
-    ExUnit.Callbacks.on_exit({__MODULE__, :break_store}, fn -> Store.invalidate(:all) end)
-    Arca.Repo.query!("ALTER TABLE platform_settings RENAME TO platform_settings_away")
-    :ok
-  end
+  defdelegate break_store!(), to: Sanctum.Test.Settings
 
   @doc "Delete `key`'s row, so it reads its installed default again."
   @spec reset(String.t()) :: :ok

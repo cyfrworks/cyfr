@@ -35,10 +35,6 @@ defmodule Cyfr.Test.LocusService do
   @key :binary.copy(<<0x4C>>, 32)
   @listener __MODULE__.Listener
 
-  @doc "The builds key the service verifies requests with and this server signs them with."
-  @spec key() :: <<_::256>>
-  def key, do: @key
-
   @doc """
   Serve builds from the running Locus application: the key installed and
   the listener started on a port of the system's choosing. Answers the

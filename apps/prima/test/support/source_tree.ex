@@ -23,9 +23,6 @@ defmodule Prima.Test.SourceTree do
 
   @table :prima_test_source_tree
 
-  @doc false
-  def table, do: @table
-
   @doc """
   Create the memo table, once per VM.
 
@@ -138,13 +135,5 @@ defmodule Prima.Test.SourceTree do
             value
         end
     end
-  end
-
-  @doc "Every `{path, source}` under `glob`, each file read at most once."
-  @spec sources(String.t()) :: [{Path.t(), String.t()}]
-  def sources(glob) do
-    glob
-    |> files!()
-    |> Enum.map(&{&1, read(&1)})
   end
 end

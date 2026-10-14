@@ -144,24 +144,6 @@ defmodule PrismWeb.ShellLiveTest.GrantTest do
     {:ok, conn: conn, ctx: ctx}
   end
 
-  defp reload_registry do
-    registry = Process.whereis(Prism.TinctureRegistry)
-
-    case Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo) do
-      :ok ->
-        try do
-          Ecto.Adapters.SQL.Sandbox.allow(Arca.Repo, self(), registry)
-          :ok = Prism.TinctureRegistry.reload()
-        after
-          Ecto.Adapters.SQL.Sandbox.checkin(Arca.Repo)
-        end
-
-      {:already, _} ->
-        Ecto.Adapters.SQL.Sandbox.allow(Arca.Repo, self(), registry)
-        :ok = Prism.TinctureRegistry.reload()
-    end
-  end
-
   # A tincture version in the athanor's tree and its component row,
   # declaring `needs`.
   defp tincture!(ctx, name, needs) do

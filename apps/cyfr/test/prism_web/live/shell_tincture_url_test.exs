@@ -68,26 +68,6 @@ defmodule PrismWeb.ShellTinctureUrlTest do
      segment: Sanctum.Tenancy.Athanors.route_slug(athanor)}
   end
 
-  # The registry is one server-wide process; after the test's own checkout
-  # is gone its reload runs on a checkout lent to it alone.
-  defp reload_registry do
-    registry = Process.whereis(Prism.TinctureRegistry)
-
-    case Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo) do
-      :ok ->
-        try do
-          Ecto.Adapters.SQL.Sandbox.allow(Arca.Repo, self(), registry)
-          :ok = Prism.TinctureRegistry.reload()
-        after
-          Ecto.Adapters.SQL.Sandbox.checkin(Arca.Repo)
-        end
-
-      {:already, _} ->
-        Ecto.Adapters.SQL.Sandbox.allow(Arca.Repo, self(), registry)
-        :ok = Prism.TinctureRegistry.reload()
-    end
-  end
-
   # The version's component row, as registration writes it: what the
   # shell reads the release digest from.
   defp register!(ctx, manifest) do

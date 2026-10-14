@@ -12,6 +12,8 @@ defmodule Locus.Runtime.ChainTest do
   # admission, read on the suite's wire.
   use ExUnit.Case, async: false
 
+  import Prima.Test.Wait, only: [wait_until: 2]
+
   alias Prima.Authority
   alias Prima.Authority.Blob
   alias Cyfr.Test.TwoServices
@@ -201,19 +203,6 @@ defmodule Locus.Runtime.ChainTest do
       )
 
     {fixture.host, imports, tracker}
-  end
-
-  defp wait_until(fun, timeout_ms \\ 5_000) do
-    deadline = System.monotonic_time(:millisecond) + timeout_ms
-
-    Stream.repeatedly(fn ->
-      cond do
-        fun.() -> :done
-        System.monotonic_time(:millisecond) > deadline -> flunk("condition never held")
-        true -> Process.sleep(20)
-      end
-    end)
-    |> Enum.find(&(&1 == :done))
   end
 
   describe "run_root/5" do
@@ -434,7 +423,7 @@ defmodule Locus.Runtime.ChainTest do
       # needs its profile row, active at the pinned consent, or the run is
       # refused as consent_moved before the entry is looked at.
       {:ok, _} =
-        Arca.ProfileStorage.put(%{
+        Arca.Test.Writers.put_profile(%{
           id: "prof-chain",
           athanor_id: ctx.athanor_id,
           source_ref: @root_node,
@@ -634,7 +623,7 @@ defmodule Locus.Runtime.ChainTest do
 
       assert %{"task_id" => _} = Jason.decode!(spawn_fn.(request))
       assert [_child_id] = admitted(host.execution_id)
-      wait_until(fn -> Sanctum.Authority.budget(auth).in_flight == 0 end)
+      wait_until(fn -> Sanctum.Authority.budget(auth).in_flight == 0 end, 5_000)
     end
 
     test "an in-chain run_stream is admitted spawn-shaped under the edge's authority", %{
@@ -673,7 +662,7 @@ defmodule Locus.Runtime.ChainTest do
 
       assert [child_id] = admitted(parent_id)
       assert entered!(child_id).cursor == {:bound, @target_node}
-      wait_until(fn -> Sanctum.Authority.budget(auth).in_flight == 0 end)
+      wait_until(fn -> Sanctum.Authority.budget(auth).in_flight == 0 end, 5_000)
     end
 
     test "an oversized emit is refused by the node's own request limit", %{ctx: ctx} do
