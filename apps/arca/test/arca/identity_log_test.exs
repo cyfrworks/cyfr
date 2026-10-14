@@ -676,17 +676,19 @@ defmodule Arca.IdentityLogRaceTest do
          |> Keyword.merge(database: "postgres", pool_size: 1)}
       )
 
-    # Taken here, or already held there by another run: either way the
-    # key is held in a database that is not this one.
-    %Postgrex.Result{rows: [[_taken]]} =
-      Postgrex.query!(other, "SELECT pg_try_advisory_lock($1)", [@gate])
+    # The case holds the key there itself, on its one connection: another
+    # run holding it there is waited for, never counted on, so no release
+    # elsewhere can race the check below.
+    Postgrex.query!(other, "SET lock_timeout = '5s'", [])
+    Postgrex.query!(other, "SELECT pg_advisory_lock($1)", [@gate])
+    %Postgrex.Result{rows: [[own]]} = Postgrex.query!(other, "SELECT pg_backend_pid()", [])
 
-    assert [[_held]] =
+    assert [[^own]] =
              Postgrex.query!(
                other,
-               "SELECT 1 FROM pg_locks l JOIN pg_database d ON d.oid = l.database " <>
+               "SELECT l.pid FROM pg_locks l JOIN pg_database d ON d.oid = l.database " <>
                  "WHERE d.datname = 'postgres' AND l.locktype = 'advisory' AND l.granted " <>
-                 "AND l.classid = 0 AND l.objid = $1 AND l.objsubid = 1 LIMIT 1",
+                 "AND l.classid = 0 AND l.objid = $1 AND l.objsubid = 1",
                [@gate]
              ).rows
 
