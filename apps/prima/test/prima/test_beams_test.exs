@@ -13,7 +13,10 @@ defmodule Prima.Test.BeamsTest do
   alias Prima.Test.Beams
 
   setup do
-    dir = Path.join(System.tmp_dir!(), "test_beams_#{System.unique_integer([:positive])}")
+    # Random bytes, not `System.unique_integer/1`, which repeats across VMs:
+    # another VM's cleanup must never remove this one's beams.
+    suffix = Base.encode16(:crypto.strong_rand_bytes(8), case: :lower)
+    dir = Path.join(System.tmp_dir!(), "test_beams_#{suffix}")
     on_exit(fn -> File.rm_rf!(dir) end)
 
     # A checkout whose own path holds `/lib/`, as one under `/var/lib/` does.
