@@ -207,6 +207,48 @@ defmodule Locus.KeeperTest do
       assert {:ok, %{exit: {:status, 0}, stdout: "late\n"}} = result
     end
 
+    # The channel is lost while the command runs: the relay ends before its
+    # last frames, by its client's loss in report-first mode, and leaves no
+    # command directory behind in either mode.
+    for mode <- [:normal, :report_first] do
+      @tag relay_mode: mode
+      test "a relay ended by the channel's loss mid-run removes its command directory (#{mode})",
+           %{name: name, fake: fake, client: client, relay_mode: mode} do
+        test = self()
+
+        if mode == :report_first do
+          reported? = fn ->
+            send(test, {:reporting, self()})
+
+            client
+            |> :sys.get_state()
+            |> Map.fetch!(:requests)
+            |> Map.values()
+            |> Enum.any?(&(&1.released and not &1.attached))
+          end
+
+          :ok = FakeKeeper.mode(fake, {:report_first, reported?})
+        end
+
+        task = Task.async(fn -> run(name, "sleep 0.3; echo done", timeout_ms: 2_000) end)
+        wait_until(fn -> FakeKeeper.running(fake) != [] end, 5_000, "the command to run")
+        [dir] = FakeKeeper.command_dirs(fake)
+        assert File.dir?(dir)
+
+        :ok = FakeKeeper.close(fake)
+        assert {{:error, _reason}, _lines} = Task.await(task, 5_000)
+
+        if mode == :report_first do
+          assert_receive {:reporting, relay}, 5_000
+          monitor = Process.monitor(relay)
+          assert_receive {:DOWN, ^monitor, :process, ^relay, _reason}, 5_000
+          refute File.exists?(dir)
+        else
+          wait_until(fn -> not File.exists?(dir) end, 5_000, "the command directory to go")
+        end
+      end
+    end
+
     test "a spawn the pool cannot hold is refused as capacity", %{name: name, fake: fake} do
       :ok = FakeKeeper.mode(fake, :capacity)
       assert {{:error, :capacity}, []} = run(name, "true")

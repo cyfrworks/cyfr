@@ -121,6 +121,9 @@ defmodule Locus.Test.FakeKeeper do
   """
   def sent(fake), do: GenServer.call(fake, :sent)
 
+  @doc "Every command directory the fake's relays made, oldest first; each is removed when its relay ends."
+  def command_dirs(fake), do: GenServer.call(fake, :command_dirs)
+
   @doc "The spawn ids whose command the fake runs or has run, as an OS process it can signal."
   def running(fake), do: GenServer.call(fake, :running)
 
@@ -140,6 +143,7 @@ defmodule Locus.Test.FakeKeeper do
        requests: [],
        exits: [],
        sent: [],
+       command_dirs: [],
        spawns: %{},
        next: 0
      }}
@@ -161,6 +165,9 @@ defmodule Locus.Test.FakeKeeper do
   def handle_call(:requests, _from, state), do: {:reply, Enum.reverse(state.requests), state}
   def handle_call(:exits, _from, state), do: {:reply, Enum.reverse(state.exits), state}
   def handle_call(:sent, _from, state), do: {:reply, Enum.reverse(state.sent), state}
+
+  def handle_call(:command_dirs, _from, state),
+    do: {:reply, Enum.reverse(state.command_dirs), state}
 
   def handle_call(:running, _from, state),
     do: {:reply, for({spawn_id, os_pid} <- state.spawns, is_integer(os_pid), do: spawn_id), state}
@@ -191,6 +198,9 @@ defmodule Locus.Test.FakeKeeper do
   end
 
   def handle_info({:send, message}, state), do: {:noreply, write(state, message)}
+
+  def handle_info({:command_dir, dir}, state),
+    do: {:noreply, %{state | command_dirs: [dir | state.command_dirs]}}
 
   # A signal asked for before the command's pid was known is sent now.
   def handle_info({:running, spawn_id, os_pid}, state) do
@@ -311,8 +321,20 @@ defmodule Locus.Test.FakeKeeper do
 
   defp signal_group(_os_pid, _sig), do: :ok
 
-  defp relay(fake, spawn_id, %{"pool" => "build"} = request, {:report_first, reported?}) do
+  # A relay's command directory is recorded, and removed however the relay
+  # ends: a client or channel gone mid-run ends it before its last frames.
+  defp relay(fake, spawn_id, request, mode) do
     dir = short_tmp_dir()
+    send(fake, {:command_dir, dir})
+
+    try do
+      relay(fake, spawn_id, request, mode, dir)
+    after
+      File.rm_rf!(dir)
+    end
+  end
+
+  defp relay(fake, spawn_id, %{"pool" => "build"} = request, {:report_first, reported?}, dir) do
     input = Path.join(dir, "stdin")
     output = Path.join(dir, "stdout")
     File.write!(input, "")
@@ -324,11 +346,10 @@ defmodule Locus.Test.FakeKeeper do
 
     conn = dial(fake, request)
     _stdin = read_stdin(conn, [])
-    finish(conn, dir, [frames(@stream_stderr, stderr), frames(@stream_stdout, stdout)])
+    finish(conn, [frames(@stream_stderr, stderr), frames(@stream_stdout, stdout)])
   end
 
-  defp relay(fake, spawn_id, request, mode) do
-    dir = short_tmp_dir()
+  defp relay(fake, spawn_id, request, mode, dir) do
     input = Path.join(dir, "stdin")
     output = Path.join(dir, "stdout")
     conn = dial(fake, request)
@@ -356,23 +377,22 @@ defmodule Locus.Test.FakeKeeper do
 
     case mode do
       {:exit, exited} ->
-        finish(conn, dir, [frames(@stream_stderr, "the command's last words\n")])
+        finish(conn, [frames(@stream_stderr, "the command's last words\n")])
         send(fake, {:send, Map.merge(%{type: "exited", spawn_id: spawn_id}, exited)})
         send(fake, {:send, %{type: "released", spawn_id: spawn_id}})
 
       _mode ->
         {exited, stdout, ""} = run(fake, spawn_id, request, conn, {dir, input, output})
-        finish(conn, dir, [frames(@stream_stdout, stdout)])
+        finish(conn, [frames(@stream_stdout, stdout)])
         send(fake, {:send, exited})
         send(fake, {:send, %{type: "released", spawn_id: spawn_id}})
     end
   end
 
   # The relay's last frames, then the end of both streams.
-  defp finish(conn, dir, frames) do
+  defp finish(conn, frames) do
     :gen_tcp.send(conn, [frames, frame(@stream_stdout, ""), frame(@stream_stderr, "")])
     :gen_tcp.close(conn)
-    File.rm_rf!(dir)
   end
 
   # The command's stderr goes to `conn` as it arrives, or is held for a
@@ -454,7 +474,6 @@ defmodule Locus.Test.FakeKeeper do
 
     :gen_tcp.send(conn, [frame(@stream_stdout, ""), frame(@stream_stderr, "")])
     :gen_tcp.close(conn)
-    File.rm_rf!(dir)
 
     exited =
       if status > 128,
