@@ -123,7 +123,7 @@ defmodule Emissary.External.ServerTest do
 
       # The monitor above was created by the replace_state closure, which runs
       # in the server process — its :DOWN goes to the server.
-      wait_until(fn -> map_size(:sys.get_state(pid).in_flight) == 0 end)
+      Prima.Test.Wait.wait_until(fn -> map_size(:sys.get_state(pid).in_flight) == 0 end, 1_000)
     end
 
     test "a stopped server ends its calls in flight and answers their callers", %{
@@ -156,19 +156,6 @@ defmodule Emissary.External.ServerTest do
 
       state = :sys.get_state(pid)
       assert state.timeout_ms == 110_000
-    end
-  end
-
-  defp wait_until(fun, deadline_ms \\ 1_000) do
-    deadline = System.monotonic_time(:millisecond) + deadline_ms
-
-    unless fun.() do
-      if System.monotonic_time(:millisecond) > deadline do
-        flunk("condition not met within #{deadline_ms}ms")
-      end
-
-      Process.sleep(10)
-      wait_until(fun, deadline_ms)
     end
   end
 
@@ -334,6 +321,45 @@ defmodule Emissary.External.ServerTest do
       # Inside the entry's host and paths, it is sent.
       assert {:ok, %{"authorization" => "Bearer sk-openai-0123456789"}} =
                Server.resolve_headers(headers, {ctx.athanor_id, "https://api.openai.com/v1/mcp"})
+    end
+
+    # An instance entry is never named by a definition whose URL a member
+    # chose (§5.5): a header naming one by name finds no athanor entry of
+    # that name, and the instance entry is neither unsealed nor used.
+    test "a header naming only an instance entry fails to connect and reads nothing of it", %{
+      name: name
+    } do
+      ctx = Sanctum.TestContext.local()
+      entry_name = "instance-only-#{System.unique_integer([:positive])}"
+      entry = instance_entry!(ctx, entry_name, %{"hosts" => ["api.example.com"]})
+
+      assert {:error, :not_found} =
+               Arca.VaultStorage.get_by_name(Sanctum.Context.actor(ctx), entry_name)
+
+      before = instance_state(entry.id)
+      assert {%{status: "active"}, _usage} = before
+
+      pid =
+        start_server(name, ctx.athanor_id,
+          url: @inside,
+          headers: %{"authorization" => "Bearer vault:" <> entry_name}
+        )
+
+      assert {:error, sentence} = GenServer.call(pid, :get_tools, 30_000)
+      assert sentence =~ "authorization"
+      refute sentence =~ entry_name
+
+      state = :sys.get_state(pid)
+      assert state.status == :error
+      assert state.headers == %{}
+
+      # The reader the connect would unseal through, asked directly at a URL
+      # the instance entry's destination admits: no athanor entry, nothing
+      # unsealed. The connect above refuses before it reaches the reader.
+      assert {:error, :not_found} =
+               Sanctum.VaultReader.unseal_for(ctx.athanor_id, entry_name, @inside)
+
+      assert instance_state(entry.id) == before
     end
 
     test "a reference this server does not resolve is refused, never sent as a literal" do
@@ -510,7 +536,7 @@ defmodule Emissary.External.ServerTest do
           send(test, {:answered, apply(Server, called, [name, athanor_id])})
         end)
 
-      wait_until(fn -> queued?(pid) end)
+      Prima.Test.Wait.wait_until(fn -> queued?(pid) end, 1_000)
       stop_cause(cause, context)
 
       receive do
@@ -1361,5 +1387,34 @@ defmodule Emissary.External.ServerTest do
       refute rendered =~ "vault:github-token"
       assert rendered =~ "leaky"
     end
+  end
+
+  # An instance entry offered to everyone, whose destination admits a POST
+  # to `hosts` on `/mcp`.
+  defp instance_entry!(ctx, entry_name, %{"hosts" => hosts}) do
+    params = %{
+      name: entry_name,
+      kind: "api_key",
+      fields: %{"token" => "sk-instance-0123456789"},
+      destination: %{"hosts" => hosts, "methods" => ["POST"], "paths" => ["/mcp"]},
+      audience: "everyone"
+    }
+
+    confirmed =
+      Sanctum.TestContext.confirmed(%{ctx | platform_admin: true}, :credential_entry, %{
+        operation: "instance_entry.create",
+        arguments: params,
+        resource: params.name
+      })
+
+    {:ok, entry} = Sanctum.InstanceEntries.create(confirmed, params)
+    entry
+  end
+
+  # The instance entry's stored row and its use today.
+  defp instance_state(id) do
+    {:ok, row} = Arca.InstanceEntries.get(Prima.Actor.system(), id)
+    {:ok, usage} = Arca.InstanceEntryUsage.usage(Prima.Actor.system(), id, 1)
+    {row, usage}
   end
 end

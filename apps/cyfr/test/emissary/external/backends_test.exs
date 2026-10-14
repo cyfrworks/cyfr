@@ -1053,6 +1053,36 @@ defmodule Emissary.External.BackendsTest do
              Arca.VaultStorage.get(Sanctum.Context.actor(ctx), disclosed.id)
   end
 
+  # An instance entry is never disclosed nor named by a definition a member
+  # wrote (§5.5): an env naming one by name finds no athanor entry of that
+  # name, and the instance entry is neither unsealed nor used.
+  test "an env naming only an instance entry is unresolved and reads nothing of it", %{
+    ctx: ctx,
+    fake: fake
+  } do
+    start_controller(fake)
+    entry_name = "instance-only-#{System.unique_integer([:positive])}"
+    entry = instance_entry!(ctx, entry_name)
+
+    assert {:error, :not_found} =
+             Arca.VaultStorage.get_by_name(Sanctum.Context.actor(ctx), entry_name)
+
+    before = instance_state(entry.id)
+    assert {%{status: "active"}, _usage} = before
+    row = stdio_row(ctx, "instance-named", %{"GITHUB_TOKEN" => "vault:" <> entry_name})
+
+    assert {:error, {:env_unresolved, "github", "GITHUB_TOKEN"}} =
+             Backends.sync(%{athanor_id: ctx.athanor_id, server_id: row.id, epoch: 1})
+
+    refute_receive {:control, "sync", _sync, _fields}, 200
+    refute_received {:sealed_env, _server, _env}
+
+    # The reader the sync would unseal through, asked directly: no athanor
+    # entry, nothing unsealed. The sync above refuses before it reaches it.
+    assert {:error, :not_found} = Sanctum.VaultReader.unseal_disclosed(ctx.athanor_id, entry_name)
+    assert instance_state(entry.id) == before
+  end
+
   test "get reports what the service runs for a stdio server", %{ctx: ctx, fake: fake} do
     start_controller(fake)
     row = stdio_row(ctx, "described", %{"NODE_ENV" => "production"})
@@ -1281,5 +1311,34 @@ defmodule Emissary.External.BackendsTest do
       {~c"State", %^module{} = state} -> state
       _ -> nil
     end)
+  end
+
+  # An instance entry offered to everyone, at the destination these cases'
+  # entries name.
+  defp instance_entry!(ctx, entry_name) do
+    params = %{
+      name: entry_name,
+      kind: "api_key",
+      fields: %{"token" => @secret},
+      destination: Map.merge(@destination, %{"methods" => ["POST"], "paths" => ["/mcp"]}),
+      audience: "everyone"
+    }
+
+    confirmed =
+      Sanctum.TestContext.confirmed(%{ctx | platform_admin: true}, :credential_entry, %{
+        operation: "instance_entry.create",
+        arguments: params,
+        resource: params.name
+      })
+
+    {:ok, entry} = Sanctum.InstanceEntries.create(confirmed, params)
+    entry
+  end
+
+  # The instance entry's stored row and its use today.
+  defp instance_state(id) do
+    {:ok, row} = Arca.InstanceEntries.get(Prima.Actor.system(), id)
+    {:ok, usage} = Arca.InstanceEntryUsage.usage(Prima.Actor.system(), id, 1)
+    {row, usage}
   end
 end

@@ -259,18 +259,17 @@ defmodule Aqua.LoopTest do
     ctx: ctx,
     thread: thread
   } do
-    turn = accept!(ctx, thread, "@aqua hello")
-    script!([reply("hi there")])
+    script!([])
     Cyfr.Test.KeeperProbe.watch()
 
-    assert :completed = Task.await(run(ctx, turn), 30_000)
-    assert_received {:attempt_ended, :suspended}
-    refute_received {:attempt_ended, _}
+    keeper_suspended_at_end!(fn ->
+      turn = accept!(ctx, thread, "@aqua hello")
+      ScriptedWorker.script([reply("hi there")])
+      assert :completed = Task.await(run(ctx, turn), 30_000)
+    end)
   end
 
   test "a turn that never ran ends with its keeper suspended too", %{ctx: ctx, thread: thread} do
-    turn = accept!(ctx, thread, "@aqua hello")
-
     start_supervised!(
       {ScriptedWorker,
        ref: @model,
@@ -280,9 +279,48 @@ defmodule Aqua.LoopTest do
 
     Cyfr.Test.KeeperProbe.watch()
 
-    assert {:failed, {:unknown_model, _}} = Task.await(run(ctx, turn), 30_000)
-    assert_received {:attempt_ended, :suspended}
-    refute_received {:attempt_ended, _}
+    keeper_suspended_at_end!(fn ->
+      turn = accept!(ctx, thread, "@aqua hello")
+      assert {:failed, {:unknown_model, _}} = Task.await(run(ctx, turn), 30_000)
+    end)
+  end
+
+  @keeper_runs 5
+
+  # Runs `scenario`, a fresh turn each time, until the probe reads the one
+  # attempt-ending write's keeper as suspended. The probe answers `:unknown`
+  # when its look ran out before the keeper settled, which says neither, so
+  # the scenario runs again, at most `@keeper_runs` times; `:renewing`, or
+  # any other count of writes, fails at once.
+  defp keeper_suspended_at_end!(scenario, seen \\ []) do
+    scenario.()
+
+    case attempt_endings() do
+      [:suspended] ->
+        :ok
+
+      [:unknown] = observed when length(seen) + 1 < @keeper_runs ->
+        keeper_suspended_at_end!(scenario, [observed | seen])
+
+      [:unknown] = observed ->
+        flunk(
+          "the keeper's state at the attempt's end stayed inconclusive over " <>
+            "#{@keeper_runs} runs: #{inspect(Enum.reverse([observed | seen]))}"
+        )
+
+      observed ->
+        flunk(
+          "expected one attempt-ending write with its keeper suspended, read #{inspect(observed)}"
+        )
+    end
+  end
+
+  defp attempt_endings do
+    receive do
+      {:attempt_ended, state} -> [state | attempt_endings()]
+    after
+      0 -> []
+    end
   end
 
   # The files hand is not scripted: it runs on the runtime's worker service.
@@ -397,6 +435,12 @@ defmodule Aqua.LoopTest do
     assert %{action: "keep", dispatch_state: "closed", outcome: "ok"} =
              Enum.find(steps, &(&1.action == "keep"))
 
+    # The approved call ran on the guest plane, the one way into it: only
+    # there does a kept note's provenance come from the host's lineage,
+    # never from the call's own arguments.
+    thread_id = thread.id
+    assert {:ok, %{thread: ^thread_id, execution: ^root}} = Aqua.Notes.read(ctx, "n")
+
     assert roots() == before
   end
 
@@ -444,6 +488,71 @@ defmodule Aqua.LoopTest do
 
     assert {:ok, %{dispatch_state: "closed", outcome: "denied"}} = Tape.step(ctx, keep.id)
     assert {:error, _} = Aqua.Notes.read(ctx, "n")
+  end
+
+  # An approval unblocks a call the chain's authority allows and grants
+  # nothing more (§5.4): the approved call still goes through the gate, in
+  # the chain, under the authority as it stands when the call is made.
+  test "an approved call whose authority was withdrawn before the resume is refused at the gate",
+       %{ctx: ctx, thread: thread} do
+    turn = accept!(ctx, thread, "@aqua keep a note")
+
+    script!([
+      calls([{"c1", "notes", %{"action" => "keep", "name" => "n", "content" => "remember"}}])
+    ])
+
+    assert {:paused, :approval} = Task.await(run(ctx, turn), 60_000)
+    {:ok, paused} = Tape.turn(ctx, turn.id)
+    {:ok, [approval]} = Tape.pending_approvals(ctx, paused)
+    {:ok, _} = Approvals.resolve(ctx, approval.id, %{decision: :approved})
+
+    # The invoke budget the call needs is withdrawn: the turn's
+    # reservation admits no further charge.
+    {1, _} =
+      Arca.Repo.update_all(
+        from(r in Arca.Schemas.BudgetReservation, where: r.id == ^paused.budget_id),
+        set: [cap: 0]
+      )
+
+    actor = Sanctum.Context.actor(ctx)
+    {:ok, refused_before} = Arca.DecisionLog.list(actor, tool: "notes", admission: :refused)
+
+    Task.await(
+      Task.async(fn -> Aqua.Loop.run_nested(ctx: ctx, turn_id: turn.id, mode: :resume) end),
+      60_000
+    )
+
+    {:ok, steps} = Tape.steps(ctx, paused)
+
+    assert %{dispatch_state: "closed", outcome: "denied"} =
+             Enum.find(steps, &(&1.action == "keep"))
+
+    assert {:error, _} = Aqua.Notes.read(ctx, "n")
+
+    # The refusal is the chain's: the one authority refusal of a notes call
+    # the resume made, decided in the chain. The turn's root records no
+    # admission call here, so the decision's parent is nil and names
+    # nothing; the call's request-log row carries the host-stamped lineage
+    # the gate judged it under, which names this turn's root and thread.
+    {:ok, refused} = Arca.DecisionLog.list(actor, tool: "notes", admission: :refused)
+    user_id = ctx.user_id
+
+    assert [
+             %Prima.Decision{
+               call_id: call_id,
+               plane: :in_chain,
+               action: "keep",
+               user_id: ^user_id,
+               refusal_class: :forbidden
+             }
+           ] = refused -- refused_before
+
+    root = paused.root_execution_id
+    thread_id = thread.id
+    assert is_binary(root) and is_binary(thread_id)
+    %Arca.Schemas.McpLog{input: input} = Arca.Repo.get(Arca.Schemas.McpLog, call_id)
+
+    assert %{"root_execution_id" => ^root, "thread_id" => ^thread_id} = Jason.decode!(input)
   end
 
   test "a turn pins the catalyst release it runs on; a resume runs only that release, and only one speaking model/chat@1",

@@ -4872,6 +4872,77 @@ defmodule PrismWeb.SystemLayerTest do
     end
   end
 
+  # The listener stands in the view's place on the bus: the test process is
+  # its view here, so the updates it sends the layer arrive in the mailbox.
+  describe "the layer's listener" do
+    setup :signed_in
+
+    test "hands the layer only the grant's keys of the granted struct, under its tag",
+         %{view: view} do
+      ctx = view_context(view)
+      tag = CyfrWeb.ContextGuard.capture(ctx)
+      layer = "listener-probe"
+      {:ok, grant} = Sanctum.Gate.open_stream(ctx, PrismWeb.SystemLayer.stream(), nil)
+      {:ok, pid} = PrismWeb.SystemLayer.Listener.start(self(), layer, ctx, grant, tag)
+      expires_at = DateTime.utc_now()
+
+      fact =
+        Cyfr.Bus.Confirmation.new(Context.actor(ctx), :opened,
+          ref: "rcf_listener_probe",
+          operation: "vault.create",
+          expires_at: expires_at
+        )
+
+      send(pid, Cyfr.Bus.Ping.new("listener-probe"))
+      send(pid, fact)
+
+      assert_receive {:phoenix, :send_update,
+                      {{PrismWeb.SystemLayer, ^layer}, %{id: ^layer, fact: projected, tag: ^tag}}},
+                     2_000
+
+      # The grant's fields alone: the payload's athanor never leaves.
+      assert projected == %{
+               "ref" => "rcf_listener_probe",
+               "kind" => :opened,
+               "operation" => "vault.create",
+               "expires_at" => expires_at
+             }
+
+      assert Enum.sort(Map.keys(projected)) == Enum.sort(grant.projection)
+
+      # Sent ahead of the fact, so already here had it been handed on.
+      refute_received {:phoenix, :send_update, {{PrismWeb.SystemLayer, ^layer}, %{fact: _}}}
+
+      monitor = Process.monitor(pid)
+      :ok = PrismWeb.SystemLayer.Listener.stop(pid)
+      assert_receive {:DOWN, ^monitor, :process, ^pid, _reason}, 2_000
+      end_views()
+    end
+
+    test "ends at its grant's deadline, telling the layer, when nothing was published",
+         %{view: view} do
+      ctx = view_context(view)
+      tag = CyfrWeb.ContextGuard.capture(ctx)
+      layer = "listener-deadline"
+      {:ok, grant} = Sanctum.Gate.open_stream(ctx, PrismWeb.SystemLayer.stream(), nil)
+      due = %{grant | deadline: DateTime.add(DateTime.utc_now(), 300, :millisecond)}
+      {:ok, pid} = PrismWeb.SystemLayer.Listener.start(self(), layer, ctx, due, tag)
+      monitor = Process.monitor(pid)
+
+      # Its own timer ends it, at the deadline and not before.
+      refute_receive {:phoenix, :send_update,
+                      {{PrismWeb.SystemLayer, ^layer}, %{listen: :ended}}},
+                     100
+
+      assert_receive {:phoenix, :send_update,
+                      {{PrismWeb.SystemLayer, ^layer}, %{id: ^layer, listen: :ended}}},
+                     2_000
+
+      assert_receive {:DOWN, ^monitor, :process, ^pid, :normal}, 2_000
+      end_views()
+    end
+  end
+
   describe "while the store cannot answer" do
     test "a safe-mode prompt is drawn, and trying again is reported", %{conn: conn} do
       user = test_user()
