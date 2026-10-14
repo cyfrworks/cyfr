@@ -340,6 +340,64 @@ t_scoped() {
   for i in "${pids[@]}"; do wait "$i"; done
 }
 
+# --- scoped waiters take slots in the order they queued -----------------------
+# hold_slots TAG: three scoped checks that hold every slot until
+# release-TAG<n> appears; their pids in $slot_holders.
+hold_slots() {
+  local n
+  slot_holders=()
+  for n in 1 2 3; do
+    "${hc[@]}" -s -- sh -c "touch $scratch/$1$n.started; $hold $scratch/release-$1$n" >/dev/null 2>&1 &
+    slot_holders+=("$!"); started+=("$!")
+    until_true 10 test -e "$scratch/$1$n.started" || fail "slot holder $n did not start"
+  done
+}
+# A waiter that polls first is not the one that queued first: every round
+# frees one slot to two waiters queued in order, and the earlier one runs.
+# The second arrives half a second after the first and the slot frees at a
+# random moment after that, so a queue that served whoever polled next
+# would give the second the slot in most rounds.
+t_scoped_order() {
+  local round a b p
+  for round in 1 2 3 4 5 6 7 8; do
+    rm -f "$scratch"/release-* "$scratch/order" "$scratch"/so*.started
+    hold_slots so
+    "${hc[@]}" -s -- sh -c "echo A >> $scratch/order; $hold $scratch/release-w" >/dev/null 2>"$scratch/soA.err" &
+    a=$!; started+=("$a")
+    until_true 10 has_line '^==> heavy-check: queued \(scoped\)' "$scratch/soA.err" || fail "round $round: the first waiter did not queue"
+    sleep 0.5
+    "${hc[@]}" -s -- sh -c "echo B >> $scratch/order; $hold $scratch/release-w" >/dev/null 2>"$scratch/soB.err" &
+    b=$!; started+=("$b")
+    until_true 10 has_line '^==> heavy-check: queued \(scoped\)' "$scratch/soB.err" || fail "round $round: the second waiter did not queue"
+    sleep "0.$((RANDOM % 10))"
+    touch "$scratch/release-so$(( (round - 1) % 3 + 1 ))"
+    until_true 10 test -s "$scratch/order" || fail "round $round: no waiter ran after a slot freed"
+    [ "$(cat "$scratch/order")" = A ] || fail "round $round: the later waiter took the slot: $(tr '\n' ' ' < "$scratch/order")"
+    touch "$scratch/release-w" "$scratch/release-so1" "$scratch/release-so2" "$scratch/release-so3"
+    for p in "${slot_holders[@]}" "$a" "$b"; do wait "$p"; done
+    [ "$(tr '\n' ' ' < "$scratch/order")" = 'A B ' ] || fail "round $round: the waiters did not both run in order: $(tr '\n' ' ' < "$scratch/order")"
+  done
+}
+# A waiter killed outright leaves its ticket's file, which no longer holds
+# anyone back.
+t_scoped_stale() {
+  local a b p
+  rm -f "$scratch/order"
+  hold_slots st
+  "${hc[@]}" -s -- true >/dev/null 2>"$scratch/stA.err" &
+  a=$!; started+=("$a")
+  until_true 10 has_line '^==> heavy-check: queued \(scoped\)' "$scratch/stA.err" || fail 'the first waiter did not queue'
+  kill -KILL "$a"; wait "$a" 2>/dev/null || :
+  [ -n "$(find "$scratch" -maxdepth 1 -name 'lock.wait.*')" ] || fail 'the killed waiter left no ticket to step over'
+  "${hc[@]}" -s -- sh -c "echo B >> $scratch/order" >/dev/null 2>"$scratch/stB.err" &
+  b=$!; started+=("$b")
+  until_true 10 has_line '^==> heavy-check: queued \(scoped\)' "$scratch/stB.err" || fail 'the second waiter did not queue'
+  touch "$scratch/release-st1"
+  until_true 10 has_line '^B$' "$scratch/order" || fail "a dead waiter's ticket kept a later one waiting"
+  touch "$scratch/release-st2" "$scratch/release-st3"
+  for p in "${slot_holders[@]}" "$b"; do wait "$p"; done
+}
+
 # --- scoped and exclusive never together; a queued exclusive goes first -------
 t_precedence() {
   local pids=()
@@ -764,7 +822,7 @@ t_await_queue() {
 
 cases=(
   usage admission nested result frame roster fds fd_base elsewhere
-  exclusive redaction flock_direct scoped precedence
+  exclusive redaction flock_direct scoped scoped_order scoped_stale precedence
   hold hold_frame queue term int hup usr1 term_queued int_queued hup_queued term_queued_scoped refusals
   leftover sigkill nested_session registry_nested survivor survivor_remains
   await_result await_died await_line await_nested await_bare await_reused await_explicit
@@ -783,5 +841,6 @@ for c in "${cases[@]}"; do
   [ ! -e "$scratch/lock.holder" ] || fail 'a holder record was left'
   [ -z "$(find "$scratch" -maxdepth 1 -name 'lock.slot*.holder')" ] || fail 'a scoped holder record was left'
   [ "$(registries)" = 0 ] || fail 'a registry was left'
+  [ -z "$(find "$scratch" -maxdepth 1 -name 'lock.wait.*')" ] || fail 'a scoped ticket was left'
 done
 echo 'heavy check tests passed'

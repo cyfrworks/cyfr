@@ -13,7 +13,10 @@
 #              beside an exclusive check. The command's own grammar
 #              decides what fits a scoped slot: it sees
 #              HEAVY_CHECK_HELD=scoped and refuses what does not.
-# A queued exclusive check goes ahead of scoped runs that arrive after it.
+# Scoped checks take slots in the order they arrived: a free slot goes to
+# a scoped check only when no scoped check that queued before it is still
+# waiting for one. A queued exclusive check goes ahead of scoped runs that
+# arrive after it.
 #
 # HOLD (default 2700 s) bounds how long the command may keep the host:
 # at the deadline it is stopped and the exit is 124. A repeat recipe
@@ -93,6 +96,7 @@ queue_pid=
 cmd=
 survivors=
 finished=false
+ticket=
 
 # The command's words for a line another check reads or a kept file: a
 # NAME=value word, such as a database URL handed through env, is shown as
@@ -160,6 +164,7 @@ on_exit() {
       waited=$((waited + 1))
     done
   fi
+  if [ -n "$ticket" ]; then rm -f "$LOCK.wait.$ticket"; fi
   if $owner; then rm -f "$CONTAIN_REGISTRY"; fi
   if $wrote_record; then rm -f "$record"; fi
   if [ -n "$ran_at" ]; then
@@ -267,19 +272,61 @@ take() {
   [ "$status" = 0 ] || gave_up
 }
 
+# The scoped queue. Each scoped check takes the next ticket from
+# $LOCK.seq and holds a lock on its own file $LOCK.wait.<ticket> while it
+# waits for a slot; it tries the slots only when no earlier ticket's file
+# is still locked. A waiter that dies loses its lock with it, so the next
+# scan removes its file and nothing waits on a pid that may be reused.
+# $LOCK.queue serializes taking a ticket and scanning, so a file is never
+# seen before its owner has locked it.
+queue_lock() { exec {queue_fd}>>"$LOCK.queue" && flock -x "$queue_fd"; }
+queue_unlock() { exec {queue_fd}>&-; }
+take_ticket() {
+  local last
+  queue_lock || exit 1
+  last=$(cat "$LOCK.seq" 2>/dev/null) || :
+  case "$last" in ''|*[!0-9]*) last=0 ;; esac
+  ticket=$((last + 1))
+  printf '%s\n' "$ticket" > "$LOCK.seq" || exit 1
+  exec {ticket_fd}>"$LOCK.wait.$ticket" || exit 1
+  flock -n -x "$ticket_fd" || exit 1
+  queue_unlock
+}
+release_ticket() {
+  rm -f "$LOCK.wait.$ticket"
+  exec {ticket_fd}>&-
+  ticket=
+}
+first_in_line() {
+  local f k first=0
+  queue_lock || exit 1
+  for f in "$LOCK".wait.*; do
+    k=${f##*.wait.}
+    case "$k" in ''|*[!0-9]*) continue ;; esac
+    [ "$k" -lt "$ticket" ] || continue
+    if flock -n -x "$f" true 2>/dev/null; then rm -f "$f"; else first=1; fi
+  done
+  queue_unlock
+  return "$first"
+}
+
 if [ "$MODE" = scoped ]; then
+  take_ticket
   slot=
-  while [ -z "$slot" ]; do
-    for ((i=1; i<=SLOTS; i++)); do
-      exec 7>"$LOCK.slot$i" || exit 1
-      if flock -n -x 7; then slot=$i; break; fi
-      exec 7>&-
-    done
-    [ -n "$slot" ] && break
+  while :; do
+    if first_in_line; then
+      for ((i=1; i<=SLOTS; i++)); do
+        exec 7>"$LOCK.slot$i" || exit 1
+        if flock -n -x 7; then slot=$i; break; fi
+        exec 7>&-
+      done
+      [ -n "$slot" ] && break
+    fi
     announce
     [ "$(queue_left)" -gt 0 ] || gave_up
-    sleep 1
+    sleep 0.5
   done
+  release_ticket
   record="$LOCK.slot$slot.holder"
 else
   record="$LOCK.holder"
