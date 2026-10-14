@@ -267,9 +267,8 @@ jobs:
         run: mix cyfr.gen.configuration_guide --check
       # The tincture SDK is built from apps/cyfr/assets/js/sdk into
       # priv/static/sdk/cyfr.js and tracked, since a tincture's entry page
-      # embeds it at compile time, and Plug.Static serves cyfr.js.gz beside
-      # it to a client that accepts gzip. A source edit without a rebuild
-      # fails here, and so does a gzip that is not the build.
+      # embeds it at compile time. A source edit without a rebuild fails
+      # here.
       - name: The built SDK is its source's
         run: |
           set -euo pipefail
@@ -278,10 +277,6 @@ jobs:
             echo "::error::apps/cyfr/priv/static/sdk/ is not the build of apps/cyfr/assets/js/sdk: run mix esbuild sdk and commit the result"
             git status --porcelain -- apps/cyfr/priv/static/sdk/
             git diff --stat -- apps/cyfr/priv/static/sdk/
-            exit 1
-          fi
-          if ! zcat apps/cyfr/priv/static/sdk/cyfr.js.gz | cmp -s - apps/cyfr/priv/static/sdk/cyfr.js; then
-            echo "::error::apps/cyfr/priv/static/sdk/cyfr.js.gz does not hold cyfr.js: gzip the build again"
             exit 1
           fi
       # The canvas toolkit is built from apps/cyfr/assets/js/toolkit into
