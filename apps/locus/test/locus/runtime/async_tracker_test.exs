@@ -4,7 +4,7 @@
 defmodule Locus.Runtime.AsyncTrackerTest do
   use ExUnit.Case, async: true
 
-  import Locus.Runtime.Test.Wait
+  import Prima.Test.Wait
 
   alias Locus.Runtime.AsyncTracker
 

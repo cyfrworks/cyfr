@@ -4,37 +4,38 @@
 defmodule Locus.KeeperTest do
   @moduledoc """
   The client side of cyfr-locus's protocol. Against a fake keeper
-  (`Locus.Test.FakeKeeper`): a run delivers stdin, answers stdout, the log
-  line by line and the exit, and returns only after the spawn is reported
-  released; every spawn asks for the builder's memory bound, and there is
-  no asking for none; the deadline, a stdout bound, a cancel and the
-  caller's death release the spawn with no grace; a relay connection that
-  arrives after the release report still delivers its output; a refused
-  spawn and a lost channel answer at once; a spawn ended at its bound is
-  the wire's `memory` refusal and a bound that cannot be enforced its
-  `unavailable`, naming the option the deployment lacks. A long-lived
-  spawn (`Locus.Launcher`) answers its handle, and its owner hears the
-  relay attached, its stdout and stderr apart and its exit, then its
-  release, the last; stdin goes as frames of the codec's bound; `signal`,
-  `release` with a grace and `pool` are the vectors' requests, byte for
-  byte but for their own ids; an owner that dies has its spawn released
-  with no grace; a request the keeper would refuse is refused before it
-  is sent. Fd 3 is the channel only when it links to the socket
-  `KEEPER_CHANNEL` names. No credential leaves the client: a runner's
-  held assign, a frame not yet whole and every message carrying a
-  payload show no key or environment value in a status or a crash
-  report, a crash report names the reason the client stopped by its kind
-  alone, and a call to a client that is gone, or a run whose client
-  crashed, answers the failure by its kind alone. A runner's relay that
-  stops reading is closed once a write to it waits out the 5 s bound, and
-  its owner hears its control channel and relay closed. The spawns'
-  vectors are `Locus.KeeperVectorsTest`'s. Whether a real spawn is
-  isolated is the image tests' to prove.
+  (`Locus.Test.FakeKeeper`): a run delivers stdin, answers stdout, the
+  log line by line and the exit, and returns only after the spawn is
+  reported released; the deadline, a stdout bound, a cancel and the
+  caller's death release the spawn with no grace; a relay connection
+  that arrives after the client has read the exit and release reports
+  still delivers its output; a refused spawn and a lost channel answer
+  at once; a spawn ended at its bound is the wire's `memory` refusal and
+  a bound that cannot be enforced its `unavailable`, naming the option
+  the deployment lacks. A long-lived spawn (`Locus.Launcher`) answers
+  its handle, and its owner hears the relay attached, its stdout and
+  stderr apart and its exit, then its release, the last; stdin goes as
+  frames of the codec's bound; `signal`, `release` with a grace and
+  `pool` are the vectors' requests, byte for byte but for their own ids;
+  an owner that dies has its spawn released with no grace; a request the
+  keeper would refuse is refused before it is sent. No credential leaves
+  the client: a runner's held assign, a frame not yet whole and every
+  message carrying a payload show no key or environment value in a
+  status or a crash report, a crash report names the reason the client
+  stopped by its kind alone, and a call to a client that is gone, or a
+  run whose client crashed, answers the failure by its kind alone. A
+  runner's relay that stops reading is closed once a write to it waits
+  out the 5 s bound, and its owner hears its control channel and relay
+  closed. The spawns' vectors are `Locus.KeeperVectorsTest`'s, and the
+  cases that change the application or process environment
+  `Locus.KeeperEnvTest`'s. Whether a real spawn is isolated is the image
+  tests' to prove.
   """
 
-  use ExUnit.Case, async: false
+  use ExUnit.Case, async: true
 
   import ExUnit.CaptureLog
+  import Prima.Test.Wait
 
   alias Locus.Keeper
   alias Locus.Runtime.Test.ScriptedHost
@@ -66,30 +67,9 @@ defmodule Locus.KeeperTest do
     {result, Agent.get(lines, &Enum.reverse/1)}
   end
 
-  defp wait_until(check, attempts \\ 100) do
-    cond do
-      check.() -> :ok
-      attempts == 0 -> flunk("condition never held")
-      true -> Process.sleep(50) && wait_until(check, attempts - 1)
-    end
-  end
-
   describe "against the fake keeper" do
     setup do
-      {fake, channel} = FakeKeeper.start()
-      attach_dir = FakeKeeper.short_tmp_dir()
-      name = :"keeper_#{System.unique_integer([:positive])}"
-      {:ok, client} = Keeper.start_link(channel: channel, attach_dir: attach_dir, name: name)
-      Process.unlink(client)
-      :ok = :socket.setopt(channel, {:otp, :controlling_process}, client)
-
-      on_exit(fn ->
-        Process.exit(client, :kill)
-        Process.exit(fake, :kill)
-        File.rm_rf!(attach_dir)
-      end)
-
-      {:ok, fake: fake, name: name, client: client}
+      {:ok, FakeKeeper.start_client!()}
     end
 
     defp releases(fake, grace) do
@@ -102,7 +82,7 @@ defmodule Locus.KeeperTest do
     # may answer before its release is read, when the command ended on
     # its own first.
     defp awaited_releases(fake, grace) do
-      wait_until(fn -> releases(fake, grace) != [] end)
+      wait_until(fn -> releases(fake, grace) != [] end, 5_000)
       releases(fake, grace)
     end
 
@@ -125,29 +105,6 @@ defmodule Locus.KeeperTest do
       assert spawn["pool"] == "build"
       assert spawn["env"] == %{"GREETING" => "hello"}
       assert spawn["attach"]["token"] =~ ~r/^[0-9a-f]{64}$/
-    end
-
-    test "every spawn asks for the builder's memory bound, and none can ask for no bound", %{
-      name: name,
-      fake: fake
-    } do
-      assert {{:ok, _}, _} = run(name, "true")
-      assert {{:ok, _}, _} = run(name, "true", memory_bytes: 33_554_432)
-
-      Application.put_env(:locus, :memory_bytes, 268_435_456)
-      on_exit(fn -> Application.delete_env(:locus, :memory_bytes) end)
-      assert {{:ok, _}, _} = run(name, "true")
-
-      spawns = fake |> FakeKeeper.requests() |> Enum.filter(&(&1["type"] == "spawn"))
-      assert Enum.map(spawns, & &1["memory_bytes"]) == [1_073_741_824, 33_554_432, 268_435_456]
-
-      for none <- [nil, 0, -1, "1G"] do
-        assert_raise ArgumentError, ~r/memory bound/, fn ->
-          run(name, "true", memory_bytes: none)
-        end
-      end
-
-      assert length(Enum.filter(FakeKeeper.requests(fake), &(&1["type"] == "spawn"))) == 3
     end
 
     test "a spawn ended at its memory bound answers the wire's memory refusal with the bound", %{
@@ -186,13 +143,13 @@ defmodule Locus.KeeperTest do
     } do
       test = self()
       runner = spawn_link(fn -> send(test, {:answer, run(name, "exec sleep 30")}) end)
-      wait_until(fn -> Enum.any?(FakeKeeper.requests(fake), &(&1["type"] == "spawn")) end)
-      Process.sleep(200)
+      wait_until(fn -> FakeKeeper.running(fake) != [] end, 5_000, "the command to run")
 
       :ok = Locus.Executor.cancel(runner)
 
       assert_receive {:answer, {{:error, :cancelled}, _lines}}, 10_000
       assert [_] = awaited_releases(fake, 0)
+      wait_until(fn -> FakeKeeper.exits(fake) != [] end, 5_000, "the released command to end")
     end
 
     test "a run past its deadline releases the spawn with no grace", %{name: name, fake: fake} do
@@ -213,7 +170,7 @@ defmodule Locus.KeeperTest do
       # The fake reports the command's output at its exit, so the exit report
       # and the output race: a spawn the keeper already saw end has nothing
       # to release, and one still running is released with no grace.
-      wait_until(fn -> releases(fake, 0) != [] or FakeKeeper.exits(fake) != [] end)
+      wait_until(fn -> releases(fake, 0) != [] or FakeKeeper.exits(fake) != [] end, 5_000)
 
       if FakeKeeper.exits(fake) == [] do
         assert [_] = releases(fake, 0)
@@ -222,21 +179,74 @@ defmodule Locus.KeeperTest do
 
     test "a caller that dies has its spawn released", %{name: name, fake: fake} do
       caller = spawn(fn -> run(name, "exec sleep 30") end)
-      wait_until(fn -> Enum.any?(FakeKeeper.requests(fake), &(&1["type"] == "spawn")) end)
-      Process.sleep(200)
+      wait_until(fn -> FakeKeeper.running(fake) != [] end, 5_000, "the command to run")
       Process.exit(caller, :kill)
 
-      wait_until(fn -> releases(fake, 0) != [] end)
+      wait_until(fn -> releases(fake, 0) != [] end, 5_000)
+      wait_until(fn -> FakeKeeper.exits(fake) != [] end, 5_000, "the released command to end")
     end
 
-    test "a relay that connects after the release report still delivers its output", %{
-      name: name,
-      fake: fake
-    } do
-      :ok = FakeKeeper.mode(fake, :report_first)
+    test "a relay that dials once the client has read the exit and release reports still delivers its output",
+         %{name: name, fake: fake, client: client} do
+      test = self()
+
+      # The relay dials only once this holds: the client has taken the
+      # release report while no relay is attached to the run.
+      reported? = fn ->
+        entries = client |> :sys.get_state() |> Map.fetch!(:requests) |> Map.values()
+        seen? = Enum.any?(entries, &(&1.released and not &1.attached))
+        if seen?, do: send(test, :release_seen_unattached)
+        seen?
+      end
+
+      :ok = FakeKeeper.mode(fake, {:report_first, reported?})
       {result, _lines} = run(name, "echo late")
 
+      assert FakeKeeper.sent(fake) == [:exited, :released, :dial]
+      assert_received :release_seen_unattached
       assert {:ok, %{exit: {:status, 0}, stdout: "late\n"}} = result
+    end
+
+    # The channel is lost while the command runs: the relay ends before its
+    # last frames, by its client's loss in report-first mode, and leaves no
+    # command directory behind in either mode.
+    for mode <- [:normal, :report_first] do
+      @tag relay_mode: mode
+      test "a relay ended by the channel's loss mid-run removes its command directory (#{mode})",
+           %{name: name, fake: fake, client: client, relay_mode: mode} do
+        test = self()
+
+        if mode == :report_first do
+          reported? = fn ->
+            send(test, {:reporting, self()})
+
+            client
+            |> :sys.get_state()
+            |> Map.fetch!(:requests)
+            |> Map.values()
+            |> Enum.any?(&(&1.released and not &1.attached))
+          end
+
+          :ok = FakeKeeper.mode(fake, {:report_first, reported?})
+        end
+
+        task = Task.async(fn -> run(name, "sleep 0.3; echo done", timeout_ms: 2_000) end)
+        wait_until(fn -> FakeKeeper.running(fake) != [] end, 5_000, "the command to run")
+        [dir] = FakeKeeper.command_dirs(fake)
+        assert File.dir?(dir)
+
+        :ok = FakeKeeper.close(fake)
+        assert {{:error, _reason}, _lines} = Task.await(task, 5_000)
+
+        if mode == :report_first do
+          assert_receive {:reporting, relay}, 5_000
+          monitor = Process.monitor(relay)
+          assert_receive {:DOWN, ^monitor, :process, ^relay, _reason}, 5_000
+          refute File.exists?(dir)
+        else
+          wait_until(fn -> not File.exists?(dir) end, 5_000, "the command directory to go")
+        end
+      end
     end
 
     test "a spawn the pool cannot hold is refused as capacity", %{name: name, fake: fake} do
@@ -251,7 +261,7 @@ defmodule Locus.KeeperTest do
     } do
       ref = Process.monitor(client)
       task = Task.async(fn -> run(name, "exec sleep 30") end)
-      wait_until(fn -> Enum.any?(FakeKeeper.requests(fake), &(&1["type"] == "spawn")) end)
+      wait_until(fn -> Enum.any?(FakeKeeper.requests(fake), &(&1["type"] == "spawn")) end, 5_000)
 
       :ok = FakeKeeper.close(fake)
 
@@ -269,42 +279,17 @@ defmodule Locus.KeeperTest do
     test "an attach directory others can enter is refused" do
       Process.flag(:trap_exit, true)
       dir = FakeKeeper.short_tmp_dir()
+      {fake, channel} = FakeKeeper.start()
+
+      on_exit(fn ->
+        Process.exit(fake, :kill)
+        File.rm_rf!(dir)
+      end)
+
       File.chmod!(dir, 0o755)
-      {_fake, channel} = FakeKeeper.start()
 
       assert {:error, {:keeper_unavailable, {:attach_dir_not_private, ^dir}}} =
                Keeper.start_link(channel: channel, attach_dir: dir, name: :keeper_open_dir)
-
-      File.rm_rf!(dir)
-    end
-
-    test "fd 3 is the channel only when it is the socket cyfr-locus names" do
-      env = fn value -> fn "KEEPER_CHANNEL" -> value end end
-      link = fn target -> fn "/proc/self/fd/3" -> target end end
-
-      assert Keeper.channel_inherited?(env.("socket:[4242]"), link.({:ok, "socket:[4242]"}))
-      refute Keeper.channel_inherited?(env.("socket:[4242]"), link.({:ok, "socket:[1]"}))
-      refute Keeper.channel_inherited?(env.("socket:[4242]"), link.({:ok, "/dev/null"}))
-      refute Keeper.channel_inherited?(env.("socket:[4242]"), link.({:error, :enoent}))
-      refute Keeper.channel_inherited?(env.(nil), link.({:ok, "socket:[4242]"}))
-      refute Keeper.channel_inherited?(env.(""), link.({:ok, ""}))
-
-      # This VM was started by no keeper: whatever its fd 3 is, the
-      # variable names nothing it links to.
-      previous = System.get_env("KEEPER_CHANNEL")
-
-      on_exit(fn ->
-        if previous,
-          do: System.put_env("KEEPER_CHANNEL", previous),
-          else: System.delete_env("KEEPER_CHANNEL")
-      end)
-
-      System.delete_env("KEEPER_CHANNEL")
-      refute Keeper.channel_inherited?()
-
-      System.put_env("KEEPER_CHANNEL", "socket:[1]")
-      refute Keeper.channel_inherited?()
-      assert Keeper.channel_env() == "KEEPER_CHANNEL"
     end
   end
 
@@ -431,9 +416,12 @@ defmodule Locus.KeeperTest do
       hex = Base.encode16(p.key, case: :lower)
       :ok = :gen_tcp.send(relay, [<<4, 4_000::32>>, ~s({"keys":{"call":"#{hex}")])
 
-      wait_until(fn ->
-        Enum.any?(:sys.get_state(c.client).requests, fn {_ref, entry} -> entry.frames != "" end)
-      end)
+      wait_until(
+        fn ->
+          Enum.any?(:sys.get_state(c.client).requests, fn {_ref, entry} -> entry.frames != "" end)
+        end,
+        5_000
+      )
 
       assert clean?(p, :sys.get_status(c.client)), "the status shows a partial frame"
 
@@ -594,7 +582,7 @@ defmodule Locus.KeeperTest do
     end
 
     defp queued_at_least(pid, n) do
-      wait_until(fn -> elem(Process.info(pid, :message_queue_len), 1) >= n end)
+      wait_until(fn -> elem(Process.info(pid, :message_queue_len), 1) >= n end, 5_000)
     end
 
     # A process waiting for a write to a connection that does not take it:
@@ -669,7 +657,7 @@ defmodule Locus.KeeperTest do
 
       # Once a write waits on the full connection, the runner writes its
       # last line, which the client receives while it waits.
-      wait_until(fn -> writing?(Process.whereis(c.name)) end)
+      wait_until(fn -> writing?(Process.whereis(c.name)) end, 5_000)
       last = ~s({"type":"complete"}\n)
       :ok = :gen_tcp.send(relay, KeeperProtocol.frames(:control, last))
 
@@ -681,20 +669,7 @@ defmodule Locus.KeeperTest do
 
   describe "a long-lived spawn against the fake keeper" do
     setup do
-      {fake, channel} = FakeKeeper.start()
-      attach_dir = FakeKeeper.short_tmp_dir()
-      name = :"keeper_#{System.unique_integer([:positive])}"
-      {:ok, client} = Keeper.start_link(channel: channel, attach_dir: attach_dir, name: name)
-      Process.unlink(client)
-      :ok = :socket.setopt(channel, {:otp, :controlling_process}, client)
-
-      on_exit(fn ->
-        Process.exit(client, :kill)
-        Process.exit(fake, :kill)
-        File.rm_rf!(attach_dir)
-      end)
-
-      {:ok, fake: fake, name: name, client: client}
+      {:ok, FakeKeeper.start_client!()}
     end
 
     defp spawn_live(name, script, env \\ %{}) do
@@ -734,7 +709,7 @@ defmodule Locus.KeeperTest do
 
     # The requests of `type` the fake has recorded, once one has reached it.
     defp recorded(fake, type) do
-      wait_until(fn -> requests(fake, type) != [] end)
+      wait_until(fn -> requests(fake, type) != [] end, 5_000)
       requests(fake, type)
     end
 
@@ -865,7 +840,7 @@ defmodule Locus.KeeperTest do
       assert_receive {:spawned, handle}, 10_000
       Process.exit(owner, :kill)
 
-      wait_until(fn -> Enum.any?(requests(fake, "release"), &(&1["grace_ms"] == 0)) end)
+      wait_until(fn -> Enum.any?(requests(fake, "release"), &(&1["grace_ms"] == 0)) end, 5_000)
       [release] = requests(fake, "release")
       assert release["spawn_id"] == handle.spawn_id
     end

@@ -133,18 +133,25 @@ defmodule Locus.Runtime.KeeperChannelTest do
   test "a handle spawns a runner with a control channel and its explicit environment, in the runner pool",
        %{keeper: keeper, name: name, dir: dir} do
     handle = start_handle!(name)
+    {:ok, bound} = Locus.Runtime.Settings.runner_memory_bytes([])
 
-    assert %{
+    # The whole request but its own id and attach target: a field dropped
+    # or added, the isolation among them, fails here.
+    assert %{"id" => id, "attach" => %{"path" => attach_path, "token" => token}} =
+             spawned = request(keeper)
+
+    assert Map.drop(spawned, ["id", "attach"]) == %{
              "v" => 1,
              "type" => "spawn",
-             "id" => id,
              "pool" => "runner",
              "control" => true,
+             "isolation" => "netns",
+             "memory_bytes" => bound,
              "argv" => ["/app/bin/locus", "start"],
-             "env" => @spec_env,
-             "attach" => %{"path" => attach_path, "token" => token}
-           } = request(keeper)
+             "env" => @spec_env
+           }
 
+    assert Map.keys(spawned["attach"]) == ["path", "token"]
     assert attach_path == Path.join(dir, "attach.sock")
     assert String.match?(token, ~r/\A[0-9a-f]{64}\z/)
 
@@ -333,7 +340,7 @@ defmodule Locus.Runtime.KeeperChannelTest do
     # Its retirement reported, the runner is forgotten.
     reply(keeper, %{v: 1, type: "released", spawn_id: spawn_id})
 
-    Locus.Runtime.Test.Wait.wait_until(
+    Prima.Test.Wait.wait_until(
       fn -> :sys.get_state(client).requests == %{} end,
       5_000,
       "the retired runner to be forgotten"

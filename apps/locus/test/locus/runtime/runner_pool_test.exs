@@ -22,7 +22,7 @@ defmodule Locus.Runtime.RunnerPoolTest do
   use ExUnit.Case, async: true
 
   import ExUnit.CaptureLog
-  import Locus.Runtime.Test.Wait
+  import Prima.Test.Wait
 
   alias Prima.RunnerControl
   alias Locus.Runtime.{RunnerPool, RunnerProcess}
@@ -271,9 +271,12 @@ defmodule Locus.Runtime.RunnerPoolTest do
 
     assert_receive {RunnerPool, ^pid, {:exit, ^id, ["att_1", "att_child"]}}
     assert counts(pool).tainted == 1
-    # Its end after the grace is not a second event.
-    refute_receive {RunnerPool, ^pid, _}, 1_500
-    wait_until(fn -> Enum.empty?(RunnerPool.runners(pool)) end)
+    # Its end after the grace is not a second event: `retire_busy/1`
+    # answers once the keeper has retired it, by when anything the pool
+    # tells of its end has been sent.
+    assert :ok = RunnerPool.retire_busy(pool)
+    assert RunnerPool.runners(pool) == []
+    refute_received {RunnerPool, ^pid, _}
   end
 
   test "a closed channel or an exited process with the subtree assigned is reported gone", %{

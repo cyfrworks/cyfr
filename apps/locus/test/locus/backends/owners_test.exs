@@ -17,6 +17,8 @@ defmodule Locus.Backends.OwnersTest do
 
   use ExUnit.Case, async: false
 
+  import Prima.Test.Wait
+
   alias Locus.Backends.{Backend, LeaseSweeper, Owners}
 
   @probe Path.expand("fixtures/probe.mjs", __DIR__)
@@ -123,14 +125,6 @@ defmodule Locus.Backends.OwnersTest do
 
   defp held(owners), do: :sys.get_state(owners).owners
 
-  defp wait_until(check, attempts \\ 200) do
-    cond do
-      check.() -> :ok
-      attempts == 0 -> flunk("condition never held")
-      true -> Process.sleep(25) && wait_until(check, attempts - 1)
-    end
-  end
-
   defp backend_pid(owners, server, version, name) do
     {:ok, %{backends: backends}} = Owners.admit(owners, invoke(server, version))
     {^name, pid} = List.keyfind(backends, name, 0)
@@ -181,7 +175,7 @@ defmodule Locus.Backends.OwnersTest do
       # A higher generation replaces it again; the retired versions are gone
       # once their backends stop.
       assert {:ok, _} = sync(owners, "srv", {3, 1}, a)
-      wait_until(fn -> map_size(held(owners)) == 1 end)
+      wait_until(fn -> map_size(held(owners)) == 1 end, 5_000)
     end
 
     test "an equal sync while the owner drains is lapsed", ctx do
@@ -286,7 +280,7 @@ defmodule Locus.Backends.OwnersTest do
       pending = Task.async(fn -> sync(owners, "a", {1, 1}, idle_backends(1)) end)
 
       # The sync waits on the pool; the table does not.
-      wait_until(fn -> :sys.get_state(owners).busy != nil end)
+      wait_until(fn -> :sys.get_state(owners).busy != nil end, 5_000)
       assert Owners.boot(owners) == "bb_owners"
       assert {:error, :unknown_owner} = Owners.admit(owners, invoke("a", {1, 1}))
       assert :ok = Owners.sweep(owners)
@@ -320,7 +314,7 @@ defmodule Locus.Backends.OwnersTest do
 
       # Retired, the owner holds its uids until its backends stop.
       assert {:error, :capacity} = sync(owners, "b", {1, 1}, idle_backends(1))
-      wait_until(fn -> held(owners) == %{} end)
+      wait_until(fn -> held(owners) == %{} end, 5_000)
 
       # Then both uids are free, and no more than both.
       assert {:ok, _} = sync(owners, "b", {1, 1}, idle_backends(2))
@@ -429,7 +423,11 @@ defmodule Locus.Backends.OwnersTest do
       assert {:ok, %{owners: [%{state: :draining, lease_ms_left: 0}]}} =
                control(owners, 1, status)
 
-      wait_until(fn -> Owners.admit(owners, invoke("a", {1, 1})) == {:error, :unknown_owner} end)
+      wait_until(
+        fn -> Owners.admit(owners, invoke("a", {1, 1})) == {:error, :unknown_owner} end,
+        5_000
+      )
+
       assert DynamicSupervisor.count_children(ctx.supervisor).active == 0
     end
 
@@ -450,7 +448,7 @@ defmodule Locus.Backends.OwnersTest do
 
       assert {:ok, _} = sync(owners, "a", {1, 1}, probe, idle_ms: 1_000)
       pid = backend_pid(owners, "a", {1, 1}, "probe")
-      wait_until(fn -> Backend.status(pid).status == :ready end)
+      wait_until(fn -> Backend.status(pid).status == :ready end, 5_000)
 
       # Used within the period: kept.
       advance(ctx, 999)
@@ -459,12 +457,12 @@ defmodule Locus.Backends.OwnersTest do
 
       advance(ctx, 1)
       :ok = LeaseSweeper.sweep(owners)
-      wait_until(fn -> Backend.status(pid).status == :idle end)
+      wait_until(fn -> Backend.status(pid).status == :idle end, 5_000)
       assert %{tools: 2} = Backend.status(pid)
 
       # Its uid is free once its process is retired: another owner takes it.
       [owner] = Map.values(held(owners))
-      wait_until(fn -> not held(owners)[owner.id].backends["probe"].slot end)
+      wait_until(fn -> not held(owners)[owner.id].backends["probe"].slot end, 5_000)
       assert {:ok, _} = sync(owners, "b", {1, 1}, [{"other", @idle, %{}}])
 
       # With no uid free, the call cannot wake it.
@@ -474,7 +472,7 @@ defmodule Locus.Backends.OwnersTest do
       # Once one is, the call wakes it and is answered.
       release = %{type: :release, owners: [%{athanor: @athanor, server: "b", e: 1}]}
       assert {:ok, _} = control(owners, 1, release)
-      wait_until(fn -> map_size(held(owners)) == 1 end)
+      wait_until(fn -> map_size(held(owners)) == 1 end, 5_000)
 
       assert {:ok, %{"content" => [%{"text" => ~s({"said":"again"})}]}} =
                Backend.call_tool(pid, "echo", %{"said" => "again"})
@@ -501,9 +499,12 @@ defmodule Locus.Backends.OwnersTest do
       renew = %{type: :renew, lease_ms: 30_000, owners: [%{athanor: @athanor, server: "a", e: 1}]}
 
       # Ready with its tools listed (the catalogue changed), then running.
-      wait_until(fn ->
-        match?({:ok, %{renewed: [%{state: :running}]}}, control(owners, 1, renew))
-      end)
+      wait_until(
+        fn ->
+          match?({:ok, %{renewed: [%{state: :running}]}}, control(owners, 1, renew))
+        end,
+        5_000
+      )
 
       assert {:ok, %{renewed: [%{state: :running, rev: 2}]}} = control(owners, 1, renew)
 
@@ -535,14 +536,17 @@ defmodule Locus.Backends.OwnersTest do
       probe = [{"probe", probe(), %{}}]
       assert {:ok, _} = sync(owners, "a", {1, 1}, probe)
       pid = backend_pid(owners, "a", {1, 1}, "probe")
-      wait_until(fn -> Backend.status(pid).status == :ready end)
+      wait_until(fn -> Backend.status(pid).status == :ready end, 5_000)
 
       assert {:error, {:tool_error, _}} = Backend.call_tool(pid, "crash", %{})
       status = %{type: :status, owners: [%{athanor: @athanor, server: "a"}]}
 
-      wait_until(fn ->
-        match?({:ok, %{owners: [%{rev: 3}]}}, control(owners, 1, status))
-      end)
+      wait_until(
+        fn ->
+          match?({:ok, %{owners: [%{rev: 3}]}}, control(owners, 1, status))
+        end,
+        5_000
+      )
 
       assert {:ok, %{owners: [%{backends: [backend]}]}} = control(owners, 1, status)
       assert %{status: :crashed, tools: 0} = backend
@@ -555,14 +559,17 @@ defmodule Locus.Backends.OwnersTest do
       probe = [{"probe", probe(), %{}}]
       assert {:ok, _} = sync(owners, "a", {1, 1}, probe)
       pid = backend_pid(owners, "a", {1, 1}, "probe")
-      wait_until(fn -> Backend.status(pid).status == :ready end)
+      wait_until(fn -> Backend.status(pid).status == :ready end, 5_000)
 
       # A line that is no answer: the call awaits one until it is stopped.
       waiting = Task.async(fn -> Backend.call_tool(pid, "flood", %{"bytes" => 8}) end)
 
-      wait_until(fn ->
-        Locus.Backends.Relay.pending_count(:sys.get_state(pid).relay) == 1
-      end)
+      wait_until(
+        fn ->
+          Locus.Backends.Relay.pending_count(:sys.get_state(pid).relay) == 1
+        end,
+        5_000
+      )
 
       assert {:error, {:tool_error, "backend busy: 1 calls in flight"}} =
                Backend.call_tool(pid, "echo", %{})

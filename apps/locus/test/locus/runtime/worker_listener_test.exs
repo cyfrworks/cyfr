@@ -474,7 +474,7 @@ defmodule Locus.Runtime.WorkerListenerTest do
 
     # The runner attaches, asks for its artifact (which this host has none
     # of) and closes the attempt failed, all as signed host calls.
-    Locus.Runtime.Test.Wait.wait_until(
+    Prima.Test.Wait.wait_until(
       fn -> ScriptedHost.requests(context.host, "fail") != [] end,
       10_000
     )

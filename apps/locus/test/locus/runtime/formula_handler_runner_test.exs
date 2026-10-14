@@ -20,7 +20,7 @@ defmodule Locus.Runtime.FormulaHandlerRunnerTest do
 
   use ExUnit.Case, async: false
 
-  import Locus.Runtime.Test.Wait
+  import Prima.Test.Wait
 
   alias Prima.WorkerAuth
   alias Locus.Runtime.FormulaHandler

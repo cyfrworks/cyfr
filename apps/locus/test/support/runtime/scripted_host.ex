@@ -128,13 +128,17 @@ defmodule Locus.Runtime.Test.ScriptedHost do
   """
   @spec serve!(t()) :: String.t()
   def serve!(%{url: url}) do
-    previous = Locus.Runtime.Test.Env.put(:host_url, url)
-    restart_service!()
+    # Registered before the change, so a change or restart that fails
+    # still puts the service back.
+    previous = Locus.Runtime.Settings.env()
 
     ExUnit.Callbacks.on_exit(fn ->
       Locus.Runtime.Test.Env.restore(previous, [:host_url])
       restart_service!()
     end)
+
+    Locus.Runtime.Test.Env.put(:host_url, url)
+    restart_service!()
 
     {:ok, %{boot: boot}} = Locus.Runtime.WorkerService.status()
     boot

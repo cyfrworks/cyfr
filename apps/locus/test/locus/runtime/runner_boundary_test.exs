@@ -18,7 +18,7 @@ defmodule Locus.Runtime.RunnerBoundaryTest do
 
   use ExUnit.Case, async: false
 
-  import Locus.Runtime.Test.Wait
+  import Prima.Test.Wait
 
   alias Locus.Runtime.Test.ScriptedHost
   alias Locus.Runtime.{RunnerPool, RunnerProcess, WorkerService}

@@ -23,7 +23,7 @@ defmodule Locus.Runtime.KeeperMemoryTest do
   use ExUnit.Case, async: false
 
   import ExUnit.CaptureLog
-  import Locus.Runtime.Test.Wait
+  import Prima.Test.Wait
 
   alias Locus.Runtime.Keeper.Channel
   alias Locus.Runtime.{RunnerPool, RunnerProcess}

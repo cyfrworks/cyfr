@@ -35,7 +35,7 @@ defmodule Locus.KeeperVectorsTest do
   attach frame of the wrong shape is closed, the token still the spawn's.
   """
 
-  use ExUnit.Case, async: false
+  use ExUnit.Case, async: true
 
   import ExUnit.CaptureLog
 

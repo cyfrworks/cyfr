@@ -13,7 +13,7 @@ defmodule Locus.Test.ProcessFamily do
   """
 
   import ExUnit.Assertions
-  import Locus.Runtime.Test.Wait
+  import Prima.Test.Wait
 
   alias Locus.DirectLauncher
   alias Locus.DirectLauncher.Runner

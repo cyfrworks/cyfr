@@ -19,7 +19,13 @@ defmodule Locus.Test.FakeKeeper do
   - `{:exit, exited}` — the command is never run: the relay writes one log
     line and the leader is reported ended as `exited` says (`:code`,
     `:signal`, `:memory_exceeded`), killed at its memory bound among them
-  - `:report_first` — `exited` and `released` are sent before the relay dials
+  - `{:report_first, reported?}` — a build's command runs before its relay
+    dials, so on no input, and its `exited` and `released` are written to
+    the channel; the relay waits until `reported?` (a function of no
+    arguments) holds, the client having read them, then dials, presents
+    the token, reads the stdin the client sends and drops it, and sends
+    the command's output. In every other mode a build's relay dials first
+    and the command reads the stdin the client sends.
   - `:pool_refused` — every `pool` request is refused with `unknown_pool`
 
   A spawn in any pool but `build` is long-lived: its relay carries stdin
@@ -60,6 +66,28 @@ defmodule Locus.Test.FakeKeeper do
   end
 
   @doc """
+  A fake and a `Locus.Keeper` client on its channel, both stopped and the
+  client's attach directory removed when the calling test ends: answers
+  `%{fake: fake, name: name, client: client}`, `name` the client's.
+  """
+  def start_client! do
+    {fake, channel} = start()
+    attach_dir = short_tmp_dir()
+    name = :"keeper_#{System.unique_integer([:positive])}"
+
+    ExUnit.Callbacks.on_exit(fn ->
+      Process.exit(fake, :kill)
+      File.rm_rf!(attach_dir)
+    end)
+
+    {:ok, client} = Locus.Keeper.start_link(channel: channel, attach_dir: attach_dir, name: name)
+    Process.unlink(client)
+    ExUnit.Callbacks.on_exit(fn -> Process.exit(client, :kill) end)
+    :ok = :socket.setopt(channel, {:otp, :controlling_process}, client)
+    %{fake: fake, name: name, client: client}
+  end
+
+  @doc """
   A private directory short enough for a unix socket path, new to this
   call: its name carries this VM's OS pid, so another partition's is
   never the same one, and a directory an earlier run left behind under a
@@ -86,6 +114,19 @@ defmodule Locus.Test.FakeKeeper do
   @doc "The spawn ids whose exit the fake has reported, in order."
   def exits(fake), do: GenServer.call(fake, :exits)
 
+  @doc """
+  What the fake has done of every spawn's end, in the order it did it:
+  `:exited` and `:released` once the report is written to the channel,
+  `:dial` once the relay has connected and written its token.
+  """
+  def sent(fake), do: GenServer.call(fake, :sent)
+
+  @doc "Every command directory the fake's relays made, oldest first; each is removed when its relay ends."
+  def command_dirs(fake), do: GenServer.call(fake, :command_dirs)
+
+  @doc "The spawn ids whose command the fake runs or has run, as an OS process it can signal."
+  def running(fake), do: GenServer.call(fake, :running)
+
   @doc "Closes the channel, as cyfr-locus exiting would."
   def close(fake), do: GenServer.call(fake, :close)
 
@@ -95,7 +136,17 @@ defmodule Locus.Test.FakeKeeper do
     spawn_link(fn -> read(channel, fake) end)
 
     {:ok,
-     %{channel: channel, buffer: "", mode: :normal, requests: [], exits: [], spawns: %{}, next: 0}}
+     %{
+       channel: channel,
+       buffer: "",
+       mode: :normal,
+       requests: [],
+       exits: [],
+       sent: [],
+       command_dirs: [],
+       spawns: %{},
+       next: 0
+     }}
   end
 
   defp read(channel, fake) do
@@ -113,6 +164,18 @@ defmodule Locus.Test.FakeKeeper do
   def handle_call({:mode, mode}, _from, state), do: {:reply, :ok, %{state | mode: mode}}
   def handle_call(:requests, _from, state), do: {:reply, Enum.reverse(state.requests), state}
   def handle_call(:exits, _from, state), do: {:reply, Enum.reverse(state.exits), state}
+  def handle_call(:sent, _from, state), do: {:reply, Enum.reverse(state.sent), state}
+
+  def handle_call(:command_dirs, _from, state),
+    do: {:reply, Enum.reverse(state.command_dirs), state}
+
+  def handle_call(:running, _from, state),
+    do: {:reply, for({spawn_id, os_pid} <- state.spawns, is_integer(os_pid), do: spawn_id), state}
+
+  # A relay's report written before it answers, so what the relay does
+  # next follows it on the channel.
+  def handle_call({:send, message}, _from, state), do: {:reply, :ok, write(state, message)}
+  def handle_call(:dialed, _from, state), do: {:reply, :ok, %{state | sent: [:dial | state.sent]}}
 
   def handle_call(:close, _from, state) do
     :socket.close(state.channel)
@@ -134,27 +197,43 @@ defmodule Locus.Test.FakeKeeper do
     {:noreply, state}
   end
 
-  # An exit the fake reports is recorded, so a test can tell a spawn the
-  # keeper saw end from one it had to release.
-  def handle_info({:send, %{type: "exited", spawn_id: spawn_id} = message}, state) do
-    :socket.send(state.channel, [Jason.encode!(Map.put(message, :v, 1)), ?\n])
-    {:noreply, %{state | exits: [spawn_id | state.exits]}}
+  def handle_info({:send, message}, state), do: {:noreply, write(state, message)}
+
+  def handle_info({:command_dir, dir}, state),
+    do: {:noreply, %{state | command_dirs: [dir | state.command_dirs]}}
+
+  # A signal asked for before the command's pid was known is sent now.
+  def handle_info({:running, spawn_id, os_pid}, state) do
+    with {:held, sigs} <- state.spawns[spawn_id],
+         do: for(sig <- Enum.reverse(sigs), do: signal_group(os_pid, sig))
+
+    {:noreply, put_in(state.spawns[spawn_id], os_pid)}
   end
 
-  def handle_info({:send, message}, state) do
-    :socket.send(state.channel, [Jason.encode!(Map.put(message, :v, 1)), ?\n])
-    {:noreply, state}
-  end
-
-  def handle_info({:running, spawn_id, os_pid}, state),
-    do: {:noreply, put_in(state.spawns[spawn_id], os_pid)}
-
-  def handle_info({:kill_after, spawn_id}, state) do
-    signal_group(state.spawns[spawn_id], "KILL")
-    {:noreply, state}
-  end
+  def handle_info({:kill_after, spawn_id}, state), do: {:noreply, signal(state, spawn_id, "KILL")}
 
   def handle_info(_message, state), do: {:noreply, state}
+
+  # An exit the fake reports is recorded, so a test can tell a spawn the
+  # keeper saw end from one it had to release; an exit and a release are
+  # recorded only once the channel took them.
+  defp write(state, message) do
+    sent = :socket.send(state.channel, [Jason.encode!(Map.put(message, :v, 1)), ?\n])
+
+    case message do
+      _message when sent != :ok ->
+        state
+
+      %{type: "exited", spawn_id: spawn_id} ->
+        %{state | exits: [spawn_id | state.exits], sent: [:exited | state.sent]}
+
+      %{type: "released"} ->
+        %{state | sent: [:released | state.sent]}
+
+      _other ->
+        state
+    end
+  end
 
   defp handle_request(%{"type" => "spawn", "id" => id}, %{mode: mode} = state)
        when mode in [:capacity, :memory_unavailable] do
@@ -176,19 +255,19 @@ defmodule Locus.Test.FakeKeeper do
     state
   end
 
-  defp handle_request(%{"type" => "signal", "spawn_id" => spawn_id, "sig" => "SIG" <> sig}, state) do
-    signal_group(state.spawns[spawn_id], sig)
-    state
-  end
+  defp handle_request(
+         %{"type" => "signal", "spawn_id" => spawn_id, "sig" => "SIG" <> sig},
+         state
+       ),
+       do: signal(state, spawn_id, sig)
 
   defp handle_request(
          %{"type" => "release", "spawn_id" => spawn_id, "grace_ms" => grace_ms},
          state
        )
        when grace_ms > 0 do
-    signal_group(state.spawns[spawn_id], "TERM")
     Process.send_after(self(), {:kill_after, spawn_id}, grace_ms)
-    state
+    signal(state, spawn_id, "TERM")
   end
 
   defp handle_request(%{"type" => "spawn"} = request, state) do
@@ -205,12 +284,30 @@ defmodule Locus.Test.FakeKeeper do
     %{state | spawns: Map.put(state.spawns, spawn_id, nil)}
   end
 
-  defp handle_request(%{"type" => "release", "spawn_id" => spawn_id}, state) do
-    signal_group(state.spawns[spawn_id], "KILL")
-    state
-  end
+  defp handle_request(%{"type" => "release", "spawn_id" => spawn_id}, state),
+    do: signal(state, spawn_id, "KILL")
 
   defp handle_request(_request, state), do: state
+
+  # A spawn whose command has not yet started holds the signal until it
+  # does, as cyfr-locus signals a spawn it has answered whether or not its
+  # command runs yet; an unknown spawn takes none.
+  defp signal(state, spawn_id, sig) do
+    case Map.fetch(state.spawns, spawn_id) do
+      {:ok, os_pid} when is_integer(os_pid) ->
+        signal_group(os_pid, sig)
+        state
+
+      {:ok, nil} ->
+        put_in(state.spawns[spawn_id], {:held, [sig]})
+
+      {:ok, {:held, sigs}} ->
+        put_in(state.spawns[spawn_id], {:held, [sig | sigs]})
+
+      :error ->
+        state
+    end
+  end
 
   # The command leads its own process group; the direct signal covers one
   # that does not. The group's negative id follows `--`, which a Linux
@@ -224,11 +321,45 @@ defmodule Locus.Test.FakeKeeper do
 
   defp signal_group(_os_pid, _sig), do: :ok
 
+  # A relay's command directory is recorded, and removed however the relay
+  # ends: a client or channel gone mid-run ends it before its last frames.
   defp relay(fake, spawn_id, request, mode) do
     dir = short_tmp_dir()
+    send(fake, {:command_dir, dir})
+
+    try do
+      relay(fake, spawn_id, request, mode, dir)
+    after
+      File.rm_rf!(dir)
+    end
+  end
+
+  defp relay(fake, spawn_id, %{"pool" => "build"} = request, {:report_first, reported?}, dir) do
     input = Path.join(dir, "stdin")
     output = Path.join(dir, "stdout")
+    File.write!(input, "")
 
+    {exited, stdout, stderr} = run(fake, spawn_id, request, nil, {dir, input, output})
+    :ok = GenServer.call(fake, {:send, exited})
+    :ok = GenServer.call(fake, {:send, %{type: "released", spawn_id: spawn_id}})
+    Prima.Test.Wait.wait_until(reported?, 5_000, "the client to read the release report")
+
+    conn = dial(fake, request)
+    _stdin = read_stdin(conn, [])
+    finish(conn, [frames(@stream_stderr, stderr), frames(@stream_stdout, stdout)])
+  end
+
+  defp relay(fake, spawn_id, request, mode, dir) do
+    input = Path.join(dir, "stdin")
+    output = Path.join(dir, "stdout")
+    conn = dial(fake, request)
+
+    if request["pool"] == "build",
+      do: run_build(fake, spawn_id, request, mode, conn, {dir, input, output}),
+      else: live(fake, spawn_id, request, conn, dir)
+  end
+
+  defp dial(fake, request) do
     {:ok, conn} =
       :gen_tcp.connect({:local, request["attach"]["path"]}, 0, [
         :binary,
@@ -237,36 +368,36 @@ defmodule Locus.Test.FakeKeeper do
       ])
 
     :ok = :gen_tcp.send(conn, frame(@stream_attach, request["attach"]["token"]))
-
-    if request["pool"] == "build",
-      do: run_build(fake, spawn_id, request, mode, conn, {dir, input, output}),
-      else: live(fake, spawn_id, request, conn, dir)
+    :ok = GenServer.call(fake, :dialed)
+    conn
   end
 
   defp run_build(fake, spawn_id, request, mode, conn, {dir, input, output}) do
     File.write!(input, read_stdin(conn, []))
 
     case mode do
-      {:exit, exited} -> report(fake, spawn_id, conn, dir, exited)
-      mode -> run(fake, spawn_id, request, mode, conn, {dir, input, output})
+      {:exit, exited} ->
+        finish(conn, [frames(@stream_stderr, "the command's last words\n")])
+        send(fake, {:send, Map.merge(%{type: "exited", spawn_id: spawn_id}, exited)})
+        send(fake, {:send, %{type: "released", spawn_id: spawn_id}})
+
+      _mode ->
+        {exited, stdout, ""} = run(fake, spawn_id, request, conn, {dir, input, output})
+        finish(conn, [frames(@stream_stdout, stdout)])
+        send(fake, {:send, exited})
+        send(fake, {:send, %{type: "released", spawn_id: spawn_id}})
     end
   end
 
-  defp report(fake, spawn_id, conn, dir, exited) do
-    :gen_tcp.send(conn, [
-      frames(@stream_stderr, "the command's last words\n"),
-      frame(@stream_stdout, ""),
-      frame(@stream_stderr, "")
-    ])
-
+  # The relay's last frames, then the end of both streams.
+  defp finish(conn, frames) do
+    :gen_tcp.send(conn, [frames, frame(@stream_stdout, ""), frame(@stream_stderr, "")])
     :gen_tcp.close(conn)
-    File.rm_rf!(dir)
-
-    send(fake, {:send, Map.merge(%{type: "exited", spawn_id: spawn_id}, exited)})
-    send(fake, {:send, %{type: "released", spawn_id: spawn_id}})
   end
 
-  defp run(fake, spawn_id, request, mode, conn, {dir, input, output}) do
+  # The command's stderr goes to `conn` as it arrives, or is held for a
+  # relay that has not dialled; its stdout is read at its exit.
+  defp run(fake, spawn_id, request, conn, {dir, input, output}) do
     env = Enum.map(request["env"], fn {k, v} -> "#{k}=#{v}" end)
 
     port =
@@ -282,8 +413,7 @@ defmodule Locus.Test.FakeKeeper do
 
     {:os_pid, os_pid} = Port.info(port, :os_pid)
     send(fake, {:running, spawn_id, os_pid})
-    status = pump(port, conn)
-    stdout = File.read!(output)
+    {status, stderr} = pump(port, conn, [])
 
     exited = %{
       type: "exited",
@@ -296,25 +426,7 @@ defmodule Locus.Test.FakeKeeper do
     exited =
       if status == 137, do: %{exited | code: nil, signal: "SIGKILL"}, else: exited
 
-    if mode == :report_first do
-      send(fake, {:send, exited})
-      send(fake, {:send, %{type: "released", spawn_id: spawn_id}})
-      Process.sleep(200)
-    end
-
-    :gen_tcp.send(conn, [
-      frames(@stream_stdout, stdout),
-      frame(@stream_stdout, ""),
-      frame(@stream_stderr, "")
-    ])
-
-    :gen_tcp.close(conn)
-    File.rm_rf!(dir)
-
-    unless mode == :report_first do
-      send(fake, {:send, exited})
-      send(fake, {:send, %{type: "released", spawn_id: spawn_id}})
-    end
+    {exited, File.read!(output), stderr}
   end
 
   # A long-lived spawn: stdin frames reach the command as they arrive, its
@@ -362,7 +474,6 @@ defmodule Locus.Test.FakeKeeper do
 
     :gen_tcp.send(conn, [frame(@stream_stdout, ""), frame(@stream_stderr, "")])
     :gen_tcp.close(conn)
-    File.rm_rf!(dir)
 
     exited =
       if status > 128,
@@ -438,14 +549,17 @@ defmodule Locus.Test.FakeKeeper do
     end
   end
 
-  defp pump(port, conn) do
+  defp pump(port, conn, held) do
     receive do
+      {^port, {:data, data}} when conn == nil ->
+        pump(port, conn, [held | data])
+
       {^port, {:data, data}} ->
         :gen_tcp.send(conn, frames(@stream_stderr, data))
-        pump(port, conn)
+        pump(port, conn, held)
 
       {^port, {:exit_status, status}} ->
-        status
+        {status, IO.iodata_to_binary(held)}
     end
   end
 

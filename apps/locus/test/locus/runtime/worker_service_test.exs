@@ -36,7 +36,7 @@ defmodule Locus.Runtime.WorkerServiceTest do
   use ExUnit.Case, async: false
 
   import ExUnit.CaptureLog
-  import Locus.Runtime.Test.Wait
+  import Prima.Test.Wait
 
   alias Prima.{HostAPI, RunnerControl, WorkerAuth, WorkerWire}
   alias Locus.Runtime.Test.{ScriptedHost, ScriptedKeeper}

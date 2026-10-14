@@ -31,6 +31,8 @@ defmodule Locus.Runtime.RelayTest do
 
   use ExUnit.Case, async: true
 
+  import Prima.Test.Wait
+
   alias Prima.{Assignment, AttachedRequest, RunnerRelay, WorkerAuth, WorkerWire}
   alias Locus.Runtime.{Egress, HostClient}
   alias Locus.Runtime.Relay.Runner, as: Endpoint
@@ -786,14 +788,6 @@ defmodule Locus.Runtime.RelayTest do
     Base.url_encode64(<<iv::binary, Bitwise.bxor(first, 1), tag::binary, ciphertext::binary>>,
       padding: false
     )
-  end
-
-  defp wait_until(fun, tries \\ 100) do
-    cond do
-      fun.() -> :ok
-      tries == 0 -> flunk("the condition never held")
-      true -> Process.sleep(20) && wait_until(fun, tries - 1)
-    end
   end
 
   test "neither end shows an attempt's keys in its status", %{host: host} do
