@@ -17,19 +17,24 @@ defmodule Arca.PublicationContractS3Test do
   Excluded from ordinary runs. The `s3-minio` CI job runs it with
   `mix test --only s3_integration` against its pinned
   MinIO container; `Arca.Test.S3Env` names the variables that point it
-  at another store instead. Each run stages under a prefix of its own, so
-  two runs against one bucket never meet.
+  at another store instead. Each run stages under a prefix of its own
+  (`Arca.Test.S3Env.run_prefix/1`), deleted on exit, so two runs against
+  one bucket never meet.
   """
 
   use Arca.PublicationContract,
     adapters: [%{adapter: Arca.Adapters.S3}],
     moduletag: :s3_integration
 
-  setup_all do
-    previous = Arca.Test.S3Env.configure!(prefix: "publication/#{System.system_time(:second)}")
-    :ok = Arca.Test.S3Env.create_bucket!()
+  alias Arca.Test.S3Env
 
-    on_exit(fn -> Arca.Test.S3Env.restore(previous) end)
+  setup_all do
+    prefix = S3Env.run_prefix("publication")
+    previous = S3Env.configure!(prefix: prefix)
+    :ok = S3Env.create_bucket!()
+    on_exit(fn -> S3Env.restore(previous) end)
+    S3Env.guard!(prefix)
+
     :ok
   end
 end
