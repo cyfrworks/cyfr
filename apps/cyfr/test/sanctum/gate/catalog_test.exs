@@ -1090,6 +1090,10 @@ defmodule Sanctum.Gate.CatalogTest do
     end
 
     test "the decision is recorded before the work runs, and completed only after it" do
+      # A decision lost to its write budget would read as one written after
+      # the work; the case holds only when none was lost.
+      lost = attach_lost()
+
       Catalog.with_providers([Witnessing], fn ->
         ctx = Sanctum.TestContext.local()
         call_id = Prima.UUID7.generate_id("call")
@@ -1099,11 +1103,18 @@ defmodule Sanctum.Gate.CatalogTest do
                    call_id: call_id
                  )
 
-        # What the handler read while it ran: admitted, and not yet done.
-        assert_received {:witnessed, ^call_id, {:ok, seen}}
-        assert seen.admission == :admitted
-        assert seen.completion == nil
-        assert seen.duration_ms == nil
+        # What the handler read while it ran, once: admitted, and not yet done.
+        assert_received {:witnessed, ^call_id,
+                         {:ok,
+                          %Prima.Decision{
+                            call_id: ^call_id,
+                            admission: :admitted,
+                            completion: nil,
+                            duration_ms: nil
+                          }}}
+
+        refute_received {:witnessed, _call_id, _seen}
+        refute_received {^lost, _metadata}
 
         assert {:ok, %{completion: :succeeded}} = decision(ctx, call_id)
       end)

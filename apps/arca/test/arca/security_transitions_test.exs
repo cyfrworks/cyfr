@@ -517,8 +517,10 @@ defmodule Arca.SecurityTransitionsTest do
   ]
 
   # The tables an allow and a reopen retire stragglers in, each inside the
-  # transition's transaction.
-  @retirement_tables ~w(frame_credentials paired_clients device_certificates pairing_invitations)
+  # transition's transaction: a client's confirmations are voided with it
+  # (`Arca.PairedClients.retire_dependents!/1`).
+  @retirement_tables ~w(frame_credentials paired_clients device_certificates
+                        pairing_invitations pending_confirmations)
 
   defp observe_offer_ends!(athanor_id, offers) do
     # The fixture's offer IDs include its tenant; file telemetry carries no
@@ -592,26 +594,32 @@ defmodule Arca.SecurityTransitionsTest do
     end
   end
 
-  # A frame, a paired client, its certificate and a pairing invitation of
-  # the person in the athanor, issued after a denial or an archive: what
-  # the allow or the reopen that follows retires.
+  # A frame, a paired client with its certificate and a confirmation it
+  # confirmed, and a pairing invitation of the person in the athanor,
+  # issued after a denial or an archive: what the allow or the reopen that
+  # follows retires.
   defp stragglers!(athanor_id, user_id) do
     client = paired!(athanor_id, user_id)
 
     [
-      frame!(athanor_id, user_id),
-      client,
-      certificate!(athanor_id, user_id, client),
-      invitation!(athanor_id, user_id)
+      {Arca.Schemas.FrameCredential, frame!(athanor_id, user_id)},
+      {Arca.Schemas.PairedClient, client},
+      {Arca.Schemas.DeviceCertificate, certificate!(athanor_id, user_id, client)},
+      {Arca.Schemas.PairingInvitation, invitation!(athanor_id, user_id)},
+      {Arca.Schemas.PendingConfirmation, confirmation!(athanor_id, user_id, client: client)}
     ]
   end
 
-  defp straggler_states([frame, client, cert, invitation]) do
+  # Each straggler's whole row, as stored.
+  defp rows(stragglers), do: for({schema, id} <- stragglers, do: Arca.Repo.get(schema, id))
+
+  defp straggler_states([frame, client, cert, invitation, confirmation]) do
     [
-      frame_state(frame),
-      paired_standing(client),
-      certificate_state(cert),
-      invitation_state(invitation)
+      frame_state(elem(frame, 1)),
+      paired_standing(elem(client, 1)),
+      certificate_state(elem(cert, 1)),
+      invitation_state(elem(invitation, 1)),
+      confirmation_state(elem(confirmation, 1))
     ]
   end
 
@@ -621,9 +629,12 @@ defmodule Arca.SecurityTransitionsTest do
       change.revoked_frame_credential_ids,
       change.revoked_paired_client_ids,
       change.revoked_device_certificate_ids,
-      change.revoked_pairing_invitation_ids
+      change.revoked_pairing_invitation_ids,
+      change.voided_confirmation_ids
     ]
   end
+
+  defp straggler_ids(stragglers), do: for({_schema, id} <- stragglers, do: [id])
 
   setup tags do
     Arca.Test.Sandbox.setup!(tags)
@@ -981,29 +992,29 @@ defmodule Arca.SecurityTransitionsTest do
         {user, own} = owner!()
         {:ok, _} = SecurityTransitions.deny_user(server(), user.id, verify: admit())
         stragglers = stragglers!(own.id, user.id)
+        before = {user(user.id), athanor(own.id), rows(stragglers)}
+        assert {elem(before, 0).status, elem(before, 1).status} == {"denied", "archived"}
         failure = fail_on!(unquote(table), "UPDATE")
 
         assert {:error, :database_error} =
                  SecurityTransitions.allow_user(server(), user.id, verify: admit())
 
-        # Nothing committed: no restored standing beside a credential the
-        # allow was to retire.
-        assert user(user.id).status == "denied"
-        assert user(user.id).security_generation == 2
-        assert athanor(own.id).status == "archived"
-        assert athanor(own.id).security_generation == 2
+        # Nothing committed, row for row: no restored standing, reopened
+        # athanor or new seat beside a credential the allow was to retire.
+        assert {user(user.id), athanor(own.id), rows(stragglers)} == before
         assert seats(user.id) == []
-        assert straggler_states(stragglers) == ["active", "active", "active", "pending"]
 
         clear_failure!(failure)
 
         assert {:ok, change} = SecurityTransitions.allow_user(server(), user.id, verify: admit())
         assert change.transitioned
         assert change.user_generation == 3
-        assert retired_ids(change) == Enum.map(stragglers, &[&1])
+        assert retired_ids(change) == straggler_ids(stragglers)
         assert user(user.id).status == "active"
         assert athanor(own.id).status == "active"
-        assert straggler_states(stragglers) == ["revoked", "revoked", "revoked", "revoked"]
+
+        assert straggler_states(stragglers) ==
+                 ["revoked", "revoked", "revoked", "revoked", "voided"]
       end
     end
   end
@@ -1144,14 +1155,15 @@ defmodule Arca.SecurityTransitionsTest do
         seat!(group.id, member.id)
         {:ok, _} = SecurityTransitions.archive_athanor(server(), group.id, verify: admit())
         stragglers = stragglers!(group.id, member.id)
+        before = {athanor(group.id), rows(stragglers)}
+        assert elem(before, 0).status == "archived"
         failure = fail_on!(unquote(table), "UPDATE")
 
         assert {:error, :database_error} =
                  SecurityTransitions.unarchive_athanor(server(), group.id, verify: admit())
 
-        assert athanor(group.id).status == "archived"
-        assert athanor(group.id).security_generation == 2
-        assert straggler_states(stragglers) == ["active", "active", "active", "pending"]
+        # Nothing committed, row for row.
+        assert {athanor(group.id), rows(stragglers)} == before
 
         clear_failure!(failure)
 
@@ -1160,9 +1172,11 @@ defmodule Arca.SecurityTransitionsTest do
 
         assert reopened.transitioned
         assert reopened.athanor_generations == %{group.id => 3}
-        assert retired_ids(reopened) == Enum.map(stragglers, &[&1])
+        assert retired_ids(reopened) == straggler_ids(stragglers)
         assert athanor(group.id).status == "active"
-        assert straggler_states(stragglers) == ["revoked", "revoked", "revoked", "revoked"]
+
+        assert straggler_states(stragglers) ==
+                 ["revoked", "revoked", "revoked", "revoked", "voided"]
       end
     end
   end

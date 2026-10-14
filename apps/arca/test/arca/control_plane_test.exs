@@ -259,7 +259,7 @@ defmodule Arca.ControlPlaneTest do
 
       # A join opens the peer's own row; a rejoin takes it over once its
       # lease ran out. Neither writes any row but the peer's.
-      assert {:ok, %{generation: 1}} = ControlPlane.take(peer, "boot_p1", 60_000)
+      assert {:ok, %{generation: 1, fence: 1}} = ControlPlane.take(peer, "boot_p1", 60_000)
       expire(peer)
       assert {:ok, %{generation: 2}} = ControlPlane.take(peer, "boot_p2", 60_000)
 
