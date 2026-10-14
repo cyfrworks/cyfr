@@ -320,6 +320,74 @@ defmodule Sanctum.Providers.AthanorMemberDoorToolsTest do
     assert {:ok, :allowed} = Sanctum.Door.admit("github|https://github.com|c", email, true)
   end
 
+  # A session the door's verdict issued to `user_id`.
+  defp session_for(user_id, email) do
+    ctx =
+      Context.build(
+        user_id: user_id,
+        email: email,
+        provider: "github",
+        authenticated: true,
+        permissions: [:read]
+      )
+
+    {:ok, session} =
+      Sanctum.Session.create(ctx, generation_snapshot: Sanctum.TestContext.snapshot!(ctx))
+
+    session
+  end
+
+  test "door.remove of an allow through the gate ejects the stranger it admitted, and only them",
+       %{ops: ops, ctx: ctx, n: n} do
+    admin = ctx.(ops, Sanctum.TestContext.athanor_id(), platform_admin: true)
+
+    [{dave_key, dave_email}, {erin_key, erin_email}] =
+      for name <- ["dave", "erin"],
+          do: {"github|https://github.com|#{name}-#{n}", "#{name}#{n}@example.com"}
+
+    assert {:ok, %{effect: "allow", id: dave_allow}} =
+             call(admin, "door", %{"action" => "allow", "value" => dave_email})
+
+    assert {:ok, %{effect: "allow"}} =
+             call(admin, "door", %{"action" => "allow", "value" => erin_email})
+
+    [dave, erin] =
+      for {key, email} <- [{dave_key, dave_email}, {erin_key, erin_email}] do
+        {:ok, user} =
+          Users.upsert_from_provider(%{id: key, provider: "github", email: email, verified: true})
+
+        user
+      end
+
+    # What the open door issued: a session for each, and a key for dave.
+    dave_session = session_for(dave.id, dave_email)
+    erin_session = session_for(erin.id, erin_email)
+    tenant = Sanctum.TestContext.local()
+
+    {:ok, dave_key_row} =
+      Sanctum.TestContext.create_key(%{tenant | user_id: dave.id, email: dave_email}, %{
+        name: "dave-key-#{n}"
+      })
+
+    assert {:ok, _} = Sanctum.Session.get(dave_session.token)
+    assert {:ok, _} = Sanctum.ApiKey.validate(dave_key_row.api_key)
+
+    assert {:ok, %{id: ^dave_allow, removed: true, ejected: ejected}} =
+             call(admin, "door", %{"action" => "remove", "id" => dave_allow})
+
+    assert ejected >= 1
+    assert {:error, :not_allowed} = Sanctum.Door.admit(dave_key, dave_email, true)
+    assert {:error, :invalid_session} = Sanctum.Session.get(dave_session.token)
+    assert {:error, _} = Sanctum.ApiKey.validate(dave_key_row.api_key)
+
+    # The person another entry still admits keeps what they hold.
+    assert {:ok, :allowed} = Sanctum.Door.admit(erin_key, erin_email, true)
+    assert {:ok, _} = Sanctum.Session.get(erin_session.token)
+
+    # Closing a door is not denying a person.
+    assert {:ok, %{status: "active"}} = Users.get_by_identity(dave_key)
+  end
+
   test "door.* allows, denies, lists and resolves a person identifier, which the cyfr door is judged by",
        %{ops: ops, ctx: ctx, n: n} do
     admin = ctx.(ops, Sanctum.TestContext.athanor_id(), platform_admin: true)
