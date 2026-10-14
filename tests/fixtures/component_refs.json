@@ -175,7 +175,7 @@
     { "a": "abd", "b": "abc", "expect": "gt" },
     { "a": "garbage", "b": "garbage", "expect": "eq" }
   ],
-  "tincture_urls_comment": "The tincture URL grammar Prima.TinctureUrl writes: a tincture's public path, /t/<athanor>/<publisher>/<name>, and a private version's served file, /_s/<credential>/<path inside the version>, under an asset credential that is opaque, URL-safe (base64url segments joined by dots), 16 to 1024 characters and never leads with a dot. parse is what a served-file path reads back as: the credential and the file's segments, or null when the path is refused. Prima's test reads these cases.",
+  "tincture_urls_comment": "The tincture URL grammar Prima.TinctureUrl writes: a tincture's public path, /t/<athanor>/<publisher>/<name>, and a private version's served file, /_s/<credential>/<path inside the version>, under an asset credential that is opaque, URL-safe (base64url segments joined by dots), 16 to 1024 characters and never leads with a dot. parse is what a served-file path reads back as: the credential and the file's segments, or null when the path is refused. Prima's test (apps/prima/test/prima/tincture_wire_test.exs) reads these cases, and the SDK's (apps/cyfr/assets/test/sdk/wire.test.mjs) reads each path: a public path, and a page under it, names its tincture, and a served file's path names none.",
   "tincture_urls": {
     "public": [
       {

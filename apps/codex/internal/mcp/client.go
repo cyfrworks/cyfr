@@ -148,30 +148,30 @@ func (c *Client) Discover(ctx context.Context) error {
 func routingHeaders(req *http.Request, method string, params any) {
 	req.Header.Set("Mcp-Method", method)
 
-	if name := namedSubject(method, params); name != "" {
+	if name, ok := namedSubject(method, params); ok {
 		req.Header.Set("Mcp-Name", encodeHeaderValue(name))
 	}
 }
 
-// namedSubject is the value Mcp-Name must carry, or "" when the method names
-// no subject.
-func namedSubject(method string, params any) string {
+// namedSubject is the value Mcp-Name must carry, and false when the method
+// names no subject. An empty subject is still one: the server requires the
+// header for it, encoded. These are Prima.MCP.Protocol.named_subject/1's
+// methods, tests/fixtures/mcp_wire.json's named_subject cases.
+func namedSubject(method string, params any) (string, bool) {
 	m, ok := params.(map[string]any)
 	if !ok {
-		return ""
+		return "", false
 	}
 
 	switch method {
-	case "tools/call", "prompts/get":
-		if name, ok := m["name"].(string); ok {
-			return name
-		}
+	case "tools/call":
+		name, ok := m["name"].(string)
+		return name, ok
 	case "resources/read":
-		if uri, ok := m["uri"].(string); ok {
-			return uri
-		}
+		uri, ok := m["uri"].(string)
+		return uri, ok
 	}
-	return ""
+	return "", false
 }
 
 // encodeHeaderValue applies the specification's Base64 sentinel when a value

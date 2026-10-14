@@ -1,0 +1,108 @@
+{
+  "comment": "The vectors pinning the error envelope a host function answers a guest across the WIT boundary, and the sentence a runner hands its guest for a refusal. An error is the JSON object {\"error\": {\"type\": <type>, \"message\": <message>}}, its two members strings and no other member; a type is one of component-guide.md's error types. `encode_error` cases are Prima.WitResponse.encode_error/2's: `type` and `message` in, the decoded `answer` out, the type given as a string or as the atom of that name, and a message that is not a string normalized to one. `safe_encode` cases are Prima.WitResponse.safe_encode/1's: `data` in, the decoded `answer` out. A value that cannot be encoded answers `fallback`, exactly its `json` text, never a raised error. `render` cases are a named sample of Prima.GuestError.render/1's, not a copy of Prima.Refusal's table: a wire answer passed through, a bare sentence, one refusal of each `class` but confirmation_required, whose sentence is tests/fixtures/confirmation.json's `signal.message`, and terms the vocabulary does not know, which render as null; `reason` in, `sentence` out. A term is written as JSON: a string, number, boolean or null as itself, an array as a list, {\"atom\": name} as an atom, {\"tuple\": [...]} as a tuple, {\"map\": {...}} as a map with string keys, and {\"bytes_base64\": ...} as the bytes it decodes to. The host side reads them now: Prima's test (apps/prima/test/prima/wit_response_vectors_test.exs) plays every case, and Cyfr.DocsDriftTest checks the envelope component-guide.md documents (its Host Functions' Error lines and its Invoke Error Types) and its encoding_error row against them; the guide's error types are held to their producers by that test's fetch error check. The guest side is a seed guest's Rust parser in a shipped, immutable version, and reads them from the next version of a guest that parses the envelope.",
+  "version": 1,
+  "envelope": {
+    "member": "error",
+    "fields": ["type", "message"]
+  },
+  "fallback": {
+    "json": "{\"error\":{\"type\":\"encoding_error\",\"message\":\"Failed to encode response\"}}",
+    "answer": {"error": {"type": "encoding_error", "message": "Failed to encode response"}}
+  },
+  "encode_error": [
+    {
+      "why": "a fetch refused by the egress policy",
+      "type": "domain_blocked",
+      "message": "Domain not allowed: api.example.com",
+      "answer": {"error": {"type": "domain_blocked", "message": "Domain not allowed: api.example.com"}}
+    },
+    {
+      "why": "a streaming request that failed before any response",
+      "type": "request_failed",
+      "message": "The connection was refused",
+      "answer": {"error": {"type": "request_failed", "message": "The connection was refused"}}
+    },
+    {
+      "why": "an invoke over its rate",
+      "type": "resource_limit",
+      "message": "Emit rate exceeded",
+      "answer": {"error": {"type": "resource_limit", "message": "Emit rate exceeded"}}
+    },
+    {
+      "why": "a message carrying quotes, a backslash, a newline and characters outside ASCII travels escaped and decodes to itself",
+      "type": "dispatch_error",
+      "message": "The \"child\" failed:\\ path\nüñ — ✓",
+      "answer": {"error": {"type": "dispatch_error", "message": "The \"child\" failed:\\ path\nüñ — ✓"}}
+    },
+    {
+      "why": "an empty message stays an empty string",
+      "type": "timeout",
+      "message": "",
+      "answer": {"error": {"type": "timeout", "message": ""}}
+    },
+    {
+      "why": "a message that is an atom is its name",
+      "type": "storage_error",
+      "message": {"atom": "enospc"},
+      "answer": {"error": {"type": "storage_error", "message": "enospc"}}
+    },
+    {
+      "why": "a message that is neither a string nor an atom is its inspected spelling",
+      "type": "unknown",
+      "message": 42,
+      "answer": {"error": {"type": "unknown", "message": "42"}}
+    },
+    {
+      "why": "a message that is not valid UTF-8 cannot be encoded, so the envelope is the fallback",
+      "type": "http_error",
+      "message": {"bytes_base64": "/w=="},
+      "answer": "fallback"
+    }
+  ],
+  "safe_encode": [
+    {
+      "why": "a success answer encodes as itself",
+      "data": {"map": {"status": 200, "headers": {"map": {"content-type": "application/json"}}, "body": "{\"ok\":true}"}},
+      "answer": {"status": 200, "headers": {"content-type": "application/json"}, "body": "{\"ok\":true}"}
+    },
+    {
+      "why": "a list encodes as a JSON array",
+      "data": {"map": {"status": "ok", "files": ["a.txt", "b/c.json"]}},
+      "answer": {"status": "ok", "files": ["a.txt", "b/c.json"]}
+    },
+    {
+      "why": "bytes that are not valid UTF-8 cannot be encoded",
+      "data": {"map": {"status": 200, "body": {"bytes_base64": "/w=="}}},
+      "answer": "fallback"
+    },
+    {
+      "why": "a tuple has no JSON form",
+      "data": {"map": {"status": 200, "body": {"tuple": [{"atom": "ok"}, "x"]}}},
+      "answer": "fallback"
+    }
+  ],
+  "render": [
+    {"why": "a runner's wire answer, already rendered on the other side: its message passed through", "reason": {"map": {"type": "denied", "message": "Not consented"}}, "sentence": "Not consented"},
+    {"why": "a bare sentence renders as its own words", "reason": "already a sentence", "sentence": "already a sentence"},
+    {"why": "a credential that was revoked", "class": "unauthenticated", "reason": {"atom": "revoked"}, "sentence": "The presented credential has been revoked"},
+    {"why": "an actor outside the athanor", "class": "forbidden", "reason": {"atom": "not_member"}, "sentence": "Only a member of the athanor can act in its threads"},
+    {"why": "a consent signal carrying its detail", "class": "consent_required", "reason": {"tuple": [{"atom": "consent_required"}, {"map": {"detail": "egress to api.example.com was added"}}]}, "sentence": "Consent required: egress to api.example.com was added"},
+    {"why": "an athanor with no assistant", "class": "setup_required", "reason": {"atom": "no_agent"}, "sentence": "This athanor has no assistant to address — reset its AQUA tree"},
+    {"why": "a message over its bound", "class": "invalid_argument", "reason": {"atom": "message_too_long"}, "sentence": "The message is longer than the 32 KiB bound"},
+    {"why": "a named resource that is absent", "class": "not_found", "reason": {"tuple": [{"atom": "not_found"}, "component", "c:1"]}, "sentence": "component not found: c:1"},
+    {"why": "a unit another write landed on first", "class": "conflict", "reason": {"atom": "stale_revision"}, "sentence": "Another write to this unit landed first — read it again and retry"},
+    {"why": "a full turn queue", "class": "rate_limited", "reason": {"atom": "busy"}, "sentence": "The turn queue is full — send again after the current turn"},
+    {"why": "a server that lost its control plane", "class": "not_owner", "reason": {"atom": "control_plane_lost"}, "sentence": "This server does not currently own its database's control plane — retry shortly"},
+    {"why": "a store that could not answer, nothing done", "class": "unavailable", "reason": {"atom": "unavailable"}, "sentence": "The service could not answer — retry shortly"},
+    {"why": "a unit whose staged objects are not what was written", "class": "corrupt", "reason": {"atom": "invalid_objects"}, "sentence": "What was staged for this unit is not what was written — nothing was published"},
+    {"why": "a timeout carrying its sentence", "class": "timeout", "reason": {"tuple": [{"atom": "timeout"}, "The call timed out"]}, "sentence": "The call timed out"},
+    {"why": "a cancellation carrying its sentence", "class": "cancelled", "reason": {"tuple": [{"atom": "cancelled"}, "The call was cancelled"]}, "sentence": "The call was cancelled"},
+    {"why": "a host call CYFR could not answer", "class": "uncertain", "reason": {"atom": "lost"}, "sentence": "The call was lost — what was asked may or may not have been done; check before asking again"},
+    {"why": "a failure sentence", "class": "internal", "reason": {"tuple": [{"atom": "failed"}, "The child failed"]}, "sentence": "The child failed"},
+    {"why": "an atom outside the vocabulary is an internal name, never a sentence", "reason": {"atom": "some_internal_state"}, "sentence": null},
+    {"why": "nothing", "reason": null, "sentence": null},
+    {"why": "an error tuple", "reason": {"tuple": [{"atom": "error"}, {"atom": "oops"}]}, "sentence": null},
+    {"why": "a guest error whose type is not a string", "reason": {"tuple": [{"atom": "guest_error"}, {"atom": "type"}, "m"]}, "sentence": null},
+    {"why": "a wire answer with no message", "reason": {"map": {"type": "denied"}}, "sentence": null}
+  ]
+}
