@@ -145,12 +145,13 @@ defmodule Cyfr.RuntimeConfigWiringTest do
     end
 
     # An accepted value is the key base byte for byte, never trimmed: the
-    # keyring and the salts hash its exact bytes. The length is bytes, so
-    # 32 two-byte characters are 64 bytes and enough.
+    # keyring and the salts hash its exact bytes. The length is bytes of the
+    # value as given, so 32 two-byte characters are 64 bytes and enough, and
+    # so are 62 bytes between two spaces.
     for {label, value} <- [
           {"of exactly 64 bytes", String.duplicate("k", 63) <> "!"},
           {"of 64 bytes in 32 characters", String.duplicate("é", 32)},
-          {"with surrounding spaces", " " <> String.duplicate("s", 64) <> " "}
+          {"of 64 bytes with surrounding spaces", " " <> String.duplicate("s", 62) <> " "}
         ] do
       test "#{label} is the key base as given", %{tmp_dir: dir} do
         key_base = unquote(value)
