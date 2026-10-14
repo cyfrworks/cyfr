@@ -292,12 +292,25 @@ defmodule Sanctum.VaultOAuthRefreshTest do
       lock_key = {:vault_oauth_refresh, ctx.athanor_id, Prima.UUID7.generate_id("vlt")}
       test = self()
 
+      # The test's own cleanup, registered before the case runs: the case is
+      # stopped first, then the refresh work of every leader it started. A
+      # leader records itself before it starts any.
+      {:ok, leaders} = Agent.start(fn -> [] end)
+
+      on_exit(fn ->
+        for leader <- Agent.get(leaders, & &1), do: stop_refresh_work(leader)
+        Agent.stop(leaders)
+      end)
+
       {case_pid, ref} =
         spawn_monitor(fn ->
           # The leader holds the entry lock in the refresh lock's own
           # unlinked task until it is told to go, which never happens here.
           leader =
             Task.async(fn ->
+              me = self()
+              Agent.update(leaders, &[me | &1])
+
               RefreshLock.run(
                 lock_key,
                 fn ->
@@ -321,8 +334,8 @@ defmodule Sanctum.VaultOAuthRefreshTest do
           )
         end)
 
+      on_exit(fn -> kill_and_await(case_pid) end)
       assert_receive {:leader, leader}, 2_000
-      stop_on_exit(leader)
 
       assert_receive {:DOWN, ^ref, :process, ^case_pid, {%ExUnit.AssertionError{}, _stack}},
                      5_000
@@ -357,7 +370,13 @@ defmodule Sanctum.VaultOAuthRefreshTest do
           do: Code.ensure_loaded!(module)
 
       test = self()
-      previous_online = :erlang.system_flag(:schedulers_online, 1)
+
+      # Restored by on_exit as well as by the `after` below, and registered
+      # before the change: ExUnit kills a test that times out, and its
+      # `after` never runs.
+      previous_online = :erlang.system_info(:schedulers_online)
+      on_exit(fn -> :erlang.system_flag(:schedulers_online, previous_online) end)
+      :erlang.system_flag(:schedulers_online, 1)
       frozen = :ets.new(:frozen_tasks, [:public])
 
       try do
@@ -377,6 +396,9 @@ defmodule Sanctum.VaultOAuthRefreshTest do
                 end,
                 priority: :high
               )
+
+            # Unlinked, so it outlives a failed case unless it is killed.
+            on_exit(fn -> Process.exit(caller, :kill) end)
 
             task =
               receive do
