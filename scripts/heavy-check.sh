@@ -4,6 +4,9 @@
 #
 # Run one check on the verification host: scripts/heavy-check.sh [-s] [-t HOLD] [-w QUEUE] [--] command [args]
 #
+# It needs Bash 4.1 or later and flock(1) (util-linux). macOS ships Bash
+# 3.2: install a current one beside flock (brew install bash flock).
+#
 # The host's checks queue here and nowhere else.
 #   exclusive  (default) a gate, a full suite, an image suite or a proof.
 #              It sizes itself to the whole machine and its tests carry
@@ -15,8 +18,8 @@
 #              HEAVY_CHECK_HELD=scoped and refuses what does not.
 # Scoped checks take slots in the order they arrived: a free slot goes to
 # a scoped check only when no scoped check that queued before it is still
-# waiting for one. A queued exclusive check goes ahead of scoped runs that
-# arrive after it.
+# waiting for one, a stopped one (Ctrl-Z, SIGSTOP) apart. A queued
+# exclusive check goes ahead of scoped runs that arrive after it.
 #
 # HOLD (default 2700 s) bounds how long the command may keep the host:
 # at the deadline it is stopped and the exit is 124. A repeat recipe
@@ -101,8 +104,8 @@ ticket=
 # The command's words for a line another check reads or a kept file: a
 # NAME=value word, such as a database URL handed through env, is shown as
 # NAME=…, and the userinfo of a URL in any other word, such as
-# --url=postgres://user:secret@host, as scheme://[redacted]@, so neither
-# value leaves this check.
+# --url=postgres://user:secret@host, as scheme://[redacted]@, up to the
+# last @ before the host, so neither value leaves this check.
 redacted() {
   local word name out=
   for word in "$@"; do
@@ -113,7 +116,7 @@ redacted() {
     esac
     out="$out${out:+ }$word"
   done
-  printf '%s' "$out" | sed -E 's#([A-Za-z][A-Za-z0-9+.-]*://)[^/@[:space:]]*@#\1[redacted]@#g'
+  printf '%s' "$out" | sed -E 's#([A-Za-z][A-Za-z0-9+.-]*://)[^/[:space:]]*@#\1[redacted]@#g'
 }
 
 alive() {
@@ -186,6 +189,10 @@ on_signal() {
 # through these copies of the streams this script was given. Bash places
 # them at 10 or above, clear of the caller's own low descriptors, and the
 # command never holds them.
+if [ "${BASH_VERSINFO[0]}" -lt 4 ] || { [ "${BASH_VERSINFO[0]}" = 4 ] && [ "${BASH_VERSINFO[1]}" -lt 1 ]; }; then
+  echo "heavy-check needs Bash 4.1 or later, this is $BASH_VERSION (on macOS: brew install bash)" >&2
+  exit 69
+fi
 exec {saved_out}>&1 {saved_err}>&2
 printf '_START=%s\n' "$$"
 trap on_exit EXIT
@@ -273,38 +280,74 @@ take() {
 }
 
 # The scoped queue. Each scoped check takes the next ticket from
-# $LOCK.seq and holds a lock on its own file $LOCK.wait.<ticket> while it
-# waits for a slot; it tries the slots only when no earlier ticket's file
-# is still locked. A waiter that dies loses its lock with it, so the next
-# scan removes its file and nothing waits on a pid that may be reused.
+# $LOCK.seq and holds a lock on its own file $LOCK.wait.<ticket>, which
+# names its pid, while it waits for a slot; it tries the slots only when
+# no earlier ticket's file is still locked by a live owner that is not
+# stopped. A waiter that dies loses its lock with it, so the next scan
+# removes its file and nothing waits on a pid that may be reused.
 # $LOCK.queue serializes taking a ticket and scanning, so a file is never
-# seen before its owner has locked it.
-queue_lock() { exec {queue_fd}>>"$LOCK.queue" && flock -x "$queue_fd"; }
+# seen before its owner has locked it and written its pid. Its holder can
+# itself be stopped, so it is waited for as the host is, bounded by the
+# queue deadline and answering a signal at once.
+queue_lock() {
+  local status=0
+  exec {queue_fd}>>"$LOCK.queue" || exit 1
+  if flock -n -x "$queue_fd"; then return 0; fi
+  flock -w "$(queue_left)" -x "$queue_fd" &
+  queue_pid=$!
+  wait "$queue_pid" || status=$?
+  queue_pid=
+  [ "$status" = 0 ] || { announce; gave_up; }
+}
 queue_unlock() { exec {queue_fd}>&-; }
 take_ticket() {
   local last
-  queue_lock || exit 1
+  queue_lock
   last=$(cat "$LOCK.seq" 2>/dev/null) || :
   case "$last" in ''|*[!0-9]*) last=0 ;; esac
   ticket=$((last + 1))
   printf '%s\n' "$ticket" > "$LOCK.seq" || exit 1
   exec {ticket_fd}>"$LOCK.wait.$ticket" || exit 1
   flock -n -x "$ticket_fd" || exit 1
+  printf '%s\n' "$$" >&"$ticket_fd" || exit 1
   queue_unlock
+}
+# Whether pid $1 is stopped: state T (or t, traced) in its stat.
+stopped() {
+  local s
+  if [ -r "/proc/$1/stat" ]; then
+    read -r s 2>/dev/null <"/proc/$1/stat" || return 1
+    s=${s##*) }
+  else
+    s=$(ps -o stat= -p "$1" 2>/dev/null) || return 1
+    s=${s// /}
+  fi
+  case "$s" in T*|t*) return 0 ;; esac
+  return 1
 }
 release_ticket() {
   rm -f "$LOCK.wait.$ticket"
   exec {ticket_fd}>&-
   ticket=
 }
+# A locked earlier ticket holds this one back while its owner lives and
+# is not stopped; the scan ends at the first that does.
 first_in_line() {
-  local f k first=0
-  queue_lock || exit 1
+  local f k owner first=0
+  queue_lock
   for f in "$LOCK".wait.*; do
     k=${f##*.wait.}
     case "$k" in ''|*[!0-9]*) continue ;; esac
     [ "$k" -lt "$ticket" ] || continue
-    if flock -n -x "$f" true 2>/dev/null; then rm -f "$f"; else first=1; fi
+    if flock -n -x "$f" true 2>/dev/null; then rm -f "$f"; continue; fi
+    owner=
+    read -r owner 2>/dev/null <"$f" || :
+    case "$owner" in
+      ''|*[!0-9]*) ;;
+      *) if ! alive "$owner" || stopped "$owner"; then continue; fi ;;
+    esac
+    first=1
+    break
   done
   queue_unlock
   return "$first"

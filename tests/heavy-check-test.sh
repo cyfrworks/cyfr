@@ -48,7 +48,8 @@ ours() {
 }
 cleanup() {
   local pid f n=0
-  for pid in ${started[@]+"${started[@]}"}; do ours "$pid" && kill -TERM "$pid" 2>/dev/null || :; done
+  # A stopped check answers TERM only once it is continued.
+  for pid in ${started[@]+"${started[@]}"}; do ours "$pid" && kill -CONT "$pid" 2>/dev/null && kill -TERM "$pid" 2>/dev/null || :; done
   for pid in ${started[@]+"${started[@]}"}; do
     while ours "$pid" && alive "$pid" && [ "$n" -lt 200 ]; do sleep 0.1; n=$((n + 1)); done
     ! ours "$pid" || kill -KILL "$pid" 2>/dev/null || :
@@ -297,11 +298,11 @@ t_redaction() {
   local a b
   # The hold script reads only its first argument; the URLs ride along.
   "${hc[@]}" -- env CYFR_DATABASE_URL=postgres://u:secret@h/db "$hold" "$scratch/release-r" \
-    --url=postgres://u:secret2@h/db https://secret3@h/x >/dev/null 2>"$scratch/r1.err" &
+    --url=postgres://u:secret2@h/db https://secret3@h/x postgres://u:pa@secret4@h/db >/dev/null 2>"$scratch/r1.err" &
   a=$!; started+=("$a")
   until_true 10 test -s "$scratch/lock.holder" || fail 'the holder left no record'
   ! grep -q secret "$scratch/lock.holder" || fail "the holder's record carries the value: $(cat "$scratch/lock.holder")"
-  has_line '^pid=[0-9]+ .* command=env CYFR_DATABASE_URL=… .* --url=postgres://\[redacted\]@h/db https://\[redacted\]@h/x$' "$scratch/lock.holder" ||
+  has_line '^pid=[0-9]+ .* command=env CYFR_DATABASE_URL=… .* --url=postgres://\[redacted\]@h/db https://\[redacted\]@h/x postgres://\[redacted\]@h/db$' "$scratch/lock.holder" ||
     fail "the record lost the name or the URLs' shape: $(cat "$scratch/lock.holder")"
   "${hc[@]}" -- true >/dev/null 2>"$scratch/r2.err" &
   b=$!; started+=("$b")
@@ -396,6 +397,58 @@ t_scoped_stale() {
   until_true 10 has_line '^B$' "$scratch/order" || fail "a dead waiter's ticket kept a later one waiting"
   touch "$scratch/release-st2" "$scratch/release-st3"
   for p in "${slot_holders[@]}" "$b"; do wait "$p"; done
+}
+
+# A stopped waiter holds back no one: a later waiter takes the slot that
+# frees, and the stopped one runs once it is continued.
+t_scoped_stopped() {
+  local a b p n
+  rm -f "$scratch/order"
+  hold_slots ss
+  "${hc[@]}" -s -- sh -c "echo A >> $scratch/order" >/dev/null 2>"$scratch/ssA.err" &
+  a=$!; started+=("$a")
+  until_true 10 has_line '^==> heavy-check: queued \(scoped\)' "$scratch/ssA.err" || fail 'the first waiter did not queue'
+  # Stopped between scans: a waiter stopped inside one holds the queue
+  # lock, which the queue_lock case covers.
+  for n in $(seq 50); do
+    kill -STOP "$a"
+    flock -n "$scratch/lock.queue" true && break
+    kill -CONT "$a"; sleep 0.1
+  done
+  until_true 5 sh -c "sed 's/.*) //' /proc/$a/stat | grep -q '^T'" || fail 'the first waiter was not stopped'
+  "${hc[@]}" -s -- sh -c "echo B >> $scratch/order" >/dev/null 2>"$scratch/ssB.err" &
+  b=$!; started+=("$b")
+  until_true 10 has_line '^==> heavy-check: queued \(scoped\)' "$scratch/ssB.err" || fail 'the second waiter did not queue'
+  touch "$scratch/release-ss1"
+  until_true 10 has_line '^B$' "$scratch/order" || fail 'a stopped waiter held back a later one'
+  kill -CONT "$a"
+  touch "$scratch/release-ss2" "$scratch/release-ss3"
+  for p in "${slot_holders[@]}" "$a" "$b"; do wait "$p"; done
+  [ "$(tr '\n' ' ' < "$scratch/order")" = 'B A ' ] || fail "the continued waiter did not run after: $(tr '\n' ' ' < "$scratch/order")"
+}
+
+# The queue lock's holder may be stopped: a waiter's wait for it keeps the
+# queue deadline and answers TERM at once.
+t_queue_lock() {
+  local f q s t
+  flock "$scratch/lock.queue" "$hold" "$scratch/release-ql" &
+  f=$!; started+=("$f")
+  until_true 10 sh -c "! flock -n '$scratch/lock.queue' true" || fail 'the queue lock was not taken'
+  t=$SECONDS
+  [ "$(status_of "${hc[@]}" -s -w 1 -- touch "$scratch/ql-ran")" = 75 ] || fail 'a check waiting on the queue lock past its deadline did not exit 75'
+  [ $((SECONDS - t)) -le 3 ] || fail "the queue deadline answered only after $((SECONDS - t))s"
+  framed "$scratch/out" 75 || fail "the queue deadline was not framed: $(tr '\n' '|' < "$scratch/out")"
+  has_line '^==> heavy-check: queue deadline after ' "$scratch/err" || fail 'the queue deadline was not reported'
+  "${hc[@]}" -s -- touch "$scratch/ql-ran" >"$scratch/ql.out" 2>"$scratch/ql.err" &
+  q=$!; started+=("$q")
+  until_true 10 pgrep -P "$q" -x flock >/dev/null || fail 'the second check did not wait for the queue lock'
+  kill -TERM "$q"
+  until_true 2 dead "$q" || fail 'a check waiting on the queue lock given TERM was still running 2s later'
+  s=0; wait "$q" || s=$?
+  [ "$s" = 143 ] || fail "a check waiting on the queue lock given TERM exited $s"
+  framed "$scratch/ql.out" 143 "$q" || fail "not framed by pid $q: $(tr '\n' '|' < "$scratch/ql.out")"
+  [ ! -e "$scratch/ql-ran" ] || fail 'a check that never had the queue lock ran'
+  touch "$scratch/release-ql"; wait "$f"
 }
 
 # --- scoped and exclusive never together; a queued exclusive goes first -------
@@ -822,7 +875,7 @@ t_await_queue() {
 
 cases=(
   usage admission nested result frame roster fds fd_base elsewhere
-  exclusive redaction flock_direct scoped scoped_order scoped_stale precedence
+  exclusive redaction flock_direct scoped scoped_order scoped_stale scoped_stopped queue_lock precedence
   hold hold_frame queue term int hup usr1 term_queued int_queued hup_queued term_queued_scoped refusals
   leftover sigkill nested_session registry_nested survivor survivor_remains
   await_result await_died await_line await_nested await_bare await_reused await_explicit
