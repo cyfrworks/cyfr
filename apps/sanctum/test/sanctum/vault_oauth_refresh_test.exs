@@ -87,17 +87,30 @@ defmodule Sanctum.VaultOAuthRefreshTest do
     counter
   end
 
-  # Killed when the test ends, passing or not, and gone before the
-  # cleanup registered ahead of it runs.
-  defp kill_on_exit(pid) do
+  # The refresh lock runs each call in an unlinked task of its own, which a
+  # failed test would leave running past the sandbox. Registered as soon as
+  # `caller` exists, before anything waits on it: the caller is stopped
+  # first, so it starts nothing more, then every refresh task begun on its
+  # behalf, whether or not it got as far as the lock's Registry.
+  defp stop_on_exit(caller) do
     on_exit(fn ->
-      ref = Process.monitor(pid)
-      Process.exit(pid, :kill)
+      kill_and_await(caller)
 
-      receive do
-        {:DOWN, ^ref, :process, ^pid, _reason} -> :ok
-      end
+      for {_, task, _, _} <- Supervisor.which_children(Sanctum.OAuth.RefreshTaskSupervisor),
+          is_pid(task),
+          {:dictionary, dictionary} <- [Process.info(task, :dictionary)],
+          caller in Keyword.get(dictionary, :"$callers", []),
+          do: kill_and_await(task)
     end)
+  end
+
+  defp kill_and_await(pid) do
+    ref = Process.monitor(pid)
+    Process.exit(pid, :kill)
+
+    receive do
+      {:DOWN, ^ref, :process, ^pid, _reason} -> :ok
+    end
   end
 
   # A caller that lost the entry's Registry race monitors the leader's
@@ -149,6 +162,8 @@ defmodule Sanctum.VaultOAuthRefreshTest do
           )
         end)
 
+      stop_on_exit(leader.pid)
+
       # The leader wins the Registry race before the reader asks.
       Prima.Test.Wait.wait_until(
         fn -> Registry.lookup(Sanctum.OAuth.RefreshRegistry, lock_key) != [] end,
@@ -158,11 +173,11 @@ defmodule Sanctum.VaultOAuthRefreshTest do
 
       # The leader's lock is held by the refresh lock's own unlinked task.
       [{owner, _}] = Registry.lookup(Sanctum.OAuth.RefreshRegistry, lock_key)
-      kill_on_exit(owner)
 
       # The reader sees the expired bundle and follows on the same key while
       # the leader still holds it; only then does the leader go on.
       reader = Task.async(fn -> VaultReader.oauth_token(ctx, resource, "google", @dispense) end)
+      stop_on_exit(reader.pid)
 
       Prima.Test.Wait.wait_until(
         fn -> follower?(owner, leader.pid) end,

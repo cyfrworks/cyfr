@@ -85,8 +85,9 @@ defmodule Sanctum.Authority.BudgetGuardTest do
 
   # A holder the test drives, killed when the test ends whether or not it
   # passed: an unlinked holder outlives a failed assertion otherwise. The
-  # cleanup returns once the holder is gone and the guard has handled its
-  # death, so no compensation is left running behind the test.
+  # cleanup returns once the holder is gone and the guard's state holds no
+  # entry for it: the guard has handled its death (or its release before
+  # it), so nothing the guard does after the test concerns this holder.
   defp spawn_holder(fun) do
     pid = spawn(fun)
 
@@ -98,7 +99,13 @@ defmodule Sanctum.Authority.BudgetGuardTest do
         {:DOWN, ^ref, :process, ^pid, _reason} -> :ok
       end
 
-      :sys.get_state(BudgetGuard)
+      wait_until(
+        fn ->
+          not Enum.any?(Map.keys(:sys.get_state(BudgetGuard).guards), &match?({_, ^pid}, &1))
+        end,
+        2_000,
+        "the guard's handling of the holder's death"
+      )
     end)
 
     pid
