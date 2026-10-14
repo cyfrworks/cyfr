@@ -88,7 +88,7 @@ defmodule Opus.Admission do
 
   - `:route` — `:public` or `:protected` for routed ingresses; public
     selection ignores authentication entirely and the selector is unused.
-  - `:ceiling`, `:live_shape_digest`, `:budget_id` —
+  - `:live_shape_digest`, `:budget_id` —
     see `Sanctum.Consent.Loader.load_root/3`.
   - `:connection` — the account the root's own calls name: the root's
     vault is the named binding its profile's ingress holds under that
@@ -1086,7 +1086,7 @@ defmodule Opus.Admission do
       |> Sanctum.Consent.Loader.load_root(
         profile,
         [live: live, shape_diff: shape_diff_fn(ctx, profile)] ++
-          Keyword.take(opts, [:ceiling, :live_shape_digest, :budget_id, :connection])
+          Keyword.take(opts, [:live_shape_digest, :budget_id, :connection])
       )
       |> case do
         {:error, reason} ->
