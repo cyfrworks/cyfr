@@ -1025,28 +1025,39 @@ defmodule Cyfr.Application do
   end
 
   defp derive_keyring_from_secret_key_base! do
-    case Application.get_env(:sanctum, :secret_key_base) do
-      key when is_binary(key) and byte_size(key) >= 32 ->
-        # A supported zero-config posture — but in a release the operator
-        # should know their ciphertexts are keyed to the Phoenix secret:
-        # rotating CYFR_SECRET_KEY_BASE orphans every sealed blob. The
-        # neighbouring boot checks warn; so does this one.
-        if Cyfr.RuntimeConfig.release?() do
-          Logger.warning(
-            "[Cyfr] No CYFR_CRYPTO_KEYRING set — deriving the crypto keyring from " <>
-              "CYFR_SECRET_KEY_BASE. Rotating that secret will orphan everything " <>
-              "sealed under it; set an explicit CYFR_CRYPTO_KEYRING to decouple them."
-          )
-        end
+    keyring = derive_keyring!(Application.get_env(:sanctum, :secret_key_base))
 
-        master = :crypto.hash(:sha256, "cyfr-cipher-keyring|" <> key)
+    # A supported zero-config posture — but in a release the operator
+    # should know their ciphertexts are keyed to the Phoenix secret:
+    # rotating CYFR_SECRET_KEY_BASE orphans every sealed blob. The
+    # neighbouring boot checks warn; so does this one.
+    if Cyfr.RuntimeConfig.release?() do
+      Logger.warning(
+        "[Cyfr] No CYFR_CRYPTO_KEYRING set — deriving the crypto keyring from " <>
+          "CYFR_SECRET_KEY_BASE. Rotating that secret will orphan everything " <>
+          "sealed under it; set an explicit CYFR_CRYPTO_KEYRING to decouple them."
+      )
+    end
+
+    keyring
+  end
+
+  @doc false
+  # Public for the same reason `cors_enforcement/3` is. The key base is
+  # held to the rule `config/runtime.exs` holds CYFR_SECRET_KEY_BASE to
+  # (`Cyfr.RuntimeConfig.check_secret_key_base/1`), so a refusal here
+  # never sends the operator to a value the boot then refuses.
+  @spec derive_keyring!(term()) :: %{primary: String.t(), keys: map()}
+  def derive_keyring!(key_base) do
+    case Cyfr.RuntimeConfig.check_secret_key_base(key_base) do
+      :ok ->
+        master = :crypto.hash(:sha256, "cyfr-cipher-keyring|" <> key_base)
         %{primary: "default", keys: %{"default" => master}}
 
-      _ ->
+      {:error, message} ->
         raise """
-        [Cyfr] FATAL: cannot derive :crypto_keyring — :secret_key_base is
-        missing or shorter than 32 bytes. Set CYFR_SECRET_KEY_BASE (>= 32
-        bytes) or provide CYFR_CRYPTO_KEYRING as JSON
+        [Cyfr] FATAL: cannot derive :crypto_keyring: #{message}. Or provide
+        CYFR_CRYPTO_KEYRING as JSON
         `{"primary": "label", "keys": {"label": "<base64-32-bytes>"}}`.
         """
     end

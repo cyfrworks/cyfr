@@ -90,7 +90,7 @@ value is literal throughout, an open `$(` included.
 | `CYFR_S3_RECEIVE_TIMEOUT_MS` | The per-request timeout against the object store, in milliseconds (default 60000); a slower store reads as a storage outage. |
 | `CYFR_S3_REGION` | The object store's region, with `CYFR_STORAGE=s3`. |
 | `CYFR_S3_SECRET_ACCESS_KEY` | The object store's secret access key, with `CYFR_STORAGE=s3`. |
-| `CYFR_SECRET_KEY_BASE` | The key base that signs sessions and derives the at-rest key (`openssl rand -base64 48`), which `cyfr init` mints; a restored data directory needs the same value. |
+| `CYFR_SECRET_KEY_BASE` | The key base that signs sessions (`openssl rand -base64 48`), which `cyfr init` mints. Production requires it, and a value that is blank or shorter than 64 bytes refuses the boot. Unless `CYFR_CRYPTO_KEYRING` is set, the at-rest keyring derives from it, so a new key leaves everything sealed under the old one unreadable and a restored data directory needs the same value. |
 | `CYFR_SEED_PATH` | The seed tree read in place: the component bundle under `components/` and the AQUA template under `aqua/` (default `seed`; the image sets its own). |
 | `CYFR_SESSION_SALT` | The session cookie's signing salt; unset, derived from `CYFR_SECRET_KEY_BASE`. Set it only to keep sessions across a key-base rotation. |
 | `CYFR_STORAGE` | `s3` for S3-compatible object storage, which needs the bucket, region and both keys; unset, the local filesystem under `CYFR_DATA_PATH`. |

@@ -124,6 +124,78 @@ defmodule Cyfr.RuntimeConfigWiringTest do
       # with the test.
       assert System.get_env("CYFR_SECRET_KEY_BASE") == before
     end
+
+    # A set value that is blank after trimming, or shorter than the 64
+    # bytes Plug's cookie store needs, refuses the boot naming the
+    # variable and the reason, never the value.
+    for {label, value, reason} <- [
+          {"whitespace-only", "  \t ", "is blank"},
+          {"63 bytes", "short-key-base-" <> String.duplicate("q", 47) <> "!",
+           "is shorter than 64 bytes"}
+        ] do
+      test "#{label}, refuses the boot naming it", %{tmp_dir: dir} do
+        value = unquote(value)
+
+        with_env(%{"CYFR_SECRET_KEY_BASE" => value, "RELEASE_ROOT" => dir}, fn ->
+          message = Exception.message(assert_raise(RuntimeError, &read_prod_config!/0))
+          assert message =~ "[Cyfr] FATAL: CYFR_SECRET_KEY_BASE #{unquote(reason)}"
+          refute String.contains?(message, value)
+        end)
+      end
+    end
+
+    # An accepted value is the key base byte for byte, never trimmed: the
+    # keyring and the salts hash its exact bytes. The length is bytes of the
+    # value as given, so 32 two-byte characters are 64 bytes and enough, and
+    # so are 62 bytes between two spaces.
+    for {label, value} <- [
+          {"of exactly 64 bytes", String.duplicate("k", 63) <> "!"},
+          {"of 64 bytes in 32 characters", String.duplicate("é", 32)},
+          {"of 64 bytes with surrounding spaces", " " <> String.duplicate("s", 62) <> " "}
+        ] do
+      test "#{label} is the key base as given", %{tmp_dir: dir} do
+        key_base = unquote(value)
+
+        with_env(%{"CYFR_SECRET_KEY_BASE" => key_base, "RELEASE_ROOT" => dir}, fn ->
+          config = read_prod_config!()
+          assert config[:sanctum][:secret_key_base] == key_base
+          assert config[:cyfr][CyfrWeb.Endpoint][:secret_key_base] == key_base
+        end)
+      end
+    end
+
+    # Development keeps its config file's key when the variable is unset or
+    # empty, and holds a set value to the same rule as production.
+    defp read_dev_config! do
+      Config.Reader.read!(Path.join(@root, "config/runtime.exs"),
+        env: :dev,
+        imports: :disabled
+      )
+    end
+
+    for {label, value} <- [{"unset", nil}, {"empty", ""}] do
+      test "#{label}, a development boot keeps its config file's key", %{tmp_dir: dir} do
+        with_env(%{"CYFR_SECRET_KEY_BASE" => unquote(value), "RELEASE_ROOT" => dir}, fn ->
+          refute Keyword.has_key?(read_dev_config!()[:sanctum] || [], :secret_key_base)
+        end)
+      end
+    end
+
+    for {label, value, reason} <- [
+          {"whitespace-only", "  \t ", "is blank"},
+          {"63 bytes", "short-key-base-" <> String.duplicate("q", 47) <> "!",
+           "is shorter than 64 bytes"}
+        ] do
+      test "#{label}, refuses a development boot too", %{tmp_dir: dir} do
+        value = unquote(value)
+
+        with_env(%{"CYFR_SECRET_KEY_BASE" => value, "RELEASE_ROOT" => dir}, fn ->
+          message = Exception.message(assert_raise(RuntimeError, &read_dev_config!/0))
+          assert message =~ "[Cyfr] FATAL: CYFR_SECRET_KEY_BASE #{unquote(reason)}"
+          refute String.contains?(message, value)
+        end)
+      end
+    end
   end
 
   describe "CYFR_LOCUS_RUNTIME_ROOT" do
