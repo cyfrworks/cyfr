@@ -83,6 +83,12 @@ apps/cyfr/priv/static/toolkit/*.js.gz
 apps/cyfr/priv/static/sdk/cyfr-[0-9a-f]*.js
 apps/cyfr/priv/static/sdk/cyfr-[0-9a-f]*.js.gz
 
+# What `mix assets.deploy` (phx.digest) writes beside every static file:
+# its digested copy `<name>-<32 hex digits>.<ext>` and the gzip companions.
+# The release build makes them; the static sources are tracked
+apps/cyfr/priv/static/**/*-[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f].*
+apps/cyfr/priv/static/**/*.gz
+
 # Go (Codex CLI)
 apps/codex/cyfr
 apps/codex/codex

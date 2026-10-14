@@ -61,20 +61,12 @@ fail() {
 # `$BUILD_PATH/release-source` (`release_source`), and a reuse
 # (RELEASE_BOOT_SKIP_BUILD=1) is refused unless the tree is still that
 # one: a proof never runs a release that is not the source it checks. The
-# record is written once the build has finished, so the build's own output
-# is part of the tree it names, as it is when a later proof reuses it. The
-# tree is read before the build as well, and the release is recorded only
-# when nothing but the build's own output changed while it built: an edit
-# saved mid-build may postdate the compile, so a release built around it
-# names no tree and is not kept for reuse. The build's own output is what
-# `mix assets.deploy` (phx.digest) writes under apps/cyfr/priv/static,
-# tracked or not: every `.gz`, and every digested copy
-# `<name>-<32 hex digits>.<ext>` (RELEASE_BUILD_OUTPUTS, read by this
-# comparison alone; the record and the reuse check read the whole tree).
-RELEASE_BUILD_OUTPUTS=(
-  ':(exclude,glob)apps/cyfr/priv/static/**/*.gz'
-  ":(exclude,glob)apps/cyfr/priv/static/**/*-$(printf '[0-9a-f]%.0s' {1..32}).*"
-)
+# tree is read before the build and again once it has finished, and the
+# release is recorded only when the two readings agree: an edit saved
+# mid-build may postdate the compile, so a release built around it names
+# no tree and is not kept for reuse. The build's own output (what
+# `mix assets.deploy` writes under apps/cyfr/priv/static, and _build) is
+# ignored by git, so it changes neither reading.
 release_build() {
   local before after
   if [ "${RELEASE_BOOT_SKIP_BUILD:-}" = "1" ] && [ -x "$REL/bin/cyfr" ]; then
@@ -83,7 +75,7 @@ release_build() {
   else
     step "building the cyfr release for $ADAPTER (MIX_ENV=prod, as Dockerfile builds it)"
     rm -f "$BUILD_PATH/release-source"
-    before="$(release_source "${RELEASE_BUILD_OUTPUTS[@]}")" ||
+    before="$(release_source)" ||
       fail "the checkout's tree could not be read before the $ADAPTER release built"
     (
       cd "$ROOT" || exit 1
@@ -94,10 +86,10 @@ release_build() {
         mix release cyfr --overwrite
     ) || fail "the $ADAPTER release did not build"
     [ -x "$REL/bin/cyfr" ] || fail "no release at $REL/bin/cyfr"
-    after="$(release_source "${RELEASE_BUILD_OUTPUTS[@]}")" ||
+    after="$(release_source)" ||
       fail "the checkout's tree could not be read after the $ADAPTER release built"
     [ "$before" = "$after" ] ||
-      fail "the tree changed while the $ADAPTER release built, beyond what mix assets.deploy writes under apps/cyfr/priv/static (its .gz files and digested copies), so the release is not recorded for reuse; build it again once the tree holds still"
+      fail "the tree changed while the $ADAPTER release built, so the release is not recorded for reuse; build it again once the tree holds still"
     release_source >"$BUILD_PATH/release-source.part" &&
       mv "$BUILD_PATH/release-source.part" "$BUILD_PATH/release-source" ||
       fail "the release's source could not be recorded"
@@ -111,19 +103,17 @@ release_build() {
 # git does not ignore, so a source file not yet added changes it too. Each
 # part is hashed apart and named, so no two trees share a text. A file
 # that vanishes between the listing and its read counts as vanished, and a
-# symlink as its target, never its target's content. Pathspecs `$@` narrow
-# both the difference from HEAD and the untracked files (`release_build`
-# leaves the build's own output out); with none, the whole tree.
+# symlink as its target, never its target's content.
 release_source() {
   local head tree
   head="$(git -C "$ROOT" rev-parse --verify HEAD)" || return 1
   tree="$(
     set -o pipefail
     cd "$ROOT" || exit 1
-    diff="$(git diff HEAD --binary --no-ext-diff --no-textconv --no-color -- . "$@" | sha256sum)" || exit 1
+    diff="$(git diff HEAD --binary --no-ext-diff --no-textconv --no-color | sha256sum)" || exit 1
     untracked="$(mktemp "${TMPDIR:-/tmp}/cyfr-release-source-XXXXXX")" || exit 1
     trap 'rm -f "$untracked"' EXIT
-    git ls-files -z --others --exclude-standard -- . "$@" >"$untracked" || exit 1
+    git ls-files -z --others --exclude-standard >"$untracked" || exit 1
     {
       printf 'diff\0%s\0' "${diff:0:64}"
       while IFS= read -r -d '' path; do

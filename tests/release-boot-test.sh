@@ -105,12 +105,12 @@ git -C "$tree" config user.email test@example.com
 git -C "$tree" config user.name test
 printf 'one\n' >"$tree/a.txt"
 printf 'two\n' >"$tree/b.txt"
-printf 'ignored/\n' >"$tree/.gitignore"
-# One of the build's own tracked outputs (mix assets.deploy's .gz files),
-# the static source it is made from, and a .gz the build does not write.
+# The checkout's own ignore rules, so the build's output is ignored here
+# as it is there, and one directory of the test's.
+{ cat "$root/.gitignore"; printf 'ignored/\n'; } >"$tree/.gitignore"
+# A static source mix assets.deploy digests, and a .gz it does not write.
 mkdir -p "$tree/apps/cyfr/priv/static" "$tree/apps/cyfr/assets"
 printf 'User-agent: *\n' >"$tree/apps/cyfr/priv/static/robots.txt"
-printf 'User-agent: *\n' | gzip -n -1 >"$tree/apps/cyfr/priv/static/robots.txt.gz"
 printf 'vendored\n' | gzip -n >"$tree/apps/cyfr/assets/vendor.js.gz"
 git -C "$tree" add -A
 git -C "$tree" commit -qm base
@@ -190,18 +190,20 @@ cp "$scratch/record" "$scratch/build/release-source"
 reused "the record restored"
 pass "a missing or malformed record is refused"
 
-# A stand-in `mix`: assets.deploy rewrites the tracked .gz as the real one
-# does (the same content, other bytes: another compression level) and
-# writes an untracked digested copy and its .gz, as phx.digest does for a
-# static source whose copies are not committed; `release` leaves a
-# release. With STUB_MIX_EDIT=PATH, a developer's save lands on PATH while
-# the release builds.
-digested="apps/cyfr/priv/static/sw-0123456789abcdef0123456789abcdef.js"
+# A stand-in `mix`: assets.deploy writes what phx.digest writes beside a
+# static source, its gzip companion and digested copies (ignored, as the
+# checkout's rules ignore them), and `release` leaves a release. With
+# STUB_MIX_EDIT=PATH, a developer's save lands on PATH while the release
+# builds.
+static=apps/cyfr/priv/static
+digested="$static/sw-0123456789abcdef0123456789abcdef.js"
 cat >"$scratch/bin/mix" <<SH
 #!/usr/bin/env bash
 case "\$1" in
   assets.deploy)
-    printf 'User-agent: *\\n' | gzip -n -9 >apps/cyfr/priv/static/robots.txt.gz
+    gzip -n -c $static/robots.txt >$static/robots.txt.gz
+    cp $static/robots.txt $static/robots-9e2c81b0855bbff2baa8371bc4a78186.txt
+    gzip -n -c $static/robots.txt >$static/robots-9e2c81b0855bbff2baa8371bc4a78186.txt.gz
     printf 'self.addEventListener("fetch", () => {});\\n' >"$digested"
     gzip -n -c "$digested" >"$digested.gz"
     ;;
@@ -215,10 +217,10 @@ esac
 exit 0
 SH
 chmod +x "$scratch/bin/mix"
-# The tree as the committed outputs leave it: no digested copy untracked.
+# The tree as a checkout leaves it: the sources, none of the build's output.
 unbuilt() {
   git -C "$tree" checkout -q -- .
-  rm -f "$tree/$digested" "$tree/$digested.gz"
+  git -C "$tree" clean -q -fdX -- "$static"
 }
 edited_mid_build() {
   [ "$(STUB_MIX_EDIT="$1" status_of drive build)" = 1 ] || { cat "$scratch/out" >&2; fail "a release built around a mid-build edit of $1 was recorded"; }
@@ -235,13 +237,12 @@ edited_mid_build apps/cyfr/assets/vendor.js.gz
 pass "a .gz outside apps/cyfr/priv/static edited while the release builds leaves it unrecorded"
 
 [ "$(status_of drive build)" = 0 ] || { cat "$scratch/out" >&2; fail "a build that wrote only its own output was not recorded"; }
-git -C "$tree" diff --quiet -- apps/cyfr/priv/static/robots.txt.gz && fail "the stand-in build rewrote no .gz"
-[ -f "$tree/$digested" ] && [ -f "$tree/$digested.gz" ] || fail "the stand-in build wrote no digested copy"
-git -C "$tree" ls-files --error-unmatch -- "$digested" >/dev/null 2>&1 && fail "the digested copy is tracked"
+for f in "$static/robots.txt.gz" "$digested" "$digested.gz"; do [ -f "$tree/$f" ] || fail "the stand-in build wrote no $f"; done
+[ -z "$(git -C "$tree" status --porcelain -- "$static")" ] || { git -C "$tree" status --porcelain -- "$static" >&2; fail "the build's output under $static is not ignored"; }
 [ -s "$scratch/build/release-source" ] || fail "a build that wrote only its own output left no record"
-reused "the release whose build rewrote its own .gz and wrote an untracked digested copy"
+reused "the release whose build wrote its digested copies and .gz"
 unbuilt
-pass "a build that rewrites its tracked .gz and writes untracked digested copies is recorded and reused"
+pass "a build that writes digested copies and .gz into the ignored paths is recorded and reused"
 
 # --- the readiness window ------------------------------------------------------
 
