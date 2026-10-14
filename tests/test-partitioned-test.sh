@@ -17,6 +17,11 @@ cleanup() {
     mkdir -p "$CYFR_RUNNER_TEST_EVIDENCE"
     cp -R "$scratch/." "$CYFR_RUNNER_TEST_EVIDENCE/"
   fi
+  # A nested runner never sweeps the registry it was given; the test that
+  # gave it stops what it lists.
+  if [ -s "$scratch/nested-registry" ]; then
+    (. "$root/scripts/lib/contain.sh" && CONTAIN_REGISTRY="$scratch/nested-registry" contain_sweep_registry 5) || result=1
+  fi
   if [ -f "$scratch/trace/prepared" ]; then
     while IFS= read -r directory; do
       case "$directory" in /tmp/cyfr-t.*|/private/tmp/cyfr-t.*)
@@ -97,6 +102,15 @@ case "$1" in
           while :; do sleep 1; done
         fi
         [ "${NOOP_DROP:-0}" != 1 ] || exit 0
+        if [ "${TERM_RESISTANT:-0}" = 1 ]; then
+          # A drop must never run beside a partition still using the database.
+          saw=none
+          while read -r leader; do
+            state=$(cat "/proc/$leader/stat" 2>/dev/null) || continue
+            case "${state##*) }" in Z*|X*) ;; *) saw=alive ;; esac
+          done < "$TRACE/resistant-leaders"
+          echo "$saw" >> "$TRACE/drop-saw"
+        fi
         echo "$CYFR_DATABASE_URL" >> "$TRACE/dropped"
         [ "${FAIL_CLEANUP:-0}" != 1 ] || exit 9
         rm "$CYFR_TEST_RUN_ROOT/database-created" ;;
@@ -140,8 +154,15 @@ case "$1" in
       wait
     fi
     if [ -n "${EMPTY_RUN:-}" ]; then
-      echo 'There are no tests to run'
-      [ "$EMPTY_RUN" != crash ] || echo '** (RuntimeError) the suite did not load'
+      case "$EMPTY_RUN" in
+        stale) echo 'No stale tests' ;;
+        *) echo 'There are no tests to run' ;;
+      esac
+      case "$EMPTY_RUN" in
+        crash) echo '** (RuntimeError) the suite did not load' ;;
+        paths) echo 'Paths given to "mix test" did not match any directory/file: apps/gone_test.exs' ;;
+        only) echo 'The --only option was given to "mix test" but no test was executed' ;;
+      esac
       exit 0
     fi
     if [ "${WAIT_CHILD:-0}" = 1 ]; then
@@ -719,6 +740,21 @@ grep -q 'no test to run: the --failed or --stale selection is empty' "$scratch/s
 [ "$(EMPTY_RUN=1 status_of "${clean[@]}" bash "$runner" -n 1)" = 1 ] || fail 'an empty run without --failed passed'
 grep -q 'NO RESULT' "$scratch/status" || fail 'an empty run without --failed was not called NO RESULT'
 [ "$(EMPTY_RUN=crash status_of "${clean[@]}" bash "$runner" -n 1 -- --failed)" = 1 ] || fail 'an empty rerun that raised passed'
+[ "$(EMPTY_RUN=paths status_of "${clean[@]}" bash "$runner" -n 1 -- --failed)" = 1 ] || fail 'an empty rerun whose paths matched nothing passed'
+[ "$(EMPTY_RUN=only status_of "${clean[@]}" bash "$runner" -n 1 -- --failed)" = 1 ] || fail 'an empty rerun whose --only ran nothing passed'
+[ "$(EMPTY_RUN=stale status_of "${clean[@]}" bash "$runner" -n 1 -- --stale)" = 0 ] || fail 'an empty --stale run failed'
+grep -q 'no test to run: the --failed or --stale selection is empty' "$scratch/status" || fail 'the empty --stale run was not named'
+[ "$(EMPTY_RUN=stale status_of "${clean[@]}" bash "$runner" -n 1)" = 1 ] || fail 'No stale tests without --stale passed'
+
+# Mix filters a whole run by its lines, so with more than one partition a
+# path with a line beside one without is refused; one partition passes them.
+mkdir -p apps/mixed/test
+touch apps/mixed/test/a_test.exs apps/mixed/test/b_test.exs
+[ "$(status_of "${clean[@]}" bash "$runner" -n 2 -- apps/mixed/test/a_test.exs apps/mixed/test/b_test.exs:3)" = 64 ] ||
+  fail 'paths with and without a line were split'
+grep -q 'paths with a line and paths without one cannot be split' "$scratch/status" || fail 'the mixed paths refusal does not say why'
+[ "$(status_of "${clean[@]}" bash "$runner" -n 1 -- apps/mixed/test/a_test.exs apps/mixed/test/b_test.exs:3)" = 0 ] ||
+  fail 'one partition refused paths with and without a line'
 
 # The compile takes every core of the run's share; a partition its part.
 : > "$TRACE/erl-flags"
@@ -786,6 +822,33 @@ while read -r leader; do
 done < "$TRACE/resistant-leaders"
 echo "eight resistant partitions stopped in ${took}s"
 
+# Nested, as under heavy-check or the gate, the runner owns no registry and
+# sweeps none, so its own stop is all that ends its partitions: every
+# leader is dead when it exits, and on PostgreSQL before any drop runs.
+alive() {
+  local state
+  state=$(cat "/proc/$1/stat" 2>/dev/null) || return 1
+  case "${state##*) }" in Z*|X*) return 1 ;; esac
+}
+(umask 077 && : > "$scratch/nested-registry")
+for adapter in sqlite postgres; do
+  : > "$TRACE/resistant-leaders"
+  : > "$TRACE/drop-saw"
+  TERM_RESISTANT=1 env -u HEAVY_CHECK_HELD -u CONTAIN_CLOSE_FDS -u CONTAIN_HOLD_FDS CONTAIN_REGISTRY="$scratch/nested-registry" \
+    bash "$runner" -n 2 -a "$adapter" >"$scratch/nested-$adapter" 2>&1 &
+  nested=$!
+  await_lines "$TRACE/resistant-leaders" 2
+  stop_runner "$nested" TERM 60 "$scratch/nested-$adapter"
+  while read -r leader; do
+    if alive "$leader"; then fail "a partition leader outlived its nested $adapter runner"; fi
+  done < "$TRACE/resistant-leaders"
+  if [ "$adapter" = postgres ]; then
+    [ "$(sort -u "$TRACE/drop-saw")" = none ] && [ "$(wc -l < "$TRACE/drop-saw")" = 2 ] ||
+      fail "a drop ran beside a live partition: $(tr '\n' ' ' < "$TRACE/drop-saw")"
+  fi
+done
+[ -s "$scratch/nested-registry" ] || fail 'the nested runner did not register its sessions'
+
 # Eight hanging drops are stopped together, within 70 s (45 + 10 + 15) of
 # the partitions' end, and every environment file goes.
 : > "$TRACE/drop-leaders"
@@ -831,25 +894,50 @@ stop_runner "$stopped" TERM 60 "$scratch/stopped"
 grep -qx '==> the failures record was left unmerged: the run stopped before its partitions ended' "$scratch/stopped" ||
   fail 'a stopped run did not say its failures record was left unmerged'
 
+# The test's lock holder takes the record's lock itself and becomes the
+# sleep that holds it, so stopping it frees the lock and leaves nothing.
+hold_record_lock() {
+  bash -c 'exec 9>>"$1" && flock 9 && touch "$TRACE/locked" && exec sleep 120' hold "$canonical.lock" &
+  holder=$!
+  await_file "$TRACE/locked"
+}
+release_record_lock() {
+  kill "$holder" 2>/dev/null || :
+  wait "$holder" 2>/dev/null || :
+  flock -n "$canonical.lock" true || fail "the test's lock holder left the record's lock held"
+}
+
+# The run waits for the record's lock: held, the seed waits, and the run
+# ends only once it is released.
+rm -f "$TRACE/locked"
+mkdir -p "$(dirname "$canonical")"
+hold_record_lock
+"${clean[@]}" bash "$runner" -n 1 >"$scratch/lock-wait" 2>&1 &
+lock_wait=$!
+for ((i=0; i<600; i++)); do pgrep -f "flock -w 60 $canonical.lock elixir" >/dev/null && break; sleep 0.1; done
+pgrep -f "flock -w 60 $canonical.lock elixir" >/dev/null || fail 'the seed never waited on the record lock'
+sleep 1
+alive "$lock_wait" || fail 'the run did not wait for the record lock'
+release_record_lock
+if wait "$lock_wait"; then :; else fail "the run that waited for the record lock failed: $(tail -n 3 "$scratch/lock-wait")"; fi
+
 # A merge stopped part-way leaves the canonical record whole, and the
 # runner says the merge did not complete. The merge waits on the record's
-# lock, held here.
+# lock, held here; stopped, it leaves nothing waiting for the lock.
 rm -f "$TRACE/release" "$TRACE/recorded-1" "$TRACE/locked"
 mkdir -p "$(dirname "$canonical")"
 RECORD_AND_WAIT=1 "${clean[@]}" bash "$runner" -n 1 >"$scratch/unmerged" 2>&1 &
 unmerged=$!
 await_file "$TRACE/recorded-1"
 unmerged_dir=$(tail -n 1 "$TRACE/prepared")
-flock "$canonical.lock" sh -c 'touch "$TRACE/locked"; exec sleep 120' &
-holder=$!
-await_file "$TRACE/locked"
+hold_record_lock
 touch "$TRACE/release"
 for ((i=0; i<600; i++)); do pgrep -f "failures-merge $unmerged_dir" >/dev/null && break; sleep 0.1; done
 pgrep -f "failures-merge $unmerged_dir" >/dev/null || fail 'the merge never started'
 sleep 1
 stop_runner "$unmerged" TERM 60 "$scratch/unmerged"
-kill "$holder" 2>/dev/null || :
-wait "$holder" 2>/dev/null || :
+if pgrep -f -- "$canonical.lock" >/dev/null; then fail "a stopped merge left a process waiting for the record lock: $(pgrep -af -- "$canonical.lock")"; fi
+release_record_lock
 [ "$(record_sum)" = "$before" ] || fail 'a stopped merge changed the failures record'
 grep -qx '==> the failures record merge did not complete; the canonical record was left as it was' "$scratch/unmerged" ||
   fail 'a stopped merge was not reported'
@@ -1028,4 +1116,17 @@ toy_run "$scratch/toy-17" -n 2 -- --warnings-as-errors
 [ "$toy_status" = 1 ] && grep -qx '==> refused under --warnings-as-errors, as Mix refuses them' "$scratch/toy-17" ||
   fail 'a misnamed file passed under --warnings-as-errors'
 rm "$toy/apps/one/test/oops_tests.exs"
+# A record of :all (a suite that failed to load) reruns the whole suite:
+# with more than one partition every file is assigned and --failed is
+# dropped, since Mix would read the record per application in one VM; one
+# partition passes --failed to Mix as given.
+toy_all() { (cd "$toy" && PATH=$real_path elixir -e 'File.write!("_build/test/test_failures", :erlang.term_to_binary({1, :all}))'); }
+toy_all
+toy_run "$scratch/toy-all" -n 2 -- --warnings-as-errors --failed
+[ "$toy_status" = 0 ] || fail "the rerun of an :all record failed with $toy_status"
+[ "$(toy_files 1)$(toy_files 2)" = 'a_test.exs d_test.exs e_test.exs b_test.exs c_test.exs ' ] || fail "an :all record assigned $(toy_files 1)/ $(toy_files 2)"
+if grep -q -- '--failed' "$toy_trace"; then fail "an :all record kept --failed: $(cat "$toy_trace")"; fi
+toy_all
+toy_run "$scratch/toy-all-1" -n 1 -- --warnings-as-errors --failed
+[ "$(cat "$toy_trace")" = '1 --no-compile --warnings-as-errors --failed' ] || fail "one partition was given $(cat "$toy_trace")"
 echo 'partition runner tests passed'

@@ -204,11 +204,20 @@ if [ "$stale" = true ] && [ "$PARTITIONS" -gt 1 ]; then
   echo '--stale runs one partition: its manifest cannot be merged across partitions' >&2; exit 64
 fi
 line_suffix='^(.+):[0-9]+$'
+located=false
+unlocated=false
 for j in ${path_index[@]+"${path_index[@]}"}; do
   path=${args[$j]}
+  if [[ $path =~ $line_suffix ]]; then located=true; else unlocated=true; fi
   while [[ $path =~ $line_suffix ]]; do path=${BASH_REMATCH[1]}; done
   [ -e "$path" ] || { echo "no such test path: ${args[$j]}" >&2; exit 64; }
 done
+# Mix applies a line filter to the whole run: beside a path with a line, a
+# path without one runs nothing of its own. A split cannot reproduce that.
+if [ "$PARTITIONS" -gt 1 ] && [ "$located" = true ] && [ "$unlocated" = true ]; then
+  echo 'with more than one partition, paths with a line and paths without one cannot be split: Mix filters the whole run by the lines; use -n 1' >&2
+  exit 64
+fi
 if [ "$PARTITIONS" -gt 1 ]; then
   if [ -n "${CYFR_TEST_WEIGHTS+set}" ]; then
     [ -n "$CYFR_TEST_WEIGHTS" ] || { echo 'CYFR_TEST_WEIGHTS names no file' >&2; exit 64; }
@@ -220,6 +229,10 @@ if [ "$PARTITIONS" -gt 1 ]; then
 fi
 
 if [ -z "${MIX_BUILD_PATH:-}" ] && [ "$ADAPTER" = postgres ]; then export MIX_BUILD_PATH=_build/test_pg; fi
+# The canonical failures record's lock (config/test.exs names the record).
+record_build=${MIX_BUILD_PATH:-_build/test}
+case "$record_build" in /*) ;; *) record_build="$checkout/$record_build" ;; esac
+record_lock="$record_build/test_failures.lock"
 export CYFR_DATABASE="$ADAPTER" MIX_ENV=test CYFR_TEST_PARTITION_ENV_LIBRARY=0
 # Mix keeps its build lock under TMPDIR, and every Mix process here runs
 # under a partition's own, so the lock excludes no one. It is off because
@@ -303,8 +316,16 @@ valid_receipt() {
 
 check_weights() { exec elixir "$helper" weights "$weights_table" "$weights_required"; }
 prepare_run() { exec elixir "$helper" prepare "$out_dir" "$checkout" "$PARTITIONS" "$ADAPTER" "$cluster"; }
-seed_failures() { exec elixir "$helper" failures-seed "$out_dir" "$PARTITIONS"; }
-merge_records() { exec elixir "$helper" failures-merge "$out_dir" "$PARTITIONS" "$@"; }
+# The record's lock is held outside the VM, by the contained leader itself,
+# so a stopped seed or merge leaves no lock holder behind.
+seed_failures() {
+  mkdir -p "${record_lock%/*}" || exit 1
+  exec flock -w 60 "$record_lock" elixir "$helper" failures-seed "$out_dir" "$PARTITIONS"
+}
+merge_records() {
+  mkdir -p "${record_lock%/*}" || exit 1
+  exec flock -w 60 "$record_lock" elixir "$helper" failures-merge "$out_dir" "$PARTITIONS" "$@"
+}
 # The pinned validator the dev and test configurations name
 # (`_tools/wasm-tools`), which the suite's applications check as they start.
 install_tools() { exec "$script_dir/wasm-tools.sh" install "$script_dir/../_tools" >/dev/null; }
@@ -357,7 +378,7 @@ contained() {
   shift
   contain_start -g "$grace" "$BASH" -c "set -uo pipefail
 $(declare -p out_dir checkout helper script_dir ADAPTER PARTITIONS cluster failed \
-  partition_flags compile_flags weights_table weights_required)
+  partition_flags compile_flags weights_table weights_required record_lock)
 $(declare -f load_partition_env valid_receipt "$1")
 $1 \"\$@\"" "$1" "${@:2}" || status=$?
   if [ "$status" != 0 ]; then

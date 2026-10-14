@@ -317,25 +317,6 @@ defmodule Cyfr.TestPartitionEnvTest do
     assert File.read!(canonical) == old
   end
 
-  test "a merge waits for the lock another holder has", %{root: root} do
-    canonical = Path.join(root, "_build/test/test_failures")
-    run = partition_run(root, "locked", 1, [{1, %{@a => "/a"}}])
-    flock = System.find_executable("flock")
-
-    holder =
-      Port.open({:spawn_executable, flock}, [
-        :binary,
-        :exit_status,
-        args: [canonical <> ".lock", "sh", "-c", "echo held; exec sleep 2"]
-      ])
-
-    assert_receive {^holder, {:data, "held\n"}}, 5_000
-    {usec, :ok} = :timer.tc(fn -> Env.failures_merge!(run, [1], root) end)
-    assert usec > 1_000_000
-    assert_receive {^holder, {:exit_status, 0}}, 5_000
-    assert read_record(canonical) == {1, %{@a => "/a"}}
-  end
-
   test "the weights table's grammar", %{root: root} do
     table = Path.join(root, "weights.tsv")
     File.write!(table, "# comment\n12.5\tapps/a/test/a_test.exs\n3\tapps/b/test/b_test.exs\n")

@@ -137,7 +137,9 @@ defmodule Cyfr.TestPartitionEnv do
   # `{1, %{{module, name} => file}}` or `{1, :all}`. Each partition records
   # into its own copy of the canonical one, and the run folds each copy's
   # change back into the canonical record as it stands then, so two runs
-  # that end in either order each keep the other's result.
+  # that end in either order each keep the other's result. The runner holds
+  # the record's lock, `flock <canonical>.lock`, around this VM, so a
+  # stopped seed or merge takes its lock holder with it.
   @record_version 1
 
   def canonical_failures(checkout) do
@@ -150,21 +152,19 @@ defmodule Cyfr.TestPartitionEnv do
   def failures_seed!(directory, count, checkout) do
     canonical = canonical_failures(checkout)
 
-    with_record_lock!(canonical, fn ->
-      binary =
-        case File.read(canonical) do
-          {:ok, binary} -> binary
-          {:error, :enoent} -> :erlang.term_to_binary({@record_version, %{}})
-        end
-
-      File.write!(Path.join(directory, "base"), binary)
-
-      for partition <- 1..count//1 do
-        root = Path.join(directory, "p#{partition}")
-        File.mkdir_p!(root)
-        File.write!(Path.join(root, "failures"), binary)
+    binary =
+      case File.read(canonical) do
+        {:ok, binary} -> binary
+        {:error, :enoent} -> :erlang.term_to_binary({@record_version, %{}})
       end
-    end)
+
+    File.write!(Path.join(directory, "base"), binary)
+
+    for partition <- 1..count//1 do
+      root = Path.join(directory, "p#{partition}")
+      File.mkdir_p!(root)
+      File.write!(Path.join(root, "failures"), binary)
+    end
 
     :ok
   end
@@ -172,36 +172,35 @@ defmodule Cyfr.TestPartitionEnv do
   def failures_merge!(directory, started, checkout) do
     canonical = canonical_failures(checkout)
 
-    with_record_lock!(canonical, fn ->
-      seed = File.read(Path.join(directory, "base"))
+    seed = File.read(Path.join(directory, "base"))
 
-      parts =
-        for partition <- started do
-          case File.read(Path.join([directory, "p#{partition}", "failures"])) do
-            # Never reached its suite's end, or recorded nothing new.
-            ^seed -> :unchanged
-            {:ok, binary} -> decode_record(binary) || :none
-            {:error, _} -> :none
-          end
+    parts =
+      for partition <- started do
+        case File.read(Path.join([directory, "p#{partition}", "failures"])) do
+          # Never reached its suite's end, or recorded nothing new.
+          ^seed -> :unchanged
+          {:ok, binary} -> decode_record(binary) || :none
+          {:error, _} -> :none
         end
+      end
 
-      base =
-        case seed do
-          {:ok, binary} -> decode_record(binary) || %{}
-          {:error, _} -> %{}
-        end
+    base =
+      case seed do
+        {:ok, binary} -> decode_record(binary) || %{}
+        {:error, _} -> %{}
+      end
 
-      current =
-        case File.read(canonical) do
-          {:ok, binary} -> decode_record(binary) || %{}
-          {:error, :enoent} -> %{}
-        end
+    current =
+      case File.read(canonical) do
+        {:ok, binary} -> decode_record(binary) || %{}
+        {:error, :enoent} -> %{}
+      end
 
-      result = merge_records(current, base, parts)
-      partial = canonical <> ".partial"
-      File.write!(partial, :erlang.term_to_binary({@record_version, result}))
-      File.rename!(partial, canonical)
-    end)
+    result = merge_records(current, base, parts)
+    File.mkdir_p!(Path.dirname(canonical))
+    partial = canonical <> ".partial"
+    File.write!(partial, :erlang.term_to_binary({@record_version, result}))
+    File.rename!(partial, canonical)
 
     :ok
   end
@@ -239,34 +238,6 @@ defmodule Cyfr.TestPartitionEnv do
     end
   rescue
     ArgumentError -> nil
-  end
-
-  # flock(1) holds the lock for as long as its child reads standard input,
-  # which is this VM's end of the port: the lock goes when the VM does.
-  defp with_record_lock!(canonical, fun) do
-    File.mkdir_p!(Path.dirname(canonical))
-    flock = System.find_executable("flock") || raise "flock (util-linux) is required"
-
-    port =
-      Port.open({:spawn_executable, flock}, [
-        :binary,
-        :exit_status,
-        {:line, 64},
-        args: [canonical <> ".lock", "sh", "-c", "echo locked; exec cat >/dev/null"]
-      ])
-
-    receive do
-      {^port, {:data, {:eol, "locked"}}} -> :ok
-      {^port, {:exit_status, _}} -> raise "the failures record lock was refused"
-    after
-      60_000 -> raise "the failures record lock was not taken within 60 s"
-    end
-
-    try do
-      fun.()
-    after
-      Port.close(port)
-    end
   end
 
   # The weights table: `<seconds>\t<path>` lines and `#` comments, the path
