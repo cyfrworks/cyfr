@@ -234,3 +234,88 @@ defmodule Emissary.MCP.SubscriptionsTest do
     end
   end
 end
+
+defmodule Emissary.MCP.SubscriptionsStreamTest do
+  @moduledoc """
+  The frames a `subscriptions/listen` stream carries, written by the
+  transport: each fact the stream's topic carries is one notification on
+  it, and none is a decision. The listen's one admission is.
+  """
+  use Emissary.Web.ConnCase, async: false
+
+  import Ecto.Query, only: [from: 2]
+  import Prima.Test.Wait
+
+  alias Emissary.MCP.Subscriptions
+
+  setup do
+    # The stream's own window, short: the case's stream ends with it.
+    Cyfr.Test.Settings.put("mcp_subscription_max_ms", 3_000)
+
+    ctx = Sanctum.TestContext.issuer!(Sanctum.TestContext.local())
+    {:ok, session} = Sanctum.Session.create(ctx)
+    {:ok, ctx: ctx, session: session}
+  end
+
+  test "three facts are three frames on the stream, and the listen is its one decision", %{
+    conn: conn,
+    ctx: ctx,
+    session: session
+  } do
+    listen =
+      Task.async(fn ->
+        conn
+        |> put_req_header("content-type", "application/json")
+        |> put_req_header("authorization", "Bearer " <> session.token)
+        |> mcp_post(%{
+          "jsonrpc" => "2.0",
+          "id" => 21,
+          "method" => "subscriptions/listen",
+          "params" => %{"notifications" => %{"toolsListChanged" => true}}
+        })
+      end)
+
+    # Open: acknowledged and waiting in its loop with nothing left to take,
+    # so every fact sent from here reaches the loop.
+    wait_until(
+      fn ->
+        match?(
+          [
+            current_function: {Emissary.Web.MCPController, :listen_loop, 4},
+            message_queue_len: 0
+          ],
+          Process.info(listen.pid, [:current_function, :message_queue_len])
+        )
+      end,
+      2_000,
+      "the listen to wait in its loop"
+    )
+
+    actor = Sanctum.Context.actor(ctx)
+
+    for _ <- 1..3 do
+      :ok =
+        Cyfr.Bus.broadcast(
+          actor,
+          Cyfr.Bus.mcp_servers(actor),
+          Cyfr.Bus.McpServers.new(actor, :changed)
+        )
+    end
+
+    conn = Task.await(listen, 10_000)
+
+    changed =
+      for "data: " <> data <- String.split(conn.resp_body, "\n\n", trim: true),
+          %{"method" => "notifications/tools/list_changed"} = frame <- [Jason.decode!(data)],
+          do: frame["params"]["_meta"][Subscriptions.subscription_id_key()]
+
+    assert changed == [21, 21, 21]
+
+    assert [request_id] = get_resp_header(conn, "x-request-id")
+
+    assert [%{tool: "stream:mcp_servers.changes", admission: "admitted"}] =
+             Arca.Repo.all(
+               from(d in Arca.Schemas.DecisionLog, where: d.request_id == ^request_id)
+             )
+  end
+end

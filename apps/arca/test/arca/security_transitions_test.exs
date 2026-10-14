@@ -432,23 +432,21 @@ defmodule Arca.SecurityTransitions.Fixtures do
   def fail_on!(table, event) do
     name = "st_fail_#{table}_#{String.downcase(event)}"
 
-    case Arca.Repo.adapter() do
-      Ecto.Adapters.SQLite3 ->
-        Arca.Repo.query!(
-          "CREATE TRIGGER #{name} BEFORE #{event} ON #{table} " <>
-            "BEGIN SELECT RAISE(ABORT, 'injected #{event} failure'); END"
-        )
+    if Arca.Test.Adapter.sqlite?() do
+      Arca.Repo.query!(
+        "CREATE TRIGGER #{name} BEFORE #{event} ON #{table} " <>
+          "BEGIN SELECT RAISE(ABORT, 'injected #{event} failure'); END"
+      )
+    else
+      Arca.Repo.query!(
+        "CREATE FUNCTION #{name}() RETURNS trigger LANGUAGE plpgsql AS " <>
+          "$$ BEGIN RAISE EXCEPTION 'injected #{event} failure'; END $$"
+      )
 
-      _postgres ->
-        Arca.Repo.query!(
-          "CREATE FUNCTION #{name}() RETURNS trigger LANGUAGE plpgsql AS " <>
-            "$$ BEGIN RAISE EXCEPTION 'injected #{event} failure'; END $$"
-        )
-
-        Arca.Repo.query!(
-          "CREATE TRIGGER #{name} BEFORE #{event} ON #{table} " <>
-            "FOR EACH ROW EXECUTE FUNCTION #{name}()"
-        )
+      Arca.Repo.query!(
+        "CREATE TRIGGER #{name} BEFORE #{event} ON #{table} " <>
+          "FOR EACH ROW EXECUTE FUNCTION #{name}()"
+      )
     end
 
     name
@@ -461,39 +459,35 @@ defmodule Arca.SecurityTransitions.Fixtures do
   def skip_on!(table, event) do
     name = "st_skip_#{table}_#{String.downcase(event)}"
 
-    case Arca.Repo.adapter() do
-      Ecto.Adapters.SQLite3 ->
-        Arca.Repo.query!(
-          "CREATE TRIGGER #{name} BEFORE #{event} ON #{table} " <>
-            "BEGIN SELECT RAISE(IGNORE); END"
-        )
+    if Arca.Test.Adapter.sqlite?() do
+      Arca.Repo.query!(
+        "CREATE TRIGGER #{name} BEFORE #{event} ON #{table} " <>
+          "BEGIN SELECT RAISE(IGNORE); END"
+      )
+    else
+      Arca.Repo.query!(
+        "CREATE FUNCTION #{name}() RETURNS trigger LANGUAGE plpgsql AS " <>
+          "$$ BEGIN RETURN NULL; END $$"
+      )
 
-      _postgres ->
-        Arca.Repo.query!(
-          "CREATE FUNCTION #{name}() RETURNS trigger LANGUAGE plpgsql AS " <>
-            "$$ BEGIN RETURN NULL; END $$"
-        )
-
-        Arca.Repo.query!(
-          "CREATE TRIGGER #{name} BEFORE #{event} ON #{table} " <>
-            "FOR EACH ROW EXECUTE FUNCTION #{name}()"
-        )
+      Arca.Repo.query!(
+        "CREATE TRIGGER #{name} BEFORE #{event} ON #{table} " <>
+          "FOR EACH ROW EXECUTE FUNCTION #{name}()"
+      )
     end
 
     name
   end
 
   def clear_failure!(name) do
-    case Arca.Repo.adapter() do
-      Ecto.Adapters.SQLite3 ->
-        Arca.Repo.query!("DROP TRIGGER #{name}")
+    if Arca.Test.Adapter.sqlite?() do
+      Arca.Repo.query!("DROP TRIGGER #{name}")
+    else
+      table =
+        Regex.replace(~r/_(delete|update)$/, Regex.replace(~r/^st_(fail|skip)_/, name, ""), "")
 
-      _postgres ->
-        table =
-          Regex.replace(~r/_(delete|update)$/, Regex.replace(~r/^st_(fail|skip)_/, name, ""), "")
-
-        Arca.Repo.query!("DROP TRIGGER #{name} ON #{table}")
-        Arca.Repo.query!("DROP FUNCTION #{name}()")
+      Arca.Repo.query!("DROP TRIGGER #{name} ON #{table}")
+      Arca.Repo.query!("DROP FUNCTION #{name}()")
     end
   end
 end
@@ -506,8 +500,9 @@ defmodule Arca.SecurityTransitionsTest do
   leaves with no membership here, the generation every real change
   raises, and a failed statement rolling back everything — the injected
   session DELETE, key UPDATE and certificate UPDATE failures included,
-  after which an allow revives nothing — or a skipped one failing the
-  postcondition.
+  after which an allow revives nothing, and a failed retirement inside an
+  allow or a reopen, which leaves the denial or the archive standing — or
+  a skipped one failing the postcondition.
   """
 
   use ExUnit.Case, async: false
@@ -520,6 +515,12 @@ defmodule Arca.SecurityTransitionsTest do
     [:cyfr, :arca, :file_offer, :withdrawn],
     [:cyfr, :arca, :file_offer, :declined]
   ]
+
+  # The tables an allow and a reopen retire stragglers in, each inside the
+  # transition's transaction: a client's confirmations are voided with it
+  # (`Arca.PairedClients.retire_dependents!/1`).
+  @retirement_tables ~w(frame_credentials paired_clients device_certificates
+                        pairing_invitations pending_confirmations)
 
   defp observe_offer_ends!(athanor_id, offers) do
     # The fixture's offer IDs include its tenant; file telemetry carries no
@@ -592,6 +593,48 @@ defmodule Arca.SecurityTransitionsTest do
       :atomics.add(config.counters, 1, 1)
     end
   end
+
+  # A frame, a paired client with its certificate and a confirmation it
+  # confirmed, and a pairing invitation of the person in the athanor,
+  # issued after a denial or an archive: what the allow or the reopen that
+  # follows retires.
+  defp stragglers!(athanor_id, user_id) do
+    client = paired!(athanor_id, user_id)
+
+    [
+      {Arca.Schemas.FrameCredential, frame!(athanor_id, user_id)},
+      {Arca.Schemas.PairedClient, client},
+      {Arca.Schemas.DeviceCertificate, certificate!(athanor_id, user_id, client)},
+      {Arca.Schemas.PairingInvitation, invitation!(athanor_id, user_id)},
+      {Arca.Schemas.PendingConfirmation, confirmation!(athanor_id, user_id, client: client)}
+    ]
+  end
+
+  # Each straggler's whole row, as stored.
+  defp rows(stragglers), do: for({schema, id} <- stragglers, do: Arca.Repo.get(schema, id))
+
+  defp straggler_states([frame, client, cert, invitation, confirmation]) do
+    [
+      frame_state(elem(frame, 1)),
+      paired_standing(elem(client, 1)),
+      certificate_state(elem(cert, 1)),
+      invitation_state(elem(invitation, 1)),
+      confirmation_state(elem(confirmation, 1))
+    ]
+  end
+
+  # What the transition answers it retired, one list per straggler's kind.
+  defp retired_ids(change) do
+    [
+      change.revoked_frame_credential_ids,
+      change.revoked_paired_client_ids,
+      change.revoked_device_certificate_ids,
+      change.revoked_pairing_invitation_ids,
+      change.voided_confirmation_ids
+    ]
+  end
+
+  defp straggler_ids(stragglers), do: for({_schema, id} <- stragglers, do: [id])
 
   setup tags do
     Arca.Test.Sandbox.setup!(tags)
@@ -943,6 +986,37 @@ defmodule Arca.SecurityTransitionsTest do
       assert athanor(own.id).status == "archived"
       assert seats(user.id) == []
     end
+
+    for table <- @retirement_tables do
+      test "an injected #{table} UPDATE failure rolls the allow back with every straggler standing" do
+        {user, own} = owner!()
+        {:ok, _} = SecurityTransitions.deny_user(server(), user.id, verify: admit())
+        stragglers = stragglers!(own.id, user.id)
+        before = {user(user.id), athanor(own.id), rows(stragglers)}
+        assert {elem(before, 0).status, elem(before, 1).status} == {"denied", "archived"}
+        failure = fail_on!(unquote(table), "UPDATE")
+
+        assert {:error, :database_error} =
+                 SecurityTransitions.allow_user(server(), user.id, verify: admit())
+
+        # Nothing committed, row for row: no restored standing, reopened
+        # athanor or new seat beside a credential the allow was to retire.
+        assert {user(user.id), athanor(own.id), rows(stragglers)} == before
+        assert seats(user.id) == []
+
+        clear_failure!(failure)
+
+        assert {:ok, change} = SecurityTransitions.allow_user(server(), user.id, verify: admit())
+        assert change.transitioned
+        assert change.user_generation == 3
+        assert retired_ids(change) == straggler_ids(stragglers)
+        assert user(user.id).status == "active"
+        assert athanor(own.id).status == "active"
+
+        assert straggler_states(stragglers) ==
+                 ["revoked", "revoked", "revoked", "revoked", "voided"]
+      end
+    end
   end
 
   describe "archive_athanor/3 and unarchive_athanor/3" do
@@ -1072,6 +1146,38 @@ defmodule Arca.SecurityTransitionsTest do
 
       assert {:error, :not_found} =
                SecurityTransitions.archive_athanor(server(), "ath_nowhere", verify: admit())
+    end
+
+    for table <- @retirement_tables do
+      test "an injected #{table} UPDATE failure rolls the reopen back with every straggler standing" do
+        group = group!()
+        member = person!()
+        seat!(group.id, member.id)
+        {:ok, _} = SecurityTransitions.archive_athanor(server(), group.id, verify: admit())
+        stragglers = stragglers!(group.id, member.id)
+        before = {athanor(group.id), rows(stragglers)}
+        assert elem(before, 0).status == "archived"
+        failure = fail_on!(unquote(table), "UPDATE")
+
+        assert {:error, :database_error} =
+                 SecurityTransitions.unarchive_athanor(server(), group.id, verify: admit())
+
+        # Nothing committed, row for row.
+        assert {athanor(group.id), rows(stragglers)} == before
+
+        clear_failure!(failure)
+
+        assert {:ok, reopened} =
+                 SecurityTransitions.unarchive_athanor(server(), group.id, verify: admit())
+
+        assert reopened.transitioned
+        assert reopened.athanor_generations == %{group.id => 3}
+        assert retired_ids(reopened) == straggler_ids(stragglers)
+        assert athanor(group.id).status == "active"
+
+        assert straggler_states(stragglers) ==
+                 ["revoked", "revoked", "revoked", "revoked", "voided"]
+      end
     end
   end
 
@@ -2064,114 +2170,106 @@ defmodule Arca.SecurityTransitionsLockTest do
     assert reopened.athanor_generations == %{own_id => 3}
   end
 
+  # PostgreSQL alone: on SQLite the denial's immediate transaction admits
+  # no seat between its plan and its locks, so there is no moved set to find.
   @tag :postgres
   test "a membership taken while a denial locks the athanors is on the set it runs again on", %{
     user_id: user_id
   } do
-    if Arca.Repo.adapter() == Ecto.Adapters.SQLite3 do
-      # One writer: the denial's immediate transaction admits no seat
-      # between its plan and its locks, so there is no moved set to find.
-      :ok
-    else
-      pair_id = group!(%{roster: "frozen"})
-      on_exit(fn -> remove_athanors!([pair_id]) end)
-      test = self()
+    pair_id = group!(%{roster: "frozen"})
+    on_exit(fn -> remove_athanors!([pair_id]) end)
+    test = self()
 
-      # Hold the person's own athanor: the denial plans without the pair,
-      # then waits on this row while the pair's seat is written.
-      holder =
-        Task.async(fn ->
-          unboxed(fn ->
-            Arca.Repo.transaction(fn ->
-              [_] =
-                from(a in Athanor,
-                  where: a.id == ^Arca.Repo.get(User, user_id).personal_athanor_id
-                )
-                |> Arca.QueryHelpers.for_update()
-                |> Arca.Repo.all()
+    # Hold the person's own athanor: the denial plans without the pair,
+    # then waits on this row while the pair's seat is written.
+    holder =
+      Task.async(fn ->
+        unboxed(fn ->
+          Arca.Repo.transaction(fn ->
+            [_] =
+              from(a in Athanor,
+                where: a.id == ^Arca.Repo.get(User, user_id).personal_athanor_id
+              )
+              |> Arca.QueryHelpers.for_update()
+              |> Arca.Repo.all()
 
-              send(test, :holding)
+            send(test, :holding)
 
-              receive do
-                :seat -> :ok
-              end
+            receive do
+              :seat -> :ok
+            end
 
-              {1, _} = Arca.Repo.insert_all(Membership, [seat_row(pair_id, user_id)])
-            end)
+            {1, _} = Arca.Repo.insert_all(Membership, [seat_row(pair_id, user_id)])
           end)
         end)
+      end)
 
-      assert_receive :holding, 5_000
+    assert_receive :holding, 5_000
 
-      denier =
-        Task.async(fn ->
-          unboxed(fn -> SecurityTransitions.deny_user(server(), user_id, verify: admit()) end)
-        end)
+    denier =
+      Task.async(fn ->
+        unboxed(fn -> SecurityTransitions.deny_user(server(), user_id, verify: admit()) end)
+      end)
 
-      refute Task.yield(denier, 300)
-      send(holder.pid, :seat)
-      Task.await(holder, 25_000)
+    refute Task.yield(denier, 300)
+    send(holder.pid, :seat)
+    Task.await(holder, 25_000)
 
-      assert {:ok, change} = Task.await(denier, 25_000)
-      assert pair_id in change.archived_athanor_ids
-      unboxed(fn -> assert Arca.Repo.get(Athanor, pair_id).status == "archived" end)
-    end
+    assert {:ok, change} = Task.await(denier, 25_000)
+    assert pair_id in change.archived_athanor_ids
+    unboxed(fn -> assert Arca.Repo.get(Athanor, pair_id).status == "archived" end)
   end
 
+  # PostgreSQL alone: on SQLite no second connection can seat the person
+  # while the denial holds the database, so the set cannot move.
   @tag :postgres
   test "a set that moves on every attempt ends in a conflict, and nothing is written", %{
     user_id: user_id,
     own_id: own_id
   } do
-    if Arca.Repo.adapter() == Ecto.Adapters.SQLite3 do
-      # One writer: no second connection can seat the person while the
-      # denial holds the database, so the set cannot move.
+    groups = for _ <- 1..3, do: group!()
+    on_exit(fn -> remove_athanors!(groups) end)
+    {:ok, _} = seat(own_id, user_id)
+    {:ok, agent} = Agent.start_link(fn -> groups end)
+
+    # Every time the policy is asked, a second connection seats the
+    # person in one more group, past the person's lock (`seat_row/2`):
+    # the set the denial planned has moved by the time it would write.
+    verify = fn _rows ->
+      next = Agent.get_and_update(agent, fn [next | rest] -> {next, rest} end)
+
+      {1, _} =
+        Task.await(
+          Task.async(fn ->
+            unboxed(fn -> Arca.Repo.insert_all(Membership, [seat_row(next, user_id)]) end)
+          end),
+          25_000
+        )
+
       :ok
-    else
-      groups = for _ <- 1..3, do: group!()
-      on_exit(fn -> remove_athanors!(groups) end)
-      {:ok, _} = seat(own_id, user_id)
-      {:ok, agent} = Agent.start_link(fn -> groups end)
+    end
 
-      # Every time the policy is asked, a second connection seats the
-      # person in one more group, past the person's lock (`seat_row/2`):
-      # the set the denial planned has moved by the time it would write.
-      verify = fn _rows ->
-        next = Agent.get_and_update(agent, fn [next | rest] -> {next, rest} end)
+    assert {:error, :conflict} =
+             unboxed(fn ->
+               SecurityTransitions.deny_user(server(), user_id, verify: verify)
+             end)
 
-        {1, _} =
-          Task.await(
-            Task.async(fn ->
-              unboxed(fn -> Arca.Repo.insert_all(Membership, [seat_row(next, user_id)]) end)
-            end),
-            25_000
-          )
+    assert Agent.get(agent, & &1) == []
 
-        :ok
+    unboxed(fn ->
+      user = Arca.Repo.get(User, user_id)
+      assert user.status == "active"
+      assert user.security_generation == 1
+      assert Arca.Repo.get(Athanor, own_id).status == "active"
+
+      for id <- groups do
+        assert Arca.Repo.get(Athanor, id).status == "active"
+        assert Arca.Repo.get(Athanor, id).security_generation == 1
       end
 
-      assert {:error, :conflict} =
-               unboxed(fn ->
-                 SecurityTransitions.deny_user(server(), user_id, verify: verify)
-               end)
-
-      assert Agent.get(agent, & &1) == []
-
-      unboxed(fn ->
-        user = Arca.Repo.get(User, user_id)
-        assert user.status == "active"
-        assert user.security_generation == 1
-        assert Arca.Repo.get(Athanor, own_id).status == "active"
-
-        for id <- groups do
-          assert Arca.Repo.get(Athanor, id).status == "active"
-          assert Arca.Repo.get(Athanor, id).security_generation == 1
-        end
-
-        # The seats the second connection wrote stand; the denial wrote nothing.
-        assert length(Arca.Repo.all(where(Membership, user_id: ^user_id))) == 4
-      end)
-    end
+      # The seats the second connection wrote stand; the denial wrote nothing.
+      assert length(Arca.Repo.all(where(Membership, user_id: ^user_id))) == 4
+    end)
   end
 
   test "a seat into an athanor a denial is archiving waits for it and is refused", %{
@@ -2204,7 +2302,6 @@ defmodule Arca.SecurityTransitionsLockTest do
     end)
   end
 
-  @tag :postgres
   test "a seat elsewhere waits for a leave holding the person, and lands after it retired them" do
     group_id = group!()
     other_id = group!()
@@ -2241,7 +2338,6 @@ defmodule Arca.SecurityTransitionsLockTest do
     end)
   end
 
-  @tag :postgres
   test "a leave waiting behind a seat elsewhere sees it, and retires no one" do
     group_id = group!()
     other_id = group!()
