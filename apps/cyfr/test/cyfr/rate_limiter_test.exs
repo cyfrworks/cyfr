@@ -13,8 +13,8 @@ defmodule Cyfr.RateLimiterTest do
   import ExUnit.CaptureLog
 
   setup do
-    Prima.RateLimiter.reset()
-    on_exit(&Prima.RateLimiter.reset/0)
+    Prima.Test.RateLimiter.reset!()
+    on_exit(&Prima.Test.RateLimiter.reset!/0)
     :ok
   end
 

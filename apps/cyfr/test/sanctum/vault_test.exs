@@ -100,7 +100,7 @@ defmodule Sanctum.VaultTest do
 
   defp mint_profile_with_ref(ctx, entry_id, binding_digest) do
     {:ok, profile} =
-      Arca.ProfileStorage.put(%{
+      Arca.Test.Writers.put_profile(%{
         athanor_id: ctx.athanor_id,
         source_ref: "formula:local.consumer",
         kind: "owner",

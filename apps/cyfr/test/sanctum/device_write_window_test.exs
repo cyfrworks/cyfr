@@ -69,8 +69,8 @@ defmodule Sanctum.DeviceWriteWindowTest do
   setup tags do
     Arca.Cache.init()
     Cyfr.Test.Sandbox.setup!(tags)
-    Prima.RateLimiter.reset()
-    on_exit(&Prima.RateLimiter.reset/0)
+    Prima.Test.RateLimiter.reset!()
+    on_exit(&Prima.Test.RateLimiter.reset!/0)
 
     n = System.unique_integer([:positive])
 

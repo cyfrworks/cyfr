@@ -510,7 +510,7 @@ defmodule Arca.Providers.RecordsTest do
 
       # Create record via internal API (kernel-only operation)
       {:ok, _} =
-        Arca.Execution.record_start(%{
+        Arca.Test.Writers.record_start(%{
           id: exec_id,
           reference: "reagent:local.test:0.1.0",
           user_id: ctx.user_id,
@@ -558,7 +558,7 @@ defmodule Arca.Providers.RecordsTest do
 
       # Create record via internal API (kernel-only operation)
       {:ok, _} =
-        Arca.Execution.record_start(%{
+        Arca.Test.Writers.record_start(%{
           id: exec_id,
           reference: "reagent:local.test:0.1.0",
           user_id: ctx.user_id,
@@ -718,7 +718,7 @@ defmodule Arca.Providers.RecordsTest do
       exec_id = "exec_cross_tenant_#{:rand.uniform(100_000)}"
 
       {:ok, _} =
-        Arca.Execution.record_start(%{
+        Arca.Test.Writers.record_start(%{
           id: exec_id,
           reference: "reagent:local.test:0.1.0",
           user_id: ctx_a.user_id,
@@ -767,7 +767,7 @@ defmodule Arca.Providers.RecordsTest do
       exec_id = "exec_auth_#{:rand.uniform(100_000)}"
 
       {:ok, _} =
-        Arca.Execution.record_start(%{
+        Arca.Test.Writers.record_start(%{
           id: exec_id,
           reference: "reagent:local.test:0.1.0",
           user_id: ctx.user_id,

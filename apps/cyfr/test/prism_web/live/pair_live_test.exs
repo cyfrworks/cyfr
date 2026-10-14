@@ -29,8 +29,8 @@ defmodule PrismWeb.PairLiveTest do
   alias Sanctum.Context
 
   setup do
-    Prima.RateLimiter.reset()
-    on_exit(fn -> Prima.RateLimiter.reset() end)
+    Prima.Test.RateLimiter.reset!()
+    on_exit(fn -> Prima.Test.RateLimiter.reset!() end)
     :ok
   end
 

@@ -323,7 +323,7 @@ defmodule Sanctum.Test.ConsentFixtures do
   """
   def seed_profile!(%Context{} = ctx, profile) do
     forget!(ctx, profile.id)
-    {:ok, _} = Arca.ProfileStorage.put(profile_attrs(ctx, profile))
+    {:ok, _} = Arca.Test.Writers.put_profile(profile_attrs(ctx, profile))
     :ok
   end
 

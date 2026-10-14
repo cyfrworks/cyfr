@@ -118,7 +118,7 @@ defmodule Arca.IntegrationTest do
         timestamp = "2025-01-#{String.pad_leading("#{i}", 2, "0")}T10:00:00Z"
         {:ok, dt, _} = DateTime.from_iso8601(timestamp)
 
-        Arca.Execution.record_start(%{
+        Arca.Test.Writers.record_start(%{
           id: "exec_#{i}",
           request_id: "req_test",
           user_id: actor.user_id,
@@ -180,7 +180,7 @@ defmodule Arca.IntegrationTest do
         timestamp = "2025-01-#{String.pad_leading("#{i}", 2, "0")}T10:00:00Z"
         {:ok, dt, _} = DateTime.from_iso8601(timestamp)
 
-        Arca.Execution.record_start(%{
+        Arca.Test.Writers.record_start(%{
           id: "mcp_exec_#{i}",
           request_id: "req_test",
           user_id: actor.user_id,
@@ -275,7 +275,7 @@ defmodule Arca.IntegrationTest do
         ts = "2025-01-0#{i}T10:00:00Z"
         {:ok, dt, _} = DateTime.from_iso8601(ts)
 
-        Arca.Execution.record_start(%{
+        Arca.Test.Writers.record_start(%{
           id: "u1_exec_#{rand_id}_#{i}",
           request_id: "req_test",
           user_id: user1_ctx.user_id,
@@ -287,7 +287,7 @@ defmodule Arca.IntegrationTest do
           status: "completed"
         })
 
-        Arca.Execution.record_start(%{
+        Arca.Test.Writers.record_start(%{
           id: "u2_exec_#{rand_id}_#{i}",
           request_id: "req_test",
           user_id: user2_ctx.user_id,
@@ -382,7 +382,7 @@ defmodule Arca.IntegrationTest do
       }
 
       # User 1 creates an execution via SQLite
-      Arca.Execution.record_start(%{
+      Arca.Test.Writers.record_start(%{
         id: "my_exec",
         request_id: "req_test",
         user_id: user1_ctx.user_id,

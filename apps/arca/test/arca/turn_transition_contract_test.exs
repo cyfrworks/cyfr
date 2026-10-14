@@ -837,39 +837,35 @@ defmodule Arca.TurnTransitionContractTest do
       assert [] = events(b.execution.id, "execution.completed")
     end
 
-    test "the test writers keep to the vocabulary", %{actor: actor} do
-      base = %{
-        id: "exec_writer_#{System.unique_integer([:positive])}",
-        reference: "reagent:local.test:1.0.0",
-        user_id: actor.user_id,
-        athanor_id: actor.athanor_id,
-        component_type: "reagent",
-        started_at: DateTime.utc_now()
-      }
+    test "a row with no attempt ends only with an outcome its status allows", %{actor: actor} do
+      {:ok, row} =
+        Arca.Test.Writers.record_start(%{
+          id: "exec_writer_#{System.unique_integer([:positive])}",
+          reference: "reagent:local.test:1.0.0",
+          user_id: actor.user_id,
+          athanor_id: actor.athanor_id,
+          component_type: "reagent",
+          started_at: DateTime.utc_now(),
+          status: "running"
+        })
 
-      assert {:error, :illegal_transition} =
-               Arca.Execution.record_start(
-                 Map.merge(base, %{status: "running", current_attempt: "att_x"})
-               )
-
-      assert {:error, {:invalid, _}} =
-               Arca.Execution.record_start(Map.put(base, :status, "sleeping"))
-
-      assert {:ok, row} = Arca.Execution.record_start(Map.put(base, :status, "running"))
-
-      done = %{completed_at: DateTime.utc_now(), duration_ms: 1, status: "completed"}
+      done = %{completed_at: DateTime.utc_now(), duration_ms: 1}
       opts = [grant: Arca.Test.Actor.grant(actor.athanor_id), verify: &Arca.Test.Actor.admits/1]
 
       assert {:error, :illegal_transition} =
-               Arca.Execution.record_complete(
+               Arca.Execution.record_end(
                  actor,
                  row.id,
+                 "completed",
                  Map.put(done, :outcome, "error"),
+                 nil,
                  opts
                )
 
+      assert execution(row.id).status == "running"
+
       assert {:ok, %{status: "completed"}} =
-               Arca.Execution.record_complete(actor, row.id, done, opts)
+               Arca.Execution.record_end(actor, row.id, "completed", done, nil, opts)
     end
   end
 

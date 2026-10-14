@@ -129,8 +129,8 @@ defmodule Emissary.Web.TinctureDataControllerTest do
   @stream_ms 10_000
 
   setup do
-    Prima.RateLimiter.reset()
-    on_exit(fn -> Prima.RateLimiter.reset() end)
+    Prima.Test.RateLimiter.reset!()
+    on_exit(fn -> Prima.Test.RateLimiter.reset!() end)
 
     _athanor = Sanctum.TestContext.athanor!()
     issuer = Sanctum.TestContext.issuer!(Sanctum.TestContext.local())
@@ -584,7 +584,7 @@ defmodule Emissary.Web.TinctureDataControllerTest do
       declared!(source, "pub-data")
 
       {:ok, _} =
-        Arca.ProfileStorage.put(%{
+        Arca.Test.Writers.put_profile(%{
           id: "prof_pub_data_#{System.unique_integer([:positive])}",
           athanor_id: source.athanor_id,
           source_ref: "tincture:local.pub-data",

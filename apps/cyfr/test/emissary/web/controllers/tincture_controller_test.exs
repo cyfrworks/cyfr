@@ -66,7 +66,7 @@ defmodule Emissary.Web.TinctureControllerTest do
       })
 
     {:ok, _} =
-      Arca.ProfileStorage.put(%{
+      Arca.Test.Writers.put_profile(%{
         id: "prof_#{name}_#{:rand.uniform(1_000_000)}",
         athanor_id: ctx.athanor_id,
         source_ref: "tincture:local.#{name}",
@@ -262,7 +262,7 @@ defmodule Emissary.Web.TinctureControllerTest do
 
     for name <- ["pub-dash", "rl-dash", "nl-dash", "built-dash"] do
       {:ok, _} =
-        Arca.ProfileStorage.put(%{
+        Arca.Test.Writers.put_profile(%{
           id: "prof_#{name}_#{:rand.uniform(1_000_000)}",
           athanor_id: ctx.athanor_id,
           source_ref: "tincture:local.#{name}",
@@ -860,12 +860,12 @@ defmodule Emissary.Web.TinctureControllerTest do
     setup do
       # Earlier tests in this file already counted requests under the disabled
       # (1M) limit — start these from a clean slate, then lower the limit.
-      Prima.RateLimiter.reset()
+      Prima.Test.RateLimiter.reset!()
       Application.put_env(:cyfr, :tincture_rate_limit_max, 2)
 
       on_exit(fn ->
         Application.put_env(:cyfr, :tincture_rate_limit_max, 1_000_000)
-        Prima.RateLimiter.reset()
+        Prima.Test.RateLimiter.reset!()
       end)
 
       :ok

@@ -48,7 +48,7 @@ defmodule Arca.VaultStorageTest do
     if reauth?, do: :ok = VaultStorage.set_status(actor, entry_id, "active")
 
     {:ok, profile} =
-      Arca.ProfileStorage.put(%{
+      Arca.Test.Writers.put_profile(%{
         athanor_id: athanor,
         source_ref: source_ref || "formula:local.consumer-#{System.unique_integer([:positive])}",
         kind: "owner",

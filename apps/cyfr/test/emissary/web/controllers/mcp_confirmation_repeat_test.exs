@@ -80,8 +80,8 @@ defmodule Emissary.Web.MCPConfirmationRepeatTest do
   @key "cyfr/confirmationId"
 
   setup do
-    Prima.RateLimiter.reset()
-    on_exit(fn -> Prima.RateLimiter.reset() end)
+    Prima.Test.RateLimiter.reset!()
+    on_exit(fn -> Prima.Test.RateLimiter.reset!() end)
 
     n = System.unique_integer([:positive])
 

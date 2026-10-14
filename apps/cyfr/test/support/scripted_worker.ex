@@ -237,7 +237,7 @@ defmodule Cyfr.Test.ScriptedWorker do
   def fresh_limits!(%Sanctum.Context{} = ctx, refs) when is_list(refs) do
     for ref <- refs do
       {:ok, pinned, _resolution} = Compendium.Resolver.resolve(ctx, ref)
-      :ok = Opus.Rates.reset(Sanctum.Context.actor(ctx), pinned)
+      :ok = Arca.RateWindows.clear(Sanctum.Context.actor(ctx), pinned)
     end
 
     :ok = Prima.Slots.forgive_unreaped(Opus.Slots, ctx.athanor_id)

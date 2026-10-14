@@ -8,17 +8,24 @@ defmodule Prima.RateLimiterTest do
   opens or moves a window.
   """
 
-  # The table is the node's, and `reset/0` clears it for everyone.
+  # The table is the node's, and `Prima.Test.RateLimiter.reset!/0` clears it
+  # for everyone.
   use ExUnit.Case, async: false
 
   alias Prima.RateLimiter
 
   setup do
-    # Sanctum owns the limiter where it runs; this application's own suite
-    # starts none, so the case starts one.
-    unless Process.whereis(RateLimiter), do: start_supervised!(RateLimiter)
-    RateLimiter.reset()
-    on_exit(fn -> RateLimiter.reset() end)
+    # Sanctum owns the limiter where it runs, and the case clears its table
+    # before and after. This application's own suite starts none, so the
+    # case starts one, and its table goes with it: the case's supervisor
+    # stops it before any `on_exit/1` callback runs.
+    if Process.whereis(RateLimiter) do
+      Prima.Test.RateLimiter.reset!()
+      on_exit(&Prima.Test.RateLimiter.reset!/0)
+    else
+      start_supervised!(RateLimiter)
+    end
+
     :ok
   end
 

@@ -26,8 +26,8 @@ defmodule Emissary.Web.CertificateRenewalControllerTest do
   @hub "https://hub.example"
 
   setup do
-    Prima.RateLimiter.reset()
-    on_exit(fn -> Prima.RateLimiter.reset() end)
+    Prima.Test.RateLimiter.reset!()
+    on_exit(fn -> Prima.Test.RateLimiter.reset!() end)
     {device_key, private} = :crypto.generate_key(:eddsa, :ed25519)
     person = enrolled!()
 

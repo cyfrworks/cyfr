@@ -34,8 +34,8 @@ defmodule Sanctum.RemoteCertificationTest do
   setup tags do
     Arca.Test.Sandbox.setup!(tags)
     Arca.Cache.init()
-    Prima.RateLimiter.reset()
-    on_exit(fn -> Prima.RateLimiter.reset() end)
+    Prima.Test.RateLimiter.reset!()
+    on_exit(fn -> Prima.Test.RateLimiter.reset!() end)
     enrolled!()
   end
 
@@ -441,7 +441,7 @@ defmodule Sanctum.RemoteCertificationTest do
       # answered for that binding and its proof verifies, and only the
       # certification can tell it is not the device's.
       for n <- 1..200 do
-        if n == 101, do: Prima.RateLimiter.reset()
+        if n == 101, do: Prima.Test.RateLimiter.reset!()
         {key, private} = :crypto.generate_key(:eddsa, :ed25519)
         forged = %{certificate | "device_key" => Encoding.b64(key)}
         source = "10.8.#{div(n, 250)}.#{rem(n, 250)}"
@@ -457,7 +457,7 @@ defmodule Sanctum.RemoteCertificationTest do
                renewed(forged, {key, private}, "10.9.0.1")
 
       assert retry_after_ms in 1..60_000
-      Prima.RateLimiter.reset()
+      Prima.Test.RateLimiter.reset!()
       assert {:error, {:rate_limited, _}} = renewed(forged, {key, private}, "10.9.0.2")
       assert %{count: 200} = window(:device_verification_installation, "installation")
 
@@ -603,7 +603,7 @@ defmodule Sanctum.RemoteCertificationTest do
                renewed(certificate, device, "10.10.1.1")
 
       assert retry_after_ms in 1..60_000
-      Prima.RateLimiter.reset()
+      Prima.Test.RateLimiter.reset!()
       assert {:error, {:rate_limited, _}} = renewed(certificate, device, "10.10.1.2")
 
       # Nothing of it was the address's or the installation's.

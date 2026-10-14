@@ -3,14 +3,16 @@
 
 defmodule Arca.ProfileStorageTest do
   @moduledoc """
-  The profile insert is held to the profile vocabulary by the schema's
-  changeset — the label grammar above all, since `RootSelect.decode/1`
-  tells an id from a label by the `prof_` prefix and is only sound while
-  no stored label wears it.
+  The profile table holds one active profile per identity: the second is
+  refused by the schema's active-identity index, through the changeset's
+  mapping, never raised. A source's live profiles are revoked together, in
+  the actor's athanor alone. The rows are written through
+  `Arca.Test.Writers.put_profile/1`.
   """
   use ExUnit.Case, async: false
 
   alias Arca.ProfileStorage
+  alias Arca.Test.Writers
 
   @source_ref "reagent:local.profile-storage-test"
 
@@ -32,39 +34,12 @@ defmodule Arca.ProfileStorageTest do
     )
   end
 
-  describe "put/1" do
-    test "an id-shaped or empty label is refused typed, and no row lands", %{athanor: athanor} do
-      assert {:error, {:invalid_label, "prof_sneaky"}} =
-               ProfileStorage.put(attrs(athanor, %{label: "prof_sneaky"}))
-
-      assert {:error, {:invalid_label, ""}} = ProfileStorage.put(attrs(athanor, %{label: ""}))
-
-      assert {:ok, []} =
-               ProfileStorage.list_for_source(Prima.Actor.in_athanor(athanor), @source_ref)
-    end
-
-    test "a label merely carrying the prefix's letters is stored", %{athanor: athanor} do
-      assert {:ok, %{label: "prof-hyphen", id: "prof_" <> _}} =
-               ProfileStorage.put(attrs(athanor, %{label: "prof-hyphen"}))
-    end
-
-    test "kind and status are held to the profile vocabulary", %{athanor: athanor} do
-      assert {:error, {:invalid, errors}} =
-               ProfileStorage.put(attrs(athanor, %{kind: "guest"}))
-
-      assert Map.has_key?(errors, :kind)
-
-      assert {:error, {:invalid, errors}} =
-               ProfileStorage.put(attrs(athanor, %{status: "sleeping"}))
-
-      assert Map.has_key?(errors, :status)
-    end
-
+  describe "the active-identity index" do
     test "a second active profile on the same identity refuses instead of raising", %{
       athanor: athanor
     } do
-      assert {:ok, _} = ProfileStorage.put(attrs(athanor, %{label: "work"}))
-      assert {:error, {:invalid, errors}} = ProfileStorage.put(attrs(athanor, %{label: "work"}))
+      assert {:ok, _} = Writers.put_profile(attrs(athanor, %{label: "work"}))
+      assert {:error, {:invalid, errors}} = Writers.put_profile(attrs(athanor, %{label: "work"}))
       assert map_size(errors) > 0
     end
   end
@@ -74,15 +49,15 @@ defmodule Arca.ProfileStorageTest do
       athanor: athanor
     } do
       actor = Prima.Actor.in_athanor(athanor)
-      {:ok, owner} = ProfileStorage.put(attrs(athanor, %{}))
+      {:ok, owner} = Writers.put_profile(attrs(athanor, %{}))
 
       {:ok, blocked} =
-        ProfileStorage.put(attrs(athanor, %{label: "blocked", status: "needs_consent"}))
+        Writers.put_profile(attrs(athanor, %{label: "blocked", status: "needs_consent"}))
 
-      {:ok, _gone} = ProfileStorage.put(attrs(athanor, %{label: "gone", status: "revoked"}))
+      {:ok, _gone} = Writers.put_profile(attrs(athanor, %{label: "gone", status: "revoked"}))
 
       {:ok, elsewhere} =
-        ProfileStorage.put(attrs(athanor, %{source_ref: "reagent:local.other-source"}))
+        Writers.put_profile(attrs(athanor, %{source_ref: "reagent:local.other-source"}))
 
       assert {:ok, revoked} = ProfileStorage.revoke_for_source(actor, @source_ref)
       assert Enum.sort(revoked) == Enum.sort([owner.id, blocked.id])

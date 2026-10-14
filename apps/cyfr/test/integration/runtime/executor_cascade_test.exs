@@ -5,6 +5,7 @@ defmodule Locus.Runtime.ExecutorCascadeTest do
   use ExUnit.Case, async: false
 
   alias Arca.Execution
+  alias Arca.Test.Writers
 
   setup tags do
     Cyfr.Test.Sandbox.setup!(tags)
@@ -21,7 +22,7 @@ defmodule Locus.Runtime.ExecutorCascadeTest do
       component_type: "catalyst"
     }
 
-    {:ok, record} = Execution.record_start(Map.merge(defaults, attrs))
+    {:ok, record} = Writers.record_start(Map.merge(defaults, attrs))
     record
   end
 
@@ -117,7 +118,7 @@ defmodule Locus.Runtime.ExecutorCascadeTest do
         )
 
       {:ok, _} =
-        Execution.record_complete(
+        Writers.record_complete(
           Sanctum.Context.actor(ctx),
           child_id,
           %{
@@ -255,7 +256,7 @@ defmodule Locus.Runtime.ExecutorCascadeTest do
 
       # The parent finishes normally.
       {:ok, _} =
-        Execution.record_complete(
+        Writers.record_complete(
           Sanctum.Context.actor(Sanctum.TestContext.local()),
           parent_id,
           %{
@@ -278,7 +279,7 @@ defmodule Locus.Runtime.ExecutorCascadeTest do
       exec_id = "exec_cancel_xtenant_#{System.unique_integer([:positive])}"
 
       {:ok, _} =
-        Execution.record_start(%{
+        Writers.record_start(%{
           id: exec_id,
           reference: "catalyst:local.test:1.0.0",
           user_id: "user_b",
@@ -326,7 +327,7 @@ defmodule Locus.Runtime.ExecutorCascadeTest do
       exec_id = "exec_cancel_owner_#{System.unique_integer([:positive])}"
 
       {:ok, _} =
-        Execution.record_start(%{
+        Writers.record_start(%{
           id: exec_id,
           reference: "catalyst:local.test:1.0.0",
           user_id: "user_b",

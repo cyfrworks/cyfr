@@ -62,8 +62,8 @@ defmodule Sanctum.Auth.DeviceFlowTest do
     test "polls beyond the per-code budget answer slow_down without provider contact" do
       Application.delete_env(:sanctum, :github_client_id)
       System.delete_env("CYFR_GITHUB_CLIENT_ID")
-      Prima.RateLimiter.reset()
-      on_exit(fn -> Prima.RateLimiter.reset() end)
+      Prima.Test.RateLimiter.reset!()
+      on_exit(fn -> Prima.Test.RateLimiter.reset!() end)
 
       code = "budget_test_code"
 
@@ -95,8 +95,8 @@ defmodule Sanctum.Auth.DeviceFlowTest do
     setup do
       Application.delete_env(:sanctum, :github_client_id)
       System.delete_env("CYFR_GITHUB_CLIENT_ID")
-      Prima.RateLimiter.reset()
-      on_exit(fn -> Prima.RateLimiter.reset() end)
+      Prima.Test.RateLimiter.reset!()
+      on_exit(fn -> Prima.Test.RateLimiter.reset!() end)
       :ok
     end
 
@@ -360,7 +360,7 @@ defmodule Sanctum.Auth.DeviceFlowTest do
     setup tags do
       Arca.Test.Sandbox.setup!(tags)
       Arca.Cache.init()
-      Prima.RateLimiter.reset()
+      Prima.Test.RateLimiter.reset!()
       endpoints = Application.get_env(:sanctum, :device_flow_endpoints)
       {:ok, _} = Sanctum.Door.Store.allow("wildcard", "*", "test")
 
@@ -370,7 +370,7 @@ defmodule Sanctum.Auth.DeviceFlowTest do
           else: Application.delete_env(:sanctum, :device_flow_endpoints)
 
         Arca.Cache.delete_match({:established, :_, :_, :_})
-        Prima.RateLimiter.reset()
+        Prima.Test.RateLimiter.reset!()
       end)
 
       Application.put_env(:sanctum, :github_client_id, "link-client")

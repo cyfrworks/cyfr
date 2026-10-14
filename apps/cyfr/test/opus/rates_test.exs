@@ -26,8 +26,7 @@ defmodule Opus.RatesTest do
 
     {:ok,
      actor: Prima.Actor.in_athanor("ath_rates_#{System.unique_integer([:positive])}"),
-     bucket: "local.test-component:1.0.0",
-     now: DateTime.utc_now()}
+     bucket: "local.test-component:1.0.0"}
   end
 
   defp policy(requests, window), do: %{rate_limit: %{requests: requests, window: window}}
@@ -37,8 +36,6 @@ defmodule Opus.RatesTest do
       from(w in RateWindow, where: w.athanor_id == ^athanor_id and w.bucket == ^bucket)
     )
   end
-
-  defp at(now, ms), do: DateTime.add(now, ms, :millisecond)
 
   # Run `fun` in `n` processes released together, so the claims really
   # race for the row rather than trickling in as the tasks spawn.
@@ -143,33 +140,32 @@ defmodule Opus.RatesTest do
     end
   end
 
+  # The window's edges are `Arca.RateWindows`', pinned at chosen instants
+  # in its own test. Here the cell's clock decides, so these cases pin what
+  # Opus maps: the consented cap and width onto the row it claims in, and
+  # the window's answers onto this module's verdicts.
   describe "the window" do
-    test "a claim at a boundary is refused while the window before was full", %{
+    test "the consented cap and width are the window the row claims in", %{
       actor: actor,
-      bucket: bucket,
-      now: now
+      bucket: bucket
     } do
-      assert {:ok, 0} = Rates.claim_at(actor, bucket, policy(1, "1s"), now)
+      assert {:ok, 1} = Rates.check(actor, bucket, policy(2, "1m"))
+      assert %RateWindow{window_ms: 60_000, count: 1} = row(actor, bucket)
+      assert {:ok, 0} = Rates.check(actor, bucket, policy(2, "1m"))
 
-      # The instant the next fixed window opens: a counter that only reset
-      # would admit here.
-      assert {:error, :rate_limited, _} =
-               Rates.claim_at(actor, bucket, policy(1, "1s"), at(now, 1_000))
-
-      assert {:ok, 0} = Rates.claim_at(actor, bucket, policy(1, "1s"), at(now, 1_001))
+      # A full window's count weighs on the next, so the wait it names is
+      # at most two widths; a refused claim writes nothing.
+      assert {:error, :rate_limited, retry_after} = Rates.check(actor, bucket, policy(2, "1m"))
+      assert retry_after in 1..120_000
+      assert %RateWindow{window_ms: 60_000, count: 2} = row(actor, bucket)
     end
 
-    test "a full window's count is still counted, weighted, in the next", %{
+    test "a cap of zero is refused for a whole window and writes nothing", %{
       actor: actor,
-      bucket: bucket,
-      now: now
+      bucket: bucket
     } do
-      for _ <- 1..10, do: assert({:ok, _} = Rates.claim_at(actor, bucket, policy(10, "1s"), now))
-
-      admitted =
-        for _ <- 1..8, do: Rates.claim_at(actor, bucket, policy(10, "1s"), at(now, 1_500))
-
-      assert Enum.count(admitted, &match?({:ok, _}, &1)) == 5
+      assert {:error, :rate_limited, 60_000} = Rates.check(actor, bucket, policy(0, "1m"))
+      assert row(actor, bucket) == nil
     end
   end
 
@@ -222,7 +218,7 @@ defmodule Opus.RatesTest do
     end
   end
 
-  describe "status/3 and reset/2" do
+  describe "status/3, and a cleared bucket" do
     test "status reads the window and counts nothing", %{actor: actor, bucket: bucket} do
       assert {:ok, 0, 5, 60_000} = Rates.status(actor, bucket, policy(5, "1m"))
 
@@ -240,11 +236,11 @@ defmodule Opus.RatesTest do
       assert {:ok, 0, 0, 0} = Rates.status(actor, bucket, policy(10, "every friday"))
     end
 
-    test "reset forgets the bucket's window", %{actor: actor, bucket: bucket} do
+    test "a cleared bucket's window is forgotten", %{actor: actor, bucket: bucket} do
       for _ <- 1..2, do: assert({:ok, _} = Rates.check(actor, bucket, policy(2, "1m")))
       assert {:error, :rate_limited, _} = Rates.check(actor, bucket, policy(2, "1m"))
 
-      assert :ok = Rates.reset(actor, bucket)
+      assert :ok = Arca.RateWindows.clear(actor, bucket)
       assert row(actor, bucket) == nil
 
       assert {:ok, 1} = Rates.check(actor, bucket, policy(2, "1m"))
@@ -257,7 +253,6 @@ defmodule Opus.RatesTest do
       for actor <- [%Prima.Actor{athanor_id: nil}, %Prima.Actor{athanor_id: ""}] do
         assert {:error, :missing_tenant} = Rates.check(actor, bucket, policy(10, "1m"))
         assert {:error, :missing_tenant} = Rates.status(actor, bucket, policy(10, "1m"))
-        assert {:error, :missing_tenant} = Rates.reset(actor, bucket)
 
         # Even with no limit to enforce: a bucket without a tenant would
         # collide across tenants.
@@ -277,7 +272,6 @@ defmodule Opus.RatesTest do
 
       assert {:error, :unavailable} = Rates.check(actor, bucket, policy(5, "1m"))
       assert {:error, :unavailable} = Rates.status(actor, bucket, policy(5, "1m"))
-      assert {:error, :unavailable} = Rates.reset(actor, bucket)
 
       # An unlimited bucket asks the store nothing, so it still answers.
       assert {:ok, :unlimited} = Rates.check(actor, bucket, nil)

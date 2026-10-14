@@ -27,8 +27,8 @@ defmodule PrismWeb.CarryLiveTest do
   @directory "https://dir.example"
 
   setup do
-    Prima.RateLimiter.reset()
-    on_exit(fn -> Prima.RateLimiter.reset() end)
+    Prima.Test.RateLimiter.reset!()
+    on_exit(fn -> Prima.Test.RateLimiter.reset!() end)
     :ok
   end
 

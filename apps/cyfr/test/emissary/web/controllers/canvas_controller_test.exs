@@ -29,8 +29,8 @@ defmodule Emissary.Web.CanvasControllerTest do
   @toolkit Path.join(:code.priv_dir(:cyfr), "static/toolkit")
 
   setup do
-    Prima.RateLimiter.reset()
-    on_exit(fn -> Prima.RateLimiter.reset() end)
+    Prima.Test.RateLimiter.reset!()
+    on_exit(fn -> Prima.Test.RateLimiter.reset!() end)
 
     _athanor = Sanctum.TestContext.athanor!()
     issuer = Sanctum.TestContext.issuer!(Sanctum.TestContext.local())
@@ -594,7 +594,7 @@ defmodule Emissary.Web.CanvasControllerTest do
       on_exit(fn ->
         Logger.configure(level: level)
         Application.put_env(:cyfr, :tincture_rate_limit_max, previous)
-        Prima.RateLimiter.reset()
+        Prima.Test.RateLimiter.reset!()
       end)
 
       :ok
@@ -645,7 +645,7 @@ defmodule Emissary.Web.CanvasControllerTest do
 
           # A response the rate limit answers before the action.
           Application.put_env(:cyfr, :tincture_rate_limit_max, 1)
-          Prima.RateLimiter.reset()
+          Prima.Test.RateLimiter.reset!()
           assert page(credential, frame).status == 200
           assert page(canary, frame).status == 429
         end)

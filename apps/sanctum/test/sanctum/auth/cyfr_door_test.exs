@@ -40,12 +40,12 @@ defmodule Sanctum.Auth.CyfrDoorTest do
   setup %{tls: tls} = tags do
     Arca.Test.Sandbox.setup!(tags)
     Arca.Cache.init()
-    Prima.RateLimiter.reset()
+    Prima.Test.RateLimiter.reset!()
     DirectoryServer.listen!()
     DirectoryServer.seam!(tls)
 
     on_exit(fn ->
-      Prima.RateLimiter.reset()
+      Prima.Test.RateLimiter.reset!()
       Arca.Cache.delete_match(Arca.Cache.Keys.match_identity_unreachable())
     end)
 
@@ -301,7 +301,7 @@ defmodule Sanctum.Auth.CyfrDoorTest do
       assert drain() == []
 
       # Another member: its own count is fresh, the cell's is not.
-      Prima.RateLimiter.reset()
+      Prima.Test.RateLimiter.reset!()
       assert {:error, {:rate_limited, _}} = CyfrDoor.challenge(past)
       assert drain() == []
 

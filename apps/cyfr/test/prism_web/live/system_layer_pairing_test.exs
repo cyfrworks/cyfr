@@ -98,8 +98,8 @@ defmodule PrismWeb.SystemLayerPairingTest do
   alias Sanctum.TestContext.MailSink
 
   setup %{conn: conn} do
-    Prima.RateLimiter.reset()
-    on_exit(fn -> Prima.RateLimiter.reset() end)
+    Prima.Test.RateLimiter.reset!()
+    on_exit(fn -> Prima.Test.RateLimiter.reset!() end)
     user = test_user()
     conn = log_in_user(conn, user)
     athanor = seated_athanor()
