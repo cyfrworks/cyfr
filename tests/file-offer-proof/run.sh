@@ -58,25 +58,18 @@ source "$ROOT/tests/browser/harness.sh"
 OUT="${PROOF_OUT:-$WORK/out}"
 PROOF_PID=""
 
-stop_proof_container() {
-  local ids
-  ids="$(docker ps -q --filter "volume=$OUT" 2>/dev/null || true)"
-  if [ -n "$ids" ]; then
-    # shellcheck disable=SC2086
-    docker stop -t 5 $ids >/dev/null 2>&1 || true
-  fi
-}
-
 # The scratch directory holds the run's keys, the cell's deployment file
 # and its database, so it goes even when a stop fails. `server_stop` ends
 # in `fail`, an `exit`, when a listener outlives its stop, and an exit
 # inside this trap would end it before the removal, so the stop runs in a
 # subshell, whose exit ends only that subshell; the stop's failure still
-# fails the run.
+# fails the run. The asks and answers go on every exit, a kept or outside
+# PROOF_OUT included; the record stays.
 cleanup() {
   local code=$?
   [ -n "$PROOF_PID" ] && kill "$PROOF_PID" 2>/dev/null || true
   stop_proof_container
+  rm -f "$OUT"/ask-* "$OUT"/answer-*
   ( server_stop ) || [ "$code" -ne 0 ] || code=1
   if [ "${RELEASE_BOOT_KEEP:-}" = 1 ]; then
     echo "kept $WORK"
@@ -87,17 +80,9 @@ cleanup() {
 }
 trap cleanup EXIT
 
-field() { printf '%s' "$1" | python3 -c "import json, sys; print(json.load(sys.stdin)['$2'])"; }
-
 # The proof's fixture inside the running server, as `bin/cyfr rpc`.
 offer_fixture() {
-  local args="" arg
-  for arg in "$@"; do
-    args="$args\"$(printf '%s' "$arg" | sed 's/[\\"]/\\&/g')\","
-  done
-  cell_cyfr "$CELL" rpc \
-    "{answer, _} = Code.eval_file(\"$HERE/fixture.exs\"); IO.puts(answer.([${args%,}]))" \
-    | sed -n 's/^OFFER=//p' | tail -1
+  cell_fixture "$CELL" "$HERE/fixture.exs" OFFER "$@"
 }
 
 release_build
@@ -197,43 +182,25 @@ setup = {
 json.dump(setup, open(out, "w"), indent=2)
 PY
 
-# Each step the proof asks for, answered once.
-answer_asks() {
-  local ask id op answer path content
-  for ask in "$OUT"/ask-*.json; do
-    [ -e "$ask" ] || continue
-    id="${ask##*/ask-}"
-    id="${id%.json}"
-    [ -e "$OUT/answer-$id.json" ] && continue
-    op="$(python3 -c "import json, sys; print(json.load(open(sys.argv[1]))['op'])" "$ask")"
-    case "$op" in
-      file)
-        path="$(python3 -c "import json, sys; print(json.load(open(sys.argv[1]))['path'])" "$ask")"
-        content="$(python3 -c "import base64, json, sys; print(base64.b64encode(json.load(open(sys.argv[1]))['content'].encode()).decode())" "$ask")"
-        answer="$(offer_fixture file "$sender_token" "$path" "$content")"
-        ;;
-      facts) answer="$(offer_fixture facts "$sender_id" "$recipient_id" "$outsider_id")" ;;
-      *) fail "the proof asked for '$op', which this script does not do" ;;
-    esac
-    [ -n "$answer" ] || answer='{"error":"the fixture answered nothing"}'
-    printf '%s\n' "$answer" >"$OUT/answer-$id.part"
-    mv "$OUT/answer-$id.part" "$OUT/answer-$id.json"
-  done
+# Each step the proof asks for (harness.sh `answer_asks`).
+answer_ask() {
+  local ask="$1" op content
+  op="$(asked "$ask" op)"
+  case "$op" in
+    file)
+      content="$(python3 -c "import base64, json, sys; print(base64.b64encode(json.load(open(sys.argv[1]))['content'].encode()).decode())" "$ask")"
+      ANSWER="$(offer_fixture file "$sender_token" "$(asked "$ask" path)" "$content")"
+      ;;
+    facts) ANSWER="$(offer_fixture facts "$sender_id" "$recipient_id" "$outsider_id")" ;;
+    *) fail "the proof asked for '$op', which this script does not do" ;;
+  esac
 }
 
 step "the file-offer proof in Chromium at the $VIEWPORT viewport, in $PLAYWRIGHT_IMAGE"
 playwright_run file-offer-proof proof.mjs /authority/homes.json /out \
   "${cookie[sender]}" "${cookie[recipient]}" "${cookie[outsider]}" &
 PROOF_PID=$!
-while kill -0 "$PROOF_PID" 2>/dev/null; do
-  answer_asks
-  sleep 0.2
-done
-set +e
-wait "$PROOF_PID"
-status=$?
-set -e
-PROOF_PID=""
+proof_await answer_ask
 
 echo "the record: $OUT/file-offer-proof.json and $OUT/file-offer-proof.md"
-exit "$status"
+exit "$PROOF_STATUS"

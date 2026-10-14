@@ -22,6 +22,7 @@ defmodule Arca.AppendParityTest do
 
   alias Arca.Adapters.Local
   alias Arca.Adapters.S3
+  alias Arca.Test.S3Env
 
   # ---------------------------------------------------------------------------
   # The shared parity cases
@@ -371,35 +372,13 @@ defmodule Arca.AppendParityTest do
     @describetag :s3_integration
 
     setup do
-      # Non-secret CI fixtures, mirrored in .github/workflows/test.yml and
-      # `Arca.Adapters.S3MinioTest`, whose bucket this shares.
-      prev = Application.get_env(:arca, :s3)
-      endpoint = System.get_env("CYFR_TEST_MINIO_ENDPOINT") || "http://127.0.0.1:9000"
+      prefix = S3Env.run_prefix("parity")
+      previous = S3Env.configure!(prefix: prefix)
+      :ok = S3Env.create_bucket!()
+      on_exit(fn -> S3Env.restore(previous) end)
+      S3Env.guard!(prefix)
 
-      Application.put_env(:arca, :s3,
-        bucket: "cyfr-test",
-        region: "us-east-1",
-        endpoint: endpoint,
-        access_key_id: "cyfrtest",
-        secret_access_key: "cyfrtest123",
-        prefix: nil,
-        path_style: true
-      )
-
-      actor = Arca.Test.Actor.local()
-      dir = ["data", "parity"]
-      create_bucket!(endpoint)
-      :ok = S3.delete_tree(actor, dir)
-
-      on_exit(fn ->
-        S3.delete_tree(actor, dir)
-
-        if prev,
-          do: Application.put_env(:arca, :s3, prev),
-          else: Application.delete_env(:arca, :s3)
-      end)
-
-      {:ok, actor: actor, dir: dir}
+      {:ok, actor: Arca.Test.Actor.local(), dir: ["data", "parity"]}
     end
 
     test("an append past the ceiling is refused whole", %{actor: actor, dir: dir},
@@ -431,38 +410,5 @@ defmodule Arca.AppendParityTest do
     test("racing replaces from one precondition land exactly one", %{actor: actor, dir: dir},
       do: parity_racing_replaces(S3, actor, dir)
     )
-  end
-
-  # This file runs on its own too, so it makes the bucket it needs; MinIO
-  # answers 409 when the bucket is already there, which is as usable.
-  defp create_bucket!(endpoint) do
-    url = "#{endpoint}/cyfr-test"
-
-    signed =
-      :aws_signature.sign_v4(
-        "cyfrtest",
-        "cyfrtest123",
-        "us-east-1",
-        "s3",
-        :calendar.universal_time(),
-        "PUT",
-        url,
-        [{"host", URI.parse(url).authority}],
-        "",
-        [{:uri_encode_path, false}]
-      )
-
-    {:ok, %{status: status, body: body}} =
-      Req.request(
-        method: :put,
-        url: url,
-        headers: Enum.map(signed, fn {k, v} -> {to_string(k), to_string(v)} end),
-        body: "",
-        decode_body: false
-      )
-
-    unless status in [200, 409] do
-      raise "could not create MinIO bucket cyfr-test: HTTP #{status} #{inspect(body)}"
-    end
   end
 end

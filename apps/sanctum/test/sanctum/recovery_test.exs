@@ -49,7 +49,7 @@ defmodule Sanctum.RecoveryTest do
   setup %{tls: tls} = tags do
     Arca.Test.Sandbox.setup!(tags)
     Arca.Cache.init()
-    Prima.RateLimiter.reset()
+    Prima.Test.RateLimiter.reset!()
     Directory.listen!()
     env = Map.new([:directory_url, :restore_token], &{&1, Application.fetch_env(:sanctum, &1)})
     mode = if InstallationClaims.installed?(), do: InstallationClaims.mode()
@@ -65,7 +65,7 @@ defmodule Sanctum.RecoveryTest do
       if mode, do: InstallationClaims.install_mode!(mode), else: InstallationClaims.reset()
       Arca.Cache.delete_match(Arca.Cache.Keys.match_identity_unreachable())
       Arca.Cache.delete_match({:established, :_, :_, :_})
-      Prima.RateLimiter.reset()
+      Prima.Test.RateLimiter.reset!()
     end)
 
     InstallationClaims.install_mode!(:ordinary)

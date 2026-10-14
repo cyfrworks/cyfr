@@ -34,7 +34,7 @@ defmodule Cyfr.TestPartitionEnvTest do
     File.mkdir_p!(root)
 
     keys =
-      ~w(CYFR_DATABASE CYFR_DATABASE_URL CYFR_CLUSTER_DATABASE_URL CYFR_TEST_RUN_ROOT MIX_TEST_PARTITION)
+      ~w(CYFR_DATABASE CYFR_DATABASE_URL CYFR_CLUSTER_DATABASE_URL CYFR_TEST_RUN_ROOT MIX_TEST_PARTITION MIX_BUILD_PATH)
 
     old = Map.new(keys, &{&1, System.get_env(&1)})
     Enum.each(keys, &System.delete_env/1)
@@ -187,5 +187,167 @@ defmodule Cyfr.TestPartitionEnvTest do
     assert first[:base_path] =~ "cyfr_test_#{:erlang.phash2(Path.expand("."))}_"
     assert first[:base_path] =~ "_p7/data"
     assert Path.dirname(first[:base_path]) == Path.dirname(first[Arca.Repo][:database])
+  end
+
+  defp record(failures), do: :erlang.term_to_binary({1, failures})
+  defp read_record(path), do: path |> File.read!() |> :erlang.binary_to_term()
+
+  # A run directory seeded from the canonical record of checkout `root`,
+  # and the record each of its partitions ends with: a map, `:all`, `:seed`
+  # (it never reached its suite's end) or `:missing`.
+  defp partition_run(root, name, count, ends) do
+    run = Path.join(root, name)
+    File.mkdir_p!(run)
+    Env.failures_seed!(run, count, root)
+
+    for {partition, final} <- ends do
+      file = Path.join([run, "p#{partition}", "failures"])
+
+      case final do
+        :seed -> :ok
+        :missing -> File.rm!(file)
+        :all -> File.write!(file, :erlang.term_to_binary({1, :all}))
+        %{} = failures -> File.write!(file, record(failures))
+      end
+    end
+
+    run
+  end
+
+  @a {ATest, :"test a"}
+  @b {BTest, :"test b"}
+  @c {CTest, :"test c"}
+
+  test "the seed copies the canonical record to the base and every partition", %{root: root} do
+    canonical = Path.join(root, "_build/test/test_failures")
+    run = Path.join(root, "run")
+    File.mkdir_p!(run)
+    Env.failures_seed!(run, 2, root)
+    # No canonical record yet: every copy is the empty record.
+    for file <- ["base", "p1/failures", "p2/failures"] do
+      assert read_record(Path.join(run, file)) == {1, %{}}
+    end
+
+    File.mkdir_p!(Path.dirname(canonical))
+    File.write!(canonical, record(%{@a => "/a_test.exs"}))
+    Env.failures_seed!(run, 2, root)
+
+    for file <- ["base", "p1/failures", "p2/failures"] do
+      assert File.read!(Path.join(run, file)) == File.read!(canonical)
+    end
+
+    System.put_env("MIX_BUILD_PATH", "_build/test_pg")
+    assert Env.canonical_failures(root) == Path.join(root, "_build/test_pg/test_failures")
+  end
+
+  test "the merge unites the partitions' new failures and removes what passed", %{root: root} do
+    canonical = Path.join(root, "_build/test/test_failures")
+    run = partition_run(root, "union", 2, [{1, %{@a => "/a"}}, {2, %{@b => "/b"}}])
+    Env.failures_merge!(run, [1, 2], root)
+    assert read_record(canonical) == {1, %{@a => "/a", @b => "/b"}}
+
+    # A passed in partition 1; B failed again in partition 2, which held it.
+    run = partition_run(root, "removal", 2, [{1, %{@b => "/b"}}, {2, %{@a => "/a", @b => "/b"}}])
+    Env.failures_merge!(run, [1, 2], root)
+    assert read_record(canonical) == {1, %{@b => "/b"}}
+  end
+
+  test "a partition that never finished, or left no record, contributes nothing", %{root: root} do
+    canonical = Path.join(root, "_build/test")
+    File.mkdir_p!(canonical)
+    canonical = Path.join(canonical, "test_failures")
+    File.write!(canonical, record(%{@a => "/a", @b => "/b"}))
+    run = partition_run(root, "partial", 3, [{1, :seed}, {2, :missing}, {3, %{@a => "/a"}}])
+    Env.failures_merge!(run, [1, 2, 3], root)
+    # Partition 3 passed B; 1 and 2 say nothing of A or B.
+    assert read_record(canonical) == {1, %{@a => "/a"}}
+    # A partition the runner did not start is not read at all.
+    run = partition_run(root, "unstarted", 2, [{1, %{@a => "/a", @c => "/c"}}, {2, %{}}])
+    Env.failures_merge!(run, [1], root)
+    assert read_record(canonical) == {1, %{@a => "/a", @c => "/c"}}
+  end
+
+  test "an :all on either side", %{root: root} do
+    canonical = Path.join(root, "_build/test/test_failures")
+    run = partition_run(root, "partition-all", 2, [{1, :all}, {2, %{@a => "/a"}}])
+    Env.failures_merge!(run, [1, 2], root)
+    assert read_record(canonical) == {1, :all}
+
+    # A base of :all: the union of what the partitions recorded.
+    run = partition_run(root, "base-all", 2, [{1, %{@b => "/b"}}, {2, %{@c => "/c"}}])
+    Env.failures_merge!(run, [1, 2], root)
+    assert read_record(canonical) == {1, %{@b => "/b", @c => "/c"}}
+
+    # ...unless a partition never finished and still holds the seed's :all.
+    File.write!(canonical, :erlang.term_to_binary({1, :all}))
+    run = partition_run(root, "base-all-partial", 2, [{1, %{@b => "/b"}}, {2, :seed}])
+    Env.failures_merge!(run, [1, 2], root)
+    assert read_record(canonical) == {1, :all}
+  end
+
+  test "two merges in a row each keep the other's result", %{root: root} do
+    canonical = Path.join(root, "_build/test/test_failures")
+    File.mkdir_p!(Path.dirname(canonical))
+    File.write!(canonical, record(%{@a => "/a", @b => "/b"}))
+    # Two runs seeded from the same record, ending in either order.
+    first = partition_run(root, "first", 1, [{1, %{@b => "/b", @c => "/c"}}])
+    second = partition_run(root, "second", 1, [{1, %{@a => "/a"}}])
+    Env.failures_merge!(first, [1], root)
+    assert read_record(canonical) == {1, %{@b => "/b", @c => "/c"}}
+    Env.failures_merge!(second, [1], root)
+    assert read_record(canonical) == {1, %{@c => "/c"}}
+  end
+
+  test "the merge replaces the record whole, by a rename", %{root: root} do
+    canonical = Path.join(root, "_build/test/test_failures")
+    File.mkdir_p!(Path.dirname(canonical))
+    File.write!(canonical, record(%{@a => "/a"}))
+    %{inode: before} = File.stat!(canonical)
+    run = partition_run(root, "renamed", 1, [{1, %{@a => "/a", @b => "/b"}}])
+    Env.failures_merge!(run, [1], root)
+    # A new file took the old one's name: a reader never sees a part of it.
+    refute File.stat!(canonical).inode == before
+    refute File.exists?(canonical <> ".partial")
+    assert read_record(canonical) == {1, %{@a => "/a", @b => "/b"}}
+
+    # A merge that cannot write its new record leaves the old one whole.
+    old = File.read!(canonical)
+    File.mkdir_p!(canonical <> ".partial")
+    run = partition_run(root, "unwritable", 1, [{1, %{@c => "/c"}}])
+    assert_raise File.Error, fn -> Env.failures_merge!(run, [1], root) end
+    assert File.read!(canonical) == old
+  end
+
+  test "the weights table's grammar", %{root: root} do
+    table = Path.join(root, "weights.tsv")
+    File.write!(table, "# comment\n12.5\tapps/a/test/a_test.exs\n3\tapps/b/test/b_test.exs\n")
+
+    assert Env.weights!(table, true) == %{
+             "apps/a/test/a_test.exs" => 12.5,
+             "apps/b/test/b_test.exs" => 3.0
+           }
+
+    # Only the default table's absence means equal weights.
+    assert Env.weights!(Path.join(root, "absent.tsv"), false) == %{}
+    assert_raise Env.Refusal, fn -> Env.weights!(Path.join(root, "absent.tsv"), true) end
+    assert_raise Env.Refusal, fn -> Env.weights!(root, false) end
+
+    for bad <- ["12.5 apps/a_test.exs", "x\tapps/a_test.exs", "1\t", "", "1\ta\tb", "-1\ta"] do
+      File.write!(table, "1\tok_test.exs\n#{bad}\n")
+      assert_raise Env.Refusal, ~r/line 2/, fn -> Env.weights!(table, false) end
+    end
+  end
+
+  test "the split: largest first, to the lightest partition, ties to the lower number" do
+    assert Env.median(%{}) == 1.0
+    assert Env.median(%{"a" => 1.0, "b" => 5.0, "c" => 3.0}) == 3.0
+    assert Env.median(%{"a" => 1.0, "b" => 5.0}) == 3.0
+
+    units = [{"a", 1.0}, {"b", 9.0}, {"c", 4.0}, {"d", 4.0}, {"e", 2.0}]
+    assert Env.split(units, 2) == [["b", "a"], ["c", "d", "e"]]
+    assert Env.split(Enum.reverse(units), 2) == Env.split(units, 2)
+    # Equal weights fill the partitions in turn.
+    assert Env.split([{"x", 1.0}, {"y", 1.0}, {"z", 1.0}], 2) == [["x", "z"], ["y"]]
+    assert Env.split([{"x", 1.0}], 3) == [["x"], [], []]
   end
 end

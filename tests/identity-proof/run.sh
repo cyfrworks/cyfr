@@ -49,15 +49,6 @@ PROOF_PID=""
 SECRETS="$WORK/secrets"
 mkdir -p -m 700 "$SECRETS"
 
-stop_proof_container() {
-  local ids
-  ids="$(docker ps -q --filter "volume=$OUT" 2>/dev/null || true)"
-  if [ -n "$ids" ]; then
-    # shellcheck disable=SC2086
-    docker stop -t 5 $ids >/dev/null 2>&1 || true
-  fi
-}
-
 # The scratch directory holds the run's authority key, the tokens and the
 # kits, so it goes even when a stop fails; the asks and answers that held
 # a kit or a token go from PROOF_OUT too. `server_stop` ends in `fail`, an
@@ -82,7 +73,6 @@ cleanup() {
 trap cleanup EXIT
 
 json() { python3 -c "import json, sys; print(json.dumps($1))"; }
-field() { printf '%s' "$1" | python3 -c "import json, sys; v = json.load(sys.stdin)$2; print(v if not isinstance(v, (dict, list, bool)) and v is not None else json.dumps(v))"; }
 now() { date +%s; }
 
 release_build
@@ -127,10 +117,10 @@ identity_fixture "$C" placeholder_athanor >/dev/null
 step "the person at a.test, signed in by the release fixture's door"
 person="$(server_fixture "$A" person operator@example.com identity-proof)"
 [ -n "$person" ] || fail "the fixture signed nobody in"
-USER_A="$(field "$person" "['user_id']")"
-SEGMENT_A="$(field "$person" "['segment']")"
-COOKIE_A="$(browser_cookie "$A" "$(field "$person" "['token']")")"
-browser_picker_layout "$A" "$(field "$person" "['token']")"
+USER_A="$(field "$person" user_id)"
+SEGMENT_A="$(field "$person" segment)"
+COOKIE_A="$(browser_cookie "$A" "$(field "$person" token)")"
+browser_picker_layout "$A" "$(field "$person" token)"
 
 IDENTIFIER=""
 MOVED_AT=0
@@ -144,9 +134,9 @@ kit_file() {
 }
 
 # The restore attempts of cell `$1`, the last one's field `$2`.
-last_restore() { field "$(identity_fixture "$1" restores)" "['restores'][-1]['$2']"; }
+last_restore() { field "$(identity_fixture "$1" restores)" restores -1 "$2"; }
 
-restored_user() { field "$(identity_fixture "$1" people)" "['people'][0]['user_id']"; }
+restored_user() { field "$(identity_fixture "$1" people)" people 0 user_id; }
 
 # B's view, polled every two seconds from now until it names `$1`, or
 # `$2` seconds pass; prints the epoch second it did, or nothing.
@@ -155,7 +145,7 @@ watch_b() {
   until=$(($(now) + limit))
   while [ "$(now)" -le "$until" ]; do
     answer="$(identity_fixture "$B" fresh "$IDENTIFIER")"
-    if [ "$(field "$answer" ".get('key_epoch')")" = "$target" ]; then
+    if [ "$(field "$answer" key_epoch 2>/dev/null)" = "$target" ]; then
       now
       return 0
     fi
@@ -187,19 +177,22 @@ print(json.dumps({"status": status, "phase": body.get("status"), "error": body.g
 PY
 }
 
+# Each step the proof asks for (harness.sh `answer_asks`, which removes
+# each ask, one that carried a kit or a cookie among them, before its
+# answer appears).
 answer_ask() {
-  local ask="$1" op answer kit started observed target
-  op="$(field "$(cat "$ask")" "['op']")"
+  local ask="$1" op kit started observed target
+  op="$(asked "$ask" op)"
   case "$op" in
     a_head)
-      answer="$(identity_fixture "$A" head "$USER_A")"
+      ANSWER="$(identity_fixture "$A" head "$USER_A")"
       ;;
     b_resolve)
       genesis="$(identity_fixture "$A" genesis "$USER_A")"
-      IDENTIFIER="$(field "$genesis" "['identifier']")"
+      IDENTIFIER="$(field "$genesis" identifier)"
       printf '%s' "$genesis" | python3 -c "import json, sys; print(json.dumps(json.load(sys.stdin)['genesis']))" >"$WORK/genesis.json"
       b_resolve
-      answer="$(cat "$WORK/resolved.json")"
+      ANSWER="$(cat "$WORK/resolved.json")"
       ;;
     preserve_a)
       # The thief's copy: A stopped, copied whole, and both started again.
@@ -207,14 +200,14 @@ answer_ask() {
       identity_preserved "$A" "$THIEF" thief.test 4480
       identity_start "$A"
       identity_start "$THIEF"
-      answer="$(json '{"preserved": True}')"
+      ANSWER="$(json '{"preserved": True}')"
       ;;
     c_first_sign_in)
       # The operator's own address: a door that would admit them first anywhere else.
-      answer="$(identity_fixture "$C" first_sign_in operator@example.com first-door)"
+      ANSWER="$(identity_fixture "$C" first_sign_in operator@example.com first-door)"
       ;;
     token)
-      answer="$(python3 -c "import json, sys; print(json.dumps({'token': open(sys.argv[1]).read().strip()}))" "$SECRETS/token-$(field "$(cat "$ask")" "['cell']")")"
+      ANSWER="$(python3 -c "import json, sys; print(json.dumps({'token': open(sys.argv[1]).read().strip()}))" "$SECRETS/token-$(asked "$ask" cell)")"
       ;;
     c_claims)
       kit="$(kit_file "$ask" kit-2.json)"
@@ -232,7 +225,7 @@ PY
       unknown="$(identity_restore_post "$C" /restore "$SECRETS/token-c" "$SECRETS/unknown.json" "$WORK/answer.json")"
       wrong="$(identity_restore_post "$C" /restore "$SECRETS/token-c" "$SECRETS/wrong-seed.json" "$WORK/answer.json")"
       attempts="$(identity_fixture "$C" restores | python3 -c "import json, sys; print(len(json.load(sys.stdin)['restores']))")"
-      answer="$(json "{'other_token': $other, 'unknown_kit': $unknown, 'wrong_seed': $wrong, 'attempts': $attempts}")"
+      ANSWER="$(json "{'other_token': $other, 'unknown_kit': $unknown, 'wrong_seed': $wrong, 'attempts': $attempts}")"
       ;;
     c_phases)
       kit="$(kit_file "$ask" kit-2.json)"
@@ -246,7 +239,7 @@ PY
       wait "$thief_pid" || true
       MOVED_AT="$(now)"
       submitted_phase="$(last_restore "$C" phase)"
-      head="$(field "$(identity_fixture "$DIR" log "$IDENTIFIER")" "['head']")"
+      head="$(field "$(identity_fixture "$DIR" log "$IDENTIFIER")" head)"
       # B watched from the move on, in the background.
       (watch_b "$head" $((FRESH + 60)) >"$WORK/observed-c") &
       identity_kill "$C"
@@ -268,8 +261,8 @@ PY
       identity_env "$C" CYFR_MAX_ATHANORS
       identity_start "$C"
       log="$(identity_fixture "$DIR" log "$IDENTIFIER")"
-      final_head="$(field "$log" "['head']")"
-      answer="$(python3 - "$submitted" "$submitted_phase" "$accepted" "$accepted_phase" "$accepted_entry" \
+      final_head="$(field "$log" head)"
+      ANSWER="$(python3 - "$submitted" "$submitted_phase" "$accepted" "$accepted_phase" "$accepted_entry" \
         "$minted" "$minted_phase" "$replay" "$log" "$WORK/thief-1.json" "$thief_2" "$final_head" \
         "$log_before" <<'PY'
 import json, sys
@@ -308,7 +301,7 @@ PY
 )"
       ;;
     b_observes)
-      cell="$(field "$(cat "$ask")" "['cell']")"
+      cell="$(asked "$ask" cell)"
       case "$cell" in
         c) started="$MOVED_AT" ;;
         *) started="$B_VERIFIED_AT" ;;
@@ -319,28 +312,28 @@ PY
       done
       observed="$(cat "$WORK/observed-$cell" 2>/dev/null || true)"
       if [ -n "$observed" ]; then
-        answer="$(json "{'observed': True, 'seconds': $((observed - started)), 'bound': $FRESH, 'slack': $SLACK}")"
+        ANSWER="$(json "{'observed': True, 'seconds': $((observed - started)), 'bound': $FRESH, 'slack': $SLACK}")"
       else
-        answer="$(json "{'observed': False, 'bound': $FRESH}")"
+        ANSWER="$(json "{'observed': False, 'bound': $FRESH}")"
       fi
       ;;
     c_window)
       user="$(restored_user "$C")"
-      answer="$(identity_fixture "$C" segment "$user" |
+      ANSWER="$(identity_fixture "$C" segment "$user" |
         python3 -c "import json, sys; a = json.load(sys.stdin); a['waited'] = int(sys.argv[1]); print(json.dumps(a))" $((REAUTH + 5)))"
       ;;
     c_link_ticket)
       (umask 077 && python3 -c "import json, sys; open(sys.argv[2], 'w').write(json.load(open(sys.argv[1]))['cookie'])" "$ask" "$SECRETS/cookie")
-      answer="$(identity_fixture "$C" link_ticket "@$SECRETS/cookie" "github|https://github.com|restored-door")"
+      ANSWER="$(identity_fixture "$C" link_ticket "@$SECRETS/cookie" "github|https://github.com|restored-door")"
       rm -f "$SECRETS/cookie"
       ;;
     people)
-      answer="$(identity_fixture "$WORK/$(field "$(cat "$ask")" "['cell']")" people)"
+      ANSWER="$(identity_fixture "$WORK/$(asked "$ask" cell)" people)"
       ;;
     a_down)
       server_stop "$THIEF"
       server_stop "$A"
-      answer="$(json '{"down": True}')"
+      ANSWER="$(json '{"down": True}')"
       ;;
     c2_accepted)
       kit="$(kit_file "$ask" kit-1.json)"
@@ -349,21 +342,21 @@ PY
       identity_front_fault dir.test none
       phase="$(last_restore "$C2" phase)"
       server_stop "$C2"
-      answer="$(printf '%s' "$accepted" | python3 -c "import json, sys; a = json.load(sys.stdin); a['attempt_phase'] = sys.argv[1]; print(json.dumps(a))" "$phase")"
+      ANSWER="$(printf '%s' "$accepted" | python3 -c "import json, sys; a = json.load(sys.stdin); a['attempt_phase'] = sys.argv[1]; print(json.dumps(a))" "$phase")"
       ;;
     front_mark)
       b_resolve
-      answer="$(identity_front_seen dir.test | python3 -c "import json, sys; print(json.dumps({'mark': len(json.load(sys.stdin)['seen'])}))")"
+      ANSWER="$(identity_front_seen dir.test | python3 -c "import json, sys; print(json.dumps({'mark': len(json.load(sys.stdin)['seen'])}))")"
       ;;
     front_since)
-      mark="$(field "$(cat "$ask")" "['mark']")"
+      mark="$(asked "$ask" mark)"
       a_port="$(cell_port "$A")"
       if curl -fsS -m 2 -o /dev/null "http://127.0.0.1:$a_port/api/health" 2>/dev/null; then a_up=True; else a_up=False; fi
-      answer="$(identity_front_seen dir.test | python3 -c "
+      ANSWER="$(identity_front_seen dir.test | python3 -c "
 import json, sys
 seen = json.load(sys.stdin)['seen'][int(sys.argv[1]):]
 print(json.dumps({'directory_only': bool(seen) and all(r['path'].startswith('/directory/v1/') for r in seen), 'requests': len(seen), 'a_answers': $a_up}))" "$mark")"
-      head="$(field "$(identity_fixture "$C3" head "$(restored_user "$C3")")" "['head']")"
+      head="$(field "$(identity_fixture "$C3" head "$(restored_user "$C3")")" head)"
       (watch_b "$head" $((FRESH + 60)) >"$WORK/observed-c3") &
       ;;
     c2_resume)
@@ -371,7 +364,7 @@ print(json.dumps({'directory_only': bool(seen) and all(r['path'].startswith('/di
       resumed="$(post_restore "$C2" "$SECRETS/kit-1.json")"
       restores="$(identity_fixture "$C2" restores)"
       people="$(identity_fixture "$C2" people)"
-      answer="$(python3 - "$resumed" "$restores" "$people" <<'PY'
+      ANSWER="$(python3 - "$resumed" "$restores" "$people" <<'PY'
 import json, sys
 resumed, restores, people = (json.loads(a) for a in sys.argv[1:])
 last = restores["restores"][-1]
@@ -389,46 +382,18 @@ PY
       [ "$wait_s" -gt 0 ] && sleep "$wait_s"
       past="$(identity_fixture "$B" fresh "$IDENTIFIER")"
       identity_front_fault dir.test none
-      answer="$(python3 -c "import json, sys; print(json.dumps({'verified': json.loads(sys.argv[1]), 'within': json.loads(sys.argv[2]), 'past': json.loads(sys.argv[3]), 'bound': $FRESH}))" "$within_verify" "$within" "$past")"
+      ANSWER="$(python3 -c "import json, sys; print(json.dumps({'verified': json.loads(sys.argv[1]), 'within': json.loads(sys.argv[2]), 'past': json.loads(sys.argv[3]), 'bound': $FRESH}))" "$within_verify" "$within" "$past")"
       ;;
     *) fail "the proof asked for '$op', which this script does not do" ;;
   esac
-  [ -n "$answer" ] || answer='{"error":"the fixture answered nothing"}'
-  printf '%s\n' "$answer" >"${ask%.json}.answer-part"
-}
-
-# Each step the proof asks for, answered once; an ask that carried a kit
-# is emptied as soon as it is read.
-answer_asks() {
-  local ask id
-  for ask in "$OUT"/ask-*.json; do
-    [ -e "$ask" ] || continue
-    id="${ask##*/ask-}"
-    id="${id%.json}"
-    [ -e "$OUT/answer-$id.json" ] && continue
-    [ -e "$OUT/answered-$id" ] && continue
-    touch "$OUT/answered-$id"
-    answer_ask "$ask"
-    if grep -q '"kit"\|"cookie"' "$ask"; then : >"$ask"; fi
-    mv "${ask%.json}.answer-part" "$OUT/answer-$id.json"
-  done
 }
 
 step "the identity proof in Chromium, in $PLAYWRIGHT_IMAGE"
 mkdir -p "$OUT"
-rm -f "$OUT"/ask-* "$OUT"/answer-* "$OUT"/answered-*
+rm -f "$OUT"/ask-* "$OUT"/answer-*
 playwright_run identity-proof proof.mjs /authority/homes.json "$SEGMENT_A" "$COOKIE_A" /out &
 PROOF_PID=$!
-while kill -0 "$PROOF_PID" 2>/dev/null; do
-  answer_asks
-  sleep 0.2
-done
-set +e
-wait "$PROOF_PID"
-status=$?
-set -e
-PROOF_PID=""
-rm -f "$OUT"/answered-*
+proof_await answer_ask
 
 echo "the record: $OUT/identity-proof.json and $OUT/identity-proof.md"
-exit "$status"
+exit "$PROOF_STATUS"

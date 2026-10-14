@@ -55,9 +55,9 @@
 // Usage: node proof.mjs HOMES_FILE OUT_DIR SENDER_COOKIE RECIPIENT_COOKIE OUTSIDER_COOKIE
 
 import { createHash, randomBytes } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { launchBrowser, readHomes, sleep, startProxy, waitFor } from "../browser/lib.mjs";
+import { ask as askRunSh, launchBrowser, readHomes, startProxy, waitFor } from "../browser/lib.mjs";
 
 const [homesFile, outDir, senderCookie, recipientCookie, outsiderCookie] = process.argv.slice(2);
 if (!homesFile || !outDir || !senderCookie || !recipientCookie || !outsiderCookie) {
@@ -109,21 +109,7 @@ function row(step, held, what, detail) {
   return !!held;
 }
 
-let asked = 0;
-async function ask(request, timeoutMs = 120_000) {
-  const id = ++asked;
-  const answer = join(outDir, `answer-${id}.json`);
-  writeFileSync(join(outDir, `ask-${id}.part`), JSON.stringify(request));
-  renameSync(join(outDir, `ask-${id}.part`), join(outDir, `ask-${id}.json`));
-  const deadline = Date.now() + timeoutMs;
-  while (!existsSync(answer)) {
-    if (Date.now() > deadline) throw new Error(`run.sh never answered ${request.op}`);
-    await sleep(100);
-  }
-  const answered = JSON.parse(readFileSync(answer, "utf8"));
-  if (answered.error) throw new Error(`run.sh could not answer ${request.op}: ${answered.error}`);
-  return answered;
-}
+const ask = (request, options) => askRunSh(request, { outDir, refuseError: true, ...options });
 
 // ---------------------------------------------------------------------------
 // The people's pages

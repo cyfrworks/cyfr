@@ -30,7 +30,7 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
-  BROWSERS, SITE, chromium, closeFrame, firefox, launch, openShell, percentiles, signedIn, sleep,
+  BROWSERS, SITE, chromium, closeFrame, firefox, launch, openShell, percentiles, redact, signedIn, sleep,
   startProxy, waitFor, webkit,
 } from "../browser/lib.mjs";
 
@@ -88,7 +88,7 @@ async function run(name, base, proxy, segment, cookie, opens) {
     check((a.allow || "").split(/;\s*/).sort().join(";") === "autoplay;fullscreen",
       `${name}: the frame's allow is the declaration's`, a.allow);
     check(a.src.startsWith("/_s/") && a.src.endsWith(`/local/${NAME}/1.0.0/dist/index.html`),
-      `${name}: the frame's page is the private version's, under its asset credential`, a.src.replace(/^\/_s\/[^/]+/, "/_s/…"));
+      `${name}: the frame's page is the private version's, under its asset credential`, redact(a.src));
     const g = first.game;
     check(g.readyAt && g.steps > 0, `${name}: Rapier stepped in the inline worker and the game was ready`, g);
     check(g.audio && g.audio.decoded, `${name}: the sound decoded once`, g.audio);
@@ -131,7 +131,7 @@ async function run(name, base, proxy, segment, cookie, opens) {
     const fetched = assets.filter((r) => !media(r) && !(r.conditional || r.status === 304));
     check(second.game.readyAt && fetched.length === 0,
       `${name}: the second open's assets (media aside) came from the browser's cache`,
-      assets.map((r) => ({ path: new URL(r.url).pathname.replace(/^\/_s\/[^/]+/, "/_s/…"), status: r.status, conditional: r.conditional })));
+      assets.map((r) => ({ path: redact(new URL(r.url).pathname), status: r.status, conditional: r.conditional })));
     record.second = {
       document: second.requests.filter((r) => r.url.endsWith("/dist/index.html")).map((r) => ({ status: r.status, conditional: r.conditional })),
       assets: assets.map((r) => ({ path: new URL(r.url).pathname.split("/").slice(-2).join("/"), status: r.status, conditional: r.conditional })),

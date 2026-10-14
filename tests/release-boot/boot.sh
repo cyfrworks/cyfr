@@ -170,7 +170,7 @@ fi
 grep -E "== (Running|Migrated)" "$CELL/boot.log"
 
 # Liveness beside readiness, so a half-open server cannot pass as a boot.
-curl -fsS "http://127.0.0.1:$PORT/api/health" >"$CELL/health.json"
+curl -fsS -m 10 "http://127.0.0.1:$PORT/api/health" >"$CELL/health.json"
 echo "GET /api/health -> 200 $(cat "$CELL/health.json")"
 
 server_stop
@@ -233,7 +233,6 @@ grep -q "Recorded the crypto keyring fingerprint" "$ORIGIN/boot.log" ||
   fail "the cell's first boot did not record its keyring fingerprint"
 person="$(server_fixture "$ORIGIN" person operator@example.com release-boot-backup)"
 [ -n "$person" ] || fail "the fixture signed nobody in"
-field() { printf '%s' "$1" | python3 -c "import json, sys; print(json.load(sys.stdin)['$2'])"; }
 user_id="$(field "$person" user_id)"
 token="$(field "$person" token)"
 
@@ -254,7 +253,7 @@ echo "the cell holds $tincture_path and $thread_id"
 serves() {
   local what="$1"
   local page
-  page="$(curl -fsS -H "authorization: Bearer $token" "http://127.0.0.1:$PORT$tincture_path")" ||
+  page="$(curl -fsS -m 30 -H "authorization: Bearer $token" "http://127.0.0.1:$PORT$tincture_path")" ||
     fail "$what: $tincture_path was not served to the person"
   case "$page" in
     *"the backup proof tincture"*) echo "$what: GET $tincture_path -> the tincture's page" ;;
@@ -263,7 +262,7 @@ serves() {
 
   local body answer
   body="$(printf '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"thread","arguments":{"action":"messages","thread":"%s"},"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientInfo":{"name":"release-boot","version":"0"},"io.modelcontextprotocol/clientCapabilities":{}}}}' "$thread_id")"
-  answer="$(curl -fsS -X POST "http://127.0.0.1:$PORT/mcp" \
+  answer="$(curl -fsS -m 30 -X POST "http://127.0.0.1:$PORT/mcp" \
     -H "authorization: Bearer $token" -H 'content-type: application/json' \
     -H 'accept: application/json, text/event-stream' -H 'mcp-protocol-version: 2026-07-28' \
     -H 'mcp-method: tools/call' -H 'mcp-name: thread' -d "$body")" ||

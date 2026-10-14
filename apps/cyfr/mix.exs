@@ -97,7 +97,6 @@ defmodule Cyfr.App.MixProject do
       {:telemetry_metrics, "~> 1.0"},
       {:telemetry_metrics_prometheus_core, "~> 1.2"},
       {:telemetry_poller, "~> 1.0"},
-      {:gettext, "~> 1.0"},
       {:opentelemetry_api, "~> 1.4"},
       {:opentelemetry, "~> 1.5"},
       {:opentelemetry_exporter, "~> 1.8"},

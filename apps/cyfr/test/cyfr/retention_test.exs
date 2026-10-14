@@ -666,7 +666,7 @@ defmodule Arca.RetentionTest do
 
     # Terminal by default: retention never touches a row still "running",
     # so a fixture that should be prunable must have finished.
-    Arca.Execution.record_start(%{
+    Arca.Test.Writers.record_start(%{
       id: id,
       request_id: "req_test",
       user_id: actor.user_id,

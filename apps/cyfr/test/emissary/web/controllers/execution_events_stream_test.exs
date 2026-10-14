@@ -4,6 +4,8 @@
 defmodule Emissary.Web.ExecutionEventsStreamTest do
   use CyfrWeb.ConnCase, async: false
 
+  @moduletag auth: :person
+
   import Ecto.Query, only: [from: 2]
   import Prima.Test.Wait
 
@@ -140,6 +142,54 @@ defmodule Emissary.Web.ExecutionEventsStreamTest do
     body = Task.await(task, 10_000)
     assert ids(body) == ["1", "1.1", "2", "2.1", "3"]
     assert body =~ "event: execution.failed"
+  end
+
+  describe "the stream's lifetime" do
+    test "a quiet stream ends at its lifetime, not at the next keep-alive", %{
+      conn: conn,
+      exec: exec
+    } do
+      Cyfr.Test.Settings.put("opus_events_max_ms", 300)
+
+      task =
+        Task.async(fn ->
+          started = System.monotonic_time(:millisecond)
+          conn = stream(conn, exec)
+          {conn, System.monotonic_time(:millisecond) - started}
+        end)
+
+      {conn, elapsed} = Task.await(task, 5_000)
+      assert conn.status == 200
+      assert ids(conn.resp_body) == ["1"]
+      assert elapsed < 2_000
+    end
+
+    # Phoenix.ConnTest runs the controller in the calling process, so the
+    # test's mailbox is the stream's: a timer the stream left armed would
+    # arrive here, as it would on a kept-alive connection's next request.
+    test "a stream that ends before its lifetime leaves no deadline behind", %{
+      conn: conn,
+      exec: exec
+    } do
+      Cyfr.Test.Settings.put("opus_events_max_ms", 300)
+      test_pid = self()
+
+      # Ended live: a terminal row published once the stream waits in its loop.
+      publisher =
+        Task.async(fn ->
+          await_live(%{pid: test_pid})
+          two = durable!(exec, "execution.completed", %{"status" => "completed"})
+          publish!(exec, "execution.completed", two)
+        end)
+
+      assert ids(stream(conn, exec).resp_body) == ["1", "2"]
+      Task.await(publisher)
+
+      # Ended in replay: the terminal row is already there.
+      assert ids(stream(conn, exec).resp_body) == ["1", "2"]
+
+      refute_receive {ExecutionEventsController, :deadline, _ref}, 600
+    end
   end
 
   describe "an open stream holds its credential to its standing" do

@@ -32,7 +32,7 @@
 # which this proof requires).
 # A failed run also leaves approval-proof-frames.json, the page's last
 # socket frames with every value the proof knows to be secret replaced
-# (tests/grant-proof/redact.mjs), and approval-proof.png, the page, unless
+# (tests/browser/lib.mjs `redact`), and approval-proof.png, the page, unless
 # the page could then show a key the person typed, when the record says
 # the screenshot was withheld. Records and browser-process diagnostics use
 # the same rule, including the typed keys' and typed payloads' digests.
@@ -65,15 +65,6 @@ PROOF_PID=""
 NAME=approval-probe
 APP="tincture:local.$NAME"
 
-stop_proof_container() {
-  local ids
-  ids="$(docker ps -q --filter "volume=$OUT" 2>/dev/null || true)"
-  if [ -n "$ids" ]; then
-    # shellcheck disable=SC2086
-    docker stop -t 5 $ids >/dev/null 2>&1 || true
-  fi
-}
-
 # The scratch directory holds the run's authority key, the cell's keys
 # and its database, and the person's session token, so it goes even when
 # a stop fails. `server_stop` ends in `fail`, an `exit`, when a listener
@@ -98,20 +89,11 @@ cleanup() {
 }
 trap cleanup EXIT
 
-field() { printf '%s' "$1" | python3 -c "import json, sys; print(json.load(sys.stdin)['$2'])"; }
-asked() { python3 -c "import json, sys; print(json.load(open(sys.argv[1]))[sys.argv[2]])" "$1" "$2"; }
-
 # The proof's fixture inside the running server, as `bin/cyfr rpc`. A
 # command that raises answers nothing, which the proof reads as a failed
 # step; what it raised is kept in the scratch directory, not the record.
 approval_fixture() {
-  local args="" arg
-  for arg in "$@"; do
-    args="$args\"$(printf '%s' "$arg" | sed 's/[\\"]/\\&/g')\","
-  done
-  cell_cyfr "$CELL" rpc \
-    "{answer, _} = Code.eval_file(\"$HERE/fixture.exs\"); IO.puts(answer.([${args%,}]))" \
-    2>>"$WORK/fixture.err" | sed -n 's/^APPROVAL=//p' | tail -1 || :
+  cell_fixture "$CELL" "$HERE/fixture.exs" APPROVAL "$@" 2>>"$WORK/fixture.err" || :
 }
 
 # The tincture the proof describes, written into the scratch directory as
@@ -128,7 +110,7 @@ with open(sys.argv[2] + '/cyfr-manifest.json', 'w') as out:
 with open(sys.argv[2] + '/index.html', 'w') as out:
     out.write(ask['index'])
 " "$ask" "$dir"
-  version="$(python3 -c "import json, sys; print(json.load(open(sys.argv[1]))['manifest']['version'])" "$ask")"
+  version="$(asked "$ask" manifest version)"
   approval_fixture publish "$token" "$dir" "$NAME" "$version"
 }
 
@@ -151,42 +133,32 @@ segment="$(field "$person" segment)"
 token="$(field "$person" token)"
 cookie="$(browser_cookie "$CELL" "$token")"
 
-# Each step the proof asks for, answered once.
-answer_asks() {
-  local ask id op answer
-  for ask in "$OUT"/ask-*.json; do
-    [ -e "$ask" ] || continue
-    id="${ask##*/ask-}"
-    id="${id%.json}"
-    [ -e "$OUT/answer-$id.json" ] && continue
-    op="$(asked "$ask" op)"
-    case "$op" in
-      person)
-        answer="$(python3 -c "import json, sys; print(json.dumps({'user_id': sys.argv[1], 'athanor_id': sys.argv[2]}))" \
-          "$user_id" "$athanor_id")"
-        ;;
-      clock) answer="$(approval_fixture clock)" ;;
-      publish) answer="$(publish "$ask")" ;;
-      state) answer="$(approval_fixture state "$token" "$APP" "$ask")" ;;
-      requested) answer="$(approval_fixture requested "$token" "$ask")" ;;
-      derived) answer="$(approval_fixture derived "$token" "$ask")" ;;
-      admit) answer="$(approval_fixture admit "$token" "$APP")" ;;
-      use) answer="$(approval_fixture use "$token" "$APP" "$ask")" ;;
-      thread) answer="$(approval_fixture thread "$token")" ;;
-      announce)
-        answer="$(approval_fixture announce "$token" "$APP" "$(asked "$ask" thread_id)" "$(asked "$ask" name)")"
-        ;;
-      account) answer="$(approval_fixture account "$token" "$APP" "$(asked "$ask" name)")" ;;
-      *) fail "the proof asked for '$op', which this script does not do" ;;
-    esac
-    [ -n "$answer" ] || answer='{"error":"the fixture answered nothing"}'
-    # An ask is removed once answered, before its answer appears: a state
-    # ask carries the digests of the keys the person typed, and none may
-    # outlive the read it was for.
-    rm -f "$ask"
-    printf '%s\n' "$answer" >"$OUT/answer-$id.part"
-    mv "$OUT/answer-$id.part" "$OUT/answer-$id.json"
-  done
+# Each step the proof asks for (harness.sh `answer_asks`, which removes an
+# ask once answered, before its answer appears: a state ask carries the
+# digests of the keys the person typed, and none may outlive the read it
+# was for).
+answer_ask() {
+  local ask="$1" op
+  op="$(asked "$ask" op)"
+  case "$op" in
+    person)
+      ANSWER="$(python3 -c "import json, sys; print(json.dumps({'user_id': sys.argv[1], 'athanor_id': sys.argv[2]}))" \
+        "$user_id" "$athanor_id")"
+      ;;
+    clock) ANSWER="$(approval_fixture clock)" ;;
+    publish) ANSWER="$(publish "$ask")" ;;
+    state) ANSWER="$(approval_fixture state "$token" "$APP" "$ask")" ;;
+    requested) ANSWER="$(approval_fixture requested "$token" "$ask")" ;;
+    derived) ANSWER="$(approval_fixture derived "$token" "$ask")" ;;
+    admit) ANSWER="$(approval_fixture admit "$token" "$APP")" ;;
+    use) ANSWER="$(approval_fixture use "$token" "$APP" "$ask")" ;;
+    thread) ANSWER="$(approval_fixture thread "$token")" ;;
+    announce)
+      ANSWER="$(approval_fixture announce "$token" "$APP" "$(asked "$ask" thread_id)" "$(asked "$ask" name)")"
+      ;;
+    account) ANSWER="$(approval_fixture account "$token" "$APP" "$(asked "$ask" name)")" ;;
+    *) fail "the proof asked for '$op', which this script does not do" ;;
+  esac
 }
 
 step "the approval proof in Chromium at $VIEWPORT, in $PLAYWRIGHT_IMAGE"
@@ -194,15 +166,7 @@ mkdir -p "$OUT"
 rm -f "$OUT"/ask-* "$OUT"/answer-*
 playwright_run approval-proof proof.mjs /authority/homes.json "$segment" "$cookie" /out "$VIEWPORT" &
 PROOF_PID=$!
-while kill -0 "$PROOF_PID" 2>/dev/null; do
-  answer_asks
-  sleep 0.2
-done
-set +e
-wait "$PROOF_PID"
-status=$?
-set -e
-PROOF_PID=""
+proof_await answer_ask
 
 echo "the record: $OUT/approval-proof.json and $OUT/approval-proof.md"
-exit "$status"
+exit "$PROOF_STATUS"

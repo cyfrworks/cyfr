@@ -23,6 +23,7 @@ Prerequisites: harness.py's. Usage: tests/locus-backends-image/memory.py IMAGE
 import os
 import sys
 
+sys.dont_write_bytecode = True
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from harness import (  # noqa: E402
@@ -77,7 +78,7 @@ def main():
         # The kill is counted as a restart; the crash's reason is reported
         # until the restarted process is ready, which the failed call
         # already carried, so the count is what is waited for here.
-        report = eventually(lambda: (lambda b: b if b["restarts"] >= 1 else None)(
+        eventually(lambda: (lambda b: b if b["restarts"] >= 1 else None)(
             c.report(HOG)["backends"][0]), "the kill to be reported")
         restarted = eventually(lambda: (lambda b: b if b["status"] == "ready" else None)(c.report(HOG)["backends"][0]),
                                "the backend to restart ready", timeout_s=30)

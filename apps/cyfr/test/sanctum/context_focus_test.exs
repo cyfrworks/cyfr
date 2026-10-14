@@ -252,7 +252,7 @@ defmodule Sanctum.ContextFocusTest do
     b_exec = "exec_b_#{System.unique_integer([:positive])}"
 
     {:ok, _} =
-      Arca.Execution.record_start(%{
+      Arca.Test.Writers.record_start(%{
         id: b_exec,
         reference: "formula:local.test:1.0.0",
         user_id: "github|https://github.com|someone",

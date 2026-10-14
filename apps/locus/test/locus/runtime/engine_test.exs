@@ -3,30 +3,44 @@
 
 defmodule Locus.Runtime.EngineTest do
   @moduledoc """
-  The runtime's own check of `authority_required`, in the VM that runs a
-  component: a run that requires an authority and was given none raises
-  before anything compiles, and one given an authority goes on to compile.
-  That a dispatched run's runner is handed the authority it was
-  dispatched with is `Locus.Runtime.AuthorityPlumbingTest`'s, in CYFR's suite.
+  The runtime's own authority check, in the VM that runs a component: a
+  run given no authority, or anything but one, raises before anything
+  compiles, whatever else its options say, and one given an authority
+  goes on to compile. That a dispatched run's runner is handed the
+  authority it was dispatched with is `Locus.Runtime.AuthorityPlumbingTest`'s,
+  in CYFR's suite.
   """
 
   use ExUnit.Case, async: true
 
-  test "the runtime itself re-checks authority_required" do
+  test "the runtime itself refuses a run without an authority" do
     assert_raise ArgumentError, ~r/an opts filter dropped it/, fn ->
-      Locus.Runtime.Engine.execute_component(<<0, 1, 2, 3>>, %{}, authority_required: true)
+      Locus.Runtime.Engine.execute_component(<<0, 1, 2, 3>>, %{})
     end
   end
 
-  test "the runtime accepts authority_required when the authority is present" do
+  test "the runtime accepts a run whose authority is present" do
     # Garbage bytes fail at compile, not at the authority check — proving the
     # check passed and execution was attempted.
     result =
       Locus.Runtime.Engine.execute_component(<<0, 1, 2, 3>>, %{},
-        authority: Prima.Authority.zero(),
-        authority_required: true
+        authority: Prima.Authority.zero()
       )
 
     assert {:error, _} = result
+  end
+
+  test "no option lets a run without an authority through" do
+    # No option opts a run out of the check: one asking to, such as
+    # `authority_required: false`, is refused all the same.
+    assert_raise ArgumentError, ~r/an opts filter dropped it/, fn ->
+      Locus.Runtime.Engine.execute_component(<<0, 1, 2, 3>>, %{}, authority_required: false)
+    end
+  end
+
+  test "the runtime refuses a run whose authority is not an authority" do
+    assert_raise ArgumentError, ~r/an opts filter dropped it/, fn ->
+      Locus.Runtime.Engine.execute_component(<<0, 1, 2, 3>>, %{}, authority: false)
+    end
   end
 end

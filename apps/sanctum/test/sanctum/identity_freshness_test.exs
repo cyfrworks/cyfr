@@ -46,7 +46,7 @@ defmodule Sanctum.IdentityFreshnessTest do
   setup tags do
     Arca.Test.Sandbox.setup!(tags)
     Arca.Cache.init()
-    Prima.RateLimiter.reset()
+    Prima.Test.RateLimiter.reset!()
     targets = Application.fetch_env(:sanctum, :private_egress_targets)
     ttl = Application.fetch_env(:sanctum, :caller_memo_ttl_ms)
 
@@ -60,7 +60,7 @@ defmodule Sanctum.IdentityFreshnessTest do
       :persistent_term.erase({Resolver, :observer})
       Arca.Cache.delete_match({:established, :_, :_, :_})
       Arca.Cache.delete_match(Arca.Cache.Keys.match_identity_unreachable())
-      Prima.RateLimiter.reset()
+      Prima.Test.RateLimiter.reset!()
     end)
 
     # The logs the scripted directory serves, by identifier, and how it

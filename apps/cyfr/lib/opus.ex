@@ -87,8 +87,8 @@ defmodule Opus do
   Root an execution chain under a profile's consent and run `reference`
   with `input` under the authority it grants.
 
-  `profile_selector` and the options `:route`, `:ceiling`,
-  `:live_shape_digest` and `:connection` are
+  `profile_selector` and the options `:route`, `:live_shape_digest` and
+  `:connection` are
   `Opus.Admission.authority_for/4`'s: a `:connection` roots the run
   under the named binding its profile's ingress holds under that name, and
   a name the ingress does not bind is `{:error, :connection_not_granted}`
@@ -108,7 +108,7 @@ defmodule Opus do
            Admission.authority_and_stamp_for(ctx, profile_selector, reference, opts) do
       exec_opts =
         opts
-        |> Keyword.drop([:route, :ceiling, :live_shape_digest, :connection])
+        |> Keyword.drop([:route, :live_shape_digest, :connection])
         |> Keyword.merge(
           authority: authority,
           activation_stamp: stamp,

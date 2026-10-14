@@ -91,7 +91,7 @@ defmodule Sanctum.Provisioning do
 
   alias Arca.ProvisioningClaims, as: Claims
   alias Sanctum.Context
-  alias Sanctum.Tenancy.{Athanors, Caps, Members, Users}
+  alias Sanctum.Tenancy.{Athanors, Members, Users}
 
   # How long a claim stands without its keeper renewing it, and how often
   # the keeper does. A claim nobody renews is takeable one lease after the
@@ -111,6 +111,11 @@ defmodule Sanctum.Provisioning do
   # claim of its own, and a keeper is that claim's for the length of its
   # own `fun`.
   @keeper_key {__MODULE__, :keeper}
+
+  # The one definition of the bounds a mint rate may hold:
+  # `mint_per_hour_range/0` hands it to the roster's validator, and a
+  # stored value outside it refuses every mint.
+  @mint_per_hour_range 1..1_000_000
 
   @typedoc "The claim an attempt holds while it fills an athanor."
   @type claim :: %{required(:owner) => String.t(), optional(atom()) => term()}
@@ -984,13 +989,14 @@ defmodule Sanctum.Provisioning do
     end
   end
 
-  # An operator's own athanor is minted past the server caps
-  # (`Athanors.create_for_operator/1`): they are named in
+  # An operator's own athanor is minted past the server caps and the mint
+  # rate (`Athanors.create_for_operator/1`): they are named in
   # `CYFR_PLATFORM_ADMIN_EMAILS` rather than arriving, and a server at
-  # capacity must still admit the person who can act on it. Everyone else
-  # is a stranger arriving and is capped — `CYFR_MINT_PER_HOUR` is exactly
-  # how fast that may happen, and `mint_allowed/0` is its only enforcement,
-  # so a refusal here must reach the door rather than being swallowed.
+  # capacity, or holding a mint rate it cannot use, must still admit the
+  # person who can act on it. Everyone else is a stranger arriving, held to
+  # the caps and to the mint rate — `CYFR_MINT_PER_HOUR` bounds how fast
+  # strangers may arrive, and `mint_allowed/0` is its only enforcement, so
+  # a refusal here must reach the door rather than being swallowed.
   defp mint_personal(%{id: user_id} = user) do
     name = personal_name(user)
 
@@ -1031,12 +1037,68 @@ defmodule Sanctum.Provisioning do
   defp record_personal(%{personal_athanor_id: id} = user, %{id: id}), do: {:ok, user}
   defp record_personal(user, athanor), do: Users.set_personal_athanor(user, athanor.id)
 
-  # The mint rate is a per-server cap on personal athanors minted per
-  # hour. `check_counted/2` counts only while the cap is on, and refuses
-  # (never admits) when the count cannot be answered.
+  @doc """
+  The bounds a mint rate (`CYFR_MINT_PER_HOUR`, the `mint_per_hour`
+  setting) may hold: the roster refuses a value outside them, so 0 is
+  never read as off, and a stored value outside them refuses every mint.
+  """
+  @spec mint_per_hour_range() :: Range.t()
+  def mint_per_hour_range, do: @mint_per_hour_range
+
+  # The mint rate is a security bound on the personal athanors minted in
+  # the last hour, not a capacity cap: unset is no bound and counts
+  # nothing. Anything else that is not a bound refuses, never admits: a
+  # store that cannot answer (a stale value included, which the setting
+  # refuses), a count that fails, and a stored value outside the roster's
+  # range (a 0 written before 0 was refused, or a row written past the
+  # roster), since an invalid bound read as no bound would open the door.
   defp mint_allowed do
-    Caps.check_counted(:mint_per_hour, fn ->
-      Athanors.count_created_since(DateTime.add(DateTime.utc_now(), -3600))
-    end)
+    case Arca.PlatformSettings.effective("mint_per_hour") do
+      {:ok, nil} ->
+        :ok
+
+      {:ok, bound} when is_integer(bound) and bound in @mint_per_hour_range ->
+        mints_below(bound)
+
+      {:ok, invalid} ->
+        Logger.warning(
+          "[Provisioning] mint_per_hour holds #{inspect(invalid)}, outside " <>
+            "#{inspect(@mint_per_hour_range)}; refusing mints until it is corrected"
+        )
+
+        mint_unverifiable()
+
+      {:error, :unavailable} ->
+        Logger.warning(
+          "[Provisioning] mint_per_hour could not be read; refusing mints until it answers"
+        )
+
+        mint_unverifiable()
+
+      {:error, reason} when reason in [:uninstalled, :unknown_key] ->
+        raise "[Provisioning] mint_per_hour cannot be read: the setting is #{reason}"
+    end
   end
+
+  defp mints_below(bound) do
+    case Athanors.count_created_since(DateTime.add(DateTime.utc_now(), -3600)) do
+      {:ok, minted} when minted < bound ->
+        :ok
+
+      {:ok, _minted} ->
+        {:error, {:limit_reached, :mint_per_hour, bound}}
+
+      {:error, reason} ->
+        Logger.warning(
+          "[Provisioning] mint_per_hour count failed: #{inspect(reason)}; " <>
+            "refusing mints until it answers"
+        )
+
+        mint_unverifiable()
+    end
+  end
+
+  # The term the caps answer when they cannot decide, which the door and
+  # `Prima.Refusal` already read as unavailable.
+  defp mint_unverifiable, do: {:error, {:cap_unverifiable, :mint_per_hour}}
 end

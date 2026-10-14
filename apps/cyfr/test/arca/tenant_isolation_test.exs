@@ -160,7 +160,7 @@ defmodule Arca.TenantIsolationTest do
       {ctx_a, ctx_b} = TestContext.two_contexts()
 
       {:ok, _} =
-        Arca.Execution.record_start(%{
+        Arca.Test.Writers.record_start(%{
           id: "exec_cross_a",
           reference: "reagent:local.test:0.1.0",
           user_id: ctx_a.user_id,
@@ -182,7 +182,7 @@ defmodule Arca.TenantIsolationTest do
       {ctx_a, _ctx_b} = TestContext.two_contexts()
 
       {:ok, _} =
-        Arca.Execution.record_start(%{
+        Arca.Test.Writers.record_start(%{
           id: "exec_platform_test",
           reference: "reagent:local.test:0.1.0",
           user_id: ctx_a.user_id,
@@ -213,7 +213,7 @@ defmodule Arca.TenantIsolationTest do
       {ctx_a, ctx_b} = TestContext.two_contexts()
 
       {:ok, _} =
-        Arca.Execution.record_start(%{
+        Arca.Test.Writers.record_start(%{
           id: "exec_tenant_a",
           reference: "reagent:local.test:0.1.0",
           user_id: ctx_a.user_id,
@@ -224,7 +224,7 @@ defmodule Arca.TenantIsolationTest do
         })
 
       {:ok, _} =
-        Arca.Execution.record_start(%{
+        Arca.Test.Writers.record_start(%{
           id: "exec_tenant_b",
           reference: "reagent:local.test:0.1.0",
           user_id: ctx_b.user_id,
@@ -482,6 +482,49 @@ defmodule Arca.TenantIsolationTest do
   end
 
   # ============================================================================
+  # Policy Log Retention Isolation
+  # ============================================================================
+
+  describe "policy log retention tenant isolation" do
+    test "a dry run counts and a cleanup deletes only the actor's own expired rows" do
+      {ctx_a, ctx_b} = TestContext.two_contexts()
+      old = DateTime.add(DateTime.utc_now(), -60 * 86_400, :second)
+      recent = DateTime.utc_now()
+
+      for {id, ctx, timestamp} <- [
+            {"policy_old_a", ctx_a, old},
+            {"policy_recent_a", ctx_a, recent},
+            {"policy_old_b", ctx_b, old}
+          ] do
+        {:ok, _} =
+          Arca.PolicyLog.record(%{
+            id: id,
+            user_id: ctx.user_id,
+            athanor_id: ctx.athanor_id,
+            timestamp: timestamp,
+            event_type: "decision"
+          })
+      end
+
+      present = fn ->
+        for id <- ["policy_old_a", "policy_recent_a", "policy_old_b"],
+            Arca.Repo.get(Arca.Schemas.PolicyLog, id) != nil,
+            do: id
+      end
+
+      actor_a = Sanctum.Context.actor(ctx_a)
+
+      assert {:ok, 1} =
+               Arca.Retention.cleanup(actor_a, "policy_log_days", value: 1, dry_run: true)
+
+      assert present.() == ["policy_old_a", "policy_recent_a", "policy_old_b"]
+
+      assert {:ok, 1} = Arca.Retention.cleanup(actor_a, "policy_log_days", value: 1)
+      assert present.() == ["policy_recent_a", "policy_old_b"]
+    end
+  end
+
+  # ============================================================================
   # Execution Retention Tenant Isolation (Tier 1a)
   # ============================================================================
 
@@ -492,7 +535,7 @@ defmodule Arca.TenantIsolationTest do
       # Create 5 executions for each tenant
       for i <- 1..5 do
         {:ok, _} =
-          Arca.Execution.record_start(%{
+          Arca.Test.Writers.record_start(%{
             id: "ret_a_#{i}",
             reference: "reagent:local.test:0.1.0",
             user_id: ctx_a.user_id,
@@ -503,7 +546,7 @@ defmodule Arca.TenantIsolationTest do
           })
 
         {:ok, _} =
-          Arca.Execution.record_start(%{
+          Arca.Test.Writers.record_start(%{
             id: "ret_b_#{i}",
             reference: "reagent:local.test:0.1.0",
             user_id: ctx_b.user_id,
@@ -536,7 +579,7 @@ defmodule Arca.TenantIsolationTest do
 
       for i <- 1..4 do
         {:ok, _} =
-          Arca.Execution.record_start(%{
+          Arca.Test.Writers.record_start(%{
             id: "all_a_#{i}",
             reference: "reagent:local.test:0.1.0",
             user_id: ctx_a.user_id,
@@ -547,7 +590,7 @@ defmodule Arca.TenantIsolationTest do
           })
 
         {:ok, _} =
-          Arca.Execution.record_start(%{
+          Arca.Test.Writers.record_start(%{
             id: "all_b_#{i}",
             reference: "reagent:local.test:0.1.0",
             user_id: ctx_b.user_id,
@@ -574,7 +617,7 @@ defmodule Arca.TenantIsolationTest do
 
       for i <- 1..3 do
         {:ok, _} =
-          Arca.Execution.record_start(%{
+          Arca.Test.Writers.record_start(%{
             id: "dry_a_#{i}",
             reference: "reagent:local.test:0.1.0",
             user_id: ctx_a.user_id,
@@ -585,7 +628,7 @@ defmodule Arca.TenantIsolationTest do
           })
 
         {:ok, _} =
-          Arca.Execution.record_start(%{
+          Arca.Test.Writers.record_start(%{
             id: "dry_b_#{i}",
             reference: "reagent:local.test:0.1.0",
             user_id: ctx_b.user_id,

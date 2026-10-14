@@ -92,6 +92,40 @@ defmodule Cyfr.RuntimeConfigWiringTest do
     end
   end
 
+  describe "CYFR_SECRET_KEY_BASE" do
+    # The file reads its .env files from RELEASE_ROOT, so each test points
+    # that at a directory of its own: no ambient file supplies the key the
+    # environment lacks.
+    @describetag :tmp_dir
+
+    # An empty value is unset, as for every other setting this file reads,
+    # so both refuse the boot by name before anything derives from it.
+    for {label, value} <- [{"missing", nil}, {"empty", ""}] do
+      test "#{label}, refuses the boot naming it", %{tmp_dir: dir} do
+        with_env(%{"CYFR_SECRET_KEY_BASE" => unquote(value), "RELEASE_ROOT" => dir}, fn ->
+          message = Exception.message(assert_raise(RuntimeError, &read_prod_config!/0))
+          assert message =~ "environment variable CYFR_SECRET_KEY_BASE is missing."
+        end)
+      end
+    end
+
+    # The control for the two above: the directory they point at is the
+    # one the file reads, and a key its .env holds is the key.
+    test "is read from RELEASE_ROOT's .env when the environment has none", %{tmp_dir: dir} do
+      key_base = Base.encode16(:crypto.strong_rand_bytes(64), case: :lower)
+      File.write!(Path.join(dir, ".env"), "CYFR_SECRET_KEY_BASE=#{key_base}\n")
+      before = System.get_env("CYFR_SECRET_KEY_BASE")
+
+      with_env(%{"CYFR_SECRET_KEY_BASE" => nil, "RELEASE_ROOT" => dir}, fn ->
+        assert read_prod_config!()[:sanctum][:secret_key_base] == key_base
+      end)
+
+      # The read puts what it sourced into the environment; the key goes
+      # with the test.
+      assert System.get_env("CYFR_SECRET_KEY_BASE") == before
+    end
+  end
+
   describe "CYFR_LOCUS_RUNTIME_ROOT" do
     test "is the 32-byte root its 64 hexadecimal digits spell, in either case" do
       root = :crypto.strong_rand_bytes(32)

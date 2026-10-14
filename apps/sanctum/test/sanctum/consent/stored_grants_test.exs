@@ -234,6 +234,53 @@ defmodule Sanctum.Consent.StoredGrantsTest do
       assert :ok = StoredGrants.run(listener_wait_ms: 0, owner: "boot_b")
       assert length(announced()) == 2
     end
+
+    # A member keeps the cell's claim through its shutdown, and a peer
+    # takes the announcement over only once the lease lapses
+    # (ARCHITECTURE.md §6.9).
+    test "a member stopped while it holds the claim keeps it until the lease lapses" do
+      _refs = seed_world!()
+      unhook_listeners!()
+      key = JobClaims.cell_key()
+
+      {held, _log} =
+        with_log(fn ->
+          # Nothing listens, so the holder waits for a listener under the
+          # claim until it is stopped.
+          task = start_supervised!({StoredGrants, listener_wait_ms: 60_000, owner: "boot_a"})
+          ref = Process.monitor(task)
+
+          Prima.Test.Wait.wait_until(
+            fn -> match?({:ok, %{owner: "boot_a"}}, live_claim(key)) end,
+            5_000,
+            "boot_a holding the regrant_notice claim"
+          )
+
+          # The claim as the holder took it, read while the holder is
+          # still alive and waiting, then stopped as a shutdown stops it.
+          {:ok, held} = JobClaims.read(@kind, key)
+          assert Process.alive?(task)
+          refute_received {:DOWN, ^ref, :process, ^task, _}
+          :ok = stop_supervised!(StoredGrants)
+          assert_receive {:DOWN, ^ref, :process, ^task, :shutdown}, 5_000
+          held
+        end)
+
+      # The row, read again, is as the holder took it: neither released
+      # (a release moves the fence and ends the lease) nor recorded.
+      assert {:ok, claim} = JobClaims.read(@kind, key)
+      assert claim == held
+      assert %{owner: "boot_a", detail: nil} = claim
+      assert JobClaims.live?(claim)
+    end
+  end
+
+  # The cell's claim when it is live, else whatever reading it answered.
+  defp live_claim(key) do
+    case JobClaims.read(@kind, key) do
+      {:ok, claim} = read -> if JobClaims.live?(claim), do: read, else: {:lapsed, claim}
+      other -> other
+    end
   end
 
   # A tray listener for this test: each announcement arrives as a message.

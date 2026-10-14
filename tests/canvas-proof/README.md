@@ -249,37 +249,6 @@ the proof's own (`BUDGET_MS`, keyed by class); the record carries its class's
 row beside the measurement, and its checks hold the record to the proof's
 budget, never to the record's copy.
 
-## Recorded run
-
-Recorded on 2026-10-10 on `p1` (AMD Ryzen 7 7700 8-Core Processor) by `run.sh`, once per
-viewport, against the SQLite `cyfr` release 0.5.8 built from this tree, in
-the harness's Playwright image of that day (`v1.63.0-noble`,
-`mcr.microsoft.com/playwright@sha256:eff16c30e6f3f4af0a03fa4b706120d5e9b0891c344a27d64559aff5900a4a27`),
-with Chromium 153.0.8010.12, Firefox 155.0 and WebKit 26.6. No run executed: every feed result shown is a fixed one.
-Each cell gives both viewports' result, desktop and 720x720, as one word where
-they agree.
-
-| Step | Chromium 153.0.8010.12 | Firefox 155.0 | WebKit 26.6 |
-|---|---|---|---|
-| `two_canvases` | held | Chromium only | Chromium only |
-| `switch` | held | Chromium only | Chromium only |
-| `written_canvas` | held | Chromium only | Chromium only |
-| `feed_chart` | held | Chromium only | Chromium only |
-| `app_over_canvas` | held | Chromium only | Chromium only |
-| `worker_stop` | held | Chromium only | Chromium only |
-| `exits` | held | held | held |
-| `worker_policy` | held | held | held |
-| `activation_once` | held | held | held |
-| `rebound_control` | held | held | held |
-| `labels` | held | held | held |
-| `validation_failures` | held | Chromium only | Chromium only |
-| `crash_safe_mode` | held | Chromium only | Chromium only |
-| `disconnect` | held | Chromium only | Chromium only |
-| `failed_fire` | held | Chromium only | Chromium only |
-
-Both viewports' measurements held their budgets; a run's figures are in
-its record, not here.
-
 ## The record's own checks
 
 `canvas-proof.json` fails the run if it carries a step reported without

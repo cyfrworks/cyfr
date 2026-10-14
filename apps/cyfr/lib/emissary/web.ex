@@ -16,7 +16,7 @@ defmodule Emissary.Web do
   The adapters answer JSON and server-sent events, and serve pages as
   well: a tincture's entry page and files, a canvas's host page, and the
   no-session pages `CyfrWeb.MinimalPage` renders. None renders a template or builds a
-  path, so a controller here takes neither verified routes nor Gettext.
+  path, so a controller here takes no verified routes.
   Content negotiation is each route's pipeline's `accepts`, not the
   controller's formats.
   """

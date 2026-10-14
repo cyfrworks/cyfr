@@ -39,10 +39,8 @@ Usage: tests/builder-image/headroom.py IMAGE [LOCUS_BUILDS_NAME=VALUE]...
 
 import json
 import os
-import shutil
 import subprocess
 import sys
-import tempfile
 import threading
 import time
 
@@ -50,6 +48,8 @@ sys.dont_write_bytecode = True
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from stack import RELEASE_BIN, RELEASE_USER, WIRE, Stack, brief, expect, output_bytes, tincture  # noqa: E402
+# stack puts tests/, which holds the shared plumbing, on the path.
+import imagesuite  # noqa: E402
 
 MIB = 1 << 20
 # A little under the wire's bound on a result's outputs, index.html beside it.
@@ -148,7 +148,9 @@ def builds(stack, sources):
 
 
 def main(image, settings):
-    empty = tempfile.mkdtemp(prefix="locus-builds-headroom-")
+    # Registered for removal at exit as soon as it exists, so a signal
+    # before the `try` leaves no directory behind.
+    empty = imagesuite.temporary_directory("locus-builds-headroom-")
     stack = Stack("locus-builds-headroom", image, empty)
     try:
         # The container's limits are compose's to read; the rest is the service's.
@@ -215,7 +217,7 @@ def main(image, settings):
                [stack.pool_processes(), stack.homes()])
     finally:
         stack.down()
-        shutil.rmtree(empty, ignore_errors=True)
+        imagesuite.remove_directory(empty)
 
 
 if __name__ == "__main__":

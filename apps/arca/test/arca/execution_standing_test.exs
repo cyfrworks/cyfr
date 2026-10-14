@@ -13,8 +13,6 @@ defmodule Arca.ExecutionStandingTest do
 
   use ExUnit.Case, async: false
 
-  import Ecto.Query
-
   alias Arca.ExecutionAttempts
   alias Arca.Test.Actor
 
@@ -166,61 +164,44 @@ defmodule Arca.ExecutionStandingTest do
   test "a completion is recorded only under a grant that stands and is the row's own", %{
     actor: actor
   } do
-    {:ok, %{execution: execution}} =
+    {:ok, %{execution: execution, attempt: attempt}} =
       Arca.Execution.admit(attrs(actor), Actor.standing(actor.athanor_id))
 
-    done = %{completed_at: DateTime.utc_now(), duration_ms: 1, status: "completed"}
+    done = %{completed_at: DateTime.utc_now(), duration_ms: 1}
     grant = Actor.grant(actor.athanor_id)
     stale = %{grant | generation: grant.generation + 1}
 
-    assert {:error, :missing_grant} = Arca.Execution.record_complete(actor, execution.id, done)
+    complete = fn id, attempt, opts ->
+      Arca.Execution.record_end(actor, id, "completed", done, attempt, opts)
+    end
 
-    assert {:error, :missing_grant} =
-             Arca.Execution.record_complete(actor, execution.id, done, grant: grant)
+    assert {:error, :missing_grant} = complete.(execution.id, attempt.attempt, [])
+    assert {:error, :missing_grant} = complete.(execution.id, attempt.attempt, grant: grant)
 
     assert {:error, :unavailable} =
-             Arca.Execution.record_complete(actor, execution.id, done,
-               grant: :stored,
-               verify: unavailable()
-             )
+             complete.(execution.id, attempt.attempt, grant: :stored, verify: unavailable())
 
     assert {:error, :not_standing} =
-             Arca.Execution.record_complete(actor, execution.id, done,
-               grant: stale,
-               verify: &Actor.admits/1
-             )
+             complete.(execution.id, attempt.attempt, grant: stale, verify: &Actor.admits/1)
 
     assert %{status: "running"} = Arca.Repo.get!(Arca.Schemas.Execution, execution.id)
 
     assert {:ok, %{status: "completed"}} =
-             Arca.Execution.record_complete(actor, execution.id, done, Actor.stored())
+             complete.(execution.id, attempt.attempt, Actor.stored())
 
     # A row with no attempt has no stamp to read: it needs an explicit grant.
-    {:ok, _} =
-      Arca.Execution.record_start(
+    {:ok, bare} =
+      Arca.Test.Writers.record_start(
         Map.merge(attrs(actor, %{id: "exec_bare_#{System.unique_integer([:positive])}"}), %{
           started_at: DateTime.utc_now(),
           status: "running"
         })
       )
 
-    [bare] =
-      Arca.Repo.all(
-        from(e in Arca.Schemas.Execution,
-          where: e.athanor_id == ^actor.athanor_id and is_nil(e.current_attempt)
-        )
-      )
+    assert {:error, :missing_grant} = complete.(bare.id, nil, Actor.stored())
 
-    assert {:error, :missing_grant} =
-             Arca.Execution.record_complete(actor, bare.id, done, Actor.stored())
-
-    assert {:ok, _} =
-             Arca.Execution.record_complete(
-               actor,
-               bare.id,
-               done,
-               Actor.standing(actor.athanor_id)
-             )
+    assert {:ok, %{status: "completed"}} =
+             complete.(bare.id, nil, Actor.standing(actor.athanor_id))
   end
 
   test "a child inherits its parent's stamp, and a successor its predecessor's", %{actor: actor} do

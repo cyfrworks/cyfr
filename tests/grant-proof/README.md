@@ -12,8 +12,8 @@ step through its output directory (`ask-N.json`, answered `answer-N.json`):
 publishing a version, reading a grant's head and the consent walk's plan,
 asking the loader for an admission as a run started on Prism's path is
 admitted, revoking the profile, and previewing decisions from the command
-line (`cyfr call profile`, built from `apps/codex`, with the person's
-session as its credential). Those reads are `fixture.exs`'s.
+line (`cyfr call profile`, built from `apps/codex` with
+`go build -mod=readonly`, with the person's session as its credential). Those reads are `fixture.exs`'s.
 
 The harness runs no execution engine and no model, so `run.sh` never starts
 a run: an admission is the loader's answer
@@ -50,15 +50,3 @@ has both:
 | a programmatic turn queued, the cell restarted, the turn resumed and judged as `programmatic` | `apps/cyfr/test/aqua/runner_test.exs` ("the origin a turn resumes under", "a line under another origin") |
 | a narrowed grant refusing the domain it dropped | `apps/cyfr/test/sanctum/consent/blob_builder_test.exs` ("what is granted is what runs: the loaded edge refuses what was dropped") |
 | an approval bound to one execution and one path refusing another path, another execution and a call after its deadline | `apps/cyfr/test/aqua/approvals_test.exs` ("a bounded standing approval"), `apps/sanctum/test/sanctum/tool_grants_test.exs` (`admits?/2`) |
-
-## Record
-
-Recorded on 2026-10-02 on `p1` by `run.sh`, Chromium 153.
-
-| Step | Chromium | What the record shows |
-|---|---|---|
-| `prism_grant` | held | origins ticked: `interactive` alone; the host box unticked sent `toggle_value` with `choice` `beta.grant.test`, and the egress row read narrowed; head revision 1, admitting `interactive`, domains `alpha.grant.test`, paths `data/probe/notes/` |
-| `cli_digest` | held | both `sha256:937a06d9de69b6defe89abed20493adeed7d445197e05baafd41a6434010281d` |
-| `background` | held | the loader answered `consent_required`; the prompt's frame row read "Keeps running in the background when hidden", `interactive` kept; revision 2, then admitted under it |
-| `reworded` | held | the same shape digest; admitted under revision 2's consent |
-| `revocation` | held | refused at the first admission asked, 93 µs after the revocation's answer (`no_profile`); earlier runs 108 µs and 92 µs |

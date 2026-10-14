@@ -29,8 +29,8 @@ defmodule Sanctum.DirectoryTest do
 
   setup tags do
     Arca.Test.Sandbox.setup!(tags)
-    Prima.RateLimiter.reset()
-    on_exit(&Prima.RateLimiter.reset/0)
+    Prima.Test.RateLimiter.reset!()
+    on_exit(&Prima.Test.RateLimiter.reset!/0)
     Sanctum.Test.Settings.put("directory_serve", "writer")
     :ok
   end
@@ -258,7 +258,7 @@ defmodule Sanctum.DirectoryTest do
 
       # A second member counts from nothing: its own counter admits the
       # request, and the window every member shares refuses it.
-      Prima.RateLimiter.reset()
+      Prima.Test.RateLimiter.reset!()
 
       assert {:error, {:rate_limited, _}} =
                Directory.register(%{genesis: genesis, source: "198.51.100.102"})
@@ -363,7 +363,7 @@ defmodule Sanctum.DirectoryTest do
 
       # A second member counts from nothing: its own counter admits the
       # rotation, and the window every member shares refuses it.
-      Prima.RateLimiter.reset()
+      Prima.Test.RateLimiter.reset!()
 
       assert {:error, {:capacity, :rotations, _}} =
                Directory.append(alice.identifier, %{entry: late, source: source()})

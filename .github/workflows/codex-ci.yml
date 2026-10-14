@@ -36,14 +36,20 @@ on:
       - 'scripts/scaffold-tarball.sh'
       - 'README.md'
       - '.github/workflows/codex-ci.yml'
+  workflow_call:
 
 permissions:
   contents: read
+
+concurrency:
+  group: codex-ci-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   test:
     name: vet + test + build
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     defaults:
       run:
         working-directory: apps/codex
@@ -74,6 +80,7 @@ jobs:
     # filesystem, process and trust-store behavior.
     name: vet + test (macOS)
     runs-on: macos-latest
+    timeout-minutes: 10
     defaults:
       run:
         working-directory: apps/codex

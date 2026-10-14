@@ -19,26 +19,30 @@ The runtime role's facts and the release's (its compose service, pool,
 port, user and directories) are read from the role table's vector file,
 tests/fixtures/locus_roles.json (`Prima.LocusRoles`), when this module is
 loaded: the suites take them from here and spell none.
+
+The command runner, the teardown on a signal and the part of the Stack that
+does not depend on the service come from tests/imagesuite.py.
 """
 
 import json
 import os
 import shutil
-import subprocess
 import sys
-import tempfile
 import time
 import urllib.error
 import urllib.request
 
-import worker_auth as auth
-
-HERE =os.path.dirname(os.path.abspath(__file__))
+sys.dont_write_bytecode = True
+HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.abspath(os.path.join(HERE, "..", ".."))
-# Prefixed to every compose project of a run, and so to its container and
-# network, for a host that tells one run's Docker objects from another's by
-# name.
-PROJECT_PREFIX = os.environ.get("STACK_PROJECT_PREFIX", "")
+if os.path.join(ROOT, "tests") not in sys.path:
+    sys.path.append(os.path.join(ROOT, "tests"))
+
+import imagesuite  # noqa: E402
+import worker_auth as auth  # noqa: E402
+from imagesuite import run  # noqa: E402
+
+imagesuite.stop_on_signals()
 # The keeper's seccomp profile and the name the locus-runtime service reads it by.
 PROFILE = os.path.join(ROOT, "apps", "locus", "keeper", "seccomp", "keeper.json")
 PROFILE_NAME = "keeper.seccomp.json"
@@ -64,13 +68,6 @@ RUN_DIR = RELEASE["run_dir"]
 KEEPER_CAPS = "00000000000000e0"
 
 
-def run(*args, check=True, env=None, timeout=None):
-    result = subprocess.run(args, capture_output=True, text=True, env=env, timeout=timeout)
-    if check and result.returncode != 0:
-        sys.exit(f"FAIL: {' '.join(args)} exited {result.returncode}\n{result.stdout}\n{result.stderr}")
-    return result
-
-
 def expect(condition, message, detail=None):
     if not condition:
         text = detail if isinstance(detail, str) else json.dumps(detail, indent=2, default=str)
@@ -90,10 +87,10 @@ def wait_until(predicate, timeout, what, interval=0.05):
         time.sleep(interval)
 
 
-class Stack:
+class Stack(imagesuite.Stack):
     def __init__(self, project, image, plane, pool_size=2, idle_ttl_ms=30_000, watchdog_grace_ms=1_000, release_grace_ms=1_500,
                  writable_cgroups=True):
-        self.project = PROJECT_PREFIX + project
+        super().__init__(project)
         self.writable_cgroups = writable_cgroups
         self.image = image
         self.plane = plane
@@ -101,11 +98,9 @@ class Stack:
         self.idle_ttl_ms = idle_ttl_ms
         self.watchdog_grace_ms = watchdog_grace_ms
         self.release_grace_ms = release_grace_ms
-        self.project_dir = tempfile.mkdtemp(prefix=f"{self.project}-")
-        # The rest of the stack's definition names a project .env, and the
-        # locus-runtime service the keeper's seccomp profile beside it, which compose
-        # reads from the project directory, as a scaffolded project holds it.
-        open(os.path.join(self.project_dir, ".env"), "w").close()
+        # The locus-runtime service names the keeper's seccomp profile beside
+        # the project's .env, which compose reads from the project directory,
+        # as a scaffolded project holds it.
         shutil.copyfile(PROFILE, os.path.join(self.project_dir, PROFILE_NAME))
         self.container = None
         self.base = None
@@ -139,6 +134,13 @@ class Stack:
         """(Re)creates the service, waits for its listener and, unless told not to, for its pool to fill."""
         self.compose("up", "--detach", "--no-build", "--force-recreate", COMPOSE_SERVICE)
         self.container = self.compose("ps", "--quiet", COMPOSE_SERVICE).stdout.strip()
+        # The plane listens on the default bridge's gateway alone: a daemon
+        # whose host-gateway-ip names another address fails here, not on the
+        # service's first call to the plane.
+        gateway = self.host_gateway()
+        expect(gateway == self.plane.host,
+               f"the container resolves host.docker.internal to {gateway}, the address the control plane listens on",
+               {"resolved": gateway, "plane": self.plane.host})
         self.wait_listener()
         if wait_pool:
             self.wait_pool()
@@ -171,12 +173,6 @@ class Stack:
 
     def logs(self):
         return self.compose("logs", "--no-color", COMPOSE_SERVICE, check=False).stdout
-
-    def down(self):
-        if os.environ.get("CI"):
-            print(self.logs())
-        self.compose("down", "--volumes", "--remove-orphans", check=False)
-        shutil.rmtree(self.project_dir, ignore_errors=True)
 
     # ------------------------------------------------------------------
     # The service's requests

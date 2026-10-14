@@ -41,7 +41,7 @@ defmodule Emissary.Web.RestoreControllerTest do
   setup %{tls: tls} do
     token = Application.fetch_env(:sanctum, :restore_token)
     mode = if InstallationClaims.installed?(), do: InstallationClaims.mode()
-    Prima.RateLimiter.reset()
+    Prima.Test.RateLimiter.reset!()
 
     on_exit(fn ->
       case token do
@@ -51,7 +51,7 @@ defmodule Emissary.Web.RestoreControllerTest do
 
       if mode, do: InstallationClaims.install_mode!(mode), else: InstallationClaims.reset()
       Arca.Cache.delete_match(Arca.Cache.Keys.match_identity_unreachable())
-      Prima.RateLimiter.reset()
+      Prima.Test.RateLimiter.reset!()
     end)
 
     # The route passes the directory client no options: the seam points it

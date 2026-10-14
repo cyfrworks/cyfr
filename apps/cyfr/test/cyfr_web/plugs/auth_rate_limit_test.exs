@@ -8,14 +8,14 @@ defmodule CyfrWeb.Plugs.AuthRateLimitTest do
 
   setup do
     # Counters live in Prima.RateLimiter's own table; start each test clean.
-    Prima.RateLimiter.reset()
+    Prima.Test.RateLimiter.reset!()
 
     originals =
       for key <- [:trust_x_forwarded_for, :trusted_proxy_hops],
           do: {key, Application.get_env(:sanctum, key)}
 
     on_exit(fn ->
-      Prima.RateLimiter.reset()
+      Prima.Test.RateLimiter.reset!()
 
       Enum.each(originals, fn
         {key, nil} -> Application.delete_env(:sanctum, key)

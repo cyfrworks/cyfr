@@ -5,8 +5,9 @@
 // reaches the servers through and its TLS front for the homes, the
 // browsers launched to trust the run's authority, the attacker's receiver,
 // the signed-in shell, the harness's own pages and the checks made with
-// them, Chromium's virtual WebAuthn authenticator, and the percentiles of a
-// measurement.
+// them, Chromium's virtual WebAuthn authenticator, the percentiles of a
+// measurement, and a proof's asks of its run.sh and the redaction of what
+// it writes.
 //
 // A single cell is reached under the name `cyfr.test` over plain HTTP (a
 // name no browser exempts from its proxy, as each exempts loopback
@@ -34,12 +35,19 @@
 import { createServer, request as forward } from "node:http";
 import { createServer as createFront } from "node:https";
 import { createSecureContext } from "node:tls";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { randomBytes } from "node:crypto";
-import { chromium, firefox, webkit } from "playwright-core";
 import { connect } from "node:net";
 
-export { chromium, firefox, webkit };
+// Playwright's library, where it is installed (harness.sh `playwright_run`
+// mounts it). A run that launches no browser, such as the canvas proof's
+// check of a saved record, uses this file without it, and any use of a
+// browser type then throws the import's own error.
+export const { chromium, firefox, webkit } = await import("playwright-core").catch((error) => {
+  const absent = new Proxy({}, { get() { throw error; } });
+  return { chromium: absent, firefox: absent, webkit: absent };
+});
 
 export const SITE = "cyfr.test";
 export const ATTACKER = "attacker.test";
@@ -678,3 +686,109 @@ export function percentiles(values) {
 }
 
 export const BROWSERS = ["chromium", "firefox", "webkit"];
+
+// ---------------------------------------------------------------------------
+// A proof's asks of its run.sh, and what it may write
+// ---------------------------------------------------------------------------
+
+let asks = 0;
+
+// The server's part of a step, asked of the proof's run.sh through the
+// output directory `outDir` (C9): `request` is written as ask-N.json,
+// whole once it appears, and the answer is read from answer-N.json, which
+// run.sh writes aside and renames (harness.sh `answer_asks`, which removes
+// the ask first). N counts this process's asks from 1. Where proofs ask
+// differently, the difference is an option: `timeoutMs`, how long run.sh
+// has to answer; `secret`, the answer is removed once read; `refuseError`,
+// an answer naming an `error` throws unless the request says `tolerate`;
+// `answers`, a list each answer's text is added to as read.
+export async function ask(request, { outDir, timeoutMs = 120_000, secret = false, refuseError = false, answers = null } = {}) {
+  const id = ++asks;
+  const answer = join(outDir, `answer-${id}.json`);
+  writeFileSync(join(outDir, `ask-${id}.part`), JSON.stringify(request));
+  renameSync(join(outDir, `ask-${id}.part`), join(outDir, `ask-${id}.json`));
+  const deadline = Date.now() + timeoutMs;
+  while (!existsSync(answer)) {
+    if (Date.now() > deadline) throw new Error(`run.sh never answered ${request.op} within ${timeoutMs} ms`);
+    await sleep(100);
+  }
+  const text = readFileSync(answer, "utf8");
+  if (secret) {
+    rmSync(answer, { force: true });
+    rmSync(join(outDir, `ask-${id}.json`), { force: true });
+  }
+  if (answers) answers.push(text);
+  const answered = JSON.parse(text);
+  if (refuseError && answered.error && !request.tolerate) throw new Error(`run.sh: ${request.op}: ${answered.error}`);
+  return answered;
+}
+
+// The marker a known secret, and a secret-named value, is replaced by.
+export const MARKER = "[secret]";
+
+const SECRET_KEYS = ["session", "static", "_csrf_token", "token", "plan_token", "proof"];
+const KEYED = new RegExp(`((?:\\\\)?"(?:${SECRET_KEYS.join("|")})(?:\\\\)?"\\s*:\\s*(?:\\\\)?")(?:[^"\\\\]|\\\\(?!"))*`, "g");
+const SECRET_ATTRIBUTES = ["data-phx-session", "data-phx-static", "data-csrf"];
+const ATTRIBUTE = new RegExp(`((?:${SECRET_ATTRIBUTES.join("|")})=(?:\\\\)?")(?:[^"\\\\]|\\\\(?!"))*`, "g");
+// The shortest part of a known value, at the text's end, that is replaced.
+const TAIL = 4;
+
+// `text` as a proof may write it, in a record, a log line or a failed run's
+// frames. Every value of `secrets` is replaced by MARKER, and so is its
+// first four or more characters where the text ends with them (a line or
+// frame cut short may end inside one). So is the value of a `session`,
+// `static`, `_csrf_token`, `token`, `plan_token` or `proof` key, and of a
+// `data-phx-session`, `data-phx-static` or `data-csrf` attribute, quoted
+// plainly or escaped inside JSON, to its closing quote or the text's end.
+// A served prefix's or a host page's asset credential (`/_s/…`,
+// `/_c/v1/…`), whole or cut short, becomes `[credential]`, a signed token
+// `[signed token]`, and a bearer's credential MARKER. None of those three
+// values takes a backslash, so a value before an escaped quote leaves the
+// escape, and JSON text stays JSON. Applied again, it changes nothing.
+export function redact(text, secrets = []) {
+  let out = String(text);
+  for (const secret of secrets) {
+    if (!secret) continue;
+    out = out.split(secret).join(MARKER);
+    for (let n = secret.length - 1; n >= TAIL; n--) {
+      if (out.endsWith(secret.slice(0, n))) {
+        out = out.slice(0, -n) + MARKER;
+        break;
+      }
+    }
+  }
+  return out
+    .replace(KEYED, `$1${MARKER}`)
+    .replace(ATTRIBUTE, `$1${MARKER}`)
+    .replace(/\/_s\/(?!\[credential\])[^/"'\s\\]+/g, "/_s/[credential]")
+    .replace(/\/_c\/v1\/(?!\[credential\])[^/"'\s\\]+/g, "/_c/v1/[credential]")
+    .replace(/SFMyNTY\.[A-Za-z0-9_\-.]*/g, "[signed token]")
+    .replace(/(Bearer\s+)(?!\[secret\])[^\s"'\\]+/gi, `$1${MARKER}`);
+}
+
+// The tokens a page holds as its frames are written, each a value a reply
+// may have carried: its CSRF meta tag, a form's hidden `_csrf_token`, and
+// each view's `data-phx-session`, `data-phx-static` and `data-csrf`. A
+// page that cannot answer within five seconds gives none, and what is
+// written keeps only what `redact`'s rules by name replace.
+export async function pageTokens(page) {
+  const read = page.evaluate(() =>
+    [...document.querySelectorAll(
+      "meta[name='csrf-token'], input[name='_csrf_token'], [data-phx-session], [data-phx-static], [data-csrf]",
+    )].flatMap((el) => ["content", "value", "data-phx-session", "data-phx-static", "data-csrf"]
+      .map((name) => el.getAttribute(name))));
+  const late = new Promise((resolve) => setTimeout(() => resolve([]), 5_000).unref());
+  const values = await Promise.race([read, late]).catch(() => []);
+  return values.filter((v) => typeof v === "string" && v.length >= 8);
+}
+
+// A page's socket frames as a failed run writes them.
+export function redactFrames(frames, secrets) {
+  return frames.map((frame) => ({ ...frame, data: redact(frame.data, secrets) }));
+}
+
+// A record as any run writes it: a step's answer may carry what the frames
+// do (a preview's `proof`), so the record passes the same rule.
+export function recordText(value, secrets) {
+  return redact(JSON.stringify(value, null, 2), secrets);
+}

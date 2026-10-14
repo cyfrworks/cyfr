@@ -66,8 +66,8 @@ defmodule Emissary.Web.DeviceChannelTest do
   @external_resource @vectors
 
   setup do
-    Prima.RateLimiter.reset()
-    on_exit(fn -> Prima.RateLimiter.reset() end)
+    Prima.Test.RateLimiter.reset!()
+    on_exit(fn -> Prima.Test.RateLimiter.reset!() end)
     {:ok, glass: glass()}
   end
 
@@ -999,6 +999,34 @@ defmodule Emissary.Web.DeviceChannelTest do
       # Nothing of that stream is delivered after its end.
       {:ok, _} = Sanctum.TestContext.confirming(session_ctx, &Sanctum.Pairing.begin(&1, %{}))
       refute_receive {DeviceChannel, :fact, ^grant_id, _message}, 100
+    end
+
+    test "the forwarder hands on only the granted struct, under its grant", %{
+      session_ctx: session_ctx
+    } do
+      state = proven(pair!(session_ctx))
+      {grant_id, _grant, state} = open_stream!(state, "s1")
+      %{forwarder: forwarder} = state.grants[grant_id]
+
+      fact =
+        Cyfr.Bus.Confirmation.new(Context.actor(state.client), :opened,
+          ref: "rcf_forwarded",
+          operation: "pairing.begin"
+        )
+
+      # In the forwarder's own mailbox, ahead of the granted struct: another
+      # bus payload, and the granted payload's fields with no struct.
+      send(forwarder, Cyfr.Bus.Ping.new("forwarder-probe"))
+      send(forwarder, fact |> Map.from_struct() |> Map.put(:ref, "plain"))
+      send(forwarder, fact)
+
+      assert_receive {DeviceChannel, :fact, ^grant_id, ^fact}, 2_000
+
+      # The forwarder reads its mailbox in order, and two processes' messages
+      # keep their order: anything it handed on before the fact is here.
+      refute_received {DeviceChannel, :fact, _grant, %Cyfr.Bus.Ping{}}
+      refute_received {DeviceChannel, :fact, _grant, %{ref: "plain"}}
+      assert Process.alive?(forwarder)
     end
 
     test "on overflow every stream ends with revoke, rather than a fact dropped", %{

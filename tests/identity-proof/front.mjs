@@ -20,17 +20,19 @@
 //     block-reads-after-recover  once a recovery is answered, every read of
 //                                a log is closed unanswered until cleared
 //   GET /seen                 every request: method, path, status, fault
-//   GET /health               200 once listening
+//   GET /health               200 once listening, with the TOKEN it was
+//                             started with, so front.sh accepts readiness
+//                             from its own container alone
 //
-// Usage: node front.mjs LISTEN_HOST:PORT CONTROL_PORT NAME CERT KEY UPSTREAM_PORT
+// Usage: node front.mjs LISTEN_HOST:PORT CONTROL_PORT NAME CERT KEY UPSTREAM_PORT TOKEN
 
 import { createServer as createHttp, request as forward } from "node:http";
 import { createServer as createTls } from "node:https";
 import { readFileSync } from "node:fs";
 
-const [listen, controlPort, name, cert, key, upstreamPort] = process.argv.slice(2);
-if (!listen || !controlPort || !name || !cert || !key || !upstreamPort) {
-  console.error("usage: node front.mjs LISTEN_HOST:PORT CONTROL_PORT NAME CERT KEY UPSTREAM_PORT");
+const [listen, controlPort, name, cert, key, upstreamPort, token] = process.argv.slice(2);
+if (!listen || !controlPort || !name || !cert || !key || !upstreamPort || !token) {
+  console.error("usage: node front.mjs LISTEN_HOST:PORT CONTROL_PORT NAME CERT KEY UPSTREAM_PORT TOKEN");
   process.exit(64);
 }
 const [host, port] = listen.split(":");
@@ -92,7 +94,7 @@ const control = createHttp((req, res) => {
     res.writeHead(status, { "content-type": "application/json" });
     res.end(JSON.stringify(body));
   };
-  if (req.method === "GET" && req.url === "/health") return reply(200, { name, mode });
+  if (req.method === "GET" && req.url === "/health") return reply(200, { name, mode, token });
   if (req.method === "GET" && req.url === "/seen") return reply(200, { seen });
   if (req.method === "POST" && req.url === "/fault") {
     let body = "";

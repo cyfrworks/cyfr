@@ -88,12 +88,12 @@ defmodule Emissary.Web.ExecutionEventsController do
   end
 
   # Single authorization chokepoint: `Sanctum.Context.authorize/3` with the
-  # `{:execution, record}` resource performs require_permission(:storage_read)
-  # + per-record verify_tenant + owner/admin/wildcard — replacing the former
-  # hand-rolled owner-or-admin check (which skipped the permission and tenant
-  # checks). The chokepoint returns `{:error, String.t()}`; collapse it to the
-  # controller's `:forbidden` so both not-found and not-authorized stay 404
-  # (no execution-id existence disclosure).
+  # `{:execution, record}` resource requires `:storage_read` and verifies the
+  # record's tenant. There is no owner check: members of an athanor are
+  # interchangeable, so any member's credential that holds `:storage_read`
+  # reads the stream. The chokepoint returns `{:error, String.t()}`; collapse
+  # it to the controller's `:forbidden` so both not-found and not-authorized
+  # stay 404 (no execution-id existence disclosure).
   defp authorize_execution_read(%Sanctum.Context{} = ctx, %{id: _} = exec) do
     case Sanctum.Context.authorize(ctx, :storage_read, {:execution, exec}) do
       :ok -> :ok
@@ -105,24 +105,50 @@ defmodule Emissary.Web.ExecutionEventsController do
   # subscribe used, and a platform-scoped viewer may carry a different
   # athanor than the record it was authorized to read. The subscription
   # comes first and the replay once, so replay and live never overlap.
+  #
+  # The lifetime is a timer armed as the stream opens, so a quiet stream
+  # ends at its deadline rather than at the next keep-alive. Its message
+  # carries a fresh ref: a stale deadline can never end another stream.
   defp stream_events(conn, ctx, execution_id, cursor, exec) do
     Opus.subscribe_events(execution_id, exec)
     watch = ContextGuard.watch(ctx)
+    stream = {execution_id, exec, watch}
+    deadline = arm_deadline()
 
     case drain(conn, execution_id, exec, cursor) do
       {conn, _cursor, true} ->
-        close(conn, execution_id, exec, watch)
+        close(conn, stream, deadline)
 
       {conn, cursor, false} ->
-        deadline = CyfrWeb.SSE.deadline(:opus_events_max_ms)
-        event_loop(conn, {execution_id, exec, watch}, cursor, deadline)
+        event_loop(conn, stream, cursor, deadline)
     end
   end
 
-  defp close(conn, execution_id, exec, watch) do
+  defp arm_deadline do
+    ref = make_ref()
+    remaining = max(CyfrWeb.SSE.deadline(:opus_events_max_ms) - now_ms(), 0)
+    {ref, Process.send_after(self(), {__MODULE__, :deadline, ref}, remaining)}
+  end
+
+  defp now_ms, do: System.monotonic_time(:millisecond)
+
+  # Every exit path closes here. The timer and a deadline message already
+  # queued go with the stream, so a kept-alive connection's next request
+  # finds neither.
+  defp close(conn, {execution_id, exec, watch}, {ref, timer}) do
+    Process.cancel_timer(timer)
+    flush_deadline(ref)
     Opus.unsubscribe_events(execution_id, exec)
     ContextGuard.unwatch(watch)
     conn
+  end
+
+  defp flush_deadline(ref) do
+    receive do
+      {__MODULE__, :deadline, ^ref} -> :ok
+    after
+      0 -> :ok
+    end
   end
 
   # Everything after the cursor, in order: the durable
@@ -151,43 +177,42 @@ defmodule Emissary.Web.ExecutionEventsController do
   # overtook, or a prefix this client has not reached, and everything
   # after the cursor is read instead — so delivery is in
   # commit order whatever order publications arrive in, and nothing is
-  # sent twice. The deadline bounds a stream whose execution never
-  # reaches a terminal event — the client reconnects with Last-Event-ID
-  # and misses nothing.
+  # sent twice. The deadline message bounds a stream whose execution
+  # never reaches a terminal event — the client reconnects with
+  # Last-Event-ID and misses nothing.
   #
   # The caller's standing is watched the whole time: a standing
   # announcement about them, or the watch's periodic recheck, revalidates,
   # and a refusal ends the stream the way the deadline does.
-  defp event_loop(conn, {execution_id, exec, watch} = stream, cursor, deadline) do
-    if System.monotonic_time(:millisecond) >= deadline do
-      close(conn, execution_id, exec, watch)
-    else
-      receive do
-        %Cyfr.Bus.ExecutionEvent{} = live ->
-          case forward(conn, execution_id, exec, cursor, Cyfr.Bus.ExecutionEvent.event(live)) do
-            {conn, _cursor, true} ->
-              close(conn, execution_id, exec, watch)
+  defp event_loop(conn, {execution_id, exec, watch} = stream, cursor, {ref, _timer} = deadline) do
+    receive do
+      {__MODULE__, :deadline, ^ref} ->
+        close(conn, stream, deadline)
 
-            {conn, cursor, false} ->
-              event_loop(conn, stream, cursor, deadline)
-          end
+      %Cyfr.Bus.ExecutionEvent{} = live ->
+        case forward(conn, execution_id, exec, cursor, Cyfr.Bus.ExecutionEvent.event(live)) do
+          {conn, _cursor, true} ->
+            close(conn, stream, deadline)
 
-        message when ContextGuard.standing_message(message) ->
-          case ContextGuard.standing(message, watch) do
-            {:ok, watch} -> event_loop(conn, {execution_id, exec, watch}, cursor, deadline)
-            {:refused, _reason} -> close(conn, execution_id, exec, watch)
-            :ignore -> event_loop(conn, stream, cursor, deadline)
-          end
-      after
-        @keep_alive_interval_ms ->
-          case chunk(conn, CyfrWeb.SSE.keep_alive_comment()) do
-            {:ok, conn} ->
-              event_loop(conn, stream, cursor, deadline)
+          {conn, cursor, false} ->
+            event_loop(conn, stream, cursor, deadline)
+        end
 
-            {:error, _} ->
-              close(conn, execution_id, exec, watch)
-          end
-      end
+      message when ContextGuard.standing_message(message) ->
+        case ContextGuard.standing(message, watch) do
+          {:ok, watch} -> event_loop(conn, {execution_id, exec, watch}, cursor, deadline)
+          {:refused, _reason} -> close(conn, stream, deadline)
+          :ignore -> event_loop(conn, stream, cursor, deadline)
+        end
+    after
+      @keep_alive_interval_ms ->
+        case chunk(conn, CyfrWeb.SSE.keep_alive_comment()) do
+          {:ok, conn} ->
+            event_loop(conn, stream, cursor, deadline)
+
+          {:error, _} ->
+            close(conn, stream, deadline)
+        end
     end
   end
 

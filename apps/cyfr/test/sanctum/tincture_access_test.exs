@@ -173,7 +173,7 @@ defmodule Sanctum.TinctureAccessTest do
     pub_ref = "tincture:local.public-dash"
 
     {:ok, _} =
-      Arca.ProfileStorage.put(%{
+      Arca.Test.Writers.put_profile(%{
         id: "prof_pub_#{:rand.uniform(1_000_000)}",
         athanor_id: ctx.athanor_id,
         source_ref: pub_ref,
@@ -307,7 +307,7 @@ defmodule Sanctum.TinctureAccessTest do
           })
 
         {:ok, _} =
-          Arca.ProfileStorage.put(%{
+          Arca.Test.Writers.put_profile(%{
             id: "prof_#{name}_#{:rand.uniform(1_000_000)}",
             athanor_id: ctx.athanor_id,
             source_ref: "tincture:local.#{name}",
@@ -329,7 +329,7 @@ defmodule Sanctum.TinctureAccessTest do
     # One outage and one read per test: on PostgreSQL the failed read
     # aborts the test's transaction, so a second read would meet that, not
     # the outage.
-    for read <- [:private, :public, :lookup] do
+    for read <- [:private, :public, :private_published] do
       test "a component-facts outage is unavailable to the #{read} read, never not found or a raise" do
         assert {:ok, _} = read(unquote(read))
 
@@ -356,13 +356,14 @@ defmodule Sanctum.TinctureAccessTest do
     end
 
     test "a component-facts answer that is neither a row nor absence is unavailable, and logged" do
-      # A context that names no athanor: the facts answer `:no_athanor`,
+      # A platform context working in no athanor holds `:storage_read` and
+      # passes the tenant gate, and the facts answer it `:no_athanor`,
       # which is no outage the port names.
-      ctx = Context.build(athanor_id: nil, authenticated: false)
+      ctx = Sanctum.TestContext.platform()
 
       log =
         ExUnit.CaptureLog.capture_log(fn ->
-          assert TinctureAccess.lookup(ctx, "local", "public-dash") == {:error, :unavailable}
+          assert TinctureAccess.get_private(ctx, "local", "public-dash") == {:error, :unavailable}
         end)
 
       assert log =~
@@ -377,7 +378,7 @@ defmodule Sanctum.TinctureAccessTest do
         ExUnit.CaptureLog.capture_log(fn ->
           answer =
             try do
-              TinctureAccess.lookup(Sanctum.TestContext.local(), "local", "public-dash")
+              TinctureAccess.get_private(Sanctum.TestContext.local(), "local", "public-dash")
             after
               Sanctum.Consent.Components.install!(real)
             end
@@ -398,7 +399,7 @@ defmodule Sanctum.TinctureAccessTest do
         ExUnit.CaptureLog.capture_log(fn ->
           answer =
             try do
-              TinctureAccess.lookup(Sanctum.TestContext.local(), "local", "public-dash")
+              TinctureAccess.get_private(Sanctum.TestContext.local(), "local", "public-dash")
             after
               Sanctum.Consent.Components.install!(real)
             end
@@ -442,8 +443,8 @@ defmodule Sanctum.TinctureAccessTest do
 
   defp read(:public), do: TinctureAccess.get_public(public_ctx(), "local", "public-dash")
 
-  defp read(:lookup),
-    do: TinctureAccess.lookup(Sanctum.TestContext.local(), "local", "public-dash")
+  defp read(:private_published),
+    do: TinctureAccess.get_private(Sanctum.TestContext.local(), "local", "public-dash")
 
   describe "public_context/1" do
     defp create_athanor!(kind, slug) do

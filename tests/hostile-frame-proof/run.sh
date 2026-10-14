@@ -32,27 +32,17 @@ HERE="$ROOT/tests/hostile-frame-proof"
 OUT="${PROOF_OUT:-$WORK/out}"
 PROOF_PID=""
 
-# The proof's own container, found by the output directory only this run
-# mounts: stopping the subshell that started it leaves `docker run` and its
-# container behind.
-stop_proof_container() {
-  local ids
-  ids="$(docker ps -q --filter "volume=$OUT" 2>/dev/null || true)"
-  if [ -n "$ids" ]; then
-    # shellcheck disable=SC2086
-    docker stop -t 5 $ids >/dev/null 2>&1 || true
-  fi
-}
-
 # The scratch directory holds the run's keys, so it goes even when a stop
 # fails. `server_stop` ends in `fail`, an `exit`, when a listener outlives
 # its stop, and an exit inside this trap would end it before the removal,
 # so the stop runs in a subshell, whose exit ends only that subshell; the
-# stop's failure still fails the run.
+# stop's failure still fails the run. The asks and answers go on every
+# exit, a kept or outside PROOF_OUT included; the record stays.
 cleanup() {
   local code=$?
   [ -n "$PROOF_PID" ] && kill "$PROOF_PID" 2>/dev/null || true
   stop_proof_container
+  rm -f "$OUT"/ask-* "$OUT"/answer-*
   ( server_stop ) || [ "$code" -ne 0 ] || code=1
   if [ "${RELEASE_BOOT_KEEP:-}" = 1 ]; then
     echo "kept $WORK"
@@ -73,11 +63,11 @@ server_start "$CELL"
 step "publishing the probe (private, and a public copy), its private neighbour and the public neighbour"
 person="$(server_fixture "$CELL" person operator@example.com containment-proof)"
 [ -n "$person" ] || fail "the fixture signed nobody in"
-field() { printf '%s' "$person" | python3 -c "import json, sys; print(json.load(sys.stdin)['$1'])"; }
-user_id="$(field user_id)"
-segment="$(field segment)"
-cookie="$(browser_cookie "$CELL" "$(field token)")"
-browser_picker_layout "$CELL" "$(field token)"
+user_id="$(field "$person" user_id)"
+segment="$(field "$person" segment)"
+token="$(field "$person" token)"
+cookie="$(browser_cookie "$CELL" "$token")"
+browser_picker_layout "$CELL" "$token"
 
 # The public copy is the same bundle under another name.
 cp -R "$HERE/tinctures/containment-probe" "$WORK/containment-probe-public"
@@ -88,11 +78,11 @@ server_fixture "$CELL" tincture "$user_id" "$HERE/tinctures/containment-probe" c
 server_fixture "$CELL" tincture "$user_id" "$HERE/tinctures/containment-neighbour" containment-neighbour private >/dev/null
 server_fixture "$CELL" tincture "$user_id" "$WORK/containment-probe-public" containment-probe-public public >/dev/null
 neighbour="$(server_fixture "$CELL" tincture "$user_id" "$ROOT/tests/browser/tinctures/frame-neighbour" frame-neighbour public)"
-neighbour_path="$(printf '%s' "$neighbour" | python3 -c 'import json, sys; print(json.load(sys.stdin)["path"])')"
+neighbour_path="$(field "$neighbour" path)"
 
-status="$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$PORT/t/$segment/local/containment-probe")"
+status="$(curl -s -m 10 -o /dev/null -w '%{http_code}' "http://127.0.0.1:$PORT/t/$segment/local/containment-probe")"
 [ "$status" = 404 ] || fail "the private probe's public address answered $status"
-status="$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$PORT$neighbour_path/neighbour.js")"
+status="$(curl -s -m 10 -o /dev/null -w '%{http_code}' "http://127.0.0.1:$PORT$neighbour_path/neighbour.js")"
 [ "$status" = 200 ] || fail "the public neighbour's script answered $status"
 
 step "the malicious fullscreen frame, and a tincture waiting for its grant"
@@ -104,7 +94,7 @@ ungranted="$(cell_cyfr "$CELL" rpc \
 [ -n "$ungranted" ] || fail "the waiting tincture's profile was not written"
 # Another session of the same person: the client that asks for a change.
 other="$(server_fixture "$CELL" person operator@example.com containment-proof)"
-other_token="$(printf '%s' "$other" | python3 -c "import json, sys; print(json.load(sys.stdin)['token'])")"
+other_token="$(field "$other" token)"
 [ -n "$other_token" ] || fail "the fixture opened no second session"
 
 # The person's layout: the picker alone (revision 1, as published above),
@@ -114,40 +104,32 @@ none='{"version":2,"canvases":[]}'
 floated='{"apps":[],"floating":[{"tincture":"tincture:local.ungranted-probe","position":{"x":6000,"y":6000}}]}'
 float="{\"version\":2,\"canvases\":[{\"id\":\"home\",\"tincture\":\"tincture:local.no-canvas\",\"postures\":{\"desk\":$floated,\"hand\":$floated}}]}"
 publish_layout() {
-  browser_layout "$CELL" "$(field token)" "$1" "$LAYOUT_REVISION"
+  browser_layout "$CELL" "$token" "$1" "$LAYOUT_REVISION"
   LAYOUT_REVISION=$((LAYOUT_REVISION + 1))
 }
 
-# Each step the proof asks for, answered once.
-answer_asks() {
-  local ask id op answer
-  for ask in "$OUT"/ask-*.json; do
-    [ -e "$ask" ] || continue
-    id="${ask##*/ask-}"
-    id="${id%.json}"
-    [ -e "$OUT/answer-$id.json" ] && continue
-    op="$(python3 -c "import json, sys; print(json.load(open(sys.argv[1]))['op'])" "$ask")"
-    case "$op" in
-      grant)
-        publish_layout "$float"
-        answer='{"ok":"floated"}'
-        ;;
-      reset)
-        publish_layout "$none"
-        answer='{"ok":"picker"}'
-        ;;
-      confirmation)
-        answer="$(server_fixture "$CELL" console "$other_token" vault/create \
-          "{\"name\":\"asked-over-a-frame-$id\",\"kind\":\"api_key\",\"fields\":{\"API_KEY\":\"not-shown-$id\"},\"destination\":{\"hosts\":[\"fixture.test\"]}}")"
-        printf '%s' "$answer" | grep -q confirmation_required ||
-          fail "the second session's change did not wait for a confirmation: $answer"
-        answer='{"ok":"asked"}'
-        ;;
-      *) fail "the proof asked for '$op', which this script does not do" ;;
-    esac
-    printf '%s\n' "$answer" >"$OUT/answer-$id.part"
-    mv "$OUT/answer-$id.part" "$OUT/answer-$id.json"
-  done
+# Each step the proof asks for (harness.sh `answer_asks`).
+answer_ask() {
+  local ask="$1" id="$2" op answer
+  op="$(asked "$ask" op)"
+  case "$op" in
+    grant)
+      publish_layout "$float"
+      ANSWER='{"ok":"floated"}'
+      ;;
+    reset)
+      publish_layout "$none"
+      ANSWER='{"ok":"picker"}'
+      ;;
+    confirmation)
+      answer="$(server_fixture "$CELL" console "$other_token" vault/create \
+        "{\"name\":\"asked-over-a-frame-$id\",\"kind\":\"api_key\",\"fields\":{\"API_KEY\":\"not-shown-$id\"},\"destination\":{\"hosts\":[\"fixture.test\"]}}")"
+      printf '%s' "$answer" | grep -q confirmation_required ||
+        fail "the second session's change did not wait for a confirmation: $answer"
+      ANSWER='{"ok":"asked"}'
+      ;;
+    *) fail "the proof asked for '$op', which this script does not do" ;;
+  esac
 }
 
 step "the containment proof in $PLAYWRIGHT_IMAGE"
@@ -155,15 +137,7 @@ mkdir -p "$OUT"
 rm -f "$OUT"/ask-* "$OUT"/answer-*
 playwright_run hostile-frame-proof proof.mjs "http://127.0.0.1:$PORT" "$segment" "$cookie" /out "$neighbour_path" &
 PROOF_PID=$!
-while kill -0 "$PROOF_PID" 2>/dev/null; do
-  answer_asks
-  sleep 0.2
-done
-set +e
-wait "$PROOF_PID"
-status=$?
-set -e
-PROOF_PID=""
+proof_await answer_ask
 
 echo "the record: $OUT/containment-proof.json and $OUT/containment-proof.md"
-exit "$status"
+exit "$PROOF_STATUS"

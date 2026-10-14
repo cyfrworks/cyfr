@@ -291,7 +291,7 @@ defmodule Sanctum.InstanceEntriesTest do
     profile = "prof_dep_#{System.unique_integer([:positive])}"
 
     {:ok, _} =
-      Arca.ProfileStorage.put(%{
+      Arca.Test.Writers.put_profile(%{
         id: profile,
         athanor_id: athanor,
         source_ref: "catalyst:local.#{profile}",

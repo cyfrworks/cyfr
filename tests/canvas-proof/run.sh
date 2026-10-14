@@ -62,18 +62,6 @@ HERE="$ROOT/tests/canvas-proof"
 OUT="${PROOF_OUT:-$WORK/out}"
 PROOF_PID=""
 
-# The proof's own container, found by the output directory only this run
-# mounts: stopping the subshell that started it leaves `docker run` and its
-# container behind.
-stop_proof_container() {
-  local ids
-  ids="$(docker ps -q --filter "volume=$OUT" 2>/dev/null || true)"
-  if [ -n "$ids" ]; then
-    # shellcheck disable=SC2086
-    docker stop -t 5 $ids >/dev/null 2>&1 || true
-  fi
-}
-
 # The asks and answers this run wrote into the output directory. An answer
 # may hold a bearer the fixture minted, so they go on every exit path, a
 # kept output directory's included.
@@ -147,30 +135,13 @@ trap cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
-# The value of key `$1` of the JSON object on stdin: as text, or, with a
-# second argument, as JSON.
-json() {
-  python3 -c '
-import json, sys
-value = json.load(sys.stdin)[sys.argv[1]]
-print(json.dumps(value) if len(sys.argv) > 2 else value)' "$@"
-}
-field() { printf '%s' "$1" | json "$2"; }
-
 # The proof's own fixture (fixture.exs) inside the server running on CELL,
 # as `bin/cyfr rpc`: `$@` are its arguments, and its one JSON line is the
 # answer.
 # A fixture rpc that never fails the script: a raise answers nothing, and
 # the caller sees an empty answer rather than the run exiting (set -e).
 canvas_fixture() {
-  local args="" arg out
-  for arg in "$@"; do
-    args="$args\"$(printf '%s' "$arg" | sed 's/[\\"#]/\\&/g')\","
-  done
-  out="$(cell_cyfr "$CELL" rpc \
-    "{answer, _} = Code.eval_file(\"$HERE/fixture.exs\"); IO.puts(answer.([${args%,}]))" \
-    2>>"$CELL/fixture.log" | sed -n 's/^CANVAS=//p' | tail -1)" || out=""
-  printf '%s' "$out"
+  cell_fixture "$CELL" "$HERE/fixture.exs" CANVAS "$@" 2>>"$CELL/fixture.log" || :
 }
 
 # A console call for the person, its answer as the release fixture gives it.
@@ -289,72 +260,65 @@ publish_layout() {
 
 binding_of() { python3 -c 'import json, sys; print(json.load(sys.stdin)["ok"]["binding"])'; }
 
-# Each step the proof asks for, answered once. A request carries the
-# command and its non-secret arguments; the answer is the fixture's or the
-# console's, which name no credential but the bearer `bearer` mints for the
-# exits step, which the proof keeps out of its record.
+# Each step the proof asks for (harness.sh `answer_asks`, with `null` for
+# an answer the fixture left empty). A request carries the command and its
+# non-secret arguments; the answer is the fixture's or the console's, which
+# name no credential but the bearer `bearer` mints for the exits step,
+# which the proof keeps out of its record.
 # Answering an ask never fails the run: errexit is off for the body, so a
 # refused console call or a parse error leaves an error answer, not an exit.
-answer_asks() {
-  local ask id op answer arg binding old removed rebound fired restore
+answer_ask() {
+  local ask="$1" op arg binding old removed rebound fired restore
   case $- in *e*) restore=1 ;; *) restore=0 ;; esac
   set +e
-  for ask in "$OUT"/ask-*.json; do
-    [ -e "$ask" ] || continue
-    id="${ask##*/ask-}"
-    id="${id%.json}"
-    [ -e "$OUT/answer-$id.json" ] && continue
-    op="$(json op <"$ask")"
-    case "$op" in
-      write)
-        answer="$(canvas_fixture write "$TOKEN" "$(json canvas <"$ask")" "$(json module <"$ask")" "$(json streams - <"$ask")")"
-        ;;
-      versions)
-        answer="$(console canvas/versions "{\"canvas\":\"$(json canvas <"$ask")\"}")"
-        ;;
-      layout)
-        publish_layout "$(json document - <"$ask")"
-        answer="$LAYOUT_ANSWER"
-        ;;
-      accept)
-        answer="$(accept_fixed "$(json feed <"$ask")" "$(json data - <"$ask")")"
-        ;;
-      state)
-        answer="$(canvas_fixture state "$TOKEN" "${FEEDS[$(json feed <"$ask")]}")"
-        ;;
-      state_of)
-        answer="$(canvas_fixture state "$TOKEN" "$(json binding <"$ask")")"
-        ;;
-      press)
-        answer="$(console feed/press "{\"binding\":\"$(json binding <"$ask")\",\"action_name\":\"$(json action <"$ask")\"}")"
-        ;;
-      bearer)
-        answer="$(canvas_fixture bearer "$TOKEN" "$(json reference <"$ask")")"
-        ;;
-      rebind)
-        arg="$(json feed <"$ask")"
-        old="${FEEDS[$arg]}"
-        removed="$(console feed/remove "{\"binding\":\"$old\"}")"
-        rebound="$(bind_feed "$arg" 60 "$(json args - <"$ask")" "$CANDLE_ACTIONS" Candles)"
-        if printf '%s' "$rebound" | grep -q '"ok"'; then FEEDS[$arg]="$(printf '%s' "$rebound" | binding_of)"; fi
-        answer="{\"old\":\"$old\",\"removed\":${removed:-null},\"bound\":${rebound:-null}}"
-        ;;
-      failed_fire)
-        rebound="$(bind_feed fire-check 1 '{"symbol":"FIRE"}' '[]' 'Fire check')"
-        if printf '%s' "$rebound" | grep -q '"ok"'; then
-          binding="$(printf '%s' "$rebound" | binding_of)"
-          fired="$(canvas_fixture failed_fire "$TOKEN" "$binding")"
-          removed="$(console feed/remove "{\"binding\":\"$binding\"}")"
-          answer="{\"bound\":$rebound,\"fire\":${fired:-null},\"removed\":${removed:-null}}"
-        else
-          answer="{\"bound\":${rebound:-null}}"
-        fi
-        ;;
-      *) answer="{\"error\":\"run.sh does not do $op\"}" ;;
-    esac
-    printf '%s\n' "${answer:-null}" >"$OUT/answer-$id.part"
-    mv "$OUT/answer-$id.part" "$OUT/answer-$id.json"
-  done
+  op="$(asked "$ask" op)"
+  case "$op" in
+    write)
+      ANSWER="$(canvas_fixture write "$TOKEN" "$(asked "$ask" canvas)" "$(asked "$ask" module)" "$(asked "$ask" streams)")"
+      ;;
+    versions)
+      ANSWER="$(console canvas/versions "{\"canvas\":\"$(asked "$ask" canvas)\"}")"
+      ;;
+    layout)
+      publish_layout "$(asked "$ask" document)"
+      ANSWER="$LAYOUT_ANSWER"
+      ;;
+    accept)
+      ANSWER="$(accept_fixed "$(asked "$ask" feed)" "$(asked "$ask" data)")"
+      ;;
+    state)
+      ANSWER="$(canvas_fixture state "$TOKEN" "${FEEDS[$(asked "$ask" feed)]}")"
+      ;;
+    state_of)
+      ANSWER="$(canvas_fixture state "$TOKEN" "$(asked "$ask" binding)")"
+      ;;
+    press)
+      ANSWER="$(console feed/press "{\"binding\":\"$(asked "$ask" binding)\",\"action_name\":\"$(asked "$ask" action)\"}")"
+      ;;
+    bearer)
+      ANSWER="$(canvas_fixture bearer "$TOKEN" "$(asked "$ask" reference)")"
+      ;;
+    rebind)
+      arg="$(asked "$ask" feed)"
+      old="${FEEDS[$arg]}"
+      removed="$(console feed/remove "{\"binding\":\"$old\"}")"
+      rebound="$(bind_feed "$arg" 60 "$(asked "$ask" args)" "$CANDLE_ACTIONS" Candles)"
+      if printf '%s' "$rebound" | grep -q '"ok"'; then FEEDS[$arg]="$(printf '%s' "$rebound" | binding_of)"; fi
+      ANSWER="{\"old\":\"$old\",\"removed\":${removed:-null},\"bound\":${rebound:-null}}"
+      ;;
+    failed_fire)
+      rebound="$(bind_feed fire-check 1 '{"symbol":"FIRE"}' '[]' 'Fire check')"
+      if printf '%s' "$rebound" | grep -q '"ok"'; then
+        binding="$(printf '%s' "$rebound" | binding_of)"
+        fired="$(canvas_fixture failed_fire "$TOKEN" "$binding")"
+        removed="$(console feed/remove "{\"binding\":\"$binding\"}")"
+        ANSWER="{\"bound\":$rebound,\"fire\":${fired:-null},\"removed\":${removed:-null}}"
+      else
+        ANSWER="{\"bound\":${rebound:-null}}"
+      fi
+      ;;
+    *) ANSWER="{\"error\":\"run.sh does not do $op\"}" ;;
+  esac
   [ "$restore" = 1 ] && set -e
   return 0
 }
@@ -364,15 +328,8 @@ step "the canvas proof at $VIEWPORT on the $HOST_CLASS host class in $PLAYWRIGHT
 # record says it is narrowed and never passes. A full run leaves it unset.
 playwright_run canvas-proof proof.mjs "http://127.0.0.1:$PORT" "$segment" "$cookie" /out "$VIEWPORT" "${CANVAS_PROOF_DEV:-}" "$HOST_CLASS" &
 PROOF_PID=$!
-while kill -0 "$PROOF_PID" 2>/dev/null; do
-  answer_asks
-  sleep 0.2
-done
-set +e
-wait "$PROOF_PID"
-status=$?
-set -e
-PROOF_PID=""
+proof_await answer_ask null
+status="$PROOF_STATUS"
 
 # Once the record is checked the answers, the one place a minted bearer
 # was kept, go.

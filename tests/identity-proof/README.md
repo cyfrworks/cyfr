@@ -38,6 +38,9 @@ resolves no name. So this proof adds, in pieces another proof sources
   forwarded, its answer never delivered) and `block-reads-after-recover`
   (once a recovery is answered, every read of a log closed unanswered),
   and reports every request that reached it (`identity_front_seen NAME`).
+  A front answers `/health` with a token the run passed it, and its
+  readiness is accepted only from that token, so a stale or foreign
+  listener on the front's address is refused.
 - `cells.sh` — each home's deployment file gains `ERL_INETRC` (an inetrc
   of the run's own naming every declared directory at its front's
   address), every front's address in `CYFR_PRIVATE_EGRESS_TARGETS`, and
@@ -97,31 +100,14 @@ the proof stops at the first row a later one rests on.
 | `b_observes_again` | B, its head verified just before C3's restore, serves C3's head within its bound of that verification, give or take the one poll that saw it, with A gone |
 | `directory_down` | with the directory down, B serves the head it verified within its bound and pauses past it (`identity_stale`) |
 
+The thief's rotation is launched with the restore's post, so which reaches
+the directory first is the race's to decide. A rotation that lands first is
+replaced by the recovery all the same, which `Sanctum.DirectoryTest`'s "a
+rotation landing between a recovery's read and its write re-bases it on the
+new head" shows.
+
 What this proof does not cover is the join proof's (`tests/join-proof/`):
 admitting the person at another home through the CYFR door, and retiring
 the sessions a relying home minted. An externally operated directory is
 not provided: the directory here is a disposable writer the run starts,
 which proves no hosted service.
-
-## Record
-
-Recorded on 2026-10-03 on `p1` by `run.sh`, Chromium 153.0.8010.12, B's
-bound 20 seconds and C's first-method window 20 seconds: every step held.
-
-| Step | What the record shows |
-|---|---|
-| `passkey`, `first_passkey` | one credential for the home's RP ID, registered active |
-| `pair` | a local subject, the person still unenrolled |
-| `enroll`, `second_kit` | the three statements shown; the kit drawn in the prompt and gone from the page once saved; no kit line in storage, an address or any request (0 leaks) |
-| `rotate` | head and live key moved; the replaced certificate closed `4408`; the glass sent `connect`, was closed `4408`, sent `renew` and `proof`, and holds a new certificate |
-| `reserved`, `claims` | `restore_reserved`; `401`, `422`, `422`, no attempt opened |
-| `phases` | `503` at `submitted`, `accepted` and `minted`, the attempt at that phase each time; one recovery added to the log (`genesis, recover, rotate, recover`: the first `recover` is the added kit) |
-| `replay` | the same entry hash as the one C recorded on resuming |
-| `thief` | both of the thief's rotations refused `stale_head`: launched with the restore's post, the recovery reached the directory first in this run. A rotation that lands first is replaced by the recovery all the same: `Sanctum.DirectoryTest`'s "a rotation landing between a recovery's read and its write re-bases it on the new head" |
-| `restore`, `without_a` | completed in one post each, the form emptied; with A and its copy stopped, every request at the front a directory path |
-| `b_observes`, `b_observes_again` | 16 s after the head moved; 21 s after B last verified, against a bound of 20 and one two-second poll |
-| `window` | past the window, the passkey refused with its sentence; the reproof completed |
-| `door`, `pair_again` | one door linked; the restored person holds no paired client at C, and the glass is unpaired there |
-| `viewport` | at 720×720 the second glass paired under a local subject, stood again at A under a renewed certificate after the rotation, and was unpaired at C; its three screens had no control under 24×24 CSS px, no text under 12 px and no overflow |
-| `superseded` | `409 superseded`, its staged keys gone, no person on C2 |
-| `directory_down` | the verified head served within the bound; `identity_stale` past it |

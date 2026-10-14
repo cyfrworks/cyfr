@@ -166,6 +166,13 @@ defmodule Opus.Host.AttachedFetchTest do
       |> send_resp(200, "ok")
     end
 
+    # Unavailable, asking to be tried again at once.
+    defp answer(conn, "/unavailable", _parent) do
+      conn
+      |> put_resp_header("retry-after", "0")
+      |> send_resp(503, "unavailable")
+    end
+
     defp answer(conn, _path, _parent), do: send_resp(conn, 200, "hello from upstream")
 
     defp keep_writing(conn, parent, 0) do
@@ -716,6 +723,33 @@ defmodule Opus.Host.AttachedFetchTest do
     {ref, port}
   end
 
+  # An upstream that reads each request's head, tells the test, and closes
+  # the connection without answering: every connection made to it is
+  # counted. It accepts for as long as the test runs, since it ends with it.
+  defp closing_upstream! do
+    test = self()
+    ref = make_ref()
+
+    spawn_link(fn ->
+      {:ok, listen} =
+        :gen_tcp.listen(0, [:binary, active: false, reuseaddr: true, ip: {127, 0, 0, 1}])
+
+      {:ok, port} = :inet.port(listen)
+      send(test, {ref, :port, port})
+      close_each(listen, test, ref)
+    end)
+
+    assert_receive {^ref, :port, port}, 5_000
+    {ref, port}
+  end
+
+  defp close_each(listen, test, ref) do
+    {:ok, socket} = :gen_tcp.accept(listen, :infinity)
+    send(test, {ref, :request, request_head(socket, "")})
+    :ok = :gen_tcp.close(socket)
+    close_each(listen, test, ref)
+  end
+
   defp request_head(socket, read) do
     if String.contains?(read, "\r\n\r\n") do
       read
@@ -971,6 +1005,48 @@ defmodule Opus.Host.AttachedFetchTest do
 
       assert {"location", "/elsewhere"} in headers
       refute_receive {:upstream, _, %{path: "/elsewhere"}}, 200
+    end
+  end
+
+  # A request carrying an attached credential is made once (§5.5): no
+  # second connection carries the credential again, whatever the first
+  # one answered.
+  describe "an upstream that fails" do
+    test "a connection that closes before any answer is made once, and the guest gets the error",
+         %{ctx: ctx} do
+      {ref, port} = closing_upstream!()
+      %{fixture: fixture} = scenario!(ctx, port)
+      request = request("http://127.0.0.1:#{port}/")
+
+      assert :ok = fetched(fixture, request)
+
+      # The one request carried the credential: there was one to send again.
+      assert_receive {^ref, :request, head}, 5_000
+      assert head =~ ~r/\r\nx-api-key: #{Regex.escape(@secret)}\r\n/i
+      refute_receive {^ref, :request, _head}, 500
+
+      assert [%{kind: :error, type: "http_error", message: message}] =
+               frames(fixture, request.call_id)
+
+      assert message =~ "HTTP request failed"
+      refute message =~ @secret
+    end
+
+    test "a 503 is made once and is the guest's answer, never retried", %{ctx: ctx, port: port} do
+      %{fixture: fixture} = scenario!(ctx, port)
+      request = request("http://127.0.0.1:#{port}/unavailable")
+
+      assert :ok = fetched(fixture, request)
+      upstream = received_upstream()
+      assert upstream.path == "/unavailable"
+      assert header(upstream, "x-api-key") == [@secret]
+      refute_receive {:upstream, _pid, _request}, 500
+
+      read = frames(fixture, request.call_id)
+      assert [%{kind: :head, status: 503, headers: headers} | _] = read
+      assert {"retry-after", "0"} in headers
+      assert body_of(read) == "unavailable"
+      assert List.last(read).kind == :end
     end
   end
 

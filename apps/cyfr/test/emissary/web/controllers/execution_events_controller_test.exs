@@ -4,9 +4,11 @@
 defmodule Emissary.Web.ExecutionEventsControllerTest do
   use CyfrWeb.ConnCase, async: false
 
-  # Execution-event access requires authentication and an ownership check.
-  # Unknown and inaccessible ids return the same 404. This fixture uses the
-  # shared test user and exercises an unknown execution id.
+  @moduletag auth: :person
+
+  # Execution-event access requires authentication, a tenant-scoped read and
+  # `storage_read` on the execution. Unknown and inaccessible ids return the
+  # same 404.
   describe "GET /api/executions/:id/events" do
     # The controller returns 503 when no worker service answers; the test
     # boot's runtime does (`Cyfr.Test.RuntimeService`).
@@ -38,13 +40,55 @@ defmodule Emissary.Web.ExecutionEventsControllerTest do
       assert json_response(conn, 503)["code"] == "unavailable"
     end
 
-    # Note: TestAuthProvider grants the test conn `[:*]` (wildcard), so a
-    # cross-user 404 test would always succeed via the admin override.
-    # The 403→404 collapse is verified by code review of the `with` chain
-    # in execution_events_controller.ex (`{:error, :forbidden}` branch
-    # returns 404, mirroring the `{:exec, nil}` branch). End-to-end coverage
-    # against a non-admin user belongs in an integration test once a
-    # session-with-narrow-permissions fixture exists.
+    @tag auth: :none
+    test "no credential is a 401", %{conn: conn} do
+      exec = admit!(Sanctum.TestContext.local())
+      terminal!(exec)
+
+      conn = get(conn, "/api/executions/#{exec.id}/events")
+
+      assert json_response(conn, 401)["code"] == "unauthenticated"
+      assert get_resp_header(conn, "www-authenticate") == ["Bearer"]
+    end
+
+    test "an execution in another athanor is a 404, as an unknown id is", %{conn: conn} do
+      {_ctx_a, ctx_b} = Sanctum.TestContext.two_contexts()
+      exec = admit!(ctx_b)
+      terminal!(exec)
+
+      conn = get(conn, "/api/executions/#{exec.id}/events")
+
+      assert json_response(conn, 404)["code"] == "not_found"
+    end
+
+    # Members of an athanor are interchangeable, so the read is gated by the
+    # credential's `storage_read`, not by who started the execution. An
+    # application key defaults to `execute`, `component_read` and
+    # `storage_read`; this one is narrowed to `execute`. The terminal row
+    # makes a controller that skipped the check end its stream at once
+    # rather than hang the test.
+    test "a key without storage_read in the execution's own athanor is a 404", %{conn: conn} do
+      ctx = Sanctum.TestContext.local()
+      exec = admit!(ctx)
+      terminal!(exec)
+
+      {ctx, user} = Sanctum.TestContext.person!(ctx, %{email: "testns@example.com"})
+      {:ok, _} = Sanctum.Tenancy.Users.set_namespace(user, ctx.namespace)
+
+      {:ok, key} =
+        Sanctum.TestContext.create_key(ctx, %{
+          name: "events-execute-only",
+          type: :application,
+          scope: ["execute"]
+        })
+
+      conn =
+        conn
+        |> put_req_header("authorization", "Bearer " <> key.api_key)
+        |> get("/api/executions/#{exec.id}/events")
+
+      assert json_response(conn, 404)["code"] == "not_found"
+    end
   end
 
   # This HTTP endpoint must render plain API errors.
@@ -90,4 +134,33 @@ defmodule Emissary.Web.ExecutionEventsControllerTest do
                     end)
 
   defp drop_executions!, do: Arca.Repo.query!(@drop_executions)
+
+  defp admit!(%Sanctum.Context{} = ctx) do
+    {:ok, %{execution: execution}} =
+      Arca.Execution.admit(
+        %{
+          id: Prima.UUID7.execution_id(),
+          reference: "reagent:local.sse:0.1.0",
+          user_id: ctx.user_id,
+          athanor_id: ctx.athanor_id,
+          component_type: "reagent",
+          origin: :programmatic
+        },
+        Cyfr.Test.AttemptFixtures.standing(ctx.athanor_id)
+      )
+
+    execution
+  end
+
+  defp terminal!(exec) do
+    {:ok, _row} =
+      Arca.ExecutionEvents.append(
+        Prima.Actor.in_athanor(exec.athanor_id),
+        exec.id,
+        "execution.completed",
+        data: %{"status" => "completed"}
+      )
+
+    :ok
+  end
 end

@@ -10,22 +10,25 @@ loopback port and the pool settings a case chooses, against a scripted
 control plane on this machine. They read what only the image shows: the
 runners' processes, uids, homes, memory groups and memory, and the
 container's CPU and log. CI runs `runners.py`, which runs `memory.py`'s
-cases, and `canary.py` in the `locus-runtime-image` job of
-`.github/workflows/test.yml`; `namespace.py` and `memory.py --measure`
-run by hand.
+cases, `canary.py` and `namespace.py` in the `locus-runtime-image` job of
+`.github/workflows/test.yml`; `memory.py --measure` stays a manual
+measurement.
 
 | Suite | What it shows |
 |---|---|
 | `runners.py` | runners ended at their bounds, settlement and cleanup, the relay, pinned egress, attached requests and the shipped model catalysts' requests, the queue age of a fresh runner, and `memory.py`'s cases |
 | `memory.py` | every runner in a memory group of its own at the service's bound, and no runner at all without `writable-cgroups=true`; `--measure` prints each workload's group peak |
-| `namespace.py` | each runner in a user and network namespace of its own, with no route out |
+| `namespace.py` | each runner in a user and network namespace of its own, with no route out; it fails before its first step where `user.max_user_namespaces` is 0, or where `kernel.apparmor_restrict_unprivileged_userns` is 1 and `docker info` lists no `name=apparmor` security option |
 | `canary.py` | the credential canary: a credential CYFR attaches to a guest's request reaches neither the runner nor the worker service |
 
 The suites share `stack.py` (the service under compose, and the
 observer that reads inside the container), `control_plane.py` (CYFR's host
 API as the tests script it) and `worker_auth.py` (`Prima.WorkerAuth`, held
-to `tests/fixtures/`' vectors). `hog.wat` is the memory case's guest, built
-to `hog.wasm` by `build.sh`, whose digests `memory.py` records.
+to `tests/fixtures/`' vectors); `stack.py` builds on `tests/imagesuite.py`,
+which the builder and backends image suites share too, and which
+`tests/imagesuite_test.py` checks without Docker. `hog.wat` is the memory
+case's guest, built to `hog.wasm` by `build.sh`, whose digests `memory.py`
+records.
 
 ## Running
 
@@ -33,9 +36,14 @@ to `hog.wasm` by `build.sh`, whose digests `memory.py` records.
 docker build -f Dockerfile.locus -t cyfr-locus:test .
 python3 tests/locus-runtime-image/runners.py cyfr-locus:test
 python3 tests/locus-runtime-image/canary.py cyfr-locus:test
+python3 -I tests/locus-runtime-image/namespace.py cyfr-locus:test
+python3 tests/locus-runtime-image/memory.py cyfr-locus:test --measure
 ```
 
 On the verification host each runs alone, through `scripts/heavy-check.sh`.
+`STACK_PROJECT_PREFIX` prefixes every compose project and container a run
+makes. A TERM or INT ends a suite with its compose project and its
+temporary directories removed.
 They need Docker Engine 28 or later with Compose on a cgroup v2 host that
 allows unprivileged user namespaces (`docker-compose.yml`'s `locus-runtime` service
 says why), and Python 3. Each case prints an `ok:` line per assertion and

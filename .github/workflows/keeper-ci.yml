@@ -23,14 +23,20 @@ on:
       - 'tests/fixtures/keeper_protocol.json'
       - 'tests/fixtures/residue-canary.go'
       - '.github/workflows/keeper-ci.yml'
+  workflow_call:
 
 permissions:
   contents: read
+
+concurrency:
+  group: keeper-ci-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   keeper:
     name: vet + test (cyfr-locus)
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     defaults:
       run:
         working-directory: apps/locus/keeper

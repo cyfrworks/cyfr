@@ -20,6 +20,9 @@ must reproduce that file's request vector: `check_signing` runs when this
 module is loaded, before any container starts, and
 `python3 tests/builder-image/stack.py` runs it alone.
 
+The command runner, the teardown on a signal and the part of the Stack that
+does not depend on the service come from tests/imagesuite.py.
+
 The builds role's facts and the release's (its service, profile, pool,
 port, user, binary and directories) are read from the role table's vector
 file, tests/fixtures/locus_roles.json (`Prima.LocusRoles`), when this
@@ -33,17 +36,22 @@ import http.client
 import json
 import os
 import secrets
-import shutil
-import subprocess
 import sys
-import tempfile
 import time
 import urllib.error
 import urllib.request
 import uuid
 
+sys.dont_write_bytecode = True
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.abspath(os.path.join(HERE, "..", ".."))
+if os.path.join(ROOT, "tests") not in sys.path:
+    sys.path.append(os.path.join(ROOT, "tests"))
+
+import imagesuite  # noqa: E402
+from imagesuite import PROJECT_PREFIX, run  # noqa: E402
+
+imagesuite.stop_on_signals()
 
 with open(os.path.join(ROOT, "tests", "fixtures", "locus_roles.json"), encoding="utf-8") as _roles:
     _TABLE = json.load(_roles)
@@ -55,9 +63,6 @@ if ROLE is None:
 
 SERVICE = ROLE["service"]
 PROFILE = ROLE["profile"]
-# Prefixed to every compose project and container of a run, for a host
-# that tells one run's Docker objects from another's by name.
-PROJECT_PREFIX = os.environ.get("STACK_PROJECT_PREFIX", "")
 POOL_FIRST, POOL_LAST = ROLE["first_uid"], ROLE["last_uid"]
 PORT = ROLE["port"]
 RELEASE_UID = RELEASE["uid"]
@@ -74,13 +79,6 @@ LABEL = WIRE["label"]
 AUTH_HEADER = WIRE["auth_header"]
 ROUTES = WIRE["routes"]
 STATUSES = WIRE["statuses"]
-
-
-def run(*args, check=True, env=None, timeout=None):
-    result = subprocess.run(args, capture_output=True, text=True, env=env, timeout=timeout)
-    if check and result.returncode != 0:
-        sys.exit(f"FAIL: {' '.join(args)} exited {result.returncode}\n{result.stdout}\n{result.stderr}")
-    return result
 
 
 def expect(condition, message, detail=None):
@@ -133,9 +131,8 @@ check_signing()
 
 def build_canary():
     """Builds tests/fixtures/residue-canary.go for Linux on this host's architecture."""
-    out = tempfile.mkdtemp(prefix="cyfr-canary-")
     # The read-only fixture mount must be traversable by pooled build UIDs.
-    os.chmod(out, 0o755)
+    out = imagesuite.temporary_directory("cyfr-canary-", 0o755)
     run(
         "docker", "run", "--rm", "--name", f"{PROJECT_PREFIX}cyfr-canary-build-{os.getpid()}",
         "-v", f"{os.path.join(ROOT, 'tests', 'fixtures')}:/src:ro", "-v", f"{out}:/out",
@@ -145,17 +142,14 @@ def build_canary():
     return out
 
 
-class Stack:
+class Stack(imagesuite.Stack):
     def __init__(self, project, image, canary_dir):
-        self.project = PROJECT_PREFIX + project
+        super().__init__(project)
         self.image = image
         self.canary_dir = canary_dir
         # The builds key of this run: compose gives it to the service as
         # LOCUS_BUILDS_KEY, from the name the server's .env holds it under.
         self.key = secrets.token_hex(32)
-        self.project_dir = tempfile.mkdtemp(prefix=f"{self.project}-")
-        # The rest of the stack's definition names a project .env.
-        open(os.path.join(self.project_dir, ".env"), "w").close()
         self.base = None
 
     def env(self):
@@ -210,12 +204,6 @@ class Stack:
 
     def logs(self):
         return self.compose("logs", "--no-color", SERVICE, check=False).stdout
-
-    def down(self):
-        if os.environ.get("CI"):
-            print(self.logs())
-        self.compose("down", "--volumes", "--remove-orphans", check=False)
-        shutil.rmtree(self.project_dir, ignore_errors=True)
 
     def exec(self, script, user=None):
         user_args = ["-u", user] if user else []

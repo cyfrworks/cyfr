@@ -18,10 +18,12 @@
 //
 // Usage: node proof.mjs HOMES_FILE SEGMENT_A COOKIE_A OUT_DIR
 
-import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { HANDHELD, measure, unmet } from "../browser/handheld.mjs";
-import { launchBrowser, readHomes, signedIn, sleep, startProxy, virtualAuthenticator, waitFor } from "../browser/lib.mjs";
+import {
+  ask as askRunSh, launchBrowser, readHomes, redact as redactKnown, signedIn, sleep, startProxy, virtualAuthenticator, waitFor,
+} from "../browser/lib.mjs";
 
 const [homesFile, segmentA, cookieA, outDir] = process.argv.slice(2);
 if (!homesFile || !segmentA || !cookieA || !outDir) {
@@ -50,31 +52,13 @@ function row(step, held, what, detail) {
   return !!held;
 }
 
-function redact(text) {
-  return secrets.reduce((out, secret) => (secret ? out.split(secret).join("[secret]") : out), text);
-}
+// What the proof writes, with every secret it handled replaced
+// (lib.mjs `redact`).
+const redact = (text) => redactKnown(text, secrets);
 
-// The homes' part of a step, asked of run.sh. `secret: true` deletes the
-// ask and its answer once read.
-let asked = 0;
-async function ask(request, { timeoutMs = 300_000, secret = false } = {}) {
-  const id = ++asked;
-  const answer = join(outDir, `answer-${id}.json`);
-  writeFileSync(join(outDir, `ask-${id}.part`), JSON.stringify(request));
-  renameSync(join(outDir, `ask-${id}.part`), join(outDir, `ask-${id}.json`));
-  const deadline = Date.now() + timeoutMs;
-  while (!existsSync(answer)) {
-    if (Date.now() > deadline) throw new Error(`run.sh never answered ${request.op}`);
-    await sleep(100);
-  }
-  const answered = JSON.parse(readFileSync(answer, "utf8"));
-  if (secret) {
-    rmSync(answer, { force: true });
-    rmSync(join(outDir, `ask-${id}.json`), { force: true });
-  }
-  if (answered.error && !request.tolerate) throw new Error(`run.sh: ${request.op}: ${answered.error}`);
-  return answered;
-}
+// The homes' part of a step, asked of run.sh (lib.mjs `ask`). `secret: true`
+// removes the answer once read; run.sh has removed the ask.
+const ask = (request, options) => askRunSh(request, { outDir, timeoutMs: 300_000, refuseError: true, ...options });
 
 // ---------------------------------------------------------------------------
 // The glass's device channel, watched from inside its own page
