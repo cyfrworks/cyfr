@@ -329,6 +329,60 @@ defmodule Cyfr.GracefulStopTest do
       assert is_pid(tree) and Process.alive?(tree)
       assert Process.whereis(CyfrWeb.Endpoint) == endpoint
     end
+
+    # The endpoint serves no listener here, so the case above passes
+    # whether or not `prep_stop/1` suspends it. The suspension is what
+    # closes a release's listening ports ("are found by the lookup, and
+    # suspending the endpoint refuses a new connection"), and it follows
+    # the drain mark, so a tab told to reconnect meets a closed port.
+    test "prep_stop marks the drain, then suspends the application's endpoint, once" do
+      drain = {LiveSocket, :drain, 0}
+      suspend = {App, :suspend_endpoint, 1}
+
+      calls = traced([drain, suspend], fn -> assert App.prep_stop(:state) == :state end)
+
+      assert calls == [{LiveSocket, :drain, []}, {App, :suspend_endpoint, [CyfrWeb.Endpoint]}]
+    end
+  end
+
+  # The calls this process made to `mfas` while `fun` ran, in order. A
+  # process's call trace is not delivered to itself, so a collector takes
+  # it, and every trace message is delivered before the collector is asked
+  # for what it holds. `prep_stop/1` calls `suspend_endpoint/1` locally,
+  # so the patterns are local ones.
+  defp traced(mfas, fun) do
+    test = self()
+    collector = spawn_link(fn -> collect(test, []) end)
+
+    on_exit(fn -> for mfa <- mfas, do: :erlang.trace_pattern(mfa, false, [:local]) end)
+
+    # A pattern applies only to a loaded module, so each is loaded first,
+    # and one that matched nothing fails here rather than tracing nothing.
+    for {module, _function, _arity} = mfa <- mfas do
+      Code.ensure_loaded!(module)
+      assert :erlang.trace_pattern(mfa, true, [:local]) == 1
+    end
+
+    1 = :erlang.trace(test, true, [:call, {:tracer, collector}])
+
+    try do
+      fun.()
+    after
+      :erlang.trace(test, false, [:call])
+    end
+
+    delivered = :erlang.trace_delivered(test)
+    assert_receive {:trace_delivered, ^test, ^delivered}, 5_000
+    send(collector, {:done, delivered})
+    assert_receive {:collected, ^delivered, calls}, 5_000
+    calls
+  end
+
+  defp collect(test, calls) do
+    receive do
+      {:trace, ^test, :call, call} -> collect(test, [call | calls])
+      {:done, ref} -> send(test, {:collected, ref, Enum.reverse(calls)})
+    end
   end
 
   describe "the suspension fails safe" do
