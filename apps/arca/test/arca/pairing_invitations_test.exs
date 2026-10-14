@@ -510,18 +510,24 @@ defmodule Arca.PairingInvitationsRaceTest do
     end)
   end
 
+  # The gate's key is held in a transaction the holder keeps open until
+  # `open_gate!/1`. A holder that dies with its case is mid-transaction, so
+  # its connection is closed rather than lent again, and the key goes with
+  # it: a session lock would stay held on the pooled connection.
   defp close_gate! do
     test = self()
 
     holder =
       Task.async(fn ->
         unboxed(fn ->
-          Arca.Repo.query!("SELECT pg_advisory_lock($1)", [@gate])
-          send(test, :gate_closed)
-
-          receive do
-            :open -> Arca.Repo.query!("SELECT pg_advisory_unlock($1)", [@gate])
-          end
+          Arca.Repo.transaction(
+            fn ->
+              Arca.Repo.query!("SELECT pg_advisory_xact_lock($1)", [@gate])
+              send(test, :gate_closed)
+              receive do: (:open -> :ok)
+            end,
+            timeout: :infinity
+          )
         end)
       end)
 
