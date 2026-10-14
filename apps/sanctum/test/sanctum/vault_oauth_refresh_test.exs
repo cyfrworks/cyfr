@@ -91,17 +91,56 @@ defmodule Sanctum.VaultOAuthRefreshTest do
   # failed test would leave running past the sandbox. Registered as soon as
   # `caller` exists, before anything waits on it: the caller is stopped
   # first, so it starts nothing more, then every refresh task begun on its
-  # behalf, whether or not it got as far as the lock's Registry.
+  # behalf, however far it got.
   defp stop_on_exit(caller) do
     on_exit(fn ->
       kill_and_await(caller)
 
-      for {_, task, _, _} <- Supervisor.which_children(Sanctum.OAuth.RefreshTaskSupervisor),
-          is_pid(task),
-          {:dictionary, dictionary} <- [Process.info(task, :dictionary)],
-          caller in Keyword.get(dictionary, :"$callers", []),
-          do: kill_and_await(task)
+      Prima.Test.Wait.wait_until(
+        fn -> stop_refresh_tasks(caller) == [] end,
+        2_000,
+        "every refresh task to show whether #{inspect(caller)} started it"
+      )
     end)
+  end
+
+  # Stops the refresh tasks `caller` started and answers those that show no
+  # owner yet. A task names its callers once it has read its start message;
+  # before that it monitors the process that started it, which is the first
+  # thing it does. A task showing neither has not run yet, and is looked at
+  # again rather than left to start after the test. A task that names or
+  # monitors another process is never touched.
+  defp stop_refresh_tasks(caller) do
+    for {_, task, _, _} <- Supervisor.which_children(Sanctum.OAuth.RefreshTaskSupervisor),
+        is_pid(task),
+        owner <- [refresh_task_owner(task, caller)],
+        owner != :other,
+        reduce: [] do
+      unresolved ->
+        if owner == :caller do
+          kill_and_await(task)
+          unresolved
+        else
+          [task | unresolved]
+        end
+    end
+  end
+
+  defp refresh_task_owner(task, caller) do
+    case Process.info(task, [:dictionary, :monitors]) do
+      [dictionary: dictionary, monitors: monitors] ->
+        owners = for {:process, pid} <- monitors, is_pid(pid), do: pid
+
+        case List.keyfind(dictionary, :"$callers", 0) do
+          {_, callers} -> if caller in callers, do: :caller, else: :other
+          nil when owners == [] -> :unknown
+          nil -> if caller in owners, do: :caller, else: :other
+        end
+
+      # Gone already: nothing of it can run after the test.
+      nil ->
+        :other
+    end
   end
 
   defp kill_and_await(pid) do
@@ -110,6 +149,8 @@ defmodule Sanctum.VaultOAuthRefreshTest do
 
     receive do
       {:DOWN, ^ref, :process, ^pid, _reason} -> :ok
+    after
+      2_000 -> flunk("#{inspect(pid)} was killed and had not exited after 2000ms")
     end
   end
 
