@@ -13,7 +13,7 @@ defmodule Locus.ExecutorTest do
   use ExUnit.Case, async: false
 
   alias Locus.Executor
-  alias Locus.Test.CodeLines
+  alias Prima.Test.CodeLines
 
   @lib Path.expand("../../lib/locus", __DIR__)
   @mix_exs Path.expand("../../mix.exs", __DIR__)

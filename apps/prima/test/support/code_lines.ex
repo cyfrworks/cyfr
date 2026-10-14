@@ -12,9 +12,9 @@ defmodule Prima.Test.CodeLines do
   Source inventory matchers can then detect fully qualified names in
   both plain and braced aliases.
 
-  Other apps load this module through `Code.require_file` for per-app tests;
-  `apps/locus/test/support/code_lines.ex` is its one copy, drift-checked
-  against this file body for body.
+  Every application that depends on Prima, Locus included, reaches it
+  through Prima's test support, which a test build compiles with Prima, so
+  there is one filter and no copy to drift.
   """
 
   # `Foo.Bar.{A, B}` → the base and the brace body. Members are split on the
