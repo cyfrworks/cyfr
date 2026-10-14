@@ -100,13 +100,7 @@ identity_kill() {
 identity_fixture() {
   local cell="$1"
   shift
-  local args="" arg
-  for arg in "$@"; do
-    args="$args\"$(printf '%s' "$arg" | sed 's/[\\"]/\\&/g')\","
-  done
-  cell_cyfr "$cell" rpc \
-    "{answer, _} = Code.eval_file(\"$ROOT/tests/identity-proof/fixture.exs\"); IO.puts(answer.([${args%,}]))" |
-    sed -n 's/^FIXTURE=//p' | tail -1
+  cell_fixture "$cell" "$ROOT/tests/identity-proof/fixture.exs" FIXTURE "$@"
 }
 
 # POST a restore request to cell `$1` as the browser does, on its own

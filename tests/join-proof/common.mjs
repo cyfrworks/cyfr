@@ -24,9 +24,9 @@
 // asks of run.sh, the browsers' helpers and the steps up to the
 // sign-ins; proof.mjs runs them and steps.mjs the rest.
 
-import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { readHomes, sleep, waitFor } from "../browser/lib.mjs";
+import { ask as askRunSh, readHomes, redact as redactKnown, sleep, waitFor } from "../browser/lib.mjs";
 export { sleep, waitFor };
 
 export const [homesFile, outDir] = process.argv.slice(2);
@@ -57,31 +57,13 @@ export function row(step, browser, held, what, detail) {
   return !!held;
 }
 
-export function redact(text) {
-  return secrets.reduce((out, secret) => (secret ? out.split(secret).join("[secret]") : out), String(text));
-}
+// What the proof writes, with every secret it handled replaced
+// (lib.mjs `redact`).
+export const redact = (text) => redactKnown(text, secrets);
 
-// The homes' part of a step, asked of run.sh. `secret: true` deletes the
-// ask and its answer once read.
-let asked = 0;
-export async function ask(request, { timeoutMs = 300_000, secret = false } = {}) {
-  const id = ++asked;
-  const answer = join(outDir, `answer-${id}.json`);
-  writeFileSync(join(outDir, `ask-${id}.part`), JSON.stringify(request));
-  renameSync(join(outDir, `ask-${id}.part`), join(outDir, `ask-${id}.json`));
-  const deadline = Date.now() + timeoutMs;
-  while (!existsSync(answer)) {
-    if (Date.now() > deadline) throw new Error(`run.sh never answered ${request.op}`);
-    await sleep(100);
-  }
-  const answered = JSON.parse(readFileSync(answer, "utf8"));
-  if (secret) {
-    rmSync(answer, { force: true });
-    rmSync(join(outDir, `ask-${id}.json`), { force: true });
-  }
-  if (answered.error && !request.tolerate) throw new Error(`run.sh: ${request.op}: ${answered.error}`);
-  return answered;
-}
+// The homes' part of a step, asked of run.sh (lib.mjs `ask`). `secret: true`
+// removes the answer once read; run.sh has removed the ask.
+export const ask = (request, options) => askRunSh(request, { outDir, timeoutMs: 300_000, refuseError: true, ...options });
 
 // ---------------------------------------------------------------------------
 // Browsers, contexts and the virtual authenticator

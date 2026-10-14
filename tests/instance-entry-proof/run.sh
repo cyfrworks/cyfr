@@ -55,15 +55,6 @@ source "$ROOT/tests/browser/harness.sh"
 OUT="${PROOF_OUT:-$WORK/out}"
 PROOF_PID=""
 
-stop_proof_container() {
-  local ids
-  ids="$(docker ps -q --filter "volume=$OUT" 2>/dev/null || true)"
-  if [ -n "$ids" ]; then
-    # shellcheck disable=SC2086
-    docker stop -t 5 $ids >/dev/null 2>&1 || true
-  fi
-}
-
 # The scratch directory holds the run's authority key, the cell's keys
 # and its database, and each person's session token, so it goes even when
 # a stop fails. `server_stop` ends in `fail`, an `exit`, when a listener
@@ -87,20 +78,11 @@ cleanup() {
 }
 trap cleanup EXIT
 
-field() { printf '%s' "$1" | python3 -c "import json, sys; print(json.load(sys.stdin)['$2'])"; }
-asked() { python3 -c "import json, sys; print(json.load(open(sys.argv[1]))[sys.argv[2]])" "$1" "$2"; }
-
 # The proof's fixture inside the running server, as `bin/cyfr rpc`. A
 # command that raises answers nothing, which the proof reads as a failed
 # step; what it raised is kept in the scratch directory, not the record.
 entry_fixture() {
-  local args="" arg
-  for arg in "$@"; do
-    args="$args\"$(printf '%s' "$arg" | sed 's/[\\"]/\\&/g')\","
-  done
-  cell_cyfr "$CELL" rpc \
-    "{answer, _} = Code.eval_file(\"$HERE/fixture.exs\"); IO.puts(answer.([${args%,}]))" \
-    2>>"$WORK/fixture.err" | sed -n 's/^ENTRY=//p' | tail -1 || :
+  cell_fixture "$CELL" "$HERE/fixture.exs" ENTRY "$@" 2>>"$WORK/fixture.err" || :
 }
 
 # A person signed in through the release fixture's door, and the browser
@@ -153,57 +135,47 @@ admin_segment="$(field "$admin" segment)"
 admin_token="$(field "$admin" token)"
 admin_cookie="$(browser_cookie "$CELL" "$admin_token")"
 
-# Each step the proof asks for, answered once.
-answer_asks() {
-  local ask id op answer
-  for ask in "$OUT"/ask-*.json; do
-    [ -e "$ask" ] || continue
-    id="${ask##*/ask-}"
-    id="${id%.json}"
-    [ -e "$OUT/answer-$id.json" ] && continue
-    op="$(asked "$ask" op)"
-    case "$op" in
-      sign_in) answer="$(sign_in "$(asked "$ask" email)" "instance-entry-proof-$(asked "$ask" name)")" ;;
-      clock) answer="$(entry_fixture clock)" ;;
-      admin)
-        answer="$(python3 -c "import json, sys; p = json.loads(sys.argv[1]); print(json.dumps({'user_id': p['user_id'], 'athanor_id': p['athanor_id']}))" "$admin")"
-        ;;
-      state)
-        # A person not yet signed in is asked for as "".
-        ana_token=-
-        ana_id="$(asked "$ask" ana)"
-        [ -n "$ana_id" ] && ana_token="$(token_of_user "$ana_id")"
-        bea_id="$(asked "$ask" bea)"
-        [ -n "$bea_id" ] || bea_id=-
-        answer="$(entry_fixture state "$ana_token" "$bea_id" \
-          "$(python3 -c "import json, sys; print(json.dumps(json.load(open(sys.argv[1]))['payloads']))" "$ask")")"
-        ;;
-      requested_digest)
-        answer="$(entry_fixture requested_digest "$(asked "$ask" provider)" "$(asked "$ask" field)" \
-          "$(python3 -c "import json, sys; print(json.dumps(json.load(open(sys.argv[1]))['destination']))" "$ask")")"
-        ;;
-      derived_head)
-        answer="$(entry_fixture derived_head "$(token_of "$ask")" "$(asked "$ask" entry_id)" \
-          "$(asked "$ask" provider)" "$(asked "$ask" field)" \
-          "$(python3 -c "import json, sys; print(json.dumps(json.load(open(sys.argv[1]))['destination']))" "$ask")")"
-        ;;
-      admit) answer="$(entry_fixture admit "$(token_of "$ask")")" ;;
-      claim)
-        answer="$(entry_fixture claim "$(token_of "$ask")" "$(asked "$ask" entry_id)" \
-          "$(asked "$ask" count)" "$(asked "$ask" url)" "$(asked "$ask" method)")"
-        ;;
-      row_binding) answer="$(entry_fixture row_binding "$(token_of "$ask")" "$(asked "$ask" entry_id)")" ;;
-      focus) answer="$(entry_fixture focus "$admin_token" "$(asked "$ask" athanor_id)")" ;;
-      *) fail "the proof asked for '$op', which this script does not do" ;;
-    esac
-    [ -n "$answer" ] || answer='{"error":"the fixture answered nothing"}'
-    # An ask is removed once answered, before its answer appears: a state
-    # ask carries the digests of the payloads the cards typed, and none may
-    # outlive the read it was for.
-    rm -f "$ask"
-    printf '%s\n' "$answer" >"$OUT/answer-$id.part"
-    mv "$OUT/answer-$id.part" "$OUT/answer-$id.json"
-  done
+# Each step the proof asks for (harness.sh `answer_asks`, which removes an
+# ask once answered, before its answer appears: a state ask carries the
+# digests of the payloads the cards typed, and none may outlive the read it
+# was for).
+answer_ask() {
+  local ask="$1" op ana_token ana_id bea_id
+  op="$(asked "$ask" op)"
+  case "$op" in
+    sign_in) ANSWER="$(sign_in "$(asked "$ask" email)" "instance-entry-proof-$(asked "$ask" name)")" ;;
+    clock) ANSWER="$(entry_fixture clock)" ;;
+    admin)
+      ANSWER="$(python3 -c "import json, sys; p = json.loads(sys.argv[1]); print(json.dumps({'user_id': p['user_id'], 'athanor_id': p['athanor_id']}))" "$admin")"
+      ;;
+    state)
+      # A person not yet signed in is asked for as "".
+      ana_token=-
+      ana_id="$(asked "$ask" ana)"
+      [ -n "$ana_id" ] && ana_token="$(token_of_user "$ana_id")"
+      bea_id="$(asked "$ask" bea)"
+      [ -n "$bea_id" ] || bea_id=-
+      ANSWER="$(entry_fixture state "$ana_token" "$bea_id" \
+        "$(python3 -c "import json, sys; print(json.dumps(json.load(open(sys.argv[1]))['payloads']))" "$ask")")"
+      ;;
+    requested_digest)
+      ANSWER="$(entry_fixture requested_digest "$(asked "$ask" provider)" "$(asked "$ask" field)" \
+        "$(python3 -c "import json, sys; print(json.dumps(json.load(open(sys.argv[1]))['destination']))" "$ask")")"
+      ;;
+    derived_head)
+      ANSWER="$(entry_fixture derived_head "$(token_of "$ask")" "$(asked "$ask" entry_id)" \
+        "$(asked "$ask" provider)" "$(asked "$ask" field)" \
+        "$(python3 -c "import json, sys; print(json.dumps(json.load(open(sys.argv[1]))['destination']))" "$ask")")"
+      ;;
+    admit) ANSWER="$(entry_fixture admit "$(token_of "$ask")")" ;;
+    claim)
+      ANSWER="$(entry_fixture claim "$(token_of "$ask")" "$(asked "$ask" entry_id)" \
+        "$(asked "$ask" count)" "$(asked "$ask" url)" "$(asked "$ask" method)")"
+      ;;
+    row_binding) ANSWER="$(entry_fixture row_binding "$(token_of "$ask")" "$(asked "$ask" entry_id)")" ;;
+    focus) ANSWER="$(entry_fixture focus "$admin_token" "$(asked "$ask" athanor_id)")" ;;
+    *) fail "the proof asked for '$op', which this script does not do" ;;
+  esac
 }
 
 step "the instance-entry proof in Chromium at $VIEWPORT, in $PLAYWRIGHT_IMAGE"
@@ -212,15 +184,7 @@ rm -f "$OUT"/ask-* "$OUT"/answer-*
 playwright_run instance-entry-proof proof.mjs /authority/homes.json "$admin_segment" "$admin_cookie" /out \
   "$VIEWPORT" &
 PROOF_PID=$!
-while kill -0 "$PROOF_PID" 2>/dev/null; do
-  answer_asks
-  sleep 0.2
-done
-set +e
-wait "$PROOF_PID"
-status=$?
-set -e
-PROOF_PID=""
+proof_await answer_ask
 
 echo "the record: $OUT/instance-entry-proof.json and $OUT/instance-entry-proof.md"
-exit "$status"
+exit "$PROOF_STATUS"

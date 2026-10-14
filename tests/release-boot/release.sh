@@ -24,7 +24,7 @@
 # Environment: RELEASE_BOOT_PORT and RELEASE_BOOT_HOST_API_PORT choose the
 # default listeners (4399 and 4398), RELEASE_BOOT_READY_TIMEOUT the seconds
 # a boot has to answer readiness (180), and RELEASE_BOOT_SKIP_BUILD=1
-# reuses the release a previous run built.
+# reuses the release a previous run built from the same tree.
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 PORT="${RELEASE_BOOT_PORT:-4399}"
@@ -56,11 +56,27 @@ fail() {
 # Building the release runs `mix assets.deploy`, as the image's builder
 # stage does, so it leaves digested assets under apps/cyfr/priv/static/ —
 # build output of a prod build, not of these proofs.
+#
+# A built release records the tree it was built from in
+# `$BUILD_PATH/release-source` (`release_source`), and a reuse
+# (RELEASE_BOOT_SKIP_BUILD=1) is refused unless the tree is still that
+# one: a proof never runs a release that is not the source it checks. The
+# tree is read before the build and again once it has finished, and the
+# release is recorded only when the two readings agree: an edit saved
+# mid-build may postdate the compile, so a release built around it names
+# no tree and is not kept for reuse. The build's own output (what
+# `mix assets.deploy` writes under apps/cyfr/priv/static, and _build) is
+# ignored by git, so it changes neither reading.
 release_build() {
+  local before after
   if [ "${RELEASE_BOOT_SKIP_BUILD:-}" = "1" ] && [ -x "$REL/bin/cyfr" ]; then
+    release_source_matches
     step "reusing the $ADAPTER release at $REL"
   else
     step "building the cyfr release for $ADAPTER (MIX_ENV=prod, as Dockerfile builds it)"
+    rm -f "$BUILD_PATH/release-source"
+    before="$(release_source)" ||
+      fail "the checkout's tree could not be read before the $ADAPTER release built"
     (
       cd "$ROOT" || exit 1
       export MIX_ENV=prod MIX_BUILD_PATH="$BUILD_PATH" CYFR_DATABASE="$ADAPTER"
@@ -69,9 +85,70 @@ release_build() {
         mix assets.deploy &&
         mix release cyfr --overwrite
     ) || fail "the $ADAPTER release did not build"
+    [ -x "$REL/bin/cyfr" ] || fail "no release at $REL/bin/cyfr"
+    after="$(release_source)" ||
+      fail "the checkout's tree could not be read after the $ADAPTER release built"
+    [ "$before" = "$after" ] ||
+      fail "the tree changed while the $ADAPTER release built, so the release is not recorded for reuse; build it again once the tree holds still"
+    release_source >"$BUILD_PATH/release-source.part" &&
+      mv "$BUILD_PATH/release-source.part" "$BUILD_PATH/release-source" ||
+      fail "the release's source could not be recorded"
   fi
+}
 
-  [ -x "$REL/bin/cyfr" ] || fail "no release at $REL/bin/cyfr"
+# The tree the checkout holds, as three lines: `head=` the commit HEAD
+# names, `adapter=` the adapter, and `tree=` one SHA-256 over every
+# difference from HEAD — `git diff HEAD`, staged and unstaged, deletions
+# and renames included — and the path and content of every untracked file
+# git does not ignore, so a source file not yet added changes it too. Each
+# part is hashed apart and named, so no two trees share a text. A file
+# that vanishes between the listing and its read counts as vanished, and a
+# symlink as its target, never its target's content.
+release_source() {
+  local head tree
+  head="$(git -C "$ROOT" rev-parse --verify HEAD)" || return 1
+  tree="$(
+    set -o pipefail
+    cd "$ROOT" || exit 1
+    diff="$(git diff HEAD --binary --no-ext-diff --no-textconv --no-color | sha256sum)" || exit 1
+    untracked="$(mktemp "${TMPDIR:-/tmp}/cyfr-release-source-XXXXXX")" || exit 1
+    trap 'rm -f "$untracked"' EXIT
+    git ls-files -z --others --exclude-standard >"$untracked" || exit 1
+    {
+      printf 'diff\0%s\0' "${diff:0:64}"
+      while IFS= read -r -d '' path; do
+        if [ -L "$path" ]; then
+          printf 'link\0%s\0%s\0' "$path" "$(readlink -- "$path")"
+        elif [ -f "$path" ] && content="$(sha256sum <"$path" 2>/dev/null)"; then
+          printf 'file\0%s\0%s\0' "$path" "${content:0:64}"
+        else
+          printf 'vanished\0%s\0' "$path"
+        fi
+      done <"$untracked"
+    } | sha256sum | cut -c1-64
+  )" || return 1
+  [[ "$head" =~ ^[0-9a-f]{40,64}$ && "$tree" =~ ^[0-9a-f]{64}$ ]] || return 1
+  printf 'head=%s\nadapter=%s\ntree=%s\n' "$head" "$ADAPTER" "$tree"
+}
+
+# Refuse a reuse whose release was built from another tree, naming each
+# part that differs and how to build one from this tree.
+release_source_matches() {
+  local recorded="$BUILD_PATH/release-source" now part differs=""
+  local rebuild="build it again: run without RELEASE_BOOT_SKIP_BUILD=1 (or tests/browser/run.sh, which builds it)"
+  [ -f "$recorded" ] ||
+    fail "the reused release was built from another tree: $recorded is missing, so the tree it was built from is unknown; $rebuild"
+  grep -Eqx 'head=[0-9a-f]{40,64}' "$recorded" && grep -Eqx 'adapter=(sqlite|postgres)' "$recorded" &&
+    grep -Eqx 'tree=[0-9a-f]{64}' "$recorded" && [ "$(wc -l <"$recorded")" -eq 3 ] ||
+    fail "the reused release was built from another tree: $recorded is malformed; $rebuild"
+  now="$(release_source)" || fail "the checkout's tree could not be read, so the reused release cannot be matched to it"
+  for part in head adapter tree; do
+    if [ "$(sed -n "s/^$part=//p" "$recorded")" != "$(printf '%s\n' "$now" | sed -n "s/^$part=//p")" ]; then
+      differs="${differs:+$differs, }$part (built from $(sed -n "s/^$part=//p" "$recorded" | cut -c1-12), now $(printf '%s\n' "$now" | sed -n "s/^$part=//p" | cut -c1-12))"
+    fi
+  done
+  [ -z "$differs" ] ||
+    fail "the reused release was built from another tree: $differs differs; $rebuild"
 }
 
 # ---------------------------------------------------------------------------
@@ -234,7 +311,11 @@ cell_pending() {
 # /api/health/ready on the cell's own listener, the readiness check the
 # image's HEALTHCHECK runs; the log is `$cell/boot.log` (appended). A boot
 # that raises, exits or never answers fails here, naming the cell, with its
-# whole log, and leaves no server behind.
+# whole log, and leaves no server behind. The window is READY_TIMEOUT
+# seconds of wall clock: each probe is bounded (READY_PROBE_SECONDS), and
+# none starts once the window has closed, so a listener that accepts and
+# never answers costs the window and one probe at most.
+READY_PROBE_SECONDS=5
 server_start() {
   local cell="$1" port
   port="$(cell_port "$cell")"
@@ -253,9 +334,9 @@ server_start() {
   SERVER_PIDS+=("$!")
   SERVER_CELLS+=("$cell")
 
-  local ready="" died=""
-  for _ in $(seq 1 "$READY_TIMEOUT"); do
-    if curl -fsS -o "$cell/ready.json" "http://127.0.0.1:$port/api/health/ready" 2>/dev/null; then
+  local ready="" died="" closes=$((SECONDS + READY_TIMEOUT))
+  while [ "$SECONDS" -lt "$closes" ]; do
+    if curl -fsS -m "$READY_PROBE_SECONDS" -o "$cell/ready.json" "http://127.0.0.1:$port/api/health/ready" 2>/dev/null; then
       ready=yes
       break
     fi
@@ -268,7 +349,7 @@ server_start() {
       died=yes
       break
     fi
-    sleep 1
+    [ "$SECONDS" -lt "$closes" ] && sleep 1
   done
 
   if [ "$ready" != yes ]; then
@@ -332,17 +413,42 @@ server_halt() {
   return 1
 }
 
-# Evaluate the fixture (tests/release-boot/fixture.exs) inside the running
-# server, as `bin/cyfr rpc`: `$2...` are its arguments, and its one JSON
-# line is the answer.
+# Evaluate the fixture file `$2` inside cell `$1`'s running server, as
+# `bin/cyfr rpc`: `$4...` are its arguments, each passed as an Elixir
+# string with `\`, `"` and `#` escaped, so no argument is interpolated, and
+# the answer is the value of its last line that begins `$3=`. A fixture
+# that raises prints no such line and answers nothing; its caller decides
+# whether that fails the run.
+cell_fixture() {
+  local cell="$1" file="$2" prefix="$3"
+  shift 3
+  local args="" arg
+  for arg in "$@"; do
+    args="$args\"$(printf '%s' "$arg" | sed 's/[\\"#]/\\&/g')\","
+  done
+  cell_cyfr "$cell" rpc \
+    "{answer, _} = Code.eval_file(\"$file\"); IO.puts(answer.([${args%,}]))" |
+    sed -n "s/^$prefix=//p" | tail -1
+}
+
+# The release-boot fixture (tests/release-boot/fixture.exs) on cell `$1`:
+# `$2...` are its arguments, and its one JSON line is the answer.
 server_fixture() {
   local cell="$1"
   shift
-  local args="" arg
-  for arg in "$@"; do
-    args="$args\"$(printf '%s' "$arg" | sed 's/[\\"]/\\&/g')\","
-  done
-  cell_cyfr "$cell" rpc \
-    "{answer, _} = Code.eval_file(\"$ROOT/tests/release-boot/fixture.exs\"); IO.puts(answer.([${args%,}]))" \
-    | sed -n 's/^FIXTURE=//p' | tail -1
+  cell_fixture "$cell" "$ROOT/tests/release-boot/fixture.exs" FIXTURE "$@"
+}
+
+# The value at the path `$2...` of the JSON document `$1`, each step a key,
+# or an index into a list (`-1`, the last): a string or a number as itself,
+# anything else (an object, a list, a boolean, null) as JSON. A step that
+# is not there fails.
+field() {
+  printf '%s' "$1" | python3 -c '
+import json, sys
+value = json.load(sys.stdin)
+for step in sys.argv[1:]:
+    value = value[int(step)] if isinstance(value, list) else value[step]
+plain = isinstance(value, (str, int, float)) and not isinstance(value, bool)
+print(value if plain else json.dumps(value))' "${@:2}"
 }

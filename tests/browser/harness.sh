@@ -23,8 +23,14 @@
 #
 # The experiments run in the official Playwright image, pinned by digest,
 # with Playwright's library installed from tests/browser/package-lock.json
-# and nothing fetched at test time but that; the container shares this
-# host's network and reaches every server on loopback.
+# once for each lockfile and nothing fetched at test time but that; the
+# container shares this host's network and reaches every server on
+# loopback.
+#
+# A proof that asks the server for its part mid-run does it through its
+# output directory (C9: `ask-<id>.json` written by the proof, answered
+# `answer-<id>.json` here); this file holds that loop (`answer_asks`,
+# `proof_await`), and lib.mjs the proof's side of it (`ask`).
 
 # mcr.microsoft.com/playwright:v1.64.0-noble
 PLAYWRIGHT_IMAGE="mcr.microsoft.com/playwright@sha256:06a9939e57531807f8d5fd76ce44b53165ffb7d7501d87ab10e285c20b1e971f"
@@ -210,20 +216,128 @@ browser_rows() {
 }
 
 # ---------------------------------------------------------------------------
+# A proof's asks
+# ---------------------------------------------------------------------------
+
+# The proof's own container, found by the output directory only this run
+# mounts: stopping the subshell that started it leaves `docker run` and its
+# container behind.
+stop_proof_container() {
+  local ids
+  ids="$(docker ps -q --filter "volume=$OUT" 2>/dev/null || true)"
+  if [ -n "$ids" ]; then
+    # shellcheck disable=SC2086
+    docker stop -t 5 $ids >/dev/null 2>&1 || true
+  fi
+}
+
+# Field `$2...` of the ask file `$1`, as release.sh's `field` prints it.
+asked() {
+  field "$(cat "$1")" "${@:2}"
+}
+
+# Each ask the proof has written into OUT, answered once. The proof's
+# dispatch `$1` is called in this shell, never a subshell, as `$1 ASK ID`,
+# so it may keep state between asks; it leaves its answer in ANSWER, and
+# an empty one is answered `$2` (default: the fixture answered nothing).
+# The ask is removed once its answer is made, before the answer appears:
+# an ask may carry a kit, a cookie, a token or a digest of a typed key, and
+# none outlives the read it was for, and an ask whose answer the proof
+# deletes once read is never answered again. The answer is written aside
+# and renamed, so the proof never reads half of one.
+answer_asks() {
+  local dispatch="$1" empty='{"error":"the fixture answered nothing"}' ask id
+  [ "$#" -lt 2 ] || empty="$2"
+  for ask in "$OUT"/ask-*.json; do
+    [ -e "$ask" ] || continue
+    id="${ask##*/ask-}"
+    id="${id%.json}"
+    [[ "$id" =~ ^[0-9]+$ ]] || continue
+    [ -e "$OUT/answer-$id.json" ] && continue
+    ANSWER=""
+    "$dispatch" "$ask" "$id"
+    [ -n "$ANSWER" ] || ANSWER="$empty"
+    rm -f "$ask"
+    printf '%s\n' "$ANSWER" >"$OUT/answer-$id.part"
+    mv "$OUT/answer-$id.part" "$OUT/answer-$id.json"
+  done
+}
+
+# Answer the asks of the proof running as the background job PROOF_PID
+# (`answer_asks`, with `$@`) until it ends, then wait for it: its exit
+# status is left in PROOF_STATUS, and PROOF_PID is cleared, so a cleanup
+# signals no process that is gone.
+proof_await() {
+  local errexit=0
+  while kill -0 "$PROOF_PID" 2>/dev/null; do
+    answer_asks "$@"
+    sleep 0.2
+  done
+  case $- in *e*) errexit=1 ;; esac
+  set +e
+  wait "$PROOF_PID"
+  PROOF_STATUS=$?
+  [ "$errexit" = 0 ] || set -e
+  PROOF_PID=""
+}
+
+# ---------------------------------------------------------------------------
 # The browsers
 # ---------------------------------------------------------------------------
+
+# Playwright's library, installed from tests/browser/package-lock.json with
+# its scripts off once for each lockfile and image, into the checkout's
+# ignored build output, and the directory it is in printed. Two runs that
+# start at once install it once: the install holds a lock, goes to a
+# directory of its own and is renamed into place complete, and a run uses
+# only a directory that is complete. Sourced without release.sh (the
+# markdown proof), so it reports on stderr itself.
+browser_node_modules() {
+  local base="$ROOT/_build/browser-node-modules" key dir
+  key="$(printf '%s\0%s' "$(sha256sum <"$BROWSER_HOME/package-lock.json")" "$PLAYWRIGHT_IMAGE" | sha256sum | cut -c1-64)"
+  dir="$base/$key"
+  if [ ! -f "$dir/complete" ] && ! {
+    mkdir -p "$base" &&
+      (
+        flock 9 || exit 1
+        [ -f "$dir/complete" ] && exit 0
+        rm -rf "$dir"
+        staging="$(mktemp -d "$base/$key.install.XXXXXX")" || exit 1
+        trap 'rm -rf "$staging"' EXIT
+        cp "$BROWSER_HOME/package.json" "$BROWSER_HOME/package-lock.json" "$staging/" || exit 1
+        printf '\n=== %s\n' "installing Playwright's library from tests/browser/package-lock.json (${key:0:12}), once for this lockfile" >&2
+        docker run --rm -u "$(id -u):$(id -g)" -e HOME=/tmp -e npm_config_update_notifier=false \
+          -v "$staging:/install" -w /install "$PLAYWRIGHT_IMAGE" \
+          npm ci --ignore-scripts --no-audit --no-fund --loglevel=error >&2 || exit 1
+        [ -d "$staging/node_modules/playwright-core" ] || exit 1
+        : >"$staging/complete"
+        mv -T "$staging" "$dir"
+      ) 9>"$base/$key.lock"
+  }; then
+    echo "::error::Playwright's library was not installed from tests/browser/package-lock.json into $dir" >&2
+    return 1
+  fi
+  printf '%s' "$dir"
+}
 
 # Run the experiment `$2` of the directory tests/`$1` in the Playwright
 # image, with `$3...` as its arguments; OUT is mounted at /out, and the
 # console's assets (apps/cyfr/assets) read-only at /assets. The
 # experiment's directory is copied beside tests/browser, so it imports the
-# harness's library as ../browser/lib.mjs, and Playwright through it. Once
-# the run has an authority, it is mounted at /authority and every browser
-# of the container trusts it; WebKit then trusts it alone.
+# harness's library as ../browser/lib.mjs, and Playwright through it from
+# /node_modules, where Playwright's library is mounted read-only
+# (`browser_node_modules`), so no run changes it. Once the run has an
+# authority, it is mounted at /authority and every browser of the
+# container trusts it; WebKit then trusts it alone.
+#
+# The container shares no IPC namespace with the host. Chromium and
+# Firefox keep their shared memory in /dev/shm, whose 64 MB Docker default
+# is too small for them, so the container has 1 GB of its own.
 playwright_run() {
-  local name="$1" script="$2"
+  local name="$1" script="$2" modules
   shift 2
   mkdir -p "$OUT"
+  modules="$(browser_node_modules)" || return 1
   local -a trust=()
   if [ -n "$BROWSER_AUTHORITY" ]; then
     trust=(
@@ -233,16 +347,17 @@ playwright_run() {
       -e PLAYWRIGHT_FIREFOX_POLICIES_JSON=/authority/firefox-policies.json
     )
   fi
-  docker run --rm --network host --ipc=host \
-    -u "$(id -u):$(id -g)" -e HOME=/tmp -e npm_config_update_notifier=false \
+  docker run --rm --network host --shm-size=1g \
+    -u "$(id -u):$(id -g)" -e HOME=/tmp \
     -v "$ROOT/tests:/tests:ro" -v "$ROOT/apps/cyfr/assets:/assets:ro" -v "$OUT:/out" \
+    -v "$modules/node_modules:/node_modules:ro" \
     ${trust[@]+"${trust[@]}"} \
     "$PLAYWRIGHT_IMAGE" \
     sh -c 'set -e
            mkdir -p /tmp/tests
            cp -R /tests/browser /tmp/tests/browser
+           rm -rf /tmp/tests/browser/node_modules
            [ "$0" = browser ] || cp -R "/tests/$0" "/tmp/tests/$0"
-           (cd /tmp/tests/browser && npm ci --ignore-scripts --no-audit --no-fund --loglevel=error)
            cd "/tmp/tests/$0"
            exec node "$@"' \
     "$name" "$script" "$@"

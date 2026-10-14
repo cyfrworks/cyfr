@@ -179,25 +179,6 @@ as the exact set the model holds.
 | `deny_person` | the administrator denies `bea@example.com` at the door on the Settings page (`door.deny`): the whole stored Company AI is the one requested, listed for no one; Bea's whole stored row is the active one read just before the deny with the three columns a deny commits together (`Sanctum.Tenancy.Users`): denied, a denial time set, and her security generation one above; no stored audience lists her; Company AI's card reads "nobody listed" |
 | `admin_focus` | the administrator's athanor switcher, its popover waited for until drawn, links to no athanor of Ana's (no path under her segment, no page naming her athanor as its `a`), nor does the page; a direct visit to Ana's vault lands elsewhere with "You are not a member of that athanor."; Sanctum's focus and refocus of the administrator's session onto Ana's athanor (`Sanctum.Context.focus/2`, `refocus/2`) refuse `not_member` |
 
-## Record
-
-Recorded on 2026-10-05 by `run.sh`, Chromium 153, at both viewports on the
-committed source (`7b33b5d9`; this README's Record section is the only later
-change). Every row held at each. After every step the whole state matched
-the model, with no field unclassified or missing and each entry's payload
-the value its card typed. No key, and no digest of a key or of a typed
-payload, reached a page, an answer or the record.
-
-| Step | desktop (1280×900) | 720×720 | What the record shows |
-|---|---|---|---|
-| `create_entry` | held | held | The store held the two entries alone, each whole entry the one its card requested: Company AI `https` `api.openai.com`, `GET` and `POST`, its two paths, no port, a person cap of 3. Each one's stored payload unsealed to the value its card typed, and its times were inside the run's window. Each create's prompt named `instance_entry.create` and was proven with the passkey. |
-| `first_sign_in` | held | held | The whole stored profile was Ana's active owner `default` of the catalyst, headed by the bootstrap's consent. The whole head was revision 1, versionless, `open_inert`, admitting `["interactive","programmatic"]`, granted by Ana via `bootstrap`. Its policy blob, blob digest, activation and shape and commit digests were the ones the bootstrap derives from the request. It held one stored binding row, the bootstrap's of Company AI, standing, at its requested digest. The loader admitted the root on that head, on the node and activation digest the derived activation names. The vault offered exactly the two entries. |
-| `claim_cap` | held | held | Three admissions. The vault offered Company AI and Company Mail alone and read "3 requests today" and the limit sentence. The fourth claim was refused `connection_cap`, its reset `2026-10-06T00:00:00.000000Z`, the database's next UTC midnight. The use rows read with the state after the step were Ana's 3 and the day's 3, each on the database's today, and no other. |
-| `narrow_audience` | held | held | The save sent `audience_shown=everyone`. The whole stored Company AI was the requested entry listed, with one member row, Bea's. Ana's claim and row binding were refused `not_offered`. Her vault offered Company Mail alone. |
-| `revoke` | held | held | The claim before was admitted, and the one after refused `entry_unavailable` (revoked). The whole stored Company Mail was the requested entry, used and revoked. Its use rows were Ana's 1 and the day's 1 on the database's today. Her vault offered nothing. |
-| `deny_person` | held | held | The whole stored Company AI was the requested entry, with no member row. Bea's whole row was denied, with a denial time inside the run's window and her security generation 2 from 1. The card read "nobody listed". |
-| `admin_focus` | held | held | The switcher's popover drew with the administrator's own athanor alone, so there was no row to follow, and no link on the page led into Ana's. The visit landed on the administrator's own chat with "You are not a member of that athanor.". Focus and refocus refused `not_member`, the session staying in the administrator's own athanor. |
-
 ## Shown elsewhere
 
 The steps that need an execution engine, a model or a runner are shown by

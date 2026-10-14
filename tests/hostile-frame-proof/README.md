@@ -55,6 +55,13 @@ elsewhere (`launchBrowser`), not in the headless shell the rest of the
 proof runs in: the headless shell keeps a hidden frame's pointer lock,
 where Chrome and the full build release it as the frame is hidden.
 
+The prompts over the fullscreen frame are held in Chromium alone. The
+harness's headless Firefox and WebKit grant a frame no fullscreen and
+pointer lock from a click, so there those attempts are recorded not
+applicable, where in Chromium the same outcome fails the proof. Real
+Firefox is therefore not verified: whether it releases a hidden frame's
+pointer lock, as Chrome does, is not driven here.
+
 Every attempt has one column, and the proof fails when an attempt leaves it:
 
 - **allowed** — the bundle's own function, which the sandbox must not break;
@@ -123,28 +130,3 @@ destination only to a secure origin, which the harness's is not, so
 | Attempt | Why |
 |---|---|
 | `suspended_on_another_member` | an action after the frame was suspended on another member: a browser cell runs one member on SQLite, so the cluster suite proves it (`apps/cyfr/test/cluster/frame_suspension_test.exs`): a frame suspended on one member is refused at its credential's next use on the other, with the control channel up and with it cut |
-
-## Record
-
-Recorded on 2026-10-01 on `p1` (`tests/browser/README.md`) by `run.sh`, each
-cell private / public; the prompts over the fullscreen frame are one cell
-each, Chromium's in its full build.
-
-| Attempt | Chromium 153 | Firefox 155 | WebKit 26.6 |
-|---|---|---|---|
-| every allowed attempt | held / held | held / held | held / held |
-| every refused attempt | held / held | held / held | held / held |
-| `sibling_message` | held / held | held / held | held / held |
-| `shared_credential_url` | held / not applicable | held / not applicable | held / not applicable |
-| `self_navigation_site` | held / held | held / held | held / held |
-| `self_navigation_session_page` | held / held | held / held | held / held |
-| session cookie sent on `self_navigation_site` | no | no | yes |
-| `session_blind_page` | held (asked of the server) | | |
-| `frame_request_refused` | held (asked of the server) | | |
-| `grant_prompt_fullscreen` | held | not applicable: the headless build granted the frame no fullscreen from a click | not applicable: as for Firefox |
-| `confirmation_prompt_fullscreen` | held | not applicable: as above | not applicable: as above |
-| `pointer_lock_retaken` | held; the frame held the pointer over the prompt (lost it 3 times, took it 4); focus in the prompt and moved by Tab; the frame's six tries changed nothing; Escape ended the lock and its next ask was refused (`SecurityError`); a second Escape dismissed the prompt, the frame told it closed unsaved | not applicable: Chromium alone | not applicable: Chromium alone |
-
-Real Firefox is not verified: the harness's headless Firefox grants a
-frame no fullscreen from a click, so whether a real Firefox releases a
-hidden frame's pointer lock, as Chrome does, has not been driven here.

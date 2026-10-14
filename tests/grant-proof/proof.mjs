@@ -28,10 +28,11 @@
 //
 // Usage: node proof.mjs HOMES_FILE SEGMENT COOKIE OUT_DIR
 
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
-import { pageTokens, recordText, redact, redactFrames } from "./redact.mjs";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { launchBrowser, readHomes, signedIn, sleep, startProxy, waitFor } from "../browser/lib.mjs";
+import {
+  ask as askRunSh, launchBrowser, pageTokens, readHomes, recordText, redact, redactFrames, signedIn, startProxy, waitFor,
+} from "../browser/lib.mjs";
 
 const [homesFile, segment, cookie, outDir] = process.argv.slice(2);
 if (!homesFile || !segment || !cookie || !outDir) {
@@ -58,19 +59,7 @@ function row(step, held, what, detail) {
   return !!held;
 }
 
-let asked = 0;
-async function ask(request, timeoutMs = 120_000) {
-  const id = ++asked;
-  const answer = join(outDir, `answer-${id}.json`);
-  writeFileSync(join(outDir, `ask-${id}.part`), JSON.stringify(request));
-  renameSync(join(outDir, `ask-${id}.part`), join(outDir, `ask-${id}.json`));
-  const deadline = Date.now() + timeoutMs;
-  while (!existsSync(answer)) {
-    if (Date.now() > deadline) throw new Error(`run.sh never answered ${request.op}`);
-    await sleep(100);
-  }
-  return JSON.parse(readFileSync(answer, "utf8"));
-}
+const ask = (request, options) => askRunSh(request, { outDir, ...options });
 
 // The grant prompt for the tincture, opened from its Components row.
 async function openGrant(page) {
@@ -155,7 +144,7 @@ async function main() {
     if (!hostNarrowed || !narrowedShown) {
       await page.screenshot({ path: join(outDir, "prism-grant.png"), fullPage: true });
       // The page's last frames, with every value the proof knows to be
-      // secret replaced before it is written (redact.mjs).
+      // secret replaced before it is written (lib.mjs `redact`).
       const known = [cookie, ...(await pageTokens(page))];
       writeFileSync(join(outDir, "prism-grant-frames.json"),
         JSON.stringify(redactFrames(frames.slice(-40), known), null, 1));

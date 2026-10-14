@@ -56,28 +56,7 @@ outcome the glass draws under a prompt as it draws it: a confirmed record
 leaves the glass's pending list at its next read, taking the prompt and
 its outcome with it, often within the frame that drew them.
 
-## Record
-
-Recorded on 2026-10-03 on `p1` by `run.sh`, certificates of 20 seconds,
-Chromium 153.0.8010.12.
-
-| Step | Chromium 153 | What the record shows |
-|---|---|---|
-| `passkey` | held | registered active under the first-method rule; one credential for `home.test` |
-| `pair` | held | the phone's Prism showed `pairing.begin` and "a browser signed in with github" before the proof; the link `https://home.test/pair#code=…` and its QR |
-| `glass` | held | the address left at `https://home.test/pair`; `connect`, `proof`, then the stream's open and the pending read |
-| `confirm` | held | the glass showed `vault.create` and the entry's name, never the typed value, then drew its outcome "Confirmed. The client that asked completes the change."; the entry was made |
-| `fresh` | held | the replayed assertion refused (`unauthenticated`); the desktop's repeat left one request waiting and nothing made; a fresh assertion, then the entry |
-| `intent` | held | `confirmation.pending`, 100 in a row: p50 2.6 ms, p95 3.1 ms, p99 3.2 ms; earlier runs p50 2.9 ms, p95 3.2 ms, p99 3.8 ms, and p50 2.0 ms, p95 2.3 ms, p99 2.6 ms |
-| `sleep` | held | woke 4 s past the expiry; its renewal dropped while asleep; the stream revoked and the channel closed `4408`; first frame after waking `renew`, no intent before standing, a new grant, the third request shown; the expired certificate refused `4408` |
-| `revoke` | held | `pairing.revoke` confirmed on the glass; the stream revoked, then the client, closed `4403`; no longer listed; key and certificate erased; the last certificate refused `4403` |
-| `viewport` | held | at 720×720: `pairing.begin` read and confirmed in the Prism's system layer, the glass, `vault.create` confirmed on it with its outcome drawn and the entry made, the glass reconnected, `pairing.revoke` confirmed on it; the consent prompt and the glass's five screens had no control under 24×24 CSS px, no text under 12 px and no overflow |
-
-The Prism page around the prompt at 720×720 is measured and not held;
-at the run of 2026-10-03 it had no control under 24×24 CSS px, no text
-under 12 px and no overflow (the picker's page dots sit in 24 px touch
-targets, and the shell's chrome and the "private" label are 12 px).
-
 The device-intent measurement is one glass on SQLite, one intent at a
 time, in Chromium through the harness's TLS front on a shared host: a
-baseline, not a measurement under concurrent load.
+baseline, not a measurement under concurrent load. The record carries its
+p50, p95 and p99; no bound is held to them.

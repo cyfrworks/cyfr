@@ -69,8 +69,9 @@ CYFR_DATABASE=sqlite mix compile --warnings-as-errors && mix assets.deploy
 `approval-proof.md` into `PROOF_OUT`. A failed run also leaves
 `approval-proof-frames.json`, the page's last socket frames, and
 `approval-proof.png`, the page, unless the page could then show a key she
-typed. Frames, records, progress lines and error output replace every known
-secret with the shared fixed marker (`tests/grant-proof/redact.mjs`): the
+typed. Frames, records, progress lines and error output pass through the
+harness's one redaction (`redact` in `tests/browser/lib.mjs`), which
+replaces every known secret with its fixed marker, `[secret]`: the
 session cookie, each typed key, its SHA-256 value, each typed-payload digest,
 and any page tokens already collected. Text is redacted before truncation.
 Comparisons and material detection use the original values in memory, so
@@ -90,7 +91,7 @@ the moment it fills a key in until it has read, on the page, that no field's
 value and none of the page's text holds any key it typed; a step that made an entry
 holds only once each key is read gone. A run that fails while the flag is
 set writes no screenshot, and its record's `screenshot` names the flag and
-says the screenshot was withheld, with redact.mjs's marker. A run that fails
+says the screenshot was withheld, with that marker. A run that fails
 at any other moment keeps its screenshot.
 
 ## Steps
@@ -259,28 +260,6 @@ every commit.
 | `lifetime_decisions` | the use path admits the app's own calls, admits the once binding for root A and again for root A, refuses it for root B (`grant_expired`), and admits the five-minute binding; the once row is then consumed by root A and each entry used; after a real wait, bounded at 330 s, until the database's time is past the until, the five-minute binding is refused (`grant_expired`) and the standing one still admitted; the loaded OpenAI edge grants GET alone; nothing is sent |
 | `named_prompt` | on a thread of hers, opened in the chat, the fixture announces the setup a launch naming the account "Personal" ends on; the grant prompt opens on the app's own calls with a "Personal" row of that fixed name, both OpenAI entries offered and none pressed; the binding whose until passed opens with no lifetime pressed, the used once binding stays once with "Grant once again" not pressed, and the OpenAI catalyst's network row opens on the head's narrowing, GET given and POST not, "GET only" pressed; she binds OpenAI Home as "Personal" and grants Anthropic until revoked, and narrows nothing herself; the pane then says "Granted. The turn that asked has ended — send your message again to run it."; revision 4 holds the default, the account beside it, the once binding still consumed by root A, and Anthropic until revoked, its blob still GET only on the OpenAI edge; "Personal" now resolves to OpenAI Home; no turn and no execution exists |
 | `revocation` | she revokes OpenAI Work on the Vault page, which says one profile loses access at its next run; the loader still admits the root, whole; the next use of the app's own calls is refused (`entry_unavailable`, revoked) and the "Personal" account beside it is still admitted; the whole state holds OpenAI Work revoked |
-
-## Record
-
-Recorded on 2026-10-07 by `run.sh`, Chromium 153, at both viewports, on
-`893f2daefbc5a5a23b70a8e3ff57c572de5f1cde` with this proof's four-file
-candidate. Every row held at each. After every step
-the whole state matched the model, with no field unclassified or missing and
-each entry's payload the value she typed. No key, and no digest of a key or
-of a typed payload, reached an answer or the record, and each key she typed
-was read gone from the page once its entry was made. No turn and no
-execution existed at any step. Every use answer named, in its place, the
-request it decides, and every previewed lifetime was compared on its own
-row's binding.
-
-| Step | desktop (1280×900) | 720×720 | What the record shows |
-|---|---|---|---|
-| `provided_preview` | held | held | The Grok need read "Provided by local, the app's public configuration, sent only to https://api.x.ai, methods GET, POST, paths /v1/.", with no entry, "Change", "Connect" or account offered. Revision 1 held no binding row. The loader admitted the root on it, whole, its Grok edge's vault exactly the provided configuration. The use path's answers, in order, named `POST https://api.x.ai/v1/chat/completions` admitted and `GET https://api.x.ai/v2/models` refused (`destination_mismatch`). |
-| `account_choices` | held | held | Connect's prompts read "Connect your openai.com account" and "Connect your anthropic.com account", prefilled with the provider as the name and the need's host. The Vault page's provider choice offered the providers of the athanor's components' key needs, "openai.com (api_key)" among them. Reopened, the grant pressed OpenAI Work with "Change" on both OpenAI needs, and Anthropic alone with no "Change". After she changed the OpenAI edge, the preview named OpenAI Work, OpenAI Home and Anthropic on their edges, its four rows, Grok's included, each until revoked, and removed nothing. Each key she typed was read gone from the page. Each of the three entries was the one its request implies, holding what she typed; OpenAI Work and Anthropic were their providers' defaults. |
-| `commit_bindings` | held | held | The re-grant opened each binding until revoked. The five-minute until she was shown was five minutes from her click, to the second, inside the database's clock around it. The OpenAI row gave GET and not POST, "GET only" pressed. Revision 3 held the three bindings standing, once and until that instant. |
-| `lifetime_decisions` | held | held | The uses answered, each naming its request, admitted (the app's own calls, root A), admitted and admitted again (the once binding, root A), `grant_expired` (the once binding, root B) and admitted (the five-minute binding, root A), and the once row then named root A. After a real wait past the previewed expiry at each viewport, the five-minute binding was refused `grant_expired` and the standing one admitted. The loaded OpenAI edge's egress was `api.openai.com`, `https`, GET alone, no private range. |
-| `named_prompt` | held | held | The resolution answered `connection_not_granted` and the announcement went out. The prompt opened with a "Personal" row of that fixed name, OpenAI Home and OpenAI Work offered in that order and neither pressed; the Anthropic binding with no lifetime pressed; the OpenAI edge once, "Grant once again" not pressed; and the OpenAI row GET only, as the head held it. Revision 4 held the default, "Personal" on OpenAI Home, the once row still naming root A, and Anthropic until revoked. The pane said "Granted. The turn that asked has ended — send your message again to run it.", and "Personal" resolved to OpenAI Home. |
-| `revocation` | held | held | The Vault page said "Entry revoked — 1 profile(s) lose access at next run.". The root was still admitted, whole. The next use of the app's own calls was refused `entry_unavailable` (revoked), and "Personal" was admitted. OpenAI Work was stored revoked. |
 
 ## Shown elsewhere
 

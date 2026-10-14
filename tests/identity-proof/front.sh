@@ -47,31 +47,42 @@ identity_front_control() {
 # (the run's authority issued its certificate when the cell became a home,
 # `browser_home`), at the address its directory was declared at. The
 # container is named for this run and that directory, and removed by
-# `identity_front_stop`.
+# `identity_front_stop`. Its health answer carries a token made for this
+# start, so a stale or concurrent front on the same address, which
+# answers without it, is never taken for this one: the start fails once
+# its own container has stopped (it could not listen) or a minute passes.
 identity_front_start() {
-  local cell="$1" host port name control
+  local cell="$1" host port name control token health
   host="$(sed -n 's/^CYFR_HOST=//p' "$cell/.env" | tail -1)"
   port="$(cell_port "$cell")"
   [ -n "${IDENTITY_FRONTS[$host]:-}" ] || fail "no directory $host is declared: identity_directory comes first"
   [ -f "$BROWSER_AUTHORITY/$host.pem" ] || fail "no certificate for $host: make $cell a home first"
   name="cyfr-identity-front-$$-${host//./-}"
   control="$(identity_front_control "$host")"
+  token="$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')"
+  [[ "$token" =~ ^[0-9a-f]{32}$ ]] || fail "no token for the front of $host"
   docker rm -f "$name" >/dev/null 2>&1 || true
   docker run -d --name "$name" --network host -u 0 \
     -v "$BROWSER_AUTHORITY:/authority:ro" -v "$ROOT/tests/identity-proof:/front:ro" \
     "$PLAYWRIGHT_IMAGE" \
     node /front/front.mjs "${IDENTITY_FRONTS[$host]}:443" "${IDENTITY_FRONT_CONTROLS[$host]}" "$host" \
-    "/authority/$host.pem" "/authority/$host.key" "$port" >/dev/null ||
+    "/authority/$host.pem" "/authority/$host.key" "$port" "$token" >/dev/null ||
     fail "the front of $host did not start"
   IDENTITY_FRONT_NAMES[$host]="$name"
-  for _ in $(seq 1 60); do
-    if curl -fsS -m 2 -o /dev/null "$control/health" 2>/dev/null; then
+  local closes=$((SECONDS + 60))
+  while [ "$SECONDS" -lt "$closes" ]; do
+    health="$(curl -fsS -m 2 "$control/health" 2>/dev/null)" || health=""
+    if [ -n "$health" ] && [ "$(field "$health" token 2>/dev/null)" = "$token" ]; then
       return 0
+    fi
+    if [ "$(docker inspect -f '{{.State.Running}}' "$name" 2>/dev/null)" != true ]; then
+      docker logs "$name" >&2 || true
+      fail "the front of $host stopped before it answered on $control${health:+, where another front answers}"
     fi
     sleep 1
   done
   docker logs "$name" >&2 || true
-  fail "the front of $host did not answer on $control"
+  fail "the front of $host did not answer on $control${health:+: another front answers there}"
 }
 
 # Break directory `$1` on purpose (front.mjs): `$2` is none, down,
