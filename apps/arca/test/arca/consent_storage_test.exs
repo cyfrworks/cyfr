@@ -9,6 +9,7 @@ defmodule Arca.ConsentStorageTest do
 
   alias Arca.ConsentStorage
   alias Arca.ProfileStorage
+  alias Arca.Test.Writers
   alias Arca.VaultStorage
 
   @key "reagent:local.storage-test|@ingress|default"
@@ -24,7 +25,7 @@ defmodule Arca.ConsentStorageTest do
 
   defp profile!(athanor, id) do
     {:ok, profile} =
-      ProfileStorage.put(%{
+      Writers.put_profile(%{
         id: id,
         athanor_id: athanor,
         source_ref: "reagent:local.storage-test",
@@ -204,7 +205,7 @@ defmodule Arca.ConsentStorageTest do
             {"unasked", "needs_consent", false, "needs_consent"}
           ] do
         {:ok, profile} =
-          ProfileStorage.put(%{
+          Writers.put_profile(%{
             id: "prof_reactivate_#{label}",
             athanor_id: athanor,
             source_ref: "reagent:local.reactivate-#{label}",
@@ -426,7 +427,7 @@ defmodule Arca.ConsentStorageTest do
       assert String.length(key) > 255
 
       {:ok, profile} =
-        ProfileStorage.put(%{
+        Writers.put_profile(%{
           id: "prof_bk_#{System.unique_integer([:positive])}",
           athanor_id: athanor,
           source_ref: @node,
@@ -549,7 +550,7 @@ defmodule Arca.ConsentStorageTest do
       _fine = profile!(athanor, "prof_entries_fine")
 
       {:ok, _damaged} =
-        ProfileStorage.put(%{
+        Writers.put_profile(%{
           id: "prof_entries_damaged",
           athanor_id: athanor,
           source_ref: "reagent:local.storage-test",
@@ -667,7 +668,7 @@ defmodule Arca.ConsentStorageTest do
   describe "active_heads/2" do
     defp granted!(athanor, id, status, refs \\ []) do
       {:ok, _profile} =
-        ProfileStorage.put(%{
+        Writers.put_profile(%{
           id: id,
           athanor_id: athanor,
           source_ref: "reagent:local.#{id}",
@@ -802,7 +803,7 @@ defmodule Arca.ConsentStorageTest do
   describe "active_head_policies/2" do
     defp head_in!(athanor, id, status) do
       {:ok, _profile} =
-        ProfileStorage.put(%{
+        Writers.put_profile(%{
           id: id,
           athanor_id: athanor,
           source_ref: "reagent:local.#{id}",
@@ -1330,7 +1331,7 @@ defmodule Arca.ConsentStorageTest do
     test "two via rows that share nothing carry no consumption across",
          %{athanor: athanor} do
       {:ok, profile} =
-        ProfileStorage.put(%{
+        Writers.put_profile(%{
           id: "prof_via_carry",
           athanor_id: athanor,
           source_ref: "reagent:local.via-carry",
@@ -1621,7 +1622,7 @@ defmodule Arca.ConsentStorageRaceTest do
 
       if write == :revise do
         {:ok, _} =
-          Arca.ProfileStorage.put(%{
+          Arca.Test.Writers.put_profile(%{
             id: profile,
             athanor_id: athanor,
             source_ref: "reagent:local.race-#{profile}",
@@ -1651,7 +1652,7 @@ defmodule Arca.ConsentStorageRaceTest do
       profile = "prof_race_#{round}_#{System.unique_integer([:positive])}"
 
       {:ok, _} =
-        Arca.ProfileStorage.put(%{
+        Arca.Test.Writers.put_profile(%{
           id: profile,
           athanor_id: athanor,
           source_ref: "reagent:local.race-#{profile}",

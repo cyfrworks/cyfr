@@ -113,7 +113,7 @@ defmodule Locus.Runtime.ExecutorRateLimitTest do
       assert retry_after > 0
 
       # Clean up
-      Opus.Rates.reset(Context.actor(ctx), component_ref)
+      :ok = Arca.RateWindows.clear(Context.actor(ctx), component_ref)
     end
 
     test "rate limiter tracks per athanor and component", %{ctx: ctx} do
@@ -135,8 +135,8 @@ defmodule Locus.Runtime.ExecutorRateLimitTest do
                Opus.Rates.check(Context.actor(ctx), component_ref_a, limit_source)
 
       # Clean up
-      Opus.Rates.reset(Context.actor(ctx), component_ref_a)
-      Opus.Rates.reset(Context.actor(ctx), component_ref_b)
+      :ok = Arca.RateWindows.clear(Context.actor(ctx), component_ref_a)
+      :ok = Arca.RateWindows.clear(Context.actor(ctx), component_ref_b)
     end
 
     test "unlimited requests when no rate limit configured", %{ctx: ctx} do
@@ -169,7 +169,7 @@ defmodule Locus.Runtime.ExecutorRateLimitTest do
                Opus.Rates.status(Context.actor(ctx), component_ref, limit_source)
 
       # Clean up
-      Opus.Rates.reset(Context.actor(ctx), component_ref)
+      :ok = Arca.RateWindows.clear(Context.actor(ctx), component_ref)
     end
   end
 end

@@ -166,7 +166,7 @@ defmodule Locus.Runtime.ExecutorCancelPenaltyTest do
     id = Prima.UUID7.execution_id()
 
     {:ok, _} =
-      Arca.Execution.record_start(%{
+      Arca.Test.Writers.record_start(%{
         id: id,
         reference: "catalyst:local.test:1.0.0",
         user_id: ctx.user_id,

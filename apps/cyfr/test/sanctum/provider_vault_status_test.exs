@@ -90,7 +90,7 @@ defmodule Sanctum.ProviderVaultStatusTest do
     {:ok, digest} = Sanctum.VaultReader.binding_digest(entry)
 
     {:ok, profile} =
-      Arca.ProfileStorage.put(%{
+      Arca.Test.Writers.put_profile(%{
         athanor_id: ctx.athanor_id,
         source_ref: "formula:local.status-consumer",
         kind: "owner",

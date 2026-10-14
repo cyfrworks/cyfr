@@ -30,7 +30,7 @@ defmodule Opus.UsageTest do
     id = "exec_usage_#{System.unique_integer([:positive])}"
 
     {:ok, row} =
-      Arca.Execution.record_start(
+      Arca.Test.Writers.record_start(
         Map.merge(
           %{
             id: id,

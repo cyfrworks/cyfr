@@ -582,7 +582,7 @@ defmodule Cyfr.SharedLimitsTest do
 
   defp fresh_limits!(ctx) do
     for bucket <- [@stub_ref, "oauth:" <> @stub_ref],
-        do: :ok = Rates.reset(Sanctum.Context.actor(ctx), bucket)
+        do: :ok = Arca.RateWindows.clear(Sanctum.Context.actor(ctx), bucket)
 
     Slots.forgive_unreaped(@slots, ctx.athanor_id)
   end

@@ -79,7 +79,7 @@ defmodule PrismWeb.SignInTraceTest do
     end)
 
     # The sign-in budgets are node-wide counters another test may have spent.
-    Prima.RateLimiter.reset()
+    Prima.Test.RateLimiter.reset!()
 
     # A fill still running when the paths are restored would provision
     # against the repository's own seed and data trees.

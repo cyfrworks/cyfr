@@ -32,7 +32,7 @@ defmodule Sanctum.Providers.PersonTest do
 
   setup tags do
     Cyfr.Test.Sandbox.setup!(tags)
-    Prima.RateLimiter.reset()
+    Prima.Test.RateLimiter.reset!()
     directory = Application.fetch_env(:sanctum, :directory_url)
 
     on_exit(fn ->
@@ -41,7 +41,7 @@ defmodule Sanctum.Providers.PersonTest do
         :error -> Application.delete_env(:sanctum, :directory_url)
       end
 
-      Prima.RateLimiter.reset()
+      Prima.Test.RateLimiter.reset!()
     end)
 
     Application.put_env(:sanctum, :directory_url, @unreachable)

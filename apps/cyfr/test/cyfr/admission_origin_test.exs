@@ -96,7 +96,7 @@ defmodule Cyfr.AdmissionOriginTest do
 
   setup do
     Arca.Cache.init()
-    Prima.RateLimiter.reset()
+    Prima.Test.RateLimiter.reset!()
     _athanor = Sanctum.TestContext.athanor!()
     Sanctum.TestContext.ready!(Sanctum.TestContext.athanor_id())
 
@@ -107,7 +107,7 @@ defmodule Cyfr.AdmissionOriginTest do
 
     on_exit(fn ->
       Prima.Slots.forgive_unreaped(Opus.Slots, Sanctum.TestContext.local().athanor_id)
-      Prima.RateLimiter.reset()
+      Prima.Test.RateLimiter.reset!()
       File.rm_rf!(base)
 
       for {{app, key}, value} <- prev do
@@ -876,7 +876,7 @@ defmodule Cyfr.AdmissionOriginTest do
     declared!(ctx, name)
 
     {:ok, _} =
-      Arca.ProfileStorage.put(%{
+      Arca.Test.Writers.put_profile(%{
         id: "prof_#{name}",
         athanor_id: ctx.athanor_id,
         source_ref: "tincture:local.#{name}",

@@ -22,8 +22,8 @@ defmodule Emissary.Web.DirectoryControllerTest do
   @directory "https://dir.example"
 
   setup do
-    Prima.RateLimiter.reset()
-    on_exit(&Prima.RateLimiter.reset/0)
+    Prima.Test.RateLimiter.reset!()
+    on_exit(&Prima.Test.RateLimiter.reset!/0)
     Cyfr.Test.Settings.put("directory_serve", "writer")
     :ok
   end

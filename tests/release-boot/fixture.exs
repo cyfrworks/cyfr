@@ -18,11 +18,11 @@
 #       The files under DIR written into the person's athanor as the local
 #       tincture NAME at 1.0.0 and registered from the tree
 #       (`Compendium.Registry.register_from_arca/3`), as a locally built
-#       tincture is. `public` also writes the active public profile that
-#       `profile.publish` leaves once its consent is committed, which is
-#       what the `/t/` route asks of a public tincture; the consent flow
-#       itself is a person's act in the console and is not what these
-#       proofs are about.
+#       tincture is. `public` also leaves the active public profile the
+#       `/t/` route asks of a public tincture, unless one is there, written
+#       by `Arca.Test.Writers.put_profile/1` loaded from the checkout (the
+#       release refuses the consent walk that `profile.publish` ends, see
+#       below); the fixture fails unless the profile is there after.
 #
 #   thread USER_ID TEXT
 #       A thread in the person's athanor holding one message, TEXT.
@@ -115,9 +115,20 @@ fn args ->
       {:ok, profiles} = Arca.ConsentStorage.profiles(actor, ref)
       public? = Enum.any?(profiles, &(&1.kind == :public and &1.status == :active))
 
+      # The release refuses the consent walk's first step here, the plan:
+      # `{:unavailable, "Components"}`, because the components projection
+      # is still behind the units the sign-in's seeding just copied
+      # (`Compendium.ProjectionReconciler`'s read barrier answers
+      # `:projection_unavailable` and never waits). So the profile the walk
+      # would leave is written as the suite writes it: a release compiles
+      # no test support, and the writer is loaded from the checkout, here
+      # and nowhere else, so a copy of this file that runs the other
+      # commands needs none of it.
       if visibility == "public" and not public? do
+        Code.require_file(Path.expand("../../apps/arca/test/support/writers.ex", __DIR__))
+
         {:ok, _profile} =
-          Arca.ProfileStorage.put(%{
+          Arca.Test.Writers.put_profile(%{
             id: "prof_" <> Base.encode16(:crypto.strong_rand_bytes(8), case: :lower),
             athanor_id: ctx.athanor_id,
             source_ref: "tincture:local.#{name}",
@@ -125,6 +136,13 @@ fn args ->
             label: "public",
             status: "active"
           })
+      end
+
+      if visibility == "public" do
+        {:ok, profiles} = Arca.ConsentStorage.profiles(actor, ref)
+
+        unless Enum.any?(profiles, &(&1.kind == :public and &1.status == :active)),
+          do: raise("tincture #{ref} holds no active public profile")
       end
 
       answer.(%{

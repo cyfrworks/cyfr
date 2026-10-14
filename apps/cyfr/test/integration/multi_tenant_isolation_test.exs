@@ -182,7 +182,7 @@ defmodule MultiTenantIsolationTest do
       common_user = "user_shared"
 
       {:ok, _} =
-        Arca.Execution.record_start(%{
+        Arca.Test.Writers.record_start(%{
           id: "exec_t1_" <> Integer.to_string(System.unique_integer([:positive])),
           reference: "f:local.h",
           input_hash: "ih1",
@@ -194,7 +194,7 @@ defmodule MultiTenantIsolationTest do
         })
 
       {:ok, _} =
-        Arca.Execution.record_start(%{
+        Arca.Test.Writers.record_start(%{
           id: "exec_t2_" <> Integer.to_string(System.unique_integer([:positive])),
           reference: "f:local.h",
           input_hash: "ih2",

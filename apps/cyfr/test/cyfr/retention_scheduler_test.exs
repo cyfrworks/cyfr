@@ -589,7 +589,7 @@ defmodule Cyfr.RetentionSchedulerTest do
 
     for i <- 1..3 do
       {:ok, _} =
-        Arca.Execution.record_start(%{
+        Arca.Test.Writers.record_start(%{
           id: "#{athanor_id}_exec_#{i}",
           request_id: "req_retention",
           user_id: actor.user_id,

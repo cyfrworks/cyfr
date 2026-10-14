@@ -14,7 +14,7 @@ defmodule CyfrWeb.Plugs.MCPRateLimitTest do
     # hears that test's owner exit: a row written there is rolled back
     # with it, and a read there fails.
     Cyfr.Test.Sandbox.setup!(tags)
-    Prima.RateLimiter.reset()
+    Prima.Test.RateLimiter.reset!()
 
     original_trust = Application.get_env(:sanctum, :trust_x_forwarded_for)
 
@@ -27,7 +27,7 @@ defmodule CyfrWeb.Plugs.MCPRateLimitTest do
       if original_trust != nil,
         do: Application.put_env(:sanctum, :trust_x_forwarded_for, original_trust)
 
-      Prima.RateLimiter.reset()
+      Prima.Test.RateLimiter.reset!()
     end)
 
     :ok

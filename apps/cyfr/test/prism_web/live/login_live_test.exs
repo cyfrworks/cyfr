@@ -248,10 +248,10 @@ defmodule PrismWeb.LoginLiveTest do
       tls = DirectoryServer.tls()
       DirectoryServer.listen!()
       DirectoryServer.seam!(tls)
-      Prima.RateLimiter.reset()
+      Prima.Test.RateLimiter.reset!()
 
       on_exit(fn ->
-        Prima.RateLimiter.reset()
+        Prima.Test.RateLimiter.reset!()
         Arca.Cache.delete_match(Arca.Cache.Keys.match_identity_unreachable())
       end)
 

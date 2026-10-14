@@ -43,11 +43,11 @@ defmodule Sanctum.PairingTest do
     else
       Arca.Test.Sandbox.setup!(tags)
       Arca.Cache.init()
-      Prima.RateLimiter.reset()
+      Prima.Test.RateLimiter.reset!()
       directory = Application.get_env(:sanctum, :directory_url)
 
       on_exit(fn ->
-        Prima.RateLimiter.reset()
+        Prima.Test.RateLimiter.reset!()
 
         if directory,
           do: Application.put_env(:sanctum, :directory_url, directory),
@@ -934,7 +934,7 @@ defmodule Sanctum.PairingTest do
 
       for n <- 1..200 do
         # The first half reach one member, the second another.
-        if n == 101, do: Prima.RateLimiter.reset()
+        if n == 101, do: Prima.Test.RateLimiter.reset!()
 
         assert Pairing.complete(
                  glass("10.2.#{div(n, 250)}.#{rem(n, 250)}"),
@@ -950,7 +950,7 @@ defmodule Sanctum.PairingTest do
                })
 
       assert retry_after_ms in 1..60_000
-      Prima.RateLimiter.reset()
+      Prima.Test.RateLimiter.reset!()
 
       assert {:error, {:rate_limited, _}} =
                Pairing.complete(glass("10.3.0.2"), :crypto.strong_rand_bytes(16), %{
@@ -1019,7 +1019,7 @@ defmodule Sanctum.PairingTest do
       assert retry_after_ms in 1..60_000
 
       # On another member too, and no address was charged for any of it.
-      Prima.RateLimiter.reset()
+      Prima.Test.RateLimiter.reset!()
 
       assert {:error, {:rate_limited, _}} =
                Pairing.complete(glass("10.7.1.2"), invitation.invitation_secret, %{

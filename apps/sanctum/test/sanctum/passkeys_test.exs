@@ -46,8 +46,8 @@ defmodule Sanctum.PasskeysTest do
   setup tags do
     Arca.Cache.init()
     Arca.Test.Sandbox.setup!(tags)
-    Prima.RateLimiter.reset()
-    on_exit(fn -> Prima.RateLimiter.reset() end)
+    Prima.Test.RateLimiter.reset!()
+    on_exit(fn -> Prima.Test.RateLimiter.reset!() end)
     :ok
   end
 

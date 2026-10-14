@@ -6,6 +6,7 @@ defmodule Arca.Retention.ExecutionsAgeTest do
 
   alias Arca.Execution
   alias Arca.Retention.ExecutionsAge
+  alias Arca.Test.Writers
 
   setup tags do
     Cyfr.Test.Sandbox.setup!(tags)
@@ -17,7 +18,7 @@ defmodule Arca.Retention.ExecutionsAgeTest do
     started = DateTime.add(DateTime.utc_now(), -days_ago, :day)
 
     {:ok, _} =
-      Execution.record_start(%{
+      Writers.record_start(%{
         id: id,
         reference: "catalyst:local.test:1.0.0",
         user_id: ctx.user_id,
@@ -29,7 +30,7 @@ defmodule Arca.Retention.ExecutionsAgeTest do
 
     if status != "running" do
       {:ok, _} =
-        Execution.record_complete(
+        Writers.record_complete(
           Sanctum.Context.actor(ctx),
           id,
           %{

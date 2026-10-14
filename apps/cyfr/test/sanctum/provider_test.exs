@@ -450,7 +450,7 @@ defmodule Sanctum.ProviderTest do
     test "a tincture whose one profile row is damaged is refused, never told it has no profile",
          %{ctx: ctx} do
       {:ok, _} =
-        Arca.ProfileStorage.put(%{
+        Arca.Test.Writers.put_profile(%{
           id: "prof_vis_dmg",
           athanor_id: ctx.athanor_id,
           source_ref: "tincture:local.vis-dmg",
@@ -509,7 +509,7 @@ defmodule Sanctum.ProviderTest do
                get.("vis-none")
 
       {:ok, _} =
-        Arca.ProfileStorage.put(%{
+        Arca.Test.Writers.put_profile(%{
           id: "prof_vis_owner_#{System.unique_integer([:positive])}",
           athanor_id: ctx.athanor_id,
           source_ref: "tincture:local.vis-owner",
@@ -535,7 +535,7 @@ defmodule Sanctum.ProviderTest do
       end)
 
       {:ok, _} =
-        Arca.ProfileStorage.put(%{
+        Arca.Test.Writers.put_profile(%{
           id: "prof_vis_#{:rand.uniform(1_000_000)}",
           athanor_id: ctx.athanor_id,
           source_ref: "tincture:local.vis-test",

@@ -7,7 +7,7 @@ defmodule CyfrWeb.Plugs.TinctureRateLimitTest do
   alias CyfrWeb.Plugs.TinctureRateLimit
 
   setup do
-    Prima.RateLimiter.reset()
+    Prima.Test.RateLimiter.reset!()
 
     # config/test.exs disables the limit globally (1_000_000); exercise the
     # real per-pipeline limits here by removing the override.
@@ -17,7 +17,7 @@ defmodule CyfrWeb.Plugs.TinctureRateLimitTest do
     Application.delete_env(:cyfr, :tincture_rate_limit_max)
 
     on_exit(fn ->
-      Prima.RateLimiter.reset()
+      Prima.Test.RateLimiter.reset!()
 
       restore = fn
         _app, _key, nil -> :ok

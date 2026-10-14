@@ -184,7 +184,7 @@ defmodule Arca.DataTest do
     test "a row read answers a plain map, and a cross-tenant read answers nothing" do
       _ = Arca.Test.Actor.athanor!()
       athanor_id = Arca.Test.Actor.athanor_id()
-      {:ok, own} = Arca.Execution.record_start(execution_attrs(athanor_id))
+      {:ok, own} = Arca.Test.Writers.record_start(execution_attrs(athanor_id))
 
       assert plain?(own)
       refute Map.has_key?(own, :__meta__)
@@ -203,7 +203,7 @@ defmodule Arca.DataTest do
     end
 
     test "a write the changeset refuses answers field errors, never the changeset" do
-      assert {:error, {:invalid, errors}} = Arca.Execution.record_start(%{})
+      assert {:error, {:invalid, errors}} = Arca.Test.Writers.record_start(%{})
       assert is_map(errors) and Map.has_key?(errors, :id)
       assert clean?(errors)
     end

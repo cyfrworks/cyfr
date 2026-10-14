@@ -952,7 +952,7 @@ defmodule Arca.InstanceEntriesTest do
     source_ref = source_ref || "catalyst:local.#{profile}"
 
     {:ok, _} =
-      Arca.ProfileStorage.put(%{
+      Arca.Test.Writers.put_profile(%{
         id: profile,
         athanor_id: athanor,
         source_ref: source_ref,

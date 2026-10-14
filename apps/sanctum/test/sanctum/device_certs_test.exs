@@ -37,12 +37,12 @@ defmodule Sanctum.DeviceCertsTest do
   setup tags do
     Arca.Cache.init()
     Arca.Test.Sandbox.setup!(tags)
-    Prima.RateLimiter.reset()
+    Prima.Test.RateLimiter.reset!()
 
     public_url = Application.get_env(:sanctum, :public_url)
 
     on_exit(fn ->
-      Prima.RateLimiter.reset()
+      Prima.Test.RateLimiter.reset!()
 
       if public_url,
         do: Application.put_env(:sanctum, :public_url, public_url),
@@ -422,7 +422,7 @@ defmodule Sanctum.DeviceCertsTest do
       # can tell it is not the client's.
       for n <- 1..200 do
         # Half the sources reach one member, half another.
-        if n == 101, do: Prima.RateLimiter.reset()
+        if n == 101, do: Prima.Test.RateLimiter.reset!()
         source = "10.4.#{div(n, 250)}.#{rem(n, 250)}"
         # Each answered the word its certificate always got.
         assert connect(forged(device), source) == {:error, :bad_signature}
@@ -432,7 +432,7 @@ defmodule Sanctum.DeviceCertsTest do
       # The installation's ceiling holds for what no client proved: the
       # next from a fresh address is refused, on either member.
       assert {:error, {:rate_limited, _}} = connect(forged(device), "10.5.0.1")
-      Prima.RateLimiter.reset()
+      Prima.Test.RateLimiter.reset!()
       assert {:error, {:rate_limited, _}} = connect(forged(device), "10.5.0.2")
       assert {:error, {:rate_limited, _}} = renew(forged(device), "10.5.0.2")
       assert %{count: 200} = window(:device_connect_installation, "installation")
@@ -479,7 +479,7 @@ defmodule Sanctum.DeviceCertsTest do
       # Refused before its certificate: the person's key was never read.
       refute "person_identities" in sources()
 
-      Prima.RateLimiter.reset()
+      Prima.Test.RateLimiter.reset!()
       assert {:error, {:device_rate_limited, retry_after_ms}} = connect(device, "192.0.2.151")
       assert retry_after_ms in 1..60_000
       assert %{count: 20} = window(:device_connect_client, device.client_id)
@@ -504,7 +504,7 @@ defmodule Sanctum.DeviceCertsTest do
 
       # This member's own count forgotten, as another member's would be:
       # the cell's is what refuses.
-      Prima.RateLimiter.reset()
+      Prima.Test.RateLimiter.reset!()
       {_other, other_private} = :crypto.generate_key(:eddsa, :ed25519)
       watch_sources!()
 
@@ -740,7 +740,7 @@ defmodule Sanctum.DeviceCertsTest do
       # From any address, on this member and in the cell.
       assert {:error, {:device_rate_limited, retry_after_ms}} = renew(device, "192.0.2.42")
       assert retry_after_ms in 1..60_000
-      Prima.RateLimiter.reset()
+      Prima.Test.RateLimiter.reset!()
       assert {:error, {:device_rate_limited, retry_after_ms}} = renew(device, "192.0.2.43")
       assert retry_after_ms in 1..60_000
       assert %{count: 20} = window(:device_verification_client, device.client_id)
@@ -1257,7 +1257,7 @@ defmodule Sanctum.DeviceCertsTest do
           do: {:error, :refused} = DeviceCerts.refuse_unattributed("203.0.113.3", :refused)
 
       # Another member: its node count starts empty, the cell's does not.
-      Prima.RateLimiter.reset()
+      Prima.Test.RateLimiter.reset!()
 
       assert {:error, {:rate_limited, _}} =
                DeviceCerts.refuse_unattributed("203.0.113.3", :refused)
@@ -1282,7 +1282,7 @@ defmodule Sanctum.DeviceCertsTest do
     test "the installation's bound holds across many sources and two members: the 201st is refused" do
       for n <- 1..200 do
         # Half the sources reach one member, half another.
-        if n == 101, do: Prima.RateLimiter.reset()
+        if n == 101, do: Prima.Test.RateLimiter.reset!()
         source = "10.1.#{div(n, 250)}.#{rem(n, 250)}"
         assert DeviceCerts.refuse_unattributed(source, :refused) == {:error, :refused}
       end
@@ -1291,7 +1291,7 @@ defmodule Sanctum.DeviceCertsTest do
                DeviceCerts.refuse_unattributed("10.9.9.8", :refused)
 
       assert retry_after_ms in 1..60_000
-      Prima.RateLimiter.reset()
+      Prima.Test.RateLimiter.reset!()
 
       assert {:error, {:rate_limited, _}} =
                DeviceCerts.refuse_unattributed("10.9.9.9", :refused)
@@ -1334,7 +1334,7 @@ defmodule Sanctum.DeviceCertsTest do
       assert retry_after_ms in 1..60_000
 
       # Another member reads the cell's count.
-      Prima.RateLimiter.reset()
+      Prima.Test.RateLimiter.reset!()
       assert {:error, {:rate_limited, _}} = DeviceCerts.claim_attributed({:person, "usr_one"})
 
       # Another name, and a client of the same spelling, have their own.
@@ -1363,7 +1363,7 @@ defmodule Sanctum.DeviceCertsTest do
 
       # Another member: this node's own read has room and asks no database;
       # the cell's read refuses.
-      Prima.RateLimiter.reset()
+      Prima.Test.RateLimiter.reset!()
       watch_sources!()
       assert DeviceCerts.verification_room(source, :node) == :ok
       assert sources() == []
