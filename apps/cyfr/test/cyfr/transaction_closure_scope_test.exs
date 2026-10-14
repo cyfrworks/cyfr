@@ -20,23 +20,28 @@ defmodule Cyfr.TransactionClosureScopeTest do
     * a capture of a local function, `&name/n` or `&name(...)`, resolved
       to that function's definitions in its module;
     * a capture of another module's function, `&Mod.name/n`, resolved to
-      that module's definitions in the tree.
+      that module's definitions in the tree;
+    * a call that returns the closure, `verify(expectation)` or
+      `Sanctum.Issuance.verify(expectation)`, resolved like a capture of
+      the function it calls, whose whole body is read.
 
   From there it follows every call to a function defined in the same
-  module, transitively, and refuses a call to `Req`, `Finch`, `Mint`,
-  `:httpc`, `Sanctum.Egress`, `Phoenix.PubSub`, `Sanctum.Notify` or `Task`,
-  or to a function `Cyfr.Bus` publishes with (`broadcast*`). A capture it
-  cannot resolve is refused too, so a closure the scan cannot read never
-  passes for one it read.
+  module and every capture of a function the tree defines, transitively,
+  and refuses a call to `Req`, `Finch`, `Mint`, `:httpc`, `:gen_tcp`,
+  `:ssl`, `:inet`, `Sanctum.Egress`, `Sanctum.Network`, `Phoenix.PubSub`,
+  `Sanctum.Notify` or `Task`, or to a function `Cyfr.Bus` publishes with
+  (`broadcast*`). A capture it cannot resolve is refused too, so a closure
+  the scan cannot read never passes for one it read. A call the tree does
+  not define (`args["verify"]` is `Access.get/2`) is no closure the scan
+  can read, and is not counted.
 
-  The scan reads code, not text: a comment or a documentation string that
-  mentions a closure and the network names no call.
+  The scan reads code, not text: a comment, a documentation string or a
+  string literal that names a refused call is no call.
 
-  Its blind spots: a closure bound to a variable (`also: also`) or built by
-  a call (`verify: verify(expectation)`) is not followed, and neither is a
-  call from a closure into another module's function. Those reach the
-  transaction through code this scan does not read, so they stay the
-  reviewer's.
+  Its blind spots: a closure bound to a variable (`also: also`) is not
+  followed, and neither is a call from a closure into another module's
+  function. Those reach the transaction through code this scan does not
+  read, so they stay the reviewer's.
   """
 
   use ExUnit.Case, async: true
@@ -45,8 +50,13 @@ defmodule Cyfr.TransactionClosureScopeTest do
 
   @keys [:verify, :also, :reserve]
 
-  # The modules a closure may not call, each with its submodules.
-  @refused_modules ~w(Req Finch Mint Sanctum.Egress Phoenix.PubSub Sanctum.Notify Task)
+  # The modules a closure may not call, each with its submodules, and the
+  # Erlang modules that open a connection or resolve a name.
+  @refused_modules ~w(Req Finch Mint Sanctum.Egress Sanctum.Network Phoenix.PubSub Sanctum.Notify Task)
+  @refused_erlang [:httpc, :gen_tcp, :ssl, :inet]
+
+  # Every form a closure takes in the tree, each read at least once there.
+  @forms [:fn, :local_capture, :local_call_capture, :remote_capture, :call]
 
   defp root, do: Path.expand("../../../..", __DIR__)
 
@@ -56,25 +66,46 @@ defmodule Cyfr.TransactionClosureScopeTest do
         do: {Path.relative_to(path, root()), SourceTree.read(path)}
   end
 
-  # Scans `sources` (`[{path, source}]`) as one tree: a remote capture
-  # resolves to a module defined anywhere in it. Answers the closures it
-  # read and what it refused in them.
+  # Scans `sources` (`[{path, source}]`) as one tree: a remote capture or
+  # call resolves to a module defined anywhere in it. Answers how many
+  # closures it read, the forms they took, and what it refused in them.
   defp scan(sources) do
     modules = Enum.flat_map(sources, fn {path, source} -> modules(path, source) end)
     index = Map.new(modules, &{&1.name, &1})
 
     read =
       for module <- modules,
-          {key, line, root} <- closures(module.body),
-          do: {module.path, line, key, module.name, root}
+          {key, line, form, root} <- closures(module.body),
+          readable?(form, root, module, index),
+          do: {module.path, line, key, form, module.name, root}
 
     refused =
-      for {path, line, key, name, root} <- read,
+      for {path, line, key, _form, name, root} <- read,
           what <- walk([{name, root}], index, MapSet.new(), []),
           do: {path, line, key, what}
 
-    %{read: length(read), refused: refused |> Enum.uniq() |> Enum.sort()}
+    %{
+      read: length(read),
+      forms: read |> Enum.map(&elem(&1, 3)) |> Enum.frequencies(),
+      refused: refused |> Enum.uniq() |> Enum.sort()
+    }
   end
+
+  # A call is a closure the scan reads when the tree defines what it calls,
+  # or when it is itself a refused call. Every other form is read, and an
+  # unresolved capture is refused by the walk.
+  defp readable?(:call, {:local, name, arity}, module, _index),
+    do: Map.has_key?(module.defs, {name, arity})
+
+  defp readable?(:call, {:remote, target, name, arity}, module, index),
+    do:
+      defined?(resolve(target, module), name, arity, index) or
+        forbidden?(resolve(target, module), name)
+
+  defp readable?(_form, _root, _module, _index), do: true
+
+  defp defined?(target, name, arity, index),
+    do: is_map_key(index, target) and is_map_key(index[target].defs, {name, arity})
 
   # Every module a source defines: its full name, its body without the
   # modules nested in it, its definitions, and the aliases in scope there,
@@ -186,15 +217,15 @@ defmodule Cyfr.TransactionClosureScopeTest do
   defp resolve(atom, _scope) when is_atom(atom), do: atom
   defp resolve(_other, _scope), do: nil
 
-  # Each `key: closure` in `body` the scan can read, as `{key, line, root}`.
-  # A value that is no closure, or one bound elsewhere, is not one.
+  # Each `key: closure` in `body` that may be a closure, as `{key, line,
+  # form, root}`. A variable, a literal or a type is none.
   defp closures(body) do
     {_ast, acc} =
       Macro.prewalk(body, [], fn
         {key, value} = node, acc when key in @keys ->
           case closure(value) do
             nil -> {node, acc}
-            {line, root} -> {node, [{key, line, root} | acc]}
+            {line, form, root} -> {node, [{key, line, form, root} | acc]}
           end
 
         node, acc ->
@@ -204,17 +235,27 @@ defmodule Cyfr.TransactionClosureScopeTest do
     acc
   end
 
-  defp closure({:fn, meta, clauses}), do: {meta[:line], {:ast, clauses}}
+  defp closure({:fn, meta, clauses}), do: {meta[:line], :fn, {:ast, clauses}}
 
   defp closure({:&, meta, [{:/, _, [{{:., _, [module, name]}, _, []}, arity]}]})
        when is_atom(name) and is_integer(arity),
-       do: {meta[:line], {:remote, module, name, arity}}
+       do: {meta[:line], :remote_capture, {:remote, module, name, arity}}
 
   defp closure({:&, meta, [{:/, _, [{name, _, ctx}, arity]}]})
        when is_atom(name) and is_atom(ctx) and is_integer(arity),
-       do: {meta[:line], {:local, name, arity}}
+       do: {meta[:line], :local_capture, {:local, name, arity}}
 
-  defp closure({:&, meta, [body]}), do: {meta[:line], {:ast, body}}
+  defp closure({:&, meta, [{name, _, args} = body]}) when is_atom(name) and is_list(args),
+    do: {meta[:line], :local_call_capture, {:ast, body}}
+
+  defp closure({:&, meta, [body]}), do: {meta[:line], :capture, {:ast, body}}
+
+  defp closure({{:., _, [module, name]}, meta, args}) when is_atom(name) and is_list(args),
+    do: {meta[:line], :call, {:remote, module, name, length(args)}}
+
+  defp closure({name, meta, args}) when is_atom(name) and is_list(args),
+    do: {meta[:line], :call, {:local, name, length(args)}}
+
   defp closure(_other), do: nil
 
   # Walks `pending` (`{module, root}`) and answers what it refused: a
@@ -256,14 +297,14 @@ defmodule Cyfr.TransactionClosureScopeTest do
         end
 
       {:ast, ast} ->
-        {more, found} = calls(ast, index[module])
+        {more, found} = calls(ast, index[module], index)
         walk(Enum.map(more, &{module, &1}) ++ pending, index, seen, found ++ refused)
     end
   end
 
   # The local definitions `ast` calls or captures, and the forbidden calls
   # it makes.
-  defp calls(ast, module) do
+  defp calls(ast, module, index) do
     {_ast, acc} =
       Macro.prewalk(ast, {[], []}, fn
         {{:., _, [target, name]}, meta, _args} = node, {more, found} when is_atom(name) ->
@@ -281,6 +322,14 @@ defmodule Cyfr.TransactionClosureScopeTest do
         when is_atom(name) and is_list(args) ->
           if Map.has_key?(module.defs, {name, length(args) + 1}),
             do: {node, {[{:local, name, length(args) + 1} | more], found}},
+            else: {node, {more, found}}
+
+        # A capture of a function another module of the tree defines is a
+        # closure too; one of a function outside the tree is not followed.
+        {:&, _, [{:/, _, [{{:., _, [target, name]}, _, []}, arity]}]} = node, {more, found}
+        when is_atom(name) and is_integer(arity) ->
+          if defined?(resolve(target, module), name, arity, index),
+            do: {node, {[{:remote, target, name, arity} | more], found}},
             else: {node, {more, found}}
 
         # A capture of an imported function (`&is_binary/1`) is no local one.
@@ -305,7 +354,7 @@ defmodule Cyfr.TransactionClosureScopeTest do
   defp label(atom) when is_atom(atom), do: inspect(atom)
   defp label(name), do: name
 
-  defp forbidden?(:httpc, _name), do: true
+  defp forbidden?(module, _name) when module in @refused_erlang, do: true
 
   defp forbidden?(module, name) when is_binary(module) do
     Enum.any?(@refused_modules, &(module == &1 or String.starts_with?(module, &1 <> "."))) or
@@ -316,11 +365,16 @@ defmodule Cyfr.TransactionClosureScopeTest do
 
   describe "the tree" do
     test "no transaction closure makes a network call or publishes" do
-      %{read: read, refused: refused} = scan(tree())
+      %{read: read, forms: forms, refused: refused} = scan(tree())
 
-      # 36 closures are read at the plan's base; the rest of the sites bind
-      # their closure to a variable or build it by a call.
-      assert read > 30, "the scan read #{read} closures — it is not reading the tree"
+      # 43 closures are read at the plan's base; the other sites bind their
+      # closure to a variable. A count alone could be met with a whole form
+      # unread, so each form is asserted read too.
+      assert read >= 43, "the scan read #{read} closures — it is not reading the tree"
+
+      for form <- @forms,
+          do:
+            assert(forms[form], "the scan read no closure of the form #{form}: #{inspect(forms)}")
 
       assert refused == [], """
       These transaction closures make a network call, publish, or capture a
@@ -331,21 +385,6 @@ defmodule Cyfr.TransactionClosureScopeTest do
       A closure runs inside Arca's transaction with its locks held: make the
       call before the transaction opens, or broadcast after it commits.
       """
-    end
-
-    test "a comment or a documentation string that mentions a closure and the network is not a closure" do
-      sources = Map.new(tree())
-
-      # Each line a text search for closures and the network finds.
-      for {path, text} <- [
-            {"apps/cyfr/lib/compendium/provisioning.ex",
-             "published it, is what makes an interrupted closure heal on the next"},
-            {"apps/sanctum/lib/sanctum/provisioning.ex",
-             "closure over the network, and no request path may hold a page open for"}
-          ] do
-        assert sources[path] =~ text, "#{path} no longer says #{inspect(text)}"
-        assert scan([{path, sources[path]}]).refused == []
-      end
     end
   end
 
@@ -359,7 +398,15 @@ defmodule Cyfr.TransactionClosureScopeTest do
       {"Phoenix.PubSub.broadcast(Cyfr.PubSub, topic, row)", "calls Phoenix.PubSub.broadcast"},
       {"Cyfr.Bus.broadcast(actor, topic, row)", "calls Cyfr.Bus.broadcast"},
       {"Sanctum.Notify.member_changed(athanor_id)", "calls Sanctum.Notify.member_changed"},
-      {"Task.start(fn -> row end)", "calls Task.start"}
+      {"Sanctum.Network.resolve_and_validate(url, [])",
+       "calls Sanctum.Network.resolve_and_validate"},
+      {":gen_tcp.connect(host, 443, [])", "calls :gen_tcp.connect"},
+      {":ssl.connect(host, 443, [])", "calls :ssl.connect"},
+      {":inet.getaddr(host, :inet)", "calls :inet.getaddr"},
+      {"Task.start(fn -> row end)", "calls Task.start"},
+      {"Task.Supervisor.start_child(Cyfr.TaskSupervisor, fn -> row end)",
+       "calls Task.Supervisor.start_child"},
+      {"Enum.each([row], &Req.get!/1)", "calls Req.get!"}
     ]
 
     for {call, refusal} <- @refusals do
@@ -423,6 +470,78 @@ defmodule Cyfr.TransactionClosureScopeTest do
                 "calls Phoenix.PubSub.broadcast (Planted.Policy, line 3)"}
              ] =
                scan([{"planted.ex", planted}, {"policy.ex", policy}]).refused
+    end
+
+    test "returned by a call is read through the function it calls" do
+      planted = """
+      defmodule Planted do
+        def write(actor, row) do
+          Arca.Users.mint(actor, row, also: record(row))
+          Arca.Users.mint(actor, row, verify: Planted.Policy.check(row))
+        end
+
+        defp record(row), do: fn _user -> Task.start(fn -> row end) end
+      end
+      """
+
+      policy = """
+      defmodule Planted.Policy do
+        def check(_row), do: &Planted.Policy.Wire.send/1
+      end
+
+      defmodule Planted.Policy.Wire do
+        def send(row), do: :gen_tcp.send(row.socket, "row")
+      end
+      """
+
+      assert %{
+               read: 2,
+               forms: %{call: 2},
+               refused: [
+                 {"planted.ex", 3, :also, "calls Task.start (Planted, line 7)"},
+                 {"planted.ex", 4, :verify, "calls :gen_tcp.send (Planted.Policy.Wire, line 6)"}
+               ]
+             } = scan([{"planted.ex", planted}, {"policy.ex", policy}])
+    end
+
+    test "naming a refused call only in prose is not refused" do
+      source = ~S"""
+      defmodule Planted do
+        @moduledoc "Never calls Req.get!/1 or Task.start/1 from a closure."
+
+        def write(actor, row), do: Arca.Users.mint(actor, row, also: fn row -> record(row) end)
+
+        @doc "Records the row; Phoenix.PubSub.broadcast/3 follows the commit."
+        def record(row) do
+          # Task.start(fn -> Req.get!(row.url) end) would outlive the lock.
+          Arca.Receipts.put(row, "Req.get!(url) and Task.start/1 are only named here")
+        end
+      end
+      """
+
+      assert %{read: 1, refused: []} = scan([{"planted.ex", source}])
+    end
+
+    test "whose calls only resemble a refused one is not refused" do
+      source = """
+      defmodule Planted do
+        alias Cyfr.Bus.Notify
+
+        def write(actor, req) do
+          Arca.Users.mint(actor, req, also: fn row -> record(actor, row, req) end)
+        end
+
+        defp record(actor, row, req) do
+          Arca.FencedPublication.publish(actor, row, req)
+          _topic = Cyfr.Bus.notify(actor)
+          task(%Notify{kind: :row})
+        end
+
+        defp task(notify), do: {:ok, notify}
+      end
+      """
+
+      assert %{read: 1, refused: []} = scan([{"planted.ex", source}])
     end
 
     test "whose capture names no definition is refused" do
