@@ -97,7 +97,7 @@ Owns the repo, every schema, query and transaction, blobs and path translation, 
 - Functions return plain maps or Prima structs, never schemas or changesets.
 - Nothing is broadcast inside a transaction; functions return committed change data and the caller emits it.
 - Caps are checked at the mutating chokepoint through the `Prima.Caps` port.
-- Locking is a conditional write. Row locks serve only multi-row transitions, through Arca's helpers, and nothing above Arca names the database adapter. SQLite and PostgreSQL behave the same.
+- Locking is a conditional write. Row locks serve only multi-row transitions, through Arca's helpers, and nothing above Arca names the database adapter. SQLite and PostgreSQL behave the same. One server-wide lock, the athanor census, serializes the writes that can raise the number of active athanors (a mint, and the transitions that reopen an archived athanor), which hold no row in common; it is spelled once, in `Arca.Repo`, and each writer takes it last, after the rows it holds and before it counts.
 - Each athanor's storage holds `components/`, `aqua/`, `threads/`, `notes/`, `memory/`, `payloads/` and `data/`; `notes/` and `memory/` are host-only, with no guest scope.
 
 ### Sanctum: decisions and the gate

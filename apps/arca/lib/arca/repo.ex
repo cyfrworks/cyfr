@@ -133,6 +133,34 @@ defmodule Arca.Repo do
     end
   end
 
+  @doc """
+  Take the server-wide lock named by `key` for the rest of the enclosing
+  transaction, for writers that hold no row in common and must still not
+  run their count and write at once (`Arca.AthanorCensus`). Raises
+  outside a transaction, where a lock would end with its own statement
+  and serialize nothing.
+
+  On PostgreSQL it is a transaction-level advisory lock on `key`, released
+  when the transaction commits or rolls back. On SQLite every transaction
+  that writes already holds the one write lock from its start
+  (`prepare_transaction/2`), so it takes no statement.
+  """
+  @spec transaction_lock(integer()) :: :ok
+  def transaction_lock(key) when is_integer(key) do
+    unless in_transaction?() do
+      raise "Arca.Repo.transaction_lock/1 called outside a transaction"
+    end
+
+    case adapter() do
+      Ecto.Adapters.SQLite3 ->
+        :ok
+
+      _postgres ->
+        query!("SELECT pg_advisory_xact_lock($1)", [key])
+        :ok
+    end
+  end
+
   # ---- standalone writes -------------------------------------------------------
   #
   # A write run outside a transaction would wait for SQLite's write lock
