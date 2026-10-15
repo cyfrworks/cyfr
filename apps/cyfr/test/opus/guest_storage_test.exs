@@ -88,9 +88,8 @@ defmodule Opus.GuestStorageTest do
   end
 
   # Every usage read of the store answers an error from here to the test's
-  # end, and no cached counter of the scope answers in its place; the
-  # restore is registered before the adapter changes.
-  defp unreadable_usage!(ctx, scope) do
+  # end; the restore is registered before the adapter changes.
+  defp unreadable_store_usage! do
     original = Application.get_env(:arca, :storage_adapter)
 
     on_exit(fn ->
@@ -100,6 +99,12 @@ defmodule Opus.GuestStorageTest do
     end)
 
     Application.put_env(:arca, :storage_adapter, UnreadableUsageAdapter)
+  end
+
+  # As `unreadable_store_usage!/0`, and no cached counter of the scope
+  # answers in the store's place.
+  defp unreadable_usage!(ctx, scope) do
+    unreadable_store_usage!()
 
     actor = Sanctum.Context.actor(ctx)
     assert :miss = Arca.Cache.get(Arca.Cache.Keys.scope_usage_files(actor, scope))
@@ -109,9 +114,12 @@ defmodule Opus.GuestStorageTest do
 
   # An unreadable usage is the typed `storage_unavailable`, which reads on
   # the worker wire as `unavailable`, never as quota exhaustion.
-  defp assert_unavailable(result) do
+  defp assert_unavailable(
+         result,
+         sentence \\ "Storage usage could not be read — nothing was written."
+       ) do
     assert {"storage_unavailable", message} = refused(result)
-    assert message == "Storage usage could not be read — nothing was written."
+    assert message == sentence
 
     assert %Prima.Refusal{class: :unavailable} =
              Prima.Refusal.classify({:guest_error, "storage_unavailable", message})
@@ -716,6 +724,47 @@ defmodule Opus.GuestStorageTest do
     refute Arca.exists?(Sanctum.Context.actor(ctx), ["data", "unread.txt"])
   end
 
+  describe "the athanor's byte cap" do
+    setup %{ctx: ctx} do
+      actor = Sanctum.Context.actor(ctx)
+      Arca.Cache.invalidate(Arca.Cache.Keys.athanor_usage(actor))
+      {:ok, actor: actor}
+    end
+
+    test "a write past the cap is refused as storage_quota_exceeded, and nothing is written",
+         %{ctx: ctx, actor: actor} do
+      Cyfr.Test.Settings.put("athanor_storage_bytes", 5)
+
+      assert {"storage_quota_exceeded", message} =
+               refused(run(ctx, edge(["data/"]), write("data/big.txt", "too many bytes")))
+
+      assert message == "Athanor storage quota reached (5 bytes)"
+      refute Arca.exists?(actor, ["data", "big.txt"])
+    end
+
+    @tag :capture_log
+    test "an unreadable athanor usage refuses the write as storage_unavailable, and nothing is written",
+         %{ctx: ctx, actor: actor} do
+      Cyfr.Test.Settings.put("athanor_storage_bytes", 1_000_000)
+
+      # The scope's counters answer, so the only usage read from the store is
+      # the athanor's total, which the store's own cap check makes.
+      Arca.Cache.put(Arca.Cache.Keys.scope_usage_files(actor, "data"), 0, 60_000)
+      Arca.Cache.put(Arca.Cache.Keys.scope_usage_bytes(actor, "data"), 0, 60_000)
+      unreadable_store_usage!()
+
+      assert :miss = Arca.Cache.get(Arca.Cache.Keys.athanor_usage(actor))
+      assert {:error, :unreadable} = Arca.Usage.athanor_bytes(actor)
+
+      assert_unavailable(
+        run(ctx, edge(["data/"]), write("data/athanor.txt", "x")),
+        "Athanor storage usage could not be read — nothing was written."
+      )
+
+      refute Arca.exists?(actor, ["data", "athanor.txt"])
+    end
+  end
+
   describe "the attempt's hold" do
     test "a refused hold writes, appends and deletes nothing, and reads need none", %{ctx: ctx} do
       :ok = Arca.put(Sanctum.Context.actor(ctx), ["data", "kept.txt"], "kept")
@@ -845,7 +894,7 @@ defmodule Opus.GuestStorageTest do
                  )
                )
 
-      assert {"storage_quota_exceeded", _} =
+      assert {"storage_unavailable", _} =
                refused(run(ctx, edge(["data/"]), append, hold: failed.(:storage_unverifiable)))
 
       assert {"not_found", _} =

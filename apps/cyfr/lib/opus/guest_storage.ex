@@ -63,7 +63,7 @@ defmodule Opus.GuestStorage do
   | `{:error, :lost}`: the attempt did not hold its row; nothing was recorded or written | `{:error, :lost}` |
   | `{:error, :unavailable}`: the database could not say; nothing was recorded or written | `{:error, :unavailable}` |
   | `{:ok, {:confirmed, :ok}}` | the operation's members |
-  | `{:ok, {:failed, {:error, reason}}}`: the store wrote nothing | the refusal of that reason: `not_found`, `storage_quota_exceeded`, `storage_conflict` for an append that kept losing to concurrent writers, else `storage_error` |
+  | `{:ok, {:failed, {:error, reason}}}`: the store wrote nothing | the refusal of that reason: `not_found`, `storage_quota_exceeded` past the athanor's cap, `storage_unavailable` when its usage could not be read, `storage_conflict` for an append that kept losing to concurrent writers, else `storage_error` |
   | `{:ok, {:uncertain, reason}}`: the write may or may not be in the store | `storage_uncertain`, saying whether the attempt lost its row or the store could not say |
 
   ## Answers
@@ -71,8 +71,8 @@ defmodule Opus.GuestStorage do
   `{:ok, members}`, or `{:error, {:guest_error, type, message}}` with the
   refusal the guest is handed: `storage_path_denied`, `action_denied`,
   `request_too_large`, `response_too_large`, `storage_quota_exceeded`,
-  `not_found`, `invalid_request`, `invalid_base64`, `storage_conflict`,
-  `storage_uncertain` or `storage_error`. Every refusal but
+  `storage_unavailable`, `not_found`, `invalid_request`, `invalid_base64`,
+  `storage_conflict`, `storage_uncertain` or `storage_error`. Every refusal but
   `storage_uncertain` wrote nothing; after `storage_uncertain` the guest
   reads the path back before it writes it again. A store fault is logged
   and answered by the verb that failed; a raise below this module is logged
@@ -524,8 +524,8 @@ defmodule Opus.GuestStorage do
 
   defp refused(_op, _path, :storage_unverifiable) do
     guest_error(
-      :storage_quota_exceeded,
-      "Athanor storage usage cannot be verified right now — try again"
+      :storage_unavailable,
+      "Athanor storage usage could not be read — nothing was written."
     )
   end
 

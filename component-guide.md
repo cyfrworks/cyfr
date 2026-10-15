@@ -899,7 +899,7 @@ Error: `{"error": {"type": "...", "message": "..."}}`.
 | `action_denied` | The action is not one this component was granted |
 | `request_too_large` / `response_too_large` | The request, or what a read would answer, is past the node's size limits |
 | `storage_quota_exceeded` | The athanor's storage cap, or the public profile's quota, would be passed |
-| `storage_unavailable` | The scope's storage usage could not be read, so the write was refused; asking again later is safe |
+| `storage_unavailable` | The scope's or the athanor's storage usage could not be read, so the write was refused; asking again later is safe |
 | `not_found` | Nothing is at the path |
 | `invalid_request` / `invalid_json` / `invalid_base64` / `unknown_action` | The request does not parse or does not name an action |
 | `storage_conflict` | The write met concurrent writers to the same path and gave up; nothing was written, and asking again is safe |
