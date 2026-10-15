@@ -223,19 +223,22 @@ defmodule Arca.FencedPublicationTest do
          %{actor: actor, key: key} do
       slot = slot!()
 
-      assert {:ok, 1} =
-               FencedPublication.publish(document(actor, key, stage!(actor, "v1")), 0, slot)
+      for {bytes, revision_read} <- [{"v1", 0}, {"v2", 1}, {"v3", 2}] do
+        assert {:ok, _} =
+                 FencedPublication.publish(
+                   document(actor, key, stage!(actor, bytes)),
+                   revision_read,
+                   slot
+                 )
+      end
 
-      assert {:ok, 2} =
-               FencedPublication.publish(document(actor, key, stage!(actor, "v2")), 1, slot)
-
-      assert :ok = FencedPublication.remove(removal(actor, key), 2, slot)
+      assert :ok = FencedPublication.remove(removal(actor, key), 3, slot)
 
       change = document(actor, key, stage!(actor, "again"))
-      assert {:ok, 3} = FencedPublication.publish(change, 0, slot)
-      assert {:ok, 3} = FencedPublication.publish(change, 0, slot)
+      assert {:ok, 4} = FencedPublication.publish(change, 0, slot)
+      assert {:ok, 4} = FencedPublication.publish(change, 0, slot)
 
-      assert {:ok, 3} =
+      assert {:ok, 4} =
                FencedPublication.publish(
                  %{change | digest: Prima.Digest.sha256("again")},
                  0,
@@ -245,67 +248,58 @@ defmodule Arca.FencedPublicationTest do
       # Another attempt's identical bytes are no replay of this one.
       other = stage!(actor, "again")
       assert {:error, :stale} = FencedPublication.publish(document(actor, key, other), 0, slot)
-      assert {:error, :stale} = FencedPublication.publish(change, 3, slot)
-      assert %{revision: 3} = FencedPublication.document(actor, key)
-
-      # The replays raised nothing: the athanor's next create is the one after.
-      next = key <> "-next"
-
-      assert {:ok, 4} =
-               FencedPublication.publish(document(actor, next, stage!(actor, "n")), 0, slot)
+      assert {:error, :stale} = FencedPublication.publish(change, 4, slot)
+      assert %{revision: 4} = FencedPublication.document(actor, key)
+      assert floor_of(actor) == 3
     end
 
-    test "every create of an athanor takes its revision from the one floor", %{actor: actor} do
+    test "the floor is the highest revision removed, and a create takes one above it", %{
+      actor: actor
+    } do
       slot = slot!()
       prefix = "floor-#{System.unique_integer([:positive])}/"
 
-      assert {:ok, 1} =
-               FencedPublication.publish(
-                 document(actor, prefix <> "a", stage!(actor, "a")),
-                 0,
-                 slot
-               )
+      # Documents never removed are created at 1, and creating raises nothing.
+      for name <- ["a", "b"] do
+        assert {:ok, 1} =
+                 FencedPublication.publish(
+                   document(actor, prefix <> name, stage!(actor, name)),
+                   0,
+                   slot
+                 )
+      end
 
-      assert {:ok, 2} =
-               FencedPublication.publish(
-                 document(actor, prefix <> "b", stage!(actor, "b")),
-                 0,
-                 slot
-               )
+      assert floor_of(actor) == 0
 
-      # Updates count from the document's own revision; a removal raises
-      # the floor to the revision removed, and never lowers it.
-      assert {:ok, 2} =
-               FencedPublication.publish(
-                 document(actor, prefix <> "a", stage!(actor, "a2")),
-                 1,
-                 slot
-               )
+      # Updates count from the document's own revision.
+      for revision_read <- 1..3 do
+        assert {:ok, revision} =
+                 FencedPublication.publish(
+                   document(actor, prefix <> "a", stage!(actor, "a#{revision_read}")),
+                   revision_read,
+                   slot
+                 )
 
-      assert {:ok, 3} =
-               FencedPublication.publish(
-                 document(actor, prefix <> "a", stage!(actor, "a3")),
-                 2,
-                 slot
-               )
+        assert revision == revision_read + 1
+      end
 
-      assert {:ok, 4} =
-               FencedPublication.publish(
-                 document(actor, prefix <> "a", stage!(actor, "a4")),
-                 3,
-                 slot
-               )
-
+      # A removal raises the floor to the revision removed, and never lowers it.
       assert :ok = FencedPublication.remove(removal(actor, prefix <> "a"), 4, slot)
-      assert :ok = FencedPublication.remove(removal(actor, prefix <> "b"), 2, slot)
+      assert :ok = FencedPublication.remove(removal(actor, prefix <> "b"), 1, slot)
       assert floor_of(actor) == 4
 
-      assert {:ok, 5} =
-               FencedPublication.publish(
-                 document(actor, prefix <> "b", stage!(actor, "b2")),
-                 0,
-                 slot
-               )
+      # Every create of the athanor now starts above it, the names removed
+      # and a name never used alike.
+      for name <- ["b", "c"] do
+        assert {:ok, 5} =
+                 FencedPublication.publish(
+                   document(actor, prefix <> name, stage!(actor, name <> "2")),
+                   0,
+                   slot
+                 )
+      end
+
+      assert floor_of(actor) == 4
 
       # Another athanor's floor is its own.
       other = actor("ath_fp_floor_other_#{System.unique_integer([:positive])}")
@@ -316,8 +310,6 @@ defmodule Arca.FencedPublicationTest do
                  0,
                  slot
                )
-
-      assert floor_of(actor) == 5
     end
 
     test "a refused create or removal leaves the floor as it was", %{actor: actor, key: key} do
@@ -326,19 +318,19 @@ defmodule Arca.FencedPublicationTest do
       assert {:ok, 1} =
                FencedPublication.publish(document(actor, key, stage!(actor, "v1")), 0, slot)
 
-      assert floor_of(actor) == 1
+      assert floor_of(actor) == 0
 
       # A create that lost to the document already there, and a removal of
-      # a revision it no longer holds, roll their raises back.
+      # a revision it no longer holds, roll back what they wrote.
       assert {:error, :stale} =
                FencedPublication.publish(document(actor, key, stage!(actor, "late")), 0, slot)
 
       assert {:error, :stale} = FencedPublication.remove(removal(actor, key), 7, slot)
-      assert floor_of(actor) == 1
+      assert floor_of(actor) == 0
 
       successor = take_over!(slot)
       assert {:error, :not_owner} = FencedPublication.remove(removal(actor, key), 1, slot)
-      assert floor_of(actor) == 1
+      assert floor_of(actor) == 0
       assert :ok = FencedPublication.remove(removal(actor, key), 1, successor)
       assert floor_of(actor) == 1
     end
@@ -576,11 +568,10 @@ defmodule Arca.FencedPublicationTest do
       slot = slot!()
       prefix = "list-#{System.unique_integer([:positive])}/"
 
-      # Each create in the athanor takes the next revision of its floor.
-      for {key, revision} <- [{"b.md", 1}, {"a.md", 2}, {"deeper/c.md", 3}] do
+      for key <- ["b.md", "a.md", "deeper/c.md"] do
         staged = stage!(actor, key)
 
-        assert {:ok, ^revision} =
+        assert {:ok, 1} =
                  FencedPublication.publish(document(actor, prefix <> key, staged), 0, slot)
       end
 
@@ -588,7 +579,7 @@ defmodule Arca.FencedPublicationTest do
       # and another athanor's document are not listed.
       staged = stage!(actor, "near")
       near = String.trim_trailing(prefix, "/") <> "-near/x.md"
-      assert {:ok, 4} = FencedPublication.publish(document(actor, near, staged), 0, slot)
+      assert {:ok, 1} = FencedPublication.publish(document(actor, near, staged), 0, slot)
       other = actor("ath_fp_list_other_#{System.unique_integer([:positive])}")
       theirs = stage!(other, "theirs")
 
@@ -600,8 +591,7 @@ defmodule Arca.FencedPublicationTest do
       assert Enum.map(docs, & &1.key) ==
                Enum.map(["a.md", "b.md", "deeper/c.md"], &(prefix <> &1))
 
-      assert Enum.map(docs, &{&1.athanor_id, &1.revision}) ==
-               Enum.map([2, 1, 3], &{actor.athanor_id, &1})
+      assert Enum.all?(docs, &(&1.athanor_id == actor.athanor_id and &1.revision == 1))
 
       assert {:ok, []} = FencedPublication.list(actor, "list-%/")
       assert {:ok, []} = FencedPublication.list(actor, String.upcase(prefix))
@@ -632,8 +622,7 @@ defmodule Arca.FencedPublicationTest do
       # read it absent creates it anew, above every revision it held.
       assert {:error, :stale} = FencedPublication.remove(removal(actor, key), 2, slot)
       third = stage!(actor, "v3")
-      assert {:ok, revision} = FencedPublication.publish(document(actor, key, third), 0, slot)
-      assert revision > 2
+      assert {:ok, 3} = FencedPublication.publish(document(actor, key, third), 0, slot)
     end
 
     test "a slot taken over, or run out, removes nothing", %{actor: actor, key: key} do
@@ -783,8 +772,8 @@ defmodule Arca.FencedPublicationFloorRaceTest do
   connections of their own outside the sandbox: both read it absent and
   are held at their publishing statements by a third transaction's
   uncommitted row at the key. Once it rolls back, exactly one creates the
-  document, above the revision its removed incarnation held, and the
-  other is `:stale`, its raise of the floor rolled back with it.
+  document one above the revision its removed incarnation held, and the
+  other is `:stale`, with the floor left as the removal raised it.
 
   Both adapters: on PostgreSQL one creator waits on the key and the other
   on the floor row the first holds; on SQLite both wait on the one write
@@ -816,7 +805,7 @@ defmodule Arca.FencedPublicationFloorRaceTest do
     {:ok, actor: actor, node: node, key: "doc-#{System.unique_integer([:positive])}"}
   end
 
-  test "two creators racing: one creates at the floor raised by one, the other is :stale", ctx do
+  test "two creators racing: one creates one above the raised floor, the other is :stale", ctx do
     slot = unboxed(fn -> slot!(ctx.node) end)
 
     # The document held revisions 1 to 3 and was removed at 3.
@@ -873,7 +862,7 @@ defmodule Arca.FencedPublicationFloorRaceTest do
     winner = if results == [{:ok, 4}, {:error, :stale}], do: first, else: second
     assert blob_key == "staging/" <> winner
 
-    assert [4] =
+    assert [3] =
              unboxed(fn ->
                Arca.Repo.all(
                  from(f in "fenced_document_floors",

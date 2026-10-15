@@ -6,9 +6,9 @@ defmodule Arca.Schemas.FencedDocumentFloor do
   Ecto schema for the `fenced_document_floors` table: one row per
   athanor, the revision floor of its fenced documents.
 
-  `floor` is at least every revision a removed document of the athanor
-  held: a removal raises it to the revision removed, and a create raises
-  it by one and takes the result as the new document's revision
+  `floor` is the highest revision a removed document of the athanor
+  held: a removal raises it to the revision removed, and a create takes
+  the row and creates its document at `floor + 1`, leaving it as it was
   (`Arca.FencedPublication`, its only writer). A removed document's
   revision is never reused.
 

@@ -32,7 +32,8 @@ defmodule Arca.TenantTablesTest do
 
     for actor <- [purged, kept] do
       assert {:ok, 1} = publish(actor, "kept.md", 0, slot)
-      assert {:ok, 2} = publish(actor, "gone.md", 0, slot)
+      assert {:ok, 1} = publish(actor, "gone.md", 0, slot)
+      assert {:ok, 2} = publish(actor, "gone.md", 1, slot)
       assert :ok = FencedPublication.remove(removal(actor, "gone.md"), 2, slot)
       assert %{documents: 1, floor: [2]} = rows(actor)
     end
@@ -40,10 +41,10 @@ defmodule Arca.TenantTablesTest do
     assert {:ok, counts} = Arca.TenantTables.delete_all_for(purged)
     assert counts["fenced_documents"] == 1
     assert counts["fenced_document_floors"] == 1
-    assert counts["storage_staging"] == 2
+    assert counts["storage_staging"] == 3
 
     assert %{documents: 0, staging: 0, floor: []} = rows(purged)
-    assert %{documents: 1, staging: 2, floor: [2]} = rows(kept)
+    assert %{documents: 1, staging: 3, floor: [2]} = rows(kept)
   end
 
   # ---- helpers ---------------------------------------------------------------

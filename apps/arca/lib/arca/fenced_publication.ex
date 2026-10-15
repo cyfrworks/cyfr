@@ -47,8 +47,8 @@ defmodule Arca.FencedPublication do
       authoritative reference for bytes staged by `Arca.Storage.stage/3`
       (`staged`, and the `digest` the writer expects, when it names one).
       A document no publication has created reads as revision 0, and the
-      first publication creates it at a revision above the athanor's
-      floor (below). The staged bytes stay
+      first publication creates it one above the athanor's floor (below):
+      at revision 1 unless a removed document raised it. The staged bytes stay
       where they were written: the document names their key, the staging
       row becomes `published` in the same transaction, and nothing is
       renamed on any adapter. The staging row of the bytes a publication
@@ -60,15 +60,18 @@ defmodule Arca.FencedPublication do
   ## The revision floor
 
   A removed document's revision is never reused in its athanor. Each
-  athanor has one `fenced_document_floors` row: a removal raises its
-  `floor` to the revision it removed, and a create raises it by one and
-  creates the document at the result. A document removed and created
-  again therefore stands above every revision it held before, and a
-  writer holding a revision it read from the removed incarnation — an
-  update, or a removal — is `:stale` against the new one. Creates and
-  removals of an athanor's documents all write that row, so they
-  serialize per athanor; on PostgreSQL a removal takes it before the
-  document's row, the order a create takes them in.
+  athanor has one `fenced_document_floors` row whose `floor` is the
+  highest revision a removed document there held: a removal raises it to
+  the revision it removed, and a create takes the row and creates the
+  document at `floor + 1`, so a document never removed is created at 1. A
+  document removed and created again therefore stands above every
+  revision it held before, and a writer holding a revision it read from
+  the removed incarnation — an update, or a removal — is `:stale` against
+  the new one. Creates and removals of an athanor's documents all take
+  that row, so they serialize per athanor. Both take it before the
+  document's row, so a removal never waits on the floor while holding
+  the document a create waits on, the deadlock the other order allows on
+  PostgreSQL.
 
   A writer that read a document as absent creates it whatever was
   created and removed there since its read: creating what is absent is
@@ -405,13 +408,12 @@ defmodule Arca.FencedPublication do
   end
 
   # The publishing statement. A document the writer read as absent is
-  # created at the athanor's floor raised by one, and a create that finds
-  # one already there has lost to another publication, its raise rolled
-  # back with it; every other publication is a compare-and-set on the
-  # revision the writer read.
+  # created one above the athanor's floor, taken first, and a create that
+  # finds one already there has lost to another publication; every other
+  # publication is a compare-and-set on the revision the writer read.
   defp commit({:document, athanor_id, key, _staged, _digest}, {blob_key, digest}, 0) do
     now = Arca.ServerMetaStorage.now!()
-    revision = raise_floor(athanor_id)
+    revision = take_floor(athanor_id) + 1
 
     row = %{
       athanor_id: athanor_id,
@@ -477,9 +479,7 @@ defmodule Arca.FencedPublication do
   # is absent, so there is nothing at it to remove.
   #
   # The floor is raised to the revision read before the document's row is
-  # touched: a create holds the floor row when it inserts the document,
-  # so a removal that held the document while it waited for the floor
-  # would deadlock against a create of the same key on PostgreSQL. The
+  # touched, the order a create takes them in (see the module doc). The
   # raise matters only when the delete lands, the one case its revision
   # is the one removed; a stale removal rolls it back.
   defp removal(athanor_id, key, revision_read) do
@@ -505,14 +505,16 @@ defmodule Arca.FencedPublication do
 
   defp select_blob_key(query), do: from(d in query, select: d.blob_key)
 
-  # The create's upsert: the athanor's floor raised by one and read back
-  # in the one statement, the first create of an athanor writing 1.
-  # Every create of the athanor writes this row, so a second waits for
-  # the first to end and raises past it.
-  defp raise_floor(athanor_id) do
+  # The create's upsert: the athanor's floor taken and read back in the
+  # one statement, written 0 where no removal has raised it. The update
+  # sets the floor to itself rather than doing nothing: `DO NOTHING`
+  # neither locks the row on PostgreSQL nor returns it, and the lock is
+  # what makes a removal that would raise the floor wait for this create
+  # to end.
+  defp take_floor(athanor_id) do
     {1, [%{floor: floor}]} =
-      Arca.Repo.insert_all(FencedDocumentFloor, [%{athanor_id: athanor_id, floor: 1}],
-        on_conflict: [inc: [floor: 1]],
+      Arca.Repo.insert_all(FencedDocumentFloor, [%{athanor_id: athanor_id, floor: 0}],
+        on_conflict: from(f in FencedDocumentFloor, update: [set: [floor: f.floor]]),
         conflict_target: [:athanor_id],
         returning: [:floor]
       )
