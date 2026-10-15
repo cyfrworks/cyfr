@@ -60,5 +60,5 @@ version ever changes, update `SELF_REF` in `src/lib.rs` and `@probe_ref` in
 ```
 src/lib.rs        sha256:e206a6b3e4633a35636a4001957004714ef8ab25932399c74223d68636df436d
 Cargo.lock        sha256:695ceaa15daafe0e307ee5bb4497e044c8bcae806665f8923f015b8b86c6a1b2
-nested_probe.wasm sha256:a14fb665a43078cdce13ad9c6879cc3984555dcf5b9a8e14efb0d858286262bb
+nested_probe.wasm sha256:a19032f3fbecf90d5a85ab44c9a3936c6c5dacf7d091976c6aac232deb9ad420
 ```
