@@ -913,7 +913,7 @@ defmodule Opus.HostListenerTest do
     # the bind, the held socket answers 127.0.0.1, and 127.0.0.3, which no
     # test binds, refuses the port.
     @tag skip: @second_loopback_unavailable && "this host cannot bind 127.0.0.2"
-    test "is the address the supervisor names, and no other address answers on its port" do
+    test "binds only the address the supervisor names" do
       {:ok, held} = :gen_tcp.listen(0, [:binary, ip: {127, 0, 0, 1}, active: false])
       {:ok, {_, port}} = :inet.sockname(held)
 
