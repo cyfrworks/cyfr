@@ -223,9 +223,14 @@ def check_apt_refresh(job, inputs):
     lines = [line.strip() for line in str(step.get("run", "")).splitlines() if line.strip()]
     if dated not in lines:
         return f"the step {step_id} does not write {output} as the UTC date"
-    for line in lines[: lines.index(dated)]:
+    at_date = lines.index(dated)
+    for line in lines[:at_date]:
         if not OUTPUT_LINE.match(line):
             return f"the step {step_id} runs {line!r} before it writes the date"
+    # A later write of the same output would replace the date.
+    for line in lines[at_date + 1 :]:
+        if re.search(rf"(?<![\w-]){re.escape(output)}=", line):
+            return f"the step {step_id} writes {output} again after the date: {line!r}"
     return None
 
 
@@ -456,6 +461,11 @@ def apt_refresh_exits_first(wf):
     step["run"] = step["run"].replace('echo "apt-refresh=', 'exit 0\necho "apt-refresh=', 1)
 
 
+def apt_refresh_overwritten(wf):
+    step = step_named(wf, "images", "Extract metadata")
+    step["run"] = step["run"].rstrip("\n") + '\necho "apt-refresh=2026-01-01" >> "$GITHUB_OUTPUT"\n'
+
+
 def apt_refresh_for_locus_only(wf):
     step = step_named(wf, "images", "Extract metadata")
     step["run"] = step["run"].replace(
@@ -504,6 +514,7 @@ MUTANTS = [
     ("an APT_REFRESH step with an if:", apt_refresh_skipped),
     ("an APT_REFRESH step after the build", apt_refresh_after_build),
     ("an exit before the APT_REFRESH date", apt_refresh_exits_first),
+    ("the APT_REFRESH date overwritten after it", apt_refresh_overwritten),
     ("a scan whose findings never fail it", scan_never_fails),
     ("|| : after the scanned-is-pushed check", comparison_ignored),
     ("packages: write on the CLI release", release_widened),
