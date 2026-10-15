@@ -301,6 +301,36 @@ defmodule Cyfr.CrossLanguageDriftTest do
   defp trim_colon(":" <> tag), do: tag
 
   # ==========================================================================
+  # The readers of the shared vector files
+  # ==========================================================================
+
+  # One vector file consumed by a test on every side: each reader names its
+  # file and every section it holds its module to. The values are each
+  # reader's own assertions; this roster fails when a reader stops reading.
+  test "each side's test reads the shared vectors it is held to" do
+    for {test_file, vectors, sections} <- [
+          {"apps/prima/test/prima/consent_signal_test.exs", "confirmation.json", [~s("signal")]},
+          {"apps/prima/test/prima/mcp/message_test.exs", "confirmation.json", [~s("signal")]},
+          {"apps/cyfr/test/cyfr_web/controllers/api_error_test.exs", "confirmation.json",
+           [~s("signal")]},
+          {"apps/codex/cmd/consent_error_test.go", "confirmation.json", [~s("signal")]},
+          {"apps/cyfr/assets/test/carrier/carry.test.mjs", "carry.json",
+           ~w(vectors.fragments.parse vectors.fragments.valid vectors.max_fragment_bytes
+              vectors.returns)},
+          {"apps/cyfr/assets/test/system_layer/device_key.test.mjs", "device_cert.json",
+           ~w(certs.challenge_refusals certs.proof_cases certs.refusals certs.proof_protocol
+              certs.purposes)}
+        ] do
+      source = read!(test_file)
+      assert source =~ vectors, "#{test_file} does not read #{vectors}"
+
+      for section <- sections do
+        assert source =~ section, "#{test_file} does not read #{vectors}'s #{section}"
+      end
+    end
+  end
+
+  # ==========================================================================
   # The MAC names: domains, service labels and the auth header
   # ==========================================================================
 

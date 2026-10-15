@@ -103,6 +103,7 @@ LOAD = "type=docker,name="
 # that writes the UTC date on every run, so each image's upgrade refreshes
 # daily (Dockerfile and Dockerfile.locus read it as ARG APT_REFRESH).
 APT_ARG = re.compile(r"^APT_REFRESH=\$\{\{ steps\.([\w-]+)\.outputs\.([\w-]+) \}\}$")
+OUTPUT_LINE = re.compile(r'^echo "[\w-]+=[^"]*" >> "\$GITHUB_OUTPUT"$')
 APT_UPGRADE = re.compile(r"^RUN .*\$\{APT_REFRESH\}.*apt-get upgrade", re.MULTILINE)
 
 
@@ -207,24 +208,46 @@ def check_apt_refresh(job, inputs):
         return f"the build's build-args are {args!r}, not APT_REFRESH from a step's output"
     step_id, output = match.groups()
     dated = f'echo "{output}=$(date -u +%F)" >> "$GITHUB_OUTPUT"'
-    for s in job.get("steps", []):
-        if s.get("id") == step_id:
-            run = str(s.get("run", ""))
-            if dated in [line.strip() for line in run.splitlines()] and not re.search(
-                r"^\s*(if|case|while|until)\b|&&|\|\|", run, re.MULTILINE
-            ):
-                return None
-            return f"the step {step_id} does not write {output} as the UTC date on every run"
-    return f"no step {step_id} writes the build's APT_REFRESH"
+    steps = job.get("steps", [])
+    at = step_index(job, lambda s: s.get("id") == step_id)
+    build = step_index(job, lambda s: "docker/build-push-action" in str(s.get("uses")))
+    if at is None:
+        return f"no step {step_id} writes the build's APT_REFRESH"
+    step = steps[at]
+    if "if" in step:
+        return f"the step {step_id} that writes APT_REFRESH runs only if {step['if']}"
+    if at > build:
+        return f"the step {step_id} that writes APT_REFRESH runs after the build"
+    # Every line before the dated one writes an output and nothing else, so
+    # nothing in the step can end it before the date is written.
+    lines = [line.strip() for line in str(step.get("run", "")).splitlines() if line.strip()]
+    if dated not in lines:
+        return f"the step {step_id} does not write {output} as the UTC date"
+    for line in lines[: lines.index(dated)]:
+        if not OUTPUT_LINE.match(line):
+            return f"the step {step_id} runs {line!r} before it writes the date"
+    return None
 
 
+# The ARG must be declared in the upgrade layer's own stage, between its
+# FROM and the RUN: an ARG above the FROM, or in another stage, leaves
+# ${APT_REFRESH} empty there, and the layer is served from cache forever.
 def check_apt_layers(dockerfiles):
     for path, text in dockerfiles.items():
-        arg = text.find("\nARG APT_REFRESH")
         layer = APT_UPGRADE.search(text)
-        if arg < 0 or layer is None or layer.start() < arg:
-            return f"{path}'s apt-get upgrade layer does not read ARG APT_REFRESH"
+        if layer is None:
+            return f"{path} has no apt-get upgrade layer that reads ${{APT_REFRESH}}"
+        stage = [m.end() for m in re.finditer(r"^FROM\b.*$", text[: layer.start()], re.MULTILINE)]
+        if not stage or not re.search(r"^ARG APT_REFRESH\b", text[stage[-1] : layer.start()], re.MULTILINE):
+            return f"{path}'s apt-get upgrade layer does not read an ARG APT_REFRESH of its own stage"
     return None
+
+
+def arg_above_stage(text):
+    layer = APT_UPGRADE.search(text)
+    stage = list(re.finditer(r"^FROM\b.*$", text[: layer.start()], re.MULTILINE))[-1]
+    without = text.replace("\nARG APT_REFRESH=0\n", "\n", 1)
+    return without.replace(stage.group(0), "ARG APT_REFRESH=0\n" + stage.group(0), 1)
 
 
 def dockerfiles():
@@ -417,6 +440,22 @@ def apt_refresh_fixed(wf):
     step["run"] = step["run"].replace("$(date -u +%F)", "2026-10-15")
 
 
+def apt_refresh_skipped(wf):
+    step_named(wf, "images", "Extract metadata")["if"] = "matrix.image == 'cyfr-locus'"
+
+
+def apt_refresh_after_build(wf):
+    steps = wf["jobs"]["images"]["steps"]
+    meta = step_named(wf, "images", "Extract metadata")
+    steps.remove(meta)
+    steps.append(meta)
+
+
+def apt_refresh_exits_first(wf):
+    step = step_named(wf, "images", "Extract metadata")
+    step["run"] = step["run"].replace('echo "apt-refresh=', 'exit 0\necho "apt-refresh=', 1)
+
+
 def apt_refresh_for_locus_only(wf):
     step = step_named(wf, "images", "Extract metadata")
     step["run"] = step["run"].replace(
@@ -462,6 +501,9 @@ MUTANTS = [
     ("no APT_REFRESH build argument", no_apt_refresh),
     ("an APT_REFRESH that is not the date", apt_refresh_fixed),
     ("an APT_REFRESH written for one image only", apt_refresh_for_locus_only),
+    ("an APT_REFRESH step with an if:", apt_refresh_skipped),
+    ("an APT_REFRESH step after the build", apt_refresh_after_build),
+    ("an exit before the APT_REFRESH date", apt_refresh_exits_first),
     ("a scan whose findings never fail it", scan_never_fails),
     ("|| : after the scanned-is-pushed check", comparison_ignored),
     ("packages: write on the CLI release", release_widened),
@@ -499,6 +541,7 @@ def main():
         for name, mutant in [
             ("no ARG APT_REFRESH", text.replace("\nARG APT_REFRESH", "\n# ARG APT_REFRESH")),
             ("an upgrade that does not read it", text.replace("${APT_REFRESH}", "refresh")),
+            ("the ARG above the upgrade stage's FROM", arg_above_stage(text)),
         ]:
             if mutant == text:
                 failures.append(f"a mutant changed nothing: {path}, {name}")
@@ -511,7 +554,7 @@ def main():
         return 1
     print(
         f"tag pipeline ok: release.yml and its Dockerfiles pass; {len(refused)} fixtures, "
-        f"{len(MUTANTS)} mutants of release.yml and {2 * len(files)} of the Dockerfiles refused"
+        f"{len(MUTANTS)} mutants of release.yml and {3 * len(files)} of the Dockerfiles refused"
     )
     return 0
 

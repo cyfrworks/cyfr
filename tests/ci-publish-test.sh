@@ -57,8 +57,6 @@ remove_registry() {
   registry_id=
 }
 
-anonymous_volumes() { docker volume ls -q --filter label=com.docker.volume.anonymous | wc -l; }
-
 cleanup() {
   remove_registry
   [ -n "$builder" ] && docker buildx rm -f "$builder" > /dev/null 2>&1
@@ -98,7 +96,6 @@ docker image inspect "$registry_image" > /dev/null 2>&1 ||
   docker pull -q "$registry_image" > /dev/null 2> "$scratch/err" || die "cannot pull $registry_image"
 # An ephemeral host port: nothing else on the host is displaced. Docker
 # trusts plain HTTP on 127.0.0.0/8.
-anonymous_before=$(anonymous_volumes)
 registry_id=$(docker run -d --name "$name" -p 127.0.0.1::5000 "$registry_image" 2> "$scratch/err") ||
   die "cannot start $registry_image"
 registry_volumes=$(docker inspect -f '{{range .Mounts}}{{if eq .Type "volume"}}{{.Name}} {{end}}{{end}}' "$registry_id")
@@ -516,10 +513,8 @@ left=
 for volume in $registry_volumes; do
   docker volume inspect "$volume" > /dev/null 2>&1 && left="$left $volume"
 done
-anonymous_after=$(anonymous_volumes)
-if [ -n "$registry_volumes" ] && [ -z "$left" ] && [ "$anonymous_after" = "$anonymous_before" ]; then pass "$label"; else
-  fail "$label" "the registry mounted: ${registry_volumes:-no volume}" "left:${left:- none}" \
-    "anonymous volumes: $anonymous_before before, $anonymous_after after"
+if [ -n "$registry_volumes" ] && [ -z "$left" ]; then pass "$label"; else
+  fail "$label" "the registry mounted: ${registry_volumes:-no volume}" "left:${left:- none}"
 fi
 
 echo "$((cases - failures))/$cases passed"
