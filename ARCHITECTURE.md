@@ -316,7 +316,7 @@ Two kinds, named apart. **Unit publication** stages a component or AQUA unit und
 
 Each fenced writer verifies the live slot in its writing transaction, by its own mechanism. Notes, layout documents, canvas versions documents and MCP server rows publish through `Arca.FencedPublication`. Schedule outcomes verify the live slot under the schedule's row lock. Feed results verify the live slot and are ordered by the sequence their fire claimed, so a result that started earlier never replaces a later one. Provisioning fills verify the live slot at their final commit. *Not built yet:* that check at a provisioning fill's final commit, whose writers hold a cached view of ownership.
 
-A removed document's revision is never reused in its athanor, so a writer holding a revision it read before the removal cannot overwrite a document created after it. *Not built yet:* the revision floor; a document created after a removal starts again at revision 1.
+A removed document's revision is never reused in its athanor, so a writer holding a revision it read before the removal cannot overwrite a document created after it.
 
 Guest objects publish by generation: each write stores its bytes under `objects/` at a generation of its own, the path's row names its settled generation as the read pointer, and nothing mutates a published object in place. *Not built yet:* guest objects by generation; a guest's write replaces the object at its path.
 

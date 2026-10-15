@@ -11,7 +11,11 @@ defmodule Aqua.Notes do
   staged (`Arca.Storage.stage/3`) and its reference published under this
   member's live ownership of its slot and the revision the writer read,
   so a member that lost its slot writes nothing and a writer that read an
-  older revision is refused rather than writing over a newer note. The
+  older revision is refused rather than writing over a newer note. A
+  forgotten note's revision is never reused: a note kept again under its
+  name stands above every revision it held, so a writer that read the
+  forgotten one is refused too. A writer that read the name as unused
+  keeps its note there, whatever was kept and forgotten since. The
   Files page shows the same documents as its `notes/` folder
   (`Arca.Files`).
 

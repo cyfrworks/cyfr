@@ -47,7 +47,8 @@ defmodule Arca.FencedPublication do
       authoritative reference for bytes staged by `Arca.Storage.stage/3`
       (`staged`, and the `digest` the writer expects, when it names one).
       A document no publication has created reads as revision 0, and the
-      first publication creates it at revision 1. The staged bytes stay
+      first publication creates it at a revision above the athanor's
+      floor (below). The staged bytes stay
       where they were written: the document names their key, the staging
       row becomes `published` in the same transaction, and nothing is
       renamed on any adapter. The staging row of the bytes a publication
@@ -56,14 +57,33 @@ defmodule Arca.FencedPublication do
       it, `list/2` reads a prefix of keys, and `remove/3` deletes it under
       the same fence, handing its bytes to the sweep.
 
+  ## The revision floor
+
+  A removed document's revision is never reused in its athanor. Each
+  athanor has one `fenced_document_floors` row: a removal raises its
+  `floor` to the revision it removed, and a create raises it by one and
+  creates the document at the result. A document removed and created
+  again therefore stands above every revision it held before, and a
+  writer holding a revision it read from the removed incarnation — an
+  update, or a removal — is `:stale` against the new one. Creates and
+  removals of an athanor's documents all write that row, so they
+  serialize per athanor; on PostgreSQL a removal takes it before the
+  document's row, the order a create takes them in.
+
+  A writer that read a document as absent creates it whatever was
+  created and removed there since its read: creating what is absent is
+  what it asked for.
+
   ## Idempotency
 
   By resource, revision and content together. Publishing what is already
-  the resource's content at `revision_read + 1` answers that revision and
-  writes nothing; the same content at any other revision is `:stale`. A
-  document's content is the staged key with its digest, so two writers
-  that staged identical bytes hold two contents, each published against
-  its own revision.
+  the resource's content answers the revision it holds and writes
+  nothing: for a row, the content at `revision_read + 1`; for a document,
+  the staged key with its digest at any revision above `revision_read`,
+  since a create's revision comes from the floor. The same content
+  anywhere else is `:stale`. A document's staged key is its writer's
+  own, so two writers that staged identical bytes hold two contents,
+  each published against its own revision.
 
   ## The transaction budget
 
@@ -75,7 +95,7 @@ defmodule Arca.FencedPublication do
 
   import Ecto.Query, only: [from: 2, where: 3]
 
-  alias Arca.Schemas.{FencedDocument, StorageStaging}
+  alias Arca.Schemas.{FencedDocument, FencedDocumentFloor, StorageStaging}
 
   # The budget must stay under `Arca.ControlPlane.margin_ms/0` (1000 ms):
   # the margin is what a member gives up of every lease it wins, so a
@@ -183,7 +203,8 @@ defmodule Arca.FencedPublication do
   what is absent included), `:budget` and `:database_error`.
 
   A removed document reads as absent, revision 0, as one never published
-  does: its next publication creates it again at revision 1.
+  does, and raises its athanor's floor to the revision removed: its next
+  publication creates it again above every revision it held.
 
   Raises `ArgumentError` for a change naming anything else, or one that
   carries staged bytes or `attrs`.
@@ -345,8 +366,11 @@ defmodule Arca.FencedPublication do
   end
 
   # The attempt is not a reserved one this publication can claim. Already
-  # published, it is a replay: a no-op when the document holds exactly it
-  # at the revision after the one read, `:stale` otherwise. Anything else
+  # published, it is a replay: a no-op when the document still names its
+  # bytes, by key and digest, at a revision above the one read (a create
+  # took its revision from the floor, not `revision_read + 1`), `:stale`
+  # otherwise. The staged key is this attempt's alone, so a document that
+  # names it holds this publication. Anything else
   # — expired, cancelled, claimed by the sweep, gone, never recorded,
   # another digest, another athanor's — cannot be published.
   defp replayed({:document, athanor_id, key, staged, digest}, revision_read) do
@@ -365,7 +389,7 @@ defmodule Arca.FencedPublication do
 
         case current do
           %FencedDocument{revision: revision, blob_key: ^blob_key, digest: ^staged_digest}
-          when revision == revision_read + 1 ->
+          when revision > revision_read ->
             {:ok, revision}
 
           _ ->
@@ -381,16 +405,18 @@ defmodule Arca.FencedPublication do
   end
 
   # The publishing statement. A document the writer read as absent is
-  # created at revision 1, and a create that finds one already there has
-  # lost to another publication; every other publication is a
-  # compare-and-set on the revision the writer read.
+  # created at the athanor's floor raised by one, and a create that finds
+  # one already there has lost to another publication, its raise rolled
+  # back with it; every other publication is a compare-and-set on the
+  # revision the writer read.
   defp commit({:document, athanor_id, key, _staged, _digest}, {blob_key, digest}, 0) do
     now = Arca.ServerMetaStorage.now!()
+    revision = raise_floor(athanor_id)
 
     row = %{
       athanor_id: athanor_id,
       key: key,
-      revision: 1,
+      revision: revision,
       blob_key: blob_key,
       digest: digest,
       inserted_at: now,
@@ -398,7 +424,7 @@ defmodule Arca.FencedPublication do
     }
 
     case Arca.Repo.insert_all(FencedDocument, [row], on_conflict: :nothing) do
-      {1, _} -> {:ok, 1}
+      {1, _} -> {:ok, revision}
       {0, _} -> {:error, :stale}
     end
   end
@@ -449,7 +475,16 @@ defmodule Arca.FencedPublication do
   # its blob key read under the row's lock first, and the bytes it named
   # handed to the sweep in the same transaction. A document at revision 0
   # is absent, so there is nothing at it to remove.
+  #
+  # The floor is raised to the revision read before the document's row is
+  # touched: a create holds the floor row when it inserts the document,
+  # so a removal that held the document while it waited for the floor
+  # would deadlock against a create of the same key on PostgreSQL. The
+  # raise matters only when the delete lands, the one case its revision
+  # is the one removed; a stale removal rolls it back.
   defp removal(athanor_id, key, revision_read) do
+    hold_floor(athanor_id, revision_read)
+
     current =
       from(d in FencedDocument,
         where: d.athanor_id == ^athanor_id and d.key == ^key and d.revision == ^revision_read
@@ -469,6 +504,41 @@ defmodule Arca.FencedPublication do
   end
 
   defp select_blob_key(query), do: from(d in query, select: d.blob_key)
+
+  # The create's upsert: the athanor's floor raised by one and read back
+  # in the one statement, the first create of an athanor writing 1.
+  # Every create of the athanor writes this row, so a second waits for
+  # the first to end and raises past it.
+  defp raise_floor(athanor_id) do
+    {1, [%{floor: floor}]} =
+      Arca.Repo.insert_all(FencedDocumentFloor, [%{athanor_id: athanor_id, floor: 1}],
+        on_conflict: [inc: [floor: 1]],
+        conflict_target: [:athanor_id],
+        returning: [:floor]
+      )
+
+    floor
+  end
+
+  # The removal's upsert: the floor raised to `revision` where it stands
+  # below it, `GREATEST(floor, revision)` written the one way both
+  # adapters read. A floor already at or above it is left as it is, and
+  # its row is still taken (PostgreSQL locks a row its `ON CONFLICT DO
+  # UPDATE` matched whether or not the `WHERE` held; SQLite's one write
+  # lock is the transaction's already).
+  defp hold_floor(athanor_id, revision) do
+    {_count, _} =
+      Arca.Repo.insert_all(FencedDocumentFloor, [%{athanor_id: athanor_id, floor: revision}],
+        on_conflict:
+          from(f in FencedDocumentFloor,
+            where: f.floor < ^revision,
+            update: [set: [floor: ^revision]]
+          ),
+        conflict_target: [:athanor_id]
+      )
+
+    :ok
+  end
 
   # Only a `published` row: the replaced bytes were this document's, and
   # a row in any other state is not a publication's to hand over.

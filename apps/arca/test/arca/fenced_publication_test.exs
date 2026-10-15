@@ -8,7 +8,9 @@ defmodule Arca.FencedPublicationTest do
   comparison of generations), the writer's live ownership of its slot on
   the database's clock (`:not_owner`, whether the lease was taken over or
   merely ran out), and never the lease row's renewal fence. Idempotency is
-  by resource, revision and content together.
+  by resource, revision and content together. A removed document's
+  revision is never reused in its athanor: a document created again
+  stands above every revision it held.
 
   Every case names its own member slot and athanor, so what it measures
   is its own.
@@ -171,6 +173,174 @@ defmodule Arca.FencedPublicationTest do
       # The losing attempt is still reserved, and publishes once read again.
       assert %StorageStaging{state: "reserved"} = staging(second)
       assert {:ok, 2} = FencedPublication.publish(document(actor, key, second), 1, slot)
+    end
+  end
+
+  describe "a removed revision is never reused" do
+    test "a writer holding a removed document's revision does not publish over it created again",
+         %{actor: actor, key: key} do
+      slot = slot!()
+
+      assert {:ok, 1} =
+               FencedPublication.publish(document(actor, key, stage!(actor, "v1")), 0, slot)
+
+      assert :ok = FencedPublication.remove(removal(actor, key), 1, slot)
+
+      again = stage!(actor, "again")
+      assert {:ok, created} = FencedPublication.publish(document(actor, key, again), 0, slot)
+
+      # A writer that read revision 1 before the removal publishes now.
+      stale = stage!(actor, "stale")
+      assert {:error, :stale} = FencedPublication.publish(document(actor, key, stale), 1, slot)
+
+      assert created == 2
+      assert %{revision: 2, blob_key: blob_key} = FencedPublication.document(actor, key)
+      assert blob_key == "staging/" <> again
+      assert %StorageStaging{state: "reserved"} = staging(stale)
+    end
+
+    test "a removal holding the old incarnation's revision is :stale against the new one", %{
+      actor: actor,
+      key: key
+    } do
+      slot = slot!()
+
+      assert {:ok, 1} =
+               FencedPublication.publish(document(actor, key, stage!(actor, "v1")), 0, slot)
+
+      assert :ok = FencedPublication.remove(removal(actor, key), 1, slot)
+
+      again = stage!(actor, "again")
+      assert {:ok, created} = FencedPublication.publish(document(actor, key, again), 0, slot)
+
+      assert {:error, :stale} = FencedPublication.remove(removal(actor, key), 1, slot)
+      assert created == 2
+      assert %{revision: 2} = FencedPublication.document(actor, key)
+      assert %StorageStaging{state: "published"} = staging(again)
+    end
+
+    test "an exact create retry after a removal answers the revision it created, and writes nothing",
+         %{actor: actor, key: key} do
+      slot = slot!()
+
+      assert {:ok, 1} =
+               FencedPublication.publish(document(actor, key, stage!(actor, "v1")), 0, slot)
+
+      assert {:ok, 2} =
+               FencedPublication.publish(document(actor, key, stage!(actor, "v2")), 1, slot)
+
+      assert :ok = FencedPublication.remove(removal(actor, key), 2, slot)
+
+      change = document(actor, key, stage!(actor, "again"))
+      assert {:ok, 3} = FencedPublication.publish(change, 0, slot)
+      assert {:ok, 3} = FencedPublication.publish(change, 0, slot)
+
+      assert {:ok, 3} =
+               FencedPublication.publish(
+                 %{change | digest: Prima.Digest.sha256("again")},
+                 0,
+                 slot
+               )
+
+      # Another attempt's identical bytes are no replay of this one.
+      other = stage!(actor, "again")
+      assert {:error, :stale} = FencedPublication.publish(document(actor, key, other), 0, slot)
+      assert {:error, :stale} = FencedPublication.publish(change, 3, slot)
+      assert %{revision: 3} = FencedPublication.document(actor, key)
+
+      # The replays raised nothing: the athanor's next create is the one after.
+      next = key <> "-next"
+
+      assert {:ok, 4} =
+               FencedPublication.publish(document(actor, next, stage!(actor, "n")), 0, slot)
+    end
+
+    test "every create of an athanor takes its revision from the one floor", %{actor: actor} do
+      slot = slot!()
+      prefix = "floor-#{System.unique_integer([:positive])}/"
+
+      assert {:ok, 1} =
+               FencedPublication.publish(
+                 document(actor, prefix <> "a", stage!(actor, "a")),
+                 0,
+                 slot
+               )
+
+      assert {:ok, 2} =
+               FencedPublication.publish(
+                 document(actor, prefix <> "b", stage!(actor, "b")),
+                 0,
+                 slot
+               )
+
+      # Updates count from the document's own revision; a removal raises
+      # the floor to the revision removed, and never lowers it.
+      assert {:ok, 2} =
+               FencedPublication.publish(
+                 document(actor, prefix <> "a", stage!(actor, "a2")),
+                 1,
+                 slot
+               )
+
+      assert {:ok, 3} =
+               FencedPublication.publish(
+                 document(actor, prefix <> "a", stage!(actor, "a3")),
+                 2,
+                 slot
+               )
+
+      assert {:ok, 4} =
+               FencedPublication.publish(
+                 document(actor, prefix <> "a", stage!(actor, "a4")),
+                 3,
+                 slot
+               )
+
+      assert :ok = FencedPublication.remove(removal(actor, prefix <> "a"), 4, slot)
+      assert :ok = FencedPublication.remove(removal(actor, prefix <> "b"), 2, slot)
+      assert floor_of(actor) == 4
+
+      assert {:ok, 5} =
+               FencedPublication.publish(
+                 document(actor, prefix <> "b", stage!(actor, "b2")),
+                 0,
+                 slot
+               )
+
+      # Another athanor's floor is its own.
+      other = actor("ath_fp_floor_other_#{System.unique_integer([:positive])}")
+
+      assert {:ok, 1} =
+               FencedPublication.publish(
+                 document(other, prefix <> "a", stage!(other, "o")),
+                 0,
+                 slot
+               )
+
+      assert floor_of(actor) == 5
+    end
+
+    test "a refused create or removal leaves the floor as it was", %{actor: actor, key: key} do
+      slot = slot!()
+
+      assert {:ok, 1} =
+               FencedPublication.publish(document(actor, key, stage!(actor, "v1")), 0, slot)
+
+      assert floor_of(actor) == 1
+
+      # A create that lost to the document already there, and a removal of
+      # a revision it no longer holds, roll their raises back.
+      assert {:error, :stale} =
+               FencedPublication.publish(document(actor, key, stage!(actor, "late")), 0, slot)
+
+      assert {:error, :stale} = FencedPublication.remove(removal(actor, key), 7, slot)
+      assert floor_of(actor) == 1
+
+      successor = take_over!(slot)
+      assert {:error, :not_owner} = FencedPublication.remove(removal(actor, key), 1, slot)
+      assert floor_of(actor) == 1
+      assert :ok = FencedPublication.remove(removal(actor, key), 1, successor)
+      assert floor_of(actor) == 1
     end
   end
 
@@ -406,10 +576,11 @@ defmodule Arca.FencedPublicationTest do
       slot = slot!()
       prefix = "list-#{System.unique_integer([:positive])}/"
 
-      for key <- ["b.md", "a.md", "deeper/c.md"] do
+      # Each create in the athanor takes the next revision of its floor.
+      for {key, revision} <- [{"b.md", 1}, {"a.md", 2}, {"deeper/c.md", 3}] do
         staged = stage!(actor, key)
 
-        assert {:ok, 1} =
+        assert {:ok, ^revision} =
                  FencedPublication.publish(document(actor, prefix <> key, staged), 0, slot)
       end
 
@@ -417,7 +588,7 @@ defmodule Arca.FencedPublicationTest do
       # and another athanor's document are not listed.
       staged = stage!(actor, "near")
       near = String.trim_trailing(prefix, "/") <> "-near/x.md"
-      assert {:ok, 1} = FencedPublication.publish(document(actor, near, staged), 0, slot)
+      assert {:ok, 4} = FencedPublication.publish(document(actor, near, staged), 0, slot)
       other = actor("ath_fp_list_other_#{System.unique_integer([:positive])}")
       theirs = stage!(other, "theirs")
 
@@ -429,7 +600,9 @@ defmodule Arca.FencedPublicationTest do
       assert Enum.map(docs, & &1.key) ==
                Enum.map(["a.md", "b.md", "deeper/c.md"], &(prefix <> &1))
 
-      assert Enum.all?(docs, &(&1.athanor_id == actor.athanor_id and &1.revision == 1))
+      assert Enum.map(docs, &{&1.athanor_id, &1.revision}) ==
+               Enum.map([2, 1, 3], &{actor.athanor_id, &1})
+
       assert {:ok, []} = FencedPublication.list(actor, "list-%/")
       assert {:ok, []} = FencedPublication.list(actor, String.upcase(prefix))
       assert {:error, :no_athanor} = FencedPublication.list(%{actor | athanor_id: ""}, prefix)
@@ -456,10 +629,11 @@ defmodule Arca.FencedPublicationTest do
       assert %StorageStaging{state: "deleting"} = staging(second)
 
       # Removed is absent: nothing to remove again, and a publication that
-      # read it absent creates it anew.
+      # read it absent creates it anew, above every revision it held.
       assert {:error, :stale} = FencedPublication.remove(removal(actor, key), 2, slot)
       third = stage!(actor, "v3")
-      assert {:ok, 1} = FencedPublication.publish(document(actor, key, third), 0, slot)
+      assert {:ok, revision} = FencedPublication.publish(document(actor, key, third), 0, slot)
+      assert revision > 2
     end
 
     test "a slot taken over, or run out, removes nothing", %{actor: actor, key: key} do
@@ -527,6 +701,16 @@ defmodule Arca.FencedPublicationTest do
 
   defp staging(id), do: Arca.Repo.get!(StorageStaging, id)
 
+  # The athanor's revision floor, read by its table's name.
+  defp floor_of(actor) do
+    Arca.Repo.one!(
+      from(f in "fenced_document_floors",
+        where: f.athanor_id == ^actor.athanor_id,
+        select: f.floor
+      )
+    )
+  end
+
   defp expire_staging!(id) do
     past = DateTime.add(Arca.ServerMetaStorage.now!(), -1_000, :millisecond)
 
@@ -590,6 +774,175 @@ defmodule Arca.FencedPublicationTest do
       )
 
     %{node: node, owner: owner, generation: generation + 1, fence: fence + 1}
+  end
+end
+
+defmodule Arca.FencedPublicationFloorRaceTest do
+  @moduledoc """
+  Two creators of one document removed at a raised floor, racing on
+  connections of their own outside the sandbox: both read it absent and
+  are held at their publishing statements by a third transaction's
+  uncommitted row at the key. Once it rolls back, exactly one creates the
+  document, above the revision its removed incarnation held, and the
+  other is `:stale`, its raise of the floor rolled back with it.
+
+  Both adapters: on PostgreSQL one creator waits on the key and the other
+  on the floor row the first holds; on SQLite both wait on the one write
+  lock.
+  """
+
+  use ExUnit.Case, async: false
+
+  import Ecto.Query, only: [from: 2]
+
+  alias Arca.FencedPublication
+  alias Arca.FencedPublication.Change
+  alias Arca.Schemas.{CellLease, FencedDocument}
+  alias Ecto.Adapters.SQL.Sandbox
+
+  defp unboxed(fun), do: Sandbox.unboxed_run(Arca.Repo, fun)
+
+  setup do
+    actor = Arca.Test.Actor.local(athanor_id: "ath_fpr_#{System.unique_integer([:positive])}")
+    node = "node-fpr-#{System.unique_integer([:positive])}"
+
+    on_exit(fn ->
+      unboxed(fn ->
+        Arca.Repo.delete_all(from(l in CellLease, where: l.node == ^node))
+        {:ok, _} = Arca.TenantTables.delete_all_for(actor)
+      end)
+    end)
+
+    {:ok, actor: actor, node: node, key: "doc-#{System.unique_integer([:positive])}"}
+  end
+
+  test "two creators racing: one creates at the floor raised by one, the other is :stale", ctx do
+    slot = unboxed(fn -> slot!(ctx.node) end)
+
+    # The document held revisions 1 to 3 and was removed at 3.
+    unboxed(fn ->
+      assert {:ok, 1} = publish(ctx, stage!(ctx.actor, "v1"), 0, slot)
+      assert {:ok, 2} = publish(ctx, stage!(ctx.actor, "v2"), 1, slot)
+      assert {:ok, 3} = publish(ctx, stage!(ctx.actor, "v3"), 2, slot)
+      assert :ok = FencedPublication.remove(removal(ctx), 3, slot)
+    end)
+
+    first = unboxed(fn -> stage!(ctx.actor, "first") end)
+    second = unboxed(fn -> stage!(ctx.actor, "second") end)
+
+    # A row at the key, never committed: each creator's insert waits on it.
+    holder =
+      holding(fn ->
+        now = Arca.ServerMetaStorage.now!()
+
+        Arca.Repo.insert_all(FencedDocument, [
+          %{
+            athanor_id: ctx.actor.athanor_id,
+            key: ctx.key,
+            revision: 99,
+            blob_key: "held",
+            digest: "held",
+            inserted_at: now,
+            updated_at: now
+          }
+        ])
+      end)
+
+    creators =
+      for staged <- [first, second],
+          do: Task.async(fn -> unboxed(fn -> publish(ctx, staged, 0, slot) end) end)
+
+    assert Enum.all?(Task.yield_many(creators, 300), &match?({_, nil}, &1)),
+           "a create passed a key another transaction held"
+
+    assert {:error, :released} = release(holder)
+    results = Enum.map(creators, &Task.await(&1, 25_000))
+
+    assert Enum.sort(results) == [{:error, :stale}, {:ok, 4}]
+
+    assert {:ok, [%FencedDocument{revision: 4, blob_key: blob_key}]} =
+             unboxed(fn ->
+               {:ok,
+                Arca.Repo.all(
+                  from(d in FencedDocument,
+                    where: d.athanor_id == ^ctx.actor.athanor_id and d.key == ^ctx.key
+                  )
+                )}
+             end)
+
+    winner = if results == [{:ok, 4}, {:error, :stale}], do: first, else: second
+    assert blob_key == "staging/" <> winner
+
+    assert [4] =
+             unboxed(fn ->
+               Arca.Repo.all(
+                 from(f in "fenced_document_floors",
+                   where: f.athanor_id == ^ctx.actor.athanor_id,
+                   select: f.floor
+                 )
+               )
+             end)
+  end
+
+  # Run `write` in a transaction of its own, hold it open until
+  # `release/1`, then roll it back.
+  defp holding(write) do
+    test = self()
+
+    task =
+      Task.async(fn ->
+        unboxed(fn ->
+          Arca.Repo.locking_transaction(fn ->
+            write.()
+            send(test, {:holding, self()})
+
+            receive do
+              :release -> Arca.Repo.rollback(:released)
+            end
+          end)
+        end)
+      end)
+
+    assert_receive {:holding, _pid}, 5_000
+    task
+  end
+
+  defp release(task) do
+    send(task.pid, :release)
+    Task.await(task, 25_000)
+  end
+
+  defp publish(ctx, staged, revision, slot) do
+    FencedPublication.publish(
+      %Change{resource: {:document, ctx.actor.athanor_id, ctx.key}, staged: staged},
+      revision,
+      slot
+    )
+  end
+
+  defp removal(ctx), do: %Change{resource: {:document, ctx.actor.athanor_id, ctx.key}}
+
+  defp stage!(actor, bytes) do
+    {:ok, id} = Arca.Storage.stage(actor, "attempt-#{System.unique_integer()}", bytes)
+    id
+  end
+
+  defp slot!(node) do
+    now = Arca.ServerMetaStorage.now!()
+
+    row = %{
+      node: node,
+      owner: node <> "#boot_a",
+      generation: 1,
+      fence: 1,
+      lease_until: DateTime.add(now, 60_000, :millisecond),
+      taken_at: now,
+      inserted_at: now,
+      updated_at: now
+    }
+
+    {1, _} = Arca.Repo.insert_all(CellLease, [row])
+    %{node: node, owner: row.owner, generation: 1, fence: 1}
   end
 end
 

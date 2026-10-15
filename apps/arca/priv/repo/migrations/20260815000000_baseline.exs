@@ -1369,6 +1369,17 @@ defmodule Arca.Repo.Migrations.Baseline do
     unless sqlite? do
       create constraint(:fenced_documents, revision_counted.name, check: revision_counted.expr)
     end
+
+    # The athanor's revision floor: at least every revision a removed
+    # document held, raised by each create, which takes its revision from
+    # it. A document created again starts above every revision it held
+    # before, so a writer that read a removed incarnation never matches
+    # the new one. Created and removed documents both write this one row,
+    # so the two serialize per athanor.
+    create table(:fenced_document_floors, primary_key: false) do
+      add :athanor_id, :string, primary_key: true, null: false
+      add :floor, :bigint, null: false, default: 0
+    end
   end
 
   # ==========================================================================

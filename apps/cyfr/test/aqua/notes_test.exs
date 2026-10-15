@@ -232,6 +232,26 @@ defmodule Aqua.NotesStoreTest do
       assert {:ok, %{content: "read again"}} = Notes.read(ctx, "plan")
     end
 
+    test "a revision read from a forgotten note does not publish over the note kept again since",
+         %{ctx: ctx} do
+      member!()
+      assert {:ok, _} = Notes.keep(ctx, "plan", "old")
+      assert {:ok, %{revision: 1, note: %{content: "old"}}} = Notes.current(ctx, "plan")
+      assert {:ok, %{forgot: "plan"}} = Notes.forget(ctx, "plan")
+      assert {:ok, _} = Notes.keep(ctx, "plan", "new")
+
+      # A writer that read revision 1 before the forget publishes now.
+      result = Notes.keep_over(ctx, "plan", "stale", 1)
+      content = Notes.read(ctx, "plan")
+
+      assert {:error, {:conflict, _}} = result,
+             "keep_over answered #{inspect(result)}; the note reads #{inspect(content)}"
+
+      assert {:ok, %{content: "new"}} = content
+      assert {:ok, %{revision: revision, note: %{content: "new"}}} = Notes.current(ctx, "plan")
+      assert revision > 1
+    end
+
     test "a keep racing another keep of the same name is a conflict, not a silent overwrite", %{
       ctx: ctx
     } do
