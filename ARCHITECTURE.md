@@ -304,7 +304,7 @@ A count or usage that cannot be read refuses the write as unavailable, for every
 
 ### 6.1 Members and the cell lease
 
-Each control-plane member owns its slot through a database lease, with a generation of its own; a peer joining invalidates no healthy member's slot. Host calls bind to the member that issued them. **A stale owner admits no work, dispenses no credential, emits no result and overwrites no successor's state.** A cached view of ownership is only a fast refusal; the guarantee is verified live in the transaction that writes. Issuance verifies the member's slot in the issuing transaction. *Not built yet:* that check when a session, an API key, a webhook secret, a vault credential or a provider credential is issued; those are issued under the cached view. A stateless asset credential (§7) is minted under the cached ownership check alone and is bounded by its source session, a stated limit.
+Each control-plane member owns its slot through a database lease, with a generation of its own; a peer joining invalidates no healthy member's slot. Host calls bind to the member that issued them. **A stale owner admits no work, dispenses no credential, emits no result and overwrites no successor's state.** A cached view of ownership is only a fast refusal; the guarantee is verified live in the transaction that writes. Issuance verifies the member's slot in the issuing transaction. *Not built yet:* that check when a session, an API key, a webhook secret, a vault credential or a provider credential is issued; those are issued under the cached view. A stateless asset credential (§7) is minted under the cached ownership check alone and is bounded by its source session or API key, a stated limit.
 
 ### 6.2 Boot and standing transitions
 
@@ -457,8 +457,8 @@ Consented work runs unattended: a component grant admits every operation it name
 - **Grouping is presentation.** Categories and groups live in the trusted renderer (§7) and never confer authority. Approving several actions at once writes one exact record per action; no group or category answers for an action a person decided, and adding an action to a group never widens an existing grant.
 - **Reads are declared.** Which grants reach a resource and which runs used a grant are declared read operations, so any surface can show them from one contract.
 - **Revocation and expiry** keep §6.6's bounds, and a standing grant never stands in for a fresh confirmation.
-- **Approval cards expire** after the athanor's `expiry_hours` (`Aqua.Approvals`, 24 by default), and an expired card is answered as declined, so a home back from a long absence asks again rather than running a queue.
-- **A provider switch stops future sends**; what the old provider kept is its own.
+- **Approval cards expire** after the athanor's `expiry_hours` (`Aqua.Approvals`, 24 by default): an expired card resolves as expired and its action is denied, so a home back from a long absence asks again rather than running a queue.
+- **A provider switch reaches the next turn.** A running turn keeps the model provider it started with, pinned on the turn, until it ends, and the next turn sends to the new one; what the old provider kept is its own.
 
 ## 11. Memory
 
