@@ -10,6 +10,13 @@ defmodule Aqua.Loop.Worker do
   before its owner can release it to run, so stopping an owner also
   catches children whose start raced the stop. `stop/1` confirms process
   death before returning; it grants no authority and writes no Tape rows.
+
+  A child waits for its release as long as its owner lives, with no
+  deadline of its own: its owner's death kills it, and so does this
+  server's, since `Aqua.TaskSupervisor` restarts with it. An owner that is
+  alive keeps its child however late it releases it, and never abandons
+  one it was given: a start waits for this server as long as the server
+  lives.
   """
 
   use GenServer
@@ -32,7 +39,7 @@ defmodule Aqua.Loop.Worker do
     owner = self()
     callers = [owner | Process.get(:"$callers", [])]
 
-    case GenServer.call(__MODULE__, {:start, fun, callers}) do
+    case GenServer.call(__MODULE__, {:start, fun, callers}, :infinity) do
       {:ok, pid} when is_pid(pid) ->
         ref = :erlang.monitor(:process, pid, [{:alias, :demonitor}])
         send(pid, {:run, owner, ref})
@@ -97,8 +104,6 @@ defmodule Aqua.Loop.Worker do
 
              receive do
                {:run, ^owner, ref} -> send(ref, {ref, fun.()})
-             after
-               @stop_ms -> exit(:worker_start_timeout)
              end
            end) do
         {:ok, pid} ->
