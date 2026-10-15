@@ -16,8 +16,9 @@
 # negative control: it must show the mix.
 #
 # The images are FROM scratch, so both platforms build on any host without
-# emulation. The registry, the builder and the loaded images are this
-# run's alone and are removed on exit, INT, TERM and HUP; the builder is
+# emulation. The registry with its anonymous volume, the builder and the
+# loaded images are this run's alone and are removed on exit, INT, TERM
+# and HUP, and the last case checks the volume is gone; the builder is
 # registered in a buildx configuration under the scratch directory, so the
 # host's builders and its default builder are untouched. A KILL leaves
 # them behind under names carrying the test's pid.
@@ -40,6 +41,7 @@ scratch=$(mktemp -d "${tmp%/}/cyfr-ci-publish-test.XXXXXX") || {
 name="cyfr-ci-publish-test-$$"
 export BUILDX_CONFIG="$scratch/buildx"
 registry_id=
+registry_volumes=
 builder=
 # The images the builds load, listed here because the builds run in
 # command substitutions.
@@ -48,8 +50,17 @@ for run in a b; do
   for arch in amd64 arm64; do scan_images+=("cyfr-ci-publish-scan/$run:$arch-$$"); done
 done
 
+# -v: the registry image declares a volume, and a container removed
+# without it leaves that anonymous volume behind on every run.
+remove_registry() {
+  [ -n "$registry_id" ] && docker rm -f -v "$registry_id" > /dev/null 2>&1
+  registry_id=
+}
+
+anonymous_volumes() { docker volume ls -q --filter label=com.docker.volume.anonymous | wc -l; }
+
 cleanup() {
-  [ -n "$registry_id" ] && docker rm -f "$registry_id" > /dev/null 2>&1
+  remove_registry
   [ -n "$builder" ] && docker buildx rm -f "$builder" > /dev/null 2>&1
   docker image rm -f "${scan_images[@]}" > /dev/null 2>&1
   rm -rf "$scratch"
@@ -87,8 +98,10 @@ docker image inspect "$registry_image" > /dev/null 2>&1 ||
   docker pull -q "$registry_image" > /dev/null 2> "$scratch/err" || die "cannot pull $registry_image"
 # An ephemeral host port: nothing else on the host is displaced. Docker
 # trusts plain HTTP on 127.0.0.0/8.
+anonymous_before=$(anonymous_volumes)
 registry_id=$(docker run -d --name "$name" -p 127.0.0.1::5000 "$registry_image" 2> "$scratch/err") ||
   die "cannot start $registry_image"
+registry_volumes=$(docker inspect -f '{{range .Mounts}}{{if eq .Type "volume"}}{{.Name}} {{end}}{{end}}' "$registry_id")
 port=$(docker port "$registry_id" 5000/tcp | sed -n 's/^127\.0\.0\.1:\([0-9]*\)$/\1/p' | head -n 1)
 [ -n "$port" ] || die "the registry published no port"
 reg="127.0.0.1:$port"
@@ -496,6 +509,18 @@ done
 label="the refusals left the registry's tags as they were"
 tags=$(tags_of publish)
 if [ "$tags" = "1.0.0 1.0.1 1.0.2 1.0.3 1.0.4 latest " ]; then pass "$label"; else fail "$label" "tags: $tags"; fi
+
+label="removing the registry removes its anonymous volume"
+remove_registry
+left=
+for volume in $registry_volumes; do
+  docker volume inspect "$volume" > /dev/null 2>&1 && left="$left $volume"
+done
+anonymous_after=$(anonymous_volumes)
+if [ -n "$registry_volumes" ] && [ -z "$left" ] && [ "$anonymous_after" = "$anonymous_before" ]; then pass "$label"; else
+  fail "$label" "the registry mounted: ${registry_volumes:-no volume}" "left:${left:- none}" \
+    "anonymous volumes: $anonymous_before before, $anonymous_after after"
+fi
 
 echo "$((cases - failures))/$cases passed"
 [ "$failures" -eq 0 ]
