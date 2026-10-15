@@ -449,6 +449,7 @@ defmodule Arca.ControlPlane do
   `verify_held/1` does.
   """
   @spec check_held(slot() | :none) :: :ok | :lost
+  # arca:db-raise-ok a store that cannot answer raises, as its doc says
   def check_held(slot) do
     {:ok, standing} = Arca.Repo.locking_transaction(fn -> verify_held(slot) end)
     standing

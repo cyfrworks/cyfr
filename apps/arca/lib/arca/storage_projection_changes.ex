@@ -207,6 +207,7 @@ defmodule Arca.StorageProjectionChanges do
   @spec replace(Prima.Actor.t(), String.t(), token(), (-> result)) ::
           {:ok, result} | {:error, term()}
         when result: term()
+  # arca:db-raise-ok each projection's storage facade runs it inside its own rescue
   def replace(%Prima.Actor{} = actor, root, token, write)
       when is_binary(root) and is_function(write, 0) do
     with {:ok, athanor} <- tenant(actor),

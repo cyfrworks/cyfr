@@ -146,6 +146,7 @@ defmodule Arca.Repo do
   (`prepare_transaction/2`), so it takes no statement.
   """
   @spec transaction_lock(integer()) :: :ok
+  # arca:db-raise-ok raises outside a transaction, as its doc says; taken inside the caller's
   def transaction_lock(key) when is_integer(key) do
     unless in_transaction?() do
       raise "Arca.Repo.transaction_lock/1 called outside a transaction"
