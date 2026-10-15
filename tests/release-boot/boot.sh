@@ -128,6 +128,16 @@ cd "$ROOT"
 # run.
 cleanup() {
   local code=$?
+  # The cell started last is the one a failed step was asking.
+  if [ "$code" -ne 0 ]; then
+    local cell
+    for cell in "$COPY" "$ORIGIN" "$CELL"; do
+      if [ -n "$cell" ] && [ -f "$cell/boot.log" ]; then
+        log_tail "$cell"
+        break
+      fi
+    done
+  fi
   ( server_stop ) || [ "$code" -ne 0 ] || code=1
   [ "${RELEASE_BOOT_KEEP:-}" = 1 ] || pg_drop_created
   if [ "${RELEASE_BOOT_KEEP:-}" = 1 ]; then
@@ -137,7 +147,51 @@ cleanup() {
   fi
   exit "$code"
 }
+# The cells whose log a failed run prints, and the token it must not
+# show, named before the trap reads them.
+CELL="" ORIGIN="" COPY="" token=""
 trap cleanup EXIT
+
+# How many of a server's last log lines a failed run prints.
+LOG_TAIL_LINES=200
+
+# The last LOG_TAIL_LINES lines of cell `$1`'s server log on stderr, for a
+# run that failed, so the failure carries what the server said. Nothing
+# the run holds secret is printed: every value of the cell's deployment
+# file and keyring that is a key, a root or a URL, and the session token,
+# are taken out where they appear, and so are a bearer credential, the
+# value assigned to any credential's name and a URL's userinfo.
+log_tail() {
+  local cell="$1"
+  [ -f "$cell/boot.log" ] || return 0
+  echo "----- the last $LOG_TAIL_LINES lines of $cell/boot.log -----" >&2
+  tail -n "$LOG_TAIL_LINES" "$cell/boot.log" | REDACT_CELL="$cell" REDACT_TOKEN="$token" python3 -I -c '
+import json, os, re, sys
+cell = os.environ["REDACT_CELL"]
+secrets = [os.environ["REDACT_TOKEN"]]
+try:
+    for line in open(os.path.join(cell, ".env")):
+        name, _, value = line.rstrip("\n").partition("=")
+        if re.search(r"KEY|SECRET|ROOT|PASSWORD|TOKEN|URL", name):
+            secrets.append(value)
+except OSError:
+    pass
+try:
+    keyring = open(os.path.join(cell, "keyring.json")).read()
+    secrets += [keyring.strip()] + list(json.loads(keyring).get("keys", {}).values())
+except (OSError, ValueError, AttributeError):
+    pass
+secrets = sorted({s for s in secrets if len(s) >= 8}, key=len, reverse=True)
+bearer = re.compile(r"(?i)(\bbearer\s+)\S+")
+named = re.compile(r"(?i)((?:authorization|secret|key_base|password|passwd|database_url|keyring|token|cookie)[\w.-]*\x22?\s*[:=>]+\s*\x22?)(?:(?:basic|bearer|digest)\s+)?[^\s,\x22}]+")
+userinfo = re.compile(r"(\w+://)[^/@\s]+@")
+for line in sys.stdin:
+    for secret in secrets:
+        line = line.replace(secret, "[redacted]")
+    line = bearer.sub(r"\1[redacted]", named.sub(r"\1[redacted]", line))
+    sys.stdout.write(userinfo.sub(r"\1[redacted]@", line))
+' >&2 || echo "(the log could not be printed)" >&2
+}
 
 release_build
 
@@ -252,9 +306,13 @@ echo "the cell holds $tincture_path and $thread_id"
 # messages over /mcp, as the person's client reads them.
 serves() {
   local what="$1"
-  local page
-  page="$(curl -fsS -m 30 -H "authorization: Bearer $token" "http://127.0.0.1:$PORT$tincture_path")" ||
-    fail "$what: $tincture_path was not served to the person"
+  local page status
+  status="$(curl -sS -m 30 -o "$WORK/page" -w '%{http_code}' -H "authorization: Bearer $token" "http://127.0.0.1:$PORT$tincture_path")" ||
+    fail "$what: $tincture_path did not answer"
+  # A refusal's body is the error's JSON, its code and message.
+  [ "$status" = 200 ] ||
+    fail "$what: $tincture_path was not served to the person: $status $(head -c 300 "$WORK/page")"
+  page="$(cat "$WORK/page")"
   case "$page" in
     *"the backup proof tincture"*) echo "$what: GET $tincture_path -> the tincture's page" ;;
     *) fail "$what: $tincture_path answered without the tincture's page" ;;

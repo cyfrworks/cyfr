@@ -18,11 +18,14 @@
 #       The files under DIR written into the person's athanor as the local
 #       tincture NAME at 1.0.0 and registered from the tree
 #       (`Compendium.Registry.register_from_arca/3`), as a locally built
-#       tincture is. `public` also leaves the active public profile the
-#       `/t/` route asks of a public tincture, unless one is there, written
-#       by `Arca.Test.Writers.put_profile/1` loaded from the checkout (the
-#       release refuses the consent walk that `profile.publish` ends, see
-#       below); the fixture fails unless the profile is there after.
+#       tincture is, once the fill the person's sign-in started has let go
+#       of their athanor. `public` also leaves the active public profile
+#       the `/t/` route asks of a public tincture, unless one is there,
+#       written by `Arca.Test.Writers.put_profile/1` loaded from the
+#       checkout (the release refuses the consent walk that
+#       `profile.publish` ends, see below); the fixture fails unless the
+#       profile is there after and the route's own read
+#       (`Sanctum.TinctureAccess.get_public/3`) finds the tincture.
 #
 #   thread USER_ID TEXT
 #       A thread in the person's athanor holding one message, TEXT.
@@ -74,6 +77,57 @@ fn args ->
     if athanor.kind == "person", do: "@" <> athanor.slug, else: athanor.slug
   end
 
+  # Returns once no fill holds the context's athanor. The sign-in takes
+  # the athanor's claim before it answers and fills it in the background,
+  # copying the shipped units into `components/`; while a unit's move is
+  # pending, every read of the components projection behind
+  # `Compendium.ProjectionReconciler.await/2` answers
+  # `:projection_unavailable`, and the `/t/` route answers 503. The fill
+  # ends in a write to the athanor's row, which announces `:athanor_changed`
+  # (`Sanctum.Provisioning.mark_filled/1`, `record_failure/4`), so the wait
+  # is on that announcement, attached before the status is read, under one
+  # deadline.
+  fill_settled = fn ctx ->
+    me = self()
+    handler = {:release_boot_fill, make_ref()}
+    athanor_id = ctx.athanor_id
+
+    :telemetry.attach(
+      handler,
+      [:cyfr, :sanctum, :notify],
+      fn _event, _measurements, %{athanor_id: id, kind: kind}, _config ->
+        if id == athanor_id and kind == :athanor_changed, do: send(me, {handler, :changed})
+      end,
+      nil
+    )
+
+    deadline = System.monotonic_time(:millisecond) + 120_000
+
+    settle = fn settle ->
+      case Sanctum.Provisioning.status(ctx) do
+        :filling ->
+          receive do
+            {^handler, :changed} -> settle.(settle)
+          after
+            max(deadline - System.monotonic_time(:millisecond), 0) ->
+              raise "the fill of #{athanor_id} still holds it after 120 s"
+          end
+
+        :unavailable ->
+          raise "the fill of #{athanor_id} could not be read"
+
+        _ready_unfilled_or_failed ->
+          :ok
+      end
+    end
+
+    try do
+      settle.(settle)
+    after
+      :telemetry.detach(handler)
+    end
+  end
+
   case args do
     ["person", email, sub] ->
       identity = Sanctum.Auth.Identity.builtin_key(:github, sub)
@@ -102,6 +156,7 @@ fn args ->
       ctx = person_ctx.(user_id)
       actor = Sanctum.Context.actor(ctx)
       unit = ["components", "tinctures", "local", name, "1.0.0"]
+      :ok = fill_settled.(ctx)
 
       for file <- Path.wildcard(Path.join(dir, "**/*"), match_dot: false),
           File.regular?(file) do
@@ -143,6 +198,15 @@ fn args ->
 
         unless Enum.any?(profiles, &(&1.kind == :public and &1.status == :active)),
           do: raise("tincture #{ref} holds no active public profile")
+
+        # The `/t/` route's own read (`Emissary.Web.TinctureController`):
+        # the address answers what this answers.
+        {:ok, public_ctx} = Sanctum.TinctureAccess.public_context(segment.(ctx.athanor_id))
+
+        case Sanctum.TinctureAccess.get_public(public_ctx, "local", name) do
+          {:ok, _tincture} -> :ok
+          other -> raise "tincture #{ref} is not served at its address: #{inspect(other)}"
+        end
       end
 
       answer.(%{
