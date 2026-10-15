@@ -189,15 +189,17 @@ to run it and its steps.
 | file offers | `tests/file-offer-proof/` | one home, `home.test`; offers, recipient acceptance and actual snapshot readback | Chromium, desktop (1280×900) and 720×720 |
 | canvas | `tests/canvas-proof/` | one cell, `cyfr.test`; SQLite only, no passkey step | Chromium, Firefox and WebKit, desktop (1280×900) and 720×720 |
 
-In CI every proof writes its records under `$RUNNER_TEMP/proofs/<proof>`,
-or `$RUNNER_TEMP/proofs/<proof>/<viewport>` for a proof run at each
+In CI every proof writes its records under
+`$RUNNER_TEMP/proofs/<proof>`, or
+`$RUNNER_TEMP/proofs/<proof>/<viewport>` for a proof run at each
 viewport, and the job keeps the record files for 14 days, whether it
-passed or not. The three vault proofs fail the job when any step fails. They start no execution worker or model: instance-entry
-claims count resolver uses, approval use checks admission and binding
-decisions, and the named-account prompt uses the announcement a turn
-would send. File acceptance really copies bytes. Their READMEs name the
-executing evidence separately; none proves the complete shipped model
-artifact → production attachment → local provider composition.
+passed or not. The three vault proofs fail the job when any step fails.
+They start no execution worker or model: instance-entry claims count
+resolver uses, approval use checks admission and binding decisions, and
+the named-account prompt uses the announcement a turn would send. File
+acceptance really copies bytes. Their READMEs name the executing
+evidence separately; none proves the complete shipped model artifact →
+production attachment → local provider composition.
 
 ## Browser matrix
 

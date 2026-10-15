@@ -119,8 +119,9 @@ env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 jobs:
   # The checks whose answer does not depend on the database adapter, once
-  # per run. Their step names are read by scripts/commit-gate.sh, which
-  # runs the same scripts, so they stay as they are wherever they run.
+  # per run. Their step names stay as they were. scripts/commit-gate.sh
+  # reads two of them, "The built SDK is its source's" and "The built
+  # toolkit is its source's", and runs their scripts.
   static:
     name: Static checks, generated files, fixtures and harness tests
     runs-on: ubuntu-latest
@@ -177,13 +178,15 @@ jobs:
             cargo install cargo-component --version "$CARGO_COMPONENT_VERSION" --locked
           fi
           cargo-component --version
-      # The fixtures build with the pinned rustc and its target alone; the
-      # runner's default toolchain stays the one the catalysts test on.
+      # The fixtures build with the pinned rustc and its target, beside
+      # wasm32-wasip1, which cargo-component builds through and would
+      # otherwise install itself during the check. The runner's default
+      # toolchain stays the one the catalysts test on.
       - name: Install the Rust fixtures' toolchain
         env:
           RUSTC_VERSION: ${{ steps.rust-pin.outputs.rustc }}
           TARGET: ${{ steps.rust-pin.outputs.target }}
-        run: rustup toolchain install "$RUSTC_VERSION" --profile minimal --target "$TARGET"
+        run: rustup toolchain install "$RUSTC_VERSION" --profile minimal --target "$TARGET" --target wasm32-wasip1
       # Each model catalyst's `model/chat@1` mapping runs on the host
       # target; the shipped binaries are not rebuilt here.
       - name: Test the model catalysts
@@ -435,13 +438,13 @@ jobs:
         run: mix compile --force --warnings-as-errors
       # --warnings-as-errors covers the .exs files `mix test` loads, which a
       # forced compile never reads: a warning in a test fails the build as
-      # one in the application does. The partitions test the build the forced compile above made, on
-      # either adapter. The runner's own PostgreSQL build, _build/test_pg,
-      # is the one the cache holds, made by whichever run first saved it,
-      # and compiled incrementally over it a module this tree did not
-      # change keeps the types it inferred from what it called back then:
-      # the test files would be type-checked against signatures the tree
-      # no longer has.
+      # one in the application does. The partitions test the build the
+      # forced compile above made, on either adapter. The runner's own
+      # PostgreSQL build, _build/test_pg, is the one the cache holds, made
+      # by whichever run first saved it, and compiled incrementally over it
+      # a module this tree did not change keeps the types it inferred from
+      # what it called back then: the test files would be type-checked
+      # against signatures the tree no longer has.
       - name: Run tests
         env:
           MIX_BUILD_PATH: _build/test
@@ -1167,12 +1170,16 @@ jobs:
       - name: Install dependencies
         run: mix deps.get
       - name: The frame-facts experiment
+        env:
+          BROWSER_OUT: ${{ runner.temp }}/proofs/frame-facts
         run: tests/browser/run.sh
       - name: The console's JavaScript tests (the SDK, the canvas toolkit, the canvas, the carrier, the system layer and the markdown hook's parse step)
         run: apps/cyfr/assets/test/run.sh
       # The markdown hook's output after DOMPurify, which needs a browser's
       # DOM (tests/markdown-proof/README.md). It starts no release.
       - name: The markdown proof (Chromium)
+        env:
+          MARKDOWN_OUT: ${{ runner.temp }}/proofs/markdown
         run: tests/markdown-proof/run.sh
       # The Locus image this run built once (the locus-image job).
       - name: Fetch the Locus image
@@ -1282,6 +1289,9 @@ jobs:
             ${{ runner.temp }}/proofs/**/*-proof.md
             ${{ runner.temp }}/proofs/multi-home-smoke/multi-home-smoke.json
             ${{ runner.temp }}/proofs/multi-home-smoke/multi-home-smoke.md
+            ${{ runner.temp }}/proofs/frame-facts/frame-facts.json
+            ${{ runner.temp }}/proofs/frame-facts/frame-facts.md
+            ${{ runner.temp }}/proofs/markdown/markdown.json
           retention-days: 14
       # The shipped Caddyfile in the Caddy image docker-compose.yml names, in
       # front of a stub upstream: HSTS, the endpoint's value, once on every
