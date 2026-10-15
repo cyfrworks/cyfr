@@ -80,7 +80,6 @@ jobs:
             file: Dockerfile
           - image: cyfr-locus
             file: Dockerfile.locus
-            apt-refresh: true
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -94,18 +93,15 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      # APT_REFRESH is the UTC date, so the Locus upgrade layer refreshes
+      # APT_REFRESH is the UTC date, so each image's upgrade layer refreshes
       # daily and is shared by every build of one day.
       - name: Extract metadata
         id: meta
         env:
           PLATFORM: ${{ matrix.platform }}
-          APT: ${{ matrix.apt-refresh }}
         run: |
           echo "arch=${PLATFORM#linux/}" >> "$GITHUB_OUTPUT"
-          if [ "$APT" = true ]; then
-            echo "build-args=APT_REFRESH=$(date -u +%F)" >> "$GITHUB_OUTPUT"
-          fi
+          echo "apt-refresh=$(date -u +%F)" >> "$GITHUB_OUTPUT"
 
       - name: Build
         id: build
@@ -114,7 +110,7 @@ jobs:
           context: .
           file: ${{ matrix.file }}
           platforms: ${{ matrix.platform }}
-          build-args: ${{ steps.meta.outputs.build-args }}
+          build-args: APT_REFRESH=${{ steps.meta.outputs.apt-refresh }}
           # The action drops its max-mode default when an output loads the
           # image; the published attestation keeps the build's config,
           # builder id and sources.

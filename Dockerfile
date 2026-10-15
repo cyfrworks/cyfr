@@ -56,7 +56,12 @@ RUN mix compile && mix assets.deploy && mix release cyfr
 # by Dockerfile.locus.
 FROM debian:trixie-slim AS runner
 
-RUN apt-get update && apt-get upgrade -y && apt-get install -y \
+# APT_REFRESH busts the build cache for this layer so the upgrade is not
+# served stale from a cached layer: CI passes the UTC date (YYYY-MM-DD), so
+# the layer refreshes once a day and is shared within it; a local build may
+# leave it.
+ARG APT_REFRESH=0
+RUN echo "apt refresh ${APT_REFRESH}" && apt-get update && apt-get upgrade -y && apt-get install -y \
     libstdc++6 \
     openssl \
     libncurses6 \

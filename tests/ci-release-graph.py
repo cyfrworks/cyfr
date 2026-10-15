@@ -5,9 +5,10 @@
 # The tag pipeline's graph: .github/workflows/release.yml publishes nothing
 # unless all six verification workflows passed, can neither be cancelled
 # nor let a failure pass, builds both images for both platforms with the
-# scan reading the loaded image, merges each image's two digests by exact
-# name and attests the merge's printed digest, and grants each job only
-# what it needs.
+# scan reading the loaded image and each image's upgrade layer refreshed on
+# the UTC date (APT_REFRESH, read by both Dockerfiles), merges each image's
+# two digests by exact name and attests the merge's printed digest, and
+# grants each job only what it needs.
 #
 # The checks run on the real file, then on fixtures and on mutants of the
 # real file, each of which must be refused, so a check that stops checking
@@ -98,6 +99,11 @@ PUSH_BY_DIGEST = (
     "push-by-digest=true,name-canonical=true,push=true"
 )
 LOAD = "type=docker,name="
+# The upgrade layer's cache key: one build argument, the output of a step
+# that writes the UTC date on every run, so each image's upgrade refreshes
+# daily (Dockerfile and Dockerfile.locus read it as ARG APT_REFRESH).
+APT_ARG = re.compile(r"^APT_REFRESH=\$\{\{ steps\.([\w-]+)\.outputs\.([\w-]+) \}\}$")
+APT_UPGRADE = re.compile(r"^RUN .*\$\{APT_REFRESH\}.*apt-get upgrade", re.MULTILINE)
 
 
 def steps_using(job, action):
@@ -159,6 +165,9 @@ def check_build(wf):
         return "the build step sets push, load or tags beside outputs", name
     if inputs.get("provenance") != "mode=max":
         return f"the build's provenance is {inputs.get('provenance')!r}, not mode=max", name
+    reason = check_apt_refresh(job, inputs)
+    if reason:
+        return reason, name
     outputs = [o.strip() for o in str(inputs.get("outputs", "")).splitlines() if o.strip()]
     if (
         len(outputs) != 2
@@ -189,6 +198,41 @@ def check_build(wf):
     if None in order or order != sorted(order):
         return "the digest is not uploaded after the scan and the comparison", name
     return None, name
+
+
+def check_apt_refresh(job, inputs):
+    args = str(inputs.get("build-args", "")).strip()
+    match = APT_ARG.match(args)
+    if not match:
+        return f"the build's build-args are {args!r}, not APT_REFRESH from a step's output"
+    step_id, output = match.groups()
+    dated = f'echo "{output}=$(date -u +%F)" >> "$GITHUB_OUTPUT"'
+    for s in job.get("steps", []):
+        if s.get("id") == step_id:
+            run = str(s.get("run", ""))
+            if dated in [line.strip() for line in run.splitlines()] and not re.search(
+                r"^\s*(if|case|while|until)\b|&&|\|\|", run, re.MULTILINE
+            ):
+                return None
+            return f"the step {step_id} does not write {output} as the UTC date on every run"
+    return f"no step {step_id} writes the build's APT_REFRESH"
+
+
+def check_apt_layers(dockerfiles):
+    for path, text in dockerfiles.items():
+        arg = text.find("\nARG APT_REFRESH")
+        layer = APT_UPGRADE.search(text)
+        if arg < 0 or layer is None or layer.start() < arg:
+            return f"{path}'s apt-get upgrade layer does not read ARG APT_REFRESH"
+    return None
+
+
+def dockerfiles():
+    texts = {}
+    for path in sorted(set(IMAGES.values())):
+        with open(os.path.join(ROOT, path)) as f:
+            texts[path] = f.read()
+    return texts
 
 
 def check_merge(wf, build):
@@ -364,6 +408,22 @@ def loaded_under_registry(wf):
     )
 
 
+def no_apt_refresh(wf):
+    del step_using(wf, "images", "build-push-action")["with"]["build-args"]
+
+
+def apt_refresh_fixed(wf):
+    step = step_named(wf, "images", "Extract metadata")
+    step["run"] = step["run"].replace("$(date -u +%F)", "2026-10-15")
+
+
+def apt_refresh_for_locus_only(wf):
+    step = step_named(wf, "images", "Extract metadata")
+    step["run"] = step["run"].replace(
+        'echo "apt-refresh=', '[ "$IMAGE" = cyfr ] || echo "apt-refresh=', 1
+    )
+
+
 def no_provenance(wf):
     del step_using(wf, "images", "build-push-action")["with"]["provenance"]
 
@@ -399,6 +459,9 @@ MUTANTS = [
     ("broad default permissions", broad_default_permissions),
     ("the loaded image named under the registry", loaded_under_registry),
     ("no max-mode provenance on the build", no_provenance),
+    ("no APT_REFRESH build argument", no_apt_refresh),
+    ("an APT_REFRESH that is not the date", apt_refresh_fixed),
+    ("an APT_REFRESH written for one image only", apt_refresh_for_locus_only),
     ("a scan whose findings never fail it", scan_never_fails),
     ("|| : after the scanned-is-pushed check", comparison_ignored),
     ("packages: write on the CLI release", release_widened),
@@ -411,6 +474,11 @@ def main():
     reason = refusal(real)
     if reason is not None:
         print(f"FAIL: release.yml: {reason}")
+        return 1
+    files = dockerfiles()
+    reason = check_apt_layers(files)
+    if reason is not None:
+        print(f"FAIL: {reason}")
         return 1
 
     failures = []
@@ -427,12 +495,24 @@ def main():
             failures.append(f"a mutant changed nothing: {name}")
         elif refusal(wf) is None:
             failures.append(f"a mutant of release.yml was accepted: {name}")
+    for path, text in files.items():
+        for name, mutant in [
+            ("no ARG APT_REFRESH", text.replace("\nARG APT_REFRESH", "\n# ARG APT_REFRESH")),
+            ("an upgrade that does not read it", text.replace("${APT_REFRESH}", "refresh")),
+        ]:
+            if mutant == text:
+                failures.append(f"a mutant changed nothing: {path}, {name}")
+            elif check_apt_layers({**files, path: mutant}) is None:
+                failures.append(f"a mutant of {path} was accepted: {name}")
 
     for line in failures:
         print(f"FAIL: {line}")
     if failures:
         return 1
-    print(f"tag pipeline ok: release.yml passes; {len(refused)} fixtures and {len(MUTANTS)} mutants refused")
+    print(
+        f"tag pipeline ok: release.yml and its Dockerfiles pass; {len(refused)} fixtures, "
+        f"{len(MUTANTS)} mutants of release.yml and {2 * len(files)} of the Dockerfiles refused"
+    )
     return 0
 
 
