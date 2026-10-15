@@ -24,7 +24,10 @@
 # them behind under names carrying the test's pid.
 #
 # Needs docker with buildx, jq and curl, and pulls registry:3 and BuildKit's
-# image when they are missing.
+# image when they are missing. The daemon must use the containerd image
+# store, which CI switches to with scripts/ci/containerd-image-store.sh, as
+# release.yml does: the classic store cannot load an image carrying its
+# attestation, and the test refuses to start on it.
 #
 # Usage: bash tests/ci-publish-test.sh
 set -uo pipefail
@@ -32,6 +35,7 @@ set -uo pipefail
 root=$(cd "$(dirname "$0")/.." && pwd)
 merge="$root/scripts/ci/merge-image.sh"
 same="$root/scripts/ci/scanned-is-pushed.sh"
+store="$root/scripts/ci/containerd-image-store.sh"
 registry_image=registry:3@sha256:ddf754342cfc8acc51a56d5d0ab6af06826461864460636d8bd5c546dab2a7b8
 tmp=${TMPDIR:-/tmp}
 scratch=$(mktemp -d "${tmp%/}/cyfr-ci-publish-test.XXXXXX") || {
@@ -78,6 +82,7 @@ for tool in docker jq curl; do
   command -v "$tool" > /dev/null || die "$tool is not on PATH"
 done
 docker buildx version > /dev/null 2>&1 || die "docker buildx is not available"
+"$store" --check > /dev/null 2> "$scratch/err" || die "the Docker daemon is not on the containerd image store"
 
 failures=0
 cases=0

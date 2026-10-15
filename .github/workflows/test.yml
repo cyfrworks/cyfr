@@ -356,6 +356,12 @@ jobs:
             sudo apt-get install -y python3-yaml
           fi
           python3 -I tests/ci-release-graph.py
+      # The publication test loads images with their attestations, as
+      # release.yml's build does, so it runs on the image store release.yml
+      # switches to, switched the same way. Nothing before it here uses
+      # Docker, and the test creates its own builder after the restart.
+      - name: Use the containerd image store
+        run: sudo scripts/ci/containerd-image-store.sh
       # release.yml's image publication against a local registry: one build
       # per platform, the scanned image the pushed one, and each run's
       # manifest merged from its own digests while another run interleaves.

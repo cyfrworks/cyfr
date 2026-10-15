@@ -8,10 +8,13 @@
 # scan reading the loaded image and each image's upgrade layer refreshed on
 # the UTC date (APT_REFRESH, read by both Dockerfiles), merges each image's
 # two digests by exact name and attests the merge's printed digest, and
-# grants each job only what it needs.
+# grants each job only what it needs. The build, and the publication test
+# in test.yml's static job, first switch the runner's Docker daemon to the
+# containerd image store, which alone can load an image carrying its
+# attestation.
 #
-# The checks run on the real file, then on fixtures and on mutants of the
-# real file, each of which must be refused, so a check that stops checking
+# The checks run on the real files, then on fixtures and on mutants of the
+# real files, each of which must be refused, so a check that stops checking
 # fails here. Needs PyYAML; reads files only.
 #
 # Usage: python3 -I tests/ci-release-graph.py
@@ -24,6 +27,7 @@ import yaml
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 RELEASE = os.path.join(ROOT, ".github", "workflows", "release.yml")
+TEST = os.path.join(ROOT, ".github", "workflows", "test.yml")
 
 VERIFY = {
     "./.github/workflows/%s.yml" % n
@@ -105,6 +109,10 @@ LOAD = "type=docker,name="
 APT_ARG = re.compile(r"^APT_REFRESH=\$\{\{ steps\.([\w-]+)\.outputs\.([\w-]+) \}\}$")
 OUTPUT_LINE = re.compile(r'^echo "[\w-]+=[^"]*" >> "\$GITHUB_OUTPUT"$')
 APT_UPGRADE = re.compile(r"^RUN .*\$\{APT_REFRESH\}.*apt-get upgrade", re.MULTILINE)
+# The switch to the containerd image store. It restarts the daemon, so it
+# precedes buildx's builder and every build.
+STORE_SWITCH = "sudo scripts/ci/containerd-image-store.sh"
+PUBLISH_TEST = "bash tests/ci-publish-test.sh"
 
 
 def steps_using(job, action):
@@ -139,6 +147,24 @@ def check_failures_pass_nothing(wf):
     return None
 
 
+def check_store_switch(job, before, what):
+    steps = job.get("steps", [])
+    at = [i for i, s in enumerate(steps) if "containerd-image-store.sh" in str(s.get("run", ""))]
+    if len(at) != 1:
+        return f"not one step switches to the containerd image store before {what}"
+    step = steps[at[0]]
+    if str(step.get("run", "")).strip() != STORE_SWITCH:
+        return f"the store switch runs {step.get('run')!r}, not {STORE_SWITCH!r}"
+    if "if" in step:
+        return f"the store switch runs only if {step['if']}"
+    if "continue-on-error" in step:
+        return "the store switch has continue-on-error"
+    first = step_index(job, before)
+    if first is None or at[0] > first:
+        return f"the store switch does not come before {what}"
+    return None
+
+
 def check_build(wf):
     jobs = wf["jobs"]
     builds = [j for j, job in jobs.items() if steps_using(job, "docker/build-push-action")]
@@ -166,6 +192,13 @@ def check_build(wf):
         return "the build step sets push, load or tags beside outputs", name
     if inputs.get("provenance") != "mode=max":
         return f"the build's provenance is {inputs.get('provenance')!r}, not mode=max", name
+    reason = check_store_switch(
+        job,
+        lambda s: str(s.get("uses", "")).split("@")[0] in ("docker/setup-buildx-action", "docker/build-push-action"),
+        "buildx's builder and the build",
+    )
+    if reason:
+        return reason, name
     reason = check_apt_refresh(job, inputs)
     if reason:
         return reason, name
@@ -326,6 +359,19 @@ def check_shape(wf):
 
 def refusal(wf):
     return check_graph(wf) or check_shape(wf)
+
+
+# The publication test builds as release.yml does, after the same switch.
+def check_static(test_wf):
+    job = test_wf.get("jobs", {}).get("static")
+    if job is None:
+        return "test.yml has no static job"
+    tests = [s for s in job.get("steps", []) if str(s.get("run", "")).strip() == PUBLISH_TEST]
+    if len(tests) != 1:
+        return "test.yml's static job does not run the publication test once"
+    if "if" in tests[0] or "continue-on-error" in tests[0]:
+        return "test.yml's publication test is conditional or allowed to fail"
+    return check_store_switch(job, lambda s: str(s.get("run", "")).strip() == PUBLISH_TEST, "the publication test")
 
 
 # --- fixtures and mutants, each of which must be refused ---
@@ -490,6 +536,69 @@ def release_widened(wf):
     wf["jobs"]["release"]["permissions"]["packages"] = "write"
 
 
+def store_step(wf, job):
+    return next(s for s in wf["jobs"][job]["steps"] if "containerd-image-store.sh" in str(s.get("run")))
+
+
+def move_store_step(wf, job, after):
+    steps = wf["jobs"][job]["steps"]
+    step = store_step(wf, job)
+    steps.remove(step)
+    steps.insert(step_index(wf["jobs"][job], after) + 1, step)
+
+
+def no_store_switch(job):
+    def mutate(wf):
+        wf["jobs"][job]["steps"].remove(store_step(wf, job))
+
+    return mutate
+
+
+def store_switch_if(job):
+    def mutate(wf):
+        store_step(wf, job)["if"] = "runner.arch == 'X64'"
+
+    return mutate
+
+
+def store_switch_continues(job):
+    def mutate(wf):
+        store_step(wf, job)["continue-on-error"] = True
+
+    return mutate
+
+
+def store_switch_ignored(job):
+    def mutate(wf):
+        store_step(wf, job)["run"] = STORE_SWITCH + " || true\n"
+
+    return mutate
+
+
+def store_switch_checks_only(job):
+    def mutate(wf):
+        store_step(wf, job)["run"] = STORE_SWITCH + " --check\n"
+
+    return mutate
+
+
+def store_switch_after_buildx(wf):
+    move_store_step(wf, "images", lambda s: "docker/setup-buildx-action" in str(s.get("uses")))
+
+
+def store_switch_after_build(wf):
+    move_store_step(wf, "images", lambda s: "docker/build-push-action" in str(s.get("uses")))
+
+
+def store_switch_after_test(wf):
+    move_store_step(wf, "static", lambda s: str(s.get("run", "")).strip() == PUBLISH_TEST)
+
+
+def publish_test_continues(wf):
+    step = next(s for s in wf["jobs"]["static"]["steps"] if str(s.get("run", "")).strip() == PUBLISH_TEST)
+    step["continue-on-error"] = True
+
+
 MUTANTS = [
     ("a check dropped from the build's needs", drop_need),
     ("the merge runs always()", merge_always),
@@ -518,6 +627,24 @@ MUTANTS = [
     ("a scan whose findings never fail it", scan_never_fails),
     ("|| : after the scanned-is-pushed check", comparison_ignored),
     ("packages: write on the CLI release", release_widened),
+    ("no switch to the containerd image store", no_store_switch("images")),
+    ("the store switch after buildx's setup", store_switch_after_buildx),
+    ("the store switch after the build", store_switch_after_build),
+    ("the store switch with an if:", store_switch_if("images")),
+    ("continue-on-error on the store switch", store_switch_continues("images")),
+    ("|| true after the store switch", store_switch_ignored("images")),
+    ("a store switch that only checks", store_switch_checks_only("images")),
+]
+
+# Mutants of test.yml's static job, each refused by check_static.
+TEST_MUTANTS = [
+    ("no switch to the containerd image store", no_store_switch("static")),
+    ("the store switch after the publication test", store_switch_after_test),
+    ("the store switch with an if:", store_switch_if("static")),
+    ("continue-on-error on the store switch", store_switch_continues("static")),
+    ("|| true after the store switch", store_switch_ignored("static")),
+    ("a store switch that only checks", store_switch_checks_only("static")),
+    ("continue-on-error on the publication test", publish_test_continues),
 ]
 
 
@@ -527,6 +654,12 @@ def main():
     reason = refusal(real)
     if reason is not None:
         print(f"FAIL: release.yml: {reason}")
+        return 1
+    with open(TEST) as f:
+        test = yaml.safe_load(f)
+    reason = check_static(test)
+    if reason is not None:
+        print(f"FAIL: test.yml: {reason}")
         return 1
     files = dockerfiles()
     reason = check_apt_layers(files)
@@ -548,6 +681,13 @@ def main():
             failures.append(f"a mutant changed nothing: {name}")
         elif refusal(wf) is None:
             failures.append(f"a mutant of release.yml was accepted: {name}")
+    for name, mutate in TEST_MUTANTS:
+        wf = copy.deepcopy(test)
+        mutate(wf)
+        if wf == test:
+            failures.append(f"a mutant changed nothing: test.yml, {name}")
+        elif check_static(wf) is None:
+            failures.append(f"a mutant of test.yml was accepted: {name}")
     for path, text in files.items():
         for name, mutant in [
             ("no ARG APT_REFRESH", text.replace("\nARG APT_REFRESH", "\n# ARG APT_REFRESH")),
@@ -564,8 +704,9 @@ def main():
     if failures:
         return 1
     print(
-        f"tag pipeline ok: release.yml and its Dockerfiles pass; {len(refused)} fixtures, "
-        f"{len(MUTANTS)} mutants of release.yml and {3 * len(files)} of the Dockerfiles refused"
+        f"tag pipeline ok: release.yml, test.yml's static job and the Dockerfiles pass; "
+        f"{len(refused)} fixtures, {len(MUTANTS)} mutants of release.yml, {len(TEST_MUTANTS)} of "
+        f"test.yml and {3 * len(files)} of the Dockerfiles refused"
     )
     return 0
 
