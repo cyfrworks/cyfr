@@ -356,6 +356,10 @@ jobs:
             sudo apt-get install -y python3-yaml
           fi
           python3 -I tests/ci-release-graph.py
+      # The store switch's own cases, against docker and systemctl shims,
+      # before it runs here and in release.yml.
+      - name: The containerd image store switch's cases
+        run: bash tests/containerd-image-store-test.sh
       # The publication test loads images with their attestations, as
       # release.yml's build does, so it runs on the image store release.yml
       # switches to, switched the same way. Nothing before it here uses

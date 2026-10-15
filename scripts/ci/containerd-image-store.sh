@@ -21,13 +21,16 @@
 # not visible on the containerd one, so a job runs this before anything
 # pulls, builds or loads an image and before buildx creates its builder.
 # --check changes nothing and only reports the store.
+# DOCKER_DAEMON_CONFIG names another configuration file, for the script's
+# own test (tests/containerd-image-store-test.sh); the workflows set none,
+# and sudo resets the environment.
 #
 # Exit status: 0 the daemon uses the containerd image store, 1 it does
 # not, its configuration is unreadable or it did not come back, 64 usage,
 # 69 a tool missing.
 set -euo pipefail
 
-config=/etc/docker/daemon.json
+config=${DOCKER_DAEMON_CONFIG:-/etc/docker/daemon.json}
 want=io.containerd.snapshotter.v1
 
 case "${1-}" in
@@ -44,11 +47,14 @@ for tool in $tools; do
 done
 
 # The daemon's image store: the driver type `docker info` names, which
-# the classic store does not report, or nothing when the daemon does not
-# answer.
+# the classic store does not report, or nothing when no daemon answers.
+# Without a daemon the CLI renders the template over an empty server
+# answer, which Docker 28's CLI does with exit 0, so only an answer
+# carrying the server's version is read.
 store() {
   local status
-  status=$(docker info --format '{{json .DriverStatus}}' 2> /dev/null) || return 0
+  status=$(docker info --format '{{if .ServerVersion}}{{json .DriverStatus}}{{end}}' 2> /dev/null) || return 0
+  [ -n "$status" ] || return 0
   jq -r 'first(.[]? | select(.[0] == "driver-type") | .[1]) // "classic"' <<< "$status" 2> /dev/null || return 0
 }
 
@@ -65,7 +71,7 @@ if [ -z "$check_only" ] && [ "$(store)" != "$want" ]; then
   mv "$config.new" "$config"
   systemctl restart docker.service
   for _ in $(seq 1 30); do
-    docker info > /dev/null 2>&1 && break
+    [ -n "$(store)" ] && break
     sleep 1
   done
 fi
