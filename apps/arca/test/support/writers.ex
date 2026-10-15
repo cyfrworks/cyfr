@@ -7,11 +7,10 @@ defmodule Arca.Test.Writers do
   the contract that writes them in production (the consent sequence for a
   profile, admission for an execution).
 
-  Each is a copy of the lib function it replaces (`Arca.ProfileStorage.put/1`,
-  `Arca.Execution.record_start/1`, `Arca.Execution.record_complete/4`),
-  writing the same rows and answering the same results, over Arca's public
-  functions and `Arca.Repo` alone; where the lib body calls a private
-  helper, the copy inlines it.
+  Each writes through the schema's own changeset, over Arca's public
+  functions and `Arca.Repo` alone, so a row it writes is one the schema
+  admits, and answers as a storage call does: `{:ok, row}` projected, or
+  `{:error, reason}`.
   """
 
   import Ecto.Query
@@ -28,8 +27,11 @@ defmodule Arca.Test.Writers do
   }
 
   @doc """
-  A profile row, as `Arca.ProfileStorage.put/1` writes it: `{:ok, row}` or
-  `{:error, reason}`. The athanor arrives in `attrs` and its absence raises.
+  A profile row from `attrs`, under a fresh `prof_` id unless `attrs`
+  names one: `{:ok, row}`, `{:error, {:invalid_label, label}}` for a label
+  the label rule refuses, or `{:error, {:invalid, errors}}` for any other
+  field the profile vocabulary refuses. The athanor arrives in `attrs` and
+  its absence raises.
   """
   @spec put_profile(map()) :: {:ok, map()} | {:error, term()}
   # arca:unscoped-ok the athanor arrives in attrs and its absence fails loudly two lines down.
@@ -56,9 +58,10 @@ defmodule Arca.Test.Writers do
 
   @doc """
   An execution row with no attempt and no admission, in a status of the
-  execution vocabulary (the start changeset's), as
-  `Arca.Execution.record_start/1` writes it. A row it writes has no stamp
-  to match, so it ends on its status alone.
+  execution vocabulary (the start changeset's): `{:ok, row}`, `{:error,
+  :illegal_transition}` when `attrs` names an attempt, or `{:error,
+  {:invalid, errors}}`. A row it writes has no stamp to match, so it ends
+  on its status alone.
   """
   @spec record_start(map()) :: {:ok, map()} | {:error, term()}
   def record_start(attrs) when is_map(attrs) do
@@ -76,9 +79,10 @@ defmodule Arca.Test.Writers do
   end
 
   @doc """
-  End a running execution row in the terminal status `attrs` names, as
-  `Arca.Execution.record_complete/4` does: an outcome must be one that
-  status allows (`{:error, :illegal_transition}` otherwise), and the write
+  End a running execution row in the terminal status `attrs` names: a
+  status that ends nothing, `running` included, is `{:error, {:invalid,
+  %{status: ["is invalid"]}}}`, an outcome must be one that status allows
+  (`{:error, :illegal_transition}` otherwise), and the write
   carries an atomic `status == "running"` precondition (`{:error,
   :not_running}`). `opts`: `attempt:` narrows the write to the attempt
   that owns the row; `grant:` and `verify:` (required,
@@ -141,7 +145,11 @@ defmodule Arca.Test.Writers do
           if execution.athanor_id != grant.athanor_id or not stamped?(execution, grant),
             do: Arca.Repo.rollback(:not_standing)
 
-          changeset = Row.complete_changeset(execution, attrs)
+          # The cast runs on the row with its status cleared, so the status
+          # is always a change and the terminal-status check always runs: a
+          # `running` cast onto a running row is otherwise no change, passes,
+          # and ends nothing while stamping the row completed.
+          changeset = Row.complete_changeset(%{execution | status: nil}, attrs)
           if not changeset.valid?, do: Arca.Repo.rollback(changeset)
 
           from(e in Row, where: e.id == ^id, where: e.status == "running")

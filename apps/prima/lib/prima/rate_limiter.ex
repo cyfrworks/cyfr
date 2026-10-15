@@ -184,14 +184,5 @@ defmodule Prima.RateLimiter do
   @doc false
   def table_name, do: @table
 
-  @doc "Clear all counters. Test seam."
-  @spec reset() :: :ok
-  def reset do
-    :ets.delete_all_objects(@table)
-    :ok
-  rescue
-    ArgumentError -> :ok
-  end
-
   defp schedule_sweep, do: Process.send_after(self(), :sweep, @sweep_interval_ms)
 end
