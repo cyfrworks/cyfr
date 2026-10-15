@@ -417,7 +417,7 @@ docker compose --profile tls --profile locus-builds up -d
 
 Then open `https://<your-domain>/` (TLS) or `http://localhost:4000/` (direct), sign in, and you're in your athanor's chat. "Add to Home Screen" installs it as a PWA (works on phones too). In TLS mode caddy proxies everything to `cyfr:4000` — Prism, `/api`, `/mcp`, `/auth` and `/t` on the same origin. The `cyfr` endpoint (`:4000`) is always published on `127.0.0.1` so the `cyfr` CLI and a local browser work from the host.
 
-**Upgrading.** `cyfr update` pulls the latest images, then `cyfr up`. `cyfr init` run again in the project adds a key a newer stack needs that `.env` lacks, and changes nothing else. From a source checkout: `docker compose --profile locus-builds pull && docker compose --profile locus-builds up -d` (add `--profile tls` if you're running with caddy, and drop the builds profile if builds are off). Check the [release notes](https://github.com/cyfrworks/cyfr/releases) first: there is no compatibility layer for behaviour, and a release says what it changes for a running server.
+**Upgrading.** An upgrade stops every member before the new release starts, so two releases never run side by side. On one server, `cyfr update` pulls the latest images, then `cyfr up` replaces the running containers with the new ones; a [cell](#several-members-on-one-database-a-cell) is stopped whole, upgraded, then started. A member whose release differs from the live members' is not refused at boot, so that stop is the only guard. `cyfr init` run again in the project adds a key a newer stack needs that `.env` lacks, and changes nothing else. From a source checkout: `docker compose --profile locus-builds pull && docker compose --profile locus-builds up -d` (add `--profile tls` if you're running with caddy, and drop the builds profile if builds are off). Check the [release notes](https://github.com/cyfrworks/cyfr/releases) first: there is no compatibility layer for behaviour, and a release says what it changes for a running server. A database built from an earlier version of the schema is not carried forward: the server refuses to boot on it and names the database to recreate.
 
 ### Stdio / npx MCP servers (filesystem, github, …)
 
@@ -747,10 +747,8 @@ What a cell gives up and what it keeps:
   per-tenant cap, and the per-credential stream cap, are each member's.
   The tenant's durable ceilings — its consented invocation rate and its
   budget — are rows, and hold for the cell.
-- An upgrade stops the whole cell: stop every member, upgrade, then start
-  them, so two releases never run side by side. A member whose release
-  differs from the live members' is not refused at boot, so the
-  operator's stop is the only guard.
+- An upgrade stops the whole cell first, as **Upgrading** under
+  [Setup](#setup) says.
 
 `scripts/test-partitioned.sh -n 1 -a postgres -- --only cluster
 apps/cyfr/test/cluster` is the suite that proves this: two real nodes, one
@@ -1005,7 +1003,7 @@ Each part of CYFR has one name, and the name is its directory, its binary or ima
 | actor | the tenant and identity carrier | — | — | — | — | — | — | — |
 | athanor | the tenancy unit, a person's own or a group's, with no organization or project above it | — | — | — | — | — | — | — |
 | lease | a control-plane member's database-held claim to its slot | — | — | — | — | — | — | — |
-| fence | the number that refuses a write from an owner that has been replaced | — | — | — | — | — | — | — |
+| fence | the lease row's renewal token, which each renewal and takeover of the row names and raises; never a publication's identity ([`ARCHITECTURE.md` §6.3](ARCHITECTURE.md#63-publication)) | — | — | — | — | — | — | — |
 | attempt | one try at running an execution on a worker service | — | — | — | — | — | — | — |
 | backend | one stdio process of an external MCP server, run by the Locus backends service | — | — | — | — | — | — | — |
 | cell | several control-plane members sharing one database | — | — | — | — | — | — | — |
