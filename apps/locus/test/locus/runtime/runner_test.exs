@@ -21,7 +21,6 @@ defmodule Locus.Runtime.RunnerTest do
   alias Locus.Runtime.Test.{ScriptedHost, ScriptedKeeper}
 
   @echo File.read!(Path.expand("../../support/runtime/test_wasm/echo.wasm", __DIR__))
-  @spin File.read!(Path.expand("../../support/runtime/test_wasm/spin.wasm", __DIR__))
   @boot "boot_runner_test"
 
   setup do
@@ -66,15 +65,28 @@ defmodule Locus.Runtime.RunnerTest do
 
     # Registered as the runner, so the subtree's processes find their
     # owner here rather than in the worker service of this VM.
-    start_supervised!(
-      {Locus.Runtime.Runner,
-       settings: settings,
-       relay: endpoint,
-       supervisor: supervisor,
-       name: Locus.Runtime.Runner,
-       halt: fn reason -> send(test, {:halted, reason}) end,
-       stop: fn status -> send(test, {:stopped, status}) end}
-    )
+    runner =
+      start_supervised!(
+        {Locus.Runtime.Runner,
+         settings: settings,
+         relay: endpoint,
+         supervisor: supervisor,
+         name: Locus.Runtime.Runner,
+         halt: fn reason -> send(test, {:halted, reason}) end,
+         stop: fn status -> send(test, {:stopped, status}) end}
+      )
+
+    # The runner's control port polls `runner_end`'s descriptor, which it
+    # does not own. A port can outlive its owner, writing out what it was
+    # given first, and has stopped polling only once it has left the port
+    # table: a descriptor closed before then is reused by the next test's
+    # sockets, and this port's late release takes the descriptor from them.
+    # Registered last, this runs first, once the runner has stopped and
+    # before the sockets close.
+    [control] =
+      for port <- Port.list(), Port.info(port, :connected) == {:connected, runner}, do: port
+
+    on_exit(fn -> wait_until(fn -> control not in Port.list() end, 5_000) end)
 
     {:ok, host: host, service: service}
   end
@@ -122,15 +134,6 @@ defmodule Locus.Runtime.RunnerTest do
     ScriptedHost.attempt!(
       host,
       [boot: @boot, component_type: :reagent, digest: Prima.Digest.sha256(@echo)] ++ opts
-    )
-  end
-
-  defp spin!(host, opts) do
-    ScriptedHost.script(host, "fetch_artifact", {:ok, Base.encode64(@spin)})
-
-    ScriptedHost.attempt!(
-      host,
-      [boot: @boot, component_type: :reagent, digest: Prima.Digest.sha256(@spin)] ++ opts
     )
   end
 
@@ -302,18 +305,24 @@ defmodule Locus.Runtime.RunnerTest do
     test = self()
 
     ScriptedHost.script(host, "fail", fn _args, _caller ->
-      send(test, {:held, self()})
+      send(test, {:fail_held, self()})
       held_until_go(test, {:ok, "held"})
     end)
 
-    attempt = spin!(host, timeout_ms: 300)
+    # The guest's bytes are held, so its call outlasts the attempt's bound.
+    # A guest spinning past it instead would keep its native thread, and
+    # the engine worker under it, for the rest of this VM's run: the kill
+    # frees only its BEAM process.
+    attempt = echo!(host, timeout_ms: 300)
+    hold_artifact!(host, @echo)
     assign(service, attempt)
+    assert_receive {:held, _fetch}, 5_000
 
     assert %{type: :exit, runner: "runner_under_test", open: [held]} = frame(service)
     assert held == attempt.attempt
     assert_receive {:halted, {:watchdog, id}}, 5_000
     assert id == attempt.execution_id
-    assert_receive {:held, fail}, 5_000
+    assert_receive {:fail_held, fail}, 5_000
     send(fail, :go)
   end
 end
