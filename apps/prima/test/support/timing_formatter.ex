@@ -23,7 +23,7 @@ defmodule Prima.Test.TimingFormatter do
   | Row      | Fields                                                     |
   |----------|------------------------------------------------------------|
   | `test`   | file, line, module, `async` or `sync`, state, usec         |
-  | `module` | file, module, `async` or `sync`, wall usec from `module_started` to `module_finished` |
+  | `module` | file, module, `async` or `sync`, wall usec from `module_started` to `module_finished`, never less than its tests' summed time |
   | `run`    | app, run usec, load usec or `-`                            |
 
   ExUnit runs a formatter it cannot load as no formatter at all, so the
@@ -65,7 +65,7 @@ defmodule Prima.Test.TimingFormatter do
         relative(module.file),
         inspect(module.name),
         mode(async_module?(module.name)),
-        finished - started
+        max(finished - started, tests_time(module))
       ])
     end
 
@@ -96,6 +96,14 @@ defmodule Prima.Test.TimingFormatter do
 
   @impl true
   def terminate(_reason, state), do: File.close(state.io)
+
+  # ExUnit casts its events, so both ends of a module's span are read when
+  # this process gets to them: a start it handles late, behind its own
+  # writes or a descheduled thread, shortens the span below the time the
+  # module's tests took, each measured where it ran. A module runs its tests
+  # one after another, so their sum is a floor its wall never goes under.
+  defp tests_time(%ExUnit.TestModule{tests: tests}),
+    do: Enum.reduce(tests, 0, fn %ExUnit.Test{time: time}, sum -> sum + time end)
 
   # Concurrent async modules are told apart by name, and a parameterized
   # module's runs by their parameters.
