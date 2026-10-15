@@ -4,12 +4,13 @@
 defmodule Prima.RunnerRelayTest do
   @moduledoc """
   The runner relay codec reproduces the shared vectors
-  (`tests/fixtures/runner_relay.json`, which the runtime's runner and worker
-  service read too): the exchange, played between a runner's channel and a
-  service's, encodes every frame to exactly its bytes and decodes each to
-  the frame sent, one example of every kind among them and a fetch whose
-  initial credit is spent and granted again; every refusal closes the
-  channel with its reason. The bounds are the fixture's and
+  (`tests/fixtures/runner_relay.json`, which Locus's relay vectors test
+  plays against the runtime's runner and worker-service ends too): the
+  exchange, played between a runner's channel and a service's, encodes
+  every frame to exactly its bytes and decodes each to the frame sent, one
+  example of every kind among them and a fetch whose initial credit is
+  spent and granted again; every refusal closes the channel with its
+  reason. The bounds are the fixture's and
   `Prima.HostAPI`'s. The service's channel never encodes a chunk past the
   credit outstanding, and the encoder raises on what the decoder would
   refuse as malformed.

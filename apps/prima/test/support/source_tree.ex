@@ -12,11 +12,12 @@ defmodule Prima.Test.SourceTree do
   reading nothing. It needs no table.
 
   `read/1` memoizes files in an ETS table owned by the test-runner process;
-  each app's `test_helper.exs` calls `ensure_table/0` before tests start,
-  and the umbrella runs them all in one VM, so the call is idempotent.
+  the database apps' suite boot (`Arca.Test.SuiteBoot.boot!/1`) calls
+  `ensure_table/0` before tests start, and the umbrella runs them all in
+  one VM, so the call is idempotent.
 
-  Falls back to a plain read when the table is absent — Locus keeps a copy
-  of its own and does not create it.
+  Falls back to a plain read when the table is absent: Prima's and Locus's
+  suites do not create it.
   """
 
   alias Prima.Test.CodeLines
@@ -26,8 +27,8 @@ defmodule Prima.Test.SourceTree do
   @doc """
   Create the memo table, once per VM.
 
-  Every app's `test_helper.exs` calls it, and the umbrella runs them all in
-  one VM, so the second call must find the table rather than raise. The
+  Every database app's suite boot calls it, and the umbrella runs them all
+  in one VM, so the second call must find the table rather than raise. The
   table is owned by the calling process — the test runner's — so it
   outlives every test and no two tests race to create it.
   """

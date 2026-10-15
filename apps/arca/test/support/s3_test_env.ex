@@ -250,10 +250,11 @@ defmodule Arca.Test.S3Env do
   end
 
   @doc """
-  Delete the guarded prefix and check what the run left, from the suite's
-  `on_exit` that `guard!/2` registers, which runs whether or not its tests
-  passed. It fails when the keys outside every run prefix differ from what
-  `guard!/2` recorded, when a key remains under the prefix, or when the prefix read one key per page
+  Delete the guarded prefix and check what the run left, from the callback
+  `guard!/2` registers (the suite's `on_exit` unless the caller passes its
+  own), which runs whether or not its tests passed. It fails when the keys
+  outside every run prefix differ from what `guard!/2` recorded, when a
+  key remains under the prefix, or when the prefix read one key per page
   differs from the prefix read whole. Keys under another run's prefix are
   not compared: a concurrent run writes there.
   """
