@@ -199,6 +199,8 @@ defmodule Arca.Test.WritersTest do
              :illegal_transition},
             {ctx.id, %{ctx.end_attrs | status: "paused"}, ctx.standing,
              {:invalid, %{status: ["is invalid"]}}},
+            {ctx.id, %{ctx.end_attrs | status: "running"}, ctx.standing,
+             {:invalid, %{status: ["is invalid"]}}},
             {ctx.id, ctx.end_attrs, [{:attempt, "att_other"} | ctx.standing], :not_running},
             {ctx.id, ctx.end_attrs, [], :missing_grant},
             {"exec_writers_missing_#{ctx.suffix}", ctx.end_attrs, ctx.standing, :not_found}
