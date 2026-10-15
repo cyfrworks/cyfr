@@ -480,11 +480,90 @@ jobs:
       # by whichever run first saved it, and compiled incrementally over it
       # a module this tree did not change keeps the types it inferred from
       # what it called back then: the test files would be type-checked
-      # against signatures the tree no longer has.
+      # against signatures the tree no longer has. The runner's output is
+      # kept in a file as well as the log: a failed run names the directory
+      # it kept in its own last lines, which the next step reads.
       - name: Run tests
+        id: run-tests
         env:
           MIX_BUILD_PATH: _build/test
-        run: scripts/test-partitioned.sh -a "${{ matrix.db }}" -- --warnings-as-errors
+        run: |
+          set -o pipefail
+          scripts/test-partitioned.sh -a "${{ matrix.db }}" -- --warnings-as-errors 2>&1 |
+            tee "$RUNNER_TEMP/run-tests.out"
+      # A failed run keeps its directory: each partition's log and scratch
+      # root, the compile and assignment logs, the failures record. That
+      # directory, and no other, is the one the runner's own 'kept' line
+      # names. What could carry a credential never leaves the runner: the
+      # partitions' database URLs (p*.env, which the runner itself removes),
+      # hidden entries (a copied .git holds the checkout's token), anything
+      # but a plain file or directory (a symlink would be uploaded as its
+      # target), and, in what remains, this job's database URL and key
+      # base, a URL's password, an authorization header and a GitHub token.
+      - name: Prepare the failed run's kept directory
+        id: kept
+        if: failure() && steps.run-tests.outcome == 'failure'
+        run: |
+          set -euo pipefail
+          mapfile -t kept < <(sed -n 's/^==> logs and disposable resources kept: //p' "$RUNNER_TEMP/run-tests.out")
+          if [ "${#kept[@]}" -ne 1 ]; then
+            echo "::warning::the runner named ${#kept[@]} kept directories, not one; nothing is uploaded"
+            exit 0
+          fi
+          dir=${kept[0]}
+          if ! [[ "$dir" =~ ^/tmp/cyfr-t\.[A-Za-z0-9]{6}$ ]] || [ -L "$dir" ] || [ ! -d "$dir" ] || [ ! -O "$dir" ]; then
+            echo "::warning::the runner's kept directory is not one it made: $dir; nothing is uploaded"
+            exit 0
+          fi
+          find "$dir" -mindepth 1 \( -name '.*' -o -name '*.env' \) -prune -exec rm -rf -- {} +
+          find "$dir" -mindepth 1 ! -type f ! -type d -delete
+          python3 -I - "$dir" <<'PY'
+          import os, re, sys
+
+          root = sys.argv[1]
+          literals = [os.environb.get(name, b"") for name in (b"CYFR_SECRET_KEY_BASE", b"CYFR_DATABASE_URL")]
+          patterns = [
+              (re.compile(rb"([A-Za-z][A-Za-z0-9+.-]*://)[^/@\s:]+:[^/@\s]*@"), rb"\1[redacted]@"),
+              (re.compile(rb"((?i:authorization):[ \t]*(?i:basic|bearer)[ \t]+)\S+"), rb"\1[redacted]"),
+              (re.compile(rb"gh[pousr]_[A-Za-z0-9]{36,}|github_pat_\w{22,}"), rb"[redacted]"),
+          ]
+
+          def clean(data):
+              for literal in filter(None, literals):
+                  data = data.replace(literal, b"[redacted]")
+              for pattern, replacement in patterns:
+                  data = pattern.sub(replacement, data)
+              return data
+
+          def files():
+              for base, _dirs, names in os.walk(root):
+                  for name in names:
+                      yield os.path.join(base, name)
+
+          def read(path):
+              with open(path, "rb") as f:
+                  return f.read()
+
+          for path in files():
+              data = read(path)
+              if clean(data) != data:
+                  with open(path, "wb") as f:
+                      f.write(clean(data))
+                  print("redacted:", os.path.relpath(path, root))
+
+          left = [path for path in files() if clean(read(path)) != read(path)]
+          if left:
+              sys.exit("still carries a credential after redaction: " + ", ".join(left))
+          PY
+          echo "dir=$dir" >> "$GITHUB_OUTPUT"
+      - name: Upload the failed run's kept directory
+        if: failure() && steps.run-tests.outcome == 'failure' && steps.kept.outputs.dir != ''
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: test-run-${{ matrix.db }}-attempt-${{ github.run_attempt }}
+          path: ${{ steps.kept.outputs.dir }}
+          if-no-files-found: error
+          retention-days: 14
 
   cluster:
     name: One cell on two members (Postgres and MinIO)
