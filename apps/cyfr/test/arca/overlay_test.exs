@@ -88,6 +88,8 @@ defmodule Arca.OverlayTest do
 
   use ExUnit.Case, async: false
 
+  import Ecto.Query, only: [from: 2]
+
   @version_dir ["components", "catalysts", "local", "bundled", "1.0.0"]
   @sentinel "cyfr-manifest.json"
 
@@ -1866,6 +1868,104 @@ defmodule Arca.OverlayTest do
                Arca.get(actor, Compendium.AquaPath.skill_manifest(name))
 
       assert {:ok, :own} = Arca.Overlay.unit_status(actor, dir)
+    end
+  end
+
+  describe "a commit is the slot holder's" do
+    @slot_keys [
+      {Arca.ControlPlane, :standing},
+      {Arca.ControlPlane, :generation},
+      {Arca.ControlPlane, :slot}
+    ]
+
+    # A claimant runs, as a deployment's does, and this member holds its
+    # slot: the umbrella's test configuration runs none. Restored when the
+    # case ends, registered before anything changes.
+    defp claimant!(name) do
+      saved = Map.new(@slot_keys, &{&1, :persistent_term.get(&1, :absent)})
+      claim = Application.get_env(:arca, :control_plane_claim_enabled)
+
+      on_exit(fn ->
+        for {key, value} <- saved do
+          if value == :absent,
+            do: :persistent_term.erase(key),
+            else: :persistent_term.put(key, value)
+        end
+
+        if is_nil(claim),
+          do: Application.delete_env(:arca, :control_plane_claim_enabled),
+          else: Application.put_env(:arca, :control_plane_claim_enabled, claim)
+      end)
+
+      Application.put_env(:arca, :control_plane_claim_enabled, true)
+      node = "node-overlay-#{name}-#{System.unique_integer([:positive])}"
+      {:ok, slot} = Arca.ControlPlane.take(node, node <> "#boot_a", 60_000)
+      slot
+    end
+
+    # A successor boot takes the member's row over, as a takeover past the
+    # lease does; this member's cached standing does not hear of it.
+    defp take_over!(%{node: node, generation: generation}) do
+      {1, _} =
+        Arca.Repo.update_all(
+          from(l in Arca.Schemas.CellLease, where: l.node == ^node),
+          set: [owner: node <> "#boot_b", generation: generation + 1]
+        )
+
+      :ok
+    end
+
+    test "a member whose slot was taken over while it staged moves no pointer", %{actor: actor} do
+      slot = claimant!("stale")
+      unit = ["components", "catalysts", "local", "fenced", "1.0.0"]
+      :ok = own_unit!(actor, unit, ~s({"type":"catalyst","v":1}))
+      {root, key} = Arca.Storage.UnitLocator.unit_key(unit)
+      {:ok, before} = Arca.StorageUnits.current(actor, root, key)
+      assert [_first] = journal(actor, unit)
+
+      gate_staging!()
+
+      committer =
+        Task.async(fn ->
+          Arca.Overlay.commit_unit(
+            actor,
+            unit,
+            {:files, [{[@sentinel], ~s({"type":"catalyst","v":2})}, {["late.txt"], "late"}]},
+            cap: :exempt
+          )
+        end)
+
+      # Staged under a draft this member registered while it still held its
+      # slot, and every cached check since answers that it does.
+      assert_receive {:staging, committer_pid}, 10_000
+      :ok = take_over!(slot)
+      assert Arca.ControlPlane.held?()
+      send(committer_pid, :proceed)
+
+      assert {:error, :not_owner} = Task.await(committer, 30_000)
+
+      # Nothing moved: the pointer, the journal and the served bytes are the
+      # first commit's, and the staged revision went with the refusal.
+      assert {:ok, after_refusal} = Arca.StorageUnits.current(actor, root, key)
+      assert after_refusal.current_revision == before.current_revision
+      assert [_first] = journal(actor, unit)
+      assert {:ok, ~s({"type":"catalyst","v":1})} = Arca.get(actor, unit ++ [@sentinel])
+      assert {:error, :not_found} = Arca.get(actor, unit ++ ["late.txt"])
+
+      # A member that holds its slot commits over it: the refused writer left
+      # neither its draft nor its staging in the way.
+      _successor = claimant!("successor")
+
+      assert {:ok, _written} =
+               Arca.Overlay.commit_unit(
+                 actor,
+                 unit,
+                 {:files, [{[@sentinel], ~s({"type":"catalyst","v":3})}]},
+                 cap: :exempt
+               )
+
+      assert [_first, _second] = journal(actor, unit)
+      assert {:ok, ~s({"type":"catalyst","v":3})} = Arca.get(actor, unit ++ [@sentinel])
     end
   end
 end

@@ -23,6 +23,13 @@ defmodule Sanctum.ProvisioningTest do
     claim
   end
 
+  # A claim another boot took where no claimant runs, as the attempt that
+  # took it carries it: under no slot.
+  defp claimed!(actor, owner) do
+    {:ok, claim} = Claims.claim(actor, owner, "provision", 60_000, :none)
+    Map.put(claim, :slot, :none)
+  end
+
   @valid_wasm File.read!(Path.join([File.cwd!(), "test/support/test_wasm/math.wasm"]))
 
   setup tags do
@@ -649,7 +656,7 @@ defmodule Sanctum.ProvisioningTest do
         "catalyst:local.c: Instance entries is unavailable — retry shortly; " <>
         "reagent:local.d: The outcome could not be confirmed."
 
-    {:ok, claim} = Claims.claim(actor, "boot_elsewhere/own_recorded", "provision", 60_000, :none)
+    claim = claimed!(actor, "boot_elsewhere/own_recorded")
 
     {answer, log} =
       with_log(fn -> Provisioning.record_failure(claim, group, :bootstrap, skipped) end)
@@ -666,7 +673,7 @@ defmodule Sanctum.ProvisioningTest do
     assert log =~ "[Provisioning] #{group.id} not provisioned at bootstrap: #{detail}"
 
     # The walk's own refusal at the same step is recorded as its term.
-    {:ok, again} = Claims.claim(actor, "boot_elsewhere/own_again", "provision", 60_000, :none)
+    again = claimed!(actor, "boot_elsewhere/own_again")
     unreadable = {:component_facts, :component_facts_unavailable}
 
     assert Provisioning.record_failure(again, group, :bootstrap, unreadable) ==
@@ -686,8 +693,7 @@ defmodule Sanctum.ProvisioningTest do
           {:bootstrap, [{"reagent:local.d", :shape_moved}, :not_a_pair]},
           {:pull_bundle, skipped}
         ] do
-      {:ok, other_claim} =
-        Claims.claim(actor, "boot_elsewhere/own_other_detail", "provision", 60_000, :none)
+      other_claim = claimed!(actor, "boot_elsewhere/own_other_detail")
 
       {other_answer, other_log} =
         with_log(fn -> Provisioning.record_failure(other_claim, group, step, other_detail) end)
@@ -725,7 +731,7 @@ defmodule Sanctum.ProvisioningTest do
       skipped = [{"reagent:local.unknown", reason}]
       detail = "reagent:local.unknown: The outcome could not be confirmed."
 
-      {:ok, claim} = Claims.claim(actor, "boot_elsewhere/own_unknown", "provision", 60_000, :none)
+      claim = claimed!(actor, "boot_elsewhere/own_unknown")
 
       {answer, log} =
         with_log(fn -> Provisioning.record_failure(claim, group, :bootstrap, skipped) end)
@@ -768,7 +774,8 @@ defmodule Sanctum.ProvisioningTest do
         Claims.claim(actor, "boot_elsewhere/own_successor", "provision", 60_000, :none)
 
       assert successor.fence == stale.fence + 1
-      {actor, stale, successor}
+      # Taken where no claimant runs, so under no slot: `:none`.
+      {actor, Map.put(stale, :slot, :none), Map.put(successor, :slot, :none)}
     end
 
     # The four writes an attempt makes on the athanor's behalf — readiness,
@@ -803,7 +810,7 @@ defmodule Sanctum.ProvisioningTest do
       assert {:ok, %{outcome: "ready"}} = Claims.current(actor)
 
       # Settled, the late one is still stale: it cannot turn ready to failed.
-      assert :stale = Claims.settle(actor, stale.owner, stale.fence, "failed", "late")
+      assert :stale = Claims.settle(actor, stale.owner, stale.fence, "failed", "late", :none)
       assert {:ok, %{outcome: "ready"}} = Claims.current(actor)
     end
 
@@ -932,7 +939,7 @@ defmodule Sanctum.ProvisioningTest do
     # A claim that reads `ready` on an athanor the row does not mark filled
     # makes nothing ready.
     {:ok, claim} = Claims.claim(actor, "boot_elsewhere/own_said_so", "provision", 60_000, :none)
-    :ok = Claims.settle(actor, claim.owner, claim.fence, "ready", nil)
+    :ok = Claims.settle(actor, claim.owner, claim.fence, "ready", nil, :none)
     refute Provisioning.provisioned?(in_group)
     assert Provisioning.status(in_group) == :unfilled
 
@@ -947,7 +954,7 @@ defmodule Sanctum.ProvisioningTest do
     assert {:ok, _} = Filler.install_shipped(in_group, "catalyst:local.foo")
     assert :ok = Filler.sync_seeds()
     {:ok, later} = Claims.claim(actor, "boot_elsewhere/own_later", "provision", 60_000, :none)
-    :ok = Claims.settle(actor, later.owner, later.fence, "failed", "seed: :whatever")
+    :ok = Claims.settle(actor, later.owner, later.fence, "failed", "seed: :whatever", :none)
 
     assert {:ok, %{provisioned_at: ^at}} = Athanors.get(group.id)
     assert :ok = Provisioning.ready(in_group)
@@ -1065,6 +1072,212 @@ defmodule Sanctum.ProvisioningTest do
       Arca.ControlPlane.record(:lost)
       assert {:error, :not_owner} = Provisioning.take_claim(athanor_id, "provision")
       assert {:error, :not_found} = Claims.current(actor)
+    end
+
+    # Every write a fill makes for the athanor, made by a member whose slot
+    # a successor took after the claim was taken under it: the claim still
+    # reads this attempt's owner and fence with a standing lease, and the
+    # member's cached standing still says it holds, so every check made
+    # before the write passes and only the write's own transaction can
+    # refuse.
+
+    test "a fill whose member lost its slot publishes nothing, and the next member fills it", %{
+      bundle_dir: bundle_dir,
+      slot: slot
+    } do
+      write_bundle!(bundle_dir)
+      {group, in_group} = group!("slotfill")
+      {:ok, claim} = Provisioning.take_claim(group.id, "provision")
+      assert claim.slot == slot
+
+      replace_lease!(slot, owner: slot.node <> "#boot_b", generation: slot.generation + 1)
+      assert Arca.ControlPlane.held?()
+
+      assert {:error, :provisioning_busy} =
+               Provisioning.hold(group.id, claim, &Filler.fill(&1, group, in_group))
+
+      # Nothing half-published: no unit, no component row, no agent, no
+      # consent, no mark and no failure recorded over the athanor.
+      actor = Prima.Actor.in_athanor(group.id)
+      assert {:ok, %{}} == Arca.Overlay.unit_statuses(actor, "components") |> own_units()
+      assert {:ok, []} = Arca.ComponentStorage.list_components(actor, limit: :none)
+      assert {:ok, []} = Arca.AgentStorage.list(actor)
+      assert {:ok, []} = Arca.ProfileStorage.list_for_source(actor, "catalyst:local.foo")
+      {:ok, row} = Athanors.get(group.id)
+      refute row.provisioned_at
+      refute Athanors.provisioning_failure(row)
+
+      # The attempt gave the athanor back, and a member holding its slot
+      # fills it whole.
+      assert {:ok, %{outcome: "released"}} = Claims.current(%Prima.Actor{athanor_id: group.id})
+      _successor = successor_slot!()
+      assert {:ok, %{provisioned_at: %DateTime{}}} = Filler.provision(row, in_group)
+      assert {:ok, [_ | _]} = Arca.AgentStorage.list(actor)
+      assert {:ok, [_profile]} = Arca.ProfileStorage.list_for_source(actor, "catalyst:local.foo")
+    end
+
+    test "the agent index a member writes after losing its slot publishes nothing", %{
+      slot: slot
+    } do
+      {group, in_group} = group!("slotidx")
+      actor = Prima.Actor.in_athanor(group.id)
+      {:ok, _copied} = Arca.Overlay.materialize_shipped(actor, "aqua")
+      {:ok, claim} = Provisioning.take_claim(group.id, "provision")
+
+      replace_lease!(slot, owner: slot.node <> "#boot_b", generation: slot.generation + 1)
+      # The claim the index is about to write under still reads as this
+      # attempt's: only the member's slot is gone.
+      assert :ok = Provisioning.holding(group.id, claim)
+
+      assert {:error, :claim_lost} = Compendium.AgentIndex.sync(in_group, claim: claim)
+      assert {:ok, []} = Arca.AgentStorage.list(actor)
+      assert {:ok, %{outcome: nil}} = Claims.current(%Prima.Actor{athanor_id: group.id})
+
+      :ok = Claims.release(%Prima.Actor{athanor_id: group.id}, claim.owner, claim.fence)
+      _successor = successor_slot!()
+      {:ok, next} = Provisioning.take_claim(group.id, "provision")
+      assert {:ok, _} = Compendium.AgentIndex.sync(in_group, claim: next)
+      assert {:ok, [_ | _]} = Arca.AgentStorage.list(actor)
+    end
+
+    test "the consent a member mints after losing its slot is not minted", %{
+      bundle_dir: bundle_dir,
+      slot: slot
+    } do
+      write_bundle!(bundle_dir)
+      {group, in_group} = group!("slotmint")
+      registered!(group.id)
+      actor = Prima.Actor.in_athanor(group.id)
+      {:ok, claim} = Provisioning.take_claim(group.id, "provision")
+
+      replace_lease!(slot, owner: slot.node <> "#boot_b", generation: slot.generation + 1)
+
+      assert {:error, :claim_lost} = Provisioning.bootstrap_consents(in_group, claim)
+      assert {:ok, []} = Arca.ProfileStorage.list_for_source(actor, "catalyst:local.foo")
+      assert {:ok, %{outcome: nil}} = Claims.current(%Prima.Actor{athanor_id: group.id})
+
+      :ok = Claims.release(%Prima.Actor{athanor_id: group.id}, claim.owner, claim.fence)
+      _successor = successor_slot!()
+      {:ok, next} = Provisioning.take_claim(group.id, "provision")
+
+      assert {:ok, %{minted: ["catalyst:local.foo"]}} =
+               Provisioning.bootstrap_consents(in_group, next)
+    end
+
+    test "the revision a member writes after losing its slot keeps the head", %{
+      slot: slot
+    } do
+      {group, in_group} = group!("slotrev")
+      actor = Prima.Actor.in_athanor(group.id)
+      ref = "catalyst:local.revised"
+      ship_revisable!(in_group, "1.0.0", %{})
+      assert {:ok, %{minted: [^ref]}} = Sanctum.Consent.Bootstrap.run(in_group)
+      {:ok, [profile]} = Arca.ConsentStorage.profiles(actor, ref)
+
+      # A release moves the shipped shape: the bootstrap-only head is due a
+      # revision.
+      ship_revisable!(in_group, "1.1.0", %{"limits" => %{"timeout" => "2m"}})
+      {:ok, claim} = Provisioning.take_claim(group.id, "seed_sync")
+      replace_lease!(slot, owner: slot.node <> "#boot_b", generation: slot.generation + 1)
+
+      assert {:error, :claim_lost} = Sanctum.Consent.Bootstrap.run(in_group, claim)
+      assert {:ok, %{revision: 1}} = Arca.ConsentStorage.head_consent(actor, profile.id)
+
+      :ok = Claims.release(%Prima.Actor{athanor_id: group.id}, claim.owner, claim.fence)
+      _successor = successor_slot!()
+      {:ok, next} = Provisioning.take_claim(group.id, "seed_sync")
+      assert {:ok, %{revised: [^ref]}} = Sanctum.Consent.Bootstrap.run(in_group, next)
+      assert {:ok, %{revision: 2}} = Arca.ConsentStorage.head_consent(actor, profile.id)
+    end
+
+    test "readiness a member marks after losing its slot is neither settled nor stamped", %{
+      slot: slot
+    } do
+      {group, _in_group} = group!("slotready")
+      actor = %Prima.Actor{athanor_id: group.id}
+      {:ok, claim} = Provisioning.take_claim(group.id, "provision")
+
+      replace_lease!(slot, owner: slot.node <> "#boot_b", generation: slot.generation + 1)
+
+      assert {:error, :claim_lost} = Provisioning.settle(group.id, claim, "ready", nil)
+      assert {:ok, %{outcome: nil}} = Claims.current(actor)
+      {:ok, row} = Athanors.get(group.id)
+      refute row.provisioned_at
+
+      # Nor is a failure recorded by it.
+      assert {:error, :provisioning_busy} =
+               Provisioning.record_failure(claim, group, :seed, :bundle_missing)
+
+      {:ok, row} = Athanors.get(group.id)
+      refute Athanors.provisioning_failure(row)
+      assert {:ok, %{outcome: nil}} = Claims.current(actor)
+
+      # A member that holds its slot settles readiness, and the row is
+      # marked by that same write — before anything is announced.
+      :ok = Claims.release(actor, claim.owner, claim.fence)
+      _successor = successor_slot!()
+      {:ok, next} = Provisioning.take_claim(group.id, "provision")
+      assert :ok = Provisioning.settle(group.id, next, "ready", nil)
+      assert {:ok, %{outcome: "ready"}} = Claims.current(actor)
+      assert {:ok, %{provisioned_at: %DateTime{} = at}} = Athanors.get(group.id)
+      assert {:ok, %{provisioned_at: ^at}} = Provisioning.mark_filled(group)
+    end
+
+    test "a renewal by a member that lost its slot keeps no lease", %{slot: slot} do
+      {group, _in_group} = group!("slotrenew")
+      {:ok, claim} = Provisioning.take_claim(group.id, "provision")
+      actor = %Prima.Actor{athanor_id: group.id}
+
+      replace_lease!(slot, owner: slot.node <> "#boot_b", generation: slot.generation + 1)
+
+      assert {:error, :not_owner} =
+               Claims.renew(actor, claim.owner, claim.fence, 60_000, claim.slot)
+
+      assert {:ok, %{lease_until: lease_until}} = Claims.current(actor)
+      assert lease_until == claim.lease_until
+    end
+
+    defp group!(tag) do
+      n = System.unique_integer([:positive])
+      ctx = %{Sanctum.TestContext.local() | user_id: "github|https://github.com|#{tag}-#{n}"}
+      {:ok, group} = Athanors.create_group(ctx.user_id, "#{tag} #{n}")
+      {group, %{ctx | athanor_id: group.id}}
+    end
+
+    # The bundle copied in and registered, as a fill's first steps leave it.
+    defp registered!(athanor_id) do
+      seed = Provisioning.seed_ctx(athanor_id)
+      {:ok, _copied} = Arca.Overlay.materialize_shipped(Sanctum.Context.actor(seed), "components")
+      {:ok, %{registered: registered}} = Compendium.AutoIndexer.scan(ctx: seed)
+      assert registered > 0
+    end
+
+    defp ship_revisable!(ctx, version, caps) do
+      {:ok, _component} =
+        Arca.Test.UnitFixtures.ship_and_register!(ctx, "catalyst", "local", "revised", version,
+          manifest: %{
+            "name" => "revised",
+            "type" => "catalyst",
+            "version" => version,
+            "publisher" => "local",
+            "caps" => caps
+          },
+          wasm: @valid_wasm
+        )
+
+      :ok
+    end
+
+    # The units the athanor holds of its own: a shipped copy that never
+    # landed reads `:available`.
+    defp own_units({:ok, statuses}),
+      do: {:ok, Map.reject(statuses, fn {_unit, status} -> status == :available end)}
+
+    # A member that holds its slot: another node's, won fresh.
+    defp successor_slot! do
+      node = "node-provisioning-next-#{System.unique_integer([:positive])}"
+      {:ok, slot} = Arca.ControlPlane.take(node, node <> "#boot_a", 60_000)
+      slot
     end
 
     defp replace_lease!(%{node: node}, set) do

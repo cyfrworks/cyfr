@@ -38,14 +38,18 @@ defmodule Arca.AgentStorage do
   `{:error, :generation_conflict}`. A token of another athanor is
   `{:error, :cross_tenant}`. Each row is stamped with the actor's athanor.
 
-  `:claim` in `opts` — `%{owner: owner, fence: fence}` — makes the rewrite
-  a provisioning attempt's, and then the transaction that writes the rows
-  is the one that holds the claim (`Arca.ProvisioningClaims.hold?/3`): a
-  rewrite whose claim a successor took writes nothing and answers
-  `{:error, :claim_lost}`. Without it the caller has no claim to lose — a
-  person editing a role through the console — and the rewrite stands on
-  its own. The guard is inside the transaction and not before it, because
-  a provisioning attempt's claim can lapse while a sync is running.
+  `:claim` in `opts` — `%{owner: owner, fence: fence, slot: slot}`, the
+  claim and the member slot it was taken under — makes the rewrite a
+  provisioning attempt's, and then the transaction that writes the rows
+  is the one that holds both (`Arca.ProvisioningClaims.hold?/4`): a
+  rewrite whose claim a successor took, or whose member lost that slot,
+  writes nothing and answers `{:error, :claim_lost}`. A claim that names
+  no slot names `:none`, which holds only where no claimant runs. Without
+  a claim the caller has no claim to lose — a person editing a role
+  through the console — and the rewrite stands on its own. The guard is
+  inside the transaction and not before it, because a provisioning
+  attempt's claim can lapse, and its member's slot be taken over, while a
+  sync is running.
   """
   @spec replace_projection(
           Prima.Actor.t(),
@@ -87,8 +91,8 @@ defmodule Arca.AgentStorage do
 
   defp holding?(_actor, nil), do: true
 
-  defp holding?(actor, %{owner: owner, fence: fence}),
-    do: Arca.ProvisioningClaims.hold?(actor, owner, fence)
+  defp holding?(actor, %{owner: owner, fence: fence} = claim),
+    do: Arca.ProvisioningClaims.hold?(actor, owner, fence, Map.get(claim, :slot, :none))
 
   @doc "The athanor's rows, by name."
   @spec list(Prima.Actor.t()) :: {:ok, [map()]} | {:error, term()}

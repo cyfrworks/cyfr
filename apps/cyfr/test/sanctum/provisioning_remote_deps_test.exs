@@ -436,7 +436,7 @@ defmodule Sanctum.ProvisioningRemoteDepsTest do
       assert {:ok, %{fence: 2}} =
                Claims.claim(actor, "boot_elsewhere/next", "provision", 1_000, :none)
 
-      assert :stale = Claims.settle(actor, held.owner, held.fence, "ready", nil)
+      assert :stale = Claims.settle(actor, held.owner, held.fence, "ready", nil, :none)
     end
 
     # The one process the attempt started beside itself, measured as a

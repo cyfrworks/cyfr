@@ -20,10 +20,15 @@ defmodule Arca.ProvisioningClaims do
       transaction under the claiming member's slot, verified live first
       (`Arca.ControlPlane.verify_held/1`): a member that lost its slot
       takes no athanor, `{:error, :not_owner}`.
-    * `renew/4` moves the lease forward, `settle/5` writes the outcome and
+    * `renew/5` moves the lease forward, `settle/6` writes the outcome and
       `release/3` settles `released`. Each lands only while the row still
       reads the caller's `owner` and `fence` and carries no outcome;
-      otherwise it answers `:stale` and writes nothing.
+      otherwise it answers `:stale` and writes nothing. `renew/5` and
+      `settle/6` also name the slot the claim was taken under and verify
+      it live in their own transaction, as `claim/5` does: a member that
+      lost its slot keeps no lease and settles no verdict,
+      `{:error, :not_owner}`. `release/3` names none — giving an athanor
+      back is safe whoever still holds the claim's owner and fence.
     * `current/1` reads the row once.
 
   ## The lease clock
@@ -96,13 +101,30 @@ defmodule Arca.ProvisioningClaims do
 
   def claim(%Prima.Actor{}, _owner, _entry_kind, _lease_ms, _slot), do: {:error, :no_athanor}
 
-  @doc "Move the lease `lease_ms` past now, while `owner` still holds `fence`."
-  @spec renew(Prima.Actor.t(), String.t(), pos_integer(), pos_integer()) ::
-          :ok | :stale | refusal()
-  def renew(%Prima.Actor{athanor_id: athanor_id}, owner, fence, lease_ms)
+  @doc """
+  Move the lease `lease_ms` past now, while `owner` still holds `fence`
+  under the member's `slot` — the one the claim was taken under, never one
+  read again since.
+
+  The slot is verified live in the renewal's own transaction before the
+  row is written (`Arca.ControlPlane.verify_held/1`), as `claim/5` verifies
+  it: a member that lost its slot keeps no lease, `{:error, :not_owner}`
+  with nothing written, so the claim of an attempt that can no longer
+  publish runs out and a successor takes it. A member that won its slot
+  back holds a new generation, which is not the slot named here.
+  """
+  @spec renew(
+          Prima.Actor.t(),
+          String.t(),
+          pos_integer(),
+          pos_integer(),
+          Arca.ControlPlane.slot() | :none
+        ) ::
+          :ok | :stale | {:error, :not_owner} | refusal()
+  def renew(%Prima.Actor{athanor_id: athanor_id}, owner, fence, lease_ms, slot)
       when is_binary(athanor_id) and athanor_id != "" and is_binary(owner) and is_integer(fence) and
              is_integer(lease_ms) and lease_ms > 0 do
-    Arca.Repo.Errors.with_db_rescue("Arca.ProvisioningClaims.renew", fn ->
+    under_slot("Arca.ProvisioningClaims.renew", slot, fn ->
       now = now()
 
       athanor_id
@@ -112,36 +134,79 @@ defmodule Arca.ProvisioningClaims do
     end)
   end
 
-  def renew(%Prima.Actor{}, _owner, _fence, _lease_ms), do: {:error, :no_athanor}
+  def renew(%Prima.Actor{}, _owner, _fence, _lease_ms, _slot), do: {:error, :no_athanor}
 
   @doc """
-  Write the attempt's `outcome` (`ready`, `failed` or `released`) and its
-  `detail`, while `owner` still holds `fence`. A claim that was taken over,
-  or already settled, answers `:stale` and keeps what it reads.
+  Write the attempt's verdict, `outcome` (`ready` or `failed`), and its
+  `detail`, while `owner` still holds `fence` under the member's `slot`,
+  and with it `stamps`, the athanor row's own record of that verdict
+  (`Arca.Athanors.set/2` on the actor's athanor: readiness, or the failure
+  a person reads).
+
+  One transaction: the slot is verified live first, as `renew/5` verifies
+  it, then the verdict is written by compare-and-set, then the stamps —
+  only once the verdict landed. A claim that was taken over, or already
+  settled, answers `:stale` and writes neither; a slot that is no longer
+  the member's answers `{:error, :not_owner}` and writes neither; stamps
+  the row refuses roll the verdict back and answer the refusal. So an
+  athanor is never marked ready, nor a failure recorded over its
+  successor's, by an attempt that no longer holds both.
   """
-  @spec settle(Prima.Actor.t(), String.t(), pos_integer(), String.t(), String.t() | nil) ::
-          :ok | :stale | refusal()
-  def settle(%Prima.Actor{athanor_id: athanor_id}, owner, fence, outcome, detail)
+  @spec settle(
+          Prima.Actor.t(),
+          String.t(),
+          pos_integer(),
+          String.t(),
+          String.t() | nil,
+          Arca.ControlPlane.slot() | :none,
+          keyword()
+        ) ::
+          :ok | :stale | {:error, :not_owner | :not_found | {:invalid, map()}} | refusal()
+  def settle(actor, owner, fence, outcome, detail, slot, stamps \\ [])
+
+  def settle(
+        %Prima.Actor{athanor_id: athanor_id} = actor,
+        owner,
+        fence,
+        outcome,
+        detail,
+        slot,
+        stamps
+      )
       when is_binary(athanor_id) and athanor_id != "" and is_binary(owner) and is_integer(fence) and
-             is_binary(outcome) and (is_binary(detail) or is_nil(detail)) do
+             is_binary(outcome) and (is_binary(detail) or is_nil(detail)) and is_list(stamps) do
     if outcome not in ProvisioningClaim.outcomes(),
       do:
         raise(ArgumentError, "unknown provisioning outcome #{Prima.LoggerContext.shape(outcome)}")
 
-    Arca.Repo.Errors.with_db_rescue("Arca.ProvisioningClaims.settle", fn ->
-      athanor_id
-      |> held(owner, fence)
-      |> Arca.Repo.update_all(set: [outcome: outcome, outcome_detail: detail, updated_at: now()])
-      |> landed()
+    under_slot("Arca.ProvisioningClaims.settle", slot, fn ->
+      with :ok <- write_outcome(athanor_id, owner, fence, outcome, detail) do
+        stamp(actor, stamps)
+      end
     end)
   end
 
-  def settle(%Prima.Actor{}, _owner, _fence, _outcome, _detail), do: {:error, :no_athanor}
+  def settle(%Prima.Actor{}, _owner, _fence, _outcome, _detail, _slot, _stamps),
+    do: {:error, :no_athanor}
 
-  @doc "Give the claim up with no verdict on readiness: `settle/5` as `released`."
+  @doc """
+  Give the claim up with no verdict on readiness: the outcome `released`,
+  while `owner` still holds `fence`, and `:stale` otherwise.
+
+  It names no slot. A release is given only once the attempt and the work
+  it started beside itself have stopped, and it hands the athanor to the
+  next attempt sooner than the lease would; a member that lost its slot
+  publishes nothing by giving the claim back.
+  """
   @spec release(Prima.Actor.t(), String.t(), pos_integer()) :: :ok | :stale | refusal()
-  def release(%Prima.Actor{} = actor, owner, fence),
-    do: settle(actor, owner, fence, "released", nil)
+  def release(%Prima.Actor{athanor_id: athanor_id}, owner, fence)
+      when is_binary(athanor_id) and athanor_id != "" and is_binary(owner) and is_integer(fence) do
+    Arca.Repo.Errors.with_db_rescue("Arca.ProvisioningClaims.release", fn ->
+      write_outcome(athanor_id, owner, fence, "released", nil)
+    end)
+  end
+
+  def release(%Prima.Actor{}, _owner, _fence), do: {:error, :no_athanor}
 
   @doc "The athanor's claim row as it reads now."
   @spec current(Prima.Actor.t()) ::
@@ -160,35 +225,43 @@ defmodule Arca.ProvisioningClaims do
   def current(%Prima.Actor{}), do: {:error, :no_athanor}
 
   @doc """
-  Hold the athanor's claim for the rest of the caller's transaction:
-  `true` while the row still reads `owner` at `fence` and carries no
-  outcome, `false` otherwise, and in either case nothing about the claim
-  changes but the instant it was last touched.
+  Hold the athanor's claim for the rest of the caller's transaction, as a
+  write that publishes for the attempt: `true` while the member still
+  holds `slot` — the one the claim was taken under, never one read again
+  since — and the row still reads `owner` at `fence` with no outcome;
+  `false` otherwise. In either case nothing about the claim changes but
+  the instant it was last touched.
 
-  It is a conditional WRITE and not a read on purpose. A read inside a
-  transaction is a check-then-act: a takeover landing between it and the
-  work it guards leaves the work written under a claim its owner has
-  lost. A write takes the claim row for the length of the transaction, so
-  a racing takeover either lands first — and this answers `false` — or
-  waits behind the commit, which is the ordering the guard needs.
+  The slot is verified first (`Arca.ControlPlane.verify_held/1`, whose
+  shared hold on the slot's lease row lasts until the caller commits), in
+  the order `claim/5` takes them. The claim is then held by a conditional
+  WRITE and not a read, on purpose: a read inside a transaction is a
+  check-then-act, and a takeover landing between it and the work it guards
+  leaves the work written under a claim its owner has lost. A write takes
+  the claim row for the length of the transaction. So a takeover of either
+  the slot or the claim lands first — and this answers `false` — or waits
+  behind the commit, which is the ordering the guard needs.
 
-  Called from inside `Arca.Repo.transaction/1`, which is where its
-  guarantee lives; it raises like anything else there, and the caller's
+  Called from inside `Arca.Repo.locking_transaction/2`, which is where its
+  guarantee lives and which `verify_held/1` requires; it raises like
+  anything else there, and the caller's
   `Arca.Repo.Errors.with_db_rescue/2` reports it.
   """
-  @spec hold?(Prima.Actor.t(), String.t(), pos_integer()) :: boolean()
-  # arca:db-raise-ok inside the caller's transaction
-  def hold?(%Prima.Actor{athanor_id: athanor_id}, owner, fence)
+  @spec hold?(Prima.Actor.t(), String.t(), pos_integer(), Arca.ControlPlane.slot() | :none) ::
+          boolean()
+  # arca:db-raise-ok inside the caller's locking transaction
+  def hold?(%Prima.Actor{athanor_id: athanor_id}, owner, fence, slot)
       when is_binary(athanor_id) and athanor_id != "" and is_binary(owner) and is_integer(fence) do
-    athanor_id
-    |> held(owner, fence)
-    |> Arca.Repo.update_all(set: [updated_at: now()])
-    |> landed()
-    |> Kernel.==(:ok)
+    Arca.ControlPlane.verify_held(slot) == :ok and
+      athanor_id
+      |> held(owner, fence)
+      |> Arca.Repo.update_all(set: [updated_at: now()])
+      |> landed()
+      |> Kernel.==(:ok)
   end
 
-  def hold?(%Prima.Actor{}, _owner, _fence),
-    do: Arca.QueryHelpers.no_athanor!("Arca.ProvisioningClaims.hold?/3")
+  def hold?(%Prima.Actor{}, _owner, _fence, _slot),
+    do: Arca.QueryHelpers.no_athanor!("Arca.ProvisioningClaims.hold?/4")
 
   @doc """
   Whether `claim`, as `claim/5` or `current/1` answered it, still stands on
@@ -307,6 +380,43 @@ defmodule Arca.ProvisioningClaims do
       where: c.athanor_id == ^athanor_id and c.owner == ^owner and c.fence == ^fence,
       where: is_nil(c.outcome)
     )
+  end
+
+  # The verdict, written only as the row still reads `owner` at `fence`.
+  defp write_outcome(athanor_id, owner, fence, outcome, detail) do
+    athanor_id
+    |> held(owner, fence)
+    |> Arca.Repo.update_all(set: [outcome: outcome, outcome_detail: detail, updated_at: now()])
+    |> landed()
+  end
+
+  # The verdict's stamps on the athanor row, inside the verdict's
+  # transaction: a refusal rolls the verdict back with it.
+  defp stamp(_actor, []), do: :ok
+
+  defp stamp(actor, stamps) do
+    case Arca.Athanors.set(actor, stamps) do
+      :ok -> :ok
+      {:error, reason} -> Arca.Repo.rollback(reason)
+    end
+  end
+
+  # `write` in one locking transaction that first verifies `slot` live, as
+  # `claim/5` does: a slot that is not the member's rolls back as
+  # `{:error, :not_owner}` with nothing written.
+  defp under_slot(entry, slot, write) do
+    Arca.Repo.Errors.with_db_rescue(entry, fn ->
+      Arca.Repo.locking_transaction(fn ->
+        case Arca.ControlPlane.verify_held(slot) do
+          :ok -> write.()
+          :lost -> Arca.Repo.rollback(:not_owner)
+        end
+      end)
+      |> case do
+        {:ok, answer} -> answer
+        {:error, _} = refused -> refused
+      end
+    end)
   end
 
   defp landed({1, _}), do: :ok

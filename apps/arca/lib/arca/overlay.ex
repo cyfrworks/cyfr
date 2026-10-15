@@ -768,8 +768,9 @@ defmodule Arca.Overlay do
   holds the unit, `{:error, :stale_revision}` when another commit landed
   first, `{:error, :missing_unit}` when the unit was dropped under this
   writer, `{:error, :invalid_objects}` when what was staged is not what
-  was written — in each case nothing is published and the staged objects
-  are removed. `{:error, :outcome_unknown}` from the commit leaves the
+  was written, `{:error, :not_owner}` when this member no longer holds its
+  slot in the cell (`Arca.StorageUnits.commit/5`) — in each case nothing
+  is published and the staged objects are removed. `{:error, :outcome_unknown}` from the commit leaves the
   staged objects where they are: the outcome is unknown.
   `{:error, {:finish_failed, reason}}` is a published unit whose move to
   the served location did not finish (`repair_unit/2`).

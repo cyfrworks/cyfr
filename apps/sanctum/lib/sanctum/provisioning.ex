@@ -63,14 +63,21 @@ defmodule Sanctum.Provisioning do
   fence is the claim row's own; the slot is the member's, not a second
   per-athanor fence.
 
+  The claim carries that slot (`claim/0`'s `:slot`) for as long as the
+  attempt runs, and it is the only slot the attempt ever names: a member
+  that loses its slot and wins it back holds a new generation, which no
+  write of the earlier attempt can pass. Every write that speaks for the
+  attempt verifies the slot and the claim's owner and fence live in its
+  own transaction: the lease's renewal, readiness — the verdict `ready`
+  and the athanor's `provisioned_at`, written together — a failure's
+  verdict and its record on the row, the consent mint and its revision,
+  and the agent index. An attempt whose member lost its slot, or whose
+  claim a successor took, writes none of them and answers
+  `{:error, :provisioning_busy}`; its claim, no longer renewed, runs out
+  or is released, and the next attempt fills the athanor.
+
   An attempt settles its claim `ready` or `failed`; an install, a sync and
-  an attempt that found the athanor filled release it. Every write that
-  speaks for the attempt is fenced by the claim: readiness is marked only
-  after the claim settled `ready`, a failure is recorded only after it
-  settled `failed`, and the consent mint and the agent index check the
-  claim still reads this owner and fence before they write. An attempt
-  whose lease ran out and whose claim a successor took writes none of
-  them and answers `{:error, :provisioning_busy}`.
+  an attempt that found the athanor filled release it.
 
   ## Giving the athanor back
 
@@ -117,8 +124,16 @@ defmodule Sanctum.Provisioning do
   # stored value outside it refuses every mint.
   @mint_per_hour_range 1..1_000_000
 
-  @typedoc "The claim an attempt holds while it fills an athanor."
-  @type claim :: %{required(:owner) => String.t(), optional(atom()) => term()}
+  @typedoc """
+  The claim an attempt holds while it fills an athanor: the claim row as
+  it was taken, and the member slot it was taken under.
+  """
+  @type claim :: %{
+          required(:owner) => String.t(),
+          required(:fence) => pos_integer(),
+          required(:slot) => Arca.ControlPlane.slot() | :none,
+          optional(atom()) => term()
+        }
 
   @doc """
   Called once the person is admitted, and again whenever their namespace
@@ -399,7 +414,7 @@ defmodule Sanctum.Provisioning do
   def take_claim(athanor_id, entry_kind) do
     with {:ok, slot} <- Arca.ControlPlane.member_slot() do
       case Claims.claim(actor(athanor_id), owner(), entry_kind, @lease_ms, slot) do
-        {:ok, claim} -> {:ok, claim}
+        {:ok, claim} -> {:ok, Map.put(claim, :slot, slot)}
         {:busy, _claim} -> {:error, :provisioning_busy}
         {:error, _} = error -> error
       end
@@ -439,12 +454,12 @@ defmodule Sanctum.Provisioning do
   end
 
   # The slot is asked again on every round: a member that loses it while
-  # waiting stops waiting.
+  # waiting stops waiting. The round that wins keeps the slot it won under.
   defp wait_for_claim(actor, owner, entry_kind, deadline, poll_ms) do
     with {:ok, slot} <- Arca.ControlPlane.member_slot() do
       case Claims.claim(actor, owner, entry_kind, @lease_ms, slot) do
         {:ok, claim} ->
-          {:ok, claim}
+          {:ok, Map.put(claim, :slot, slot)}
 
         {:busy, _claim} ->
           if now_ms() < deadline do
@@ -600,8 +615,10 @@ defmodule Sanctum.Provisioning do
   # beside itself, and watches the attempt: an attempt killed where it
   # stands runs no `after`, so the keeper is what stops that work and
   # releases the claim — in that order, and only in that order. A renewal
-  # refused as stale means a successor holds the athanor: what this attempt
-  # started must stop writing to it, and there is nothing left to keep.
+  # refused as stale means a successor holds the athanor, and one refused
+  # as `:not_owner` that this member lost the slot the claim was taken
+  # under: either way what this attempt started must stop writing to it,
+  # and there is nothing left to keep.
   defp keep(actor, claim) do
     attempt = self()
 
@@ -624,7 +641,7 @@ defmodule Sanctum.Provisioning do
   defp keep_loop(actor, claim, ref, started) do
     receive do
       :renew ->
-        case Claims.renew(actor, claim.owner, claim.fence, @lease_ms) do
+        case Claims.renew(actor, claim.owner, claim.fence, @lease_ms, claim.slot) do
           :ok ->
             Process.send_after(self(), :renew, @renew_ms)
             keep_loop(actor, claim, ref, started)
@@ -740,26 +757,61 @@ defmodule Sanctum.Provisioning do
 
   @doc """
   The claim's own verdict, written only while this attempt still holds
-  it. What follows a verdict — the mark, the failure record — is written
-  only once it landed.
+  it under the slot it was taken under. A verdict `ready` is readiness:
+  the row's `provisioned_at`, with any earlier failure forgotten, lands in
+  the verdict's own transaction (`Arca.ProvisioningClaims.settle/7`), so
+  the athanor is marked filled exactly when the claim says so and only by
+  the attempt that still holds both. `mark_filled/1` announces it once
+  this has answered `:ok`. A claim a successor took and a slot this member
+  lost are both `{:error, :claim_lost}`: the athanor is no longer this
+  attempt's to speak for, and nothing is written.
   """
   @spec settle(String.t(), claim(), String.t(), String.t() | nil) ::
           :ok | {:error, :claim_lost} | {:error, term()}
-  def settle(athanor_id, claim, outcome, detail) when is_binary(athanor_id) do
-    case Claims.settle(actor(athanor_id), claim.owner, claim.fence, outcome, detail) do
+  def settle(athanor_id, claim, "ready", detail) when is_binary(athanor_id) do
+    now = DateTime.utc_now()
+
+    verdict(athanor_id, claim, "ready", detail,
+      provisioned_at: now,
+      provisioning_failed_at: nil,
+      provisioning_failure: nil,
+      updated_at: now
+    )
+  end
+
+  def settle(athanor_id, claim, outcome, detail) when is_binary(athanor_id),
+    do: verdict(athanor_id, claim, outcome, detail, [])
+
+  # The verdict and `stamps`, the athanor row's record of it, in one write.
+  defp verdict(athanor_id, claim, outcome, detail, stamps) do
+    case Claims.settle(
+           actor(athanor_id),
+           claim.owner,
+           claim.fence,
+           outcome,
+           detail,
+           claim.slot,
+           stamps
+         ) do
       :ok -> :ok
       :stale -> {:error, :claim_lost}
+      {:error, :not_owner} -> {:error, :claim_lost}
       {:error, _} = error -> error
     end
   end
 
   @doc """
-  An attempt whose claim a successor took: it marks nothing and records
-  nothing, and the athanor is the successor's — in progress, not failed.
+  An attempt whose claim a successor took, or whose member lost the slot
+  the claim was taken under: it marks nothing and records nothing, and the
+  athanor is the next attempt's — in progress, not failed.
   """
   @spec lost(String.t()) :: {:error, :provisioning_busy}
   def lost(athanor_id) do
-    Logger.warning("[Provisioning] #{athanor_id}: claim lost to a later attempt; nothing written")
+    Logger.warning(
+      "[Provisioning] #{athanor_id}: claim lost to a later attempt, or this member's slot " <>
+        "lost; nothing written"
+    )
+
     {:error, :provisioning_busy}
   end
 
@@ -844,31 +896,45 @@ defmodule Sanctum.Provisioning do
   end
 
   @doc """
-  Mark the athanor filled and tell its subscribers. Called only once the
-  claim settled `ready`: announcing a fill that did not finish would have
-  every listener read the bundle again and ask for another attempt.
+  Tell the athanor's subscribers it is filled, once `settle/4`'s verdict
+  `ready` has committed readiness: announcing a fill that did not finish
+  would have every listener read the bundle again and ask for another
+  attempt. Writes nothing; answers the row as it now reads.
   """
   @spec mark_filled(Sanctum.Tenancy.Athanors.athanor()) ::
           {:ok, Sanctum.Tenancy.Athanors.athanor()} | {:error, term()}
-  def mark_filled(athanor) do
-    case Athanors.mark_provisioned(athanor) do
-      {:ok, filled} ->
-        # The athanor's own topic, the kind every console subscriber already
-        # re-reads the row on: a page rendering "still being prepared" clears
-        # itself rather than waiting for a reload.
-        Sanctum.Notify.broadcast(filled.id, :athanor_changed, %{name: filled.name})
-        {:ok, filled}
+  def mark_filled(%{id: athanor_id} = athanor) do
+    case announce(athanor) do
+      {:ok, %{provisioned_at: %DateTime{}}} = filled ->
+        filled
+
+      other ->
+        Logger.error("[Provisioning] #{athanor_id} filled but not read back: #{inspect(other)}")
+        other
+    end
+  end
+
+  # The row as it reads after a verdict committed, announced on the
+  # athanor's own topic — the kind every console subscriber already
+  # re-reads the row on, so a page rendering "still being prepared" clears
+  # itself rather than waiting for a reload.
+  defp announce(%{id: athanor_id} = athanor) do
+    case athanor(athanor_id) do
+      {:ok, row} = read ->
+        Sanctum.Notify.broadcast(athanor_id, :athanor_changed, %{name: row.name})
+        read
 
       {:error, _} = error ->
-        Logger.error("[Provisioning] #{athanor.id} filled but not marked: #{inspect(error)}")
+        Sanctum.Notify.broadcast(athanor_id, :athanor_changed, %{name: Map.get(athanor, :name)})
         error
     end
   end
 
   @doc """
-  Record where a fill stopped. The claim settles `failed` first, and the
-  row records the failure only once that landed: an attempt whose claim a
-  successor took leaves the successor's record alone.
+  Record where a fill stopped. The claim's verdict `failed` and the row's
+  record of the failure land in one write, only while the claim and the
+  slot it was taken under are still this attempt's (as `settle/4`'s): an
+  attempt that lost either leaves the successor's record alone.
 
   The `bootstrap` step's list of sources that did not mint
   (`bootstrap_consents/2`'s `{:unminted, refs}`) is recorded and logged
@@ -882,8 +948,15 @@ defmodule Sanctum.Provisioning do
           {:error, term()}
   def record_failure(claim, athanor, step, detail) do
     said = failure_detail(step, detail)
+    now = DateTime.utc_now()
 
-    case settle(athanor.id, claim, "failed", "#{step}: #{said}") do
+    stamps = [
+      provisioning_failed_at: now,
+      provisioning_failure: Jason.encode!(%{"step" => to_string(step), "detail" => said}),
+      updated_at: now
+    ]
+
+    case verdict(athanor.id, claim, "failed", "#{step}: #{said}", stamps) do
       :ok ->
         Logger.warning("[Provisioning] #{athanor.id} not provisioned at #{step}: #{said}")
 
@@ -892,7 +965,7 @@ defmodule Sanctum.Provisioning do
           step: step
         })
 
-        Athanors.record_provisioning_failure(athanor, step, said)
+        _ = announce(athanor)
 
         {:error, {:provisioning_failed, step, detail}}
 

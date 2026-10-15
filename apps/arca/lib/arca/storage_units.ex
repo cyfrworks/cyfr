@@ -20,7 +20,8 @@ defmodule Arca.StorageUnits do
        hold a unit for longer than that.
     2. The writer stages its objects under `stage_prefix/3`, outside any
        transaction.
-    3. `commit/5` is one short transaction: it rechecks that the row is
+    3. `commit/5` is one short transaction: it verifies the writing
+       member still holds its slot in the cell, rechecks that the row is
        the actor's athanor's and not retired, compares the pointer with
        the revision the writer staged against and the draft token with the
        writer's, moves the pointer, clears the token and appends exactly
@@ -144,10 +145,21 @@ defmodule Arca.StorageUnits do
   token and appends one journal row — or does none of it. Answers `t:Arca.Schemas.StorageUnit.commit_result/0`:
   `:stale_revision` when the pointer moved, `:stale_writer` when the draft
   is no longer the writer's, `:missing_unit` for a row that is absent,
-  retired or another athanor's.
+  retired or another athanor's, `:not_owner` when the writing member no
+  longer holds its slot in the cell.
+
+  The slot is the one this member holds as the commit begins
+  (`Arca.ControlPlane.member_slot/0`, a term read), and the transaction
+  verifies it live before it touches the row
+  (`Arca.ControlPlane.verify_held/1`, which holds the slot's lease row
+  until commit): a takeover of the member's slot either lands first, and
+  the pointer does not move, or waits until the commit has landed. A
+  member's cached standing outlives the row it stands for by up to a
+  renewal, so the cached check every gate makes on the way in is never
+  what lets a pointer move.
   """
   @spec commit(Prima.Actor.t(), StorageUnit.t(), String.t() | nil, String.t(), identity()) ::
-          StorageUnit.commit_result() | {:error, :no_athanor}
+          StorageUnit.commit_result() | {:error, :not_owner | :no_athanor}
   def commit(
         %Prima.Actor{} = actor,
         %StorageUnit{} = unit,
@@ -169,7 +181,12 @@ defmodule Arca.StorageUnits do
   @spec stamped_commit(Prima.Actor.t(), StorageUnit.t(), String.t() | nil, String.t(), identity()) ::
           {:committed, pos_integer()}
           | {:error,
-             :stale_revision | :stale_writer | :missing_unit | :outcome_unknown | :no_athanor}
+             :stale_revision
+             | :stale_writer
+             | :missing_unit
+             | :not_owner
+             | :outcome_unknown
+             | :no_athanor}
   def stamped_commit(
         %Prima.Actor{} = actor,
         %StorageUnit{} = unit,
@@ -180,9 +197,10 @@ defmodule Arca.StorageUnits do
       when is_binary(writer_token) and is_binary(new_revision) and is_binary(content) and
              is_binary(who) and (is_nil(expected_revision) or is_binary(expected_revision)) do
     with {:ok, athanor} <- tenant(actor),
-         :ok <- owned(athanor, unit) do
+         :ok <- owned(athanor, unit),
+         {:ok, slot} <- Arca.ControlPlane.member_slot() do
       rescuing_db("commit", fn ->
-        move_pointer(actor, athanor, unit, expected_revision, writer_token, identity)
+        move_pointer(actor, athanor, unit, expected_revision, writer_token, identity, slot)
       end)
     end
   end
@@ -438,23 +456,29 @@ defmodule Arca.StorageUnits do
   # ---------------------------------------------------------------------------
 
   # The pointer move, the journal row and the projection generation share
-  # one transaction, so none exists without the others. The compare is the
-  # update's own WHERE: no read-then-write window, on either adapter. The
-  # unit row is locked by that update before the root's epoch is raised —
-  # the order every storage writer keeps — and the root and key the
-  # generation is stamped on are the row's, never the caller's struct's.
-  # The change is announced once it has committed.
+  # one transaction, so none exists without the others. The writer's slot
+  # is verified first, under its lease row's shared lock, so a member that
+  # lost its slot moves no pointer and a takeover cannot land between the
+  # check and the move. The compare is the update's own WHERE: no
+  # read-then-write window, on either adapter. The unit row is locked by
+  # that update before the root's epoch is raised — the order every
+  # storage writer keeps — and the root and key the generation is stamped
+  # on are the row's, never the caller's struct's. The change is announced
+  # once it has committed.
   defp move_pointer(
          actor,
          athanor,
          %StorageUnit{id: id},
          expected_revision,
          writer_token,
-         identity
+         identity,
+         slot
        ) do
     now = DateTime.utc_now()
 
     Arca.Repo.locking_transaction(fn ->
+      if Arca.ControlPlane.verify_held(slot) == :lost, do: Arca.Repo.rollback(:not_owner)
+
       case swap(athanor, id, expected_revision, writer_token, identity, now) do
         [{root, unit_key}] ->
           append_journal!(athanor, id, expected_revision, identity, now)

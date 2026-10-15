@@ -142,12 +142,17 @@ defmodule Sanctum.Consent.Bootstrap do
   `"system:bootstrap"` for a server-side mint (a seed context).
 
   `claim` is the provisioning claim the walk runs under
-  (`Arca.ProvisioningClaims`): the walk starts, and each source is minted
-  or revised, only while the athanor's claim still reads that owner and
-  fence with no outcome. A walk whose claim a later attempt took answers
-  `{:error, :claim_lost}` — what it minted before the loss stands, since
-  it held the athanor then, and nothing is minted after. With no claim
-  (`nil`) the walk is unfenced: an athanor nothing else is filling.
+  (`Arca.ProvisioningClaims`) and the member slot it was taken under: the
+  walk starts only while the athanor's claim still reads that owner and
+  fence with no outcome, and each source is minted or revised only while
+  the claim still reads so and the member still holds that slot, both
+  verified in the transaction that writes it
+  (`Arca.ProvisioningClaims.hold?/4`). A walk whose claim a later attempt
+  took, or whose member lost the slot, answers `{:error, :claim_lost}` —
+  what it minted before the loss stands, since it held the athanor then,
+  and nothing is minted after. A claim that names no slot names `:none`,
+  which holds only where no claimant runs. With no claim (`nil`) the walk
+  is unfenced: an athanor nothing else is filling.
 
   Answers `{:error, {:component_facts, reason}}` when the athanor's
   component facts cannot be read (`Sanctum.Consent.Components`). That is
@@ -170,7 +175,10 @@ defmodule Sanctum.Consent.Bootstrap do
     end
   end
 
-  # Whether the athanor's claim is still the one this walk runs under.
+  # Whether the athanor's claim is still the one this walk runs under, read
+  # once before the walk so a lost claim walks nothing. It guards no write:
+  # each mint and revision holds the claim in its own transaction
+  # (`fenced/2`).
   defp holding(_ctx, nil), do: :ok
 
   defp holding(%Context{} = ctx, %{owner: owner, fence: fence}) do
@@ -178,6 +186,26 @@ defmodule Sanctum.Consent.Bootstrap do
       {:ok, %{owner: ^owner, fence: ^fence, outcome: nil}} -> :ok
       _ -> {:error, :claim_lost}
     end
+  end
+
+  # The options a consent write runs under `claim` with: a `verify:` the
+  # write's own locking transaction runs, holding the claim row at its
+  # owner and fence and verifying the member slot the claim was taken
+  # under, so a takeover of either lands before the write, which then
+  # writes nothing, or after it has committed. With no claim, none.
+  defp fenced(_ctx, nil), do: []
+
+  defp fenced(%Context{} = ctx, %{owner: owner, fence: fence} = claim) do
+    actor = Context.actor(ctx)
+    slot = Map.get(claim, :slot, :none)
+
+    verify = fn ->
+      if Arca.ProvisioningClaims.hold?(actor, owner, fence, slot),
+        do: :ok,
+        else: {:error, :claim_lost}
+    end
+
+    [verify: verify]
   end
 
   defp walk(ctx, claim) do
@@ -337,9 +365,15 @@ defmodule Sanctum.Consent.Bootstrap do
          {:ok, blob_json} <- BlobBuilder.encode(nodes),
          {:ok, digests} <-
            compute_digests(ctx, source_ref, JCS.hash_binary(blob_json), List.wrap(binding)),
-         {:ok, activation_json} <- JCS.encode(activation.graph),
-         :ok <- holding(ctx, claim) do
-      insert(ctx, source_ref, blob_json, digests, activation_json, BlobBuilder.vault_refs(nodes))
+         {:ok, activation_json} <- JCS.encode(activation.graph) do
+      insert(
+        {ctx, claim},
+        source_ref,
+        blob_json,
+        digests,
+        activation_json,
+        BlobBuilder.vault_refs(nodes)
+      )
     end
   end
 
@@ -687,7 +721,6 @@ defmodule Sanctum.Consent.Bootstrap do
            compute_digests(ctx, source_ref, JCS.hash_binary(blob_json), List.wrap(binding)),
          :ok <- revisable(head, digests, activation.graph, vouched),
          {:ok, activation_json} <- JCS.encode(activation.graph),
-         :ok <- holding(ctx, claim),
          {:ok, _consent} <-
            Arca.ConsentStorage.insert_revision(
              %{
@@ -707,7 +740,8 @@ defmodule Sanctum.Consent.Bootstrap do
                granted_via: "bootstrap"
              },
              BlobBuilder.vault_refs(nodes),
-             head.id
+             head.id,
+             fenced(ctx, claim)
            ) do
       {:revised, profile.id}
     else
@@ -804,11 +838,12 @@ defmodule Sanctum.Consent.Bootstrap do
   defp granted_by(%Context{user_id: user_id}) when is_binary(user_id), do: user_id
   defp granted_by(_), do: "system:bootstrap"
 
-  defp insert(ctx, source_ref, blob_json, digests, activation_json, vault_refs) do
+  defp insert({ctx, claim}, source_ref, blob_json, digests, activation_json, vault_refs) do
     profile_id = Prima.UUID7.generate_id("prof")
 
     # Profile and first revision commit together — a failed consent leg
-    # must not leave an orphan profile with a NULL head.
+    # must not leave an orphan profile with a NULL head — and under the
+    # claim, held in the same transaction.
     with {:ok, _consent} <-
            Arca.ConsentStorage.mint_profile_with_revision(
              %{
@@ -834,7 +869,8 @@ defmodule Sanctum.Consent.Bootstrap do
                granted_by: granted_by(ctx),
                granted_via: "bootstrap"
              },
-             vault_refs
+             vault_refs,
+             fenced(ctx, claim)
            ) do
       {:ok, profile_id}
     end

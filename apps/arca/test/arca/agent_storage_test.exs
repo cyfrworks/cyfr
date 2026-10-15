@@ -151,7 +151,7 @@ defmodule Arca.AgentStorageTest do
 
     # The successor takes the claim — settling the predecessor's is what
     # makes the row takeable, and the take raises the fence.
-    assert :ok = Claims.settle(actor, first.owner, first.fence, "failed", nil)
+    assert :ok = Claims.settle(actor, first.owner, first.fence, "failed", nil, slot)
     assert {:ok, second} = Claims.claim(actor, "boot_b", "seed_sync", @lease_ms, slot)
     assert second.fence > first.fence
 
@@ -180,7 +180,7 @@ defmodule Arca.AgentStorageTest do
     slot: slot
   } do
     assert {:ok, claim} = Claims.claim(actor, "boot_a", "first_need", @lease_ms, slot)
-    assert :ok = Claims.settle(actor, claim.owner, claim.fence, "ready", nil)
+    assert :ok = Claims.settle(actor, claim.owner, claim.fence, "ready", nil, slot)
 
     assert {:error, :claim_lost} =
              AgentStorage.replace_projection(actor, token(actor), [row(athanor_id, "alpha")],
@@ -197,7 +197,7 @@ defmodule Arca.AgentStorageTest do
       slot: slot
     } do
       assert {:ok, claim} = Claims.claim(actor, "boot_a", "first_need", @lease_ms, slot)
-      assert :ok = Claims.settle(actor, claim.owner, claim.fence, "failed", nil)
+      assert :ok = Claims.settle(actor, claim.owner, claim.fence, "failed", nil, slot)
       generation = edited!(actor, "alpha")
 
       assert {:error, :claim_lost} =

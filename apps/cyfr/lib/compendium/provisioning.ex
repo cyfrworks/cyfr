@@ -561,13 +561,16 @@ defmodule Compendium.Provisioning do
 
   # The athanor's agents as rows, derived from the tree the seed just
   # filled or the release just moved, written in the same transaction that
-  # holds the claim: an attempt a successor took over publishes no index,
-  # and that is the one failure here that IS provisioning's, since the
-  # successor owns the athanor from that moment. Anything else — a file
-  # that would not parse, a tree that could not be read — leaves the rows
-  # as they were and is reported.
+  # holds the claim and verifies the member slot it was taken under: an
+  # attempt a successor took over, or whose member lost that slot,
+  # publishes no index, and that is the one failure here that IS
+  # provisioning's, since the successor owns the athanor from that moment.
+  # Anything else — a file that would not parse, a tree that could not be
+  # read — leaves the rows as they were and is reported.
   defp index_agents(ctx, claim) do
-    case Compendium.AgentIndex.sync(ctx, claim: %{owner: claim.owner, fence: claim.fence}) do
+    case Compendium.AgentIndex.sync(ctx,
+           claim: %{owner: claim.owner, fence: claim.fence, slot: claim.slot}
+         ) do
       {:ok, _} ->
         :ok
 

@@ -109,6 +109,142 @@ defmodule Arca.ProvisioningClaimsTest do
     end
   end
 
+  describe "a member that lost the slot its claim was taken under" do
+    # The case's slot row taken over by a successor boot, as a takeover past
+    # the lease writes it.
+    defp take_over!(slot) do
+      {1, _} =
+        Arca.Repo.update_all(from(l in CellLease, where: l.node == ^slot.node),
+          set: [owner: slot.node <> "#boot_b", generation: slot.generation + 1, fence: 2]
+        )
+
+      :ok
+    end
+
+    test "renews nothing, and the lease stays where it was", %{actor: actor, slot: slot} do
+      {:ok, claim} = claim(actor, "boot_1/a", "sign_in", @lease_ms)
+      :ok = take_over!(slot)
+
+      assert {:error, :not_owner} =
+               Claims.renew(actor, claim.owner, claim.fence, @lease_ms, slot)
+
+      assert {:ok, still} = Claims.current(actor)
+      assert still.lease_until == claim.lease_until
+      assert still.updated_at == claim.updated_at
+      assert still.outcome == nil
+    end
+
+    test "renews nothing under a slot that ran out with no successor", %{
+      actor: actor,
+      slot: slot
+    } do
+      {:ok, claim} = claim(actor, "boot_1/a", "sign_in", @lease_ms)
+      past = DateTime.add(Arca.ServerMetaStorage.now!(), -1_000, :millisecond)
+
+      {1, _} =
+        Arca.Repo.update_all(from(l in CellLease, where: l.node == ^slot.node),
+          set: [lease_until: past]
+        )
+
+      assert {:error, :not_owner} =
+               Claims.renew(actor, claim.owner, claim.fence, @lease_ms, slot)
+
+      assert {:ok, %{lease_until: lease_until}} = Claims.current(actor)
+      assert lease_until == claim.lease_until
+    end
+
+    test "renews nothing once the same member took the claim over under a new fence", %{
+      actor: actor,
+      slot: slot
+    } do
+      old = lapsed!(actor, "boot_1/a")
+      {:ok, new} = claim(actor, "boot_1/b", "provision", @lease_ms)
+      assert new.fence == old.fence + 1
+
+      assert :stale = Claims.renew(actor, old.owner, old.fence, @lease_ms, slot)
+      assert {:ok, %{owner: "boot_1/b", lease_until: lease_until}} = Claims.current(actor)
+      assert lease_until == new.lease_until
+    end
+
+    test "settles no verdict and stamps nothing on the athanor", %{
+      actor: actor,
+      athanor_id: athanor_id,
+      slot: slot
+    } do
+      Arca.Test.Actor.ensure_athanor_row(athanor_id)
+      {:ok, claim} = claim(actor, "boot_1/a", "first_need", @lease_ms)
+      :ok = take_over!(slot)
+      now = DateTime.utc_now()
+
+      assert {:error, :not_owner} =
+               Claims.settle(actor, claim.owner, claim.fence, "ready", nil, slot,
+                 provisioned_at: now
+               )
+
+      assert {:error, :not_owner} =
+               Claims.settle(actor, claim.owner, claim.fence, "failed", "late", slot,
+                 provisioning_failed_at: now
+               )
+
+      assert {:ok, %{outcome: nil, outcome_detail: nil}} = Claims.current(actor)
+      assert %{provisioned_at: nil, provisioning_failed_at: nil} = athanor_row(athanor_id)
+    end
+
+    test "holds nothing inside a writer's transaction", %{actor: actor, slot: slot} do
+      {:ok, claim} = claim(actor, "boot_1/a", "first_need", @lease_ms)
+
+      assert {:ok, true} =
+               Arca.Repo.locking_transaction(fn ->
+                 Claims.hold?(actor, claim.owner, claim.fence, slot)
+               end)
+
+      :ok = take_over!(slot)
+
+      assert {:ok, false} =
+               Arca.Repo.locking_transaction(fn ->
+                 Claims.hold?(actor, claim.owner, claim.fence, slot)
+               end)
+    end
+  end
+
+  test "a verdict lands with the athanor's stamps, and a stale one with neither", %{
+    actor: actor,
+    athanor_id: athanor_id
+  } do
+    Arca.Test.Actor.ensure_athanor_row(athanor_id)
+    old = lapsed!(actor, "boot_1/a")
+    {:ok, new} = claim(actor, "boot_1/b", "provision", @lease_ms)
+    now = DateTime.utc_now()
+
+    assert :stale =
+             Claims.settle(actor, old.owner, old.fence, "failed", "late", slot(),
+               provisioning_failed_at: now
+             )
+
+    assert %{provisioning_failed_at: nil} = athanor_row(athanor_id)
+
+    assert :ok =
+             Claims.settle(actor, new.owner, new.fence, "ready", nil, slot(), provisioned_at: now)
+
+    assert {:ok, %{outcome: "ready"}} = Claims.current(actor)
+    assert %{provisioned_at: %DateTime{}, provisioning_failed_at: nil} = athanor_row(athanor_id)
+  end
+
+  # A stamp the row refuses rolls the verdict back with it.
+  test "a stamp the athanor row refuses leaves the claim unsettled", %{actor: actor} do
+    {:ok, claim} = claim(actor, "boot_1/a", "first_need", @lease_ms)
+
+    assert {:error, :not_found} =
+             Claims.settle(actor, claim.owner, claim.fence, "ready", nil, slot(),
+               provisioned_at: DateTime.utc_now()
+             )
+
+    assert {:ok, %{outcome: nil}} = Claims.current(actor)
+  end
+
+  defp athanor_row(athanor_id),
+    do: Arca.Repo.one(from(a in Arca.Schemas.Athanor, where: a.id == ^athanor_id))
+
   # A claim with a lease this short has run out by the time anyone looks.
   defp lapsed!(actor, owner, entry_kind \\ "first_need") do
     {:ok, claim} = claim(actor, owner, entry_kind, 1)
@@ -133,8 +269,8 @@ defmodule Arca.ProvisioningClaimsTest do
     on_exit(fn -> :telemetry.detach(handler) end)
 
     assert {:error, :no_athanor} = claim(nobody, "boot_1/a", "provision", @lease_ms)
-    assert {:error, :no_athanor} = Claims.renew(nobody, "boot_1/a", 1, @lease_ms)
-    assert {:error, :no_athanor} = Claims.settle(nobody, "boot_1/a", 1, "ready", nil)
+    assert {:error, :no_athanor} = Claims.renew(nobody, "boot_1/a", 1, @lease_ms, slot())
+    assert {:error, :no_athanor} = Claims.settle(nobody, "boot_1/a", 1, "ready", nil, slot())
     assert {:error, :no_athanor} = Claims.release(nobody, "boot_1/a", 1)
     assert {:error, :no_athanor} = Claims.current(nobody)
     refute_received :queried
@@ -213,13 +349,15 @@ defmodule Arca.ProvisioningClaimsTest do
     assert {:ok, %{fence: 1}} = claim(other, "boot_1/b", "first_need", @lease_ms)
 
     # And an owner's writes land only on the athanor its actor names.
-    assert :stale = Claims.settle(other, "boot_1/a", 1, "ready", nil)
+    assert :stale = Claims.settle(other, "boot_1/a", 1, "ready", nil, slot())
     assert {:ok, %{outcome: nil}} = Claims.current(actor)
   end
 
   test "a settled claim is taken at the next fence, under a new attempt", %{actor: actor} do
     {:ok, first} = claim(actor, "boot_1/a", "first_need", @lease_ms)
-    assert :ok = Claims.settle(actor, "boot_1/a", first.fence, "failed", "closure: :timeout")
+
+    assert :ok =
+             Claims.settle(actor, "boot_1/a", first.fence, "failed", "closure: :timeout", slot())
 
     assert {:ok, %{outcome: "failed", outcome_detail: "closure: :timeout"} = settled} =
              Claims.current(actor)
@@ -245,14 +383,14 @@ defmodule Arca.ProvisioningClaimsTest do
     assert new.fence == old.fence + 1
 
     # The old owner renews nothing, settles nothing and releases nothing —
-    assert :stale = Claims.renew(actor, old.owner, old.fence, @lease_ms)
-    assert :stale = Claims.settle(actor, old.owner, old.fence, "ready", nil)
-    assert :stale = Claims.settle(actor, old.owner, old.fence, "failed", "late")
+    assert :stale = Claims.renew(actor, old.owner, old.fence, @lease_ms, slot())
+    assert :stale = Claims.settle(actor, old.owner, old.fence, "ready", nil, slot())
+    assert :stale = Claims.settle(actor, old.owner, old.fence, "failed", "late", slot())
     assert :stale = Claims.release(actor, old.owner, old.fence)
 
     # — not under the successor's fence either: owner and fence both bind.
-    assert :stale = Claims.settle(actor, old.owner, new.fence, "ready", nil)
-    assert :stale = Claims.settle(actor, new.owner, old.fence, "ready", nil)
+    assert :stale = Claims.settle(actor, old.owner, new.fence, "ready", nil, slot())
+    assert :stale = Claims.settle(actor, new.owner, old.fence, "ready", nil, slot())
 
     assert {:ok, %{owner: "boot_2/b", outcome: nil, outcome_detail: nil}} = Claims.current(actor)
   end
@@ -260,10 +398,10 @@ defmodule Arca.ProvisioningClaimsTest do
   test "a stale owner cannot overwrite its successor's failure", %{actor: actor} do
     old = lapsed!(actor, "boot_1/a")
     {:ok, new} = claim(actor, "boot_1/b", "provision", @lease_ms)
-    :ok = Claims.settle(actor, new.owner, new.fence, "failed", "seed: :bundle_missing")
+    :ok = Claims.settle(actor, new.owner, new.fence, "failed", "seed: :bundle_missing", slot())
 
-    assert :stale = Claims.settle(actor, old.owner, old.fence, "ready", nil)
-    assert :stale = Claims.settle(actor, old.owner, old.fence, "failed", "mine")
+    assert :stale = Claims.settle(actor, old.owner, old.fence, "ready", nil, slot())
+    assert :stale = Claims.settle(actor, old.owner, old.fence, "failed", "mine", slot())
 
     assert {:ok, %{outcome: "failed", outcome_detail: "seed: :bundle_missing"}} =
              Claims.current(actor)
@@ -271,7 +409,7 @@ defmodule Arca.ProvisioningClaimsTest do
 
   test "a renewal keeps a claim that would have run out", %{actor: actor} do
     {:ok, claim} = claim(actor, "boot_1/a", "sign_in", 1)
-    assert :ok = Claims.renew(actor, claim.owner, claim.fence, @lease_ms)
+    assert :ok = Claims.renew(actor, claim.owner, claim.fence, @lease_ms, slot())
 
     {:ok, renewed} = Claims.current(actor)
     assert DateTime.compare(renewed.lease_until, claim.lease_until) == :gt
@@ -284,8 +422,8 @@ defmodule Arca.ProvisioningClaimsTest do
     assert :ok = Claims.release(actor, claim.owner, claim.fence)
     assert {:ok, %{outcome: "released"}} = Claims.current(actor)
 
-    assert :stale = Claims.settle(actor, claim.owner, claim.fence, "ready", nil)
-    assert :stale = Claims.renew(actor, claim.owner, claim.fence, @lease_ms)
+    assert :stale = Claims.settle(actor, claim.owner, claim.fence, "ready", nil, slot())
+    assert :stale = Claims.renew(actor, claim.owner, claim.fence, @lease_ms, slot())
     assert {:ok, %{outcome: "released"}} = Claims.current(actor)
   end
 
@@ -312,7 +450,7 @@ defmodule Arca.ProvisioningClaimsTest do
     {:ok, claim} = claim(actor, "boot_1/a", "provision", @lease_ms)
 
     assert_raise ArgumentError, fn ->
-      Claims.settle(actor, claim.owner, claim.fence, "finished", nil)
+      Claims.settle(actor, claim.owner, claim.fence, "finished", nil, slot())
     end
   end
 end
