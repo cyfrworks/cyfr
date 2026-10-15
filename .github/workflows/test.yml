@@ -9,10 +9,16 @@ on:
       - 'config/**'
       - 'mix.exs'
       - 'mix.lock'
-      # Every workflow: the drift test reads docker.yml and the retired-
-      # settings test scans them all; the image scans read .trivyignore.yaml.
+      # The formatting check reads it.
+      - '.formatter.exs'
+      # Every workflow: the drift test reads release.yml and the retired-
+      # settings test scans them all; the image scans read .trivyignore.yaml
+      # and trivy-secret.yaml.
       - '.github/workflows/*.yml'
+      # The setup-elixir action every BEAM job here runs.
+      - '.github/actions/**'
       - '.trivyignore.yaml'
+      - 'trivy-secret.yaml'
       # Compile-embedded (@external_resource) into compendium/providers/aqua.ex.
       - 'component-guide.md'
       - 'tincture-guide.md'
@@ -52,10 +58,16 @@ on:
       - 'config/**'
       - 'mix.exs'
       - 'mix.lock'
-      # Every workflow: the drift test reads docker.yml and the retired-
-      # settings test scans them all; the image scans read .trivyignore.yaml.
+      # The formatting check reads it.
+      - '.formatter.exs'
+      # Every workflow: the drift test reads release.yml and the retired-
+      # settings test scans them all; the image scans read .trivyignore.yaml
+      # and trivy-secret.yaml.
       - '.github/workflows/*.yml'
+      # The setup-elixir action every BEAM job here runs.
+      - '.github/actions/**'
       - '.trivyignore.yaml'
+      - 'trivy-secret.yaml'
       # Compile-embedded (@external_resource) into compendium/providers/aqua.ex.
       - 'component-guide.md'
       - 'tincture-guide.md'
@@ -91,6 +103,12 @@ on:
   workflow_call:
 permissions:
   contents: read
+# A newer push to a pull request cancels the run it supersedes. Elsewhere a
+# started run is never cancelled; GitHub keeps one waiting run per group,
+# so a waiting run on main gives way to a newer push's.
+concurrency:
+  group: test-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 env:
   MIX_ENV: test
   ERL_CRASH_DUMP_SECONDS: 0
@@ -100,70 +118,75 @@ env:
   MIX_OS_CONCURRENCY_LOCK: 0
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 jobs:
-  test:
-    name: Elixir Tests (${{ matrix.db }})
+  # The checks whose answer does not depend on the database adapter, once
+  # per run. Their step names stay as they were. scripts/commit-gate.sh
+  # reads two of them, "The built SDK is its source's" and "The built
+  # toolkit is its source's", and runs their scripts.
+  static:
+    name: Static checks, generated files, fixtures and harness tests
     runs-on: ubuntu-latest
-    # Both adapters must stay green. SQLite is the shipped default; Postgres is
-    # bring-your-own. The data layer is Ecto-schema-backed so column values cast
-    # to the same Elixir types on both, and both legs are blocking.
-    strategy:
-      fail-fast: false
-      matrix:
-        db: [sqlite, postgres]
-    services:
-      # Test-only ephemeral database — these credentials (and CYFR_SECRET_KEY_BASE
-      # below) are non-secret CI fixtures for the Postgres container, never used
-      # outside CI.
-      postgres:
-        image: postgres:18.6
-        env:
-          POSTGRES_USER: cyfr
-          POSTGRES_PASSWORD: cyfr
-          POSTGRES_DB: cyfr_test
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd pg_isready
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
+    timeout-minutes: 90
     env:
-      CYFR_DATABASE: ${{ matrix.db }}
-      CYFR_DATABASE_URL: ${{ matrix.db == 'postgres' && 'postgres://cyfr:cyfr@localhost:5432/cyfr_test' || '' }}
-      CYFR_SECRET_KEY_BASE: ${{ matrix.db == 'postgres' && 'JspnK9M8XQE1HFBRZWuzJqK8ZX8ITp5vPQ6MJv2RmFfKpGr2fEhAgSf3UqBT5xTk' || '' }}
+      CYFR_DATABASE: sqlite
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: erlef/setup-beam@54075bcc5e249e4758d363f27d099f55d843f124 # v1
-        id: beam
-        with:
-          otp-version: '29'
-          elixir-version: '1.20.4'
       - name: Cache deps and build
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        uses: ./.github/actions/setup-elixir
         with:
-          path: |
-            deps
-            _build
-          key: ${{ runner.os }}-mix-${{ matrix.db }}-${{ steps.beam.outputs.elixir-version }}-${{ steps.beam.outputs.otp-version }}-${{ hashFiles('mix.lock') }}
-          restore-keys: ${{ runner.os }}-mix-${{ matrix.db }}-${{ steps.beam.outputs.elixir-version }}-${{ steps.beam.outputs.otp-version }}-
+          cache-key-prefix: mix-static
+      # The Rust test fixtures' build script is the one pin of their
+      # toolchain and refuses any other, so the versions installed here are
+      # read from it.
+      - name: Read the Rust fixtures' toolchain pin
+        id: rust-pin
+        run: |
+          set -euo pipefail
+          pins=apps/cyfr/test/support/test_wasm/build-fixture.sh
+          pin() {
+            local value
+            value="$(sed -n "s/^$1=//p" "$pins")"
+            if ! [[ "$value" =~ ^$2$ ]]; then
+              echo "::error::$pins pins no single $1 of the form $2" >&2
+              exit 1
+            fi
+            printf '%s' "$value"
+          }
+          rustc="$(pin rustc_version '[0-9]+\.[0-9]+\.[0-9]+')"
+          component="$(pin cargo_component_version '[0-9]+\.[0-9]+\.[0-9]+')"
+          target="$(pin target 'wasm32-[a-z0-9]+')"
+          {
+            echo "rustc=$rustc"
+            echo "cargo-component=$component"
+            echo "target=$target"
+          } >> "$GITHUB_OUTPUT"
       - name: Cache cargo-component
         id: cargo-component-cache
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.cargo/bin/cargo-component
-          key: ${{ runner.os }}-cargo-component-0.21.1
-      # The compile-path tests — Locus's own and the control plane's build
-      # over the wire to the real builds service (test/integration/locus) —
-      # are tagged :requires_cargo_component and excluded when the binary is
-      # absent; install it so they actually run. The runner ships rustup;
-      # only the wasm targets and the tool are added.
+          key: ${{ runner.os }}-cargo-component-${{ steps.rust-pin.outputs.cargo-component }}
+      # scripts/check-test-wasm.sh builds the Rust fixtures with it. The
+      # runner ships rustup; only the wasm targets and the tool are added.
       - name: Install cargo-component
+        env:
+          CARGO_COMPONENT_VERSION: ${{ steps.rust-pin.outputs.cargo-component }}
+          CACHE_HIT: ${{ steps.cargo-component-cache.outputs.cache-hit }}
         run: |
+          set -euo pipefail
           rustup target add wasm32-wasip1 wasm32-wasip2
-          if [ "${{ steps.cargo-component-cache.outputs.cache-hit }}" != "true" ]; then
-            cargo install cargo-component --version 0.21.1 --locked
+          if [ "$CACHE_HIT" != "true" ]; then
+            cargo install cargo-component --version "$CARGO_COMPONENT_VERSION" --locked
           fi
           cargo-component --version
+      # The fixtures build with the pinned rustc and its target, beside
+      # wasm32-wasip1, which cargo-component builds through and would
+      # otherwise install itself during the check. The runner's default
+      # toolchain stays the one the catalysts test on.
+      - name: Install the Rust fixtures' toolchain
+        env:
+          RUSTC_VERSION: ${{ steps.rust-pin.outputs.rustc }}
+          TARGET: ${{ steps.rust-pin.outputs.target }}
+        run: rustup toolchain install "$RUSTC_VERSION" --profile minimal --target "$TARGET" --target wasm32-wasip1
       # Each model catalyst's `model/chat@1` mapping runs on the host
       # target; the shipped binaries are not rebuilt here.
       - name: Test the model catalysts
@@ -238,15 +261,10 @@ jobs:
       # at `_tools/wasm-tools`, where the test configuration names it.
       - name: Install the pinned wasm-tools
         run: scripts/wasm-tools.sh install _tools
-      # Every layer edge is a Boundary declaration, and a forbidden
-      # reference is a compiler warning: a plain compile only warns, and
-      # incremental state can keep a declaration the tree no longer has, so
-      # both environments compile forced with warnings as errors.
+      # The steps below read the compiled application. The cache keeps
+      # _build across commits, and incremental state can keep what the
+      # tree no longer has, so this compile is forced as the test job's is.
       - name: Compile with warnings as errors
-        run: mix compile --force --warnings-as-errors
-      - name: Compile the dev target with warnings as errors
-        env:
-          MIX_ENV: dev
         run: mix compile --force --warnings-as-errors
       # The Boundary plants: each writes a forbidden edge into a copy of the
       # tree and force-compiles it, so a declaration that stopped refusing
@@ -295,21 +313,138 @@ jobs:
             git diff --stat -- apps/cyfr/priv/static/toolkit/
             exit 1
           fi
-      # --warnings-as-errors covers the .exs files `mix test` loads, which a
-      # forced compile never reads: a warning in a test fails the build as
-      # one in the application does.
+      # The harness's own tests, each against stand-ins for what the harness
+      # runs: the containment library, the partition runner and its
+      # environment helper, the host queue and the commit gate.
       - name: Verify partition infrastructure
         run: |
+          bash tests/contain-test.sh
           bash tests/test-partitioned-test.sh
           elixir tests/test-partition-env-test.exs
           bash tests/heavy-check-test.sh
-      # The partitions test the build the forced compile above made, on
-      # either adapter. The runner's own PostgreSQL build, _build/test_pg,
-      # is the one the cache holds, made by whichever run first saved it,
-      # and compiled incrementally over it a module this tree did not
-      # change keeps the types it inferred from what it called back then:
-      # the test files would be type-checked against signatures the tree
-      # no longer has.
+          bash tests/commit-gate-test.sh
+      # Every checked-in test WASM fixture is its source's build: the WAT
+      # fixtures with the pinned wasm-tools, the Rust ones with the pinned
+      # rustc and cargo-component, which refuse any other.
+      - name: Every test WASM fixture is its source's build
+        env:
+          RUSTUP_TOOLCHAIN: ${{ steps.rust-pin.outputs.rustc }}
+        run: scripts/check-test-wasm.sh
+      # The release proofs' shared plumbing against stand-ins: the reuse of
+      # a built release, the readiness bounds and the one redaction. The
+      # proofs themselves run in the browser job.
+      - name: The release proofs' shared plumbing
+        run: bash tests/release-boot-test.sh
+
+  test:
+    name: Elixir Tests (${{ matrix.db }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 95
+    # Both adapters must stay green. SQLite is the shipped default; Postgres is
+    # bring-your-own. The data layer is Ecto-schema-backed so column values cast
+    # to the same Elixir types on both, and both legs are blocking.
+    strategy:
+      fail-fast: false
+      matrix:
+        db: [sqlite, postgres]
+    services:
+      # Test-only ephemeral database — these credentials (and CYFR_SECRET_KEY_BASE
+      # below) are non-secret CI fixtures for the Postgres container, never used
+      # outside CI.
+      postgres:
+        image: postgres:18.6
+        env:
+          POSTGRES_USER: cyfr
+          POSTGRES_PASSWORD: cyfr
+          POSTGRES_DB: cyfr_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      CYFR_DATABASE: ${{ matrix.db }}
+      CYFR_DATABASE_URL: ${{ matrix.db == 'postgres' && 'postgres://cyfr:cyfr@localhost:5432/cyfr_test' || '' }}
+      CYFR_SECRET_KEY_BASE: ${{ matrix.db == 'postgres' && 'JspnK9M8XQE1HFBRZWuzJqK8ZX8ITp5vPQ6MJv2RmFfKpGr2fEhAgSf3UqBT5xTk' || '' }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Cache deps and build
+        uses: ./.github/actions/setup-elixir
+        with:
+          cache-key-prefix: mix-${{ matrix.db }}
+      # The cargo-component version the Rust fixtures' build script pins,
+      # read as the static job reads it.
+      - name: Read the Rust fixtures' toolchain pin
+        id: rust-pin
+        run: |
+          set -euo pipefail
+          pins=apps/cyfr/test/support/test_wasm/build-fixture.sh
+          pin() {
+            local value
+            value="$(sed -n "s/^$1=//p" "$pins")"
+            if ! [[ "$value" =~ ^$2$ ]]; then
+              echo "::error::$pins pins no single $1 of the form $2" >&2
+              exit 1
+            fi
+            printf '%s' "$value"
+          }
+          rustc="$(pin rustc_version '[0-9]+\.[0-9]+\.[0-9]+')"
+          component="$(pin cargo_component_version '[0-9]+\.[0-9]+\.[0-9]+')"
+          target="$(pin target 'wasm32-[a-z0-9]+')"
+          {
+            echo "rustc=$rustc"
+            echo "cargo-component=$component"
+            echo "target=$target"
+          } >> "$GITHUB_OUTPUT"
+      - name: Cache cargo-component
+        id: cargo-component-cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cargo/bin/cargo-component
+          key: ${{ runner.os }}-cargo-component-${{ steps.rust-pin.outputs.cargo-component }}
+      # The compile-path tests — Locus's own and the control plane's build
+      # over the wire to the real builds service (test/integration/locus) —
+      # are tagged :requires_cargo_component and excluded when the binary is
+      # absent; install it so they actually run. The runner ships rustup;
+      # only the wasm targets and the tool are added.
+      - name: Install cargo-component
+        env:
+          CARGO_COMPONENT_VERSION: ${{ steps.rust-pin.outputs.cargo-component }}
+          CACHE_HIT: ${{ steps.cargo-component-cache.outputs.cache-hit }}
+        run: |
+          set -euo pipefail
+          rustup target add wasm32-wasip1 wasm32-wasip2
+          if [ "$CACHE_HIT" != "true" ]; then
+            cargo install cargo-component --version "$CARGO_COMPONENT_VERSION" --locked
+          fi
+          cargo-component --version
+      - name: Install dependencies
+        run: mix deps.get
+      # The pinned validator every component passes (scripts/wasm-tools.sh),
+      # at `_tools/wasm-tools`, where the test configuration names it.
+      - name: Install the pinned wasm-tools
+        run: scripts/wasm-tools.sh install _tools
+      # Every layer edge is a Boundary declaration, and a forbidden
+      # reference is a compiler warning: a plain compile only warns, and
+      # incremental state can keep a declaration the tree no longer has, so
+      # both environments compile forced with warnings as errors.
+      - name: Compile with warnings as errors
+        run: mix compile --force --warnings-as-errors
+      - name: Compile the dev target with warnings as errors
+        env:
+          MIX_ENV: dev
+        run: mix compile --force --warnings-as-errors
+      # --warnings-as-errors covers the .exs files `mix test` loads, which a
+      # forced compile never reads: a warning in a test fails the build as
+      # one in the application does. The partitions test the build the
+      # forced compile above made, on either adapter. The runner's own
+      # PostgreSQL build, _build/test_pg, is the one the cache holds, made
+      # by whichever run first saved it, and compiled incrementally over it
+      # a module this tree did not change keeps the types it inferred from
+      # what it called back then: the test files would be type-checked
+      # against signatures the tree no longer has.
       - name: Run tests
         env:
           MIX_BUILD_PATH: _build/test
@@ -318,6 +453,7 @@ jobs:
   cluster:
     name: One cell on two members (Postgres and MinIO)
     runs-on: ubuntu-latest
+    timeout-minutes: 40
     # One cell runs on several members, and a cluster flag is not evidence
     # of it. This job runs the two-node suite: two `:peer` nodes,
     # each running the whole application against one Postgres and one
@@ -349,19 +485,10 @@ jobs:
       CYFR_SECRET_KEY_BASE: JspnK9M8XQE1HFBRZWuzJqK8ZX8ITp5vPQ6MJv2RmFfKpGr2fEhAgSf3UqBT5xTk
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: erlef/setup-beam@54075bcc5e249e4758d363f27d099f55d843f124 # v1
-        id: beam
-        with:
-          otp-version: '29'
-          elixir-version: '1.20.4'
       - name: Cache deps and build
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        uses: ./.github/actions/setup-elixir
         with:
-          path: |
-            deps
-            _build
-          key: ${{ runner.os }}-mix-cluster-${{ steps.beam.outputs.elixir-version }}-${{ steps.beam.outputs.otp-version }}-${{ hashFiles('mix.lock') }}
-          restore-keys: ${{ runner.os }}-mix-cluster-${{ steps.beam.outputs.elixir-version }}-${{ steps.beam.outputs.otp-version }}-
+          cache-key-prefix: mix-cluster
       # CYFR_CLUSTER=1 refuses local storage: two members would each hold
       # half of every athanor. The same image and credentials the s3-minio
       # job uses, pinned by digest like every other image here.
@@ -388,8 +515,9 @@ jobs:
           exit 1
       # The `test` alias creates and migrates the database first, so the
       # members find a schema rather than migrating under each other.
-      # --only cluster fails the job if it matches nothing, which is what
-      # stops a suite that silently stopped running.
+      # The runner fails the job when --only cluster ran no test (Mix alone
+      # exits 0 for that in an umbrella), which is what stops a suite that
+      # silently stopped running.
       # The suite tests the build the forced compile above made. The
       # runner's own PostgreSQL build, _build/test_pg, is the one the cache
       # holds, made by whichever run first saved it, and compiled
@@ -407,19 +535,16 @@ jobs:
   prima-independence:
     name: Prima compiles and tests alone
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: erlef/setup-beam@54075bcc5e249e4758d363f27d099f55d843f124 # v1
-        id: beam
-        with:
-          otp-version: '29'
-          elixir-version: '1.20.4'
+      # The four islands fetch the same deps from the one lock and build
+      # nothing they keep, so they share one deps cache.
       - name: Cache deps
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        uses: ./.github/actions/setup-elixir
         with:
-          path: deps
-          key: ${{ runner.os }}-mix-prima-${{ steps.beam.outputs.elixir-version }}-${{ steps.beam.outputs.otp-version }}-${{ hashFiles('mix.lock') }}
-          restore-keys: ${{ runner.os }}-mix-prima-${{ steps.beam.outputs.elixir-version }}-${{ steps.beam.outputs.otp-version }}-
+          cache-key-prefix: mix-deps
+          build-cache: 'false'
       - name: Install dependencies
         run: mix deps.get
       # The shared contracts depend on no other application: a checkout
@@ -447,21 +572,18 @@ jobs:
   arca-independence:
     name: Arca compiles and tests from its declared apps alone
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     env:
       CYFR_DATABASE: sqlite
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: erlef/setup-beam@54075bcc5e249e4758d363f27d099f55d843f124 # v1
-        id: beam
-        with:
-          otp-version: '29'
-          elixir-version: '1.20.4'
+      # The four islands fetch the same deps from the one lock and build
+      # nothing they keep, so they share one deps cache.
       - name: Cache deps
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        uses: ./.github/actions/setup-elixir
         with:
-          path: deps
-          key: ${{ runner.os }}-mix-arca-${{ steps.beam.outputs.elixir-version }}-${{ steps.beam.outputs.otp-version }}-${{ hashFiles('mix.lock') }}
-          restore-keys: ${{ runner.os }}-mix-arca-${{ steps.beam.outputs.elixir-version }}-${{ steps.beam.outputs.otp-version }}-
+          cache-key-prefix: mix-deps
+          build-cache: 'false'
       - name: Install dependencies
         run: mix deps.get
       # Persistence holds nothing of the layers above it: a checkout with
@@ -485,21 +607,18 @@ jobs:
   sanctum-independence:
     name: Sanctum compiles and tests from its declared apps alone
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     env:
       CYFR_DATABASE: sqlite
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: erlef/setup-beam@54075bcc5e249e4758d363f27d099f55d843f124 # v1
-        id: beam
-        with:
-          otp-version: '29'
-          elixir-version: '1.20.4'
+      # The four islands fetch the same deps from the one lock and build
+      # nothing they keep, so they share one deps cache.
       - name: Cache deps
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        uses: ./.github/actions/setup-elixir
         with:
-          path: deps
-          key: ${{ runner.os }}-mix-sanctum-${{ steps.beam.outputs.elixir-version }}-${{ steps.beam.outputs.otp-version }}-${{ hashFiles('mix.lock') }}
-          restore-keys: ${{ runner.os }}-mix-sanctum-${{ steps.beam.outputs.elixir-version }}-${{ steps.beam.outputs.otp-version }}-
+          cache-key-prefix: mix-deps
+          build-cache: 'false'
       - name: Install dependencies
         run: mix deps.get
       # The auth domain holds nothing of the domains and surfaces above it:
@@ -525,19 +644,16 @@ jobs:
   locus-independence:
     name: Locus compiles and tests from its declared apps alone
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: erlef/setup-beam@54075bcc5e249e4758d363f27d099f55d843f124 # v1
-        id: beam
-        with:
-          otp-version: '29'
-          elixir-version: '1.20.4'
+      # The four islands fetch the same deps from the one lock and build
+      # nothing they keep, so they share one deps cache.
       - name: Cache deps
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        uses: ./.github/actions/setup-elixir
         with:
-          path: deps
-          key: ${{ runner.os }}-mix-locus-${{ steps.beam.outputs.elixir-version }}-${{ steps.beam.outputs.otp-version }}-${{ hashFiles('mix.lock') }}
-          restore-keys: ${{ runner.os }}-mix-locus-${{ steps.beam.outputs.elixir-version }}-${{ steps.beam.outputs.otp-version }}-
+          cache-key-prefix: mix-deps
+          build-cache: 'false'
       - name: Install dependencies
         run: mix deps.get
       # Locus releases without the control plane: a checkout holding only
@@ -567,23 +683,15 @@ jobs:
   s3-minio:
     name: S3 adapter vs MinIO
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     env:
       CYFR_DATABASE: sqlite
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: erlef/setup-beam@54075bcc5e249e4758d363f27d099f55d843f124 # v1
-        id: beam
-        with:
-          otp-version: '29'
-          elixir-version: '1.20.4'
       - name: Cache deps and build
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        uses: ./.github/actions/setup-elixir
         with:
-          path: |
-            deps
-            _build
-          key: ${{ runner.os }}-mix-minio-${{ steps.beam.outputs.elixir-version }}-${{ steps.beam.outputs.otp-version }}-${{ hashFiles('mix.lock') }}
-          restore-keys: ${{ runner.os }}-mix-minio-${{ steps.beam.outputs.elixir-version }}-${{ steps.beam.outputs.otp-version }}-
+          cache-key-prefix: mix-minio
       # The stub suite verifies request shape; only a real implementation
       # verifies the signature over pre-percent-encoded URLs and the
       # Content-MD5-signed DeleteObjects batch. Credentials are non-secret
@@ -623,9 +731,54 @@ jobs:
         if: failure()
         run: docker logs minio
 
+  # Dockerfile.locus built once per run, for every job that runs the image:
+  # builder-image, locus-runtime-image, locus-backends-image and the
+  # browser job's tincture proof each load this build under their own tag.
+  locus-image:
+    name: The Locus image, built once for this run
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # The image's upgrade layer refreshes once a UTC day and is shared
+      # within it (Dockerfile.locus's APT_REFRESH).
+      - name: The UTC date the upgrade layer refreshes on
+        id: apt-refresh
+        run: echo "date=$(date -u +%Y-%m-%d)" >> "$GITHUB_OUTPUT"
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - name: Build the Locus image once
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          file: Dockerfile.locus
+          build-args: |
+            APT_REFRESH=${{ steps.apt-refresh.outputs.date }}
+          load: true
+          tags: cyfr-locus:ci
+          cache-from: type=gha,scope=locus
+          cache-to: type=gha,scope=locus,mode=max
+      - name: Save the Locus image
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/locus-image"
+          docker save cyfr-locus:ci | zstd -T0 -q -o "$RUNNER_TEMP/locus-image/cyfr-locus.tar.zst"
+      # Already compressed, and read only by this run's jobs. A re-run of
+      # this job replaces it.
+      - name: Upload the Locus image
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: locus-image
+          path: ${{ runner.temp }}/locus-image/cyfr-locus.tar.zst
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 1
+          overwrite: true
+
   builder-image:
     name: Builder image (lock lifecycle, isolation, memory bound, headroom)
     runs-on: ubuntu-latest
+    timeout-minutes: 40
+    needs: locus-image
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       # The service bounds every build with a cgroup of its own, which needs
@@ -648,18 +801,17 @@ jobs:
             fail=1
           fi
           exit "$fail"
-      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
-      - name: Build the builder image
-        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+      # The Locus image this run built once (the locus-image job).
+      - name: Fetch the Locus image
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
-          context: .
-          file: Dockerfile.locus
-          build-args: |
-            APT_REFRESH=${{ github.run_id }}
-          load: true
-          tags: cyfr-locus:smoke
-          cache-from: type=gha,scope=locus
-          cache-to: type=gha,scope=locus,mode=max
+          name: locus-image
+          path: ${{ runner.temp }}/locus-image
+      - name: Load the Locus image
+        run: |
+          set -euo pipefail
+          zstd -dc "$RUNNER_TEMP/locus-image/cyfr-locus.tar.zst" | docker load
+          docker tag cyfr-locus:ci cyfr-locus:smoke
       # docker-compose.yml's locus-builds service with its own settings
       # (layered with tests/builder-image/compose.locus-builds.yml for the
       # image and a loopback port), every request signed on the build wire
@@ -704,7 +856,7 @@ jobs:
       - name: A tincture builds from its lockfile, its install scripts with no credential
         run: python3 tests/builder-image/lockfile.py cyfr-locus:smoke
 
-      # The same scan docker.yml runs before publishing the Locus image.
+      # The same scan release.yml runs before publishing the Locus image.
       - name: Scan the image
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
@@ -719,6 +871,8 @@ jobs:
   locus-runtime-image:
     name: Runtime image (runner kills, memory bound, settlement, cleanup, credential canary)
     runs-on: ubuntu-latest
+    timeout-minutes: 20
+    needs: locus-image
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       # The service bounds every runner with a cgroup of its own, which needs
@@ -745,18 +899,17 @@ jobs:
       # as the runner image sets it: the keeper clones each runner's
       # namespaces under Docker's default AppArmor profile, which allows
       # the clone (docker-compose.yml's locus-runtime service says why).
-      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
-      - name: Build the Locus image
-        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+      # The Locus image this run built once (the locus-image job).
+      - name: Fetch the Locus image
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
-          context: .
-          file: Dockerfile.locus
-          load: true
-          tags: cyfr-locus:runtime
-          cache-from: |
-            type=gha,scope=locus
-            type=gha,scope=locus-runtime
-          cache-to: type=gha,scope=locus-runtime,mode=max
+          name: locus-image
+          path: ${{ runner.temp }}/locus-image
+      - name: Load the Locus image
+        run: |
+          set -euo pipefail
+          zstd -dc "$RUNNER_TEMP/locus-image/cyfr-locus.tar.zst" | docker load
+          docker tag cyfr-locus:ci cyfr-locus:runtime
       # docker-compose.yml's locus-runtime service with its own settings
       # (layered with tests/locus-runtime-image/compose.locus-runtime.yml
       # for the image, a loopback port and a pool of two), reaching a
@@ -779,6 +932,11 @@ jobs:
       # homes, groups, memory and CPU show it.
       - name: Runner kills, memory bound, settlement and cleanup
         run: python3 tests/locus-runtime-image/runners.py cyfr-locus:runtime
+      # Each runner in a user and network namespace of its own, with no
+      # route out, observed on the kernel; it fails before its first step
+      # on a host that cannot make the namespaces.
+      - name: Each runner in namespaces of its own
+        run: python3 -I tests/locus-runtime-image/namespace.py cyfr-locus:runtime
       # The canary's own checks, without the image: the streamed count
       # against a whole-buffer count across chunk boundaries, and the
       # observer verdicts against observers that fail.
@@ -795,7 +953,7 @@ jobs:
       - name: The credential canary
         run: python3 tests/locus-runtime-image/canary.py cyfr-locus:runtime
 
-      # The same scan docker.yml runs before publishing the Locus image, here
+      # The same scan release.yml runs before publishing the Locus image, here
       # on the image the runtime role ran.
       - name: Scan the image
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
@@ -815,6 +973,8 @@ jobs:
   locus-backends-image:
     name: Backends image (end to end, isolation, refusals, residue, memory bound)
     runs-on: ubuntu-latest
+    timeout-minutes: 30
+    needs: locus-image
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       # The service bounds every backend with a cgroup of its own, which
@@ -837,18 +997,18 @@ jobs:
             fail=1
           fi
           exit "$fail"
-      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
-      - name: Build the Locus image
-        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+      # The Locus image this run built once (the locus-image job).
+      - name: Fetch the Locus image
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
-          context: .
-          file: Dockerfile.locus
-          load: true
-          tags: cyfr-locus:backends
-          cache-from: |
-            type=gha,scope=locus
-            type=gha,scope=locus-backends
-          cache-to: type=gha,scope=locus-backends,mode=max
+          name: locus-image
+          path: ${{ runner.temp }}/locus-image
+      - name: Load the Locus image
+        run: |
+          set -euo pipefail
+          zstd -dc "$RUNNER_TEMP/locus-image/cyfr-locus.tar.zst" | docker load
+          docker tag cyfr-locus:ci cyfr-locus:backends
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
       - name: Build the app image
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
@@ -908,7 +1068,7 @@ jobs:
 
       # The app image is built here, and this is the one push-time build of
       # it — so it is scanned here, where a finding stops the commit that
-      # brought it in rather than a release. Same scan docker.yml runs
+      # brought it in rather than a release. Same scan release.yml runs
       # before publishing it. The Locus image is scanned in builder-image.
       - name: Scan the app image
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
@@ -932,6 +1092,7 @@ jobs:
   release-boot:
     name: The cyfr release boots on ${{ matrix.db }}
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     strategy:
       fail-fast: false
       matrix:
@@ -957,21 +1118,12 @@ jobs:
       CYFR_DATABASE_URL: ${{ matrix.db == 'postgres' && 'postgres://cyfr:cyfr@localhost:5432/cyfr_release_boot' || '' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: erlef/setup-beam@54075bcc5e249e4758d363f27d099f55d843f124 # v1
-        id: beam
-        with:
-          otp-version: '29'
-          elixir-version: '1.20.4'
       # A prod build of its own, per adapter: the adapter is compiled in, so
       # the two legs can share neither build nor release.
       - name: Cache deps and the prod build
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        uses: ./.github/actions/setup-elixir
         with:
-          path: |
-            deps
-            _build
-          key: ${{ runner.os }}-mix-release-boot-${{ matrix.db }}-${{ steps.beam.outputs.elixir-version }}-${{ steps.beam.outputs.otp-version }}-${{ hashFiles('mix.lock') }}
-          restore-keys: ${{ runner.os }}-mix-release-boot-${{ matrix.db }}-${{ steps.beam.outputs.elixir-version }}-${{ steps.beam.outputs.otp-version }}-
+          cache-key-prefix: mix-release-boot-${{ matrix.db }}
       - name: Install dependencies
         run: mix deps.get
       # The runner's own database names, against a docker stub: two runs on
@@ -1000,50 +1152,60 @@ jobs:
     # approval and file-offer proofs run in Chromium at both viewports, and
     # the canvas proof runs at both viewports too.
     # A hang is cut here before the runner's six-hour limit.
-    timeout-minutes: 240
+    timeout-minutes: 145
+    # The tincture proof's builds service runs the Locus image this run
+    # built once.
+    needs: locus-image
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: erlef/setup-beam@54075bcc5e249e4758d363f27d099f55d843f124 # v1
-        id: beam
+      - name: Cache deps and the prod build
+        uses: ./.github/actions/setup-elixir
         with:
-          otp-version: '29'
-          elixir-version: '1.20.4'
+          cache-key-prefix: mix-browser
       # The grant proof builds the command line from apps/codex.
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: apps/codex/go.mod
           cache-dependency-path: apps/codex/go.sum
-      - name: Cache deps and the prod build
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: |
-            deps
-            _build
-          key: ${{ runner.os }}-mix-browser-${{ steps.beam.outputs.elixir-version }}-${{ steps.beam.outputs.otp-version }}-${{ hashFiles('mix.lock') }}
-          restore-keys: ${{ runner.os }}-mix-browser-${{ steps.beam.outputs.elixir-version }}-${{ steps.beam.outputs.otp-version }}-
       - name: Install dependencies
         run: mix deps.get
       - name: The frame-facts experiment
+        env:
+          BROWSER_OUT: ${{ runner.temp }}/proofs/frame-facts
         run: tests/browser/run.sh
       - name: The console's JavaScript tests (the SDK, the canvas toolkit, the canvas, the carrier, the system layer and the markdown hook's parse step)
         run: apps/cyfr/assets/test/run.sh
       # The markdown hook's output after DOMPurify, which needs a browser's
       # DOM (tests/markdown-proof/README.md). It starts no release.
       - name: The markdown proof (Chromium)
+        env:
+          MARKDOWN_OUT: ${{ runner.temp }}/proofs/markdown
         run: tests/markdown-proof/run.sh
-      - name: Build the Locus builds image for the tincture proof
-        run: docker build -f Dockerfile.locus -t cyfr-locus:tincture-proof .
+      # The Locus image this run built once (the locus-image job).
+      - name: Fetch the Locus image
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: locus-image
+          path: ${{ runner.temp }}/locus-image
+      - name: Load the Locus image
+        run: |
+          set -euo pipefail
+          zstd -dc "$RUNNER_TEMP/locus-image/cyfr-locus.tar.zst" | docker load
+          docker tag cyfr-locus:ci cyfr-locus:tincture-proof
       - name: The tincture proof
         env:
           RELEASE_BOOT_SKIP_BUILD: '1'
+          PROOF_OUT: ${{ runner.temp }}/proofs/tincture
         run: tests/tincture-proof/run.sh cyfr-locus:tincture-proof
       - name: The frame sandbox containment proof
         env:
           RELEASE_BOOT_SKIP_BUILD: '1'
+          PROOF_OUT: ${{ runner.temp }}/proofs/hostile-frame
         run: tests/hostile-frame-proof/run.sh
       - name: The pairing proof (Chromium alone, with its virtual WebAuthn authenticator)
         env:
           RELEASE_BOOT_SKIP_BUILD: '1'
+          PROOF_OUT: ${{ runner.temp }}/proofs/pairing
         run: tests/pairing-proof/run.sh
       # Two homes on hostnames of their own over HTTPS, the shape the identity
       # and join proofs stand on: each a secure context, names the run's
@@ -1053,12 +1215,14 @@ jobs:
       - name: The multi-home smoke
         env:
           RELEASE_BOOT_SKIP_BUILD: '1'
+          PROOF_OUT: ${{ runner.temp }}/proofs/multi-home-smoke
         run: tests/multi-home-smoke/run.sh
       # Enrollment, printed kits, a rotation, the restores and what each home
       # sees, against a directory of its own (tests/identity-proof/README.md).
       - name: The identity proof (Chromium alone, with its virtual WebAuthn authenticator)
         env:
           RELEASE_BOOT_SKIP_BUILD: '1'
+          PROOF_OUT: ${{ runner.temp }}/proofs/identity
         run: tests/identity-proof/run.sh
       # A person joining a hub from their own home, on two directories: the
       # sign-in, the carry and a second profile in every browser, the passkey
@@ -1066,12 +1230,14 @@ jobs:
       - name: The join proof
         env:
           RELEASE_BOOT_SKIP_BUILD: '1'
+          PROOF_OUT: ${{ runner.temp }}/proofs/join
         run: tests/join-proof/run.sh
       # The steps that need no execution engine and no model; the others are
       # the suite's (tests/grant-proof/README.md).
       - name: The grant proof (Chromium alone)
         env:
           RELEASE_BOOT_SKIP_BUILD: '1'
+          PROOF_OUT: ${{ runner.temp }}/proofs/grant
         run: tests/grant-proof/run.sh
       - name: The instance-entry proof (Chromium, desktop and 720x720)
         env:
@@ -1079,7 +1245,7 @@ jobs:
         run: |
           set -euo pipefail
           for viewport in desktop 720x720; do
-            VAULT_PROOF_VIEWPORT="$viewport" PROOF_OUT="$RUNNER_TEMP/vault-proofs/instance-entry/$viewport" tests/instance-entry-proof/run.sh
+            VAULT_PROOF_VIEWPORT="$viewport" PROOF_OUT="$RUNNER_TEMP/proofs/instance-entry/$viewport" tests/instance-entry-proof/run.sh
           done
       - name: The approval proof (Chromium, desktop and 720x720)
         env:
@@ -1087,7 +1253,7 @@ jobs:
         run: |
           set -euo pipefail
           for viewport in desktop 720x720; do
-            VAULT_PROOF_VIEWPORT="$viewport" PROOF_OUT="$RUNNER_TEMP/vault-proofs/approval/$viewport" tests/approval-proof/run.sh
+            VAULT_PROOF_VIEWPORT="$viewport" PROOF_OUT="$RUNNER_TEMP/proofs/approval/$viewport" tests/approval-proof/run.sh
           done
       - name: The file-offer proof (Chromium, desktop and 720x720)
         env:
@@ -1095,7 +1261,7 @@ jobs:
         run: |
           set -euo pipefail
           for viewport in desktop 720x720; do
-            VAULT_PROOF_VIEWPORT="$viewport" PROOF_OUT="$RUNNER_TEMP/vault-proofs/file-offer/$viewport" tests/file-offer-proof/run.sh
+            VAULT_PROOF_VIEWPORT="$viewport" PROOF_OUT="$RUNNER_TEMP/proofs/file-offer/$viewport" tests/file-offer-proof/run.sh
           done
       # The runner is the GitHub-hosted host class, held to its own canvas
       # budget (tests/canvas-proof/README.md).
@@ -1106,16 +1272,26 @@ jobs:
         run: |
           set -euo pipefail
           for viewport in desktop 720x720; do
-            CANVAS_PROOF_VIEWPORT="$viewport" PROOF_OUT="$RUNNER_TEMP/canvas-proof/$viewport" tests/canvas-proof/run.sh
+            CANVAS_PROOF_VIEWPORT="$viewport" PROOF_OUT="$RUNNER_TEMP/proofs/canvas/$viewport" tests/canvas-proof/run.sh
           done
-      # The records, kept so a failed run's can be checked again with
-      # `node proof.mjs --check-record`.
-      - name: Upload the canvas proof's records
+      # Every proof's records, under proofs/<proof>, or
+      # proofs/<proof>/<viewport> for a proof run at each viewport, kept so a
+      # failed run's can be read, and a canvas record checked again with
+      # `node proof.mjs --check-record`. Only the record files: nothing else
+      # a proof leaves on a failed run is uploaded.
+      - name: Upload the proofs' records
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
-          name: canvas-proof-records
-          path: ${{ runner.temp }}/canvas-proof
+          name: proof-records
+          path: |
+            ${{ runner.temp }}/proofs/**/*-proof.json
+            ${{ runner.temp }}/proofs/**/*-proof.md
+            ${{ runner.temp }}/proofs/multi-home-smoke/multi-home-smoke.json
+            ${{ runner.temp }}/proofs/multi-home-smoke/multi-home-smoke.md
+            ${{ runner.temp }}/proofs/frame-facts/frame-facts.json
+            ${{ runner.temp }}/proofs/frame-facts/frame-facts.md
+            ${{ runner.temp }}/proofs/markdown/markdown.json
           retention-days: 14
       # The shipped Caddyfile in the Caddy image docker-compose.yml names, in
       # front of a stub upstream: HSTS, the endpoint's value, once on every
@@ -1128,6 +1304,7 @@ jobs:
   seed-guards:
     name: Seed media (clean, immutable versions)
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -1215,18 +1392,27 @@ jobs:
             echo "$bad"
             exit 1
           fi
-      # Require new version directories for seed changes; existing bundle versions are immutable.
+      # The guard scripts' own cases, each in a scratch repository.
+      - name: The CI guard scripts' own cases
+        run: bash tests/ci-guards-test.sh
+      # Require new version directories for seed changes; existing bundle
+      # versions are immutable (scripts/ci/seed-guard.sh says what it
+      # refuses).
       - name: Existing seed component versions are unmodified
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_REF: ${{ github.base_ref }}
+          BEFORE: ${{ github.event.before }}
         run: |
           set -euo pipefail
-          if [ "${{ github.event_name }}" = "pull_request" ]; then
-            git fetch --no-tags origin "${{ github.base_ref }}"
-            base="$(git merge-base "origin/${{ github.base_ref }}" HEAD)"
+          if [ "$EVENT_NAME" = "pull_request" ]; then
+            git fetch --no-tags origin "$BASE_REF"
+            base="$(git merge-base "origin/$BASE_REF" HEAD)"
           else
             # A push names the commit it moved from. A new branch or a
             # force-push reports the null SHA, and the very first commit has
             # no parent — nothing to diff against, so nothing to guard.
-            base="${{ github.event.before }}"
+            base="$BEFORE"
             if ! git cat-file -e "${base}^{commit}" 2>/dev/null; then
               base="$(git rev-parse --verify --quiet HEAD^ || true)"
             fi
@@ -1235,90 +1421,25 @@ jobs:
               exit 0
             fi
           fi
-          # A diff of a tree that is not there is empty; refuse it.
-          if [ -z "$(git ls-files -- seed/components | head -1)" ]; then
-            echo "::error::seed/components holds no tracked file — the check would compare nothing"
-            exit 1
-          fi
-          # The rule is about paths, not file identity: every query runs with
-          # --no-renames. Rename detection reports a rename under its
-          # DESTINATION path, so shipping a new version by copying the last
-          # one read as "files removed from the version that still ships" —
-          # retiring 1.0.6 for 1.0.7 failed the check the comment below says
-          # it should pass. It also hid an in-place edit whenever git paired
-          # the file with a deletion elsewhere: that pair is R, which the
-          # modified-file query does not select.
-          bad="$(git diff --no-renames --name-only --diff-filter=M "$base"..HEAD -- 'seed/components/**')"
-          # A deletion inside a version directory that still ships is a
-          # mutation too; retiring the WHOLE directory is a release decision
-          # and passes.
-          while IFS= read -r f; do
-            [ -z "$f" ] && continue
-            vdir="$(printf '%s\n' "$f" | cut -d/ -f1-6)"
-            if [ -d "$vdir" ]; then bad="$bad"$'\n'"$f"; fi
-          done <<< "$(git diff --no-renames --name-only --diff-filter=D "$base"..HEAD -- 'seed/components/**')"
-          # Reject added files inside version directories that already exist at the base revision.
-          while IFS= read -r f; do
-            [ -z "$f" ] && continue
-            vdir="$(printf '%s\n' "$f" | cut -d/ -f1-6)"
-            if git rev-parse --verify --quiet "$base:$vdir" >/dev/null 2>&1; then
-              bad="$bad"$'\n'"$f"
-            fi
-          done <<< "$(git diff --no-renames --name-only --diff-filter=A "$base"..HEAD -- 'seed/components/**')"
-          bad="$(printf '%s\n' "$bad" | sed '/^$/d')"
-          if [ -n "$bad" ]; then
-            echo "::error::files changed inside existing seed/components version directories — ship a new version instead"
-            echo "$bad"
-            exit 1
-          fi
+          scripts/ci/seed-guard.sh "$base"
 
   config-seam:
     name: Config keys (no compile-time/runtime split)
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       # Reject runtime reads or writes of compile-time configuration keys.
-      # Intentional exceptions require `# config:compile-runtime-ok` on each
-      # compile_env line.
+      # An intentional exception carries `config:compile-runtime-ok` on its
+      # compile_env read's own line or in the comment block directly above
+      # it (scripts/ci/config-seam.sh).
       - name: Keys read at compile time must not also be read at runtime
-        run: |
-          set -uo pipefail
-          keys="$(mktemp)"
-          failures="$(mktemp)"
-          git grep -hoE 'compile_env\(:cyfr, *:[a-z_0-9]+' -- 'apps/**/*.ex' 'apps/**/*.exs' \
-            | sed 's/.*:cyfr, *://' | sort -u > "$keys"
-          # A scan that finds no compile-time key reads nothing; refuse it.
-          if [ ! -s "$keys" ]; then
-            echo "::error::no compile_env reads matched — the scan would check nothing"
-            exit 1
-          fi
-
-          while IFS= read -r key; do
-            [ -n "$key" ] || continue
-            # Exempt when every file that compile_env's this key carries the
-            # tag: one tag anywhere in the file exempts the whole file.
-            untagged=$(git grep -lE "compile_env\(:cyfr, *:${key}[^a-z_0-9]" -- 'apps/**/*.ex' 'apps/**/*.exs' \
-              | while IFS= read -r f; do
-                  grep -q 'config:compile-runtime-ok' "$f" || echo "$f"
-                done)
-            [ -z "$untagged" ] && continue
-
-            runtime=$(git grep -nE "Application\.(get_env|fetch_env!?|put_env)\(:cyfr, *:${key}[^a-z_0-9]" -- 'apps/**/*.ex' 'apps/**/*.exs' || true)
-            if [ -n "$runtime" ]; then
-              echo "::error::config key :${key} is read with compile_env AND at runtime — one of them will be stale" >> "$failures"
-              echo "$runtime" >> "$failures"
-            fi
-          done < "$keys"
-
-          if [ -s "$failures" ]; then
-            cat "$failures"
-            echo "Read the key one way, or tag every compile_env line for it # config:compile-runtime-ok with the reason."
-            exit 1
-          fi
+        run: scripts/ci/config-seam.sh
 
   vocabulary-gate:
     name: No org/project fossils (one tenancy vocabulary)
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       # The tenancy unit is the athanor and a conversation is a thread. This
