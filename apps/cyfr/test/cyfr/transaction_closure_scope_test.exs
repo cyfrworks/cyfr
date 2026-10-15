@@ -23,16 +23,24 @@ defmodule Cyfr.TransactionClosureScopeTest do
       `&Mod.name(...)`, resolved to that module's definitions in the tree;
     * a call that returns the closure, `verify(expectation)` or
       `Sanctum.Issuance.verify(expectation)`, resolved like a capture of
-      the function it calls, whose whole body is read.
+      the function it calls, whose whole body is read;
+    * a variable bound once to one of these in the clause that passes it,
+      before it is passed (`verify = fn -> … end` then `verify: verify`),
+      read as that form at the line it is passed.
 
   From there it follows every call to a function defined in the same
   module, written plain or qualified (`f(x)`, `__MODULE__.f(x)`, `Mod.f(x)`
   in `Mod`), and every capture of a function the tree defines,
-  transitively. It refuses a call to `Req`, `Finch`, `Mint`, `:httpc`,
-  `:gen_tcp`, `:ssl`, `:inet`, `Sanctum.Egress`, `Sanctum.Network`,
-  `Phoenix.PubSub`, `Sanctum.Notify` or `Task`, or to a function `Cyfr.Bus`
-  publishes with (`broadcast*`), written through an `alias` or plain
-  through an `import`. A capture it cannot resolve is refused too, so a closure
+  transitively. A qualified call from there into another module of the
+  same application (`Authz.consume(ctx, claim)` in Sanctum) is followed
+  one module deep: into that module's function and the calls and captures
+  it makes within its own module, but not into a third.
+
+  It refuses a call to `Req`, `Finch`, `Mint`, `:httpc`, `:gen_tcp`,
+  `:ssl`, `:inet`, `Sanctum.Egress`, `Sanctum.Network`, `Phoenix.PubSub`,
+  `Sanctum.Notify` or `Task`, or to a function `Cyfr.Bus` publishes with
+  (`broadcast*`), written through an `alias` or plain through an
+  `import`, wherever the walk reaches it. A capture it cannot resolve is refused too, so a closure
   the scan cannot read never passes for one it read. A call the tree does
   not define (`args["verify"]` is `Access.get/2`) is no closure the scan
   can read, and is not counted.
@@ -40,10 +48,12 @@ defmodule Cyfr.TransactionClosureScopeTest do
   The scan reads code, not text: a comment, a documentation string or a
   string literal that names a refused call is no call.
 
-  Its blind spots: a closure bound to a variable (`also: also`) is not
-  followed, and neither is a call from a closure into another module's
-  function. Those reach the transaction through code this scan does not
-  read, so they stay the reviewer's.
+  Its blind spots: a variable bound more than once in its clause, or bound
+  by a parameter, a clause head, a generator or a pattern (`also: also`
+  passed through from a caller), is not followed; neither is a qualified
+  call two modules away from the closure, nor one into another
+  application. Those reach the transaction through code this scan does
+  not read, so they stay the reviewer's.
   """
 
   use ExUnit.Case, async: true
@@ -77,17 +87,18 @@ defmodule Cyfr.TransactionClosureScopeTest do
 
     read =
       for module <- modules,
-          {key, line, form, root} <- closures(module.body),
+          {key, line, form, root, via} <- closures(module.body),
           readable?(form, root, module, index),
-          do: {module.path, line, key, form, module.name, root}
+          do: {module.path, line, key, form, via, module.name, root}
 
     refused =
-      for {path, line, key, _form, name, root} <- read,
-          what <- walk([{name, root}], index, MapSet.new(), []),
+      for {path, line, key, _form, _via, name, root} <- read,
+          what <- walk([{name, root, 0}], index, %{}, []),
           do: {path, line, key, what}
 
     %{
       read: length(read),
+      bound: Enum.count(read, &(elem(&1, 4) == :bound)),
       forms: read |> Enum.map(&elem(&1, 3)) |> Enum.frequencies(),
       refused: refused |> Enum.uniq() |> Enum.sort()
     }
@@ -109,9 +120,9 @@ defmodule Cyfr.TransactionClosureScopeTest do
   defp defined?(target, name, arity, index),
     do: is_map_key(index, target) and is_map_key(index[target].defs, {name, arity})
 
-  # Every module a source defines: its full name, its body without the
-  # modules nested in it, its definitions, and the aliases and imports in
-  # scope there, its enclosing modules' included.
+  # Every module a source defines: its full name, its application, its body
+  # without the modules nested in it, its definitions, and the aliases and
+  # imports in scope there, its enclosing modules' included.
   defp modules(path, source) do
     source
     |> Code.string_to_quoted!(columns: true, file: path)
@@ -126,7 +137,7 @@ defmodule Cyfr.TransactionClosureScopeTest do
           own = strip_modules(body)
           scope = %{name: name, aliases: aliases(own, %{name: name, aliases: outer.aliases})}
           scope = Map.put(scope, :imports, imports(own, scope) ++ outer.imports)
-          module = Map.merge(scope, %{path: path, body: own, defs: defs(own)})
+          module = Map.merge(scope, %{path: path, app: app(path), body: own, defs: defs(own)})
           {nil, [module | defmodules(body, path, scope)] ++ acc}
 
         node, acc ->
@@ -134,6 +145,15 @@ defmodule Cyfr.TransactionClosureScopeTest do
       end)
 
     found
+  end
+
+  # The application `apps/<app>/…` is in; every other path is one
+  # application, the planted sources'.
+  defp app(path) do
+    case Path.split(path) do
+      ["apps", app | _rest] -> app
+      _other -> nil
+    end
   end
 
   # A nested `defmodule B` inside `A` is `A.B`.
@@ -280,21 +300,97 @@ defmodule Cyfr.TransactionClosureScopeTest do
   defp resolve(_other, _scope), do: nil
 
   # Each `key: closure` in `body` that may be a closure, as `{key, line,
-  # form, root}`. A variable, a literal or a type is none.
-  defp closures(body) do
+  # form, root, via}`: written where it is passed (`:written`), or a
+  # variable the definition's clause binds once, before it is passed, to a
+  # form `closure/1` reads (`:bound`). A literal, a type or any other
+  # variable is none.
+  defp closures(body), do: passed(body, nil)
+
+  # `bound` is the bindings of the clause `ast` lies in, or `nil` outside
+  # every definition.
+  defp passed(ast, bound) do
     {_ast, acc} =
-      Macro.prewalk(body, [], fn
+      Macro.prewalk(ast, [], fn
+        {kind, _meta, [_head, opts]} = clause, acc
+        when kind in [:def, :defp] and is_list(opts) and is_nil(bound) ->
+          {nil, passed(clause, bindings(clause)) ++ acc}
+
         {key, value} = node, acc when key in @keys ->
-          case closure(value) do
-            nil -> {node, acc}
-            {line, form, root} -> {node, [{key, line, form, root} | acc]}
-          end
+          {node, entry(key, value, bound || %{}) ++ acc}
 
         node, acc ->
           {node, acc}
       end)
 
     acc
+  end
+
+  defp entry(key, value, bound) do
+    case closure(value) do
+      {line, form, root} -> [{key, line, form, root, :written}]
+      nil -> bound_entry(key, value, bound)
+    end
+  end
+
+  # `key: name` where the clause binds `name` once, by `name = value` on a
+  # line at or before this one, to a closure: read at the line it is passed.
+  defp bound_entry(key, {name, meta, ctx}, bound) when is_atom(name) and is_atom(ctx) do
+    with {line, value} <- Map.get(bound, name),
+         true <- line <= meta[:line],
+         {_line, form, root} <- closure(value) do
+      [{key, meta[:line], form, root, :bound}]
+    else
+      _none -> []
+    end
+  end
+
+  defp bound_entry(_key, _value, _bound), do: []
+
+  # The variables a definition's clause binds exactly once, by `name =
+  # value`, as name to `{line, value}`. A variable it binds anywhere else
+  # as well (a parameter, a clause head, a generator, a pattern or a second
+  # match) is none: which binding a use reads is then the reviewer's.
+  defp bindings({_kind, _meta, [head, opts]}) do
+    {_ast, {sites, plain}} =
+      Macro.prewalk(opts, {pattern_vars(head, %{}), %{}}, fn
+        {:=, meta, [lhs, value]} = node, {sites, plain} ->
+          plain =
+            case lhs do
+              {name, _, ctx} when is_atom(name) and is_atom(ctx) ->
+                Map.put(plain, name, {meta[:line], value})
+
+              _pattern ->
+                plain
+            end
+
+          {node, {pattern_vars(lhs, sites), plain}}
+
+        {op, _, [lhs, _rhs]} = node, {sites, plain} when op in [:<-, :->] ->
+          {node, {pattern_vars(lhs, sites), plain}}
+
+        node, acc ->
+          {node, acc}
+      end)
+
+    for {name, binding} <- plain, sites[name] == 1, into: %{}, do: {name, binding}
+  end
+
+  # `sites` with one more for each variable `pattern` binds; a pinned one
+  # binds nothing.
+  defp pattern_vars(pattern, sites) do
+    {_ast, sites} =
+      Macro.prewalk(pattern, sites, fn
+        {:^, _, _}, sites ->
+          {nil, sites}
+
+        {name, _, ctx} = node, sites when is_atom(name) and is_atom(ctx) ->
+          {node, Map.update(sites, name, 1, &(&1 + 1))}
+
+        node, sites ->
+          {node, sites}
+      end)
+
+    sites
   end
 
   defp closure({:fn, meta, clauses}), do: {meta[:line], :fn, {:ast, clauses}}
@@ -326,11 +422,15 @@ defmodule Cyfr.TransactionClosureScopeTest do
 
   defp closure(_other), do: nil
 
-  # Walks `pending` (`{module, root}`) and answers what it refused: a
-  # forbidden call or an unresolved capture, as text with its line.
+  # Walks `pending` (`{module, root, depth}`) and answers what it refused:
+  # a forbidden call or an unresolved capture, as text with its line.
+  # `depth` counts the qualified calls into another module the walk has
+  # followed to reach `root`; it follows one (`calls/4`). `seen` holds the
+  # least depth each definition was walked at, since a definition walked
+  # deeper followed less.
   defp walk([], _index, _seen, refused), do: refused
 
-  defp walk([{module, root} | pending], index, seen, refused) do
+  defp walk([{module, root, depth} | pending], index, seen, refused) do
     case root do
       {:remote, target, name, arity} ->
         target = resolve(target, index[module])
@@ -340,7 +440,7 @@ defmodule Cyfr.TransactionClosureScopeTest do
             walk(pending, index, seen, ["calls #{label(target)}.#{name}/#{arity}" | refused])
 
           Map.has_key?(index, target) ->
-            walk([{target, {:local, name, arity}} | pending], index, seen, refused)
+            walk([{target, {:local, name, arity}, depth} | pending], index, seen, refused)
 
           true ->
             unresolved =
@@ -350,16 +450,19 @@ defmodule Cyfr.TransactionClosureScopeTest do
         end
 
       {:roots, roots} ->
-        walk(Enum.map(roots, &{module, &1}) ++ pending, index, seen, refused)
+        walk(Enum.map(roots, &{module, &1, depth}) ++ pending, index, seen, refused)
+
+      {:across, target, name, arity} ->
+        walk([{target, {:local, name, arity}, depth + 1} | pending], index, seen, refused)
 
       {:local, name, arity} ->
         cond do
-          MapSet.member?(seen, {module, name, arity}) ->
+          Map.get(seen, {module, name, arity}, depth + 1) <= depth ->
             walk(pending, index, seen, refused)
 
           bodies = Map.get(index[module].defs, {name, arity}) ->
-            more = Enum.map(bodies, &{module, {:ast, &1}})
-            walk(more ++ pending, index, MapSet.put(seen, {module, name, arity}), refused)
+            more = Enum.map(bodies, &{module, {:ast, &1}, depth})
+            walk(more ++ pending, index, Map.put(seen, {module, name, arity}, depth), refused)
 
           target = imported(index[module], name, arity) ->
             walk(pending, index, seen, [
@@ -373,8 +476,8 @@ defmodule Cyfr.TransactionClosureScopeTest do
         end
 
       {:ast, ast} ->
-        {more, found} = calls(ast, index[module], index)
-        walk(Enum.map(more, &{module, &1}) ++ pending, index, seen, found ++ refused)
+        {more, found} = calls(ast, index[module], index, depth)
+        walk(Enum.map(more, &{module, &1, depth}) ++ pending, index, seen, found ++ refused)
     end
   end
 
@@ -382,14 +485,15 @@ defmodule Cyfr.TransactionClosureScopeTest do
   # forbidden calls it makes. A node a clause below handles is still walked
   # into, so a piped or captured call is also seen as written: the same
   # refusal twice is one, and a lookup at the written arity finds nothing
-  # or what the walk has already seen.
-  defp calls(ast, module, index) do
+  # or what the walk has already seen. At `depth` 0 a qualified call into
+  # another module of the same application is followed too.
+  defp calls(ast, module, index, depth) do
     {_ast, acc} =
       Macro.prewalk(ast, {[], []}, fn
         # A piped call takes one argument more than it is written with.
         {:|>, _, [_lhs, {{:., _, [target, name]}, meta, args}]} = node, acc
         when is_atom(name) and is_list(args) ->
-          {node, qualified(acc, target, name, length(args) + 1, meta, module)}
+          {node, qualified(acc, {target, name, length(args) + 1, meta}, module, index, depth)}
 
         {:|>, _, [_lhs, {name, meta, args}]} = node, acc when is_atom(name) and is_list(args) ->
           {node, unqualified(acc, name, length(args) + 1, meta, module)}
@@ -409,7 +513,7 @@ defmodule Cyfr.TransactionClosureScopeTest do
           {node, unqualified(acc, name, arity, meta, module)}
 
         {{:., _, [target, name]}, meta, args} = node, acc when is_atom(name) and is_list(args) ->
-          {node, qualified(acc, target, name, length(args), meta, module)}
+          {node, qualified(acc, {target, name, length(args), meta}, module, index, depth)}
 
         {name, meta, args} = node, acc when is_atom(name) and is_list(args) ->
           {node, unqualified(acc, name, length(args), meta, module)}
@@ -422,8 +526,9 @@ defmodule Cyfr.TransactionClosureScopeTest do
   end
 
   # `Mod.name(...)`: refused, or followed when `Mod` is the module itself,
-  # by its name, an alias of it or `__MODULE__`.
-  defp qualified({more, found}, target, name, arity, meta, module) do
+  # by its name, an alias of it or `__MODULE__`, or, at `depth` 0, another
+  # module of the same application that defines it.
+  defp qualified({more, found}, {target, name, arity, meta}, module, index, depth) do
     target = resolve(target, module)
 
     cond do
@@ -432,6 +537,9 @@ defmodule Cyfr.TransactionClosureScopeTest do
 
       target == module.name and Map.has_key?(module.defs, {name, arity}) ->
         {[{:local, name, arity} | more], found}
+
+      depth == 0 and defined?(target, name, arity, index) and index[target].app == module.app ->
+        {[{:across, target, name, arity} | more], found}
 
       true ->
         {more, found}
@@ -477,12 +585,14 @@ defmodule Cyfr.TransactionClosureScopeTest do
 
   describe "the tree" do
     test "no transaction closure makes a network call or publishes" do
-      %{read: read, forms: forms, refused: refused} = scan(tree())
+      %{read: read, bound: bound, forms: forms, refused: refused} = scan(tree())
 
-      # 43 closures are read at the plan's base; the other sites bind their
-      # closure to a variable. A count alone could be met with a whole form
-      # unread, so each form is asserted read too.
-      assert read >= 43, "the scan read #{read} closures — it is not reading the tree"
+      # 53 closures are read at the plan's base, 10 of them bound to a
+      # variable before they are passed. A count alone could be met with a
+      # whole form unread, so each form is asserted read too, and the bound
+      # ones are counted apart.
+      assert read >= 53, "the scan read #{read} closures — it is not reading the tree"
+      assert bound >= 10, "the scan read #{bound} bound closures — it is not reading bindings"
 
       for form <- @forms,
           do:
@@ -784,6 +894,136 @@ defmodule Cyfr.TransactionClosureScopeTest do
                {"planted.ex", 4, :verify,
                 "captures Planted.Gone.check/1, which the tree does not define"}
              ] = scan([{"planted.ex", source}]).refused
+    end
+
+    test "bound to a variable once in its clause is read where it is passed" do
+      # The consent commit's shape: one `verify` handed to either write.
+      source = """
+      defmodule Planted do
+        def commit(ctx, attrs) do
+          verify = fn -> verify_binding_liveness(ctx) end
+
+          if attrs.profile_id do
+            Arca.ConsentStorage.insert_revision(attrs, [], "head",
+              verify: verify,
+              reactivate: true
+            )
+          else
+            Arca.ConsentStorage.mint_profile_with_revision(attrs, [], verify: verify)
+          end
+        end
+
+        defp verify_binding_liveness(ctx), do: Cyfr.Bus.broadcast(ctx.actor, "rows", ctx)
+      end
+      """
+
+      assert %{
+               read: 2,
+               bound: 2,
+               forms: %{fn: 2},
+               refused: [
+                 {"planted.ex", 7, :verify, "calls Cyfr.Bus.broadcast (Planted, line 15)"},
+                 {"planted.ex", 11, :verify, "calls Cyfr.Bus.broadcast (Planted, line 15)"}
+               ]
+             } = scan([{"planted.ex", source}])
+    end
+
+    test "bound to a variable is refused through a qualified call into its own app" do
+      # The recovery enrollment's shape: `also` calls another module of
+      # the same application, which publishes.
+      recovery = """
+      defmodule Planted.Recovery do
+        alias Planted.Authz
+
+        def enroll(ctx, attrs, change) do
+          also = fn _attempt -> Authz.consume(ctx, {:recovery_material, change}) end
+
+          case Arca.IdentityAttempts.open(ctx.actor, attrs, also: also) do
+            {:ok, attempt} -> attempt
+            error -> error
+          end
+        end
+      end
+      """
+
+      authz = """
+      defmodule Planted.Authz do
+        def consume(ctx, claim), do: ctx |> spend(claim)
+        defp spend(ctx, claim), do: Cyfr.Bus.broadcast_global("rows", {ctx, claim})
+      end
+      """
+
+      assert %{
+               read: 1,
+               bound: 1,
+               refused: [
+                 {"apps/planted/lib/recovery.ex", 7, :also,
+                  "calls Cyfr.Bus.broadcast_global (Planted.Authz, line 3)"}
+               ]
+             } =
+               scan([
+                 {"apps/planted/lib/recovery.ex", recovery},
+                 {"apps/planted/lib/authz.ex", authz}
+               ])
+    end
+
+    test "is followed one module deep into its own app, and no further" do
+      planted = """
+      defmodule Planted do
+        def write(actor, row) do
+          Arca.Users.mint(actor, row, also: fn row -> Planted.Policy.check(row) end)
+          Arca.Users.mint(actor, row, verify: fn row -> Other.Policy.check(row) end)
+        end
+      end
+      """
+
+      policy = """
+      defmodule Planted.Policy do
+        def check(row), do: Planted.Wire.send(row) && Planted.Policy.note(row)
+        def note(row), do: :inet.gethostname() && row
+      end
+
+      defmodule Planted.Wire do
+        def send(row), do: :gen_tcp.send(row.socket, "row")
+      end
+      """
+
+      other = """
+      defmodule Other.Policy do
+        def check(row), do: Req.get!(row.url)
+      end
+      """
+
+      # `Planted.Wire.send/1` is two modules away, and `Other.Policy` is
+      # another application's: both stay the reviewer's.
+      assert [
+               {"apps/planted/lib/planted.ex", 3, :also,
+                "calls :inet.gethostname (Planted.Policy, line 3)"}
+             ] =
+               scan([
+                 {"apps/planted/lib/planted.ex", planted},
+                 {"apps/planted/lib/policy.ex", policy},
+                 {"apps/other/lib/policy.ex", other}
+               ]).refused
+    end
+
+    test "bound twice, through a pattern or as a parameter, is not read" do
+      source = """
+      defmodule Planted do
+        def write(actor, row, also) do
+          Arca.Users.mint(actor, row, also: also)
+
+          verify = fn _row -> :ok end
+          verify = if row.strict, do: fn _row -> Req.get!(row.url) end, else: verify
+          Arca.Users.mint(actor, row, verify: verify)
+
+          {:ok, reserve} = {:ok, fn -> Task.start(fn -> row end) end}
+          Arca.Users.mint(actor, row, reserve: reserve)
+        end
+      end
+      """
+
+      assert %{read: 0, bound: 0, refused: []} = scan([{"planted.ex", source}])
     end
 
     test "that reads and writes through Arca alone passes" do

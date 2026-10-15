@@ -11,7 +11,7 @@ defmodule Cyfr.BusTest do
   use ExUnit.Case, async: false
 
   alias Cyfr.Bus
-  alias Cyfr.Bus.{Execution, Notify, Progress, RoomInView, Session, Viewing}
+  alias Cyfr.Bus.{Execution, Notify, Ping, Progress, RoomInView, Session, Viewing}
 
   defp actor(athanor_id), do: Prima.Actor.in_athanor(athanor_id)
 
@@ -296,6 +296,67 @@ defmodule Cyfr.BusTest do
 
       assert_receive %Progress{subject: {:pull, "p1"}}
       assert_receive %Progress{subject: {:pull, "p1"}}
+    end
+  end
+
+  describe "a publish inside a transaction" do
+    # Broadcast follows the commit (`ARCHITECTURE.md` §4.4): each door
+    # raises while the calling process holds a transaction open, and
+    # publishes once that transaction has committed.
+    setup tags do
+      Cyfr.Test.Sandbox.setup!(tags)
+      :ok
+    end
+
+    defp held(publish, payload) do
+      assert {:ok, error} =
+               Arca.Repo.transaction(fn ->
+                 assert Arca.in_transaction?()
+                 assert_raise ArgumentError, publish
+               end)
+
+      assert error.message =~ "inside a transaction"
+      refute_received ^payload
+
+      # Deliveries from this process arrive in the order it sent them, so
+      # one sent inside the transaction would be the first matched here and
+      # leave the one sent after the commit behind.
+      refute Arca.in_transaction?()
+      assert :ok = publish.()
+      assert_receive ^payload
+      refute_received ^payload
+    end
+
+    test "of a tenant payload raises, and publishes once after the commit" do
+      a = actor("ath_held")
+      :ok = Bus.subscribe(a, Bus.executions(a))
+      payload = Execution.new(a, :started)
+
+      held(fn -> Bus.broadcast(a, Bus.executions(a), payload) end, payload)
+    end
+
+    test "of progress raises, and publishes once after the commit" do
+      a = actor("ath_held_progress")
+      :ok = Bus.subscribe(a, Bus.progress(a, {:pull, "held"}))
+      step = Progress.new(a, {:pull, "held"}, phase: :pulling)
+
+      held(fn -> Bus.broadcast_progress(a, step) end, step)
+    end
+
+    test "of a global payload raises, and publishes once after the commit" do
+      topic = Bus.health_check(System.unique_integer([:positive]))
+      :ok = Bus.subscribe_global(topic)
+      ping = Ping.new(topic)
+
+      held(fn -> Bus.broadcast_global(topic, ping) end, ping)
+    end
+
+    test "of a page payload raises, and publishes once after the commit" do
+      topic = Bus.page_viewing(self())
+      :ok = Bus.subscribe_page(topic)
+      viewing = Viewing.new("ath_held_page")
+
+      held(fn -> Bus.broadcast_page(topic, viewing) end, viewing)
     end
   end
 

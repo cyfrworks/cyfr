@@ -754,9 +754,14 @@ defmodule Cyfr.Bus do
   struct the roster declares for it, and its `athanor_id` must be the
   actor's. Anything else answers `{:error, :cross_tenant}`, publishes
   nothing and emits `[:cyfr, :bus, :publish_refused]`.
+
+  Raises `ArgumentError` inside a transaction, as every publish here does:
+  broadcast follows the commit.
   """
   @spec broadcast(Actor.t(), String.t(), struct()) :: :ok | {:error, term()}
   def broadcast(%Actor{} = actor, topic, %module{} = payload) when is_binary(topic) do
+    committed!("broadcast/3")
+
     with {:ok, athanor_id} <- tenant_of(actor),
          {:ok, row} <- tenant_row(topic, athanor_id),
          true <- row.struct == module,
@@ -775,6 +780,8 @@ defmodule Cyfr.Bus do
   """
   @spec broadcast_progress(Actor.t(), Progress.t()) :: :ok | {:error, term()}
   def broadcast_progress(%Actor{} = actor, %Progress{subject: subject} = step) do
+    committed!("broadcast_progress/2")
+
     topics =
       case step.request_id do
         request_id when is_binary(request_id) and request_id != "" ->
@@ -792,18 +799,40 @@ defmodule Cyfr.Bus do
     end)
   end
 
-  @doc "Publish `payload` on the global topic `topic`. Any other topic or struct raises."
+  @doc """
+  Publish `payload` on the global topic `topic`. Any other topic or
+  struct raises, and so does a publish inside a transaction.
+  """
   @spec broadcast_global(String.t(), struct()) :: :ok | {:error, term()}
   def broadcast_global(topic, %_{} = payload) when is_binary(topic) do
+    committed!("broadcast_global/2")
     row = scoped_row!(:global, topic, payload)
     publish(row, topic, payload)
   end
 
-  @doc "Publish `payload` on the page topic `topic`, on this node only."
+  @doc """
+  Publish `payload` on the page topic `topic`, on this node only. A
+  publish inside a transaction raises.
+  """
   @spec broadcast_page(String.t(), struct()) :: :ok
   def broadcast_page(topic, %_{} = payload) when is_binary(topic) do
+    committed!("broadcast_page/2")
     _row = scoped_row!(:page, topic, payload)
     Phoenix.PubSub.local_broadcast(@pubsub, topic, payload)
+  end
+
+  # A publish from inside a transaction would announce a write that may
+  # still roll back, and holds the transaction's locks while it is
+  # delivered (`ARCHITECTURE.md` §4.4): the caller publishes after the
+  # commit. The check is the calling process's own transaction, on the
+  # repository it uses.
+  defp committed!(door) do
+    if Arca.in_transaction?() do
+      raise ArgumentError,
+            "Cyfr.Bus.#{door} was called inside a transaction: publish after it commits"
+    end
+
+    :ok
   end
 
   @doc """
