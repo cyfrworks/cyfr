@@ -18,6 +18,8 @@ defmodule Arca.AthanorCensus do
   transaction commits or rolls back. On SQLite every transaction that
   writes already holds the database's one write lock from its start
   (`Arca.Repo.locking_transaction/2`), so the lock takes no statement.
+  `Arca.Repo.transaction_lock/1` spells both, as the one home of the
+  adapters' locking statements (`Arca.LockingSeamTest`).
 
   It is the last lock its caller takes before the count: after the rows
   the caller already holds (the people a mint holds, the person or
@@ -43,25 +45,10 @@ defmodule Arca.AthanorCensus do
   @key :erlang.phash2("arca:athanor_census")
 
   @doc """
-  Take the census lock for the rest of the enclosing transaction. Raises
-  outside a transaction, where a lock would end with its own statement
-  and serialize nothing.
+  Take the census lock for the rest of the enclosing transaction
+  (`Arca.Repo.transaction_lock/1`). Raises outside a transaction, where a
+  lock would end with its own statement and serialize nothing.
   """
   @spec lock() :: :ok
-  # arca:unscoped-ok an advisory lock on a server-wide key; no table, no tenant.
-  # arca:db-raise-ok a step inside the caller's transaction, which must roll back if it fails.
-  def lock do
-    unless Arca.Repo.in_transaction?() do
-      raise "Arca.AthanorCensus.lock/0 called outside a transaction"
-    end
-
-    case Arca.Repo.adapter() do
-      Ecto.Adapters.Postgres ->
-        Arca.Repo.query!("SELECT pg_advisory_xact_lock($1)", [@key])
-        :ok
-
-      _sqlite ->
-        :ok
-    end
-  end
+  def lock, do: Arca.Repo.transaction_lock(@key)
 end

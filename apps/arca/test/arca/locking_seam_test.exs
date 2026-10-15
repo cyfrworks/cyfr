@@ -5,12 +5,15 @@ defmodule Arca.LockingSeamTest do
   @moduledoc """
   The two adapters lock differently, and each difference is spelled in
   exactly one place: a row lock clause only in `Arca.QueryHelpers`
-  (`for_update/1`), and SQLite's write lock only in `Arca.Repo`, whose
-  transaction hook sets every transaction's mode and runs the one
-  statement that takes the lock. A locking transaction that reaches the
-  adapter any other way is a lock one adapter raises on or silently
-  ignores, and a mode or a lock-taking write spelled elsewhere bypasses
-  the hook's bounded wait, so each is refused here.
+  (`for_update/1`), and SQLite's write lock and PostgreSQL's advisory
+  lock only in `Arca.Repo`, whose transaction hook sets every
+  transaction's mode and runs the one statement that takes the write
+  lock, and whose `transaction_lock/1` takes a server-wide lock on each
+  adapter. A locking transaction that reaches the adapter any other way
+  is a lock one adapter raises on or silently ignores, a mode or a
+  lock-taking write spelled elsewhere bypasses the hook's bounded wait,
+  and an advisory lock spelled elsewhere is a lock SQLite has no
+  statement for, so each is refused here.
 
   The scan reads code lines only (`Prima.Test.CodeLines`): a comment or a
   doc naming a lock is prose, not a lock.
@@ -22,19 +25,26 @@ defmodule Arca.LockingSeamTest do
 
   @root Path.expand("../../../..", __DIR__)
 
-  # Both spellings of each: `lock(query, …)` / `lock: "…"` in a query;
+  # Both spellings of each: `lock(query, …)`, bare or qualified as
+  # `Ecto.Query.lock` or `Query.lock`, / `lock: "…"` in a query, where a
+  # function of our own named `lock` (its definition, its spec, a call with
+  # no arguments) is no clause, since Ecto's `lock` always takes one;
   # `mode: …` / `[:mode, …]`-style keyword building, whatever the value;
-  # and the write that touches no row, which takes SQLite's lock.
-  @lock_clause ~r/(?<![\w.])lock\(|(?<![\w:])lock:\s/
+  # the write that touches no row, which takes SQLite's lock; and every
+  # PostgreSQL advisory lock function: session or transaction, waiting or
+  # `try`, exclusive or shared, and its unlocks.
+  @lock_clause ~r/(?:\bQuery\.|(?<![\w.]))(?<!def |defp |@spec )lock\((?!\s*\))|(?<![\w:])lock:\s/
   @mode ~r/(?<![\w:])mode:\s|(?<![\w:]):mode,/
   @lock_write ~r/\bWHERE\s+0\b/i
+  @advisory ~r/\bpg_(?:try_)?advisory_/i
 
-  @patterns [lock: @lock_clause, mode: @mode, lock_write: @lock_write]
+  @patterns [lock: @lock_clause, mode: @mode, lock_write: @lock_write, advisory: @advisory]
 
   @homes %{
     lock: "apps/arca/lib/arca/query_helpers.ex",
     mode: "apps/arca/lib/arca/repo.ex",
-    lock_write: "apps/arca/lib/arca/repo.ex"
+    lock_write: "apps/arca/lib/arca/repo.ex",
+    advisory: "apps/arca/lib/arca/repo.ex"
   }
 
   defp arca_sources do
@@ -73,6 +83,9 @@ defmodule Arca.LockingSeamTest do
 
     assert CodeLines.lines(homes[@homes.lock_write]) |> Enum.any?(&(&1 =~ @lock_write)),
            "the scan no longer sees prepare_transaction/2's own lock-taking write"
+
+    assert CodeLines.lines(homes[@homes.advisory]) |> Enum.any?(&(&1 =~ @advisory)),
+           "the scan no longer sees transaction_lock/1's own advisory lock"
   end
 
   test "no lock clause, transaction mode or lock-taking write outside its one home" do
@@ -86,7 +99,8 @@ defmodule Arca.LockingSeamTest do
            rows with `Arca.QueryHelpers.for_update/1`: SQLite raises on a lock
            clause, PostgreSQL ignores a transaction mode, and on SQLite
            `Arca.Repo.prepare_transaction/2` alone takes the write lock, with a
-           wait that never parks a scheduler.
+           wait that never parks a scheduler. Take a server-wide lock with
+           `Arca.Repo.transaction_lock/1`, which spells it for each adapter.
            """
   end
 
@@ -107,6 +121,65 @@ defmodule Arca.LockingSeamTest do
       assert [
                "apps/arca/lib/arca/planted.ex:4: lock outside" <> _,
                "apps/arca/lib/arca/planted.ex:5: lock outside" <> _
+             ] = violations(planted)
+    end
+
+    test "an advisory lock outside Arca.Repo is refused, waiting or try, in any case" do
+      planted = [
+        {"apps/arca/lib/arca/planted.ex",
+         ~S'''
+         defmodule Arca.Planted do
+           def a(k), do: Arca.Repo.query!("SELECT pg_advisory_xact_lock($1)", [k])
+           def b(k), do: Arca.Repo.query!("SELECT pg_advisory_lock($1)", [k])
+           def c(k), do: Arca.Repo.query!("SELECT pg_try_advisory_xact_lock($1)", [k])
+           def d(k), do: Arca.Repo.query!("SELECT PG_ADVISORY_LOCK_SHARED($1)", [k])
+           def e(k), do: Arca.Repo.query!("SELECT pg_advisory_unlock($1)", [k])
+           def f, do: Arca.Repo.query!("SELECT PG_ADVISORY_UNLOCK_ALL()")
+         end
+         '''}
+      ]
+
+      assert [
+               "apps/arca/lib/arca/planted.ex:2: advisory outside" <> _,
+               "apps/arca/lib/arca/planted.ex:3: advisory outside" <> _,
+               "apps/arca/lib/arca/planted.ex:4: advisory outside" <> _,
+               "apps/arca/lib/arca/planted.ex:5: advisory outside" <> _,
+               "apps/arca/lib/arca/planted.ex:6: advisory outside" <> _,
+               "apps/arca/lib/arca/planted.ex:7: advisory outside" <> _
+             ] = violations(planted)
+    end
+
+    test "a function named lock is not a lock clause, and Ecto's lock beside it still is" do
+      planted = [
+        {"apps/arca/lib/arca/planted.ex",
+         ~S'''
+         defmodule Arca.Planted do
+           @spec lock() :: :ok
+           def lock do
+             Arca.Repo.transaction_lock(1)
+           end
+
+           @spec lock(integer()) :: :ok
+           def lock(key), do: Arca.Repo.transaction_lock(key)
+           defp lock(key, _), do: Arca.Repo.transaction_lock(key)
+           def a, do: Arca.AthanorCensus.lock()
+           def b, do: lock( )
+
+           def c(q), do: q |> lock("FOR UPDATE") |> Arca.Repo.all()
+           def d(q), do: Arca.Repo.all(lock(q, "FOR UPDATE"))
+           def e, do: Arca.Repo.all(from(r in "rows", lock: "FOR UPDATE", select: r.id))
+           def f(q), do: Arca.Repo.all(Ecto.Query.lock(q, "FOR UPDATE"))
+           def g(q), do: q |> Query.lock("FOR SHARE") |> Arca.Repo.all()
+         end
+         '''}
+      ]
+
+      assert [
+               "apps/arca/lib/arca/planted.ex:13: lock outside" <> _,
+               "apps/arca/lib/arca/planted.ex:14: lock outside" <> _,
+               "apps/arca/lib/arca/planted.ex:15: lock outside" <> _,
+               "apps/arca/lib/arca/planted.ex:16: lock outside" <> _,
+               "apps/arca/lib/arca/planted.ex:17: lock outside" <> _
              ] = violations(planted)
     end
 
@@ -153,13 +226,16 @@ defmodule Arca.LockingSeamTest do
         {@homes.lock,
          "defmodule Q do\n  def a, do: Arca.Repo.transaction(& &1, mode: :immediate)\n" <>
            "  def b, do: Arca.Repo.query!(\"UPDATE t SET x = x WHERE 0\")\nend\n"},
-        {@homes.mode, "defmodule R do\n  def a(q), do: lock(q, \"FOR UPDATE\")\nend\n"}
+        {@homes.mode, "defmodule R do\n  def a(q), do: lock(q, \"FOR UPDATE\")\nend\n"},
+        {@homes.lock,
+         "defmodule S do\n  def a, do: Arca.Repo.query!(\"SELECT pg_advisory_xact_lock(1)\")\nend\n"}
       ]
 
       assert [
                "apps/arca/lib/arca/query_helpers.ex:2: mode outside" <> _,
                "apps/arca/lib/arca/query_helpers.ex:3: lock_write outside" <> _,
-               "apps/arca/lib/arca/repo.ex:2: lock outside" <> _
+               "apps/arca/lib/arca/repo.ex:2: lock outside" <> _,
+               "apps/arca/lib/arca/query_helpers.ex:2: advisory outside" <> _
              ] = violations(planted)
     end
 
@@ -184,10 +260,10 @@ defmodule Arca.LockingSeamTest do
          defmodule Arca.Planted do
            @moduledoc """
            Takes a row lock: see mode: :immediate and lock("FOR UPDATE"),
-           and the write lock: UPDATE t SET x = x WHERE 0.
+           the write lock: UPDATE t SET x = x WHERE 0, and pg_advisory_xact_lock.
            """
 
-           # lock: a comment is prose, and so is mode: :deferred or WHERE 0
+           # lock: a comment is prose, and so is mode: :deferred, WHERE 0 or pg_advisory_lock
            def a, do: :ok
          end
          '''}
