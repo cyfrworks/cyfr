@@ -21,8 +21,12 @@ defmodule Cyfr.Cluster.Store do
   running between cases — so it must not share a database with a run that
   expects a sandbox to roll its writes back.
 
-  The object store is `Arca.Test.S3Env`'s, under a prefix of this run's
-  own so two runs against one bucket never meet.
+  The object store is `Arca.Test.S3Env`'s, under this run's own run prefix
+  (`Arca.Test.S3Env.run_prefix/1`), so two runs against one bucket never
+  meet. `ready!/0` guards it (`Arca.Test.S3Env.guard!/2`) for the whole
+  run, because one cell serves every case: once the suite has ended and
+  the members have stopped, the prefix is deleted and the run fails if
+  anything outside it changed.
   """
 
   @default_url "postgres://cyfr:cyfr@localhost:5432/cyfr_cluster_test"
@@ -35,22 +39,9 @@ defmodule Cyfr.Cluster.Store do
   @spec s3_config() :: keyword()
   def s3_config, do: Arca.Test.S3Env.config(prefix: prefix())
 
-  @doc """
-  The prefix this run's athanors live under, minted once so a failed run
-  leaves nothing a later one will read.
-  """
+  @doc "The prefix this run's athanors live under."
   @spec prefix() :: String.t()
-  def prefix do
-    case :persistent_term.get({__MODULE__, :prefix}, nil) do
-      nil ->
-        minted = "cluster-#{System.system_time(:millisecond)}"
-        :persistent_term.put({__MODULE__, :prefix}, minted)
-        minted
-
-      minted ->
-        minted
-    end
-  end
+  def prefix, do: Arca.Test.S3Env.run_prefix("cluster")
 
   @doc """
   Refuse the run before a member is started if either store is missing,
@@ -62,6 +53,19 @@ defmodule Cyfr.Cluster.Store do
     database!()
     bucket!()
     seed_tree!()
+    guard!()
+    :ok
+  end
+
+  # `Cyfr.Cluster.Cell.ensure!/0` registers the cell's shutdown after this,
+  # and ExUnit runs the last registered `after_suite` callback first, so
+  # the members have stopped writing before the prefix is cleaned.
+  defp guard! do
+    _guard =
+      Arca.Test.S3Env.guard!(prefix(), fn clean ->
+        ExUnit.after_suite(fn _results -> clean.() end)
+      end)
+
     :ok
   end
 
