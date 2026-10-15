@@ -13,8 +13,10 @@ on:
 permissions:
   contents: read
 
-# A second run of one tag waits for the first and is never cancelled, so a
-# publication is never cut off between its pushes and its manifest.
+# A second run of one tag waits for the first instead of cancelling it, so
+# a publication is never cut off between its pushes and its manifest.
+# GitHub keeps one pending run per group: a pending run is cancelled when a
+# newer one queues behind it.
 concurrency:
   group: publish-${{ github.ref }}
   cancel-in-progress: false
@@ -60,7 +62,8 @@ jobs:
   images:
     needs: [test, dialyzer, codex-ci, keeper-ci, license-lint, security]
     if: github.repository == 'cyfrworks/cyfr'
-    timeout-minutes: 20
+    # No successful run has built cyfr-locus yet to bound it by.
+    timeout-minutes: 90
     permissions:
       contents: read
       packages: write
@@ -112,6 +115,10 @@ jobs:
           file: ${{ matrix.file }}
           platforms: ${{ matrix.platform }}
           build-args: ${{ steps.meta.outputs.build-args }}
+          # The action drops its max-mode default when an output loads the
+          # image; the published attestation keeps the build's config,
+          # builder id and sources.
+          provenance: mode=max
           outputs: |
             type=docker,name=cyfr-scan/${{ matrix.image }}:${{ steps.meta.outputs.arch }}
             type=image,name=${{ env.REGISTRY }}/${{ matrix.image }},push-by-digest=true,name-canonical=true,push=true

@@ -122,14 +122,20 @@ context() {
 }
 
 # build RUN ARCH OUTPUT...: builds RUN's image for linux/ARCH with the
-# given outputs and prints containerimage.digest from the build's
+# given outputs (an argument starting with -- passes to buildx as is) and
+# prints containerimage.digest from the build's
 # metadata, which build-push-action reports as its digest output. It runs
 # in a command substitution, so the caller checks what it printed.
 build() {
   local run=$1 arch=$2 meta="$scratch/meta-$1-$2-$RANDOM.json"
   shift 2
   local outputs=()
-  for out in "$@"; do outputs+=(--output "$out"); done
+  for out in "$@"; do
+    case "$out" in
+      --*) outputs+=("$out") ;;
+      *) outputs+=(--output "$out") ;;
+    esac
+  done
   docker buildx build --builder "$builder" --platform "linux/$arch" "${outputs[@]}" \
     --metadata-file "$meta" "$(context "$run")" > /dev/null 2> "$scratch/err" || {
     echo "build of run $run for $arch failed:" >&2
@@ -140,9 +146,9 @@ build() {
 }
 
 # release.yml's build: one build, loaded for the scan and pushed by digest,
-# with BuildKit's default provenance attestation.
+# with the max-mode provenance its `provenance: mode=max` input asks for.
 pipeline_build() {
-  build "$1" "$2" \
+  build "$1" "$2" --attest=type=provenance,mode=max \
     "type=docker,name=cyfr-ci-publish-scan/$1:$2-$$" \
     "type=image,name=$reg/publish,push-by-digest=true,name-canonical=true,push=true"
 }
@@ -235,6 +241,18 @@ for d in "$a_amd64" "$a_arm64" "$b_amd64" "$b_arm64"; do
          and ([.manifests[] | select(.platform.os == "linux")] | length) == 1' <<< "$raw" > /dev/null || ok=0
 done
 if [ "$ok" = 1 ]; then pass "$label"; else fail "$label"; fi
+
+label="each pushed attestation is max-mode provenance, with the build's config and sources"
+ok=1
+for d in "$a_amd64" "$a_arm64" "$b_amd64" "$b_arm64"; do
+  docker buildx imagetools inspect "$reg/publish@$d" --format '{{json .Provenance}}' |
+    jq -e '(if has("SLSA") then .SLSA else to_entries[0].value.SLSA end)
+           | (.buildDefinition.internalParameters | has("buildConfig"))
+             and (.runDetails.metadata.buildkit_metadata | has("source"))' > /dev/null 2>&1 || ok=0
+done
+if [ "$ok" = 1 ]; then pass "$label"; else
+  fail "$label" "$(docker buildx imagetools inspect "$reg/publish@$a_amd64" --format '{{json .Provenance}}' | head -c 400)"
+fi
 
 label="pushing by digest leaves no tag in the registry"
 tags=$(tags_of publish)

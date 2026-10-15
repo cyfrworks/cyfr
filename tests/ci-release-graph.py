@@ -88,6 +88,10 @@ def check_graph(wf):
 
 # The one step allowed to fail on: the Homebrew tap push, after the release.
 HOMEBREW = "Publish Homebrew cask to tap"
+# A failure turned into success: `|| true` or `|| :`.
+IGNORED = re.compile(r"\|\|\s*(true|:)(?=\s|;|\)|$)", re.MULTILINE)
+# The CLI release's permissions at BASE, which it may narrow and never widen.
+RELEASE_PERMISSIONS = {"contents": "write", "id-token": "write", "attestations": "write"}
 IMAGES = {"cyfr": "Dockerfile", "cyfr-locus": "Dockerfile.locus"}
 PUSH_BY_DIGEST = (
     "type=image,name=${{ env.REGISTRY }}/${{ matrix.image }},"
@@ -123,7 +127,7 @@ def check_failures_pass_nothing(wf):
                 continue
             if "continue-on-error" in s:
                 return f"{j}'s step {s.get('name') or s.get('uses')!r} has continue-on-error"
-            if re.search(r"\|\|\s*true\b", str(s.get("run", ""))):
+            if IGNORED.search(str(s.get("run", ""))):
                 return f"{j}'s step {s.get('name')!r} ignores a failure"
     return None
 
@@ -153,6 +157,8 @@ def check_build(wf):
     inputs = steps[0].get("with", {})
     if any(k in inputs for k in ("push", "load", "tags")):
         return "the build step sets push, load or tags beside outputs", name
+    if inputs.get("provenance") != "mode=max":
+        return f"the build's provenance is {inputs.get('provenance')!r}, not mode=max", name
     outputs = [o.strip() for o in str(inputs.get("outputs", "")).splitlines() if o.strip()]
     if (
         len(outputs) != 2
@@ -169,6 +175,8 @@ def check_build(wf):
     scans = steps_using(job, "aquasecurity/trivy-action")
     if len(scans) != 1 or scans[0].get("env", {}).get("TRIVY_IMAGE_SRC") != "docker":
         return "the scan can read an image the build did not load", name
+    if str(scans[0].get("with", {}).get("exit-code")) != "1":
+        return f"the scan's exit-code is {scans[0].get('with', {}).get('exit-code')!r}, not '1'", name
     if scans[0].get("with", {}).get("image-ref") != loaded:
         return "the scan reads another image than the loaded one", name
     if not steps_running(job, "scripts/ci/scanned-is-pushed.sh"):
@@ -220,6 +228,14 @@ def check_permissions(wf, build, merge):
     want = {"contents": "read", "packages": "write", "id-token": "write", "attestations": "write"}
     if jobs[merge].get("permissions") != want:
         return f"the merge's permissions are {jobs[merge].get('permissions')}"
+    release = [k for k, job in jobs.items() if steps_using(job, "goreleaser/goreleaser-action")]
+    if len(release) != 1:
+        return f"not one CLI release job: {release}"
+    granted = jobs[release[0]].get("permissions") or {}
+    if not isinstance(granted, dict) or any(
+        k not in RELEASE_PERMISSIONS or (v == "write" and RELEASE_PERMISSIONS[k] != "write") for k, v in granted.items()
+    ):
+        return f"the CLI release's permissions {granted} go beyond {RELEASE_PERMISSIONS}"
     return None
 
 
@@ -348,6 +364,23 @@ def loaded_under_registry(wf):
     )
 
 
+def no_provenance(wf):
+    del step_using(wf, "images", "build-push-action")["with"]["provenance"]
+
+
+def scan_never_fails(wf):
+    step_named(wf, "images", "Scan the image")["with"]["exit-code"] = "0"
+
+
+def comparison_ignored(wf):
+    step = next(s for s in wf["jobs"]["images"]["steps"] if "scanned-is-pushed" in str(s.get("run")))
+    step["run"] = step["run"].replace('"$DIGEST"\n', '"$DIGEST" || :\n', 1)
+
+
+def release_widened(wf):
+    wf["jobs"]["release"]["permissions"]["packages"] = "write"
+
+
 MUTANTS = [
     ("a check dropped from the build's needs", drop_need),
     ("the merge runs always()", merge_always),
@@ -365,6 +398,10 @@ MUTANTS = [
     ("|| true on the merge", merge_ignores_failure),
     ("broad default permissions", broad_default_permissions),
     ("the loaded image named under the registry", loaded_under_registry),
+    ("no max-mode provenance on the build", no_provenance),
+    ("a scan whose findings never fail it", scan_never_fails),
+    ("|| : after the scanned-is-pushed check", comparison_ignored),
+    ("packages: write on the CLI release", release_widened),
 ]
 
 
