@@ -601,13 +601,15 @@ a reopen admits only runs started after it.
 `cyfr admin allow '*'` admits any identity your provider authenticates,
 and anyone who signs in through the CYFR door —
 that is the public-hosting configuration, and it is the one where the limits
-matter. They are the platform settings of the `tenancy` group in
-[configuration-guide.md](configuration-guide.md): athanors on the server,
-athanors minted per hour, groups one person creates, DMs one person holds,
-seats in a group, threads in an athanor, and the bytes one athanor holds.
-Each is off unless set, except the group, DM and thread caps, which ship
-at 50, 200 and 1000 and are each turned off with `0`; a private box needs
-none of the others.
+matter. They are platform settings in
+[configuration-guide.md](configuration-guide.md): the `tenancy` group's
+athanors on the server, groups one person creates, DMs one person holds,
+seats in a group, threads in an athanor and the bytes one athanor holds,
+and the athanors minted per hour (`CYFR_MINT_PER_HOUR`, a rate). Each is
+off unless set, except the group, DM and thread caps, which ship at 50,
+200 and 1000 and are each turned off with `0`. The mint rate is a bound
+that is never 0: `CYFR_MINT_PER_HOUR=0` refuses the boot, and unset is no
+bound. A private box needs none of the others.
 
 A new athanor is provisioned with its own copy of the shipped bundle and
 AQUA tree, so the athanor cap bounds tenancy and the storage cap each
@@ -745,6 +747,10 @@ What a cell gives up and what it keeps:
   per-tenant cap, and the per-credential stream cap, are each member's.
   The tenant's durable ceilings — its consented invocation rate and its
   budget — are rows, and hold for the cell.
+- An upgrade stops the whole cell: stop every member, upgrade, then start
+  them, so two releases never run side by side. A member whose release
+  differs from the live members' is not refused at boot, so the
+  operator's stop is the only guard.
 
 `scripts/test-partitioned.sh -n 1 -a postgres -- --only cluster
 apps/cyfr/test/cluster` is the suite that proves this: two real nodes, one
