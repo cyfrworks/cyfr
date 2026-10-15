@@ -87,6 +87,36 @@ defmodule Opus.GuestStorageTest do
     {type, message}
   end
 
+  # Every usage read of the store answers an error from here to the test's
+  # end, and no cached counter of the scope answers in its place; the
+  # restore is registered before the adapter changes.
+  defp unreadable_usage!(ctx, scope) do
+    original = Application.get_env(:arca, :storage_adapter)
+
+    on_exit(fn ->
+      if original,
+        do: Application.put_env(:arca, :storage_adapter, original),
+        else: Application.delete_env(:arca, :storage_adapter)
+    end)
+
+    Application.put_env(:arca, :storage_adapter, UnreadableUsageAdapter)
+
+    actor = Sanctum.Context.actor(ctx)
+    assert :miss = Arca.Cache.get(Arca.Cache.Keys.scope_usage_files(actor, scope))
+    assert :miss = Arca.Cache.get(Arca.Cache.Keys.scope_usage_bytes(actor, scope))
+    assert {:error, :unreadable} = Arca.Usage.scope_usage(actor, scope)
+  end
+
+  # An unreadable usage is the typed `storage_unavailable`, which reads on
+  # the worker wire as `unavailable`, never as quota exhaustion.
+  defp assert_unavailable(result) do
+    assert {"storage_unavailable", message} = refused(result)
+    assert message == "Storage usage could not be read — nothing was written."
+
+    assert %Prima.Refusal{class: :unavailable} =
+             Prima.Refusal.classify({:guest_error, "storage_unavailable", message})
+  end
+
   describe "operations" do
     test "read answers base64 content; a missing file is not_found", %{ctx: ctx} do
       :ok = Arca.put(Sanctum.Context.actor(ctx), ["data", "test.txt"], "hello world")
@@ -638,20 +668,12 @@ defmodule Opus.GuestStorageTest do
     end
 
     @tag :capture_log
-    test "an unreadable usage refuses the public write", %{ctx: ctx} do
-      original = Application.get_env(:arca, :storage_adapter)
-      Application.put_env(:arca, :storage_adapter, UnreadableUsageAdapter)
+    test "an unreadable usage refuses the public write as storage_unavailable, and nothing is written",
+         %{ctx: ctx} do
+      unreadable_usage!(ctx, "data")
 
-      on_exit(fn ->
-        if original,
-          do: Application.put_env(:arca, :storage_adapter, original),
-          else: Application.delete_env(:arca, :storage_adapter)
-      end)
-
-      assert {"storage_quota_exceeded", message} =
-               refused(quota_write(ctx, "data/a.txt", 10, %{max_bytes: 100, max_files: 50}))
-
-      assert message =~ "usage unavailable"
+      assert_unavailable(quota_write(ctx, "data/a.txt", 10, %{max_bytes: 100, max_files: 50}))
+      refute Arca.exists?(Sanctum.Context.actor(ctx), ["data", "a.txt"])
     end
 
     test "a public profile's scope carries the configured quota; any other carries none", %{
@@ -683,6 +705,15 @@ defmodule Opus.GuestStorageTest do
              refused(run(ctx, edge(["data/"]), write("data/one-more.txt", "x")))
 
     assert message =~ "file ceiling"
+  end
+
+  @tag :capture_log
+  test "an unreadable file count refuses the scope write as storage_unavailable, and nothing is written",
+       %{ctx: ctx} do
+    unreadable_usage!(ctx, "data")
+
+    assert_unavailable(run(ctx, edge(["data/"]), write("data/unread.txt", "x")))
+    refute Arca.exists?(Sanctum.Context.actor(ctx), ["data", "unread.txt"])
   end
 
   describe "the attempt's hold" do

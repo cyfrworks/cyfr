@@ -74,7 +74,7 @@ defmodule Prima.WitResponseVectorsTest do
   end
 
   test "encode_error answers every case's envelope, for a type given as a string or an atom" do
-    for vector <- cases!("encode_error", 8, ~w(why type message answer)) do
+    for vector <- cases!("encode_error", 9, ~w(why type message answer)) do
       %{"why" => why, "type" => type, "message" => message, "answer" => answer} = vector
 
       for type <- [type, String.to_atom(type)] do
@@ -86,7 +86,7 @@ defmodule Prima.WitResponseVectorsTest do
   test "every encode_error answer is the envelope and nothing else" do
     %{"member" => member, "fields" => fields} = @vectors["envelope"]
 
-    for vector <- cases!("encode_error", 8, ~w(why type message answer)) do
+    for vector <- cases!("encode_error", 9, ~w(why type message answer)) do
       %{"why" => why, "answer" => answer} = vector
       %{^member => error} = envelope = expected(answer)
       assert Map.keys(envelope) == [member], why
@@ -133,7 +133,7 @@ defmodule Prima.WitResponseVectorsTest do
   end
 
   test "render answers every case's sentence, and nothing for a term it does not know" do
-    cases = cases!("render", 22, ~w(why reason sentence), ~w(class))
+    cases = cases!("render", 23, ~w(why reason sentence), ~w(class))
     assert Enum.any?(cases, &is_nil(&1["sentence"]))
 
     for vector <- cases do
@@ -144,7 +144,7 @@ defmodule Prima.WitResponseVectorsTest do
 
   test "the sample holds one refusal of each class but confirmation_required, of that class" do
     sampled =
-      for vector <- cases!("render", 22, ~w(why reason sentence), ~w(class)),
+      for vector <- cases!("render", 23, ~w(why reason sentence), ~w(class)),
           Map.has_key?(vector, "class"),
           do: {vector["class"], vector}
 

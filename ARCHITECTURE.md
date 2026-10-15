@@ -298,7 +298,7 @@ Untrusted builds and backend processes run isolated from the control plane and f
 
 Resource limits, platform ceilings, capacity ceilings, depth caps and shared invocation budgets are separate meanings, and a new kind of budget is a cap of its own meaning beside them, never folded into one. A capacity ceiling bounds how many of one kind an owner holds; the bounds that keep a guest, a caller or the host safe (rates, sizes, depths, budgets, pools and timeouts) are security bounds, not capacity, and keep their own meanings. What zero, absence, a default, a charge or a release means is stated by each one's own contract. An instance entry's use cap is a cap of its own meaning, counted in requests attached per person and in total each day, and distinct from any spend budget counted in currency.
 
-A count or usage that cannot be read refuses the write as unavailable, for every cap kind. *Not built yet:* that refusal for a guest's storage; an unreadable public quota refuses as exhausted, and an unreadable file count admits the write.
+A count or usage that cannot be read refuses the write as unavailable, for every cap kind.
 
 ## 6. Ownership, state and reliability
 

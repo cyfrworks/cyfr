@@ -41,9 +41,9 @@ defmodule Opus.GuestStorage do
        `max_request_size`.
     8. For a public profile, a write or append keeps its scope within the
        public quota (`config :cyfr, :public_storage_quota`); usage that
-       cannot be read refuses the write.
-    9. A write or append finds its scope under 100,000 files; usage that
-       cannot be read passes this check.
+       cannot be read refuses the write as `storage_unavailable`.
+    9. A write or append finds its scope under 100,000 files; a count that
+       cannot be read refuses the write as `storage_unavailable`.
 
   A read or listing answers at most the node's `max_response_size` bytes.
   The athanor's byte cap is `Arca`'s own write gate.
@@ -348,7 +348,10 @@ defmodule Opus.GuestStorage do
             "#{ctx.athanor_id}; refusing the write"
         )
 
-        guest_error(:storage_quota_exceeded, "Storage usage unavailable — write refused.")
+        guest_error(
+          :storage_unavailable,
+          "Storage usage could not be read — nothing was written."
+        )
     end
   end
 
@@ -362,8 +365,19 @@ defmodule Opus.GuestStorage do
           "Storage file ceiling reached (#{@max_scope_files} files per scope)"
         )
 
-      _ ->
+      {:ok, _usage} ->
         :ok
+
+      _unreadable ->
+        Logger.warning(
+          "[Opus.GuestStorage] file-ceiling count unreadable for " <>
+            "#{ctx.athanor_id}; refusing the write"
+        )
+
+        guest_error(
+          :storage_unavailable,
+          "Storage usage could not be read — nothing was written."
+        )
     end
   end
 

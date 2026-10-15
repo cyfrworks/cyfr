@@ -109,6 +109,7 @@ defmodule Prima.Refusal do
     "storage_path_denied" => :forbidden,
     "resource_limit" => :rate_limited,
     "storage_quota_exceeded" => :rate_limited,
+    "storage_unavailable" => :unavailable,
     "not_found" => :not_found,
     "setup_required" => :setup_required,
     "uncertain" => :uncertain,
