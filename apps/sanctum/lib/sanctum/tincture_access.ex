@@ -139,23 +139,6 @@ defmodule Sanctum.TinctureAccess do
     end
   end
 
-  @doc """
-  Look up a tincture via the authoritative registry without auth checks.
-
-  Used for asset serving where sandboxed iframes (no allow-same-origin)
-  cannot send cookies. Validates refs and resolves through the component-facts port.
-  Does NOT check visibility — callers should use `get_public/3` for that.
-  """
-  @spec lookup(Context.t(), String.t(), String.t()) ::
-          {:ok, map()} | {:error, :not_found | :unavailable}
-  def lookup(%Context{} = ctx, publisher, tincture_name) do
-    with :ok <- validate_refs(publisher, tincture_name) do
-      lookup_tincture(ctx, publisher, tincture_name)
-    else
-      _ -> {:error, :not_found}
-    end
-  end
-
   # ---------------------------------------------------------------------------
   # Private
   # ---------------------------------------------------------------------------

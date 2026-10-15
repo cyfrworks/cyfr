@@ -111,47 +111,6 @@ defmodule Opus.Rates do
 
   def check(%Prima.Actor{}, _bucket, _limit_source), do: missing_tenant("check")
 
-  # `check/3` at an explicit instant, for tests that pin a claim to a
-  # window's edge; a running cell takes the instant from its own clock.
-  @doc false
-  @spec claim_at(Prima.Actor.t(), String.t(), map() | nil, DateTime.t()) :: verdict()
-  def claim_at(
-        %Prima.Actor{athanor_id: athanor_id} = actor,
-        bucket,
-        limit_source,
-        %DateTime{} = now
-      )
-      when is_binary(athanor_id) and athanor_id != "" do
-    case consented(limit_source) do
-      :unlimited ->
-        {:ok, :unlimited}
-
-      :invalid ->
-        {:error, :rate_limited, 0}
-
-      {cap, window_ms} ->
-        verdict(Arca.RateWindows.claim_at(actor, bucket, cap, window_ms, now))
-    end
-  end
-
-  def claim_at(%Prima.Actor{}, _bucket, _limit_source, _now), do: missing_tenant("check")
-
-  @doc """
-  Forget the bucket's window: the next claim opens a fresh one.
-  Administrative, and what a test uses to start a bucket from nothing.
-  """
-  @spec reset(Prima.Actor.t(), String.t()) ::
-          :ok | {:error, :missing_tenant} | {:error, :unavailable}
-  def reset(%Prima.Actor{athanor_id: athanor_id} = actor, bucket)
-      when is_binary(athanor_id) and athanor_id != "" do
-    case Arca.RateWindows.clear(actor, bucket) do
-      :ok -> :ok
-      {:error, reason} -> unavailable(reason, "reset")
-    end
-  end
-
-  def reset(%Prima.Actor{}, _bucket), do: missing_tenant("reset")
-
   @doc """
   What the bucket reads now, counting nothing: `{:ok, used, remaining,
   window_ms}`, or `{:ok, :unlimited}` when no limit is configured.

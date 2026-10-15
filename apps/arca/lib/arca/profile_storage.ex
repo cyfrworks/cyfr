@@ -3,43 +3,20 @@
 
 defmodule Arca.ProfileStorage do
   @moduledoc """
-  Persistence mechanics for profiles. Validation and consent semantics
-  live in the identity domain above, which is the only caller. Every
-  function but `put/1` takes the `Prima.Actor` first and matches it in the
-  head, refusing an actor whose athanor is nil or the empty string with
-  `{:error, :no_athanor}` before any query. Every read and
-  write is keyed by the owning athanor.
+  Persistence mechanics for existing profiles: reads, status changes and
+  head advances. A profile row is minted only with its first consent
+  revision (`Arca.ConsentStorage.mint_profile_with_revision/4`).
+  Validation and consent semantics live above, in Sanctum's consent
+  domain and `Arca.ConsentStorage`, which call this module beside the
+  entry stores that change a profile's status. Every function takes the
+  `Prima.Actor` first and matches it in the head, refusing an actor whose
+  athanor is nil or the empty string with `{:error, :no_athanor}` before
+  any query. Every read and write is keyed by the owning athanor.
   """
 
   import Ecto.Query
 
   alias Arca.Schemas.Profile
-
-  @spec put(map()) :: {:ok, map()} | {:error, term()}
-  # arca:unscoped-ok the athanor arrives in attrs and its absence fails loudly two lines down.
-  def put(attrs) when is_map(attrs) do
-    Arca.Repo.Errors.with_db_rescue("Arca.ProfileStorage.put", fn ->
-      # A profile without an athanor is a construction bug — fail here, not
-      # at the NOT NULL constraint.
-      _ = Map.fetch!(attrs, :athanor_id)
-      row = Map.put_new(attrs, :id, Prima.UUID7.generate_id("prof"))
-
-      # The schema's changeset holds the row to the profile vocabulary and
-      # carries the active-identity index (a bare struct insert declares no
-      # constraint, so a race raised past the db-error rescue). A label
-      # refusal keeps the typed shape the consent verbs answer with.
-      case Arca.Repo.insert(Profile.changeset(%Profile{}, row)) do
-        {:error, %Ecto.Changeset{errors: errors}} = refusal ->
-          if Keyword.has_key?(errors, :label),
-            do: {:error, {:invalid_label, Map.get(row, :label)}},
-            else: refusal
-
-        result ->
-          result
-      end
-    end)
-    |> Arca.Data.project()
-  end
 
   @spec get(Prima.Actor.t(), String.t()) ::
           {:ok, map()} | {:error, :no_athanor | :not_found | :database_error}
