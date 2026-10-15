@@ -147,50 +147,22 @@ cleanup() {
   fi
   exit "$code"
 }
-# The cells whose log a failed run prints, and the token it must not
-# show, named before the trap reads them.
-CELL="" ORIGIN="" COPY="" token=""
+# The cells whose log a failed run prints, named before the trap reads
+# them.
+CELL="" ORIGIN="" COPY=""
 trap cleanup EXIT
 
 # How many of a server's last log lines a failed run prints.
 LOG_TAIL_LINES=200
 
 # The last LOG_TAIL_LINES lines of cell `$1`'s server log on stderr, for a
-# run that failed, so the failure carries what the server said. Nothing
-# the run holds secret is printed: every value of the cell's deployment
-# file and keyring that is a key, a root or a URL, and the session token,
-# are taken out where they appear, and so are a bearer credential, the
-# value assigned to any credential's name and a URL's userinfo.
+# run that failed, so the failure carries what the server said, redacted
+# (`redact_log`).
 log_tail() {
   local cell="$1"
-  [ -f "$cell/boot.log" ] || return 0
   echo "----- the last $LOG_TAIL_LINES lines of $cell/boot.log -----" >&2
-  tail -n "$LOG_TAIL_LINES" "$cell/boot.log" | REDACT_CELL="$cell" REDACT_TOKEN="$token" python3 -I -c '
-import json, os, re, sys
-cell = os.environ["REDACT_CELL"]
-secrets = [os.environ["REDACT_TOKEN"]]
-try:
-    for line in open(os.path.join(cell, ".env")):
-        name, _, value = line.rstrip("\n").partition("=")
-        if re.search(r"KEY|SECRET|ROOT|PASSWORD|TOKEN|URL", name):
-            secrets.append(value)
-except OSError:
-    pass
-try:
-    keyring = open(os.path.join(cell, "keyring.json")).read()
-    secrets += [keyring.strip()] + list(json.loads(keyring).get("keys", {}).values())
-except (OSError, ValueError, AttributeError):
-    pass
-secrets = sorted({s for s in secrets if len(s) >= 8}, key=len, reverse=True)
-bearer = re.compile(r"(?i)(\bbearer\s+)\S+")
-named = re.compile(r"(?i)((?:authorization|secret|key_base|password|passwd|database_url|keyring|token|cookie)[\w.-]*\x22?\s*[:=>]+\s*\x22?)(?:(?:basic|bearer|digest)\s+)?[^\s,\x22}]+")
-userinfo = re.compile(r"(\w+://)[^/@\s]+@")
-for line in sys.stdin:
-    for secret in secrets:
-        line = line.replace(secret, "[redacted]")
-    line = bearer.sub(r"\1[redacted]", named.sub(r"\1[redacted]", line))
-    sys.stdout.write(userinfo.sub(r"\1[redacted]@", line))
-' >&2 || echo "(the log could not be printed)" >&2
+  tail -n "$LOG_TAIL_LINES" "$cell/boot.log" | redact_log "$cell" >&2 ||
+    echo "(the log could not be redacted, so it is not printed)" >&2
 }
 
 release_build
@@ -218,7 +190,7 @@ echo "GET /api/health/ready -> 200 $(cat "$CELL/ready.json")"
 step "the boot migrated the schema itself"
 if ! grep -q "== Migrated" "$CELL/boot.log"; then
   echo "::error::the boot log does not report a migration it ran" >&2
-  cat "$CELL/boot.log" >&2
+  redact_log "$CELL" <"$CELL/boot.log" >&2 || echo "(the log could not be redacted, so it is not printed)" >&2
   exit 1
 fi
 grep -E "== (Running|Migrated)" "$CELL/boot.log"
@@ -249,13 +221,13 @@ set -e
 
 if [ "$status" -eq 0 ]; then
   echo "::error::the release booted with the wildcard CORS allowlist and authentication configured" >&2
-  cat "$REFUSAL_LOG" >&2
+  redact_log "$CELL" <"$REFUSAL_LOG" >&2 || echo "(the log could not be redacted, so it is not printed)" >&2
   exit 1
 fi
 
 if ! grep -q "CORS wildcard" "$REFUSAL_LOG"; then
   echo "::error::the refused boot did not name the CORS wildcard" >&2
-  cat "$REFUSAL_LOG" >&2
+  redact_log "$CELL" <"$REFUSAL_LOG" >&2 || echo "(the log could not be redacted, so it is not printed)" >&2
   exit 1
 fi
 
@@ -289,6 +261,7 @@ person="$(server_fixture "$ORIGIN" person operator@example.com release-boot-back
 [ -n "$person" ] || fail "the fixture signed nobody in"
 user_id="$(field "$person" user_id)"
 token="$(field "$person" token)"
+LOG_SECRETS+=("$token")
 
 TINCTURE_DIR="$WORK/tincture"
 mkdir -p "$TINCTURE_DIR"

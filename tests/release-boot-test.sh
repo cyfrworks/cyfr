@@ -6,11 +6,12 @@
 # built and no browser runs. The reuse of a built release
 # (tests/release-boot/release.sh `release_build`, RELEASE_BOOT_SKIP_BUILD=1)
 # against a git tree of the test's own; the readiness window of
-# `server_start` against a listener that accepts and never answers; the
-# identity front's readiness (tests/identity-proof/front.sh) against a
-# stranger answering on its address, with `docker` a stand-in; and the one
-# redaction (tests/browser/lib.mjs `redact`) against a vector of every
-# pattern the proofs' former copies masked, run by node.
+# `server_start` against a listener that accepts and never answers, and
+# the redaction of the boot log it prints; the identity front's readiness
+# (tests/identity-proof/front.sh) against a stranger answering on its
+# address, with `docker` a stand-in; and the one redaction
+# (tests/browser/lib.mjs `redact`) against a vector of every pattern the
+# proofs' former copies masked, run by node.
 set -euo pipefail
 root=$(cd "$(dirname "$0")/.." && pwd)
 scratch=$(mktemp -d /tmp/cyfr-release-boot-test.XXXXXX)
@@ -247,14 +248,27 @@ pass "a build that writes digested copies and .gz into the ignored paths is reco
 # --- the readiness window ------------------------------------------------------
 
 # A release whose `start` holds a listener on the cell's port that accepts
-# and never answers, and whose `stop` ends it.
+# and never answers, and whose `stop` ends it. Its log first writes every
+# secret the cell holds, and a bearer credential, which the failure's dump
+# of that log must not show.
 port=$(free_port)
 mkdir -p "$scratch/cell"
-printf 'CYFR_PORT=%s\n' "$port" >"$scratch/cell/.env"
+{
+  printf 'CYFR_PORT=%s\n' "$port"
+  echo "CYFR_SECRET_KEY_BASE=key-base-Q7w9e2r4t6y8u0i1o3p5"
+  echo "CYFR_LOCUS_BACKENDS_KEY=backends-key-5f1e9d3c7b"
+  echo "CYFR_DATABASE_URL=postgres://cyfr:db-pass-8642@localhost:5432/cyfr_x"
+} >"$scratch/cell/.env"
+printf '{"primary":"k1","keys":{"k1":"keyring-key-A1b2C3d4E5f6="}}' >"$scratch/cell/keyring.json"
 cat >"$scratch/build/rel/cyfr/bin/cyfr" <<SH
 #!/usr/bin/env bash
 case "\$1" in
-  start) echo \$\$ >"\$PWD/stub.pid"; exec python3 "$scratch/serve.py" hang 127.0.0.1 "\$CYFR_PORT" ;;
+  start)
+    echo "key base \$CYFR_SECRET_KEY_BASE, backends \$CYFR_LOCUS_BACKENDS_KEY"
+    echo "repo at \$CYFR_DATABASE_URL, password db-pass-8642"
+    echo "keyring \$CYFR_CRYPTO_KEYRING, key keyring-key-A1b2C3d4E5f6="
+    echo "authorization: Bearer bearer-cred-9753"
+    echo \$\$ >"\$PWD/stub.pid"; exec python3 "$scratch/serve.py" hang 127.0.0.1 "\$CYFR_PORT" ;;
   stop) kill "\$(cat "\$PWD/stub.pid")" 2>/dev/null; exit 0 ;;
 esac
 SH
@@ -267,11 +281,16 @@ took=$((SECONDS - started))
 [ "$status" = 1 ] || { cat "$scratch/out" >&2; fail "a listener that never answers ended server_start with $status, not 1"; }
 has "did not answer /api/health/ready on 127.0.0.1:$port within ${ready}s" "the failure names the port and the window"
 has "cell $scratch/cell" "the failure names the cell"
+has "----- boot log of cell $scratch/cell -----" "the failure prints the boot log"
+has "[secret]" "the boot log's secrets are masked"
+for secret in key-base-Q7w9e2r4t6y8u0i1o3p5 backends-key-5f1e9d3c7b db-pass-8642 keyring-key-A1b2C3d4E5f6 bearer-cred-9753; do
+  if grep -qF -- "$secret" "$scratch/out"; then cat "$scratch/out" >&2; fail "the failed start's boot log shows $secret"; fi
+done
 # The window, one probe, and the stop of a listener that ends on `stop`.
 [ "$took" -le $((ready + probe + 5)) ] || fail "server_start gave up after ${took}s, past ${ready}s and one ${probe}s probe"
 if accepts 127.0.0.1 "$port" 2>/dev/null; then fail "a listener outlived the failed start on $port"; fi
 if kill -0 "$(cat "$scratch/cell/stub.pid")" 2>/dev/null; then fail "the started server outlived the failed start"; fi
-pass "a listener that never answers fails server_start in ${took}s, naming the cell and port, and leaves no server"
+pass "a listener that never answers fails server_start in ${took}s, naming the cell and port, printing its log with no secret of the cell's, and leaves no server"
 
 # --- the identity front's readiness -----------------------------------------
 

@@ -27,6 +27,8 @@
 # reuses the release a previous run built from the same tree.
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+# The proofs' one redaction (`redact_log`), named from this checkout.
+REDACTION="$ROOT/tests/browser/lib.mjs"
 PORT="${RELEASE_BOOT_PORT:-4399}"
 HOST_API_PORT="${RELEASE_BOOT_HOST_API_PORT:-4398}"
 READY_TIMEOUT="${RELEASE_BOOT_READY_TIMEOUT:-180}"
@@ -303,6 +305,51 @@ cell_pending() {
     | sed -n 's/^PENDING=//p' | tail -1
 }
 
+# Values a log of this run must not show beside the ones its cells hold,
+# such as a session token a proof was given; a sourcing script appends to
+# it.
+LOG_SECRETS=()
+
+# Standard input on standard output with nothing cell `$1` or the run
+# holds secret, through the proofs' one redaction (REDACTION's `redact`):
+# it is given every value of the cell's deployment file whose
+# name says key, secret, root, password, token or URL, the password such a
+# URL carries, the cell's keyring and each of its keys, and LOG_SECRETS,
+# and it masks a bearer credential and the values its rules name. The
+# values travel in the environment, never on a command line. A log that
+# cannot be redacted is not printed: the function fails instead.
+redact_log() {
+  local cell="$1"
+  REDACT_CELL="$cell" REDACT_LIB="$REDACTION" \
+    REDACT_SECRETS="$(printf '%s\n' ${LOG_SECRETS[@]+"${LOG_SECRETS[@]}"})" \
+    node --input-type=module -e '
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+import { pathToFileURL } from "node:url";
+const { redact } = await import(pathToFileURL(process.env.REDACT_LIB).href);
+const read = (name) => { try { return readFileSync(join(process.env.REDACT_CELL, name), "utf8"); } catch { return ""; } };
+const secrets = process.env.REDACT_SECRETS.split("\n");
+for (const line of read(".env").split("\n")) {
+  const at = line.indexOf("=");
+  if (at < 0 || !/KEY|SECRET|ROOT|PASSWORD|TOKEN|URL/.test(line.slice(0, at))) continue;
+  const value = line.slice(at + 1);
+  secrets.push(value);
+  try {
+    const { password } = new URL(value);
+    if (password) secrets.push(password, decodeURIComponent(password));
+  } catch {}
+}
+const keyring = read("keyring.json").trim();
+if (keyring) {
+  secrets.push(keyring);
+  try { secrets.push(...Object.values(JSON.parse(keyring).keys ?? {})); } catch {}
+}
+// Longest first, so a value that holds another goes whole.
+const known = [...new Set(secrets)].filter((s) => typeof s === "string" && s.length >= 4).sort((a, b) => b.length - a.length);
+process.stdout.write(redact(readFileSync(0, "utf8"), known));
+'
+}
+
 # ---------------------------------------------------------------------------
 # A server
 # ---------------------------------------------------------------------------
@@ -311,7 +358,7 @@ cell_pending() {
 # /api/health/ready on the cell's own listener, the readiness check the
 # image's HEALTHCHECK runs; the log is `$cell/boot.log` (appended). A boot
 # that raises, exits or never answers fails here, naming the cell, with its
-# whole log, and leaves no server behind. The window is READY_TIMEOUT
+# whole log redacted (`redact_log`), and leaves no server behind. The window is READY_TIMEOUT
 # seconds of wall clock: each probe is bounded (READY_PROBE_SECONDS), and
 # none starts once the window has closed, so a listener that accepts and
 # never answers costs the window and one probe at most.
@@ -354,7 +401,8 @@ server_start() {
 
   if [ "$ready" != yes ]; then
     echo "----- boot log of cell $cell -----" >&2
-    tail -n "+$((mark + 1))" "$log" >&2
+    tail -n "+$((mark + 1))" "$log" | redact_log "$cell" >&2 ||
+      echo "(the boot log could not be redacted, so it is not printed)" >&2
     if [ -n "$died" ]; then
       echo "::error::the $ADAPTER release of cell $cell exited while booting, without answering /api/health/ready on 127.0.0.1:$port" >&2
     else
