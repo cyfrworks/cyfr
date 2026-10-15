@@ -10,16 +10,16 @@
 # Each DIGEST is one platform's build as pushed: an index holding the
 # platform image and its provenance attestation, or a bare image manifest.
 # Together they must be exactly one linux/amd64 and one linux/arm64 image.
-# The script creates IMAGE:VERSION and IMAGE:latest from IMAGE@DIGEST for
-# both, then reads IMAGE:VERSION back and prints that manifest's own digest
-# on stdout, the one the attestation names. The read goes through the
-# version tag, never :latest, which a later release moves. The manifests
-# the published index lists, with their platforms, must be exactly the
-# ones the given digests hold: one missing, added or moved to another
-# platform fails the script and prints nothing.
+# The script creates IMAGE:VERSION alone from IMAGE@DIGEST for both and
+# reads it back through that tag, never :latest, which a later release
+# moves. The manifests the index lists, with their platforms, must be
+# exactly the ones the given digests hold: one missing, added or moved to
+# another platform fails the script, prints nothing and leaves :latest
+# where it was. Only the verified index moves :latest, by its digest, and
+# its digest is printed on stdout, the one the attestation names.
 #
-# Exit status: 0 published, 1 the platforms or the published manifest are
-# not the ones given, 64 usage, 69 docker buildx or jq missing.
+# Exit status: 0 published, 1 the platforms, the published manifest or
+# :latest are not the ones given, 64 usage, 69 docker buildx or jq missing.
 set -euo pipefail
 
 usage() {
@@ -75,7 +75,7 @@ fi
 
 sources=()
 for digest in "$@"; do sources+=("$image@$digest"); done
-docker buildx imagetools create --tag "$image:$version" --tag "$image:latest" "${sources[@]}" >&2
+docker buildx imagetools create --tag "$image:$version" "${sources[@]}" >&2
 
 # One read gives both the digest printed and the list checked, so they
 # describe the same manifest.
@@ -91,6 +91,15 @@ if [ "$listed" != "$given" ]; then
   echo "$0: $image:$version ($published) is not the manifest of the digests given" >&2
   echo "  given:" $given >&2
   echo "  listed:" $listed >&2
+  exit 1
+fi
+
+# By digest, so :latest names the index just verified whatever the version
+# tag names by now.
+docker buildx imagetools create --tag "$image:latest" "$image@$published" >&2
+latest=$(docker buildx imagetools inspect "$image:latest" --format '{{json .Manifest}}' | jq -r '.digest')
+if [ "$latest" != "$published" ]; then
+  echo "$0: $image:latest names $latest, not the published $published" >&2
   exit 1
 fi
 

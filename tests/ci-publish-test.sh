@@ -300,6 +300,7 @@ shim "$scratch/shim-interleave" '^buildx imagetools inspect [^ ]+ --format' \
 PATH="$scratch/shim-interleave:$PATH" run_script "$merge" "$reg/publish" 1.0.0 "$a_amd64" "$a_arm64"
 a_code=$code
 a_printed=$(cat "$scratch/out")
+a_latest=$(digest_of "$reg/publish:latest")
 cp "$scratch/err" "$scratch/err-a"
 run_script "$merge" "$reg/publish" 1.0.1 "$b_amd64" "$b_arm64"
 b_code=$code
@@ -341,6 +342,11 @@ if is_digest "$a_printed" "$b_printed" && [ "$a_printed" = "$a_tag" ] && [ "$b_p
   pass "$label"
 else
   fail "$label" "A printed '$a_printed', 1.0.0 names $a_tag" "B printed '$b_printed', 1.0.1 names $b_tag"
+fi
+
+label="A's merge points latest at the index it verified, by that digest"
+if is_digest "$a_printed" && [ "$a_latest" = "$a_printed" ]; then pass "$label"; else
+  fail "$label" "A printed '$a_printed', latest named $a_latest after A's merge"
 fi
 
 label="neither printed digest is the other run's"
@@ -411,19 +417,23 @@ fi
 
 # As a second run of the same version would: the tag names B's images, or
 # only one of A's own, when the script reads it back. The script must
-# refuse and print nothing.
+# refuse, print nothing and leave :latest where it was.
 moved_case() {
   local version=$1 description=$2
   shift 2
   shim "$scratch/shim-moved-$version" "^buildx imagetools inspect $reg/publish:${version//./\\.} --format" \
     buildx imagetools create --tag "$reg/publish:$version" "$@"
-  label="a version tag moved to $description is refused, and no digest is printed"
+  label="a version tag moved to $description is refused, no digest is printed and latest stays"
+  latest_before=$(digest_of "$reg/publish:latest")
   PATH="$scratch/shim-moved-$version:$PATH" run_script "$merge" "$reg/publish" "$version" "$a_amd64" "$a_arm64"
+  latest_after=$(digest_of "$reg/publish:latest")
   if [ "$code" = 1 ] && [ -d "$scratch/shim-moved-$version/fired" ] && [ ! -s "$scratch/out" ] &&
-    grep -qF 'is not the manifest of the digests given' "$scratch/err"; then
+    grep -qF 'is not the manifest of the digests given' "$scratch/err" &&
+    is_digest "$latest_before" && [ "$latest_after" = "$latest_before" ]; then
     pass "$label"
   else
-    fail "$label" "exit $code" "stdout: $(cat "$scratch/out")" "stderr: $(tr '\n' ' ' < "$scratch/err")"
+    fail "$label" "exit $code" "stdout: $(cat "$scratch/out")" "stderr: $(tr '\n' ' ' < "$scratch/err")" \
+      "latest before $latest_before, after $latest_after"
   fi
 }
 moved_case 1.0.2 "another run's images" "$reg/publish@$b_amd64" "$reg/publish@$b_arm64"
@@ -436,9 +446,11 @@ refused_case() {
   local want=$1 description=$2 version=$3
   shift 3
   label="refused before publishing: $description"
+  latest_before=$(digest_of "$reg/publish:latest")
   run_script "$merge" "$reg/publish" "$version" "$@"
   if [ "$code" = "$want" ] && [ ! -s "$scratch/out" ] &&
-    ! docker buildx imagetools inspect "$reg/publish:$version" > /dev/null 2>&1; then
+    ! docker buildx imagetools inspect "$reg/publish:$version" > /dev/null 2>&1 &&
+    is_digest "$latest_before" && [ "$(digest_of "$reg/publish:latest")" = "$latest_before" ]; then
     pass "$label"
   else
     fail "$label" "exit $code, want $want" "stdout: $(cat "$scratch/out")"
