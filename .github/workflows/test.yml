@@ -11,7 +11,9 @@ on:
       - 'mix.lock'
       # The formatting check reads it.
       - '.formatter.exs'
-      # Every workflow: the drift test reads release.yml and the retired-
+      # Every workflow: the drift test, the tag pipeline's graph check
+      # (tests/ci-release-graph.py) and its publication test
+      # (tests/ci-publish-test.sh) read release.yml, and the retired-
       # settings test scans them all; the image scans read .trivyignore.yaml
       # and trivy-secret.yaml.
       - '.github/workflows/*.yml'
@@ -60,7 +62,9 @@ on:
       - 'mix.lock'
       # The formatting check reads it.
       - '.formatter.exs'
-      # Every workflow: the drift test reads release.yml and the retired-
+      # Every workflow: the drift test, the tag pipeline's graph check
+      # (tests/ci-release-graph.py) and its publication test
+      # (tests/ci-publish-test.sh) read release.yml, and the retired-
       # settings test scans them all; the image scans read .trivyignore.yaml
       # and trivy-secret.yaml.
       - '.github/workflows/*.yml'
@@ -125,7 +129,7 @@ jobs:
   static:
     name: Static checks, generated files, fixtures and harness tests
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    timeout-minutes: 100
     env:
       CYFR_DATABASE: sqlite
     steps:
@@ -335,6 +339,28 @@ jobs:
       # proofs themselves run in the browser job.
       - name: The release proofs' shared plumbing
         run: bash tests/release-boot-test.sh
+      # The image suites' shared plumbing without Docker: teardown on a
+      # signal, the namespace prerequisite and no bytecode under tests/.
+      - name: The image suites' shared plumbing
+        run: python3 -I tests/imagesuite_test.py
+      # The tag pipeline publishes nothing unless every check passed: its
+      # graph read from release.yml, then mutants of it, each refused.
+      # It reads YAML through PyYAML, which -I finds only among the system
+      # interpreter's packages: the package is installed when absent, and a
+      # missing module fails the import loudly rather than skipping a check.
+      - name: The tag pipeline's graph
+        run: |
+          set -euo pipefail
+          if ! python3 -I -c 'import yaml' 2>/dev/null; then
+            sudo apt-get update
+            sudo apt-get install -y python3-yaml
+          fi
+          python3 -I tests/ci-release-graph.py
+      # release.yml's image publication against a local registry: one build
+      # per platform, the scanned image the pushed one, and each run's
+      # manifest merged from its own digests while another run interleaves.
+      - name: The tag pipeline's image publication
+        run: bash tests/ci-publish-test.sh
 
   test:
     name: Elixir Tests (${{ matrix.db }})
@@ -927,9 +953,10 @@ jobs:
       # exactly that bound while the container's limit is untouched, the
       # exit reported with every child's attempt, the uid emptied and
       # scrubbed before its reuse and the sibling completing, and without
-      # writable-cgroups=true no runner process ever starting. Each case observed as the service detects it, as the
-      # control plane records it and as the container's processes, uids,
-      # homes, groups, memory and CPU show it.
+      # writable-cgroups=true no runner process ever starting. Each case is
+      # observed as the service detects it, as the control plane records it
+      # and as the container's processes, uids, homes, groups, memory and
+      # CPU show it.
       - name: Runner kills, memory bound, settlement and cleanup
         run: python3 tests/locus-runtime-image/runners.py cyfr-locus:runtime
       # Each runner in a user and network namespace of its own, with no
