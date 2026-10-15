@@ -1,25 +1,229 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 CYFR Works Inc.
+
+# The one workflow a release tag starts. It verifies the tagged commit once,
+# with every check a change to main runs, and publishes nothing unless all
+# six pass: the CLI release and its provenance, and the cyfr and cyfr-locus
+# images.
 name: Release
 on:
   push:
     tags: ['[0-9]+.[0-9]+.[0-9]+']
 
 permissions:
-  contents: write
-  id-token: write
-  attestations: write
+  contents: read
+
+# A second run of one tag waits for the first instead of cancelling it, so
+# a publication is never cut off between its pushes and its manifest.
+# GitHub keeps one pending run per group: a pending run is cancelled when a
+# newer one queues behind it.
+concurrency:
+  group: publish-${{ github.ref }}
+  cancel-in-progress: false
 
 env:
+  REGISTRY: ghcr.io/cyfrworks
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
-  # Require tests on the tagged commit before building release artifacts.
-  verify:
+  # The verification: each called workflow bounds its own jobs.
+  test:
     if: github.repository == 'cyfrworks/cyfr'
     uses: ./.github/workflows/test.yml
 
-  release:
-    needs: verify
+  dialyzer:
     if: github.repository == 'cyfrworks/cyfr'
+    uses: ./.github/workflows/dialyzer.yml
+
+  codex-ci:
+    if: github.repository == 'cyfrworks/cyfr'
+    uses: ./.github/workflows/codex-ci.yml
+
+  keeper-ci:
+    if: github.repository == 'cyfrworks/cyfr'
+    uses: ./.github/workflows/keeper-ci.yml
+
+  license-lint:
+    if: github.repository == 'cyfrworks/cyfr'
+    uses: ./.github/workflows/license-lint.yml
+
+  security:
+    if: github.repository == 'cyfrworks/cyfr'
+    uses: ./.github/workflows/security.yml
+
+  # The app image and the Locus image, which serves the runtime, the builds
+  # and the backends service: every deploy pulls both, and a project
+  # `cyfr init` writes carries no sources to build them from.
+  #
+  # One build per image and platform. It loads the image for the scan and
+  # pushes the same result by digest alone: no tag names it, so a digest
+  # whose scan fails stays where no version or `latest` reaches it, and a
+  # concurrent run cannot move what this run merges.
+  images:
+    needs: [test, dialyzer, codex-ci, keeper-ci, license-lint, security]
+    if: github.repository == 'cyfrworks/cyfr'
+    # No successful run has built cyfr-locus yet to bound it by.
+    timeout-minutes: 90
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      matrix:
+        image: [cyfr, cyfr-locus]
+        platform: [linux/amd64, linux/arm64]
+        include:
+          - platform: linux/amd64
+            runner: ubuntu-latest
+          - platform: linux/arm64
+            runner: ubuntu-24.04-arm
+          - image: cyfr
+            file: Dockerfile
+          - image: cyfr-locus
+            file: Dockerfile.locus
+            apt-refresh: true
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      - name: Log in to GHCR
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # APT_REFRESH is the UTC date, so the Locus upgrade layer refreshes
+      # daily and is shared by every build of one day.
+      - name: Extract metadata
+        id: meta
+        env:
+          PLATFORM: ${{ matrix.platform }}
+          APT: ${{ matrix.apt-refresh }}
+        run: |
+          echo "arch=${PLATFORM#linux/}" >> "$GITHUB_OUTPUT"
+          if [ "$APT" = true ]; then
+            echo "build-args=APT_REFRESH=$(date -u +%F)" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Build
+        id: build
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          file: ${{ matrix.file }}
+          platforms: ${{ matrix.platform }}
+          build-args: ${{ steps.meta.outputs.build-args }}
+          # The action drops its max-mode default when an output loads the
+          # image; the published attestation keeps the build's config,
+          # builder id and sources.
+          provenance: mode=max
+          outputs: |
+            type=docker,name=cyfr-scan/${{ matrix.image }}:${{ steps.meta.outputs.arch }}
+            type=image,name=${{ env.REGISTRY }}/${{ matrix.image }},push-by-digest=true,name-canonical=true,push=true
+          cache-from: type=gha,scope=${{ matrix.image }}-${{ steps.meta.outputs.arch }}
+          cache-to: type=gha,scope=${{ matrix.image }}-${{ steps.meta.outputs.arch }},mode=max
+
+      # A fixable HIGH or CRITICAL finding fails the release. The findings
+      # .trivyignore.yaml lists are npm's bundled dependencies, which the
+      # Locus image runs for tincture builds and for the stdio backends it
+      # serves. The scan reads the loaded image alone: a name missing from
+      # the daemon fails instead of being fetched from a registry.
+      - name: Scan the image
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        env:
+          TRIVY_IMAGE_SRC: docker
+        with:
+          version: v0.75.0
+          image-ref: cyfr-scan/${{ matrix.image }}:${{ steps.meta.outputs.arch }}
+          format: table
+          exit-code: '1'
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+          trivyignores: .trivyignore.yaml
+
+      - name: The scanned image is the pushed one
+        env:
+          SCANNED: cyfr-scan/${{ matrix.image }}:${{ steps.meta.outputs.arch }}
+          PUSHED: ${{ env.REGISTRY }}/${{ matrix.image }}
+          DIGEST: ${{ steps.build.outputs.digest }}
+          ARCH: ${{ steps.meta.outputs.arch }}
+        run: |
+          scripts/ci/scanned-is-pushed.sh "$SCANNED" "$PUSHED" "$DIGEST"
+          mkdir -p digest
+          echo "$DIGEST" > "digest/$ARCH"
+
+      - name: Upload the digest
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: digest-${{ matrix.image }}-${{ steps.meta.outputs.arch }}
+          path: digest/${{ steps.meta.outputs.arch }}
+          if-no-files-found: error
+          retention-days: 1
+
+  # Each image's multi-arch manifest, made from this run's scanned digests
+  # alone, and attested by the digest of the manifest the version tag names.
+  merge:
+    needs: images
+    if: github.repository == 'cyfrworks/cyfr'
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
+    strategy:
+      matrix:
+        image: [cyfr, cyfr-locus]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Log in to GHCR
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # By exact name: cyfr is a prefix of cyfr-locus.
+      - name: Download the amd64 digest
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: digest-${{ matrix.image }}-amd64
+          path: digests
+
+      - name: Download the arm64 digest
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: digest-${{ matrix.image }}-arm64
+          path: digests
+
+      - name: Create and push the multi-arch manifest
+        id: manifest
+        env:
+          IMAGE: ${{ env.REGISTRY }}/${{ matrix.image }}
+        run: |
+          digest=$(scripts/ci/merge-image.sh "$IMAGE" "${GITHUB_REF_NAME#v}" "$(cat digests/amd64)" "$(cat digests/arm64)")
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3
+        with:
+          subject-name: ${{ env.REGISTRY }}/${{ matrix.image }}
+          subject-digest: ${{ steps.manifest.outputs.digest }}
+          push-to-registry: true
+
+  # The CLI's release and its provenance.
+  release:
+    needs: [test, dialyzer, codex-ci, keeper-ci, license-lint, security]
+    if: github.repository == 'cyfrworks/cyfr'
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
     runs-on: ubuntu-latest
     outputs:
       hashes: ${{ steps.hash.outputs.hashes }}
