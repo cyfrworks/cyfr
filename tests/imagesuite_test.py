@@ -4,13 +4,17 @@
 """The image suites' shared plumbing, without Docker: a suite that TERM or INT
 stops tears its stacks and temporary directories down, a second signal does
 not cut that teardown short, the runtime suite's namespace prerequisite
-refuses the hosts it names and passes the others, and no entry script writes
-bytecode for anything under tests/, whatever cache is already there.
+refuses the hosts it names and passes the others, the runtime stack waits
+out a restart Docker reports running before the container is started again
+and a port compose publishes late, and fails within its bound where either
+never comes, and no entry script writes bytecode for anything under tests/,
+whatever cache is already there.
 
 Usage: python3 -I tests/imagesuite_test.py
 """
 
 import glob
+import http.server
 import json
 import os
 import shutil
@@ -18,8 +22,10 @@ import signal
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import unittest
+from unittest import mock
 
 sys.dont_write_bytecode = True
 TESTS = os.path.dirname(os.path.abspath(__file__))
@@ -164,6 +170,106 @@ class NamespacePrerequisite(unittest.TestCase):
         ]
         for limit, restrict, options in allowed:
             self.assertIsNone(self.refusal(limit, restrict, options), (limit, restrict, options))
+
+
+class RuntimeRestart(unittest.TestCase):
+    """The runtime stack's restart wait and listener wait, against Docker's answers as a restart gives them."""
+
+    @classmethod
+    def setUpClass(cls):
+        sys.path.insert(0, os.path.join(TESTS, "locus-runtime-image"))
+        import stack
+        cls.module = stack
+
+    def inspection(self, status, restarts, port):
+        # `docker inspect` of a container its restart policy restarts: from
+        # its process's exit until it is started again Docker reports it
+        # running and restarting, its restart counted, with no port.
+        state = {"Status": status, "Running": status in ("running", "restarting"), "Restarting": status == "restarting",
+                 "StartedAt": "2026-10-15T09:42:51Z"}
+        ports = {f"{self.module.PORT}/tcp": [{"HostIp": "127.0.0.1", "HostPort": str(port)}]} if port else {}
+        return json.dumps([{"State": state, "RestartCount": restarts, "NetworkSettings": {"Ports": ports}}])
+
+    def fake(self, inspections=(), ports=()):
+        """A runtime stack whose Docker answers `inspections` in turn and whose compose answers `ports` in turn."""
+        module, test = self.module, self
+        inspected, published = list(inspections), list(ports)
+
+        class Fake(module.Stack):
+            def compose(self, *args, check=True):
+                if args[0] == "port":
+                    answer = published.pop(0) if len(published) > 1 else published[0]
+                    return subprocess.CompletedProcess(args, 0 if answer else 1, f"{answer}\n" if answer else "",
+                                                       "" if answer else f"no port {module.PORT}/tcp for container test-1\n")
+                return subprocess.CompletedProcess(args, 0, "", "")
+
+            def logs(self):
+                return "the service's log\n"
+
+            def status(self):
+                return 200, {"ok": {"boot": "boot_after"}}
+
+        def run(*args, **_options):
+            test.assertEqual(args[:2], ("docker", "inspect"))
+            answer = inspected.pop(0) if len(inspected) > 1 else inspected[0]
+            return subprocess.CompletedProcess(args, 0, answer, "")
+
+        patched = mock.patch.object(module, "run", run)
+        patched.start()
+        self.addCleanup(patched.stop)
+        stack = Fake("imagesuite-test", "image", plane=None)
+        self.addCleanup(stack.down)
+        stack.container = "test-1"
+        return stack
+
+    def listener(self):
+        """A listener on the loopback that refuses an unsigned status with 401, as the image's does."""
+        class Refuse(http.server.BaseHTTPRequestHandler):
+            def do_POST(self):
+                self.send_response(401)
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+
+            def log_message(self, *_args):
+                pass
+
+        server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Refuse)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        self.addCleanup(server.server_close)
+        self.addCleanup(server.shutdown)
+        return f"127.0.0.1:{server.server_address[1]}"
+
+    def test_a_restarting_container_is_not_restarted_until_it_runs(self):
+        before = self.inspection("running", 0, 33584)
+        restarting = self.inspection("restarting", 1, None)
+        started = self.inspection("running", 1, 33585)
+        stack = self.fake([before, restarting, restarting, started])
+        state = stack.container_state()
+        self.assertEqual((state["running"], state["restarting"], state["restarts"]), (True, False, 0))
+        restarted = stack.wait_restarted(state, 5)
+        self.assertEqual((restarted["running"], restarted["restarting"], restarted["restarts"]), (True, False, 1))
+
+    def test_a_container_that_never_starts_again_fails_the_restart_wait(self):
+        stack = self.fake([self.inspection("running", 0, 33584), self.inspection("restarting", 1, None)])
+        state = stack.container_state()
+        with self.assertRaises(SystemExit) as failure:
+            stack.wait_restarted(state, 0.5)
+        self.assertIn("the container to restart in place", str(failure.exception))
+
+    def test_the_listener_wait_reads_a_port_published_late(self):
+        address = self.listener()
+        stack = self.fake(ports=[None, None, address])
+        self.assertEqual(stack.wait_listener(timeout=10), {"boot": "boot_after"})
+        self.assertEqual((stack.base, stack.boot), (f"http://{address}", "boot_after"))
+
+    def test_a_port_never_published_fails_the_listener_wait_naming_it(self):
+        stack = self.fake(ports=[None])
+        with self.assertRaises(SystemExit) as failure:
+            stack.wait_listener(timeout=1)
+        message = str(failure.exception)
+        self.assertIn(f"compose never published port {self.module.PORT}", message)
+        self.assertIn(f"no port {self.module.PORT}/tcp for container test-1", message)
+        self.assertIn("the service's log", message)
 
 
 class Bytecode(unittest.TestCase):

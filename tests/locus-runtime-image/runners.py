@@ -823,8 +823,7 @@ def test_service_death(stack, plane):
            f"detection: every runner was retired {ms(gone - t_kill)} ms after the service's VM died (cyfr-locus's lost grace is {LOST_GRACE_S} s)",
            stack.runner_processes())
 
-    restarted = wait_until(lambda: (lambda s: s if s["restarts"] > state["restarts"] and s["running"] else None)(stack.container_state()),
-                           60, "the container to restart")
+    restarted = stack.wait_restarted(state, 60)
     stack.wait_listener()
     expect(stack.boot != old_boot, f"detection: the restarted service is a new boot ({stack.boot}) after restart {restarted['restarts']}", restarted)
     stack.wait_pool()

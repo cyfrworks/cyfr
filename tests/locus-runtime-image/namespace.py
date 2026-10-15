@@ -460,8 +460,7 @@ def test_restart(stack):
     state = stack.container_state()
     beam = stack.service_beam_pid()
     stack.exec(f"kill -9 {beam}")
-    wait_until(lambda: (lambda s: s if s["restarts"] > state["restarts"] and s["running"] else None)(stack.container_state()),
-               60, "the container to restart in place")
+    stack.wait_restarted(state, 60)
     stack.wait_listener()
     logs = stack.logs()
     unavailable = [line for line in logs.splitlines() if "memory bounds are unavailable" in line]

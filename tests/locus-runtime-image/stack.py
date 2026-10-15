@@ -146,11 +146,22 @@ class Stack(imagesuite.Stack):
             self.wait_pool()
 
     def wait_listener(self, timeout=90):
-        """The listener answers an unsigned status 401 (the image's liveness), then a signed one 200."""
-        address = self.compose("port", COMPOSE_SERVICE, str(PORT)).stdout.strip().splitlines()[0]
-        self.base = f"http://{address}"
+        """The listener answers an unsigned status 401 (the image's liveness), then a signed one 200.
+
+        The published port is read within the same deadline until compose
+        names it: a container is given its port only as it starts, so one
+        not yet started has none to name."""
+        self.base = None
+        published = None
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
+            if self.base is None:
+                published = self.compose("port", COMPOSE_SERVICE, str(PORT), check=False)
+                address = published.stdout.strip().splitlines()[0] if published.returncode == 0 and published.stdout.strip() else None
+                if address is None:
+                    time.sleep(0.5)
+                    continue
+                self.base = f"http://{address}"
             try:
                 urllib.request.urlopen(urllib.request.Request(f"{self.base}/worker/v1/status", data=b"{}", method="POST"), timeout=2)
             except urllib.error.HTTPError as error:
@@ -162,6 +173,9 @@ class Stack(imagesuite.Stack):
             except (OSError, ValueError):
                 pass
             time.sleep(0.5)
+        if self.base is None:
+            sys.exit(f"FAIL: compose never published port {PORT} of the {COMPOSE_SERVICE} service within {timeout}s: "
+                     f"`docker compose port` exited {published.returncode}\n{published.stdout}{published.stderr}\n" + self.logs())
         sys.exit(f"FAIL: the {COMPOSE_SERVICE} service never answered its status\n" + self.logs())
 
     def wait_pool(self, timeout=90):
@@ -314,10 +328,24 @@ class Stack(imagesuite.Stack):
         return (after - before) / 1_000_000 / (time.monotonic() - t0)
 
     def container_state(self):
-        raw = run("docker", "inspect", "--format", "{{json .State}}", self.container).stdout
-        state = json.loads(raw)
-        restarts = json.loads(run("docker", "inspect", "--format", "{{.RestartCount}}", self.container).stdout)
-        return {"running": state["Running"], "status": state["Status"], "started_at": state["StartedAt"], "restarts": restarts}
+        """The container's state and restart count, from one inspection so the two describe the same moment."""
+        inspected = json.loads(run("docker", "inspect", self.container).stdout)[0]
+        state = inspected["State"]
+        return {"running": state["Running"], "restarting": state["Restarting"], "status": state["Status"],
+                "started_at": state["StartedAt"], "restarts": inspected["RestartCount"]}
+
+    def wait_restarted(self, before, timeout):
+        """The container's state once its restart policy has started it again after `before`, or a failure.
+
+        Docker counts the restart and reports the container running, with
+        `Restarting` set, from the moment its process exits: the container
+        is started again, and its port published, only after the policy's
+        delay. The restart is done when the count has risen and the
+        container runs without `Restarting`."""
+        return wait_until(
+            lambda: (lambda s: s if s["restarts"] > before["restarts"] and s["running"] and not s["restarting"] else None)(
+                self.container_state()),
+            timeout, "the container to restart in place")
 
 
 class StatusSampler:
