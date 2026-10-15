@@ -907,18 +907,29 @@ defmodule Opus.HostListenerTest do
 
   describe "the bind" do
     # The socket is bound to the address the supervisor names and to no
-    # other: another loopback address on the same port has no listener, so
-    # the kernel refuses the connection while the listener answers on its
-    # own address.
+    # other. The test holds the port on 127.0.0.1 first, as any 127.0.0.1
+    # listener on the host may hold the port a port-0 bind on another
+    # loopback address is given: the listening socket's own address shows
+    # the bind, the held socket answers 127.0.0.1, and 127.0.0.3, which no
+    # test binds, refuses the port.
     @tag skip: @second_loopback_unavailable && "this host cannot bind 127.0.0.2"
-    test "is the address the supervisor names, and no other address answers on its port" do
-      bound = start_supervised!({HostListener, bind: @second_loopback, port: 0}, id: :bound)
-      port = HostListener.port(bound)
+    test "binds only the address the supervisor names" do
+      {:ok, held} = :gen_tcp.listen(0, [:binary, ip: {127, 0, 0, 1}, active: false])
+      {:ok, {_, port}} = :inet.sockname(held)
 
+      bound = start_supervised!({HostListener, bind: @second_loopback, port: port}, id: :bound)
+
+      assert listening_address(bound) == {@second_loopback, port}
       assert {404, _} = post("http://127.0.0.2:#{port}", "/nowhere", [], "", raw: true)
 
       assert {:error, :econnrefused} =
-               :gen_tcp.connect({127, 0, 0, 1}, port, [:binary, active: false], 1_000)
+               :gen_tcp.connect({127, 0, 0, 3}, port, [:binary, active: false], 1_000)
+
+      {:ok, client} = :gen_tcp.connect({127, 0, 0, 1}, port, [:binary, active: false], 1_000)
+      assert {:ok, accepted} = :gen_tcp.accept(held, 1_000)
+      :ok = :gen_tcp.close(accepted)
+      :ok = :gen_tcp.close(client)
+      :ok = :gen_tcp.close(held)
 
       # Still listening on its own address after the refusal.
       assert {:ok, socket} =
@@ -1366,6 +1377,17 @@ defmodule Opus.HostListenerTest do
         {:ok, more} = :gen_tcp.recv(socket, 0, 10_000)
         read_answer(socket, read <> more)
     end
+  end
+
+  # The address and port the listener's socket reports as its own
+  # (`:inet.sockname/1` on the listening socket, as ThousandIsland reads
+  # it once the socket listens).
+  defp listening_address(listener) do
+    {:server, bandit, _type, _modules} =
+      listener |> Supervisor.which_children() |> List.keyfind(:server, 0)
+
+    {:ok, address} = ThousandIsland.listener_info(bandit)
+    address
   end
 
   defp drain(listener) do
