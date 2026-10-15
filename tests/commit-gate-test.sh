@@ -361,13 +361,13 @@ framed a "$a" 1
 has_line '^prima=0$' "$scratch/a.log/islands.summary" || fail 'the prima island did not pass beside the stalled one'
 has_line '^sanctum=0$' "$scratch/a.log/islands.summary" || fail 'the sanctum island did not pass beside the stalled one'
 has_line '^==> islands.arca stopped at its deadline$' "$scratch/a.err" || fail 'the stalled island was not reported'
-for s in compile_sqlite_test compile_sqlite_dev js_suite sdk_bundle toolkit_bundle canary_checks worker_auth_check backends_check dialyzer boundary_plants sqlite_suite; do
+for s in compile_sqlite_test compile_sqlite_dev js_suite sdk_bundle toolkit_bundle canary_checks imagesuite_checks worker_auth_check backends_check dialyzer boundary_plants sqlite_suite; do
   has_line "^$s=0$" "$scratch/a.log/static.summary" || fail "the static step $s did not pass: $(tr '\n' ' ' < "$scratch/a.log/static.summary")"
 done
 has_line '^pg_tests=0$' "$scratch/a.log/postgres.summary" || fail "the PostgreSQL tests did not pass: $(tr '\n' ' ' < "$scratch/a.log/postgres.summary")"
 has_line '^fossils=0$' "$scratch/a.log/vocab.summary" || fail 'the vocabulary leg did not pass'
 has_line '^==> islands +FAILED ' "$scratch/a.out" || fail 'the islands leg was not reported failed'
-has_line '^==> static +ok .*worker_auth_check=0 backends_check=0 ' "$scratch/a.out" || fail 'the static leg and its Python self-checks were not reported passed'
+has_line '^==> static +ok .*canary_checks=0 imagesuite_checks=0 worker_auth_check=0 backends_check=0 ' "$scratch/a.out" || fail 'the static leg and its Python checks were not reported passed'
 has_line '^==> postgres +ok ' "$scratch/a.out" || fail 'the postgres leg was not reported passed'
 has_line '^    postgres\.pg_tests: Result: 1 passed' "$scratch/a.out" || fail 'the final report did not read the PostgreSQL tests'
 [ -z "$(find "$scratch/a.log" -maxdepth 1 -name 'island_*')" ] || fail "the stalled island's copy was left behind"

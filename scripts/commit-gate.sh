@@ -15,8 +15,9 @@
 #             credo, ops.gen.cli --check, cyfr.gen.configuration_guide
 #             --check, the console's JavaScript tests, CI's built-SDK and
 #             built-toolkit checks (their scripts read from test.yml), the
-#             release-boot names test, the canary's own checks and the two
-#             Python self-checks (worker_auth.py and the backends
+#             release-boot names test, the canary's own checks, the image
+#             suites' shared plumbing (tests/imagesuite_test.py) and the
+#             two Python self-checks (worker_auth.py and the backends
 #             harness.py; none needs a database or an image), dialyzer,
 #             the Boundary plants, then the full SQLite suite in N
 #             partitions
@@ -93,7 +94,7 @@ pg_selection() {
 deadline_for() {
   if [ -n "${GATE_STEP_DEADLINE:-}" ]; then echo "$GATE_STEP_DEADLINE"; return; fi
   case "$1" in
-    fossils|format|credo|opsgen|confguide|js_suite|sdk_bundle|toolkit_bundle|boot_names|canary_checks|worker_auth_check|backends_check|island_compile|island_test) echo 600 ;;
+    fossils|format|credo|opsgen|confguide|js_suite|sdk_bundle|toolkit_bundle|boot_names|canary_checks|imagesuite_checks|worker_auth_check|backends_check|island_compile|island_test) echo 600 ;;
     compile_*|boundary_plants) echo 1200 ;;
     # A first run builds the PLT.
     dialyzer) echo 2400 ;;
@@ -102,7 +103,7 @@ deadline_for() {
 }
 
 # The steps of a leg, for the deadline of a leg that waits on it.
-STATIC_STEPS='compile_sqlite_test compile_sqlite_dev format credo opsgen confguide js_suite sdk_bundle toolkit_bundle boot_names canary_checks worker_auth_check backends_check dialyzer boundary_plants sqlite_suite'
+STATIC_STEPS='compile_sqlite_test compile_sqlite_dev format credo opsgen confguide js_suite sdk_bundle toolkit_bundle boot_names canary_checks imagesuite_checks worker_auth_check backends_check dialyzer boundary_plants sqlite_suite'
 steps_of() {
   case "$1" in
     static) echo "$STATIC_STEPS" ;;
@@ -173,6 +174,7 @@ leg_static() {
   step static toolkit_bundle env MIX_BUILD_PATH=_build/test CYFR_DATABASE=sqlite MIX_ENV=test bash "$toolkit" || return
   step static boot_names bash tests/release-boot/names-test.sh || return
   step static canary_checks python3 -I tests/locus-runtime-image/canary_test.py || return
+  step static imagesuite_checks python3 -I tests/imagesuite_test.py || return
   # The image suites' own protocol code against the vectors, with no image.
   step static worker_auth_check python3 -I tests/locus-runtime-image/worker_auth.py --self-check || return
   step static backends_check python3 -I tests/locus-backends-image/harness.py --self-check || return
