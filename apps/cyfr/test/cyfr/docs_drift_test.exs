@@ -244,17 +244,17 @@ defmodule Cyfr.DocsDriftTest do
     assert Enum.sort(glossary_column("Compose service")) == Enum.sort(Map.keys(services)),
            "the glossary's compose services are not docker-compose.yml's"
 
-    # The images the release workflow builds, each from its Dockerfile.
+    # The images the tag pipeline publishes, each from its Dockerfile.
     built =
       ~r/- image: ([a-z][a-z0-9-]*)\n\s+file: (\S+)/
-      |> Regex.scan(File.read!(Path.join(@repo_root, ".github/workflows/docker.yml")),
+      |> Regex.scan(File.read!(Path.join(@repo_root, ".github/workflows/release.yml")),
         capture: :all_but_first
       )
       |> Map.new(fn [image, file] -> {image, file} end)
 
     for {image, file} <- built do
       assert File.regular?(Path.join(@repo_root, file)),
-             "docker.yml builds #{image} from #{file}, which is missing"
+             "release.yml builds #{image} from #{file}, which is missing"
     end
 
     images =
@@ -264,7 +264,7 @@ defmodule Cyfr.DocsDriftTest do
       )
 
     assert Enum.sort(Enum.uniq(images)) == Enum.sort(Map.keys(built)),
-           "the glossary's images #{inspect(images)} are not the ones docker.yml builds"
+           "the glossary's images #{inspect(images)} are not the ones release.yml builds"
 
     # Every image of ours compose runs is one the workflow publishes, built
     # from the Dockerfile the workflow builds it from.
@@ -274,11 +274,11 @@ defmodule Cyfr.DocsDriftTest do
       published = image |> String.trim_leading("ghcr.io/cyfrworks/") |> String.split(":") |> hd()
 
       assert Map.has_key?(built, published),
-             "compose's #{name} runs #{image}, which docker.yml does not build"
+             "compose's #{name} runs #{image}, which release.yml does not build"
 
       if service.dockerfile do
         assert service.dockerfile == built[published],
-               "compose builds #{name} from #{service.dockerfile}, docker.yml from #{built[published]}"
+               "compose builds #{name} from #{service.dockerfile}, release.yml from #{built[published]}"
       end
     end
   end

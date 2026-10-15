@@ -1,7 +1,7 @@
 # Findings the Locus image cannot take a fix for, with what would lift
 # each. Read by every image scan: the three in
 # .github/workflows/test.yml, which run on every push, and the one in
-# .github/workflows/docker.yml, which runs before an image is published.
+# .github/workflows/release.yml, which runs before an image is published.
 # Every other fixable HIGH or CRITICAL still fails those jobs.
 #
 # Each entry is scoped to the path where the finding was observed, so the
