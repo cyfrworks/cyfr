@@ -11,7 +11,9 @@ on:
       - 'mix.lock'
       # The formatting check reads it.
       - '.formatter.exs'
-      # Every workflow: the drift test reads release.yml and the retired-
+      # Every workflow: the drift test, the tag pipeline's graph check
+      # (tests/ci-release-graph.py) and its publication test
+      # (tests/ci-publish-test.sh) read release.yml, and the retired-
       # settings test scans them all; the image scans read .trivyignore.yaml
       # and trivy-secret.yaml.
       - '.github/workflows/*.yml'
@@ -60,7 +62,9 @@ on:
       - 'mix.lock'
       # The formatting check reads it.
       - '.formatter.exs'
-      # Every workflow: the drift test reads release.yml and the retired-
+      # Every workflow: the drift test, the tag pipeline's graph check
+      # (tests/ci-release-graph.py) and its publication test
+      # (tests/ci-publish-test.sh) read release.yml, and the retired-
       # settings test scans them all; the image scans read .trivyignore.yaml
       # and trivy-secret.yaml.
       - '.github/workflows/*.yml'
@@ -125,7 +129,7 @@ jobs:
   static:
     name: Static checks, generated files, fixtures and harness tests
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    timeout-minutes: 100
     env:
       CYFR_DATABASE: sqlite
     steps:
@@ -335,6 +339,28 @@ jobs:
       # proofs themselves run in the browser job.
       - name: The release proofs' shared plumbing
         run: bash tests/release-boot-test.sh
+      # The image suites' shared plumbing without Docker: teardown on a
+      # signal, the namespace prerequisite and no bytecode under tests/.
+      - name: The image suites' shared plumbing
+        run: python3 -I tests/imagesuite_test.py
+      # The tag pipeline publishes nothing unless every check passed: its
+      # graph read from release.yml, then mutants of it, each refused.
+      # It reads YAML through PyYAML, which -I finds only among the system
+      # interpreter's packages: the package is installed when absent, and a
+      # missing module fails the import loudly rather than skipping a check.
+      - name: The tag pipeline's graph
+        run: |
+          set -euo pipefail
+          if ! python3 -I -c 'import yaml' 2>/dev/null; then
+            sudo apt-get update
+            sudo apt-get install -y python3-yaml
+          fi
+          python3 -I tests/ci-release-graph.py
+      # release.yml's image publication against a local registry: one build
+      # per platform, the scanned image the pushed one, and each run's
+      # manifest merged from its own digests while another run interleaves.
+      - name: The tag pipeline's image publication
+        run: bash tests/ci-publish-test.sh
 
   test:
     name: Elixir Tests (${{ matrix.db }})
@@ -927,9 +953,10 @@ jobs:
       # exactly that bound while the container's limit is untouched, the
       # exit reported with every child's attempt, the uid emptied and
       # scrubbed before its reuse and the sibling completing, and without
-      # writable-cgroups=true no runner process ever starting. Each case observed as the service detects it, as the
-      # control plane records it and as the container's processes, uids,
-      # homes, groups, memory and CPU show it.
+      # writable-cgroups=true no runner process ever starting. Each case is
+      # observed as the service detects it, as the control plane records it
+      # and as the container's processes, uids, homes, groups, memory and
+      # CPU show it.
       - name: Runner kills, memory bound, settlement and cleanup
         run: python3 tests/locus-runtime-image/runners.py cyfr-locus:runtime
       # Each runner in a user and network namespace of its own, with no
@@ -1008,12 +1035,19 @@ jobs:
           set -euo pipefail
           zstd -dc "$RUNNER_TEMP/locus-image/cyfr-locus.tar.zst" | docker load
           docker tag cyfr-locus:ci cyfr-locus:backends
+      # The image's upgrade layer refreshes once a UTC day and is shared
+      # within it (Dockerfile's APT_REFRESH), as the Locus image's does.
+      - name: The UTC date the upgrade layer refreshes on
+        id: apt-refresh
+        run: echo "date=$(date -u +%Y-%m-%d)" >> "$GITHUB_OUTPUT"
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
       - name: Build the app image
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
           file: Dockerfile
+          build-args: |
+            APT_REFRESH=${{ steps.apt-refresh.outputs.date }}
           load: true
           tags: cyfr:push
           cache-from: type=gha,scope=cyfr-push

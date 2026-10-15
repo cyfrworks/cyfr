@@ -25,8 +25,10 @@ defmodule Arca.DbRescueCoverageTest do
   @root Path.expand("../../../..", __DIR__)
 
   # Same boundary fix as `Arca.UnscopedQuerySeamTest`: `exists?` and
-  # `query!` cannot carry a trailing `\b`.
-  @repo_call ~r/\b(?:Arca\.)?Repo\.(?:(?:all|one|update_all|delete_all|aggregate|get|get_by|insert|insert_all|update|delete|transaction|rollback)\b|exists\?|query!?)/
+  # `query!` cannot carry a trailing `\b`. Ecto's raising forms (`get!`,
+  # `insert!`, …) match through the `\b` before their `!`; `Arca.Repo`'s
+  # own transactions and its transaction lock raise too, so they are listed.
+  @repo_call ~r/\b(?:Arca\.)?Repo\.(?:(?:all|one|update_all|delete_all|aggregate|get|get_by|insert|insert_all|insert_or_update|update|delete|transaction|locking_transaction|read_transaction|transaction_lock|rollback)\b|exists\?|query!?)/
   @covered ~r/with_db_rescue|rescuing_db|^\s*rescue\b/m
   @tag_marker ~r/#\s*arca:db-raise-ok\s+\S/
 
@@ -36,6 +38,8 @@ defmodule Arca.DbRescueCoverageTest do
 
   # Same per-function segmentation as Arca.UnscopedQuerySeamTest: heads at
   # two-space `def`/`defp`, the contiguous comment lines above riding along.
+  # A body ends at the next `@doc`, so the documentation of the function
+  # after it, which may name Repo functions, is never read as its code.
   defp functions(lines) do
     starts = for {line, i} <- Enum.with_index(lines), line =~ ~r/^  defp? /, do: i
 
@@ -48,6 +52,7 @@ defmodule Arca.DbRescueCoverageTest do
 
     for {from, to} <- bounds do
       preamble = comments_above(lines, from)
+      to = Enum.find((from + 1)..(to - 1)//1, to, &(Enum.at(lines, &1) =~ ~r/^  @doc\b/))
       body = Enum.slice(lines, from, max(to - from, 1))
       {from + 1, Enum.join(preamble ++ body, "\n")}
     end
@@ -66,18 +71,26 @@ defmodule Arca.DbRescueCoverageTest do
   # inward. Only `def` heads are entry points.
   defp public?(body), do: body =~ ~r/^  def /m
 
+  # `sources` is `[{relative_path, source}]`, so a planted file is checked
+  # exactly as a real one is.
+  defp offenders(sources) do
+    for {path, source} <- sources,
+        {line, body} <- functions(String.split(source, "\n")),
+        public?(body),
+        body =~ @repo_call,
+        not (body =~ @covered),
+        not (body =~ @tag_marker) do
+      head = body |> String.split("\n") |> Enum.find(&(&1 =~ ~r/^  def /)) |> String.trim()
+      "#{path}:#{line}: #{head}"
+    end
+  end
+
   test "every public row-plane entry that touches the repo is rescued or says why" do
     offenders =
-      for path <- sources(),
-          source = Prima.Test.SourceTree.read(path),
-          {line, body} <- functions(String.split(source, "\n")),
-          public?(body),
-          body =~ @repo_call,
-          not (body =~ @covered),
-          not (body =~ @tag_marker) do
-        head = body |> String.split("\n") |> Enum.find(&(&1 =~ ~r/^  def /)) |> String.trim()
-        "#{Path.relative_to(path, @root)}:#{line}: #{head}"
-      end
+      offenders(
+        for path <- sources(),
+            do: {Path.relative_to(path, @root), Prima.Test.SourceTree.read(path)}
+      )
 
     assert offenders == [],
            """
@@ -93,5 +106,46 @@ defmodule Arca.DbRescueCoverageTest do
            step, a boot-time read — put `# arca:db-raise-ok <why>` on the
            head so the decision is greppable.
            """
+  end
+
+  test "a planted entry that opens Arca.Repo's own transaction or lock unrescued is refused, and the next function's doc is not its body" do
+    planted = [
+      {"apps/arca/lib/arca/planted.ex",
+       ~S'''
+       defmodule Arca.Planted do
+         def a(fun), do: Arca.Repo.locking_transaction(fun)
+
+         def b(fun), do: Repo.read_transaction(fun)
+
+         def c, do: Arca.Repo.transaction_lock(1)
+
+         def d(changeset), do: Repo.insert_or_update(changeset)
+
+         def e(fun) do
+           Arca.Repo.Errors.with_db_rescue("Arca.Planted.e", fn ->
+             Arca.Repo.locking_transaction(fun)
+           end)
+         end
+
+         # arca:db-raise-ok a step inside its caller's transaction
+         def f, do: Arca.Repo.transaction_lock(2)
+
+         def g, do: :ok
+
+         @doc """
+         Not one of these: it reads nothing through Arca.Repo.all/1 or
+         Arca.Repo.locking_transaction/2.
+         """
+         def h, do: :ok
+       end
+       '''}
+    ]
+
+    assert offenders(planted) == [
+             "apps/arca/lib/arca/planted.ex:2: def a(fun), do: Arca.Repo.locking_transaction(fun)",
+             "apps/arca/lib/arca/planted.ex:4: def b(fun), do: Repo.read_transaction(fun)",
+             "apps/arca/lib/arca/planted.ex:6: def c, do: Arca.Repo.transaction_lock(1)",
+             "apps/arca/lib/arca/planted.ex:8: def d(changeset), do: Repo.insert_or_update(changeset)"
+           ]
   end
 end

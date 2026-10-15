@@ -188,8 +188,8 @@ defmodule Arca.RateWindows do
 
   @doc """
   Forget `bucket`'s window: the row goes, and the next claim opens a
-  fresh one. Administrative, and what a test uses to start a bucket from
-  nothing.
+  fresh one. No library path calls it: it is how a test starts a bucket
+  from nothing.
   """
   @spec clear(Prima.Actor.t(), String.t()) :: :ok | {:error, :no_athanor | :database_error}
   def clear(%Prima.Actor{athanor_id: athanor_id}, bucket)

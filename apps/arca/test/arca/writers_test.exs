@@ -15,6 +15,8 @@ defmodule Arca.Test.WritersTest do
   alias Arca.ProfileStorage
   alias Arca.Test.Writers
 
+  import Ecto.Query, only: [from: 2]
+
   @athanor Arca.Test.Actor.athanor_id()
 
   setup tags do
@@ -105,12 +107,16 @@ defmodule Arca.Test.WritersTest do
       end
 
       missing = "reagent:local.no-athanor-#{suffix}"
+      no_athanor = Map.delete(profile_attrs(missing), :athanor_id)
+      assert_raise KeyError, fn -> Writers.put_profile(no_athanor) end
 
-      assert_raise KeyError, fn ->
-        Writers.put_profile(Map.delete(profile_attrs(missing), :athanor_id))
-      end
-
-      assert no_profiles?(actor, missing)
+      # Read across every athanor: a row written before the refusal could
+      # sit under any of them, and a scoped read sees only one.
+      # arca:unscoped-ok the check is that no athanor holds the row
+      assert Arca.Repo.aggregate(
+               from(p in Arca.Schemas.Profile, where: p.source_ref == ^missing),
+               :count
+             ) == 0
     end
   end
 

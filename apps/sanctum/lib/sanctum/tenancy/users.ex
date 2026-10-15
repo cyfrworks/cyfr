@@ -404,7 +404,9 @@ defmodule Sanctum.Tenancy.Users do
 
   # Taking the place of an archived athanor back has to ask for it, or
   # archiving and reopening would be the way past `CYFR_MAX_ATHANORS`. The
-  # count runs inside the transition, with the athanor locked.
+  # count runs inside the transition, with the athanor locked and the
+  # census lock held (`Arca.AthanorCensus`), so a reopen and a mint at the
+  # last place cannot both land.
   defp restorable(%{athanor: %{status: "archived"}}),
     do: Sanctum.Tenancy.Caps.check_counted(:max_athanors, &Athanors.count/0)
 

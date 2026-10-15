@@ -9,10 +9,10 @@ These suites run the Locus image (`Dockerfile.locus`) in its runtime role, as
 loopback port and the pool settings a case chooses, against a scripted
 control plane on this machine. They read what only the image shows: the
 runners' processes, uids, homes, memory groups and memory, and the
-container's CPU and log. CI runs `runners.py`, which runs `memory.py`'s
-cases, `canary.py` and `namespace.py` in the `locus-runtime-image` job of
-`.github/workflows/test.yml`; `memory.py --measure` stays a manual
-measurement.
+container's CPU and log. The `locus-runtime-image` job of
+`.github/workflows/test.yml` runs `runners.py` (which runs `memory.py`'s
+cases), `namespace.py`, `canary_test.py` and `canary.py`, each as a step of
+its own; `memory.py --measure` stays a manual measurement.
 
 | Suite | What it shows |
 |---|---|

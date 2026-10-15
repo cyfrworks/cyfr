@@ -50,7 +50,12 @@ missing or wrong header fails CI.
 - Run the tests for what you touched as operating-system partitions:
   `scripts/test-partitioned.sh <test paths>` on SQLite, and
   `scripts/test-partitioned.sh -a postgres <test paths>` on PostgreSQL.
-  CI runs the whole suite on both.
+  CI runs the whole suite on both. After a run,
+  `scripts/test-partitioned.sh -- --failed` with the same `-a` reruns
+  exactly the failures every partition recorded: each adapter keeps its
+  record under its own build path. `mix test --failed` reads SQLite's;
+  it reaches PostgreSQL's only with
+  `MIX_BUILD_PATH=_build/test_pg CYFR_DATABASE=postgres`.
 - If you changed a `@spec` or a function's return shape, run `mix dialyzer`.
   CI runs it too. It is fast once the PLT is built, and the findings it
   reports today are recorded in [`.dialyzer_ignore.exs`](.dialyzer_ignore.exs)

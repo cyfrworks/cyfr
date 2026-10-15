@@ -15,8 +15,17 @@ defmodule Arca.LockingSeamTest do
   and an advisory lock spelled elsewhere is a lock SQLite has no
   statement for, so each is refused here.
 
-  The scan reads code lines only (`Prima.Test.CodeLines`): a comment or a
-  doc naming a lock is prose, not a lock.
+  A lock written as SQL is refused as its Ecto spelling is: a row lock
+  clause (`FOR UPDATE`, `FOR SHARE` and their key variants) outside
+  `Arca.QueryHelpers`, a transaction mode (`BEGIN IMMEDIATE`) outside
+  `Arca.Repo`, and a table lock (`LOCK TABLE`) anywhere, since neither
+  adapter's locking goes through one.
+
+  The scan reads code lines (`Prima.Test.CodeLines`): a comment or a doc
+  naming a lock is prose, not a lock. The SQL spellings are also read on
+  the lines `CodeLines` drops as text, the body of a heredoc or sigil and a
+  multi-line string's later lines, unless the text is documentation: that
+  is where a statement sent with `query!` or `fragment` is written.
   """
 
   use ExUnit.Case, async: true
@@ -37,14 +46,35 @@ defmodule Arca.LockingSeamTest do
   @mode ~r/(?<![\w:])mode:\s|(?<![\w:]):mode,/
   @lock_write ~r/\bWHERE\s+0\b/i
   @advisory ~r/\bpg_(?:try_)?advisory_/i
+  # The same locks written as SQL, in any case: a row lock clause in each
+  # strength PostgreSQL has, a transaction that opens with a mode, and a
+  # table lock.
+  @row_lock_sql ~r/\bFOR\s+(?:NO\s+KEY\s+)?UPDATE\b|\bFOR\s+(?:KEY\s+)?SHARE\b/i
+  @begin_mode ~r/\bBEGIN\s+(?:IMMEDIATE|EXCLUSIVE|DEFERRED)\b/i
+  @table_lock ~r/\bLOCK\s+(?:TABLE\b|(?:ONLY\s+)?[\w."]+\s+IN\s+[\w\s]+?\s+MODE\b)/i
 
-  @patterns [lock: @lock_clause, mode: @mode, lock_write: @lock_write, advisory: @advisory]
+  # Elixir spellings are read on code lines only; SQL ones on code lines
+  # and on the text of strings and heredocs.
+  @code_patterns [lock: @lock_clause, mode: @mode]
+  @sql_patterns [
+    lock_write: @lock_write,
+    advisory: @advisory,
+    row_lock_sql: @row_lock_sql,
+    begin_mode: @begin_mode,
+    table_lock: @table_lock
+  ]
 
+  @text_tokens [:bin_string, :list_string, :bin_heredoc, :list_heredoc, :sigil]
+
+  # A table lock has no home: neither adapter's locking takes one.
   @homes %{
     lock: "apps/arca/lib/arca/query_helpers.ex",
     mode: "apps/arca/lib/arca/repo.ex",
     lock_write: "apps/arca/lib/arca/repo.ex",
-    advisory: "apps/arca/lib/arca/repo.ex"
+    advisory: "apps/arca/lib/arca/repo.ex",
+    row_lock_sql: "apps/arca/lib/arca/query_helpers.ex",
+    begin_mode: "apps/arca/lib/arca/repo.ex",
+    table_lock: nil
   }
 
   defp arca_sources do
@@ -52,15 +82,65 @@ defmodule Arca.LockingSeamTest do
         do: {Path.relative_to(path, @root), SourceTree.read(path)}
   end
 
+  # The lines of `source` a string, heredoc or sigil spans that are
+  # neither code (`code`, `CodeLines.code_lines/1`'s answer) nor
+  # documentation: the text `CodeLines` drops, read here for SQL alone.
+  defp text_lines(source, code) do
+    {:ok, _line, _column, _warnings, tokens, _terminators} =
+      :elixir_tokenizer.tokenize(String.to_charlist(source), 1, [])
+
+    code_numbers = MapSet.new(code, &elem(&1, 1))
+
+    text =
+      for [at, name, token] <- Enum.chunk_every([nil, nil | Enum.reverse(tokens)], 3, 1, :discard),
+          is_tuple(token) and elem(token, 0) in @text_tokens,
+          {line, _column, _extra} <- [elem(token, 1)],
+          not doc?(at, name, line),
+          n <- line..(line + newlines(token)),
+          into: MapSet.new(),
+          do: n
+
+    source
+    |> String.split("\n")
+    |> Enum.with_index(1)
+    |> Enum.filter(fn {_line, n} -> n in text and n not in code_numbers end)
+  end
+
+  # `@doc`, `@moduledoc`, `@typedoc` or `@shortdoc` with its text opening
+  # on the attribute's own line.
+  defp doc?({:at_op, {line, _, _}, :@}, {:identifier, {line, _, _}, name}, line),
+    do: name in [:doc, :moduledoc, :typedoc, :shortdoc]
+
+  defp doc?(_at, _name, _line), do: false
+
+  # How many lines past its first a text token runs: the newlines in its
+  # literal parts, and the lines each interpolation spans.
+  defp newlines(token) do
+    token
+    |> parts()
+    |> Enum.reduce(0, fn
+      {{start, _, _}, {stop, _, _}, _tokens}, acc -> acc + stop - start
+      literal, acc -> acc + length(String.split(IO.chardata_to_string(literal), "\n")) - 1
+    end)
+  end
+
+  defp parts({:bin_string, _meta, parts}), do: parts
+  defp parts({:list_string, _meta, parts}), do: parts
+  defp parts({:bin_heredoc, _meta, _indent, parts}), do: parts
+  defp parts({:list_heredoc, _meta, _indent, parts}), do: parts
+  defp parts({:sigil, _meta, _name, parts, _modifiers, _indent, _delimiter}), do: parts
+
   # `sources` is `[{relative_path, source}]`, so a planted file is checked
   # exactly as a real one is.
   defp violations(sources) do
     for {path, source} <- sources,
-        {line, n} <- CodeLines.code_lines(source),
-        {kind, pattern} <- @patterns,
+        code <- [CodeLines.code_lines(source)],
+        {line, n} <- Enum.sort_by(code ++ text_lines(source, code), &elem(&1, 1)),
+        {kind, pattern} <- @code_patterns ++ @sql_patterns,
+        Keyword.has_key?(@sql_patterns, kind) or {line, n} in code,
         line =~ pattern,
         path != @homes[kind],
-        do: "#{path}:#{n}: #{kind} outside #{@homes[kind]}: #{String.trim(line)}"
+        do: "#{path}:#{n}: #{kind} outside #{@homes[kind] || "any home"}: #{String.trim(line)}"
   end
 
   test "the scan reads the storage layer's source, not nothing" do
@@ -71,7 +151,7 @@ defmodule Arca.LockingSeamTest do
 
     homes = Map.new(sources)
 
-    for {kind, home} <- @homes do
+    for {kind, home} <- @homes, home != nil do
       assert Map.has_key?(homes, home), "#{home}, the #{kind} helper's home, was not scanned"
     end
 
@@ -86,6 +166,9 @@ defmodule Arca.LockingSeamTest do
 
     assert CodeLines.lines(homes[@homes.advisory]) |> Enum.any?(&(&1 =~ @advisory)),
            "the scan no longer sees transaction_lock/1's own advisory lock"
+
+    assert CodeLines.lines(homes[@homes.row_lock_sql]) |> Enum.any?(&(&1 =~ @row_lock_sql)),
+           "the scan no longer sees for_update/1's own FOR UPDATE"
   end
 
   test "no lock clause, transaction mode or lock-taking write outside its one home" do
@@ -120,7 +203,9 @@ defmodule Arca.LockingSeamTest do
 
       assert [
                "apps/arca/lib/arca/planted.ex:4: lock outside" <> _,
-               "apps/arca/lib/arca/planted.ex:5: lock outside" <> _
+               "apps/arca/lib/arca/planted.ex:4: row_lock_sql outside" <> _,
+               "apps/arca/lib/arca/planted.ex:5: lock outside" <> _,
+               "apps/arca/lib/arca/planted.ex:5: row_lock_sql outside" <> _
              ] = violations(planted)
     end
 
@@ -176,10 +261,15 @@ defmodule Arca.LockingSeamTest do
 
       assert [
                "apps/arca/lib/arca/planted.ex:13: lock outside" <> _,
+               "apps/arca/lib/arca/planted.ex:13: row_lock_sql outside" <> _,
                "apps/arca/lib/arca/planted.ex:14: lock outside" <> _,
+               "apps/arca/lib/arca/planted.ex:14: row_lock_sql outside" <> _,
                "apps/arca/lib/arca/planted.ex:15: lock outside" <> _,
+               "apps/arca/lib/arca/planted.ex:15: row_lock_sql outside" <> _,
                "apps/arca/lib/arca/planted.ex:16: lock outside" <> _,
-               "apps/arca/lib/arca/planted.ex:17: lock outside" <> _
+               "apps/arca/lib/arca/planted.ex:16: row_lock_sql outside" <> _,
+               "apps/arca/lib/arca/planted.ex:17: lock outside" <> _,
+               "apps/arca/lib/arca/planted.ex:17: row_lock_sql outside" <> _
              ] = violations(planted)
     end
 
@@ -235,7 +325,89 @@ defmodule Arca.LockingSeamTest do
                "apps/arca/lib/arca/query_helpers.ex:2: mode outside" <> _,
                "apps/arca/lib/arca/query_helpers.ex:3: lock_write outside" <> _,
                "apps/arca/lib/arca/repo.ex:2: lock outside" <> _,
+               "apps/arca/lib/arca/repo.ex:2: row_lock_sql outside" <> _,
                "apps/arca/lib/arca/query_helpers.ex:2: advisory outside" <> _
+             ] = violations(planted)
+    end
+
+    test "a lock written as SQL in a query string or fragment is refused, in any case" do
+      planted = [
+        {"apps/arca/lib/arca/planted.ex",
+         ~S'''
+         defmodule Arca.Planted do
+           def a, do: Arca.Repo.query!("SELECT id FROM rows WHERE id = $1 FOR UPDATE", [1])
+           def b, do: Arca.Repo.query!("select id from rows for no key update")
+           def c, do: Arca.Repo.query!("SELECT id FROM rows FOR SHARE SKIP LOCKED")
+           def d, do: Arca.Repo.query!("SELECT id FROM rows FOR KEY SHARE")
+           def e(q), do: from(r in q, where: fragment("? IN (SELECT id FROM t FOR UPDATE)", r.id))
+           def f, do: Arca.Repo.query!("LOCK TABLE rows IN EXCLUSIVE MODE")
+           def g, do: Arca.Repo.query!("lock only rows in access exclusive mode")
+           def h, do: Arca.Repo.query!("BEGIN IMMEDIATE")
+           def i, do: Arca.Repo.query!("begin exclusive transaction")
+         end
+         '''}
+      ]
+
+      assert [
+               "apps/arca/lib/arca/planted.ex:2: row_lock_sql outside" <> _,
+               "apps/arca/lib/arca/planted.ex:3: row_lock_sql outside" <> _,
+               "apps/arca/lib/arca/planted.ex:4: row_lock_sql outside" <> _,
+               "apps/arca/lib/arca/planted.ex:5: row_lock_sql outside" <> _,
+               "apps/arca/lib/arca/planted.ex:6: row_lock_sql outside" <> _,
+               "apps/arca/lib/arca/planted.ex:7: table_lock outside any home" <> _,
+               "apps/arca/lib/arca/planted.ex:8: table_lock outside any home" <> _,
+               "apps/arca/lib/arca/planted.ex:9: begin_mode outside" <> _,
+               "apps/arca/lib/arca/planted.ex:10: begin_mode outside" <> _
+             ] = violations(planted)
+    end
+
+    test "a lock in heredoc or multi-line SQL is refused on the line it is written" do
+      planted = [
+        {"apps/arca/lib/arca/planted.ex",
+         ~S'''
+         defmodule Arca.Planted do
+           @locked """
+           SELECT id
+             FROM rows
+            WHERE id = $1
+              FOR UPDATE
+           """
+
+           def a, do: Arca.Repo.query!(@locked, [1])
+
+           def b do
+             Arca.Repo.query!(~s"""
+             LOCK TABLE rows
+             """)
+           end
+
+           def c, do: Arca.Repo.query!("SELECT 1;
+             BEGIN IMMEDIATE;
+             COMMIT")
+
+           def d, do: Arca.Repo.query!("SELECT #{
+             "pg_advisory_xact_lock(1)"
+           }
+           FROM t WHERE 0
+           ")
+
+           def e do
+             Arca.Repo.query!(~S"""
+             SELECT id FROM rows
+               for key share
+             """)
+           end
+         end
+         '''}
+      ]
+
+      assert [
+               "apps/arca/lib/arca/planted.ex:6: row_lock_sql outside" <> _,
+               "apps/arca/lib/arca/planted.ex:13: table_lock outside any home" <> _,
+               "apps/arca/lib/arca/planted.ex:18: begin_mode outside" <> _,
+               "apps/arca/lib/arca/planted.ex:22: advisory outside" <> _,
+               "apps/arca/lib/arca/planted.ex:24: lock_write outside" <> _,
+               "apps/arca/lib/arca/planted.ex:30: row_lock_sql outside" <> _
              ] = violations(planted)
     end
 
@@ -263,7 +435,11 @@ defmodule Arca.LockingSeamTest do
            the write lock: UPDATE t SET x = x WHERE 0, and pg_advisory_xact_lock.
            """
 
-           # lock: a comment is prose, and so is mode: :deferred, WHERE 0 or pg_advisory_lock
+           @doc """
+           Never LOCK TABLE, BEGIN IMMEDIATE or SELECT … FOR SHARE here.
+           """
+           # lock: a comment is prose, and so is mode: :deferred, WHERE 0 or pg_advisory_lock,
+           # LOCK TABLE t, BEGIN EXCLUSIVE or FOR UPDATE
            def a, do: :ok
          end
          '''}

@@ -1086,9 +1086,10 @@ defmodule Cyfr.DocsDriftTest do
   # vectors' (`Prima.WitResponse`'s test reads the same file), wherever
   # component-guide spells it: the Error: lines of `cyfr:http/fetch` and
   # `cyfr:storage/files`, and the Invoke Error Types, whose table names the
-  # fallback's type and the member a setup_required error carries besides. The error types themselves are held to their producers
-  # by the fetch error check above. The `model/chat@1` refusal, with its
-  # `provider` member, is a model catalyst's own result, not this envelope.
+  # fallback's type and the member a setup_required error carries besides.
+  # The error types themselves are held to their producers by the fetch
+  # error check above. The `model/chat@1` refusal, with its `provider`
+  # member, is a model catalyst's own result, not this envelope.
   test "component-guide's error envelope and its fallback type are the guest error vectors'" do
     vectors =
       @repo_root

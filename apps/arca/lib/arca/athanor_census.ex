@@ -50,5 +50,6 @@ defmodule Arca.AthanorCensus do
   lock would end with its own statement and serialize nothing.
   """
   @spec lock() :: :ok
+  # arca:db-raise-ok raises outside a transaction, as its doc says; its caller holds one
   def lock, do: Arca.Repo.transaction_lock(@key)
 end

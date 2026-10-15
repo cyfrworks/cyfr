@@ -155,8 +155,8 @@ defmodule Sanctum.Consent.BlobBuilder do
   into that edge alone. `opts[:edge_vault_fn]` overrides one dep edge's
   vault; `nil` keeps the node's default. `opts[:subset]` narrows each node
   it names (`narrow/5`), every node it names being one of the graph's, under
-  `opts[:ceiling]` (the platform ceiling when absent); a refused narrowing
-  answers `{:error, {:invalid_argument, sentence}}`.
+  the platform ceiling; a refused narrowing answers
+  `{:error, {:invalid_argument, sentence}}`.
 
   Every node is read at the release the closure resolved
   (`Sanctum.Consent.Plan.closure_rows/3`), never at its latest: a
@@ -174,7 +174,7 @@ defmodule Sanctum.Consent.BlobBuilder do
 
     with :ok <- subset_nodes(subset, graph),
          {:ok, rows} <- build_rows(ctx, graph, source_ref, opts) do
-      narrowing = {subset, ceiling(subset, opts)}
+      narrowing = {subset, ceiling(subset)}
       place = {graph, rows}
 
       Enum.reduce_while(Map.keys(graph), {:ok, %{}}, fn node_key, {:ok, acc} ->
@@ -201,11 +201,11 @@ defmodule Sanctum.Consent.BlobBuilder do
   and the node takes the narrowed limits. What those nodes grant is the ask
   each narrowing must lie inside. Answers the nodes and `narrowed/1`'s map.
   """
-  @spec narrow_nodes(map(), String.t(), map(), keyword()) ::
+  @spec narrow_nodes(map(), String.t(), map()) ::
           {:ok, map(), narrowed()} | {:error, {:invalid_argument, String.t()}}
-  def narrow_nodes(nodes, source_ref, subset, opts \\ []) when is_map(nodes) do
+  def narrow_nodes(nodes, source_ref, subset) when is_map(nodes) do
     with :ok <- subset_nodes(subset, nodes) do
-      ceiling = ceiling(subset, opts)
+      ceiling = ceiling(subset)
 
       subset
       |> Enum.sort()
@@ -284,10 +284,8 @@ defmodule Sanctum.Consent.BlobBuilder do
 
   # The ceiling a narrowing's limits must lie inside, read only when a
   # narrowing names something.
-  defp ceiling(subset, _opts) when subset == %{}, do: nil
-
-  defp ceiling(_subset, opts),
-    do: Keyword.get_lazy(opts, :ceiling, &Sanctum.Policy.Ceiling.platform_ceiling/0)
+  defp ceiling(subset) when subset == %{}, do: nil
+  defp ceiling(_subset), do: Sanctum.Policy.Ceiling.platform_ceiling()
 
   defp put_narrowed(narrowed, _node_key, []), do: narrowed
   defp put_narrowed(narrowed, node_key, kinds), do: Map.put(narrowed, node_key, kinds)

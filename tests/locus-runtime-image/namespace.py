@@ -57,8 +57,9 @@ before its first step on the two refusals it reads: where
 user.max_user_namespaces is 0, or where
 kernel.apparmor_restrict_unprivileged_userns is 1 and Docker's default
 AppArmor profile, which allows them then, is not in force (`docker info`
-lists no `name=apparmor` security option). The service steps sign their requests with the scripted control plane's keys
-(control_plane.py); none of them needs the service to reach it.
+lists no `name=apparmor` security option). The service steps sign their
+requests with the scripted control plane's keys (control_plane.py); none
+of them needs the service to reach it.
 
 Usage: tests/locus-runtime-image/namespace.py IMAGE [STEP]...
 """
