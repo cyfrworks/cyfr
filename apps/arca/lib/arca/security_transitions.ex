@@ -210,6 +210,8 @@ defmodule Arca.SecurityTransitions do
   @restore_marker "restore_pending"
   # The kit's challenges, one `server_meta` row each, keyed by digest.
   @challenge_prefix "restore_kit_challenge:"
+  # The kit credentials, one `server_meta` row each, keyed by digest.
+  @credential_prefix "restore_kit:"
 
   @typedoc "The caller's policy over the locked rows."
   @type verify :: (map() -> :ok | {:error, term()})
@@ -1192,9 +1194,11 @@ defmodule Arca.SecurityTransitions do
   its attempt `lapsed` with outcome `uncertain` and the attempt's pending
   write intents `uncertain`, a turn `uncertain` with its open steps. Rows
   already suspended, blocked, revoked or tombstoned keep their state. It
-  then writes one open `restore_people` row for each person who held a
-  method it suspended — an active passkey or a standing paired client —
-  and deletes the marker it read, so a retry after commit finds no marker and moves
+  then closes every recovery an earlier restore left open, as superseded,
+  with every kit credential and challenge it left, writes one open
+  `restore_people` row for each person who holds a method it suspended,
+  or one an earlier restore suspended and they have not re-enabled — a
+  passkey or a paired client — and deletes the marker it read, so a retry after commit finds no marker and moves
   nothing, and a crash before commit leaves the marker for the next boot.
 
   The membership freeze is what those rows mean: a group athanor with a
@@ -1260,7 +1264,7 @@ defmodule Arca.SecurityTransitions do
         set: [open: false, closed_at: now]
       )
 
-    Arca.Repo.delete_all(from(m in ServerMeta, where: m.key == ^kit_key(user_id)))
+    drop_credentials!(user_id)
     Enum.sort(ids || [])
   end
 
@@ -1393,7 +1397,9 @@ defmodule Arca.SecurityTransitions do
           String.t(),
           String.t(),
           DateTime.t()
-        ) :: :ok | {:error, :challenge_refused | :closed | :cross_tenant | :database_error}
+        ) ::
+          :ok
+          | {:error, :challenge_refused | :closed | :not_owner | :cross_tenant | :database_error}
   def redeem_kit_challenge(
         %Prima.Actor{scope: :platform, system: true},
         user_id,
@@ -1406,8 +1412,10 @@ defmodule Arca.SecurityTransitions do
              is_binary(credential_digest) do
     kit_write("Arca.SecurityTransitions.redeem_kit_challenge", user_id, restore_id, fn ->
       with :ok <- take_challenge(challenge_digest, user_id, restore_id) do
-        put_meta(kit_key(user_id), %{
-          "d" => credential_digest,
+        drop_credentials!(user_id)
+
+        put_meta(credential_key(credential_digest), %{
+          "u" => user_id,
           "r" => restore_id,
           "e" => DateTime.to_unix(expires_at, :millisecond)
         })
@@ -1420,8 +1428,9 @@ defmodule Arca.SecurityTransitions do
 
   @doc """
   The person's kit credential whose digest is `credential_digest`, while
-  it is unexpired on the database's clock and the person's row under its
-  restore is open: `{:ok, restore_id}`, else `{:error, :not_standing}`.
+  it is unexpired on the database's clock, the person's row under its
+  restore is open and the person is in good standing (not denied):
+  `{:ok, restore_id}`, else `{:error, :not_standing}`.
   """
   @spec kit_credential(Prima.Actor.t(), String.t(), String.t()) ::
           {:ok, String.t()} | {:error, :not_standing | :cross_tenant | :database_error}
@@ -1435,6 +1444,30 @@ defmodule Arca.SecurityTransitions do
 
   def kit_credential(%Prima.Actor{}, _user_id, _digest), do: {:error, :cross_tenant}
 
+  @doc """
+  Whose kit credential the digest `credential_digest` names: `{:ok,
+  user_id}` while it is held, else `{:error, :not_standing}`. The
+  credential carries no person, so a bearer is found by its digest alone;
+  whether it still stands is `kit_credential/3`'s.
+  """
+  @spec kit_holder(Prima.Actor.t(), String.t()) ::
+          {:ok, String.t()} | {:error, :not_standing | :cross_tenant | :database_error}
+  def kit_holder(%Prima.Actor{scope: :platform, system: true}, credential_digest)
+      when is_binary(credential_digest) do
+    Arca.Repo.Errors.with_db_rescue("Arca.SecurityTransitions.kit_holder", fn ->
+      with %ServerMeta{value: value} <-
+             Arca.Repo.get(ServerMeta, credential_key(credential_digest)),
+           {:ok, %{"u" => user_id}} when is_binary(user_id) <- Jason.decode(value) do
+        {:ok, user_id}
+      else
+        _none -> {:error, :not_standing}
+      end
+    end)
+    |> Arca.Data.project()
+  end
+
+  def kit_holder(%Prima.Actor{}, _digest), do: {:error, :cross_tenant}
+
   @doc false
   @spec kit_stands!(String.t(), String.t()) :: {:ok, String.t()} | {:error, :not_standing}
   # `kit_credential/3` inside the caller's transaction: the write a kit
@@ -1444,15 +1477,27 @@ defmodule Arca.SecurityTransitions do
   def kit_stands!(user_id, credential_digest) do
     now = Arca.ServerMetaStorage.now!()
 
-    with %ServerMeta{value: value} <- Arca.Repo.get(ServerMeta, kit_key(user_id)),
-         {:ok, %{"d" => digest, "r" => restore_id, "e" => expires}} <- Jason.decode(value),
-         true <- same_digest?(digest, credential_digest),
+    with %ServerMeta{value: value} <-
+           Arca.Repo.get(ServerMeta, credential_key(credential_digest)),
+         {:ok, %{"u" => holder, "r" => restore_id, "e" => expires}} <- Jason.decode(value),
+         true <- holder == user_id,
          true <- is_integer(expires) and DateTime.to_unix(now, :millisecond) < expires,
-         true <- Arca.Repo.exists?(open_row(user_id, restore_id)) do
+         true <- Arca.Repo.exists?(open_row(user_id, restore_id)),
+         true <- standing?(user_id) do
       {:ok, restore_id}
     else
       _no -> {:error, :not_standing}
     end
+  end
+
+  # The person in good standing, read under a shared lock on their row: a
+  # denial that committed first is seen, and one that starts later waits
+  # for the write this check admits.
+  defp standing?(user_id) do
+    from(u in User, where: u.id == ^user_id and u.status == "active", select: u.id)
+    |> QueryHelpers.for_share()
+    |> Arca.Repo.one()
+    |> is_binary()
   end
 
   defp declared_restore(slot) do
@@ -1499,9 +1544,15 @@ defmodule Arca.SecurityTransitions do
     _user_ids = lock_all(User)
     _athanor_ids = lock_all(Athanor)
 
-    # The people whose methods the restore suspends, read before it does:
+    # The people whose methods the restore suspends, read before it does,
+    # and those whose methods an earlier restore still holds suspended:
     # each has a passkey or device to re-enable, and only they recover.
     holders = method_holders()
+
+    # An earlier restore's recovery ends here: its rows close as
+    # superseded, and its kit credentials and challenges go, so no proof
+    # made against the earlier backup re-enables anything after this one.
+    superseded = supersede_recoveries(now)
 
     generations = raise_generations(User, now)
     athanor_generations = raise_generations(Athanor, now)
@@ -1590,6 +1641,7 @@ defmodule Arca.SecurityTransitions do
 
     Map.merge(runs, %{
       restore_id: restore_id,
+      superseded_restore_ids: superseded,
       user_ids: holders,
       user_generations: generations,
       athanor_generations: athanor_generations,
@@ -1616,17 +1668,43 @@ defmodule Arca.SecurityTransitions do
     |> Arca.Repo.all()
   end
 
-  # Everyone holding an active passkey or a standing paired client.
+  # Everyone holding a passkey or a paired client that is active, or that
+  # an earlier restore suspended and they have not yet re-enabled.
   # arca:unscoped-ok a declared restore reads every person's methods, across every athanor.
   defp method_holders do
-    passkeys = from(p in Passkey, where: p.state == "active", select: p.user_id)
-    clients = from(c in PairedClient, where: c.standing == "active", select: c.user_id)
+    passkeys =
+      from(p in Passkey, where: p.state in ["active", "suspended"], select: p.user_id)
+
+    clients =
+      from(c in PairedClient,
+        where: c.standing in ["active", "suspended"],
+        select: c.user_id
+      )
 
     passkeys
     |> union(^clients)
     |> Arca.Repo.all()
     |> Enum.uniq()
     |> Enum.sort()
+  end
+
+  # Every open recovery closed, and every kit credential and challenge
+  # deleted: what an earlier restore left standing.
+  # arca:unscoped-ok a declared restore supersedes every earlier recovery of the server.
+  defp supersede_recoveries(now) do
+    {_count, closed} =
+      Arca.Repo.update_all(
+        from(r in RestorePerson, where: r.open == true, select: r.restore_id),
+        set: [open: false, closed_at: now]
+      )
+
+    kits =
+      from(m in ServerMeta,
+        where: like(m.key, "restore_kit:%") or like(m.key, ^(@challenge_prefix <> "%"))
+      )
+
+    {_count, _} = Arca.Repo.delete_all(kits)
+    closed |> List.wrap() |> Enum.uniq() |> Enum.sort()
   end
 
   defp raise_generations(schema, now) do
@@ -1727,6 +1805,11 @@ defmodule Arca.SecurityTransitions do
       ),
       from(t in Turn, where: t.status in ^Prima.TurnState.open_statuses()),
       from(m in ServerMeta, where: m.key == ^@restore_marker),
+      from(r in RestorePerson, where: r.open == true and r.restore_id != ^restore_id),
+      from(m in ServerMeta,
+        where:
+          like(m.key, ^(@credential_prefix <> "%")) or like(m.key, ^(@challenge_prefix <> "%"))
+      ),
       from(u in User,
         where:
           u.id in ^holders and
@@ -1857,35 +1940,49 @@ defmodule Arca.SecurityTransitions do
     }
   end
 
-  defp kit_key(user_id), do: "restore_kit:" <> user_id
+  # A kit credential's row, keyed by the bearer's digest: the bearer is
+  # random bytes alone (`Prima.CredentialShape`'s `:restore_kit_credential`).
+  defp credential_key("sha256:" <> hex), do: @credential_prefix <> hex
+  defp credential_key(other), do: @credential_prefix <> other
 
-  defp same_digest?(held, presented)
-       when is_binary(held) and is_binary(presented) and byte_size(held) == byte_size(presented),
-       do: :crypto.hash_equals(held, presented)
-
-  defp same_digest?(_held, _presented), do: false
-
-  # A kit write: one locking transaction with the person's open row under
-  # `restore_id` locked first, so a close that commits first refuses it.
-  defp kit_write(tag, user_id, restore_id, body) do
-    Arca.Repo.Errors.with_db_rescue(tag, fn ->
-      Arca.Repo.locking_transaction(fn ->
-        locked =
-          open_row(user_id, restore_id) |> QueryHelpers.for_update() |> Arca.Repo.one()
-
-        result = if locked, do: body.(), else: {:error, :closed}
-
-        case result do
-          :ok -> :ok
-          {:error, reason} -> Arca.Repo.rollback(reason)
+  # The person's kit credentials, deleted: a new one replaces them, and a
+  # closed recovery leaves none.
+  # arca:unscoped-ok the restore's credential rows are server facts, read for one person.
+  defp drop_credentials!(user_id) do
+    held =
+      from(m in ServerMeta,
+        where: like(m.key, ^(@credential_prefix <> "%")),
+        select: {m.key, m.value}
+      )
+      |> Arca.Repo.all()
+      |> Enum.flat_map(fn {key, value} ->
+        case Jason.decode(value) do
+          {:ok, %{"u" => ^user_id}} -> [key]
+          _another -> []
         end
       end)
+
+    if held != [], do: Arca.Repo.delete_all(from(m in ServerMeta, where: m.key in ^held))
+    :ok
+  end
+
+  # A kit write: under the live ownership fence (`Arca.Repo.owned/2`), one
+  # locking transaction with the person's open row under `restore_id`
+  # locked first, so a close that commits first refuses it.
+  defp kit_write(tag, user_id, restore_id, body) do
+    tag
+    |> Arca.Repo.owned(fn ->
+      locked = open_row(user_id, restore_id) |> QueryHelpers.for_update() |> Arca.Repo.one()
+
+      case if(locked, do: body.(), else: {:error, :closed}) do
+        :ok -> {:ok, :ok}
+        {:error, _reason} = refusal -> refusal
+      end
     end)
     |> case do
       {:ok, :ok} -> :ok
       {:error, _reason} = refusal -> refusal
     end
-    |> Arca.Data.project()
   end
 
   defp challenge_key("sha256:" <> hex), do: @challenge_prefix <> hex

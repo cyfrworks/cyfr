@@ -110,7 +110,9 @@ defmodule Arca.Members do
   committed: a leave that found the person with no other seat is never
   overtaken by one landing elsewhere, and a seat never lands in an
   archived athanor: `{:error, :athanor_archived}`, the answer adding a
-  member to one already gets.
+  member to one already gets. Under the same athanor lock, a group a
+  declared restore froze — an active member's recovery still open — is
+  refused `{:error, :recovering_from_restore}`.
 
   An invitation held for a person identifier (`:person_identifier`) is
   claimed by whoever proves that identity, so it widens who may sit here:
@@ -143,6 +145,7 @@ defmodule Arca.Members do
       write = fn ->
         with :ok <- hold_person(Map.get(attrs, :user_id)),
              :ok <- seatable(athanor_id),
+             :ok <- not_frozen(athanor_id),
              :ok <- reserve.(),
              {:ok, row} <-
                attrs |> defaults() |> Map.put(:athanor_id, athanor_id) |> do_insert() do
@@ -1063,6 +1066,16 @@ defmodule Arca.Members do
       "archived" -> {:error, :athanor_archived}
       _active -> :ok
     end
+  end
+
+  # A group a declared restore froze admits no one new: read under the
+  # athanor's lock `seatable/1` took, so of two seats racing into one
+  # group, the second reads the first, and a member whose recovery is open
+  # seated first freezes the group for the one that waited
+  # (`Arca.SecurityTransitions.restore_frozen?/1`).
+  defp not_frozen(athanor_id) do
+    frozen = where(Arca.SecurityTransitions.frozen_athanors(), [m], m.athanor_id == ^athanor_id)
+    if Arca.Repo.exists?(frozen), do: {:error, :recovering_from_restore}, else: :ok
   end
 
   defp found(nil), do: {:error, :not_found}

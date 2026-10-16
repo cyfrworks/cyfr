@@ -1340,9 +1340,12 @@ defmodule Sanctum.Pairing do
   transaction that writes it, after the item's lock: the person's
   `restore_people` row is open, locked there
   (`Arca.SecurityTransitions.restore_open!/1`), and the kit credential
-  whose digest is `credential_digest` stands under it, unexpired
-  (`Arca.SecurityTransitions.kit_stands!/2`). Otherwise `kit_refusal/0`:
-  the kit authorizes nothing once the person's restore has closed.
+  whose digest is `credential_digest` stands under it, unexpired, for a
+  person still in good standing, read again here beside the row and the
+  digest (`Arca.SecurityTransitions.kit_stands!/2`), so a denial between
+  the credential's admission and this write re-enables nothing. Otherwise
+  `kit_refusal/0`: the kit authorizes nothing once the person's restore
+  has closed or the person no longer stands.
   """
   @spec kit_confirmed(String.t(), String.t()) :: :ok | {:error, Prima.Refusal.t()}
   def kit_confirmed(user_id, credential_digest)

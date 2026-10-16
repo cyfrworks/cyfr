@@ -1016,9 +1016,11 @@ defmodule Sanctum.Recovery do
   redeemed once, in the transaction that records the credential, with
   the person's open row locked.
 
-  The credential is the token `rkc_<user id>.<32 random bytes>`, alive ten
-  minutes and only while the person's row stays open; this home keeps its
-  digest alone. It admits the four re-enable operations and their
+  The credential is the token `rkc_` and 32 random bytes
+  (`Prima.CredentialShape`'s `:restore_kit_credential`, which the sanitizer
+  redacts wherever it appears), alive ten minutes and only while the
+  person's row stays open and they stand; this home keeps its digest alone,
+  under which it finds the person. It admits the four re-enable operations and their
   previews and nothing else (`Sanctum.Caller.establish_kit/2`).
 
   Refusals: `:invalid_proof` (malformed), `:not_recovering` (no enrolled
@@ -1042,7 +1044,7 @@ defmodule Sanctum.Recovery do
          {:ok, _key} <- kit_signer(proof, state),
          {:ok, now} <-
            guarded("kit credential clock", fn -> {:ok, Arca.ServerMetaStorage.now!()} end) do
-      token = "rkc_" <> user_id <> "." <> Encoding.b64(:crypto.strong_rand_bytes(32))
+      token = Prima.CredentialShape.mint(:restore_kit_credential)
       expires_at = DateTime.add(now, @kit_credential_ms, :millisecond)
 
       case Arca.SecurityTransitions.redeem_kit_challenge(
@@ -1066,12 +1068,11 @@ defmodule Sanctum.Recovery do
   # The kit credential `token` presents, read standing now: its person is
   # in good standing and their row under its restore is open. What
   # `Sanctum.Caller.establish_kit/2` admits on; each write reads it again.
-  def kit_grant("rkc_" <> rest = token) do
-    with [user_id, _secret] <- String.split(rest, ".", parts: 2),
-         true <- Prima.PersonId.person?(user_id),
+  def kit_grant(token) when is_binary(token) do
+    with true <- Prima.CredentialShape.match?(:restore_kit_credential, token),
          digest = Prima.Digest.sha256(token),
-         {:ok, restore_id} <- Arca.SecurityTransitions.kit_credential(system(), user_id, digest),
-         {:ok, %{status: "active"}} <- Arca.Users.get(system(), user_id) do
+         {:ok, user_id} <- Arca.SecurityTransitions.kit_holder(system(), digest),
+         {:ok, restore_id} <- Arca.SecurityTransitions.kit_credential(system(), user_id, digest) do
       {:ok, %{user_id: user_id, restore_id: restore_id, credential_digest: digest}}
     else
       {:error, :database_error} -> {:error, :unavailable}

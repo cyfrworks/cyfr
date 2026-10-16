@@ -161,7 +161,7 @@ defmodule Emissary.Web.RestoreController do
   defp kit_refuse(conn, {:rate_limited, retry_after_ms}),
     do: retry(conn, "rate_limited", max(div(retry_after_ms + 999, 1000), 1))
 
-  defp kit_refuse(conn, reason) when reason in [:directory_unavailable, :unavailable],
+  defp kit_refuse(conn, reason) when reason in [:directory_unavailable, :unavailable, :not_owner],
     do: retry(conn, "unavailable", 1)
 
   defp kit_refuse(conn, %Prima.Refusal{class: class, reason: reason, message: message}) do

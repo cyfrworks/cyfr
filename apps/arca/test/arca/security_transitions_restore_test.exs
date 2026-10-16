@@ -463,6 +463,21 @@ defmodule Arca.SecurityTransitionsRestoreTest do
 
   defp get(schema, id), do: Arca.Repo.get(schema, id)
 
+  defp invited(athanor_id, invitee) do
+    Map.merge(
+      %{
+        id: Prima.UUID7.generate_id("mem"),
+        athanor_id: athanor_id,
+        scope: "athanor",
+        status: "invited",
+        added_by: "x",
+        created_at: now(),
+        updated_at: now()
+      },
+      invitee
+    )
+  end
+
   # A home as a backup holds it: two people, each with their own athanor
   # and a group they share, and in every store the transition moves an
   # active, a blocked and a terminal row.
@@ -703,6 +718,56 @@ defmodule Arca.SecurityTransitionsRestoreTest do
       assert is_nil(marker())
     end
 
+    test "a second restore supersedes the first: its rows close, its kit goes, and whoever " <>
+           "still holds a suspended method recovers again" do
+      fixture = home!()
+      first = marked!()
+      assert {:ok, %{restore_id: ^first}} = SecurityTransitions.restore(slot: :none)
+
+      # Alice proved her kit under the first restore and left a challenge.
+      later = DateTime.add(Arca.ServerMetaStorage.now!(), 60_000, :millisecond)
+      challenge = Prima.Digest.sha256("first-challenge")
+      credential = Prima.Digest.sha256("first-credential")
+
+      :ok =
+        SecurityTransitions.put_kit_challenge(server(), fixture.alice.id, first, challenge, later)
+
+      :ok =
+        SecurityTransitions.put_kit_challenge(
+          server(),
+          fixture.alice.id,
+          first,
+          Prima.Digest.sha256("unused"),
+          later
+        )
+
+      :ok =
+        SecurityTransitions.redeem_kit_challenge(
+          server(),
+          fixture.alice.id,
+          first,
+          challenge,
+          credential,
+          later
+        )
+
+      second = marked!()
+
+      assert {:ok, %{restore_id: ^second, superseded_restore_ids: [^first]}} =
+               SecurityTransitions.restore(slot: :none)
+
+      # Her methods are still suspended: she recovers under the second.
+      assert [%{restore_id: ^first, open: false}, %{restore_id: ^second, open: true}] =
+               rows(fixture.alice.id)
+
+      assert {:error, :not_standing} =
+               SecurityTransitions.kit_credential(server(), fixture.alice.id, credential)
+
+      assert {:error, :not_standing} = SecurityTransitions.kit_holder(server(), credential)
+
+      refute Arca.Repo.exists?(from(m in Schemas.ServerMeta, where: like(m.key, "restore_kit%")))
+    end
+
     test "is applied once: a boot after it finds no marker and moves nothing again" do
       fixture = home!()
       restore_id = marked!()
@@ -837,6 +902,13 @@ defmodule Arca.SecurityTransitionsRestoreTest do
     } do
       group = Prima.Actor.in_athanor(f.group.id)
       assert {:ok, true} = SecurityTransitions.restore_frozen?(group)
+
+      # The seat's own transaction refuses it, under the athanor's lock.
+      newcomer = person!()
+
+      assert {:error, :recovering_from_restore} =
+               Arca.Members.seat(group, %{user_id: newcomer.id, added_by: "x"})
+
       # A person's own athanor is never frozen by it.
       assert {:ok, false} = SecurityTransitions.restore_frozen?(Prima.Actor.in_athanor(f.own.id))
 
@@ -849,27 +921,19 @@ defmodule Arca.SecurityTransitionsRestoreTest do
         Arca.Repo.locking_transaction(fn -> SecurityTransitions.close_restore!(f.bob.id) end)
 
       assert {:ok, false} = SecurityTransitions.restore_frozen?(group)
+      assert {:ok, _seated} = Arca.Members.seat(group, %{user_id: newcomer.id, added_by: "x"})
     end
 
     test "an invitation to a frozen group stays an invitation until every member has recovered",
          %{fixture: f} do
       newcomer = person!()
 
-      {:ok, _} =
-        Arca.Members.seat(Prima.Actor.in_athanor(f.group.id), %{
-          email: newcomer.email,
-          status: "invited",
-          added_by: "x"
-        })
-
+      # Invitations made before the freeze, which a frozen group no longer
+      # takes (`Arca.Members.seat/3`).
       identifier = "per_" <> String.duplicate("a", 64)
 
-      {:ok, _} =
-        Arca.Members.seat(Prima.Actor.in_athanor(f.group.id), %{
-          person_identifier: identifier,
-          status: "invited",
-          added_by: "x"
-        })
+      insert!(Schemas.Membership, invited(f.group.id, %{email: newcomer.email}))
+      insert!(Schemas.Membership, invited(f.group.id, %{person_identifier: identifier}))
 
       # Her own athanor is no group; an invitation there would activate.
       assert {:ok, []} =

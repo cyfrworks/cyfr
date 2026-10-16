@@ -424,12 +424,14 @@ defmodule Arca.ApiKeyStorage do
              is_binary(key_id) and is_list(opts) do
     verify = Keyword.fetch!(opts, :verify)
 
-    Arca.Repo.Errors.with_db_rescue("ApiKeyStorage.reenable", fn ->
-      Arca.Repo.locking_transaction(fn ->
-        athanor_id |> reenable_row(user_id, key_id, verify) |> Arca.Repo.committed()
-      end)
+    # Under the live ownership fence, as every write of this member is
+    # (`Arca.Repo.owned/2`): a member whose slot was taken over writes
+    # nothing and answers `:not_owner`. The person first, then the row,
+    # the order every re-enabling write takes.
+    Arca.Repo.owned("Arca.ApiKeyStorage.reenable", fn ->
+      _locked = Arca.DirectoryHeads.lock_person!(user_id)
+      reenable_row(athanor_id, user_id, key_id, verify)
     end)
-    |> Arca.Data.project()
   end
 
   def reenable(%Prima.Actor{}, _user_id, _key_id, _opts), do: {:error, :no_athanor}

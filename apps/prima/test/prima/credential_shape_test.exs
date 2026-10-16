@@ -55,6 +55,19 @@ defmodule Prima.CredentialShapeTest do
     end
   end
 
+  describe "a recovery kit's credential" do
+    test "is a prefixed shape, redacted whole or embedded" do
+      credential = CredentialShape.mint(:restore_kit_credential)
+
+      assert CredentialShape.match?(:restore_kit_credential, credential)
+      assert String.starts_with?(credential, "rkc_")
+      assert CredentialShape.redact("note: " <> credential <> ".", "*") == "note: *."
+
+      assert Prima.Sanitizer.sanitize(%{"note" => "shown " <> credential <> " here"}) ==
+               %{"note" => "shown [REDACTED] here"}
+    end
+  end
+
   describe "match?/2" do
     test "holds for the whole value only, and for its own kind only" do
       credential = CredentialShape.mint(:webhook_secret)

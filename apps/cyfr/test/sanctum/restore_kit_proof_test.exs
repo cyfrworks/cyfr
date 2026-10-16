@@ -553,6 +553,138 @@ defmodule Sanctum.RestoreKitProofTest do
     assert {:ok, nil} = restore_open(door_only.user_id)
   end
 
+  # ---- a second restore, a denial, a lost slot, the log ------------------------------
+
+  test "a second declared restore leaves the first restore's kit credential re-enabling nothing",
+       %{directory: directory} do
+    person = enrolled!(directory)
+    first = restored!()
+    credential = credential!(person)
+    second = restored!()
+    refute first == second
+
+    # The person still recovers, under the second restore.
+    assert {:ok, ^second} = restore_open(person.user.id)
+
+    assert %{"error" => "invalid_credential"} =
+             json_response(
+               reenable(credential, %{
+                 "operation" => "passkey.reenable",
+                 "passkey_id" => person.passkey
+               }),
+               401
+             )
+
+    assert Arca.Repo.get(Schemas.Passkey, person.passkey).state == "suspended"
+  end
+
+  test "a second declared restore leaves an outstanding challenge of the first redeeming nothing",
+       %{directory: directory} do
+    person = enrolled!(directory)
+    first = restored!()
+    proof = signed(person, challenge(person), person.recovery_private)
+    second = restored!()
+    refute first == second
+
+    conn = post_json("/restore/kit", %{"proof" => proof})
+    assert conn.status in [404, 409]
+    refute Map.has_key?(Jason.decode!(conn.resp_body), "credential")
+
+    # A fresh proof under the second restore recovers.
+    assert is_binary(credential!(person))
+  end
+
+  test "a kit re-enable reads its person's standing again: a denial after admission writes nothing",
+       %{directory: directory} do
+    person = enrolled!(directory)
+    name = "kit-denied-" <> Prima.UUID7.generate_id("wh")
+
+    assert :ok =
+             Arca.WebhookStorage.create_webhook(%{
+               name: name,
+               slug: "wh_" <> Base.url_encode64(:crypto.strong_rand_bytes(18), padding: false),
+               target_ref: "f:local.handler",
+               secret_encrypted: :crypto.strong_rand_bytes(64),
+               signature_header: "x-cyfr-signature",
+               input_template: "{}",
+               athanor_id: person.athanor.id,
+               created_by: person.user.id,
+               profile_id: "prof_kit"
+             })
+
+    assert {:ok, webhook} =
+             Arca.WebhookStorage.get_by_name(Prima.Actor.in_athanor(person.athanor.id), name)
+
+    restored!()
+    credential = credential!(person)
+
+    # Admitted as the controller admits it, then denied before the write.
+    assert {:ok, ctx, grant} = Sanctum.Caller.establish_kit(credential, "webhook.reenable")
+
+    assert {:ok, _} =
+             Arca.SecurityTransitions.deny_user(Prima.Actor.system(), person.user.id,
+               verify: fn _ -> :ok end
+             )
+
+    assert {:error, _refused} =
+             Sanctum.Recovery.kit_reenable(ctx, grant, "webhook.reenable", %{
+               "webhook_id" => webhook.id
+             })
+
+    assert Arca.Repo.get(Schemas.Webhook, webhook.id).suspended
+  end
+
+  test "a member whose slot was taken over mints no kit credential", %{directory: directory} do
+    person = enrolled!(directory)
+    restored!()
+    proof = signed(person, challenge(person), person.recovery_private)
+
+    keys = [
+      {Arca.ControlPlane, :standing},
+      {Arca.ControlPlane, :generation},
+      {Arca.ControlPlane, :slot}
+    ]
+
+    saved = Map.new(keys, &{&1, :persistent_term.get(&1, :absent)})
+    claim = Application.get_env(:arca, :control_plane_claim_enabled)
+
+    on_exit(fn ->
+      for {key, value} <- saved do
+        if value == :absent,
+          do: :persistent_term.erase(key),
+          else: :persistent_term.put(key, value)
+      end
+
+      if is_nil(claim),
+        do: Application.delete_env(:arca, :control_plane_claim_enabled),
+        else: Application.put_env(:arca, :control_plane_claim_enabled, claim)
+    end)
+
+    Application.put_env(:arca, :control_plane_claim_enabled, true)
+    node = "kit-slot-#{System.unique_integer([:positive])}"
+    {:ok, slot} = Arca.ControlPlane.take(node, node <> "#old", 60_000)
+
+    Arca.Repo.get!(Schemas.CellLease, slot.node)
+    |> Ecto.Changeset.change(owner: "successor", generation: slot.generation + 1)
+    |> Arca.Repo.update!()
+
+    assert :lost = Arca.ControlPlane.check_held(slot)
+    conn = post_json("/restore/kit", %{"proof" => proof})
+    refute Map.has_key?(Jason.decode!(conn.resp_body), "credential")
+  end
+
+  test "the kit credential is redacted by its shape wherever it appears", %{
+    directory: directory
+  } do
+    person = enrolled!(directory)
+    restored!()
+    credential = credential!(person)
+
+    assert Prima.CredentialShape.match?(:restore_kit_credential, credential)
+    sanitized = Prima.Sanitizer.sanitize(%{"note" => "shown " <> credential <> " here"})
+    refute String.contains?(sanitized["note"], credential)
+  end
+
   # ---- the vectors -------------------------------------------------------------------
 
   test "the kit proof's vectors verify here as the browser signs them" do

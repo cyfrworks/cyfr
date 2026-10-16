@@ -1059,4 +1059,75 @@ defmodule Sanctum.ApiKeyTest do
 
     ApiKey.rotate(confirmed, name, issuance)
   end
+
+  # A member whose slot was taken over by a successor writes nothing: the
+  # re-enable runs under the live ownership fence, a kit's included.
+  for kind <- [:key, :webhook] do
+    test "a member whose slot was taken over re-enables no #{kind} under a kit", %{ctx: ctx} do
+      kind = unquote(kind)
+      {:ok, _} = create_key(ctx, %{name: "held", scope: []})
+      key_id = key_id!(ctx, "held")
+
+      :ok =
+        Arca.WebhookStorage.create_webhook(%{
+          name: "held",
+          slug: "wh_" <> Base.url_encode64(:crypto.strong_rand_bytes(18), padding: false),
+          target_ref: "f:local.handler",
+          secret_encrypted: :crypto.strong_rand_bytes(64),
+          athanor_id: ctx.athanor_id,
+          created_by: ctx.user_id,
+          profile_id: "prof_kit"
+        })
+
+      {:ok, webhook} = Arca.WebhookStorage.get_by_name(Context.actor(ctx), "held")
+      restore_id = declared_restore!()
+      digest = kit_credential!(ctx.user_id, restore_id)
+      kit = {:kit, %{user_id: ctx.user_id, credential_digest: digest}}
+
+      keys = [
+        {Arca.ControlPlane, :standing},
+        {Arca.ControlPlane, :generation},
+        {Arca.ControlPlane, :slot}
+      ]
+
+      saved = Map.new(keys, &{&1, :persistent_term.get(&1, :absent)})
+      claim = Application.get_env(:arca, :control_plane_claim_enabled)
+
+      on_exit(fn ->
+        for {key, value} <- saved do
+          if value == :absent,
+            do: :persistent_term.erase(key),
+            else: :persistent_term.put(key, value)
+        end
+
+        if is_nil(claim),
+          do: Application.delete_env(:arca, :control_plane_claim_enabled),
+          else: Application.put_env(:arca, :control_plane_claim_enabled, claim)
+      end)
+
+      Application.put_env(:arca, :control_plane_claim_enabled, true)
+      node = "kit-reenable-#{System.unique_integer([:positive])}"
+      {:ok, slot} = Arca.ControlPlane.take(node, node <> "#old", 60_000)
+
+      {1, _} =
+        Arca.Repo.update_all(from(l in Arca.Schemas.CellLease, where: l.node == ^slot.node),
+          set: [owner: "successor", generation: slot.generation + 1]
+        )
+
+      assert :lost = Arca.ControlPlane.check_held(slot)
+
+      {answer, suspended} =
+        case kind do
+          :key ->
+            {ApiKey.reenable(ctx, key_id, kit), stored_key(key_id).suspended}
+
+          :webhook ->
+            {Sanctum.Webhook.reenable(ctx, webhook.id, kit),
+             Arca.Repo.get!(Arca.Schemas.Webhook, webhook.id).suspended}
+        end
+
+      assert {:error, :not_owner} = answer
+      assert suspended
+    end
+  end
 end

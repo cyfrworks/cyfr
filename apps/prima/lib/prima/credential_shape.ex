@@ -19,6 +19,9 @@ defmodule Prima.CredentialShape do
       random bytes (`Sanctum.Webhook`);
     * `:confirmation_secret` — a pending confirmation's secret, `cnf_` and
       32 random bytes (`Prima.Confirmation`);
+    * `:restore_kit_credential` — the credential a recovering person's
+      kit proof answers after a declared restore, `rkc_` and 32 random
+      bytes (`Sanctum.Recovery`);
     * `:signed_token` — a token signed by `Plug.Crypto.sign/4` with
       SHA-256, which is how the tincture asset, frame and validation
       credentials are spelled (`Sanctum.TinctureAuth`): the header
@@ -55,6 +58,8 @@ defmodule Prima.CredentialShape do
   @webhook_secret_bytes 24
   @confirmation_secret_prefix "cnf_"
   @confirmation_secret_bytes 32
+  @restore_kit_credential_prefix "rkc_"
+  @restore_kit_credential_bytes 32
 
   # `Plug.Crypto.MessageVerifier`'s protected header for HMAC-SHA-256, and
   # the unpadded base64url length of its 32-byte signature.
@@ -73,6 +78,7 @@ defmodule Prima.CredentialShape do
           {:api_key, :application | :service | :admin}
           | :webhook_secret
           | :confirmation_secret
+          | :restore_kit_credential
           | :signed_token
 
   @doc "The API-key prefix of each key type."
@@ -90,7 +96,9 @@ defmodule Prima.CredentialShape do
       [
         {:webhook_secret, @webhook_secret_prefix, encoded_length(@webhook_secret_bytes)},
         {:confirmation_secret, @confirmation_secret_prefix,
-         encoded_length(@confirmation_secret_bytes)}
+         encoded_length(@confirmation_secret_bytes)},
+        {:restore_kit_credential, @restore_kit_credential_prefix,
+         encoded_length(@restore_kit_credential_bytes)}
       ]
   end
 
@@ -118,6 +126,9 @@ defmodule Prima.CredentialShape do
 
   def mint(:confirmation_secret),
     do: drawn(@confirmation_secret_prefix, @confirmation_secret_bytes)
+
+  def mint(:restore_kit_credential),
+    do: drawn(@restore_kit_credential_prefix, @restore_kit_credential_bytes)
 
   @doc """
   Whether `value` is, whole, a credential of `kind`.

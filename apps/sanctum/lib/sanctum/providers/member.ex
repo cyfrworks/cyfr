@@ -27,9 +27,9 @@ defmodule Sanctum.Providers.Member do
   (`Arca.SecurityTransitions.restore_frozen?/1`): until every member's
   recovery has closed, `add` is refused with a sentence that says so,
   while `remove` and `leave`, which only reduce who is there, stay
-  admitted. A restore opens recoveries only at boot, before anything is
-  admitted, and a running home only closes them, so a group read unfrozen
-  here cannot become frozen before the seat is written.
+  admitted. The seat's own transaction decides it, under the athanor's
+  lock (`Arca.Members.seat/3`); this provider's read before it only
+  answers early.
   """
 
   require Logger
@@ -188,6 +188,9 @@ defmodule Sanctum.Providers.Member do
         {:error, :athanor_archived} ->
           {:error, {:invalid_argument, "That athanor is archived"}}
 
+        {:error, :recovering_from_restore} ->
+          {:error, recovering_refusal()}
+
         {:error, {:limit_reached, key, cap}} ->
           {:error, {:invalid_argument, "Limit reached: #{key} = #{cap}"}}
 
@@ -247,22 +250,27 @@ defmodule Sanctum.Providers.Member do
   def handle(_ctx, %{"action" => action}), do: {:error, {:unknown_action, "member.#{action}"}}
   def handle(_ctx, _args), do: {:error, :action_missing}
 
-  # A group with a member still recovering from a declared restore admits
-  # no one new until each of them has recovered (the module doc).
+  defp recovering_refusal do
+    %Prima.Refusal{
+      class: :forbidden,
+      reason: :recovering_from_restore,
+      message:
+        "This home was restored from a backup, and a member of this group has not yet " <>
+          "recovered their sign-in: no one is added until every member has"
+    }
+  end
+
+  # A courtesy read before the write: the seat's own transaction decides
+  # (`Arca.Members.seat/3`), under the athanor's lock. A group with a
+  # member still recovering from a declared restore admits no one new
+  # until each of them has recovered (the module doc).
   defp not_recovering(%{id: athanor_id}) do
     case Arca.SecurityTransitions.restore_frozen?(Prima.Actor.in_athanor(athanor_id)) do
       {:ok, false} ->
         :ok
 
       {:ok, true} ->
-        {:error,
-         %Prima.Refusal{
-           class: :forbidden,
-           reason: :recovering_from_restore,
-           message:
-             "This home was restored from a backup, and a member of this group has not yet " <>
-               "recovered their sign-in: no one is added until every member has"
-         }}
+        {:error, recovering_refusal()}
 
       {:error, _unanswered} ->
         {:error, {:unavailable, "Storage"}}
