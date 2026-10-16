@@ -13,6 +13,16 @@ defmodule Arca.Schemas.CronSchedule do
   and seq (`feed_result`, `feed_result_at`, `feed_result_seq`). Only
   `Arca.CronSchedule.create_feed/2` writes a feed; the schedule changesets
   cast none of those fields.
+
+  `missed_runs` is the schedule's declared policy for due times it missed
+  (`skip`, the default, or `catch_up`), and `catch_up_limit` how many of
+  them one catch-up episode fires: set under `catch_up`, never under
+  `skip`. An open episode is `catch_up_left` missed times still to fire,
+  up to the horizon `catch_up_until`; only `Arca.ScheduleOccurrences.claim/3`
+  opens, walks and closes one, and a write that moves the cursor or the
+  policy here closes it. The upper bound of the limit is the scheduler's
+  (`Opus.Schedules.Scheduler.max_catch_up/0`), held on each adapter by the
+  table's CHECK, which this changeset reads back as a validation error.
   """
 
   use Ecto.Schema
@@ -20,6 +30,7 @@ defmodule Arca.Schemas.CronSchedule do
 
   @statuses ~w(active paused deleted needs_consent)
   @concurrency ~w(forbid allow)
+  @missed_runs ~w(skip catch_up)
   @kinds ~w(schedule feed)
 
   @primary_key {:id, :string, autogenerate: false}
@@ -46,6 +57,7 @@ defmodule Arca.Schemas.CronSchedule do
     # Whether a due occurrence is claimed while another of this schedule
     # is still open: `forbid` or `allow` (`Arca.ScheduleOccurrences`).
     field :concurrency, :string, default: "forbid"
+    # skip | catch_up, and the episode `ScheduleOccurrences.claim/3` walks.
     field :missed_runs, :string, default: "skip"
     field :catch_up_limit, :integer
     field :catch_up_until, :utc_datetime_usec
@@ -83,6 +95,8 @@ defmodule Arca.Schemas.CronSchedule do
       :profile_id,
       :status,
       :concurrency,
+      :missed_runs,
+      :catch_up_limit,
       :athanor_id,
       :next_run_at,
       :created_at,
@@ -101,6 +115,7 @@ defmodule Arca.Schemas.CronSchedule do
     ])
     |> validate_inclusion(:status, @statuses)
     |> validate_inclusion(:concurrency, @concurrency)
+    |> validate_missed_runs()
   end
 
   @doc """
@@ -163,6 +178,8 @@ defmodule Arca.Schemas.CronSchedule do
       :profile_id,
       :status,
       :concurrency,
+      :missed_runs,
+      :catch_up_limit,
       :next_run_at,
       :last_run_at,
       :last_execution_id,
@@ -172,6 +189,45 @@ defmodule Arca.Schemas.CronSchedule do
     ])
     |> validate_inclusion(:status, @statuses)
     |> validate_inclusion(:concurrency, @concurrency)
+    |> validate_missed_runs()
+    |> close_episode()
+  end
+
+  # The policy and its limit agree: `catch_up` names a limit of at least
+  # one, `skip` names none. The limit's ceiling is the CHECK's, read back
+  # here rather than raised, so a store refusal crosses as a field error.
+  defp validate_missed_runs(changeset) do
+    changeset =
+      changeset
+      |> validate_inclusion(:missed_runs, @missed_runs)
+      |> check_constraint(:catch_up_limit, name: :cron_schedules_catch_up_limit_declared)
+      |> check_constraint(:catch_up_left, name: :cron_schedules_catch_up_episode)
+
+    case {get_field(changeset, :missed_runs), get_field(changeset, :catch_up_limit)} do
+      {"catch_up", nil} ->
+        add_error(changeset, :catch_up_limit, "is required when missed_runs is catch_up")
+
+      {"catch_up", limit} when limit < 1 ->
+        add_error(changeset, :catch_up_limit, "must be at least 1")
+
+      {"skip", limit} when not is_nil(limit) ->
+        add_error(changeset, :catch_up_limit, "must be empty when missed_runs is skip")
+
+      _agreed ->
+        changeset
+    end
+  end
+
+  # A write that moves the cursor or changes the policy ends any catch-up
+  # episode the claim had open: the missed times it counted were counted
+  # against the old cursor and the old limit.
+  defp close_episode(changeset) do
+    if Enum.any?(
+         [:next_run_at, :missed_runs, :catch_up_limit, :cron_expression],
+         &changed?(changeset, &1)
+       ),
+       do: change(changeset, catch_up_until: nil, catch_up_left: 0),
+       else: changeset
   end
 
   @doc "The changeset a schedule is soft-deleted through."

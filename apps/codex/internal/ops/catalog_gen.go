@@ -4586,6 +4586,10 @@ type ScheduleCreateArgs struct {
 	Metadata Field[map[string]any] `json:"metadata,omitzero"`
 	// Whether a due occurrence runs while another of this schedule is still open (default forbid)
 	Concurrency Field[string] `json:"concurrency,omitzero"`
+	// What becomes of due times the server missed (create/update): skip them (default), or catch_up on up to catch_up_limit of them, oldest first
+	MissedRuns Field[string] `json:"missed_runs,omitzero"`
+	// How many missed times one catch-up fires, 1 to 24 (create/update; required with catch_up, refused with skip)
+	CatchUpLimit Field[int] `json:"catch_up_limit,omitzero"`
 }
 
 // MarshalJSON supplies the operation's fixed action discriminator.
@@ -4705,6 +4709,10 @@ type ScheduleUpdateArgs struct {
 	Metadata Field[*map[string]any] `json:"metadata,omitzero"`
 	// Whether a due occurrence runs while another of this schedule is still open (default forbid)
 	Concurrency Field[string] `json:"concurrency,omitzero"`
+	// What becomes of due times the server missed (create/update): skip them (default), or catch_up on up to catch_up_limit of them, oldest first
+	MissedRuns Field[string] `json:"missed_runs,omitzero"`
+	// How many missed times one catch-up fires, 1 to 24 (create/update; required with catch_up, refused with skip)
+	CatchUpLimit Field[int] `json:"catch_up_limit,omitzero"`
 }
 
 // MarshalJSON supplies the operation's fixed action discriminator.

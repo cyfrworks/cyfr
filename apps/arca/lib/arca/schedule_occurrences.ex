@@ -59,17 +59,46 @@ defmodule Arca.ScheduleOccurrences do
 
   @doc """
   Take the occurrence `schedule.next_run_at` names for the boot
-  `claimant`, moving the cursor to `next_run`: `{:ok, occurrence}` when
-  this call won it, `:held` when it was not due or another claimant
-  advanced the cursor first, `:overlapping` when the schedule forbids
-  concurrency and an occurrence of it is still open.
+  `claimant`, and move the cursor past it: `{:ok, occurrence}` when this
+  call won it, `:skipped` when the due time was missed and the schedule
+  declares `skip` (the cursor moved on, nothing fired), `:held` when it
+  was not due or another claimant advanced the cursor first,
+  `:overlapping` when the schedule forbids concurrency and an occurrence
+  of it is still open.
 
   `schedule` is read for its `id`, its `athanor_id` and the
   `next_run_at` the caller saw, which is the cursor the write compares
-  against; everything else the claim decides on, concurrency included,
-  is read from the row as it stands. Due is decided on the cell's clock,
-  so a member whose own clock runs fast cannot fire a schedule before it
-  is due for its peers.
+  against; everything else the claim decides on, concurrency and the
+  missed-run policy and episode included, is read from the row as it
+  stands under its lock. Due is decided on the cell's clock, so a member
+  whose own clock runs fast cannot fire a schedule before it is due for
+  its peers.
+
+  `cadence` carries what the claim cannot know of the schedule's
+  expression: `next_after`, the first time the expression names strictly
+  after a given instant (`{:ok, time}`, anything else when there is
+  none), and `missed_bound_ms`, how late a due time may be claimed and
+  still be an ordinary one: the larger of the scheduler's jitter and the
+  slot lease, so neither a timer that fires a few seconds late nor a
+  successor taking over a slot is downtime.
+
+  A due time older than the bound at claim was missed. Under `skip` it
+  does not fire: the cursor moves to the first time the bound does not
+  call missed, and the claim answers `:skipped`. Under `catch_up` it
+  opens an episode: `catch_up_until` is set to the horizon (every time at
+  or before it was missed when the episode opened) and `catch_up_left`
+  to the limit; each claim then fires the cursor's time, decrements
+  `catch_up_left` and moves the cursor to the next time while some are
+  left and the next is within the horizon. Otherwise the episode closes:
+  the cursor moves to the first time the bound does not call missed, and
+  both columns clear. The episode lives in those columns, so a restart or
+  a takeover resumes it from the row. A due time within the bound fires
+  under either policy, and the cursor moves to the next time after it.
+  The cursor only ever moves forward from the time it fired, so the
+  claim's own walk never names a time twice; a cursor some other write
+  set to a time that already fired (a clock set back) is moved past it
+  with nothing fired and answered `:held`, and the unique
+  `(schedule_id, scheduled_for)` stands behind both.
 
   Every row, a schedule's and a feed's alike, is claimed only under the
   member's live slot: the row is locked and the slot checked before the
@@ -78,16 +107,26 @@ defmodule Arca.ScheduleOccurrences do
   `{:error, :not_owner}` with the cursor unmoved and no occurrence
   written.
   """
-  @spec claim(map(), String.t(), DateTime.t()) ::
-          {:ok, map()} | :held | :overlapping | {:error, :not_owner | :database_error}
-  def claim(%{next_run_at: nil}, _claimant, _next_run), do: :held
+  @type cadence :: %{
+          required(:next_after) => (DateTime.t() -> {:ok, DateTime.t()} | term()),
+          required(:missed_bound_ms) => non_neg_integer()
+        }
+
+  @spec claim(map(), String.t(), cadence()) ::
+          {:ok, map()}
+          | :skipped
+          | :held
+          | :overlapping
+          | {:error, :not_owner | :database_error}
+  def claim(%{next_run_at: nil}, _claimant, _cadence), do: :held
 
   def claim(
         %{id: id, next_run_at: %DateTime{} = due_for} = schedule,
         claimant,
-        %DateTime{} = next_run
+        %{next_after: next_after, missed_bound_ms: bound_ms}
       )
-      when is_binary(id) and is_binary(claimant) do
+      when is_binary(id) and is_binary(claimant) and is_function(next_after, 1) and
+             is_integer(bound_ms) and bound_ms >= 0 do
     athanor_id = Map.fetch!(schedule, :athanor_id)
 
     Errors.with_db_rescue("ScheduleOccurrences.claim", fn ->
@@ -102,40 +141,43 @@ defmodule Arca.ScheduleOccurrences do
         with {:error, reason} <- Arca.CronSchedule.slot_fence(),
              do: Arca.Repo.rollback(reason)
 
-        {count, _} =
-          from(s in CronSchedule,
-            where: s.id == ^id and s.athanor_id == ^athanor_id,
-            where: s.status == "active" and s.next_run_at == ^due_for and s.next_run_at <= ^now
-          )
-          |> Arca.Repo.update_all(set: [next_run_at: next_run])
+        row = due_row(athanor_id, id, due_for, now) || Arca.Repo.rollback(:held)
+        horizon = DateTime.add(now, -bound_ms, :millisecond)
 
-        if count != 1, do: Arca.Repo.rollback(:held)
+        case advance(row, due_for, horizon, next_after) do
+          {:skip, cursor} ->
+            move_cursor(athanor_id, id, cursor)
+            :skipped
 
-        concurrency =
-          Arca.Repo.one(from(s in CronSchedule, where: s.id == ^id, select: s.concurrency))
+          {:fire, cursor} ->
+            cond do
+              # A cursor naming a time that already fired (a clock set
+              # back behind a write that computed it) moves past it and
+              # fires nothing: each time is fired once.
+              fired?(athanor_id, id, due_for) ->
+                move_cursor(athanor_id, id, cursor)
+                :fired
 
-        # Due and won, but another occurrence of the schedule is still
-        # open: the cursor stays where it was, and the occurrence waits.
-        if concurrency == "forbid" and open?(athanor_id, id),
-          do: Arca.Repo.rollback(:overlapping)
+              # Due and won, but another occurrence of the schedule is
+              # still open: the cursor and the episode stay where they
+              # were, and the occurrence waits.
+              row.concurrency == "forbid" and open?(athanor_id, id) ->
+                Arca.Repo.rollback(:overlapping)
 
-        %ScheduleOccurrence{}
-        |> ScheduleOccurrence.changeset(%{
-          id: Prima.UUID7.generate_id("occ"),
-          athanor_id: athanor_id,
-          schedule_id: id,
-          scheduled_for: due_for,
-          state: "claimed",
-          claimed_by: claimant,
-          claimed_at: now
-        })
-        |> Arca.Repo.insert()
-        |> case do
-          {:ok, row} -> row
-          {:error, _changeset} -> Arca.Repo.rollback(:held)
+              true ->
+                move_cursor(athanor_id, id, cursor)
+                insert_occurrence(athanor_id, id, due_for, claimant, now)
+            end
+
+          :none ->
+            # The expression names no later time: nothing is claimed
+            # rather than an occurrence nothing can advance past.
+            Arca.Repo.rollback(:held)
         end
       end)
       |> case do
+        {:ok, :skipped} -> :skipped
+        {:ok, :fired} -> :held
         {:ok, row} -> {:ok, row}
         {:error, :held} -> :held
         {:error, :overlapping} -> :overlapping
@@ -143,6 +185,115 @@ defmodule Arca.ScheduleOccurrences do
       end
     end)
     |> Arca.Data.project()
+  end
+
+  # The locked row, read only while it is active, its cursor is the one
+  # the caller saw and that cursor is due on the cell's clock.
+  # arca:db-raise-ok inside the claim transaction
+  defp due_row(athanor_id, id, due_for, now) do
+    Arca.Repo.one(
+      from(s in CronSchedule,
+        where: s.id == ^id and s.athanor_id == ^athanor_id,
+        where: s.status == "active" and s.next_run_at == ^due_for and s.next_run_at <= ^now,
+        select:
+          map(s, [
+            :concurrency,
+            :missed_runs,
+            :catch_up_limit,
+            :catch_up_until,
+            :catch_up_left
+          ])
+      )
+    )
+  end
+
+  # What the claim does with the due time and where the cursor goes, as
+  # `{:fire | :skip, cursor}` with the episode columns the cursor carries,
+  # or `:none` when the expression names no later time.
+  defp advance(%{catch_up_left: left, catch_up_until: until}, due_for, horizon, next_after)
+       when left > 0 do
+    # An open episode: the cursor's time is one of its missed times.
+    walk(due_for, left - 1, until, horizon, next_after)
+  end
+
+  defp advance(row, due_for, horizon, next_after) do
+    cond do
+      DateTime.compare(due_for, horizon) != :lt ->
+        # Within the bound: an ordinary occurrence, whatever the policy.
+        with {:ok, next} <- next_time(next_after, due_for), do: {:fire, episode(next, nil, 0)}
+
+      row.missed_runs == "catch_up" ->
+        walk(due_for, row.catch_up_limit - 1, horizon, horizon, next_after)
+
+      true ->
+        with {:ok, next} <- next_time(next_after, horizon), do: {:skip, episode(next, nil, 0)}
+    end
+  end
+
+  # Fire `due_for` and keep the episode open on the next missed time while
+  # some are left to fire and the next is within its horizon; otherwise
+  # close it on the first time the bound does not call missed, and never
+  # on one at or before `due_for`: a cell clock set back since the episode
+  # opened puts the horizon behind the cursor, and the cursor still moves
+  # forward.
+  defp walk(due_for, left, until, horizon, next_after) do
+    with {:ok, next} <- next_time(next_after, due_for) do
+      if left > 0 and DateTime.compare(next, until) != :gt do
+        {:fire, episode(next, until, left)}
+      else
+        with {:ok, resumed} <- next_time(next_after, horizon),
+             do: {:fire, episode(max_time(resumed, next), nil, 0)}
+      end
+    end
+  end
+
+  defp episode(next_run_at, until, left),
+    do: [next_run_at: next_run_at, catch_up_until: until, catch_up_left: left]
+
+  # The expression's next time strictly after `instant`, never at or
+  # before it, so the cursor only moves forward.
+  defp next_time(next_after, instant) do
+    case next_after.(instant) do
+      {:ok, %DateTime{} = next} ->
+        if DateTime.compare(next, instant) == :gt, do: {:ok, next}, else: :none
+
+      _none ->
+        :none
+    end
+  end
+
+  defp max_time(a, b), do: if(DateTime.compare(a, b) == :lt, do: b, else: a)
+
+  # arca:db-raise-ok inside the claim transaction
+  defp move_cursor(athanor_id, id, cursor) do
+    from(s in CronSchedule, where: s.id == ^id and s.athanor_id == ^athanor_id)
+    |> Arca.Repo.update_all(set: cursor)
+    |> case do
+      {1, _} -> :ok
+      {_moved, _} -> Arca.Repo.rollback(:held)
+    end
+  end
+
+  # The occurrence the claim won. A time already taken (the unique
+  # `(schedule_id, scheduled_for)`) is another claim's, and this one is
+  # held: the transaction rolls back with the cursor unmoved.
+  # arca:db-raise-ok inside the claim transaction
+  defp insert_occurrence(athanor_id, id, due_for, claimant, now) do
+    %ScheduleOccurrence{}
+    |> ScheduleOccurrence.changeset(%{
+      id: Prima.UUID7.generate_id("occ"),
+      athanor_id: athanor_id,
+      schedule_id: id,
+      scheduled_for: due_for,
+      state: "claimed",
+      claimed_by: claimant,
+      claimed_at: now
+    })
+    |> Arca.Repo.insert()
+    |> case do
+      {:ok, row} -> row
+      {:error, _changeset} -> Arca.Repo.rollback(:held)
+    end
   end
 
   @doc """
@@ -463,6 +614,16 @@ defmodule Arca.ScheduleOccurrences do
     )
     |> Arca.QueryHelpers.for_update()
     |> Arca.Repo.one()
+  end
+
+  # arca:db-raise-ok inside the claim transaction
+  defp fired?(athanor_id, schedule_id, scheduled_for) do
+    Arca.Repo.exists?(
+      from(o in ScheduleOccurrence,
+        where: o.athanor_id == ^athanor_id and o.schedule_id == ^schedule_id,
+        where: o.scheduled_for == ^scheduled_for
+      )
+    )
   end
 
   # arca:db-raise-ok inside the claim transaction

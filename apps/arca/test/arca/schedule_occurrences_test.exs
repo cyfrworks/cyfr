@@ -77,6 +77,12 @@ defmodule Arca.ScheduleOccurrencesTest do
 
   defp next_occurrence, do: DateTime.add(DateTime.utc_now(), 300, :second)
 
+  # What the scheduler hands a claim: the expression's next time after an
+  # instant (here one fixed time ahead), and a missed bound under which a
+  # cursor these cases put a minute back is an ordinary due time.
+  defp cadence(next \\ next_occurrence()),
+    do: %{next_after: fn _instant -> {:ok, next} end, missed_bound_ms: :timer.hours(1)}
+
   defp now, do: Arca.ServerMetaStorage.now!()
 
   # A member's slot put past its lease on the cell's clock: the one
@@ -168,7 +174,7 @@ defmodule Arca.ScheduleOccurrencesTest do
 
     results =
       for node <- ["node-a", "node-b", "node-c"] do
-        ScheduleOccurrences.claim(schedule, node, advanced_to)
+        ScheduleOccurrences.claim(schedule, node, cadence(advanced_to))
       end
 
     assert [{:ok, %{state: "claimed", claimed_by: winner}}] =
@@ -184,7 +190,7 @@ defmodule Arca.ScheduleOccurrencesTest do
              ScheduleOccurrences.list(actor, schedule.id)
 
     assert DateTime.compare(due_for, schedule.next_run_at) == :eq
-    assert :held = ScheduleOccurrences.claim(schedule, "node-d", next_occurrence())
+    assert :held = ScheduleOccurrences.claim(schedule, "node-d", cadence())
   end
 
   test "an occurrence not yet due, or a schedule without a cursor, is not claimed", %{
@@ -202,14 +208,14 @@ defmodule Arca.ScheduleOccurrencesTest do
              ScheduleOccurrences.claim(
                %{schedule | next_run_at: future},
                "node-a",
-               next_occurrence()
+               cadence()
              )
 
     assert :held =
              ScheduleOccurrences.claim(
                %{schedule | next_run_at: nil},
                "node-a",
-               next_occurrence()
+               cadence()
              )
 
     assert {:ok, []} = ScheduleOccurrences.list(actor, schedule.id)
@@ -221,7 +227,7 @@ defmodule Arca.ScheduleOccurrencesTest do
 
     # Each schedule has an occurrence open, and its next one already due.
     for schedule <- [forbid, allow] do
-      {:ok, occurrence} = ScheduleOccurrences.claim(schedule, "node-a", next_occurrence())
+      {:ok, occurrence} = ScheduleOccurrences.claim(schedule, "node-a", cadence())
 
       assert 1 =
                ScheduleOccurrences.start!(
@@ -235,14 +241,14 @@ defmodule Arca.ScheduleOccurrencesTest do
     forbid = due_again!(forbid)
     allow = due_again!(allow)
 
-    assert :overlapping = ScheduleOccurrences.claim(forbid, "node-a", next_occurrence())
+    assert :overlapping = ScheduleOccurrences.claim(forbid, "node-a", cadence())
     assert DateTime.compare(cursor!(forbid.id), forbid.next_run_at) == :eq
 
     assert {:ok, [%{state: "started"}]} =
              ScheduleOccurrences.list(actor, forbid.id)
 
     assert {:ok, %{state: "claimed"}} =
-             ScheduleOccurrences.claim(allow, "node-a", next_occurrence())
+             ScheduleOccurrences.claim(allow, "node-a", cadence())
 
     assert {:ok, [_, _]} = ScheduleOccurrences.list(actor, allow.id)
 
@@ -253,18 +259,18 @@ defmodule Arca.ScheduleOccurrencesTest do
              ScheduleOccurrences.finish(actor, open.id, "node-a", open.execution_id, "completed")
 
     assert {:ok, %{state: "claimed"}} =
-             ScheduleOccurrences.claim(forbid, "node-a", next_occurrence())
+             ScheduleOccurrences.claim(forbid, "node-a", cadence())
   end
 
   test "the claim decides on the row's concurrency, never on the caller's copy", %{actor: actor} do
     forbid = due!(actor, %{concurrency: "forbid"})
-    {:ok, open} = ScheduleOccurrences.claim(forbid, "node-a", next_occurrence())
+    {:ok, open} = ScheduleOccurrences.claim(forbid, "node-a", cadence())
     assert 1 = ScheduleOccurrences.start!(actor, open.id, "node-a", "exec_#{open.id}")
 
     # A stale or forged copy that says `allow` is read for its id, its
     # athanor and the cursor it saw; the row still forbids an overlap.
     forged = %{due_again!(forbid) | concurrency: "allow"}
-    assert :overlapping = ScheduleOccurrences.claim(forged, "node-a", next_occurrence())
+    assert :overlapping = ScheduleOccurrences.claim(forged, "node-a", cadence())
     assert {:ok, [_only]} = ScheduleOccurrences.list(actor, forbid.id)
   end
 
@@ -272,7 +278,7 @@ defmodule Arca.ScheduleOccurrencesTest do
     actor: actor
   } do
     schedule = due!(actor)
-    {:ok, occurrence} = ScheduleOccurrences.claim(schedule, "node-a", next_occurrence())
+    {:ok, occurrence} = ScheduleOccurrences.claim(schedule, "node-a", cadence())
 
     assert 1 = ScheduleOccurrences.start!(actor, occurrence.id, "node-a", "exec_1")
     assert 0 = ScheduleOccurrences.start!(actor, occurrence.id, "node-a", "exec_2")
@@ -318,7 +324,7 @@ defmodule Arca.ScheduleOccurrencesTest do
     # runner names the execution it would have started or none; only its
     # own claimant ends it.
     later = due!(actor)
-    {:ok, claimed} = ScheduleOccurrences.claim(later, "node-a", next_occurrence())
+    {:ok, claimed} = ScheduleOccurrences.claim(later, "node-a", cadence())
 
     assert {:error, :stale} =
              ScheduleOccurrences.settle_dead(actor, claimed.id, "node-b", "exec_3")
@@ -328,7 +334,7 @@ defmodule Arca.ScheduleOccurrencesTest do
 
     # And a finish naming no execution ends only one never started.
     last = due!(actor)
-    {:ok, unstarted} = ScheduleOccurrences.claim(last, "node-a", next_occurrence())
+    {:ok, unstarted} = ScheduleOccurrences.claim(last, "node-a", cadence())
 
     assert {:ok, 1} =
              ScheduleOccurrences.finish(actor, unstarted.id, "node-a", nil, "failed")
@@ -348,7 +354,7 @@ defmodule Arca.ScheduleOccurrencesTest do
     actor: actor
   } do
     schedule = due!(actor)
-    {:ok, occurrence} = ScheduleOccurrences.claim(schedule, "node-a", next_occurrence())
+    {:ok, occurrence} = ScheduleOccurrences.claim(schedule, "node-a", cadence())
 
     assert 0 = ScheduleOccurrences.start!(actor, occurrence.id, "node-b", "exec_other")
 
@@ -363,7 +369,7 @@ defmodule Arca.ScheduleOccurrencesTest do
 
   test "a finish naming no claimant ends only an occurrence that names none", %{actor: actor} do
     schedule = due!(actor)
-    {:ok, claimed} = ScheduleOccurrences.claim(schedule, "node-a", next_occurrence())
+    {:ok, claimed} = ScheduleOccurrences.claim(schedule, "node-a", cadence())
 
     # A row with a claimant is not one that names none: nothing moves.
     assert {:error, :stale} = ScheduleOccurrences.finish(actor, claimed.id, nil, nil, "failed")
@@ -394,11 +400,11 @@ defmodule Arca.ScheduleOccurrencesTest do
   test "recovery names what a dead scheduler left: claimed never invoked, started with its execution gone",
        %{actor: actor} do
     schedule = due!(actor)
-    {:ok, claimed} = ScheduleOccurrences.claim(schedule, "node-a", next_occurrence())
+    {:ok, claimed} = ScheduleOccurrences.claim(schedule, "node-a", cadence())
 
     # Admission starts only the admitting boot's claim.
     running = due!(actor)
-    {:ok, started} = ScheduleOccurrences.claim(running, Prima.Boot.id(), next_occurrence())
+    {:ok, started} = ScheduleOccurrences.claim(running, Prima.Boot.id(), cadence())
 
     {:ok, %{attempt: attempt}} =
       Arca.Execution.admit(
@@ -443,7 +449,7 @@ defmodule Arca.ScheduleOccurrencesTest do
     assert {:ok, _} = Arca.ControlPlane.take(member, Prima.Boot.id(), 60_000)
 
     schedule = due!(actor)
-    {:ok, started} = ScheduleOccurrences.claim(schedule, Prima.Boot.id(), next_occurrence())
+    {:ok, started} = ScheduleOccurrences.claim(schedule, Prima.Boot.id(), cadence())
 
     {:ok, %{attempt: attempt}} =
       Arca.Execution.admit(
@@ -509,7 +515,7 @@ defmodule Arca.ScheduleOccurrencesTest do
     member = "node-orphan-#{System.unique_integer([:positive])}"
     assert {:ok, _} = Arca.ControlPlane.take(member, Prima.Boot.id(), 60_000)
     schedule = due!(actor)
-    {:ok, orphan} = ScheduleOccurrences.claim(schedule, Prima.Boot.id(), next_occurrence())
+    {:ok, orphan} = ScheduleOccurrences.claim(schedule, Prima.Boot.id(), cadence())
 
     {1, _} =
       Arca.Repo.update_all(
@@ -536,7 +542,7 @@ defmodule Arca.ScheduleOccurrencesTest do
     assert {:ok, _} = Arca.ControlPlane.take(member, boot, 60_000)
 
     schedule = due!(actor)
-    {:ok, fresh} = ScheduleOccurrences.claim(schedule, boot, next_occurrence())
+    {:ok, fresh} = ScheduleOccurrences.claim(schedule, boot, cadence())
 
     # The cutoff is behind the claim, and the claimant is on the roster:
     # the occurrence is that member's work in hand.
@@ -557,7 +563,7 @@ defmodule Arca.ScheduleOccurrencesTest do
     assert {:ok, _} = Arca.ControlPlane.take(member, boot, 60_000)
 
     schedule = due!(actor)
-    {:ok, stuck} = ScheduleOccurrences.claim(schedule, boot, next_occurrence())
+    {:ok, stuck} = ScheduleOccurrences.claim(schedule, boot, cadence())
 
     assert {:ok, %{never_invoked: never_invoked}} =
              ScheduleOccurrences.recoverable(DateTime.add(now(), 1_000, :millisecond))
@@ -567,7 +573,7 @@ defmodule Arca.ScheduleOccurrencesTest do
 
   test "of two recoverers of one abandoned occurrence, exactly one re-runs it", %{actor: actor} do
     schedule = due!(actor)
-    {:ok, abandoned} = ScheduleOccurrences.claim(schedule, "boot-gone", next_occurrence())
+    {:ok, abandoned} = ScheduleOccurrences.claim(schedule, "boot-gone", cadence())
 
     # Both read the same row and both take it from the same claimant; the
     # statement names the claimant it was read under, so the second
@@ -612,7 +618,7 @@ defmodule Arca.ScheduleOccurrencesTest do
 
       for row <- [feed, schedule] do
         assert {:error, :not_owner} =
-                 ScheduleOccurrences.claim(row, "boot-stale", next_occurrence())
+                 ScheduleOccurrences.claim(row, "boot-stale", cadence())
 
         assert {:ok, []} = ScheduleOccurrences.list(actor, row.id)
       end
@@ -627,17 +633,253 @@ defmodule Arca.ScheduleOccurrencesTest do
         advanced_to = next_occurrence()
 
         assert {:ok, %{state: "claimed", claimed_by: "boot-live"}} =
-                 ScheduleOccurrences.claim(row, "boot-live", advanced_to)
+                 ScheduleOccurrences.claim(row, "boot-live", cadence(advanced_to))
 
         assert DateTime.compare(cursor!(row.id), advanced_to) == :eq
-        assert :held = ScheduleOccurrences.claim(row, "boot-other", next_occurrence())
+        assert :held = ScheduleOccurrences.claim(row, "boot-other", cadence())
       end
+    end
+  end
+
+  describe "missed runs" do
+    # An hourly expression whose times sit half an hour off the cell's
+    # clock: the last missed time is half an hour ago and the next one
+    # half an hour ahead, whenever the case runs.
+    defp hourly do
+      anchor = DateTime.add(now(), 1_800, :second)
+
+      fn instant ->
+        steps = Integer.floor_div(DateTime.diff(instant, anchor, :microsecond), 3_600_000_000) + 1
+        {:ok, DateTime.add(anchor, steps * 3_600, :second)}
+      end
+    end
+
+    defp policy(next_after), do: %{next_after: next_after, missed_bound_ms: 35_000}
+
+    # A schedule of `attrs` whose cursor is `hours_back` of `next_after`'s
+    # times behind the cell's clock.
+    defp missed!(actor, next_after, hours_back, attrs) do
+      {:ok, last} = next_after.(DateTime.add(now(), -3_600, :second))
+      cursor = DateTime.add(last, -(hours_back - 1) * 3_600, :second)
+      schedule = due!(actor, attrs)
+
+      {1, _} =
+        Arca.Repo.update_all(from(s in ScheduleRow, where: s.id == ^schedule.id),
+          set: [next_run_at: cursor]
+        )
+
+      %{schedule | next_run_at: cursor}
+    end
+
+    # A statement the adapter refuses with the limit's CHECK, in its own
+    # savepoint so the case's transaction goes on: each adapter raises its
+    # own error, naming the constraint.
+    defp refused_by_check!(statement) do
+      answer =
+        Arca.Repo.transaction(fn ->
+          try do
+            statement.()
+          rescue
+            e -> Arca.Repo.rollback(Exception.message(e))
+          end
+        end)
+
+      assert {:error, message} = answer, "the statement was not refused"
+      assert message =~ "cron_schedules_catch_up_limit_declared"
+    end
+
+    defp row!(id) do
+      {:ok, row} = CronSchedule.get_for_daemon(id)
+      row
+    end
+
+    defp fired(actor, schedule) do
+      {:ok, rows} = ScheduleOccurrences.list(actor, schedule.id)
+      rows |> Enum.map(& &1.scheduled_for) |> Enum.sort(DateTime)
+    end
+
+    test "under skip a missed time fires nothing, and the cursor moves to the first time not missed",
+         %{actor: actor} do
+      next_after = hourly()
+      schedule = missed!(actor, next_after, 10, %{})
+      assert row!(schedule.id).missed_runs == "skip"
+
+      assert :skipped = ScheduleOccurrences.claim(schedule, "node-a", policy(next_after))
+      assert fired(actor, schedule) == []
+
+      row = row!(schedule.id)
+      assert {row.catch_up_until, row.catch_up_left} == {nil, 0}
+      assert DateTime.compare(row.next_run_at, now()) == :gt
+      assert DateTime.diff(row.next_run_at, now(), :second) in 1_700..1_800
+    end
+
+    test "under catch_up the episode fires the limit's oldest missed times, one per claim, and closes",
+         %{actor: actor} do
+      next_after = hourly()
+      # `allow`, so the claims these cases leave open hold nothing back.
+      schedule =
+        missed!(actor, next_after, 10, %{
+          concurrency: "allow",
+          missed_runs: "catch_up",
+          catch_up_limit: 3
+        })
+
+      first = schedule.next_run_at
+
+      for n <- 1..3 do
+        row = row!(schedule.id)
+
+        assert {:ok, %{scheduled_for: due_for}} =
+                 ScheduleOccurrences.claim(row, "node-a", policy(next_after))
+
+        assert DateTime.compare(due_for, DateTime.add(first, (n - 1) * 3_600, :second)) == :eq
+
+        # The episode is on the row, so whoever claims next resumes it.
+        after_claim = row!(schedule.id)
+
+        if n < 3 do
+          assert after_claim.catch_up_left == 3 - n
+          assert %DateTime{} = after_claim.catch_up_until
+
+          assert DateTime.compare(after_claim.next_run_at, DateTime.add(due_for, 3_600, :second)) ==
+                   :eq
+        else
+          assert {after_claim.catch_up_until, after_claim.catch_up_left} == {nil, 0}
+          assert DateTime.compare(after_claim.next_run_at, now()) == :gt
+        end
+      end
+
+      # Ticks after the episode find nothing due.
+      for _ <- 1..3,
+          do:
+            assert(
+              :held = ScheduleOccurrences.claim(row!(schedule.id), "node-a", policy(next_after))
+            )
+
+      assert length(fired(actor, schedule)) == 3
+    end
+
+    test "a due time within the bound is an ordinary occurrence under either policy, and the cursor moves to the time after it",
+         %{actor: actor} do
+      next_after = hourly()
+
+      for attrs <- [%{}, %{missed_runs: "catch_up", catch_up_limit: 2}], late <- [0, 20, 34] do
+        schedule = due!(actor, attrs)
+        due_for = DateTime.add(now(), -late, :second)
+
+        {1, _} =
+          Arca.Repo.update_all(from(s in ScheduleRow, where: s.id == ^schedule.id),
+            set: [next_run_at: due_for]
+          )
+
+        assert {:ok, %{scheduled_for: ^due_for}} =
+                 ScheduleOccurrences.claim(
+                   %{schedule | next_run_at: due_for},
+                   "node-a",
+                   policy(next_after)
+                 )
+
+        row = row!(schedule.id)
+        assert {:ok, row.next_run_at} == next_after.(due_for)
+        assert {row.catch_up_until, row.catch_up_left} == {nil, 0}
+      end
+    end
+
+    test "a forbid schedule held back by an open occurrence keeps its episode where it was",
+         %{actor: actor} do
+      next_after = hourly()
+      schedule = missed!(actor, next_after, 5, %{missed_runs: "catch_up", catch_up_limit: 4})
+      {:ok, _first} = ScheduleOccurrences.claim(schedule, "node-a", policy(next_after))
+      before = row!(schedule.id)
+
+      assert :overlapping = ScheduleOccurrences.claim(before, "node-a", policy(next_after))
+
+      assert Map.take(row!(schedule.id), [:next_run_at, :catch_up_until, :catch_up_left]) ==
+               Map.take(before, [:next_run_at, :catch_up_until, :catch_up_left])
+    end
+
+    test "a cursor set back to a time that already fired moves past it and fires nothing again",
+         %{actor: actor} do
+      next_after = hourly()
+      schedule = due!(actor)
+      due_for = DateTime.add(now(), -1, :second)
+
+      {1, _} =
+        Arca.Repo.update_all(from(s in ScheduleRow, where: s.id == ^schedule.id),
+          set: [next_run_at: due_for]
+        )
+
+      {:ok, %{scheduled_for: fired_at}} =
+        ScheduleOccurrences.claim(row!(schedule.id), "node-a", policy(next_after))
+
+      # What a write computed on a clock set back leaves: the cursor names
+      # the time just fired.
+      {1, _} =
+        Arca.Repo.update_all(from(s in ScheduleRow, where: s.id == ^schedule.id),
+          set: [next_run_at: fired_at]
+        )
+
+      assert :held = ScheduleOccurrences.claim(row!(schedule.id), "node-b", policy(next_after))
+      assert fired(actor, schedule) == [fired_at]
+      assert DateTime.compare(row!(schedule.id).next_run_at, fired_at) == :gt
+    end
+
+    test "the table refuses a catch_up without a limit of 1 to 24, and a skip with one, on this adapter",
+         %{actor: actor} do
+      schedule = due!(actor)
+
+      for {policy, limit} <- [{"catch_up", nil}, {"catch_up", 0}, {"catch_up", 25}, {"skip", 3}] do
+        refused_by_check!(fn ->
+          Arca.Repo.update_all(from(s in ScheduleRow, where: s.id == ^schedule.id),
+            set: [missed_runs: policy, catch_up_limit: limit]
+          )
+        end)
+      end
+
+      for {policy, limit} <- [{"catch_up", nil}, {"catch_up", 0}] do
+        row = %{
+          id: "sched_check_#{System.unique_integer([:positive])}",
+          kind: "schedule",
+          user_id: actor.user_id,
+          athanor_id: actor.athanor_id,
+          name: "check-#{System.unique_integer([:positive])}",
+          cron_expression: "0 * * * *",
+          reference: "reagent:local.test:1.0.0",
+          profile_id: "prof_test",
+          status: "active",
+          concurrency: "forbid",
+          missed_runs: policy,
+          catch_up_limit: limit,
+          catch_up_left: 0,
+          run_count: 0,
+          error_count: 0,
+          feed_fire_seq: 0,
+          feed_result_seq: 0,
+          created_at: now(),
+          updated_at: now()
+        }
+
+        refused_by_check!(fn -> Arca.Repo.insert_all(ScheduleRow, [row]) end)
+      end
+
+      # The changeset reads the refusal back as a field error.
+      assert {:error, {:validation, %{catch_up_limit: [_ | _]}}} =
+               CronSchedule.update(actor, schedule.id, %{
+                 missed_runs: "catch_up",
+                 catch_up_limit: 0
+               })
+
+      assert {:error, {:validation, %{catch_up_limit: [_ | _]}}} =
+               CronSchedule.update(actor, schedule.id, %{
+                 missed_runs: "catch_up",
+                 catch_up_limit: 25
+               })
     end
   end
 
   test "an execution admitted for an occurrence nobody claimed is refused", %{actor: actor} do
     schedule = due!(actor)
-    {:ok, occurrence} = ScheduleOccurrences.claim(schedule, "node-a", next_occurrence())
+    {:ok, occurrence} = ScheduleOccurrences.claim(schedule, "node-a", cadence())
     assert 1 = ScheduleOccurrences.start!(actor, occurrence.id, "node-a", "exec_first")
 
     assert {:error, :occurrence_not_claimed} =
@@ -743,7 +985,7 @@ defmodule Arca.ScheduleOccurrencesTakeoverTest do
 
     answer =
       stale_write(slot, lock_schedule(schedule.id), fn ->
-        ScheduleOccurrences.claim(schedule, slot.owner, next_occurrence())
+        ScheduleOccurrences.claim(schedule, slot.owner, cadence())
       end)
 
     assert answer == {:error, :not_owner}
@@ -757,7 +999,7 @@ defmodule Arca.ScheduleOccurrencesTakeoverTest do
       schedule = unboxed(fn -> due!(actor) end)
 
       {:ok, occurrence} =
-        unboxed(fn -> ScheduleOccurrences.claim(schedule, slot.owner, next_occurrence()) end)
+        unboxed(fn -> ScheduleOccurrences.claim(schedule, slot.owner, cadence()) end)
 
       successor = slot.node <> "#boot_b"
 
@@ -815,6 +1057,12 @@ defmodule Arca.ScheduleOccurrencesTakeoverTest do
   end
 
   defp next_occurrence, do: DateTime.add(DateTime.utc_now(), 300, :second)
+
+  # What the scheduler hands a claim: the expression's next time after an
+  # instant (here one fixed time ahead), and a missed bound under which a
+  # cursor these cases put a minute back is an ordinary due time.
+  defp cadence(next \\ next_occurrence()),
+    do: %{next_after: fn _instant -> {:ok, next} end, missed_bound_ms: :timer.hours(1)}
 
   defp lock_schedule(id) do
     fn ->

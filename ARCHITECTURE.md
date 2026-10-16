@@ -328,7 +328,7 @@ Audit traffic cannot consume the capacity needed to renew ownership. Audit write
 
 An admitted guest holds a durable attempt generation, and its discrete effects and completion are fenced against it. A crash past a step that is not replay-safe leaves an explicit uncertain outcome, and a possibly completed side effect is replayed only under a contract that proves replay safe. Every exit path, timeout, cancellation, process death and loss of ownership included, releases resources and stops dependents in dependency order. A replay-protected endpoint refuses with `unavailable` when its store cannot answer.
 
-Every scheduled occurrence has one identity, and each schedule declares what happens to occurrences missed while the home was down (`missed_runs`): skip them, or catch up a bounded number per period of downtime. *Not built yet:* the declared missed-run policy; a past due time fires once.
+Every scheduled occurrence has one identity, and each schedule declares what happens to occurrences missed while the home was down (`missed_runs`): skip them, or catch up a bounded number per period of downtime.
 
 ### 6.6 Revocation bounds
 

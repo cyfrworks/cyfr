@@ -28,8 +28,22 @@ defmodule Opus.Schedules.Scheduler do
   re-run is admitted by a compare-and-set on the occurrence, so two
   recoverers produce one re-run. An occurrence claimed and never invoked
   runs once, a started one whose execution ended or was swept while the
-  occurrence stayed open is `uncertain`. A due time in the past fires at
-  once, once.
+  occurrence stayed open is `uncertain`.
+
+  A due time the cell missed is handled by the schedule's declared
+  `missed_runs`. A due time is missed when, at claim, it is older than the
+  missed bound (`missed_bound_ms/0`): the larger of this scheduler's
+  jitter (at most 30 s) and the member's slot lease, with a few seconds
+  for the timer's delivery, so a timer that
+  fires a few seconds late, or a successor that takes over a lapsed slot,
+  fires an ordinary occurrence under either policy. Under `skip`, the
+  default, a missed time does not fire and the cursor moves on to the
+  first time not missed. Under `catch_up` a missed time opens an episode
+  that fires at most `catch_up_limit` (1 to `max_catch_up/0`) of the
+  missed times, one per claim, oldest first, and then resumes after them;
+  the episode is kept on the schedule's row, so a restart or a takeover
+  resumes it (`Arca.ScheduleOccurrences.claim/3`). Each fired time is its
+  own occurrence, at most once per `(schedule_id, scheduled_for)`.
 
   Every write this scheduler makes is gated twice: on the member holding
   its cell slot (`Arca.ControlPlane.held?/0`) and on the generation it
@@ -152,6 +166,16 @@ defmodule Opus.Schedules.Scheduler do
   @max_timer_ms 60 * 60 * 1_000
   @max_load_retries 5
   @recheck_ms 30_000
+  # The most a timer is pushed past its due time (`jitter_ms/1`).
+  @max_jitter_ms 30_000
+  # What a fully jittered timer may still arrive past its jitter: the
+  # message's own delivery, and a member clock behind the cell's by a few
+  # seconds, since the timer is armed on the member's clock and the claim
+  # decides on the cell's.
+  @missed_slack_ms 5_000
+  # The most missed times one catch-up episode fires; the CHECK on
+  # `cron_schedules.catch_up_limit` holds the same number on each adapter.
+  @max_catch_up 24
   # Two ticks: the grace a live member's lapsed run is given, and the age at
   # which a claim is any member's to recover (`abandoned_before/0`). The
   # standing pass comes a second later than this (`arm_standing/1`).
@@ -174,6 +198,21 @@ defmodule Opus.Schedules.Scheduler do
   def resume(schedule_id), do: GenServer.cast(__MODULE__, {:resume, schedule_id})
   def update(schedule_id), do: GenServer.cast(__MODULE__, {:update, schedule_id})
   def reload, do: GenServer.cast(__MODULE__, :reload)
+
+  @doc "The most missed times a `catch_up` schedule's episode fires (its `catch_up_limit` ceiling)."
+  @spec max_catch_up() :: pos_integer()
+  def max_catch_up, do: @max_catch_up
+
+  @doc """
+  How late a due time may be claimed and still fire as an ordinary
+  occurrence: the larger of the jitter a timer adds (`jitter_ms/1`, at
+  most 30 s) and the member's slot lease (`Cyfr.Cell.lease_ms/0`), with
+  5 s more for a fully jittered timer's own delivery and a member clock
+  slightly behind the cell's. A due time older than this at claim was
+  missed, and its schedule's `missed_runs` decides it.
+  """
+  @spec missed_bound_ms() :: pos_integer()
+  def missed_bound_ms, do: max(@max_jitter_ms, Cyfr.Cell.lease_ms()) + @missed_slack_ms
 
   @impl true
   def init(_opts) do
@@ -443,7 +482,8 @@ defmodule Opus.Schedules.Scheduler do
   end
 
   # Boot arms timers: the cursor each row carries is the next occurrence,
-  # and a cursor already in the past fires at once.
+  # and a cursor already in the past is claimed at once, where its
+  # schedule's missed-run policy decides it.
   defp load_one_schedule(schedule, acc) do
     case Cron.parse(schedule.cron_expression) do
       {:ok, _} ->
@@ -845,6 +885,15 @@ defmodule Opus.Schedules.Scheduler do
             # Not due, or another node advanced the cursor first.
             schedule_timer(schedule.id, state)
 
+          :skipped ->
+            # Missed under `skip`: nothing ran, and the cursor moved on to
+            # the first time not missed.
+            Logger.info(
+              "[Opus.Schedules.Scheduler] schedule #{schedule.id} missed #{DateTime.to_iso8601(schedule.next_run_at)} — skipped"
+            )
+
+            schedule_timer(schedule.id, state)
+
           :overlapping ->
             # An occurrence of this schedule is still open and the
             # schedule forbids overlap: the due one waits, and is looked
@@ -879,13 +928,19 @@ defmodule Opus.Schedules.Scheduler do
     end
   end
 
-  # Claiming and advancing are one write. An expression that no longer
-  # parses cannot yield a next occurrence — nothing is claimed rather
-  # than an occurrence nothing can advance past.
+  # Claiming and advancing are one write, decided on the cell's clock: the
+  # claim asks the expression for the time after the one it fires, or
+  # after the missed horizon, and the missed bound says which due times
+  # are ordinary. An expression that no longer parses cannot yield a next
+  # occurrence — nothing is claimed rather than an occurrence nothing can
+  # advance past.
   defp claim(schedule) do
-    case compute_next_run(schedule.cron_expression) do
-      {:ok, next_run} ->
-        ScheduleOccurrences.claim(schedule, claimant(), next_run)
+    case Cron.parse(schedule.cron_expression) do
+      {:ok, parsed} ->
+        ScheduleOccurrences.claim(schedule, claimant(), %{
+          next_after: &Cron.next_run(parsed, &1),
+          missed_bound_ms: missed_bound_ms()
+        })
 
       _unparseable ->
         Logger.warning(
@@ -1568,9 +1623,11 @@ defmodule Opus.Schedules.Scheduler do
   end
 
   # Up to a tenth of the delay, capped at 30 s: schedules that share a
-  # minute boundary spread instead of landing on the same tick.
+  # minute boundary spread instead of landing on the same tick. The cap is
+  # part of the missed bound (`missed_bound_ms/0`), so a jittered timer
+  # never fires a missed time.
   defp jitter_ms(delay_ms) do
-    case min(30_000, div(delay_ms, 10)) do
+    case min(@max_jitter_ms, div(delay_ms, 10)) do
       spread when spread > 0 -> :rand.uniform(spread)
       _ -> 0
     end

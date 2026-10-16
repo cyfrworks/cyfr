@@ -8,7 +8,10 @@ defmodule Opus.Schedules.Provider do
   (`Arca.CronSchedule`), and telling the scheduler
   (`Opus.Schedules.Scheduler`) what changed. A schedule's `concurrency`
   — `forbid` (the default) or `allow` — says whether a due occurrence may
-  run while another of the same schedule is still open.
+  run while another of the same schedule is still open. Its `missed_runs`
+  — `skip` (the default) or `catch_up` with a `catch_up_limit` of 1 to
+  `Opus.Schedules.Scheduler.max_catch_up/0` — says what becomes of the due
+  times the cell missed (`Opus.Schedules.Scheduler`).
 
   Every action reads rows of kind `schedule` only: a feed shares the
   table (`Opus.Feeds`), but its id or name is `not_found` here, `list`
@@ -86,6 +89,15 @@ defmodule Opus.Schedules.Provider do
                 description:
                   "Whether a due occurrence runs while another of this schedule is still open (default forbid)",
                 enum: ["forbid", "allow"]
+              ),
+              Arg.new("missed_runs", :string,
+                description:
+                  "What becomes of due times the server missed (create/update): skip them (default), or catch_up on up to catch_up_limit of them, oldest first",
+                enum: ["skip", "catch_up"]
+              ),
+              Arg.new("catch_up_limit", :integer,
+                description:
+                  "How many missed times one catch-up fires, 1 to #{Opus.Schedules.Scheduler.max_catch_up()} (create/update; required with catch_up, refused with skip)"
               )
             ],
             kind: :write,
@@ -157,6 +169,15 @@ defmodule Opus.Schedules.Provider do
                 description:
                   "Whether a due occurrence runs while another of this schedule is still open (default forbid)",
                 enum: ["forbid", "allow"]
+              ),
+              Arg.new("missed_runs", :string,
+                description:
+                  "What becomes of due times the server missed (create/update): skip them (default), or catch_up on up to catch_up_limit of them, oldest first",
+                enum: ["skip", "catch_up"]
+              ),
+              Arg.new("catch_up_limit", :integer,
+                description:
+                  "How many missed times one catch-up fires, 1 to #{Opus.Schedules.Scheduler.max_catch_up()} (create/update; required with catch_up, refused with skip)"
               )
             ],
             kind: :write,
@@ -232,6 +253,7 @@ defmodule Opus.Schedules.Provider do
     with :ok <- validate_required(args, ["name", "cron_expression", "reference"]),
          :ok <- validate_cron(args["cron_expression"]),
          :ok <- validate_concurrency(args["concurrency"]),
+         {:ok, missed} <- missed_runs(args, %{missed_runs: "skip", catch_up_limit: nil}),
          {:ok, reference, resolved_reference} <-
            resolve_for_schedule(ctx, args["reference"], "create schedule"),
          :ok <- verify_component_exists(ctx, resolved_reference),
@@ -258,7 +280,7 @@ defmodule Opus.Schedules.Provider do
         concurrency: args["concurrency"] || "forbid"
       }
 
-      insert(ctx, attrs)
+      insert(ctx, Map.merge(attrs, missed))
     end
   end
 
@@ -296,8 +318,9 @@ defmodule Opus.Schedules.Provider do
     with {:schedule, {:ok, schedule}} <-
            {:schedule, schedule(ctx, id)},
          :ok <- validate_cron_if_present(args["cron_expression"]),
-         :ok <- validate_concurrency(args["concurrency"]) do
-      update_attrs = %{}
+         :ok <- validate_concurrency(args["concurrency"]),
+         {:ok, missed} <- missed_runs(args, schedule) do
+      update_attrs = missed
 
       update_attrs =
         if args["concurrency"],
@@ -517,6 +540,41 @@ defmodule Opus.Schedules.Provider do
   defp validate_concurrency(value) when value in ["forbid", "allow"], do: :ok
   defp validate_concurrency(_), do: {:error, "concurrency must be forbid or allow"}
 
+  # The policy the write leaves the schedule with, as the two columns:
+  # what the arguments name, over what `current` holds. A `catch_up` names
+  # a limit of 1 to the scheduler's ceiling, and NULL or 0 is refused; a
+  # `skip` names none, and switching to it drops the old limit.
+  defp missed_runs(args, current) do
+    policy = Map.get(args, "missed_runs") || current.missed_runs
+
+    limit =
+      cond do
+        Map.has_key?(args, "catch_up_limit") -> args["catch_up_limit"]
+        policy == current.missed_runs -> current.catch_up_limit
+        true -> nil
+      end
+
+    max = Opus.Schedules.Scheduler.max_catch_up()
+
+    case {policy, limit} do
+      {"skip", nil} ->
+        {:ok, %{missed_runs: "skip", catch_up_limit: nil}}
+
+      {"skip", _limit} ->
+        {:error, {:invalid_argument, "catch_up_limit applies only to missed_runs catch_up"}}
+
+      {"catch_up", limit} when is_integer(limit) and limit >= 1 and limit <= max ->
+        {:ok, %{missed_runs: "catch_up", catch_up_limit: limit}}
+
+      {"catch_up", _limit} ->
+        {:error,
+         {:invalid_argument, "missed_runs catch_up needs a catch_up_limit of 1 to #{max}"}}
+
+      {_other, _limit} ->
+        {:error, {:invalid_argument, "missed_runs must be skip or catch_up"}}
+    end
+  end
+
   # The cap is read at the write and counted in the insert's own
   # transaction. A cap the store cannot answer refuses: the setting refuses
   # a stale value, and no fallback number stands in for it.
@@ -561,6 +619,8 @@ defmodule Opus.Schedules.Provider do
       metadata: decode_stored(schedule.metadata, nil, "metadata"),
       status: schedule.status,
       concurrency: schedule.concurrency,
+      missed_runs: schedule.missed_runs,
+      catch_up_limit: schedule.catch_up_limit,
       next_run_at: schedule.next_run_at && DateTime.to_iso8601(schedule.next_run_at),
       last_run_at: schedule.last_run_at && DateTime.to_iso8601(schedule.last_run_at),
       last_execution_id: schedule.last_execution_id,

@@ -11,7 +11,7 @@ defmodule Opus.Schedules.SchedulerTest do
   alias Arca.{CronSchedule, ScheduleOccurrences}
   alias Arca.Schemas.CronSchedule, as: ScheduleRow
   alias Cyfr.Bus.ScheduleCompleted
-  alias Opus.Schedules.Scheduler
+  alias Opus.Schedules.{Cron, Scheduler}
   alias Cyfr.Test.ScriptedWorker
   alias Prima.Test.AuthorityFixtures
   alias Sanctum.Test.ConsentFixtures
@@ -137,7 +137,9 @@ defmodule Opus.Schedules.SchedulerTest do
     schedule
   end
 
-  defp due!(schedule, seconds_ago \\ 60) do
+  # Due a few seconds ago: well within the missed bound, so the claim
+  # fires it as an ordinary occurrence under either policy.
+  defp due!(schedule, seconds_ago \\ 5) do
     past = DateTime.add(DateTime.utc_now(), -seconds_ago, :second)
 
     {1, _} =
@@ -149,8 +151,14 @@ defmodule Opus.Schedules.SchedulerTest do
   end
 
   defp occurrences(ctx, schedule) do
-    {:ok, rows} = ScheduleOccurrences.list(Sanctum.Context.actor(ctx), schedule.id)
+    {:ok, rows} = ScheduleOccurrences.list(Sanctum.Context.actor(ctx), schedule.id, limit: 100)
     rows
+  end
+
+  # What the scheduler hands a claim of `schedule`.
+  defp cadence(schedule) do
+    {:ok, parsed} = Cron.parse(schedule.cron_expression)
+    %{next_after: &Cron.next_run(parsed, &1), missed_bound_ms: Scheduler.missed_bound_ms()}
   end
 
   defp lose_ownership(loss) do
@@ -736,27 +744,255 @@ defmodule Opus.Schedules.SchedulerTest do
       })
     end
 
-    next = DateTime.add(now, 3600, :second)
-
-    assert :overlapping = ScheduleOccurrences.claim(forbid, "node-a", next)
+    assert :overlapping = ScheduleOccurrences.claim(forbid, "node-a", cadence(forbid))
     assert [%{state: "started"}] = occurrences(ctx, forbid)
     {:ok, row} = CronSchedule.get_for_daemon(forbid.id)
     assert DateTime.compare(row.next_run_at, forbid.next_run_at) == :eq
 
-    assert {:ok, %{state: "claimed"}} = ScheduleOccurrences.claim(allow, "node-a", next)
+    assert {:ok, %{state: "claimed"}} = ScheduleOccurrences.claim(allow, "node-a", cadence(allow))
     assert [_, _] = occurrences(ctx, allow)
   end
 
-  test "a missed occurrence fires once", %{ctx: ctx} do
+  test "a missed occurrence fires once under catch_up with a limit of 1, and not at all under skip",
+       %{ctx: ctx} do
     script!([%{"ran" => true}])
-    schedule = due!(create_schedule(ctx), 7_200)
+    once = due!(create_schedule(ctx, %{missed_runs: "catch_up", catch_up_limit: 1}), 7_200)
+    skipped = due!(create_schedule(ctx), 7_200)
     scheduler = scheduler!()
 
-    wait_until(fn -> match?([%{state: "completed"}], occurrences(ctx, schedule)) end)
-    send(scheduler, {:fire, schedule.id})
+    wait_until(fn -> match?([%{state: "completed"}], occurrences(ctx, once)) end)
+
+    wait_until(fn ->
+      {:ok, row} = CronSchedule.get_for_daemon(skipped.id)
+      DateTime.compare(row.next_run_at, skipped.next_run_at) == :gt
+    end)
+
+    for schedule <- [once, skipped], do: send(scheduler, {:fire, schedule.id})
     _ = :sys.get_state(scheduler)
-    assert [_] = occurrences(ctx, schedule)
+    assert [%{scheduled_for: fired}] = occurrences(ctx, once)
+    assert DateTime.compare(fired, once.next_run_at) == :eq
+    assert [] = occurrences(ctx, skipped)
     assert [_] = ScriptedWorker.calls()
+  end
+
+  describe "missed runs" do
+    # An hourly expression at the minute half an hour from now: its last
+    # missed time is about half an hour ago and its next about half an
+    # hour ahead, whenever the case runs.
+    defp offset_hourly do
+      minute = DateTime.add(DateTime.utc_now(), 1_800, :second).minute
+      "#{minute} * * * *"
+    end
+
+    # A schedule of `attrs` whose cursor is `missed` of its expression's
+    # times behind: the oldest of them.
+    defp missed!(ctx, missed, attrs) do
+      schedule = create_schedule(ctx, Map.merge(%{cron_expression: offset_hourly()}, attrs))
+      {:ok, parsed} = Cron.parse(schedule.cron_expression)
+      {:ok, last} = Cron.next_run(parsed, DateTime.add(DateTime.utc_now(), -3_600, :second))
+      cursor = DateTime.add(last, -(missed - 1) * 3_600, :second)
+
+      {1, _} =
+        Arca.Repo.update_all(from(s in ScheduleRow, where: s.id == ^schedule.id),
+          set: [next_run_at: cursor]
+        )
+
+      %{schedule | next_run_at: cursor}
+    end
+
+    defp row!(schedule) do
+      {:ok, row} = CronSchedule.get_for_daemon(schedule.id)
+      row
+    end
+
+    defp fired_times(ctx, schedule) do
+      ctx |> occurrences(schedule) |> Enum.map(& &1.scheduled_for) |> Enum.sort(DateTime)
+    end
+
+    defp hours_after(time, n), do: DateTime.add(time, n * 3_600, :second)
+
+    test "a downtime of 10 missed times under catch_up 3 fires exactly 3 over repeated ticks, then resumes after now",
+         %{ctx: ctx} do
+      script!(List.duplicate(%{"ran" => true}, 3))
+
+      schedule =
+        missed!(ctx, 10, %{concurrency: "allow", missed_runs: "catch_up", catch_up_limit: 3})
+
+      scheduler = scheduler!()
+
+      wait_until(fn ->
+        match?([_, _, _], occurrences(ctx, schedule)) and row!(schedule).catch_up_left == 0
+      end)
+
+      for _tick <- 1..3 do
+        send(scheduler, {:fire, schedule.id})
+        _ = :sys.get_state(scheduler)
+      end
+
+      wait_until(fn -> Enum.all?(occurrences(ctx, schedule), &(&1.state == "completed")) end)
+
+      assert fired_times(ctx, schedule) ==
+               for(n <- 0..2, do: hours_after(schedule.next_run_at, n))
+
+      assert length(ScriptedWorker.calls()) == 3
+
+      row = row!(schedule)
+      assert {row.catch_up_until, row.catch_up_left} == {nil, 0}
+      assert DateTime.compare(row.next_run_at, DateTime.utc_now()) == :gt
+    end
+
+    test "a restart between the second and the third catch-up fire resumes from the row and fires the third once",
+         %{ctx: ctx} do
+      actor = Sanctum.Context.actor(ctx)
+      schedule = missed!(ctx, 10, %{missed_runs: "catch_up", catch_up_limit: 3})
+
+      # The member that fired the first two is gone: what it left is the
+      # row's cursor and episode, and its two ended occurrences.
+      for _ <- 1..2 do
+        {:ok, occurrence} =
+          ScheduleOccurrences.claim(row!(schedule), "boot-gone", cadence(schedule))
+
+        {:ok, 1} = ScheduleOccurrences.finish(actor, occurrence.id, "boot-gone", nil, "completed")
+      end
+
+      assert %{catch_up_left: 1, catch_up_until: %DateTime{}} = row!(schedule)
+
+      script!([%{"ran" => true}])
+      scheduler = scheduler!()
+
+      wait_until(fn ->
+        length(occurrences(ctx, schedule)) == 3 and row!(schedule).catch_up_left == 0
+      end)
+
+      send(scheduler, {:fire, schedule.id})
+      _ = :sys.get_state(scheduler)
+
+      assert fired_times(ctx, schedule) ==
+               for(n <- 0..2, do: hours_after(schedule.next_run_at, n))
+
+      wait_until(fn -> length(ScriptedWorker.calls()) == 1 end)
+      assert DateTime.compare(row!(schedule).next_run_at, DateTime.utc_now()) == :gt
+    end
+
+    test "a skip schedule whose timer fires within the jitter after its due time fires once, every time",
+         %{ctx: ctx} do
+      # The scheduler adds up to 30 s to a timer (`jitter_ms/1`); a fire
+      # that late, or a little later still, is the ordinary occurrence.
+      lateness = [1, 15, 29, 30, 33]
+      script!(List.duplicate(%{"ran" => true}, length(lateness)))
+
+      late =
+        for seconds <- lateness,
+            do: due!(create_schedule(ctx, %{cron_expression: offset_hourly()}), seconds)
+
+      # Past the bound it is a missed time, and skip skips it.
+      missed = due!(create_schedule(ctx, %{cron_expression: offset_hourly()}), 40)
+      scheduler = scheduler!()
+
+      wait_until(fn ->
+        Enum.all?(late, &match?([%{state: "completed"}], occurrences(ctx, &1)))
+      end)
+
+      for schedule <- [missed | late], do: send(scheduler, {:fire, schedule.id})
+      _ = :sys.get_state(scheduler)
+
+      for schedule <- late do
+        assert fired_times(ctx, schedule) == [schedule.next_run_at]
+      end
+
+      assert fired_times(ctx, missed) == []
+      assert DateTime.compare(row!(missed).next_run_at, DateTime.utc_now()) == :gt
+      assert length(ScriptedWorker.calls()) == length(lateness)
+    end
+
+    @tag timeout: 120_000
+    test "a stop and restart across several due times under skip skips only the missed ones and fires the next ordinary one",
+         %{ctx: ctx} do
+      script!([%{"ran" => true}])
+      # Every minute: the next ordinary time is within the bound or less
+      # than half a minute ahead, so the case waits at most that long.
+      schedule = create_schedule(ctx, %{cron_expression: "* * * * *"})
+      stopped_at = DateTime.add(DateTime.utc_now(), -6 * 60, :second)
+
+      {1, _} =
+        Arca.Repo.update_all(from(s in ScheduleRow, where: s.id == ^schedule.id),
+          set: [next_run_at: stopped_at]
+        )
+
+      started = DateTime.utc_now()
+      _scheduler = scheduler!()
+
+      wait_until(fn -> match?([%{state: "completed"}], occurrences(ctx, schedule)) end, 45_000)
+
+      assert [fired] = fired_times(ctx, schedule)
+      bound = Scheduler.missed_bound_ms()
+      assert DateTime.diff(fired, started, :millisecond) > -bound
+      assert length(ScriptedWorker.calls()) == 1
+    end
+
+    test "a walk across both daylight-saving changes fires each UTC time once, and a cursor set back to a fired time fires nothing again",
+         %{ctx: ctx} do
+      # Expressions are UTC: the weeks around the American (8 March) and
+      # European (29 March) changes are 24 hours apart day by day.
+      schedule =
+        create_schedule(ctx, %{
+          cron_expression: "30 1 * * *",
+          concurrency: "allow",
+          missed_runs: "catch_up",
+          catch_up_limit: Scheduler.max_catch_up()
+        })
+
+      first = ~U[2026-03-06 01:30:00.000000Z]
+
+      {1, _} =
+        Arca.Repo.update_all(from(s in ScheduleRow, where: s.id == ^schedule.id),
+          set: [next_run_at: first]
+        )
+
+      for _ <- 1..Scheduler.max_catch_up() do
+        assert {:ok, _} = ScheduleOccurrences.claim(row!(schedule), "node-a", cadence(schedule))
+      end
+
+      fired = fired_times(ctx, schedule)
+      assert fired == for(n <- 0..23, do: DateTime.add(first, n * 86_400, :second))
+      assert row!(schedule).catch_up_left == 0
+      assert :held = ScheduleOccurrences.claim(row!(schedule), "node-a", cadence(schedule))
+
+      # A clock set back can leave a cursor naming a time that fired; it
+      # is moved past, and fires nothing.
+      {1, _} =
+        Arca.Repo.update_all(from(s in ScheduleRow, where: s.id == ^schedule.id),
+          set: [next_run_at: List.last(fired)]
+        )
+
+      assert :held = ScheduleOccurrences.claim(row!(schedule), "node-b", cadence(schedule))
+      assert fired_times(ctx, schedule) == fired
+      assert DateTime.compare(row!(schedule).next_run_at, List.last(fired)) == :gt
+    end
+
+    test "the catch-up ceiling is the table's: max_catch_up/0 is accepted and one more refused",
+         %{ctx: ctx} do
+      assert Scheduler.max_catch_up() == 24
+      create_schedule(ctx, %{missed_runs: "catch_up", catch_up_limit: Scheduler.max_catch_up()})
+
+      assert {:error, {:validation, %{catch_up_limit: [_ | _]}}} =
+               CronSchedule.create(Sanctum.Context.actor(ctx), %{
+                 user_id: ctx.user_id,
+                 athanor_id: ctx.athanor_id,
+                 name: "over-#{System.unique_integer([:positive])}",
+                 cron_expression: "0 * * * *",
+                 reference: "reagent:local.test:1.0.0",
+                 resolved_reference: "reagent:local.test:1.0.0",
+                 profile_id: @profile_id,
+                 missed_runs: "catch_up",
+                 catch_up_limit: Scheduler.max_catch_up() + 1,
+                 cap: 1_000
+               })
+    end
+
+    test "the missed bound is the larger of the jitter cap and the slot lease, with the delivery slack" do
+      assert Scheduler.missed_bound_ms() == max(30_000, Cyfr.Cell.lease_ms()) + 5_000
+    end
   end
 
   test "a runner that dies leaves a started occurrence uncertain", %{ctx: ctx} do

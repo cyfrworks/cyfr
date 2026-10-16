@@ -54,6 +54,93 @@ defmodule Opus.Schedules.ProviderTest do
     {:ok, ctx: ctx}
   end
 
+  describe "missed runs" do
+    defp create!(ctx, extra) do
+      Provider.handle(
+        "schedule",
+        ctx,
+        Map.merge(
+          %{
+            "action" => "create",
+            "profile_id" => "prof-cron",
+            "name" => "missed-#{System.unique_integer([:positive])}",
+            "cron_expression" => "*/5 * * * *",
+            "reference" => "reagent:local.test:1.0.0"
+          },
+          extra
+        )
+      )
+    end
+
+    test "a schedule skips missed times unless it declares a catch-up, and the policy is projected",
+         %{ctx: ctx} do
+      assert {:ok, %{missed_runs: "skip", catch_up_limit: nil}} = create!(ctx, %{})
+
+      assert {:ok, %{missed_runs: "catch_up", catch_up_limit: 3} = made} =
+               create!(ctx, %{"missed_runs" => "catch_up", "catch_up_limit" => 3})
+
+      assert {:ok, %{missed_runs: "catch_up", catch_up_limit: 3}} =
+               Provider.handle("schedule", ctx, %{
+                 "action" => "get",
+                 "schedule_id" => made.schedule_id
+               })
+    end
+
+    test "catch_up refuses a NULL, absent, 0 or over-ceiling limit, and skip refuses any limit",
+         %{ctx: ctx} do
+      for extra <- [
+            %{"missed_runs" => "catch_up"},
+            %{"missed_runs" => "catch_up", "catch_up_limit" => nil},
+            %{"missed_runs" => "catch_up", "catch_up_limit" => 0},
+            %{"missed_runs" => "catch_up", "catch_up_limit" => -1},
+            %{
+              "missed_runs" => "catch_up",
+              "catch_up_limit" => Opus.Schedules.Scheduler.max_catch_up() + 1
+            },
+            %{"missed_runs" => "skip", "catch_up_limit" => 2},
+            %{"catch_up_limit" => 2},
+            %{"missed_runs" => "sometimes"}
+          ] do
+        assert {:error, {:invalid_argument, _}} = create!(ctx, extra), inspect(extra)
+      end
+
+      {:ok, %{schedules: listed}} = Provider.handle("schedule", ctx, %{"action" => "list"})
+      assert listed == []
+    end
+
+    test "an update sets, keeps and drops the policy, and refuses a NULL or 0 limit with the schedule standing",
+         %{ctx: ctx} do
+      {:ok, %{schedule_id: id}} = create!(ctx, %{})
+
+      update =
+        &Provider.handle(
+          "schedule",
+          ctx,
+          Map.merge(%{"action" => "update", "schedule_id" => id}, &1)
+        )
+
+      assert {:ok, %{missed_runs: "catch_up", catch_up_limit: 2}} =
+               update.(%{"missed_runs" => "catch_up", "catch_up_limit" => 2})
+
+      # An update naming neither keeps both.
+      assert {:ok, %{missed_runs: "catch_up", catch_up_limit: 2}} =
+               update.(%{"name" => "renamed"})
+
+      assert {:ok, %{catch_up_limit: 5}} = update.(%{"catch_up_limit" => 5})
+
+      for extra <- [%{"catch_up_limit" => 0}, %{"catch_up_limit" => nil}] do
+        assert {:error, {:invalid_argument, _}} = update.(extra)
+      end
+
+      assert {:ok, %{missed_runs: "catch_up", catch_up_limit: 5}} =
+               Provider.handle("schedule", ctx, %{"action" => "get", "schedule_id" => id})
+
+      # Back to skip, the limit goes with it.
+      assert {:ok, %{missed_runs: "skip", catch_up_limit: nil}} =
+               update.(%{"missed_runs" => "skip"})
+    end
+  end
+
   describe "tools/0" do
     test "returns schedule tool definition" do
       tools = Provider.tools()
