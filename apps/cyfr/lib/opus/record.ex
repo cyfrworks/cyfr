@@ -425,6 +425,27 @@ defmodule Opus.Record do
 
   def inherited_grant(_athanor_id, _parent_execution_id), do: {:error, :not_standing}
 
+  @doc """
+  Whether any run of the tree rooted at `execution_id` was admitted with
+  egress, as each admission marked the root (`Arca.Execution.reached_outside/2`):
+  what a launcher reads from the run's completion result. `nil` when the
+  root cannot be read, which a reader takes as outside.
+  """
+  @spec reached_outside(Context.t(), String.t()) :: boolean() | nil
+  def reached_outside(%Context{} = ctx, execution_id) when is_binary(execution_id) do
+    case Arca.Execution.reached_outside(Sanctum.Context.actor(ctx), execution_id) do
+      {:ok, reached} -> reached
+      {:error, _unreadable} -> nil
+    end
+  end
+
+  def reached_outside(%Context{}, _execution_id), do: nil
+
+  # A run's own admitted egress: the domains its edge allows.
+  defp reaches_outside?(%{allowed_domains: [_ | _]}), do: true
+  defp reaches_outside?(%{"allowed_domains" => [_ | _]}), do: true
+  defp reaches_outside?(_policy), do: false
+
   defp admit(%__MODULE__{} = record, opts, payloads) do
     case Arca.Execution.admit(
            %{
@@ -460,7 +481,10 @@ defmodule Opus.Record do
                reservation: record.reservation,
                payloads: payloads,
                grant: record.grant,
-               verify: &Sanctum.ExecutionStanding.verify/1
+               verify: &Sanctum.ExecutionStanding.verify/1,
+               # A run admitted with egress marks its tree's root in this
+               # transaction, where retention cannot reach it first.
+               reaches_outside: reaches_outside?(record.host_policy)
              ],
              Keyword.take(opts, [
                :charge,

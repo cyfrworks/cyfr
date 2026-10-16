@@ -744,7 +744,7 @@ defmodule Opus.Provider do
     case run_root_formatted(ctx, reference, input, opts, args) do
       {:ok, result} ->
         # Format response for MCP (convert atoms to strings for JSON)
-        {:ok, format_run_result(result, reference)}
+        {:ok, format_run_result(ctx, result, reference)}
 
       {:error, reason} ->
         {:error, reason}
@@ -891,7 +891,10 @@ defmodule Opus.Provider do
 
   # Format the root run's result for the MCP response
   # Converts atoms to strings for JSON serialization
-  defp format_run_result(result, reference) do
+  # The completion result carries whether any run of the tree was admitted
+  # with egress, as each admission marked its root (`Opus.Record`): the
+  # one fact a launcher reads to know what the result came from.
+  defp format_run_result(ctx, result, reference) do
     meta = result.metadata
 
     %{
@@ -903,7 +906,8 @@ defmodule Opus.Provider do
       component_digest: meta.component_digest,
       user_id: meta.user_id,
       reference: reference,
-      policy_applied: meta.policy_applied
+      policy_applied: meta.policy_applied,
+      reached_outside: Record.reached_outside(ctx, meta.execution_id)
     }
   end
 

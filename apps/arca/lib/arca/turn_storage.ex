@@ -36,8 +36,8 @@ defmodule Arca.TurnStorage do
   sources the step opens with (`:sources`) and the sources of the earlier
   turns whose rows it sends (`:sources_from`), and `close_step/4` joins
   the sources of its result (`:sources`), and of a component it launched
-  (`:launched`): outside, named by its reference, when any execution of
-  the launched tree was admitted with egress, as its row records it. A
+  (`:launched`): outside, named by its reference, unless the launch's
+  completion result says no run of its tree was admitted with egress. A
   clone turn opens with its
   parent's sources, and the parent joins its clones' when it closes the
   step that ran them: a clone row is never locked by its parent's
@@ -100,7 +100,7 @@ defmodule Arca.TurnStorage do
   # `{:error, :no_athanor}` before any query, and `bind_child!/4`, which
   # runs inside admission's transaction, raises instead., only: [from: 2]
 
-  alias Arca.Schemas.{Approval, Execution, Thread, Message, Turn, TurnStep}
+  alias Arca.Schemas.{Approval, Thread, Message, Turn, TurnStep}
 
   # The turn vocabulary is `Prima.TurnState`'s; these are its sets, bound
   # at compile time so guards can test membership.
@@ -1368,9 +1368,10 @@ defmodule Arca.TurnStorage do
   row; omitted for a step that produced none), `:execution_id`, `:error`,
   `:fence`, and `:sources`, the `Prima.Source`s the result carries, joined
   into the turn's in the same transaction; a `clone` step joins its
-  clones' sources too. `:launched` (`%{reference, execution_id}`) names a
-  component the step launched: outside, under its reference, when an
-  execution of its tree holds egress or none can be read. A step closes from `dispatched`, or from
+  clones' sources too. `:launched` (`%{reference, reached_outside}`, the
+  latter from the launch's completion result) names a component the step
+  launched: outside, under its reference, unless `reached_outside` is
+  `false`. A step closes from `dispatched`, or from
   `proposed` for `denied` and `skipped`.
   """
   @spec close_step(Prima.Actor.t(), String.t(), String.t(), map()) ::
@@ -2452,42 +2453,23 @@ defmodule Arca.TurnStorage do
       clones ++ launched_sources!(athanor_id, Map.get(attrs, :launched))
   end
 
-  # A launched component is outside, named by its reference, when its
-  # grant reaches the network: the egress any execution of its tree was
-  # admitted with (`host_policy`'s `allowed_domains`, written at its
-  # admission), read here in the step's transaction. A launch that names
-  # no execution, a tree with no row, and a policy that does not read are
-  # outside too: what cannot be shown to stay in the athanor did not.
-  # arca:db-raise-ok inside the caller's transaction
+  # A launched component is outside, named by its reference, unless the
+  # completion result its launcher was handed says no run of its tree was
+  # admitted with egress. That fact lives on the tree's root row, marked in
+  # each run's admission transaction (`Arca.Execution.admit/2`) and carried
+  # into the result, because a child's own row may be pruned by retention
+  # before the launch closes; nothing here reads an execution row. A launch
+  # with no result, or one whose result does not say, is outside.
   defp launched_sources!(_athanor_id, nil), do: []
 
-  defp launched_sources!(athanor_id, %{reference: reference, execution_id: id})
-       when is_binary(id) do
-    policies =
-      from(e in Execution,
-        where: e.athanor_id == ^athanor_id and (e.id == ^id or e.root_execution_id == ^id),
-        select: e.host_policy
-      )
-      |> Arca.Repo.all()
-
-    if policies != [] and Enum.all?(policies, &no_egress?/1),
-      do: [],
-      else: [Prima.Source.outside(reference)]
-  end
+  defp launched_sources!(_athanor_id, %{reference: _reference, reached_outside: false}),
+    do: []
 
   defp launched_sources!(_athanor_id, %{reference: reference}),
     do: [Prima.Source.outside(reference)]
 
+  # arca:db-raise-ok inside the caller's transaction
   defp launched_sources!(_athanor_id, _launched), do: Arca.Repo.rollback(:invalid_sources)
-
-  defp no_egress?(policy) when is_binary(policy) do
-    case Jason.decode(policy) do
-      {:ok, %{"allowed_domains" => []}} -> true
-      _reaches_or_unreadable -> false
-    end
-  end
-
-  defp no_egress?(_none), do: false
 
   # arca:db-raise-ok inside the caller's transaction
   defp sources!(sources) when is_list(sources) do

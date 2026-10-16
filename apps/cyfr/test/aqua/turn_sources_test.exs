@@ -304,7 +304,7 @@ defmodule Aqua.TurnSourcesTest do
   end
 
   describe "a launched component" do
-    test "is outside, named by its reference, only when an execution of its tree was admitted with egress",
+    test "is outside, named by its reference, only when a run of its tree was admitted with egress",
          %{ctx: ctx, thread: thread} do
       turn = running!(ctx, thread)
 
@@ -318,13 +318,7 @@ defmodule Aqua.TurnSourcesTest do
 
       # A quiet root whose child reached the network.
       tree = launched!(ctx, [])
-      child = launched!(ctx, ["feeds.example"])
-
-      {1, _} =
-        Arca.Repo.update_all(
-          from(e in Arca.Schemas.Execution, where: e.id == ^child),
-          set: [root_execution_id: tree, parent_execution_id: tree]
-        )
+      _child = child_run!(ctx, tree, ["feeds.example"])
 
       assert Source.outside("formula:local.tree") in closed_launch!(
                ctx,
@@ -333,8 +327,8 @@ defmodule Aqua.TurnSourcesTest do
                tree
              )
 
-      # A tree with no row, and a launch naming no execution, cannot show
-      # they stayed in the athanor.
+      # A tree no row answers for, and a launch with no result, cannot
+      # show they stayed in the athanor.
       assert Source.outside("formula:local.gone") in closed_launch!(
                ctx,
                turn,
@@ -347,6 +341,50 @@ defmodule Aqua.TurnSourcesTest do
                turn,
                "formula:local.unnamed",
                nil
+             )
+    end
+
+    test "retention pruning an egress-bearing child before the launch closes does not erase the outside source",
+         %{ctx: ctx, thread: thread} do
+      turn = running!(ctx, thread)
+      actor = Sanctum.Context.actor(ctx)
+      grant = Cyfr.Test.AttemptFixtures.grant(ctx.athanor_id)
+      root = launched!(ctx, [])
+
+      loud = child_run!(ctx, root, ["feeds.example"])
+      assert {:ok, _} = ended!(actor, loud.execution.id, loud.attempt.attempt, grant)
+      quiet = child_run!(ctx, root, [])
+
+      # The newest-N selection is deterministic without a timing sleep.
+      {1, _} =
+        Arca.Repo.update_all(
+          from(e in Arca.Schemas.Execution, where: e.id == ^quiet.execution.id),
+          set: [started_at: DateTime.add(DateTime.utc_now(), 1, :second)]
+        )
+
+      assert {:ok, 1} = Arca.Retention.cleanup(actor, "executions", value: 1)
+
+      refute Arca.Repo.exists?(
+               from(e in Arca.Schemas.Execution, where: e.id == ^loud.execution.id)
+             )
+
+      assert Arca.Repo.exists?(
+               from(e in Arca.Schemas.Execution, where: e.id == ^root and e.status == "running")
+             )
+
+      assert Arca.Repo.exists?(
+               from(e in Arca.Schemas.Execution, where: e.id == ^quiet.execution.id)
+             )
+
+      assert {:ok, _} = ended!(actor, quiet.execution.id, quiet.attempt.attempt, grant)
+      root_row = Arca.Execution.get_tenant(actor, root)
+      assert {:ok, _} = ended!(actor, root, root_row.current_attempt, grant)
+
+      assert Source.outside("formula:local.retained-tree") in closed_launch!(
+               ctx,
+               turn,
+               "formula:local.retained-tree",
+               root
              )
     end
   end
@@ -421,43 +459,75 @@ defmodule Aqua.TurnSourcesTest do
     turn
   end
 
-  # A launched root admitted with `domains` as its egress, as admission
-  # records the policy it enforced.
+  # A launched root admitted with `domains` as its egress, as Opus admits
+  # one (`Opus.Record`): the policy it enforced, and the tree's mark when
+  # that policy reaches the network.
   defp launched!(ctx, domains) do
     id = "exec_launched_#{System.unique_integer([:positive])}"
+    {:ok, _} = admit_run!(ctx, id, domains, %{})
+    id
+  end
 
-    {:ok, _} =
-      Arca.Execution.admit(
+  # A child of `root` admitted the same way.
+  defp child_run!(ctx, root, domains) do
+    id = "exec_child_#{System.unique_integer([:positive])}"
+
+    {:ok, admitted} =
+      admit_run!(ctx, id, domains, %{parent_execution_id: root, root_execution_id: root})
+
+    admitted
+  end
+
+  defp admit_run!(ctx, id, domains, lineage) do
+    Arca.Execution.admit(
+      Map.merge(
         %{
           id: id,
           reference: "formula:local.launched",
           user_id: ctx.user_id,
           athanor_id: ctx.athanor_id,
           component_type: "formula",
-          origin: :interactive
+          origin: :interactive,
+          host_policy: Jason.encode!(%{allowed_domains: domains, allowed_tools: []})
         },
-        grant: Cyfr.Test.AttemptFixtures.grant(ctx.athanor_id),
-        verify: &Sanctum.ExecutionStanding.verify/1
-      )
-
-    {1, _} =
-      Arca.Repo.update_all(from(e in Arca.Schemas.Execution, where: e.id == ^id),
-        set: [host_policy: Jason.encode!(%{allowed_domains: domains, allowed_tools: []})]
-      )
-
-    id
+        lineage
+      ),
+      grant: Cyfr.Test.AttemptFixtures.grant(ctx.athanor_id),
+      verify: &Sanctum.ExecutionStanding.verify/1,
+      reaches_outside: domains != []
+    )
   end
 
-  # One step of the turn closed as a launch of `reference` that started
-  # `execution_id`: the sources it added to the turn's.
+  defp ended!(actor, id, attempt, grant) do
+    Arca.Execution.record_end(
+      actor,
+      id,
+      "completed",
+      %{completed_at: DateTime.utc_now(), duration_ms: 1},
+      attempt,
+      grant: grant,
+      verify: &Sanctum.ExecutionStanding.verify/1
+    )
+  end
+
+  # One step of the turn closed as the loop closes a launch of `reference`
+  # whose run started `execution_id`: with what its completion result says
+  # (`execution.run`'s `reached_outside`, read as the provider reads it),
+  # nothing for a launch with no result. Answers the sources it added.
   defp closed_launch!(ctx, turn, reference, execution_id) do
     before = sources(ctx, turn)
     {:ok, step} = Tape.record_model_intent(ctx, turn, %{})
     {:ok, step} = Tape.mark_dispatched(ctx, turn, step)
 
+    reached =
+      case execution_id && Opus.Record.reached_outside(ctx, execution_id) do
+        reached when is_boolean(reached) -> reached
+        _none -> :unknown
+      end
+
     {:ok, _} =
       Tape.close_step(ctx, turn, step, "ok", %{
-        launched: %{reference: reference, execution_id: execution_id}
+        launched: %{reference: reference, execution_id: execution_id, reached_outside: reached}
       })
 
     sources(ctx, turn) -- before

@@ -34,8 +34,8 @@ defmodule Aqua.Loop do
   started and one for the model's own web search when the request offers
   it; a call's result closes with the sources it carries
   (`Aqua.Loop.Policy.sources_of/2`), and a launched component's with an
-  outside source named by its reference when its tree was admitted with
-  egress (`Arca.TurnStorage.close_step/4`). The room excerpt is the athanor's own
+  outside source named by its reference unless its completion result says
+  no run of its tree was admitted with egress (`Arca.TurnStorage.close_step/4`). The room excerpt is the athanor's own
   members' words and joins nothing. A standing allow is judged against the
   sources as they stand when a call is decided and again when it
   dispatches, and a card names them.
@@ -1704,7 +1704,7 @@ defmodule Aqua.Loop do
           }
         },
         execution_id: id,
-        launched: %{reference: call && call.target, execution_id: id}
+        launched: %{reference: call && call.target, reached_outside: reached_outside(result)}
       })
 
     state
@@ -1714,6 +1714,13 @@ defmodule Aqua.Loop do
     close(state, step, call, {:error, describe(reason)})
     state
   end
+
+  # Whether the launched tree reached outside, as its completion result
+  # says (`execution.run`'s `reached_outside`); anything else is unknown,
+  # which the step's close reads as outside.
+  defp reached_outside(%{reached_outside: reached}) when is_boolean(reached), do: reached
+  defp reached_outside(%{"reached_outside" => reached}) when is_boolean(reached), do: reached
+  defp reached_outside(_result), do: :unknown
 
   defp unwrap({:ok, %Call{} = call}), do: call
   defp unwrap(_), do: nil
