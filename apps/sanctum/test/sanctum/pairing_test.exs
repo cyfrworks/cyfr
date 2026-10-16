@@ -270,7 +270,8 @@ defmodule Sanctum.PairingTest do
     :passkey_registration,
     :remote_sign_in,
     :key_rotation,
-    :sign_in_methods
+    :sign_in_methods,
+    :seal_change
   ]
 
   describe "the action table" do
@@ -316,7 +317,8 @@ defmodule Sanctum.PairingTest do
         "person.assert" => :remote_sign_in,
         "person.rotate" => :key_rotation,
         "person.link_door" => :sign_in_methods,
-        "person.unlink_door" => :sign_in_methods
+        "person.unlink_door" => :sign_in_methods,
+        "seal.change" => :seal_change
       }
 
       for {operation, action} <- expected do

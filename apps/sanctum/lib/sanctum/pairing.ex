@@ -203,14 +203,17 @@ defmodule Sanctum.Pairing do
     passkey_registration: :fresh,
     remote_sign_in: :fresh,
     key_rotation: :fresh,
-    sign_in_methods: :fresh
+    sign_in_methods: :fresh,
+    seal_change: :fresh
   }
 
   # Each operation that confirms something, as `tool.action`, the spelling
   # a pending confirmation records (`Prima.Confirmation`). The two rebinds
   # confirm a widening only: their deciding site decides which rebind
   # widens and asks there (`Sanctum.Vault.rebind_confirmation/5`), so this
-  # table makes no narrowing rebind confirm anything.
+  # table makes no narrowing rebind confirm anything. `seal.change` is the
+  # spelling of the seal's change (`Sanctum.Seal.change/2`), which the
+  # system layer makes and no gate operation exposes.
   @operations %{
     "vault.create" => :credential_entry,
     "vault.rotate" => :credential_entry,
@@ -238,7 +241,8 @@ defmodule Sanctum.Pairing do
     "person.assert" => :remote_sign_in,
     "person.rotate" => :key_rotation,
     "person.link_door" => :sign_in_methods,
-    "person.unlink_door" => :sign_in_methods
+    "person.unlink_door" => :sign_in_methods,
+    "seal.change" => :seal_change
   }
 
   # A pairing invitation: 128 random bits, alive five minutes.
@@ -264,6 +268,7 @@ defmodule Sanctum.Pairing do
           | :remote_sign_in
           | :key_rotation
           | :sign_in_methods
+          | :seal_change
 
   @typedoc """
   An opened invitation: its raw `invitation_secret` (16 bytes, shown to

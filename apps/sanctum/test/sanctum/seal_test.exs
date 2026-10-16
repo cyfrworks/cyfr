@@ -70,10 +70,12 @@ defmodule Sanctum.SealTest do
   defp device!(ctx) do
     {device_key, private} = :crypto.generate_key(:eddsa, :ed25519)
 
+    digest = Prima.Device.key_digest(device_key)
+
     {:ok, invitation} =
       ctx
-      |> Sanctum.TestContext.confirmed(:device_pairing, Pairing.invitation_change())
-      |> Pairing.begin(%{})
+      |> Sanctum.TestContext.confirmed(:device_pairing, Pairing.invitation_change(digest))
+      |> Pairing.begin(%{key_digest: digest})
 
     glass = Context.build(%{authenticated: false, client_ip: @source})
     submission = %{device_key: device_key}
@@ -299,6 +301,103 @@ defmodule Sanctum.SealTest do
 
       text = Seal.generate()
       assert {:ok, %Seal{text: ^text}} = Seal.choose(ctx, %{text: text, glyph: hd(Seal.glyphs())})
+    end
+  end
+
+  describe "change/2" do
+    # The person's seal-change confirmations, by state.
+    defp records(user_id) do
+      Arca.Repo.all(
+        from(c in "pending_confirmations",
+          where: c.user_id == ^user_id and c.operation == "seal.change",
+          select: %{operation: c.operation, state: c.state}
+        )
+      )
+    end
+
+    test "without a fresh seal_change proof, asks one and changes nothing", %{ctx: ctx} do
+      chosen!(ctx, %{text: "oak"})
+
+      assert {:error, {:confirmation_required, %{id: id, operation: "seal.change"}}} =
+               Seal.change(ctx, %{text: "pine", glyph: "☘"})
+
+      assert is_binary(id)
+      assert stored(ctx.user_id) == %{text: "oak", glyph: nil}
+      assert [%{operation: "seal.change", state: "pending"}] = records(ctx.user_id)
+
+      # A secret that names a record never proven waits on it, and still
+      # changes nothing.
+      assert {:error, {:confirmation_required, %{id: ^id}}} =
+               Seal.change(%{ctx | confirmation_id: id}, %{text: "pine", glyph: "☘"})
+
+      assert stored(ctx.user_id) == %{text: "oak", glyph: nil}
+    end
+
+    test "under a proof of that exact change, replaces the seal once", %{ctx: ctx} do
+      chosen!(ctx, %{text: "oak"})
+      new = %{text: "pine", glyph: "☘"}
+
+      assert {:ok, %Seal{text: "pine", glyph: "☘"}} =
+               Sanctum.TestContext.confirming(ctx, &Seal.change(&1, new))
+
+      assert {:ok, %Seal{text: "pine", glyph: "☘"}} = Seal.for_system_layer(ctx)
+      assert [%{state: "consumed"}] = records(ctx.user_id)
+    end
+
+    test "a proof is spent once, and binds the seal it was asked for", %{ctx: ctx} do
+      chosen!(ctx, %{text: "oak"})
+
+      proven =
+        Sanctum.TestContext.confirmed(ctx, :seal_change, %{
+          operation: "seal.change",
+          arguments: %{"text" => "pine", "glyph" => nil}
+        })
+
+      # Another seal under that proof asks again and changes nothing.
+      assert {:error, {:confirmation_required, _ask}} = Seal.change(proven, %{text: "wren"})
+      assert stored(ctx.user_id) == %{text: "oak", glyph: nil}
+
+      assert {:ok, %Seal{text: "pine"}} = Seal.change(proven, %{text: "pine"})
+
+      # The same proof a second time: spent, so it is asked again.
+      assert {:error, {:confirmation_required, _ask}} = Seal.change(proven, %{text: "pine"})
+      assert stored(ctx.user_id) == %{text: "pine", glyph: nil}
+    end
+
+    test "the record it opens carries nothing of the seal", %{ctx: ctx} do
+      chosen!(ctx, %{text: "oak"})
+
+      {:error, {:confirmation_required, %{id: id}}} =
+        Seal.change(ctx, %{text: "saffron kestrel", glyph: "⚓"})
+
+      {:ok, row} =
+        Arca.PendingConfirmations.get(Context.actor(ctx), Prima.Confirmation.ref(id))
+
+      refute inspect(row, limit: :infinity) =~ "saffron"
+      refute inspect(row, limit: :infinity) =~ "⚓"
+    end
+
+    test "a person with no seal is not_set, and no confirmation opens", %{ctx: ctx} do
+      assert Seal.change(ctx, %{text: "pine"}) == {:error, :not_set}
+      assert records(ctx.user_id) == []
+    end
+
+    test "is refused from every context but the person's own interactive client, opening nothing",
+         %{ctx: ctx} do
+      chosen!(ctx, %{text: "oak"})
+
+      for refused <- [
+            %{ctx | origin: :programmatic},
+            %{ctx | auth_method: :api_key, api_key_id: "key_seal", session_token_hash: nil},
+            %{ctx | anonymous: true},
+            Context.enter_guest(ctx)
+          ] do
+        assert Seal.change(refused, %{text: "pine"}) == {:error, :refused}
+      end
+
+      assert Seal.change(ctx, %{text: "my own words"}) == {:error, :invalid_seal}
+      assert records(ctx.user_id) == []
+      assert stored(ctx.user_id) == %{text: "oak", glyph: nil}
     end
   end
 
