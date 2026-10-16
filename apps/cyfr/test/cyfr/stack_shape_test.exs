@@ -845,7 +845,7 @@ defmodule Cyfr.StackShapeTest do
   defp guard_spelled?(_text, %{guard: nil}), do: false
 
   defp guard_spelled?(text, _role),
-    do: not (text =~ ~r/^GUARD = ROLE\["guard"\]$/m) or text =~ ~r/^GUARD = ["']/m
+    do: not (text =~ ~r/^GUARD\s*=\s*ROLE\["guard"\]\s*$/m) or text =~ ~r/^GUARD\s*=\s*["']/m
 
   # Where a suite spells a fact of its role or of the release: a number
   # (`_` allowed between its digits) or a path anywhere; a name as a whole
@@ -1546,6 +1546,10 @@ defmodule Cyfr.StackShapeTest do
        [{builds_harness, :suite, :builds}]},
       {"the builds harness spelling a guard other than the table's",
        {builds_harness, ~s(GUARD = ROLE["guard"]), ~s(GUARD = "wrong-guard")},
+       [{builds_harness, :suite, :builds}]},
+      {"a later literal overrides the suite guard lookup",
+       {builds_harness, ~s(GUARD = ROLE["guard"]),
+        ~s(GUARD = ROLE["guard"]) <> "\n" <> ~s(GUARD="wrong-guard")},
        [{builds_harness, :suite, :builds}]},
       {"the runtime keeper's remedy naming another pool",
        {runtime_keeper, "--pool #{runtime.pool}:", "--pool #{runtime.pool}s:"},
