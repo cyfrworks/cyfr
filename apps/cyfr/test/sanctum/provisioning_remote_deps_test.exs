@@ -179,6 +179,108 @@ defmodule Sanctum.ProvisioningRemoteDepsTest do
     {:ok, ctx: %{ctx | athanor_id: group.id}, group: group, stall: stall}
   end
 
+  test "a remote dependency of a stale fill cannot overwrite its successor after slot regain",
+       %{ctx: ctx, group: group, stall: stall} do
+    enabled = Application.fetch_env(:arca, :control_plane_claim_enabled)
+
+    slot_keys =
+      for key <- [:standing, :generation, :slot], do: {Arca.ControlPlane, key}
+
+    previous = Map.new(slot_keys, &{&1, :persistent_term.get(&1, :absent)})
+
+    on_exit(fn ->
+      case enabled do
+        {:ok, value} -> Application.put_env(:arca, :control_plane_claim_enabled, value)
+        :error -> Application.delete_env(:arca, :control_plane_claim_enabled)
+      end
+
+      for {key, value} <- previous do
+        if value == :absent,
+          do: :persistent_term.erase(key),
+          else: :persistent_term.put(key, value)
+      end
+    end)
+
+    Application.put_env(:arca, :control_plane_claim_enabled, true)
+    node = "remote-regain-#{System.unique_integer([:positive])}"
+    {:ok, original} = Arca.ControlPlane.take(node, node <> "#old", 60_000)
+    Agent.update(stall, fn _ -> "someone/catalysts/elsewhere" end)
+    old_fill = Task.async(fn -> Provisioning.provision(group, ctx) end)
+
+    on_exit(fn ->
+      if Process.alive?(old_fill.pid) do
+        ref = Process.monitor(old_fill.pid)
+        Process.exit(old_fill.pid, :kill)
+
+        receive do
+          {:DOWN, ^ref, :process, _, _} -> :ok
+        after
+          5_000 -> :ok
+        end
+      end
+    end)
+
+    assert_receive {:stalled, "someone/catalysts/elsewhere"}, 15_000
+    actor = Sanctum.Context.actor(ctx)
+    {:ok, held} = Claims.current(actor)
+
+    import Ecto.Query, only: [from: 2]
+
+    {1, _} =
+      Arca.Repo.update_all(from(l in Arca.Schemas.CellLease, where: l.node == ^node),
+        set: [lease_until: DateTime.add(DateTime.utc_now(), -60, :second)]
+      )
+
+    {:ok, successor} = Arca.ControlPlane.take(node, node <> "#successor", 60_000)
+    assert successor.generation > original.generation
+
+    {1, _} =
+      Arca.Repo.update_all(
+        from(c in Arca.Schemas.ProvisioningClaim, where: c.athanor_id == ^group.id),
+        set: [lease_until: DateTime.add(DateTime.utc_now(), -60, :second)]
+      )
+
+    {:ok, next} = Provisioning.take_claim(group.id, "first_need")
+    assert next.fence > held.fence
+    unit = ["components", "catalysts", "someone", "elsewhere", "1.0.0"]
+
+    assert {:ok, _} =
+             Arca.Overlay.commit_unit(
+               actor,
+               unit,
+               {:files,
+                [
+                  {["cyfr-manifest.json"], ~s({"type":"catalyst","customized":true})},
+                  {["catalyst.wasm"], "SUCCESSOR-BYTES"}
+                ]},
+               cap: :exempt
+             )
+
+    {root, key} = Arca.Storage.UnitLocator.unit_key(unit)
+    {:ok, theirs} = Arca.StorageUnits.current(actor, root, key)
+
+    {1, _} =
+      Arca.Repo.update_all(from(l in Arca.Schemas.CellLease, where: l.node == ^node),
+        set: [lease_until: DateTime.add(DateTime.utc_now(), -60, :second)]
+      )
+
+    {:ok, regained} = Arca.ControlPlane.take(node, node <> "#old", 60_000)
+    assert regained.generation > successor.generation
+    Agent.update(stall, fn _ -> nil end)
+    result = Task.await(old_fill, 30_000)
+    {:ok, current} = Arca.StorageUnits.current(actor, root, key)
+    {:ok, bytes} = Arca.get(actor, unit ++ ["catalyst.wasm"])
+
+    assert {current.current_revision, bytes} == {theirs.current_revision, "SUCCESSOR-BYTES"},
+           "old fill returned #{inspect(result)}; revision changed: " <>
+             "#{current.current_revision != theirs.current_revision}; " <>
+             "served remote fixture bytes: #{bytes == @wasm}"
+
+    # The old fill's pull commits nothing, and the fill then writes nothing
+    # for the athanor: it answers as an attempt that lost it.
+    assert result == {:error, :provisioning_busy}
+  end
+
   test "a stalled required pull ends within its budget, releases coordination, and the next attempt completes the closure",
        %{ctx: ctx, group: group, stall: stall} do
     Agent.update(stall, fn _ -> "someone/catalysts/below" end)

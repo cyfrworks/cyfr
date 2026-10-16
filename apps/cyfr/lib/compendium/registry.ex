@@ -109,6 +109,9 @@ defmodule Compendium.Registry do
     (the OCI pull path). Remote content may never mint into the `local`
     publisher namespace — that namespace is reserved for components
     registered from the filesystem.
+  - `:claim` - a provisioning claim and the member slot it was taken under
+    (a fill's pull): the unit commits only while both are still the
+    fill's (`Arca.Overlay.commit_unit/4`), refused `:not_owner` otherwise.
 
   ## Returns
 
@@ -158,7 +161,8 @@ defmodule Compendium.Registry do
              version,
              wasm_bytes,
              manifest_bytes,
-             unit_files
+             unit_files,
+             Keyword.take(opts, [:claim])
            ),
          {:ok, component} <-
            land_row(ctx, name, version, metadata, validation, publisher,
@@ -183,7 +187,17 @@ defmodule Compendium.Registry do
   # minimal when the publish carries none, so every published unit reads
   # complete and completeness and rows can never disagree. The storage
   # cap sees the whole incoming unit, not just the artifact.
-  defp commit_component_unit(ctx, type, publisher, name, version, wasm_bytes, manifest, extras) do
+  defp commit_component_unit(
+         ctx,
+         type,
+         publisher,
+         name,
+         version,
+         wasm_bytes,
+         manifest,
+         extras,
+         claim
+       ) do
     version_dir = ComponentPath.version_dir(type, publisher, name, version)
     wasm_rel = [ComponentPath.wasm_name(type)]
 
@@ -200,9 +214,10 @@ defmodule Compendium.Registry do
         })
 
     Sanctum.Context.actor(ctx)
-    |> Arca.Overlay.commit_unit(version_dir, {:files, [{wasm_rel, wasm_bytes} | extras]},
-      cap: {:checked, total},
-      sentinel: sentinel
+    |> Arca.Overlay.commit_unit(
+      version_dir,
+      {:files, [{wasm_rel, wasm_bytes} | extras]},
+      [cap: {:checked, total}, sentinel: sentinel] ++ claim
     )
     |> commit_outcome(:wasm_write_failed)
   end
@@ -302,6 +317,8 @@ defmodule Compendium.Registry do
     - `:allow_overwrite` - Allow overwriting existing versions (default: false)
     - `:unit_files` - `{relative_segments, bytes}` the unit carries beside
       the archive (a pull's README and src/ tree)
+    - `:claim` - as `publish_bytes/4`'s: a fill's pull commits the unit
+      only while the fill still holds its claim and slot
   """
   def publish_tincture_archive(%Context{} = ctx, archive_bytes, metadata, opts \\ [])
       when is_binary(archive_bytes) and is_map(metadata) do
@@ -352,7 +369,8 @@ defmodule Compendium.Registry do
              # Extra unit files (a pull's README and src/ tree) are laid
              # over the archive before validation, so a layer wins any name
              # collision with an archived file and is checked as it lands.
-             unit_files: Keyword.get(opts, :unit_files, [])
+             unit_files: Keyword.get(opts, :unit_files, []),
+             claim: Keyword.get(opts, :claim)
            ),
          {:ok, component} <-
            land_row(ctx, name, version, metadata, validation, publisher,
@@ -980,6 +998,14 @@ defmodule Compendium.Registry do
   # it (`lay_unit_files/2`), validate the tree that results and store
   # exactly that tree to Arca. Returns {:ok, %{digest, size, exports}} on
   # success.
+  # A fill's claim, when the publish carries one, for the unit commit.
+  defp fill_claim(opts) do
+    case Keyword.get(opts, :claim) do
+      nil -> []
+      claim -> [claim: claim]
+    end
+  end
+
   defp extract_and_store_tincture(ctx, archive_bytes, publisher, name, version, opts) do
     # Hook between validation and the first Arca write. Callers use it to
     # refuse a publish without leaving extracted files behind.
@@ -1042,7 +1068,11 @@ defmodule Compendium.Registry do
                    end)}
 
                 Sanctum.Context.actor(ctx)
-                |> Arca.Overlay.commit_unit(version_dir, source, cap: {:checked, validation.size})
+                |> Arca.Overlay.commit_unit(
+                  version_dir,
+                  source,
+                  [cap: {:checked, validation.size}] ++ fill_claim(opts)
+                )
                 |> commit_outcome(:tincture_store_failed)
                 |> case do
                   {:ok, _written} -> {:ok, validation}

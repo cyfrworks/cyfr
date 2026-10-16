@@ -253,8 +253,8 @@ defmodule Compendium.Provisioning do
          {:ok, _scan} <- register_bundle(athanor_id, claim),
          :ok <- aqua_definitions(athanor_id, claim),
          :ok <- index_agents(ctx, claim),
-         {:ok, closure} <- pull_required_deps(ctx),
-         optional <- pull_optional_deps(ctx),
+         {:ok, closure} <- pull_required_deps(ctx, claim),
+         optional <- pull_optional_deps(ctx, claim),
          {:ok, bootstrap} <- Athanor.bootstrap_consents(ctx, claim),
          :ok <- Athanor.settle(athanor_id, claim, "ready", nil) do
       Logger.info(
@@ -395,7 +395,7 @@ defmodule Compendium.Provisioning do
     # something — a transient registry outage at the previous sync must
     # not leave the closure missing until the next release. Both are
     # cheap no-ops when nothing is missing.
-    case pull_required_deps(ctx) do
+    case pull_required_deps(ctx, claim) do
       {:ok, _closure} ->
         :ok
 
@@ -405,7 +405,7 @@ defmodule Compendium.Provisioning do
         )
     end
 
-    _ = pull_optional_deps(ctx)
+    _ = pull_optional_deps(ctx, claim)
 
     # The index and the mint speak for the athanor, so they are this sync's
     # only while the claim is. The index says so in the transaction that
@@ -594,10 +594,10 @@ defmodule Compendium.Provisioning do
   # declares it cannot run without — pulled under the attempt's deadline.
   # A pull that fails, times out or exits is a provisioning failure at the
   # closure step, retried by the next attempt.
-  defp pull_required_deps(ctx) do
+  defp pull_required_deps(ctx, claim) do
     budget_ms = Application.fetch_env!(:cyfr, :provisioning_required_pull_budget_ms)
 
-    case bounded_pull(ctx, missing_bundle_deps(ctx, :required), budget_ms) do
+    case bounded_pull(ctx, missing_bundle_deps(ctx, :required), budget_ms, claim) do
       {:ok, %{failed: []} = closure} -> {:ok, closure}
       {:ok, %{failed: failed}} -> {:error, {:closure, failed}}
       :timeout -> {:error, {:closure, {:timeout, budget_ms}}}
@@ -612,13 +612,13 @@ defmodule Compendium.Provisioning do
   # activations covering what is there, and the catalysts arrive when a
   # model is connected. An optional dependency that fails to pull is never
   # a provisioning failure.
-  defp pull_optional_deps(ctx) do
+  defp pull_optional_deps(ctx, claim) do
     optional =
       if Compendium.RegistryHost.configured?(),
         do: missing_bundle_deps(ctx, :all) -- missing_bundle_deps(ctx, :required),
         else: []
 
-    case bounded_pull(ctx, optional, @optional_pull_budget_ms) do
+    case bounded_pull(ctx, optional, @optional_pull_budget_ms, claim) do
       {:ok, %{pulled: pulled, failed: []}} ->
         length(pulled)
 
@@ -661,12 +661,15 @@ defmodule Compendium.Provisioning do
   # not this process's: unlinked so its crash stays its own, it would
   # otherwise outlive an attempt killed where it stands and go on writing
   # into an athanor a successor already holds. The claim's keeper starts it
-  # and stops it before the claim goes back.
-  defp bounded_pull(_ctx, [], _budget_ms), do: {:ok, %{pulled: [], failed: [], present: []}}
+  # and stops it before the claim goes back. Each unit it pulls commits
+  # under the attempt's claim and the slot that claim was taken under, so
+  # a pull that outlives the attempt's hold on either publishes nothing.
+  defp bounded_pull(_ctx, [], _budget_ms, _claim),
+    do: {:ok, %{pulled: [], failed: [], present: []}}
 
-  defp bounded_pull(ctx, refs, budget_ms) do
+  defp bounded_pull(ctx, refs, budget_ms, claim) do
     Athanor.bounded_work(Compendium.ProvisioningSupervisor, budget_ms, fn ->
-      Pull.ensure_published_deps(ctx, refs)
+      Pull.ensure_published_deps(ctx, refs, claim: fence(claim))
     end)
   end
 

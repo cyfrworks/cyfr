@@ -39,9 +39,14 @@ defmodule Compendium.OCI.Client do
 
   - `{:ok, result}` with component metadata and digest
   - `{:error, reason}` on failure
+
+  `claim:` in `opts` — a provisioning claim and the member slot it was
+  taken under — is handed to the registry's unit commit
+  (`Compendium.Registry.publish_bytes/4`, `publish_tincture_archive/4`),
+  so a fill's pull publishes only while the fill still holds both.
   """
-  @spec pull(Context.t(), String.t()) :: {:ok, map()} | {:error, term()}
-  def pull(%Context{} = ctx, oci_ref) when is_binary(oci_ref) do
+  @spec pull(Context.t(), String.t(), keyword()) :: {:ok, map()} | {:error, term()}
+  def pull(%Context{} = ctx, oci_ref, opts \\ []) when is_binary(oci_ref) and is_list(opts) do
     with {:ok, ref} <- Reference.parse(oci_ref),
          :ok <- Compendium.RegistryHost.validate_host(ref.registry),
          # Resolve the component ref before any network I/O so a refused
@@ -73,7 +78,7 @@ defmodule Compendium.OCI.Client do
          unit_files = source_files ++ readme_unit_files(readme_bytes),
          {:ok, component} <-
            store_component(
-             ctx,
+             {ctx, Keyword.take(opts, [:claim])},
              component_ref,
              cyfr_manifest,
              content_bytes,
@@ -667,7 +672,7 @@ defmodule Compendium.OCI.Client do
   end
 
   defp store_component(
-         ctx,
+         {ctx, claim},
          component_ref,
          cyfr_manifest,
          content_bytes,
@@ -699,18 +704,24 @@ defmodule Compendium.OCI.Client do
     # the bytes arrived: pulled — "oci", whatever the type.
     case component_ref.type do
       "tincture" ->
-        Registry.publish_tincture_archive(ctx, content_bytes, metadata,
-          allow_overwrite: true,
-          origin: :remote,
-          unit_files: unit_files
+        Registry.publish_tincture_archive(
+          ctx,
+          content_bytes,
+          metadata,
+          [allow_overwrite: true, origin: :remote, unit_files: unit_files] ++ claim
         )
 
       _wasm_type ->
-        Registry.publish_bytes(ctx, content_bytes, metadata,
-          allow_overwrite: true,
-          origin: :remote,
-          source: Compendium.Source.oci(),
-          unit_files: unit_files
+        Registry.publish_bytes(
+          ctx,
+          content_bytes,
+          metadata,
+          [
+            allow_overwrite: true,
+            origin: :remote,
+            source: Compendium.Source.oci(),
+            unit_files: unit_files
+          ] ++ claim
         )
     end
   end
