@@ -1,0 +1,8 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 CYFR Works Inc.
+
+# The Rust release the cyfr-locus image builds components with: its Rust
+# stage installs this channel as the default toolchain (Dockerfile.locus),
+# and Dependabot's rust-toolchain updates propose the next one.
+[toolchain]
+channel = "1.99.1"

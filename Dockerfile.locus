@@ -64,7 +64,7 @@
 
 # ---- cyfr-locus, the process helper: a static Go binary, pinned to the Go
 # release apps/locus/keeper/go.mod names ----
-FROM golang:1.27.2-alpine AS keeper
+FROM golang:1.27.2-alpine@sha256:f92b6ef800e499660581efdabdf25d9d817a9d124eaf900924f0504e7e27e12d AS keeper
 WORKDIR /src
 COPY apps/locus/keeper/go.mod apps/locus/keeper/go.sum ./
 RUN go mod download
@@ -72,7 +72,7 @@ COPY apps/locus/keeper/ ./
 RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/cyfr-locus .
 
 # ---- Stage 1: release build ----
-FROM hexpm/elixir:1.20.4-erlang-29.1.1-debian-trixie-20261005 AS relbuilder
+FROM hexpm/elixir:1.20.4-erlang-29.1.1-debian-trixie-20261005@sha256:fd5f8520b3836b8b1e5d5e6dd890d1fda394e4e378bbc0cbc67cd618f321e29b AS relbuilder
 
 RUN apt-get update && apt-get install -y \
     build-essential \
@@ -121,7 +121,7 @@ COPY wit/ wit/
 RUN mix do compile --no-listeners + release locus --no-compile
 
 # ---- Stage 2: toolchain runtime ----
-FROM debian:trixie-slim
+FROM debian:trixie-slim@sha256:a29215f6a35e51e22adffa17f89e9d2ef06214e64a2bad10d765c46aea49f11f
 
 LABEL org.opencontainers.image.source="https://github.com/cyfrworks/cyfr"
 LABEL org.opencontainers.image.licenses="Apache-2.0"
@@ -154,10 +154,15 @@ ENV RUSTUP_HOME=/usr/local/rustup \
 
 # rustup-init is version- and checksum-pinned (hashes from
 # static.rust-lang.org's own .sha256 files) instead of `curl | sh` of a
-# moving script that runs as root at build time.
+# moving script that runs as root at build time, and it installs the Rust
+# release rust-toolchain.toml names as the default toolchain, so a build
+# does not take whatever stable is current.
 ARG RUSTUP_VERSION=1.28.2
 ARG CARGO_COMPONENT_VERSION=0.21.1
+COPY rust-toolchain.toml /tmp/rust-toolchain.toml
 RUN ARCH=$(dpkg --print-architecture) \
+    && RUST_TOOLCHAIN=$(sed -n 's/^channel = "\([0-9][0-9.]*\)"$/\1/p' /tmp/rust-toolchain.toml) \
+    && { [ -n "$RUST_TOOLCHAIN" ] || { echo "rust-toolchain.toml names no channel"; exit 1; }; } \
     && case "$ARCH" in \
          amd64) RUST_TRIPLE=x86_64-unknown-linux-gnu; RUSTUP_SHA=20a06e644b0d9bd2fbdbfd52d42540bdde820ea7df86e92e533c073da0cdd43c ;; \
          arm64) RUST_TRIPLE=aarch64-unknown-linux-gnu; RUSTUP_SHA=e3853c5a252fca15252d07cb23a1bdd9377a8c6f3efa01531109281ae47f841c ;; \
@@ -168,8 +173,9 @@ RUN ARCH=$(dpkg --print-architecture) \
        -o /tmp/rustup-init \
     && echo "${RUSTUP_SHA}  /tmp/rustup-init" | sha256sum -c - \
     && chmod +x /tmp/rustup-init \
-    && /tmp/rustup-init -y --profile minimal \
-    && rm /tmp/rustup-init \
+    && /tmp/rustup-init -y --profile minimal --default-toolchain "$RUST_TOOLCHAIN" \
+    && rm /tmp/rustup-init /tmp/rust-toolchain.toml \
+    && [ "$(rustc --version | cut -d' ' -f2)" = "$RUST_TOOLCHAIN" ] \
     && rustup target add wasm32-wasip1 wasm32-wasip2 \
     && cargo install --locked cargo-component@${CARGO_COMPONENT_VERSION} \
     && rm -rf /usr/local/cargo/registry /usr/local/cargo/git \

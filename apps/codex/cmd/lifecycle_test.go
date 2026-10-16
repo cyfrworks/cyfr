@@ -4,8 +4,11 @@
 package cmd
 
 import (
+	"bytes"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -13,6 +16,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/cyfr/codex/internal/release"
 	"github.com/cyfr/codex/internal/scaffold"
 )
 
@@ -698,6 +702,32 @@ func TestForceRefetchesTheSeccompProfile(t *testing.T) {
 	}
 	if dev := forceRefetched(false); len(dev) != 0 {
 		t.Errorf("a dev build's init --force removes %v, which its no-op tarball cannot replace", dev)
+	}
+}
+
+// `cyfr init` stops when the scaffold of its release fails verification,
+// naming the release and that nothing was extracted, and goes on with a
+// warning when the download itself fails.
+func TestScaffoldDownloadFailure(t *testing.T) {
+	var warn bytes.Buffer
+	unverified := fmt.Errorf("checksums.txt for 1.2.3: %w: not signed by the release workflow", release.ErrUnverified)
+	err := scaffoldDownloadFailure("1.2.3", unverified, &warn)
+	if err == nil {
+		t.Fatal("an unverified scaffold lets init continue")
+	}
+	if !errors.Is(err, release.ErrUnverified) || !strings.Contains(err.Error(), "1.2.3") || !strings.Contains(err.Error(), "nothing was extracted") {
+		t.Errorf("the refusal is %q", err)
+	}
+	if warn.Len() != 0 {
+		t.Errorf("a refusal also warned %q", warn.String())
+	}
+
+	transport := errors.New("checksums.txt: download https://example.invalid/checksums.txt: HTTP 503")
+	if err := scaffoldDownloadFailure("1.2.3", transport, &warn); err != nil {
+		t.Errorf("a transport failure stops init: %v", err)
+	}
+	if !strings.Contains(warn.String(), "HTTP 503") || !strings.Contains(warn.String(), "continuing anyway") {
+		t.Errorf("a transport failure warns %q", warn.String())
 	}
 }
 

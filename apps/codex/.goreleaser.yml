@@ -38,8 +38,11 @@ checksum:
 signs:
   - cmd: cosign
     signature: "${artifact}.sigstore.json"
+    # The protobuf bundle (media type v0.3) sigstore-go reads: `cyfr init`
+    # and `cyfr update` verify checksums.txt with it.
     args:
       - "sign-blob"
+      - "--new-bundle-format"
       - "--bundle=${signature}"
       - "${artifact}"
       - "--yes"
@@ -77,3 +80,9 @@ release:
     # Publish the installer as a release asset so `cyfr upgrade` can fetch a
     # tag-pinned installer instead of piping main-branch HEAD to sh.
     - glob: ../../scripts/install.sh
+    # The release's manifest and its keyless signature, which the release
+    # workflow writes and signs outside the checkout before this runs:
+    # `cyfr update` verifies them against the workflow's identity at the
+    # tag. An unset RELEASE_MANIFEST_DIR or a missing file fails the release.
+    - glob: "{{ .Env.RELEASE_MANIFEST_DIR }}/release.json"
+    - glob: "{{ .Env.RELEASE_MANIFEST_DIR }}/release.json.sigstore.json"

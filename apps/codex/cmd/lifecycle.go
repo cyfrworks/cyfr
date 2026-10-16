@@ -12,6 +12,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"os"
@@ -24,11 +25,26 @@ import (
 
 	"github.com/cyfr/codex/internal/config"
 	"github.com/cyfr/codex/internal/prompt"
+	"github.com/cyfr/codex/internal/release"
 	"github.com/cyfr/codex/internal/scaffold"
 	"github.com/cyfr/codex/internal/version"
 	"github.com/spf13/cobra"
 	"gopkg.in/yaml.v3"
 )
+
+// scaffoldDownloadFailure decides what a failed scaffold download means
+// for `cyfr init` of release rel. A release file that fails verification
+// (release.ErrUnverified) stops init, since the scaffold carries the
+// compose file naming the images `cyfr up` runs, and the scaffold refuses
+// before extracting a byte. Any other failure is a transport failure: it
+// warns on warn, and init continues with the files already present.
+func scaffoldDownloadFailure(rel string, err error, warn io.Writer) error {
+	if errors.Is(err, release.ErrUnverified) {
+		return fmt.Errorf("the scaffold of release %s failed verification, so nothing was extracted: %w", rel, err)
+	}
+	fmt.Fprintf(warn, "Warning: failed to download scaffold files: %v (continuing anyway)\n", err)
+	return nil
+}
 
 // generateSecretKey returns a 64-byte cryptographically random key, base64url-encoded.
 func generateSecretKey() (string, error) {
@@ -409,12 +425,16 @@ Re-running in an existing project is safe: docker-compose.yml, Caddyfile, cyfr.y
 			_ = os.Remove("cyfr.yaml")
 		}
 
-		// Download scaffold files (non-fatal): guides, wit/, aqua/, and the
-		// deploy files (docker-compose.yml, Caddyfile, .env.example and the
+		// Download scaffold files: guides, wit/, aqua/, and the deploy
+		// files (docker-compose.yml, Caddyfile, .env.example and the
 		// services' env examples). Idempotent — existing files kept. No-op
-		// for dev builds (version.Version=="dev"/"").
+		// for dev builds (version.Version=="dev"/""). A download that fails
+		// warns and init goes on; a release that fails verification stops
+		// it (scaffoldDownloadFailure).
 		if err := scaffold.Download(version.Version); err != nil {
-			fmt.Fprintf(os.Stderr, "Warning: failed to download scaffold files: %v (continuing anyway)\n", err)
+			if stop := scaffoldDownloadFailure(version.Version, err, os.Stderr); stop != nil {
+				return stop
+			}
 		}
 
 		composeExists := fileExists("docker-compose.yml")
@@ -482,8 +502,12 @@ database_path: ./data/cyfr.db
 		// Warm-pull the images docker-compose.yml starts with this project's
 		// profiles, read from the .env just written (cyfr, and cyfr-locus
 		// for locus-runtime and locus-backends, the same image serving
-		// locus-builds with builds on, and caddy in TLS mode). Falls back to the published
-		// cyfr image on a dev build (no compose).
+		// locus-builds with builds on, and caddy in TLS mode). A release's
+		// compose names each as <repository>:<version>@<digest>, and
+		// `docker pull` of such a reference pulls by the digest, so the
+		// warm pull fetches exactly the images the verified scaffold names.
+		// Falls back to the published cyfr image on a dev build (no
+		// compose).
 		images := imagesFromCompose("docker-compose.yml", composeProfiles(".env"))
 		if len(images) == 0 {
 			images = []string{"ghcr.io/cyfrworks/cyfr:latest"}

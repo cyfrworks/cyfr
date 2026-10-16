@@ -1,0 +1,60 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 CYFR Works Inc.
+
+# Weekly proposals for every pinned dependency: the Dockerfiles' base
+# images and compose's caddy (by digest), the workflows' and the composite
+# action's actions (by commit), the Mix and Go modules, and the Rust
+# release rust-toolchain.toml names. Minor and patch updates of one
+# ecosystem arrive as one pull request; a major update arrives as a pull
+# request of its own. Nothing here merges anything: every proposal is
+# reviewed and merged by hand.
+version: 2
+updates:
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      docker:
+        update-types: [minor, patch]
+
+  - package-ecosystem: docker-compose
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      docker-compose:
+        update-types: [minor, patch]
+
+  - package-ecosystem: github-actions
+    directories:
+      - /
+      - /.github/actions/setup-elixir
+    schedule:
+      interval: weekly
+    groups:
+      github-actions:
+        update-types: [minor, patch]
+
+  - package-ecosystem: mix
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      mix:
+        update-types: [minor, patch]
+
+  - package-ecosystem: gomod
+    directories:
+      - /apps/codex
+      - /apps/locus/keeper
+    schedule:
+      interval: weekly
+    groups:
+      gomod:
+        update-types: [minor, patch]
+
+  - package-ecosystem: rust-toolchain
+    directory: /
+    schedule:
+      interval: weekly

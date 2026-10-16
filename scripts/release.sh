@@ -94,34 +94,23 @@ if [ -n "$(git status --porcelain)" ]; then
   fi
 fi
 
-# A release tag must never point at a red commit: run the full suite on BOTH
-# database adapters and credo before touching versions. The adapter is chosen
-# at compile time, so Postgres is a build of its own (MIX_BUILD_PATH) against
-# its own database: a tag that ran SQLite alone said nothing about the half of
-# the shipped product that runs on Postgres. Point CYFR_POSTGRES_TEST_URL at a
-# database this may create, migrate and write to; without one the Postgres leg
-# is refused, not skipped. Skip both with SKIP_TESTS=1 only when the same tree
-# already passed locally moments ago.
+# A release tag must never point at a red commit: before touching versions,
+# the close gate runs every check a commit passes and the full suite on
+# both database adapters, the cluster suite and every island, queued on
+# the verification host as any exclusive check is (scripts/heavy-check.sh,
+# scripts/commit-gate.sh). Its PostgreSQL legs use the database
+# config/test.exs names for each partition on the host's fixture server,
+# localhost:5432, so the release names none. Its logs stay in a fresh
+# directory named before it starts and again when it ends. Skip it with
+# SKIP_TESTS=1 only when the same tree passed the close gate moments ago.
 if [ "${SKIP_TESTS:-}" != "1" ]; then
-  echo "Running the full test suite on SQLite (set SKIP_TESTS=1 to skip)..."
-  CYFR_DATABASE=sqlite mix test
-
-  if [ -z "${CYFR_POSTGRES_TEST_URL:-}" ]; then
-    echo "Error: CYFR_POSTGRES_TEST_URL is not set, so the Postgres suite cannot run."
-    echo "Set it to a disposable Postgres database (e.g."
-    echo "  postgres://cyfr:cyfr@localhost:5432/cyfr_test)"
-    echo "or set SKIP_TESTS=1 if this tree just passed on both adapters."
+  GATE_LOGS="$(mktemp -d "${TMPDIR:-/tmp}/release-gate.XXXXXX")"
+  echo "Running the close gate (set SKIP_TESTS=1 to skip); its logs go to $GATE_LOGS"
+  if ! scripts/heavy-check.sh -t 7200 -- scripts/commit-gate.sh -l "$GATE_LOGS" --close; then
+    echo "Error: the close gate failed; its logs are in $GATE_LOGS"
     exit 1
   fi
-
-  echo "Running the full test suite on Postgres..."
-  CYFR_DATABASE=postgres \
-    MIX_BUILD_PATH="$REPO_ROOT/_build/test_pg" \
-    CYFR_DATABASE_URL="$CYFR_POSTGRES_TEST_URL" \
-    mix test
-
-  mix credo --only=warning
-  echo "Suite green on both adapters."
+  echo "The close gate passed; its logs are in $GATE_LOGS"
 fi
 
 # Portable in-place sed (macOS requires -i '', Linux requires -i)

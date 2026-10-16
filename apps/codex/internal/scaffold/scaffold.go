@@ -8,6 +8,7 @@ import (
 	"bufio"
 	"bytes"
 	"compress/gzip"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
@@ -18,13 +19,21 @@ import (
 	"slices"
 	"strings"
 	"time"
+
+	"github.com/cyfr/codex/internal/release"
+)
+
+// The release assets the scaffold comes from, by version tag. They are
+// variables so tests can point them at an httptest server.
+var (
+	urlTemplate      = "https://github.com/cyfrworks/cyfr/releases/download/%s/cyfr-scaffold.tar.gz"
+	checksumTemplate = "https://github.com/cyfrworks/cyfr/releases/download/%s/checksums.txt"
 )
 
 const (
-	urlTemplate      = "https://github.com/cyfrworks/cyfr/releases/download/%s/cyfr-scaffold.tar.gz"
-	checksumTemplate = "https://github.com/cyfrworks/cyfr/releases/download/%s/checksums.txt"
 	maxFileSize      = 10 << 20 // 10 MB per file
 	maxTarballSize   = 64 << 20 // 64 MB whole tarball
+	maxChecksumsSize = 1 << 20  // checksums.txt and its bundle, each
 	requestTimeout   = 60 * time.Second
 )
 
@@ -133,10 +142,11 @@ func extract(version string, overwriteManaged bool) error {
 	client := &http.Client{Timeout: requestTimeout}
 
 	// The tarball carries docker-compose.yml, which names the images `cyfr
-	// up` will pull and run (cyfr and cyfr-locus) — verify it
-	// against the release's cosign-signed checksums.txt before extracting a
-	// byte. The release binary itself gets the same treatment from
-	// install.sh.
+	// up` will pull and run (cyfr, cyfr-locus and caddy) — verify it
+	// against the release's checksums.txt, itself verified as signed by
+	// the release workflow for this version, before downloading or
+	// extracting a byte of it. The release binary itself gets the same
+	// treatment from install.sh.
 	want, err := fetchScaffoldChecksum(client, version)
 	if err != nil {
 		return err
@@ -239,24 +249,36 @@ func extract(version string, overwriteManaged bool) error {
 	return nil
 }
 
-// fetchScaffoldChecksum reads the release's checksums.txt and returns the
-// expected sha256 (hex) for cyfr-scaffold.tar.gz. A release without an
-// entry fails closed — the CLI and the release ship in lockstep, so a
-// missing line means a broken release, never an older layout to tolerate.
+// fetchScaffoldChecksum reads the release's checksums.txt, verifies its
+// sigstore bundle as the release workflow's keyless signature for version
+// under release.TrustMaterial, and only then returns the expected sha256
+// (hex) for cyfr-scaffold.tar.gz from the verified bytes. A checksums.txt
+// that fails verification refuses with an error wrapping
+// release.ErrUnverified; a download that fails is a transport error. A
+// release without an entry fails closed — the CLI and the release ship in
+// lockstep, so a missing line means a broken release, never an older
+// layout to tolerate.
 func fetchScaffoldChecksum(client *http.Client, version string) (string, error) {
+	ctx := context.Background()
 	url := fmt.Sprintf(checksumTemplate, version)
 
-	resp, err := client.Get(url)
+	checksums, err := release.FetchBounded(ctx, client, url, maxChecksumsSize)
 	if err != nil {
-		return "", fmt.Errorf("download checksums.txt: %w", err)
+		return "", fmt.Errorf("checksums.txt: %w", err)
 	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("download checksums.txt: HTTP %d from %s", resp.StatusCode, url)
+	bundle, err := release.FetchBounded(ctx, client, url+release.BundleSuffix, maxChecksumsSize)
+	if err != nil {
+		return "", fmt.Errorf("checksums.txt's signature: %w", err)
+	}
+	trusted, err := release.TrustMaterial(ctx)
+	if err != nil {
+		return "", err
+	}
+	if err := release.VerifyBlob(checksums, bundle, version, trusted); err != nil {
+		return "", fmt.Errorf("checksums.txt for %s: %w", version, err)
 	}
 
-	scanner := bufio.NewScanner(io.LimitReader(resp.Body, 1<<20))
+	scanner := bufio.NewScanner(bytes.NewReader(checksums))
 	for scanner.Scan() {
 		fields := strings.Fields(scanner.Text())
 		if len(fields) == 2 && filepath.Base(fields[1]) == "cyfr-scaffold.tar.gz" {

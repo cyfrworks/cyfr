@@ -51,6 +51,39 @@ jobs:
     if: github.repository == 'cyfrworks/cyfr'
     uses: ./.github/workflows/security.yml
 
+  # The tag names the release the tree declares: Prima.Version.current/0
+  # reads apps/prima/mix.exs, and every mix.exs moves with it
+  # (Cyfr.VersionDriftTest). The image build and the CLI release need this
+  # job, so a tag that names another version builds and publishes nothing.
+  # It publishes nothing itself and runs beside the six checks.
+  version:
+    if: github.repository == 'cyfrworks/cyfr'
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: The tag is the version mix.exs declares
+        run: |
+          set -euo pipefail
+          declared=()
+          while IFS= read -r line; do
+            if [[ "$line" =~ ^[[:space:]]*version:[[:space:]]*\"([^\"]*)\" ]]; then
+              declared+=("${BASH_REMATCH[1]}")
+            fi
+          done < apps/prima/mix.exs
+          if [ "${#declared[@]}" -ne 1 ] || ! [[ "${declared[0]}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::apps/prima/mix.exs declares ${#declared[@]} versions [${declared[*]}], not one MAJOR.MINOR.PATCH"
+            exit 1
+          fi
+          if [ "$GITHUB_REF_NAME" != "${declared[0]}" ]; then
+            echo "::error::the tag $GITHUB_REF_NAME is not the version ${declared[0]} that apps/prima/mix.exs declares"
+            exit 1
+          fi
+          echo "The tag $GITHUB_REF_NAME is the version apps/prima/mix.exs declares."
+
   # The app image and the Locus image, which serves the runtime, the builds
   # and the backends service: every deploy pulls both, and a project
   # `cyfr init` writes carries no sources to build them from.
@@ -60,7 +93,7 @@ jobs:
   # whose scan fails stays where no version or `latest` reaches it, and a
   # concurrent run cannot move what this run merges.
   images:
-    needs: [test, dialyzer, codex-ci, keeper-ci, license-lint, security]
+    needs: [version, test, dialyzer, codex-ci, keeper-ci, license-lint, security]
     if: github.repository == 'cyfrworks/cyfr'
     # No successful run has built cyfr-locus yet to bound it by.
     timeout-minutes: 90
@@ -217,9 +250,32 @@ jobs:
           subject-digest: ${{ steps.manifest.outputs.digest }}
           push-to-registry: true
 
-  # The CLI's release and its provenance.
+      # The digest merge-image.sh verified and printed, for release.json and
+      # the scaffold's compose: the release job reads it from this artifact
+      # alone, never from a tag another run can move.
+      - name: Record the merged digest
+        env:
+          DIGEST: ${{ steps.manifest.outputs.digest }}
+        run: |
+          mkdir -p merged
+          echo "$DIGEST" > merged/digest
+
+      - name: Upload the merged digest
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: merged-${{ matrix.image }}
+          path: merged/digest
+          if-no-files-found: error
+          retention-days: 1
+
+  # The CLI's release and its provenance, and the release's signed manifest:
+  # release.json names the two merged images, the Caddy image the compose
+  # pins and the scaffold, each by digest, and is signed keyless under this
+  # workflow's identity at the tag. The order avoids a digest cycle: the
+  # images' digests go into the scaffold's compose, the scaffold is built
+  # and hashed, and only then is the manifest written, checked and signed.
   release:
-    needs: [test, dialyzer, codex-ci, keeper-ci, license-lint, security]
+    needs: [version, merge, test, dialyzer, codex-ci, keeper-ci, license-lint, security]
     if: github.repository == 'cyfrworks/cyfr'
     timeout-minutes: 10
     permissions:
@@ -241,8 +297,57 @@ jobs:
 
       - uses: sigstore/cosign-installer@398d4b0eeef1380460a10c8013a76f728fb906ac # v3
 
+      # By exact name: cyfr is a prefix of cyfr-locus. Outside the
+      # checkout, so GoReleaser finds the tree as the tag left it.
+      - name: Download the merged cyfr digest
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: merged-cyfr
+          path: ${{ runner.temp }}/merged/cyfr
+
+      - name: Download the merged cyfr-locus digest
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: merged-cyfr-locus
+          path: ${{ runner.temp }}/merged/cyfr-locus
+
+      # The scaffold's compose names each image as <version>@<digest>; the
+      # script refuses a malformed digest and an image line left unpinned.
       - name: Create scaffold tarball
-        run: bash scripts/scaffold-tarball.sh apps/codex/cyfr-scaffold.tar.gz
+        run: |
+          set -euo pipefail
+          cyfr=$(cat "$RUNNER_TEMP/merged/cyfr/digest")
+          locus=$(cat "$RUNNER_TEMP/merged/cyfr-locus/digest")
+          bash scripts/scaffold-tarball.sh apps/codex/cyfr-scaffold.tar.gz "$GITHUB_REF_NAME" "$cyfr" "$locus"
+
+      # Written once, outside the checkout: the bytes signed below are the
+      # bytes released, and GoReleaser finds the tree as the tag left it.
+      - name: Write the release manifest
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/release"
+          cyfr=$(cat "$RUNNER_TEMP/merged/cyfr/digest")
+          locus=$(cat "$RUNNER_TEMP/merged/cyfr-locus/digest")
+          caddy=$(sed -nE 's/^[[:space:]]*image:[[:space:]]*caddy:[^@[:space:]]*@(sha256:[0-9a-f]{64})[[:space:]]*$/\1/p' docker-compose.yml)
+          scaffold=$(sha256sum apps/codex/cyfr-scaffold.tar.gz | cut -d' ' -f1)
+          jq -n \
+            --arg version "$GITHUB_REF_NAME" \
+            --arg cyfr "$cyfr" \
+            --arg locus "$locus" \
+            --arg caddy "$caddy" \
+            --arg scaffold "sha256:$scaffold" \
+            '{version: $version, images: {cyfr: $cyfr, cyfr_locus: $locus, caddy: $caddy}, scaffold: $scaffold}' \
+            > "$RUNNER_TEMP/release/release.json"
+
+      # The manifest's shape (tests/fixtures/release_manifest.json's rules),
+      # its version against the tag, its scaffold digest against the file,
+      # its Caddy digest against the compose, and the scaffold's compose
+      # against its image digests.
+      - name: Validate the release manifest
+        run: python3 -I tests/ci-release-graph.py --manifest "$RUNNER_TEMP/release/release.json" --version "$GITHUB_REF_NAME" --scaffold apps/codex/cyfr-scaffold.tar.gz
+
+      - name: Sign the release manifest
+        run: cosign sign-blob --yes --new-bundle-format --bundle "$RUNNER_TEMP/release/release.json.sigstore.json" "$RUNNER_TEMP/release/release.json"
 
       - name: Run GoReleaser
         id: goreleaser
@@ -254,6 +359,8 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          # Where .goreleaser.yml's release finds release.json and its bundle.
+          RELEASE_MANIFEST_DIR: ${{ runner.temp }}/release
 
       - name: Attest build provenance
         uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3
