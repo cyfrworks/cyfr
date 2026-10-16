@@ -907,7 +907,11 @@ defmodule Opus.Provider do
       user_id: meta.user_id,
       reference: reference,
       policy_applied: meta.policy_applied,
-      reached_outside: Record.reached_outside(ctx, meta.execution_id)
+      reached_outside: Record.reached_outside(ctx, meta.execution_id),
+      # The tree's ledger as its root's terminal write left it: what its
+      # result carries into whoever launched it.
+      sources:
+        result |> Map.get(:sources, [Prima.Source.outside(nil)]) |> Prima.Source.to_json_list()
     }
   end
 

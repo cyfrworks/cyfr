@@ -164,18 +164,24 @@ defmodule Prima.Flow do
 
   @doc """
   The flows of `flows` a consent keeps for the exits its edge binds: a
-  domain flow while its pattern is among `domains`, a need flow while its
-  need is among `needs`, and a server flow while its server is among
-  `servers`.
+  domain flow while one of the edge's `domains` is its pattern or lies
+  under it (a domain narrowed within a declared pattern keeps the
+  pattern's flows), a need flow while its need is among `needs`, and a
+  server flow while its server is among `servers`.
   """
   @spec bound([t()], %{domains: [String.t()], needs: [String.t()], servers: [String.t()]}) ::
           [t()]
   def bound(flows, %{domains: domains, needs: needs, servers: servers}) do
     flows
     |> Enum.filter(fn
-      %{to: "need:" <> name} -> name in needs
-      %{to: "server:" <> name} -> name in servers
-      %{to: domain} -> domain in domains
+      %{to: "need:" <> name} ->
+        name in needs
+
+      %{to: "server:" <> name} ->
+        name in servers
+
+      %{to: pattern} ->
+        Enum.any?(domains, &(&1 == pattern or Prima.Network.domain_allowed?(&1, [pattern])))
     end)
     |> set()
   end
