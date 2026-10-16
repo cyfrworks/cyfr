@@ -465,6 +465,26 @@ func newUpdateScenario(t *testing.T, compose []byte, env map[string]string) *upd
 }
 
 // answer writes a scenario file of the fake docker.
+// addVolume adds volume to the cyfr service's mounts in the scenario's
+// `compose config` answer.
+func (s *updateScenario) addVolume(volume map[string]any) {
+	s.t.Helper()
+	raw, err := os.ReadFile(filepath.Join(s.fake, "config.out"))
+	if err != nil {
+		s.t.Fatal(err)
+	}
+	var config map[string]any
+	if err := json.Unmarshal(raw, &config); err != nil {
+		s.t.Fatal(err)
+	}
+	cyfr := config["services"].(map[string]any)["cyfr"].(map[string]any)
+	cyfr["volumes"] = append(cyfr["volumes"].([]any), volume)
+	if raw, err = json.Marshal(config); err != nil {
+		s.t.Fatal(err)
+	}
+	s.answer("config.out", string(raw))
+}
+
 func (s *updateScenario) answer(name, content string) {
 	s.t.Helper()
 	if err := os.WriteFile(filepath.Join(s.fake, name), []byte(content), 0644); err != nil {
@@ -1256,6 +1276,36 @@ func TestUpdateOnASignal(t *testing.T) {
 	}
 }
 
+// Once the switch begins it is never cut short: a signal during the start
+// lets the start finish, so the stack is not left half-switched, and the
+// update reports the interrupt beside its outcome. Found by review: the
+// command's documentation said every step from the stop on ends the update.
+func TestUpdateFinishesTheSwitchOnASignal(t *testing.T) {
+	s := newUpdateScenario(t, shippedCompose(t), nil)
+	s.answer("up.signal", "")
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM)
+	defer stop()
+	out, err := s.run(ctx)
+	select {
+	case <-ctx.Done():
+	case <-time.After(10 * time.Second):
+		t.Fatal("the signal never arrived")
+	}
+	if err != nil {
+		t.Fatalf("update: %v\n%s", err, out)
+	}
+	log := s.log()
+	if log[len(log)-1] != profiles+"up -d --wait --wait-timeout 900" {
+		t.Errorf("the start was not the last step:\n%s", strings.Join(log, "\n"))
+	}
+	if !strings.Contains(out, "An interrupt arrived during the switch") {
+		t.Errorf("the update did not report the interrupt:\n%s", out)
+	}
+	if got, err := os.ReadFile(filepath.Join(s.project, "docker-compose.yml")); err != nil || !bytes.Equal(got, switched(s.compose)) {
+		t.Errorf("docker-compose.yml is not the switched file (error %v)", err)
+	}
+}
+
 // The switch rewrites only image lines and ensureCyfrComposeFields keeps
 // every block it does not own: x-locus-role, each worker's merge of it,
 // each guard's own keys and every key a bundled service runs with besides
@@ -1321,5 +1371,67 @@ func TestSwitchKeepsTheBundledServicesBlocks(t *testing.T) {
 		if !reflect.DeepEqual(was, is) {
 			t.Errorf("the written %s runs as\n%v\nwant\n%v", name, is, was)
 		}
+	}
+}
+
+// The storage root is what cyfr sees under it: a second bind at
+// /app/data/components covers the host's ./data/components, so the
+// snapshot holds the nested mount's bytes there and nothing of the covered
+// host directory, beside the rest of the root.
+func TestUpdateSnapshotsNestedStorageMount(t *testing.T) {
+	nested := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(nested, "acme"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	want := "authoritative nested-mount component bytes"
+	if err := os.WriteFile(filepath.Join(nested, "acme", "c.wasm"), []byte(want), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(nested, "only-in-mount"), []byte("mounted"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	compose := strings.Replace(string(shippedCompose(t)), "      - ./data:/app/data\n", "      - ./data:/app/data\n      - "+nested+":/app/data/components\n", 1)
+	s := newUpdateScenario(t, []byte(compose), nil)
+	// A file only the covered host directory holds, which cyfr never sees.
+	if err := os.WriteFile(filepath.Join(s.project, "data", "components", "covered"), []byte("covered"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	s.addVolume(map[string]any{"type": "bind", "source": nested, "target": "/app/data/components"})
+
+	out, err := s.run(context.Background())
+	if err != nil {
+		t.Fatalf("update: %v\n%s", err, out)
+	}
+	storage := filepath.Join(s.snapshotDir(), "storage")
+	for name, content := range map[string]string{
+		"components/acme/c.wasm":   want,
+		"components/only-in-mount": "mounted",
+		"blobs/x":                  "blob",
+	} {
+		if data, err := os.ReadFile(filepath.Join(storage, name)); err != nil || string(data) != content {
+			t.Errorf("storage/%s holds %q (error %v), want %q", name, data, err, content)
+		}
+	}
+	if _, err := os.Lstat(filepath.Join(storage, "components", "covered")); !errors.Is(err, fs.ErrNotExist) {
+		t.Errorf("storage/components holds the covered host file (%v)", err)
+	}
+}
+
+// A mount under the storage root that is no bind (a named volume, a tmpfs)
+// holds bytes no host directory names, so the update refuses it before
+// anything stops rather than write a snapshot without them.
+func TestUpdateRefusesANonBindMountUnderTheStorageRoot(t *testing.T) {
+	for _, kind := range []string{"volume", "tmpfs"} {
+		t.Run(kind, func(t *testing.T) {
+			s := newUpdateScenario(t, shippedCompose(t), nil)
+			s.addVolume(map[string]any{"type": kind, "source": "cyfr-components", "target": "/app/data/components"})
+			out, err := s.run(context.Background())
+			if err == nil || !strings.Contains(err.Error(), kind+" mount at /app/data/components") {
+				t.Fatalf("update answered %v\n%s", err, out)
+			}
+			s.nothingStopped()
+			s.composeUnchanged()
+			s.noBackups()
+		})
 	}
 }

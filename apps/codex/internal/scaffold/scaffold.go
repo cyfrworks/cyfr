@@ -131,7 +131,10 @@ func isManaged(path string) bool {
 
 // extract fetches the scaffold tarball and extracts it. When overwriteManaged
 // is true, managed files are replaced with the tarball contents; other files
-// retain the existing skip-if-exists behavior.
+// retain the existing skip-if-exists behavior. Every integrity failure — a
+// checksums.txt that does not verify, a tarball that is not the one it
+// names — wraps release.ErrUnverified and extracts nothing; only a download
+// that fails is a transport error.
 func extract(version string, overwriteManaged bool) error {
 	if version == "dev" || version == "" {
 		return nil
@@ -167,12 +170,14 @@ func extract(version string, overwriteManaged bool) error {
 		return fmt.Errorf("download scaffold: %w", err)
 	}
 	if len(tarball) > maxTarballSize {
-		return fmt.Errorf("download scaffold: exceeds the %d-byte limit", int64(maxTarballSize))
+		// Larger than any scaffold a release ships, so not the one its
+		// signed checksums.txt names.
+		return fmt.Errorf("%w: the scaffold download exceeds the %d-byte limit", release.ErrUnverified, int64(maxTarballSize))
 	}
 
 	got := sha256.Sum256(tarball)
 	if hex.EncodeToString(got[:]) != want {
-		return fmt.Errorf("scaffold checksum mismatch for %s: the download does not match the release's checksums.txt", version)
+		return fmt.Errorf("%w: scaffold checksum mismatch for %s: the download does not match the release's signed checksums.txt", release.ErrUnverified, version)
 	}
 
 	gr, err := gzip.NewReader(bytes.NewReader(tarball))
@@ -255,9 +260,9 @@ func extract(version string, overwriteManaged bool) error {
 // (hex) for cyfr-scaffold.tar.gz from the verified bytes. A checksums.txt
 // that fails verification refuses with an error wrapping
 // release.ErrUnverified; a download that fails is a transport error. A
-// release without an entry fails closed — the CLI and the release ship in
-// lockstep, so a missing line means a broken release, never an older
-// layout to tolerate.
+// release without an entry fails closed as unverified — the CLI and the
+// release ship in lockstep, so a missing line means a broken release, never
+// an older layout to tolerate.
 func fetchScaffoldChecksum(client *http.Client, version string) (string, error) {
 	ctx := context.Background()
 	url := fmt.Sprintf(checksumTemplate, version)
@@ -289,5 +294,5 @@ func fetchScaffoldChecksum(client *http.Client, version string) (string, error) 
 		return "", fmt.Errorf("read checksums.txt: %w", err)
 	}
 
-	return "", fmt.Errorf("checksums.txt for %s has no cyfr-scaffold.tar.gz entry", version)
+	return "", fmt.Errorf("%w: the signed checksums.txt for %s has no cyfr-scaffold.tar.gz entry", release.ErrUnverified, version)
 }

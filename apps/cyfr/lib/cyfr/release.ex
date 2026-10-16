@@ -97,9 +97,11 @@ defmodule Cyfr.Release do
 
   where `eval` starts no application: like `migrate/0` it starts the repo
   alone (`Ecto.Migrator.with_repo/2`), migrates nothing and checks no
-  fingerprint, so it reads a database of the release that wrote it. An
-  empty list is the only answer that lets the update go on. A store that
-  cannot answer raises, so `eval` exits non-zero and the update stops,
+  fingerprint, so it reads a database of the release that wrote it. The
+  update goes on only when every slot it answers is a member already
+  running the release being installed — a host of the cell updated before
+  this one — so on a single host only an empty list lets it go on. A store
+  that cannot answer raises, so `eval` exits non-zero and the update stops,
   never reading an error as an empty cell.
   """
   @spec live_slots() :: [

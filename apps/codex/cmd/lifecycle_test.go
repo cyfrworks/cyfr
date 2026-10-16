@@ -5,10 +5,13 @@ package cmd
 
 import (
 	"bytes"
+	"context"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"net/http"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -18,6 +21,7 @@ import (
 
 	"github.com/cyfr/codex/internal/release"
 	"github.com/cyfr/codex/internal/scaffold"
+	"github.com/sigstore/sigstore-go/pkg/root"
 )
 
 func TestRenderEnvFile(t *testing.T) {
@@ -738,5 +742,69 @@ func TestFileExists(t *testing.T) {
 	}
 	if !fileExists(dir) {
 		t.Error("fileExists returned false for an existing directory")
+	}
+}
+
+type roundTripper func(*http.Request) (*http.Response, error)
+
+func (f roundTripper) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
+// `cyfr init` stops on a scaffold its release's signed checksums.txt does
+// not name, rather than warn and go on to an unpinned warm pull: the real
+// download path, under the vector file's test trust root, answers a
+// verification failure, and init reads it as one. Found by review: the
+// mismatch read as a transport failure.
+func TestInitRefusesAlteredScaffold(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join("..", "..", "..", "tests", "fixtures", "release_manifest.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fixture struct {
+		Signature struct {
+			TrustedRoot json.RawMessage `json:"trusted_root"`
+			Checksums   struct {
+				Version   string          `json:"version"`
+				Checksums string          `json:"checksums"`
+				Bundle    json.RawMessage `json:"bundle"`
+			} `json:"checksums"`
+		} `json:"signature"`
+	}
+	if err := json.Unmarshal(raw, &fixture); err != nil {
+		t.Fatal(err)
+	}
+	trusted, err := root.NewTrustedRootFromJSON(fixture.Signature.TrustedRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	savedTrust, savedTransport := release.TrustMaterial, http.DefaultTransport
+	t.Cleanup(func() { release.TrustMaterial, http.DefaultTransport = savedTrust, savedTransport })
+	release.TrustMaterial = func(context.Context) (root.TrustedMaterial, error) { return trusted, nil }
+	checksums := fixture.Signature.Checksums
+	http.DefaultTransport = roundTripper(func(r *http.Request) (*http.Response, error) {
+		var content string
+		switch filepath.Base(r.URL.Path) {
+		case "checksums.txt":
+			content = checksums.Checksums
+		case "checksums.txt.sigstore.json":
+			content = string(checksums.Bundle)
+		case "cyfr-scaffold.tar.gz":
+			content = "tampered scaffold"
+		default:
+			return nil, fmt.Errorf("unexpected request: %s", r.URL)
+		}
+		return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(content)), Header: make(http.Header), Request: r}, nil
+	})
+	t.Chdir(t.TempDir())
+
+	downloadErr := scaffold.Download(checksums.Version)
+	if downloadErr == nil || !strings.Contains(downloadErr.Error(), "checksum mismatch") {
+		t.Fatalf("expected the checksum mismatch, got %v", downloadErr)
+	}
+	var warning bytes.Buffer
+	if stop := scaffoldDownloadFailure(checksums.Version, downloadErr, &warning); stop == nil {
+		t.Fatalf("init continued after the signed checksums.txt refused the tarball: %v; warning=%q", downloadErr, warning.String())
+	}
+	if warning.Len() != 0 {
+		t.Errorf("init warned %q and stopped; a verification failure is no warning", warning.String())
 	}
 }

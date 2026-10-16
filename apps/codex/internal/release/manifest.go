@@ -45,7 +45,8 @@ const (
 
 // ErrUnverified marks every refusal of a release file's authenticity: an
 // unsigned or wrongly signed file, another identity or issuer, another
-// version, a malformed manifest. A transport failure is not wrapped in it.
+// version, a malformed manifest, a download that is not the file a signed
+// one names. A transport failure is not wrapped in it.
 var ErrUnverified = errors.New("release not verified")
 
 // Images holds each shipped image's digest, `sha256:` and 64 hex digits.
@@ -55,7 +56,12 @@ type Images struct {
 	Caddy     string `json:"caddy"`
 }
 
-// Manifest is a release's `release.json`.
+// Manifest is a release's `release.json`. `cyfr update` reads its images;
+// its Scaffold digest is not compared when the scaffold downloads, because
+// the scaffold is verified against the release's checksums.txt, signed on
+// its own by the same workflow identity and verified before a byte of the
+// tarball is read (internal/scaffold), which `cyfr init` relies on too
+// without a manifest.
 type Manifest struct {
 	Version  string `json:"version"`
 	Images   Images `json:"images"`

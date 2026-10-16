@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"maps"
 	"net/url"
 	"os"
 	"os/exec"
@@ -48,7 +49,7 @@ var updateCmd = &cobra.Command{
 5. Snapshot the database, the local storage root, the keyring, .env and docker-compose.yml as it stands into backups/<UTC timestamp>/, snapshot.json last.
 6. Rewrite the managed image lines to <image>:<version>@<digest> (Caddy keeps its tag) and start the stack, waiting for every service to be healthy. A failure from here leaves the stack stopped and prints the snapshot and the restore command; old code never starts over migrated data.
 
-An interrupt before the stop changes nothing; from the stop on, the running step finishes and the update ends as that step's failure would.`,
+An interrupt before the stop changes nothing. From the stop until the switch, the running step finishes and the update ends as that step's failure would. Once the switch begins, the switch and the start run to their end, so the stack is never left half-switched; an interrupt then is reported, not acted on.`,
 	GroupID: "server",
 	Example: "  cyfr update",
 	RunE: func(cmd *cobra.Command, args []string) error {
@@ -153,8 +154,10 @@ var errUpdateInterrupted = errors.New("cyfr update was interrupted before anythi
 // runUpdate is `cyfr update` in the working directory. ctx is cancelled by
 // SIGINT or SIGTERM (main's signal context): before the stop step the
 // cancellation aborts the update with nothing changed; from the stop step
-// on, every step runs under a context detached from it, and the update ends
-// after the running step as that step's failure would.
+// on, every step runs under a context detached from it, and until the
+// switch the update ends after the running step as that step's failure
+// would. The switch and the start are one step that is never cut short:
+// an interrupt during it is reported once the start has answered.
 func runUpdate(ctx context.Context, out, errOut io.Writer) error {
 	if ctx == nil {
 		ctx = context.Background()
@@ -287,6 +290,9 @@ func (u *updater) run() error {
 		return u.stopAfterSwitch(err)
 	}
 	u.report()
+	if u.ctx.Err() != nil {
+		fmt.Fprintln(u.out, "An interrupt arrived during the switch; the switch and the start ran to their end, so the stack is not left half-switched.")
+	}
 	return nil
 }
 
@@ -662,10 +668,21 @@ type stackConfig struct {
 	pgURL   string
 	pgMajor int
 	storage string // local | s3
-	// storageRoot is the local storage root's host path.
-	storageRoot string
+	// storageMounts are the mounts that make up the local storage root as cyfr
+	// sees it: the root's own bind first, then every bind mounted under it,
+	// shallower before deeper.
+	storageMounts []storageMount
 	// keyring is the snapshot's keyring file, dotenv lines.
 	keyring string
+}
+
+// storageMount is one bind making up the storage root: rel is where it
+// sits under the root (empty for the root itself), host its resolved host
+// path, and dir whether that path is a directory.
+type storageMount struct {
+	rel  string
+	host string
+	dir  bool
 }
 
 // composeConfig is the part of `docker compose config --format json` the
@@ -704,24 +721,49 @@ func (u *updater) readConfig() error {
 		}
 		return ""
 	}
-	// containerToHost maps a container path through the bind mount whose
-	// target is its longest prefix.
+	// containerToHost maps a container path through the mount whose target
+	// is its longest prefix, which is the one cyfr sees the path through;
+	// ok is false unless that mount is a bind.
 	containerToHost := func(p string) (string, bool) {
-		best, host := -1, ""
+		best, host, bind := -1, "", false
 		for _, v := range cyfr.Volumes {
 			target := path.Clean(v.Target)
-			if v.Type != "bind" || v.Source == "" {
-				continue
-			}
 			rel, ok := strings.CutPrefix(p, target)
 			if !ok || rel != "" && !strings.HasPrefix(rel, "/") && target != "/" {
 				continue
 			}
 			if len(target) > best {
-				best, host = len(target), filepath.Join(v.Source, filepath.FromSlash(rel))
+				best, bind = len(target), v.Type == "bind" && v.Source != ""
+				host = filepath.Join(v.Source, filepath.FromSlash(rel))
 			}
 		}
-		return host, best >= 0
+		return host, best >= 0 && bind
+	}
+	// nestedMounts answers every mount whose target lies strictly under the
+	// container path root, shallower first, refusing one that is not a bind:
+	// its bytes are no host directory the snapshot can copy.
+	nestedMounts := func(root string) ([]storageMount, error) {
+		var mounts []storageMount
+		for _, v := range cyfr.Volumes {
+			target := path.Clean(v.Target)
+			rel, ok := strings.CutPrefix(target, strings.TrimSuffix(root, "/")+"/")
+			if !ok || rel == "" {
+				continue
+			}
+			if v.Type != "bind" || v.Source == "" {
+				return nil, fmt.Errorf("The storage root %s has a %s mount at %s, which cyfr update cannot snapshot; nothing was changed", root, v.Type, target)
+			}
+			resolved, err := filepath.EvalSymlinks(v.Source)
+			info, statErr := os.Stat(resolved)
+			if err != nil || statErr != nil || !(info.IsDir() || info.Mode().IsRegular()) {
+				return nil, fmt.Errorf("The mount %s under the storage root (on the host %s) is not a readable directory or file, so cyfr update cannot snapshot it; nothing was changed", target, v.Source)
+			}
+			mounts = append(mounts, storageMount{rel: rel, host: resolved, dir: info.IsDir()})
+		}
+		slices.SortStableFunc(mounts, func(a, b storageMount) int {
+			return strings.Count(a.rel, "/") - strings.Count(b.rel, "/")
+		})
+		return mounts, nil
 	}
 	settingPath := func(name, fallback string) (string, error) {
 		value := fallback
@@ -784,7 +826,11 @@ func (u *updater) readConfig() error {
 		if info, statErr := os.Stat(resolved); err != nil || statErr != nil || !info.IsDir() {
 			return fmt.Errorf("The storage root %s (on the host %s) is not a readable directory, so cyfr update cannot snapshot it; nothing was changed", dataPath, host)
 		}
-		c.storageRoot = resolved
+		nested, err := nestedMounts(dataPath)
+		if err != nil {
+			return err
+		}
+		c.storageMounts = append([]storageMount{{host: resolved, dir: true}}, nested...)
 	case "s3":
 		c.storage = "s3"
 	default:
@@ -1124,7 +1170,7 @@ func (u *updater) takeSnapshot() error {
 				exclude[filepath.Clean(c.sqliteFile+suffix)] = true
 			}
 		}
-		if err := copyTree(c.storageRoot, filepath.Join(dir, "storage"), exclude, u.out); err != nil {
+		if err := copyStorage(c.storageMounts, filepath.Join(dir, "storage"), exclude, u.out); err != nil {
 			return err
 		}
 		parts = append(parts, "storage")
@@ -1224,16 +1270,54 @@ func copyFile(src, dst string) error {
 	return errors.Join(err, out.Sync(), out.Close())
 }
 
+// copyStorage copies the storage root as cyfr sees it into dst: each mount
+// in order, shallower first, into its place under dst, leaving out of each
+// the host paths a deeper mount covers in the container, so every byte
+// copied is one cyfr reads and none it reads is missing.
+func copyStorage(mounts []storageMount, dst string, exclude map[string]bool, out io.Writer) error {
+	for i, m := range mounts {
+		skip := maps.Clone(exclude)
+		for _, deeper := range mounts[i+1:] {
+			if m.rel == "" {
+				skip[filepath.Join(m.host, filepath.FromSlash(deeper.rel))] = true
+			} else if rest, ok := strings.CutPrefix(deeper.rel, m.rel+"/"); ok {
+				skip[filepath.Join(m.host, filepath.FromSlash(rest))] = true
+			}
+		}
+		target := filepath.Join(dst, filepath.FromSlash(m.rel))
+		if m.rel != "" {
+			if err := os.MkdirAll(filepath.Dir(target), 0700); err != nil {
+				return err
+			}
+		}
+		if !m.dir {
+			if err := copyFile(m.host, target); err != nil {
+				return err
+			}
+			continue
+		}
+		if err := copyTree(m.host, target, skip, out); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // copyTree copies the directory root to the new directory dst: directories
 // 0700, regular files 0600, a symlink as the link it is, never followed;
-// the host paths in exclude are left out, and any other kind of entry is
-// skipped and named.
+// the host paths in exclude, and everything under an excluded directory,
+// are left out, and any other kind of entry is skipped and named.
 func copyTree(root, dst string, exclude map[string]bool, out io.Writer) error {
 	return filepath.WalkDir(root, func(p string, entry fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
 		if exclude[filepath.Clean(p)] {
+			// An excluded directory is a deeper mount's place: nothing under
+			// it is the root's.
+			if entry.IsDir() {
+				return fs.SkipDir
+			}
 			return nil
 		}
 		rel, err := filepath.Rel(root, p)
