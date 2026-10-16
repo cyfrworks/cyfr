@@ -1059,6 +1059,9 @@ defmodule Arca.Repo.Migrations.Baseline do
       # When the current owner took the slot, which is what a recovery-time
       # bound is measured from.
       add :taken_at, :utc_datetime_usec, null: false
+      # The release the current owner runs (`Prima.Version.current/0`);
+      # null on a row no take has stamped, which names no release.
+      add :release, :string
 
       timestamps(type: :utc_datetime_usec)
     end
@@ -1426,6 +1429,12 @@ defmodule Arca.Repo.Migrations.Baseline do
   defp executions do
     sqlite? = repo().__adapter__() == Ecto.Adapters.SQLite3
 
+    # The execution and attempt vocabularies (`Prima.ExecutionState`),
+    # spelled as literal lists so this file stays the frozen text its
+    # fingerprint hashes.
+    execution_status =
+      known("executions_status_known", "status", ~w(running paused completed failed cancelled))
+
     create table(:executions, primary_key: false) do
       add :id, :string, primary_key: true
       add :reference, :string, null: false
@@ -1436,7 +1445,12 @@ defmodule Arca.Repo.Migrations.Baseline do
       add :started_at, :utc_datetime_usec, null: false
       add :completed_at, :utc_datetime_usec
       add :duration_ms, :integer
-      add :status, :string, null: false, default: "running"
+
+      add :status, :string,
+        null: false,
+        default: "running",
+        check: if(sqlite?, do: execution_status)
+
       add :error_message, :text
       add :request_id, :string
       add :input, :text
@@ -1471,6 +1485,7 @@ defmodule Arca.Repo.Migrations.Baseline do
       add :origin, :string
     end
 
+    checked(sqlite?, :executions, [execution_status])
     create unique_index(:executions, [:id, :athanor_id])
     # One child per key under a parent: two identical admissions race here,
     # and the loser is answered with the winner's row.
@@ -1501,6 +1516,22 @@ defmodule Arca.Repo.Migrations.Baseline do
       expr: "athanor_generation > 0"
     }
 
+    attempt_state =
+      known(
+        "execution_attempts_state_known",
+        "state",
+        ~w(running paused completed failed cancelled lapsed)
+      )
+
+    # Null while the attempt is open, which the check admits: a check
+    # refuses only a false result, and `NULL IN (…)` is unknown.
+    attempt_outcome =
+      known(
+        "execution_attempts_outcome_known",
+        "outcome",
+        ~w(ok error result_lost cancelled uncertain)
+      )
+
     create table(:execution_attempts, primary_key: false) do
       add :attempt, :string, primary_key: true
       add :athanor_id, :string, null: false
@@ -1530,20 +1561,14 @@ defmodule Arca.Repo.Migrations.Baseline do
       # always null for a turn root.
       add :claimed_by, :string
       add :lease_until, :utc_datetime_usec, null: false
-      # running | paused | completed | failed | cancelled | lapsed
-      add :state, :string, null: false
-      # ok | error | result_lost | cancelled | uncertain
-      add :outcome, :string
+      add :state, :string, null: false, check: if(sqlite?, do: attempt_state)
+      add :outcome, :string, check: if(sqlite?, do: attempt_outcome)
       add :started_at, :utc_datetime_usec, null: false
       add :running_since, :utc_datetime_usec
       add :ended_at, :utc_datetime_usec
     end
 
-    unless sqlite? do
-      create constraint(:execution_attempts, attempt_generation.name,
-               check: attempt_generation.expr
-             )
-    end
+    checked(sqlite?, :execution_attempts, [attempt_generation, attempt_state, attempt_outcome])
 
     create unique_index(:execution_attempts, [:execution_id, :fence])
     create index(:execution_attempts, [:athanor_id, :state, :lease_until])
@@ -1825,6 +1850,13 @@ defmodule Arca.Repo.Migrations.Baseline do
     audience_known = known("instance_entries_audience_known", "audience", ~w(everyone listed))
     instance_attach_only = %{name: "instance_entries_attach_only", expr: "attach_only"}
 
+    # A stored credential's statuses (`Arca.StatusTransitions`), and a
+    # profile's.
+    credential_statuses = ~w(active needs_reauth revoked tombstoned)
+    vault_status = known("vault_entries_status_known", "status", credential_statuses)
+    instance_status = known("instance_entries_status_known", "status", credential_statuses)
+    profile_status = known("profiles_status_known", "status", ~w(active needs_consent revoked))
+
     default_names_one = %{
       name: "vault_defaults_names_one",
       expr:
@@ -1872,7 +1904,7 @@ defmodule Arca.Repo.Migrations.Baseline do
       add :oauth_scopes, :text
       add :destination, :text, null: false
       add :attach_only, :boolean, null: false, default: true
-      add :status, :string, null: false, default: "active"
+      add :status, :string, null: false, default: "active", check: if(sqlite?, do: vault_status)
       add :payload_rev, :integer, null: false, default: 0
       add :sealed_payload, :binary
       add :last_used_at, :utc_datetime_usec
@@ -1880,6 +1912,7 @@ defmodule Arca.Repo.Migrations.Baseline do
       timestamps(type: :utc_datetime_usec)
     end
 
+    checked(sqlite?, :vault_entries, [vault_status])
     create unique_index(:vault_entries, [:athanor_id, :id])
 
     create unique_index(:vault_entries, [:athanor_id, :name],
@@ -1911,7 +1944,11 @@ defmodule Arca.Repo.Migrations.Baseline do
         default: true,
         check: if(sqlite?, do: instance_attach_only)
 
-      add :status, :string, null: false, default: "active"
+      add :status, :string,
+        null: false,
+        default: "active",
+        check: if(sqlite?, do: instance_status)
+
       add :payload_rev, :integer, null: false, default: 0
       add :sealed_payload, :binary
       add :last_used_at, :utc_datetime_usec
@@ -1929,7 +1966,12 @@ defmodule Arca.Repo.Migrations.Baseline do
       timestamps(type: :utc_datetime_usec)
     end
 
-    checked(sqlite?, :instance_entries, [policy_known, audience_known, instance_attach_only])
+    checked(sqlite?, :instance_entries, [
+      policy_known,
+      audience_known,
+      instance_attach_only,
+      instance_status
+    ])
 
     create unique_index(:instance_entries, [:name],
              where: "status != 'tombstoned'",
@@ -1995,12 +2037,13 @@ defmodule Arca.Repo.Migrations.Baseline do
       add :source_ref, :string, null: false
       add :kind, :string, null: false, default: "owner"
       add :label, :string, null: false, default: "default"
-      add :status, :string, null: false, default: "active"
+      add :status, :string, null: false, default: "active", check: if(sqlite?, do: profile_status)
       add :head_consent_id, :string
 
       timestamps(type: :utc_datetime_usec)
     end
 
+    checked(sqlite?, :profiles, [profile_status])
     create unique_index(:profiles, [:athanor_id, :id])
 
     create unique_index(:profiles, [:athanor_id, :source_ref, :label, :kind],
@@ -2350,6 +2393,40 @@ defmodule Arca.Repo.Migrations.Baseline do
         "(kind = 'schedule' AND feed_spec IS NULL) OR (kind = 'feed' AND feed_spec IS NOT NULL)"
     }
 
+    # A schedule's missed-run policy: `skip` declares no limit, `catch_up`
+    # a limit of 1 to 24 (`Opus.Schedules.Scheduler.max_catch_up/0`). Each
+    # rule below is true or false on every row, never unknown: it reads
+    # NOT NULL columns and tests a nullable one with IS NULL first, so a
+    # NULL limit cannot pass where one is required.
+    missed_runs_known =
+      known("cron_schedules_missed_runs_known", "missed_runs", ~w(skip catch_up))
+
+    catch_up_limit_declared = %{
+      name: "cron_schedules_catch_up_limit_declared",
+      expr:
+        "(missed_runs = 'skip' AND catch_up_limit IS NULL) OR " <>
+          "(missed_runs = 'catch_up' AND catch_up_limit IS NOT NULL " <>
+          "AND catch_up_limit BETWEEN 1 AND 24)"
+    }
+
+    # An open catch-up episode: `catch_up_left` missed times still to fire,
+    # up to `catch_up_until`. Nothing is left under `skip`, and work left
+    # always has its cursor.
+    catch_up_episode = %{
+      name: "cron_schedules_catch_up_episode",
+      expr:
+        "catch_up_left BETWEEN 0 AND 24 " <>
+          "AND (missed_runs = 'catch_up' OR catch_up_left = 0) " <>
+          "AND (catch_up_left = 0 OR catch_up_until IS NOT NULL)"
+    }
+
+    occurrence_state =
+      known(
+        "schedule_occurrences_state_known",
+        "state",
+        ~w(claimed started completed failed uncertain)
+      )
+
     sqlite? = repo().__adapter__() == Ecto.Adapters.SQLite3
 
     # A feed (`kind = 'feed'`) is a schedule of one component operation whose
@@ -2380,6 +2457,20 @@ defmodule Arca.Repo.Migrations.Baseline do
       # forbid | allow: whether a due occurrence may be claimed while another
       # of the same schedule is still open.
       add :concurrency, :string, null: false, default: "forbid"
+
+      add :missed_runs, :string,
+        null: false,
+        default: "skip",
+        check: if(sqlite?, do: missed_runs_known)
+
+      add :catch_up_limit, :integer, check: if(sqlite?, do: catch_up_limit_declared)
+      add :catch_up_until, :utc_datetime_usec
+
+      add :catch_up_left, :integer,
+        null: false,
+        default: 0,
+        check: if(sqlite?, do: catch_up_episode)
+
       add :feed_spec, :text
       add :feed_fire_seq, :integer, null: false, default: 0
       add :feed_result_seq, :integer, null: false, default: 0
@@ -2389,9 +2480,12 @@ defmodule Arca.Repo.Migrations.Baseline do
       add :updated_at, :utc_datetime_usec, null: false
     end
 
-    unless sqlite? do
-      create constraint(:cron_schedules, kind_spec.name, check: kind_spec.expr)
-    end
+    checked(sqlite?, :cron_schedules, [
+      kind_spec,
+      missed_runs_known,
+      catch_up_limit_declared,
+      catch_up_episode
+    ])
 
     create unique_index(:cron_schedules, [:id, :athanor_id])
     create index(:cron_schedules, [:status])
@@ -2420,14 +2514,15 @@ defmodule Arca.Repo.Migrations.Baseline do
           null: false
 
       add :scheduled_for, :utc_datetime_usec, null: false
-      # claimed | started | completed | failed | uncertain
-      add :state, :string, null: false
+      add :state, :string, null: false, check: if(sqlite?, do: occurrence_state)
       add :execution_id, :string
       add :attempts, :integer, null: false, default: 0
       add :claimed_by, :string
       add :claimed_at, :utc_datetime_usec, null: false
       add :ended_at, :utc_datetime_usec
     end
+
+    checked(sqlite?, :schedule_occurrences, [occurrence_state])
 
     create unique_index(:schedule_occurrences, [:schedule_id, :scheduled_for])
     create index(:schedule_occurrences, [:athanor_id, :state])
@@ -2540,6 +2635,16 @@ defmodule Arca.Repo.Migrations.Baseline do
   # the composite parents are plain strings: the tenant seam holds every
   # query to `athanor_id`.
   defp turns do
+    sqlite? = repo().__adapter__() == Ecto.Adapters.SQLite3
+
+    # `Prima.TurnState.statuses/0`.
+    turn_status =
+      known(
+        "turns_status_known",
+        "status",
+        ~w(accepted running paused completed failed cancelled uncertain)
+      )
+
     create table(:turns, primary_key: false) do
       add :id, :string, primary_key: true
       add :athanor_id, :string, null: false
@@ -2554,7 +2659,7 @@ defmodule Arca.Repo.Migrations.Baseline do
 
       add :agent, :string
       add :requested_by, :string
-      add :status, :string, null: false
+      add :status, :string, null: false, check: if(sqlite?, do: turn_status)
       add :error, :text
       add :accepted_at, :utc_datetime_usec, null: false
       add :ended_at, :utc_datetime_usec
@@ -2592,6 +2697,7 @@ defmodule Arca.Repo.Migrations.Baseline do
       add :origin, :string
     end
 
+    checked(sqlite?, :turns, [turn_status])
     create unique_index(:turns, [:id, :athanor_id])
     create index(:turns, [:athanor_id, :thread_id, :accepted_at])
     create index(:turns, [:athanor_id, :status])
