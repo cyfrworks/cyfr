@@ -37,9 +37,6 @@ defmodule Sanctum.Auth.DeviceFlow do
   alias Sanctum.Auth.Identity
   alias Sanctum.{Context, Session}
 
-  # Supported providers; @provider_urls must have the same keys.
-  @known_providers ~w(github google)
-
   # Device-flow endpoints — per-provider URLs and scopes.
   @provider_urls %{
     github: %{
@@ -56,6 +53,12 @@ defmodule Sanctum.Auth.DeviceFlow do
       scope: "openid email profile"
     }
   }
+
+  # The device-flow providers: the sign-in providers `Sanctum.Atoms` lists
+  # that have endpoints above, in its order.
+  @known_providers for provider <- Sanctum.Atoms.providers(),
+                       provider in Enum.map(Map.keys(@provider_urls), &Atom.to_string/1),
+                       do: provider
 
   # The endpoints a flow talks to. A suite points them at a stand-in IdP
   # with `config :sanctum, :device_flow_endpoints, %{github: %{token: url}}`,
@@ -705,9 +708,9 @@ defmodule Sanctum.Auth.DeviceFlow do
   defp get_client_secret(:google), do: Application.get_env(:sanctum, :google_client_secret)
 
   @doc """
-  The device-flow providers this module knows how to speak to — the one
-  roster; the web surfaces validate against it instead of each carrying
-  its own ["github", "google"] literal.
+  The device-flow providers this module knows how to speak to: the
+  sign-in providers of `Sanctum.Atoms.providers/0` that have device-flow
+  endpoints. The web surfaces and the CLI validate against it.
 
   Knowing a provider is not the same as being able to use it. For the
   subset the operator has actually supplied credentials for, which is what

@@ -161,7 +161,7 @@ defmodule Sanctum.Providers.InstanceEntry do
               description:
                 "What the entry holds: an API key or a bundle of fields; an OAuth account " <>
                   "is an athanor's own entry",
-              enum: ["api_key", "bundle"]
+              enum: Prima.CredentialKinds.instance()
             ),
             Arg.new("provider_hint", :string,
               description: "Immutable provider tag (e.g. 'openai.com'); set at create only"

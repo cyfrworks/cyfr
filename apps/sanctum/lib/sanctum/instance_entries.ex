@@ -101,7 +101,7 @@ defmodule Sanctum.InstanceEntries do
 
   require Logger
 
-  @kinds ~w(api_key bundle)
+  @kinds Prima.CredentialKinds.instance()
   @policies ~w(any shipped)
   @audiences ~w(everyone listed)
   @rebind_attempts 3

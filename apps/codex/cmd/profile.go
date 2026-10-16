@@ -11,6 +11,7 @@ import (
 	"io"
 	"math"
 	"os"
+	"slices"
 	"strings"
 	"time"
 	"unicode"
@@ -622,11 +623,7 @@ type needRow struct {
 // declared is a need the manifest declares as a credential, unlike the
 // undeclared slot of a manifest that declares no needs.
 func (n needRow) declared() bool {
-	switch n.kind {
-	case "api_key", "oauth", "bundle":
-		return true
-	}
-	return false
+	return slices.Contains(ops.CredentialKinds, n.kind)
 }
 
 func readNeed(raw any) (needRow, bool) {

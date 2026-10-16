@@ -28,6 +28,7 @@ defmodule Compendium.Provider do
 
   @behaviour Prima.Provider
 
+  @impl true
   def service, do: "compendium"
 
   require Logger
@@ -42,6 +43,7 @@ defmodule Compendium.Provider do
   `:registry_health_probe`), else the probe's answer — `"ok"`, `"error"`
   or `"unreachable"`. A degraded registry is a state, never a raise.
   """
+  @impl true
   def status, do: %{"registry" => registry_health()}
 
   # The probe's answer is memoized per registry: it is an outbound HTTPS
@@ -120,6 +122,7 @@ defmodule Compendium.Provider do
   @doc """
   Returns available Compendium resources (concrete URIs only).
   """
+  @impl true
   def resources do
     []
   end
@@ -129,6 +132,7 @@ defmodule Compendium.Provider do
   of either is the `component.read_resource` operation, admitted by the
   gate under `:component_read`.
   """
+  @impl true
   def resource_templates do
     [
       %{
@@ -225,6 +229,7 @@ defmodule Compendium.Provider do
   # ToolProvider Protocol (validated at runtime)
   # ============================================================================
 
+  @impl true
   def tools do
     [
       Compendium.Providers.Component.definition(),
@@ -237,6 +242,7 @@ defmodule Compendium.Provider do
   # Tool Handlers — delegated to per-tool modules
   # ============================================================================
 
+  @impl true
   def handle("component", ctx, %{"action" => "read_resource"} = args),
     do: ctx |> read_resource(args["uri"]) |> index("Component index")
 

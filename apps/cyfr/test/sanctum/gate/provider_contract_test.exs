@@ -165,6 +165,90 @@ defmodule Sanctum.Gate.ProviderContractTest do
     refute implements_provider?(Sanctum.VirtualTools)
   end
 
+  # Each `Prima.Provider` callback a provider implements carries `@impl`
+  # on its first clause, so the compiler holds every clause under it to the
+  # behaviour: a callback renamed in the behaviour, or one a provider
+  # misspells, is a warning rather than a function nothing calls.
+  test "every product provider's callbacks carry @impl" do
+    callbacks = Provider.behaviour_info(:callbacks)
+    implementers = product_modules() |> Enum.filter(&implements_provider?/1)
+
+    for module <- [Compendium.Provider, Opus.Provider, Opus.Schedules.Provider, Sanctum.Provider],
+        do: assert(module in implementers)
+
+    unannotated =
+      for module <- implementers,
+          callback <- unannotated_callbacks(module_source(module), module, callbacks),
+          do: "#{inspect(module)}.#{callback}"
+
+    assert unannotated == [],
+           "these Prima.Provider callbacks have no @impl on their first clause: " <>
+             Enum.join(unannotated, ", ")
+  end
+
+  test "a provider callback stripped of its @impl is caught, and only that one" do
+    callbacks = Provider.behaviour_info(:callbacks)
+    source = module_source(Opus.Schedules.Provider)
+
+    assert unannotated_callbacks(source, Opus.Schedules.Provider, callbacks) == []
+
+    assert [_] = Regex.scan(~r/^  @impl true\n  def tools do$/m, source)
+    stripped = String.replace(source, "  @impl true\n  def tools do", "  def tools do")
+
+    assert unannotated_callbacks(stripped, Opus.Schedules.Provider, callbacks) == ["tools/0"]
+  end
+
+  defp module_source(module) do
+    module.module_info(:compile)[:source] |> to_string() |> Prima.Test.SourceTree.read()
+  end
+
+  # The callbacks `module`'s source defines whose first clause no `@impl`
+  # (other than `@impl false`) precedes, as `name/arity`.
+  defp unannotated_callbacks(source, module, callbacks) do
+    forms = module_forms(Code.string_to_quoted!(source), [], module)
+    assert forms != nil, "no defmodule #{inspect(module)} in its source"
+
+    {first_clauses, _pending} =
+      Enum.reduce(forms, {%{}, false}, fn
+        {:@, _, [{:impl, _, [value]}]}, {seen, _pending} ->
+          {seen, value != false}
+
+        {kind, _, [head | _]}, {seen, pending}
+        when kind in [:def, :defp, :defmacro, :defmacrop, :defdelegate] ->
+          key = {kind, def_name_arity(head)}
+          {Map.put_new(seen, key, pending), false}
+
+        _form, acc ->
+          acc
+      end)
+
+    for {name, arity} <- callbacks,
+        Map.get(first_clauses, {:def, {name, arity}}) == false,
+        do: "#{name}/#{arity}"
+  end
+
+  defp def_name_arity({:when, _, [call | _]}), do: def_name_arity(call)
+  defp def_name_arity({name, _, args}) when is_atom(name), do: {name, length(args || [])}
+
+  # The top-level forms of the `defmodule` that defines `module`, nested
+  # definitions included.
+  defp module_forms({:defmodule, _, [{:__aliases__, _, parts}, [do: body]]}, prefix, module) do
+    name = Module.concat(prefix ++ parts)
+    forms = block_forms(body)
+
+    if name == module,
+      do: forms,
+      else: Enum.find_value(forms, &module_forms(&1, prefix ++ parts, module))
+  end
+
+  defp module_forms({:__block__, _, forms}, prefix, module),
+    do: Enum.find_value(forms, &module_forms(&1, prefix, module))
+
+  defp module_forms(_form, _prefix, _module), do: nil
+
+  defp block_forms({:__block__, _, forms}), do: forms
+  defp block_forms(form), do: [form]
+
   test "optional tool metadata accompanies derived annotations" do
     [definition] = MockToolProvider.tools()
 

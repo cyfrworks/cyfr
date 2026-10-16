@@ -42,6 +42,7 @@ defmodule Sanctum.Provider do
 
   @behaviour Prima.Provider
 
+  @impl true
   def service, do: "sanctum"
 
   # ============================================================================
@@ -53,6 +54,7 @@ defmodule Sanctum.Provider do
   either is the `session.read_resource` operation, which answers any
   caller its own self-description.
   """
+  @impl true
   def resources do
     [
       %{
@@ -73,6 +75,7 @@ defmodule Sanctum.Provider do
   @doc """
   Returns Sanctum resource templates (RFC 6570 URI templates).
   """
+  @impl true
   def resource_templates do
     []
   end
@@ -81,6 +84,7 @@ defmodule Sanctum.Provider do
   # ToolProvider Protocol
   # ============================================================================
 
+  @impl true
   def tools do
     [
       Sanctum.Providers.Session.definition(),
@@ -105,12 +109,14 @@ defmodule Sanctum.Provider do
   The streams Sanctum's tools offer, each declared beside its operations:
   a person's pending confirmations (`confirmation.changes`).
   """
+  @impl true
   def streams, do: Sanctum.Providers.Confirmation.streams()
 
   # ============================================================================
   # Tool Handlers — delegated to per-tool modules
   # ============================================================================
 
+  @impl true
   def handle("session", ctx, args), do: Sanctum.Providers.Session.handle(ctx, args)
   def handle("athanor", ctx, args), do: Sanctum.Providers.Athanor.handle(ctx, args)
   def handle("member", ctx, args), do: Sanctum.Providers.Member.handle(ctx, args)

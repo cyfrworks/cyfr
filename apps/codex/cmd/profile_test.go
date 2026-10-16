@@ -10,11 +10,13 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 	"unicode"
 
+	"github.com/cyfr/codex/internal/ops"
 	"github.com/cyfr/codex/internal/prompt"
 )
 
@@ -1614,6 +1616,42 @@ func TestProfileList_SaysWhatStandsInPlaceOfAHead(t *testing.T) {
 		}
 		if !strings.HasSuffix(line, " "+head) {
 			t.Errorf("%s reads %q, want its head as %q", id, line, head)
+		}
+	}
+}
+
+// The CLI classifies a need by the credential kinds the server's owner
+// declares, as `mix ops.gen.cli` renders them, and names every sign-in
+// provider it may be told.
+func TestGeneratedRosters_ClassifyNeedsAndNameProviders(t *testing.T) {
+	if len(ops.CredentialKinds) == 0 || len(ops.SignInProviders) == 0 || len(ops.DeviceFlowProviders) == 0 {
+		t.Fatalf("a generated roster is empty: %v %v %v",
+			ops.CredentialKinds, ops.SignInProviders, ops.DeviceFlowProviders)
+	}
+	for _, kind := range ops.CredentialKinds {
+		need, ok := readNeed(map[string]any{"need": "n", "kind": kind})
+		if !ok || !need.declared() {
+			t.Errorf("a %q need is not read as a declared credential", kind)
+		}
+	}
+	for _, kind := range []string{"catalyst", "reagent", "formula", ""} {
+		if need, _ := readNeed(map[string]any{"need": "n", "kind": kind}); need.declared() {
+			t.Errorf("a %q need is read as a declared credential", kind)
+		}
+	}
+	for _, kind := range ops.InstanceCredentialKinds {
+		if !slices.Contains(ops.CredentialKinds, kind) {
+			t.Errorf("instance kind %q is no credential kind", kind)
+		}
+	}
+	for _, provider := range ops.DeviceFlowProviders {
+		if !slices.Contains(ops.SignInProviders, provider) {
+			t.Errorf("device-flow provider %q is no sign-in provider", provider)
+		}
+	}
+	for _, provider := range ops.SignInProviders {
+		if prettyProvider(provider) == provider {
+			t.Errorf("sign-in provider %q has no label", provider)
 		}
 	}
 }

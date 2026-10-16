@@ -30,16 +30,20 @@ defmodule Opus.Schedules.Provider do
 
   @behaviour Prima.Provider
 
+  @impl true
   def service, do: "opus"
 
   alias Sanctum.{Context, Refusals}
 
   require Logger
 
+  @impl true
   def resources, do: []
+  @impl true
   def resource_templates, do: []
   def read(_ctx, _uri), do: {:error, "No resources"}
 
+  @impl true
   def tools do
     alias Prima.{Arg, Operation}
     # create/update also require the registration's consent binding —
@@ -223,6 +227,7 @@ defmodule Opus.Schedules.Provider do
   end
 
   # Create
+  @impl true
   def handle("schedule", %Context{} = ctx, %{"action" => "create"} = args) do
     with :ok <- validate_required(args, ["name", "cron_expression", "reference"]),
          :ok <- validate_cron(args["cron_expression"]),

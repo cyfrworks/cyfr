@@ -359,6 +359,18 @@ var Actions = map[string][]string{
 	"webhook":             {"create", "get", "list", "revoke", "rotate", "update"},
 }
 
+// CredentialKinds lists every credential kind a manifest need may name.
+var CredentialKinds = []string{"api_key", "oauth", "bundle"}
+
+// InstanceCredentialKinds lists the credential kinds an instance entry holds.
+var InstanceCredentialKinds = []string{"api_key", "bundle"}
+
+// SignInProviders lists every sign-in provider.
+var SignInProviders = []string{"github", "google", "oidcc"}
+
+// DeviceFlowProviders lists the sign-in providers a device flow starts with.
+var DeviceFlowProviders = []string{"github", "google"}
+
 // ApprovalListArgs carries arguments for approval.list.
 type ApprovalListArgs struct {
 	// list: the thread whose open cards to show

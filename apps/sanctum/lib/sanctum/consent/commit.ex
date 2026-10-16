@@ -1131,7 +1131,7 @@ defmodule Sanctum.Consent.Commit do
   defp single_credential_need(rows, dep) do
     with {:ok, _row, manifest} <- node_row_manifest(rows, dep),
          declared when is_list(declared) <- Prima.Manifest.Needs.from_manifest(manifest),
-         [need] <- Enum.filter(declared, &(&1.kind in ~w(api_key oauth bundle))) do
+         [need] <- Enum.filter(declared, &(&1.kind in Prima.CredentialKinds.all())) do
       need
     else
       _ -> :unknown
@@ -1185,7 +1185,7 @@ defmodule Sanctum.Consent.Commit do
     declared = Prima.Manifest.Needs.from_manifest(dep_manifest)
 
     credential =
-      for need <- declared || [], need.kind in ~w(api_key oauth bundle), do: need
+      for need <- declared || [], need.kind in Prima.CredentialKinds.all(), do: need
 
     case {Map.get(raw, :need), declared, credential} do
       {nil, nil, _} ->
@@ -1949,6 +1949,9 @@ defmodule Sanctum.Consent.Commit do
   defp attach_rule(%{attach: %{} = rule}), do: Prima.Manifest.Needs.attach_to_map(rule)
   defp attach_rule(_declared_need), do: nil
 
+  # The needs an entry meets; the others name a component.
+  @credential_kinds Prima.CredentialKinds.all()
+
   defp check_known_need("@ingress", nil), do: {:ok, nil}
   defp check_known_need(need, nil), do: {:error, {:unknown_need, need}}
 
@@ -1957,7 +1960,7 @@ defmodule Sanctum.Consent.Commit do
       nil ->
         {:error, {:unknown_need, need}}
 
-      %{kind: kind} = declared_need when kind in ~w(api_key oauth bundle) ->
+      %{kind: kind} = declared_need when kind in @credential_kinds ->
         {:ok, declared_need}
 
       %{kind: kind} ->
@@ -2274,7 +2277,7 @@ defmodule Sanctum.Consent.Commit do
 
   defp credential_needs(manifest) do
     for need <- Prima.Manifest.Needs.from_manifest(manifest) || [],
-        need.kind in ~w(api_key oauth bundle),
+        need.kind in Prima.CredentialKinds.all(),
         do: need
   end
 

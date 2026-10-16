@@ -94,10 +94,12 @@ defmodule PrismWeb.SettingsLive do
   alias Sanctum.Auth.DeviceFlow
 
   @default_link_poll_s 5
+  # The doors a device flow links.
+  @device_flow_providers DeviceFlow.providers()
 
   # The days of use the Use card reads for each entry, today included.
   @instance_days 7
-  @instance_kinds ~w(api_key bundle)
+  @instance_kinds Prima.CredentialKinds.instance()
   @instance_policies ~w(any shipped)
 
   # The new-entry form as typed. It never holds a value: the key is typed
@@ -269,7 +271,7 @@ defmodule PrismWeb.SettingsLive do
   # ---- doors -----------------------------------------------------------------
 
   def handle_event("link_device", %{"provider" => provider}, socket)
-      when provider in ["github", "google"] do
+      when provider in @device_flow_providers do
     start_link_flow(socket, String.to_existing_atom(provider))
   end
 

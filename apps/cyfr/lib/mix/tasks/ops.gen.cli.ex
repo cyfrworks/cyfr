@@ -10,6 +10,11 @@ defmodule Mix.Tasks.Ops.Gen.Cli do
   preserve omission separately from an explicit zero, false, empty or null.
   Each argument struct serializes its declared action discriminator.
 
+  The file also carries the rosters the CLI validates and classifies by,
+  read from their owners: the credential kinds (`Prima.CredentialKinds`),
+  the sign-in providers (`Sanctum.Atoms.providers/0`) and the device-flow
+  providers (`Sanctum.Auth.DeviceFlow.providers/0`).
+
       mix ops.gen.cli
       mix ops.gen.cli --check
   """
@@ -70,20 +75,38 @@ defmodule Mix.Tasks.Ops.Gen.Cli do
 
   @doc "The file's text, from the loaded catalog."
   @spec render() :: String.t()
-  def render do
-    operations =
-      for provider <- Sanctum.Catalog.configured_providers(),
-          tool <- provider.tools(),
-          operation <- tool.operations,
-          :external in operation.planes,
-          do: operation
+  def render, do: render(operations())
 
-    render(operations)
+  @doc "The loaded catalog's external operations."
+  @spec operations() :: [Prima.Operation.t()]
+  def operations do
+    for provider <- Sanctum.Catalog.configured_providers(),
+        tool <- provider.tools(),
+        operation <- tool.operations,
+        :external in operation.planes,
+        do: operation
   end
 
-  @doc "Render explicit declarations, without starting the catalog."
-  @spec render([Prima.Operation.t()]) :: String.t()
-  def render(operations) do
+  @typedoc "A roster the file carries: its Go name, its comment and its values."
+  @type roster :: {String.t(), String.t(), [String.t()]}
+
+  @doc "The rosters the file carries, read from their owners."
+  @spec rosters() :: [roster()]
+  def rosters do
+    [
+      {"CredentialKinds", "every credential kind a manifest need may name",
+       Prima.CredentialKinds.all()},
+      {"InstanceCredentialKinds", "the credential kinds an instance entry holds",
+       Prima.CredentialKinds.instance()},
+      {"SignInProviders", "every sign-in provider", Sanctum.Atoms.providers()},
+      {"DeviceFlowProviders", "the sign-in providers a device flow starts with",
+       Sanctum.Auth.DeviceFlow.providers()}
+    ]
+  end
+
+  @doc "Render explicit declarations and rosters, without starting the catalog."
+  @spec render([Prima.Operation.t()], [roster()]) :: String.t()
+  def render(operations, rosters \\ rosters()) do
     operations = Enum.sort_by(operations, &{&1.tool, &1.action})
 
     by_tool =
@@ -107,6 +130,12 @@ defmodule Mix.Tasks.Ops.Gen.Cli do
       Enum.map_join(by_tool, "\n", fn {tool, actions} ->
         list = Enum.map_join(actions, ", ", &~s("#{&1}"))
         ~s(\t"#{tool}": {#{list}},)
+      end)
+
+    rosters =
+      Enum.map_join(rosters, "\n", fn {name, comment, values} ->
+        list = Enum.map_join(values, ", ", &~s("#{&1}"))
+        "// #{name} lists #{comment}.\nvar #{name} = []string{#{list}}\n"
       end)
 
     """
@@ -136,6 +165,8 @@ defmodule Mix.Tasks.Ops.Gen.Cli do
     var Actions = map[string][]string{
     #{table}
     }
+
+    #{rosters}
 
     #{Enum.map_join(operations, "\n", &operation_struct/1)}
     """

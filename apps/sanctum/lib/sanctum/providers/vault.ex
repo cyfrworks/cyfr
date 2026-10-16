@@ -126,7 +126,7 @@ defmodule Sanctum.Providers.Vault do
             Arg.new("kind", :string,
               required: true,
               description: "What the entry holds",
-              enum: ["api_key", "oauth", "bundle"]
+              enum: Prima.CredentialKinds.all()
             ),
             Arg.new("fields", {:map, Arg.new(nil, :string)},
               description: "Secret material as name → value; names mirror field_names"
@@ -339,7 +339,9 @@ defmodule Sanctum.Providers.Vault do
   end
 
   def handle(_ctx, %{"action" => "create"}) do
-    {:error, {:invalid_argument, "create requires name and kind (api_key | oauth | bundle)"}}
+    {:error,
+     {:invalid_argument,
+      "create requires name and kind (#{Enum.join(Prima.CredentialKinds.all(), " | ")})"}}
   end
 
   def handle(%Context{} = ctx, %{"action" => "rename", "id" => id, "name" => name}) do

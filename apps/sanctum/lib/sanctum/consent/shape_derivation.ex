@@ -72,9 +72,13 @@ defmodule Sanctum.Consent.ShapeDerivation do
   # would answer different shapes for up to a minute.
   @live_cache_ttl_ms :timer.seconds(60)
 
-  # The list each vault need kind's projection names; the kinds not here
-  # are component-typed and project nothing.
-  @projection_lists %{"api_key" => :fields, "bundle" => :fields, "oauth" => :scopes}
+  # The list each vault need kind's projection names: an OAuth need's
+  # scopes, every other credential kind's fields. The kinds not here are
+  # component-typed and project nothing.
+  @projection_lists Map.new(
+                      Prima.CredentialKinds.all(),
+                      &{&1, if(&1 == "oauth", do: :scopes, else: :fields)}
+                    )
 
   # The actions a pattern never grants: each binds or ends a standing
   # conduit for a profile's authority, sets runs firing on their own under

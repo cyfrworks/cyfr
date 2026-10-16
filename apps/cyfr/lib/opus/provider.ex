@@ -35,6 +35,7 @@ defmodule Opus.Provider do
 
   @behaviour Prima.Provider
 
+  @impl true
   def service, do: "opus"
 
   require Logger
@@ -48,6 +49,7 @@ defmodule Opus.Provider do
   # Resources
   # ============================================================================
 
+  @impl true
   def resources do
     []
   end
@@ -57,6 +59,7 @@ defmodule Opus.Provider do
   read of either is the `execution.read_resource` operation, admitted by
   the gate under `:storage_read`.
   """
+  @impl true
   def resource_templates do
     [
       %{
@@ -255,6 +258,7 @@ defmodule Opus.Provider do
   # ToolProvider Protocol (validated at runtime)
   # ============================================================================
 
+  @impl true
   def tools do
     alias Prima.{Arg, Operation}
     # External-plane only, and `host: :intercepted`: a running
@@ -477,6 +481,7 @@ defmodule Opus.Provider do
   # exists to prevent. Components invoke children through the formula host,
   # which intercepts these actions before dispatch; nothing legitimate arrives
   # here guest-planed. Fail closed regardless of the identity's permissions.
+  @impl true
   def handle("execution", %Context{plane: :guest}, %{"action" => action})
       when action in ["run", "run_stream"] do
     {:error,

@@ -64,7 +64,7 @@ defmodule Sanctum.Vault do
 
   require Logger
 
-  @kinds ~w(api_key oauth bundle)
+  @kinds Prima.CredentialKinds.all()
   @rebind_attempts 3
 
   # The status a profile takes when the binding under its head consent

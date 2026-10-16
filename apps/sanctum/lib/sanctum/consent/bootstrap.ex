@@ -404,7 +404,7 @@ defmodule Sanctum.Consent.Bootstrap do
          needs when is_list(needs) <- Prima.Manifest.Needs.from_manifest(manifest),
          [need] <-
            Enum.filter(needs, fn need ->
-             need.kind in ~w(api_key oauth bundle) and is_map(need.attach) and
+             need.kind in Prima.CredentialKinds.all() and is_map(need.attach) and
                need.disclose != true
            end) do
       need
@@ -698,7 +698,7 @@ defmodule Sanctum.Consent.Bootstrap do
   defp credential_needs(manifest) do
     case Prima.Manifest.Needs.from_manifest(manifest) do
       needs when is_list(needs) ->
-        for need <- needs, need.kind in ~w(api_key oauth bundle), do: need.name
+        for need <- needs, need.kind in Prima.CredentialKinds.all(), do: need.name
 
       _ ->
         []

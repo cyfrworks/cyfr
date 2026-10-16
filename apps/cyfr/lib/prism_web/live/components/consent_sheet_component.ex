@@ -153,7 +153,7 @@ defmodule PrismWeb.ConsentSheetComponent do
   @duration_limits ~w(timeout batch_timeout)
 
   # The needs an entry meets; any other names a component.
-  @credential_kinds ~w(api_key oauth bundle)
+  @credential_kinds Prima.CredentialKinds.all()
   # The furthest an until-lifetime reaches: the home refuses one more
   # than 24 hours after its commit.
   @horizon_s 24 * 3600

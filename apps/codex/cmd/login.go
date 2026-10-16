@@ -8,6 +8,8 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"slices"
+	"strings"
 	"time"
 
 	"github.com/cyfr/codex/internal/config"
@@ -21,8 +23,8 @@ import (
 var flagLoginProvider string
 
 func init() {
-	loginCmd.Flags().StringVar(&flagLoginProvider, "provider", "github",
-		"OAuth provider for device-flow login (github or google)")
+	loginCmd.Flags().StringVar(&flagLoginProvider, "provider", ops.DeviceFlowProviders[0],
+		"OAuth provider for device-flow login ("+strings.Join(ops.DeviceFlowProviders, " or ")+")")
 
 	rootCmd.AddCommand(loginCmd)
 	rootCmd.AddCommand(logoutCmd)
@@ -51,10 +53,11 @@ can push components. Later logins do not need cyfr.run to be reachable.`,
 		// This keeps shell scripts deterministic (flag or --no-interactive
 		// ⇒ no prompt) while making Google discoverable interactively.
 		if !cmd.Flags().Changed("provider") && prompt.IsInteractive(flagNoInteractive) {
-			choice, err := prompt.SelectOne("Choose an OAuth provider", []prompt.Option{
-				{Label: "GitHub", Value: "github"},
-				{Label: "Google", Value: "google"},
-			})
+			options := make([]prompt.Option, 0, len(ops.DeviceFlowProviders))
+			for _, p := range ops.DeviceFlowProviders {
+				options = append(options, prompt.Option{Label: prettyProvider(p), Value: p})
+			}
+			choice, err := prompt.SelectOne("Choose an OAuth provider", options)
 			if err != nil {
 				if prompt.IsAborted(err) {
 					return prompt.ErrAborted
@@ -64,8 +67,9 @@ can push components. Later logins do not need cyfr.run to be reachable.`,
 			provider = choice
 		}
 
-		if provider != "github" && provider != "google" {
-			return fmt.Errorf("Unsupported provider %q — use 'github' or 'google'.", provider)
+		if !slices.Contains(ops.DeviceFlowProviders, provider) {
+			return fmt.Errorf("Unsupported provider %q — use '%s'.", provider,
+				strings.Join(ops.DeviceFlowProviders, "' or '"))
 		}
 
 		client := newClient()

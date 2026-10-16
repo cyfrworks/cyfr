@@ -120,7 +120,7 @@ defmodule Opus.Host.AttachedFetch do
   alias Prima.Authority.Blob.Edge
   alias Prima.Manifest.Needs
 
-  @credential_kinds ~w(api_key oauth bundle)
+  @credential_kinds Prima.CredentialKinds.all()
   @ambiguous "This connection's binding holds more than one value, and its attach rule takes one"
   @connect_timeout_ms 5_000
   @no_status "HTTP request failed: an answer with no valid status is not relayed"

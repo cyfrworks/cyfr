@@ -3,15 +3,19 @@
 
 defmodule Sanctum.Gate.LiteralDriftTest do
   @moduledoc """
-  Every operation a client spells as a literal exists in the catalog, and
-  the CLI's generated names and argument structs are the catalog's.
+  Every operation the library spells as a literal exists in the catalog,
+  and the CLI's generated names, argument structs and rosters are the
+  catalog's and their owners'.
 
   The CLI names the operations its built-in commands call through
   `apps/codex/internal/ops/catalog_gen.go`, rendered by `mix ops.gen.cli`
   from the catalog: a renamed or retired action fails `go build` there.
   This test refuses a checked-in render that is stale, so the build sees
   the catalog as it is. Argument fields and their presence are generated from the same
-  declarations; renamed fields fail the Go build.
+  declarations; renamed fields fail the Go build. The credential kinds and
+  the sign-in providers the CLI reads are rendered into the same file from
+  `Prima.CredentialKinds` and Sanctum's rosters, so a roster that moves
+  makes the render stale.
 
   The one library site that dispatches by name across an app boundary
   (the build host registering a compiled component) still spells a
@@ -22,21 +26,11 @@ defmodule Sanctum.Gate.LiteralDriftTest do
 
   @root Path.expand("../../../../..", __DIR__)
 
-  # `CallTool(<ctx>, "<tool>", map[string]any{ "action": "<x>"`, the map
-  # literal on the same or the following line.
-  @go_call ~r/CallTool\([^,]+,\s*"(\w+)",\s*map\[string\]any\{\s*"action":\s*"(\w+)"/
-
   # `call_external("<tool>", <ctx>, %{ "action" => "<x>"` in library code.
   @ex_call ~r/call_(?:external|in_chain)\("(\w+)",[^%]*%\{\s*"action"\s*=>\s*"(\w+)"/
 
-  test "every literal tool.action in the CLI and the library is one the catalog serves" do
+  test "every literal tool.action in the library is one the catalog serves" do
     served = MapSet.new(Sanctum.Catalog.tool_actions())
-
-    go_pairs =
-      for file <- Prima.Test.SourceTree.files!(Path.join(@root, "apps/codex/**/*.go")),
-          not String.ends_with?(file, "_test.go"),
-          [_, tool, action] <- Regex.scan(@go_call, File.read!(file)),
-          do: {Path.relative_to(file, @root), "#{tool}.#{action}"}
 
     ex_pairs =
       for dir <- Prima.Test.SourceTree.app_libs(@root),
@@ -44,12 +38,11 @@ defmodule Sanctum.Gate.LiteralDriftTest do
           [_, tool, action] <- Regex.scan(@ex_call, Prima.Test.SourceTree.read(file)),
           do: {Path.relative_to(file, @root), "#{tool}.#{action}"}
 
-    pairs = go_pairs ++ ex_pairs
-
     assert ex_pairs != [],
            "no literal operation calls found — the regexes no longer match the sources"
 
-    unknown = for {file, pair} <- pairs, not MapSet.member?(served, pair), do: "#{file}: #{pair}"
+    unknown =
+      for {file, pair} <- ex_pairs, not MapSet.member?(served, pair), do: "#{file}: #{pair}"
 
     assert unknown == [],
            """
@@ -76,5 +69,23 @@ defmodule Sanctum.Gate.LiteralDriftTest do
     planted = String.replace(text, line <> "\n", "", global: false)
     refute Mix.Tasks.Ops.Gen.Cli.current?({:ok, planted}, rendered)
     refute Mix.Tasks.Ops.Gen.Cli.current?({:error, :enoent}, rendered)
+
+    # Each roster is in the file as its owner reads, and an owner that
+    # moved, against the file that kept the old list, is drift.
+    operations = Mix.Tasks.Ops.Gen.Cli.operations()
+    rosters = Mix.Tasks.Ops.Gen.Cli.rosters()
+    assert length(rosters) == 4
+
+    for {name, comment, [_ | _] = values} <- rosters do
+      assert text =~ "var #{name} = []string{#{Enum.map_join(values, ", ", &~s("#{&1}"))}}"
+
+      moved = List.keyreplace(rosters, name, 0, {name, comment, Enum.drop(values, -1)})
+
+      refute Mix.Tasks.Ops.Gen.Cli.current?(
+               file,
+               Mix.Tasks.Ops.Gen.Cli.render(operations, moved)
+             ),
+             "a moved #{name} is not seen"
+    end
   end
 end

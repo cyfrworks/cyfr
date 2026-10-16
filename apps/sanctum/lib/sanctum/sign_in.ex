@@ -97,7 +97,7 @@ defmodule Sanctum.SignIn do
   alias Sanctum.Slug
   alias Sanctum.Tenancy.{Members, Users}
 
-  @linkable ~w(github google oidcc)
+  @linkable Sanctum.Atoms.providers()
   @link_ticket_ms 600_000
   @link_refused "This sign-in link is not yours, has expired or was already used; sign in " <>
                   "with that door again"

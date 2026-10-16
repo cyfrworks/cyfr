@@ -164,20 +164,18 @@ func renderWhoami(composed map[string]any, registryErr error) {
 	}
 }
 
+// providerLabels names each provider of ops.SignInProviders for a person.
+var providerLabels = map[string]string{"github": "GitHub", "google": "Google", "oidcc": "OIDC"}
+
 // prettyProvider renders the machine-name provider as a user-facing label.
 func prettyProvider(p string) string {
-	switch p {
-	case "github":
-		return "GitHub"
-	case "google":
-		return "Google"
-	case "oidcc":
-		return "OIDC"
-	case "":
-		return "unknown"
-	default:
-		return p
+	if label, ok := providerLabels[p]; ok {
+		return label
 	}
+	if p == "" {
+		return "unknown"
+	}
+	return p
 }
 
 // personalSlug extracts the personal-namespace slug from the registry response,

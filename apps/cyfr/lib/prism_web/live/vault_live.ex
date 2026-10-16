@@ -513,7 +513,7 @@ defmodule PrismWeb.VaultLive do
 
   # The kinds of entry the create form makes. An OAuth entry is made by
   # its own form, through a grant.
-  @form_kinds ~w(api_key bundle)
+  @form_kinds Prima.CredentialKinds.all() -- ["oauth"]
 
   # The most component rows one `component.list` answers.
   @list_limit 1000

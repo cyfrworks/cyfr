@@ -140,7 +140,7 @@ defmodule Sanctum.Consent.Plan do
   @default_origins [:interactive]
 
   # The needs an entry meets; the others name a component.
-  @credential_kinds ~w(api_key oauth bundle)
+  @credential_kinds Prima.CredentialKinds.all()
 
   @type t :: %{
           plan_token: String.t(),

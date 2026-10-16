@@ -50,7 +50,7 @@ defmodule Sanctum.Providers.Session do
           [
             Arg.new("provider", :string,
               description: "OAuth provider for device flow",
-              enum: ["github", "google"]
+              enum: Sanctum.Auth.DeviceFlow.providers()
             )
           ],
           auth: :anonymous,
@@ -68,7 +68,7 @@ defmodule Sanctum.Providers.Session do
             ),
             Arg.new("provider", :string,
               description: "OAuth provider for device flow",
-              enum: ["github", "google"]
+              enum: Sanctum.Auth.DeviceFlow.providers()
             )
           ],
           auth: :anonymous,

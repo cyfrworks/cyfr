@@ -64,7 +64,7 @@ defmodule Prima.Manifest.Needs do
   @type_re ~r/^[a-z_]+:[a-z0-9._-]+$/
   # Needs accept credential kinds and the executable types defined by
   # Prima.ComponentRef.
-  @credential_kinds ~w(api_key oauth bundle)
+  @credential_kinds Prima.CredentialKinds.all()
   @kinds @credential_kinds ++ Prima.ComponentRef.executable_types()
   @credential_only_keys ~w(attach hosts paths disclose)
   @entry_keys ~w(type reason fields scopes required) ++ @credential_only_keys
