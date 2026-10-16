@@ -5751,4 +5751,377 @@ defmodule PrismWeb.SystemLayerTest do
       assert String.starts_with?(described(view), "pine ♫ ")
     end
   end
+
+  # ---------------------------------------------------------------------------
+  # The seal on the wire
+  # ---------------------------------------------------------------------------
+
+  # A person with a seal set, on a page that holds a canvas and frames. The
+  # tinctures are laid in the tree of an athanor minted and seated for this
+  # test alone (its fill writes the tree as it seats it), under the
+  # partition's storage root, and that tree is removed, and nothing else,
+  # when the test ends.
+  defp wire_world(%{conn: conn}) do
+    user = test_user()
+    conn = log_in_user(conn, user)
+    athanor = seated_athanor()
+    ctx = %{Sanctum.TestContext.local() | athanor_id: athanor.id}
+
+    segments = Arca.Storage.physical_segments(Context.actor(ctx), [])
+    tree = Path.join([Application.fetch_env!(:arca, :base_path) | segments])
+
+    on_exit(fn ->
+      File.rm_rf!(tree)
+      reload_registry()
+    end)
+
+    {1, _} =
+      Arca.Repo.insert_all("person_seals", [
+        %{user_id: user.user_id, text: "quill zephyr", glyph: "✈", set_at: DateTime.utc_now()}
+      ])
+
+    %{conn: conn, user: user, ctx: ctx}
+  end
+
+  # A tincture version in the athanor's tree and its component row, with
+  # `tincture` its manifest's block and `files` its files.
+  defp lay!(ctx, name, tincture, files) do
+    manifest = %{
+      "name" => name,
+      "type" => "tincture",
+      "version" => "1.0.0",
+      "publisher" => "local",
+      "tincture" => tincture
+    }
+
+    dir =
+      Arca.Adapters.Local.build_path(
+        Sanctum.Context.actor(ctx),
+        ["components", "tinctures", "local", name, "1.0.0"]
+      )
+
+    File.mkdir_p!(dir)
+    File.write!(Path.join(dir, "cyfr-manifest.json"), Jason.encode!(manifest))
+    for {file, bytes} <- files, do: File.write!(Path.join(dir, file), bytes)
+
+    digest = "sha256:" <> Base.encode16(:crypto.hash(:sha256, name), case: :lower)
+    {:ok, release_digest} = Compendium.ReleaseDigest.compute(digest, manifest)
+    now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+
+    {:ok, _} =
+      Arca.ComponentStorage.put_component(Sanctum.Context.actor(ctx), %{
+        id: "cmp_#{name}_#{System.unique_integer([:positive])}",
+        name: name,
+        version: "1.0.0",
+        component_type: "tincture",
+        description: name,
+        tags: "[]",
+        digest: digest,
+        release_digest: release_digest,
+        size: 100,
+        exports: "[]",
+        manifest: Jason.encode!(manifest),
+        publisher: "local",
+        publisher_id: "local|local|#{ctx.namespace}",
+        source: Compendium.Source.filesystem(),
+        signature_verified: false,
+        inserted_at: now,
+        updated_at: now
+      })
+
+    Prism.TinctureRegistry.reload_athanor(ctx.athanor_id)
+    :ok
+  end
+
+  defp tincture!(ctx, name, block \\ %{}) do
+    lay!(ctx, name, Map.merge(%{"entry" => "index.html", "frame" => %{}}, block), [
+      {"index.html", "<html><head></head><body>#{name}</body></html>"}
+    ])
+  end
+
+  defp canvas!(ctx, name) do
+    lay!(
+      ctx,
+      name,
+      %{
+        "frame" => %{"placement" => "canvas"},
+        "canvas" => %{"module" => "canvas.js", "toolkit" => 1},
+        "streams" => []
+      },
+      [{"canvas.js", "export default (canvas) => canvas.render({type: \"spacer\"})"}]
+    )
+
+    {:ok, _} =
+      Arca.CanvasVersions.publish(
+        Sanctum.Context.actor(ctx),
+        name,
+        %{Arca.CanvasVersions.empty() | working: "1.0.0"},
+        0
+      )
+  end
+
+  defp layout!(ctx, user, canvases) do
+    {:ok, layout} = Prima.Layout.validate(%{"version" => 2, "canvases" => canvases})
+    {:ok, _revision} = Arca.Layouts.publish(Sanctum.Context.actor(ctx), user.user_id, layout, 0)
+    :ok
+  end
+
+  defp app(tincture, mode, order), do: %{"tincture" => tincture, "mode" => mode, "order" => order}
+
+  # Desk: a column app that may ask for a credential and read its
+  # person's session, a full app, and a floating entry. Hand: one column.
+  # A second canvas places nothing.
+  defp canvases do
+    [
+      %{
+        "id" => "home",
+        "tincture" => "tincture:local.markets",
+        "postures" => %{
+          "desk" => %{
+            "apps" => [
+              app("tincture:local.slot-dash", "column", 0),
+              app("tincture:local.icon-dash", "full", 1)
+            ],
+            "floating" => [
+              %{
+                "tincture" => "tincture:local.float-dash",
+                "position" => %{"x" => 2500, "y" => 5000}
+              }
+            ]
+          },
+          "hand" => %{
+            "apps" => [app("tincture:local.icon-dash", "column", 0)],
+            "floating" => []
+          }
+        }
+      },
+      %{"id" => "work", "tincture" => "tincture:local.notes-canvas", "postures" => %{}}
+    ]
+  end
+
+  defp installed!(ctx) do
+    canvas!(ctx, "markets")
+    canvas!(ctx, "notes-canvas")
+    tincture!(ctx, "slot-dash", %{"actions" => ["vault.create", "session.whoami"]})
+    tincture!(ctx, "icon-dash")
+    tincture!(ctx, "float-dash", %{"frame" => %{"placement" => "float"}})
+  end
+
+  defp frames(view), do: :sys.get_state(view.pid).socket.assigns.frames
+
+  defp by_key(view, key), do: Prism.Frames.get(frames(view), key)
+
+  # Everything the view has sent this test by now: the view's process has
+  # served every message before it, so what it pushed has reached the
+  # client, and a render served after it has delivered those pushes and
+  # replies here. Answers every message in the mailbox, whatever its shape.
+  defp drain(view) do
+    _ = :sys.get_state(view.pid)
+    _ = render(view)
+    drain_mailbox([])
+  end
+
+  defp drain_mailbox(acc) do
+    receive do
+      message -> drain_mailbox([message | acc])
+    after
+      0 -> Enum.reverse(acc)
+    end
+  end
+
+  defp pushes(messages, ref),
+    do: for({^ref, {:push_event, event, payload}} <- messages, do: {event, payload})
+
+  defp replies(messages, ref), do: for({^ref, {:reply, payload}} <- messages, do: payload)
+
+  defp whole(term), do: inspect(term, limit: :infinity, printable_limit: :infinity)
+
+  # A list of messages names only those that carry the seal, so a failure
+  # prints none of the other messages the mailbox held (the mount's own
+  # response, with its session cookie, among them).
+  defp refute_seal(messages, what) when is_list(messages) do
+    carrying = Enum.filter(messages, &(whole(&1) =~ "quill zephyr"))
+    assert carrying == [], "#{what} carries the seal: #{whole(carrying)}"
+  end
+
+  # A text names only the stretch around each place it carries the seal,
+  # so a failure prints none of the page's signed session.
+  defp refute_seal(text, what) when is_binary(text) do
+    around =
+      for [{at, _length}] <- Regex.scan(~r/#{"quill zephyr"}/u, text, return: :index),
+          do: binary_part(text, max(at - 120, 0), min(240, byte_size(text) - max(at - 120, 0)))
+
+    assert around == [], "#{what} carries the seal: #{whole(around)}"
+  end
+
+  defp refute_seal(term, what), do: refute_seal(whole(term), what)
+
+  # A frame's own call to a data route, as its bridge posts it.
+  defp data(path, body, bearer) do
+    build_conn()
+    |> put_req_header("content-type", "application/json")
+    |> put_req_header("origin", "null")
+    |> put_req_header("authorization", Prima.TinctureWire.bearer(bearer))
+    |> post(path, Jason.encode!(body))
+  end
+
+  defp canvas_verb!(view, frame_id, verb, args) do
+    render_hook(view, "canvas_verb", %{
+      "frame" => frame_id,
+      "message" => Prima.CanvasWire.encode(%{verb: verb, frame: frame_id, args: args})
+    })
+  end
+
+  defp frame_verb!(view, frame_id, verb, args) do
+    render_hook(view, "frame_verb", %{
+      "frame" => frame_id,
+      "message" => Prima.TinctureWire.shell_message(verb, frame_id, args)
+    })
+  end
+
+  defp canvas_html(view) do
+    view
+    |> render()
+    |> LazyHTML.from_fragment()
+    |> LazyHTML.query("#canvas")
+    |> LazyHTML.to_html()
+  end
+
+  defp description(view) do
+    view
+    |> render()
+    |> LazyHTML.from_fragment()
+    |> LazyHTML.query("#system-layer-description")
+    |> LazyHTML.text()
+    |> String.trim()
+  end
+
+  describe "the seal on the wire" do
+    setup :wire_world
+
+    test "frame, canvas and data-route payloads carry none of it, while the layer's prompt begins with it",
+         %{conn: conn, ctx: ctx, user: user} do
+      installed!(ctx)
+      layout!(ctx, user, canvases())
+
+      {view, html} = mount_athanor(conn, "/tinctures")
+      %{proxy: {ref, _topic, _}} = view
+
+      # The page as drawn with no prompt open: no description, no seal.
+      refute html =~ ~s(id="system-layer-description")
+      refute_seal(html, "the page with no prompt open")
+
+      # A posture the client reports, and back: the desk's frames are
+      # opened anew.
+      view |> element("#canvas-hook") |> render_hook("posture", %{"posture" => "hand"})
+      view |> element("#canvas-hook") |> render_hook("posture", %{"posture" => "desk"})
+
+      canvas = by_key(view, {:canvas, "home"})
+      column = by_key(view, {:app, "home", "tincture:local.slot-dash"})
+      float = by_key(view, {:floating, "home", "tincture:local.float-dash"})
+      assert %{state: :live, visible: true} = canvas
+      assert %{state: :live, visible: true} = column
+      assert %{state: :live} = float
+
+      # Every frame's handshake: a canvas's boot, a frame's bearer.
+      for frame <- Prism.Frames.list(frames(view)),
+          do: render_hook(view, "frame_handshake", %{"frame" => frame.id})
+
+      # The canvas's own verbs, and the full app it opens and closes: the
+      # frames beneath it frozen and let run again, with their rotated
+      # bearers.
+      canvas_verb!(view, canvas.id, :ready, %{})
+      canvas_verb!(view, canvas.id, :open, %{"ref" => "tincture:local.icon-dash"})
+
+      assert %{placement: :full, visible: true} =
+               icon = by_key(view, {:app, "home", "tincture:local.icon-dash"})
+
+      render_hook(view, "frame_handshake", %{"frame" => icon.id})
+      render_click(view, "close_active_tincture", %{})
+      assert %{state: :live, visible: true} = by_key(view, column.key)
+
+      after_mount = drain(view)
+
+      boots = for %{boot: boot} <- replies(after_mount, ref), do: boot
+      bearers = for %{credential: bearer} <- replies(after_mount, ref), do: bearer
+      assert [_ | _] = boots
+      assert length(bearers) >= 2
+
+      events = pushes(after_mount, ref) |> Enum.map(&elem(&1, 0)) |> Enum.uniq()
+      assert "canvas_installed" in events
+      assert "frame_state" in events
+      assert "frame_bearer" in events
+
+      refute_seal(after_mount, "a push, reply or message from the shell")
+      refute_seal(render(view), "the page with no prompt open")
+
+      # A data route the column frame calls: its person's own session, read
+      # under the frame's credential.
+      column = by_key(view, column.key)
+
+      bearer =
+        for(
+          {"frame_bearer", %{frame: id, credential: b}} <- pushes(after_mount, ref),
+          id == column.id,
+          do: b
+        )
+        |> List.last()
+
+      assert is_binary(bearer)
+
+      whoami =
+        data(
+          Prima.TinctureWire.route(:action),
+          Prima.TinctureWire.request(:action, %{operation: "session.whoami", args: %{}}),
+          bearer
+        )
+
+      assert whoami.status == 200
+
+      assert {:ok, %{"user_id" => user_id}} =
+               Prima.TinctureWire.decode_answer(:action, Jason.decode!(whoami.resp_body))
+
+      assert user_id == user.user_id
+      refute_seal(whoami.resp_body, "the frame's session.whoami answer")
+
+      # The canvas's own data path, which answers its frame alone: refused
+      # for a stream it does not declare, and the refusal carries no seal.
+      [%{"credential" => canvas_bearer} | _] = boots
+
+      stream =
+        data(
+          Prima.CanvasWire.stream_path(canvas.id),
+          Prima.TinctureWire.request(:stream_open, %{stream: "mcp_servers.changes", subject: nil}),
+          canvas_bearer
+        )
+
+      assert stream.status in 400..499
+      refute_seal(stream.resp_body, "the canvas data path's answer")
+
+      # The positive control, on this very page: the column frame asks for
+      # a credential, and the layer's prompt begins with the seal.
+      frame_verb!(view, column.id, :credential, %{"name" => "weather-api"})
+      _ = render(view)
+      assert render(view) =~ ~s(data-kind="credential_entry")
+      assert String.starts_with?(description(view), "#{"quill zephyr"} #{"✈"}")
+
+      # Shown once on the page, in the description alone, and never in
+      # the canvas layer that holds the frames.
+      assert length(String.split(render(view), "quill zephyr")) == 2
+      refute_seal(canvas_html(view), "the canvas layer under an open prompt")
+
+      # Dismissed: the frame is told only that nothing was saved.
+      view |> element(~s(#system-layer-dialog button[phx-click="dismiss"])) |> render_click()
+      after_prompt = drain(view)
+      column_id = column.id
+
+      assert Enum.any?(
+               pushes(after_prompt, ref),
+               &match?({"frame_credential", %{frame: ^column_id, saved: false}}, &1)
+             )
+
+      refute_seal(after_prompt, "a push, reply or message from the shell after the prompt")
+      refute_seal(render(view), "the page once the prompt is dismissed")
+    end
+  end
 end
