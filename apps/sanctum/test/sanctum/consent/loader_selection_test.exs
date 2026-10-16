@@ -633,7 +633,10 @@ defmodule Sanctum.Consent.LoaderSelectionTest do
           status: :active
         })
 
-      set_profile!(ctx, "prof-claude-twin", status: "sideways")
+      # The row's kind outside the vocabulary: `status` is held by the
+      # table's CHECK (`profiles_status_known`), so damage reaches a read
+      # through a column the table does not hold.
+      set_profile!(ctx, "prof-claude-twin", kind: "sideways")
 
       assert {:selection, "default", {:error, {:lender_corrupt, @catalyst, "prof-claude-twin"}}} =
                Loader.row_binding(ctx, consent, row)
