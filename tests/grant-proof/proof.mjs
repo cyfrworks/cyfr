@@ -21,6 +21,9 @@
 //   reworded     a version that only rewords its need's reason: the same
 //                shape digest, and the run is admitted under the grant it
 //                had, nothing asked
+//   flows        a version that lets one more class reach the host it keeps:
+//                the person's run is asked to grant again, the sheet shows
+//                that exit with the class; granted, the head holds the flow
 //   revocation   the profile revoked in the console: the next admission is
 //                refused, timed from the revocation's answer
 //
@@ -216,16 +219,22 @@ async function main() {
 
     const egress = narrowed.rows.find((r) => r.kind === "egress");
     const storage = narrowed.rows.find((r) => r.kind === "storage");
+    // Every exit is shown with the classes that may reach it: the kept
+    // host the folder's files, the dropped host the notes.
+    const exitShown = (shown, host, cls) =>
+      shown.rows.some((r) => r.kind === "exits" && r.text.includes(host) && r.text.includes(cls));
+    const exitsShown = exitShown(first, KEPT, "files_by_grant") && exitShown(first, DROPPED, "filed");
     if (!row("prism_grant",
       sealSpoken && first.origins.length === 1 && first.origins[0] === "interactive" &&
         hostUnticked && hostSent && egress && /narrowed by you/.test(egress.text) &&
-        storage && storage.text.includes(PICKED) && /narrowed by you/.test(storage.text) &&
+        storage && storage.text.includes(PICKED) && /narrowed by you/.test(storage.text) && exitsShown &&
         head.revision === 1 && JSON.stringify(head.admitted_origins) === JSON.stringify(["interactive"]) &&
         JSON.stringify(head.domains) === JSON.stringify([KEPT]) &&
-        JSON.stringify(head.paths) === JSON.stringify([PICKED]),
-      "the prompt spoken first with the seal chosen; granted in Prism, a host unticked and the folder narrowed through the picker, interactive alone",
+        JSON.stringify(head.paths) === JSON.stringify([PICKED]) &&
+        JSON.stringify(head.flows) === JSON.stringify([`files_by_grant to ${KEPT}`]),
+      "the prompt spoken first with the seal chosen, every exit shown with its flows; granted in Prism, a host unticked and the folder narrowed through the picker, interactive alone, the dropped host's flow gone with it",
       { seal: record.seal, origins: first.origins, admits: narrowed.admits, paths: head.paths, domains: head.domains,
-        host_checkbox: record.prism_grant.host_checkbox })) return;
+        flows: head.flows, exits_shown: exitsShown, host_checkbox: record.prism_grant.host_checkbox })) return;
 
     // -----------------------------------------------------------------------
     // cli_digest
@@ -274,11 +283,32 @@ async function main() {
     const still = await ask({ op: "admit" });
     const unchanged = await ask({ op: "head" });
     record.reworded = { reworded, still, unchanged };
-    row("reworded",
+    if (!row("reworded",
       reworded.shape_digest === regranted.shape_digest && still.admitted === true &&
         still.consent_id === regranted.consent_id && unchanged.revision === 2,
       "a reworded reason changes no shape digest and asks nothing",
-      { shape: reworded.shape_digest === regranted.shape_digest, still, revision: unchanged.revision });
+      { shape: reworded.shape_digest === regranted.shape_digest, still, revision: unchanged.revision })) return;
+
+    // -----------------------------------------------------------------------
+    // flows
+    // -----------------------------------------------------------------------
+    await ask({ op: "publish", version: "1.3.0", variant: "flows" });
+    const flowed = await ask({ op: "plan" });
+    const flowAsking = await ask({ op: "admit" });
+    await openGrant(page);
+    const flowSheet = await sheet(page);
+    await confirm(page);
+    const flowHead = await ask({ op: "head" });
+    const flowAdmitted = await ask({ op: "admit" });
+    record.flows = { flowed, flowAsking, flowSheet, flowHead, flowAdmitted };
+    if (!row("flows",
+      flowed.shape_digest !== reworded.shape_digest &&
+        flowAsking.admitted === false && flowAsking.refusal === "consent_required" &&
+        exitShown(flowSheet, KEPT, "outside") && exitShown(flowSheet, KEPT, "files_by_grant") &&
+        flowHead.revision === 3 && flowHead.flows.includes(`outside to ${KEPT}`) &&
+        flowAdmitted.admitted === true && flowAdmitted.consent_id === flowHead.consent_id,
+      "a version letting one more class reach a host is asked again with that exit shown; granted, the head holds the flow",
+      { asking: flowAsking, flows: flowHead.flows, revision: flowHead.revision })) return;
 
     // -----------------------------------------------------------------------
     // revocation
@@ -301,7 +331,7 @@ async function main() {
 }
 
 main()
-  .then(() => process.exit(rows.length === 5 && rows.every((r) => r.held) ? 0 : 1))
+  .then(() => process.exit(rows.length === 6 && rows.every((r) => r.held) ? 0 : 1))
   .catch((error) => {
     console.error(error);
     process.exit(1);

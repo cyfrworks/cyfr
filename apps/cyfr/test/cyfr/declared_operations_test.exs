@@ -168,7 +168,7 @@ defmodule Cyfr.DeclaredOperationsTest do
 
       subset = Enum.find(fields, &(&1.name == "subset"))
       assert {:map, %{type: {:record, kinds}}} = subset.type
-      assert Enum.map(kinds, & &1.name) == ~w(egress storage tools limits)
+      assert Enum.map(kinds, & &1.name) == ~w(egress storage tools limits exits)
 
       {:record, limits} = Enum.find(kinds, &(&1.name == "limits")).type
 

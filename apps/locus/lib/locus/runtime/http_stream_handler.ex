@@ -345,12 +345,12 @@ defmodule Locus.Runtime.HttpStreamHandler do
   defp perform_streaming_request(request, buffer, host, component_ref, timeout_ms, limits) do
     start_time = System.monotonic_time(:millisecond)
 
-    with {:ok, request} <- HttpRequestValidation.repin(request, host),
-         {:ok, relay, ref} <- HttpHandler.relay_fetch(host, request) do
+    with {:ok, repinned} <- HttpRequestValidation.repin(request, host),
+         {:ok, relay, ref} <- HttpHandler.relay_fetch(host, repinned) do
       # The reader grants the relay credit for each chunk it hands the
       # guest, so it must know which fetch the buffer is filled from.
       update_buffer(buffer, &%{&1 | fetch: {relay, ref}})
-      collect_stream_chunks(ref, buffer, request, component_ref, start_time, timeout_ms, limits)
+      collect_stream_chunks(ref, buffer, repinned, component_ref, start_time, timeout_ms, limits)
     else
       # CYFR refused the pin, and has already recorded the denial.
       {:refused, type, message} ->

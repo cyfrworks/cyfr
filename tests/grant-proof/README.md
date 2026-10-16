@@ -6,7 +6,7 @@ runs it names. The home is one `cyfr` release on a SQLite cell,
 `home.test`, behind the harness's HTTPS front (`browser_home`). One person
 is signed in by the release fixture's door (`tests/release-boot/fixture.exs`
 `person`), and their local tincture `grant-probe` (`tinctures/grant-probe/`)
-asks for two hosts, a folder and a key it can go without. `proof.mjs`
+asks for two hosts, a folder and a key it can go without, and lets the folder's files reach one host and its notes the other. `proof.mjs`
 drives the person in Chromium; it asks `run.sh` for the home's part of a
 step through its output directory (`ask-N.json`, answered `answer-N.json`):
 publishing a version, reading a grant's head and the consent walk's plan,
@@ -32,10 +32,11 @@ the first row a later one rests on.
 
 | Step | What holds |
 |---|---|
-| `prism_grant` | the person chooses their seal from the system layer's first-use offer, whose prompt began with the line that none is chosen, and the grant prompt's accessible description in Chromium's accessibility tree then begins with that seal, with keyboard focus inside the prompt; the person grants grant-probe from its Components row, in the system layer's grant prompt: `interactive` is the one origin ticked; unticking the host `beta.grant.test` sends that host and the egress row reads narrowed; the trusted picker narrows the folder to one inside the ask (`data/probe/notes/`); the head is revision 1, admitting `interactive` alone and granting `alpha.grant.test` alone and that folder alone |
+| `prism_grant` | the person chooses their seal from the system layer's first-use offer, whose prompt began with the line that none is chosen, and the grant prompt's accessible description in Chromium's accessibility tree then begins with that seal, with keyboard focus inside the prompt; the person grants grant-probe from its Components row, in the system layer's grant prompt: `interactive` is the one origin ticked; unticking the host `beta.grant.test` sends that host and the egress row reads narrowed; the trusted picker narrows the folder to one inside the ask (`data/probe/notes/`); every exit is shown with the classes that may reach it (`alpha.grant.test` the folder's `files_by_grant`, `beta.grant.test` its `filed` notes); the head is revision 1, admitting `interactive` alone and granting `alpha.grant.test` alone, that folder alone and the flow to that host alone, the dropped host's flow gone with it |
 | `cli_digest` | the command line's preview of exactly the decisions the sheet sent answers the commit digest the head was committed under |
 | `background` | version 1.1.0 asks to keep running when hidden: the plan's shape digest moves, the loader asks the person's run to grant again (`consent_required`), and the prompt shows the background row, starting from the origins the head admits; granted, the head is revision 2 and the run is admitted under it |
 | `reworded` | version 1.2.0 only rewords its need's reason: the shape digest is the head's, the run is admitted under revision 2, and nothing is asked |
+| `flows` | version 1.3.0 lets outside material reach the host the person kept: the plan's shape digest moves, the loader asks the person's run to grant again (`consent_required`), and the prompt's exits row for that host names `outside` beside `files_by_grant`; granted, the head is revision 3, holds the flow and admits the run |
 | `revocation` | the profile revoked in the console: the first admission asked after the revocation's answer is refused, on the member that committed it |
 
 ## Pending a worker beside the release
