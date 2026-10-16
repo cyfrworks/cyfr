@@ -1355,10 +1355,11 @@ defmodule Arca.SecurityTransitions do
   expires, so a challenge anyone asks for never displaces another one the
   person is answering, nor their kit credential. Expired challenges are
   removed as a new one is held. `{:error, :closed}` when the person has
-  no open row under that restore.
+  no open row under that restore; `{:error, :not_owner}` on a member whose
+  slot was taken over.
   """
   @spec put_kit_challenge(Prima.Actor.t(), String.t(), String.t(), String.t(), DateTime.t()) ::
-          :ok | {:error, :closed | :cross_tenant | :database_error}
+          :ok | {:error, :closed | :not_owner | :cross_tenant | :database_error}
   def put_kit_challenge(
         %Prima.Actor{scope: :platform, system: true},
         user_id,

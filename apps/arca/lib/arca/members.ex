@@ -640,8 +640,9 @@ defmodule Arca.Members do
   An invitation to a group a declared restore froze — one with an active
   member whose recovery is still open
   (`Arca.SecurityTransitions.restore_frozen?/1`) — is refused, read in
-  the same transaction: it stays an invitation, and activates on a sign-in
-  after every member has recovered. The others activate.
+  the same transaction after the invitations' athanors are locked, in the
+  order `seat/3` locks one: it stays an invitation, and activates on a
+  sign-in after every member has recovered. The others activate.
   """
   @spec activate_invited(Prima.Actor.t(), String.t(), String.t(), DateTime.t()) ::
           {:ok, [String.t()]} | refusal()
@@ -670,10 +671,11 @@ defmodule Arca.Members do
 
       Arca.Repo.locking_transaction(fn ->
         :ok = hold_person(user_id)
+        locked = lock_invited_athanors(invited)
         Arca.Repo.delete_all(superseded)
 
         {_count, athanor_ids} =
-          Arca.Repo.update_all(from(m in unfrozen(invited), select: m.athanor_id),
+          Arca.Repo.update_all(from(m in unfrozen(invited, locked), select: m.athanor_id),
             set: [user_id: user_id, status: "active", email: nil, updated_at: now]
           )
 
@@ -684,11 +686,31 @@ defmodule Arca.Members do
 
   def activate_invited(%Prima.Actor{}, _user_id, _email, _now), do: {:error, :cross_tenant}
 
-  # The invitations of `invited` to a group no declared restore holds
-  # frozen, read in the activating transaction.
-  defp unfrozen(invited) do
+  # The athanors the person's invitations name, locked in id order after
+  # the person, as `seat/3` locks its athanor after its person: a seat
+  # into one of them that is still uncommitted holds that lock, so the
+  # freeze this activation reads next is read after it, never in a
+  # snapshot it then updates past.
+  defp lock_invited_athanors(invited) do
+    ids =
+      from(m in invited, where: not is_nil(m.athanor_id), select: m.athanor_id, distinct: true)
+      |> Arca.Repo.all()
+      |> Enum.sort()
+
+    from(a in Athanor, where: a.id in ^ids, order_by: [asc: a.id], select: a.id)
+    |> QueryHelpers.for_update()
+    |> Arca.Repo.all()
+  end
+
+  # The invitations of `invited` to the athanors `locked` holds, each a
+  # group no declared restore holds frozen, read in the activating
+  # transaction after those locks. An invitation to an athanor not locked
+  # here stays an invitation for a later sign-in.
+  defp unfrozen(invited, locked) do
     from(m in invited,
-      where: m.athanor_id not in subquery(Arca.SecurityTransitions.frozen_athanors())
+      where:
+        m.athanor_id in ^locked and
+          m.athanor_id not in subquery(Arca.SecurityTransitions.frozen_athanors())
     )
   end
 
@@ -732,10 +754,11 @@ defmodule Arca.Members do
 
       fenced(fn ->
         :ok = hold_person(user_id)
+        locked = lock_invited_athanors(invited)
         Arca.Repo.delete_all(superseded)
 
         {_count, athanor_ids} =
-          Arca.Repo.update_all(from(m in unfrozen(invited), select: m.athanor_id),
+          Arca.Repo.update_all(from(m in unfrozen(invited, locked), select: m.athanor_id),
             set: [user_id: user_id, status: "active", person_identifier: nil, updated_at: now]
           )
 
