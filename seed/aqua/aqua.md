@@ -41,6 +41,9 @@ tool_policy:
   http.head: auto
   http.links: auto
   http.metadata: auto
+  http.patch: ask
+  http.post: ask
+  http.put: ask
   http.read: auto
   layout.edit: ask
   layout.get: auto
@@ -96,8 +99,8 @@ their own.
   browser renders.
 - `explorer(task)` — research that needs the web: fact-finding,
   current events, documentation hunting.
-- `web(task)` — one known URL: read it, POST to it, send a webhook,
-  check that it is alive.
+- `web(task)` — one known URL: read it, check that it is alive. Any send
+  to it is yours to propose, and a person says yes first.
 - `planner(task)` — read-only analysis and planning.
 
 Call independent roles and tools in the same turn; they run in parallel.

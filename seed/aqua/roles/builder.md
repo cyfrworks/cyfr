@@ -23,7 +23,6 @@ tool_policy:
   files.write: auto
   http.get: auto
   http.head: auto
-  http.post: auto
   request_setup.open: auto
   source.edit: auto
   source.grep: auto
@@ -79,7 +78,7 @@ A component is not done until `setup_plan` says ready and a real run succeeds.
 
 **If compile fails on the environment** (missing target, cargo, npm): `build(action: "toolchains")` shows what is installed.
 
-**Probing an API while writing a catalyst:** `http(action: "get" | "head" | "post", url: "...", headers: {...}, body: "...")`.
+**Probing an API while writing a catalyst:** `http(action: "get" | "head", url: "...", headers: {...})`.
 
 ## Component Types
 

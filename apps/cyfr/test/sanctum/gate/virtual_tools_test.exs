@@ -51,9 +51,9 @@ defmodule Sanctum.Gate.VirtualToolsTest do
                 {"links", :read},
                 {"metadata", :read},
                 {"options", :read},
-                {"patch", :write},
-                {"post", :execute},
-                {"put", :write},
+                {"patch", :external},
+                {"post", :external},
+                {"put", :external},
                 {"read", :read}
               ]},
              {"request_setup", [{"open", :write}]},
@@ -61,7 +61,7 @@ defmodule Sanctum.Gate.VirtualToolsTest do
               [{"delete", :destructive}, {"list", :read}, {"read", :read}, {"write", :write}]}
            ]
 
-    assert VirtualTools.kind_for("http", "post") == :execute
+    assert VirtualTools.kind_for("http", "post") == :external
     assert VirtualTools.kind_for("files", "nope") == nil
     assert VirtualTools.kind_for("component", "read") == nil
     assert VirtualTools.kind_for("files", nil) == nil

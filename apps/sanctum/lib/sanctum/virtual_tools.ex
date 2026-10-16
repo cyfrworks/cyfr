@@ -12,7 +12,7 @@ defmodule Sanctum.VirtualTools do
   provider. Per family: its title, its description and the catalyst it
   runs on (`nil` for `request_setup`, a UI event). Per action:
 
-    * **kind** — `:read`, `:write`, `:execute` or `:destructive`;
+    * **kind** — `:read`, `:write`, `:execute`, `:destructive` or `:external`;
     * **planes** — always `[:in_chain]`: no ingress reaches a virtual
       action from outside a running formula;
     * **recovery** — `:replay_safe` on a read reviewed as safe to
@@ -31,7 +31,7 @@ defmodule Sanctum.VirtualTools do
   """
 
   @typedoc "An action's kind."
-  @type kind :: :read | :write | :execute | :destructive
+  @type kind :: :read | :write | :execute | :destructive | :external
 
   @typedoc "One action's declaration."
   @type action :: %{
@@ -117,9 +117,9 @@ defmodule Sanctum.VirtualTools do
         "get" => %{kind: :read, planes: [:in_chain]},
         "head" => %{kind: :read, planes: [:in_chain]},
         "options" => %{kind: :read, planes: [:in_chain]},
-        "put" => %{kind: :write, planes: [:in_chain]},
-        "patch" => %{kind: :write, planes: [:in_chain]},
-        "post" => %{kind: :execute, planes: [:in_chain]},
+        "put" => %{kind: :external, planes: [:in_chain]},
+        "patch" => %{kind: :external, planes: [:in_chain]},
+        "post" => %{kind: :external, planes: [:in_chain]},
         "delete" => %{kind: :destructive, planes: [:in_chain]}
       }
     },

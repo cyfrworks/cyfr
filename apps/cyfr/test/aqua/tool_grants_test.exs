@@ -7,6 +7,9 @@ defmodule Aqua.ToolGrantsTest do
   # further than the athanor it was given in.
   use ExUnit.Case, async: false
 
+  alias Aqua.Loop.Binding
+  alias Aqua.Loop.Binding.Call
+  alias Aqua.Loop.Policy
   alias Aqua.ToolGrants
 
   setup tags do
@@ -142,6 +145,32 @@ defmodule Aqua.ToolGrantsTest do
                %{"files.delete" => "ask", "files.read" => "auto"}
 
       assert ToolGrants.resolve(%{"http.*" => "auto"}, [])["http.delete"] == "ask"
+    end
+
+    test "an HTTP post, put or patch the author made automatic asks; a GET stays automatic" do
+      # Each call resolves through the binding the loop uses, and its decision
+      # reads the key the binding names, from the ceiling's own effective map.
+      args = %{"url" => "https://example.test/", "body" => "b"}
+
+      authored = %{
+        "http.get" => "auto",
+        "http.post" => "auto",
+        "http.put" => "auto",
+        "http.patch" => "auto"
+      }
+
+      effective = ToolGrants.effective(authored, [])
+      guest = ToolGrants.to_guest(effective)
+
+      for name <- ~w(http.post http.put http.patch) do
+        assert {:ok, %Call{tool: tool, action: action} = call} = Binding.resolve(name, args)
+        assert {:ask, :authored} = effective["#{tool}.#{action}"], "#{name} stayed automatic"
+        assert Policy.decide(call, guest, []) == :ask
+      end
+
+      assert {:ok, %Call{} = get} = Binding.resolve("http.get", args)
+      assert {:auto, :authored} = effective["http.get"]
+      assert Policy.decide(get, guest, []) == :auto
     end
 
     test "allowed_keys/1 is grant-derived and a deny subtracts" do
@@ -325,6 +354,52 @@ defmodule Aqua.ToolGrantsTest do
       # standing answer a destructive action should be able to take.
       assert {:ok, _} = grant(ctx, %{tool: "notes", action: "forget", effect: "deny"})
       assert {:ok, _} = grant(ctx, %{tool: "srv:thing", action: "do", effect: "deny"})
+    end
+
+    test "an HTTP post, put or patch takes no standing allow at the write, at either scope", %{
+      ctx: ctx
+    } do
+      # Their kind is external: a destination outside the home is never a
+      # standing answer. A deny stands, and a GET (a read) is granted.
+      for action <- ~w(post put patch) do
+        assert {:error, {:scope_not_permitted, :external}} =
+                 grant(ctx, %{tool: "http", action: action}),
+               "http.#{action} took a thread-scope standing allow"
+
+        assert {:error, {:scope_not_permitted, :external}} =
+                 grant(ctx, %{scope: "agent", tool: "http", action: action}),
+               "http.#{action} took an agent-scope standing allow"
+
+        assert {:ok, _} = grant(ctx, %{tool: "http", action: action, effect: "deny"})
+      end
+
+      assert {:error, {:scope_not_permitted, :destructive}} =
+               grant(ctx, %{tool: "http", action: "delete"})
+
+      assert {:ok, _} = grant(ctx, %{tool: "http", action: "get"})
+    end
+
+    test "a stored standing allow for an HTTP post stops counting at the read", %{ctx: ctx} do
+      # A row a surface wrote without `put/2`, so the write's rule never saw it.
+      # Read back, it stands for nothing: the pair is not listed, and the
+      # author's `auto` falls to `ask` at the ceiling.
+      stale = %{
+        athanor_id: ctx.athanor_id,
+        scope: "thread",
+        effect: "allow",
+        thread_id: "thread_1",
+        agent_name: "aqua",
+        tool: "http",
+        action: "post",
+        granted_by: ctx.user_id
+      }
+
+      assert {:ok, _} = Arca.ToolGrantStorage.put(stale)
+
+      rows = rows(ctx, "thread_1", ctx.athanor_id, "aqua")
+      assert [_] = rows
+      assert ToolGrants.allowed_keys(rows) == MapSet.new()
+      assert ToolGrants.resolve(%{"http.post" => "auto"}, rows) == %{"http.post" => "ask"}
     end
 
     test "an action that never stands takes no standing allow at any scope, and a deny stands",
