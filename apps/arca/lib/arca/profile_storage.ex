@@ -63,9 +63,10 @@ defmodule Arca.ProfileStorage do
   Every move `from` names must be one `Arca.StatusTransitions`'s profile
   table admits, or nothing is read and the answer is
   `{:error, :illegal_transition}`; so it is when the row holds a status
-  outside `from`. A row already at `to` is written again when `from`
-  names `to`, so a retry finishes what an earlier attempt left. A row the
-  athanor does not hold is `{:error, :not_found}`.
+  outside `from`. A row already `needs_consent` or `revoked` is written so
+  again when `from` names that status, so a retry finishes what an earlier
+  attempt left; `active → active` is refused, since `active` comes only by
+  re-consent. A row the athanor does not hold is `{:error, :not_found}`.
   """
   @spec transition(Prima.Actor.t(), String.t(), :any | String.t() | [String.t()], String.t()) ::
           :ok | {:error, :no_athanor | :not_found | :illegal_transition | :database_error}

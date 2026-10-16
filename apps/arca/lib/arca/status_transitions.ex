@@ -21,8 +21,9 @@ defmodule Arca.StatusTransitions do
   from `active` or `needs_consent`. It is `active` again only from
   `needs_consent`, by the revision that re-consents it. Nothing leaves
   `revoked`: a revoked profile keeps its history and a new one takes its
-  identity. Writing the status a row already holds is admitted wherever
-  the table lists it, so a retry finishes what an earlier attempt left.
+  identity. A profile already `needs_consent` or `revoked` may be written
+  so again, so a retry finishes what an earlier attempt left; an `active`
+  one may not, since `active` comes only by re-consent.
   """
 
   @credentials %{

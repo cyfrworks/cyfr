@@ -18,7 +18,8 @@ defmodule Arca.Schemas.Profile do
   alias Prima.Authority.RootSelect
 
   @kinds ~w(owner public)
-  @statuses ~w(active needs_consent revoked)
+  # The status vocabulary is the profile table's in `Arca.StatusTransitions`.
+  @statuses Arca.StatusTransitions.statuses(:profiles)
   @required [:id, :athanor_id, :source_ref, :kind, :label, :status]
   @identity [:athanor_id, :source_ref, :label, :kind]
 
@@ -35,6 +36,10 @@ defmodule Arca.Schemas.Profile do
 
     timestamps(type: :utc_datetime_usec)
   end
+
+  @doc "Every status a profile row can carry (`Arca.StatusTransitions.statuses(:profiles)`)."
+  @spec statuses() :: [String.t()]
+  def statuses, do: @statuses
 
   @doc """
   A profile row about to be inserted.

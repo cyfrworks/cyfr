@@ -1254,6 +1254,39 @@ defmodule Opus.ProviderTest do
       assert running_result.count == 0
     end
 
+    test "paused is a filter the gate admits, answering only the athanor's paused rows" do
+      ctx = Sanctum.TestContext.local() |> Sanctum.TestContext.via(:api)
+      now = NaiveDateTime.utc_now()
+      [paused, running, foreign] = for _ <- 1..3, do: Prima.UUID7.execution_id()
+
+      reference =
+        Jason.encode!(%{type: "reagent", publisher: "local", name: "filter", version: "1.0.0"})
+
+      for {id, status, athanor} <- [
+            {paused, "paused", ctx.athanor_id},
+            {running, "running", ctx.athanor_id},
+            {foreign, "paused", ctx.athanor_id <> "_other"}
+          ] do
+        {1, _} =
+          Arca.Repo.insert_all("executions", [
+            %{
+              id: id,
+              athanor_id: athanor,
+              user_id: ctx.user_id,
+              reference: reference,
+              started_at: now,
+              status: status
+            }
+          ])
+      end
+
+      assert {:ok, %{count: 1, executions: [%{execution_id: ^paused, status: "paused"}]}} =
+               Sanctum.Gate.call_external("execution", ctx, %{
+                 "action" => "list",
+                 "status" => "paused"
+               })
+    end
+
     test "respects limit parameter", %{ctx: ctx, ref: ref} do
       # Run multiple executions (all will fail)
       for i <- 1..3 do

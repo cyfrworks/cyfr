@@ -8,8 +8,9 @@ defmodule Arca.ProfileStorageTest do
   mapping, never raised. A source's live profiles are revoked together, in
   the actor's athanor alone. A status moves only as the profile table of
   `Arca.StatusTransitions` admits, in one conditional write: a revoked
-  profile never comes back, and a write of the status a row already holds
-  succeeds wherever the table lists it. The rows are written through
+  profile never comes back, a `needs_consent` or `revoked` profile written
+  so again succeeds, and `active → active` is refused, since `active` comes
+  only by re-consent. The rows are written through
   `Arca.Test.Writers.put_profile/1`.
   """
   use ExUnit.Case, async: false
