@@ -7,7 +7,8 @@ defmodule Opus.FacadeTest do
   an entry added without a roster change fails here. The lease keeper's
   entries answer as `Opus.LeaseWatch` does; `list_by_request/3` and
   `count_by_request/2` are the request log's correlation reads, the
-  executions a request id ran (`Sanctum.PolicyLog`'s surface read).
+  executions a request id ran, which `PrismWeb.ActivitiesLive` calls
+  under its context beside `Sanctum.PolicyLog`'s own reads.
   """
 
   use ExUnit.Case, async: true
