@@ -135,6 +135,29 @@ defmodule Sanctum.Consent.ShapeDiffTest do
              Enum.find(diff, &(&1.capability == "storage.actions"))
   end
 
+  test "flows are covered too: a release that lets a class reach an exit names that flow", %{
+    ctx: ctx
+  } do
+    publish_live!(ctx, "1.0.9", %{
+      "egress" => %{"domains" => ["a.example"]},
+      "flows" => [
+        %{"from" => "filed", "to" => "a.example"},
+        %{"from" => "vault_disclosed", "to" => "a.example"}
+      ]
+    })
+
+    granted =
+      blob(%{
+        "egress" => %{"domains" => ["a.example"]},
+        "flows" => [%{"from" => "filed", "to" => "a.example"}]
+      })
+
+    diff = ShapeDiff.compute(ctx, @source, granted)
+
+    assert %{change: :widened, added: ["vault_disclosed to a.example"], removed: []} =
+             Enum.find(diff, &(&1.capability == "flows"))
+  end
+
   test "a host the ask still covers is never reported as dropped", %{ctx: ctx} do
     # The ask moved to a wildcard: the plain host the person was granted is
     # still inside it, as the egress pin reads a domain grant.
