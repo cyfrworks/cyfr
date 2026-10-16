@@ -141,7 +141,7 @@ defmodule Opus.Host.ToolFlowTest do
     {:ok, digest} = Sanctum.ToolServerDigest.from_server(server)
 
     %{
-      "tools" => ["execution.logs"],
+      "tools" => ["execution.logs", "notes.read", "component.categories"],
       "tool_servers" => [
         %{"server_digest" => digest, "server_name" => @server, "tool_patterns" => ["probe__echo"]}
       ],
@@ -356,5 +356,54 @@ defmodule Opus.Host.ToolFlowTest do
 
     assert Source.outside(nil) in ledger(reader)
     assert {:error, :flow} = pin(reader, "https://api.example.test/send")
+  end
+
+  test "a note's own provenance reaches the guest that reads it: a note kept with vault-disclosed material is never merely filed",
+       %{ctx: ctx, server: server} do
+    {:ok, _} =
+      Aqua.Notes.keep(ctx, "key-material", "the key is k",
+        sources: [Source.new(:vault_disclosed)]
+      )
+
+    fixture = formula!(ctx, authority(server, []))
+
+    assert %{"ok" => _} = tool(fixture, "notes", %{"action" => "read", "name" => "key-material"})
+
+    assert Source.new(:filed) in ledger(fixture)
+    assert Source.new(:vault_disclosed) in ledger(fixture)
+  end
+
+  test "a catalog read that declares no sources is outside material",
+       %{ctx: ctx, server: server} do
+    fixture = formula!(ctx, authority(server, []))
+    assert %{"ok" => _} = tool(fixture, "component", %{"action" => "categories"})
+    assert ledger(fixture) == [Source.outside(nil)]
+  end
+
+  test "a child's restricted read is its parent's before the read returns, outlives the child, and decides the parent's next send",
+       %{ctx: ctx, server: server} do
+    fixture = formula!(ctx, authority(server, []))
+    child = admit_child!(fixture)
+    :ok = Arca.put(Sanctum.Context.actor(fixture.ctx), ["data", "secret.txt"], "restricted")
+
+    assert ledger(fixture) == []
+
+    assert %{"ok" => %{"content" => _}} =
+             AttemptFixtures.call(child, "storage", %{
+               "action" => "read",
+               "path" => "data/secret.txt"
+             })
+
+    # The parent holds it now, before the child has handed it anything.
+    assert Source.new(:files_by_grant) in ledger(fixture)
+
+    # The child ends; what its read put in the parent's ledger stays.
+    assert %{"ok" => _} =
+             AttemptFixtures.call(child, "fail", %{
+               "outcome" => AttemptFixtures.outcome(child, "failed", %{"error" => "gone"})
+             })
+
+    assert Source.new(:files_by_grant) in ledger(fixture)
+    assert {:error, :flow} = pin(fixture, "https://api.example.test/send")
   end
 end
