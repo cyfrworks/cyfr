@@ -1670,6 +1670,44 @@ describe("the glass's page, for a person whose keys are at another home", () => 
   const fragmentOf = (certificate) => "#certificate=" + b64url(new TextEncoder().encode(JSON.stringify(certificate)))
   const challengeMessage = (challenge) => ({data: JSON.stringify({protocol: device.protocol, type: "challenge", challenge})})
 
+  test("a link opened on the page already showing the code, for a person whose keys are elsewhere, says to certify there", async () => {
+    const page = await mountPage({
+      hash: "",
+      replies: {
+        prepared: () => ({}),
+        pair_start: ({device_key}) => ({challenge: {...certs.challenges.pair, device_key}, certify})
+      }
+    })
+    try {
+      assert.equal(page.el.find("glass-status").getAttribute("data-state"), "unpaired")
+      const prepared = await page.store.loadPrepared()
+
+      globalThis.location.hash = "#code=UjcQhGOiIAu_9xjWI7A-Fw"
+      await page.hook.onHash()
+
+      assert.deepEqual(page.pushed.map((p) => p.event), ["prepared", "pair_start"])
+      assert.equal((await page.store.loadPending()).keyDigest, prepared.keyDigest)
+      assert.ok(page.el.find("glass-certify"))
+      assert.equal(page.el.find("glass-status").getAttribute("data-state"), "certify")
+    } finally {
+      page.restore()
+    }
+
+    // A refused pairing says so, and the page reads unpaired again.
+    const refused = await mountPage({
+      hash: "",
+      replies: {prepared: () => ({}), pair_start: () => ({error: "This device is not the one the pairing was approved for"})}
+    })
+    try {
+      globalThis.location.hash = "#code=UjcQhGOiIAu_9xjWI7A-Fw"
+      await refused.hook.onHash()
+      assert.ok(refused.el.find("glass-error"))
+      assert.equal(refused.el.find("glass-status").getAttribute("data-state"), "unpaired")
+    } finally {
+      refused.restore()
+    }
+  })
+
   test("the pairing keeps its code and key for the invitation's life, asks for their home, and goes there to certify", async () => {
     const keys = await generateKeyPair(subtle)
     const deviceKey = await publicKeyB64(keys.publicKey, subtle)

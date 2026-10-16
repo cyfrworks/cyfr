@@ -806,6 +806,7 @@ export default {
   // code to try again.
   pairRefused(text) {
     this.pairError = text
+    this.status = null
     this.drawGlass(this.glass)
   },
 
@@ -1053,9 +1054,15 @@ export function clearForms(dialog) {
 }
 
 // What the glass says of its connection.
+// The page's own states of a pairing it is carrying out.
+const PAIRING_STATES = ["pairing", "certify"]
+
 export function glassStatus(glass, drawn) {
   switch (glass && glass.status) {
+    // A pairing under way on a glass that holds nothing yet, as one begun
+    // from a link opened on the page already showing its code, says so.
     case "unpaired":
+      if (drawn && PAIRING_STATES.includes(drawn.state)) return drawn
       return {state: "unpaired", text: "This device is not paired. Approve the code shown here on a device of yours signed in to this home, then open the pairing link it gives you here."}
     case "connecting":
       return {state: "connecting", text: "Connecting…"}
