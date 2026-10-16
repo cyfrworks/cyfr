@@ -54,9 +54,9 @@ defmodule Sanctum.Auth.DeviceFlow do
     }
   }
 
-  # The device-flow providers: the sign-in providers `Sanctum.Atoms` lists
+  # The device-flow providers: `Prima.SignInProviders.device_flow/0`'s
   # that have endpoints above, in its order.
-  @known_providers for provider <- Sanctum.Atoms.providers(),
+  @known_providers for provider <- Prima.SignInProviders.device_flow(),
                        provider in Enum.map(Map.keys(@provider_urls), &Atom.to_string/1),
                        do: provider
 
@@ -708,9 +708,8 @@ defmodule Sanctum.Auth.DeviceFlow do
   defp get_client_secret(:google), do: Application.get_env(:sanctum, :google_client_secret)
 
   @doc """
-  The device-flow providers this module knows how to speak to: the
-  sign-in providers of `Sanctum.Atoms.providers/0` that have device-flow
-  endpoints. The web surfaces and the CLI validate against it.
+  The device-flow providers this module knows how to speak to: those of
+  `Prima.SignInProviders.device_flow/0` that have device-flow endpoints.
 
   Knowing a provider is not the same as being able to use it. For the
   subset the operator has actually supplied credentials for, which is what

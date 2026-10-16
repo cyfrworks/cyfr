@@ -14,7 +14,7 @@ defmodule Sanctum.Gate.LiteralDriftTest do
   the catalog as it is. Argument fields and their presence are generated from the same
   declarations; renamed fields fail the Go build. The credential kinds and
   the sign-in providers the CLI reads are rendered into the same file from
-  `Prima.CredentialKinds` and Sanctum's rosters, so a roster that moves
+  `Prima.CredentialKinds` and `Prima.SignInProviders`, so a roster that moves
   makes the render stale.
 
   The one library site that dispatches by name across an app boundary
@@ -74,7 +74,13 @@ defmodule Sanctum.Gate.LiteralDriftTest do
     # moved, against the file that kept the old list, is drift.
     operations = Mix.Tasks.Ops.Gen.Cli.operations()
     rosters = Mix.Tasks.Ops.Gen.Cli.rosters()
-    assert length(rosters) == 4
+
+    assert Enum.map(rosters, &elem(&1, 2)) == [
+             Prima.CredentialKinds.all(),
+             Prima.CredentialKinds.instance(),
+             Prima.SignInProviders.all(),
+             Prima.SignInProviders.device_flow()
+           ]
 
     for {name, comment, [_ | _] = values} <- rosters do
       assert text =~ "var #{name} = []string{#{Enum.map_join(values, ", ", &~s("#{&1}"))}}"

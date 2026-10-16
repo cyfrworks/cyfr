@@ -6,9 +6,10 @@ defmodule Cyfr.RosterLiteralTest do
   The credential kinds and the sign-in providers each have one owner, and
   no library source spells them again.
 
-  `Prima.CredentialKinds` owns the kinds (`all/0`, `instance/0`),
-  `Sanctum.Atoms.providers/0` the sign-in providers, and
-  `Sanctum.Auth.DeviceFlow.providers/0` is a filter over it. A second
+  `Prima.CredentialKinds` owns the kinds (`all/0`, `instance/0`) and
+  `Prima.SignInProviders` the sign-in providers (`all/0`, `device_flow/0`);
+  the identity domain's `Sanctum.Atoms.providers/0` and
+  `Sanctum.Auth.DeviceFlow.providers/0` derive from it. A second
   spelling is a roster that stays behind when the owner moves: a surface
   offering a kind the vault refuses, or an operation enum refusing a
   provider sign-in accepts.
@@ -50,7 +51,10 @@ defmodule Cyfr.RosterLiteralTest do
       "credential kinds",
       "instance credential kinds"
     ],
-    "apps/sanctum/lib/sanctum/atoms.ex" => ["sign-in providers"]
+    "apps/prima/lib/prima/sign_in_providers.ex" => [
+      "sign-in providers",
+      "device-flow providers"
+    ]
   }
 
   # `{file, function, roster}`: a spelling that is its own policy, not the
@@ -65,6 +69,8 @@ defmodule Cyfr.RosterLiteralTest do
   test "the owners answer the rosters" do
     assert Prima.CredentialKinds.all() == @kinds
     assert Prima.CredentialKinds.instance() == @instance_kinds
+    assert Prima.SignInProviders.all() == @sign_in
+    assert Prima.SignInProviders.device_flow() == @device_flow
     assert Sanctum.Atoms.providers() == @sign_in
     assert Sanctum.Auth.DeviceFlow.providers() == @device_flow
   end
@@ -83,8 +89,7 @@ defmodule Cyfr.RosterLiteralTest do
     assert offenders == [],
            """
            These sources spell a roster its owner declares; read the owner instead
-           (Prima.CredentialKinds, Sanctum.Atoms.providers/0,
-           Sanctum.Auth.DeviceFlow.providers/0):
+           (Prima.CredentialKinds, Prima.SignInProviders):
 
            #{Enum.join(offenders, "\n")}
            """
@@ -129,14 +134,17 @@ defmodule Cyfr.RosterLiteralTest do
     end
 
     # An owner spells its roster and nothing else.
-    assert refused(
-             "apps/sanctum/lib/sanctum/atoms.ex",
-             module_with(~S'@p ~w(github google oidcc)')
-           ) ==
-             []
+    owner = "apps/prima/lib/prima/sign_in_providers.ex"
+    assert refused(owner, module_with(~S'@p ~w(github google oidcc)')) == []
+    assert refused(owner, module_with(~S'@d ~w(github google)')) == []
+    assert [_] = refused(owner, module_with(~S'@k ~w(api_key bundle)'))
 
+    # The identity domain derives its rosters and spells none.
     assert [_] =
-             refused("apps/sanctum/lib/sanctum/atoms.ex", module_with(~S'@k ~w(api_key bundle)'))
+             refused(
+               "apps/sanctum/lib/sanctum/atoms.ex",
+               module_with(~S'@p ~w(github google oidcc)')
+             )
 
     # The commit's no-scopes policy is accepted where it is, and the same
     # spelling anywhere else in the file is a roster.

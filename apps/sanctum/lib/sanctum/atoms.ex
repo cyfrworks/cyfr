@@ -41,8 +41,8 @@ defmodule Sanctum.Atoms do
   @spec person_permissions() :: [atom()]
   def person_permissions, do: @person_permissions
 
-  # Pre-create atoms for the supported sign-in providers.
-  @known_providers ~w(github google oidcc)
+  # Pre-create atoms for the sign-in providers, `Prima.SignInProviders`'.
+  @known_providers Prima.SignInProviders.all()
 
   @doc "The sign-in provider vocabulary as strings."
   @spec providers() :: [String.t()]

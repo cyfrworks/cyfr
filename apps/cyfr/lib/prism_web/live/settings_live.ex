@@ -95,7 +95,7 @@ defmodule PrismWeb.SettingsLive do
 
   @default_link_poll_s 5
   # The doors a device flow links.
-  @device_flow_providers DeviceFlow.providers()
+  @device_flow_providers Prima.SignInProviders.device_flow()
 
   # The days of use the Use card reads for each entry, today included.
   @instance_days 7

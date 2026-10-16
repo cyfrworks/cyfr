@@ -51,7 +51,7 @@ defmodule Compendium.Providers.Registry do
             Arg.new("provider", :string,
               required: true,
               description: "OAuth provider (for probe / claim_personal)",
-              enum: Sanctum.Auth.DeviceFlow.providers()
+              enum: Prima.SignInProviders.device_flow()
             ),
             Arg.new("access_token", :string,
               required: true,
@@ -78,7 +78,7 @@ defmodule Compendium.Providers.Registry do
             Arg.new("provider", :string,
               required: true,
               description: "OAuth provider (for probe / claim_personal)",
-              enum: Sanctum.Auth.DeviceFlow.providers()
+              enum: Prima.SignInProviders.device_flow()
             ),
             Arg.new("access_token", :string,
               required: true,
@@ -352,7 +352,7 @@ defmodule Compendium.Providers.Registry do
             Arg.new("provider", :string,
               required: true,
               description: "Identity provider",
-              enum: Sanctum.Atoms.providers()
+              enum: Prima.SignInProviders.all()
             ),
             Arg.new("access_token", :string,
               description:
@@ -378,7 +378,7 @@ defmodule Compendium.Providers.Registry do
             Arg.new("provider", :string,
               required: true,
               description: "Identity provider",
-              enum: Sanctum.Atoms.providers()
+              enum: Prima.SignInProviders.all()
             ),
             Arg.new("access_token", :string,
               description:
