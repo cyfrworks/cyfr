@@ -20,7 +20,12 @@
 # line; the merge's exit is ignored, so a low figure never fails the run and
 # a failing test still does. The merge is skipped, and says why, when
 # apps/*/cover/ holds an export of another run. Every exit path removes the
-# run's own exports.
+# run's own exports. `mix test.coverage` also writes a page per module under
+# the checkout's cover/ (git- and docker-ignored), replacing the last run's.
+# The option is for measuring on demand, not for the gate: a cover-compiled
+# module has no beam on disk (`:code.which/1` answers `cover_compiled`), so
+# the tests that read a module's beam (Prima.EffectsTest's compiled view,
+# Prima.VersionTest, Prima.Test.BeamsTest, Cyfr.SeedOfferTest) fail under it.
 #
 # Stdout begins `_START=<pid>` and ends `_EXIT=<pid> <status>`, unless the
 # heavy-check that runs it (HEAVY_CHECK_HELD) writes them. The status is 0
