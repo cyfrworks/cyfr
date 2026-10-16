@@ -469,6 +469,22 @@ defmodule Cyfr.Telemetry.Catalog do
       note: "a person approved or declined an agent's proposed action"
     },
 
+    # ——— the boot's seed offer ———
+    [:cyfr, :seed_offer, :completed] => %{
+      consumers: [:operator],
+      note:
+        "the boot's seed offer ran to its end under the cell's seed_release claim, " <>
+          "after the endpoint started: readiness does not wait for it, so this is " <>
+          "where an operator learns it finished"
+    },
+    [:cyfr, :seed_offer, :aborted] => %{
+      consumers: [:operator],
+      note:
+        "the boot's seed offer ended without finishing — the claim unreadable, the " <>
+          "work raised or died, a renewal lost, or a stop — by its reason alone: " <>
+          "the next boot or sign-in tries again, so it is an alarm and not a failure"
+    },
+
     # ——— the bus ———
     [:cyfr, :bus, :publish_refused] => %{
       consumers: [:operator],

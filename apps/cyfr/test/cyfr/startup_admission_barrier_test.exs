@@ -139,12 +139,13 @@ defmodule Cyfr.StartupAdmissionBarrierTest do
   @web [Emissary.Web.TaskSupervisor, CyfrWeb.Endpoint]
 
   # The order a stop of the whole tree stops every lasting child in: the
-  # web tier, the console, the schedule pair, then the domains in reverse
-  # (the host API listener before the attempt tree it reaches), and the
-  # foundations down to the cell.
+  # web tier, the seed offer, the console, the schedule pair, then the
+  # domains in reverse (the host API listener before the attempt tree it
+  # reaches), and the foundations down to the cell.
   @stop_order [
     CyfrWeb.Endpoint,
     Emissary.Web.TaskSupervisor,
+    Cyfr.SeedOffer,
     Prism.TaskSupervisor,
     Prism.TinctureRegistry,
     Opus.Schedules.Scheduler,
@@ -191,6 +192,7 @@ defmodule Cyfr.StartupAdmissionBarrierTest do
 
   # The children that hold a claim or a slot row while they run.
   @claim_holders [
+    Cyfr.SeedOffer,
     Cyfr.Cell,
     Cyfr.RetentionScheduler,
     Opus.WorkerWatch,
@@ -198,13 +200,14 @@ defmodule Cyfr.StartupAdmissionBarrierTest do
   ]
 
   # The leaves the product starts no lasting process for: the one-shot
-  # checks and offers answer `:ignore`, and the recovery task exits once it
-  # has run. Their stand-ins record the start and leave no process either.
+  # checks answer `:ignore`, and the recovery task exits once it has run.
+  # Their stand-ins record the start and leave no process either. The seed
+  # offer is not among them: it runs after its start has returned, holding
+  # its claim until it ends or is stopped.
   @no_process [
     Arca.SchemaFingerprint.Check,
     Cyfr.KeyringFingerprint.Check,
-    Aqua.RunnerRecovery,
-    Cyfr.SeedOffer
+    Aqua.RunnerRecovery
   ]
 
   # The children a rest_for_one restart from `Cyfr.Cell` starts before the

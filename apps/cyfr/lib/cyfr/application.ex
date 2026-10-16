@@ -581,8 +581,10 @@ defmodule Cyfr.Application do
   end
 
   # Last in the infra tier, and optional: offers new seed media to the
-  # athanors that exist. Its failure is logged and never stops the boot; the
-  # sandboxed test boot omits it with the gate's runtime switch.
+  # athanors that exist. Its start returns before the offer runs, so the
+  # web tier does not wait for it; its failure is logged and never stops
+  # the boot, and as a temporary child it restarts nothing. The sandboxed
+  # test boot omits it with the gate's runtime switch.
   defp seed_offer do
     if boot_work_enabled?(),
       do: [
