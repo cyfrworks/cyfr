@@ -481,6 +481,19 @@ defmodule Arca.PendingConfirmations do
     Enum.sort(refs || [])
   end
 
+  @doc false
+  @spec delete_all!() :: [String.t()]
+  # A declared restore's delete, in its transaction
+  # (`Arca.SecurityTransitions.restore/1`): every record, open or ended,
+  # goes, so no confirmation given before the backup was taken proves a
+  # change after it. Answers the refs deleted.
+  # arca:unscoped-ok a declared restore deletes every pending confirmation of the server.
+  # arca:db-raise-ok a transaction step: its caller rescues around the transaction.
+  def delete_all! do
+    {_count, refs} = Arca.Repo.delete_all(from(c in PendingConfirmation, select: c.ref))
+    Enum.sort(refs || [])
+  end
+
   # ---- internals -------------------------------------------------------------
 
   # A new record, always: none that stands is answered, whoever opened it.

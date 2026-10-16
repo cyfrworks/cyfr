@@ -265,4 +265,144 @@ defmodule Arca.WebhookStorageTest do
       assert length(list_b) == 1
     end
   end
+
+  # A declared restore suspends every webhook; these put one in that state
+  # the way the transition leaves it.
+  defp suspend!(athanor_id, name) do
+    import Ecto.Query
+
+    {1, _} =
+      from(w in Arca.Schemas.Webhook, where: w.athanor_id == ^athanor_id and w.name == ^name)
+      |> Arca.Repo.update_all(set: [suspended: true])
+
+    {:ok, hook} = WebhookStorage.get_by_name(Prima.Actor.in_athanor(athanor_id), name)
+    hook
+  end
+
+  defp stored(id), do: Arca.Repo.get!(Arca.Schemas.Webhook, id)
+
+  describe "a suspended webhook" do
+    test "is no ingress lookup's, and is listed with its flag", %{athanor_id: athanor_id} do
+      attrs = wh_attrs("held", athanor_id)
+      :ok = WebhookStorage.create_webhook(attrs)
+      hook = suspend!(athanor_id, "held")
+
+      assert hook.suspended == true
+      assert {:error, :not_found} = WebhookStorage.get_by_slug(attrs.slug)
+
+      assert {:ok, [%{name: "held", suspended: true}]} =
+               WebhookStorage.list_webhooks(Prima.Actor.in_athanor(athanor_id))
+    end
+  end
+
+  describe "reenable/4" do
+    setup %{athanor_id: athanor_id} do
+      attrs = wh_attrs("held", athanor_id)
+      :ok = WebhookStorage.create_webhook(attrs)
+
+      %{
+        attrs: attrs,
+        hook: suspend!(athanor_id, "held"),
+        actor: Prima.Actor.in_athanor(athanor_id)
+      }
+    end
+
+    test "writes the person's suspended webhook back after verify agrees, without its secrets",
+         %{attrs: attrs, hook: hook, actor: actor} do
+      parent = self()
+
+      verify = fn row ->
+        send(parent, {:verified, row})
+        :ok
+      end
+
+      assert {:ok, reenabled} =
+               WebhookStorage.reenable(actor, "test_user", hook.id, verify: verify)
+
+      assert %{suspended: false, enabled: true} = reenabled
+      assert reenabled.id == hook.id
+      refute Map.has_key?(reenabled, :secret_encrypted)
+      refute Map.has_key?(reenabled, :previous_secret_encrypted)
+
+      assert_received {:verified, %{suspended: true} = seen}
+      refute Map.has_key?(seen, :secret_encrypted)
+
+      assert %{suspended: false} = stored(hook.id)
+      assert {:ok, %{name: "held"}} = WebhookStorage.get_by_slug(attrs.slug)
+    end
+
+    test "a verify refusal rolls back and is the answer", %{
+      attrs: attrs,
+      hook: hook,
+      actor: actor
+    } do
+      assert {:error, :not_standing} =
+               WebhookStorage.reenable(actor, "test_user", hook.id,
+                 verify: fn _ -> {:error, :not_standing} end
+               )
+
+      assert %{suspended: true} = stored(hook.id)
+      assert {:error, :not_found} = WebhookStorage.get_by_slug(attrs.slug)
+    end
+
+    test "another person's webhook, another athanor's or an unknown id is not found", %{
+      hook: hook,
+      actor: actor
+    } do
+      never = fn _ -> flunk("verify asked for a webhook that is not the person's") end
+
+      assert {:error, :not_found} =
+               WebhookStorage.reenable(actor, "someone_else", hook.id, verify: never)
+
+      assert {:error, :not_found} =
+               WebhookStorage.reenable(Prima.Actor.in_athanor("ath_other"), "test_user", hook.id,
+                 verify: never
+               )
+
+      assert {:error, :not_found} =
+               WebhookStorage.reenable(actor, "test_user", "whk_unknown", verify: never)
+
+      assert {:error, :no_athanor} =
+               WebhookStorage.reenable(Prima.Actor.system(), "test_user", hook.id, verify: never)
+
+      assert %{suspended: true} = stored(hook.id)
+    end
+
+    test "a disabled webhook is never revived, and a standing one is not suspended", %{
+      athanor_id: athanor_id,
+      hook: hook,
+      actor: actor
+    } do
+      never = fn _ -> flunk("verify asked for a webhook that cannot be re-enabled") end
+      :ok = WebhookStorage.set_disabled(actor, "held")
+
+      assert {:error, :revoked} =
+               WebhookStorage.reenable(actor, "test_user", hook.id, verify: never)
+
+      assert %{enabled: false, suspended: true} = stored(hook.id)
+
+      :ok = WebhookStorage.create_webhook(wh_attrs("live", athanor_id))
+      {:ok, live} = WebhookStorage.get_by_name(actor, "live")
+
+      assert {:error, :not_suspended} =
+               WebhookStorage.reenable(actor, "test_user", live.id, verify: never)
+    end
+  end
+
+  describe "get_created_webhook/3" do
+    test "reads the person's own webhook in any state, without secrets, and no one else's", %{
+      athanor_id: athanor_id
+    } do
+      :ok = WebhookStorage.create_webhook(wh_attrs("mine", athanor_id))
+      actor = Prima.Actor.in_athanor(athanor_id)
+      {:ok, hook} = WebhookStorage.get_by_name(actor, "mine")
+      :ok = WebhookStorage.set_disabled(actor, "mine")
+
+      assert {:ok, %{enabled: false, suspended: false} = read} =
+               WebhookStorage.get_created_webhook(actor, "test_user", hook.id)
+
+      refute Map.has_key?(read, :secret_encrypted)
+      assert {:error, :not_found} = WebhookStorage.get_created_webhook(actor, "other", hook.id)
+    end
+  end
 end

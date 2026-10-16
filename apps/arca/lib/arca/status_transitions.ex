@@ -24,6 +24,12 @@ defmodule Arca.StatusTransitions do
   identity. A profile already `needs_consent` or `revoked` may be written
   so again, so a retry finishes what an earlier attempt left; an `active`
   one may not, since `active` comes only by re-consent.
+
+  A declared restore (`Arca.SecurityTransitions.restore/1`) moves each
+  domain's `active` rows once, by the move `restored/1` names and the
+  table admits: a credential to `needs_reauth`, until it is rotated at its
+  destination, and a profile to `needs_consent`, until it is re-consented.
+  A row in any other status keeps it.
   """
 
   @credentials %{
@@ -36,6 +42,11 @@ defmodule Arca.StatusTransitions do
     "revoked" => ~w(active needs_consent revoked),
     "needs_consent" => ~w(active needs_consent),
     "active" => ~w(needs_consent)
+  }
+
+  @restored %{
+    credentials: {"active", "needs_reauth"},
+    profiles: {"active", "needs_consent"}
   }
 
   @statuses %{
@@ -57,4 +68,17 @@ defmodule Arca.StatusTransitions do
   @spec from(domain(), term()) :: {:ok, [String.t()]} | :error
   def from(:credentials, status), do: Map.fetch(@credentials, status)
   def from(:profiles, status), do: Map.fetch(@profiles, status)
+
+  @doc """
+  The move a declared restore makes on `domain`'s rows, `{from, to}`: the
+  one status it moves and the status it writes, a move the domain's table
+  admits.
+  """
+  @spec restored(domain()) :: {String.t(), String.t()}
+  def restored(domain) do
+    {from, to} = restored = Map.fetch!(@restored, domain)
+    {:ok, admitted} = from(domain, to)
+    true = from in admitted
+    restored
+  end
 end

@@ -17,7 +17,7 @@ defmodule Arca.SecurityTransitions.Projection do
   @athanor ~w(id kind roster name owner_user_id created_by status archived_at security_generation)a
   @membership ~w(id user_id email athanor_id scope status)a
   @session ~w(id user_id athanor_id expires_at)a
-  @api_key ~w(id name athanor_id created_by revoked ip_allowlist)a
+  @api_key ~w(id name athanor_id created_by revoked suspended ip_allowlist)a
 
   @spec user(User.t() | nil) :: map() | nil
   def user(row), do: narrowed(row, User, @user)

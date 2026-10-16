@@ -633,6 +633,12 @@ defmodule Arca.Members do
   that person and athanor. An invitation already activated or already
   withdrawn is not there to find, so neither produces a second
   membership.
+
+  An invitation to a group a declared restore froze — one with an active
+  member whose recovery is still open
+  (`Arca.SecurityTransitions.restore_frozen?/1`) — is refused, read in
+  the same transaction: it stays an invitation, and activates on a sign-in
+  after every member has recovered. The others activate.
   """
   @spec activate_invited(Prima.Actor.t(), String.t(), String.t(), DateTime.t()) ::
           {:ok, [String.t()]} | refusal()
@@ -664,7 +670,7 @@ defmodule Arca.Members do
         Arca.Repo.delete_all(superseded)
 
         {_count, athanor_ids} =
-          Arca.Repo.update_all(from(m in invited, select: m.athanor_id),
+          Arca.Repo.update_all(from(m in unfrozen(invited), select: m.athanor_id),
             set: [user_id: user_id, status: "active", email: nil, updated_at: now]
           )
 
@@ -675,11 +681,21 @@ defmodule Arca.Members do
 
   def activate_invited(%Prima.Actor{}, _user_id, _email, _now), do: {:error, :cross_tenant}
 
+  # The invitations of `invited` to a group no declared restore holds
+  # frozen, read in the activating transaction.
+  defp unfrozen(invited) do
+    from(m in invited,
+      where: m.athanor_id not in subquery(Arca.SecurityTransitions.frozen_athanors())
+    )
+  end
+
   @doc """
   `activate_invited/4` for the invitations held for a person identifier
   (`per_…`): each becomes this person's active membership, the identifier
   consumed, in one transaction with the person's row locked first, and an
-  invitation for an athanor the person already sits in is dropped.
+  invitation for an athanor the person already sits in is dropped. An
+  invitation to a group a declared restore froze stays an invitation, as
+  `activate_invited/4` leaves one.
   Seating a person widens what they reach, so the transaction first proves
   this member still owns its slot (`{:error, :not_owner}` otherwise).
   """
@@ -716,7 +732,7 @@ defmodule Arca.Members do
         Arca.Repo.delete_all(superseded)
 
         {_count, athanor_ids} =
-          Arca.Repo.update_all(from(m in invited, select: m.athanor_id),
+          Arca.Repo.update_all(from(m in unfrozen(invited), select: m.athanor_id),
             set: [user_id: user_id, status: "active", person_identifier: nil, updated_at: now]
           )
 

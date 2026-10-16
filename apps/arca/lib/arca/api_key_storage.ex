@@ -18,6 +18,13 @@ defmodule Arca.ApiKeyStorage do
   Writes use `insert_all`/`update_all` and trust their caller — they run no
   changeset validation, so callers must validate input first.
 
+  A declared restore suspends every unrevoked key (`suspended`): a
+  suspended key authenticates nothing until `reenable/4` writes it back,
+  and is never rotated. Reads that answer a key's attributes return the
+  flag; the read a key-authenticated context makes of its own key
+  (`get_key_by_id/2`) answers only a key that is neither revoked nor
+  suspended.
+
   Keys are stored as SHA-256 hashes for indexed lookups.
   Key metadata (name, type, scope, rate_limit, ip_allowlist) is stored as plaintext.
 
@@ -46,6 +53,7 @@ defmodule Arca.ApiKeyStorage do
     :rate_limit,
     :ip_allowlist,
     :revoked,
+    :suspended,
     :created_by,
     :rotated_at,
     :athanor_id,
@@ -164,8 +172,9 @@ defmodule Arca.ApiKeyStorage do
   def get_key(%Prima.Actor{}, _name), do: {:error, :no_athanor}
 
   @doc """
-  Get an unrevoked key row by its id within an athanor — the lookup a
-  key-authenticated context uses to read its own key's attributes.
+  Get an unrevoked, unsuspended key row by its id within an athanor —
+  the lookup a key-authenticated context uses to read its own key's
+  attributes.
   """
   @spec get_key_by_id(Prima.Actor.t(), String.t()) ::
           {:ok, map()} | {:error, :no_athanor | :not_found | :database_error}
@@ -173,7 +182,7 @@ defmodule Arca.ApiKeyStorage do
       when is_binary(athanor_id) and athanor_id != "" and is_binary(id) do
     Arca.Repo.Errors.with_db_rescue("ApiKeyStorage.get_key_by_id", fn ->
       query =
-        from(k in ApiKey, where: k.id == ^id and k.revoked == false)
+        from(k in ApiKey, where: k.id == ^id and k.revoked == false and k.suspended == false)
         |> where_athanor(athanor_id)
 
       case Arca.Repo.one(query) do
@@ -185,6 +194,33 @@ defmodule Arca.ApiKeyStorage do
   end
 
   def get_key_by_id(%Prima.Actor{}, _id), do: {:error, :no_athanor}
+
+  @doc """
+  The key `id` that the person `user_id` created in the actor's athanor,
+  whatever its state, revoked and suspended alike: the row a change to
+  one of the person's own keys names before it is asked.
+  """
+  @spec get_created_key(Prima.Actor.t(), String.t(), String.t()) ::
+          {:ok, map()} | {:error, :no_athanor | :not_found | :database_error}
+  def get_created_key(%Prima.Actor{athanor_id: athanor_id}, user_id, id)
+      when is_binary(athanor_id) and athanor_id != "" and is_binary(user_id) and is_binary(id) do
+    Arca.Repo.Errors.with_db_rescue("ApiKeyStorage.get_created_key", fn ->
+      query =
+        from(k in ApiKey,
+          where: k.id == ^id and k.created_by == ^user_id,
+          select: map(k, ^@returned_fields)
+        )
+        |> where_athanor(athanor_id)
+
+      case Arca.Repo.one(query) do
+        nil -> {:error, :not_found}
+        row -> {:ok, row}
+      end
+    end)
+    |> Arca.Data.project()
+  end
+
+  def get_created_key(%Prima.Actor{}, _user_id, _id), do: {:error, :no_athanor}
 
   @doc """
   Get a key by its hash. Used for validate() lookups.
@@ -218,7 +254,8 @@ defmodule Arca.ApiKeyStorage do
   end
 
   @doc """
-  List all non-revoked keys of an athanor, sorted by inserted_at.
+  List all non-revoked keys of an athanor, sorted by inserted_at, a
+  suspended one among them with its flag.
   """
   @spec list_keys(Prima.Actor.t()) :: {:ok, [map()]} | {:error, :no_athanor | :database_error}
   def list_keys(%Prima.Actor{athanor_id: athanor_id})
@@ -286,7 +323,8 @@ defmodule Arca.ApiKeyStorage do
   is a new credential: anything bound to the old row's id (a tincture
   token derived from it) is retired with it, and no row that follows can
   take that id back. A member that no longer owns its slot rotates
-  nothing (`{:error, :not_owner}`).
+  nothing (`{:error, :not_owner}`), and a suspended key is not rotated
+  (`{:error, :suspended}`).
   """
   @spec rotate_key(Prima.Actor.t(), String.t(), binary(), String.t(), keyword()) ::
           :ok | {:error, term()}
@@ -321,6 +359,11 @@ defmodule Arca.ApiKeyStorage do
     case current do
       nil ->
         {:error, :not_found}
+
+      # A rotation's successor would stand unsuspended: a suspended key is
+      # re-enabled first (`reenable/4`), under the proof that asks.
+      %ApiKey{suspended: true} ->
+        {:error, :suspended}
 
       %ApiKey{} = old ->
         # Retired before its successor is written: the name is unique among
@@ -357,5 +400,75 @@ defmodule Arca.ApiKeyStorage do
 
         {:ok, :rotated}
     end
+  end
+
+  @doc """
+  Re-enable the key `key_id` that a declared restore suspended, of the
+  person `user_id` who created it, in the actor's athanor, in one locking
+  transaction: the key's row is locked first, then `verify:` is asked
+  with a plain map of it (never its hash), and only on `:ok` is the row
+  written back unsuspended. `verify:` takes whatever the proof locks after
+  the key: the person's restore row, the kit's grant. Any other answer
+  rolls the transaction back and is the refusal.
+
+  A key that is not this person's in this athanor is `:not_found`; a
+  revoked one is `:revoked` and is never revived; one that is not
+  suspended is `:not_suspended`. Answers the re-enabled row.
+  """
+  @spec reenable(Prima.Actor.t(), String.t(), String.t(), keyword()) ::
+          {:ok, map()}
+          | {:error,
+             :no_athanor | :not_found | :revoked | :not_suspended | :database_error | term()}
+  def reenable(%Prima.Actor{athanor_id: athanor_id}, user_id, key_id, opts)
+      when is_binary(athanor_id) and athanor_id != "" and is_binary(user_id) and
+             is_binary(key_id) and is_list(opts) do
+    verify = Keyword.fetch!(opts, :verify)
+
+    Arca.Repo.Errors.with_db_rescue("ApiKeyStorage.reenable", fn ->
+      Arca.Repo.locking_transaction(fn ->
+        athanor_id |> reenable_row(user_id, key_id, verify) |> Arca.Repo.committed()
+      end)
+    end)
+    |> Arca.Data.project()
+  end
+
+  def reenable(%Prima.Actor{}, _user_id, _key_id, _opts), do: {:error, :no_athanor}
+
+  defp reenable_row(athanor_id, user_id, key_id, verify) do
+    locked =
+      from(k in ApiKey, where: k.id == ^key_id and k.created_by == ^user_id)
+      |> where_athanor(athanor_id)
+      |> Arca.QueryHelpers.for_update()
+      |> Arca.Repo.one()
+
+    case locked do
+      nil ->
+        {:error, :not_found}
+
+      %ApiKey{revoked: true} ->
+        {:error, :revoked}
+
+      %ApiKey{suspended: false} ->
+        {:error, :not_suspended}
+
+      %ApiKey{} = row ->
+        case verify.(Map.take(row, @returned_fields)) do
+          :ok -> {:ok, unsuspend(row, athanor_id)}
+          {:error, reason} -> {:error, reason}
+          refusal -> {:error, refusal}
+        end
+    end
+  end
+
+  defp unsuspend(%ApiKey{} = row, athanor_id) do
+    now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+
+    {1, _} =
+      from(k in ApiKey,
+        where: k.id == ^row.id and k.athanor_id == ^athanor_id and k.suspended == true
+      )
+      |> Arca.Repo.update_all(set: [suspended: false, updated_at: now])
+
+    row |> Map.merge(%{suspended: false, updated_at: now}) |> Map.take(@returned_fields)
   end
 end

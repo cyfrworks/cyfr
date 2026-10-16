@@ -15,10 +15,13 @@ defmodule Arca.Schemas.PairedClient do
 
   @type t :: %__MODULE__{}
 
-  @standings ~w(active revoked)
+  @standings ~w(active suspended revoked)
   @source_kinds ~w(session api_key device_cert)
 
-  @doc "The standings a paired client may hold; `revoked` is terminal."
+  @doc """
+  The standings a paired client may hold: `suspended` while a declared
+  restore holds it until its person re-enables it; `revoked` is terminal.
+  """
   @spec standings() :: [String.t()]
   def standings, do: @standings
 

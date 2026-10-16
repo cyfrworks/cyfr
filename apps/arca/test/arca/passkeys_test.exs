@@ -10,7 +10,12 @@ defmodule Arca.PasskeysTest do
   remote person's credential names its `recovery_epoch` and a head whose
   recovery replaced it revokes it, while an ordinary rotation keeps it;
   every active credential marks the person's first-method flag for good; a
-  revocation voids the confirmations the credential confirmed.
+  revocation voids the confirmations the credential confirmed. A suspended
+  credential, a declared restore's, records no use and is listed only when
+  its state is asked for; it is re-enabled only from `suspended`, under
+  its verifier, by an owner of the slot, which closes its person's restore
+  and no one else's, as an administrator's activation does; a revoked one
+  is never re-enabled.
   """
 
   # Takes the cell's slot, which is process-wide; each case restores it.
@@ -153,6 +158,40 @@ defmodule Arca.PasskeysTest do
 
   defp as(person), do: %Prima.Actor{user_id: person.id}
 
+  defp suspend!(passkey) do
+    {1, _} =
+      Arca.Repo.update_all(from(p in Arca.Schemas.Passkey, where: p.id == ^passkey.id),
+        set: [state: "suspended"]
+      )
+
+    passkey
+  end
+
+  # The person's open row of a declared restore, as the transition writes it.
+  defp recovering!(user_id) do
+    restore_id = Prima.UUID7.generate_id("rst")
+
+    Arca.Repo.insert!(%Arca.Schemas.RestorePerson{
+      restore_id: restore_id,
+      user_id: user_id,
+      open: true
+    })
+
+    restore_id
+  end
+
+  defp open?(user_id, restore_id) do
+    Arca.Repo.one(
+      from(r in Arca.Schemas.RestorePerson,
+        where: r.user_id == ^user_id and r.restore_id == ^restore_id,
+        select: r.open
+      )
+    )
+  end
+
+  defp state(id),
+    do: Arca.Repo.one(from(p in Arca.Schemas.Passkey, where: p.id == ^id, select: p.state))
+
   describe "registration" do
     test "an active credential marks the first method, and the exception is then spent" do
       person = local!()
@@ -238,6 +277,104 @@ defmodule Arca.PasskeysTest do
     end
   end
 
+  describe "a declared restore's suspension" do
+    test "a suspended credential records no use, and is listed only when its state is asked for" do
+      person = local!()
+      {:ok, active} = Passkeys.register(as(person), attrs(person, %{}))
+      {:ok, suspended} = Passkeys.register(as(person), attrs(person, %{}))
+      suspend!(suspended)
+
+      assert {:error, :stale} = Passkeys.record_use(as(person), suspended.id, 0, 1)
+
+      assert {:ok, [%{id: active_id}]} = Passkeys.list(as(person), person.id)
+      assert active_id == active.id
+
+      assert {:ok, [%{id: suspended_id, state: "suspended"}]} =
+               Passkeys.list(as(person), person.id, state: :suspended)
+
+      assert suspended_id == suspended.id
+      assert {:ok, all} = Passkeys.list(as(person), person.id, state: :all)
+      assert length(all) == 2
+
+      # The sign-in lookup finds it, and the caller decides it proves nothing.
+      assert {:ok, %{state: "suspended"}} =
+               Passkeys.get_by_credential(server(), suspended.rp_id, suspended.credential_id)
+    end
+
+    test "reenable/4 moves it active under its verifier and closes its person's restore alone" do
+      person = local!()
+      bystander = local!()
+      {:ok, passkey} = Passkeys.register(as(person), attrs(person, %{}))
+      suspend!(passkey)
+      restore_id = recovering!(person.id)
+      bystanders = recovering!(bystander.id)
+      test = self()
+
+      verify = fn row ->
+        send(test, {:verified, row})
+        :ok
+      end
+
+      assert {:ok, %{state: "active", closed_restore_ids: [^restore_id]} = row} =
+               Passkeys.reenable(server(), person.id, passkey.id, verify: verify)
+
+      refute is_struct(row)
+      assert row.id == passkey.id
+      assert_received {:verified, %{state: "suspended"} = seen}
+      refute is_struct(seen)
+
+      assert state(passkey.id) == "active"
+      assert open?(person.id, restore_id) == false
+      assert open?(bystander.id, bystanders) == true
+
+      assert {:error, :not_suspended} =
+               Passkeys.reenable(server(), person.id, passkey.id, verify: verify)
+    end
+
+    test "a verifier's refusal, a revoked credential or a stale owner changes nothing" do
+      person = local!()
+      {:ok, passkey} = Passkeys.register(as(person), attrs(person, %{}))
+      suspend!(passkey)
+      restore_id = recovering!(person.id)
+      ok = fn _row -> :ok end
+
+      assert {:error, :not_this_proof} =
+               Passkeys.reenable(server(), person.id, passkey.id,
+                 verify: fn _row -> {:error, :not_this_proof} end
+               )
+
+      assert {:error, :cross_tenant} =
+               Passkeys.reenable(as(person), person.id, passkey.id, verify: ok)
+
+      assert {:error, :not_found} =
+               Passkeys.reenable(server(), local!().id, passkey.id, verify: ok)
+
+      assert {:error, :not_found} =
+               Passkeys.reenable(server(), person.id, "psk_absent", verify: ok)
+
+      # A suspended credential may still be revoked, and is then never revived.
+      {:ok, gone} = Passkeys.register(as(person), attrs(person, %{}))
+      suspend!(gone)
+      {:ok, %{passkey: %{state: "revoked"}}} = Passkeys.revoke(as(person), gone.id)
+      assert {:error, :revoked} = Passkeys.reenable(server(), person.id, gone.id, verify: ok)
+      assert state(gone.id) == "revoked"
+
+      {:ok, slot} = Arca.ControlPlane.member_slot()
+
+      {1, _} =
+        Arca.Repo.update_all(
+          from(l in Arca.Schemas.CellLease, where: l.node == ^slot.node),
+          set: [owner: "someone-else", generation: slot.generation + 1]
+        )
+
+      assert {:error, :not_owner} =
+               Passkeys.reenable(server(), person.id, passkey.id, verify: ok)
+
+      assert state(passkey.id) == "suspended"
+      assert open?(person.id, restore_id) == true
+    end
+  end
+
   describe "activation" do
     setup do
       identifier = "per_" <> Prima.Digest.sha256_hex("g-#{System.unique_integer()}")
@@ -283,6 +420,7 @@ defmodule Arca.PasskeysTest do
 
       assert active.state == "active"
       assert active.admin_confirmation_id == "cnf_admin"
+      assert active.closed_restore_ids == []
 
       assert {:error, :not_pending} =
                Passkeys.activate(server(), pending.id,
@@ -290,6 +428,36 @@ defmodule Arca.PasskeysTest do
                  identity_key_epoch: epoch,
                  identity_recovery_epoch: epoch
                )
+    end
+
+    test "the administrator's activation closes the person's restore, and no one else's", %{
+      person: person,
+      pending: pending,
+      epoch: epoch
+    } do
+      restore_id = recovering!(person.id)
+      bystander = local!()
+      bystanders = recovering!(bystander.id)
+
+      assert {:error, :refused} =
+               Passkeys.activate(server(), pending.id,
+                 registration_digest: pending.registration_digest,
+                 identity_key_epoch: epoch,
+                 identity_recovery_epoch: epoch,
+                 also: fn _row -> {:error, :refused} end
+               )
+
+      assert open?(person.id, restore_id) == true
+
+      assert {:ok, %{state: "active", closed_restore_ids: [^restore_id]}} =
+               Passkeys.activate(server(), pending.id,
+                 registration_digest: pending.registration_digest,
+                 identity_key_epoch: epoch,
+                 identity_recovery_epoch: epoch
+               )
+
+      assert open?(person.id, restore_id) == false
+      assert open?(bystander.id, bystanders) == true
     end
 
     test "an authorization named under a key epoch the head has moved past activates nothing",

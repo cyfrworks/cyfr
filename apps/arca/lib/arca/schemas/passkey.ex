@@ -14,9 +14,12 @@ defmodule Arca.Schemas.Passkey do
 
   @type t :: %__MODULE__{}
 
-  @states ~w(pending active revoked)
+  @states ~w(pending active suspended revoked)
 
-  @doc "The standings a passkey may hold; `revoked` is terminal."
+  @doc """
+  The standings a passkey may hold: `suspended` while a declared restore
+  holds it until its person re-enables it; `revoked` is terminal.
+  """
   @spec states() :: [String.t()]
   def states, do: @states
 

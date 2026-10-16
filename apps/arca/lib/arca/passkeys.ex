@@ -6,7 +6,7 @@ defmodule Arca.Passkeys do
   A person's WebAuthn credentials at this relying home
   (`Arca.Schemas.Passkey`): person-scoped, never an athanor's, each pinned
   to the home's RP ID, with its public key, signature counter and standing
-  `pending | active | revoked`.
+  `pending | active | suspended | revoked`.
 
   Arca verifies no assertion: the auth domain does, and records here what
   it decided.
@@ -34,15 +34,22 @@ defmodule Arca.Passkeys do
       lock), and a recovery that moves that epoch revokes it
       (`revoke_recovery_epoch!/2`); an ordinary rotation does not. A local
       person's names none.
+    * **Suspension** is a declared restore's (`Arca.SecurityTransitions`):
+      a suspended credential asserts nothing, since only an active one
+      records a use, and only `reenable/4` makes it active again, closing
+      its person's restore in the same transaction. An administrator's
+      activation of a pending credential (`activate/3`) closes it too.
     * **Revocation** is terminal, and voids the pending confirmations the
       credential confirmed (`Arca.PendingConfirmations`). It locks the
       person's row first, as unlinking a door does, and runs the caller's
-      `also:` check under that lock.
+      `also:` check under that lock. A suspended credential may be
+      revoked; a revoked one is never re-enabled.
 
   Every function takes the actor first: a person reaches their own
   credentials, the platform's own actor any. Registration and activation
-  prove first that this member still owns its slot (`:not_owner`); a
-  revocation only narrows and is never refused for ownership.
+  prove first that this member still owns its slot (`:not_owner`), and so
+  does re-enabling; a revocation only narrows and is never refused for
+  ownership.
   """
 
   import Ecto.Query
@@ -93,6 +100,11 @@ defmodule Arca.Passkeys do
   (an epoch the cached head no longer names), `:first_method_used`,
   `:not_found`, `:not_owner`, `:cross_tenant`, `:database_error`, or the
   closure's reason.
+
+  The activation is the administrator's, so once the closure admits it
+  the person's open restore closes in the same transaction
+  (`Arca.SecurityTransitions.close_restore!/1`); the row answered carries
+  `closed_restore_ids`, the restores it closed.
   """
   @spec activate(Prima.Actor.t(), String.t(), keyword()) :: {:ok, row()} | {:error, term()}
   def activate(%Prima.Actor{} = actor, id, opts) when is_binary(id) and is_list(opts) do
@@ -118,9 +130,10 @@ defmodule Arca.Passkeys do
   end
 
   @doc """
-  The live credential (`pending` or `active`) with `credential_id` at
-  `rp_id`: the sign-in lookup, made before any session exists, so only the
-  platform's own actor makes it.
+  The live credential (`pending`, `active` or `suspended`) with
+  `credential_id` at `rp_id`: the sign-in lookup, made before any session
+  exists, so only the platform's own actor makes it. Which state proves
+  anything is the caller's decision: only `active` does.
   """
   @spec get_by_credential(Prima.Actor.t(), String.t(), String.t()) ::
           {:ok, row()} | {:error, :not_found | :cross_tenant | :database_error}
@@ -140,7 +153,7 @@ defmodule Arca.Passkeys do
 
   @doc """
   The person's credentials, oldest first, narrowed by `state:` (`:active`,
-  the default, `:pending`, `:revoked` or `:all`).
+  the default, `:pending`, `:suspended`, `:revoked` or `:all`).
   """
   @spec list(Prima.Actor.t(), String.t(), keyword()) ::
           {:ok, [row()]} | {:error, :cross_tenant | :database_error}
@@ -219,6 +232,44 @@ defmodule Arca.Passkeys do
     end)
     |> Arca.Data.project()
   end
+
+  @doc """
+  Re-enable the suspended credential `id` of the person `user_id`, in one
+  locking transaction that checks first that this member still owns its
+  slot: the person's row locked first, as every change to their ways in
+  locks it, then the credential, then `opts[:verify]` handed it as a plain
+  map (anything but `:ok` rolls back with that reason), then the
+  credential written `active`, and the person's open restore closed
+  (`Arca.SecurityTransitions.close_restore!/1`), since a re-enabled method
+  ends their recovery. Only the platform's own actor re-enables: the proof
+  is decided above, and may come before any session (a recovery kit).
+  Answers the row with `closed_restore_ids`, the restores it closed.
+
+  Refusals: `:not_found` (no such credential of that person), `:revoked`
+  (never revived), `:not_suspended`, `:cross_tenant`, `:not_owner`,
+  `:database_error`, or the verifier's reason.
+  """
+  @spec reenable(Prima.Actor.t(), String.t(), String.t(), keyword()) ::
+          {:ok, row()}
+          | {:error,
+             :not_found
+             | :revoked
+             | :not_suspended
+             | :cross_tenant
+             | :not_owner
+             | :database_error
+             | term()}
+  def reenable(%Prima.Actor{scope: :platform, system: true}, user_id, id, opts)
+      when is_binary(user_id) and is_binary(id) and is_list(opts) do
+    verify = Keyword.fetch!(opts, :verify)
+
+    Arca.Repo.Errors.with_db_rescue("Arca.Passkeys.reenable", fn ->
+      fenced(fn -> reenable_in(user_id, id, verify) end)
+    end)
+    |> Arca.Data.project()
+  end
+
+  def reenable(%Prima.Actor{}, _user_id, _id, _opts), do: {:error, :cross_tenant}
 
   @doc false
   @spec revoke_all(Ecto.Queryable.t()) :: [String.t()]
@@ -333,8 +384,10 @@ defmodule Arca.Passkeys do
              :ok <- moved_active(passkey, now, Keyword.get(opts, :admin_confirmation_id)) do
           activated = Arca.Repo.get!(Passkey, passkey.id)
 
+          # The administrator's activation, once admitted, ends the
+          # person's recovery from a declared restore.
           case also.(Arca.Data.project(activated)) do
-            :ok -> {:ok, activated}
+            :ok -> {:ok, closed_with(activated, close_restore(passkey.user_id))}
             {:error, _reason} = refusal -> refusal
           end
         end
@@ -342,6 +395,39 @@ defmodule Arca.Passkeys do
   end
 
   defp activate_in(%Passkey{}, _opts), do: {:error, :not_pending}
+
+  # The person first, then the credential, then the person's restore row
+  # (`close_restore!/1`): the order every re-enabling write takes.
+  defp reenable_in(user_id, id, verify) do
+    _locked = Arca.DirectoryHeads.lock_person!(user_id)
+
+    from(p in Passkey, where: p.id == ^id and p.user_id == ^user_id)
+    |> Arca.QueryHelpers.for_update()
+    |> Arca.Repo.one()
+    |> reenabled(verify)
+  end
+
+  defp reenabled(nil, _verify), do: {:error, :not_found}
+  defp reenabled(%Passkey{state: "revoked"}, _verify), do: {:error, :revoked}
+
+  defp reenabled(%Passkey{state: "suspended"} = passkey, verify) do
+    with :ok <- verified(verify.(Arca.Data.project(passkey))),
+         {:ok, active} <-
+           passkey
+           |> Ecto.Changeset.change(state: "active", updated_at: Arca.ServerMetaStorage.now!())
+           |> Arca.Repo.update() do
+      {:ok, closed_with(active, close_restore(active.user_id))}
+    end
+  end
+
+  defp reenabled(%Passkey{}, _verify), do: {:error, :not_suspended}
+
+  defp verified(:ok), do: :ok
+  defp verified({:error, reason}), do: {:error, reason}
+  defp verified(other), do: {:error, other}
+
+  defp closed_with(passkey, closed),
+    do: passkey |> Arca.Data.project() |> Map.put(:closed_restore_ids, closed)
 
   # The person's row first, as every change to a person's ways in locks
   # it, then the credential read again under that lock, so `was` is the
@@ -398,9 +484,11 @@ defmodule Arca.Passkeys do
 
   defp person(%Prima.Actor{}, _user_id), do: {:error, :cross_tenant}
 
+  defp close_restore(user_id), do: Arca.SecurityTransitions.close_restore!(user_id)
+
   defp by_state(query, :all), do: query
 
-  defp by_state(query, state) when state in [:active, :pending, :revoked],
+  defp by_state(query, state) when state in [:active, :pending, :suspended, :revoked],
     do: where(query, [p], p.state == ^Atom.to_string(state))
 
   defp found(nil), do: {:error, :not_found}

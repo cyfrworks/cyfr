@@ -19,6 +19,12 @@ defmodule Arca.WebhookStorage do
   carried on the row and surfaced into the execution context at invoke time.
 
   Soft-disable via `enabled: false` (revoke). Audit trail is preserved.
+
+  A declared restore suspends every webhook (`suspended`): a suspended
+  webhook is invisible to the ingress lookup (`get_by_slug/1`), so its
+  deliveries are refused as an unknown slug's are and its secret is never
+  opened, until `reenable/4` writes it back. A disabled webhook is never
+  re-enabled.
   """
 
   require Logger
@@ -33,6 +39,23 @@ defmodule Arca.WebhookStorage do
   import Arca.QueryHelpers, only: [where_athanor: 2]
 
   alias Arca.Schemas.Webhook
+
+  # The columns a re-enable reads and answers: never the sealed secrets.
+  @public_fields [
+    :id,
+    :name,
+    :slug,
+    :target_ref,
+    :description,
+    :enabled,
+    :suspended,
+    :created_by,
+    :profile_id,
+    :rotated_at,
+    :athanor_id,
+    :inserted_at,
+    :updated_at
+  ]
 
   @doc """
   Insert a new webhook row.
@@ -97,7 +120,8 @@ defmodule Arca.WebhookStorage do
   @doc """
   Look up a webhook by slug. Tenant-agnostic by design — the public
   `/hooks/:slug` route has no tenant context. Returns the row including
-  `enabled`; callers MUST gate on `enabled == true`.
+  `enabled`; callers MUST gate on `enabled == true`. A suspended webhook
+  is `{:error, :not_found}`.
 
   > #### Caution {: .warning}
   >
@@ -110,7 +134,7 @@ defmodule Arca.WebhookStorage do
   # athanor is read off the row and every later step is scoped by it.
   def get_by_slug(slug) when is_binary(slug) do
     Arca.Repo.Errors.with_db_rescue("WebhookStorage.get_by_slug", fn ->
-      query = from(w in Webhook, where: w.slug == ^slug, limit: 1)
+      query = from(w in Webhook, where: w.slug == ^slug and w.suspended == false, limit: 1)
 
       case Arca.Repo.one(query) do
         nil -> {:error, :not_found}
@@ -143,7 +167,8 @@ defmodule Arca.WebhookStorage do
   def get_by_name(%Prima.Actor{}, _name), do: {:error, :no_athanor}
 
   @doc """
-  List an athanor's enabled webhooks, ordered by inserted_at.
+  List an athanor's enabled webhooks, ordered by inserted_at, a suspended
+  one among them with its flag.
 
   Returns the public-view columns only — the encrypted secret columns are
   deliberately not loaded here (the only caller redacts them anyway; the verify
@@ -168,6 +193,7 @@ defmodule Arca.WebhookStorage do
             :input_template,
             :description,
             :enabled,
+            :suspended,
             :rate_limit,
             :rotated_at,
             :inserted_at,
@@ -357,5 +383,103 @@ defmodule Arca.WebhookStorage do
           {_, _} -> {:ok, :rotated}
         end
     end
+  end
+
+  @doc """
+  The webhook `id` that the person `user_id` created in the actor's
+  athanor, whatever its state, disabled and suspended alike, without its
+  secrets: the row a change to one of the person's own webhooks names
+  before it is asked.
+  """
+  @spec get_created_webhook(Prima.Actor.t(), String.t(), String.t()) ::
+          {:ok, map()} | {:error, :no_athanor | :not_found | :database_error}
+  def get_created_webhook(%Prima.Actor{athanor_id: athanor_id}, user_id, id)
+      when is_binary(athanor_id) and athanor_id != "" and is_binary(user_id) and is_binary(id) do
+    Arca.Repo.Errors.with_db_rescue("WebhookStorage.get_created_webhook", fn ->
+      query =
+        from(w in Webhook,
+          where: w.id == ^id and w.created_by == ^user_id,
+          select: map(w, ^@public_fields)
+        )
+        |> where_athanor(athanor_id)
+
+      case Arca.Repo.one(query) do
+        nil -> {:error, :not_found}
+        row -> {:ok, row}
+      end
+    end)
+    |> Arca.Data.project()
+  end
+
+  def get_created_webhook(%Prima.Actor{}, _user_id, _id), do: {:error, :no_athanor}
+
+  @doc """
+  Re-enable the webhook `webhook_id` that a declared restore suspended, of
+  the person `user_id` who created it, in the actor's athanor, in one
+  locking transaction: the webhook's row is locked first, then `verify:`
+  is asked with a plain map of it (never its secrets), and only on `:ok`
+  is the row written back unsuspended. `verify:` takes whatever the proof
+  locks after the webhook: the person's restore row, the kit's grant. Any
+  other answer rolls the transaction back and is the refusal.
+
+  A webhook that is not this person's in this athanor is `:not_found`; a
+  disabled one is `:revoked` and is never revived; one that is not
+  suspended is `:not_suspended`. Answers the re-enabled row.
+  """
+  @spec reenable(Prima.Actor.t(), String.t(), String.t(), keyword()) ::
+          {:ok, map()}
+          | {:error,
+             :no_athanor | :not_found | :revoked | :not_suspended | :database_error | term()}
+  def reenable(%Prima.Actor{athanor_id: athanor_id}, user_id, webhook_id, opts)
+      when is_binary(athanor_id) and athanor_id != "" and is_binary(user_id) and
+             is_binary(webhook_id) and is_list(opts) do
+    verify = Keyword.fetch!(opts, :verify)
+
+    Arca.Repo.Errors.with_db_rescue("WebhookStorage.reenable", fn ->
+      Arca.Repo.locking_transaction(fn ->
+        athanor_id |> reenable_row(user_id, webhook_id, verify) |> Arca.Repo.committed()
+      end)
+    end)
+    |> Arca.Data.project()
+  end
+
+  def reenable(%Prima.Actor{}, _user_id, _webhook_id, _opts), do: {:error, :no_athanor}
+
+  defp reenable_row(athanor_id, user_id, webhook_id, verify) do
+    locked =
+      from(w in Webhook, where: w.id == ^webhook_id and w.created_by == ^user_id)
+      |> where_athanor(athanor_id)
+      |> Arca.QueryHelpers.for_update()
+      |> Arca.Repo.one()
+
+    case locked do
+      nil ->
+        {:error, :not_found}
+
+      %Webhook{enabled: false} ->
+        {:error, :revoked}
+
+      %Webhook{suspended: false} ->
+        {:error, :not_suspended}
+
+      %Webhook{} = row ->
+        case verify.(Map.take(row, @public_fields)) do
+          :ok -> {:ok, unsuspend(row, athanor_id)}
+          {:error, reason} -> {:error, reason}
+          refusal -> {:error, refusal}
+        end
+    end
+  end
+
+  defp unsuspend(%Webhook{} = row, athanor_id) do
+    now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+
+    {1, _} =
+      from(w in Webhook,
+        where: w.id == ^row.id and w.athanor_id == ^athanor_id and w.suspended == true
+      )
+      |> Arca.Repo.update_all(set: [suspended: false, updated_at: now])
+
+    row |> Map.merge(%{suspended: false, updated_at: now}) |> Map.take(@public_fields)
   end
 end

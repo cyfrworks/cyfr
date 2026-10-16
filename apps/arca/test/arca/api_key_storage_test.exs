@@ -180,4 +180,158 @@ defmodule Arca.ApiKeyStorageTest do
     # Arca.R6AthanorLessFailClosedTest and that domain's API key tests), not
     # by a tenant-scoped storage lookup.
   end
+
+  # A declared restore suspends every unrevoked key; these put a key in
+  # that state the way the transition leaves it.
+  defp suspend!(athanor_id, name) do
+    import Ecto.Query
+
+    {1, _} =
+      from(k in Arca.Schemas.ApiKey,
+        where: k.athanor_id == ^athanor_id and k.name == ^name and k.revoked == false
+      )
+      |> Arca.Repo.update_all(set: [suspended: true])
+
+    {:ok, key} = ApiKeyStorage.get_key(Prima.Actor.in_athanor(athanor_id), name)
+    key
+  end
+
+  defp stored(id), do: Arca.Repo.get!(Arca.Schemas.ApiKey, id)
+
+  describe "a suspended key" do
+    test "is read with its flag, and is not the key a key-authenticated context reads", %{
+      athanor_id: athanor_id
+    } do
+      attrs = key_attrs("held", athanor_id)
+      :ok = ApiKeyStorage.create_key(attrs, Arca.Test.Actor.issuance())
+      actor = Prima.Actor.in_athanor(athanor_id)
+      key = suspend!(athanor_id, "held")
+
+      assert key.suspended == true
+      assert {:ok, %{suspended: true}} = ApiKeyStorage.get_key_by_hash(attrs.key_hash)
+      assert {:ok, [%{name: "held", suspended: true}]} = ApiKeyStorage.list_keys(actor)
+      assert {:error, :not_found} = ApiKeyStorage.get_key_by_id(actor, key.id)
+    end
+
+    test "is not rotated, so no successor stands unsuspended", %{athanor_id: athanor_id} do
+      :ok = ApiKeyStorage.create_key(key_attrs("held", athanor_id), Arca.Test.Actor.issuance())
+      key = suspend!(athanor_id, "held")
+      new_hash = :crypto.hash(:sha256, "successor")
+
+      assert {:error, :suspended} =
+               ApiKeyStorage.rotate_key(
+                 Prima.Actor.in_athanor(athanor_id),
+                 "held",
+                 new_hash,
+                 "pfx",
+                 Arca.Test.Actor.issuance()
+               )
+
+      assert {:error, :not_found} = ApiKeyStorage.get_key_by_hash(new_hash)
+      assert %{suspended: true, revoked: false} = stored(key.id)
+    end
+  end
+
+  describe "reenable/4" do
+    setup %{athanor_id: athanor_id} do
+      :ok = ApiKeyStorage.create_key(key_attrs("held", athanor_id), Arca.Test.Actor.issuance())
+      %{key: suspend!(athanor_id, "held"), actor: Prima.Actor.in_athanor(athanor_id)}
+    end
+
+    test "writes the person's suspended key back after verify agrees, with the row it saw", %{
+      key: key,
+      actor: actor
+    } do
+      parent = self()
+
+      verify = fn row ->
+        send(parent, {:verified, row})
+        :ok
+      end
+
+      assert {:ok, reenabled} = ApiKeyStorage.reenable(actor, "test_user", key.id, verify: verify)
+      assert %{id: id, suspended: false, revoked: false} = reenabled
+      assert id == key.id
+      refute Map.has_key?(reenabled, :key_hash)
+
+      assert_received {:verified, %{id: ^id, suspended: true} = seen}
+      refute Map.has_key?(seen, :key_hash)
+
+      assert %{suspended: false, revoked: false} = stored(key.id)
+      assert {:ok, %{id: ^id}} = ApiKeyStorage.get_key_by_id(actor, key.id)
+    end
+
+    test "a verify refusal rolls back and is the answer", %{key: key, actor: actor} do
+      assert {:error, :not_standing} =
+               ApiKeyStorage.reenable(actor, "test_user", key.id,
+                 verify: fn _ -> {:error, :not_standing} end
+               )
+
+      assert {:error, :refused} =
+               ApiKeyStorage.reenable(actor, "test_user", key.id, verify: fn _ -> :refused end)
+
+      assert %{suspended: true} = stored(key.id)
+    end
+
+    test "another person's key, another athanor's or an unknown id is not found", %{
+      key: key,
+      actor: actor
+    } do
+      never = fn _ -> flunk("verify asked for a key that is not the person's") end
+
+      assert {:error, :not_found} =
+               ApiKeyStorage.reenable(actor, "someone_else", key.id, verify: never)
+
+      assert {:error, :not_found} =
+               ApiKeyStorage.reenable(Prima.Actor.in_athanor("ath_other"), "test_user", key.id,
+                 verify: never
+               )
+
+      assert {:error, :not_found} =
+               ApiKeyStorage.reenable(actor, "test_user", "key_unknown", verify: never)
+
+      assert {:error, :no_athanor} =
+               ApiKeyStorage.reenable(Prima.Actor.system(), "test_user", key.id, verify: never)
+
+      assert %{suspended: true} = stored(key.id)
+    end
+
+    test "a revoked key is never revived, and a standing one is not suspended", %{
+      athanor_id: athanor_id,
+      key: key,
+      actor: actor
+    } do
+      never = fn _ -> flunk("verify asked for a key that cannot be re-enabled") end
+      :ok = ApiKeyStorage.revoke_key(actor, "held")
+
+      assert {:error, :revoked} =
+               ApiKeyStorage.reenable(actor, "test_user", key.id, verify: never)
+
+      assert %{revoked: true} = stored(key.id)
+
+      :ok = ApiKeyStorage.create_key(key_attrs("live", athanor_id), Arca.Test.Actor.issuance())
+      {:ok, live} = ApiKeyStorage.get_key(actor, "live")
+
+      assert {:error, :not_suspended} =
+               ApiKeyStorage.reenable(actor, "test_user", live.id, verify: never)
+    end
+  end
+
+  describe "get_created_key/3" do
+    test "reads the person's own key in any state, and no one else's", %{athanor_id: athanor_id} do
+      :ok = ApiKeyStorage.create_key(key_attrs("mine", athanor_id), Arca.Test.Actor.issuance())
+      actor = Prima.Actor.in_athanor(athanor_id)
+      {:ok, key} = ApiKeyStorage.get_key(actor, "mine")
+      :ok = ApiKeyStorage.revoke_key(actor, "mine")
+
+      assert {:ok, %{id: id, revoked: true, suspended: false}} =
+               ApiKeyStorage.get_created_key(actor, "test_user", key.id)
+
+      assert id == key.id
+      assert {:error, :not_found} = ApiKeyStorage.get_created_key(actor, "other", key.id)
+
+      assert {:error, :not_found} =
+               ApiKeyStorage.get_created_key(Prima.Actor.in_athanor("ath_x"), "test_user", key.id)
+    end
+  end
 end
