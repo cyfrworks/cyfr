@@ -6,7 +6,8 @@ defmodule Compendium.Tincture.Rules do
   The rules a tincture's frame is served and held by, in one module: the
   file types a version serves, the frame capabilities a manifest may
   declare and what each opens in the frame's `sandbox` and `allow`
-  attributes, the entry page's Content Security Policy, the templates a
+  attributes, the entry page's Content Security Policy and the origins it
+  admits, the source classes a frame's reads may carry, the templates a
   tincture starts from, the lockfile a build tincture ships, and the
   grammar of its frame, canvas, streams and system actions. A
   canvas (placement `canvas`) is held tighter: its declaration reaches
@@ -129,11 +130,21 @@ defmodule Compendium.Tincture.Rules do
   # which the person makes.
   @persons_actions Enum.uniq(Caps.agent_only_tools() ++ ["feed.press"])
 
+  # The stream namespaces whose events carry a conversation's or the
+  # notes' material, which may be of any source class.
+  @conversation_streams ~w(turn thread notes)
+
   @origin ~r/\Ahttps?:\/\/(\[[0-9a-fA-F:]+\]|[A-Za-z0-9.-]+)(:[0-9]{1,5})?\z/
   @nonce ~r/\A[A-Za-z0-9+\/_=-]{16,128}\z/
 
   @typedoc "A refusal in `Prima.Manifest`'s block vocabulary: the tag and a sentence."
   @type refusal :: {:invalid_tincture, String.t()}
+
+  @typedoc """
+  One read a frame makes: an invoke of a component, a system action by its
+  operation name, a stream by its name, or a stored file.
+  """
+  @type read :: :invoke | {:action, String.t()} | {:stream, String.t()} | :storage
 
   @typedoc "A template a tincture starts from: its name, its build tool (nil for none) and its entry."
   @type template :: %{name: String.t(), build: String.t() | nil, entry: String.t()}
@@ -282,12 +293,7 @@ defmodule Compendium.Tincture.Rules do
     unless is_binary(nonce) and Regex.match?(@nonce, nonce),
       do: raise(ArgumentError, "a CSP nonce is 16 to 128 base64 characters")
 
-    connect =
-      (get_in(manifest, ["tincture", "connect"]) || [])
-      |> List.wrap()
-      |> Enum.filter(&Prima.Manifest.valid_connect_domain?/1)
-      |> Enum.uniq()
-      |> Enum.map(&"https://#{&1}")
+    connect = manifest |> connect_origins() |> Enum.map(&"https://#{&1}")
 
     [
       "default-src 'self'",
@@ -305,6 +311,25 @@ defmodule Compendium.Tincture.Rules do
     ]
     |> Enum.join("; ")
   end
+
+  @doc """
+  The origins a frame's page may connect to beyond its endpoint: the
+  manifest's `tincture.connect` domains that hold to the connect grammar
+  (`Prima.Manifest.valid_connect_domain?/1`), spelled as declared, each
+  once, in declared order. `csp/2` admits exactly these, over `https`, and
+  each is an exit of the frame (`Prima.Flow`): what the frame reads may
+  reach it only as the frame's grant lets it flow there. A manifest that
+  declares none, a canvas always, has none.
+  """
+  @spec connect_origins(term()) :: [String.t()]
+  def connect_origins(%{"tincture" => %{"connect" => connect}}) do
+    connect
+    |> List.wrap()
+    |> Enum.filter(&Prima.Manifest.valid_connect_domain?/1)
+    |> Enum.uniq()
+  end
+
+  def connect_origins(_manifest), do: []
 
   @doc """
   A canvas's `Content-Security-Policy` header value: the one policy of its
@@ -445,6 +470,75 @@ defmodule Compendium.Tincture.Rules do
   end
 
   def invokes?(_manifest, _ref), do: false
+
+  @doc """
+  The source classes (`Prima.Source`) a frame's read may carry, known
+  before anything is read or run, in class order:
+
+    * `:invoke`, a component's result: every class, since a run's answer
+      carries whatever its run read;
+    * `{:action, "tool.action"}`, a system action: what the catalogued
+      operation declares its answers may carry
+      (`Prima.Operation.possible_classes/1`, `outside` for an operation that
+      declares nothing), and every class for one the catalog does not hold;
+    * `{:stream, name}`, a stream's events and its refresh: every class for
+      a stream over a turn, a thread or notes (a name under `turn.`,
+      `thread.` or `notes.`), `outside` for any other;
+    * `:storage`, a stored file: `files_by_grant` and `outside`, since a
+      file carries no provenance of its own.
+
+  Nothing is read for the answer: the operation table is the catalog's
+  (`Sanctum.Catalog`), loaded at boot.
+  """
+  @spec read_classes(read()) :: [Prima.Source.class()]
+  def read_classes(:invoke), do: Prima.Source.classes()
+  def read_classes(:storage), do: [:files_by_grant, :outside]
+
+  def read_classes({:action, operation}) when is_binary(operation) do
+    case catalogued(operation) do
+      %Prima.Operation{} = declared -> Prima.Operation.possible_classes(declared)
+      nil -> Prima.Source.classes()
+    end
+  end
+
+  def read_classes({:stream, name}) when is_binary(name) do
+    [namespace | _rest] = String.split(name, ".")
+    if namespace in @conversation_streams, do: Prima.Source.classes(), else: [:outside]
+  end
+
+  @doc """
+  The source classes any read the manifest declares may carry
+  (`read_classes/1` over each): an invoke of each of its
+  `dependencies.static`, each of its `actions` and each of its `streams`,
+  in class order. A run a frame invokes starts holding these
+  (`Opus.Tincture`), since what the frame passes it may carry anything the
+  frame has read. A declaration that does not read is every class.
+  """
+  @spec frame_classes(term()) :: [Prima.Source.class()]
+  def frame_classes(manifest) do
+    case validate_declaration(manifest) do
+      {:ok, %Tincture{} = declaration} ->
+        reads =
+          Enum.map(static_dependencies(manifest), fn _dependency -> :invoke end) ++
+            Enum.map(declaration.actions, &{:action, &1}) ++
+            Enum.map(declaration.streams, &{:stream, &1.name})
+
+        classes = Enum.flat_map(reads, &read_classes/1)
+        Enum.filter(Prima.Source.classes(), &(&1 in classes))
+
+      {:error, _unreadable} ->
+        Prima.Source.classes()
+    end
+  end
+
+  defp catalogued(operation) do
+    with [tool, action] <- String.split(operation, ".", parts: 2),
+         {_provider, %{operations: operations}} <- Map.get(Sanctum.Catalog.operations(), tool) do
+      Enum.find(operations, &(&1.action == action))
+    else
+      _uncatalogued -> nil
+    end
+  end
 
   defp static_dependencies(%{"dependencies" => %{"static" => static}}) when is_list(static) do
     for entry <- static,
