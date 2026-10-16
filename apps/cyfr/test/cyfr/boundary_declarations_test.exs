@@ -130,7 +130,7 @@ defmodule Cyfr.BoundaryDeclarationsTest do
           Cipher.Rotation ClientIp Consent.Loader Consent.Proof
           Consent.RegistrationBinding Consent.ShapeDerivation Consent.ShapeDiff Context
           Door Door.Store Egress ExecutionStanding Namespace Network Notify
-          Policy.Enforcement Provisioning Session SignIn Tenancy Tenancy.Athanors
+          Policy.Enforcement PolicyLog Provisioning Session SignIn Tenancy Tenancy.Athanors
           Tenancy.Members Tenancy.Users TinctureAuth ToolServerDigest Unauthorized
           UnauthorizedError Vault Vault.OAuthGrant VaultReader),
        "the identity, authority, consent and vault entries the layers above call " <>

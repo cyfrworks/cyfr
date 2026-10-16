@@ -5,7 +5,9 @@ defmodule Opus.FacadeTest do
   @moduledoc """
   The execution domain's door for callers outside it is an exact roster:
   an entry added without a roster change fails here. The lease keeper's
-  entries answer as `Opus.LeaseWatch` does.
+  entries answer as `Opus.LeaseWatch` does; `list_by_request/3` and
+  `count_by_request/2` are the request log's correlation reads, the
+  executions a request id ran (`Sanctum.PolicyLog`'s surface read).
   """
 
   use ExUnit.Case, async: true
@@ -20,12 +22,14 @@ defmodule Opus.FacadeTest do
     cancel_for_restart: 3,
     claim_turn_root: 2,
     claim_turn_root: 3,
+    count_by_request: 2,
     events_since: 3,
     feeds: 1,
     get: 2,
     invoke_tincture: 3,
     list: 1,
     list: 2,
+    list_by_request: 3,
     pause_turn_root: 3,
     release_turn_root: 3,
     resume_lease_watch: 1,
