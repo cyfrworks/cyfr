@@ -46,6 +46,10 @@ defmodule Arca.Schemas.CronSchedule do
     # Whether a due occurrence is claimed while another of this schedule
     # is still open: `forbid` or `allow` (`Arca.ScheduleOccurrences`).
     field :concurrency, :string, default: "forbid"
+    field :missed_runs, :string, default: "skip"
+    field :catch_up_limit, :integer
+    field :catch_up_until, :utc_datetime_usec
+    field :catch_up_left, :integer, default: 0
     field :feed_spec, :string
     field :feed_fire_seq, :integer, default: 0
     field :feed_result_seq, :integer, default: 0

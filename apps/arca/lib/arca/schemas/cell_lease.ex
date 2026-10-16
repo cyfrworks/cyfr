@@ -32,6 +32,7 @@ defmodule Arca.Schemas.CellLease do
     field :fence, :integer
     field :lease_until, :utc_datetime_usec
     field :taken_at, :utc_datetime_usec
+    field :release, :string
     timestamps(type: :utc_datetime_usec)
   end
 end
