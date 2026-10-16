@@ -22,9 +22,16 @@ defmodule Sanctum.EstablishBoundaryTest do
   # and what each site is.
   @sites %{
     # The recipes `establish/2` runs in place, a frame credential and a
-    # webhook row, and `establish_device/2`: a paired device
-    # `Sanctum.DeviceCerts`, its one caller, verified.
-    "apps/sanctum/lib/sanctum/caller.ex" => 3,
+    # webhook row; `establish_device/2`: a paired device
+    # `Sanctum.DeviceCerts`, its one caller, verified; and
+    # `establish_kit/2`: the restore kit's checklist credential, minted by
+    # `Sanctum.Recovery` against a signed kit proof and admitting the four
+    # `*.reenable` operations and their previews alone (A4).
+    "apps/sanctum/lib/sanctum/caller.ex" => 4,
+    # `Sanctum.Seal.interactive/1` matches an already established context
+    # (a function head naming `authenticated: true`); it builds none. The
+    # roster names it because the line reads like a build.
+    "apps/sanctum/lib/sanctum/seal.ex" => 1,
     # `Session.load/2`, the session recipe `establish/2` calls.
     "apps/sanctum/lib/sanctum/session.ex" => 1,
     # `ApiKey.context_from_metadata/1`, the key recipe `establish/2` calls.
