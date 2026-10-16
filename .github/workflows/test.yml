@@ -319,7 +319,8 @@ jobs:
           fi
       # The harness's own tests, each against stand-ins for what the harness
       # runs: the containment library, the partition runner and its
-      # environment helper, the host queue and the commit gate.
+      # environment helper, the host queue, the commit gate and the red-rate
+      # reader (against a canned gh).
       - name: Verify partition infrastructure
         run: |
           bash tests/contain-test.sh
@@ -327,6 +328,7 @@ jobs:
           elixir tests/test-partition-env-test.exs
           bash tests/heavy-check-test.sh
           bash tests/commit-gate-test.sh
+          bash tests/ci-red-rate-test.sh
       # Every checked-in test WASM fixture is its source's build: the WAT
       # fixtures with the pinned wasm-tools, the Rust ones with the pinned
       # rustc and cargo-component, which refuse any other.
