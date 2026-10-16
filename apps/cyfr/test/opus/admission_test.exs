@@ -255,12 +255,14 @@ defmodule Opus.AdmissionTest do
         consent(root, %{id: "consent-chain-damaged"})
       )
 
+      # A status outside the vocabulary cannot be stored (its CHECK); a
+      # kind outside it is the damage a read can still meet.
       {1, _} =
         Arca.Repo.update_all(
           Ecto.Query.from(p in Arca.Schemas.Profile,
             where: p.athanor_id == ^ctx.athanor_id and p.id == "prof-chain-damaged"
           ),
-          set: [status: "sideways"]
+          set: [kind: "sideways"]
         )
 
       # A default or routed selection could be the damaged row's: never a guess.
