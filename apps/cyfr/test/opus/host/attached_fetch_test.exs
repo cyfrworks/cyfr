@@ -860,6 +860,72 @@ defmodule Opus.Host.AttachedFetchTest do
   # Admitted
   # ---------------------------------------------------------------------------
 
+  describe "flows" do
+    # A class the run read, joined as a read joins it.
+    defp read_class!(fixture, class) do
+      :ok =
+        Opus.Ledger.join(
+          Prima.Actor.in_athanor(fixture.athanor_id),
+          fixture.execution_id,
+          [Prima.Source.new(class)]
+        )
+    end
+
+    defp ledger(fixture) do
+      {:ok, sources} =
+        Arca.Execution.sources(Prima.Actor.in_athanor(fixture.athanor_id), fixture.execution_id)
+
+      sources
+    end
+
+    test "a run holding a class its grant lets flow nowhere is refused flow_blocked and recorded, before a credential is resolved or a byte leaves",
+         %{ctx: ctx, port: port} do
+      test = self()
+      handler = "attached-fetch-flow-#{System.unique_integer([:positive])}"
+
+      :telemetry.attach(
+        handler,
+        [:cyfr, :opus, :secret, :dispensed],
+        fn _event, _measurements, metadata, _config -> send(test, {:dispensed, metadata}) end,
+        nil
+      )
+
+      on_exit(fn -> :telemetry.detach(handler) end)
+
+      %{fixture: fixture} = scenario!(ctx, port)
+      read_class!(fixture, :filed)
+
+      message =
+        fixture
+        |> fetched(request("http://127.0.0.1:#{port}/hello"))
+        |> refused!("flow_blocked")
+
+      assert message =~ "127.0.0.1"
+      refute message =~ "/hello"
+      refute_received {:upstream, _, _}
+      refute_received {:dispensed, _}
+      assert pins(fixture) == []
+
+      assert [denial] = denials(fixture)
+      assert denial.decision_reason =~ "attached: This run read filed material"
+    end
+
+    test "with a flow of that class to the destination host, the same request is made, and its host joins the ledger",
+         %{ctx: ctx, port: port} do
+      scenario = scenario!(ctx, port)
+
+      %{authority: authority} =
+        put_in(scenario.authority.resources.flows, [%{from: :filed, to: "127.0.0.1"}])
+
+      fixture = attempt!(ctx, authority, scenario.component_ref, scenario.limits, [])
+      read_class!(fixture, :filed)
+
+      assert :ok = fetched(fixture, request("http://127.0.0.1:#{port}/hello"))
+      assert received_upstream().path == "/hello"
+      assert Prima.Source.outside("127.0.0.1") in ledger(fixture)
+    end
+  end
+
   describe "an admitted request" do
     test "reaches the upstream with the credential attached and answers sealed frames", %{
       ctx: ctx,
