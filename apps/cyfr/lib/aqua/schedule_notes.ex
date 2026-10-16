@@ -135,6 +135,20 @@ defmodule Aqua.ScheduleNotes do
         Logger.warning("[ScheduleNotes] pending records not read: #{inspect(reason)}")
         %{}
     end
+  catch
+    # The tick runs with no caller to answer to: a read that raises here
+    # (under the test sandbox, a tick between two tests holds no
+    # connection owner, and `with_db_rescue` does not cover that error)
+    # must not take the keeper down, since a keeper restarted by its
+    # supervisor ticks again at once and the loop ends with the whole
+    # tree. The next tick, or the next completion, drains.
+    kind, reason ->
+      Logger.warning(
+        "[ScheduleNotes] pending records not read: " <>
+          Prima.LogFilter.format_exception(kind, reason)
+      )
+
+      %{}
   end
 
   @doc """
