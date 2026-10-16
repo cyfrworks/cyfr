@@ -423,9 +423,9 @@ Then open `https://<your-domain>/` (TLS) or `http://localhost:4000/` (direct), s
 
 1. fetches the release's `release.json` and its signature and verifies them: signed keyless by the release workflow of that version's tag, naming that version. Without network access to the release, or with a manifest that does not verify, it refuses and changes nothing;
 2. pulls every image the manifest names by its digest, and refreshes the managed scaffold files, while the stack still runs; a failed pull changes nothing;
-3. refuses while a member of the [cell](#several-members-on-one-database-a-cell) runs outside this stack, and while `docker-compose.yml` lacks a service of the bundled stack (`cyfr init --force` regenerates the file and keeps `.env`);
-4. stops every service, printing how long each took, and reads the cell's slots with the server stopped: any member still holding one after a lease (15 s) starts the old stack again and ends the update;
-5. copies the cell into `backups/<timestamp>/`: the database (the SQLite file, or a `pg_dump` in the PostgreSQL server's own major version), the storage root, the keyring and `.env`, with `snapshot.json` written last, so a backup without it is incomplete. An object store (`CYFR_STORAGE=s3`) is outside the snapshot: it relies on the bucket's own versioning;
+3. refuses while a member of the [cell](#several-members-on-one-database-a-cell) on another release than this one runs outside this stack, and while `docker-compose.yml` lacks a service of the bundled stack (`cyfr init --force` regenerates the file and keeps `.env`);
+4. stops every service, printing how long each took, and reads the cell's slots with the server stopped: any member of another release still holding one after a lease (15 s) starts the old stack again and ends the update;
+5. copies the cell into `backups/<timestamp>/`: the database (the SQLite file, or a `pg_dump` in the PostgreSQL server's own major version), the storage root, the keyring, `.env` and `docker-compose.yml` as it stood (part `compose`), with `snapshot.json` written last, so a backup without it is incomplete. An object store (`CYFR_STORAGE=s3`) is outside the snapshot: it relies on the bucket's own versioning;
 6. rewrites the `image:` lines naming `ghcr.io/cyfrworks/cyfr`, `ghcr.io/cyfrworks/cyfr-locus` and the bundled caddy to the release's version and digest, leaving and reporting any other image, then starts the stack and waits for readiness. A release that fails to migrate or start leaves the stack stopped, since old code never starts over migrated bytes, and the update prints the backup's path and `cyfr restore <backup>`.
 
 A member whose release differs from a live member's is refused at boot, naming both releases. `cyfr init` run again in the project adds a key a newer stack needs that `.env` lacks, and changes nothing else. From a source checkout: `docker compose --profile locus-builds pull && docker compose --profile locus-builds up -d` (add `--profile tls` if you're running with caddy, and drop the builds profile if builds are off). Check the [release notes](https://github.com/cyfrworks/cyfr/releases) first: there is no compatibility layer for behaviour, and a release says what it changes for a running server. A database built from an earlier version of the schema is not carried forward: the server refuses to boot on it and names the database to recreate.
@@ -760,10 +760,12 @@ What a cell gives up and what it keeps:
   budget — are rows, and hold for the cell.
 - A cell runs one release. A member whose release differs from a live
   member's is refused its slot and stops at boot, naming both releases
-  (an older member whose slot names no release counts as another), and
-  `cyfr update` refuses while a member outside its own stack is live, as
-  **Upgrading** under [Setup](#setup) says: stop every other member
-  first.
+  (an older member whose slot names no release counts as another). To
+  upgrade a cell on several hosts, stop the stack on every host, run
+  `cyfr update` on one, which starts the new release there, then on each
+  of the others: an update admits a live member outside its own stack
+  only when that member already runs the release it installs, and
+  refuses any other, as **Upgrading** under [Setup](#setup) says.
 
 `scripts/test-partitioned.sh -n 1 -a postgres -- --only cluster
 apps/cyfr/test/cluster` is the suite that proves this: two real nodes, one
@@ -890,7 +892,7 @@ Commands marked with `[i]` support interactive selection when run without argume
 | `cyfr init` | Scaffold a CYFR project — downloads `docker-compose.yml` + `Caddyfile`, writes `.env` (asks the TLS y/n question) with the stack's keys minted into it, creates dirs; in an existing project it adds only the keys `.env` lacks (`--force` re-fetches the deploy files; never replaces `.env`) |
 | `cyfr up` / `cyfr down` | Start / stop the stack: cyfr, locus-runtime and locus-backends, plus locus-builds when `CYFR_LOCUS_BUILDS_URL` in `.env` names it (as `cyfr init` writes it) and caddy when `CYFR_BEHIND_PROXY=true` |
 | `cyfr upgrade` | Upgrade the CYFR Codex binary (system-wide) |
-| `cyfr update` | Pull the latest stack images (cyfr and cyfr-locus, caddy when TLS) and refresh managed scaffold (guides, `wit/`, bundled `aqua/` prompts); leaves your `.env`, `docker-compose.yml`, `Caddyfile` alone, and notes a service of the bundled stack your `docker-compose.yml` lacks |
+| `cyfr update` | Install the release this CLI is: verify its signed manifest, pull every image by digest, stop the stack, snapshot it into `backups/`, rewrite `docker-compose.yml`'s managed image lines (cyfr, cyfr-locus, the bundled caddy) to the release's digests and start it (see **Upgrading**); leaves `.env`, `Caddyfile` and every other image line alone, and refuses a `docker-compose.yml` that lacks a service of the bundled stack |
 
 > `cyfr --version` and `cyfr status` print a one-line hint when a newer release is available. The check only runs in an interactive terminal and is cached for a day; set `CYFR_NO_UPDATE_CHECK=1` (e.g. in your shell profile) to turn it off.
 

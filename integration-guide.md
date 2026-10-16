@@ -1300,9 +1300,11 @@ What a cell changes for a client and an operator:
   member holding it, and a member whose release differs from a live
   member's is refused its slot and stops at boot, naming both releases; a
   live slot that names no release counts as another. Stop every member
-  before the new release starts: `cyfr update` refuses while a member
-  outside its own stack is live, and stops, snapshots and switches its
-  own stack only once none is.
+  before the new release starts: stop the stack on every host, update
+  one, then the others. `cyfr update` refuses while a member outside its
+  own stack is live on another release, admits one that already runs
+  the release it installs, and stops, snapshots and switches its own
+  stack only once no other release holds a slot.
 
 ### Execution workers
 

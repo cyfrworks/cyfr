@@ -28,9 +28,10 @@
 #          server from a container of the app image on the project's
 #          default network, and it holds every `tools/call` unanswered, so
 #          the call is still running when the stop begins.
-#          No execution or thread turn runs here: both need the Locus
-#          runtime, which this project does not start, and a turn a
-#          provider key besides. The case prints the stop's wall time, the
+#          The held call and the held stream are the running work this
+#          case measures a stop under; no execution or thread turn runs
+#          here: both need the Locus runtime, which this project does not
+#          start, and a turn a provider key besides. The case prints the stop's wall time, the
 #          grace, the container's exit and how the stream and the call
 #          ended.
 #

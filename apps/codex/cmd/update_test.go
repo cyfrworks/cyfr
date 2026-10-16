@@ -645,6 +645,7 @@ func TestUpdateRunsTheCeremonyInOrder(t *testing.T) {
 		".env":                           "CYFR_BEHIND_PROXY=true\nCYFR_LOCUS_BUILDS_URL=http://locus-builds:4100\nCYFR_PORT=4000\n",
 		"storage/components/acme/c.wasm": "component-bytes",
 		"storage/blobs/x":                "blob",
+		"compose":                        string(s.compose),
 	}
 	for name, content := range files {
 		path := filepath.Join(dir, name)
@@ -683,7 +684,7 @@ func TestUpdateRunsTheCeremonyInOrder(t *testing.T) {
 	wantSnapshot := map[string]any{
 		"version":         "0.8.0",
 		"taken_at":        "2026-10-16T12:00:00Z",
-		"parts":           []any{"database", "database-wal", "storage", "keyring", ".env"},
+		"parts":           []any{"database", "database-wal", "storage", "keyring", ".env", "compose"},
 		"storage_adapter": "local",
 		"complete":        true,
 	}
@@ -695,7 +696,7 @@ func TestUpdateRunsTheCeremonyInOrder(t *testing.T) {
 	for _, e := range entries {
 		names = append(names, e.Name())
 	}
-	if !slices.Equal(names, []string{".env", "database", "database-wal", "keyring", "snapshot.json", "storage"}) {
+	if !slices.Equal(names, []string{".env", "compose", "database", "database-wal", "keyring", "snapshot.json", "storage"}) {
 		t.Errorf("the snapshot holds %v", names)
 	}
 
@@ -743,7 +744,7 @@ func TestUpdateDumpsPostgresWithoutTheURLOnArgv(t *testing.T) {
 	}
 	var snapshot snapshotManifest
 	data, _ := os.ReadFile(filepath.Join(s.snapshotDir(), "snapshot.json"))
-	if json.Unmarshal(data, &snapshot) != nil || !slices.Equal(snapshot.Parts, []string{"database", "storage", "keyring", ".env"}) {
+	if json.Unmarshal(data, &snapshot) != nil || !slices.Equal(snapshot.Parts, []string{"database", "storage", "keyring", ".env", "compose"}) {
 		t.Errorf("snapshot.json is %s", data)
 	}
 	// The SQLite files under the storage root are not the database here and
@@ -768,7 +769,7 @@ func TestUpdateSnapshotsWithoutTheS3Store(t *testing.T) {
 	}
 	var snapshot snapshotManifest
 	data, _ := os.ReadFile(filepath.Join(s.snapshotDir(), "snapshot.json"))
-	if json.Unmarshal(data, &snapshot) != nil || snapshot.StorageAdapter != "s3" || !slices.Equal(snapshot.Parts, []string{"database", "database-wal", "keyring", ".env"}) {
+	if json.Unmarshal(data, &snapshot) != nil || snapshot.StorageAdapter != "s3" || !slices.Equal(snapshot.Parts, []string{"database", "database-wal", "keyring", ".env", "compose"}) {
 		t.Errorf("snapshot.json is %s", data)
 	}
 }
@@ -791,6 +792,54 @@ func TestUpdateRefusesAForeignLiveSlot(t *testing.T) {
 	s.nothingStopped()
 	s.composeUnchanged()
 	s.noBackups()
+}
+
+// A cell on several hosts: one host was updated and started first, so its
+// member runs the target release. The next host's update admits that live
+// member, before the stop and in the offline read, and goes on; a member
+// of another release, or of none, is still refused.
+func TestUpdateAdmitsAMemberAlreadyOnTheTargetRelease(t *testing.T) {
+	// Read once: each scenario moves the test into its own project.
+	compose := shippedCompose(t)
+	target := `{"node":"cyfr@first-host","owner":"o2","release":"` + testVersion + `","lease_until":"2026-10-16T12:00:12Z"}`
+	s := newUpdateScenario(t, compose, nil)
+	s.answer("rpc.out", "CYFR_ROSTER="+`{"self":"cyfr@abc","release":"0.8.0","slots":[{"node":"cyfr@abc","owner":"o1","release":"0.8.0","lease_until":"2026-10-16T12:00:10Z"},`+target+`]}`+"\n")
+	s.answer("eval.out", "CYFR_LIVE_SLOTS="+`{"release":"0.8.0","slots":[`+target+`]}`+"\n")
+	out, err := s.run(context.Background())
+	if err != nil {
+		t.Fatalf("update: %v\n%s", err, out)
+	}
+	if !s.hasCall(profiles + "up -d --wait --wait-timeout 900") {
+		t.Errorf("the update did not start the switched stack:\n%s", strings.Join(s.log(), "\n"))
+	}
+
+	for name, release := range map[string]string{"another release": `"0.7.9"`, "no release": `null`} {
+		t.Run(name, func(t *testing.T) {
+			other := `{"node":"cyfr@first-host","owner":"o2","release":` + release + `,"lease_until":"2026-10-16T12:00:12Z"}`
+			s := newUpdateScenario(t, compose, nil)
+			s.answer("rpc.out", "CYFR_ROSTER="+`{"self":"cyfr@abc","release":"0.8.0","slots":[`+other+`]}`+"\n")
+			out, err := s.run(context.Background())
+			if err == nil || !strings.Contains(err.Error(), "cyfr@first-host") {
+				t.Fatalf("update answered %v\n%s", err, out)
+			}
+			s.nothingStopped()
+			s.composeUnchanged()
+			s.noBackups()
+		})
+	}
+
+	// Offline, a member of the target release beside one of another is still
+	// refused, once the window closes, and the old stack starts again.
+	s = newUpdateScenario(t, compose, nil)
+	s.answer("eval.out", "CYFR_LIVE_SLOTS="+`{"release":"0.8.0","slots":[`+target+`,{"node":"cyfr@old-host","owner":"o3","release":"0.8.0","lease_until":"2026-10-16T12:00:12Z"}]}`+"\n")
+	out, err = s.run(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "cyfr@old-host (release 0.8.0)") || strings.Contains(err.Error(), "first-host") {
+		t.Fatalf("update answered %v\n%s", err, out)
+	}
+	if !s.hasCall(profiles + "start") {
+		t.Errorf("the old stack was not started again:\n%s", strings.Join(s.log(), "\n"))
+	}
+	s.composeUnchanged()
 }
 
 // A compose file lacking a bundled service, each guard among them, refuses

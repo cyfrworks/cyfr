@@ -43,9 +43,9 @@ var updateCmd = &cobra.Command{
 
 1. Fetch the release's signed manifest (release.json) and verify it; a manifest that does not verify, or no network access to it, refuses.
 2. Read docker-compose.yml. Every bundled service (locus-runtime, locus-builds, locus-backends and both egress guards) must be present; one missing refuses, naming 'cyfr init --force'. An image line naming ghcr.io/cyfrworks/cyfr, ghcr.io/cyfrworks/cyfr-locus or the bundled Caddy is managed; any other image is an override, left as written and reported.
-3. While the stack still runs: read its configuration, pull every managed image by the manifest's digest, update the scaffold files (guides, WIT definitions, the keeper's seccomp profile, the shipped AQUA prompts) and read the cell's roster, refusing while a member outside this stack holds a live slot.
-4. Stop every service, timing each, and re-read the roster offline until no slot is live (at most one lease); a slot still live restarts the old stack and refuses.
-5. Snapshot the database, the local storage root, the keyring and .env into backups/<UTC timestamp>/, snapshot.json last.
+3. While the stack still runs: read its configuration, pull every managed image by the manifest's digest, read the cell's roster, refusing while a member outside this stack holds a live slot on another release than this one (a host of the cell already updated stays), then update the scaffold files (guides, WIT definitions, the keeper's seccomp profile, the shipped AQUA prompts).
+4. Stop every service, timing each, and re-read the roster offline until no slot of another release than this one is live (at most one lease); one still live restarts the old stack and refuses.
+5. Snapshot the database, the local storage root, the keyring, .env and docker-compose.yml as it stands into backups/<UTC timestamp>/, snapshot.json last.
 6. Rewrite the managed image lines to <image>:<version>@<digest> (Caddy keeps its tag) and start the stack, waiting for every service to be healthy. A failure from here leaves the stack stopped and prints the snapshot and the restore command; old code never starts over migrated data.
 
 An interrupt before the stop changes nothing; from the stop on, the running step finishes and the update ends as that step's failure would.`,
@@ -920,7 +920,10 @@ func markedLine(output, marker string) (string, error) {
 }
 
 // readRoster reads the running cell's live slots through its own node and
-// refuses while one belongs to a member outside this stack.
+// refuses while one belongs to a member outside this stack that runs
+// another release than the target. A member already on the target release
+// is a host of the cell updated before this one: it stays, and this stack
+// joins it once switched.
 func (u *updater) readRoster() error {
 	ctx, cancel := context.WithTimeout(u.ctx, composeRunTimeout)
 	defer cancel()
@@ -957,14 +960,20 @@ func (u *updater) readRoster() error {
 	}
 	var foreign []string
 	for _, slot := range *answer.Slots {
-		if slot.Node != answer.Self {
+		if slot.Node != answer.Self && !u.onTarget(slot) {
 			foreign = append(foreign, fmt.Sprintf("%s (%s)", slot.Node, slot.release()))
 		}
 	}
 	if len(foreign) > 0 {
-		return fmt.Errorf("The cell has a live member outside this stack: %s. cyfr update cannot stop it; stop it first, then run 'cyfr update' again. Nothing was changed", strings.Join(foreign, ", "))
+		return fmt.Errorf("The cell has a live member outside this stack on another release than %s: %s. cyfr update cannot stop it; stop it first, then run 'cyfr update' again. Nothing was changed", u.version, strings.Join(foreign, ", "))
 	}
 	return nil
+}
+
+// onTarget reports whether slot's member runs the release this update
+// installs; a slot naming no release does not.
+func (u *updater) onTarget(slot rosterSlot) bool {
+	return slot.Release != nil && *slot.Release == u.version
 }
 
 // ---- stop, re-read, snapshot -----------------------------------------------------
@@ -1010,9 +1019,10 @@ func (u *updater) stopServices(services ...string) (time.Duration, error) {
 }
 
 // rereadOffline reads the live slots with nothing of the stack running,
-// until none is live or the window closes; a member stopped past its grace
-// leaves its row until its lease runs out. Any error or unreadable answer
-// refuses, never reads as no slot.
+// until none is live but members of the target release (hosts of the cell
+// updated before this one) or the window closes; a member stopped past its
+// grace leaves its row until its lease runs out. Any error or unreadable
+// answer refuses, never reads as no slot.
 func (u *updater) rereadOffline() error {
 	deadline := time.Now().Add(liveSlotsWindow)
 	for {
@@ -1036,13 +1046,19 @@ func (u *updater) rereadOffline() error {
 		if err != nil {
 			return fmt.Errorf("The offline roster read did not answer (%v)", err)
 		}
-		if len(*answer.Slots) == 0 {
+		var others []rosterSlot
+		for _, slot := range *answer.Slots {
+			if !u.onTarget(slot) {
+				others = append(others, slot)
+			}
+		}
+		if len(others) == 0 {
 			u.oldRelease = answer.Release
 			return nil
 		}
 		if !time.Now().Add(liveSlotsPoll).Before(deadline) {
 			var nodes []string
-			for _, slot := range *answer.Slots {
+			for _, slot := range others {
 				nodes = append(nodes, fmt.Sprintf("%s (%s)", slot.Node, slot.release()))
 			}
 			return fmt.Errorf("A slot is still live %s after the stop: %s. A member outside this stack holds the cell; stop it first", liveSlotsWindow, strings.Join(nodes, ", "))
@@ -1062,8 +1078,9 @@ type snapshotManifest struct {
 }
 
 // takeSnapshot copies the stopped cell into backups/<UTC timestamp>/: the
-// database, the local storage root, the keyring and .env, then
-// snapshot.json. Directories are 0700 and files 0600.
+// database, the local storage root, the keyring, .env and the compose file
+// as it stood before the switch, then snapshot.json. Directories are 0700
+// and files 0600.
 func (u *updater) takeSnapshot() error {
 	now := updateNow().UTC()
 	if err := os.Mkdir("backups", 0700); err != nil && !errors.Is(err, fs.ErrExist) {
@@ -1123,6 +1140,12 @@ func (u *updater) takeSnapshot() error {
 		return err
 	}
 	parts = append(parts, ".env")
+	// The compose file as it stood before the switch, so a restore puts the
+	// old release's image lines back with the rest.
+	if err := writeNewFile(filepath.Join(dir, "compose"), u.compose.original); err != nil {
+		return err
+	}
+	parts = append(parts, "compose")
 
 	data, err := json.MarshalIndent(snapshotManifest{
 		Version:        u.oldRelease,

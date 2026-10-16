@@ -198,7 +198,6 @@ tolerates them, and a `.env` file that assigns one refuses the boot.
 | `CYFR_INSTALL_DIR` | the installer (scripts/install.sh): where it puts the CLI |
 | `CYFR_VERSION` | the installer: the release it installs |
 | `CYFR_IMAGE` | the installer: the image the stack it writes runs |
-| `CYFR_POSTGRES_TEST_URL` | the test harness: the PostgreSQL server the suite runs on |
 | `CYFR_TEST_…` (every name it begins) | the test harness: its partition, run root and object-store fixtures |
 | `CYFR_CLUSTER_DATABASE_URL` | the test harness: the cluster suite's shared database |
 | `CYFR_GOLDEN_RECORD` | the test harness: rewrites the consent bootstrap's golden file |
