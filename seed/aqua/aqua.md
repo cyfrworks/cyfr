@@ -47,6 +47,7 @@ tool_policy:
   http.read: auto
   layout.edit: ask
   layout.get: auto
+  notes.endorse: ask
   notes.forget: ask
   notes.keep: ask
   notes.list: auto

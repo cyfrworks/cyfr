@@ -14,8 +14,10 @@ defmodule Aqua.Providers.Approval do
   A decision is made once: deciding a card again answers the first
   decision as a replay, with no second effect. A standing approval may
   name its bounds — the card's own execution, turn or schedule it ends
-  with (`lifecycle`), a deadline (`until`) and the resources it covers
-  (`constraint`) — and each is carried into the standing row or refused.
+  with (`lifecycle`), a deadline (`until`), the resources it covers
+  (`constraint`) and the outside sources, among those the card named, it
+  also follows (`sources`) — and each is carried into the standing row or
+  refused.
   """
 
   @behaviour Prima.Provider
@@ -74,6 +76,23 @@ defmodule Aqua.Providers.Approval do
                ]},
               description:
                 "resolve: the resources a standing approval covers, for an action that declares which argument names one"
+            ),
+            Arg.new(
+              "sources",
+              {:array,
+               Arg.new(
+                 nil,
+                 {:record,
+                  [
+                    Arg.new("class", :string,
+                      required: true,
+                      enum: Enum.map(Prima.Source.classes(), &Atom.to_string/1)
+                    ),
+                    Arg.new("name", :string)
+                  ]}
+               )},
+              description:
+                "resolve: the outside sources, among those the card names, a standing approval also follows"
             )
           ],
           kind: :write,
@@ -172,17 +191,31 @@ defmodule Aqua.Providers.Approval do
 
   # The bounds a resolve names, each read explicitly: a lifecycle by its
   # name, a deadline as an ISO 8601 time with its offset, a constraint as
-  # its resource kind and patterns. Whether they may stand is the
-  # decision's (`Aqua.Standing`).
+  # its resource kind and patterns, sources as their canonical objects
+  # (none named is no bound). Whether they may stand is the decision's
+  # (`Aqua.Approvals`, `Aqua.Standing`).
   defp bounds(args) do
     with {:ok, lifecycle} <- lifecycle(args["lifecycle"]),
          {:ok, until} <- until(args["until"]),
-         {:ok, constraint} <- constraint(args["constraint"]) do
+         {:ok, constraint} <- constraint(args["constraint"]),
+         {:ok, sources} <- sources(args["sources"]) do
       {:ok,
-       %{lifecycle: lifecycle, until: until, constraint: constraint}
+       %{lifecycle: lifecycle, until: until, constraint: constraint, sources: sources}
        |> Map.reject(fn {_bound, value} -> is_nil(value) end)}
     end
   end
+
+  defp sources(nil), do: {:ok, nil}
+  defp sources([]), do: {:ok, nil}
+
+  defp sources(sources) when is_list(sources) do
+    if Enum.all?(sources, &is_map/1),
+      do: {:ok, Enum.map(sources, &Prima.Source.from_json/1)},
+      else: {:error, {:invalid_argument, "sources are objects naming a class and a name"}}
+  end
+
+  defp sources(_sources),
+    do: {:error, {:invalid_argument, "sources are objects naming a class and a name"}}
 
   defp lifecycle(nil), do: {:ok, nil}
 

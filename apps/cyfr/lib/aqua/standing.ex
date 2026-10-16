@@ -17,7 +17,9 @@ defmodule Aqua.Standing do
   built.
 
   A standing allow may carry the bounds the person chose: the lifecycle
-  it ends with, a deadline, and the resources it covers. The lifecycle is
+  it ends with, a deadline, the resources it covers and the outside
+  sources it also follows (none unless chosen, so an allow asks again
+  after any outside read it does not name). The lifecycle is
   named by its kind and read from the card's own turn — `:execution` the
   turn's root execution, `:turn` the turn, `:schedule` the schedule that
   root was started by, refused when there is none — so a person can bound
@@ -34,13 +36,15 @@ defmodule Aqua.Standing do
 
   @typedoc """
   The bounds a person chose for a standing answer: the `lifecycle` it
-  ends with, the time it ends at (`until`) and the resources it covers
-  (`constraint`, a resource kind and its patterns). Each is optional.
+  ends with, the time it ends at (`until`), the resources it covers
+  (`constraint`, a resource kind and its patterns) and the outside
+  `sources` it also follows. Each is optional.
   """
   @type bounds :: %{
           optional(:lifecycle) => lifecycle() | nil,
           optional(:until) => DateTime.t() | nil,
-          optional(:constraint) => %{kind: String.t(), patterns: [String.t()]} | nil
+          optional(:constraint) => %{kind: String.t(), patterns: [String.t()]} | nil,
+          optional(:sources) => [Prima.Source.t()] | nil
         }
 
   @doc "Whether `scope` may stand for the card's intent."
@@ -127,7 +131,8 @@ defmodule Aqua.Standing do
       {:ok,
        Map.merge(lifecycle, %{
          expires_at: Map.get(bounds, :until),
-         constraint: Map.get(bounds, :constraint)
+         constraint: Map.get(bounds, :constraint),
+         sources: Map.get(bounds, :sources)
        })}
     end
   end

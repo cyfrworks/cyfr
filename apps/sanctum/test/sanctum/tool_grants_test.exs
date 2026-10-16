@@ -556,10 +556,57 @@ defmodule Sanctum.ToolGrantsTest do
           thread_id: thread,
           tool: "files",
           action: "write",
-          args: %{"path" => "data/notes/a.md", "content" => "x"}
+          args: %{"path" => "data/notes/a.md", "content" => "x"},
+          sources: []
         },
         overrides
       )
+    end
+
+    test "an allow covers a turn that read only what it names: no outside source unless named",
+         %{ctx: ctx, thread: thread} do
+      host = Prima.Source.outside("news.example")
+      allow!(ctx, thread, %{})
+
+      # An allow with no other bound is still bounded by its sources.
+      assert ToolGrants.admits?(ctx, call(thread, %{}))
+      assert ToolGrants.admits?(ctx, call(thread, %{sources: [Prima.Source.new(:filed)]}))
+      refute ToolGrants.admits?(ctx, call(thread, %{sources: [host]}))
+      refute ToolGrants.admits?(ctx, call(thread, %{sources: nil}))
+      refute ToolGrants.admits?(ctx, Map.delete(call(thread, %{}), :sources))
+
+      allow!(ctx, thread, %{sources: [host]})
+      {:ok, [grant]} = ToolGrants.for_thread(ctx, thread)
+      assert grant.sources == [host]
+
+      assert ToolGrants.admits?(ctx, call(thread, %{sources: [Prima.Source.new(:pinned), host]}))
+
+      refute ToolGrants.admits?(
+               ctx,
+               call(thread, %{sources: [host, Prima.Source.outside("other.example")]})
+             )
+
+      # Nothing names an unnamed outside source.
+      refute ToolGrants.admits?(ctx, call(thread, %{sources: [Prima.Source.outside(nil)]}))
+    end
+
+    test "an allow names only named outside sources, and a deny names none", %{ctx: ctx} do
+      now = DateTime.utc_now()
+      host = Prima.Source.outside("news.example")
+
+      assert :ok = ToolGrants.check_standing(decision(%{sources: [host]}), now)
+      assert :ok = ToolGrants.check_standing(decision(%{effect: "deny", sources: []}), now)
+
+      for sources <- [[Prima.Source.new(:filed)], [Prima.Source.outside(nil)], "news"] do
+        assert {:error, {:scope_not_permitted, :invalid_sources}} =
+                 ToolGrants.check_standing(decision(%{sources: sources}), now)
+      end
+
+      assert {:error, {:scope_not_permitted, :bounded_deny}} =
+               ToolGrants.check_standing(decision(%{effect: "deny", sources: [host]}), now)
+
+      assert {:error, {:scope_not_permitted, :bounded_deny}} =
+               ToolGrants.put(ctx, decision(%{effect: "deny", sources: [host]}))
     end
 
     test "a call inside the constraint is covered; another path, an unsafe one or none asks",
@@ -651,7 +698,7 @@ defmodule Sanctum.ToolGrantsTest do
       refute ToolGrants.admits?(ctx, call(thread, %{execution_id: a}))
     end
 
-    test "a deny for the pair covers every call, and an unbounded allow is not this answer's",
+    test "a deny for the pair covers every call, and an allow with no other bound is decided here too",
          %{ctx: ctx, thread: thread, a: a} do
       allow!(ctx, thread, %{lifecycle_kind: "execution", lifecycle_id: a})
 
@@ -663,9 +710,11 @@ defmodule Sanctum.ToolGrantsTest do
 
       refute ToolGrants.admits?(ctx, call(thread, %{execution_id: a}))
 
+      # Bounded by its sources alone, it covers a turn that read nothing
+      # from outside.
       allow!(ctx, thread, %{}, %{tool: "probe_component", action: "list"})
 
-      refute ToolGrants.admits?(
+      assert ToolGrants.admits?(
                ctx,
                call(thread, %{tool: "probe_component", action: "list", execution_id: a})
              )

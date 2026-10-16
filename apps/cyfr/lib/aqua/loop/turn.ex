@@ -8,12 +8,12 @@ defmodule Aqua.Loop.Turn do
   digest must equal the one the turn started under — the roster and the
   roles the soul may clone into, the effective policy composed with the
   standing rows, the resolved model catalyst with its capabilities, the
-  system prompt, the tool surface (with the accounts the soul's launches
-  may name, read once here for every request the spec makes,
-  `Aqua.Hands.launch_accounts/1`), the room excerpt the sender attached,
-  and the deadline the authority allows, and the admission decision the
-  turn's root execution was started under (`call_id`), which every call
-  the turn makes names as its parent call.
+  system prompt and the sources it read, the tool surface (with the
+  accounts the soul's launches may name, read once here for every
+  request the spec makes, `Aqua.Hands.launch_accounts/1`), the room
+  excerpt the sender attached, and the deadline the authority allows,
+  and the admission decision the turn's root execution was started under
+  (`call_id`), which every call the turn makes names as its parent call.
 
   A clone's spec is built the same way from the role's definition, under
   the parent's authority and catalyst.
@@ -51,7 +51,8 @@ defmodule Aqua.Loop.Turn do
     :excerpt,
     :attachments,
     soul?: true,
-    several_people?: false
+    several_people?: false,
+    sources: []
   ]
 
   @doc """
@@ -84,6 +85,9 @@ defmodule Aqua.Loop.Turn do
       options = decode(turn.options)
       several? = not Sanctum.Tenancy.Members.solo?(Context.athanor!(ctx))
 
+      prompt =
+        Aqua.Prompt.compose(ctx, agent: agent, authority: authority, several_people?: several?)
+
       spec = %__MODULE__{
         ctx: ctx,
         guest: Context.enter_guest(ctx),
@@ -98,12 +102,8 @@ defmodule Aqua.Loop.Turn do
         catalyst: catalyst,
         model: model,
         capabilities: capabilities,
-        system:
-          Aqua.Prompt.compose(ctx,
-            agent: agent,
-            authority: authority,
-            several_people?: several?
-          ),
+        system: prompt.text,
+        sources: prompt.sources,
         tools:
           Request.tool_definitions(policy,
             roles: roles,

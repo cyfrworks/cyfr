@@ -31,7 +31,14 @@ defmodule PrismWeb.AquaApprovalCard do
     - limit to these paths — for an action that declares which argument
       names a storage path (`Sanctum.Catalog.action_declaration/1`), a
       standing choice may carry the path the call names, in the storage
-      door's spelling, as its constraint.
+      door's spelling, as its constraint;
+    - also when it follows — a standing choice may name the outside
+      sources the turn has read, as the card lists them, so the answer
+      covers calls made after reading them. Unticked, a standing answer
+      asks again once its turn reads any outside source.
+
+  The card names what the turn has read (`intent["sources"]`): each class,
+  and every outside source by its name.
 
   Which standing answers are offered follows the action's own
   declaration, the same one the runner and the grant store enforce: none
@@ -70,6 +77,7 @@ defmodule PrismWeb.AquaApprovalCard do
       |> Map.put(:kind, action_kind(assigns.payload))
       |> Map.put(:standing, standing(assigns.payload))
       |> Map.put(:proposal, assigns.payload[:proposal] || assigns.payload["proposal"])
+      |> Map.put(:read, read_sources(assigns.payload))
 
     ~H"""
     <div
@@ -107,6 +115,17 @@ defmodule PrismWeb.AquaApprovalCard do
         {@payload[:summary] || @payload["summary"]}
       </div>
 
+      <div
+        :if={@read != []}
+        class="text-[11px] text-gray-400 mb-2"
+        data-test="approval-sources"
+      >
+        after reading: {Enum.map_join(Prima.Source.classes_of(@read), ", ", &class_label/1)}
+        <span :if={outside_names(@read) != []}>
+          — from outside:
+          <span class="font-mono text-gray-300">{Enum.join(outside_names(@read), ", ")}</span>
+        </span>
+      </div>
       <div
         :if={account(@proposal)}
         class="text-[12px] text-gray-400 mb-2"
@@ -269,6 +288,21 @@ defmodule PrismWeb.AquaApprovalCard do
                 /> limit to these paths:
                 <span class="font-mono text-gray-300">{Enum.join(@limit.patterns, ", ")}</span>
               </label>
+              <label
+                :if={named_outside(@read) != []}
+                class="inline-flex items-center gap-1"
+                data-test="approval-follows"
+              >
+                <input
+                  type="checkbox"
+                  phx-click="approval:toggle_follows"
+                  phx-target={@myself}
+                  checked={@follows}
+                /> also when it follows:
+                <span class="font-mono text-gray-300">
+                  {Enum.map_join(named_outside(@read), ", ", & &1.name)}
+                </span>
+              </label>
             </div>
           <% end %>
         <% status(@status) == :approved -> %>
@@ -326,6 +360,7 @@ defmodule PrismWeb.AquaApprovalCard do
       |> assign_new(:decided_at, fn -> nil end)
       |> assign_new(:scheduled, fn -> false end)
       |> assign_new(:limited, fn -> false end)
+      |> assign_new(:follows, fn -> false end)
       |> assign(:deadlines, @deadlines)
 
     {:ok, assign_new(socket, :limit, fn -> limit(socket.assigns.payload) end)}
@@ -363,6 +398,10 @@ defmodule PrismWeb.AquaApprovalCard do
 
   def handle_event("approval:toggle_limit", _params, socket) do
     {:noreply, assign(socket, :limited, not socket.assigns.limited)}
+  end
+
+  def handle_event("approval:toggle_follows", _params, socket) do
+    {:noreply, assign(socket, :follows, not socket.assigns.follows)}
   end
 
   def handle_event("approval:decline", %{"reason" => reason}, socket) do
@@ -428,10 +467,47 @@ defmodule PrismWeb.AquaApprovalCard do
 
   defp choice(_scope, _params, _assigns), do: :error
 
-  defp limited(choice, %{limited: true, limit: %{} = limit}),
+  defp limited(choice, assigns), do: choice |> limit_paths(assigns) |> follow(assigns)
+
+  defp limit_paths(choice, %{limited: true, limit: %{} = limit}),
     do: Map.put(choice, :constraint, limit)
 
-  defp limited(choice, _assigns), do: choice
+  defp limit_paths(choice, _assigns), do: choice
+
+  # A standing choice follows the named outside sources the card lists
+  # when the person ticked it; the sources are the card's own.
+  defp follow(choice, %{follows: true, payload: payload}) do
+    case payload |> read_sources() |> named_outside() do
+      [] -> choice
+      sources -> Map.put(choice, :sources, sources)
+    end
+  end
+
+  defp follow(choice, _assigns), do: choice
+
+  # What the turn had read when the card was drawn, as the intent names it.
+  defp read_sources(payload) do
+    (payload[:sources] || payload["sources"] || [])
+    |> List.wrap()
+    |> Enum.map(fn
+      %Prima.Source{} = source -> source
+      other -> Prima.Source.from_json(other)
+    end)
+    |> Prima.Source.set()
+  end
+
+  defp named_outside(sources),
+    do: Enum.filter(sources, &(Prima.Source.outside?(&1) and is_binary(&1.name)))
+
+  defp outside_names(sources) do
+    for source <- sources, Prima.Source.outside?(source), do: source.name || "an unnamed source"
+  end
+
+  defp class_label(:pinned), do: "the pinned page"
+  defp class_label(:filed), do: "filed notes"
+  defp class_label(:files_by_grant), do: "files"
+  defp class_label(:vault_disclosed), do: "a vault value"
+  defp class_label(:outside), do: "outside material"
 
   # The account a launch names, which the approval binds: the
   # `connection` of an `execution.run`, nil for any other call or none.
@@ -455,13 +531,20 @@ defmodule PrismWeb.AquaApprovalCard do
       bounds["lifecycle"] && ", ending with its #{bounds["lifecycle"]}",
       bounds["until"] && ", until #{bounds["until"]}",
       match?(%{"patterns" => [_ | _]}, bounds["constraint"]) &&
-        ", for #{Enum.join(bounds["constraint"]["patterns"], ", ")}"
+        ", for #{Enum.join(bounds["constraint"]["patterns"], ", ")}",
+      match?([_ | _], bounds["sources"]) && ", also after #{followed(bounds["sources"])}"
     ]
     |> Enum.filter(&is_binary/1)
     |> Enum.join()
   end
 
   defp bounds_label(_bounds), do: ""
+
+  defp followed(sources),
+    do:
+      sources
+      |> Enum.map(&Prima.Source.from_json/1)
+      |> Enum.map_join(", ", &(&1.name || "an unnamed source"))
 
   defp status(:pending), do: :pending
   defp status(:running), do: :running

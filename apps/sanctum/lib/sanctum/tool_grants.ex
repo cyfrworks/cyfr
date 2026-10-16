@@ -31,17 +31,21 @@ defmodule Sanctum.ToolGrants do
       still to come, and a constraint, a resource kind and its patterns,
       only for an action that declares an argument naming a resource of
       that kind (`Prima.Operation`'s `resource:`);
+    * an allow names the outside sources it covers (`Prima.Source`s,
+      each a named outside source; none by default);
     * a deny carries none of them and always stands, so a standing deny
       never lapses.
 
-  ## A bounded allow is decided per call
+  ## Every allow is decided per call
 
-  A bounded allow never makes its pair automatic for a turn. `admits?/2`
-  answers, for one call, whether a bounded allow covers it, from the rows
-  as they stand when it is asked: the allow's lifecycle is the call's own
-  execution, turn or schedule and is still live, its deadline has not
-  passed, and the call's resource argument lies inside its constraint. A
-  deny for the pair covers every call.
+  An allow is always bounded by its sources, the empty list among them,
+  so no allow makes its pair automatic for a turn. `admits?/2` answers,
+  for one call, whether an allow covers it, from the rows as they stand
+  when it is asked: the allow's lifecycle is the call's own execution,
+  turn or schedule and is still live, its deadline has not passed, the
+  call's resource argument lies inside its constraint, and every outside
+  source the call's turn has read is one the allow names. A deny for the
+  pair covers every call.
   """
 
   alias Sanctum.Context
@@ -61,7 +65,8 @@ defmodule Sanctum.ToolGrants do
   `:deadline_passed`), and a constraint on an action that names no
   resource (`:no_resource`), of another kind than the action's
   (`:resource_kind`) or outside its kind's grammar
-  (`:invalid_constraint`).
+  (`:invalid_constraint`), and sources that are not named outside
+  sources (`:invalid_sources`).
   """
   @type reason ::
           :destructive
@@ -76,14 +81,17 @@ defmodule Sanctum.ToolGrants do
           | :no_resource
           | :resource_kind
           | :invalid_constraint
+          | :invalid_sources
 
   @typedoc "An answer the rule refuses to let stand."
   @type refusal :: {:scope_not_permitted, reason()}
 
   @typedoc """
   One call as `admits?/2` judges it: the agent that makes it, its thread,
-  its `tool` and `action` with its arguments, and the turn and the root
-  execution it is made in.
+  its `tool` and `action` with its arguments, the turn and the root
+  execution it is made in, and the sources that turn has read. A call
+  that names no sources is read as having read an unnamed outside
+  source, which no allow covers.
   """
   @type call :: %{
           required(:agent_name) => String.t(),
@@ -92,7 +100,8 @@ defmodule Sanctum.ToolGrants do
           required(:action) => String.t(),
           required(:args) => map(),
           optional(:execution_id) => String.t() | nil,
-          optional(:turn_id) => String.t() | nil
+          optional(:turn_id) => String.t() | nil,
+          optional(:sources) => [Prima.Source.t()]
         }
 
   # The bounds an allow may carry and a deny never does, as the row names
@@ -141,7 +150,8 @@ defmodule Sanctum.ToolGrants do
   The athanor and the deciding person come from the context. A context
   with no tenant is `:forbidden`; attributes that do not make a grant are
   `:invalid_argument`; an answer that may not stand is refused with its
-  reason (`check_standing/2`).
+  reason (`check_standing/2`). An allow may also name `sources`, the
+  outside sources it covers.
   """
   @spec grant_row(Context.t(), map()) ::
           {:ok, map()} | {:error, :invalid_argument | :forbidden | refusal()}
@@ -196,11 +206,12 @@ defmodule Sanctum.ToolGrants do
   bound. An allow stands only while the action's current declaration,
   read from the operation table, would take it at its scope, and its
   bounds are well formed: a lifecycle names its kind and its row
-  together, a deadline is after `now`, and a constraint is a resource
-  kind the action declares with patterns in the store's one grammar for
-  it (`Arca.ToolGrantStorage.constraint_errors/2`): a storage path names
-  one path or a folder ending in `/`, never a wildcard. Both
-  writes apply it, and a reader applies it to every row it reads back.
+  together, a deadline is after `now`, a constraint is a resource kind
+  the action declares with patterns in the store's one grammar for it
+  (`Arca.ToolGrantStorage.constraint_errors/2`): a storage path names one
+  path or a folder ending in `/`, never a wildcard, and the sources it
+  names are named outside sources. Both writes apply it, and a reader
+  applies it to every row it reads back.
   """
   @spec check_standing(map(), DateTime.t()) :: :ok | {:error, refusal()}
   def check_standing(attrs, %DateTime{} = now) when is_map(attrs) do
@@ -211,20 +222,20 @@ defmodule Sanctum.ToolGrants do
   end
 
   @doc """
-  Whether a bounded allow covers `call`, as it is asked: `true` only when
-  no deny stands for the pair and a bounded allow for the call's agent,
-  tool and action, read fresh from the store, still stands
-  (`check_standing/2`, at this moment) and covers the call — its
-  lifecycle is the call's own execution, turn or the schedule its
-  execution was started by, and the call's resource argument lies inside
-  its constraint: a path read as the storage door reads it (refused when
-  absolute or unsafe, then matched as the call spells it by
-  `Prima.ComponentPath.path_granted?/2`) or a host as the egress policy
-  matches it. An unbounded allow is the policy's to answer, not this.
+  Whether an allow covers `call`, as it is asked: `true` only when no
+  deny stands for the pair and an allow for the call's agent, tool and
+  action, read fresh from the store, still stands (`check_standing/2`, at
+  this moment) and covers the call — its lifecycle is the call's own
+  execution, turn or the schedule its execution was started by, the
+  call's resource argument lies inside its constraint (a path read as the
+  storage door reads it, refused when absolute or unsafe, then matched as
+  the call spells it by `Prima.ComponentPath.path_granted?/2`, or a host
+  as the egress policy matches it), and every outside source the call's
+  turn has read is one the allow names (`Prima.Source.uncovered/2`).
 
-  A store that cannot be read, a call that names no thread or agent, and
-  a call whose resource argument is absent or unsafe are all `false`: a
-  bounded allow that cannot be checked is not one.
+  A store that cannot be read, a call that names no thread or agent, a
+  call whose resource argument is absent or unsafe, and a call that names
+  no sources are all `false`: an allow that cannot be checked is not one.
   """
   @spec admits?(Context.t(), call()) :: boolean()
   def admits?(
@@ -267,7 +278,8 @@ defmodule Sanctum.ToolGrants do
          :ok <- declared_standing(declaration.standing, scope),
          :ok <- lifecycle(attrs),
          :ok <- deadline(attrs, now),
-         :ok <- constraint(attrs, declaration.resource) do
+         :ok <- constraint(attrs, declaration.resource),
+         :ok <- sources(attrs) do
       {:ok, declaration}
     end
   end
@@ -373,7 +385,28 @@ defmodule Sanctum.ToolGrants do
 
   defp constraint_parts(_constraint), do: :error
 
-  defp bounded?(attrs), do: Enum.any?(@bounds, &(not is_nil(Map.get(attrs, &1))))
+  # The sources an allow names are named outside sources, as the store
+  # answers them; a stored list that did not decode answers an unnamed
+  # one, which this refuses.
+  defp sources(attrs) do
+    case Map.get(attrs, :sources, []) do
+      sources when is_list(sources) ->
+        if Enum.all?(sources, &named_outside?/1), do: :ok, else: refuse(:invalid_sources)
+
+      _other ->
+        refuse(:invalid_sources)
+    end
+  end
+
+  defp named_outside?(%Prima.Source{class: :outside, name: name}), do: is_binary(name)
+  defp named_outside?(_source), do: false
+
+  # A deny is bounded by any of the four bounds or by a source it names;
+  # the empty list of sources is no bound.
+  defp bounded?(attrs),
+    do:
+      Enum.any?(@bounds, &(not is_nil(Map.get(attrs, &1)))) or
+        Map.get(attrs, :sources, []) not in [nil, []]
 
   defp refuse(reason), do: {:error, {:scope_not_permitted, reason}}
 
@@ -382,14 +415,14 @@ defmodule Sanctum.ToolGrants do
   # ---------------------------------------------------------------------------
 
   defp covers?(ctx, %{effect: "allow"} = row, call, now) do
-    bounded?(row) and
-      case standing(row, now) do
-        {:ok, declaration} ->
-          within_lifecycle?(ctx, row, call) and within_constraint?(row, declaration, call)
+    case standing(row, now) do
+      {:ok, declaration} ->
+        within_sources?(row, call) and within_lifecycle?(ctx, row, call) and
+          within_constraint?(row, declaration, call)
 
-        {:error, _refusal} ->
-          false
-      end
+      {:error, _refusal} ->
+        false
+    end
   end
 
   defp covers?(_ctx, _row, _call, _now), do: false
@@ -409,6 +442,18 @@ defmodule Sanctum.ToolGrants do
   end
 
   defp own?(id, call_id), do: is_binary(id) and is_binary(call_id) and id == call_id
+
+  # Every outside source the call's turn has read is one the row names; a
+  # call that names no sources has read what nobody can name.
+  defp within_sources?(row, call) do
+    read =
+      case Map.get(call, :sources) do
+        sources when is_list(sources) -> sources
+        _unknown -> [Prima.Source.outside(nil)]
+      end
+
+    Prima.Source.uncovered(read, Map.get(row, :sources, [])) == []
+  end
 
   # The schedule the call's execution was started by, read in the caller's
   # athanor; none, for an execution no schedule started or one not found.
@@ -494,7 +539,9 @@ defmodule Sanctum.ToolGrants do
 
         :decision ->
           bounds =
-            attrs |> Map.take(@bounds) |> Map.reject(fn {_field, value} -> is_nil(value) end)
+            attrs
+            |> Map.take([:sources | @bounds])
+            |> Map.reject(fn {_field, value} -> is_nil(value) end)
 
           {:ok,
            key

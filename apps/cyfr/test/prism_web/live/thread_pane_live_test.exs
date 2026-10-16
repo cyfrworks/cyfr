@@ -248,6 +248,45 @@ defmodule PrismWeb.ThreadPaneLiveTest do
     assert input =~ ~s("kind":"storage_path")
   end
 
+  test "a card that also follows the outside sources it names sends them to approval.resolve",
+       %{conn: conn, room: room, in_room: in_room, thread: thread} do
+    shown = [
+      %{"class" => "filed", "name" => nil},
+      %{"class" => "outside", "name" => "news.example"}
+    ]
+
+    card =
+      card!(
+        in_room,
+        thread,
+        %{"tool" => "files", "action" => "write", "args" => %{"path" => "data/a.md"}},
+        %{"standing" => nil, "sources" => shown}
+      )
+
+    pane = room_pane(conn, room, thread)
+    card_dom = ~s([id$="-card-#{card.id}"])
+    assert has_element?(pane, ~s(#{card_dom} [data-test="approval-sources"]), "news.example")
+
+    pane |> element(~s(#{card_dom} input[phx-click="approval:toggle_follows"])) |> render_click()
+    pane |> element(~s(#{card_dom} button[phx-value-hours="1"])) |> render_click()
+    render(pane)
+
+    [input] =
+      Arca.Repo.all(
+        from(l in Arca.Schemas.McpLog,
+          where: l.tool == "approval" and l.action == "resolve",
+          select: l.input
+        )
+      )
+
+    # The named outside source alone: never the filed class beside it.
+    assert %{
+             "sources" => [%{"class" => "outside", "name" => "news.example"}],
+             "scope" => "thread"
+           } =
+             Jason.decode!(input)
+  end
+
   @write %{
     "tool" => "files",
     "action" => "write",

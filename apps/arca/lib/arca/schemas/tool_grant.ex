@@ -28,6 +28,11 @@ defmodule Arca.Schemas.ToolGrant do
   its patterns, stored as JSON in the one grammar `constraint_errors/2`
   spells. A deny carries none of the four, so a standing deny never
   lapses; one written with any is refused.
+
+  An allow also names the outside sources it covers (`sources`, a JSON
+  list of named outside `Prima.Source`s, empty by default): a turn that
+  read an outside source the list does not name asks again. A deny names
+  none.
   """
 
   use Ecto.Schema
@@ -93,6 +98,7 @@ defmodule Arca.Schemas.ToolGrant do
   @spec changeset(t() | map(), map()) :: Ecto.Changeset.t()
   def changeset(grant \\ %__MODULE__{}, attrs) do
     {constraint, attrs} = Map.pop(Map.new(attrs), :constraint)
+    {sources, attrs} = Map.pop(attrs, :sources)
 
     grant
     |> cast(attrs, [
@@ -124,6 +130,7 @@ defmodule Arca.Schemas.ToolGrant do
     |> validate_inclusion(:effect, @effects)
     |> validate_thread()
     |> put_constraint(constraint)
+    |> put_sources(sources)
     |> validate_lifecycle()
     |> validate_bounds()
   end
@@ -149,6 +156,39 @@ defmodule Arca.Schemas.ToolGrant do
         :corrupt
     end
   end
+
+  @doc """
+  A stored source list read back as `Prima.Source`s (`Prima.Source.decode/1`:
+  text that does not decode is one unnamed outside source, which covers
+  nothing).
+  """
+  @spec decode_sources(String.t() | nil) :: [Prima.Source.t()]
+  def decode_sources(json), do: Prima.Source.decode(json)
+
+  # The outside sources an allow covers arrive as `Prima.Source`s, each
+  # named: an unnamed one names no origin a turn could be checked against,
+  # and a source of any other class is not one a grant covers. A deny
+  # carries none, the empty list among them stored as the default.
+  defp put_sources(changeset, nil), do: changeset
+
+  defp put_sources(changeset, sources) when is_list(sources) do
+    cond do
+      not Enum.all?(sources, &named_outside?/1) ->
+        add_error(changeset, :sources, "names only named outside sources")
+
+      sources != [] and get_field(changeset, :effect) == "deny" ->
+        add_error(changeset, :sources, "a deny carries no bound")
+
+      true ->
+        put_change(changeset, :sources, Prima.Source.encode(sources))
+    end
+  end
+
+  defp put_sources(changeset, _other),
+    do: add_error(changeset, :sources, "is a list of sources")
+
+  defp named_outside?(%Prima.Source{class: :outside, name: name}), do: is_binary(name)
+  defp named_outside?(_source), do: false
 
   # A constraint arrives as a map of its kind and patterns and is stored as
   # JSON; a string or any other shape is refused rather than stored as given.

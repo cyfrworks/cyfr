@@ -149,4 +149,45 @@ defmodule PrismWeb.AquaApprovalCardTest do
     assert html =~ "ending with its execution"
     assert html =~ "for data/notes/"
   end
+
+  test "the card names what the turn read: each class, and every outside source by its name" do
+    read = [
+      %{"class" => "pinned", "name" => nil},
+      %{"class" => "filed", "name" => nil},
+      %{"class" => "outside", "name" => "news.example"},
+      %{"class" => "outside", "name" => nil}
+    ]
+
+    html = card(%{"action_kind" => "write", "sources" => read})
+
+    assert html =~ ~s(data-test="approval-sources")
+    assert html =~ "the pinned page, filed notes, outside material"
+    assert html =~ "an unnamed source, news.example"
+
+    # A standing answer may follow only the named outside sources.
+    assert html =~ ~s(data-test="approval-follows")
+    assert html =~ ~s(phx-click="approval:toggle_follows")
+    [follows] = Regex.run(~r/also when it follows:.*?<\/label>/s, html)
+    assert follows =~ "news.example"
+    refute follows =~ "unnamed"
+  end
+
+  test "a turn that read nothing, or nothing named from outside, offers no follows" do
+    refute card(%{"action_kind" => "write"}) =~ ~s(data-test="approval-sources")
+
+    html = card(%{"action_kind" => "write", "sources" => [%{"class" => "filed", "name" => nil}]})
+    assert html =~ "after reading: filed notes"
+    refute html =~ ~s(data-test="approval-follows")
+  end
+
+  test "a decided standing answer says which outside sources it also follows" do
+    html =
+      card(%{"action_kind" => "write"},
+        status: "approved",
+        scope: :thread,
+        bounds: %{"sources" => [%{"class" => "outside", "name" => "news.example"}]}
+      )
+
+    assert html =~ "also after news.example"
+  end
 end

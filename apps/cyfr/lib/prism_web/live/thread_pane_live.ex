@@ -604,7 +604,8 @@ defmodule PrismWeb.ThreadPaneLive do
   defp models_loaded(socket, {:error, _}), do: {:noreply, assign(socket, :models_loaded, true)}
 
   # A card is decided through `approval.resolve`, by its approval's id,
-  # with the bounds the person chose for a standing answer. A refusal
+  # with the bounds the person chose for a standing answer, the outside
+  # sources it also follows among them. A refusal
   # reaches the person who clicked — log-only made the button appear to
   # do nothing.
   defp decide(socket, {:approval_approve, id, %{scope: scope} = choice}) when is_binary(id) do
@@ -625,6 +626,7 @@ defmodule PrismWeb.ThreadPaneLive do
             choice[:until] && DateTime.to_iso8601(choice[:until])
           )
           |> Prima.MapUtil.put_present("constraint", constraint_wire(choice[:constraint]))
+          |> Prima.MapUtil.put_present("sources", sources_wire(choice[:sources]))
 
         case PrismWeb.Ops.call_tool(socket, "approval/resolve", args) do
           {:ok, _} ->
@@ -676,6 +678,11 @@ defmodule PrismWeb.ThreadPaneLive do
     do: %{"kind" => to_string(kind), "patterns" => patterns}
 
   defp constraint_wire(_none), do: nil
+
+  # The outside sources a standing answer also follows, as their canonical
+  # objects; none chosen sends none.
+  defp sources_wire([_ | _] = sources), do: Prima.Source.to_json_list(sources)
+  defp sources_wire(_none), do: nil
 
   # ---------------------------------------------------------------------------
   # Runner events
@@ -1641,7 +1648,7 @@ defmodule PrismWeb.ThreadPaneLive do
                   message_id={msg.id}
                   approval_id={msg.approval_id}
                   scheduled={Map.get(@run_schedules, msg.execution_id, false)}
-                  bounds={Map.take(resolution, ~w(lifecycle until constraint))}
+                  bounds={Map.take(resolution, ~w(lifecycle until constraint sources))}
                   payload={intent}
                   status={msg.status}
                   decided_at={msg.resolved_at}

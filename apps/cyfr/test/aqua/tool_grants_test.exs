@@ -89,11 +89,21 @@ defmodule Aqua.ToolGrantsTest do
   end
 
   describe "resolve/2" do
-    test "an allow makes a declared 'ask' automatic" do
+    test "an allow with no other bound is bounded by its sources: a declared 'ask' still asks" do
       declared = %{"component.pull" => "ask"}
       grants = [%{effect: "allow", tool: "component", action: "pull"}]
 
-      assert ToolGrants.resolve(declared, grants) == %{"component.pull" => "auto"}
+      # Each call is decided as it is made (`Sanctum.ToolGrants.admits?/2`),
+      # never by a plain `auto` for the whole turn.
+      assert ToolGrants.resolve(declared, grants) == %{"component.pull" => "ask"}
+
+      assert {:auto, {:bounded, [%{lifecycle_kind: nil, expires_at: nil, constraint: nil}]}} =
+               ToolGrants.effective(declared, grants)["component.pull"]
+
+      named = [Map.put(hd(grants), :sources, [Prima.Source.outside("registry.example")])]
+
+      assert {:auto, {:bounded, [%{sources: [%Prima.Source{name: "registry.example"}]}]}} =
+               ToolGrants.effective(declared, named)["component.pull"]
     end
 
     test "a deny beats a declared 'auto' and pins the pair as denied" do
@@ -222,7 +232,7 @@ defmodule Aqua.ToolGrantsTest do
       assert ToolGrants.resolve(%{}, [bounded(%{})]) == %{"files.write" => "ask"}
     end
 
-    test "never narrows an authored auto, and gives way to an unbounded allow and to a deny" do
+    test "never narrows an authored auto, and gives way to a deny; no allow becomes a plain auto" do
       assert ToolGrants.resolve(%{"files.write" => "auto"}, [bounded(%{})]) ==
                %{"files.write" => "auto"}
 
@@ -230,7 +240,7 @@ defmodule Aqua.ToolGrantsTest do
                bounded(%{}),
                bounded(%{scope: "agent", lifecycle_kind: nil, lifecycle_id: nil, constraint: nil})
              ]) ==
-               %{"files.write" => "auto"}
+               %{"files.write" => "ask"}
 
       assert ToolGrants.resolve(%{"files.write" => "auto"}, [
                bounded(%{}),

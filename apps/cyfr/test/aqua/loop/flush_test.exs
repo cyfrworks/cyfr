@@ -232,6 +232,27 @@ defmodule Aqua.Loop.FlushTest do
     assert {:ok, []} = Tape.pending_approvals(ctx, turn)
   end
 
+  test "a flush never keeps onto a pinned page", %{ctx: ctx, thread: thread} do
+    allow_keep!(ctx, thread)
+    turn = accept_large!(ctx, thread)
+
+    script!([
+      round_one(),
+      %{"entries" => []},
+      flush_reply([keep("n1", "about-you", "they like trains"), keep("n2", "about-us", "x")]),
+      reply("the story so far"),
+      reply("done")
+    ])
+
+    assert :completed = Task.await(run(ctx, turn), 60_000)
+    {:ok, steps} = Tape.steps(ctx, turn)
+    flush_calls = Enum.filter(steps, &(&1.purpose == "flush" and &1.kind != "model"))
+
+    assert ["error", "error"] = Enum.map(flush_calls, & &1.outcome)
+    assert :none = Aqua.Notes.pinned(ctx)
+    assert {:error, _} = Aqua.Notes.read(ctx, "about-you")
+  end
+
   test "a grant withdrawn while the flush request runs keeps no note", %{
     ctx: ctx,
     thread: thread

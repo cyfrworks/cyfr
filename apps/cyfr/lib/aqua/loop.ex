@@ -23,6 +23,20 @@ defmodule Aqua.Loop do
 
   Every write goes through `Aqua.Tape` under the actor's guest-planed
   context; the loop process never runs a child on itself.
+
+  ## The turn's sources
+
+  Every way a turn reads joins its sources (`Prima.Source`,
+  `turns.sources`) in the transaction that writes the step it belongs to.
+  A model step opens with the prompt's sources (`Aqua.Prompt.compose/2`),
+  the sources of every earlier turn whose rows the request sends,
+  compaction summaries among them, an outside source for a turn a webhook
+  started and one for the model's own web search when the request offers
+  it; a call's result closes with the sources it carries
+  (`Aqua.Loop.Policy.sources_of/2`). The room excerpt is the athanor's own
+  members' words and joins nothing. A standing allow is judged against the
+  sources as they stand when a call is decided and again when it
+  dispatches, and a card names them.
   """
 
   require Logger
@@ -557,7 +571,7 @@ defmodule Aqua.Loop do
          {:ok, rows} <- Tape.projection(guest(state), state.turn),
          {:ok, planned, rows} <- compact(state, rows),
          first? = planned.steps == 0,
-         {:ok, step, planned} <- open_model_step(planned, "chat") do
+         {:ok, step, planned} <- open_model_step(planned, "chat", rows) do
       excerpt = if planned.excerpt_sent?, do: nil, else: planned.spec.excerpt
       request = request(planned, rows, excerpt, first?)
       planned = %{planned | sent_upto: highest_seq(rows)}
@@ -621,10 +635,16 @@ defmodule Aqua.Loop do
   # Every model step opened — a chat round, its retry, a compaction —
   # counts against the turn's cap, before it opens; the count is the
   # turn's, rebuilt from its rows on a continuation.
-  defp open_model_step(%State{steps: steps}, _purpose) when steps >= @max_steps,
+  #
+  # The step opens with what the request reads (`opening_sources/1`), and
+  # with the sources of the earlier turns whose rows it sends, joined in
+  # the step's own transaction.
+  defp open_model_step(state, purpose, rows \\ [])
+
+  defp open_model_step(%State{steps: steps}, _purpose, _rows) when steps >= @max_steps,
     do: {:error, :step_cap}
 
-  defp open_model_step(%State{} = state, purpose) do
+  defp open_model_step(%State{} = state, purpose, rows) do
     with {:ok, step} <-
            Tape.record_model_intent(guest(state), state.turn, %{
              idempotency_key:
@@ -632,11 +652,41 @@ defmodule Aqua.Loop do
              child_execution_id: Prima.UUID7.execution_id(),
              tool: state.spec.catalyst,
              action: "chat",
-             purpose: purpose
+             purpose: purpose,
+             sources: opening_sources(state),
+             sources_from: earlier_turns(state, rows)
            }),
          {:ok, step} <- Tape.mark_dispatched(guest(state), state.turn, step) do
       {:ok, step, %{state | steps: state.steps + 1}}
     end
+  end
+
+  # What a model step reads besides the rows: the system prompt's sources,
+  # a webhook's payload for a turn one started, and the open web when the
+  # request offers the model's own search.
+  defp opening_sources(%State{spec: spec, turn: turn}) do
+    webhook = if turn.origin == "webhook", do: [Prima.Source.outside("webhook")], else: []
+
+    search =
+      if native_search?(spec), do: [Prima.Source.outside("web_search")], else: []
+
+    spec.sources ++ webhook ++ search
+  end
+
+  # The request offers web search exactly when `Request.build/1` adds the
+  # provider tool: the policy grants `native_search` and the model has it.
+  defp native_search?(spec),
+    do:
+      Map.get(spec.policy, "native_search") == "auto" and
+        "web_search" in (Map.get(spec.capabilities || %{}, :provider_tools) || [])
+
+  # The earlier turns whose rows a request sends: every row's turn but
+  # this one's. An unattached row is a person's and names none.
+  defp earlier_turns(%State{turn: turn}, rows) do
+    rows
+    |> Enum.map(&Map.get(&1, :turn_id))
+    |> Enum.reject(&(is_nil(&1) or &1 == turn.id))
+    |> Enum.uniq()
   end
 
   defp ask_model(%State{} = state, step, request, retained, retries) do
@@ -1087,7 +1137,10 @@ defmodule Aqua.Loop do
 
   defp open_card(%State{} = state, step, %Call{} = call, card_opts) do
     intent =
-      Policy.card(call, [id: Prima.UUID7.generate_id("apr")] ++ card_opts)
+      Policy.card(
+        call,
+        [id: Prima.UUID7.generate_id("apr"), sources: shown_sources(state)] ++ card_opts
+      )
       |> Map.put("tool_call_id", call.tool_call_id)
 
     case Tape.open_approval(guest(state), state.turn, step, %{
@@ -1293,9 +1346,11 @@ defmodule Aqua.Loop do
     end
   end
 
-  # Where a call is made, as a bounded allow is judged against it
+  # Where a call is made, as a standing allow is judged against it
   # (`Sanctum.ToolGrants.admits?/2`): the member's context its rows are
-  # read under, the agent, the thread, the turn and the turn's root.
+  # read under, the agent, the thread, the turn and the turn's root. The
+  # turn's sources are read from its row as each call is decided
+  # (`Aqua.Loop.Policy`), so a source a concurrent call joined counts.
   defp place(%State{spec: spec, turn: turn}) do
     [
       ctx: spec.ctx,
@@ -1304,6 +1359,15 @@ defmodule Aqua.Loop do
       turn_id: turn.id,
       execution_id: turn.root_execution_id
     ]
+  end
+
+  # What a card names: the turn's sources as they stand, or an unnamed
+  # outside source when they cannot be read.
+  defp shown_sources(%State{} = state) do
+    case Tape.turn(guest(state), state.turn.id) do
+      {:ok, %{sources: sources}} -> Prima.Source.decode(sources)
+      _unreadable -> [Prima.Source.outside(nil)]
+    end
   end
 
   defp settle_denied(%State{} = state, step, %Call{} = call, message) do
@@ -1321,7 +1385,7 @@ defmodule Aqua.Loop do
             {:uncertain, step, describe(reason)}
 
           result ->
-            case close(state, step, call, result) do
+            case close(state, step, call, result, Policy.sources_of(call, result)) do
               {:ok, _closed} ->
                 :ok
 
@@ -1384,8 +1448,9 @@ defmodule Aqua.Loop do
 
   # The step's result row and outcome: `ok`, `error`, `denied` for a
   # refusal by the policy or the chain, `skipped` for a call not started,
-  # or `uncertain` for a call closed with its outcome unknown.
-  defp close(%State{} = state, step, call, result) do
+  # or `uncertain` for a call closed with its outcome unknown — with the
+  # sources the result carries, joined in the same transaction.
+  defp close(%State{} = state, step, call, result, sources \\ []) do
     {outcome, text, error?} =
       case result do
         {:unknown, message} ->
@@ -1430,7 +1495,8 @@ defmodule Aqua.Loop do
         }
       },
       execution_id: step.child_execution_id,
-      error: if(error?, do: text, else: nil)
+      error: if(error?, do: text, else: nil),
+      sources: sources
     })
   end
 
@@ -1624,6 +1690,7 @@ defmodule Aqua.Loop do
 
   defp close_launch(state, step, call, {:ok, id, result}) do
     text = Jason.encode!(result, pretty: true)
+    sources = if call, do: Policy.sources_of(call, {:ok, result}), else: []
 
     _ =
       Tape.close_step(guest(state), state.turn, step, "ok", %{
@@ -1635,7 +1702,8 @@ defmodule Aqua.Loop do
             "is_error" => false
           }
         },
-        execution_id: id
+        execution_id: id,
+        sources: sources
       })
 
     state
@@ -1879,24 +1947,35 @@ defmodule Aqua.Loop do
   end
 
   # One silent request before older rows are summarized away, so the model
-  # can keep notes: `notes.keep` alone, under a standing `auto` re-read from
-  # the member's grants, in a turn no unknown outcome restricts, with room
-  # left for the flush, the summary and the next chat request, and only
-  # when the request fits the catalyst's cap.
+  # can keep notes: `notes.keep` alone, under the author's `auto` or a
+  # standing allow that covers it now (its sources among its bounds),
+  # re-read from the member's grants, in a turn no unknown outcome
+  # restricts, with room left for the flush, the summary and the next chat
+  # request, and only when the request fits the catalyst's cap. The kept
+  # note carries the turn's sources when they hold an outside one
+  # (`Aqua.Providers.Notes`).
   defp flush(%State{spec: spec} = state, rows, probe) do
     cap = catalyst_request_cap(spec)
 
     with true <- flush_room?(state.steps, state.restricted?),
          {:ok, policy} <- Turn.current_policy(spec),
-         "auto" <- Map.get(policy, @flush_key),
-         request = flush_request(probe, policy),
+         true <- flush_granted?(state, policy),
+         request = flush_request(probe, Map.put(policy, @flush_key, "auto")),
          size when is_integer(size) and (is_nil(cap) or size <= cap) <- encoded_size(request),
-         {:ok, step, state} <- open_model_step(state, "flush") do
+         {:ok, step, state} <- open_model_step(state, "flush", rows) do
       keep_notes(%{state | sent_upto: highest_seq(rows)}, step, request)
     else
       {:error, :superseded} = superseded -> superseded
       _not_flushed -> :skipped
     end
+  end
+
+  # The keep a flush offers runs without a card: under the author's `auto`,
+  # or an allow that covers a keep in this turn as it stands now. Each kept
+  # note is asked again as it dispatches.
+  defp flush_granted?(%State{} = state, policy) do
+    probe = %Call{kind: :catalog, tool: @flush_tool, action: @flush_action, args: %{}}
+    Policy.auto?(probe, policy, place(state))
   end
 
   @doc false
@@ -2025,7 +2104,7 @@ defmodule Aqua.Loop do
         previous_summary: previous && previous.content
       )
 
-    case open_model_step(state, "compaction") do
+    case open_model_step(state, "compaction", rows) do
       {:error, :step_cap} -> {:error, :step_cap}
       {:error, reason} -> skip_compaction(state, rows, reason)
       {:ok, step, state} -> commit_summary(state, rows, boundary, request, step)

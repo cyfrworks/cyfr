@@ -11,9 +11,10 @@ defmodule Aqua.ToolGrants do
     * **Declared** — the agent's markdown `tool_policy`. The author's
       intent, edited on the AQUA page. A chat click never writes here.
     * **Granted** — a `tool_grants` row. What a human answered when the
-      agent asked. `"allow"` makes the pair automatic; `"deny"` is the
-      decline verb, and it **beats a declared `"auto"`** — a person who
-      said "never" outranks a default they did not write.
+      agent asked. `"allow"` covers the calls its bounds admit, each
+      decided as it is made; `"deny"` is the decline verb, and it **beats
+      a declared `"auto"`** — a person who said "never" outranks a default
+      they did not write.
 
   `resolve/2` is the composition, and it is the only thing that should
   ever be handed to a turn as its policy.
@@ -39,14 +40,18 @@ defmodule Aqua.ToolGrants do
   to every row read here; the same declaration is minted into the
   approval intent the runner checks, so the two gates cannot disagree.
 
-  ## A bounded allow asks
+  ## Every allow is bounded
 
-  An allow may carry bounds: the execution, turn or schedule it ends
-  with, a deadline, and the resources it covers. `effective/2` keeps them
-  on the pair's decision, and the guest reads the pair as `"ask"`: no
-  bounded allow is automatic for a whole turn. Each call is decided as it
-  is made, and again as it dispatches, by `Sanctum.ToolGrants.admits?/2`
-  against the rows as they stand then (`Aqua.Loop.Policy`). A bounded
+  An allow carries bounds: the outside sources it covers (none, unless
+  the person named some), and may carry the execution, turn or schedule
+  it ends with, a deadline, and the resources it covers. Its sources are
+  a bound even when empty, so every allow is bounded: `effective/2` keeps
+  the bounds on the pair's decision, and the guest reads the pair as
+  `"ask"`, so no allow is automatic for a whole turn. Each call is
+  decided as it is made, and again as it dispatches, by
+  `Sanctum.ToolGrants.admits?/2` against the rows and the turn's sources
+  as they stand then (`Aqua.Loop.Policy`): an allow covers no call made
+  after its turn read an outside source the allow does not name. An
   allow never narrows what the author made automatic.
   """
 
@@ -56,7 +61,7 @@ defmodule Aqua.ToolGrants do
   @effects Sanctum.ToolGrants.effects()
 
   # The bounds an allow may carry, as its row names them.
-  @bounds [:lifecycle_kind, :lifecycle_id, :expires_at, :constraint]
+  @bounds [:lifecycle_kind, :lifecycle_id, :expires_at, :constraint, :sources]
 
   @type key :: {tool :: String.t(), action :: String.t()}
 
@@ -64,20 +69,22 @@ defmodule Aqua.ToolGrants do
   @type grant :: %{required(:scope) => String.t(), optional(atom()) => term()}
 
   @typedoc """
-  A bounded allow's bounds, as its row holds them: the scope it was given
-  at, the lifecycle it ends with, its deadline and its constraint.
+  An allow's bounds, as its row holds them: the scope it was given at,
+  the lifecycle it ends with, its deadline, its constraint and the
+  outside sources it covers.
   """
   @type bounds :: %{
           scope: String.t() | nil,
           lifecycle_kind: String.t() | nil,
           lifecycle_id: String.t() | nil,
           expires_at: DateTime.t() | nil,
-          constraint: map() | :corrupt | nil
+          constraint: map() | :corrupt | nil,
+          sources: [Prima.Source.t()] | nil
         }
 
   @typedoc """
   One effective decision: the mode, and who made it — the author, a
-  standing grant, or bounded allows, whose bounds it keeps.
+  standing deny, or allows, whose bounds it keeps.
   """
   @type decision :: {:auto | :ask | :deny, :authored | :grant | {:bounded, [bounds()]}}
 
@@ -104,11 +111,12 @@ defmodule Aqua.ToolGrants do
   untouched. A key for a tool nobody catalogues passes through too — the
   guest offers no such tool.
 
-  Then the decisions: a bounded allow keeps its bounds on its pair, as
+  Then the decisions: an allow keeps its bounds on its pair, as
   `{:auto, {:bounded, bounds}}`, unless the author already made the pair
-  automatic; an unbounded allow makes its pair `:auto` (a grant's); a
-  standing deny KEEPS its pair, as `:deny` — an absent key would let a
-  surviving glob answer, and the guest stops at a present one. Last the
+  automatic — every allow is bounded by its sources, so none becomes a
+  plain `:auto`; a standing deny KEEPS its pair, as `:deny` — an absent
+  key would let a surviving glob answer, and the guest stops at a
+  present one. Last the
   ceiling: an `:auto` on a destructive or external action, or on an
   action whose kind is unknown, becomes `:ask`; an action a catalogued
   tool does not have is dropped. A hand-edited file reaches the guest
@@ -117,20 +125,18 @@ defmodule Aqua.ToolGrants do
   @spec effective(map(), [grant()]) :: %{String.t() => decision()}
   def effective(authored, grants) when is_map(authored) and is_list(grants) do
     {denied, allowed} = Enum.split_with(grants, &(&1.effect == "deny"))
-    {bounded, unbounded} = allowed |> standing_allows() |> Enum.split_with(&bounded?/1)
 
     authored
     |> expand_globs()
-    |> with_bounded(bounded)
-    |> Map.merge(Map.new(unbounded, fn g -> {key_string(g), {:auto, :grant}} end))
+    |> with_bounded(standing_allows(allowed))
     |> Map.merge(Map.new(denied, fn g -> {key_string(g), {:deny, :grant}} end))
     |> ceiling()
   end
 
   @doc """
   The guest's spelling of `effective/2`: `"auto" | "ask" | "deny"` per
-  key. A bounded allow is `"ask"`: it covers only the calls its bounds
-  admit, each decided as it is made.
+  key. An allow is `"ask"`: it covers only the calls its bounds admit,
+  each decided as it is made.
   """
   @spec to_guest(%{String.t() => decision()}) :: map()
   def to_guest(decisions) when is_map(decisions),
@@ -139,9 +145,9 @@ defmodule Aqua.ToolGrants do
   defp guest_mode({:auto, {:bounded, _bounds}}), do: "ask"
   defp guest_mode({mode, _by}), do: Atom.to_string(mode)
 
-  # A bounded allow joins its pair's decision, kept beside any other
-  # bounded allow for the pair. It never narrows an authored `auto`, and
-  # an unbounded allow or a deny merged after it outranks it.
+  # An allow joins its pair's decision, kept beside any other allow for
+  # the pair. It never narrows an authored `auto`, and a deny merged after
+  # it outranks it.
   defp with_bounded(decisions, bounded) do
     Enum.reduce(bounded, decisions, fn grant, acc ->
       bounds = bounds_of(grant)
@@ -156,8 +162,6 @@ defmodule Aqua.ToolGrants do
 
   defp bounds_of(grant),
     do: Map.new([:scope | @bounds], &{&1, Map.get(grant, &1)})
-
-  defp bounded?(grant), do: Enum.any?(@bounds, &(not is_nil(Map.get(grant, &1))))
 
   # Authored values are `"ask" | "auto"` (the parser's grammar); anything
   # else in a file is read as ask, the fail-closed reading the guest
@@ -306,9 +310,9 @@ defmodule Aqua.ToolGrants do
   @doc """
   The `{tool, action}` pairs a person answered with a standing allow that
   still stands — what the chat shows as its standing answers, each
-  revocable there. A bounded allow is listed too, though it covers only
-  the calls its bounds admit (each decided as it is made, `effective/2`),
-  so every standing answer a person gave can be seen and withdrawn. An
+  revocable there. An allow covers only the calls its bounds admit (each
+  decided as it is made, `effective/2`), and every one is listed, so
+  every standing answer a person gave can be seen and withdrawn. An
   authored `auto` never mints a card, so it is never here; an allow the
   action's current declaration would refuse no longer stands and is not
   here; a deny for the same pair subtracts, since the pair asks no more.
@@ -392,6 +396,9 @@ defmodule Aqua.ToolGrants do
 
   def refusal_message({:scope_not_permitted, :invalid_constraint}),
     do: "The paths or domains the answer is limited to are not valid ones."
+
+  def refusal_message({:scope_not_permitted, :invalid_sources}),
+    do: "An answer can follow only the outside sources this card names."
 
   def refusal_message({:scope_not_permitted, _other}),
     do: "A standing answer is not permitted for this action — decide it once."

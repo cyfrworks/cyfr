@@ -263,7 +263,141 @@ defmodule Aqua.NotesStoreTest do
     end
   end
 
+  describe "outside material" do
+    test "a note kept with sources answers them on every read until a person endorses it", %{
+      ctx: ctx
+    } do
+      member!()
+      host = Prima.Source.outside("news.example")
+      assert {:ok, _} = Notes.keep(ctx, "clip", "Fares rise on Monday", sources: [host])
+
+      assert {:ok, %{sources: [^host]}} = read = Notes.read(ctx, "clip")
+      assert Notes.sources_of_answer(read) == [host]
+      assert {:ok, %{entries: [%{name: "clip", sources: [^host]}]}} = Notes.index(ctx)
+      assert {:ok, %{notes: [%{sources: [^host]}]} = found} = Notes.search(ctx, "fares")
+      assert Notes.sources_of_answer({:ok, %{matches: found.notes}}) == [host]
+
+      # The card must name exactly what the note carries.
+      assert {:error, {:conflict, _}} =
+               Notes.endorse(ctx, "clip", [Prima.Source.outside("other.example")])
+
+      assert {:error, {:conflict, _}} = Notes.endorse(ctx, "clip", [])
+      assert {:ok, %{sources: [^host]}} = Notes.read(ctx, "clip")
+
+      assert {:ok, %{endorsed: "clip"}} =
+               Notes.endorse(ctx, "clip", Prima.Source.to_json_list([host]))
+
+      assert {:ok, %{content: "Fares rise on Monday", sources: [], kept_by: kept_by}} =
+               Notes.read(ctx, "clip")
+
+      assert kept_by == ctx.user_id
+      assert {:error, {:invalid_argument, _}} = Notes.endorse(ctx, "clip", [host])
+      assert {:error, {:invalid_argument, _}} = Notes.endorse(ctx, "about-us", [host])
+      assert {:error, {:not_found, "note", "gone"}} = Notes.endorse(ctx, "gone", [host])
+    end
+
+    test "an endorsement never writes over a note corrected since its read", %{ctx: ctx} do
+      member!()
+      host = Prima.Source.outside("news.example")
+      assert {:ok, _} = Notes.keep(ctx, "clip", "Fares rise", sources: [host])
+
+      Interleave.plant(fn ->
+        {:ok, _} = Notes.keep_over(ctx, "clip", "Fares fall, corrected", 1)
+      end)
+
+      assert {:error, {:conflict, _}} = Notes.endorse(ctx, "clip", [host])
+      assert {:ok, %{content: "Fares fall, corrected", sources: []}} = Notes.read(ctx, "clip")
+    end
+
+    test "a keep in a chain that read outside material is marked, whatever allowed it; a pin is not",
+         %{ctx: ctx, actor: actor} do
+      member!()
+      host = Prima.Source.outside("news.example")
+      {thread, root} = chain!(ctx, actor, [Prima.Source.new(:filed), host])
+
+      # A standing allow naming the source covers the keep; it admits the
+      # action and endorses nothing.
+      {:ok, _} =
+        Aqua.ToolGrants.put(ctx, %{
+          scope: "thread",
+          effect: "allow",
+          thread_id: thread,
+          agent_name: "aqua",
+          tool: "notes",
+          action: "keep",
+          sources: [host]
+        })
+
+      guest = Sanctum.Context.enter_guest(ctx)
+      lineage = %{"root_execution_id" => root, "thread_id" => thread}
+
+      assert {:ok, %{kept: "clip"}} =
+               Aqua.Providers.Notes.handle(
+                 "notes",
+                 guest,
+                 Map.merge(lineage, %{"action" => "keep", "name" => "clip", "content" => "x"})
+               )
+
+      assert {:ok, %{sources: [%Prima.Source{class: :filed}, ^host], thread: ^thread}} =
+               Notes.read(ctx, "clip")
+
+      assert {:ok, %{pinned: "about-us"}} =
+               Aqua.Providers.Notes.handle(
+                 "notes",
+                 guest,
+                 Map.merge(lineage, %{"action" => "pin", "name" => "about-us", "content" => "y"})
+               )
+
+      assert {:ok, %{sources: []}} = Notes.pinned(ctx)
+
+      # The same keep at the door, and one from a chain that read only the
+      # athanor's own material, carry none.
+      assert {:ok, _} =
+               Aqua.Providers.Notes.handle("notes", ctx, %{
+                 "action" => "keep",
+                 "name" => "door",
+                 "content" => "z"
+               })
+
+      assert {:ok, %{sources: []}} = Notes.read(ctx, "door")
+      {_thread, own} = chain!(ctx, actor, [Prima.Source.new(:filed)])
+
+      assert {:ok, _} =
+               Aqua.Providers.Notes.handle("notes", guest, %{
+                 "action" => "keep",
+                 "name" => "own",
+                 "content" => "w",
+                 "root_execution_id" => own
+               })
+
+      assert {:ok, %{sources: []}} = Notes.read(ctx, "own")
+    end
+  end
+
   # ---- helpers ---------------------------------------------------------------
+
+  # A turn of a thread of this athanor running on its own root execution,
+  # having read `sources`: written straight to its row, as the loop's step
+  # writes leave it.
+  defp chain!(ctx, actor, sources) do
+    actor = Map.put(actor, :user_id, ctx.user_id)
+    {:ok, thread} = Arca.ThreadStorage.create(actor)
+
+    {:ok, %{turn: turn}} =
+      Arca.TurnStorage.accept_message(actor, thread.id, %{
+        message: %{author: ctx.user_id, content: "go"},
+        turn: %{agent: "aqua", requested_by: ctx.user_id, origin: :interactive}
+      })
+
+    root = "exec_notes_#{System.unique_integer([:positive])}"
+
+    {1, _} =
+      Arca.Repo.update_all(from(t in Arca.Schemas.Turn, where: t.id == ^turn.id),
+        set: [root_execution_id: root, sources: Prima.Source.encode(sources)]
+      )
+
+    {thread.id, root}
+  end
 
   # This member's slot, taken and recorded as the claimant takes it.
   defp member! do

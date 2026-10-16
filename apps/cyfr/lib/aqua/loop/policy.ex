@@ -26,12 +26,19 @@ defmodule Aqua.Loop.Policy do
   the profile does not bind ends the call as setup required, before any
   approval is read.
 
-  A key that asks runs at once only when a bounded allow covers this very
-  call (`Sanctum.ToolGrants.admits?/2`): its lifecycle is the call's own
-  execution, turn or schedule and still live, its deadline has not
-  passed and the call's resource lies inside its constraint, read from
-  the rows as they stand when the call is decided and again when it
-  dispatches, never from the turn's start.
+  A key that asks runs at once only when a standing allow covers this
+  very call (`Sanctum.ToolGrants.admits?/2`): its lifecycle is the call's
+  own execution, turn or schedule and still live, its deadline has not
+  passed, the call's resource lies inside its constraint, and every
+  outside source the turn has read is one the allow names, read from the
+  rows and the turn's sources as they stand when the call is decided and
+  again when it dispatches, never from the turn's start.
+
+  `sources_of/2` names the sources a call's result carries into its
+  turn: `filed` and the notes' own provenance for a notes read,
+  `files_by_grant` for a files or storage read and a component's source,
+  and an outside source named by its origin for an external server's
+  tool, the HTTP hand, a launched component and a feed's results.
 
   `touched_refs/1` names the components a turn's closed write,
   destructive and execute calls reached, from their durable rows.
@@ -65,11 +72,12 @@ defmodule Aqua.Loop.Policy do
   The decision for `call` under `policy`. `opts`: `:restricted?` (the
   turn holds a call whose outcome is unknown: only a replay-safe read
   runs, whatever the policy says), and where the call is made, which a
-  bounded allow is judged against and a launch's account is resolved
+  standing allow is judged against and a launch's account is resolved
   under: `:ctx` (the member's context its rows are read under), `:agent`
   (the agent's name), `:thread_id`, `:turn_id` and `:execution_id` (the
-  turn's root). Without them a key that asks, asks, and a launch naming
-  an account is refused.
+  turn's root); the turn's sources are read from its row as the call is
+  decided, unless `:sources` names them. Without them a key that asks,
+  asks, and a launch naming an account is refused.
   """
   @spec decide(Call.t(), map(), keyword()) :: decision()
   def decide(%Call{} = call, policy, opts) do
@@ -158,9 +166,10 @@ defmodule Aqua.Loop.Policy do
     end
   end
 
-  # Whether a bounded allow covers this very call, read fresh. Only a hand
-  # or a catalog call runs under a standing answer; a call made nowhere
-  # the rows can be read for asks.
+  # Whether a standing allow covers this very call, read fresh. Only a
+  # hand or a catalog call runs under a standing answer; a call made
+  # nowhere the rows can be read for asks, and so does one whose turn's
+  # sources are not known.
   defp admitted?(%Call{kind: kind, tool: tool, action: action, args: args}, opts)
        when kind in [:hand, :catalog] and is_binary(action) do
     with %Sanctum.Context{} = ctx <- Keyword.get(opts, :ctx),
@@ -173,7 +182,8 @@ defmodule Aqua.Loop.Policy do
         action: action,
         args: args,
         execution_id: Keyword.get(opts, :execution_id),
-        turn_id: Keyword.get(opts, :turn_id)
+        turn_id: Keyword.get(opts, :turn_id),
+        sources: turn_sources(ctx, opts)
       })
     else
       _ -> false
@@ -181,6 +191,24 @@ defmodule Aqua.Loop.Policy do
   end
 
   defp admitted?(_call, _opts), do: false
+
+  # The turn's sources: those the place names, else the turn's row read
+  # now, so a source a concurrent call joined counts. A turn whose row
+  # cannot be read has unknown sources, which no allow covers.
+  defp turn_sources(ctx, opts) do
+    case Keyword.fetch(opts, :sources) do
+      {:ok, sources} ->
+        sources
+
+      :error ->
+        with turn_id when is_binary(turn_id) <- Keyword.get(opts, :turn_id),
+             {:ok, %{sources: sources}} <- Aqua.Tape.turn(ctx, turn_id) do
+          Prima.Source.decode(sources)
+        else
+          _unknown -> nil
+        end
+    end
+  end
 
   defp deny(call), do: {:deny, "#{key(call)} is not in the agent's policy"}
 
@@ -300,7 +328,9 @@ defmodule Aqua.Loop.Policy do
   takes no standing answer, and its proposal carries the account its
   call named as the binding stores it and the entry it resolved to
   (`opts[:account]`, `proposal/2`), so the approval binds the account the
-  card showed.
+  card showed. The card names the sources the turn has read
+  (`opts[:sources]`, canonical JSON): a standing answer may follow only
+  the outside ones it names.
   """
   @spec card(Call.t(), keyword()) :: map()
   def card(%Call{} = call, opts \\ []) do
@@ -314,9 +344,80 @@ defmodule Aqua.Loop.Policy do
       "action_kind" =>
         Atom.to_string(Aqua.Kinds.kind_for(call.tool, call.action || "") || :external),
       "standing" => standing(call),
-      "proposal" => proposal
+      "proposal" => proposal,
+      "sources" => Prima.Source.to_json_list(Keyword.get(opts, :sources, []))
     }
   end
+
+  @doc """
+  The sources `call`'s `result` carries into its turn. A notes read is
+  `filed`, joined by the provenance of every note it answered; a files or
+  storage read and a component's source are `files_by_grant`; an
+  external server's tool is outside, named by its server; the HTTP hand
+  is outside, named by the host its URL names; a launched component is
+  outside, named by its reference; a feed's listing is outside, named by
+  each feed whose result it carries. Any other call carries none. A
+  result is joined whatever its outcome: an error body is read too.
+  """
+  @spec sources_of(Call.t(), term()) :: [Prima.Source.t()]
+  def sources_of(%Call{kind: :external, target: target}, _result),
+    do: [Prima.Source.outside(server_of(target))]
+
+  def sources_of(%Call{kind: :hand, tool: "http", args: args}, _result),
+    do: [Prima.Source.outside(host_of(args["url"]))]
+
+  def sources_of(%Call{kind: :hand, tool: tool, action: action}, _result)
+      when tool in ["files", "storage"] do
+    if Aqua.Kinds.kind_for(tool, action) == :read,
+      do: [Prima.Source.new(:files_by_grant)],
+      else: []
+  end
+
+  def sources_of(%Call{kind: :catalog, tool: "source", action: action}, _result) do
+    if Aqua.Kinds.kind_for("source", action) == :read,
+      do: [Prima.Source.new(:files_by_grant)],
+      else: []
+  end
+
+  def sources_of(%Call{kind: :catalog, tool: "notes", action: action}, result)
+      when action in ["read", "list", "search"],
+      do: [Prima.Source.new(:filed) | Aqua.Notes.sources_of_answer(result)]
+
+  def sources_of(%Call{kind: :catalog, tool: "feed", action: "list"}, result),
+    do: feed_sources(result)
+
+  def sources_of(%Call{kind: :launch, target: reference}, _result),
+    do: [Prima.Source.outside(reference)]
+
+  def sources_of(%Call{}, _result), do: []
+
+  # `server:tool` is named by its server.
+  defp server_of(target) when is_binary(target),
+    do: target |> String.split(":", parts: 2) |> hd()
+
+  defp server_of(_target), do: nil
+
+  # A URL is named by its host, lowercased; one that names none is an
+  # unnamed outside source.
+  defp host_of(url) when is_binary(url) do
+    case URI.parse(url) do
+      %URI{host: host} when is_binary(host) and host != "" -> String.downcase(host)
+      _ -> nil
+    end
+  end
+
+  defp host_of(_url), do: nil
+
+  # Each feed whose result the listing carries, by its binding; a listing
+  # that cannot be read is an unnamed outside source.
+  defp feed_sources({:ok, %{feeds: feeds}}) when is_list(feeds) do
+    for %{binding_id: id} = feed <- feeds, Map.get(feed, :result) != nil do
+      Prima.Source.outside("feed:#{id}")
+    end
+  end
+
+  defp feed_sources({:ok, _other}), do: [Prima.Source.outside(nil)]
+  defp feed_sources(_failed), do: []
 
   # A launch is an external act, approved one card at a time.
   defp standing(%Call{kind: :launch}), do: Sanctum.Annotations.standing_to_wire(false)

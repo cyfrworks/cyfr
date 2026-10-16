@@ -184,6 +184,7 @@ const (
 	MemberLeave                     = "leave"
 	MemberList                      = "list"
 	MemberRemove                    = "remove"
+	NotesEndorse                    = "endorse"
 	NotesForget                     = "forget"
 	NotesKeep                       = "keep"
 	NotesList                       = "list"
@@ -335,7 +336,7 @@ var Actions = map[string][]string{
 	"mcp_log":             {"correlate", "fan_outs", "get", "list", "stats"},
 	"mcp_servers":         {"create", "delete", "disable", "enable", "get", "list", "refresh", "restart", "test", "update"},
 	"member":              {"add", "leave", "list", "remove"},
-	"notes":               {"forget", "keep", "list", "pin", "read", "search"},
+	"notes":               {"endorse", "forget", "keep", "list", "pin", "read", "search"},
 	"oauth":               {"delete_client", "list", "set_client"},
 	"pairing":             {"begin", "complete", "list", "renew", "revoke"},
 	"passkey":             {"list", "recover_admin", "register", "revoke"},
@@ -402,6 +403,8 @@ type ApprovalResolveArgs struct {
 	Until Field[string] `json:"until,omitzero"`
 	// resolve: the resources a standing approval covers, for an action that declares which argument names one
 	Constraint Field[ApprovalResolveArgsConstraint] `json:"constraint,omitzero"`
+	// resolve: the outside sources, among those the card names, a standing approval also follows
+	Sources Field[[]ApprovalResolveArgsSourcesItem] `json:"sources,omitzero"`
 }
 
 // MarshalJSON supplies the operation's fixed action discriminator.
@@ -426,6 +429,22 @@ func (args *ApprovalResolveArgsConstraint) UnmarshalJSON(data []byte) error {
 		return err
 	}
 	*args = ApprovalResolveArgsConstraint(value)
+	return nil
+}
+
+type ApprovalResolveArgsSourcesItem struct {
+	Class string        `json:"class"`
+	Name  Field[string] `json:"name,omitzero"`
+}
+
+// UnmarshalJSON refuses unknown fields and preserves required presence.
+func (args *ApprovalResolveArgsSourcesItem) UnmarshalJSON(data []byte) error {
+	type fields ApprovalResolveArgsSourcesItem
+	var value fields
+	if err := decodeRecord(data, &value); err != nil {
+		return err
+	}
+	*args = ApprovalResolveArgsSourcesItem(value)
 	return nil
 }
 
@@ -2743,6 +2762,39 @@ func (args MemberRemoveArgs) MarshalJSON() ([]byte, error) {
 		Action string `json:"action"`
 		fields
 	}{Action: MemberRemove, fields: fields(args)})
+}
+
+// NotesEndorseArgs carries arguments for notes.endorse.
+type NotesEndorseArgs struct {
+	// What the note is called (keep, pin, read, forget)
+	Name string `json:"name"`
+	// endorse: the sources the note carries, as a read answered them — cleared only while the note carries exactly these
+	Sources []NotesEndorseArgsSourcesItem `json:"sources"`
+}
+
+// MarshalJSON supplies the operation's fixed action discriminator.
+func (args NotesEndorseArgs) MarshalJSON() ([]byte, error) {
+	type fields NotesEndorseArgs
+	return json.Marshal(struct {
+		Action string `json:"action"`
+		fields
+	}{Action: NotesEndorse, fields: fields(args)})
+}
+
+type NotesEndorseArgsSourcesItem struct {
+	Class string        `json:"class"`
+	Name  Field[string] `json:"name,omitzero"`
+}
+
+// UnmarshalJSON refuses unknown fields and preserves required presence.
+func (args *NotesEndorseArgsSourcesItem) UnmarshalJSON(data []byte) error {
+	type fields NotesEndorseArgsSourcesItem
+	var value fields
+	if err := decodeRecord(data, &value); err != nil {
+		return err
+	}
+	*args = NotesEndorseArgsSourcesItem(value)
+	return nil
 }
 
 // NotesForgetArgs carries arguments for notes.forget.

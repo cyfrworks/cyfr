@@ -21,7 +21,7 @@ defmodule Aqua.PromptTest do
 
   describe "file paths follow the authority, not the layout" do
     test "a turn granted no storage is told so", %{ctx: ctx} do
-      prompt = Prompt.compose(ctx, agent: agent(), authority: nil)
+      prompt = Prompt.compose(ctx, agent: agent(), authority: nil).text
 
       assert prompt =~ "File paths: none"
 
@@ -34,14 +34,14 @@ defmodule Aqua.PromptTest do
 
     test "a granted scope is named, an ungranted one is not", %{ctx: ctx} do
       prompt =
-        Prompt.compose(ctx, agent: agent(), authority: authority_granting(["data/notes"]))
+        Prompt.compose(ctx, agent: agent(), authority: authority_granting(["data/notes"])).text
 
       assert prompt =~ "data/ for user storage"
       refute prompt =~ "components/ for"
     end
 
     test "a whole-tree grant names every scope", %{ctx: ctx} do
-      prompt = Prompt.compose(ctx, agent: agent(), authority: authority_granting(["**"]))
+      prompt = Prompt.compose(ctx, agent: agent(), authority: authority_granting(["**"])).text
 
       for scope <- Map.keys(Arca.Storage.guest_scopes()) do
         assert prompt =~ scope <> "/"
@@ -51,7 +51,7 @@ defmodule Aqua.PromptTest do
     test "the scope vocabulary is still the layout's", %{ctx: ctx} do
       # A renamed scope must move the prompt with it — the grant decides
       # WHETHER a scope is named, the layout decides what it is called.
-      prompt = Prompt.compose(ctx, agent: agent(), authority: authority_granting(["**"]))
+      prompt = Prompt.compose(ctx, agent: agent(), authority: authority_granting(["**"])).text
       named = Map.keys(Arca.Storage.guest_scopes())
 
       assert Enum.all?(named, &(prompt =~ &1))
@@ -61,7 +61,7 @@ defmodule Aqua.PromptTest do
   describe "whose athanor" do
     test "says nothing when the agent is working in its own", %{ctx: ctx} do
       prompt =
-        Prompt.compose(ctx, agent: agent(), owner: "ath_1", focus: "ath_1", authority: nil)
+        Prompt.compose(ctx, agent: agent(), owner: "ath_1", focus: "ath_1", authority: nil).text
 
       refute prompt =~ "another athanor"
     end
@@ -69,17 +69,17 @@ defmodule Aqua.PromptTest do
 
   describe "several people" do
     test "explains the Name: prefix only when there is one", %{ctx: ctx} do
-      alone = Prompt.compose(ctx, agent: agent(), authority: nil)
+      alone = Prompt.compose(ctx, agent: agent(), authority: nil).text
       refute alone =~ "Several people are talking"
 
-      together = Prompt.compose(ctx, agent: agent(), authority: nil, several_people?: true)
+      together = Prompt.compose(ctx, agent: agent(), authority: nil, several_people?: true).text
       assert together =~ "Several people are talking"
       assert together =~ "`Name: text`"
     end
   end
 
   test "the console prelude is part of the one composition, and lists no approvals", %{ctx: ctx} do
-    prompt = Prompt.compose(ctx, agent: agent(%{"component.pull" => "ask"}), authority: nil)
+    prompt = Prompt.compose(ctx, agent: agent(%{"component.pull" => "ask"}), authority: nil).text
 
     assert prompt =~ "## AQUA Shell Control"
     assert prompt =~ "call the `ui` tool"
@@ -137,7 +137,7 @@ defmodule Aqua.PromptTest do
       {:ok, _} = Aqua.Notes.keep(room, "flight", "BA117 on the 3rd\nseat 4A")
       {:ok, _} = Aqua.Notes.keep(room, "decided", "Lisbon")
 
-      prompt = Prompt.compose(room, agent: agent(%{"notes.keep" => "ask"}), authority: nil)
+      prompt = Prompt.compose(room, agent: agent(%{"notes.keep" => "ask"}), authority: nil).text
 
       {before, notes} = split_last(prompt, "## Notes")
       assert before =~ "## Runtime Context"
@@ -153,10 +153,38 @@ defmodule Aqua.PromptTest do
       refute notes =~ "scope `everywhere`"
     end
 
+    test "composition answers what it read: the pinned page, the index and each note's sources",
+         %{room: room} do
+      assert %{sources: []} = Prompt.compose(room, agent: agent(), authority: nil)
+
+      {:ok, _} = Aqua.Notes.pin(room, "about-us", "We are planning a trip.")
+
+      assert %{sources: [%Prima.Source{class: :pinned}]} =
+               Prompt.compose(room, agent: agent(), authority: nil)
+
+      {:ok, _} = Aqua.Notes.keep(room, "decided", "Lisbon")
+
+      assert Prompt.compose(room, agent: agent(), authority: nil).sources ==
+               [Prima.Source.new(:pinned), Prima.Source.new(:filed)]
+
+      # An outside-derived note joins its sources without a `notes.read`,
+      # and is shown attributed, never as the person's own words.
+      host = Prima.Source.outside("news.example")
+      {:ok, _} = Aqua.Notes.keep(room, "clip", "Fares rise on Monday", sources: [host])
+
+      composed = Prompt.compose(room, agent: agent(), authority: nil)
+      assert host in composed.sources
+
+      assert composed.text =~
+               "- clip — Fares rise on Monday (kept after reading outside material: news.example"
+
+      assert composed.text =~ "- decided — Lisbon\n"
+    end
+
     test "a person's own athanor carries about-you and may look everywhere", %{home: home} do
       {:ok, _} = Aqua.Notes.pin(home, "about-you", "Prefers mornings.")
 
-      prompt = Prompt.compose(home, agent: agent(), authority: nil)
+      prompt = Prompt.compose(home, agent: agent(), authority: nil).text
 
       assert prompt =~ "### Pinned: about-you\n\nPrefers mornings."
       assert prompt =~ "scope `everywhere`"
@@ -165,7 +193,8 @@ defmodule Aqua.PromptTest do
     end
 
     test "the scroll index sits between the prelude and the notes", %{room: room} do
-      prompt = Prompt.compose(room, agent: agent(%{"component.pull" => "ask"}), authority: nil)
+      prompt =
+        Prompt.compose(room, agent: agent(%{"component.pull" => "ask"}), authority: nil).text
 
       {before, rest} = split_last(prompt, "## Scrolls")
       assert before =~ "## AQUA Shell Control"
@@ -187,12 +216,12 @@ defmodule Aqua.PromptTest do
       {:ok, _} = Aqua.Notes.keep(room, "decided", "Lisbon")
 
       [first, _] =
-        String.split(Prompt.compose(room, agent: agent(), authority: nil), "Current date:",
+        String.split(Prompt.compose(room, agent: agent(), authority: nil).text, "Current date:",
           parts: 2
         )
 
       [again, _] =
-        String.split(Prompt.compose(room, agent: agent(), authority: nil), "Current date:",
+        String.split(Prompt.compose(room, agent: agent(), authority: nil).text, "Current date:",
           parts: 2
         )
 
@@ -203,7 +232,7 @@ defmodule Aqua.PromptTest do
     end
 
     test "the clock comes last, and the room is never in the system prompt", %{room: room} do
-      prompt = Prompt.compose(room, agent: agent(), authority: nil)
+      prompt = Prompt.compose(room, agent: agent(), authority: nil).text
 
       [stable, volatile] = String.split(prompt, "Current date:", parts: 2)
       assert stable =~ "## Runtime Context"
@@ -231,7 +260,9 @@ defmodule Aqua.PromptTest do
       end
 
       [_, notes] =
-        String.split(Prompt.compose(room, agent: agent(), authority: nil), "## Notes", parts: 2)
+        String.split(Prompt.compose(room, agent: agent(), authority: nil).text, "## Notes",
+          parts: 2
+        )
 
       assert notes =~ "- note-001 — line 1\n"
       assert notes =~ "- note-#{String.pad_leading(Integer.to_string(limit), 3, "0")} — "

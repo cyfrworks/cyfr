@@ -33,8 +33,20 @@ defmodule Aqua.Providers.Notes do
   `keep` may be granted standing for one thread and no wider
   (`standing: :thread`); `pin` never (`standing: false`), because a
   pinned page is read into every turn and each change to it deserves a
-  click; `forget` is destructive and already takes no standing allow. The
-  annotation is the one source for every gate that honours it.
+  click; `endorse` never either, since it makes outside material the
+  person's own; `forget` is destructive and already takes no standing
+  allow. The annotation is the one source for every gate that honours it.
+
+  ## Outside material
+
+  A note kept in a chain whose turns read an outside source carries those
+  turns' sources in its provenance (`Aqua.Notes.chain_sources/2`, read
+  from the host-stamped root execution, never from what the model wrote),
+  so it reads back as outside material, whatever admitted the keep: an
+  approval admits the action and never endorses the content. Pins are not
+  marked. `endorse` is the one clearing: it names the sources it clears,
+  so the card a person approves shows them, and it writes only while the
+  note still carries exactly those.
   """
 
   @behaviour Prima.Provider
@@ -42,7 +54,7 @@ defmodule Aqua.Providers.Notes do
   alias Aqua.Notes
   alias Sanctum.Context
 
-  @writes ~w(keep pin forget)
+  @writes ~w(keep pin forget endorse)
 
   @impl true
   def service, do: "aqua"
@@ -107,6 +119,39 @@ defmodule Aqua.Providers.Notes do
             Arg.new("execution", :string,
               description:
                 "keep, pin, at the door: provenance — the execution the note was kept from. In a chain the host stamps it and this is ignored."
+            )
+          ],
+          kind: :write,
+          planes: [:external, :in_chain],
+          consent: :interactive,
+          standing: false
+        ),
+        Operation.new(
+          "notes",
+          "endorse",
+          "Endorse notes",
+          [
+            Arg.new("name", :string,
+              required: true,
+              description: "What the note is called (keep, pin, read, forget)"
+            ),
+            Arg.new(
+              "sources",
+              {:array,
+               Arg.new(
+                 nil,
+                 {:record,
+                  [
+                    Arg.new("class", :string,
+                      required: true,
+                      enum: Enum.map(Prima.Source.classes(), &Atom.to_string/1)
+                    ),
+                    Arg.new("name", :string)
+                  ]}
+               )},
+              required: true,
+              description:
+                "endorse: the sources the note carries, as a read answered them — cleared only while the note carries exactly these"
             )
           ],
           kind: :write,
@@ -233,15 +278,24 @@ defmodule Aqua.Providers.Notes do
   defp dispatch(_ctx, %{"action" => "keep"}),
     do: {:error, {:invalid_argument, "keep requires 'name' and 'content'"}}
 
+  # A pinned page is set one card at a time and carries no sources: the
+  # person who approved it made it theirs.
   defp dispatch(ctx, %{"action" => "pin", "name" => name, "content" => content} = args)
        when is_binary(name) and is_binary(content),
-       do: Notes.pin(ctx, name, content, provenance(args, ctx))
+       do: Notes.pin(ctx, name, content, Keyword.delete(provenance(args, ctx), :sources))
 
   defp dispatch(_ctx, %{"action" => "pin"}),
     do: {:error, {:invalid_argument, "pin requires 'name' and 'content' (empty content clears)"}}
 
   defp dispatch(ctx, %{"action" => "forget", "name" => name}) when is_binary(name),
     do: Notes.forget(ctx, name)
+
+  defp dispatch(ctx, %{"action" => "endorse", "name" => name, "sources" => sources})
+       when is_binary(name) and is_list(sources),
+       do: Notes.endorse(ctx, name, sources)
+
+  defp dispatch(_ctx, %{"action" => "endorse"}),
+    do: {:error, {:invalid_argument, "endorse requires 'name' and 'sources'"}}
 
   defp dispatch(_ctx, %{"action" => "forget"}),
     do: {:error, {:invalid_argument, "forget requires 'name'"}}
@@ -252,15 +306,20 @@ defmodule Aqua.Providers.Notes do
     end
   end
 
-  defp dispatch(ctx, %{"action" => "read", "name" => name} = args) when is_binary(name),
-    do: Notes.read(ctx, name, scope(args), athanor_id: args["athanor_id"])
+  defp dispatch(ctx, %{"action" => "read", "name" => name} = args) when is_binary(name) do
+    with {:ok, note} <- Notes.read(ctx, name, scope(args), athanor_id: args["athanor_id"]),
+         do: {:ok, wire_sources(note)}
+  end
 
   defp dispatch(_ctx, %{"action" => "read"}),
     do: {:error, {:invalid_argument, "read requires 'name'"}}
 
   defp dispatch(ctx, %{"action" => "search", "query" => query} = args) when is_binary(query) do
     with {:ok, %{notes: matches} = page} <- Notes.search(ctx, query, scope(args), page(args)) do
-      {:ok, page |> Map.delete(:notes) |> Map.merge(%{matches: matches, scope: scope(args)})}
+      {:ok,
+       page
+       |> Map.delete(:notes)
+       |> Map.merge(%{matches: Enum.map(matches, &wire_sources/1), scope: scope(args)})}
     end
   end
 
@@ -272,22 +331,34 @@ defmodule Aqua.Providers.Notes do
 
   defp scope(args), do: Map.get(args, "scope", "athanor")
 
+  # A note's sources on the wire are their canonical JSON objects.
+  defp wire_sources(%{sources: sources} = note),
+    do: %{note | sources: Prima.Source.to_json_list(sources)}
+
   defp page(args), do: [limit: args["limit"], after: args["after"]]
 
   # Where a note was kept from. In a chain the registry stamps the
   # execution and the thread onto the call as host-only keys
   # (the gate's lineage), and those are the only
   # provenance read there — a value the model put under `thread` or
-  # `execution` is ignored, never recorded. At the door a person says
+  # `execution` is ignored, never recorded. A chain whose turns read an
+  # outside source hands the note their sources. At the door a person says
   # what they choose to.
-  defp provenance(args, %Context{plane: :guest}) do
+  defp provenance(args, %Context{plane: :guest} = ctx) do
     [
       thread: args["thread_id"],
-      execution: args["root_execution_id"] || args["parent_execution_id"]
+      execution: args["root_execution_id"] || args["parent_execution_id"],
+      sources: outside_material(Notes.chain_sources(ctx, args["root_execution_id"]))
     ]
   end
 
   defp provenance(args, _ctx) do
     [thread: args["thread"], execution: args["execution"]]
+  end
+
+  # The chain's sources when any is outside, else none: a note derived
+  # only from the athanor's own material is the athanor's.
+  defp outside_material(sources) do
+    if Enum.any?(sources, &Prima.Source.outside?/1), do: sources, else: []
   end
 end

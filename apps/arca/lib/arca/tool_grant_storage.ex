@@ -109,7 +109,7 @@ defmodule Arca.ToolGrantStorage do
   execution, turn or schedule it was given for is still open (running or
   paused, open, not deleted). A bounded allow whose row has ended, or is
   gone, is not answered. A row's `constraint` is answered decoded, as
-  `%{kind, patterns}` or nil.
+  `%{kind, patterns}` or nil, and its `sources` as `Prima.Source`s.
 
   Read whole and filtered in memory — a thread has a handful of
   grants, and one indexed read beats a query per agent per turn.
@@ -166,14 +166,16 @@ defmodule Arca.ToolGrantStorage do
   # Internal
   # ---------------------------------------------------------------------------
 
-  # A row answered with its constraint decoded. A stored constraint that
-  # does not decode is not a narrower allow to guess at: the row is
-  # answered with `constraint: :corrupt`, which no caller may admit under.
-  defp decoded(%ToolGrant{constraint: constraint} = grant),
+  # A row answered with its constraint and sources decoded. A stored
+  # constraint that does not decode is not a narrower allow to guess at:
+  # the row is answered with `constraint: :corrupt`, which no caller may
+  # admit under; stored sources that do not decode cover nothing.
+  defp decoded(%ToolGrant{constraint: constraint, sources: sources} = grant),
     do:
       grant
       |> Arca.Data.project()
       |> Map.put(:constraint, ToolGrant.decode_constraint(constraint))
+      |> Map.put(:sources, ToolGrant.decode_sources(sources))
 
   defp conflict_columns("thread"), do: [:thread_id, :agent_name, :tool, :action]
   defp conflict_columns("agent"), do: [:athanor_id, :agent_name, :tool, :action]

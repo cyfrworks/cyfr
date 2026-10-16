@@ -28,6 +28,18 @@ defmodule Arca.TurnStorage do
   the transaction and the whole transaction is retried, since a retry
   inside an aborted Postgres transaction cannot land.
 
+  ## The turn's sources
+
+  `turns.sources` is every source the turn has read (`Prima.Source`), a
+  set that only grows. It grows in the transaction that writes the step
+  a read belongs to, after the turn row is taken: `put_step/3` joins the
+  sources the step opens with (`:sources`) and the sources of the earlier
+  turns whose rows it sends (`:sources_from`), and `close_step/4` joins
+  the sources of its result (`:sources`). A clone turn opens with its
+  parent's sources, and the parent joins its clones' when it closes the
+  step that ran them: a clone row is never locked by its parent's
+  writer, so the turn-before-clone lock order holds.
+
   ## The thread claim
 
   Which root turn may run at all is the thread's, not the turn's:
@@ -1151,8 +1163,11 @@ defmodule Arca.TurnStorage do
   `:purpose` (default `chat`), `:tool`, `:action`, `:idempotency_key`, `:authority_digest`,
   `:request_digest`, `:proposal_digest`, `:recovery`, `:excluded` (a
   list), `:message_id`, `:child_execution_id`, `:dispatch_state`
-  (`Prima.TurnState.opening_states/0`, default `proposed`), `:fence`. A
-  step is recorded on a running turn only; any other state or turn is
+  (`Prima.TurnState.opening_states/0`, default `proposed`), `:fence`,
+  and the sources the step opens with: `:sources` (`Prima.Source`s) and
+  `:sources_from` (the ids of earlier turns of the thread whose rows the
+  step sends, each turn's sources joined as it stands). A step is
+  recorded on a running turn only; any other state or turn is
   `{:error, :illegal_transition}`.
   """
   @spec put_step(Prima.Actor.t(), String.t(), map()) :: {:ok, map()} | {:error, term()}
@@ -1166,6 +1181,7 @@ defmodule Arca.TurnStorage do
         if Map.get(attrs, :dispatch_state, "proposed") not in Prima.TurnState.opening_states(),
           do: Arca.Repo.rollback(:illegal_transition)
 
+        turn = join_sources!(athanor_id, turn, opened_sources!(athanor_id, turn, attrs))
         insert_step!(athanor_id, turn, attrs)
       end)
     end)
@@ -1347,8 +1363,10 @@ defmodule Arca.TurnStorage do
   `outcome`, `execution_id` and error, and the `step.closed` event, in
   one transaction. `attrs`: `:result` (`%{content, payload}` for the
   row; omitted for a step that produced none), `:execution_id`, `:error`,
-  `:fence`. A step closes from `dispatched`, or from `proposed` for
-  `denied` and `skipped`.
+  `:fence`, and `:sources`, the `Prima.Source`s the result carries, joined
+  into the turn's in the same transaction; a `clone` step joins its
+  clones' sources too. A step closes from `dispatched`, or from
+  `proposed` for `denied` and `skipped`.
   """
   @spec close_step(Prima.Actor.t(), String.t(), String.t(), map()) ::
           {:ok, %{step: map(), result: map() | nil}} | {:error, term()}
@@ -1843,6 +1861,9 @@ defmodule Arca.TurnStorage do
                 # A clone runs under its parent turn's origin, and a parent
                 # that records none has no origin to hand on.
                 origin: parent.origin || Arca.Repo.rollback(:no_origin),
+                # A clone reads its task, which its parent wrote from what
+                # the parent had read.
+                sources: parent.sources,
                 fence: 1,
                 runner_id: Prima.Boot.id(),
                 status: "running",
@@ -1870,6 +1891,32 @@ defmodule Arca.TurnStorage do
   end
 
   def open_clone_turn(%Prima.Actor{}, _parent_turn_id, _attrs), do: {:error, :no_athanor}
+
+  @doc """
+  The sources the turns of one chain have read: the root turn whose root
+  execution is `root_execution_id` and every clone turn under it (a clone
+  runs on its parent's root execution), joined. `{:ok, []}` when no turn
+  of the caller's athanor runs on that execution.
+  """
+  @spec chain_sources(Prima.Actor.t(), String.t()) ::
+          {:ok, [Prima.Source.t()]} | {:error, term()}
+  def chain_sources(%Prima.Actor{athanor_id: athanor_id}, root_execution_id)
+      when is_binary(athanor_id) and athanor_id != "" and is_binary(root_execution_id) do
+    Arca.Repo.Errors.with_db_rescue("Arca.TurnStorage.chain_sources", fn ->
+      sources =
+        from(t in Turn,
+          where: t.athanor_id == ^athanor_id and t.root_execution_id == ^root_execution_id,
+          select: t.sources
+        )
+        |> Arca.Repo.all()
+        |> Enum.flat_map(&Prima.Source.decode/1)
+        |> Prima.Source.set()
+
+      {:ok, sources}
+    end)
+  end
+
+  def chain_sources(%Prima.Actor{}, _root_execution_id), do: {:error, :no_athanor}
 
   @doc "The open clone turns under `turn_id`, oldest first."
   @spec open_clones(Prima.Actor.t(), String.t()) :: {:ok, [map()]} | {:error, term()}
@@ -2327,6 +2374,8 @@ defmodule Arca.TurnStorage do
 
     if count != 1, do: Arca.Repo.rollback(:not_open)
 
+    _turn = join_sources!(athanor_id, turn, closed_sources!(athanor_id, turn, step, attrs))
+
     event!(athanor_id, turn, "step.closed", step.id, %{
       "outcome" => outcome,
       "execution_id" => Map.get(attrs, :execution_id),
@@ -2335,6 +2384,77 @@ defmodule Arca.TurnStorage do
 
     %{step: step!(athanor_id, step.id), result: result}
   end
+
+  # The turn's sources joined by `sources`, under the row lock `own!/3`
+  # took: the set is read and written again inside that lock, so it only
+  # grows and no concurrent writer's additions are lost.
+  # arca:db-raise-ok inside the caller's transaction
+  defp join_sources!(athanor_id, %Turn{} = turn, sources) do
+    joined = Prima.Source.encode(Prima.Source.union(Prima.Source.decode(turn.sources), sources))
+
+    if joined == turn.sources do
+      turn
+    else
+      {1, _} =
+        from(t in Turn, where: t.athanor_id == ^athanor_id and t.id == ^turn.id)
+        |> Arca.Repo.update_all(set: [sources: joined])
+
+      %{turn | sources: joined}
+    end
+  end
+
+  # What a step opens with: the sources it names and those of the earlier
+  # turns of the same thread whose rows it sends, as each turn stands. A
+  # turn of another thread or athanor joins nothing.
+  # arca:db-raise-ok inside the caller's transaction
+  defp opened_sources!(athanor_id, %Turn{} = turn, attrs) do
+    sources!(Map.get(attrs, :sources, [])) ++
+      case Map.get(attrs, :sources_from, []) do
+        [] ->
+          []
+
+        ids when is_list(ids) ->
+          from(t in Turn,
+            where: t.athanor_id == ^athanor_id and t.thread_id == ^turn.thread_id,
+            where: t.id in ^ids and t.id != ^turn.id,
+            select: t.sources
+          )
+          |> Arca.Repo.all()
+          |> Enum.flat_map(&Prima.Source.decode/1)
+
+        _other ->
+          Arca.Repo.rollback(:invalid_sources)
+      end
+  end
+
+  # What a closing step's result carries, and for a `clone` step the
+  # sources of the clones this turn ran, read as they stand.
+  # arca:db-raise-ok inside the caller's transaction
+  defp closed_sources!(athanor_id, %Turn{} = turn, %TurnStep{} = step, attrs) do
+    clones =
+      if step.kind == "clone" do
+        from(t in Turn,
+          where: t.athanor_id == ^athanor_id and t.parent_turn_id == ^turn.id,
+          select: t.sources
+        )
+        |> Arca.Repo.all()
+        |> Enum.flat_map(&Prima.Source.decode/1)
+      else
+        []
+      end
+
+    sources!(Map.get(attrs, :sources, [])) ++ clones
+  end
+
+  # arca:db-raise-ok inside the caller's transaction
+  defp sources!(sources) when is_list(sources) do
+    if Enum.all?(sources, &is_struct(&1, Prima.Source)),
+      do: sources,
+      else: Arca.Repo.rollback(:invalid_sources)
+  end
+
+  # arca:db-raise-ok inside the caller's transaction
+  defp sources!(_sources), do: Arca.Repo.rollback(:invalid_sources)
 
   # arca:db-raise-ok inside the caller's transaction
   defp insert_step!(athanor_id, %Turn{} = turn, attrs) do

@@ -34,7 +34,8 @@ defmodule Aqua.Approvals do
           optional(:reason) => String.t() | nil,
           optional(:lifecycle) => Standing.lifecycle() | nil,
           optional(:until) => DateTime.t() | nil,
-          optional(:constraint) => %{kind: String.t(), patterns: [String.t()]} | nil
+          optional(:constraint) => %{kind: String.t(), patterns: [String.t()]} | nil,
+          optional(:sources) => [Prima.Source.t()] | nil
         }
 
   @type outcome :: %{
@@ -53,9 +54,11 @@ defmodule Aqua.Approvals do
   (`:approved` | `:declined`), `:scope` (`:once` by default; `:thread`
   or `:always` with an approval, `:never` with a decline), `:reason`,
   and a standing approval's bounds: `:lifecycle` (`:execution`, `:turn`
-  or `:schedule`, the card's own), `:until` (a `DateTime`) and
-  `:constraint` (`%{kind, patterns}`), carried with the scope into the
-  standing row (`Aqua.Standing.rows/5`).
+  or `:schedule`, the card's own), `:until` (a `DateTime`),
+  `:constraint` (`%{kind, patterns}`) and `:sources` (the outside sources,
+  among those the card named, the answer also follows), carried with the
+  scope into the standing row (`Aqua.Standing.rows/5`). A source the card
+  did not name is refused, never stored.
 
   Answers the outcome, with `pending` the turn's approvals still open
   after this one. `{:error, :not_found}` for no such approval;
@@ -68,7 +71,7 @@ defmodule Aqua.Approvals do
   def resolve(%Context{} = ctx, approval_id, %{decision: decision} = choice)
       when decision in [:approved, :declined] do
     scope = Map.get(choice, :scope) || :once
-    bounds = Map.take(choice, [:lifecycle, :until, :constraint])
+    bounds = Map.take(choice, [:lifecycle, :until, :constraint, :sources])
 
     with {:ok, approval} <- fetch_approval(ctx, approval_id),
          {:ok, turn} <- Tape.turn(ctx, approval.turn_id),
@@ -183,6 +186,7 @@ defmodule Aqua.Approvals do
     proposal = intent["proposal"] || %{}
 
     with :ok <- Standing.check(intent, scope),
+         :ok <- named_on_card(intent, Map.get(bounds, :sources)),
          :ok <- authorize_card(ctx, turn, proposal),
          :ok <- pins_hold(ctx, turn, approval, intent),
          {:ok, grants} <- Standing.rows(ctx, turn, proposal, scope, bounds) do
@@ -416,7 +420,22 @@ defmodule Aqua.Approvals do
     |> put_bound("lifecycle", Map.get(bounds, :lifecycle), &Atom.to_string/1)
     |> put_bound("until", Map.get(bounds, :until), &DateTime.to_iso8601/1)
     |> put_bound("constraint", Map.get(bounds, :constraint), &constraint_wire/1)
+    |> put_bound("sources", Map.get(bounds, :sources), &Prima.Source.to_json_list/1)
   end
+
+  # A standing answer follows only outside sources its card named: the
+  # card is a client, and the sources it showed are the intent's.
+  defp named_on_card(_intent, nil), do: :ok
+
+  defp named_on_card(intent, sources) when is_list(sources) do
+    shown = intent |> Map.get("sources", []) |> List.wrap() |> Enum.map(&Prima.Source.from_json/1)
+
+    if Enum.all?(sources, &(Prima.Source.outside?(&1) and is_binary(&1.name) and &1 in shown)),
+      do: :ok,
+      else: {:error, {:scope_not_permitted, :invalid_sources}}
+  end
+
+  defp named_on_card(_intent, _sources), do: {:error, {:scope_not_permitted, :invalid_sources}}
 
   defp constraint_wire(constraint) do
     %{

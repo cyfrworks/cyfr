@@ -130,7 +130,8 @@ defmodule Aqua.ApprovalsTest do
       "action_kind" => Keyword.get(opts, :kind, "write"),
       "standing" => Keyword.get(opts, :standing),
       "tool_call_id" => "c1",
-      "proposal" => proposal
+      "proposal" => proposal,
+      "sources" => Prima.Source.to_json_list(Keyword.get(opts, :sources, []))
     }
 
     {:ok, %{approval: approval}} =
@@ -350,13 +351,61 @@ defmodule Aqua.ApprovalsTest do
           action: "write",
           args: %{"path" => path},
           turn_id: turn.id,
-          execution_id: turn.root_execution_id
+          execution_id: turn.root_execution_id,
+          sources: []
         }
       end
 
       assert Sanctum.ToolGrants.admits?(ctx, place.("data/other/y.md"))
       assert Sanctum.ToolGrants.admits?(ctx, place.("data/notes/y.md"))
       refute Sanctum.ToolGrants.admits?(ctx, place.("data/elsewhere/y.md"))
+    end
+
+    test "follows only the outside sources its card named, into its row and resolution", %{
+      ctx: ctx,
+      thread: thread,
+      pins: pins
+    } do
+      turn = started!(ctx, thread, pins)
+      host = Prima.Source.outside("news.example")
+      shown = [Prima.Source.new(:filed), host]
+
+      %{approval: approval} = card!(ctx, turn, @keep, standing: "thread", sources: shown)
+
+      # A source the card did not name is refused, and the card stays open.
+      for sources <- [[Prima.Source.outside("other.example")], [Prima.Source.new(:filed)]] do
+        assert {:error, {:scope_not_permitted, :invalid_sources}} =
+                 Approvals.resolve(ctx, approval.id, %{
+                   decision: :approved,
+                   scope: :thread,
+                   sources: sources
+                 })
+      end
+
+      assert {:ok, %{decision: "approved"}} =
+               Approvals.resolve(ctx, approval.id, %{
+                 decision: :approved,
+                 scope: :thread,
+                 sources: [host]
+               })
+
+      assert {:ok, [%{sources: [^host]}]} = Aqua.ToolGrants.for_thread(ctx, thread.id, "aqua")
+
+      assert %{"sources" => [%{"class" => "outside", "name" => "news.example"}]} =
+               resolution(ctx, approval.id)
+    end
+
+    test "a once answer takes no sources", %{ctx: ctx, thread: thread, pins: pins} do
+      turn = started!(ctx, thread, pins)
+      host = Prima.Source.outside("news.example")
+      %{approval: approval} = card!(ctx, turn, @keep, standing: "thread", sources: [host])
+
+      assert {:error, {:scope_not_permitted, :bounds_without_standing}} =
+               Approvals.resolve(ctx, approval.id, %{
+                 decision: :approved,
+                 scope: :once,
+                 sources: [host]
+               })
     end
 
     test "a bound the answer may not carry is refused, and the card stays open", %{
