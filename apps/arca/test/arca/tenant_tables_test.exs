@@ -6,8 +6,8 @@ defmodule Arca.TenantTablesTest do
   `Arca.TenantTables.delete_all_for/1` removes every row an athanor owns
   from the tables its writers fill, and no other athanor's. Each case
   writes its rows through the table's own writer, purges one athanor and
-  reads both back; the outbox's rows, whose writers come later, are
-  written straight to their tables.
+  reads both back; the outbox's rows and the guest objects' generation
+  rows, whose writers come later, are written straight to their tables.
 
   The roster's drift against the live schema is
   `apps/cyfr/test/arca/schema_baseline_test.exs`'s.
@@ -26,6 +26,8 @@ defmodule Arca.TenantTablesTest do
     ConsumerReceipt,
     FencedDocument,
     FencedDocumentFloor,
+    ObjectGeneration,
+    ObjectRevision,
     OutboxRecord,
     StorageStaging
   }
@@ -96,6 +98,51 @@ defmodule Arca.TenantTablesTest do
     assert outbox_rows(kept) == %{records: 1, receipts: 1}
   end
 
+  test "an athanor's guest object revisions and generations go with it" do
+    [purged, kept] = for _ <- 1..2, do: actor()
+    now = DateTime.utc_now()
+
+    for %Prima.Actor{athanor_id: athanor_id} <- [purged, kept] do
+      {2, _} =
+        Arca.Repo.insert_all(ObjectRevision, [
+          %{
+            athanor_id: athanor_id,
+            path: "data/a.txt",
+            generation: 2,
+            settled_generation: 2,
+            sources: "[]",
+            deleted: false,
+            deleted_at_generation: nil,
+            settled_at: now
+          },
+          %{
+            athanor_id: athanor_id,
+            path: "data/b.txt",
+            generation: 1,
+            settled_generation: nil,
+            sources: "[]",
+            deleted: false,
+            deleted_at_generation: nil,
+            settled_at: nil
+          }
+        ])
+
+      {3, _} =
+        Arca.Repo.insert_all(ObjectGeneration, [
+          %{athanor_id: athanor_id, path: "data/a.txt", generation: 1, bytes: 3, marked_at: now},
+          %{athanor_id: athanor_id, path: "data/a.txt", generation: 2, bytes: 5, marked_at: now},
+          %{athanor_id: athanor_id, path: "data/b.txt", generation: 1, bytes: 7, marked_at: now}
+        ])
+    end
+
+    assert {:ok, counts} = Arca.TenantTables.delete_all_for(purged)
+    assert counts["object_revisions"] == 2
+    assert counts["object_generations"] == 3
+
+    assert object_rows(purged) == %{revisions: 0, generations: 0}
+    assert object_rows(kept) == %{revisions: 2, generations: 3}
+  end
+
   # ---- helpers ---------------------------------------------------------------
 
   defp actor,
@@ -122,6 +169,18 @@ defmodule Arca.TenantTablesTest do
       floor:
         Arca.Repo.all(
           from(f in FencedDocumentFloor, where: f.athanor_id == ^athanor_id, select: f.floor)
+        )
+    }
+  end
+
+  defp object_rows(%Prima.Actor{athanor_id: athanor_id}) do
+    %{
+      revisions:
+        Arca.Repo.aggregate(from(r in ObjectRevision, where: r.athanor_id == ^athanor_id), :count),
+      generations:
+        Arca.Repo.aggregate(
+          from(g in ObjectGeneration, where: g.athanor_id == ^athanor_id),
+          :count
         )
     }
   end

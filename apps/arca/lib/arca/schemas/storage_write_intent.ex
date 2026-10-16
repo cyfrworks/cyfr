@@ -15,7 +15,9 @@ defmodule Arca.Schemas.StorageWriteIntent do
   its row while the write was in flight. `reason` says why a `failed` or
   `uncertain` row settled as it did. `op` is `put | append | delete`,
   `path` the athanor-relative path, and `bytes` what a put or append
-  carried. A row goes only when its execution's row does. Owned by the
+  carried, and `generation` the generation of `path` its transaction
+  marked (`Arca.Schemas.ObjectRevision`), nil for an intent made before
+  generations. A row goes only when its execution's row does. Owned by the
   athanor.
   """
 
@@ -43,6 +45,7 @@ defmodule Arca.Schemas.StorageWriteIntent do
     field :op, :string
     field :path, :string
     field :bytes, :integer
+    field :generation, :integer
     field :state, :string
     field :reason, :string
     field :inserted_at, :utc_datetime_usec

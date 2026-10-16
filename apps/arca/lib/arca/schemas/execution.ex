@@ -107,6 +107,9 @@ defmodule Arca.Schemas.Execution do
     # How the run started (`Prima.Origin`'s wire spelling): the admission
     # path names it for a root, and a child carries its parent's.
     field :origin, :string
+    # The run's source ledger (`Prima.Source`, canonical JSON): seeded at
+    # admission and only ever grown.
+    field :sources, :string, default: "[]"
   end
 
   # Every column a start writes — the write path's half of the row shape,
@@ -137,7 +140,8 @@ defmodule Arca.Schemas.Execution do
     :current_attempt,
     :event_seq,
     :call_id,
-    :origin
+    :origin,
+    :sources
   ]
 
   @doc "The columns `start_changeset/1` casts, for the write path to pin against."

@@ -48,6 +48,8 @@ defmodule Arca.TenantTables do
     "budget_charges",
     "budget_reservations",
     "storage_write_intents",
+    "object_generations",
+    "object_revisions",
     "execution_attempts",
     "approvals",
     "turn_steps",

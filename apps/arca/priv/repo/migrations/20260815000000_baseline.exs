@@ -1547,6 +1547,10 @@ defmodule Arca.Repo.Migrations.Baseline do
       # How the run started (`Prima.Origin`): named by the admission path
       # for a root, copied from the parent for a child.
       add :origin, :string
+      # The run's source ledger (`Prima.Source`, canonical JSON): seeded in
+      # the admission transaction and only ever grown, before the bytes a
+      # read or a child carries reach the run.
+      add :sources, :text, null: false, default: "[]"
     end
 
     checked(sqlite?, :executions, [execution_status])
@@ -1665,6 +1669,10 @@ defmodule Arca.Repo.Migrations.Baseline do
       add :path, :text, null: false
       # The bytes a put or append carried; null for a delete.
       add :bytes, :integer
+      # The generation of `path` this write's transaction marked
+      # (`object_revisions.generation`); null for an intent made before
+      # generations.
+      add :generation, :bigint
       # pending | confirmed | failed | uncertain
       add :state, :string, null: false
       # Why a failed or uncertain intent settled as it did.
@@ -1675,6 +1683,38 @@ defmodule Arca.Repo.Migrations.Baseline do
 
     create index(:storage_write_intents, [:athanor_id, :attempt, :state])
     create index(:storage_write_intents, [:athanor_id, :state, :inserted_at])
+
+    # A guest object's path under `data/`: the last generation handed out
+    # for it and the generation a read resolves to. `generation` only
+    # rises, raised by a mark in its intent's transaction before the store;
+    # `settled_generation` is null until a first settlement and moves only
+    # to a newer settled generation than both itself and
+    # `deleted_at_generation`. `sources` are the settled generation's
+    # (`Prima.Source`, canonical JSON), named by every writer.
+    create table(:object_revisions, primary_key: false) do
+      add :athanor_id, :string, primary_key: true, null: false
+      add :path, :text, primary_key: true, null: false
+      add :generation, :bigint, null: false
+      add :settled_generation, :bigint
+      add :sources, :text, null: false
+      add :deleted, :boolean, null: false, default: false
+      add :deleted_at_generation, :bigint
+      add :settled_at, :utc_datetime_usec
+    end
+
+    # One row per generation of a path whose object may exist, with the
+    # bytes the mark said its writer will store: the settled generation's
+    # row gives the path's visible bytes, and the rows together are the
+    # home's physical count. Retention deletes the object, then its row.
+    create table(:object_generations, primary_key: false) do
+      add :athanor_id, :string, primary_key: true, null: false
+      add :path, :text, primary_key: true, null: false
+      add :generation, :bigint, primary_key: true, null: false
+      add :bytes, :bigint, null: false
+      add :marked_at, :utc_datetime_usec, null: false
+    end
+
+    create index(:object_generations, [:athanor_id, :marked_at])
 
     # Lifecycle and step outcomes, numbered from `executions.event_seq`.
     create table(:execution_events, primary_key: false) do

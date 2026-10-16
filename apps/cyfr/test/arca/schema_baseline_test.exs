@@ -412,6 +412,8 @@ defmodule Arca.SchemaBaselineTest do
           Arca.Schemas.StorageCommit,
           Arca.Schemas.ProvisioningClaim,
           Arca.Schemas.StorageWriteIntent,
+          Arca.Schemas.ObjectRevision,
+          Arca.Schemas.ObjectGeneration,
           Arca.Schemas.CellLease,
           Arca.Schemas.JobClaim,
           Arca.Schemas.RateWindow
