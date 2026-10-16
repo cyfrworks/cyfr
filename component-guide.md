@@ -1361,6 +1361,7 @@ Errors returned by `invoke::call`/`invoke::spawn` as `{"error": {"type": "...", 
 | `resource_limit` | `max_concurrent_tasks`, emit size, or emit rate exceeded |
 | `timeout` | Exceeded `batch_timeout` |
 | `tool_denied` | MCP tool not covered by the granted tool patterns |
+| `flow_blocked` | A tool server's tool refused before its arguments left: the run read a source class its grant declares no flow of to `server:<name>` |
 | `encoding_error` | A tool's result could not be encoded as JSON |
 | `uncertain` | The host call's answer was lost after the call may have taken effect, so its outcome is unknown |
 | `unknown` | The host produced a result in an unexpected shape |
