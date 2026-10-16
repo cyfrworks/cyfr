@@ -151,7 +151,7 @@ import {assert as assertPasskey, register as registerPasskey, supported as passk
  * `glass-keep`, `glass-certify`, `glass-home`, `glass-home-submit`,
  * `glass-prompt` (with `data-ref`), `glass-preview`,
  * `glass-asker`, `glass-passkey`, `glass-email`, `glass-code-form`,
- * `glass-code`, `glass-code-submit`, `glass-reauth-note`, `glass-cancel`
+ * `glass-code`, `glass-code-submit`, `glass-reauth`, `glass-reauth-note`, `glass-cancel`
  * and `glass-outcome` (with `data-ok`).
  */
 
@@ -831,6 +831,17 @@ export default {
       case "email":
         this.codeSent.add(ref)
         return this.glass.sendCode(ref)
+      case "oidc": {
+        // The tab opens on the click itself, which a browser allows, and
+        // goes to the issuer once the home answered its address.
+        const tab = globalThis.open ? globalThis.open("about:blank", "_blank") : null
+        return this.glass.reauthenticate(ref).then((url) => {
+          if (!tab) return
+          if (!url) return tab.close()
+          tab.opener = null
+          tab.location.href = url
+        })
+      }
       case "cancel":
         return this.glass.cancel(ref)
     }
@@ -962,8 +973,9 @@ export default {
           children.push(button(doc, "glass-email", "email", model.ref, "Email me a code"))
         }
       }
-      if (model.signInElsewhere) {
-        children.push(element(doc, "p", {"data-test": "glass-reauth-note", class: "text-xs text-gray-400"}, "To confirm with a fresh sign-in, use a browser signed in to this home."))
+      if (model.offers.includes("oidc")) {
+        children.push(button(doc, "glass-reauth", "oidc", model.ref, "Sign in again"))
+        children.push(element(doc, "p", {"data-test": "glass-reauth-note", class: "text-xs text-gray-400"}, "The sign-in opens in a new tab; approve the change there in a browser signed in to this home."))
       }
       children.push(button(doc, "glass-cancel", "cancel", model.ref, "Cancel this request"))
       if (outcome) children.push(element(doc, "p", {"data-test": "glass-outcome", "data-ok": String(outcome.ok), role: "status", class: "text-sm"}, outcome.text))

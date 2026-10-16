@@ -569,8 +569,9 @@ export function answersCertify(certificate, asked, {deviceKey, home}) {
 /**
  * What the glass draws for one `confirmation.pending` entry: the home's
  * preview and the client that asked, and the proofs it can carry out
- * here. A fresh sign-in needs a signed-in browser, which a glass is not,
- * so it is never offered; it is named instead.
+ * here. A fresh sign-in the glass begins opens in a new tab and is
+ * approved in a browser signed in to this home; the home records it as
+ * given on this device.
  */
 export function promptModel(entry, {webauthn = true} = {}) {
   const preview = entry.preview || {}
@@ -586,14 +587,14 @@ export function promptModel(entry, {webauthn = true} = {}) {
   const offers = []
   if (methods.includes("passkey") && webauthn && entry.webauthn) offers.push("passkey")
   if (methods.includes("email")) offers.push("email")
+  if (methods.includes("oidc")) offers.push("oidc")
 
   return {
     ref: entry.ref,
     operation: entry.operation,
     rows,
     asker: askerName(entry.asker),
-    offers,
-    signInElsewhere: methods.includes("oidc")
+    offers
   }
 }
 
@@ -1067,6 +1068,25 @@ export class Glass {
 
   async sendCode(ref) {
     return this.act(ref, "confirmation.reauth", {ref, method: "email"}, "A code was sent to your email.")
+  }
+
+  /**
+   * Begin a fresh sign-in for `ref` from this device: answers the issuer's
+   * URL for the page to open, or null when the home refused, which the
+   * outcome says. The home records the proof as given on this device once
+   * the person approves it in a browser signed in to this home.
+   */
+  async reauthenticate(ref) {
+    try {
+      const {url} = await this.request("confirmation.reauth", {ref, method: "oidc"})
+      this.outcome = {...this.outcome, [ref]: {ok: true, text: "Sign in in the tab that opened, then approve the change there in a browser signed in to this home."}}
+      this.onChange(this)
+      return typeof url === "string" ? url : null
+    } catch (error) {
+      this.outcome = {...this.outcome, [ref]: {ok: false, text: error.message}}
+      this.onChange(this)
+      return null
+    }
   }
 
   async confirmWithCode(ref, code) {

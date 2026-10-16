@@ -487,6 +487,32 @@ describe("the connection", () => {
     assert.deepEqual(socket.sent.find((m) => m.operation === "streams.open").args, {stream: CONFIRMATIONS})
   })
 
+  test("a fresh sign-in begun here asks the home for the issuer's address and says where to approve it", async () => {
+    const {glass, h, deviceKey} = await glassWith({certificate})
+    await glass.start()
+    const socket = h.socket()
+    socket.onopen()
+    await proved(socket, deviceKey)
+    home(socket, standing(certificate))
+    await settle()
+
+    const asked = glass.reauthenticate("cnr_ref")
+    const intent = socket.sent.at(-1)
+    assert.equal(intent.operation, "confirmation.reauth")
+    assert.deepEqual(intent.args, {ref: "cnr_ref", method: "oidc"})
+    home(socket, {protocol: device.protocol, type: "answer", id: intent.id, result: {method: "oidc", url: "https://idp.example/authorize?x=1"}})
+    assert.equal(await asked, "https://idp.example/authorize?x=1")
+    assert.equal(glass.outcome.cnr_ref.ok, true)
+    assert.match(glass.outcome.cnr_ref.text, /approve the change there in a browser signed in/)
+
+    // A refusal opens nothing, and says why.
+    const refused = glass.reauthenticate("cnr_other")
+    const second = socket.sent.at(-1)
+    home(socket, {protocol: device.protocol, type: "answer", id: second.id, error: {class: "invalid_argument", message: "No OpenID Connect sign-in of this server is yours"}})
+    assert.equal(await refused, null)
+    assert.deepEqual(glass.outcome.cnr_other, {ok: false, text: "No OpenID Connect sign-in of this server is yours"})
+  })
+
   test("answers only the challenge it asked for, and once: another purpose, home, client or key is left unsigned", async () => {
     for (const [name, challenge] of [
       ["a renewal it did not ask for", (key) => ({...certs.challenges.renew, device_key: key})],
@@ -774,14 +800,13 @@ describe("the glass's prompt", () => {
       ["scopes", "a, b"]
     ])
     assert.equal(model.asker, "a browser signed in with github")
-    assert.deepEqual(model.offers, ["passkey", "email"])
-    assert.equal(model.signInElsewhere, true)
+    assert.deepEqual(model.offers, ["passkey", "email", "oidc"])
   })
 
   test("offers no passkey where the browser has none, and nothing the record does not offer", () => {
-    assert.deepEqual(promptModel(entry, {webauthn: false}).offers, ["email"])
+    assert.deepEqual(promptModel(entry, {webauthn: false}).offers, ["email", "oidc"])
     assert.deepEqual(promptModel({...entry, methods: []}).offers, [])
-    assert.equal(promptModel({...entry, methods: ["passkey"]}).signInElsewhere, false)
+    assert.deepEqual(promptModel({...entry, methods: ["passkey"]}).offers, ["passkey"])
   })
 
   test("names its connection's state", () => {

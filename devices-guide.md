@@ -72,11 +72,11 @@ A proof covers that one request, is used once and expires with it.
 - **A fresh sign-in** at the identity provider of the door you signed in with, forced to ask you again. It opens in a new tab, so the asking page stays. The provider must report when you signed in. The page it returns to shows the change again, and confirms only when you approve it in a browser signed in as you.
 - **A code sent to your verified email** is not offered yet: no home has a mail transport.
 
-A paired device offers a passkey and an email code. It has no session, so it cannot use a fresh sign-in; it says to use a signed-in browser for that. A client with no person behind it, an app frame or an API key, shows no confirm control; where one asks, it offers to request confirmation, and you confirm on another of your devices.
+A paired device offers a passkey, an email code and a fresh sign-in it begins, which opens in a new tab and is approved there in a browser signed in to this home; each counts as given on that device. A client with no person behind it, an app frame or an API key, shows no confirm control; where one asks, it offers to request confirmation, and you confirm on another of your devices.
 
 ### Adding a device, a passkey or a door
 
-Once you hold a passkey or a paired device at this home, three changes need a confirmation from one of them: pairing another device (or certifying one for another home), registering another passkey, and linking a door. Your passkey's assertion qualifies, and so does a confirmation you give on a device you paired, whichever proof it uses there. A fresh sign-in, or a code, given in a browser that is not a paired device confirms every other change but not these: their request offers only what qualifies and says to confirm with your passkey or on a device you paired.
+Once you hold a passkey or a paired device at this home, three changes need a confirmation from one of them: pairing another device (or certifying one for another home), registering another passkey, and linking a door. Your passkey's assertion qualifies, and so does a confirmation you give on a device you paired, whichever proof it uses there, a fresh sign-in it begins included. A fresh sign-in, or a code, asked for from a browser that is not a paired device confirms every other change but not these: their request offers only what qualifies and says to confirm with your passkey or on a device you paired.
 
 Before your first passkey or device, a fresh sign-in confirms the first one, once. Whichever lands first, your first passkey or your first paired device, closes that path for good: revoking every passkey and device later does not reopen it. If you lose them all, recover with your recovery kit or through this home's platform administrator (below).
 

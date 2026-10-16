@@ -527,7 +527,7 @@ defmodule Sanctum.Providers.ConfirmationTest do
       %{oidc_user: user, oidc_ctx: session_ctx(user, athanor)}
     end
 
-    test "is restricted once the latch is set: a session offers a passkey, a paired device a passkey or a code, never a sign-in",
+    test "is restricted once the latch is set: a session offers a passkey, a paired device every proof it begins",
          %{oidc_user: user, oidc_ctx: session_ctx} do
       assert latch(user.id) == nil
 
@@ -556,9 +556,11 @@ defmodule Sanctum.Providers.ConfirmationTest do
       assert %{restricted: false, methods: ["passkey", "oidc", "email"]} =
                pending!(session_ctx, other)
 
-      # From the paired device, the addition offers the proofs the device
-      # gives itself; the other record every proof.
-      assert %{restricted: true, methods: ["passkey", "email"]} = pending!(device_ctx, addition)
+      # From the paired device, the addition offers every proof, each
+      # recorded as given on it, a fresh sign-in it begins included; the
+      # other record every proof.
+      assert %{restricted: true, methods: ["passkey", "oidc", "email"]} =
+               pending!(device_ctx, addition)
 
       assert %{restricted: false, methods: ["passkey", "oidc", "email"]} =
                pending!(device_ctx, other)

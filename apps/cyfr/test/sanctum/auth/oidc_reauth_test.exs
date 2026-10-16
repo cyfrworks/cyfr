@@ -493,6 +493,146 @@ defmodule Sanctum.Auth.OIDCReauthTest do
     end
   end
 
+  # ---------------------------------------------------------------------------
+  # Adding a device: a re-authentication a paired device began
+  # ---------------------------------------------------------------------------
+
+  # Asked by `ctx`, proven by a re-authentication `prover` began and the
+  # person approved from their own session: the record's secret.
+  defp reauth_confirmed!(ctx, prover, subject, token, change) do
+    {:error, {:confirmation_required, %{id: secret}}} =
+      Sanctum.Consent.Authz.check(%{ctx | confirmation_id: nil}, :device_pairing, change)
+
+    ref = Prima.Confirmation.ref(secret)
+    {held, _request} = verified!(prover, subject, ref)
+    assert {:ok, %{state: "confirmed"}} = OIDC.reauth_decide(held.ticket, token, :approve)
+    secret
+  end
+
+  defp pairing_change(digest), do: Sanctum.Pairing.invitation_change(digest)
+
+  # The glass's two calls under the invitation, with the key it made.
+  defp complete!(secret, {device_key, private}) do
+    glass = Context.build(%{authenticated: false, client_ip: "198.51.100.30"})
+
+    {:ok, %{challenge: challenge}} =
+      Sanctum.Pairing.complete(glass, secret, %{device_key: device_key})
+
+    {:ok, paired} =
+      Sanctum.Pairing.complete(glass, secret, %{
+        device_key: device_key,
+        proof: Prima.DeviceCert.Proof.sign(challenge, private)
+      })
+
+    paired
+  end
+
+  # The person's first device, paired on a re-authentication from their
+  # session while they hold no passkey and no device, and the context its
+  # channel mints from a connect proof.
+  defp first_device!(%{ctx: ctx, subject: subject, token: token}) do
+    {device_key, private} = key = :crypto.generate_key(:eddsa, :ed25519)
+    digest = Prima.Device.key_digest(device_key)
+    secret = reauth_confirmed!(ctx, ctx, subject, token, pairing_change(digest))
+
+    {:ok, invitation} =
+      Sanctum.Pairing.begin(%{ctx | confirmation_id: secret}, %{key_digest: digest})
+
+    paired = complete!(invitation.invitation_secret, key)
+    certificate = paired.certificate
+
+    {:ok, challenge} =
+      Prima.DeviceCert.Challenge.new(
+        purpose: :connect,
+        home: certificate.audience,
+        athanor: certificate.athanor,
+        client_id: paired.client_id,
+        device_key: device_key,
+        nonce: :crypto.strong_rand_bytes(Prima.DeviceCert.Challenge.nonce_bytes()),
+        now: System.system_time(:millisecond)
+      )
+
+    {:ok, device_ctx} =
+      Sanctum.DeviceCerts.verify_connect(
+        %{client_id: paired.client_id, certificate: certificate, source: "198.51.100.30"},
+        Prima.DeviceCert.Proof.sign(challenge, private),
+        challenge
+      )
+
+    %{client_id: paired.client_id, ctx: device_ctx}
+  end
+
+  describe "a re-authentication begun from a paired device" do
+    test "confirms as that device: a device it confirmed is added, and the invitation names it",
+         %{ctx: ctx, subject: subject, token: token} = seated do
+      device = first_device!(seated)
+      {device_key, _private} = key = :crypto.generate_key(:eddsa, :ed25519)
+      digest = Prima.Device.key_digest(device_key)
+
+      secret = reauth_confirmed!(ctx, device.ctx, subject, token, pairing_change(digest))
+      row = record(ctx, Prima.Confirmation.ref(secret))
+      assert {row.proof, row.confirmed_client_id} == {"oidc_reauth", device.client_id}
+
+      assert {:ok, invitation} =
+               Sanctum.Pairing.begin(%{ctx | confirmation_id: secret}, %{key_digest: digest})
+
+      assert %{confirmer_kind: "device", confirmer_id: confirmer} =
+               Arca.Repo.get_by!(Arca.Schemas.PairingInvitation,
+                 secret_hash: Prima.Digest.sha256(invitation.invitation_secret)
+               )
+
+      assert confirmer == device.client_id
+      assert %{client_id: _} = complete!(invitation.invitation_secret, key)
+    end
+
+    test "its state names the device; one begun from a session names none",
+         %{ctx: ctx} = seated do
+      device = first_device!(seated)
+      ref = opened!(ctx)
+
+      {_url, from_device} = begun!(device.ctx, ref)
+      {_url, from_session} = begun!(ctx, ref)
+
+      decoded = fn state ->
+        [payload, _mac] = String.split(state, ".")
+        payload |> Base.url_decode64!(padding: false) |> Jason.decode!()
+      end
+
+      assert %{"d" => client_id} = decoded.(from_device.state)
+      assert client_id == device.client_id
+      refute Map.has_key?(decoded.(from_session.state), "d")
+    end
+
+    test "from a session that names no client, a re-authentication adds no device once one is paired",
+         %{ctx: ctx, subject: subject, token: token} = seated do
+      _device = first_device!(seated)
+      {device_key, _private} = :crypto.generate_key(:eddsa, :ed25519)
+      digest = Prima.Device.key_digest(device_key)
+
+      secret = reauth_confirmed!(ctx, ctx, subject, token, pairing_change(digest))
+      assert record(ctx, Prima.Confirmation.ref(secret)).confirmed_client_id == nil
+
+      assert Sanctum.Pairing.begin(%{ctx | confirmation_id: secret}, %{key_digest: digest}) ==
+               {:error, Sanctum.Pairing.addition_refusal()}
+    end
+
+    test "a device revoked between its login and the person's answer confirms nothing",
+         %{ctx: ctx, subject: subject, token: token} = seated do
+      device = first_device!(seated)
+      digest = Prima.Device.key_digest(elem(:crypto.generate_key(:eddsa, :ed25519), 0))
+
+      {:error, {:confirmation_required, %{id: secret}}} =
+        Sanctum.Consent.Authz.check(ctx, :device_pairing, pairing_change(digest))
+
+      ref = Prima.Confirmation.ref(secret)
+      {held, _request} = verified!(device.ctx, subject, ref)
+      {:ok, _revoked} = Arca.PairedClients.revoke(Context.actor(ctx), device.client_id)
+
+      assert OIDC.reauth_decide(held.ticket, token, :approve) == {:error, :revoked}
+      assert record(ctx, ref).state == "pending"
+    end
+  end
+
   describe "GET and POST /auth/oidcc/reauth" do
     # The issuer's redirect, in a browser holding `token`'s session.
     defp called_back(conn, ctx, subject, token) do

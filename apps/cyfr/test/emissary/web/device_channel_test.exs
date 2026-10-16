@@ -916,7 +916,7 @@ defmodule Emissary.Web.DeviceChannelTest do
       assert entry["asker"]["kind"] == "session"
 
       # An addition, once the person holds a passkey: the paired device
-      # offers the proofs it gives itself, a passkey and an emailed code.
+      # offers every proof the person holds, each recorded as given on it.
       assert entry["restricted"] == true
       assert entry["methods"] == ["passkey", "email"]
       refute inspect(entries) =~ id

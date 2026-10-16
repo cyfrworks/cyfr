@@ -38,8 +38,8 @@ defmodule Sanctum.Providers.Confirmation do
       door (`Sanctum.Pairing.addition?/1`), once a passkey or a paired
       device ever existed for the person, is marked `restricted` and
       offers only the proofs such an addition takes (`Sanctum.Pairing`):
-      on a paired device, those it records itself as giving (`passkey`,
-      `email`); anywhere else, a `passkey`.
+      on a paired device, every proof, each recorded as given on it (a
+      fresh sign-in it begins included); anywhere else, a `passkey`.
     * `cancel` ends one.
 
   Every action is the person's own, on the external plane, through an
@@ -271,21 +271,19 @@ defmodule Sanctum.Providers.Confirmation do
 
   # The proofs a record offers, and whether they are restricted: an
   # addition, once the latch is set, takes a proof a passkey or a paired
-  # client gives (`Sanctum.Pairing`), so a paired device offers the proofs
-  # it records itself as giving and any other client a passkey alone. A
-  # forced-fresh sign-in completes on a page that names no client.
+  # client gives (`Sanctum.Pairing`). Every proof a paired device begins is
+  # recorded as given on it, a forced-fresh sign-in included
+  # (`Sanctum.Auth.OIDC.reauth_url/2`), so it offers them all; any other
+  # client offers a passkey alone.
   defp offered(ctx, row, methods, latched?) do
     if latched? and Pairing.addition?(row.operation) do
-      kept =
-        case ctx do
-          %Context{auth_method: :device, client_id: client_id} when is_binary(client_id) ->
-            ["passkey", "email"]
+      case ctx do
+        %Context{auth_method: :device, client_id: client_id} when is_binary(client_id) ->
+          {methods, true}
 
-          %Context{} ->
-            ["passkey"]
-        end
-
-      {Enum.filter(methods, &(&1 in kept)), true}
+        %Context{} ->
+          {Enum.filter(methods, &(&1 == "passkey")), true}
+      end
     else
       {methods, false}
     end
