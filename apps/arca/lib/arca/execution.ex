@@ -219,6 +219,16 @@ defmodule Arca.Execution do
       # The athanor's standing first, before any execution or attempt row
       # is written or locked; a child's grant is its parent's stamp.
       Arca.ExecutionStanding.verify!(grant, verify)
+
+      # A run admitted with egress marks its tree's root below. The root's
+      # execution row is locked here, before any attempt row is — the
+      # parent's, which `hold_for_child!` takes, among them — in the
+      # execution-then-attempt order every execution write keeps
+      # (`Arca.ExecutionAttempts.takeover!/3`), so the admission and a
+      # takeover of the root never wait on each other in opposite order. A
+      # root admitted with egress holds its own row from its insert.
+      root = if Keyword.get(opts, :reaches_outside, false), do: lock_root!(athanor_id, attrs)
+
       inherits!(athanor_id, Map.get(attrs, :parent_execution_id), grant)
       attrs = origin!(athanor_id, attrs)
 
@@ -301,8 +311,12 @@ defmodule Arca.Execution do
           Arca.Repo.rollback(:parent_ended)
       end
 
-      if Keyword.get(opts, :reaches_outside, false),
-        do: reaches_outside!(athanor_id, execution.root_execution_id || execution.id)
+      case root do
+        nil -> :ok
+        :own -> reaches_outside!(athanor_id, execution.id, execution.host_policy)
+        {root_id, policy} -> reaches_outside!(athanor_id, root_id, policy)
+        :gone -> :ok
+      end
 
       commit_payloads!(Keyword.get(opts, :payloads, []), attempt_id)
 
@@ -513,7 +527,9 @@ defmodule Arca.Execution do
   `admit/2`'s `:reaches_outside` marked the root: `{:ok, true | false}`,
   read from the root's own row, which retention keeps while it runs, so
   a child pruned before the root ends cannot take the fact with it.
-  `{:error, :not_found}` for no root in the caller's athanor.
+  `{:error, :not_found}` for no root in the caller's athanor, and
+  `{:error, :unreadable}` for a root whose `host_policy` is not a JSON
+  object: a policy that cannot be read says nothing, never "no egress".
 
   The mark lives in the root's `host_policy` JSON, beside the policy its
   own admission recorded.
@@ -524,24 +540,58 @@ defmodule Arca.Execution do
     Arca.Repo.Errors.with_db_rescue("Execution.reached_outside", fn ->
       case row_of(actor, id) do
         nil -> {:error, :not_found}
-        %Row{host_policy: policy} -> {:ok, Map.get(policy_map(policy), @reached_key) == true}
+        %Row{host_policy: policy} -> reached(policy)
       end
     end)
   end
 
-  # Mark the tree's root as reached outside, under the admission's
-  # transaction: a set that only turns true, so concurrent admissions of
-  # one tree write the same value.
-  # arca:db-raise-ok inside the caller's transaction
-  defp reaches_outside!(athanor_id, root_id) do
-    policy =
-      from(e in Row,
-        where: e.athanor_id == ^athanor_id and e.id == ^root_id,
-        select: e.host_policy
-      )
-      |> Arca.Repo.one()
+  defp reached(policy) do
+    case decoded_policy(policy) do
+      {:ok, map} -> {:ok, Map.get(map, @reached_key) == true}
+      :error -> {:error, :unreadable}
+    end
+  end
 
-    marked = policy |> policy_map() |> Map.put(@reached_key, true) |> Jason.encode!()
+  # The tree's root, locked before any attempt row (see `admit/2`): `:own`
+  # for a root, whose insert holds its row, else `{root_id, host_policy}`
+  # read under the lock, or `:gone` for a root no row holds.
+  # arca:db-raise-ok inside the caller's transaction
+  defp lock_root!(athanor_id, attrs) do
+    case Map.get(attrs, :root_execution_id) do
+      root_id when is_binary(root_id) and root_id != "" ->
+        if root_id == Map.get(attrs, :id) do
+          :own
+        else
+          from(e in Row,
+            where: e.athanor_id == ^athanor_id and e.id == ^root_id,
+            select: e.host_policy
+          )
+          |> Arca.QueryHelpers.for_update()
+          |> Arca.Repo.all()
+          |> case do
+            [policy] -> {root_id, policy}
+            [] -> :gone
+          end
+        end
+
+      _root ->
+        :own
+    end
+  end
+
+  # Mark the tree's root as reached outside, under the lock `lock_root!/2`
+  # took (or the root's own insert): a mark that only turns true, written
+  # over the policy read under that lock. A policy that does not read as a
+  # JSON object keeps nothing but the mark.
+  # arca:db-raise-ok inside the caller's transaction
+  defp reaches_outside!(athanor_id, root_id, policy) do
+    base =
+      case decoded_policy(policy) do
+        {:ok, map} -> map
+        :error -> %{}
+      end
+
+    marked = base |> Map.put(@reached_key, true) |> Jason.encode!()
 
     if marked != policy do
       from(e in Row, where: e.athanor_id == ^athanor_id and e.id == ^root_id)
@@ -551,14 +601,15 @@ defmodule Arca.Execution do
     :ok
   end
 
-  defp policy_map(policy) when is_binary(policy) do
+  # A host policy is a JSON object or it is unreadable.
+  defp decoded_policy(policy) when is_binary(policy) do
     case Jason.decode(policy) do
-      {:ok, %{} = map} -> map
-      _unreadable -> %{}
+      {:ok, %{} = map} -> {:ok, map}
+      _not_an_object -> :error
     end
   end
 
-  defp policy_map(_none), do: %{}
+  defp decoded_policy(_none), do: :error
 
   # The row itself, for the writers here that act on it inside their own
   # rescue or transaction.

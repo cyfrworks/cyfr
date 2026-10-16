@@ -1271,3 +1271,169 @@ defmodule Arca.ExecutionTakeoverTest do
     pid
   end
 end
+
+defmodule Arca.ExecutionEgressMarkTest do
+  @moduledoc """
+  The mark a run admitted with egress leaves on its tree's root
+  (`Arca.Execution.admit/2`'s `:reaches_outside`), read back by
+  `Arca.Execution.reached_outside/2`: a root whose policy does not read as
+  a JSON object says nothing, never "no egress"; and the admission takes
+  the root's execution row before any attempt row, the order a takeover
+  takes them in, so the two never deadlock.
+
+  The lock case runs on PostgreSQL alone, on connections of its own
+  outside the sandbox, in an athanor of its own whose rows it deletes
+  when it ends: SQLite's one write lock serializes the two transactions.
+  """
+
+  use ExUnit.Case, async: false
+
+  import Ecto.Query, only: [from: 2]
+
+  alias Arca.Execution
+  alias Arca.Schemas.ExecutionAttempt
+  alias Arca.Schemas.Execution, as: Row
+  alias Arca.Test.LockWait
+  alias Ecto.Adapters.SQL.Sandbox
+
+  @athanor Arca.Test.Actor.athanor_id()
+
+  setup tags do
+    Arca.Test.Sandbox.setup!(tags)
+    :ok
+  end
+
+  test "a marked root whose policy is not a JSON object answers unreadable, never false" do
+    Arca.Test.Actor.athanor!()
+    actor = Arca.Test.Actor.local()
+    root = "exec_mark_#{System.unique_integer([:positive])}"
+    {:ok, _} = admit(@athanor, root, %{}, Arca.Test.Actor.grant(@athanor), true)
+    assert {:ok, true} = Execution.reached_outside(actor, root)
+
+    quiet = "exec_quiet_#{System.unique_integer([:positive])}"
+    {:ok, _} = admit(@athanor, quiet, %{}, Arca.Test.Actor.grant(@athanor), false)
+    assert {:ok, false} = Execution.reached_outside(actor, quiet)
+
+    for policy <- ["not-json", "", "[]", "null", "true", nil] do
+      for id <- [root, quiet] do
+        {1, _} =
+          Arca.Repo.update_all(from(e in Row, where: e.id == ^id), set: [host_policy: policy])
+
+        assert {:error, :unreadable} = Execution.reached_outside(actor, id), inspect(policy)
+      end
+    end
+
+    assert {:error, :not_found} = Execution.reached_outside(actor, "exec_none")
+  end
+
+  @tag :postgres
+  test "an egress child's admission waits on its root's row a takeover holds, and neither deadlocks" do
+    athanor = "ath_exec_mark_#{System.unique_integer([:positive])}"
+    unboxed(fn -> Arca.Test.Actor.ensure_athanor_row(athanor) end)
+
+    on_exit(fn ->
+      unboxed(fn ->
+        ids = from(e in Row, where: e.athanor_id == ^athanor, select: e.id)
+
+        Arca.Repo.delete_all(
+          from(i in "execution_events", where: i.execution_id in subquery(ids))
+        )
+
+        Arca.Repo.delete_all(from(a in ExecutionAttempt, where: a.athanor_id == ^athanor))
+        Arca.Repo.delete_all(from(e in Row, where: e.athanor_id == ^athanor))
+        Arca.Repo.delete_all(from(a in Arca.Schemas.Athanor, where: a.id == ^athanor))
+      end)
+    end)
+
+    grant = unboxed(fn -> Arca.Test.Actor.grant(athanor) end)
+    root = "exec_root_#{System.unique_integer([:positive])}"
+
+    {:ok, %{attempt: %{attempt: attempt}}} =
+      unboxed(fn -> admit(athanor, root, %{}, grant, false) end)
+
+    test = self()
+
+    # A takeover's order: the root's execution row, then its current
+    # attempt, held apart so the admission can start between them.
+    takeover =
+      Task.async(fn ->
+        unboxed(fn ->
+          Arca.Repo.transaction(fn ->
+            from(e in Row, where: e.athanor_id == ^athanor and e.id == ^root)
+            |> Arca.QueryHelpers.for_update()
+            |> Arca.Repo.one!()
+
+            send(test, :root_held)
+
+            receive do
+              :take_attempt -> :ok
+            end
+
+            from(a in ExecutionAttempt, where: a.athanor_id == ^athanor and a.attempt == ^attempt)
+            |> Arca.QueryHelpers.for_update()
+            |> Arca.Repo.one!()
+
+            :taken
+          end)
+        end)
+      end)
+
+    assert_receive :root_held, 15_000
+    child = "exec_child_#{System.unique_integer([:positive])}"
+
+    admission =
+      Task.async(fn ->
+        unboxed(fn ->
+          send(test, {:backend, backend_pid()})
+
+          admit(
+            athanor,
+            child,
+            %{parent_execution_id: root, root_execution_id: root},
+            grant,
+            true
+          )
+        end)
+      end)
+
+    assert_receive {:backend, backend}, 15_000
+    LockWait.await_lock_wait!(backend, [], timeout_ms: 10_000)
+    send(takeover.pid, :take_attempt)
+
+    assert {:ok, :taken} = Task.await(takeover, 30_000)
+    assert {:ok, %{execution: %{id: ^child}}} = Task.await(admission, 30_000)
+
+    assert {:ok, true} =
+             unboxed(fn ->
+               Execution.reached_outside(Arca.Test.Actor.local(athanor_id: athanor), root)
+             end)
+  end
+
+  defp admit(athanor, id, lineage, grant, reaches_outside?) do
+    Execution.admit(
+      Map.merge(
+        %{
+          id: id,
+          reference: "catalyst:local.mark:1.0.0",
+          user_id: "user_test",
+          athanor_id: athanor,
+          component_type: "catalyst",
+          origin: :programmatic,
+          host_policy:
+            Jason.encode!(%{allowed_domains: if(reaches_outside?, do: ["x.example"], else: [])})
+        },
+        lineage
+      ),
+      grant: grant,
+      verify: &Arca.Test.Actor.verify/1,
+      reaches_outside: reaches_outside?
+    )
+  end
+
+  defp unboxed(fun), do: Sandbox.unboxed_run(Arca.Repo, fun)
+
+  defp backend_pid do
+    %{rows: [[pid]]} = Arca.Repo.query!("SELECT pg_backend_pid()")
+    pid
+  end
+end

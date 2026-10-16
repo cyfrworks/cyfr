@@ -344,6 +344,25 @@ defmodule Aqua.TurnSourcesTest do
              )
     end
 
+    test "a root whose policy no longer reads as a JSON object is outside, marked or not",
+         %{ctx: ctx, thread: thread} do
+      turn = running!(ctx, thread)
+
+      for {name, domains, policy} <- [
+            {"formula:local.marked", ["api.example.com"], "not-json"},
+            {"formula:local.blank", [], ""}
+          ] do
+        root = launched!(ctx, domains)
+
+        {1, _} =
+          Arca.Repo.update_all(from(e in Arca.Schemas.Execution, where: e.id == ^root),
+            set: [host_policy: policy]
+          )
+
+        assert closed_launch!(ctx, turn, name, root) == [Source.outside(name)]
+      end
+    end
+
     test "retention pruning an egress-bearing child before the launch closes does not erase the outside source",
          %{ctx: ctx, thread: thread} do
       turn = running!(ctx, thread)
