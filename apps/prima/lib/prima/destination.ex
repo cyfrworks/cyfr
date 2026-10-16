@@ -218,7 +218,7 @@ defmodule Prima.Destination do
 
     inner.scheme == outer.scheme and inner.port == outer.port and
       Enum.all?(inner.hosts, &Prima.Network.domain_allowed?(&1, outer.hosts)) and
-      inner.methods -- outer.methods == [] and
+      Enum.all?(inner.methods, &(&1 in outer.methods)) and
       Enum.all?(inner.paths, fn path ->
         Enum.any?(outer.paths, &List.starts_with?(segments(path), segments(&1)))
       end)

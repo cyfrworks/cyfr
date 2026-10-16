@@ -962,6 +962,24 @@ defmodule Sanctum.VaultTest do
       refute Enum.any?(open, &(&1.operation == "vault.rebind"))
     end
 
+    test "disclosed fields are compared as sets: a repeated name is no new field",
+         %{person: person} do
+      view = create!(person, %{fields: %{"key" => "material", "url" => "https://db.example"}})
+      assert view.field_names == ["key", "url"]
+
+      # `url` dropped and `key` named twice: fewer fields, the session alone.
+      assert {:ok, _} = Vault.rebind(person, %{id: view.id, field_names: ["key", "key"]})
+      narrowed = row!(person, view.id)
+      assert MapSet.new(Jason.decode!(narrowed.field_names)) == MapSet.new(["key"])
+
+      # A name the entry does not disclose is growth, however often the
+      # names it does disclose are repeated beside it.
+      assert {:error, {:confirmation_required, %{operation: "vault.rebind"}}} =
+               Vault.rebind(person, %{id: view.id, field_names: ["key", "key", "region"]})
+
+      assert row!(person, view.id) == narrowed
+    end
+
     test "a confirmed widening rebind moves the binding its person was shown, and nothing else",
          %{person: person} do
       view =

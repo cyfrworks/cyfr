@@ -551,16 +551,23 @@ defmodule Sanctum.Vault do
   # where it could not, or lets a component read what it could not: a
   # destination not within the stored one (a stored one that does not read
   # admitted nothing), disclosure turned on, or a disclosed field the entry
-  # did not disclose. An attach-only entry's fields are read by no
+  # did not disclose. Fields are compared as sets of names, so a name
+  # repeated is no new field. An attach-only entry's fields are read by no
   # component, so its field schema widens nothing.
   @spec rebind_widens?(map(), map()) :: boolean()
   def rebind_widens?(entry, rebound) do
     not destination_within?(rebound.destination, entry.destination) or
       (rebound.attach_only == false and
          (entry.attach_only != false or
-            decode_list(rebound.field_names, "field_names") --
-              decode_list(entry.field_names, "field_names") != []))
+            not MapSet.subset?(field_set(rebound), field_set(entry))))
   end
+
+  # A binding's field names as a set, sorted: what a rebind compares and
+  # what its confirmation shows.
+  defp field_names(binding),
+    do: binding.field_names |> decode_list("field_names") |> Enum.uniq()
+
+  defp field_set(binding), do: MapSet.new(field_names(binding))
 
   defp destination_within?(text, stored) do
     with {:ok, destination} <- read_destination(text),
@@ -574,11 +581,11 @@ defmodule Sanctum.Vault do
   @doc false
   # What a rebind's confirmation shows (`Prima.Confirmation.Preview`'s
   # details), secret-free: every part of the binding a rebind can move as
-  # it will be — the destination's admitted sets (`Prima.Destination.admitted/1`),
-  # whether the fields are disclosed, and the field schema — and, beside
-  # each part that moves, what it was (`<part>_before`). The provider, the
-  # OAuth endpoints and the scopes do not move here; the change's digests
-  # bind them.
+  # it will be — the destination's admitted sets
+  # (`Prima.Destination.admitted/1`), whether the fields are disclosed, and
+  # the field names as a set — and, beside each part that moves, what it
+  # was (`<part>_before`). The provider, the OAuth endpoints and the scopes
+  # do not move here; the change's digests bind them.
   @spec rebind_details(map(), map()) :: %{String.t() => String.t() | [String.t()]}
   def rebind_details(entry, rebound) do
     before = binding_shown(entry)
@@ -611,7 +618,7 @@ defmodule Sanctum.Vault do
 
     Map.merge(destination, %{
       "disclosed" => if(binding.attach_only == false, do: "yes", else: "no"),
-      "field_names" => decode_list(binding.field_names, "field_names")
+      "field_names" => field_names(binding)
     })
   end
 

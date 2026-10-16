@@ -386,6 +386,10 @@ defmodule Prima.DestinationTest do
       assert both(get, get_post) == {true, false}
       assert both(get_post, @host) == {true, false}
       assert both(get, Map.put(@host, "methods", ["POST"])) == {false, false}
+
+      # Compared as sets: a repeated method is no method the outer lacks.
+      repeated = %{new!(get) | methods: ["GET", "GET"]}
+      assert Destination.within?(repeated, new!(get))
     end
 
     test "paths: each inner prefix has an outer prefix that is a segment prefix of it, absent is the root" do
