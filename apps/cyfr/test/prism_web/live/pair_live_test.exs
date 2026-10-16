@@ -13,9 +13,11 @@ defmodule PrismWeb.PairLiveTest do
   never reached the browser was issued once, and the same code then says
   it was already used.
 
-  The page's script is the browser's half: here its two events are sent
-  as the hook sends them (`pair_start`, `pair_proof`), signed by a device
-  key made in the test.
+  The page's script is the browser's half: it makes the device key before
+  any invitation and sends its digest (`prepared`), which the page shows
+  as the key's code; here its events are sent as the hook sends them
+  (`prepared`, `pair_start`, `pair_proof`), signed by a device key made in
+  the test, the one whose digest the invitation was opened for.
   """
 
   use PrismWeb.ConnCase, async: false
@@ -35,8 +37,9 @@ defmodule PrismWeb.PairLiveTest do
   end
 
   # A person seated in their own athanor, and a pairing code they began
-  # under a session and a proven confirmation.
-  defp invited! do
+  # under a session and a proven confirmation, for the key `keys` the new
+  # glass made first.
+  defp invited!(keys \\ key_pair()) do
     user = test_user()
     {:ok, athanor} = Sanctum.Tenancy.Athanors.create_group(user.user_id, "Pair #{user.namespace}")
 
@@ -57,18 +60,26 @@ defmodule PrismWeb.PairLiveTest do
     {:ok, %{invitation_url: url}} =
       Sanctum.TestContext.confirming(
         ctx,
-        &Sanctum.Gate.call_external("pairing", &1, %{"action" => "begin"})
+        &Sanctum.Gate.call_external("pairing", &1, %{
+          "action" => "begin",
+          "key_digest" => digest(keys)
+        })
       )
 
     %URI{path: "/pair", fragment: "code=" <> code} = URI.parse(url)
-    %{user: user, athanor: athanor, ctx: ctx, code: code}
+    %{user: user, athanor: athanor, ctx: ctx, code: code, keys: keys}
   end
 
   # The glass's half of the ceremony, as the hook drives it: its key, the
   # challenge, its proof, and the answer.
-  defp pair(view, code, {device_key, private}) do
+  defp pair(view, code, {device_key, private} = keys) do
     key = Encoding.b64(device_key)
-    render_hook(view, "pair_start", %{"invitation_secret" => code, "device_key" => key})
+
+    render_hook(view, "pair_start", %{
+      "invitation_secret" => code,
+      "device_key" => key,
+      "key_digest" => digest(keys)
+    })
 
     case reply(view) do
       %{challenge: challenge} ->
@@ -78,6 +89,7 @@ defmodule PrismWeb.PairLiveTest do
         render_hook(view, "pair_proof", %{
           "invitation_secret" => code,
           "device_key" => key,
+          "key_digest" => digest(keys),
           "proof" => proof
         })
 
@@ -95,6 +107,8 @@ defmodule PrismWeb.PairLiveTest do
 
   defp key_pair, do: :crypto.generate_key(:eddsa, :ed25519)
 
+  defp digest({device_key, _private}), do: Device.key_digest(device_key)
+
   defp paired_clients(ctx) do
     {:ok, %{clients: clients}} =
       Sanctum.Gate.call_external("pairing", ctx, %{"action" => "list"})
@@ -104,7 +118,7 @@ defmodule PrismWeb.PairLiveTest do
 
   test "a browser with neither cookie nor certificate pairs, under a context it builds itself",
        %{conn: conn} do
-    %{user: user, athanor: athanor, code: code} = invited!()
+    %{user: user, athanor: athanor, code: code, keys: keys} = invited!()
 
     {:ok, view, html} = live(conn, "/pair")
     assert html =~ ~s(data-glass="pair")
@@ -118,7 +132,7 @@ defmodule PrismWeb.PairLiveTest do
     assert is_nil(ctx.auth_method) and is_nil(ctx.session_token_hash)
     assert ctx.client_ip == "127.0.0.1"
 
-    {device_key, _private} = keys = key_pair()
+    {device_key, _private} = keys
     assert %{client_id: client_id, certificate: certificate} = pair(view, code, keys)
 
     {:ok, certificate} = DeviceCert.decode(certificate)
@@ -131,7 +145,7 @@ defmodule PrismWeb.PairLiveTest do
 
   test "a leftover session of another person is ignored: the client is the person the code names",
        %{conn: conn} do
-    %{user: user, ctx: ctx, code: code} = invited!()
+    %{user: user, ctx: ctx, code: code, keys: keys} = invited!()
     stranger = test_user()
     conn = log_in_user(conn, stranger)
 
@@ -139,16 +153,16 @@ defmodule PrismWeb.PairLiveTest do
     refute html =~ stranger.email
     assert is_nil(:sys.get_state(view.pid).socket.assigns.context.user_id)
 
-    assert %{client_id: client_id, certificate: certificate} = pair(view, code, key_pair())
+    assert %{client_id: client_id, certificate: certificate} = pair(view, code, keys)
     {:ok, certificate} = DeviceCert.decode(certificate)
     assert certificate.subject.user_id == user.user_id
     assert [%{client_id: ^client_id}] = paired_clients(ctx)
   end
 
   test "the certificate answered connects the device channel", %{conn: conn} do
-    %{athanor: athanor, code: code} = invited!()
+    %{athanor: athanor, code: code, keys: keys} = invited!()
     {:ok, view, _html} = live(conn, "/pair")
-    {_device_key, private} = keys = key_pair()
+    {_device_key, private} = keys
     %{client_id: client_id, certificate: certificate} = pair(view, code, keys)
     {:ok, certificate} = DeviceCert.decode(certificate)
 
@@ -183,20 +197,27 @@ defmodule PrismWeb.PairLiveTest do
 
   test "a browser that closed before the answer was paired once, and the same code then says so",
        %{conn: conn} do
-    %{ctx: ctx, code: code} = invited!()
+    %{ctx: ctx, code: code, keys: keys} = invited!()
 
     # The proof is sent, the pairing issued, and the browser goes before it
     # reads the answer.
     {:ok, first, _html} = live(conn, "/pair")
-    {device_key, private} = key_pair()
+    {device_key, private} = keys
     key = Encoding.b64(device_key)
-    render_hook(first, "pair_start", %{"invitation_secret" => code, "device_key" => key})
+
+    render_hook(first, "pair_start", %{
+      "invitation_secret" => code,
+      "device_key" => key,
+      "key_digest" => digest(keys)
+    })
+
     %{challenge: challenge} = reply(first)
     {:ok, challenge} = Challenge.decode(challenge)
 
     render_hook(first, "pair_proof", %{
       "invitation_secret" => code,
       "device_key" => key,
+      "key_digest" => digest(keys),
       "proof" => Proof.encode(Proof.sign(challenge, private))
     })
 
@@ -205,7 +226,7 @@ defmodule PrismWeb.PairLiveTest do
     # Opened again from the same code: the explicit answer, and no second
     # device.
     {:ok, again, _html} = live(conn, "/pair")
-    assert %{error: sentence} = pair(again, code, key_pair())
+    assert %{error: sentence} = pair(again, code, keys)
     assert sentence =~ "already used"
     assert render(again) =~ ~s(data-test="pair-error")
     assert [_one] = paired_clients(ctx)
@@ -213,7 +234,7 @@ defmodule PrismWeb.PairLiveTest do
 
   test "a code whose person's keys are at another home answers what that home is to certify, and pairs nothing without its certificate",
        %{conn: conn} do
-    %{user: user, athanor: athanor, ctx: ctx, code: code} = invited!()
+    %{user: user, athanor: athanor, ctx: ctx, code: code, keys: keys} = invited!()
 
     # From here the person is this home's remote person: their keys are at
     # another home, which certifies their devices.
@@ -229,10 +250,15 @@ defmodule PrismWeb.PairLiveTest do
         directory_url: "https://dir.example"
       })
 
-    {device_key, private} = key_pair()
+    {device_key, private} = keys
     key = Encoding.b64(device_key)
     {:ok, view, _html} = live(conn, "/pair")
-    render_hook(view, "pair_start", %{"invitation_secret" => code, "device_key" => key})
+
+    render_hook(view, "pair_start", %{
+      "invitation_secret" => code,
+      "device_key" => key,
+      "key_digest" => digest(keys)
+    })
 
     assert %{challenge: challenge, certify: certify} = reply(view)
 
@@ -247,6 +273,7 @@ defmodule PrismWeb.PairLiveTest do
     render_hook(view, "pair_proof", %{
       "invitation_secret" => code,
       "device_key" => key,
+      "key_digest" => digest(keys),
       "proof" => Proof.encode(Proof.sign(held, private))
     })
 
@@ -256,9 +283,9 @@ defmodule PrismWeb.PairLiveTest do
   end
 
   test "the completion is decided by the gate, and no decision holds the code", %{conn: conn} do
-    %{code: code} = invited!()
+    %{code: code, keys: keys} = invited!()
     {:ok, view, _html} = live(conn, "/pair")
-    assert %{certificate: _} = pair(view, code, key_pair())
+    assert %{certificate: _} = pair(view, code, keys)
 
     # Two admitted completions, the challenge and the proof, with no
     # caller: the invitation named the person.
@@ -278,5 +305,49 @@ defmodule PrismWeb.PairLiveTest do
     refute Arca.Repo.exists?(
              from(l in Arca.Schemas.McpLog, where: l.tool == "pairing" and l.action == "complete")
            )
+  end
+
+  test "a glass that made its key first shows the key's code, and pairs under the invitation opened for it",
+       %{conn: conn} do
+    {device_key, _private} = keys = key_pair()
+    key_digest = digest(keys)
+    {:ok, view, _html} = live(conn, "/pair")
+
+    render_hook(view, "prepared", %{"key_digest" => key_digest})
+    assert reply(view) == %{}
+    code = Device.key_code(key_digest)
+    assert has_element?(view, ~s([data-test="pair-key-code"]), code)
+    assert has_element?(view, ~s([data-test="pair-key-qr"] svg))
+
+    # A digest the page cannot read draws nothing.
+    {:ok, other, _html} = live(conn, "/pair")
+    render_hook(other, "prepared", %{"key_digest" => "not-a-digest"})
+    assert %{error: _sentence} = reply(other)
+    refute has_element?(other, ~s([data-test="pair-key"]))
+
+    # The person opens the invitation for that code; the same glass pairs,
+    # and the code is gone.
+    %{code: secret} = invited!(keys)
+    assert %{certificate: certificate} = pair(view, secret, keys)
+    {:ok, certificate} = DeviceCert.decode(certificate)
+    assert certificate.device_key == device_key
+    refute has_element?(view, ~s([data-test="pair-key"]))
+  end
+
+  test "a browser holding another key is refused under the invitation, and the glass it named still pairs",
+       %{conn: conn} do
+    %{ctx: ctx, code: code, keys: keys} = invited!()
+    {:ok, view, _html} = live(conn, "/pair")
+
+    # Its own key, its own digest, and a valid proof of its own: refused
+    # before any challenge is answered.
+    assert %{error: sentence} = pair(view, code, key_pair())
+    assert sentence =~ "not the one the pairing was approved for"
+    assert render(view) =~ ~s(data-test="pair-error")
+    assert paired_clients(ctx) == []
+
+    {:ok, glass, _html} = live(conn, "/pair")
+    assert %{client_id: client_id} = pair(glass, code, keys)
+    assert [%{client_id: ^client_id}] = paired_clients(ctx)
   end
 end
