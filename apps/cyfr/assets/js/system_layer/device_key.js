@@ -460,7 +460,11 @@ async function askIssuer(fetchFn, url, body) {
 /**
  * The glass's store in IndexedDB: one record, the key pair (the private
  * key unexportable), the public key's encoding, the client id and the
- * certificate. `load` answers it or null. Beside it, the prepared key a
+ * certificate. `load` answers it or null. A device's own connection writes
+ * or erases it only through `saveIf` and `clearIf`, which act only while the
+ * stored record is still that device's, read and written in one
+ * transaction: a replacement written meanwhile stays. Beside it, the
+ * prepared key a
  * pairing is to use, made before any invitation: the key pair, the public
  * key's encoding and its digest (`loadPrepared`, `savePrepared`,
  * `clearPrepared`); the pending record of
@@ -492,10 +496,36 @@ export function openStore(indexedDB = globalThis.indexedDB, name = "cyfr-glass")
         })
     )
 
+  // A write made only while the stored device is still `clientId`'s: the
+  // record read and the write made in one transaction, which IndexedDB
+  // orders after every earlier readwrite transaction on the store, so a
+  // record a replacement wrote first is never touched by the device it
+  // replaced. Answers whether it wrote.
+  const ifStill = (clientId, write) =>
+    open().then(
+      (db) =>
+        new Promise((resolve, reject) => {
+          const tx = db.transaction("glass", "readwrite")
+          const store = tx.objectStore("glass")
+          const read = store.get("device")
+          let wrote = false
+          read.onsuccess = () => {
+            if (read.result && read.result.clientId === clientId) {
+              write(store)
+              wrote = true
+            }
+          }
+          tx.oncomplete = () => resolve(wrote)
+          tx.onerror = () => reject(tx.error)
+        })
+    )
+
   return {
     load: () => run("readonly", (store) => store.get("device")).then((value) => value || null),
     save: (record) => run("readwrite", (store) => store.put(record, "device")).then(() => record),
     clear: () => run("readwrite", (store) => store.delete("device")).then(() => null),
+    saveIf: (clientId, record) => ifStill(clientId, (store) => store.put(record, "device")),
+    clearIf: (clientId) => ifStill(clientId, (store) => store.delete("device")),
     loadPrepared: () => run("readonly", (store) => store.get("prepared")).then((value) => value || null),
     savePrepared: (record) => run("readwrite", (store) => store.put(record, "prepared")).then(() => record),
     clearPrepared: () => run("readwrite", (store) => store.delete("prepared")).then(() => null),
@@ -518,6 +548,8 @@ export function memoryStore(record = null, pendingRecord = null, certifyRecord =
     load: async () => held,
     save: async (next) => (held = next),
     clear: async () => (held = null),
+    saveIf: async (clientId, next) => (held && held.clientId === clientId ? ((held = next), true) : false),
+    clearIf: async (clientId) => (held && held.clientId === clientId ? ((held = null), true) : false),
     loadPrepared: async () => prepared,
     savePrepared: async (next) => (prepared = next),
     clearPrepared: async () => (prepared = null),
@@ -747,7 +779,7 @@ export class Glass {
       case "certificate":
         this.device = {...this.device, certificate: body.certificate}
         this.mustRenew = false
-        await this.store.save(this.device)
+        await this.store.saveIf(this.device.clientId, this.device)
         return
 
       case "standing":
@@ -809,7 +841,7 @@ export class Glass {
       this.candidate = null
       this.offer(null)
       try {
-        await this.store.save(this.device)
+        await this.store.saveIf(this.device.clientId, this.device)
       } catch (_error) {
         // Kept for this page; the next page asks the person again.
       }
@@ -907,7 +939,7 @@ export class Glass {
       this.mustRenew = false
       this.unreachable = 0
       this.offer(null)
-      await this.store.save(this.device)
+      await this.store.saveIf(this.device.clientId, this.device)
       this.connect()
     } catch (error) {
       if (this.device !== device || this.status === "revoked") return
@@ -930,7 +962,7 @@ export class Glass {
       if (this.device !== device) return
       this.device = {...device, certificate}
       this.offer(null)
-      await this.store.save(this.device)
+      await this.store.saveIf(this.device.clientId, this.device)
       this.connect()
     } catch (error) {
       if (this.device !== device || this.status === "revoked") return
@@ -979,12 +1011,13 @@ export class Glass {
 
   /**
    * Forget the device this glass holds: its connection closed, its key and
-   * certificate erased here. The home still lists the client until it is
-   * revoked.
+   * certificate erased here while the stored record is still its own. The
+   * home still lists the client until it is revoked.
    */
   async unpair() {
+    const device = this.device
     this.forget()
-    await this.store.clear()
+    if (device) await this.store.clearIf(device.clientId)
     this.set("unpaired")
   }
 
@@ -1009,11 +1042,15 @@ export class Glass {
     this.pending = []
   }
 
+  // The pairing ended: this device's record is erased, only while the
+  // stored record is still its own, so a replacement written meanwhile
+  // stays.
   async revoked() {
+    const device = this.device
     this.set("revoked")
     this.stopListenRetry()
     this.device = null
-    await this.store.clear()
+    if (device) await this.store.clearIf(device.clientId)
     this.closeSocket()
   }
 

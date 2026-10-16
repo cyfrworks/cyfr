@@ -1074,6 +1074,73 @@ describe("a glass that holds a device, opened on a pairing link", () => {
     })
   }
 
+  test("a revocation the old connection receives while the replacement's write is in flight leaves the replacement stored", async () => {
+    const prepared = await preparedKey()
+    const page = await mountGlassPage({stored: storedDevice, replies, prepared})
+    const deferred = () => {
+      let resolve
+      const promise = new Promise((done) => (resolve = done))
+      return {promise, resolve}
+    }
+    const saveEntered = deferred()
+    const allowSave = deferred()
+    const saveCommitted = deferred()
+    const eraseEntered = deferred()
+    const allowErase = deferred()
+    const eraseCommitted = deferred()
+    // Two readwrite transactions, as IndexedDB orders them: the
+    // replacement's put begins first, and the old connection's erasure,
+    // whichever call makes it, waits for it and then commits.
+    const gated = (write) => async (...args) => {
+      eraseEntered.resolve()
+      await allowErase.promise
+      const answer = await write(...args)
+      eraseCommitted.resolve()
+      return answer
+    }
+    const save = page.store.save
+    page.store.save = async (record) => {
+      saveEntered.resolve()
+      await allowSave.promise
+      await save(record)
+      saveCommitted.resolve()
+      return record
+    }
+    page.store.clear = gated(page.store.clear)
+    if (page.store.clearIf) page.store.clearIf = gated(page.store.clearIf)
+    try {
+      await page.hook.glass.start()
+      const oldSocket = page.sockets.at(-1)
+      const replacing = page.hook.glassClick({target: page.el.find("glass-replace"), preventDefault() {}})
+      await saveEntered.promise
+      const revoking = oldSocket.onmessage({data: JSON.stringify({protocol: device.protocol, type: "revoke", client_id: storedDevice.clientId})})
+      await eraseEntered.promise
+      allowSave.resolve()
+      await saveCommitted.promise
+      allowErase.resolve()
+      await Promise.all([replacing, revoking, eraseCommitted.promise])
+
+      assert.equal((await page.store.load())?.clientId, "pcl_new")
+    } finally {
+      allowSave.resolve()
+      allowErase.resolve()
+      page.hook.destroyGlass()
+      page.restore()
+    }
+  })
+
+  test("a device's own writes and erasure leave a record another device wrote", async () => {
+    const store = memoryStore({...storedDevice, clientId: "pcl_new"})
+    assert.equal(await store.saveIf(storedDevice.clientId, storedDevice), false)
+    assert.equal(await store.clearIf(storedDevice.clientId), false)
+    assert.equal((await store.load()).clientId, "pcl_new")
+    assert.equal(await store.saveIf("pcl_new", {...storedDevice, clientId: "pcl_new", certificate: {renewed: true}}), true)
+    assert.deepEqual((await store.load()).certificate, {renewed: true})
+    assert.equal(await store.clearIf("pcl_new"), true)
+    assert.equal(await store.load(), null)
+    assert.equal(await store.saveIf("pcl_new", storedDevice), false, "an erased record is not written back")
+  })
+
   test("nothing is sent and nothing replaced until the person chooses", async () => {
     const page = await mountGlassPage({stored: storedDevice, replies})
     try {
