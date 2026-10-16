@@ -44,10 +44,11 @@ defmodule Sanctum.Providers.Confirmation do
     * `cancel` ends one.
 
   While the home's storage reserve is depleted (`Arca.StorageReserve`),
-  the gate admits `pending` only with a `request`, and a proof, a
-  re-authentication or a cancel only by a `ref`, naming a record of an
-  action declared `reduces_authority`, and `pending` answers only such
-  records: the freed reserve completes a revocation, not another change.
+  `pending` answers only the person's records of an action declared
+  `reduces_authority`, so a client reconnecting then still finds a
+  revocation waiting on it, and the gate admits a `request`, a proof, a
+  re-authentication or a cancel only by a ref naming such a record: the
+  freed reserve completes a revocation, not another change.
 
   While the person recovers from a declared restore (their
   `restore_people` row is open, `Arca.SecurityTransitions.restore_open/2`),

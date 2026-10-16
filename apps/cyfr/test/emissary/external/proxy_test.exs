@@ -306,6 +306,121 @@ defmodule Emissary.External.ProxyTest do
     end
   end
 
+  describe "the storage reserve" do
+    # While the home's storage reserve is depleted (`Arca.StorageReserve`)
+    # a proxied call is no read and takes no authority away, so the gate
+    # refuses it at admission, on either plane: nothing is resolved,
+    # started, rowed or charged.
+    setup do
+      on_exit(fn -> Arca.StorageReserve.put(:ok) end)
+      :ok
+    end
+
+    defp reserve_refused?(answer),
+      do:
+        match?(
+          {:error,
+           %Prima.Refusal{
+             stage: :admission,
+             class: :unavailable,
+             reason: {:unavailable, :storage_reserve}
+           }},
+          answer
+        )
+
+    test "an external call reaches the proxy, and while depleted is refused before it does",
+         %{ctx: ctx} do
+      Arca.McpServerStorage.insert(Sanctum.Context.actor(ctx), %{
+        cap: 0,
+        name: "reserve-console",
+        url: "https://localhost:99999/mcp",
+        config_json: Jason.encode!(%{"console" => true})
+      })
+
+      on_exit(fn ->
+        Emissary.External.ServerSupervisor.stop("reserve-console", ctx.athanor_id)
+      end)
+
+      Arca.StorageReserve.put(:depleted)
+      assert reserve_refused?(Sanctum.Gate.call_external("reserve-console:probe", ctx, %{}))
+
+      assert [] =
+               Registry.lookup(
+                 Emissary.External.ServerRegistry,
+                 {"reserve-console", ctx.athanor_id}
+               )
+
+      # Held again, the same call reaches the proxy: the unreachable server
+      # answers, not the reserve.
+      Arca.StorageReserve.put(:ok)
+      answer = Sanctum.Gate.call_external("reserve-console:probe", ctx, %{})
+      assert {:error, _unreachable} = answer
+      refute reserve_refused?(answer)
+    end
+
+    test "a chain's call is refused while depleted before its step is taken", %{ctx: ctx} do
+      Arca.McpServerStorage.insert(Sanctum.Context.actor(ctx), %{
+        cap: 0,
+        name: "reserve-chain",
+        url: "https://localhost:99999/mcp"
+      })
+
+      on_exit(fn -> Emissary.External.ServerSupervisor.stop("reserve-chain", ctx.athanor_id) end)
+
+      lineage = Cyfr.Test.AttemptFixtures.lineage!(ctx)
+      Arca.StorageReserve.put(:depleted)
+
+      assert reserve_refused?(
+               Sanctum.Gate.call_in_chain("reserve-chain:probe", ctx, %{}, chain_authority(),
+                 lineage: lineage
+               )
+             )
+
+      assert [] = tool_calls()
+    end
+  end
+
+  # An authority whose one node's ingress edge names the proxied tool.
+  defp chain_authority do
+    node = "formula:local.reserve-chain"
+
+    graph = %{
+      "canonical" => "jcs-1",
+      "nodes" => %{
+        node => %{
+          "limits" => %{
+            "timeout" => "1m",
+            "max_memory_bytes" => 67_108_864,
+            "max_request_size" => 1_048_576,
+            "max_response_size" => 5_242_880,
+            "rate_limit" => %{"requests" => 10_000, "window" => "1m"},
+            "max_concurrent_tasks" => 10,
+            "batch_timeout" => "1m"
+          },
+          "edges" => %{"@ingress" => %{"tools" => ["reserve-chain:probe"]}}
+        }
+      }
+    }
+
+    {:ok, blob} = Prima.Authority.Blob.parse(graph)
+
+    {:ok, authority} =
+      Prima.Authority.root(
+        %{
+          profile_id: "prof-reserve",
+          consent_id: "consent-reserve",
+          source_ref: node,
+          kind: :owner,
+          invoke_mode: :open_inert,
+          activation: %{node => "sha256:reserve"}
+        },
+        blob,
+        ceiling: Sanctum.Policy.Ceiling.platform_ceiling()
+      )
+
+    authority
+  end
+
   describe "an outbound call's own row" do
     test "an in-chain call is admitted as a tool_call under the caller's lineage and closed after",
          %{ctx: ctx} do

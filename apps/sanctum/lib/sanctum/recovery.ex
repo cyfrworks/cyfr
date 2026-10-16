@@ -1218,13 +1218,17 @@ defmodule Sanctum.Recovery do
   `:superseded`, `:refused` (the directory refused the recovery; the
   token is spent), `:restored` (a completed restore, which issues no
   session), and the retryable `{:retry, phase, seconds}` and
-  `:unavailable`.
+  `:unavailable`. While the home's storage reserve is depleted
+  (`Arca.StorageReserve`) a restore, an ingress and no operation that
+  takes authority away, is refused `{:unavailable, :storage_reserve}`
+  once the capability is checked, before anything is read or written.
   """
   @spec restore(kit(), String.t() | nil, opts()) :: {:ok, map()} | {:error, term()}
   def restore(kit, capability, opts \\ []) do
     opts = client_options!(opts)
 
     with {:ok, token_digest} <- capability(capability),
+         :ok <- reserve_held(),
          {:ok, kit} <- parse_kit(kit) do
       case Arca.IdentityAttempts.get_by_token(system(), token_digest) do
         {:ok, attempt} ->
@@ -1241,6 +1245,10 @@ defmodule Sanctum.Recovery do
       end
     end
   end
+
+  defp reserve_held,
+    do:
+      if(Arca.StorageReserve.depleted?(), do: {:error, Arca.StorageReserve.refusal()}, else: :ok)
 
   @doc """
   A first-method reproof challenge for this installation's completed

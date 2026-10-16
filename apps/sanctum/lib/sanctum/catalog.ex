@@ -696,13 +696,14 @@ defmodule Sanctum.Catalog do
   # Below the storage reserve's mark (`Arca.StorageReserve`) the gate
   # admits only what spends no reserve or takes authority away: a read, an
   # action declared `reduces_authority`, and, for such an action's request
-  # alone, the confirmation that completes it, named by the record's
-  # reference — `confirmation.pending` by its `request`, a proof, a
-  # re-authentication and a cancel by their `ref`. The pending list is a
-  # read, yet while depleted it is admitted only for such a request, so
-  # no other request's record is read, proven or spent. A reference that
-  # names no record of the caller's, or a record of an action not
-  # declared so, is refused alike.
+  # alone, the confirmation that completes it. `confirmation.pending` is a
+  # read and answers then only the caller's records of such actions
+  # (`Sanctum.Providers.Confirmation`), so a client that reconnects finds
+  # a revocation waiting on it; with a `request` it names one of those. A
+  # proof, a re-authentication and a cancel are admitted only by a `ref`
+  # naming one, so no other request's record is proven or spent. A
+  # reference that names no record of the caller's, or a record of an
+  # action not declared so, is refused alike.
   defp reserve_admits(name, meta, action, ctx, args) do
     if Arca.StorageReserve.depleted?(),
       do: depleted_admits(name, declared_operation(meta, action), ctx, args),
@@ -710,13 +711,11 @@ defmodule Sanctum.Catalog do
   end
 
   defp depleted_admits("confirmation", _operation, ctx, args) do
-    reference =
-      case args["action"] || args[:action] do
-        "pending" -> args["request"] || args[:request]
-        _proof_or_cancel -> args["ref"] || args[:ref]
-      end
-
-    if flagged_request?(ctx, reference), do: :ok, else: {:error, reserve_refusal()}
+    case {args["action"] || args[:action], args["request"] || args[:request]} do
+      {"pending", nil} -> :ok
+      {"pending", request} -> flagged_admits(ctx, request)
+      {_proof_or_cancel, _request} -> flagged_admits(ctx, args["ref"] || args[:ref])
+    end
   end
 
   defp depleted_admits(_name, %Operation{reduces_authority: true}, _ctx, _args), do: :ok
@@ -741,14 +740,20 @@ defmodule Sanctum.Catalog do
 
   defp flagged_request?(_ctx, _reference), do: false
 
-  defp reserve_refusal do
-    %Prima.Refusal{
-      class: :unavailable,
-      reason: Arca.StorageReserve.refusal(),
-      message:
-        "This home is nearly out of storage: until space is freed it accepts only reads " <>
-          "and changes that take authority away, such as signing out or revoking"
-    }
+  defp flagged_admits(ctx, reference),
+    do: if(flagged_request?(ctx, reference), do: :ok, else: {:error, reserve_refusal()})
+
+  defp reserve_refusal, do: Prima.Refusal.classify(Arca.StorageReserve.refusal())
+
+  @doc """
+  A proxied `server:tool` call's admission under the storage reserve: the
+  table declares no such tool, so none is a read or takes authority away,
+  and while the reserve is depleted each is refused as every other such
+  operation is (`Sanctum.Dispatch`).
+  """
+  @spec proxied_admission() :: :ok | {:error, Prima.Refusal.t()}
+  def proxied_admission do
+    if Arca.StorageReserve.depleted?(), do: {:error, reserve_refusal()}, else: :ok
   end
 
   @doc """

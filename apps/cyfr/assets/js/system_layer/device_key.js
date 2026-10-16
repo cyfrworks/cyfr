@@ -810,7 +810,7 @@ export class Glass {
         return
 
       case "event":
-        if (this.grants.get(body.grant_id) === CONFIRMATIONS) return this.refresh(body.payload && body.payload.ref)
+        if (this.grants.get(body.grant_id) === CONFIRMATIONS) return this.refresh()
         return
 
       case "revoke":
@@ -912,47 +912,16 @@ export class Glass {
 
   // The person's open confirmations, read again: the glass shows the
   // home's record, never a fact's word, each prompt beginning with the
-  // person's seal, read again with it. `ref` is the record a fact just
-  // named, if one did.
-  async refresh(ref = null) {
+  // person's seal, read again with it.
+  async refresh() {
     try {
-      const confirmations = await this.readPending(ref)
+      const {confirmations} = await this.request("confirmation.pending", {})
       const seal = await this.readSeal()
-      this.pending = confirmations
+      this.pending = confirmations || []
       this.seal = seal
       this.onChange(this)
     } catch (_error) {
       // A refused read leaves what was shown; the next fact reads again.
-    }
-  }
-
-  // Every open record; or, when the home cannot answer the whole list, as
-  // while its storage reserve is depleted it answers only a record named
-  // by its ref (`request`), each record this glass shows and the one a
-  // fact just named, by its ref, so a revocation waiting on this glass is
-  // still read and proven. A record no longer answered is no longer
-  // shown; when none answers, the read fails as a whole.
-  async readPending(ref) {
-    try {
-      const {confirmations} = await this.request("confirmation.pending", {})
-      return confirmations || []
-    } catch (error) {
-      const refs = new Set(this.pending.map((entry) => entry.ref))
-      if (typeof ref === "string" && ref !== "") refs.add(ref)
-      if (!error.refusal || error.refusal.class !== "unavailable" || refs.size === 0) throw error
-      const entries = []
-      let answered = 0
-      for (const request of refs) {
-        try {
-          const {confirmations} = await this.request("confirmation.pending", {request})
-          entries.push(...(confirmations || []))
-          answered += 1
-        } catch (_refused) {
-          // Not this glass's to read now, or no longer waiting.
-        }
-      }
-      if (answered === 0) throw error
-      return entries
     }
   }
 

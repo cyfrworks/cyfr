@@ -1247,64 +1247,64 @@ defmodule Emissary.Web.DeviceChannelTest do
   describe "the storage reserve" do
     setup [:seated]
 
-    # While the reserve is depleted the gate answers `confirmation.pending`
-    # only for a request named by its ref (`Sanctum.Catalog`), so a glass
-    # that reconnects reads no list: a revocation opened while it was away
-    # is not discovered there, and one whose opened fact it heard is read,
-    # proven and spent by its ref.
-    test "a reconnecting glass discovers no revocation opened while it was away, and proves one it heard opened",
+    # While the reserve is depleted `confirmation.pending` answers only the
+    # person's records of an action declared `reduces_authority`
+    # (`Sanctum.Catalog`), so a glass that reconnects then finds the
+    # revocation opened while it was away, proves it and lets it be spent,
+    # and never sees an ordinary request waiting beside it.
+    test "a reconnecting glass discovers the revocation opened while it was away, and no other record",
          %{session_ctx: session_ctx, user: user} do
       authenticator = Sanctum.TestContext.passkey!(user.id)
       glass = pair!(session_ctx)
-      heard_device = pair!(session_ctx)
       away_device = pair!(session_ctx)
 
-      # Heard: the glass listens when the first revocation opens.
-      state = proven(glass)
-      {grant_id, _grant, state} = open_stream!(state, "s1")
-
-      assert {:error, {:confirmation_required, %{id: heard_id}}} =
-               revoke(session_ctx, heard_device.client_id)
-
-      {payload, _state} = event!(state, grant_id)
-      heard = Prima.Confirmation.ref(heard_id)
-      assert payload["ref"] == heard
-
-      # Away: the glass is offline when the second opens.
+      # Away: the glass is offline when both open.
       assert {:error, {:confirmation_required, %{id: away_id}}} =
                revoke(session_ctx, away_device.client_id)
+
+      assert {:error, {:confirmation_required, %{id: ordinary_id}}} =
+               Sanctum.Pairing.begin(session_ctx, begin_args())
+
+      away = Prima.Confirmation.ref(away_id)
+      ordinary = Prima.Confirmation.ref(ordinary_id)
 
       on_exit(fn -> Arca.StorageReserve.put(:ok) end)
       Arca.StorageReserve.put(:depleted)
 
-      # The reconnect's read of every waiting record is refused, so the
-      # revocation opened while away is not found there.
+      # The reconnect's read of every waiting record finds the revocation
+      # alone.
       state = proven(glass)
 
-      {error, state} = answer_error!(state, intent_message("p1", "confirmation.pending", %{}))
-      assert error["class"] == "unavailable"
-      refute inspect(error) =~ Prima.Confirmation.ref(away_id)
-
-      # The one it heard opened is read by its request and proven.
       {%{"confirmations" => [entry]}, state} =
-        answer!(state, intent_message("p2", "confirmation.pending", %{"request" => heard}))
+        answer!(state, intent_message("p1", "confirmation.pending", %{}))
 
-      assert entry["ref"] == heard
+      assert entry["ref"] == away
       assert entry["operation"] == "pairing.revoke"
+      refute inspect(entry) =~ ordinary
 
+      # The ordinary record is not read by its ref either.
+      {error, state} =
+        answer_error!(
+          state,
+          intent_message("p2", "confirmation.pending", %{"request" => ordinary})
+        )
+
+      assert error["class"] == "unavailable"
+
+      # The revocation is proven on the glass, and spent.
       {:ok, digest} = Prima.Identity.Encoding.unb64(entry["webauthn"]["challenge"], 32)
       assertion = Sanctum.TestContext.Authenticator.assertion(authenticator, digest)
 
       {confirmed, _state} =
         answer!(
           state,
-          intent_message("p3", "confirmation.confirm", %{"ref" => heard, "assertion" => assertion})
+          intent_message("p3", "confirmation.confirm", %{"ref" => away, "assertion" => assertion})
         )
 
       assert confirmed["state"] == "confirmed"
 
       assert {:ok, %{standing: "revoked"}} =
-               revoke(%{session_ctx | confirmation_id: heard_id}, heard_device.client_id)
+               revoke(%{session_ctx | confirmation_id: away_id}, away_device.client_id)
     end
   end
 

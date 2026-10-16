@@ -520,10 +520,14 @@ defmodule Sanctum.Dispatch do
   # A declared action is authorized before its remaining fields are
   # validated. Missing or unknown action identity stays a cast error so
   # every ingress reports the same refusal. Remote `server:tool` names
-  # keep their existing proxied authorization.
+  # keep their existing proxied authorization, and while the storage
+  # reserve is depleted an authenticated caller's are refused here, before
+  # any budget is taken, as every operation that is no read and takes no
+  # authority away is (`Sanctum.Catalog.proxied_admission/0`); an
+  # unauthenticated caller is still refused for that first.
   defp authorize_declared_action(name, ctx, args, in_chain?) do
     if String.contains?(name, ":") do
-      :ok
+      if ctx.authenticated, do: Catalog.proxied_admission(), else: :ok
     else
       case Catalog.lookup(name) do
         {:ok, {_module, meta}} -> authorize_declared_action(name, meta, ctx, args, in_chain?)
@@ -752,8 +756,13 @@ defmodule Sanctum.Dispatch do
           {:error, reason} -> refused(opts, args, Refusals.admission(reason))
         end
 
+      # A name the table does not hold: a proxied `server:tool` is admitted
+      # by the same check a chain's call passes.
       :miss ->
-        dispatch(name, ctx, args, opts)
+        case authorize_declared_action(name, ctx, args, false) do
+          :ok -> dispatch(name, ctx, args, opts)
+          {:error, reason} -> refused(opts, args, Refusals.admission(reason))
+        end
     end
   end
 

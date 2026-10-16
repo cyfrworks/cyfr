@@ -360,8 +360,9 @@ defmodule Cyfr.StorageReserveTest do
 
       ref = Prima.Confirmation.ref(id)
 
-      # …which the whole list does not show, and its request does.
-      assert reserve_refusal?(call(ctx, "confirmation", "pending", %{}))
+      # …which the list shows, and its request reads alone.
+      assert {:ok, %{confirmations: [%{ref: ^ref}]}} =
+               call(ctx, "confirmation", "pending", %{})
 
       assert {:ok, %{confirmations: [entry]}} =
                call(ctx, "confirmation", "pending", %{"request" => ref})
@@ -412,7 +413,11 @@ defmodule Cyfr.StorageReserveTest do
 
       flagged = Prima.Confirmation.ref(flagged_id)
 
-      assert reserve_refusal?(call(ctx, "confirmation", "pending", %{}))
+      # The list answers the flagged request's record alone; the ordinary
+      # one is never in it, nor read by its ref.
+      assert {:ok, %{confirmations: [%{ref: ^flagged}]}} =
+               call(ctx, "confirmation", "pending", %{})
+
       assert reserve_refusal?(call(ctx, "confirmation", "pending", %{"request" => ordinary}))
 
       assert reserve_refusal?(
@@ -485,6 +490,31 @@ defmodule Cyfr.StorageReserveTest do
       assert {:error, {:unavailable, :storage_reserve}} = Arca.append(actor, ["data", "y"], "y")
       assert :ok = Arca.delete(actor, ["data", "kept"])
       assert {:error, :not_found} = Arca.get(actor, ["data", "kept"])
+    end
+
+    test "Arca's refusal reaching a surface renders as unavailable, in the table's sentence",
+         %{session_ctx: ctx, monitor: pid} do
+      Disk.set_free(@bytes - 1)
+      assert Cyfr.StorageReserve.poll(pid) == :depleted
+
+      assert {:error, reason} = Arca.put(Context.actor(ctx), ["data", "x"], "x")
+
+      log =
+        ExUnit.CaptureLog.capture_log(fn ->
+          assert %Prima.Refusal{class: :unavailable, reason: ^reason, message: message} =
+                   Sanctum.Refusals.classify(reason)
+
+          assert message =~ "nearly out of storage"
+          assert Sanctum.Refusals.render(reason) == message
+        end)
+
+      refute log =~ "unexpected"
+
+      # The gate's own refusal is the same row.
+      assert {:error, %Prima.Refusal{message: gate_message}} =
+               call(ctx, "notes", "keep", %{"name" => "reserve", "content" => "a note"})
+
+      assert gate_message == Sanctum.Refusals.render(reason)
     end
 
     test "the cell's own claims are written while depleted", %{monitor: pid} do

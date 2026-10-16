@@ -274,6 +274,30 @@ defmodule Emissary.Web.RestoreControllerTest do
     end
   end
 
+  # ---- the storage reserve --------------------------------------------------------
+
+  describe "the storage reserve" do
+    test "while depleted a restore is refused as unavailable, after the capability and before any write",
+         %{conn: conn, directory: directory} do
+      on_exit(fn -> Arca.StorageReserve.put(:ok) end)
+      Arca.StorageReserve.put(:depleted)
+      kit = identity(directory).kit
+
+      # The capability is checked first: a request without it learns nothing.
+      assert json_response(restore(conn, kit, nil), 401) == %{"error" => "invalid_token"}
+
+      conn = restore(build_conn(), kit)
+      assert json_response(conn, 503) == %{"status" => "unavailable", "retry_after" => 1}
+      assert get_resp_header(conn, "retry-after") == ["1"]
+      assert counts() == @nothing
+
+      assert {:error, {:unavailable, :storage_reserve}} =
+               Sanctum.Recovery.restore(kit, @token)
+
+      assert counts() == @nothing
+    end
+  end
+
   # ---- the node and the token ----------------------------------------------------
 
   describe "the node and the token" do

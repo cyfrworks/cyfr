@@ -797,6 +797,15 @@ defmodule Prima.Refusal do
   defp row(:storage_unverifiable),
     do: {:unavailable, "The athanor's storage use could not be read — retry shortly"}
 
+  # The home's storage reserve is depleted (`Arca.StorageReserve`): what
+  # Arca's write gate refuses, and the gate's refusal of every operation
+  # but a read and one that takes authority away.
+  defp row({:unavailable, :storage_reserve}),
+    do:
+      {:unavailable,
+       "This home is nearly out of storage: until space is freed it accepts only reads " <>
+         "and changes that take authority away, such as signing out or revoking"}
+
   defp row(:context_too_long),
     do: {:invalid_argument, "The thread is longer than the model accepts"}
 

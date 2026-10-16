@@ -587,7 +587,8 @@ fn args ->
       {:error, {:confirmation_required, %{id: id}}} = call.(ctx, "pairing", revoke)
       ref = Prima.Confirmation.ref(id)
 
-      {:error, %Prima.Refusal{reason: {:unavailable, :storage_reserve}}} =
+      # The list answers only records of an authority-reducing change.
+      {:ok, %{confirmations: [%{ref: ^ref}]}} =
         call.(ctx, "confirmation", %{"action" => "pending"})
 
       {:ok, %{confirmations: [entry]}} =
