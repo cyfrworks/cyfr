@@ -311,7 +311,7 @@ defmodule PrismWeb.ConsentSheetComponentTest do
 
     # What the grant opens with binds the required need's suggestion
     # alone: never the optional one, never the undeclared slot.
-    assert PrismWeb.ConsentSheetComponent.initial_choices(plan) == %{
+    assert Prism.ConsentChoices.initial_choices(plan, DateTime.utc_now()) == %{
              {:need, "one", nil} => %{
                source: "own",
                id: "vlt_1",
@@ -393,11 +393,11 @@ defmodule PrismWeb.ConsentSheetComponentTest do
       ]
     }
 
-    choices = PrismWeb.ConsentSheetComponent.initial_choices(plan)
+    choices = Prism.ConsentChoices.initial_choices(plan, DateTime.utc_now())
     assert Map.keys(choices) == [{:dep, "tincture:local.sheet-app", "catalyst:local.sheet-db"}]
 
     decisions =
-      PrismWeb.ConsentSheetComponent.decisions(
+      Prism.ConsentChoices.decisions(
         "tincture:local.sheet-app",
         nil,
         ["interactive"],
@@ -636,6 +636,32 @@ defmodule PrismWeb.ConsentSheetComponentTest do
 
   @regrant "tincture:local.sheet-regrant"
 
+  # A head row as the plan answers it (`Sanctum.Consent.Plan`): placed as
+  # the commit reads its row, with the need the commit tells it was bound
+  # for, nil for one it cannot tell.
+  defp placed(%{binding_key: key} = head, need) do
+    {:ok, {node, edge, name}} = Prima.Authority.Blob.parse_binding_key(key)
+
+    dep =
+      case Prima.Authority.Blob.edge_target(edge) do
+        {:ok, dep} -> dep
+        :ingress -> nil
+      end
+
+    source =
+      cond do
+        Map.has_key?(head, :entry_id) -> "own"
+        Map.has_key?(head, :instance_entry_id) -> "instance"
+        Map.has_key?(head, :label) -> "label"
+      end
+
+    head
+    |> Map.merge(%{source: source, node: node, edge: edge})
+    |> Prima.MapUtil.put_present(:dep, dep)
+    |> Prima.MapUtil.put_present(:connection, name)
+    |> Prima.MapUtil.put_present(:need, need)
+  end
+
   # An app with one required need its suggestion meets, whose head binds
   # another of its candidates with `lifetime`.
   defp regrant_plan(lifetime, over \\ %{}) do
@@ -653,12 +679,15 @@ defmodule PrismWeb.ConsentSheetComponentTest do
           )
         ],
         head_bindings: [
-          %{
-            binding_key: "#{@regrant}|@ingress|default",
-            entry_id: "vlt_h",
-            lifetime: lifetime,
-            consumed: lifetime.kind == "once"
-          }
+          placed(
+            %{
+              binding_key: "#{@regrant}|@ingress|default",
+              entry_id: "vlt_h",
+              lifetime: lifetime,
+              consumed: lifetime.kind == "once"
+            },
+            "api_key"
+          )
         ]
       },
       over
@@ -668,10 +697,10 @@ defmodule PrismWeb.ConsentSheetComponentTest do
   # The grant as the layer opens it: the choices the plan opens with, as
   # decisions, previewed as one credential row of that lifetime.
   defp regrant_sheet(plan) do
-    choices = PrismWeb.ConsentSheetComponent.initial_choices(plan)
+    choices = Prism.ConsentChoices.initial_choices(plan, DateTime.utc_now())
 
     decisions =
-      PrismWeb.ConsentSheetComponent.decisions(@regrant, nil, ["interactive"], %{}, choices)
+      Prism.ConsentChoices.decisions(@regrant, nil, ["interactive"], %{}, choices)
 
     rows =
       for %{"lifetime" => lifetime} <- decisions["bindings"],
@@ -801,16 +830,19 @@ defmodule PrismWeb.ConsentSheetComponentTest do
       regrant_plan(%{kind: "standing", until: nil}, %{
         needs: app_needs,
         head_bindings: [
-          %{
-            binding_key: "#{@regrant}|@ingress|default",
-            entry_id: "vlt_gone",
-            lifetime: %{kind: "standing", until: nil},
-            consumed: false
-          }
+          placed(
+            %{
+              binding_key: "#{@regrant}|@ingress|default",
+              entry_id: "vlt_gone",
+              lifetime: %{kind: "standing", until: nil},
+              consumed: false
+            },
+            nil
+          )
         ]
       })
 
-    assert PrismWeb.ConsentSheetComponent.initial_choices(plan) == %{}
+    assert Prism.ConsentChoices.initial_choices(plan, DateTime.utc_now()) == %{}
 
     dep = "catalyst:local.sheet-regrant-db"
 
@@ -828,7 +860,7 @@ defmodule PrismWeb.ConsentSheetComponentTest do
       %{from: @regrant, dep: dep, needs: needs, candidates: [lender]}
     end
 
-    edge_head = fn binds ->
+    edge_head = fn binds, need ->
       Map.merge(
         %{
           binding_key: "#{@regrant}|#{dep}|default",
@@ -837,6 +869,7 @@ defmodule PrismWeb.ConsentSheetComponentTest do
         },
         binds
       )
+      |> placed(need)
     end
 
     db =
@@ -850,20 +883,20 @@ defmodule PrismWeb.ConsentSheetComponentTest do
       candidates: [],
       needs: [],
       dependency_needs: [row.([db, key_need("write", "to write", [own("vlt_x", "X key")])])],
-      head_bindings: [edge_head.(%{entry_id: "vlt_gone"})]
+      head_bindings: [edge_head.(%{entry_id: "vlt_gone"}, nil)]
     }
 
-    assert PrismWeb.ConsentSheetComponent.initial_choices(several) == %{}
+    assert Prism.ConsentChoices.initial_choices(several, DateTime.utc_now()) == %{}
 
     lent = %{
       several
       | dependency_needs: [row.([db])],
-        head_bindings: [edge_head.(%{label: "work"})]
+        head_bindings: [edge_head.(%{label: "work"}, "db")]
     }
 
-    choices = PrismWeb.ConsentSheetComponent.initial_choices(lent)
+    choices = Prism.ConsentChoices.initial_choices(lent, DateTime.utc_now())
 
-    assert PrismWeb.ConsentSheetComponent.decisions(@regrant, nil, ["interactive"], %{}, choices)[
+    assert Prism.ConsentChoices.decisions(@regrant, nil, ["interactive"], %{}, choices)[
              "selections"
            ] == [
              %{
@@ -883,8 +916,10 @@ defmodule PrismWeb.ConsentSheetComponentTest do
     ahead = now |> DateTime.add(2 * 3600) |> DateTime.truncate(:second) |> DateTime.to_iso8601()
     passed = now |> DateTime.add(-3600) |> DateTime.truncate(:second) |> DateTime.to_iso8601()
 
-    head = fn key, id, lifetime, consumed ->
-      %{binding_key: key, entry_id: id, lifetime: lifetime, consumed: consumed}
+    standing = %{kind: "standing", until: nil}
+
+    head = fn key, id, lifetime, consumed, need ->
+      placed(%{binding_key: key, entry_id: id, lifetime: lifetime, consumed: consumed}, need)
     end
 
     plan = %{
@@ -914,18 +949,36 @@ defmodule PrismWeb.ConsentSheetComponentTest do
         }
       ],
       head_bindings: [
-        head.("#{@regrant}|@ingress|default", "vlt_h", %{kind: "standing", until: nil}, false),
-        head.("#{@regrant}|@ingress|name:Work", "vlt_w", %{kind: "once", until: nil}, true),
-        head.("#{@regrant}|#{dep}|default", "vlt_db", %{kind: "standing", until: nil}, false),
-        head.("#{@regrant}|#{dep}|name:Later", "vlt_dw", %{kind: "until", until: ahead}, false),
-        head.("#{@regrant}|#{dep}|name:Gone", "vlt_dw", %{kind: "until", until: passed}, false)
+        head.("#{@regrant}|@ingress|default", "vlt_h", standing, false, "api_key"),
+        head.(
+          "#{@regrant}|@ingress|name:Work",
+          "vlt_w",
+          %{kind: "once", until: nil},
+          true,
+          "api_key"
+        ),
+        head.("#{@regrant}|#{dep}|default", "vlt_db", standing, false, "db"),
+        head.(
+          "#{@regrant}|#{dep}|name:Later",
+          "vlt_dw",
+          %{kind: "until", until: ahead},
+          false,
+          "db"
+        ),
+        head.(
+          "#{@regrant}|#{dep}|name:Gone",
+          "vlt_dw",
+          %{kind: "until", until: passed},
+          false,
+          "db"
+        )
       ]
     }
 
-    choices = PrismWeb.ConsentSheetComponent.initial_choices(plan)
+    choices = Prism.ConsentChoices.initial_choices(plan, DateTime.utc_now())
 
     decisions =
-      PrismWeb.ConsentSheetComponent.decisions(@regrant, nil, ["interactive"], %{}, choices)
+      Prism.ConsentChoices.decisions(@regrant, nil, ["interactive"], %{}, choices)
 
     assert decisions["bindings"] == [
              %{"need" => "api_key", "entry_id" => "vlt_h", "lifetime" => %{"kind" => "standing"}},
@@ -1373,8 +1426,14 @@ defmodule PrismWeb.ConsentSheetComponentTest do
         ])
       ],
       head_bindings: [
-        %{binding_key: "#{ref}|@ingress|default", entry_id: "vlt_a", lifetime: standing},
-        %{binding_key: "#{ref}|@ingress|name:Work", entry_id: "vlt_c", lifetime: standing}
+        placed(
+          %{binding_key: "#{ref}|@ingress|default", entry_id: "vlt_a", lifetime: standing},
+          "api_key"
+        ),
+        placed(
+          %{binding_key: "#{ref}|@ingress|name:Work", entry_id: "vlt_c", lifetime: standing},
+          "api_key"
+        )
       ]
     }
 

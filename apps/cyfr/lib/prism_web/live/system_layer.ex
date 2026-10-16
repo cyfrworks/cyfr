@@ -263,7 +263,7 @@ defmodule PrismWeb.SystemLayer do
   it): the consent walk's plan as `profile.plan` answers it, with what its
   head holds (`head_origins`, `head_bindings`, and `shape_diff` when the
   shape moved), its preview of what the grant opens with
-  (`PrismWeb.ConsentSheetComponent.initial_choices/1`: on a re-grant, what
+  (`Prism.ConsentChoices.initial_choices/2`: on a re-grant, what
   the head binds with its lifetime, never wider, and elsewhere the plan's
   suggestions bound for the required needs of the app and of each
   dependency) under the origins
@@ -282,7 +282,7 @@ defmodule PrismWeb.SystemLayer do
   dep, from, need}` (`dep` nil for the app's own calls, `from` nil for the
   grant's source, `need` nil for the edge's one credential need; an absent
   key is nil), carried on the subject as `account`: the grant opens with
-  that account's row (`PrismWeb.ConsentSheetComponent.open_account/3`), a
+  that account's row (`Prism.ConsentChoices.open_account/3`), a
   dependency's default a profile lends switched first to the entry it
   lends, so the preview is of that default; an account the plan has no
   edge for opens the grant without it, saying why.
@@ -348,7 +348,8 @@ defmodule PrismWeb.SystemLayer do
     do: {:ok, first_decisions(ref, label, plan, %{}), nil, nil}
 
   defp first_walk(ctx_or_socket, {ref, label, account}, plan) do
-    suggested = with_account(plan, PrismWeb.ConsentSheetComponent.initial_choices(plan), account)
+    initial = Prism.ConsentChoices.initial_choices(plan, DateTime.utc_now())
+    suggested = with_account(plan, initial, account)
     decisions = first_decisions(ref, label, plan, suggested)
 
     case first_preview(ctx_or_socket, decisions) do
@@ -372,7 +373,7 @@ defmodule PrismWeb.SystemLayer do
   defp with_account(_plan, choices, nil), do: choices
 
   defp with_account(plan, choices, %{name: name} = account) when is_binary(name) do
-    case PrismWeb.ConsentSheetComponent.open_account(plan, choices, account) do
+    case Prism.ConsentChoices.open_account(plan, choices, account) do
       {:ok, placed} -> placed
       {:error, _sentence} -> choices
     end
@@ -385,7 +386,7 @@ defmodule PrismWeb.SystemLayer do
   # narrowed off opens off, and so does one newly asked for, which the
   # grant never covered. A first grant has none, and opens on the ask.
   defp first_decisions(ref, label, plan, choices) do
-    PrismWeb.ConsentSheetComponent.decisions(
+    Prism.ConsentChoices.decisions(
       ref,
       label,
       plan[:head_origins] || ["interactive"],
@@ -1687,7 +1688,7 @@ defmodule PrismWeb.SystemLayer do
       Enum.map(socket.assigns.queue, fn
         %{id: ^grant_id, kind: :grant, subject: subject} = grant ->
           decisions =
-            PrismWeb.ConsentSheetComponent.bind_entered(subject.decisions, return, entry_id)
+            Prism.ConsentChoices.bind_entered(subject.decisions, return, entry_id)
 
           subject = %{subject | decisions: decisions, preview: nil} |> Map.put(:replan, true)
           %{grant | subject: subject}

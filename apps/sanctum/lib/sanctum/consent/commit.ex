@@ -2190,9 +2190,8 @@ defmodule Sanctum.Consent.Commit do
   # A head binding is kept when the revision binds its key for the same
   # need, or for a need either side cannot tell; otherwise it is removed.
   defp removal({_ctx, _sources, built} = reads, ref, kept) do
-    with {:ok, {node, edge, name}} <- removed_place(ref.binding_key),
-         {:ok, identity} <- head_identity(ref) do
-      need = head_need(reads, {node, edge}, identity)
+    with {:ok, %{node: node, edge: edge, name: name, identity: identity, need: need}} <-
+           head_place(reads, ref) do
       decided = Map.get(built.needs, ref.binding_key)
 
       if MapSet.member?(kept, ref.binding_key) and
@@ -2204,6 +2203,52 @@ defmodule Sanctum.Consent.Commit do
          |> Prima.MapUtil.put_present("connection", name)
          |> Map.merge(removed_entry(reads, identity, edge))}
       end
+    end
+  end
+
+  @doc false
+  # What a head binding is, as its `consent_vault_refs` row holds it: its
+  # key's node, edge and account `name`, the dependency the edge reaches
+  # (`dep`, nil on the app's own calls), what it binds (`identity`) and
+  # the need it was bound for (`need`, nil when that cannot be told). This
+  # is the one reading of a head binding: a revision's removed bindings
+  # are judged on it, and the plan answers its head rows from it
+  # (`Sanctum.Consent.Plan`), so the sheet and the preview reopen and
+  # remove the same binding for the same need. `reads` is `{ctx, sources,
+  # built}`: the caller's context, the choice sources
+  # (`Sanctum.Consent.Plan.choice_sources/1`) and the grant's
+  # `source_ref`, `declared` needs, `graph` and closure `rows`. A row
+  # whose key or binding cannot be read is
+  # `{:error, {:preview_unrepresentable, :removed}}`.
+  @spec head_place({Context.t(), term(), map()}, map()) ::
+          {:ok,
+           %{
+             node: String.t(),
+             edge: String.t(),
+             name: String.t() | nil,
+             dep: String.t() | nil,
+             identity: {:own | :instance | :label, String.t()},
+             need: String.t() | nil
+           }}
+          | {:error, {:preview_unrepresentable, :removed}}
+  def head_place(reads, ref) do
+    with {:ok, {node, edge, name}} <- removed_place(ref.binding_key),
+         {:ok, identity} <- head_identity(ref) do
+      dep =
+        case edge_dep(edge) do
+          {:ok, dep} -> dep
+          :error -> nil
+        end
+
+      {:ok,
+       %{
+         node: node,
+         edge: edge,
+         name: name,
+         dep: dep,
+         identity: identity,
+         need: head_need(reads, {node, edge}, identity)
+       }}
     end
   end
 

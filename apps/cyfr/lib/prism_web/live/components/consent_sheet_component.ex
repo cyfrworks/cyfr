@@ -27,8 +27,9 @@ defmodule PrismWeb.ConsentSheetComponent do
   as its candidates, a profile of the dependency that lends its key, or
   the configuration the app's publisher provides, which takes no choice.
   The entry the plan suggests is preselected for a required need
-  (`initial_choices/1`, which the grant prompt opens with), shown as the
-  pressed choice with a "Change" control when there is another; an
+  (`Prism.ConsentChoices.initial_choices/2`, which the grant prompt
+  opens with), shown as the pressed choice with a "Change" control when
+  there is another; an
   optional need shows its suggestion as a choice one click away, unbound;
   the slot of a manifest declaring no needs is never bound unasked. A
   re-grant opens instead on what its head binds, the entry and its
@@ -139,6 +140,36 @@ defmodule PrismWeb.ConsentSheetComponent do
 
   alias PrismWeb.Ops
 
+  import Prism.ConsentChoices,
+    only: [
+      account_default: 3,
+      account_head: 3,
+      account_problem: 2,
+      accounts_on: 2,
+      candidates_of: 1,
+      choices_of: 2,
+      decisions: 5,
+      declared?: 1,
+      dep_row: 3,
+      field: 2,
+      held_choices: 4,
+      in_order: 1,
+      initial_choices: 2,
+      label_of: 1,
+      lifetime_of: 3,
+      limit_label: 1,
+      lowerable: 1,
+      lowered: 3,
+      new_choice: 3,
+      origins_of: 2,
+      row_needs: 1,
+      session_end_of: 1,
+      session_until: 2,
+      subset_of: 1,
+      suggested: 1,
+      walk_account: 4
+    ]
+
   @interactive "interactive"
   @extra_origins [
     {"programmatic", "Also for agents and scripts"},
@@ -149,54 +180,8 @@ defmodule PrismWeb.ConsentSheetComponent do
     "egress" => ~w(domains methods schemes private_ips),
     "storage" => ~w(paths actions)
   }
-  @integer_limits ~w(max_memory_bytes max_request_size max_response_size max_concurrent_tasks)
-  @duration_limits ~w(timeout batch_timeout)
 
-  # The needs an entry meets; any other names a component.
-  @credential_kinds Prima.CredentialKinds.all()
-  # The furthest an until-lifetime reaches: the home refuses one more
-  # than 24 hours after its commit.
-  @horizon_s 24 * 3600
-  @spans %{"5m" => 300, "1h" => 3600}
   @read_methods ~w(GET HEAD)
-
-  @typedoc "An edge a credential rides: the app's own calls for a need, or a dependency's edge."
-  @type edge :: {:need, String.t()} | {:dep, String.t(), String.t()}
-
-  @typedoc """
-  A credential slot: the default of one of the app's needs, the default
-  of a dependency's edge, or a named account on an edge, told apart from
-  the edge's other accounts by its row's reference (`"name:<name>"` for an
-  account the walk already held, `"row:<n>"` for one added here, whose
-  name the person may still change).
-  """
-  @type slot ::
-          {:need, String.t(), String.t() | nil}
-          | {:dep, String.t(), String.t()}
-          | {:account, edge(), String.t()}
-
-  @typedoc """
-  What a slot is bound to: an entry of the athanor (`"own"`), an instance
-  entry (`"instance"`) or a lending profile's label (`"label"`); the
-  dependency's need it is for, where it must be named; its lifetime as
-  the wire spells it, the person's choice that made it, and `renew`. A
-  named account also carries its `name`, whether that name is `fixed`,
-  and the order it was added in (`seq`); its entry may not be chosen yet.
-  A default switched from a lending profile names that profile
-  (`lent_by`).
-  """
-  @type choice :: %{
-          required(:source) => String.t() | nil,
-          required(:id) => String.t() | nil,
-          required(:need) => String.t() | nil,
-          required(:lifetime) => map() | nil,
-          required(:choice) => String.t() | nil,
-          required(:renew) => boolean(),
-          optional(:name) => String.t(),
-          optional(:fixed) => boolean(),
-          optional(:seq) => non_neg_integer(),
-          optional(:lent_by) => String.t()
-        }
 
   @impl true
   def mount(socket) do
@@ -287,12 +272,13 @@ defmodule PrismWeb.ConsentSheetComponent do
   defp from_walk(socket, plan, walk) do
     decisions = Map.get(walk, :decisions) || %{}
     held = Map.get(walk, :held)
-    choices = held_choices(choices_of(decisions, plan), held, plan)
+    now = DateTime.utc_now()
+    choices = held_choices(choices_of(decisions, plan), held, plan, now)
 
     # The account a grant was opened for is placed once, on the walk the
     # grant opens with; a walk drawn again holds the sheet's own rows.
     {choices, account_refusal} =
-      if is_map(held), do: {choices, nil}, else: walk_account(plan, choices, walk)
+      if is_map(held), do: {choices, nil}, else: walk_account(plan, choices, walk, now)
 
     socket
     |> assign(
@@ -310,67 +296,6 @@ defmodule PrismWeb.ConsentSheetComponent do
     |> previewed()
   end
 
-  # The walk's account placed among its choices. The grant previewed its
-  # default already switched from a lending profile, where it was one: that
-  # default is marked as switched, as the person's own adding marks it.
-  defp walk_account(plan, choices, %{account: %{name: _} = account}) do
-    case open_account(plan, choices, account) do
-      {:ok, placed} ->
-        {mark_switched(placed, plan, account), nil}
-
-      {:error, sentence} ->
-        {choices, %{at: :account, message: sentence}}
-    end
-  end
-
-  defp walk_account(_plan, choices, _walk), do: {choices, nil}
-
-  defp mark_switched(choices, plan, account) do
-    with {:ok, initial} <- open_account(plan, initial_choices(plan), account),
-         {slot, %{lent_by: label} = switched} <-
-           Enum.find(initial, fn {_slot, choice} -> Map.has_key?(choice, :lent_by) end),
-         %{source: source, id: id} = held when source == switched.source and id == switched.id <-
-           Map.get(choices, slot) do
-      Map.put(choices, slot, Map.put(held, :lent_by, label))
-    else
-      _not_switched -> choices
-    end
-  end
-
-  # The choices a walk's decisions hold, as the sheet held them when it
-  # last handed the walk on (`held`): a sheet drawn again, as after a
-  # credential entry, starts from them, so the lifetime the person pressed
-  # for a binding the decisions hold unchanged stays pressed, an until
-  # included, a binding whose lifetime is yet to be chosen, which no
-  # decision carries, is still offered, and every named account's row is
-  # the sheet's own, complete or not. A walk the grant opens with holds
-  # none: its only such bindings are the head's whose time has passed.
-  defp held_choices(decided, held, plan) do
-    {base, decided} =
-      if is_map(held),
-        do: {held, Map.reject(decided, fn {slot, _choice} -> account_slot?(slot) end)},
-        else: {pending(initial_choices(plan)), decided}
-
-    named =
-      Map.new(decided, fn {slot, choice} ->
-        case Map.get(base, slot) do
-          %{source: source, id: id, lifetime: lifetime, choice: name}
-          when source == choice.source and id == choice.id and lifetime == choice.lifetime ->
-            {slot, %{choice | choice: name}}
-
-          _other ->
-            {slot, choice}
-        end
-      end)
-
-    accounts = if is_map(held), do: Map.filter(held, &account_slot?(elem(&1, 0))), else: %{}
-
-    base |> pending() |> Map.merge(named) |> Map.merge(accounts)
-  end
-
-  defp pending(choices),
-    do: Map.filter(choices, fn {_slot, choice} -> is_nil(choice.lifetime) end)
-
   # Why the grant opened with nothing bound: the home refused to preview
   # the plan's suggestions, in its own sentence, shown until a choice of
   # the person's previews.
@@ -379,470 +304,9 @@ defmodule PrismWeb.ConsentSheetComponent do
 
   defp suggestion_refusal(_none), do: nil
 
-  defp origins_of(origins, _plan) when is_list(origins) and origins != [], do: in_order(origins)
-  defp origins_of(_none, %{head_origins: [_ | _] = origins}), do: in_order(origins)
-  defp origins_of(_none, _plan), do: [@interactive]
-
-  defp subset_of(subset) when is_map(subset), do: subset
-  defp subset_of(_none), do: %{}
-
-  defp label_of(label) when is_binary(label) and label != "", do: label
-  defp label_of(_none), do: nil
-
-  defp session_end_of(at) when is_binary(at) do
-    case DateTime.from_iso8601(at) do
-      {:ok, at, _offset} -> at
-      _unreadable -> nil
-    end
-  end
-
-  defp session_end_of(%DateTime{} = at), do: at
-  defp session_end_of(_none), do: nil
-
-  # The origins named, `interactive` always among them, in the enum's order.
-  defp in_order(origins) do
-    named = [@interactive | Enum.map(origins, &to_string/1)]
-    Enum.filter(Prima.Origin.spellings(), &(&1 in named))
-  end
-
   # ---------------------------------------------------------------------------
   # The credential choices
   # ---------------------------------------------------------------------------
-
-  @doc """
-  The choices a grant opens with, by slot. A re-grant never opens wider
-  than its head: an edge the head binds (`head_bindings`) reopens on what
-  the head bound there, each named account on its own row under its
-  fixed name, with its lifetime — a `once` stays `once`, an
-  `until` still ahead keeps its time, and one that has passed reopens
-  with no lifetime (`lifetime: nil`), which no decision carries until the
-  person chooses one. A head binding whose need cannot be told (its entry
-  is no need's candidate and there are several) leaves its edge unbound,
-  and no suggestion takes its place. Any other edge takes the plan's
-  suggestion: for the app, its first required declared credential need
-  that has one, and for each dependency edge the app's configuration does
-  not fill, the first required need of the dependency that has one — an
-  edge carries one need's credentials, the app's own and a dependency's
-  alike — each standing until revoked. An optional need, and the slot of
-  a manifest that declares no needs, is bound by no one but the person.
-  """
-  @spec initial_choices(map()) :: %{slot() => choice()}
-  def initial_choices(plan) when is_map(plan) do
-    {held, held_edges} = head_choices(plan)
-
-    source =
-      if MapSet.member?(held_edges, :source) do
-        %{}
-      else
-        plan
-        |> field(:needs)
-        |> List.wrap()
-        |> Enum.find(&(declared?(&1) and field(&1, :required) == true and suggested(&1) != nil))
-        |> case do
-          nil -> %{}
-          need -> %{{:need, field(need, :need), nil} => suggested_choice(suggested(need), nil)}
-        end
-      end
-
-    suggested =
-      for row <- List.wrap(field(plan, :dependency_needs)),
-          slot <- [{:dep, field(row, :from), field(row, :dep)}],
-          not MapSet.member?(held_edges, slot),
-          not provided_edge?(row),
-          need <- [
-            Enum.find(row_needs(row), &(field(&1, :required) == true and suggested(&1) != nil))
-          ],
-          need != nil,
-          into: source do
-        named = if length(row_needs(row)) > 1, do: field(need, :need)
-
-        {slot, suggested_choice(suggested(need), named)}
-      end
-
-    Map.merge(suggested, held)
-  end
-
-  # What the head binds, by the slot each binding reopens, and the edges
-  # the head binds anything on (`:source` for the app's own calls), where
-  # a suggestion then adds nothing. A binding whose need cannot be told is
-  # left unbound: narrower than the head, never wider.
-  defp head_choices(plan) do
-    source_ref = field(plan, :source_ref)
-    now = DateTime.utc_now()
-
-    keyed =
-      for head <- List.wrap(field(plan, :head_bindings)),
-          {:ok, key} <- [Prima.Authority.Blob.parse_binding_key(field(head, :binding_key))],
-          {_source, _id} = identity <- [head_identity(head)],
-          do: {key, identity, head}
-
-    held_edges =
-      MapSet.new(keyed, fn
-        {{^source_ref, "@ingress", _name}, _identity, _head} -> :source
-        {{node, edge, _name}, _identity, _head} -> {:dep, node, edge_dep(edge)}
-      end)
-
-    held =
-      for {key, {source, id} = identity, head} <- keyed,
-          {slot, need} <- [head_slot(plan, source_ref, key, identity)],
-          into: %{} do
-        {lifetime, choice} = head_lifetime(field(head, :lifetime), now)
-
-        held = %{
-          source: source,
-          id: id,
-          need: need,
-          lifetime: lifetime,
-          choice: choice,
-          renew: false
-        }
-
-        case slot do
-          {:account, _edge, "name:" <> name} -> {slot, fixed_account(held, name)}
-          _default -> {slot, held}
-        end
-      end
-
-    {held, held_edges}
-  end
-
-  # A named account the walk already holds: its name is fixed.
-  defp fixed_account(choice, name), do: Map.merge(choice, %{name: name, fixed: true, seq: 0})
-
-  # What a head binding binds, as its `consent_vault_refs` row holds it.
-  defp head_identity(head) do
-    cond do
-      is_binary(field(head, :entry_id)) -> {"own", field(head, :entry_id)}
-      is_binary(field(head, :instance_entry_id)) -> {"instance", field(head, :instance_entry_id)}
-      is_binary(field(head, :label)) -> {"label", field(head, :label)}
-      true -> nil
-    end
-  end
-
-  defp edge_dep(edge) do
-    case Prima.Authority.Blob.edge_target(edge) do
-      {:ok, dep} -> dep
-      :ingress -> nil
-    end
-  end
-
-  # The slot a head binding reopens: the app's own calls, for the need
-  # whose candidates hold its entry (the one need, when the app has one);
-  # or the dependency edge it sits on, naming the dependency's need where
-  # it declares several. A binding whose need cannot be told, or whose
-  # edge the plan no longer has or the app's configuration now fills,
-  # reopens nowhere.
-  defp head_slot(plan, source_ref, {source_ref, "@ingress", name}, {source, id})
-       when source != "label" do
-    needs = List.wrap(field(plan, :needs))
-
-    case {Enum.filter(needs, &holds?(&1, id)), needs} do
-      {[need], _needs} -> {named_slot({:need, field(need, :need)}, name), nil}
-      {_none_or_several, [only]} -> {named_slot({:need, field(only, :need)}, name), nil}
-      _unknown -> nil
-    end
-  end
-
-  defp head_slot(plan, _source_ref, {node, edge, name}, {source, _id} = identity)
-       when edge != "@ingress" and (is_nil(name) or source != "label") do
-    with dep when is_binary(dep) <- edge_dep(edge),
-         %{} = row <- dep_row(plan, node, dep),
-         false <- provided_edge?(row),
-         {:ok, need} <- edge_need(row_needs(row), edge, identity) do
-      {named_slot({:dep, node, dep}, name), need}
-    else
-      _elsewhere -> nil
-    end
-  end
-
-  defp head_slot(_plan, _source_ref, _key, _identity), do: nil
-
-  # The slot of an edge's default (no name), or of the account it names.
-  defp named_slot({:need, need}, nil), do: {:need, need, nil}
-  defp named_slot({:dep, node, dep}, nil), do: {:dep, node, dep}
-  defp named_slot(edge, name), do: {:account, edge, "name:" <> name}
-
-  # The dependency's need a head binding on its edge is for: none to name
-  # where the dependency declares one need or a profile lends; else the
-  # need the edge names, or the one need whose candidates hold the entry.
-  defp edge_need(needs, _edge, {source, _id}) when source == "label" or length(needs) <= 1,
-    do: {:ok, nil}
-
-  defp edge_need(needs, edge, {_source, id}) do
-    case {String.split(edge, "|", parts: 2), Enum.filter(needs, &holds?(&1, id))} do
-      {[_dep, named], _holding} ->
-        if Enum.any?(needs, &(field(&1, :need) == named)), do: {:ok, named}, else: :unknown
-
-      {_bare, [need]} ->
-        {:ok, field(need, :need)}
-
-      _unknown ->
-        :unknown
-    end
-  end
-
-  defp holds?(need, id) do
-    Enum.any?(candidates_of(need), fn candidate ->
-      field(candidate, :entry_id) == id or field(candidate, :instance_entry_id) == id
-    end)
-  end
-
-  # A head binding's lifetime as it reopens: as it stands, or none when
-  # the time it was granted until has passed.
-  defp head_lifetime(lifetime, now) do
-    case {field(lifetime, :kind), field(lifetime, :until)} do
-      {"until", until} when is_binary(until) ->
-        case DateTime.from_iso8601(until) do
-          {:ok, at, _offset} ->
-            if DateTime.compare(at, now) == :gt,
-              do: {%{"kind" => "until", "until" => until}, nil},
-              else: {nil, nil}
-
-          _unreadable ->
-            {nil, nil}
-        end
-
-      {kind, _until} when kind in ["standing", "once"] ->
-        {%{"kind" => kind}, kind}
-
-      _unknown ->
-        {nil, nil}
-    end
-  end
-
-  @doc """
-  The decisions payload of a walk: the ref, the app's bindings and the
-  dependencies' selections with their entries, lifetimes and `renew`, each
-  edge's default first and then its named accounts under their names, the
-  origins, and the label and narrowing when there are any, as
-  `profile.preview` and `profile.commit` take them.
-  """
-  @spec decisions(String.t(), String.t() | nil, [String.t()], map(), %{slot() => choice()}) ::
-          map()
-  def decisions(ref, label, origins, subset, choices) do
-    # A binding whose lifetime the person has yet to choose is no decision,
-    # nor an account with no entry chosen or no name it can carry.
-    sorted =
-      choices
-      |> Enum.filter(fn {slot, choice} -> decided?(slot, choice, choices) end)
-      |> Enum.sort()
-
-    accounts =
-      Enum.sort_by(for({{:account, _, _}, _} = held <- sorted, do: held), &account_order/1)
-
-    bindings =
-      for({{:need, need, name}, choice} <- sorted, do: binding(need, name, choice)) ++
-        for {{:account, {:need, need}, _ref}, choice} <- accounts,
-            do: binding(need, choice.name, choice)
-
-    selections =
-      for({{:dep, from, dep}, choice} <- sorted, do: selection(from, dep, choice)) ++
-        for {{:account, {:dep, from, dep}, _ref}, choice} <- accounts,
-            do: Map.put(selection(from, dep, choice), "name", choice.name)
-
-    %{"ref" => ref, "bindings" => bindings, "origins" => origins}
-    |> then(&if selections == [], do: &1, else: Map.put(&1, "selections", selections))
-    |> Prima.MapUtil.put_present("label", label)
-    |> then(&if subset == %{}, do: &1, else: Map.put(&1, "subset", subset))
-  end
-
-  # Whether a choice is sent: a binding with a lifetime, and an account
-  # with its entry, its lifetime and a name it can carry.
-  defp decided?({:account, _edge, _ref} = slot, choice, choices) do
-    is_map(choice.lifetime) and choice.source in ["own", "instance"] and is_binary(choice.id) and
-      is_nil(account_problem(slot, choices))
-  end
-
-  defp decided?(_slot, choice, _choices), do: is_map(choice.lifetime)
-
-  # The order accounts are sent in: by edge, then by name.
-  defp account_order({{:account, edge, _ref}, choice}), do: {edge, choice.name}
-
-  # The order an edge's accounts are drawn and judged in: those the walk
-  # held first, then each as it was added.
-  defp row_order({{:account, _edge, ref}, choice}),
-    do: {if(Map.get(choice, :fixed), do: 0, else: 1), Map.get(choice, :seq, 0), ref}
-
-  defp account_slot?({:account, _edge, _ref}), do: true
-  defp account_slot?(_slot), do: false
-
-  # The accounts on `edge`, in their rows' order.
-  defp accounts_on(choices, edge) do
-    choices
-    |> Enum.filter(&match?({{:account, ^edge, _ref}, _choice}, &1))
-    |> Enum.sort_by(&row_order/1)
-  end
-
-  # Why an account's name keeps its row out of the grant, or nil: a name
-  # to give, one the binding key can carry, and one no earlier row of its
-  # edge holds, compared by Unicode's full lowercase mapping as the home
-  # compares them (`Prima.Authority.Blob.same_account_name?/2`).
-  defp account_problem({:account, edge, _ref} = slot, choices) do
-    name = Map.fetch!(choices, slot).name
-
-    cond do
-      name == "" ->
-        "Name this account to grant it."
-
-      not Prima.Authority.Blob.valid_account_name?(name) ->
-        "An account's name is 1 to 128 bytes of text without a | or a control character."
-
-      earlier = earlier_namesake(slot, name, accounts_on(choices, edge)) ->
-        "Another account on this edge is named #{earlier}; each names its own."
-
-      true ->
-        nil
-    end
-  end
-
-  defp earlier_namesake(slot, name, rows) do
-    rows
-    |> Enum.take_while(fn {other, _choice} -> other != slot end)
-    |> Enum.find_value(fn {_other, choice} ->
-      if Prima.Authority.Blob.same_account_name?(choice.name, name), do: choice.name
-    end)
-  end
-
-  @doc """
-  `decisions` with the entry `entry_id`, made through a credential-entry
-  prompt raised for a need (`return: %{need}`) or a dependency
-  (`return: %{from, dep, need}`), bound there standing: the need's
-  default binding, the app's bindings of any other need dropped (the
-  app's own calls carry one need's credentials), or the dependency's
-  edge's default, its named accounts kept.
-  """
-  @spec bind_entered(map(), map(), String.t()) :: map()
-  def bind_entered(%{} = decisions, %{dep: dep, from: from} = return, entry_id) do
-    kept =
-      decisions
-      |> Map.get("selections", [])
-      |> Enum.reject(&(&1["dep"] == dep and (&1["from"] || from) == from and is_nil(&1["name"])))
-
-    selection =
-      selection(from, dep, %{
-        source: "own",
-        id: entry_id,
-        need: Map.get(return, :need),
-        lifetime: %{"kind" => "standing"},
-        renew: false
-      })
-
-    Map.put(decisions, "selections", kept ++ [selection])
-  end
-
-  def bind_entered(%{} = decisions, %{need: need}, entry_id) do
-    kept =
-      decisions
-      |> Map.get("bindings", [])
-      |> Enum.filter(&(&1["need"] == need and is_binary(&1["name"])))
-
-    binding =
-      binding(need, nil, %{
-        source: "own",
-        id: entry_id,
-        lifetime: %{"kind" => "standing"},
-        renew: false
-      })
-
-    Map.put(decisions, "bindings", [binding | kept])
-  end
-
-  defp binding(need, name, choice) do
-    %{"need" => need, id_key(choice.source) => choice.id, "lifetime" => choice.lifetime}
-    |> Prima.MapUtil.put_present("name", name)
-    |> put_renew(choice)
-  end
-
-  defp selection(from, dep, choice) do
-    %{
-      "dep" => dep,
-      "from" => from,
-      id_key(choice.source) => choice.id,
-      "lifetime" => choice.lifetime
-    }
-    |> then(fn item ->
-      if choice.source != "label" and is_binary(Map.get(choice, :need)),
-        do: Map.put(item, "need", choice.need),
-        else: item
-    end)
-    |> put_renew(choice)
-  end
-
-  defp id_key("instance"), do: "instance_entry_id"
-  defp id_key("label"), do: "label"
-  defp id_key(_own), do: "entry_id"
-
-  defp put_renew(item, %{renew: true}), do: Map.put(item, "renew", true)
-  defp put_renew(item, _choice), do: item
-
-  defp suggested_choice(%{entry_id: id}, need), do: new_choice("own", id, need)
-  defp suggested_choice(%{instance_entry_id: id}, need), do: new_choice("instance", id, need)
-
-  defp new_choice(source, id, need) do
-    %{
-      source: source,
-      id: id,
-      need: need,
-      lifetime: %{"kind" => "standing"},
-      choice: "standing",
-      renew: false
-    }
-  end
-
-  # The choices a walk's decisions hold, by slot, each named account on
-  # its own row under its fixed name.
-  defp choices_of(decisions, plan) do
-    source_ref = field(plan, :source_ref)
-
-    bindings =
-      for %{"need" => need} = item <- List.wrap(decisions["bindings"]),
-          {source, id} <- [held_id(item)],
-          into: %{},
-          do: held_slot({:need, need}, item, held_choice(item, source, id, nil))
-
-    for %{"dep" => dep} = item <- List.wrap(decisions["selections"]),
-        {source, id} <- [held_id(item) || {"label", "default"}],
-        into: bindings,
-        do:
-          held_slot(
-            {:dep, item["from"] || source_ref, dep},
-            item,
-            held_choice(item, source, id, item["need"])
-          )
-  end
-
-  defp held_slot(edge, %{"name" => name}, choice) when is_binary(name),
-    do: {named_slot(edge, name), fixed_account(choice, name)}
-
-  defp held_slot(edge, _item, choice), do: {named_slot(edge, nil), choice}
-
-  defp held_id(%{"entry_id" => id}) when is_binary(id), do: {"own", id}
-  defp held_id(%{"instance_entry_id" => id}) when is_binary(id), do: {"instance", id}
-  defp held_id(%{"label" => label}) when is_binary(label), do: {"label", label}
-  defp held_id(_item), do: nil
-
-  defp held_choice(item, source, id, need) do
-    lifetime =
-      case item["lifetime"] do
-        %{"kind" => "until", "until" => until} when is_binary(until) ->
-          %{"kind" => "until", "until" => until}
-
-        %{"kind" => kind} when kind in ["standing", "once"] ->
-          %{"kind" => kind}
-
-        _standing ->
-          %{"kind" => "standing"}
-      end
-
-    %{
-      source: source,
-      id: id,
-      need: need,
-      lifetime: lifetime,
-      choice: if(lifetime["kind"] == "until", do: nil, else: lifetime["kind"]),
-      renew: item["renew"] == true
-    }
-  end
 
   # A slot as an event names it, and back: the only slots taken are the
   # shapes the sheet draws.
@@ -1263,156 +727,6 @@ defmodule PrismWeb.ConsentSheetComponent do
   # Named accounts
   # ---------------------------------------------------------------------------
 
-  @doc """
-  `choices` with the named account `account` placed
-  (`%{name, dep, from, need}`, as `PrismWeb.SystemLayer.grant_prompt/4`
-  passes it: `dep` nil for the app's own calls, `from` nil for the
-  grant's source, `need` nil for the edge's one credential need): as held
-  when its edge already holds an account of that name, compared by
-  Unicode's full lowercase mapping; otherwise a new row of that fixed
-  name, no entry pressed and standing pressed, beside the edge's default
-  as the grant otherwise opens it, a default a profile lends first
-  switched to the entry it lends. `{:error, sentence}` when the plan has
-  no edge or need for it, or the lent default cannot be switched.
-  """
-  @spec open_account(map(), %{slot() => choice()}, map()) ::
-          {:ok, %{slot() => choice()}} | {:error, String.t()}
-  def open_account(plan, choices, %{name: name} = account) when is_binary(name) do
-    with {:ok, edge, need} <- account_edge(plan, account),
-         {:ok, choices, _default_need} <- account_default(plan, choices, edge) do
-      if Enum.any?(
-           accounts_on(choices, edge),
-           &Prima.Authority.Blob.same_account_name?(elem(&1, 1).name, name)
-         ),
-         do: {:ok, choices},
-         else:
-           {:ok,
-            Map.put(
-              choices,
-              named_slot(edge, name),
-              fixed_account(new_choice(nil, nil, need), name)
-            )}
-    end
-  end
-
-  # The edge and need a named account sits on, as the plan has them.
-  defp account_edge(plan, %{name: name, dep: nil} = account) do
-    source = field(plan, :source_ref)
-    needs = plan |> field(:needs) |> List.wrap() |> Enum.filter(&declared?/1)
-
-    case {Map.get(account, :need), needs} do
-      {nil, [one]} ->
-        {:ok, {:need, field(one, :need)}, nil}
-
-      {nil, []} ->
-        no_place(name, "#{source}'s own calls take no credential")
-
-      {nil, _several} ->
-        no_place(
-          name,
-          "#{source}'s own calls declare several credential needs, and it names none of them"
-        )
-
-      {need, needs} ->
-        if Enum.any?(needs, &(field(&1, :need) == need)),
-          do: {:ok, {:need, need}, nil},
-          else: no_place(name, "#{source} declares no credential need #{need}")
-    end
-  end
-
-  defp account_edge(plan, %{name: name, dep: dep} = account) when is_binary(dep) do
-    from = Map.get(account, :from) || field(plan, :source_ref)
-
-    case dep_row(plan, from, dep) do
-      nil ->
-        no_place(name, "#{dep} is no dependency #{from} calls in this grant")
-
-      row ->
-        needs = row_needs(row)
-        need = Map.get(account, :need)
-
-        cond do
-          provided_edge?(row) ->
-            no_place(name, "this app provides #{dep}'s credential")
-
-          is_binary(need) and not Enum.any?(needs, &(field(&1, :need) == need)) ->
-            no_place(name, "#{dep} declares no credential need #{need}")
-
-          is_binary(need) ->
-            {:ok, {:dep, from, dep}, if(length(needs) > 1, do: need)}
-
-          length(needs) == 1 ->
-            {:ok, {:dep, from, dep}, nil}
-
-          true ->
-            no_place(name, "#{dep} declares several credential needs, and it names none of them")
-        end
-    end
-  end
-
-  defp account_edge(_plan, %{name: name}), do: no_place(name, "it names no edge of this grant")
-
-  defp no_place(name, why),
-    do: {:error, "The account #{name} is not added to this grant: #{why}."}
-
-  # The default an account sits beside: the app's need's, as it stands; a
-  # dependency's, which a profile lending its key is first switched to the
-  # entry that profile lends, since an account sits beside an entry
-  # chosen here. Answers the choices and the default's need.
-  defp account_default(_plan, choices, {:need, _need}), do: {:ok, choices, nil}
-
-  defp account_default(plan, choices, {:dep, from, dep}) do
-    slot = {:dep, from, dep}
-
-    case Map.get(choices, slot) do
-      %{source: "label", id: label} = default ->
-        with {:ok, source, id, need} <- switch_lent(dep_row(plan, from, dep), dep, label) do
-          switched =
-            %{default | source: source, id: id, need: need, renew: false}
-            |> Map.put(:lent_by, label)
-
-          {:ok, Map.put(choices, slot, switched), need}
-        end
-
-      %{need: need} ->
-        {:ok, choices, need}
-
-      nil ->
-        {:ok, choices, nil}
-    end
-  end
-
-  # The entry the `label` profile lends, as the plan's lender candidate
-  # names it, and the dependency's need it fills: none to name where the
-  # dependency declares one need, else the one need whose candidates hold
-  # it.
-  defp switch_lent(row, dep, label) do
-    lender =
-      row |> field(:candidates) |> List.wrap() |> Enum.find(&(field(&1, :label) == label))
-
-    with %{} <- lender,
-         id when is_binary(id) <- field(lender, :entry_id),
-         source when source in ["own", "instance"] <- field(lender, :source) do
-      case {row_needs(row), Enum.filter(row_needs(row), &holds?(&1, id))} do
-        {[_one], _holding} ->
-          {:ok, source, id, nil}
-
-        {_several, [need]} ->
-          {:ok, source, id, field(need, :need)}
-
-        _cannot_tell ->
-          {:error,
-           "No account is added: none of #{dep}'s needs can be told for the key its #{label} " <>
-             "profile lends, which an account would sit beside."}
-      end
-    else
-      _unread ->
-        {:error,
-         "No account is added: the key #{dep}'s #{label} profile lends cannot be read here, and " <>
-           "an account sits beside a key chosen here."}
-    end
-  end
-
   # The edge a default's slot sits on.
   defp default_edge({:need, need, nil}), do: {:ok, {:need, need}}
   defp default_edge({:dep, from, dep}), do: {:ok, {:dep, from, dep}}
@@ -1461,22 +775,6 @@ defmodule PrismWeb.ConsentSheetComponent do
 
     account_rows(plan, choices, {:dep, row.from, row.dep}, fn choice ->
       not several? or choice.need == field(need, :need) or (is_nil(choice.need) and index == 0)
-    end)
-  end
-
-  # The head's binding of the account `name` on `edge`.
-  defp account_head(plan, edge, name) do
-    source_ref = field(plan, :source_ref)
-
-    plan
-    |> field(:head_bindings)
-    |> List.wrap()
-    |> Enum.find(fn head ->
-      case {edge, Prima.Authority.Blob.parse_binding_key(field(head, :binding_key))} do
-        {{:need, _need}, {:ok, {^source_ref, "@ingress", ^name}}} -> true
-        {{:dep, from, dep}, {:ok, {node, key, ^name}}} -> node == from and edge_dep(key) == dep
-        _other -> false
-      end
     end)
   end
 
@@ -1531,37 +829,6 @@ defmodule PrismWeb.ConsentSheetComponent do
   # ---------------------------------------------------------------------------
   # Lifetimes
   # ---------------------------------------------------------------------------
-
-  # The lifetime a choice sends, computed now: standing and once as they
-  # are; five minutes and an hour from now; this session, the earlier of
-  # the session's end and 24 hours from now, offered only while there is
-  # a session end ahead.
-  defp lifetime_of(choice, _session_end, _now) when choice in ["standing", "once"],
-    do: {:ok, %{"kind" => choice}}
-
-  defp lifetime_of(choice, _session_end, now) when is_map_key(@spans, choice),
-    do: {:ok, until(DateTime.add(now, Map.fetch!(@spans, choice), :second))}
-
-  defp lifetime_of("session", session_end, now) do
-    case session_until(session_end, now) do
-      %DateTime{} = at -> {:ok, until(at)}
-      nil -> :error
-    end
-  end
-
-  defp lifetime_of(_choice, _session_end, _now), do: :error
-
-  defp until(%DateTime{} = at),
-    do: %{"kind" => "until", "until" => at |> DateTime.truncate(:second) |> DateTime.to_iso8601()}
-
-  defp session_until(%DateTime{} = session_end, %DateTime{} = now) do
-    if DateTime.compare(session_end, now) == :gt do
-      horizon = DateTime.add(now, @horizon_s, :second)
-      if DateTime.compare(session_end, horizon) == :lt, do: session_end, else: horizon
-    end
-  end
-
-  defp session_until(_none, _now), do: nil
 
   # The five choices, each named by what it does; "this session" by the
   # time it ends, never by signing out, since an until is fixed once
@@ -1718,81 +985,6 @@ defmodule PrismWeb.ConsentSheetComponent do
   defp put_node(subset, node, record) when record == %{}, do: Map.delete(subset, node)
   defp put_node(subset, node, record), do: Map.put(subset, node, record)
 
-  # The limits the person lowered, each at most its ask; a field left at
-  # its ask, or blank, is not sent.
-  # The node's limits as they stand (`current`, the narrowing the walk
-  # holds, a re-grant's head narrowing among it) changed only by what the
-  # form sent: a field lowered below the ask is narrowed to it, one sent at
-  # the ask is the ask again, and one left empty or not on the form keeps
-  # what it held. A narrowing the form cannot show, such as a rate's
-  # window longer than the ask's, is never dropped by lowering another.
-  defp lowered(limits, asked, current) do
-    limits
-    |> Enum.sort()
-    |> Enum.reduce_while({:ok, current}, fn {field, raw}, {:ok, acc} ->
-      case lower(field, String.trim(to_string(raw)), asked, acc) do
-        :unchanged -> {:cont, {:ok, acc}}
-        {:ask, key} -> {:cont, {:ok, Map.delete(acc, key)}}
-        {:ok, {key, value}} -> {:cont, {:ok, Map.put(acc, key, value)}}
-        {:error, _sentence} = error -> {:halt, error}
-      end
-    end)
-  end
-
-  defp lower(_field, "", _asked, _current), do: :unchanged
-
-  defp lower(field, raw, asked, _current) when field in @integer_limits do
-    with {value, ""} <- Integer.parse(raw),
-         ask when is_integer(ask) <- asked[field] do
-      cond do
-        value == ask -> {:ask, field}
-        value > ask or value < 0 -> {:error, "#{limit_label(field)} can be at most #{ask}."}
-        true -> {:ok, {field, value}}
-      end
-    else
-      _ -> {:error, "#{limit_label(field)} must be a whole number."}
-    end
-  end
-
-  defp lower(field, raw, asked, _current) when field in @duration_limits do
-    with {:ok, ms} <- Prima.Limits.parse_duration(raw),
-         ask when is_binary(ask) <- asked[field],
-         {:ok, ask_ms} <- Prima.Limits.parse_duration(ask) do
-      cond do
-        ms == ask_ms -> {:ask, field}
-        ms > ask_ms -> {:error, "#{limit_label(field)} can be at most #{ask}."}
-        true -> {:ok, {field, raw}}
-      end
-    else
-      _ -> {:error, "#{limit_label(field)} must be a duration, like 30s or 5m."}
-    end
-  end
-
-  # The count the form shows is lowered in the window the node holds now:
-  # the ask's, or a longer one a re-grant's head narrowing kept (the
-  # overlap of the head's rate and the ask's). The rate is the ask again
-  # only when both its count and its window are the ask's.
-  defp lower("rate_requests", raw, %{"rate_limit" => %{"requests" => ask} = asked}, current) do
-    ask_window = asked["window"]
-    window = get_in(current, ["rate_limit", "window"]) || ask_window
-
-    case Integer.parse(raw) do
-      {^ask, ""} when window == ask_window ->
-        {:ask, "rate_limit"}
-
-      {value, ""} when value >= 0 and value <= ask ->
-        {:ok, {"rate_limit", %{"requests" => value, "window" => window}}}
-
-      {_value, ""} ->
-        {:error, "The rate can be at most #{ask} requests."}
-
-      _ ->
-        {:error, "The rate must be a whole number of requests."}
-    end
-  end
-
-  defp lower(_field, _raw, _asked, _current), do: :unchanged
-
   defp inside?(path, asked), do: Prima.ComponentPath.path_granted?(path, asked)
 
   # ---------------------------------------------------------------------------
@@ -1839,7 +1031,7 @@ defmodule PrismWeb.ConsentSheetComponent do
       assign(socket,
         subset: subset_of(plan[:head_narrowing]),
         origins: origins_of(nil, plan),
-        choices: initial_choices(plan),
+        choices: initial_choices(plan, DateTime.utc_now()),
         moved: true,
         previewed: nil,
         refusal: nil,
@@ -1925,34 +1117,6 @@ defmodule PrismWeb.ConsentSheetComponent do
   # The plan's needs
   # ---------------------------------------------------------------------------
 
-  # A plan answered through `PrismWeb.Ops` is atom-keyed; a field read
-  # here takes either spelling.
-  defp field(nil, _key), do: nil
-  defp field(map, key) when is_map(map), do: Map.get(map, key, Map.get(map, Atom.to_string(key)))
-
-  defp declared?(need), do: field(need, :kind) in @credential_kinds
-
-  defp suggested(need) do
-    case field(need, :suggested) do
-      %{entry_id: id} = suggested when is_binary(id) -> suggested
-      %{instance_entry_id: id} = suggested when is_binary(id) -> suggested
-      %{"entry_id" => id} when is_binary(id) -> %{entry_id: id}
-      %{"instance_entry_id" => id} when is_binary(id) -> %{instance_entry_id: id}
-      _none -> nil
-    end
-  end
-
-  defp row_needs(row), do: List.wrap(field(row, :needs))
-
-  defp provided_edge?(row), do: Enum.any?(row_needs(row), &(field(&1, :source) == "provided"))
-
-  defp dep_row(plan, from, dep) do
-    plan
-    |> field(:dependency_needs)
-    |> List.wrap()
-    |> Enum.find(&(field(&1, :from) == from and field(&1, :dep) == dep))
-  end
-
   # The need a slot's event names: one of the app's, or one of the
   # dependency's on that edge.
   defp slot_need(plan, {:need, _need, _name}, name),
@@ -1964,8 +1128,6 @@ defmodule PrismWeb.ConsentSheetComponent do
       row -> Enum.find(row_needs(row), &(field(&1, :need) == name))
     end
   end
-
-  defp candidates_of(need), do: List.wrap(field(need, :candidates))
 
   defp candidate_pick(candidate) do
     case candidate do
@@ -3256,25 +2418,6 @@ defmodule PrismWeb.ConsentSheetComponent do
 
   defp limit_value("rate_requests", values), do: get_in(values, ["rate_limit", "requests"])
   defp limit_value(field, values), do: values[field] || "none"
-
-  defp lowerable(%{"values" => values}) do
-    fields =
-      for field <- @duration_limits ++ @integer_limits,
-          values[field] != nil,
-          do: field
-
-    if is_map(values["rate_limit"]), do: fields ++ ["rate_requests"], else: fields
-  end
-
-  defp limit_label("timeout"), do: "Timeout"
-  defp limit_label("batch_timeout"), do: "Batch timeout"
-  defp limit_label("max_memory_bytes"), do: "Memory (bytes)"
-  defp limit_label("max_request_size"), do: "Request size (bytes)"
-  defp limit_label("max_response_size"), do: "Response size (bytes)"
-  defp limit_label("max_concurrent_tasks"), do: "Concurrent tasks"
-  defp limit_label("rate_limit"), do: "Rate"
-  defp limit_label("rate_requests"), do: "Requests per window"
-  defp limit_label(field), do: field
 
   defp origin_label("interactive"), do: "when you use it (interactive)"
   defp origin_label("programmatic"), do: "by agents and scripts (programmatic)"

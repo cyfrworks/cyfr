@@ -36,7 +36,10 @@ defmodule Sanctum.Consent.Plan do
   holds as `%{binding_key, lifetime: %{kind, until}, consumed}` and what
   it binds (`entry_id`, `instance_entry_id` or a lending profile's
   `label`) from its `consent_vault_refs` row (`consumed` when a root has
-  used a `once` binding), so a re-grant reopens on what the head holds,
+  used a `once` binding), placed as the commit reads it (`source`, `node`,
+  `edge`, `dep`, `connection` and the `need` it was bound for,
+  `Sanctum.Consent.Commit.head_place/2`), so a re-grant reopens on what
+  the head holds,
   never wider, and a surface can offer to grant a consumed `once` binding
   again; `head_narrowing`, per consent-graph node the narrowing the head
   holds against the ask as it stands, in the decisions' `subset` shape
@@ -165,14 +168,28 @@ defmodule Sanctum.Consent.Plan do
           defaults: map()
         }
 
-  @typedoc "One binding of the profile's head, as its `consent_vault_refs` row holds it."
+  @typedoc """
+  One binding of the profile's head, as its `consent_vault_refs` row holds
+  it, and, where its key and binding can be read, placed as the commit
+  reads it (`Sanctum.Consent.Commit.head_place/2`): `source`, which of
+  `entry_id`, `instance_entry_id` and `label` it binds; the `node` and
+  `edge` its key names, the dependency the edge reaches (`dep`) and its
+  account's name (`connection`); and the `need` it was bound for, absent
+  when that cannot be told.
+  """
   @type head_binding :: %{
           required(:binding_key) => String.t(),
           required(:lifetime) => %{kind: String.t(), until: String.t() | nil},
           required(:consumed) => boolean(),
           optional(:entry_id) => String.t(),
           optional(:instance_entry_id) => String.t(),
-          optional(:label) => String.t()
+          optional(:label) => String.t(),
+          optional(:source) => String.t(),
+          optional(:node) => String.t(),
+          optional(:edge) => String.t(),
+          optional(:dep) => String.t(),
+          optional(:connection) => String.t(),
+          optional(:need) => String.t()
         }
 
   @doc "The origins a grant admits when its decision names none: `interactive` alone."
@@ -256,7 +273,18 @@ defmodule Sanctum.Consent.Plan do
          {:ok, head_narrowing} <- held_narrowing(stored, source_ref, asked),
          {:ok, plan_token} <-
            mint_token(ctx, shape_digest, profile_id, expected_revision) do
-      head = head_facts(ctx, stored, shape_digest, {source_ref, asked})
+      # A head binding is read as the commit reads it (`Commit.head_place/2`),
+      # over this plan's own closure and choice sources.
+      reads =
+        {ctx, sources,
+         %{
+           source_ref: source_ref,
+           declared: Prima.Manifest.Needs.from_manifest(manifest),
+           graph: closure,
+           rows: closure_rows
+         }}
+
+      head = head_facts(ctx, stored, shape_digest, {source_ref, asked}, reads)
 
       {:ok,
        %{
@@ -751,13 +779,13 @@ defmodule Sanctum.Consent.Plan do
   # What the profile's head holds: the origins it admits, its bindings,
   # and what changed against it when the shape moved. A first grant, or a
   # profile with no head, holds none.
-  defp head_facts(_ctx, :none, _shape_digest, _ask),
+  defp head_facts(_ctx, :none, _shape_digest, _ask, _reads),
     do: %{origins: nil, bindings: [], shape_diff: []}
 
-  defp head_facts(ctx, {:ok, head, _profile_id}, shape_digest, {source_ref, asked}) do
+  defp head_facts(ctx, {:ok, head, _profile_id}, shape_digest, {source_ref, asked}, reads) do
     %{
       origins: Prima.Origin.to_wire_list(head.admitted_origins),
-      bindings: Enum.map(head.vault_refs, &head_binding/1),
+      bindings: Enum.map(head.vault_refs, &head_binding(&1, reads)),
       shape_diff:
         if(head.shape_digest == shape_digest,
           do: [],
@@ -1048,8 +1076,11 @@ defmodule Sanctum.Consent.Plan do
 
   # A head row as a re-grant reopens it: its key, what it binds (the
   # athanor's entry, the instance entry or the lending profile's label,
-  # never material), its lifetime and whether a root consumed it.
-  defp head_binding(ref) do
+  # never material), its lifetime and whether a root consumed it, and, as
+  # the commit reads the row (`Commit.head_place/2`), which of the three it
+  # binds (`source`), where it sits and the need it was bound for. A row
+  # whose key or binding cannot be read is placed nowhere.
+  defp head_binding(ref, reads) do
     %{
       binding_key: ref.binding_key,
       lifetime: %{kind: ref.lifetime_kind, until: until_of(ref.expires_at)},
@@ -1058,6 +1089,20 @@ defmodule Sanctum.Consent.Plan do
     |> Prima.MapUtil.put_present(:entry_id, ref.vault_entry_id)
     |> Prima.MapUtil.put_present(:instance_entry_id, ref.instance_entry_id)
     |> Prima.MapUtil.put_present(:label, ref.via_label)
+    |> Map.merge(placed(reads, ref))
+  end
+
+  defp placed(reads, ref) do
+    case Sanctum.Consent.Commit.head_place(reads, ref) do
+      {:ok, %{identity: {source, _id}} = place} ->
+        %{source: Atom.to_string(source), node: place.node, edge: place.edge}
+        |> Prima.MapUtil.put_present(:dep, place.dep)
+        |> Prima.MapUtil.put_present(:connection, place.name)
+        |> Prima.MapUtil.put_present(:need, place.need)
+
+      {:error, _unrepresentable} ->
+        %{}
+    end
   end
 
   # The instant as it was decided: a whole second is spelled without the
