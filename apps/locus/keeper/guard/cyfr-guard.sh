@@ -42,8 +42,9 @@
 # port: the exception matches the connection's original destination.
 #
 #   cyfr-guard         install the rules, write the ready file and sleep
-#   cyfr-guard check   the health probe: the ready file is present and the
-#                      rules it records are the ones installed
+#   cyfr-guard check   the health probe: the ready file is present, both
+#                      rule tables can be read, and the rules they hold are
+#                      the ones the file records
 #
 # Environment:
 #   CYFR_GUARD_POOL              the island's spawn uids, `<first>-<last>`
@@ -60,18 +61,26 @@ CHAIN=CYFR_GUARD
 log() { echo "[cyfr-guard] $*" >&2; }
 
 # The filter tables of both families, digested: what the ready file
-# records and the health probe compares. The dump's timestamps and the
-# packet counters it prints beside each built-in chain's policy are left
-# out, since both move while the rules stand.
+# records and the health probe compares. Each table is read on its own and
+# a read that fails answers nothing, with status 1, so neither the ready
+# file nor the probe ever holds a digest of a table that could not be
+# read. The dump's timestamps and the packet counters it prints beside each
+# built-in chain's policy are left out, since both move while the rules
+# stand.
 digest() {
-  { iptables-save -t filter; ip6tables-save -t filter; } |
-    sed -E -e '/^#/d' -e 's/ \[[0-9]+:[0-9]+\]$//' | sha256sum | cut -d' ' -f1
+  v4="$(iptables-save -t filter)" || { log "error: iptables-save failed"; return 1; }
+  v6="$(ip6tables-save -t filter)" || { log "error: ip6tables-save failed"; return 1; }
+  sum="$(printf '%s\n%s\n' "$v4" "$v6" | sed -E -e '/^#/d' -e 's/ \[[0-9]+:[0-9]+\]$//' | sha256sum | cut -d' ' -f1)"
+  case "$sum" in
+    ????????????????????????????????????????????????????????????????) printf '%s\n' "$sum" ;;
+    *) log "error: no digest of the rules"; return 1 ;;
+  esac
 }
 
 check() {
   [ -f "$READY" ] || { log "not ready: $READY is absent"; exit 1; }
   recorded="$(cat "$READY")"
-  installed="$(digest)"
+  installed="$(digest)" || { log "not ready: a rule table could not be read"; exit 1; }
   [ "$recorded" = "$installed" ] || { log "not ready: the rules installed are not the ones recorded"; exit 1; }
 }
 
@@ -192,7 +201,8 @@ install_rules() {
   v6 -A "$CHAIN" -d fc00::/7 -j REJECT --reject-with icmp6-adm-prohibited
 
   mkdir -p "$READY_DIR"
-  digest > "$READY.tmp"
+  recorded="$(digest)" || { log "error: a rule table could not be read, so the guard is not ready"; exit 1; }
+  printf '%s\n' "$recorded" > "$READY.tmp"
   mv "$READY.tmp" "$READY"
   log "ready: every rule installed for spawns $pool"
 }

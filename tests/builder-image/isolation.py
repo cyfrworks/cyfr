@@ -39,6 +39,11 @@
 - A guard started with an ip6tables that fails writes no ready file, never
   turns healthy, names the rule that failed, and the builder behind it is
   never started.
+- A guard whose rule table of either family cannot be read is not healthy:
+  its probe refuses while the read fails, Docker sees it unhealthy, and
+  once the read works again the probe compares the rules in place with the
+  ones recorded, so a chain cleared behind the probe's back is refused too;
+  a guard whose table cannot be read as it starts records no ready file.
 
 Usage: tests/builder-image/isolation.py IMAGE
 """
@@ -476,6 +481,83 @@ def test_guard_failure(image, canary):
         imagesuite.remove_directory(tools)
 
 
+# A wrapper over one family's save tool, installed first on the guard's
+# PATH by a test: it fails while the marker file named in it exists in the
+# guard's tmpfs, and runs the image's own tool otherwise.
+SAVE_WRAPPER = """#!/bin/sh
+if [ -e /run/cyfr-guard/fail-@SAVE@ ]; then
+  echo '@SAVE@: injected read failure' >&2
+  exit 23
+fi
+exec /usr/sbin/@SAVE@ "$@"
+"""
+FAMILIES = (("iptables", "iptables-save"), ("ip6tables", "ip6tables-save"))
+
+
+def test_guard_unreadable(image, canary):
+    tools = imagesuite.temporary_directory("cyfr-guard-unreadable-", 0o755)
+
+    def install(save, text):
+        with open(os.path.join(tools, save), "w") as f:
+            f.write(text)
+        os.chmod(os.path.join(tools, save), 0o755)
+
+    # A guard whose table cannot be read as it starts records no ready file
+    # and starts no island: nothing is recorded of a table that was not read.
+    for _table, save in FAMILIES:
+        for other in FAMILIES:
+            install(other[1], SAVE_WRAPPER.replace("@SAVE@", other[1]))
+        install(save, f"#!/bin/sh\necho '{save}: injected read failure' >&2\nexit 23\n")
+        stack = Stack("locus-builds-isolation-guard-unreadable", image, canary, guard_tools_dir=tools)
+        try:
+            refused = stack.up_refused()
+            guard = stack.compose("ps", "--all", "--quiet", GUARD).stdout.strip()
+            logs = run("docker", "logs", guard, check=False)
+            text = logs.stdout + logs.stderr
+            expect(refused.returncode != 0 and "dependency failed to start" in refused.stderr,
+                   f"compose does not start the builder behind a guard whose {save} fails as it starts",
+                   refused.stdout + refused.stderr + text[-2000:])
+            expect(f"[cyfr-guard] error: {save} failed" in text and "ready:" not in text,
+                   f"the guard named the failed {save} and wrote no ready file", text[-2000:])
+        finally:
+            stack.down()
+
+    # A guard whose table stops reading later is not healthy while the read
+    # fails, and once the read works again its probe compares the rules in
+    # place with the ones recorded, so a chain cleared meanwhile is refused.
+    for _table, save in FAMILIES:
+        install(save, SAVE_WRAPPER.replace("@SAVE@", save))
+    stack = Stack("locus-builds-isolation-guard-unreadable", image, canary, guard_tools_dir=tools)
+    try:
+        stack.up()
+        healthy = stack.inspect(stack.guard)["State"]["Health"]["Status"]
+        expect(healthy == "healthy", "the guard is healthy while both rule tables read", healthy)
+        for table, save in FAMILIES:
+            marker = f"/run/cyfr-guard/fail-{save}"
+            stack.guard_exec(f"touch {marker}")
+            probe = stack.guard_exec("cyfr-guard check")
+            expect(probe.returncode != 0 and "could not be read" in probe.stderr,
+                   f"the probe refuses while {save} fails, the rules standing", probe.stdout + probe.stderr)
+            stack.guard_exec(f"{table} -F CYFR_GUARD")
+            probe = stack.guard_exec("cyfr-guard check")
+            expect(probe.returncode != 0, f"the probe refuses while {save} fails and the {table} chain is cleared",
+                   probe.stdout + probe.stderr)
+            stack.guard_exec(f"rm -f {marker}")
+            probe = stack.guard_exec("cyfr-guard check")
+            expect(probe.returncode != 0 and "not the ones recorded" in probe.stderr,
+                   f"once {save} reads again, the probe refuses the cleared {table} chain", probe.stdout + probe.stderr)
+        # Docker's own probe reaches the same verdict.
+        for _ in range(600):
+            if stack.inspect(stack.guard)["State"]["Health"]["Status"] == "unhealthy":
+                break
+            time.sleep(0.1)
+        health = stack.inspect(stack.guard)["State"]["Health"]
+        expect(health["Status"] == "unhealthy", "Docker sees the guard unhealthy once its rules are gone", health)
+    finally:
+        stack.down()
+        imagesuite.remove_directory(tools)
+
+
 def test_no_bound_no_build(stack):
     stack.up(writable_cgroups=False)
     options = json.loads(run("docker", "inspect", stack.container).stdout)[0]["HostConfig"]["SecurityOpt"]
@@ -511,6 +593,7 @@ def main(image):
         # After the first project is down: a second default network of the
         # fixed subnet could not exist beside the first's.
         test_guard_failure(image, canary)
+        test_guard_unreadable(image, canary)
     finally:
         shutil.rmtree(canary, ignore_errors=True)
 

@@ -833,9 +833,19 @@ defmodule Cyfr.StackShapeTest do
     for {path, name, harness?} <- suite_files(texts),
         text = Map.fetch!(texts, path),
         (harness? and not (text =~ ~s("fixtures", "locus_roles.json"))) or
+          (harness? and guard_spelled?(text, role(roles, name))) or
           Enum.any?(spellings(release, role(roles, name)), &Regex.match?(&1, text)),
         do: {path, :suite, name}
   end
+
+  # A harness of a guarded role names the guard from the table alone,
+  # `GUARD = ROLE["guard"]`: a literal in that position is drift whatever
+  # it says, since a wrong name is not one of the table's values and a
+  # value scan would miss it.
+  defp guard_spelled?(_text, %{guard: nil}), do: false
+
+  defp guard_spelled?(text, _role),
+    do: not (text =~ ~r/^GUARD = ROLE\["guard"\]$/m) or text =~ ~r/^GUARD = ["']/m
 
   # Where a suite spells a fact of its role or of the release: a number
   # (`_` allowed between its digits) or a path anywhere; a name as a whole
@@ -1533,6 +1543,9 @@ defmodule Cyfr.StackShapeTest do
        [{builds_overlay, :service, :builds}]},
       {"the builds harness spelling its guard",
        {builds_harness, ~s(GUARD = ROLE["guard"]), ~s(GUARD = "#{builds.guard}")},
+       [{builds_harness, :suite, :builds}]},
+      {"the builds harness spelling a guard other than the table's",
+       {builds_harness, ~s(GUARD = ROLE["guard"]), ~s(GUARD = "wrong-guard")},
        [{builds_harness, :suite, :builds}]},
       {"the runtime keeper's remedy naming another pool",
        {runtime_keeper, "--pool #{runtime.pool}:", "--pool #{runtime.pool}s:"},
