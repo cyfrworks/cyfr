@@ -73,6 +73,20 @@ defmodule Opus.Host.EgressTest do
     end
   end
 
+  # A resolver during whose lookup the run reads a source: what a source
+  # joined between the first decision and the answer looks like.
+  defmodule GrowingResolver do
+    @moduledoc false
+
+    def getaddr(_name, :inet) do
+      {actor, id} = Process.get({__MODULE__, :execution})
+      :ok = Opus.Ledger.join(actor, id, [Prima.Source.new(:filed)])
+      {:ok, {203, 0, 113, 10}}
+    end
+
+    def getaddr(_name, _family), do: {:error, :nxdomain}
+  end
+
   setup tags do
     Cyfr.Test.Sandbox.setup!(tags)
     :ok
@@ -257,6 +271,22 @@ defmodule Opus.Host.EgressTest do
       assert {:ok, %PinnedTarget{}} = pin(fixture, "https://API.x.test/b", :fetch)
       assert {:error, :flow} = pin(fixture, "https://other.x.test/", :fetch)
       refute Enum.any?(Resolver.looked_up(), fn {host, _} -> host == "other.x.test" end)
+    end
+
+    test "a source the run joins while the name resolves refuses the pin: the decision is taken again before it is answered" do
+      fixture = flowing!(["api.example.test"], [])
+
+      Process.put(
+        {GrowingResolver, :execution},
+        {Prima.Actor.in_athanor(fixture.athanor_id), fixture.execution_id}
+      )
+
+      assert {:error, :flow} =
+               pin(fixture, "https://api.example.test/send", :fetch, resolver: GrowingResolver)
+
+      assert Prima.Source.new(:filed) in ledger(fixture)
+      refute Prima.Source.outside("api.example.test") in ledger(fixture)
+      assert [%{decision: "denied"}] = denials(fixture)
     end
 
     test "every spelling of one IPv6 address is one host to the ledger" do

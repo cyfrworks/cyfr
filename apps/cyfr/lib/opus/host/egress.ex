@@ -27,7 +27,9 @@ defmodule Opus.Host.Egress do
        source named by that exact host is its own, and the classes an
        approved launch let flow count — else `flow`; a ledger that
        cannot be read is `unavailable`. A grant that declares no flow
-       keeps sending until its run reads a source;
+       keeps sending until its run reads a source. The ledger is read
+       and decided once more after the address is checked (below), and
+       the pin is answered only on that second decision;
     3. a `redirect` names, as `from`, a pin this attempt was answered
        within the last two windows, and its URL has that pin's origin
        (`Prima.Network.same_origin?/2`: scheme, host and effective port);
@@ -150,7 +152,11 @@ defmodule Opus.Host.Egress do
          :ok <- flows(caller, chain, edge, uri),
          :ok <- same_origin(caller, request, uri, now),
          {:ok, pinned} <- resolve(request.url, resolver),
-         :ok <- permitted(pinned, private_ips(edge)) do
+         :ok <- permitted(pinned, private_ips(edge)),
+         # Decided again once the name has resolved: a source the run
+         # joined while it resolved is in the ledger the pin is answered
+         # on, and the pin is answered only on this second decision.
+         :ok <- flows(caller, chain, edge, uri) do
       pinned(pinned, now)
     end
   end
