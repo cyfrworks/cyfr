@@ -163,8 +163,8 @@ defmodule Opus.Record do
     # record read back.
     :origin,
     # A root's seed (`Prima.Source`), from what admitted it (`root_seed/2`);
-    # a child's is its parent's ledger, read where it is admitted. Empty on
-    # a record read back.
+    # a child's is its parent's ledger, read where it is admitted. On a
+    # record read back, the row's ledger as that read found it.
     sources: [],
     # The classes an approved launch let flow to every exit of its tree,
     # written into the root's policy (`Arca.Execution.launch_key/0`).
@@ -639,7 +639,22 @@ defmodule Opus.Record do
   already have happened, and the answer is `{:error, :not_standing}`.
   """
   @spec write_completed(t()) :: :ok | {:error, term()}
-  def write_completed(%__MODULE__{status: :completed} = record) do
+  def write_completed(%__MODULE__{} = record) do
+    case write_completed_ledger(record) do
+      {:ok, _ledger} -> :ok
+      refused -> refused
+    end
+  end
+
+  @doc """
+  `write_completed/1`, answering `{:ok, ledger}` on success: the run's
+  source ledger as the terminal transaction itself read it
+  (`Arca.Execution.row_ledger/1`), the first carrier of its provenance
+  to whoever it answers — never a read after the write, which retention
+  may race.
+  """
+  @spec write_completed_ledger(t()) :: {:ok, [Prima.Source.t()]} | {:error, term()}
+  def write_completed_ledger(%__MODULE__{status: :completed} = record) do
     ctx = record_to_ctx(record)
 
     close = %{
@@ -660,10 +675,13 @@ defmodule Opus.Record do
                verify: &Sanctum.ExecutionStanding.verify/1
              ) do
           {:ok, execution} ->
-            publish(record, "execution.completed", execution.event_seq, %{
-              "status" => "completed",
-              "duration_ms" => record.duration_ms
-            })
+            :ok =
+              publish(record, "execution.completed", execution.event_seq, %{
+                "status" => "completed",
+                "duration_ms" => record.duration_ms
+              })
+
+            {:ok, Arca.Execution.row_ledger(execution)}
 
           {:error, :not_standing} ->
             if staged, do: Arca.ExecutionPayloads.discard(staged)
@@ -683,7 +701,7 @@ defmodule Opus.Record do
     end
   end
 
-  def write_completed(%__MODULE__{status: status}) do
+  def write_completed_ledger(%__MODULE__{status: status}) do
     {:error, "Cannot write completed record for status: #{status}"}
   end
 
@@ -919,7 +937,8 @@ defmodule Opus.Record do
       profile_id: result[:profile_id],
       attempt: result[:current_attempt],
       kind: result[:kind],
-      turn_id: result[:turn_id]
+      turn_id: result[:turn_id],
+      sources: Arca.Execution.row_ledger(result)
     }
   end
 

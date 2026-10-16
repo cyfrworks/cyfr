@@ -1638,17 +1638,38 @@ defmodule Aqua.Loop do
         if id = cancellable(fresh), do: Opus.cancel(ctx(state), id)
 
         why = describe(reason)
+        # A dead waiter handed back no completion result, so what its run
+        # read comes from the child's row, or is an unnamed outside source
+        # when the row is gone: a dead waiter never means an empty ledger.
+        ledger = read_ledger(state, fresh.child_execution_id)
 
         case Prima.TurnStep.unresolved(fresh) do
           :uncertain ->
+            _ = Tape.join_sources(guest, state.turn, ledger)
             unknown(state, fresh, why, mode)
 
           :unknown ->
-            _ = close(state, fresh, unwrap(call), {:unknown, "the outcome is unknown: #{why}"})
+            _ =
+              close(
+                state,
+                fresh,
+                unwrap(call),
+                {:unknown, "the outcome is unknown: #{why}"},
+                ledger
+              )
+
             :ok
 
           _replay ->
-            _ = close(state, fresh, unwrap(call), {:error, "the call did not finish: #{why}"})
+            _ =
+              close(
+                state,
+                fresh,
+                unwrap(call),
+                {:error, "the call did not finish: #{why}"},
+                ledger
+              )
+
             :ok
         end
 

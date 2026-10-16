@@ -357,6 +357,78 @@ defmodule Aqua.TurnLedgerTest do
     end
   end
 
+  describe "a child whose waiter is gone, or whose row is gone at its terminal write" do
+    test "a dead hand waiter's step joins the completed child's persisted ledger",
+         %{ctx: ctx, thread: thread, actor: actor} do
+      script!([
+        calls([read("dead-ledger")]),
+        {:probe, self()},
+        {:crash, :after_persist},
+        %{"lines" => ["LEDGER-DERIVED-SENTINEL"]},
+        reply("done")
+      ])
+
+      turn = accept!(ctx, thread, "@aqua read the file")
+
+      {result, child} =
+        probed_run(ctx, turn, fn id ->
+          :ok = Opus.Ledger.join(actor, id, [Source.outside("crash-only.example")])
+        end)
+
+      assert result == :completed
+      assert {:ok, child_sources} = Arca.Execution.sources(actor, child)
+      assert Source.outside("crash-only.example") in child_sources
+      assert Source.outside("crash-only.example") in sources(ctx, turn)
+    end
+
+    test "the completion result carries the ledger the terminal write itself returned, so " <>
+           "retention at the terminal telemetry takes nothing back",
+         %{ctx: ctx, thread: thread, actor: actor} do
+      script!([{:probe, self()}, reply("LEDGER-DERIVED-SENTINEL")])
+      turn = accept!(ctx, thread, "@aqua hello")
+      task = Task.async(fn -> Aqua.Loop.run(ctx: ctx, turn_id: turn.id) end)
+      assert_receive {:scripted_probe, runner, child}, 30_000
+      :ok = Opus.Ledger.join(actor, child, [Source.outside("terminal-only.example")])
+      owner = self()
+      handler = {__MODULE__, :terminal_probe, make_ref()}
+      on_exit(fn -> :telemetry.detach(handler) end)
+
+      :ok =
+        :telemetry.attach(
+          handler,
+          [:cyfr, :opus, :execute, :stop],
+          fn _event, _measurements, metadata, _config ->
+            if metadata.execution_id == child do
+              send(owner, {:at_terminal, self(), child})
+
+              receive do
+                :terminal_continue -> :ok
+              after
+                15_000 -> :ok
+              end
+            end
+          end,
+          nil
+        )
+
+      send(runner, :continue)
+      assert_receive {:at_terminal, completer, ^child}, 30_000
+      assert {:ok, %{status: "completed"}} = row(actor, child)
+
+      {1, _} =
+        Arca.Repo.update_all(from(e in Arca.Schemas.Execution, where: e.id == ^child),
+          set: [started_at: DateTime.add(DateTime.utc_now(), -3_600, :second)]
+        )
+
+      assert {:ok, pruned} = Arca.Retention.cleanup(actor, "executions", value: 1)
+      assert pruned >= 1
+      assert row(actor, child) == :none
+      send(completer, :terminal_continue)
+      assert Task.await(task, 60_000) == :completed
+      assert Source.outside("terminal-only.example") in sources(ctx, turn)
+    end
+  end
+
   # ---------------------------------------------------------------------------
   # Helpers
   # ---------------------------------------------------------------------------

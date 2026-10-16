@@ -587,6 +587,19 @@ defmodule Arca.Execution do
     end)
   end
 
+  @doc """
+  The ledger a row read in hand holds (a run's, not a turn root's): its
+  stored set, an absent or unreadable one an unnamed outside source. What
+  a caller holding the row a terminal write returned reads, so the
+  ledger its answer carries is the one that write committed, never a
+  read after it.
+  """
+  @spec row_ledger(map()) :: [Prima.Source.t()]
+  def row_ledger(%{sources: stored}) when is_binary(stored) or is_nil(stored),
+    do: ledger_text(stored)
+
+  def row_ledger(_row), do: [Prima.Source.outside(nil)]
+
   # The key of the classes an approved launch let flow, in its root's
   # `host_policy`.
   @launch_key "launch_flows"

@@ -81,7 +81,7 @@ defmodule Opus.Close do
   completes with the refusal as its output. An output that exceeds the
   node's `max_response_size` or cannot be encoded closes the run failed. Answers the result — `%{status: :completed, output: masked,
   metadata: map, sources: [Prima.Source.t()]}`, `sources` the run's
-  ledger as its terminal write left it (`sources/1`) — or
+  ledger as the terminal transaction itself read it — or
   `{:error, message}`. A cancel that closed the row
   first leaves the cancelled row standing; the result is still answered.
   A run whose athanor was archived while it ran is never answered as a
@@ -95,7 +95,7 @@ defmodule Opus.Close do
     with :ok <- check_application_error(close, secrets, masked_output),
          :ok <- check_response_size(close, secrets, masked_output),
          completed_record = Record.complete(close.record, masked_output),
-         {:written, write_result} <- completed_write(close, completed_record) do
+         {:written, write_result, ledger} <- completed_write(close, completed_record) do
       if write_result == :ok, do: StepSpans.completed(close.step_spans)
 
       # The lifecycle telemetry follows the row: a completion is announced
@@ -116,7 +116,9 @@ defmodule Opus.Close do
         status: :completed,
         output: masked_output,
         metadata: metadata(close, completed_record),
-        sources: sources(close)
+        # The ledger the terminal transaction read; a row another writer
+        # ended first (a cancel) is read as it stands now.
+        sources: ledger || sources(close)
       }
 
       result =
@@ -132,14 +134,17 @@ defmodule Opus.Close do
   # closed failed by the record's write: its output is neither answered
   # nor announced as a success.
   defp completed_write(close, completed_record) do
-    case Record.write_completed(completed_record) do
+    case Record.write_completed_ledger(completed_record) do
       {:error, :not_standing} ->
         message = "Execution refused: its athanor is no longer active"
         Telemetry.execute_exception(Record.fail(close.record, message), message)
         {:error, message}
 
+      {:ok, ledger} ->
+        {:written, :ok, ledger}
+
       write_result ->
-        {:written, write_result}
+        {:written, write_result, nil}
     end
   end
 
@@ -225,7 +230,7 @@ defmodule Opus.Close do
            status: :completed,
            output: row.output,
            metadata: metadata(close, row),
-           sources: sources(close)
+           sources: row.sources
          }}
 
       {:ok, %Record{status: status, error: error}} when status in [:failed, :cancelled] ->
