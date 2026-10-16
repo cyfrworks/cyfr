@@ -145,7 +145,12 @@ defmodule Sanctum.Gate.DispatchBoundaryTest do
         Beams.production?(path),
         reduce: %{} do
       acc ->
-        module = path |> Path.basename(".beam") |> String.to_atom()
+        module =
+          path
+          |> Path.basename(".beam")
+          |> String.replace_prefix("Elixir.", "")
+          |> List.wrap()
+          |> Module.safe_concat()
 
         Map.update(
           acc,

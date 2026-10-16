@@ -108,7 +108,12 @@ defmodule PrismWeb.ToolSeamTest do
           |> Path.wildcard(),
         source = beam_source(path),
         MapSet.member?(sources, source),
-        do: {path |> Path.basename(".beam") |> String.to_atom(), source, String.to_charlist(path)}
+        do:
+          {path
+           |> Path.basename(".beam")
+           |> String.replace_prefix("Elixir.", "")
+           |> List.wrap()
+           |> Module.safe_concat(), source, String.to_charlist(path)}
   end
 
   defp beam_source(path) do
