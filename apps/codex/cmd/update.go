@@ -76,7 +76,7 @@ var (
 
 const (
 	// updateLockName is the file in the project directory that admits one
-	// update at a time; it holds the updating process's pid.
+	// update or restore at a time; it holds the running process's pid.
 	updateLockName = ".cyfr-update.lock"
 
 	// rosterExpr reads the running cell's live slots through its own node,
@@ -166,7 +166,7 @@ func runUpdate(ctx context.Context, out, errOut io.Writer) error {
 	if _, err := os.Stat("cyfr.yaml"); err != nil {
 		return errors.New("Not in a cyfr project directory (no cyfr.yaml found).\nRun 'cyfr init' to create a new project.")
 	}
-	unlock, err := takeUpdateLock()
+	unlock, err := takeUpdateLock("update")
 	if err != nil {
 		return err
 	}
@@ -180,9 +180,10 @@ func runUpdate(ctx context.Context, out, errOut io.Writer) error {
 	return u.run()
 }
 
-// takeUpdateLock creates the update lock, refusing while another update
-// holds it, and answers the function that removes it.
-func takeUpdateLock() (func(), error) {
+// takeUpdateLock creates the lock `cyfr update` and `cyfr restore` share,
+// refusing while either holds it, and answers the function that removes it;
+// command names the one taking it.
+func takeUpdateLock(command string) (func(), error) {
 	f, err := os.OpenFile(updateLockName, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
 	if errors.Is(err, fs.ErrExist) {
 		holder := "an unknown process"
@@ -190,7 +191,7 @@ func takeUpdateLock() (func(), error) {
 			holder = "pid " + strings.TrimSpace(string(data))
 		}
 		abs, _ := filepath.Abs(updateLockName)
-		return nil, fmt.Errorf("Another cyfr update holds %s (%s). If no update is running, remove the file and run 'cyfr update' again", abs, holder)
+		return nil, fmt.Errorf("Another cyfr update or restore holds %s (%s). If neither is running, remove the file and run 'cyfr %s' again", abs, holder, command)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("could not take the update lock %s: %w", updateLockName, err)
@@ -778,46 +779,15 @@ func (u *updater) readConfig() error {
 	if err != nil {
 		return err
 	}
-	env := func(name string) string {
-		if value := cyfr.Environment[name]; value != nil {
-			return strings.TrimSpace(*value)
-		}
-		return ""
-	}
-	// containerToHost maps a container path through the mount whose target
-	// is its longest prefix, which is the one cyfr sees the path through;
-	// ok is false unless that mount is a bind.
-	containerToHost := func(p string) (string, bool) {
-		best, host, bind := -1, "", false
-		for _, v := range mounts {
-			target := path.Clean(v.Target)
-			rel, ok := strings.CutPrefix(p, target)
-			if !ok || rel != "" && !strings.HasPrefix(rel, "/") && target != "/" {
-				continue
-			}
-			switch isBind := v.Type == "bind" && v.Source != ""; {
-			case len(target) > best:
-				best, bind = len(target), isBind
-				host = filepath.Join(v.Source, filepath.FromSlash(rel))
-			case len(target) == best && !isBind:
-				// Two mounts at one target: which one cyfr sees is not
-				// the configuration's to say, so the path is not mapped.
-				bind = false
-			}
-		}
-		return host, best >= 0 && bind
-	}
+	env := func(name string) string { return serviceSetting(cyfr.Environment, name) }
+	containerToHost := func(p string) (string, bool) { return mountedHost(mounts, p) }
 	// nestedMounts answers every mount whose target lies strictly under the
 	// container path root, shallower first, refusing one that is not a bind:
 	// its bytes are no host directory the snapshot can copy.
 	nestedMounts := func(root string) ([]storageMount, error) {
 		var nested []storageMount
-		for _, v := range mounts {
-			target := path.Clean(v.Target)
-			rel, ok := strings.CutPrefix(target, strings.TrimSuffix(root, "/")+"/")
-			if !ok || rel == "" {
-				continue
-			}
+		for _, n := range mountsUnder(mounts, root) {
+			v, target := n.mount, path.Clean(n.mount.Target)
 			if v.Type != "bind" || v.Source == "" {
 				return nil, fmt.Errorf("The storage root %s has a %s mount at %s, which cyfr update cannot snapshot; nothing was changed", root, v.Type, target)
 			}
@@ -826,24 +796,17 @@ func (u *updater) readConfig() error {
 			if err != nil || statErr != nil || !(info.IsDir() || info.Mode().IsRegular()) {
 				return nil, fmt.Errorf("The mount %s under the storage root (on the host %s) is not a readable directory or file, so cyfr update cannot snapshot it; nothing was changed", target, v.Source)
 			}
-			nested = append(nested, storageMount{rel: rel, host: resolved, dir: info.IsDir()})
+			nested = append(nested, storageMount{rel: n.rel, host: resolved, dir: info.IsDir()})
 		}
-		slices.SortStableFunc(nested, func(a, b storageMount) int {
-			return strings.Count(a.rel, "/") - strings.Count(b.rel, "/")
-		})
+		sortByDepth(nested)
 		return nested, nil
 	}
 	settingPath := func(name, fallback string) (string, error) {
-		value := fallback
-		if raw := cyfr.Environment[name]; raw != nil {
-			if value = strings.TrimSpace(*raw); value == "" {
-				return "", fmt.Errorf("%s is set but blank; nothing was changed", name)
-			}
+		value, ok := settingPathIn(cyfr.Environment, name, fallback)
+		if !ok {
+			return "", fmt.Errorf("%s is set but blank; nothing was changed", name)
 		}
-		if !path.IsAbs(value) {
-			value = path.Join(appWorkdir, value)
-		}
-		return path.Clean(value), nil
+		return value, nil
 	}
 
 	c := &stackConfig{}
@@ -906,7 +869,7 @@ func (u *updater) readConfig() error {
 	}
 
 	var keyring []string
-	for _, name := range []string{"CYFR_CRYPTO_KEYRING", "CYFR_SECRET_KEY_BASE"} {
+	for _, name := range keyringSettings {
 		raw := cyfr.Environment[name]
 		if raw == nil || strings.TrimSpace(*raw) == "" {
 			continue
@@ -929,6 +892,91 @@ func (u *updater) readConfig() error {
 	}
 	u.config = c
 	return nil
+}
+
+// keyringSettings are the settings holding the keys to a cell's data, which
+// the snapshot's keyring file carries.
+var keyringSettings = []string{"CYFR_CRYPTO_KEYRING", "CYFR_SECRET_KEY_BASE"}
+
+// s3OutsideSnapshot is the stated limit of a snapshot of a cell whose store
+// is S3.
+const s3OutsideSnapshot = "The object store (S3) is outside the snapshot; it relies on the bucket's own versioning."
+
+// serviceSetting answers a service's environment setting, trimmed; empty
+// when unset.
+func serviceSetting(environment map[string]*string, name string) string {
+	if value := environment[name]; value != nil {
+		return strings.TrimSpace(*value)
+	}
+	return ""
+}
+
+// settingPathIn answers the container path a path setting names, fallback
+// when it is unset, a relative one against the image's WORKDIR; ok is false
+// for a setting that is set but blank.
+func settingPathIn(environment map[string]*string, name, fallback string) (string, bool) {
+	value := fallback
+	if raw := environment[name]; raw != nil {
+		if value = strings.TrimSpace(*raw); value == "" {
+			return "", false
+		}
+	}
+	if !path.IsAbs(value) {
+		value = path.Join(appWorkdir, value)
+	}
+	return path.Clean(value), true
+}
+
+// mountedHost maps a container path through the mount whose target is its
+// longest prefix, which is the one cyfr sees the path through; ok is false
+// unless that mount is a bind.
+func mountedHost(mounts []composeMount, p string) (string, bool) {
+	best, host, bind := -1, "", false
+	for _, v := range mounts {
+		target := path.Clean(v.Target)
+		rel, ok := strings.CutPrefix(p, target)
+		if !ok || rel != "" && !strings.HasPrefix(rel, "/") && target != "/" {
+			continue
+		}
+		switch isBind := v.Type == "bind" && v.Source != ""; {
+		case len(target) > best:
+			best, bind = len(target), isBind
+			host = filepath.Join(v.Source, filepath.FromSlash(rel))
+		case len(target) == best && !isBind:
+			// Two mounts at one target: which one cyfr sees is not
+			// the configuration's to say, so the path is not mapped.
+			bind = false
+		}
+	}
+	return host, best >= 0 && bind
+}
+
+// nestedMount is a mount whose target lies under a container path, rel
+// being where under it.
+type nestedMount struct {
+	rel   string
+	mount composeMount
+}
+
+// mountsUnder answers every mount whose target lies strictly under the
+// container path root, in the configuration's order.
+func mountsUnder(mounts []composeMount, root string) []nestedMount {
+	var nested []nestedMount
+	for _, v := range mounts {
+		rel, ok := strings.CutPrefix(path.Clean(v.Target), strings.TrimSuffix(root, "/")+"/")
+		if ok && rel != "" {
+			nested = append(nested, nestedMount{rel: rel, mount: v})
+		}
+	}
+	return nested
+}
+
+// sortByDepth orders storage mounts shallower before deeper, keeping the
+// order of mounts of one depth.
+func sortByDepth(mounts []storageMount) {
+	slices.SortStableFunc(mounts, func(a, b storageMount) int {
+		return strings.Count(a.rel, "/") - strings.Count(b.rel, "/")
+	})
 }
 
 // dotenvLine spells name=value so parseEnvFile reads value back exactly:
@@ -954,18 +1002,36 @@ func (u *updater) probePostgres() error {
 	}
 	ctx, cancel := context.WithTimeout(u.ctx, composeRunTimeout)
 	defer cancel()
+	major, err := u.serverMajor(ctx)
+	if errors.Is(err, errServerVersion) {
+		return errors.New("the PostgreSQL server's version did not read as a number; nothing was changed")
+	}
+	if err != nil {
+		return fmt.Errorf("cyfr update could not reach the PostgreSQL server at CYFR_DATABASE_URL to read its version (%v); nothing was changed", err)
+	}
+	u.config.pgMajor = major
+	return nil
+}
+
+// errServerVersion is serverMajor's answer when the server answered a
+// version that does not read.
+var errServerVersion = errors.New("the server's version does not read")
+
+// serverMajor reads the major version of the PostgreSQL server at the
+// configured URL through a postgres client container, the URL reaching it
+// through its environment.
+func (u *updater) serverMajor(ctx context.Context) (int, error) {
 	answer, err := u.dockerOutput(ctx, []string{pgURLVariable + "=" + u.config.pgURL},
 		"run", "--rm", "--network", "host", "-e", pgURLVariable, pgImageProbe,
 		"sh", "-c", `exec psql "$`+pgURLVariable+`" -tAc "SHOW server_version_num"`)
 	if err != nil {
-		return fmt.Errorf("cyfr update could not reach the PostgreSQL server at CYFR_DATABASE_URL to read its version (%v); nothing was changed", err)
+		return 0, err
 	}
 	num, err := strconv.Atoi(strings.TrimSpace(answer))
 	if err != nil || num < 10000 {
-		return errors.New("the PostgreSQL server's version did not read as a number; nothing was changed")
+		return 0, errServerVersion
 	}
-	u.config.pgMajor = num / 10000
-	return nil
+	return num / 10000, nil
 }
 
 // pgImage is the dump's image, the server's own major.
@@ -1041,15 +1107,8 @@ func markedLine(output, marker string) (string, error) {
 func (u *updater) readRoster() error {
 	ctx, cancel := context.WithTimeout(u.ctx, composeRunTimeout)
 	defer cancel()
-	ps, err := u.dockerOutput(ctx, nil, u.composeArgs("ps", "--services", "--status", "running")...)
-	if err != nil {
-		return fmt.Errorf("docker compose could not list the running services (%v); nothing was changed", err)
-	}
-	u.running = nil
-	for _, line := range strings.Split(ps, "\n") {
-		if name := strings.TrimSpace(line); name != "" && !slices.Contains(u.running, name) {
-			u.running = append(u.running, name)
-		}
+	if err := u.listRunning(ctx); err != nil {
+		return err
 	}
 	if !slices.Contains(u.running, "cyfr") {
 		return nil
@@ -1080,6 +1139,21 @@ func (u *updater) readRoster() error {
 	}
 	if len(foreign) > 0 {
 		return fmt.Errorf("The cell has a live member outside this stack on another release than %s: %s. cyfr update cannot stop it; stop it first, then run 'cyfr update' again. Nothing was changed", u.version, strings.Join(foreign, ", "))
+	}
+	return nil
+}
+
+// listRunning reads the stack's running services into u.running.
+func (u *updater) listRunning(ctx context.Context) error {
+	ps, err := u.dockerOutput(ctx, nil, u.composeArgs("ps", "--services", "--status", "running")...)
+	if err != nil {
+		return fmt.Errorf("docker compose could not list the running services (%v); nothing was changed", err)
+	}
+	u.running = nil
+	for _, line := range strings.Split(ps, "\n") {
+		if name := strings.TrimSpace(line); name != "" && !slices.Contains(u.running, name) {
+			u.running = append(u.running, name)
+		}
 	}
 	return nil
 }
@@ -1138,13 +1212,31 @@ func (u *updater) stopServices(services ...string) (time.Duration, error) {
 // grace leaves its row until its lease runs out. Any error or unreadable
 // answer refuses, never reads as no slot.
 func (u *updater) rereadOffline() error {
+	release, others, err := u.waitLiveSlots(u.onTarget)
+	if err != nil {
+		return err
+	}
+	if len(others) > 0 {
+		return fmt.Errorf("A slot is still live %s after the stop: %s. A member outside this stack holds the cell; stop it first", liveSlotsWindow, slotNames(others))
+	}
+	u.oldRelease = release
+	return nil
+}
+
+// waitLiveSlots reads the live slots offline, in a container of the
+// configured image with nothing of the stack running, until every live slot
+// is one admit admits or the window closes, and answers the release the
+// image runs and the live slots admit does not admit, none when the read
+// ended with every slot admitted. An error or an unreadable answer is an
+// error, never no slot.
+func (u *updater) waitLiveSlots(admit func(rosterSlot) bool) (string, []rosterSlot, error) {
 	deadline := time.Now().Add(liveSlotsWindow)
 	for {
 		ctx, cancel := u.detached(composeRunTimeout)
 		output, err := u.dockerOutput(ctx, nil, u.composeArgs("run", "--rm", "--no-deps", "-T", "cyfr", "bin/cyfr", "eval", liveSlotsExpr)...)
 		cancel()
 		if err != nil {
-			return fmt.Errorf("The offline roster read failed (%v)", err)
+			return "", nil, fmt.Errorf("The offline roster read failed (%v)", err)
 		}
 		var answer struct {
 			Release string        `json:"release"`
@@ -1158,27 +1250,28 @@ func (u *updater) rereadOffline() error {
 			err = errors.New("no release or no slots")
 		}
 		if err != nil {
-			return fmt.Errorf("The offline roster read did not answer (%v)", err)
+			return "", nil, fmt.Errorf("The offline roster read did not answer (%v)", err)
 		}
 		var others []rosterSlot
 		for _, slot := range *answer.Slots {
-			if !u.onTarget(slot) {
+			if !admit(slot) {
 				others = append(others, slot)
 			}
 		}
-		if len(others) == 0 {
-			u.oldRelease = answer.Release
-			return nil
-		}
-		if !time.Now().Add(liveSlotsPoll).Before(deadline) {
-			var nodes []string
-			for _, slot := range others {
-				nodes = append(nodes, fmt.Sprintf("%s (%s)", slot.Node, slot.release()))
-			}
-			return fmt.Errorf("A slot is still live %s after the stop: %s. A member outside this stack holds the cell; stop it first", liveSlotsWindow, strings.Join(nodes, ", "))
+		if len(others) == 0 || !time.Now().Add(liveSlotsPoll).Before(deadline) {
+			return answer.Release, others, nil
 		}
 		time.Sleep(liveSlotsPoll)
 	}
+}
+
+// slotNames names live slots, each by its node and release.
+func slotNames(slots []rosterSlot) string {
+	var nodes []string
+	for _, slot := range slots {
+		nodes = append(nodes, fmt.Sprintf("%s (%s)", slot.Node, slot.release()))
+	}
+	return strings.Join(nodes, ", ")
 }
 
 // snapshotManifest is snapshot.json, written last: its presence marks a
@@ -1243,7 +1336,7 @@ func (u *updater) takeSnapshot() error {
 		}
 		parts = append(parts, "storage")
 	} else {
-		fmt.Fprintln(u.out, "The object store (S3) is outside the snapshot; it relies on the bucket's own versioning.")
+		fmt.Fprintln(u.out, s3OutsideSnapshot)
 	}
 
 	if err := writeNewFile(filepath.Join(dir, "keyring"), []byte(c.keyring)); err != nil {
