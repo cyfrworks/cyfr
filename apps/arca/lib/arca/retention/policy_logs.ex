@@ -17,12 +17,11 @@ defmodule Arca.Retention.PolicyLogs do
   def unit, do: :days
 
   @impl true
-  def prune(%Prima.Actor{athanor_id: athanor}, days, dry_run) when is_binary(athanor) do
+  def prune(%Prima.Actor{athanor_id: athanor} = actor, days, dry_run) when is_binary(athanor) do
     cutoff = Kind.days_cutoff(days)
-    opts = [athanor_id: athanor]
 
     if dry_run,
-      do: Arca.PolicyLog.count_before(cutoff, opts),
-      else: Arca.PolicyLog.delete_before(cutoff, opts)
+      do: Arca.PolicyLog.count_before(actor, cutoff),
+      else: Arca.PolicyLog.delete_before(actor, cutoff)
   end
 end

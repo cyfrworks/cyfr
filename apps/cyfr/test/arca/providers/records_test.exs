@@ -37,10 +37,10 @@ defmodule Arca.Providers.RecordsTest do
   # ============================================================================
 
   describe "tools/0" do
-    test "returns the two record tools and the retention tool" do
+    test "returns the record tool and the retention tool" do
       tools = MCP.tools()
 
-      assert Enum.map(tools, & &1.name) == ["record", "policy_log", "retention"]
+      assert Enum.map(tools, & &1.name) == ["record", "retention"]
 
       assert MCP.service() == "arca"
       refute Code.ensure_loaded?(Cyfr.Retention)
@@ -844,17 +844,6 @@ defmodule Arca.Providers.RecordsTest do
   # Tool Schema Hardening
   # ============================================================================
 
-  describe "policy_log tool schema" do
-    test "only exposes read-only actions" do
-      tools = MCP.tools()
-      tool = Enum.find(tools, &(&1.name == "policy_log"))
-      actions = tool.input_schema["properties"]["action"]["enum"]
-      assert actions == ["list", "get", "correlate"]
-
-      refute "log" in actions
-    end
-  end
-
   # ============================================================================
   # Retired Write Actions Denied (kernel-only)
   # ============================================================================
@@ -864,9 +853,7 @@ defmodule Arca.Providers.RecordsTest do
       # Undeclared actions must be refused before handler dispatch.
       retired = [
         {"record", "record_start"},
-        {"record", "record_complete"},
-        {"policy_log", "log"},
-        {"policy_log", "delete"}
+        {"record", "record_complete"}
       ]
 
       for {tool, verb} <- retired do
@@ -895,39 +882,6 @@ defmodule Arca.Providers.RecordsTest do
 
       {:ok, result} = MCP.read(actor(ctx), "arca://files/data/nested/file.txt", all_roots())
       assert Base.decode64!(result.content) == "nested content"
-    end
-  end
-
-  describe "correlate authorization" do
-    setup do
-      no_read_ctx = %Context{
-        user_id: "regular_user",
-        athanor_id: "ath_test",
-        permissions: MapSet.new([:execute]),
-        scope: :athanor,
-        auth_method: :api_key,
-        api_key_type: :application,
-        authenticated: true
-      }
-
-      {:ok, no_read_ctx: no_read_ctx}
-    end
-
-    test "policy_log.correlate requires :storage_read like its siblings", %{no_read_ctx: ctx} do
-      assert {:error,
-              %Prima.Refusal{stage: :admission, reason: {:missing_permission, :storage_read}}} =
-               Sanctum.Gate.call_external("policy_log", ctx, %{
-                 "action" => "correlate",
-                 "request_id" => "req_x"
-               })
-    end
-
-    test "correlate succeeds for a :storage_read context", %{ctx: ctx} do
-      assert {:ok, %{request_id: "req_none"}} =
-               MCP.handle("policy_log", actor(ctx), %{
-                 "action" => "correlate",
-                 "request_id" => "req_none"
-               })
     end
   end
 

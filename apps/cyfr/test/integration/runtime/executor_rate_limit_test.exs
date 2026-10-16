@@ -80,12 +80,9 @@ defmodule Locus.Runtime.ExecutorRateLimitTest do
         )
 
       rows =
-        [
-          athanor_id: ctx.athanor_id,
-          event_type: "policy_consultation",
-          limit: 50
-        ]
-        |> Arca.PolicyLog.list()
+        ctx.athanor_id
+        |> Prima.Actor.in_athanor()
+        |> Arca.PolicyLog.list(event_type: "policy_consultation", limit: 50)
         |> then(fn {:ok, rows} -> rows end)
         |> Enum.filter(&(&1.component_ref == ref))
 

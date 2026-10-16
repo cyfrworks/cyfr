@@ -883,7 +883,7 @@ defmodule Opus.HostTest do
 
       # Each refusal is a recorded denial of the attempt's component, naming
       # no URL.
-      {:ok, rows} = Arca.PolicyLog.list(athanor_id: fixture.athanor_id, limit: 100)
+      {:ok, rows} = Arca.PolicyLog.list(Prima.Actor.in_athanor(fixture.athanor_id), limit: 100)
       denials = Enum.filter(rows, &(&1.component_ref == fixture.component_ref))
       assert [_, _] = denials
 
@@ -931,7 +931,7 @@ defmodule Opus.HostTest do
                |> Opus.Host.call(body)
                |> Jason.decode!()
 
-      {:ok, rows} = Arca.PolicyLog.list(athanor_id: fixture.athanor_id, limit: 100)
+      {:ok, rows} = Arca.PolicyLog.list(Prima.Actor.in_athanor(fixture.athanor_id), limit: 100)
       assert Enum.filter(rows, &(&1.component_ref == fixture.component_ref)) == []
     end
 

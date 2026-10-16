@@ -82,9 +82,8 @@ defmodule Emissary.MCP.ChainLoggingTest do
 
   defp rows_for(ctx, request_id) do
     {:ok, rows} =
-      Arca.McpLog.list(
+      Arca.McpLog.list(Prima.Actor.in_athanor(ctx.athanor_id),
         request_id: request_id,
-        athanor_id: ctx.athanor_id,
         limit: 100
       )
 
@@ -207,7 +206,7 @@ defmodule Emissary.MCP.ChainLoggingTest do
       {:ok, _} = Sanctum.Gate.call_external("typed_probe", ctx, %{"action" => "empty"})
     end)
 
-    {:ok, rows} = Arca.McpLog.list(athanor_id: ctx.athanor_id, limit: 100)
+    {:ok, rows} = Arca.McpLog.list(Prima.Actor.in_athanor(ctx.athanor_id), limit: 100)
     [row] = Enum.filter(rows, &(&1.tool == "typed_probe"))
 
     # It is a root: a call of its own, the first of a request of its own.
@@ -226,7 +225,7 @@ defmodule Emissary.MCP.ChainLoggingTest do
     {:ok, _} = Sanctum.Gate.call_external("system", ctx, %{"action" => "status"})
     {:ok, _} = Sanctum.Gate.call_external("tools", ctx, %{"action" => "list"})
 
-    assert Arca.McpLog.list(athanor_id: ctx.athanor_id, limit: 100) == {:ok, []},
+    assert Arca.McpLog.list(Prima.Actor.in_athanor(ctx.athanor_id), limit: 100) == {:ok, []},
            "a discovery or log read wrote a row to the log"
 
     assert {:ok, []} = Arca.DecisionLog.list(Sanctum.Context.actor(ctx))

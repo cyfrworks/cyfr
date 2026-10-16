@@ -823,7 +823,7 @@ defmodule Opus.Host.AttachedFetchTest do
     do: for({^name, value} <- request.headers, do: value)
 
   defp denials(fixture) do
-    {:ok, rows} = Arca.PolicyLog.list(athanor_id: fixture.athanor_id, limit: 100)
+    {:ok, rows} = Arca.PolicyLog.list(Prima.Actor.in_athanor(fixture.athanor_id), limit: 100)
     Enum.filter(rows, &(&1.component_ref == fixture.component_ref))
   end
 

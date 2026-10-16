@@ -37,7 +37,7 @@ defmodule Arca.RecordSinkTest do
     # Nothing is written until the sink drains.
     :ok = RecordSink.flush()
 
-    {:ok, rows} = Arca.PolicyLog.list(athanor_id: "ath_a", limit: 100)
+    {:ok, rows} = Arca.PolicyLog.list(Prima.Actor.in_athanor("ath_a"), limit: 100)
     assert Enum.all?(ids, fn id -> Enum.any?(rows, &(&1.id == id)) end)
   end
 
@@ -47,7 +47,7 @@ defmodule Arca.RecordSinkTest do
     :ok = RecordSink.enqueue({:policy_log, %{id: "plog_bad"}})
     :ok = RecordSink.flush()
 
-    {:ok, rows} = Arca.PolicyLog.list(athanor_id: "ath_a", limit: 100)
+    {:ok, rows} = Arca.PolicyLog.list(Prima.Actor.in_athanor("ath_a"), limit: 100)
     assert Enum.any?(rows, &(&1.id == good))
     refute Enum.any?(rows, &(&1.id == "plog_bad"))
   end
@@ -76,7 +76,7 @@ defmodule Arca.RecordSinkTest do
     Application.put_env(:arca, :record_sink_inline, true)
     id = Prima.UUID7.generate_id("plog")
     :ok = RecordSink.enqueue({:policy_log, policy_attrs(%{id: id})})
-    assert {:ok, sink_rows} = Arca.PolicyLog.list(athanor_id: "ath_a", limit: 100)
+    assert {:ok, sink_rows} = Arca.PolicyLog.list(Prima.Actor.in_athanor("ath_a"), limit: 100)
     assert Enum.any?(sink_rows, &(&1.id == id))
   end
 
@@ -97,14 +97,14 @@ defmodule Arca.RecordSinkTest do
     # is about terminate/2 and not about the flush timer.
     assert %{count: count} = :sys.get_state(pid)
     assert count >= 1
-    {:ok, before} = Arca.PolicyLog.list(athanor_id: "ath_a", limit: 100)
+    {:ok, before} = Arca.PolicyLog.list(Prima.Actor.in_athanor("ath_a"), limit: 100)
     refute Enum.any?(before, &(&1.id == id))
 
     ref = Process.monitor(pid)
     :ok = GenServer.stop(pid, :normal)
     assert_receive {:DOWN, ^ref, :process, ^pid, :normal}, 5_000
 
-    {:ok, rows} = Arca.PolicyLog.list(athanor_id: "ath_a", limit: 100)
+    {:ok, rows} = Arca.PolicyLog.list(Prima.Actor.in_athanor("ath_a"), limit: 100)
     assert Enum.any?(rows, &(&1.id == id)), "the buffered row was lost at shutdown"
 
     assert Enum.any?(1..200, fn _ ->

@@ -570,6 +570,56 @@ defmodule Opus do
   defdelegate list(ctx, opts \\ []), to: Record
 
   @doc """
+  The executions the ingress request `request_id` started in the context's
+  athanor, newest first, at most `limit` (`Arca.Execution.list_by_request/3`,
+  under the context's actor).
+
+  A context without `:storage_read`, or one on the guest plane, is the
+  permission refusal `Sanctum.Context.require_permission/2` answers; a
+  context with no athanor is `{:error, :no_athanor}`, whatever its scope.
+  Both refuse before any row is read.
+  """
+  @spec list_by_request(Context.t(), String.t(), pos_integer()) ::
+          {:ok, [map()]} | {:error, term()}
+  def list_by_request(%Context{} = ctx, request_id, limit)
+      when is_binary(request_id) and is_integer(limit) and limit > 0 do
+    with {:ok, actor} <- reader(ctx) do
+      case Arca.Execution.list_by_request(actor, request_id, limit) do
+        rows when is_list(rows) -> {:ok, rows}
+        {:error, _} = refusal -> refusal
+      end
+    end
+  end
+
+  @doc """
+  How many executions each of `request_ids` started in the context's
+  athanor, as a map from request id to count; an id that started none is
+  absent (`Arca.Execution.count_by_request/2`, under the context's actor).
+  The same refusals as `list_by_request/3`, before any row is read.
+  """
+  @spec count_by_request(Context.t(), [String.t()]) ::
+          {:ok, %{String.t() => non_neg_integer()}} | {:error, term()}
+  def count_by_request(%Context{} = ctx, request_ids) when is_list(request_ids) do
+    with {:ok, actor} <- reader(ctx) do
+      case Arca.Execution.count_by_request(actor, request_ids) do
+        counts when is_map(counts) -> {:ok, counts}
+        {:error, _} = refusal -> refusal
+      end
+    end
+  end
+
+  # The actor a surface's execution read runs under: a context holding
+  # `:storage_read` on the external plane, in a resolved athanor.
+  defp reader(%Context{} = ctx) do
+    with :ok <- Context.require_permission(ctx, :storage_read) do
+      case Context.actor(ctx) do
+        %Prima.Actor{athanor_id: id} = actor when is_binary(id) and id != "" -> {:ok, actor}
+        %Prima.Actor{} -> {:error, :no_athanor}
+      end
+    end
+  end
+
+  @doc """
   Keep the lease of `attempt` of `execution_id`, held outside the engine
   by the calling process, exiting that process when the lease is lost
   (`Opus.LeaseWatch.start/3`).

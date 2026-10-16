@@ -410,7 +410,7 @@ defmodule Opus.Host.StorageTest do
 
   describe "record_denial" do
     defp rows(fixture) do
-      {:ok, rows} = Arca.PolicyLog.list(athanor_id: fixture.athanor_id, limit: 50)
+      {:ok, rows} = Arca.PolicyLog.list(Prima.Actor.in_athanor(fixture.athanor_id), limit: 50)
       Enum.filter(rows, &(&1.component_ref == fixture.component_ref))
     end
 

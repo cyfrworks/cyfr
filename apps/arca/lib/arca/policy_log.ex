@@ -7,6 +7,10 @@ defmodule Arca.PolicyLog do
   tenant-scoped readers and the retention primitives over
   `Arca.Schemas.PolicyLog`. Every row a function here answers is a plain
   map (`Arca.Data`).
+
+  The rows are security rows: Sanctum is their one reader
+  (`Sanctum.PolicyLog`, `Sanctum.Providers.PolicyLog`), and every reader
+  here takes the caller's actor first and scopes to its athanor.
   """
 
   import Ecto.Query
@@ -27,7 +31,10 @@ defmodule Arca.PolicyLog do
   end
 
   @doc """
-  Lists recent policy logs with optional filters.
+  The actor's athanor's policy logs, newest first, with optional filters.
+  The athanor is the actor's: an `:athanor_id` among the options names
+  nothing. An actor with no athanor is `{:error, :no_athanor}` before any
+  row is read, whatever its scope.
 
   Options:
   - `:limit` - Maximum records to return (default: 20)
@@ -35,27 +42,31 @@ defmodule Arca.PolicyLog do
   - `:request_id` - Filter by request ID
   - `:execution_id` - Filter by execution ID
   - `:event_type` - Filter by event type
+  - `:with_consent` - Join each row's consent attribution (default: false)
   """
-  @spec list(keyword()) :: {:ok, [map()]} | {:error, :database_error}
-  def list(opts) do
-    Arca.Repo.Errors.with_db_rescue("PolicyLog.list", fn -> {:ok, do_list(opts)} end)
+  @spec list(Prima.Actor.t(), keyword()) ::
+          {:ok, [map()]} | {:error, :no_athanor | :database_error}
+  def list(%Prima.Actor{athanor_id: athanor_id}, opts)
+      when is_binary(athanor_id) and athanor_id != "" and is_list(opts) do
+    Arca.Repo.Errors.with_db_rescue("PolicyLog.list", fn -> {:ok, do_list(athanor_id, opts)} end)
     |> Arca.Data.project()
   end
 
-  defp do_list(opts) do
+  def list(%Prima.Actor{}, opts) when is_list(opts), do: {:error, :no_athanor}
+
+  defp do_list(athanor_id, opts) do
     limit = Keyword.get(opts, :limit, 20)
     user_id = Keyword.get(opts, :user_id)
     request_id = Keyword.get(opts, :request_id)
     execution_id = Keyword.get(opts, :execution_id)
     event_type = Keyword.get(opts, :event_type)
-    athanor_id = Keyword.fetch!(opts, :athanor_id)
 
     query =
       from(l in Row,
-        where: l.athanor_id == ^athanor_id,
         order_by: [desc: l.timestamp],
         limit: ^limit
       )
+      |> Arca.QueryHelpers.where_athanor(athanor_id)
 
     query = if user_id, do: where(query, [l], l.user_id == ^user_id), else: query
     query = if request_id, do: where(query, [l], l.request_id == ^request_id), else: query
@@ -105,17 +116,15 @@ defmodule Arca.PolicyLog do
   end
 
   @doc """
-  Deletes all policy logs with timestamps before the given datetime.
-
-  Requires `:athanor_id` — deletion is always scoped to one athanor.
+  Deletes the actor's athanor's policy logs with timestamps before
+  `datetime`: the retention kind's sweep (`Arca.Retention.PolicyLogs`).
 
   Returns `{:ok, count}` — or `{:error, :database_error}` when the store cannot answer.
   """
-  @spec delete_before(DateTime.t(), keyword()) ::
+  @spec delete_before(Prima.Actor.t(), DateTime.t()) ::
           {:ok, non_neg_integer()} | {:error, :database_error}
-  def delete_before(%DateTime{} = datetime, opts) do
-    athanor_id = Keyword.fetch!(opts, :athanor_id)
-
+  def delete_before(%Prima.Actor{athanor_id: athanor_id}, %DateTime{} = datetime)
+      when is_binary(athanor_id) and athanor_id != "" do
     Arca.Repo.Errors.with_db_rescue("Arca.PolicyLog.delete_before", fn ->
       {count, _} =
         Row
@@ -128,11 +137,10 @@ defmodule Arca.PolicyLog do
   end
 
   @doc "How many rows `delete_before/2` would remove — the dry-run count."
-  @spec count_before(DateTime.t(), keyword()) ::
+  @spec count_before(Prima.Actor.t(), DateTime.t()) ::
           {:ok, non_neg_integer()} | {:error, :database_error}
-  def count_before(%DateTime{} = datetime, opts) do
-    athanor_id = Keyword.fetch!(opts, :athanor_id)
-
+  def count_before(%Prima.Actor{athanor_id: athanor_id}, %DateTime{} = datetime)
+      when is_binary(athanor_id) and athanor_id != "" do
     Arca.Repo.Errors.with_db_rescue("Arca.PolicyLog.count_before", fn ->
       count =
         Row

@@ -103,19 +103,16 @@ defmodule Sanctum.RequestLog do
 
   @doc """
   The caller's athanor's request-log rows, newest first
-  (`Arca.McpLog.list/1`, whose filters `opts` carries: `:limit`,
-  `:user_id`, `:status`, `:request_id`, `:tool` and `:since`). The
-  athanor is the context's, set over any `:athanor_id` the options name.
-  A context with no athanor is `{:error, :no_athanor}` before any row is
-  read, whatever its scope.
+  (`Arca.McpLog.list/2`, whose filters `opts` carries: `:limit`,
+  `:user_id`, `:status`, `:request_id`, `:tool` and `:since`), read under
+  the context's actor. The athanor is the context's; an `:athanor_id`
+  among the options names nothing. A context with no athanor is
+  `{:error, :no_athanor}` before any row is read, whatever its scope.
   """
   @spec list(Context.t(), keyword()) ::
           {:ok, [map()]} | {:error, :no_athanor | :database_error}
-  def list(%Context{athanor_id: athanor_id}, opts)
-      when is_binary(athanor_id) and athanor_id != "" and is_list(opts),
-      do: Arca.McpLog.list(Keyword.put(opts, :athanor_id, athanor_id))
-
-  def list(%Context{}, opts) when is_list(opts), do: {:error, :no_athanor}
+  def list(%Context{} = ctx, opts) when is_list(opts),
+    do: Arca.McpLog.list(Context.actor(ctx), opts)
 
   @doc """
   The completion columns of a call's row: `"success"` with its sanitized

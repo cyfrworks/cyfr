@@ -15,11 +15,12 @@ defmodule PrismWeb.ActivitiesLive do
   logs), the fan-out counts are the request's, and `?id=req_…` focuses
   the request.
 
-  The decisions and the request-log rows are security rows, read through
-  Sanctum under the caller's context (`Sanctum.Decisions.list/2` and
-  `correlate/2`, `Sanctum.RequestLog.list/2`); the executions and policy
-  logs through the storage facades directly under the caller's actor.
-  Every read is held to the freshness rule first
+  The decisions, the request-log rows and the policy logs are security
+  rows, read through Sanctum under the caller's context
+  (`Sanctum.Decisions.list/2` and `correlate/2`, `Sanctum.RequestLog.list/2`,
+  `Sanctum.PolicyLog.list/2`); the executions through execution's own
+  reads under the same context (`Opus.list_by_request/3`,
+  `Opus.count_by_request/2`). Every read is held to the freshness rule first
   (`CyfrWeb.ContextGuard.check/1`), and none of them is an operation.
   `ExecutionsLive` at `/executions` groups activity by execution for run
   inspection and control.
@@ -224,7 +225,7 @@ defmodule PrismWeb.ActivitiesLive do
       socket
       |> assign(:decisions, decisions)
       |> assign(:leaders, leaders(decisions))
-      |> assign(:fan_outs, build_fan_outs(Sanctum.Context.actor(ctx), decisions))
+      |> assign(:fan_outs, build_fan_outs(ctx, decisions))
       |> assign(:loading, false)
       |> assign(:error, nil)
     else
@@ -269,35 +270,33 @@ defmodule PrismWeb.ActivitiesLive do
   defp correlate(socket, request_id) do
     with {:ok, ctx} <- reader(socket),
          {:ok, decisions} <- Sanctum.Decisions.correlate(ctx, request_id) do
-      actor = Sanctum.Context.actor(ctx)
-      scope = [request_id: request_id, limit: 100, athanor_id: actor.athanor_id]
+      scope = [request_id: request_id, limit: 100]
 
       {:ok,
        %{
          request_id: request_id,
          decisions: Enum.map(decisions, &Map.from_struct/1),
          mcp_logs: leg(Sanctum.RequestLog.list(ctx, scope)),
-         executions: leg(Arca.Execution.list_by_request(actor, request_id)),
-         policy_logs: leg(Arca.PolicyLog.list(scope))
+         executions: leg(Opus.list_by_request(ctx, request_id, 100)),
+         policy_logs: leg(Sanctum.PolicyLog.list(ctx, scope))
        }}
     end
   end
 
   defp leg({:ok, rows}) when is_list(rows), do: rows
-  defp leg(rows) when is_list(rows), do: rows
   defp leg({:error, _reason}), do: []
 
   # Fan-out count per request_id: how many executions share this request's
   # id? One GROUP BY, scoped to the current page's requests.
-  defp build_fan_outs(actor, decisions) do
+  defp build_fan_outs(ctx, decisions) do
     ids =
       decisions
       |> Enum.map(& &1.request_id)
       |> Enum.reject(&is_nil/1)
       |> Enum.uniq()
 
-    case ids != [] && Arca.Execution.count_by_request(actor, ids) do
-      counts when is_map(counts) -> counts
+    case ids != [] && Opus.count_by_request(ctx, ids) do
+      {:ok, counts} -> counts
       _ -> %{}
     end
   end

@@ -11,8 +11,9 @@ defmodule Sanctum.Providers.McpLog do
   call with the caller's full context and hands these handlers the
   `Prima.Actor` it projects, and nothing else. What remains here is the
   residual the annotations cannot express: the log is tenant-scoped, so an
-  actor with no athanor is refused before any row is read (an actor of
-  `:platform` scope reads across athanors and is not).
+  actor with no athanor is refused before any row is read. An actor of
+  `:platform` scope passes that check, and each store's reader decides what
+  it reads: `list` and `stats` read one athanor's rows, the actor's.
 
   `correlate` answers what a request left behind: its request-log rows,
   the executions it started and its policy logs (`correlation/2`, which
@@ -24,7 +25,7 @@ defmodule Sanctum.Providers.McpLog do
 
   require Logger
 
-  alias Sanctum.Providers.Decision
+  alias Sanctum.Providers.{Decision, PolicyLog}
 
   @impl true
   def service, do: "sanctum"
@@ -147,19 +148,17 @@ defmodule Sanctum.Providers.McpLog do
   def handle("mcp_log", %Prima.Actor{} = actor, %{"action" => "list"} = args) do
     with :ok <- tenant_ok(actor) do
       opts =
-        [
-          limit: min(args["limit"] || 20, 1000),
-          athanor_id: actor.athanor_id
-        ]
+        [limit: min(args["limit"] || 20, 1000)]
         |> maybe_put(:user_id, args["user_id"])
         |> maybe_put(:status, args["status"])
         |> maybe_put(:request_id, args["request_id"])
         |> maybe_put(:tool, args["tool"])
 
       with {:ok, opts} <- since_opt(opts, args["since"]),
-           {:ok, records} <- Arca.McpLog.list(opts) do
+           {:ok, records} <- Arca.McpLog.list(actor, opts) do
         {:ok, %{logs: Enum.map(records, &mcp_log_to_map/1)}}
       else
+        {:error, :no_athanor} -> {:error, :missing_tenant}
         {:error, :database_error} -> {:error, {:unavailable, "Storage"}}
         {:error, _} = err -> err
       end
@@ -217,9 +216,7 @@ defmodule Sanctum.Providers.McpLog do
 
       since = DateTime.utc_now() |> DateTime.add(-since_hours * 3600, :second)
 
-      opts = [since: since, athanor_id: actor.athanor_id]
-
-      case Arca.McpLog.stats(opts) do
+      case Arca.McpLog.stats(actor, since: since) do
         {:ok, stats} ->
           {:ok,
            %{
@@ -233,6 +230,9 @@ defmodule Sanctum.Providers.McpLog do
                  else: 0.0
                )
            }}
+
+        {:error, :no_athanor} ->
+          {:error, :missing_tenant}
 
         {:error, :database_error} ->
           {:error, {:unavailable, "Storage"}}
@@ -253,12 +253,12 @@ defmodule Sanctum.Providers.McpLog do
   @doc false
   # What a request left behind besides its decisions, joined best-effort:
   # a storage outage on one leg leaves that leg empty rather than raising
-  # on the error tuple. The executions and policy logs are rendered by the
-  # records door, which owns their projections.
+  # on the error tuple. The executions are rendered by the records door and
+  # the policy logs by the policy log's, each the owner of its projection.
   @spec correlation(Prima.Actor.t(), String.t()) :: map()
   def correlation(%Prima.Actor{} = actor, request_id) do
     mcp_logs =
-      case Arca.McpLog.list(request_id: request_id, limit: 100, athanor_id: actor.athanor_id) do
+      case Arca.McpLog.list(actor, request_id: request_id, limit: 100) do
         {:ok, rows} -> Enum.map(rows, &mcp_log_to_map/1)
         {:error, _} -> []
       end
@@ -270,8 +270,8 @@ defmodule Sanctum.Providers.McpLog do
       end
 
     policy_logs =
-      case Arca.PolicyLog.list(request_id: request_id, limit: 100, athanor_id: actor.athanor_id) do
-        {:ok, rows} -> Enum.map(rows, &Arca.Providers.Records.policy_log_to_map/1)
+      case Arca.PolicyLog.list(actor, request_id: request_id, limit: 100) do
+        {:ok, rows} -> Enum.map(rows, &PolicyLog.policy_log_to_map/1)
         {:error, _} -> []
       end
 

@@ -50,8 +50,9 @@ defmodule Locus.Runtime.HttpHandlerEnforcementTest do
   end
 
   defp rows_for(attempt) do
-    [athanor_id: attempt.athanor_id, limit: 50]
-    |> Arca.PolicyLog.list()
+    attempt.athanor_id
+    |> Prima.Actor.in_athanor()
+    |> Arca.PolicyLog.list(limit: 50)
     |> then(fn {:ok, rows} -> rows end)
     |> Enum.filter(&(&1.component_ref == attempt.component_ref))
   end

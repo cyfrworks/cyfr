@@ -21,7 +21,10 @@ defmodule Arca.McpLog do
   def statuses, do: Row.statuses()
 
   @doc """
-  Lists recent MCP logs with optional filters.
+  The actor's athanor's MCP logs, newest first, with optional filters.
+  The athanor is the actor's: an `:athanor_id` among the options names
+  nothing. An actor with no athanor is `{:error, :no_athanor}` before any
+  row is read, whatever its scope.
 
   Options:
   - `:limit` - Maximum records to return (default: 20)
@@ -31,20 +34,23 @@ defmodule Arca.McpLog do
   - `:tool` - Filter by tool name
   - `:since` - Filter logs after this DateTime
   """
-  @spec list(keyword()) :: {:ok, [map()]} | {:error, :database_error}
-  def list(opts) do
-    Arca.Repo.Errors.with_db_rescue("McpLog.list", fn -> {:ok, do_list(opts)} end)
+  @spec list(Prima.Actor.t(), keyword()) ::
+          {:ok, [map()]} | {:error, :no_athanor | :database_error}
+  def list(%Prima.Actor{athanor_id: athanor_id}, opts)
+      when is_binary(athanor_id) and athanor_id != "" and is_list(opts) do
+    Arca.Repo.Errors.with_db_rescue("McpLog.list", fn -> {:ok, do_list(athanor_id, opts)} end)
     |> Arca.Data.project()
   end
 
-  defp do_list(opts) do
+  def list(%Prima.Actor{}, opts) when is_list(opts), do: {:error, :no_athanor}
+
+  defp do_list(athanor_id, opts) do
     limit = Keyword.get(opts, :limit, 20)
     user_id = Keyword.get(opts, :user_id)
     status = Keyword.get(opts, :status)
     request_id = Keyword.get(opts, :request_id)
     tool = Keyword.get(opts, :tool)
     since = Keyword.get(opts, :since)
-    athanor_id = Keyword.fetch!(opts, :athanor_id)
 
     query =
       from(l in Row,
@@ -121,7 +127,10 @@ defmodule Arca.McpLog do
   end
 
   @doc """
-  Aggregates log statistics for logs since the given datetime.
+  Aggregates the actor's athanor's log statistics. The athanor is the
+  actor's: an `:athanor_id` among the options names nothing. An actor with
+  no athanor is `{:error, :no_athanor}` before any row is read, whatever
+  its scope.
 
   Options:
   - `:since` - Only include logs after this DateTime
@@ -129,14 +138,14 @@ defmodule Arca.McpLog do
 
   Returns a map with `:total`, `:errors`, and `:avg_duration_ms`.
   """
-  @spec stats(keyword()) ::
+  @spec stats(Prima.Actor.t(), keyword()) ::
           {:ok, %{total: non_neg_integer(), errors: non_neg_integer(), avg_duration_ms: number()}}
-          | {:error, :database_error}
-  def stats(opts) do
+          | {:error, :no_athanor | :database_error}
+  def stats(%Prima.Actor{athanor_id: athanor_id}, opts)
+      when is_binary(athanor_id) and athanor_id != "" and is_list(opts) do
     Arca.Repo.Errors.with_db_rescue("McpLog.stats", fn ->
       since = Keyword.get(opts, :since)
       user_id = Keyword.get(opts, :user_id)
-      athanor_id = Keyword.fetch!(opts, :athanor_id)
 
       query = Arca.QueryHelpers.where_athanor(Row, athanor_id)
 
@@ -164,6 +173,8 @@ defmodule Arca.McpLog do
        %{total: row.total, errors: normalize_count(row.errors), avg_duration_ms: avg_duration}}
     end)
   end
+
+  def stats(%Prima.Actor{}, opts) when is_list(opts), do: {:error, :no_athanor}
 
   defp normalize_count(nil), do: 0
   defp normalize_count(%Decimal{} = d), do: Decimal.to_integer(d)

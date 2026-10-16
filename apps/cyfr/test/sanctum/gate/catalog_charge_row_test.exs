@@ -176,7 +176,7 @@ defmodule Sanctum.Gate.CatalogChargeRowTest do
     assert {:error, %Prima.Refusal{stage: :admission}} = call(ctx, auth, charge, lineage)
 
     {:ok, rows} =
-      Arca.McpLog.list(request_id: ctx.request_id, athanor_id: @athanor, limit: 100)
+      Arca.McpLog.list(Prima.Actor.in_athanor(@athanor), request_id: ctx.request_id, limit: 100)
 
     assert [%{tool: "tincture_visibility", status: status}] = rows
     refute status == "success"

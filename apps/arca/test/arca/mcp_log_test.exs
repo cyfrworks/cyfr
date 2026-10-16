@@ -68,7 +68,7 @@ defmodule Arca.McpLogTest do
     end
   end
 
-  describe "list/1" do
+  describe "list/2" do
     test "returns logs ordered by timestamp desc" do
       t1 = DateTime.add(DateTime.utc_now(), -60, :second)
       t2 = DateTime.utc_now()
@@ -76,7 +76,7 @@ defmodule Arca.McpLogTest do
       {:ok, _} = seed(log_attrs(%{id: "req_l1", timestamp: t1}))
       {:ok, _} = seed(log_attrs(%{id: "req_l2", timestamp: t2}))
 
-      {:ok, logs} = McpLog.list(athanor_id: "ath_test")
+      {:ok, logs} = McpLog.list(Prima.Actor.in_athanor("ath_test"), [])
       ids = Enum.map(logs, & &1.id)
       assert "req_l2" in ids
       assert "req_l1" in ids
@@ -89,7 +89,7 @@ defmodule Arca.McpLogTest do
       {:ok, _} = seed(log_attrs(%{id: "req_fu1", user_id: "alice"}))
       {:ok, _} = seed(log_attrs(%{id: "req_fu2", user_id: "bob"}))
 
-      {:ok, logs} = McpLog.list(athanor_id: "ath_test", user_id: "alice")
+      {:ok, logs} = McpLog.list(Prima.Actor.in_athanor("ath_test"), user_id: "alice")
       assert Enum.all?(logs, &(&1.user_id == "alice"))
     end
 
@@ -97,7 +97,7 @@ defmodule Arca.McpLogTest do
       {:ok, _} = seed(log_attrs(%{id: "req_fs1", status: "success"}))
       {:ok, _} = seed(log_attrs(%{id: "req_fs2", status: "error"}))
 
-      {:ok, logs} = McpLog.list(athanor_id: "ath_test", status: "error")
+      {:ok, logs} = McpLog.list(Prima.Actor.in_athanor("ath_test"), status: "error")
       assert logs != []
       assert Enum.all?(logs, &(&1.status == "error"))
     end
@@ -109,7 +109,7 @@ defmodule Arca.McpLogTest do
       {:ok, _} = seed(log_attrs(%{id: "call_a1", request_id: "req_root_a"}))
       {:ok, _} = seed(log_attrs(%{id: "req_root_b", request_id: "req_root_b"}))
 
-      {:ok, logs} = McpLog.list(athanor_id: "ath_test", request_id: "req_root_a")
+      {:ok, logs} = McpLog.list(Prima.Actor.in_athanor("ath_test"), request_id: "req_root_a")
       assert logs != []
       assert length(logs) == 2
       assert Enum.all?(logs, &(&1.request_id == "req_root_a"))
@@ -120,7 +120,7 @@ defmodule Arca.McpLogTest do
       {:ok, _} = seed(log_attrs(%{id: "req_ft1", tool: "storage"}))
       {:ok, _} = seed(log_attrs(%{id: "req_ft2", tool: "execution"}))
 
-      {:ok, logs} = McpLog.list(athanor_id: "ath_test", tool: "storage")
+      {:ok, logs} = McpLog.list(Prima.Actor.in_athanor("ath_test"), tool: "storage")
       assert logs != []
       assert Enum.all?(logs, &(&1.tool == "storage"))
     end
@@ -131,7 +131,7 @@ defmodule Arca.McpLogTest do
       {:ok, _} = seed(log_attrs(%{id: "req_since2", timestamp: DateTime.utc_now()}))
 
       cutoff = DateTime.add(DateTime.utc_now(), -60, :second)
-      {:ok, logs} = McpLog.list(athanor_id: "ath_test", since: cutoff)
+      {:ok, logs} = McpLog.list(Prima.Actor.in_athanor("ath_test"), since: cutoff)
       ids = Enum.map(logs, & &1.id)
       assert "req_since2" in ids
       refute "req_since1" in ids
@@ -142,7 +142,7 @@ defmodule Arca.McpLogTest do
         {:ok, _} = seed(log_attrs(%{id: "req_lim_#{i}"}))
       end
 
-      {:ok, logs} = McpLog.list(athanor_id: "ath_test", limit: 2)
+      {:ok, logs} = McpLog.list(Prima.Actor.in_athanor("ath_test"), limit: 2)
       assert length(logs) <= 2
     end
   end
@@ -225,13 +225,13 @@ defmodule Arca.McpLogTest do
     end
   end
 
-  describe "stats/1" do
+  describe "stats/2" do
     test "returns aggregated stats" do
       {:ok, _} = seed(log_attrs(%{id: "req_st1", status: "success", duration_ms: 100}))
       {:ok, _} = seed(log_attrs(%{id: "req_st2", status: "success", duration_ms: 200}))
       {:ok, _} = seed(log_attrs(%{id: "req_st3", status: "error", duration_ms: 50}))
 
-      {:ok, stats} = McpLog.stats(athanor_id: "ath_test")
+      {:ok, stats} = McpLog.stats(Prima.Actor.in_athanor("ath_test"), [])
       assert stats.total >= 3
       assert stats.errors >= 1
       assert is_integer(stats.avg_duration_ms)
@@ -247,14 +247,31 @@ defmodule Arca.McpLogTest do
         seed(log_attrs(%{id: "req_sts2", timestamp: DateTime.utc_now(), status: "success"}))
 
       cutoff = DateTime.add(DateTime.utc_now(), -60, :second)
-      {:ok, stats} = McpLog.stats(athanor_id: "ath_test", since: cutoff)
+      {:ok, stats} = McpLog.stats(Prima.Actor.in_athanor("ath_test"), since: cutoff)
       # Only recent log should be counted
       assert stats.total >= 1
+    end
+
+    test "the athanor is the actor's, and an actor with no athanor is refused" do
+      {:ok, _} = seed(log_attrs(%{id: "req_sto_a", athanor_id: "ath_a"}))
+      {:ok, _} = seed(log_attrs(%{id: "req_sto_b", athanor_id: "ath_b"}))
+
+      actor_a = Arca.Test.Actor.local(athanor_id: "ath_a")
+
+      assert {:ok, %{total: 1}} = McpLog.stats(actor_a, athanor_id: "ath_b")
+      assert {:ok, [%{id: "req_sto_a"}]} = McpLog.list(actor_a, athanor_id: "ath_b", limit: 100)
+
+      platform = Arca.Test.Actor.platform(user_id: "admin")
+      assert McpLog.stats(platform, []) == {:error, :no_athanor}
+      assert McpLog.list(platform, []) == {:error, :no_athanor}
+
+      assert McpLog.list(%Prima.Actor{athanor_id: "", scope: :athanor}, []) ==
+               {:error, :no_athanor}
     end
   end
 
   describe "tenant isolation" do
-    test "list/1 only returns logs from the specified tenant" do
+    test "list/2 only returns logs from the actor's athanor" do
       actor_a = Arca.Test.Actor.local(athanor_id: "ath_a", user_id: "user_a")
       actor_b = Arca.Test.Actor.local(athanor_id: "ath_b", user_id: "user_b")
 
@@ -264,8 +281,8 @@ defmodule Arca.McpLogTest do
       {:ok, _} =
         seed(log_attrs(%{id: "req_iso_b", athanor_id: actor_b.athanor_id}))
 
-      {:ok, logs_a} = McpLog.list(athanor_id: actor_a.athanor_id)
-      {:ok, logs_b} = McpLog.list(athanor_id: actor_b.athanor_id)
+      {:ok, logs_a} = McpLog.list(actor_a, [])
+      {:ok, logs_b} = McpLog.list(actor_b, [])
 
       ids_a = Enum.map(logs_a, & &1.id)
       ids_b = Enum.map(logs_b, & &1.id)
@@ -276,7 +293,7 @@ defmodule Arca.McpLogTest do
       refute "req_iso_a" in ids_b
     end
 
-    test "stats/1 respects tenant boundaries" do
+    test "stats/2 respects tenant boundaries" do
       actor_a = Arca.Test.Actor.local(athanor_id: "ath_a", user_id: "user_a")
       actor_b = Arca.Test.Actor.local(athanor_id: "ath_b", user_id: "user_b")
 
@@ -298,8 +315,8 @@ defmodule Arca.McpLogTest do
           })
         )
 
-      {:ok, stats_a} = McpLog.stats(athanor_id: actor_a.athanor_id)
-      {:ok, stats_b} = McpLog.stats(athanor_id: actor_b.athanor_id)
+      {:ok, stats_a} = McpLog.stats(actor_a, [])
+      {:ok, stats_b} = McpLog.stats(actor_b, [])
 
       assert stats_a.errors >= 1
       assert stats_b.errors == 0

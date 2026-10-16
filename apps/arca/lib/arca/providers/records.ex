@@ -3,13 +3,12 @@
 
 defmodule Arca.Providers.Records do
   @moduledoc """
-  The record tools — `record` and `policy_log` — over what Arca persists
-  about executions and policy consultations, the `retention` tool over
-  what the athanor keeps of them, and the reader behind the
-  `arca://files/{path}` resource. The decision record and the request log
-  are security rows, read through Sanctum's own tools; their correlation
-  renders a request's executions and policy logs through this door's two
-  projections (`execution_to_map/1`, `policy_log_to_map/1`).
+  The `record` tool over what Arca persists about executions, the
+  `retention` tool over what the athanor keeps of its records, and the
+  reader behind the `arca://files/{path}` resource. The decision record,
+  the request log and the policy log are security rows, read through
+  Sanctum's own tools; their correlation renders a request's executions
+  through this door's projection (`execution_to_map/1`).
 
   The provider declares `context_kind: :actor`: the gate authorizes every
   call with the caller's full context and hands these handlers the
@@ -112,45 +111,6 @@ defmodule Arca.Providers.Records do
         ],
         description: "Query execution records - get or list executions",
         title: "Execution Records"
-      ),
-      Operation.tool(
-        [
-          Operation.new(
-            "policy_log",
-            "list",
-            "List policy log",
-            [
-              Arg.new("request_id", :string, description: "Filter by request ID"),
-              Arg.new("execution_id", :string, description: "Filter by execution ID"),
-              Arg.new("user_id", :string, description: "Filter by user ID"),
-              Arg.new("event_type", :string, description: "Filter by event type"),
-              Arg.new("limit", :integer, description: "Max results (default: 20)")
-            ],
-            kind: :read,
-            planes: [:external],
-            permission: :storage_read
-          ),
-          Operation.new(
-            "policy_log",
-            "get",
-            "Get policy log",
-            [Arg.new("id", :string, required: true, description: "Policy log ID")],
-            kind: :read,
-            planes: [:external],
-            permission: :storage_read
-          ),
-          Operation.new(
-            "policy_log",
-            "correlate",
-            "Correlate policy log",
-            [Arg.new("request_id", :string, required: true, description: "Filter by request ID")],
-            kind: :read,
-            planes: [:external],
-            permission: :storage_read
-          )
-        ],
-        description: "Query policy consultation logs - list, get, or correlate logs",
-        title: "Policy Logs"
       ),
       retention_tool()
     ]
@@ -318,79 +278,6 @@ defmodule Arca.Providers.Records do
 
   def handle("record", %Prima.Actor{}, _args) do
     {:error, Prima.Provider.invalid_action("record", action_enum("record"))}
-  end
-
-  # ============================================================================
-  # Policy Log Tool
-  # ============================================================================
-
-  def handle("policy_log", %Prima.Actor{} = actor, %{"action" => "get", "id" => id}) do
-    with :ok <- tenant_ok(actor) do
-      record =
-        Arca.PolicyLog.get_tenant(actor, id) ||
-          Arca.PolicyLog.get_by_request_id_tenant(actor, id)
-
-      case record do
-        nil ->
-          {:error, {:not_found, "Policy log", id}}
-
-        record ->
-          {:ok, policy_log_to_map(record)}
-      end
-    end
-  end
-
-  def handle("policy_log", %Prima.Actor{}, %{"action" => "get"}) do
-    {:error, {:invalid_argument, "Missing required argument: id"}}
-  end
-
-  def handle("policy_log", %Prima.Actor{} = actor, %{"action" => "list"} = args) do
-    with :ok <- tenant_ok(actor) do
-      opts =
-        [
-          limit: min(args["limit"] || 20, 1000),
-          athanor_id: actor.athanor_id
-        ]
-        |> maybe_put(:user_id, args["user_id"])
-        |> maybe_put(:request_id, args["request_id"])
-        |> maybe_put(:execution_id, args["execution_id"])
-        |> maybe_put(:event_type, args["event_type"])
-
-      case Arca.PolicyLog.list(opts) do
-        {:ok, records} -> {:ok, %{logs: Enum.map(records, &policy_log_to_map/1)}}
-        {:error, :database_error} -> {:error, {:unavailable, "Storage"}}
-      end
-    end
-  end
-
-  def handle("policy_log", %Prima.Actor{} = actor, %{
-        "action" => "correlate",
-        "request_id" => request_id
-      }) do
-    with :ok <- tenant_ok(actor) do
-      opts =
-        [
-          request_id: request_id,
-          limit: 100,
-          athanor_id: actor.athanor_id
-        ]
-
-      policy_logs =
-        case Arca.PolicyLog.list(opts) do
-          {:ok, rows} -> Enum.map(rows, &policy_log_to_map/1)
-          {:error, _} -> []
-        end
-
-      {:ok, %{request_id: request_id, policy_logs: policy_logs}}
-    end
-  end
-
-  def handle("policy_log", %Prima.Actor{}, %{"action" => "correlate"}) do
-    {:error, {:invalid_argument, "Missing required argument: request_id"}}
-  end
-
-  def handle("policy_log", %Prima.Actor{}, _args) do
-    {:error, Prima.Provider.invalid_action("policy_log", action_enum("policy_log"))}
   end
 
   # ============================================================================
@@ -625,26 +512,6 @@ defmodule Arca.Providers.Records do
   end
 
   defp format_datetime(value), do: Prima.Time.iso8601(value)
-
-  @doc false
-  # A policy log as the wire carries it. The request log's correlation
-  # renders a request's policy logs through it.
-  @spec policy_log_to_map(map()) :: map()
-  def policy_log_to_map(%{id: _} = log) do
-    %{
-      id: log.id,
-      request_id: log.request_id,
-      execution_id: log.execution_id,
-      user_id: log.user_id,
-      timestamp: format_datetime(log.timestamp),
-      event_type: log.event_type,
-      component_ref: log.component_ref,
-      component_type: log.component_type,
-      decision: log.decision,
-      host_policy_snapshot: decode_json(log.host_policy_snapshot, "host_policy_snapshot"),
-      decision_reason: log.decision_reason
-    }
-  end
 
   defp decode_json(nil, _field), do: nil
 

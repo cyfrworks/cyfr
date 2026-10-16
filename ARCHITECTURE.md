@@ -199,8 +199,6 @@ Dispatch stays in the control plane: Opus decides what runs, Compendium what bui
 | A surface reading | Domain facades, or the foundation reads the boundary catalog rosters for that surface, under the caller's context | Never a security row; never a bridge that exposes a facade to a frame |
 | A trust island and the control plane | A signed, versioned protocol whose shapes live in Prima | One vector file per protocol, tested on every side |
 
-*Not built yet:* the roster of each surface's foundation reads (§12).
-
 Foundations below Host emit telemetry; Host's bridge is the one place telemetry becomes a bus message.
 
 ### 4.2 The four ports
@@ -477,7 +475,7 @@ Memory is an assistant capability, `Aqua.Memory`, not a process the person tends
 
 - **Compilation.** Layer edges are Mix dependencies and Boundary declarations, so a forbidden edge fails to compile. Sanctum's lack of Ecto is enforced the same way.
 - **`Cyfr.Boundaries`** holds the rows the compiler cannot express, each with its reason: narrower allow lists, cross-application reaches, the security-read seam, the admission entries, the bus, configuration, settings, route and port rosters, and the marker groups.
-- **Seam tests** hold actor-first arguments, including keyword or map tenants, the unscoped and bypass markers, roster membership, the surface reads each surface may make, Sanctum-only security storage, refusal rendering, the rule that no frame reaches a facade, and the rule that no sandbox token, CSP directive or served file type is written outside the tincture rules. *Not built yet:* the keyword-tenant seam and the surface-read roster; a tenant passed by keyword or in a map escapes the actor-first seam, and a surface's foundation reads are unrostered.
+- **Seam tests** hold actor-first arguments, including keyword or map tenants, the unscoped and bypass markers, roster membership, the surface reads each surface may make, Sanctum-only security storage, refusal rendering, the rule that no frame reaches a facade, and the rule that no sandbox token, CSP directive or served file type is written outside the tincture rules.
 - **Drift tests** compare every derived view with its owner: the CLI catalog, discovery, telemetry rosters, protocol vectors in every language, environment variables against the shipped examples, the image and compose files against the Locus role table, the configuration guide against the settings roster, the guides' tables, the route map and the glossary.
 - **Containment suites** run the shipped image in each of its roles: runner isolation, memory and network, builder and backend isolation, and the credential canary.
 

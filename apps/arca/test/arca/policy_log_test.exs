@@ -44,7 +44,7 @@ defmodule Arca.PolicyLogTest do
     end
   end
 
-  describe "list/1" do
+  describe "list/2" do
     test "returns logs ordered by timestamp desc" do
       t1 = DateTime.add(DateTime.utc_now(), -60, :second)
       t2 = DateTime.utc_now()
@@ -52,7 +52,7 @@ defmodule Arca.PolicyLogTest do
       {:ok, _} = PolicyLog.record(log_attrs(%{id: "pl_list_1", timestamp: t1}))
       {:ok, _} = PolicyLog.record(log_attrs(%{id: "pl_list_2", timestamp: t2}))
 
-      {:ok, logs} = PolicyLog.list(athanor_id: "ath_test")
+      {:ok, logs} = PolicyLog.list(Prima.Actor.in_athanor("ath_test"), [])
       ids = Enum.map(logs, & &1.id)
       assert "pl_list_2" in ids
       assert "pl_list_1" in ids
@@ -66,7 +66,7 @@ defmodule Arca.PolicyLogTest do
       {:ok, _} = PolicyLog.record(log_attrs(%{id: "pl_u1", user_id: "alice"}))
       {:ok, _} = PolicyLog.record(log_attrs(%{id: "pl_u2", user_id: "bob"}))
 
-      {:ok, logs} = PolicyLog.list(athanor_id: "ath_test", user_id: "alice")
+      {:ok, logs} = PolicyLog.list(Prima.Actor.in_athanor("ath_test"), user_id: "alice")
       assert Enum.all?(logs, &(&1.user_id == "alice"))
     end
 
@@ -74,7 +74,7 @@ defmodule Arca.PolicyLogTest do
       {:ok, _} = PolicyLog.record(log_attrs(%{id: "pl_r1", request_id: "req_123"}))
       {:ok, _} = PolicyLog.record(log_attrs(%{id: "pl_r2", request_id: "req_456"}))
 
-      {:ok, logs} = PolicyLog.list(athanor_id: "ath_test", request_id: "req_123")
+      {:ok, logs} = PolicyLog.list(Prima.Actor.in_athanor("ath_test"), request_id: "req_123")
       assert logs != []
       assert Enum.all?(logs, &(&1.request_id == "req_123"))
     end
@@ -83,7 +83,7 @@ defmodule Arca.PolicyLogTest do
       {:ok, _} = PolicyLog.record(log_attrs(%{id: "pl_e1", execution_id: "exec_1"}))
       {:ok, _} = PolicyLog.record(log_attrs(%{id: "pl_e2", execution_id: "exec_2"}))
 
-      {:ok, logs} = PolicyLog.list(athanor_id: "ath_test", execution_id: "exec_1")
+      {:ok, logs} = PolicyLog.list(Prima.Actor.in_athanor("ath_test"), execution_id: "exec_1")
       assert logs != []
       assert Enum.all?(logs, &(&1.execution_id == "exec_1"))
     end
@@ -92,7 +92,7 @@ defmodule Arca.PolicyLogTest do
       {:ok, _} = PolicyLog.record(log_attrs(%{id: "pl_et1", event_type: "denied"}))
       {:ok, _} = PolicyLog.record(log_attrs(%{id: "pl_et2", event_type: "violation"}))
 
-      {:ok, logs} = PolicyLog.list(athanor_id: "ath_test", event_type: "denied")
+      {:ok, logs} = PolicyLog.list(Prima.Actor.in_athanor("ath_test"), event_type: "denied")
       assert logs != []
       assert Enum.all?(logs, &(&1.event_type == "denied"))
     end
@@ -102,8 +102,66 @@ defmodule Arca.PolicyLogTest do
         {:ok, _} = PolicyLog.record(log_attrs(%{id: "pl_lim_#{i}"}))
       end
 
-      {:ok, logs} = PolicyLog.list(athanor_id: "ath_test", limit: 2)
+      {:ok, logs} = PolicyLog.list(Prima.Actor.in_athanor("ath_test"), limit: 2)
       assert length(logs) <= 2
+    end
+
+    test "the athanor is the actor's, whatever the options name" do
+      {:ok, _} = PolicyLog.record(log_attrs(%{id: "pl_opt_a", athanor_id: "ath_a"}))
+      {:ok, _} = PolicyLog.record(log_attrs(%{id: "pl_opt_b", athanor_id: "ath_b"}))
+
+      actor_a = Arca.Test.Actor.local(athanor_id: "ath_a")
+
+      {:ok, logs} = PolicyLog.list(actor_a, athanor_id: "ath_b", limit: 100)
+      assert Enum.map(logs, & &1.id) == ["pl_opt_a"]
+    end
+
+    test "an actor with no athanor is refused, whatever its scope" do
+      {:ok, _} = PolicyLog.record(log_attrs(%{id: "pl_none"}))
+
+      assert PolicyLog.list(Arca.Test.Actor.platform(user_id: "admin"), []) ==
+               {:error, :no_athanor}
+
+      assert PolicyLog.list(%Prima.Actor{athanor_id: "", scope: :athanor}, []) ==
+               {:error, :no_athanor}
+
+      # The shape it read before it took the actor, a bare keyword list,
+      # is gone.
+      refute function_exported?(PolicyLog, :list, 1)
+    end
+  end
+
+  describe "delete_before/2 and count_before/2" do
+    test "count and delete only the actor's athanor's rows before the cutoff" do
+      old = DateTime.add(DateTime.utc_now(), -7200, :second)
+
+      {:ok, _} =
+        PolicyLog.record(log_attrs(%{id: "pl_old_a", athanor_id: "ath_a", timestamp: old}))
+
+      {:ok, _} =
+        PolicyLog.record(log_attrs(%{id: "pl_old_b", athanor_id: "ath_b", timestamp: old}))
+
+      {:ok, _} = PolicyLog.record(log_attrs(%{id: "pl_new_a", athanor_id: "ath_a"}))
+
+      actor_a = Arca.Test.Actor.local(athanor_id: "ath_a")
+      cutoff = DateTime.add(DateTime.utc_now(), -60, :second)
+
+      assert PolicyLog.count_before(actor_a, cutoff) == {:ok, 1}
+      assert PolicyLog.delete_before(actor_a, cutoff) == {:ok, 1}
+      assert PolicyLog.count_before(actor_a, cutoff) == {:ok, 0}
+
+      platform = Arca.Test.Actor.platform(user_id: "admin")
+      assert is_nil(PolicyLog.get_tenant(platform, "pl_old_a"))
+      assert %{id: "pl_old_b"} = PolicyLog.get_tenant(platform, "pl_old_b")
+      assert %{id: "pl_new_a"} = PolicyLog.get_tenant(platform, "pl_new_a")
+    end
+
+    test "an actor with no athanor matches no head" do
+      cutoff = DateTime.utc_now()
+      platform = Arca.Test.Actor.platform(user_id: "admin")
+
+      assert_raise FunctionClauseError, fn -> PolicyLog.delete_before(platform, cutoff) end
+      assert_raise FunctionClauseError, fn -> PolicyLog.count_before(platform, cutoff) end
     end
   end
 
@@ -172,7 +230,7 @@ defmodule Arca.PolicyLogTest do
   end
 
   describe "tenant isolation" do
-    test "list/1 only returns logs from the specified tenant" do
+    test "list/2 only returns logs from the actor's athanor" do
       actor_a = Arca.Test.Actor.local(athanor_id: "ath_a", user_id: "user_a")
       actor_b = Arca.Test.Actor.local(athanor_id: "ath_b", user_id: "user_b")
 
@@ -182,8 +240,8 @@ defmodule Arca.PolicyLogTest do
       {:ok, _} =
         PolicyLog.record(log_attrs(%{id: "pl_iso_b", athanor_id: actor_b.athanor_id}))
 
-      {:ok, logs_a} = PolicyLog.list(athanor_id: actor_a.athanor_id)
-      {:ok, logs_b} = PolicyLog.list(athanor_id: actor_b.athanor_id)
+      {:ok, logs_a} = PolicyLog.list(actor_a, [])
+      {:ok, logs_b} = PolicyLog.list(actor_b, [])
 
       ids_a = Enum.map(logs_a, & &1.id)
       ids_b = Enum.map(logs_b, & &1.id)

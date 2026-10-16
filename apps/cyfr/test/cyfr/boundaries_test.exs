@@ -170,6 +170,42 @@ defmodule Cyfr.BoundariesTest do
         do: reach
   end
 
+  # Every Arca function a beam (a path or a compiled binary) calls or
+  # captures, as `{caller, callee, function}`: what the surface-read roster
+  # reads. The caller is the beam's own module.
+  defp arca_reaches(beam) do
+    {:ok, {caller, _chunks}} = :beam_lib.chunks(beam, [])
+
+    for {module, function, _arity} <- Beams.reaches(beam),
+        name = inspect(module),
+        name == "Arca" or String.starts_with?(name, "Arca."),
+        uniq: true,
+        do: {inspect(caller), name, function}
+  end
+
+  # The surfaces' production beams, as the surface-read roster reads them: a
+  # beam whose source is a file of the surface trees.
+  defp surface_arca_reaches do
+    sources =
+      for glob <- Boundaries.surface_trees(),
+          path <- SourceTree.files!(Path.join(root(), glob)),
+          into: MapSet.new(),
+          do: path
+
+    for path <- beams(:cyfr),
+        MapSet.member?(sources, beam_source(path)),
+        reach <- arca_reaches(String.to_charlist(path)),
+        uniq: true,
+        do: reach
+  end
+
+  defp beam_source(path) do
+    {:ok, {_module, [compile_info: info]}} =
+      :beam_lib.chunks(String.to_charlist(path), [:compile_info])
+
+    info |> Keyword.get(:source, ~c"") |> to_string()
+  end
+
   # ---------------------------------------------------------------------------
   # The scans read
   # ---------------------------------------------------------------------------
@@ -563,9 +599,10 @@ defmodule Cyfr.BoundariesTest do
       assert MapSet.member?(below, "Arca.Members")
       assert MapSet.member?(below, "Arca.DecisionLog")
       assert MapSet.member?(below, "Arca.McpLog")
+      assert MapSet.member?(below, "Arca.PolicyLog")
     end
 
-    test "the security-row roster is exactly the thirty-two stores, each a module" do
+    test "the security-row roster is exactly the thirty-three stores, each a module" do
       assert Enum.sort(Boundaries.sanctum_only_storage()) ==
                Enum.sort(~w(
                  Arca.ConsentStorage Arca.ConsentProofStorage Arca.ProfileStorage
@@ -577,7 +614,7 @@ defmodule Cyfr.BoundariesTest do
                  Arca.DirectoryHeads Arca.DeviceCertificates Arca.DeviceCertifications
                  Arca.PairingInvitations Arca.Passkeys Arca.PendingConfirmations Arca.CarryActions
                  Arca.InstallationClaims Arca.RequestRateWindows Arca.InstanceEntries
-                 Arca.InstanceEntryUsage Arca.DecisionLog Arca.McpLog
+                 Arca.InstanceEntryUsage Arca.DecisionLog Arca.McpLog Arca.PolicyLog
                ))
 
       for name <- Boundaries.sanctum_only_storage() do
@@ -692,6 +729,168 @@ defmodule Cyfr.BoundariesTest do
   # ---------------------------------------------------------------------------
   # 3. The routes
   # ---------------------------------------------------------------------------
+
+  describe "the surface reads" do
+    test "a surface's Arca call is a rostered read, or a rostered write" do
+      reaches = surface_arca_reaches()
+
+      assert length(reaches) > 30,
+             "the surface scan found #{length(reaches)} calls into Arca — it is not reading"
+
+      # The scan sees an aliased call: the thread pane names the store as
+      # `Threads`, and its calls are the store's.
+      assert {"PrismWeb.ThreadPaneLive", "Arca.ThreadStorage", :get} in reaches
+
+      assert {"CyfrWeb.Plugs.WebhookIdempotency", "Arca.WebhookDeliveryStorage", :record} in reaches
+
+      assert Boundaries.surface_read_violations(reaches) == [],
+             """
+             A surface calls a function of the storage layer no row names.
+             Read it through the domain that owns the rows, or add a row to
+             `Cyfr.Boundaries.surface_reads/0` (a read) or `surface_writes/0`
+             (a write) with a line saying why.
+
+             #{Enum.join(Boundaries.surface_read_violations(reaches), "\n")}
+             """
+    end
+
+    test "no surface-read row is stale" do
+      reaches = surface_arca_reaches()
+
+      assert Boundaries.stale_surface_reads(reaches) == [],
+             """
+             A surface-read or surface-write row names a call its surface no
+             longer makes. Remove it: a standing row readmits the call it was
+             written to allow.
+
+             #{Enum.join(Boundaries.stale_surface_reads(reaches), "\n")}
+             """
+    end
+
+    test "a read row names reads alone, and no security store" do
+      assert Boundaries.surface_read_writes(
+               Boundaries.surface_reads(),
+               Boundaries.surface_writes()
+             ) ==
+               []
+
+      # A function whose name says it changes the store is never a read.
+      mutating =
+        ~r/^(put|take|invalidate|delete|record|release|insert|update|upsert|write|create|set|store|remove|purge|clear|mark|append|claim|mint|revoke)/
+
+      for %{from: from, into: into, functions: functions} <- Boundaries.surface_reads(),
+          function <- functions do
+        refute Atom.to_string(function) =~ mutating,
+               "#{from} -> #{into}.#{function} is rostered as a read"
+      end
+
+      for %{from: from, into: into} <- Boundaries.surface_reads() ++ Boundaries.surface_writes() do
+        refute into in Boundaries.sanctum_only_storage(),
+               "#{from} -> #{into}: a security store is Sanctum's to read"
+      end
+    end
+
+    test "every row is one surface's calls of one storage module, with its reason" do
+      sources =
+        for glob <- Boundaries.surface_trees(),
+            path <- SourceTree.files!(Path.join(root(), glob)),
+            into: MapSet.new(),
+            do: path
+
+      rows = Boundaries.surface_reads() ++ Boundaries.surface_writes()
+
+      for roster <- [Boundaries.surface_reads(), Boundaries.surface_writes()] do
+        pairs = Enum.map(roster, &{&1.from, &1.into})
+        assert pairs == Enum.uniq(pairs), "a surface's calls of one module are split over rows"
+      end
+
+      for %{from: from, into: into, functions: functions, reason: reason} = row <- rows do
+        assert Map.keys(row) |> Enum.sort() == [:from, :functions, :into, :reason]
+
+        assert is_binary(reason) and String.length(reason) > 40,
+               "#{from} -> #{into} has no reason"
+
+        assert functions == Enum.sort(Enum.uniq(functions)), "#{from} -> #{into} is not sorted"
+
+        caller = Module.concat([from])
+        assert Code.ensure_loaded?(caller), "#{from} is not a module"
+
+        assert MapSet.member?(sources, to_string(caller.module_info(:compile)[:source])),
+               "#{from} is not a surface module"
+
+        callee = Module.concat([into])
+        assert Code.ensure_loaded?(callee), "#{into} is not a module"
+
+        for function <- functions do
+          assert Enum.any?(callee.__info__(:functions), &(elem(&1, 0) == function)),
+                 "#{into}.#{function} is not a public function"
+        end
+      end
+    end
+
+    test "a planted unrostered call, aliased or not, is reported, and a dropped one is stale" do
+      [{PrismWeb.PlantedSurfaceLive, binary}] =
+        Code.compile_string(~S'''
+        defmodule PrismWeb.PlantedSurfaceLive do
+          alias Arca.ThreadStorage, as: Threads
+
+          def kept(key), do: Arca.Cache.get(key)
+          def taken(key), do: Arca.Cache.take(key)
+          def threads(actor), do: Threads.list(actor)
+          def runs, do: &Arca.Execution.list/1
+          def consultations(actor), do: Arca.PolicyLog.list(actor, [])
+        end
+        ''')
+
+      :code.purge(PrismWeb.PlantedSurfaceLive)
+      :code.delete(PrismWeb.PlantedSurfaceLive)
+
+      # Spoken as the panel, which reads the cache and the thread list and
+      # writes the cache with `put` alone: a `take` it was never rostered for
+      # is reported though its row names a read of the same store, and so is
+      # every store it has no row for.
+      planted =
+        for {_from, into, function} <- arca_reaches(binary),
+            do: {"PrismWeb.AquaPanelLive", into, function}
+
+      assert Boundaries.surface_read_violations(planted) == [
+               "PrismWeb.AquaPanelLive -> Arca.Cache.take",
+               "PrismWeb.AquaPanelLive -> Arca.Execution.list",
+               "PrismWeb.AquaPanelLive -> Arca.PolicyLog.list"
+             ]
+
+      # Under its own name, a planted surface has no row at all, so even the
+      # aliased read is reported.
+      own = arca_reaches(binary)
+
+      assert "PrismWeb.PlantedSurfaceLive -> Arca.ThreadStorage.list" in Boundaries.surface_read_violations(
+               own
+             )
+
+      # The policy log is a security store: a surface that names it is
+      # refused by the security-row seam as well, however it is rostered here.
+      assert Boundaries.surface_violations(security_row_seam(), [
+               {"apps/cyfr/lib/prism_web/live/planted_surface_live.ex", [{"Arca.PolicyLog", 9}]}
+             ]) == ["Arca.PolicyLog"]
+
+      reaches = surface_arca_reaches()
+      dropped = List.delete(reaches, {"PrismWeb.ShellLive", "Arca.Cache", :delete_match})
+
+      assert Boundaries.stale_surface_reads(dropped) == [
+               "PrismWeb.ShellLive -> Arca.Cache.delete_match"
+             ]
+    end
+
+    test "a function rostered as both a read and a write is reported" do
+      reads = [%{into: "Arca.Cache", functions: [:get, :put]}]
+
+      assert Boundaries.surface_read_writes(reads, Boundaries.surface_writes()) == [
+               "Arca.Cache.put"
+             ]
+
+      assert Boundaries.surface_read_writes(reads, []) == []
+    end
+  end
 
   describe "the Sanctum exports" do
     test "the host calls exactly the rostered Sanctum functions" do
@@ -1426,20 +1625,25 @@ defmodule Cyfr.BoundariesTest do
 
       assert Boundaries.surface_violations(row, standing) == ["Arca.Members"]
 
-      # The decision record and the request log are security rows too: the
-      # activity page reads them through Sanctum, never from the stores.
+      # The decision record, the request log and the policy log are security
+      # rows too: the activity page reads them through Sanctum, never from
+      # the stores.
       activity = [
         {"apps/cyfr/lib/prism_web/live/planted_activities_live.ex",
          CodeLines.aliases(~S'''
          defmodule PrismWeb.PlantedActivitiesLive do
+           alias Arca.PolicyLog, as: Consultations
+
            def decisions(actor, opts), do: Arca.DecisionLog.list(actor, opts)
            def chain(actor, request_id), do: Arca.DecisionLog.correlate(actor, request_id)
-           def logs(scope), do: Arca.McpLog.list(scope)
+           def logs(actor, opts), do: Arca.McpLog.list(actor, opts)
+           def policy(actor, opts), do: Consultations.list(actor, opts)
          end
          ''')}
       ]
 
-      assert Boundaries.surface_violations(row, activity) == ["Arca.DecisionLog", "Arca.McpLog"]
+      assert Boundaries.surface_violations(row, activity) ==
+               ["Arca.DecisionLog", "Arca.McpLog", "Arca.PolicyLog"]
 
       for name <- Boundaries.sanctum_only_storage() do
         ["Arca", store] = String.split(name, ".")

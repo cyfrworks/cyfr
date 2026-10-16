@@ -444,7 +444,7 @@ defmodule Locus.Runtime.ModelContractTest do
     # was asked, completed when the call returns; `system.status` is
     # discovery, which is not recorded.
     gated = fn ->
-      {:ok, rows} = Arca.McpLog.list(athanor_id: ctx.athanor_id, limit: 100)
+      {:ok, rows} = Arca.McpLog.list(Prima.Actor.in_athanor(ctx.athanor_id), limit: 100)
       for %{tool: tool} = row <- rows, tool in ["notes", "system"], do: row
     end
 

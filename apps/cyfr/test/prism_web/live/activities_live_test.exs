@@ -8,7 +8,8 @@ defmodule PrismWeb.ActivitiesLiveTest do
   Checks that filter changes update the query string and preserve
   the LiveView session, that the rows are the athanor's admission
   decisions, and that a row is keyed by the request its call belongs to
-  and expands into that request's correlation.
+  and expands into that request's correlation, read in the seated
+  athanor alone.
   """
   use PrismWeb.ConnCase, async: false
 
@@ -103,6 +104,35 @@ defmodule PrismWeb.ActivitiesLiveTest do
     assert html =~ "probe-input"
   end
 
+  test "the expansion shows the request's policy rows and executions, never another athanor's",
+       %{conn: conn} do
+    ctx = athanor_context()
+    decision = decision(ctx, tool: "execution", action: "run")
+    :ok = Sanctum.Decisions.open(ctx, decision, %{input: %{}})
+    _lineage = Cyfr.Test.AttemptFixtures.lineage!(ctx)
+    policy!(ctx.athanor_id, ctx.request_id, "the seated athanor's consultation")
+
+    # Another athanor's executions and policy row under the same request id:
+    # the page reads the seated member's athanor alone.
+    foreign_execution!("ath_other_activities", ctx.request_id)
+    foreign_execution!("ath_other_activities", ctx.request_id)
+    policy!("ath_other_activities", ctx.request_id, "another athanor's consultation")
+
+    {view, _html} = mount_athanor(conn, "/activities")
+
+    # The fan-out count is the seated athanor's one execution, not three.
+    assert has_element?(view, ~s(tr[data-call-id="#{decision.call_id}"] span.font-mono), "1")
+
+    view |> element(~s(tr[phx-value-id="#{ctx.request_id}"])) |> render_click()
+    html = settled_render(view)
+
+    assert html =~ "Executions (1)"
+    assert html =~ "Policy decisions (1)"
+    assert html =~ "the seated athanor&#39;s consultation"
+    refute html =~ "another athanor"
+    refute html =~ "foreign-fixture"
+  end
+
   test "a refusal is a row with its class, and a completion shows how the work ended",
        %{conn: conn} do
     ctx = athanor_context()
@@ -157,6 +187,41 @@ defmodule PrismWeb.ActivitiesLiveTest do
 
     assert html =~ "Decisions (1)"
     assert html =~ decision.call_id
+  end
+
+  # An execution row of another athanor under `request_id`, written as the
+  # store holds it: nobody is seated there to start a run.
+  defp foreign_execution!(athanor_id, request_id) do
+    Arca.Repo.insert!(%Arca.Schemas.Execution{
+      id: Prima.UUID7.execution_id(),
+      reference: "formula:local.foreign-fixture:0.1.0",
+      user_id: "user_foreign",
+      athanor_id: athanor_id,
+      request_id: request_id,
+      started_at: DateTime.utc_now(),
+      status: "running"
+    })
+
+    :ok
+  end
+
+  # One policy consultation row in `athanor_id` under `request_id`.
+  defp policy!(athanor_id, request_id, reason) do
+    {:ok, _row} =
+      Arca.PolicyLog.record(%{
+        id: Prima.UUID7.generate_id("pl"),
+        request_id: request_id,
+        athanor_id: athanor_id,
+        user_id: "user_activities",
+        timestamp: DateTime.utc_now(),
+        event_type: "policy_consultation",
+        component_ref: "formula:local.lineage-fixture:0.1.0",
+        component_type: "formula",
+        decision: "allowed",
+        decision_reason: reason
+      })
+
+    :ok
   end
 
   # A context in the seated athanor under a request of its own.

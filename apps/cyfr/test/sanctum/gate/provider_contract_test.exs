@@ -286,7 +286,8 @@ defmodule Sanctum.Gate.ProviderContractTest do
                Arca.Providers.Files,
                Arca.Providers.Records,
                Sanctum.Providers.Decision,
-               Sanctum.Providers.McpLog
+               Sanctum.Providers.McpLog,
+               Sanctum.Providers.PolicyLog
              ]
 
       assert :ok = Catalog.audit_context_kinds()

@@ -147,7 +147,9 @@ defmodule Arca.DecisionLogTest do
       assert :ok = DecisionLog.append(actor, decision, mcp_log: projection)
 
       assert {:ok, [log]} =
-               Arca.McpLog.list(request_id: decision.request_id, athanor_id: actor.athanor_id)
+               Arca.McpLog.list(Prima.Actor.in_athanor(actor.athanor_id),
+                 request_id: decision.request_id
+               )
 
       assert log.id == decision.call_id
       assert log.athanor_id == actor.athanor_id
@@ -161,7 +163,9 @@ defmodule Arca.DecisionLogTest do
                )
 
       assert {:ok, [%{status: "success", duration_ms: 3}]} =
-               Arca.McpLog.list(request_id: decision.request_id, athanor_id: actor.athanor_id)
+               Arca.McpLog.list(Prima.Actor.in_athanor(actor.athanor_id),
+                 request_id: decision.request_id
+               )
     end
 
     test "a projection needs the actor's athanor" do

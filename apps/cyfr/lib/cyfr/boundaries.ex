@@ -27,7 +27,7 @@ defmodule Cyfr.Boundaries do
   scan that read nothing, because a roster that stops reading passes
   every assertion it makes.
 
-  Five kinds of row, and three registers beside them:
+  Five kinds of row, and five registers beside them:
 
     * `applications/0` — what each umbrella application may depend on, as
       its `mix.exs` declares it, and the layer each module namespace sits
@@ -42,8 +42,10 @@ defmodule Cyfr.Boundaries do
       (`sanctum_only_storage/0`). Beside them, `http_free/0` names the
       domain trees no line of which names an HTTP type, `bus_free/0`
       the bus's own tree, which names no identity, domain or surface
-      module, and `sanctum_exports/0` the identity domain's functions the
-      host application calls, one by one.
+      module, `sanctum_exports/0` the identity domain's functions the
+      host application calls, one by one, and `surface_reads/0` and
+      `surface_writes/0` what each surface calls of the storage layer,
+      function by function, the reads apart from the writes.
     * `route_postures/0` and `public_routes/0` — how every HTTP route is
       authenticated. The posture travels with the route (each route
       provider declares it as route metadata); this catalog
@@ -299,7 +301,7 @@ defmodule Cyfr.Boundaries do
     Arca.DeviceCertificates Arca.DeviceCertifications Arca.PairingInvitations Arca.Passkeys
     Arca.PendingConfirmations Arca.CarryActions Arca.InstallationClaims
     Arca.RequestRateWindows Arca.InstanceEntries Arca.InstanceEntryUsage
-    Arca.DecisionLog Arca.McpLog
+    Arca.DecisionLog Arca.McpLog Arca.PolicyLog
   )
   @security_row_readers ["apps/sanctum/lib", "apps/arca/lib"]
 
@@ -526,9 +528,9 @@ defmodule Cyfr.Boundaries do
       allow: ~w(
         Sanctum.Annotations Sanctum.ApiKey Sanctum.Auth Sanctum.BearerToken Sanctum.Caller
         Sanctum.Catalog Sanctum.ClientIp Sanctum.Consent Sanctum.Context Sanctum.Decisions
-        Sanctum.Door Sanctum.Gate Sanctum.Pairing Sanctum.Passkeys Sanctum.Refusals
-        Sanctum.RequestLog Sanctum.Session Sanctum.SignIn Sanctum.Tenancy Sanctum.TinctureAuth
-        Sanctum.Unauthorized Sanctum.Webhook
+        Sanctum.Door Sanctum.Gate Sanctum.Pairing Sanctum.Passkeys Sanctum.PolicyLog
+        Sanctum.Refusals Sanctum.RequestLog Sanctum.Session Sanctum.SignIn Sanctum.Tenancy
+        Sanctum.TinctureAuth Sanctum.Unauthorized Sanctum.Webhook
       ),
       reason:
         "the console, its browser sign-in (`PrismWeb.AuthController`, which asks the " <>
@@ -566,9 +568,10 @@ defmodule Cyfr.Boundaries do
           "is that page's read of a tool's declared actions and the approval card's " <>
           "decoding of a standing. `Sanctum.Refusals` classifies and renders a refusal " <>
           "for the console's pages and the web tier's answers. " <>
-          "`Sanctum.Decisions` and `Sanctum.RequestLog` are the activity page's reads of " <>
-          "the decision record and the request log under its fresh context " <>
-          "(`PrismWeb.ActivitiesLive`): security rows, read only through Sanctum. " <>
+          "`Sanctum.Decisions`, `Sanctum.RequestLog` and `Sanctum.PolicyLog` are the " <>
+          "activity page's reads of the decision record, the request log and the policy " <>
+          "log under its fresh context (`PrismWeb.ActivitiesLive`): security rows, read " <>
+          "only through Sanctum. " <>
           "`Sanctum.Decisions` is also the decision the identity plug and the console's " <>
           "guard record for a refusal they make before the gate. " <>
           "Boundary's exports are global, and `Sanctum` exports more than this roster to " <>
@@ -1100,8 +1103,8 @@ defmodule Cyfr.Boundaries do
           "person's identity row, keys, attempts and carries, the directory's logs " <>
           "and cached heads, passkeys, pending confirmations, the installation claim, " <>
           "the pre-authentication rate windows, the instance's own entries and " <>
-          "their use counts, and the admission decisions and the request-log rows " <>
-          "that project them " <>
+          "their use counts, the admission decisions and the request-log rows " <>
+          "that project them, and the policy consultation log " <>
           "are security rows. A domain or a surface learns about them only " <>
           "through Sanctum's entries, which scope by the caller's context. Arca holds " <>
           "the rows and Sanctum reads them; no other tree names the stores. " <>
@@ -1261,6 +1264,394 @@ defmodule Cyfr.Boundaries do
       Enum.any?(@bus_free.namespaces, &(module == &1 or String.starts_with?(module, &1 <> ".")))
   end
 
+  # What a surface calls of the storage layer, function by function. A
+  # console page, a console controller or a web-tier plug reads Arca
+  # directly only where a row here names the call and says why; every other
+  # read goes through the domain that owns the rows, and a security row is
+  # Sanctum's whatever this roster says (the security-row surface above).
+  # The compiled beams of the surface trees are the reader: a call a
+  # surface starts making without a row fails, and a row naming a function
+  # its surface no longer calls is reported stale. A read row names reads
+  # alone; a call that changes what the store holds is a write, rostered
+  # beside the reads as an infrastructure exception with its own reason, and
+  # no function is both.
+  @surface_trees [
+    "apps/cyfr/lib/prism/**/*.ex",
+    "apps/cyfr/lib/prism.ex",
+    "apps/cyfr/lib/prism_web/**/*.ex",
+    "apps/cyfr/lib/prism_web.ex",
+    "apps/cyfr/lib/cyfr_web/**/*.ex",
+    "apps/cyfr/lib/cyfr_web.ex"
+  ]
+
+  @surface_reads [
+    %{
+      from: "CyfrWeb.Plugs.ControlPlaneOwnership",
+      into: "Arca.ControlPlane",
+      functions: [:held?],
+      reason:
+        "a member that does not hold its control-plane slot answers no request: the " <>
+          "plug asks whether this member holds the slot right now, which reads the " <>
+          "member's own lease state and no row."
+    },
+    %{
+      from: "CyfrWeb.Plugs.MCPRateLimit",
+      into: "Arca.PlatformSettings",
+      functions: [:effective],
+      reason:
+        "the MCP rate limit's bounds are platform settings, read as they stand " <>
+          "(defaults over the operator's values) on each request; no athanor's row."
+    },
+    %{
+      from: "CyfrWeb.Plugs.WebhookRateLimit",
+      into: "Arca.PlatformSettings",
+      functions: [:effective],
+      reason:
+        "the per-address webhook rate limit is a platform setting, read as it stands " <>
+          "on each delivery; no athanor's row."
+    },
+    %{
+      from: "CyfrWeb.SSE",
+      into: "Arca.PlatformSettings",
+      functions: [:effective],
+      reason:
+        "a stream's lifetime bounds are platform settings, read when the stream " <>
+          "opens; no athanor's row."
+    },
+    %{
+      from: "Prism.TinctureRegistry",
+      into: "Arca",
+      functions: [:get, :list_recursive],
+      reason:
+        "the shell discovers an athanor's tinctures from the files under its " <>
+          "components and reads each manifest, under the caller's actor through the " <>
+          "storage facade's tenant-relative reads."
+    },
+    %{
+      from: "Prism.Tray",
+      into: "Arca.Cache",
+      functions: [:get],
+      reason:
+        "the tray's badges are kept per browser session under a hash of its token; a " <>
+          "read answers the kept badges or a miss, and drops an expired entry as it " <>
+          "finds it, which is the cache's own housekeeping."
+    },
+    %{
+      from: "PrismWeb.AquaPanelLive",
+      into: "Arca.Cache",
+      functions: [:get],
+      reason:
+        "the panel's open state and thread are kept per browser session under a hash " <>
+          "of its token; a read answers them or a miss, and drops an expired entry as " <>
+          "it finds it, which is the cache's own housekeeping."
+    },
+    %{
+      from: "PrismWeb.AquaPanelLive",
+      into: "Arca.ThreadStorage",
+      functions: [:list],
+      reason:
+        "the panel lists the caller's athanor's threads under the caller's actor; the " <>
+          "assistant owns every thread write."
+    },
+    %{
+      from: "PrismWeb.AttachmentController",
+      into: "Arca.ThreadStorage",
+      functions: [:get_message],
+      reason:
+        "an attachment is served for a message the caller's actor can read, found " <>
+          "first under that actor; the assistant owns every thread write."
+    },
+    %{
+      from: "PrismWeb.AttachmentController",
+      into: "Arca",
+      functions: [:serve_to_conn],
+      reason:
+        "the attachment's bytes stream from the storage facade under the caller's " <>
+          "actor, tenant-relative, once its message is found."
+    },
+    %{
+      from: "PrismWeb.ChatLive",
+      into: "Arca.ThreadStorage",
+      functions: [:get, :list],
+      reason:
+        "the chat page lists and opens the focused athanor's threads under its " <>
+          "actor; the assistant owns every thread write."
+    },
+    %{
+      from: "PrismWeb.ChatLive",
+      into: "Arca.ThreadSubscriptionStorage",
+      functions: [:followed],
+      reason:
+        "the chat page marks the threads the person follows, read under the focused " <>
+          "athanor's actor; following is changed through the assistant."
+    },
+    %{
+      from: "PrismWeb.ExecutionsLive",
+      into: "Arca.Execution",
+      functions: [:statuses],
+      reason:
+        "the status filter offers the execution row's status vocabulary, a constant " <>
+          "that reads no row."
+    },
+    %{
+      from: "PrismWeb.FileController",
+      into: "Arca.Files",
+      functions: [:locate],
+      reason:
+        "the download route resolves a console path to the physical segments of a " <>
+          "shown folder under the caller's actor, so only a shown folder serves."
+    },
+    %{
+      from: "PrismWeb.FileController",
+      into: "Arca",
+      functions: [:serve_to_conn],
+      reason:
+        "the located file's bytes stream from the storage facade under the caller's " <>
+          "actor, tenant-relative."
+    },
+    %{
+      from: "PrismWeb.FilesLive",
+      into: "Arca.Files",
+      functions: [:max_write],
+      reason:
+        "the upload control's size bound is the files door's own write bound, a " <>
+          "constant that reads no row, so the page and the door refuse at one size."
+    },
+    %{
+      from: "PrismWeb.LegalAcceptController",
+      into: "Arca.Cache",
+      functions: [:get],
+      reason:
+        "the legal texts a version names are kept for a while once read; a read " <>
+          "answers them or a miss, and drops an expired entry as it finds it, which is " <>
+          "the cache's own housekeeping."
+    },
+    %{
+      from: "PrismWeb.LoginLive",
+      into: "Arca.ControlPlane",
+      functions: [:held?],
+      reason:
+        "a member that does not hold its control-plane slot signs nobody in: the page " <>
+          "asks whether this member holds the slot right now before it starts a flow."
+    },
+    %{
+      from: "PrismWeb.ModelCatalog",
+      into: "Arca.Cache",
+      functions: [:get],
+      reason:
+        "a run's model catalogue is kept per athanor for a while; a read answers it or " <>
+          "a miss, and drops an expired entry as it finds it, which is the cache's own " <>
+          "housekeeping."
+    },
+    %{
+      from: "PrismWeb.ShellLive",
+      into: "Arca.Cache",
+      functions: [:get],
+      reason:
+        "the shell's tincture scan is marked running per athanor so two refreshes " <>
+          "start one scan; a read answers the mark or a miss, and drops an expired mark " <>
+          "as it finds it, which is the cache's own housekeeping."
+    },
+    %{
+      from: "PrismWeb.ShellLive",
+      into: "Arca.Cache.Keys",
+      functions: [:tincture_scan_running],
+      reason:
+        "the scan mark's key is the cache's own spelling for the actor's athanor, so " <>
+          "the shell and the scan name one entry; it reads nothing."
+    },
+    %{
+      from: "PrismWeb.ThreadPaneLive",
+      into: "Arca.Execution",
+      functions: [:get_tenant],
+      reason:
+        "a pending card offers \"for this schedule\" only where its run was started " <>
+          "by one: the pane reads the run's execution row once, under the pane's actor, " <>
+          "for its schedule id alone."
+    },
+    %{
+      from: "PrismWeb.ThreadPaneLive",
+      into: "Arca.ThreadStorage",
+      functions: [:get, :get_message, :latest_messages, :payload, :resolution],
+      reason:
+        "the pane opens a thread and its latest messages under the pane's actor, and " <>
+          "decodes a message's stored payload and resolution with the store's own " <>
+          "projections, which read no row; the assistant owns every thread write."
+    },
+    %{
+      from: "PrismWeb.TopbarLive",
+      into: "Arca.ThreadSubscriptionStorage",
+      functions: [:follows?],
+      reason:
+        "the top bar shows whether the person follows the open thread, read under the " <>
+          "actor; following is changed through the assistant."
+    }
+  ]
+
+  @surface_writes [
+    %{
+      from: "CyfrWeb.Plugs.WebhookIdempotency",
+      into: "Arca.WebhookDeliveryStorage",
+      functions: [:record, :release],
+      reason:
+        "a delivery's idempotency key is claimed before the delivery is admitted and " <>
+          "released when it is not taken up, so a retried delivery runs once: the claim " <>
+          "is the ingress plug's own, keyed by the webhook and the sender's key, and " <>
+          "holds no athanor's data."
+    },
+    %{
+      from: "Prism.Tray",
+      into: "Arca.Cache",
+      functions: [:put],
+      reason:
+        "the tray keeps the badges it computed per browser session, under a hash of " <>
+          "its token, for a bounded time: node-local memory, never a row."
+    },
+    %{
+      from: "PrismWeb.AquaPanelLive",
+      into: "Arca.Cache",
+      functions: [:put],
+      reason:
+        "the panel keeps its open state and thread per browser session, under a hash " <>
+          "of its token, for a bounded time: node-local memory, never a row."
+    },
+    %{
+      from: "PrismWeb.AuthController",
+      into: "Arca.Cache",
+      functions: [:take],
+      reason:
+        "a sign-in ticket the login page left is taken once by the callback that " <>
+          "completes it, so a ticket cannot be replayed: node-local memory, never a row."
+    },
+    %{
+      from: "PrismWeb.LegalAcceptController",
+      into: "Arca.Cache",
+      functions: [:put],
+      reason:
+        "the legal texts a version names are kept once read, for a bounded time: " <>
+          "node-local memory, never a row."
+    },
+    %{
+      from: "PrismWeb.LoginLive",
+      into: "Arca.Cache",
+      functions: [:put],
+      reason:
+        "the login page leaves a single-use ticket, bound to the browser, for the " <>
+          "callback that completes the sign-in, for a bounded time: node-local memory, " <>
+          "never a row."
+    },
+    %{
+      from: "PrismWeb.ModelCatalog",
+      into: "Arca.Cache",
+      functions: [:invalidate, :put],
+      reason:
+        "a run's model catalogue is kept per athanor for a bounded time and dropped " <>
+          "when a key is bound or removed: node-local memory, never a row."
+    },
+    %{
+      from: "PrismWeb.PasskeyController",
+      into: "Arca.Cache",
+      functions: [:take],
+      reason:
+        "a passkey sign-in ticket is taken once by the request that completes it, so " <>
+          "a ticket cannot be replayed: node-local memory, never a row."
+    },
+    %{
+      from: "PrismWeb.ShellLive",
+      into: "Arca.Cache",
+      functions: [:delete_match, :put],
+      reason:
+        "the shell marks its tincture scan running per athanor for a bounded time, so " <>
+          "two refreshes start one scan, and clears the mark when the scan ends: " <>
+          "node-local memory, never a row."
+    }
+  ]
+
+  @doc """
+  The source trees a surface is: the console's domain code, its pages and
+  controllers, and the web tier's shared plugs. Their compiled modules are
+  what `surface_reads/0` and `surface_writes/0` read.
+  """
+  @spec surface_trees() :: [String.t()]
+  def surface_trees, do: @surface_trees
+
+  @doc """
+  Every read a surface makes of the storage layer, as
+  `%{from: surface_module, into: storage_module, functions: [atom], reason:}`.
+  A row names the functions its surface calls of one storage module, and
+  only reads.
+  """
+  @spec surface_reads() :: [map()]
+  def surface_reads, do: @surface_reads
+
+  @doc """
+  Every call a surface makes that changes what the storage layer holds,
+  rostered as an infrastructure exception in the shape of `surface_reads/0`.
+  """
+  @spec surface_writes() :: [map()]
+  def surface_writes, do: @surface_writes
+
+  @typedoc "A surface's call into Arca as the compiled scan reads it: caller, callee, function."
+  @type surface_reach :: {String.t(), String.t(), atom()}
+
+  @doc """
+  The calls in `reaches` into Arca that no read or write row names, as
+  `Caller -> Module.function`.
+  """
+  @spec surface_read_violations([surface_reach()]) :: [String.t()]
+  def surface_read_violations(reaches) do
+    rostered = rostered_surface_calls()
+
+    reaches
+    |> Enum.filter(fn {_from, into, _function} -> arca_module?(into) end)
+    |> Enum.reject(&MapSet.member?(rostered, &1))
+    |> Enum.map(&surface_label/1)
+    |> Enum.uniq()
+    |> Enum.sort()
+  end
+
+  @doc "The rostered surface calls `reaches` no longer holds, as `Caller -> Module.function`."
+  @spec stale_surface_reads([surface_reach()]) :: [String.t()]
+  def stale_surface_reads(reaches) do
+    reached = MapSet.new(reaches)
+
+    rostered_surface_calls()
+    |> Enum.reject(&MapSet.member?(reached, &1))
+    |> Enum.map(&surface_label/1)
+    |> Enum.sort()
+  end
+
+  @doc """
+  The functions of one storage module a row of `reads` names and a row of
+  `writes` names too, as `Module.function`: a write admitted as a read.
+  `surface_reads/0` and `surface_writes/0` hold none.
+  """
+  @spec surface_read_writes([map()], [map()]) :: [String.t()]
+  def surface_read_writes(reads, writes) do
+    written =
+      for %{into: into, functions: functions} <- writes,
+          function <- functions,
+          into: MapSet.new(),
+          do: {into, function}
+
+    for %{into: into, functions: functions} <- reads,
+        function <- functions,
+        MapSet.member?(written, {into, function}),
+        uniq: true,
+        do: "#{into}.#{function}"
+  end
+
+  defp rostered_surface_calls do
+    for %{from: from, into: into, functions: functions} <- @surface_reads ++ @surface_writes,
+        function <- functions,
+        into: MapSet.new(),
+        do: {from, into, function}
+  end
+
+  defp arca_module?(module), do: module == "Arca" or String.starts_with?(module, "Arca.")
+
+  defp surface_label({from, into, function}), do: "#{from} -> #{into}.#{function}"
+
   # What the host application calls of the identity domain, function by
   # function. The namespace rows above say which Sanctum namespaces a tree
   # may name; this says which functions of them `apps/cyfr/lib` calls at
@@ -1393,6 +1784,7 @@ defmodule Cyfr.Boundaries do
     "Sanctum.Pairing" => [actions: 0, can_confirm?: 1],
     "Sanctum.Passkeys" => [sign_in: 2, sign_in_challenge: 0],
     "Sanctum.Policy.Enforcement" => [record: 1],
+    "Sanctum.PolicyLog" => [list: 2],
     "Sanctum.Provisioning" => [
       athanor: 1,
       await_claim: 5,

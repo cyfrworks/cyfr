@@ -12,8 +12,9 @@ defmodule Sanctum.Policy.EnforcementTest do
   end
 
   defp rows_for(ctx, component_ref) do
-    [athanor_id: ctx.athanor_id, limit: 50]
-    |> Arca.PolicyLog.list()
+    ctx.athanor_id
+    |> Prima.Actor.in_athanor()
+    |> Arca.PolicyLog.list(limit: 50)
     |> then(fn {:ok, rows} -> rows end)
     |> Enum.filter(&(&1.component_ref == component_ref))
   end
