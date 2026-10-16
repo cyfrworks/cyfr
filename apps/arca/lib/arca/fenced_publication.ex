@@ -71,7 +71,8 @@ defmodule Arca.FencedPublication do
   that row, so they serialize per athanor. Both take it before the
   document's row, so a removal never waits on the floor while holding
   the document a create waits on, the deadlock the other order allows on
-  PostgreSQL.
+  PostgreSQL. Both take it before the budget is checked, so a writer
+  that waited on the floor past its budget publishes nothing.
 
   A writer that read a document as absent creates it whatever was
   created and removed there since its read: creating what is absent is
@@ -222,6 +223,7 @@ defmodule Arca.FencedPublication do
       started = System.monotonic_time(:millisecond)
 
       with :ok <- owned(slot),
+           :ok <- hold_floor(athanor_id, revision_read),
            :ok <- within_budget(started) do
         removal(athanor_id, key, revision_read)
       end
@@ -317,14 +319,25 @@ defmodule Arca.FencedPublication do
 
   # Ownership first, under the lease row's shared lock; then the staged
   # attempt, on the database's clock read after that lock was won; then
-  # the budget; then the one statement that publishes.
+  # the revision to write, a create's taken from the athanor's floor row,
+  # which it may wait for; then the budget, after every wait but the
+  # publishing statement's own; then the one statement that publishes.
   defp publication(target, revision_read, slot, started) do
     with :ok <- owned(slot),
          {:claimed, content} <- claim(target, revision_read),
+         revision = next_revision(target, revision_read),
          :ok <- within_budget(started) do
-      commit(target, content, revision_read)
+      commit(target, content, revision_read, revision)
     end
   end
+
+  # A create takes its revision one above the athanor's floor, holding the
+  # floor row until the transaction ends; every other publication raises
+  # the revision it read by one.
+  defp next_revision({:document, athanor_id, _key, _staged, _digest}, 0),
+    do: take_floor(athanor_id) + 1
+
+  defp next_revision(_target, revision_read), do: revision_read + 1
 
   # `:none` stands for no slot only where no claimant runs; anywhere else
   # `verify_held/1` answers it `:lost`, a writer that holds none.
@@ -407,13 +420,13 @@ defmodule Arca.FencedPublication do
     end
   end
 
-  # The publishing statement. A document the writer read as absent is
-  # created one above the athanor's floor, taken first, and a create that
-  # finds one already there has lost to another publication; every other
-  # publication is a compare-and-set on the revision the writer read.
-  defp commit({:document, athanor_id, key, _staged, _digest}, {blob_key, digest}, 0) do
+  # The publishing statement, writing `revision` (`next_revision/2`). A
+  # document the writer read as absent is created one above the athanor's
+  # floor, and a create that finds one already there has lost to another
+  # publication; every other publication is a compare-and-set on the
+  # revision the writer read.
+  defp commit({:document, athanor_id, key, _staged, _digest}, {blob_key, digest}, 0, revision) do
     now = Arca.ServerMetaStorage.now!()
-    revision = take_floor(athanor_id) + 1
 
     row = %{
       athanor_id: athanor_id,
@@ -436,14 +449,19 @@ defmodule Arca.FencedPublication do
   # and its bytes change together or not at all. The blob key is read
   # under the row's lock (the database's one write lock on SQLite), so it
   # is the one the compare-and-set below replaces.
-  defp commit({:document, athanor_id, key, _staged, _digest}, {blob_key, digest}, revision_read) do
+  defp commit(
+         {:document, athanor_id, key, _staged, _digest},
+         {blob_key, digest},
+         revision_read,
+         revision
+       ) do
     current =
       from(d in FencedDocument,
         where: d.athanor_id == ^athanor_id and d.key == ^key and d.revision == ^revision_read
       )
 
     now = Arca.ServerMetaStorage.now!()
-    set = [revision: revision_read + 1, blob_key: blob_key, digest: digest, updated_at: now]
+    set = [revision: revision, blob_key: blob_key, digest: digest, updated_at: now]
 
     with replaced when is_binary(replaced) <-
            current
@@ -452,14 +470,14 @@ defmodule Arca.FencedPublication do
            |> Arca.Repo.one(),
          {1, _} <- Arca.Repo.update_all(current, set: set) do
       if replaced != blob_key, do: retire(athanor_id, replaced, now)
-      {:ok, revision_read + 1}
+      {:ok, revision}
     else
       _moved -> {:error, :stale}
     end
   end
 
   # arca:unscoped-ok the row is the one the writer read under its own actor, named by its key.
-  defp commit({:row, schema, id, attrs}, nil, revision_read) do
+  defp commit({:row, schema, id, attrs}, nil, revision_read, revision) do
     [primary_key] = schema.__schema__(:primary_key)
 
     current =
@@ -467,8 +485,8 @@ defmodule Arca.FencedPublication do
         where: field(r, ^primary_key) == ^id and r.revision == ^revision_read
       )
 
-    case Arca.Repo.update_all(current, set: Map.to_list(attrs) ++ [revision: revision_read + 1]) do
-      {1, _} -> {:ok, revision_read + 1}
+    case Arca.Repo.update_all(current, set: Map.to_list(attrs) ++ [revision: revision]) do
+      {1, _} -> {:ok, revision}
       {0, _} -> unchanged(schema, primary_key, id, attrs, revision_read)
     end
   end
@@ -478,13 +496,11 @@ defmodule Arca.FencedPublication do
   # handed to the sweep in the same transaction. A document at revision 0
   # is absent, so there is nothing at it to remove.
   #
-  # The floor is raised to the revision read before the document's row is
-  # touched, the order a create takes them in (see the module doc). The
-  # raise matters only when the delete lands, the one case its revision
-  # is the one removed; a stale removal rolls it back.
+  # `remove/3` has raised the floor to the revision read before this, the
+  # order a create takes them in (see the module doc). The raise matters
+  # only when the delete lands, the one case its revision is the one
+  # removed; a stale removal rolls it back.
   defp removal(athanor_id, key, revision_read) do
-    hold_floor(athanor_id, revision_read)
-
     current =
       from(d in FencedDocument,
         where: d.athanor_id == ^athanor_id and d.key == ^key and d.revision == ^revision_read

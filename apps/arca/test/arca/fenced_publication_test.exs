@@ -935,6 +935,218 @@ defmodule Arca.FencedPublicationFloorRaceTest do
   end
 end
 
+defmodule Arca.FencedPublicationFloorBudgetTest do
+  @moduledoc """
+  A create or a removal that waits on its athanor's floor row until its
+  verified lease has run out rolls back on its budget, writing nothing:
+  the floor is taken before the budget is checked, never after it.
+
+  PostgreSQL only: SQLite takes its one write lock at `BEGIN IMMEDIATE`,
+  before the budget's clock starts, so no wait on the floor falls inside
+  a publication there. The wait is observed through `pg_blocking_pids`.
+  """
+
+  use ExUnit.Case, async: false
+
+  import Ecto.Query, only: [from: 2]
+
+  alias Arca.FencedPublication
+  alias Arca.FencedPublication.Change
+  alias Arca.Schemas.{CellLease, FencedDocumentFloor, StorageStaging}
+  alias Ecto.Adapters.SQL.Sandbox
+
+  @moduletag :postgres
+
+  # The lease the writer verifies, left to run out while it waits.
+  @lease_ms 1_500
+
+  defp unboxed(fun), do: Sandbox.unboxed_run(Arca.Repo, fun)
+
+  setup do
+    actor = Arca.Test.Actor.local(athanor_id: "ath_fpb_#{System.unique_integer([:positive])}")
+    node = "node-fpb-#{System.unique_integer([:positive])}"
+
+    on_exit(fn ->
+      unboxed(fn ->
+        Arca.Repo.delete_all(from(l in CellLease, where: l.node == ^node))
+        {:ok, _} = Arca.TenantTables.delete_all_for(actor)
+      end)
+    end)
+
+    slot = unboxed(fn -> slot!(node) end)
+    {:ok, actor: actor, node: node, slot: slot, key: "doc-#{System.unique_integer([:positive])}"}
+  end
+
+  test "a create that waited on the floor past its lease publishes nothing", ctx do
+    staged =
+      unboxed(fn ->
+        {1, _} =
+          Arca.Repo.insert_all(FencedDocumentFloor, [
+            %{athanor_id: ctx.actor.athanor_id, floor: 3}
+          ])
+
+        stage!(ctx.actor, "new bytes")
+      end)
+
+    result =
+      while_the_floor_is_held(ctx, fn ->
+        FencedPublication.publish(document(ctx, staged), 0, ctx.slot)
+      end)
+
+    current = unboxed(fn -> FencedPublication.document(ctx.actor, ctx.key) end)
+
+    assert result == {:error, :budget},
+           "the create answered #{inspect(result)} and wrote #{inspect(current)} after its lease ran out"
+
+    assert :not_found == current
+
+    assert %StorageStaging{state: "reserved"} =
+             unboxed(fn -> Arca.Repo.get!(StorageStaging, staged) end)
+
+    assert [3] == unboxed(fn -> floor_of(ctx.actor) end)
+  end
+
+  test "a removal that waited on the floor past its lease removes nothing", ctx do
+    staged =
+      unboxed(fn ->
+        staged = stage!(ctx.actor, "old bytes")
+        assert {:ok, 1} = FencedPublication.publish(document(ctx, staged), 0, ctx.slot)
+        staged
+      end)
+
+    result =
+      while_the_floor_is_held(ctx, fn ->
+        FencedPublication.remove(
+          %Change{resource: {:document, ctx.actor.athanor_id, ctx.key}},
+          1,
+          ctx.slot
+        )
+      end)
+
+    current = unboxed(fn -> FencedPublication.document(ctx.actor, ctx.key) end)
+
+    assert result == {:error, :budget},
+           "the removal answered #{inspect(result)}, leaving #{inspect(current)}, after its lease ran out"
+
+    assert %{revision: 1} = current
+
+    assert %StorageStaging{state: "published"} =
+             unboxed(fn -> Arca.Repo.get!(StorageStaging, staged) end)
+
+    assert [0] == unboxed(fn -> floor_of(ctx.actor) end)
+  end
+
+  # Hold the athanor's floor row in a transaction of its own, start the
+  # writer, see it blocked on the row, let its lease run out on the
+  # database's clock, release the row and answer what the writer did.
+  defp while_the_floor_is_held(ctx, write) do
+    test = self()
+    deadline = unboxed(fn -> lease_for!(ctx.node, @lease_ms) end)
+
+    holder =
+      Task.async(fn ->
+        unboxed(fn ->
+          Arca.Repo.locking_transaction(fn ->
+            {1, _} =
+              Arca.Repo.update_all(
+                from(f in FencedDocumentFloor,
+                  where: f.athanor_id == ^ctx.actor.athanor_id,
+                  update: [set: [floor: f.floor]]
+                ),
+                []
+              )
+
+            %{rows: [[backend]]} = Arca.Repo.query!("SELECT pg_backend_pid()")
+            send(test, {:floor_held, backend})
+
+            receive do
+              :release -> :ok
+            end
+          end)
+        end)
+      end)
+
+    assert_receive {:floor_held, backend}, 5_000
+    writer = Task.async(fn -> unboxed(write) end)
+
+    Prima.Test.Wait.wait_until(
+      fn -> unboxed(fn -> blocked_on_floor?(backend) end) end,
+      5_000,
+      "the writer blocked on the floor row"
+    )
+
+    Prima.Test.Wait.wait_until(
+      fn ->
+        unboxed(fn -> DateTime.compare(Arca.ServerMetaStorage.now!(), deadline) == :gt end)
+      end,
+      @lease_ms + 5_000,
+      "the writer's lease to run out while it waits"
+    )
+
+    send(holder.pid, :release)
+    assert {:ok, :ok} = Task.await(holder, 25_000)
+    Task.await(writer, 25_000)
+  end
+
+  defp blocked_on_floor?(backend) do
+    %{rows: [[count]]} =
+      Arca.Repo.query!(
+        """
+        SELECT count(*) FROM pg_stat_activity
+        WHERE datname = current_database() AND $1 = ANY(pg_blocking_pids(pid))
+          AND query LIKE 'INSERT INTO "fenced_document_floors"%'
+        """,
+        [backend]
+      )
+
+    count == 1
+  end
+
+  defp floor_of(actor) do
+    Arca.Repo.all(
+      from(f in FencedDocumentFloor, where: f.athanor_id == ^actor.athanor_id, select: f.floor)
+    )
+  end
+
+  defp document(ctx, staged),
+    do: %Change{resource: {:document, ctx.actor.athanor_id, ctx.key}, staged: staged}
+
+  defp stage!(actor, bytes) do
+    {:ok, id} = Arca.Storage.stage(actor, "attempt-#{System.unique_integer()}", bytes)
+    id
+  end
+
+  # The lease from now on the database's clock, its deadline answered.
+  defp lease_for!(node, ms) do
+    deadline = DateTime.add(Arca.ServerMetaStorage.now!(), ms, :millisecond)
+
+    {1, _} =
+      Arca.Repo.update_all(from(l in CellLease, where: l.node == ^node),
+        set: [lease_until: deadline]
+      )
+
+    deadline
+  end
+
+  defp slot!(node) do
+    now = Arca.ServerMetaStorage.now!()
+
+    row = %{
+      node: node,
+      owner: node <> "#boot_a",
+      generation: 1,
+      fence: 1,
+      lease_until: DateTime.add(now, 60_000, :millisecond),
+      taken_at: now,
+      inserted_at: now,
+      updated_at: now
+    }
+
+    {1, _} = Arca.Repo.insert_all(CellLease, [row])
+    %{node: node, owner: row.owner, generation: 1, fence: 1}
+  end
+end
+
 defmodule Arca.FencedPublicationLockTest do
   @moduledoc """
   `Arca.FencedPublication.publish/3` under real concurrency, on
