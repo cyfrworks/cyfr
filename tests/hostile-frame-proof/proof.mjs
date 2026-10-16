@@ -689,7 +689,7 @@ async function promptsIn(browser, name, proxy, base, segment, cookie, outDir) {
   }
 }
 
-// A frame that connects to one origin and reads the person's notes: the
+// A frame that connects to one origin and lists the person's files: the
 // read is admitted only when every class it may carry has a declared flow
 // to that origin. The probe sends what it read to the origin; the
 // harness's proxy sees every tunnel a browser asks for to it.

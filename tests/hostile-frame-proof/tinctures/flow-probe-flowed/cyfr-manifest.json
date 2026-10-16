@@ -16,6 +16,6 @@
   "tincture": {
     "entry": "index.html",
     "connect": ["attacker.test"],
-    "actions": ["notes.list"]
+    "actions": ["file.list"]
   }
 }

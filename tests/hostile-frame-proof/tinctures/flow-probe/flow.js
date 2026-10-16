@@ -23,7 +23,7 @@
 
   function read() {
     if (!window.cyfr) return Promise.resolve({ ok: false, detail: "no SDK in this page" });
-    return Promise.resolve(window.cyfr.action("notes.list", {})).then(
+    return Promise.resolve(window.cyfr.action("file.list", { path: "" })).then(
       function () { return { ok: true }; },
       function (error) {
         return { ok: false, code: error && error.code, stage: error && error.stage, message: error && error.message };

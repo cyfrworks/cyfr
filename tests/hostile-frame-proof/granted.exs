@@ -4,25 +4,15 @@
 # The containment proof's flowed control, granted: evaluated inside the
 # running server by `bin/cyfr rpc` (tests/hostile-frame-proof/run.sh), the
 # person's grant of their local tincture NAME as the consent walk makes it —
-# plan, preview, commit — under their interactive context, granting the
+# plan, preview, commit — under their session, as the console asks under it,
+# on the interactive path, granting the
 # whole ask, its flows among it. Answers one line, `GRANTED=` and the
 # profile's id; a plan the components projection cannot answer yet is
 # asked again, for up to ten seconds.
 
-fn [user_id, name] ->
-  {:ok, user} = Sanctum.Tenancy.Users.get(user_id)
-
-  ctx =
-    Sanctum.Context.build(
-      user_id: user.id,
-      email: user.email,
-      provider: "github",
-      athanor_id: nil,
-      permissions: Sanctum.Context.person_permissions()
-    )
-
-  {:ok, ctx} = Sanctum.Tenancy.resolve_status(%{ctx | namespace: user.namespace}, force: true)
-  ctx = %{ctx | origin: :interactive}
+fn [token, name] ->
+  {:ok, console} = Sanctum.Caller.establish({:session, token})
+  ctx = %{console | origin: :interactive}
   ref = "tincture:local." <> name
   decisions = %{ref: ref, origins: [:interactive]}
 
