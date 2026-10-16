@@ -440,6 +440,20 @@ defmodule Sanctum.Vault do
   scopes are the ones its token was granted for and change only with a
   newly granted token (`Sanctum.Vault.OAuthGrant`).
 
+  A rebind that widens the binding is a sensitive change
+  (`credential_entry`, `vault.rebind`): a destination not within the
+  stored one (`Prima.Destination.within?/2`), disclosure turned on, or a
+  disclosed field the entry did not disclose. It is asked at this site
+  (`Sanctum.Consent.Authz.check/3`), and its confirmation binds the entry,
+  the binding digest it was decided over and the one it moves to, and is
+  spent in the binding move's own transaction
+  (`Sanctum.Consent.Authz.consume/2`), so a proof is never spent on a
+  binding its person was not shown. A rebind that narrows or keeps what
+  the entry admits needs the session alone. A binding that moved before
+  the write lands is read again and decided again: a proof given over the
+  binding that moved asks again; one whose binding is as it was, after a
+  write that lost its compare-and-set and rolled back, is spent once.
+
   Returns the new derived binding digest and the profiles now blocked at
   `needs_consent`.
   """
@@ -475,25 +489,144 @@ defmodule Sanctum.Vault do
   end
 
   # The new digest is derived here, from the entry as it was read merged
-  # with the edit: a decision, made before any transaction opens. What
-  # crosses into Arca is data — the digest the row must still read, the
-  # columns to write, and the word a blocked profile takes. The binding
+  # with the edit: a decision, made before any transaction opens, and so
+  # is whether it widens the binding and needs its person's confirmation.
+  # What crosses into Arca is data — the digest the row must still read,
+  # the columns to write, and the word a blocked profile takes — and the
+  # confirmation's consumption, the transaction's first step. The binding
   # move and the invalidation of every profile that depended on it are one
   # transaction there, so no consent is ever left covering a binding it
-  # did not approve, and a lost compare-and-set leaves neither behind.
+  # did not approve, and a lost compare-and-set leaves none of them behind.
   defp move_binding(%Context{} = ctx, entry, changes) when is_map(changes) do
-    with {:ok, digest} <- VaultReader.binding_digest(Map.merge(entry, changes)),
+    rebound = Map.merge(entry, changes)
+
+    with {:ok, digest} <- VaultReader.binding_digest(rebound),
+         {:ok, confirmation} <-
+           rebind_confirmation(ctx, "vault.rebind", entry, rebound, digest),
          {:ok, affected} <-
            Arca.VaultStorage.move_binding(
              Context.actor(ctx),
              entry.id,
              entry.binding_digest,
              Map.put(changes, :binding_digest, digest),
-             @needs_consent
+             @needs_consent,
+             confirmation
            ) do
+      if confirmation != [], do: Authz.consumed(ctx)
       {:ok, %{binding_digest: digest, affected: affected}}
     end
   end
+
+  @doc false
+  # The confirmation a rebind of `entry` to `rebound`, whose binding digest
+  # is `digest`, needs, as the options of its binding move
+  # (`Arca.VaultStorage.move_binding/6`, `Arca.InstanceEntries.move_binding/6`):
+  # none when it narrows or keeps what the entry admits (`rebind_widens?/2`);
+  # when it widens, the `credential_entry` confirmation of `operation`,
+  # asked here (`Authz.check/3`) and spent as the move's `verify:` step
+  # (`Authz.consume/2`). The change binds the entry, the digest it was read
+  # at and the one it moves to, and its preview shows the binding it moves
+  # to and what each moved part was (`rebind_details/2`).
+  # `Sanctum.InstanceEntries` decides its rebind here too.
+  @spec rebind_confirmation(Context.t(), String.t(), map(), map(), String.t()) ::
+          {:ok, keyword()} | {:error, term()}
+  def rebind_confirmation(%Context{} = ctx, operation, entry, rebound, digest) do
+    if rebind_widens?(entry, rebound) do
+      change = %{
+        operation: operation,
+        arguments: %{"entry" => entry.id, "from" => entry.binding_digest, "to" => digest},
+        resource: entry.name,
+        details: rebind_details(entry, rebound)
+      }
+
+      with :ok <- Authz.check(ctx, :credential_entry, change),
+           do: {:ok, verify: fn -> Authz.consume(ctx, {:credential_entry, change}) end}
+    else
+      {:ok, []}
+    end
+  end
+
+  @doc false
+  # Whether moving a binding from `entry` to `rebound` lets its material go
+  # where it could not, or lets a component read what it could not: a
+  # destination not within the stored one (a stored one that does not read
+  # admitted nothing), disclosure turned on, or a disclosed field the entry
+  # did not disclose. An attach-only entry's fields are read by no
+  # component, so its field schema widens nothing.
+  @spec rebind_widens?(map(), map()) :: boolean()
+  def rebind_widens?(entry, rebound) do
+    not destination_within?(rebound.destination, entry.destination) or
+      (rebound.attach_only == false and
+         (entry.attach_only != false or
+            decode_list(rebound.field_names, "field_names") --
+              decode_list(entry.field_names, "field_names") != []))
+  end
+
+  defp destination_within?(text, stored) do
+    with {:ok, destination} <- read_destination(text),
+         {:ok, held} <- read_destination(stored) do
+      Prima.Destination.within?(destination, held)
+    else
+      :error -> false
+    end
+  end
+
+  @doc false
+  # What a rebind's confirmation shows (`Prima.Confirmation.Preview`'s
+  # details), secret-free: every part of the binding a rebind can move as
+  # it will be — the destination's admitted sets (`Prima.Destination.admitted/1`),
+  # whether the fields are disclosed, and the field schema — and, beside
+  # each part that moves, what it was (`<part>_before`). The provider, the
+  # OAuth endpoints and the scopes do not move here; the change's digests
+  # bind them.
+  @spec rebind_details(map(), map()) :: %{String.t() => String.t() | [String.t()]}
+  def rebind_details(entry, rebound) do
+    before = binding_shown(entry)
+    shown = binding_shown(rebound)
+
+    Enum.reduce(before, shown, fn {part, was}, details ->
+      if Map.get(shown, part) == was,
+        do: details,
+        else: Map.put(details, part <> "_before", was)
+    end)
+  end
+
+  defp binding_shown(binding) do
+    destination =
+      case read_destination(binding.destination) do
+        {:ok, destination} ->
+          admitted = Prima.Destination.admitted(destination)
+
+          %{
+            "scheme" => admitted.scheme,
+            "port" => Integer.to_string(admitted.port),
+            "hosts" => admitted.hosts,
+            "methods" => admitted.methods,
+            "paths" => admitted.paths
+          }
+
+        :error ->
+          %{"destination" => "none"}
+      end
+
+    Map.merge(destination, %{
+      "disclosed" => if(binding.attach_only == false, do: "yes", else: "no"),
+      "field_names" => decode_list(binding.field_names, "field_names")
+    })
+  end
+
+  # A stored destination's canonical text, read through the athanor-entry
+  # grammar; one that does not read admits nothing.
+  defp read_destination(text) when is_binary(text) do
+    with {:ok, %{} = map} <- Prima.Json.decode(text),
+         {:ok, destination} <- Prima.Destination.from_map(map) do
+      {:ok, destination}
+    else
+      _unreadable -> :error
+    end
+  end
+
+  defp read_destination(_absent), do: :error
 
   @doc false
   # What a profile's status becomes when the binding under its head consent

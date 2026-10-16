@@ -56,7 +56,7 @@ Revocation erases nothing already shown on the device. Until revocation or expir
 
 ## Fresh Confirmation
 
-Using what was granted, making a grant and answering an agent's approval need only your session. A short list of sensitive changes needs a fresh confirmation every time, for every person: entering or rotating a credential, issuing or rotating a credential that outlives the session (an API key or a webhook secret), pairing a device, revoking one, recovery material, rotating your live key, a remote sign-in assertion, linking or unlinking a door, and registering or removing a passkey.
+Using what was granted, making a grant and answering an agent's approval need only your session. A short list of sensitive changes needs a fresh confirmation every time, for every person: entering or rotating a credential, widening where a credential may go or what a component may read of it (narrowing needs only your session), issuing or rotating a credential that outlives the session (an API key or a webhook secret), pairing a device, revoking one, recovery material, rotating your live key, a remote sign-in assertion, linking or unlinking a door, and registering or removing a passkey.
 
 Asking for one opens a pending confirmation of that exact change, shown with a preview the home stores: the change, what it concerns, the athanor and the home. It lives `confirmation_seconds` (five minutes by default). The client that asked holds a secret for it that no other client sees, and only that client completes the change; every other client names the request by its public ref.
 

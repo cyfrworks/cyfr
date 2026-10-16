@@ -273,10 +273,12 @@ defmodule Sanctum.PairingTest do
       expected = %{
         "vault.create" => :credential_entry,
         "vault.rotate" => :credential_entry,
+        "vault.rebind" => :credential_entry,
         "vault.authorize" => :credential_entry,
         "oauth.set_client" => :credential_entry,
         "instance_entry.create" => :credential_entry,
         "instance_entry.rotate" => :credential_entry,
+        "instance_entry.rebind" => :credential_entry,
         "instance_entry.set_audience" => :credential_sharing,
         "instance_entry.set_component_policy" => :credential_sharing,
         "key.create" => :credential_issuance,
@@ -304,11 +306,13 @@ defmodule Sanctum.PairingTest do
       end
 
       # The unlock and the transfer have no operation yet, and a read or an
-      # everyday change confirms nothing: an instance entry's rebind, caps,
-      # revoke and delete need the session alone, as its reads do.
+      # everyday change confirms nothing: an instance entry's caps, revoke
+      # and delete need the session alone, as its reads do. A rebind names
+      # its action for the widening its site decides; a narrowing one asks
+      # nothing (`Sanctum.VaultTest`, `Sanctum.InstanceEntriesTest`).
       for operation <- ~w(vault.list vault.rename key.revoke profile.commit person.kit_ack
                           pairing.complete pairing.list pairing.renew vault/create
-                          instance_entry.rebind instance_entry.set_caps instance_entry.revoke
+                          instance_entry.set_caps instance_entry.revoke
                           instance_entry.delete instance_entry.list instance_entry.usage
                           instance_entry.offered) do
         assert Pairing.action_for(operation) == nil, operation

@@ -445,22 +445,37 @@ defmodule Arca.InstanceEntries do
   them `{:error, {:invalid, _}}`, before any write.
   `{:error, :binding_moved}` when another change landed first. Answers
   the blocked `{athanor_id, profile_id}` pairs.
+
+  `verify:` (optional) is the caller's check, run as the transaction's
+  first step, before the compare-and-set: it answers `:ok`, or
+  `{:error, reason}`, which rolls the transaction back and is answered.
+  A widening rebind spends its confirmation there
+  (`Sanctum.Consent.Authz.consume/2`), so the proof, the move and the
+  blocked profiles commit together, and a move that loses its
+  compare-and-set rolls the proof's consumption back with it.
   """
-  @spec move_binding(Prima.Actor.t(), String.t(), String.t() | nil, map(), String.t()) ::
+  @spec move_binding(Prima.Actor.t(), String.t(), String.t() | nil, map(), String.t(), keyword()) ::
           {:ok, [{String.t(), String.t()}]}
           | {:error,
              :binding_moved
              | :endpoints_immutable
              | {:invalid_destination, term()}
              | {:invalid, map()}}
+          | {:error, term()}
           | refusal()
-  def move_binding(actor, id, from_digest, changes, blocked_status)
+  def move_binding(actor, id, from_digest, changes, blocked_status, opts \\ [])
+
+  def move_binding(actor, id, from_digest, changes, blocked_status, opts)
       when platform(actor) and is_binary(id) and is_map(changes) and
-             (is_binary(from_digest) or is_nil(from_digest)) and is_binary(blocked_status) do
+             (is_binary(from_digest) or is_nil(from_digest)) and is_binary(blocked_status) and
+             is_list(opts) do
+    verify = Keyword.get(opts, :verify, fn -> :ok end)
+
     with :ok <- movable(changes) do
       Arca.Repo.Errors.with_db_rescue("Arca.InstanceEntries.move_binding", fn ->
         transact(fn ->
-          with :ok <- cas_binding(id, from_digest, changes) do
+          with :ok <- verify.(),
+               :ok <- cas_binding(id, from_digest, changes) do
             block_dependents(actor, id, blocked_status)
           end
         end)
@@ -468,9 +483,10 @@ defmodule Arca.InstanceEntries do
     end
   end
 
-  def move_binding(%Prima.Actor{}, id, from_digest, changes, blocked_status)
+  def move_binding(%Prima.Actor{}, id, from_digest, changes, blocked_status, opts)
       when is_binary(id) and is_map(changes) and
-             (is_binary(from_digest) or is_nil(from_digest)) and is_binary(blocked_status),
+             (is_binary(from_digest) or is_nil(from_digest)) and is_binary(blocked_status) and
+             is_list(opts),
       do: {:error, :cross_tenant}
 
   @doc """

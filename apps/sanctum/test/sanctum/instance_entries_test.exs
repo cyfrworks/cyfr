@@ -130,6 +130,45 @@ defmodule Sanctum.InstanceEntriesTest do
   # Helpers
   # ---------------------------------------------------------------------------
 
+  # A telemetry handler on every repo statement: the test process runs the
+  # race's `act` once, at the first statement its `point` names, after that
+  # statement ran.
+  @doc false
+  def race(_event, _measurements, metadata, %{test: test, point: point, act: act}) do
+    if self() == test and Process.get(:rebind_race) == :armed and point.(metadata) do
+      Process.put(:rebind_race, :fired)
+      act.()
+    end
+
+    :ok
+  end
+
+  defp race!(point, act) do
+    handler = "instance-rebind-race-#{System.unique_integer([:positive])}"
+    config = %{test: self(), point: point, act: act}
+    :ok = :telemetry.attach(handler, [:arca, :repo, :query], &__MODULE__.race/4, config)
+    on_exit(fn -> :telemetry.detach(handler) end)
+    Process.put(:rebind_race, :armed)
+  end
+
+  # The pending confirmation whose secret `id` a signal answered.
+  defp confirmation!(ctx, id) do
+    {:ok, row} =
+      Arca.PendingConfirmations.get(Context.actor(ctx), Prima.Confirmation.ref(id))
+
+    row
+  end
+
+  defp canonical(destination) do
+    {:ok, parsed} = Prima.Destination.new(destination, true)
+    Prima.Destination.canonical(parsed)
+  end
+
+  defp profile_of(athanor, profile) do
+    {:ok, row} = Arca.ProfileStorage.get(Prima.Actor.in_athanor(athanor), profile)
+    row.status
+  end
+
   defp params(over \\ %{}) do
     Map.merge(
       %{
@@ -1136,6 +1175,187 @@ defmodule Sanctum.InstanceEntriesTest do
                })
 
       refute_received {:instance_entry, :rebound, _}
+    end
+
+    test "a rebind to a destination not within the stored one asks first, and moves nothing " <>
+           "until confirmed",
+         %{admin: admin} do
+      for destination <- [
+            Map.put(@inference, "hosts", ["api.openai.com", "files.openai.com"]),
+            Map.put(@inference, "hosts", ["*.openai.com"]),
+            Map.put(@inference, "methods", ["DELETE", "GET", "POST"]),
+            Map.put(@inference, "paths", ["/v1/chat/completions", "/v1/files", "/v1/models"]),
+            Map.put(@inference, "paths", ["/v1"]),
+            Map.put(@inference, "paths", ["/v1/modelsx"]),
+            Map.put(@inference, "port", 8443),
+            Map.put(@inference, "scheme", "http")
+          ] do
+        entry = create!(admin)
+        dependent = dependent!("ath_a", entry)
+        before = stored(entry.id)
+
+        assert {:error, {:confirmation_required, %{id: id, operation: "instance_entry.rebind"}}} =
+                 InstanceEntries.rebind(admin, %{entry_id: entry.id, destination: destination}),
+               inspect(destination)
+
+        assert confirmation!(admin, id).state == "pending"
+        assert stored(entry.id) == before
+        assert profile_of("ath_a", dependent) == "active"
+      end
+
+      refute_received {:instance_entry, :rebound, _}
+    end
+
+    test "a narrower destination needs the session alone", %{admin: admin} do
+      for destination <- [
+            Map.put(@inference, "methods", ["POST"]),
+            Map.put(@inference, "paths", ["/v1/models"]),
+            Map.put(@inference, "paths", ["/v1/models/gpt-5"]),
+            Map.put(@inference, "port", 443)
+          ] do
+        entry = create!(admin)
+
+        assert {:ok, %{binding_digest: digest}} =
+                 InstanceEntries.rebind(admin, %{entry_id: entry.id, destination: destination}),
+               inspect(destination)
+
+        assert stored(entry.id).binding_digest == digest
+        assert_received {:instance_entry, :rebound, _}
+      end
+    end
+
+    test "a confirmed wider destination moves what its administrator was shown, and a proof " <>
+           "of another operation, destination or binding asks again",
+         %{admin: admin} do
+      entry = create!(admin)
+      dependent = dependent!("ath_a", entry)
+      wider = Map.put(@inference, "paths", ["/v1"])
+      params = %{entry_id: entry.id, destination: wider}
+
+      assert {:error, {:confirmation_required, %{id: id}}} = InstanceEntries.rebind(admin, params)
+
+      record = confirmation!(admin, id)
+      assert {record.operation, record.action} == {"instance_entry.rebind", "credential_entry"}
+      preview = Jason.decode!(record.preview)
+      assert preview["resource"] == entry.name
+
+      assert preview["details"] == %{
+               "scheme" => "https",
+               "port" => "443",
+               "hosts" => ["api.openai.com"],
+               "methods" => ["GET", "POST"],
+               "paths" => ["/v1"],
+               "paths_before" => ["/v1/chat/completions", "/v1/models"],
+               "disclosed" => "no",
+               "field_names" => ["API_KEY"]
+             }
+
+      refute record.preview =~ @secret
+      TestContext.prove!(admin, id)
+
+      # The same change proven as the vault's rebind is not this rebind.
+      {:ok, digest} =
+        Sanctum.VaultReader.binding_digest(%{stored(entry.id) | destination: canonical(wider)})
+
+      vault_proof =
+        TestContext.confirmed(admin, :credential_entry, %{
+          operation: "vault.rebind",
+          arguments: %{"entry" => entry.id, "from" => entry.binding_digest, "to" => digest},
+          resource: entry.name,
+          details: preview["details"]
+        })
+
+      assert {:error, {:confirmation_required, %{id: asked}}} =
+               InstanceEntries.rebind(vault_proof, params)
+
+      refute asked == vault_proof.confirmation_id
+
+      # Another destination under this proof.
+      proven = %{admin | confirmation_id: id}
+      before = stored(entry.id)
+
+      assert {:error, {:confirmation_required, %{id: other}}} =
+               InstanceEntries.rebind(proven, %{
+                 params
+                 | destination: Map.put(wider, "paths", ["/"])
+               })
+
+      refute other == id
+      assert stored(entry.id) == before
+
+      assert {:ok, %{binding_digest: ^digest, affected: [{"ath_a", ^dependent}]}} =
+               InstanceEntries.rebind(proven, params)
+
+      assert confirmation!(admin, id).state == "consumed"
+      moved = stored(entry.id)
+      assert moved.destination == canonical(wider)
+      assert moved.binding_digest == digest
+
+      for column <- [:provider_hint, :oauth_endpoints, :oauth_scopes, :field_names, :attach_only] do
+        assert Map.fetch!(moved, column) == Map.fetch!(before, column), inspect(column)
+      end
+
+      assert Sanctum.Vault.rebind_details(before, moved) == preview["details"]
+      assert profile_of("ath_a", dependent) == "needs_consent"
+      assert_received {:instance_entry, :rebound, _}
+    end
+
+    test "a wider destination's write that lost its compare-and-set and rolled back is " <>
+           "retried, and spends the one proof the lost write did not",
+         %{admin: admin} do
+      entry = create!(admin)
+      params = %{entry_id: entry.id, destination: Map.put(@inference, "paths", ["/v1"])}
+
+      assert {:error, {:confirmation_required, %{id: id}}} = InstanceEntries.rebind(admin, params)
+      TestContext.prove!(admin, id)
+
+      race!(
+        fn %{source: source, query: query} ->
+          source == "pending_confirmations" and String.starts_with?(query, "UPDATE")
+        end,
+        fn ->
+          {1, _} =
+            Arca.Repo.update_all(
+              Ecto.Query.from(i in Arca.Schemas.InstanceEntry, where: i.id == ^entry.id),
+              set: [binding_digest: "sha256:moved-in-the-lost-write"]
+            )
+        end
+      )
+
+      assert {:ok, %{binding_digest: digest}} =
+               InstanceEntries.rebind(%{admin | confirmation_id: id}, params)
+
+      assert Process.get(:rebind_race) == :fired
+      assert stored(entry.id).binding_digest == digest
+      assert confirmation!(admin, id).state == "consumed"
+    end
+
+    test "a binding another rebind moved before the compare-and-set refuses the proof and " <>
+           "asks again, spending nothing",
+         %{admin: admin} do
+      entry = create!(admin)
+      params = %{entry_id: entry.id, destination: Map.put(@inference, "paths", ["/v1"])}
+      models = Map.put(@inference, "paths", ["/v1/models"])
+
+      assert {:error, {:confirmation_required, %{id: id}}} = InstanceEntries.rebind(admin, params)
+      TestContext.prove!(admin, id)
+
+      race!(
+        fn %{source: source, query: query} ->
+          source == "instance_entries" and String.starts_with?(query, "SELECT")
+        end,
+        fn ->
+          {:ok, _} = InstanceEntries.rebind(admin, %{entry_id: entry.id, destination: models})
+        end
+      )
+
+      assert {:error, {:confirmation_required, %{id: asked}}} =
+               InstanceEntries.rebind(%{admin | confirmation_id: id}, params)
+
+      assert Process.get(:rebind_race) == :fired
+      refute asked == id
+      assert stored(entry.id).destination == canonical(models)
+      assert confirmation!(admin, id).state == "confirmed"
     end
 
     test "people answers whoever has signed in and stands active, as an id and a display " <>

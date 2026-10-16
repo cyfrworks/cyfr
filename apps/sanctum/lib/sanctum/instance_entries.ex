@@ -519,6 +519,14 @@ defmodule Sanctum.InstanceEntries do
   blocked until its person consents again, in the store's transaction.
   An unchanged destination is `{:error, :no_binding_changes}`. Answers
   the new digest and the blocked `{athanor_id, profile_id}` pairs.
+
+  A destination not within the stored one (`Prima.Destination.within?/2`)
+  confirms `credential_entry` (`instance_entry.rebind`), decided as
+  `Sanctum.Vault.rebind/2` decides a widening rebind: asked here, bound to
+  the entry and the binding digests it moves from and to, and spent in
+  the store's binding move; a narrower destination needs the session
+  alone. An instance entry stays attach-only, so its destination is all a
+  rebind widens.
   """
   @spec rebind(Context.t(), map()) ::
           {:ok, %{binding_digest: String.t(), affected: [{String.t(), String.t()}]}}
@@ -530,7 +538,7 @@ defmodule Sanctum.InstanceEntries do
       if destination == entry.destination do
         {:error, :no_binding_changes}
       else
-        with {:ok, rebound} <- move(entry, destination, @rebind_attempts) do
+        with {:ok, rebound} <- move(ctx, entry, destination, @rebind_attempts) do
           announce(ctx, :rebound, id)
           {:ok, rebound}
         end
@@ -540,22 +548,28 @@ defmodule Sanctum.InstanceEntries do
 
   def rebind(%Context{}, _params), do: {:error, :entry_required}
 
-  # A rebind that lost the race recomputes against what landed.
-  defp move(entry, destination, attempts) do
-    with {:ok, digest} <-
-           VaultReader.binding_digest(%{entry | destination: destination}) do
+  # A rebind that lost the race recomputes against what landed, and is
+  # decided again there.
+  defp move(ctx, entry, destination, attempts) do
+    rebound = %{entry | destination: destination}
+
+    with {:ok, digest} <- VaultReader.binding_digest(rebound),
+         {:ok, confirmation} <-
+           Sanctum.Vault.rebind_confirmation(ctx, "instance_entry.rebind", entry, rebound, digest) do
       case Store.move_binding(
              actor(),
              entry.id,
              entry.binding_digest,
              %{destination: destination, binding_digest: digest},
-             Sanctum.Vault.blocked_profile_status()
+             Sanctum.Vault.blocked_profile_status(),
+             confirmation
            ) do
         {:ok, affected} ->
+          if confirmation != [], do: Authz.consumed(ctx)
           {:ok, %{binding_digest: digest, affected: affected}}
 
         {:error, :binding_moved} when attempts > 1 ->
-          with {:ok, fresh} <- living(entry.id), do: move(fresh, destination, attempts - 1)
+          with {:ok, fresh} <- living(entry.id), do: move(ctx, fresh, destination, attempts - 1)
 
         {:error, _} = error ->
           error

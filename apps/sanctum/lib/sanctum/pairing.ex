@@ -171,14 +171,19 @@ defmodule Sanctum.Pairing do
   }
 
   # Each operation that confirms something, as `tool.action`, the spelling
-  # a pending confirmation records (`Prima.Confirmation`).
+  # a pending confirmation records (`Prima.Confirmation`). The two rebinds
+  # confirm a widening only: their deciding site decides which rebind
+  # widens and asks there (`Sanctum.Vault.rebind_confirmation/5`), so this
+  # table makes no narrowing rebind confirm anything.
   @operations %{
     "vault.create" => :credential_entry,
     "vault.rotate" => :credential_entry,
+    "vault.rebind" => :credential_entry,
     "vault.authorize" => :credential_entry,
     "oauth.set_client" => :credential_entry,
     "instance_entry.create" => :credential_entry,
     "instance_entry.rotate" => :credential_entry,
+    "instance_entry.rebind" => :credential_entry,
     "instance_entry.set_audience" => :credential_sharing,
     "instance_entry.set_component_policy" => :credential_sharing,
     "key.create" => :credential_issuance,

@@ -177,6 +177,53 @@ defmodule Prima.Destination do
     end
   end
 
+  @doc """
+  The sets a destination admits, each absent bound spelled out: its
+  scheme, its effective port (the scheme's default when absent), its
+  hosts, its methods (every method `methods/0` names when absent) and its
+  path prefixes (`["/"]` when absent). `within?/2` compares these, and a
+  confirmation that shows a destination shows them.
+  """
+  @spec admitted(t()) :: %{
+          scheme: String.t(),
+          port: 1..65_535,
+          hosts: [String.t(), ...],
+          methods: [String.t(), ...],
+          paths: [String.t(), ...]
+        }
+  def admitted(%__MODULE__{} = destination) do
+    %{
+      scheme: destination.scheme,
+      port: destination_port(destination),
+      hosts: destination.hosts,
+      methods: destination.methods || @methods,
+      paths: destination.paths || ["/"]
+    }
+  end
+
+  @doc """
+  Whether every request `inner` admits, `outer` admits too: containment
+  over the admitted sets (`admitted/1`). The schemes and the effective
+  ports are equal; every host of `inner`, as written, is matched by a
+  host pattern of `outer` (`Prima.Network.domain_allowed?/2`), so
+  `*.a.example` is within `*.example` and `example` is not; `inner`'s
+  methods are a subset of `outer`'s; and every path prefix of `inner` has
+  a prefix of `outer` that is a segment prefix of it, so `/v1/models` is
+  within `/v1` and `/v1x` is not.
+  """
+  @spec within?(t(), t()) :: boolean()
+  def within?(%__MODULE__{} = inner, %__MODULE__{} = outer) do
+    inner = admitted(inner)
+    outer = admitted(outer)
+
+    inner.scheme == outer.scheme and inner.port == outer.port and
+      Enum.all?(inner.hosts, &Prima.Network.domain_allowed?(&1, outer.hosts)) and
+      inner.methods -- outer.methods == [] and
+      Enum.all?(inner.paths, fn path ->
+        Enum.any?(outer.paths, &List.starts_with?(segments(path), segments(&1)))
+      end)
+  end
+
   @doc "Whether `host` is a destination host: an exact hostname or `*.` and a hostname."
   @spec valid_host?(term()) :: boolean()
   def valid_host?("*." <> base), do: Regex.match?(@wildcard_base, base)

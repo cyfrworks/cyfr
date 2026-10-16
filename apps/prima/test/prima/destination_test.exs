@@ -320,6 +320,132 @@ defmodule Prima.DestinationTest do
     end
   end
 
+  describe "within?/2" do
+    # Both ways: whether `a` is within `b`, then whether `b` is within `a`.
+    defp both(a, b),
+      do: {Destination.within?(new!(a), new!(b)), Destination.within?(new!(b), new!(a))}
+
+    @host %{"hosts" => ["api.example.com"]}
+
+    test "a destination is within itself, and its absent port, methods and paths within their explicit equivalents" do
+      for d <- [
+            @host,
+            Map.merge(@host, %{"port" => 8443, "methods" => ["GET"], "paths" => ["/v1"]})
+          ] do
+        assert both(d, d) == {true, true}
+      end
+
+      assert both(@host, Map.put(@host, "port", 443)) == {true, true}
+
+      assert both(Map.put(@host, "scheme", "http"), %{
+               "hosts" => ["api.example.com"],
+               "scheme" => "http",
+               "port" => 80
+             }) == {true, true}
+
+      assert both(@host, Map.put(@host, "methods", Destination.methods())) == {true, true}
+      assert both(@host, Map.put(@host, "paths", ["/"])) == {true, true}
+
+      assert both(Map.put(@host, "paths", ["/v1"]), Map.put(@host, "paths", ["/v1/"])) ==
+               {true, true}
+    end
+
+    test "the scheme must be the same" do
+      assert both(@host, Map.put(@host, "scheme", "http")) == {false, false}
+    end
+
+    test "the effective port must be the same: 443 and 8443 are not within each other" do
+      assert both(@host, Map.put(@host, "port", 8443)) == {false, false}
+      assert both(Map.put(@host, "port", 443), Map.put(@host, "port", 8443)) == {false, false}
+
+      assert both(
+               Map.put(@host, "scheme", "http"),
+               Map.merge(@host, %{"scheme" => "http", "port" => 443})
+             ) == {false, false}
+    end
+
+    test "every host, as written, is matched by a host pattern of the outer destination" do
+      wildcard = %{"hosts" => ["*.example.com"]}
+
+      assert both(@host, wildcard) == {true, false}
+      assert both(%{"hosts" => ["*.a.example.com"]}, wildcard) == {true, false}
+      assert both(%{"hosts" => ["example.com"]}, wildcard) == {false, false}
+      assert both(%{"hosts" => ["api.example.com.evil.test"]}, wildcard) == {false, false}
+      assert both(%{"hosts" => ["*.xexample.com"]}, wildcard) == {false, false}
+
+      two = %{"hosts" => ["api.example.com", "files.example.com"]}
+      assert both(@host, two) == {true, false}
+      assert both(two, %{"hosts" => ["api.example.com", "other.example.com"]}) == {false, false}
+      assert both(two, %{"hosts" => ["*.example.com", "unrelated.test"]}) == {true, false}
+    end
+
+    test "methods: a subset is within, absent is every method" do
+      get = Map.put(@host, "methods", ["GET"])
+      get_post = Map.put(@host, "methods", ["GET", "POST"])
+
+      assert both(get, get_post) == {true, false}
+      assert both(get_post, @host) == {true, false}
+      assert both(get, Map.put(@host, "methods", ["POST"])) == {false, false}
+    end
+
+    test "paths: each inner prefix has an outer prefix that is a segment prefix of it, absent is the root" do
+      v1 = Map.put(@host, "paths", ["/v1"])
+
+      assert both(Map.put(@host, "paths", ["/v1/models"]), v1) == {true, false}
+      assert both(Map.put(@host, "paths", ["/v1x"]), v1) == {false, false}
+
+      assert both(
+               Map.put(@host, "paths", ["/v1/models-x"]),
+               Map.put(@host, "paths", ["/v1/models"])
+             ) == {false, false}
+
+      assert both(v1, @host) == {true, false}
+      assert both(v1, Map.put(@host, "paths", ["/"])) == {true, false}
+
+      assert both(
+               Map.put(@host, "paths", ["/v1/a", "/v2"]),
+               Map.put(@host, "paths", ["/v1", "/v2"])
+             ) ==
+               {true, false}
+
+      assert both(
+               Map.put(@host, "paths", ["/v1/a", "/v3"]),
+               Map.put(@host, "paths", ["/v1", "/v2"])
+             ) ==
+               {false, false}
+    end
+
+    test "whatever the inner destination admits, an outer one it is within admits too" do
+      destinations =
+        for hosts <- [["api.example.com"], ["*.example.com"], ["api.example.com", "x.test"]],
+            port <- [nil, 443, 8443],
+            methods <- [nil, ["GET"], ["GET", "POST"]],
+            paths <- [nil, ["/v1"], ["/v1/models"], ["/v1x"]] do
+          %{"hosts" => hosts, "port" => port, "methods" => methods, "paths" => paths}
+          |> Map.reject(fn {_key, value} -> is_nil(value) end)
+          |> new!()
+        end
+
+      requests =
+        for url <- [
+              "https://api.example.com/v1/models",
+              "https://api.example.com:8443/v1/models/x",
+              "https://a.example.com/v1x",
+              "https://x.test/v1",
+              "https://api.example.com/"
+            ],
+            method <- ["GET", "POST", "DELETE"],
+            do: {URI.parse(url), method}
+
+      for inner <- destinations, outer <- destinations, Destination.within?(inner, outer) do
+        for {uri, method} <- requests, Destination.matches?(inner, uri, method) do
+          assert Destination.matches?(outer, uri, method),
+                 "#{inspect(inner)} within #{inspect(outer)} but #{method} #{uri} escapes"
+        end
+      end
+    end
+  end
+
   describe "the grammar's predicates" do
     test "valid_host? and valid_path? answer the grammar new/2 holds" do
       assert Destination.valid_host?("api.example.com")

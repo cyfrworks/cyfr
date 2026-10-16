@@ -402,30 +402,54 @@ defmodule Arca.VaultStorage do
   `{:error, :binding_moved}` when another change landed first or the entry
   is gone; the caller re-reads and recomputes. The answer on success is
   the profiles blocked.
+
+  `verify:` (optional) is the caller's check, run as the transaction's
+  first step, before the compare-and-set: it answers `:ok`, or
+  `{:error, reason}`, which rolls the transaction back and is answered.
+  A widening rebind spends its confirmation there
+  (`Sanctum.Consent.Authz.consume/2`), so the proof, the move and the
+  blocked profiles commit together, and a move that loses its
+  compare-and-set rolls the proof's consumption back with it.
   """
-  @spec move_binding(Prima.Actor.t(), String.t(), String.t() | nil, map(), String.t()) ::
+  @spec move_binding(Prima.Actor.t(), String.t(), String.t() | nil, map(), String.t(), keyword()) ::
           {:ok, [String.t()]}
           | {:error, :binding_moved | :endpoints_immutable | {:invalid_destination, term()}}
+          | {:error, term()}
           | refusal()
-  def move_binding(%Prima.Actor{athanor_id: athanor_id}, id, from_digest, changes, blocked_status)
+  def move_binding(actor, id, from_digest, changes, blocked_status, opts \\ [])
+
+  def move_binding(
+        %Prima.Actor{athanor_id: athanor_id},
+        id,
+        from_digest,
+        changes,
+        blocked_status,
+        opts
+      )
       when resolved(athanor_id) and is_binary(id) and is_map(changes) and
-             (is_binary(from_digest) or is_nil(from_digest)) and is_binary(blocked_status) do
+             (is_binary(from_digest) or is_nil(from_digest)) and is_binary(blocked_status) and
+             is_list(opts) do
+    verify = Keyword.get(opts, :verify, fn -> :ok end)
+
     with :ok <- movable(changes) do
       Arca.Repo.Errors.with_db_rescue("Arca.VaultStorage.move_binding", fn ->
         transact(fn ->
-          rebind(athanor_id, id, %{
-            from_digest: from_digest,
-            changes: changes,
-            blocked_status: blocked_status
-          })
+          with :ok <- verify.() do
+            rebind(athanor_id, id, %{
+              from_digest: from_digest,
+              changes: changes,
+              blocked_status: blocked_status
+            })
+          end
         end)
       end)
     end
   end
 
-  def move_binding(%Prima.Actor{}, id, from_digest, changes, blocked_status)
+  def move_binding(%Prima.Actor{}, id, from_digest, changes, blocked_status, opts)
       when is_binary(id) and is_map(changes) and
-             (is_binary(from_digest) or is_nil(from_digest)) and is_binary(blocked_status),
+             (is_binary(from_digest) or is_nil(from_digest)) and is_binary(blocked_status) and
+             is_list(opts),
       do: {:error, :no_athanor}
 
   @doc """

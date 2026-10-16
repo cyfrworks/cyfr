@@ -971,7 +971,7 @@ A vault entry holds credential material — sealed at rest, never returned by an
 | `create` | `name`, `kind` (`api_key` \| `oauth` \| `bundle`), `fields`, `destination` (+ `disclose`) | Mint an entry with sealed material, bound to where it may go |
 | `rename` | `id`, `name` | Relabel an entry — a label is unique among the athanor's living entries |
 | `rotate` | `id`, `fields`, `expected_payload_rev` | Replace material, same field schema — CAS-guarded, **no re-consent needed** |
-| `rebind` | `id` + binding fields (`field_names`, `destination`, `disclose`) | Change what the credential *talks to* — dependent consents stop being ready until re-approved. Scopes change only by re-authorizing; endpoints never change |
+| `rebind` | `id` + binding fields (`field_names`, `destination`, `disclose`) | Change what the credential *talks to* — dependent consents stop being ready until re-approved. A widening rebind (a destination not within the stored one, disclosure turned on, or a disclosed field added) needs a fresh confirmation; a narrowing one the session alone. Scopes change only by re-authorizing; endpoints never change |
 | `authorize` | `id` (re-auth, + `oauth_scopes`) or `name` + `provider_hint` + `destination` (+ `oauth_scopes`, `oauth_endpoints`, `disclose`) | Start a browser OAuth grant; the callback completes it into the entry |
 | `revoke` | `id` | Kill the material; dependent profiles report not-ready |
 | `delete` | `id` | Remove the entry |
@@ -997,9 +997,15 @@ A vault entry holds credential material — sealed at rest, never returned by an
 Vault mutations require an interactive session — components, tincture frames and guest-plane callers can never reach these verbs; `list` needs a surface that could finish a consent walk. A tincture never takes a secret itself: `cyfr.credential(name)` has the shell prompt the person, and the shell's prompt makes the `create`.
 
 Entering or rotating the material (`create`, `rotate`) also requires fresh
-`credential_entry` confirmation for that exact change. A grant that binds
-an existing entry and a provider default change need only the session;
-neither enters material nor grants an unbound component access.
+`credential_entry` confirmation for that exact change, and so does a
+`rebind` that widens the binding: a destination that admits a host, port,
+scheme, method or path the stored one does not, disclosure turned on, or
+a disclosed field added. Its preview shows the binding it moves to and
+what each moved part was, and its confirmation names the binding it was
+asked over: when the entry is rebound in between, the repeat asks again.
+A rebind that narrows the binding, a grant that binds an existing entry
+and a provider default change need only the session; none enters
+material or grants an unbound component access.
 
 **OAuth is entry-keyed, not component-keyed.** Provider endpoints live on the vault entry (`google` is a built-in preset), and your OAuth app's client credentials are set once per provider with `oauth.set_client` (`provider`, `client_id`, `client_secret`) — operator configuration, not a manifest concern. The component declares a need of type `oauth:<provider>` with the scopes it requires. With `attach`, it names the connection on its request and CYFR attaches the token; a need that reads `get_access_token("<provider>")` requires an explicitly disclosed entry and receives short-lived, auto-refreshed tokens. The endpoints are immutable after creation. A projection narrower than the entry's scopes is refused unless the provider's preset declares a verified attenuating refresh; no shipped preset declares one.
 
@@ -1011,7 +1017,7 @@ An instance entry is a credential the platform admin enters once for the whole i
 |--------|----------|--------------|
 | `create` | `name`, `kind` (`api_key` \| `bundle`), `fields`, `destination` (with `methods` and `paths`), `audience` (`everyone` \| `listed`, + `members`), optional `component_policy` (`any` \| `shipped`, `any` when omitted), `person_daily`, `total_daily` | Seal the material and offer it — needs a fresh confirmation |
 | `rotate` | `entry_id`, `fields`, `expected_payload_rev` | Replace material, same field schema, CAS-guarded — needs a fresh confirmation |
-| `rebind` | `entry_id`, `destination` | Move where it may go — every profile that binds it, in every athanor, stops being ready until re-approved |
+| `rebind` | `entry_id`, `destination` | Move where it may go — every profile that binds it, in every athanor, stops being ready until re-approved. A destination not within the stored one needs a fresh confirmation; a narrower one the session alone |
 | `set_audience` | `entry_id`, `audience`, `members`, `expected` (`audience`, `members`: the audience you saw) | Who it is offered to — widening (to `everyone`, or adding a person) needs a fresh confirmation; narrowing the session alone. `expected` is required and compared with the stored audience, members as a set, before anything else: a stored audience that differs is a conflict ("The audience changed since it was shown, so nothing was saved."), with nothing saved and no confirmation asked, and a confirmed widening repeated over an audience that moved meets the same conflict. `members` are person ids (`people`): one that names no one who has signed in, a typed email among them, is refused `person_unknown`, and a denied person `person_denied` |
 | `set_component_policy` | `entry_id`, `component_policy` | `shipped` admits only an unmodified shipped component; `shipped` to `any` needs a fresh confirmation, `any` to `shipped` the session alone |
 | `set_caps` | `entry_id`, `person_daily`, `total_daily` | The day's request caps, at least one named; `null` takes the platform default, `0` admits no use, an omitted cap keeps its value |

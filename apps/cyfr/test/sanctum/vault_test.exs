@@ -8,6 +8,8 @@ defmodule Sanctum.VaultTest do
   # carry no binding key, so no binding lifetime is read for them.
   @dispense %{root_execution_id: "exec_reader_test", profile_id: nil, consent_id: nil}
 
+  import Ecto.Query, only: [from: 2]
+
   alias Sanctum.Vault
   alias Sanctum.VaultReader
 
@@ -91,6 +93,18 @@ defmodule Sanctum.VaultTest do
     })
   end
 
+  # A rebind its person confirmed: asked, proven and repeated as Prism
+  # repeats a change once its person confirmed it
+  # (`Sanctum.TestContext.confirming/2`).
+  defp rebind_confirmed(ctx, params),
+    do: Sanctum.TestContext.confirming(ctx, &Vault.rebind(&1, params))
+
+  # The pending confirmation whose secret `id` a signal answered.
+  defp confirmation!(ctx, id) do
+    {:ok, row} = Arca.PendingConfirmations.get(actor(ctx), Prima.Confirmation.ref(id))
+    row
+  end
+
   defp resource_for(ctx, id) do
     {:ok, entry} = Arca.VaultStorage.get(actor(ctx), id)
     {:ok, digest} = VaultReader.binding_digest(entry)
@@ -98,11 +112,14 @@ defmodule Sanctum.VaultTest do
     %{entry_id: id, binding_digest: digest, projection: %{fields: fields, scopes: []}}
   end
 
+  # A profile of its own consumer, so a case may mint one per entry.
   defp mint_profile_with_ref(ctx, entry_id, binding_digest) do
+    consumer = "formula:local.consumer-#{System.unique_integer([:positive])}"
+
     {:ok, profile} =
       Arca.Test.Writers.put_profile(%{
         athanor_id: ctx.athanor_id,
-        source_ref: "formula:local.consumer",
+        source_ref: consumer,
         kind: "owner",
         label: "default",
         status: "active"
@@ -128,7 +145,7 @@ defmodule Sanctum.VaultTest do
         },
         [
           %{
-            binding_key: "formula:local.consumer|@ingress|default",
+            binding_key: consumer <> "|@ingress|default",
             scope: "athanor",
             vault_entry_id: entry_id,
             binding_digest: binding_digest
@@ -138,6 +155,27 @@ defmodule Sanctum.VaultTest do
       )
 
     profile
+  end
+
+  # A telemetry handler on every repo statement: the test process runs the
+  # race's `act` once, at the first statement its `point` names, after that
+  # statement ran.
+  @doc false
+  def race(_event, _measurements, metadata, %{test: test, point: point, act: act}) do
+    if self() == test and Process.get(:rebind_race) == :armed and point.(metadata) do
+      Process.put(:rebind_race, :fired)
+      act.()
+    end
+
+    :ok
+  end
+
+  defp race!(point, act) do
+    handler = "vault-rebind-race-#{System.unique_integer([:positive])}"
+    config = %{test: self(), point: point, act: act}
+    :ok = :telemetry.attach(handler, [:arca, :repo, :query], &__MODULE__.race/4, config)
+    on_exit(fn -> :telemetry.detach(handler) end)
+    Process.put(:rebind_race, :armed)
   end
 
   describe "authorization class" do
@@ -375,7 +413,7 @@ defmodule Sanctum.VaultTest do
       assert Vault.destination_matches?(ctx, entry.name, url)
 
       {:ok, _} =
-        Vault.rebind(ctx, %{id: entry.id, destination: %{"hosts" => ["elsewhere.example"]}})
+        rebind_confirmed(ctx, %{id: entry.id, destination: %{"hosts" => ["elsewhere.example"]}})
 
       refute Vault.destination_matches?(ctx, entry.name, url)
     end
@@ -401,7 +439,7 @@ defmodule Sanctum.VaultTest do
       refute Vault.disclosed?(%{ctx | athanor_id: "ath_other"}, disclosed.name)
 
       # Disclosed by a rebind, the attach-only entry may be named.
-      {:ok, _} = Vault.rebind(ctx, %{id: attached.id, disclose: true})
+      {:ok, _} = rebind_confirmed(ctx, %{id: attached.id, disclose: true})
       assert Vault.disclosed?(ctx, attached.name)
 
       for entry <- [disclosed, attached], do: assert(row!(ctx, entry.id).last_used_at == nil)
@@ -662,7 +700,10 @@ defmodule Sanctum.VaultTest do
       profile = mint_profile_with_ref(ctx, view.id, old_resource.binding_digest)
 
       assert {:ok, %{binding_digest: new_digest, affected: affected}} =
-               Vault.rebind(ctx, %{id: view.id, field_names: ["anon_key", "service_key", "url"]})
+               rebind_confirmed(ctx, %{
+                 id: view.id,
+                 field_names: ["anon_key", "service_key", "url"]
+               })
 
       assert new_digest != old_resource.binding_digest
       assert affected == [profile.id]
@@ -691,10 +732,13 @@ defmodule Sanctum.VaultTest do
                )
 
       assert {:ok, %{binding_digest: first}} =
-               Vault.rebind(ctx, %{id: view.id, field_names: ["anon_key", "region", "url"]})
+               rebind_confirmed(ctx, %{id: view.id, field_names: ["anon_key", "region", "url"]})
 
       assert {:ok, %{binding_digest: digest}} =
-               Vault.rebind(ctx, %{id: view.id, field_names: ["anon_key", "service_key", "url"]})
+               rebind_confirmed(ctx, %{
+                 id: view.id,
+                 field_names: ["anon_key", "service_key", "url"]
+               })
 
       {:ok, row} = Arca.VaultStorage.get(actor(ctx), view.id)
       assert digest != first
@@ -818,11 +862,286 @@ defmodule Sanctum.VaultTest do
 
       assert row!(ctx, view.id).field_names == before.field_names
 
-      # The field schema still rebinds.
+      # The field schema still rebinds; a disclosed field it adds is the
+      # person's to confirm.
       assert {:ok, %{binding_digest: moved}} =
-               Vault.rebind(ctx, %{id: view.id, field_names: ["note"]})
+               rebind_confirmed(ctx, %{id: view.id, field_names: ["note"]})
 
       assert moved != before.binding_digest
+    end
+  end
+
+  describe "a widening rebind is its person's to confirm" do
+    setup %{ctx: ctx} do
+      {person, _user} = Sanctum.TestContext.person!(ctx)
+      %{person: person}
+    end
+
+    test "a rebind that widens where the material may go or what a component reads asks " <>
+           "first, and moves nothing until confirmed",
+         %{person: person} do
+      narrow = %{"hosts" => ["api.db.example"], "methods" => ["GET"], "paths" => ["/v1"]}
+
+      for {stored, params} <- [
+            # Another host, and a host pattern over the stored host.
+            {%{destination: narrow},
+             %{destination: Map.put(narrow, "hosts", ["api.db.example", "other.example"])}},
+            {%{destination: narrow}, %{destination: Map.put(narrow, "hosts", ["*.db.example"])}},
+            # Another method, and every method.
+            {%{destination: narrow}, %{destination: Map.put(narrow, "methods", ["GET", "POST"])}},
+            {%{destination: narrow}, %{destination: Map.delete(narrow, "methods")}},
+            # Another path prefix, a wider one, every path, and a sibling.
+            {%{destination: narrow}, %{destination: Map.put(narrow, "paths", ["/v1", "/v2"])}},
+            {%{destination: Map.put(narrow, "paths", ["/v1/models"])}, %{destination: narrow}},
+            {%{destination: narrow}, %{destination: Map.delete(narrow, "paths")}},
+            {%{destination: narrow}, %{destination: Map.put(narrow, "paths", ["/v1x"])}},
+            # Another port, another scheme.
+            {%{destination: narrow}, %{destination: Map.put(narrow, "port", 8443)}},
+            {%{destination: narrow}, %{destination: Map.put(narrow, "scheme", "http")}},
+            # Disclosure turned on, and a disclosed field added.
+            {%{disclose: false}, %{disclose: true}},
+            {%{}, %{field_names: ["anon_key", "service_key", "url"]}},
+            {%{}, %{field_names: ["anon_key", "region"]}}
+          ] do
+        view = create!(person, stored)
+        before = row!(person, view.id)
+        profile = mint_profile_with_ref(person, view.id, before.binding_digest)
+
+        assert {:error, {:confirmation_required, %{id: id, operation: "vault.rebind"}}} =
+                 Vault.rebind(person, Map.put(params, :id, view.id)),
+               inspect(params)
+
+        assert confirmation!(person, id).state == "pending"
+        assert row!(person, view.id) == before, inspect(params)
+
+        assert {:ok, %{status: "active"}} =
+                 Arca.ProfileStorage.get(actor(person), profile.id)
+      end
+    end
+
+    test "a rebind that narrows the binding, or keeps what it admits, needs the session alone",
+         %{person: person} do
+      wide = %{"hosts" => ["db.example", "*.api.example"]}
+
+      for {stored, params} <- [
+            {%{destination: wide}, %{destination: %{"hosts" => ["db.example"]}}},
+            {%{destination: wide}, %{destination: %{"hosts" => ["v1.api.example"]}}},
+            {%{destination: wide}, %{destination: %{"hosts" => ["*.eu.api.example"]}}},
+            {%{destination: wide}, %{destination: Map.put(wide, "methods", ["GET"])}},
+            {%{destination: wide}, %{destination: Map.put(wide, "paths", ["/v1"])}},
+            {%{destination: Map.put(wide, "paths", ["/v1"])},
+             %{destination: Map.put(wide, "paths", ["/v1/models"])}},
+            # The same admitted sets spelled out: the default port, every
+            # method, the root path.
+            {%{destination: wide},
+             %{
+               destination:
+                 Map.merge(wide, %{
+                   "port" => 443,
+                   "methods" => Prima.Destination.methods(),
+                   "paths" => ["/"]
+                 })
+             }},
+            {%{}, %{disclose: false}},
+            {%{}, %{field_names: ["url"]}},
+            # An attach-only entry's field schema is read by no component.
+            {%{disclose: false}, %{field_names: ["anon_key", "service_key", "url"]}}
+          ] do
+        view = create!(person, stored)
+        before = row!(person, view.id)
+
+        assert {:ok, %{binding_digest: digest}} =
+                 Vault.rebind(person, Map.put(params, :id, view.id)),
+               inspect(params)
+
+        refute digest == before.binding_digest
+        assert row!(person, view.id).binding_digest == digest
+      end
+
+      {:ok, open} = Arca.PendingConfirmations.list_open(actor(person), person.user_id)
+      refute Enum.any?(open, &(&1.operation == "vault.rebind"))
+    end
+
+    test "a confirmed widening rebind moves the binding its person was shown, and nothing else",
+         %{person: person} do
+      view =
+        create!(person, %{
+          disclose: false,
+          destination: %{"hosts" => ["db.example"], "paths" => ["/v1"]}
+        })
+
+      before = row!(person, view.id)
+      profile = mint_profile_with_ref(person, view.id, before.binding_digest)
+
+      params = %{
+        id: view.id,
+        destination: %{"hosts" => ["db.example", "files.example"], "methods" => ["GET"]},
+        disclose: true,
+        field_names: ["anon_key", "region", "url"]
+      }
+
+      assert {:error, {:confirmation_required, %{id: id}}} = Vault.rebind(person, params)
+
+      record = confirmation!(person, id)
+      assert {record.operation, record.action} == {"vault.rebind", "credential_entry"}
+      preview = Jason.decode!(record.preview)
+      assert preview["resource"] == view.name
+
+      # The binding it moves to, every part a rebind moves, and what each
+      # moved part was: the destination's admitted sets, the disclosure and
+      # the field schema: no secret, and no material.
+      assert preview["details"] == %{
+               "scheme" => "https",
+               "port" => "443",
+               "hosts" => ["db.example", "files.example"],
+               "hosts_before" => ["db.example"],
+               "methods" => ["GET"],
+               "methods_before" => Prima.Destination.methods(),
+               "paths" => ["/"],
+               "paths_before" => ["/v1"],
+               "disclosed" => "yes",
+               "disclosed_before" => "no",
+               "field_names" => ["anon_key", "region", "url"],
+               "field_names_before" => ["anon_key", "url"]
+             }
+
+      Sanctum.TestContext.prove!(person, id)
+
+      assert {:ok, %{binding_digest: digest, affected: [affected]}} =
+               Vault.rebind(%{person | confirmation_id: id}, params)
+
+      assert affected == profile.id
+      assert confirmation!(person, id).state == "consumed"
+
+      # What moved is what the preview showed, and what it did not show did
+      # not move: the provider, the OAuth endpoints and scopes, the
+      # material.
+      moved = row!(person, view.id)
+
+      assert moved.destination ==
+               ~s({"hosts":["db.example","files.example"],"methods":["GET"],"scheme":"https"})
+
+      assert {moved.attach_only, moved.field_names, moved.binding_digest} ==
+               {false, ~s(["anon_key","region","url"]), digest}
+
+      for column <- [
+            :provider_hint,
+            :oauth_endpoints,
+            :oauth_scopes,
+            :name,
+            :kind,
+            :status,
+            :sealed_payload,
+            :payload_rev
+          ] do
+        assert Map.fetch!(moved, column) == Map.fetch!(before, column), inspect(column)
+      end
+
+      assert Vault.rebind_details(before, moved) == preview["details"]
+      assert {:ok, ^digest} = VaultReader.binding_digest(moved)
+
+      {:ok, blocked} = Arca.ProfileStorage.get(actor(person), profile.id)
+      assert blocked.status == "needs_consent"
+    end
+
+    test "a proof moves its one binding: another entry, another destination, or a binding " <>
+           "that moved under it asks again",
+         %{person: person} do
+      view = create!(person)
+      other = create!(person)
+      wider = %{id: view.id, destination: %{"hosts" => ["db.example", "files.example"]}}
+
+      assert {:error, {:confirmation_required, %{id: id}}} = Vault.rebind(person, wider)
+      Sanctum.TestContext.prove!(person, id)
+      proven = %{person | confirmation_id: id}
+
+      for params <- [
+            %{wider | id: other.id},
+            %{wider | destination: %{"hosts" => ["db.example", "logs.example"]}},
+            Map.put(wider, :disclose, false)
+          ] do
+        before = row!(person, params.id)
+
+        assert {:error, {:confirmation_required, %{id: asked}}} = Vault.rebind(proven, params),
+               inspect(params)
+
+        refute asked == id
+        assert row!(person, params.id) == before
+      end
+
+      # The binding moves before the proof is spent (a narrowing, the
+      # session alone): the proof was given over the binding that was, and
+      # is not spent on the one that is.
+      assert {:ok, _} = Vault.rebind(person, %{id: view.id, field_names: ["url"]})
+      moved = row!(person, view.id)
+
+      assert {:error, {:confirmation_required, %{id: asked}}} = Vault.rebind(proven, wider)
+      refute asked == id
+      assert row!(person, view.id) == moved
+      assert confirmation!(person, id).state == "confirmed"
+    end
+
+    test "a write that lost its compare-and-set and rolled back is retried, and spends the one " <>
+           "proof the lost write did not",
+         %{person: person} do
+      view = create!(person)
+      params = %{id: view.id, destination: %{"hosts" => ["db.example", "files.example"]}}
+
+      assert {:error, {:confirmation_required, %{id: id}}} = Vault.rebind(person, params)
+      Sanctum.TestContext.prove!(person, id)
+
+      # In the binding move's transaction, once the proof is consumed and
+      # before the compare-and-set, the row's digest is moved in that same
+      # transaction: the compare-and-set loses, and its rollback takes the
+      # consumption and the move back together, so the retry reads the
+      # binding the proof was given over and finds the proof unspent.
+      race!(
+        fn %{source: source, query: query} ->
+          source == "pending_confirmations" and String.starts_with?(query, "UPDATE")
+        end,
+        fn ->
+          {1, _} =
+            Arca.Repo.update_all(from(v in Arca.Schemas.VaultEntry, where: v.id == ^view.id),
+              set: [binding_digest: "sha256:moved-in-the-lost-write"]
+            )
+        end
+      )
+
+      assert {:ok, %{binding_digest: digest}} =
+               Vault.rebind(%{person | confirmation_id: id}, params)
+
+      assert Process.get(:rebind_race) == :fired
+      assert row!(person, view.id).binding_digest == digest
+      assert confirmation!(person, id).state == "consumed"
+    end
+
+    test "a binding another rebind moved before the compare-and-set refuses the proof and " <>
+           "asks again, spending nothing",
+         %{person: person} do
+      view = create!(person)
+      params = %{id: view.id, destination: %{"hosts" => ["db.example", "files.example"]}}
+
+      assert {:error, {:confirmation_required, %{id: id}}} = Vault.rebind(person, params)
+      Sanctum.TestContext.prove!(person, id)
+
+      # Just after the rebind read the entry, another rebind of it commits.
+      race!(
+        fn %{source: source, query: query} ->
+          source == "vault_entries" and String.starts_with?(query, "SELECT")
+        end,
+        fn -> {:ok, _} = Vault.rebind(person, %{id: view.id, field_names: ["url"]}) end
+      )
+
+      assert {:error, {:confirmation_required, %{id: asked}}} =
+               Vault.rebind(%{person | confirmation_id: id}, params)
+
+      assert Process.get(:rebind_race) == :fired
+      refute asked == id
+
+      moved = row!(person, view.id)
+      assert moved.field_names == ~s(["url"])
+      assert moved.destination == @destination_text
+      assert confirmation!(person, id).state == "confirmed"
     end
   end
 
