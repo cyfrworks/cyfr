@@ -88,6 +88,10 @@ status="$(curl -s -m 10 -o /dev/null -w '%{http_code}' "http://127.0.0.1:$PORT$n
 step "a frame that connects to one origin and reads notes, with and without a flow to it"
 server_fixture "$CELL" tincture "$user_id" "$HERE/tinctures/flow-probe" flow-probe private >/dev/null
 server_fixture "$CELL" tincture "$user_id" "$HERE/tinctures/flow-probe-flowed" flow-probe-flowed private >/dev/null
+granted="$(cell_cyfr "$CELL" rpc \
+  "{answer, _} = Code.eval_file(\"$HERE/granted.exs\"); IO.puts(answer.([\"$user_id\", \"flow-probe-flowed\"]))" |
+  sed -n 's/^GRANTED=//p' | tail -1)"
+[ -n "$granted" ] || fail "the flowed control's grant was not committed"
 
 step "the malicious fullscreen frame, and a tincture waiting for its grant"
 server_fixture "$CELL" tincture "$user_id" "$HERE/tinctures/fullscreen-probe" fullscreen-probe private >/dev/null

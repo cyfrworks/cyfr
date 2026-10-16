@@ -8,7 +8,7 @@ Chromium, Firefox and WebKit. `proof.mjs` drives one attempt at a time and
 reads each where it can be seen: in the frame, at the harness's proxy, at a
 recording endpoint on a foreign origin, in a sibling frame, in the shell.
 
-Beside them, two flow probes (`tinctures/flow-probe/`, `tinctures/flow-probe-flowed/`) declare the recording endpoint's name as their one connect origin and a read of the person's notes, one with no flow of what the read may carry to that origin and one with the flows, and each sends what it read there. The harness serves that name over plain HTTP, so a send under the frame's `https://` connect policy is seen as the tunnel the browser asks the proxy for, not as a request the endpoint records.
+Beside them, two flow probes (`tinctures/flow-probe/`, `tinctures/flow-probe-flowed/`) declare the recording endpoint's name as their one connect origin and a read of the person's notes, one with no flow of what the read may carry to that origin and one with the flows, granted through the consent walk (`granted.exs`), and each sends what it read there. The harness serves that name over plain HTTP, so a send under the frame's `https://` connect policy is seen as the tunnel the browser asks the proxy for, not as a request the endpoint records.
 
 A second probe (`tinctures/fullscreen-probe/`) is the malicious fullscreen
 frame: it declares fullscreen and pointer lock, and the `vault.create`

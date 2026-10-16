@@ -23,7 +23,8 @@
 //                had, nothing asked
 //   flows        a version that lets one more class reach the host it keeps:
 //                the person's run is asked to grant again, the sheet shows
-//                that exit with the class; granted, the head holds the flow
+//                that exit with the class unticked; ticked and granted, the
+//                head holds the flow
 //   revocation   the profile revoked in the console: the next admission is
 //                refused, timed from the revocation's answer
 //
@@ -297,6 +298,14 @@ async function main() {
     const flowAsking = await ask({ op: "admit" });
     await openGrant(page);
     const flowSheet = await sheet(page);
+    // A re-grant opens from the head's narrowing, so a flow the version
+    // newly asks for opens unticked: the person ticks it.
+    const newFlow = page.locator(
+      `${layer} input[phx-click="toggle_flow"][phx-value-exit="${KEPT}"][phx-value-choice="outside"]`,
+    );
+    const openedOff = !(await newFlow.isChecked());
+    await newFlow.click();
+    const ticked = await waitFor(async () => newFlow.isChecked(), { what: "the new flow ticked" }).catch(() => false);
     await confirm(page);
     const flowHead = await ask({ op: "head" });
     const flowAdmitted = await ask({ op: "admit" });
@@ -305,10 +314,10 @@ async function main() {
       flowed.shape_digest !== reworded.shape_digest &&
         flowAsking.admitted === false && flowAsking.refusal === "consent_required" &&
         exitShown(flowSheet, KEPT, "outside") && exitShown(flowSheet, KEPT, "files_by_grant") &&
-        flowHead.revision === 3 && flowHead.flows.includes(`outside to ${KEPT}`) &&
+        openedOff && ticked && flowHead.revision === 3 && flowHead.flows.includes(`outside to ${KEPT}`) &&
         flowAdmitted.admitted === true && flowAdmitted.consent_id === flowHead.consent_id,
-      "a version letting one more class reach a host is asked again with that exit shown; granted, the head holds the flow",
-      { asking: flowAsking, flows: flowHead.flows, revision: flowHead.revision })) return;
+      "a version letting one more class reach a host is asked again with that exit shown, the new flow unticked; ticked and granted, the head holds it",
+      { asking: flowAsking, opened_off: openedOff, ticked, flows: flowHead.flows, revision: flowHead.revision })) return;
 
     // -----------------------------------------------------------------------
     // revocation
