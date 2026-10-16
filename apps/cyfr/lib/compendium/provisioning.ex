@@ -250,8 +250,8 @@ defmodule Compendium.Provisioning do
     # consent source, and its revision bytes are registered by the index
     # before any consent names it.
     with :ok <- Arca.ensure_roots(Context.actor(Athanor.seed_ctx(athanor_id))),
-         {:ok, _scan} <- register_bundle(athanor_id),
-         :ok <- aqua_definitions(athanor_id),
+         {:ok, _scan} <- register_bundle(athanor_id, claim),
+         :ok <- aqua_definitions(athanor_id, claim),
          :ok <- index_agents(ctx, claim),
          {:ok, closure} <- pull_required_deps(ctx),
          optional <- pull_optional_deps(ctx),
@@ -375,7 +375,7 @@ defmodule Compendium.Provisioning do
         Logger.warning("[Provisioning] #{athanor.id}: roots — #{inspect(reason)}")
     end
 
-    heal_shipped(ctx, athanor.id)
+    heal_shipped(ctx, athanor.id, claim)
 
     case AutoIndexer.scan(ctx: ctx) do
       {:ok, %{registered: registered}} when registered > 0 ->
@@ -427,7 +427,8 @@ defmodule Compendium.Provisioning do
   # What the athanor already chose, restored: a shipped version its rows
   # name but its tree lacks, and the shipped AQUA tree when it holds no
   # AQUA unit at all. A newer shipped version with no row is left available.
-  defp heal_shipped(ctx, athanor_id) do
+  # Each copy is the sync's, published only under its claim and slot.
+  defp heal_shipped(ctx, athanor_id, claim) do
     actor = Context.actor(ctx)
 
     with {:ok, statuses} <- Arca.Overlay.unit_statuses(actor, "components"),
@@ -443,7 +444,7 @@ defmodule Compendium.Provisioning do
         end)
 
       for {unit, :available} <- statuses, MapSet.member?(registered, unit) do
-        case Arca.Overlay.pull_shipped(actor, unit) do
+        case Arca.Overlay.pull_shipped(actor, unit, claim: fence(claim)) do
           :ok ->
             Logger.info("[Provisioning] #{athanor_id}: restored shipped #{Enum.join(unit, "/")}")
 
@@ -464,7 +465,7 @@ defmodule Compendium.Provisioning do
         held? = Enum.any?(statuses, fn {_unit, status} -> status != :available end)
 
         if not held? and statuses != %{} do
-          case Arca.Overlay.materialize_shipped(Context.actor(ctx), "aqua") do
+          case Arca.Overlay.materialize_shipped(Context.actor(ctx), "aqua", claim: fence(claim)) do
             {:ok, copied} ->
               Logger.info(
                 "[Provisioning] #{athanor_id}: copied #{length(copied)} shipped AQUA unit(s)"
@@ -518,16 +519,17 @@ defmodule Compendium.Provisioning do
 
   # The bundle copied in and registered as rows: every shipped version
   # directory the athanor does not hold is copied from the seed
-  # (`Arca.Overlay.materialize_shipped/2`), then the scan walks the
-  # athanor's `components/` and mints a row per version directory. An
-  # install without its bundle cannot provision anyone; say so rather than
-  # minting an empty athanor.
-  defp register_bundle(athanor_id) do
+  # (`Arca.Overlay.materialize_shipped/3`) under the attempt's claim and
+  # slot, then the scan walks the athanor's `components/` and mints a row
+  # per version directory. An install without its bundle cannot provision
+  # anyone; say so rather than minting an empty athanor.
+  defp register_bundle(athanor_id, claim) do
     ctx = Athanor.seed_ctx(athanor_id)
     actor = Context.actor(ctx)
 
     with :ok <- bundle_present(actor),
-         {:ok, _copied} <- Arca.Overlay.materialize_shipped(actor, "components") do
+         {:ok, _copied} <-
+           Arca.Overlay.materialize_shipped(actor, "components", claim: fence(claim)) do
       # A component that fails registration is logged by the scan and
       # skipped; the consent bootstrap's minting gate is what decides
       # whether what registered is enough to provision. A discovery outage
@@ -548,11 +550,13 @@ defmodule Compendium.Provisioning do
   # The shipped AQUA tree, checked well-formed first (a v2-shaped or empty
   # mount fails loud here, at the one moment an operator is watching,
   # instead of as an empty roster later), then copied into the athanor's
-  # `aqua/` — every shipped unit it does not yet hold.
-  defp aqua_definitions(athanor_id) do
+  # `aqua/` — every shipped unit it does not yet hold, under the attempt's
+  # claim and slot.
+  defp aqua_definitions(athanor_id, claim) do
+    actor = Context.actor(Athanor.seed_ctx(athanor_id))
+
     with :ok <- Compendium.AquaTemplate.seed_check(),
-         {:ok, _copied} <-
-           Arca.Overlay.materialize_shipped(Context.actor(Athanor.seed_ctx(athanor_id)), "aqua") do
+         {:ok, _copied} <- Arca.Overlay.materialize_shipped(actor, "aqua", claim: fence(claim)) do
       :ok
     else
       {:error, reason} -> {:error, {:aqua_template, reason}}
@@ -568,9 +572,7 @@ defmodule Compendium.Provisioning do
   # Anything else — a file that would not parse, a tree that could not be
   # read — leaves the rows as they were and is reported.
   defp index_agents(ctx, claim) do
-    case Compendium.AgentIndex.sync(ctx,
-           claim: %{owner: claim.owner, fence: claim.fence, slot: claim.slot}
-         ) do
+    case Compendium.AgentIndex.sync(ctx, claim: fence(claim)) do
       {:ok, _} ->
         :ok
 
@@ -582,6 +584,11 @@ defmodule Compendium.Provisioning do
         :ok
     end
   end
+
+  # The attempt's fence as every write it makes for the athanor names it:
+  # the claim's owner and fence, and the member slot the claim was taken
+  # under — never a slot read again since.
+  defp fence(claim), do: %{owner: claim.owner, fence: claim.fence, slot: claim.slot}
 
   # The bundle's required dependencies — everything a local component
   # declares it cannot run without — pulled under the attempt's deadline.

@@ -44,6 +44,43 @@ defmodule Arca.OverlayTest.GatedStagingAdapter do
   end
 end
 
+defmodule Arca.OverlayTest.ListingBarrierAdapter do
+  @moduledoc false
+  # Parks one writer right after it listed `components/`: the listing it
+  # answers is the real one, taken before the park, so the writer goes on
+  # from what it saw while the test changes the world under it.
+  use Arca.Storage.TestDouble
+
+  @gate {__MODULE__, :gate}
+
+  # Armed by the writer itself, so a listing by anyone else passes.
+  def arm(test_pid), do: :persistent_term.put(@gate, {test_pid, self()})
+  def disarm, do: :persistent_term.erase(@gate)
+
+  def list_recursive(actor, ["components"] = path) do
+    listed = Arca.Adapters.Local.list_recursive(actor, path)
+
+    case :persistent_term.get(@gate, nil) do
+      {test_pid, writer} when writer == self() ->
+        disarm()
+        send(test_pid, {:listed, self()})
+
+        receive do
+          :proceed -> :ok
+        after
+          30_000 -> :ok
+        end
+
+      _other ->
+        :ok
+    end
+
+    listed
+  end
+
+  def list_recursive(actor, path), do: Arca.Adapters.Local.list_recursive(actor, path)
+end
+
 defmodule Arca.OverlayTest.NoSwapAdapter do
   @moduledoc false
   # A tenant adapter that exports no `replace_tree/3` — an object store's
@@ -1913,6 +1950,95 @@ defmodule Arca.OverlayTest do
         )
 
       :ok
+    end
+
+    # Rows written straight: a lease that ran out, as time would leave it.
+    defp lapse_slot!(%{node: node}) do
+      {1, _} =
+        Arca.Repo.update_all(from(l in Arca.Schemas.CellLease, where: l.node == ^node),
+          set: [lease_until: DateTime.add(Arca.ServerMetaStorage.now!(), -60, :second)]
+        )
+
+      :ok
+    end
+
+    defp lapse_claim!(athanor_id) do
+      {1, _} =
+        Arca.Repo.update_all(
+          from(c in Arca.Schemas.ProvisioningClaim, where: c.athanor_id == ^athanor_id),
+          set: [lease_until: DateTime.add(Arca.ServerMetaStorage.now!(), -60, :second)]
+        )
+
+      :ok
+    end
+
+    test "a fill whose member lost its slot and claim, then won a newer slot back, " <>
+           "never replaces its successor's unit",
+         %{actor: actor} do
+      original = claimant!("regain")
+      node = original.node
+      {:ok, claim} = Sanctum.Provisioning.take_claim(actor.athanor_id, "first_need")
+      assert claim.slot == original
+
+      Application.put_env(:arca, :storage_adapter, Arca.OverlayTest.ListingBarrierAdapter)
+
+      on_exit(fn ->
+        Arca.OverlayTest.ListingBarrierAdapter.disarm()
+        Application.put_env(:arca, :storage_adapter, Arca.Adapters.Local)
+      end)
+
+      test_pid = self()
+      fence = %{owner: claim.owner, fence: claim.fence, slot: claim.slot}
+
+      old_fill =
+        Task.async(fn ->
+          Arca.OverlayTest.ListingBarrierAdapter.arm(test_pid)
+          Arca.Overlay.materialize_shipped(actor, "components", claim: fence)
+        end)
+
+      # The old fill has listed the shipped unit as missing, and holds no
+      # draft yet.
+      assert_receive {:listed, old_pid}, 10_000
+
+      # A successor boot takes the slot and the athanor, and commits its
+      # own bytes at the unit.
+      :ok = lapse_slot!(original)
+      {:ok, successor} = Arca.ControlPlane.take(node, node <> "#successor", 60_000)
+      assert successor.generation > original.generation
+      :ok = lapse_claim!(actor.athanor_id)
+      {:ok, next} = Sanctum.Provisioning.take_claim(actor.athanor_id, "first_need")
+      assert next.fence > claim.fence
+
+      assert {:ok, _} =
+               Arca.Overlay.commit_unit(
+                 actor,
+                 @version_dir,
+                 {:files,
+                  [
+                    {[@sentinel], ~s({"type":"catalyst","customized":true})},
+                    {["catalyst.wasm"], "SUCCESSOR-BYTES"}
+                  ]},
+                 cap: :exempt
+               )
+
+      {root, key} = Arca.Storage.UnitLocator.unit_key(@version_dir)
+      {:ok, theirs} = Arca.StorageUnits.current(actor, root, key)
+
+      # The old member wins its slot back, at a newer generation than both.
+      :ok = lapse_slot!(successor)
+      {:ok, regained} = Arca.ControlPlane.take(node, node <> "#boot_a", 60_000)
+      assert regained.generation > successor.generation
+
+      send(old_pid, :proceed)
+
+      assert {:error, {:materialize_failed, @version_dir, :not_owner}} =
+               Task.await(old_fill, 30_000)
+
+      assert {:ok, %{current_revision: revision}} = Arca.StorageUnits.current(actor, root, key)
+      assert revision == theirs.current_revision
+      assert {:ok, "SUCCESSOR-BYTES"} = Arca.get(actor, @version_dir ++ ["catalyst.wasm"])
+      assert {:ok, %{owner: owner}} = Arca.ProvisioningClaims.current(actor)
+      assert owner == next.owner
     end
 
     test "a member whose slot was taken over while it staged moves no pointer", %{actor: actor} do

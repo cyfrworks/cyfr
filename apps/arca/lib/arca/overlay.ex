@@ -627,10 +627,14 @@ defmodule Arca.Overlay do
 
   A unit the seed does not ship refuses as `{:error, :not_shipped}`; a
   path that is not a unit as `{:error, :not_a_unit}`.
+
+  `claim:` in `opts` is `commit_unit/4`'s: the copy is a provisioning
+  attempt's, published only while that attempt still holds its claim and
+  the slot it was taken under.
   """
-  @spec pull_shipped(Prima.Actor.t(), Arca.Storage.path()) ::
+  @spec pull_shipped(Prima.Actor.t(), Arca.Storage.path(), keyword()) ::
           :ok | {:error, :not_shipped | :not_a_unit | :not_overlaid | term()}
-  def pull_shipped(%Prima.Actor{} = actor, unit) do
+  def pull_shipped(%Prima.Actor{} = actor, unit, opts \\ []) when is_list(opts) do
     case Arca.Storage.locate(unit) do
       loc when loc in [:not_overlaid, :above_unit] ->
         {:error, :not_overlaid}
@@ -639,25 +643,31 @@ defmodule Arca.Overlay do
         cond do
           unit_of(loc) != unit -> {:error, :not_a_unit}
           not seed_unit_present?(loc) -> {:error, :not_shipped}
-          true -> do_pull_shipped(actor, loc)
+          true -> do_pull_shipped(actor, loc, Keyword.take(opts, [:claim]))
         end
     end
   end
 
-  defp do_pull_shipped(actor, {:dir, unit, sentinel}) do
+  defp do_pull_shipped(actor, {:dir, unit, sentinel}, claim) do
     seed_dir = seed(unit)
 
     with :ok <- seed_sentinel_present(seed_dir, sentinel),
          {:ok, _written} <-
-           commit_unit(actor, unit, {:tree, seed_dir, exclude: &excluded?/1}, cap: :exempt) do
+           commit_unit(
+             actor,
+             unit,
+             {:tree, seed_dir, exclude: &excluded?/1},
+             [cap: :exempt] ++ claim
+           ) do
       Logger.info("[Arca.Overlay] copied shipped #{Enum.join(unit, "/")} for #{actor.athanor_id}")
       :ok
     end
   end
 
-  defp do_pull_shipped(actor, {:file, unit}) do
+  defp do_pull_shipped(actor, {:file, unit}, claim) do
     with {:ok, bytes} <- seed_get(unit),
-         {:ok, _written} <- commit_unit(actor, unit, {:files, [{[], bytes}]}, cap: :exempt) do
+         {:ok, _written} <-
+           commit_unit(actor, unit, {:files, [{[], bytes}]}, [cap: :exempt] ++ claim) do
       Logger.info("[Arca.Overlay] copied shipped #{Enum.join(unit, "/")} for #{actor.athanor_id}")
       :ok
     end
@@ -669,18 +679,23 @@ defmodule Arca.Overlay do
   fills a fresh athanor at provisioning and what heals an athanor whose
   tree lost a copy. Answers the units copied; stops at the first unit
   that cannot be copied.
+
+  `claim:` in `opts` makes every copy a provisioning attempt's
+  (`pull_shipped/3`): a unit the athanor's next attempt committed after
+  this one listed the root is never replaced by this one's copy, since
+  the copy's commit holds this attempt's claim and slot or moves nothing.
   """
-  @spec materialize_shipped(Prima.Actor.t(), String.t()) ::
+  @spec materialize_shipped(Prima.Actor.t(), String.t(), keyword()) ::
           {:ok, [Arca.Storage.path()]} | {:error, term()}
-  def materialize_shipped(%Prima.Actor{} = actor, root)
-      when is_binary(root) do
+  def materialize_shipped(%Prima.Actor{} = actor, root, opts \\ [])
+      when is_binary(root) and is_list(opts) do
     with {:ok, statuses} <- unit_statuses(actor, root) do
       statuses
       |> Enum.filter(fn {_unit, status} -> status == :available end)
       |> Enum.map(fn {unit, _status} -> unit end)
       |> Enum.sort()
       |> Enum.reduce_while({:ok, []}, fn unit, {:ok, copied} ->
-        case pull_shipped(actor, unit) do
+        case pull_shipped(actor, unit, opts) do
           :ok -> {:cont, {:ok, [unit | copied]}}
           {:error, reason} -> {:halt, {:error, {:materialize_failed, unit, reason}}}
         end
@@ -758,6 +773,12 @@ defmodule Arca.Overlay do
       question and this one. A unit whose completion object is already
       served — its sentinel, or a file unit's file, whatever row names it
       — refuses as `{:error, :exists}` before any write.
+    * `claim:` — `%{owner: owner, fence: fence, slot: slot}`, the
+      provisioning claim a fill holds and the member slot it was taken
+      under. The row commit then verifies that slot and holds that claim
+      in its transaction (`Arca.StorageUnits.stamped_commit/6`) instead of
+      verifying the slot the member holds now, and refuses
+      `{:error, :not_owner}` once the attempt lost either.
   A file unit commits as `{:files, [{[], bytes}]}` and refuses
   `sentinel:`. A commit over existing tenant content replaces it whole
   (stale files from a prior partial or an overwritten pull do not
@@ -801,11 +822,17 @@ defmodule Arca.Overlay do
     # never be completed must not move a byte or hold the unit.
     with {:ok, entries} <- entries(internal, loc, source, override),
          :ok <- check_commit_cap(actor, cap) do
-      write(actor, internal, loc, fn _draft ->
-        if Keyword.get(opts, :if_absent, false) and occupied?(actor, loc),
-          do: {:error, :exists},
-          else: {:ok, entries}
-      end)
+      write(
+        actor,
+        internal,
+        loc,
+        fn _draft ->
+          if Keyword.get(opts, :if_absent, false) and occupied?(actor, loc),
+            do: {:error, :exists},
+            else: {:ok, entries}
+        end,
+        Keyword.take(opts, [:claim])
+      )
     end
   end
 
@@ -1150,8 +1177,9 @@ defmodule Arca.Overlay do
 
   # Step 1's row half. `gate` is asked while this writer holds the draft,
   # so no other commit can land between its answer and this commit; it
-  # answers what to write, or the refusal.
-  defp write(actor, internal, loc, gate) do
+  # answers what to write, or the refusal. `commit_opts` name the writer
+  # the row commit verifies (`Arca.StorageUnits.stamped_commit/6`).
+  defp write(actor, internal, loc, gate, commit_opts \\ []) do
     actor = actor
     {root, key} = UnitLocator.unit_key(unit_of(loc))
     token = StorageUnits.new_writer_token()
@@ -1160,7 +1188,7 @@ defmodule Arca.Overlay do
       case gate.(draft) do
         {:ok, entries} ->
           with_internal_writes(fn ->
-            publish(actor, internal, loc, draft, token, entries)
+            publish(actor, internal, loc, draft, token, entries, commit_opts)
           end)
 
         {:error, _} = refusal ->
@@ -1183,7 +1211,7 @@ defmodule Arca.Overlay do
   # Steps 1–3 on the object side, then the commit. Everything a refusal
   # leaves behind is this revision's own prefix, which goes with it —
   # except when the commit's outcome is unknown.
-  defp publish(actor, internal, loc, draft, token, entries) do
+  defp publish(actor, internal, loc, draft, token, entries, commit_opts) do
     unit = unit_of(loc)
     revision = StorageUnits.new_revision()
 
@@ -1202,7 +1230,14 @@ defmodule Arca.Overlay do
           commit_identity: actor.user_id || "system"
         }
 
-        case StorageUnits.stamped_commit(actor, draft, draft.current_revision, token, identity) do
+        case StorageUnits.stamped_commit(
+               actor,
+               draft,
+               draft.current_revision,
+               token,
+               identity,
+               commit_opts
+             ) do
           {:committed, generation} ->
             with {:ok, _written} = served <-
                    finish(internal, loc, revision, Enum.map(manifest, &elem(&1, 0))) do

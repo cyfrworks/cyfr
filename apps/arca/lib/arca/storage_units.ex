@@ -156,7 +156,7 @@ defmodule Arca.StorageUnits do
   the pointer does not move, or waits until the commit has landed. A
   member's cached standing outlives the row it stands for by up to a
   renewal, so the cached check every gate makes on the way in is never
-  what lets a pointer move.
+  what lets a pointer move. `stamped_commit/6` names the writer instead.
   """
   @spec commit(Prima.Actor.t(), StorageUnit.t(), String.t() | nil, String.t(), identity()) ::
           StorageUnit.commit_result() | {:error, :not_owner | :no_athanor}
@@ -177,8 +177,24 @@ defmodule Arca.StorageUnits do
   `commit/5`, answering the projection generation the commit stamped on
   the unit — the one `Arca.StorageProjectionChanges.mark_ready/5` is
   handed once the committed revision is served.
+
+  `:claim` in `opts` — `%{owner: owner, fence: fence, slot: slot}`, a
+  provisioning claim and the member slot it was taken under — makes the
+  commit a provisioning attempt's: the transaction verifies THAT slot and
+  holds THAT claim (`Arca.ProvisioningClaims.hold?/4`) in place of the
+  slot the member holds now, so an attempt whose member lost its slot, or
+  whose claim a successor took, moves no pointer even after the member
+  has won a newer slot back. Either loss answers `{:error, :not_owner}`.
+  Without it the writer is the member as it stands (`commit/5`).
   """
-  @spec stamped_commit(Prima.Actor.t(), StorageUnit.t(), String.t() | nil, String.t(), identity()) ::
+  @spec stamped_commit(
+          Prima.Actor.t(),
+          StorageUnit.t(),
+          String.t() | nil,
+          String.t(),
+          identity(),
+          keyword()
+        ) ::
           {:committed, pos_integer()}
           | {:error,
              :stale_revision
@@ -192,18 +208,37 @@ defmodule Arca.StorageUnits do
         %StorageUnit{} = unit,
         expected_revision,
         writer_token,
-        %{new_revision: new_revision, content_identity: content, commit_identity: who} = identity
+        %{new_revision: new_revision, content_identity: content, commit_identity: who} = identity,
+        opts \\ []
       )
       when is_binary(writer_token) and is_binary(new_revision) and is_binary(content) and
-             is_binary(who) and (is_nil(expected_revision) or is_binary(expected_revision)) do
+             is_binary(who) and (is_nil(expected_revision) or is_binary(expected_revision)) and
+             is_list(opts) do
     with {:ok, athanor} <- tenant(actor),
          :ok <- owned(athanor, unit),
-         {:ok, slot} <- Arca.ControlPlane.member_slot() do
+         {:ok, writer} <- writer(Keyword.get(opts, :claim)) do
       rescuing_db("commit", fn ->
-        move_pointer(actor, athanor, unit, expected_revision, writer_token, identity, slot)
+        move_pointer(actor, athanor, unit, expected_revision, writer_token, identity, writer)
       end)
     end
   end
+
+  # Who the commit is written for: the member as it stands, or the
+  # provisioning attempt a claim names, with the slot it was taken under.
+  defp writer(nil) do
+    with {:ok, slot} <- Arca.ControlPlane.member_slot(), do: {:ok, {:member, slot}}
+  end
+
+  defp writer(%{owner: owner, fence: fence, slot: slot})
+       when is_binary(owner) and is_integer(fence),
+       do: {:ok, {:claim, owner, fence, slot}}
+
+  # Inside the commit's locking transaction: the member's slot verified
+  # live, or the attempt's slot verified and its claim held.
+  defp writes?(_actor, {:member, slot}), do: Arca.ControlPlane.verify_held(slot) == :ok
+
+  defp writes?(actor, {:claim, owner, fence, slot}),
+    do: Arca.ProvisioningClaims.hold?(actor, owner, fence, slot)
 
   @doc """
   The committed pointer of one unit, for a reader to resolve once per
@@ -456,10 +491,10 @@ defmodule Arca.StorageUnits do
   # ---------------------------------------------------------------------------
 
   # The pointer move, the journal row and the projection generation share
-  # one transaction, so none exists without the others. The writer's slot
-  # is verified first, under its lease row's shared lock, so a member that
-  # lost its slot moves no pointer and a takeover cannot land between the
-  # check and the move. The compare is the update's own WHERE: no
+  # one transaction, so none exists without the others. The writer is
+  # verified first — its slot under the lease row's shared lock, and an
+  # attempt's claim row held — so a writer that lost either moves no
+  # pointer and a takeover cannot land between the check and the move. The compare is the update's own WHERE: no
   # read-then-write window, on either adapter. The unit row is locked by
   # that update before the root's epoch is raised — the order every
   # storage writer keeps — and the root and key the generation is stamped
@@ -472,12 +507,12 @@ defmodule Arca.StorageUnits do
          expected_revision,
          writer_token,
          identity,
-         slot
+         writer
        ) do
     now = DateTime.utc_now()
 
     Arca.Repo.locking_transaction(fn ->
-      if Arca.ControlPlane.verify_held(slot) == :lost, do: Arca.Repo.rollback(:not_owner)
+      unless writes?(actor, writer), do: Arca.Repo.rollback(:not_owner)
 
       case swap(athanor, id, expected_revision, writer_token, identity, now) do
         [{root, unit_key}] ->
