@@ -473,9 +473,8 @@ defmodule Cyfr.Telemetry.Catalog do
     [:cyfr, :seed_offer, :completed] => %{
       consumers: [:operator],
       note:
-        "the boot's seed offer ran to its end under the cell's seed_release claim, " <>
-          "after the endpoint started: readiness does not wait for it, so this is " <>
-          "where an operator learns it finished"
+        "the boot's seed offer ran to its end under the cell's seed_release claim: " <>
+          "readiness does not wait for it, so this is where an operator learns it finished"
     },
     [:cyfr, :seed_offer, :aborted] => %{
       consumers: [:operator],

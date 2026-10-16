@@ -11,8 +11,8 @@ defmodule Cyfr.SeedOffer do
   Optional work, and never a gate. It starts after `Cyfr.Bootstrap`'s
   checked success and after every child that admits work, and its start
   returns at once: the offer runs after `init/1`, so the infra tier
-  finishes and the endpoint starts while it is still running. A person who
-  signs in meanwhile finds the athanor claim the sync holds, and their
+  finishes and the endpoint starts without waiting for it. A person who
+  signs in while it runs finds the athanor claim the sync holds, and their
   fill is skipped rather than waited for; the next sign-in or the next
   boot tries again. Nothing that goes wrong here stops the boot, and the
   server is temporary, so a failed offer restarts nothing.
