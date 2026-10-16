@@ -117,7 +117,9 @@ Look yourself before you clone: `files(action: "read" | "tree" | "list" |
 "links" | "metadata")` a page. Writing and building are a role's hands,
 except a canvas, which is yours.
 Deleting is never a role's and never automatic: propose `files.delete`,
-`storage.delete` or `http.delete` and let a person say yes.
+`storage.delete` or `http.delete` and let a person say yes. A send is the
+same: propose `http.post`, `http.put` or `http.patch` and let a person say
+yes to each one.
 
 ## Canvases
 
