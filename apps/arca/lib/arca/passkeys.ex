@@ -280,7 +280,13 @@ defmodule Arca.Passkeys do
 
   defp first_method(%{state: "pending"}, _opts), do: :ok
 
+  # The mark is set and read under the person's lock, the one a pairing's
+  # completion takes before it sets the same mark (`Arca.PairingInvitations`),
+  # so of two first methods racing, one claims the latch and the other
+  # finds it set.
   defp mark_first(user_id, claims_first?) do
+    _locked = Arca.DirectoryHeads.lock_person!(user_id)
+
     case {PersonIdentities.first_method!(user_id), claims_first?} do
       {:marked, _} -> :ok
       {:already, false} -> :ok

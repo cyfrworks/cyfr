@@ -11,6 +11,7 @@ import {
   Glass,
   generateKeyPair,
   homeOrigin,
+  keyDigest,
   openingPlan,
   openStore,
   promptModel,
@@ -620,6 +621,10 @@ export default {
           return this.drawGlass(this.glass)
         case "pair":
           return this.pairGlass(code).then((outcome) => (outcome === "certify" ? undefined : this.glass.start()))
+        case "unpaired":
+          // No device and no code: the key a pairing will use is made now,
+          // before any invitation, and its code shown to approve it.
+          return this.prepareKey().then(() => this.glass.start())
         default:
           return this.glass.start()
       }
@@ -674,7 +679,7 @@ export default {
     this.drawStatus("pairing", "Pairing this device…")
 
     try {
-      const base = {invitation_secret: pending.code, device_key: pending.publicKey, certificate}
+      const base = {invitation_secret: pending.code, device_key: pending.publicKey, key_digest: pending.keyDigest, certificate}
       const started = await this.pushAsync("pair_start", base)
       if (!started || started.error) return this.endPending((started && started.error) || "The pairing did not start.")
 
@@ -707,22 +712,46 @@ export default {
     this.glass.closeSocket()
   },
 
-  // The pairing, in two steps through the page: the key pair is made here
-  // and its private key never leaves; the secret goes only to this home.
+  // The key a pairing uses, made before any invitation and kept until a
+  // pairing uses it: the page shows its code, which the person approves on
+  // a client of theirs. Its private key never leaves this browser.
+  async prepareKey() {
+    try {
+      let prepared = await this.store.loadPrepared()
+      if (!prepared) {
+        const {privateKey, publicKey} = await generateKeyPair()
+        const deviceKey = await publicKeyB64(publicKey)
+        prepared = await this.store.savePrepared({privateKey, publicKey: deviceKey, keyDigest: await keyDigest(deviceKey)})
+      }
+      await this.pushAsync("prepared", {key_digest: prepared.keyDigest})
+      return prepared
+    } catch (_error) {
+      this.pairRefused("This browser cannot hold a device key here.")
+      return null
+    }
+  },
+
+  // The pairing, in two steps through the page, with the key made before
+  // the invitation opened, the one its code approved; the secret goes only
+  // to this home.
   async pairGlass(code) {
     this.drawStatus("pairing", "Pairing this device…")
 
     try {
-      const {privateKey, publicKey} = await generateKeyPair()
-      const deviceKey = await publicKeyB64(publicKey)
-      const started = await this.pushAsync("pair_start", {invitation_secret: code, device_key: deviceKey})
+      const prepared = await this.store.loadPrepared()
+      if (!prepared) {
+        return this.pairRefused("This browser made no key for this pairing. Open this home's /pair page here first, approve the code it shows on a device of yours, then open the link it gives you here.")
+      }
+      const {privateKey, publicKey: deviceKey, keyDigest: digest} = prepared
+      const started = await this.pushAsync("pair_start", {invitation_secret: code, device_key: deviceKey, key_digest: digest})
       if (!started || started.error) return this.pairRefused((started && started.error) || "The pairing did not start.")
 
       // The person's keys are at another home, which certifies this device:
       // the code and key pair wait for its certificate, at most the
       // invitation's life, while the person goes there.
       if (started.certify) {
-        await this.store.savePending({code, privateKey, publicKey: deviceKey, certify: started.certify, at: Date.now()})
+        await this.store.savePending({code, privateKey, publicKey: deviceKey, keyDigest: digest, certify: started.certify, at: Date.now()})
+        await this.store.clearPrepared()
         this.certifyAsk = {request: {...started.certify, device_key: deviceKey}, home: ""}
         this.drawStatus("certify", "Your keys are held at another home. Certify this device there to pair it here.")
         return "certify"
@@ -733,10 +762,11 @@ export default {
       // device, which the device learns here first.
       const reserved = started.challenge && started.challenge.client_id
       const proof = await prove(started.challenge, privateKey, {purpose: "pair", home: this.home, deviceKey, clientId: reserved})
-      const paired = await this.pushAsync("pair_proof", {invitation_secret: code, device_key: deviceKey, proof})
+      const paired = await this.pushAsync("pair_proof", {invitation_secret: code, device_key: deviceKey, key_digest: digest, proof})
       if (!paired || paired.error) return this.pairRefused((paired && paired.error) || "The pairing did not finish.")
 
       await this.store.save({privateKey, publicKey: deviceKey, clientId: paired.client_id, certificate: paired.certificate})
+      await this.store.clearPrepared()
       return "paired"
     } catch (error) {
       this.pairRefused(error.refused ? error.message : "This browser cannot hold a device key here.")
@@ -844,7 +874,7 @@ export default {
             doc,
             "p",
             {class: "text-sm"},
-            "This device is already paired with this home. Pairing it under this code forgets the device it holds and pairs it as whoever showed the code."
+            "This device is already paired with this home. Pairing it under this code forgets the device it holds and pairs the key this browser made for the code you approved."
           ),
           element(doc, "button", {type: "button", "data-test": "glass-replace", "data-action": "replace"}, "Forget this device and pair again"),
           element(doc, "button", {type: "button", "data-test": "glass-keep", "data-action": "keep"}, "Keep this device")
@@ -985,7 +1015,7 @@ export function clearForms(dialog) {
 export function glassStatus(glass, drawn) {
   switch (glass && glass.status) {
     case "unpaired":
-      return {state: "unpaired", text: "This device is not paired. Open a pairing code from a browser signed in to this home."}
+      return {state: "unpaired", text: "This device is not paired. Approve the code shown here on a device of yours signed in to this home, then open the pairing link it gives you here."}
     case "connecting":
       return {state: "connecting", text: "Connecting…"}
     case "renewing":

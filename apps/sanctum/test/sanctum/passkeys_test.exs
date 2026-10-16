@@ -143,6 +143,41 @@ defmodule Sanctum.PasskeysTest do
     fun.(%{ctx | confirmation_id: id})
   end
 
+  # Confirm the record the signal `id` answered with a fresh
+  # re-authentication from a session that names no client: a confirmation
+  # no passkey and no paired client gave. Answers the confirmed row.
+  defp reauthenticated!(ctx, id) do
+    assert {:ok, %{state: "confirmed"} = row} =
+             Arca.PendingConfirmations.confirm(
+               Context.actor(ctx),
+               Prima.Confirmation.ref(id),
+               %{proof: "oidc_reauth"}
+             )
+
+    assert {row.confirmed_passkey_id, row.confirmed_client_id} == {nil, nil}
+    row
+  end
+
+  # A person admitted through an OpenID Connect door this home
+  # re-authenticates, so a re-authentication is a fresh method of theirs.
+  defp oidc_person! do
+    issuer = oidc_issuer!()
+    subject = "passkeys-#{System.unique_integer([:positive])}"
+    person!(provider: "oidcc", key: Sanctum.Auth.Identity.key(:oidcc, issuer, subject))
+  end
+
+  # A passkey registered on a confirmation the person's re-authentication
+  # gave, with `auth`: answers the register's answer.
+  defp register_reauthenticated(ctx, auth) do
+    answer = credential(ctx, auth)
+
+    assert {:error, {:confirmation_required, %{id: id, operation: "passkey.register"}}} =
+             Passkeys.register(ctx, %{credential: answer})
+
+    reauthenticated!(ctx, id)
+    {id, Passkeys.register(%{ctx | confirmation_id: id}, %{credential: answer})}
+  end
+
   defp change(name \\ "prod-key", secret \\ "sk-secret") do
     %{
       operation: "vault.create",
@@ -412,6 +447,63 @@ defmodule Sanctum.PasskeysTest do
       assert Enum.sort(Map.keys(meta)) == [:athanor_id, :expires_at, :operation, :ref, :user_id]
 
       assert length(Arca.Repo.all(from(p in Passkey, where: p.user_id == ^user.id))) == 2
+    end
+
+    test "with a passkey held, a re-authentication no passkey or device gave adds no passkey; the passkey's own assertion does" do
+      %{ctx: ctx, user: user} = person!()
+      {auth, first} = registered!(ctx)
+      assert %DateTime{} = first_method_at(user.id)
+
+      assert {id, refused} = register_reauthenticated(ctx, authenticator())
+      assert refused == {:error, Sanctum.Pairing.addition_refusal()}
+
+      # Nothing is stored and the confirmation is not spent.
+      assert Enum.map(passkeys(user.id), & &1.id) == [first.id]
+
+      assert {:ok, %{state: "confirmed"}} =
+               Arca.PendingConfirmations.get(Context.actor(ctx), Prima.Confirmation.ref(id))
+
+      # The same addition confirmed by the passkey they hold lands active.
+      third = credential(ctx, authenticator())
+
+      assert {:ok, %{status: "active", passkey: %{state: "active"}}} =
+               confirming(ctx, auth, &Passkeys.register(&1, %{credential: third}))
+
+      assert length(passkeys(user.id)) == 2
+    end
+
+    test "before any passkey or device, a re-authentication registers the first passkey and sets the latch" do
+      %{ctx: ctx, user: user} = oidc_person!()
+      assert first_method_at(user.id) == nil
+      assert Passkeys.fresh_method?(ctx)
+
+      assert {_id, {:ok, %{status: "active", passkey: %{state: "active"}}}} =
+               register_reauthenticated(ctx, authenticator())
+
+      assert %DateTime{} = first_method_at(user.id)
+    end
+
+    test "revoking every passkey never reopens the latch: a re-authentication still adds none" do
+      %{ctx: ctx, user: user, athanor: athanor} = oidc_person!()
+      auth = authenticator()
+
+      assert {_id, {:ok, %{status: "active", passkey: passkey}}} =
+               register_reauthenticated(ctx, auth)
+
+      assert {:ok, %{state: "revoked"}} = confirming(ctx, auth, &Passkeys.revoke(&1, passkey.id))
+      latched = first_method_at(user.id)
+      assert %DateTime{} = latched
+
+      # A new session of theirs: the door it came through still
+      # re-authenticates, and no passkey stands.
+      later = session_ctx(user, athanor, provider: "oidcc")
+      assert Passkeys.fresh_method?(later)
+
+      assert {_id, refused} = register_reauthenticated(later, authenticator())
+      assert refused == {:error, Sanctum.Pairing.addition_refusal()}
+
+      assert Enum.filter(passkeys(user.id), &(&1.state != "revoked")) == []
+      assert first_method_at(user.id) == latched
     end
 
     test "the last active passkey of a person with no linked door is their way in, and stays" do

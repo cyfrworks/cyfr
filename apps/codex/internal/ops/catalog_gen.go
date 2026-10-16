@@ -2962,6 +2962,8 @@ func (args OauthSetClientArgs) MarshalJSON() ([]byte, error) {
 
 // PairingBeginArgs carries arguments for pairing.begin.
 type PairingBeginArgs struct {
+	// begin: the code the new device shows, the digest of the key it generated; only that key completes the pairing
+	KeyDigest string `json:"key_digest"`
 }
 
 // MarshalJSON supplies the operation's fixed action discriminator.
@@ -2979,6 +2981,8 @@ type PairingCompleteArgs struct {
 	InvitationSecret string `json:"invitation_secret"`
 	// The device's public key, unpadded base64url (complete, renew)
 	DeviceKey string `json:"device_key"`
+	// complete: the digest of the device key, the code the device showed
+	KeyDigest string `json:"key_digest"`
 	// complete: the device key's signature over the pair challenge; absent, the answer is the challenge to sign
 	Proof Field[PairingCompleteArgsProof] `json:"proof,omitzero"`
 	// complete: for a person whose identity is at another home, the device certificate their home issued for this client, device key, home and athanor; absent for a person whose keys are here

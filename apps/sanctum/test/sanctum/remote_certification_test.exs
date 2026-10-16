@@ -254,6 +254,37 @@ defmodule Sanctum.RemoteCertificationTest do
       assert length(records(user)) == 1
     end
 
+    test "once a passkey exists, a re-authentication no passkey or device gave certifies nothing; the passkey's proof does",
+         %{ctx: ctx, user: user, device: device} do
+      _auth = TestContext.passkey!(user.id)
+      refute is_nil(Arca.Repo.get_by!(PersonIdentity, user_id: user.id).first_method_at)
+
+      {:error, {:confirmation_required, %{id: id}}} =
+        RemoteCertification.certify(ctx, args(device))
+
+      ref = Prima.Confirmation.ref(id)
+
+      assert {:ok, %{state: "confirmed", confirmed_passkey_id: nil, confirmed_client_id: nil}} =
+               Arca.PendingConfirmations.confirm(Context.actor(ctx), ref, %{
+                 proof: "oidc_reauth"
+               })
+
+      # Refused in the transaction that would record it: no record, no
+      # certificate answered, and the confirmation left unconsumed.
+      assert RemoteCertification.certify(%{ctx | confirmation_id: id}, args(device)) ==
+               {:error, Sanctum.Pairing.addition_refusal()}
+
+      assert records(user) == []
+      assert {:ok, %{state: "confirmed"}} = Arca.PendingConfirmations.get(Context.actor(ctx), ref)
+
+      # The same certification confirmed by the passkey they hold.
+      assert {:ok, %{certificate: certificate}} =
+               TestContext.confirming(ctx, &RemoteCertification.certify(&1, args(device)))
+
+      assert {:ok, _cert} = DeviceCert.decode(certificate)
+      assert [_record] = records(user)
+    end
+
     test "this home, a malformed request and an unenrolled person certify nothing",
          %{ctx: ctx, device: device} do
       assert {:error, {:invalid_argument, message}} =

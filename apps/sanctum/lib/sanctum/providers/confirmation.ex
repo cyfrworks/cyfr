@@ -34,7 +34,12 @@ defmodule Sanctum.Providers.Confirmation do
       `passkey` (a passkey of theirs is registered at this home), `oidc`
       (a fresh sign-in at the identity provider of their linked door) and
       `email` (a code can reach their verified email). A client offers only
-      those it can carry out.
+      those it can carry out. A record that adds a device, a passkey or a
+      door (`Sanctum.Pairing.addition?/1`), once a passkey or a paired
+      device ever existed for the person, is marked `restricted` and
+      offers only the proofs such an addition takes (`Sanctum.Pairing`):
+      on a paired device, those it records itself as giving (`passkey`,
+      `email`); anywhere else, a `passkey`.
     * `cancel` ends one.
 
   Every action is the person's own, on the external plane, through an
@@ -164,9 +169,15 @@ defmodule Sanctum.Providers.Confirmation do
   def handle(%Context{} = ctx, %{"action" => "pending"}) do
     with {:ok, user_id} <- person(ctx),
          {:ok, rows} <- open(ctx, user_id),
-         {:ok, credentials} <- credentials(ctx, user_id) do
+         {:ok, credentials} <- credentials(ctx, user_id),
+         {:ok, latched?} <- latched(user_id) do
       methods = methods(user_id, credentials)
-      {:ok, %{confirmations: Enum.map(rows, &pending(&1, credentials, methods))}}
+
+      {:ok,
+       %{
+         confirmations:
+           Enum.map(rows, &pending(&1, credentials, offered(ctx, &1, methods, latched?)))
+       }}
     else
       {:error, reason} -> {:error, refusal(reason)}
     end
@@ -248,6 +259,38 @@ defmodule Sanctum.Providers.Confirmation do
     |> Enum.map(fn {method, _available} -> method end)
   end
 
+  # Whether a passkey or a paired device ever existed for the person here:
+  # the first-method latch, which nothing clears (`Arca.PersonIdentities`).
+  defp latched(user_id) do
+    case Arca.PersonIdentities.get(Prima.Actor.system(), user_id) do
+      {:ok, %{first_method_at: at}} -> {:ok, not is_nil(at)}
+      {:error, :not_found} -> {:ok, false}
+      {:error, _unanswered} -> {:error, :unavailable}
+    end
+  end
+
+  # The proofs a record offers, and whether they are restricted: an
+  # addition, once the latch is set, takes a proof a passkey or a paired
+  # client gives (`Sanctum.Pairing`), so a paired device offers the proofs
+  # it records itself as giving and any other client a passkey alone. A
+  # forced-fresh sign-in completes on a page that names no client.
+  defp offered(ctx, row, methods, latched?) do
+    if latched? and Pairing.addition?(row.operation) do
+      kept =
+        case ctx do
+          %Context{auth_method: :device, client_id: client_id} when is_binary(client_id) ->
+            ["passkey", "email"]
+
+          %Context{} ->
+            ["passkey"]
+        end
+
+      {Enum.filter(methods, &(&1 in kept)), true}
+    else
+      {methods, false}
+    end
+  end
+
   # The record `ref` names, in the context's athanor, of the context's own
   # person: a ref of another person, another athanor or none is not found.
   defp own(actor, ref, user_id) do
@@ -261,9 +304,9 @@ defmodule Sanctum.Providers.Confirmation do
 
   # An open record as a client of its person reads it: its ref, what it
   # would change, as the home stored it, which client asked, which proofs
-  # the person can give, and how a passkey proves it — the challenge is the
-  # raw bytes of the record's digest.
-  defp pending(row, credentials, methods) do
+  # the person can give and whether they are restricted, and how a passkey
+  # proves it — the challenge is the raw bytes of the record's digest.
+  defp pending(row, credentials, {methods, restricted?}) do
     "sha256:" <> hex = row.digest
 
     %{
@@ -275,6 +318,7 @@ defmodule Sanctum.Providers.Confirmation do
       state: row.state,
       expires_at: row.expires_at,
       methods: methods,
+      restricted: restricted?,
       webauthn: %{
         "challenge" => Prima.Identity.Encoding.b64(Base.decode16!(hex, case: :lower)),
         "rpId" => row.rp_id,

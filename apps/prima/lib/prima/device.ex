@@ -11,10 +11,13 @@ defmodule Prima.Device do
 
   From the glass to the home:
 
-    * `pair_request` — `invitation_secret`, the 16-byte bearer secret from
-      the pairing QR, named so `Prima.Sanitizer` redacts it wherever a
-      message is logged, and `device_key`, the public key the glass
-      generated and never exports.
+    * `pair_request` — `invitation_secret`, the 16-byte secret from the
+      pairing QR, named so `Prima.Sanitizer` redacts it wherever a message
+      is logged; `device_key`, the public key the glass generated before
+      the invitation opened and never exports; and `key_digest`, that
+      key's digest (`key_digest/1`), the one the glass showed and the
+      invitation was opened for. A `key_digest` that is not the digest of
+      `device_key` is refused by its shape.
     * `connect` — `client_id` and the `certificate` (`Prima.DeviceCert`)
       the glass connects under.
     * `renew` — `client_id`, and optionally the old `certificate`, which
@@ -54,6 +57,8 @@ defmodule Prima.Device do
 
   @protocol "cyfr-device/v1"
   @invitation_bytes 16
+  @digest_bytes 32
+  @code_group 4
   @max_args_bytes 65_536
   @max_names 64
   @name ~r/\A[a-z][a-z0-9_]{0,31}\z/
@@ -61,7 +66,8 @@ defmodule Prima.Device do
 
   # type => {sender, required fields, optional fields}, each field with its codec
   @types %{
-    pair_request: {:glass, [invitation_secret: :invitation, device_key: :key], []},
+    pair_request:
+      {:glass, [invitation_secret: :invitation, device_key: :key, key_digest: :digest], []},
     connect: {:glass, [client_id: :id, certificate: :certificate], []},
     renew: {:glass, [client_id: :id], [certificate: :certificate]},
     proof: {:glass, [proof: :proof], []},
@@ -114,6 +120,46 @@ defmodule Prima.Device do
   def types(sender) when sender in [:glass, :home] do
     Enum.sort(for {type, {^sender, _required, _optional}} <- @types, do: type)
   end
+
+  @doc """
+  The digest of the device public key `device_key` (32 raw bytes):
+  SHA-256 over those bytes, as unpadded base64url. The glass shows it
+  before an invitation opens, `pairing.begin` names it, and only the key
+  it is the digest of completes that invitation.
+  """
+  @spec key_digest(binary()) :: String.t()
+  def key_digest(device_key) when is_binary(device_key) and byte_size(device_key) == 32,
+    do: Encoding.b64(:crypto.hash(:sha256, device_key))
+
+  @doc "Whether `value` is spelled as a key digest is: unpadded base64url of 32 bytes."
+  @spec key_digest?(term()) :: boolean()
+  def key_digest?(value), do: match?({:ok, _digest}, get(:digest, value))
+
+  @doc """
+  The key digest `key_digest` as a person reads and types it: its
+  characters in groups of four, separated by single spaces.
+  `from_key_code/1` reads it back.
+  """
+  @spec key_code(String.t()) :: String.t()
+  def key_code(key_digest) when is_binary(key_digest) do
+    key_digest
+    |> String.graphemes()
+    |> Enum.chunk_every(@code_group)
+    |> Enum.map_join(" ", &Enum.join/1)
+  end
+
+  @doc """
+  The key digest a person typed or pasted as `text`, its code spelled with
+  or without the spaces between its groups: `{:ok, key_digest}`, or
+  `:error` for anything else.
+  """
+  @spec from_key_code(term()) :: {:ok, String.t()} | :error
+  def from_key_code(text) when is_binary(text) do
+    digest = String.replace(text, ~r/\s+/u, "")
+    if key_digest?(digest), do: {:ok, digest}, else: :error
+  end
+
+  def from_key_code(_text), do: :error
 
   @doc "The fields that mark an intent as carrying continuous data."
   @spec continuous_fields() :: [String.t()]
@@ -207,12 +253,25 @@ defmodule Prima.Device do
       else: {:error, {:invalid_field, "result"}}
   end
 
+  # A pairing request names the digest of the key it carries, so a key the
+  # invitation was not opened for is refused before anything is read.
+  defp one_outcome(:pair_request, %{device_key: device_key, key_digest: key_digest}) do
+    if key_digest(device_key) == key_digest,
+      do: :ok,
+      else: {:error, {:invalid_field, "key_digest"}}
+  end
+
   defp one_outcome(_type, _body), do: :ok
 
   defp get(:id, value), do: ok_if(Encoding.id?(value), value)
   defp get(:ms, value), do: ok_if(Encoding.ms?(value), value)
   defp get(:key, value), do: Encoding.unb64(value, Encoding.key_bytes())
   defp get(:invitation, value), do: Encoding.unb64(value, @invitation_bytes)
+
+  defp get(:digest, value) do
+    with {:ok, _bytes} <- Encoding.unb64(value, @digest_bytes), do: {:ok, value}
+  end
+
   defp get(:certificate, value), do: DeviceCert.decode(value)
   defp get(:challenge, value), do: Challenge.decode(value)
   defp get(:proof, value), do: Proof.decode(value)

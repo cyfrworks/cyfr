@@ -370,6 +370,8 @@ defmodule Sanctum.SignIn do
   another person's or another session's, or naming another provider; a
   door that is not linkable), the consent signal `{:confirmation_required,
   _}` and the confirmation's other refusals (`Sanctum.Consent.Authz`),
+  the addition refusal (`Sanctum.Pairing.addition_refusal/0`: a
+  confirmation no passkey or paired client gave, once one ever existed),
   `{:conflict, _}` (another person's identity), `{:door, reason}` (the door
   no longer admits it), `:not_standing`, `:unavailable`.
   """
@@ -410,7 +412,7 @@ defmodule Sanctum.SignIn do
              Prima.Actor.system(),
              ctx.user_id,
              door,
-             also: fn _linked -> Authz.consume(ctx, {:sign_in_methods, change}) end
+             also: fn _linked -> linked_confirmed(ctx, change) end
            ) do
         {:ok, %{linked: linked}} ->
           if linked, do: Authz.consumed(ctx)
@@ -429,6 +431,15 @@ defmodule Sanctum.SignIn do
           {:error, reason}
       end
     end
+  end
+
+  # Inside the link's transaction, under the person's lock: the
+  # confirmation consumed, and, once a passkey or a paired device ever
+  # existed for the person, one of them must have given it
+  # (`Sanctum.Pairing.addition_confirmed/1`).
+  defp linked_confirmed(ctx, change) do
+    with :ok <- Authz.consume(ctx, {:sign_in_methods, change}),
+         do: Sanctum.Pairing.addition_confirmed(ctx)
   end
 
   # What confirming a link approves: this door, by provider and subject,

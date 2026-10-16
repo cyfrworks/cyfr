@@ -17,7 +17,10 @@ defmodule Sanctum.Providers.ConfirmationTest do
   request-log row, decision or log line keeps it. A plain OAuth sign-in is
   no proof. A code is bound to its record, used once, and five wrong ones
   cancel the record. `pending` names the proofs the person can give
-  (`methods`). The stream `confirmation.changes` is declared beside the
+  (`methods`); a record that adds a device, a passkey or a door, once a
+  passkey or a paired device ever existed for the person, is `restricted`
+  to the proofs such an addition takes: a passkey, and on a paired device
+  also an emailed code. The stream `confirmation.changes` is declared beside the
   operations, projecting the ref and what happened to the record. No
   secret, code or assertion reaches a log.
   """
@@ -26,6 +29,7 @@ defmodule Sanctum.Providers.ConfirmationTest do
 
   import ExUnit.CaptureLog
 
+  alias Prima.DeviceCert.{Challenge, Proof}
   alias Prima.Identity.Encoding
   alias Sanctum.Context
   alias Sanctum.TestContext
@@ -478,6 +482,149 @@ defmodule Sanctum.Providers.ConfirmationTest do
       {:ok, keys} = Sanctum.ApiKey.list(key_ctx)
       refute Enum.any?(keys, &(&1.name == "minted"))
     end
+  end
+
+  # ---------------------------------------------------------------------------
+  # An addition once a passkey or a paired device exists
+  # ---------------------------------------------------------------------------
+
+  describe "a record that adds a device, a passkey or a door" do
+    # A person whose door is this home's identity provider, so a fresh
+    # sign-in is a proof they can give, with a verified email.
+    setup do
+      issuer = "https://issuer.addition.example"
+
+      previous =
+        {Application.get_env(:sanctum, :oidc_issuer), Application.get_env(:ueberauth, Ueberauth)}
+
+      on_exit(fn ->
+        {oidc, ueberauth} = previous
+        restore(:sanctum, :oidc_issuer, oidc)
+        restore(:ueberauth, Ueberauth, ueberauth)
+      end)
+
+      Application.put_env(:sanctum, :oidc_issuer, issuer)
+
+      Application.put_env(:ueberauth, Ueberauth,
+        providers: [
+          oidcc:
+            {Ueberauth.Strategy.Oidcc,
+             issuer: :cyfr_oidc, client_id: "cid", client_secret: "csec"}
+        ]
+      )
+
+      n = System.unique_integer([:positive])
+
+      {:ok, user} =
+        Users.upsert_from_provider(%{
+          id: Sanctum.Auth.Identity.key(:oidcc, issuer, "addition-#{n}"),
+          provider: "oidcc",
+          email: "confirmation-addition#{n}@example.com",
+          verified: true
+        })
+
+      {:ok, athanor} = Athanors.create_group(user.id, "Confirmation addition #{n}")
+      %{oidc_user: user, oidc_ctx: session_ctx(user, athanor)}
+    end
+
+    test "is restricted once the latch is set: a session offers a passkey, a paired device a passkey or a code, never a sign-in",
+         %{oidc_user: user, oidc_ctx: session_ctx} do
+      assert latch(user.id) == nil
+
+      # Before any passkey or device: the addition and any other record
+      # offer every proof the person can give, unrestricted.
+      assert {:error, {:confirmation_required, %{id: addition, operation: "pairing.begin"}}} =
+               call(session_ctx, "pairing", "begin", %{"key_digest" => digest()})
+
+      other = asked!(session_ctx)
+
+      for id <- [addition, other] do
+        record = pending!(session_ctx, id)
+        assert record.restricted == false, record.operation
+        assert record.methods == ["oidc", "email"], record.operation
+      end
+
+      # A device paired, under the person's first passkey: the latch is set.
+      device_ctx = device_ctx!(session_ctx)
+      refute latch(user.id) == nil
+      assert %Context{auth_method: :device, client_id: "pcl_" <> _} = device_ctx
+
+      # From the session, the addition offers a passkey alone; the other
+      # record every proof.
+      assert %{restricted: true, methods: ["passkey"]} = pending!(session_ctx, addition)
+
+      assert %{restricted: false, methods: ["passkey", "oidc", "email"]} =
+               pending!(session_ctx, other)
+
+      # From the paired device, the addition offers the proofs the device
+      # gives itself; the other record every proof.
+      assert %{restricted: true, methods: ["passkey", "email"]} = pending!(device_ctx, addition)
+
+      assert %{restricted: false, methods: ["passkey", "oidc", "email"]} =
+               pending!(device_ctx, other)
+    end
+  end
+
+  defp digest do
+    {device_key, _private} = :crypto.generate_key(:eddsa, :ed25519)
+    Prima.Device.key_digest(device_key)
+  end
+
+  # The person's first-method latch: when a passkey or a paired device
+  # first existed for them here, or nil.
+  defp latch(user_id) do
+    case Arca.PersonIdentities.get(Prima.Actor.system(), user_id) do
+      {:ok, %{first_method_at: at}} -> at
+      {:error, :not_found} -> nil
+    end
+  end
+
+  # A device of the person paired through the ceremony, and the context its
+  # channel holds once its connect proof verified, as a request under its
+  # certificate verifies it.
+  defp device_ctx!(session_ctx) do
+    {device_key, private} = :crypto.generate_key(:eddsa, :ed25519)
+    key_digest = Prima.Device.key_digest(device_key)
+    source = "198.51.100.61"
+
+    {:ok, invitation} =
+      session_ctx
+      |> TestContext.confirmed(:device_pairing, Sanctum.Pairing.invitation_change(key_digest))
+      |> Sanctum.Pairing.begin(%{key_digest: key_digest})
+
+    glass = Context.build(%{authenticated: false, client_ip: source})
+    submission = %{device_key: device_key}
+
+    {:ok, %{challenge: challenge}} =
+      Sanctum.Pairing.complete(glass, invitation.invitation_secret, submission)
+
+    {:ok, %{client_id: client_id, certificate: certificate}} =
+      Sanctum.Pairing.complete(
+        glass,
+        invitation.invitation_secret,
+        Map.put(submission, :proof, Proof.sign(challenge, private))
+      )
+
+    {:ok, connect} =
+      Challenge.new(
+        purpose: :connect,
+        home: certificate.audience,
+        athanor: certificate.athanor,
+        client_id: client_id,
+        device_key: device_key,
+        nonce: :crypto.strong_rand_bytes(Challenge.nonce_bytes()),
+        now: System.system_time(:millisecond)
+      )
+
+    {:ok, ctx} =
+      Sanctum.DeviceCerts.verify_connect(
+        %{client_id: client_id, certificate: certificate, source: source},
+        Proof.sign(connect, private),
+        connect
+      )
+
+    {:ok, ctx} = Sanctum.DeviceCerts.verify_request(certificate, ctx, [])
+    ctx
   end
 
   # ---------------------------------------------------------------------------

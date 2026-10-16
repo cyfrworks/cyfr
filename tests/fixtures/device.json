@@ -1,5 +1,5 @@
 {
-  "comment": "The vectors pinning Prima.Device, the device protocol: every side reads each message as its sender sent it and writes it back to the same map, and refuses each refusal with the named reason. Certificates, challenges and proofs are tests/fixtures/device_cert.json's. An intent is one discrete operation; one carrying a stream, frames, chunks, samples or a continuous field is refused by its shape. The too_large case is the valid intent with args {\"blob\": args_filler_length 'a' characters}.",
+  "comment": "The vectors pinning Prima.Device, the device protocol: every side reads each message as its sender sent it and writes it back to the same map, and refuses each refusal with the named reason. Certificates, challenges and proofs are tests/fixtures/device_cert.json's. A pairing request names the digest of the key it carries (key_digest: SHA-256 over the key's 32 raw bytes, unpadded base64url), which a person reads as its code, groups of four separated by single spaces; one naming another digest is refused. An intent is one discrete operation; one carrying a stream, frames, chunks, samples or a continuous field is refused by its shape. The too_large case is the valid intent with args {\"blob\": args_filler_length 'a' characters}.",
   "continuous_fields": [
     "stream",
     "frames",
@@ -7,11 +7,17 @@
     "samples",
     "continuous"
   ],
+  "key_digest": {
+    "code": "sv5Q Hby2 ooLr BWLs _JOr jk8g oRiw YWrr CDbE 2Rui E0o",
+    "device_key": "VuvwnjcI5bKkUvYLeH7B7Y-xHIrpKvaDLettMxKZg2c",
+    "key_digest": "sv5QHby2ooLrBWLs_JOrjk8goRiwYWrrCDbE2RuiE0o"
+  },
   "messages": [
     {
       "message": {
         "device_key": "VuvwnjcI5bKkUvYLeH7B7Y-xHIrpKvaDLettMxKZg2c",
         "invitation_secret": "UjcQhGOiIAu_9xjWI7A-Fw",
+        "key_digest": "sv5QHby2ooLrBWLs_JOrjk8goRiwYWrrCDbE2RuiE0o",
         "protocol": "cyfr-device/v1",
         "type": "pair_request"
       },
@@ -575,10 +581,34 @@
       "message": {
         "device_key": "VuvwnjcI5bKkUvYLeH7B7Y-xHIrpKvaDLettMxKZg2c",
         "invitation_secret": "oCNvVXi2nEs",
+        "key_digest": "sv5QHby2ooLrBWLs_JOrjk8goRiwYWrrCDbE2RuiE0o",
         "protocol": "cyfr-device/v1",
         "type": "pair_request"
       },
       "name": "an invitation of 8 bytes",
+      "sender": "glass"
+    },
+    {
+      "error": "invalid_field",
+      "message": {
+        "device_key": "VuvwnjcI5bKkUvYLeH7B7Y-xHIrpKvaDLettMxKZg2c",
+        "invitation_secret": "UjcQhGOiIAu_9xjWI7A-Fw",
+        "key_digest": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        "protocol": "cyfr-device/v1",
+        "type": "pair_request"
+      },
+      "name": "a pairing request naming another key's digest",
+      "sender": "glass"
+    },
+    {
+      "error": "missing_field",
+      "message": {
+        "device_key": "VuvwnjcI5bKkUvYLeH7B7Y-xHIrpKvaDLettMxKZg2c",
+        "invitation_secret": "UjcQhGOiIAu_9xjWI7A-Fw",
+        "protocol": "cyfr-device/v1",
+        "type": "pair_request"
+      },
+      "name": "a pairing request naming no key digest",
       "sender": "glass"
     },
     {

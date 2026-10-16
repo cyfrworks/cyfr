@@ -19,9 +19,11 @@ defmodule Sanctum.RemoteCertification do
   nothing), and then one transaction locks the person, consumes the
   confirmation and records the certification
   (`Arca.DeviceCertifications.certify/3`) only while the person's head is
-  the certificate's `key_epoch`. Only then is the certificate answered; a
-  transaction that refuses leaves the signed certificate unanswered and
-  the confirmation unconsumed.
+  the certificate's `key_epoch`. Once a passkey or a paired device ever
+  existed for the person here, one of them must have given that confirmation
+  (`Sanctum.Pairing`, its module doc). Only then is the certificate
+  answered; a transaction that refuses leaves the signed certificate
+  unanswered and the confirmation unconsumed.
 
   ## Renewing (`person.renew_certificate`)
 
@@ -249,7 +251,13 @@ defmodule Sanctum.RemoteCertification do
       expires_at: DateTime.from_unix!(certificate.expires_at, :millisecond)
     }
 
-    verify = fn -> Authz.consume(ctx, {:device_pairing, change}) end
+    # The confirmation consumed under the person's lock and, once a
+    # passkey or a paired device ever existed for the person, given by one
+    # of them (`Sanctum.Pairing.addition_confirmed/1`).
+    verify = fn ->
+      with :ok <- Authz.consume(ctx, {:device_pairing, change}),
+           do: Sanctum.Pairing.addition_confirmed(ctx)
+    end
 
     case Arca.DeviceCertifications.certify(Context.actor(ctx), attrs, verify) do
       {:ok, row} -> {:ok, row}

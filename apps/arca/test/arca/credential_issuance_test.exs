@@ -37,6 +37,7 @@ defmodule Arca.CredentialIssuanceTest do
     OauthProviderCredential,
     PairedClient,
     PairingInvitation,
+    PendingConfirmation,
     Session,
     User,
     VaultEntry,
@@ -109,6 +110,7 @@ defmodule Arca.CredentialIssuanceTest do
     on_exit(fn ->
       unboxed(fn ->
         Arca.Repo.delete_all(where(PairingInvitation, athanor_id: ^athanor_id))
+        Arca.Repo.delete_all(where(PendingConfirmation, athanor_id: ^athanor_id))
         Arca.Repo.delete_all(where(Webhook, athanor_id: ^athanor_id))
         Arca.Repo.delete_all(where(VaultEntry, athanor_id: ^athanor_id))
         Arca.Repo.delete_all(where(DeviceCertificate, athanor_id: ^athanor_id))
@@ -772,27 +774,82 @@ defmodule Arca.CredentialIssuanceTest do
      fn -> match?({:ok, %{sealed_payload: "v2"}}, Arca.VaultStorage.get(actor, entry.id)) end}
   end
 
+  # The invitation is opened on the person's proven `pairing.begin`
+  # confirmation, which its verifier consumes once the issuance's own
+  # verifier agrees, as `Sanctum.Pairing.begin/2` consumes it.
   defp other_write(:invitation_open, user_id, athanor_id, seat_id) do
     actor = Prima.Actor.in_athanor(athanor_id)
     secret_hash = Prima.Digest.sha256("glass-#{System.unique_integer([:positive])}")
+    {secret, expected} = pairing_confirmation!(actor, user_id)
 
     open = fn opts ->
       attrs = %{
         user_id: user_id,
         membership_id: seat_id,
         secret_hash: secret_hash,
+        key_digest: Prima.Device.key_digest(:crypto.strong_rand_bytes(32)),
+        confirmation_ref: Prima.Confirmation.ref(secret),
         audience_home: "https://home.example",
         lifetime_ms: 60_000,
         source: get_in(opts, [:lock, :source])
       }
 
-      case Arca.PairingInvitations.open(actor, attrs, Keyword.fetch!(opts, :verify)) do
+      verify = fn locked ->
+        with :ok <- Keyword.fetch!(opts, :verify).(locked),
+             {:ok, _consumed} <- Arca.PendingConfirmations.consume(actor, secret, expected) do
+          :ok
+        end
+      end
+
+      case Arca.PairingInvitations.open(actor, attrs, verify) do
         {:ok, _invitation} -> :ok
         {:error, _reason} = refusal -> refusal
       end
     end
 
     {open, fn -> Arca.Repo.exists?(where(PairingInvitation, secret_hash: ^secret_hash)) end}
+  end
+
+  # A `pairing.begin` confirmation of the person, proven by a
+  # re-authentication no passkey or paired client gave (the person holds
+  # neither, so their first-method latch is open): its secret and what
+  # consuming it expects.
+  defp pairing_confirmation!(actor, user_id) do
+    secret = "cnf_" <> Base.url_encode64(:crypto.strong_rand_bytes(32), padding: false)
+    opener = "session:credential-issuance-test"
+
+    {:ok, record} =
+      Prima.Confirmation.new(
+        id: Prima.Confirmation.ref(secret),
+        home: "https://home.example",
+        rp_id: "home.example",
+        athanor: actor.athanor_id,
+        person: user_id,
+        operation: "pairing.begin",
+        args_digest: Prima.Digest.sha256("args-#{System.unique_integer()}"),
+        action: "device_pairing",
+        preview: %{home: "https://home.example", athanor: "CI", operation: "pairing.begin"},
+        challenge: :crypto.strong_rand_bytes(32),
+        expires_at: System.system_time(:millisecond) + 300_000
+      )
+
+    {:ok, _} =
+      Arca.PendingConfirmations.open(actor, %{
+        record: record,
+        opener: opener,
+        asker: %{"kind" => "session"}
+      })
+
+    {:ok, _} = Arca.PendingConfirmations.confirm(actor, record.id, %{proof: "oidc_reauth"})
+
+    {secret,
+     %{
+       user_id: user_id,
+       operation: "pairing.begin",
+       args_digest: record.args_digest,
+       preview: record.preview,
+       opener: opener
+     }}
   end
 
   # An invitation is opened only by a member that owns its slot

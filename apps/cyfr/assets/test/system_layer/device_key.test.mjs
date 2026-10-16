@@ -32,6 +32,8 @@ import {
   HOME_TYPES,
   intentMessage,
   jcs,
+  keyCode,
+  keyDigest,
   memoryStore,
   openingPlan,
   pairRequestMessage,
@@ -223,13 +225,31 @@ describe("device.json", () => {
     assert.deepEqual(renewMessage(located.client_id, located.certificate), located)
 
     const pair = named("a pairing request")
-    assert.deepEqual(pairRequestMessage(pair.invitation_secret, pair.device_key), pair)
+    assert.deepEqual(pairRequestMessage(pair.invitation_secret, pair.device_key, pair.key_digest), pair)
 
     const intent = named("a discrete intent")
     assert.deepEqual(intentMessage(intent.id, intent.operation, intent.args), intent)
 
     const repeated = named("an intent repeated under its confirmation")
     assert.deepEqual(intentMessage(repeated.id, repeated.operation, repeated.args, repeated.confirmation_id), repeated)
+  })
+
+  test("a pairing request names its key's digest, and the code a person types is that digest's", async () => {
+    const {device_key, key_digest, code} = device.key_digest
+    assert.equal(await keyDigest(device_key, subtle), key_digest)
+    assert.equal(await keyDigest(device_key), key_digest)
+    assert.equal(keyCode(key_digest), code)
+    assert.equal(code.replace(/ /g, ""), key_digest)
+
+    // The pairing request's digest is the digest of the key it carries.
+    const pair = named("a pairing request")
+    assert.equal(await keyDigest(pair.device_key, subtle), pair.key_digest)
+
+    // The two pairing requests the protocol refuses: another key's digest,
+    // and none.
+    const refused = Object.fromEntries(device.refusals.map(({name, error}) => [name, error]))
+    assert.equal(refused["a pairing request naming another key's digest"], "invalid_field")
+    assert.equal(refused["a pairing request naming no key digest"], "missing_field")
   })
 
   test("each message the home sends is read, and no other", () => {
@@ -304,6 +324,27 @@ describe("the device key", () => {
     }
     await assert.rejects(prove(own("connect"), key, undefined, subtle), (error) => error.refused === true)
     await assert.rejects(prove(own("connect"), key, {...asked, home: undefined}, subtle), (error) => error.refused === true)
+  })
+
+  test("a key prepared for a pairing is kept beside the device, and cleared alone", async () => {
+    const {privateKey: key, publicKey: pub} = await generateKeyPair(subtle)
+    const deviceKey = await publicKeyB64(pub, subtle)
+    const prepared = {privateKey: key, publicKey: deviceKey, keyDigest: await keyDigest(deviceKey, subtle)}
+
+    const empty = memoryStore()
+    assert.equal(await empty.loadPrepared(), null)
+    await empty.savePrepared(prepared)
+    assert.deepEqual(await empty.loadPrepared(), prepared)
+    assert.equal(await empty.load(), null)
+    await empty.clearPrepared()
+    assert.equal(await empty.loadPrepared(), null)
+
+    const record = {clientId: "pcl_1"}
+    const held = memoryStore(record, null, null, prepared)
+    assert.deepEqual(await held.loadPrepared(), prepared)
+    assert.deepEqual(await held.load(), record)
+    await held.clearPrepared()
+    assert.deepEqual(await held.load(), record)
   })
 
   test("the pairing code is read from the fragment's code alone", () => {
@@ -916,7 +957,7 @@ describe("a glass that holds a device, opened on a pairing link", () => {
     }
   }
 
-  async function mountGlassPage({stored, replies}) {
+  async function mountGlassPage({stored, replies, prepared = null, hash = "#code=UjcQhGOiIAu_9xjWI7A-Fw"}) {
     const saved = {document: globalThis.document, location: globalThis.location, history: globalThis.history, WebSocket: globalThis.WebSocket}
     const sockets = []
     const pushed = []
@@ -929,7 +970,7 @@ describe("a glass that holds a device, opened on a pairing link", () => {
       addEventListener() {},
       removeEventListener() {}
     }
-    globalThis.location = {hash: "#code=UjcQhGOiIAu_9xjWI7A-Fw", pathname: "/pair", search: "", protocol: "https:", host: "alice.example"}
+    globalThis.location = {hash, pathname: "/pair", search: "", protocol: "https:", host: "alice.example"}
     globalThis.history = {replaceState: (...args) => replaced.push(args)}
     globalThis.WebSocket = class {
       constructor(url) {
@@ -946,7 +987,7 @@ describe("a glass that holds a device, opened on a pairing link", () => {
 
     const el = new Node("div")
     el.setAttribute("data-glass", "pair")
-    const store = memoryStore(stored)
+    const store = memoryStore(stored, null, null, prepared)
     const hook = Object.assign(Object.create(SystemLayer), {
       el,
       store,
@@ -964,8 +1005,16 @@ describe("a glass that holds a device, opened on a pairing link", () => {
   const certificate = certs.certificates.local.certificate
   const storedDevice = {clientId: certificate.client_id, certificate, publicKey: certificate.device_key}
   const replies = {
+    prepared: () => ({}),
     pair_start: ({device_key}) => ({challenge: {...certs.challenges.pair, device_key}}),
     pair_proof: () => ({client_id: "pcl_new", certificate: {...certificate, client_id: "pcl_new"}})
+  }
+
+  // The key the glass made before the invitation, as its page prepared it.
+  async function preparedKey() {
+    const keys = await generateKeyPair(subtle)
+    const deviceKey = await publicKeyB64(keys.publicKey, subtle)
+    return {privateKey: keys.privateKey, publicKey: deviceKey, keyDigest: await keyDigest(deviceKey, subtle)}
   }
 
   test("nothing is sent and nothing replaced until the person chooses", async () => {
@@ -985,7 +1034,8 @@ describe("a glass that holds a device, opened on a pairing link", () => {
   })
 
   test("replacing is explicit: the stored device is unpaired first, then the code pairs", async () => {
-    const page = await mountGlassPage({stored: storedDevice, replies})
+    const prepared = await preparedKey()
+    const page = await mountGlassPage({stored: storedDevice, replies, prepared})
     try {
       await page.hook.glassClick({target: page.el.find("glass-replace"), preventDefault() {}})
 
@@ -997,6 +1047,7 @@ describe("a glass that holds a device, opened on a pairing link", () => {
       const record = await page.store.load()
       assert.equal(record.clientId, "pcl_new")
       assert.notEqual(record.publicKey, certificate.device_key)
+      assert.equal(record.publicKey, prepared.publicKey)
       assert.equal(page.el.find("glass-replace-ask"), null)
       assert.equal(page.sockets.at(-1).url, "wss://alice.example/device/websocket")
     } finally {
@@ -1018,14 +1069,79 @@ describe("a glass that holds a device, opened on a pairing link", () => {
     }
   })
 
-  test("a glass holding nothing pairs from the link at once", async () => {
-    const page = await mountGlassPage({stored: null, replies})
+  test("a glass holding nothing pairs from the link at once, with the key it prepared", async () => {
+    const prepared = await preparedKey()
+    const page = await mountGlassPage({stored: null, replies, prepared})
     try {
       assert.deepEqual(
         page.pushed.map((push) => push.event),
         ["pair_start", "pair_proof"]
       )
-      assert.equal((await page.store.load()).clientId, "pcl_new")
+      // Both steps name the prepared key and its digest, the one the code
+      // approved.
+      for (const {payload} of page.pushed) {
+        assert.equal(payload.device_key, prepared.publicKey)
+        assert.equal(payload.key_digest, prepared.keyDigest)
+      }
+      const record = await page.store.load()
+      assert.equal(record.clientId, "pcl_new")
+      assert.equal(record.publicKey, prepared.publicKey)
+      assert.equal(record.privateKey, prepared.privateKey)
+      assert.equal(await page.store.loadPrepared(), null, "the prepared key is used once")
+    } finally {
+      page.restore()
+    }
+  })
+
+  test("a link opened on a browser that prepared no key sends nothing and says where to begin", async () => {
+    const page = await mountGlassPage({stored: null, replies})
+    try {
+      assert.deepEqual(page.pushed, [])
+      assert.equal(await page.store.load(), null)
+      const error = page.el.find("glass-error")
+      assert.ok(error)
+      assert.match(error.children.map((child) => child.text).join(""), /made no key for this pairing/)
+    } finally {
+      page.restore()
+    }
+  })
+
+  test("a page opened with no device and no code prepares a key once and sends its digest", async () => {
+    const page = await mountGlassPage({stored: null, replies, hash: ""})
+    try {
+      assert.deepEqual(page.pushed.map((push) => push.event), ["prepared"])
+      const prepared = await page.store.loadPrepared()
+      assert.ok(prepared)
+      assert.equal(prepared.privateKey.extractable, false)
+      assert.equal(prepared.keyDigest, await keyDigest(prepared.publicKey, subtle))
+      assert.deepEqual(page.pushed[0].payload, {key_digest: prepared.keyDigest})
+      assert.equal(await page.store.load(), null)
+      assert.deepEqual(page.sockets, [])
+    } finally {
+      page.restore()
+    }
+
+    // Opened again, the same key's digest: nothing new is made.
+    const prepared = await page.store.loadPrepared()
+    const again = await mountGlassPage({stored: null, replies, hash: "", prepared})
+    try {
+      assert.deepEqual(again.pushed, [{event: "prepared", payload: {key_digest: prepared.keyDigest}}])
+      assert.equal(await again.store.loadPrepared(), prepared)
+    } finally {
+      again.restore()
+    }
+  })
+
+  test("a refused pairing keeps the prepared key, so the person can approve its code again", async () => {
+    const prepared = await preparedKey()
+    const refusing = {...replies, pair_start: () => ({error: "This device is not the one the pairing was approved for: approve the code this device shows"})}
+    const page = await mountGlassPage({stored: null, replies: refusing, prepared})
+    try {
+      assert.deepEqual(page.pushed.map((push) => push.event), ["pair_start"])
+      assert.equal(page.pushed[0].payload.key_digest, prepared.keyDigest)
+      assert.equal(await page.store.load(), null)
+      assert.equal(await page.store.loadPrepared(), prepared)
+      assert.ok(page.el.find("glass-error"))
     } finally {
       page.restore()
     }
@@ -1444,7 +1560,7 @@ describe("the glass's page, for a person whose keys are at another home", () => 
     }
   }
 
-  async function mountPage({hash, stored = null, pending = null, asked = null, replies = {}, fetch = null}) {
+  async function mountPage({hash, stored = null, pending = null, asked = null, prepared = null, replies = {}, fetch = null}) {
     const saved = {document: globalThis.document, location: globalThis.location, history: globalThis.history, WebSocket: globalThis.WebSocket, fetch: globalThis.fetch}
     if (fetch) globalThis.fetch = fetch
     const sockets = []
@@ -1475,7 +1591,7 @@ describe("the glass's page, for a person whose keys are at another home", () => 
 
     const el = new Node("div")
     el.setAttribute("data-glass", "pair")
-    const store = memoryStore(stored, pending, asked)
+    const store = memoryStore(stored, pending, asked, prepared)
     const hook = Object.assign(Object.create(SystemLayer), {
       el,
       store,
@@ -1501,15 +1617,24 @@ describe("the glass's page, for a person whose keys are at another home", () => 
   const challengeMessage = (challenge) => ({data: JSON.stringify({protocol: device.protocol, type: "challenge", challenge})})
 
   test("the pairing keeps its code and key for the invitation's life, asks for their home, and goes there to certify", async () => {
+    const keys = await generateKeyPair(subtle)
+    const deviceKey = await publicKeyB64(keys.publicKey, subtle)
+    const prepared = {privateKey: keys.privateKey, publicKey: deviceKey, keyDigest: await keyDigest(deviceKey, subtle)}
     const page = await mountPage({
       hash: "#code=UjcQhGOiIAu_9xjWI7A-Fw",
+      prepared,
       replies: {pair_start: ({device_key}) => ({challenge: {...certs.challenges.pair, device_key}, certify})}
     })
     try {
       assert.deepEqual(page.pushed.map((p) => p.event), ["pair_start"])
+      assert.equal(page.pushed[0].payload.key_digest, prepared.keyDigest)
       const pending = await page.store.loadPending()
       assert.equal(pending.code, "UjcQhGOiIAu_9xjWI7A-Fw")
       assert.deepEqual(pending.certify, certify)
+      // The prepared key moves to the pending pairing, with its digest.
+      assert.equal(pending.publicKey, prepared.publicKey)
+      assert.equal(pending.keyDigest, prepared.keyDigest)
+      assert.equal(await page.store.loadPrepared(), null)
       assert.equal(await page.store.load(), null)
       assert.ok(page.el.find("glass-certify"))
       assert.equal(page.el.find("glass-status").getAttribute("data-state"), "certify")
@@ -1547,7 +1672,7 @@ describe("the glass's page, for a person whose keys are at another home", () => 
   test("the certificate their home sends back completes the pending pairing, with it, and connects", async () => {
     const keys = await generateKeyPair(subtle)
     const publicKey = await publicKeyB64(keys.publicKey, subtle)
-    const pending = {code: "UjcQhGOiIAu_9xjWI7A-Fw", privateKey: keys.privateKey, publicKey, certify, at: Date.now()}
+    const pending = {code: "UjcQhGOiIAu_9xjWI7A-Fw", privateKey: keys.privateKey, publicKey, keyDigest: await keyDigest(publicKey, subtle), certify, at: Date.now()}
     const certificate = remoteCertificate(publicKey, {client_id: "pcl_new", athanor: "ath_hub", not_before: Date.now(), expires_at: Date.now() + 3_600_000})
 
     const page = await mountPage({
@@ -1564,6 +1689,8 @@ describe("the glass's page, for a person whose keys are at another home", () => 
       for (const {payload} of page.pushed) {
         assert.deepEqual(payload.certificate, certificate)
         assert.equal(payload.invitation_secret, pending.code)
+        assert.equal(payload.device_key, publicKey)
+        assert.equal(payload.key_digest, pending.keyDigest)
       }
       assert.deepEqual((await page.store.load()).certificate, certificate)
       assert.equal(await page.store.loadPending(), null)

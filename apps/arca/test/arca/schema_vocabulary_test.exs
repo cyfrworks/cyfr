@@ -18,7 +18,9 @@ defmodule Arca.SchemaVocabularyTest do
   value of the vocabulary lands, `"bogus"` is refused by the named
   constraint and not by some other rule of an incomplete row, and a
   nullable column still takes NULL. The schedule's missed-run columns are
-  held the same way, NULL and zero limits among the refused rows.
+  held the same way, NULL and zero limits among the refused rows, and so
+  is a pairing invitation's confirmer, whose kind and id are set together
+  or not at all.
   """
 
   use ExUnit.Case, async: false
@@ -46,7 +48,11 @@ defmodule Arca.SchemaVocabularyTest do
       {"vault_entries", "vault_entries_status_known", "status",
        Arca.StatusTransitions.statuses(:credentials)},
       {"instance_entries", "instance_entries_status_known", "status",
-       Arca.StatusTransitions.statuses(:credentials)}
+       Arca.StatusTransitions.statuses(:credentials)},
+      # `Arca.PairingInvitations` writes the kind of the confirmer it reads
+      # from the consumed confirmation: a passkey or a paired device.
+      {"pairing_invitations", "pairing_invitations_confirmer_kind_known", "confirmer_kind",
+       ~w(passkey device)}
     ]
   end
 
@@ -155,6 +161,35 @@ defmodule Arca.SchemaVocabularyTest do
         refused!("vault_entries", vault_entry(ctx, status), "vault_entries_status_known")
         refused!("instance_entries", instance_entry(ctx, status), "instance_entries_status_known")
       end
+    end
+  end
+
+  describe "a pairing invitation's confirmer" do
+    test "lands every kind with its id, or neither, and refuses another kind or one without the other",
+         ctx do
+      assert {1, _} = insert!("pairing_invitations", invitation(ctx, nil, nil))
+
+      for kind <- ~w(passkey device) do
+        assert {1, _} = insert!("pairing_invitations", invitation(ctx, kind, id("cfm")))
+      end
+
+      refused!(
+        "pairing_invitations",
+        invitation(ctx, "bogus", id("cfm")),
+        "pairing_invitations_confirmer_kind_known"
+      )
+
+      refused!(
+        "pairing_invitations",
+        invitation(ctx, "passkey", nil),
+        "pairing_invitations_confirmer_whole"
+      )
+
+      refused!(
+        "pairing_invitations",
+        invitation(ctx, nil, id("cfm")),
+        "pairing_invitations_confirmer_whole"
+      )
     end
   end
 
@@ -420,6 +455,24 @@ defmodule Arca.SchemaVocabularyTest do
       kind: "api_key",
       destination: ~s({"hosts":["api.example.com"]}),
       status: status,
+      inserted_at: now(),
+      updated_at: now()
+    }
+  end
+
+  defp invitation(%{athanor: athanor}, confirmer_kind, confirmer_id) do
+    %{
+      id: id("pin"),
+      athanor_id: athanor,
+      secret_hash: id("hash"),
+      user_id: "user_vocab",
+      membership_id: id("mem"),
+      prospective_client_id: id("pcl"),
+      audience_home: "https://home.example",
+      expires_at: now(),
+      key_digest: id("digest"),
+      confirmer_kind: confirmer_kind,
+      confirmer_id: confirmer_id,
       inserted_at: now(),
       updated_at: now()
     }

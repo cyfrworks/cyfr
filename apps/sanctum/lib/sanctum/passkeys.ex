@@ -26,7 +26,11 @@ defmodule Sanctum.Passkeys do
        OpenID Connect door this home re-authenticates, or a verified email
        a code can reach) confirms `passkey_registration`
        (`Sanctum.Consent.Authz`), consumed with the row it opens: their
-       first passkey here too, however recent their sign-in;
+       first passkey here too, however recent their sign-in. Once a
+       passkey or a paired device ever existed for them here, the
+       confirmation must be one a passkey or a standing paired client gave
+       (`Sanctum.Pairing`, its module doc); one neither gave registers only
+       their first method, claiming the first-method latch in the write;
     2. a local person who holds none, and for whom no fresh method has
        ever existed (the persistent first-method mark on their identity
        row), signed in through a local door, `restore` included and a
@@ -297,17 +301,26 @@ defmodule Sanctum.Passkeys do
 
   # A person who holds a fresh method confirms the registration; the
   # confirmation is consumed in the transaction that writes the row, after
-  # the caller's standing is read again there (`Authz.consume/2`).
+  # the caller's standing is read again there (`Authz.consume/2`). A
+  # confirmation no passkey or paired client gave registers only the
+  # person's first method: the write claims the first-method latch under
+  # the person's lock (`first_method: true`), and once a passkey or device
+  # ever existed it is refused (`Sanctum.Pairing.addition_refusal/0`).
   defp confirmed(ctx, verified, credential, opts) do
     change = registration_change(verified, credential)
 
-    with :ok <- Authz.check(ctx, :passkey_registration, change) do
+    with :ok <- Authz.check(ctx, :passkey_registration, change),
+         {:ok, confirmer} <- Sanctum.Pairing.confirmer(ctx) do
       also = fn _row -> Authz.consume(ctx, {:passkey_registration, change}) end
+      opts = if is_nil(confirmer), do: Keyword.put(opts, :first_method, true), else: opts
 
       case store(ctx.user_id, verified, "active", [also: also] ++ opts) do
         {:ok, row} ->
           Authz.consumed(ctx)
           {:ok, %{status: "active", passkey: listed(row)}}
+
+        {:error, :first_method_used} ->
+          {:error, Sanctum.Pairing.addition_refusal()}
 
         {:error, reason} ->
           {:error, reason}

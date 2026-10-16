@@ -87,10 +87,74 @@ defmodule Sanctum.IssuanceTest do
     %{user: user, athanor: athanor, session_ctx: session_ctx}
   end
 
-  defp begin!(session_ctx) do
+  # A pairing begun for the digest of the device key the glass made first,
+  # under a confirmation the person proved: only that key completes it.
+  defp begin!(session_ctx, device_key) do
+    digest = Prima.Device.key_digest(device_key)
+
     session_ctx
-    |> Sanctum.TestContext.confirmed(:device_pairing, Pairing.invitation_change())
-    |> Pairing.begin(%{})
+    |> Sanctum.TestContext.confirmed(:device_pairing, Pairing.invitation_change(digest))
+    |> Pairing.begin(%{key_digest: digest})
+  end
+
+  # A `pairing.begin` confirmation of the person `user_id` in `actor`'s
+  # athanor, opened, proven by their passkey and consumed through the
+  # confirmations' own store: the record an invitation written straight
+  # into the invitations' store reads its confirmer from. Answers its ref.
+  defp consumed_pairing_confirmation!(actor, user_id) do
+    _authenticator = Sanctum.TestContext.passkey!(user_id)
+
+    passkey_id =
+      Arca.Repo.one!(
+        from(p in Arca.Schemas.Passkey,
+          where: p.user_id == ^user_id and p.state == "active",
+          select: p.id
+        )
+      )
+
+    secret = "cnf_" <> Base.url_encode64(:crypto.strong_rand_bytes(32), padding: false)
+    preview = %{home: Person.home(), athanor: "Elsewhere", operation: "pairing.begin"}
+    args_digest = Prima.Digest.sha256("pairing-#{System.unique_integer()}")
+    opener = "session:pairing-#{System.unique_integer([:positive])}"
+
+    {:ok, record} =
+      Prima.Confirmation.new(
+        id: Prima.Confirmation.ref(secret),
+        home: Person.home(),
+        rp_id: Sanctum.Passkeys.rp_id(),
+        athanor: actor.athanor_id,
+        person: user_id,
+        operation: "pairing.begin",
+        args_digest: args_digest,
+        action: "device_pairing",
+        preview: preview,
+        challenge: :crypto.strong_rand_bytes(32),
+        expires_at: System.system_time(:millisecond) + 300_000
+      )
+
+    {:ok, _} =
+      Arca.PendingConfirmations.open(actor, %{
+        record: record,
+        opener: opener,
+        asker: %{"kind" => "session"}
+      })
+
+    {:ok, _} =
+      Arca.PendingConfirmations.confirm(actor, record.id, %{
+        proof: "passkey",
+        passkey_id: passkey_id
+      })
+
+    {:ok, _} =
+      Arca.PendingConfirmations.consume(actor, secret, %{
+        user_id: user_id,
+        operation: "pairing.begin",
+        args_digest: args_digest,
+        preview: record.preview,
+        opener: opener
+      })
+
+    record.id
   end
 
   # Revoking a device is a sensitive change, under the person's session and
@@ -109,7 +173,7 @@ defmodule Sanctum.IssuanceTest do
   # first certificate.
   defp pair!(session_ctx) do
     {device_key, private} = :crypto.generate_key(:eddsa, :ed25519)
-    {:ok, invitation} = begin!(session_ctx)
+    {:ok, invitation} = begin!(session_ctx, device_key)
     glass = Context.build(%{authenticated: false, client_ip: @source})
     submission = %{device_key: device_key}
 
@@ -742,17 +806,22 @@ defmodule Sanctum.IssuanceTest do
     # An invitation there whose only basis is the person's platform row,
     # which `Sanctum.Pairing.begin/2` never opens but a stored row can
     # carry: written through the invitations' own store, under a policy
-    # that lets it open.
+    # that lets it open, for the device key the glass made first and on a
+    # consumed `pairing.begin` confirmation the person's passkey gave.
     secret = :crypto.strong_rand_bytes(16)
     secret_hash = Prima.Digest.sha256(secret)
+    {device_key, private} = :crypto.generate_key(:eddsa, :ed25519)
+    elsewhere_actor = Prima.Actor.in_athanor(elsewhere.id)
 
     {:ok, %{membership_id: membership_id}} =
       Arca.PairingInvitations.open(
-        Prima.Actor.in_athanor(elsewhere.id),
+        elsewhere_actor,
         %{
           user_id: user.id,
           membership_id: platform.id,
           secret_hash: secret_hash,
+          key_digest: Prima.Device.key_digest(device_key),
+          confirmation_ref: consumed_pairing_confirmation!(elsewhere_actor, user.id),
           audience_home: Person.home(),
           lifetime_ms: 600_000
         },
@@ -764,7 +833,6 @@ defmodule Sanctum.IssuanceTest do
     # The glass holding the secret asks for its challenge and answers it:
     # the redemption locks the platform row, which is no seat in the
     # athanor, and pairs nothing.
-    {device_key, private} = :crypto.generate_key(:eddsa, :ed25519)
     glass = Context.build(%{authenticated: false, client_ip: @source})
     submission = %{device_key: device_key}
 
@@ -986,13 +1054,15 @@ defmodule Sanctum.IssuanceTest do
       ctx = verified!(device)
       count = fn -> Arca.Repo.aggregate(Arca.Schemas.PairingInvitation, :count) end
       opened = count.()
+      {new_key, _private} = :crypto.generate_key(:eddsa, :ed25519)
+      digest = Prima.Device.key_digest(new_key)
 
       confirmed =
-        Sanctum.TestContext.confirmed(ctx, :device_pairing, Pairing.invitation_change())
+        Sanctum.TestContext.confirmed(ctx, :device_pairing, Pairing.invitation_change(digest))
 
       assert {:error, :not_standing} =
                revoked_in_window(session_ctx, device.client_id, &checked_point/2, fn ->
-                 Pairing.begin(confirmed, %{})
+                 Pairing.begin(confirmed, %{key_digest: digest})
                end)
 
       assert count.() == opened
@@ -1002,11 +1072,13 @@ defmodule Sanctum.IssuanceTest do
       session_ctx: session_ctx
     } do
       device = pair!(session_ctx)
+      {new_key, _private} = :crypto.generate_key(:eddsa, :ed25519)
+      digest = Prima.Device.key_digest(new_key)
 
       confirmed =
         device
         |> verified!()
-        |> Sanctum.TestContext.confirmed(:device_pairing, Pairing.invitation_change())
+        |> Sanctum.TestContext.confirmed(:device_pairing, Pairing.invitation_change(digest))
 
       test = self()
       handler = "issuance-begin-#{System.unique_integer([:positive])}"
@@ -1023,7 +1095,7 @@ defmodule Sanctum.IssuanceTest do
         )
 
       on_exit(fn -> :telemetry.detach(handler) end)
-      assert {:ok, %{client_id: "pcl_" <> _}} = Pairing.begin(confirmed, %{})
+      assert {:ok, %{client_id: "pcl_" <> _}} = Pairing.begin(confirmed, %{key_digest: digest})
       :telemetry.detach(handler)
 
       statements = statements()
@@ -1141,9 +1213,9 @@ defmodule Sanctum.IssuanceTest do
 
       # Paired at this home under their home's certificate: the invitation
       # opened under the person's proof here, then they are remote.
-      {:ok, invitation} = begin!(session_ctx)
-      :ok = DirectoryServer.remote_person!(user.id, identity)
       {device_key, private} = :crypto.generate_key(:eddsa, :ed25519)
+      {:ok, invitation} = begin!(session_ctx, device_key)
+      :ok = DirectoryServer.remote_person!(user.id, identity)
       certificate = remote_certificate(identity, invitation.client_id, device_key, athanor)
       glass = Context.build(%{authenticated: false, client_ip: @source})
       submission = %{device_key: device_key, certificate: certificate}

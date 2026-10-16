@@ -75,13 +75,18 @@ end
 defmodule PrismWeb.SystemLayerPairingTest do
   @moduledoc """
   The system layer's pairing prompt: the person's paired devices, each
-  revocable, and a pairing code for a new one. Beginning a pairing and
-  revoking a device are sensitive changes, so each waits on its record,
-  shown with the home's preview before any proof; the layer holds the
-  request's secret and makes the change once the record reads confirmed,
-  wherever it was proven. The code it then draws is `pairing.begin`'s
-  `invitation_url`, as a QR code and as the link, and that link's code
-  completes a pairing from a glass holding nothing. A proof is a passkey,
+  revocable, and a pairing code for a new one. A pairing begins with the
+  code the new device shows, the digest of the key it made first, typed
+  into the prompt's form; a malformed code asks nothing. Beginning a
+  pairing and revoking a device are sensitive changes, so each waits on
+  its record, shown with the home's preview before any proof, the device's
+  code in it; the layer holds the request's secret and makes the change
+  once the record reads confirmed, wherever it was proven. The code it
+  then draws is `pairing.begin`'s `invitation_url`, as a QR code and as
+  the link, beside the device's code, and that link's code completes a
+  pairing from the glass holding that key. Once the person holds a
+  passkey, the pairing's record says it takes a passkey or a paired
+  device's proof. A proof is a passkey,
   a code sent to the person's email, or a fresh sign-in at their identity
   provider, which opens in a new tab; a client with no person behind it
   is offered a request for confirmation instead.
@@ -136,12 +141,38 @@ defmodule PrismWeb.SystemLayerPairingTest do
     ref
   end
 
-  # A glass holding nothing completes the pairing the link names.
-  defp complete!(url) do
-    %URI{fragment: "code=" <> secret} = URI.parse(url)
+  # A new glass's key, made before any invitation: the key pair, its
+  # digest and the code the glass shows for it.
+  defp device_key! do
     {device_key, private} = :crypto.generate_key(:eddsa, :ed25519)
+    digest = Prima.Device.key_digest(device_key)
+
+    %{
+      public: device_key,
+      private: private,
+      digest: digest,
+      code: Prima.Device.key_code(digest)
+    }
+  end
+
+  # The code typed into the prompt's begin form.
+  defp begin!(view, code, id \\ "pairing-1") do
+    view |> form("##{id}-pairing-begin", %{"key_code" => code}) |> render_submit()
+  end
+
+  # The glass holding `key`, and nothing else, completes the pairing the
+  # link names.
+  defp complete!(url, key) do
+    %URI{fragment: "code=" <> secret} = URI.parse(url)
+    {device_key, private} = {key.public, key.private}
     glass = Context.build(%{authenticated: false, client_ip: "198.51.100.71"})
-    submission = %{"invitation_secret" => secret, "device_key" => Encoding.b64(device_key)}
+
+    submission = %{
+      "invitation_secret" => secret,
+      "device_key" => Encoding.b64(device_key),
+      "key_digest" => key.digest
+    }
+
     call = &Sanctum.Gate.call_external("pairing", glass, Map.merge(&1, %{"action" => "complete"}))
 
     {:ok, %{challenge: challenge}} = call.(submission)
@@ -161,13 +192,20 @@ defmodule PrismWeb.SystemLayerPairingTest do
   describe "pairing a device" do
     test "begins only once its record is confirmed, then draws the link as a QR code that pairs a glass",
          %{conn: conn, athanor: athanor, ctx: ctx} do
+      key = device_key!()
       view = host!(conn, athanor)
       html = open_pairing!(view)
 
       assert html =~ ~s(data-kind="pairing")
       assert has_element?(view, ~s([data-test="pairing-none"]))
 
-      view |> element(~s([data-test="pairing-begin"])) |> render_click()
+      assert has_element?(
+               view,
+               ~s([data-test="pairing-begin-form"] [data-test="pairing-key-input"])
+             )
+
+      # The code as the new device shows it, its groups spaced.
+      begin!(view, key.code)
 
       # Waiting on its record, with the home's preview and this client as
       # the asker; no code is drawn and the prompt reports nothing.
@@ -176,7 +214,14 @@ defmodule PrismWeb.SystemLayerPairingTest do
       assert html =~ ~s(data-ref="#{ref}")
       assert html =~ ~s(data-status="waiting")
       assert has_element?(view, ~s([data-test="confirmation-preview"]), "pairing.begin")
+      assert has_element?(view, ~s([data-test="confirmation-preview"]), key.code)
       assert has_element?(view, ~s([data-test="confirmation-asker"]), "a browser signed in")
+
+      # The record asks for exactly this key's digest, the spaces gone.
+      assert {:ok, %{preview: preview}} =
+               Arca.PendingConfirmations.get(Context.actor(ctx), ref)
+
+      assert preview =~ key.code
       refute has_element?(view, ~s([data-test="pairing-qr"]))
       refute html =~ "cnf_"
       refute_received {:host, {:system_layer, "pairing-1", _}}
@@ -195,8 +240,13 @@ defmodule PrismWeb.SystemLayerPairingTest do
       refute render(view) =~ ~s(data-ref="#{ref}")
       assert {:ok, %{state: "consumed"}} = Arca.PendingConfirmations.get(Context.actor(ctx), ref)
 
-      # The link's code pairs a glass holding nothing, as the person.
-      client_id = complete!(url)
+      # Beside the link, the code of the one device it pairs; no sentence
+      # says whoever opens it pairs.
+      assert has_element?(view, ~s([data-test="pairing-key-code"]), key.code)
+      refute render(view) =~ "Whoever opens it"
+
+      # The link's code pairs the glass holding that key, as the person.
+      client_id = complete!(url, key)
 
       assert {:ok, %{clients: [%{client_id: ^client_id}]}} =
                PrismWeb.Ops.call_tool(ctx, "pairing/list", %{})
@@ -220,7 +270,7 @@ defmodule PrismWeb.SystemLayerPairingTest do
 
       view = host!(conn, athanor)
       open_pairing!(view)
-      view |> element(~s([data-test="pairing-begin"])) |> render_click()
+      begin!(view, device_key!().code)
       Sanctum.TestContext.prove!(ctx, open_record!(ctx, "pairing.begin"))
 
       wait_until(fn -> has_element?(view, ~s([data-test="pairing-link"])) end, 2_000, "the link")
@@ -228,6 +278,8 @@ defmodule PrismWeb.SystemLayerPairingTest do
       assert byte_size(url) > PrismWeb.QR.capacity(10)
       assert url == "https://" <> host <> "/pair#code=" <> String.slice(url, -22, 22)
       assert has_element?(view, ~s([data-test="pairing-link-only"]))
+      assert has_element?(view, ~s([data-test="pairing-key-code"]))
+      refute render(view) =~ "Whoever opens it"
       refute has_element?(view, ~s([data-test="pairing-qr"]))
       Cyfr.Test.Sandbox.end_views()
     end
@@ -236,9 +288,11 @@ defmodule PrismWeb.SystemLayerPairingTest do
          %{conn: conn, athanor: athanor, ctx: ctx} do
       view = host!(conn, athanor)
       open_pairing!(view)
-      view |> element(~s([data-test="pairing-begin"])) |> render_click()
+      begin!(view, device_key!().code)
       ref = open_record!(ctx, "pairing.begin")
 
+      # No passkey or device yet: not restricted, and the code is offered.
+      refute has_element?(view, ~s([data-test="confirmation-restricted"]))
       view |> element(~s([data-test="confirm-email"])) |> render_click()
       assert_receive {:confirmation_code_mail, mail}, 2_000
       assert has_element?(view, ~s([data-test="confirm-code"]))
@@ -247,6 +301,80 @@ defmodule PrismWeb.SystemLayerPairingTest do
 
       wait_until(fn -> has_element?(view, ~s([data-test="pairing-qr"])) end, 2_000, "the code")
       assert {:ok, %{state: "consumed"}} = Arca.PendingConfirmations.get(Context.actor(ctx), ref)
+      Cyfr.Test.Sandbox.end_views()
+    end
+  end
+
+  describe "the code the new device shows" do
+    test "a malformed one asks nothing and says what to type", %{
+      conn: conn,
+      athanor: athanor,
+      ctx: ctx
+    } do
+      key = device_key!()
+      view = host!(conn, athanor)
+      open_pairing!(view)
+
+      for code <- ["", "not a code", String.slice(key.code, 0, 20), key.code <> " AAAA"] do
+        html = begin!(view, code)
+        assert html =~ "Type the code the new device shows"
+        assert {:ok, []} = Arca.PendingConfirmations.list_open(Context.actor(ctx), ctx.user_id)
+      end
+
+      refute_received {:host, {:system_layer, "pairing-1", _}}
+      assert has_element?(view, ~s([data-test="pairing-begin-form"]))
+    end
+
+    test "a valid one asks for exactly its digest, typed with or without its spaces", %{
+      conn: conn,
+      athanor: athanor,
+      ctx: ctx
+    } do
+      key = device_key!()
+      view = host!(conn, athanor)
+      open_pairing!(view)
+
+      # Pasted with a line break for one space, its groups run together
+      # after the next, and blanks around it.
+      typed =
+        "  " <>
+          (key.code
+           |> String.replace(" ", "\n", global: false)
+           |> String.replace(" ", "", global: false)) <>
+          "  "
+
+      begin!(view, typed)
+
+      ref = open_record!(ctx, "pairing.begin")
+      {:ok, row} = Arca.PendingConfirmations.get(Context.actor(ctx), ref)
+      assert row.preview =~ key.code
+
+      # Proven elsewhere, the invitation is opened for that digest alone.
+      Sanctum.TestContext.prove!(ctx, ref)
+      wait_until(fn -> has_element?(view, ~s([data-test="pairing-link"])) end, 2_000, "the link")
+      assert has_element?(view, ~s([data-test="pairing-key-code"]), key.code)
+
+      assert {:ok, [%{key_digest: digest}]} =
+               Arca.PairingInvitations.list(Context.actor(ctx), user_id: ctx.user_id)
+
+      assert digest == key.digest
+      Cyfr.Test.Sandbox.end_views()
+    end
+
+    test "once the person holds a passkey, the pairing's record says it takes a passkey or a paired device",
+         %{conn: conn, athanor: athanor, ctx: ctx, user: user} do
+      Sanctum.TestContext.passkey!(user.user_id)
+      view = host!(conn, athanor)
+      open_pairing!(view)
+      begin!(view, device_key!().code)
+
+      ref = open_record!(ctx, "pairing.begin")
+      html = render(view)
+      assert html =~ ~s(data-ref="#{ref}")
+
+      assert has_element?(view, ~s([data-test="confirmation-restricted"]), "your passkey")
+      assert has_element?(view, ~s([data-test="confirm-passkey"]))
+      refute has_element?(view, ~s([data-test="confirm-email"]))
       Cyfr.Test.Sandbox.end_views()
     end
   end
@@ -261,13 +389,18 @@ defmodule PrismWeb.SystemLayerPairingTest do
       {:ok, other} =
         Sanctum.Caller.establish(session.token, focus: athanor.id, task_supervisor: nil)
 
+      key = device_key!()
+
       {:ok, %{invitation_url: url}} =
         Sanctum.TestContext.confirming(
           other,
-          &Sanctum.Gate.call_external("pairing", &1, %{"action" => "begin"})
+          &Sanctum.Gate.call_external("pairing", &1, %{
+            "action" => "begin",
+            "key_digest" => key.digest
+          })
         )
 
-      client_id = complete!(url)
+      client_id = complete!(url, key)
 
       view = host!(conn, athanor)
       open_pairing!(view)
@@ -337,7 +470,7 @@ defmodule PrismWeb.SystemLayerPairingTest do
 
       view = host!(conn, athanor)
       open_pairing!(view)
-      view |> element(~s([data-test="pairing-begin"])) |> render_click()
+      begin!(view, device_key!().code)
 
       view |> element(~s([data-test="confirm-reauth"])) |> render_click()
 

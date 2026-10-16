@@ -556,6 +556,64 @@ defmodule Sanctum.SignInTest do
       ticket
     end
 
+    # The link asked under the person's session, its record confirmed
+    # through the confirmations' own store with `proof` (a proof no passkey
+    # gave: `client_id` names the paired client it was given on, if any),
+    # and the link repeated naming the record.
+    defp linked_on(person, ticket, proof) do
+      assert {:error, {:confirmation_required, %{id: id, operation: "person.link_door"}}} =
+               SignIn.link_door(person.ctx, "oidcc", ticket)
+
+      assert {:ok, %{state: "confirmed"}} =
+               Arca.PendingConfirmations.confirm(
+                 Sanctum.Context.actor(person.ctx),
+                 Prima.Confirmation.ref(id),
+                 proof
+               )
+
+      SignIn.link_door(%{person.ctx | confirmation_id: id}, "oidcc", ticket)
+    end
+
+    # A device paired to the person in their athanor through the ceremony:
+    # its key made first, the invitation opened for its digest under the
+    # person's proof, completed with that key. Answers its client id.
+    defp paired_client!(person) do
+      {device_key, private} = :crypto.generate_key(:eddsa, :ed25519)
+      digest = Prima.Device.key_digest(device_key)
+
+      {:ok, invitation} =
+        person.ctx
+        |> Sanctum.TestContext.confirmed(
+          :device_pairing,
+          Sanctum.Pairing.invitation_change(digest)
+        )
+        |> Sanctum.Pairing.begin(%{key_digest: digest})
+
+      source = "192.0.2.#{rem(System.unique_integer([:positive]), 250) + 1}"
+      glass = Sanctum.Context.build(%{authenticated: false, client_ip: source})
+      submission = %{device_key: device_key}
+
+      {:ok, %{challenge: challenge}} =
+        Sanctum.Pairing.complete(glass, invitation.invitation_secret, submission)
+
+      {:ok, %{client_id: client_id}} =
+        Sanctum.Pairing.complete(
+          glass,
+          invitation.invitation_secret,
+          Map.put(submission, :proof, Prima.DeviceCert.Proof.sign(challenge, private))
+        )
+
+      client_id
+    end
+
+    # The person's first-method latch: set once a passkey or a paired
+    # device ever existed for them.
+    defp first_method_at(user_id) do
+      Arca.Repo.one(
+        from(p in PersonIdentity, where: p.user_id == ^user_id, select: p.first_method_at)
+      )
+    end
+
     test "a ticket is minted for a standing session and a linkable door the door admits" do
       person = seated!()
       n = System.unique_integer([:positive])
@@ -624,6 +682,46 @@ defmodule Sanctum.SignInTest do
                SignIn.link_door(person.ctx, "oidcc", ticket)
 
       assert {:error, :not_found} = Users.get_by_identity(oidc(n).key)
+    end
+
+    test "once a passkey exists, a re-authentication no passkey or device gave links no door" do
+      person = seated!()
+      _auth = Sanctum.TestContext.passkey!(person.user.id)
+      assert %DateTime{} = first_method_at(person.user.id)
+      n = System.unique_integer([:positive])
+
+      assert linked_on(person, ticket!(person, oidc(n)), %{proof: "oidc_reauth"}) ==
+               {:error, Sanctum.Pairing.addition_refusal()}
+
+      assert {:error, :not_found} = Users.get_by_identity(oidc(n).key)
+    end
+
+    test "once a device is paired, a confirmation given on that device links the door" do
+      person = seated!()
+      client_id = paired_client!(person)
+      assert %DateTime{} = first_method_at(person.user.id)
+      n = System.unique_integer([:positive])
+
+      assert {:ok, %{linked: true}} =
+               linked_on(person, ticket!(person, oidc(n)), %{
+                 proof: "email_code",
+                 client_id: client_id
+               })
+
+      assert {:ok, %{id: user_id}} = Users.get_by_identity(oidc(n).key)
+      assert user_id == person.user.id
+    end
+
+    test "before any passkey or device, a re-authentication links the door" do
+      person = seated!()
+      assert first_method_at(person.user.id) == nil
+      n = System.unique_integer([:positive])
+
+      assert {:ok, %{linked: true}} =
+               linked_on(person, ticket!(person, oidc(n)), %{proof: "oidc_reauth"})
+
+      assert {:ok, %{id: user_id}} = Users.get_by_identity(oidc(n).key)
+      assert user_id == person.user.id
     end
 
     test "a ticket answers only its person, their session and its provider" do

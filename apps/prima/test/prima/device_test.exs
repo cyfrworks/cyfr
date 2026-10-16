@@ -64,10 +64,29 @@ defmodule Prima.DeviceTest do
 
     assert {:ok, {:proof, %{proof: %Proof{}}}} = Device.decode(by_type["proof"], :glass)
 
-    assert {:ok, {:pair_request, %{invitation_secret: invitation, device_key: key}}} =
+    assert {:ok,
+            {:pair_request, %{invitation_secret: invitation, device_key: key, key_digest: digest}}} =
              Device.decode(by_type["pair_request"], :glass)
 
     assert byte_size(invitation) == 16 and byte_size(key) == 32
+    assert digest == Device.key_digest(key)
+  end
+
+  test "a key's digest and its code are the fixture's, and the code reads back to the digest" do
+    %{"device_key" => key, "key_digest" => digest, "code" => code} = vectors()["key_digest"]
+    {:ok, raw} = Prima.Identity.Encoding.unb64(key, 32)
+
+    assert Device.key_digest(raw) == digest
+    assert Device.key_digest?(digest)
+    assert Device.key_code(digest) == code
+    assert Device.from_key_code(code) == {:ok, digest}
+    assert Device.from_key_code(" " <> String.replace(code, " ", "\n") <> " ") == {:ok, digest}
+    assert Device.from_key_code(digest) == {:ok, digest}
+
+    for not_a_digest <- [String.slice(digest, 0, 42), digest <> "A", "sha256:" <> digest, nil, 7] do
+      refute Device.key_digest?(not_a_digest)
+      assert Device.from_key_code(not_a_digest) == :error
+    end
   end
 
   test "every refusal is refused with its reason" do

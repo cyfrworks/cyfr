@@ -13,18 +13,25 @@ defmodule Sanctum.Pairing do
 
   ## The ceremony
 
+    * The new glass generates its device key first, before any
+      invitation exists, and shows the key's digest
+      (`Prima.Device.key_digest/1`), as the code the person carries to a
+      client already theirs.
     * `begin/2` — a person, under their session in the athanor in focus,
-      opens a pairing invitation: a 128-bit random bearer secret, stored
-      only as its hash (`Arca.PairingInvitations`), for this home, alive
-      five minutes, reserving the client id the device it pairs will
-      hold. It is a sensitive change (`device_pairing`): a device paired
-      from a stolen session would outlive the session, so the
-      confirmation is asked before anything is written and consumed in
-      the transaction that opens the invitation, and its preview states
-      that whoever presents the invitation pairs a device.
+      opens a pairing invitation for that digest: a 128-bit random secret,
+      stored only as its hash (`Arca.PairingInvitations`), for this home,
+      alive five minutes, reserving the client id the device it pairs
+      will hold, and naming the one device key that may complete it. It
+      is a sensitive change (`device_pairing`): a device paired from a
+      stolen session would outlive the session, so the confirmation is
+      asked for exactly that key digest before anything is written and
+      consumed in the transaction that opens the invitation, its preview
+      names the digest, and the invitation records which passkey or
+      paired client confirmed it (below).
     * `complete/3` — the new glass, holding neither a session nor a
       certificate of this home's, presents the secret and its device
-      public key and is answered a `pair` challenge; it signs the
+      public key, which must be the key the invitation names, and is
+      answered a `pair` challenge; it signs the
       challenge with its device key and presents the proof, and the home
       records the paired client and issues its first certificate, or, for
       a remote person, records the one their own home issued (below).
@@ -36,9 +43,13 @@ defmodule Sanctum.Pairing do
       the browser still holds never chooses the person. The person's
       standing and seat are locked and checked, the invitation rechecked
       and consumed, the client recorded and the certificate issued and
-      recorded, in one transaction (`Arca.PairingInvitations.consume/4`),
+      recorded, in one transaction (`Arca.PairingInvitations.consume/5`),
       so a closed invitation never reopens and a person denied or gone
-      from the athanor is paired nothing.
+      from the athanor is paired nothing. In that transaction, under the
+      invitation's lock and before the certificate is signed, the
+      presented key's digest must be the invitation's and the passkey or
+      paired client that confirmed it must still stand; any other key,
+      one whose own proof is valid included, pairs nothing.
     * `renew/2` — a paired device's replacement certificate, through its
       device channel's renewal exchange alone: after the channel verified
       a fresh `renew` challenge it issued and holds against the key the
@@ -88,6 +99,31 @@ defmodule Sanctum.Pairing do
   counted against the address (20 a minute) and the installation (200 a
   minute) and refused. So a flood of guessed codes, from any number of
   addresses, leaves the invitation's bearer able to complete.
+
+  ## Adding a method or a device once one exists
+
+  Three changes add a way to act as the person here: pairing a device
+  (`device_pairing`, `begin/2` and a remote certification,
+  `Sanctum.RemoteCertification`), registering a passkey
+  (`passkey_registration`, `Sanctum.Passkeys.register/2`) and linking a
+  door (`sign_in_methods`, `Sanctum.SignIn.link_door/3`). Once the person
+  holds, or ever held, a passkey or a paired device here, each needs a
+  confirmation attributed to one of them: a passkey assertion
+  (`confirmed_passkey_id`), or a confirmation given on a standing paired
+  client (`confirmed_client_id`), whatever proof that client gave. A fresh
+  re-authentication from a session that names no client confirms every
+  other change, and not these. Before the first passkey or device, a fresh
+  re-authentication bootstraps the first, and the bootstrap is latched by
+  whichever first method commits first (`Arca.PersonIdentities`, its
+  `first_method_at`): the first passkey's registration or the first
+  device's completed pairing, each setting the mark in the transaction that
+  writes it, under the person's lock. Revoking every passkey and device
+  never reopens it: a person who has lost them recovers with their kit or
+  through the administrator's recovery. `addition_confirmed/1` decides it
+  for a write that runs in the person's transaction after the
+  confirmation's consumption; the pairing's own invitation records its
+  confirmer, and an invitation that names none completes only as the
+  write that sets the latch.
 
   ## The pair challenge
 
@@ -230,16 +266,23 @@ defmodule Sanctum.Pairing do
           | :sign_in_methods
 
   @typedoc """
-  An opened invitation: its raw bearer `invitation_secret` (16 bytes,
-  shown to the person once, in the pairing code, and stored nowhere), the
-  `client_id` it reserves for the device that redeems it, and when it
-  expires.
+  An opened invitation: its raw `invitation_secret` (16 bytes, shown to
+  the person once, in the pairing code, and stored nowhere), the
+  `client_id` it reserves for the device that redeems it, the
+  `key_digest` of the one device key that may, and when it expires.
   """
   @type invitation :: %{
           invitation_secret: binary(),
           client_id: String.t(),
+          key_digest: String.t(),
           expires_at: DateTime.t()
         }
+
+  @typedoc """
+  Who gave a consumed confirmation: the passkey whose assertion proved it,
+  the paired client it was given on, or `nil` for neither.
+  """
+  @type confirmer :: {:passkey, String.t()} | {:device, String.t()} | nil
 
   @typedoc """
   What the new glass submits to `complete/3`: its device public key
@@ -276,6 +319,14 @@ defmodule Sanctum.Pairing do
     * `:invalid_invitation` — no pending, unexpired invitation has that
       secret: unknown, used, withdrawn or expired alike, so the answer
       says nothing about which.
+    * `:key_mismatch` — the device key presented is not the one whose
+      digest the invitation was opened for.
+    * `:confirmer_revoked` — the passkey or paired client that confirmed
+      the invitation no longer stands.
+    * `t:Prima.Refusal.t/0` with reason `:standing_confirmer_required`
+      (`addition_refusal/0`) — a device, passkey or door added on a
+      confirmation no passkey or paired client gave, once the person's
+      first-method latch is set.
     * `:proof_refused` — the proof does not answer the challenge under the
       device key submitted, or the challenge is not one this home issued
       for that invitation or client.
@@ -302,6 +353,9 @@ defmodule Sanctum.Pairing do
   """
   @type refusal ::
           :invalid_invitation
+          | :key_mismatch
+          | :confirmer_revoked
+          | Prima.Refusal.t()
           | :proof_refused
           | :wrong_audience
           | :certificate_required
@@ -323,21 +377,26 @@ defmodule Sanctum.Pairing do
 
   @doc """
   Open a pairing invitation for the person of `ctx` in the athanor in
-  focus (the module doc). `args` takes nothing yet.
+  focus (the module doc). `args` names `key_digest` (or `"key_digest"`),
+  the digest of the device key the new glass shows
+  (`Prima.Device.key_digest/1`).
 
-  The `device_pairing` confirmation is asked first
-  (`Sanctum.Consent.Authz.check/3`) and consumed inside the transaction
-  that opens the invitation (`Sanctum.Consent.Authz.consume/2`), under the
-  person, athanor and seat locked and checked at the generations the
-  context read, and the credential the context holds (its session, or a
-  paired device's client and certificate) locked and checked after them
-  (`Sanctum.Issuance`). Answers `t:invitation/0`.
+  The `device_pairing` confirmation is asked first, for exactly that key
+  digest (`Sanctum.Consent.Authz.check/3`), and consumed inside the
+  transaction that opens the invitation (`Sanctum.Consent.Authz.consume/2`),
+  under the person, athanor and seat locked and checked at the
+  generations the context read, and the credential the context holds (its
+  session, or a paired device's client and certificate) locked and checked
+  after them (`Sanctum.Issuance`). The invitation records the passkey or
+  paired client the consumed confirmation names, read from its row in that
+  transaction; one that names neither opens only while the person's
+  first-method latch is open (the module doc). Answers `t:invitation/0`.
   """
   @spec begin(Context.t(), map()) :: {:ok, invitation()} | {:error, refusal()}
   def begin(%Context{} = ctx, args) when is_map(args) do
-    change = invitation_change()
-
     with :ok <- person_focused(ctx),
+         {:ok, key_digest} <- key_digest_argument(args),
+         change = invitation_change(key_digest),
          :ok <- Authz.check(ctx, :device_pairing, change),
          {:ok, expectation} <- Sanctum.Issuance.expectation(ctx, []),
          {:ok, membership_id} <- seated(expectation) do
@@ -347,6 +406,8 @@ defmodule Sanctum.Pairing do
         user_id: ctx.user_id,
         membership_id: membership_id,
         secret_hash: secret_hash(secret),
+        key_digest: key_digest,
+        confirmation_ref: confirmation_ref(ctx),
         audience_home: Person.home(),
         lifetime_ms: @invitation_ms,
         source: expectation.source
@@ -371,10 +432,17 @@ defmodule Sanctum.Pairing do
            %{
              invitation_secret: secret,
              client_id: invitation.prospective_client_id,
+             key_digest: invitation.key_digest,
              expires_at: invitation.expires_at
            }}
 
         {:error, :database_error} ->
+          {:error, :unavailable}
+
+        {:error, :first_method_used} ->
+          {:error, addition_refusal()}
+
+        {:error, :confirmation_unconsumed} ->
           {:error, :unavailable}
 
         {:error, reason} ->
@@ -383,20 +451,41 @@ defmodule Sanctum.Pairing do
     end
   end
 
+  defp key_digest_argument(args) do
+    digest = Map.get(args, :key_digest, Map.get(args, "key_digest"))
+
+    if Prima.Device.key_digest?(digest),
+      do: {:ok, digest},
+      else:
+        {:error,
+         {:invalid_argument,
+          "The key_digest is the code the new device shows: unpadded base64url of 32 bytes"}}
+  end
+
+  defp confirmation_ref(%Context{confirmation_id: id}) when is_binary(id) and id != "",
+    do: Prima.Confirmation.ref(id)
+
+  defp confirmation_ref(%Context{}), do: nil
+
   @doc """
   What confirming a pairing approves (`t:Sanctum.Consent.Authz.change/0`),
-  the change `begin/2` decides: the invitation is a bearer capability, and
-  the preview says so.
+  the change `begin/2` decides: an invitation for the device key whose
+  digest is `key_digest`, which the preview names as the code the new
+  device shows (`Prima.Device.key_code/1`).
   """
-  @spec invitation_change() :: Sanctum.Consent.Authz.change()
-  def invitation_change do
+  @spec invitation_change(String.t()) :: Sanctum.Consent.Authz.change()
+  def invitation_change(key_digest) when is_binary(key_digest) do
+    code = Prima.Device.key_code(key_digest)
+
     %{
       operation: "pairing.begin",
-      arguments: %{},
+      arguments: %{"key_digest" => key_digest},
+      resource: "the device showing " <> code,
       details: %{
+        "device" => code,
         "invitation" =>
-          "Whoever presents this pairing code within #{@invitation_minutes} minutes pairs a " <>
-            "device that acts as you in this athanor until you revoke it."
+          "The device that shows this code, and no other, pairs within " <>
+            "#{@invitation_minutes} minutes and acts as you in this athanor until you revoke it."
       }
     }
   end
@@ -433,6 +522,7 @@ defmodule Sanctum.Pairing do
          {:ok, invitation} <- invitation(secret, now, source),
          :ok <- DeviceCerts.claim_attributed({:person, invitation.user_id}),
          :ok <- this_home(invitation),
+         :ok <- approved_key(invitation, device_key),
          {:ok, issuer} <-
            issuer(invitation, device_key, Map.get(submission, :certificate), now) do
       case {Map.get(submission, :proof), issuer} do
@@ -481,6 +571,17 @@ defmodule Sanctum.Pairing do
   defp this_home(%{audience_home: audience}) do
     if audience == Person.home(), do: :ok, else: {:error, :wrong_audience}
   end
+
+  # Routing only, before any challenge is answered: the key presented is
+  # the one the invitation was opened for. The redemption holds it again
+  # under the invitation's lock.
+  defp approved_key(%{key_digest: expected}, device_key) when is_binary(expected) do
+    if Plug.Crypto.secure_compare(expected, Prima.Device.key_digest(device_key)),
+      do: :ok,
+      else: {:error, :key_mismatch}
+  end
+
+  defp approved_key(_invitation, _device_key), do: {:error, :key_mismatch}
 
   # Who certifies the device: this home, for a person whose keys are here,
   # with no certificate offered; or the person's own home, whose
@@ -612,6 +713,7 @@ defmodule Sanctum.Pairing do
       actor
       |> Arca.PairingInvitations.consume(
         secret_hash(secret),
+        Prima.Device.key_digest(device_key),
         &redeemable(&1, invitation),
         &paired(actor, &1, device_key, issuer)
       )
@@ -669,6 +771,8 @@ defmodule Sanctum.Pairing do
     do: {:error, :invalid_invitation}
 
   defp redeemed({:error, :database_error}), do: {:error, :unavailable}
+  defp redeemed({:error, :first_method_used}), do: {:error, addition_refusal()}
+  defp redeemed({:error, :no_identity}), do: {:error, :unavailable}
   defp redeemed({:error, reason}), do: {:error, reason}
 
   @doc """
@@ -936,6 +1040,99 @@ defmodule Sanctum.Pairing do
   defp seated(_expectation), do: {:error, :not_standing}
 
   defp now_ms, do: System.os_time(:millisecond)
+
+  # ---------------------------------------------------------------------------
+  # Adding a method or a device
+  # ---------------------------------------------------------------------------
+
+  @additions ~w(pairing.begin person.certify passkey.register person.link_door)
+
+  @doc """
+  Whether the operation `operation` (`tool.action`) adds a way to act as
+  the person here (the module doc): pairing a device, certifying one for
+  another home, registering a passkey or linking a door.
+  """
+  @spec addition?(String.t()) :: boolean()
+  def addition?(operation) when is_binary(operation), do: operation in @additions
+
+  @doc """
+  Who gave the confirmation `ctx.confirmation_id` names (`t:confirmer/0`),
+  read from its record in the context's athanor: the passkey whose
+  assertion proved it, else the paired client it was given on, else
+  `nil`. A record is attributed once, when it is confirmed, and never
+  again, so the answer read once it is confirmed holds through its
+  consumption. A context that names no record, or a record of another
+  person, is `nil`.
+  """
+  @spec confirmer(Context.t()) :: {:ok, confirmer()} | {:error, :unavailable}
+  def confirmer(%Context{confirmation_id: id, athanor_id: a, user_id: u} = ctx)
+      when is_binary(id) and id != "" and is_binary(a) and a != "" and is_binary(u) do
+    case Arca.PendingConfirmations.get(Context.actor(ctx), Prima.Confirmation.ref(id)) do
+      {:ok, %{user_id: ^u, confirmed_passkey_id: passkey_id}} when is_binary(passkey_id) ->
+        {:ok, {:passkey, passkey_id}}
+
+      {:ok, %{user_id: ^u, confirmed_client_id: client_id}} when is_binary(client_id) ->
+        {:ok, {:device, client_id}}
+
+      {:ok, _unattributed} ->
+        {:ok, nil}
+
+      {:error, :not_found} ->
+        {:ok, nil}
+
+      {:error, _unanswered} ->
+        {:error, :unavailable}
+    end
+  end
+
+  def confirmer(%Context{}), do: {:ok, nil}
+
+  @doc """
+  Whether the addition whose confirmation `ctx` just consumed may be
+  written, inside the transaction that writes it (the module doc): a
+  confirmation a passkey or paired client gave always may; one neither
+  gave only while the person's first-method latch is open, read under
+  the person's lock (`Arca.PersonIdentities.first_method_open?/2`), so a
+  latch set by a write that committed first refuses it and one that starts
+  later waits. A write that itself sets the latch claims it instead
+  (`Sanctum.Passkeys`, `Arca.PairingInvitations`).
+  """
+  @spec addition_confirmed(Context.t()) :: :ok | {:error, Prima.Refusal.t() | :unavailable}
+  def addition_confirmed(%Context{user_id: user_id} = ctx) when is_binary(user_id) do
+    case confirmer(ctx) do
+      {:ok, nil} ->
+        case Arca.PersonIdentities.first_method_open?(Prima.Actor.system(), user_id) do
+          {:ok, true} -> :ok
+          {:ok, false} -> {:error, addition_refusal()}
+          {:error, _unanswered} -> {:error, :unavailable}
+        end
+
+      {:ok, _confirmer} ->
+        :ok
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  def addition_confirmed(%Context{}), do: {:error, addition_refusal()}
+
+  @doc """
+  The refusal of an addition confirmed by neither a passkey nor a paired
+  client once the person's first-method latch is set, in the one refusal
+  shape every surface renders.
+  """
+  @spec addition_refusal() :: Prima.Refusal.t()
+  def addition_refusal do
+    %Prima.Refusal{
+      class: :forbidden,
+      reason: :standing_confirmer_required,
+      message:
+        "Once you hold a passkey or a paired device here, adding a device, a passkey or a " <>
+          "sign-in needs a confirmation from one of them: confirm with your passkey, or on a " <>
+          "device you paired"
+    }
+  end
 
   # ---------------------------------------------------------------------------
   # The action table

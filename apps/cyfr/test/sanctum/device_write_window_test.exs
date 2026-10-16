@@ -133,11 +133,12 @@ defmodule Sanctum.DeviceWriteWindowTest do
   # under its certificate verified.
   defp paired!(session_ctx) do
     {device_key, private} = :crypto.generate_key(:eddsa, :ed25519)
+    digest = Prima.Device.key_digest(device_key)
 
     {:ok, invitation} =
       session_ctx
-      |> Sanctum.TestContext.confirmed(:device_pairing, Pairing.invitation_change())
-      |> Pairing.begin(%{})
+      |> Sanctum.TestContext.confirmed(:device_pairing, Pairing.invitation_change(digest))
+      |> Pairing.begin(%{key_digest: digest})
 
     glass = Context.build(%{authenticated: false, client_ip: @source})
     submission = %{device_key: device_key}

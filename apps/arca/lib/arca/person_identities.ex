@@ -88,6 +88,38 @@ defmodule Arca.PersonIdentities do
   def get(%Prima.Actor{}, _user_id), do: {:error, :not_found}
 
   @doc """
+  Whether the first-method latch of the person `user_id` is still open: no
+  fresh confirmation method, a passkey or a paired device, has ever
+  existed for them, and the mark `first_method!/1` writes once and for
+  good is unset. The person's row is locked first, as every write that
+  sets the mark holds it, so inside a caller's transaction the answer
+  stands until that transaction ends. A person with no identity row holds
+  no method and reads open. The actor reads as `get/2` does.
+  """
+  @spec first_method_open?(Prima.Actor.t(), String.t()) ::
+          {:ok, boolean()} | {:error, :cross_tenant | :database_error}
+  def first_method_open?(%Prima.Actor{} = actor, user_id)
+      when is_binary(user_id) and user_id != "" do
+    if reads?(actor, user_id) do
+      Arca.Repo.Errors.with_db_rescue("Arca.PersonIdentities.first_method_open?", fn ->
+        Arca.Repo.locking_transaction(fn ->
+          _locked = Arca.DirectoryHeads.lock_person!(user_id)
+
+          not Arca.Repo.exists?(
+            from(p in PersonIdentity,
+              where: p.user_id == ^user_id and not is_nil(p.first_method_at)
+            )
+          )
+        end)
+      end)
+    else
+      {:error, :cross_tenant}
+    end
+  end
+
+  def first_method_open?(%Prima.Actor{}, _user_id), do: {:error, :cross_tenant}
+
+  @doc """
   The identity row an identifier names, for the door before any person or
   session exists: only the platform's own actor asks.
   """

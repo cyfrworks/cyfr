@@ -14,6 +14,13 @@
  * device key's signature over the JCS bytes of the challenge the home
  * held for the connection, every field but `sig`.
  *
+ * A pairing makes its key first, before any invitation exists: the
+ * prepared key is kept in the store until a pairing uses it, and its
+ * digest (`keyDigest`, `Prima.Device.key_digest/1`) is shown as its code
+ * (`keyCode`), which the person types on a client of theirs to open an
+ * invitation for that key alone. The invitation's link then pairs with
+ * the prepared key, its `pair_request` naming the key and its digest.
+ *
  * The connection (`Glass`) sends `connect` under the certificate it
  * holds, or `renew` when that certificate has expired by this device's
  * clock, answers each challenge with a proof, and is ready only once the
@@ -224,8 +231,20 @@ export const renewMessage = (clientId, certificate) => message("renew", {client_
 export const proofMessage = (proof) => message("proof", {proof})
 export const capabilitiesMessage = (capabilities) => message("capabilities", {capabilities})
 
-export const pairRequestMessage = (invitationSecret, deviceKey) =>
-  message("pair_request", {invitation_secret: invitationSecret, device_key: deviceKey})
+export const pairRequestMessage = (invitationSecret, deviceKey, keyDigest) =>
+  message("pair_request", {invitation_secret: invitationSecret, device_key: deviceKey, key_digest: keyDigest})
+
+/**
+ * The digest of the device public key `deviceKey` (its unpadded base64url
+ * encoding): SHA-256 over the key's 32 raw bytes, as unpadded base64url,
+ * as `Prima.Device.key_digest/1` takes it.
+ */
+export async function keyDigest(deviceKey, subtle = globalThis.crypto.subtle) {
+  return b64url(await subtle.digest("SHA-256", fromB64url(deviceKey)))
+}
+
+/** The key digest as a person reads and types it: groups of four, separated by single spaces. */
+export const keyCode = (digest) => (digest.match(/.{1,4}/g) || []).join(" ")
 
 /**
  * One discrete operation. An intent never carries continuous data, so
@@ -441,7 +460,10 @@ async function askIssuer(fetchFn, url, body) {
 /**
  * The glass's store in IndexedDB: one record, the key pair (the private
  * key unexportable), the public key's encoding, the client id and the
- * certificate. `load` answers it or null. Beside it, the pending record of
+ * certificate. `load` answers it or null. Beside it, the prepared key a
+ * pairing is to use, made before any invitation: the key pair, the public
+ * key's encoding and its digest (`loadPrepared`, `savePrepared`,
+ * `clearPrepared`); the pending record of
  * a pairing that waits for the person's own home to certify it: the
  * invitation's code, the key pair, what to certify and when it began
  * (`loadPending`, `savePending`, `clearPending`); and the certification
@@ -474,6 +496,9 @@ export function openStore(indexedDB = globalThis.indexedDB, name = "cyfr-glass")
     load: () => run("readonly", (store) => store.get("device")).then((value) => value || null),
     save: (record) => run("readwrite", (store) => store.put(record, "device")).then(() => record),
     clear: () => run("readwrite", (store) => store.delete("device")).then(() => null),
+    loadPrepared: () => run("readonly", (store) => store.get("prepared")).then((value) => value || null),
+    savePrepared: (record) => run("readwrite", (store) => store.put(record, "prepared")).then(() => record),
+    clearPrepared: () => run("readwrite", (store) => store.delete("prepared")).then(() => null),
     loadPending: () => run("readonly", (store) => store.get("pending")).then((value) => value || null),
     savePending: (record) => run("readwrite", (store) => store.put(record, "pending")).then(() => record),
     clearPending: () => run("readwrite", (store) => store.delete("pending")).then(() => null),
@@ -484,14 +509,18 @@ export function openStore(indexedDB = globalThis.indexedDB, name = "cyfr-glass")
 }
 
 /** A store in memory, with the same calls. */
-export function memoryStore(record = null, pendingRecord = null, certifyRecord = null) {
+export function memoryStore(record = null, pendingRecord = null, certifyRecord = null, preparedRecord = null) {
   let held = record
   let pending = pendingRecord
   let asked = certifyRecord
+  let prepared = preparedRecord
   return {
     load: async () => held,
     save: async (next) => (held = next),
     clear: async () => (held = null),
+    loadPrepared: async () => prepared,
+    savePrepared: async (next) => (prepared = next),
+    clearPrepared: async () => (prepared = null),
     loadPending: async () => pending,
     savePending: async (next) => (pending = next),
     clearPending: async () => (pending = null),

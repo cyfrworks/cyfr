@@ -10,10 +10,17 @@
 //
 //   passkey      the phone registers its passkey, made by Chromium's
 //                virtual authenticator, as the person's first method
-//   pair         the desktop begins a pairing under Devices; the phone's
-//                Prism, reading the preview and the asker, confirms it with
-//                that passkey; the desktop shows the pairing link and its QR
-//   glass        the phone opens the desktop's link and becomes the glass:
+//   pair         the phone opens this home's /pair page, which makes its
+//                device key and shows the key's code; the desktop types that
+//                code under Devices and begins a pairing for it; the phone's
+//                Prism, reading the preview (the code among it) and the
+//                asker, confirms it with that passkey; the desktop shows the
+//                pairing link and its QR beside the code
+//   other_key    a browser context of its own, which made its own key on
+//                /pair, opens the desktop's link: refused, it holds no
+//                device, and the link still pairs the phone
+//   glass        the phone, the browser that showed the code, opens the
+//                desktop's link and becomes the glass with the key it made:
 //                the code leaves the address, and the device channel stands
 //   confirm      the desktop asks for a credential entry; the glass shows
 //                the home's preview and the asker before the proof, confirms
@@ -36,8 +43,9 @@
 //                the channel; the glass forgets its key and certificate, and
 //                its last certificate opens nothing
 //   viewport     the glass's steps once more at the proposed handheld's
-//                720×720 touch viewport (../browser/handheld.mjs): a
-//                pairing's consent in the Prism's system layer, the glass,
+//                720×720 touch viewport (../browser/handheld.mjs): its key's
+//                code typed on the desktop, a pairing's consent in the
+//                Prism's system layer, the glass,
 //                a confirmation on it, its reconnection and its revocation,
 //                each screen meeting the handheld's checks
 //
@@ -340,6 +348,36 @@ const glassOutcome = (phone, ref) => waitFor(
 
 const vaultNames = async () => (await ask({ op: "vault_names" })).names || [];
 
+// The glass's page opened with no device and no link: it makes its device
+// key and shows the key's code. Answers the code as the page shows it.
+async function shownCode(page) {
+  await page.goto(`${base}/pair`);
+  const code = page.locator('[data-test="pair-key-code"]');
+  await code.waitFor({ timeout: 30_000 });
+  return (await code.textContent()).trim();
+}
+
+// The code typed into the desktop's pairing prompt, and the pairing begun
+// for it: its request waits on its confirmation.
+async function beginFor(desk, code) {
+  await openDevices(desk);
+  await desk.locator(`${layer} [data-test="pairing-key-input"]`).fill(code);
+  await desk.locator(`${layer} [data-test="pairing-begin"]`).click();
+  await desk.waitForSelector(`${layer} [data-test="confirmation"][data-own="true"]`, { timeout: 30_000 });
+}
+
+// The key digest the paired device's certificate names, as its code: the
+// SHA-256 of the key's raw bytes, unpadded base64url, in groups of four.
+const certifiedCode = (page, certificate) => page.evaluate(async (deviceKey) => {
+  const base64 = deviceKey.replace(/-/g, "+").replace(/_/g, "/");
+  const raw = Uint8Array.from(atob(base64 + "=".repeat((4 - (base64.length % 4)) % 4)), (c) => c.charCodeAt(0));
+  const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", raw));
+  const b64url = btoa(String.fromCharCode(...digest)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+  return b64url.match(/.{1,4}/g).join(" ");
+}, certificate.device_key);
+
+const spaced = (text) => text.replace(/\s+/g, " ");
+
 // ---------------------------------------------------------------------------
 // The steps
 // ---------------------------------------------------------------------------
@@ -383,16 +421,21 @@ async function passkey(phone, authenticator) {
 }
 
 async function pair(desk, phone) {
-  await openDevices(desk);
-  await desk.locator(`${layer} [data-test="pairing-begin"]`).click();
-  await desk.waitForSelector(`${layer} [data-test="confirmation"][data-own="true"]`, { timeout: 30_000 });
+  // The phone makes its key first, on this home's /pair page, and shows
+  // its code; the desktop begins a pairing for that code.
+  const code = await shownCode(phone);
+  const unpaired = await phone.locator('[data-test="glass-status"]').getAttribute("data-state");
+  await beginFor(desk, code);
 
   // The phone's Prism shows the request from the home's record, before
   // any proof, and confirms it with the passkey.
+  await phone.goto(shell);
+  await connected(phone);
   const prompt = `${layer} [data-test="confirmation"][data-own="false"]`;
   await phone.waitForSelector(prompt, { timeout: 30_000 });
   const preview = await phone.locator(`${prompt} [data-test="confirmation-preview"]`).first().textContent();
   const asker = await phone.locator(`${prompt} [data-test="confirmation-asker"]`).textContent();
+  const restricted = await phone.locator(`${prompt} [data-test="confirmation-restricted"]`).count();
   await phone.locator(`${prompt} [data-test="confirm-passkey"]`).click();
 
   // Confirmed there, the desktop's pairing goes on: its link appears.
@@ -404,23 +447,62 @@ async function pair(desk, phone) {
   }
   const link = await desk.locator(`${layer} [data-test="pairing-link"]`).inputValue();
   const qr = await desk.locator(`${layer} [data-test="pairing-qr"] svg`).count();
-  record.pair = { preview: preview.trim(), asker: asker.trim(), link_shape: link.replace(/#code=.*/, "#code=…"), qr };
-  return [row("pair", /pairing\.begin/.test(preview) && /a browser signed in/.test(asker) &&
-    link.startsWith(`${base}/pair#code=`) && qr === 1,
-    "the desktop's pairing, confirmed on the phone's Prism after its preview and asker, shows its link and QR",
-    record.pair), link];
+  const deskCode = (await desk.locator(`${layer} [data-test="pairing-key-code"]`).textContent()).trim();
+  const bearer = (await layerText(desk)).includes("Whoever opens it");
+  record.pair = {
+    code, phone_before: unpaired, preview: preview.trim(), asker: asker.trim(), restricted,
+    link_shape: link.replace(/#code=.*/, "#code=…"), qr, desktop_code: deskCode, bearer_sentence: bearer,
+  };
+  return [row("pair", /pairing\.begin/.test(preview) && spaced(preview).includes(code) && /a browser signed in/.test(asker) &&
+    link.startsWith(`${base}/pair#code=`) && qr === 1 && deskCode === code && !bearer,
+    "the phone's /pair page shows its key's code; the desktop's pairing for that code, confirmed on the phone's Prism after its preview (the code among it) and asker, shows its link and QR beside the code",
+    record.pair), link, code];
 }
 
-async function glass(phone, link, authenticator) {
+// A browser of its own, holding no session: it makes its own key on /pair,
+// then opens the link the desktop's pairing gave for the phone's code. The
+// home refuses its key, it is paired nothing, and the link still pairs the
+// phone (the glass step, after this one).
+async function otherKey(browser, link, code) {
+  const context = await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
+  try {
+    const other = await context.newPage();
+    const own = await shownCode(other);
+    await other.goto(link);
+    // A pairing that went through draws no error: what the page shows then
+    // is recorded, and the row fails.
+    const error = other.locator('[data-test="glass-error"]');
+    const refused = await error.waitFor({ timeout: 30_000 }).then(() => error.textContent(), () => null);
+    const status = await other.locator('[data-test="glass-status"]').getAttribute("data-state").catch(() => null);
+    const address = await other.evaluate(() => location.href);
+    const held = await storedDevice(other);
+    record.other_key = {
+      own_code_differs: own !== code, refused: refused && refused.trim(), status, address, holds_device: held !== null,
+    };
+    return row("other_key",
+      own.length > 0 && own !== code && /not the one the pairing was approved for/.test(refused || "") &&
+        address === `${base}/pair` && held === null,
+      "a browser context that made its own key opens the link: refused, and it holds no device",
+      record.other_key);
+  } finally {
+    await context.close();
+  }
+}
+
+async function glass(phone, link, code, authenticator) {
   await phone.goto(link);
   await phone.waitForSelector('[data-test="glass-status"][data-state="ready"]', { timeout: 60_000 });
   const address = await phone.evaluate(() => location.href);
   const log = await deviceLog(phone);
   const opened = log.filter((e) => e.dir === "out").map((e) => e.type);
   const credentials = (await authenticator.credentials()).length;
-  record.glass = { address, sent: opened.slice(0, 4), credentials };
-  return row("glass", address === `${base}/pair` && opened[0] === "connect" && opened.includes("proof") && credentials === 1,
-    "the desktop's link opens the glass: the code leaves the address and the device channel stands",
+  // The key that paired is the one whose code the phone showed.
+  const held = await storedDevice(phone);
+  const pairedCode = held ? await certifiedCode(phone, held.certificate) : null;
+  record.glass = { address, sent: opened.slice(0, 4), credentials, paired_code_is_shown_code: pairedCode === code };
+  return row("glass", address === `${base}/pair` && opened[0] === "connect" && opened.includes("proof") && credentials === 1 &&
+    pairedCode === code,
+    "the desktop's link opens the glass on the phone that showed the code, with the key it made: the code leaves the address and the device channel stands",
     record.glass);
 }
 
@@ -591,11 +673,14 @@ async function handheld(browser, desk, phoneAuthenticator) {
   for (const credential of await phoneAuthenticator.credentials()) await authenticator.add(credential);
   const measured = {};
 
-  // A pairing, its consent read and confirmed in the Prism's system layer.
+  // Its key made first, and its code shown, measured and recorded; then a
+  // pairing begun on the desktop for that code, its consent read and
+  // confirmed in the Prism's system layer.
+  const code = await shownCode(hand);
+  const codeScreen = await measureScreen(hand);
+  await beginFor(desk, code);
   await hand.goto(shell);
   await connected(hand);
-  await openDevices(desk);
-  await desk.locator(`${layer} [data-test="pairing-begin"]`).click();
   const prompt = `${layer} [data-test="confirmation"][data-own="false"]`;
   await hand.waitForSelector(`${prompt} [data-test="confirm-passkey"]`, { timeout: 30_000 });
   const consent = (await hand.locator(`${prompt} [data-test="confirmation-preview"]`).first().textContent()).trim();
@@ -604,6 +689,7 @@ async function handheld(browser, desk, phoneAuthenticator) {
   await hand.locator(`${prompt} [data-test="confirm-passkey"]`).click();
   await desk.waitForSelector(`${layer} [data-test="pairing-link"]`, { timeout: 30_000 });
   const link = await desk.locator(`${layer} [data-test="pairing-link"]`).inputValue();
+  const deskCode = (await desk.locator(`${layer} [data-test="pairing-key-code"]`).textContent()).trim();
 
   // The glass.
   await hand.goto(link);
@@ -640,14 +726,14 @@ async function handheld(browser, desk, phoneAuthenticator) {
 
   const failures = unmet(measured);
   record.viewport = {
-    viewport: HANDHELD.viewport, consent, entry: { preview: shown.preview, outcome, completed },
-    revoke_preview: revoking.preview, measured, failures, finding_prism_page: prismPage,
+    viewport: HANDHELD.viewport, code, desktop_code: deskCode, consent, entry: { preview: shown.preview, outcome, completed },
+    revoke_preview: revoking.preview, measured, failures, finding_prism_page: prismPage, finding_code_screen: codeScreen,
   };
   return row("viewport",
-    /pairing\.begin/.test(consent) && link.startsWith(`${base}/pair#code=`) && !!held &&
+    /pairing\.begin/.test(consent) && deskCode === code && link.startsWith(`${base}/pair#code=`) && !!held &&
       /vault\.create/.test(shown.preview) && shown.preview.includes(name) && outcome !== null && outcome.ok === "true" &&
       completed && /pairing\.revoke/.test(revoking.preview) && failures.length === 0,
-    "at 720×720: a pairing's consent read and confirmed in the Prism's system layer, the glass, a credential entry confirmed on it, its reconnection and its revocation, every control 24×24 CSS px or more, text 12 px or more, nothing overflowing",
+    "at 720×720: its key's code typed on the desktop, a pairing's consent read and confirmed in the Prism's system layer, the glass, a credential entry confirmed on it, its reconnection and its revocation, every control 24×24 CSS px or more, text 12 px or more, nothing overflowing",
     record.viewport);
 }
 
@@ -678,8 +764,9 @@ try {
   const authenticator = await virtualAuthenticator(phone);
 
   if (await passkey(phone, authenticator)) {
-    const [paired, link] = await pair(desk, phone);
-    if (paired && await glass(phone, link, authenticator)) {
+    const [paired, link, code] = await pair(desk, phone);
+    if (paired) await otherKey(browser, link, code);
+    if (paired && await glass(phone, link, code, authenticator)) {
       const [confirmed, firstRef] = await confirmEntry(desk, phone);
       if (confirmed && await fresh(desk, phone, firstRef)) {
         await measure(phone);
@@ -708,7 +795,7 @@ try {
   proxy.close();
 }
 
-const STEPS = ["passkey", "pair", "glass", "confirm", "fresh", "intent", "sleep", "revoke", "viewport"];
+const STEPS = ["passkey", "pair", "other_key", "glass", "confirm", "fresh", "intent", "sleep", "revoke", "viewport"];
 const outcome = (step) => {
   const found = rows.find((r) => r.step === step);
   return found ? (found.held ? "held" : "FAILED") : "not reached";

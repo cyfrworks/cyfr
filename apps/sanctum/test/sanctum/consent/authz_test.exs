@@ -131,15 +131,16 @@ defmodule Sanctum.Consent.AuthzTest do
     source = "192.0.2.#{rem(System.unique_integer([:positive]), 250) + 1}"
     glass = Context.build(%{authenticated: false, client_ip: source})
     {device_key, private} = :crypto.generate_key(:eddsa, :ed25519)
+    digest = Prima.Device.key_digest(device_key)
 
     confirmed =
       Sanctum.TestContext.confirmed(
         session_ctx,
         :device_pairing,
-        Sanctum.Pairing.invitation_change()
+        Sanctum.Pairing.invitation_change(digest)
       )
 
-    {:ok, invitation} = Sanctum.Pairing.begin(confirmed, %{})
+    {:ok, invitation} = Sanctum.Pairing.begin(confirmed, %{key_digest: digest})
 
     {:ok, %{challenge: challenge}} =
       Sanctum.Pairing.complete(glass, invitation.invitation_secret, %{device_key: device_key})

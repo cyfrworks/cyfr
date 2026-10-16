@@ -4,8 +4,9 @@
 defmodule Sanctum.Providers.Pairing do
   @moduledoc """
   The `pairing` tool: a person's paired clients in the athanor in focus —
-  begin a pairing, which issues a short-lived bearer invitation after a
-  fresh confirmation (`device_pairing`); complete it from the new glass;
+  begin a pairing for the device key the new glass shows, which issues a
+  short-lived invitation for that key alone after a fresh confirmation
+  (`device_pairing`); complete it from the new glass;
   renew a paired client's certificate; revoke one (`pairing_revocation`);
   and list them.
 
@@ -23,13 +24,17 @@ defmodule Sanctum.Providers.Pairing do
   The ceremony is `Sanctum.Pairing`'s. Here each action is read off the
   wire and answered on it:
 
-    * `begin` answers the invitation's secret (unpadded base64url, for the
-      pairing code), the client id it reserves, its expiry, and the
+    * `begin` takes `key_digest`, the digest of the key the new glass
+      generated and shows (`Prima.Device.key_digest/1`), and answers the
+      invitation's secret (unpadded base64url, for the pairing code), the
+      client id it reserves, the key digest it is for, its expiry, and the
       `invitation_url` a new glass opens: this home's `/pair` page with the
       secret in its fragment's `code`, so the page reads it in the browser
       and no request line carries it. The pairing QR encodes that URL; it
       is built here and nowhere else.
-    * `complete` answers the `pair` challenge to sign when it carries no
+    * `complete` carries the device key and its `key_digest`, which must
+      be the digest of that key and the one the invitation names; it
+      answers the `pair` challenge to sign when it carries no
       proof, and the paired client's id and its first certificate
       (`Prima.DeviceCert`'s JSON) when it carries the proof over it. For a
       person whose identity is at another home it carries, with both
@@ -58,7 +63,15 @@ defmodule Sanctum.Providers.Pairing do
   def definition do
     Operation.tool(
       [
-        Operation.new("pairing", "begin", "Begin pairing a device", [],
+        Operation.new(
+          "pairing",
+          "begin",
+          "Begin pairing a device",
+          [
+            key_digest(
+              "begin: the code the new device shows, the digest of the key it generated; only that key completes the pairing"
+            )
+          ],
           kind: :write,
           planes: [:external],
           consent: :interactive
@@ -76,6 +89,7 @@ defmodule Sanctum.Providers.Pairing do
               required: true,
               description: "The device's public key, unpadded base64url (complete, renew)"
             ),
+            key_digest("complete: the digest of the device key, the code the device showed"),
             proof(
               "complete: the device key's signature over the pair challenge; absent, the answer is the challenge to sign",
               false
@@ -122,6 +136,9 @@ defmodule Sanctum.Providers.Pairing do
     )
   end
 
+  defp key_digest(description),
+    do: Arg.new("key_digest", :string, required: true, description: description)
+
   defp client_id,
     do:
       Arg.new("client_id", :string,
@@ -159,6 +176,7 @@ defmodule Sanctum.Providers.Pairing do
            invitation_secret: Encoding.b64(invitation.invitation_secret),
            invitation_url: invitation_url(invitation.invitation_secret),
            client_id: invitation.client_id,
+           key_digest: invitation.key_digest,
            expires_at: Prima.Time.iso8601(invitation.expires_at)
          }}
 
@@ -226,7 +244,8 @@ defmodule Sanctum.Providers.Pairing do
       "protocol" => Prima.Device.protocol(),
       "type" => "pair_request",
       "invitation_secret" => args["invitation_secret"],
-      "device_key" => args["device_key"]
+      "device_key" => args["device_key"],
+      "key_digest" => args["key_digest"]
     }
 
     case Prima.Device.decode(message, :glass) do
@@ -236,8 +255,8 @@ defmodule Sanctum.Providers.Pairing do
       {:error, _malformed} ->
         {:error,
          {:invalid_argument,
-          "The pairing code or the device key is not one a pairing takes: unpadded base64url of " <>
-            "16 and 32 bytes"}}
+          "The pairing code, the device key or its digest is not one a pairing takes: unpadded " <>
+            "base64url of 16, 32 and 32 bytes, the digest that key's"}}
     end
   end
 
@@ -308,6 +327,22 @@ defmodule Sanctum.Providers.Pairing do
         :unauthenticated,
         :invalid_invitation,
         "This pairing code is not valid: it has expired or was already used. Show a new one."
+      )
+
+  defp refusal(:key_mismatch),
+    do:
+      refused(
+        :forbidden,
+        :key_mismatch,
+        "This device is not the one the pairing was approved for: approve the code this device shows"
+      )
+
+  defp refusal(:confirmer_revoked),
+    do:
+      refused(
+        :forbidden,
+        :confirmer_revoked,
+        "The passkey or device that approved this pairing no longer stands here: approve it again"
       )
 
   defp refusal(:proof_refused),

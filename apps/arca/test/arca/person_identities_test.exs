@@ -245,5 +245,31 @@ defmodule Arca.PersonIdentitiesTest do
       assert {:ok, :no_identity} =
                Arca.Repo.transaction(fn -> PersonIdentities.first_method!("usr_nobody") end)
     end
+
+    test "reads open before it is set and closed after, open for a person with no row, and only to the person or the platform" do
+      person = person!()
+      {:ok, _} = PersonIdentities.create(server(), local_attrs(person.id))
+      own = %Prima.Actor{user_id: person.id}
+
+      assert {:ok, true} = PersonIdentities.first_method_open?(own, person.id)
+      assert {:ok, true} = PersonIdentities.first_method_open?(server(), person.id)
+
+      {:ok, :marked} = Arca.Repo.transaction(fn -> PersonIdentities.first_method!(person.id) end)
+
+      assert {:ok, false} = PersonIdentities.first_method_open?(own, person.id)
+      assert {:ok, false} = PersonIdentities.first_method_open?(server(), person.id)
+
+      bare = person!()
+      assert {:error, :not_found} = PersonIdentities.get(server(), bare.id)
+
+      assert {:ok, true} =
+               PersonIdentities.first_method_open?(%Prima.Actor{user_id: bare.id}, bare.id)
+
+      assert {:error, :cross_tenant} =
+               PersonIdentities.first_method_open?(%Prima.Actor{user_id: bare.id}, person.id)
+
+      assert {:error, :cross_tenant} =
+               PersonIdentities.first_method_open?(Prima.Actor.in_athanor("ath_test"), person.id)
+    end
   end
 end

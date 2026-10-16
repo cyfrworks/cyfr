@@ -92,10 +92,14 @@ defmodule Sanctum.DeviceCertsTest do
 
   # Beginning a pairing and revoking a device are sensitive changes: each
   # under a confirmation the person proved (`Sanctum.TestContext.confirmed/3`).
-  defp begin!(session_ctx) do
+  # A pairing is begun for the digest of the device key the glass made
+  # first, and only that key completes it.
+  defp begin!(session_ctx, device_key) do
+    digest = Prima.Device.key_digest(device_key)
+
     session_ctx
-    |> Sanctum.TestContext.confirmed(:device_pairing, Pairing.invitation_change())
-    |> Pairing.begin(%{})
+    |> Sanctum.TestContext.confirmed(:device_pairing, Pairing.invitation_change(digest))
+    |> Pairing.begin(%{key_digest: digest})
   end
 
   defp revoke!(session_ctx, client_id) do
@@ -112,7 +116,7 @@ defmodule Sanctum.DeviceCertsTest do
   # first certificate.
   defp pair!(session_ctx, source \\ @source) do
     {device_key, private} = :crypto.generate_key(:eddsa, :ed25519)
-    {:ok, invitation} = begin!(session_ctx)
+    {:ok, invitation} = begin!(session_ctx, device_key)
     glass = Context.build(%{authenticated: false, client_ip: source})
     submission = %{device_key: device_key}
 
@@ -1392,9 +1396,9 @@ defmodule Sanctum.DeviceCertsTest do
 
       # Paired at this home under their home's certificate: the invitation
       # opened under the person's proof here, then they are remote.
-      {:ok, invitation} = begin!(session_ctx)
-      :ok = DirectoryServer.remote_person!(user.id, identity)
       {device_key, private} = :crypto.generate_key(:eddsa, :ed25519)
+      {:ok, invitation} = begin!(session_ctx, device_key)
+      :ok = DirectoryServer.remote_person!(user.id, identity)
       certificate = remote_certificate(identity, invitation.client_id, device_key, athanor)
       glass = Context.build(%{authenticated: false, client_ip: @source})
       submission = %{device_key: device_key, certificate: certificate}

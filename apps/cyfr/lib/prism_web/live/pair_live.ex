@@ -5,16 +5,25 @@ defmodule PrismWeb.PairLive do
   @moduledoc """
   `/pair`: the glass's own page at this home, sessionless.
 
-  A pairing code opens it with the invitation's secret in the URL's
+  Opened with no fragment by a glass that holds no device, the page's
+  script (`assets/js/system_layer/`, `data-glass="pair"`) makes the
+  glass's key pair first, non-extractable and kept across reloads
+  (`device_key.js`), before any invitation exists, and sends this view
+  the key's digest (`prepared`), which the page shows as the key's code
+  (`Prima.Device.key_code/1`) and a QR code of it: the person types it on
+  a client of theirs, where `pairing.begin` opens an invitation for that
+  key alone.
+
+  The invitation's link opens the page again with its secret in the URL's
   fragment (`#code=…`, `pairing.begin`'s `invitation_url`), which a
-  browser never sends: the page's script (`assets/js/system_layer/`,
-  `data-glass="pair"`) reads it, clears it from the address, makes the
-  glass's key pair, non-extractable and kept across reloads
-  (`device_key.js`), and completes the pairing in two steps through this
-  view: `pair_start` with the secret and the device key, answered with
-  the `pair` challenge to sign, then `pair_proof` with the signature,
-  answered with the paired client's id and its first certificate. The
-  script then connects the device channel under that certificate.
+  browser never sends: the script reads it, clears it from the address,
+  and completes the pairing with the key it made, in two steps through
+  this view: `pair_start` with the secret, the device key and its digest,
+  answered with the `pair` challenge to sign, then `pair_proof` with the
+  signature, answered with the paired client's id and its first
+  certificate. The script then connects the device channel under that
+  certificate. A code opened on a browser that made no key, or another
+  key, pairs nothing: the invitation names the key it is for.
 
   A person whose identity is at another home pairs under the certificate
   their own home issues. Their first `pair_start`, with no certificate, is
@@ -56,6 +65,7 @@ defmodule PrismWeb.PairLive do
      |> assign(:page_title, "Pair this device")
      |> assign(:context, unauthenticated(socket))
      |> assign(:paired, false)
+     |> assign(:key, nil)
      |> assign(:error, nil), layout: false}
   end
 
@@ -73,30 +83,60 @@ defmodule PrismWeb.PairLive do
     )
   end
 
+  # The key the glass made before any invitation: its code, to type on a
+  # client of the person's, and a QR code of it. A digest this page cannot
+  # read draws nothing.
   @impl true
-  def handle_event(
-        "pair_start",
-        %{"invitation_secret" => secret, "device_key" => device_key} = params,
-        socket
-      )
-      when is_binary(secret) and is_binary(device_key) do
-    complete(
-      socket,
-      certified(params, %{"invitation_secret" => secret, "device_key" => device_key})
-    )
+  def handle_event("prepared", %{"key_digest" => key_digest}, socket) do
+    if Prima.Device.key_digest?(key_digest) do
+      code = Prima.Device.key_code(key_digest)
+
+      svg =
+        case PrismWeb.QR.svg(code, label: "This device's code", class: "h-48 w-48") do
+          {:ok, svg} -> svg
+          {:error, :too_long} -> nil
+        end
+
+      {:reply, %{}, assign(socket, :key, %{code: code, svg: svg})}
+    else
+      {:reply, %{error: "This device's key could not be read."}, assign(socket, :key, nil)}
+    end
   end
 
   def handle_event(
-        "pair_proof",
-        %{"invitation_secret" => secret, "device_key" => device_key, "proof" => proof} = params,
+        "pair_start",
+        %{"invitation_secret" => secret, "device_key" => device_key, "key_digest" => digest} =
+          params,
         socket
       )
-      when is_binary(secret) and is_binary(device_key) and is_map(proof) do
+      when is_binary(secret) and is_binary(device_key) and is_binary(digest) do
     complete(
       socket,
       certified(params, %{
         "invitation_secret" => secret,
         "device_key" => device_key,
+        "key_digest" => digest
+      })
+    )
+  end
+
+  def handle_event(
+        "pair_proof",
+        %{
+          "invitation_secret" => secret,
+          "device_key" => device_key,
+          "key_digest" => digest,
+          "proof" => proof
+        } = params,
+        socket
+      )
+      when is_binary(secret) and is_binary(device_key) and is_binary(digest) and is_map(proof) do
+    complete(
+      socket,
+      certified(params, %{
+        "invitation_secret" => secret,
+        "device_key" => device_key,
+        "key_digest" => digest,
         "proof" => proof
       })
     )
@@ -119,7 +159,7 @@ defmodule PrismWeb.PairLive do
 
       {:ok, %{client_id: client_id, certificate: certificate}} ->
         {:reply, %{client_id: client_id, certificate: certificate},
-         assign(socket, paired: true, error: nil)}
+         assign(socket, paired: true, key: nil, error: nil)}
 
       {:error, reason} ->
         sentence = PrismWeb.Ops.error_message(reason)
@@ -133,10 +173,20 @@ defmodule PrismWeb.PairLive do
     <main class="mx-auto max-w-md space-y-4 p-6 text-gray-100">
       <h1 class="text-xl font-semibold">Pair this device</h1>
       <p class="text-sm text-gray-300">
-        This device pairs with this home under the code another of your devices showed. It
-        keeps a key of its own that never leaves it, and connects under the certificate this
-        home issues for that key.
+        This device makes a key of its own that never leaves it, and connects under the
+        certificate this home issues for that key. Approve its code on a device of yours signed
+        in to this home, then open the pairing link that device shows here.
       </p>
+
+      <section :if={@key && !@paired} class="space-y-2" data-test="pair-key">
+        <p class="text-sm">
+          Type this code under Pair a device on a device of yours signed in to this home:
+        </p>
+        <p class="font-mono text-lg" data-test="pair-key-code">{@key.code}</p>
+        <div :if={@key.svg} class="w-fit rounded bg-white p-2" data-test="pair-key-qr">
+          {Phoenix.HTML.raw(@key.svg)}
+        </div>
+      </section>
 
       <p :if={@paired} class="text-sm" data-test="pair-paired">
         This device is paired.

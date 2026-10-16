@@ -1411,11 +1411,28 @@ defmodule PrismWeb.SystemLayer do
     end)
   end
 
-  def handle_event("pairing_begin", %{"id" => id}, socket) do
+  # The code the new device shows, typed or pasted with or without the
+  # spaces between its groups: the digest of the key it generated, the one
+  # key the invitation is opened for.
+  def handle_event("pairing_begin", %{"prompt_id" => id} = params, socket) do
     CyfrWeb.ContextGuard.guard(socket, fn socket ->
       case open(socket, id, [:pairing]) do
-        {:ok, prompt} -> {:noreply, pairing_begin(socket, prompt)}
-        :none -> {:noreply, socket}
+        {:ok, prompt} ->
+          case Prima.Device.from_key_code(params["key_code"]) do
+            {:ok, key_digest} ->
+              {:noreply, pairing_begin(socket, prompt, key_digest)}
+
+            :error ->
+              {:noreply,
+               assign(
+                 socket,
+                 :error,
+                 "Type the code the new device shows: open this home's /pair page on it first"
+               )}
+          end
+
+        :none ->
+          {:noreply, socket}
       end
     end)
   end
@@ -2086,7 +2103,7 @@ defmodule PrismWeb.SystemLayer do
         case socket.assigns.current do
           %{id: ^prompt_id, kind: :pairing} = prompt ->
             case repeat do
-              :pairing_begin -> pairing_begin(socket, prompt)
+              {:pairing_begin, key_digest} -> pairing_begin(socket, prompt, key_digest)
               {:pairing_revoke, client_id} -> pairing_revoke(socket, prompt, client_id)
             end
 
@@ -2212,8 +2229,14 @@ defmodule PrismWeb.SystemLayer do
     end
   end
 
-  defp pairing_begin(socket, prompt) do
-    case layer_call(socket, prompt, :pairing_begin, "pairing/begin", %{}) do
+  defp pairing_begin(socket, prompt, key_digest) do
+    case layer_call(
+           socket,
+           prompt,
+           {:pairing_begin, key_digest},
+           "pairing/begin",
+           %{"key_digest" => key_digest}
+         ) do
       {:asked, socket} ->
         socket
 
@@ -2225,7 +2248,12 @@ defmodule PrismWeb.SystemLayer do
             {:error, :too_long} -> nil
           end
 
-        invitation = %{url: url, svg: svg, expires_at: expires_at}
+        invitation = %{
+          url: url,
+          svg: svg,
+          expires_at: expires_at,
+          code: Prima.Device.key_code(key_digest)
+        }
 
         socket
         |> assign(:pairing, %{pairing_of(socket, prompt) | invitation: invitation})
@@ -2664,6 +2692,18 @@ defmodule PrismWeb.SystemLayer do
 
   defp body(assigns), do: ~H""
 
+  # An addition once a passkey or paired device exists takes a proof one
+  # of them gives (`Sanctum.Pairing`): the record offers only those, and
+  # says where to give one when this client offers none.
+  defp restricted([]),
+    do:
+      "Adding a device, a passkey or a sign-in is confirmed with your passkey or on a device " <>
+        "you paired: confirm it there."
+
+  defp restricted(_methods),
+    do:
+      "Adding a device, a passkey or a sign-in is confirmed with your passkey or on a device you paired."
+
   attr :panel, :map, required: true
   attr :may, :boolean, required: true
   attr :myself, :any, required: true
@@ -2728,6 +2768,14 @@ defmodule PrismWeb.SystemLayer do
         data-status={status_name(@panel.status)}
       >
         {status(@panel)}
+      </p>
+
+      <p
+        :if={@open and @entry != nil and @entry[:restricted] == true}
+        class="text-sm text-gray-300"
+        data-test="confirmation-restricted"
+      >
+        {restricted(@methods)}
       </p>
 
       <div :if={@may and @open and @entry != nil} class="flex flex-wrap gap-2">

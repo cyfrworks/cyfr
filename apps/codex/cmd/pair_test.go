@@ -13,11 +13,18 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// The answer pairing.begin gives: the home builds the link, and the secret
-// rides its fragment.
+// The code the new device shows, the digest of the key of
+// tests/fixtures/device.json's pairing request, as the person reads it.
+const (
+	pairingCode   = "sv5Q Hby2 ooLr BWLs _JOr jk8g oRiw YWrr CDbE 2Rui E0o"
+	pairingDigest = "sv5QHby2ooLrBWLs_JOrjk8goRiwYWrrCDbE2RuiE0o"
+)
+
+// The answer pairing.begin gives: the home builds the link, the secret
+// rides its fragment, and it names the key digest it is for.
 const pairingAnswer = `{"invitation_url":"https://home.example/pair#code=q2mTb0yU7aKpXv1ZcR4n8w",` +
 	`"invitation_secret":"q2mTb0yU7aKpXv1ZcR4n8w","client_id":"pcl_0192f4c1-8a2e-7d3b-9c41-5e6f7a8b9c0d",` +
-	`"expires_at":"2026-10-01T12:05:00Z"}`
+	`"key_digest":"` + pairingDigest + `","expires_at":"2026-10-01T12:05:00Z"}`
 
 // runCLI runs the cyfr command line with args against srv, with a
 // credential and no config file of the person's, and answers what it
@@ -67,24 +74,27 @@ func (s *cliServer) count() int {
 	return len(s.requests)
 }
 
-// `cyfr pair` begins a pairing and prints the link the home answered, with
-// its expiry and the client it reserves.
+// `cyfr pair <code>` begins a pairing for the key digest the new device
+// showed and prints the link the home answered, with the device's code, its
+// expiry and the client it reserves.
 func TestPair_PrintsTheLinkAndItsExpiry(t *testing.T) {
 	onTerminal(t, false)
 	srv := newCLIServer(t, "pairing.begin", pairingAnswer)
 
-	out, err := runCLI(t, srv, "pair")
+	out, err := runCLI(t, srv, "pair", pairingCode)
 	if err != nil {
 		t.Fatalf("cyfr pair failed: %v\n%s", err, out)
 	}
 
-	if name, args := srv.call(0); name != "pairing" || len(args) != 1 || args["action"] != "begin" {
-		t.Errorf("expected pairing.begin with no arguments, got %s %v", name, args)
+	if name, args := srv.call(0); name != "pairing" || len(args) != 2 || args["action"] != "begin" ||
+		args["key_digest"] != pairingDigest {
+		t.Errorf("expected pairing.begin with the key digest alone, got %s %v", name, args)
 	}
 	for _, want := range []string{
 		"https://home.example/pair#code=q2mTb0yU7aKpXv1ZcR4n8w",
 		"2026-10-01T12:05:00Z",
 		"pcl_0192f4c1-8a2e-7d3b-9c41-5e6f7a8b9c0d",
+		pairingCode,
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("the output lacks %q:\n%s", want, out)
@@ -98,7 +108,7 @@ func TestPair_JSONIsTheLinkItsExpiryAndTheClient(t *testing.T) {
 	onTerminal(t, false)
 	srv := newCLIServer(t, "pairing.begin", pairingAnswer)
 
-	out, err := runCLI(t, srv, "pair", "--json")
+	out, err := runCLI(t, srv, "pair", pairingDigest, "--json")
 	if err != nil {
 		t.Fatalf("cyfr pair --json failed: %v\n%s", err, out)
 	}
@@ -109,7 +119,8 @@ func TestPair_JSONIsTheLinkItsExpiryAndTheClient(t *testing.T) {
 	}
 	if printed["invitation_url"] != "https://home.example/pair#code=q2mTb0yU7aKpXv1ZcR4n8w" ||
 		printed["expires_at"] != "2026-10-01T12:05:00Z" ||
-		printed["client_id"] != "pcl_0192f4c1-8a2e-7d3b-9c41-5e6f7a8b9c0d" {
+		printed["client_id"] != "pcl_0192f4c1-8a2e-7d3b-9c41-5e6f7a8b9c0d" ||
+		printed["key_digest"] != pairingDigest {
 		t.Errorf("unexpected JSON: %v", printed)
 	}
 	if _, ok := printed["invitation_secret"]; ok {
@@ -124,7 +135,7 @@ func TestPair_AnAnswerWithNoLinkFails(t *testing.T) {
 	srv := newCLIServer(t, "pairing.begin",
 		`{"invitation_secret":"q2mTb0yU7aKpXv1ZcR4n8w","expires_at":"2026-10-01T12:05:00Z"}`)
 
-	out, err := runCLI(t, srv, "pair")
+	out, err := runCLI(t, srv, "pair", pairingCode)
 	if !exitsOne(err) {
 		t.Fatalf("expected a failure, got %v\n%s", err, out)
 	}
@@ -141,7 +152,7 @@ func TestPair_MeetsItsConfirmationOnATerminal(t *testing.T) {
 	term.enter()
 	srv := newCLIServer(t, "pairing.begin", pendingSecret, pairingAnswer)
 
-	out, err := runCLI(t, srv, "pair")
+	out, err := runCLI(t, srv, "pair", pairingCode)
 	if err != nil {
 		t.Fatalf("cyfr pair failed: %v\n%s", err, out)
 	}
@@ -165,7 +176,7 @@ func TestPair_OffATerminalExitsNonZeroWithNothingChanged(t *testing.T) {
 	onTerminal(t, false)
 	srv := newCLIServer(t, "pairing.begin", pendingSecret, pairingAnswer)
 
-	out, err := runCLI(t, srv, "pair")
+	out, err := runCLI(t, srv, "pair", pairingCode)
 	if !exitsOne(err) {
 		t.Fatalf("expected exit 1, got %v\n%s", err, out)
 	}
@@ -180,6 +191,36 @@ func TestPair_OffATerminalExitsNonZeroWithNothingChanged(t *testing.T) {
 	}
 	if strings.Contains(out, "cnf_") || strings.Contains(out, "pair#code=") {
 		t.Errorf("the output shows the secret or a link:\n%s", out)
+	}
+}
+
+// The code split across words, as a shell splits it unquoted, is the same
+// code; anything that is not a key's digest is refused before any request,
+// as is a link answered for another device's code.
+func TestPair_ReadsTheCodeAndRefusesAnyOther(t *testing.T) {
+	onTerminal(t, false)
+	srv := newCLIServer(t, "pairing.begin", pairingAnswer)
+
+	out, err := runCLI(t, srv, append([]string{"pair"}, strings.Fields(pairingCode)...)...)
+	if err != nil {
+		t.Fatalf("cyfr pair with the code's groups as words failed: %v\n%s", err, out)
+	}
+	if _, args := srv.call(0); args["key_digest"] != pairingDigest {
+		t.Errorf("expected the digest read from the groups, got %v", args)
+	}
+
+	for _, code := range []string{"sv5QHby2", pairingDigest + "A", "sv5QHby2ooLrBWLs+JOrjk8goRiwYWrrCDbE2RuiE0o"} {
+		refused := newCLIServer(t, "pairing.begin", pairingAnswer)
+		out, err := runCLI(t, refused, "pair", code)
+		if !exitsOne(err) || refused.count() != 0 {
+			t.Errorf("%q: expected a refusal and no request, got %v, %d requests\n%s", code, err, refused.count(), out)
+		}
+	}
+
+	other := newCLIServer(t, "pairing.begin", strings.Replace(pairingAnswer, pairingDigest, strings.Repeat("A", 43), 1))
+	out, err = runCLI(t, other, "pair", pairingCode)
+	if !exitsOne(err) || strings.Contains(out, "pair#code=") {
+		t.Errorf("a link for another device's code was printed: %v\n%s", err, out)
 	}
 }
 

@@ -648,11 +648,15 @@ defmodule Emissary.Web.DeviceChannelTest do
       directory = DirectoryServer.start!(tls)
       identity = DirectoryServer.identity!(directory.dir, directory.url)
 
+      {device_key, private} = :crypto.generate_key(:eddsa, :ed25519)
+
       {:ok, invitation} =
-        Sanctum.TestContext.confirming(session_ctx, &Sanctum.Pairing.begin(&1, %{}))
+        Sanctum.TestContext.confirming(
+          session_ctx,
+          &Sanctum.Pairing.begin(&1, %{key_digest: Device.key_digest(device_key)})
+        )
 
       :ok = DirectoryServer.remote_person!(user.id, identity)
-      {device_key, private} = :crypto.generate_key(:eddsa, :ed25519)
       now = System.system_time(:millisecond)
 
       {:ok, cert} =
@@ -798,10 +802,13 @@ defmodule Emissary.Web.DeviceChannelTest do
 
       # A pairing completion from the same address is not charged for it:
       # bad connects cannot starve completions and renewals.
-      {:ok, invitation} =
-        Sanctum.TestContext.confirming(session_ctx, &Sanctum.Pairing.begin(&1, %{}))
-
       {device_key, _} = :crypto.generate_key(:eddsa, :ed25519)
+
+      {:ok, invitation} =
+        Sanctum.TestContext.confirming(
+          session_ctx,
+          &Sanctum.Pairing.begin(&1, %{key_digest: Device.key_digest(device_key)})
+        )
 
       assert {:ok, %{challenge: _}} =
                Sanctum.Pairing.complete(
@@ -876,7 +883,7 @@ defmodule Emissary.Web.DeviceChannelTest do
       # A record of the person's opens: its fact arrives as an event under
       # the grant, projected, and never carries the secret.
       assert {:error, {:confirmation_required, %{id: id}}} =
-               Sanctum.Pairing.begin(session_ctx, %{})
+               Sanctum.Pairing.begin(session_ctx, begin_args())
 
       {payload, state} = event!(state, grant_id)
       assert payload["ref"] == Prima.Confirmation.ref(id)
@@ -893,8 +900,10 @@ defmodule Emissary.Web.DeviceChannelTest do
       device = pair!(session_ctx)
       state = proven(device)
 
+      args = begin_args()
+
       assert {:error, {:confirmation_required, %{id: id}}} =
-               Sanctum.Pairing.begin(session_ctx, %{})
+               Sanctum.Pairing.begin(session_ctx, args)
 
       ref = Prima.Confirmation.ref(id)
 
@@ -903,8 +912,13 @@ defmodule Emissary.Web.DeviceChannelTest do
 
       entry = Enum.find(entries, &(&1["ref"] == ref))
       assert entry["preview"]["operation"] == "pairing.begin"
+      assert entry["preview"]["details"]["device"] == Device.key_code(args.key_digest)
       assert entry["asker"]["kind"] == "session"
-      assert "passkey" in entry["methods"]
+
+      # An addition, once the person holds a passkey: the paired device
+      # offers the proofs it gives itself, a passkey and an emailed code.
+      assert entry["restricted"] == true
+      assert entry["methods"] == ["passkey", "email"]
       refute inspect(entries) =~ id
 
       {:ok, digest} = Prima.Identity.Encoding.unb64(entry["webauthn"]["challenge"], 32)
@@ -920,7 +934,7 @@ defmodule Emissary.Web.DeviceChannelTest do
 
       # Only the session that asked repeats it, under its secret.
       assert {:ok, _invitation} =
-               Sanctum.Pairing.begin(%{session_ctx | confirmation_id: id}, %{})
+               Sanctum.Pairing.begin(%{session_ctx | confirmation_id: id}, args)
     end
 
     test "a refused open is answered with its error, and the channel stays open", %{
@@ -997,7 +1011,9 @@ defmodule Emissary.Web.DeviceChannelTest do
       assert_receive {:DOWN, ^monitor, :process, ^forwarder, _reason}, 2_000
 
       # Nothing of that stream is delivered after its end.
-      {:ok, _} = Sanctum.TestContext.confirming(session_ctx, &Sanctum.Pairing.begin(&1, %{}))
+      args = begin_args()
+      {:ok, _} = Sanctum.TestContext.confirming(session_ctx, &Sanctum.Pairing.begin(&1, args))
+
       refute_receive {DeviceChannel, :fact, ^grant_id, _message}, 100
     end
 
@@ -1036,7 +1052,7 @@ defmodule Emissary.Web.DeviceChannelTest do
       {first, _grant, state} = open_stream!(state, "s1")
       {second, _grant, state} = open_stream!(state, "s2")
 
-      {:error, {:confirmation_required, _}} = Sanctum.Pairing.begin(session_ctx, %{})
+      {:error, {:confirmation_required, _}} = Sanctum.Pairing.begin(session_ctx, begin_args())
       assert_receive {DeviceChannel, :fact, ^first, message}, 2_000
 
       # A channel that has fallen this far behind.
@@ -1067,7 +1083,7 @@ defmodule Emissary.Web.DeviceChannelTest do
       state = proven(pair!(session_ctx))
       {grant_id, _grant, state} = open_stream!(state, "s1")
 
-      {:error, {:confirmation_required, _}} = Sanctum.Pairing.begin(session_ctx, %{})
+      {:error, {:confirmation_required, _}} = Sanctum.Pairing.begin(session_ctx, begin_args())
       assert_receive {DeviceChannel, :fact, ^grant_id, message}, 2_000
 
       # The client's row cannot be read now.
@@ -1368,7 +1384,11 @@ defmodule Emissary.Web.DeviceChannelTest do
         Device.encode({:renew, %{client_id: glass.client_id}}),
         Device.encode(
           {:pair_request,
-           %{invitation_secret: :crypto.strong_rand_bytes(16), device_key: device_key}}
+           %{
+             invitation_secret: :crypto.strong_rand_bytes(16),
+             device_key: device_key,
+             key_digest: Device.key_digest(device_key)
+           }}
         )
       ]
 
@@ -1391,6 +1411,11 @@ defmodule Emissary.Web.DeviceChannelTest do
             do: {vector["name"], message}
 
       assert length(glass_refusals) > 10
+
+      # A pairing request naming another key's digest, and one naming none.
+      names = Enum.map(glass_refusals, &elem(&1, 0))
+      assert "a pairing request naming another key's digest" in names
+      assert "a pairing request naming no key digest" in names
 
       for {name, message} <- glass_refusals do
         result = send_frame(channel(), message)
@@ -1665,7 +1690,10 @@ defmodule Emissary.Web.DeviceChannelTest do
     {device_key, private} = :crypto.generate_key(:eddsa, :ed25519)
 
     {:ok, invitation} =
-      Sanctum.TestContext.confirming(session_ctx, &Sanctum.Pairing.begin(&1, %{}))
+      Sanctum.TestContext.confirming(
+        session_ctx,
+        &Sanctum.Pairing.begin(&1, %{key_digest: Device.key_digest(device_key)})
+      )
 
     source = "198.51.100.#{rem(System.unique_integer([:positive]), 250) + 1}"
     glass = Context.build(%{authenticated: false, client_ip: source})
@@ -1680,6 +1708,13 @@ defmodule Emissary.Web.DeviceChannelTest do
       })
 
     %{cert: certificate, client_id: client_id, private: private}
+  end
+
+  # What `Sanctum.Pairing.begin/2` takes for a new glass that made its key
+  # first: that key's digest, the code the glass shows.
+  defp begin_args do
+    {device_key, _private} = :crypto.generate_key(:eddsa, :ed25519)
+    %{key_digest: Device.key_digest(device_key)}
   end
 
   # A paired device's channel after its proof verified.
