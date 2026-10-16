@@ -7,6 +7,12 @@ defmodule Aqua.LaunchTest do
   the approved turn's row stores — never `interactive` inferred from the
   person approving. A programmatic turn's launch stays programmatic, and a
   turn whose row stores no origin launches nothing.
+
+  It runs only as its card bound it: the turn's sources and the app's
+  grant as they stood when the card was drawn. A source the turn read
+  since, or another revision of the grant, refuses it as stale before
+  anything starts; otherwise its root runs under the step's id, seeded
+  with those sources and letting flow the classes the card named.
   """
 
   use ExUnit.Case, async: false
@@ -136,11 +142,7 @@ defmodule Aqua.LaunchTest do
   end
 
   defp launch_card(ctx, turn, approver) do
-    proposal = %{
-      "tool" => "execution",
-      "action" => "run",
-      "args" => %{"reference" => @application, "input" => %{}}
-    }
+    proposal = bound_proposal(ctx, turn, %{"reference" => @application, "input" => %{}})
 
     {:ok, model_step} = Tape.record_model_intent(ctx, turn, %{})
 
@@ -177,6 +179,23 @@ defmodule Aqua.LaunchTest do
       })
 
     {Approvals.resolve(approver, approval.id, %{decision: :approved}), step.id}
+  end
+
+  # The proposal of a launch card for `args` as the loop draws one: the
+  # call, the account its card binds when `vault_entry` is given, the
+  # turn's sources as they stand and what they let flow to the app's grant
+  # (`Aqua.Loop.Policy.launch_flow/3`).
+  defp bound_proposal(ctx, turn, args, vault_entry \\ nil) do
+    {:ok, call} = Aqua.Loop.Binding.resolve("execution.run", args)
+    sources = turn_sources(ctx, turn)
+    launch = call |> Aqua.Loop.Policy.launch_flow(ctx, sources) |> Map.put(:sources, sources)
+    account = if vault_entry, do: %{vault_entry: vault_entry, name: args["connection"]}
+    Aqua.Loop.Policy.proposal(call, account, launch)
+  end
+
+  defp turn_sources(ctx, turn) do
+    {:ok, %{sources: sources}} = Tape.turn(ctx, turn.id)
+    Prima.Source.decode(sources)
   end
 
   defp launched(ctx) do
@@ -425,10 +444,8 @@ defmodule Aqua.LaunchTest do
 
   # A launch card for `args`, its proposal binding `vault_entry` when one
   # is given, as the loop opens it; approved by `approver`. Answers the step.
-  defp approved_named_launch!(ctx, turn, approver, args, vault_entry) do
-    proposal =
-      %{"tool" => "execution", "action" => "run", "args" => args}
-      |> Prima.MapUtil.put_present("vault_entry", vault_entry)
+  defp approved_named_launch!(ctx, turn, approver, args, vault_entry, root_id \\ nil) do
+    proposal = bound_proposal(ctx, turn, args, vault_entry)
 
     {:ok, model_step} = Tape.record_model_intent(ctx, turn, %{})
 
@@ -443,7 +460,8 @@ defmodule Aqua.LaunchTest do
             action: "run",
             arguments: args,
             kind: "execute",
-            step_kind: "launch"
+            step_kind: "launch",
+            child_execution_id: root_id
           }
         ]
       })
@@ -754,7 +772,7 @@ defmodule Aqua.LaunchTest do
 
     log =
       ExUnit.CaptureLog.capture_log(fn ->
-        assert Launch.dispatch(ctx, step) == {:error, {:conflict, @stale_work}}
+        assert Launch.run(ctx, step) == {:refused, {:conflict, @stale_work}}
       end)
 
     assert_received :regranted
@@ -824,9 +842,15 @@ defmodule Aqua.LaunchTest do
     {_dispatched, calls} =
       traced([@root_load, @attempt_open], fn -> Launch.dispatch(ctx, step) end)
 
-    # The root's one load reads the head with the approved account in hand:
-    # the entry the card bound and the name its binding stored.
-    assert [[root_ctx, _profile, _opts]] = args_of(calls, @root_load)
+    # The root's load reads the head with the approved account in hand:
+    # the entry the card bound and the name its binding stored. Before it,
+    # the dispatcher's own read of the grant, its early refusal of a moved
+    # one, is the approver's and carries nothing the card bound.
+    assert [[early_ctx, _, _], [root_ctx, _profile, _opts]] = args_of(calls, @root_load)
+
+    assert {Map.fetch(early_ctx, :approved_entry), Map.fetch(early_ctx, :launch)} ==
+             {{:ok, nil}, {:ok, nil}}
+
     assert Map.fetch(root_ctx, :approved_entry) == {:ok, %{entry: work.id, name: "Work"}}
 
     # The run is admitted under that entry, and the context its attempt
@@ -843,6 +867,7 @@ defmodule Aqua.LaunchTest do
 
     for carried <- [opened[:ctx], opened[:close].ctx, opened[:assignment].ctx] do
       assert Map.fetch(carried, :approved_entry) == {:ok, nil}
+      assert Map.fetch(carried, :launch) == {:ok, nil}
     end
   end
 
@@ -878,6 +903,126 @@ defmodule Aqua.LaunchTest do
     assert [[root_ctx, _profile, _opts]] = args_of(calls, @root_load)
     assert Map.fetch(root_ctx, :approved_entry) == {:ok, nil}
     assert [_launched] = launched_of(ctx, app)
+  end
+
+  # ---------------------------------------------------------------------------
+  # What the card bound of the launch: the turn's sources and the grant
+  # ---------------------------------------------------------------------------
+
+  # An app of the person's own granted with a default entry alone: its one
+  # exit is `api.example.com`, and its grant declares no flow to it.
+  defp granted_app!(ctx) do
+    app = publish_app!(ctx)
+    default = disclosed_entry!(ctx, "default")
+    grant!(ctx, app, [%{need: "api_key", entry_id: default.id}])
+    %{app: app, default: default, args: %{"reference" => app <> ":1.0.0", "input" => %{}}}
+  end
+
+  defp stale_launch!(ctx, step, app, reason) do
+    attempts = attempts_of(ctx)
+    assert Launch.run(ctx, step) == {:refused, {:conflict, Prima.Refusal.message(reason)}}
+    assert launched_of(ctx, app) == []
+    assert attempts_of(ctx) == attempts
+  end
+
+  test "a launch whose turn read a source after its card was approved is refused as stale, " <>
+         "with nothing started",
+       %{ctx: ctx, thread: thread, pins: pins, approver: approver} do
+    %{app: app, args: args} = granted_app!(ctx)
+    turn = started!(%{ctx | origin: :interactive}, thread, pins)
+    step = approved_named_launch!(ctx, turn, approver, args, nil)
+
+    # The turn reads outside material after the card was drawn and approved.
+    {:ok, _} =
+      Tape.record_model_intent(ctx, turn, %{sources: [Prima.Source.outside("news.example")]})
+
+    stale_launch!(ctx, step, app, :approved_sources_moved)
+  end
+
+  test "a launch whose app's grant moved since its card was approved is refused as stale, " <>
+         "with nothing started",
+       %{ctx: ctx, thread: thread, pins: pins, approver: approver} do
+    %{app: app, default: default, args: args} = granted_app!(ctx)
+    turn = started!(%{ctx | origin: :interactive}, thread, pins)
+    step = approved_named_launch!(ctx, turn, approver, args, nil)
+
+    # A new revision of the app's grant: one more account bound.
+    work = disclosed_entry!(ctx, "work")
+
+    grant!(ctx, app, [
+      %{need: "api_key", entry_id: default.id},
+      %{need: "api_key", name: "Work", entry_id: work.id}
+    ])
+
+    stale_launch!(ctx, step, app, :approved_grant_moved)
+  end
+
+  test "a card drawn when its app had no grant lets nothing flow, whatever grant its root loads",
+       %{ctx: ctx, thread: thread, pins: pins, approver: approver} do
+    Cyfr.Test.Sandbox.stop_work_on_exit()
+    on_exit(fn -> Prima.Slots.forgive_unreaped(Opus.Slots, ctx.athanor_id) end)
+
+    app = publish_app!(ctx)
+    args = %{"reference" => app <> ":1.0.0", "input" => %{}}
+    turn = started!(%{ctx | origin: :interactive}, thread, pins)
+    pinned = Prima.Source.new(:pinned)
+    {:ok, _} = Tape.record_model_intent(ctx, turn, %{sources: [pinned]})
+
+    # No grant to judge the turn's sources against: the card binds none,
+    # and lets nothing flow.
+    assert %{"lets_flow" => []} = proposal = bound_proposal(ctx, turn, args)
+    refute Map.has_key?(proposal, "consent_id")
+
+    root_id = Prima.UUID7.execution_id()
+    step = approved_named_launch!(ctx, turn, approver, args, nil, root_id)
+    default = disclosed_entry!(ctx, "default")
+    grant!(ctx, app, [%{need: "api_key", entry_id: default.id}])
+    dispatched = Launch.dispatch(ctx, step)
+
+    # The grant made since decides the run's sends alone: seeded with the
+    # turn's sources, the root lets no class flow.
+    assert launched_of(ctx, app) == [root_id], "launch answered #{inspect(dispatched)}"
+    actor = Sanctum.Context.actor(ctx)
+
+    assert {:ok, %{launch_classes: [], sources: seeded}} =
+             Arca.Execution.flow_state(actor, root_id)
+
+    assert pinned in seeded
+  end
+
+  test "an approved launch roots under the step's id, seeded with the turn's sources, with the " <>
+         "classes its card lets flow in the root's policy",
+       %{ctx: ctx, thread: thread, pins: pins, approver: approver} do
+    Cyfr.Test.Sandbox.stop_work_on_exit()
+    on_exit(fn -> Prima.Slots.forgive_unreaped(Opus.Slots, ctx.athanor_id) end)
+
+    %{app: app, args: args} = granted_app!(ctx)
+    turn = started!(%{ctx | origin: :interactive}, thread, pins)
+    pinned = Prima.Source.new(:pinned)
+    news = Prima.Source.outside("news.example")
+    {:ok, _} = Tape.record_model_intent(ctx, turn, %{sources: [pinned, news]})
+
+    # Neither class has a flow to the app's one exit, and the outside
+    # material came from another host: the card lets both flow.
+    proposal = bound_proposal(ctx, turn, args)
+    assert %{"lets_flow" => ["pinned", "outside"], "consent_id" => consent_id} = proposal
+    {:ok, %{consent_id: ^consent_id}} = Opus.authority_for(ctx, :default, app)
+
+    root_id = Prima.UUID7.execution_id()
+    step = approved_named_launch!(ctx, turn, approver, args, nil, root_id)
+    dispatched = Launch.dispatch(ctx, step)
+
+    assert launched_of(ctx, app) == [root_id], "launch answered #{inspect(dispatched)}"
+    actor = Sanctum.Context.actor(ctx)
+
+    assert {:ok, %{launch_classes: [:pinned, :outside]}} =
+             Arca.Execution.flow_state(actor, root_id)
+
+    assert {:ok, [%{type: "execution.started"} = started | _]} =
+             Arca.ExecutionEvents.since(actor, root_id, 0)
+
+    assert Arca.ExecutionEvents.data(started)["sources"] ==
+             Prima.Source.to_json_list([pinned, news])
   end
 
   # ---------------------------------------------------------------------------

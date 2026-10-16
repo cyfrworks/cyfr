@@ -39,14 +39,24 @@ defmodule Aqua.Loop.Policy do
   `files_by_grant` for a files or storage read and a component's source,
   and an outside source named by its origin for an external server's
   tool, the HTTP hand and a feed's results, and a launched component
-  whose grant reaches the network.
+  whose grant reaches the network; and a hand's child its own ledger,
+  as its completion result carries it (`child_ledger/1`).
+
+  A launch's card binds what the launch will carry (`launch_flow/3`): the
+  turn's sources it seeds the launched root with, the consent revision
+  of the grant the app roots at, and the classes of those sources that
+  some exit of that grant's tree declares no flow for (`lets_flow/2`),
+  which the person's approval lets flow to every exit of the tree. They
+  are part of the proposal its digest hashes, so a source the turn reads
+  after the card, or another grant, is not what was approved.
 
   `touched_refs/1` names the components a turn's closed write,
   destructive and execute calls reached, from their durable rows.
   """
 
   alias Aqua.Loop.Binding.Call
-  alias Prima.Authority.RootSelect
+  alias Prima.Authority.{Blob, RootSelect}
+  alias Prima.Authority.Blob.Edge
 
   @typedoc """
   A launch's account as its card binds it: the entry the name resolved to
@@ -328,14 +338,28 @@ defmodule Aqua.Loop.Policy do
   the standing from the catalog, never from the model. A launch's card
   takes no standing answer, and its proposal carries the account its
   call named as the binding stores it and the entry it resolved to
-  (`opts[:account]`, `proposal/2`), so the approval binds the account the
+  (`opts[:account]`, `proposal/3`), so the approval binds the account the
   card showed. The card names the sources the turn has read
   (`opts[:sources]`, canonical JSON): a standing answer may follow only
-  the outside ones it names.
+  the outside ones it names. A launch's proposal also binds those
+  sources, and what `opts[:launch]` (`launch_flow/3`) read of the
+  launched grant: its consent revision and the classes the approval
+  lets flow.
   """
   @spec card(Call.t(), keyword()) :: map()
   def card(%Call{} = call, opts \\ []) do
-    proposal = proposal(call, Keyword.get(opts, :account))
+    sources = Keyword.get(opts, :sources, [])
+
+    launch =
+      case Keyword.get(opts, :launch) do
+        %{consent_id: consent_id, classes: classes} ->
+          %{sources: sources, consent_id: consent_id, classes: classes}
+
+        nil ->
+          %{sources: sources, consent_id: nil, classes: []}
+      end
+
+    proposal = proposal(call, Keyword.get(opts, :account), launch)
 
     %{
       "kind" => "request_approval",
@@ -346,9 +370,81 @@ defmodule Aqua.Loop.Policy do
         Atom.to_string(Aqua.Kinds.kind_for(call.tool, call.action || "") || :external),
       "standing" => standing(call),
       "proposal" => proposal,
-      "sources" => Prima.Source.to_json_list(Keyword.get(opts, :sources, []))
+      "sources" => Prima.Source.to_json_list(sources)
     }
   end
+
+  @doc """
+  What a launch of `call` binds of the grant its app roots at, read under
+  `ctx` without running anything (`Aqua.Launch.authority/4`, the selector
+  and account the call names): the grant's consent revision and the
+  classes of `sources` its tree lets no exit take (`lets_flow/2`). A
+  grant that cannot be loaded binds no revision and lets nothing flow.
+  """
+  @spec launch_flow(Call.t(), Sanctum.Context.t() | nil, [Prima.Source.t()]) ::
+          %{consent_id: String.t() | nil, classes: [Prima.Source.class()]}
+  def launch_flow(%Call{kind: :launch} = call, %Sanctum.Context{} = ctx, sources)
+      when is_list(sources) do
+    case Aqua.Launch.authority(ctx, call.target, call.action, call.args) do
+      {:ok, %Prima.Authority{consent_id: consent_id, policy: policy}} ->
+        %{consent_id: consent_id, classes: lets_flow(policy, sources)}
+
+      {:error, _not_loaded} ->
+        %{consent_id: nil, classes: []}
+    end
+  end
+
+  def launch_flow(%Call{}, _ctx, _sources), do: %{consent_id: nil, classes: []}
+
+  @doc """
+  The classes of `sources` that some exit of the grant `policy` grants
+  no flow for: an egress domain an edge allows, or a tool server it
+  binds, that the edge's own flows (`Prima.Authority.Blob.Edge.flows/1`)
+  leave a source uncovered at (`Prima.Flow.uncovered/3`, the one send
+  decision). A launch's approval lets these flow to every exit of the
+  tree, so an approval that names none widens nothing.
+  """
+  @spec lets_flow(Blob.t() | :none, [Prima.Source.t()]) :: [Prima.Source.class()]
+  def lets_flow(%Blob{nodes: nodes}, sources) when is_list(sources) do
+    uncovered =
+      for {_ref, %Blob.Node{edges: edges}} <- nodes,
+          {_key, %Edge{} = edge} <- edges,
+          exit <- exits(edge),
+          source <- Prima.Flow.uncovered(sources, exit, flows: Edge.flows(edge)),
+          do: source
+
+    Prima.Source.classes_of(uncovered)
+  end
+
+  def lets_flow(_policy, _sources), do: []
+
+  # The exits a send through an edge is decided at: each egress domain as
+  # the edge allows it, and each tool server it binds. A credential need
+  # is no exit any send is decided at.
+  defp exits(%Edge{tool_servers: servers} = edge) do
+    Enum.map(Edge.domains(edge), &{:domain, &1}) ++
+      for(%{server_name: name} when is_binary(name) <- servers, do: {:server, name})
+  end
+
+  @doc """
+  What a model or hand child's answer says of its ledger: `{:carried,
+  sources}` for a completion result carrying the ledger its terminal
+  write left (`Opus.Close.complete/4`); `:nothing_ran` for a refusal the
+  gate made at admission, before any attempt existed
+  (`%Prima.Refusal{stage: :admission}`); `:unknown` for anything else —
+  a failure, a death, an answer of another shape — whose ledger only the
+  child's row can tell. Row absence never says nothing ran: retention
+  may prune a terminal child before its step closes.
+  """
+  @spec child_ledger(term()) :: {:carried, [Prima.Source.t()]} | :nothing_ran | :unknown
+  def child_ledger({:ok, %{sources: sources}}) when is_list(sources) do
+    if Enum.all?(sources, &is_struct(&1, Prima.Source)),
+      do: {:carried, sources},
+      else: :unknown
+  end
+
+  def child_ledger({:error, %Prima.Refusal{stage: :admission}}), do: :nothing_ran
+  def child_ledger(_answer), do: :unknown
 
   @doc """
   The sources `call`'s `result` carries into its turn. A notes read is
@@ -356,24 +452,27 @@ defmodule Aqua.Loop.Policy do
   storage read and a component's source are `files_by_grant`; an
   external server's tool is outside, named by its server; the HTTP hand
   is outside, named by the host its URL names; a feed's listing is
-  outside, named by each feed whose result it carries. Any other call
-  carries none here: a launched component's are judged from its tree's
-  admitted egress where its step closes (`Arca.TurnStorage.close_step/4`'s
-  `:launched`). A result is joined whatever its outcome: an error body is
-  read too.
+  outside, named by each feed whose result it carries. A hand also
+  carries its child's ledger, as its completion result carries it
+  (`child_ledger/1`; a hand's failure names none, and the loop reads its
+  child's row). Any other call carries none here: a launched
+  component's are judged from its tree's admitted egress and its
+  result's ledger where its step closes
+  (`Arca.TurnStorage.close_step/4`'s `:launched` and `:sources`). A
+  result is joined whatever its outcome: an error body is read too.
   """
   @spec sources_of(Call.t(), term()) :: [Prima.Source.t()]
   def sources_of(%Call{kind: :external, target: target}, _result),
     do: [Prima.Source.outside(server_of(target))]
 
-  def sources_of(%Call{kind: :hand, tool: "http", args: args}, _result),
-    do: [Prima.Source.outside(host_of(args["url"]))]
+  def sources_of(%Call{kind: :hand} = call, result) do
+    carried =
+      case child_ledger(result) do
+        {:carried, sources} -> sources
+        _not_carried -> []
+      end
 
-  def sources_of(%Call{kind: :hand, tool: tool, action: action}, _result)
-      when tool in ["files", "storage"] do
-    if Aqua.Kinds.kind_for(tool, action) == :read,
-      do: [Prima.Source.new(:files_by_grant)],
-      else: []
+    hand_sources(call) ++ carried
   end
 
   def sources_of(%Call{kind: :catalog, tool: "source", action: action}, _result) do
@@ -390,6 +489,18 @@ defmodule Aqua.Loop.Policy do
     do: feed_sources(result)
 
   def sources_of(%Call{}, _result), do: []
+
+  # What a hand's call names it read, whatever its child answered.
+  defp hand_sources(%Call{tool: "http", args: args}),
+    do: [Prima.Source.outside(host_of(args["url"]))]
+
+  defp hand_sources(%Call{tool: tool, action: action}) when tool in ["files", "storage"] do
+    if Aqua.Kinds.kind_for(tool, action) == :read,
+      do: [Prima.Source.new(:files_by_grant)],
+      else: []
+  end
+
+  defp hand_sources(%Call{}), do: []
 
   # `server:tool` is named by its server.
   defp server_of(target) when is_binary(target),
@@ -432,28 +543,43 @@ defmodule Aqua.Loop.Policy do
   to when its card was drawn: its `connection` spelled as the binding
   stores the name, when the call names that account in any case
   (`Prima.Authority.Blob.same_account_name?/2`), and the entry beside
-  the call (`vault_entry`).
+  the call (`vault_entry`). A launch's proposal also carries what its
+  card binds of the run (`launch`, `Aqua.Launch.bind/1`; none bound
+  when nil): the turn's sources, the launched grant's consent revision
+  and the classes the approval lets flow, so its digest binds them.
   """
-  @spec proposal(Call.t(), account() | nil) :: map()
-  def proposal(call, account \\ nil)
+  @spec proposal(Call.t(), account() | nil, Aqua.Launch.binding() | nil) :: map()
+  def proposal(call, account \\ nil, launch \\ nil)
 
-  def proposal(%Call{} = call, nil),
-    do: %{"tool" => call.tool, "action" => call.action, "args" => call.args}
-
-  def proposal(%Call{args: args} = call, %{vault_entry: entry_id, name: stored}) do
-    args =
-      case args["connection"] do
-        named when is_binary(named) ->
-          if Prima.Authority.Blob.same_account_name?(named, stored),
-            do: Map.put(args, "connection", stored),
-            else: args
-
-        _none ->
-          args
-      end
-
-    %{"tool" => call.tool, "action" => call.action, "args" => args, "vault_entry" => entry_id}
+  def proposal(%Call{} = call, account, launch) do
+    %{"tool" => call.tool, "action" => call.action, "args" => account_args(call.args, account)}
+    |> put_account(account)
+    |> put_launch(call, launch)
   end
+
+  defp account_args(args, %{name: stored}) do
+    case args["connection"] do
+      named when is_binary(named) ->
+        if Prima.Authority.Blob.same_account_name?(named, stored),
+          do: Map.put(args, "connection", stored),
+          else: args
+
+      _none ->
+        args
+    end
+  end
+
+  defp account_args(args, nil), do: args
+
+  defp put_account(proposal, %{vault_entry: entry_id}),
+    do: Map.put(proposal, "vault_entry", entry_id)
+
+  defp put_account(proposal, nil), do: proposal
+
+  defp put_launch(proposal, %Call{kind: :launch}, launch),
+    do: Map.merge(proposal, Aqua.Launch.bind(launch))
+
+  defp put_launch(proposal, %Call{}, _launch), do: proposal
 
   @doc "The digest a card is consumed by: the canonical proposal, hashed."
   @spec proposal_digest(map()) :: String.t()

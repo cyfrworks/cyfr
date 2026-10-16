@@ -210,4 +210,179 @@ defmodule Aqua.Loop.PolicyTest do
     assert {:deny, _} = Policy.decide(ui, @policy, restricted?: true)
     assert :auto = Policy.decide(ui, @policy, restricted?: false)
   end
+
+  # ---------------------------------------------------------------------------
+  # What a launch's card binds
+  # ---------------------------------------------------------------------------
+
+  defp launch!(args \\ %{}) do
+    resolve!(
+      "execution",
+      Map.merge(
+        %{"action" => "run", "reference" => "reagent:local.app:1.0.0", "input" => %{}},
+        args
+      )
+    )
+  end
+
+  defp digest(call, opts), do: call |> Policy.card(opts) |> Policy.proposal_digest()
+
+  test "a launch's card binds the turn's sources, the grant's consent revision and the classes it lets flow" do
+    call = launch!()
+    pinned = Prima.Source.new(:pinned)
+    host = Prima.Source.outside("news.example")
+
+    shown = [
+      sources: [pinned, host],
+      launch: %{consent_id: "con_shown", classes: [:pinned, :outside]}
+    ]
+
+    card = Policy.card(call, shown)
+
+    assert card["proposal"] == %{
+             "tool" => "execution",
+             "action" => "run",
+             "args" => call.args,
+             "sources" => [
+               %{"class" => "pinned"},
+               %{"class" => "outside", "name" => "news.example"}
+             ],
+             "consent_id" => "con_shown",
+             "lets_flow" => ["pinned", "outside"]
+           }
+
+    # The binding reads back as what was bound.
+    assert Aqua.Launch.bound(card["proposal"]) == %{
+             sources: [pinned, host],
+             consent_id: "con_shown",
+             classes: [:pinned, :outside]
+           }
+
+    # Each of the three moves the digest: a card approved over one is not
+    # the card of another.
+    approved = digest(call, shown)
+    assert digest(call, Keyword.put(shown, :sources, [pinned])) != approved
+
+    assert digest(
+             call,
+             Keyword.put(shown, :launch, %{consent_id: "con_other", classes: [:pinned, :outside]})
+           ) !=
+             approved
+
+    assert digest(
+             call,
+             Keyword.put(shown, :launch, %{consent_id: "con_shown", classes: [:pinned]})
+           ) !=
+             approved
+
+    # A launch whose grant could not be loaded binds none, and still binds
+    # the sources; any other call's card binds nothing of a launch.
+    unloaded = Policy.card(call, sources: [pinned, host])["proposal"]
+    assert %{"lets_flow" => [], "sources" => [_, _]} = unloaded
+    refute Map.has_key?(unloaded, "consent_id")
+    assert Aqua.Launch.bound(unloaded).consent_id == nil
+
+    read = resolve!("files", %{"action" => "read", "path" => "a"})
+    refute Map.has_key?(Policy.card(read, sources: [pinned])["proposal"], "sources")
+  end
+
+  # A blob of one node whose edges are `edges` (`{key, edge}`).
+  defp blob(edges) do
+    %Prima.Authority.Blob{
+      nodes: %{
+        "reagent:local.app" => %Prima.Authority.Blob.Node{limits: nil, edges: Map.new(edges)}
+      }
+    }
+  end
+
+  defp egress(domains, flows),
+    do: %Prima.Authority.Blob.Edge{
+      egress: %{domains: domains, methods: [], schemes: [], private_ips: []},
+      flows: flows
+    }
+
+  defp server(name, flows),
+    do: %Prima.Authority.Blob.Edge{
+      tool_servers: [
+        %{
+          server_digest: "sha256:x",
+          server_name: name,
+          tool_patterns: ["*"],
+          descriptions_digest: nil
+        }
+      ],
+      flows: flows
+    }
+
+  test "a launch lets flow the classes some exit of the grant's tree declares no flow of" do
+    pinned = Prima.Source.new(:pinned)
+    filed = Prima.Source.new(:filed)
+    api = Prima.Source.outside("api.example.com")
+
+    covered = egress(["api.example.com"], [%{from: :pinned, to: "api.example.com"}])
+
+    # A class the edge's own flow covers at its one exit needs nothing.
+    assert Policy.lets_flow(blob([{"@ingress", covered}]), [pinned]) == []
+    assert Policy.lets_flow(blob([{"@ingress", covered}]), [pinned, filed]) == [:filed]
+
+    # Every exit of the tree counts: a tool server with no pinned flow lets
+    # pinned flow, whatever the domain's flow covers.
+    tree = blob([{"@ingress", covered}, {"catalyst:local.tool", server("github", [])}])
+    assert Policy.lets_flow(tree, [pinned]) == [:pinned]
+
+    github = server("github", [%{from: :pinned, to: "server:github"}])
+    assert Policy.lets_flow(blob([{"@ingress", covered}, {"tool", github}]), [pinned]) == []
+
+    # Material from a host may go back to it by name; a pattern never
+    # covers by name.
+    assert Policy.lets_flow(blob([{"@ingress", egress(["api.example.com"], [])}]), [api]) == []
+
+    assert Policy.lets_flow(blob([{"@ingress", egress(["*.example.com"], [])}]), [api]) == [
+             :outside
+           ]
+
+    # A domain narrowed under a flow's pattern keeps the pattern's flow.
+    narrowed = egress(["api.example.com"], [%{from: :filed, to: "*.example.com"}])
+    assert Policy.lets_flow(blob([{"@ingress", narrowed}]), [filed]) == []
+
+    # No exit, no flow to let; and a grant with no blob lets nothing.
+    assert Policy.lets_flow(blob([{"@ingress", %Prima.Authority.Blob.Edge{}}]), [pinned]) == []
+    assert Policy.lets_flow(:none, [pinned, filed]) == []
+  end
+
+  test "a child's answer carries its ledger, says nothing ran, or leaves it to the row" do
+    vault = Prima.Source.new(:vault_disclosed)
+
+    assert Policy.child_ledger({:ok, %{status: :completed, output: %{}, sources: [vault]}}) ==
+             {:carried, [vault]}
+
+    admission = %Prima.Refusal{
+      class: :forbidden,
+      reason: :denied,
+      message: "no",
+      stage: :admission
+    }
+
+    assert Policy.child_ledger({:error, admission}) == :nothing_ran
+
+    # A refusal of the execution, a failure's text, an answer with no
+    # ledger or one that does not read, and a death leave it to the row.
+    assert Policy.child_ledger({:error, %{admission | stage: :execution}}) == :unknown
+    assert Policy.child_ledger({:error, "the run failed"}) == :unknown
+    assert Policy.child_ledger({:ok, %{output: %{}}}) == :unknown
+
+    assert Policy.child_ledger({:ok, %{output: %{}, sources: [%{"class" => "filed"}]}}) ==
+             :unknown
+
+    assert Policy.child_ledger({:error, {:invoke_denied, :edge_missing}}) == :unknown
+
+    # A hand's result carries its child's ledger beside what the hand names.
+    get = resolve!("http", %{"action" => "get", "url" => "https://news.example/today"})
+
+    assert Policy.sources_of(get, {:ok, %{output: %{}, sources: [vault]}}) ==
+             [Prima.Source.outside("news.example"), vault]
+
+    assert Policy.sources_of(get, {:error, "the run failed"}) ==
+             [Prima.Source.outside("news.example")]
+  end
 end

@@ -51,7 +51,10 @@ defmodule PrismWeb.AquaApprovalCard do
   answer: one approval is for that one launch. When the launch names an
   account (`connection`), the card says which, spelled as its binding
   stores the name (the proposal carries that spelling), and the approval
-  binds that account as the card shows it.
+  binds that account as the card shows it. It also names the classes of
+  what the turn has read that the app's grant declares no flow of to
+  some exit (`proposal["lets_flow"]`): the approval lets them flow to
+  every exit of that grant, and binds them.
 
   Risk visualization derives from the action's `kind` (read/write/execute/
   destructive/external). The colour weight scales with the kind so the common
@@ -132,6 +135,16 @@ defmodule PrismWeb.AquaApprovalCard do
         data-test="approval-account"
       >
         as the account <span class="font-medium text-gray-100">{account(@proposal)}</span>
+      </div>
+      <div
+        :if={lets_flow(@proposal) != []}
+        class="text-[12px] text-gray-400 mb-2"
+        data-test="approval-lets-flow"
+      >
+        this app will be allowed to send:
+        <span class="font-medium text-gray-100">
+          {Enum.map_join(lets_flow(@proposal), ", ", &class_label/1)}
+        </span>
       </div>
 
       <%= if @proposal do %>
@@ -523,6 +536,21 @@ defmodule PrismWeb.AquaApprovalCard do
   end
 
   defp account(_proposal), do: nil
+
+  # The classes a launch's card lets flow to every exit of the launched
+  # app's grant (`lets_flow`, which the approval binds), in class order;
+  # none for any other card.
+  defp lets_flow(%{} = proposal) do
+    case proposal[:lets_flow] || proposal["lets_flow"] do
+      spelled when is_list(spelled) ->
+        Enum.filter(Prima.Source.classes(), &(Atom.to_string(&1) in spelled))
+
+      _none ->
+        []
+    end
+  end
+
+  defp lets_flow(_proposal), do: []
 
   # The bounds a decided card's standing answer carries, as its resolution
   # records them.

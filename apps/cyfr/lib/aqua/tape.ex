@@ -364,6 +364,20 @@ defmodule Aqua.Tape do
     end
   end
 
+  @doc """
+  Join `sources` into the turn's (`TurnStorage.join_sources/4`), under the
+  turn's row lock and its fence: what a model child's persisted ledger
+  brings into its turn before the turn uses the child's answer. A runner
+  whose fence moved is refused `{:error, :superseded}`; nothing to join
+  writes nothing.
+  """
+  @spec join_sources(Context.t(), turn(), [Prima.Source.t()]) :: :ok | {:error, term()}
+  def join_sources(%Context{}, _turn, []), do: :ok
+
+  def join_sources(%Context{} = ctx, turn, sources) when is_list(sources),
+    do:
+      TurnStorage.join_sources(Sanctum.Context.actor(ctx), turn.id, sources, %{fence: turn.fence})
+
   @doc "Flip a proposed step to dispatched, in its own commit."
   @spec mark_dispatched(Context.t(), turn(), step()) :: {:ok, step()} | {:error, term()}
   def mark_dispatched(%Context{} = ctx, turn, step),

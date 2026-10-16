@@ -15,6 +15,7 @@ defmodule Aqua.LoopTest do
   use ExUnit.Case, async: false
 
   import Ecto.Query, only: [from: 2]
+  import Phoenix.LiveViewTest, only: [render_component: 2]
 
   alias Aqua.{Approvals, Tape}
   alias Arca.ThreadStorage, as: Threads
@@ -1761,6 +1762,136 @@ defmodule Aqua.LoopTest do
 
     # Nothing read the refusal as a reason the refusal table does not know.
     refute log =~ "Prima.Refusal"
+
+    # Refused before its run was asked for, the launch brought nothing into
+    # the turn: no unnamed outside source stands for a row that never was.
+    refute Prima.Source.outside(nil) in turn_sources(ctx, turn)
+  end
+
+  # A launch of `launchable_app!/1`'s app through the loop, after a turn
+  # that read the pinned page: the card the loop drew, approved by another
+  # member, and the run resumed in a task while the app's script runs. The
+  # app's run stops at `{:probe, self()}` for `on_probe` to act on its
+  # root, by id. Answers the turn, the card's intent, the turn's sources
+  # when the card was drawn, the root's id and the loop's result.
+  defp launch_through_loop!(ctx, thread, app_answer, on_probe) do
+    %{ref: app} = launchable_app!(ctx)
+    {:ok, _} = Aqua.Notes.pin(ctx, "about-us", "We are planning a trip.")
+
+    start_supervised!(
+      {ScriptedWorker,
+       ref: [@model, app],
+       script: [
+         calls([{"c1", "execution.run", %{"reference" => app <> ":1.0.0", "input" => %{}}}]),
+         {:probe, self()},
+         app_answer,
+         reply("after the launch")
+       ]}
+    )
+
+    turn = accept!(ctx, thread, "@aqua launch it")
+    assert {:paused, :approval} = Task.await(run(ctx, turn), 60_000)
+    {:ok, paused} = Tape.turn(ctx, turn.id)
+    {:ok, [approval]} = Tape.pending_approvals(ctx, paused)
+    {:ok, card} = Tape.message(ctx, approval.message_id)
+    intent = Tape.payload(card)["intent"]
+    at_card = turn_sources(ctx, turn)
+
+    assert {:ok, %{decision: "approved", resolution_kind: "launch"}} =
+             Approvals.resolve(approver!(ctx), approval.id, %{decision: :approved})
+
+    resumed =
+      Task.async(fn -> Aqua.Loop.run_nested(ctx: ctx, turn_id: turn.id, mode: :resume) end)
+
+    assert_receive {:scripted_probe, runner, root_id}, 30_000
+    on_probe.(root_id)
+    send(runner, :continue)
+
+    %{
+      app: app,
+      turn: paused,
+      intent: intent,
+      at_card: at_card,
+      root_id: root_id,
+      result: Task.await(resumed, 60_000)
+    }
+  end
+
+  defp vault_disclosed!(ctx, execution_id),
+    do:
+      :ok =
+        Opus.Ledger.join(Sanctum.Context.actor(ctx), execution_id, [
+          Prima.Source.new(:vault_disclosed)
+        ])
+
+  defp turn_sources(ctx, turn) do
+    {:ok, %{sources: sources}} = Tape.turn(ctx, turn.id)
+    Prima.Source.decode(sources)
+  end
+
+  test "a launch's card binds the turn's sources, the app's grant and the classes it lets flow, " <>
+         "and names them; approved, the app roots on them and its tree's ledger joins the turn " <>
+         "by its completion result",
+       %{ctx: ctx, thread: thread} do
+    %{app: app, turn: turn, intent: intent, at_card: shown, root_id: root_id, result: result} =
+      launch_through_loop!(ctx, thread, %{"answered" => true}, &vault_disclosed!(ctx, &1))
+
+    assert result == :completed
+
+    # The card bound the turn's sources as they stood, the app's grant at
+    # its head and every class of them, the grant's one exit declaring no
+    # flow of any.
+    assert Prima.Source.new(:pinned) in shown
+    refute Prima.Source.new(:vault_disclosed) in shown
+    classes = Prima.Source.classes_of(shown)
+    {:ok, %{consent_id: consent_id}} = Opus.authority_for(ctx, :default, app)
+
+    assert %{"consent_id" => ^consent_id, "lets_flow" => lets_flow} = intent["proposal"]
+    assert Aqua.Launch.bound(intent["proposal"]).sources == shown
+    assert intent["sources"] == Prima.Source.to_json_list(shown)
+    assert lets_flow == Enum.map(classes, &Atom.to_string/1)
+
+    html =
+      render_component(PrismWeb.AquaApprovalCard,
+        id: "card",
+        message_id: "msg",
+        approval_id: "apr",
+        status: "pending",
+        payload: intent
+      )
+
+    assert [named] = Regex.run(~r/data-test="approval-lets-flow".*?<\/div>/s, html)
+    assert named =~ "this app will be allowed to send:"
+    assert named =~ "the pinned page"
+
+    # The app rooted under the launch step's own id, seeded with what the
+    # card bound and letting flow the classes it named.
+    {:ok, steps} = Tape.steps(ctx, turn)
+
+    assert %{child_execution_id: ^root_id, outcome: "ok"} =
+             Enum.find(steps, &(&1.kind == "launch"))
+
+    actor = Sanctum.Context.actor(ctx)
+    assert {:ok, %{launch_classes: ^classes}} = Arca.Execution.flow_state(actor, root_id)
+    {:ok, [started | _]} = Arca.ExecutionEvents.since(actor, root_id, 0)
+    assert Arca.ExecutionEvents.data(started)["sources"] == Prima.Source.to_json_list(shown)
+
+    # What the app read reached the turn by its completion result.
+    assert Prima.Source.new(:vault_disclosed) in turn_sources(ctx, turn)
+  end
+
+  test "a launched app that fails brings its tree's ledger into the turn from its root's row",
+       %{ctx: ctx, thread: thread} do
+    %{turn: turn, root_id: root_id, result: result} =
+      launch_through_loop!(ctx, thread, {:error, "the app failed"}, &vault_disclosed!(ctx, &1))
+
+    assert result == :completed
+    {:ok, steps} = Tape.steps(ctx, turn)
+
+    assert %{child_execution_id: ^root_id, outcome: "error"} =
+             Enum.find(steps, &(&1.kind == "launch"))
+
+    assert Prima.Source.new(:vault_disclosed) in turn_sources(ctx, turn)
   end
 
   # What an MCP client reads of `thread` (`thread.messages`, through the
