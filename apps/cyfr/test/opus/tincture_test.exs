@@ -13,7 +13,9 @@ defmodule Opus.TinctureTest do
   owner profile is not there for it. The tincture and its profile are read
   on every call, so a profile revoked since a surface cached the tincture
   refuses, and so does a tincture that is gone. A guest-planed context
-  refuses. Every refusal is a typed `%Prima.Refusal{}`.
+  refuses. Every refusal is a typed `%Prima.Refusal{}`. The run starts
+  holding the classes the tincture's declared reads may carry, on its row
+  and in its start event.
   """
 
   use ExUnit.Case, async: false
@@ -61,16 +63,17 @@ defmodule Opus.TinctureTest do
     {:ok, ctx: ctx, dep: dep}
   end
 
-  # A registered tincture that declares the dependency; its profiles are
-  # each test's own.
-  defp tincture!(ctx, name) do
+  # A registered tincture that declares `block` beside its entry and the
+  # static dependencies `deps`, by default the dependency alone; its
+  # profiles are each test's own.
+  defp tincture!(ctx, name, block \\ %{}, deps \\ [%{"ref" => @dep, "reason" => "test"}]) do
     manifest = %{
       "name" => name,
       "type" => "tincture",
       "version" => "1.0.0",
       "publisher" => "local",
-      "tincture" => %{"entry" => "index.html"},
-      "dependencies" => %{"static" => [%{"ref" => @dep, "reason" => "test"}]}
+      "tincture" => Map.merge(%{"entry" => "index.html"}, block),
+      "dependencies" => %{"static" => deps}
     }
 
     digest = "sha256:" <> Base.encode16(:crypto.hash(:sha256, name), case: :lower)
@@ -341,6 +344,49 @@ defmodule Opus.TinctureTest do
 
       assert [%{authority: authority}] = ScriptedWorker.calls()
       assert authority.profile_kind == :public
+    end
+  end
+
+  describe "the run a tincture invokes" do
+    # The run's ledger as its row holds it and as its start recorded it.
+    defp assert_seed(ctx, execution_id, seed) do
+      actor = Sanctum.Context.actor(ctx)
+      seed = Prima.Source.set(seed)
+
+      assert {:ok, ^seed} = Arca.Execution.sources(actor, execution_id)
+      assert {:ok, [started | _rest]} = Arca.ExecutionEvents.since(actor, execution_id, 0)
+      assert started.type == "execution.started"
+
+      assert Arca.ExecutionEvents.data(started)["sources"] ==
+               Prima.Source.to_json_list(seed)
+    end
+
+    test "starts holding every class the tincture's declared reads may carry", %{ctx: ctx} do
+      node = tincture!(ctx, "tinc-seeded")
+      _owner = profile!(ctx, node, :owner)
+      worker!([%{"answer" => 1}])
+      ScriptedWorker.fresh_limits!(ctx, [@dep_ref])
+
+      assert {:ok, %{status: :completed, execution_id: execution_id}} =
+               Opus.invoke_tincture(ctx, args("tinc-seeded", :protected), :protected)
+
+      # Its static dependency is an invoke, whose result may carry every
+      # class; the outside source names nothing.
+      assert_seed(ctx, execution_id, Enum.map(Prima.Source.classes(), &Prima.Source.new/1))
+    end
+
+    test "starts holding only what the tincture's declared reads may carry", %{ctx: ctx} do
+      # No static dependency, and an action whose answers declare nothing:
+      # outside alone. The profile's grant still reaches the dependency.
+      node = tincture!(ctx, "tinc-narrow", %{"actions" => ["system.status"]}, [])
+      _owner = profile!(ctx, node, :owner)
+      worker!([%{"answer" => 2}])
+      ScriptedWorker.fresh_limits!(ctx, [@dep_ref])
+
+      assert {:ok, %{status: :completed, execution_id: execution_id}} =
+               Opus.invoke_tincture(ctx, args("tinc-narrow", :protected), :protected)
+
+      assert_seed(ctx, execution_id, [Prima.Source.outside(nil)])
     end
   end
 

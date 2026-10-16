@@ -17,7 +17,10 @@ defmodule Opus.Tincture do
   authority — and an absent tincture answers as an inaccessible one does,
   `not_found`; a store that cannot answer is `unavailable`. The profile
   the route selects roots the run and its edge to `reference` decides what
-  the dependency may reach (`Opus.run_root_edge/5`).
+  the dependency may reach (`Opus.run_root_edge/5`). The run's source
+  ledger starts with one source of each class the tincture's declared
+  reads may carry (`Compendium.tincture_frame_classes/1`), outside
+  unnamed: what a frame passes it may carry anything the frame has read.
 
   The arguments are the gate's cast of the declared operation's
   (`Opus.Providers.Tincture`); the gate is their one validator. A
@@ -123,12 +126,15 @@ defmodule Opus.Tincture do
     started = System.monotonic_time()
 
     # The endpoints start before the execution machinery; a call in that
-    # window is refused, never crashed.
+    # window is refused, never crashed. The run starts holding every class
+    # the tincture's declared reads may carry, since what its frame passes
+    # may carry anything the frame has read.
     outcome =
       if Opus.available?() do
         Opus.run_root_edge(run_ctx, tincture_ref, reference, input,
           route: route,
-          client_ip: ctx.client_ip
+          client_ip: ctx.client_ip,
+          frame_sources: frame_sources(tincture)
         )
       else
         {:error, :engine_starting}
@@ -138,6 +144,15 @@ defmodule Opus.Tincture do
       System.convert_time_unit(System.monotonic_time() - started, :native, :millisecond)
 
     finish(outcome, meta, duration_ms)
+  end
+
+  # The root's seed: one source of each class, outside unnamed, since no
+  # read has named where its outside material came from.
+  defp frame_sources(%{manifest: manifest}) do
+    manifest
+    |> Compendium.tincture_frame_classes()
+    |> Enum.map(&Prima.Source.new/1)
+    |> Prima.Source.set()
   end
 
   defp finish({:ok, result}, meta, duration_ms) do
