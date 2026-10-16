@@ -32,8 +32,8 @@ defmodule Cyfr.RosterLiteralTest do
 
   @root Path.expand("../../../..", __DIR__)
 
-  # The rosters, as §N2 of the plan fixes their values; the first test
-  # holds the owners to them.
+  # The rosters' ordered vocabularies; the first test holds the owners to
+  # them.
   @kinds ~w(api_key oauth bundle)
   @instance_kinds ~w(api_key bundle)
   @sign_in ~w(github google oidcc)
