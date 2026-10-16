@@ -225,12 +225,19 @@ async function firstPasskey(page, authenticator, base, segment, step) {
   return row(step, held >= 1 && registered === 1, "the first passkey is registered from the settings page through the system layer's ceremony", record[step]);
 }
 
-// A glass paired at A from the desktop's Devices: the pairing confirmed on
-// the desktop, its link opened on `glass`. Answers the device it holds.
+// A glass paired at A from the desktop's Devices: the glass makes its key
+// first on A's /pair page and shows its code, the desktop begins a pairing
+// for that code and confirms it, and the link opens on the same glass.
+// Answers the device it holds.
 async function pairAtA(desk, glass) {
+  await glass.goto(`${A}/pair`);
+  const shown = glass.locator('[data-test="pair-key-code"]');
+  await shown.waitFor({ timeout: 30_000 });
+  const code = (await shown.textContent()).trim();
   await open(desk, shellOf(A, segmentA));
   await desk.locator("#shell-devices").click();
   await desk.waitForSelector(`${layer} [data-test="pairing"]`, { timeout: 30_000 });
+  await desk.locator(`${layer} [data-test="pairing-key-input"]`).fill(code);
   await desk.locator(`${layer} [data-test="pairing-begin"]`).click();
   await confirmHere(desk);
   await desk.waitForSelector(`${layer} [data-test="pairing-link"]`, { timeout: 30_000 });

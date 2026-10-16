@@ -457,14 +457,18 @@ export async function setUpHome(chromium, proxy) {
   const kit2 = await readKit(desk);
   await saveKit(desk);
 
-  // A glass paired at A, which confirms what Firefox and WebKit ask for.
+  // A glass paired at A, which confirms what Firefox and WebKit ask for:
+  // it makes its key first on A's /pair page and shows its code, which the
+  // desktop's pairing is begun for.
   const glassContext = await freshContext(chromium, { viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
   await glassContext.addInitScript(instrumentDevice);
   const glass = await glassContext.newPage();
   await authenticatorWith(glass, await credentialsFor(desk, new URL(A).host));
+  const code = await shownCode(glass, A);
   await open(desk, `${A}/a/${encodeURIComponent(segment)}/tinctures`);
   await desk.locator("#shell-devices").click();
   await desk.waitForSelector(`${layer} [data-test="pairing"]`, { timeout: 30_000 });
+  await desk.locator(`${layer} [data-test="pairing-key-input"]`).fill(code);
   await desk.locator(`${layer} [data-test="pairing-begin"]`).click();
   await confirmHere(desk);
   await desk.waitForSelector(`${layer} [data-test="pairing-link"]`, { timeout: 30_000 });
@@ -486,6 +490,15 @@ export async function setUpHome(chromium, proxy) {
     "the person enrolls at A with a passkey, adds a second printed kit (person/enroll_holder), and pairs a glass there",
     record.home);
   return { held, desk, deskContext, segment, settings, glass, kit1, kit2, identifier: kit1.identifier };
+}
+
+// The code a new device's /pair page at `base` shows: the digest of the
+// key it made before any invitation, which a pairing is begun for.
+export async function shownCode(page, base) {
+  await page.goto(`${base}/pair`);
+  const shown = page.locator('[data-test="pair-key-code"]');
+  await shown.waitFor({ timeout: 30_000 });
+  return (await shown.textContent()).trim();
 }
 
 export async function readKit(page) {

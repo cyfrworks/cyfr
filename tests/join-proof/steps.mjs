@@ -6,6 +6,7 @@
 // dropped answer and closed tabs; a passkey and a phone at the hub; a
 // removal, a rotation and a recovery; and an unreachable directory.
 
+import { createHash, randomBytes } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { request as httpRequest } from "node:http";
 import { connect as tlsConnect } from "node:tls";
@@ -14,7 +15,7 @@ import {
   A, A2, H, SETTINGS, addSession, admitted, assertions, ask, authenticatorWith, begin, captureAssertions, closePrompt,
   confirmFromHere, confirmHere, connected, continueAtHub, counted, credentialsFor, crossSiteHeld, deviceLog, flashed,
   freshContext, glassState, instrumentDevice, layer, nameHome, open, passkeySignIn, ready, record, row,
-  secrets, signIn, signInAtHome, signInAtHub, sleep, storageOf, storedDevice, waitFor,
+  secrets, shownCode, signIn, signInAtHome, signInAtHub, sleep, storageOf, storedDevice, waitFor,
 } from "./common.mjs";
 
 const b64url = (object) => Buffer.from(JSON.stringify(object)).toString("base64url");
@@ -381,9 +382,18 @@ async function aPasskeyAtHub(chromium, { home, identifier }) {
 // The person pairs a phone at H's pair athanor: the phone takes them to
 // A to certify it, and comes back with A's certificate.
 async function pairPhone(chromium, { page, home, base = A, credentialsFrom, viewport, step }) {
+  // The phone makes its key first, on H's /pair page, and shows its code;
+  // the person begins H's pairing for that code.
+  const context = await freshContext(chromium, viewport || { viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
+  await context.addInitScript(instrumentDevice);
+  const phone = await context.newPage();
+  await authenticatorWith(phone, await credentialsFor(credentialsFrom, new URL(base).host));
+  const code = await shownCode(phone, H);
+
   await open(page, shellAt(H, "pair"));
   await page.locator("#shell-devices").click();
   await page.waitForSelector(`${layer} [data-test="pairing"]`, { timeout: 30_000 });
+  await page.locator(`${layer} [data-test="pairing-key-input"]`).fill(code);
   await page.locator(`${layer} [data-test="pairing-begin"]`).click();
   await confirmHere(page);
   await page.waitForSelector(`${layer} [data-test="pairing-link"]`, { timeout: 30_000 });
@@ -391,10 +401,6 @@ async function pairPhone(chromium, { page, home, base = A, credentialsFrom, view
   await closePrompt(page);
   secrets.push(link.split("#code=")[1]);
 
-  const context = await freshContext(chromium, viewport || { viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
-  await context.addInitScript(instrumentDevice);
-  const phone = await context.newPage();
-  await authenticatorWith(phone, await credentialsFor(credentialsFrom, new URL(base).host));
   const measured = {};
   await phone.goto(link);
   await phone.waitForSelector('[data-test="glass-status"][data-state="certify"]', { timeout: 60_000 });
@@ -611,6 +617,10 @@ async function restore(chromium, state) {
   await open(passkeyPage, shellAt(H, "pair"));
   await passkeyPage.locator("#shell-devices").click();
   await passkeyPage.waitForSelector(`${layer} [data-test="pairing"]`, { timeout: 30_000 });
+  // A pairing begun for some new device's code, the digest of a key no
+  // glass here holds: it only waits for its confirmation.
+  const someKey = createHash("sha256").update(randomBytes(32)).digest("base64url");
+  await passkeyPage.locator(`${layer} [data-test="pairing-key-input"]`).fill(someKey);
   await passkeyPage.locator(`${layer} [data-test="pairing-begin"]`).click();
   await passkeyPage.waitForSelector(`${layer} [data-test="confirmation"][data-own="true"]`, { timeout: 30_000 });
   state.passkeySession = { passkeyContext, passkeyPage };
