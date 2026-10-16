@@ -923,9 +923,10 @@ async function main() {
         anaRoutes.some((route) => url.pathname === route || url.pathname.startsWith(`${route}/`));
     };
     const listsAna = [...switcherLinks, ...links].some(intoAna);
-    // The visit lands where the refusal sends it, which says so.
+    // The visit lands where the refusal sends it, which says what it says
+    // of an athanor that does not exist.
     await admin.goto(pagePath(ana.segment, "/vault"));
-    const refusedVisit = await told(admin, "You are not a member of that athanor.", 15_000);
+    const refusedVisit = await told(admin, `There is no athanor at ${ana.segment}.`, 15_000);
     const landed = admin.url();
     const decision = await ask({ op: "focus", athanor_id: ana.athanor_id });
     const adminHtml = await admin.content();
@@ -937,7 +938,7 @@ async function main() {
     };
     row("admin_focus",
       drawn && !listsAna && !intoAna(landed) && refusedVisit &&
-        same(decision, { platform_admin: true, in_focus: operator.athanor_id, focus: "not_member", refocus: "not_member" }) &&
+        same(decision, { platform_admin: true, in_focus: operator.athanor_id, focus: "not_found", refocus: "not_found" }) &&
         !holdsKey(adminHtml) && focusedState.held,
       "the administrator's switcher lists no athanor of Ana's, a direct visit is refused, and the focus decision " +
         "refuses it; the whole state is the model",
