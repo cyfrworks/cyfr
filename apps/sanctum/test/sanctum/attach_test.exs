@@ -359,10 +359,13 @@ defmodule Sanctum.AttachTest do
       {vault, facts} = bound!(ctx, entry)
 
       {:ok, _} =
-        Sanctum.Vault.rebind(ctx, %{
-          id: entry.id,
-          destination: %{"hosts" => ["api.example.com"], "paths" => ["/v2/"]}
-        })
+        TestContext.confirming(
+          ctx,
+          &Sanctum.Vault.rebind(&1, %{
+            id: entry.id,
+            destination: %{"hosts" => ["api.example.com"], "paths" => ["/v2/"]}
+          })
+        )
 
       url = request("https://api.example.com/v1")
 

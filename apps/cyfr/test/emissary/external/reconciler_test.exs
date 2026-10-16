@@ -443,7 +443,12 @@ defmodule Emissary.External.ReconcilerTest do
 
     watched = Process.monitor(pid)
 
-    {:ok, _} = Vault.rebind(ctx, %{id: entry.id, destination: @destination})
+    # Another host is a widening its person confirms.
+    {:ok, _} =
+      Sanctum.TestContext.confirming(
+        ctx,
+        &Vault.rebind(&1, %{id: entry.id, destination: @destination})
+      )
 
     sync_reconciler()
     assert_receive {:reconciled, %{server: "movedsrv"}}, 2_000

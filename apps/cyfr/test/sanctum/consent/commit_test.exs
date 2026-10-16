@@ -2947,9 +2947,10 @@ defmodule Sanctum.Consent.CommitRebindRaceTest do
         unboxed(fn ->
           if postgres?(), do: send(test, {:backend, backend_pid()})
 
+          # A narrower destination, which the session alone moves.
           Sanctum.Vault.rebind(ctx, %{
             id: entry.id,
-            destination: Map.put(@inference, "paths", ["/v2/"])
+            destination: Map.put(@inference, "paths", ["/v1/models/"])
           })
         end)
       end)

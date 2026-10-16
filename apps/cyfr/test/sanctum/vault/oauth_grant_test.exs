@@ -20,6 +20,8 @@ defmodule Sanctum.Vault.OAuthGrantTest do
   # cases, so the entries are disclosed.
   @destination %{"hosts" => ["gmail.googleapis.com"]}
   @destination_text ~s({"hosts":["gmail.googleapis.com"],"scheme":"https"})
+  # A narrower destination, which the session alone moves.
+  @narrower Map.put(@destination, "paths", ["/gmail/"])
 
   setup tags do
     Arca.Cache.init()
@@ -1355,7 +1357,7 @@ defmodule Sanctum.Vault.OAuthGrantTest do
 
     test "a refresh whose binding moves without a payload write answers nothing",
          %{ctx: ctx} do
-      # A rebind of the field schema writes no payload, so the refresh's own
+      # A rebind of the destination writes no payload, so the refresh's own
       # write wins its compare-and-set; the row after the write is checked
       # against the binding the dispense was validated at.
       entry = race_entry!(ctx, [@a], expired_bundle("at-old", "rt-1"))
@@ -1365,7 +1367,7 @@ defmodule Sanctum.Vault.OAuthGrantTest do
         {fn ->
            send(
              test,
-             {:rebind, Sanctum.Vault.rebind(ctx, %{id: entry.id, field_names: ["note"]})}
+             {:rebind, Sanctum.Vault.rebind(ctx, %{id: entry.id, destination: @narrower})}
            )
          end, {:ok, %{"access_token" => "at-refreshed", "expires_in" => 3600}}}
       ])
@@ -1390,7 +1392,7 @@ defmodule Sanctum.Vault.OAuthGrantTest do
         {fn ->
            send(
              test,
-             {:rebind, Sanctum.Vault.rebind(ctx, %{id: entry.id, field_names: ["note"]})}
+             {:rebind, Sanctum.Vault.rebind(ctx, %{id: entry.id, destination: @narrower})}
            )
          end, {:ok, %{"access_token" => "at-a-refreshed", "scope" => @a, "expires_in" => 3600}}}
       ])

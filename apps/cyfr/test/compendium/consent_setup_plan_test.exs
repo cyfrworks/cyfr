@@ -361,7 +361,12 @@ defmodule Compendium.ConsentSetupPlanTest do
       })
 
     grant!(ctx, "reagent:local.plan-rebound", [%{need: "@ingress", entry_id: entry.id}])
-    {:ok, _} = Vault.rebind(ctx, %{id: entry.id, field_names: ["k", "region"]})
+    # A disclosed field added is its person's to confirm.
+    {:ok, _} =
+      Sanctum.TestContext.confirming(
+        ctx,
+        &Vault.rebind(&1, %{id: entry.id, field_names: ["k", "region"]})
+      )
 
     {:ok, plan} = Compendium.Component.setup_plan(ctx, "reagent:local.plan-rebound")
 
@@ -603,7 +608,11 @@ defmodule Compendium.ConsentSetupPlanTest do
 
       # The lender's entry is rebound: the lender waits on a new consent,
       # so the selection resolves to nothing, which is said, not raised.
-      {:ok, _} = Vault.rebind(ctx, %{id: entry.id, field_names: ["KEY", "ORG"]})
+      {:ok, _} =
+        Sanctum.TestContext.confirming(
+          ctx,
+          &Vault.rebind(&1, %{id: entry.id, field_names: ["KEY", "ORG"]})
+        )
 
       {:ok, plan} = Compendium.Component.setup_plan(ctx, ref)
 
