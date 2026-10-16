@@ -1263,7 +1263,10 @@ defmodule Arca.Execution do
   `outcome`, the row leaves `running`/`paused` as `status`, and the
   lifecycle event (`execution.<status>`, or `execution.result_lost` for
   a completed run whose result was not kept) is appended — its number is
-  the answered execution's `event_seq` — in one transaction. `attempt`
+  the answered execution's `event_seq` — in one transaction, which locks
+  the row before the attempt. The answered execution is the row as that
+  write left it, read back inside the transaction: its `sources` are the
+  ledger the run ended with (`row_ledger/1`). `attempt`
   names the attempt ending it and is required for a row that has one
   (`{:error, :attempt_not_owner}` when nil); only a row with no attempt —
   a test fixture's, never an admission's — ends with nil.
@@ -1334,9 +1337,13 @@ defmodule Arca.Execution do
     Arca.Repo.locking_transaction(fn ->
       if grant, do: Arca.ExecutionStanding.verify!(grant, verify)
 
+      # The execution row is locked before its attempt is, the order every
+      # execution write keeps, so no source joins the run between this
+      # read and the terminal write (`join_sources/3` locks the row too).
       execution =
         from(e in Row, where: e.id == ^id and e.status in ^@open_statuses)
         |> Arca.QueryHelpers.where_tenant_unless_platform(actor)
+        |> Arca.QueryHelpers.for_update()
         |> Arca.Repo.one()
 
       if is_nil(execution), do: Arca.Repo.rollback(:not_running)
@@ -1395,7 +1402,15 @@ defmodule Arca.Execution do
             |> Map.merge(Map.drop(Map.get(attrs, :event, %{}), ["status", "outcome"]))
         )
 
-      %{Ecto.Changeset.apply_changes(changeset) | event_seq: event.seq}
+      # The row as the terminal write left it, read back under the lock:
+      # its ledger is the completion result's (`row_ledger/1`), never what
+      # the changeset was built from.
+      ended =
+        from(e in Row, where: e.id == ^id)
+        |> Arca.QueryHelpers.where_tenant_unless_platform(actor)
+        |> Arca.Repo.one!()
+
+      %{ended | event_seq: event.seq}
     end)
   end
 

@@ -184,4 +184,93 @@ defmodule Arca.ExecutionLedgerTest do
 
     assert is_nil(Arca.Repo.get(Row, id))
   end
+
+  # Outside the sandbox: the case below needs transactions of its own that
+  # wait on each other's locks.
+  defp unboxed(fun), do: Ecto.Adapters.SQL.Sandbox.unboxed_run(Arca.Repo, fun)
+
+  defp backend! do
+    %{rows: [[backend]]} = Arca.Repo.query!("SELECT pg_backend_pid()")
+    backend
+  end
+
+  @tag :postgres
+  @tag timeout: 60_000
+  test "a join made while a terminal write waits on its attempt waits for that write, " <>
+         "and the completion carries the row the write left" do
+    id = "exec_ledger_terminal_#{System.unique_integer([:positive])}"
+    joined = Source.outside("joined-during-close.example")
+    parent = self()
+
+    on_exit(fn ->
+      unboxed(fn ->
+        for schema <- [Arca.Schemas.ExecutionEvent, Arca.Schemas.ExecutionAttempt] do
+          Arca.Repo.delete_all(Ecto.Query.from(r in schema, where: r.execution_id == ^id))
+        end
+
+        Arca.Repo.delete_all(Ecto.Query.from(e in Row, where: e.id == ^id))
+      end)
+    end)
+
+    attempt = unboxed(fn -> admit!(%{id: id}) end).current_attempt
+
+    # The attempt is held, so the terminal write waits on it mid-way.
+    blocker =
+      Task.async(fn ->
+        unboxed(fn ->
+          Arca.Repo.locking_transaction(fn ->
+            Ecto.Query.from(a in Arca.Schemas.ExecutionAttempt, where: a.attempt == ^attempt)
+            |> Arca.QueryHelpers.for_update()
+            |> Arca.Repo.one!()
+
+            send(parent, :held)
+            receive do: (:release -> :ok), after: (30_000 -> Arca.Repo.rollback(:timeout))
+          end)
+        end)
+      end)
+
+    assert_receive :held, 5_000
+
+    ending =
+      Task.async(fn ->
+        unboxed(fn ->
+          send(parent, {:ending, backend!()})
+
+          Execution.record_end(
+            actor(),
+            id,
+            "completed",
+            %{completed_at: DateTime.utc_now(), duration_ms: 1},
+            attempt,
+            Arca.Test.Actor.stored()
+          )
+        end)
+      end)
+
+    assert_receive {:ending, ending_backend}, 5_000
+    Arca.Test.LockWait.await_lock_wait!(ending_backend, ["execution_attempts"])
+
+    joining =
+      Task.async(fn ->
+        unboxed(fn ->
+          send(parent, {:joining, backend!()})
+          Execution.join_sources(actor(), id, [joined])
+        end)
+      end)
+
+    # The terminal write holds the row: the join waits on it, never lands
+    # between the write's read and its update.
+    assert_receive {:joining, joining_backend}, 5_000
+    Arca.Test.LockWait.await_lock_wait!(joining_backend, ["executions"])
+
+    send(blocker.pid, :release)
+    assert {:ok, :ok} = Task.await(blocker)
+    assert {:ok, terminal} = Task.await(ending)
+    assert :ok = Task.await(joining)
+
+    # The completion carries the ledger the run ended with; the join,
+    # made after, is the row's alone.
+    assert Execution.row_ledger(terminal) == []
+    assert sources!(id) == [joined]
+  end
 end
