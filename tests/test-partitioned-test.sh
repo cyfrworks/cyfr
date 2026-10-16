@@ -118,6 +118,20 @@ case "$1" in
   test)
     key="$(basename "$(dirname "$CYFR_TEST_RUN_ROOT")")-p$MIX_TEST_PARTITION"
     printf '%s\n' "$TMPDIR" "$CYFR_TEST_RUN_ROOT" "${CYFR_DATABASE_URL:-}" "${CYFR_CLUSTER_DATABASE_URL:-}" "$@" > "$TRACE/$key"
+    if [ "${COVER_EXPORTS:-0}" = 1 ]; then
+      # Mix's export under --cover: apps/<app>/cover/<name>.coverdata for
+      # each application the partition ran, then the result.
+      name= previous=
+      for argument in "$@"; do
+        if [ "$previous" = --export-coverage ]; then name=$argument; fi
+        previous=$argument
+      done
+      for app in one two; do
+        mkdir -p "apps/$app/cover"
+        echo "$MIX_TEST_PARTITION" > "apps/$app/cover/$name.coverdata"
+      done
+      if [ "${COVER_FAIL:-}" = "$MIX_TEST_PARTITION" ]; then echo 'Result: 1 test, 1 failure'; exit 2; fi
+    fi
     if [ "${DIAGNOSTIC_PHASE:-}" = test ]; then
       cat "$DIAGNOSTIC_INPUT"
       for ((i=0;i<150;i++)); do echo .; done
@@ -179,6 +193,12 @@ case "$1" in
     fi
     echo 'Result: 1 test, 0 failures'
     date +%s >> "$TRACE/tests-ended" ;;
+  test.coverage)
+    # Mix's merge: it reads every export under apps/*/cover/ and prints its
+    # table, exiting 3 as Mix does below its threshold.
+    ls apps/*/cover/*.coverdata > "$TRACE/coverage-merged"
+    printf '| Percentage | Module     |\n|------------|------------|\n|     61.25%% | Total      |\n'
+    exit 3 ;;
   *) exit 88 ;;
 esac
 FAKE
@@ -681,6 +701,42 @@ for adapter in sqlite postgres; do
     echo "$adapter-cancel-$dependency passed (exit $result)"
   done
 done
+# --- --cover: one Total line, the run's own status, the exports removed ---
+# Each partition exports under the run's name, ahead of the other Mix
+# arguments; the merge reads exactly those exports and its exit 3 (a figure
+# below Mix's threshold) changes nothing; a failing test still fails the
+# run with the figure printed; another run's export stops the merge and is
+# left alone; and no export of the run remains once it ends.
+cover_exports() { (cd "$scratch/work" && find apps -name '*.coverdata' 2>/dev/null | sort); }
+cover_run() { ls "$TRACE"/cyfr-t.*-p1 | sed 's|.*/||; s|-p1$||'; }
+rm -f "$TRACE"/cyfr-t.*-p*
+COVER_EXPORTS=1 "${clean[@]}" bash "$runner" -n 2 --cover >"$scratch/cover" 2>&1 || fail "a --cover run failed: $(cat "$scratch/cover")"
+run=$(cover_run)
+for i in 1 2; do
+  [ "$(sed -n '5,9p' "$TRACE/$run-p$i" | tr '\n' ' ')" = "test --no-compile --cover --export-coverage $run-p$i " ] ||
+    fail "partition $i was not given its export ahead of the rest: $(sed -n '5,$p' "$TRACE/$run-p$i" | tr '\n' ' ')"
+done
+[ "$(sort "$TRACE/coverage-merged" | tr '\n' ' ')" = "apps/one/cover/$run-p1.coverdata apps/one/cover/$run-p2.coverdata apps/two/cover/$run-p1.coverdata apps/two/cover/$run-p2.coverdata " ] ||
+  fail "the merge read $(tr '\n' ' ' < "$TRACE/coverage-merged")"
+grep -qx '==> coverage: 61.25% of lines in total (4 exports merged)' "$scratch/cover" || fail "no Total line: $(cat "$scratch/cover")"
+[ -z "$(cover_exports)" ] || fail "a --cover run left its exports: $(cover_exports)"
+[ ! -e "$scratch/work/apps/one/cover" ] || fail 'a --cover run left an empty cover directory'
+rm -f "$TRACE"/cyfr-t.*-p* "$TRACE/coverage-merged"
+[ "$(COVER_EXPORTS=1 COVER_FAIL=2 status_of "${clean[@]}" bash "$runner" -n 2 --cover)" = 1 ] || fail "a failing test under --cover did not fail the run: $(cat "$scratch/status")"
+grep -qx '==> coverage: 61.25% of lines in total (4 exports merged)' "$scratch/status" || fail "a failing run printed no Total line: $(cat "$scratch/status")"
+[ -z "$(cover_exports)" ] || fail "a failing --cover run left its exports: $(cover_exports)"
+rm -f "$TRACE"/cyfr-t.*-p* "$TRACE/coverage-merged"
+mkdir -p "$scratch/work/apps/three/cover"
+echo other > "$scratch/work/apps/three/cover/other.coverdata"
+[ "$(COVER_EXPORTS=1 status_of "${clean[@]}" bash "$runner" -n 2 --cover)" = 0 ] || fail "a run beside another's export failed: $(cat "$scratch/status")"
+grep -qx '==> coverage not merged: apps/\*/cover/ holds exports of another run: apps/three/cover/other.coverdata' "$scratch/status" ||
+  fail "another run's export did not stop the merge: $(cat "$scratch/status")"
+[ ! -e "$TRACE/coverage-merged" ] || fail "the merge ran beside another run's export"
+[ "$(cover_exports)" = apps/three/cover/other.coverdata ] || fail "the run removed another's export or left its own: $(cover_exports)"
+rm -rf "$scratch/work/apps/three" "$TRACE"/cyfr-t.*-p*
+[ "$(status_of "${clean[@]}" bash "$runner" -n 1 --cover -- --cover)" = 64 ] || fail 'Mix --cover beside the runner'"'"'s was not refused'
+[ "$(status_of "${clean[@]}" bash "$runner" -n 1 --cover -- --export-coverage mine)" = 64 ] || fail 'Mix --export-coverage beside the runner'"'"'s was not refused'
+echo 'cover: one Total line, a failing test still fails, exports removed, another run'"'"'s left alone'
 # --- containment, the terminal lines and admission -------------------------
 
 # lines_of OUT ARGS...: the runner in the background, so its pid is known.
