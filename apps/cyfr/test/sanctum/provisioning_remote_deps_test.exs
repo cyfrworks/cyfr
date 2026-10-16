@@ -281,6 +281,281 @@ defmodule Sanctum.ProvisioningRemoteDepsTest do
     assert result == {:error, :provisioning_busy}
   end
 
+  test "a stale fill cannot replace its successor component row after committing its unit",
+       %{ctx: ctx, group: group, stall: stall} do
+    enabled = Application.fetch_env(:arca, :control_plane_claim_enabled)
+
+    slot_keys =
+      for key <- [:standing, :generation, :slot], do: {Arca.ControlPlane, key}
+
+    previous = Map.new(slot_keys, &{&1, :persistent_term.get(&1, :absent)})
+
+    on_exit(fn ->
+      case enabled do
+        {:ok, value} -> Application.put_env(:arca, :control_plane_claim_enabled, value)
+        :error -> Application.delete_env(:arca, :control_plane_claim_enabled)
+      end
+
+      for {key, value} <- previous do
+        if value == :absent,
+          do: :persistent_term.erase(key),
+          else: :persistent_term.put(key, value)
+      end
+    end)
+
+    Application.put_env(:arca, :control_plane_claim_enabled, true)
+    node = "remote-regain-#{System.unique_integer([:positive])}"
+    {:ok, original} = Arca.ControlPlane.take(node, node <> "#old", 60_000)
+    Agent.update(stall, fn _ -> "someone/catalysts/elsewhere" end)
+    actor = Sanctum.Context.actor(ctx)
+    unit = ["components", "catalysts", "someone", "elsewhere", "1.0.0"]
+    {root, key} = Arca.Storage.UnitLocator.unit_key(unit)
+    observer = self()
+    handler = {__MODULE__, make_ref()}
+    on_exit(fn -> :telemetry.detach(handler) end)
+
+    :ok =
+      :telemetry.attach(
+        handler,
+        Arca.StorageProjectionChanges.event(),
+        fn _, _, metadata, _ ->
+          if metadata.athanor_id == group.id and metadata.root == "components" and metadata.ready and
+               match?({:ok, _}, Arca.StorageUnits.current(actor, root, key)) do
+            send(observer, {:published_before_row, self()})
+
+            receive do
+              :continue_row -> :ok
+            after
+              15_000 -> raise "review barrier was not released"
+            end
+          end
+        end,
+        nil
+      )
+
+    old_fill = Task.async(fn -> Provisioning.provision(group, ctx) end)
+
+    on_exit(fn ->
+      if Process.alive?(old_fill.pid) do
+        ref = Process.monitor(old_fill.pid)
+        Process.exit(old_fill.pid, :kill)
+
+        receive do
+          {:DOWN, ^ref, :process, _, _} -> :ok
+        after
+          5_000 -> :ok
+        end
+      end
+    end)
+
+    assert_receive {:stalled, "someone/catalysts/elsewhere"}, 15_000
+    actor = Sanctum.Context.actor(ctx)
+    {:ok, held} = Claims.current(actor)
+    Agent.update(stall, fn _ -> nil end)
+    assert_receive {:published_before_row, old_pull}, 15_000
+    :ok = :telemetry.detach(handler)
+
+    import Ecto.Query, only: [from: 2]
+
+    {1, _} =
+      Arca.Repo.update_all(from(l in Arca.Schemas.CellLease, where: l.node == ^node),
+        set: [lease_until: DateTime.add(DateTime.utc_now(), -60, :second)]
+      )
+
+    {:ok, successor} = Arca.ControlPlane.take(node, node <> "#successor", 60_000)
+    assert successor.generation > original.generation
+
+    {1, _} =
+      Arca.Repo.update_all(
+        from(c in Arca.Schemas.ProvisioningClaim, where: c.athanor_id == ^group.id),
+        set: [lease_until: DateTime.add(DateTime.utc_now(), -60, :second)]
+      )
+
+    {:ok, next} = Provisioning.take_claim(group.id, "first_need")
+    assert next.fence > held.fence
+    {:ok, manifest} = Arca.get(actor, unit ++ ["cyfr-manifest.json"])
+
+    metadata = %{
+      name: "elsewhere",
+      version: "1.0.0",
+      type: "catalyst",
+      publisher: "someone",
+      description: "SUCCESSOR-ROW",
+      manifest: manifest
+    }
+
+    assert {:ok, _} =
+             Compendium.Registry.publish_bytes(ctx, @wasm, metadata,
+               allow_overwrite: true,
+               origin: :remote,
+               source: "oci",
+               claim: %{owner: next.owner, fence: next.fence, slot: next.slot}
+             )
+
+    {:ok, theirs} = Arca.StorageUnits.current(actor, root, key)
+
+    {:ok, successor_row} =
+      Arca.ComponentStorage.get_component(actor, "elsewhere", "1.0.0", "someone", "catalyst")
+
+    assert successor_row.description == "SUCCESSOR-ROW"
+
+    {1, _} =
+      Arca.Repo.update_all(from(l in Arca.Schemas.CellLease, where: l.node == ^node),
+        set: [lease_until: DateTime.add(DateTime.utc_now(), -60, :second)]
+      )
+
+    {:ok, regained} = Arca.ControlPlane.take(node, node <> "#old", 60_000)
+    assert regained.generation > successor.generation
+    send(old_pull, :continue_row)
+    result = Task.await(old_fill, 30_000)
+    {:ok, current} = Arca.StorageUnits.current(actor, root, key)
+    assert current.current_revision == theirs.current_revision
+
+    {:ok, current_row} =
+      Arca.ComponentStorage.get_component(actor, "elsewhere", "1.0.0", "someone", "catalyst")
+
+    assert current_row.description == "SUCCESSOR-ROW",
+           "old fill returned #{inspect(result)}; row now says #{inspect(current_row.description)}"
+  end
+
+  test "a stale fill's refused row cleans up nothing its successor published",
+       %{ctx: ctx, group: group} do
+    enabled = Application.fetch_env(:arca, :control_plane_claim_enabled)
+    slot_keys = for key <- [:standing, :generation, :slot], do: {Arca.ControlPlane, key}
+    previous = Map.new(slot_keys, &{&1, :persistent_term.get(&1, :absent)})
+
+    on_exit(fn ->
+      case enabled do
+        {:ok, value} -> Application.put_env(:arca, :control_plane_claim_enabled, value)
+        :error -> Application.delete_env(:arca, :control_plane_claim_enabled)
+      end
+
+      for {key, value} <- previous do
+        if value == :absent,
+          do: :persistent_term.erase(key),
+          else: :persistent_term.put(key, value)
+      end
+    end)
+
+    Application.put_env(:arca, :control_plane_claim_enabled, true)
+    node = "remote-cleanup-#{System.unique_integer([:positive])}"
+    {:ok, original} = Arca.ControlPlane.take(node, node <> "#old", 60_000)
+    {:ok, held} = Provisioning.take_claim(group.id, "first_need")
+    actor = Sanctum.Context.actor(ctx)
+    unit = ["components", "catalysts", "someone", "cleanup", "1.0.0"]
+    {root, key} = Arca.Storage.UnitLocator.unit_key(unit)
+    observer = self()
+    handler = {__MODULE__, make_ref()}
+    on_exit(fn -> :telemetry.detach(handler) end)
+
+    # The old attempt's publish parks once its unit is committed and ready,
+    # before its row is written. The row it then writes is refused — the
+    # successor's row stands by then, and this publish may not overwrite
+    # one — which is what sends it to clean its unit up.
+    :ok =
+      :telemetry.attach(
+        handler,
+        Arca.StorageProjectionChanges.event(),
+        fn _, _, metadata, _ ->
+          if metadata.athanor_id == group.id and metadata.root == "components" and
+               metadata.ready and self() != observer and
+               match?({:ok, _}, Arca.StorageUnits.current(actor, root, key)) do
+            :telemetry.detach(handler)
+            send(observer, {:published_before_row, self()})
+
+            receive do
+              :continue_row -> :ok
+            after
+              15_000 -> raise "the barrier was not released"
+            end
+          end
+        end,
+        nil
+      )
+
+    metadata = fn description, manifest ->
+      %{
+        name: "cleanup",
+        version: "1.0.0",
+        type: "catalyst",
+        publisher: "someone",
+        description: description,
+        manifest: Jason.encode!(manifest)
+      }
+    end
+
+    manifest = %{"name" => "cleanup", "version" => "1.0.0", "type" => "catalyst"}
+
+    old_publish =
+      Task.async(fn ->
+        Compendium.Registry.publish_bytes(ctx, @wasm, metadata.("STALE", manifest),
+          allow_overwrite: false,
+          origin: :remote,
+          source: "oci",
+          claim: %{owner: held.owner, fence: held.fence, slot: held.slot}
+        )
+      end)
+
+    on_exit(fn ->
+      if Process.alive?(old_publish.pid), do: Process.exit(old_publish.pid, :kill)
+    end)
+
+    assert_receive {:published_before_row, old_pid}, 15_000
+
+    import Ecto.Query, only: [from: 2]
+
+    lapse_slot = fn ->
+      {1, _} =
+        Arca.Repo.update_all(from(l in Arca.Schemas.CellLease, where: l.node == ^node),
+          set: [lease_until: DateTime.add(DateTime.utc_now(), -60, :second)]
+        )
+    end
+
+    # A successor takes the slot and the athanor and publishes the unit and
+    # its row.
+    lapse_slot.()
+    {:ok, successor} = Arca.ControlPlane.take(node, node <> "#successor", 60_000)
+    assert successor.generation > original.generation
+
+    {1, _} =
+      Arca.Repo.update_all(
+        from(c in Arca.Schemas.ProvisioningClaim, where: c.athanor_id == ^group.id),
+        set: [lease_until: DateTime.add(DateTime.utc_now(), -60, :second)]
+      )
+
+    {:ok, next} = Provisioning.take_claim(group.id, "first_need")
+    assert next.fence > held.fence
+
+    assert {:ok, _} =
+             Compendium.Registry.publish_bytes(ctx, @wasm, metadata.("SUCCESSOR-ROW", manifest),
+               allow_overwrite: true,
+               origin: :remote,
+               source: "oci",
+               claim: %{owner: next.owner, fence: next.fence, slot: next.slot}
+             )
+
+    {:ok, theirs} = Arca.StorageUnits.current(actor, root, key)
+
+    # The old member wins a newer slot back, and its publish resumes.
+    lapse_slot.()
+    {:ok, regained} = Arca.ControlPlane.take(node, node <> "#old", 60_000)
+    assert regained.generation > successor.generation
+    send(old_pid, :continue_row)
+    result = Task.await(old_publish, 30_000)
+
+    assert {:ok, %{current_revision: revision}} = Arca.StorageUnits.current(actor, root, key)
+
+    assert revision == theirs.current_revision,
+           "old publish returned #{inspect(result)}; the successor's unit was retired"
+
+    assert {:ok, @wasm} = Arca.get(actor, unit ++ ["catalyst.wasm"])
+
+    assert {:ok, %{description: "SUCCESSOR-ROW"}} =
+             Arca.ComponentStorage.get_component(actor, "cleanup", "1.0.0", "someone", "catalyst")
+
+    assert {:error, _} = result
+  end
+
   test "a stalled required pull ends within its budget, releases coordination, and the next attempt completes the closure",
        %{ctx: ctx, group: group, stall: stall} do
     Agent.update(stall, fn _ -> "someone/catalysts/below" end)

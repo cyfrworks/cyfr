@@ -131,6 +131,7 @@ defmodule Arca.Overlay do
   alias Arca.{StorageProjectionChanges, StorageUnits}
 
   @internal_writes_key {__MODULE__, :internal_writes}
+  @claim_key {__MODULE__, :claim}
 
   @typedoc """
   What one shadow unit holds: `:available` (the seed ships it, the athanor
@@ -167,6 +168,41 @@ defmodule Arca.Overlay do
   @spec internal_writes?() :: boolean()
   def internal_writes?, do: Process.get(@internal_writes_key, false)
 
+  @doc """
+  Run `fun` with every unit removal it makes held to `claim` — a
+  provisioning attempt's claim and the member slot it was taken under,
+  `%{owner: owner, fence: fence, slot: slot}`: the unit's retirement
+  verifies that slot and holds that claim in its own transaction
+  (`Arca.StorageUnits.stamped_retire/4`), and a removal by an attempt
+  that lost either retires nothing and deletes nothing,
+  `{:error, :not_owner}`. How an attempt's publish cleans up the unit it
+  committed when its row is refused, through the `Arca` facade's own
+  delete and its gates. Lexical and process-local, as
+  `with_internal_writes/1` is: work handed to another process does not
+  carry the claim. `nil` runs `fun` with no claim.
+  """
+  @spec with_claim(map() | nil, (-> result)) :: result when result: term()
+  def with_claim(nil, fun) when is_function(fun, 0), do: fun.()
+
+  def with_claim(%{owner: owner, fence: fence, slot: _} = claim, fun)
+      when is_binary(owner) and is_integer(fence) and is_function(fun, 0) do
+    prev = Process.put(@claim_key, claim)
+
+    try do
+      fun.()
+    after
+      if prev, do: Process.put(@claim_key, prev), else: Process.delete(@claim_key)
+    end
+  end
+
+  # The claim a removal in this process names, if `with_claim/2` set one.
+  defp retire_opts do
+    case Process.get(@claim_key) do
+      nil -> []
+      claim -> [claim: claim]
+    end
+  end
+
   # ---------------------------------------------------------------------------
   # Arca.Storage callbacks — reads answer from the athanor's tree alone.
   # ---------------------------------------------------------------------------
@@ -200,7 +236,9 @@ defmodule Arca.Overlay do
   end
 
   # A delete AT a unit is the unit's removal, so its row goes first: a
-  # reader never finds a committed pointer over a tree being cleared. A
+  # reader never finds a committed pointer over a tree being cleared. Inside
+  # `with_claim/2` the retirement names the attempt's claim
+  # (`Arca.StorageUnits.stamped_retire/4`), and a refusal deletes nothing. A
   # unit with no row, or one already retired, deletes as plain bytes, and
   # either way the root's projection is told the unit is going — a
   # tombstone, pending until the tenant delete returns. Only a delete that
@@ -216,7 +254,7 @@ defmodule Arca.Overlay do
       unit ->
         {root, key} = UnitLocator.unit_key(unit)
 
-        case StorageUnits.stamped_retire(actor, root, key) do
+        case StorageUnits.stamped_retire(actor, root, key, retire_opts()) do
           {outcome, generation} when outcome in [:retired, :not_found] ->
             case delete.() do
               :ok ->

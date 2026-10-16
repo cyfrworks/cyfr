@@ -170,7 +170,8 @@ defmodule Compendium.Registry do
              manifest_map: manifest_map,
              allow_overwrite: allow_overwrite,
              source: Keyword.get(opts, :source),
-             rollback_unit: ComponentPath.version_dir(component_type, publisher, name, version)
+             rollback_unit: ComponentPath.version_dir(component_type, publisher, name, version),
+             claim: Keyword.get(opts, :claim)
            ) do
       {:ok, with_warnings(component, warnings)}
     end
@@ -257,7 +258,10 @@ defmodule Compendium.Registry do
   # ingress — a row must never land before its refs are known good. On
   # any failure, `rollback_unit:` deletes the just-committed unit so
   # completeness and rows can never disagree (the scanner never passes
-  # it: its bytes are the user's source).
+  # it: its bytes are the user's source). A fill's publish names its
+  # `claim:`, and then the row and the cleanup land only while the fill
+  # still holds that claim and the slot it was taken under: a resumed
+  # stale fill neither rewrites nor removes what its successor published.
   defp land_row(ctx, name, version, metadata, validation, publisher, opts) do
     build_opts =
       [manifest: opts[:manifest], manifest_map: opts[:manifest_map]] ++
@@ -268,21 +272,23 @@ defmodule Compendium.Registry do
              build_component(ctx, name, version, metadata, validation, publisher, build_opts),
            :ok <- validate_dependencies(component, opts[:manifest]),
            {:ok, _} <-
-             save_component(ctx, component, opts[:allow_overwrite], name, version) do
+             save_component(ctx, component, opts[:allow_overwrite], name, version, opts[:claim]) do
         invalidate_executor_caches(ctx)
         {:ok, component}
       end
 
     with {:error, _} = error <- result do
-      rollback_unit(ctx, opts[:rollback_unit])
+      rollback_unit(ctx, opts[:rollback_unit], opts[:claim])
       error
     end
   end
 
-  defp rollback_unit(_ctx, nil), do: :ok
+  defp rollback_unit(_ctx, nil, _claim), do: :ok
 
-  defp rollback_unit(ctx, version_dir) do
-    case Arca.delete_tree(Sanctum.Context.actor(ctx), version_dir) do
+  defp rollback_unit(ctx, version_dir, claim) do
+    case Arca.Overlay.with_claim(claim, fn ->
+           Arca.delete_tree(Sanctum.Context.actor(ctx), version_dir)
+         end) do
       :ok ->
         :ok
 
@@ -378,7 +384,8 @@ defmodule Compendium.Registry do
              manifest: manifest_bytes,
              manifest_map: manifest_map,
              allow_overwrite: allow_overwrite,
-             rollback_unit: ComponentPath.version_dir("tincture", publisher, name, version)
+             rollback_unit: ComponentPath.version_dir("tincture", publisher, name, version),
+             claim: Keyword.get(opts, :claim)
            ) do
       {:ok, with_warnings(component, warnings)}
     end
@@ -998,14 +1005,6 @@ defmodule Compendium.Registry do
   # it (`lay_unit_files/2`), validate the tree that results and store
   # exactly that tree to Arca. Returns {:ok, %{digest, size, exports}} on
   # success.
-  # A fill's claim, when the publish carries one, for the unit commit.
-  defp fill_claim(opts) do
-    case Keyword.get(opts, :claim) do
-      nil -> []
-      claim -> [claim: claim]
-    end
-  end
-
   defp extract_and_store_tincture(ctx, archive_bytes, publisher, name, version, opts) do
     # Hook between validation and the first Arca write. Callers use it to
     # refuse a publish without leaving extracted files behind.
@@ -1071,7 +1070,7 @@ defmodule Compendium.Registry do
                 |> Arca.Overlay.commit_unit(
                   version_dir,
                   source,
-                  [cap: {:checked, validation.size}] ++ fill_claim(opts)
+                  [cap: {:checked, validation.size}] ++ claims(Keyword.get(opts, :claim))
                 )
                 |> commit_outcome(:tincture_store_failed)
                 |> case do
@@ -1281,24 +1280,32 @@ defmodule Compendium.Registry do
 
   # For local publisher, allow overwrite (skip check_not_exists).
   # Other publishers reject duplicates.
-  defp put_component(ctx, component) do
-    Arca.ComponentStorage.put_component(Sanctum.Context.actor(ctx), component)
+  defp put_component(ctx, component, claim) do
+    Arca.ComponentStorage.put_component(Sanctum.Context.actor(ctx), component, claims(claim))
   end
+
+  # A fill's claim, when the publish carries one, as a write's option.
+  defp claims(nil), do: []
+  defp claims(claim), do: [claim: claim]
 
   # Atomically insert or upsert depending on allow_overwrite.
   # For local publisher, always upsert (allow_overwrite semantics).
   # For non-local, use insert_component to detect duplicates atomically.
-  defp save_component(ctx, component, true = _allow_overwrite, _name, _version) do
-    put_component(ctx, component)
+  defp save_component(ctx, component, true = _allow_overwrite, _name, _version, claim) do
+    put_component(ctx, component, claim)
   end
 
-  defp save_component(ctx, component, false, name, version) do
+  defp save_component(ctx, component, false, name, version, claim) do
     publisher = ComponentPath.normalize_publisher(Map.get(component, :publisher))
 
     if ComponentPath.local_publisher?(publisher) do
-      put_component(ctx, component)
+      put_component(ctx, component, claim)
     else
-      case Arca.ComponentStorage.insert_component(Sanctum.Context.actor(ctx), component) do
+      case Arca.ComponentStorage.insert_component(
+             Sanctum.Context.actor(ctx),
+             component,
+             claims(claim)
+           ) do
         {:ok, _} = ok -> ok
         {:error, :already_exists} -> {:error, {:already_exists, name, version}}
         error -> error

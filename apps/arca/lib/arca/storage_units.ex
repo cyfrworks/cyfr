@@ -233,6 +233,13 @@ defmodule Arca.StorageUnits do
        when is_binary(owner) and is_integer(fence),
        do: {:ok, {:claim, owner, fence, slot}}
 
+  # A retirement names a claim only for an attempt's own cleanup; without
+  # one it is checked as it always was, by the deleter's own gates.
+  defp retires?(_actor, nil), do: true
+
+  defp retires?(actor, %{owner: owner, fence: fence, slot: slot}),
+    do: Arca.ProvisioningClaims.hold?(actor, owner, fence, slot)
+
   # Inside the commit's locking transaction: the member's slot verified
   # live, or the attempt's slot verified and its claim held.
   defp writes?(_actor, {:member, slot}), do: Arca.ControlPlane.verify_held(slot) == :ok
@@ -292,15 +299,25 @@ defmodule Arca.StorageUnits do
   the row: `:retired`, or `:not_found` for no row or one already retired.
   The deleter marks the tombstone ready once the tenant delete returns
   (`Arca.StorageProjectionChanges.mark_ready/5`, revision nil).
+
+  `:claim` in `opts` is `stamped_commit/6`'s: a provisioning attempt's
+  retirement — the cleanup of a unit its own publish committed — lands
+  only while the attempt still holds its claim and the slot it was taken
+  under, both held in this transaction before the row moves, and answers
+  `{:error, :not_owner}` with nothing retired otherwise, so a resumed
+  stale attempt never retires its successor's unit.
   """
-  @spec stamped_retire(Prima.Actor.t(), String.t(), String.t()) ::
-          {:retired | :not_found, pos_integer()} | refusal()
-  def stamped_retire(%Prima.Actor{} = actor, root, unit_key)
-      when is_binary(root) and is_binary(unit_key) do
+  @spec stamped_retire(Prima.Actor.t(), String.t(), String.t(), keyword()) ::
+          {:retired | :not_found, pos_integer()} | {:error, :not_owner} | refusal()
+  def stamped_retire(%Prima.Actor{} = actor, root, unit_key, opts \\ [])
+      when is_binary(root) and is_binary(unit_key) and is_list(opts) do
     with {:ok, athanor} <- tenant(actor) do
       answer =
         rescuing_db("retire", fn ->
           Arca.Repo.locking_transaction(fn ->
+            if not retires?(actor, Keyword.get(opts, :claim)),
+              do: Arca.Repo.rollback(:not_owner)
+
             retired = retire_row(athanor, root, unit_key)
 
             generation =

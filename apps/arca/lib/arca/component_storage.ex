@@ -16,10 +16,19 @@ defmodule Arca.ComponentStorage do
 
   The rows are the `components` root's projection: what the tree derives
   is written by `replace_projection/3`, against a snapshot of that root,
-  and acknowledged in the same transaction. `put_component/2`,
-  `insert_component/2` and `delete_component/5` are the direct writes of
+  and acknowledged in the same transaction. `put_component/3`,
+  `insert_component/3` and `delete_component/5` are the direct writes of
   the ingresses whose rows the tree cannot derive (a publish, a pull) and
   of an explicit removal.
+
+  A row a provisioning attempt writes — a fill's dependency pull —
+  carries the attempt's claim (`:claim` in `put_component/3`'s and
+  `insert_component/3`'s opts, `%{owner: owner, fence: fence, slot:
+  slot}`): the write's own transaction verifies that slot and holds that
+  claim (`Arca.ProvisioningClaims.hold?/4`) before the row moves, and an
+  attempt that lost either writes nothing and answers
+  `{:error, :not_owner}`. A row a person's publish or pull writes names no
+  claim.
   """
 
   import Ecto.Query
@@ -115,14 +124,40 @@ defmodule Arca.ComponentStorage do
   (`Compendium.Registry`), not the storage layer's. Ensures tenant fields from
   the context.
   """
-  def put_component(%Prima.Actor{athanor_id: athanor_id} = actor, attrs)
-      when is_binary(athanor_id) and athanor_id != "" and is_map(attrs) do
+  def put_component(actor, attrs, opts \\ [])
+
+  def put_component(%Prima.Actor{athanor_id: athanor_id} = actor, attrs, opts)
+      when is_binary(athanor_id) and athanor_id != "" and is_map(attrs) and is_list(opts) do
     attrs = attrs |> validate_source!() |> then(&ensure_tenant_fields(actor, &1))
 
-    rescuing_db("put_component", fn -> do_put_component(attrs) end)
+    rescuing_db("put_component", fn ->
+      under_claim(actor, Keyword.get(opts, :claim), fn -> do_put_component(attrs) end)
+    end)
   end
 
-  def put_component(%Prima.Actor{}, _attrs), do: {:error, :no_athanor}
+  def put_component(%Prima.Actor{}, _attrs, _opts), do: {:error, :no_athanor}
+
+  # A direct row write, inside a locking transaction that first holds the
+  # attempt's claim and verifies its slot when the write names one. With
+  # none, the write stands on its own, as a person's does.
+  defp under_claim(_actor, nil, write), do: write.()
+
+  defp under_claim(actor, %{owner: owner, fence: fence, slot: slot}, write) do
+    Arca.Repo.locking_transaction(fn ->
+      if Arca.ProvisioningClaims.hold?(actor, owner, fence, slot) do
+        case write.() do
+          {:ok, written} -> written
+          {:error, reason} -> Arca.Repo.rollback(reason)
+        end
+      else
+        Arca.Repo.rollback(:not_owner)
+      end
+    end)
+    |> case do
+      {:ok, written} -> {:ok, written}
+      {:error, _} = refused -> refused
+    end
+  end
 
   # arca:unscoped-ok the attrs arrive with the athanor set by the caller-facing entry (ensure_tenant_fields).
   defp do_put_component(attrs) do
@@ -161,7 +196,7 @@ defmodule Arca.ComponentStorage do
   Replace the rows the `components` root's projection derives, against
   `token`, that root's snapshot (`Arca.StorageProjectionChanges.snapshot/3`):
   in one transaction the rows each `delete:` removal names go, each
-  `put:` row is written (an upsert on its identity, as `put_component/2`),
+  `put:` row is written (an upsert on its identity, as `put_component/3`),
   and every unit the token names that is ready is acknowledged — the
   root's epoch too, when all of them are. Removals are made before puts.
 
@@ -247,21 +282,25 @@ defmodule Arca.ComponentStorage do
   Returns `{:ok, attrs}` on success, `{:error, :already_exists}` if the
   athanor/publisher/name/version/type combination already exists.
   """
+  def insert_component(actor, attrs, opts \\ [])
+
   # arca:unscoped-ok ensure_tenant_fields/2 stamps the context's athanor onto the row before the write.
-  def insert_component(%Prima.Actor{athanor_id: athanor_id} = actor, attrs)
-      when is_binary(athanor_id) and athanor_id != "" and is_map(attrs) do
+  def insert_component(%Prima.Actor{athanor_id: athanor_id} = actor, attrs, opts)
+      when is_binary(athanor_id) and athanor_id != "" and is_map(attrs) and is_list(opts) do
     attrs = attrs |> validate_source!() |> then(&ensure_tenant_fields(actor, &1))
 
     rescuing_db("insert_component", fn ->
-      case Arca.Repo.insert_all(Component, [attrs], on_conflict: :nothing) do
-        {1, _} -> {:ok, attrs}
-        {0, _} -> {:error, :already_exists}
-        error -> {:error, error}
-      end
+      under_claim(actor, Keyword.get(opts, :claim), fn ->
+        case Arca.Repo.insert_all(Component, [attrs], on_conflict: :nothing) do
+          {1, _} -> {:ok, attrs}
+          {0, _} -> {:error, :already_exists}
+          error -> {:error, error}
+        end
+      end)
     end)
   end
 
-  def insert_component(%Prima.Actor{}, _attrs), do: {:error, :no_athanor}
+  def insert_component(%Prima.Actor{}, _attrs, _opts), do: {:error, :no_athanor}
 
   # The closed source roster (`Prima.ComponentSource.values/0`), enforced
   # where rows are WRITTEN — an unrostered value would silently skew
