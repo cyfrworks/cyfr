@@ -69,8 +69,12 @@ jobs:
 
       - name: go test
         # -race matches the Makefile's local invocation — the stricter run
-        # was the one CI didn't do.
-        run: go test ./... -race
+        # was the one CI didn't do. The total coverage goes to the job
+        # summary: it is reported, never a floor, so only a failing test
+        # fails the step.
+        run: |
+          go test ./... -race -coverprofile="$RUNNER_TEMP/cover.out"
+          echo "apps/codex coverage: $(go tool cover -func "$RUNNER_TEMP/cover.out" | tail -1)" >> "$GITHUB_STEP_SUMMARY"
 
       - name: go build
         run: go build ./...

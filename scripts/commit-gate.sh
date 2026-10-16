@@ -158,7 +158,7 @@ leg_static() {
   # default, _build/dev, and never share a directory with the test build.
   step static compile_sqlite_dev env CYFR_DATABASE=sqlite MIX_ENV=dev mix compile --force --warnings-as-errors || return
   step static format mix format --check-formatted || return
-  step static credo mix credo --only=warning || return
+  step static credo mix credo --strict || return
   step static opsgen mix ops.gen.cli --check || return
   step static confguide mix cyfr.gen.configuration_guide --check || return
   step static js_suite apps/cyfr/assets/test/run.sh || return

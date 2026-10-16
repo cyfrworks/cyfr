@@ -11,6 +11,11 @@ on:
       - 'mix.lock'
       # The formatting check reads it.
       - '.formatter.exs'
+      # The static analysis reads the first two; the Dialyzer filters' reason
+      # test reads the third.
+      - '.credo.exs'
+      - '.credo_baseline.exs'
+      - '.dialyzer_ignore.exs'
       # Every workflow: the drift test, the tag pipeline's graph check
       # (tests/ci-release-graph.py) and its publication test
       # (tests/ci-publish-test.sh) read release.yml, and the retired-
@@ -62,6 +67,11 @@ on:
       - 'mix.lock'
       # The formatting check reads it.
       - '.formatter.exs'
+      # The static analysis reads the first two; the Dialyzer filters' reason
+      # test reads the third.
+      - '.credo.exs'
+      - '.credo_baseline.exs'
+      - '.dialyzer_ignore.exs'
       # Every workflow: the drift test, the tag pipeline's graph check
       # (tests/ci-release-graph.py) and its publication test
       # (tests/ci-publish-test.sh) read release.yml, and the retired-
@@ -275,8 +285,11 @@ jobs:
       # an edge fails here, once, outside the partitions.
       - name: Boundary plants
         run: mix test apps/cyfr/test/cyfr/boundaries_test.exs --only boundary_plant
+      # .credo.exs's checks against .credo_baseline.exs: a finding the
+      # baseline does not record fails, and so does a recorded one the tree
+      # no longer has.
       - name: Static analysis
-        run: mix credo --only=warning
+        run: mix credo --strict
       - name: Check formatting
         run: mix format --check-formatted
       # The CLI's operation constants are generated from the server's
@@ -373,6 +386,37 @@ jobs:
       # manifest merged from its own digests while another run interleaves.
       - name: The tag pipeline's image publication
         run: bash tests/ci-publish-test.sh
+
+  # The console's JavaScript and the SDK's source: eslint's recommended
+  # rules (apps/cyfr/assets/eslint.config.mjs) and the unit tests under c8,
+  # whose coverage summary is reported and never a floor. Neither needs an
+  # image or a build, so the job waits on no other.
+  js-unit:
+    name: JavaScript lint, unit tests and coverage
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: apps/cyfr/assets
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # Node 24, the runtime FORCE_JAVASCRIPT_ACTIONS_TO_NODE24 gives the
+      # actions.
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: apps/cyfr/assets/package-lock.json
+      # eslint and c8 as package-lock.json pins them, with no install
+      # script run.
+      - name: Install the lint and coverage tools
+        run: npm ci --ignore-scripts
+      - name: Lint the console's JavaScript and the SDK
+        run: npx eslint .
+      - name: The console's JavaScript tests (the SDK, the canvas toolkit, the canvas, the carrier, the system layer and the markdown hook's parse step)
+        env:
+          CYFR_COVERAGE: 1
+        run: test/run.sh
 
   test:
     name: Elixir Tests (${{ matrix.db }})
@@ -1298,8 +1342,6 @@ jobs:
         env:
           BROWSER_OUT: ${{ runner.temp }}/proofs/frame-facts
         run: tests/browser/run.sh
-      - name: The console's JavaScript tests (the SDK, the canvas toolkit, the canvas, the carrier, the system layer and the markdown hook's parse step)
-        run: apps/cyfr/assets/test/run.sh
       # The markdown hook's output after DOMPurify, which needs a browser's
       # DOM (tests/markdown-proof/README.md). It starts no release.
       - name: The markdown proof (Chromium)

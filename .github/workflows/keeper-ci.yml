@@ -54,8 +54,12 @@ jobs:
       - name: go vet
         run: go vet ./...
 
+      # The total coverage goes to the job summary: it is reported, never a
+      # floor, so only a failing test fails the step.
       - name: go test
-        run: go test ./... -race
+        run: |
+          go test ./... -race -coverprofile="$RUNNER_TEMP/cover.out"
+          echo "apps/locus/keeper coverage: $(go tool cover -func "$RUNNER_TEMP/cover.out" | tail -1)" >> "$GITHUB_STEP_SUMMARY"
 
       # The keeper's real-kernel tests start processes under pooled uids and
       # hold each spawn to a memory bound in a cgroup v2 group of its own, so
