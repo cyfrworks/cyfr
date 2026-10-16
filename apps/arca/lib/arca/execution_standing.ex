@@ -130,7 +130,9 @@ defmodule Arca.ExecutionStanding do
         on: e.id == a.execution_id and e.current_attempt == a.attempt,
         left_join: t in Athanor,
         on: t.id == a.athanor_id,
-        where: a.state in ["running", "paused"] and e.status in ["running", "paused"],
+        where:
+          a.state in ^Prima.ExecutionState.open_attempt_states() and
+            e.status in ^Prima.ExecutionState.open_statuses(),
         where:
           is_nil(t.id) or t.status != "active" or
             t.security_generation != a.athanor_generation,

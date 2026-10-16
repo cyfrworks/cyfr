@@ -22,6 +22,7 @@ defmodule Arca.Execution do
   # they stand.
 
   @terminal_statuses Row.terminal_statuses()
+  @open_statuses Prima.ExecutionState.open_statuses()
   @fields Row.__schema__(:fields)
 
   # The outcomes an ended execution's attempt may close with, by the
@@ -418,64 +419,82 @@ defmodule Arca.Execution do
   defp outcome_allowed?(status, outcome), do: outcome in Map.get(@end_outcomes, status, [])
 
   @doc """
-  Lists recent executions with optional filters.
+  Lists the recent executions of the actor's athanor, newest first, with
+  optional filters. An actor without an athanor is `{:error, :no_athanor}`.
 
   Options:
   - `:limit` - Maximum records to return (default: 20)
   - `:user_id` - Filter by user ID
-  - `:status` - Filter by status
+  - `:status` - Filter by status (`Prima.ExecutionState.statuses/0`, or `:all`)
+  - `:parent_execution_id` - Filter by parent
+  """
+  @spec list(Prima.Actor.t(), keyword()) :: [map()] | {:error, :no_athanor | :database_error}
+  def list(%Prima.Actor{athanor_id: athanor_id}, opts)
+      when is_binary(athanor_id) and athanor_id != "" and is_list(opts) do
+    Arca.Repo.Errors.with_db_rescue("Execution.list", fn -> list_rows(athanor_id, opts) end)
+    |> Arca.Data.project()
+  end
+
+  def list(%Prima.Actor{}, opts) when is_list(opts), do: {:error, :no_athanor}
+
+  @doc """
+  Lists recent executions of `opts[:athanor_id]`, with `list/2`'s
+  filters. The tenant is a keyword here; `list/2` reads it off the actor.
   """
   @spec list(keyword()) :: [map()] | {:error, :database_error}
   def list(opts) do
     Arca.Repo.Errors.with_db_rescue("Execution.list", fn ->
-      limit = Keyword.get(opts, :limit, 20)
-      user_id = Keyword.get(opts, :user_id)
-      status = Keyword.get(opts, :status)
-      athanor_id = Keyword.fetch!(opts, :athanor_id)
-
-      query =
-        from(e in Row,
-          order_by: [desc: e.started_at],
-          limit: ^limit,
-          select:
-            map(e, [
-              :id,
-              :reference,
-              :input_hash,
-              :user_id,
-              :athanor_id,
-              :request_id,
-              :component_type,
-              :component_digest,
-              :started_at,
-              :completed_at,
-              :duration_ms,
-              :status,
-              :error_message,
-              :parent_execution_id,
-              :root_execution_id,
-              :resolver_digest,
-              :activation_digest
-            ])
-        )
-
-      query = Arca.QueryHelpers.where_athanor(query, athanor_id)
-
-      query = if user_id, do: where(query, [e], e.user_id == ^user_id), else: query
-
-      query =
-        if status && status != :all,
-          do: where(query, [e], e.status == ^to_string(status)),
-          else: query
-
-      parent_id = Keyword.get(opts, :parent_execution_id)
-
-      query =
-        if parent_id, do: where(query, [e], e.parent_execution_id == ^parent_id), else: query
-
-      Arca.Repo.all(query)
+      list_rows(Keyword.fetch!(opts, :athanor_id), opts)
     end)
     |> Arca.Data.project()
+  end
+
+  defp list_rows(athanor_id, opts) do
+    limit = Keyword.get(opts, :limit, 20)
+    user_id = Keyword.get(opts, :user_id)
+    status = Keyword.get(opts, :status)
+
+    query =
+      from(e in Row,
+        order_by: [desc: e.started_at],
+        limit: ^limit,
+        select:
+          map(e, [
+            :id,
+            :reference,
+            :input_hash,
+            :user_id,
+            :athanor_id,
+            :request_id,
+            :component_type,
+            :component_digest,
+            :started_at,
+            :completed_at,
+            :duration_ms,
+            :status,
+            :error_message,
+            :parent_execution_id,
+            :root_execution_id,
+            :resolver_digest,
+            :activation_digest
+          ])
+      )
+
+    query = Arca.QueryHelpers.where_athanor(query, athanor_id)
+
+    query = if user_id, do: where(query, [e], e.user_id == ^user_id), else: query
+
+    query =
+      if status && status != :all,
+        do: where(query, [e], e.status == ^to_string(status)),
+        else: query
+
+    parent_id = Keyword.get(opts, :parent_execution_id)
+
+    query =
+      if parent_id, do: where(query, [e], e.parent_execution_id == ^parent_id), else: query
+
+    Arca.Repo.all(query)
   end
 
   @doc """
@@ -705,7 +724,7 @@ defmodule Arca.Execution do
 
     from(e in Row,
       where: e.started_at < ^cutoff,
-      where: e.status not in ["running", "paused"]
+      where: e.status not in ^@open_statuses
     )
     |> Arca.QueryHelpers.where_athanor(athanor_id)
   end
@@ -738,7 +757,7 @@ defmodule Arca.Execution do
 
     from(e in Row,
       where: e.id not in subquery(keep_ids_query),
-      where: e.status not in ["running", "paused"]
+      where: e.status not in ^@open_statuses
     )
     |> Arca.QueryHelpers.where_athanor(athanor_id)
   end
@@ -827,7 +846,7 @@ defmodule Arca.Execution do
     Arca.Repo.locking_transaction(fn ->
       if grant, do: Arca.ExecutionStanding.verify!(grant, verify)
 
-      open = from(e in Row, where: e.id == ^id and e.status in ["running", "paused"])
+      open = from(e in Row, where: e.id == ^id and e.status in ^@open_statuses)
 
       row =
         if grant,
@@ -851,7 +870,7 @@ defmodule Arca.Execution do
 
           if retired? do
             {count, _} =
-              from(e in Row, where: e.id == ^id and e.status in ["running", "paused"])
+              from(e in Row, where: e.id == ^id and e.status in ^@open_statuses)
               |> Arca.Repo.update_all(
                 set: [
                   status: "failed",
@@ -964,7 +983,7 @@ defmodule Arca.Execution do
       if grant, do: Arca.ExecutionStanding.verify!(grant, verify)
 
       execution =
-        from(e in Row, where: e.id == ^id and e.status in ["running", "paused"])
+        from(e in Row, where: e.id == ^id and e.status in ^@open_statuses)
         |> Arca.QueryHelpers.where_tenant_unless_platform(actor)
         |> Arca.Repo.one()
 
@@ -1004,7 +1023,7 @@ defmodule Arca.Execution do
       commit_payloads!(Map.get(attrs, :payloads, []), owner)
 
       {1, _} =
-        from(e in Row, where: e.id == ^id and e.status in ["running", "paused"])
+        from(e in Row, where: e.id == ^id and e.status in ^@open_statuses)
         |> Arca.QueryHelpers.where_tenant_unless_platform(actor)
         |> Arca.Repo.update_all(set: Map.to_list(changeset.changes))
 

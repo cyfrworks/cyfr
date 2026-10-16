@@ -385,7 +385,9 @@ defmodule Arca.BudgetReservations do
         join: e in Arca.Schemas.Execution,
         on: e.id == a.execution_id,
         where: a.athanor_id == ^athanor_id and a.attempt == ^attempt,
-        where: e.current_attempt == ^attempt and a.state in ["running", "paused"]
+        where:
+          e.current_attempt == ^attempt and
+            a.state in ^Prima.ExecutionState.open_attempt_states()
       )
     )
   end

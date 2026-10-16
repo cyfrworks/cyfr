@@ -125,6 +125,7 @@ defmodule Arca.ToolGrantStorage do
     Arca.Repo.Errors.with_db_rescue("Arca.ToolGrantStorage.list_for_thread", fn ->
       now = Arca.ServerMetaStorage.now!()
       open_turns = Prima.TurnState.open_statuses()
+      open_executions = Prima.ExecutionState.open_statuses()
 
       rows =
         from(g in ToolGrant,
@@ -146,7 +147,7 @@ defmodule Arca.ToolGrantStorage do
             g.effect == "deny" or
               ((is_nil(g.expires_at) or g.expires_at > ^now) and
                  (is_nil(g.lifecycle_kind) or
-                    (g.lifecycle_kind == "execution" and e.status in ["running", "paused"]) or
+                    (g.lifecycle_kind == "execution" and e.status in ^open_executions) or
                     (g.lifecycle_kind == "turn" and t.status in ^open_turns) or
                     (g.lifecycle_kind == "schedule" and not is_nil(s.id) and
                        s.status != "deleted"))),

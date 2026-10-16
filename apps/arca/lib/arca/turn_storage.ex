@@ -94,6 +94,9 @@ defmodule Arca.TurnStorage do
   @step_kinds Prima.TurnState.step_kinds()
   @outcomes Prima.TurnState.outcomes()
   @decisions Prima.TurnState.decisions()
+  # The open turns a suspend or a takeover moves: an `accepted` turn has
+  # no root attempt yet, so nothing of it is held to suspend or take over.
+  @held @open -- ["accepted"]
 
   @doc "Every status a turn can carry (`Prima.TurnState.statuses/0`)."
   defdelegate statuses, to: Prima.TurnState
@@ -547,7 +550,7 @@ defmodule Arca.TurnStorage do
           execution_status!(
             athanor_id,
             turn.root_execution_id,
-            ["running", "paused"],
+            Prima.ExecutionState.open_statuses(),
             Prima.TurnState.status_of(status),
             error: Map.get(attrs, :error)
           )
@@ -614,7 +617,7 @@ defmodule Arca.TurnStorage do
     Arca.Repo.Errors.with_db_rescue("Arca.TurnStorage.suspend", fn ->
       Arca.Repo.locking_transaction(fn ->
         turn = take!(athanor_id, turn_id, attrs)
-        if turn.status not in ["running", "paused"], do: Arca.Repo.rollback(:not_running)
+        if turn.status not in @held, do: Arca.Repo.rollback(:not_running)
         now = DateTime.utc_now()
 
         ran =
@@ -747,7 +750,7 @@ defmodule Arca.TurnStorage do
     Arca.Repo.Errors.with_db_rescue("Arca.TurnStorage.takeover", fn ->
       Arca.Repo.locking_transaction(fn ->
         turn = take!(athanor_id, turn_id, attrs)
-        if turn.status not in ["running", "paused"], do: Arca.Repo.rollback(:not_open)
+        if turn.status not in @held, do: Arca.Repo.rollback(:not_open)
         {_limit, spends} = recovery!(turn, attrs)
         if is_nil(turn.root_execution_id), do: Arca.Repo.rollback(:no_root)
         grant = standing!(athanor_id, turn, attrs, :required)
@@ -800,7 +803,7 @@ defmodule Arca.TurnStorage do
     execution_status!(
       athanor_id,
       turn.root_execution_id,
-      ["running", "paused", "failed"],
+      Prima.ExecutionState.from(:execution, "running"),
       "running"
     )
 
@@ -976,7 +979,7 @@ defmodule Arca.TurnStorage do
           execution_status!(
             athanor_id,
             turn.root_execution_id,
-            ["running", "paused", "failed"],
+            Prima.ExecutionState.from(:execution, "paused"),
             "paused"
           )
 
@@ -2392,11 +2395,17 @@ defmodule Arca.TurnStorage do
 
   defp execution_status!(_athanor_id, nil, _from, _to, _opts), do: :ok
 
+  # A write states the move its operation makes, which stays within
+  # `Prima.ExecutionState`'s table: a move outside it is this module's
+  # mistake and raises, rolling the caller's transaction back.
   defp execution_status!(athanor_id, execution_id, from, to, opts) do
     from = List.wrap(from)
 
+    unless Enum.all?(from, &Prima.ExecutionState.transition?(:execution, &1, to)),
+      do: raise(ArgumentError, "no execution status write moves #{Enum.join(from, "|")} to #{to}")
+
     sets =
-      if to in Arca.Execution.terminal_statuses(),
+      if to in Prima.ExecutionState.terminal_statuses(),
         do: [
           status: to,
           completed_at: DateTime.utc_now(),

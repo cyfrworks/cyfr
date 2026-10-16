@@ -244,6 +244,8 @@ defmodule Opus.Host.Children do
   # admitted under this execution, claimed by this runner on this service
   # and boot, and still running. Its attempt closes it failed, releasing
   # its slot, invoke slot and charge, and the waiter hears the refusal.
+  @terminal_attempt_states Prima.ExecutionState.terminal_attempt_states()
+
   defp release(caller, chain, child_id) do
     with %{parent_execution_id: parent} <-
            Arca.Execution.get_tenant(Sanctum.Context.actor(chain.ctx), child_id),
@@ -253,7 +255,7 @@ defmodule Opus.Host.Children do
         when runner == caller.runner and service == caller.service and boot == caller.boot ->
           refuse_child(child_id, @not_started)
 
-        %{state: state} when state in ["completed", "failed", "cancelled", "lapsed"] ->
+        %{state: state} when state in @terminal_attempt_states ->
           {:ok, true}
 
         _ ->

@@ -381,7 +381,7 @@ defmodule Opus.Provider do
               ),
               Arg.new("status", :string,
                 description: "Filter by status (list action)",
-                enum: ["running", "completed", "failed", "cancelled", "all"],
+                enum: Prima.ExecutionState.statuses() ++ ["all"],
                 default: "all"
               )
             ],
@@ -946,11 +946,12 @@ defmodule Opus.Provider do
     }
   end
 
-  defp parse_status_filter(nil), do: :all
-  defp parse_status_filter("all"), do: :all
-  defp parse_status_filter("running"), do: :running
-  defp parse_status_filter("completed"), do: :completed
-  defp parse_status_filter("failed"), do: :failed
-  defp parse_status_filter("cancelled"), do: :cancelled
+  # Each execution status a list may filter on and its atom, made at
+  # compile time so a caller's filter never makes one.
+  @status_filters Map.new(Prima.ExecutionState.statuses(), &{&1, String.to_atom(&1)})
+
+  defp parse_status_filter(status) when is_map_key(@status_filters, status),
+    do: @status_filters[status]
+
   defp parse_status_filter(_), do: :all
 end

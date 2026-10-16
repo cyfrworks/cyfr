@@ -50,6 +50,10 @@ defmodule Arca.ScheduleOccurrences do
   @open ["claimed", "started"]
   @terminal ["completed", "failed", "uncertain"]
 
+  @doc "Every state an occurrence can be in: the open two and the terminal three."
+  @spec states() :: [String.t()]
+  def states, do: @open ++ @terminal
+
   @doc "The states of an occurrence still to be run or running."
   def open_states, do: @open
 
@@ -380,7 +384,7 @@ defmodule Arca.ScheduleOccurrences do
           left_join: e in Arca.Schemas.Execution,
           on: e.id == o.execution_id and e.athanor_id == o.athanor_id,
           where: o.state == "started",
-          where: is_nil(e.id) or e.status not in ["running", "paused"],
+          where: is_nil(e.id) or e.status not in ^Prima.ExecutionState.open_statuses(),
           select: o
         )
 

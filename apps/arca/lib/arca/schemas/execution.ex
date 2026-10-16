@@ -29,21 +29,23 @@ defmodule Arca.Schemas.Execution do
   use Ecto.Schema
   import Ecto.Changeset
 
-  # The execution lifecycle vocabulary, in one place like its sibling
-  # stores. A row starts "running" and ends in exactly one of the
-  # terminal three.
-  @statuses ~w(running paused completed failed cancelled)
+  # The execution lifecycle vocabulary is `Prima.ExecutionState`'s. A row
+  # starts "running" and ends in exactly one of the terminal three.
+  @statuses Prima.ExecutionState.statuses()
+  @terminal_statuses Prima.ExecutionState.terminal_statuses()
   # What a row is: a component run, a host loop's logical turn root, or an
   # outbound tool call.
   @kinds ~w(component turn tool_call)
-  @terminal_statuses ~w(completed failed cancelled)
 
   @type t :: %__MODULE__{}
 
-  @doc "Every status an execution row can carry."
+  @doc "Every status an execution row can carry (`Prima.ExecutionState.statuses/0`)."
   def statuses, do: @statuses
 
-  @doc "The statuses a finished execution can carry."
+  @doc """
+  The statuses a finished execution can carry
+  (`Prima.ExecutionState.terminal_statuses/0`).
+  """
   def terminal_statuses, do: @terminal_statuses
 
   @doc "Every kind an execution row can carry."

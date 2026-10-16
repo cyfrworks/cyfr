@@ -142,14 +142,18 @@ defmodule Arca.ExecutionAttempts do
 
   alias Arca.Schemas.{ExecutionAttempt, StorageWriteIntent}
 
-  @open_states ["running", "paused"]
-  @terminal_states ["completed", "failed", "cancelled", "lapsed"]
-  @outcomes ["ok", "error", "result_lost", "cancelled", "uncertain"]
+  @open_states Prima.ExecutionState.open_attempt_states()
+  @terminal_states Prima.ExecutionState.terminal_attempt_states()
+  @outcomes Prima.ExecutionState.outcomes()
+  # The ends an owner closes its attempt with; a lapse is the sweep's or a
+  # successor's, never the owner's.
+  @closes Prima.ExecutionState.terminal_attempt_states() -- ["lapsed"]
+  @open_executions Prima.ExecutionState.open_statuses()
 
-  @doc "The states an attempt that still owns work can be in."
+  @doc "The states an attempt that still owns work can be in (`Prima.ExecutionState`)."
   def open_states, do: @open_states
 
-  @doc "The states of an attempt that no longer owns work."
+  @doc "The states of an attempt that no longer owns work (`Prima.ExecutionState`)."
   def terminal_states, do: @terminal_states
 
   @doc "A fresh attempt id."
@@ -789,7 +793,7 @@ defmodule Arca.ExecutionAttempts do
         %Prima.ExecutionGrant{athanor_id: athanor_id} = grant
       )
       when is_binary(athanor_id) and athanor_id != "" and
-             state in ["completed", "failed", "cancelled"] and
+             state in @closes and
              outcome in @outcomes do
     close_interval!(athanor_id, attempt, @open_states, state, outcome, DateTime.utc_now(), grant)
   end
@@ -907,7 +911,8 @@ defmodule Arca.ExecutionAttempts do
   or `failed` by a lapse of its current attempt (`lapsed`, the sweep's
   retirement of a lease its holder stopped renewing), which is the one
   failure a successor may take up; any other row rolls the transaction
-  back as `{:execution_not_in, ["running", "paused", "failed"]}`.
+  back as `{:execution_not_in, ["running", "paused", "failed"]}`, the
+  statuses `Prima.ExecutionState` lets a successor put back to `running`.
   Answers `%{previous: t | nil, attempt: t, ran_ms: n}`
   where `ran_ms` is the predecessor's unaccounted running interval (0
   when it had none).
@@ -948,7 +953,8 @@ defmodule Arca.ExecutionAttempts do
       |> Arca.Repo.one()
 
     unless successor_admitted?(execution, previous),
-      do: Arca.Repo.rollback({:execution_not_in, ["running", "paused", "failed"]})
+      do:
+        Arca.Repo.rollback({:execution_not_in, Prima.ExecutionState.from(:execution, "running")})
 
     # A successor inherits its predecessor's stamp unchanged: a grant of
     # any other generation is not this execution's.
@@ -1013,7 +1019,7 @@ defmodule Arca.ExecutionAttempts do
   # A successor takes up an open execution, or one a lapse failed: its
   # current attempt `lapsed`, never closed. A row that ended by its own
   # close — completed, cancelled, or failed by its owner — stays ended.
-  defp successor_admitted?(%{status: status}, _previous) when status in ["running", "paused"],
+  defp successor_admitted?(%{status: status}, _previous) when status in @open_executions,
     do: true
 
   defp successor_admitted?(%{status: "failed"}, %ExecutionAttempt{state: "lapsed"}), do: true

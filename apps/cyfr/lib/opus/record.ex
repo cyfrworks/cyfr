@@ -48,6 +48,10 @@ defmodule Opus.Record do
 
   alias Sanctum.Context
 
+  # Each stored execution status (`Prima.ExecutionState.statuses/0`) and
+  # its atom, made at compile time so parsing a row never makes one.
+  @status_atoms Map.new(Prima.ExecutionState.statuses(), &{&1, String.to_atom(&1)})
+
   @typedoc """
   A decoded JSON value. The `input`, `output` and `host_policy` columns hold
   whatever the execution produced, and a component's result is not required
@@ -782,23 +786,18 @@ defmodule Opus.Record do
     limit = Keyword.get(opts, :limit, 20)
     status_filter = Keyword.get(opts, :status, :all)
 
-    opts = [
-      limit: limit,
-      athanor_id: ctx.athanor_id
-    ]
+    opts = [limit: limit]
 
     opts =
       if status_filter != :all,
         do: Keyword.put(opts, :status, to_string(status_filter)),
         else: opts
 
-    # `Arca.Execution.list/1` runs under `with_db_rescue`, so an outage
-    # comes back as a refusal rather than rows. Mapping over it raised
-    # (a two-tuple is not enumerable), which made this function's own
-    # `{:error, term()}` arm unreachable and every caller's error branch
-    # dead — `Opus.ArchiveWatch` has one written for exactly
-    # this case. The refusal travels now.
-    case Arca.Execution.list(opts) do
+    # `Arca.Execution.list/2` runs under `with_db_rescue`, so an outage
+    # comes back as a refusal rather than rows, and the refusal travels:
+    # every caller's error branch (`Opus.ArchiveWatch` among them) is
+    # written for it.
+    case Arca.Execution.list(Context.actor(ctx), opts) do
       {:error, reason} ->
         {:error, reason}
 
@@ -868,11 +867,7 @@ defmodule Opus.Record do
   defp parse_reference(_other), do: nil
 
   defp parse_status(nil), do: :running
-  defp parse_status("running"), do: :running
-  defp parse_status("paused"), do: :paused
-  defp parse_status("completed"), do: :completed
-  defp parse_status("failed"), do: :failed
-  defp parse_status("cancelled"), do: :cancelled
+  defp parse_status(status) when is_map_key(@status_atoms, status), do: @status_atoms[status]
 
   defp parse_status(unknown) do
     Logger.warning("[Opus.Record] Unrecognized status: #{inspect(unknown)}, treating as :unknown")
