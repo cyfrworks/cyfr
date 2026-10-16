@@ -7,7 +7,10 @@ defmodule Prima.ManifestCapsTest do
   them (`Prima.ComponentPath.door_path/1`): a path with an empty segment, a
   `.` or `..` segment, or a trailing form other than one `/` is refused at
   every manifest write, so the blob parse, the preview and the door read
-  one spelling. `"*"` is the grant grammar's wildcard, not a path.
+  one spelling. `"*"` is the grant grammar's wildcard, not a path. A flow
+  names a source class and an exit the manifest declares — an egress
+  domain or connect origin as spelled, a declared need, or a tool server —
+  and anything else is refused at every write.
   """
 
   use ExUnit.Case, async: true
@@ -237,6 +240,115 @@ defmodule Prima.ManifestCapsTest do
     test "joins the agent-only tools as exact names, and nothing else does" do
       assert Caps.agent_only_tools() ==
                ~w(feed.bind feed.remove layout.edit schedule.create schedule.update)
+    end
+  end
+
+  describe "a flow in the ask" do
+    # A manifest declaring two egress domains, one connect origin and one
+    # need, and the flows it names.
+    defp flowing(flows, extra \\ %{}) do
+      Map.merge(
+        %{
+          "type" => "tincture",
+          "needs" => %{"api_key" => %{"type" => "api_key:x.com", "reason" => "r"}},
+          "tincture" => %{"connect" => ["origin.example"]},
+          "caps" => %{
+            "egress" => %{"domains" => ["api.example.com", "*.cdn.example"]},
+            "flows" => flows
+          }
+        },
+        extra
+      )
+    end
+
+    defp flow(from, to), do: %{"from" => from, "to" => to}
+
+    test "naming a declared domain, a connect origin, a declared need or a server passes" do
+      flows = [
+        flow("filed", "api.example.com"),
+        flow("pinned", "*.cdn.example"),
+        flow("outside", "origin.example"),
+        flow("vault_disclosed", "need:api_key"),
+        flow("files_by_grant", "server:forecasts"),
+        flow("pinned", "*.cdn.example")
+      ]
+
+      assert :ok = Caps.validate(flowing(flows), &guest_path?/1)
+      assert :ok = Manifest.validate(flowing(flows), &guest_path?/1)
+
+      # Read as one set: in class order, then by exit, each flow once.
+      assert %{flows: read} = Caps.from_manifest(flowing(flows), &guest_path?/1)
+
+      assert read == [
+               %{from: :pinned, to: "*.cdn.example"},
+               %{from: :filed, to: "api.example.com"},
+               %{from: :files_by_grant, to: "server:forecasts"},
+               %{from: :vault_disclosed, to: "need:api_key"},
+               %{from: :outside, to: "origin.example"}
+             ]
+
+      # The same flows in another order and repeated are the same ask.
+      assert Caps.from_manifest(flowing(Enum.reverse(flows) ++ flows), &guest_path?/1) ==
+               Caps.from_manifest(flowing(flows), &guest_path?/1)
+    end
+
+    test "naming an exit the manifest does not declare is refused at every write" do
+      for to <- [
+            "other.example",
+            "sub.api.example.com",
+            "x.cdn.example",
+            "https://api.example.com",
+            "need:other",
+            "origin.example.org"
+          ] do
+        manifest = flowing([flow("filed", to)])
+
+        assert {:error, {:invalid_caps, {:undeclared_flow_exit, ^to}}} =
+                 Caps.validate(manifest, &guest_path?/1),
+               to
+
+        assert {:error, {:invalid_manifest, [{:invalid_caps, {:undeclared_flow_exit, ^to}}]}} =
+                 Manifest.validate(manifest, &guest_path?/1)
+
+        assert Caps.from_manifest(manifest, &guest_path?/1) == nil
+      end
+
+      # A connect entry that is no origin declares no exit, and a manifest
+      # with no tincture block declares none at all.
+      bad_origin = flowing([flow("filed", "a b")], %{"tincture" => %{"connect" => ["a b"]}})
+
+      assert {:error, {:invalid_caps, {:undeclared_flow_exit, "a b"}}} =
+               Caps.validate(bad_origin, &guest_path?/1)
+
+      no_frame = Map.delete(flowing([flow("filed", "origin.example")]), "tincture")
+
+      assert {:error, {:invalid_caps, {:undeclared_flow_exit, "origin.example"}}} =
+               Caps.validate(no_frame, &guest_path?/1)
+    end
+
+    test "an unknown or unsettled class, a malformed entry or exit, or another key is refused" do
+      for {flows, reason} <- [
+            {[flow("unsettled", "api.example.com")], {:unknown_flow_class, "unsettled"}},
+            {[flow("secret", "api.example.com")], {:unknown_flow_class, "secret"}},
+            {[flow(nil, "api.example.com")], {:unknown_flow_class, nil}},
+            {[flow("filed", "server:")], {:malformed_flow_exit, "server:"}},
+            {[flow("filed", "need:")], {:malformed_flow_exit, "need:"}},
+            {[flow("filed", "")], {:malformed_flow_exit, ""}},
+            {[flow("filed", nil)], {:malformed_flow_exit, nil}},
+            {[Map.put(flow("filed", "api.example.com"), "via", "x")],
+             {:unknown_flow_keys, ["via"]}},
+            {["filed>api.example.com"], {:flow_not_an_object, "filed>api.example.com"}},
+            {%{"from" => "filed"}, {:flows_not_a_list, %{"from" => "filed"}}}
+          ] do
+        assert {:error, {:invalid_caps, ^reason}} =
+                 Caps.validate(flowing(flows), &guest_path?/1),
+               inspect(flows)
+      end
+    end
+
+    test "a manifest that declares none asks none" do
+      assert %{flows: []} = Caps.from_manifest(%{"caps" => %{}}, &guest_path?/1)
+      assert %{flows: []} = Caps.empty()
     end
   end
 

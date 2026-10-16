@@ -3,9 +3,9 @@
 
 defmodule Prima.Manifest.Tincture do
   @moduledoc """
-  What a tincture declares about its frame, beside its entry and its
-  `connect` origins: four blocks of the manifest's `tincture` object, and
-  their digest.
+  What a tincture declares about its frame, beside its entry: four blocks
+  of the manifest's `tincture` object and their digest, and the `connect`
+  origins its frame may reach (`connect/1`).
 
     * `frame` — `capabilities` (names; which names exist, and what each
       opens, are `Compendium.Tincture.Rules`'), `placement` (a name, or
@@ -108,6 +108,25 @@ defmodule Prima.Manifest.Tincture do
   @doc "Whether `subject` is a literal stream subject (never `\"*\"`)."
   @spec literal_subject?(term()) :: boolean()
   def literal_subject?(subject), do: is_binary(subject) and Regex.match?(@subject, subject)
+
+  @doc """
+  The external origins the manifest's `tincture.connect` declares: the
+  domains the served page's CSP `connect-src` admits over `https`, each a
+  bare domain `Prima.Manifest.valid_connect_domain?/1` reads, sorted and
+  without duplicates. They are exits of the tincture's frame
+  (`Prima.Flow`): a flow names one as spelled here, and the consent shape
+  carries them. An entry that does not read is no origin, as the CSP
+  drops it; a manifest write refuses it first.
+  """
+  @spec connect(term()) :: [String.t()]
+  def connect(%{"tincture" => %{"connect" => connect}}) when is_list(connect),
+    do:
+      connect
+      |> Enum.filter(&Prima.Manifest.valid_connect_domain?/1)
+      |> Enum.uniq()
+      |> Enum.sort()
+
+  def connect(_manifest), do: []
 
   @doc """
   Whether the manifest's `tincture` object declares any of the blocks. A
