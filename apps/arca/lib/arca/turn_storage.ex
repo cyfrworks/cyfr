@@ -61,9 +61,10 @@ defmodule Arca.TurnStorage do
   that attempt's grant (`Arca.ExecutionStanding`): `attrs[:grant]` —
   `:stored` for the stamp the root's current attempt carries — and
   `attrs[:verify]`, the identity domain's check over it. The check runs
-  inside the transaction once the turn row is taken and read again,
-  before any execution or attempt row is locked; the attempt is written
-  only when it carries the grant's stamp. A resume, a completion, a
+  inside the transaction once the turn row is taken and read again — and,
+  for the transitions that lock the turn's root execution (`lock_root!/2`),
+  after that row too — before any step or attempt row is locked; the
+  attempt is written only when it carries the grant's stamp. A resume, a completion, a
   recovery, a takeover and a set-down are refused
   `{:error, :missing_grant}` without both inputs, whatever the turn
   holds; a failure, a cancel or an uncertain end retires work and needs
@@ -2753,8 +2754,10 @@ defmodule Arca.TurnStorage do
   end
 
   # The root's grant a turn write runs under, asked in the caller's
-  # locking transaction once the turn row is taken and read again, before
-  # any execution or attempt row is locked: `attrs[:grant]` (`:stored` for
+  # locking transaction once the turn row is taken and read again (and the
+  # root execution's row, where the transition takes it through
+  # `lock_root!/2`), before any step or attempt row is locked:
+  # `attrs[:grant]` (`:stored` for
   # the stamp the turn's root attempt carries) checked by `attrs[:verify]`.
   # A write that must stand (`:required`) is refused without both inputs;
   # any other write names them only when the turn has a root attempt,
