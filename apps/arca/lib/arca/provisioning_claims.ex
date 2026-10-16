@@ -124,13 +124,15 @@ defmodule Arca.ProvisioningClaims do
   def renew(%Prima.Actor{athanor_id: athanor_id}, owner, fence, lease_ms, slot)
       when is_binary(athanor_id) and athanor_id != "" and is_binary(owner) and is_integer(fence) and
              is_integer(lease_ms) and lease_ms > 0 do
-    under_slot("Arca.ProvisioningClaims.renew", slot, fn ->
-      now = now()
+    Arca.Repo.Errors.with_db_rescue("Arca.ProvisioningClaims.renew", fn ->
+      under_slot(slot, fn ->
+        now = now()
 
-      athanor_id
-      |> held(owner, fence)
-      |> Arca.Repo.update_all(set: [lease_until: lease_end(now, lease_ms), updated_at: now])
-      |> landed()
+        athanor_id
+        |> held(owner, fence)
+        |> Arca.Repo.update_all(set: [lease_until: lease_end(now, lease_ms), updated_at: now])
+        |> landed()
+      end)
     end)
   end
 
@@ -179,10 +181,12 @@ defmodule Arca.ProvisioningClaims do
       do:
         raise(ArgumentError, "unknown provisioning outcome #{Prima.LoggerContext.shape(outcome)}")
 
-    under_slot("Arca.ProvisioningClaims.settle", slot, fn ->
-      with :ok <- write_outcome(athanor_id, owner, fence, outcome, detail) do
-        stamp(actor, stamps)
-      end
+    Arca.Repo.Errors.with_db_rescue("Arca.ProvisioningClaims.settle", fn ->
+      under_slot(slot, fn ->
+        with :ok <- write_outcome(athanor_id, owner, fence, outcome, detail) do
+          stamp(actor, stamps)
+        end
+      end)
     end)
   end
 
@@ -403,20 +407,20 @@ defmodule Arca.ProvisioningClaims do
 
   # `write` in one locking transaction that first verifies `slot` live, as
   # `claim/5` does: a slot that is not the member's rolls back as
-  # `{:error, :not_owner}` with nothing written.
-  defp under_slot(entry, slot, write) do
-    Arca.Repo.Errors.with_db_rescue(entry, fn ->
-      Arca.Repo.locking_transaction(fn ->
-        case Arca.ControlPlane.verify_held(slot) do
-          :ok -> write.()
-          :lost -> Arca.Repo.rollback(:not_owner)
-        end
-      end)
-      |> case do
-        {:ok, answer} -> answer
-        {:error, _} = refused -> refused
+  # `{:error, :not_owner}` with nothing written. The public entry that
+  # calls it holds the `with_db_rescue`, as the row-plane convention has it
+  # (`Arca.DbRescueCoverageTest` reads each public entry's own body).
+  defp under_slot(slot, write) do
+    Arca.Repo.locking_transaction(fn ->
+      case Arca.ControlPlane.verify_held(slot) do
+        :ok -> write.()
+        :lost -> Arca.Repo.rollback(:not_owner)
       end
     end)
+    |> case do
+      {:ok, answer} -> answer
+      {:error, _} = refused -> refused
+    end
   end
 
   defp landed({1, _}), do: :ok
