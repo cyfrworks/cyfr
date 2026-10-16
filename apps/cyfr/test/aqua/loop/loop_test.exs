@@ -30,14 +30,16 @@ defmodule Aqua.LoopTest do
     Arca.Cache.init()
     Cyfr.Test.Sandbox.setup!()
 
-    test_path = Path.join(System.tmp_dir!(), "loop_#{System.unique_integer([:positive])}")
-    keys = [arca: :base_path, arca: :seed_path, cyfr: :locus_runtime_workers]
+    # The test's storage is the tree of an athanor minted for it alone,
+    # under the partition's storage root: nothing else names the tree, and
+    # it is removed, and nothing else, when the test ends.
+    ctx = ScriptedWorker.athanor!(Sanctum.TestContext.local(:prism))
+    tree = own_tree!(ctx)
+    keys = [arca: :seed_path, cyfr: :locus_runtime_workers]
     prev = Map.new(keys, fn {app, key} -> {{app, key}, Application.get_env(app, key)} end)
-    Application.put_env(:arca, :base_path, test_path)
-    Application.put_env(:arca, :seed_path, @seed_root)
 
     on_exit(fn ->
-      File.rm_rf!(test_path)
+      File.rm_rf!(tree)
 
       for {{app, key}, value} <- prev do
         if value,
@@ -46,10 +48,13 @@ defmodule Aqua.LoopTest do
       end
     end)
 
-    # The loops' work stops before the paths it runs under are restored.
+    # The shipped catalysts the turns run are read from the repository's
+    # seed tree; the suite's own carries none.
+    Application.put_env(:arca, :seed_path, @seed_root)
+
+    # The loops' work stops before their tree is removed and the seed tree restored.
     Cyfr.Test.Sandbox.stop_work_on_exit()
 
-    ctx = Sanctum.TestContext.local(:prism)
     :ok = Sanctum.TestContext.shipped!(ctx.athanor_id)
     {:ok, %{errors: 0}} = Compendium.AutoIndexer.scan(ctx: ctx)
     {:ok, _} = Compendium.AgentIndex.sync(ctx)
@@ -62,6 +67,16 @@ defmodule Aqua.LoopTest do
     {:ok, thread} = Threads.create(Sanctum.Context.actor(ctx))
     :ok = Aqua.Runner.subscribe(thread.id, ctx.athanor_id)
     {:ok, ctx: ctx, thread: thread}
+  end
+
+  # The athanor's tree under the partition's storage root, which no earlier
+  # test may have left behind: an athanor whose tree already exists is not
+  # this test's alone.
+  defp own_tree!(ctx) do
+    segments = Arca.Storage.physical_segments(Sanctum.Context.actor(ctx), [])
+    tree = Path.join([Application.fetch_env!(:arca, :base_path) | segments])
+    refute File.exists?(tree), "#{ctx.athanor_id}'s tree is left from another test"
+    tree
   end
 
   test "the catalyst's consented cap answers to a name, not to the ref the spec carries", %{

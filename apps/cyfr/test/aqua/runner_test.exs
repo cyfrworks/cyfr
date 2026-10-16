@@ -34,14 +34,17 @@ defmodule Aqua.RunnerTest do
     Arca.Cache.init()
     Cyfr.Test.Sandbox.setup!()
 
-    test_path = Path.join(System.tmp_dir!(), "runner_#{System.unique_integer([:positive])}")
-    keys = [arca: :base_path, arca: :seed_path, cyfr: :locus_runtime_workers]
+    # The test's storage is the tree of an athanor minted for it alone,
+    # under the partition's storage root: nothing else names the tree, and
+    # it is removed, and nothing else, when the test ends.
+    {ctx, user} = Sanctum.TestContext.person!(Sanctum.TestContext.local(:prism))
+    ctx = ScriptedWorker.athanor!(ctx)
+    tree = own_tree!(ctx)
+    keys = [arca: :seed_path, cyfr: :locus_runtime_workers]
     prev = Map.new(keys, fn {app, key} -> {{app, key}, Application.get_env(app, key)} end)
-    Application.put_env(:arca, :base_path, test_path)
-    Application.put_env(:arca, :seed_path, @seed_root)
 
     on_exit(fn ->
-      File.rm_rf!(test_path)
+      File.rm_rf!(tree)
 
       for {{app, key}, value} <- prev do
         if value,
@@ -50,10 +53,13 @@ defmodule Aqua.RunnerTest do
       end
     end)
 
-    # The runners run under the paths restored above.
+    # The shipped catalysts the turns run are read from the repository's
+    # seed tree; the suite's own carries none.
+    Application.put_env(:arca, :seed_path, @seed_root)
+
+    # The runners stop before their tree is removed and the seed tree restored.
     Cyfr.Test.Sandbox.stop_work_on_exit()
 
-    {ctx, user} = Sanctum.TestContext.person!(Sanctum.TestContext.local(:prism))
     # The sends here are the console's: a person on an interactive surface,
     # the origin `CyfrWeb.ContextGuard` gives the context it establishes.
     ctx = %{ctx | origin: :interactive}
@@ -74,6 +80,23 @@ defmodule Aqua.RunnerTest do
     {:ok, thread} = Threads.create(Sanctum.Context.actor(ctx))
     :ok = Runner.subscribe(thread.id, ctx.athanor_id)
     {:ok, ctx: ctx, user: user, thread: thread}
+  end
+
+  # The athanor's tree under the partition's storage root, which no earlier
+  # test may have left behind: an athanor whose tree already exists is not
+  # this test's alone.
+  defp own_tree!(ctx) do
+    segments = Arca.Storage.physical_segments(Sanctum.Context.actor(ctx), [])
+    tree = Path.join([Application.fetch_env!(:arca, :base_path) | segments])
+    refute File.exists?(tree), "#{ctx.athanor_id}'s tree is left from another test"
+    tree
+  end
+
+  # The tree is removed once the work the test started has stopped: the
+  # stop registered after the removal runs before it.
+  defp remove_on_exit(tree) do
+    on_exit(fn -> File.rm_rf!(tree) end)
+    Cyfr.Test.Sandbox.stop_work_on_exit()
   end
 
   defp script!(items), do: start_supervised!({ScriptedWorker, ref: @model, script: items})
@@ -184,6 +207,8 @@ defmodule Aqua.RunnerTest do
 
     {:ok, _} = Members.ensure(ctx.user_id, scope: "athanor", athanor_id: fresh.id)
     {:ok, fresh_ctx} = Sanctum.Context.focus(ctx, fresh.id)
+    # The refused send starts the athanor's fill, which writes its tree.
+    remove_on_exit(own_tree!(fresh_ctx))
     {:ok, fresh_thread} = Threads.create(Sanctum.Context.actor(fresh_ctx))
     # The roster is handed in: reading it would itself start the fill.
     assert {:error, :not_provisioned} =
