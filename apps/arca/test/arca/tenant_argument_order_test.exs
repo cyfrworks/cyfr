@@ -53,6 +53,11 @@ defmodule Arca.TenantArgumentOrderTest do
 
   The functions that still read the tenant from their options are rostered
   below, each with why, and the roster only shrinks.
+
+  The scan reads calls as written, pipes and private defaults included. A
+  read hidden behind a function value (`then(opts, &Keyword.fetch!(&1,
+  :athanor_id))`, `apply/3`, a captured reader passed along) escapes it:
+  a named blind spot, not an admission.
   """
 
   use ExUnit.Case, async: true
