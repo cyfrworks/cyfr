@@ -1468,8 +1468,13 @@ defmodule Opus.Schedules.Scheduler do
     end
   end
 
-  # The read's revision, while the schedule row is the one read before
-  # the run; unbound (`absent`) once anything wrote it since.
+  # The run's read is bound when the schedule row's `updated_at` at the
+  # finish equals the stored value read before the run, and is otherwise
+  # `absent`, which only creates the note or replaces this schedule's own
+  # earlier outcome, so an unread note at a changed destination is a
+  # conflict. The limit: a schedule edited during its run, or overlapping
+  # runs of one that allows them, deliver as a conflict even where the run
+  # read the very note it would update.
   defp bound_read(occurrence, %{updated_at: %DateTime{} = before}, %{
          updated_at: %DateTime{} = now
        }) do
