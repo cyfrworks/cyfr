@@ -91,7 +91,7 @@ defmodule Arca.Repo.Migrations.Baseline do
     }
 
     create table(:athanors, primary_key: false) do
-      add :id, :string, primary_key: true
+      add :id, :string, primary_key: true, null: false
       add :kind, :string, null: false
       add :name, :string, null: false
       add :slug, :string, null: false
@@ -143,7 +143,7 @@ defmodule Arca.Repo.Migrations.Baseline do
     # foreign key here — synthetic principals are not people. `email` is not
     # unique.
     create table(:users, primary_key: false) do
-      add :id, :string, primary_key: true
+      add :id, :string, primary_key: true, null: false
       add :email, :string
       # Tri-state on purpose: true when the provider proved the address,
       # false when it said the opposite, NULL when it said nothing.
@@ -181,7 +181,7 @@ defmodule Arca.Repo.Migrations.Baseline do
     # How an identity provider names a person, keyed by the IdP composite
     # `<provider>|<issuer>|<subject>`. One person may be named by several.
     create table(:external_identities, primary_key: false) do
-      add :id, :string, primary_key: true
+      add :id, :string, primary_key: true, null: false
       add :user_id, references(:users, type: :string, on_delete: :delete_all), null: false
       add :key, :string, null: false
       add :provider, :string, null: false
@@ -200,7 +200,7 @@ defmodule Arca.Repo.Migrations.Baseline do
     # email the door does not know — they take effect when a platform admin
     # resolves them.
     create table(:server_allowlist, primary_key: false) do
-      add :id, :string, primary_key: true
+      add :id, :string, primary_key: true, null: false
       add :kind, :string, null: false
       add :value, :string, null: false
       add :effect, :string, null: false, default: "allow"
@@ -221,7 +221,7 @@ defmodule Arca.Repo.Migrations.Baseline do
     # before the person has signed in and carries no user_id; it activates,
     # atomically, on their first admitted sign-in.
     create table(:memberships, primary_key: false) do
-      add :id, :string, primary_key: true
+      add :id, :string, primary_key: true, null: false
       add :user_id, :string
       add :email, :string
       add :person_identifier, :string
@@ -262,7 +262,7 @@ defmodule Arca.Repo.Migrations.Baseline do
   # takes the same row; the lease is what a successor waits out.
   defp provisioning do
     create table(:provisioning_claims, primary_key: false) do
-      add :id, :string, primary_key: true
+      add :id, :string, primary_key: true, null: false
       add :athanor_id, :string, null: false
       # The boot holding the claim; a mark from another boot never lands.
       add :owner, :string, null: false
@@ -293,7 +293,7 @@ defmodule Arca.Repo.Migrations.Baseline do
     # memberships, the athanor's consents and the policy, never by a list
     # frozen at sign-in.
     create table(:sessions, primary_key: false) do
-      add :id, :string, primary_key: true
+      add :id, :string, primary_key: true, null: false
       add :token_hash, :binary, null: false
       add :token_prefix, :string
       add :user_id, :string, null: false
@@ -318,7 +318,7 @@ defmodule Arca.Repo.Migrations.Baseline do
     create index(:sessions, [:identity_key_epoch], where: "identity_key_epoch IS NOT NULL")
 
     create table(:api_keys, primary_key: false) do
-      add :id, :string, primary_key: true
+      add :id, :string, primary_key: true, null: false
       add :name, :string, null: false
       add :key_hash, :binary, null: false
       add :key_prefix, :string, null: false
@@ -348,7 +348,7 @@ defmodule Arca.Repo.Migrations.Baseline do
            )
 
     create table(:registry_tokens, primary_key: false) do
-      add :id, :string, primary_key: true
+      add :id, :string, primary_key: true, null: false
       add :user_id, :string, null: false
       add :registry, :string, null: false
       add :namespace_slug, :string, null: false
@@ -397,7 +397,7 @@ defmodule Arca.Repo.Migrations.Baseline do
     # is spent once by `Arca.FrameCredentials.consume/3`. A revoked row is
     # terminal; `Arca.Retention.FrameCredentials` removes it once aged.
     create table(:frame_credentials, primary_key: false) do
-      add :id, :string, primary_key: true
+      add :id, :string, primary_key: true, null: false
       add :athanor_id, :string, null: false
       add :user_id, :string, null: false
       add :publisher, :string, null: false
@@ -455,7 +455,7 @@ defmodule Arca.Repo.Migrations.Baseline do
     # transaction (`Arca.SecurityTransitions`). A declared restore
     # suspends every standing row until the person re-enables it.
     create table(:paired_clients, primary_key: false) do
-      add :id, :string, primary_key: true
+      add :id, :string, primary_key: true, null: false
       add :athanor_id, :string, null: false
       add :user_id, :string, null: false
       add :source_kind, :string, null: false
@@ -507,7 +507,7 @@ defmodule Arca.Repo.Migrations.Baseline do
     # compare-and-set token; `first_method_at` records that a fresh
     # confirmation method ever existed, and nothing resets it.
     create table(:person_identities, primary_key: false) do
-      add :id, :string, primary_key: true
+      add :id, :string, primary_key: true, null: false
       add :user_id, references(:users, type: :string, on_delete: :delete_all), null: false
       add :identifier, :string
 
@@ -553,7 +553,7 @@ defmodule Arca.Repo.Migrations.Baseline do
     # request bytes, and their digest. Staged keys and a pending kit seed
     # are sealed; a restore names the installation token digest it claimed.
     create table(:identity_attempts, primary_key: false) do
-      add :id, :string, primary_key: true
+      add :id, :string, primary_key: true, null: false
       add :kind, :string, null: false, check: if(sqlite?, do: Enum.at(attempt_checks, 0))
       add :request_id, :string, null: false
       add :user_id, :string
@@ -613,7 +613,7 @@ defmodule Arca.Repo.Migrations.Baseline do
     # the same outcome. A refused request has no position. `bytes` is what
     # the row counts against the directory's log-byte quota.
     create table(:identity_log_entries, primary_key: false) do
-      add :id, :string, primary_key: true
+      add :id, :string, primary_key: true, null: false
       add :identifier, :string, null: false
       add :seq, :integer
       add :kind, :string, null: false, check: if(sqlite?, do: Enum.at(log_checks, 0))
@@ -651,7 +651,7 @@ defmodule Arca.Repo.Migrations.Baseline do
     # head, its `key_epoch`, its `recovery_epoch` and the verified state,
     # with when it was verified on the database's clock.
     create table(:directory_heads, primary_key: false) do
-      add :identifier, :string, primary_key: true
+      add :identifier, :string, primary_key: true, null: false
       add :genesis, :binary, null: false
       add :directory_url, :text, null: false
       add :head_hash, :string, null: false
@@ -679,7 +679,7 @@ defmodule Arca.Repo.Migrations.Baseline do
     # and challenge. A terminal action keeps its digests and outcome until
     # `retain_until`, its payload cleared.
     create table(:carry_actions, primary_key: false) do
-      add :id, :string, primary_key: true
+      add :id, :string, primary_key: true, null: false
       add :kind, :string, null: false, check: if(sqlite?, do: Enum.at(carry_checks, 0))
       add :action_id, :string, null: false
       add :user_id, :string, null: false
@@ -731,7 +731,7 @@ defmodule Arca.Repo.Migrations.Baseline do
     # it. A declared restore suspends an active credential, which then
     # asserts nothing until the person re-enables it.
     create table(:passkeys, primary_key: false) do
-      add :id, :string, primary_key: true
+      add :id, :string, primary_key: true, null: false
       add :user_id, references(:users, type: :string, on_delete: :delete_all), null: false
       add :credential_id, :text, null: false
       add :rp_id, :string, null: false
@@ -771,7 +771,10 @@ defmodule Arca.Repo.Migrations.Baseline do
     # person's own system layer. The person owns it: it goes with their
     # `users` row and never with an athanor.
     create table(:person_seals, primary_key: false) do
-      add :user_id, references(:users, type: :string, on_delete: :delete_all), primary_key: true
+      add :user_id, references(:users, type: :string, on_delete: :delete_all),
+        primary_key: true,
+        null: false
+
       add :text, :text, null: false
       add :glyph, :string
       add :set_at, :utc_datetime_usec, null: false
@@ -789,9 +792,11 @@ defmodule Arca.Repo.Migrations.Baseline do
     # person recovers on their own. The person owns it: it goes with their
     # `users` row and never with an athanor.
     create table(:restore_people, primary_key: false) do
-      add :restore_id, :string, primary_key: true
+      add :restore_id, :string, primary_key: true, null: false
 
-      add :user_id, references(:users, type: :string, on_delete: :delete_all), primary_key: true
+      add :user_id, references(:users, type: :string, on_delete: :delete_all),
+        primary_key: true,
+        null: false
 
       add :open, :boolean, null: false, default: true, check: if(sqlite?, do: restore_open)
       add :closed_at, :utc_datetime_usec
@@ -807,7 +812,7 @@ defmodule Arca.Repo.Migrations.Baseline do
     # and ended with the attempt it bound. At most one is pending, and a
     # token digest claims once, ever.
     create table(:installation_claims, primary_key: false) do
-      add :id, :string, primary_key: true
+      add :id, :string, primary_key: true, null: false
       add :token_digest, :string, null: false
       add :request_id, :string, null: false
       add :identifier, :string, null: false
@@ -832,7 +837,7 @@ defmodule Arca.Repo.Migrations.Baseline do
     # member. The key is the hash of what the caller named (an address, an
     # identifier), never the value itself.
     create table(:request_rate_windows, primary_key: false) do
-      add :id, :string, primary_key: true
+      add :id, :string, primary_key: true, null: false
       add :bucket, :string, null: false
       add :key_hash, :string, null: false
       add :window_start, :utc_datetime_usec, null: false
@@ -864,7 +869,7 @@ defmodule Arca.Repo.Migrations.Baseline do
     # was issued under. Expiry is read on the database's clock; `revoked`
     # is terminal.
     create table(:device_certificates, primary_key: false) do
-      add :id, :string, primary_key: true
+      add :id, :string, primary_key: true, null: false
       add :athanor_id, :string, null: false
       add :paired_client_id, :string, null: false
       add :user_id, :string, null: false
@@ -910,7 +915,7 @@ defmodule Arca.Repo.Migrations.Baseline do
     # device key extends it only under the same `key_epoch`. The athanor is
     # the other home's, so it is no tenant column here.
     create table(:device_certifications, primary_key: false) do
-      add :id, :string, primary_key: true
+      add :id, :string, primary_key: true, null: false
       add :user_id, references(:users, type: :string, on_delete: :delete_all), null: false
       add :identifier, :string, null: false
       add :key_epoch, :string, null: false
@@ -957,7 +962,7 @@ defmodule Arca.Repo.Migrations.Baseline do
     # by which client or passkey, and a state each transition moves once.
     # A remote person's record names the `key_epoch` it depends on.
     create table(:pending_confirmations, primary_key: false) do
-      add :ref, :string, primary_key: true
+      add :ref, :string, primary_key: true, null: false
       add :athanor_id, :string, null: false
       add :user_id, :string, null: false
       add :operation, :string, null: false
@@ -1024,7 +1029,7 @@ defmodule Arca.Repo.Migrations.Baseline do
     # whose confirmation opened it, which must still stand at completion;
     # an invitation opened before the person held either names none.
     create table(:pairing_invitations, primary_key: false) do
-      add :id, :string, primary_key: true
+      add :id, :string, primary_key: true, null: false
       add :athanor_id, :string, null: false
       add :secret_hash, :string, null: false
       add :user_id, :string, null: false
@@ -1077,7 +1082,7 @@ defmodule Arca.Repo.Migrations.Baseline do
   # using this database.
   defp server do
     create table(:server_meta, primary_key: false) do
-      add :key, :string, primary_key: true
+      add :key, :string, primary_key: true, null: false
       add :value, :string, null: false
       add :updated_at, :utc_datetime_usec, null: false
     end
@@ -1101,7 +1106,7 @@ defmodule Arca.Repo.Migrations.Baseline do
     # returning node can never reissue a generation a worker already
     # retired.
     create table(:cell_leases, primary_key: false) do
-      add :node, :string, primary_key: true
+      add :node, :string, primary_key: true, null: false
       # The boot holding the slot (`Prima.Boot.id/0`).
       add :owner, :string, null: false
       # What this member stamps on what it issues outward — worker
@@ -1134,7 +1139,7 @@ defmodule Arca.Repo.Migrations.Baseline do
     # reads and writes through the tenant-scoped facade under its own
     # actor, so a key naming an athanor grants no reach into it.
     create table(:job_claims, primary_key: false) do
-      add :id, :string, primary_key: true
+      add :id, :string, primary_key: true, null: false
       # The job (`Arca.Schemas.JobClaim.kinds/0`).
       add :kind, :string, null: false
       # What is claimed within the kind: a worker service id, an athanor's
@@ -1162,7 +1167,7 @@ defmodule Arca.Repo.Migrations.Baseline do
     # request; the admission decision weights the prior window by how much
     # of it is still in view.
     create table(:rate_windows, primary_key: false) do
-      add :id, :string, primary_key: true
+      add :id, :string, primary_key: true, null: false
       add :athanor_id, :string, null: false
       # The bucket within the athanor: a component reference, or a platform
       # bucket's name.
@@ -1190,7 +1195,7 @@ defmodule Arca.Repo.Migrations.Baseline do
 
   defp components do
     create table(:components, primary_key: false) do
-      add :id, :string, primary_key: true
+      add :id, :string, primary_key: true, null: false
       add :name, :string, null: false
       add :version, :string, null: false
       add :component_type, :string, null: false
@@ -1226,7 +1231,7 @@ defmodule Arca.Repo.Migrations.Baseline do
     # Build status as rows; the artifacts are blobs under the athanor's
     # components/ tree.
     create table(:build_records, primary_key: false) do
-      add :id, :string, primary_key: true
+      add :id, :string, primary_key: true, null: false
       add :athanor_id, :string, null: false
       add :user_id, :string, null: false
       add :reference, :string, null: false
@@ -1252,7 +1257,7 @@ defmodule Arca.Repo.Migrations.Baseline do
   # promotes what a losing writer staged.
   defp storage_units do
     create table(:storage_units, primary_key: false) do
-      add :id, :string, primary_key: true
+      add :id, :string, primary_key: true, null: false
       add :athanor_id, :string, null: false
       # The seeded root the unit lives under (`Arca.Storage.overlay_roots/0`).
       add :root, :string, null: false
@@ -1277,7 +1282,7 @@ defmodule Arca.Repo.Migrations.Baseline do
     # transaction and never updated or deleted. `prior_revision` is null
     # for a unit's first commit.
     create table(:storage_commits, primary_key: false) do
-      add :id, :string, primary_key: true
+      add :id, :string, primary_key: true, null: false
       add :athanor_id, :string, null: false
 
       add :storage_unit_id,
@@ -1327,7 +1332,7 @@ defmodule Arca.Repo.Migrations.Baseline do
     }
 
     create table(:storage_projection_roots, primary_key: false) do
-      add :id, :string, primary_key: true
+      add :id, :string, primary_key: true, null: false
       add :athanor_id, :string, null: false
       # The seeded root (`Arca.Storage.overlay_roots/0`).
       add :root, :string, null: false
@@ -1354,7 +1359,7 @@ defmodule Arca.Repo.Migrations.Baseline do
     create unique_index(:storage_projection_roots, [:athanor_id, :root])
 
     create table(:storage_projection_changes, primary_key: false) do
-      add :id, :string, primary_key: true
+      add :id, :string, primary_key: true, null: false
       add :athanor_id, :string, null: false
       add :root, :string, null: false
       # The unit's key inside its root, as `storage_units` spells it.
@@ -1392,7 +1397,7 @@ defmodule Arca.Repo.Migrations.Baseline do
 
     create table(:storage_staging, primary_key: false) do
       # A ULID minted per staging attempt; the last segment of `key`.
-      add :id, :string, primary_key: true
+      add :id, :string, primary_key: true, null: false
       add :athanor_id, :string, null: false
       # The writer's purpose, opaque to the store.
       add :attempt, :string, null: false
@@ -1453,7 +1458,7 @@ defmodule Arca.Repo.Migrations.Baseline do
     # soul or role, carrying the digest of the file's bytes (its revision)
     # and of its security-relevant subset (its capability).
     create table(:agents, primary_key: false) do
-      add :id, :string, primary_key: true
+      add :id, :string, primary_key: true, null: false
       add :athanor_id, :string, null: false
       add :name, :string, null: false
       # soul | role
@@ -1471,7 +1476,7 @@ defmodule Arca.Repo.Migrations.Baseline do
     # bytes: content-addressed and immutable, so a turn that pinned a
     # revision can retrieve it after the tree moved on.
     create table(:agent_revisions, primary_key: false) do
-      add :id, :string, primary_key: true
+      add :id, :string, primary_key: true, null: false
       add :athanor_id, :string, null: false
       add :digest, :string, null: false
       add :bytes, :binary, null: false
@@ -1495,7 +1500,7 @@ defmodule Arca.Repo.Migrations.Baseline do
       known("executions_status_known", "status", ~w(running paused completed failed cancelled))
 
     create table(:executions, primary_key: false) do
-      add :id, :string, primary_key: true
+      add :id, :string, primary_key: true, null: false
       add :reference, :string, null: false
       add :input_hash, :string
       add :user_id, :string, null: false
@@ -1592,7 +1597,7 @@ defmodule Arca.Repo.Migrations.Baseline do
       )
 
     create table(:execution_attempts, primary_key: false) do
-      add :attempt, :string, primary_key: true
+      add :attempt, :string, primary_key: true, null: false
       add :athanor_id, :string, null: false
 
       add :athanor_generation, :bigint,
@@ -1638,7 +1643,7 @@ defmodule Arca.Repo.Migrations.Baseline do
     # recorded while its attempt held its row and before the store was
     # touched, settled once the store answered or the attempt lost its row.
     create table(:storage_write_intents, primary_key: false) do
-      add :id, :string, primary_key: true
+      add :id, :string, primary_key: true, null: false
       add :athanor_id, :string, null: false
 
       add :execution_id,
@@ -1673,7 +1678,7 @@ defmodule Arca.Repo.Migrations.Baseline do
 
     # Lifecycle and step outcomes, numbered from `executions.event_seq`.
     create table(:execution_events, primary_key: false) do
-      add :id, :string, primary_key: true
+      add :id, :string, primary_key: true, null: false
       add :athanor_id, :string, null: false
 
       add :execution_id,
@@ -1701,7 +1706,7 @@ defmodule Arca.Repo.Migrations.Baseline do
     # decides how long. Bytes are removed before their rows permit the
     # execution's deletion.
     create table(:execution_payloads, primary_key: false) do
-      add :id, :string, primary_key: true
+      add :id, :string, primary_key: true, null: false
       add :athanor_id, :string, null: false
 
       add :execution_id,
@@ -1726,7 +1731,7 @@ defmodule Arca.Repo.Migrations.Baseline do
     create index(:execution_payloads, [:athanor_id, :retention_class, :inserted_at])
 
     create table(:budget_reservations, primary_key: false) do
-      add :id, :string, primary_key: true
+      add :id, :string, primary_key: true, null: false
       add :athanor_id, :string, null: false
 
       add :root_execution_id,
@@ -1747,7 +1752,7 @@ defmodule Arca.Repo.Migrations.Baseline do
     create index(:budget_reservations, [:athanor_id, :root_execution_id])
 
     create table(:budget_charges, primary_key: false) do
-      add :id, :string, primary_key: true
+      add :id, :string, primary_key: true, null: false
       add :athanor_id, :string, null: false
 
       add :reservation_id,
@@ -1779,7 +1784,7 @@ defmodule Arca.Repo.Migrations.Baseline do
     # admission decision (`decision_logs`), written in the same
     # transaction: `id` is the decision's call id.
     create table(:mcp_logs, primary_key: false) do
-      add :id, :string, primary_key: true
+      add :id, :string, primary_key: true, null: false
       add :user_id, :string
       add :timestamp, :utc_datetime_usec, null: false
       add :tool, :string
@@ -1807,7 +1812,7 @@ defmodule Arca.Repo.Migrations.Baseline do
     create index(:mcp_logs, [:athanor_id, :timestamp])
 
     create table(:policy_logs, primary_key: false) do
-      add :id, :string, primary_key: true
+      add :id, :string, primary_key: true, null: false
       add :request_id, :string
       add :execution_id, :string
       add :user_id, :string, null: false
@@ -1843,7 +1848,7 @@ defmodule Arca.Repo.Migrations.Baseline do
     # its own retention, and no tenant reads it. The index names are spelled
     # so both adapters carry the same ones.
     create table(:decision_logs, primary_key: false) do
-      add :call_id, :string, primary_key: true
+      add :call_id, :string, primary_key: true, null: false
       add :parent_call_id, :string
       add :request_id, :string
       add :user_id, :string
@@ -1951,7 +1956,7 @@ defmodule Arca.Repo.Migrations.Baseline do
     # every entry; `attach_only` holds unless the entry was created to be
     # disclosed.
     create table(:vault_entries, primary_key: false) do
-      add :id, :string, primary_key: true
+      add :id, :string, primary_key: true, null: false
       add :athanor_id, :string, null: false
       add :name, :string, null: false
       add :provider_hint, :string, null: false, default: ""
@@ -1987,7 +1992,7 @@ defmodule Arca.Repo.Migrations.Baseline do
     # one and no athanor's erasure touches one; a deleted one is a
     # tombstone, so the consents that bound it keep their rows.
     create table(:instance_entries, primary_key: false) do
-      add :id, :string, primary_key: true
+      add :id, :string, primary_key: true, null: false
       add :name, :string, null: false
       add :provider_hint, :string, null: false, default: ""
       add :kind, :string, null: false
@@ -2071,7 +2076,7 @@ defmodule Arca.Repo.Migrations.Baseline do
     # athanor's) or an instance entry. Written by one upsert, so a provider
     # never has two.
     create table(:vault_defaults, primary_key: false) do
-      add :id, :string, primary_key: true
+      add :id, :string, primary_key: true, null: false
       add :athanor_id, :string, null: false
       add :provider_hint, :string, null: false
 
@@ -2091,7 +2096,7 @@ defmodule Arca.Repo.Migrations.Baseline do
     create index(:vault_defaults, [:instance_entry_id])
 
     create table(:profiles, primary_key: false) do
-      add :id, :string, primary_key: true
+      add :id, :string, primary_key: true, null: false
       add :athanor_id, :string, null: false
       add :source_ref, :string, null: false
       add :kind, :string, null: false, default: "owner"
@@ -2114,7 +2119,7 @@ defmodule Arca.Repo.Migrations.Baseline do
 
     # Insert-only: a revision that exists but is not the head is history.
     create table(:consents, primary_key: false) do
-      add :id, :string, primary_key: true
+      add :id, :string, primary_key: true, null: false
       add :athanor_id, :string, null: false
 
       add :profile_id,
@@ -2180,7 +2185,7 @@ defmodule Arca.Repo.Migrations.Baseline do
     # Single-use, delete-on-read. No foreign keys by design: a proof outlives
     # the plan it came from and must not be cascaded away.
     create table(:consent_proofs, primary_key: false) do
-      add :token_hash, :string, primary_key: true
+      add :token_hash, :string, primary_key: true, null: false
       add :kind, :string, null: false
       add :digest, :string, null: false
       add :bindings, :text, null: false, default: "{}"
@@ -2193,7 +2198,7 @@ defmodule Arca.Repo.Migrations.Baseline do
     create index(:consent_proofs, [:expires_at])
 
     create table(:oauth_provider_credentials, primary_key: false) do
-      add :id, :string, primary_key: true
+      add :id, :string, primary_key: true, null: false
       add :athanor_id, :string, null: false
       add :provider, :string, null: false
       add :payload_ciphertext, :binary, null: false
@@ -2212,7 +2217,7 @@ defmodule Arca.Repo.Migrations.Baseline do
     # key would permit duplicates; effect is not in either key, so flipping
     # allow/deny updates one row.
     create table(:tool_grants, primary_key: false) do
-      add :id, :string, primary_key: true
+      add :id, :string, primary_key: true, null: false
       add :athanor_id, :string, null: false
       add :scope, :string, null: false
       add :effect, :string, null: false
@@ -2291,7 +2296,7 @@ defmodule Arca.Repo.Migrations.Baseline do
     }
 
     create table(:file_offers, primary_key: false) do
-      add :id, :string, primary_key: true
+      add :id, :string, primary_key: true, null: false
       add :athanor_id, :string, null: false
       add :offer_id, :string, null: false
       add :sender_user_id, :string, null: false
@@ -2318,7 +2323,7 @@ defmodule Arca.Repo.Migrations.Baseline do
     create index(:file_offers, [:athanor_id, :status, :expires_at])
 
     create table(:file_receipts, primary_key: false) do
-      add :id, :string, primary_key: true
+      add :id, :string, primary_key: true, null: false
       add :athanor_id, :string, null: false
       add :offer_id, :string, null: false
       add :sender_user_id, :string, null: false
@@ -2368,7 +2373,7 @@ defmodule Arca.Repo.Migrations.Baseline do
     sqlite? = repo().__adapter__() == Ecto.Adapters.SQLite3
 
     create table(:mcp_servers, primary_key: false) do
-      add :id, :string, primary_key: true
+      add :id, :string, primary_key: true, null: false
       add :name, :string, null: false
       add :transport, :string, null: false, check: if(sqlite?, do: transport_check)
       add :url, :string
@@ -2393,7 +2398,7 @@ defmodule Arca.Repo.Migrations.Baseline do
     create unique_index(:mcp_servers, [:athanor_id, :name])
 
     create table(:webhooks, primary_key: false) do
-      add :id, :string, primary_key: true
+      add :id, :string, primary_key: true, null: false
       add :name, :string, null: false
       add :slug, :string, null: false
       add :target_ref, :string, null: false
@@ -2425,7 +2430,7 @@ defmodule Arca.Repo.Migrations.Baseline do
     # A claimed or succeeded delivery holds its idempotency claim; a failed
     # one can be reclaimed by a retry.
     create table(:webhook_deliveries, primary_key: false) do
-      add :id, :string, primary_key: true
+      add :id, :string, primary_key: true, null: false
 
       add :webhook_id,
           references(:webhooks, type: :string, on_delete: :delete_all),
@@ -2502,7 +2507,7 @@ defmodule Arca.Repo.Migrations.Baseline do
     # that claimed `feed_result_seq`. An earlier-claimed result never
     # replaces a later one (`Arca.CronSchedule.accept_feed_result/5`).
     create table(:cron_schedules, primary_key: false) do
-      add :id, :string, primary_key: true
+      add :id, :string, primary_key: true, null: false
       add :kind, :string, null: false, default: "schedule", check: if(sqlite?, do: kind_spec)
       # Attribution: who created the schedule. The athanor owns it.
       add :user_id, :string, null: false
@@ -2568,7 +2573,7 @@ defmodule Arca.Repo.Migrations.Baseline do
     # (the cursor moves in the same write), started by the execution's
     # admission, ended with the run.
     create table(:schedule_occurrences, primary_key: false) do
-      add :id, :string, primary_key: true
+      add :id, :string, primary_key: true, null: false
       add :athanor_id, :string, null: false
 
       add :schedule_id,
@@ -2615,10 +2620,10 @@ defmodule Arca.Repo.Migrations.Baseline do
     # another member or after the source changed reads the fact as it
     # stood. A fact is recorded once, whoever retries the source.
     create table(:outbox_records, primary_key: false) do
-      add :source_kind, :string, primary_key: true
-      add :source_id, :string, primary_key: true
-      add :source_revision, :string, primary_key: true
-      add :kind, :string, primary_key: true
+      add :source_kind, :string, primary_key: true, null: false
+      add :source_id, :string, primary_key: true, null: false
+      add :source_revision, :string, primary_key: true, null: false
+      add :kind, :string, primary_key: true, null: false
       add :athanor_id, :string, null: false
       add :snapshot, :text, null: false
       add :inserted_at, :utc_datetime_usec, null: false
@@ -2637,10 +2642,10 @@ defmodule Arca.Repo.Migrations.Baseline do
     # transaction that applied it: a consumer applies a fact once, and a
     # record is kept until its last consumer's receipt has aged out.
     create table(:consumer_receipts, primary_key: false) do
-      add :consumer, :string, primary_key: true
-      add :source_kind, :string, primary_key: true
-      add :source_id, :string, primary_key: true
-      add :source_revision, :string, primary_key: true
+      add :consumer, :string, primary_key: true, null: false
+      add :source_kind, :string, primary_key: true, null: false
+      add :source_id, :string, primary_key: true, null: false
+      add :source_revision, :string, primary_key: true, null: false
       add :athanor_id, :string, null: false
       add :outcome, :string, null: false, check: if(sqlite?, do: receipt_outcome)
       add :inserted_at, :utc_datetime_usec, null: false
@@ -2658,7 +2663,7 @@ defmodule Arca.Repo.Migrations.Baseline do
   # Rows are the shared, durable record — no browser session owns a turn.
   defp threads do
     create table(:threads, primary_key: false) do
-      add :id, :string, primary_key: true
+      add :id, :string, primary_key: true, null: false
       add :athanor_id, :string, null: false
       add :title, :string, null: false, default: "New thread"
       # Attribution: the person who opened it. The athanor owns it.
@@ -2688,7 +2693,7 @@ defmodule Arca.Repo.Migrations.Baseline do
     create unique_index(:threads, [:active_turn_id], where: "active_turn_id IS NOT NULL")
 
     create table(:messages, primary_key: false) do
-      add :id, :string, primary_key: true
+      add :id, :string, primary_key: true, null: false
 
       add :thread_id,
           references(:threads, type: :string, on_delete: :delete_all),
@@ -2731,7 +2736,7 @@ defmodule Arca.Repo.Migrations.Baseline do
     # Follows for each member's sidebar: display only; membership still
     # decides access.
     create table(:thread_subscriptions, primary_key: false) do
-      add :id, :string, primary_key: true
+      add :id, :string, primary_key: true, null: false
       add :athanor_id, :string, null: false
       add :thread_id, :string, null: false
       add :user_id, :string, null: false
@@ -2764,7 +2769,7 @@ defmodule Arca.Repo.Migrations.Baseline do
       )
 
     create table(:turns, primary_key: false) do
-      add :id, :string, primary_key: true
+      add :id, :string, primary_key: true, null: false
       add :athanor_id, :string, null: false
 
       add :thread_id,
@@ -2831,7 +2836,7 @@ defmodule Arca.Repo.Migrations.Baseline do
            )
 
     create table(:turn_steps, primary_key: false) do
-      add :id, :string, primary_key: true
+      add :id, :string, primary_key: true, null: false
       add :athanor_id, :string, null: false
 
       add :turn_id,
@@ -2879,7 +2884,7 @@ defmodule Arca.Repo.Migrations.Baseline do
     create index(:turn_steps, [:athanor_id, :dispatch_state])
 
     create table(:approvals, primary_key: false) do
-      add :id, :string, primary_key: true
+      add :id, :string, primary_key: true, null: false
       add :athanor_id, :string, null: false
 
       add :turn_id,
@@ -2925,7 +2930,7 @@ defmodule Arca.Repo.Migrations.Baseline do
   # row is its default.
   defp platform_settings do
     create table(:platform_settings, primary_key: false) do
-      add :key, :string, primary_key: true
+      add :key, :string, primary_key: true, null: false
       add :value, :text, null: false
       add :revision, :bigint, null: false
       # Who set it, as the host names them; nil on the reserved row.
@@ -2936,8 +2941,8 @@ defmodule Arca.Repo.Migrations.Baseline do
     # Each member's environment pins, under its slot's generation, retired
     # by whoever next takes or expires the slot.
     create table(:settings_pins, primary_key: false) do
-      add :key, :string, primary_key: true
-      add :member, :string, primary_key: true
+      add :key, :string, primary_key: true, null: false
+      add :member, :string, primary_key: true, null: false
       add :generation, :bigint, null: false
       add :value, :text, null: false
     end
