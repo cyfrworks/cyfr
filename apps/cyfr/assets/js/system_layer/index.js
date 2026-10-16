@@ -723,10 +723,12 @@ export default {
       const paired = await this.pushAsync("pair_proof", {...base, proof})
       if (!paired || paired.error) return this.endPending((paired && paired.error) || "The pairing did not finish.")
 
-      // The device this browser held, if any, goes only now, once the new
-      // one is issued.
-      await this.glass.unpair()
+      // The new device's record overwrites the one this browser held, if
+      // any, in the store's one write: a write that fails leaves the old
+      // device as it was. Only once it committed is the old connection let
+      // go, which touches nothing stored.
       await this.store.save({privateKey: pending.privateKey, publicKey: pending.publicKey, clientId: paired.client_id, certificate: paired.certificate})
+      this.glass.forget()
       await this.store.clearPending()
       this.certifyAsk = null
     } catch (error) {
@@ -804,10 +806,12 @@ export default {
       const paired = await this.pushAsync("pair_proof", {invitation_secret: code, device_key: deviceKey, key_digest: digest, proof})
       if (!paired || paired.error) return this.pairRefused((paired && paired.error) || "The pairing did not finish.")
 
-      // The device this browser held, if any, goes only now, once the new
-      // one is issued.
-      await this.glass.unpair()
+      // The new device's record overwrites the one this browser held, if
+      // any, in the store's one write: a write that fails leaves the old
+      // device as it was. Only once it committed is the old connection let
+      // go, which touches nothing stored.
       await this.store.save({privateKey, publicKey: deviceKey, clientId: paired.client_id, certificate: paired.certificate})
+      this.glass.forget()
       await this.store.clearPrepared()
       return "paired"
     } catch (error) {

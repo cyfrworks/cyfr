@@ -983,6 +983,17 @@ export class Glass {
    * revoked.
    */
   async unpair() {
+    this.forget()
+    await this.store.clear()
+    this.set("unpaired")
+  }
+
+  /**
+   * Let go of the connection and state of the device this glass held,
+   * touching nothing in the store: for a replacement whose record has
+   * already overwritten the old one there, which a later `start` connects.
+   */
+  forget() {
     this.closeSocket()
     this.offer(null)
     this.candidate = null
@@ -996,8 +1007,6 @@ export class Glass {
     this.retryTimer = null
     this.device = null
     this.pending = []
-    await this.store.clear()
-    this.set("unpaired")
   }
 
   async revoked() {

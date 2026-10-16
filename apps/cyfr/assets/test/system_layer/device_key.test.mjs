@@ -1042,6 +1042,38 @@ describe("a glass that holds a device, opened on a pairing link", () => {
     return {privateKey: keys.privateKey, publicKey: deviceKey, keyDigest: await keyDigest(deviceKey, subtle)}
   }
 
+  for (const pairing of ["local", "remote"]) {
+    test(`a ${pairing} replacement whose new device cannot be saved keeps the old device as it was`, async () => {
+      const prepared = await preparedKey()
+      const page = await mountGlassPage({stored: storedDevice, replies, prepared})
+      let writes = 0
+      page.store.save = async () => {
+        writes++
+        throw new DOMException("Injected IndexedDB write failure", "QuotaExceededError")
+      }
+      try {
+        if (pairing === "local") {
+          await page.hook.glassClick({target: page.el.find("glass-replace"), preventDefault() {}})
+        } else {
+          await page.hook.pairRemote(
+            {...prepared, code: "UjcQhGOiIAu_9xjWI7A-Fw", certify: {client_id: certs.challenges.pair.client_id}},
+            certificate
+          )
+        }
+
+        // The home issued the replacement and saving it was tried once.
+        assert.deepEqual(page.pushed.map(({event}) => event), ["pair_start", "pair_proof"])
+        assert.equal(writes, 1)
+        // The device the browser held is still stored, whole.
+        assert.deepEqual(await page.store.load(), storedDevice)
+        assert.ok(page.el.find("glass-error"))
+      } finally {
+        page.hook.destroyGlass()
+        page.restore()
+      }
+    })
+  }
+
   test("nothing is sent and nothing replaced until the person chooses", async () => {
     const page = await mountGlassPage({stored: storedDevice, replies})
     try {
