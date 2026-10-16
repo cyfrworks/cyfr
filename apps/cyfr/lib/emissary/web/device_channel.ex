@@ -74,6 +74,16 @@ defmodule Emissary.Web.DeviceChannel do
   An admitted open whose forwarder cannot start is answered with an
   `unavailable` error and its grant revoked; the channel stays open.
 
+  ## The seal
+
+  The intent `seal.read`, with no `args`, is checked like every intent and
+  answered by the channel itself, never through the gate: the person's
+  seal (`Sanctum.Seal.for_system_layer/1`), read under the client's own
+  context, which the glass draws first in each confirmation prompt it
+  shows. Its `result` is `{seal}`, the seal's `text` and `glyph` alone, or
+  `null` while none is chosen or the client cannot read it. No operation
+  answers it, so no operation's result, log or decision carries the seal.
+
   ## Renewal
 
   A glass renews with `renew`, naming its client and the certificate that
@@ -209,6 +219,9 @@ defmodule Emissary.Web.DeviceChannel do
   # holds at most.
   @open_stream "streams.open"
   @max_grants 16
+
+  # The intent the channel answers with the person's seal.
+  @read_seal "seal.read"
 
   # The mailbox depth past which the channel has fallen too far behind its
   # streams to deliver them faithfully.
@@ -579,6 +592,7 @@ defmodule Emissary.Web.DeviceChannel do
   end
 
   defp dispatch(%{operation: @open_stream} = intent, state), do: open_stream(intent, state)
+  defp dispatch(%{operation: @read_seal} = intent, state), do: read_seal(intent, state)
 
   defp dispatch(%{id: id, operation: operation, args: args} = intent, state) do
     {tool, action} = names(operation)
@@ -601,6 +615,37 @@ defmodule Emissary.Web.DeviceChannel do
       end
 
     {:reply, :ok, {:text, wire({:answer, answer})}, state}
+  end
+
+  # `seal.read`: the seal the glass draws first in its prompts, read under
+  # the client's own context and answered here, so nothing but this answer
+  # carries it. A malformed read is refused before anything is read.
+  defp read_seal(%{id: id, args: args}, state) when map_size(args) == 0 do
+    ctx = %{
+      state.client
+      | request_id: state.ctx.request_id,
+        call_id: state.call_id,
+        confirmation_id: nil,
+        origin: :interactive
+    }
+
+    seal =
+      case Sanctum.Seal.for_system_layer(ctx) do
+        {:ok, %Sanctum.Seal{text: text, glyph: glyph}} -> %{"text" => text, "glyph" => glyph}
+        :none -> nil
+      end
+
+    {:reply, :ok, {:text, wire({:answer, %{id: id, result: %{"seal" => seal}}})}, state}
+  end
+
+  defp read_seal(%{id: id}, state) do
+    refusal = %{
+      Sanctum.Refusals.classify({:invalid_argument, "seal.read takes no arguments"})
+      | stage: :admission
+    }
+
+    record(state, refusal, "seal", "read")
+    {:reply, :ok, answer_refused(id, refusal), state}
   end
 
   # ---------------------------------------------------------------------------

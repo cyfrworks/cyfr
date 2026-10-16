@@ -458,14 +458,16 @@ defmodule Cyfr.Boundaries do
         Sanctum.Context Sanctum.Decisions Sanctum.DeviceCerts Sanctum.Directory Sanctum.Egress
         Sanctum.ExecutionStanding Sanctum.Gate
         Sanctum.Network Sanctum.Proxy Sanctum.Recovery Sanctum.Refusals Sanctum.Resources
-        Sanctum.RunningTasks Sanctum.Session Sanctum.TinctureAccess
+        Sanctum.RunningTasks Sanctum.Seal Sanctum.Session Sanctum.TinctureAccess
         Sanctum.TinctureAuth Sanctum.ToolServerDigest Sanctum.Unauthorized
         Sanctum.UnauthorizedError Sanctum.Vault Sanctum.Vault.OAuthGrant Sanctum.VaultReader
         Sanctum.Visibility Sanctum.Webhook
       ),
       reason:
         "the auth fabric's own front door, where a wide roster is the front door doing " <>
-          "its job. The MCP transport carries tenancy, reads a server's vault edge, and " <>
+          "its job. `Sanctum.Seal` is the device channel's read of the person's seal for " <>
+          "the prompts a paired glass draws, answered by the channel and never by an " <>
+          "operation. The MCP transport carries tenancy, reads a server's vault edge, and " <>
           "uses Sanctum.Network/Egress for external servers and the backends service. " <>
           "`Sanctum.Vault` is the check of a server definition against the entries it " <>
           "names, metadata only, which the external provider makes before storing one " <>
