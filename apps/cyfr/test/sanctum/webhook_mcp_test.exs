@@ -305,6 +305,42 @@ defmodule Sanctum.WebhookMCPTest do
     end
   end
 
+  describe "webhook/reenable" do
+    test "answers the webhook a restore suspended, once confirmed, and refuses in sentences",
+         %{ctx: ctx} do
+      {:ok, _} =
+        handle(ctx, %{
+          "action" => "create",
+          "name" => "held",
+          "replay_protection" => "none",
+          "target_ref" => "f:local.handler",
+          "profile_id" => "prof-handler"
+        })
+
+      {:ok, %{id: id}} = handle(ctx, %{"action" => "get", "name" => "held"})
+
+      Ecto.Query.from(w in Arca.Schemas.Webhook, where: w.id == ^id)
+      |> Arca.Repo.update_all(set: [suspended: true])
+
+      {:ok, %{webhooks: [listed]}} = handle(ctx, %{"action" => "list"})
+      assert %{id: ^id, suspended: true} = listed
+
+      assert {:ok, %{reenabled: %{id: ^id, name: "held", suspended: false}}} =
+               handle(ctx, %{"action" => "reenable", "webhook_id" => id})
+
+      assert {:error, %Prima.Refusal{class: :conflict, reason: :not_suspended, message: message}} =
+               handle(ctx, %{"action" => "reenable", "webhook_id" => id})
+
+      assert message =~ "not suspended"
+
+      assert {:error, %Prima.Refusal{class: :not_found}} =
+               handle(ctx, %{"action" => "reenable", "webhook_id" => "whk_unknown"})
+
+      assert {:error, %Prima.Refusal{class: :invalid_argument}} =
+               handle(ctx, %{"action" => "reenable"})
+    end
+  end
+
   describe "webhook unknown action" do
     test "returns informative error", %{ctx: ctx} do
       {:error, msg} = handle(ctx, %{"action" => "nonsense"})

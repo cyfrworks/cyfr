@@ -527,11 +527,104 @@ defmodule Cyfr.Application do
   # start, so nothing after it ever starts. Only the sandboxed test boot
   # omits it, where no process may write before a test checks out the
   # sandbox — see `bootstrap_skipped?/2`.
+  #
+  # A declared restore's transition runs right before it, under this
+  # member's slot (`declared_restore/0`), so the reconcile and every child
+  # after it read the store the transition left. The sandboxed test boot
+  # omits both.
   defp gate do
     if bootstrap_skipped?(@bootstrap_skip_permitted, boot_work_enabled?()),
       do: [],
-      else: [Supervisor.child_spec(Cyfr.Bootstrap, restart: :transient)]
+      else: [
+        %{
+          id: :declared_restore,
+          start: {__MODULE__, :declared_restore, []},
+          restart: :transient,
+          type: :worker
+        },
+        Supervisor.child_spec(Cyfr.Bootstrap, restart: :transient)
+      ]
   end
+
+  @doc """
+  The declared restore's step before the gate (`ARCHITECTURE.md` §6.9):
+  when `cyfr restore` left the marker `restore_pending`, its transition
+  (`Arca.SecurityTransitions.restore/1`) runs in one transaction under
+  this member's slot, and only its commit lets the gate start. Answers
+  `:ignore` once it committed or when there was no marker, so the
+  supervisor starts the gate next and keeps nothing running for it; a
+  restart of the cell's claimant or of anything before it runs it again,
+  finding no marker. A member that should hold a slot and does not, a
+  lost slot, a postcondition that did not hold, a store that cannot
+  answer or a raise answer `{:error, {:restore_refused, class}}`, so the
+  supervisor's start fails and the application does not boot: the marker
+  stays for the next boot, and nothing admits work over a half-restored
+  store.
+  """
+  @spec declared_restore() :: :ignore | {:error, {:restore_refused, atom()}}
+  def declared_restore do
+    with {:ok, slot} <- restore_slot(),
+         {:ok, change} <- Arca.SecurityTransitions.restore(slot: slot) do
+      restored(change)
+    else
+      {:error, reason} -> restore_refused(reason)
+    end
+  rescue
+    e -> restore_refused({:exception, e})
+  catch
+    kind, _reason -> restore_refused({:exception, kind})
+  end
+
+  # The slot this member holds (`Arca.ControlPlane.member_slot/0`): a
+  # deployment where no member claims one has nothing to fence, and runs
+  # the transition under none; one that should hold a slot and does not
+  # runs nothing.
+  defp restore_slot do
+    case Arca.ControlPlane.member_slot() do
+      {:ok, slot} -> {:ok, slot}
+      {:error, :not_owner} -> {:error, :slot_not_held}
+    end
+  end
+
+  defp restored(:none), do: :ignore
+
+  defp restored(%{restore_id: restore_id} = change) do
+    Logger.warning(
+      "[Cyfr.Application] declared restore #{restore_id} applied: " <>
+        "#{length(change.user_ids)} people must recover; " <>
+        "#{length(change.revoked_session_hashes)} sessions retired, " <>
+        "#{length(change.suspended_api_key_ids)} keys, " <>
+        "#{length(change.suspended_webhook_ids)} webhooks, " <>
+        "#{length(change.suspended_paired_client_ids)} devices and " <>
+        "#{length(change.suspended_passkey_ids)} passkeys suspended, " <>
+        "#{length(change.failed_execution_ids)} runs and " <>
+        "#{length(change.uncertain_turn_ids)} turns ended uncertain"
+    )
+
+    :ignore
+  end
+
+  defp restore_refused({class, %{__exception__: true, __struct__: module}}) do
+    Logger.error(
+      "[Cyfr.Application] declared restore refused: #{class} (#{inspect(module)}); " <>
+        "this member admits no work"
+    )
+
+    {:error, {:restore_refused, class}}
+  end
+
+  defp restore_refused({:exception, kind}) when is_atom(kind),
+    do: restore_refused(:exception)
+
+  defp restore_refused(reason) when is_atom(reason) do
+    Logger.error(
+      "[Cyfr.Application] declared restore refused: #{reason}; this member admits no work"
+    )
+
+    {:error, {:restore_refused, reason}}
+  end
+
+  defp restore_refused(_reason), do: restore_refused(:exception)
 
   # After the gate: everything that admits work — fires a schedule,
   # recovers a turn, starts a backend, serves a host call, dispenses a

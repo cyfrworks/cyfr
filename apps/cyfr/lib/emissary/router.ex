@@ -358,7 +358,9 @@ defmodule Emissary.Router do
 
       # Restore (`Sanctum.Recovery`): an identity brought back onto this
       # empty node from its printed kit, under the installation capability
-      # (`CYFR_RESTORE_TOKEN`) in the authorization header. Its body is
+      # (`CYFR_RESTORE_TOKEN`) in the authorization header; and, on a home
+      # restored from a backup, a recovering person's kit proof and the
+      # re-enables it admits. Its body is
       # bounded to 16 KiB before it is decoded (`CyfrWeb.Plugs.RawBodyReader`).
       scope "/restore", Emissary.Web do
         pipe_through :restore
@@ -369,6 +371,17 @@ defmodule Emissary.Router do
           metadata: %{auth: :installation_capability}
 
         post "/reproof", RestoreController, :reproof, metadata: %{auth: :installation_capability}
+
+        # After a declared restore: a person with no door left proves their
+        # kit over a challenge this home holds, and re-enables their
+        # suspended methods and credentials under the credential it answers.
+        post "/kit/challenge", RestoreController, :kit_challenge,
+          metadata: %{auth: :restore_kit_proof}
+
+        post "/kit", RestoreController, :kit, metadata: %{auth: :restore_kit_proof}
+
+        post "/kit/reenable", RestoreController, :kit_reenable,
+          metadata: %{auth: :restore_kit_proof}
       end
     end
   end

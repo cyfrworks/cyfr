@@ -27,10 +27,27 @@ defmodule PrismWeb.RestoreLive do
   closed with no method installed is proven again from the kit
   (`POST /restore/challenge`, then `POST /restore/reproof`).
 
+  Its second section, the kit step (`data-restore-kit`, driven by the
+  same script's `KitStep`), serves a home restored from a backup, whose
+  restore suspended every method and session. The person types their
+  identifier and the kit's recovery secret into inputs with no `name`; the
+  browser asks `POST /restore/kit/challenge` for a challenge, signs a kit
+  proof over it with the seed, and trades the proof at `POST /restore/kit`
+  for a recovery credential held in the page's memory alone. Under that
+  credential, in the `authorization` header, it lists each class's
+  suspended items and re-enables the one the person picks
+  (`POST /restore/kit/reenable`); re-enabling a passkey or a device ends
+  the recovery and the person signs in with it. The seed is never sent,
+  and neither it nor the credential reaches this view.
+
   Its controls carry `data-test` names: `restore-form`, `restore-token`,
   `restore-identifier`, `restore-directory`, `restore-secret`,
   `restore-submit`, `restore-clear`, `restore-status` (with `data-state`),
-  `restore-reproof` and `restore-continue`.
+  `restore-reproof` and `restore-continue`; the kit step's are
+  `restore-kit-form`, `restore-kit-identifier`, `restore-kit-secret`,
+  `restore-kit-submit`, `restore-kit-clear`, `restore-kit-items`,
+  `restore-kit-reenable` (one per suspended item, drawn by the script)
+  and `restore-kit-status` (with `data-state`).
   """
 
   use PrismWeb, :live_view
@@ -123,6 +140,58 @@ defmodule PrismWeb.RestoreLive do
         >
           Continue to your home
         </a>
+
+        <section
+          id="restore-kit"
+          data-restore-kit
+          aria-labelledby="restore-kit-title"
+          class="space-y-3 border-t border-gray-700 pt-4"
+        >
+          <h2 id="restore-kit-title" class="text-lg font-semibold">Recover after a restore</h2>
+          <p class="text-sm text-gray-300">
+            When this home was restored from a backup, every passkey, device, API key and webhook it held was suspended and every session ended. Prove your kit here to re-enable what is yours. Your recovery secret signs in this browser and is never sent.
+          </p>
+          <form
+            id="restore-kit-form"
+            data-restore-kit-form
+            data-test="restore-kit-form"
+            autocomplete="off"
+            class="space-y-3"
+          >
+            <.field
+              id="restore-kit-identifier"
+              label="Identifier"
+              field="identifier"
+              test="restore-kit-identifier"
+            />
+            <.field
+              id="restore-kit-secret"
+              label="Recovery secret"
+              field="recovery_secret"
+              test="restore-kit-secret"
+            />
+            <div class="flex flex-wrap gap-2">
+              <button
+                type="submit"
+                data-test="restore-kit-submit"
+                class="rounded-md bg-blue-600 px-3 py-2 text-sm font-semibold text-white hover:bg-blue-500"
+              >
+                Recover
+              </button>
+              <button
+                type="button"
+                data-restore-kit-clear
+                data-test="restore-kit-clear"
+                class="rounded-md border border-gray-600 px-3 py-2 text-sm font-semibold hover:bg-gray-800"
+              >
+                Clear
+              </button>
+            </div>
+          </form>
+
+          <p class="text-sm" role="status" data-test="restore-kit-status" data-state="idle"></p>
+          <div data-restore-kit-items data-test="restore-kit-items" hidden class="space-y-3"></div>
+        </section>
 
         <noscript>
           <p class="text-sm">This page needs JavaScript to send the kit to this installation.</p>

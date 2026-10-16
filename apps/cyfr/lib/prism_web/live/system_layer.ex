@@ -4,11 +4,11 @@
 defmodule PrismWeb.SystemLayer do
   @moduledoc """
   The system layer: what Prism alone draws above every frame — grant,
-  unlock, sign-in, credential-entry, pairing and confirmation prompts, and
-  safe mode. It presents a prompt and never decides one: the operation a
-  confirmation dispatches is decided where the change is, in Sanctum,
-  which checks the caller's standing and any fresh confirmation the
-  change needs.
+  unlock, sign-in, credential-entry, pairing and confirmation prompts,
+  safe mode, and the restore checklist. It presents a prompt and never
+  decides one: the operation a confirmation dispatches is decided where
+  the change is, in Sanctum, which checks the caller's standing and any
+  fresh confirmation the change needs.
 
   Each view that asks for a grant or a sensitive change mounts it once,
   with the view's `context`, beside its `PrismWeb.SystemLayer.Hook`,
@@ -124,7 +124,31 @@ defmodule PrismWeb.SystemLayer do
       through `person.kit_ack`. The seed is the browser's, drawn there and
       submitted (`recovery_submit`) and submitted again once confirmed,
       never assigned; a kit's lines go to the browser in a push and are
-      erased there when the prompt ends.
+      erased there when the prompt ends;
+    * a re-enable from the restore checklist — `key.reenable`,
+      `webhook.reenable`, `pairing.reenable` or `passkey.reenable` of the
+      item the person chose (below).
+
+  ## After a declared restore
+
+  A layer that listens, on the page of a person who can confirm, reads
+  the person's restore checklist (`Sanctum.Recovery.checklist/1`) once
+  per page and draws it while it lists anything
+  (`PrismWeb.SystemLayer.RestoreChecklist`): the passkeys, paired
+  devices, API keys and webhooks the restore suspended, the profiles to
+  consent to again and the entries to rotate. A layer that does not
+  listen draws none, since it hears no record's confirmation. A
+  re-enable (`restore_reenable`) names one of the four operations and an
+  item the checklist lists for the page's athanor, and is dispatched as
+  the layer's own sensitive change: its `confirmation_required` opens
+  that record's confirmation prompt, marked as this client's, which
+  reports nothing to the page. Once the record reads confirmed the layer
+  makes the change again with the secret it holds, closes the prompt and
+  reads the checklist again. A refusal is shown as its sentence, in the
+  prompt or, for the first dispatch, in the checklist. While the
+  person's recovery is open the record offers a door's fresh sign-in or
+  an emailed code, never a passkey: which proofs it offers is the
+  record's, as Sanctum decides them.
 
   ## The seal
 
@@ -213,7 +237,7 @@ defmodule PrismWeb.SystemLayer do
   alias Phoenix.LiveView.JS
   alias Prism.SafeMode
   alias PrismWeb.Ops
-  alias PrismWeb.SystemLayer.{Listener, Pairing, Prompt, Recovery}
+  alias PrismWeb.SystemLayer.{Listener, Pairing, Prompt, Recovery, RestoreChecklist}
   alias Sanctum.Context
 
   @layer_id "system-layer"
@@ -748,7 +772,12 @@ defmodule PrismWeb.SystemLayer do
        athanor_name: nil,
        seal: :none,
        seal_offer: :unread,
-       seal_pair: nil
+       seal_pair: nil,
+       restore_checklist: :unread,
+       restore_places: %{},
+       restore_notice: nil,
+       restore_error: nil,
+       reenabling: %{}
      )}
   end
 
@@ -826,7 +855,7 @@ defmodule PrismWeb.SystemLayer do
     {:noreply, socket} =
       CyfrWeb.ContextGuard.guard(
         socket,
-        &{:noreply, &1 |> end_moved_grants() |> listen() |> offer_seal()}
+        &{:noreply, &1 |> end_moved_grants() |> listen() |> offer_seal() |> read_checklist()}
       )
 
     {:ok, socket}
@@ -1406,6 +1435,7 @@ defmodule PrismWeb.SystemLayer do
             {:noreply,
              socket
              |> drop_prompt_asks(id)
+             |> forget_reenable(id)
              |> advance()
              |> restore_after_grant(id, :dismissed)}
           else
@@ -1628,6 +1658,13 @@ defmodule PrismWeb.SystemLayer do
           {:noreply, socket}
       end
     end)
+  end
+
+  # A re-enable from the restore checklist: the operation is one of the
+  # four and the item one the checklist lists here (`RestoreChecklist`).
+  def handle_event("restore_reenable", %{"operation" => operation, "id" => id}, socket)
+      when is_binary(operation) and is_binary(id) do
+    CyfrWeb.ContextGuard.guard(socket, &{:noreply, restore_reenable(&1, operation, id)})
   end
 
   # An event names the prompt it was drawn for, so a late click or Escape
@@ -2205,6 +2242,10 @@ defmodule PrismWeb.SystemLayer do
             {:seal_change, fields} = repeat
             seal_submit(socket, prompt, fields)
 
+          %{id: ^prompt_id, kind: :confirmation} = prompt ->
+            {:restore_reenable, operation, id} = repeat
+            reenable_again(socket, prompt, operation, id)
+
           _gone ->
             socket
         end
@@ -2262,7 +2303,12 @@ defmodule PrismWeb.SystemLayer do
   end
 
   # A prompt the stream opened for another client's request reports
-  # nothing: its parent never asked for it.
+  # nothing: its parent never asked for it. Nor does the confirmation of a
+  # re-enable the checklist asked for, which is the layer's own.
+  defp reports?(%{assigns: %{reenabling: reenabling}}, %{id: id})
+       when is_map_key(reenabling, id),
+       do: false
+
   defp reports?(socket, %{kind: :confirmation} = prompt) do
     case panel_of(socket.assigns.panels, prompt) do
       {_ref, %{origin: :stream}} -> false
@@ -2502,6 +2548,182 @@ defmodule PrismWeb.SystemLayer do
   defp recovery_ack(socket, _prompt), do: socket
 
   # ---------------------------------------------------------------------------
+  # The restore checklist
+  # ---------------------------------------------------------------------------
+
+  # Read once per page by a layer that listens, for a person who can
+  # confirm, and again after each re-enable. A layer that does not listen
+  # hears no record's confirmation, so it could not repeat a re-enable,
+  # and the page's own layer draws the checklist once. A read the store
+  # does not answer leaves the checklist unread, for the next update.
+  defp read_checklist(%{assigns: %{listen: false}} = socket), do: socket
+
+  defp read_checklist(
+         %{assigns: %{restore_checklist: :unread, context: %Context{} = context}} = socket
+       ) do
+    if can_prove?(context), do: load_checklist(socket), else: socket
+  end
+
+  defp read_checklist(socket), do: socket
+
+  defp load_checklist(%{assigns: %{context: %Context{} = context}} = socket) do
+    case Sanctum.Recovery.checklist(context) do
+      {:ok, nil} ->
+        assign(socket, restore_checklist: nil, restore_places: %{})
+
+      {:ok, %{} = checklist} ->
+        assign(socket,
+          restore_checklist: checklist,
+          restore_places: restore_places(checklist, context)
+        )
+
+      {:error, _unread} ->
+        socket
+    end
+  end
+
+  defp load_checklist(socket), do: socket
+
+  # Each athanor the checklist's items sit in, and the page's own, by its
+  # route and the name the person knows it by: where an item is
+  # re-enabled, consented to again or rotated.
+  defp restore_places(checklist, %Context{} = context) do
+    ids = Enum.uniq([context.athanor_id | RestoreChecklist.athanor_ids(checklist)])
+
+    for id <- ids,
+        is_binary(id),
+        {:ok, athanor} <- [Sanctum.Tenancy.Athanors.get(id)],
+        into: %{} do
+      {id,
+       %{route: Sanctum.Tenancy.Athanors.route_slug(athanor), name: place_name(athanor, context)}}
+    end
+  end
+
+  defp place_name(%{kind: "person"}, _context), do: "your own athanor"
+  defp place_name(athanor, context), do: PrismWeb.Athanors.label(athanor, context)
+
+  # A re-enable asked for from the checklist, dispatched as the layer's
+  # own sensitive change. Its fresh confirmation opens the record's
+  # prompt, marked as this client's: the layer holds the secret and makes
+  # the change again once the record is confirmed (`reenable_again/4`).
+  defp restore_reenable(socket, operation, id) do
+    case RestoreChecklist.request(
+           socket.assigns.restore_checklist,
+           operation,
+           id,
+           context_athanor(socket)
+         ) do
+      {:ok, tool, args} ->
+        socket = assign(socket, restore_notice: nil, restore_error: nil)
+
+        case Ops.call_tool(socket, tool, args) do
+          {:error, {:confirmation_required, %{id: secret} = signal}} when is_binary(secret) ->
+            ask_reenable(socket, signal, {:restore_reenable, operation, id})
+
+          {:ok, _reenabled} ->
+            reenabled(socket, operation)
+
+          {:error, reason} ->
+            assign(socket, :restore_error, Ops.error_message(reason))
+        end
+
+      :error ->
+        socket
+    end
+  end
+
+  # The record's own prompt, with the home's preview when it reads, shown
+  # as this client's request; the layer keeps the secret, never drawn.
+  defp ask_reenable(socket, %{id: secret} = signal, repeat) do
+    ref = Prima.Confirmation.ref(secret)
+
+    entry =
+      case pending_entry(socket, ref) do
+        {:ok, entry} ->
+          entry
+
+        _unread ->
+          %{
+            ref: ref,
+            operation: Map.get(signal, :operation),
+            expires_at: Map.get(signal, :expires_at)
+          }
+      end
+
+    case Prompt.confirmation(entry, true) do
+      {:ok, prompt} ->
+        held = %{id: secret, ref: ref, prompt_id: prompt.id, repeat: repeat}
+
+        socket
+        |> assign(
+          held: Map.put(socket.assigns.held, ref, held),
+          reenabling: Map.put(socket.assigns.reenabling, prompt.id, repeat)
+        )
+        |> put_panel(ref, %{
+          prompt_id: prompt.id,
+          entry: entry,
+          own: true,
+          origin: :layer,
+          status: :waiting
+        })
+        |> arrive(prompt)
+
+      {:error, :invalid_prompt} ->
+        Ops.call_tool(socket, "confirmation/cancel", %{"ref" => ref})
+
+        assign(
+          socket,
+          :restore_error,
+          "The confirmation it needs could not be shown here, so it was withdrawn. " <>
+            "Nothing was changed."
+        )
+    end
+  end
+
+  # The confirmed record's change, made again once with its secret. A
+  # re-enable done closes its prompt and reads the checklist again; one
+  # refused shows the refusal in the prompt, which the person closes.
+  defp reenable_again(socket, prompt, operation, id) do
+    case RestoreChecklist.request(
+           socket.assigns.restore_checklist,
+           operation,
+           id,
+           context_athanor(socket)
+         ) do
+      {:ok, tool, args} ->
+        case layer_call(socket, prompt, {:restore_reenable, operation, id}, tool, args) do
+          {:asked, socket} ->
+            socket
+
+          {:done, {:ok, _reenabled}, socket} ->
+            socket |> forget_reenable(prompt.id) |> advance() |> reenabled(operation)
+
+          {:done, {:error, reason}, socket} ->
+            assign(socket, :error, Ops.error_message(reason))
+        end
+
+      :error ->
+        for {ref, %{prompt_id: prompt_id}} <- socket.assigns.held, prompt_id == prompt.id do
+          Ops.call_tool(socket, "confirmation/cancel", %{"ref" => ref})
+        end
+
+        socket
+        |> drop_prompt_asks(prompt.id)
+        |> assign(
+          :error,
+          "This page no longer lists it, so its approval was withdrawn. Nothing was changed."
+        )
+    end
+  end
+
+  defp reenabled(socket, operation),
+    do:
+      socket |> load_checklist() |> assign(:restore_notice, RestoreChecklist.reenabled(operation))
+
+  defp forget_reenable(socket, prompt_id),
+    do: assign(socket, :reenabling, Map.delete(socket.assigns.reenabling, prompt_id))
+
+  # ---------------------------------------------------------------------------
   # Who can confirm
   # ---------------------------------------------------------------------------
 
@@ -2541,7 +2763,8 @@ defmodule PrismWeb.SystemLayer do
         # one with none waits for another client of the person.
         proves: panel != nil and can_prove?(assigns[:context]),
         panel: panel,
-        safe_mode: match?(%{kind: :safe_mode}, assigns.current)
+        safe_mode: match?(%{kind: :safe_mode}, assigns.current),
+        focus: context_athanor(%{assigns: assigns})
       )
 
     ~H"""
@@ -2635,6 +2858,18 @@ defmodule PrismWeb.SystemLayer do
           </button>
         </div>
       </section>
+
+      <RestoreChecklist.checklist
+        :if={is_map(@restore_checklist)}
+        id={"#{@id}-restore"}
+        checklist={@restore_checklist}
+        places={@restore_places}
+        athanor_id={@focus}
+        notice={@restore_notice}
+        error={@restore_error}
+        myself={@myself}
+        button_class={button_class(false)}
+      />
     </div>
     """
   end

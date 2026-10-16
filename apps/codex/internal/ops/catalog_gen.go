@@ -161,6 +161,7 @@ const (
 	KeyCreate                       = "create"
 	KeyGet                          = "get"
 	KeyList                         = "list"
+	KeyReenable                     = "reenable"
 	KeyRevoke                       = "revoke"
 	KeyRotate                       = "rotate"
 	LayoutEdit                      = "edit"
@@ -197,10 +198,12 @@ const (
 	PairingBegin                    = "begin"
 	PairingComplete                 = "complete"
 	PairingList                     = "list"
+	PairingReenable                 = "reenable"
 	PairingRenew                    = "renew"
 	PairingRevoke                   = "revoke"
 	PasskeyList                     = "list"
 	PasskeyRecoverAdmin             = "recover_admin"
+	PasskeyReenable                 = "reenable"
 	PasskeyRegister                 = "register"
 	PasskeyRevoke                   = "revoke"
 	PersonAssert                    = "assert"
@@ -311,6 +314,7 @@ const (
 	WebhookCreate                   = "create"
 	WebhookGet                      = "get"
 	WebhookList                     = "list"
+	WebhookReenable                 = "reenable"
 	WebhookRevoke                   = "revoke"
 	WebhookRotate                   = "rotate"
 	WebhookUpdate                   = "update"
@@ -331,15 +335,15 @@ var Actions = map[string][]string{
 	"feed":                {"bind", "list", "press", "remove"},
 	"file":                {"accept", "decline", "delete", "list", "offer", "offers", "read", "withdraw", "write"},
 	"instance_entry":      {"create", "delete", "list", "offered", "people", "rebind", "revoke", "rotate", "set_audience", "set_caps", "set_component_policy", "usage"},
-	"key":                 {"create", "get", "list", "revoke", "rotate"},
+	"key":                 {"create", "get", "list", "reenable", "revoke", "rotate"},
 	"layout":              {"edit", "get"},
 	"mcp_log":             {"correlate", "fan_outs", "get", "list", "stats"},
 	"mcp_servers":         {"create", "delete", "disable", "enable", "get", "list", "refresh", "restart", "test", "update"},
 	"member":              {"add", "leave", "list", "remove"},
 	"notes":               {"endorse", "forget", "keep", "list", "pin", "read", "search"},
 	"oauth":               {"delete_client", "list", "set_client"},
-	"pairing":             {"begin", "complete", "list", "renew", "revoke"},
-	"passkey":             {"list", "recover_admin", "register", "revoke"},
+	"pairing":             {"begin", "complete", "list", "reenable", "renew", "revoke"},
+	"passkey":             {"list", "recover_admin", "reenable", "register", "revoke"},
 	"person":              {"assert", "carry_begin", "carry_cancel", "carry_complete", "carry_list", "certify", "enroll", "enroll_abandon", "enroll_holder", "kit", "kit_ack", "link_door", "renew_certificate", "rotate", "status", "unlink_door"},
 	"policy_log":          {"correlate", "get", "list"},
 	"profile":             {"commit", "grant", "grants", "list", "plan", "preview", "publish", "revoke"},
@@ -357,7 +361,7 @@ var Actions = map[string][]string{
 	"tools":               {"list"},
 	"turn":                {"recover", "suspend"},
 	"vault":               {"authorize", "create", "delete", "list", "rebind", "rename", "revoke", "rotate", "set_default", "status"},
-	"webhook":             {"create", "get", "list", "revoke", "rotate", "update"},
+	"webhook":             {"create", "get", "list", "reenable", "revoke", "rotate", "update"},
 }
 
 // CredentialKinds lists every credential kind a manifest need may name.
@@ -2295,6 +2299,21 @@ func (args KeyListArgs) MarshalJSON() ([]byte, error) {
 	}{Action: KeyList, fields: fields(args)})
 }
 
+// KeyReenableArgs carries arguments for key.reenable.
+type KeyReenableArgs struct {
+	// The id of your key that restoring this home from a backup suspended (key.list shows it)
+	KeyId string `json:"key_id"`
+}
+
+// MarshalJSON supplies the operation's fixed action discriminator.
+func (args KeyReenableArgs) MarshalJSON() ([]byte, error) {
+	type fields KeyReenableArgs
+	return json.Marshal(struct {
+		Action string `json:"action"`
+		fields
+	}{Action: KeyReenable, fields: fields(args)})
+}
+
 // KeyRevokeArgs carries arguments for key.revoke.
 type KeyRevokeArgs struct {
 	// Human-readable name for the key
@@ -3034,9 +3053,24 @@ func (args PairingListArgs) MarshalJSON() ([]byte, error) {
 	}{Action: PairingList, fields: fields(args)})
 }
 
+// PairingReenableArgs carries arguments for pairing.reenable.
+type PairingReenableArgs struct {
+	// The paired client (pcl_…) (renew, revoke, reenable)
+	ClientId string `json:"client_id"`
+}
+
+// MarshalJSON supplies the operation's fixed action discriminator.
+func (args PairingReenableArgs) MarshalJSON() ([]byte, error) {
+	type fields PairingReenableArgs
+	return json.Marshal(struct {
+		Action string `json:"action"`
+		fields
+	}{Action: PairingReenable, fields: fields(args)})
+}
+
 // PairingRenewArgs carries arguments for pairing.renew.
 type PairingRenewArgs struct {
-	// The paired client (pcl_…) (renew, revoke)
+	// The paired client (pcl_…) (renew, revoke, reenable)
 	ClientId string `json:"client_id"`
 	// The device's public key, unpadded base64url (complete, renew)
 	DeviceKey string `json:"device_key"`
@@ -3078,7 +3112,7 @@ func (args *PairingRenewArgsProof) UnmarshalJSON(data []byte) error {
 
 // PairingRevokeArgs carries arguments for pairing.revoke.
 type PairingRevokeArgs struct {
-	// The paired client (pcl_…) (renew, revoke)
+	// The paired client (pcl_…) (renew, revoke, reenable)
 	ClientId string `json:"client_id"`
 }
 
@@ -3108,7 +3142,7 @@ func (args PasskeyListArgs) MarshalJSON() ([]byte, error) {
 type PasskeyRecoverAdminArgs struct {
 	// recover_admin: the person whose pending registration is authorized
 	UserId string `json:"user_id"`
-	// The passkey, or the pending registration (revoke, recover_admin)
+	// The passkey, or the pending registration (revoke, reenable, recover_admin)
 	PasskeyId string `json:"passkey_id"`
 	// recover_admin: the digest (sha256:<hex>) of the exact pending registration authorized
 	RegistrationDigest string `json:"registration_digest"`
@@ -3121,6 +3155,21 @@ func (args PasskeyRecoverAdminArgs) MarshalJSON() ([]byte, error) {
 		Action string `json:"action"`
 		fields
 	}{Action: PasskeyRecoverAdmin, fields: fields(args)})
+}
+
+// PasskeyReenableArgs carries arguments for passkey.reenable.
+type PasskeyReenableArgs struct {
+	// The passkey, or the pending registration (revoke, reenable, recover_admin)
+	PasskeyId string `json:"passkey_id"`
+}
+
+// MarshalJSON supplies the operation's fixed action discriminator.
+func (args PasskeyReenableArgs) MarshalJSON() ([]byte, error) {
+	type fields PasskeyReenableArgs
+	return json.Marshal(struct {
+		Action string `json:"action"`
+		fields
+	}{Action: PasskeyReenable, fields: fields(args)})
 }
 
 // PasskeyRegisterArgs carries arguments for passkey.register.
@@ -3140,7 +3189,7 @@ func (args PasskeyRegisterArgs) MarshalJSON() ([]byte, error) {
 
 // PasskeyRevokeArgs carries arguments for passkey.revoke.
 type PasskeyRevokeArgs struct {
-	// The passkey, or the pending registration (revoke, recover_admin)
+	// The passkey, or the pending registration (revoke, reenable, recover_admin)
 	PasskeyId string `json:"passkey_id"`
 }
 
@@ -5777,6 +5826,21 @@ func (args WebhookListArgs) MarshalJSON() ([]byte, error) {
 		Action string `json:"action"`
 		fields
 	}{Action: WebhookList, fields: fields(args)})
+}
+
+// WebhookReenableArgs carries arguments for webhook.reenable.
+type WebhookReenableArgs struct {
+	// The id of your webhook that restoring this home from a backup suspended (webhook.list shows it)
+	WebhookId string `json:"webhook_id"`
+}
+
+// MarshalJSON supplies the operation's fixed action discriminator.
+func (args WebhookReenableArgs) MarshalJSON() ([]byte, error) {
+	type fields WebhookReenableArgs
+	return json.Marshal(struct {
+		Action string `json:"action"`
+		fields
+	}{Action: WebhookReenable, fields: fields(args)})
 }
 
 // WebhookRevokeArgs carries arguments for webhook.revoke.

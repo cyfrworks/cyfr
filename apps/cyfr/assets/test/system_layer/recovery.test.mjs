@@ -2,22 +2,38 @@
 // Copyright 2026 CYFR Works Inc.
 
 import assert from "node:assert/strict"
+import {readFileSync} from "node:fs"
 import {afterEach, beforeEach, describe, test} from "node:test"
 
+import {jcs} from "../../js/system_layer/device_key.js"
 import SystemLayer from "../../js/system_layer/index.js"
 import {
   clearKit,
   drawKit,
   drawRequestId,
   drawSeed,
+  endsRecovery,
+  exactBytes,
+  KIT_OPERATIONS,
+  KIT_PROTOCOL,
+  kitFields,
+  kitItemText,
+  kitProof,
+  kitRefusal,
+  kitRequest,
   kitRows,
+  kitSignedBytes,
+  KitStep,
   Material,
+  reenableBody,
   RESTORE_RETRIES,
   restoreOutcome,
   restoreRequest,
   RestorePage,
   SEED_BYTES
 } from "../../js/system_layer/recovery.js"
+
+const restoreKit = JSON.parse(readFileSync(new URL("../../../../../tests/fixtures/restore_kit.json", import.meta.url), "utf8"))
 
 // A cryptographic source that counts its draws and fills each from a
 // counter, so every draw is distinct and reproducible.
@@ -526,5 +542,362 @@ describe("the layer's recovery prompts", () => {
     layers.splice(layers.indexOf(page.hook), 1)
     assert.equal(page.hook.material.held.size, 0)
     assert.equal(page.el.listeners.submit, undefined)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// The kit step: tests/fixtures/restore_kit.json
+// ---------------------------------------------------------------------------
+
+const validKit = restoreKit.valid
+const kitFieldsOf = ({restore_id: restoreId, identifier, challenge}) => ({restoreId, identifier, challenge})
+
+describe("the kit proof", () => {
+  test("its protocol and challenge length are the fixture's", () => {
+    assert.equal(KIT_PROTOCOL, restoreKit.protocol)
+    assert.equal(restoreKit.challenge_bytes, 32)
+  })
+
+  test("signs the fixture's JCS bytes and reproduces its sig from the seed", async () => {
+    const fields = kitFields(kitFieldsOf(validKit.fields))
+    assert.equal(new TextDecoder().decode(kitSignedBytes(fields)), validKit.signed)
+    assert.equal(new TextDecoder().decode(kitSignedBytes(validKit.proof)), validKit.signed)
+
+    const proof = await kitProof({seed: restoreKit.kit.seed, ...kitFieldsOf(validKit.fields)})
+    assert.deepEqual(proof, validKit.proof)
+    assert.equal(jcs(proof), jcs(validKit.proof))
+
+    const digest = Buffer.from(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(jcs(proof)))).toString("hex")
+    assert.equal(`sha256:${digest}`, validKit.digest)
+  })
+
+  test("the proof verifies under the kit's public key, and another seed's under its own alone", async () => {
+    const verify = async (map, publicKey) => {
+      const key = await crypto.subtle.importKey("raw", Buffer.from(publicKey, "base64url"), {name: "Ed25519"}, false, ["verify"])
+      return crypto.subtle.verify({name: "Ed25519"}, key, Buffer.from(map.sig, "base64url"), kitSignedBytes(map))
+    }
+    assert.equal(await verify(validKit.proof, restoreKit.kit.public), true)
+
+    const other = await kitProof({seed: restoreKit.other_kit.seed, ...kitFieldsOf(validKit.fields)})
+    const refused = restoreKit.refused.find((entry) => entry.name === "a signature by another seed")
+    assert.deepEqual(other, refused.proof)
+    assert.equal(await verify(other, restoreKit.kit.public), false)
+    assert.equal(await verify(other, restoreKit.other_kit.public), true)
+  })
+
+  test("a seed or challenge that is not exactly 32 bytes in unpadded base64url signs nothing", async () => {
+    const challenge = validKit.fields.challenge
+    for (const seed of [restoreKit.kit.seed + "=", restoreKit.kit.seed.slice(1), "", "not base64!"]) {
+      await assert.rejects(kitProof({seed, restoreId: "rst_1", identifier: validKit.fields.identifier, challenge}))
+    }
+    for (const entry of restoreKit.refused.filter((refused) => refused.error.field === "challenge" && refused.proof.challenge)) {
+      assert.equal(exactBytes(entry.proof.challenge, 32), null, entry.name)
+      await assert.rejects(kitProof({seed: restoreKit.kit.seed, restoreId: "rst_1", identifier: validKit.fields.identifier, challenge: entry.proof.challenge}), entry.name)
+    }
+  })
+})
+
+describe("the kit ingress's requests", () => {
+  test("carry the credential only in the authorization header, once held", () => {
+    const asked = kitRequest("/restore/kit/challenge", {identifier: "per_x"})
+    assert.equal(asked.init.headers.authorization, undefined)
+    assert.equal(asked.init.method, "POST")
+    assert.equal(asked.init.cache, "no-store")
+
+    const listed = kitRequest("/restore/kit/reenable", reenableBody("key.reenable"), "rkc_usr_1.secret")
+    assert.equal(listed.url, "/restore/kit/reenable")
+    assert.equal(listed.init.headers.authorization, "Bearer rkc_usr_1.secret")
+    assert.doesNotMatch(listed.url + listed.init.body, /rkc_/)
+  })
+
+  test("each operation names its item by its own argument", () => {
+    assert.deepEqual(Object.entries(KIT_OPERATIONS), [
+      ["key.reenable", "key_id"],
+      ["webhook.reenable", "webhook_id"],
+      ["pairing.reenable", "client_id"],
+      ["passkey.reenable", "passkey_id"]
+    ])
+    assert.deepEqual(reenableBody("webhook.reenable"), {operation: "webhook.reenable"})
+    assert.deepEqual(reenableBody("pairing.reenable", "pcl_1"), {operation: "pairing.reenable", client_id: "pcl_1"})
+    assert.throws(() => reenableBody("member.add"))
+    assert.deepEqual(Object.keys(KIT_OPERATIONS).filter(endsRecovery), ["pairing.reenable", "passkey.reenable"])
+  })
+
+  test("its refusals read as sentences, and an ended credential says so", () => {
+    assert.match(kitRefusal(404, {error: "not_recovering"}).text, /no open recovery/)
+    assert.match(kitRefusal(409, {error: "not_a_holder"}).text, /not one of this identity's kits/)
+    assert.match(kitRefusal(409, {error: "challenge_refused"}).text, /expired or was used/)
+    assert.match(kitRefusal(422, {error: "invalid_proof"}).text, /recovery secret/)
+    assert.match(kitRefusal(503, null).text, /directory/)
+    assert.match(kitRefusal(409, {error: "revoked"}).text, /never re-enabled/)
+    assert.deepEqual([kitRefusal(401, {error: "invalid_credential"}).ended, kitRefusal(403, {error: "operation_not_permitted"}).ended], [true, false])
+    assert.equal(kitRefusal(500, null).ended, false)
+  })
+
+  test("an item is shown by its name or label", () => {
+    assert.equal(kitItemText("key.reenable", {id: "k1", name: "ci", prefix: "cyfr_ab"}), "ci (cyfr_ab…)")
+    assert.equal(kitItemText("pairing.reenable", {id: "pcl_1", label: "Phone"}), "Phone")
+    assert.equal(kitItemText("passkey.reenable", {id: "pk_1", label: "Laptop", rp_id: "home.test"}), "Laptop (home.test)")
+    assert.equal(kitItemText("webhook.reenable", {id: "wh_1"}), "wh_1")
+  })
+})
+
+// The kit step's element: its form of two unnamed inputs, its list and
+// its status, with the few members the code touches.
+function kitPage(values) {
+  const inputs = Object.fromEntries(["identifier", "recovery_secret"].map((field) => {
+    const input = node("input")
+    input.value = values[field] ?? ""
+    return [field, input]
+  }))
+  const form = node("form")
+  form.querySelector = (selector) => inputs[selector.match(/data-field="([^"]+)"/)[1]]
+  form.querySelectorAll = () => Object.values(inputs)
+  const list = node("div", {hidden: true})
+  list.hidden = true
+  const status = node("p")
+  const el = node("section")
+  el.querySelector = (selector) =>
+    ({"[data-restore-kit-form]": form, "[data-restore-kit-items]": list, '[data-test="restore-kit-status"]': status})[selector]
+  return {el, form, inputs, list, status}
+}
+
+// Every element a drawn node holds, its own included.
+function walk(element) {
+  return [element, ...element.children.flatMap((child) => walk(child))]
+}
+
+const kitTyped = {identifier: validKit.fields.identifier, recovery_secret: restoreKit.kit.seed}
+const credential = "rkc_usr_01a09fee-0000-7000-8000-000000000001.c2VjcmV0LWNyZWRlbnRpYWwtYnl0ZXMtMzItbG9uZy4"
+
+// A kit ingress that answers by route, recording every request.
+function kitIngress({items = {}, reenabled = () => [200, {reenabled: {}}], challenge = [200, {challenge: validKit.fields.challenge, restore_id: validKit.fields.restore_id, expires_at: "2026-10-16T00:05:00Z"}], grant = [200, {credential, expires_at: "2026-10-16T00:10:00Z"}]} = {}) {
+  const asked = []
+  const fetch = async (url, init) => {
+    asked.push({url, init})
+    const body = JSON.parse(init.body)
+    let answer
+    if (url === "/restore/kit/challenge") answer = challenge
+    else if (url === "/restore/kit") answer = grant
+    else if (url === "/restore/kit/reenable") {
+      const argument = KIT_OPERATIONS[body.operation]
+      answer = body[argument] ? reenabled(body) : [200, {items: items[body.operation] || []}]
+    } else answer = [404, {error: "not_found"}]
+    return {status: answer[0], json: async () => answer[1]}
+  }
+  return {fetch, asked}
+}
+
+// Fails the test when anything is logged while `run` runs.
+async function silently(run) {
+  const said = []
+  const saved = {}
+  for (const level of ["log", "info", "warn", "error", "debug"]) {
+    saved[level] = console[level]
+    console[level] = (...args) => said.push(args)
+  }
+  try {
+    return await run()
+  } finally {
+    Object.assign(console, saved)
+    assert.deepEqual(said, [], "nothing is logged")
+  }
+}
+
+const suspended = {
+  "key.reenable": [{id: "key_1", name: "ci", prefix: "cyfr_ab", athanor_id: "ath_1"}],
+  "webhook.reenable": [{id: "wh_1", name: "deploys", athanor_id: "ath_1"}],
+  "pairing.reenable": [{id: "pcl_1", label: "Phone", athanor_id: "ath_1"}],
+  "passkey.reenable": [{id: "pk_1", label: "Laptop", rp_id: "home.test"}]
+}
+
+describe("the restore page's kit step", () => {
+  test("proves the kit over the home's challenge, then lists each class's suspended items under the credential", async () => {
+    const page = kitPage(kitTyped)
+    const {fetch, asked} = kitIngress({items: suspended})
+    const step = new KitStep(page.el, {fetch, doc: fakeDoc})
+
+    await silently(() => step.begin())
+
+    assert.deepEqual(asked.map((entry) => entry.url), [
+      "/restore/kit/challenge",
+      "/restore/kit",
+      "/restore/kit/reenable",
+      "/restore/kit/reenable",
+      "/restore/kit/reenable",
+      "/restore/kit/reenable"
+    ])
+    assert.deepEqual(JSON.parse(asked[0].init.body), {identifier: validKit.fields.identifier})
+    assert.deepEqual(JSON.parse(asked[1].init.body), {proof: validKit.proof})
+    assert.equal(asked[0].init.headers.authorization, undefined)
+    assert.equal(asked[1].init.headers.authorization, undefined)
+    assert.deepEqual(asked.slice(2).map((entry) => JSON.parse(entry.init.body)), Object.keys(KIT_OPERATIONS).map((operation) => ({operation})))
+    assert.ok(asked.slice(2).every((entry) => entry.init.headers.authorization === `Bearer ${credential}`))
+
+    // The seed is never sent, and leaves the form once the proof is accepted.
+    for (const entry of asked) assert.ok(!(entry.url + entry.init.body + JSON.stringify(entry.init.headers)).includes(restoreKit.kit.seed))
+    assert.equal(page.inputs.recovery_secret.value, "")
+    assert.equal(page.inputs.identifier.value, validKit.fields.identifier)
+
+    assert.equal(page.status.attrs["data-state"], "listed")
+    assert.equal(page.list.hidden, false)
+    const buttons = walk(page.list).filter((element) => element.attrs["data-test"] === "restore-kit-reenable")
+    assert.deepEqual(buttons.map((button) => [button.attrs["data-operation"], button.attrs["data-id"]]), [
+      ["key.reenable", "key_1"],
+      ["webhook.reenable", "wh_1"],
+      ["pairing.reenable", "pcl_1"],
+      ["passkey.reenable", "pk_1"]
+    ])
+    assert.ok(texts(page.list).includes("ci (cyfr_ab…)"))
+  })
+
+  test("re-enabling a key keeps the recovery; re-enabling a passkey ends it and forgets the credential", async () => {
+    const page = kitPage(kitTyped)
+    const {fetch, asked} = kitIngress({items: suspended})
+    const step = new KitStep(page.el, {fetch, doc: fakeDoc})
+    await step.begin()
+
+    await silently(() => step.reenable("key.reenable", "key_1"))
+    const keyAsk = asked.at(-1)
+    assert.deepEqual(JSON.parse(keyAsk.init.body), {operation: "key.reenable", key_id: "key_1"})
+    assert.equal(keyAsk.init.headers.authorization, `Bearer ${credential}`)
+    assert.equal(page.status.attrs["data-state"], "reenabled")
+    assert.equal(step.credential, credential)
+    assert.ok(!texts(page.list).includes("ci (cyfr_ab…)"), "the re-enabled key leaves the list")
+
+    await silently(() => step.reenable("passkey.reenable", "pk_1"))
+    assert.deepEqual(JSON.parse(asked.at(-1).init.body), {operation: "passkey.reenable", passkey_id: "pk_1"})
+    assert.equal(page.status.attrs["data-state"], "done")
+    assert.match(page.status.textContent, /Laptop \(home\.test\) is active again.*Sign in with it/)
+    assert.equal(step.credential, null)
+    assert.deepEqual(texts(page.list), [])
+    assert.equal(page.list.hidden, true)
+    assert.ok(Object.values(page.inputs).every((input) => input.value === ""))
+
+    const before = asked.length
+    await step.reenable("webhook.reenable", "wh_1")
+    assert.equal(asked.length, before, "nothing is asked once the credential is gone")
+  })
+
+  test("re-enabling a device ends the recovery too", async () => {
+    const page = kitPage(kitTyped)
+    const {fetch, asked} = kitIngress({items: suspended})
+    const step = new KitStep(page.el, {fetch, doc: fakeDoc})
+    await step.begin()
+    await step.reenable("pairing.reenable", "pcl_1")
+    assert.deepEqual(JSON.parse(asked.at(-1).init.body), {operation: "pairing.reenable", client_id: "pcl_1"})
+    assert.equal(page.status.attrs["data-state"], "done")
+    assert.equal(step.credential, null)
+  })
+
+  test("a refusal of the proof is said, and the form keeps what was typed to mend it", async () => {
+    const page = kitPage(kitTyped)
+    const {fetch, asked} = kitIngress({grant: [409, {error: "not_a_holder"}]})
+    const step = new KitStep(page.el, {fetch, doc: fakeDoc})
+    await step.begin()
+    assert.equal(asked.length, 2)
+    assert.equal(page.status.attrs["data-state"], "refused")
+    assert.match(page.status.textContent, /not one of this identity's kits/)
+    assert.equal(step.credential, null)
+    assert.equal(page.inputs.recovery_secret.value, restoreKit.kit.seed)
+  })
+
+  test("a home with no open recovery is said, and nothing is signed", async () => {
+    const page = kitPage(kitTyped)
+    const {fetch, asked} = kitIngress({challenge: [404, {error: "not_recovering"}]})
+    await new KitStep(page.el, {fetch, doc: fakeDoc}).begin()
+    assert.deepEqual(asked.map((entry) => entry.url), ["/restore/kit/challenge"])
+    assert.match(page.status.textContent, /no open recovery/)
+  })
+
+  test("an answer that is not a kit challenge is signed over by nothing", async () => {
+    const short = restoreKit.refused.find((entry) => entry.name === "a challenge of 31 bytes").proof.challenge
+    for (const challenge of [[200, {challenge: short, restore_id: "rst_1"}], [200, {challenge: validKit.fields.challenge}]]) {
+      const page = kitPage(kitTyped)
+      const {fetch, asked} = kitIngress({challenge})
+      await new KitStep(page.el, {fetch, doc: fakeDoc}).begin()
+      assert.deepEqual(asked.map((entry) => entry.url), ["/restore/kit/challenge"])
+      assert.equal(page.status.attrs["data-state"], "refused")
+    }
+  })
+
+  test("an ended credential forgets what the page holds", async () => {
+    const page = kitPage(kitTyped)
+    const {fetch} = kitIngress({items: suspended, reenabled: () => [401, {error: "invalid_credential"}]})
+    const step = new KitStep(page.el, {fetch, doc: fakeDoc})
+    await step.begin()
+    await step.reenable("webhook.reenable", "wh_1")
+    assert.equal(step.credential, null)
+    assert.equal(page.status.attrs["data-state"], "refused")
+    assert.match(page.status.textContent, /recovery has ended/)
+    assert.deepEqual(texts(page.list), [])
+  })
+
+  test("a refused re-enablement keeps the credential and the list", async () => {
+    const page = kitPage(kitTyped)
+    const {fetch} = kitIngress({items: suspended, reenabled: () => [409, {error: "revoked"}]})
+    const step = new KitStep(page.el, {fetch, doc: fakeDoc})
+    await step.begin()
+    await step.reenable("key.reenable", "key_1")
+    assert.equal(step.credential, credential)
+    assert.match(page.status.textContent, /never re-enabled/)
+    assert.ok(texts(page.list).includes("ci (cyfr_ab…)"))
+  })
+
+  test("a line that is not one sends nothing", async () => {
+    for (const typed of [{...kitTyped, recovery_secret: ""}, {...kitTyped, recovery_secret: restoreKit.kit.seed + "="}, {...kitTyped, identifier: "per_abc"}]) {
+      const page = kitPage(typed)
+      const {fetch, asked} = kitIngress()
+      await new KitStep(page.el, {fetch, doc: fakeDoc}).begin()
+      assert.equal(asked.length, 0)
+      assert.equal(page.status.attrs["data-state"], "refused")
+    }
+  })
+
+  test("cleared while an answer is awaited, it forgets the seed and the credential and drops the answer", async () => {
+    const page = kitPage(kitTyped)
+    let release
+    const gate = new Promise((resolve) => (release = resolve))
+    const {fetch: answer, asked} = kitIngress({items: suspended})
+    let granting
+    const reached = new Promise((resolve) => (granting = resolve))
+    const fetch = async (url, init) => {
+      if (url === "/restore/kit") {
+        granting()
+        await gate
+      }
+      return answer(url, init)
+    }
+    const step = new KitStep(page.el, {fetch, doc: fakeDoc})
+    const running = step.begin()
+    await reached
+
+    step.clear("idle", "")
+    release()
+    await running
+    assert.equal(step.credential, null)
+    assert.ok(Object.values(page.inputs).every((input) => input.value === ""))
+    assert.deepEqual(asked.map((entry) => entry.url), ["/restore/kit/challenge", "/restore/kit"], "no list is asked under a credential the clear dropped")
+    assert.equal(page.status.attrs["data-state"], "idle")
+  })
+
+  test("the restore page drives the kit step its element holds, and destroys it with itself", async () => {
+    const kit = kitPage(kitTyped)
+    const page = restorePage(kitValues)
+    const outer = page.el.querySelector
+    page.el.querySelector = (selector) => (selector === "[data-restore-kit]" ? kit.el : outer(selector))
+    const {fetch, asked} = kitIngress({items: suspended})
+    const restore = new RestorePage(page.el, {fetch, doc: fakeDoc, ...manualTimers()})
+    assert.ok(restore.kit instanceof KitStep)
+
+    await restore.kit.begin()
+    assert.equal(asked[0].url, "/restore/kit/challenge")
+    assert.equal(restore.kit.credential, credential)
+
+    restore.destroy()
+    assert.equal(restore.kit.credential, null)
+    assert.ok(Object.values(kit.inputs).every((input) => input.value === ""))
+    assert.equal(kit.form.listeners.submit, undefined)
+    assert.equal(kit.el.listeners.click, undefined)
   })
 })

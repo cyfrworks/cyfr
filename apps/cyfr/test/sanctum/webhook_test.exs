@@ -472,6 +472,226 @@ defmodule Sanctum.WebhookTest do
     end
   end
 
+  # ============================================================================
+  # A declared restore
+  # ============================================================================
+
+  # The declared restore as the boot runs it (`Arca.SecurityTransitions`):
+  # every webhook suspended and one open restore row per person. Answers
+  # the restore id.
+  defp declared_restore! do
+    {:ok, restore_id} = Arca.SecurityTransitions.mark_restore(Prima.Actor.system())
+    {:ok, %{restore_id: ^restore_id}} = Arca.SecurityTransitions.restore(slot: :none)
+    restore_id
+  end
+
+  # The person's open restore row, written as the transition writes it,
+  # for the cases that need their passkey still standing beside it.
+  defp open_restore!(user_id) do
+    restore_id = Prima.UUID7.generate_id("rst")
+
+    {1, _} =
+      Arca.Repo.insert_all(Arca.Schemas.RestorePerson, [
+        %{restore_id: restore_id, user_id: user_id, open: true}
+      ])
+
+    restore_id
+  end
+
+  defp suspend!(ctx, name) do
+    import Ecto.Query
+
+    {1, _} =
+      from(w in Arca.Schemas.Webhook, where: w.athanor_id == ^ctx.athanor_id and w.name == ^name)
+      |> Arca.Repo.update_all(set: [suspended: true])
+
+    :ok
+  end
+
+  defp stored_hook(id), do: Arca.Repo.get!(Arca.Schemas.Webhook, id)
+
+  # The kit credential the restore ingress would hand the person: a
+  # challenge put and redeemed under their open row. Answers its digest.
+  defp kit_credential!(user_id, restore_id) do
+    later = DateTime.add(Arca.ServerMetaStorage.now!(), 60_000, :millisecond)
+    challenge = Prima.Digest.sha256("challenge-#{System.unique_integer()}")
+    credential = Prima.Digest.sha256("credential-#{System.unique_integer()}")
+    server = Prima.Actor.system()
+
+    :ok =
+      Arca.SecurityTransitions.put_kit_challenge(server, user_id, restore_id, challenge, later)
+
+    :ok =
+      Arca.SecurityTransitions.redeem_kit_challenge(
+        server,
+        user_id,
+        restore_id,
+        challenge,
+        credential,
+        later
+      )
+
+    credential
+  end
+
+  defp reenable_confirmed(ctx, id),
+    do: Sanctum.TestContext.confirming(ctx, &Webhook.reenable(&1, id, :confirmation))
+
+  # A delivery as the ingress plugs take it: the row its slug resolves to,
+  # verified with the secret the sender signs with.
+  defp deliver(slug, secret, body) do
+    with {:ok, hook} <- Webhook.resolve_ingress(slug) do
+      Webhook.verify_with_grace(hook, body, "sha256=" <> hmac_hex(secret, body))
+    end
+  end
+
+  describe "a webhook a declared restore suspended" do
+    test "releases no secret: its delivery is refused as an unknown slug's is", %{ctx: ctx} do
+      {:ok, %{slug: slug, secret: secret}} =
+        create(ctx, %{name: "restored", target_ref: "f:local.handler"})
+
+      assert {:ok, %{signing_secrets: _}} = Webhook.resolve_ingress(slug)
+      assert :ok = deliver(slug, secret, "body")
+
+      declared_restore!()
+
+      assert Webhook.resolve_ingress(slug) == Webhook.resolve_ingress("wh_no_such_slug")
+      assert {:error, :not_found} = Webhook.resolve_ingress(slug)
+      assert {:error, :not_found} = deliver(slug, secret, "body")
+    end
+
+    test "is listed as suspended, by the id that re-enables it", %{ctx: ctx} do
+      {:ok, _} = create(ctx, %{name: "held", target_ref: "f:local.handler"})
+      {:ok, _} = create(ctx, %{name: "live", target_ref: "f:local.h"})
+      :ok = suspend!(ctx, "held")
+
+      {:ok, hooks} = Webhook.list(ctx)
+      by_name = Map.new(hooks, &{&1.name, &1})
+
+      assert %{suspended: true, id: "whk_" <> _} = by_name["held"]
+      assert %{suspended: false} = by_name["live"]
+      refute Map.has_key?(by_name["held"], :secret)
+    end
+  end
+
+  describe "reenable/3 under a confirmation" do
+    setup %{ctx: ctx} do
+      {:ok, %{slug: slug, secret: secret}} =
+        create(ctx, %{name: "held", target_ref: "f:local.handler"})
+
+      {:ok, %{id: id}} = Webhook.get(ctx, "held")
+      :ok = suspend!(ctx, "held")
+      {person, _user} = Sanctum.TestContext.person!(ctx)
+      %{id: id, slug: slug, secret: secret, person: person}
+    end
+
+    test "asks the person's fresh confirmation, then deliveries verify again", %{
+      person: person,
+      id: id,
+      slug: slug,
+      secret: secret
+    } do
+      assert {:error, {:confirmation_required, %{operation: "webhook.reenable"}}} =
+               Webhook.reenable(%{person | confirmation_id: nil}, id, :confirmation)
+
+      assert %{suspended: true} = stored_hook(id)
+
+      assert {:ok, %{id: ^id, name: "held", suspended: false} = hook} =
+               reenable_confirmed(person, id)
+
+      refute Map.has_key?(hook, :secret)
+      assert %{suspended: false, enabled: true} = stored_hook(id)
+      assert :ok = deliver(slug, secret, "body")
+    end
+
+    test "another person's webhook is not found, and asks no confirmation", %{id: id} do
+      {other, _user} =
+        Sanctum.TestContext.person!(
+          %{Sanctum.TestContext.local() | user_id: "local|local|other"},
+          %{email: "other@example.com"}
+        )
+
+      assert {:error, :not_found} =
+               Webhook.reenable(%{other | confirmation_id: nil}, id, :confirmation)
+
+      assert %{suspended: true} = stored_hook(id)
+    end
+
+    test "a revoked webhook is never revived, and a standing one is not suspended", %{
+      ctx: ctx,
+      person: person,
+      id: id
+    } do
+      :ok = Webhook.revoke(ctx, "held")
+
+      assert {:error, :revoked} =
+               Webhook.reenable(%{person | confirmation_id: nil}, id, :confirmation)
+
+      assert %{enabled: false} = stored_hook(id)
+
+      {:ok, _} = create(ctx, %{name: "live", target_ref: "f:local.h"})
+      {:ok, %{id: live}} = Webhook.get(ctx, "live")
+
+      assert {:error, :not_suspended} =
+               Webhook.reenable(%{person | confirmation_id: nil}, live, :confirmation)
+    end
+
+    test "while the person's restore row is open, a passkey's confirmation is refused", %{
+      person: person,
+      id: id,
+      slug: slug,
+      secret: secret
+    } do
+      open_restore!(person.user_id)
+
+      assert {:error, %Prima.Refusal{reason: :restore_source_required}} =
+               reenable_confirmed(person, id)
+
+      assert %{suspended: true} = stored_hook(id)
+      assert {:error, :not_found} = deliver(slug, secret, "body")
+    end
+  end
+
+  describe "reenable/3 under the kit" do
+    test "re-enables the person's webhook while their row is open, and nothing once it closed",
+         %{ctx: ctx} do
+      {:ok, %{slug: first_slug, secret: first_secret}} =
+        create(ctx, %{name: "first", target_ref: "f:local.handler"})
+
+      {:ok, %{slug: second_slug, secret: second_secret}} =
+        create(ctx, %{name: "second", target_ref: "f:local.h"})
+
+      {:ok, %{id: first}} = Webhook.get(ctx, "first")
+      {:ok, %{id: second}} = Webhook.get(ctx, "second")
+      {person, _user} = Sanctum.TestContext.person!(ctx)
+      user = person.user_id
+
+      restore_id = declared_restore!()
+      credential = kit_credential!(user, restore_id)
+      kit = {:kit, %{user_id: user, credential_digest: credential}}
+
+      assert {:error, Sanctum.Pairing.kit_refusal()} ==
+               Webhook.reenable(ctx, first, {:kit, %{user_id: user, credential_digest: "x"}})
+
+      assert {:error, :not_found} =
+               Webhook.reenable(
+                 ctx,
+                 first,
+                 {:kit, %{user_id: "usr_someone", credential_digest: credential}}
+               )
+
+      assert {:ok, %{id: ^first, suspended: false}} = Webhook.reenable(ctx, first, kit)
+      assert :ok = deliver(first_slug, first_secret, "body")
+
+      {:ok, _} =
+        Arca.Repo.locking_transaction(fn -> Arca.SecurityTransitions.close_restore!(user) end)
+
+      assert {:error, Sanctum.Pairing.kit_refusal()} == Webhook.reenable(ctx, second, kit)
+      assert %{suspended: true} = stored_hook(second)
+      assert {:error, :not_found} = deliver(second_slug, second_secret, "body")
+    end
+  end
+
   describe "verify_with_grace/3" do
     test "verifies a correctly-signed payload", %{ctx: ctx} do
       {:ok, %{slug: slug, secret: secret}} =

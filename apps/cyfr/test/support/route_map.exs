@@ -343,6 +343,33 @@
         },
         %{
           verb: "POST",
+          path: "/restore/kit",
+          plug: "Emissary.Web.RestoreController",
+          plug_opts: ":kit",
+          auth: "restore_kit_proof",
+          live_view: nil,
+          pipe_through: ["restore"]
+        },
+        %{
+          verb: "POST",
+          path: "/restore/kit/challenge",
+          plug: "Emissary.Web.RestoreController",
+          plug_opts: ":kit_challenge",
+          auth: "restore_kit_proof",
+          live_view: nil,
+          pipe_through: ["restore"]
+        },
+        %{
+          verb: "POST",
+          path: "/restore/kit/reenable",
+          plug: "Emissary.Web.RestoreController",
+          plug_opts: ":kit_reenable",
+          auth: "restore_kit_proof",
+          live_view: nil,
+          pipe_through: ["restore"]
+        },
+        %{
+          verb: "POST",
           path: "/restore/reproof",
           plug: "Emissary.Web.RestoreController",
           plug_opts: ":reproof",

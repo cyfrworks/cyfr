@@ -43,9 +43,9 @@ defmodule Sanctum.ProviderDispatchContractTest do
     "member" => ["list", "add", "remove", "leave"],
     "door" => ["list", "requests", "allow", "deny", "remove", "resolve"],
     "oauth" => ["set_client", "list", "delete_client"],
-    "key" => ["create", "get", "list", "revoke", "rotate"],
+    "key" => ["create", "get", "list", "revoke", "rotate", "reenable"],
     "tincture_visibility" => ["get"],
-    "webhook" => ["create", "list", "get", "update", "revoke", "rotate"],
+    "webhook" => ["create", "list", "get", "update", "revoke", "rotate", "reenable"],
     "vault" => [
       "list",
       "status",
@@ -77,8 +77,8 @@ defmodule Sanctum.ProviderDispatchContractTest do
       "renew_certificate",
       "assert"
     ],
-    "pairing" => ["begin", "complete", "renew", "revoke", "list"],
-    "passkey" => ["register", "list", "revoke", "recover_admin"],
+    "pairing" => ["begin", "complete", "renew", "revoke", "list", "reenable"],
+    "passkey" => ["register", "list", "revoke", "reenable", "recover_admin"],
     "confirmation" => ["confirm", "reauth", "pending", "cancel"],
     "instance_entry" => [
       "create",
@@ -102,9 +102,10 @@ defmodule Sanctum.ProviderDispatchContractTest do
     "member" => "Unknown action: member.___no_such_action___",
     "door" => "Unknown action: door.___no_such_action___",
     "oauth" => "Invalid oauth action. Use: set_client, list, or delete_client",
-    "key" => "Invalid key action. Use: create, get, list, revoke, or rotate",
+    "key" => "Invalid key action. Use: create, get, list, revoke, rotate, or reenable",
     "tincture_visibility" => "Invalid tincture_visibility action. Use: get",
-    "webhook" => "Invalid webhook action. Use: create, list, get, update, revoke, or rotate",
+    "webhook" =>
+      "Invalid webhook action. Use: create, list, get, update, revoke, rotate, or reenable",
     "vault" =>
       "Invalid vault action. Use: list, status, set_default, create, rename, rotate, rebind, authorize, revoke, or delete",
     "profile" =>

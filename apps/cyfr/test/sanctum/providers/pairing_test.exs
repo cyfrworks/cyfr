@@ -15,8 +15,10 @@ defmodule Sanctum.Providers.PairingTest do
   answered its client and certificate, bound to the person the invitation
   names whatever session asks. Any other key, one with a valid proof of
   its own included, is refused and pairs nothing. The person lists and
-  revokes their paired clients. Renewal is the device channel's alone.
-  The invitation's secret, its link and the proof reach no log.
+  revokes their paired clients, and after a declared restore re-enables a
+  suspended one on a door's re-authentication (`reenable`), which ends
+  their recovery. Renewal is the device channel's alone. The invitation's
+  secret, its link and the proof reach no log.
   """
 
   # The rate limiter's table is the node's.
@@ -408,6 +410,57 @@ defmodule Sanctum.Providers.PairingTest do
 
     assert %Prima.Refusal{class: :not_found} =
              refusal(call(session_ctx, "revoke", %{"client_id" => "pcl_nothing"}))
+  end
+
+  test "after a declared restore the person re-enables a suspended device, and a revoked one never",
+       %{session_ctx: session_ctx, user: user, athanor: athanor} do
+    %{client_id: client_id} = pair!(session_ctx)
+    %{client_id: revoked_id} = pair!(session_ctx)
+
+    {:ok, _} = Arca.SecurityTransitions.mark_restore(Prima.Actor.system())
+    {:ok, %{restore_id: _}} = Arca.SecurityTransitions.restore(slot: :none)
+
+    # Every session went with the restore: the person signs in again.
+    built =
+      Context.build(
+        user_id: user.id,
+        email: user.email,
+        provider: "github",
+        athanor_id: athanor.id,
+        permissions: [:*],
+        auth_method: :oidc,
+        authenticated: true
+      )
+
+    {:ok, session} = Sanctum.TestContext.create_session(built)
+    {:ok, ctx} = Sanctum.Caller.establish(session.token, focus: athanor.id, task_supervisor: nil)
+
+    assert {:ok, %{clients: []}} = call(ctx, "list", %{})
+    {:ok, _} = Arca.PairedClients.revoke(Context.actor(ctx), revoked_id)
+
+    assert %Prima.Refusal{class: :conflict, reason: :revoked} =
+             refusal(call(ctx, "reenable", %{"client_id" => revoked_id}))
+
+    assert {:error, {:confirmation_required, %{id: id, operation: "pairing.reenable"}}} =
+             call(ctx, "reenable", %{"client_id" => client_id})
+
+    # A door's re-authentication, from a session that names no client.
+    {:ok, _} =
+      Arca.PendingConfirmations.confirm(Context.actor(ctx), Prima.Confirmation.ref(id), %{
+        proof: "oidc_reauth"
+      })
+
+    assert {:ok, %{client_id: ^client_id, standing: "active", recovery_closed: true}} =
+             call(%{ctx | confirmation_id: id}, "reenable", %{"client_id" => client_id})
+
+    assert {:ok, %{clients: [%{client_id: ^client_id}]}} = call(ctx, "list", %{})
+
+    assert {:ok, nil} = Arca.SecurityTransitions.restore_open(Prima.Actor.system(), user.id)
+
+    assert %Prima.Refusal{class: :conflict, reason: :not_suspended} =
+             refusal(call(ctx, "reenable", %{"client_id" => client_id}))
+
+    assert %Prima.Refusal{class: :invalid_argument} = refusal(call(ctx, "reenable", %{}))
   end
 
   test "renewal is the device channel's alone: a session is refused", %{session_ctx: session_ctx} do

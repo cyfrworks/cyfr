@@ -326,6 +326,37 @@ defmodule Sanctum.ProviderTest do
       assert rotated.api_key != original.api_key
     end
 
+    test "reenable answers the key a restore suspended, once confirmed, and refuses in sentences",
+         %{ctx: ctx} do
+      {:ok, _} = key_tool(ctx, %{"action" => "create", "name" => "held"})
+      {:ok, %{id: id}} = key_tool(ctx, %{"action" => "get", "name" => "held"})
+
+      Ecto.Query.from(k in Arca.Schemas.ApiKey, where: k.id == ^id)
+      |> Arca.Repo.update_all(set: [suspended: true])
+
+      {:ok, %{keys: [listed]}} = key_tool(ctx, %{"action" => "list"})
+      assert %{id: ^id, suspended: true} = listed
+
+      assert {:error, %Prima.Refusal{class: :conflict, reason: :suspended}} =
+               key_tool(ctx, %{"action" => "rotate", "name" => "held"})
+
+      assert {:ok, %{reenabled: %{id: ^id, name: "held", suspended: false}}} =
+               key_tool(ctx, %{"action" => "reenable", "key_id" => id})
+
+      assert {:error, %Prima.Refusal{class: :conflict, reason: :not_suspended, message: message}} =
+               key_tool(ctx, %{"action" => "reenable", "key_id" => id})
+
+      assert message =~ "not suspended"
+
+      :ok = Sanctum.ApiKey.revoke(ctx, "held")
+
+      assert {:error, %Prima.Refusal{class: :conflict, reason: :revoked}} =
+               key_tool(ctx, %{"action" => "reenable", "key_id" => id})
+
+      assert {:error, %Prima.Refusal{class: :not_found}} =
+               key_tool(ctx, %{"action" => "reenable", "key_id" => "key_unknown"})
+    end
+
     test "get missing key returns error", %{ctx: ctx} do
       {:error, msg} = key_tool(ctx, %{"action" => "get", "name" => "missing"})
       assert err_msg(msg) =~ "not found"

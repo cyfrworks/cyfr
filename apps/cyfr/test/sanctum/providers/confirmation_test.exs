@@ -22,7 +22,10 @@ defmodule Sanctum.Providers.ConfirmationTest do
   to the proofs such an addition takes: a passkey, and on a paired device
   also an emailed code. The stream `confirmation.changes` is declared beside the
   operations, projecting the ref and what happened to the record. No
-  secret, code or assertion reaches a log.
+  secret, code or assertion reaches a log. While the person recovers from
+  a declared restore every record of theirs is marked `restore`, offers no
+  passkey, and an assertion confirms nothing; an emailed code re-enables
+  their passkey, which ends it.
   """
 
   use ExUnit.Case, async: false
@@ -320,6 +323,7 @@ defmodule Sanctum.Providers.ConfirmationTest do
       # The proofs this person can give: their passkey here and a code to
       # their verified email; no identity provider signs them in here.
       assert record.methods == ["passkey", "email"]
+      assert record.restore == false
     end
 
     test "pending names only the proofs the person can give", %{session_ctx: session_ctx} do
@@ -632,6 +636,71 @@ defmodule Sanctum.Providers.ConfirmationTest do
   # ---------------------------------------------------------------------------
   # The emailed code
   # ---------------------------------------------------------------------------
+
+  describe "while the person recovers from a declared restore" do
+    test "no passkey is offered or taken; an emailed code re-enables it, which ends the recovery",
+         %{user: user, athanor: athanor} do
+      authenticator = TestContext.passkey!(user.id)
+      {:ok, [passkey]} = Arca.Passkeys.list(Prima.Actor.system(), user.id)
+
+      {:ok, _} = Arca.SecurityTransitions.mark_restore(Prima.Actor.system())
+      {:ok, %{restore_id: _}} = Arca.SecurityTransitions.restore(slot: :none)
+
+      # Every session went with the restore: the person signs in again.
+      session_ctx = session_ctx(user, athanor)
+      id = asked!(session_ctx)
+      record = pending!(session_ctx, id)
+
+      assert record.restore == true
+      assert record.methods == ["email"]
+      assert record.webauthn["allowCredentials"] == []
+
+      challenge = Base.url_decode64!(record.webauthn["challenge"], padding: false)
+
+      assert %Prima.Refusal{class: :forbidden, reason: :restore_source_required} =
+               refusal(
+                 call(session_ctx, "confirm", %{
+                   "ref" => record.ref,
+                   "assertion" => Authenticator.assertion(authenticator, challenge)
+                 })
+               )
+
+      assert row!(session_ctx, id).state == "pending"
+
+      # The passkey's re-enabling, proven by the code mailed for it.
+      assert {:error, {:confirmation_required, %{id: reenable, operation: "passkey.reenable"}}} =
+               call(session_ctx, "passkey", "reenable", %{"passkey_id" => passkey.id})
+
+      assert {:ok, %{method: "email"}} =
+               call(session_ctx, "reauth", %{"ref" => ref(reenable), "method" => "email"})
+
+      assert_receive {:confirmation_code_mail, mail}
+
+      assert {:ok, %{state: "confirmed"}} =
+               call(session_ctx, "confirm", %{
+                 "ref" => ref(reenable),
+                 "code" => MailSink.code(mail)
+               })
+
+      passkey_id = passkey.id
+
+      assert {:ok, %{passkey: %{id: ^passkey_id, state: "active"}, recovery_closed: true}} =
+               call(%{session_ctx | confirmation_id: reenable}, "passkey", "reenable", %{
+                 "passkey_id" => passkey_id
+               })
+
+      # The recovery is over: the passkey is offered and proves again.
+      record = pending!(session_ctx, id)
+      assert record.restore == false
+      assert record.methods == ["passkey", "email"]
+
+      assert {:ok, %{state: "confirmed"}} =
+               call(session_ctx, "confirm", %{
+                 "ref" => record.ref,
+                 "assertion" => Authenticator.assertion(authenticator, challenge)
+               })
+    end
+  end
 
   describe "an emailed one-time code" do
     test "is sent to the verified email for one record, and confirms it", %{

@@ -531,7 +531,8 @@ defmodule Cyfr.Boundaries do
         Sanctum.Annotations Sanctum.ApiKey Sanctum.Auth Sanctum.BearerToken Sanctum.Caller
         Sanctum.Catalog Sanctum.ClientIp Sanctum.Consent Sanctum.Context Sanctum.Decisions
         Sanctum.Door Sanctum.Gate Sanctum.Pairing Sanctum.Passkeys Sanctum.PolicyLog
-        Sanctum.Refusals Sanctum.RequestLog Sanctum.Seal Sanctum.Session Sanctum.SignIn
+        Sanctum.Recovery Sanctum.Refusals Sanctum.RequestLog Sanctum.Seal Sanctum.Session
+        Sanctum.SignIn
         Sanctum.Tenancy Sanctum.TinctureAuth Sanctum.Unauthorized Sanctum.Webhook
       ),
       reason:
@@ -546,6 +547,9 @@ defmodule Cyfr.Boundaries do
           "`Sanctum.Pairing` is the system layer's reading of the action table and of " <>
           "whether this client has a person behind it who can confirm, which hides a " <>
           "control and never decides: the operation a confirmation dispatches decides. " <>
+          "`Sanctum.Recovery` is the system layer's read of the person's checklist after " <>
+          "a declared restore (`checklist/1`), what it lists for them to re-enable, " <>
+          "re-consent and rotate; each re-enable it offers is an operation, decided there. " <>
           "`Sanctum.Seal` is the system layer's read of the person's seal, which it draws " <>
           "first in every prompt, and the first choice and the confirmed change it makes " <>
           "from its seal prompt; the settings page reads only whether one is set. No " <>
@@ -1704,6 +1708,7 @@ defmodule Cyfr.Boundaries do
       drop_memo: 1,
       establish: 2,
       establish_context: 1,
+      establish_kit: 2,
       fresh?: 1,
       peek: 1,
       revalidate_session: 1
@@ -1814,7 +1819,15 @@ defmodule Cyfr.Boundaries do
       under_claim: 3
     ],
     "Sanctum.Proxy" => [install!: 1],
-    "Sanctum.Recovery" => [reproof: 2, restore: 2, restore_challenge: 1],
+    "Sanctum.Recovery" => [
+      checklist: 1,
+      kit_challenge: 1,
+      kit_proof: 1,
+      kit_reenable: 4,
+      reproof: 2,
+      restore: 2,
+      restore_challenge: 1
+    ],
     "Sanctum.Refusals" => [classify: 1, classify: 2, code_override: 1, known?: 1, render: 1],
     "Sanctum.RegistryCredentials" => [delete: 3, get: 3, list: 2, put_push_token: 6],
     "Sanctum.RequestLog" => [list: 2],
@@ -2107,6 +2120,18 @@ defmodule Cyfr.Boundaries do
           "authorization header, checked in constant time before any kit is read, any key " <>
           "staged or any outbound call made (`Sanctum.Recovery`); no session and no CSRF " <>
           "token, since no cross-site form sets the header and no CORS answer admits one"
+    },
+    restore_kit_proof: %{
+      admits: :credential,
+      why:
+        "a person recovering from a declared restore, with no door or method left: a " <>
+          "challenge this home holds for their identifier while their recovery is open, " <>
+          "bounded per address and per person; a kit proof over it, signed by a recovery " <>
+          "key of their identity read fresh from its directory and redeemed once; and the " <>
+          "kit credential it answers, admitted for the four re-enable operations and their " <>
+          "previews alone (`Sanctum.Recovery`, `Sanctum.Caller.establish_kit/2`); no session " <>
+          "and no CSRF token, since no cross-site form sets the header and no CORS answer " <>
+          "admits one"
     },
     browser_session: %{
       admits: :session,

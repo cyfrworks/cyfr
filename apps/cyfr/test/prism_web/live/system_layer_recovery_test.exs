@@ -10,7 +10,8 @@ defmodule PrismWeb.SystemLayerRecoveryTest.Host do
   on_mount {CyfrWeb.ContextGuard, :protected}
 
   @impl true
-  def mount(_params, session, socket), do: {:ok, assign(socket, :test, session["test"])}
+  def mount(_params, session, socket),
+    do: {:ok, assign(socket, test: session["test"], listen: Map.get(session, "listen", true))}
 
   @impl true
   def handle_info({:prompt, prompt}, socket) do
@@ -26,7 +27,12 @@ defmodule PrismWeb.SystemLayerRecoveryTest.Host do
   @impl true
   def render(assigns) do
     ~H"""
-    <.live_component module={PrismWeb.SystemLayer} id="system-layer" context={@context} />
+    <.live_component
+      module={PrismWeb.SystemLayer}
+      id="system-layer"
+      context={@context}
+      listen={@listen}
+    />
     """
   end
 end
@@ -46,6 +52,13 @@ defmodule PrismWeb.SystemLayerRecoveryTest do
   what it held. A prompt never names a seed, and a frame never reaches
   any of it.
 
+  After a declared restore the layer draws the person's restore
+  checklist: what the restore suspended, each with its re-enable control
+  where the page reaches it, the profiles to consent to again and the
+  entries to rotate. A re-enable is the layer's own sensitive change,
+  confirmed while the recovery is open by a door or an emailed code and
+  never by a passkey, and made again by the layer once confirmed.
+
   The directory is a scripted one this home reaches through the client's
   test seam (`Sanctum.Test.DirectoryServer`).
   """
@@ -54,6 +67,7 @@ defmodule PrismWeb.SystemLayerRecoveryTest do
 
   import Ecto.Query, only: [from: 2]
   import ExUnit.CaptureLog
+  import Prima.Test.Wait
 
   alias Arca.Schemas.IdentityAttempt
   alias Prima.Identity
@@ -62,7 +76,7 @@ defmodule PrismWeb.SystemLayerRecoveryTest do
   alias PrismWeb.SystemLayerRecoveryTest.Host
   alias Sanctum.Context
   alias Sanctum.Test.DirectoryServer, as: Directory
-  alias Sanctum.TestContext.Authenticator
+  alias Sanctum.TestContext.{Authenticator, MailSink}
 
   setup_all do
     %{tls: Directory.tls()}
@@ -485,6 +499,356 @@ defmodule PrismWeb.SystemLayerRecoveryTest do
         })
 
       assert html =~ "Type the recovery secret of a kit you hold now."
+    end
+  end
+
+  # ---- after a declared restore --------------------------------------------------
+
+  defp now, do: DateTime.utc_now()
+  defp uniq, do: System.unique_integer([:positive])
+
+  defp insert!(schema, row) do
+    {1, _} = Arca.Repo.insert_all(schema, [row])
+    row.id
+  end
+
+  defp key!(athanor_id, user_id) do
+    insert!(Arca.Schemas.ApiKey, %{
+      id: Prima.UUID7.generate_id("key"),
+      name: "key-#{uniq()}",
+      key_hash: :crypto.strong_rand_bytes(32),
+      key_prefix: "cyfr_sk_rs",
+      type: "service",
+      scope: "[]",
+      revoked: false,
+      suspended: false,
+      created_by: user_id,
+      athanor_id: athanor_id,
+      inserted_at: now(),
+      updated_at: now()
+    })
+  end
+
+  defp profile!(athanor_id) do
+    insert!(Arca.Schemas.Profile, %{
+      id: Prima.UUID7.generate_id("prf"),
+      athanor_id: athanor_id,
+      source_ref: "local:acme/restored-#{uniq()}",
+      kind: "owner",
+      label: "default",
+      status: "active",
+      inserted_at: now(),
+      updated_at: now()
+    })
+  end
+
+  defp webhook!(athanor_id, user_id, profile_id) do
+    insert!(Arca.Schemas.Webhook, %{
+      id: Prima.UUID7.generate_id("whk"),
+      name: "hook-#{uniq()}",
+      slug: "hook-#{uniq()}",
+      target_ref: "local:acme/tool",
+      secret_encrypted: "sealed-webhook-secret",
+      athanor_id: athanor_id,
+      profile_id: profile_id,
+      created_by: user_id,
+      suspended: false,
+      inserted_at: now(),
+      updated_at: now()
+    })
+  end
+
+  defp paired!(athanor_id, user_id) do
+    insert!(Arca.Schemas.PairedClient, %{
+      id: Prima.UUID7.generate_id("pcl"),
+      athanor_id: athanor_id,
+      user_id: user_id,
+      source_kind: "session",
+      source_id: "src_#{uniq()}",
+      standing: "active",
+      label: "the kitchen tablet",
+      inserted_at: now(),
+      updated_at: now()
+    })
+  end
+
+  defp vault!(athanor_id) do
+    insert!(Arca.Schemas.VaultEntry, %{
+      id: Prima.UUID7.generate_id("vlt"),
+      athanor_id: athanor_id,
+      name: "restored-entry-#{uniq()}",
+      kind: "api_key",
+      destination: ~s({"hosts":["api.example.com"],"scheme":"https"}),
+      status: "active",
+      inserted_at: now(),
+      updated_at: now()
+    })
+  end
+
+  defp row!(schema, id), do: Arca.Repo.get!(schema, id)
+
+  defp pending_records(user_id) do
+    Arca.Repo.all(
+      from(c in "pending_confirmations",
+        where: c.user_id == ^user_id,
+        select: %{ref: c.ref, operation: c.operation, action: c.action, state: c.state}
+      )
+    )
+  end
+
+  defp host!(conn, athanor, opts \\ []) do
+    session = %{
+      "athanor_id" => athanor.id,
+      "test" => self(),
+      "listen" => Keyword.get(opts, :listen, true)
+    }
+
+    {:ok, view, _html} = live_isolated(conn, Host, session: session)
+    view
+  end
+
+  # A person whose home was restored from a backup with the marker: their
+  # passkey, a paired device, an API key and a webhook of theirs and a
+  # profile and a vault entry of their own athanor, and an API key in a
+  # group they sit in, each standing before the restore; then signed in
+  # again with a door, since the restore ended every session.
+  defp restored(%{conn: conn}) do
+    user = test_user()
+    _before = log_in_user(conn, user)
+    athanor = seated_athanor()
+    authenticator = Sanctum.TestContext.passkey!(user.user_id)
+    {:ok, group} = Sanctum.Tenancy.Athanors.create_group(user.user_id, "Restored #{uniq()}")
+
+    passkey_id =
+      Arca.Repo.one!(
+        from(p in Arca.Schemas.Passkey, where: p.user_id == ^user.user_id, select: p.id)
+      )
+
+    profile_id = profile!(athanor.id)
+
+    ids = %{
+      passkey: passkey_id,
+      client: paired!(athanor.id, user.user_id),
+      key: key!(athanor.id, user.user_id),
+      webhook: webhook!(athanor.id, user.user_id, profile_id),
+      profile: profile_id,
+      vault: vault!(athanor.id),
+      group_key: key!(group.id, user.user_id)
+    }
+
+    {:ok, _marked} = Arca.SecurityTransitions.mark_restore(Prima.Actor.system())
+    {:ok, %{restore_id: restore_id}} = Arca.SecurityTransitions.restore(slot: :none)
+
+    conn = log_in_user(conn, user)
+
+    %{
+      conn: conn,
+      view: host!(conn, athanor),
+      user: user,
+      athanor: athanor,
+      group: group,
+      authenticator: authenticator,
+      restore_id: restore_id,
+      ids: ids
+    }
+  end
+
+  defp reenable!(view, operation, id) do
+    view
+    |> element(~s([data-test="restore-reenable"][data-operation="#{operation}"][data-id="#{id}"]))
+    |> render_click()
+  end
+
+  describe "the restore checklist" do
+    setup :restored
+
+    test "lists what the restore suspended and asks for again, with nothing secret and no prompt",
+         %{view: view, athanor: athanor, ids: ids} do
+      assert has_element?(view, ~s([data-test="restore-checklist"][data-recovering="true"]))
+      assert render(view) =~ "This home was restored from a backup"
+      assert has_element?(view, ~s([data-test="restore-checklist-recovering"]))
+
+      for {operation, id} <- [
+            {"passkey.reenable", ids.passkey},
+            {"pairing.reenable", ids.client},
+            {"key.reenable", ids.key},
+            {"webhook.reenable", ids.webhook}
+          ] do
+        assert has_element?(
+                 view,
+                 ~s([data-test="restore-reenable"][data-operation="#{operation}"][data-id="#{id}"])
+               ),
+               operation
+      end
+
+      profile = row!(Arca.Schemas.Profile, ids.profile)
+
+      assert has_element?(
+               view,
+               ~s([data-test="restore-checklist-profile"][data-id="#{ids.profile}"]),
+               profile.source_ref
+             )
+
+      consent =
+        PrismWeb.Focus.path(
+          athanor,
+          "/components?" <> URI.encode_query(%{"ref" => profile.source_ref, "setup" => "true"})
+        )
+
+      assert has_element?(view, ~s([data-test="restore-checklist-consent"][href="#{consent}"]))
+
+      entry = row!(Arca.Schemas.VaultEntry, ids.vault)
+
+      assert has_element?(
+               view,
+               ~s([data-test="restore-checklist-entry"][data-kind="vault"][data-id="#{ids.vault}"]),
+               entry.name
+             )
+
+      # The checklist holds no secret: a webhook's sealed secret and a
+      # key's hash never reach the page.
+      html = render(view)
+      key = row!(Arca.Schemas.ApiKey, ids.key)
+      refute html =~ "sealed-webhook-secret"
+      refute html =~ Base.encode16(key.key_hash, case: :lower)
+      assert open_prompt(view) == nil
+      Cyfr.Test.Sandbox.end_views()
+    end
+
+    test "a key in another athanor is re-enabled there: the checklist links to it",
+         %{view: view, group: group, ids: ids} do
+      refute has_element?(view, ~s([data-test="restore-reenable"][data-id="#{ids.group_key}"]))
+
+      assert has_element?(
+               view,
+               ~s([data-test="restore-checklist-item"][data-id="#{ids.group_key}"] ) <>
+                 ~s([data-test="restore-checklist-elsewhere"][href="#{PrismWeb.Focus.path(group, "/api-keys")}"])
+             )
+
+      Cyfr.Test.Sandbox.end_views()
+    end
+
+    test "a re-enable the checklist does not offer here dispatches nothing",
+         %{view: view, user: user, ids: ids} do
+      for {operation, id} <- [
+            {"key.reenable", ids.group_key},
+            {"key.reenable", "key_not_listed"},
+            {"vault.delete", ids.vault},
+            {"passkey.reenable", ids.key}
+          ] do
+        view
+        |> layer()
+        |> render_hook("restore_reenable", %{"operation" => operation, "id" => id})
+      end
+
+      assert open_prompt(view) == nil
+      assert pending_records(user.user_id) == []
+      refute has_element?(view, ~s([data-test="restore-checklist-error"]))
+      Cyfr.Test.Sandbox.end_views()
+    end
+
+    test "is drawn by the page's own layer alone: a layer that does not listen draws none",
+         %{conn: conn, athanor: athanor} do
+      quiet = host!(conn, athanor, listen: false)
+      refute has_element?(quiet, ~s([data-test="restore-checklist"]))
+      Cyfr.Test.Sandbox.end_views()
+    end
+
+    # Needs the four re-enable operations and the confirmation provider's
+    # restore rule.
+    test "a re-enable raises its record's prompt, offering an emailed code and never a passkey",
+         %{view: view, user: user, ids: ids} do
+      reenable!(view, "passkey.reenable", ids.passkey)
+
+      assert [%{ref: ref, operation: "passkey.reenable", action: "restore_reenable"}] =
+               pending_records(user.user_id)
+
+      assert open_prompt(view) == Prompt.confirmation_id(ref)
+
+      assert has_element?(
+               view,
+               ~s([data-test="confirmation"][data-ref="#{ref}"][data-own="true"])
+             )
+
+      refute has_element?(view, ~s([data-test="confirm-passkey"]))
+      assert has_element?(view, ~s([data-test="confirm-email"]))
+
+      # The secret is the layer's own, never drawn.
+      refute render(view) =~ held_secret(view)
+
+      # Dismissed, the request is cancelled; the page asked for nothing,
+      # so it is told nothing.
+      view |> element(~s([data-test="prompt-dismiss"])) |> render_click()
+      assert open_prompt(view) == nil
+      assert [%{state: "cancelled"}] = pending_records(user.user_id)
+      refute_received {:host, {:system_layer, _id, _outcome}}
+      Cyfr.Test.Sandbox.end_views()
+    end
+
+    # Needs the four re-enable operations and the confirmation provider's
+    # restore rule.
+    test "an emailed code re-enables a passkey, which ends the recovery; the passkey then confirms",
+         %{view: view, user: user, ids: ids, authenticator: authenticator} do
+      reenable!(view, "passkey.reenable", ids.passkey)
+      view |> element(~s([data-test="confirm-email"])) |> render_click()
+      assert_receive {:confirmation_code_mail, mail}, 2_000
+      view |> form("#system-layer-code", %{"code" => MailSink.code(mail)}) |> render_submit()
+
+      wait_until(
+        fn ->
+          has_element?(view, ~s([data-test="restore-checklist"][data-recovering="false"]))
+        end,
+        2_000,
+        "the recovery's end"
+      )
+
+      assert open_prompt(view) == nil
+
+      assert has_element?(
+               view,
+               ~s([data-test="restore-checklist-notice"]),
+               "passkey is re-enabled"
+             )
+
+      refute has_element?(
+               view,
+               ~s([data-test="restore-checklist-item"][data-id="#{ids.passkey}"])
+             )
+
+      assert row!(Arca.Schemas.Passkey, ids.passkey).state == "active"
+
+      assert {:ok, nil} =
+               Arca.SecurityTransitions.restore_open(Prima.Actor.system(), user.user_id)
+
+      # The device stays suspended until it is re-enabled itself.
+      assert has_element?(view, ~s([data-test="restore-reenable"][data-id="#{ids.client}"]))
+      assert row!(Arca.Schemas.PairedClient, ids.client).standing == "suspended"
+
+      # The recovery over, the re-enabled passkey confirms the next one.
+      reenable!(view, "key.reenable", ids.key)
+      ref = Prima.Confirmation.ref(held_secret(view))
+      prove_here!(view, ref, authenticator)
+
+      wait_until(
+        fn ->
+          not has_element?(view, ~s([data-test="restore-checklist-item"][data-id="#{ids.key}"]))
+        end,
+        2_000,
+        "the key's re-enable"
+      )
+
+      refute row!(Arca.Schemas.ApiKey, ids.key).suspended
+      refute_received {:host, {:system_layer, _id, _outcome}}
+      Cyfr.Test.Sandbox.end_views()
+    end
+  end
+
+  describe "a person with nothing to recover" do
+    setup :signed_in
+
+    test "sees no restore checklist", %{view: view, ctx: ctx} do
+      assert {:ok, nil} = Sanctum.Recovery.checklist(ctx)
+      refute has_element?(view, ~s([data-test="restore-checklist"]))
     end
   end
 

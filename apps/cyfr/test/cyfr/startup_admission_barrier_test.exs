@@ -63,7 +63,8 @@ defmodule Cyfr.StartupAdmissionBarrierTest do
     Phoenix.PubSub.Supervisor,
     Cyfr.StandingWatch,
     Cyfr.TelemetryBridge,
-    Cyfr.Platform.Settings
+    Cyfr.Platform.Settings,
+    :declared_restore
   ]
 
   # A supervisor the census describes is `{id, children}`, in start order.
@@ -200,13 +201,15 @@ defmodule Cyfr.StartupAdmissionBarrierTest do
   ]
 
   # The leaves the product starts no lasting process for: the one-shot
-  # checks answer `:ignore`, and the recovery task exits once it has run.
+  # checks and the declared restore's step answer `:ignore`, and the
+  # recovery task exits once it has run.
   # Their stand-ins record the start and leave no process either. The seed
   # offer is not among them: it runs after its start has returned, holding
   # its claim until it ends or is stopped.
   @no_process [
     Arca.SchemaFingerprint.Check,
     Cyfr.KeyringFingerprint.Check,
+    :declared_restore,
     Aqua.RunnerRecovery
   ]
 
@@ -274,6 +277,13 @@ defmodule Cyfr.StartupAdmissionBarrierTest do
       # refusal it returns is the supervisor's failure to start. The offer
       # is temporary: it runs once, at boot.
       assert %{restart: :transient} = infra |> Enum.find(&(shape(&1) == Cyfr.Bootstrap)) |> spec()
+
+      # The declared restore's step is the gate's first half: transient
+      # too, so a restart of what precedes it runs it again and finds no
+      # marker, and its refusal is the supervisor's failure to start.
+      assert %{restart: :transient} =
+               infra |> Enum.find(&(shape(&1) == :declared_restore)) |> spec()
+
       assert %{restart: :temporary} = infra |> Enum.find(&(shape(&1) == Cyfr.SeedOffer)) |> spec()
 
       # The cell, which the suite's own boot omits, releases its slot row
@@ -291,6 +301,7 @@ defmodule Cyfr.StartupAdmissionBarrierTest do
       [{_, _, _, infra}, _web] = Cyfr.Application.tiers()
       ids = Enum.map(infra, &shape/1)
       refute Cyfr.Bootstrap in ids
+      refute :declared_restore in ids
       refute Cyfr.SeedOffer in ids
     end
 

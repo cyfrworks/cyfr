@@ -45,6 +45,38 @@ defmodule Emissary.Web.RestoreController do
     * `503 {"status": phase, "retry_after": seconds}` — the restore stands
       at `phase` and resumes under the same token, with a `retry-after`
       header.
+
+  ## After a declared restore: the kit
+
+  A home restored from a backup (`ARCHITECTURE.md` §6.9) retired every
+  session and suspended every passkey and device, so a person with no
+  door left recovers with their printed kit, sessionless, and without the
+  installation token. The kit's seed stays in the browser: it signs the
+  home's challenge (`Prima.Identity.RestoreKit`), and the signature is
+  verified against the recovery keys of the person's identity read fresh
+  from their directory (`Sanctum.Recovery.kit_proof/2`).
+
+    * `POST /restore/kit/challenge` — `{"identifier": per_…}`: `200
+      {"challenge", "restore_id", "expires_at"}`, alive five minutes.
+    * `POST /restore/kit` — `{"proof": {…}}`, the signed kit proof:
+      `200 {"credential", "expires_at"}`, the kit credential, alive ten
+      minutes and while the person's row of the restore stays open.
+    * `POST /restore/kit/reenable` — the credential as
+      `authorization: Bearer <credential>`, and `{"operation", …}` naming
+      one of the four re-enable operations: with no item named, `200
+      {"items": […]}`, that class's suspended items; with one
+      (`key_id`, `webhook_id`, `client_id`, `passkey_id`), `200
+      {"reenabled": …}`. The credential admits these four and nothing else
+      (`Sanctum.Caller.establish_kit/2`).
+
+  Their refusals: `404 not_recovering` (the identifier names no enrolled
+  person of this home recovering from a restore, or their recovery has
+  closed), `422 invalid_proof`, `409 challenge_refused` (not this person's
+  held challenge, expired or used), `409 not_a_holder` (no recovery key
+  of the identity signed it), `401 invalid_credential`, `403
+  operation_not_permitted`, a re-enable's own refusal as `{"error": code,
+  "message": sentence}`, and `503` with a `retry-after` header when the
+  directory or the store cannot answer or the person's budget is spent.
   """
 
   use Emissary.Web, :controller
@@ -76,6 +108,92 @@ defmodule Emissary.Web.RestoreController do
       Sanctum.Recovery.reproof(Map.take(params, ["challenge" | @kit_fields]), capability(conn))
     )
   end
+
+  @doc "`POST /restore/kit/challenge`."
+  def kit_challenge(conn, params) do
+    case Sanctum.Recovery.kit_challenge(Map.get(params, "identifier")) do
+      {:ok, %{challenge: challenge, restore_id: restore_id, expires_at: expires_at}} ->
+        conn
+        |> put_status(200)
+        |> json(%{
+          challenge: challenge,
+          restore_id: restore_id,
+          expires_at: DateTime.to_iso8601(expires_at)
+        })
+
+      {:error, reason} ->
+        kit_refuse(conn, reason)
+    end
+  end
+
+  @doc "`POST /restore/kit`."
+  def kit(conn, params) do
+    case Sanctum.Recovery.kit_proof(Map.get(params, "proof")) do
+      {:ok, %{credential: credential, expires_at: expires_at}} ->
+        conn
+        |> put_status(200)
+        |> json(%{credential: credential, expires_at: DateTime.to_iso8601(expires_at)})
+
+      {:error, reason} ->
+        kit_refuse(conn, reason)
+    end
+  end
+
+  @doc "`POST /restore/kit/reenable`."
+  def kit_reenable(conn, params) do
+    operation = Map.get(params, "operation")
+    args = Map.drop(params, ["operation"])
+
+    with {:ok, ctx, grant} <- Sanctum.Caller.establish_kit(capability(conn), operation),
+         {:ok, answer} <- Sanctum.Recovery.kit_reenable(ctx, grant, operation, args) do
+      body =
+        case answer do
+          %{items: items} -> %{items: items}
+          reenabled -> %{reenabled: reenabled}
+        end
+
+      conn |> put_status(200) |> json(body)
+    else
+      {:error, reason} -> kit_refuse(conn, reason)
+    end
+  end
+
+  defp kit_refuse(conn, {:rate_limited, retry_after_ms}),
+    do: retry(conn, "rate_limited", max(div(retry_after_ms + 999, 1000), 1))
+
+  defp kit_refuse(conn, reason) when reason in [:directory_unavailable, :unavailable],
+    do: retry(conn, "unavailable", 1)
+
+  defp kit_refuse(conn, %Prima.Refusal{class: class, reason: reason, message: message}) do
+    conn
+    |> put_status(refusal_status(class))
+    |> json(%{error: Atom.to_string(reason), message: message})
+  end
+
+  defp kit_refuse(conn, reason) do
+    {status, code} = kit_status(reason)
+    conn |> put_status(status) |> json(%{error: code})
+  end
+
+  defp kit_status(:not_recovering), do: {404, "not_recovering"}
+  defp kit_status(:invalid_proof), do: {422, "invalid_proof"}
+  defp kit_status(:challenge_refused), do: {409, "challenge_refused"}
+  defp kit_status(:not_a_holder), do: {409, "not_a_holder"}
+  defp kit_status(:invalid_credential), do: {401, "invalid_credential"}
+  defp kit_status(:operation_not_permitted), do: {403, "operation_not_permitted"}
+  defp kit_status(:not_standing), do: {401, "invalid_credential"}
+  defp kit_status(:not_found), do: {404, "not_found"}
+  defp kit_status(:revoked), do: {409, "revoked"}
+  defp kit_status(:not_suspended), do: {409, "not_suspended"}
+  defp kit_status({:not_found, _kind, _id}), do: {404, "not_found"}
+  defp kit_status({:invalid_argument, _message}), do: {422, "invalid_argument"}
+  defp kit_status(_reason), do: {422, "refused"}
+
+  defp refusal_status(:not_found), do: 404
+  defp refusal_status(:unauthenticated), do: 401
+  defp refusal_status(:forbidden), do: 403
+  defp refusal_status(:conflict), do: 409
+  defp refusal_status(_class), do: 422
 
   # The session goes to the holder of the capability, in its cookie alone,
   # on a session cleared of whatever the browser carried before.

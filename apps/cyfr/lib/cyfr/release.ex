@@ -141,6 +141,45 @@ defmodule Cyfr.Release do
   end
 
   @doc """
+  Declare a restore: write the marker `restore_pending`
+  (`Arca.SecurityTransitions.mark_restore/1`), whose value is a new
+  restore id, and answer that id; a marker already written is answered
+  as it stands, so a second run declares the same restore. The next boot
+  consumes it before its gate opens (`ARCHITECTURE.md` §6.9). `cyfr
+  restore` runs it with the whole cell stopped, once every part of the
+  backup is back, as
+
+      bin/cyfr eval 'IO.puts("CYFR_RESTORE_ID=" <> Cyfr.Release.mark_restore())'
+
+  and an operator who put a backup back by hand runs the same before the
+  first start. Like `live_slots/0` it starts the repo alone, migrates
+  nothing and checks no fingerprint. A store that cannot answer raises,
+  so `eval` exits non-zero and no restore is declared.
+  """
+  @spec mark_restore() :: String.t()
+  def mark_restore do
+    load_app()
+
+    [restore_id | _] =
+      Enum.map(repos(), fn repo ->
+        {:ok, restore_id, _} =
+          Ecto.Migrator.with_repo(repo, fn _ ->
+            case Arca.SecurityTransitions.mark_restore(Prima.Actor.system()) do
+              {:ok, restore_id} ->
+                restore_id
+
+              {:error, reason} ->
+                raise "the restore could not be declared: #{Prima.LoggerContext.shape(reason)}"
+            end
+          end)
+
+        restore_id
+      end)
+
+    restore_id
+  end
+
+  @doc """
   Report which key label every sealed value is encrypted under, each
   sealed column of a row counted, without decrypting anything.
 

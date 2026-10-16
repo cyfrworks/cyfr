@@ -63,6 +63,57 @@ defmodule Cyfr.ReleaseTest do
     end
   end
 
+  # `cyfr restore` declares a restore with the cell stopped; the boot's
+  # step before the gate consumes it (`Cyfr.Application.declared_restore/0`).
+  describe "mark_restore/0" do
+    test "declares one restore, which a second run answers again" do
+      restore_id = Cyfr.Release.mark_restore()
+      assert is_binary(restore_id)
+      assert Cyfr.Release.mark_restore() == restore_id
+      assert {:ok, ^restore_id} = Arca.ServerMetaStorage.get("restore_pending")
+    end
+
+    test "the boot's step consumes it before the gate, once, and then finds none" do
+      restore_id = Cyfr.Release.mark_restore()
+
+      assert :ignore = Cyfr.Application.declared_restore()
+      assert {:error, :not_found} = Arca.ServerMetaStorage.get("restore_pending")
+
+      # A restart of what precedes the gate runs the step again: no marker,
+      # nothing applied.
+      assert :ignore = Cyfr.Application.declared_restore()
+
+      assert {:error, :not_found} = Arca.ServerMetaStorage.get("restore_pending")
+
+      assert is_binary(restore_id)
+    end
+
+    test "a step whose transition fails refuses the boot and keeps the marker" do
+      restore_id = Cyfr.Release.mark_restore()
+      name = "release_restore_fail"
+
+      if Arca.Test.Adapter.sqlite?() do
+        Arca.Repo.query!(
+          "CREATE TRIGGER #{name} BEFORE DELETE ON server_meta " <>
+            "BEGIN SELECT RAISE(ABORT, 'injected failure'); END"
+        )
+      else
+        Arca.Repo.query!(
+          "CREATE FUNCTION #{name}() RETURNS trigger LANGUAGE plpgsql AS " <>
+            "$$ BEGIN RAISE EXCEPTION 'injected failure'; END $$"
+        )
+
+        Arca.Repo.query!(
+          "CREATE TRIGGER #{name} BEFORE DELETE ON server_meta " <>
+            "FOR EACH ROW EXECUTE FUNCTION #{name}()"
+        )
+      end
+
+      assert {:error, {:restore_refused, :database_error}} = Cyfr.Application.declared_restore()
+      assert {:ok, ^restore_id} = Arca.ServerMetaStorage.get("restore_pending")
+    end
+  end
+
   defp slot!(node, release, lease_until, now) do
     {1, _} =
       Arca.Repo.insert_all(Arca.Schemas.CellLease, [
