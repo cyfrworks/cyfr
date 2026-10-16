@@ -207,13 +207,15 @@ defmodule Sanctum.Tenancy.UsersTest do
     {:ok, :added} = Members.add(group, [user_id: u.id], "owner42")
     now = DateTime.utc_now()
 
+    # Written straight to the tables: their stores come with the seal and
+    # the declared restore.
     {1, _} =
-      Arca.Repo.insert_all(Arca.Schemas.PersonSeal, [
-        %{user_id: u.id, text: "amber heron", glyph: nil, set_at: now}
+      Arca.Repo.insert_all("person_seals", [
+        %{user_id: u.id, text: "amber heron", set_at: now}
       ])
 
     {1, _} =
-      Arca.Repo.insert_all(Arca.Schemas.RestorePerson, [
+      Arca.Repo.insert_all("restore_people", [
         %{restore_id: "rst_#{System.unique_integer([:positive])}", user_id: u.id}
       ])
 
@@ -229,7 +231,7 @@ defmodule Sanctum.Tenancy.UsersTest do
     assert person_rows(u.id) == %{seals: 1, restore_periods: 1}
 
     # Their owner is the person's row: deleting it takes both.
-    assert {1, _} = Arca.Repo.delete_all(from(p in Arca.Schemas.User, where: p.id == ^u.id))
+    assert {1, _} = Arca.Repo.delete_all(from(p in "users", where: p.id == ^u.id))
     assert person_rows(u.id) == %{seals: 0, restore_periods: 0}
   end
 
@@ -237,12 +239,12 @@ defmodule Sanctum.Tenancy.UsersTest do
     %{
       seals:
         Arca.Repo.aggregate(
-          from(s in Arca.Schemas.PersonSeal, where: s.user_id == ^user_id),
+          from(s in "person_seals", where: s.user_id == ^user_id),
           :count
         ),
       restore_periods:
         Arca.Repo.aggregate(
-          from(r in Arca.Schemas.RestorePerson, where: r.user_id == ^user_id),
+          from(r in "restore_people", where: r.user_id == ^user_id),
           :count
         )
     }
