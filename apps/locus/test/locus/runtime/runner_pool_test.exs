@@ -76,7 +76,17 @@ defmodule Locus.Runtime.RunnerPoolTest do
         RunnerControl.encode(%{type: :complete, execution_id: execution_id, clean: clean})
       )
 
-  defp spawn_of(keeper, pid), do: Enum.find(spawns(keeper), &(&1.owner == pid))
+  # The keeper records a spawn as the runner's owner starts; a take answers
+  # as soon as the runner stands, so the record is awaited, not assumed.
+  defp spawn_of(keeper, pid) do
+    wait_until(
+      fn -> Enum.any?(spawns(keeper), &(&1.owner == pid)) end,
+      5_000,
+      "the keeper to record the runner's spawn"
+    )
+
+    Enum.find(spawns(keeper), &(&1.owner == pid))
+  end
 
   # Run `fun` with runner `spawn`'s process suspended, so a release the
   # keeper delivers it is never handled and the runner is never reported
