@@ -4613,6 +4613,8 @@ type RetentionSetArgsSettings struct {
 	FileOfferDays Field[int] `json:"file_offer_days,omitzero"`
 	// Days of records kept per athanor
 	FileReceiptDays Field[int] `json:"file_receipt_days,omitzero"`
+	// Days of records kept per athanor
+	OutboxRecordDays Field[int] `json:"outbox_record_days,omitzero"`
 }
 
 // UnmarshalJSON refuses unknown fields and preserves required presence.

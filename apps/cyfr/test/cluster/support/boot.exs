@@ -350,85 +350,119 @@ defmodule Cyfr.Cluster.Boot do
   end
 
   @doc """
-  A schedule's committed completion as this member publishes it: issued
-  under the slot it holds now (`Arca.ControlPlane.held/0`), asking for its
-  outcome to be kept.
+  A schedule of `athanor_id` that keeps its outcome as a note, bound to a
+  profile of its own whose head consent is at revision 1, made on this
+  member. Answers its id.
   """
-  @spec completion(String.t(), String.t(), String.t()) :: struct()
-  def completion(athanor_id, schedule_id, execution_id) do
-    Cyfr.Bus.ScheduleCompleted.new(%{Prima.Actor.in_athanor(athanor_id) | user_id: "cluster"}, %{
-      issuer_member: Cyfr.Bus.ScheduleCompleted.issuer(Arca.ControlPlane.held()),
-      schedule_id: schedule_id,
-      execution_id: execution_id,
-      completed_at: DateTime.utc_now(),
-      keep_outcome: true,
-      output: %{"from" => to_string(node())}
-    })
+  @spec keeping_schedule!(String.t(), String.t()) :: String.t()
+  def keeping_schedule!(athanor_id, label) do
+    profile_id = "prof-notes-#{label}-#{System.unique_integer([:positive])}"
+    ref = "reagent:local.cluster-notes"
+
+    :ok =
+      Sanctum.Test.ConsentFixtures.seed_head!(
+        %{Sanctum.TestContext.local() | athanor_id: athanor_id},
+        %{id: profile_id, kind: :owner, source_ref: ref, label: "default", status: :active},
+        %{
+          id: "cons-#{profile_id}",
+          revision: 1,
+          scope: :versionless,
+          pinned_version: "",
+          invoke_mode: :open_inert,
+          shape_digest: "sha256:shape-#{profile_id}",
+          commit_digest: "sha256:commit-#{profile_id}",
+          resolved_policy: Jason.encode!(%{"canonical" => "jcs-1", "nodes" => %{}}),
+          activation: %{},
+          admitted_origins: [:schedule],
+          vault_refs: []
+        }
+      )
+
+    {:ok, schedule} =
+      Arca.CronSchedule.create(Prima.Actor.in_athanor(athanor_id), %{
+        user_id: "usr_cluster",
+        athanor_id: athanor_id,
+        name: "cluster-notes-#{label}",
+        cron_expression: "0 * * * *",
+        reference: ref <> ":1.0.0",
+        resolved_reference: ref <> ":1.0.0",
+        profile_id: profile_id,
+        metadata: Jason.encode!(%{"keep_outcome" => true}),
+        next_run_at: DateTime.add(DateTime.utc_now(), -60, :second),
+        cap: 1_000
+      })
+
+    schedule.id
   end
 
-  @doc "Publish `completion` on the cell's completion topic, from this member."
-  @spec publish_completion(struct()) :: :ok | {:error, term()}
-  def publish_completion(completion),
-    do: Cyfr.Bus.broadcast_global(Cyfr.Bus.schedule_completions(), completion)
+  @doc """
+  One run of `schedule_id` on this member, ended as a completed run ends
+  (`Opus.Schedules.Scheduler.complete/4`): its occurrence claimed under
+  this member's slot and boot, started under a fresh execution as an
+  admission starts it, and finished with `output`, the outcome's record
+  written in the finish's own transaction. Answers the occurrence's id.
+  """
+  @spec finished_run!(String.t(), String.t(), term()) :: String.t()
+  def finished_run!(athanor_id, schedule_id, output) do
+    actor = Prima.Actor.in_athanor(athanor_id)
+    {:ok, schedule} = Arca.CronSchedule.get(actor, schedule_id)
+    cadence = %{next_after: &{:ok, DateTime.add(&1, 3600, :second)}, missed_bound_ms: 600_000}
+    {:ok, occurrence} = Arca.ScheduleOccurrences.claim(schedule, Prima.Boot.id(), cadence)
+    execution_id = Prima.UUID7.execution_id()
 
-  @doc "Wait until this member's notes keeper has handled what it was sent."
-  @spec settle_notes() :: :ok
-  def settle_notes do
-    _ = :sys.get_state(Aqua.ScheduleNotes, 30_000)
-    :ok
+    {:ok, 1} =
+      Arca.Repo.transaction(fn ->
+        Arca.ScheduleOccurrences.start!(actor, occurrence.id, Prima.Boot.id(), execution_id)
+      end)
+
+    {:ok, 1} = Opus.Schedules.Scheduler.complete(occurrence, execution_id, output)
+    occurrence.id
   end
 
-  @doc "The note `name` of `athanor_id` as this member reads it, or `:none`."
+  @doc """
+  Stop this member's notes keeper from working, and hold the notes claim
+  of `athanor_id` under this member's boot for `lease_ms`, as a member
+  that took the work and then stopped would leave it.
+  """
+  @spec hold_notes!(String.t(), pos_integer()) :: map()
+  def hold_notes!(athanor_id, lease_ms) do
+    :ok = :sys.suspend(Aqua.ScheduleNotes, 30_000)
+    {:ok, claim} = Arca.JobClaims.claim("schedule_notes", athanor_id, Prima.Boot.id(), lease_ms)
+    claim
+  end
+
+  @doc "This member's notes keeper's drain of `athanor_id`, under this member's boot."
+  @spec drain_notes(String.t()) :: term()
+  def drain_notes(athanor_id), do: Aqua.ScheduleNotes.drain(athanor_id)
+
+  @doc "The note `name` of `athanor_id` with its revision, as this member reads it, or `:none`."
   @spec note(String.t(), String.t()) :: map() | :none
   def note(athanor_id, name) do
     internal = Sanctum.Context.internal(user_id: "cluster", permissions: [:storage_read])
 
     with {:ok, ctx} <- Sanctum.Context.refocus(internal, athanor_id),
-         {:ok, note} <- Aqua.Notes.read(ctx, name) do
-      note
+         {:ok, %{revision: revision, note: %{} = note}} <- Aqua.Notes.current(ctx, name) do
+      Map.put(note, :revision, revision)
     else
       _ -> :none
     end
   end
 
   @doc """
-  Keep `completion` on this member after it lost its slot, and hold the
-  slot again afterwards; the member's claimant rewrites the real standing
-  on its next renewal.
-
-  The claimant writes the standing of the slot it holds back on every
-  renew tick (`Arca.ControlPlane.renew/1`), so it is suspended between two
-  ticks for as long as the member stands without its slot, and resumed
-  only once the slot is held again. The standing is read on both sides of
-  the keep, so a keep that wrote is the keeper's doing and never a
-  standing that moved under it. A renew still running after one lease has
-  won nothing, so that is how long the suspend waits for the claimant to
-  finish one, inside the case's own call; a suspend that waited longer
-  still lands once that renew returns, and the resume is queued behind it.
+  The outcome the notes keeper recorded for the occurrence
+  `occurrence_id` of `athanor_id`, or `:none`.
   """
-  @spec keep_without_slot(struct()) :: term()
-  def keep_without_slot(completion) do
-    try do
-      :ok = :sys.suspend(Cyfr.Cell, 15_000)
+  @spec notes_outcome(String.t(), String.t()) :: String.t() | :none
+  def notes_outcome(athanor_id, occurrence_id) do
+    import Ecto.Query, only: [from: 2]
 
-      try do
-        Arca.ControlPlane.record(:lost)
-        without_slot!("before")
-        answer = Aqua.ScheduleNotes.keep(completion)
-        without_slot!("after")
-        answer
-      after
-        Arca.ControlPlane.record({:held, 5_000})
-      end
-    after
-      :sys.resume(Cyfr.Cell)
-    end
-  end
-
-  defp without_slot!(side) do
-    if Arca.ControlPlane.held?() do
-      raise "this member held its slot #{side} the keep, though it was recorded lost"
-    end
+    Arca.Repo.one(
+      from(c in Arca.Schemas.ConsumerReceipt,
+        where: c.athanor_id == ^athanor_id and c.consumer == "schedule_notes",
+        where: c.source_kind == "schedule_occurrence" and c.source_id == ^occurrence_id,
+        select: c.outcome
+      )
+    ) || :none
   end
 
   @doc "Stop the application cleanly, releasing the slot and every claim."

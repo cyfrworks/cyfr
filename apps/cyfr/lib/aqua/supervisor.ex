@@ -24,9 +24,11 @@ defmodule Aqua.Supervisor do
     Supervisor.init(
       [
         # Keeps a completed schedule's outcome as a note when the schedule
-        # asked for it: subscribed to the committed completions before the
-        # scheduler can fire, and acting only on its own member's. 5 s: its
-        # stop, which holds no work in flight.
+        # asked for it, from the outbox records the finishes committed:
+        # subscribed to the completions as wake-ups before the scheduler
+        # can fire, and draining at boot. 5 s: a drain cut short rolls its
+        # publication and receipt back together, and its claim lapses for
+        # the next member.
         Supervisor.child_spec(Aqua.ScheduleNotes, shutdown: 5_000),
         # The loop worker's 5 s is its stop, which holds no work in flight;
         # the task supervisor's 30 s the longest loop step it lets finish.

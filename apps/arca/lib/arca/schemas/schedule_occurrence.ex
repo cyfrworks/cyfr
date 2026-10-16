@@ -7,7 +7,9 @@ defmodule Arca.Schemas.ScheduleOccurrence do
   was due for, the node that claimed it, the execution that started it
   and how it ended. `state` is `claimed` (taken, not yet admitted),
   `started` (an execution was admitted for it), then `completed`,
-  `failed` or `uncertain`. Owned by the athanor through its schedule.
+  `failed` or `uncertain`. `note_revision_read` is the revision of the
+  schedule's note as the run first read it, 0 for no note, and nil while
+  the run has read none. Owned by the athanor through its schedule.
   """
 
   use Ecto.Schema
@@ -40,7 +42,8 @@ defmodule Arca.Schemas.ScheduleOccurrence do
     :attempts,
     :claimed_by,
     :claimed_at,
-    :ended_at
+    :ended_at,
+    :note_revision_read
   ]
 
   def changeset(row, attrs) do

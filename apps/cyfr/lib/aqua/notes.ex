@@ -59,8 +59,9 @@ defmodule Aqua.Notes do
   `Aqua.Providers.Notes`, the door people and agents come through;
   `Aqua.Prompt`, which reads the pinned page and the index into every
   turn; `Aqua.ScheduleNotes`, which keeps a schedule's outcome where no
-  person is at the keyboard; and `PrismWeb.AquaLive`, which edits the
-  pinned page on the AQUA page.
+  person is at the keyboard, through the publication that writes its
+  receipt beside the note (`keep_fenced/6`); and `PrismWeb.AquaLive`,
+  which edits the pinned page on the AQUA page.
   """
 
   require Logger
@@ -218,6 +219,55 @@ defmodule Aqua.Notes do
       # Keeping under a name that exists replaces what was there — said so
       # in the answer, so the tape can say so too, never silently.
       {:ok, %{kept: name, athanor_id: Context.athanor!(ctx), replaced: revision_read > 0}}
+    end
+  end
+
+  @doc """
+  `keep_over/5` with the publication's two owner closures
+  (`Arca.FencedPublication.publish/4`, `ARCHITECTURE.md` §4.4): the bytes
+  are staged first, outside any transaction, and the note is then
+  published over `revision_read` in one transaction under this member's
+  live slot, where `verify:` is asked before the publication and `also:`
+  writes the caller's row beside it, handed the revision the note now
+  holds. A closure's refusal publishes nothing, writes neither, and is
+  answered `{:error, {:declined, reason}}`; the staged bytes of a refused
+  publication have their reservation ended.
+
+  Answers the revision the note now holds with `keep_over/5`'s answer, or
+  its refusals: a note written since it was read is `{:conflict, _}`.
+  """
+  @spec keep_fenced(
+          Context.t(),
+          String.t(),
+          String.t(),
+          non_neg_integer(),
+          provenance(),
+          keyword()
+        ) ::
+          {:ok,
+           %{
+             kept: String.t(),
+             athanor_id: String.t(),
+             replaced: boolean(),
+             revision: pos_integer()
+           }}
+          | {:error, refusal() | {:declined, term()}}
+  def keep_fenced(%Context{} = ctx, name, content, revision_read, provenance, closures)
+      when is_binary(content) and is_integer(revision_read) and revision_read >= 0 and
+             is_list(provenance) and is_list(closures) do
+    closures = Keyword.take(closures, [:verify, :also])
+
+    with :ok <- check_name(name),
+         :ok <- refuse_pinned(name, "keep", "pin"),
+         {:ok, revision} <-
+           published(ctx, name, encode(ctx, content, provenance), revision_read, closures) do
+      {:ok,
+       %{
+         kept: name,
+         athanor_id: Context.athanor!(ctx),
+         replaced: revision_read > 0,
+         revision: revision
+       }}
     end
   end
 
@@ -569,6 +619,15 @@ defmodule Aqua.Notes do
   with the `:athanor_id` locator — the one athanor, opened under the
   reader's own seat (`Sanctum.Context.focus/2`: membership and archive
   checked), and never from a room's chain, which reads its own pile alone.
+
+  `:root_execution_id` names the chain the read is made in, as the host
+  stamped it (never a value a model wrote). A scheduled run's first read
+  of its schedule's note in the athanor in focus is recorded on the
+  occurrence with the revision it answered, 0 for no note
+  (`Aqua.ScheduleNotes.read_by_run/4`): the revision the run's outcome is
+  later published over. A read whose record cannot be written answers
+  unavailable, so a run never acts on a read its outcome cannot account
+  for.
   """
   @spec read(Context.t(), String.t(), scope(), keyword()) :: {:ok, note()} | {:error, refusal()}
   def read(ctx, name, scope \\ "athanor", opts \\ [])
@@ -583,7 +642,50 @@ defmodule Aqua.Notes do
   def read(%Context{} = ctx, name, scope, opts) do
     with :ok <- check_name(name),
          {:ok, read_ctx} <- read_context(ctx, scope, Keyword.get(opts, :athanor_id)) do
-      fetch(read_ctx, name)
+      case read_with_revision(read_ctx, name) do
+        {:ok, note, revision} ->
+          with :ok <- read_by_run(ctx, read_ctx, name, revision, opts), do: {:ok, note}
+
+        :none ->
+          with :ok <- read_by_run(ctx, read_ctx, name, 0, opts),
+               do: {:error, {:not_found, "note", name}}
+
+        :unreadable ->
+          {:error, {:not_found, "note", name}}
+      end
+    end
+  end
+
+  # The note and the revision it was read at; `:none` where nothing holds
+  # the name; `:unreadable` where its store or its bytes could not answer,
+  # which records no read.
+  defp read_with_revision(ctx, name) do
+    case document(ctx, name) do
+      {:ok, nil} ->
+        :none
+
+      {:ok, doc} ->
+        case content(ctx, doc) do
+          {:ok, binary} -> {:ok, decode(ctx, name, binary), revision(doc)}
+          _unreadable -> :unreadable
+        end
+
+      {:error, _} ->
+        :unreadable
+    end
+  end
+
+  # Only a read in the athanor the chain runs in can be its schedule's.
+  defp read_by_run(ctx, read_ctx, name, revision, opts) do
+    case Keyword.get(opts, :root_execution_id) do
+      root when is_binary(root) and root != "" and read_ctx.athanor_id == ctx.athanor_id ->
+        case Aqua.ScheduleNotes.read_by_run(Context.actor(ctx), root, name, revision) do
+          :ok -> :ok
+          {:error, :unavailable} -> {:error, {:unavailable, "Notes"}}
+        end
+
+      _none ->
+        :ok
     end
   end
 
@@ -703,6 +805,10 @@ defmodule Aqua.Notes do
   # holds none stages nothing; bytes a refused publication staged have
   # their reservation ended, and the sweep removes them.
   defp publish(ctx, name, bytes, revision_read) do
+    with {:ok, _revision} <- published(ctx, name, bytes, revision_read, []), do: :ok
+  end
+
+  defp published(ctx, name, bytes, revision_read, closures) do
     actor = Sanctum.Context.actor(ctx)
 
     with {:ok, slot} <- slot(),
@@ -712,9 +818,9 @@ defmodule Aqua.Notes do
         staged: staged
       }
 
-      case Arca.FencedPublication.publish(change, revision_read, slot) do
-        {:ok, _revision} ->
-          :ok
+      case Arca.FencedPublication.publish(change, revision_read, slot, closures) do
+        {:ok, revision} ->
+          {:ok, revision}
 
         {:error, reason} ->
           _ = Arca.Storage.cancel_stage(actor, staged)
@@ -751,6 +857,13 @@ defmodule Aqua.Notes do
   # not answer — writes nothing and is answered as a retry.
   defp publication_refusal(name, :stale) do
     {:conflict, "the note '#{name}' changed while it was being written — read it and try again"}
+  end
+
+  # A refusal of the publication's own; anything else is an owner
+  # closure's, answered as that closure gave it.
+  defp publication_refusal(_name, reason)
+       when reason not in [:not_owner, :expired, :budget, :database_error] do
+    {:declined, reason}
   end
 
   defp publication_refusal(_name, reason) do

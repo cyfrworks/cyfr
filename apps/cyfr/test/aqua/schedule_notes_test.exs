@@ -23,25 +23,32 @@ defmodule Aqua.ScheduleNotesTest.Between do
 end
 
 defmodule Aqua.ScheduleNotesTest do
-  # A schedule that asked to keep its outcome: the committed completion
-  # files a note in the schedule's athanor with the run as provenance,
-  # capped, once per execution, and only on the member that issued it; a
-  # run nobody asked to keep, a closed furnace or a lost slot writes
-  # nothing.
+  # A schedule that asked to keep its outcome: the finish records the
+  # outcome in the outbox in its own transaction, and the consumer files
+  # the note from that record alone, once, under its job claim, over the
+  # revision the run read — keeping a person's change, never writing over
+  # a later outcome, and writing nothing once the authority is gone.
   use ExUnit.Case, async: false
 
   import Ecto.Query, only: [from: 2]
+  import Prima.Test.Wait
 
-  alias Arca.ControlPlane
+  alias Arca.{ConsumerReceipts, ControlPlane, CronSchedule, ScheduleOccurrences}
   alias Aqua.ScheduleNotes
   alias Cyfr.Bus.ScheduleCompleted
+  alias Opus.Schedules.Scheduler
+  alias Sanctum.Test.ConsentFixtures
+
+  @claimant "boot_schedule_notes_test"
+  @reference "reagent:local.notes"
 
   setup tags do
     Cyfr.Test.Sandbox.setup!(tags)
 
-    test_path = Path.join(System.tmp_dir!(), "schedule_notes_#{:rand.uniform(1_000_000)}")
+    test_path =
+      Path.join(System.tmp_dir!(), "schedule_notes_#{System.unique_integer([:positive])}")
+
     original = Application.get_env(:arca, :base_path)
-    Application.put_env(:arca, :base_path, test_path)
 
     on_exit(fn ->
       File.rm_rf!(test_path)
@@ -51,148 +58,435 @@ defmodule Aqua.ScheduleNotesTest do
         else: Application.delete_env(:arca, :base_path)
     end)
 
+    Application.put_env(:arca, :base_path, test_path)
     on_exit(fn -> ControlPlane.record(:unclaimed) end)
+
+    # The member's own consumer drains on a tick and on every completion:
+    # held still for the case, which drains by hand, and let go after.
+    keeper = Process.whereis(ScheduleNotes)
+    on_exit(fn -> resume(keeper) end)
+    :ok = :sys.suspend(keeper)
+
+    Cyfr.Test.Sandbox.stop_work_on_exit()
 
     n = System.unique_integer([:positive])
     user = "local|idp|sched-#{n}"
     {:ok, athanor} = Sanctum.Tenancy.Athanors.create_group(user, "Ops #{n}")
     ctx = %{Sanctum.TestContext.local() | user_id: user, athanor_id: athanor.id}
-    {:ok, user: user, athanor: athanor, ctx: ctx}
+    profile_id = "prof_notes_#{n}"
+    :ok = granted!(ctx, profile_id)
+
+    {:ok, user: user, athanor: athanor, ctx: ctx, profile_id: profile_id}
   end
 
-  # What the scheduler publishes once the occurrence's close and the run's
-  # record committed, from this member's own slot.
-  defp completed(athanor, user, overrides \\ %{}) do
-    actor = %{Prima.Actor.in_athanor(athanor.id) | user_id: user}
-
-    fields =
-      Map.merge(
-        %{
-          issuer_member: ScheduleCompleted.issuer(ControlPlane.held()),
-          schedule_id: "sched_#{System.unique_integer([:positive])}",
-          execution_id: "exec_#{System.unique_integer([:positive])}",
-          occurrence_id: "occ_1",
-          completed_at: DateTime.utc_now(),
-          keep_outcome: true,
-          output: %{"summary" => "42 rows reconciled"}
-        },
-        overrides
-      )
-
-    ScheduleCompleted.new(actor, fields)
+  defp resume(keeper) do
+    if Process.alive?(keeper), do: :sys.resume(keeper)
+  rescue
+    _ -> :ok
   end
 
-  test "a completed run that asked to be kept files a note, named by the schedule's id, with the run as provenance",
-       %{athanor: athanor, user: user, ctx: ctx} do
-    completion = completed(athanor, user)
-    assert :kept = ScheduleNotes.keep(completion)
-
-    assert {:ok, note} = Aqua.Notes.read(ctx, completion.schedule_id)
-    assert note.content =~ "42 rows reconciled"
-    assert note.kept_by == "schedule:" <> completion.schedule_id
-    assert note.execution == completion.execution_id
+  # The profile a schedule fires under, with a head consent at revision 1.
+  defp granted!(ctx, profile_id) do
+    ConsentFixtures.seed_head!(
+      ctx,
+      %{id: profile_id, kind: :owner, source_ref: @reference, label: "default", status: :active},
+      %{
+        id: "consent-#{profile_id}",
+        revision: 1,
+        scope: :versionless,
+        pinned_version: "",
+        invoke_mode: :open_inert,
+        shape_digest: "sha256:shape-#{profile_id}",
+        commit_digest: "sha256:commit-#{profile_id}",
+        resolved_policy: Jason.encode!(%{"canonical" => "jcs-1", "nodes" => %{}}),
+        activation: %{},
+        admitted_origins: [:schedule],
+        vault_refs: []
+      }
+    )
   end
 
-  test "the next run replaces the note before it", %{athanor: athanor, user: user, ctx: ctx} do
-    first = completed(athanor, user)
-    assert :kept = ScheduleNotes.keep(first)
-
-    next =
-      completed(athanor, user, %{
-        schedule_id: first.schedule_id,
-        output: %{"summary" => "43 rows"}
+  defp schedule!(%{ctx: ctx, profile_id: profile_id}, metadata) do
+    {:ok, schedule} =
+      CronSchedule.create(Sanctum.Context.actor(ctx), %{
+        user_id: ctx.user_id,
+        athanor_id: ctx.athanor_id,
+        name: "sched-#{System.unique_integer([:positive])}",
+        cron_expression: "0 * * * *",
+        reference: @reference <> ":1.0.0",
+        resolved_reference: @reference <> ":1.0.0",
+        profile_id: profile_id,
+        metadata: metadata,
+        next_run_at: DateTime.add(DateTime.utc_now(), 3600, :second),
+        cap: 1_000
       })
 
-    assert :kept = ScheduleNotes.keep(next)
-
-    assert {:ok, note} = Aqua.Notes.read(ctx, first.schedule_id)
-    assert note.content =~ "43 rows"
-    refute note.content =~ "42 rows"
-    assert {:ok, %{notes: [_]}} = Aqua.Notes.list(ctx)
+    schedule
   end
 
-  test "the same completion delivered twice keeps one note, once", %{
-    athanor: athanor,
-    user: user,
-    ctx: ctx
-  } do
-    completion = completed(athanor, user)
-    assert :kept = ScheduleNotes.keep(completion)
-    {:ok, %{kept_at: kept_at}} = Aqua.Notes.read(ctx, completion.schedule_id)
+  defp keeping(context, name \\ nil) do
+    metadata =
+      if name,
+        do: Jason.encode!(%{"keep_outcome" => true, "note_name" => name}),
+        else: Jason.encode!(%{"keep_outcome" => true})
 
-    assert :duplicate = ScheduleNotes.keep(completion)
-    assert {:ok, %{notes: [_]}} = Aqua.Notes.list(ctx)
-    assert {:ok, %{kept_at: ^kept_at}} = Aqua.Notes.read(ctx, completion.schedule_id)
+    schedule!(context, metadata)
   end
 
-  test "note_name names the note; a string output is kept as it is; a long one is cut with a marker",
-       %{athanor: athanor, user: user, ctx: ctx} do
-    long = String.duplicate("é", 40_000)
-    completion = completed(athanor, user, %{output: long, note_name: "reconciliation"})
-    assert completion.truncated
+  # Occurrences of it may overlap, so an earlier one can finish last.
+  defp overlapping!(schedule) do
+    {1, _} =
+      Arca.Repo.update_all(
+        from(s in Arca.Schemas.CronSchedule, where: s.id == ^schedule.id),
+        set: [concurrency: "allow"]
+      )
 
-    assert :kept = ScheduleNotes.keep(completion)
-
-    assert {:ok, note} = Aqua.Notes.read(ctx, "reconciliation")
-    assert String.valid?(note.content)
-    assert String.ends_with?(note.content, "longer than 64 KiB]")
-    assert byte_size(note.content) <= 64 * 1024 + 100
-    assert {:error, _} = Aqua.Notes.read(ctx, completion.schedule_id)
+    schedule
   end
 
-  test "a note_name the ledger's grammar refuses writes nothing, and the id is not used instead",
-       %{athanor: athanor, user: user, ctx: ctx} do
-    assert :not_kept =
-             ScheduleNotes.keep(completed(athanor, user, %{note_name: "nightly: sync"}))
+  # One occurrence of `schedule`, due `seconds_ago`, claimed and started
+  # under a fresh execution as an admission starts it.
+  defp started!(schedule, seconds_ago) do
+    due = DateTime.add(DateTime.utc_now(), -seconds_ago, :second)
 
-    assert :not_kept = ScheduleNotes.keep(completed(athanor, user, %{note_name: "../escape"}))
-    assert {:ok, %{notes: []}} = Aqua.Notes.list(ctx)
+    {1, _} =
+      Arca.Repo.update_all(
+        from(s in Arca.Schemas.CronSchedule, where: s.id == ^schedule.id),
+        set: [next_run_at: due]
+      )
+
+    cadence = %{next_after: &{:ok, DateTime.add(&1, 3600, :second)}, missed_bound_ms: 600_000}
+
+    {:ok, occurrence} =
+      ScheduleOccurrences.claim(%{schedule | next_run_at: due}, @claimant, cadence)
+
+    execution_id = Prima.UUID7.execution_id()
+    actor = Prima.Actor.in_athanor(schedule.athanor_id)
+
+    {:ok, 1} =
+      Arca.Repo.transaction(fn ->
+        ScheduleOccurrences.start!(actor, occurrence.id, @claimant, execution_id)
+      end)
+
+    {occurrence, execution_id}
   end
 
-  test "a run nobody asked to keep writes nothing", %{athanor: athanor, user: user, ctx: ctx} do
-    assert :skipped = ScheduleNotes.keep(completed(athanor, user, %{keep_outcome: false}))
-    assert {:ok, %{notes: []}} = Aqua.Notes.list(ctx)
+  defp finished!({occurrence, execution_id}, output) do
+    {:ok, 1} = Scheduler.complete(occurrence, execution_id, output, @claimant)
+    {occurrence, execution_id}
   end
 
-  test "an archived athanor's schedule writes nothing", %{athanor: athanor, user: user, ctx: ctx} do
-    {:ok, _} = Sanctum.Tenancy.Athanors.archive(athanor)
-    assert :skipped = ScheduleNotes.keep(completed(athanor, user))
-    assert {:ok, %{notes: []}} = Aqua.Notes.list(ctx)
+  defp ran!(schedule, seconds_ago, output),
+    do: schedule |> started!(seconds_ago) |> finished!(output)
+
+  # The run's read of its note, as the notes tool makes it in its chain.
+  defp read_by_run(ctx, {_occurrence, execution_id}, name),
+    do: Aqua.Notes.read(ctx, name, "athanor", root_execution_id: execution_id)
+
+  # The outcome record the occurrence's finish wrote, by its source.
+  defp source({occurrence, _execution_id}, _schedule) do
+    Arca.Repo.one!(
+      from(r in Arca.Schemas.OutboxRecord,
+        where: r.source_kind == "schedule_occurrence" and r.source_id == ^occurrence.id,
+        select: %{
+          source_kind: r.source_kind,
+          source_id: r.source_id,
+          source_revision: r.source_revision
+        }
+      )
+    )
   end
 
-  describe "the issuer" do
-    test "another member's completion writes nothing here", %{
-      athanor: athanor,
-      user: user,
-      ctx: ctx
-    } do
-      peer = %{node: "peer@host", owner: "boot_peer", generation: 1}
-      assert :skipped = ScheduleNotes.keep(completed(athanor, user, %{issuer_member: peer}))
+  defp outcome(athanor, source),
+    do: ConsumerReceipts.outcome(Prima.Actor.in_athanor(athanor.id), "schedule_notes", source)
+
+  defp drain(athanor), do: ScheduleNotes.drain(athanor.id)
+
+  defp note(ctx, name), do: Aqua.Notes.current(ctx, name)
+
+  defp plant(between), do: Process.put(Aqua.ScheduleNotesTest.Between, between)
+
+  defp with_between(context) do
+    installed = Prima.Caps.impl!()
+    on_exit(fn -> Prima.Caps.install!(installed) end)
+    Prima.Caps.install!(Aqua.ScheduleNotesTest.Between)
+    context
+  end
+
+  describe "delivery" do
+    setup :with_between
+
+    test "a finished run's note is written once from its record, after its metadata changed and its payload was pruned, by a consumer restarted without the bus",
+         %{athanor: athanor, ctx: ctx} = context do
+      schedule = keeping(context, "nightly")
+      run = ran!(schedule, 60, %{"summary" => "42 rows reconciled"})
+
+      # What the note would be built from now says something else entirely.
+      {:ok, _} =
+        CronSchedule.update(Sanctum.Context.actor(ctx), schedule.id, %{
+          metadata: Jason.encode!(%{"keep_outcome" => false, "note_name" => "elsewhere"})
+        })
+
+      assert {:ok, _} =
+               Arca.Retention.cleanup(Sanctum.Context.actor(ctx), "schedule_payload_days",
+                 value: 1
+               )
+
+      source = source(run, schedule)
+
+      # The consumer restarts, and nothing is published on the bus: its
+      # boot drain finds the record.
+      keeper = Process.whereis(ScheduleNotes)
+      ref = Process.monitor(keeper)
+      Process.exit(keeper, :kill)
+      assert_receive {:DOWN, ^ref, :process, ^keeper, :killed}
+
+      wait_until(
+        fn -> match?({:ok, "applied"}, outcome(athanor, source)) end,
+        10_000,
+        "the restarted consumer to keep the note"
+      )
+
+      # Held still again for the rest of the case.
+      :ok = :sys.suspend(Process.whereis(ScheduleNotes))
+
+      assert {:ok, %{revision: 1, note: note}} = note(ctx, "nightly")
+      assert note.content =~ "42 rows reconciled"
+      assert note.kept_by == "schedule:" <> schedule.id
+      assert note.execution == elem(run, 1)
+      assert {:ok, %{revision: 0}} = note(ctx, "elsewhere")
+      assert {:ok, %{}} = drain(athanor)
+      assert {:ok, %{revision: 1}} = note(ctx, "nightly")
+    end
+
+    test "the same record delivered twice keeps one note, once",
+         %{athanor: athanor, ctx: ctx} = context do
+      schedule = keeping(context)
+      run = ran!(schedule, 60, "first")
+      source = source(run, schedule)
+
+      # Two drains at once under two owners: one holds the claim.
+      answers =
+        [
+          Task.async(fn -> ScheduleNotes.drain(athanor.id, owner: "owner_a") end),
+          Task.async(fn -> ScheduleNotes.drain(athanor.id, owner: "owner_b") end)
+        ]
+        |> Task.await_many(15_000)
+
+      assert Enum.count(answers, &match?({:ok, %{"applied" => 1}}, &1)) == 1
+
+      assert {:ok, %{}} = drain(athanor)
+      assert {:ok, "applied"} = outcome(athanor, source)
+      assert {:ok, %{revision: 1, note: %{content: "first"}}} = note(ctx, schedule.id)
+    end
+
+    test "a person's edit after the run read the note is kept, and the outcome is a conflict",
+         %{athanor: athanor, ctx: ctx} = context do
+      schedule = keeping(context, "nightly")
+      {:ok, _} = Aqua.Notes.keep(ctx, "nightly", "the list as it was")
+
+      started = started!(schedule, 60)
+      assert {:ok, %{content: "the list as it was"}} = read_by_run(ctx, started, "nightly")
+      {:ok, _} = Aqua.Notes.keep(ctx, "nightly", "corrected by hand")
+      run = finished!(started, "the run's list")
+      source = source(run, schedule)
+
+      assert {:ok, %{"conflict" => 1}} = drain(athanor)
+      assert {:ok, "conflict"} = outcome(athanor, source)
+      assert {:ok, %{revision: 2, note: %{content: "corrected by hand"}}} = note(ctx, "nightly")
+    end
+
+    test "a person's edit after the run finished is kept, and the outcome is a conflict",
+         %{athanor: athanor, ctx: ctx} = context do
+      schedule = keeping(context, "nightly")
+      started = started!(schedule, 60)
+      assert {:error, {:not_found, "note", "nightly"}} = read_by_run(ctx, started, "nightly")
+      run = finished!(started, "the run's list")
+      {:ok, _} = Aqua.Notes.keep(ctx, "nightly", "written by hand")
+
+      assert {:ok, %{"conflict" => 1}} = drain(athanor)
+      assert {:ok, "conflict"} = outcome(athanor, source(run, schedule))
+      assert {:ok, %{revision: 1, note: %{content: "written by hand"}}} = note(ctx, "nightly")
+    end
+
+    test "a run that read the note publishes over the revision it read",
+         %{athanor: athanor, ctx: ctx} = context do
+      schedule = keeping(context, "nightly")
+      {:ok, _} = Aqua.Notes.keep(ctx, "nightly", "a person's start")
+      started = started!(schedule, 60)
+      assert {:ok, _} = read_by_run(ctx, started, "nightly")
+      run = finished!(started, "the run's answer")
+
+      assert {:ok, %{"applied" => 1}} = drain(athanor)
+      assert {:ok, "applied"} = outcome(athanor, source(run, schedule))
+      assert {:ok, %{revision: 2, note: %{content: "the run's answer"}}} = note(ctx, "nightly")
+    end
+
+    test "a repeating run that reads no note replaces its own outcome; a person's edit before the next delivery is kept",
+         %{athanor: athanor, ctx: ctx} = context do
+      schedule = keeping(context)
+
+      first = ran!(schedule, 300, "first outcome")
+      assert {:ok, %{"applied" => 1}} = drain(athanor)
+
+      second = ran!(schedule, 200, "second outcome")
+      assert {:ok, %{"applied" => 1}} = drain(athanor)
+      assert {:ok, %{revision: 2, note: %{content: "second outcome"}}} = note(ctx, schedule.id)
+
+      third = ran!(schedule, 100, "third outcome")
+      {:ok, _} = Aqua.Notes.keep(ctx, schedule.id, "a person's correction")
+      assert {:ok, %{"conflict" => 1}} = drain(athanor)
+
+      assert {:ok, "applied"} = outcome(athanor, source(first, schedule))
+      assert {:ok, "applied"} = outcome(athanor, source(second, schedule))
+      assert {:ok, "conflict"} = outcome(athanor, source(third, schedule))
+
+      assert {:ok, %{revision: 3, note: %{content: "a person's correction"}}} =
+               note(ctx, schedule.id)
+    end
+
+    test "an earlier occurrence finishing after a later one's note landed is superseded",
+         %{athanor: athanor, ctx: ctx} = context do
+      schedule = context |> keeping() |> overlapping!()
+      earlier = started!(schedule, 300)
+      later = ran!(schedule, 100, "later outcome")
+      assert {:ok, %{"applied" => 1}} = drain(athanor)
+
+      earlier = finished!(earlier, "earlier outcome")
+      assert {:ok, %{"superseded" => 1}} = drain(athanor)
+      assert {:ok, "superseded"} = outcome(athanor, source(earlier, schedule))
+      assert {:ok, "applied"} = outcome(athanor, source(later, schedule))
+      assert {:ok, %{revision: 1, note: %{content: "later outcome"}}} = note(ctx, schedule.id)
+    end
+
+    test "the profile revoked after the note was staged refuses it: no note, the outcome refused",
+         %{athanor: athanor, ctx: ctx, profile_id: profile_id} = context do
+      schedule = keeping(context)
+      run = ran!(schedule, 60, "kept once authority stands")
+      source = source(run, schedule)
+
+      plant(fn ->
+        :ok =
+          Arca.ProfileStorage.transition(Sanctum.Context.actor(ctx), profile_id, :any, "revoked")
+      end)
+
+      assert {:ok, %{"refused" => 1}} = drain(athanor)
+      assert {:ok, "refused"} = outcome(athanor, source)
+      assert {:ok, %{revision: 0}} = note(ctx, schedule.id)
+    end
+
+    test "a new head consent since the finish refuses the note",
+         %{athanor: athanor, ctx: ctx} = context do
+      schedule = keeping(context)
+      run = ran!(schedule, 60, "kept under the old consent")
+      _ = ConsentFixtures.regrant_origins!(ctx, context.profile_id, [:schedule, :interactive])
+
+      assert {:ok, %{"refused" => 1}} = drain(athanor)
+      assert {:ok, "refused"} = outcome(athanor, source(run, schedule))
+      assert {:ok, %{revision: 0}} = note(ctx, schedule.id)
+    end
+
+    test "a crash after the note's publication and before its receipt rolls both back, and the next drain keeps one note",
+         %{athanor: athanor, ctx: ctx} = context do
+      schedule = keeping(context)
+      run = ran!(schedule, 60, "kept with its receipt")
+      source = source(run, schedule)
+
+      # The receipt's table is gone once the note is staged: the
+      # publication's statement lands, and the receipt beside it raises.
+      plant(fn -> rename!("consumer_receipts", "consumer_receipts_away") end)
+
+      assert {:stopped, {:unavailable, "Notes"}} = drain(athanor)
+      rename!("consumer_receipts_away", "consumer_receipts")
+
+      assert {:ok, %{revision: 0}} = note(ctx, schedule.id)
+      assert :none = outcome(athanor, source)
+
+      assert {:ok, %{"applied" => 1}} = drain(athanor)
+      assert {:ok, "applied"} = outcome(athanor, source)
+
+      assert {:ok, %{revision: 1, note: %{content: "kept with its receipt"}}} =
+               note(ctx, schedule.id)
+    end
+
+    for loss <- [:lapsed, :taken] do
+      test "a job claim #{loss} on a live member writes neither the note nor a receipt",
+           %{athanor: athanor, ctx: ctx} = context do
+        schedule = keeping(context)
+        run = ran!(schedule, 60, "never written")
+        source = source(run, schedule)
+
+        plant(fn -> lose_claim!(athanor.id, unquote(loss)) end)
+
+        assert {:stopped, unquote(loss)} = drain(athanor)
+        assert :none = outcome(athanor, source)
+        assert {:ok, %{revision: 0}} = note(ctx, schedule.id)
+
+        assert {:ok, [_pending]} =
+                 Arca.Outbox.pending(
+                   Prima.Actor.in_athanor(athanor.id),
+                   "schedule_notes",
+                   "schedule_outcome"
+                 )
+      end
+    end
+  end
+
+  describe "what is written" do
+    test "a note named by the schedule's id, with the run as provenance, and a long output cut with a marker",
+         %{athanor: athanor, ctx: ctx} = context do
+      schedule = keeping(context)
+      long = String.duplicate("é", 40_000)
+      {_occurrence, execution_id} = ran!(schedule, 60, long)
+
+      assert {:ok, %{"applied" => 1}} = drain(athanor)
+      assert {:ok, %{note: note}} = note(ctx, schedule.id)
+      assert note.kept_by == "schedule:" <> schedule.id
+      assert note.execution == execution_id
+      assert String.valid?(note.content)
+      assert String.ends_with?(note.content, "longer than 64 KiB]")
+      assert byte_size(note.content) <= 64 * 1024 + 100
+    end
+
+    test "a note_name no note may carry is refused, and the id is not used instead",
+         %{athanor: athanor, ctx: ctx} = context do
+      for name <- ["nightly: sync", "../escape", "about-us"] do
+        schedule = keeping(context, name)
+        _ = ran!(schedule, 60, "x")
+        assert {:ok, %{"refused" => 1}} = drain(athanor)
+        assert {:ok, %{revision: 0}} = note(ctx, schedule.id)
+      end
+
       assert {:ok, %{notes: []}} = Aqua.Notes.list(ctx)
     end
 
-    test "a member that does not hold its slot writes nothing", %{
-      athanor: athanor,
-      user: user,
-      ctx: ctx
-    } do
-      completion = completed(athanor, user)
-      ControlPlane.record(:lost)
-      assert :skipped = ScheduleNotes.keep(completion)
+    test "a run nobody asked to keep writes nothing, and its record is answered",
+         %{athanor: athanor, ctx: ctx} = context do
+      schedule = schedule!(context, nil)
+      run = ran!(schedule, 60, "not for keeping")
+
+      assert {:ok, %{"applied" => 1}} = drain(athanor)
+      assert {:ok, "applied"} = outcome(athanor, source(run, schedule))
       assert {:ok, %{notes: []}} = Aqua.Notes.list(ctx)
+    end
+
+    test "an archived athanor's schedule writes nothing",
+         %{athanor: athanor, ctx: ctx} = context do
+      schedule = keeping(context)
+      run = ran!(schedule, 60, "x")
+      {:ok, _} = Sanctum.Tenancy.Athanors.archive(athanor)
+
+      assert {:ok, %{"refused" => 1}} = drain(athanor)
+      assert {:ok, "refused"} = outcome(athanor, source(run, schedule))
     end
   end
 
-  describe "the publication" do
-    setup do
+  describe "the member's slot" do
+    setup context do
       keys = [{ControlPlane, :standing}, {ControlPlane, :generation}, {ControlPlane, :slot}]
       saved = Map.new(keys, &{&1, :persistent_term.get(&1, :absent)})
-      installed = Prima.Caps.impl!()
-      Prima.Caps.install!(Aqua.ScheduleNotesTest.Between)
 
       on_exit(fn ->
-        Prima.Caps.install!(installed)
-
         for {key, value} <- saved do
           if value == :absent,
             do: :persistent_term.erase(key),
@@ -200,120 +494,309 @@ defmodule Aqua.ScheduleNotesTest do
         end
       end)
 
+      with_between(context)
       node = "node-sched-#{System.unique_integer([:positive])}"
       {:ok, slot} = ControlPlane.take(node, node <> "#boot_a", 60_000)
       {:ok, slot: slot}
     end
 
-    test "is kept under the member's own slot", %{athanor: athanor, user: user, ctx: ctx} do
-      completion = completed(athanor, user)
-      assert :kept = ScheduleNotes.keep(completion)
-      assert {:ok, %{execution: execution}} = Aqua.Notes.read(ctx, completion.schedule_id)
-      assert execution == completion.execution_id
+    test "is what the note is kept under", %{athanor: athanor, ctx: ctx} = context do
+      schedule = keeping(context)
+      _ = ran!(schedule, 60, "x")
+      assert {:ok, %{"applied" => 1}} = drain(athanor)
+      assert {:ok, %{revision: 1}} = note(ctx, schedule.id)
     end
 
-    test "a note someone kept after it was read stands, and the outcome is not written over it",
-         %{athanor: athanor, user: user, ctx: ctx} do
-      completion = completed(athanor, user, %{note_name: "nightly"})
-      plant(fn -> {:ok, _} = Aqua.Notes.keep(ctx, "nightly", "kept by hand") end)
-
-      assert :not_kept = ScheduleNotes.keep(completion)
-      assert {:ok, %{content: "kept by hand", execution: nil}} = Aqua.Notes.read(ctx, "nightly")
-    end
-
-    test "a slot taken over between the read and the publication publishes nothing",
-         %{athanor: athanor, user: user, ctx: ctx, slot: slot} do
-      completion = completed(athanor, user)
+    test "taken over between the read and the publication publishes nothing and answers nothing",
+         %{athanor: athanor, ctx: ctx, slot: slot} = context do
+      schedule = keeping(context)
+      run = ran!(schedule, 60, "x")
       plant(fn -> take_over!(slot) end)
 
-      assert :not_kept = ScheduleNotes.keep(completion)
-      assert {:error, {:not_found, "note", _}} = Aqua.Notes.read(ctx, completion.schedule_id)
+      assert {:stopped, _} = drain(athanor)
+      assert :none = outcome(athanor, source(run, schedule))
       assert {:ok, %{notes: []}} = Aqua.Notes.list(ctx)
     end
 
-    test "a slot that ran out with no successor publishes nothing",
-         %{athanor: athanor, user: user, ctx: ctx, slot: slot} do
-      completion = completed(athanor, user)
+    test "run out with no successor publishes nothing",
+         %{athanor: athanor, ctx: ctx, slot: slot} = context do
+      schedule = keeping(context)
+      run = ran!(schedule, 60, "x")
       plant(fn -> expire!(slot) end)
 
-      assert :not_kept = ScheduleNotes.keep(completion)
+      assert {:stopped, _} = drain(athanor)
+      assert :none = outcome(athanor, source(run, schedule))
       assert {:ok, %{notes: []}} = Aqua.Notes.list(ctx)
-    end
-
-    defp plant(between), do: Process.put(Aqua.ScheduleNotesTest.Between, between)
-
-    defp take_over!(%{node: node, generation: generation, fence: fence}) do
-      {1, _} =
-        Arca.Repo.update_all(from(l in Arca.Schemas.CellLease, where: l.node == ^node),
-          set: [owner: node <> "#boot_b", generation: generation + 1, fence: fence + 1]
-        )
-
-      :ok
-    end
-
-    defp expire!(%{node: node}) do
-      past = DateTime.add(Arca.ServerMetaStorage.now!(), -1_000, :millisecond)
-
-      {1, _} =
-        Arca.Repo.update_all(from(l in Arca.Schemas.CellLease, where: l.node == ^node),
-          set: [lease_until: past]
-        )
-
-      :ok
     end
   end
 
   describe "the process" do
-    test "hears the committed completion on the bus and keeps its note", %{
-      athanor: athanor,
-      user: user,
-      ctx: ctx
-    } do
-      completion = completed(athanor, user)
-      :ok = Cyfr.Bus.broadcast_global(Cyfr.Bus.schedule_completions(), completion)
+    test "drains the athanor a completion it hears names",
+         %{athanor: athanor, ctx: ctx} = context do
+      schedule = keeping(context)
+      {_occurrence, execution_id} = ran!(schedule, 60, "heard")
 
+      keeper = Process.whereis(ScheduleNotes)
+      :ok = :sys.resume(keeper)
+
+      completion =
+        ScheduleCompleted.new(Prima.Actor.in_athanor(athanor.id), %{
+          schedule_id: schedule.id,
+          execution_id: execution_id
+        })
+
+      :ok = Cyfr.Bus.broadcast_global(Cyfr.Bus.schedule_completions(), completion)
       # One round trip: the completion ahead of it has been handled.
-      :sys.get_state(ScheduleNotes)
-      assert {:ok, %{execution: execution}} = Aqua.Notes.read(ctx, completion.schedule_id)
-      assert execution == completion.execution_id
+      :sys.get_state(keeper)
+      :ok = :sys.suspend(keeper)
+
+      assert {:ok, %{revision: 1, note: %{content: "heard"}}} = note(ctx, schedule.id)
     end
 
-    test "is subscribed again after a restart", %{athanor: athanor, user: user, ctx: ctx} do
+    test "is subscribed again after a restart" do
       before = Process.whereis(ScheduleNotes)
       ref = Process.monitor(before)
       Process.exit(before, :kill)
       assert_receive {:DOWN, ^ref, :process, ^before, :killed}
 
       :ok =
-        Prima.Test.Wait.wait_until(
+        wait_until(
           fn -> Process.whereis(ScheduleNotes) not in [nil, before] end,
           5_000,
           "the notes keeper to restart"
         )
 
       restarted = Process.whereis(ScheduleNotes)
+      :ok = :sys.suspend(restarted)
       assert Cyfr.Bus.schedule_completions() in Registry.keys(Cyfr.PubSub, restarted)
-
-      completion = completed(athanor, user)
-      :ok = Cyfr.Bus.broadcast_global(Cyfr.Bus.schedule_completions(), completion)
-      :sys.get_state(ScheduleNotes)
-      assert {:ok, _note} = Aqua.Notes.read(ctx, completion.schedule_id)
     end
 
-    test "survives a completion that cannot be kept" do
+    test "survives a completion that names an athanor with nothing to keep" do
+      keeper = Process.whereis(ScheduleNotes)
+      :ok = :sys.resume(keeper)
+
       completion =
         ScheduleCompleted.new(Prima.Actor.in_athanor("ath_nowhere"), %{
           schedule_id: "s",
-          execution_id: "e",
-          keep_outcome: true,
-          issuer_member: ScheduleCompleted.issuer(ControlPlane.held()),
-          output: "x"
+          execution_id: "e"
         })
 
-      pid = Process.whereis(ScheduleNotes)
       :ok = Cyfr.Bus.broadcast_global(Cyfr.Bus.schedule_completions(), completion)
-      :sys.get_state(ScheduleNotes)
-      assert Process.whereis(ScheduleNotes) == pid
+      :sys.get_state(keeper)
+      :ok = :sys.suspend(keeper)
+      assert Process.whereis(ScheduleNotes) == keeper
     end
+  end
+
+  defp lose_claim!(athanor_id, :lapsed) do
+    past = DateTime.add(Arca.ServerMetaStorage.now!(), -1_000, :millisecond)
+
+    {1, _} =
+      Arca.Repo.update_all(
+        from(c in Arca.Schemas.JobClaim,
+          where: c.kind == "schedule_notes" and c.key == ^athanor_id
+        ),
+        set: [lease_until: past]
+      )
+
+    :ok
+  end
+
+  defp lose_claim!(athanor_id, :taken) do
+    {1, _} =
+      Arca.Repo.update_all(
+        from(c in Arca.Schemas.JobClaim,
+          where: c.kind == "schedule_notes" and c.key == ^athanor_id
+        ),
+        set: [owner: "boot_peer"],
+        inc: [fence: 1]
+      )
+
+    :ok
+  end
+
+  defp rename!(from, to) do
+    Arca.Repo.query!(~s(ALTER TABLE "#{from}" RENAME TO "#{to}"))
+    :ok
+  end
+
+  defp take_over!(%{node: node, generation: generation, fence: fence}) do
+    {1, _} =
+      Arca.Repo.update_all(from(l in Arca.Schemas.CellLease, where: l.node == ^node),
+        set: [owner: node <> "#boot_b", generation: generation + 1, fence: fence + 1]
+      )
+
+    :ok
+  end
+
+  defp expire!(%{node: node}) do
+    past = DateTime.add(Arca.ServerMetaStorage.now!(), -1_000, :millisecond)
+
+    {1, _} =
+      Arca.Repo.update_all(from(l in Arca.Schemas.CellLease, where: l.node == ^node),
+        set: [lease_until: past]
+      )
+
+    :ok
+  end
+end
+
+defmodule Aqua.ScheduleNotesSchedulerTest do
+  @moduledoc """
+  The whole path, through the real scheduler: a fired run whose schedule
+  keeps its outcome completes while the member's notes keeper is held,
+  the keeper then dies with the completion it was woken by unread, and
+  the restarted keeper keeps the note from the record the finish wrote.
+  """
+
+  use ExUnit.Case, async: false
+
+  import Ecto.Query, only: [from: 2]
+  import Prima.Test.Wait
+
+  alias Arca.{CronSchedule, ScheduleOccurrences}
+  alias Cyfr.Test.ScriptedWorker
+  alias Opus.Schedules.Scheduler
+  alias Prima.Test.AuthorityFixtures
+  alias Sanctum.Test.ConsentFixtures
+
+  @reference "reagent:local.test"
+  @profile_id "prof_test"
+  @math_wasm_path Path.expand("../support/test_wasm/math.wasm", __DIR__)
+
+  setup do
+    Arca.Cache.init()
+    Cyfr.Test.Sandbox.setup!()
+
+    test_path = Path.join(System.tmp_dir!(), "notes_sched_#{System.unique_integer([:positive])}")
+    keys = [cyfr: :cron_scheduler_enabled, cyfr: :locus_runtime_workers, arca: :base_path]
+    prev = Map.new(keys, fn {app, key} -> {{app, key}, Application.get_env(app, key)} end)
+    ctx = Sanctum.TestContext.local()
+
+    on_exit(fn ->
+      Prima.Slots.forgive_unreaped(Opus.Slots, ctx.athanor_id)
+      File.rm_rf!(test_path)
+
+      for {{app, key}, value} <- prev do
+        if value,
+          do: Application.put_env(app, key, value),
+          else: Application.delete_env(app, key)
+      end
+    end)
+
+    Application.put_env(:cyfr, :cron_scheduler_enabled, true)
+
+    Application.put_env(
+      :cyfr,
+      :locus_runtime_workers,
+      ScriptedWorker.workers(@reference, prev[{:cyfr, :locus_runtime_workers}])
+    )
+
+    Application.put_env(:arca, :base_path, test_path)
+    Cyfr.Test.Sandbox.stop_work_on_exit()
+
+    Sanctum.TestContext.ready!(ctx.athanor_id)
+    granted!(ctx)
+    {:ok, ctx: ctx}
+  end
+
+  defp granted!(ctx) do
+    {:ok, component} =
+      Compendium.Registry.publish_bytes(ctx, File.read!(@math_wasm_path), %{
+        name: "test",
+        version: "1.0.0",
+        type: "reagent"
+      })
+
+    :ok =
+      ConsentFixtures.seed_head!(
+        ctx,
+        %{
+          id: @profile_id,
+          kind: :owner,
+          source_ref: @reference,
+          label: "default",
+          status: :active
+        },
+        %{
+          id: "consent-#{@profile_id}",
+          revision: 1,
+          scope: :versionless,
+          pinned_version: "",
+          invoke_mode: :open_inert,
+          shape_digest: "sha256:shape-#{@profile_id}",
+          commit_digest: "sha256:commit-#{@profile_id}",
+          resolved_policy:
+            Jason.encode!(%{
+              "canonical" => "jcs-1",
+              "nodes" => %{
+                @reference => %{
+                  "limits" => AuthorityFixtures.limits_map(),
+                  "edges" => %{"@ingress" => %{}}
+                }
+              }
+            }),
+          activation: %{@reference => component.release_digest},
+          admitted_origins: [:interactive, :schedule],
+          vault_refs: []
+        }
+      )
+  end
+
+  test "a fired run's note is kept by the restarted keeper, the completion that woke it lost", %{
+    ctx: ctx
+  } do
+    keeper = Process.whereis(Aqua.ScheduleNotes)
+    :ok = :sys.suspend(keeper)
+
+    {:ok, schedule} =
+      CronSchedule.create(Sanctum.Context.actor(ctx), %{
+        user_id: ctx.user_id,
+        athanor_id: ctx.athanor_id,
+        name: "sched-#{System.unique_integer([:positive])}",
+        cron_expression: "0 * * * *",
+        reference: "reagent:local.test:1.0.0",
+        resolved_reference: "reagent:local.test:1.0.0",
+        profile_id: @profile_id,
+        metadata: ~s({"keep_outcome": true, "note_name": "nightly-run"}),
+        next_run_at: DateTime.add(DateTime.utc_now(), 3600, :second),
+        cap: 1_000
+      })
+
+    {1, _} =
+      Arca.Repo.update_all(from(s in Arca.Schemas.CronSchedule, where: s.id == ^schedule.id),
+        set: [next_run_at: DateTime.add(DateTime.utc_now(), -5, :second)]
+      )
+
+    start_supervised!({ScriptedWorker, ref: @reference, script: [%{"ran" => true}]})
+    start_supervised!(Scheduler)
+
+    wait_until(
+      fn ->
+        match?(
+          {:ok, [%{state: "completed"}]},
+          ScheduleOccurrences.list(Sanctum.Context.actor(ctx), schedule.id)
+        )
+      end,
+      15_000,
+      "the run to complete"
+    )
+
+    # The keeper dies with the completion it was woken by still unread.
+    ref = Process.monitor(keeper)
+    Process.exit(keeper, :kill)
+    assert_receive {:DOWN, ^ref, :process, ^keeper, :killed}
+
+    wait_until(
+      fn ->
+        match?({:ok, %{revision: 1}}, Aqua.Notes.current(ctx, "nightly-run"))
+      end,
+      10_000,
+      "the restarted keeper to keep the note"
+    )
+
+    assert {:ok, %{note: note}} = Aqua.Notes.current(ctx, "nightly-run")
+    assert note.content =~ "ran"
+    assert note.kept_by == "schedule:" <> schedule.id
   end
 end

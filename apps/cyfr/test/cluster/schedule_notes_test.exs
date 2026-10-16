@@ -5,73 +5,85 @@ Code.require_file("support/support.exs", __DIR__)
 
 defmodule Cyfr.Cluster.ScheduleNotesTest do
   @moduledoc """
-  Two members, one committed schedule completion.
+  Two members, one finished run whose outcome asks to be kept.
 
-  The completion is published on a topic every member hears
-  (`Cyfr.Bus.schedule_completions/0`), and every member runs a notes keeper
-  (`Aqua.ScheduleNotes`). Only the member whose slot issued the completion
-  writes, so a peer's delivery is no second write; a second delivery to the
-  issuer finds the execution already recorded; and a member that lost its
-  slot before writing writes nothing, anywhere.
+  The finish records the outcome in the outbox in its own transaction,
+  and the note is kept from that record by whichever member's notes
+  keeper (`Aqua.ScheduleNotes`) holds the athanor's `schedule_notes`
+  claim. A member that took the claim and died leaves the work to its
+  peer once the claim's lease lapses, and the peer keeps the note once;
+  two members draining at once keep it once.
   """
 
   use Cyfr.Cluster.Case, async: false
 
-  defp completion(member, athanor, label) do
-    Cell.call(member, Cyfr.Cluster.Boot, :completion, [
-      athanor.id,
-      "sched_#{label}",
-      "exec_#{label}"
-    ])
-  end
-
-  defp settle!(members),
-    do: for(m <- members, do: Cell.call(m, Cyfr.Cluster.Boot, :settle_notes, []))
-
   defp note(member, athanor, name),
     do: Cell.call(member, Cyfr.Cluster.Boot, :note, [athanor.id, name])
 
-  test "a completion both members hear is kept once, by the member that issued it" do
-    athanor = Cell.call(:a, Cyfr.Cluster.Fixtures, :athanor!, ["notes-one"])
-    issued = completion(:a, athanor, "one")
+  defp outcome(member, athanor, occurrence_id),
+    do: Cell.call(member, Cyfr.Cluster.Boot, :notes_outcome, [athanor.id, occurrence_id])
 
-    assert :ok = Cell.call(:b, Cyfr.Cluster.Boot, :publish_completion, [issued])
+  test "a member that held the work and died leaves it to its peer, which keeps the note once its claim lapsed" do
+    athanor = Cell.call(:a, Fixtures, :athanor!, ["notes-takeover"])
+    schedule_id = Cell.call(:a, Cyfr.Cluster.Boot, :keeping_schedule!, [athanor.id, "takeover"])
 
-    # The message crosses to the issuer's keeper over the cell's own
-    # distribution, on no schedule this case controls.
+    # The member takes the athanor's notes, its keeper then stops, and its
+    # run finishes there: the outcome is a committed record nobody works.
+    _claim = Cell.call(:a, Cyfr.Cluster.Boot, :hold_notes!, [athanor.id, 3_000])
+
+    occurrence_id =
+      Cell.call(:a, Cyfr.Cluster.Boot, :finished_run!, [
+        athanor.id,
+        schedule_id,
+        %{"from" => "a"}
+      ])
+
+    # While the dead member's claim stands, the peer does not step in.
+    assert Cell.call(:b, Cyfr.Cluster.Boot, :drain_notes, [athanor.id]) == :busy
+    assert note(:b, athanor, schedule_id) == :none
+
+    Cell.kill(:a)
+
     Wait.until!(
-      fn -> note(:a, athanor, issued.schedule_id) != :none end,
-      "the issuing member to keep the note"
+      fn ->
+        Cell.call(:b, Cyfr.Cluster.Boot, :drain_notes, [athanor.id])
+        outcome(:b, athanor, occurrence_id) == "applied"
+      end,
+      "the peer to keep the note once the dead member's claim lapsed"
     )
 
-    settle!([:a, :b])
-    note = note(:a, athanor, issued.schedule_id)
-    assert %{execution: execution, kept_by: kept_by} = note
-    assert execution == issued.execution_id
-    assert kept_by == "schedule:" <> issued.schedule_id
-
-    # The peer heard it too, and is not its issuer; the issuer, asked again,
-    # finds the execution already recorded.
-    assert Cell.call(:b, Aqua.ScheduleNotes, :keep, [issued]) == :skipped
-    assert Cell.call(:a, Aqua.ScheduleNotes, :keep, [issued]) == :duplicate
-    assert note(:a, athanor, issued.schedule_id).kept_at == note.kept_at
+    assert %{revision: 1, content: content, kept_by: kept_by} = note(:b, athanor, schedule_id)
+    assert content =~ ~s("from":"a")
+    assert kept_by == "schedule:" <> schedule_id
+    assert Cell.call(:b, Cyfr.Cluster.Boot, :drain_notes, [athanor.id]) == {:ok, %{}}
+    assert %{revision: 1} = note(:b, athanor, schedule_id)
   end
 
-  test "a completion issued by the other member is not kept here" do
-    athanor = Cell.call(:a, Cyfr.Cluster.Fixtures, :athanor!, ["notes-peer"])
-    issued = completion(:b, athanor, "peer")
+  test "both members draining one athanor at once keep its note once" do
+    athanor = Cell.call(:a, Fixtures, :athanor!, ["notes-race"])
+    schedule_id = Cell.call(:a, Cyfr.Cluster.Boot, :keeping_schedule!, [athanor.id, "race"])
 
-    assert Cell.call(:a, Aqua.ScheduleNotes, :keep, [issued]) == :skipped
-    assert note(:a, athanor, issued.schedule_id) == :none
-  end
+    occurrence_id =
+      Cell.call(:b, Cyfr.Cluster.Boot, :finished_run!, [athanor.id, schedule_id, "raced"])
 
-  test "a member that lost its slot before the write writes nothing, and its peer does not step in" do
-    athanor = Cell.call(:a, Cyfr.Cluster.Fixtures, :athanor!, ["notes-lost"])
-    issued = completion(:a, athanor, "lost")
+    drain = {Cyfr.Cluster.Boot, :drain_notes, [athanor.id]}
+    results = Barrier.race(a: drain, b: drain)
 
-    assert Cell.call(:a, Cyfr.Cluster.Boot, :keep_without_slot, [issued]) == :skipped
-    assert Cell.call(:b, Aqua.ScheduleNotes, :keep, [issued]) == :skipped
-    assert note(:a, athanor, issued.schedule_id) == :none
-    assert note(:b, athanor, issued.schedule_id) == :none
+    applied = for {member, {:ok, %{"applied" => 1}}} <- results, do: member
+    assert length(applied) <= 1, inspect(results)
+
+    # Either a racer kept it, or each found the other holding the claim or
+    # the record already answered; the members' own keepers may have
+    # reached it first on a completion or a tick.
+    Wait.until!(
+      fn ->
+        Cell.call(:a, Cyfr.Cluster.Boot, :drain_notes, [athanor.id])
+        outcome(:a, athanor, occurrence_id) == "applied"
+      end,
+      "one member to keep the note"
+    )
+
+    assert %{revision: 1, content: "raced"} = note(:a, athanor, schedule_id)
+    assert %{revision: 1} = note(:b, athanor, schedule_id)
   end
 end

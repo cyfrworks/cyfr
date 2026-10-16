@@ -178,21 +178,58 @@ defmodule Arca.FencedPublication do
       its publishing statement and rolled back.
     * `{:error, :database_error}` — the store could not answer.
 
+  `opts` carry the higher owner's two closures (`ARCHITECTURE.md` §4.4),
+  each run inside the publication's transaction:
+
+    * `verify:` — a zero-arity check that must hold at commit, asked
+      first, before the slot is verified: it may take the owner's own
+      locks (a job claim's fence, the rows its authority rests on) and
+      read under them. Those rows are locked before the lease row's
+      shared lock, the order every writer that locks its rows and then
+      checks its slot keeps (the schedule claim, `Arca.CronSchedule`'s
+      writes, a consent commit), so the two never wait on each other in
+      a cycle on PostgreSQL. Its refusal writes nothing.
+    * `also:` — the owner's row written beside the publication, handed
+      the revision the resource now holds, run after the publishing
+      statement or after a replay of it is recognized, so a retried
+      publication accounts for its row too. Its refusal rolls the
+      publication back.
+
+  Each answers `:ok`, or `{:error, reason}`, which rolls the whole
+  transaction back and is answered as it is; any other answer raises
+  `ArgumentError`, which rolls it back too.
+
   Raises `ArgumentError` for a change of no shape above: a document with
   no staged id or with `attrs`, a row with a staged id, or `attrs` that
   name the revision.
   """
-  @spec publish(Change.t(), non_neg_integer(), writer()) ::
-          {:ok, non_neg_integer()} | {:error, refusal()}
-  def publish(%Change{} = change, revision_read, slot)
-      when is_integer(revision_read) and revision_read >= 0 do
+  @spec publish(Change.t(), non_neg_integer(), writer(), keyword()) ::
+          {:ok, non_neg_integer()} | {:error, refusal() | term()}
+  def publish(%Change{} = change, revision_read, slot, opts \\ [])
+      when is_integer(revision_read) and revision_read >= 0 and is_list(opts) do
     target = target!(change)
     slot = writer!(slot)
+    verify = closure!(opts, :verify, 0)
+    also = closure!(opts, :also, 1)
 
     fenced("Arca.FencedPublication.publish", fn ->
       started = System.monotonic_time(:millisecond)
-      publication(target, revision_read, slot, started)
+      publication(target, revision_read, slot, started, verify, also)
     end)
+  end
+
+  defp closure!(opts, key, arity) do
+    case Keyword.fetch(opts, key) do
+      :error ->
+        nil
+
+      {:ok, closure} when is_function(closure, arity) ->
+        closure
+
+      {:ok, other} ->
+        raise ArgumentError,
+              "#{key}: is a closure of arity #{arity}, got " <> Prima.LoggerContext.shape(other)
+    end
   end
 
   @doc """
@@ -235,7 +272,8 @@ defmodule Arca.FencedPublication do
   end
 
   # One transaction for a publication or a removal: a refusal rolls it
-  # back whole, and only the declared refusals leave it.
+  # back whole, and only the declared refusals and the owner's closures'
+  # own leave it.
   defp fenced(label, step) do
     Arca.Repo.Errors.with_db_rescue(label, fn ->
       Arca.Repo.locking_transaction(fn ->
@@ -246,9 +284,29 @@ defmodule Arca.FencedPublication do
       end)
       |> case do
         {:ok, revision} when is_integer(revision) and revision >= 0 -> {:ok, revision}
+        {:error, {__MODULE__, :closure, reason}} -> {:error, reason}
         {:error, reason} when reason in @refusals -> {:error, reason}
       end
     end)
+  end
+
+  # An owner's closure, run where the publication asks it: its refusal is
+  # carried out of the transaction apart from the publication's own.
+  defp ran(nil, _args), do: :ok
+
+  defp ran(closure, args) do
+    case apply(closure, args) do
+      :ok ->
+        :ok
+
+      {:error, reason} ->
+        {:error, {__MODULE__, :closure, reason}}
+
+      other ->
+        raise ArgumentError,
+              "a verify: or also: closure answers :ok or {:error, reason}, got " <>
+                Prima.LoggerContext.shape(other)
+    end
   end
 
   # The fence, when the slot carries one, is left behind here.
@@ -317,17 +375,34 @@ defmodule Arca.FencedPublication do
 
   # ---- the transaction ---------------------------------------------------------
 
-  # Ownership first, under the lease row's shared lock; then the staged
-  # attempt, on the database's clock read after that lock was won; then
-  # the revision to write, a create's taken from the athanor's floor row,
-  # which it may wait for; then the budget, after every wait but the
-  # publishing statement's own; then the one statement that publishes.
-  defp publication(target, revision_read, slot, started) do
-    with :ok <- owned(slot),
-         {:claimed, content} <- claim(target, revision_read),
-         revision = next_revision(target, revision_read),
-         :ok <- within_budget(started) do
-      commit(target, content, revision_read, revision)
+  # The owner's check first, under whatever row locks it takes; then
+  # ownership, under the lease row's shared lock; then the staged attempt,
+  # on the database's clock read after those locks were won; then the revision
+  # to write, a create's taken from the athanor's floor row, which it may
+  # wait for; then the budget, after every wait but the publishing
+  # statement's own; then the one statement that publishes, and the
+  # owner's row beside it. A replay recognized at the claim answers the
+  # revision it already published, and the owner's row is still written
+  # beside it.
+  defp publication(target, revision_read, slot, started, verify, also) do
+    with :ok <- ran(verify, []),
+         :ok <- owned(slot),
+         {:ok, revision} <- landed(target, revision_read, started),
+         :ok <- ran(also, [revision]) do
+      {:ok, revision}
+    end
+  end
+
+  defp landed(target, revision_read, started) do
+    case claim(target, revision_read) do
+      {:claimed, content} ->
+        revision = next_revision(target, revision_read)
+
+        with :ok <- within_budget(started),
+             do: commit(target, content, revision_read, revision)
+
+      replayed ->
+        replayed
     end
   end
 

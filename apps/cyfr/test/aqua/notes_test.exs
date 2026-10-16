@@ -426,3 +426,137 @@ defmodule Aqua.NotesStoreTest do
     :ok
   end
 end
+
+defmodule Aqua.NotesRunReadTest do
+  @moduledoc """
+  A scheduled run's first read of its schedule's note records, on its
+  occurrence, the revision the read answered (0 for no note): one guarded
+  write, in the athanor the chain runs in, for that occurrence's own
+  execution while it is started and has recorded none. Another note,
+  another execution, another athanor or a later read records nothing.
+  """
+
+  use ExUnit.Case, async: false
+
+  import Ecto.Query, only: [from: 2]
+
+  alias Aqua.Notes
+  alias Arca.{CronSchedule, ScheduleOccurrences}
+
+  setup tags do
+    Cyfr.Test.Sandbox.setup!(tags)
+
+    base = Path.join(System.tmp_dir!(), "notes_run_read_#{System.unique_integer([:positive])}")
+    original = Application.get_env(:arca, :base_path)
+
+    on_exit(fn ->
+      File.rm_rf!(base)
+
+      if original,
+        do: Application.put_env(:arca, :base_path, original),
+        else: Application.delete_env(:arca, :base_path)
+    end)
+
+    Application.put_env(:arca, :base_path, base)
+
+    n = System.unique_integer([:positive])
+    user = "local|idp|run-read-#{n}"
+    {:ok, athanor} = Sanctum.Tenancy.Athanors.create_group(user, "Run read #{n}")
+    ctx = %{Sanctum.TestContext.local() | user_id: user, athanor_id: athanor.id}
+    {:ok, ctx: ctx, actor: Sanctum.Context.actor(ctx)}
+  end
+
+  # A started occurrence of a schedule whose note is `name`.
+  defp running!(ctx, metadata) do
+    actor = Sanctum.Context.actor(ctx)
+    due = DateTime.add(DateTime.utc_now(), -60, :second)
+
+    {:ok, schedule} =
+      CronSchedule.create(actor, %{
+        user_id: ctx.user_id,
+        athanor_id: ctx.athanor_id,
+        name: "sched-#{System.unique_integer([:positive])}",
+        cron_expression: "0 * * * *",
+        reference: "reagent:local.read:1.0.0",
+        resolved_reference: "reagent:local.read:1.0.0",
+        profile_id: "prof_read",
+        metadata: metadata,
+        next_run_at: due,
+        cap: 1_000
+      })
+
+    cadence = %{next_after: &{:ok, DateTime.add(&1, 3600, :second)}, missed_bound_ms: 600_000}
+    {:ok, occurrence} = ScheduleOccurrences.claim(schedule, "boot_read", cadence)
+    execution_id = Prima.UUID7.execution_id()
+
+    {:ok, 1} =
+      Arca.Repo.transaction(fn ->
+        ScheduleOccurrences.start!(actor, occurrence.id, "boot_read", execution_id)
+      end)
+
+    %{schedule: schedule, occurrence: occurrence, execution_id: execution_id}
+  end
+
+  defp recorded(ctx, %{occurrence: occurrence}) do
+    {:ok, row} = ScheduleOccurrences.get(Sanctum.Context.actor(ctx), occurrence.id)
+    row.note_revision_read
+  end
+
+  defp read(ctx, run, name),
+    do: Notes.read(ctx, name, "athanor", root_execution_id: run.execution_id)
+
+  test "the first read records the revision it answered, and a later read leaves it", %{ctx: ctx} do
+    run = running!(ctx, ~s({"keep_outcome": true, "note_name": "nightly"}))
+    {:ok, _} = Notes.keep(ctx, "nightly", "first")
+    {:ok, _} = Notes.keep(ctx, "nightly", "second")
+
+    assert {:ok, %{content: "second"}} = read(ctx, run, "nightly")
+    assert recorded(ctx, run) == 2
+
+    {:ok, _} = Notes.keep(ctx, "nightly", "third")
+    assert {:ok, %{content: "third"}} = read(ctx, run, "nightly")
+    assert recorded(ctx, run) == 2
+  end
+
+  test "a read of no note records 0; a schedule with no note_name names its note by its id", %{
+    ctx: ctx
+  } do
+    run = running!(ctx, ~s({"keep_outcome": true}))
+    assert {:error, {:not_found, "note", _}} = read(ctx, run, run.schedule.id)
+    assert recorded(ctx, run) == 0
+  end
+
+  test "another note, a read with no chain, or another execution records nothing", %{ctx: ctx} do
+    run = running!(ctx, ~s({"keep_outcome": true, "note_name": "nightly"}))
+    {:ok, _} = Notes.keep(ctx, "other", "x")
+    {:ok, _} = Notes.keep(ctx, "nightly", "y")
+
+    assert {:ok, _} = read(ctx, run, "other")
+    assert {:ok, _} = Notes.read(ctx, "nightly")
+    assert {:ok, _} = Notes.read(ctx, "nightly", "athanor", root_execution_id: "exec_elsewhere")
+    assert recorded(ctx, run) == nil
+  end
+
+  test "an occurrence that is no longer started records nothing", %{ctx: ctx} do
+    run = running!(ctx, ~s({"keep_outcome": true, "note_name": "nightly"}))
+
+    {1, _} =
+      Arca.Repo.update_all(
+        from(o in Arca.Schemas.ScheduleOccurrence, where: o.id == ^run.occurrence.id),
+        set: [state: "uncertain"]
+      )
+
+    assert {:error, {:not_found, "note", "nightly"}} = read(ctx, run, "nightly")
+    assert recorded(ctx, run) == nil
+  end
+
+  test "a chain in another athanor cannot record this occurrence's read", %{ctx: ctx} do
+    run = running!(ctx, ~s({"keep_outcome": true, "note_name": "nightly"}))
+    n = System.unique_integer([:positive])
+    {:ok, other} = Sanctum.Tenancy.Athanors.create_group(ctx.user_id, "Elsewhere #{n}")
+    elsewhere = %{ctx | athanor_id: other.id}
+
+    assert {:error, {:not_found, "note", "nightly"}} = read(elsewhere, run, "nightly")
+    assert recorded(ctx, run) == nil
+  end
+end

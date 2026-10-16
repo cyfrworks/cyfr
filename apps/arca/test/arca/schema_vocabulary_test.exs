@@ -52,7 +52,9 @@ defmodule Arca.SchemaVocabularyTest do
       # `Arca.PairingInvitations` writes the kind of the confirmer it reads
       # from the consumed confirmation: a passkey or a paired device.
       {"pairing_invitations", "pairing_invitations_confirmer_kind_known", "confirmer_kind",
-       ~w(passkey device)}
+       ~w(passkey device)},
+      {"consumer_receipts", "consumer_receipts_outcome_known", "outcome",
+       Arca.ConsumerReceipts.outcomes()}
     ]
   end
 
@@ -149,6 +151,14 @@ defmodule Arca.SchemaVocabularyTest do
       for status <- ~w(bogus needs_reauth tombstoned) do
         refused!("profiles", profile(ctx, status), "profiles_status_known")
       end
+    end
+
+    test "lands every receipt outcome and refuses any other", ctx do
+      for outcome <- ~w(applied superseded conflict refused) do
+        assert {1, _} = insert!("consumer_receipts", receipt(ctx, outcome))
+      end
+
+      refused!("consumer_receipts", receipt(ctx, "bogus"), "consumer_receipts_outcome_known")
     end
 
     test "lands every credential status in both stores and refuses any other", ctx do
@@ -432,6 +442,18 @@ defmodule Arca.SchemaVocabularyTest do
       scheduled_for: NaiveDateTime.add(now(), System.unique_integer([:positive]), :second),
       state: state,
       claimed_at: now()
+    }
+  end
+
+  defp receipt(%{athanor: athanor}, outcome) do
+    %{
+      consumer: "schedule_notes",
+      source_kind: "schedule_occurrence",
+      source_id: id("occ"),
+      source_revision: "2026-10-16T00:00:00.000000Z",
+      athanor_id: athanor,
+      outcome: outcome,
+      inserted_at: now()
     }
   end
 

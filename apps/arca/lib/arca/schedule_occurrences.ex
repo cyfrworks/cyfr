@@ -331,32 +331,262 @@ defmodule Arca.ScheduleOccurrences do
   claimant, and either that execution or, still `claimed`, none at all.
   `execution_id` nil matches only an occurrence never started.
 
+  `also:` (optional) is the higher owner's closure (`ARCHITECTURE.md`
+  §4.4), run in the same transaction once the statement moved the row,
+  and handed what the finish read there: the occurrence as it now stands
+  (`note_revision_read` among its fields, the revision its run first read
+  the schedule's note at), its schedule's `id`, `profile_id`, `metadata`
+  and `updated_at`, and `consent_revision`, the revision of that
+  profile's head consent (nil for none). It writes the outcome's record
+  (`Arca.Outbox.put!/2`), so the occurrence ends and its record lands
+  together or not at all. It answers `:ok`, or `{:error, reason}`, which
+  rolls the finish back and is answered as it is; any other answer
+  raises `ArgumentError`, which rolls it back too.
+
   Answers `{:ok, 1}`, or `{:error, :stale}` when nothing matched: the
   occurrence was ended already, or another claimant or execution holds
   it now, and nothing moved.
   """
-  @spec finish(Prima.Actor.t(), String.t(), String.t() | nil, String.t() | nil, String.t()) ::
-          {:ok, 1} | {:error, :stale | :no_athanor | :database_error}
+  @spec finish(
+          Prima.Actor.t(),
+          String.t(),
+          String.t() | nil,
+          String.t() | nil,
+          String.t(),
+          keyword()
+        ) ::
+          {:ok, 1} | {:error, :stale | :no_athanor | :database_error | term()}
+  def finish(actor, occurrence_id, claimed_by, execution_id, state, opts \\ [])
+
   def finish(
         %Prima.Actor{athanor_id: athanor_id},
         occurrence_id,
         claimed_by,
         execution_id,
-        state
+        state,
+        opts
       )
       when is_binary(athanor_id) and athanor_id != "" and state in @terminal and
              (is_binary(claimed_by) or is_nil(claimed_by)) and
-             (is_binary(execution_id) or is_nil(execution_id)) do
-    Errors.with_db_rescue("ScheduleOccurrences.finish", fn ->
+             (is_binary(execution_id) or is_nil(execution_id)) and is_list(opts) do
+    query =
       athanor_id
       |> open_held_by(occurrence_id, claimed_by)
       |> where_execution(execution_id)
-      |> ended(state)
+
+    Errors.with_db_rescue("ScheduleOccurrences.finish", fn ->
+      case Keyword.fetch(opts, :also) do
+        :error ->
+          ended(query, state)
+
+        {:ok, also} when is_function(also, 1) ->
+          ended_with(query, state, athanor_id, occurrence_id, also)
+      end
     end)
   end
 
-  def finish(%Prima.Actor{}, _occurrence_id, _claimed_by, _execution_id, _state),
+  def finish(%Prima.Actor{}, _occurrence_id, _claimed_by, _execution_id, _state, _opts),
     do: {:error, :no_athanor}
+
+  # The finish and the owner's closure in one transaction: the closure
+  # runs only once the row moved, and a refusal rolls the move back.
+  # arca:db-raise-ok inside the caller's rescue
+  defp ended_with(query, state, athanor_id, occurrence_id, also) do
+    Arca.Repo.locking_transaction(fn ->
+      with {:ok, 1} <- ended(query, state),
+           :ok <- also_ran(also.(finished(athanor_id, occurrence_id))) do
+        1
+      else
+        {:error, reason} -> Arca.Repo.rollback(reason)
+      end
+    end)
+  end
+
+  # What the finish hands its closure, read in its transaction.
+  # arca:db-raise-ok inside the finish's transaction
+  defp finished(athanor_id, occurrence_id) do
+    occurrence =
+      ScheduleOccurrence
+      |> Arca.Repo.get_by!(athanor_id: athanor_id, id: occurrence_id)
+      |> Arca.Data.project()
+
+    schedule =
+      Arca.Repo.one!(
+        from(s in CronSchedule,
+          where: s.athanor_id == ^athanor_id and s.id == ^occurrence.schedule_id,
+          select: map(s, [:id, :profile_id, :metadata, :updated_at])
+        )
+      )
+
+    %{
+      occurrence: occurrence,
+      schedule: schedule,
+      consent_revision: consent_revision(athanor_id, schedule.profile_id)
+    }
+  end
+
+  defp also_ran(:ok), do: :ok
+  defp also_ran({:error, _reason} = refusal), do: refusal
+
+  defp also_ran(other) do
+    raise ArgumentError,
+          "an also: closure answers :ok or {:error, reason}, got " <>
+            Prima.LoggerContext.shape(other)
+  end
+
+  # The revision of the profile's head consent, or nil where it has none.
+  # arca:db-raise-ok inside the caller's transaction
+  defp consent_revision(athanor_id, profile_id) do
+    Arca.Repo.one(
+      from(p in Arca.Schemas.Profile,
+        join: c in Arca.Schemas.Consent,
+        on: c.id == p.head_consent_id and c.athanor_id == p.athanor_id,
+        where: p.athanor_id == ^athanor_id and p.id == ^profile_id,
+        select: c.revision
+      )
+    )
+  end
+
+  @doc """
+  The started occurrence `execution_id` runs in the actor's athanor, while
+  its run has read no note of its schedule yet: its `id`, its
+  `schedule_id` and that schedule's stored `metadata`, which names the
+  note. `:none` for an execution no such occurrence names.
+  """
+  @spec unread(Prima.Actor.t(), String.t()) ::
+          {:ok, %{id: String.t(), schedule_id: String.t(), metadata: String.t() | nil}}
+          | :none
+          | {:error, :no_athanor | :database_error}
+  def unread(%Prima.Actor{athanor_id: athanor_id}, execution_id)
+      when is_binary(athanor_id) and athanor_id != "" and is_binary(execution_id) do
+    Errors.with_db_rescue("ScheduleOccurrences.unread", fn ->
+      from(o in ScheduleOccurrence,
+        join: s in CronSchedule,
+        on: s.id == o.schedule_id and s.athanor_id == o.athanor_id,
+        where: o.athanor_id == ^athanor_id and o.state == "started",
+        where: o.execution_id == ^execution_id and is_nil(o.note_revision_read),
+        select: %{id: o.id, schedule_id: o.schedule_id, metadata: s.metadata}
+      )
+      |> Arca.Repo.one()
+      |> case do
+        nil -> :none
+        row -> {:ok, row}
+      end
+    end)
+  end
+
+  def unread(%Prima.Actor{}, _execution_id), do: {:error, :no_athanor}
+
+  @doc """
+  Record that the run `execution_id` of the occurrence first read its
+  schedule's note at `revision` (0 for no note): one statement, matching
+  the athanor, the occurrence and the execution, while the occurrence is
+  `started` and has recorded no read. Answers `:ok` when it recorded,
+  `:unchanged` when an earlier read already had, or the run no longer
+  holds it started.
+  """
+  @spec note_read(Prima.Actor.t(), String.t(), String.t(), non_neg_integer()) ::
+          :ok | :unchanged | {:error, :no_athanor | :database_error}
+  def note_read(%Prima.Actor{athanor_id: athanor_id}, occurrence_id, execution_id, revision)
+      when is_binary(athanor_id) and athanor_id != "" and is_binary(occurrence_id) and
+             is_binary(execution_id) and is_integer(revision) and revision >= 0 do
+    Errors.with_db_rescue("ScheduleOccurrences.note_read", fn ->
+      from(o in ScheduleOccurrence,
+        where: o.athanor_id == ^athanor_id and o.id == ^occurrence_id,
+        where: o.execution_id == ^execution_id and o.state == "started",
+        where: is_nil(o.note_revision_read)
+      )
+      |> Arca.Repo.update_all(set: [note_revision_read: revision])
+      |> case do
+        {1, _} -> :ok
+        {0, _} -> :unchanged
+      end
+    end)
+  end
+
+  def note_read(%Prima.Actor{}, _occurrence_id, _execution_id, _revision),
+    do: {:error, :no_athanor}
+
+  @doc """
+  Inside the caller's locking transaction: whether the authority a
+  schedule's outcome was recorded under still stands — the schedule row
+  exists, its bound profile `profile_id` is active, and that profile's
+  head consent is at `consent_revision` (nil: it has none). The schedule
+  and the profile rows are read under a shared lock, so a deletion, a
+  revocation or a new head commits before this read or waits for the
+  caller's commit.
+
+  Answers `:ok` or `{:error, :authority_gone}`. Raises outside a
+  transaction and on a store that cannot answer, so the caller's
+  transaction rolls back.
+  """
+  @spec authority(Prima.Actor.t(), %{
+          schedule_id: String.t(),
+          profile_id: String.t(),
+          consent_revision: non_neg_integer() | nil
+        }) :: :ok | {:error, :authority_gone}
+  # arca:db-raise-ok a step inside the caller's locking transaction; a raise rolls it back.
+  def authority(%Prima.Actor{athanor_id: athanor_id}, %{
+        schedule_id: schedule_id,
+        profile_id: profile_id,
+        consent_revision: revision
+      })
+      when is_binary(athanor_id) and athanor_id != "" and is_binary(schedule_id) and
+             is_binary(profile_id) do
+    unless Arca.Repo.in_transaction?() do
+      raise ArgumentError, "Arca.ScheduleOccurrences.authority/2 runs inside a transaction"
+    end
+
+    schedule =
+      from(s in CronSchedule,
+        where: s.id == ^schedule_id and s.athanor_id == ^athanor_id,
+        select: s.id
+      )
+      |> Arca.QueryHelpers.for_share()
+      |> Arca.Repo.one()
+
+    status =
+      from(p in Arca.Schemas.Profile,
+        where: p.athanor_id == ^athanor_id and p.id == ^profile_id,
+        select: p.status
+      )
+      |> Arca.QueryHelpers.for_share()
+      |> Arca.Repo.one()
+
+    if schedule && status == "active" && consent_revision(athanor_id, profile_id) == revision,
+      do: :ok,
+      else: {:error, :authority_gone}
+  end
+
+  def authority(%Prima.Actor{}, %{}),
+    do: Arca.QueryHelpers.no_athanor!("Arca.ScheduleOccurrences.authority/2")
+
+  @doc """
+  When the occurrence of schedule `schedule_id` that ran `execution_id`
+  was due, in the actor's athanor, or `:none`: the order a schedule's
+  outcomes land in.
+  """
+  @spec scheduled_for(Prima.Actor.t(), String.t(), String.t()) ::
+          {:ok, DateTime.t()} | :none | {:error, :no_athanor | :database_error}
+  def scheduled_for(%Prima.Actor{athanor_id: athanor_id}, schedule_id, execution_id)
+      when is_binary(athanor_id) and athanor_id != "" and is_binary(schedule_id) and
+             is_binary(execution_id) do
+    Errors.with_db_rescue("ScheduleOccurrences.scheduled_for", fn ->
+      from(o in ScheduleOccurrence,
+        where: o.athanor_id == ^athanor_id and o.schedule_id == ^schedule_id,
+        where: o.execution_id == ^execution_id,
+        select: o.scheduled_for,
+        limit: 1
+      )
+      |> Arca.Repo.one()
+      |> case do
+        nil -> :none
+        at -> {:ok, at}
+      end
+    end)
+  end
+
+  def scheduled_for(%Prima.Actor{}, _schedule_id, _execution_id), do: {:error, :no_athanor}
 
   @doc """
   End an occurrence whose runner died, only while `claimed_by` still

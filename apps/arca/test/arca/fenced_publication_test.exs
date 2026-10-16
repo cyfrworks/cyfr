@@ -3,14 +3,16 @@
 
 defmodule Arca.FencedPublicationTest do
   @moduledoc """
-  `Arca.FencedPublication.publish/3` keeps three facts apart and checks
+  `Arca.FencedPublication.publish/4` keeps three facts apart and checks
   each: the revision the writer read (a conflict is `:stale`, never a
   comparison of generations), the writer's live ownership of its slot on
   the database's clock (`:not_owner`, whether the lease was taken over or
   merely ran out), and never the lease row's renewal fence. Idempotency is
   by resource, revision and content together. A removed document's
   revision is never reused in its athanor: a document created again
-  stands above every revision it held.
+  stands above every revision it held. The owner's `verify:` and `also:`
+  closures run inside the publication's transaction, and either one's
+  refusal rolls the whole of it back.
 
   Every case names its own member slot and athanor, so what it measures
   is its own.
@@ -651,6 +653,147 @@ defmodule Arca.FencedPublicationTest do
           ] do
         assert_raise ArgumentError, fn -> FencedPublication.remove(change, 1, slot) end
       end
+    end
+  end
+
+  describe "the owner's closures" do
+    # A row the owner writes beside the publication: a receipt of a
+    # source of this case's own.
+    defp receipt_beside(actor, outcome \\ "applied") do
+      source = "occ_fp_#{System.unique_integer([:positive])}"
+      test = self()
+
+      also = fn revision ->
+        send(test, {:also, revision})
+
+        Arca.ConsumerReceipts.put!(actor, %{
+          consumer: "schedule_notes",
+          source_kind: "schedule_occurrence",
+          source_id: source,
+          source_revision: "r1",
+          outcome: outcome
+        })
+      end
+
+      {also, %{source_kind: "schedule_occurrence", source_id: source, source_revision: "r1"}}
+    end
+
+    defp receipted(actor, source),
+      do: Arca.ConsumerReceipts.outcome(actor, "schedule_notes", source)
+
+    test "verify: is asked in the transaction, and also: writes its row beside the publication, handed its revision",
+         %{actor: actor, key: key} do
+      slot = slot!()
+      staged = stage!(actor, "v1")
+      {also, source} = receipt_beside(actor)
+      test = self()
+
+      assert {:ok, 1} =
+               FencedPublication.publish(document(actor, key, staged), 0, slot,
+                 verify: fn ->
+                   send(test, {:verify, Arca.Repo.in_transaction?()})
+                   :ok
+                 end,
+                 also: also
+               )
+
+      assert_received {:verify, true}
+      assert_received {:also, 1}
+      assert %{revision: 1} = FencedPublication.document(actor, key)
+      assert {:ok, "applied"} = receipted(actor, source)
+    end
+
+    test "a verify: refusal publishes nothing, writes no row and is answered as it is", %{
+      actor: actor,
+      key: key
+    } do
+      slot = slot!()
+      staged = stage!(actor, "v1")
+      {also, source} = receipt_beside(actor)
+
+      assert {:error, :authority_gone} =
+               FencedPublication.publish(document(actor, key, staged), 0, slot,
+                 verify: fn -> {:error, :authority_gone} end,
+                 also: also
+               )
+
+      refute_received {:also, _}
+      assert :not_found = FencedPublication.document(actor, key)
+      assert %StorageStaging{state: "reserved"} = staging(staged)
+      assert :none = receipted(actor, source)
+    end
+
+    test "an also: refusal rolls the publication back with it", %{actor: actor, key: key} do
+      slot = slot!()
+      staged = stage!(actor, "v1")
+
+      assert {:error, :receipted} =
+               FencedPublication.publish(document(actor, key, staged), 0, slot,
+                 also: fn _revision -> {:error, :receipted} end
+               )
+
+      assert :not_found = FencedPublication.document(actor, key)
+      assert %StorageStaging{state: "reserved"} = staging(staged)
+    end
+
+    test "a closure answering anything else raises, and nothing is published", %{
+      actor: actor,
+      key: key
+    } do
+      slot = slot!()
+      staged = stage!(actor, "v1")
+
+      assert_raise ArgumentError, ~r/answers :ok or \{:error, reason\}/, fn ->
+        FencedPublication.publish(document(actor, key, staged), 0, slot,
+          also: fn _revision -> :done end
+        )
+      end
+
+      assert :not_found = FencedPublication.document(actor, key)
+      assert %StorageStaging{state: "reserved"} = staging(staged)
+
+      assert_raise ArgumentError, ~r/arity 0/, fn ->
+        FencedPublication.publish(document(actor, key, staged), 0, slot, verify: fn _ -> :ok end)
+      end
+    end
+
+    test "verify: is asked before the slot, and a writer that lost its slot still publishes nothing",
+         %{actor: actor, key: key} do
+      slot = slot!()
+      staged = stage!(actor, "v1")
+      expire!(slot)
+      test = self()
+
+      assert {:error, :not_owner} =
+               FencedPublication.publish(document(actor, key, staged), 0, slot,
+                 verify: fn ->
+                   send(test, :verified)
+                   :ok
+                 end
+               )
+
+      assert_received :verified
+      assert :not_found = FencedPublication.document(actor, key)
+    end
+
+    test "a replay still runs also:, so a retried publication accounts for its row", %{
+      actor: actor,
+      key: key
+    } do
+      slot = slot!()
+      staged = stage!(actor, "v1")
+      change = document(actor, key, staged)
+      {also, source} = receipt_beside(actor)
+
+      assert {:ok, 1} = FencedPublication.publish(change, 0, slot, also: also)
+      assert_received {:also, 1}
+
+      # The same attempt again: its row is there already, which the
+      # owner's closure answers, and the replay with it.
+      assert {:error, :receipted} = FencedPublication.publish(change, 0, slot, also: also)
+      assert_received {:also, 1}
+      assert %{revision: 1} = FencedPublication.document(actor, key)
+      assert {:ok, "applied"} = receipted(actor, source)
     end
   end
 

@@ -133,11 +133,15 @@ defmodule Opus.Schedules.Scheduler do
   no completion — a stale owner emits no result — and neither does one
   whose runner task died: its decision reads as unknown.
 
-  A completed occurrence is announced on `Cyfr.Bus.schedule_completions/0`
+  A completed occurrence's outcome is recorded in the outbox in the
+  transaction that closes it (`complete/4`, `Prima.OutboxRecord`), the
+  durable fact `Aqua.ScheduleNotes` keeps a note from. It is then
+  announced on `Cyfr.Bus.schedule_completions/0`
   (`Cyfr.Bus.ScheduleCompleted`) once: only when closing it moved the
   occurrence row, the schedule's run was recorded, and the generation still
-  holds when checked again just before the publish. The row's stored
-  metadata says whether the outcome is kept (`keep_outcome/1`).
+  holds when checked again just before the publish. The announcement only
+  wakes the consumer; a lost one loses nothing. The row's stored metadata
+  says whether the outcome is kept (`keep_outcome/1`).
 
   A row of kind `feed` (`Opus.Feeds`) fires through the same claim,
   decision, run, profile and options as a schedule, its first occurrence
@@ -1179,7 +1183,7 @@ defmodule Opus.Schedules.Scheduler do
             routed_to: Opus.service()
           }
 
-          case finish(occurrence, execution_id, "completed") do
+          case complete(occurrence, execution_id, output) do
             {:error, :stale} ->
               # Another member's occurrence now: this member's decision is
               # still closed, and nothing else is written or announced.
@@ -1412,6 +1416,48 @@ defmodule Opus.Schedules.Scheduler do
     |> logged_stale(occurrence)
   end
 
+  @doc false
+  # A completed run's end of its occurrence (`finish/3`, `claimed_by` this
+  # boot), with the outcome's record (`Prima.OutboxRecord`) written in
+  # the finish's own transaction (`Arca.ScheduleOccurrences.finish/6`'s
+  # `also:`): the output as the run answered it, the schedule's choice to
+  # keep it parsed from its metadata as the finish read it, the authority
+  # the run fired under and the note revision the occurrence recorded at
+  # the run's read. The note is never read here. The record's delivery is
+  # `Aqua.ScheduleNotes`'s; the completion broadcast after it only wakes
+  # it.
+  @spec complete(map(), String.t(), term(), String.t()) ::
+          {:ok, 1} | {:error, :stale | :no_athanor | :database_error | term()}
+  def complete(occurrence, execution_id, output, claimed_by \\ claimant()) do
+    ScheduleOccurrences.finish(
+      Prima.Actor.in_athanor(occurrence.athanor_id),
+      occurrence.id,
+      claimed_by,
+      execution_id,
+      "completed",
+      also: &record_outcome(&1, output)
+    )
+    |> logged_stale(occurrence)
+  end
+
+  defp record_outcome(%{occurrence: occurrence} = finished, output) do
+    record =
+      Prima.OutboxRecord.schedule_outcome(%{
+        occurrence: occurrence,
+        schedule: finished.schedule,
+        consent_revision: finished.consent_revision,
+        keep: keep_outcome(finished.schedule.metadata),
+        output: output
+      })
+
+    # A record already there is this finish's own: the occurrence moves
+    # once, so a second finish never reaches here.
+    case Arca.Outbox.put!(Prima.Actor.in_athanor(occurrence.athanor_id), record) do
+      :ok -> :ok
+      {:error, :exists} -> :ok
+    end
+  end
+
   # An end answered `:stale` found the occurrence another member's now,
   # or already ended: one line says so, and the answer is handed on.
   defp logged_stale({:error, :stale} = stale, occurrence) do
@@ -1492,10 +1538,11 @@ defmodule Opus.Schedules.Scheduler do
   end
 
   # The completion is announced only after both writes committed — the
-  # occurrence closed by THIS finish and the run recorded — and only while
-  # the generation still holds, checked again immediately before the
-  # publish: a member taken over announces nothing its successor might
-  # announce too. A finish that ended no row answered `:stale` and never
+  # occurrence closed by THIS finish, its outcome recorded with it, and
+  # the run recorded — and only while the generation still holds, checked
+  # again immediately before the publish: a member taken over announces
+  # nothing its successor might announce too. The announcement is a
+  # wake-up for the outcome's consumers; the record is the fact. A finish that ended no row answered `:stale` and never
   # reaches here, since that closer's is the only word; the `moved > 0`
   # guard is the shape this clause accepts, and anything else, a finish
   # the store could not answer included, publishes nothing.
@@ -1536,42 +1583,24 @@ defmodule Opus.Schedules.Scheduler do
 
   @doc false
   # Whether a schedule keeps its outcome, and under which note name, read
-  # from the row's stored metadata. Absent, empty, not a map or not valid
-  # JSON is a run nobody asked to keep; invalid JSON is said in one line
-  # naming the column and its size, never its bytes.
+  # from the row's stored metadata (`Prima.OutboxRecord.keep_pair/1`, the
+  # one reading of it). Absent, empty, not a map or not valid JSON is a
+  # run nobody asked to keep; invalid JSON is said in one line naming the
+  # column and its size, never its bytes.
   @spec keep_outcome(term()) :: {boolean(), String.t() | nil}
   def keep_outcome(metadata) do
-    case stored_metadata(metadata) do
-      %{"keep_outcome" => true} = wants -> {true, note_name(wants["note_name"])}
-      _ -> {false, nil}
-    end
-  end
-
-  defp stored_metadata(%{} = decoded), do: decoded
-  defp stored_metadata(nil), do: %{}
-  defp stored_metadata(""), do: %{}
-
-  defp stored_metadata(json) when is_binary(json) do
-    case Prima.Json.decode(json) do
-      {:ok, %{} = decoded} ->
-        decoded
-
-      {:ok, _other} ->
-        %{}
+    case Prima.OutboxRecord.keep_pair(metadata) do
+      {:ok, pair} ->
+        pair
 
       {:error, :invalid_json} ->
         Logger.warning(
-          "[Opus.Schedules.Scheduler] stored metadata is not valid JSON (#{byte_size(json)} bytes)"
+          "[Opus.Schedules.Scheduler] stored metadata is not valid JSON (#{byte_size(metadata)} bytes)"
         )
 
-        %{}
+        {false, nil}
     end
   end
-
-  defp stored_metadata(_other), do: %{}
-
-  defp note_name(name) when is_binary(name) and name != "", do: name
-  defp note_name(_), do: nil
 
   defp record_error(ctx, schedule_id, message) do
     case CronSchedule.record_error(Sanctum.Context.actor(ctx), schedule_id, message) do
