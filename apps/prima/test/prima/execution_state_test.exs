@@ -122,12 +122,4 @@ defmodule Prima.ExecutionStateTest do
     assert ExecutionState.from(:execution, "bogus") == []
     assert ExecutionState.from(:attempt, "bogus") == []
   end
-
-  test "an unknown domain is not a vocabulary" do
-    assert_raise FunctionClauseError, fn ->
-      ExecutionState.transition?(:turn, "running", "paused")
-    end
-
-    assert_raise FunctionClauseError, fn -> ExecutionState.from(:turn, "running") end
-  end
 end

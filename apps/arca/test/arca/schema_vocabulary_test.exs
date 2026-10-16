@@ -182,11 +182,15 @@ defmodule Arca.SchemaVocabularyTest do
 
       assert {1, _} = insert!("cron_schedules", schedule(ctx, %{missed_runs: "skip"}))
 
-      refused!(
-        "cron_schedules",
-        schedule(ctx, %{missed_runs: "bogus"}),
-        "cron_schedules_missed_runs_known"
-      )
+      assert check!("cron_schedules", "cron_schedules_missed_runs_known") ==
+               {"missed_runs", ["skip", "catch_up"]}
+
+      # An unknown policy breaks the limit's rule as well; either adapter
+      # may name either.
+      refused!("cron_schedules", schedule(ctx, %{missed_runs: "bogus"}), [
+        "cron_schedules_missed_runs_known",
+        "cron_schedules_catch_up_limit_declared"
+      ])
 
       for limit <- [nil, 0, -1, 25] do
         refused!(
@@ -283,7 +287,7 @@ defmodule Arca.SchemaVocabularyTest do
     result
   end
 
-  defp refused!(table, row, constraint) do
+  defp refused!(table, row, constraints) do
     message =
       try do
         insert!(table, row)
@@ -294,7 +298,7 @@ defmodule Arca.SchemaVocabularyTest do
 
     assert message, "#{table} took #{inspect(row)}"
 
-    assert message =~ constraint,
+    assert Enum.any?(List.wrap(constraints), &(message =~ &1)),
            "#{table} refused #{inspect(row)} for another reason: #{message}"
   end
 

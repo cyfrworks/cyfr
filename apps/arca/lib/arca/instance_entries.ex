@@ -816,7 +816,7 @@ defmodule Arca.InstanceEntries do
 
   # Each profile moves from the unrevoked statuses its locked read found
   # it in; a block that may not reach `blocked_status` from them refuses,
-  # and the refusal rolls the revoke back with it.
+  # and the refusal rolls the enclosing write back with it.
   defp block_profiles(pairs, blocked_status) do
     unrevoked = Arca.StatusTransitions.statuses(:profiles) -- ["revoked"]
 
