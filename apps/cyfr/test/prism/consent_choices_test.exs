@@ -79,7 +79,11 @@ defmodule Prism.ConsentChoicesTest do
   end
 
   # Account names distinct by Unicode's full lowercase mapping on one edge.
-  defp names, do: uniq_list_of(member_of(~w(Work Home Ops Lab)), max_length: 3)
+  defp names do
+    map(list_of(boolean(), length: 4), fn picks ->
+      for({name, true} <- Enum.zip(~w(Work Home Ops Lab), picks), do: name) |> Enum.take(3)
+    end)
+  end
 
   # The choices of a walk over `plan`: the app's default for one of its
   # needs, the edge's default (an entry, or the profile that lends one),
