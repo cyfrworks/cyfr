@@ -5,7 +5,7 @@
 # The `cyfr` release, built as `Dockerfile` builds it (MIX_ENV=prod, the
 # adapter chosen at compile time by CYFR_DATABASE, `mix release cyfr`),
 # booted against a FRESH database of that adapter with auto-migration on
-# (tests/release-boot/release.sh). Four cases, in order:
+# (tests/release-boot/release.sh). Five cases, in order:
 #
 #   boots    the environment `cyfr init` writes — the stack's keys, the
 #            empty CORS allowlist, authentication configured,
@@ -38,7 +38,16 @@
 #            auto-migration off. The copy must pass the schema fingerprint
 #            (`Arca.SchemaFingerprint.verify!/0`) and the keyring
 #            fingerprint its boot checks, and serve the tincture and the
-#            thread to the person's session, which the copy still honours.
+#            thread to the person's session, which the copy still honours:
+#            an undeclared restore keeps the backup's authority, the stated
+#            limit.
+#
+#   marked restore  the same copy, stopped and declared restored as
+#            `cyfr restore` declares one (`bin/cyfr eval` of
+#            `Cyfr.Release.mark_restore/0`), then booted: the boot consumes
+#            the marker before its gate opens, so the pre-backup session is
+#            refused, the person's vault entry answers `entry_unavailable`
+#            to a host-side read, and the tincture's profile needs consent.
 #
 # Nothing else boots a release: the suite starts the application under its
 # test configuration, which migrates nothing and reads no `.env`, so a boot
@@ -314,7 +323,12 @@ echo '<!doctype html><html><head></head><body>the backup proof tincture</body></
 tincture="$(server_fixture "$ORIGIN" tincture "$user_id" "$TINCTURE_DIR" backup-proof public)"
 tincture_path="$(field "$tincture" path)"
 thread_id="$(field "$(server_fixture "$ORIGIN" thread "$user_id" "the backup proof thread")" thread_id)"
-echo "the cell holds $tincture_path and $thread_id"
+# An entry of the person's, for the marked restore to block.
+server_fixture "$ORIGIN" vault "$token" restore-proof api_key backup-proof-value >/dev/null ||
+  fail "the fixture wrote no vault entry"
+LOG_SECRETS+=("backup-proof-value")
+athanor_id="$(field "$person" athanor_id)"
+echo "the cell holds $tincture_path, $thread_id and the vault entry restore-proof"
 
 # The tincture page as the person's session fetches it, and the thread's
 # messages over /mcp, as the person's client reads them.
@@ -396,4 +410,65 @@ echo "GET /api/health/ready -> 200 $(cat "$COPY/ready.json")"
 serves "the copy"
 server_stop
 
-step "the cyfr release boots on $ADAPTER, migrates itself, refuses loudly and restores from its backup"
+# ---------------------------------------------------------------------------
+# Case 4: the same backup, declared restored
+# ---------------------------------------------------------------------------
+
+# What `$1` answers to the person's pre-backup session over /mcp: the HTTP
+# status of a `thread.messages` call.
+mcp_status() {
+  local body
+  body="$(printf '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"thread","arguments":{"action":"messages","thread":"%s"},"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientInfo":{"name":"release-boot","version":"0"},"io.modelcontextprotocol/clientCapabilities":{}}}}' "$thread_id")"
+  curl -sS -m 30 -o "$WORK/mcp" -w '%{http_code}' -X POST "http://127.0.0.1:$PORT/mcp" \
+    -H "authorization: Bearer $token" -H 'content-type: application/json' \
+    -H 'accept: application/json, text/event-stream' -H 'mcp-protocol-version: 2026-07-28' \
+    -H 'mcp-method: tools/call' -H 'mcp-name: thread' -d "$body"
+}
+
+step "the copy, stopped, declared restored as cyfr restore declares one"
+marked="$(cell_cyfr "$COPY" eval 'IO.puts("CYFR_RESTORE_ID=" <> Cyfr.Release.mark_restore())' |
+  sed -n 's/^CYFR_RESTORE_ID=//p')"
+[ -n "$marked" ] || fail "mark_restore/0 printed no restore id"
+again="$(cell_cyfr "$COPY" eval 'IO.puts("CYFR_RESTORE_ID=" <> Cyfr.Release.mark_restore())' |
+  sed -n 's/^CYFR_RESTORE_ID=//p')"
+[ "$again" = "$marked" ] || fail "a second mark declared another restore: $again, not $marked"
+echo "declared restore $marked"
+
+step "the marked copy boots, consuming the marker before its gate opens"
+server_start "$COPY"
+grep -q "declared restore $marked applied" "$COPY/boot.log" ||
+  fail "the boot log does not report the declared restore applied"
+echo "GET /api/health/ready -> 200 $(cat "$COPY/ready.json")"
+
+status="$(mcp_status)" || fail "/mcp did not answer"
+[ "$status" = 401 ] ||
+  fail "the pre-backup session was not refused after a declared restore: $status $(head -c 300 "$WORK/mcp")"
+echo "the pre-backup session: POST /mcp -> 401"
+
+read_entry="$(cell_cyfr "$COPY" rpc \
+  "IO.puts(\"VAULT=\" <> inspect(Sanctum.VaultReader.unseal_disclosed(\"$athanor_id\", \"restore-proof\")))" |
+  sed -n 's/^VAULT=//p')"
+[ "$read_entry" = '{:error, {:entry_unavailable, "needs_reauth"}}' ] ||
+  fail "the vault entry was read after a declared restore: $read_entry"
+echo "the vault entry restore-proof: $read_entry"
+
+profiles="$(cell_cyfr "$COPY" rpc \
+  'require Ecto.Query; IO.puts("PROFILES=" <> Enum.join(Arca.Repo.all(Ecto.Query.from(p in Arca.Schemas.Profile, select: p.status)), ","))' |
+  sed -n 's/^PROFILES=//p')"
+case "$profiles" in
+  "" | *active*) fail "a profile stands after a declared restore: ${profiles:-none}" ;;
+  *needs_consent*) echo "the tincture's profile: $profiles" ;;
+  *) fail "no profile needs consent after a declared restore: $profiles" ;;
+esac
+server_stop
+
+step "a second boot of the restored copy finds no marker and applies nothing"
+# The server log grows across a cell's boots: only this boot's lines count.
+seen="$(wc -l <"$COPY/boot.log")"
+server_start "$COPY"
+if tail -n +"$((seen + 1))" "$COPY/boot.log" | grep -q "declared restore"; then
+  fail "the second boot applied a declared restore again"
+fi
+server_stop
+
+step "the cyfr release boots on $ADAPTER, migrates itself, refuses loudly, restores from its backup and consumes a declared restore"

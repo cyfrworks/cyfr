@@ -95,6 +95,16 @@ The token restores one identity, once. Another kit under the same token is refus
 
 A restore brings back your identity alone. It restores no private data (a backup does that) and no membership another home revoked.
 
+### When your home is restored from a backup
+
+Putting a backup back is a different thing: the operator runs `cyfr restore`, which declares it, and the home retires the authority the backup carried before it admits anything. When you next open it:
+
+- **You sign in again.** Every session ended. Your passkeys and paired devices are suspended, so neither signs you in or confirms anything until you re-enable it. Sign in with a door (GitHub, Google or your organization's sign-in); your first confirmation is that door's fresh sign-in or an emailed code.
+- **No door left?** Open `https://<your home>/restore` and use **Recover after a restore**: type your identifier and your kit's recovery secret. The secret stays in the browser, which signs the home's challenge with it; the home checks the signature against your identity read fresh from its directory. It answers a short credential that re-enables your passkeys, devices, keys and webhooks, and nothing else. An identity you never enrolled has no kit: a platform administrator authorizes a passkey you register for you instead.
+- **Re-enable from the checklist.** The system layer lists what the restore suspended. Re-enabling a passkey or a device needs a door's fresh sign-in, an emailed code or the kit, never the passkey or device itself; once one is re-enabled, your recovery is over and it confirms as before. API keys and webhooks are re-enabled the same way.
+- **Consent again, and rotate.** Every component's grant asks for consent again from the checklist, and every stored credential needs re-entering after you rotate it where it came from, since the backup's copy may be known. A run open at the backup ended uncertain and is never resumed; start it again.
+- **Groups wait for everyone.** A group with a member still recovering admits no new member until each has. Removing someone and leaving work as before.
+
 ---
 
 ## Your Saved Homes Are Your Device's

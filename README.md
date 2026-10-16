@@ -861,15 +861,48 @@ What to back up depends on the backends you configured:
 | Postgres | your database + `./data` for files | `pg_dump` on your schedule + the `./data` copy above |
 | S3 | the bucket + the database | enable bucket versioning/replication; back the database up as above |
 
-Restore = put `./data` (and the database) back, then start the stack with the
-**same `CYFR_SECRET_KEY_BASE`** — secrets are encrypted with a key derived
-from it, so a restored data directory is unreadable under a different key
-base. The session cookie's and the LiveView socket's signing salts,
-`CYFR_SESSION_SALT` and `CYFR_LIVE_SALT`, are derived from the key base
+A restore needs the **same `CYFR_SECRET_KEY_BASE`** — secrets are encrypted
+with a key derived from it, so a restored data directory is unreadable under
+a different key base. The session cookie's and the LiveView socket's signing
+salts, `CYFR_SESSION_SALT` and `CYFR_LIVE_SALT`, are derived from the key base
 unless `.env` sets them. Treat `.env` as part of the backup (it holds that key), store it
 separately from the data backup if you can, and exclude `erl_crash.dump` and
 `tmp/` from backup jobs — a crash dump can contain decrypted key material
 from process memory.
+
+**Restore is declared.** `cyfr restore backups/<timestamp>` puts a snapshot
+`cyfr update` took back: it refuses an incomplete snapshot or one whose
+layout it cannot put back, stops the stack and refuses while any member of
+the cell still runs, on any host and of any release, then puts back the
+database, the storage root (each nested mount's bytes at its own source),
+the keyring, `.env` and `docker-compose.yml`. It then declares the restore
+before anything starts:
+
+```sh
+docker compose run --rm --no-deps -T cyfr bin/cyfr eval 'IO.puts("CYFR_RESTORE_ID=" <> Cyfr.Release.mark_restore())'
+```
+
+and only then starts the stack (`--no-start` leaves it stopped). A backup
+put back by hand is declared the same way, with the whole cell stopped,
+before its first start. The next boot retires what the backup's authority
+could still do before it admits anything: every session ends; API keys,
+webhook secrets, paired devices and passkeys are suspended until their
+person re-enables them from the system layer's checklist under a door's
+fresh sign-in, an emailed code or their kit (`/restore`, **Recover after a
+restore**); every component grant asks for consent again; standing
+approvals, unused once-bindings and pending confirmations are dropped;
+every stored credential is unusable until it is rotated where it came from
+and entered again; runs open at the backup end uncertain and none resumes;
+and a group admits no new member until each of its members has recovered.
+[identity-guide.md](identity-guide.md) has the person's side. The
+sign-in providers' OAuth client credentials and the registry push tokens
+stay as the backup restored them. An object store (`CYFR_STORAGE=s3`) is
+outside the snapshot: objects written since it stay in the bucket.
+
+A restore that is not declared keeps the backup's authority, and the home
+cannot tell it was restored: sessions, keys and grants the backup holds
+still work, and a revocation made after the backup was taken is not seen.
+Declare every restore.
 
 A backup restores the server. A person's identity has its own recovery,
 for a home lost with no backup to put back: someone who enrolled (their
@@ -893,6 +926,7 @@ Commands marked with `[i]` support interactive selection when run without argume
 | `cyfr up` / `cyfr down` | Start / stop the stack: cyfr, locus-runtime and locus-backends, plus locus-builds when `CYFR_LOCUS_BUILDS_URL` in `.env` names it (as `cyfr init` writes it) and caddy when `CYFR_BEHIND_PROXY=true` |
 | `cyfr upgrade` | Upgrade the CYFR Codex binary (system-wide) |
 | `cyfr update` | Install the release this CLI is: verify its signed manifest, pull every image by digest, stop the stack, snapshot it into `backups/`, rewrite `docker-compose.yml`'s managed image lines (cyfr, cyfr-locus, the bundled caddy) to the release's digests and start it (see **Upgrading**); leaves `.env`, `Caddyfile` and every other image line alone, and refuses a `docker-compose.yml` that lacks a service of the bundled stack |
+| `cyfr restore <snapshot>` | Put a snapshot from `backups/` back with the whole cell stopped (refused while any member of the cell runs), declare the restore and start the stack (`--no-start` leaves it stopped); see **Backup and restore** |
 
 > `cyfr --version` and `cyfr status` print a one-line hint when a newer release is available. The check only runs in an interactive terminal and is cached for a day; set `CYFR_NO_UPDATE_CHECK=1` (e.g. in your shell profile) to turn it off.
 
