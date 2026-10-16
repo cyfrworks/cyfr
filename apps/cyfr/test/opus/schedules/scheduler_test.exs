@@ -970,6 +970,75 @@ defmodule Opus.Schedules.SchedulerTest do
       assert DateTime.compare(row!(schedule).next_run_at, List.last(fired)) == :gt
     end
 
+    test "a forbid time held past the bound by an overrunning run is dropped under skip and fired within the limit under catch_up",
+         %{ctx: ctx} do
+      actor = Sanctum.Context.actor(ctx)
+      bound = Scheduler.missed_bound_ms()
+
+      held =
+        for attrs <- [%{}, %{missed_runs: "catch_up", catch_up_limit: 1}] do
+          schedule = create_schedule(ctx, Map.merge(%{concurrency: "forbid"}, attrs))
+
+          # The run of the time before is still going.
+          Arca.Repo.insert!(%Arca.Schemas.ScheduleOccurrence{
+            id: "occ_overrun_#{schedule.id}",
+            athanor_id: ctx.athanor_id,
+            schedule_id: schedule.id,
+            scheduled_for: DateTime.add(DateTime.utc_now(), -3_600, :second),
+            state: "claimed",
+            claimed_by: "boot-overrun",
+            claimed_at: Arca.ServerMetaStorage.now!()
+          })
+
+          # Due within the bound, the time waits behind the run under
+          # either policy.
+          due = due!(schedule)
+          assert :overlapping = ScheduleOccurrences.claim(due, "node-a", cadence(due))
+          due
+        end
+
+      # The run overran: by the time the scheduler looks again, the time
+      # it held back is older than the bound.
+      [skip, catch_up] =
+        for schedule <- held do
+          late = DateTime.add(Arca.ServerMetaStorage.now!(), -(bound + 5_000), :millisecond)
+
+          {1, _} =
+            Arca.Repo.update_all(from(s in ScheduleRow, where: s.id == ^schedule.id),
+              set: [next_run_at: late]
+            )
+
+          %{schedule | next_run_at: late}
+        end
+
+      # Under skip it is dropped, though the run is still going.
+      assert :skipped = ScheduleOccurrences.claim(skip, "node-a", cadence(skip))
+      refute Enum.any?(fired_times(ctx, skip), &(DateTime.compare(&1, skip.next_run_at) == :eq))
+      assert DateTime.compare(row!(skip).next_run_at, skip.next_run_at) == :gt
+
+      # Under catch_up it still waits for the run, then fires once it ends.
+      assert :overlapping = ScheduleOccurrences.claim(catch_up, "node-a", cadence(catch_up))
+
+      {:ok, 1} =
+        ScheduleOccurrences.finish(
+          actor,
+          "occ_overrun_#{catch_up.id}",
+          "boot-overrun",
+          nil,
+          "completed"
+        )
+
+      assert {:ok, %{scheduled_for: fired}} =
+               ScheduleOccurrences.claim(row!(catch_up), "node-a", cadence(catch_up))
+
+      assert DateTime.compare(fired, catch_up.next_run_at) == :eq
+
+      # The limit of 1 is spent: the episode closed on the first time not missed.
+      row = row!(catch_up)
+      assert {row.catch_up_until, row.catch_up_left} == {nil, 0}
+      assert DateTime.compare(row.next_run_at, catch_up.next_run_at) == :gt
+    end
+
     test "the catch-up ceiling is the table's: max_catch_up/0 is accepted and one more refused",
          %{ctx: ctx} do
       assert Scheduler.max_catch_up() == 24

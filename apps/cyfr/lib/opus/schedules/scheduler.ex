@@ -44,6 +44,10 @@ defmodule Opus.Schedules.Scheduler do
   the episode is kept on the schedule's row, so a restart or a takeover
   resumes it (`Arca.ScheduleOccurrences.claim/3`). Each fired time is its
   own occurrence, at most once per `(schedule_id, scheduled_for)`.
+  Missed has this one meaning whatever kept the time from its claim:
+  downtime, a `forbid` schedule held back past the bound by a run that
+  overran, or retries after store errors, since why a time waited is not
+  kept and a restart during the wait would read as downtime anyway.
 
   Every write this scheduler makes is gated twice: on the member holding
   its cell slot (`Arca.ControlPlane.held?/0`) and on the generation it

@@ -515,7 +515,7 @@ defmodule Sanctum.Session do
   """
   @spec use_athanor(Context.t(), String.t()) ::
           {:ok, Context.t()}
-          | {:error, :not_found | :archived | :not_member | :no_session | term()}
+          | {:error, :not_found | :archived | :no_session | term()}
   def use_athanor(%Context{session_token_hash: hash} = ctx, athanor_id)
       when is_binary(hash) and is_binary(athanor_id) do
     with {:ok, focused} <- Context.focus(ctx, athanor_id),

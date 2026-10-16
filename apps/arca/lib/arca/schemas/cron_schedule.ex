@@ -124,6 +124,8 @@ defmodule Arca.Schemas.CronSchedule do
   A live name the athanor's feeds already hold is a unique-constraint
   error, declared in both adapters' spellings: PostgreSQL names the index,
   and ecto_sqlite3 derives a name from the columns SQLite's error lists.
+  A feed takes no missed-run policy and stays `skip`: a poll missed is
+  covered by the next.
   """
   @spec feed_changeset(map()) :: Ecto.Changeset.t()
   def feed_changeset(attrs) do

@@ -803,7 +803,7 @@ CYFR supports cron-based scheduling for recurring component execution. Create sc
 }
 ```
 
-**Missed runs:** `missed_runs` declares what becomes of due times the server missed while it was down. `skip`, the default, fires none of them: the schedule resumes at its next time. `catch_up` fires up to `catch_up_limit` of them (1 to 24, required with `catch_up` and refused with `skip`), oldest first, one after another, then resumes at its next time; a restart part-way through carries on where it stopped. A due time is missed only when it is more than about half a minute late, so a schedule that fires a few seconds late fires as usual under either policy. Each due time fires at most once. `schedule.update` takes the same two arguments, and `schedule.get` and `schedule.list` show them.
+**Missed runs:** `missed_runs` declares what becomes of due times the server missed while it was down. `skip`, the default, fires none of them: the schedule resumes at its next time. `catch_up` fires up to `catch_up_limit` of them (1 to 24, required with `catch_up` and refused with `skip`), oldest first, one after another, then resumes at its next time; a restart part-way through carries on where it stopped. A due time is missed only when it is more than about half a minute late, so a schedule that fires a few seconds late fires as usual under either policy. A due time a `forbid` schedule held back that long behind its previous, still running, run is missed too. Each due time fires at most once. `schedule.update` takes the same two arguments, and `schedule.get` and `schedule.list` show them.
 
 **Cron expression format:** 5-field standard cron — `minute hour day-of-month month day-of-week`. Supports `*` (any), ranges (`1-5`), steps (`*/15`), and lists (`1,3,5`). Minimum interval is 1 minute.
 
@@ -824,10 +824,11 @@ cyfr schedule resume <schedule_id>
 cyfr schedule delete <schedule_id>
 ```
 
-`cyfr schedule create` makes a `skip` schedule. To declare a catch-up from the command line, pass the arguments to the tool directly:
+`--missed-runs` and `--catch-up-limit` declare the same policy on `cyfr schedule create` and `cyfr schedule update`:
 
 ```bash
-cyfr call schedule '{"action":"update","schedule_id":"<schedule_id>","missed_runs":"catch_up","catch_up_limit":3}'
+cyfr schedule create --profile <profile_id> --name nightly --cron "0 2 * * *" --ref "formula:local.report:1.0.0" --missed-runs catch_up --catch-up-limit 3
+cyfr schedule update <schedule_id> --missed-runs skip
 ```
 
 **Constraints:** An athanor holds at most the operator's `max_schedules_per_athanor` schedules, a paused one included (1,000 unless the operator sets it, and 0 removes the ceiling). Minimum interval is 1 minute.

@@ -22,6 +22,7 @@ func init() {
 	scheduleCreateCmd.Flags().String("ref", "", "Component reference")
 	scheduleCreateCmd.Flags().String("profile", "", "Consented execution profile ID")
 	scheduleCreateCmd.Flags().String("input", "", "JSON input for execution")
+	addMissedRunsFlags(scheduleCreateCmd)
 
 	scheduleGetCmd.Flags().Bool("json", false, "") // inherits from root but explicit for clarity
 	scheduleGetCmd.Flags().MarkHidden("json")
@@ -31,6 +32,7 @@ func init() {
 	scheduleUpdateCmd.Flags().String("ref", "", "New component reference")
 	scheduleUpdateCmd.Flags().String("profile", "", "Replacement consented execution profile ID")
 	scheduleUpdateCmd.Flags().String("input", "", "New JSON input")
+	addMissedRunsFlags(scheduleUpdateCmd)
 
 	scheduleCmd.AddCommand(scheduleCreateCmd)
 	scheduleCmd.AddCommand(scheduleListCmd)
@@ -56,6 +58,7 @@ var scheduleCreateCmd = &cobra.Command{
 	Example: `  cyfr schedule create --profile <profile-id> --name daily-report --cron "0 9 * * *" --ref "catalyst:local.reporter"
   cyfr schedule create --profile <profile-id> --name processor --cron "*/5 * * * *" --ref "reagent:local.proc" --input '{"key":"value"}'
   cyfr schedule create --profile <profile-id> --name pinned --cron "0 * * * *" --ref "catalyst:local.reporter:1.0.0"
+  cyfr schedule create --profile <profile-id> --name nightly --cron "0 2 * * *" --ref "catalyst:local.reporter" --missed-runs catch_up --catch-up-limit 3
   cyfr schedule create  # interactive mode`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		client := newClient()
@@ -125,6 +128,7 @@ var scheduleCreateCmd = &cobra.Command{
 			}
 			toolArgs.Input = ops.Value(inputMap)
 		}
+		toolArgs.MissedRuns, toolArgs.CatchUpLimit = missedRunsFlags(cmd)
 
 		result, err := client.CallTool(cmd.Context(), ops.Schedule, toolArgs)
 		if err != nil {
@@ -178,7 +182,9 @@ var scheduleUpdateCmd = &cobra.Command{
 	Long:  "Update one or more fields of an existing schedule. Only explicitly set flags are sent.",
 	Example: `  cyfr schedule update my-schedule --cron "0 */2 * * *"
   cyfr schedule update my-schedule --name new-name
-  cyfr schedule update my-schedule --input '{"key":"new-value"}'`,
+  cyfr schedule update my-schedule --input '{"key":"new-value"}'
+  cyfr schedule update my-schedule --missed-runs catch_up --catch-up-limit 3
+  cyfr schedule update my-schedule --missed-runs skip`,
 	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		client := newClient()
@@ -209,6 +215,7 @@ var scheduleUpdateCmd = &cobra.Command{
 			}
 			toolArgs.Input = ops.Nullable(inputMap)
 		}
+		toolArgs.MissedRuns, toolArgs.CatchUpLimit = missedRunsFlags(cmd)
 
 		result, err := client.CallTool(cmd.Context(), ops.Schedule, toolArgs)
 		if err != nil {
@@ -288,4 +295,28 @@ var scheduleDeleteCmd = &cobra.Command{
 		}
 		return nil
 	},
+}
+
+// addMissedRunsFlags declares a schedule's missed-run policy on create and
+// update: what becomes of due times the server missed.
+func addMissedRunsFlags(cmd *cobra.Command) {
+	cmd.Flags().String("missed-runs", "", "Missed due times: skip (default) or catch_up")
+	cmd.Flags().Int("catch-up-limit", 0, "How many missed times one catch-up fires (with --missed-runs catch_up)")
+}
+
+// missedRunsFlags reads the two flags as set: one not given is not sent, so
+// an update keeps what the schedule holds. The tool decides what a policy
+// and a limit may be, and refuses a catch_up without one.
+func missedRunsFlags(cmd *cobra.Command) (ops.Field[string], ops.Field[int]) {
+	var policy ops.Field[string]
+	var limit ops.Field[int]
+	if cmd.Flags().Changed("missed-runs") {
+		v, _ := cmd.Flags().GetString("missed-runs")
+		policy = ops.Value(v)
+	}
+	if cmd.Flags().Changed("catch-up-limit") {
+		v, _ := cmd.Flags().GetInt("catch-up-limit")
+		limit = ops.Value(v)
+	}
+	return policy, limit
 }
