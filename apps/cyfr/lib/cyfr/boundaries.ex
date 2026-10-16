@@ -297,9 +297,9 @@ defmodule Cyfr.Boundaries do
     Arca.VaultStorage Arca.SessionStorage Arca.ApiKeyStorage Arca.RegistryTokenStorage
     Arca.ProviderCredentialStorage Arca.WebhookStorage Arca.FrameCredentials
     Arca.PairedClients Arca.Users Arca.Members Arca.Athanors Arca.Doors
-    Arca.PersonIdentities Arca.IdentityAttempts Arca.IdentityLog Arca.DirectoryHeads
-    Arca.DeviceCertificates Arca.DeviceCertifications Arca.PairingInvitations Arca.Passkeys
-    Arca.PendingConfirmations Arca.CarryActions Arca.InstallationClaims
+    Arca.PersonIdentities Arca.PersonSeals Arca.IdentityAttempts Arca.IdentityLog
+    Arca.DirectoryHeads Arca.DeviceCertificates Arca.DeviceCertifications
+    Arca.PairingInvitations Arca.Passkeys Arca.PendingConfirmations Arca.CarryActions Arca.InstallationClaims
     Arca.RequestRateWindows Arca.InstanceEntries Arca.InstanceEntryUsage
     Arca.DecisionLog Arca.McpLog Arca.PolicyLog
   )
