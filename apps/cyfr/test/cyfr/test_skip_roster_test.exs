@@ -18,7 +18,10 @@ defmodule Cyfr.TestSkipRosterTest do
   only where the host cannot run it and excludes nothing elsewhere, so it
   carries no expiry; each such skip is rostered below by file and exact
   expression, and one not rostered is refused. A tag whose shape the roster cannot read
-  statically is refused too, so no skip hides behind a call.
+  statically is refused too, so no skip hides behind a call. Within one tag a
+  repeated key counts as ExUnit counts it, the last one written, so
+  `skip: false, skip: true` skips; the fields belong on the same tag as the
+  skip.
 
   The rule is a function of the files it reads, so it is also run on
   planted files it must refuse and accept.
@@ -73,12 +76,16 @@ defmodule Cyfr.TestSkipRosterTest do
   end
 
   # What a tag argument says about skipping, read from its syntax.
-  defp tag_skip(:skip), do: {:standing, []}
+  defp tag_skip(:skip), do: {:standing, %{}}
   defp tag_skip(atom) when is_atom(atom), do: nil
 
   defp tag_skip(list) when is_list(list) do
     if Enum.all?(list, &match?({key, _} when is_atom(key), &1)) do
-      case Keyword.fetch(list, :skip) do
+      # ExUnit folds a tag's keywords into a map, so a repeated key is the
+      # last one written.
+      fields = Map.new(list)
+
+      case Map.fetch(fields, :skip) do
         :error ->
           nil
 
@@ -86,7 +93,7 @@ defmodule Cyfr.TestSkipRosterTest do
           nil
 
         {:ok, value} ->
-          if Macro.quoted_literal?(value), do: {:standing, list}, else: {:prerequisite, value}
+          if Macro.quoted_literal?(value), do: {:standing, fields}, else: {:prerequisite, value}
       end
     else
       {:unreadable, Macro.to_string(list)}
@@ -97,15 +104,15 @@ defmodule Cyfr.TestSkipRosterTest do
 
   # Why a found skip is refused, or nil when it is permitted.
   defp refusal(root, {file, line, :standing, fields}, today) do
-    missing = Enum.reject(@required, &Keyword.has_key?(fields, &1))
+    missing = Enum.reject(@required, &Map.has_key?(fields, &1))
 
     reasons =
       Enum.reject(
         [
           missing != [] && "lacks #{Enum.map_join(missing, ", ", &"#{&1}:")}",
-          Keyword.has_key?(fields, :owner) && not name?(fields[:owner]) && "owner: is not a name",
-          Keyword.has_key?(fields, :expires) && expiry_refusal(fields[:expires], today),
-          Keyword.has_key?(fields, :covered_by) && coverage_refusal(root, fields[:covered_by])
+          Map.has_key?(fields, :owner) && not name?(fields[:owner]) && "owner: is not a name",
+          Map.has_key?(fields, :expires) && expiry_refusal(fields[:expires], today),
+          Map.has_key?(fields, :covered_by) && coverage_refusal(root, fields[:covered_by])
         ],
         &(&1 in [false, nil])
       )
@@ -213,6 +220,19 @@ defmodule Cyfr.TestSkipRosterTest do
 
   @future Date.to_iso8601(Date.add(Date.utc_today(), 30))
   @past "2026-01-01"
+
+  test "a later repeated skip key cannot hide an effective skip", %{dir: dir} do
+    for off <- ["false", "nil"] do
+      assert [refused] =
+               planted_refusals(dir, "  @tag skip: #{off}, skip: true\n  test \"t\", do: :ok")
+
+      assert refused =~ "standing skip lacks owner:, expires:, covered_by:"
+    end
+
+    # And the other way round, as ExUnit reads it: the last key, false, runs
+    # the test.
+    assert planted_refusals(dir, "  @tag skip: true, skip: false\n  test \"t\", do: :ok") == []
+  end
 
   test "a bare skip is refused, in every tag attribute", %{dir: dir} do
     for attribute <- [

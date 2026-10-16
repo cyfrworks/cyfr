@@ -224,5 +224,42 @@ new_case
 run -b
 check usage
 
+# Malformed but valid JSON must not produce success-shaped counts.
+label="a JSON object is not a run list"
+new_case
+printf '{}\n' > "$case_dir/list.json"
+run
+check failed_with "red-rate: gh run list answered something other than a list of runs"
+
+label="a run without an id, a status or an attempt count is refused"
+new_case
+printf '[{"attempt":1,"status":"completed","conclusion":"success"}]\n' > "$case_dir/list.json"
+run
+check failed_with "red-rate: gh run list answered something other than a list of runs"
+
+label="a completed run with zero attempts is refused"
+new_case
+printf '[{"databaseId":101,"attempt":0,"status":"completed","conclusion":"success"}]\n' > "$case_dir/list.json"
+run
+check failed_with "red-rate: gh run list answered something other than a list of runs"
+
+label="a JSON object is not a job list"
+main_case
+printf '{"jobs":{}}\n' > "$case_dir/view-101-1.json"
+expect_limit=4 run -n 4
+check failed_with "red-rate: gh run view 101 --attempt 1 answered no job list"
+
+label="an empty job list for a completed attempt is refused"
+main_case
+printf '{"jobs":[]}\n' > "$case_dir/view-102-2.json"
+expect_limit=4 run -n 4
+check failed_with "red-rate: gh run view 102 --attempt 2 answered no job list"
+
+label="a job without a name or a numeric id is refused"
+main_case
+printf '{"jobs":[{"conclusion":"success","name":"Static checks"}]}\n' > "$case_dir/view-103-1.json"
+expect_limit=4 run -n 4
+check failed_with "red-rate: gh run view 103 --attempt 1 answered no job list"
+
 echo "$cases cases, $failures failures"
 [ "$failures" -eq 0 ]
