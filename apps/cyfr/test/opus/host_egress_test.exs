@@ -169,7 +169,7 @@ defmodule Opus.Host.EgressTest do
   describe "the egress_pin cases of tests/fixtures/host_api.json" do
     test "each is pinned or refused as it names under an edge allowing every host" do
       assert Enum.map(@vectors["egress_pin_cases"], & &1["name"]) ==
-               ~w(fetch stream redirect denied metadata resolution redirect_credentials)
+               ~w(fetch stream redirect denied metadata resolution redirect_credentials flow)
 
       # The addresses the vectors answer: the fetch's, then the redirect's
       # hop to the same host.
@@ -177,12 +177,24 @@ defmodule Opus.Host.EgressTest do
       Resolver.script("login.other.test", :inet, [{203, 0, 113, 50}])
 
       fixture = attached!(["*"])
-      run_cases(fixture, @vectors["egress_pin_cases"])
+      {flow, cases} = Enum.split_with(@vectors["egress_pin_cases"], &(&1["name"] == "flow"))
+      run_cases(fixture, cases)
 
-      # The hop to another origin was refused before its host was resolved.
-      refute Enum.any?(Resolver.looked_up(), fn {host, _family} -> host == "login.other.test" end)
+      # The flow case's run has read a class its edge lets flow nowhere.
+      :ok =
+        Opus.Ledger.join(Prima.Actor.in_athanor(fixture.athanor_id), fixture.execution_id, [
+          Prima.Source.new(:filed)
+        ])
 
-      assert fixture |> denials() |> Enum.map(& &1.decision) == List.duplicate("denied", 4)
+      run_cases(fixture, flow)
+
+      # The hop to another origin, and the host the ledger may not reach,
+      # were refused before their names were resolved.
+      refute Enum.any?(Resolver.looked_up(), fn {host, _family} ->
+               host in ["login.other.test", "collector.example.test"]
+             end)
+
+      assert fixture |> denials() |> Enum.map(& &1.decision) == List.duplicate("denied", 5)
     end
   end
 
