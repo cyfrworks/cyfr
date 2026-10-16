@@ -62,16 +62,29 @@ defmodule Compendium.Pull do
 
   `{:error, :not_shipped}` when the seed carries no such version;
   `{:error, :not_local}` for a ref outside the `local` namespace.
+
+  `claim:` in `opts` — `%{owner: owner, fence: fence, slot: slot}` — is
+  the provisioning claim a caller holding the athanor runs under, and the
+  member slot it was taken under: the copy then publishes only while that
+  claim and slot are still the caller's (`Arca.Overlay.pull_shipped/3`),
+  and answers `{:error, :not_owner}` otherwise. Without it the copy is
+  the member's as it stands.
   """
-  @spec pull_shipped(Context.t(), String.t()) ::
+  @spec pull_shipped(Context.t(), String.t(), keyword()) ::
           {:ok, %{status: String.t(), component_ref: String.t()}} | {:error, term()}
-  def pull_shipped(%Context{} = ctx, reference) when is_binary(reference) do
+  def pull_shipped(%Context{} = ctx, reference, opts \\ [])
+      when is_binary(reference) and is_list(opts) do
     with {:ok, %Prima.ComponentRef{} = cref} <- Prima.ComponentRef.parse(reference),
          :ok <- local_ref(cref),
          {:ok, version} <- shipped_version(cref),
          unit =
            Compendium.ComponentPath.version_dir(cref.type, cref.namespace, cref.name, version),
-         :ok <- Arca.Overlay.pull_shipped(Sanctum.Context.actor(ctx), unit),
+         :ok <-
+           Arca.Overlay.pull_shipped(
+             Sanctum.Context.actor(ctx),
+             unit,
+             Keyword.take(opts, [:claim])
+           ),
          {:ok, _} <- Compendium.Registry.register_from_arca(ctx, unit) do
       pulled = %Prima.ComponentRef{cref | version: version}
       {:ok, %{status: "pulled", component_ref: Prima.ComponentRef.to_string(pulled)}}

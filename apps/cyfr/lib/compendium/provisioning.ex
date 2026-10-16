@@ -310,7 +310,7 @@ defmodule Compendium.Provisioning do
     # a person is holding this request open, and a refusal they can retry
     # beats queueing behind a fill. Released with no verdict on readiness.
     Athanor.under_claim(athanor_id, "install_shipped", fn claim ->
-      with {:ok, pulled} <- Pull.pull_shipped(ctx, reference),
+      with {:ok, pulled} <- Pull.pull_shipped(ctx, reference, claim: fence(claim)),
            :ok <- Athanor.bootstrap_consents_for(ctx, claim, pulled.component_ref) do
         {:ok, pulled}
       else

@@ -2041,6 +2041,77 @@ defmodule Arca.OverlayTest do
       assert owner == next.owner
     end
 
+    test "an install whose member lost its slot and claim, then won a newer slot back, " <>
+           "never replaces its successor's unit",
+         %{actor: actor} do
+      original = claimant!("install")
+      node = original.node
+      ctx = Sanctum.TestContext.local()
+      claims_actor = %Prima.Actor{athanor_id: actor.athanor_id}
+
+      # The install parks once it holds the athanor's claim, before it reads
+      # or writes anything: its lease keeper cannot start while the
+      # provisioning supervisor is suspended.
+      supervisor = Process.whereis(Sanctum.ProvisioningSupervisor)
+      on_exit(fn -> if Process.alive?(supervisor), do: :sys.resume(supervisor) end)
+      :ok = :sys.suspend(supervisor)
+
+      install =
+        Task.async(fn ->
+          Compendium.Provisioning.install_shipped(ctx, "catalyst:local.bundled")
+        end)
+
+      Prima.Test.Wait.wait_until(
+        fn ->
+          match?(
+            {:ok, %{entry_kind: "install_shipped", outcome: nil}},
+            Arca.ProvisioningClaims.current(claims_actor)
+          )
+        end,
+        10_000,
+        "the install to hold the athanor's claim"
+      )
+
+      {:ok, held} = Arca.ProvisioningClaims.current(claims_actor)
+
+      # A successor boot takes the slot and the athanor, and commits its own
+      # bytes at the unit.
+      :ok = lapse_slot!(original)
+      {:ok, successor} = Arca.ControlPlane.take(node, node <> "#successor", 60_000)
+      :ok = lapse_claim!(actor.athanor_id)
+      {:ok, next} = Sanctum.Provisioning.take_claim(actor.athanor_id, "first_need")
+      assert next.fence > held.fence
+
+      assert {:ok, _} =
+               Arca.Overlay.commit_unit(
+                 actor,
+                 @version_dir,
+                 {:files,
+                  [
+                    {[@sentinel], ~s({"type":"catalyst","customized":true})},
+                    {["catalyst.wasm"], "SUCCESSOR-BYTES"}
+                  ]},
+                 cap: :exempt
+               )
+
+      {root, key} = Arca.Storage.UnitLocator.unit_key(@version_dir)
+      {:ok, theirs} = Arca.StorageUnits.current(actor, root, key)
+
+      # The old member wins its slot back, at a newer generation than both.
+      :ok = lapse_slot!(successor)
+      {:ok, regained} = Arca.ControlPlane.take(node, node <> "#boot_a", 60_000)
+      assert regained.generation > successor.generation
+
+      :ok = :sys.resume(supervisor)
+      assert {:error, :not_owner} = Task.await(install, 30_000)
+
+      assert {:ok, %{current_revision: revision}} = Arca.StorageUnits.current(actor, root, key)
+      assert revision == theirs.current_revision
+      assert {:ok, "SUCCESSOR-BYTES"} = Arca.get(actor, @version_dir ++ ["catalyst.wasm"])
+      assert {:ok, %{owner: owner, outcome: nil}} = Arca.ProvisioningClaims.current(claims_actor)
+      assert owner == next.owner
+    end
+
     test "a member whose slot was taken over while it staged moves no pointer", %{actor: actor} do
       slot = claimant!("stale")
       unit = ["components", "catalysts", "local", "fenced", "1.0.0"]
