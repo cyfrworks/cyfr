@@ -758,6 +758,37 @@ defmodule Sanctum.Consent.CommitTest do
       assert unclamped_narrowing(narrowed.resolved_policy, asked_policy, ref) == narrowing
     end
 
+    test "a grant keeps the flows its head kept, never the whole ask", %{ctx: ctx} do
+      publish!(ctx, "commit-grant-flows", "1.0.0", %{
+        "caps" => %{
+          "egress" => %{"domains" => ["api.one.example"]},
+          "flows" => [
+            %{"from" => "pinned", "to" => "api.one.example"},
+            %{"from" => "filed", "to" => "api.one.example"}
+          ]
+        }
+      })
+
+      ref = "reagent:local.commit-grant-flows"
+      entry = entry!(ctx)
+      kept = %{ref => %{"exits" => [%{"from" => "pinned", "to" => "api.one.example"}]}}
+      {:ok, %{profile_id: profile_id, revision: 1}} = walk!(ctx, ref, %{subset: kept})
+
+      {:ok, plan} = Plan.plan(ctx, %{ref: ref})
+      assert plan.head_narrowing == kept
+
+      assert {:ok, %{revision: 2}} =
+               Commit.grant(ctx, %{
+                 profile_id: profile_id,
+                 bindings: [%{need: "@ingress", entry_id: entry.id}],
+                 expected_consent_revision: 1
+               })
+
+      {:ok, blob} = Prima.Authority.Blob.parse(head!(ctx, profile_id).resolved_policy)
+      {:ok, ingress} = Prima.Authority.Blob.ingress(blob, ref)
+      assert Prima.Authority.Blob.Edge.flows(ingress) == [%{from: :pinned, to: "api.one.example"}]
+    end
+
     test "a head no narrowing touched is re-issued whole", %{ctx: ctx} do
       publish!(ctx, "commit-grant-whole")
       ref = "reagent:local.commit-grant-whole"

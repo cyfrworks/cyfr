@@ -800,8 +800,8 @@ defmodule Sanctum.Consent.Plan do
   field of a narrowable kind whose grant on the head differs from the
   ask, named as the head grants it within the ask — the egress domains,
   methods, schemes and private ranges, the storage paths and actions, the
-  tools, and each limit (a rate limit by the fields that differ). A head
-  no narrowing touched answers `%{}`.
+  tools, the flows to the node's exits, and each limit (a rate limit by
+  the fields that differ). A head no narrowing touched answers `%{}`.
 
   A narrowing grants part of the ask, so it is the head's grant
   intersected with what the ask still names, each value read as the
@@ -896,9 +896,12 @@ defmodule Sanctum.Consent.Plan do
           into: %{},
           do: {kind, record}
 
-    if ((asked && asked["tools"]) || []) != [],
-      do: Map.put(sets, "tools", []),
-      else: sets
+    sets =
+      if ((asked && asked["tools"]) || []) != [],
+        do: Map.put(sets, "tools", []),
+        else: sets
+
+    if edge_flows(asked) != [], do: Map.put(sets, "exits", []), else: sets
   end
 
   # The head's grant of one node within the ask, kind by kind: a narrowing
@@ -918,6 +921,7 @@ defmodule Sanctum.Consent.Plan do
       fields_differing(node_key, head, asked, "storage", ~w(paths actions))
     )
     |> put_differing("tools", tools_differing(node_key, head, asked))
+    |> put_differing("exits", exits_differing(head, asked))
     |> put_differing(
       "limits",
       limits_differing(node_key, head_limits || %{}, asked_limits || %{})
@@ -947,6 +951,24 @@ defmodule Sanctum.Consent.Plan do
       )
 
     if kept != ((asked && asked["tools"]) || []), do: kept
+  end
+
+  # The head's flows the ask still asks, named when they are fewer than
+  # the ask's: a flow is a pair the narrowing names exactly, so what the
+  # head keeps of the ask is the intersection, and an empty one keeps none.
+  defp exits_differing(head, asked) do
+    asked_flows = edge_flows(asked)
+    kept = Enum.filter(edge_flows(head), &(&1 in asked_flows))
+    if kept != asked_flows, do: Prima.Flow.to_json(kept)
+  end
+
+  defp edge_flows(nil), do: []
+
+  defp edge_flows(edge) do
+    case Prima.Flow.parse(edge["flows"], :any) do
+      {:ok, flows} -> flows
+      {:error, _unread} -> []
+    end
   end
 
   # The head's limits that differ from the ask, each the narrower of the
