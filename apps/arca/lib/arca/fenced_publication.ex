@@ -383,7 +383,10 @@ defmodule Arca.FencedPublication do
   # statement's own; then the one statement that publishes, and the
   # owner's row beside it. A replay recognized at the claim answers the
   # revision it already published, and the owner's row is still written
-  # beside it.
+  # beside it. The owner's row locks come before the lease row's shared
+  # lock because the schedule claim and the consent writers lock their
+  # rows and then verify the slot: the reverse order here would let a
+  # lease renewal queued between the two close a deadlock on PostgreSQL.
   defp publication(target, revision_read, slot, started, verify, also) do
     with :ok <- ran(verify, []),
          :ok <- owned(slot),

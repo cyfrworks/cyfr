@@ -107,13 +107,14 @@ defmodule Cyfr.BoundaryDeclarationsTest do
          "rows Sanctum reads; that no other layer reads them is `Cyfr.Boundaries`' " <>
          "security row"},
       {~w(AgentRevisions AgentStorage BudgetReservations BuildRecords Cache Cache.Keys
-          CipherRotation ComponentStorage ControlPlane CredentialBindings CronSchedule
-          Execution ExecutionAttempts ExecutionEvents ExecutionPayloads ExecutionStanding
-          Health JobClaims McpServerStorage Overlay PolicyLog ProvisioningClaims RateWindows
-          RecordSink ScheduleOccurrences SecurityTransitions ServerMetaStorage Storage
-          StorageProjectionChanges StorageProjectionRoots TenantTables ThreadStorage
-          ThreadSubscriptionStorage TurnStorage Usage VaultDefaults WebhookDeliveryStorage),
-       "the storage, lease, claim and cache facades the layers above call downward"},
+          CipherRotation ComponentStorage ConsumerReceipts ControlPlane CredentialBindings
+          CronSchedule Execution ExecutionAttempts ExecutionEvents ExecutionPayloads
+          ExecutionStanding Health JobClaims McpServerStorage Outbox Overlay PolicyLog
+          ProvisioningClaims RateWindows RecordSink ScheduleOccurrences SecurityTransitions
+          ServerMetaStorage Storage StorageProjectionChanges StorageProjectionRoots TenantTables
+          ThreadStorage ThreadSubscriptionStorage TurnStorage Usage VaultDefaults
+          WebhookDeliveryStorage),
+       "the storage, lease, claim, outbox and cache facades the layers above call downward"},
       {~w(InstallationClaims),
        "the installation mode Sanctum installs and the first-person mint reads"},
       {~w(Providers.Records),

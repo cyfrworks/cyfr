@@ -550,6 +550,22 @@ defmodule Aqua.NotesRunReadTest do
     assert recorded(ctx, run) == nil
   end
 
+  test "the notes tool's read in a scheduled chain records the revision it answered", %{ctx: ctx} do
+    run = running!(ctx, ~s({"keep_outcome": true, "note_name": "nightly"}))
+    {:ok, _} = Notes.keep(ctx, "nightly", "a person's list")
+
+    # The registry stamps the chain's root onto the call as a host-only
+    # key; the provider hands it to the read.
+    assert {:ok, %{content: "a person's list"}} =
+             Aqua.Providers.Notes.handle("notes", ctx, %{
+               "action" => "read",
+               "name" => "nightly",
+               "root_execution_id" => run.execution_id
+             })
+
+    assert recorded(ctx, run) == 1
+  end
+
   test "a chain in another athanor cannot record this occurrence's read", %{ctx: ctx} do
     run = running!(ctx, ~s({"keep_outcome": true, "note_name": "nightly"}))
     n = System.unique_integer([:positive])

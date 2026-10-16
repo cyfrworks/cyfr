@@ -11,8 +11,9 @@ defmodule Cyfr.Bus.ScheduleCompleted do
   `issuer_member` is the slot the publishing member held
   (`Arca.ControlPlane.held/0`: its node, its boot and its generation), or
   nil where no claimant runs. A subscriber on every member hears every
-  completion; only the one whose own slot is the issuer acts on it, so
-  delivery to peers creates no second write.
+  completion, and it only wakes the outcome's consumer (`Aqua.ScheduleNotes`),
+  which works the outbox record the finish committed under its job claim
+  and never this payload, so delivery to peers creates no second write.
 
   `output` is the run's output — already masked by the close that
   answered it — only when the schedule asked to keep its outcome

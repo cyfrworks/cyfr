@@ -307,7 +307,11 @@ defmodule Aqua.Providers.Notes do
   end
 
   defp dispatch(ctx, %{"action" => "read", "name" => name} = args) when is_binary(name) do
-    with {:ok, note} <- Notes.read(ctx, name, scope(args), athanor_id: args["athanor_id"]),
+    with {:ok, note} <-
+           Notes.read(ctx, name, scope(args),
+             athanor_id: args["athanor_id"],
+             root_execution_id: args["root_execution_id"]
+           ),
          do: {:ok, wire_sources(note)}
   end
 
