@@ -5530,4 +5530,225 @@ defmodule PrismWeb.SystemLayerTest do
       keys
     end
   end
+
+  # ---------------------------------------------------------------------------
+  # The seal
+  # ---------------------------------------------------------------------------
+
+  describe "the seal" do
+    setup :signed_in
+
+    defp plant_seal!(user, text, glyph) do
+      {1, _} =
+        Arca.Repo.insert_all("person_seals", [
+          %{user_id: user.user_id, text: text, glyph: glyph, set_at: DateTime.utc_now()}
+        ])
+
+      :ok
+    end
+
+    # The text of the open prompt's description, the element the dialog's
+    # `aria-describedby` names, as assistive technology reads it.
+    defp described(view) do
+      view
+      |> element("#system-layer-description")
+      |> render()
+      |> String.replace(~r/<[^>]+>/, " ")
+      |> String.split()
+      |> Enum.join(" ")
+    end
+
+    # One prompt of every kind the layer draws.
+    defp every_kind(ctx) do
+      secret = "cnf_" <> Base.url_encode64(:crypto.strong_rand_bytes(32), padding: false)
+
+      {:ok, confirmation} =
+        Prompt.confirmation(
+          %{
+            ref: Prima.Confirmation.ref(secret),
+            operation: "key.create",
+            expires_at: DateTime.add(DateTime.utc_now(), 300)
+          },
+          false
+        )
+
+      safe_mode = Prism.SafeMode.enter(:crashed, %{canvas: "home", tincture: nil, kept: nil})
+
+      %{
+        grant: grant(ctx, "k-grant"),
+        unlock: %{id: "k-unlock", kind: :unlock, action: :vault_unlock, subject: %{}},
+        sign_in: sign_in("k-sign-in"),
+        credential_entry: credential("k-credential", "probe"),
+        safe_mode: %{id: "k-safe", kind: :safe_mode, action: nil, subject: safe_mode},
+        pairing: %{id: "k-pairing", kind: :pairing, action: :device_pairing, subject: %{}},
+        confirmation: confirmation,
+        seal: %{id: "k-seal", kind: :seal, action: :seal_change, subject: %{}},
+        enrollment: %{
+          id: "k-enrollment",
+          kind: :enrollment,
+          action: :recovery_material,
+          subject: %{directory_url: "https://directory.example"}
+        },
+        kit: %{
+          id: "k-kit",
+          kind: :kit,
+          action: :recovery_material,
+          subject: %{attempt_id: "att_k"}
+        },
+        holder: %{id: "k-holder", kind: :holder, action: :recovery_material, subject: %{}}
+      }
+    end
+
+    # Each prompt shown alone, its description read, and ended.
+    defp descriptions(view, prompts) do
+      for {kind, prompt} <- prompts, into: %{} do
+        prompt(view, prompt)
+        assert open_prompt(view) == prompt.id, inspect(kind)
+        text = described(view)
+
+        if kind == :safe_mode,
+          do:
+            view
+            |> element(~s(button[phx-click="choose"][phx-value-offer="retry"]))
+            |> render_click(),
+          else: view |> element(~s(button[phx-click="dismiss"])) |> render_click()
+
+        assert open_prompt(view) == nil, inspect(kind)
+        {kind, text}
+      end
+    end
+
+    test "every prompt kind begins with the line that no seal is chosen, then with the seal",
+         %{view: view, ctx: ctx, user: user} do
+      prompts = every_kind(ctx)
+      assert Enum.sort(Map.keys(prompts)) == Enum.sort(Prompt.kinds())
+
+      for {kind, text} <- descriptions(view, prompts) do
+        assert String.starts_with?(text, "No seal chosen yet."), "#{kind}: #{text}"
+      end
+
+      plant_seal!(user, "quill zephyr", "✈")
+
+      for {kind, text} <- descriptions(view, prompts) do
+        assert String.starts_with?(text, "quill zephyr ✈ "), "#{kind}: #{text}"
+        refute text =~ "No seal chosen yet.", inspect(kind)
+      end
+
+      # The seal is the description's first element, so it is spoken first.
+      prompt(view, sign_in("k-first"))
+
+      assert has_element?(
+               view,
+               ~s(#system-layer-description > [data-test="seal"][data-seal="set"]:first-child),
+               "quill zephyr ✈"
+             )
+    end
+
+    test "with no prompt open the seal is drawn nowhere", %{view: view, user: user} do
+      plant_seal!(user, "quill zephyr", "✈")
+      refute render(view) =~ "quill zephyr"
+
+      prompt(view, sign_in("s1"))
+      assert render(view) =~ "quill zephyr"
+      view |> element(~s(button[phx-click="dismiss"])) |> render_click()
+      refute render(view) =~ "quill zephyr"
+    end
+
+    test "a person with no seal is offered the choice beside the prompts, and chooses once",
+         %{view: view, ctx: ctx} do
+      assert has_element?(view, ~s([data-test="seal-offer"]))
+
+      # A prompt in front hides the offer; it comes back once that one ends.
+      prompt(view, sign_in("s1"))
+      refute has_element?(view, ~s([data-test="seal-offer"]))
+      view |> element(~s(button[phx-click="dismiss"])) |> render_click()
+      assert has_element?(view, ~s([data-test="seal-offer"]))
+
+      view |> element(~s([data-test="seal-offer-open"])) |> render_click()
+      assert open_prompt(view) == "seal-choice"
+      assert render(view) =~ "Choose your seal"
+
+      # The drawn pair is offered first, and a word the list lacks is
+      # refused with nothing written.
+      [_, pair] = Regex.run(~r/<option value="([a-z]+ [a-z]+)" selected/, render(view))
+      [first, second] = String.split(pair, " ")
+      assert first in Sanctum.Seal.words() and second in Sanctum.Seal.words()
+
+      # A browser can send words the form never offered.
+      view
+      |> layer()
+      |> render_submit("seal_submit", %{
+        "prompt_id" => "seal-choice",
+        "text" => "my own words",
+        "glyph" => ""
+      })
+
+      assert render(view) =~ "Choose the pair drawn for you or one of the listed words"
+      assert Sanctum.Seal.for_system_layer(view_context(view)) == :none
+
+      view |> form("#system-layer-seal", %{"text" => pair, "glyph" => "☘"}) |> render_submit()
+
+      assert open_prompt(view) == nil
+      refute has_element?(view, ~s([data-test="seal-offer"]))
+
+      assert {:ok, %Sanctum.Seal{text: ^pair, glyph: "☘"}} =
+               Sanctum.Seal.for_system_layer(view_context(view))
+
+      # The layer's own offer reports nothing: no view asked for it.
+      no_outcome("seal-choice")
+
+      prompt(view, sign_in("s2"))
+      assert String.starts_with?(described(view), pair <> " ☘ ")
+      assert {:ok, []} = Arca.PendingConfirmations.list_open(Context.actor(ctx), ctx.user_id)
+    end
+
+    test "the offer can be put away for the page, and is not made once a seal is set",
+         %{conn: conn, view: view, user: user} do
+      view |> element(~s([data-test="seal-offer-dismiss"])) |> render_click()
+      refute has_element?(view, ~s([data-test="seal-offer"]))
+
+      plant_seal!(user, "oak", nil)
+
+      {:ok, again, _html} =
+        live_isolated(log_in_user(conn, user), Host,
+          session: %{"athanor_id" => view_context(view).athanor_id, "test" => self()}
+        )
+
+      refute has_element?(again, ~s([data-test="seal-offer"]))
+    end
+
+    test "a change waits on a fresh proof, then is made once by the layer",
+         %{view: view, ctx: ctx, user: user} do
+      authenticator = Sanctum.TestContext.passkey!(user.user_id)
+      plant_seal!(user, "oak", nil)
+
+      prompt(view, %{id: "seal-c", kind: :seal, action: :seal_change, subject: %{}})
+      assert render(view) =~ "Change your seal"
+      assert has_element?(view, ~s(button[data-test="seal-submit"]), "Change your seal")
+
+      view |> form("#system-layer-seal", %{"text" => "pine", "glyph" => "♫"}) |> render_submit()
+
+      # Waiting on its record: nothing changed, and the record names the
+      # change but nothing of the seal.
+      no_outcome("seal-c")
+      assert render(view) =~ ~s(data-status="waiting")
+      assert {:ok, %Sanctum.Seal{text: "oak"}} = Sanctum.Seal.for_system_layer(view_context(view))
+
+      assert {:ok, [%{ref: ref, operation: "seal.change"} = record]} =
+               Arca.PendingConfirmations.list_open(Context.actor(ctx), ctx.user_id)
+
+      refute inspect(record, limit: :infinity) =~ "pine"
+
+      prove_here!(view, ref, authenticator)
+
+      assert outcome("seal-c") == :confirmed
+      assert open_prompt(view) == nil
+
+      assert {:ok, %Sanctum.Seal{text: "pine", glyph: "♫"}} =
+               Sanctum.Seal.for_system_layer(view_context(view))
+
+      prompt(view, sign_in("after"))
+      assert String.starts_with?(described(view), "pine ♫ ")
+    end
+  end
 end

@@ -1900,6 +1900,63 @@ defmodule PrismWeb.SettingsLiveTest do
       refute html =~ "quill zephyr"
       refute render(view) =~ "quill zephyr"
     end
+
+    test "the control raises the seal prompt, whose change is not made without a fresh proof",
+         %{conn: conn} do
+      person = test_user()
+      seal!(person, "quill zephyr")
+      {view, _html} = conn |> log_in_user(person) |> mount_athanor("/settings")
+
+      view |> element(~s([data-test="identity-seal-change"])) |> render_click()
+      render(view)
+
+      assert has_element?(view, ~s(#system-layer [data-kind="seal"]))
+      assert has_element?(view, ~s(#system-layer-title), "Change your seal")
+
+      # The page's own prompt begins with the seal it is to change.
+      assert has_element?(
+               view,
+               ~s(#system-layer-description > [data-test="seal"]:first-child),
+               "quill zephyr"
+             )
+
+      view
+      |> form("#system-layer-seal", %{"text" => "pine", "glyph" => ""})
+      |> render_submit()
+
+      # No proof yet: the change waits on its own record, and the seal
+      # stands.
+      assert has_element?(view, ~s(#system-layer [data-status="waiting"]))
+
+      assert [%{operation: "seal.change", state: "pending"}] =
+               Arca.Repo.all(
+                 from(c in "pending_confirmations",
+                   where: c.user_id == ^person.user_id,
+                   select: %{operation: c.operation, state: c.state}
+                 )
+               )
+
+      assert [%{text: "quill zephyr"}] =
+               Arca.Repo.all(
+                 from(s in "person_seals",
+                   where: s.user_id == ^person.user_id,
+                   select: %{text: s.text}
+                 )
+               )
+
+      # Dismissing the waiting request cancels it, and still changes nothing.
+      view |> element(~s(#system-layer [data-test="prompt-dismiss"])) |> render_click()
+
+      assert [%{state: "cancelled"}] =
+               Arca.Repo.all(
+                 from(c in "pending_confirmations",
+                   where: c.user_id == ^person.user_id,
+                   select: %{state: c.state}
+                 )
+               )
+
+      assert has_element?(view, ~s([data-test="identity-seal-change"]))
+    end
   end
 
   describe "sign-in doors" do
