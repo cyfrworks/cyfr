@@ -100,7 +100,7 @@ defmodule Arca.FrameCredentials do
       changeset(QueryHelpers.stamp_tenant!(actor, Map.take(attrs, @required ++ @optional)))
 
     if changeset.valid? do
-      owned("Arca.FrameCredentials.mint", fn ->
+      Arca.Repo.owned("Arca.FrameCredentials.mint", fn ->
         case Arca.Repo.insert(changeset) do
           {:ok, row} ->
             {:ok, row}
@@ -211,7 +211,7 @@ defmodule Arca.FrameCredentials do
   def resume(%Prima.Actor{athanor_id: athanor_id} = actor, id, deadline)
       when is_binary(athanor_id) and athanor_id != "" and is_binary(id) and
              (is_struct(deadline, DateTime) or deadline == :keep) do
-    owned("Arca.FrameCredentials.resume", fn ->
+    Arca.Repo.owned("Arca.FrameCredentials.resume", fn ->
       # The row is locked before the clock is read, so a resume that waited
       # behind another write judges the deadline as it acts.
       row = locked_row(actor, id)
@@ -250,7 +250,7 @@ defmodule Arca.FrameCredentials do
              | :database_error}
   def renew(%Prima.Actor{athanor_id: athanor_id} = actor, id, %DateTime{} = deadline)
       when is_binary(athanor_id) and athanor_id != "" and is_binary(id) do
-    owned("Arca.FrameCredentials.renew", fn ->
+    Arca.Repo.owned("Arca.FrameCredentials.renew", fn ->
       row = locked_row(actor, id)
       now = Arca.ServerMetaStorage.now!()
 
@@ -304,7 +304,7 @@ defmodule Arca.FrameCredentials do
   def consume(%Prima.Actor{athanor_id: athanor_id} = actor, frame_id, expected_digest)
       when is_binary(athanor_id) and athanor_id != "" and is_binary(frame_id) and
              is_binary(expected_digest) do
-    owned("Arca.FrameCredentials.consume", fn ->
+    Arca.Repo.owned("Arca.FrameCredentials.consume", fn ->
       # The row is locked before the clock is read, so a consume that
       # waited behind another judges the deadline as it acts.
       row = locked_frame(actor, frame_id)
@@ -394,26 +394,6 @@ defmodule Arca.FrameCredentials do
       do: {:error, :conflict},
       else: {:error, Arca.Data.invalid(changeset)}
   end
-
-  # A write that widens a bearer: one locking transaction whose first step
-  # checks the member's slot on the database's clock, so a takeover that
-  # committed first refuses it and one that starts later waits for it.
-  defp owned(tag, write) do
-    Arca.Repo.Errors.with_db_rescue(tag, fn ->
-      with {:ok, slot} <- Arca.ControlPlane.member_slot() do
-        Arca.Repo.locking_transaction(fn ->
-          case Arca.ControlPlane.verify_held(slot) do
-            :ok -> write.() |> committed()
-            :lost -> Arca.Repo.rollback(:not_owner)
-          end
-        end)
-      end
-    end)
-    |> Arca.Data.project()
-  end
-
-  defp committed({:ok, value}), do: value
-  defp committed({:error, reason}), do: Arca.Repo.rollback(reason)
 
   defp unwrap({:ok, {:ok, row}}), do: {:ok, row}
   defp unwrap({:ok, {:error, reason}}), do: {:error, reason}

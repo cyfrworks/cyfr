@@ -612,10 +612,8 @@ defmodule Sanctum.VaultReader do
   # A stored JSON column that does not decode reads as its default. The
   # line names the column and its size, never its bytes. `decode_list/2`
   # and `decode_map/2` answer nil themselves.
-  defp decode_stored("", default, _field), do: default
-
-  defp decode_stored(json, default, field) when is_binary(json) do
-    case Prima.Json.decode(json) do
+  defp decode_stored(json, default, field) do
+    case Prima.Json.decode_stored(json, default) do
       {:ok, value} ->
         value
 

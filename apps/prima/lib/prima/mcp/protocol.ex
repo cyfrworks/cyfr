@@ -18,6 +18,10 @@ defmodule Prima.MCP.Protocol do
 
   @supported [@version]
 
+  # Offered only outbound, to a peer that still requires the stateful
+  # `initialize` handshake; never accepted inbound (`supported?/1`).
+  @legacy_version "2025-03-26"
+
   # Reverse-DNS `_meta` keys defined by the specification. Every request carries
   # its own version, identity and capabilities here instead of establishing them
   # once in a handshake — that is what makes the protocol stateless.
@@ -192,6 +196,14 @@ defmodule Prima.MCP.Protocol do
   """
   @spec version() :: String.t()
   def version, do: @version
+
+  @doc """
+  The revision this server offers a peer that requires the legacy
+  `initialize` handshake: an upstream MCP server or a stdio backend.
+  It is never among `supported/0`.
+  """
+  @spec legacy_version() :: String.t()
+  def legacy_version, do: @legacy_version
 
   @doc """
   Every revision this server accepts, newest first.

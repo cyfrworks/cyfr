@@ -6,6 +6,22 @@ defmodule PrismWeb.DisplayHelpersTest do
 
   import PrismWeb.DisplayHelpers
 
+  describe "f/2" do
+    test "an atom key that is present answers its value, false and nil among them" do
+      assert f(%{on: false}, :on) == false
+      assert f(%{"on" => true, on: false}, :on) == false
+      assert f(%{"on" => "stale", on: nil}, :on) == nil
+      assert f(%{on: "yes"}, :on) == "yes"
+    end
+
+    test "the string key is read only when the atom key is absent" do
+      assert f(%{"on" => false}, :on) == false
+      assert f(%{"on" => "yes"}, :on) == "yes"
+      assert f(%{}, :on) == nil
+      assert f(nil, :on) == nil
+    end
+  end
+
   describe "principal_label/1" do
     test "the server's synthetic principals read as what they are" do
       assert principal_label("system") == "System"

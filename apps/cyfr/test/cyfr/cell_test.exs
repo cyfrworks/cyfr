@@ -380,8 +380,8 @@ defmodule Cyfr.CellTest do
 
   describe "the boot refusals" do
     @cell_facts %{
-      repo_adapter: Ecto.Adapters.Postgres,
-      storage_adapter: Arca.Adapters.S3,
+      adapter: :postgres,
+      shared_storage?: true,
       proto_dist: :inet_tls,
       dist_certificates?: true,
       cell_cookie: String.duplicate("c", 40),
@@ -395,17 +395,17 @@ defmodule Cyfr.CellTest do
       assert Cell.refusals(@cell_facts) == []
     end
 
-    test "SQLite is refused, naming the adapter and what to set" do
-      assert [message] = Cell.refusals(%{@cell_facts | repo_adapter: Ecto.Adapters.SQLite3})
+    test "SQLite is refused, naming the database and what to set" do
+      assert [message] = Cell.refusals(%{@cell_facts | adapter: :sqlite})
       assert message =~ "needs Postgres"
-      assert message =~ "Ecto.Adapters.SQLite3"
+      assert message =~ "this member's database is SQLite"
       assert message =~ "CYFR_DATABASE=postgres"
     end
 
-    test "local storage is refused, naming the adapter and what to set" do
-      assert [message] = Cell.refusals(%{@cell_facts | storage_adapter: Arca.Adapters.Local})
+    test "local storage is refused, naming it and what to set" do
+      assert [message] = Cell.refusals(%{@cell_facts | shared_storage?: false})
       assert message =~ "shared object storage"
-      assert message =~ "Arca.Adapters.Local"
+      assert message =~ "this member's storage is local"
       assert message =~ "CYFR_STORAGE=s3"
     end
 
@@ -465,8 +465,8 @@ defmodule Cyfr.CellTest do
 
     test "each refusal fires on its own, and all of them together name all seven" do
       broken = %{
-        repo_adapter: Ecto.Adapters.SQLite3,
-        storage_adapter: Arca.Adapters.Local,
+        adapter: :sqlite,
+        shared_storage?: false,
         proto_dist: :inet_tcp,
         dist_certificates?: false,
         cell_cookie: nil,

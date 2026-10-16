@@ -103,6 +103,8 @@ defmodule Aqua.Runner do
   # A runner with nothing to do for this long stops; the next send starts it again.
   @idle_ms :timer.minutes(15)
   @resume_retry_ms 5_000
+  # The boot's recovery scan, retried while the database cannot answer.
+  @recovery_backoff_ms [1_000, 4_000, 16_000]
 
   @type send_result :: %{
           accepted: true,
@@ -419,23 +421,53 @@ defmodule Aqua.Runner do
     }
   end
 
-  @doc "Start a runner for every thread holding an open turn, while this boot owns the control plane."
+  @doc """
+  Start a runner for every thread holding an open turn, while this boot
+  owns the control plane.
+
+  A scan the database cannot answer is tried again after each wait of
+  `@recovery_backoff_ms`; once the last retry fails too, the recovery is
+  abandoned with a log line and `[:cyfr, :aqua, :recovery, :abandoned]`.
+  It answers `:ok` either way and never exits abnormally: it runs as a
+  transient child of `Aqua.RunnerTree`, and a crash loop would spend that
+  tree's restart intensity and take every runner with it.
+  """
   @spec recover_all() :: :ok
-  def recover_all do
-    if Arca.ControlPlane.held?() do
-      Enum.each(Tape.with_open_turns(), fn {athanor_id, thread_id} ->
-        ensure(thread_id, athanor_id)
-      end)
-    end
+  def recover_all, do: recover_all(&Process.sleep/1)
 
+  @doc false
+  # `wait` spends each wait of `@recovery_backoff_ms`, so a test can
+  # observe the waits without sleeping through them.
+  @spec recover_all((non_neg_integer() -> term())) :: :ok
+  def recover_all(wait) when is_function(wait, 1) do
+    if Arca.ControlPlane.held?(), do: recover_open(@recovery_backoff_ms, wait, 1)
     :ok
-  rescue
-    e ->
-      Logger.warning(
-        "[Aqua.Runner] boot recovery skipped: #{Prima.LogFilter.exception_message(e)}"
-      )
+  end
 
-      :ok
+  defp recover_open(backoff_ms, wait, attempt) do
+    case Tape.with_open_turns() do
+      {:ok, threads} ->
+        Enum.each(threads, fn {athanor_id, thread_id} -> ensure(thread_id, athanor_id) end)
+
+      {:error, :unavailable} ->
+        case backoff_ms do
+          [ms | rest] ->
+            wait.(ms)
+            recover_open(rest, wait, attempt + 1)
+
+          [] ->
+            abandon_recovery(attempt)
+        end
+    end
+  end
+
+  defp abandon_recovery(attempts) do
+    Logger.error(
+      "[Aqua.Runner] boot recovery abandoned: the open-turn scan could not read " <>
+        "the database in #{attempts} attempts; no runner was recovered on this boot"
+    )
+
+    :telemetry.execute([:cyfr, :aqua, :recovery, :abandoned], %{attempts: attempts}, %{})
   end
 
   defp call(%Context{} = ctx, thread_id, request) do

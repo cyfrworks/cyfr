@@ -90,9 +90,6 @@ defmodule Emissary.External.Server do
   @default_max_in_flight 8
   @registry Emissary.External.ServerRegistry
 
-  # Offer 2025-03-26 to peers requiring the legacy handshake.
-  @legacy_protocol_version "2025-03-26"
-
   # Matched in a pattern, so it has to be a compile-time literal — but it is
   # initialized from the one place the vocabulary is defined rather than written
   # out again here.
@@ -951,7 +948,7 @@ defmodule Emissary.External.Server do
 
     body =
       Message.encode_request(request_id, "initialize", %{
-        "protocolVersion" => @legacy_protocol_version,
+        "protocolVersion" => Protocol.legacy_version(),
         "capabilities" => %{},
         "clientInfo" => %{
           "name" => "cyfr",

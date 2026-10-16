@@ -116,6 +116,41 @@ defmodule Arca.Repo do
   end
 
   @doc """
+  Run `write` as a write only the control plane's holder makes: one
+  locking transaction whose first step checks this member's slot on the
+  database's clock, so a takeover that committed first refuses it with
+  `{:error, :not_owner}` and one that starts later waits for it.
+
+  `write` answers `{:ok, value}` or `{:error, reason}`, and an error
+  rolls the transaction back (`committed/1`). A store that cannot answer
+  is `{:error, :database_error}`, logged under `tag`; the answer is
+  projected through `Arca.Data.project/1`.
+  """
+  @spec owned(String.t(), (-> {:ok, term()} | {:error, term()})) ::
+          {:ok, term()} | {:error, term()}
+  def owned(tag, write) when is_binary(tag) and is_function(write, 0) do
+    Arca.Repo.Errors.with_db_rescue(tag, fn ->
+      with {:ok, slot} <- Arca.ControlPlane.member_slot() do
+        locking_transaction(fn ->
+          case Arca.ControlPlane.verify_held(slot) do
+            :ok -> write.() |> committed()
+            :lost -> rollback(:not_owner)
+          end
+        end)
+      end
+    end)
+    |> Arca.Data.project()
+  end
+
+  @doc """
+  Inside a transaction, the value of a write's `{:ok, value}`, or the
+  rollback of the transaction with its `{:error, reason}`.
+  """
+  @spec committed({:ok, value} | {:error, term()}) :: value when value: term()
+  def committed({:ok, value}), do: value
+  def committed({:error, reason}), do: rollback(reason)
+
+  @doc """
   Run `fun` as a transaction for reads that must see one consistent state
   and write nothing, beside `locking_transaction/2` for the writes.
 

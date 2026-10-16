@@ -14,6 +14,9 @@ defmodule Prima.Json do
     * `decode/1` — `{:ok, term} | {:error, :invalid_json}`. The caller
       decides what a corrupt column means and says so in its own log;
       execution paths fail closed.
+    * `decode_stored/2` — a stored column that may be absent: `{:ok,
+      default}` for nil or empty, otherwise `decode/1`'s answer. The owner
+      logs a corrupt column under its own prefix and picks its reading.
     * `safe_encode/1` — encode, or the one `#{inspect(~s({"_encoding_error":"value not encodable"}))}`
       envelope. An unencodable value must neither crash the caller nor
       masquerade as data.
@@ -35,6 +38,15 @@ defmodule Prima.Json do
   end
 
   def decode(_), do: {:error, :invalid_json}
+
+  @doc """
+  Decode a stored JSON column that may be absent: nil or the empty string
+  answers `{:ok, default}`, anything else `decode/1`'s answer.
+  """
+  @spec decode_stored(String.t() | nil, term()) :: {:ok, term()} | {:error, :invalid_json}
+  def decode_stored(nil, default), do: {:ok, default}
+  def decode_stored("", default), do: {:ok, default}
+  def decode_stored(json, _default) when is_binary(json), do: decode(json)
 
   @doc "Encode, or the one failure envelope — never `inspect/1` output."
   @spec safe_encode(term()) :: String.t()

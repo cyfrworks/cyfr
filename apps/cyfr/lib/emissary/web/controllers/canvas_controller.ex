@@ -33,6 +33,8 @@ defmodule Emissary.Web.CanvasController do
 
   use Emissary.Web, :controller
 
+  import Emissary.Web.TinctureController, only: [asset_context: 2]
+
   @toolkit Path.join(:code.priv_dir(:cyfr), "static/toolkit")
   @host_path Path.join(@toolkit, "host.js")
   @worker_path Path.join(@toolkit, "worker.js")
@@ -107,22 +109,6 @@ defmodule Emissary.Web.CanvasController do
     if Prima.TinctureUrl.credential?(credential) and Prima.TinctureWire.frame_id?(frame_id),
       do: :ok,
       else: {:error, :not_found}
-  end
-
-  # What the credential opens, as a context, as the served files read it:
-  # the person's athanor, bound to the credential's source and deadline. It
-  # is not an authenticated caller and carries no permission; it names
-  # whose rows are read, and nothing runs under it.
-  defp asset_context(authority, client_ip) do
-    Sanctum.Context.build(
-      user_id: authority.user_id,
-      athanor_id: authority.athanor_id,
-      scope: :athanor,
-      authenticated: false,
-      credential_binding: authority.credential_binding,
-      credential_deadline: authority.expires_at,
-      client_ip: client_ip
-    )
   end
 
   # The version the frame opened, in the credential's athanor, while its

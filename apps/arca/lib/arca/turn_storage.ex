@@ -2142,21 +2142,28 @@ defmodule Arca.TurnStorage do
   @doc """
   Every thread holding an open root turn, across all tenants, as
   `{athanor_id, thread_id}` pairs — the boot's recovery scan.
+  `{:error, :unavailable}` when the database cannot answer, never an
+  empty list a caller would read as nothing to recover.
   System-internal only.
   """
-  @spec with_open_turns() :: [{String.t(), String.t()}]
+  @spec with_open_turns() :: {:ok, [{String.t(), String.t()}]} | {:error, :unavailable}
   def with_open_turns do
-    Arca.Repo.Errors.with_db_rescue("Arca.TurnStorage.with_open_turns", [], fn ->
-      # arca:unscoped-ok the boot recovers open turns of every tenant when
-      # no tenant context exists yet; system-internal only.
-      Arca.Repo.all(
-        from(t in Turn,
-          where: t.status in ^@open and is_nil(t.parent_turn_id),
-          distinct: true,
-          select: {t.athanor_id, t.thread_id}
-        )
-      )
-    end)
+    Arca.Repo.Errors.with_db_rescue(
+      "Arca.TurnStorage.with_open_turns",
+      {:error, :unavailable},
+      fn ->
+        # arca:unscoped-ok the boot recovers open turns of every tenant when
+        # no tenant context exists yet; system-internal only.
+        {:ok,
+         Arca.Repo.all(
+           from(t in Turn,
+             where: t.status in ^@open and is_nil(t.parent_turn_id),
+             distinct: true,
+             select: {t.athanor_id, t.thread_id}
+           )
+         )}
+      end
+    )
     |> Arca.Data.project()
   end
 

@@ -618,8 +618,11 @@ defmodule Aqua.Tape do
   def open_turns(%Context{} = ctx, thread_id),
     do: TurnStorage.open_turns(Sanctum.Context.actor(ctx), thread_id)
 
-  @doc "Every thread with an open root turn, across tenants — the boot's recovery scan."
-  @spec with_open_turns() :: [{String.t(), String.t()}]
+  @doc """
+  Every thread with an open root turn, across tenants — the boot's
+  recovery scan; `{:error, :unavailable}` when the database cannot answer.
+  """
+  @spec with_open_turns() :: {:ok, [{String.t(), String.t()}]} | {:error, :unavailable}
   def with_open_turns, do: TurnStorage.with_open_turns()
 
   @doc "One approval."

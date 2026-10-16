@@ -9,7 +9,9 @@ defmodule PrismWeb.DisplayHelpers do
   @doc """
   Read `key` from a map that may carry atom keys or string keys.
 
-  Reads atom-keyed Elixir values and string-keyed JSON values.
+  Reads atom-keyed Elixir values and string-keyed JSON values. The string
+  key is read only when the atom key is absent, so a stored `false` or
+  `nil` under the atom key is the answer.
   Imported into LiveViews through `PrismWeb.__using__/1`.
 
   Nil-tolerant, as all six were: a page that renders before its data has
@@ -17,7 +19,13 @@ defmodule PrismWeb.DisplayHelpers do
   """
   @spec f(map() | nil, atom()) :: term()
   def f(nil, _key), do: nil
-  def f(map, key) when is_map(map) and is_atom(key), do: map[key] || map[to_string(key)]
+
+  def f(map, key) when is_map(map) and is_atom(key) do
+    case Map.fetch(map, key) do
+      {:ok, value} -> value
+      :error -> Map.get(map, to_string(key))
+    end
+  end
 
   @doc """
   A short human label for a principal id as it appears on executions, logs

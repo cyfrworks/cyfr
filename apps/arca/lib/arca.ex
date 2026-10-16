@@ -213,6 +213,20 @@ defmodule Arca do
   defdelegate repo_adapter(), to: Arca.Repo, as: :adapter
 
   @doc """
+  What a layer above may know of the adapters this deployment runs: its
+  database, and whether its object storage is one every member of a cell
+  shares. Above Arca these are the facts to branch on, never an adapter
+  module.
+  """
+  @spec adapter_facts() :: %{adapter: :sqlite | :postgres, shared_storage?: boolean()}
+  def adapter_facts do
+    %{adapter: database(repo_adapter()), shared_storage?: shared_storage?(storage_adapter())}
+  end
+
+  defp database(Ecto.Adapters.Postgres), do: :postgres
+  defp database(Ecto.Adapters.SQLite3), do: :sqlite
+
+  @doc """
   Whether the calling process is inside a transaction of the repository:
   for a layer above that must make no network call and no write of its
   own while a caller's transaction holds its locks.
@@ -224,12 +238,9 @@ defmodule Arca do
   @spec storage_adapter() :: module()
   defdelegate storage_adapter(), to: Arca.Storage, as: :configured_adapter
 
-  @doc """
-  Whether `adapter` keeps objects every member of a cell shares: the
-  object store does, one member's filesystem does not.
-  """
-  @spec shared_storage?(module()) :: boolean()
-  def shared_storage?(adapter), do: adapter == Arca.Adapters.S3
+  # Whether `adapter` keeps objects every member of a cell shares: the
+  # object store does, one member's filesystem does not.
+  defp shared_storage?(adapter), do: adapter == Arca.Adapters.S3
 
   @doc """
   Read content from storage.

@@ -125,12 +125,17 @@ defmodule Emissary.Web.TinctureController do
     end
   end
 
-  # What the credential opens, as a context: reads in the person's
-  # athanor, bound to the credential's source and deadline. It is not an
-  # authenticated caller — only `Sanctum.Caller.establish/2` builds one —
-  # and carries no permission: it names whose bytes are read, and nothing
-  # runs under it.
-  defp asset_context(authority, client_ip) do
+  @doc """
+  What an asset credential opens, as a context, for every route that
+  serves under one (a tincture's files here, a canvas's host page in
+  `Emissary.Web.CanvasController`): reads in the person's athanor, bound
+  to the credential's source and deadline. It is not an authenticated
+  caller — only `Sanctum.Caller.establish/2` builds one — and carries no
+  permission: it names whose rows and bytes are read, and nothing runs
+  under it.
+  """
+  @spec asset_context(map(), String.t() | nil) :: Sanctum.Context.t()
+  def asset_context(authority, client_ip) do
     Sanctum.Context.build(
       user_id: authority.user_id,
       athanor_id: authority.athanor_id,

@@ -115,7 +115,7 @@ defmodule Arca.PairedClients do
       )
 
     if changeset.valid? do
-      owned("Arca.PairedClients.record", fn ->
+      Arca.Repo.owned("Arca.PairedClients.record", fn ->
         case Arca.Repo.insert(changeset) do
           {:ok, row} ->
             {:ok, row}
@@ -296,27 +296,6 @@ defmodule Arca.PairedClients do
     _ = retire_dependents!(ids)
     ids
   end
-
-  # A write that widens what may be confirmed: one locking transaction
-  # whose first step checks the member's slot on the database's clock, so
-  # a takeover that committed first refuses it and one that starts later
-  # waits for it.
-  defp owned(tag, write) do
-    Arca.Repo.Errors.with_db_rescue(tag, fn ->
-      with {:ok, slot} <- Arca.ControlPlane.member_slot() do
-        Arca.Repo.locking_transaction(fn ->
-          case Arca.ControlPlane.verify_held(slot) do
-            :ok -> write.() |> committed()
-            :lost -> Arca.Repo.rollback(:not_owner)
-          end
-        end)
-      end
-    end)
-    |> Arca.Data.project()
-  end
-
-  defp committed({:ok, value}), do: value
-  defp committed({:error, reason}), do: Arca.Repo.rollback(reason)
 
   # The platform system actor retires a person's clients in every athanor;
   # any other actor is held to its own.

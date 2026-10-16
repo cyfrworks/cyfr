@@ -21,6 +21,12 @@ defmodule Prima.MCP.ProtocolTest do
       refute Protocol.supported?(nil)
     end
 
+    test "the legacy revision is offered outbound and never accepted inbound" do
+      assert Protocol.legacy_version() == "2025-03-26"
+      refute Protocol.supported?(Protocol.legacy_version())
+      refute Protocol.legacy_version() in Protocol.supported()
+    end
+
     test "a request declares its revision in params._meta" do
       key = Protocol.meta_protocol_version_key()
 

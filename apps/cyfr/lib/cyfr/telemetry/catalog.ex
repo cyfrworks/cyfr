@@ -468,6 +468,13 @@ defmodule Cyfr.Telemetry.Catalog do
       consumers: [:audit],
       note: "a person approved or declined an agent's proposed action"
     },
+    [:cyfr, :aqua, :recovery, :abandoned] => %{
+      consumers: [:operator],
+      note:
+        "the boot's scan for open turns could not read the database after its last " <>
+          "retry, so no runner was recovered on this boot: an open turn waits until its " <>
+          "thread's runner next starts, and this is where an operator learns it"
+    },
 
     # ——— the boot's seed offer ———
     [:cyfr, :seed_offer, :completed] => %{

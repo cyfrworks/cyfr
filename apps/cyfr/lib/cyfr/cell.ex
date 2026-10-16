@@ -170,9 +170,8 @@ defmodule Cyfr.Cell do
   """
   @spec facts() :: map()
   def facts do
-    %{
-      repo_adapter: Arca.repo_adapter(),
-      storage_adapter: Arca.storage_adapter(),
+    Arca.adapter_facts()
+    |> Map.merge(%{
       proto_dist: proto_dist(),
       dist_certificates?: dist_certificates?(),
       cell_cookie: Application.get_env(:cyfr, :cell_cookie),
@@ -180,32 +179,28 @@ defmodule Cyfr.Cell do
       topologies: Application.get_env(:libcluster, :topologies, []),
       locus_runtime_root: Application.get_env(:cyfr, :locus_runtime_root),
       host_api_url: Cyfr.RuntimeConfig.host_api_url()
-    }
+    })
   end
 
-  defp postgres(%{repo_adapter: Ecto.Adapters.Postgres}), do: []
+  defp postgres(%{adapter: :postgres}), do: []
 
-  defp postgres(%{repo_adapter: adapter}) do
+  defp postgres(%{adapter: :sqlite}) do
     """
-    CYFR_CLUSTER=1 needs Postgres, and this member's database adapter is \
-    #{inspect(adapter)}. SQLite is one file with one writer and no server \
-    clock, so members cannot agree which lease stands. Set \
-    CYFR_DATABASE=postgres and point every member at one database, or unset \
-    CYFR_CLUSTER.\
+    CYFR_CLUSTER=1 needs Postgres, and this member's database is SQLite. \
+    SQLite is one file with one writer and no server clock, so members \
+    cannot agree which lease stands. Set CYFR_DATABASE=postgres and point \
+    every member at one database, or unset CYFR_CLUSTER.\
     """
   end
 
-  defp shared_storage(%{storage_adapter: adapter}) do
-    if Arca.shared_storage?(adapter), do: [], else: shared_storage_refusal(adapter)
-  end
+  defp shared_storage(%{shared_storage?: true}), do: []
 
-  defp shared_storage_refusal(adapter) do
+  defp shared_storage(%{shared_storage?: false}) do
     """
     CYFR_CLUSTER=1 needs shared object storage, and this member's storage \
-    adapter is #{inspect(adapter)}. Local storage is one member's \
-    filesystem: two members would each hold half of every athanor. Set \
-    CYFR_STORAGE=s3 with the bucket and credentials every member shares, or \
-    unset CYFR_CLUSTER.\
+    is local. Local storage is one member's filesystem: two members would \
+    each hold half of every athanor. Set CYFR_STORAGE=s3 with the bucket \
+    and credentials every member shares, or unset CYFR_CLUSTER.\
     """
   end
 

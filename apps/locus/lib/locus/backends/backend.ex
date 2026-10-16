@@ -12,11 +12,12 @@ defmodule Locus.Backends.Backend do
   The backend's command runs as `["/bin/sh", "-c", command]` in the uid
   pool `backends`, its environment the definition's `env` block alone
   (the launcher adds its own `HOME`, `TMPDIR`, `USER`, `LOGNAME` and
-  `PATH`). Once spawned it is initialized at protocol revision
-  `2025-03-26`, told `notifications/initialized`, and asked `tools/list`;
-  its answer is the backend's tools and the backend is `ready`. Until
-  then it is `starting`. A handshake refused or not answered within its
-  bound ends the process, whose exit is then a crash.
+  `PATH`). Once spawned it is initialized at the legacy protocol revision
+  (`Prima.MCP.Protocol.legacy_version/0`), told `notifications/initialized`,
+  and asked `tools/list`; its answer is the backend's tools and the
+  backend is `ready`. Until then it is `starting`. A handshake refused or
+  not answered within its bound ends the process, whose exit is then a
+  crash.
 
   ## Crashes
 
@@ -83,7 +84,6 @@ defmodule Locus.Backends.Backend do
   alias Locus.Backends.Relay
   alias Prima.LocusBackends
 
-  @protocol_version "2025-03-26"
   @pool "backends"
 
   @defaults %{
@@ -443,7 +443,7 @@ defmodule Locus.Backends.Backend do
 
   defp initialize(state) do
     params = %{
-      protocolVersion: @protocol_version,
+      protocolVersion: Prima.MCP.Protocol.legacy_version(),
       capabilities: %{},
       clientInfo: %{name: "cyfr-locus", version: version()}
     }
