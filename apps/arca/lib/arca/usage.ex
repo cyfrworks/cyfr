@@ -16,8 +16,9 @@ defmodule Arca.Usage do
   never extends a TTL). Deletes and failed writes DROP the entries, so
   reclaimed space is recomputed accurately and a partial write can never
   be under-counted. Read misses walk the tree once and cache the answer;
-  walk failures are the caller's to map (fail-closed for a cap,
-  fail-open for a backstop) and are never cached.
+  walk failures are never cached and are the caller's to refuse: a cap,
+  the public quota and the file-count backstop each refuse the write as
+  unavailable on one.
 
   `Arca.Cache.Keys` spells the key shapes; this module is their only
   reader and writer.
