@@ -489,8 +489,8 @@ defmodule Opus.Host.Children do
 
   defp operation_of(name, args) do
     with action when is_binary(action) <- Map.get(args, "action"),
-         {:ok, {_module, %{operations: operations}}} when is_list(operations) <-
-           Sanctum.Catalog.lookup(name) do
+         {_module, %{operations: operations}} when is_list(operations) <-
+           Map.get(Sanctum.Catalog.operations(), name) do
       Enum.find(operations, &(&1.action == action))
     else
       _ -> nil
