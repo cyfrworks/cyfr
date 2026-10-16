@@ -970,7 +970,7 @@ defmodule Cyfr.StartupAdmissionBarrierTest do
         reference: "reagent:local.barrier:1.0.0",
         resolved_reference: "reagent:local.barrier:1.0.0",
         profile_id: "prof_barrier",
-        next_run_at: DateTime.add(DateTime.utc_now(), -60, :second),
+        next_run_at: DateTime.add(DateTime.utc_now(), -5, :second),
         cap: 1_000
       })
 

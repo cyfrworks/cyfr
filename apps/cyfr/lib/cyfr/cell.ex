@@ -86,6 +86,10 @@ defmodule Cyfr.Cell do
 
   @roster_key {__MODULE__, :roster}
 
+  @doc "The slot lease a member takes and renews, in milliseconds of database time."
+  @spec lease_ms() :: pos_integer()
+  def lease_ms, do: @lease_ms
+
   @doc "Whether `boot` is a live member's boot (`Arca.ControlPlane.live_member?/1`)."
   @spec live_member?(String.t()) :: boolean()
   defdelegate live_member?(boot), to: Arca.ControlPlane

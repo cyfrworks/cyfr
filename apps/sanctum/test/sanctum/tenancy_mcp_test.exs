@@ -110,11 +110,15 @@ defmodule Sanctum.TenancyMCPTest do
       {:ok, theirs} =
         Athanors.create_group(stranger, "Not Yours #{System.unique_integer([:positive])}")
 
-      assert {:error, {:invalid_argument, "Not a member of that athanor"}} =
-               Provider.handle("athanor", ctx, %{"action" => "get", "athanor" => theirs.id})
+      # Answered as a missing athanor is: the refusal tells the caller
+      # nothing of whether it exists.
+      id = theirs.id
 
-      assert {:error, {:invalid_argument, "Not a member of that athanor"}} =
-               Provider.handle("member", ctx, %{"action" => "list", "athanor" => theirs.id})
+      assert {:error, {:not_found, "Athanor", ^id}} =
+               Provider.handle("athanor", ctx, %{"action" => "get", "athanor" => id})
+
+      assert {:error, {:not_found, "Athanor", ^id}} =
+               Provider.handle("member", ctx, %{"action" => "list", "athanor" => id})
     end
 
     test "an archived athanor is a hard stop except where the action asks for it", %{ctx: ctx} do
@@ -259,13 +263,16 @@ defmodule Sanctum.TenancyMCPTest do
 
       refute Members.member?(user, created.id)
 
-      # `Members.remove_member/2` archives a group nobody is left in, so the
-      # second attempt is stopped by the archive rather than by the missing
-      # seat — a group with no members is not a group anyone can act in.
-      # The former member reads nothing of it; an operator, who holds no
-      # seat either, reads its public facts and nothing it holds.
-      assert {:error, {:invalid_argument, "Not a member of that athanor"}} =
-               Provider.handle("athanor", ctx, %{"action" => "get", "athanor" => created.id})
+      # `Members.remove_member/2` archives a group nobody is left in — a
+      # group with no members is not a group anyone can act in — and the
+      # second attempt is refused for the missing seat before the archive
+      # is read. The former member reads nothing of it, not even that it is
+      # archived; an operator, who holds no seat either, reads its public
+      # facts and nothing it holds.
+      id = created.id
+
+      assert {:error, {:not_found, "Athanor", ^id}} =
+               Provider.handle("athanor", ctx, %{"action" => "get", "athanor" => id})
 
       test = self()
       handler = "tenancy-mcp-facts-#{System.unique_integer([:positive])}"
@@ -298,8 +305,8 @@ defmodule Sanctum.TenancyMCPTest do
       # thread, file, vault or member list is read for the answer.
       assert Enum.reject(reads(), &(&1 in ["athanors", "memberships"])) == []
 
-      assert {:error, {:invalid_argument, "That athanor is archived"}} =
-               Provider.handle("member", ctx, %{"action" => "leave", "athanor" => created.id})
+      assert {:error, {:not_found, "Athanor", ^id}} =
+               Provider.handle("member", ctx, %{"action" => "leave", "athanor" => id})
     end
 
     test "a person's own athanor takes no members and cannot be left" do

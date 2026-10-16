@@ -484,7 +484,7 @@ defmodule Cyfr.AdmissionEntriesSeamTest do
         reference: reference,
         resolved_reference: reference,
         profile_id: "prof_seam",
-        next_run_at: DateTime.add(DateTime.utc_now(), -60, :second),
+        next_run_at: DateTime.add(DateTime.utc_now(), -5, :second),
         cap: 1_000
       })
 

@@ -332,7 +332,7 @@ defmodule Cyfr.AdmissionOriginTest do
         reference: "#{@dep}:0.1.0",
         resolved_reference: @dep_ref,
         profile_id: "prof_origin_dep",
-        next_run_at: DateTime.add(DateTime.utc_now(), -60, :second),
+        next_run_at: DateTime.add(DateTime.utc_now(), -5, :second),
         cap: 1_000
       })
 

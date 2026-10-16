@@ -699,7 +699,13 @@ defmodule Opus.Schedules.OwnershipFenceTest do
       # The claim commits for this boot, and the process that made it is
       # gone before it started the run.
       later = DateTime.add(DateTime.utc_now(), 3_600, :second)
-      {:ok, %{id: occurrence_id}} = ScheduleOccurrences.claim(schedule, Prima.Boot.id(), later)
+
+      cadence = %{
+        next_after: fn _instant -> {:ok, later} end,
+        missed_bound_ms: Opus.Schedules.Scheduler.missed_bound_ms()
+      }
+
+      {:ok, %{id: occurrence_id}} = ScheduleOccurrences.claim(schedule, Prima.Boot.id(), cadence)
 
       started = System.monotonic_time(:millisecond)
       scheduler = scheduler!()
@@ -1264,8 +1270,9 @@ defmodule Opus.Schedules.OwnershipFenceTest do
     schedule
   end
 
+  # Due a few seconds ago: an ordinary occurrence, within the missed bound.
   defp due!(schedule) do
-    past = DateTime.add(DateTime.utc_now(), -60, :second)
+    past = DateTime.add(DateTime.utc_now(), -5, :second)
 
     {1, _} =
       Arca.Repo.update_all(from(s in ScheduleRow, where: s.id == ^schedule.id),

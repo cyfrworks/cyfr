@@ -889,7 +889,10 @@ defmodule Arca.ExecutionTest do
       next = DateTime.add(DateTime.utc_now(), 300, :second)
 
       {:ok, occurrence} =
-        Arca.ScheduleOccurrences.claim(%{schedule | next_run_at: past}, Prima.Boot.id(), next)
+        Arca.ScheduleOccurrences.claim(%{schedule | next_run_at: past}, Prima.Boot.id(), %{
+          next_after: fn _instant -> {:ok, next} end,
+          missed_bound_ms: :timer.hours(1)
+        })
 
       assert :ok =
                Arca.ScheduleOccurrences.recover(
@@ -1140,7 +1143,9 @@ defmodule Arca.ExecutionTakeoverTest do
     feed = %{feed | next_run_at: past}
     next = DateTime.add(DateTime.utc_now(), 300, :second)
     # Claimed as this boot, the boot admission starts an occurrence for.
-    {:ok, occurrence} = ScheduleOccurrences.claim(feed, Prima.Boot.id(), next)
+    # A bound under which the cursor put a minute back is an ordinary due time.
+    cadence = %{next_after: fn _instant -> {:ok, next} end, missed_bound_ms: :timer.hours(1)}
+    {:ok, occurrence} = ScheduleOccurrences.claim(feed, Prima.Boot.id(), cadence)
     {feed, occurrence}
   end
 

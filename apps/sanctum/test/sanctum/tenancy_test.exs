@@ -448,7 +448,7 @@ defmodule Sanctum.TenancyTest do
           authenticated: true
         )
 
-      assert {:error, :not_member} = Context.focus(ctx, group.id)
+      assert {:error, :not_found} = Context.focus(ctx, group.id)
     end
 
     test "a person in two athanors leaving one keeps the other seat, their identity and their head",

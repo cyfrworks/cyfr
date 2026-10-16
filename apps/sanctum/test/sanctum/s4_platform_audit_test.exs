@@ -108,7 +108,7 @@ defmodule Sanctum.S4PlatformAuditTest do
       # A member's focus, an operator's refused one, and the revalidation
       # of an operator's session that still names the group.
       assert {:ok, _} = Context.focus(person.(alice, nil, false), group.id)
-      assert {:error, :not_member} = Context.focus(person.(ops, nil, true), group.id)
+      assert {:error, :not_found} = Context.focus(person.(ops, nil, true), group.id)
       assert {:ok, %{athanor_id: nil}} = Sanctum.Tenancy.revalidate(person.(ops, group.id, true))
 
       refute_received {:platform_ctx, _, _}

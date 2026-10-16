@@ -770,12 +770,16 @@ defmodule Cyfr.Cluster.Fixtures do
   @doc """
   Claim `schedule_id`'s due occurrence for this member's boot, advancing
   the cursor to `next_run`. `{:ok, occurrence}`, `:held` or `:overlapping`.
+  The cursor these cases put back is an ordinary due time: the claim's
+  missed bound is an hour.
   """
   @spec claim_occurrence(String.t(), DateTime.t()) :: {:ok, map()} | :held | :overlapping | term()
   def claim_occurrence(schedule_id, next_run) do
     {:ok, schedule} = Arca.CronSchedule.get_for_daemon(schedule_id)
 
-    case Arca.ScheduleOccurrences.claim(schedule, Prima.Boot.id(), next_run) do
+    cadence = %{next_after: fn _instant -> {:ok, next_run} end, missed_bound_ms: :timer.hours(1)}
+
+    case Arca.ScheduleOccurrences.claim(schedule, Prima.Boot.id(), cadence) do
       {:ok, occurrence} ->
         {:ok, %{id: occurrence.id, state: occurrence.state, claimed_by: occurrence.claimed_by}}
 

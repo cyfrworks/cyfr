@@ -600,7 +600,7 @@ defmodule Opus.FeedsTest do
       :ok = :sys.suspend(tasks)
       on_exit(fn -> if Process.alive?(tasks), do: :sys.resume(tasks) end)
 
-      due = DateTime.add(DateTime.utc_now(), -60, :second)
+      due = DateTime.add(DateTime.utc_now(), -5, :second)
 
       {1, _} =
         Arca.Repo.update_all(from(s in ScheduleRow, where: s.id == ^feed.id),
@@ -1100,7 +1100,7 @@ defmodule Opus.FeedsTest do
         reference: @pinned,
         resolved_reference: @pinned,
         profile_id: @profile_id,
-        next_run_at: DateTime.add(DateTime.utc_now(), -60, :second),
+        next_run_at: DateTime.add(DateTime.utc_now(), -5, :second),
         cap: 1_000
       })
 
