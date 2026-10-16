@@ -14,8 +14,8 @@
 # first_*: the job's conclusion on the run's first attempt, the one the
 # push itself produced. pass is `success`, cancelled is `cancelled`, and
 # every other conclusion a completed run can carry (`failure`,
-# `timed_out`, `startup_failure`, `action_required`, a job left without
-# one) is a fail; a `skipped` job is counted nowhere. A later attempt
+# `timed_out`, `startup_failure`, `action_required`, a null conclusion of
+# a job left without one) is a fail; a `skipped` job is counted nowhere. A later attempt
 # never changes the first attempt's counts.
 # reruns: how many times the job ran again on a later attempt of a run,
 # a job of a later attempt being one whose id no earlier attempt had, so
@@ -53,15 +53,20 @@ trap 'rm -rf "$scratch"' EXIT
 gh run list --workflow "$WORKFLOW" --branch "$BRANCH" --limit "$RUNS" \
   --json databaseId,attempt,status,conclusion > "$scratch/runs.json" ||
   { echo "red-rate: gh run list failed" >&2; exit 1; }
-# The answer is an array of runs, each with a numeric id, a status and an
-# attempt count of one or more; anything else (an object, a run without
-# them, a completed run with no attempt) is refused rather than counted as
+# The answer is one JSON document: an array of runs, each an object with a
+# numeric id, a string status, an integer attempt count of one or more and
+# a conclusion that is a string or null. Anything else (no document, an
+# object, a run without them, a fractional or zero attempt, a number for a
+# conclusion) is refused before anything is counted, rather than read as
 # nothing.
+jq -e 'type == "array"' "$scratch/runs.json" >/dev/null 2>&1 ||
+  { echo 'red-rate: gh run list answered something other than a list of runs' >&2; exit 1; }
 jq -r '
-  if type != "array" then error("not an array of runs") else .[] end
+  .[]
   | if type != "object" or (.databaseId | type) != "number" or (.status | type) != "string"
-       or (.attempt | type) != "number" or .attempt < 1
-    then error("a run without a numeric id, a status and an attempt count of 1 or more: \(.)")
+       or (.attempt | type) != "number" or .attempt < 1 or (.attempt | floor) != .attempt
+       or ((.conclusion | type) != "string" and (.conclusion | type) != "null")
+    then error("a run without a numeric id, a string status, an integer attempt count of 1 or more and a string or null conclusion: \(.)")
     else [.databaseId, .attempt, .status, (.conclusion // "")] | @tsv end' \
   "$scratch/runs.json" > "$scratch/runs.tsv" ||
   { echo 'red-rate: gh run list answered something other than a list of runs' >&2; exit 1; }
@@ -75,14 +80,19 @@ while IFS=$'\t' read -r id attempts status _conclusion; do
   for ((a = 1; a <= attempts; a++)); do
     gh run view "$id" --attempt "$a" --json jobs > "$scratch/attempt.json" ||
       { echo "red-rate: gh run view $id --attempt $a failed" >&2; exit 1; }
-    # The answer holds a non-empty array of jobs, each with a name and a
-    # numeric id (a completed attempt ran at least one job); anything else
-    # is refused. One row per job: run, attempt, job id, conclusion, name,
-    # the name last, as it may hold anything but a newline.
+    # The answer is one JSON document: an object whose jobs are a non-empty
+    # array (a completed attempt ran at least one job), each an object with
+    # a string name, a numeric id and a conclusion that is a string or null.
+    # Anything else is refused before anything is counted. One row per job:
+    # run, attempt, job id, conclusion, name, the name last, as it may hold
+    # anything but a newline.
+    jq -e 'type == "object" and (.jobs | type) == "array" and .jobs != []' "$scratch/attempt.json" >/dev/null 2>&1 ||
+      { echo "red-rate: gh run view $id --attempt $a answered no job list" >&2; exit 1; }
     jq -r --arg run "$id" --arg attempt "$a" '
-      if (.jobs | type) != "array" or .jobs == [] then error("no job list") else .jobs[] end
+      .jobs[]
       | if type != "object" or (.name | type) != "string" or (.databaseId | type) != "number"
-        then error("a job without a name and a numeric id: \(.)")
+           or ((.conclusion | type) != "string" and (.conclusion | type) != "null")
+        then error("a job without a string name, a numeric id and a string or null conclusion: \(.)")
         else [$run, $attempt, (.databaseId | tostring), (.conclusion // "unfinished"), .name] | @tsv end' \
       "$scratch/attempt.json" >> "$scratch/jobs.tsv" ||
       { echo "red-rate: gh run view $id --attempt $a answered no job list" >&2; exit 1; }

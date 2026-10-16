@@ -261,5 +261,60 @@ printf '{"jobs":[{"conclusion":"success","name":"Static checks"}]}\n' > "$case_d
 expect_limit=4 run -n 4
 check failed_with "red-rate: gh run view 103 --attempt 1 answered no job list"
 
+# Review controls: a malformed reader response must never produce counts.
+label="an attempt view that is not an object is refused"
+main_case
+printf '[]\n' > "$case_dir/view-101-1.json"
+expect_limit=4 run -n 4
+check failed_with "red-rate: gh run view 101 --attempt 1 answered no job list"
+
+label="a run missing attempt is refused"
+new_case
+printf '[{"databaseId":101,"status":"completed","conclusion":"success"}]\n' > "$case_dir/list.json"
+run
+check failed_with "red-rate: gh run list answered something other than a list of runs"
+
+label="a run conclusion that is a number is refused"
+main_case
+printf '[{"databaseId":101,"attempt":1,"status":"completed","conclusion":42}]\n' > "$case_dir/list.json"
+run
+check failed_with "red-rate: gh run list answered something other than a list of runs"
+
+label="a job conclusion that is a number is refused"
+main_case
+printf '{"jobs":[{"databaseId":1,"name":"Static checks","conclusion":42}]}\n' > "$case_dir/view-101-1.json"
+expect_limit=4 run -n 4
+check failed_with "red-rate: gh run view 101 --attempt 1 answered no job list"
+
+label="a job conclusion that is a boolean is refused"
+main_case
+printf '{"jobs":[{"databaseId":1,"name":"Static checks","conclusion":false}]}\n' > "$case_dir/view-101-1.json"
+expect_limit=4 run -n 4
+check failed_with "red-rate: gh run view 101 --attempt 1 answered no job list"
+
+label="a fractional attempt count is refused"
+main_case
+printf '[{"databaseId":101,"attempt":1.5,"status":"completed","conclusion":"success"}]\n' > "$case_dir/list.json"
+run
+check failed_with "red-rate: gh run list answered something other than a list of runs"
+
+label="an empty run-list response is refused"
+new_case
+: > "$case_dir/list.json"
+run
+check failed_with "red-rate: gh run list answered something other than a list of runs"
+
+label="an empty attempt response is refused"
+main_case
+: > "$case_dir/view-101-1.json"
+expect_limit=4 run -n 4
+check failed_with "red-rate: gh run view 101 --attempt 1 answered no job list"
+
+label="a null job conclusion is a fail, as a job left without one"
+main_case
+printf '{"jobs":[{"databaseId":1,"name":"Static checks","conclusion":null}]}\n' > "$case_dir/view-103-1.json"
+expect_limit=4 run -n 4
+check stdout_is $'job\tfirst_pass\tfirst_fail\tfirst_cancelled\treruns\trerun_pass\trerun_fail\trerun_cancelled\nBrowser harness\t2\t0\t0\t1\t1\t0\t0\nElixir Tests (sqlite)\t0\t2\t0\t3\t2\t1\t0\nStatic checks\t1\t2\t0\t1\t1\t0\t0\n# runs: 4 listed, 3 completed and counted, 1 not completed and left out: 104\n'
+
 echo "$cases cases, $failures failures"
 [ "$failures" -eq 0 ]

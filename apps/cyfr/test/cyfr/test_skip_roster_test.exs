@@ -7,21 +7,23 @@ defmodule Cyfr.TestSkipRosterTest do
   defect that is owned, dated and covered elsewhere, or it runs.
 
   Every test file under `apps/*/test` is read as code, so a `@tag :skip`
-  inside a string or a comment is a fixture, not a skip, and a skip spelled
-  `@tag :skip`, `@tag skip: ...`, `@moduletag ...` or `@describetag ...`,
-  bare or inside a keyword list, is one. A skip whose value is a literal
-  (`:skip`, `skip: true`, `skip: "why"`) stands on every host: it is
-  refused unless its tag also carries `owner:` (a name), `expires:` (an
-  ISO 8601 date not yet passed) and `covered_by:` (where the coverage is
-  kept; a test path there names a file that exists). A skip whose value
+  inside a string or a comment is a fixture, not a skip. For every `test`
+  and `property` the roster computes the tags ExUnit gives it: the
+  module's `@moduletag`s written before it, then the enclosing describe's
+  `@describetag`s, then the test's own `@tag`s, in that order, a later
+  write winning over an earlier one, a bare atom standing for `key: true`,
+  and the test's own tags consumed by it. The skip rule reads that merged
+  map: a `skip` set and truthy to a literal (`:skip`, `skip: true`,
+  `skip: "why"`) stands on every host and is refused unless the same map
+  carries `owner:` (a name), `expires:` (an ISO 8601 date not yet passed)
+  and `covered_by:` (where the coverage is kept; a test path there names a
+  file that exists), whichever attribute wrote each. A `skip` whose value
   is computed from the host (`skip: @unavailable && "why"`) skips the test
   only where the host cannot run it and excludes nothing elsewhere, so it
   carries no expiry; each such skip is rostered below by file and exact
-  expression, and one not rostered is refused. A tag whose shape the roster cannot read
-  statically is refused too, so no skip hides behind a call. Within one tag a
-  repeated key counts as ExUnit counts it, the last one written, so
-  `skip: false, skip: true` skips; the fields belong on the same tag as the
-  skip.
+  expression, and one not rostered is refused. A tag whose shape the
+  roster cannot read statically is refused too, so no skip hides behind a
+  call.
 
   The rule is a function of the files it reads, so it is also run on
   planted files it must refuse and accept.
@@ -44,92 +46,143 @@ defmodule Cyfr.TestSkipRosterTest do
   # The rule, as a function of files
   # ---------------------------------------------------------------------------
 
-  @tag_attributes [:tag, :moduletag, :describetag]
   @required [:owner, :expires, :covered_by]
+  @test_macros [:test, :property]
+  # Bodies no test is defined in, and whose `@tag` would be a read of the
+  # attribute, not a tag.
+  @opaque_bodies [:def, :defp, :defmacro, :defmacrop, :setup, :setup_all]
 
-  # Every tag of every file that skips, or that cannot be read, as
-  # `{file, line, kind, detail}`: kind `:standing` with its keyword fields,
-  # `:prerequisite` with the skip's expression, `:unreadable` with the tag's
-  # source.
-  defp skips(root, files) do
+  # Every test of every file with the tags ExUnit gives it, as
+  # `{file, line, :test, tags}`, and every tag the roster cannot read as
+  # `{file, line, :unreadable, source}`.
+  defp tests(root, files) do
     Enum.flat_map(files, fn file ->
       path = Path.join(root, file)
-      source = File.read!(path)
-      ast = Code.string_to_quoted!(source, file: path)
-
-      {_ast, found} =
-        Macro.prewalk(ast, [], fn
-          {:@, meta, [{name, _, [argument]}]} = node, acc when name in @tag_attributes ->
-            line = Keyword.get(meta, :line)
-
-            case tag_skip(argument) do
-              nil -> {node, acc}
-              {kind, detail} -> {node, [{file, line, kind, detail} | acc]}
-            end
-
-          node, acc ->
-            {node, acc}
-        end)
-
+      ast = Code.string_to_quoted!(File.read!(path), file: path)
+      {_state, found} = walk(ast, fresh(), file, [])
       Enum.reverse(found)
     end)
   end
 
-  # What a tag argument says about skipping, read from its syntax.
-  defp tag_skip(:skip), do: {:standing, %{}}
-  defp tag_skip(atom) when is_atom(atom), do: nil
+  # The walk keeps the three tag scopes ExUnit keeps: the module's, the
+  # describe's (nil outside one) and the next test's.
+  defp fresh, do: %{module: %{}, describe: nil, tag: %{}}
 
-  defp tag_skip(list) when is_list(list) do
-    if Enum.all?(list, &match?({key, _} when is_atom(key), &1)) do
-      # ExUnit folds a tag's keywords into a map, so a repeated key is the
-      # last one written.
-      fields = Map.new(list)
+  defp walk({:defmodule, _, [_name, body]}, state, file, found) do
+    {_inner, found} = walk(body, fresh(), file, found)
+    {state, found}
+  end
 
-      case Map.fetch(fields, :skip) do
-        :error ->
-          nil
+  defp walk({:@, meta, [{attribute, _, [argument]}]}, state, file, found)
+       when attribute in [:moduletag, :describetag, :tag] do
+    line = Keyword.get(meta, :line)
 
-        {:ok, value} when value in [false, nil] ->
-          nil
+    case {attribute, normalize(argument)} do
+      {_, :unreadable} ->
+        {state, [{file, line, :unreadable, "@#{attribute} #{Macro.to_string(argument)}"} | found]}
 
-        {:ok, value} ->
-          if Macro.quoted_literal?(value), do: {:standing, fields}, else: {:prerequisite, value}
-      end
-    else
-      {:unreadable, Macro.to_string(list)}
+      {:moduletag, tags} ->
+        {%{state | module: Map.merge(state.module, tags)}, found}
+
+      {:describetag, _tags} when state.describe == nil ->
+        {state, [{file, line, :unreadable, "@describetag outside a describe"} | found]}
+
+      {:describetag, tags} ->
+        {%{state | describe: Map.merge(state.describe, tags)}, found}
+
+      {:tag, tags} ->
+        {%{state | tag: Map.merge(state.tag, tags)}, found}
     end
   end
 
-  defp tag_skip(other), do: {:unreadable, Macro.to_string(other)}
+  defp walk({:describe, _, [_name, body]}, state, file, found) do
+    {inner, found} = walk(body, %{state | describe: %{}}, file, found)
+    {%{inner | describe: state.describe}, found}
+  end
 
-  # Why a found skip is refused, or nil when it is permitted.
-  defp refusal(root, {file, line, :standing, fields}, today) do
-    missing = Enum.reject(@required, &Map.has_key?(fields, &1))
+  defp walk({macro, meta, [_name | _] = args}, state, file, found)
+       when macro in @test_macros and is_list(args) do
+    tags =
+      state.module
+      |> Map.merge(state.describe || %{})
+      |> Map.merge(state.tag)
+
+    {%{state | tag: %{}}, [{file, Keyword.get(meta, :line), :test, tags} | found]}
+  end
+
+  defp walk({definer, _, _}, state, _file, found) when definer in @opaque_bodies,
+    do: {state, found}
+
+  defp walk({form, _meta, args}, state, file, found) when is_list(args) do
+    {state, found} = walk(form, state, file, found)
+    walk(args, state, file, found)
+  end
+
+  defp walk({left, right}, state, file, found) do
+    {state, found} = walk(left, state, file, found)
+    walk(right, state, file, found)
+  end
+
+  defp walk(list, state, file, found) when is_list(list) do
+    Enum.reduce(list, {state, found}, fn node, {state, found} ->
+      walk(node, state, file, found)
+    end)
+  end
+
+  defp walk(_leaf, state, _file, found), do: {state, found}
+
+  # A tag argument as ExUnit folds it: an atom is `key: true`, a keyword
+  # list is taken in order with a repeated key's last value, anything else
+  # is refused.
+  defp normalize(atom) when is_atom(atom), do: %{atom => true}
+
+  defp normalize(list) when is_list(list) do
+    if Enum.all?(list, &match?({key, _} when is_atom(key), &1)),
+      do: Map.new(list),
+      else: :unreadable
+  end
+
+  defp normalize(_other), do: :unreadable
+
+  # Why a test's tags are refused, or nil when the test runs or its skip is
+  # permitted.
+  defp refusal(root, {file, line, :test, tags}, today) do
+    skip = Map.get(tags, :skip)
+
+    cond do
+      skip in [nil, false] ->
+        nil
+
+      Macro.quoted_literal?(skip) ->
+        standing_refusal(root, file, line, tags, today)
+
+      Macro.to_string(skip) in Map.get(@prerequisite_skips, file, []) ->
+        nil
+
+      true ->
+        "#{file}:#{line} prerequisite skip #{Macro.to_string(skip)} is not rostered"
+    end
+  end
+
+  defp refusal(_root, {file, line, :unreadable, source}, _today),
+    do: "#{file}:#{line} tag #{source} cannot be read for a skip"
+
+  defp standing_refusal(root, file, line, tags, today) do
+    missing = Enum.reject(@required, &Map.has_key?(tags, &1))
 
     reasons =
       Enum.reject(
         [
           missing != [] && "lacks #{Enum.map_join(missing, ", ", &"#{&1}:")}",
-          Map.has_key?(fields, :owner) && not name?(fields[:owner]) && "owner: is not a name",
-          Map.has_key?(fields, :expires) && expiry_refusal(fields[:expires], today),
-          Map.has_key?(fields, :covered_by) && coverage_refusal(root, fields[:covered_by])
+          Map.has_key?(tags, :owner) && not name?(tags.owner) && "owner: is not a name",
+          Map.has_key?(tags, :expires) && expiry_refusal(tags.expires, today),
+          Map.has_key?(tags, :covered_by) && coverage_refusal(root, tags.covered_by)
         ],
         &(&1 in [false, nil])
       )
 
     if reasons == [], do: nil, else: "#{file}:#{line} standing skip #{Enum.join(reasons, "; ")}"
   end
-
-  defp refusal(_root, {file, line, :prerequisite, expression}, _today) do
-    written = Macro.to_string(expression)
-
-    if written in Map.get(@prerequisite_skips, file, []),
-      do: nil,
-      else: "#{file}:#{line} prerequisite skip #{written} is not rostered"
-  end
-
-  defp refusal(_root, {file, line, :unreadable, source}, _today),
-    do: "#{file}:#{line} tag #{source} cannot be read for a skip"
 
   defp name?(value), do: is_binary(value) and String.trim(value) != ""
 
@@ -153,9 +206,17 @@ defmodule Cyfr.TestSkipRosterTest do
 
   defp refusals(root, files, today \\ Date.utc_today()) do
     root
-    |> skips(files)
+    |> tests(files)
     |> Enum.map(&refusal(root, &1, today))
     |> Enum.reject(&is_nil/1)
+  end
+
+  # The skips computed from the host, with the file each is in.
+  defp prerequisite_skips(root, files) do
+    for {file, _line, :test, %{skip: skip}} <- tests(root, files),
+        skip not in [nil, false],
+        not Macro.quoted_literal?(skip),
+        do: {file, Macro.to_string(skip)}
   end
 
   defp test_files(root) do
@@ -177,16 +238,12 @@ defmodule Cyfr.TestSkipRosterTest do
     assert "apps/cyfr/test/opus/host_listener_test.exs" in files
   end
 
-  test "no test file skips without an owner, an expiry and kept coverage" do
-    files = test_files(@root)
-    assert refusals(@root, files) == []
+  test "no test skips without an owner, an expiry and kept coverage" do
+    assert refusals(@root, test_files(@root)) == []
   end
 
   test "the prerequisite skips are exactly the rostered expressions" do
-    found =
-      for {file, _line, :prerequisite, expression} <- skips(@root, test_files(@root)),
-          do: {file, Macro.to_string(expression)}
-
+    found = prerequisite_skips(@root, test_files(@root))
     rostered = for {file, expressions} <- @prerequisite_skips, e <- expressions, do: {file, e}
     assert Enum.sort(found) == Enum.sort(rostered)
   end
@@ -220,30 +277,105 @@ defmodule Cyfr.TestSkipRosterTest do
 
   @future Date.to_iso8601(Date.add(Date.utc_today(), 30))
   @past "2026-01-01"
+  @lacking "standing skip lacks owner:, expires:, covered_by:"
+  @permitted ~s(skip: true, owner: "someone", expires: "#{@future}", covered_by: "elsewhere")
 
-  test "a later repeated skip key cannot hide an effective skip", %{dir: dir} do
+  test "a bare skip is refused, from every tag attribute", %{dir: dir} do
+    for body <- [
+          "  @tag :skip\n  test \"t\", do: :ok",
+          "  @tag skip: \"flaky\"\n  test \"t\", do: :ok",
+          "  @moduletag :skip\n  test \"t\", do: :ok",
+          "  describe \"d\" do\n    @describetag skip: true\n    test \"t\", do: :ok\n  end"
+        ] do
+      assert [refused] = planted_refusals(dir, body)
+      assert refused =~ @lacking
+    end
+  end
+
+  test "a module skip reaches every test written after it, and none before", %{dir: dir} do
+    assert [second, third] =
+             planted_refusals(dir, """
+               test "before", do: :ok
+               @moduletag :skip
+               test "after", do: :ok
+               describe "d" do
+                 test "inside", do: :ok
+               end
+             """)
+
+    assert second =~ ":5 #{@lacking}"
+    assert third =~ ":7 #{@lacking}"
+  end
+
+  test "a later repeated skip key counts, as ExUnit counts it", %{dir: dir} do
     for off <- ["false", "nil"] do
       assert [refused] =
                planted_refusals(dir, "  @tag skip: #{off}, skip: true\n  test \"t\", do: :ok")
 
-      assert refused =~ "standing skip lacks owner:, expires:, covered_by:"
+      assert refused =~ @lacking
     end
 
-    # And the other way round, as ExUnit reads it: the last key, false, runs
-    # the test.
     assert planted_refusals(dir, "  @tag skip: true, skip: false\n  test \"t\", do: :ok") == []
   end
 
-  test "a bare skip is refused, in every tag attribute", %{dir: dir} do
-    for attribute <- [
-          "@tag :skip",
-          "@moduletag :skip",
-          "@describetag skip: true",
-          "@tag skip: \"flaky\""
-        ] do
-      assert [refused] = planted_refusals(dir, "  #{attribute}\n  test \"t\", do: :ok")
-      assert refused =~ "standing skip lacks owner:, expires:, covered_by:"
-    end
+  test "a later write at any level overrides an earlier one, as ExUnit merges them", %{dir: dir} do
+    # A bare skip the test's next tag turns off runs.
+    assert planted_refusals(dir, "  @tag :skip\n  @tag skip: false\n  test \"t\", do: :ok") == []
+    # A describe turns a module skip off for its tests.
+    assert planted_refusals(dir, """
+             @moduletag :skip
+             describe "d" do
+               @describetag skip: false
+               test "t", do: :ok
+             end
+           """) == []
+
+    # The fields may come from another level than the skip.
+    assert planted_refusals(dir, """
+             @moduletag owner: "someone", covered_by: "elsewhere"
+             describe "d" do
+               @describetag expires: "#{@future}"
+               @tag :skip
+               test "t", do: :ok
+             end
+           """) == []
+  end
+
+  test "later tag metadata cannot turn an allowed skip into an expired skip", %{dir: dir} do
+    assert [refused] =
+             planted_refusals(dir, """
+               @tag #{@permitted}
+               @tag expires: "#{@past}"
+               test "t", do: :ok
+             """)
+
+    assert refused =~ "expired #{@past}"
+  end
+
+  test "describe metadata cannot expire an inherited module skip", %{dir: dir} do
+    assert [refused] =
+             planted_refusals(dir, """
+               @moduletag #{@permitted}
+               describe "inherited" do
+                 @describetag expires: "#{@past}"
+                 test "t", do: :ok
+               end
+             """)
+
+    assert refused =~ "expired #{@past}"
+  end
+
+  test "test metadata cannot remove the owner of an inherited describe skip", %{dir: dir} do
+    assert [refused] =
+             planted_refusals(dir, """
+               describe "inherited" do
+                 @describetag #{@permitted}
+                 @tag owner: nil
+                 test "t", do: :ok
+               end
+             """)
+
+    assert refused =~ "owner: is not a name"
   end
 
   test "a skip with every field, not yet expired, covering a file in the tree, is permitted", %{
@@ -318,6 +450,9 @@ defmodule Cyfr.TestSkipRosterTest do
              []
 
     assert [refused] = planted_refusals(dir, "  @tag tags_for(:slow)\n  test \"t\", do: :ok")
-    assert refused =~ "tag tags_for(:slow) cannot be read for a skip"
+    assert refused =~ "tag @tag tags_for(:slow) cannot be read for a skip"
+
+    assert [refused] = planted_refusals(dir, "  @describetag :skip\n  test \"t\", do: :ok")
+    assert refused =~ "@describetag outside a describe cannot be read"
   end
 end
