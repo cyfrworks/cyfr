@@ -182,13 +182,15 @@ defmodule Sanctum.Consent.AccountsTest do
 
       assert {:error, {:ambiguous, _ids}} = Accounts.resolve(ctx, :default, ref, "Work")
 
-      # A profile row whose status no writer produces is damage, not an absence.
+      # A profile row whose kind no writer produces is damage, not an
+      # absence. Its status cannot be stored outside the vocabulary (its
+      # CHECK); its kind is the damage a read can still meet.
       {1, _} =
         Arca.Repo.update_all(
           from(p in Arca.Schemas.Profile,
             where: p.athanor_id == ^ctx.athanor_id and p.id == ^profile_id
           ),
-          set: [status: "sideways"]
+          set: [kind: "sideways"]
         )
 
       assert {:error, {:corrupt, {:profile, ^profile_id}}} =
