@@ -37,9 +37,10 @@ defmodule Sanctum.Auth.OIDC do
       `:cyfr_oidc` configuration worker, for a login forced fresh with
       `prompt=login` and `max_age=0`, carrying a nonce derived from the
       confirmation's ref and digest and held on the record, a state
-      naming the record's ref, and the paired client a caller on a paired
-      device begins it from, under a keyed digest, and a PKCE verifier
-      derived from the nonce. Its redirect URI is
+      naming the record's ref, the attempt's nonce, and the paired client a
+      caller on a paired device begins it from, under a keyed digest, and
+      a PKCE verifier derived from the nonce. A state answers only the
+      attempt the record's nonce names now. Its redirect URI is
       `<origin>/auth/oidcc/reauth`, which the issuer must list beside the
       sign-in callback. Nothing here carries the secret the asking
       request holds: the URL travels through the issuer, the browser and
@@ -301,7 +302,13 @@ defmodule Sanctum.Auth.OIDC do
          {:ok, _door} <- linked_door(user_id),
          {:ok, row} <- pending_record(actor, ref, user_id) do
       nonce = reauth_nonce(row)
-      begun = %{athanor_id: ctx.athanor_id, ref: row.ref, client_id: device_client(ctx)}
+
+      begun = %{
+        athanor_id: ctx.athanor_id,
+        ref: row.ref,
+        nonce: nonce,
+        client_id: device_client(ctx)
+      }
 
       case Arca.PendingConfirmations.put_challenge(actor, row.ref, %{reauth_nonce: nonce}) do
         {:ok, _held} ->
@@ -341,6 +348,7 @@ defmodule Sanctum.Auth.OIDC do
          actor = Prima.Actor.in_athanor(athanor_id),
          {:ok, row} <- stored(actor, ref),
          {:ok, nonce} <- held_nonce(row),
+         :ok <- this_attempt(begun, nonce),
          {:ok, ttl} <- alive_ms(row),
          {:ok, claims} <- client().redeem(code, request(begun, nonce)),
          :ok <- fresh(claims, nonce, row),
@@ -544,15 +552,24 @@ defmodule Sanctum.Auth.OIDC do
     }
   end
 
-  # The state names the record by its public ref, and the paired client a
-  # device began it from, under a keyed digest only this home can make:
-  # the callback reads nothing it did not write, and the state, which the
-  # issuer, the browser and the request log all see, carries nothing the
-  # asking request alone holds. A client id is no secret; the digest keeps
-  # anyone from naming a device that did not begin the login.
-  defp state(%{athanor_id: athanor_id, ref: ref, client_id: client_id}) do
+  # A state answers only the attempt it was minted for: the one whose nonce
+  # the record holds now. A re-authentication begun again replaces the
+  # nonce, so an earlier attempt's state, a device's among them, confirms
+  # nothing, whatever code comes with it.
+  defp this_attempt(%{nonce: nonce}, held) do
+    if Plug.Crypto.secure_compare(nonce, held), do: :ok, else: {:error, :reauth_refused}
+  end
+
+  # The state names the record by its public ref, the attempt by its nonce
+  # and the paired client a device began it from, under a keyed digest
+  # only this home can make: the callback reads nothing it did not write,
+  # and the state, which the issuer, the browser and the request log all
+  # see, carries nothing the asking request alone holds (the nonce rides
+  # the authorization URL beside it). A client id is no secret; the digest
+  # keeps anyone from naming a device that did not begin this attempt.
+  defp state(%{athanor_id: athanor_id, ref: ref, nonce: nonce, client_id: client_id}) do
     payload =
-      %{"a" => athanor_id, "c" => ref}
+      %{"a" => athanor_id, "c" => ref, "n" => nonce}
       |> Prima.MapUtil.put_present("d", client_id)
       |> Encoding.jcs!()
       |> Encoding.b64()
@@ -568,11 +585,11 @@ defmodule Sanctum.Auth.OIDC do
          {:ok, mac} <- Encoding.unb64(mac, 32),
          true <- Plug.Crypto.secure_compare(mac, state_mac(payload)),
          {:ok, json} <- Base.url_decode64(payload, padding: false),
-         {:ok, %{"a" => athanor_id, "c" => ref} = read} <- Jason.decode(json),
+         {:ok, %{"a" => athanor_id, "c" => ref, "n" => nonce} = read} <- Jason.decode(json),
          client_id = Map.get(read, "d"),
-         true <- Encoding.id?(athanor_id) and Prima.Confirmation.ref?(ref),
+         true <- Encoding.id?(athanor_id) and Prima.Confirmation.ref?(ref) and is_binary(nonce),
          true <- is_nil(client_id) or Encoding.id?(client_id) do
-      {:ok, %{athanor_id: athanor_id, ref: ref, client_id: client_id}}
+      {:ok, %{athanor_id: athanor_id, ref: ref, nonce: nonce, client_id: client_id}}
     else
       _forged -> {:error, :reauth_refused}
     end

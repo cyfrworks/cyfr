@@ -663,13 +663,20 @@ export default {
     }
   },
 
-  // Keep the stored device and forget the code, or unpair the stored
-  // device and pair under the code.
+  // Keep the stored device and forget the code, or pair under the code
+  // with the key this browser made for it, letting the stored device go
+  // only once the new one is issued: a replacement that cannot proceed
+  // erases nothing. A browser that made no key for the code keeps its
+  // device and makes one now, whose code the page shows to approve.
   async replaceDevice(replace) {
     const code = this.pendingCode
     this.pendingCode = null
     if (replace && code) {
-      await this.glass.unpair()
+      if (!(await this.store.loadPrepared())) {
+        await this.prepareKey()
+        this.pairRefused("This browser made no key for that pairing, so it keeps the device it holds. Approve the code now shown here on a device of yours, then open the link it gives you here.")
+        return this.glass.start()
+      }
       if ((await this.pairGlass(code)) === "certify") return
     }
     return this.glass.start()
@@ -716,6 +723,9 @@ export default {
       const paired = await this.pushAsync("pair_proof", {...base, proof})
       if (!paired || paired.error) return this.endPending((paired && paired.error) || "The pairing did not finish.")
 
+      // The device this browser held, if any, goes only now, once the new
+      // one is issued.
+      await this.glass.unpair()
       await this.store.save({privateKey: pending.privateKey, publicKey: pending.publicKey, clientId: paired.client_id, certificate: paired.certificate})
       await this.store.clearPending()
       this.certifyAsk = null
@@ -794,6 +804,9 @@ export default {
       const paired = await this.pushAsync("pair_proof", {invitation_secret: code, device_key: deviceKey, key_digest: digest, proof})
       if (!paired || paired.error) return this.pairRefused((paired && paired.error) || "The pairing did not finish.")
 
+      // The device this browser held, if any, goes only now, once the new
+      // one is issued.
+      await this.glass.unpair()
       await this.store.save({privateKey, publicKey: deviceKey, clientId: paired.client_id, certificate: paired.certificate})
       await this.store.clearPrepared()
       return "paired"
@@ -915,7 +928,7 @@ export default {
             doc,
             "p",
             {class: "text-sm"},
-            "This device is already paired with this home. Pairing it under this code forgets the device it holds and pairs the key this browser made for the code you approved."
+            "This device is already paired with this home. Pairing it under this code pairs the key this browser made for the code you approved, and forgets the device it holds once the new one is paired."
           ),
           element(doc, "button", {type: "button", "data-test": "glass-replace", "data-action": "replace"}, "Forget this device and pair again"),
           element(doc, "button", {type: "button", "data-test": "glass-keep", "data-action": "keep"}, "Keep this device")

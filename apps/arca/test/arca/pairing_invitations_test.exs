@@ -1111,6 +1111,197 @@ defmodule Arca.PairingInvitationsRaceTest do
     assert clients(actor) == 1
   end
 
+  @tag :postgres
+  test "an invitation that expires while its redemption waits for its confirmer's lock is refused",
+       %{
+         actor: actor,
+         membership: membership
+       } do
+    # Complete a real first pairing so the next invitation names a standing
+    # device and the person's first-method latch has already been set.
+    {_first, first_hash, first_digest} = open!(actor, membership)
+
+    {:ok, %{client: confirmer}} =
+      unboxed(fn ->
+        PairingInvitations.consume(actor, first_hash, first_digest, &admits/1, issue(actor))
+      end)
+
+    secret = "expiry-#{System.unique_integer([:positive])}"
+    hash = Prima.Digest.sha256(secret)
+    digest = Prima.Device.key_digest(:crypto.strong_rand_bytes(32))
+
+    {:ok, invitation} =
+      unboxed(fn ->
+        confirmation =
+          Confirmations.confirmed!(actor, actor.user_id, %{
+            proof: "oidc_reauth",
+            client_id: confirmer.id
+          })
+
+        PairingInvitations.open(
+          actor,
+          %{
+            user_id: actor.user_id,
+            membership_id: membership.id,
+            secret_hash: hash,
+            key_digest: digest,
+            confirmation_ref: confirmation.ref,
+            audience_home: "https://home.example",
+            lifetime_ms: 3_000
+          },
+          Confirmations.consuming(actor, confirmation)
+        )
+      end)
+
+    test = self()
+
+    holder =
+      Task.async(fn ->
+        unboxed(fn ->
+          Arca.Repo.transaction(fn ->
+            from(p in PairedClient,
+              where: p.athanor_id == ^actor.athanor_id and p.id == ^confirmer.id
+            )
+            |> Arca.QueryHelpers.for_update()
+            |> Arca.Repo.one!()
+
+            send(test, :confirmer_held)
+
+            receive do
+              :release_confirmer -> :ok
+            after
+              30_000 -> :timed_out
+            end
+          end)
+        end)
+      end)
+
+    on_exit(fn ->
+      if Process.alive?(holder.pid), do: Process.exit(holder.pid, :kill)
+    end)
+
+    assert_receive :confirmer_held, 5_000
+    {waiter, backend} = redemption(actor, hash, digest)
+
+    on_exit(fn ->
+      if Process.alive?(waiter.pid), do: Process.exit(waiter.pid, :kill)
+    end)
+
+    assert_waits!(waiter, backend, [~s("paired_clients"), "FOR UPDATE"])
+
+    now = unboxed(fn -> Arca.ServerMetaStorage.now!() end)
+
+    assert DateTime.compare(now, invitation.expires_at) == :lt,
+           "the waiter did not reach the confirmer before invitation expiry"
+
+    await_past!(invitation.expires_at)
+
+    send(holder.pid, :release_confirmer)
+    assert {:ok, :ok} = Task.await(holder, 25_000)
+    result = Task.await(waiter, 25_000)
+    assert result == {:error, :expired}
+    assert clients(actor) == 1
+
+    assert %{state: "pending"} =
+             unboxed(fn -> Arca.Repo.get!(PairingInvitation, invitation.id) end)
+  end
+
+  # The person's first passkey, registered claiming the first-method latch,
+  # on a connection of its own whose backend the test watches.
+  defp first_passkey(actor) do
+    test = self()
+
+    task =
+      Task.async(fn ->
+        unboxed(fn ->
+          send(test, {:registrant, backend()})
+
+          Arca.Passkeys.register(
+            %Prima.Actor{user_id: actor.user_id},
+            %{
+              user_id: actor.user_id,
+              credential_id: "cred-race-#{System.unique_integer([:positive])}",
+              rp_id: "home.example",
+              relying_home: "https://home.example",
+              public_key: "cose-key",
+              registration_digest: Prima.Digest.sha256("reg-#{System.unique_integer()}"),
+              possession_verified: true,
+              state: "active"
+            },
+            first_method: true
+          )
+        end)
+      end)
+
+    assert_receive {:registrant, pid}, 5_000
+    {task, pid}
+  end
+
+  @tag :postgres
+  test "a first pairing and a first passkey racing to the latch: one sets it, the other is refused",
+       %{actor: actor, membership: membership} do
+    {_invitation, hash, digest} = open!(actor, membership)
+    test = self()
+
+    on_exit(fn ->
+      unboxed(fn ->
+        Arca.Repo.delete_all(from(p in Arca.Schemas.Passkey, where: p.user_id == ^actor.user_id))
+      end)
+    end)
+
+    # The person's lock held: both contenders start and are seen waiting
+    # on it, so neither has read the latch when it is let go.
+    holder =
+      Task.async(fn ->
+        unboxed(fn ->
+          Arca.Repo.transaction(fn ->
+            Arca.DirectoryHeads.lock_person!(actor.user_id)
+            send(test, :person_held)
+
+            receive do
+              :release -> :ok
+            after
+              30_000 -> :timed_out
+            end
+          end)
+        end)
+      end)
+
+    on_exit(fn -> if Process.alive?(holder.pid), do: Process.exit(holder.pid, :kill) end)
+    assert_receive :person_held, 5_000
+
+    {pairing, pairing_backend} = redemption(actor, hash, digest)
+    {passkey, passkey_backend} = first_passkey(actor)
+    assert_waits!(pairing, pairing_backend, [~s("users"), "FOR UPDATE"])
+    assert_waits!(passkey, passkey_backend, [~s("users"), "FOR UPDATE"])
+
+    # Read without the person's lock, which the holder keeps: still open.
+    assert {:ok, %{first_method_at: nil}} =
+             unboxed(fn -> PersonIdentities.get(server(), actor.user_id) end)
+
+    send(holder.pid, :release)
+    assert {:ok, :ok} = Task.await(holder, 25_000)
+    results = [Task.await(pairing, 25_000), Task.await(passkey, 25_000)]
+
+    assert [{:ok, _winner}] = Enum.filter(results, &match?({:ok, _}, &1))
+    assert Enum.filter(results, &match?({:error, _}, &1)) == [{:error, :first_method_used}]
+
+    passkeys =
+      unboxed(fn ->
+        Arca.Repo.aggregate(
+          from(p in Arca.Schemas.Passkey,
+            where: p.user_id == ^actor.user_id and p.state == "active"
+          ),
+          :count
+        )
+      end)
+
+    assert clients(actor) + passkeys == 1
+
+    assert {:ok, false} =
+             unboxed(fn -> PersonIdentities.first_method_open?(server(), actor.user_id) end)
+  end
+
   # The database's clock is past `instant`, polled at most 5 seconds.
   defp await_past!(instant, tries \\ 250) do
     now = unboxed(fn -> Arca.ServerMetaStorage.now!() end)

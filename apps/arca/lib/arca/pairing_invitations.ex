@@ -42,7 +42,9 @@ defmodule Arca.PairingInvitations do
   issuance closure runs, the presented key's digest must be the one the
   invitation names (`:key_mismatch`), its confirmer must still stand, the
   passkey active or the paired client active, each locked
-  (`:confirmer_revoked`), and the person's first-method latch is set: an
+  (`:confirmer_revoked`), the invitation still unexpired on the
+  database's clock once that lock is won (`:expired`), and the person's
+  first-method latch is set: an
   invitation with no confirmer must be the one that sets it, so of two
   bootstrap invitations one alone completes (`:first_method_used`). Then
   the issuance closure records the paired client and its certificate and
@@ -185,6 +187,7 @@ defmodule Arca.PairingInvitations do
                :ok <- redeemable(current, invitation, locked.now),
                :ok <- key_matches(current, key_digest),
                :ok <- confirmer_stands(current),
+               :ok <- still_unexpired(current),
                :ok <- latched(current),
                {:ok, result} <- issue.(Arca.Data.project(current)),
                :ok <- consumed!(current, locked.now) do
@@ -366,6 +369,15 @@ defmodule Arca.PairingInvitations do
     if query |> QueryHelpers.for_update() |> Arca.Repo.one() |> is_binary(),
       do: :ok,
       else: {:error, :confirmer_revoked}
+  end
+
+  # The confirmer's lock may be waited for after the expiry was read: the
+  # invitation is held to its expiry again, on the database's clock, once
+  # every lock is won and before anything is issued.
+  defp still_unexpired(%PairingInvitation{expires_at: expires_at}) do
+    if DateTime.compare(expires_at, Arca.ServerMetaStorage.now!()) == :gt,
+      do: :ok,
+      else: {:error, :expired}
   end
 
   # The person's first-method latch is set by this redemption's

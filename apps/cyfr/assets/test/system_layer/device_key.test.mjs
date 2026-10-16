@@ -1058,7 +1058,55 @@ describe("a glass that holds a device, opened on a pairing link", () => {
     }
   })
 
-  test("replacing is explicit: the stored device is unpaired first, then the code pairs", async () => {
+  test("a replacement in a browser that made no key for the code keeps the working device and makes a key to approve", async () => {
+    const page = await mountGlassPage({stored: storedDevice, replies})
+    try {
+      assert.equal(await page.store.loadPrepared(), null)
+      await page.hook.glassClick({target: page.el.find("glass-replace"), preventDefault() {}})
+
+      // The device it held stands, connected as before; nothing was asked
+      // of the home under the code, and a key was made whose code the page
+      // shows to approve.
+      assert.equal((await page.store.load()).clientId, certificate.client_id)
+      assert.deepEqual(page.pushed.map((push) => push.event), ["prepared"])
+      const prepared = await page.store.loadPrepared()
+      assert.ok(prepared)
+      assert.deepEqual(page.pushed[0].payload, {key_digest: prepared.keyDigest})
+      assert.match(page.el.find("glass-error").children.map((child) => child.text).join(""), /keeps the device it holds/)
+      assert.equal(page.sockets.length, 1)
+
+      // That key's code approved, its link opened on this page: the
+      // replacement now pairs with it, and only then the old device goes.
+      globalThis.location.hash = "#code=UjcQhGOiIAu_9xjWI7A-Fw"
+      await page.hook.onHash()
+      assert.ok(page.el.find("glass-replace-ask"))
+      await page.hook.glassClick({target: page.el.find("glass-replace"), preventDefault() {}})
+      assert.deepEqual(page.pushed.map((push) => push.event), ["prepared", "pair_start", "pair_proof"])
+      const record = await page.store.load()
+      assert.equal(record.clientId, "pcl_new")
+      assert.equal(record.publicKey, prepared.publicKey)
+    } finally {
+      page.restore()
+    }
+  })
+
+  test("a replacement the home refuses keeps the working device", async () => {
+    const prepared = await preparedKey()
+    const refusing = {...replies, pair_start: () => ({error: "This device is not the one the pairing was approved for"})}
+    const page = await mountGlassPage({stored: storedDevice, replies: refusing, prepared})
+    try {
+      await page.hook.glassClick({target: page.el.find("glass-replace"), preventDefault() {}})
+      assert.deepEqual(page.pushed.map((push) => push.event), ["pair_start"])
+      assert.equal((await page.store.load()).clientId, certificate.client_id)
+      assert.equal(await page.store.loadPrepared(), prepared)
+      assert.ok(page.el.find("glass-error"))
+      assert.equal(page.sockets.at(-1).url, "wss://alice.example/device/websocket")
+    } finally {
+      page.restore()
+    }
+  })
+
+  test("replacing is explicit: under the key made for the code, the new device pairs and only then replaces the stored one", async () => {
     const prepared = await preparedKey()
     const page = await mountGlassPage({stored: storedDevice, replies, prepared})
     try {

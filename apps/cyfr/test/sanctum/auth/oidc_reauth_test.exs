@@ -258,7 +258,10 @@ defmodule Sanctum.Auth.OIDCReauthTest do
       # browser or the request log sees carries the asking request's
       # secret.
       [payload, _mac] = String.split(request.state, ".")
-      assert %{"c" => ^id} = payload |> Base.url_decode64!(padding: false) |> Jason.decode!()
+      nonce = request.nonce
+
+      assert %{"c" => ^id, "n" => ^nonce} =
+               payload |> Base.url_decode64!(padding: false) |> Jason.decode!()
 
       for seen <- [url, request.state, request.nonce, request.pkce_verifier] do
         refute seen =~ secret
@@ -611,6 +614,47 @@ defmodule Sanctum.Auth.OIDCReauthTest do
 
       secret = reauth_confirmed!(ctx, ctx, subject, token, pairing_change(digest))
       assert record(ctx, Prima.Confirmation.ref(secret)).confirmed_client_id == nil
+
+      assert Sanctum.Pairing.begin(%{ctx | confirmation_id: secret}, %{key_digest: digest}) ==
+               {:error, Sanctum.Pairing.addition_refusal()}
+    end
+
+    test "a device's state replayed against a later attempt begun from a session confirms nothing",
+         %{ctx: ctx, subject: subject, token: token} = seated do
+      device = first_device!(seated)
+      digest = Prima.Device.key_digest(elem(:crypto.generate_key(:eddsa, :ed25519), 0))
+
+      {:error, {:confirmation_required, %{id: secret}}} =
+        Sanctum.Consent.Authz.check(ctx, :device_pairing, pairing_change(digest))
+
+      ref = Prima.Confirmation.ref(secret)
+      {_url, from_device} = begun!(device.ctx, ref)
+      {_url, from_session} = begun!(ctx, ref)
+      refute from_device.nonce == from_session.nonce
+      refute from_device.pkce_verifier == from_session.pkce_verifier
+
+      # The device's state, read from its authorization URL, beside the
+      # code of the later login the session began: the record's nonce is
+      # the later attempt's, so the device's state names an attempt that no
+      # longer stands, and nothing is held to approve.
+      assert OIDC.reauth_callback(%{
+               "state" => from_device.state,
+               "code" => code(claims(from_session, subject))
+             }) == {:error, :reauth_refused}
+
+      row = record(ctx, ref)
+      assert {row.state, row.confirmed_client_id} == {"pending", nil}
+
+      # The session's own attempt confirms, given on no device, and adds
+      # nothing once a device is paired.
+      {:ok, %{ticket: ticket}} =
+        OIDC.reauth_callback(%{
+          "state" => from_session.state,
+          "code" => code(claims(from_session, subject))
+        })
+
+      assert {:ok, %{state: "confirmed"}} = OIDC.reauth_decide(ticket, token, :approve)
+      assert record(ctx, ref).confirmed_client_id == nil
 
       assert Sanctum.Pairing.begin(%{ctx | confirmation_id: secret}, %{key_digest: digest}) ==
                {:error, Sanctum.Pairing.addition_refusal()}
