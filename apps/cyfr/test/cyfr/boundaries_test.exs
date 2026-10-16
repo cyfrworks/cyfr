@@ -812,13 +812,13 @@ defmodule Cyfr.BoundariesTest do
 
         assert functions == Enum.sort(Enum.uniq(functions)), "#{from} -> #{into} is not sorted"
 
-        caller = Module.concat([from])
+        caller = Module.safe_concat([from])
         assert Code.ensure_loaded?(caller), "#{from} is not a module"
 
         assert MapSet.member?(sources, to_string(caller.module_info(:compile)[:source])),
                "#{from} is not a surface module"
 
-        callee = Module.concat([into])
+        callee = Module.safe_concat([into])
         assert Code.ensure_loaded?(callee), "#{into} is not a module"
 
         for function <- functions do
