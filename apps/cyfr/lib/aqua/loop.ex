@@ -33,7 +33,9 @@ defmodule Aqua.Loop do
   compaction summaries among them, an outside source for a turn a webhook
   started and one for the model's own web search when the request offers
   it; a call's result closes with the sources it carries
-  (`Aqua.Loop.Policy.sources_of/2`). The room excerpt is the athanor's own
+  (`Aqua.Loop.Policy.sources_of/2`), and a launched component's with an
+  outside source named by its reference when its tree was admitted with
+  egress (`Arca.TurnStorage.close_step/4`). The room excerpt is the athanor's own
   members' words and joins nothing. A standing allow is judged against the
   sources as they stand when a call is decided and again when it
   dispatches, and a card names them.
@@ -1690,7 +1692,6 @@ defmodule Aqua.Loop do
 
   defp close_launch(state, step, call, {:ok, id, result}) do
     text = Jason.encode!(result, pretty: true)
-    sources = if call, do: Policy.sources_of(call, {:ok, result}), else: []
 
     _ =
       Tape.close_step(guest(state), state.turn, step, "ok", %{
@@ -1703,7 +1704,7 @@ defmodule Aqua.Loop do
           }
         },
         execution_id: id,
-        sources: sources
+        launched: %{reference: call && call.target, execution_id: id}
       })
 
     state

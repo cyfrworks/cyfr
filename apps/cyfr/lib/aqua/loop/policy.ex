@@ -38,7 +38,8 @@ defmodule Aqua.Loop.Policy do
   turn: `filed` and the notes' own provenance for a notes read,
   `files_by_grant` for a files or storage read and a component's source,
   and an outside source named by its origin for an external server's
-  tool, the HTTP hand, a launched component and a feed's results.
+  tool, the HTTP hand and a feed's results, and a launched component
+  whose grant reaches the network.
 
   `touched_refs/1` names the components a turn's closed write,
   destructive and execute calls reached, from their durable rows.
@@ -354,10 +355,12 @@ defmodule Aqua.Loop.Policy do
   `filed`, joined by the provenance of every note it answered; a files or
   storage read and a component's source are `files_by_grant`; an
   external server's tool is outside, named by its server; the HTTP hand
-  is outside, named by the host its URL names; a launched component is
-  outside, named by its reference; a feed's listing is outside, named by
-  each feed whose result it carries. Any other call carries none. A
-  result is joined whatever its outcome: an error body is read too.
+  is outside, named by the host its URL names; a feed's listing is
+  outside, named by each feed whose result it carries. Any other call
+  carries none here: a launched component's are judged from its tree's
+  admitted egress where its step closes (`Arca.TurnStorage.close_step/4`'s
+  `:launched`). A result is joined whatever its outcome: an error body is
+  read too.
   """
   @spec sources_of(Call.t(), term()) :: [Prima.Source.t()]
   def sources_of(%Call{kind: :external, target: target}, _result),
@@ -385,9 +388,6 @@ defmodule Aqua.Loop.Policy do
 
   def sources_of(%Call{kind: :catalog, tool: "feed", action: "list"}, result),
     do: feed_sources(result)
-
-  def sources_of(%Call{kind: :launch, target: reference}, _result),
-    do: [Prima.Source.outside(reference)]
 
   def sources_of(%Call{}, _result), do: []
 

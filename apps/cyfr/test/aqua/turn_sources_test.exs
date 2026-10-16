@@ -18,6 +18,8 @@ defmodule Aqua.TurnSourcesTest do
 
   use PrismWeb.ConnCase, async: false
 
+  import Ecto.Query, only: [from: 2]
+
   alias Aqua.Tape
   alias Arca.ThreadStorage, as: Threads
   alias Cyfr.Test.ScriptedWorker
@@ -301,6 +303,54 @@ defmodule Aqua.TurnSourcesTest do
     end
   end
 
+  describe "a launched component" do
+    test "is outside, named by its reference, only when an execution of its tree was admitted with egress",
+         %{ctx: ctx, thread: thread} do
+      turn = running!(ctx, thread)
+
+      quiet = launched!(ctx, [])
+      assert closed_launch!(ctx, turn, "formula:local.quiet", quiet) == []
+
+      loud = launched!(ctx, ["api.example.com"])
+
+      assert closed_launch!(ctx, turn, "formula:local.loud", loud) ==
+               [Source.outside("formula:local.loud")]
+
+      # A quiet root whose child reached the network.
+      tree = launched!(ctx, [])
+      child = launched!(ctx, ["feeds.example"])
+
+      {1, _} =
+        Arca.Repo.update_all(
+          from(e in Arca.Schemas.Execution, where: e.id == ^child),
+          set: [root_execution_id: tree, parent_execution_id: tree]
+        )
+
+      assert Source.outside("formula:local.tree") in closed_launch!(
+               ctx,
+               turn,
+               "formula:local.tree",
+               tree
+             )
+
+      # A tree with no row, and a launch naming no execution, cannot show
+      # they stayed in the athanor.
+      assert Source.outside("formula:local.gone") in closed_launch!(
+               ctx,
+               turn,
+               "formula:local.gone",
+               "exec_none"
+             )
+
+      assert Source.outside("formula:local.unnamed") in closed_launch!(
+               ctx,
+               turn,
+               "formula:local.unnamed",
+               nil
+             )
+    end
+  end
+
   # ---------------------------------------------------------------------------
   # Helpers
   # ---------------------------------------------------------------------------
@@ -337,6 +387,81 @@ defmodule Aqua.TurnSourcesTest do
   # boundary.
   defp accept_large!(ctx, thread),
     do: accept!(ctx, thread, "@aqua read this\n" <> String.duplicate("lorem ipsum ", 7_000))
+
+  # A running turn on a root of its own, as the loop holds one.
+  defp running!(ctx, thread) do
+    turn = accept!(ctx, thread, "@aqua launch it")
+
+    {:ok, %{execution: execution, attempt: attempt}} =
+      Arca.Execution.admit(
+        %{
+          id: "exec_src_#{System.unique_integer([:positive])}",
+          reference: "agent:local.aqua",
+          user_id: ctx.user_id,
+          athanor_id: ctx.athanor_id,
+          component_type: "agent",
+          kind: "turn",
+          turn_id: turn.id,
+          origin: :interactive
+        },
+        reservation: %{budget_id: "bgt_#{System.unique_integer([:positive])}", cap: 4},
+        grant: Cyfr.Test.AttemptFixtures.grant(ctx.athanor_id),
+        verify: &Sanctum.ExecutionStanding.verify/1
+      )
+
+    {:ok, turn} =
+      Tape.start_turn(ctx, turn, %{
+        root_execution_id: execution.id,
+        attempt: attempt.attempt,
+        profile_id: "prof_src",
+        consent_id: "consent_src",
+        recovery_limit: Aqua.Runner.RecoveryPolicy.max_attempts()
+      })
+
+    turn
+  end
+
+  # A launched root admitted with `domains` as its egress, as admission
+  # records the policy it enforced.
+  defp launched!(ctx, domains) do
+    id = "exec_launched_#{System.unique_integer([:positive])}"
+
+    {:ok, _} =
+      Arca.Execution.admit(
+        %{
+          id: id,
+          reference: "formula:local.launched",
+          user_id: ctx.user_id,
+          athanor_id: ctx.athanor_id,
+          component_type: "formula",
+          origin: :interactive
+        },
+        grant: Cyfr.Test.AttemptFixtures.grant(ctx.athanor_id),
+        verify: &Sanctum.ExecutionStanding.verify/1
+      )
+
+    {1, _} =
+      Arca.Repo.update_all(from(e in Arca.Schemas.Execution, where: e.id == ^id),
+        set: [host_policy: Jason.encode!(%{allowed_domains: domains, allowed_tools: []})]
+      )
+
+    id
+  end
+
+  # One step of the turn closed as a launch of `reference` that started
+  # `execution_id`: the sources it added to the turn's.
+  defp closed_launch!(ctx, turn, reference, execution_id) do
+    before = sources(ctx, turn)
+    {:ok, step} = Tape.record_model_intent(ctx, turn, %{})
+    {:ok, step} = Tape.mark_dispatched(ctx, turn, step)
+
+    {:ok, _} =
+      Tape.close_step(ctx, turn, step, "ok", %{
+        launched: %{reference: reference, execution_id: execution_id}
+      })
+
+    sources(ctx, turn) -- before
+  end
 
   defp status(ctx, turn) do
     {:ok, %{status: status}} = Tape.turn(ctx, turn.id)
