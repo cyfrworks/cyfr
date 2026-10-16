@@ -95,7 +95,9 @@ defmodule Opus.Record do
           retention_class: String.t() | nil,
           retained_input: map() | nil,
           grant: Prima.ExecutionGrant.t() | nil,
-          origin: Prima.Origin.t() | nil
+          origin: Prima.Origin.t() | nil,
+          sources: [Prima.Source.t()],
+          launch_classes: [Prima.Source.class()]
         }
 
   # One execution row and the admission inputs that travel with it: the
@@ -159,7 +161,14 @@ defmodule Opus.Record do
     # context set. A child names none: its row carries its parent's,
     # read where it is admitted (`Arca.Execution.admit/2`). Nil on a
     # record read back.
-    :origin
+    :origin,
+    # A root's seed (`Prima.Source`), from what admitted it (`root_seed/2`);
+    # a child's is its parent's ledger, read where it is admitted. Empty on
+    # a record read back.
+    sources: [],
+    # The classes an approved launch let flow to every exit of its tree,
+    # written into the root's policy (`Arca.Execution.launch_key/0`).
+    launch_classes: []
   ]
 
   @doc """
@@ -187,6 +196,15 @@ defmodule Opus.Record do
   entry that built `ctx` set, into the row `write_started/2` admits; no
   option names one. A record with a `:parent_execution_id` carries none,
   and its row takes its parent's.
+
+  A root's source ledger is seeded from what admitted it, never from an
+  argument: an approved launch's stamp (`:launch`, `%{sources, classes}`,
+  which `Opus.Admission` takes off the approver's context alone) seeds the
+  turn's sources and writes the classes the person let flow; a webhook's
+  run starts outside; a frame's invocation starts with the classes its
+  declared reads may carry (`:frame_sources`, which `Opus.Tincture`
+  alone passes); an interactive, programmatic, scheduled or feed run
+  starts empty until it reads. A child's is its parent's.
   """
   @spec new(Context.t(), String.t(), map(), keyword()) :: t()
   def new(%Context{} = ctx, reference, input, opts \\ []) do
@@ -232,8 +250,34 @@ defmodule Opus.Record do
       retained_input: Keyword.get(opts, :retained_input),
       grant: Keyword.get(opts, :grant),
       # The context's, never an option's: the admission entry decides.
-      origin: if(is_nil(parent_execution_id), do: ctx.origin)
+      origin: if(is_nil(parent_execution_id), do: ctx.origin),
+      sources: if(is_nil(parent_execution_id), do: root_seed(ctx, opts), else: []),
+      launch_classes: if(is_nil(parent_execution_id), do: launch_classes(opts), else: [])
     }
+  end
+
+  defp root_seed(%Context{} = ctx, opts) do
+    case Keyword.get(opts, :launch) do
+      %{sources: sources} when is_list(sources) ->
+        Prima.Source.set(sources)
+
+      _no_launch ->
+        cond do
+          ctx.origin in [:webhook, "webhook"] -> [Prima.Source.outside("webhook")]
+          is_list(Keyword.get(opts, :frame_sources)) -> Keyword.fetch!(opts, :frame_sources)
+          true -> []
+        end
+    end
+  end
+
+  defp launch_classes(opts) do
+    case Keyword.get(opts, :launch) do
+      %{classes: classes} when is_list(classes) ->
+        Enum.filter(Prima.Source.classes(), &(&1 in classes))
+
+      _no_launch ->
+        []
+    end
   end
 
   defp default_retention_class(%Context{} = ctx),
@@ -446,6 +490,16 @@ defmodule Opus.Record do
   defp reaches_outside?(%{"allowed_domains" => [_ | _]}), do: true
   defp reaches_outside?(_policy), do: false
 
+  # The root's policy with the classes its approved launch let flow, read
+  # for every send of its tree (`Arca.Execution.flow_state/2`).
+  defp launch_policy(%__MODULE__{launch_classes: []} = record), do: record.host_policy
+
+  defp launch_policy(%__MODULE__{host_policy: policy, launch_classes: classes}) do
+    (policy || %{})
+    |> Map.new(fn {key, value} -> {to_string(key), value} end)
+    |> Map.put(Arca.Execution.launch_key(), Enum.map(classes, &Atom.to_string/1))
+  end
+
   defp admit(%__MODULE__{} = record, opts, payloads) do
     case Arca.Execution.admit(
            %{
@@ -461,7 +515,7 @@ defmodule Opus.Record do
              started_at: record.started_at,
              status: "running",
              input: encode_json(input_envelope(record)),
-             host_policy: encode_json(record.host_policy),
+             host_policy: encode_json(launch_policy(record)),
              parent_execution_id: record.parent_execution_id,
              child_key: record.child_key,
              root_execution_id: record.root_execution_id,
@@ -472,7 +526,8 @@ defmodule Opus.Record do
              kind: record.kind || "component",
              turn_id: record.turn_id,
              schedule_id: record.schedule_id,
-             origin: record.origin
+             origin: record.origin,
+             sources: record.sources
            },
            Keyword.merge(
              [

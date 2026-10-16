@@ -155,6 +155,17 @@ defmodule Arca.Execution do
   - `:reaches_outside` — the run was admitted with egress (its caller's
     reading of its own edge): its tree's root, itself for a root, is
     marked in the same transaction (`reached_outside/2`).
+
+  The row's source ledger (`sources/2`) is seeded in the same
+  transaction. A root's is the `:sources` attr its admission path names
+  (`Prima.Source`s), absent read as none: the path above this module
+  states every root's seed. A child's is its parent's ledger as it stands
+  in the transaction — for a child of a turn root, the sources of the turn
+  its `:step` belongs to, or of every turn on that root when it names no
+  step — joined by any `:sources` its admission names, which are joined
+  into its ancestors' ledgers in the same transaction (`join_sources/3`),
+  as a tool-server call's server is before the call leaves. The seed is
+  also the `execution.started` event's `sources`, for audit.
   - `:grant` and `:verify` (required, `Arca.ExecutionStanding`) — the
     `Prima.ExecutionGrant` the attempt is stamped with and the caller's
     check over it, asked first in the transaction, before any row is
@@ -231,6 +242,7 @@ defmodule Arca.Execution do
 
       inherits!(athanor_id, Map.get(attrs, :parent_execution_id), grant)
       attrs = origin!(athanor_id, attrs)
+      attrs = seed!(athanor_id, attrs, Keyword.get(opts, :step))
 
       execution =
         case Arca.Repo.insert(Row.start_changeset(attrs)) do
@@ -348,7 +360,10 @@ defmodule Arca.Execution do
           Prima.Actor.in_athanor(athanor_id),
           execution.id,
           "execution.started",
-          data: %{"attempt" => attempt_id}
+          data: %{
+            "attempt" => attempt_id,
+            "sources" => execution.sources |> ledger_text() |> Prima.Source.to_json_list()
+          }
         )
 
       %{
@@ -549,6 +564,230 @@ defmodule Arca.Execution do
     case decoded_policy(policy) do
       {:ok, map} -> {:ok, Map.get(map, @reached_key) == true}
       :error -> {:error, :unreadable}
+    end
+  end
+
+  @doc """
+  A run's source ledger (`Prima.Source`): every class it read, seeded at
+  admission and only ever grown (`join_sources/3`). A turn root's ledger
+  is its turns' (`Arca.TurnStorage.chain_sources/2`): the root execution
+  of a host loop records none of its own. A stored ledger that is absent
+  or does not read is one unnamed outside source, never none: provenance
+  that cannot be read is not the athanor's own. `{:error, :not_found}`
+  for no such row in the caller's athanor.
+  """
+  @spec sources(Prima.Actor.t(), String.t()) ::
+          {:ok, [Prima.Source.t()]} | {:error, :not_found | :database_error}
+  def sources(%Prima.Actor{} = actor, id) when is_binary(id) do
+    Arca.Repo.Errors.with_db_rescue("Execution.sources", fn ->
+      case row_of(actor, id) do
+        nil -> {:error, :not_found}
+        %Row{} = row -> {:ok, ledger!(row)}
+      end
+    end)
+  end
+
+  # The key of the classes an approved launch let flow, in its root's
+  # `host_policy`.
+  @launch_key "launch_flows"
+
+  @doc """
+  What a send of the run `id` is decided on: its ledger (`sources/2`) and
+  the classes the launch that started its tree let flow to every exit of
+  that tree (`:launch_classes`, from the root's `host_policy`, written by
+  its admission; empty for a tree no launch started or a root no row
+  holds). `{:error, :not_found}` for no such row.
+  """
+  @spec flow_state(Prima.Actor.t(), String.t()) ::
+          {:ok, %{sources: [Prima.Source.t()], launch_classes: [Prima.Source.class()]}}
+          | {:error, :not_found | :database_error}
+  def flow_state(%Prima.Actor{} = actor, id) when is_binary(id) do
+    Arca.Repo.Errors.with_db_rescue("Execution.flow_state", fn ->
+      case row_of(actor, id) do
+        nil ->
+          {:error, :not_found}
+
+        %Row{} = row ->
+          root =
+            case row.root_execution_id do
+              root_id when is_binary(root_id) and root_id != row.id -> row_of(actor, root_id)
+              _own -> row
+            end
+
+          {:ok, %{sources: ledger!(row), launch_classes: launch_classes(root)}}
+      end
+    end)
+  end
+
+  defp launch_classes(%Row{host_policy: policy}) do
+    with {:ok, map} <- decoded_policy(policy),
+         classes when is_list(classes) <- Map.get(map, @launch_key) do
+      by_spelling = Map.new(Prima.Source.classes(), &{Atom.to_string(&1), &1})
+      for class <- classes, Map.has_key?(by_spelling, class), do: Map.fetch!(by_spelling, class)
+    else
+      _none -> []
+    end
+  end
+
+  defp launch_classes(nil), do: []
+
+  @doc "The key an approved launch's classes are written under in its root's `host_policy`."
+  @spec launch_key() :: String.t()
+  def launch_key, do: @launch_key
+
+  @doc """
+  Join `sources` into the ledger of the run `id` and of every ancestor up
+  its admission chain (`parent_execution_id`), stopping below a turn root,
+  whose ledger is its turns', in one transaction: the rows are locked
+  root first, read again under the lock and written only where the set
+  grows, so concurrent joins in one tree neither deadlock nor lose an
+  addition. Called before the bytes the sources describe reach the run,
+  so every byte a child hands up is preceded by its ancestors holding its
+  provenance. `{:error, :not_found}` for no such row.
+  """
+  @spec join_sources(Prima.Actor.t(), String.t(), [Prima.Source.t()]) ::
+          :ok | {:error, :not_found | :database_error}
+  def join_sources(%Prima.Actor{athanor_id: athanor_id} = actor, id, sources)
+      when is_binary(athanor_id) and athanor_id != "" and is_binary(id) and is_list(sources) do
+    Arca.Repo.Errors.with_db_rescue("Execution.join_sources", fn ->
+      case row_of(actor, id) do
+        nil ->
+          {:error, :not_found}
+
+        %Row{} ->
+          if sources == [] do
+            :ok
+          else
+            Arca.Repo.locking_transaction(fn -> join_chain!(athanor_id, id, sources) end)
+            |> case do
+              {:ok, :ok} -> :ok
+              {:error, reason} -> {:error, reason}
+            end
+          end
+      end
+    end)
+  end
+
+  def join_sources(%Prima.Actor{}, _id, _sources), do: {:error, :not_found}
+
+  # The run and its ancestors up to the first turn root (excluded), locked
+  # root first and each joined under its own lock.
+  # arca:db-raise-ok inside the caller's transaction
+  defp join_chain!(athanor_id, id, sources) do
+    athanor_id
+    |> chain!(id, [], 0)
+    |> Enum.each(fn chain_id ->
+      from(e in Row,
+        where: e.athanor_id == ^athanor_id and e.id == ^chain_id,
+        select: e.sources
+      )
+      |> Arca.QueryHelpers.for_update()
+      |> Arca.Repo.all()
+      |> case do
+        [stored] ->
+          joined = Prima.Source.encode(Prima.Source.union(ledger_text(stored), sources))
+
+          if joined != stored do
+            from(e in Row, where: e.athanor_id == ^athanor_id and e.id == ^chain_id)
+            |> Arca.Repo.update_all(set: [sources: joined])
+          end
+
+        [] ->
+          :ok
+      end
+    end)
+  end
+
+  # The admission chain from `id` up, as ids root first, stopping below a
+  # turn root. Bounded: a chain longer than any depth an admission allows
+  # is cut there rather than walked without end.
+  @max_chain 64
+
+  # arca:db-raise-ok inside the caller's transaction
+  defp chain!(_athanor_id, nil, acc, _depth), do: acc
+  defp chain!(_athanor_id, _id, acc, depth) when depth >= @max_chain, do: acc
+
+  defp chain!(athanor_id, id, acc, depth) do
+    from(e in Row,
+      where: e.athanor_id == ^athanor_id and e.id == ^id,
+      select: {e.kind, e.parent_execution_id}
+    )
+    |> Arca.Repo.one()
+    |> case do
+      nil -> acc
+      {"turn", _parent} -> acc
+      {_kind, parent} -> chain!(athanor_id, parent, [id | acc], depth + 1)
+    end
+  end
+
+  # A row's ledger: a turn root's is its turns'; any other's is its stored
+  # set, an absent or unreadable one an unnamed outside source.
+  # arca:db-raise-ok inside the caller's rescue or transaction
+  defp ledger!(%Row{kind: "turn", id: id, athanor_id: athanor_id}),
+    do: Arca.TurnStorage.chain_sources!(Prima.Actor.in_athanor(athanor_id), id)
+
+  defp ledger!(%Row{sources: stored}), do: ledger_text(stored)
+
+  defp ledger_text(nil), do: [Prima.Source.outside(nil)]
+  defp ledger_text(stored) when is_binary(stored), do: Prima.Source.decode(stored)
+
+  # The seed `admit/2` writes (see its doc): a root's as named; a child's
+  # its parent's ledger joined by what its admission names, which joins
+  # its ancestors first, their execution rows locked before any attempt
+  # row is.
+  # arca:db-raise-ok inside the caller's transaction
+  defp seed!(athanor_id, attrs, step) do
+    named = named_sources!(Map.get(attrs, :sources))
+
+    case Map.get(attrs, :parent_execution_id) do
+      nil ->
+        Map.put(attrs, :sources, Prima.Source.encode(named))
+
+      parent_id ->
+        inherited = parent_ledger!(athanor_id, parent_id, step)
+        if named != [], do: join_chain!(athanor_id, parent_id, named)
+        Map.put(attrs, :sources, Prima.Source.encode(Prima.Source.union(inherited, named)))
+    end
+  end
+
+  # arca:db-raise-ok inside the caller's transaction
+  defp named_sources!(nil), do: []
+
+  defp named_sources!(sources) when is_list(sources) do
+    if Enum.all?(sources, &is_struct(&1, Prima.Source)),
+      do: Prima.Source.set(sources),
+      else: Arca.Repo.rollback(:invalid_sources)
+  end
+
+  defp named_sources!(_sources), do: Arca.Repo.rollback(:invalid_sources)
+
+  # The parent's ledger as it stands: a turn root's is the turn the
+  # child's step belongs to — a step of another root's turn admits
+  # nothing — or, with no step, every turn on that root.
+  # arca:db-raise-ok inside the caller's transaction
+  defp parent_ledger!(athanor_id, parent_id, step) do
+    case Arca.Repo.one(from(e in Row, where: e.athanor_id == ^athanor_id and e.id == ^parent_id)) do
+      nil ->
+        Arca.Repo.rollback(:parent_ended)
+
+      %Row{kind: "turn"} ->
+        case step do
+          %{id: step_id} when is_binary(step_id) ->
+            case Arca.TurnStorage.step_sources!(
+                   Prima.Actor.in_athanor(athanor_id),
+                   step_id,
+                   parent_id
+                 ) do
+              {:ok, sources} -> sources
+              :none -> Arca.Repo.rollback(:step_superseded)
+            end
+
+          _no_step ->
+            Arca.TurnStorage.chain_sources!(Prima.Actor.in_athanor(athanor_id), parent_id)
+        end
+
+      %Row{} = parent ->
+        ledger!(parent)
     end
   end
 

@@ -125,6 +125,20 @@ defmodule Sanctum.Context do
   @type approved_entry :: %{entry: String.t(), name: String.t()}
 
   @typedoc """
+  What an approved launch's card bound for the root it dispatches: the
+  turn's sources it seeds (`sources`), the classes the person let flow to
+  every exit of the launched tree (`classes`), the consent revision the
+  card showed the launched grant at (`consent_id`) and the root's
+  pre-minted id (`execution_id`).
+  """
+  @type launch :: %{
+          sources: [Prima.Source.t()],
+          classes: [Prima.Source.class()],
+          consent_id: String.t() | nil,
+          execution_id: String.t()
+        }
+
+  @typedoc """
   The frame a context acts for, when a frame credential established it
   (`Sanctum.Caller.establish({:frame_credential, bearer}, …)`): the
   credential row's `id`, the shell's `frame_id`, the tincture version the
@@ -163,6 +177,7 @@ defmodule Sanctum.Context do
           client_id: String.t() | nil,
           confirmation_id: String.t() | nil,
           approved_entry: approved_entry() | nil,
+          launch: launch() | nil,
           origin: Prima.Origin.t() | nil,
           authenticated: boolean(),
           anonymous: boolean(),
@@ -238,6 +253,14 @@ defmodule Sanctum.Context do
     # entry under this name, and clears it from the context the run
     # carries on, so it rides that one call and is never compared again.
     :approved_entry,
+    # What an approved launch's card bound for its root (`t:launch/0`), or
+    # nil. Like `approved_entry`, only `Aqua.Launch.dispatch/2` sets it, on
+    # the approver's context for the one `execution.run` it dispatches;
+    # nothing a caller sends can name one and `build/1` never sets it. The
+    # root's admission (`Opus.Admission`) seeds the root from it, refuses a
+    # root whose loaded consent revision is not the one the card showed,
+    # and clears it from the context the run carries on.
+    :launch,
     # How the run this context starts began (`Prima.Origin`): set by the
     # admission entry that builds the context, never from a caller's
     # argument, or nil where no entry named one.

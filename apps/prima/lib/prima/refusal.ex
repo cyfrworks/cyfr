@@ -390,6 +390,14 @@ defmodule Prima.Refusal do
 
   defp row(:action_missing), do: {:invalid_argument, "Missing required argument: action"}
 
+  # A send whose run read a class its grant declares no flow of to the
+  # exit (`Prima.Flow`): the classes and the exit's host or server name.
+  defp row({:flow_not_declared, %{classes: [_ | _] = classes, exit: exit}})
+       when is_binary(exit) do
+    if Enum.all?(classes, &(&1 in Prima.Source.classes())),
+      do: {:forbidden, Prima.Flow.sentence(classes, exit)}
+  end
+
   defp row({:unknown_action, name_action}) when is_binary(name_action),
     do: {:invalid_argument, "Unknown action: #{name_action}"}
 
@@ -750,6 +758,12 @@ defmodule Prima.Refusal do
     do:
       {:conflict,
        "The account this launch was approved for has changed since it was approved, so nothing " <>
+         "ran: ask again to approve it as it stands now."}
+
+  defp row(:approved_grant_moved),
+    do:
+      {:conflict,
+       "The grant this launch was approved under has changed since it was approved, so nothing " <>
          "ran: ask again to approve it as it stands now."}
 
   defp row(reason) when reason in @barrier_conflicts,

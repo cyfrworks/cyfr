@@ -47,8 +47,9 @@ defmodule Prima.PinnedTarget do
   address), `metadata` (a metadata address, refused before any policy),
   `resolution` (the name resolves to no address), `redirect_credentials`
   (a redirect hop that would carry the request's credentials to another
-  origin than the pin it came from) and `malformed` (the args do not
-  read).
+  origin than the pin it came from), `flow` (the run read a source class
+  its grant declares no flow of to the host, `Prima.Flow`) and `malformed`
+  (the args do not read).
   """
 
   @enforce_keys [:id, :ip, :family, :scheme, :port, :host, :expires_at]
@@ -61,7 +62,8 @@ defmodule Prima.PinnedTarget do
   @type purpose :: :fetch | :stream | :redirect | :attached
 
   @typedoc "A pin `egress_pin` refuses, as its error answer names it."
-  @type refusal :: :denied | :metadata | :resolution | :redirect_credentials | :malformed
+  @type refusal ::
+          :denied | :metadata | :resolution | :redirect_credentials | :flow | :malformed
 
   @typedoc "An `egress_pin` request's args, read."
   @type request :: %{url: String.t(), purpose: purpose(), from: String.t() | nil}
@@ -77,7 +79,7 @@ defmodule Prima.PinnedTarget do
         }
 
   @purposes [:fetch, :stream, :redirect]
-  @refusals [:denied, :metadata, :resolution, :redirect_credentials, :malformed]
+  @refusals [:denied, :metadata, :resolution, :redirect_credentials, :flow, :malformed]
   @members ~w(id ip family scheme port host expires_at)
 
   @id ~r/\A[A-Za-z0-9_-]{1,128}\z/

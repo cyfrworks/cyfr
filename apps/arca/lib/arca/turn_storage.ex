@@ -1924,6 +1924,84 @@ defmodule Arca.TurnStorage do
 
   def chain_sources(%Prima.Actor{}, _root_execution_id), do: {:error, :no_athanor}
 
+  @doc """
+  `chain_sources/2` inside the caller's transaction: the joined sources of
+  every turn on `root_execution_id`, raising as the transaction's own
+  reads do.
+  """
+  @spec chain_sources!(Prima.Actor.t(), String.t()) :: [Prima.Source.t()]
+  # arca:db-raise-ok inside the caller's transaction
+  def chain_sources!(%Prima.Actor{athanor_id: athanor_id}, root_execution_id)
+      when is_binary(athanor_id) and athanor_id != "" and is_binary(root_execution_id) do
+    from(t in Turn,
+      where: t.athanor_id == ^athanor_id and t.root_execution_id == ^root_execution_id,
+      select: t.sources
+    )
+    |> Arca.Repo.all()
+    |> Enum.flat_map(&Prima.Source.decode/1)
+    |> Prima.Source.set()
+  end
+
+  def chain_sources!(%Prima.Actor{}, _root_execution_id),
+    do: Arca.QueryHelpers.no_athanor!("Arca.TurnStorage.chain_sources!/2")
+
+  @doc """
+  The sources of the turn the step `step_id` belongs to, as they stand
+  inside the caller's transaction: `{:ok, sources}` when that turn runs on
+  `root_execution_id`, `:none` for a step of no turn on it. What a child a
+  loop step admits under a turn root starts from: the step's own turn, a
+  clone's included, with every source its step opened with already joined.
+  """
+  @spec step_sources!(Prima.Actor.t(), String.t(), String.t()) ::
+          {:ok, [Prima.Source.t()]} | :none
+  # arca:db-raise-ok inside the caller's transaction
+  def step_sources!(%Prima.Actor{athanor_id: athanor_id}, step_id, root_execution_id)
+      when is_binary(athanor_id) and athanor_id != "" and is_binary(step_id) and
+             is_binary(root_execution_id) do
+    from(s in TurnStep,
+      join: t in Turn,
+      on: t.id == s.turn_id and t.athanor_id == s.athanor_id,
+      where: s.athanor_id == ^athanor_id and s.id == ^step_id,
+      where: t.root_execution_id == ^root_execution_id,
+      select: t.sources
+    )
+    |> Arca.Repo.one()
+    |> case do
+      nil -> :none
+      stored -> {:ok, Prima.Source.decode(stored)}
+    end
+  end
+
+  def step_sources!(%Prima.Actor{}, _step_id, _root_execution_id),
+    do: Arca.QueryHelpers.no_athanor!("Arca.TurnStorage.step_sources!/3")
+
+  @doc """
+  Join `sources` into the turn `turn_id`'s, under the turn's row lock and
+  only while the caller still holds the turn at `attrs[:fence]`
+  (`{:error, :superseded}` otherwise): what a model or hand child's
+  persisted ledger brings into its turn before the turn uses its answer.
+  The set only grows.
+  """
+  @spec join_sources(Prima.Actor.t(), String.t(), [Prima.Source.t()], map()) ::
+          :ok | {:error, term()}
+  def join_sources(%Prima.Actor{athanor_id: athanor_id}, turn_id, sources, attrs)
+      when is_binary(athanor_id) and athanor_id != "" and is_binary(turn_id) and
+             is_list(sources) and is_map(attrs) do
+    Arca.Repo.Errors.with_db_rescue("Arca.TurnStorage.join_sources", fn ->
+      Arca.Repo.locking_transaction(fn ->
+        turn = own!(athanor_id, turn_id, attrs)
+        _turn = join_sources!(athanor_id, turn, sources!(sources))
+        :ok
+      end)
+      |> case do
+        {:ok, :ok} -> :ok
+        {:error, reason} -> {:error, reason}
+      end
+    end)
+  end
+
+  def join_sources(%Prima.Actor{}, _turn_id, _sources, _attrs), do: {:error, :no_athanor}
+
   @doc "The open clone turns under `turn_id`, oldest first."
   @spec open_clones(Prima.Actor.t(), String.t()) :: {:ok, [map()]} | {:error, term()}
   def open_clones(%Prima.Actor{athanor_id: athanor_id}, turn_id)

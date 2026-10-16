@@ -336,7 +336,13 @@ defmodule Opus.Admission do
       # the context the run carries on (its row, its close, its attempt and
       # so its chain, its children and its calls) holds none, so nothing
       # later in the run compares against it.
-      ctx = %{ctx | approved_entry: nil}
+      #
+      # An approved launch's stamp seeds the root's row and is cleared the
+      # same way: it reaches the record as an option taken off the
+      # context here alone, never from the caller's options.
+      launch = if is_nil(opts[:parent_execution_id]), do: ctx.launch
+      ctx = %{ctx | approved_entry: nil, launch: nil}
+      opts = opts |> Keyword.delete(:launch) |> launch_opts(launch)
       admit_owned(ctx, reference, input, opts)
     else
       {:error, :control_plane_lost}
@@ -483,6 +489,8 @@ defmodule Opus.Admission do
         schedule_id: opts[:schedule_id]
       ]
       |> maybe_put(:execution_id, opts[:execution_id])
+      |> maybe_put(:launch, opts[:launch])
+      |> maybe_put(:frame_sources, opts[:frame_sources])
       |> maybe_put(:reservation, reservation(opts))
 
     ctx
@@ -983,10 +991,21 @@ defmodule Opus.Admission do
          {:ok, profile} <- select.(candidates),
          {:ok, _ref, _type, component} <- inspect_component(ctx, reference),
          {:ok, authority, stamp} <-
-           approved_root(ctx, load_authority(ctx, profile, component, opts)) do
+           ctx |> approved_root(load_authority(ctx, profile, component, opts)) |> launched(ctx) do
       {:ok, %{authority: authority, stamp: stamp, profile: profile}}
     end
   end
+
+  # An approved launch roots only at the consent revision its card showed
+  # (the context's `launch`, which `Aqua.Launch` alone sets): the card bound
+  # the classes it let flow to that grant's exits, so a changed grant is a
+  # stale approval, refused before anything starts.
+  defp launched({:ok, authority, _stamp} = loaded, %Context{launch: %{consent_id: consent_id}})
+       when is_binary(consent_id) do
+    if authority.consent_id == consent_id, do: loaded, else: {:error, :approved_grant_moved}
+  end
+
+  defp launched(loaded, _ctx), do: loaded
 
   # An approved launch roots only on the account its card showed (the
   # context's `approved_entry`, which `Aqua.Launch` alone sets), judged on
@@ -1154,6 +1173,15 @@ defmodule Opus.Admission do
   end
 
   # An option is kept only when it carries a value.
+  # A launched root runs under the id its card's approval minted, so the
+  # loop can read its row whatever the launch answers.
+  defp launch_opts(opts, nil), do: opts
+
+  defp launch_opts(opts, %{execution_id: id} = launch) when is_binary(id),
+    do: opts |> Keyword.put(:launch, launch) |> Keyword.put_new(:execution_id, id)
+
+  defp launch_opts(opts, launch), do: Keyword.put(opts, :launch, launch)
+
   defp maybe_put(opts, _key, nil), do: opts
   defp maybe_put(opts, key, value), do: Keyword.put(opts, key, value)
 end

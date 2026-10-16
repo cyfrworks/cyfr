@@ -8,7 +8,8 @@ defmodule Prima.Authority.Blob do
   (name-level component refs) to their resolved limits and outgoing edges.
   Edges are keyed by target ref plus named-need slot and carry the exact
   resources that edge grants — vault projection, egress, storage, expanded
-  tool actions, tool servers. The reserved `"@ingress"` edge carries the
+  tool actions, tool servers, and the flows (`Prima.Flow`) its source
+  classes may take to its exits. The reserved `"@ingress"` edge carries the
   resources a profile's source node receives when invoked directly.
 
   Parsing is a fail-closed allowlist: unknown keys anywhere, malformed
@@ -111,10 +112,11 @@ defmodule Prima.Authority.Blob do
             egress: egress() | nil,
             storage: storage() | nil,
             tools: [String.t()],
-            tool_servers: [tool_server()]
+            tool_servers: [tool_server()],
+            flows: [Prima.Flow.t()]
           }
 
-    defstruct vault: nil, egress: nil, storage: nil, tools: [], tool_servers: []
+    defstruct vault: nil, egress: nil, storage: nil, tools: [], tool_servers: [], flows: []
 
     # A nil edge (an authority with `resources: :none`) and a nil resource
     # group read as empty lists, and an empty list grants nothing.
@@ -135,6 +137,11 @@ defmodule Prima.Authority.Blob do
     @spec tools(t() | nil) :: [String.t()]
     def tools(nil), do: []
     def tools(%__MODULE__{tools: tools}), do: tools
+
+    @doc "The flows the edge declares (`Prima.Flow`); empty for a nil edge."
+    @spec flows(t() | nil) :: [Prima.Flow.t()]
+    def flows(nil), do: []
+    def flows(%__MODULE__{flows: flows}), do: flows
 
     defp egress(nil, _key), do: []
     defp egress(%__MODULE__{egress: nil}, _key), do: []
@@ -277,6 +284,7 @@ defmodule Prima.Authority.Blob do
         else: Enum.map(edge.tool_servers, &tool_server_to_map/1)
       )
     )
+    |> put_resource("flows", if(edge.flows == [], do: nil, else: Prima.Flow.to_json(edge.flows)))
   end
 
   defp put_resource(map, _key, nil), do: map
@@ -687,7 +695,8 @@ defmodule Prima.Authority.Blob do
     "egress" => :egress,
     "storage" => :storage,
     "tools" => :tools,
-    "tool_servers" => :tool_servers
+    "tool_servers" => :tool_servers,
+    "flows" => :flows
   }
 
   # `placement` is `:placed` for an edge of a parsed graph, whose node and
@@ -923,6 +932,17 @@ defmodule Prima.Authority.Blob do
     |> case do
       {:ok, servers} -> {:ok, Enum.reverse(servers)}
       {:error, _} = err -> err
+    end
+  end
+
+  # A stored edge's flows were held to the manifest's declared exits when
+  # their consent committed; here they are held to the grammar, and an
+  # empty list is the absent resource, never written.
+  defp validate_resource(:flows, raw) when is_list(raw) and raw != [] do
+    case Prima.Flow.parse(raw, :any) do
+      {:ok, flows} when length(flows) == length(raw) -> {:ok, flows}
+      {:ok, _deduplicated} -> {:error, "must not repeat a flow"}
+      {:error, _reason} -> {:error, "must be a list of {from, to} flows"}
     end
   end
 

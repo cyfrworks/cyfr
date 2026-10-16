@@ -542,6 +542,19 @@ defmodule Opus do
   def cancel(%Context{} = ctx, execution_id), do: Dispatch.cancel(ctx, execution_id)
 
   @doc """
+  The source ledger of the execution `execution_id` in `ctx`'s athanor
+  (`Opus.Ledger`): `{:ok, sources}`; `{:error, :not_found}` for a row no
+  longer held — retention prunes a terminal run while its caller may
+  still be closing the step that ran it, so absence says nothing about
+  what ran; or `{:error, :unavailable}`. The loop's second carrier of a
+  child's provenance into its turn, read when the child failed.
+  """
+  @spec sources(Context.t(), String.t()) ::
+          {:ok, [Prima.Source.t()]} | {:error, :not_found | :unavailable}
+  def sources(%Context{} = ctx, execution_id) when is_binary(execution_id),
+    do: Opus.Ledger.sources(Context.actor(ctx), execution_id)
+
+  @doc """
   End a running execution because its consent changed underneath it: it
   ends `restart_required`, and a rerun selects the new revision.
   """

@@ -80,7 +80,9 @@ defmodule Opus.Close do
   component's catalyst envelope, whose error is its refusal: that run
   completes with the refusal as its output. An output that exceeds the
   node's `max_response_size` or cannot be encoded closes the run failed. Answers the result — `%{status: :completed, output: masked,
-  metadata: map}` — or `{:error, message}`. A cancel that closed the row
+  metadata: map, sources: [Prima.Source.t()]}`, `sources` the run's
+  ledger as its terminal write left it (`sources/1`) — or
+  `{:error, message}`. A cancel that closed the row
   first leaves the cancelled row standing; the result is still answered.
   A run whose athanor was archived while it ran is never answered as a
   success: its completion is refused (`Opus.Record.write_completed/1`),
@@ -113,7 +115,8 @@ defmodule Opus.Close do
       result = %{
         status: :completed,
         output: masked_output,
-        metadata: metadata(close, completed_record)
+        metadata: metadata(close, completed_record),
+        sources: sources(close)
       }
 
       result =
@@ -198,12 +201,32 @@ defmodule Opus.Close do
     end
   end
 
+  @doc """
+  The ledger of the run `close` ends (`Arca.Execution.sources/2`), read
+  after its terminal write, for the result its caller is handed: the
+  first carrier of a child's provenance to a turn. One that cannot be read
+  is an unnamed outside source, never none.
+  """
+  @spec sources(t()) :: [Prima.Source.t()]
+  def sources(%__MODULE__{ctx: ctx, record: record}) do
+    case Opus.Ledger.sources(Sanctum.Context.actor(ctx), record.id) do
+      {:ok, sources} -> sources
+      {:error, _unread} -> [Prima.Source.outside(nil)]
+    end
+  end
+
   # The row is read with the host-side context of its own terminal writes:
   # a child admitted on the guest plane cannot read it with its own.
   defp closed_answer(%__MODULE__{record: record} = close, message) do
     case Record.reread(record) do
       {:ok, %Record{status: :completed} = row} ->
-        {:ok, %{status: :completed, output: row.output, metadata: metadata(close, row)}}
+        {:ok,
+         %{
+           status: :completed,
+           output: row.output,
+           metadata: metadata(close, row),
+           sources: sources(close)
+         }}
 
       {:ok, %Record{status: status, error: error}} when status in [:failed, :cancelled] ->
         {:error, error || "Execution #{status}"}
