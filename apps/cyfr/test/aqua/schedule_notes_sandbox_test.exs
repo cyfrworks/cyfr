@@ -68,7 +68,7 @@ defmodule Aqua.ScheduleNotesSandboxTest do
       capture_log(fn ->
         # No sandbox owner here: its boot drain and the forced tick after
         # it both read with no connection to read on.
-        name = Module.concat(__MODULE__, Keeper)
+        name = Aqua.ScheduleNotesSandboxTest.Keeper
         keeper = start_supervised!({ScheduleNotes, name: name, tick_ms: :timer.hours(1)})
         send(keeper, :drain_all)
         :sys.get_state(keeper)
