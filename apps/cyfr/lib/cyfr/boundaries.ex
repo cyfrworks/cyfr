@@ -1770,7 +1770,8 @@ defmodule Cyfr.Boundaries do
       internal: 1,
       refocus: 2,
       require_permission: 2,
-      require_tenant!: 1
+      require_tenant!: 1,
+      stamp_launch: 2
     ],
     "Sanctum.Decisions" => [
       close: 3,

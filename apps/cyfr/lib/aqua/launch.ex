@@ -336,7 +336,7 @@ defmodule Aqua.Launch do
   end
 
   # The approver's context also carries what the card bound for the run's
-  # root (`Sanctum.Context`'s `launch`), set here alone and never from
+  # root (`Sanctum.Context.stamp_launch/2`, called here alone), never from
   # anything a caller sends: the turn's sources the root is seeded with
   # (`sources_hold/2` has held them to the card's), the classes the card
   # lets flow — only ever among those sources' own, and none for a card
@@ -346,15 +346,12 @@ defmodule Aqua.Launch do
   defp launching(approver, sources, %{classes: classes, consent_id: consent_id}, step) do
     held = if is_binary(consent_id), do: Prima.Source.classes_of(sources), else: []
 
-    %{
-      approver
-      | launch: %{
-          sources: sources,
-          classes: Enum.filter(classes, &(&1 in held)),
-          consent_id: consent_id,
-          execution_id: root_id(step)
-        }
-    }
+    Sanctum.Context.stamp_launch(approver, %{
+      sources: sources,
+      classes: Enum.filter(classes, &(&1 in held)),
+      consent_id: consent_id,
+      execution_id: root_id(step)
+    })
   end
 
   defp root_id(%{child_execution_id: id}) when is_binary(id), do: id

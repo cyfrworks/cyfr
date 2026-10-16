@@ -254,9 +254,10 @@ defmodule Sanctum.Context do
     # carries on, so it rides that one call and is never compared again.
     :approved_entry,
     # What an approved launch's card bound for its root (`t:launch/0`), or
-    # nil. Like `approved_entry`, only `Aqua.Launch.dispatch/2` sets it, on
-    # the approver's context for the one `execution.run` it dispatches;
-    # nothing a caller sends can name one and `build/1` never sets it. The
+    # nil. Set through `stamp_launch/2` alone, which `Aqua.Launch` alone
+    # calls, on the approver's context for the one `execution.run` it
+    # dispatches; nothing a caller sends can name one and `build/1` never
+    # sets it. The
     # root's admission (`Opus.Admission`) seeds the root from it, refuses a
     # root whose loaded consent revision is not the one the card showed,
     # and clears it from the context the run carries on.
@@ -690,6 +691,28 @@ defmodule Sanctum.Context do
   """
   @spec enter_guest(t()) :: t()
   def enter_guest(%__MODULE__{} = ctx), do: %{ctx | plane: :guest}
+
+  @doc """
+  `ctx` carrying an approved launch's stamp (`t:launch/0`): the one writer
+  of the field, whose root admission seeds the launched root from it
+  (`Opus.Admission`). It mints a host-trusted seed and the classes a tree
+  may send anywhere, so it is called from `Aqua.Launch` alone, a roster
+  holds (`Sanctum.LaunchStampBoundaryTest`). A stamp of another shape
+  raises.
+  """
+  @spec stamp_launch(t(), launch()) :: t()
+  def stamp_launch(
+        %__MODULE__{} = ctx,
+        %{sources: sources, classes: classes, consent_id: consent_id, execution_id: id} = launch
+      )
+      when is_list(sources) and is_list(classes) and (is_binary(consent_id) or is_nil(consent_id)) and
+             is_binary(id) do
+    unless Enum.all?(sources, &is_struct(&1, Prima.Source)) and
+             Enum.all?(classes, &(&1 in Prima.Source.classes())),
+           do: raise(ArgumentError, "a launch stamp names Prima.Source values and classes")
+
+    %{ctx | launch: Map.take(launch, [:sources, :classes, :consent_id, :execution_id])}
+  end
 
   @doc """
   The actor this context projects: a `Prima.Actor` with `athanor_id`,
