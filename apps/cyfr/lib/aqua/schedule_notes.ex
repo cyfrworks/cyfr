@@ -66,6 +66,11 @@ defmodule Aqua.ScheduleNotes do
 
   The write runs under the server's own context, able to read and write
   storage and nothing more, refocused on the record's athanor.
+
+  `:schedule_notes_enabled` false leaves it unstarted: under the test
+  sandbox a drain on a tick would work another test's records on the
+  connection that test lent, so the suite turns it off and the tests that
+  need a keeper start one.
   """
 
   use GenServer
@@ -94,7 +99,11 @@ defmodule Aqua.ScheduleNotes do
 
   @doc false
   def start_link(opts \\ []) do
-    GenServer.start_link(__MODULE__, opts, name: Keyword.get(opts, :name, __MODULE__))
+    if Application.get_env(:cyfr, :schedule_notes_enabled, true) do
+      GenServer.start_link(__MODULE__, opts, name: Keyword.get(opts, :name, __MODULE__))
+    else
+      :ignore
+    end
   end
 
   @impl true

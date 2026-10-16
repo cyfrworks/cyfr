@@ -282,11 +282,6 @@ defmodule Opus.Schedules.SchedulerTest do
   describe "the committed completion" do
     setup do
       :ok = Cyfr.Bus.subscribe_global(Cyfr.Bus.schedule_completions())
-
-      # The notes keeper hears every completion this suite publishes; its
-      # write is done before the test gives its sandbox back.
-      on_exit(fn -> :sys.get_state(Aqua.ScheduleNotes) end)
-      :ok
     end
 
     test "is published once per completed occurrence, after both writes, from this member", %{

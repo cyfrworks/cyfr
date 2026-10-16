@@ -61,11 +61,18 @@ defmodule Aqua.ScheduleNotesTest do
     Application.put_env(:arca, :base_path, test_path)
     on_exit(fn -> ControlPlane.record(:unclaimed) end)
 
-    # The member's own consumer drains on a tick and on every completion:
-    # held still for the case, which drains by hand, and let go after.
-    keeper = Process.whereis(ScheduleNotes)
-    on_exit(fn -> resume(keeper) end)
-    :ok = :sys.suspend(keeper)
+    # The suite starts no keeper (`:schedule_notes_enabled`): a case drains
+    # by hand, and a case about the process starts its own.
+    previous = Application.fetch_env(:cyfr, :schedule_notes_enabled)
+
+    on_exit(fn ->
+      case previous do
+        {:ok, value} -> Application.put_env(:cyfr, :schedule_notes_enabled, value)
+        :error -> Application.delete_env(:cyfr, :schedule_notes_enabled)
+      end
+    end)
+
+    Application.put_env(:cyfr, :schedule_notes_enabled, true)
 
     Cyfr.Test.Sandbox.stop_work_on_exit()
 
@@ -79,10 +86,13 @@ defmodule Aqua.ScheduleNotesTest do
     {:ok, user: user, athanor: athanor, ctx: ctx, profile_id: profile_id}
   end
 
-  defp resume(keeper) do
-    if Process.alive?(keeper), do: :sys.resume(keeper)
-  rescue
-    _ -> :ok
+  # This case's keeper, under the test's supervisor, which restarts it as
+  # the member's restarts its own. Its tick is an hour away unless the case
+  # asks for another; its boot drain has run when it is answered.
+  defp keeper!(opts \\ []) do
+    keeper = start_supervised!({ScheduleNotes, Keyword.put_new(opts, :tick_ms, :timer.hours(1))})
+    :sys.get_state(keeper)
+    keeper
   end
 
   # The profile a schedule fires under, with a head consent at revision 1.
@@ -238,21 +248,11 @@ defmodule Aqua.ScheduleNotesTest do
 
       source = source(run, schedule)
 
-      # The consumer restarts, and nothing is published on the bus: its
-      # boot drain finds the record.
-      keeper = Process.whereis(ScheduleNotes)
-      ref = Process.monitor(keeper)
-      Process.exit(keeper, :kill)
-      assert_receive {:DOWN, ^ref, :process, ^keeper, :killed}
-
-      wait_until(
-        fn -> match?({:ok, "applied"}, outcome(athanor, source)) end,
-        10_000,
-        "the restarted consumer to keep the note"
-      )
-
-      # Held still again for the rest of the case.
-      :ok = :sys.suspend(Process.whereis(ScheduleNotes))
+      # The consumer starts after the completion was published, so it
+      # never hears it: its boot drain finds the record.
+      keeper = keeper!()
+      assert {:ok, "applied"} = outcome(athanor, source)
+      :ok = :sys.suspend(keeper)
 
       assert {:ok, %{revision: 1, note: note}} = note(ctx, "nightly")
       assert note.content =~ "42 rows reconciled"
@@ -507,8 +507,7 @@ defmodule Aqua.ScheduleNotesTest do
       assert {:ok, %{revision: 0}} = note(ctx, schedule.id)
     end
 
-    test "an archived athanor's schedule writes nothing",
-         %{athanor: athanor, ctx: ctx} = context do
+    test "an archived athanor's schedule writes nothing", %{athanor: athanor} = context do
       schedule = keeping(context)
       run = ran!(schedule, 60, "x")
       {:ok, _} = Sanctum.Tenancy.Athanors.archive(athanor)
@@ -571,9 +570,9 @@ defmodule Aqua.ScheduleNotesTest do
     test "drains the athanor a completion it hears names",
          %{athanor: athanor, ctx: ctx} = context do
       schedule = keeping(context)
+      keeper = keeper!()
+      :ok = :sys.suspend(keeper)
       {_occurrence, execution_id} = ran!(schedule, 60, "heard")
-
-      keeper = Process.whereis(ScheduleNotes)
       :ok = :sys.resume(keeper)
 
       completion =
@@ -585,13 +584,30 @@ defmodule Aqua.ScheduleNotesTest do
       :ok = Cyfr.Bus.broadcast_global(Cyfr.Bus.schedule_completions(), completion)
       # One round trip: the completion ahead of it has been handled.
       :sys.get_state(keeper)
-      :ok = :sys.suspend(keeper)
 
       assert {:ok, %{revision: 1, note: %{content: "heard"}}} = note(ctx, schedule.id)
     end
 
+    test "drains on its tick a record no completion named", %{athanor: athanor} do
+      keeper = keeper!(tick_ms: 100)
+
+      # Written straight to the outbox, so nothing is published: only the
+      # tick reaches it. A run nobody asked to keep is answered with
+      # nothing written.
+      record = unkept_record!(athanor.id)
+      source = Prima.OutboxRecord.source(record)
+
+      wait_until(
+        fn -> match?({:ok, "applied"}, outcome(athanor, source)) end,
+        5_000,
+        "the keeper's tick to answer the record"
+      )
+
+      assert Process.whereis(ScheduleNotes) == keeper
+    end
+
     test "is subscribed again after a restart" do
-      before = Process.whereis(ScheduleNotes)
+      before = keeper!()
       ref = Process.monitor(before)
       Process.exit(before, :kill)
       assert_receive {:DOWN, ^ref, :process, ^before, :killed}
@@ -604,13 +620,11 @@ defmodule Aqua.ScheduleNotesTest do
         )
 
       restarted = Process.whereis(ScheduleNotes)
-      :ok = :sys.suspend(restarted)
       assert Cyfr.Bus.schedule_completions() in Registry.keys(Cyfr.PubSub, restarted)
     end
 
     test "survives a completion that names an athanor with nothing to keep" do
-      keeper = Process.whereis(ScheduleNotes)
-      :ok = :sys.resume(keeper)
+      keeper = keeper!()
 
       completion =
         ScheduleCompleted.new(Prima.Actor.in_athanor("ath_nowhere"), %{
@@ -620,9 +634,33 @@ defmodule Aqua.ScheduleNotesTest do
 
       :ok = Cyfr.Bus.broadcast_global(Cyfr.Bus.schedule_completions(), completion)
       :sys.get_state(keeper)
-      :ok = :sys.suspend(keeper)
       assert Process.whereis(ScheduleNotes) == keeper
     end
+  end
+
+  # An outcome record of a run nobody asked to keep, in `athanor_id`'s
+  # outbox, as a finish writes it.
+  defp unkept_record!(athanor_id) do
+    actor = Prima.Actor.in_athanor(athanor_id)
+    now = DateTime.utc_now()
+
+    record =
+      Prima.OutboxRecord.schedule_outcome(%{
+        occurrence: %{
+          id: Prima.UUID7.generate_id("occ"),
+          athanor_id: athanor_id,
+          scheduled_for: now,
+          execution_id: Prima.UUID7.execution_id(),
+          note_revision_read: nil
+        },
+        schedule: %{id: "sched_unkept", profile_id: "prof_unkept", updated_at: now},
+        consent_revision: nil,
+        keep: {false, nil},
+        output: "not for keeping"
+      })
+
+    :ok = Arca.Outbox.put!(actor, record)
+    record
   end
 
   defp lose_claim!(athanor_id, :lapsed) do
@@ -706,7 +744,14 @@ defmodule Aqua.ScheduleNotesSchedulerTest do
     Cyfr.Test.Sandbox.setup!()
 
     test_path = Path.join(System.tmp_dir!(), "notes_sched_#{System.unique_integer([:positive])}")
-    keys = [cyfr: :cron_scheduler_enabled, cyfr: :locus_runtime_workers, arca: :base_path]
+
+    keys = [
+      cyfr: :cron_scheduler_enabled,
+      cyfr: :schedule_notes_enabled,
+      cyfr: :locus_runtime_workers,
+      arca: :base_path
+    ]
+
     prev = Map.new(keys, fn {app, key} -> {{app, key}, Application.get_env(app, key)} end)
     ctx = Sanctum.TestContext.local()
 
@@ -714,14 +759,17 @@ defmodule Aqua.ScheduleNotesSchedulerTest do
       Prima.Slots.forgive_unreaped(Opus.Slots, ctx.athanor_id)
       File.rm_rf!(test_path)
 
+      # A switch the suite holds `false` is put back as `false`: deleted,
+      # it would read as its default, on.
       for {{app, key}, value} <- prev do
-        if value,
-          do: Application.put_env(app, key, value),
-          else: Application.delete_env(app, key)
+        if is_nil(value),
+          do: Application.delete_env(app, key),
+          else: Application.put_env(app, key, value)
       end
     end)
 
     Application.put_env(:cyfr, :cron_scheduler_enabled, true)
+    Application.put_env(:cyfr, :schedule_notes_enabled, true)
 
     Application.put_env(
       :cyfr,
@@ -783,7 +831,9 @@ defmodule Aqua.ScheduleNotesSchedulerTest do
   test "a fired run's note is kept by the restarted keeper, the completion that woke it lost", %{
     ctx: ctx
   } do
-    keeper = Process.whereis(Aqua.ScheduleNotes)
+    # The keeper is held still, so the completion that wakes it waits
+    # unread in its mailbox.
+    keeper = start_supervised!({Aqua.ScheduleNotes, tick_ms: :timer.hours(1)})
     :ok = :sys.suspend(keeper)
 
     {:ok, schedule} =

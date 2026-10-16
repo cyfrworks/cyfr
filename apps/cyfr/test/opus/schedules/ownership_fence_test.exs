@@ -1964,12 +1964,7 @@ defmodule Opus.Schedules.OwnershipFenceFeedsTest do
 
   defp script!(items), do: start_supervised!({ScriptedWorker, ref: @reference, script: items})
 
-  defp scheduler! do
-    # The notes keeper hears every completion; its write is done before
-    # the case gives its sandbox back.
-    on_exit(fn -> :sys.get_state(Aqua.ScheduleNotes) end)
-    start_supervised!(Scheduler)
-  end
+  defp scheduler!, do: start_supervised!(Scheduler)
 
   defp occurrences(actor, schedule_id) do
     {:ok, rows} = ScheduleOccurrences.list(actor, schedule_id)

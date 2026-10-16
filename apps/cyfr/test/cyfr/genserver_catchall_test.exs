@@ -20,7 +20,6 @@ defmodule Cyfr.GenServerCatchallTest do
     {Aqua.Loop.Worker, "Loop.Worker"},
     {Arca.Cache.Sweeper, "Sweeper"},
     {Cyfr.TelemetryBridge, "TelemetryBridge"},
-    {Aqua.ScheduleNotes, "ScheduleNotes"},
     {Cyfr.StandingWatch, "StandingWatch"},
     {Cyfr.Platform.Settings, "Platform.Settings"},
     {Arca.AuditHandler, "AuditHandler"},
@@ -39,6 +38,7 @@ defmodule Cyfr.GenServerCatchallTest do
   @not_probed %{
     Cyfr.RetentionScheduler => "gated by :retention_scheduler_enabled",
     Opus.Schedules.Scheduler => "gated by :cron_scheduler_enabled",
+    Aqua.ScheduleNotes => "gated by :schedule_notes_enabled; probed on an instance below",
     Cyfr.Cell => "gated by :control_plane_claim_enabled",
     Opus.Sweeper => "gated by :execution_sweeper_enabled",
     Opus.ArchiveWatch => "gated by :execution_archive_watch_enabled",
@@ -108,6 +108,39 @@ defmodule Cyfr.GenServerCatchallTest do
 
         assert Process.alive?(pid)
         GenServer.stop(pid)
+      end
+    end
+  end
+
+  describe "the schedule-notes keeper" do
+    # Off under the suite (`:schedule_notes_enabled`), so it is probed on
+    # a keeper of its own, which drains at its start and so needs the
+    # sandbox connection.
+    setup tags do
+      Cyfr.Test.Sandbox.setup!(tags)
+      previous = Application.fetch_env(:cyfr, :schedule_notes_enabled)
+
+      on_exit(fn ->
+        case previous do
+          {:ok, value} -> Application.put_env(:cyfr, :schedule_notes_enabled, value)
+          :error -> Application.delete_env(:cyfr, :schedule_notes_enabled)
+        end
+      end)
+
+      Application.put_env(:cyfr, :schedule_notes_enabled, true)
+      :ok
+    end
+
+    for message <- [@unexpected_msg, {:random, "payload"}] do
+      test "survives #{inspect(message)} and logs it" do
+        pid = start_supervised!({Aqua.ScheduleNotes, tick_ms: :timer.hours(1)})
+
+        assert capture_log(fn ->
+                 send(pid, unquote(Macro.escape(message)))
+                 :sys.get_state(pid)
+               end) =~ "unexpected message"
+
+        assert Process.alive?(pid)
       end
     end
   end

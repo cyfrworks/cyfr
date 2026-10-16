@@ -511,6 +511,7 @@ defmodule Cyfr.Cluster.Cell do
         {:locus_runtime_root, Application.fetch_env!(:cyfr, :locus_runtime_root)},
         {:retention_scheduler_enabled, true},
         {:cron_scheduler_enabled, true},
+        {:schedule_notes_enabled, true},
         # The security gate runs on every member: this build carries the
         # suite's compile-time skip permission, and turning the runtime
         # switch on is what keeps `Cyfr.Bootstrap` in the member's tree, so

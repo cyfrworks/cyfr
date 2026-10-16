@@ -2269,6 +2269,7 @@ defmodule Cyfr.Boundaries do
 
     # Boot switches with an in-code default; flipping one is a code change.
     cron_scheduler_enabled: :default,
+    schedule_notes_enabled: :default,
     execution_sweeper_enabled: :default,
     execution_archive_watch_enabled: :default,
     worker_watch_enabled: :default,

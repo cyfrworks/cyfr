@@ -151,6 +151,11 @@ config :cyfr, external_server_reconciler_enabled: false
 # stays within the owning test's sandbox lifetime.
 config :cyfr, cron_scheduler_enabled: false
 
+# The schedule-notes keeper drains at boot and on a timer: under the
+# shared sandbox its tick would work another test's records on the
+# connection that test lent. Its own tests start one.
+config :cyfr, schedule_notes_enabled: false
+
 # The projection reconciler starts and attaches nothing: its recovery and
 # its notifications would reconcile from its own process, on a sandbox
 # connection no test owns. Every read's barrier reconciles in the reader,
