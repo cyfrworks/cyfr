@@ -64,6 +64,7 @@ defmodule Sanctum.Providers.Passkey do
           consent: :interactive
         ),
         Operation.new("passkey", "revoke", "Revoke a passkey", [passkey_id()],
+          reduces_authority: true,
           kind: :destructive,
           planes: [:external],
           consent: :interactive

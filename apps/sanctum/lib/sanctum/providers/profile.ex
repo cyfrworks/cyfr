@@ -295,6 +295,7 @@ defmodule Sanctum.Providers.Profile do
               description: "Profile id (grant/list/revoke)"
             )
           ],
+          reduces_authority: true,
           kind: :destructive,
           planes: [:external],
           consent: :interactive

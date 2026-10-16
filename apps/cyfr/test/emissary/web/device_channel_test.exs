@@ -1241,6 +1241,74 @@ defmodule Emissary.Web.DeviceChannelTest do
   end
 
   # ==========================================================================
+  # The storage reserve
+  # ==========================================================================
+
+  describe "the storage reserve" do
+    setup [:seated]
+
+    # While the reserve is depleted the gate answers `confirmation.pending`
+    # only for a request named by its ref (`Sanctum.Catalog`), so a glass
+    # that reconnects reads no list: a revocation opened while it was away
+    # is not discovered there, and one whose opened fact it heard is read,
+    # proven and spent by its ref.
+    test "a reconnecting glass discovers no revocation opened while it was away, and proves one it heard opened",
+         %{session_ctx: session_ctx, user: user} do
+      authenticator = Sanctum.TestContext.passkey!(user.id)
+      glass = pair!(session_ctx)
+      heard_device = pair!(session_ctx)
+      away_device = pair!(session_ctx)
+
+      # Heard: the glass listens when the first revocation opens.
+      state = proven(glass)
+      {grant_id, _grant, state} = open_stream!(state, "s1")
+
+      assert {:error, {:confirmation_required, %{id: heard_id}}} =
+               revoke(session_ctx, heard_device.client_id)
+
+      {payload, _state} = event!(state, grant_id)
+      heard = Prima.Confirmation.ref(heard_id)
+      assert payload["ref"] == heard
+
+      # Away: the glass is offline when the second opens.
+      assert {:error, {:confirmation_required, %{id: away_id}}} =
+               revoke(session_ctx, away_device.client_id)
+
+      on_exit(fn -> Arca.StorageReserve.put(:ok) end)
+      Arca.StorageReserve.put(:depleted)
+
+      # The reconnect's read of every waiting record is refused, so the
+      # revocation opened while away is not found there.
+      state = proven(glass)
+
+      {error, state} = answer_error!(state, intent_message("p1", "confirmation.pending", %{}))
+      assert error["class"] == "unavailable"
+      refute inspect(error) =~ Prima.Confirmation.ref(away_id)
+
+      # The one it heard opened is read by its request and proven.
+      {%{"confirmations" => [entry]}, state} =
+        answer!(state, intent_message("p2", "confirmation.pending", %{"request" => heard}))
+
+      assert entry["ref"] == heard
+      assert entry["operation"] == "pairing.revoke"
+
+      {:ok, digest} = Prima.Identity.Encoding.unb64(entry["webauthn"]["challenge"], 32)
+      assertion = Sanctum.TestContext.Authenticator.assertion(authenticator, digest)
+
+      {confirmed, _state} =
+        answer!(
+          state,
+          intent_message("p3", "confirmation.confirm", %{"ref" => heard, "assertion" => assertion})
+        )
+
+      assert confirmed["state"] == "confirmed"
+
+      assert {:ok, %{standing: "revoked"}} =
+               revoke(%{session_ctx | confirmation_id: heard_id}, heard_device.client_id)
+    end
+  end
+
+  # ==========================================================================
   # The seal
   # ==========================================================================
 
@@ -1434,6 +1502,13 @@ defmodule Emissary.Web.DeviceChannelTest do
     assert {:event, %{grant_id: ^grant_id, payload: payload}} = decoded(json)
     {payload, state}
   end
+
+  defp revoke(ctx, client_id),
+    do:
+      Sanctum.Gate.call_external("pairing", ctx, %{
+        "action" => "revoke",
+        "client_id" => client_id
+      })
 
   defp answer!(state, message) do
     assert {:reply, :ok, {:text, json}, state} = send_frame(state, message)

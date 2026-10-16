@@ -108,6 +108,7 @@ defmodule Sanctum.Providers.Member do
                 "With an email or an identifier: withdraw only its pending invitation, never a member, and answer not found once it has been accepted (remove)"
             )
           ],
+          reduces_authority: true,
           kind: :destructive,
           planes: [:external]
         ),
@@ -121,6 +122,7 @@ defmodule Sanctum.Providers.Member do
                 "The athanor to act on — an id, a group slug, or @<namespace>. Defaults to the athanor in focus."
             )
           ],
+          reduces_authority: true,
           kind: :write,
           planes: [:external]
         )

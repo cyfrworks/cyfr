@@ -1111,8 +1111,11 @@ defmodule PrismWeb.SystemLayer do
     end
   end
 
+  # One record, read by its ref as the `request`: the read the gate still
+  # admits for an authority-reducing change while the storage reserve is
+  # depleted, when the whole list is refused.
   defp pending_entry(socket, ref) do
-    with {:ok, entries} <- pending_entries(socket) do
+    with {:ok, entries} <- pending_entries(socket, %{"request" => ref}) do
       case Enum.find(entries, &(&1.ref == ref)) do
         nil -> {:error, :not_pending}
         entry -> {:ok, entry}
@@ -1120,8 +1123,8 @@ defmodule PrismWeb.SystemLayer do
     end
   end
 
-  defp pending_entries(socket) do
-    case Ops.call_tool(socket.assigns.context, "confirmation/pending", %{}) do
+  defp pending_entries(socket, args \\ %{}) do
+    case Ops.call_tool(socket.assigns.context, "confirmation/pending", args) do
       {:ok, %{confirmations: entries}} -> {:ok, entries}
       {:error, reason} -> {:error, reason}
     end

@@ -22,6 +22,14 @@ defmodule Arca.DecisionLog do
   on SQLite the caller's transaction holds the one write lock this would
   wait for.
 
+  ## The storage reserve
+
+  While the home's storage reserve is depleted (`Arca.StorageReserve`),
+  every append and completion is refused at once as `:storage_reserve`,
+  before a worker starts: the space the reserve freed is kept for the
+  authority-reducing changes the gate still admits, and an audit row
+  never spends it.
+
   ## The writers
 
   The writing processes are supervised workers of this node's writer
@@ -108,7 +116,9 @@ defmodule Arca.DecisionLog do
     @moduledoc """
     Why a decision was not written: `:timeout` (the budget ran out),
     `:unavailable` (the store could not answer), `:capacity` (every
-    writer this node runs was busy, so none was started), `:conflict` (the
+    writer this node runs was busy, so none was started),
+    `:storage_reserve` (the home's storage reserve is depleted, so nothing
+    was written), `:conflict` (the
     call id holds a different decision or completion) or `:not_found` (no
     admission under the id in the actor's tenant, for a completion).
     `stage` is the write that failed.
@@ -117,7 +127,8 @@ defmodule Arca.DecisionLog do
     @enforce_keys [:kind, :stage]
     defstruct [:kind, :stage]
 
-    @type kind :: :timeout | :unavailable | :capacity | :conflict | :not_found
+    @type kind ::
+            :timeout | :unavailable | :capacity | :storage_reserve | :conflict | :not_found
     @type stage :: :append | :finish
     @type t :: %__MODULE__{kind: kind(), stage: stage()}
   end
@@ -421,6 +432,12 @@ defmodule Arca.DecisionLog do
   # caller: the caller's death does not stop a write already under way, and
   # the write's crash is an answer. No worker free is `:capacity` at once.
   defp budgeted(stage, write) do
+    if Arca.StorageReserve.depleted?(),
+      do: {:error, failure(stage, :storage_reserve)},
+      else: write_budgeted(stage, write)
+  end
+
+  defp write_budgeted(stage, write) do
     deadline = System.monotonic_time(:millisecond) + @budget_ms
     reply = Process.alias([:reply])
 

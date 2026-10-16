@@ -194,6 +194,7 @@ defmodule Arca do
       Storage.UnitLocator,
       StorageProjectionChanges,
       StorageProjectionRoots,
+      StorageReserve,
       TenantTables,
       ThreadStorage,
       ThreadSubscriptionStorage,
@@ -856,6 +857,14 @@ defmodule Arca do
 
       match?({:create, _}, kind) and reserved_name?(path) ->
         {:error, :reserved_name}
+
+      # Below the storage reserve's mark nothing new lands in an athanor's
+      # tree, the store's own writes included: the freed reserve is kept
+      # for the authority-reducing changes the gate still admits, which
+      # write rows (`Arca.StorageReserve`). A delete still reclaims space.
+      kind not in [:delete, :delete_tree] and Arca.Storage.classify(path) == :tenant and
+          Arca.StorageReserve.depleted?() ->
+        {:error, Arca.StorageReserve.refusal()}
 
       true ->
         # The write shapes of the seeded roots and their `:bundled`

@@ -174,6 +174,7 @@ defmodule Sanctum.Providers.Person do
             description: "unlink_door: the linked door's identity key (provider|issuer|subject)"
           )
         ],
+        reduces_authority: true,
         kind: :destructive,
         planes: [:external],
         consent: :interactive

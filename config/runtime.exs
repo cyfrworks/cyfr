@@ -585,6 +585,18 @@ if config_env() != :test do
       end
   end
 
+  # The storage reserve (`Cyfr.StorageReserve`): its size, and the
+  # directory holding its file, the database's under SQLite unless set.
+  # The boot checks the directory on the host it runs on.
+  case Cyfr.RuntimeConfig.resolve_storage_reserve(getenv, built_adapter, paths.database_path) do
+    {:ok, reserve} ->
+      config :cyfr, :storage_reserve_bytes, reserve.bytes
+      config :cyfr, :storage_reserve_path, reserve.path
+
+    {:error, message} ->
+      raise "[Cyfr] FATAL: #{message}"
+  end
+
   # Browser CORS allowlist: assigned, it is the allowlist it spells, and
   # assigned empty it is the empty allowlist — no cross-origin caller at
   # all, which is what a same-origin deployment sets and what

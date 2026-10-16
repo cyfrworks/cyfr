@@ -23,6 +23,14 @@ defmodule Prima.Operation do
   kind only for an action that declares one; an action that declares none
   takes no standing constraint. Like `resource_schemes`, it is metadata for
   the gate, absent from the annotation view and from discovery.
+
+  `reduces_authority` marks an action that only takes authority away:
+  signing out, revoking, withdrawing consent, leaving, removing a member,
+  denying someone at a door, unlinking a door, archiving. While the home's
+  storage reserve is depleted (`Cyfr.StorageReserve`) the gate admits
+  these, reads and the confirmations they need, and nothing else. It is
+  metadata for the gate too, absent from the annotation view and from
+  discovery.
   """
 
   alias Prima.Arg
@@ -43,7 +51,8 @@ defmodule Prima.Operation do
     :host,
     :resource,
     auth: :required,
-    resource_schemes: []
+    resource_schemes: [],
+    reduces_authority: false
   ]
 
   @type t :: %__MODULE__{
@@ -61,7 +70,8 @@ defmodule Prima.Operation do
           recovery: :replay_safe | nil,
           host: :intercepted | nil,
           resource: {String.t(), resource_kind()} | nil,
-          resource_schemes: [String.t()]
+          resource_schemes: [String.t()],
+          reduces_authority: boolean()
         }
 
   @typedoc "The kinds of resource an action's argument may name."
@@ -93,7 +103,10 @@ defmodule Prima.Operation do
   @doc "Declare an action, refusing invalid or contradictory declarations."
   @spec new(String.t(), String.t(), String.t(), [Arg.t()], keyword()) :: t()
   def new(tool, action, description, args, opts) do
-    unknown = Keyword.keys(opts) -- [:resource, :resource_schemes | @annotation_fields]
+    unknown =
+      Keyword.keys(opts) --
+        [:resource, :resource_schemes, :reduces_authority | @annotation_fields]
+
     if unknown != [], do: raise(ArgumentError, "unknown operation annotations")
 
     op =
@@ -119,11 +132,15 @@ defmodule Prima.Operation do
              op.consent in [nil, :interactive, :staging] and
              op.scope in [nil, :platform] and op.standing in [nil, false, :thread] and
              op.recovery in [nil, :replay_safe] and
+             is_boolean(op.reduces_authority) and
              (is_nil(op.permission) or is_atom(op.permission)),
            do: raise(ArgumentError, "invalid operation annotation")
 
     if op.recovery == :replay_safe and op.kind != :read,
       do: raise(ArgumentError, "only explicitly reviewed reads can be replay-safe")
+
+    if op.reduces_authority and op.kind == :read,
+      do: raise(ArgumentError, "a read takes no authority away")
 
     if Enum.any?(op.args, &(&1.name == "action")),
       do: raise(ArgumentError, "action is the operation discriminator")

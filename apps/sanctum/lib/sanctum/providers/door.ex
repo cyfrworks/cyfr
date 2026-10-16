@@ -80,6 +80,7 @@ defmodule Sanctum.Providers.Door do
             Arg.new("note", :string, nullable: true, description: "Why (allow, deny)")
           ],
           scope: :platform,
+          reduces_authority: true,
           kind: :destructive,
           planes: [:external]
         ),

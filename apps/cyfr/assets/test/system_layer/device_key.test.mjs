@@ -726,6 +726,62 @@ describe("the connection", () => {
     assert.equal(socket.sent.filter((m) => m.operation === "seal.read").length, 2)
   })
 
+  test("when the home answers no whole list, the records shown and the one a fact named are read by request", async () => {
+    const {glass, h, deviceKey} = await glassWith({certificate})
+    await glass.start()
+    const socket = h.socket()
+    socket.onopen()
+    await proved(socket, deviceKey)
+    home(socket, standing(certificate))
+    await settle()
+
+    const answer = (intent, body) => home(socket, {protocol: device.protocol, type: "answer", id: intent.id, ...body})
+    const last = (operation) => socket.sent.filter((m) => m.operation === operation).at(-1)
+    const shown = {ref: "cnr_shown", operation: "pairing.revoke"}
+    const named = {ref: "cnr_named", operation: "passkey.revoke"}
+
+    answer(last("confirmation.pending"), {result: {confirmations: [shown]}})
+    await settle()
+    answer(last("seal.read"), {result: {seal: null}})
+    await settle()
+    assert.deepEqual(glass.pending, [shown])
+
+    // The storage reserve depleted: the whole list is refused, and each
+    // record is read by its ref, the shown one and the one the fact names.
+    const opens = socket.sent.filter((m) => m.operation === "streams.open")
+    answer(opens[0], {result: {grant_id: "sgr_1"}})
+    home(socket, {protocol: device.protocol, type: "grant", grant_id: "sgr_1", stream: CONFIRMATIONS, projection: ["ref", "kind"], expires_at: certificate.expires_at})
+    await settle()
+    answer(last("confirmation.pending"), {error: {class: "unavailable", message: "nearly out of storage"}})
+    await settle()
+    assert.deepEqual(last("confirmation.pending").args, {request: "cnr_shown"})
+    answer(last("confirmation.pending"), {result: {confirmations: [shown]}})
+    await settle()
+    answer(last("seal.read"), {result: {seal: null}})
+    await settle()
+
+    home(socket, {protocol: device.protocol, type: "event", grant_id: "sgr_1", payload: {ref: "cnr_named", kind: "opened"}})
+    await settle()
+    answer(last("confirmation.pending"), {error: {class: "unavailable", message: "nearly out of storage"}})
+    await settle()
+    assert.deepEqual(last("confirmation.pending").args, {request: "cnr_shown"})
+    answer(last("confirmation.pending"), {result: {confirmations: [shown]}})
+    await settle()
+    assert.deepEqual(last("confirmation.pending").args, {request: "cnr_named"})
+    answer(last("confirmation.pending"), {result: {confirmations: [named]}})
+    await settle()
+    answer(last("seal.read"), {result: {seal: null}})
+    await settle()
+    assert.deepEqual(glass.pending, [shown, named])
+
+    // A refusal of another class, or every record refused, leaves what was shown.
+    const again = glass.refresh()
+    answer(last("confirmation.pending"), {error: {class: "forbidden", message: "no"}})
+    await again
+    assert.deepEqual(glass.pending, [shown, named])
+    assert.equal(socket.sent.filter((m) => m.operation === "confirmation.pending" && m.args.request).length, 3)
+  })
+
   test("each fact of the stream reads the pending list again; a grant's end opens it again", async () => {
     const {glass, h, deviceKey} = await glassWith({certificate})
     await glass.start()

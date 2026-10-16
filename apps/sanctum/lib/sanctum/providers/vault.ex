@@ -263,6 +263,7 @@ defmodule Sanctum.Providers.Vault do
           "revoke",
           "Revoke vault",
           [Arg.new("id", :string, required: true, description: "Vault entry id (vlt_…)")],
+          reduces_authority: true,
           kind: :destructive,
           planes: [:external],
           consent: :interactive

@@ -5,7 +5,7 @@
 # The `cyfr` release, built as `Dockerfile` builds it (MIX_ENV=prod, the
 # adapter chosen at compile time by CYFR_DATABASE, `mix release cyfr`),
 # booted against a FRESH database of that adapter with auto-migration on
-# (tests/release-boot/release.sh). Five cases, in order:
+# (tests/release-boot/release.sh). Six cases, in order:
 #
 #   boots    the environment `cyfr init` writes — the stack's keys, the
 #            empty CORS allowlist, authentication configured,
@@ -48,6 +48,23 @@
 #            the marker before its gate opens, so the pre-backup session is
 #            refused, the person's vault entry answers `entry_unavailable`
 #            to a host-side read, and the tincture's profile needs consent.
+#
+#   reserve  a cell whose storage reserve (`Cyfr.StorageReserve`) shares a
+#            size-limited filesystem with its database: for SQLite the data
+#            directory, which holds the database, the storage root and the
+#            reserve's directory; for PostgreSQL a postgres server's data
+#            directory beside the reserve's directory. The filesystem is a
+#            tmpfs a container of this user's holds, since the host offers
+#            no mount to an unprivileged user: the SQLite cell's server runs
+#            in that container (the host's own `/usr` and this checkout's
+#            release, so the same binaries), and the host reads and fills
+#            the tmpfs through the container's root (`/proc/<pid>/root`).
+#            The cell boots holding its reserve file, a person pairs a
+#            device, and the filesystem is filled below the mark: the cell
+#            latches `depleted` and frees the file, a note write is
+#            refused, and the device's revocation is opened, read by its
+#            request, proven and committed through the gate, and is still
+#            there once the cell, still depleted, has restarted.
 #
 # Nothing else boots a release: the suite starts the application under its
 # test configuration, which migrates nothing and reads no `.env`, so a boot
@@ -147,7 +164,7 @@ cleanup() {
   # The cell started last is the one a failed step was asking.
   if [ "$code" -ne 0 ]; then
     local cell
-    for cell in "$COPY" "$ORIGIN" "$CELL"; do
+    for cell in "$RESERVE" "$COPY" "$ORIGIN" "$CELL"; do
       if [ -n "$cell" ] && [ -f "$cell/boot.log" ]; then
         log_tail "$cell"
         break
@@ -155,6 +172,8 @@ cleanup() {
     done
   fi
   ( server_stop ) || [ "$code" -ne 0 ] || code=1
+  # The reserve case's filesystem goes with the container that holds it.
+  [ -z "$RESERVE_HOLDER" ] || docker rm -f "$RESERVE_HOLDER" >/dev/null 2>&1 || true
   [ "${RELEASE_BOOT_KEEP:-}" = 1 ] || pg_drop_created
   if [ "${RELEASE_BOOT_KEEP:-}" = 1 ]; then
     echo "kept $WORK"
@@ -165,7 +184,7 @@ cleanup() {
 }
 # The cells whose log a failed run prints, named before the trap reads
 # them.
-CELL="" ORIGIN="" COPY=""
+CELL="" ORIGIN="" COPY="" RESERVE="" RESERVE_HOLDER=""
 trap cleanup EXIT
 
 # How many of a server's last log lines a failed run prints.
@@ -471,4 +490,263 @@ if tail -n +"$((seen + 1))" "$COPY/boot.log" | grep -q "declared restore"; then
 fi
 server_stop
 
-step "the cyfr release boots on $ADAPTER, migrates itself, refuses loudly, restores from its backup and consumes a declared restore"
+# ---------------------------------------------------------------------------
+# Case 6: the storage reserve, on a filesystem that fills
+# ---------------------------------------------------------------------------
+
+# The reserve's size and the limited filesystem's: room for the schema, a
+# PostgreSQL server's WAL and the reserve, filled below the mark after.
+RESERVE_BYTES=$((64 * 1024 * 1024))
+RESERVE_FS_SIZE=512m
+
+# The bytes an unprivileged writer may still use under `$1`, as the
+# reserve reads them (statvfs's available blocks).
+free_bytes() {
+  local blocks size
+  read -r blocks size < <(stat -f -c '%a %S' "$1") || fail "no free space reading for $1"
+  echo $((blocks * size))
+}
+
+# A tmpfs of RESERVE_FS_SIZE owned by this user, held by a container of
+# this user's whose root this user may enter: the container's id in
+# RESERVE_HOLDER, which the cleanup removes, and the tmpfs's path from the
+# host in LIMITED. `$1` is where it mounts the tmpfs, the rest the
+# container's own arguments, its image among them.
+reserve_holder() {
+  local mount="$1" pid
+  shift
+  RESERVE_HOLDER="$(docker run -d --user "$(id -u):$(id -g)" \
+    --tmpfs "$mount:size=$RESERVE_FS_SIZE,uid=$(id -u),gid=$(id -g),mode=0700" \
+    "$@")" || fail "no container could hold the reserve case's filesystem"
+  pid="$(docker inspect -f '{{.State.Pid}}' "$RESERVE_HOLDER")"
+  [ -n "$pid" ] && [ "$pid" != 0 ] || fail "the reserve case's container is not running"
+  LIMITED="/proc/$pid/root$mount"
+  [ -w "$LIMITED" ] || fail "the reserve case's filesystem is not this user's to write: $LIMITED"
+}
+
+# What the reserve case asks of the running cell, evaluated in it by
+# `bin/cyfr rpc` (`cell_fixture`): the software passkey and the pairing
+# ceremony are the suite's own (`Sanctum.TestContext`, loaded from the
+# checkout), every change goes through the gate, and each command answers
+# one `RESERVE=` line.
+RESERVE_FIXTURE="$WORK/reserve.exs"
+cat >"$RESERVE_FIXTURE" <<'ELIXIR'
+fn args ->
+  answer = fn map -> "RESERVE=" <> Jason.encode!(map) end
+  call = fn ctx, tool, args -> Sanctum.Gate.call_external(tool, ctx, args) end
+
+  # The session's person and their software passkey.
+  person = fn root, token ->
+    Code.require_file(Path.join(root, "apps/sanctum/test/support/test_context.ex"))
+    {:ok, ctx} = Sanctum.Caller.establish({:session, token})
+    {ctx, Sanctum.TestContext.Authenticator.for_person(ctx.user_id)}
+  end
+
+  case args do
+    ["pair", root, token] ->
+      {ctx, authenticator} = person.(root, token)
+
+      # Their first passkey, under the first-method rule, on their own
+      # session focused nowhere, as the console registers one.
+      session = %{ctx | athanor_id: nil}
+      {:ok, options} = Sanctum.Passkeys.register(session, %{})
+      credential = Sanctum.TestContext.Authenticator.registration(authenticator, options)
+      {:ok, %{status: "active"}} = Sanctum.Passkeys.register(session, %{credential: credential})
+
+      {public, private} = :crypto.generate_key(:eddsa, :ed25519)
+      digest = Prima.Device.key_digest(public)
+
+      {:ok, %{invitation_secret: secret}} =
+        Sanctum.TestContext.confirming(
+          ctx,
+          &call.(&1, "pairing", %{"action" => "begin", "key_digest" => digest})
+        )
+
+      glass = Sanctum.Context.build(%{authenticated: false, client_ip: "198.51.100.47"})
+
+      submission = %{
+        "action" => "complete",
+        "invitation_secret" => secret,
+        "device_key" => Prima.Identity.Encoding.b64(public),
+        "key_digest" => digest
+      }
+
+      {:ok, %{challenge: challenge}} = call.(glass, "pairing", submission)
+      {:ok, challenge} = Prima.DeviceCert.Challenge.decode(challenge)
+      proof = Prima.DeviceCert.Proof.encode(Prima.DeviceCert.Proof.sign(challenge, private))
+
+      {:ok, %{client_id: client_id}} =
+        call.(glass, "pairing", Map.put(submission, "proof", proof))
+
+      answer.(%{client_id: client_id})
+
+    ["revoke", root, token, client_id] ->
+      {ctx, authenticator} = person.(root, token)
+      revoke = %{"action" => "revoke", "client_id" => client_id}
+
+      {:error, {:confirmation_required, %{id: id}}} = call.(ctx, "pairing", revoke)
+      ref = Prima.Confirmation.ref(id)
+
+      {:error, %Prima.Refusal{reason: {:unavailable, :storage_reserve}}} =
+        call.(ctx, "confirmation", %{"action" => "pending"})
+
+      {:ok, %{confirmations: [entry]}} =
+        call.(ctx, "confirmation", %{"action" => "pending", "request" => ref})
+
+      {:ok, digest} = Prima.Identity.Encoding.unb64(entry.webauthn["challenge"], 32)
+      assertion = Sanctum.TestContext.Authenticator.assertion(authenticator, digest)
+
+      {:ok, %{state: "confirmed"}} =
+        call.(ctx, "confirmation", %{"action" => "confirm", "ref" => ref, "assertion" => assertion})
+
+      {:ok, %{standing: standing}} = call.(%{ctx | confirmation_id: id}, "pairing", revoke)
+      answer.(%{standing: standing})
+
+    ["note", token] ->
+      {:ok, ctx} = Sanctum.Caller.establish({:session, token})
+
+      case call.(ctx, "notes", %{"action" => "keep", "name" => "reserve", "content" => "a note"}) do
+        {:ok, _kept} -> answer.(%{note: "kept"})
+        {:error, %Prima.Refusal{reason: reason}} -> answer.(%{note: inspect(reason)})
+        {:error, reason} -> answer.(%{note: inspect(reason)})
+      end
+
+    ["state"] ->
+      answer.(%{state: Arca.StorageReserve.state()})
+
+    ["standing", client_id] ->
+      answer.(%{standing: Arca.Repo.get!(Arca.Schemas.PairedClient, client_id).standing})
+  end
+end
+ELIXIR
+
+reserve() { cell_fixture "$RESERVE" "$RESERVE_FIXTURE" RESERVE "$@"; }
+
+# The latch as the running cell reads it, waited for to read `$1` across
+# the monitor's 5 s polls.
+reserve_awaits() {
+  local want="$1" state="" closes=$((SECONDS + 60))
+  while [ "$SECONDS" -lt "$closes" ]; do
+    state="$(field "$(reserve state)" state)" || state=""
+    [ "$state" = "$want" ] && return 0
+    sleep 2
+  done
+  fail "the storage reserve did not read $want within 60 s: ${state:-no answer}"
+}
+
+# Start and stop the reserve case's cell: a PostgreSQL cell on the host
+# as every other cell; a SQLite cell in the container holding its data
+# directory, under the environment the host's would run with, its
+# database moved onto that directory's filesystem, where the reserve's
+# directory defaults to.
+reserve_start() {
+  if [ "$ADAPTER" = postgres ]; then
+    server_start "$RESERVE"
+    return
+  fi
+  local mark closes
+  mark="$( [ -f "$RESERVE/boot.log" ] && wc -l <"$RESERVE/boot.log" || echo 0)"
+  cell_env "$RESERVE" CYFR_DATABASE_PATH="$RESERVE/data/cyfr.db" RELEASE_TMP="$RESERVE/tmp" \
+    env >"$RESERVE/container.env"
+  docker exec -d -w "$RESERVE" --env-file "$RESERVE/container.env" "$RESERVE_HOLDER" \
+    bash -c 'exec "$0" start >>"$1" 2>&1' "$REL/bin/cyfr" "$RESERVE/boot.log" ||
+    fail "the reserve case's cell could not be started in its container"
+  closes=$((SECONDS + READY_TIMEOUT))
+  until curl -fsS -m 5 -o "$RESERVE/ready.json" "http://127.0.0.1:$PORT/api/health/ready" 2>/dev/null; do
+    if tail -n "+$((mark + 1))" "$RESERVE/boot.log" | grep -q "Kernel pid terminated\|Application cyfr exited\|application_start_failure"; then
+      fail "the reserve case's cell exited while booting"
+    fi
+    [ "$SECONDS" -lt "$closes" ] || fail "the reserve case's cell did not answer readiness within $READY_TIMEOUT s"
+    sleep 1
+  done
+}
+
+reserve_stop() {
+  if [ "$ADAPTER" = postgres ]; then
+    server_stop
+    return
+  fi
+  local closes=$((SECONDS + 60))
+  cell_cyfr "$RESERVE" stop >/dev/null 2>&1 || fail "the reserve case's cell did not take its stop"
+  while curl -fsS -m 2 -o /dev/null "http://127.0.0.1:$PORT/api/health" 2>/dev/null; do
+    [ "$SECONDS" -lt "$closes" ] || fail "the reserve case's cell outlived its stop"
+    sleep 1
+  done
+}
+
+step "the storage reserve: a $ADAPTER cell on a size-limited filesystem"
+RESERVE="$WORK/reserve"
+if [ "$ADAPTER" = postgres ]; then
+  # The server's data directory and the reserve's directory on one tmpfs.
+  reserve_holder /var/lib/postgresql \
+    -e POSTGRES_PASSWORD=reserve -e POSTGRES_DB=reserve -p 127.0.0.1::5432 "$PG_IMAGE"
+  RESERVE_PG_PORT="$(docker port "$RESERVE_HOLDER" 5432/tcp | sed -n 's/^127\.0\.0\.1://p' | head -1)"
+  [ -n "$RESERVE_PG_PORT" ] || fail "the reserve case's postgres server publishes no port"
+  closes=$((SECONDS + 60))
+  until docker exec "$RESERVE_HOLDER" pg_isready -q -h 127.0.0.1 -U postgres; do
+    [ "$SECONDS" -lt "$closes" ] || fail "the reserve case's postgres server did not start"
+    sleep 1
+  done
+  LOG_SECRETS+=("reserve")
+  cell_new "$RESERVE" "postgres://postgres:reserve@127.0.0.1:$RESERVE_PG_PORT/reserve"
+  mkdir "$LIMITED/reserve"
+  echo "CYFR_STORAGE_RESERVE_PATH=$LIMITED/reserve" >>"$RESERVE/.env"
+  RESERVE_DIR="$LIMITED/reserve"
+else
+  # The data directory on the tmpfs, in the container the cell runs in.
+  cell_new "$RESERVE"
+  mkdir -p "$RESERVE/tmp"
+  reserve_holder "$RESERVE/data" --hostname "$(hostname)" --network host \
+    -v /usr:/usr:ro -v /etc/ld.so.cache:/etc/ld.so.cache:ro \
+    -v "$ROOT:$ROOT:ro" -v "$WORK:$WORK" debian:trixie-slim sleep infinity
+  RESERVE_DIR="$LIMITED"
+fi
+echo "CYFR_STORAGE_RESERVE_BYTES=$RESERVE_BYTES" >>"$RESERVE/.env"
+
+reserve_start
+[ "$(field "$(reserve state)" state)" = ok ] || fail "the cell did not boot holding its reserve"
+[ "$(stat -c %s "$RESERVE_DIR/cyfr-storage-reserve")" = "$RESERVE_BYTES" ] ||
+  fail "the cell did not preallocate its reserve file of $RESERVE_BYTES bytes"
+echo "booted ok, holding a reserve file of $RESERVE_BYTES bytes"
+
+reserve_person="$(server_fixture "$RESERVE" person operator@example.com release-boot-reserve)"
+[ -n "$reserve_person" ] || fail "the fixture signed nobody in"
+reserve_token="$(field "$reserve_person" token)"
+LOG_SECRETS+=("$reserve_token")
+client_id="$(field "$(reserve pair "$ROOT" "$reserve_token")" client_id)" ||
+  fail "the person paired no device"
+echo "the person paired $client_id"
+
+step "the filesystem filled below the mark: the cell latches depleted and frees its reserve"
+free="$(free_bytes "$LIMITED")"
+fill=$((free - RESERVE_BYTES + 8 * 1024 * 1024))
+[ "$fill" -gt 0 ] || fail "the limited filesystem is already below the mark: $free bytes free"
+fallocate -l "$fill" "$LIMITED/filler" || fail "the limited filesystem could not be filled"
+echo "free before the fill: $free bytes; after: $(free_bytes "$LIMITED") bytes"
+reserve_awaits depleted
+[ ! -e "$RESERVE_DIR/cyfr-storage-reserve" ] || fail "the depleted cell kept its reserve file"
+before="$(free_bytes "$LIMITED")"
+echo "depleted, the reserve file freed: $before bytes free"
+
+note="$(field "$(reserve note "$reserve_token")" note)"
+[ "$note" = "{:unavailable, :storage_reserve}" ] || fail "a note write was not refused: $note"
+echo "notes.keep -> $note"
+
+standing="$(field "$(reserve revoke "$ROOT" "$reserve_token" "$client_id")" standing)" ||
+  fail "the device's revocation did not complete while depleted"
+[ "$standing" = revoked ] || fail "the revocation answered $standing"
+after="$(free_bytes "$LIMITED")"
+echo "pairing.revoke, confirmed by its request -> $standing; it spent $((before - after)) bytes of the reserve"
+
+step "the depleted cell restarted: still depleted, the revocation still there"
+reserve_stop
+reserve_start
+[ "$(field "$(reserve state)" state)" = depleted ] || fail "the restart reopened ordinary admission"
+[ "$(field "$(reserve standing "$client_id")" standing)" = revoked ] ||
+  fail "the revocation is not there after the restart"
+echo "restarted depleted; $client_id is revoked"
+reserve_stop
+docker rm -f "$RESERVE_HOLDER" >/dev/null
+RESERVE_HOLDER=""
+
+step "the cyfr release boots on $ADAPTER, migrates itself, refuses loudly, restores from its backup, consumes a declared restore and keeps its storage reserve"

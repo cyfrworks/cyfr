@@ -58,6 +58,7 @@ defmodule Cyfr do
       RuntimeConfig,
       SeedOffer,
       StandingWatch,
+      StorageReserve,
       Telemetry.Catalog,
       TelemetryBridge
     ],

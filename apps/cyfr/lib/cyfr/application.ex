@@ -530,8 +530,14 @@ defmodule Cyfr.Application do
   #
   # A declared restore's transition runs right before it, under this
   # member's slot (`declared_restore/0`), so the reconcile and every child
-  # after it read the store the transition left. The sandboxed test boot
-  # omits both.
+  # after it read the store the transition left. Between the two, the
+  # storage reserve derives its latch (`Cyfr.StorageReserve`), so a home
+  # below the reserve's mark, or one restarted while depleted, admits
+  # nothing but reads and authority-reducing changes from its first
+  # request; the transition and the reconcile take authority away and
+  # write rows, which the latch never refuses. A reserve directory the
+  # boot cannot use stops its start, and the boot. The sandboxed test boot
+  # omits all three.
   defp gate do
     if bootstrap_skipped?(@bootstrap_skip_permitted, boot_work_enabled?()),
       do: [],
@@ -542,6 +548,8 @@ defmodule Cyfr.Application do
           restart: :transient,
           type: :worker
         },
+        # 5 s: its stop, which holds no work in flight.
+        Supervisor.child_spec(Cyfr.StorageReserve, shutdown: 5_000),
         Supervisor.child_spec(Cyfr.Bootstrap, restart: :transient)
       ]
   end

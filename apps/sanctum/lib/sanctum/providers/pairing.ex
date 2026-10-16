@@ -128,6 +128,7 @@ defmodule Sanctum.Providers.Pairing do
           consent: :interactive
         ),
         Operation.new("pairing", "revoke", "Revoke a paired device", [client_id()],
+          reduces_authority: true,
           kind: :destructive,
           planes: [:external],
           consent: :interactive

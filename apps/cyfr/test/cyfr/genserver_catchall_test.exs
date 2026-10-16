@@ -40,6 +40,8 @@ defmodule Cyfr.GenServerCatchallTest do
     Opus.Schedules.Scheduler => "gated by :cron_scheduler_enabled",
     Aqua.ScheduleNotes => "gated by :schedule_notes_enabled; probed on an instance below",
     Cyfr.Cell => "gated by :control_plane_claim_enabled",
+    Cyfr.StorageReserve =>
+      "started before the gate, which the sandboxed test boot omits; probed on an instance in its own test",
     Opus.Sweeper => "gated by :execution_sweeper_enabled",
     Opus.ArchiveWatch => "gated by :execution_archive_watch_enabled",
     Opus.WorkerWatch => "gated by :worker_watch_enabled",

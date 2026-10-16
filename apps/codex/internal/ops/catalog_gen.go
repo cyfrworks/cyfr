@@ -1346,6 +1346,8 @@ func (args ConfirmationConfirmArgs) MarshalJSON() ([]byte, error) {
 
 // ConfirmationPendingArgs carries arguments for confirmation.pending.
 type ConfirmationPendingArgs struct {
+	// pending: one pending confirmation's ref, to read that request's record alone
+	Request Field[string] `json:"request,omitzero"`
 }
 
 // MarshalJSON supplies the operation's fixed action discriminator.

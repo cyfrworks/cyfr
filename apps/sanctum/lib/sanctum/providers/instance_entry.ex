@@ -228,7 +228,7 @@ defmodule Sanctum.Providers.InstanceEntry do
           "revoke",
           "Revoke instance entry",
           [entry_id],
-          [kind: :destructive] ++ platform
+          [kind: :destructive, reduces_authority: true] ++ platform
         ),
         Operation.new(
           "instance_entry",

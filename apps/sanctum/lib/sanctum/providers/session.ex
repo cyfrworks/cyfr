@@ -35,6 +35,7 @@ defmodule Sanctum.Providers.Session do
         ),
         Operation.new("session", "logout", "Logout session", [],
           auth: :anonymous,
+          reduces_authority: true,
           kind: :write,
           planes: [:external]
         ),

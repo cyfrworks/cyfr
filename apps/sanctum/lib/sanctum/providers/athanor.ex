@@ -115,6 +115,7 @@ defmodule Sanctum.Providers.Athanor do
                 "The athanor to act on — an id, a group slug, or @<namespace>. Defaults to the athanor in focus."
             )
           ],
+          reduces_authority: true,
           kind: :destructive,
           planes: [:external]
         ),

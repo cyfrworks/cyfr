@@ -666,7 +666,10 @@ defmodule Sanctum.Catalog do
   @spec authorize_annotated_action(String.t(), map(), Context.t(), map(), boolean()) ::
           :ok
           | {:error,
-             Sanctum.Unauthorized.reason() | :action_missing | {:unknown_action, String.t()}}
+             Sanctum.Unauthorized.reason()
+             | :action_missing
+             | {:unknown_action, String.t()}
+             | Prima.Refusal.t()}
   def authorize_annotated_action(name, meta, ctx, args, in_chain? \\ false) do
     action = args["action"] || args[:action]
     annotation = Annotations.annotation(meta, action)
@@ -685,7 +688,95 @@ defmodule Sanctum.Catalog do
         {:error, {:unknown_action, "#{name}.#{action}"}}
 
       true ->
-        Sanctum.Visibility.authorize(name, annotation, ctx, in_chain?)
+        with :ok <- Sanctum.Visibility.authorize(name, annotation, ctx, in_chain?),
+             do: reserve_admits(name, meta, action, ctx, args)
+    end
+  end
+
+  # Below the storage reserve's mark (`Arca.StorageReserve`) the gate
+  # admits only what spends no reserve or takes authority away: a read, an
+  # action declared `reduces_authority`, and, for such an action's request
+  # alone, the confirmation that completes it, named by the record's
+  # reference — `confirmation.pending` by its `request`, a proof, a
+  # re-authentication and a cancel by their `ref`. The pending list is a
+  # read, yet while depleted it is admitted only for such a request, so
+  # no other request's record is read, proven or spent. A reference that
+  # names no record of the caller's, or a record of an action not
+  # declared so, is refused alike.
+  defp reserve_admits(name, meta, action, ctx, args) do
+    if Arca.StorageReserve.depleted?(),
+      do: depleted_admits(name, declared_operation(meta, action), ctx, args),
+      else: :ok
+  end
+
+  defp depleted_admits("confirmation", _operation, ctx, args) do
+    reference =
+      case args["action"] || args[:action] do
+        "pending" -> args["request"] || args[:request]
+        _proof_or_cancel -> args["ref"] || args[:ref]
+      end
+
+    if flagged_request?(ctx, reference), do: :ok, else: {:error, reserve_refusal()}
+  end
+
+  defp depleted_admits(_name, %Operation{reduces_authority: true}, _ctx, _args), do: :ok
+  defp depleted_admits(_name, %Operation{kind: :read}, _ctx, _args), do: :ok
+  defp depleted_admits(_name, _operation, _ctx, _args), do: {:error, reserve_refusal()}
+
+  defp declared_operation(%{operations: operations}, action),
+    do: Enum.find(operations, &(&1.action == action))
+
+  defp declared_operation(_meta, _action), do: nil
+
+  # The caller's own pending record under `reference`, in the athanor in
+  # focus, asked by an action declared `reduces_authority`.
+  defp flagged_request?(%Context{user_id: user_id, athanor_id: athanor_id} = ctx, reference)
+       when is_binary(reference) and reference != "" and is_binary(user_id) and user_id != "" and
+              is_binary(athanor_id) and athanor_id != "" do
+    case Arca.PendingConfirmations.get(Context.actor(ctx), reference) do
+      {:ok, %{user_id: ^user_id, operation: operation}} -> reduces_authority?(operation)
+      _absent_another_or_unanswered -> false
+    end
+  end
+
+  defp flagged_request?(_ctx, _reference), do: false
+
+  defp reserve_refusal do
+    %Prima.Refusal{
+      class: :unavailable,
+      reason: Arca.StorageReserve.refusal(),
+      message:
+        "This home is nearly out of storage: until space is freed it accepts only reads " <>
+          "and changes that take authority away, such as signing out or revoking"
+    }
+  end
+
+  @doc """
+  Whether the table declares the action `name` (`tool.action`)
+  `reduces_authority` (`Prima.Operation`): one of the few the gate admits
+  while the storage reserve is depleted. False for a name the table does
+  not hold.
+  """
+  @spec reduces_authority?(String.t()) :: boolean()
+  def reduces_authority?(name) when is_binary(name) do
+    with {tool, action} <- split_action(name),
+         {:ok, {_module, meta}} <- lookup(tool),
+         %Operation{reduces_authority: true} <- declared_operation(meta, action) do
+      true
+    else
+      _ -> false
+    end
+  end
+
+  # An action name holds no dot, so a pair splits at the last one.
+  defp split_action(name) do
+    case String.split(name, ".") do
+      [_, _ | _] = parts ->
+        {tool, [action]} = Enum.split(parts, -1)
+        {Enum.join(tool, "."), action}
+
+      _ ->
+        :error
     end
   end
 

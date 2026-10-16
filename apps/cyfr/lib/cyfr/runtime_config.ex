@@ -38,6 +38,12 @@ defmodule Cyfr.RuntimeConfig do
   # of the endpoint's, held for every use of it (`check_secret_key_base/1`).
   @secret_key_base_bytes 64
 
+  # The storage reserve's default and ceiling: 64 MiB holds a revocation's
+  # rows and the log or WAL growth it causes on either adapter, and 1 TiB
+  # is past any reserve a home would keep.
+  @default_storage_reserve_bytes 64 * 1024 * 1024
+  @max_storage_reserve_bytes 1024 * 1024 * 1024 * 1024
+
   @doc """
   Resolve the auth provider module from the environment.
 
@@ -347,6 +353,50 @@ defmodule Cyfr.RuntimeConfig do
           "" -> {:error, "#{var} is set but blank; unset it or give it a path."}
           path -> {:ok, Path.expand(path)}
         end
+    end
+  end
+
+  @doc """
+  Resolve the storage reserve (`Cyfr.StorageReserve`) for a build of
+  `adapter`, whose SQLite file, under SQLite, is `database_path`:
+
+    * `CYFR_STORAGE_RESERVE_BYTES` — the mark and the reserve file's size,
+      a whole number of bytes from 1 to 1 TiB (default 64 MiB). 0 is
+      refused: a home with no reserve has no room left to revoke in, a
+      security bound rather than a capacity ceiling.
+    * `CYFR_STORAGE_RESERVE_PATH` — the directory holding the reserve file,
+      whose filesystem the reserve guards. Under SQLite it defaults to the
+      database's directory; under PostgreSQL it has no default, and unset
+      no file is kept.
+
+  Whether the path exists, is writable and reports its free space is the
+  boot's check on the host it runs on (`Cyfr.StorageReserve`). Returns
+  `{:ok, %{bytes: _, path: path | nil}}` or `{:error, message}`.
+  """
+  @spec resolve_storage_reserve(getenv, module(), Path.t()) ::
+          {:ok, %{bytes: pos_integer(), path: Path.t() | nil}} | {:error, String.t()}
+  def resolve_storage_reserve(getenv, adapter, database_path)
+      when is_function(getenv, 1) and is_atom(adapter) and is_binary(database_path) do
+    with {:ok, bytes} <-
+           Prima.EnvValue.bytes(
+             getenv,
+             "CYFR_STORAGE_RESERVE_BYTES",
+             1..@max_storage_reserve_bytes
+           ),
+         {:ok, path} <- storage_reserve_path(getenv, adapter, database_path) do
+      {:ok, %{bytes: bytes || @default_storage_reserve_bytes, path: path}}
+    end
+  end
+
+  @doc "The storage reserve's size when `CYFR_STORAGE_RESERVE_BYTES` is unset: 64 MiB."
+  @spec default_storage_reserve_bytes() :: pos_integer()
+  def default_storage_reserve_bytes, do: @default_storage_reserve_bytes
+
+  defp storage_reserve_path(getenv, adapter, database_path) do
+    case getenv.("CYFR_STORAGE_RESERVE_PATH") do
+      nil when adapter == Ecto.Adapters.SQLite3 -> {:ok, Path.dirname(Path.expand(database_path))}
+      nil -> {:ok, nil}
+      _set -> path_var(getenv, "CYFR_STORAGE_RESERVE_PATH", nil)
     end
   end
 

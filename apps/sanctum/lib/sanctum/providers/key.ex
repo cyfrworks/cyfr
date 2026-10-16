@@ -81,6 +81,7 @@ defmodule Sanctum.Providers.Key do
               description: "Human-readable name for the key"
             )
           ],
+          reduces_authority: true,
           kind: :write,
           planes: [:external],
           permission: :admin

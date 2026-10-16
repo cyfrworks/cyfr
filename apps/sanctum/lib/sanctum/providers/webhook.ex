@@ -160,6 +160,7 @@ defmodule Sanctum.Providers.Webhook do
               description: "Human-readable name for the webhook (unique per tenant)"
             )
           ],
+          reduces_authority: true,
           kind: :write,
           planes: [:external],
           permission: :admin

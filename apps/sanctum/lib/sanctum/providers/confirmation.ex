@@ -25,7 +25,8 @@ defmodule Sanctum.Providers.Confirmation do
       (`Sanctum.Auth.OIDC.reauth_callback/1`, `reauth_decide/3`).
     * `reauth` begins that login, answering the issuer's URL, or sends the
       code.
-    * `pending` answers the person's open confirmations with the previews
+    * `pending` answers the person's open confirmations, or with a
+      `request` the one record that ref names, with the previews
       the home stored, so another of their devices shows the home's record
       rather than the asking client's word; with the asker, a name for the
       client that asked, so the person tells their own request from
@@ -41,6 +42,12 @@ defmodule Sanctum.Providers.Confirmation do
       on a paired device, every proof, each recorded as given on it (a
       fresh sign-in it begins included); anywhere else, a `passkey`.
     * `cancel` ends one.
+
+  While the home's storage reserve is depleted (`Arca.StorageReserve`),
+  the gate admits `pending` only with a `request`, and a proof, a
+  re-authentication or a cancel only by a `ref`, naming a record of an
+  action declared `reduces_authority`, and `pending` answers only such
+  records: the freed reserve completes a revocation, not another change.
 
   While the person recovers from a declared restore (their
   `restore_people` row is open, `Arca.SecurityTransitions.restore_open/2`),
@@ -111,7 +118,16 @@ defmodule Sanctum.Providers.Confirmation do
           planes: [:external],
           consent: :interactive
         ),
-        Operation.new("confirmation", "pending", "List your pending confirmations", [],
+        Operation.new(
+          "confirmation",
+          "pending",
+          "List your pending confirmations",
+          [
+            Arg.new("request", :string,
+              description:
+                "pending: one pending confirmation's ref, to read that request's record alone"
+            )
+          ],
           kind: :read,
           planes: [:external],
           consent: :interactive
@@ -176,9 +192,10 @@ defmodule Sanctum.Providers.Confirmation do
     end
   end
 
-  def handle(%Context{} = ctx, %{"action" => "pending"}) do
+  def handle(%Context{} = ctx, %{"action" => "pending"} = args) do
     with {:ok, user_id} <- person(ctx),
          {:ok, rows} <- open(ctx, user_id),
+         rows = requested(rows, args["request"]),
          {:ok, restore?} <- recovering(user_id),
          {:ok, credentials} <- credentials(ctx, user_id, restore?),
          {:ok, latched?} <- latched(user_id) do
@@ -234,6 +251,18 @@ defmodule Sanctum.Providers.Confirmation do
     if Pairing.can_confirm?(ctx) and is_binary(ctx.athanor_id) and ctx.athanor_id != "",
       do: {:ok, ctx.user_id},
       else: {:error, :unauthenticated}
+  end
+
+  # The records a `pending` read answers: the one its `request` names, or
+  # every open one. While the storage reserve is depleted, only those of
+  # an action declared `reduces_authority` (`Sanctum.Catalog`), whose
+  # confirmations the gate still admits.
+  defp requested(rows, request) do
+    rows = if is_binary(request), do: Enum.filter(rows, &(&1.ref == request)), else: rows
+
+    if Arca.StorageReserve.depleted?(),
+      do: Enum.filter(rows, &Sanctum.Catalog.reduces_authority?(&1.operation)),
+      else: rows
   end
 
   defp open(ctx, user_id) do

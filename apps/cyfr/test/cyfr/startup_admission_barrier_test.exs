@@ -64,7 +64,8 @@ defmodule Cyfr.StartupAdmissionBarrierTest do
     Cyfr.StandingWatch,
     Cyfr.TelemetryBridge,
     Cyfr.Platform.Settings,
-    :declared_restore
+    :declared_restore,
+    Cyfr.StorageReserve
   ]
 
   # A supervisor the census describes is `{id, children}`, in start order.
@@ -181,6 +182,7 @@ defmodule Cyfr.StartupAdmissionBarrierTest do
     Sanctum.RunningTasks,
     CyfrWeb.SSE.Registry,
     Cyfr.RetentionScheduler,
+    Cyfr.StorageReserve,
     Cyfr.Platform.Settings,
     Cyfr.TelemetryBridge,
     Cyfr.StandingWatch,
