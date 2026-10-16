@@ -119,8 +119,11 @@ defmodule Cyfr.Release do
       {:ok, slots, _} =
         Ecto.Migrator.with_repo(repo, fn _ ->
           case Arca.ControlPlane.roster() do
-            {:ok, rows} -> Enum.map(rows, &live_slot/1)
-            {:error, reason} -> raise "the cell's slots could not be read: #{inspect(reason)}"
+            {:ok, rows} ->
+              Enum.map(rows, &live_slot/1)
+
+            {:error, reason} ->
+              raise "the cell's slots could not be read: #{Prima.LoggerContext.shape(reason)}"
           end
         end)
 
