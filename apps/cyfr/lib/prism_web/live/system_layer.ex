@@ -126,6 +126,26 @@ defmodule PrismWeb.SystemLayer do
       never assigned; a kit's lines go to the browser in a push and are
       erased there when the prompt ends.
 
+  ## The seal
+
+  Every prompt begins with the person's seal (`Sanctum.Seal`): its words
+  and glyph are the first text of the dialog's description, the element
+  its `aria-describedby` names, so assistive technology speaks them first;
+  until one is chosen, that text says no seal is chosen yet, never a
+  default. The layer reads the seal under its own context each time a
+  prompt is shown (`Sanctum.Seal.for_system_layer/1`), so it is the
+  person's own interactive client's read and nothing else's; no frame,
+  operation or data route carries it. A layer that listens, on the page of
+  a person who can confirm and has no seal yet, offers the choice once per
+  page beside its prompts, never in front of one: the offer opens the
+  `:seal` prompt, whose first choice (`Sanctum.Seal.choose/2`) reports
+  nothing, since no view asked for it. A `:seal` prompt with the
+  `:seal_change` action, which the settings page raises, changes the seal
+  as the layer's own sensitive change (`Sanctum.Seal.change/2`), held and
+  repeated once confirmed like the layer's other changes. The words offered
+  are the home's list, with a pair drawn for the prompt
+  (`Sanctum.Seal.generate/0`), and the glyphs its set.
+
   A page registers a passkey through the layer's `webauthn:create`
   ceremony (`create_passkey/4`): the browser answers the layer, which
   hands the credential to the page (`{:system_layer_passkey, {:ok,
@@ -207,6 +227,8 @@ defmodule PrismWeb.SystemLayer do
   @asks :system_layer_asks
   # Where a view keeps the nested views whose prompts it placed.
   @relays :system_layer_relays
+  # The id of the seal prompt the layer's own first-use offer opens.
+  @seal_choice "seal-choice"
 
   # A release's outcome that the approval could not be withdrawn: a
   # release's own (`:withdraw_failed`) or a refused repeat's
@@ -723,7 +745,10 @@ defmodule PrismWeb.SystemLayer do
        recovery: nil,
        restoring: %{},
        athanor_route: nil,
-       athanor_name: nil
+       athanor_name: nil,
+       seal: :none,
+       seal_offer: :unread,
+       seal_pair: nil
      )}
   end
 
@@ -799,7 +824,10 @@ defmodule PrismWeb.SystemLayer do
     socket = assign(socket, assigns)
 
     {:noreply, socket} =
-      CyfrWeb.ContextGuard.guard(socket, &{:noreply, &1 |> end_moved_grants() |> listen()})
+      CyfrWeb.ContextGuard.guard(
+        socket,
+        &{:noreply, &1 |> end_moved_grants() |> listen() |> offer_seal()}
+      )
 
     {:ok, socket}
   end
@@ -1286,7 +1314,7 @@ defmodule PrismWeb.SystemLayer do
   defp step(socket) do
     socket
     |> forget_recovery()
-    |> assign(current: nil, queue: [], error: nil, pairing: nil, recovery: nil)
+    |> assign(current: nil, queue: [], error: nil, pairing: nil, recovery: nil, seal_pair: nil)
   end
 
   # A recovery prompt that ends, however it ends, has the browser forget
@@ -1309,14 +1337,42 @@ defmodule PrismWeb.SystemLayer do
        when kind in [:enrollment, :kit, :holder],
        do: assign(socket, pairing: nil, recovery: Recovery.start(id))
 
+  # The seal prompt offers a pair drawn for it.
+  defp mark_shown(%{assigns: %{current: %{kind: :seal}}} = socket),
+    do: assign(socket, pairing: nil, recovery: nil, seal_pair: Sanctum.Seal.generate())
+
   defp mark_shown(socket), do: assign(socket, pairing: nil, recovery: nil)
 
-  # What a shown prompt reads: the pairing prompt, the person's paired
-  # clients.
-  defp load_shown(%{assigns: %{pairing: %{clients: :unread} = pairing}} = socket),
+  # What a shown prompt reads: the person's seal, which every prompt
+  # begins with, and for the pairing prompt the person's paired clients.
+  defp load_shown(socket), do: socket |> load_seal() |> load_clients()
+
+  defp load_seal(%{assigns: %{current: nil}} = socket), do: socket
+  defp load_seal(socket), do: assign(socket, :seal, read_seal(socket.assigns[:context]))
+
+  defp read_seal(%Context{} = context), do: Sanctum.Seal.for_system_layer(context)
+  defp read_seal(_context), do: :none
+
+  defp load_clients(%{assigns: %{pairing: %{clients: :unread} = pairing}} = socket),
     do: assign(socket, :pairing, %{pairing | clients: clients(socket)})
 
-  defp load_shown(socket), do: socket
+  defp load_clients(socket), do: socket
+
+  # The first-use offer, read once per page by a layer that listens, for a
+  # person who can confirm: shown while no seal is set and no prompt is
+  # open, until the person chooses one or puts it away.
+  defp offer_seal(%{assigns: %{listen: false}} = socket), do: socket
+
+  defp offer_seal(%{assigns: %{seal_offer: :unread, context: %Context{} = context}} = socket) do
+    if can_prove?(context) do
+      seal = Sanctum.Seal.for_system_layer(context)
+      assign(socket, seal: seal, seal_offer: if(seal == :none, do: :open, else: :closed))
+    else
+      socket
+    end
+  end
+
+  defp offer_seal(socket), do: socket
 
   defp report(id, outcome), do: send(self(), {:system_layer, id, outcome})
 
@@ -1540,6 +1596,36 @@ defmodule PrismWeb.SystemLayer do
       case open_panel(socket, ref) do
         {:ok, _panel} -> {:noreply, cancel(socket, ref)}
         :none -> {:noreply, socket}
+      end
+    end)
+  end
+
+  def handle_event("seal_offer", _params, socket) do
+    CyfrWeb.ContextGuard.guard(socket, fn socket ->
+      {:noreply, arrive(socket, %{id: @seal_choice, kind: :seal, action: nil, subject: %{}})}
+    end)
+  end
+
+  def handle_event("seal_offer_dismiss", _params, socket),
+    do: {:noreply, assign(socket, :seal_offer, :closed)}
+
+  def handle_event("seal_draw", %{"id" => id}, socket) do
+    case open(socket, id, [:seal]) do
+      {:ok, _prompt} -> {:noreply, assign(socket, :seal_pair, Sanctum.Seal.generate())}
+      :none -> {:noreply, socket}
+    end
+  end
+
+  # The words and glyph chosen, read out of the event and handed to
+  # Sanctum, which takes only its own list's.
+  def handle_event("seal_submit", %{"prompt_id" => id} = params, socket) do
+    CyfrWeb.ContextGuard.guard(socket, fn socket ->
+      case open(socket, id, [:seal]) do
+        {:ok, prompt} ->
+          {:noreply, seal_submit(socket, prompt, %{text: params["text"], glyph: params["glyph"]})}
+
+        :none ->
+          {:noreply, socket}
       end
     end)
   end
@@ -2038,11 +2124,16 @@ defmodule PrismWeb.SystemLayer do
   # change waits for a proof, `{:done, result, socket}` with any other
   # answer. `repeat` says how the change is made again once confirmed:
   # `:resubmit`, by the browser; anything else, by the layer.
-  defp layer_call(socket, prompt, repeat, tool, args) do
+  defp layer_call(socket, prompt, repeat, tool, args),
+    do: layer_change(socket, prompt, repeat, &Ops.call_tool(socket, tool, args, &1))
+
+  # The same for a change `dispatch` makes, handed the options that name
+  # the held secret: an operation's call, or Sanctum's own for the seal.
+  defp layer_change(socket, prompt, repeat, dispatch) do
     held = held_of(socket, prompt.id, repeat)
     opts = if held, do: [confirmation_id: held.id], else: []
 
-    case Ops.call_tool(socket, tool, args, opts) do
+    case dispatch.(opts) do
       {:error, {:confirmation_required, %{id: id}}} when is_map(held) and id == held.id ->
         {:asked, set_status(socket, held.ref, :waiting)}
 
@@ -2110,6 +2201,10 @@ defmodule PrismWeb.SystemLayer do
           %{id: ^prompt_id, kind: :kit} = prompt ->
             recovery_submit(socket, prompt, %{})
 
+          %{id: ^prompt_id, kind: :seal} = prompt ->
+            {:seal_change, fields} = repeat
+            seal_submit(socket, prompt, fields)
+
           _gone ->
             socket
         end
@@ -2175,6 +2270,7 @@ defmodule PrismWeb.SystemLayer do
     end
   end
 
+  defp reports?(_socket, %{id: @seal_choice}), do: false
   defp reports?(_socket, _prompt), do: true
 
   # ---------------------------------------------------------------------------
@@ -2287,6 +2383,70 @@ defmodule PrismWeb.SystemLayer do
       _other -> %{prompt_id: prompt.id, clients: {:ok, []}, invitation: nil}
     end
   end
+
+  # ---------------------------------------------------------------------------
+  # The seal
+  # ---------------------------------------------------------------------------
+
+  # The first choice, while none is set; a change, under the fresh
+  # confirmation the layer holds the secret of and repeats once confirmed.
+  defp seal_submit(socket, %{action: nil} = prompt, fields) do
+    case Sanctum.Seal.choose(socket.assigns[:context], fields) do
+      {:ok, seal} ->
+        socket |> assign(seal: {:ok, seal}, seal_offer: :closed) |> seal_set(prompt)
+
+      {:error, :already_set} ->
+        socket
+        |> assign(:seal, read_seal(socket.assigns[:context]))
+        |> seal_refused(prompt, :already_set)
+
+      {:error, reason} ->
+        seal_refused(socket, prompt, reason)
+    end
+  end
+
+  defp seal_submit(socket, %{action: :seal_change} = prompt, fields) do
+    change = fn opts ->
+      Sanctum.Seal.change(confirming(socket.assigns[:context], opts), fields)
+    end
+
+    case layer_change(socket, prompt, {:seal_change, fields}, change) do
+      {:asked, socket} -> socket
+      {:done, {:ok, seal}, socket} -> socket |> assign(:seal, {:ok, seal}) |> seal_set(prompt)
+      {:done, {:error, reason}, socket} -> seal_refused(socket, prompt, reason)
+    end
+  end
+
+  defp confirming(%Context{} = context, opts),
+    do: %{context | confirmation_id: Keyword.get(opts, :confirmation_id)}
+
+  defp confirming(context, _opts), do: context
+
+  # The offer's own prompt reports nothing: no view asked for it.
+  defp seal_set(socket, %{id: @seal_choice} = prompt),
+    do: socket |> drop_prompt_asks(prompt.id) |> advance()
+
+  defp seal_set(socket, prompt), do: settle(socket, prompt, :confirmed)
+
+  defp seal_refused(socket, %{id: @seal_choice}, reason),
+    do: assign(socket, :error, seal_refusal(reason))
+
+  defp seal_refused(socket, prompt, reason),
+    do: refuse(socket, prompt, reason, seal_refusal(reason))
+
+  defp seal_refusal(:already_set),
+    do: "A seal is already set here. Change it from Settings, under Your identity."
+
+  defp seal_refusal(:not_set), do: "No seal is set here yet: choose one first."
+
+  defp seal_refusal(:invalid_seal),
+    do: "Choose the pair drawn for you or one of the listed words, and a listed glyph or none."
+
+  defp seal_refusal(:refused),
+    do: "Only your own signed-in browser or paired device chooses or changes your seal."
+
+  defp seal_refusal(:unavailable), do: "Your seal could not be saved. Try again."
+  defp seal_refusal(reason), do: Ops.error_message(reason)
 
   # ---------------------------------------------------------------------------
   # Recovery material
@@ -2412,6 +2572,7 @@ defmodule PrismWeb.SystemLayer do
             {title(@current)}
           </h2>
           <p id={"#{@id}-description"} class="text-sm text-gray-300">
+            <.seal seal={@seal} />
             {description(@current)}
           </p>
 
@@ -2427,6 +2588,7 @@ defmodule PrismWeb.SystemLayer do
             context={assigns[:context]}
             athanor_route={@athanor_route}
             athanor_name={@athanor_name}
+            seal_pair={@seal_pair}
           />
 
           <.panel :if={@panel} panel={@panel} may={@proves} myself={@myself} id={@id} />
@@ -2442,7 +2604,65 @@ defmodule PrismWeb.SystemLayer do
           </p>
         </div>
       </dialog>
+
+      <section
+        :if={@seal_offer == :open and is_nil(@current)}
+        data-test="seal-offer"
+        aria-label="Your seal"
+        class="fixed bottom-4 left-4 z-40 max-w-sm space-y-2 rounded-lg border border-gray-700 bg-gray-900 p-4 text-sm text-gray-100 shadow-xl"
+      >
+        <p>
+          Choose your seal. Every prompt this home draws will begin with it, so you can tell its prompts from anything an app shows.
+        </p>
+        <div class="flex flex-wrap gap-2">
+          <button
+            type="button"
+            phx-click="seal_offer"
+            phx-target={@myself}
+            data-test="seal-offer-open"
+            class={button_class(true)}
+          >
+            Choose your seal
+          </button>
+          <button
+            type="button"
+            phx-click="seal_offer_dismiss"
+            phx-target={@myself}
+            data-test="seal-offer-dismiss"
+            class={button_class(false)}
+          >
+            Not now
+          </button>
+        </div>
+      </section>
     </div>
+    """
+  end
+
+  attr :seal, :any, required: true
+
+  # The person's seal, the first text of every prompt's description; until
+  # one is chosen, the line that says none is, never a default.
+  defp seal(%{seal: {:ok, %Sanctum.Seal{} = seal}} = assigns) do
+    assigns =
+      assign(assigns, :shown, Enum.join(Enum.reject([seal.text, seal.glyph], &is_nil/1), " "))
+
+    ~H"""
+    <span
+      data-test="seal"
+      data-seal="set"
+      class="mr-1 inline-block rounded bg-gray-700 px-2 py-0.5 font-semibold text-white"
+    >{@shown}</span>
+    """
+  end
+
+  defp seal(assigns) do
+    ~H"""
+    <span
+      data-test="seal"
+      data-seal="none"
+      class="mr-1 inline-block rounded border border-dashed border-gray-500 px-2 py-0.5 text-gray-300"
+    >No seal chosen yet.</span>
     """
   end
 
@@ -2472,6 +2692,7 @@ defmodule PrismWeb.SystemLayer do
   attr :context, :any, default: nil
   attr :athanor_route, :any, default: nil
   attr :athanor_name, :any, default: nil
+  attr :seal_pair, :string, default: nil
 
   # The consent walk: the sheet starts from the plan and preview the
   # prompt arrived with and hands each walk it makes back to this layer.
@@ -2687,6 +2908,48 @@ defmodule PrismWeb.SystemLayer do
       button_class={button_class(false)}
       primary_class={button_class(true)}
     />
+    """
+  end
+
+  # The seal's words: the pair drawn for the prompt first, then each word
+  # of the list alone; and a glyph, or none.
+  defp body(%{prompt: %{kind: :seal}} = assigns) do
+    assigns = assign(assigns, words: Sanctum.Seal.words(), glyphs: Sanctum.Seal.glyphs())
+
+    ~H"""
+    <form
+      id={"#{@id}-seal"}
+      phx-submit="seal_submit"
+      phx-target={@myself}
+      class="space-y-3"
+      data-test="seal-form"
+    >
+      <input type="hidden" name="prompt_id" value={@prompt.id} />
+      <label class="block space-y-1 text-sm">
+        <span>Words</span>
+        <select name="text" data-test="seal-text" class="w-full rounded bg-gray-800 p-2">
+          <option :if={@seal_pair} value={@seal_pair} selected>{@seal_pair} (drawn for you)</option>
+          <option :for={word <- @words} value={word}>{word}</option>
+        </select>
+      </label>
+      <button
+        type="button"
+        phx-click="seal_draw"
+        phx-target={@myself}
+        phx-value-id={@prompt.id}
+        data-test="seal-draw"
+        class={button_class(false)}
+      >
+        Draw another pair
+      </button>
+      <label class="block space-y-1 text-sm">
+        <span>A glyph, if you want one</span>
+        <select name="glyph" data-test="seal-glyph" class="w-full rounded bg-gray-800 p-2">
+          <option value="">None</option>
+          <option :for={glyph <- @glyphs} value={glyph}>{glyph}</option>
+        </select>
+      </label>
+    </form>
     """
   end
 
@@ -2928,6 +3191,19 @@ defmodule PrismWeb.SystemLayer do
           true -> "Save to vault"
         end}
       </button>
+      <button
+        :if={@prompt.kind == :seal}
+        type="submit"
+        form={"#{@id}-seal"}
+        data-test="seal-submit"
+        class={button_class(true)}
+      >
+        {cond do
+          is_nil(@prompt.action) -> "Set this seal"
+          @may -> "Change your seal"
+          true -> "Request confirmation"
+        end}
+      </button>
     </div>
     """
   end
@@ -2966,6 +3242,8 @@ defmodule PrismWeb.SystemLayer do
 
   defp title(%{kind: :safe_mode}), do: "Safe mode"
   defp title(%{kind: :pairing}), do: "Your devices"
+  defp title(%{kind: :seal, action: nil}), do: "Choose your seal"
+  defp title(%{kind: :seal}), do: "Change your seal"
   defp title(%{kind: :confirmation, subject: %{operation: operation}}), do: "Confirm #{operation}"
 
   defp title(%{kind: kind} = prompt) when kind in [:enrollment, :kit, :holder],
@@ -3011,6 +3289,17 @@ defmodule PrismWeb.SystemLayer do
     do:
       "Pair a phone or another browser with this home, or revoke a device you paired. " <>
         "Pairing and revoking each need a fresh confirmation."
+
+  defp description(%{kind: :seal, action: nil}),
+    do:
+      "Every prompt this home draws begins with your seal. No app can read it, so a prompt " <>
+        "that shows another seal, or none, is not this home's. Choose the pair drawn for " <>
+        "you or one word, and a glyph if you want one."
+
+  defp description(%{kind: :seal}),
+    do:
+      "Every prompt this home draws begins with your seal. Choose the new one; changing it " <>
+        "needs a fresh confirmation."
 
   defp description(%{kind: :confirmation, subject: %{own: true}}),
     do:

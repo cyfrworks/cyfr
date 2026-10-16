@@ -1818,7 +1818,14 @@ defmodule Cyfr.Boundaries do
     "Sanctum.RequestLog" => [list: 2],
     "Sanctum.Resources" => [list_resource_templates: 0, list_resources: 0, resolve: 1, table: 0],
     "Sanctum.RunningTasks" => [cancel: 1, cancel_handle: 1, release_handle: 1],
-    "Sanctum.Seal" => [for_system_layer: 1],
+    "Sanctum.Seal" => [
+      change: 2,
+      choose: 2,
+      for_system_layer: 1,
+      generate: 0,
+      glyphs: 0,
+      words: 0
+    ],
     "Sanctum.Session" => [cleanup: 0, create: 1, destroy: 1, get: 1],
     "Sanctum.SignIn" => [admitted: 2, link_ticket: 2, record_namespace: 2, suggested_slug: 2],
     "Sanctum.Tenancy" => [
