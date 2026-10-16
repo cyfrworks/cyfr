@@ -1435,3 +1435,117 @@ func TestUpdateRefusesANonBindMountUnderTheStorageRoot(t *testing.T) {
 		})
 	}
 }
+
+// setService sets key on the cyfr service in the scenario's `compose
+// config` answer.
+func (s *updateScenario) setService(key string, value any) {
+	s.t.Helper()
+	raw, err := os.ReadFile(filepath.Join(s.fake, "config.out"))
+	if err != nil {
+		s.t.Fatal(err)
+	}
+	var config map[string]any
+	if err := json.Unmarshal(raw, &config); err != nil {
+		s.t.Fatal(err)
+	}
+	config["services"].(map[string]any)["cyfr"].(map[string]any)[key] = value
+	if raw, err = json.Marshal(config); err != nil {
+		s.t.Fatal(err)
+	}
+	s.answer("config.out", string(raw))
+}
+
+// Every key compose mounts something with is read, not only `volumes`: a
+// service-level tmpfs (a list or one path), a secret or a config whose
+// target lies under the storage root, or at the root itself, is no bind
+// the snapshot can copy, and volumes_from mounts what the configuration
+// does not place; each refuses before anything stops. Found by review: a
+// service-level tmpfs under the root was accepted and the update reported
+// success.
+func TestUpdateRefusesEveryNonBindMountSource(t *testing.T) {
+	cases := []struct {
+		name, key string
+		value     any
+		want      string
+	}{
+		{"tmpfs list", "tmpfs", []string{"/app/data/components:rw,size=64m"}, "tmpfs mount at /app/data/components"},
+		{"tmpfs path", "tmpfs", "/app/data/components", "tmpfs mount at /app/data/components"},
+		{"tmpfs over the root", "tmpfs", []string{"/app/data"}, "on no bind mount"},
+		{"secret", "secrets", []map[string]any{{"source": "blob", "target": "/app/data/blobs/key"}}, "secret mount at /app/data/blobs/key"},
+		{"config", "configs", []map[string]any{{"source": "settings", "target": "/app/data/settings.json"}}, "config mount at /app/data/settings.json"},
+		{"volumes_from", "volumes_from", []string{"service:other"}, "volumes_from"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			s := newUpdateScenario(t, shippedCompose(t), nil)
+			s.setService(c.key, c.value)
+			out, err := s.run(context.Background())
+			if err == nil || !strings.Contains(err.Error(), c.want) {
+				t.Fatalf("update answered %v, want a refusal naming %q\n%s", err, c.want, out)
+			}
+			s.nothingStopped()
+			s.composeUnchanged()
+			s.noBackups()
+		})
+	}
+
+	// A secret at its default place, outside the storage root, is no bar.
+	s := newUpdateScenario(t, shippedCompose(t), nil)
+	s.setService("secrets", []map[string]any{{"source": "token"}})
+	if out, err := s.run(context.Background()); err != nil {
+		t.Fatalf("a secret under /run/secrets refused the update: %v\n%s", err, out)
+	}
+}
+
+// Nested binds supplied deepest first, each covering files of the one above
+// it: the snapshot holds every layer's own bytes in its place and none a
+// deeper layer covers.
+func TestUpdateSnapshotsNestedMountsInAnyOrder(t *testing.T) {
+	parent, child, deepest := t.TempDir(), t.TempDir(), t.TempDir()
+	write := func(dir, rel, content string) {
+		t.Helper()
+		p := filepath.Join(dir, rel)
+		if err := os.MkdirAll(filepath.Dir(p), 0700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(content), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write(parent, "parent-only", "parent")
+	write(parent, "acme/covered-parent", "hidden")
+	write(parent, "acme/deep/c.wasm", "hidden-parent")
+	write(child, "child-only", "child")
+	write(child, "deep/covered-child", "hidden")
+	write(child, "deep/c.wasm", "hidden-child")
+	write(deepest, "c.wasm", "deepest bytes")
+	compose := strings.Replace(string(shippedCompose(t)), "      - ./data:/app/data\n",
+		"      - ./data:/app/data\n      - "+deepest+":/app/data/components/acme/deep\n      - "+child+":/app/data/components/acme\n      - "+parent+":/app/data/components\n", 1)
+	s := newUpdateScenario(t, []byte(compose), nil)
+	write(filepath.Join(s.project, "data"), "components/covered-root", "hidden")
+	for _, v := range []map[string]any{
+		{"type": "bind", "source": deepest, "target": "/app/data/components/acme/deep"},
+		{"type": "bind", "source": child, "target": "/app/data/components/acme"},
+		{"type": "bind", "source": parent, "target": "/app/data/components"},
+	} {
+		s.addVolume(v)
+	}
+	out, err := s.run(context.Background())
+	if err != nil {
+		t.Fatalf("update: %v\n%s", err, out)
+	}
+	for rel, want := range map[string]string{
+		"components/parent-only":      "parent",
+		"components/acme/child-only":  "child",
+		"components/acme/deep/c.wasm": "deepest bytes",
+	} {
+		if got, err := os.ReadFile(filepath.Join(s.snapshotDir(), "storage", rel)); err != nil || string(got) != want {
+			t.Errorf("storage/%s holds %q (error %v), want %q", rel, got, err, want)
+		}
+	}
+	for _, rel := range []string{"components/covered-root", "components/acme/covered-parent", "components/acme/deep/covered-child"} {
+		if _, err := os.Lstat(filepath.Join(s.snapshotDir(), "storage", rel)); !errors.Is(err, fs.ErrNotExist) {
+			t.Errorf("storage/%s, a covered file, is in the snapshot (%v)", rel, err)
+		}
+	}
+}

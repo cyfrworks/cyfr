@@ -5,6 +5,7 @@ package cmd
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -688,14 +689,72 @@ type storageMount struct {
 // composeConfig is the part of `docker compose config --format json` the
 // update reads.
 type composeConfig struct {
-	Services map[string]struct {
-		Environment map[string]*string `json:"environment"`
-		Volumes     []struct {
-			Type   string `json:"type"`
-			Source string `json:"source"`
-			Target string `json:"target"`
-		} `json:"volumes"`
-	} `json:"services"`
+	Services map[string]composeService `json:"services"`
+}
+
+// composeService is a service as `docker compose config --format json`
+// writes it: its environment, and every key that mounts something into its
+// filesystem.
+type composeService struct {
+	Environment map[string]*string `json:"environment"`
+	Volumes     []composeMount     `json:"volumes"`
+	// Tmpfs is a path or a list of them, each with its options after `:`.
+	Tmpfs       json.RawMessage `json:"tmpfs"`
+	Secrets     []composeFile   `json:"secrets"`
+	Configs     []composeFile   `json:"configs"`
+	VolumesFrom []string        `json:"volumes_from"`
+}
+
+// composeMount is one mount into a service's filesystem.
+type composeMount struct {
+	Type   string `json:"type"`
+	Source string `json:"source"`
+	Target string `json:"target"`
+}
+
+// composeFile is a secret or a config mounted into a service.
+type composeFile struct {
+	Source string `json:"source"`
+	Target string `json:"target"`
+}
+
+// mounts answers every mount compose makes into svc: its volumes of every
+// type, its tmpfs paths, and its secrets and configs at their targets. A
+// service mounting another's volumes (volumes_from) is refused, since what
+// those put where is not in the configuration.
+func (svc composeService) mounts() ([]composeMount, error) {
+	if len(svc.VolumesFrom) > 0 {
+		return nil, fmt.Errorf("the cyfr service mounts the volumes of %s (volumes_from), which cyfr update cannot place, so it cannot snapshot the storage root; nothing was changed", strings.Join(svc.VolumesFrom, ", "))
+	}
+	mounts := slices.Clone(svc.Volumes)
+	var tmpfs []string
+	if len(svc.Tmpfs) > 0 && string(svc.Tmpfs) != "null" {
+		var one string
+		if err := json.Unmarshal(svc.Tmpfs, &one); err == nil {
+			tmpfs = []string{one}
+		} else if err := json.Unmarshal(svc.Tmpfs, &tmpfs); err != nil {
+			return nil, errors.New("the cyfr service's tmpfs did not read; nothing was changed")
+		}
+	}
+	for _, entry := range tmpfs {
+		target, _, _ := strings.Cut(entry, ":")
+		mounts = append(mounts, composeMount{Type: "tmpfs", Target: target})
+	}
+	for _, secret := range svc.Secrets {
+		target := cmp.Or(secret.Target, secret.Source)
+		if !path.IsAbs(target) {
+			target = path.Join("/run/secrets", target)
+		}
+		mounts = append(mounts, composeMount{Type: "secret", Source: secret.Source, Target: target})
+	}
+	for _, config := range svc.Configs {
+		target := cmp.Or(config.Target, config.Source)
+		if !path.IsAbs(target) {
+			target = "/" + target
+		}
+		mounts = append(mounts, composeMount{Type: "config", Source: config.Source, Target: target})
+	}
+	return mounts, nil
 }
 
 // readConfig reads cyfr's effective environment and mounts from compose and
@@ -715,6 +774,10 @@ func (u *updater) readConfig() error {
 	if !ok {
 		return errors.New("the stack's configuration has no cyfr service; nothing was changed")
 	}
+	mounts, err := cyfr.mounts()
+	if err != nil {
+		return err
+	}
 	env := func(name string) string {
 		if value := cyfr.Environment[name]; value != nil {
 			return strings.TrimSpace(*value)
@@ -726,15 +789,20 @@ func (u *updater) readConfig() error {
 	// ok is false unless that mount is a bind.
 	containerToHost := func(p string) (string, bool) {
 		best, host, bind := -1, "", false
-		for _, v := range cyfr.Volumes {
+		for _, v := range mounts {
 			target := path.Clean(v.Target)
 			rel, ok := strings.CutPrefix(p, target)
 			if !ok || rel != "" && !strings.HasPrefix(rel, "/") && target != "/" {
 				continue
 			}
-			if len(target) > best {
-				best, bind = len(target), v.Type == "bind" && v.Source != ""
+			switch isBind := v.Type == "bind" && v.Source != ""; {
+			case len(target) > best:
+				best, bind = len(target), isBind
 				host = filepath.Join(v.Source, filepath.FromSlash(rel))
+			case len(target) == best && !isBind:
+				// Two mounts at one target: which one cyfr sees is not
+				// the configuration's to say, so the path is not mapped.
+				bind = false
 			}
 		}
 		return host, best >= 0 && bind
@@ -743,8 +811,8 @@ func (u *updater) readConfig() error {
 	// container path root, shallower first, refusing one that is not a bind:
 	// its bytes are no host directory the snapshot can copy.
 	nestedMounts := func(root string) ([]storageMount, error) {
-		var mounts []storageMount
-		for _, v := range cyfr.Volumes {
+		var nested []storageMount
+		for _, v := range mounts {
 			target := path.Clean(v.Target)
 			rel, ok := strings.CutPrefix(target, strings.TrimSuffix(root, "/")+"/")
 			if !ok || rel == "" {
@@ -758,12 +826,12 @@ func (u *updater) readConfig() error {
 			if err != nil || statErr != nil || !(info.IsDir() || info.Mode().IsRegular()) {
 				return nil, fmt.Errorf("The mount %s under the storage root (on the host %s) is not a readable directory or file, so cyfr update cannot snapshot it; nothing was changed", target, v.Source)
 			}
-			mounts = append(mounts, storageMount{rel: rel, host: resolved, dir: info.IsDir()})
+			nested = append(nested, storageMount{rel: rel, host: resolved, dir: info.IsDir()})
 		}
-		slices.SortStableFunc(mounts, func(a, b storageMount) int {
+		slices.SortStableFunc(nested, func(a, b storageMount) int {
 			return strings.Count(a.rel, "/") - strings.Count(b.rel, "/")
 		})
-		return mounts, nil
+		return nested, nil
 	}
 	settingPath := func(name, fallback string) (string, error) {
 		value := fallback
