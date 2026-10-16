@@ -21,6 +21,16 @@
 #                 builder holds no tenant state. On after `cyfr init`, which
 #                 writes CYFR_LOCUS_BUILDS_URL and mints its key; selected
 #                 by its profile.                  [profile: locus-builds]
+#   locus-builds-guard, locus-backends-guard — each island's egress guard:
+#                 the same image running cyfr-guard with NET_ADMIN alone,
+#                 whose network namespace the island's service shares, so
+#                 a build or a backend reaches public hosts and the private
+#                 hosts CYFR_PRIVATE_EGRESS_TARGETS names, and never a
+#                 link-local or metadata address, the control plane,
+#                 another private address or another spawn's listener.
+#                 The island starts only once its guard is healthy, which
+#                 it is only with every rule installed.
+#                                  [locus-builds-guard: profile locus-builds]
 #   caddy      — TLS + reverse proxy in front of cyfr. Opt-in via the `tls`
 #                 profile.                                   [profile: tls]
 #
@@ -132,8 +142,23 @@ services:
       - CYFR_LOCUS_RUNTIME_WORKERS=${CYFR_LOCUS_RUNTIME_WORKERS:-wrk_locus=http://locus-runtime:4200}
       - CYFR_HOST_API_BIND=172.16.231.2
       - CYFR_HOST_API_PORT=${CYFR_HOST_API_PORT:-4300}
+      # The endpoint binds cyfr's own fixed address on the default network
+      # (below), where Docker publishes the host's loopback port and Caddy
+      # reaches it, and no other: the networks the Locus services join
+      # never reach the endpoint.
+      - CYFR_BIND_ADDRESS=172.16.230.2
     networks:
-      default: {}
+      # A fixed address, the one CYFR_BIND_ADDRESS names: outside the
+      # network's ip_range, so no container started first can take it. The
+      # network is cyfr's gateway (gw_priority), so Docker maps the
+      # published loopback port to this address whatever other networks
+      # cyfr joins and in whatever order they came up (the network is
+      # dual-stack for the same reason, see `networks`); without that, an
+      # IPv6-enabled island network takes the mapping, and the port
+      # answers nothing (tests/compose-proof/run.sh --case bind holds it).
+      default:
+        ipv4_address: 172.16.230.2
+        gw_priority: 1
       locus-backends: {}
       locus-builds: {}
       # A fixed address, the one CYFR_HOST_API_BIND names: outside the
@@ -174,8 +199,6 @@ services:
       context: .
       dockerfile: Dockerfile.locus
     profiles: ["locus-builds"]
-    expose:
-      - "4100"
     # The release's settings from .env.locus, one file for every role. The
     # builder never sees the rest of .env: not the keyring, not the
     # database, not the runtime's root, not the backends key, and refuses
@@ -189,14 +212,25 @@ services:
       # CYFR_LOCUS_BUILDS_KEY. Without a valid key the builder refuses to
       # start (and restart-loops here).
       - LOCUS_BUILDS_KEY=${CYFR_LOCUS_BUILDS_KEY:-}
-    # Only cyfr can reach the builder: it sits on its own network, which
-    # cyfr also joins; locus-backends, locus-runtime and caddy never see port 4100. The
+    # Only cyfr can reach the builder: it shares the network namespace of
+    # its guard, which sits on the builds network, which cyfr also joins;
+    # locus-backends, locus-runtime and caddy never see port 4100. The
     # network is not `internal` — cargo and npm need crates.io and the
-    # registry — so the isolation is who is attached, not egress. This is
-    # the container's only network, so listening on every interface is
-    # listening on it (LOCUS_BUILDS_BIND is for a builder outside compose).
-    networks:
-      - locus-builds
+    # registry — and what a build reaches out to is the guard's rules
+    # (cyfr-guard): public hosts and the private hosts
+    # CYFR_PRIVATE_EGRESS_TARGETS names, nothing link-local, no metadata
+    # address, not the control plane, no other private address, and no
+    # listener of another build on the shared loopback. The guard's
+    # namespace is the container's only network, so listening on every
+    # interface is listening on it (LOCUS_BUILDS_BIND is for a builder
+    # outside compose). The builder starts only once the guard is healthy,
+    # which it is only with every rule installed; a guard that restarts
+    # takes a fresh namespace, and the builder is recreated to join it
+    # (`docker compose up -d`).
+    network_mode: service:locus-builds-guard
+    depends_on:
+      locus-builds-guard:
+        condition: service_healthy
     # No /data mount: the builder holds no tenant state — sources arrive in
     # the request, artifacts leave in the response. These tmpfs mounts are
     # the only writable surfaces under the read-only root. Build homes: each
@@ -225,6 +259,68 @@ services:
           # measurement, tests/builder-image/headroom.py repeats it).
           memory: ${LOCUS_BUILDS_MEMORY_LIMIT:-4G}
           cpus: "${LOCUS_BUILDS_CPU_LIMIT:-2}"
+
+  # The builds island's egress guard: the Locus image running cyfr-guard
+  # (apps/locus/keeper/guard/cyfr-guard.sh) in the network namespace
+  # locus-builds shares, holding NET_ADMIN and no other capability. It
+  # carries the island's service name as an alias, so cyfr's
+  # CYFR_LOCUS_BUILDS_URL resolves to the namespace the builder listens
+  # in. Its health is the ready file cyfr-guard writes only once every rule
+  # is installed, re-checked against the rules in place; a guard whose
+  # rules failed never turns healthy, so its island never starts. It
+  # starts with the island's profile and no release, key or mount.
+  locus-builds-guard:
+    container_name: cyfr-locus-builds-guard
+    image: ghcr.io/cyfrworks/cyfr-locus:latest
+    build:
+      context: .
+      dockerfile: Dockerfile.locus
+    profiles: ["locus-builds"]
+    # The builder's port, which it listens on in this namespace: Docker
+    # takes a port's exposure from the namespace's owner alone.
+    expose:
+      - "4100"
+    entrypoint: ["cyfr-guard"]
+    init: true
+    cap_drop:
+      - ALL
+    cap_add:
+      - NET_ADMIN
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    ipc: none
+    # The ready file's tmpfs, the guard's only writable surface.
+    tmpfs:
+      - /run/cyfr-guard:mode=0755,size=1m
+    environment:
+      # The island's spawn uids, whose reach into the shared namespace the
+      # guard refuses (the resolver apart); cyfr's fixed address on the
+      # default network; and the private hosts the deployment names, the
+      # one exception to the private ranges.
+      - CYFR_GUARD_POOL=30001-30016
+      - CYFR_GUARD_CONTROL_PLANE=172.16.230.2
+      - CYFR_PRIVATE_EGRESS_TARGETS=${CYFR_PRIVATE_EGRESS_TARGETS:-locus-backends}
+    networks:
+      locus-builds:
+        aliases:
+          - locus-builds
+    healthcheck:
+      test: ["CMD", "cyfr-guard", "check"]
+      interval: 10s
+      timeout: 3s
+      start_period: 5s
+      retries: 3
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    deploy:
+      resources:
+        limits:
+          memory: 32M
 
   # The runtime: the same image as locus-builds, holding the runtime's key
   # and the runner pool, and no other key. cyfr reaches it at
@@ -337,8 +433,6 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.locus
-    expose:
-      - "4101"
     # The image's entrypoint serves builds; this service runs the backend
     # pool instead: 32 uids, each backend under one of its own.
     entrypoint: ["cyfr-locus", "serve", "--pool", "backends:20001-20032", "--home-root", "/var/lib/locus/homes", "--client-user", "locus", "--", "/app/bin/locus", "start"]
@@ -357,14 +451,24 @@ services:
       # CYFR_LOCUS_BACKENDS_KEY. `cyfr init` generates it. Without a valid
       # key the service refuses to start (and restart-loops here).
       - LOCUS_BACKENDS_KEY=${CYFR_LOCUS_BACKENDS_KEY:-}
-    # Only cyfr can reach the service: it sits on its own network, which
-    # cyfr also joins; locus-builds, locus-runtime and caddy never see port 4101.
-    # The network is not `internal` — `npx` needs the registry and a
-    # backend its upstream API — so the isolation is who is attached, not
-    # egress. This is the container's only network, so listening on every
-    # interface is listening on it.
-    networks:
-      - locus-backends
+    # Only cyfr can reach the service: it shares the network namespace of
+    # its guard, which sits on the backends network, which cyfr also joins;
+    # locus-builds, locus-runtime and caddy never see port 4101. The
+    # network is not `internal` — `npx` needs the registry and a backend
+    # its upstream API — and what a backend reaches out to is the guard's
+    # rules (cyfr-guard): public hosts and the private hosts
+    # CYFR_PRIVATE_EGRESS_TARGETS names, nothing link-local, no metadata
+    # address, not the control plane, no other private address, and no
+    # listener of another backend on the shared loopback. The guard's
+    # namespace is the container's only network, so listening on every
+    # interface is listening on it. The service starts only once the guard
+    # is healthy, which it is only with every rule installed; a guard that
+    # restarts takes a fresh namespace, and the service is recreated to
+    # join it (`docker compose up -d`).
+    network_mode: service:locus-backends-guard
+    depends_on:
+      locus-backends-guard:
+        condition: service_healthy
     # These tmpfs mounts are the only writable surfaces under the read-only
     # root, so a backend has no shared /tmp, /var/tmp, /run or /dev/shm and
     # writes temporary files under its home. Backend homes: each backend's
@@ -397,6 +501,54 @@ services:
           # This limit bounds every backend running at once and the
           # service beside them together.
           memory: 1G
+
+  # The backends island's egress guard, as the builds island's: cyfr-guard
+  # in the namespace locus-backends shares, NET_ADMIN alone, the island's
+  # service name as its alias, healthy only with every rule installed.
+  locus-backends-guard:
+    container_name: cyfr-locus-backends-guard
+    image: ghcr.io/cyfrworks/cyfr-locus:latest
+    build:
+      context: .
+      dockerfile: Dockerfile.locus
+    expose:
+      - "4101"
+    entrypoint: ["cyfr-guard"]
+    init: true
+    cap_drop:
+      - ALL
+    cap_add:
+      - NET_ADMIN
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    ipc: none
+    tmpfs:
+      - /run/cyfr-guard:mode=0755,size=1m
+    environment:
+      - CYFR_GUARD_POOL=20001-20032
+      - CYFR_GUARD_CONTROL_PLANE=172.16.230.2
+      - CYFR_PRIVATE_EGRESS_TARGETS=${CYFR_PRIVATE_EGRESS_TARGETS:-locus-backends}
+    networks:
+      locus-backends:
+        aliases:
+          - locus-backends
+    healthcheck:
+      test: ["CMD", "cyfr-guard", "check"]
+      interval: 10s
+      timeout: 3s
+      start_period: 5s
+      retries: 3
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    deploy:
+      resources:
+        limits:
+          memory: 32M
 
   caddy:
     profiles: ["tls"]
@@ -440,10 +592,30 @@ services:
           memory: 256M
 
 networks:
-  default: {}
-  # cyfr <-> locus-backends only (see the locus-backends service).
+  # cyfr's endpoint, Caddy and the host's published loopback port. Its
+  # subnet is fixed so cyfr can hold the fixed address its endpoint binds
+  # (CYFR_BIND_ADDRESS), outside the pools Docker draws the other
+  # networks' subnets from by default, as the locus-runtime network's is
+  # (below); the other containers on it take addresses from its ip_range
+  # alone. Docker publishes 127.0.0.1:${CYFR_PORT:-4000} to that address
+  # (tests/compose-proof/run.sh --case bind holds it to that). The network
+  # is dual-stack, with the unique-local IPv6 subnet Docker assigns: Docker
+  # maps a published port to the container's address on an IPv6-enabled
+  # network ahead of an IPv4-only one, so a network cyfr joins that has
+  # IPv6 on (an island network an operator enables it on, or every network
+  # under a daemon that enables it by default) would otherwise take the
+  # mapping from this one; with IPv6 on here, cyfr's gw_priority decides.
+  default:
+    enable_ipv6: true
+    ipam:
+      config:
+        - subnet: 172.16.230.0/24
+          ip_range: 172.16.230.128/25
+  # cyfr <-> locus-backends-guard, whose namespace locus-backends shares
+  # (see the locus-backends service).
   locus-backends: {}
-  # cyfr <-> locus-builds only (see the locus-builds service).
+  # cyfr <-> locus-builds-guard, whose namespace locus-builds shares (see
+  # the locus-builds service).
   locus-builds: {}
   # cyfr <-> locus-runtime only: the other Locus services and caddy never
   # see port 4200, and no runner is on it (see the locus-runtime service).

@@ -24,10 +24,26 @@
   deployment that lacks it would be, the service answers every build
   `unavailable`, naming the option, and runs nothing: no build is ever run
   without its memory bound (tests/builder-image/memory.py proves the bound).
+- The builder listens in the namespace of its egress guard, the image under
+  test holding NET_ADMIN alone, and a build leaves only through the guard's
+  rules: its connections to cyfr's name on the builds network and to
+  cyfr's fixed endpoint address (a stand-in answers both to a container
+  outside the guard), to the metadata and link-local addresses of both
+  families, to another private address and to the island's own loopback
+  are refused at once, each counted on the guard's own rule; the resolver
+  and the public registry are reached (the registry step is skipped, with
+  its reason, under CYFR_TEST_OFFLINE=1).
+- A build's listener on the shared loopback is reached by the container's
+  root and refused to a concurrent build of another uid, on the loopback,
+  on `::1` and on the island's own address.
+- A guard started with an ip6tables that fails writes no ready file, never
+  turns healthy, names the rule that failed, and the builder behind it is
+  never started.
 
 Usage: tests/builder-image/isolation.py IMAGE
 """
 
+import ipaddress
 import json
 import os
 import re
@@ -40,9 +56,13 @@ sys.dont_write_bytecode = True
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from stack import (  # noqa: E402
-    HOME_ROOT, POOL_FIRST, POOL_LAST, PORT, PROJECT_PREFIX, RELEASE_BIN, RELEASE_UID, RELEASE_USER, ROLE, RUN_DIR, Stack,
-    brief, build_canary, expect, output_file, run, tincture,
+    CONNECT_PROBE, ENDPOINT_ADDRESS, GUARD, HOME_ROOT, NETWORK, POOL_FIRST, POOL_LAST, PORT, PROJECT_PREFIX, REFUSED, RELEASE,
+    RELEASE_BIN, RELEASE_UID, RELEASE_USER, ROLE, RUN_DIR, SERVICE, Stack, brief, build_canary, expect, output_file, run,
+    tincture,
 )
+
+# On the path once stack.py is loaded.
+import imagesuite  # noqa: E402
 
 KEEPER_CAPS = "00000000000000e0"
 TAG = "locus-builds-residue"
@@ -132,6 +152,44 @@ impl Guest for Daemon {
     }
 }
 """
+
+
+# A build's connection probe: cyfr's name on the builds network and
+# cyfr's fixed endpoint address (the stand-in answers both), the metadata
+# and link-local addresses of both families, a private address, Docker's
+# resolver, the island's own loopback and, unless the host is offline, the
+# public registry. The resolver is also asked for cyfr's name, as a build
+# asks for a registry's.
+EGRESS = r"""
+set -u
+mkdir -p dist
+getent hosts cyfr > dist/cyfr.txt 2>&1; echo "status=$?" >> dist/cyfr.txt
+node probe.js targets "cyfr:4000" "@STAND_IN_V4@:4000" "[@STAND_IN_V6@]:4000" "@ENDPOINT@:4000" "169.254.169.254:80" \
+  "100.100.100.200:80" "[fd00:ec2::254]:80" "[fe80::1%eth0]:80" "10.1.2.3:80" "127.0.0.11:53" "127.0.0.1:1" \
+  @REGISTRY@ > dist/egress.txt 2>&1
+if [ -n "@REGISTRY@" ]; then
+  curl -sS -o /dev/null -w '%{http_code}' --max-time 20 https://registry.npmjs.org/ > dist/registry.txt 2>&1
+fi
+"""
+
+# A build that listens on the shared loopback, on every address, and waits
+# for a concurrent build to try it; and that build, which tries the
+# loopback, `::1` and the island's own address.
+SIBLING_PORT = 47331
+SIBLING_LISTENER = r"""
+set -eu
+mkdir -p dist
+id -u > dist/uid.txt
+node -e "require('http').createServer((q, s) => s.end('sibling ' + process.getuid())).listen(@PORT@, '::')" > dist/listener.log 2>&1 &
+sleep 25
+echo done > dist/index.html
+""".replace("@PORT@", str(SIBLING_PORT))
+SIBLING_INTRUDER = r"""
+set -u
+mkdir -p dist
+id -u > dist/uid.txt
+node probe.js targets "127.0.0.1:@PORT@" "[::1]:@PORT@" "@OWN@:@PORT@" > dist/sibling.txt 2>&1
+""".replace("@PORT@", str(SIBLING_PORT))
 
 
 def pool_user(uid):
@@ -263,6 +321,161 @@ def test_residue(stack):
     expect("quarantined" not in logs and "outlived retirement" not in logs, "every build uid was retired clean", logs)
 
 
+def island_address(stack):
+    """The island's own address on the builds network: the guard's, whose namespace the builder shares."""
+    return stack.inspect(stack.guard)["NetworkSettings"]["Networks"][f"{stack.project}_{NETWORK}"]["IPAddress"]
+
+
+def stand_in_addresses(stack):
+    """The stand-in's IPv4 and IPv6 addresses on the builds network, where it answers to cyfr's name."""
+    stand_in = stack.compose("ps", "--quiet", "cyfr-stand-in").stdout.strip()
+    network = stack.inspect(stand_in)["NetworkSettings"]["Networks"][f"{stack.project}_{NETWORK}"]
+    return network["IPAddress"], network["GlobalIPv6Address"]
+
+
+def island_rule_counted(rose, subnets, address):
+    """Whether a REJECT rule of one of the guard's logged island subnets, the one holding `address`, counted a packet."""
+    ip = ipaddress.ip_address(address)
+    logged = [ipaddress.ip_network(subnet, strict=False) for subnet in subnets]
+    for rule, count in rose.items():
+        found = re.search(r"-d (\S+) -j REJECT", rule)
+        if not found or count <= 0:
+            continue
+        network = ipaddress.ip_network(found.group(1), strict=False)
+        if network.version == ip.version and ip in network and network in logged:
+            return True
+    return False
+
+
+def test_egress(stack):
+    guard, island = stack.inspect(stack.guard), stack.inspect(stack.container)
+    # Docker spells a capability it was given with or without its CAP_ prefix.
+    caps = [cap.removeprefix("CAP_") for cap in guard["HostConfig"]["CapAdd"] or []]
+    expect(guard["Config"]["Image"] == stack.image and caps == ["NET_ADMIN"]
+           and guard["HostConfig"]["CapDrop"] == ["ALL"] and guard["State"]["Health"]["Status"] == "healthy",
+           "the guard is the image under test, holding NET_ADMIN alone, and healthy", guard["HostConfig"])
+    expect(island["HostConfig"]["NetworkMode"] == f"container:{stack.guard}",
+           "the builder shares its guard's network namespace", island["HostConfig"]["NetworkMode"])
+    subnets = re.findall(r"island subnet (\S+)", stack.guard_logs())
+    expect(subnets, "the guard found the island's subnets", stack.guard_logs())
+
+    # The controls: outside the guard, both of cyfr's addresses answer.
+    for network, url in [(NETWORK, "http://cyfr:4000/"), (RELEASE["endpoint_network"], f"http://{ENDPOINT_ADDRESS}:4000/")]:
+        control = stack.beside(network, "curl", "-sS", "--max-time", "5", url)
+        expect(control.returncode == 0 and control.stdout == "stand-in",
+               f"the stand-in for cyfr answers {url} to a container on the {network} network outside the guard",
+               control.stdout + control.stderr)
+
+    offline = os.environ.get("CYFR_TEST_OFFLINE") == "1"
+    registry = "" if offline else "registry.npmjs.org:443"
+    stand_in_v4, stand_in_v6 = stand_in_addresses(stack)
+    expect(stand_in_v4 and stand_in_v6, "the stand-in holds an address of each family on the builds network", [stand_in_v4, stand_in_v6])
+    before = stack.guard_counters()
+    script = (EGRESS.replace("@ENDPOINT@", ENDPOINT_ADDRESS).replace("@REGISTRY@", registry)
+              .replace("@STAND_IN_V4@", stand_in_v4).replace("@STAND_IN_V6@", stand_in_v6))
+    status, answer = stack.build(tincture(script, {"probe.js": CONNECT_PROBE}), "javascript", "tincture")
+    expect(status == 200, "the egress probe build succeeds", brief(answer))
+    after = stack.guard_counters()
+    codes = fields(output_file(answer, "egress.txt"))
+    detail = {"codes": codes, "cyfr": output_file(answer, "cyfr.txt"), "registry": output_file(answer, "registry.txt")}
+    expect(codes.get("cyfr:4000") in REFUSED and codes.get(f"{stand_in_v4}:4000") in REFUSED
+           and codes.get(f"[{stand_in_v6}]:4000") in REFUSED and codes.get(f"{ENDPOINT_ADDRESS}:4000") in REFUSED,
+           "a build's connections to cyfr:4000, to cyfr's address of each family on the builds network and to cyfr's fixed "
+           "endpoint address are refused by the guard", detail)
+    expect(codes.get("169.254.169.254:80") in REFUSED and codes.get("100.100.100.200:80") in REFUSED,
+           "a build's connections to the IPv4 metadata addresses are refused", detail)
+    expect(codes.get("[fd00:ec2::254]:80") in REFUSED and codes.get("[fe80::1%eth0]:80") not in (None, "connected"),
+           "a build's connections to the IPv6 metadata and link-local addresses are refused", detail)
+    expect(codes.get("10.1.2.3:80") in REFUSED, "a build's connection to another private address is refused", detail)
+    expect(codes.get("127.0.0.1:1") in REFUSED, "a build's connection to the island's loopback is refused", detail)
+    expect(codes.get("127.0.0.11:53") == "connected" and "status=0" in (output_file(answer, "cyfr.txt") or ""),
+           "a build reaches Docker's resolver, over TCP and for cyfr's name", detail)
+    if offline:
+        print("skip: registry.npmjs.org:443 is not reached from a build: CYFR_TEST_OFFLINE=1 says this host has no public network",
+              flush=True)
+    else:
+        expect(codes.get("registry.npmjs.org:443") == "connected" and output_file(answer, "registry.txt") == "200",
+               "a build reaches the public registry", detail)
+
+    # Each refusal, and the resolver's exception, was the guard's own rule:
+    # that rule's counter rose while the build ran. The island's subnets are
+    # matched as networks, since the guard logs them in full and
+    # ip6tables-save prints them compressed.
+    rose = {rule: after.get(rule, 0) - before.get(rule, 0) for rule in after}
+    matched = {fragment: any(count > 0 for rule, count in rose.items() if fragment in rule)
+               for fragment in ["-d 169.254.0.0/16", "-d 100.100.100.200/32", f"-d {ENDPOINT_ADDRESS}/32",
+                                "-d fe80::/10", "-d fd00:ec2::254/128", "-d 10.0.0.0/8",
+                                "--dst-type LOCAL -j REJECT", "--ctorigdst 127.0.0.11"]}
+    for address in (stand_in_v4, stand_in_v6):
+        matched[f"the island subnet holding {address}"] = island_rule_counted(rose, subnets, address)
+    expect(all(matched.values()), "each refusal and the resolver's exception counted on the guard's own rule", {"rose": rose, "matched": matched})
+
+
+def test_sibling_loopback(stack):
+    results = {}
+
+    def build(name, script):
+        results[name] = stack.build(tincture(script, {"probe.js": CONNECT_PROBE}), "javascript", "tincture")
+
+    own = island_address(stack)
+    listener = threading.Thread(target=build, args=("listener", SIBLING_LISTENER))
+    listener.start()
+    control = None
+    for _ in range(150):
+        control = stack.exec(f"curl -sS --max-time 2 http://127.0.0.1:{SIBLING_PORT}/")
+        if control.returncode == 0 and control.stdout.startswith("sibling "):
+            break
+        time.sleep(0.1)
+    expect(control is not None and control.stdout.startswith("sibling "),
+           "a build's listener on the shared loopback answers the container's root", control and control.stdout + control.stderr)
+    before = stack.guard_counters()
+    build("intruder", SIBLING_INTRUDER.replace("@OWN@", own))
+    listener.join()
+    after = stack.guard_counters()
+
+    status, answer = results["intruder"]
+    expect(status == 200, "the intruding build succeeds", brief(answer))
+    expect(results["listener"][0] == 200, "the listening build completes undisturbed", brief(results["listener"][1]))
+    listening_uid = (output_file(results["listener"][1], "uid.txt") or "").strip()
+    intruding_uid = (output_file(answer, "uid.txt") or "").strip()
+    codes = fields(output_file(answer, "sibling.txt"))
+    detail = {"codes": codes, "listener": listening_uid, "intruder": intruding_uid, "control": control.stdout}
+    expect(listening_uid and intruding_uid and listening_uid != intruding_uid and control.stdout == f"sibling {listening_uid}",
+           "the two builds ran under different uids, and the listener was the first's", detail)
+    expect(all(codes.get(target) in REFUSED for target in [f"127.0.0.1:{SIBLING_PORT}", f"[::1]:{SIBLING_PORT}", f"{own}:{SIBLING_PORT}"]),
+           "the other build's connections to the listener, on the loopback, on ::1 and on the island's own address, are refused", detail)
+    rose = {rule: after.get(rule, 0) - before.get(rule, 0) for rule in after if "--dst-type LOCAL -j REJECT" in rule}
+    expect(sum(rose.values()) >= 3, "each refusal counted on the guard's loopback rule for the island's uids", rose)
+
+
+def test_guard_failure(image, canary):
+    tools = imagesuite.temporary_directory("cyfr-guard-fails-", 0o755)
+    with open(os.path.join(tools, "ip6tables"), "w") as f:
+        f.write("#!/bin/sh\necho 'ip6tables: forced failure' >&2\nexit 1\n")
+    os.chmod(os.path.join(tools, "ip6tables"), 0o755)
+    stack = Stack("locus-builds-isolation-guard-fails", image, canary, guard_tools_dir=tools)
+    try:
+        refused = stack.up_refused()
+        expect(refused.returncode != 0 and "dependency failed to start" in refused.stderr,
+               "compose does not start the builder: its guard never turned healthy", refused.stdout + refused.stderr)
+        guard = stack.compose("ps", "--all", "--quiet", GUARD).stdout.strip()
+        island = stack.compose("ps", "--all", "--quiet", SERVICE).stdout.strip()
+        expect(guard and island, "compose created the guard and the builder", [guard, island])
+        state = stack.inspect(guard)["State"]
+        logs = run("docker", "logs", guard, check=False)
+        text = logs.stdout + logs.stderr
+        expect(state.get("Health", {}).get("Status") != "healthy" and (state["ExitCode"] == 1 or state["RestartCount"] >= 1),
+               "the guard never turned healthy: it ended with an error, and restarts", state)
+        expect("[cyfr-guard] error: ip6tables" in text and "ready:" not in text,
+               "the guard named the ip6tables rule that failed and wrote no ready file", text[-2000:])
+        state = stack.inspect(island)["State"]
+        expect(state["Status"] == "created" and state["StartedAt"].startswith("0001-"),
+               "the builder behind the guard was never started", state)
+    finally:
+        stack.down()
+        imagesuite.remove_directory(tools)
+
+
 def test_no_bound_no_build(stack):
     stack.up(writable_cgroups=False)
     options = json.loads(run("docker", "inspect", stack.container).stdout)[0]["HostConfig"]["SecurityOpt"]
@@ -283,15 +496,22 @@ def main(image):
     canary = build_canary()
     stack = Stack("locus-builds-isolation", image, canary)
     try:
-        stack.up()
+        stack.up(stand_in=True)
         test_process_model(stack, image)
         test_build_identity(stack)
         test_concurrent_trees(stack)
+        test_egress(stack)
+        test_sibling_loopback(stack)
         test_no_survivors(stack)
         test_residue(stack)
         test_no_bound_no_build(stack)
     finally:
         stack.down()
+    try:
+        # After the first project is down: a second default network of the
+        # fixed subnet could not exist beside the first's.
+        test_guard_failure(image, canary)
+    finally:
         shutil.rmtree(canary, ignore_errors=True)
 
 

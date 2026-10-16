@@ -3,13 +3,19 @@
 """The builds service under docker compose, for the builder image tests.
 
 A Stack runs docker-compose.yml's `locus-builds` service (profile
-`locus-builds`) layered with compose.locus-builds.yml, which adds only the
-image under test, a loopback port, the residue canary, the pool's uid range
-and the build deadline, and lets compose name the container after the
-project. Everything else (capabilities, security options, read-only root,
-`ipc: none`, tmpfs mounts, limits) is the shipped service. `up` can also
-start it without the `writable-cgroups=true` option
-(compose.no-writable-cgroups.yml), as a deployment that lacks it would.
+`locus-builds`) behind its egress guard, layered with
+compose.locus-builds.yml, which adds only the image under test, the residue
+canary, the pool's uid range and the build deadline, on the guard a
+loopback port and a tools directory first on its PATH, a stand-in for cyfr
+and IPv6 on the builds network, and lets compose name the containers after
+the project. Everything else (capabilities, security options, read-only
+root, `ipc: none`, tmpfs mounts, limits, the guard's rules and the
+builder's wait for the guard's health) is the shipped stack. The builder
+listens in the guard's namespace, so its port is read on the guard. `up`
+can also start it without the `writable-cgroups=true` option
+(compose.no-writable-cgroups.yml), as a deployment that lacks it would,
+and a Stack made with a tools directory holding an `ip6tables` that fails
+starts a guard whose rules fail (`up_refused`).
 
 The Stack is a client of the build wire (`Prima.BuilderProtocol`): it signs
 every build request under `cyfr-locus/v1` with a builds key it makes for
@@ -62,9 +68,15 @@ if ROLE is None:
     sys.exit("FAIL: tests/fixtures/locus_roles.json names no builds role")
 
 SERVICE = ROLE["service"]
+GUARD = ROLE["guard"]
+NETWORK = ROLE["network"]
 PROFILE = ROLE["profile"]
 POOL_FIRST, POOL_LAST = ROLE["first_uid"], ROLE["last_uid"]
 PORT = ROLE["port"]
+ENDPOINT_ADDRESS = RELEASE["endpoint_address"]
+# The stand-in for cyfr the overlay starts, under cyfr's name on the builds
+# network and at cyfr's fixed endpoint address.
+STAND_IN = "cyfr-stand-in"
 RELEASE_UID = RELEASE["uid"]
 RELEASE_USER = RELEASE["user"]
 RELEASE_BIN = RELEASE["bin"]
@@ -143,20 +155,27 @@ def build_canary():
 
 
 class Stack(imagesuite.Stack):
-    def __init__(self, project, image, canary_dir):
+    def __init__(self, project, image, canary_dir, guard_tools_dir=None):
         super().__init__(project)
         self.image = image
         self.canary_dir = canary_dir
+        # The directory first on the guard's PATH: empty, so the guard runs
+        # the image's own tools, unless a test gives it one.
+        self.guard_tools_dir = guard_tools_dir or imagesuite.temporary_directory("cyfr-guard-tools-", 0o755)
         # The builds key of this run: compose gives it to the service as
         # LOCUS_BUILDS_KEY, from the name the server's .env holds it under.
         self.key = secrets.token_hex(32)
         self.base = None
+        self.container = None
+        self.guard = None
 
     def env(self):
         return {
             **os.environ,
             "BUILDER_IMAGE": self.image,
             "CANARY_DIR": self.canary_dir,
+            "GUARD_TOOLS_DIR": self.guard_tools_dir,
+            "ENDPOINT_ADDRESS": ENDPOINT_ADDRESS,
             "CYFR_LOCUS_BUILDS_KEY": self.key,
             "BUILD_POOL": self.pool,
             "LOCUS_BUILDS_TIMEOUT_MS": str(self.timeout_ms or ""),
@@ -177,18 +196,21 @@ class Stack(imagesuite.Stack):
             env=self.env(), check=check,
         )
 
-    def up(self, pool=f"{POOL_FIRST}-{POOL_LAST}", timeout_ms=None, writable_cgroups=True):
-        """(Re)creates the service with this pool and build deadline and waits for the wire's health answer.
+    def up(self, pool=f"{POOL_FIRST}-{POOL_LAST}", timeout_ms=None, writable_cgroups=True, stand_in=False):
+        """(Re)creates the service with this pool and build deadline, behind its guard, and waits for the wire's health answer.
 
         `writable_cgroups=False` starts it as a deployment without the
-        `writable-cgroups=true` security option would.
+        `writable-cgroups=true` security option would; `stand_in` starts
+        the stand-in for cyfr beside it.
         """
         self.pool = pool
         self.timeout_ms = timeout_ms
         self.writable_cgroups = writable_cgroups
-        self.compose("up", "--detach", "--no-build", "--force-recreate", SERVICE)
+        self.compose("up", "--detach", "--no-build", "--force-recreate", SERVICE, *([STAND_IN] if stand_in else []))
         self.container = self.compose("ps", "--quiet", SERVICE).stdout.strip()
-        address = self.compose("port", SERVICE, str(PORT)).stdout.strip().splitlines()[0]
+        self.guard = self.compose("ps", "--quiet", GUARD).stdout.strip()
+        # The builder listens in the guard's namespace: the port is the guard's.
+        address = self.compose("port", GUARD, str(PORT)).stdout.strip().splitlines()[0]
         self.base = f"http://{address}"
         body = json.dumps({"version": VERSION}).encode()
         for _ in range(90):
@@ -202,12 +224,37 @@ class Stack(imagesuite.Stack):
             time.sleep(1)
         sys.exit(f"FAIL: the builds service never answered POST {ROUTES['health']}\n" + self.logs())
 
+    def up_refused(self):
+        """Starts the service as `up` does and answers compose's refusal: the result of an `up` that must not succeed."""
+        self.pool = f"{POOL_FIRST}-{POOL_LAST}"
+        self.timeout_ms = None
+        self.writable_cgroups = True
+        return self.compose("up", "--detach", "--no-build", "--force-recreate", SERVICE, check=False)
+
     def logs(self):
         return self.compose("logs", "--no-color", SERVICE, check=False).stdout
+
+    def guard_logs(self):
+        return self.compose("logs", "--no-color", GUARD, check=False).stdout
 
     def exec(self, script, user=None):
         user_args = ["-u", user] if user else []
         return run("docker", "exec", *user_args, self.container, "sh", "-c", script, check=False)
+
+    def guard_exec(self, script):
+        return run("docker", "exec", self.guard, "sh", "-c", script, check=False)
+
+    def guard_counters(self):
+        """The packets each of the guard's rules has matched, by the rule's text, both families."""
+        return guard_counters(self.guard_exec("iptables-save -c -t filter; ip6tables-save -c -t filter").stdout)
+
+    def inspect(self, container):
+        return json.loads(run("docker", "inspect", container).stdout)[0]
+
+    def beside(self, network, *command):
+        """`command` run in a container of the image under test on `network`, outside the guard's namespace: a control."""
+        return run("docker", "run", "--rm", "--name", f"{self.project}-beside-{os.getpid()}", "--network", f"{self.project}_{network}",
+                   "--entrypoint", command[0], self.image, *command[1:], check=False, timeout=60)
 
     def processes(self):
         """Every process in the container as (pid, uids, cap_eff, command line)."""
@@ -279,6 +326,49 @@ class Stack(imagesuite.Stack):
         """
         _http_status, _progress, terminal = self.build_lines(*args, **kwargs)
         return (200 if terminal["type"] == "result" else STATUSES[terminal["class"]]), terminal
+
+
+def guard_counters(saved):
+    """The packet count of each rule of `iptables-save -c` output, by the rule's text (its chain and matches), both families as given."""
+    counters = {}
+    for line in saved.splitlines():
+        if line.startswith("[") and "] -A " in line:
+            count, rule = line.split("] ", 1)
+            counters[rule] = counters.get(rule, 0) + int(count[1:].split(":")[0])
+    return counters
+
+
+# A probe of one connection per target, run by node under a spawn's uid:
+# for each `host:port` after the argument `targets` (an IPv6 host in
+# brackets, a zone allowed), the code the kernel answers the connect with,
+# or `connected`. One attempt per target, at the first address a name
+# resolves to (no happy eyeballs). The guard answers a refusal at once with
+# an administratively-prohibited ICMP, EHOSTUNREACH over IPv4 and EACCES
+# over IPv6; a closed port answers ECONNREFUSED, an unrouted address
+# ENETUNREACH, and a black hole times out, so each outcome tells the rule's
+# answer from every other. A link-local IPv6 destination is the exception:
+# the kernel delivers no ICMPv6 error for it, so the refused connect times
+# out, and the guard's rule is shown by its counter.
+CONNECT_PROBE = r"""
+const net = require("net");
+(async () => {
+  const lines = [];
+  for (const target of process.argv.slice(process.argv.indexOf("targets") + 1)) {
+    const at = target.lastIndexOf(":");
+    const host = target.slice(0, at).replace(/^\[|\]$/g, "");
+    const port = Number(target.slice(at + 1));
+    const code = await new Promise((resolve) => {
+      const socket = net.connect({ host, port, timeout: 4000, autoSelectFamily: false });
+      socket.on("connect", () => { socket.destroy(); resolve("connected"); });
+      socket.on("error", (error) => resolve(error.code || String(error)));
+      socket.on("timeout", () => { socket.destroy(); resolve("ETIMEDOUT"); });
+    });
+    lines.push(`${target}=${code}`);
+  }
+  console.log(lines.join("\n"));
+})();
+"""
+REFUSED = ("EHOSTUNREACH", "EACCES")
 
 
 def tincture(build_script, files=None):

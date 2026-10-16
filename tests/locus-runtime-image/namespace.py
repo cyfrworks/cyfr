@@ -31,6 +31,11 @@ runner's own uid, outside that namespace, may not):
   stream, the runner's call on fd 4 arrives there and the answer reaches
   it; with one that never opens it, the runner writes to fd 4 and exits
   and the client receives no frame on stream 5, its end frame included.
+- `nested`: under the profile, which lets a clone make a user and network
+  namespace so the keeper can isolate each spawn, a runner makes none of
+  its own: its clone with CLONE_NEWUSER, alone or with CLONE_NEWNET, is
+  refused EPERM, where the same clone without a namespace flag makes a
+  child; `unshare -U` is refused; and it still starts a thread.
 - `spawn`: the shipped service fills its pool; every runner runs under a
   pooled uid whose user namespace maps only that uid and gid to themselves
   with setgroups denied, and holds no capability in any of the five sets,
@@ -83,7 +88,7 @@ from stack import (HOME_ROOT, POOL_FIRST, POOL_LAST, PROFILE, ROLE, RUN_DIR, SER
                    Stack, expect, run, wait_until)
 
 IMAGE_PROFILE = "/etc/cyfr/keeper.json"
-STEPS = ("refusals", "connect", "relay", "spawn", "cgroup", "network", "descriptors", "kill", "reuse", "restart")
+STEPS = ("refusals", "connect", "relay", "nested", "spawn", "cgroup", "network", "descriptors", "kill", "reuse", "restart")
 POOL = f"{ROLE['pool']}:{POOL_FIRST}-{POOL_LAST}:{ROLE['isolation']}"
 TOKEN = "0123456789abcdef" * 4
 BOOT_S = 90
@@ -296,13 +301,13 @@ class Attach:
         shutil.rmtree(self.dir, ignore_errors=True)
 
 
-def relay_session(image, command, opens):
+def relay_session(image, command, opens, env=None):
     """A spawn of the isolated pool running `command`, its relay served by this machine: the replies and what the relay carried."""
     attach = Attach()
     serving = threading.Thread(target=attach.serve, args=(opens,), daemon=True)
     serving.start()
     try:
-        request = spawn_line("1", ["/bin/sh", "-c", command], control=True, attach=f"{Attach.MOUNT}/a.sock")
+        request = spawn_line("1", ["/bin/sh", "-c", command], env=env, control=True, attach=f"{Attach.MOUNT}/a.sock")
         assert "'" not in request
         client = (f"printf '%s\\n' '{request}' >&3; "
                   'for n in 1 2 3; do read -r line <&3; echo "reply:$line"; done')
@@ -330,6 +335,45 @@ def test_relay(image):
     expect(carried and 5 not in carried.get("streams", [5]) and carried["got"].get(1) == b"done\n" and {1, 2, 4} <= set(carried["ended"]),
            "relay: a client that never opened stream 5 receives no frame on it, its end included, though the runner wrote to fd 4",
            carried)
+
+
+# The runner's calls, made with perl's syscall(): clone's number on this
+# machine, then each clone's flags with SIGCHLD as its exit signal and no
+# stack, so its child is a copy that exits at once. A clone answers `ok`
+# when it made a child, else its errno's name.
+NESTED_CLONES = (
+    "use POSIX (); $| = 1; my $nr = shift; "
+    "sub attempt { my $flags = shift; my $pid = syscall($nr, $flags | 17, 0, 0, 0, 0); "
+    "if ($pid == 0) { POSIX::_exit(0); } if ($pid > 0) { waitpid($pid, 0); return q{ok}; } "
+    "return $!{EPERM} ? q{EPERM} : q{errno} . ($! + 0); } "
+    "print qq{process=}, attempt(0), qq{\n}; "
+    "print qq{newuser=}, attempt(0x10000000), qq{\n}; "
+    "print qq{newuser_newnet=}, attempt(0x50000000), qq{\n};"
+)
+NESTED_THREAD = "$| = 1; print qq{thread=}, threads->create(sub { 7 })->join, qq{\n};"
+CLONE_NR = {"x86_64": 56, "aarch64": 220}
+
+
+def test_nested(image):
+    command = ('arch=$(uname -m); echo "arch=$arch"; '
+               'case "$arch" in ' + " ".join(f"{arch}) nr={nr};;" for arch, nr in CLONE_NR.items()) + ' *) nr=;; esac; '
+               'u=$(unshare -U true 2>&1); echo "unshare=$u status $?"; '
+               '[ -n "$nr" ] && perl -e "$CLONES" "$nr"; perl -Mthreads -e "$THREAD"')
+    got, carried, ran = relay_session(image, command, opens=False, env={"CLONES": NESTED_CLONES, "THREAD": NESTED_THREAD})
+    out = (carried or {}).get("got", {}).get(1, b"").decode(errors="replace")
+    facts = dict(line.split("=", 1) for line in out.splitlines() if "=" in line)
+    detail = {"stdout": out, "stderr": (carried or {}).get("got", {}).get(2, b"").decode(errors="replace"), "replies": got,
+              "keeper": ran.stderr[-2000:]}
+    expect([r["type"] for r in got] == ["spawned", "exited", "released"] and got[1].get("code") == 0,
+           "nested: a spawn of the isolated pool runs the probe to its exit", detail)
+    expect(facts.get("arch") in CLONE_NR, f"nested: the runner knows clone's number on {facts.get('arch')}", detail)
+    expect(facts.get("process") == "ok", "nested: a runner's clone without a namespace flag makes a child (the probe's control)", detail)
+    expect(facts.get("newuser") == "EPERM" and facts.get("newuser_newnet") == "EPERM",
+           "nested: a runner's clone with CLONE_NEWUSER, alone or with CLONE_NEWNET, is refused EPERM, "
+           "though the profile lets the keeper make that clone", detail)
+    expect("Operation not permitted" in facts.get("unshare", "") and not facts.get("unshare", "").endswith(" status 0"),
+           "nested: a runner's `unshare -U` is refused", detail)
+    expect(facts.get("thread") == "7", "nested: a runner still starts a thread and joins it", detail)
 
 
 # ---------------------------------------------------------------------------
@@ -479,7 +523,9 @@ def main(image, steps):
         test_connect(image)
     if "relay" in steps:
         test_relay(image)
-    service_steps = [s for s in steps if s not in ("refusals", "connect", "relay")]
+    if "nested" in steps:
+        test_nested(image)
+    service_steps = [s for s in steps if s not in ("refusals", "connect", "relay", "nested")]
     if not service_steps:
         return
     plane = ControlPlane(secrets.token_bytes(32), SERVICE).serve()

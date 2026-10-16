@@ -455,7 +455,13 @@ if config_env() != :test do
       http: [
         ip: emissary_bind,
         port: port,
-        thousand_island_options: [read_timeout: 60_000]
+        thousand_island_options: [read_timeout: 60_000],
+        # HTTP/1.1 alone, as every Bandit listener of the product serves
+        # (config/config.exs's base says the same, so dev and test agree):
+        # a WebSocket upgrades from HTTP/1.1 and SSE streams as an HTTP/1.1
+        # response, so neither needs HTTP/2, and endpoint_http2_test.exs
+        # holds the release to it.
+        http_2_options: [enabled: false]
       ],
       check_origin: host_origins ++ localhost_origins,
       secret_key_base: secret_key_base,

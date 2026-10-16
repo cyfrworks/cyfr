@@ -113,7 +113,14 @@ config :cyfr, CyfrWeb.Endpoint,
   # The drain, in every environment: on shutdown the listener stops
   # accepting and lets the connections already open finish for this long
   # before it closes them. Each environment's `http:` merges over it.
-  http: [thousand_island_options: [shutdown_timeout: 30_000]]
+  http: [
+    thousand_island_options: [shutdown_timeout: 30_000],
+    # HTTP/1.1 alone, in every environment, as the release's `http:` in
+    # config/runtime.exs says too, so dev and test serve what the release
+    # serves. A WebSocket upgrades from HTTP/1.1 and SSE streams as an
+    # HTTP/1.1 response, so neither needs HTTP/2.
+    http_2_options: [enabled: false]
+  ]
 
 # Include module metadata in Logger output for filtering by emitter.
 config :logger, :default_formatter,

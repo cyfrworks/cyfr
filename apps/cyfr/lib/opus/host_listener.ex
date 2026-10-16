@@ -139,8 +139,8 @@ defmodule Opus.HostListener do
 
   @doc """
   The listener's child spec: a supervisor of the nonce memory, the node's
-  pin table (`Opus.Host.Egress`) and the Bandit server, bound to
-  `:bind` (default loopback) on `:port` (required).
+  pin table (`Opus.Host.Egress`) and the Bandit server, serving HTTP/1.1
+  alone, bound to `:bind` (default loopback) on `:port` (required).
   On shutdown the server stops accepting and lets the connections already
   open finish for `:drain_ms` (default 5 000) before it closes them.
   """
@@ -622,6 +622,8 @@ defmodule Opus.HostListener do
       children = [
         {Opus.HostListener.Nonces, nonces},
         Opus.Host.Egress.Pins,
+        # HTTP/1.1 alone, as every Bandit listener of the product serves;
+        # host_listener_http2_test.exs holds it.
         Elixir.Supervisor.child_spec(
           {Bandit,
            plug: {Opus.HostListener, %{nonces: nonces}},
@@ -629,6 +631,7 @@ defmodule Opus.HostListener do
            ip: bind,
            port: port,
            startup_log: false,
+           http_2_options: [enabled: false],
            thousand_island_options: [shutdown_timeout: drain_ms]},
           id: @server
         )

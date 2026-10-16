@@ -83,11 +83,13 @@ type Probe struct {
 // process inside a new user namespace cannot map an id its parent could
 // not, nor join a cgroup its owner did not delegate. Only once the spec
 // arrives does it become the pooled uid and gid, drop every set, bounding,
-// inheritable, permitted, effective and ambient, set no_new_privs, and
-// execute the command, which then holds no capability anywhere and has no
-// route out of its namespace: the loopback stays down, and a descriptor it
-// inherited, its control channel on fd 3 and its relay on fd 4, is its
-// only way to anything.
+// inheritable, permitted, effective and ambient, set no_new_privs, install
+// the runner's seccomp filter (seccomp_linux.go) and execute the command,
+// which then holds no capability anywhere, can make no namespace of its own
+// and has no route out of its namespace: the loopback stays down, and a
+// descriptor it inherited, its control channel on fd 3 and its relay on fd
+// 4, is its only way to anything. A filter that cannot be installed refuses
+// the spawn before anything executes.
 func Main() int {
 	// Capabilities and no_new_privs belong to a thread, and execve takes
 	// the credentials of the thread that calls it: the drop, the check and
@@ -145,6 +147,11 @@ func Main() int {
 	}
 	if err := checkCredentials(spec.UID, spec.GID, isolated); err != nil {
 		return fail("credentials: %v", err)
+	}
+	if isolated {
+		if err := installRunnerFilter(); err != nil {
+			return fail("seccomp: %v", err)
+		}
 	}
 	if err := checkCgroup(spec); err != nil {
 		return fail("cgroup: %v", err)

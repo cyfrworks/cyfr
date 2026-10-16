@@ -14,7 +14,11 @@
 # carries no endpoint of the product's, no database and no tenant state,
 # and the release holds only the shared contracts and Locus (`mix release
 # locus`). Compose runs it three times, as locus-runtime, locus-builds and
-# locus-backends, each with its own key, pool and network.
+# locus-backends, each with its own key, pool and network, and twice more
+# as the egress guards of the builds and backends islands (cyfr-guard,
+# apps/locus/keeper/guard/cyfr-guard.sh): a guard holds NET_ADMIN alone,
+# installs the island's egress rules in a network namespace of its own,
+# which the island's service then shares, and runs no release.
 #
 # Process model: cyfr-locus runs as root holding only SETUID, SETGID and
 # KILL (it refuses to start with any other capability), starts the locus
@@ -139,6 +143,7 @@ RUN echo "apt refresh ${APT_REFRESH}" && apt-get update && apt-get upgrade -y &&
     curl \
     locales \
     build-essential \
+    iptables \
     && rm -rf /var/lib/apt/lists/* \
     && sed -i '/en_US.UTF-8/s/^# //g' /etc/locale.gen \
     && locale-gen
@@ -228,6 +233,10 @@ WORKDIR /app
 
 COPY --from=keeper /out/cyfr-locus /usr/local/bin/cyfr-locus
 COPY apps/locus/keeper/seccomp/keeper.json /etc/cyfr/keeper.json
+# The egress guard the builds and backends islands run (docker-compose.yml's
+# locus-builds-guard and locus-backends-guard); iptables, installed above,
+# is its one tool.
+COPY --chmod=0755 apps/locus/keeper/guard/cyfr-guard.sh /usr/local/bin/cyfr-guard
 COPY --from=relbuilder /app/_build/prod/rel/locus ./
 COPY --from=relbuilder /opt/wasm-tools/wasm-tools /usr/local/bin/wasm-tools
 COPY LICENSE FAIR_SOURCE.md /app/

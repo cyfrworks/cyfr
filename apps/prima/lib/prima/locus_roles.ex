@@ -13,6 +13,14 @@ defmodule Prima.LocusRoles do
   and the socket spawns' relays attach to. The image's own entrypoint and
   health probe serve `image_role`.
 
+  The release's endpoint, which cyfr serves, binds one fixed address
+  under compose: `endpoint_address`, on the network `endpoint_network`
+  (compose's `default`), whose subnet is `endpoint_subnet` and whose other
+  containers take addresses from `endpoint_ip_range` alone, so nothing
+  started first can hold cyfr's. Docker publishes the host's loopback port
+  to that address, and the networks the Locus roles join never reach the
+  endpoint.
+
   A role (`roles/0`, in the order runtime, builds, backends) is served
   under cyfr-locus from the uid pool `pool`, whose uids `uids` are named
   `user_prefix` and a two-digit ordinal, each spawn isolated as `isolation`
@@ -20,7 +28,13 @@ defmodule Prima.LocusRoles do
   listens on `port`; compose runs it as the service `service` in the
   container `container`, on the network `network` that only it and CYFR
   join, selected by the profile `profile` where it has one (`nil`: it
-  always starts), with its spawns' homes on a tmpfs of `home_size`.
+  always starts), with its spawns' homes on a tmpfs of `home_size`. A role
+  whose spawns have a network of the island's own, the builds and backends
+  roles, runs behind the egress guard `guard`: the compose service that
+  holds the island's network namespace and installs the rules every build
+  or backend leaves through (cyfr-guard), which the role's service shares
+  (`network_mode: service:<guard>`) and starts behind; the runtime, whose
+  runners have no network, has none (`nil`).
 
   `tests/fixtures/locus_roles.json` holds the same table for the image
   suites, which cannot read this module: `Prima.LocusRolesTest` holds the
@@ -46,7 +60,11 @@ defmodule Prima.LocusRoles do
           home_root: String.t(),
           run_dir: String.t(),
           run_size: String.t(),
-          image_role: name()
+          image_role: name(),
+          endpoint_network: String.t(),
+          endpoint_subnet: String.t(),
+          endpoint_ip_range: String.t(),
+          endpoint_address: String.t()
         }
 
   @typedoc "One role's facts."
@@ -61,7 +79,8 @@ defmodule Prima.LocusRoles do
           service: String.t(),
           container: String.t(),
           network: String.t(),
-          profile: String.t() | nil
+          profile: String.t() | nil,
+          guard: String.t() | nil
         }
 
   @release %{
@@ -71,7 +90,11 @@ defmodule Prima.LocusRoles do
     home_root: "/var/lib/locus/homes",
     run_dir: "/run/locus",
     run_size: "16m",
-    image_role: :builds
+    image_role: :builds,
+    endpoint_network: "default",
+    endpoint_subnet: "172.16.230.0/24",
+    endpoint_ip_range: "172.16.230.128/25",
+    endpoint_address: "172.16.230.2"
   }
 
   @roles [
@@ -86,7 +109,8 @@ defmodule Prima.LocusRoles do
       service: "locus-runtime",
       container: "cyfr-locus-runtime",
       network: "locus-runtime",
-      profile: nil
+      profile: nil,
+      guard: nil
     },
     %{
       name: :builds,
@@ -99,7 +123,8 @@ defmodule Prima.LocusRoles do
       service: "locus-builds",
       container: "cyfr-locus-builds",
       network: "locus-builds",
-      profile: "locus-builds"
+      profile: "locus-builds",
+      guard: "locus-builds-guard"
     },
     %{
       name: :backends,
@@ -112,7 +137,8 @@ defmodule Prima.LocusRoles do
       service: "locus-backends",
       container: "cyfr-locus-backends",
       network: "locus-backends",
-      profile: nil
+      profile: nil,
+      guard: "locus-backends-guard"
     }
   ]
 

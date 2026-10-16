@@ -127,9 +127,13 @@ EXPOSE ${CYFR_PORT} ${CYFR_HOST_API_PORT}
 
 # Readiness, not liveness: /api/health/ready answers 503 until the DB,
 # cache and registries are actually up; start-period covers boot
-# migrations.
+# migrations. The probe asks the address the endpoint binds
+# (CYFR_BIND_ADDRESS: compose fixes cyfr's address on its default network,
+# a bare install binds every interface, which 127.0.0.1 reaches), an IPv6
+# one in brackets.
 HEALTHCHECK --interval=10s --timeout=3s --start-period=60s --retries=3 \
-    CMD curl -f http://localhost:${CYFR_PORT:-4000}/api/health/ready || exit 1
+    CMD addr="${CYFR_BIND_ADDRESS:-127.0.0.1}"; case "$addr" in *:*) addr="[$addr]";; esac; \
+        curl -f "http://$addr:${CYFR_PORT:-4000}/api/health/ready" || exit 1
 
 ENTRYPOINT ["/app/docker-entrypoint.sh"]
 CMD ["sh", "-c", "exec /app/bin/cyfr start"]

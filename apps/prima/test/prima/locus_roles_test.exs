@@ -7,9 +7,13 @@ defmodule Prima.LocusRolesTest do
   are one table: the file holds the module's values, value by value and
   in its order, under exactly its keys. And the table is one a node can
   run: no two roles share a name, a pool, a service, a container, a
-  network, a user prefix or a port; their uid ranges are disjoint and none
-  holds the release's uid; every isolation is one the keeper knows; and
-  the image serves one of the roles.
+  network, a user prefix, a port or a guard, and no guard is named as a
+  service; their uid ranges are disjoint and none holds the release's uid;
+  every isolation is one the keeper knows; a role whose spawns share the
+  island's network has a guard and the runtime, whose runners have none,
+  has none; the image serves one of the roles; and the endpoint's fixed
+  address lies in its subnet, outside the range the subnet's other
+  containers draw from.
   """
   use ExUnit.Case, async: true
 
@@ -19,8 +23,9 @@ defmodule Prima.LocusRolesTest do
            |> File.read!()
            |> Jason.decode!()
 
-  @release_keys ~w(bin home_root image_role run_dir run_size uid user)
-  @role_keys ~w(container first_uid home_size isolation last_uid name network pool port
+  @release_keys ~w(bin endpoint_address endpoint_ip_range endpoint_network endpoint_subnet
+                   home_root image_role run_dir run_size uid user)
+  @role_keys ~w(container first_uid guard home_size isolation last_uid name network pool port
                 profile service user_prefix)
 
   # The file's spelling of a value of the module: atoms as their names,
@@ -65,13 +70,61 @@ defmodule Prima.LocusRolesTest do
     end
   end
 
-  test "no two roles share a name, a pool, a service, a container, a network, a user prefix or a port" do
+  test "no two roles share a name, a pool, a service, a container, a network, a user prefix, a port or a guard" do
     roles = LocusRoles.roles()
 
     for fact <- [:name, :pool, :service, :container, :network, :user_prefix, :port] do
       values = Enum.map(roles, &Map.fetch!(&1, fact))
       assert Enum.uniq(values) == values, "#{fact} repeats: #{inspect(values)}"
     end
+
+    guards = for %{guard: guard} <- roles, guard != nil, do: guard
+    assert Enum.uniq(guards) == guards, "guard repeats: #{inspect(guards)}"
+    assert guards -- Enum.map(roles, & &1.service) == guards, "a guard is named as a service"
+  end
+
+  # The runtime's runners have no network, so nothing of theirs leaves to
+  # be guarded; a build or a backend shares its island's network and
+  # leaves through the island's guard.
+  test "a role whose spawns share the island's network has a guard, and the runtime has none" do
+    for role <- LocusRoles.roles() do
+      if role.isolation == nil do
+        assert is_binary(role.guard) and role.guard != "", "#{role.name} has no guard"
+      else
+        assert role.guard == nil, "#{role.name}'s isolated spawns need no guard"
+      end
+    end
+  end
+
+  test "the endpoint's fixed address lies in its subnet, outside the range the other containers draw from" do
+    %{endpoint_subnet: subnet, endpoint_ip_range: range, endpoint_address: address} =
+      LocusRoles.release()
+
+    {base, bits} = cidr(subnet)
+    {range_base, range_bits} = cidr(range)
+    {value, 32} = cidr(address <> "/32")
+    last = base + Bitwise.bsl(1, 32 - bits) - 1
+
+    assert range_bits > bits and
+             Bitwise.bsr(range_base, 32 - bits) == Bitwise.bsr(base, 32 - bits),
+           "#{range} is not a part of #{subnet}"
+
+    assert Bitwise.bsr(value, 32 - bits) == Bitwise.bsr(base, 32 - bits),
+           "#{address} is not in #{subnet}"
+
+    refute Bitwise.bsr(value, 32 - range_bits) == Bitwise.bsr(range_base, 32 - range_bits),
+           "#{address} is in #{range}"
+
+    refute value in [base, base + 1, last],
+           "#{address} is the subnet's network, gateway or broadcast address"
+  end
+
+  # An IPv4 address with a prefix length, the address as an integer.
+  defp cidr(text) do
+    [address, bits] = String.split(text, "/")
+    {:ok, {a, b, c, d}} = :inet.parse_ipv4strict_address(String.to_charlist(address))
+    <<value::32>> = <<a, b, c, d>>
+    {value, String.to_integer(bits)}
   end
 
   test "the uid ranges are disjoint, ascending, and none holds the release's uid" do

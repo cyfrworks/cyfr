@@ -1,0 +1,10 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 CYFR Works Inc.
+#
+# The Compose proof's front (tests/compose-proof/run.sh): plain HTTP on
+# port 80, proxied to cyfr's endpoint as the shipped Caddyfile proxies its
+# TLS site, so the leg through Caddy is the shipped stack's path to the
+# fixed address cyfr binds, with no certificate to trust.
+:80 {
+	reverse_proxy cyfr:{$CYFR_PORT:4000}
+}

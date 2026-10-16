@@ -173,10 +173,14 @@ defmodule Locus.Runtime do
 
   # The credentials are loaded by the worker service, which refuses the
   # boot when they are missing or malformed; the listener reads the same.
+  # HTTP/1.1 alone, as the builds and backends listeners serve;
+  # runtime_http2_test.exs holds it.
   defp listener do
     %Locus.Runtime.Credentials{bind: bind, port: port} = Locus.Runtime.Credentials.load!()
 
-    Supervisor.child_spec({Bandit, plug: Locus.Runtime.WorkerListener, ip: bind, port: port},
+    Supervisor.child_spec(
+      {Bandit,
+       plug: Locus.Runtime.WorkerListener, ip: bind, port: port, http_2_options: [enabled: false]},
       id: Locus.Runtime.WorkerListener
     )
   end

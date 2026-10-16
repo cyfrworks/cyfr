@@ -3,13 +3,18 @@
 # Copyright 2026 CYFR Works Inc.
 """The backends service under docker compose, and a control plane that signs as CYFR does.
 
-A Stack runs docker-compose.yml's `locus-backends` service layered with
-compose.locus-backends.yml, which adds only the image under test, a
-loopback port, the probe backend (probe-backend.mjs), the residue canary,
-the pool's uid range and the per-backend memory bound, and lets compose name
-the container after the project. Everything else (the backends key from
+A Stack runs docker-compose.yml's `locus-backends` service behind its
+egress guard, layered with compose.locus-backends.yml, which adds only the
+image under test, the probe backend (probe-backend.mjs), the residue
+canary, the pool's uid range and the per-backend memory bound, on the guard
+a loopback port and a tools directory first on its PATH, a stand-in for
+cyfr and IPv6 on the backends network, and lets compose name the containers
+after the project. Everything else (the backends key from
 CYFR_LOCUS_BACKENDS_KEY, capabilities, security options, read-only root,
-`ipc: none`, tmpfs mounts, limits, the network) is the shipped service.
+`ipc: none`, tmpfs mounts, limits, the network, the guard's rules and the
+service's wait for the guard's health) is the shipped stack. The service
+listens in the guard's namespace, so its port is read on the guard, and a
+second instance of it runs in a namespace of its own (`alone`).
 
 A Controller is the control plane's side of the backends wire
 (`Prima.LocusBackends`), reimplemented here from its vector file,
@@ -71,8 +76,14 @@ if ROLE is None:
     sys.exit("FAIL: tests/fixtures/locus_roles.json names no backends role")
 
 SERVICE = ROLE["service"]
+GUARD = ROLE["guard"]
+NETWORK = ROLE["network"]
 PORT = ROLE["port"]
 POOL_FIRST, POOL_LAST = ROLE["first_uid"], ROLE["last_uid"]
+ENDPOINT_ADDRESS = RELEASE["endpoint_address"]
+# The stand-in for cyfr the overlay starts, under cyfr's name on the
+# backends network and at cyfr's fixed endpoint address.
+STAND_IN = "cyfr-stand-in"
 RELEASE_UID = RELEASE["uid"]
 RELEASE_USER = RELEASE["user"]
 RELEASE_BIN = RELEASE["bin"]
@@ -545,6 +556,49 @@ class Controller:
 # ————— the service under compose —————
 
 
+def guard_counters(saved):
+    """The packet count of each rule of `iptables-save -c` output, by the rule's text (its chain and matches), both families as given."""
+    counters = {}
+    for line in saved.splitlines():
+        if line.startswith("[") and "] -A " in line:
+            count, rule = line.split("] ", 1)
+            counters[rule] = counters.get(rule, 0) + int(count[1:].split(":")[0])
+    return counters
+
+
+# A probe of one connection per target, run by node under a backend's uid:
+# for each `host:port` after the argument `targets` (an IPv6 host in
+# brackets, a zone allowed), the code the kernel answers the connect with,
+# or `connected`. One attempt per target, at the first address a name
+# resolves to (no happy eyeballs). The guard answers a refusal at once with
+# an administratively-prohibited ICMP, EHOSTUNREACH over IPv4 and EACCES
+# over IPv6; a closed port answers ECONNREFUSED, an unrouted address
+# ENETUNREACH, and a black hole times out, so each outcome tells the rule's
+# answer from every other. A link-local IPv6 destination is the exception:
+# the kernel delivers no ICMPv6 error for it, so the refused connect times
+# out, and the guard's rule is shown by its counter.
+CONNECT_PROBE = r"""
+const net = require("net");
+(async () => {
+  const lines = [];
+  for (const target of process.argv.slice(process.argv.indexOf("targets") + 1)) {
+    const at = target.lastIndexOf(":");
+    const host = target.slice(0, at).replace(/^\[|\]$/g, "");
+    const port = Number(target.slice(at + 1));
+    const code = await new Promise((resolve) => {
+      const socket = net.connect({ host, port, timeout: 4000, autoSelectFamily: false });
+      socket.on("connect", () => { socket.destroy(); resolve("connected"); });
+      socket.on("error", (error) => resolve(error.code || String(error)));
+      socket.on("timeout", () => { socket.destroy(); resolve("ETIMEDOUT"); });
+    });
+    lines.push(`${target}=${code}`);
+  }
+  console.log(lines.join("\n"));
+})();
+"""
+REFUSED = ("EHOSTUNREACH", "EACCES")
+
+
 def build_canary():
     """Builds tests/fixtures/residue-canary.go for Linux on this host's architecture."""
     # The read-only fixture mount must be traversable by pooled backend uids.
@@ -571,15 +625,19 @@ def require_docker():
 
 
 class Stack(imagesuite.Stack):
-    def __init__(self, project, image, canary_dir=None):
+    def __init__(self, project, image, canary_dir=None, guard_tools_dir=None):
         super().__init__(project)
         self.image = image
         self.canary_dir = canary_dir or HERE
+        # The directory first on the guard's PATH: empty, so the guard runs
+        # the image's own tools, unless a test gives it one.
+        self.guard_tools_dir = guard_tools_dir or imagesuite.temporary_directory("cyfr-guard-tools-", 0o755)
         # The backends key of this run: compose gives it to the service as
         # LOCUS_BACKENDS_KEY, from the name cyfr's .env holds it under.
         self.key = secrets.token_bytes(32)
         self.base = None
         self.container = None
+        self.guard = None
         self.pool = f"{POOL_FIRST}-{POOL_LAST}"
         self.memory_bytes = None
 
@@ -589,6 +647,8 @@ class Stack(imagesuite.Stack):
             "BACKENDS_IMAGE": self.image,
             "PROBE_DIR": HERE,
             "CANARY_DIR": self.canary_dir,
+            "GUARD_TOOLS_DIR": self.guard_tools_dir,
+            "ENDPOINT_ADDRESS": ENDPOINT_ADDRESS,
             "CYFR_LOCUS_BACKENDS_KEY": self.key.hex(),
             "BACKENDS_POOL": self.pool,
             "LOCUS_BACKENDS_MEMORY_BYTES": str(self.memory_bytes or ""),
@@ -603,21 +663,92 @@ class Stack(imagesuite.Stack):
             env=env or self.env(), check=check,
         )
 
-    def up(self, pool=None, memory_bytes=None):
-        """(Re)creates the service with this pool and memory bound, and waits for the wire's health answer."""
+    def up(self, pool=None, memory_bytes=None, stand_in=False):
+        """(Re)creates the service with this pool and memory bound, behind its guard, and waits for the wire's health answer.
+
+        `stand_in` starts the stand-in for cyfr beside it.
+        """
         self.pool = pool or f"{POOL_FIRST}-{POOL_LAST}"
         self.memory_bytes = memory_bytes
-        self.compose("up", "--detach", "--no-build", "--force-recreate", SERVICE)
+        self.compose("up", "--detach", "--no-build", "--force-recreate", SERVICE, *([STAND_IN] if stand_in else []))
         self.container = self.compose("ps", "--quiet", SERVICE).stdout.strip()
-        expect(self.container, f"compose started the {SERVICE} container")
+        self.guard = self.compose("ps", "--quiet", GUARD).stdout.strip()
+        expect(self.container and self.guard, f"compose started the {SERVICE} container behind its guard")
         return self.published()
 
+    def up_refused(self):
+        """Starts the service as `up` does and answers compose's refusal: the result of an `up` that must not succeed."""
+        self.pool = f"{POOL_FIRST}-{POOL_LAST}"
+        self.memory_bytes = None
+        return self.compose("up", "--detach", "--no-build", "--force-recreate", SERVICE, check=False)
+
     def published(self):
-        """Reads the published port (a restart may change it) and waits for the health answer."""
-        address = self.compose("port", SERVICE, str(PORT)).stdout.strip().splitlines()[0]
+        """Reads the published port (a restart may change it) and waits for the health answer.
+
+        The service listens in the guard's namespace: the port is the guard's.
+        """
+        address = self.compose("port", GUARD, str(PORT)).stdout.strip().splitlines()[0]
         self.base = f"http://{address}"
         wait_healthy(self.base, self.logs)
         return self.base
+
+    def guard_logs(self):
+        return self.compose("logs", "--no-color", GUARD, check=False).stdout
+
+    def guard_exec(self, script):
+        return run("docker", "exec", self.guard, "sh", "-c", script, check=False)
+
+    def guard_counters(self):
+        """The packets each of the guard's rules has matched, by the rule's text, both families."""
+        return guard_counters(self.guard_exec("iptables-save -c -t filter; ip6tables-save -c -t filter").stdout)
+
+    def inspect(self, container):
+        return json.loads(run("docker", "inspect", container).stdout)[0]
+
+    def beside(self, network, *command):
+        """`command` run in a container of the image under test on `network`, outside the guard's namespace: a control."""
+        return run("docker", "run", "--rm", "--name", f"{self.project}-beside-{os.getpid()}", "--network", f"{self.project}_{network}",
+                   "--entrypoint", command[0], self.image, *command[1:], check=False, timeout=60)
+
+    def alone(self, name, publish=False):
+        """A second instance of the shipped service, started as `name` in a network namespace of its own on the island's network.
+
+        `compose run` would put it in the guard's namespace, beside the
+        running service's listener; `docker run` gives it the running
+        container's own configuration (capabilities, security options,
+        read-only root, ipc, init, tmpfs mounts, limit, mounts, environment
+        and entrypoint), read from that container, so the second instance
+        is the shipped service and spells none of it. With `publish`, its
+        port is published on the loopback, read with `docker port`.
+        """
+        info = self.inspect(self.container)
+        host, config = info["HostConfig"], info["Config"]
+        args = ["docker", "run", "--detach", "--name", name, "--network", f"{self.project}_{NETWORK}"]
+        if host.get("Init"):
+            args.append("--init")
+        if publish:
+            args += ["--publish", f"127.0.0.1::{PORT}"]
+        for cap in host.get("CapDrop") or []:
+            args += ["--cap-drop", cap]
+        for cap in host.get("CapAdd") or []:
+            args += ["--cap-add", cap]
+        for option in host.get("SecurityOpt") or []:
+            args += ["--security-opt", option]
+        if host.get("ReadonlyRootfs"):
+            args.append("--read-only")
+        if host.get("IpcMode"):
+            args += ["--ipc", host["IpcMode"]]
+        for path, options in (host.get("Tmpfs") or {}).items():
+            args += ["--tmpfs", f"{path}:{options}" if options else path]
+        if host.get("Memory"):
+            args += ["--memory", str(host["Memory"])]
+        for bind in host.get("Binds") or []:
+            args += ["--volume", bind]
+        for entry in config.get("Env") or []:
+            args += ["--env", entry]
+        entrypoint = config.get("Entrypoint") or []
+        args += ["--entrypoint", entrypoint[0], self.image, *entrypoint[1:], *(config.get("Cmd") or [])]
+        run(*args)
 
     def controller(self, **options):
         return Controller(self.base, self.key, **options)

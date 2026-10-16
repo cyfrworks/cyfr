@@ -1,0 +1,24 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 CYFR Works Inc.
+#
+# Layered over docker-compose.yml by the Compose proof
+# (tests/compose-proof/run.sh): cyfr and caddy keep every setting compose
+# gives them, cyfr's networks, fixed addresses, environment, mounts and
+# health probe among them. This adds only the app image built from the
+# tree, loopback ports Docker picks for the run in place of the shipped
+# ones, so a run meets no deployed stack and no other run, the project's
+# names in place of the shipped container names, and the proof's
+# Caddyfile, which fronts cyfr over plain HTTP in place of the shipped TLS
+# site.
+services:
+  cyfr:
+    image: ${COMPOSE_PROOF_IMAGE:?set COMPOSE_PROOF_IMAGE}
+    pull_policy: never
+    container_name: !reset null
+    ports: !override
+      - "127.0.0.1::${CYFR_PORT:-4000}"
+  caddy:
+    ports: !override
+      - "127.0.0.1::80"
+    volumes: !override
+      - ${COMPOSE_PROOF_CADDYFILE:?set COMPOSE_PROOF_CADDYFILE}:/etc/caddy/Caddyfile:ro

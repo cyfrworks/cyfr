@@ -22,10 +22,26 @@ Driven only by requests signed as CYFR signs them (harness.py):
   cyfr-locus retires every backend and exits 70; when cyfr-locus is lost,
   the container ends with every backend in it; cyfr-locus refuses Docker's
   default capabilities; and stopping the service retires every backend.
+- The service listens in the namespace of its egress guard, the image under
+  test holding NET_ADMIN alone, and a backend leaves only through the
+  guard's rules: its connections to cyfr's name on the backends network
+  and to cyfr's fixed endpoint address (a stand-in answers both to a
+  container outside the guard), to the metadata and link-local addresses
+  of both families, to another private address and to the island's own
+  loopback are refused at once, each counted on the guard's own rule; the
+  resolver and the public registry are reached (the registry step is
+  skipped, with its reason, under CYFR_TEST_OFFLINE=1).
+- A backend's listener on the shared loopback is reached by the container's
+  root and refused to another owner's backend, on the loopback, on `::1`
+  and on the island's own address.
+- A guard started with an ip6tables that fails writes no ready file, never
+  turns healthy, names the rule that failed, and the service behind it is
+  never started.
 
 Prerequisites: harness.py's. Usage: tests/locus-backends-image/isolation.py IMAGE
 """
 
+import ipaddress
 import os
 import re
 import sys
@@ -34,10 +50,13 @@ sys.dont_write_bytecode = True
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from harness import (  # noqa: E402
-    HOME_ROOT, KEEPER_CAPS, MCP_VERSION, POOL_FIRST, POOL_LAST, PORT, PROJECT_PREFIX, RELEASE_BIN, RELEASE_UID,
-    RELEASE_USER, ROLE, ROUTES, RUN_DIR, SERVICE, Controller, Stack, eventually, expect, owner_of, owner_key, pool_user,
-    post, probe, require_docker, run, wait_healthy, wire_json,
+    CONNECT_PROBE, ENDPOINT_ADDRESS, GUARD, HOME_ROOT, KEEPER_CAPS, MCP_VERSION, NETWORK, POOL_FIRST, POOL_LAST, PORT,
+    PROJECT_PREFIX, REFUSED, RELEASE, RELEASE_BIN, RELEASE_UID, RELEASE_USER, ROLE, ROUTES, RUN_DIR, SERVICE, Controller,
+    Stack, eventually, expect, owner_of, owner_key, pool_user, post, probe, require_docker, run, wait_healthy, wire_json,
 )
+
+# On the path once harness.py is loaded.
+import imagesuite  # noqa: E402
 
 ALPHA, BETA = owner_of("alpha"), owner_of("beta")
 ALPHA_SECRET = "alpha-secret-value"
@@ -64,6 +83,160 @@ def inspect_pid(stack, image, script):
                image, "-c", script, check=False)
 
 
+# The port a backend listens on for the sibling case.
+SIBLING_PORT = 47331
+
+
+def fields(text):
+    return dict(line.split("=", 1) for line in (text or "").splitlines() if "=" in line)
+
+
+def island_address(stack):
+    """The island's own address on the backends network: the guard's, whose namespace the service shares."""
+    return stack.inspect(stack.guard)["NetworkSettings"]["Networks"][f"{stack.project}_{NETWORK}"]["IPAddress"]
+
+
+def stand_in_addresses(stack):
+    """The stand-in's IPv4 and IPv6 addresses on the backends network, where it answers to cyfr's name."""
+    stand_in = stack.compose("ps", "--quiet", "cyfr-stand-in").stdout.strip()
+    network = stack.inspect(stand_in)["NetworkSettings"]["Networks"][f"{stack.project}_{NETWORK}"]
+    return network["IPAddress"], network["GlobalIPv6Address"]
+
+
+def island_rule_counted(rose, subnets, address):
+    """Whether a REJECT rule of one of the guard's logged island subnets, the one holding `address`, counted a packet."""
+    ip = ipaddress.ip_address(address)
+    logged = [ipaddress.ip_network(subnet, strict=False) for subnet in subnets]
+    for rule, count in rose.items():
+        found = re.search(r"-d (\S+) -j REJECT", rule)
+        if not found or count <= 0:
+            continue
+        network = ipaddress.ip_network(found.group(1), strict=False)
+        if network.version == ip.version and ip in network and network in logged:
+            return True
+    return False
+
+
+def test_egress(stack, c, owner):
+    guard, island = stack.inspect(stack.guard), stack.inspect(stack.container)
+    # Docker spells a capability it was given with or without its CAP_ prefix.
+    caps = [cap.removeprefix("CAP_") for cap in guard["HostConfig"]["CapAdd"] or []]
+    expect(guard["Config"]["Image"] == stack.image and caps == ["NET_ADMIN"]
+           and guard["HostConfig"]["CapDrop"] == ["ALL"] and guard["State"]["Health"]["Status"] == "healthy",
+           "the guard is the image under test, holding NET_ADMIN alone, and healthy", guard["HostConfig"])
+    expect(island["HostConfig"]["NetworkMode"] == f"container:{stack.guard}",
+           "the service shares its guard's network namespace", island["HostConfig"]["NetworkMode"])
+    subnets = re.findall(r"island subnet (\S+)", stack.guard_logs())
+    expect(subnets, "the guard found the island's subnets", stack.guard_logs())
+
+    # The controls: outside the guard, both of cyfr's addresses answer.
+    for network, url in [(NETWORK, "http://cyfr:4000/"), (RELEASE["endpoint_network"], f"http://{ENDPOINT_ADDRESS}:4000/")]:
+        control = stack.beside(network, "curl", "-sS", "--max-time", "5", url)
+        expect(control.returncode == 0 and control.stdout == "stand-in",
+               f"the stand-in for cyfr answers {url} to a container on the {network} network outside the guard",
+               control.stdout + control.stderr)
+
+    offline = os.environ.get("CYFR_TEST_OFFLINE") == "1"
+    stand_in_v4, stand_in_v6 = stand_in_addresses(stack)
+    expect(stand_in_v4 and stand_in_v6, "the stand-in holds an address of each family on the backends network", [stand_in_v4, stand_in_v6])
+    targets = ["cyfr:4000", f"{stand_in_v4}:4000", f"[{stand_in_v6}]:4000", f"{ENDPOINT_ADDRESS}:4000", "169.254.169.254:80",
+               "100.100.100.200:80", "[fd00:ec2::254]:80", "[fe80::1%eth0]:80", "10.1.2.3:80", "127.0.0.11:53", "127.0.0.1:1"
+               ] + ([] if offline else ["registry.npmjs.org:443"])
+    before = stack.guard_counters()
+    resolved = c.tool(owner, "probe__run", {"argv": ["getent", "hosts", "cyfr"]})
+    probed = c.tool(owner, "probe__run", {"argv": ["node", "-e", CONNECT_PROBE, "targets", *targets]})
+    fetched = None if offline else c.tool(owner, "probe__run", {"argv": ["curl", "-sS", "-o", "/dev/null", "-w", "%{http_code}",
+                                                                           "--max-time", "8", "https://registry.npmjs.org/"]})
+    after = stack.guard_counters()
+    codes = fields(probed.get("stdout"))
+    detail = {"codes": codes, "probe": probed, "resolved": resolved, "fetched": fetched}
+    expect(probed["status"] == 0, "the backend's connection probe ran to its end", detail)
+    expect(codes.get("cyfr:4000") in REFUSED and codes.get(f"{stand_in_v4}:4000") in REFUSED
+           and codes.get(f"[{stand_in_v6}]:4000") in REFUSED and codes.get(f"{ENDPOINT_ADDRESS}:4000") in REFUSED,
+           "a backend's connections to cyfr:4000, to cyfr's address of each family on the backends network and to cyfr's "
+           "fixed endpoint address are refused by the guard", detail)
+    expect(codes.get("169.254.169.254:80") in REFUSED and codes.get("100.100.100.200:80") in REFUSED,
+           "a backend's connections to the IPv4 metadata addresses are refused", detail)
+    expect(codes.get("[fd00:ec2::254]:80") in REFUSED and codes.get("[fe80::1%eth0]:80") not in (None, "connected"),
+           "a backend's connections to the IPv6 metadata and link-local addresses are refused", detail)
+    expect(codes.get("10.1.2.3:80") in REFUSED, "a backend's connection to another private address is refused", detail)
+    expect(codes.get("127.0.0.1:1") in REFUSED, "a backend's connection to the island's loopback is refused", detail)
+    expect(codes.get("127.0.0.11:53") == "connected" and resolved["status"] == 0 and "cyfr" in (resolved.get("stdout") or ""),
+           "a backend reaches Docker's resolver, over TCP and for cyfr's name", detail)
+    if offline:
+        print("skip: registry.npmjs.org:443 is not reached from a backend: CYFR_TEST_OFFLINE=1 says this host has no public network",
+              flush=True)
+    else:
+        expect(codes.get("registry.npmjs.org:443") == "connected" and fetched["status"] == 0 and fetched.get("stdout") == "200",
+               "a backend reaches the public registry", detail)
+
+    # Each refusal, and the resolver's exception, was the guard's own rule:
+    # that rule's counter rose while the backend probed. The island's subnets are
+    # matched as networks, since the guard logs them in full and
+    # ip6tables-save prints them compressed.
+    rose = {rule: after.get(rule, 0) - before.get(rule, 0) for rule in after}
+    matched = {fragment: any(count > 0 for rule, count in rose.items() if fragment in rule)
+               for fragment in ["-d 169.254.0.0/16", "-d 100.100.100.200/32", f"-d {ENDPOINT_ADDRESS}/32",
+                                "-d fe80::/10", "-d fd00:ec2::254/128", "-d 10.0.0.0/8",
+                                "--dst-type LOCAL -j REJECT", "--ctorigdst 127.0.0.11"]}
+    for address in (stand_in_v4, stand_in_v6):
+        matched[f"the island subnet holding {address}"] = island_rule_counted(rose, subnets, address)
+    expect(all(matched.values()), "each refusal and the resolver's exception counted on the guard's own rule", {"rose": rose, "matched": matched})
+
+
+def test_sibling_loopback(stack, c, listener, intruder):
+    """`listener` and `intruder` are two owners whose backends run under different uids."""
+    own = island_address(stack)
+    started = c.tool(listener, "probe__run", {"argv": [
+        "sh", "-c",
+        f"setsid node -e \"require('http').createServer((q, s) => s.end('sibling ' + process.getuid())).listen({SIBLING_PORT}, '::')\""
+        " >/dev/null 2>&1 & sleep 1"]})
+    expect(started["status"] == 0, "a backend started a listener on the shared loopback", started)
+    control = eventually(lambda: (lambda r: r if r.returncode == 0 and r.stdout.startswith("sibling ") else None)(
+        stack.exec(f"curl -sS --max-time 2 http://127.0.0.1:{SIBLING_PORT}/")), "the backend's listener to answer the container's root")
+    listening_uid = str(c.tool(listener, "probe__whoami")["uid"])
+    expect(control.stdout == f"sibling {listening_uid}", "the listener on the shared loopback is the backend's", control.stdout)
+    before = stack.guard_counters()
+    probed = c.tool(intruder, "probe__run", {"argv": ["node", "-e", CONNECT_PROBE, "targets",
+                                                       f"127.0.0.1:{SIBLING_PORT}", f"[::1]:{SIBLING_PORT}", f"{own}:{SIBLING_PORT}"]})
+    after = stack.guard_counters()
+    codes = fields(probed.get("stdout"))
+    detail = {"codes": codes, "probe": probed, "listener": listening_uid, "intruder": c.tool(intruder, "probe__whoami")["uid"]}
+    expect(probed["status"] == 0 and all(codes.get(target) in REFUSED for target in codes) and len(codes) == 3,
+           "another owner's backend's connections to the listener, on the loopback, on ::1 and on the island's own address, are refused",
+           detail)
+    rose = {rule: after.get(rule, 0) - before.get(rule, 0) for rule in after if "--dst-type LOCAL -j REJECT" in rule}
+    expect(sum(rose.values()) >= 3, "each refusal counted on the guard's loopback rule for the island's uids", rose)
+
+
+def test_guard_failure(image):
+    tools = imagesuite.temporary_directory("cyfr-guard-fails-", 0o755)
+    with open(os.path.join(tools, "ip6tables"), "w") as f:
+        f.write("#!/bin/sh\necho 'ip6tables: forced failure' >&2\nexit 1\n")
+    os.chmod(os.path.join(tools, "ip6tables"), 0o755)
+    stack = Stack("locus-backends-isolation-guard-fails", image, guard_tools_dir=tools)
+    try:
+        refused = stack.up_refused()
+        expect(refused.returncode != 0 and "dependency failed to start" in refused.stderr,
+               "compose does not start the service: its guard never turned healthy", refused.stdout + refused.stderr)
+        guard = stack.compose("ps", "--all", "--quiet", GUARD).stdout.strip()
+        island = stack.compose("ps", "--all", "--quiet", SERVICE).stdout.strip()
+        expect(guard and island, "compose created the guard and the service", [guard, island])
+        state = stack.inspect(guard)["State"]
+        logs = run("docker", "logs", guard, check=False)
+        text = logs.stdout + logs.stderr
+        expect(state.get("Health", {}).get("Status") != "healthy" and (state["ExitCode"] == 1 or state["RestartCount"] >= 1),
+               "the guard never turned healthy: it ended with an error, and restarts", state)
+        expect("[cyfr-guard] error: ip6tables" in text and "ready:" not in text,
+               "the guard named the ip6tables rule that failed and wrote no ready file", text[-2000:])
+        state = stack.inspect(island)["State"]
+        expect(state["Status"] == "created" and state["StartedAt"].startswith("0001-"),
+               "the service behind the guard was never started", state)
+    finally:
+        stack.down()
+        imagesuite.remove_directory(tools)
+
+
 def keeper_and_release(stack, target=None):
     procs = stack.processes(target)
     keeper = next((p for p in procs if p["cmd"].startswith("cyfr-locus serve")), None)
@@ -78,7 +251,7 @@ def main():
     require_docker()
     stack = Stack("locus-backends-isolation", image)
     try:
-        stack.up()
+        stack.up(stand_in=True)
         c = stack.controller()
         expect(c.hello()[0] == 200 and c.reconcile([])[0] == 200, "the service is greeted and reconciled")
 
@@ -168,6 +341,10 @@ def main():
         expect(c.tool(ALPHA, "probe__whoami")["pid"] == alpha["pid"] and c.tool(BETA, "probe__whoami")["pid"] == beta["pid"],
                "both backends survived each other's attempts")
 
+        # ————— the island's egress —————
+        test_egress(stack, c, ALPHA)
+        test_sibling_loopback(stack, c, ALPHA, BETA)
+
         # ————— retirement —————
         daemon = c.tool(ALPHA, "probe__spawn_daemon")["pid"]
         started = eventually(lambda: next((p for p in stack.processes() if p["pid"] == daemon), None), "the daemon to start")
@@ -199,9 +376,12 @@ def main():
             expect(result.returncode != 0 and "LOCUS_BACKENDS_KEY" in result.stdout + result.stderr,
                    f"the release refuses to start with the key {key!r}", result.stdout[-2000:] + result.stderr[-2000:])
 
+        # A second instance of the service, in a namespace of its own
+        # (harness.py `alone`): in the guard's it would meet the running
+        # service's listener.
         lost = f"{stack.project}-lost"
         run("docker", "rm", "--force", lost, check=False)
-        stack.compose("run", "--detach", "--name", lost, "--no-deps", "--service-ports", SERVICE)
+        stack.alone(lost, publish=True)
         try:
             base = "http://" + run("docker", "port", lost, str(PORT)).stdout.strip().splitlines()[0]
             wait_healthy(base)
@@ -220,7 +400,7 @@ def main():
         finally:
             run("docker", "rm", "--force", lost, check=False)
 
-        stack.compose("run", "--detach", "--name", lost, "--no-deps", SERVICE)
+        stack.alone(lost)
         try:
             eventually(lambda: keeper_and_release(stack, lost)[1], "the third service's release to start", timeout_s=60)
             lost_keeper, _ = keeper_and_release(stack, lost)
@@ -251,6 +431,9 @@ def main():
         expect(ALPHA_SECRET not in text, "a backend's credential never reaches the service's log")
     finally:
         stack.down()
+    # After the first project is down: a second default network of the
+    # fixed subnet could not exist beside the first's.
+    test_guard_failure(image)
 
 
 if __name__ == "__main__":
