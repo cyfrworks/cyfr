@@ -307,6 +307,8 @@ defmodule Locus.ListenerTest do
       socket: self(),
       transport_module: __MODULE__.ShutReporter,
       read_timeout: 1_000,
+      handshake_timeout: 1_000,
+      peername: {{127, 0, 0, 1}, 0},
       silent_terminate_on_error: false,
       span:
         ThousandIsland.Telemetry.start_span(:connection, %{}, %{handler: __MODULE__.ShutReporter})
