@@ -1344,9 +1344,11 @@ defmodule Sanctum.Consent.BlobBuilder do
   # One row per exit of the node's edge — each egress domain, each tool
   # server the edge grants, each connect origin of a tincture, and each
   # exit a flow names — with the classes its flows let reach it, as a send
-  # to it is decided: a domain narrowed within a declared pattern shows
-  # the pattern's flows it inherits (`Prima.Flow.classes_reaching/2`). An exit is narrowed where the narrowing kept fewer classes
-  # to it than `asked`, the flows the manifest declares.
+  # to it is decided and a frame's data route admits a read for a connect
+  # origin: a domain narrowed within a declared pattern shows the
+  # pattern's flows it inherits (`Prima.Flow.classes_reaching/2`). An exit
+  # is narrowed where the narrowing kept fewer classes to it than `asked`,
+  # the flows the manifest declares.
   defp exits_rows(node_key, resources, narrowed, {connect, asked}) do
     flows = flows_of(resources)
 

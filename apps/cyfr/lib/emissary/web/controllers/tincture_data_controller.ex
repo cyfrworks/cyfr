@@ -510,7 +510,10 @@ defmodule Emissary.Web.TinctureDataController do
   # class the read may carry needs a flow to every origin, decided on the
   # classes the read may carry before it is made: what it then answers
   # carries no class outside them. A frame that connects nowhere reads
-  # no grant here.
+  # no grant here. An origin under a declared pattern inherits the
+  # pattern's flows, by the one function the consent preview shows them
+  # with (`Prima.Flow.classes_reaching/2`), so the route admits exactly
+  # what the person was shown.
   defp flowing(kind, request, %{manifest: manifest} = caller) do
     case Compendium.tincture_connect_origins(manifest) do
       [] ->
@@ -531,7 +534,7 @@ defmodule Emissary.Web.TinctureDataController do
 
   defp covered(classes, origins, flows) do
     Enum.reduce_while(origins, :ok, fn origin, :ok ->
-      case classes -- Prima.Flow.classes_to(flows, origin) do
+      case classes -- Prima.Flow.classes_reaching(flows, origin) do
         [] -> {:cont, :ok}
         uncovered -> {:halt, {:error, flow_refusal(uncovered, origin)}}
       end

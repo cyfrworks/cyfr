@@ -1021,7 +1021,89 @@ defmodule Emissary.Web.TinctureDataControllerTest do
   # the route's own row, named `invoke`.
   defp invoked(route), do: Enum.filter(mcp_rows("tincture"), &(&1.action == route))
 
+  # A tincture `name` reading `flow_probe.filed` that connects to
+  # `connect` and declares `flows` (`{class, to}` pairs), granted through
+  # the consent commit the person makes from its preview: its frame, and
+  # the classes the preview showed flowing to each exit.
+  defp previewed_frame!(source, name, connect, flows) do
+    manifest = %{
+      "name" => name,
+      "type" => "tincture",
+      "version" => @version,
+      "publisher" => "local",
+      "tincture" => %{
+        "entry" => "index.html",
+        "connect" => connect,
+        "actions" => ["flow_probe.filed"]
+      },
+      "caps" => %{"flows" => Enum.map(flows, &flow/1)}
+    }
+
+    assert :ok = Prima.Manifest.validate(manifest, fn _ -> true end)
+    digest = put_version!(source, name, manifest)
+    decisions = %{ref: "tincture:local.#{name}"}
+    {:ok, plan} = Sanctum.Consent.Plan.plan(source, decisions)
+    {:ok, preview} = Sanctum.Consent.Commit.preview(source, decisions)
+
+    {:ok, committed} =
+      Sanctum.Consent.Commit.commit(source, %{
+        decisions: decisions,
+        plan_token: plan.plan_token,
+        proof: preview.proof,
+        commit_digest: preview.commit_digest,
+        expected_consent_revision: plan.expected_consent_revision
+      })
+
+    shown =
+      for %{"kind" => "exits", "values" => %{"exit" => exit, "flows" => classes}} <- plan.rows,
+          into: %{},
+          do: {exit, classes}
+
+    {frame!(source, name, digest, committed.revision), shown}
+  end
+
   describe "a frame that connects beyond its endpoint" do
+    test "an origin under a declared pattern is read with the pattern's flows, as the preview " <>
+           "showed them flowing to it",
+         %{source: source} do
+      Sanctum.Catalog.with_providers([FiledProbe], fn ->
+        Process.register(self(), :tincture_flow_probe)
+
+        {frame, shown} =
+          previewed_frame!(source, "inherited-origin", ["*.flows.example", @origin], [
+            {:filed, "*.flows.example"}
+          ])
+
+        assert shown[@origin] == ["filed"]
+        conn = action(frame.bearer, "flow_probe.filed")
+
+        assert conn.status == 200
+        assert {:ok, _answer} = answer(conn, :action)
+        assert_receive :flow_probe_read, @stream_ms
+      end)
+    end
+
+    test "an origin under no declared pattern is shown no flow and refused the read",
+         %{source: source} do
+      Sanctum.Catalog.with_providers([FiledProbe], fn ->
+        Process.register(self(), :tincture_flow_probe)
+        unflowed = "api.unflowed.example"
+
+        {frame, shown} =
+          previewed_frame!(source, "uncovered-origin", ["*.flows.example", unflowed], [
+            {:filed, "*.flows.example"}
+          ])
+
+        assert shown[unflowed] == []
+        conn = action(frame.bearer, "flow_probe.filed")
+
+        assert conn.status == 403
+        assert %{class: "forbidden", message: message} = refused(conn, :action)
+        assert message == Prima.Flow.sentence([:filed], unflowed)
+        refute_received :flow_probe_read
+      end)
+    end
+
     test "a file read carries what an unrecorded file is, outside material, beside the grant's own class",
          %{source: source} do
       actor = Sanctum.Context.actor(source)

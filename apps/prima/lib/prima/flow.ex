@@ -156,17 +156,13 @@ defmodule Prima.Flow do
   def exits(flows) when is_list(flows),
     do: flows |> Enum.map(& &1.to) |> Enum.uniq() |> Enum.sort()
 
-  @doc "The classes a set of flows lets reach `exit`, spelled exactly as declared."
-  @spec classes_to([t()], String.t()) :: [Source.class()]
-  def classes_to(flows, exit) when is_list(flows) and is_binary(exit) do
-    for %{from: class, to: ^exit} <- set(flows), uniq: true, do: class
-  end
-
   @doc """
   The classes a set of flows lets reach `exit`, as a send to it is
-  decided (`uncovered/3`): a flow naming the exit as spelled, and, for a
-  domain, a flow whose pattern the domain lies under — a host narrowed
-  within a declared pattern inherits the pattern's flows. In class order.
+  decided (`uncovered/3`), a frame's data route admits a read for its
+  connect origin and the consent preview shows the exit's flows: a flow
+  naming the exit as spelled, and, for a domain, a flow whose pattern
+  the domain lies under — a host narrowed within a declared pattern
+  inherits the pattern's flows. In class order.
   """
   @spec classes_reaching([t()], String.t()) :: [Source.class()]
   def classes_reaching(flows, exit) when is_list(flows) and is_binary(exit) do
