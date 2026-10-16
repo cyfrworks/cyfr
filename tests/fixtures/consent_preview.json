@@ -322,6 +322,17 @@
         }
       },
       {
+        "kind": "exits",
+        "narrowed": true,
+        "node": "reagent:local.weather",
+        "values": {
+          "exit": "eu.api.weather.example",
+          "flows": [
+            "outside"
+          ]
+        }
+      },
+      {
         "kind": "tools",
         "narrowed": false,
         "node": "reagent:local.geo",

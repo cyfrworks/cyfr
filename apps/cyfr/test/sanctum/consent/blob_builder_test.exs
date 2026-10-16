@@ -14,6 +14,8 @@ defmodule Sanctum.Consent.BlobBuilderTest do
 
   use ExUnit.Case, async: false
 
+  require Phoenix.LiveViewTest
+
   alias Prima.Authority.Blob
   alias Prima.ConsentPreview
   alias Sanctum.Consent.BlobBuilder
@@ -731,6 +733,46 @@ defmodule Sanctum.Consent.BlobBuilderTest do
       Blob.Edge.flows(ingress)
     end
 
+    test "a host narrowed under a declared pattern shows the pattern's flows it inherits, as the committed grant lets them reach it",
+         %{ctx: ctx} do
+      host = "api.b.two.example"
+      subset = %{@flow_ref => %{"egress" => %{"domains" => [host]}}}
+      {:ok, plan} = Plan.plan(ctx, %{ref: @flow_ref})
+      {:ok, preview} = preview(ctx, subset, @flow_ref)
+      %{profile_id: profile_id} = walk!(ctx, subset, @flow_ref)
+
+      committed = head_flows!(ctx, profile_id)
+
+      assert Prima.Flow.uncovered([Prima.Source.outside(nil)], {:domain, host}, flows: committed) ==
+               []
+
+      row = Enum.find(preview.rows, &(get_in(&1, ["values", "exit"]) == host))
+      assert row["values"]["flows"] == ["outside"]
+
+      html =
+        Phoenix.LiveViewTest.render_component(PrismWeb.ConsentSheetComponent,
+          id: "narrowed-exit",
+          ref: @flow_ref,
+          walk: %{
+            ref: @flow_ref,
+            plan: plan,
+            preview: preview,
+            decisions: %{"ref" => @flow_ref, "subset" => subset}
+          },
+          context: ctx
+        )
+
+      text =
+        html
+        |> LazyHTML.from_fragment()
+        |> LazyHTML.query(~s([data-row="exits"][data-exit="#{host}"]))
+        |> LazyHTML.text()
+        |> String.replace(~r/\s+/, " ")
+
+      assert text =~ "outside"
+      refute text =~ "nothing it reads"
+    end
+
     test "the plan asks every flow declared; the grant keeps those its edge binds, and runs them",
          %{ctx: ctx} do
       {:ok, plan} = Plan.plan(ctx, %{ref: @flow_ref})
@@ -819,7 +861,7 @@ defmodule Sanctum.Consent.BlobBuilderTest do
 
       assert exits(preview.rows) == %{
                "*.two.example" => {["outside"], false},
-               "api.b.two.example" => {[], false}
+               "api.b.two.example" => {["outside"], false}
              }
 
       %{profile_id: profile_id} = walk!(ctx, subset, @flow_ref)

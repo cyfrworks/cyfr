@@ -1343,8 +1343,9 @@ defmodule Sanctum.Consent.BlobBuilder do
 
   # One row per exit of the node's edge — each egress domain, each tool
   # server the edge grants, each connect origin of a tincture, and each
-  # exit a flow names — with the classes its flows let reach it, spelled
-  # as declared. An exit is narrowed where the narrowing kept fewer classes
+  # exit a flow names — with the classes its flows let reach it, as a send
+  # to it is decided: a domain narrowed within a declared pattern shows
+  # the pattern's flows it inherits (`Prima.Flow.classes_reaching/2`). An exit is narrowed where the narrowing kept fewer classes
   # to it than `asked`, the flows the manifest declares.
   defp exits_rows(node_key, resources, narrowed, {connect, asked}) do
     flows = flows_of(resources)
@@ -1366,7 +1367,7 @@ defmodule Sanctum.Consent.BlobBuilder do
   end
 
   defp class_names(flows, exit),
-    do: flows |> Prima.Flow.classes_to(exit) |> Enum.map(&Atom.to_string/1)
+    do: flows |> Prima.Flow.classes_reaching(exit) |> Enum.map(&Atom.to_string/1)
 
   defp set_row(node_key, kind, granted, shown_by, narrowed) do
     values = Map.new(Map.fetch!(@set_fields, kind), &{&1, (granted && granted[&1]) || []})

@@ -550,7 +550,8 @@ defmodule Sanctum.Consent.ShapeDerivationTest do
       {:ok, input} = ShapeDerivation.shape_input(ctx, "reagent:local.shape-empty")
 
       assert input.needs == []
-      assert input.caps == %{}
+      # Flows and connect origins are named even when none are declared.
+      assert input.caps == %{"flows" => [], "tincture.connect" => []}
       assert input.slots == []
       assert input.tool_actions == []
 
@@ -624,10 +625,12 @@ defmodule Sanctum.Consent.ShapeDerivationTest do
       }
     }
 
+    # The pinned digest is the shape's since flows and connect origins are
+    # in every shape, empty or not.
     test "a manifest that declares none of what attaching added keeps its digest", %{ctx: ctx} do
       publish!(ctx, "shape-pinned", "1.0.0", %{manifest: Jason.encode!(@pinned_manifest)})
 
-      assert {:ok, "sha256:4668715d2bcc22e11bd84c9c6d59b45f0577e11e2815b870abe96f6a2abd365e"} =
+      assert {:ok, "sha256:e7ef02f63635370d827a19e5cfed0093748c290ef0c423233819df67075a2ecf"} =
                ShapeDerivation.live_digest(ctx, "reagent:local.shape-pinned")
     end
 
@@ -878,10 +881,34 @@ defmodule Sanctum.Consent.ShapeDerivationTest do
       {:ok, moved} = ShapeDerivation.live_digest(ctx, ref)
       refute moved == before_digest
 
-      # A tincture that declares none asks for no origin.
+      # A tincture that declares none names no origin, and says so.
       bare = tincture!(ctx, "shape-no-origins", "1.0.0", %{})
       {:ok, bare_input} = ShapeDerivation.shape_input(ctx, bare)
-      refute Map.has_key?(bare_input.caps, "tincture.connect")
+      assert bare_input.caps["tincture.connect"] == []
+    end
+
+    test "a component that declares no flow and no origin still names both, so a consent made " <>
+           "before shapes named them asks again",
+         %{ctx: ctx} do
+      publish!(ctx, "shape-flowless", "1.0.0", %{
+        manifest: %{"caps" => %{"egress" => %{"domains" => ["api.example.test"]}}}
+      })
+
+      {:ok, input} = ShapeDerivation.shape_input(ctx, "reagent:local.shape-flowless")
+      assert input.caps["flows"] == []
+      assert input.caps["tincture.connect"] == []
+
+      # The shape as it was spelled before flows were shape: without the
+      # two keys. Its digest is not this shape's, so its consent asks again.
+      {:ok, digest} = Sanctum.Consent.ShapeDigest.compute(input)
+
+      {:ok, before_flows} =
+        Sanctum.Consent.ShapeDigest.compute(%{
+          input
+          | caps: Map.drop(input.caps, ["flows", "tincture.connect"])
+        })
+
+      refute digest == before_flows
     end
   end
 

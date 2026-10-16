@@ -163,6 +163,26 @@ defmodule Prima.Flow do
   end
 
   @doc """
+  The classes a set of flows lets reach `exit`, as a send to it is
+  decided (`uncovered/3`): a flow naming the exit as spelled, and, for a
+  domain, a flow whose pattern the domain lies under — a host narrowed
+  within a declared pattern inherits the pattern's flows. In class order.
+  """
+  @spec classes_reaching([t()], String.t()) :: [Source.class()]
+  def classes_reaching(flows, exit) when is_list(flows) and is_binary(exit) do
+    reached = exit_of(exit)
+
+    for %{from: class, to: to} <- set(flows),
+        to == exit or (reached != nil and reaches?(to, reached)),
+        uniq: true,
+        do: class
+  end
+
+  defp exit_of("need:" <> _name), do: nil
+  defp exit_of("server:" <> name), do: {:server, name}
+  defp exit_of(domain), do: {:domain, domain}
+
+  @doc """
   The flows of `flows` a consent keeps for the exits its edge binds: a
   domain flow while one of the edge's `domains` is its pattern or lies
   under it (a domain narrowed within a declared pattern keeps the
@@ -223,9 +243,9 @@ defmodule Prima.Flow do
   flow and the exit, by host or server, never a URL, a path or a value.
   """
   @spec refusal([Source.t()], exit()) ::
-          {:flow_not_declared, %{classes: [Source.class()], exit: String.t()}}
+          {:flow_not_declared, [Source.class()], String.t()}
   def refusal(uncovered, exit) when is_list(uncovered),
-    do: {:flow_not_declared, %{classes: Source.classes_of(uncovered), exit: exit_name(exit)}}
+    do: {:flow_not_declared, Source.classes_of(uncovered), exit_name(exit)}
 
   @doc "The sentence `refusal/2`'s reason reads as."
   @spec sentence([Source.class()], String.t()) :: String.t()

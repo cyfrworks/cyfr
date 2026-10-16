@@ -54,7 +54,7 @@ defmodule Prima.ConsentPreviewTest do
     assert length(Enum.uniq(identities)) == length(weather)
 
     assert Enum.sort(Enum.map(weather, & &1.values["exit"])) ==
-             ~w(api.weather.example need:api_key server:forecasts)
+             ~w(api.weather.example eu.api.weather.example need:api_key server:forecasts)
 
     # An exit no flow names is a row too, with no class.
     assert Enum.any?(exits, &(&1.values["flows"] == []))

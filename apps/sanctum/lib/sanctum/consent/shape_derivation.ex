@@ -28,8 +28,11 @@ defmodule Sanctum.Consent.ShapeDerivation do
   lists each declared flow as `<class>><exit>` (a class spells no `>`, so
   each string is one flow), and `"tincture.connect"` the origins a
   tincture's frame may reach (`Prima.Manifest.Tincture.connect/1`), which
-  are exits of that frame. A version that declares another flow or origin
-  asks again; one that declares none keeps the digest it had.
+  are exits of that frame. Both keys are in every shape, empty for a
+  component that declares none: flows are part of what a person consents
+  to, so every consent made before the shape named them asks again (no
+  release carries consents across that change), and a version that
+  declares another flow or origin asks again.
 
   A stored manifest that does not decode has no shape: every entry here
   answers `{:error, {:corrupt, {:manifest, source_ref}}}` for it, never the
@@ -407,8 +410,10 @@ defmodule Sanctum.Consent.ShapeDerivation do
     |> put_list("egress.private_ips", caps.egress.private_ips)
     |> put_list("storage.paths", caps.storage.paths)
     |> put_list("storage.actions", caps.storage.actions)
-    |> put_list("flows", Enum.map(caps.flows, &"#{&1.from}>#{&1.to}"))
-    |> put_list("tincture.connect", connect)
+    # Present even when empty: a shape names the flows and exits it was
+    # consented under, none included (see the moduledoc).
+    |> Map.put("flows", Enum.map(caps.flows, &"#{&1.from}>#{&1.to}"))
+    |> Map.put("tincture.connect", connect)
     |> put_limits(caps.limits)
   end
 
