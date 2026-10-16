@@ -206,7 +206,7 @@ defmodule Cyfr.SeedOffer do
     {:error, :died}
   end
 
-  defp died_class(reason) when is_atom(reason), do: inspect(reason)
+  defp died_class(reason) when is_atom(reason), do: Atom.to_string(reason)
   defp died_class(_reason), do: "exit"
 
   defp lost(:taken), do: "taken"
