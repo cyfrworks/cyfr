@@ -164,7 +164,9 @@ defmodule Arca.ControlPlane do
           generation: pos_integer(),
           fence: pos_integer(),
           lease_until: DateTime.t(),
-          release: String.t()
+          # nil only on a row recorded by hand (a test putting a member
+          # back in a state it held); every take and revival stamps it.
+          release: String.t() | nil
         }
 
   @doc """
