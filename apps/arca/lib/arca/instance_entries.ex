@@ -355,7 +355,7 @@ defmodule Arca.InstanceEntries do
           | {:error, :not_found | {:entry_unavailable, String.t()} | {:invalid, map()}}
           | refusal()
   def set_status(actor, id, status) when platform(actor) and is_binary(id) do
-    case Arca.StatusTransitions.from(status) do
+    case Arca.StatusTransitions.from(:credentials, status) do
       {:ok, _from} ->
         Arca.Repo.Errors.with_db_rescue("Arca.InstanceEntries.set_status", fn ->
           write_status(id, status)
@@ -814,11 +814,17 @@ defmodule Arca.InstanceEntries do
     |> Enum.sort()
   end
 
+  # Each profile moves from the unrevoked statuses its locked read found
+  # it in; a block that may not reach `blocked_status` from them refuses,
+  # and the refusal rolls the revoke back with it.
   defp block_profiles(pairs, blocked_status) do
+    unrevoked = Arca.StatusTransitions.statuses(:profiles) -- ["revoked"]
+
     Enum.reduce_while(pairs, :ok, fn {athanor_id, profile_id}, :ok ->
-      case Arca.ProfileStorage.set_status(
+      case Arca.ProfileStorage.transition(
              Prima.Actor.in_athanor(athanor_id),
              profile_id,
+             unrevoked,
              blocked_status
            ) do
         :ok -> {:cont, :ok}
@@ -833,7 +839,7 @@ defmodule Arca.InstanceEntries do
   # arca:unscoped-ok the instance's own credentials, offered to athanors and
   # deleted with none of them: the rows carry no athanor to scope to.
   defp write_status(id, status) do
-    {:ok, from} = Arca.StatusTransitions.from(status)
+    {:ok, from} = Arca.StatusTransitions.from(:credentials, status)
     query = from(i in InstanceEntry, where: i.id == ^id and i.status in ^from)
 
     case Arca.Repo.update_all(query, set: [status: status, updated_at: now()]) do

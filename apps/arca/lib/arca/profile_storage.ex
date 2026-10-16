@@ -53,23 +53,70 @@ defmodule Arca.ProfileStorage do
 
   def list_for_source(%Prima.Actor{}, _source_ref), do: {:error, :no_athanor}
 
-  @spec set_status(Prima.Actor.t(), String.t(), String.t()) :: :ok | {:error, term()}
-  def set_status(%Prima.Actor{athanor_id: athanor_id}, id, status)
-      when is_binary(athanor_id) and athanor_id != "" and is_binary(status) do
-    Arca.Repo.Errors.with_db_rescue("Arca.ProfileStorage.set_status", fn ->
-      case Arca.Repo.update_all(
-             from(p in Profile, where: p.id == ^id)
-             |> Arca.QueryHelpers.where_athanor(athanor_id),
-             set: [status: status, updated_at: DateTime.utc_now()]
-           ) do
-        {1, _} -> :ok
-        {0, _} -> {:error, :not_found}
-      end
-    end)
-    |> Arca.Data.project()
+  @doc """
+  Move a profile from one of the statuses `from` names (a status, a list
+  of them, or `:any` for every status the table lets reach `to`) to `to`,
+  as one conditional write: the row changes only while it holds one of
+  `from`, so a write raced by another lands wholly before it or finds the
+  row moved and changes nothing.
+
+  Every move `from` names must be one `Arca.StatusTransitions`'s profile
+  table admits, or nothing is read and the answer is
+  `{:error, :illegal_transition}`; so it is when the row holds a status
+  outside `from`. A row already at `to` is written again when `from`
+  names `to`, so a retry finishes what an earlier attempt left. A row the
+  athanor does not hold is `{:error, :not_found}`.
+  """
+  @spec transition(Prima.Actor.t(), String.t(), :any | String.t() | [String.t()], String.t()) ::
+          :ok | {:error, :no_athanor | :not_found | :illegal_transition | :database_error}
+  def transition(%Prima.Actor{athanor_id: athanor_id}, id, from, to)
+      when is_binary(athanor_id) and athanor_id != "" and is_binary(to) do
+    from = sources(from, to)
+
+    if from != [] and admitted?(from, to) do
+      Arca.Repo.Errors.with_db_rescue("Arca.ProfileStorage.transition", fn ->
+        case Arca.Repo.update_all(
+               from(p in Profile, where: p.id == ^id and p.status in ^from)
+               |> Arca.QueryHelpers.where_athanor(athanor_id),
+               set: [status: to, updated_at: DateTime.utc_now()]
+             ) do
+          {1, _} -> :ok
+          {0, _} -> refused(athanor_id, id)
+        end
+      end)
+    else
+      {:error, :illegal_transition}
+    end
   end
 
-  def set_status(%Prima.Actor{}, _id, _status), do: {:error, :no_athanor}
+  def transition(%Prima.Actor{}, _id, _from, to) when is_binary(to), do: {:error, :no_athanor}
+
+  defp sources(:any, to) do
+    case Arca.StatusTransitions.from(:profiles, to) do
+      {:ok, allowed} -> allowed
+      :error -> []
+    end
+  end
+
+  defp sources(from, _to), do: List.wrap(from)
+
+  defp admitted?(from, to) do
+    case Arca.StatusTransitions.from(:profiles, to) do
+      {:ok, allowed} -> Enum.all?(from, &(&1 in allowed))
+      :error -> false
+    end
+  end
+
+  # Why a conditional write changed nothing: no such row, or one whose
+  # status `from` did not name.
+  defp refused(athanor_id, id) do
+    exists? =
+      from(p in Profile, where: p.id == ^id)
+      |> Arca.QueryHelpers.where_athanor(athanor_id)
+      |> Arca.Repo.exists?()
+
+    if exists?, do: {:error, :illegal_transition}, else: {:error, :not_found}
+  end
 
   @doc """
   Revoke every profile of a name-level source ref that is not already

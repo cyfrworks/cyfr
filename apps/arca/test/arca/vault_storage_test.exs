@@ -437,6 +437,21 @@ defmodule Arca.VaultStorageTest do
       assert row.provider_hint == ""
     end
 
+    test "two successive rebinds both commit, the second blocking the blocked dependent again",
+         %{actor: actor} do
+      entry = put!(actor, %{binding_digest: "sha256:d0"})
+      profile = dependent_profile!(actor, entry.id)
+
+      for {from, to} <- [{"sha256:d0", "sha256:d1"}, {"sha256:d1", "sha256:d2"}] do
+        assert {:ok, [affected]} =
+                 VaultStorage.move_binding(actor, entry.id, from, %{binding_digest: to}, @blocked)
+
+        assert affected == profile.id
+        assert status_of(actor, entry.id).binding_digest == to
+        assert profile_status(actor, profile.id) == @blocked
+      end
+    end
+
     test "two rebinds read the same digest: one wins, the loser is refused and blocks nothing",
          %{actor: actor} do
       entry = put!(actor, %{binding_digest: "sha256:d0"})
@@ -457,9 +472,10 @@ defmodule Arca.VaultStorageTest do
       # The winner blocked the dependent; put it back so the loser's own
       # effect on it, if any, is the only thing the assertion can see.
       :ok =
-        Arca.ProfileStorage.set_status(
+        Arca.ProfileStorage.transition(
           Prima.Actor.in_athanor(actor.athanor_id),
           profile.id,
+          :any,
           "active"
         )
 
@@ -553,7 +569,7 @@ defmodule Arca.VaultStorageTest do
       entry = put!(actor, %{binding_digest: "sha256:d0"})
       source = "formula:local.shared-#{System.unique_integer([:positive])}"
       old = dependent_profile!(actor, entry.id, source)
-      :ok = Arca.ProfileStorage.set_status(actor, old.id, "revoked")
+      :ok = Arca.ProfileStorage.transition(actor, old.id, :any, "revoked")
       live = dependent_profile!(actor, entry.id, source)
 
       assert {:ok, [affected]} =

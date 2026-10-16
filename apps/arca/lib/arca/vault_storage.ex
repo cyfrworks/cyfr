@@ -341,7 +341,7 @@ defmodule Arca.VaultStorage do
           | refusal()
   def set_status(%Prima.Actor{athanor_id: athanor_id}, id, status)
       when resolved(athanor_id) and is_binary(id) and is_binary(status) do
-    case Arca.StatusTransitions.from(status) do
+    case Arca.StatusTransitions.from(:credentials, status) do
       {:ok, from} ->
         Arca.Repo.Errors.with_db_rescue("Arca.VaultStorage.set_status", fn ->
           query =
@@ -739,11 +739,17 @@ defmodule Arca.VaultStorage do
     |> Enum.sort()
   end
 
+  # Each profile moves from the unrevoked statuses its locked read found
+  # it in; a block that may not reach `blocked_status` from them refuses,
+  # and the refusal rolls the binding back with it.
   defp block_profiles(athanor_id, profile_ids, blocked_status) do
+    unrevoked = Arca.StatusTransitions.statuses(:profiles) -- ["revoked"]
+
     Enum.reduce_while(profile_ids, :ok, fn profile_id, :ok ->
-      case Arca.ProfileStorage.set_status(
+      case Arca.ProfileStorage.transition(
              Prima.Actor.in_athanor(athanor_id),
              profile_id,
+             unrevoked,
              blocked_status
            ) do
         :ok -> {:cont, :ok}

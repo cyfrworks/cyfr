@@ -217,7 +217,9 @@ defmodule Arca.ConsentStorageTest do
         {:ok, first} =
           ConsentStorage.insert_revision(consent_attrs(athanor, profile.id, 1), [], nil)
 
-        :ok = ProfileStorage.set_status(actor, profile.id, status)
+        # The profile is minted active; it moves only to another status.
+        if status != "active",
+          do: :ok = ProfileStorage.transition(actor, profile.id, :any, status)
 
         assert {:ok, second} =
                  ConsentStorage.insert_revision(
@@ -235,7 +237,7 @@ defmodule Arca.ConsentStorageTest do
 
       # A revision refused writes no status either.
       {:ok, refused} = ProfileStorage.get(actor, "prof_reactivate_blocked")
-      :ok = ProfileStorage.set_status(actor, refused.id, "needs_consent")
+      :ok = ProfileStorage.transition(actor, refused.id, :any, "needs_consent")
 
       assert {:error, :head_moved} =
                ConsentStorage.insert_revision(
@@ -559,10 +561,12 @@ defmodule Arca.ConsentStorageTest do
           status: "active"
         })
 
+      # A status outside the vocabulary cannot be stored (its CHECK); a
+      # kind outside it is the damage a read can still meet.
       {1, _} =
         Arca.Repo.update_all(
           Ecto.Query.from(p in Arca.Schemas.Profile, where: p.id == "prof_entries_damaged"),
-          set: [status: "sideways"]
+          set: [kind: "sideways"]
         )
 
       actor = %Prima.Actor{athanor_id: athanor}
@@ -681,7 +685,7 @@ defmodule Arca.ConsentStorageTest do
         ConsentStorage.insert_revision(consent_attrs(athanor, id, 1), refs, nil)
 
       if status != "active",
-        do: :ok = ProfileStorage.set_status(Prima.Actor.in_athanor(athanor), id, status)
+        do: :ok = ProfileStorage.transition(Prima.Actor.in_athanor(athanor), id, :any, status)
 
       consent
     end
@@ -816,7 +820,7 @@ defmodule Arca.ConsentStorageTest do
         ConsentStorage.insert_revision(consent_attrs(athanor, id, 1), [], nil)
 
       if status != "active",
-        do: :ok = ProfileStorage.set_status(Prima.Actor.in_athanor(athanor), id, status)
+        do: :ok = ProfileStorage.transition(Prima.Actor.in_athanor(athanor), id, :any, status)
 
       :ok
     end

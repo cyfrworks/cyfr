@@ -466,6 +466,26 @@ defmodule Arca.InstanceEntriesTest do
   end
 
   describe "move_binding/5" do
+    test "two successive rebinds both commit, the second blocking the blocked dependent again",
+         %{platform: platform} do
+      entry = put!(platform)
+      a = dependent!("ath_a", entry.id)
+
+      for {from, to} <- [{"sha256:i0", "sha256:i1"}, {"sha256:i1", "sha256:i2"}] do
+        assert {:ok, [{"ath_a", ^a}]} =
+                 InstanceEntries.move_binding(
+                   platform,
+                   entry.id,
+                   from,
+                   %{destination: @narrowed, binding_digest: to},
+                   "needs_consent"
+                 )
+
+        assert {:ok, %{binding_digest: ^to}} = InstanceEntries.get(platform, entry.id)
+        assert profile_status("ath_a", a) == "needs_consent"
+      end
+    end
+
     test "moves the destination and blocks every athanor's dependent profile",
          %{platform: platform} do
       entry = put!(platform)
@@ -575,7 +595,10 @@ defmodule Arca.InstanceEntriesTest do
         entry = put!(platform)
         source = "catalyst:local.shared-#{System.unique_integer([:positive])}"
         old = dependent!("ath_a", entry.id, source)
-        :ok = Arca.ProfileStorage.set_status(Prima.Actor.in_athanor("ath_a"), old, "revoked")
+
+        :ok =
+          Arca.ProfileStorage.transition(Prima.Actor.in_athanor("ath_a"), old, :any, "revoked")
+
         live = dependent!("ath_a", entry.id, source)
 
         args =
@@ -605,6 +628,20 @@ defmodule Arca.InstanceEntriesTest do
       end
     end
 
+    test "a repeated revoke commits and blocks the already blocked dependent again",
+         %{platform: platform} do
+      entry = put!(platform)
+      a = dependent!("ath_a", entry.id)
+
+      for _ <- 1..2 do
+        assert {:ok, [{"ath_a", ^a}]} =
+                 InstanceEntries.revoke(platform, entry.id, "needs_consent")
+
+        assert {:ok, %{status: "revoked"}} = InstanceEntries.get(platform, entry.id)
+        assert profile_status("ath_a", a) == "needs_consent"
+      end
+    end
+
     test "a repeat blocks again and answers the pairs, so a retry finishes the job",
          %{platform: platform} do
       for verb <- [:revoke, :tombstone] do
@@ -616,7 +653,7 @@ defmodule Arca.InstanceEntriesTest do
 
         # What an attempt that ended the entry and was stopped before its
         # dependents were blocked would have left behind.
-        :ok = Arca.ProfileStorage.set_status(Prima.Actor.in_athanor("ath_a"), a, "active")
+        :ok = Arca.ProfileStorage.transition(Prima.Actor.in_athanor("ath_a"), a, :any, "active")
 
         assert {:ok, [{"ath_a", ^a}]} =
                  apply(InstanceEntries, verb, [platform, entry.id, "needs_consent"])
@@ -630,7 +667,7 @@ defmodule Arca.InstanceEntriesTest do
       entry = put!(platform)
       a = dependent!("ath_a", entry.id)
       {:ok, [_]} = InstanceEntries.tombstone(platform, entry.id, "needs_consent")
-      :ok = Arca.ProfileStorage.set_status(Prima.Actor.in_athanor("ath_a"), a, "active")
+      :ok = Arca.ProfileStorage.transition(Prima.Actor.in_athanor("ath_a"), a, :any, "active")
 
       assert {:error, {:entry_unavailable, "tombstoned"}} =
                InstanceEntries.revoke(platform, entry.id, "needs_consent")

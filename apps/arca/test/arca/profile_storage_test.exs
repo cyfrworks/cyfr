@@ -6,7 +6,10 @@ defmodule Arca.ProfileStorageTest do
   The profile table holds one active profile per identity: the second is
   refused by the schema's active-identity index, through the changeset's
   mapping, never raised. A source's live profiles are revoked together, in
-  the actor's athanor alone. The rows are written through
+  the actor's athanor alone. A status moves only as the profile table of
+  `Arca.StatusTransitions` admits, in one conditional write: a revoked
+  profile never comes back, and a write of the status a row already holds
+  succeeds wherever the table lists it. The rows are written through
   `Arca.Test.Writers.put_profile/1`.
   """
   use ExUnit.Case, async: false
@@ -78,5 +81,106 @@ defmodule Arca.ProfileStorageTest do
       assert {:error, :database_error} =
                ProfileStorage.revoke_for_source(Prima.Actor.in_athanor(athanor), @source_ref)
     end
+  end
+
+  describe "transition/4" do
+    test "moves a profile only along the table, and never out of revoked", %{athanor: athanor} do
+      actor = Prima.Actor.in_athanor(athanor)
+
+      for {from, to, answer} <- [
+            {"active", "needs_consent", :ok},
+            {"needs_consent", "needs_consent", :ok},
+            {"needs_consent", "active", :ok},
+            {"active", "revoked", :ok},
+            {"needs_consent", "revoked", :ok},
+            {"revoked", "revoked", :ok},
+            {"active", "active", {:error, :illegal_transition}},
+            {"revoked", "active", {:error, :illegal_transition}},
+            {"revoked", "needs_consent", {:error, :illegal_transition}}
+          ] do
+        profile = profile!(athanor, from)
+
+        assert ProfileStorage.transition(actor, profile.id, from, to) == answer,
+               "#{from} -> #{to}"
+
+        held = if answer == :ok, do: to, else: from
+        assert {:ok, %{status: ^held}} = ProfileStorage.get(actor, profile.id)
+      end
+    end
+
+    test "a revoked profile is not reactivated by any source the caller names", %{
+      athanor: athanor
+    } do
+      actor = Prima.Actor.in_athanor(athanor)
+      profile = profile!(athanor, "revoked")
+
+      for from <- [:any, "revoked", ["needs_consent", "revoked"], ["active"], []] do
+        assert {:error, :illegal_transition} =
+                 ProfileStorage.transition(actor, profile.id, from, "active")
+      end
+
+      assert {:ok, %{status: "revoked"}} = ProfileStorage.get(actor, profile.id)
+    end
+
+    test "writes only while the row holds a status the caller named", %{athanor: athanor} do
+      actor = Prima.Actor.in_athanor(athanor)
+      profile = profile!(athanor, "needs_consent")
+
+      # Revoked by another writer after the caller read it active.
+      assert :ok = ProfileStorage.transition(actor, profile.id, :any, "revoked")
+
+      assert {:error, :illegal_transition} =
+               ProfileStorage.transition(actor, profile.id, "active", "needs_consent")
+
+      assert {:ok, %{status: "revoked"}} = ProfileStorage.get(actor, profile.id)
+    end
+
+    test "an unknown status, another athanor's row and a missing row change nothing", %{
+      athanor: athanor
+    } do
+      actor = Prima.Actor.in_athanor(athanor)
+      profile = profile!(athanor, "active")
+      other = Prima.Actor.in_athanor("#{athanor}_other")
+
+      assert {:error, :illegal_transition} =
+               ProfileStorage.transition(actor, profile.id, "active", "bogus")
+
+      assert {:error, :not_found} =
+               ProfileStorage.transition(other, profile.id, "active", "revoked")
+
+      assert {:error, :not_found} =
+               ProfileStorage.transition(actor, "prof_missing", "active", "revoked")
+
+      assert {:error, :no_athanor} =
+               ProfileStorage.transition(%Prima.Actor{}, profile.id, "active", "revoked")
+
+      assert {:ok, %{status: "active"}} = ProfileStorage.get(actor, profile.id)
+    end
+
+    @tag :capture_log
+    test "a store that cannot answer is a database error", %{athanor: athanor} do
+      Arca.Repo.query!("ALTER TABLE profiles RENAME TO profiles_unavailable")
+
+      assert {:error, :database_error} =
+               ProfileStorage.transition(
+                 Prima.Actor.in_athanor(athanor),
+                 "prof_any",
+                 :any,
+                 "revoked"
+               )
+    end
+  end
+
+  defp profile!(athanor, status) do
+    {:ok, profile} =
+      Writers.put_profile(
+        attrs(athanor, %{
+          id: "prof_#{System.unique_integer([:positive])}",
+          label: "l#{System.unique_integer([:positive])}",
+          status: status
+        })
+      )
+
+    profile
   end
 end

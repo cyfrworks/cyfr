@@ -429,7 +429,10 @@ defmodule Aqua.Loop.CloneTest do
     assert_receive {:scripted_probe, worker, _}, 30_000
 
     {:ok, [soul_profile]} = Arca.ConsentStorage.profiles(Sanctum.Context.actor(ctx), @soul)
-    :ok = Arca.ProfileStorage.set_status(Sanctum.Context.actor(ctx), soul_profile.id, "revoked")
+
+    :ok =
+      Arca.ProfileStorage.transition(Sanctum.Context.actor(ctx), soul_profile.id, :any, "revoked")
+
     send(worker, :continue)
 
     # The call in flight finishes; the soul's next model call is refused at

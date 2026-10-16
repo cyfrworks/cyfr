@@ -375,7 +375,7 @@ defmodule Sanctum.AttachTest do
 
       # Even under a profile active again, the entry is held to the digest
       # the consent approved.
-      :ok = Arca.ProfileStorage.set_status(Context.actor(ctx), facts.profile_id, "active")
+      :ok = Arca.ProfileStorage.transition(Context.actor(ctx), facts.profile_id, :any, "active")
       assert {:error, :binding_mismatch} = Attach.resolve(ctx, vault, "api_key", url, facts)
     end
 
@@ -461,7 +461,12 @@ defmodule Sanctum.AttachTest do
       {vault, facts} = bound!(ctx, entry)
 
       :ok =
-        Arca.ProfileStorage.set_status(Context.actor(ctx), facts.profile_id, "needs_consent")
+        Arca.ProfileStorage.transition(
+          Context.actor(ctx),
+          facts.profile_id,
+          :any,
+          "needs_consent"
+        )
 
       assert {:error, :grant_expired} = Attach.resolve(ctx, vault, "api_key", url, facts)
 

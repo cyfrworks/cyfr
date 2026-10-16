@@ -1689,7 +1689,18 @@ defmodule Sanctum.Consent.PlanTest do
       lending_closure!(ctx)
       lender = lender!(ctx)
       [%{entry_id: key}] = lenders(ctx)
-      reactivate = fn -> :ok = Arca.ProfileStorage.set_status(actor(ctx), lender, "active") end
+
+      # A move that blocked the lender leaves it at needs_consent; one
+      # that did not leaves it active, with nothing to reactivate.
+      reactivate = fn ->
+        case Arca.ProfileStorage.get(actor(ctx), lender) do
+          {:ok, %{status: "active"}} ->
+            :ok
+
+          {:ok, %{status: "needs_consent"}} ->
+            :ok = Arca.ProfileStorage.transition(actor(ctx), lender, "needs_consent", "active")
+        end
+      end
 
       {:ok, _} = Sanctum.Vault.rebind(ctx, %{id: key, field_names: ["OPENAI_API_KEY", "REGION"]})
       reactivate.()

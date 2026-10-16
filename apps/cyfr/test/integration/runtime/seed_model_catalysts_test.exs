@@ -291,7 +291,14 @@ defmodule Locus.Runtime.SeedModelCatalystsTest do
     {:ok, [claude_profile]} =
       Arca.ConsentStorage.profiles(Sanctum.Context.actor(ctx), "catalyst:local.claude")
 
-    :ok = Arca.ProfileStorage.set_status(Sanctum.Context.actor(ctx), claude_profile.id, "revoked")
+    :ok =
+      Arca.ProfileStorage.transition(
+        Sanctum.Context.actor(ctx),
+        claude_profile.id,
+        :any,
+        "revoked"
+      )
+
     {:ok, revoked} = Opus.authority_for(ctx, :default, "agent:local.aqua")
 
     assert {:error, {:setup_required, %{reason: "vault_selection_unbound"}}} =
