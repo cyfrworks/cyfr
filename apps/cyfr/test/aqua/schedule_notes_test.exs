@@ -168,11 +168,15 @@ defmodule Aqua.ScheduleNotesTest do
         ScheduleOccurrences.start!(actor, occurrence.id, @claimant, execution_id)
       end)
 
-    {occurrence, execution_id}
+    # The schedule row as the scheduler reads it before the run.
+    {:ok, read_before} = CronSchedule.get(actor, schedule.id)
+    {Map.put(occurrence, :read_before, read_before), execution_id}
   end
 
   defp finished!({occurrence, execution_id}, output) do
-    {:ok, 1} = Scheduler.complete(occurrence, execution_id, output, @claimant)
+    {:ok, 1} =
+      Scheduler.complete(occurrence.read_before, occurrence, execution_id, output, @claimant)
+
     {occurrence, execution_id}
   end
 
@@ -468,6 +472,39 @@ defmodule Aqua.ScheduleNotesTest do
       assert {:ok, %{"applied" => 1}} = drain(athanor)
       assert {:ok, "applied"} = outcome(athanor, source(run, schedule))
       assert {:ok, %{notes: []}} = Aqua.Notes.list(ctx)
+    end
+
+    test "a destination changed after the run read its note is a conflict, and the unread note it now names is kept",
+         %{athanor: athanor, ctx: ctx} = context do
+      schedule = keeping(context, "old")
+      {:ok, _} = Aqua.Notes.keep(ctx, "old", "the old note")
+      {:ok, _} = Aqua.Notes.keep(ctx, "new", "a person's unread note")
+      run = started!(schedule, 60)
+      assert {:ok, %{content: "the old note"}} = read_by_run(ctx, run, "old")
+
+      {:ok, _} =
+        CronSchedule.update(Sanctum.Context.actor(ctx), schedule.id, %{
+          metadata: Jason.encode!(%{"keep_outcome" => true, "note_name" => "new"})
+        })
+
+      run = finished!(run, "the run's outcome")
+
+      assert {:ok, %{"conflict" => 1}} = drain(athanor)
+      assert {:ok, "conflict"} = outcome(athanor, source(run, schedule))
+      assert {:ok, %{revision: 1, note: %{content: "a person's unread note"}}} = note(ctx, "new")
+      assert {:ok, %{revision: 1, note: %{content: "the old note"}}} = note(ctx, "old")
+    end
+
+    test "an athanor archived after the note was staged gets no note, and the outcome is refused",
+         %{athanor: athanor, ctx: ctx} = context do
+      schedule = keeping(context)
+      run = ran!(schedule, 60, "must not land after archive")
+      with_between(context)
+      plant(fn -> {:ok, _} = Sanctum.Tenancy.Athanors.archive(athanor) end)
+
+      assert {:ok, %{"refused" => 1}} = drain(athanor)
+      assert {:ok, "refused"} = outcome(athanor, source(run, schedule))
+      assert {:ok, %{revision: 0}} = note(ctx, schedule.id)
     end
 
     test "an archived athanor's schedule writes nothing",

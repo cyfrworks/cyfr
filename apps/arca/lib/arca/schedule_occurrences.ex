@@ -509,12 +509,13 @@ defmodule Arca.ScheduleOccurrences do
 
   @doc """
   Inside the caller's locking transaction: whether the authority a
-  schedule's outcome was recorded under still stands — the schedule row
-  exists, its bound profile `profile_id` is active, and that profile's
-  head consent is at `consent_revision` (nil: it has none). The schedule
-  and the profile rows are read under a shared lock, so a deletion, a
-  revocation or a new head commits before this read or waits for the
-  caller's commit.
+  schedule's outcome was recorded under still stands — the athanor is
+  not archived, the schedule row exists, its bound profile `profile_id`
+  is active, and that profile's head consent is at `consent_revision`
+  (nil: it has none). The athanor, the schedule and the profile rows are
+  read under a shared lock, in that order, the athanor before its rows,
+  so an archive, a deletion, a revocation or a new head commits before
+  this read or waits for the caller's commit.
 
   Answers `:ok` or `{:error, :authority_gone}`. Raises outside a
   transaction and on a store that cannot answer, so the caller's
@@ -537,6 +538,11 @@ defmodule Arca.ScheduleOccurrences do
       raise ArgumentError, "Arca.ScheduleOccurrences.authority/2 runs inside a transaction"
     end
 
+    athanor =
+      from(a in Arca.Schemas.Athanor, where: a.id == ^athanor_id, select: a.status)
+      |> Arca.QueryHelpers.for_share()
+      |> Arca.Repo.one()
+
     schedule =
       from(s in CronSchedule,
         where: s.id == ^schedule_id and s.athanor_id == ^athanor_id,
@@ -553,9 +559,10 @@ defmodule Arca.ScheduleOccurrences do
       |> Arca.QueryHelpers.for_share()
       |> Arca.Repo.one()
 
-    if schedule && status == "active" && consent_revision(athanor_id, profile_id) == revision,
-      do: :ok,
-      else: {:error, :authority_gone}
+    if (athanor not in [nil, "archived"] and schedule) && status == "active" &&
+         consent_revision(athanor_id, profile_id) == revision,
+       do: :ok,
+       else: {:error, :authority_gone}
   end
 
   def authority(%Prima.Actor{}, %{}),

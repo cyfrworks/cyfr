@@ -415,7 +415,7 @@ defmodule Cyfr.Cluster.Boot do
         Arca.ScheduleOccurrences.start!(actor, occurrence.id, Prima.Boot.id(), execution_id)
       end)
 
-    {:ok, 1} = Opus.Schedules.Scheduler.complete(occurrence, execution_id, output)
+    {:ok, 1} = Opus.Schedules.Scheduler.complete(schedule, occurrence, execution_id, output)
     occurrence.id
   end
 

@@ -185,10 +185,10 @@ defmodule Arca.FencedPublication do
       first, before the slot is verified: it may take the owner's own
       locks (a job claim's fence, the rows its authority rests on) and
       read under them. Those rows are locked before the lease row's
-      shared lock, the order every writer that locks its rows and then
-      checks its slot keeps (the schedule claim, `Arca.CronSchedule`'s
-      writes, a consent commit), so the two never wait on each other in
-      a cycle on PostgreSQL. Its refusal writes nothing.
+      shared lock, the order the schedule writers keep (the schedule
+      claim and `Arca.CronSchedule`'s writes lock their row, then verify
+      the slot), so the two never wait on each other in a cycle on
+      PostgreSQL. Its refusal writes nothing.
     * `also:` — the owner's row written beside the publication, handed
       the revision the resource now holds, run after the publishing
       statement or after a replay of it is recognized, so a retried
@@ -384,9 +384,10 @@ defmodule Arca.FencedPublication do
   # owner's row beside it. A replay recognized at the claim answers the
   # revision it already published, and the owner's row is still written
   # beside it. The owner's row locks come before the lease row's shared
-  # lock because the schedule claim and the consent writers lock their
-  # rows and then verify the slot: the reverse order here would let a
-  # lease renewal queued between the two close a deadlock on PostgreSQL.
+  # lock because the schedule writers (the claim, `Arca.CronSchedule`'s
+  # writes) lock their row and then verify the slot: the reverse order
+  # here would let a lease renewal queued between the two close a
+  # deadlock on PostgreSQL.
   defp publication(target, revision_read, slot, started, verify, also) do
     with :ok <- ran(verify, []),
          :ok <- owned(slot),

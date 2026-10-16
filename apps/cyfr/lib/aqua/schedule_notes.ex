@@ -343,7 +343,12 @@ defmodule Aqua.ScheduleNotes do
              with :ok <- held(JobClaims.hold(claim)),
                   do: ScheduleOccurrences.authority(actor, authority)
            end,
-           also: fn _revision -> ConsumerReceipts.put!(actor, applied) end
+           also: fn _revision ->
+             # The claim again, on the clock read after every lock the
+             # publication waited on, the member's lease row among them.
+             with :ok <- held(JobClaims.hold(claim)),
+                  do: ConsumerReceipts.put!(actor, applied)
+           end
          ) do
       {:ok, _kept} ->
         {:ok, "applied"}

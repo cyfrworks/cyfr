@@ -102,7 +102,8 @@ defmodule Arca.ConsumerReceipts do
   writer's member `slot`: the claim's row is held at its owner and fence
   (`Arca.JobClaims.hold/1`), then the slot verified live
   (`Arca.ControlPlane.verify_held/1`, `:none` where no claimant runs),
-  and the receipt written only while both stand on the database's clock.
+  then the claim's lease judged again on the database's clock read after
+  that wait, and the receipt written only while both stand.
 
   Answers `:ok`, `:taken` or `:lapsed` (the claim is no longer this
   consumer's to act under), `{:error, :not_owner}` (the member no longer
@@ -117,8 +118,12 @@ defmodule Arca.ConsumerReceipts do
       when is_binary(athanor_id) and athanor_id != "" do
     Errors.with_db_rescue("Arca.ConsumerReceipts.record", fn ->
       Arca.Repo.locking_transaction(fn ->
+        # The claim is asked again after the lease row's lock is won: a
+        # claim that ran out while this waited on the member's lease is
+        # judged on the clock read after the wait, and writes nothing.
         with {:ok, _held} <- Arca.JobClaims.hold(claim),
              :ok <- Arca.ControlPlane.verify_held(slot),
+             {:ok, _still} <- Arca.JobClaims.hold(claim),
              :ok <- put!(actor, receipt) do
           :ok
         else

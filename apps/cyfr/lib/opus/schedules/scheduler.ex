@@ -1183,7 +1183,7 @@ defmodule Opus.Schedules.Scheduler do
             routed_to: Opus.service()
           }
 
-          case complete(occurrence, execution_id, output) do
+          case complete(schedule, occurrence, execution_id, output) do
             {:error, :stale} ->
               # Another member's occurrence now: this member's decision is
               # still closed, and nothing else is written or announced.
@@ -1426,24 +1426,34 @@ defmodule Opus.Schedules.Scheduler do
   # the run's read. The note is never read here. The record's delivery is
   # `Aqua.ScheduleNotes`'s; the completion broadcast after it only wakes
   # it.
-  @spec complete(map(), String.t(), term(), String.t()) ::
+  #
+  # `schedule` is the row as this member read it before the run. A read's
+  # revision is the revision of the note the schedule named when the run
+  # read it, and the occurrence holds no name beside it: so the record
+  # copies it only while the schedule row stands at that same revision
+  # (`updated_at`, the row's own stored value) when the finish reads it.
+  # A row written since — a changed destination among anything else — may
+  # name another note than the one read, and the record says `absent`,
+  # which publishes only over nothing or over this schedule's own earlier
+  # outcome, never over a note the run did not read.
+  @spec complete(map(), map(), String.t(), term(), String.t()) ::
           {:ok, 1} | {:error, :stale | :no_athanor | :database_error | term()}
-  def complete(occurrence, execution_id, output, claimed_by \\ claimant()) do
+  def complete(schedule, occurrence, execution_id, output, claimed_by \\ claimant()) do
     ScheduleOccurrences.finish(
       Prima.Actor.in_athanor(occurrence.athanor_id),
       occurrence.id,
       claimed_by,
       execution_id,
       "completed",
-      also: &record_outcome(&1, output)
+      also: &record_outcome(&1, schedule, output)
     )
     |> logged_stale(occurrence)
   end
 
-  defp record_outcome(%{occurrence: occurrence} = finished, output) do
+  defp record_outcome(%{occurrence: occurrence} = finished, read_before, output) do
     record =
       Prima.OutboxRecord.schedule_outcome(%{
-        occurrence: occurrence,
+        occurrence: bound_read(occurrence, read_before, finished.schedule),
         schedule: finished.schedule,
         consent_revision: finished.consent_revision,
         keep: keep_outcome(finished.schedule.metadata),
@@ -1457,6 +1467,19 @@ defmodule Opus.Schedules.Scheduler do
       {:error, :exists} -> :ok
     end
   end
+
+  # The read's revision, while the schedule row is the one read before
+  # the run; unbound (`absent`) once anything wrote it since.
+  defp bound_read(occurrence, %{updated_at: %DateTime{} = before}, %{
+         updated_at: %DateTime{} = now
+       }) do
+    if DateTime.compare(before, now) == :eq,
+      do: occurrence,
+      else: %{occurrence | note_revision_read: nil}
+  end
+
+  defp bound_read(occurrence, _read_before, _finished),
+    do: %{occurrence | note_revision_read: nil}
 
   # An end answered `:stale` found the occurrence another member's now,
   # or already ended: one line says so, and the answer is handed on.
