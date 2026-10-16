@@ -142,9 +142,9 @@ defmodule Arca.Usage do
 
   @doc """
   One tenant scope's cached `%{files:, bytes:}` — or one scope walk on a
-  miss. Walk failures return raw, uncached; the public quota fails
-  closed on them, the file-count backstop fails open — that asymmetry is
-  the call sites' policy, not this cache's.
+  miss. Walk failures return raw, uncached; the public quota and the
+  file-count backstop each refuse the write as unavailable on them — that
+  is the call sites' policy, not this cache's.
   """
   @spec scope_usage(Prima.Actor.t(), String.t()) ::
           {:ok, %{files: non_neg_integer(), bytes: non_neg_integer()}} | {:error, term()}
