@@ -15,6 +15,8 @@ defmodule Prism do
   - `Prism.Labels` / `Prism.Tray` — mode vocabulary and the notification
     tray's badge state.
   - `Prism.SafeMode` — what the system layer offers when a canvas fails.
+  - `Prism.ConsentChoices` — the consent sheet's choices, pure over the
+    plan's typed rows.
 
   `Aqua` owns agent orchestration; Prism renders its state.
   """
@@ -23,6 +25,7 @@ defmodule Prism do
     deps: [Sanctum, Arca, Cyfr, Compendium, Aqua, Opus, CyfrWeb],
     exports: [
       CanvasValidation,
+      ConsentChoices,
       Frames,
       Labels,
       SafeMode,

@@ -95,7 +95,9 @@ defmodule Sanctum.Gate.ErrorAdoptionTest do
     "apps/cyfr/lib/compendium/component.ex" => 3,
     "apps/cyfr/lib/compendium/providers/shared.ex" => 4,
     "apps/cyfr/lib/compendium/registry.ex" => 4,
-    "apps/sanctum/lib/sanctum/catalog.ex" => 3,
+    "apps/sanctum/lib/sanctum/catalog.ex" => 2,
+    # A chain's call that names no action, said in the gate's words.
+    "apps/sanctum/lib/sanctum/dispatch.ex" => 1,
     # The build orchestration behind `Compendium.Builds.Provider`: the
     # three this ratchet could not see until the scan followed a tool
     # module into what it calls.
@@ -183,6 +185,10 @@ defmodule Sanctum.Gate.ErrorAdoptionTest do
     end)
   end
 
+  # The gate's dispatch, which every tool's call passes and which no tool
+  # names: `Sanctum.Gate` delegates to it.
+  @gate_dispatch ["apps/sanctum/lib/sanctum/dispatch.ex"]
+
   # The tool modules, and every module of this umbrella they name. A
   # refusal a tool returns is often produced a call deeper, and a scan
   # that stops at the tool counts the wrong number.
@@ -202,7 +208,7 @@ defmodule Sanctum.Gate.ErrorAdoptionTest do
           path = Map.get(by_module, name),
           do: path
 
-    Enum.uniq(tools ++ reached)
+    Enum.uniq(tools ++ reached ++ Enum.map(@gate_dispatch, &Path.join(root(), &1)))
   end
 
   defp defmodule_name(path) do

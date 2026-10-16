@@ -1314,13 +1314,22 @@ defmodule Sanctum.Consent.PlanTest do
                      binding_key: once_key,
                      entry_id: entry.id,
                      lifetime: %{kind: "once", until: nil},
-                     consumed: false
+                     consumed: false,
+                     source: "own",
+                     node: ref,
+                     edge: "@ingress",
+                     need: "api_key"
                    },
                    %{
                      binding_key: until_key,
                      entry_id: entry.id,
                      lifetime: %{kind: "until", until: DateTime.to_iso8601(until)},
-                     consumed: false
+                     consumed: false,
+                     source: "own",
+                     node: ref,
+                     edge: "@ingress",
+                     connection: "later",
+                     need: "api_key"
                    }
                  ],
                  & &1.binding_key
@@ -1358,7 +1367,11 @@ defmodule Sanctum.Consent.PlanTest do
                  binding_key: "#{ref}|@ingress|default",
                  instance_entry_id: offered.id,
                  lifetime: %{kind: "standing", until: nil},
-                 consumed: false
+                 consumed: false,
+                 source: "instance",
+                 node: ref,
+                 edge: "@ingress",
+                 need: "api_key"
                }
              ]
 
@@ -1381,7 +1394,12 @@ defmodule Sanctum.Consent.PlanTest do
                  binding_key: "#{app}|#{dep}|default",
                  label: "default",
                  lifetime: %{kind: "once", until: nil},
-                 consumed: false
+                 consumed: false,
+                 source: "label",
+                 node: app,
+                 edge: dep,
+                 dep: dep,
+                 need: "api_key"
                }
              ]
     end
