@@ -32,7 +32,14 @@ defmodule PrismWeb.SchedulesLive do
 
   require Logger
 
-  @empty_form %{"name" => "", "reference" => "", "profile_id" => "", "input" => ""}
+  @empty_form %{
+    "name" => "",
+    "reference" => "",
+    "profile_id" => "",
+    "input" => "",
+    "missed_runs" => "skip",
+    "catch_up_limit" => ""
+  }
 
   @cron_presets [
     {"Every minute", "* * * * *"},
@@ -113,19 +120,38 @@ defmodule PrismWeb.SchedulesLive do
       |> assign(:form, to_form(Map.merge(@empty_form, Map.take(params, Map.keys(@empty_form)))))
       |> assign(:cron_custom, params["cron_custom"] || socket.assigns.cron_custom)
 
-    case create_input(params, cron) do
-      {:ok, input_args} ->
-        args =
-          Map.merge(input_args, %{
-            "action" => "create",
-            "name" => name,
-            "cron_expression" => cron,
-            "reference" => ref,
-            "profile_id" => params["profile_id"]
-          })
+    with {:ok, input_args} <- create_input(params, cron),
+         {:ok, missed_args} <- missed_input(params) do
+      args =
+        input_args
+        |> Map.merge(missed_args)
+        |> Map.merge(%{
+          "action" => "create",
+          "name" => name,
+          "cron_expression" => cron,
+          "reference" => ref,
+          "profile_id" => params["profile_id"]
+        })
 
-        {:noreply, create_admitted(socket, args)}
+      {:noreply, create_admitted(socket, args)}
+    else
+      {:error, reason} ->
+        {:noreply, put_flash(socket, :error, "Failed: #{error_message(reason)}")}
+    end
+  end
 
+  # A schedule's missed-run policy, changed in its row. The tool decides
+  # what a limit may be; the page only reads the number it was given.
+  def handle_event("missed_runs", %{"schedule_id" => id} = params, socket) do
+    with {:ok, missed_args} <- missed_input(params),
+         {:ok, _} <-
+           call_tool(
+             socket,
+             "schedule",
+             Map.merge(missed_args, %{"action" => "update", "schedule_id" => id})
+           ) do
+      {:noreply, socket |> fetch_schedules() |> put_flash(:info, "Missed runs saved")}
+    else
       {:error, reason} ->
         {:noreply, put_flash(socket, :error, "Failed: #{error_message(reason)}")}
     end
@@ -323,6 +349,18 @@ defmodule PrismWeb.SchedulesLive do
         decode_input(params["input"])
     end
   end
+
+  # What the form says of missed runs, as the tool's arguments: `skip`
+  # takes no limit, and `catch_up` the whole number entered (the tool
+  # refuses one out of its range).
+  defp missed_input(%{"missed_runs" => "catch_up"} = params) do
+    case Integer.parse(String.trim(params["catch_up_limit"] || "")) do
+      {limit, ""} -> {:ok, %{"missed_runs" => "catch_up", "catch_up_limit" => limit}}
+      _ -> {:error, "Catching up needs how many missed runs to fire, a whole number"}
+    end
+  end
+
+  defp missed_input(_params), do: {:ok, %{"missed_runs" => "skip"}}
 
   defp decode_input(input) when input in [nil, ""], do: {:ok, %{}}
 
@@ -523,6 +561,31 @@ defmodule PrismWeb.SchedulesLive do
                   class="font-mono"
                 />
               </div>
+              <div>
+                <label class="block text-xs font-medium text-gray-400 mb-1">Missed runs</label>
+                <div class="flex gap-2">
+                  <select
+                    name="missed_runs"
+                    class="rounded-lg bg-gray-800 border border-gray-700 px-4 py-2 text-sm text-white focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
+                  >
+                    <option value="skip" selected={@form[:missed_runs].value != "catch_up"}>
+                      Skip
+                    </option>
+                    <option value="catch_up" selected={@form[:missed_runs].value == "catch_up"}>
+                      Catch up
+                    </option>
+                  </select>
+                  <.input
+                    name="catch_up_limit"
+                    type="number"
+                    value={@form[:catch_up_limit].value}
+                    placeholder="how many"
+                  />
+                </div>
+                <p class="mt-1 text-xs text-gray-500">
+                  What becomes of runs the server missed while it was down: skip them, or catch up on up to this many, oldest first.
+                </p>
+              </div>
             </div>
             <div class="flex justify-end gap-2">
               <.button variant="ghost" type="button" phx-click="toggle_create">Cancel</.button>
@@ -541,22 +604,25 @@ defmodule PrismWeb.SchedulesLive do
           <table class="min-w-full divide-y divide-gray-800 table-fixed">
             <thead>
               <tr>
-                <th class="w-[16%] px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">
+                <th class="w-[13%] px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">
                   Name
                 </th>
-                <th class="w-[20%] px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">
+                <th class="w-[15%] px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">
                   Reference
                 </th>
-                <th class="w-[14%] px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">
+                <th class="w-[12%] px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">
                   Schedule
                 </th>
-                <th class="w-[10%] px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">
+                <th class="w-[16%] px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">
+                  Missed Runs
+                </th>
+                <th class="w-[8%] px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">
                   Status
                 </th>
-                <th class="w-[12%] px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">
+                <th class="w-[10%] px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">
                   Next Run
                 </th>
-                <th class="w-[12%] px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">
+                <th class="w-[10%] px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">
                   Last Run
                 </th>
                 <th class="w-[6%] px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">
@@ -585,6 +651,34 @@ defmodule PrismWeb.SchedulesLive do
                     <span class="block text-xs text-gray-500 font-mono">
                       {f(sched, :cron_expression)}
                     </span>
+                  </td>
+                  <td class="px-4 py-3 text-sm">
+                    <form
+                      id={"missed-#{f(sched, :schedule_id)}"}
+                      phx-submit="missed_runs"
+                      class="flex items-center gap-1"
+                    >
+                      <input type="hidden" name="schedule_id" value={f(sched, :schedule_id)} />
+                      <select
+                        name="missed_runs"
+                        class="rounded bg-gray-800 border border-gray-700 px-2 py-1 text-xs text-white"
+                      >
+                        <option value="skip" selected={f(sched, :missed_runs) != "catch_up"}>
+                          Skip
+                        </option>
+                        <option value="catch_up" selected={f(sched, :missed_runs) == "catch_up"}>
+                          Catch up
+                        </option>
+                      </select>
+                      <input
+                        name="catch_up_limit"
+                        type="number"
+                        min="1"
+                        value={f(sched, :catch_up_limit)}
+                        class="w-14 rounded bg-gray-800 border border-gray-700 px-2 py-1 text-xs text-white"
+                      />
+                      <.button variant="ghost" type="submit" class="text-xs px-2 py-1">Save</.button>
+                    </form>
                   </td>
                   <td class="px-4 py-3 text-sm whitespace-nowrap">
                     <.badge color={status_badge_color(f(sched, :status))}>

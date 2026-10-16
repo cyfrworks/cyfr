@@ -123,6 +123,62 @@ defmodule PrismWeb.SchedulesLiveTest do
     assert_form(view, submitted)
   end
 
+  describe "missed runs" do
+    test "a schedule is made with the policy chosen, its row shows it, and the row saves a change",
+         %{view: view, ctx: ctx, params: params} do
+      grant_origins!(ctx, [:interactive, :schedule])
+
+      render_submit(
+        view,
+        "create",
+        Map.merge(params, %{"missed_runs" => "catch_up", "catch_up_limit" => "3"})
+      )
+
+      assert {:ok, %{id: id, missed_runs: "catch_up", catch_up_limit: 3}} = schedule(ctx, params)
+
+      # The row shows the policy it holds.
+      assert has_element?(view, ~s(#missed-#{id} option[value="catch_up"][selected]))
+      assert has_element?(view, ~s(#missed-#{id} input[name="catch_up_limit"][value="3"]))
+
+      view
+      |> form("#missed-#{id}", %{"missed_runs" => "catch_up", "catch_up_limit" => "5"})
+      |> render_submit()
+
+      assert {:ok, %{catch_up_limit: 5}} = schedule(ctx, params)
+      assert has_element?(view, ~s(#missed-#{id} input[name="catch_up_limit"][value="5"]))
+
+      view |> form("#missed-#{id}", %{"missed_runs" => "skip"}) |> render_submit()
+      assert {:ok, %{missed_runs: "skip", catch_up_limit: nil}} = schedule(ctx, params)
+      assert has_element?(view, ~s(#missed-#{id} option[value="skip"][selected]))
+    end
+
+    test "a catch-up without a whole limit, or with 0, is refused and the schedule stands",
+         %{view: view, ctx: ctx, params: params} do
+      grant_origins!(ctx, [:interactive, :schedule])
+
+      render_submit(
+        view,
+        "create",
+        Map.merge(params, %{"missed_runs" => "catch_up", "catch_up_limit" => ""})
+      )
+
+      assert {:error, :not_found} = schedule(ctx, params)
+
+      render_submit(view, "create", params)
+      assert {:ok, %{id: id, missed_runs: "skip"}} = schedule(ctx, params)
+
+      for limit <- ["0", "two"] do
+        html =
+          view
+          |> form("#missed-#{id}", %{"missed_runs" => "catch_up", "catch_up_limit" => limit})
+          |> render_submit()
+
+        assert html =~ "Failed"
+        assert {:ok, %{missed_runs: "skip", catch_up_limit: nil}} = schedule(ctx, params)
+      end
+    end
+  end
+
   describe "a profile whose grant does not admit schedules" do
     test "raises the grant prompt first, and a dismissal makes no schedule", %{
       view: view,
