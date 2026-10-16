@@ -556,6 +556,54 @@ defmodule PrismWeb.SettingsLiveTest do
              )
     end
 
+    test "a destination that widens asks for a fresh confirmation and, confirmed, moves the " <>
+           "binding; one that narrows is saved with the session",
+         %{conn: conn} do
+      %{view: view, ctx: ctx} = admin!(conn)
+      entry = entry!(ctx)
+      send(view.pid, :load)
+      render(view)
+      before = stored(entry.id)
+
+      form = fn paths ->
+        %{
+          "entry_id" => entry.id,
+          "destination_hosts" => "api.example.com",
+          "destination_scheme" => "https",
+          "destination_methods" => "GET POST",
+          "destination_paths" => paths,
+          "destination_port" => ""
+        }
+      end
+
+      # Every path under /v1: wider than the two the entry admits.
+      view |> element("#instance-rebind-#{entry.id}") |> render_submit(form.("/v1"))
+
+      assert [%{ref: ref, operation: "instance_entry.rebind"}] = open_records(ctx)
+
+      assert has_element?(view, ~s(#system-layer [data-test="confirmation"][data-own="true"])),
+             "no prompt; the page showed #{inspect(Regex.run(~r/Instance entries: [^<]*/, render(view)))}"
+
+      assert stored(entry.id).binding_digest == before.binding_digest
+
+      Sanctum.TestContext.prove!(ctx, ref)
+      wait_until(fn -> render(view) =~ "Destination saved" end, 2_000, "the widening made")
+
+      widened = stored(entry.id)
+      assert Jason.decode!(widened.destination)["paths"] == ["/v1"]
+      refute widened.binding_digest == before.binding_digest
+      assert record_state(ctx, ref) == "consumed"
+
+      # The model list alone: narrower, saved with the session.
+      view |> element("#instance-rebind-#{entry.id}") |> render_submit(form.("/v1/models"))
+
+      assert open_records(ctx) == []
+      narrowed = stored(entry.id)
+      assert Jason.decode!(narrowed.destination)["paths"] == ["/v1/models"]
+      refute narrowed.binding_digest == widened.binding_digest
+      assert render(view) =~ "Destination saved"
+    end
+
     test "shipped to any asks a fresh confirmation bound to the entry and the setting; any to " <>
            "shipped is saved with the session",
          %{conn: conn} do

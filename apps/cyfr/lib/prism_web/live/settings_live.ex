@@ -363,13 +363,7 @@ defmodule PrismWeb.SettingsLive do
 
   def handle_event("instance_rebind", %{"entry_id" => id} = params, socket) do
     args = %{"entry_id" => id, "destination" => SystemLayer.destination_params(params)}
-
-    instance_call(
-      socket,
-      "instance_entry/rebind",
-      args,
-      "Destination saved: every consent that binds the entry asks again."
-    )
+    rebind_instance(socket, id, args)
   end
 
   # An audience is saved as the administrator's own edit of what the form
@@ -476,6 +470,9 @@ defmodule PrismWeb.SettingsLive do
 
       {:repeat, {:instance_policy, id}, _tool, args, socket} ->
         set_policy(socket, id, args)
+
+      {:repeat, {:instance_rebind, id}, _tool, args, socket} ->
+        rebind_instance(socket, id, args)
 
       {:ok, socket} ->
         cond do
@@ -983,6 +980,25 @@ defmodule PrismWeb.SettingsLive do
       {:ok, %{changed: changed}, socket} ->
         message = if changed, do: "Audience saved.", else: unchanged
         {:noreply, socket |> load_instance() |> put_flash(:info, message)}
+
+      {:asked, socket} ->
+        {:noreply, socket}
+
+      {:error, reason, socket} ->
+        {:noreply, instance_refused(socket, reason)}
+    end
+  end
+
+  # A wider destination asks for a fresh confirmation through the page's
+  # layer and is made again once confirmed; a narrower one is saved with
+  # the session.
+  defp rebind_instance(socket, id, args) do
+    case SystemLayer.call(socket, {:instance_rebind, id}, "instance_entry/rebind", args) do
+      {:ok, _result, socket} ->
+        {:noreply,
+         socket
+         |> load_instance()
+         |> put_flash(:info, "Destination saved: every consent that binds the entry asks again.")}
 
       {:asked, socket} ->
         {:noreply, socket}
