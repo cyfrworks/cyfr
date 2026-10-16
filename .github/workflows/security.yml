@@ -16,6 +16,8 @@ on:
       - 'docker-compose.yml'
       - '.github/actions/**'
       - '.github/workflows/security.yml'
+      - '.trivyignore.yaml'
+      - 'seed/components/**'
   push:
     branches: [main]
     paths:
@@ -32,6 +34,8 @@ on:
       - 'docker-compose.yml'
       - '.github/actions/**'
       - '.github/workflows/security.yml'
+      - '.trivyignore.yaml'
+      - 'seed/components/**'
   schedule:
     # Weekly on Monday at 08:00 UTC
     - cron: '0 8 * * 1'
@@ -158,13 +162,45 @@ jobs:
           format: table
           exit-code: '1'
 
-      - name: Misconfiguration scan (report-only)
-        # Report configuration findings without failing CI.
+      - name: Misconfiguration scan (enforced)
+        # A HIGH or CRITICAL configuration finding fails, apart from the
+        # path-scoped, dated exceptions under `misconfigurations:` in
+        # .trivyignore.yaml.
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           version: v0.75.0
           scan-type: fs
           scanners: misconfig
           format: table
-          exit-code: '0'
+          exit-code: '1'
           severity: CRITICAL,HIGH
+          trivyignores: .trivyignore.yaml
+
+  npm-audit:
+    name: npm Audit (shipped tincture lockfiles)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Audit every shipped lockfile
+        # The seed's lockfiles ship in the image (Dockerfile's COPY of
+        # seed/components) and a tincture build installs from them. A HIGH
+        # or CRITICAL advisory in a runtime dependency fails. A shipped
+        # version is never edited: a finding is fixed in a new tincture
+        # version. Finding no lockfile fails too, so a moved tree is not
+        # read as a clean one.
+        run: |
+          mapfile -t locks < <(find seed/components -name package-lock.json -not -path '*/node_modules/*' | sort)
+          if [ "${#locks[@]}" -eq 0 ]; then
+            echo "no package-lock.json under seed/components" >&2
+            exit 1
+          fi
+          status=0
+          for lock in "${locks[@]}"; do
+            dir=$(dirname "$lock")
+            echo "::group::$dir"
+            (cd "$dir" && bash "$GITHUB_WORKSPACE/scripts/security-scan.sh" npm audit --omit=dev --audit-level=high) || status=1
+            echo "::endgroup::"
+          done
+          exit "$status"

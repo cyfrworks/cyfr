@@ -1,13 +1,18 @@
-# Findings the Locus image cannot take a fix for, with what would lift
-# each. Read by every image scan: the three in
+# Findings CYFR cannot take a fix for yet, with what would lift each.
+#
+# Every entry names its owner in a comment (`# owner: @handle`), carries an
+# `expired_at` date and is scoped to the paths where the finding was
+# observed, so the same identifier anywhere else still fails. On its
+# `expired_at` date Trivy stops honouring the entry and the finding fails
+# again, and tests/security-scan-test.sh, which the Security workflow runs
+# on every change to this file and every week, refuses an entry without an
+# owner, without a date, without paths or past its date. An owner lifts the
+# entry or renews it with a new date and the reason it still holds.
+#
+# vulnerabilities: read by every image scan, the three in
 # .github/workflows/test.yml, which run on every push, and the one in
 # .github/workflows/release.yml, which runs before an image is published.
 # Every other fixable HIGH or CRITICAL still fails those jobs.
-#
-# Each entry is scoped to the path where the finding was observed, so the
-# same identifier appearing anywhere else still fails. A bare id would have
-# suppressed it image-wide, which is wider than the reasoning below
-# supports.
 #
 # All seven live in npm's bundled dependencies, pinned by npm's lockfile. The
 # image's npm is the one Node 24.21.0, the newest Node 24 LTS, bundles:
@@ -26,16 +31,24 @@
 # arbitrary execution by design, under a pooled uid of its own. A denial of
 # service, or a parser disagreeing about an address, sits below what that
 # caller already commands.
+#
+# misconfigurations: read by the repository's misconfiguration scan in
+# .github/workflows/security.yml, which fails on every other HIGH or
+# CRITICAL finding.
 
 vulnerabilities:
   # brace-expansion 5.0.7, fixed at 5.0.9. npm 11.19.1 and later bundle
   # 5.0.9, but no Node 24 LTS release bundles that npm yet. Lift when the
   # image's Node bundles npm 11.19.1 or later.
   - id: CVE-2026-14257
+    # owner: @moonmoon69
+    expired_at: 2027-01-15
     paths:
       - "usr/local/lib/node_modules/npm/node_modules/brace-expansion/package.json"
     statement: npm's bundled brace-expansion; the npm Node 24 LTS bundles does not ship the fix.
   - id: CVE-2026-69152
+    # owner: @moonmoon69
+    expired_at: 2027-01-15
     paths:
       - "usr/local/lib/node_modules/npm/node_modules/brace-expansion/package.json"
     statement: npm's bundled brace-expansion; the npm Node 24 LTS bundles does not ship the fix.
@@ -45,10 +58,14 @@ vulnerabilities:
   # (fixed at 5.0.11). Lift once the npm the image's Node bundles carries
   # 5.0.11 or later.
   - id: CVE-2026-102276
+    # owner: @moonmoon69
+    expired_at: 2027-01-15
     paths:
       - "usr/local/lib/node_modules/npm/node_modules/brace-expansion/package.json"
     statement: npm's bundled brace-expansion; no npm release ships the fix.
   - id: CVE-2026-102278
+    # owner: @moonmoon69
+    expired_at: 2027-01-15
     paths:
       - "usr/local/lib/node_modules/npm/node_modules/brace-expansion/package.json"
     statement: npm's bundled brace-expansion; no npm release ships the fix.
@@ -57,6 +74,8 @@ vulnerabilities:
   # subprotocol. Lift once the npm the image's Node bundles carries 6.28.1
   # or later.
   - id: CVE-2026-19534
+    # owner: @moonmoon69
+    expired_at: 2027-01-15
     paths:
       - "usr/local/lib/node_modules/npm/node_modules/undici/package.json"
     statement: npm's bundled undici; no npm release ships the fix.
@@ -66,6 +85,8 @@ vulnerabilities:
   # later bundle 7.5.22. Lift when the image's Node bundles npm 11.19.1 or
   # later.
   - id: CVE-2026-73566
+    # owner: @moonmoon69
+    expired_at: 2027-01-15
     paths:
       - "usr/local/lib/node_modules/npm/node_modules/tar/package.json"
     statement: npm's bundled tar; the npm Node 24 LTS bundles does not ship the fix.
@@ -74,6 +95,35 @@ vulnerabilities:
   # of the same string. Fixed at 10.3.1; npm 11.19.1 and later bundle
   # 10.5.0. Lift when the image's Node bundles npm 11.19.1 or later.
   - id: CVE-2026-69192
+    # owner: @moonmoon69
+    expired_at: 2027-01-15
     paths:
       - "usr/local/lib/node_modules/npm/node_modules/ip-address/package.json"
     statement: npm's bundled ip-address; the npm Node 24 LTS bundles does not ship the fix.
+
+misconfigurations:
+  # No USER line: both images start as root on purpose. The server's
+  # entrypoint re-chowns bind-mounted data and then drops to `app` with
+  # setpriv (docker-entrypoint.sh). cyfr-locus stays root holding only
+  # SETUID, SETGID and KILL to give every build, backend and runner a pooled
+  # uid of its own (Dockerfile.locus). A USER line would break both. Review
+  # by the date; lift if either image stops needing root at start.
+  - id: DS-0002
+    # owner: @moonmoon69
+    expired_at: 2027-04-15
+    paths:
+      - "Dockerfile"
+      - "Dockerfile.locus"
+    statement: the image starts as root to drop privileges itself; see the comment above.
+
+  # apt-get install without --no-install-recommends, in the builder and
+  # runner stages of both images. Lift by adding the flag to those
+  # `apt-get install` lines and checking that the images still build and
+  # pass their suites.
+  - id: DS-0029
+    # owner: @moonmoon69
+    expired_at: 2027-01-15
+    paths:
+      - "Dockerfile"
+      - "Dockerfile.locus"
+    statement: recommended packages are still installed; lift by adding --no-install-recommends.
