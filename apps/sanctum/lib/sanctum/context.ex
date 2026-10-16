@@ -783,12 +783,17 @@ defmodule Sanctum.Context do
   Focus the context on an athanor: the one narrowing entry every LiveView
   mount and `session.use` run through.
 
-  A member of the athanor may focus it, and no one else: a platform admin
-  holding no seat there is `{:error, :not_member}` like anyone else, since
-  the capability is over the instance and is not a seat. What an operator
-  does to an athanor they are not in is a platform-scope operation that
-  focuses nothing (`Sanctum.Providers.Athanor`'s purge and destroy). An
-  archived athanor cannot be focused by anyone.
+  A member of the athanor may focus it, and no one else. Anyone without a
+  current seat there is answered `{:error, :not_found}`, whether the
+  athanor is open, archived or does not exist: the refusal is the same for
+  all three, so an outsider learns nothing of which athanors exist or
+  what became of them. A platform admin holding no seat is answered so
+  like anyone else, since the capability is over the instance and is not a
+  seat; what an operator does to an athanor they are not in is a
+  platform-scope operation that focuses nothing (`Sanctum.Providers.Athanor`'s
+  purge and destroy). An archived athanor cannot be focused by anyone, and
+  only a seated member is told that it is archived (`:archived`): the seat
+  is read before the standing.
 
   The athanor is named by its id, or by a map carrying it (`:id`), and
   only the id is read: its row, its standing and the seat are read again
@@ -798,26 +803,31 @@ defmodule Sanctum.Context do
   never an absence.
   """
   @spec focus(t(), String.t() | %{required(:id) => String.t(), optional(atom()) => term()}) ::
-          {:ok, t()} | {:error, :not_found | :archived | :not_member | :unavailable}
+          {:ok, t()} | {:error, :not_found | :archived | :unavailable}
   def focus(%__MODULE__{} = ctx, %{id: athanor_id}) when is_binary(athanor_id),
     do: focus(ctx, athanor_id)
 
   def focus(%__MODULE__{} = ctx, athanor_id) when is_binary(athanor_id) do
     case Sanctum.Tenancy.Athanors.get(athanor_id) do
-      {:ok, %{status: "archived"}} -> {:error, :archived}
       {:ok, %{id: ^athanor_id} = athanor} -> seated(ctx, athanor)
       {:error, :not_found} -> {:error, :not_found}
       {:error, _unreadable} -> {:error, :unavailable}
     end
   end
 
+  # The seat first, the standing second: whether an athanor is archived is
+  # its members' to hear, and a caller with no seat is told what a missing
+  # athanor tells them.
   defp seated(ctx, %{id: id} = athanor) do
     case Sanctum.Tenancy.Members.active_seat(ctx.user_id, id) do
+      {:ok, _seat} when athanor.status == "archived" ->
+        {:error, :archived}
+
       {:ok, seat} ->
         {:ok, refocused(ctx, athanor, seat.id)}
 
       :none ->
-        {:error, :not_member}
+        {:error, :not_found}
 
       {:error, _unreadable} ->
         {:error, :unavailable}
@@ -858,7 +868,7 @@ defmodule Sanctum.Context do
   a closed furnace either.
   """
   @spec refocus(t(), String.t()) ::
-          {:ok, t()} | {:error, :not_found | :archived | :not_member | :unavailable}
+          {:ok, t()} | {:error, :not_found | :archived | :unavailable}
   def refocus(%__MODULE__{auth_method: :system} = ctx, athanor_id)
       when is_binary(athanor_id) do
     case Sanctum.Tenancy.Athanors.get(athanor_id) do

@@ -138,19 +138,20 @@ defmodule Sanctum.Providers.Session do
   def handle(%Context{} = ctx, %{"action" => "use", "athanor" => athanor})
       when is_binary(athanor) do
     with {:ok, resolved} <- resolve_athanor(athanor),
-         {:ok, focused} <- focus_session(ctx, resolved.id) do
+         {:ok, focused} <- Sanctum.Session.use_athanor(ctx, resolved.id) do
       {:ok, %{athanor: Sanctum.Providers.Athanor.render(resolved), scope: focused.scope}}
     else
-      {:error, :not_member} ->
-        {:error, {:invalid_argument, "Not a member of that athanor"}}
-
+      # Focus answers this only to a member: a caller without a seat is
+      # told what a missing athanor tells them, below.
       {:error, :archived} ->
         {:error, {:invalid_argument, "That athanor is archived"}}
 
-      # Only `resolve_athanor/1` can still answer this: `focus_session/2`
-      # re-tags the session row's own :not_found, so the refusal names
-      # what is actually missing instead of blaming the athanor that
-      # resolved a line above.
+      # No such athanor, or none the caller holds a seat in: one refusal,
+      # naming what the caller named, for an open, an archived and an
+      # absent athanor alike. A session row gone under the call (revoked
+      # meanwhile) answers `:not_found` from `use_athanor/2` too, and is
+      # answered so as well: naming the session instead would tell a caller
+      # with no seat that the athanor exists.
       {:error, :not_found} ->
         {:error, {:not_found, "Athanor", athanor}}
 
@@ -397,19 +398,11 @@ defmodule Sanctum.Providers.Session do
   # row is gone — the athanor resolved a line earlier. Two sources for one
   # tag made the refusal a structured falsehood a client could branch on;
   # this names the one that is actually missing.
-  defp focus_session(ctx, athanor_id) do
-    case Sanctum.Session.use_athanor(ctx, athanor_id) do
-      {:error, :not_found} -> {:error, :no_session}
-      other -> other
-    end
-  end
-
+  # An archived athanor resolves like an open one, so `focus/2` decides
+  # what the caller hears of it; a store that cannot answer is unavailable.
   defp resolve_athanor(segment) do
     if Sanctum.Tenancy.Athanors.athanor_id?(segment) do
-      case Sanctum.Tenancy.Athanors.get(segment) do
-        {:ok, athanor} -> {:ok, athanor}
-        _ -> {:error, :not_found}
-      end
+      Sanctum.Tenancy.Athanors.get(segment)
     else
       Sanctum.Tenancy.Athanors.by_route_slug(segment)
     end

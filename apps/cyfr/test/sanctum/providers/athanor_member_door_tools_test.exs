@@ -69,11 +69,11 @@ defmodule Sanctum.Providers.AthanorMemberDoorToolsTest do
     {:ok, %{athanors: bobs}} = call(b, "athanor", %{"action" => "list"})
     refute Enum.any?(bobs, &(&1.id == group.id))
 
-    # a non-member cannot act on it
+    # a non-member cannot act on it, and is told what a missing athanor tells them
     assert {:error, msg} =
              call(b, "member", %{"action" => "list", "athanor" => group.id})
 
-    assert Refusals.render(msg) =~ "Not a member"
+    assert Refusals.render(msg) =~ "not found"
 
     # add by user id, then bob sees it
     assert {:ok, %{state: "added"}} =
@@ -697,12 +697,59 @@ defmodule Sanctum.Providers.AthanorMemberDoorToolsTest do
     assert reloaded.athanor_id == gid
 
     b = %{ctx.(bob, Sanctum.TestContext.athanor_id(), []) | session_token_hash: "x"}
-    assert {:error, msg} = call(b, "session", %{"action" => "use", "athanor" => group.slug})
-    assert Refusals.render(msg) =~ "Not a member"
+
+    slug = group.slug
+
+    assert {:error, {:not_found, "Athanor", ^slug}} =
+             call(b, "session", %{"action" => "use", "athanor" => slug})
 
     k = ctx.(alice, Sanctum.TestContext.athanor_id(), auth_method: :api_key)
     assert {:error, msg} = call(k, "session", %{"action" => "use", "athanor" => group.slug})
     assert Refusals.render(msg) =~ "needs a session"
+  end
+
+  test "athanor.get and session.use answer a caller without a seat the same for an open, an archived and a missing athanor; a member hears archived",
+       %{alice: alice, bob: bob, ctx: ctx, n: n} do
+    a = ctx.(alice, Sanctum.TestContext.athanor_id(), [])
+    {:ok, open} = call(a, "athanor", %{"action" => "create", "name" => "Open #{n}"})
+    {:ok, closed} = call(a, "athanor", %{"action" => "create", "name" => "Closed #{n}"})
+
+    {:ok, %{status: "archived"}} =
+      call(a, "athanor", %{"action" => "archive", "athanor" => closed.id})
+
+    missing = Prima.UUID7.generate_id("ath")
+
+    b = %{ctx.(bob, Sanctum.TestContext.athanor_id(), []) | session_token_hash: "x"}
+
+    # The refusal names what the caller named and nothing else, so with
+    # the name taken out the three answers are one.
+    for id <- [open.id, closed.id, missing],
+        {tool, action} <- [{"athanor", "get"}, {"session", "use"}] do
+      assert {:error, {:not_found, "Athanor", ^id}} =
+               call(b, tool, %{"action" => action, "athanor" => id}),
+             "#{tool}.#{action} told a caller with no seat something of #{id}"
+    end
+
+    # A former member is an outsider like any other.
+    {:ok, _} = Members.ensure(bob, scope: "athanor", athanor_id: open.id)
+    :ok = Members.remove_member(open, user_id: bob)
+
+    assert {:error, {:not_found, "Athanor", id}} =
+             call(b, "athanor", %{"action" => "get", "athanor" => open.id})
+
+    assert id == open.id
+
+    # The member hears that it is archived, and still reads it.
+    with_hash = %{a | session_token_hash: "x"}
+
+    assert {:error, {:invalid_argument, "That athanor is archived"}} =
+             call(with_hash, "session", %{"action" => "use", "athanor" => closed.id})
+
+    assert {:ok, %{status: "archived"}} =
+             call(a, "athanor", %{"action" => "get", "athanor" => closed.id})
+
+    assert {:error, {:invalid_argument, "That athanor is archived"}} =
+             call(a, "athanor", %{"action" => "rename", "name" => "x", "athanor" => closed.id})
   end
 
   test "a person's own athanor has one member on every path — its owner is neither joined nor removed",
@@ -743,7 +790,7 @@ defmodule Sanctum.Providers.AthanorMemberDoorToolsTest do
 
     operator = ctx.(ops, Sanctum.TestContext.athanor_id(), platform_admin: true)
 
-    for who <- [a, operator],
+    for {who, refused} <- [{a, "archived"}, {operator, "not found"}],
         {tool, args} <- [
           {"athanor", %{"action" => "rename", "name" => "Reopened"}},
           {"athanor",
@@ -754,7 +801,7 @@ defmodule Sanctum.Providers.AthanorMemberDoorToolsTest do
         ] do
       assert {:error, msg} = call(who, tool, Map.put(args, "athanor", group.id))
 
-      assert Refusals.render(msg) =~ "archived",
+      assert Refusals.render(msg) =~ refused,
              "#{tool}.#{args["action"]} ran on an archived athanor"
     end
 
@@ -778,10 +825,11 @@ defmodule Sanctum.Providers.AthanorMemberDoorToolsTest do
     assert {id, name} == {group.id, "Closed #{n}"}
 
     for {tool, action} <- [{"member", "list"}, {"athanor", "unarchive"}] do
-      assert {:error, msg} = call(operator, tool, %{"action" => action, "athanor" => group.id})
-
-      assert Refusals.render(msg) =~ "Not a member",
+      assert {:error, {:not_found, "Athanor", id}} =
+               call(operator, tool, %{"action" => action, "athanor" => group.id}),
              "#{tool}.#{action} admitted a seatless operator"
+
+      assert id == group.id
     end
 
     assert {:ok, %{status: "archived"}} = Athanors.get(group.id)
@@ -793,11 +841,11 @@ defmodule Sanctum.Providers.AthanorMemberDoorToolsTest do
     # Open again, it is still its members' alone: an operator with no seat
     # reads nothing of it and cannot archive it.
     for action <- ["get", "archive"] do
-      assert {:error, msg} =
-               call(operator, "athanor", %{"action" => action, "athanor" => group.id})
-
-      assert Refusals.render(msg) =~ "Not a member",
+      assert {:error, {:not_found, "Athanor", id}} =
+               call(operator, "athanor", %{"action" => action, "athanor" => group.id}),
              "athanor.#{action} admitted a seatless operator"
+
+      assert id == group.id
     end
 
     assert {:ok, %{status: "active"}} = Athanors.get(group.id)
@@ -842,7 +890,7 @@ defmodule Sanctum.Providers.AthanorMemberDoorToolsTest do
     assert {:error, msg} =
              call(operator, "athanor", %{"action" => "unarchive", "athanor" => personal.id})
 
-    assert Refusals.render(msg) =~ "Not a member"
+    assert Refusals.render(msg) =~ "not found"
     assert {:ok, %{status: "archived"}} = Athanors.get(personal.id)
 
     assert {:ok, %{id: id, status: "archived"}} =
@@ -1014,8 +1062,10 @@ defmodule Sanctum.Providers.AthanorMemberDoorToolsTest do
         )
 
       # No seat: the platform scope and the capability open nothing.
-      assert {:error, {:invalid_argument, "Not a member of that athanor"}} =
+      assert {:error, {:not_found, "Athanor", id}} =
                Sanctum.Providers.Athanor.resolve(operator, %{"athanor" => group.id})
+
+      assert id == group.id
 
       {:ok, _} = Members.ensure(ops, scope: "athanor", athanor_id: group.id)
 

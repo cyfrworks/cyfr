@@ -48,8 +48,33 @@ defmodule Sanctum.ContextFocusTest do
     assert {:ok, focused} = Context.focus(c, a.id)
     assert focused.athanor_id == a.id
     assert focused.scope == :athanor
-    assert {:error, :not_member} = Context.focus(c, b)
+    assert {:error, :not_found} = Context.focus(c, b)
     assert {:error, :not_found} = Context.focus(c, "ath_nope")
+  end
+
+  test "a caller without a seat is answered alike for an open, an archived and a missing athanor; a member hears archived",
+       %{a: a, b: b, alice: alice, ops: ops, ctx: ctx} do
+    {:ok, archived} = Athanors.archive(a)
+    missing = Prima.UUID7.generate_id("ath")
+
+    # Neither a stranger, nor an operator, nor a member who left learns
+    # which of the three it is.
+    former = "github|https://github.com|former-#{System.unique_integer([:positive])}"
+    {:ok, _} = Members.ensure(former, scope: "athanor", athanor_id: b.id)
+    :ok = Members.remove_member(b, user_id: former)
+
+    for caller <- [
+          ctx.("github|https://github.com|stranger", nil, false),
+          ctx.(ops, nil, true),
+          ctx.(former, nil, false)
+        ] do
+      answers = for id <- [b.id, archived.id, missing], do: Context.focus(caller, id)
+      assert answers == List.duplicate({:error, :not_found}, 3)
+      assert Context.refocus(caller, archived.id) == {:error, :not_found}
+    end
+
+    # The member is told the truth.
+    assert {:error, :archived} = Context.focus(ctx.(alice, nil, false), archived.id)
   end
 
   test "an archived athanor cannot be focused", %{a: a, alice: alice, ctx: ctx} do
@@ -73,11 +98,18 @@ defmodule Sanctum.ContextFocusTest do
   end
 
   test "a store that cannot answer is unavailable, never an absence or a refusal",
-       %{a: a, alice: alice, ctx: ctx} do
+       %{a: a, b: b, alice: alice, ops: ops, ctx: ctx} do
     c = ctx.(alice, nil, false)
+    {:ok, _} = Athanors.archive(b)
 
     Arca.Repo.query!("ALTER TABLE memberships RENAME TO memberships_unavailable")
     assert {:error, :unavailable} = Context.focus(c, a.id)
+
+    # An unreadable seat is not an absent one, for an archived athanor the
+    # caller holds no seat in too: the outage is never folded into the
+    # outsider's refusal.
+    assert {:error, :unavailable} = Context.focus(c, b.id)
+    assert {:error, :unavailable} = Context.focus(ctx.(ops, nil, true), b.id)
     Arca.Repo.query!("ALTER TABLE memberships_unavailable RENAME TO memberships")
 
     Arca.Repo.query!("ALTER TABLE athanors RENAME TO athanors_unavailable")
@@ -94,7 +126,7 @@ defmodule Sanctum.ContextFocusTest do
     c = ctx.(alice, nil, false)
     assert {:ok, %{athanor_id: id}} = Context.refocus(c, a.id)
     assert id == a.id
-    assert {:error, :not_member} = Context.refocus(c, b.id)
+    assert {:error, :not_found} = Context.refocus(c, b.id)
 
     # The system plane crosses tenants by design (recovery resolving a
     # stored agent has no member to speak as) — but a closed furnace stays
@@ -152,9 +184,9 @@ defmodule Sanctum.ContextFocusTest do
     # A group, another person's own athanor: the capability is no seat in
     # either, so focus refuses the operator exactly as it refuses anyone.
     for athanor <- [a, b, personal] do
-      assert {:error, :not_member} = Context.focus(admin, athanor)
-      assert {:error, :not_member} = Context.focus(admin, athanor.id)
-      assert {:error, :not_member} = Context.refocus(admin, athanor.id)
+      assert {:error, :not_found} = Context.focus(admin, athanor)
+      assert {:error, :not_found} = Context.focus(admin, athanor.id)
+      assert {:error, :not_found} = Context.refocus(admin, athanor.id)
     end
 
     # Refused, and audited by nothing: no open is recorded, because none
@@ -171,7 +203,7 @@ defmodule Sanctum.ContextFocusTest do
       )
 
     assert_received {:audit, %{sanctioned: true, user_id: ^ops}}
-    assert {:error, :not_member} = Context.focus(platform, b)
+    assert {:error, :not_found} = Context.focus(platform, b)
     refute_received {:audit, _}
   end
 
@@ -209,7 +241,7 @@ defmodule Sanctum.ContextFocusTest do
     :ok = Members.remove_member(a, user_id: user.id)
     assert {:ok, %{status: "active"}} = Athanors.get(a.id)
 
-    assert {:error, :not_member} = Context.focus(admin, a)
+    assert {:error, :not_found} = Context.focus(admin, a)
 
     # A session still naming the group is moved on its next revalidation to
     # their own athanor: the capability stays, and keeps them in no other.

@@ -12,13 +12,19 @@ defmodule Sanctum.Providers.Athanor do
   person's act — an API-key context is refused, since a key belongs to one
   athanor and is nobody's identity.
 
-  Every verb but two acts in an athanor the caller holds a seat in. `purge`
-  and `destroy` are the operator's platform-scope operations
+  Every verb but two acts in an athanor the caller holds a seat in, and
+  anyone without a current seat is answered as if the athanor did not
+  exist (`{:not_found, "Athanor", named}`), whether it is open, archived
+  or absent: only a seated member hears that an athanor is archived.
+  `purge` and `destroy` are the operator's platform-scope operations
   (`scope: :platform`, checked at admission): they reclaim an archived
   athanor the operator need not belong to, focus nothing, and read it
-  through the server's own platform context. An operator with no seat may
-  `get` an archived athanor's public facts and nothing more; every other
-  verb refuses them like anyone else.
+  through the server's own platform context. That instance capability is
+  also the one way past the single refusal: a platform administrator with
+  no seat may `get` an archived athanor's public facts and nothing more,
+  and a caller without the capability, a former member or any other
+  non-member, never reaches that read. Every other verb refuses an
+  operator like anyone else.
   """
 
   require Logger
@@ -440,32 +446,33 @@ defmodule Sanctum.Providers.Athanor do
   # :athanor`, its id bound) — the shape every downstream act must run
   # under. `Context.focus/2` is the narrowing: a seat, and nothing else —
   # an operator with none is refused here like anyone else, and a platform
-  # context's wider scope stops here, not in the handler.
+  # context's wider scope stops here, not in the handler. A caller without
+  # a seat is refused as a missing athanor is, naming what they named, and
+  # only after the seat is found does an archived athanor say so.
   @doc false
   def resolve(%Context{} = ctx, args, opts \\ []) do
-    with {:ok, athanor} <- lookup(ctx, Map.get(args, "athanor"), opts) do
+    named = Map.get(args, "athanor")
+
+    with {:ok, athanor} <- lookup(ctx, named, opts) do
       case Context.focus(ctx, athanor) do
         {:ok, focused} -> {:ok, athanor, focused}
-        {:error, :archived} -> open_archived(ctx, athanor)
+        {:error, :archived} -> open_archived(ctx, athanor, opts)
         {:error, :unavailable} -> {:error, {:unavailable, "Storage"}}
-        {:error, _} -> not_a_member()
+        {:error, :not_found} -> {:error, {:not_found, "Athanor", named || athanor.id}}
       end
     end
   end
 
-  # `focus/2` rightly refuses an archived athanor, and `lookup/3` only
-  # admitted one because the action asked for it (`get`, `unarchive`) — so
-  # the focused shape is built by hand here, under the one admission focus
-  # grants: a seat. The operator capability admits nothing here.
-  defp open_archived(ctx, athanor) do
-    if Members.member?(ctx.user_id, athanor.id),
+  # `focus/2` answers `:archived` only once it has found the caller's
+  # current seat, so this is a member's archived athanor. It stays refused
+  # unless the action asked for it (`get`, `unarchive`); then the focused
+  # shape is built by hand, under the one admission focus granted: a seat.
+  # The operator capability admits nothing here.
+  defp open_archived(ctx, athanor, opts) do
+    if Keyword.get(opts, :include_archived, false),
       do: {:ok, athanor, %{ctx | athanor_id: athanor.id, scope: :athanor}},
-      else: not_a_member()
+      else: {:error, {:invalid_argument, "That athanor is archived"}}
   end
-
-  @not_a_member {:invalid_argument, "Not a member of that athanor"}
-
-  defp not_a_member, do: {:error, @not_a_member}
 
   # The athanor a platform-scope operation names, archived ones included,
   # looked up through the server's own platform context
@@ -477,10 +484,11 @@ defmodule Sanctum.Providers.Athanor do
 
   # What an operator who holds no seat may learn of an archived athanor:
   # its public facts, read through the same platform scope, and nothing it
-  # holds — no members, thread, file or vault. An athanor still open is its
-  # members' alone, and a non-operator is refused as any non-member is:
-  # both keep the refusal `resolve/3` gave.
-  defp archived_facts(%Context{platform_admin: true}, args, @not_a_member = refusal) do
+  # holds — no members, thread, file or vault. This is the instance
+  # capability, not a seat: an athanor still open is its members' alone,
+  # and a caller without the capability is refused as any non-member is,
+  # with the missing-athanor refusal `resolve/3` gave.
+  defp archived_facts(%Context{platform_admin: true}, args, {:not_found, "Athanor", _} = refusal) do
     case platform_target(args) do
       {:ok, %{status: "archived"} = athanor} ->
         {:ok,
@@ -498,14 +506,14 @@ defmodule Sanctum.Providers.Athanor do
 
   defp archived_facts(_ctx, _args, refusal), do: {:error, refusal}
 
-  defp lookup(%Context{athanor_id: id}, nil, opts) when is_binary(id), do: get(id, opts)
+  defp lookup(%Context{athanor_id: id}, nil, _opts) when is_binary(id), do: get(id)
 
   defp lookup(%Context{}, nil, _opts),
     do: {:error, {:invalid_argument, "No athanor in focus — pass athanor"}}
 
   defp lookup(%Context{}, segment, opts) when is_binary(segment) do
     if Athanors.athanor_id?(segment) do
-      get(segment, opts)
+      get(segment)
     else
       segment
       |> Athanors.by_route_slug(include_archived: Keyword.get(opts, :include_archived, false))
@@ -513,22 +521,17 @@ defmodule Sanctum.Providers.Athanor do
     end
   end
 
-  defp get(id, opts) do
-    case Athanors.get(id) do
-      {:ok, %{status: "archived"} = athanor} ->
-        if Keyword.get(opts, :include_archived, false),
-          do: {:ok, athanor},
-          else: {:error, {:invalid_argument, "That athanor is archived"}}
-
-      other ->
-        or_not_found(other, id)
-    end
-  end
+  # An archived row is found like any other: whether the caller may hear
+  # that it is archived is `resolve/3`'s to decide once focus has read the
+  # seat, so an outsider's refusal for it is the missing athanor's.
+  defp get(id), do: or_not_found(Athanors.get(id), id)
 
   # The refusal names what the caller named — an id or a route slug — and
-  # nothing else about the athanor.
+  # nothing else about the athanor. A store that cannot answer is
+  # unavailable, never an absence.
   defp or_not_found({:ok, athanor}, _named), do: {:ok, athanor}
-  defp or_not_found(_, named), do: {:error, {:not_found, "Athanor", named}}
+  defp or_not_found({:error, :not_found}, named), do: {:error, {:not_found, "Athanor", named}}
+  defp or_not_found({:error, _unreadable}, _named), do: {:error, {:unavailable, "Storage"}}
 
   defp owner_admitted(%{kind: "person", owner_user_id: owner}) when is_binary(owner) do
     case Sanctum.Tenancy.Users.get(owner) do

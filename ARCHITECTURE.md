@@ -250,7 +250,7 @@ Only a need none of these covers, a fifth port, a new layer edge or a new namesp
 - **Tenant identity comes from the authenticated actor.** A guest-supplied path or argument never selects a tenant, and an unresolved identity is a refusal, never a placeholder.
 - **Ownership travels** with rows, relationships, blobs, events and cache keys. A cross-tenant operation names its system responsibility or an authorized change of focus. Caches, indexes and derived labels obey the boundaries of the rows they come from, and a cache never creates or widens authority.
 - **A platform administrator holds a capability over the instance, not a seat**: they enter no athanor they are not a member of, and the instance's own resources are offered to athanors, never reached into.
-- **Outsiders learn nothing of an athanor.** Anyone without a current seat in an athanor, a former member included, gets the same answer as for an athanor that does not exist; `archived` is said to members only. *Not built yet:* the single refusal; an outsider is told that the athanor is archived or that they are not a member.
+- **Outsiders learn nothing of an athanor.** Anyone without a current seat in an athanor, a former member included, gets the same answer as for an athanor that does not exist; `archived` is said to members only.
 - **Nothing lands in an athanor its members did not accept**: a file sent to a person is an offer until they accept it into their own tree.
 - **The actor** is a Prima struct. `Sanctum.Context` carries it with authority, focus and credentials; Arca and the bus accept the actor and never the context.
 
