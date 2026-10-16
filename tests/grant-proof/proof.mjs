@@ -7,9 +7,12 @@
 // page. Each step is one row of the record; the proof fails when a row does
 // not hold, and stops at the first row a later one rests on.
 //
-//   prism_grant  the grant made in Prism's system layer, one host narrowed
-//                away and interactive the one origin admitted: the head
-//                holds exactly that
+//   prism_grant  the person's seal chosen from the system layer's first-use
+//                offer, and then the first text of the grant prompt's
+//                accessible description in Chromium's tree, with keyboard
+//                focus inside the prompt; the grant made in Prism's system
+//                layer, one host narrowed away and interactive the one
+//                origin admitted: the head holds exactly that
 //   cli_digest   the same decisions previewed from the command line answer
 //                the commit digest the head was committed under
 //   background   a version asking to keep running when hidden: the person's
@@ -92,6 +95,46 @@ function sheet(page) {
   }, layer);
 }
 
+// The open prompt's accessible description, as Chromium's accessibility
+// tree computes it from the dialog's `aria-describedby`, and whether
+// keyboard focus is inside the prompt.
+async function described(page) {
+  const cdp = await page.context().newCDPSession(page);
+  try {
+    const { root } = await cdp.send("DOM.getDocument", { depth: 0 });
+    const { nodeId } = await cdp.send("DOM.querySelector", { nodeId: root.nodeId, selector: layer });
+    const { nodes } = await cdp.send("Accessibility.getPartialAXTree", { nodeId, fetchRelatives: false });
+    const node = nodes.find((n) => !n.ignored) || {};
+    const focused = await page.evaluate((dialog) => Boolean(document.activeElement?.closest(dialog)), layer);
+    return {
+      role: node.role?.value ?? null,
+      description: (node.description?.value ?? "").replace(/\s+/g, " ").trim(),
+      focused,
+    };
+  } finally {
+    await cdp.detach();
+  }
+}
+
+// The seal, chosen from the layer's first-use offer on the Components page:
+// the pair drawn for the prompt and the first glyph of the set. What the
+// seal prompt's own description began with before it was chosen is kept.
+async function chooseSeal(page) {
+  await page.goto(components);
+  await page.waitForSelector(".phx-connected", { timeout: 30_000 });
+  await page.locator('[data-test="seal-offer-open"]').click({ timeout: 30_000 });
+  await page.waitForSelector(`${layer}[open] [data-kind="seal"]`, { timeout: 30_000 });
+  const before = await described(page);
+  const text = await page.locator(`${layer} select[name="text"]`).inputValue();
+  await page.locator(`${layer} select[name="glyph"]`).selectOption({ index: 1 });
+  const glyph = await page.locator(`${layer} select[name="glyph"]`).inputValue();
+  await page.locator(`${layer} [data-test="seal-submit"]`).click();
+  await page.waitForFunction(() => !document.getElementById("system-layer-dialog")?.open, null, {
+    timeout: 30_000,
+  });
+  return { seal: `${text} ${glyph}`, before };
+}
+
 async function confirm(page) {
   await page.locator(`${layer} [data-test="prompt-confirm"]`).click();
   await page.waitForFunction(() => !document.getElementById("system-layer-dialog")?.open, null, {
@@ -114,8 +157,19 @@ async function main() {
       ws.on("framesent", (f) => frames.push({ dir: "out", data: String(f.payload).slice(0, 600) }));
       ws.on("framereceived", (f) => frames.push({ dir: "in", data: String(f.payload).slice(0, 600) }));
     });
+    const chosen = await chooseSeal(page);
     await openGrant(page);
+    const spoken = await described(page);
     const first = await sheet(page);
+    // The record keeps what held, never the seal's words.
+    record.seal = {
+      none_before: chosen.before.description.startsWith("No seal chosen yet."),
+      role: spoken.role,
+      focused: spoken.focused,
+      begins_with_seal: spoken.description.startsWith(`${chosen.seal} `),
+    };
+    const sealSpoken = record.seal.none_before && spoken.role === "dialog" && spoken.focused &&
+      record.seal.begins_with_seal;
 
     // A host's checkbox, unticked: the browser sends the host it names,
     // and the home narrows the grant to the host left ticked.
@@ -149,7 +203,7 @@ async function main() {
       writeFileSync(join(outDir, "prism-grant-frames.json"),
         JSON.stringify(redactFrames(frames.slice(-40), known), null, 1));
       row("prism_grant", false, "the sheet never showed the narrowed preview",
-        { first, narrowed, host_narrowed: hostNarrowed, host_sent: hostEvent });
+        { first, narrowed, host_narrowed: hostNarrowed, host_sent: hostEvent, seal: record.seal });
       return;
     }
     await confirm(page);
@@ -157,19 +211,20 @@ async function main() {
     record.prism_grant = {
       first, narrowed, head,
       host_checkbox: { unticked_in_browser: hostUnticked, narrowed_by_home: hostNarrowed, sent: hostEvent },
+      seal: record.seal,
     };
 
     const egress = narrowed.rows.find((r) => r.kind === "egress");
     const storage = narrowed.rows.find((r) => r.kind === "storage");
     if (!row("prism_grant",
-      first.origins.length === 1 && first.origins[0] === "interactive" &&
+      sealSpoken && first.origins.length === 1 && first.origins[0] === "interactive" &&
         hostUnticked && hostSent && egress && /narrowed by you/.test(egress.text) &&
         storage && storage.text.includes(PICKED) && /narrowed by you/.test(storage.text) &&
         head.revision === 1 && JSON.stringify(head.admitted_origins) === JSON.stringify(["interactive"]) &&
         JSON.stringify(head.domains) === JSON.stringify([KEPT]) &&
         JSON.stringify(head.paths) === JSON.stringify([PICKED]),
-      "granted in Prism, a host unticked and the folder narrowed through the picker, interactive alone",
-      { origins: first.origins, admits: narrowed.admits, paths: head.paths, domains: head.domains,
+      "the prompt spoken first with the seal chosen; granted in Prism, a host unticked and the folder narrowed through the picker, interactive alone",
+      { seal: record.seal, origins: first.origins, admits: narrowed.admits, paths: head.paths, domains: head.domains,
         host_checkbox: record.prism_grant.host_checkbox })) return;
 
     // -----------------------------------------------------------------------
