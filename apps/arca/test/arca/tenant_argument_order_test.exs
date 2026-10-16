@@ -107,9 +107,6 @@ defmodule Arca.TenantArgumentOrderTest do
     "Arca.Execution.delete_older_than/2" => @uncalled,
     "Arca.Execution.delete_older_than_days/2" => @uncalled,
     "Arca.Execution.ids_older_than_days/2" => @from_prune,
-    "Arca.Execution.list/1" =>
-      "`Opus.Record.list/2` and the `record` tool's `list` pass the athanor of the " <>
-        "context or actor they hold; the actor-first head moves with those callers",
     "Arca.Execution.stale_ids/2" => @from_prune,
     "Arca.ExecutionAttempts.count_intents_before/2" => @from_prune,
     "Arca.ExecutionAttempts.delete_intents_before/2" => @from_prune,

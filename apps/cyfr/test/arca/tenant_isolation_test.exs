@@ -235,12 +235,12 @@ defmodule Arca.TenantIsolationTest do
         })
 
       # Query with A's tenant filters
-      a_results = Arca.Execution.list(athanor_id: ctx_a.athanor_id)
+      a_results = Arca.Execution.list(Prima.Actor.in_athanor(ctx_a.athanor_id), [])
       assert length(a_results) == 1
       assert hd(a_results).id == "exec_tenant_a"
 
       # Query with B's tenant filters
-      b_results = Arca.Execution.list(athanor_id: ctx_b.athanor_id)
+      b_results = Arca.Execution.list(Prima.Actor.in_athanor(ctx_b.athanor_id), [])
       assert length(b_results) == 1
       assert hd(b_results).id == "exec_tenant_b"
     end
@@ -563,13 +563,13 @@ defmodule Arca.TenantIsolationTest do
 
       # Tenant A has 2
       a_results =
-        Arca.Execution.list(athanor_id: ctx_a.athanor_id, limit: 100)
+        Arca.Execution.list(Prima.Actor.in_athanor(ctx_a.athanor_id), limit: 100)
 
       assert length(a_results) == 2
 
       # Tenant B still has 5
       b_results =
-        Arca.Execution.list(athanor_id: ctx_b.athanor_id, limit: 100)
+        Arca.Execution.list(Prima.Actor.in_athanor(ctx_b.athanor_id), limit: 100)
 
       assert length(b_results) == 5
     end
@@ -607,7 +607,7 @@ defmodule Arca.TenantIsolationTest do
 
       # Tenant B unaffected
       b_results =
-        Arca.Execution.list(athanor_id: ctx_b.athanor_id, limit: 100)
+        Arca.Execution.list(Prima.Actor.in_athanor(ctx_b.athanor_id), limit: 100)
 
       assert length(b_results) == 4
     end
@@ -646,7 +646,7 @@ defmodule Arca.TenantIsolationTest do
                )
 
       # All records still exist
-      all_a = Arca.Execution.list(athanor_id: ctx_a.athanor_id, limit: 100)
+      all_a = Arca.Execution.list(Prima.Actor.in_athanor(ctx_a.athanor_id), limit: 100)
       assert length(all_a) == 3
     end
   end

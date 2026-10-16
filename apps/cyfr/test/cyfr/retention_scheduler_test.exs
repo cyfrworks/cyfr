@@ -605,7 +605,7 @@ defmodule Cyfr.RetentionSchedulerTest do
   end
 
   defp executions(athanor_id),
-    do: length(Arca.Execution.list(athanor_id: athanor_id, limit: 100))
+    do: length(Arca.Execution.list(Prima.Actor.in_athanor(athanor_id), limit: 100))
 
   defp active_ids,
     do: Sanctum.Tenancy.Athanors.list_active() |> Enum.map(& &1.id) |> Enum.sort()

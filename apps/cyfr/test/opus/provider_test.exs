@@ -1725,10 +1725,9 @@ defmodule Opus.ProviderTest do
 
       # Check SQLite for a failed execution record
       records =
-        Arca.Execution.list(
+        Arca.Execution.list(Prima.Actor.in_athanor(ctx.athanor_id),
           user_id: ctx.user_id,
-          limit: 10,
-          athanor_id: ctx.athanor_id
+          limit: 10
         )
 
       failed_records = Enum.filter(records, &(&1.status == "failed"))

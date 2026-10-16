@@ -437,18 +437,6 @@ defmodule Arca.Execution do
 
   def list(%Prima.Actor{}, opts) when is_list(opts), do: {:error, :no_athanor}
 
-  @doc """
-  Lists recent executions of `opts[:athanor_id]`, with `list/2`'s
-  filters. The tenant is a keyword here; `list/2` reads it off the actor.
-  """
-  @spec list(keyword()) :: [map()] | {:error, :database_error}
-  def list(opts) do
-    Arca.Repo.Errors.with_db_rescue("Execution.list", fn ->
-      list_rows(Keyword.fetch!(opts, :athanor_id), opts)
-    end)
-    |> Arca.Data.project()
-  end
-
   defp list_rows(athanor_id, opts) do
     limit = Keyword.get(opts, :limit, 20)
     user_id = Keyword.get(opts, :user_id)

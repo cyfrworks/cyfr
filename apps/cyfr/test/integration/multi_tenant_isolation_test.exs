@@ -205,8 +205,8 @@ defmodule MultiTenantIsolationTest do
           started_at: DateTime.utc_now() |> DateTime.truncate(:microsecond)
         })
 
-      list_a = Arca.Execution.list(athanor_id: ctx_a.athanor_id)
-      list_b = Arca.Execution.list(athanor_id: ctx_b.athanor_id)
+      list_a = Arca.Execution.list(Prima.Actor.in_athanor(ctx_a.athanor_id), [])
+      list_b = Arca.Execution.list(Prima.Actor.in_athanor(ctx_b.athanor_id), [])
 
       assert list_a != []
       assert list_b != []
@@ -214,8 +214,9 @@ defmodule MultiTenantIsolationTest do
       assert Enum.all?(list_b, &(&1.athanor_id == ctx_b.athanor_id))
     end
 
-    test "list/1 without an athanor is a caller error, not a cross-athanor read" do
-      assert_raise KeyError, fn -> Arca.Execution.list([]) end
+    test "list/2 for an actor without an athanor is refused, not a cross-athanor read" do
+      assert {:error, :no_athanor} = Arca.Execution.list(%Prima.Actor{}, [])
+      assert {:error, :no_athanor} = Arca.Execution.list(%Prima.Actor{athanor_id: ""}, [])
     end
   end
 

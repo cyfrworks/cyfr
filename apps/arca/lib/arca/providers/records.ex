@@ -257,19 +257,16 @@ defmodule Arca.Providers.Records do
   def handle("record", %Prima.Actor{} = actor, %{"action" => "list"} = args) do
     with :ok <- tenant_ok(actor) do
       opts =
-        [
-          limit: min(args["limit"] || 20, 1000),
-          athanor_id: actor.athanor_id
-        ]
+        [limit: min(args["limit"] || 20, 1000)]
         # user_id is an optional attribution filter any member may pass; default
         # is athanor-wide (the athanor is the access boundary).
         |> maybe_put(:user_id, args["user_id"])
         |> maybe_put(:status, args["status"])
         |> maybe_put(:parent_execution_id, args["parent_execution_id"])
 
-      # `list/1` answers a tuple on an outage; mapping over it raised a
+      # `list/2` answers a tuple on an outage; mapping over it raised a
       # 500 where the sibling log arms answer the storage refusal.
-      case Arca.Execution.list(opts) do
+      case Arca.Execution.list(actor, opts) do
         {:error, :database_error} -> {:error, {:unavailable, "Storage"}}
         records -> {:ok, %{executions: Enum.map(records, &execution_to_map/1)}}
       end

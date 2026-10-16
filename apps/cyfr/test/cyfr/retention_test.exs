@@ -659,7 +659,8 @@ defmodule Arca.RetentionTest do
   # that rolls it back with the test.
   defp drop_settings!, do: Arca.Repo.query!("DROP TABLE retention_settings")
 
-  defp executions(actor), do: Arca.Execution.list(limit: 100, athanor_id: actor.athanor_id)
+  defp executions(actor),
+    do: Arca.Execution.list(Prima.Actor.in_athanor(actor.athanor_id), limit: 100)
 
   defp create_execution_with_timestamp(actor, id, timestamp, status \\ "completed") do
     {:ok, dt, _} = DateTime.from_iso8601(timestamp)

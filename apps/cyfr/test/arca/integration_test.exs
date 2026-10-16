@@ -133,10 +133,9 @@ defmodule Arca.IntegrationTest do
 
       # Verify all 5 exist
       records =
-        Arca.Execution.list(
+        Arca.Execution.list(Prima.Actor.in_athanor(actor.athanor_id),
           user_id: actor.user_id,
-          limit: 100,
-          athanor_id: actor.athanor_id
+          limit: 100
         )
 
       assert length(records) == 5
@@ -149,10 +148,9 @@ defmodule Arca.IntegrationTest do
 
       # 5. Verify only 3 remain
       records =
-        Arca.Execution.list(
+        Arca.Execution.list(Prima.Actor.in_athanor(actor.athanor_id),
           user_id: actor.user_id,
-          limit: 100,
-          athanor_id: actor.athanor_id
+          limit: 100
         )
 
       assert length(records) == 3
@@ -305,7 +303,7 @@ defmodule Arca.IntegrationTest do
       assert {:ok, 4} =
                Retention.cleanup(Sanctum.Context.actor(user1_ctx), "executions", value: 2)
 
-      remaining = Arca.Execution.list(athanor_id: athanor, limit: 100)
+      remaining = Arca.Execution.list(Prima.Actor.in_athanor(athanor), limit: 100)
 
       assert length(remaining) == 2
     end
@@ -395,20 +393,18 @@ defmodule Arca.IntegrationTest do
 
       # User 1 can see it
       u1_records =
-        Arca.Execution.list(
+        Arca.Execution.list(Prima.Actor.in_athanor("ath_test"),
           user_id: "exec_user_1",
-          limit: 100,
-          athanor_id: "ath_test"
+          limit: 100
         )
 
       assert length(u1_records) == 1
 
       # User 2 cannot see it (different user_id)
       u2_records =
-        Arca.Execution.list(
+        Arca.Execution.list(Prima.Actor.in_athanor("ath_test"),
           user_id: "exec_user_2",
-          limit: 100,
-          athanor_id: "ath_test"
+          limit: 100
         )
 
       assert u2_records == []
