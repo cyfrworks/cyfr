@@ -98,14 +98,63 @@ defmodule Opus.Host.EgressTest do
   end
 
   # An authority whose edge's egress allows `domains` and grants the
-  # private addresses `private_ips`.
+  # private addresses `private_ips`. Every pin answered joins its host to
+  # the run's ledger as an outside source, so an edge pinning several
+  # hosts in one run lets outside material flow to all of them; the flow
+  # cases below hold their own edges.
   defp egress(domains, private_ips) do
     %{
       Authority.zero()
       | resources: %Edge{
-          egress: %{domains: domains, methods: [], schemes: [], private_ips: private_ips}
+          egress: %{domains: domains, methods: [], schemes: [], private_ips: private_ips},
+          flows: [%{from: :outside, to: "*"}]
         }
     }
+  end
+
+  # An edge for the flow cases: egress to `domains`, storage of `data/`,
+  # and exactly `flows`.
+  defp flowing!(domains, flows) do
+    AttemptFixtures.attached!(
+      ctx: Sanctum.TestContext.local(:api),
+      authority: %{
+        Authority.zero()
+        | resources: %Edge{
+            egress: %{domains: domains, methods: [], schemes: [], private_ips: []},
+            storage: %{paths: ["data/"], actions: ["read", "list", "exists"]},
+            flows: flows
+          }
+      }
+    )
+  end
+
+  defp ledger(fixture) do
+    {:ok, sources} =
+      Arca.Execution.sources(Prima.Actor.in_athanor(fixture.athanor_id), fixture.execution_id)
+
+    sources
+  end
+
+  # A storage root of the test's own, restored before it is changed.
+  defp storage_root! do
+    dir = Path.join(System.tmp_dir!(), "host_egress_flow_#{System.unique_integer([:positive])}")
+    previous = Application.get_env(:arca, :base_path)
+
+    on_exit(fn ->
+      File.rm_rf!(dir)
+
+      if previous,
+        do: Application.put_env(:arca, :base_path, previous),
+        else: Application.delete_env(:arca, :base_path)
+    end)
+
+    File.mkdir_p!(dir)
+    Application.put_env(:arca, :base_path, dir)
+  end
+
+  defp read!(fixture, path) do
+    assert %{"ok" => %{"content" => _bytes}} =
+             AttemptFixtures.call(fixture, "storage", %{"action" => "read", "path" => path})
   end
 
   defp attached!(domains, private_ips \\ []),
@@ -134,6 +183,76 @@ defmodule Opus.Host.EgressTest do
       refute Enum.any?(Resolver.looked_up(), fn {host, _family} -> host == "login.other.test" end)
 
       assert fixture |> denials() |> Enum.map(& &1.decision) == List.duplicate("denied", 4)
+    end
+  end
+
+  describe "flows" do
+    test "a run that read data/ is refused a granted host its grant declares no flow to, before the name is looked up, and recorded" do
+      storage_root!()
+      Resolver.script("api.example.test", :inet, [{203, 0, 113, 10}])
+      fixture = flowing!(["api.example.test"], [])
+      :ok = Arca.put(Sanctum.Context.actor(fixture.ctx), ["data", "notes.txt"], "restricted")
+
+      read!(fixture, "data/notes.txt")
+      assert Prima.Source.new(:files_by_grant) in ledger(fixture)
+
+      assert {:error, :flow} = pin(fixture, "https://api.example.test/send", :fetch)
+      assert Resolver.looked_up() == []
+
+      assert [%{decision: "denied", decision_reason: reason}] = denials(fixture)
+      assert reason =~ "fetch: This run read files_by_grant, outside material"
+      assert reason =~ "api.example.test"
+      refute reason =~ "/send"
+    end
+
+    test "the same run with flows of what it read to that host is pinned" do
+      storage_root!()
+      Resolver.script("api.example.test", :inet, [{203, 0, 113, 10}])
+
+      fixture =
+        flowing!(["api.example.test"], [
+          %{from: :files_by_grant, to: "api.example.test"},
+          %{from: :outside, to: "api.example.test"}
+        ])
+
+      :ok = Arca.put(Sanctum.Context.actor(fixture.ctx), ["data", "notes.txt"], "restricted")
+      read!(fixture, "data/notes.txt")
+
+      assert {:ok, %PinnedTarget{host: "api.example.test"}} =
+               pin(fixture, "https://api.example.test/send", :fetch)
+    end
+
+    test "a pin taken before a read decides nothing after it: the send's own ask is refused" do
+      storage_root!()
+      Resolver.script("api.example.test", :inet, [{203, 0, 113, 10}, {203, 0, 113, 10}])
+      fixture = flowing!(["api.example.test"], [])
+      :ok = Arca.put(Sanctum.Context.actor(fixture.ctx), ["data", "notes.txt"], "restricted")
+
+      assert {:ok, %PinnedTarget{}} = pin(fixture, "https://api.example.test/send", :fetch)
+      read!(fixture, "data/notes.txt")
+      assert {:error, :flow} = pin(fixture, "https://api.example.test/send", :fetch)
+    end
+
+    test "a pinned host joins the ledger before it is answered; that exact host is covered, another under the same pattern is not" do
+      Resolver.script("api.x.test", :inet, [{203, 0, 113, 10}])
+      Resolver.script("other.x.test", :inet, [{203, 0, 113, 11}])
+      fixture = flowing!(["*.x.test"], [])
+
+      assert ledger(fixture) == []
+      assert {:ok, %PinnedTarget{}} = pin(fixture, "https://api.x.test/a", :fetch)
+      assert ledger(fixture) == [Prima.Source.outside("api.x.test")]
+
+      assert {:ok, %PinnedTarget{}} = pin(fixture, "https://API.x.test/b", :fetch)
+      assert {:error, :flow} = pin(fixture, "https://other.x.test/", :fetch)
+      refute Enum.any?(Resolver.looked_up(), fn {host, _} -> host == "other.x.test" end)
+    end
+
+    test "every spelling of one IPv6 address is one host to the ledger" do
+      fixture = flowing!(["*"], [])
+
+      assert {:ok, %PinnedTarget{}} = pin(fixture, "http://[2001:db8::20]:8080/", :fetch)
+      assert ledger(fixture) == [Prima.Source.outside("[2001:db8::20]")]
+      assert {:ok, %PinnedTarget{}} = pin(fixture, "http://[2001:0DB8:0:0::0020]:8080/", :fetch)
     end
   end
 

@@ -1100,9 +1100,15 @@ defmodule Opus.Attempt do
   defp unseal(state, caller) do
     case fetch_secrets(state) do
       {:ok, secrets} ->
-        StepSpans.guest_started(state.close.step_spans)
-        audit_dispensed(state, caller.runner, secrets)
-        {:reply, {:ok, secrets}, %{state | claimed_by: caller.runner, secrets: secrets}}
+        case join(state, disclosure_sources(state.authority, secrets)) do
+          :ok ->
+            StepSpans.guest_started(state.close.step_spans)
+            audit_dispensed(state, caller.runner, secrets)
+            {:reply, {:ok, secrets}, %{state | claimed_by: caller.runner, secrets: secrets}}
+
+          {:error, :unavailable} ->
+            {:reply, {:error, :unavailable}, state}
+        end
 
       {:setup_required, reason} ->
         typed = {:setup_required, setup_payload(state, reason)}
@@ -1115,6 +1121,24 @@ defmodule Opus.Attempt do
         end)
     end
   end
+
+  # A vault entry's fields handed to the guest are vault-disclosed material
+  # its run's ledger holds before the runner is answered with them; a
+  # publisher's provided values are public, and an edge that discloses
+  # nothing adds nothing.
+  defp disclosure_sources(_authority, secrets) when map_size(secrets) == 0, do: []
+
+  defp disclosure_sources(%Authority{resources: %Edge{vault: %{provided: _values}}}, _secrets),
+    do: []
+
+  defp disclosure_sources(_authority, _secrets), do: [Prima.Source.new(:vault_disclosed)]
+
+  # The run's ledger joined ahead of the bytes it describes
+  # (`Opus.Ledger.join/3`); a join that cannot be written withholds them.
+  defp join(_state, []), do: :ok
+
+  defp join(state, sources),
+    do: Opus.Ledger.join(Context.actor(state.ctx), state.execution_id, sources)
 
   defp fetch_secrets(%__MODULE__{authority: authority, close: close} = state) do
     case authority do
@@ -1395,11 +1419,36 @@ defmodule Opus.Attempt do
   defp run(op, state) when elem(op, 0) in [:storage, :fetch_artifact, :record_denial] do
     case Host.Storage.run(op, host_storage(state)) do
       {:error, :lost} -> {:stop, :normal, {:error, :lost}, release_holds(state)}
+      {:ok, _answer} = reply -> {:reply, read_joined(state, op, reply), state}
       reply -> {:reply, reply, state}
     end
   end
 
   defp run(_op, state), do: {:reply, {:error, :lost}, state}
+
+  # What a storage read answers — a file's bytes, a listing's names, a
+  # path's existence — reaches the guest only once the run's ledger holds
+  # its provenance. A file is read through the edge's storage grant; an
+  # object under `data/` carries no recorded sources of its own yet, and
+  # provenance that is not recorded is outside. The component's own
+  # artifact and the bare scope listing carry nothing.
+  defp read_joined(state, {:storage, action, %{"path" => path}}, reply)
+       when action in [:read, :list, :exists] do
+    case join(state, storage_sources(path)) do
+      :ok -> reply
+      {:error, :unavailable} -> {:error, :unavailable}
+    end
+  end
+
+  defp read_joined(_state, _op, reply), do: reply
+
+  defp storage_sources(""), do: []
+
+  defp storage_sources("components/" <> _rest), do: [Prima.Source.new(:files_by_grant)]
+  defp storage_sources("components"), do: [Prima.Source.new(:files_by_grant)]
+
+  defp storage_sources(_path),
+    do: [Prima.Source.new(:files_by_grant), Prima.Source.outside(nil)]
 
   defp names_outcome?(state, %Outcome{} = outcome) do
     outcome.execution_id == state.execution_id and outcome.attempt == state.attempt and
@@ -1598,7 +1647,12 @@ defmodule Opus.Attempt do
     case resolve_token(state, provider) do
       {:ok, token} ->
         token_request(state, provider, start_time, %{status: :ok})
-        {{:ok, token}, %{state | tokens: [token | state.tokens]}}
+
+        # A dispensed token is vault material the guest now holds.
+        case join(state, [Prima.Source.new(:vault_disclosed)]) do
+          :ok -> {{:ok, token}, %{state | tokens: [token | state.tokens]}}
+          {:error, :unavailable} -> {{:error, :unavailable}, state}
+        end
 
       {:error, reason} ->
         message = refusal_message(reason)

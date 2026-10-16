@@ -54,9 +54,9 @@ defmodule Sanctum.Gate.ErrorAdoptionTest do
     # A malformed blob's `{:invalid_resource, node, edge, kind, message}`
     # says what is wrong with the stored resource, and nothing branches on
     # the sentence; a vault binding's scope, binding key, destination,
-    # attach rule, named accounts, provided configuration and lender each
-    # say theirs.
-    "apps/prima/lib/prima/authority/blob.ex" => 22,
+    # attach rule, named accounts, provided configuration, lender and flows
+    # each say theirs.
+    "apps/prima/lib/prima/authority/blob.ex" => 23,
     "apps/prima/lib/prima/component_ref.ex" => 20,
     "apps/cyfr/lib/emissary/external/server.ex" => 19,
     # The concurrency argument's own refusal is a sentence about the value

@@ -67,6 +67,21 @@ defmodule Opus.Host.Children do
   and the header's attempt as its lineage. A setup refusal is announced on
   the root's event stream. The answer is the tool's result.
 
+  A tool server's tool (`server:tool`) is an exit: before its arguments
+  leave, the run's ledger as it stands (`Opus.Ledger.check/4`) must hold no
+  class the edge's flows do not let reach `server:<name>`, else the call is
+  refused `flow_blocked` and recorded as a denial; a ledger that cannot be
+  read is `unavailable`. Whatever the call answers — its result or its
+  refusal — reaches the guest, and the root's stream hears of a setup
+  refusal, only once the run's ledger holds what the answer carries
+  (`Opus.Ledger.join/3`): a server's answer is outside, named by the server
+  (its call's row was labelled so before the call left,
+  `Emissary.External.Proxy`); a catalog action's success carries what its
+  `sources:` declaration says (`Prima.Operation.answer_sources/3`: its
+  classes, or the answer's own provenance); a refusal made before any
+  handler ran carries nothing, and any other carries every class the
+  action may answer. A join that cannot be written answers `unavailable`.
+
   ## release_child
 
   A child the runner was handed but could not start (its keys did not open,
@@ -207,12 +222,23 @@ defmodule Opus.Host.Children do
           call_id: chain.call_id
         }
 
-        case Sanctum.Gate.call_in_chain(tool.name, chain.ctx, tool.args, chain.authority,
-               guest_fn: tool.guest_fn,
-               lineage: lineage
-             ) do
-          {:ok, result} -> tool_result(result)
-          {:error, reason} -> {:error, tool_refusal(reason, chain)}
+        with :ok <- server_flows(caller, chain, tool) do
+          result =
+            Sanctum.Gate.call_in_chain(tool.name, chain.ctx, tool.args, chain.authority,
+              guest_fn: tool.guest_fn,
+              lineage: lineage
+            )
+
+          case answered(caller, chain, tool, result) do
+            :ok ->
+              case result do
+                {:ok, result} -> tool_result(result)
+                {:error, reason} -> {:error, tool_refusal(reason, chain)}
+              end
+
+            {:error, :unavailable} ->
+              {:error, :unavailable}
+          end
         end
 
       # The attempt refused the call before any chain existed — its row is
@@ -379,6 +405,97 @@ defmodule Opus.Host.Children do
   # ---------------------------------------------------------------------------
   # tool_call
   # ---------------------------------------------------------------------------
+
+  # A tool server is an exit: the run's ledger must flow to it before its
+  # arguments leave. A catalog tool's arguments stay inside the athanor.
+  defp server_flows(caller, chain, %{name: name}) do
+    case String.split(name, ":", parts: 2) do
+      [server, _tool] when server != "" ->
+        case Opus.Ledger.check(
+               Sanctum.Context.actor(chain.ctx),
+               caller.execution_id,
+               edge(chain.authority),
+               {:server, server}
+             ) do
+          :ok ->
+            :ok
+
+          {:refused, refusal} ->
+            message = Prima.Refusal.message(refusal)
+            record_flow_denial(chain, message)
+            {:error, guest_error(:flow_blocked, message)}
+
+          {:error, :unavailable} ->
+            {:error, :unavailable}
+        end
+
+      _catalog ->
+        :ok
+    end
+  end
+
+  defp edge(%Prima.Authority{resources: %Prima.Authority.Blob.Edge{} = edge}), do: edge
+  defp edge(_authority), do: nil
+
+  defp record_flow_denial(chain, message) do
+    Sanctum.Policy.Enforcement.record(%{
+      ctx: chain.ctx,
+      component_ref: chain.component_ref,
+      component_type: :catalyst,
+      event_type: :denied,
+      decision: :denied,
+      decision_reason: "tool: #{message}"
+    })
+  end
+
+  # What the call's answer carries joins the run's ledger before the
+  # answer, a refusal included, reaches the guest.
+  defp answered(caller, chain, tool, result) do
+    Opus.Ledger.join(
+      Sanctum.Context.actor(chain.ctx),
+      caller.execution_id,
+      answer_sources(chain, tool, result)
+    )
+  end
+
+  defp answer_sources(chain, %{name: name} = tool, result) do
+    case String.split(name, ":", parts: 2) do
+      [server, _tool] when server != "" ->
+        [Prima.Source.outside(server)]
+
+      _catalog ->
+        catalog_sources(operation_of(name, tool.args), result, Sanctum.Context.actor(chain.ctx))
+    end
+  end
+
+  defp catalog_sources(nil, {:ok, _answer}, _actor), do: [Prima.Source.outside(nil)]
+
+  defp catalog_sources(%Prima.Operation{} = op, {:ok, answer}, actor),
+    do: Prima.Operation.answer_sources(op, actor, answer)
+
+  defp catalog_sources(op, {:error, reason}, _actor) do
+    if admission_refusal?(reason) do
+      []
+    else
+      possible = if op, do: Prima.Operation.possible_classes(op), else: [:outside]
+      Enum.map(possible, &Prima.Source.new/1)
+    end
+  end
+
+  # A refusal the gate made before any handler ran carries nothing the
+  # tool read.
+  defp admission_refusal?(%Prima.Refusal{stage: :admission}), do: true
+  defp admission_refusal?(reason), do: Sanctum.Refusals.classify(reason).stage == :admission
+
+  defp operation_of(name, args) do
+    with action when is_binary(action) <- Map.get(args, "action"),
+         {:ok, {_module, %{operations: operations}}} when is_list(operations) <-
+           Sanctum.Catalog.lookup(name) do
+      Enum.find(operations, &(&1.action == action))
+    else
+      _ -> nil
+    end
+  end
 
   defp tool_result(result) do
     case Jason.encode(result) do

@@ -179,6 +179,7 @@ defmodule Aqua.Providers.Notes do
             )
           ],
           kind: :read,
+          sources: {:answer, {__MODULE__, :answer_sources}},
           planes: [:external, :in_chain],
           consent: :interactive,
           recovery: :replay_safe
@@ -203,6 +204,7 @@ defmodule Aqua.Providers.Notes do
             )
           ],
           kind: :read,
+          sources: {:answer, {__MODULE__, :answer_sources}},
           planes: [:external, :in_chain],
           consent: :interactive,
           recovery: :replay_safe
@@ -245,6 +247,7 @@ defmodule Aqua.Providers.Notes do
             )
           ],
           kind: :read,
+          sources: {:answer, {__MODULE__, :answer_sources}},
           planes: [:external, :in_chain],
           consent: :interactive,
           recovery: :replay_safe
@@ -255,6 +258,17 @@ defmodule Aqua.Providers.Notes do
       title: "Notes"
     )
   end
+
+  @doc """
+  What a notes read's answer carries (its operations' `sources:`
+  declaration, `Prima.Operation.answer_sources/3`): the filed note it read,
+  with each note's own provenance as it was written — an outside source
+  keeps its name, and a note carrying vault-disclosed material keeps that
+  class (`Aqua.Notes.sources_of_answer/1`).
+  """
+  @spec answer_sources(Prima.Actor.t() | nil, term()) :: [Prima.Source.t()]
+  def answer_sources(_actor, answer),
+    do: Prima.Source.set([Prima.Source.new(:filed) | Aqua.Notes.sources_of_answer({:ok, answer})])
 
   @impl true
   def handle("notes", %Context{} = ctx, args), do: dispatch(ctx, args)

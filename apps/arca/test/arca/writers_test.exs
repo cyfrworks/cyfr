@@ -141,7 +141,7 @@ defmodule Arca.Test.WritersTest do
     do:
       Map.merge(
         blank(Arca.Schemas.Execution),
-        Map.merge(execution_attrs(id), %{kind: "component", event_seq: 0})
+        Map.merge(execution_attrs(id), %{kind: "component", event_seq: 0, sources: "[]"})
       )
 
   describe "record_start/1" do

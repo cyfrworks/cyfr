@@ -102,6 +102,7 @@ defmodule Aqua.Providers.Thread do
         ),
         Operation.new("thread", "list", "List thread", [],
           kind: :read,
+          sources: [:pinned, :filed, :files_by_grant, :vault_disclosed, :outside],
           planes: [:external],
           consent: :interactive
         ),
@@ -116,6 +117,7 @@ defmodule Aqua.Providers.Thread do
             )
           ],
           kind: :read,
+          sources: [:pinned, :filed, :files_by_grant, :vault_disclosed, :outside],
           planes: [:external],
           consent: :interactive
         ),
@@ -138,6 +140,7 @@ defmodule Aqua.Providers.Thread do
             )
           ],
           kind: :read,
+          sources: [:pinned, :filed, :files_by_grant, :vault_disclosed, :outside],
           planes: [:external],
           consent: :interactive
         ),
@@ -360,6 +363,7 @@ defmodule Aqua.Providers.Thread do
             )
           ],
           kind: :read,
+          sources: [:pinned, :filed, :files_by_grant, :vault_disclosed, :outside],
           planes: [:external],
           consent: :interactive
         ),

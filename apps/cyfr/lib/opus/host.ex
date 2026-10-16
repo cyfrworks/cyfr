@@ -96,7 +96,7 @@ defmodule Opus.Host do
     * `not_found`, when `fetch_artifact` names no artifact of the attempt's;
     * for `egress_pin`, `malformed` for args that do not read
       (`Prima.PinnedTarget.read_request/1`), and `denied`, `metadata`,
-      `resolution` or `redirect_credentials` for a pin CYFR does not grant
+      `resolution`, `redirect_credentials` or `flow` for a pin CYFR does not grant
       (`Opus.Host.Egress`);
     * `guest_error` with its `type` and `message`, and a `remediation` for
       a `setup_required` one, a refusal the runner hands its guest; for
@@ -179,7 +179,8 @@ defmodule Opus.Host do
     :denied,
     :metadata,
     :resolution,
-    :redirect_credentials
+    :redirect_credentials,
+    :flow
   ]
 
   @doc """

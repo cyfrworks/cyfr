@@ -939,10 +939,11 @@ defmodule Prima.Authority.Blob do
   # their consent committed; here they are held to the grammar, and an
   # empty list is the absent resource, never written.
   defp validate_resource(:flows, raw) when is_list(raw) and raw != [] do
-    case Prima.Flow.parse(raw, :any) do
-      {:ok, flows} when length(flows) == length(raw) -> {:ok, flows}
-      {:ok, _deduplicated} -> {:error, "must not repeat a flow"}
-      {:error, _reason} -> {:error, "must be a list of {from, to} flows"}
+    with {:ok, flows} <- Prima.Flow.parse(raw, :any),
+         true <- length(flows) == length(raw) do
+      {:ok, flows}
+    else
+      _unread -> {:error, "must be a list of distinct {from, to} flows"}
     end
   end
 

@@ -393,6 +393,12 @@ defmodule Emissary.External.Proxy do
   # `not_recorded`, and neither hands the answer back. A console call
   # writes no row.
   #
+  # Whatever the server answers is outside material named by the server.
+  # The row is labelled so in its admission transaction, and the label is
+  # joined into its caller's ledger there too (`Arca.Execution.admit/2`),
+  # before the call leaves: its answer or its error, published when the row
+  # closes, is never readable from a row whose ledger lacks it.
+  #
   # The row runs under its caller's grant: the stamp its parent's current
   # attempt stores, inherited unchanged and checked again as it is admitted
   # and as it completes. A call whose caller's athanor was archived is not
@@ -424,7 +430,8 @@ defmodule Emissary.External.Proxy do
       input: Jason.encode!(input_envelope(server_name, remote_tool, input)),
       parent_execution_id: args["parent_execution_id"],
       root_execution_id: args["root_execution_id"] || args["parent_execution_id"],
-      kind: "tool_call"
+      kind: "tool_call",
+      sources: [Prima.Source.outside(server_name)]
     }
 
     with {:ok, grant} <- inherited_grant(ctx, attrs.parent_execution_id),

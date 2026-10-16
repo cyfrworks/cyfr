@@ -386,6 +386,7 @@ defmodule Opus.Provider do
               )
             ],
             kind: :read,
+            sources: {:answer, {__MODULE__, :answer_sources}},
             planes: [:external, :in_chain],
             permission: :execute
           ),
@@ -400,6 +401,7 @@ defmodule Opus.Provider do
               )
             ],
             kind: :read,
+            sources: {:answer, {__MODULE__, :answer_sources}},
             planes: [:external, :in_chain],
             permission: :execute
           ),
@@ -481,6 +483,36 @@ defmodule Opus.Provider do
   # exists to prevent. Components invoke children through the formula host,
   # which intercepts these actions before dispatch; nothing legitimate arrives
   # here guest-planed. Fail closed regardless of the identity's permissions.
+  @doc """
+  What an execution read's answer carries (the `logs` and `list`
+  operations' `sources:` declaration, `Prima.Operation.answer_sources/3`):
+  the ledger of every execution it answers (`Arca.Execution.sources/2`),
+  read under `actor`. A record of a sibling or child carries the
+  provenance its run held when it wrote what the record shows; one whose
+  ledger cannot be read, or whose row is gone, is an unnamed outside
+  source.
+  """
+  @spec answer_sources(Prima.Actor.t() | nil, term()) :: [Prima.Source.t()]
+  def answer_sources(%Prima.Actor{} = actor, answer) do
+    answer
+    |> answered_ids()
+    |> Enum.flat_map(fn id ->
+      case Arca.Execution.sources(actor, id) do
+        {:ok, sources} -> sources
+        {:error, _unread} -> [Prima.Source.outside(nil)]
+      end
+    end)
+    |> Prima.Source.set()
+  end
+
+  def answer_sources(_actor, _answer), do: [Prima.Source.outside(nil)]
+
+  defp answered_ids(%{executions: executions}) when is_list(executions),
+    do: for(%{execution_id: id} <- executions, is_binary(id), do: id)
+
+  defp answered_ids(%{execution_id: id}) when is_binary(id), do: [id]
+  defp answered_ids(_answer), do: []
+
   @impl true
   def handle("execution", %Context{plane: :guest}, %{"action" => action})
       when action in ["run", "run_stream"] do

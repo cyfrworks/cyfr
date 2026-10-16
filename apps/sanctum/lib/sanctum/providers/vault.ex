@@ -79,6 +79,7 @@ defmodule Sanctum.Providers.Vault do
       [
         Operation.new("vault", "list", "List vault", [],
           kind: :read,
+          sources: [:vault_disclosed],
           planes: [:external],
           consent: :staging
         ),
@@ -88,6 +89,7 @@ defmodule Sanctum.Providers.Vault do
           "Vault entry status",
           [],
           kind: :read,
+          sources: [:vault_disclosed],
           planes: [:external]
         ),
         Operation.new(

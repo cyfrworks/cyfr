@@ -21,21 +21,28 @@ defmodule Opus.Host.Egress do
        (`Prima.Network.domain_allowed?/2`, where `"*"` matches every
        host); an authority with no edge, an edge with no egress, and a
        host no pattern matches are `denied`;
-    2. a `redirect` names, as `from`, a pin this attempt was answered
+    2. the run's source ledger, read as it stands now
+       (`Opus.Ledger.check/4`), holds no class the edge's flows
+       (`Prima.Flow`) do not let reach the URL's host — an outside
+       source named by that exact host is its own, and the classes an
+       approved launch let flow count — else `flow`; a ledger that
+       cannot be read is `unavailable`. A grant that declares no flow
+       keeps sending until its run reads a source;
+    3. a `redirect` names, as `from`, a pin this attempt was answered
        within the last two windows, and its URL has that pin's origin
        (`Prima.Network.same_origin?/2`: scheme, host and effective port);
        anything else is `redirect_credentials`. The engine carries the
        request's credentials on a guest's redirect, so the hop stays on
        its pin's origin: a hop elsewhere is refused, not stripped;
-    3. only then is the host resolved, once, through
+    4. only then is the host resolved, once, through
        `Sanctum.Network.pin/2`, IPv4 first and IPv6 only when no IPv4
        address resolves, and a name that resolves to nothing is
        `resolution`. A host the names refused is never resolved, so a
        guest cannot carry data out in the labels of a name its policy
        refuses;
-    4. a metadata address (`Prima.Cidr.metadata?/1`) is `metadata`,
+    5. a metadata address (`Prima.Cidr.metadata?/1`) is `metadata`,
        whatever the policy grants;
-    5. a private address (`Prima.Cidr.private_ip?/1`) is `denied` unless
+    6. a private address (`Prima.Cidr.private_ip?/1`) is `denied` unless
        the edge grants it (`egress.private_ips`, IPs and CIDRs); an
        authority with no edge, or an edge with no egress, grants no
        private address. The operator's `CYFR_PRIVATE_EGRESS_TARGETS` is
@@ -43,8 +50,15 @@ defmodule Opus.Host.Egress do
 
   A pin answers the address with the URL's scheme and port, its host (an
   IPv6 literal in brackets), an `id` minted for it and an `expires_at` one
-  header window (`Prima.WorkerAuth.window_ms/0`) past the call. Each of
-  the four refusals is recorded as a denial of the attempt's component in
+  header window (`Prima.WorkerAuth.window_ms/0`) past the call. Before it
+  is answered, the host it names joins the run's ledger as an outside
+  source (`Opus.Ledger.join/3`): what the request brings back comes from
+  that host, and the ledger holds it before any byte of the answer can
+  exist. A join that cannot be written answers `unavailable`. Every
+  request is decided here afresh — the relay asks again at the moment it
+  sends (`Locus.Runtime.Relay`) — so a send is decided on the ledger as
+  it stands then, never on a pin taken before a read. Each of
+  the five refusals is recorded as a denial of the attempt's component in
   its athanor (`Sanctum.Policy.Enforcement.record/1`, as
   `Opus.Host.Storage` records a runner's `record_denial`), its reason
   led by the request's purpose (`fetch: …`, `attached: …`) and naming the
@@ -94,13 +108,15 @@ defmodule Opus.Host.Egress do
     resolver = Keyword.get(opts, :resolver, :inet)
 
     with {:ok, chain} <- Attempt.call(caller.execution_id, caller, :chain) do
-      case decide(caller, request, chain.authority, resolver, now) do
+      case decide(caller, request, chain, resolver, now) do
         {:ok, pin} ->
-          remember(caller, pin, now)
-          {:ok, pin}
+          answered(caller, chain, pin, now)
 
         {:refused, :malformed, _sentence} ->
           {:error, :malformed}
+
+        {:unavailable, :ledger} ->
+          {:error, :unavailable}
 
         {:refused, refusal, sentence} ->
           record(chain, request.purpose, sentence)
@@ -109,17 +125,47 @@ defmodule Opus.Host.Egress do
     end
   end
 
-  defp decide(caller, request, authority, resolver, now) do
-    edge = edge(authority)
+  # The pinned host joins the run's ledger before the pin is answered, so
+  # whatever the request brings back is already labelled when it arrives.
+  defp answered(caller, chain, pin, now) do
+    case Opus.Ledger.join(Sanctum.Context.actor(chain.ctx), caller.execution_id, [
+           Prima.Source.outside(canonical_host(pin.host))
+         ]) do
+      :ok ->
+        remember(caller, pin, now)
+        {:ok, pin}
+
+      {:error, :unavailable} ->
+        {:error, :unavailable}
+    end
+  end
+
+  defp decide(caller, request, chain, resolver, now) do
+    edge = edge(chain.authority)
 
     # The name checks come before the resolution: a refused host is never
-    # looked up.
+    # looked up, and neither is one the run's ledger may not reach.
     with {:ok, uri} <- parse(request.url),
          :ok <- domain_allowed(uri, edge),
+         :ok <- flows(caller, chain, edge, uri),
          :ok <- same_origin(caller, request, uri, now),
          {:ok, pinned} <- resolve(request.url, resolver),
          :ok <- permitted(pinned, private_ips(edge)) do
       pinned(pinned, now)
+    end
+  end
+
+  # The run's ledger as it stands, against the edge's flows to this host.
+  defp flows(caller, chain, edge, uri) do
+    case Opus.Ledger.check(
+           Sanctum.Context.actor(chain.ctx),
+           caller.execution_id,
+           edge,
+           {:domain, canonical_host(host_of(uri))}
+         ) do
+      :ok -> :ok
+      {:refused, refusal} -> {:refused, :flow, Prima.Refusal.message(refusal)}
+      {:error, :unavailable} -> {:unavailable, :ledger}
     end
   end
 
@@ -217,6 +263,20 @@ defmodule Opus.Host.Egress do
   end
 
   defp scheme_of(%URI{scheme: scheme}), do: String.downcase(scheme)
+
+  # A host as the run's ledger names it: a hostname lowercased without its
+  # trailing dot, an IP literal in its one canonical spelling (an IPv6 one
+  # in brackets), so every spelling of one address is one source and one
+  # exit, and no spelling of another can pass for it.
+  defp canonical_host(host) do
+    bare = host |> String.trim_leading("[") |> String.trim_trailing("]")
+
+    case :inet.parse_strict_address(String.to_charlist(bare)) do
+      {:ok, ip} when tuple_size(ip) == 8 -> "[" <> to_string(:inet.ntoa(ip)) <> "]"
+      {:ok, ip} -> to_string(:inet.ntoa(ip))
+      {:error, _name} -> host |> String.downcase() |> String.trim_trailing(".")
+    end
+  end
 
   defp remember(caller, pin, now) do
     origin = %URI{scheme: pin.scheme, host: pin.host, port: pin.port}

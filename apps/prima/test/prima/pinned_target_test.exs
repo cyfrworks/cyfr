@@ -142,7 +142,7 @@ defmodule Prima.PinnedTargetTest do
 
   test "the refusals and purposes are the wire's names, and a pin expires after its instant" do
     assert PinnedTarget.refusals() ==
-             [:denied, :metadata, :resolution, :redirect_credentials, :malformed]
+             [:denied, :metadata, :resolution, :redirect_credentials, :flow, :malformed]
 
     assert PinnedTarget.purposes() == [:fetch, :stream, :redirect]
     refute PinnedTarget.expired?(@pin, @pin.expires_at)

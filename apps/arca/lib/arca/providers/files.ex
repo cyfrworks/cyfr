@@ -84,12 +84,14 @@ defmodule Arca.Providers.Files do
           "List a folder; an omitted or empty path lists the root folders",
           [path],
           kind: :read,
+          sources: [:files_by_grant],
           planes: [:external],
           permission: :storage_read,
           resource: {"path", :storage_path}
         ),
         Operation.new("file", "read", "Read a file as text or base64 bytes", [Arg.required(path)],
           kind: :read,
+          sources: [:files_by_grant],
           planes: [:external],
           permission: :storage_read,
           resource: {"path", :storage_path}
@@ -148,6 +150,7 @@ defmodule Arca.Providers.Files do
             "or that failed to land",
           [],
           kind: :read,
+          sources: [:files_by_grant],
           planes: [:external],
           permission: :storage_read,
           consent: :interactive
