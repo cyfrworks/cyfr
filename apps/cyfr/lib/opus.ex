@@ -572,7 +572,8 @@ defmodule Opus do
   @doc """
   The executions the ingress request `request_id` started in the context's
   athanor, newest first, at most `limit` (`Arca.Execution.list_by_request/3`,
-  under the context's actor).
+  under the context's actor). A context of `:platform` scope, the server's
+  own, reads them in every athanor, as that read does for its actor.
 
   A context without `:storage_read`, or one on the guest plane, is the
   permission refusal `Sanctum.Context.require_permission/2` answers; a
@@ -595,7 +596,8 @@ defmodule Opus do
   How many executions each of `request_ids` started in the context's
   athanor, as a map from request id to count; an id that started none is
   absent (`Arca.Execution.count_by_request/2`, under the context's actor).
-  The same refusals as `list_by_request/3`, before any row is read.
+  A context of `:platform` scope counts them in every athanor, and the same
+  refusals as `list_by_request/3` come before any row is read.
   """
   @spec count_by_request(Context.t(), [String.t()]) ::
           {:ok, %{String.t() => non_neg_integer()}} | {:error, term()}
@@ -609,7 +611,8 @@ defmodule Opus do
   end
 
   # The actor a surface's execution read runs under: a context holding
-  # `:storage_read` on the external plane, in a resolved athanor.
+  # `:storage_read` on the external plane, in a resolved athanor. Its scope
+  # travels on the actor, so a `:platform` one reads across athanors.
   defp reader(%Context{} = ctx) do
     with :ok <- Context.require_permission(ctx, :storage_read) do
       case Context.actor(ctx) do

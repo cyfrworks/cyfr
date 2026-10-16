@@ -79,30 +79,39 @@ defmodule Arca.TenantArgumentOrderTest do
   # The public functions that still read the tenant from their options, by
   # `Module.function/arity`, each with why it may. The seam below fails on
   # one that is not here and on a row nothing matches any longer.
-  @retention_primitive "a retention primitive: its one caller is its kind's " <>
-                         "actor-first `prune/3` (`Arca.Retention.*`), which passes the " <>
-                         "athanor the actor's head bound, and the primitive requires it " <>
-                         "(`Keyword.fetch!/2`); its actor-first head moves with the kind"
+  # Each retention primitive below requires the athanor (`Keyword.fetch!/2`),
+  # and its actor-first head moves with the retention path that calls it.
+  @from_prune "a retention primitive called only by its kind's actor-first `prune/3` " <>
+                "(`Arca.Retention.*`), which passes the athanor the actor's head bound"
+
+  @through_execution_rows "a retention primitive called only by " <>
+                            "`Arca.Retention.ExecutionRows.delete/3`, which takes the actor " <>
+                            "first and is reached from the execution kinds' actor-first " <>
+                            "`prune/3` with the athanor the actor's head bound"
+
+  @uncalled "a retention primitive no production code calls: the execution kinds " <>
+              "select ids (`stale_ids/2`, `ids_older_than_days/2`) and delete through " <>
+              "`delete_ids/2` instead"
 
   @keyword_tenant_readers %{
-    "Arca.DecisionLog.count_before/2" => @retention_primitive,
-    "Arca.DecisionLog.delete_before/2" => @retention_primitive,
-    "Arca.Execution.count_older_than_days/2" => @retention_primitive,
-    "Arca.Execution.count_stale/2" => @retention_primitive,
-    "Arca.Execution.delete_ids/2" => @retention_primitive,
-    "Arca.Execution.delete_older_than/2" => @retention_primitive,
-    "Arca.Execution.delete_older_than_days/2" => @retention_primitive,
-    "Arca.Execution.ids_older_than_days/2" => @retention_primitive,
+    "Arca.DecisionLog.count_before/2" => @from_prune,
+    "Arca.DecisionLog.delete_before/2" => @from_prune,
+    "Arca.Execution.count_older_than_days/2" => @from_prune,
+    "Arca.Execution.count_stale/2" => @from_prune,
+    "Arca.Execution.delete_ids/2" => @through_execution_rows,
+    "Arca.Execution.delete_older_than/2" => @uncalled,
+    "Arca.Execution.delete_older_than_days/2" => @uncalled,
+    "Arca.Execution.ids_older_than_days/2" => @from_prune,
     "Arca.Execution.list/1" =>
       "`Opus.Record.list/2` and the `record` tool's `list` pass the athanor of the " <>
         "context or actor they hold; the actor-first head moves with those callers",
-    "Arca.Execution.stale_ids/2" => @retention_primitive,
-    "Arca.ExecutionAttempts.count_intents_before/2" => @retention_primitive,
-    "Arca.ExecutionAttempts.delete_intents_before/2" => @retention_primitive,
-    "Arca.FrameCredentials.count_revoked_before/2" => @retention_primitive,
-    "Arca.FrameCredentials.delete_revoked_before/2" => @retention_primitive,
-    "Arca.McpLog.count_before/2" => @retention_primitive,
-    "Arca.McpLog.delete_before/2" => @retention_primitive
+    "Arca.Execution.stale_ids/2" => @from_prune,
+    "Arca.ExecutionAttempts.count_intents_before/2" => @from_prune,
+    "Arca.ExecutionAttempts.delete_intents_before/2" => @from_prune,
+    "Arca.FrameCredentials.count_revoked_before/2" => @from_prune,
+    "Arca.FrameCredentials.delete_revoked_before/2" => @from_prune,
+    "Arca.McpLog.count_before/2" => @from_prune,
+    "Arca.McpLog.delete_before/2" => @from_prune
   }
 
   @tenant_keys [:athanor_id, :actor, :tenant]
@@ -170,13 +179,24 @@ defmodule Arca.TenantArgumentOrderTest do
   # The public functions of one source that read the tenant from an options
   # argument without an actor-first head, as `{label, line}`, where label is
   # `Module.function/arity`: directly, or through a private function of the
-  # same module they call.
+  # same module they call. A pipe is read as the call it is, so
+  # `opts |> Keyword.fetch!(:athanor_id)` reads as
+  # `Keyword.fetch!(opts, :athanor_id)`.
   defp keyword_tenant_readers(source) do
     source
     |> Code.string_to_quoted!()
+    |> Macro.prewalk(&unpipe/1)
     |> modules()
     |> Enum.flat_map(fn {module, clauses} -> option_readers(module, clauses) end)
   end
+
+  defp unpipe({:|>, _, [left, {call, meta, args}]}) when is_list(args),
+    do: {call, meta, [left | args]}
+
+  defp unpipe({:|>, _, [left, {call, meta, context}]}) when is_atom(call) and is_atom(context),
+    do: {call, meta, [left]}
+
+  defp unpipe(node), do: node
 
   defp modules(ast) do
     {_ast, found} =
@@ -194,7 +214,8 @@ defmodule Arca.TenantArgumentOrderTest do
   defp clauses({:__block__, _, body}), do: Enum.flat_map(body, &clause/1)
   defp clauses(body), do: clause(body)
 
-  defp clause({kind, meta, [head, body]}) when kind in [:def, :defp] do
+  # A clause, or a bodiless head that declares defaults (`body: nil`).
+  defp clause({kind, meta, [head | body]}) when kind in [:def, :defp] and length(body) <= 1 do
     {name, args, guard} = head_parts(head)
 
     [
@@ -204,7 +225,7 @@ defmodule Arca.TenantArgumentOrderTest do
         arity: length(args),
         args: args,
         guard: guard,
-        body: body,
+        body: List.first(body),
         line: meta[:line]
       }
     ]
@@ -220,9 +241,29 @@ defmodule Arca.TenantArgumentOrderTest do
   defp head_parts({name, _, args}) when is_atom(name) and is_list(args), do: {name, args, nil}
   defp head_parts({name, _, _context}) when is_atom(name), do: {name, [], nil}
 
+  # A function with defaults is every arity it generates: a call to any of
+  # them reaches its clauses. The defaults are declared on a clause or on a
+  # bodiless head.
   defp option_readers(module, clauses) do
-    by_function = Enum.group_by(clauses, &{&1.name, &1.arity})
-    private = for %{kind: :defp} = c <- clauses, into: MapSet.new(), do: {c.name, c.arity}
+    defaults =
+      Enum.reduce(clauses, %{}, fn c, acc ->
+        count = Enum.count(c.args, &match?({:\\, _, _}, &1))
+        Map.update(acc, {c.kind, c.name, c.arity}, count, &max(&1, count))
+      end)
+
+    arities = fn c -> (c.arity - Map.fetch!(defaults, {c.kind, c.name, c.arity}))..c.arity end
+    clauses = Enum.reject(clauses, &is_nil(&1.body))
+
+    by_function =
+      for c <- clauses, arity <- arities.(c), reduce: %{} do
+        acc -> Map.update(acc, {c.name, arity}, [c], &(&1 ++ [c]))
+      end
+
+    private =
+      for %{kind: :defp} = c <- clauses,
+          arity <- arities.(c),
+          into: MapSet.new(),
+          do: {c.name, arity}
 
     reads? = fn function ->
       by_function |> Map.get(function, []) |> Enum.any?(&reads_tenant?/1)
@@ -487,7 +528,7 @@ defmodule Arca.TenantArgumentOrderTest do
     end
   end
 
-  test "the keyword-tenant detector sees the direct and the delegated read, and no payload" do
+  test "the keyword-tenant detector sees the direct, piped and delegated read, and no payload" do
     planted = ~S"""
     defmodule Arca.Planted do
       def by_option(opts), do: Keyword.fetch!(opts, :athanor_id)
@@ -503,6 +544,14 @@ defmodule Arca.TenantArgumentOrderTest do
         athanor_id
       end
 
+      def by_pipe(opts), do: opts |> Keyword.fetch!(:athanor_id)
+
+      def through_a_default(opts), do: defaulted(opts)
+
+      def through_a_bodiless_default(opts), do: opts |> headed()
+
+      def piped_option(opts), do: opts |> Keyword.get(:limit) |> max(1)
+
       def actor_first(%Prima.Actor{athanor_id: athanor_id}, opts)
           when is_binary(athanor_id) and athanor_id != "",
           do: {athanor_id, Keyword.get(opts, :limit, 20)}
@@ -517,6 +566,11 @@ defmodule Arca.TenantArgumentOrderTest do
         limit = Keyword.get(opts, :limit)
         {limit, Keyword.get(opts, :tenant)}
       end
+
+      defp defaulted(opts, _unused \\ nil), do: Keyword.fetch!(opts, :tenant)
+
+      defp headed(opts, extra \\ nil)
+      defp headed(opts, _extra), do: Keyword.get(opts, :actor)
     end
     """
 
@@ -525,7 +579,10 @@ defmodule Arca.TenantArgumentOrderTest do
              "Arca.Planted.through_a_helper/1",
              "Arca.Planted.by_access/2",
              "Arca.Planted.from_a_map/1",
-             "Arca.Planted.matched/1"
+             "Arca.Planted.matched/1",
+             "Arca.Planted.by_pipe/1",
+             "Arca.Planted.through_a_default/1",
+             "Arca.Planted.through_a_bodiless_default/1"
            ]
   end
 

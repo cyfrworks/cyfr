@@ -10,7 +10,10 @@ defmodule Arca.PolicyLog do
 
   The rows are security rows: Sanctum is their one reader
   (`Sanctum.PolicyLog`, `Sanctum.Providers.PolicyLog`), and every reader
-  here takes the caller's actor first and scopes to its athanor.
+  here takes the caller's actor first. `list/2` and the retention
+  primitives read the actor's athanor alone; `get_tenant/2` and
+  `get_by_request_id_tenant/2` read the actor's athanor, or every
+  athanor's for an actor of `:platform` scope.
   """
 
   import Ecto.Query
