@@ -1817,12 +1817,13 @@ defmodule Aqua.LoopTest do
     }
   end
 
-  defp vault_disclosed!(ctx, execution_id),
-    do:
-      :ok =
-        Opus.Ledger.join(Sanctum.Context.actor(ctx), execution_id, [
-          Prima.Source.new(:vault_disclosed)
-        ])
+  # What the launched app reads: a source no other step of the turn holds
+  # (the model's own key is a disclosed vault field, so the turn holds
+  # `vault_disclosed` already), so the turn holding it is the app's doing.
+  @app_read Prima.Source.outside("app-read.example")
+
+  defp app_read!(ctx, execution_id),
+    do: :ok = Opus.Ledger.join(Sanctum.Context.actor(ctx), execution_id, [@app_read])
 
   defp turn_sources(ctx, turn) do
     {:ok, %{sources: sources}} = Tape.turn(ctx, turn.id)
@@ -1834,7 +1835,7 @@ defmodule Aqua.LoopTest do
          "by its completion result",
        %{ctx: ctx, thread: thread} do
     %{app: app, turn: turn, intent: intent, at_card: shown, root_id: root_id, result: result} =
-      launch_through_loop!(ctx, thread, %{"answered" => true}, &vault_disclosed!(ctx, &1))
+      launch_through_loop!(ctx, thread, %{"answered" => true}, &app_read!(ctx, &1))
 
     assert result == :completed
 
@@ -1842,7 +1843,7 @@ defmodule Aqua.LoopTest do
     # its head and every class of them, the grant's one exit declaring no
     # flow of any.
     assert Prima.Source.new(:pinned) in shown
-    refute Prima.Source.new(:vault_disclosed) in shown
+    refute @app_read in shown
     classes = Prima.Source.classes_of(shown)
     {:ok, %{consent_id: consent_id}} = Opus.authority_for(ctx, :default, app)
 
@@ -1877,13 +1878,13 @@ defmodule Aqua.LoopTest do
     assert Arca.ExecutionEvents.data(started)["sources"] == Prima.Source.to_json_list(shown)
 
     # What the app read reached the turn by its completion result.
-    assert Prima.Source.new(:vault_disclosed) in turn_sources(ctx, turn)
+    assert @app_read in turn_sources(ctx, turn)
   end
 
   test "a launched app that fails brings its tree's ledger into the turn from its root's row",
        %{ctx: ctx, thread: thread} do
     %{turn: turn, root_id: root_id, result: result} =
-      launch_through_loop!(ctx, thread, {:error, "the app failed"}, &vault_disclosed!(ctx, &1))
+      launch_through_loop!(ctx, thread, {:error, "the app failed"}, &app_read!(ctx, &1))
 
     assert result == :completed
     {:ok, steps} = Tape.steps(ctx, turn)
@@ -1891,7 +1892,7 @@ defmodule Aqua.LoopTest do
     assert %{child_execution_id: ^root_id, outcome: "error"} =
              Enum.find(steps, &(&1.kind == "launch"))
 
-    assert Prima.Source.new(:vault_disclosed) in turn_sources(ctx, turn)
+    assert @app_read in turn_sources(ctx, turn)
   end
 
   # What an MCP client reads of `thread` (`thread.messages`, through the

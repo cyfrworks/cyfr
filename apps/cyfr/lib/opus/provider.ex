@@ -850,6 +850,11 @@ defmodule Opus.Provider do
   # the account, and the gate classes it a conflict (`Prima.Refusal`).
   defp format_root_result({:error, :approved_entry_moved} = refused), do: refused
 
+  # A root whose loaded consent revision is not the one an approved
+  # launch's card bound stays typed, so the launch answers it as a stale
+  # approval with nothing run.
+  defp format_root_result({:error, :approved_grant_moved} = refused), do: refused
+
   # A consent the root's load could not read right now, or read damaged,
   # stays typed, so the caller is answered in its own class (unavailable
   # or corrupt) and sentence, never as an authority error or a grant to

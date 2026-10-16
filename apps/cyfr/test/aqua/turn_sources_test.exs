@@ -13,7 +13,9 @@ defmodule Aqua.TurnSourcesTest do
 
   The model, the HTTP hand and the files hand are scripted; everything
   else — the loop, the gate, the cards, `approval.resolve` and the pane
-  that sends it — is real.
+  that sends it — is real. The model's key is bound as a disclosed vault
+  field, so every turn whose model ran holds `vault_disclosed`: the model
+  child's ledger joins its turn when its step closes.
   """
 
   use PrismWeb.ConnCase, async: false
@@ -175,7 +177,7 @@ defmodule Aqua.TurnSourcesTest do
       second = accept!(ctx, thread, "@aqua and now?")
       script!([reply("still fares")])
       assert :completed = run(ctx, second)
-      assert sources(ctx, second) == [host]
+      assert sources(ctx, second) == [Source.new(:vault_disclosed), host]
       assert [] = for(%{kind: kind} = s <- steps(ctx, second), kind != "model", do: s)
     end
 
@@ -200,7 +202,7 @@ defmodule Aqua.TurnSourcesTest do
       second = accept!(ctx, thread, "@aqua and now?")
       script!([reply("still fares")])
       assert :completed = run(ctx, second)
-      assert sources(ctx, second) == [host]
+      assert sources(ctx, second) == [Source.new(:vault_disclosed), host]
     end
 
     test "the prompt's pinned page and an outside-derived note in the index join without a notes.read",
@@ -212,7 +214,13 @@ defmodule Aqua.TurnSourcesTest do
       script!([reply("hello")])
       assert :completed = run(ctx, turn)
 
-      assert sources(ctx, turn) == [Source.new(:pinned), Source.new(:filed), host]
+      assert sources(ctx, turn) == [
+               Source.new(:pinned),
+               Source.new(:filed),
+               Source.new(:vault_disclosed),
+               host
+             ]
+
       [request] = chat_requests()
       assert Jason.encode!(request) =~ "kept after reading outside material: news.example"
     end
@@ -254,8 +262,8 @@ defmodule Aqua.TurnSourcesTest do
       [_ | later] = for %{kind: "model"} = s <- steps(ctx, turn), do: s
       refute Enum.any?(later, fn s -> (s.excluded || "") =~ "room_excerpt" end)
 
-      # The files read is the turn's only source.
-      assert sources(ctx, turn) == [Source.new(:files_by_grant)]
+      # The files read is the turn's only source beside the model's key.
+      assert sources(ctx, turn) == [Source.new(:files_by_grant), Source.new(:vault_disclosed)]
     end
 
     test "a note kept by a flush after an outside read carries it, and reading it elsewhere puts it back",
