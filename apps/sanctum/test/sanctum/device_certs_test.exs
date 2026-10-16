@@ -15,6 +15,11 @@ defmodule Sanctum.DeviceCertsTest do
   and the installation, so a flood naming a client never spends the
   client's. Every member counts every bound.
 
+  A client a declared restore suspended stands for nothing: no connect,
+  no request, no renewal, and its context confirms nothing, until its
+  person re-enables it under a door's proof; then it connects under its
+  certificate and renews through its channel as before.
+
   Every certificate here comes from the real ceremony
   (`Sanctum.Pairing.begin/2` under a session, `complete/3` from a glass
   holding nothing); a key is proved by what it signs.
@@ -1215,6 +1220,88 @@ defmodule Sanctum.DeviceCertsTest do
       {:ok, _} = revoke!(session_ctx, device.client_id)
       assert DeviceCerts.client_standing(ctx) == {:error, :revoked}
     end
+  end
+
+  describe "a declared restore" do
+    test "a suspended client stands for nothing until its person re-enables it, then renews as before",
+         %{session_ctx: session_ctx, user: user, athanor: athanor} do
+      device = pair!(session_ctx)
+      {:ok, ctx} = connect(device)
+      assert DeviceCerts.client_standing(ctx) == :ok
+      assert Pairing.can_confirm?(ctx)
+
+      {:ok, _restore_id} = Arca.SecurityTransitions.mark_restore(Prima.Actor.system())
+
+      assert {:ok, %{suspended_paired_client_ids: suspended}} =
+               Arca.SecurityTransitions.restore(slot: :none)
+
+      assert device.client_id in suspended
+
+      # The context it held confirms nothing and authorizes no request; a
+      # connect and a renewal are refused as a client whose standing ended.
+      assert DeviceCerts.client_standing(ctx) == {:error, :not_standing}
+      refute Pairing.can_confirm?(ctx)
+      assert DeviceCerts.verify_request(device.certificate, ctx, []) == {:error, :not_standing}
+      assert {:error, :not_standing} = connect(device)
+      assert {:error, :not_standing} = renew(device, @source)
+
+      assert DeviceCerts.paired_client(athanor.id, user.id, device.client_id) ==
+               {:error, :not_standing}
+
+      # Every session went with the restore: the person signs in again
+      # and re-enables the device on a door's re-authentication.
+      session = signed_in!(user, athanor)
+
+      assert {:error, {:confirmation_required, %{id: id, operation: "pairing.reenable"}}} =
+               Pairing.reenable(session, device.client_id, :confirmation)
+
+      {:ok, %{state: "confirmed"}} =
+        Arca.PendingConfirmations.confirm(
+          Context.actor(session),
+          Prima.Confirmation.ref(id),
+          %{proof: "oidc_reauth"}
+        )
+
+      assert {:ok, %{client: %{standing: "active"}, recovery_closed: true}} =
+               Pairing.reenable(%{session | confirmation_id: id}, device.client_id, :confirmation)
+
+      # It connects under its certificate again, and renews through its
+      # channel's exchange, which an active client is admitted to.
+      assert {:ok, again} = connect(device)
+      assert DeviceCerts.client_standing(again) == :ok
+      assert Pairing.can_confirm?(again)
+
+      challenge = challenge(device, :renew)
+      proof = Proof.sign(challenge, device.private)
+      assert {:ok, renewal} = DeviceCerts.verify_connect(connection(device), proof, challenge)
+
+      assert {:ok, %{client_id: client_id, certificate: %DeviceCert{}}} =
+               Pairing.renew(renewal, %{
+                 client_id: device.client_id,
+                 device_key: device.device_key,
+                 proof: proof
+               })
+
+      assert client_id == device.client_id
+    end
+  end
+
+  # A new session of `user` in `athanor`, as signing in again makes one.
+  defp signed_in!(user, athanor) do
+    built =
+      Context.build(
+        user_id: user.id,
+        email: user.email,
+        provider: "github",
+        athanor_id: athanor.id,
+        permissions: [:*],
+        auth_method: :oidc,
+        authenticated: true
+      )
+
+    {:ok, session} = Sanctum.TestContext.create_session(built)
+    {:ok, ctx} = Sanctum.Caller.establish(session.token, focus: athanor.id, task_supervisor: nil)
+    ctx
   end
 
   # ---------------------------------------------------------------------------

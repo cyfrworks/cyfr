@@ -7,10 +7,14 @@ defmodule Sanctum.ToolGrants do
   for one agent, kept so the question is not asked again, and the rule
   for which answers may stand.
 
-  A grant is consent state, so its rows are read and written only here.
-  The tenant is the caller's context — a caller cannot name an athanor,
-  a deciding person or a row id; `grant_row/2` and `put/2` take them from
-  the context and drop everything else the attributes carry.
+  A grant is consent state, so its rows are read and written only here,
+  but for one transition: a declared restore deletes every allow, in
+  every athanor, in the transaction that retires the backup's authority
+  (`Arca.SecurityTransitions.restore/1`), so an answer given before the
+  backup was taken is asked again, while every deny stands. The tenant is
+  the caller's context — a caller cannot name an athanor, a deciding
+  person or a row id; `grant_row/2` and `put/2` take them from the
+  context and drop everything else the attributes carry.
 
   ## Which answers may stand
 

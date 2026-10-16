@@ -30,6 +30,15 @@ defmodule Sanctum.PasskeysTest do
   pauses, and the retry verifies against the new head. Once they hold a
   fresh method here, a passkey here or a verified email a code can reach,
   they confirm their next passkey themselves, as anyone does.
+
+  After a declared restore a suspended passkey signs no one in, proves no
+  confirmation and is no fresh method. Its person re-enables it on an
+  emailed code or a door's re-authentication, or with their recovery kit,
+  never on a confirmation a passkey or device gave; that closes their
+  restore and no one else's, as the administrator's recovery does, and a
+  revoked passkey is never revived. An unenrolled administrator with no
+  door, every method suspended and no pending registration has no way
+  back in through any of these.
   """
 
   use ExUnit.Case, async: false
@@ -289,6 +298,75 @@ defmodule Sanctum.PasskeysTest do
     )
 
     on_exit(fn -> :telemetry.detach(id) end)
+  end
+
+  # A declared restore: its marker written, then consumed as the boot
+  # consumes it. Answers the restore's id.
+  defp restored! do
+    {:ok, _marked} = Arca.SecurityTransitions.mark_restore(Prima.Actor.system())
+    assert {:ok, %{restore_id: restore_id}} = Arca.SecurityTransitions.restore(slot: :none)
+    restore_id
+  end
+
+  defp restore_open(user_id) do
+    {:ok, restore_id} = Arca.SecurityTransitions.restore_open(Prima.Actor.system(), user_id)
+    restore_id
+  end
+
+  defp state(passkey_id),
+    do: Arca.Repo.one(from(p in Passkey, where: p.id == ^passkey_id, select: p.state))
+
+  # A kit credential the kit ingress would issue for the person's open
+  # restore: its challenge held, then redeemed. Answers the credential's
+  # digest.
+  defp kit_credential!(user_id, restore_id) do
+    expires_at = DateTime.add(DateTime.utc_now(), 600, :second)
+    challenge = Prima.Digest.sha256(:crypto.strong_rand_bytes(32))
+    credential = Prima.Digest.sha256(:crypto.strong_rand_bytes(32))
+    system = Prima.Actor.system()
+
+    :ok =
+      Arca.SecurityTransitions.put_kit_challenge(
+        system,
+        user_id,
+        restore_id,
+        challenge,
+        expires_at
+      )
+
+    :ok =
+      Arca.SecurityTransitions.redeem_kit_challenge(
+        system,
+        user_id,
+        restore_id,
+        challenge,
+        credential,
+        expires_at
+      )
+
+    credential
+  end
+
+  # The confirmed record `id` attributed to the passkey `passkey_id`, as no
+  # confirmation path writes it for a suspended one.
+  defp attributed!(ctx, id, passkey_id) do
+    ref = Prima.Confirmation.ref(id)
+
+    {1, _} =
+      Arca.Repo.update_all(
+        from(c in PendingConfirmation, where: c.athanor_id == ^ctx.athanor_id and c.ref == ^ref),
+        set: [confirmed_passkey_id: passkey_id]
+      )
+  end
+
+  # The code mailed for the record `id`, proving it.
+  defp code_confirmed!(ctx, id) do
+    ref = Prima.Confirmation.ref(id)
+    assert {:ok, %{method: "email"}} = Sanctum.Auth.EmailVerification.send_code(ctx, ref)
+    assert_receive {:confirmation_code_mail, mail}
+
+    assert {:ok, %{state: "confirmed"}} =
+             Sanctum.Auth.EmailVerification.verify_code(ctx, ref, TestContext.MailSink.code(mail))
   end
 
   # ---------------------------------------------------------------------------
@@ -1147,6 +1225,33 @@ defmodule Sanctum.PasskeysTest do
                        %{kind: :passkey_registered, athanor_id: ^admin_athanor}}
     end
 
+    test "after a declared restore, the administrator's activation closes the person's restore alone",
+         %{person: person, pending: pending, admin: admin, admin_athanor: admin_athanor} do
+      restore_id = restored!()
+
+      # Every session went with the restore, and the administrator's own
+      # passkey is suspended: they confirm through a door.
+      admin = %{
+        session_ctx(%{id: admin.user_id, email: admin.email}, admin_athanor)
+        | platform_admin: true
+      }
+
+      args = %{
+        user_id: person.id,
+        passkey_id: pending.passkey_id,
+        registration_digest: pending.registration_digest
+      }
+
+      assert {:error, {:confirmation_required, %{id: id}}} = Passkeys.recover_admin(admin, args)
+      reauthenticated!(admin, id)
+
+      assert {:ok, %{status: "active", recovery_closed: true}} =
+               Passkeys.recover_admin(%{admin | confirmation_id: id}, args)
+
+      assert restore_open(person.id) == nil
+      assert restore_open(admin.user_id) == restore_id
+    end
+
     test "a person who no longer stands gains no passkey, and the administrator's proof is kept",
          %{person: person, pending: pending, admin: admin, admin_auth: admin_auth} do
       args = %{
@@ -1378,6 +1483,266 @@ defmodule Sanctum.PasskeysTest do
 
       assert Passkeys.assert(ctx, row.ref, Authenticator.assertion(auth, challenge(row))) ==
                {:error, :assertion_refused}
+    end
+  end
+
+  # ---------------------------------------------------------------------------
+  # After a declared restore
+  # ---------------------------------------------------------------------------
+
+  describe "after a declared restore" do
+    # Two people with a verified email a code reaches, each with a passkey
+    # the door admits them by, and a second passkey of the first.
+    setup do
+      code_transport!()
+      %{ctx: ctx, user: user, athanor: athanor, key: key} = person!(verified: true)
+      {auth, passkey} = registered_by_code!(ctx)
+      second_auth = authenticator()
+      answer = credential(ctx, second_auth)
+
+      {:ok, %{passkey: second}} =
+        confirming(ctx, auth, &Passkeys.register(&1, %{credential: answer}))
+
+      {:ok, _} = Sanctum.Door.Store.allow("user_id", key, "ops")
+
+      %{ctx: other_ctx, user: other} = person!(verified: true)
+      {_other_auth, _other_passkey} = registered_by_code!(other_ctx)
+
+      held = Passkeys.sign_in_challenge()
+      assert {:ok, _} = Passkeys.sign_in(held, Authenticator.assertion(auth, held.challenge))
+
+      restore_id = restored!()
+
+      %{
+        user: user,
+        athanor: athanor,
+        auth: auth,
+        passkey: passkey,
+        second: second,
+        other: other,
+        restore_id: restore_id,
+        session: session_ctx(user, athanor)
+      }
+    end
+
+    test "a suspended passkey signs no one in and proves no confirmation", %{
+      session: session,
+      auth: auth,
+      passkey: passkey
+    } do
+      assert state(passkey.id) == "suspended"
+
+      held = Passkeys.sign_in_challenge()
+
+      assert Passkeys.sign_in(held, Authenticator.assertion(auth, held.challenge)) ==
+               {:error, :assertion_refused}
+
+      row = opened!(session)
+
+      assert Passkeys.assert(session, row.ref, Authenticator.assertion(auth, challenge(row))) ==
+               {:error, :assertion_refused}
+
+      assert {:ok, %{state: "pending"}} =
+               Arca.PendingConfirmations.get(Context.actor(session), row.ref)
+
+      # The person reads it as suspended.
+      assert {:ok, listed} = Passkeys.list(session)
+      assert Enum.find(listed, &(&1.id == passkey.id)).state == "suspended"
+    end
+
+    test "an emailed code re-enables a passkey, closing its person's restore alone; it proves again",
+         %{
+           session: session,
+           user: user,
+           auth: auth,
+           passkey: passkey,
+           other: other,
+           restore_id: restore_id
+         } do
+      assert {:error, {:confirmation_required, %{id: id, operation: "passkey.reenable"}}} =
+               Passkeys.reenable(session, passkey.id, :confirmation)
+
+      code_confirmed!(session, id)
+      passkey_id = passkey.id
+
+      assert {:ok, %{passkey: %{id: ^passkey_id, state: "active"}, recovery_closed: true}} =
+               Passkeys.reenable(%{session | confirmation_id: id}, passkey_id, :confirmation)
+
+      assert restore_open(user.id) == nil
+      assert restore_open(other.id) == restore_id
+
+      row = opened!(session)
+
+      assert {:ok, %{state: "confirmed"}} =
+               Passkeys.assert(session, row.ref, Authenticator.assertion(auth, challenge(row)))
+
+      held = Passkeys.sign_in_challenge()
+      assert {:ok, _} = Passkeys.sign_in(held, Authenticator.assertion(auth, held.challenge))
+
+      # Nothing is left to re-enable on it.
+      assert {:error, %Prima.Refusal{reason: :not_suspended, class: :conflict}} =
+               Passkeys.reenable(session, passkey_id, :confirmation)
+    end
+
+    test "a suspended passkey never approves its own return", %{
+      session: session,
+      user: user,
+      auth: auth,
+      passkey: passkey,
+      restore_id: restore_id
+    } do
+      assert {:error, {:confirmation_required, %{id: id}}} =
+               Passkeys.reenable(session, passkey.id, :confirmation)
+
+      ref = Prima.Confirmation.ref(id)
+      {:ok, row} = Arca.PendingConfirmations.get(Context.actor(session), ref)
+
+      # Its own assertion over the record proves nothing, and no proof of
+      # its can be recorded.
+      assert Passkeys.assert(session, ref, Authenticator.assertion(auth, challenge(row))) ==
+               {:error, :assertion_refused}
+
+      assert {:error, :revoked} =
+               Arca.PendingConfirmations.confirm(Context.actor(session), ref, %{
+                 proof: "passkey",
+                 passkey_id: passkey.id
+               })
+
+      # A record attributed to it is refused while the person's restore is
+      # open, whatever let it be recorded.
+      code_confirmed!(session, id)
+      attributed!(session, id, passkey.id)
+
+      assert Passkeys.reenable(%{session | confirmation_id: id}, passkey.id, :confirmation) ==
+               {:error, Sanctum.Pairing.restore_source_refusal()}
+
+      assert state(passkey.id) == "suspended"
+      assert restore_open(user.id) == restore_id
+    end
+
+    test "a revoked passkey is never revived, by a confirmation or by the kit", %{
+      session: session,
+      user: user,
+      passkey: passkey,
+      restore_id: restore_id
+    } do
+      {:ok, _} = Arca.Passkeys.revoke(Prima.Actor.system(), passkey.id)
+
+      assert {:error, %Prima.Refusal{reason: :revoked, class: :conflict}} =
+               Passkeys.reenable(session, passkey.id, :confirmation)
+
+      digest = kit_credential!(user.id, restore_id)
+
+      assert {:error, %Prima.Refusal{reason: :revoked}} =
+               Passkeys.reenable(
+                 session,
+                 passkey.id,
+                 {:kit, %{user_id: user.id, credential_digest: digest}}
+               )
+
+      assert state(passkey.id) == "revoked"
+      assert restore_open(user.id) == restore_id
+    end
+
+    test "the kit re-enables a passkey while its person's restore is open, and nothing after", %{
+      user: user,
+      passkey: passkey,
+      second: second,
+      other: other,
+      restore_id: restore_id
+    } do
+      digest = kit_credential!(user.id, restore_id)
+      kit = fn digest -> {:kit, %{user_id: user.id, credential_digest: digest}} end
+      nobody = Context.build(%{authenticated: false})
+
+      assert Passkeys.reenable(nobody, passkey.id, kit.("sha256:" <> String.duplicate("0", 64))) ==
+               {:error, Sanctum.Pairing.kit_refusal()}
+
+      # Another person's kit reaches none of theirs.
+      other_digest = kit_credential!(other.id, restore_id)
+
+      assert Passkeys.reenable(
+               nobody,
+               passkey.id,
+               {:kit, %{user_id: other.id, credential_digest: other_digest}}
+             ) == {:error, {:not_found, "passkey", passkey.id}}
+
+      assert {:ok, %{passkey: %{state: "active"}, recovery_closed: true}} =
+               Passkeys.reenable(nobody, passkey.id, kit.(digest))
+
+      assert restore_open(user.id) == nil
+      assert restore_open(other.id) == restore_id
+
+      # The credential went with the person's restore.
+      assert Passkeys.reenable(nobody, second.id, kit.(digest)) ==
+               {:error, Sanctum.Pairing.kit_refusal()}
+
+      assert state(second.id) == "suspended"
+    end
+
+    test "an unenrolled administrator with no door, every method suspended and no pending registration, has no way back in" do
+      # A local person admitted by a door this home does not re-authenticate,
+      # with no verified email: their passkey is their one fresh method.
+      %{ctx: ctx, user: user} = person!()
+      {:ok, _} = Sanctum.Tenancy.Members.ensure(user.id, scope: "platform")
+      {auth, passkey} = registered!(ctx)
+
+      # Their last door removed while they keep the passkey, and the
+      # operator admitting them by their own id.
+      Arca.Repo.delete_all(from(i in Arca.Schemas.ExternalIdentity, where: i.user_id == ^user.id))
+
+      {:ok, _} = Sanctum.Door.Store.allow("user_id", user.id, "ops")
+      held = Passkeys.sign_in_challenge()
+      assert {:ok, _} = Passkeys.sign_in(held, Authenticator.assertion(auth, held.challenge))
+
+      system = Prima.Actor.system()
+
+      assert {:ok, %{enrollment: "none", identifier: nil}} =
+               Arca.PersonIdentities.get(system, user.id)
+
+      assert {:ok, %{scope: "platform"}} = Sanctum.Tenancy.Members.platform_seat(user.id)
+
+      restore_id = restored!()
+
+      # The passkey door is shut, and no other door, re-authentication or
+      # code reaches them: they hold no session, and cannot sign in.
+      held = Passkeys.sign_in_challenge()
+
+      assert Passkeys.sign_in(held, Authenticator.assertion(auth, held.challenge)) ==
+               {:error, :assertion_refused}
+
+      assert {:ok, []} = Arca.Users.identities(system, user.id)
+      refute Sanctum.Auth.OIDC.reauth_available?(user.id)
+      refute Sanctum.Auth.EmailVerification.code_available?(user.id)
+      assert sessions(user.id) == []
+
+      refute Passkeys.fresh_method?(
+               Context.build(user_id: user.id, athanor_id: ctx.athanor_id, authenticated: true)
+             )
+
+      # The administrator's recovery activates only a pending registration,
+      # and they have none: the suspended passkey is not one, and making one
+      # needs a session they cannot get.
+      assert {:ok, []} = Arca.Passkeys.list(system, user.id, state: :pending)
+      %{ctx: other_admin, user: other} = person!()
+      {:ok, _} = Sanctum.Tenancy.Members.ensure(other.id, scope: "platform")
+
+      assert Passkeys.recover_admin(%{other_admin | platform_admin: true}, %{
+               user_id: user.id,
+               passkey_id: passkey.id,
+               registration_digest: passkey.registration_digest
+             }) == {:error, {:not_found, "pending passkey", passkey.id}}
+
+      # The kit ingress is for an enrolled person, and they are not: no kit
+      # credential stands for them, so the kit re-enables nothing.
+      assert Passkeys.reenable(
+               Context.build(%{authenticated: false}),
+               passkey.id,
+               {:kit, %{user_id: user.id, credential_digest: Prima.Digest.sha256("no kit")}}
+             ) == {:error, Sanctum.Pairing.kit_refusal()}
+
+      assert state(passkey.id) == "suspended"
+      assert restore_open(user.id) == restore_id
     end
   end
 

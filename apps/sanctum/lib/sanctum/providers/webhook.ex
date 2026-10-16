@@ -4,7 +4,7 @@
 defmodule Sanctum.Providers.Webhook do
   @moduledoc """
   Webhook tool handlers for the Sanctum MCP provider — create, list, get,
-  update, revoke, and rotate inbound webhooks.
+  update, revoke, rotate, and re-enable inbound webhooks.
 
   Extracted from `Sanctum.Provider`; behaviour preserved exactly.
   """
@@ -177,6 +177,22 @@ defmodule Sanctum.Providers.Webhook do
           kind: :write,
           planes: [:external],
           permission: :admin
+        ),
+        Operation.new(
+          "webhook",
+          "reenable",
+          "Re-enable a webhook a restore suspended",
+          [
+            Arg.new("webhook_id", :string,
+              required: true,
+              description:
+                "The id of your webhook that restoring this home from a backup suspended (webhook.list shows it)"
+            )
+          ],
+          kind: :write,
+          planes: [:external],
+          permission: :admin,
+          consent: :interactive
         )
       ],
       description:
@@ -361,11 +377,63 @@ defmodule Sanctum.Providers.Webhook do
     {:error, "Missing required argument: name"}
   end
 
+  def handle(%Context{} = ctx, %{"action" => "reenable", "webhook_id" => webhook_id})
+      when is_binary(webhook_id) do
+    case Sanctum.Webhook.reenable(ctx, webhook_id, :confirmation) do
+      {:ok, hook} ->
+        {:ok, %{reenabled: hook}}
+
+      {:error, reason} ->
+        {:error, reenable_refusal(reason)}
+    end
+  end
+
+  def handle(_ctx, %{"action" => "reenable"}) do
+    {:error,
+     %Prima.Refusal{
+       class: :invalid_argument,
+       reason: :missing_argument,
+       message: "Name the webhook to re-enable by its id (webhook_id)"
+     }}
+  end
+
   def handle(_ctx, _args) do
     {:error, Prima.Provider.invalid_action("webhook", action_enum())}
   end
 
   # --- helpers ---
+
+  # A re-enable's refusals, each in the sentence the person reads; the
+  # confirmation's own answers pass as they are.
+  defp reenable_refusal(:not_found),
+    do: %Prima.Refusal{
+      class: :not_found,
+      reason: :not_found,
+      message: "You have no webhook with that id in this athanor"
+    }
+
+  defp reenable_refusal(:revoked),
+    do: %Prima.Refusal{
+      class: :conflict,
+      reason: :revoked,
+      message:
+        "That webhook was revoked, and a revoked webhook is never re-enabled: create a new one"
+    }
+
+  defp reenable_refusal(:not_suspended),
+    do: %Prima.Refusal{
+      class: :conflict,
+      reason: :not_suspended,
+      message: "That webhook is not suspended, so there is nothing to re-enable"
+    }
+
+  defp reenable_refusal(reason) when reason in [:database_error, :unavailable],
+    do: Prima.Refusal.classify(:unavailable)
+
+  defp reenable_refusal(reason) when Sanctum.Issuance.standing_refusal?(reason),
+    do: Sanctum.Issuance.standing_refusal(reason)
+
+  defp reenable_refusal(reason), do: reason
 
   defp broadcast_webhooks_changed(ctx),
     do: Sanctum.Telemetry.webhooks_changed(Sanctum.Context.athanor!(ctx))

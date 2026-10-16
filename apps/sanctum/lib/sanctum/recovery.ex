@@ -847,6 +847,292 @@ defmodule Sanctum.Recovery do
   end
 
   # ===========================================================================
+  # After a declared restore: the checklist and the kit
+  # ===========================================================================
+
+  @kit_challenge_ms 5 * 60 * 1000
+  @kit_credential_ms 10 * 60 * 1000
+  @kit_challenges_per_minute 20
+  @reenables ~w(key.reenable webhook.reenable pairing.reenable passkey.reenable)
+
+  @typedoc """
+  What a kit credential admits, as `Sanctum.Caller.establish_kit/2` hands
+  it on: the person, their open restore and the credential's digest, which
+  each re-enable reads standing again in its own transaction.
+  """
+  @type kit_grant :: %{user_id: String.t(), restore_id: String.t(), credential_digest: String.t()}
+
+  @doc """
+  The person's restore checklist (`ARCHITECTURE.md` §6.9) while they
+  recover from a declared restore: every key, webhook, paired device and
+  passkey of theirs held suspended, every profile to re-consent and every
+  vault entry to rotate in the athanors they sit in, and every instance
+  entry to rotate when they administer the platform
+  (`Arca.SecurityTransitions.restore_checklist/3`). `{:ok, nil}` for a
+  person no declared restore found, whose blocked profiles and entries are
+  none of a restore's doing, and for one who has recovered with nothing
+  left on it.
+  """
+  @spec checklist(Context.t()) :: {:ok, map() | nil} | {:error, term()}
+  def checklist(%Context{} = ctx) do
+    with {:ok, user_id} <- person(ctx) do
+      case Arca.SecurityTransitions.restore_checklist(system(), user_id,
+             platform_admin: ctx.platform_admin == true
+           ) do
+        {:ok, list} -> {:ok, if(empty_checklist?(list), do: nil, else: list)}
+        {:error, _unanswered} -> {:error, :unavailable}
+      end
+    end
+  end
+
+  defp empty_checklist?(%{restored: false}), do: true
+
+  defp empty_checklist?(list) do
+    is_nil(list.restore_id) and
+      Enum.all?(
+        [
+          :api_keys,
+          :webhooks,
+          :paired_clients,
+          :passkeys,
+          :profiles,
+          :vault_entries,
+          :instance_entries
+        ],
+        &(Map.fetch!(list, &1) == [])
+      )
+  end
+
+  @doc """
+  A kit challenge for the person `identifier` names, while their row of a
+  declared restore is open (the kit ingress, `POST /restore/kit/challenge`):
+  32 random bytes, held by their digest for five minutes on the database's
+  clock, and the restore id the proof must name. The identifier must name
+  a local person of this home who is enrolled and in good standing;
+  anyone else, and a person whose row has closed, are refused alike as
+  `:not_recovering`. Counted against the person's own budget, twenty a
+  minute, on the cell's clock (`Arca.RequestRateWindows`).
+  """
+  @spec kit_challenge(term()) ::
+          {:ok, %{challenge: String.t(), restore_id: String.t(), expires_at: DateTime.t()}}
+          | {:error, :not_recovering | {:rate_limited, non_neg_integer()} | :unavailable}
+  def kit_challenge(identifier) do
+    with {:ok, user_id, restore_id} <- recovering(identifier),
+         :ok <- kit_budget(user_id),
+         {:ok, now} <-
+           guarded("kit challenge clock", fn -> {:ok, Arca.ServerMetaStorage.now!()} end) do
+      challenge = :crypto.strong_rand_bytes(32)
+      expires_at = DateTime.add(now, @kit_challenge_ms, :millisecond)
+
+      case Arca.SecurityTransitions.put_kit_challenge(
+             system(),
+             user_id,
+             restore_id,
+             challenge_digest(challenge),
+             expires_at
+           ) do
+        :ok ->
+          {:ok,
+           %{challenge: Encoding.b64(challenge), restore_id: restore_id, expires_at: expires_at}}
+
+        {:error, :closed} ->
+          {:error, :not_recovering}
+
+        {:error, _unanswered} ->
+          {:error, :unavailable}
+      end
+    end
+  end
+
+  @doc """
+  Verify a kit proof (`Prima.Identity.RestoreKit`, protocol
+  `cyfr/restore-kit/v1`) and answer the person's kit credential (the kit
+  ingress, `POST /restore/kit`). The proof names the person's identifier,
+  their open restore and a challenge this home holds for them; it must be
+  signed by a recovery key of the identity's head read fresh from its
+  directory now, never by a key the restored home holds. The challenge is
+  redeemed once, in the transaction that records the credential, with
+  the person's open row locked.
+
+  The credential is the token `rkc_<user id>.<32 random bytes>`, alive ten
+  minutes and only while the person's row stays open; this home keeps its
+  digest alone. It admits the four re-enable operations and their
+  previews and nothing else (`Sanctum.Caller.establish_kit/2`).
+
+  Refusals: `:invalid_proof` (malformed), `:not_recovering` (no enrolled
+  local person, or their row under that restore is closed),
+  `:not_a_holder` (no recovery key of the fresh head signed it),
+  `:challenge_refused` (not held for this person and restore, expired, or
+  redeemed already), the retryable `:directory_unavailable`, and
+  `:unavailable`.
+  """
+  @spec kit_proof(term(), opts()) ::
+          {:ok, %{credential: String.t(), expires_at: DateTime.t(), user_id: String.t()}}
+          | {:error, term()}
+  def kit_proof(map, opts \\ []) do
+    opts = client_options!(opts)
+
+    with {:ok, proof} <- read_kit_proof(map),
+         {:ok, user_id, restore_id} <- recovering(proof.identifier),
+         :ok <- same_restore(proof.restore_id, restore_id),
+         {:ok, %{genesis: genesis}} <- restored_genesis(user_id),
+         {:ok, state} <- live_state(proof.identifier, genesis, opts),
+         {:ok, _key} <- kit_signer(proof, state),
+         {:ok, now} <-
+           guarded("kit credential clock", fn -> {:ok, Arca.ServerMetaStorage.now!()} end) do
+      token = "rkc_" <> user_id <> "." <> Encoding.b64(:crypto.strong_rand_bytes(32))
+      expires_at = DateTime.add(now, @kit_credential_ms, :millisecond)
+
+      case Arca.SecurityTransitions.redeem_kit_challenge(
+             system(),
+             user_id,
+             restore_id,
+             challenge_digest(proof.challenge),
+             Prima.Digest.sha256(token),
+             expires_at
+           ) do
+        :ok -> {:ok, %{credential: token, expires_at: expires_at, user_id: user_id}}
+        {:error, :challenge_refused} -> {:error, :challenge_refused}
+        {:error, :closed} -> {:error, :not_recovering}
+        {:error, _unanswered} -> {:error, :unavailable}
+      end
+    end
+  end
+
+  @doc false
+  @spec kit_grant(term()) :: {:ok, kit_grant()} | {:error, :invalid_credential | :unavailable}
+  # The kit credential `token` presents, read standing now: its person is
+  # in good standing and their row under its restore is open. What
+  # `Sanctum.Caller.establish_kit/2` admits on; each write reads it again.
+  def kit_grant("rkc_" <> rest = token) do
+    with [user_id, _secret] <- String.split(rest, ".", parts: 2),
+         true <- Prima.PersonId.person?(user_id),
+         digest = Prima.Digest.sha256(token),
+         {:ok, restore_id} <- Arca.SecurityTransitions.kit_credential(system(), user_id, digest),
+         {:ok, %{status: "active"}} <- Arca.Users.get(system(), user_id) do
+      {:ok, %{user_id: user_id, restore_id: restore_id, credential_digest: digest}}
+    else
+      {:error, :database_error} -> {:error, :unavailable}
+      _refused -> {:error, :invalid_credential}
+    end
+  end
+
+  def kit_grant(_token), do: {:error, :invalid_credential}
+
+  @doc """
+  The re-enable operations a kit credential admits, and nothing else.
+  """
+  @spec kit_operations() :: [String.t()]
+  def kit_operations, do: @reenables
+
+  @doc """
+  One re-enable, or its preview, under a kit credential
+  (`Sanctum.Caller.establish_kit/2` admitted it for exactly `operation`):
+  with no item named, the person's items of that class held suspended
+  (`key.reenable` their keys, `webhook.reenable` their webhooks,
+  `pairing.reenable` their devices, `passkey.reenable` their passkeys);
+  with one named (`key_id`, `webhook_id`, `client_id`, `passkey_id`),
+  that item re-enabled, the credential read standing again in the
+  write's own transaction. Re-enabling a device or a passkey closes the
+  person's row, and with it the credential.
+  """
+  @spec kit_reenable(Context.t(), kit_grant(), String.t(), map()) ::
+          {:ok, map()} | {:error, term()}
+  def kit_reenable(%Context{} = ctx, %{user_id: user_id} = grant, operation, args)
+      when operation in @reenables and is_map(args) do
+    proof = {:kit, Map.take(grant, [:user_id, :credential_digest])}
+
+    case {operation, Map.get(args, item_arg(operation))} do
+      {_operation, nil} -> kit_preview(user_id, operation)
+      {"key.reenable", id} when is_binary(id) -> Sanctum.ApiKey.reenable(ctx, id, proof)
+      {"webhook.reenable", id} when is_binary(id) -> Sanctum.Webhook.reenable(ctx, id, proof)
+      {"pairing.reenable", id} when is_binary(id) -> Sanctum.Pairing.reenable(ctx, id, proof)
+      {"passkey.reenable", id} when is_binary(id) -> Sanctum.Passkeys.reenable(ctx, id, proof)
+      {_operation, _malformed} -> {:error, {:invalid_argument, "The item id is a string"}}
+    end
+  end
+
+  def kit_reenable(%Context{}, _grant, _operation, _args),
+    do: {:error, :operation_not_permitted}
+
+  defp item_arg("key.reenable"), do: "key_id"
+  defp item_arg("webhook.reenable"), do: "webhook_id"
+  defp item_arg("pairing.reenable"), do: "client_id"
+  defp item_arg("passkey.reenable"), do: "passkey_id"
+
+  defp kit_preview(user_id, operation) do
+    case Arca.SecurityTransitions.restore_checklist(system(), user_id) do
+      {:ok, list} -> {:ok, %{items: Map.fetch!(list, preview_class(operation))}}
+      {:error, _unanswered} -> {:error, :unavailable}
+    end
+  end
+
+  defp preview_class("key.reenable"), do: :api_keys
+  defp preview_class("webhook.reenable"), do: :webhooks
+  defp preview_class("pairing.reenable"), do: :paired_clients
+  defp preview_class("passkey.reenable"), do: :passkeys
+
+  # The person a kit names, recovering: a local, enrolled person of this
+  # home, in good standing, with a row of a declared restore open. Every
+  # other answer is the same refusal, so the ingress says nothing more
+  # about an identifier than that it is not recovering here.
+  defp recovering(identifier) do
+    with true <- Encoding.identifier?(identifier),
+         {:ok, %{user_id: user_id, provenance: "local", enrollment: "enrolled"}} <-
+           Arca.PersonIdentities.lookup_identifier(system(), identifier),
+         {:ok, %{status: "active"}} <- Arca.Users.get(system(), user_id),
+         {:ok, restore_id} when is_binary(restore_id) <-
+           Arca.SecurityTransitions.restore_open(system(), user_id) do
+      {:ok, user_id, restore_id}
+    else
+      {:error, :database_error} -> {:error, :unavailable}
+      _not_recovering -> {:error, :not_recovering}
+    end
+  end
+
+  defp kit_budget(user_id) do
+    case Arca.RequestRateWindows.claim(
+           system(),
+           :restore_kit,
+           user_id,
+           @kit_challenges_per_minute,
+           60_000
+         ) do
+      :ok -> :ok
+      {:error, {:rate_limited, retry_after_ms}} -> {:error, {:rate_limited, retry_after_ms}}
+      {:error, _unanswered} -> {:error, :unavailable}
+    end
+  end
+
+  defp read_kit_proof(map) do
+    case Identity.RestoreKit.decode(map) do
+      {:ok, proof} -> {:ok, proof}
+      {:error, _malformed} -> {:error, :invalid_proof}
+    end
+  end
+
+  defp same_restore(restore_id, restore_id), do: :ok
+  defp same_restore(_named, _open), do: {:error, :not_recovering}
+
+  # The genesis the person's enrollment registered: the locator of their
+  # directory, which the restored identity row may name at a head the
+  # directory has since moved past.
+  defp restored_genesis(user_id) do
+    case Arca.IdentityAttempts.genesis(system(), user_id) do
+      {:ok, binding} -> {:ok, binding}
+      {:error, :not_found} -> {:error, :not_recovering}
+      {:error, _unanswered} -> {:error, :unavailable}
+    end
+  end
+
+  defp kit_signer(proof, %State{recovery_keys: keys}) do
+    case Identity.RestoreKit.signer(proof, keys) do
+      {:ok, key} -> {:ok, key}
+      {:error, _wrong_signer} -> {:error, :not_a_holder}
+    end
+  end
+
+  # ===========================================================================
   # Restore
   # ===========================================================================
 

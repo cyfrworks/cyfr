@@ -364,12 +364,16 @@ defmodule Sanctum.Webhook do
   called, and not before — opens the current and, inside its grace window,
   previous secret, answering each as a binary or `:unreadable`, for
   `verify_with_grace/4`. The sealed columns are not carried as fields,
-  and a disabled row carries no secret at all. The plug that verifies
-  drops the function from the connection once it has.
+  and a disabled row carries no secret at all. A webhook a declared
+  restore suspended is `{:error, :not_found}`, as a slug no row holds,
+  and its secrets are never opened. The plug that verifies drops the
+  function from the connection once it has.
   """
   @spec resolve_ingress(String.t()) :: {:ok, map()} | {:error, :not_found | :unavailable}
   def resolve_ingress(slug) when is_binary(slug) do
     case WebhookStorage.get_by_slug(slug) do
+      # A declared restore suspended it: refused as a slug no row holds.
+      {:ok, %{suspended: true}} -> {:error, :not_found}
       {:ok, row} -> {:ok, ingress_view(row)}
       {:error, :not_found} -> {:error, :not_found}
       {:error, _unreadable} -> {:error, :unavailable}
@@ -382,7 +386,7 @@ defmodule Sanctum.Webhook do
   defp ingress_view(row) do
     view = Map.drop(row, [:secret_encrypted, :previous_secret_encrypted])
 
-    if row.enabled == true do
+    if row.enabled == true and row.suspended == false do
       aad = webhook_aad(row)
       current = row.secret_encrypted
       previous = Map.get(row, :previous_secret_encrypted)
@@ -459,6 +463,128 @@ defmodule Sanctum.Webhook do
          rotated_at: now
        }}
     end
+  end
+
+  @doc """
+  Re-enable the webhook `webhook_id` that a declared restore suspended,
+  one the person created, under `proof` (`t:Sanctum.ApiKey.proof/0`).
+
+  Under `:confirmation`, `ctx` is the person's own, in the webhook's
+  athanor: the change (`webhook.reenable`) is asked first
+  (`Sanctum.Consent.Authz.check/3`, which may answer the confirmation
+  signal), and in the transaction that writes the webhook, after its row
+  is locked, the confirmation is consumed and must be one
+  `Sanctum.Pairing.restore_confirmed/1` admits: while the person's
+  restore row is open, never one a passkey or paired device gave.
+
+  Under `{:kit, %{user_id, credential_digest}}` no confirmation is asked:
+  the webhook is found among the person's suspended webhooks in whichever
+  athanor holds it, and in the transaction that writes it the person's
+  restore row must be open and the kit credential still standing there.
+
+  Refusals: `:not_found` for a webhook that is not the person's,
+  `:revoked` for a disabled one, which is never revived, `:not_suspended`
+  for one that already stands, and `:not_standing` for a kit credential
+  that no longer stands; a confirmation's own refusals pass as they are.
+  """
+  @spec reenable(Context.t(), String.t(), Sanctum.ApiKey.proof()) ::
+          {:ok, map()} | {:error, term()}
+  def reenable(%Context{} = ctx, webhook_id, :confirmation) when is_binary(webhook_id) do
+    with :ok <- tenant(ctx),
+         {:ok, user_id} <- person(ctx),
+         actor = actor!(ctx),
+         {:ok, row} <- WebhookStorage.get_created_webhook(actor, user_id, webhook_id),
+         :ok <- reenablable(row),
+         change = reenable_change(row),
+         :ok <- Sanctum.Consent.Authz.check(ctx, :restore_reenable, change),
+         {:ok, row} <-
+           WebhookStorage.reenable(actor, user_id, webhook_id,
+             verify: fn _row -> confirmed_reenable(ctx, change) end
+           ) do
+      Sanctum.Consent.Authz.consumed(ctx)
+      reenabled(row)
+    end
+  end
+
+  def reenable(%Context{}, webhook_id, {:kit, %{user_id: user_id, credential_digest: digest}})
+      when is_binary(webhook_id) and is_binary(user_id) and is_binary(digest) do
+    with {:ok, athanor_id} <- suspended_webhook_athanor(user_id, webhook_id),
+         {:ok, row} <-
+           WebhookStorage.reenable(Prima.Actor.in_athanor(athanor_id), user_id, webhook_id,
+             verify: fn _row -> Sanctum.Pairing.kit_confirmed(user_id, digest) end
+           ) do
+      reenabled(row)
+    end
+  end
+
+  defp tenant(ctx) do
+    case Context.tenant_ok(ctx) do
+      {:error, :missing_tenant} -> {:error, :athanor_required}
+      :ok -> :ok
+    end
+  end
+
+  defp person(%Context{user_id: user_id}) when is_binary(user_id) and user_id != "",
+    do: {:ok, user_id}
+
+  defp person(%Context{}), do: {:error, :unauthenticated}
+
+  # Asked before a confirmation is: a webhook no proof could re-enable
+  # asks for none. The write reads the row again under its lock.
+  defp reenablable(%{enabled: false}), do: {:error, :revoked}
+  defp reenablable(%{suspended: true}), do: :ok
+  defp reenablable(%{}), do: {:error, :not_suspended}
+
+  defp reenable_change(row) do
+    %{
+      operation: "webhook.reenable",
+      arguments: %{"webhook_id" => row.id},
+      resource: row.name,
+      details: %{
+        "effect" =>
+          "Re-enables the webhook #{row.name}, suspended when this home was restored " <>
+            "from a backup, so deliveries signed with its secret run again"
+      }
+    }
+  end
+
+  # The confirmation is consumed after the webhook's row is locked, and
+  # the person's restore row is locked after it (`restore_confirmed/1`).
+  defp confirmed_reenable(ctx, change) do
+    with :ok <- Sanctum.Consent.Authz.consume(ctx, {:restore_reenable, change}),
+         do: Sanctum.Pairing.restore_confirmed(ctx)
+  end
+
+  # The kit sees the person's suspended webhooks alone, wherever they are.
+  defp suspended_webhook_athanor(user_id, webhook_id) do
+    case Arca.SecurityTransitions.restore_checklist(Prima.Actor.system(), user_id) do
+      {:ok, %{webhooks: webhooks}} ->
+        case Enum.find(webhooks, &(&1.id == webhook_id)) do
+          %{athanor_id: athanor_id} -> {:ok, athanor_id}
+          nil -> {:error, :not_found}
+        end
+
+      {:error, _unanswered} ->
+        {:error, :database_error}
+    end
+  end
+
+  defp reenabled(row) do
+    Sanctum.Telemetry.webhooks_changed(row.athanor_id)
+
+    {:ok,
+     %{
+       id: row.id,
+       name: row.name,
+       slug: row.slug,
+       url: build_url(row.slug),
+       target_ref: row.target_ref,
+       description: row.description,
+       enabled: row.enabled,
+       suspended: row.suspended == true,
+       created_at: Prima.Time.iso8601(row.inserted_at),
+       rotated_at: Prima.Time.iso8601(row.rotated_at)
+     }}
   end
 
   # The secret is opened only once the signature (and any timestamp) is
@@ -846,6 +972,7 @@ defmodule Sanctum.Webhook do
     slug = row.slug
 
     %{
+      id: row.id,
       name: row.name,
       slug: slug,
       url: build_url(slug),
@@ -856,6 +983,7 @@ defmodule Sanctum.Webhook do
       input_template: decode_template_safely(row.input_template, slug),
       description: row.description,
       enabled: row.enabled,
+      suspended: row.suspended == true,
       rate_limit: row.rate_limit,
       created_at: Prima.Time.iso8601(row.inserted_at),
       rotated_at: Prima.Time.iso8601(row.rotated_at)

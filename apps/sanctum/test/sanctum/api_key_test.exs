@@ -795,6 +795,246 @@ defmodule Sanctum.ApiKeyTest do
     end
   end
 
+  # ---------------------------------------------------------------------------
+  # A declared restore
+  # ---------------------------------------------------------------------------
+
+  # The declared restore as the boot runs it (`Arca.SecurityTransitions`):
+  # every unrevoked key suspended and one open restore row per person.
+  # Answers the restore id.
+  defp declared_restore! do
+    {:ok, restore_id} = Arca.SecurityTransitions.mark_restore(Prima.Actor.system())
+    {:ok, %{restore_id: ^restore_id}} = Arca.SecurityTransitions.restore(slot: :none)
+    restore_id
+  end
+
+  # The person's open restore row, written as the transition writes it,
+  # for the cases that need their passkey still standing beside it.
+  defp open_restore!(user_id) do
+    restore_id = Prima.UUID7.generate_id("rst")
+
+    {1, _} =
+      Arca.Repo.insert_all(Arca.Schemas.RestorePerson, [
+        %{restore_id: restore_id, user_id: user_id, open: true}
+      ])
+
+    restore_id
+  end
+
+  defp suspend!(%Context{athanor_id: athanor_id}, name) do
+    {1, _} =
+      Arca.Repo.update_all(
+        from(k in Arca.Schemas.ApiKey,
+          where: k.athanor_id == ^athanor_id and k.name == ^name and k.revoked == false
+        ),
+        set: [suspended: true]
+      )
+
+    :ok
+  end
+
+  defp key_id!(ctx, name) do
+    {:ok, %{id: id}} = ApiKey.get(ctx, name)
+    id
+  end
+
+  defp stored_key(id), do: Arca.Repo.get!(Arca.Schemas.ApiKey, id)
+
+  # The kit credential the restore ingress would hand the person: a
+  # challenge put and redeemed under their open row. Answers its digest.
+  defp kit_credential!(user_id, restore_id) do
+    later = DateTime.add(Arca.ServerMetaStorage.now!(), 60_000, :millisecond)
+    challenge = Prima.Digest.sha256("challenge-#{System.unique_integer()}")
+    credential = Prima.Digest.sha256("credential-#{System.unique_integer()}")
+    server = Prima.Actor.system()
+
+    :ok =
+      Arca.SecurityTransitions.put_kit_challenge(server, user_id, restore_id, challenge, later)
+
+    :ok =
+      Arca.SecurityTransitions.redeem_kit_challenge(
+        server,
+        user_id,
+        restore_id,
+        challenge,
+        credential,
+        later
+      )
+
+    credential
+  end
+
+  defp reenable_confirmed(ctx, key_id) do
+    Sanctum.TestContext.confirming(ctx, &ApiKey.reenable(&1, key_id, :confirmation))
+  end
+
+  describe "a key a declared restore suspended" do
+    test "authenticates nothing, refused as a revoked key is", %{ctx: ctx} do
+      {:ok, %{api_key: raw}} = create_key(ctx, %{name: "restored", scope: []})
+      assert {:ok, _} = ApiKey.validate(raw, [])
+      assert {:ok, _} = Sanctum.Caller.establish({:api_key, raw}, client_ip: "127.0.0.1")
+
+      declared_restore!()
+
+      assert {:error, :suspended} = ApiKey.validate(raw, [])
+
+      assert {:error, :revoked} =
+               Sanctum.Caller.establish({:api_key, raw}, client_ip: "127.0.0.1")
+    end
+
+    test "derives no credential, and a context built from it does not revalidate", %{ctx: ctx} do
+      {:ok, %{api_key: raw}} = create_key(ctx, %{name: "held", scope: []})
+      {:ok, key_ctx} = Sanctum.Caller.establish({:api_key, raw}, client_ip: "127.0.0.1")
+      key_ctx = %{key_ctx | client_ip: "127.0.0.1"}
+
+      claims =
+        Map.merge(key_ctx.credential_binding, %{
+          user_id: key_ctx.user_id,
+          athanor_id: key_ctx.athanor_id
+        })
+
+      assert {:ok, _} = Sanctum.Caller.derived_standing(claims)
+      assert {:ok, _} = Sanctum.Caller.revalidate_session(key_ctx)
+
+      # Suspended alone, generations untouched: the key row is what refuses.
+      :ok = suspend!(ctx, "held")
+
+      assert {:error, :not_standing} = Sanctum.Caller.derived_standing(claims)
+      assert {:error, :unauthenticated} = Sanctum.Caller.revalidate_session(key_ctx)
+    end
+
+    test "is listed as suspended, by the id that re-enables it", %{ctx: ctx} do
+      {:ok, _} = create_key(ctx, %{name: "held", scope: []})
+      {:ok, _} = create_key(ctx, %{name: "live", scope: []})
+      :ok = suspend!(ctx, "held")
+
+      {:ok, keys} = ApiKey.list(ctx)
+      by_name = Map.new(keys, &{&1.name, &1})
+
+      assert %{suspended: true, id: "key_" <> _} = by_name["held"]
+      assert %{suspended: false} = by_name["live"]
+      assert {:ok, %{suspended: true}} = ApiKey.get(ctx, "held")
+    end
+
+    test "is not rotated: its successor would stand unsuspended", %{ctx: ctx} do
+      {:ok, %{api_key: raw}} = create_key(ctx, %{name: "held", scope: []})
+      id = key_id!(ctx, "held")
+      :ok = suspend!(ctx, "held")
+
+      assert {:error, :suspended} = rotate_key(ctx, "held")
+      assert %{suspended: true, revoked: false} = stored_key(id)
+      assert {:error, :suspended} = ApiKey.validate(raw, [])
+    end
+  end
+
+  describe "reenable/3 under a confirmation" do
+    setup %{ctx: ctx} do
+      {:ok, %{api_key: raw}} = create_key(ctx, %{name: "held", scope: []})
+      id = key_id!(ctx, "held")
+      :ok = suspend!(ctx, "held")
+      %{raw: raw, key_id: id}
+    end
+
+    test "asks the person's fresh confirmation, then the key authenticates again", %{
+      ctx: ctx,
+      raw: raw,
+      key_id: id
+    } do
+      assert {:error, {:confirmation_required, _}} =
+               ApiKey.reenable(%{ctx | confirmation_id: nil}, id, :confirmation)
+
+      assert %{suspended: true} = stored_key(id)
+
+      assert {:ok, %{id: ^id, name: "held", suspended: false}} = reenable_confirmed(ctx, id)
+      assert %{suspended: false, revoked: false} = stored_key(id)
+      assert {:ok, %{name: "held"}} = ApiKey.validate(raw, [])
+    end
+
+    test "another person's key is not found, and asks no confirmation", %{key_id: id} do
+      other =
+        %{Sanctum.TestContext.local() | user_id: "local|local|other"}
+        |> Sanctum.TestContext.issuer!(%{email: "other@example.com"})
+
+      assert {:error, :not_found} =
+               ApiKey.reenable(%{other | confirmation_id: nil}, id, :confirmation)
+
+      assert %{suspended: true} = stored_key(id)
+    end
+
+    test "a revoked key is never revived, and a standing key is not suspended", %{
+      ctx: ctx,
+      key_id: id
+    } do
+      :ok = ApiKey.revoke(ctx, "held")
+
+      assert {:error, :revoked} =
+               ApiKey.reenable(%{ctx | confirmation_id: nil}, id, :confirmation)
+
+      assert %{revoked: true} = stored_key(id)
+
+      {:ok, _} = create_key(ctx, %{name: "live", scope: []})
+      live = key_id!(ctx, "live")
+
+      assert {:error, :not_suspended} =
+               ApiKey.reenable(%{ctx | confirmation_id: nil}, live, :confirmation)
+    end
+
+    test "while the person's restore row is open, a passkey's confirmation is refused", %{
+      ctx: ctx,
+      raw: raw,
+      key_id: id
+    } do
+      open_restore!(ctx.user_id)
+
+      assert {:error, %Prima.Refusal{reason: :restore_source_required}} =
+               reenable_confirmed(ctx, id)
+
+      assert %{suspended: true} = stored_key(id)
+      assert {:error, :suspended} = ApiKey.validate(raw, [])
+    end
+  end
+
+  describe "reenable/3 under the kit" do
+    test "re-enables the person's key while their row is open, and nothing once it closed",
+         %{ctx: ctx} do
+      {:ok, %{api_key: first}} = create_key(ctx, %{name: "first", scope: []})
+      {:ok, %{api_key: second}} = create_key(ctx, %{name: "second", scope: []})
+      first_id = key_id!(ctx, "first")
+      second_id = key_id!(ctx, "second")
+      user = ctx.user_id
+
+      restore_id = declared_restore!()
+      credential = kit_credential!(user, restore_id)
+      kit = {:kit, %{user_id: user, credential_digest: credential}}
+
+      # Another credential, or another person's, stands for nothing.
+      assert {:error, Sanctum.Pairing.kit_refusal()} ==
+               ApiKey.reenable(ctx, first_id, {:kit, %{user_id: user, credential_digest: "x"}})
+
+      assert {:error, :not_found} =
+               ApiKey.reenable(
+                 ctx,
+                 first_id,
+                 {:kit, %{user_id: "usr_someone", credential_digest: credential}}
+               )
+
+      assert {:ok, %{id: ^first_id, suspended: false}} = ApiKey.reenable(ctx, first_id, kit)
+      assert {:ok, %{name: "first"}} = ApiKey.validate(first, [])
+
+      # Re-enabling a key closes no row: the kit still stands until the
+      # person re-enables a method, or an administrator closes it.
+      assert {:ok, ^restore_id} =
+               Arca.SecurityTransitions.restore_open(Prima.Actor.system(), user)
+
+      {:ok, _} =
+        Arca.Repo.locking_transaction(fn -> Arca.SecurityTransitions.close_restore!(user) end)
+
+      assert {:error, Sanctum.Pairing.kit_refusal()} == ApiKey.reenable(ctx, second_id, kit)
+      assert %{suspended: true} = stored_key(second_id)
+      assert {:error, :suspended} = ApiKey.validate(second, [])
+    end
+  end
+
   # A key minted, or rotated, as a person does it: the fresh confirmation
   # its issuance needs, proven by the person's passkey, and then the call
   # (`Sanctum.TestContext.confirmed/3`).

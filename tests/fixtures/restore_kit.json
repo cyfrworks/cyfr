@@ -1,0 +1,249 @@
+{
+  "challenge_bytes": 32,
+  "comment": "The vectors pinning Prima.Identity.RestoreKit, the kit proof cyfr/restore-kit/v1 a person answers a home restored from a backup with: every side derives the recovery key from the seed, re-signs the proof's fields and reproduces its signed JCS bytes and sig byte for byte, reproduces its digest (sha256:<hex> over the JCS bytes of the whole signed proof), and refuses each refused proof with its reason, a decoding refusal naming its field. Binary values are unpadded base64url; the seed is the kit's recovery secret, the Ed25519 private key (RFC 8032). A wrong_signer proof decodes and no recovery key of the head signed it.",
+  "kit": {
+    "public": "YluDahPW0MY2L7lc9ww0tWnleZqrQtGxDg2NDyrM8xQ",
+    "seed": "TRpXnIElsXtMbW_jAlqFVsI0vRuQpjl5hnsdS48XuWw"
+  },
+  "other_kit": {
+    "public": "J2Zfkfjb9ivZhPZoOi9cHxrJjbQcf_tkLMAhJZUF824",
+    "seed": "bFNy-16wW3FOCBXRAEUEOMX2Whhbh8hgayjaiwKz8KQ"
+  },
+  "protocol": "cyfr/restore-kit/v1",
+  "refused": [
+    {
+      "error": {
+        "reason": "wrong_protocol"
+      },
+      "name": "another protocol version",
+      "proof": {
+        "challenge": "ltZ2HwPEV5In0w2uI0GV8X_BOz9kcPAo3dfL-W8rB58",
+        "identifier": "per_a1d848bba8568fe0ff4fa1539e71c4bdfe30800b135fb56e94b362c8bebb1491",
+        "protocol": "cyfr/restore-kit/v2",
+        "restore_id": "rst_01a09fee-0000-7000-8000-00000000a4a4",
+        "sig": "ePokRxXuEg4m1Refq7Et-477RbZP8ipQ9bdEjoR3bM-ZuHw4Y7L7a_I5fHQIeR7XhjIb943Kqw6m1KqicqS6DA"
+      }
+    },
+    {
+      "error": {
+        "reason": "wrong_protocol"
+      },
+      "name": "the identity protocol",
+      "proof": {
+        "challenge": "ltZ2HwPEV5In0w2uI0GV8X_BOz9kcPAo3dfL-W8rB58",
+        "identifier": "per_a1d848bba8568fe0ff4fa1539e71c4bdfe30800b135fb56e94b362c8bebb1491",
+        "protocol": "cyfr-identity/v1",
+        "restore_id": "rst_01a09fee-0000-7000-8000-00000000a4a4",
+        "sig": "ePokRxXuEg4m1Refq7Et-477RbZP8ipQ9bdEjoR3bM-ZuHw4Y7L7a_I5fHQIeR7XhjIb943Kqw6m1KqicqS6DA"
+      }
+    },
+    {
+      "error": {
+        "field": "protocol",
+        "reason": "missing_field"
+      },
+      "name": "no protocol",
+      "proof": {
+        "challenge": "ltZ2HwPEV5In0w2uI0GV8X_BOz9kcPAo3dfL-W8rB58",
+        "identifier": "per_a1d848bba8568fe0ff4fa1539e71c4bdfe30800b135fb56e94b362c8bebb1491",
+        "restore_id": "rst_01a09fee-0000-7000-8000-00000000a4a4",
+        "sig": "ePokRxXuEg4m1Refq7Et-477RbZP8ipQ9bdEjoR3bM-ZuHw4Y7L7a_I5fHQIeR7XhjIb943Kqw6m1KqicqS6DA"
+      }
+    },
+    {
+      "error": {
+        "field": "directory",
+        "reason": "unknown_field"
+      },
+      "name": "an unknown field",
+      "proof": {
+        "challenge": "ltZ2HwPEV5In0w2uI0GV8X_BOz9kcPAo3dfL-W8rB58",
+        "directory": "https://directory.example",
+        "identifier": "per_a1d848bba8568fe0ff4fa1539e71c4bdfe30800b135fb56e94b362c8bebb1491",
+        "protocol": "cyfr/restore-kit/v1",
+        "restore_id": "rst_01a09fee-0000-7000-8000-00000000a4a4",
+        "sig": "ePokRxXuEg4m1Refq7Et-477RbZP8ipQ9bdEjoR3bM-ZuHw4Y7L7a_I5fHQIeR7XhjIb943Kqw6m1KqicqS6DA"
+      }
+    },
+    {
+      "error": {
+        "field": "athanor",
+        "reason": "unknown_field"
+      },
+      "name": "an unknown field beside a missing one",
+      "proof": {
+        "athanor": "ath_1",
+        "identifier": "per_a1d848bba8568fe0ff4fa1539e71c4bdfe30800b135fb56e94b362c8bebb1491",
+        "protocol": "cyfr/restore-kit/v1",
+        "restore_id": "rst_01a09fee-0000-7000-8000-00000000a4a4",
+        "sig": "ePokRxXuEg4m1Refq7Et-477RbZP8ipQ9bdEjoR3bM-ZuHw4Y7L7a_I5fHQIeR7XhjIb943Kqw6m1KqicqS6DA"
+      }
+    },
+    {
+      "error": {
+        "field": "challenge",
+        "reason": "missing_field"
+      },
+      "name": "no challenge",
+      "proof": {
+        "identifier": "per_a1d848bba8568fe0ff4fa1539e71c4bdfe30800b135fb56e94b362c8bebb1491",
+        "protocol": "cyfr/restore-kit/v1",
+        "restore_id": "rst_01a09fee-0000-7000-8000-00000000a4a4",
+        "sig": "ePokRxXuEg4m1Refq7Et-477RbZP8ipQ9bdEjoR3bM-ZuHw4Y7L7a_I5fHQIeR7XhjIb943Kqw6m1KqicqS6DA"
+      }
+    },
+    {
+      "error": {
+        "field": "sig",
+        "reason": "missing_field"
+      },
+      "name": "no signature",
+      "proof": {
+        "challenge": "ltZ2HwPEV5In0w2uI0GV8X_BOz9kcPAo3dfL-W8rB58",
+        "identifier": "per_a1d848bba8568fe0ff4fa1539e71c4bdfe30800b135fb56e94b362c8bebb1491",
+        "protocol": "cyfr/restore-kit/v1",
+        "restore_id": "rst_01a09fee-0000-7000-8000-00000000a4a4"
+      }
+    },
+    {
+      "error": {
+        "field": "challenge",
+        "reason": "invalid_field"
+      },
+      "name": "a challenge of 31 bytes",
+      "proof": {
+        "challenge": "ltZ2HwPEV5In0w2uI0GV8X_BOz9kcPAo3dfL-W8rBw",
+        "identifier": "per_a1d848bba8568fe0ff4fa1539e71c4bdfe30800b135fb56e94b362c8bebb1491",
+        "protocol": "cyfr/restore-kit/v1",
+        "restore_id": "rst_01a09fee-0000-7000-8000-00000000a4a4",
+        "sig": "ePokRxXuEg4m1Refq7Et-477RbZP8ipQ9bdEjoR3bM-ZuHw4Y7L7a_I5fHQIeR7XhjIb943Kqw6m1KqicqS6DA"
+      }
+    },
+    {
+      "error": {
+        "field": "challenge",
+        "reason": "invalid_field"
+      },
+      "name": "a challenge of 33 bytes",
+      "proof": {
+        "challenge": "ltZ2HwPEV5In0w2uI0GV8X_BOz9kcPAo3dfL-W8rB58A",
+        "identifier": "per_a1d848bba8568fe0ff4fa1539e71c4bdfe30800b135fb56e94b362c8bebb1491",
+        "protocol": "cyfr/restore-kit/v1",
+        "restore_id": "rst_01a09fee-0000-7000-8000-00000000a4a4",
+        "sig": "ePokRxXuEg4m1Refq7Et-477RbZP8ipQ9bdEjoR3bM-ZuHw4Y7L7a_I5fHQIeR7XhjIb943Kqw6m1KqicqS6DA"
+      }
+    },
+    {
+      "error": {
+        "field": "challenge",
+        "reason": "invalid_field"
+      },
+      "name": "a padded challenge",
+      "proof": {
+        "challenge": "ltZ2HwPEV5In0w2uI0GV8X_BOz9kcPAo3dfL-W8rB58=",
+        "identifier": "per_a1d848bba8568fe0ff4fa1539e71c4bdfe30800b135fb56e94b362c8bebb1491",
+        "protocol": "cyfr/restore-kit/v1",
+        "restore_id": "rst_01a09fee-0000-7000-8000-00000000a4a4",
+        "sig": "ePokRxXuEg4m1Refq7Et-477RbZP8ipQ9bdEjoR3bM-ZuHw4Y7L7a_I5fHQIeR7XhjIb943Kqw6m1KqicqS6DA"
+      }
+    },
+    {
+      "error": {
+        "field": "sig",
+        "reason": "invalid_field"
+      },
+      "name": "a padded signature",
+      "proof": {
+        "challenge": "ltZ2HwPEV5In0w2uI0GV8X_BOz9kcPAo3dfL-W8rB58",
+        "identifier": "per_a1d848bba8568fe0ff4fa1539e71c4bdfe30800b135fb56e94b362c8bebb1491",
+        "protocol": "cyfr/restore-kit/v1",
+        "restore_id": "rst_01a09fee-0000-7000-8000-00000000a4a4",
+        "sig": "ePokRxXuEg4m1Refq7Et-477RbZP8ipQ9bdEjoR3bM-ZuHw4Y7L7a_I5fHQIeR7XhjIb943Kqw6m1KqicqS6DA=="
+      }
+    },
+    {
+      "error": {
+        "field": "challenge",
+        "reason": "invalid_field"
+      },
+      "name": "a challenge in standard base64",
+      "proof": {
+        "challenge": "ltZ2HwPEV5In0w2uI0GV8X/BOz9kcPAo3dfL+W8rB58",
+        "identifier": "per_a1d848bba8568fe0ff4fa1539e71c4bdfe30800b135fb56e94b362c8bebb1491",
+        "protocol": "cyfr/restore-kit/v1",
+        "restore_id": "rst_01a09fee-0000-7000-8000-00000000a4a4",
+        "sig": "ePokRxXuEg4m1Refq7Et-477RbZP8ipQ9bdEjoR3bM-ZuHw4Y7L7a_I5fHQIeR7XhjIb943Kqw6m1KqicqS6DA"
+      }
+    },
+    {
+      "error": {
+        "field": "identifier",
+        "reason": "invalid_field"
+      },
+      "name": "an identifier that is not one",
+      "proof": {
+        "challenge": "ltZ2HwPEV5In0w2uI0GV8X_BOz9kcPAo3dfL-W8rB58",
+        "identifier": "usr_01a09fee-0000-7000-8000-000000000001",
+        "protocol": "cyfr/restore-kit/v1",
+        "restore_id": "rst_01a09fee-0000-7000-8000-00000000a4a4",
+        "sig": "ePokRxXuEg4m1Refq7Et-477RbZP8ipQ9bdEjoR3bM-ZuHw4Y7L7a_I5fHQIeR7XhjIb943Kqw6m1KqicqS6DA"
+      }
+    },
+    {
+      "error": {
+        "field": "restore_id",
+        "reason": "invalid_field"
+      },
+      "name": "a restore id that is not an id",
+      "proof": {
+        "challenge": "ltZ2HwPEV5In0w2uI0GV8X_BOz9kcPAo3dfL-W8rB58",
+        "identifier": "per_a1d848bba8568fe0ff4fa1539e71c4bdfe30800b135fb56e94b362c8bebb1491",
+        "protocol": "cyfr/restore-kit/v1",
+        "restore_id": "rst 1",
+        "sig": "ePokRxXuEg4m1Refq7Et-477RbZP8ipQ9bdEjoR3bM-ZuHw4Y7L7a_I5fHQIeR7XhjIb943Kqw6m1KqicqS6DA"
+      }
+    },
+    {
+      "error": {
+        "reason": "wrong_signer"
+      },
+      "name": "a signature by another seed",
+      "proof": {
+        "challenge": "ltZ2HwPEV5In0w2uI0GV8X_BOz9kcPAo3dfL-W8rB58",
+        "identifier": "per_a1d848bba8568fe0ff4fa1539e71c4bdfe30800b135fb56e94b362c8bebb1491",
+        "protocol": "cyfr/restore-kit/v1",
+        "restore_id": "rst_01a09fee-0000-7000-8000-00000000a4a4",
+        "sig": "_z_BVdkWUsEgMbTiS7FOnPvk9IuuuZTK3xTnkB6IOep5b4qig6vASgZ9yu1rHn9cFj0z2vRE5GCGM6nYLrC0Bg"
+      }
+    },
+    {
+      "error": {
+        "reason": "wrong_signer"
+      },
+      "name": "a proof altered after it was signed",
+      "proof": {
+        "challenge": "H57IcmA8F6TclMn1WkpOqQcrwVZA5J292zXEPQkO43c",
+        "identifier": "per_a1d848bba8568fe0ff4fa1539e71c4bdfe30800b135fb56e94b362c8bebb1491",
+        "protocol": "cyfr/restore-kit/v1",
+        "restore_id": "rst_01a09fee-0000-7000-8000-00000000a4a4",
+        "sig": "ePokRxXuEg4m1Refq7Et-477RbZP8ipQ9bdEjoR3bM-ZuHw4Y7L7a_I5fHQIeR7XhjIb943Kqw6m1KqicqS6DA"
+      }
+    }
+  ],
+  "valid": {
+    "digest": "sha256:771e2a3c2fa3be851360f250e80f58a6010ac49f4b6ad9e376d9b83e0b68452d",
+    "fields": {
+      "challenge": "ltZ2HwPEV5In0w2uI0GV8X_BOz9kcPAo3dfL-W8rB58",
+      "identifier": "per_a1d848bba8568fe0ff4fa1539e71c4bdfe30800b135fb56e94b362c8bebb1491",
+      "restore_id": "rst_01a09fee-0000-7000-8000-00000000a4a4"
+    },
+    "proof": {
+      "challenge": "ltZ2HwPEV5In0w2uI0GV8X_BOz9kcPAo3dfL-W8rB58",
+      "identifier": "per_a1d848bba8568fe0ff4fa1539e71c4bdfe30800b135fb56e94b362c8bebb1491",
+      "protocol": "cyfr/restore-kit/v1",
+      "restore_id": "rst_01a09fee-0000-7000-8000-00000000a4a4",
+      "sig": "ePokRxXuEg4m1Refq7Et-477RbZP8ipQ9bdEjoR3bM-ZuHw4Y7L7a_I5fHQIeR7XhjIb943Kqw6m1KqicqS6DA"
+    },
+    "signed": "{\"challenge\":\"ltZ2HwPEV5In0w2uI0GV8X_BOz9kcPAo3dfL-W8rB58\",\"identifier\":\"per_a1d848bba8568fe0ff4fa1539e71c4bdfe30800b135fb56e94b362c8bebb1491\",\"protocol\":\"cyfr/restore-kit/v1\",\"restore_id\":\"rst_01a09fee-0000-7000-8000-00000000a4a4\"}"
+  }
+}

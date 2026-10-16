@@ -25,9 +25,9 @@ defmodule Prima.Identity.Encoding do
       name, and a port only when it is not the scheme's default, with no
       path, user, query or fragment. Only that spelling is accepted, so two
       homes are one exactly when their spellings are equal.
-    * **An id** (a client, athanor, carry action, confirmation, request or
-      intent id) is 1 to 128 characters of `[A-Za-z0-9_-]`, starting with a
-      letter or digit.
+    * **An id** (a client, athanor, carry action, confirmation, request,
+      intent or restore id) is 1 to 128 characters of `[A-Za-z0-9_-]`,
+      starting with a letter or digit.
 
   A map a decoder is handed must hold exactly its shape's fields: an unknown
   field answers `{:unknown_field, name}` before a missing one answers
@@ -445,6 +445,124 @@ defmodule Prima.Identity.RecoverRequest do
   defp b64_or_nil(bytes), do: Encoding.b64(bytes)
 end
 
+defmodule Prima.Identity.RestoreKit do
+  @moduledoc """
+  The kit proof a person gives a home restored from a backup
+  (`cyfr/restore-kit/v1`): the restore it answers, the identifier it
+  speaks for and the 32-byte challenge that home issued, signed by one of
+  the identifier's recovery keys, the kit's seed, over exactly those
+  fields. `tests/fixtures/restore_kit.json` holds its vectors.
+
+  It carries its protocol inside what it signs, as every identity shape
+  does, so it is never read as a recover request or an entry. A proof
+  names one restore, one identifier and one challenge: a home holds it to
+  its own challenge for that person's open restore and to the recovery
+  keys of the person's fresh head (`signer/2`).
+  """
+
+  alias Prima.Identity.Encoding
+
+  @protocol "cyfr/restore-kit/v1"
+  @required ~w(protocol restore_id identifier challenge)
+  @challenge_bytes 32
+
+  @type t :: %__MODULE__{
+          restore_id: String.t(),
+          identifier: String.t(),
+          challenge: binary(),
+          sig: binary() | nil
+        }
+
+  @enforce_keys [:restore_id, :identifier, :challenge]
+  defstruct [:restore_id, :identifier, :challenge, sig: nil]
+
+  @doc "The protocol string a kit proof carries."
+  @spec protocol() :: String.t()
+  def protocol, do: @protocol
+
+  @doc "The length of a kit challenge, in bytes."
+  @spec challenge_bytes() :: pos_integer()
+  def challenge_bytes, do: @challenge_bytes
+
+  @doc """
+  An unsigned proof from its fields (atom keys, the challenge as raw
+  bytes). Sign it with `Prima.Identity.sign/2` under the kit's seed.
+  """
+  @spec new(map() | keyword()) :: {:ok, t()} | {:error, Encoding.reason()}
+  def new(attrs) do
+    attrs = Map.new(attrs)
+
+    %{
+      "protocol" => @protocol,
+      "restore_id" => attrs[:restore_id],
+      "identifier" => attrs[:identifier],
+      "challenge" => if(is_binary(attrs[:challenge]), do: Encoding.b64(attrs[:challenge]))
+    }
+    |> Encoding.compact()
+    |> read(false)
+  end
+
+  @doc "Read a signed proof from its JSON map."
+  @spec decode(term()) :: {:ok, t()} | {:error, Encoding.reason() | :wrong_protocol}
+  def decode(map), do: read(map, true)
+
+  @doc "The JSON map of a proof; `sig` is absent while unsigned."
+  @spec encode(t()) :: map()
+  def encode(%__MODULE__{} = proof) do
+    Encoding.compact(%{
+      "protocol" => @protocol,
+      "restore_id" => proof.restore_id,
+      "identifier" => proof.identifier,
+      "challenge" => Encoding.b64(proof.challenge),
+      "sig" => proof.sig && Encoding.b64(proof.sig)
+    })
+  end
+
+  @doc """
+  The recovery key among `recovery_keys` whose signature the proof
+  carries, or `:wrong_signer` when none verifies it.
+  """
+  @spec signer(t(), [binary()]) :: {:ok, binary()} | {:error, :wrong_signer}
+  def signer(%__MODULE__{} = proof, recovery_keys) do
+    map = encode(proof)
+
+    case Enum.find(recovery_keys, &Encoding.verify(map, &1)) do
+      nil -> {:error, :wrong_signer}
+      key -> {:ok, key}
+    end
+  end
+
+  defp read(map, signed?) when is_map(map) and not is_struct(map) do
+    sig = if signed?, do: ["sig"], else: []
+
+    with :ok <- Encoding.protocol(map, @protocol),
+         :ok <- Encoding.fields(map, @required ++ sig, []),
+         {:ok, restore_id} <- Encoding.check(map, "restore_id", &Encoding.id?/1),
+         {:ok, identifier} <- Encoding.check(map, "identifier", &Encoding.identifier?/1),
+         {:ok, challenge} <- Encoding.binary(map, "challenge", @challenge_bytes),
+         {:ok, signature} <- signature(map, signed?) do
+      {:ok,
+       %__MODULE__{
+         restore_id: restore_id,
+         identifier: identifier,
+         challenge: challenge,
+         sig: signature
+       }}
+    end
+  end
+
+  defp read(_value, _signed?), do: {:error, {:invalid_field, "proof"}}
+
+  defp signature(_map, false), do: {:ok, nil}
+
+  defp signature(map, true) do
+    case Encoding.signature(map["sig"]) do
+      {:ok, sig} -> {:ok, sig}
+      :error -> {:error, {:invalid_field, "sig"}}
+    end
+  end
+end
+
 defmodule Prima.Identity.Entry do
   @moduledoc """
   One entry of an identity log. `kind` is `:genesis`, `:rotate` or
@@ -775,7 +893,9 @@ defmodule Prima.Identity do
 
   A kit seed is 32 bytes and is the Ed25519 private key of one recovery
   holder (RFC 8032): `derive_recovery_key/1` answers its key pair. No
-  encryption key is derived from it.
+  encryption key is derived from it. Besides a recover request, the seed
+  signs a `Prima.Identity.RestoreKit` proof, with which a person answers a
+  home restored from a backup.
 
   ## Locating a remote person
 
@@ -786,7 +906,7 @@ defmodule Prima.Identity do
   proves neither membership nor a fresh head.
   """
 
-  alias Prima.Identity.{Encoding, Entry, RecoverRequest, State}
+  alias Prima.Identity.{Encoding, Entry, RecoverRequest, RestoreKit, State}
 
   @protocol "cyfr-identity/v1"
   @prefix "per"
@@ -824,19 +944,23 @@ defmodule Prima.Identity do
   @spec kinds() :: [Entry.kind()]
   def kinds, do: [:genesis, :rotate, :recover]
 
-  @doc "The JCS bytes of an entry or a recover request, `sig` included."
-  @spec canonical(Entry.t() | RecoverRequest.t()) :: binary()
+  @doc "The JCS bytes of an entry, a recover request or a kit proof, `sig` included."
+  @spec canonical(Entry.t() | RecoverRequest.t() | RestoreKit.t()) :: binary()
   def canonical(%Entry{} = entry), do: entry |> Entry.encode() |> Encoding.jcs!()
 
   def canonical(%RecoverRequest{} = request),
     do: request |> RecoverRequest.encode() |> Encoding.jcs!()
 
+  def canonical(%RestoreKit{} = proof), do: proof |> RestoreKit.encode() |> Encoding.jcs!()
+
   @doc """
-  Sign a genesis or rotate entry, or a recover request, with an Ed25519
-  private key: its `sig` covers the JCS bytes of its map without `sig`.
+  Sign a genesis or rotate entry, a recover request or a kit proof with an
+  Ed25519 private key: its `sig` covers the JCS bytes of its map without
+  `sig`.
   """
   @spec sign(Entry.t(), binary()) :: Entry.t()
   @spec sign(RecoverRequest.t(), binary()) :: RecoverRequest.t()
+  @spec sign(RestoreKit.t(), binary()) :: RestoreKit.t()
   def sign(%Entry{kind: kind} = entry, private_key) when kind in [:genesis, :rotate] do
     %{entry | sig: signature(Entry.encode(%{entry | sig: nil}), private_key)}
   end
@@ -845,13 +969,21 @@ defmodule Prima.Identity do
     %{request | sig: signature(RecoverRequest.encode(%{request | sig: nil}), private_key)}
   end
 
-  @doc "Whether a signed genesis or rotate entry, or a recover request, carries `public_key`'s signature."
-  @spec verify(Entry.t() | RecoverRequest.t(), binary()) :: :ok | {:error, :wrong_signer}
+  def sign(%RestoreKit{} = proof, private_key) do
+    %{proof | sig: signature(RestoreKit.encode(%{proof | sig: nil}), private_key)}
+  end
+
+  @doc "Whether a signed genesis or rotate entry, a recover request or a kit proof carries `public_key`'s signature."
+  @spec verify(Entry.t() | RecoverRequest.t() | RestoreKit.t(), binary()) ::
+          :ok | {:error, :wrong_signer}
   def verify(%Entry{kind: kind} = entry, public_key) when kind in [:genesis, :rotate],
     do: verified(Encoding.verify(Entry.encode(entry), public_key))
 
   def verify(%RecoverRequest{} = request, public_key),
     do: verified(Encoding.verify(RecoverRequest.encode(request), public_key))
+
+  def verify(%RestoreKit{} = proof, public_key),
+    do: verified(Encoding.verify(RestoreKit.encode(proof), public_key))
 
   @doc """
   The identifier a genesis hashes to: `per_` and the lowercase hex of

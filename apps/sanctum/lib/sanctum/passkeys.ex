@@ -65,7 +65,8 @@ defmodule Sanctum.Passkeys do
   WebAuthn assertion whose challenge is the 32 raw bytes of the record's
   digest (`Prima.Confirmation.digest/1`), with user verification, at this
   home's origin and RP ID, by an active passkey of that person registered
-  here. The signature counter is checked as WebAuthn Level 3 §7.2 has it:
+  here: a passkey a declared restore suspended proves nothing until it is
+  re-enabled. The signature counter is checked as WebAuthn Level 3 §7.2 has it:
   two zero counts pass, and otherwise the count must rise. The record is
   confirmed once, naming the passkey and any paired client that gave the
   proof, so revoking either voids it. A remote person's head is read
@@ -75,7 +76,8 @@ defmodule Sanctum.Passkeys do
   ## Sign-in
 
   `sign_in_challenge/0` and `sign_in/2` are the passkey door: an active
-  passkey of an active person, whose linked door identities (a remote
+  passkey (never a suspended one) of an active person, whose linked door
+  identities (a remote
   person's `cyfr` identity among them, judged by its identifier) or
   verified email still pass `Sanctum.Door.admit/3` (or, for a person with
   no linked door, their own id, as a restore's door entry names it),
@@ -87,6 +89,17 @@ defmodule Sanctum.Passkeys do
   `:identity_stale`, a pause the person retries, and the retry verifies
   against the new head, which refuses a passkey a recovery retired. The
   sign-in page holds the challenge and answers it once.
+
+  ## After a declared restore
+
+  A declared restore suspends every active passkey
+  (`Arca.SecurityTransitions`): a suspended passkey signs no one in,
+  proves no confirmation and is no fresh method (`fresh_method?/1`). The
+  person makes one active again with `reenable/3`: while their restore is
+  open, on a confirmation a door this home re-authenticates or an emailed
+  code gave, or with their recovery kit, never on one a passkey or a
+  paired device gave; and the re-enabling closes their restore. The administrator's recovery (`recover_admin/2`) closes it
+  too, in the transaction that activates the pending passkey.
   """
 
   alias Prima.Identity.Encoding
@@ -468,7 +481,8 @@ defmodule Sanctum.Passkeys do
 
   @doc """
   Whether the context's person holds a fresh method at this home: an
-  active passkey registered here, an OpenID Connect door this home can
+  active passkey registered here (a suspended one is none), an OpenID
+  Connect door this home can
   re-authenticate (`Sanctum.Auth.OIDC.reauth_available?/1`), or a verified
   email a one-time code can reach
   (`Sanctum.Auth.EmailVerification.code_available?/1`). The passkeys are
@@ -701,10 +715,16 @@ defmodule Sanctum.Passkeys do
     end
   end
 
+  # Only an active passkey proves anything: a pending one awaits its
+  # administrator, and a suspended one, a declared restore's, asserts
+  # nothing until its person re-enables it under a door's proof or their kit.
   defp credential(credential_id) do
     case Arca.Passkeys.get_by_credential(Prima.Actor.system(), rp_id(), credential_id) do
       {:ok, %{state: "active", relying_home: home} = passkey} ->
         if home == origin(), do: {:ok, passkey}, else: {:error, :assertion_refused}
+
+      {:ok, %{state: "suspended"}} ->
+        {:error, :assertion_refused}
 
       {:ok, _pending} ->
         {:error, :assertion_refused}
@@ -967,8 +987,8 @@ defmodule Sanctum.Passkeys do
   # ---------------------------------------------------------------------------
 
   @doc """
-  The context's person's passkeys here, active and pending, oldest first
-  (`t:listed/0`).
+  The context's person's passkeys here, active, suspended and pending,
+  oldest first (`t:listed/0`).
   """
   @spec list(Context.t()) :: {:ok, [listed()]} | {:error, term()}
   def list(%Context{} = ctx) do
@@ -1079,6 +1099,11 @@ defmodule Sanctum.Passkeys do
   authorization made before a rotation or a recovery activates nothing
   after it, and a registration made before a recovery is gone with the
   recovery epoch it was bound to.
+
+  The activation closes the person's open restore, if a declared restore
+  left one, in the same transaction (`Arca.Passkeys.activate/3`): an
+  administrator's recovery ends the person's recovery from the restore.
+  It answers `recovery_closed`, whether it did.
   """
   @spec recover_admin(Context.t(), map()) :: {:ok, map()} | {:error, term()}
   def recover_admin(
@@ -1109,7 +1134,13 @@ defmodule Sanctum.Passkeys do
           Authz.consumed(ctx)
           announce(:passkey_registered, [personal_athanor(user_id)])
           announce(:passkey_recovered, person_athanors(user_id))
-          {:ok, %{status: "active", passkey: listed(row)}}
+
+          {:ok,
+           %{
+             status: "active",
+             passkey: listed(row),
+             recovery_closed: row.closed_restore_ids != []
+           }}
 
         {:error, :person_not_standing} ->
           {:error, {:conflict, "That person no longer stands here; nothing was activated"}}
@@ -1193,6 +1224,134 @@ defmodule Sanctum.Passkeys do
       details: %{"registration_digest" => digest}
     }
   end
+
+  # ---------------------------------------------------------------------------
+  # Re-enabling after a declared restore
+  # ---------------------------------------------------------------------------
+
+  @typedoc """
+  What a re-enabling rests on: the confirmation `ctx` names, or a recovery
+  kit's credential, its person and the credential's digest
+  (`Sanctum.Pairing.t:proof/0`).
+  """
+  @type proof :: Sanctum.Pairing.proof()
+
+  @doc """
+  Re-enable the passkey `passkey_id`, which a declared restore suspended,
+  under `proof`. Answers `%{passkey: listed, recovery_closed:}`,
+  `recovery_closed` true when this closed the person's open restore, as
+  re-enabling a method does (`Arca.Passkeys.reenable/4`).
+
+  With `:confirmation`, `ctx` is the person's own session or device: a
+  sensitive change (`:restore_reenable`), asked first and consumed in the
+  transaction that writes the passkey, where, while the person's restore
+  is open, a confirmation a passkey or a paired client gave is refused
+  (`Sanctum.Pairing.restore_confirmed/1`): no suspended method approves
+  its own return, and the person proves it with a door this home
+  re-authenticates or an emailed code. With `{:kit, %{user_id:,
+  credential_digest:}}` the kit ingress has verified the person's recovery
+  kit, and the write admits it only while that credential stands under
+  their open restore (`Sanctum.Pairing.kit_confirmed/2`).
+
+  Refusals: `{:not_found, "passkey", id}`, `t:Prima.Refusal.t/0` with
+  reason `:revoked` (a revoked passkey is never revived) or
+  `:not_suspended`, `Sanctum.Pairing.kit_refusal/0`,
+  `Sanctum.Pairing.restore_source_refusal/0`, the consent signal, and the
+  context's and the store's own (`:unauthenticated`, `:unavailable`).
+  """
+  @spec reenable(Context.t(), String.t(), proof()) :: {:ok, map()} | {:error, term()}
+  def reenable(%Context{} = ctx, passkey_id, :confirmation) when is_binary(passkey_id) do
+    with {:ok, user_id} <- registrant(ctx),
+         {:ok, passkey} <- held_own(ctx, user_id, passkey_id),
+         :ok <- reenable_ready(passkey),
+         change = reenable_change(passkey),
+         :ok <- Authz.check(ctx, :restore_reenable, change) do
+      verify = fn _row ->
+        with :ok <- Authz.consume(ctx, {:restore_reenable, change}),
+             do: Sanctum.Pairing.restore_confirmed(ctx)
+      end
+
+      case Arca.Passkeys.reenable(Prima.Actor.system(), user_id, passkey_id, verify: verify) do
+        {:ok, row} ->
+          Authz.consumed(ctx)
+          {:ok, reenabled(row)}
+
+        {:error, reason} ->
+          {:error, reenable_refusal(reason, passkey_id)}
+      end
+    end
+  end
+
+  def reenable(
+        %Context{},
+        passkey_id,
+        {:kit, %{user_id: user_id, credential_digest: digest}}
+      )
+      when is_binary(passkey_id) and is_binary(user_id) and is_binary(digest) do
+    case Arca.Passkeys.reenable(Prima.Actor.system(), user_id, passkey_id,
+           verify: fn _row -> Sanctum.Pairing.kit_confirmed(user_id, digest) end
+         ) do
+      {:ok, row} -> {:ok, reenabled(row)}
+      {:error, reason} -> {:error, reenable_refusal(reason, passkey_id)}
+    end
+  end
+
+  def reenable(%Context{}, _passkey_id, _proof),
+    do: {:error, {:invalid_argument, "Name the passkey and how its return is proven"}}
+
+  # The context person's passkey `passkey_id`, at any state.
+  defp held_own(ctx, user_id, passkey_id) do
+    case Arca.Passkeys.get(Context.actor(ctx), passkey_id) do
+      {:ok, %{user_id: ^user_id} = passkey} -> {:ok, passkey}
+      {:error, :database_error} -> {:error, :unavailable}
+      _other -> {:error, {:not_found, "passkey", passkey_id}}
+    end
+  end
+
+  # Read before anything is asked, so a person is never asked to confirm a
+  # return the write would refuse; the write reads it again under its lock.
+  defp reenable_ready(%{state: "suspended"}), do: :ok
+  defp reenable_ready(%{state: "revoked"}), do: {:error, reenable_refusal(:revoked, nil)}
+  defp reenable_ready(_other), do: {:error, reenable_refusal(:not_suspended, nil)}
+
+  defp reenable_change(passkey) do
+    %{
+      operation: "passkey.reenable",
+      arguments: %{"passkey_id" => passkey.id},
+      resource: passkey.label || "passkey " <> String.slice(passkey.credential_id, 0, 16),
+      details: %{
+        "effect" =>
+          "This passkey, suspended when this home was restored from a backup, signs you in " <>
+            "and confirms for you again"
+      }
+    }
+  end
+
+  defp reenabled(row),
+    do: %{passkey: listed(row), recovery_closed: row.closed_restore_ids != []}
+
+  defp reenable_refusal(:not_found, passkey_id), do: {:not_found, "passkey", passkey_id}
+
+  defp reenable_refusal(:revoked, _passkey_id),
+    do: %Prima.Refusal{
+      class: :conflict,
+      reason: :revoked,
+      message:
+        "This passkey was revoked, and a revoked passkey is never re-enabled: register a new one"
+    }
+
+  defp reenable_refusal(:not_suspended, _passkey_id),
+    do: %Prima.Refusal{
+      class: :conflict,
+      reason: :not_suspended,
+      message: "This passkey is not suspended: there is nothing to re-enable"
+    }
+
+  defp reenable_refusal(reason, _passkey_id)
+       when reason in [:database_error, :not_owner, :cross_tenant],
+       do: :unavailable
+
+  defp reenable_refusal(reason, _passkey_id), do: reason
 
   # ---------------------------------------------------------------------------
   # Shared

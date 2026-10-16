@@ -42,6 +42,16 @@ defmodule Sanctum.Providers.Confirmation do
       fresh sign-in it begins included); anywhere else, a `passkey`.
     * `cancel` ends one.
 
+  While the person recovers from a declared restore (their
+  `restore_people` row is open, `Arca.SecurityTransitions.restore_open/2`),
+  a passkey proves nothing for them: `pending` marks each record `restore:
+  true`, offers no `passkey` among its `methods` and no credential in its
+  WebAuthn options, so a door this home re-authenticates or an emailed
+  code is the proof, and `confirm` with an assertion is refused
+  (`Sanctum.Pairing.restore_source_refusal/0`). Otherwise each record is
+  `restore: false`. The mark is per record, beside `restricted`, though it
+  is the person's state and so the same on every record of theirs.
+
   Every action is the person's own, on the external plane, through an
   interactive surface (`consent: :interactive`), and reaches only records
   of the context's own person.
@@ -146,7 +156,7 @@ defmodule Sanctum.Providers.Confirmation do
       when is_binary(ref) do
     case {args["assertion"], args["code"]} do
       {assertion, nil} when is_map(assertion) ->
-        answered(Passkeys.assert(ctx, ref, assertion))
+        with :ok <- passkey_may_prove(ctx), do: answered(Passkeys.assert(ctx, ref, assertion))
 
       {nil, code} when is_binary(code) and code != "" ->
         answered(EmailVerification.verify_code(ctx, ref, code))
@@ -169,14 +179,18 @@ defmodule Sanctum.Providers.Confirmation do
   def handle(%Context{} = ctx, %{"action" => "pending"}) do
     with {:ok, user_id} <- person(ctx),
          {:ok, rows} <- open(ctx, user_id),
-         {:ok, credentials} <- credentials(ctx, user_id),
+         {:ok, restore?} <- recovering(user_id),
+         {:ok, credentials} <- credentials(ctx, user_id, restore?),
          {:ok, latched?} <- latched(user_id) do
       methods = methods(user_id, credentials)
 
       {:ok,
        %{
          confirmations:
-           Enum.map(rows, &pending(&1, credentials, offered(ctx, &1, methods, latched?)))
+           Enum.map(
+             rows,
+             &pending(&1, credentials, offered(ctx, &1, methods, latched?), restore?)
+           )
        }}
     else
       {:error, reason} -> {:error, refusal(reason)}
@@ -229,8 +243,34 @@ defmodule Sanctum.Providers.Confirmation do
     end
   end
 
-  # The person's active passkeys here, read as the context's own.
-  defp credentials(ctx, user_id) do
+  # Whether the person recovers from a declared restore: their restore row
+  # is open, so no passkey proves anything for them.
+  defp recovering(user_id) do
+    case Arca.SecurityTransitions.restore_open(Prima.Actor.system(), user_id) do
+      {:ok, nil} -> {:ok, false}
+      {:ok, _restore_id} -> {:ok, true}
+      {:error, _unanswered} -> {:error, :unavailable}
+    end
+  end
+
+  # A passkey's assertion is taken only while the person is not recovering
+  # from a declared restore. A context that names no person is left to the
+  # assertion's own refusal.
+  defp passkey_may_prove(%Context{user_id: user_id}) when is_binary(user_id) and user_id != "" do
+    case recovering(user_id) do
+      {:ok, false} -> :ok
+      {:ok, true} -> {:error, Pairing.restore_source_refusal()}
+      {:error, reason} -> {:error, refusal(reason)}
+    end
+  end
+
+  defp passkey_may_prove(%Context{}), do: :ok
+
+  # The person's active passkeys here, read as the context's own; none
+  # while they recover from a declared restore.
+  defp credentials(_ctx, _user_id, true = _restore?), do: {:ok, []}
+
+  defp credentials(ctx, user_id, false = _restore?) do
     case Arca.Passkeys.list(Context.actor(ctx), user_id, state: :active) do
       {:ok, rows} ->
         {:ok,
@@ -302,9 +342,10 @@ defmodule Sanctum.Providers.Confirmation do
 
   # An open record as a client of its person reads it: its ref, what it
   # would change, as the home stored it, which client asked, which proofs
-  # the person can give and whether they are restricted, and how a passkey
-  # proves it — the challenge is the raw bytes of the record's digest.
-  defp pending(row, credentials, {methods, restricted?}) do
+  # the person can give and whether they are restricted, whether the person
+  # recovers from a declared restore, and how a passkey proves it — the
+  # challenge is the raw bytes of the record's digest.
+  defp pending(row, credentials, {methods, restricted?}, restore?) do
     "sha256:" <> hex = row.digest
 
     %{
@@ -317,6 +358,7 @@ defmodule Sanctum.Providers.Confirmation do
       expires_at: row.expires_at,
       methods: methods,
       restricted: restricted?,
+      restore: restore?,
       webauthn: %{
         "challenge" => Prima.Identity.Encoding.b64(Base.decode16!(hex, case: :lower)),
         "rpId" => row.rp_id,

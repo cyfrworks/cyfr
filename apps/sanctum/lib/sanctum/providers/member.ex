@@ -22,6 +22,14 @@ defmodule Sanctum.Providers.Member do
   leaves them seated. An identifier stands alone, never beside an email
   or a user id. Mutations are a person's act; an API-key context is
   refused.
+
+  A group is frozen while a member of it recovers from a declared restore
+  (`Arca.SecurityTransitions.restore_frozen?/1`): until every member's
+  recovery has closed, `add` is refused with a sentence that says so,
+  while `remove` and `leave`, which only reduce who is there, stay
+  admitted. A restore opens recoveries only at boot, before anything is
+  admitted, and a running home only closes them, so a group read unfrozen
+  here cannot become frozen before the seat is written.
   """
 
   require Logger
@@ -146,7 +154,8 @@ defmodule Sanctum.Providers.Member do
   def handle(%Context{} = ctx, %{"action" => "add"} = args) do
     # The person named is checked for its shape before the athanor is read.
     with {:ok, target} <- target(args),
-         {:ok, athanor, _focused} <- Athanor.resolve(ctx, args) do
+         {:ok, athanor, _focused} <- Athanor.resolve(ctx, args),
+         :ok <- not_recovering(athanor) do
       case Members.add(athanor, target, ctx.user_id) do
         {:ok, _added_or_invited} ->
           # Uniform: whether the person is already here or arrives later,
@@ -237,6 +246,28 @@ defmodule Sanctum.Providers.Member do
 
   def handle(_ctx, %{"action" => action}), do: {:error, {:unknown_action, "member.#{action}"}}
   def handle(_ctx, _args), do: {:error, :action_missing}
+
+  # A group with a member still recovering from a declared restore admits
+  # no one new until each of them has recovered (the module doc).
+  defp not_recovering(%{id: athanor_id}) do
+    case Arca.SecurityTransitions.restore_frozen?(Prima.Actor.in_athanor(athanor_id)) do
+      {:ok, false} ->
+        :ok
+
+      {:ok, true} ->
+        {:error,
+         %Prima.Refusal{
+           class: :forbidden,
+           reason: :recovering_from_restore,
+           message:
+             "This home was restored from a backup, and a member of this group has not yet " <>
+               "recovered their sign-in: no one is added until every member has"
+         }}
+
+      {:error, _unanswered} ->
+        {:error, {:unavailable, "Storage"}}
+    end
+  end
 
   # An identifier names a person by their identity, and stands alone:
   # beside an email or a user id, which of them meant the person is not

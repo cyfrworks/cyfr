@@ -4,7 +4,7 @@
 defmodule Sanctum.Providers.Key do
   @moduledoc """
   API key tool handlers for the Sanctum MCP provider — create, get, list,
-  revoke, and rotate API keys.
+  revoke, rotate, and re-enable API keys.
 
   Extracted from `Sanctum.Provider`; behaviour preserved exactly.
   """
@@ -98,9 +98,26 @@ defmodule Sanctum.Providers.Key do
           kind: :write,
           planes: [:external],
           permission: :admin
+        ),
+        Operation.new(
+          "key",
+          "reenable",
+          "Re-enable a key a restore suspended",
+          [
+            Arg.new("key_id", :string,
+              required: true,
+              description:
+                "The id of your key that restoring this home from a backup suspended (key.list shows it)"
+            )
+          ],
+          kind: :write,
+          planes: [:external],
+          permission: :admin,
+          consent: :interactive
         )
       ],
-      description: "Manage API keys - create, get, list, revoke, or rotate keys",
+      description:
+        "Manage API keys - create, get, list, revoke, rotate, or re-enable a key a restore suspended",
       title: "API Key Management"
     )
   end
@@ -224,6 +241,9 @@ defmodule Sanctum.Providers.Key do
          "#{name} carries a consent capability and cannot be rotated — " <>
            "revoke it and mint a new key, which asks for consent again"}
 
+      {:error, :suspended} ->
+        {:error, suspended_refusal()}
+
       {:error, reason} when Sanctum.Issuance.standing_refusal?(reason) ->
         {:error, Sanctum.Issuance.standing_refusal(reason)}
 
@@ -246,11 +266,71 @@ defmodule Sanctum.Providers.Key do
     {:error, "Missing required argument: name"}
   end
 
+  def handle(%Context{} = ctx, %{"action" => "reenable", "key_id" => key_id})
+      when is_binary(key_id) do
+    case Sanctum.ApiKey.reenable(ctx, key_id, :confirmation) do
+      {:ok, key} ->
+        {:ok, %{reenabled: key}}
+
+      {:error, reason} ->
+        {:error, reenable_refusal(reason)}
+    end
+  end
+
+  def handle(_ctx, %{"action" => "reenable"}) do
+    {:error,
+     %Prima.Refusal{
+       class: :invalid_argument,
+       reason: :missing_argument,
+       message: "Name the key to re-enable by its id (key_id)"
+     }}
+  end
+
   def handle(_ctx, _args) do
     {:error, Prima.Provider.invalid_action("key", action_enum())}
   end
 
   # --- helpers ---
+
+  # A re-enable's refusals, each in the sentence the person reads; the
+  # confirmation's own answers pass as they are.
+  defp reenable_refusal(:not_found),
+    do: %Prima.Refusal{
+      class: :not_found,
+      reason: :not_found,
+      message: "You have no key with that id in this athanor"
+    }
+
+  defp reenable_refusal(:revoked),
+    do: %Prima.Refusal{
+      class: :conflict,
+      reason: :revoked,
+      message: "That key was revoked, and a revoked key is never re-enabled: create a new one"
+    }
+
+  defp reenable_refusal(:not_suspended),
+    do: %Prima.Refusal{
+      class: :conflict,
+      reason: :not_suspended,
+      message: "That key is not suspended, so there is nothing to re-enable"
+    }
+
+  defp reenable_refusal(reason) when reason in [:database_error, :unavailable],
+    do: Prima.Refusal.classify(:unavailable)
+
+  defp reenable_refusal(reason) when Sanctum.Issuance.standing_refusal?(reason),
+    do: Sanctum.Issuance.standing_refusal(reason)
+
+  defp reenable_refusal(reason), do: reason
+
+  defp suspended_refusal,
+    do: %Prima.Refusal{
+      class: :conflict,
+      reason: :suspended,
+      message:
+        "This key was suspended when this home was restored from a backup: " <>
+          "re-enable it first, then rotate it"
+    }
 
   defp parse_key_type_arg("application"), do: {:ok, :application}
   defp parse_key_type_arg("service"), do: {:ok, :service}

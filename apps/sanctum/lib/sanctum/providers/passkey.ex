@@ -4,11 +4,15 @@
 defmodule Sanctum.Providers.Passkey do
   @moduledoc """
   The `passkey` tool: a person's passkeys at this relying home —
-  register one, list them, revoke one, and the platform administrator's
-  authorization of one exact pending registration for a person who holds
-  no fresh method here. Registering, revoking and that authorization are
-  sensitive changes (`passkey_registration`), and the administrator's
-  needs the administrator's own fresh confirmation.
+  register one, list them, revoke one, re-enable one a declared restore
+  suspended, and the platform administrator's authorization of one exact
+  pending registration for a person who holds no fresh method here.
+  Registering, revoking and that authorization are sensitive changes
+  (`passkey_registration`), and the administrator's needs the
+  administrator's own fresh confirmation. Re-enabling is one too
+  (`restore_reenable`), confirmed while the person recovers by a door this
+  home re-authenticates or an emailed code, never by a passkey or a paired
+  device.
 
   Every action is on the external plane, through an interactive surface
   (`consent: :interactive`); `recover_admin` is also `scope: :platform`,
@@ -22,9 +26,13 @@ defmodule Sanctum.Providers.Passkey do
       (`status: "active"`), a pending one awaiting the platform
       administrator (`status: "awaiting_administrator"`, its id and
       registration digest), or the `confirmation_required` signal.
-    * `list` answers the person's active and pending passkeys here.
+    * `list` answers the person's active, suspended and pending passkeys
+      here.
     * `revoke` answers the revoked passkey.
-    * `recover_admin` answers the activated passkey.
+    * `reenable` answers the passkey, active again, and `recovery_closed`,
+      whether re-enabling it ended the person's recovery from the restore.
+      A recovery kit re-enables through the kit ingress, not here.
+    * `recover_admin` answers the activated passkey and `recovery_closed`.
   """
 
   alias Prima.{Arg, Operation}
@@ -62,6 +70,15 @@ defmodule Sanctum.Providers.Passkey do
         ),
         Operation.new(
           "passkey",
+          "reenable",
+          "Re-enable a passkey suspended by a restore",
+          [passkey_id()],
+          kind: :write,
+          planes: [:external],
+          consent: :interactive
+        ),
+        Operation.new(
+          "passkey",
           "recover_admin",
           "Authorize a person's pending passkey",
           [
@@ -83,7 +100,7 @@ defmodule Sanctum.Providers.Passkey do
         )
       ],
       description:
-        "Your passkeys at this server: register, list and revoke them. A platform admin authorizes the exact pending passkey of a person who has no fresh way to confirm here.",
+        "Your passkeys at this server: register, list and revoke them, and re-enable one a restore from a backup suspended. A platform admin authorizes the exact pending passkey of a person who has no fresh way to confirm here.",
       title: "Passkeys"
     )
   end
@@ -92,7 +109,7 @@ defmodule Sanctum.Providers.Passkey do
     do:
       Arg.new("passkey_id", :string,
         required: true,
-        description: "The passkey, or the pending registration (revoke, recover_admin)"
+        description: "The passkey, or the pending registration (revoke, reenable, recover_admin)"
       )
 
   def handle(%Context{} = ctx, %{"action" => "register"} = args) do
@@ -119,6 +136,11 @@ defmodule Sanctum.Providers.Passkey do
     end
   end
 
+  def handle(%Context{} = ctx, %{"action" => "reenable", "passkey_id" => id})
+      when is_binary(id) do
+    ctx |> Passkeys.reenable(id, :confirmation) |> answered()
+  end
+
   def handle(
         %Context{} = ctx,
         %{
@@ -138,7 +160,7 @@ defmodule Sanctum.Providers.Passkey do
     |> answered()
   end
 
-  def handle(_ctx, %{"action" => "revoke"}),
+  def handle(_ctx, %{"action" => action}) when action in ~w(revoke reenable),
     do: {:error, {:invalid_argument, "Missing required argument: passkey_id"}}
 
   def handle(_ctx, %{"action" => "recover_admin"}),

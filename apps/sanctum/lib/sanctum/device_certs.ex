@@ -163,7 +163,8 @@ defmodule Sanctum.DeviceCerts do
       person or device key than the paired-client row or the context, or
       the context is not a device context `verify_connect/3` produced.
     * `:revoked` — the paired client was revoked.
-    * `:not_standing` — no such paired client here, or the person is
+    * `:not_standing` — no such paired client here, a client a declared
+      restore suspended (until its person re-enables it), or the person is
       denied, the athanor archived or the person no longer seated in it.
     * `:identity_stale` — a remote person's directory could not confirm
       their head fresh: the request pauses.
@@ -694,8 +695,10 @@ defmodule Sanctum.DeviceCerts do
   The paired-client row `client_id` in the athanor `athanor_id`, of the
   person `user_id` (any person's for `nil`): `{:ok, row}` for an active
   client paired with a device key, `:revoked` for a revoked one,
-  `:not_standing` for one this home does not hold, and `:unavailable`
-  when the store cannot answer.
+  `:not_standing` for a suspended one (a declared restore's, which stands
+  for nothing until it is re-enabled, `Sanctum.Pairing.reenable/3`) and
+  for one this home does not hold, and `:unavailable` when the store
+  cannot answer.
   """
   @spec paired_client(String.t(), String.t() | nil, String.t()) ::
           {:ok, map()} | {:error, :revoked | :not_standing | :unavailable}
@@ -720,8 +723,12 @@ defmodule Sanctum.DeviceCerts do
 
   def paired_client(_athanor_id, _user_id, _client_id), do: {:error, :not_standing}
 
+  # Only an active device client stands. A suspended one is refused as a
+  # client whose standing ended, never as revoked: it stands again once
+  # re-enabled, and its glass reconnects or renews then.
   defp row_standing(%{standing: "active", source_kind: "device_cert"} = row), do: {:ok, row}
   defp row_standing(%{standing: "revoked"}), do: {:error, :revoked}
+  defp row_standing(%{standing: "suspended"}), do: {:error, :not_standing}
   defp row_standing(_no_device), do: {:error, :not_standing}
 
   defp stored_key(row, device_key) do
@@ -770,8 +777,9 @@ defmodule Sanctum.DeviceCerts do
 
   @doc """
   Whether the paired client a device context names still stands: its
-  certificate's deadline not passed, the paired-client row active and the
-  person's standing in the athanor (`standing/2`). For a grant decided
+  certificate's deadline not passed, the paired-client row active (a
+  suspended one is `:not_standing`) and the person's standing in the
+  athanor (`standing/2`). For a grant decided
   under a paired device (`Sanctum.Consent.Authz.authorize/3`) and for who
   can confirm (`Sanctum.Pairing.can_confirm?/1`). Any other context
   stands for no paired client.

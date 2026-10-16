@@ -281,12 +281,56 @@ defmodule Sanctum.Caller do
     end
   end
 
+  @doc """
+  Establish a recovering person's kit credential (the token
+  `Sanctum.Recovery.kit_proof/2` answered) for exactly `operation`: one of
+  the four re-enable operations (`Sanctum.Recovery.kit_operations/0`). Any
+  other operation is refused `:operation_not_permitted` before the
+  credential is read. The credential is read standing now
+  (`Sanctum.Recovery.kit_grant/1`): its person in good standing and their
+  recovery from a declared restore open.
+
+  The context names the person and nothing else: no athanor, no
+  permission, no auth method and no session, so no other surface or
+  operation admits it and it confirms nothing
+  (`Sanctum.Pairing.can_confirm?/1`). It comes with the grant, which each
+  re-enable reads standing again in its own write.
+  """
+  @spec establish_kit(String.t() | nil, term()) ::
+          {:ok, Context.t(), Sanctum.Recovery.kit_grant()}
+          | {:error, :invalid_credential | :operation_not_permitted | :unavailable}
+  def establish_kit(token, operation) do
+    cond do
+      operation not in Sanctum.Recovery.kit_operations() ->
+        {:error, :operation_not_permitted}
+
+      not is_binary(token) ->
+        {:error, :invalid_credential}
+
+      true ->
+        with {:ok, grant} <- Sanctum.Recovery.kit_grant(token) do
+          ctx =
+            Context.build(
+              user_id: grant.user_id,
+              provider: "restore_kit",
+              permissions: [],
+              authenticated: true
+            )
+
+          {:ok, validated(ctx), grant}
+        end
+    end
+  end
+
   # The key store's answers, in this module's vocabulary. A malformed key
-  # and an unknown one read alike, as the store already takes care they do.
+  # and an unknown one read alike, as the store already takes care they do,
+  # and a key a declared restore suspended reads as a revoked one.
   defp api_key_refusal(reason) when reason in [:invalid_key_format, :invalid_key],
     do: :invalid_credential
 
-  defp api_key_refusal(reason) when reason in [:revoked, :channel_closed], do: :revoked
+  defp api_key_refusal(reason) when reason in [:revoked, :suspended, :channel_closed],
+    do: :revoked
+
   defp api_key_refusal(:ip_not_allowed), do: :ip_not_allowed
   defp api_key_refusal(:database_error), do: :unavailable
 
@@ -613,7 +657,9 @@ defmodule Sanctum.Caller do
   defp derived_source(
          %{
            kind: :api_key,
-           row: %{revoked: false, athanor_id: athanor_id, created_by: user_id} = row
+           row:
+             %{revoked: false, suspended: false, athanor_id: athanor_id, created_by: user_id} =
+               row
          },
          _now,
          %{athanor_id: athanor_id, user_id: user_id},
@@ -1050,7 +1096,9 @@ defmodule Sanctum.Caller do
   defp stored_key(
          %{
            kind: :api_key,
-           row: %{revoked: false, athanor_id: athanor_id, created_by: creator} = row
+           row:
+             %{revoked: false, suspended: false, athanor_id: athanor_id, created_by: creator} =
+               row
          },
          %Context{athanor_id: athanor_id, user_id: creator, client_ip: client_ip}
        ) do

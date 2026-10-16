@@ -23,6 +23,11 @@ defmodule Sanctum.PairingTest do
   and the installation, so guessed codes never stop the bearer. Local
   pairing reads no directory.
 
+  After a declared restore a person re-enables a suspended device on a
+  door's re-authentication or with their recovery kit, which closes their
+  restore and no one else's; a confirmation a suspended passkey or device
+  gave approves nothing, and a revoked device is never revived.
+
   The closed action table, the operations that confirm each action, no
   change asking for a proof before one exists, and who can confirm: a
   client with no person behind it confirms nothing, a paired device while
@@ -271,7 +276,8 @@ defmodule Sanctum.PairingTest do
     :remote_sign_in,
     :key_rotation,
     :sign_in_methods,
-    :seal_change
+    :seal_change,
+    :restore_reenable
   ]
 
   describe "the action table" do
@@ -318,7 +324,11 @@ defmodule Sanctum.PairingTest do
         "person.rotate" => :key_rotation,
         "person.link_door" => :sign_in_methods,
         "person.unlink_door" => :sign_in_methods,
-        "seal.change" => :seal_change
+        "seal.change" => :seal_change,
+        "key.reenable" => :restore_reenable,
+        "webhook.reenable" => :restore_reenable,
+        "pairing.reenable" => :restore_reenable,
+        "passkey.reenable" => :restore_reenable
       }
 
       for {operation, action} <- expected do
@@ -1264,6 +1274,250 @@ defmodule Sanctum.PairingTest do
       assert client_id == device.client_id
     end
   end
+
+  describe "reenable/3 after a declared restore" do
+    setup %{session_ctx: session_ctx, user: user, athanor: athanor} do
+      device = pair!(session_ctx)
+
+      # A second athanor of the person's, with a device of its own.
+      {:ok, second} = Athanors.create_group(user.id, "Pairing second")
+      far = pair!(signed_in!(user, second))
+
+      # A second person, recovering beside them.
+      other = seated!()
+      other_device = pair!(other.session_ctx)
+
+      {:ok, _} = Arca.SecurityTransitions.mark_restore(Prima.Actor.system())
+      assert {:ok, %{restore_id: restore_id}} = Arca.SecurityTransitions.restore(slot: :none)
+
+      %{
+        device: device,
+        far: far,
+        other: other,
+        other_device: other_device,
+        restore_id: restore_id,
+        session: signed_in!(user, athanor)
+      }
+    end
+
+    test "a door's re-authentication re-enables the device and closes its person's restore alone",
+         %{session: session, device: device, user: user, other: other, restore_id: restore_id} do
+      assert {:ok, []} = Pairing.list(session)
+      assert restore_open(user.id) == restore_id
+
+      assert {:error, {:confirmation_required, %{id: id, operation: "pairing.reenable"}}} =
+               Pairing.reenable(session, device.client_id, :confirmation)
+
+      assert Jason.decode!(record!(session, id).preview)["resource"] == device.client_id
+      door_confirmed!(session, id)
+      client_id = device.client_id
+
+      assert {:ok,
+              %{
+                client: %{client_id: ^client_id, standing: "active"},
+                recovery_closed: true
+              }} = Pairing.reenable(%{session | confirmation_id: id}, client_id, :confirmation)
+
+      assert {:ok, [%{client_id: ^client_id}]} = Pairing.list(session)
+      assert record!(session, id).state == "consumed"
+      assert restore_open(user.id) == nil
+      assert restore_open(other.user.id) == restore_id
+
+      # Nothing is left to re-enable on it.
+      assert {:error, %Prima.Refusal{reason: :not_suspended, class: :conflict}} =
+               Pairing.reenable(session, client_id, :confirmation)
+    end
+
+    test "no suspended passkey or device confirms anything, nor approves its own return",
+         %{session: session, device: device, user: user, restore_id: restore_id} do
+      assert {:error, {:confirmation_required, %{id: id}}} =
+               Pairing.reenable(session, device.client_id, :confirmation)
+
+      ref = Prima.Confirmation.ref(id)
+      actor = Context.actor(session)
+      [passkey_id] = suspended_passkeys(user.id)
+
+      # Neither can record a confirmation: each stands for nothing.
+      assert {:error, :revoked} =
+               Arca.PendingConfirmations.confirm(actor, ref, %{
+                 proof: "oidc_reauth",
+                 client_id: device.client_id
+               })
+
+      assert {:error, :revoked} =
+               Arca.PendingConfirmations.confirm(actor, ref, %{
+                 proof: "passkey",
+                 passkey_id: passkey_id
+               })
+
+      # And a confirmation attributed to either is refused while the
+      # person's restore is open, whatever let it be recorded.
+      for attribution <- [
+            [confirmed_client_id: device.client_id],
+            [confirmed_passkey_id: passkey_id]
+          ] do
+        assert {:error, {:confirmation_required, %{id: id}}} =
+                 Pairing.reenable(session, device.client_id, :confirmation)
+
+        door_confirmed!(session, id)
+        attribute!(session, id, attribution)
+
+        assert Pairing.reenable(%{session | confirmation_id: id}, device.client_id, :confirmation) ==
+                 {:error, Pairing.restore_source_refusal()}
+
+        assert record!(session, id).state == "confirmed"
+      end
+
+      assert standing(device.client_id) == "suspended"
+      assert restore_open(user.id) == restore_id
+    end
+
+    test "a revoked device is never revived, and nothing is asked first",
+         %{session: session, device: device, user: user, restore_id: restore_id} do
+      {:ok, %{standing: "revoked"}} =
+        Arca.PairedClients.revoke(Context.actor(session), device.client_id)
+
+      assert {:error, %Prima.Refusal{reason: :revoked, class: :conflict}} =
+               Pairing.reenable(session, device.client_id, :confirmation)
+
+      assert {:ok, []} = Arca.PendingConfirmations.list_open(Context.actor(session), user.id)
+
+      digest = kit_credential!(user.id, restore_id)
+
+      assert {:error, %Prima.Refusal{reason: :revoked}} =
+               Pairing.reenable(glass(), device.client_id, {:kit, kit(user, digest)})
+
+      assert standing(device.client_id) == "revoked"
+      assert restore_open(user.id) == restore_id
+    end
+
+    test "the kit re-enables a device in any athanor of its person while their restore is open, and nothing after",
+         %{
+           device: device,
+           far: far,
+           user: user,
+           other: other,
+           other_device: other_device,
+           restore_id: restore_id
+         } do
+      digest = kit_credential!(user.id, restore_id)
+
+      # Another digest, and another person's device, are not this kit's.
+      assert {:error, Pairing.kit_refusal()} ==
+               Pairing.reenable(
+                 glass(),
+                 far.client_id,
+                 {:kit, kit(user, "sha256:" <> String.duplicate("0", 64))}
+               )
+
+      assert {:error, {:not_found, "paired client", other_device.client_id}} ==
+               Pairing.reenable(glass(), other_device.client_id, {:kit, kit(user, digest)})
+
+      assert {:ok, %{client: %{standing: "active"}, recovery_closed: true}} =
+               Pairing.reenable(glass(), far.client_id, {:kit, kit(user, digest)})
+
+      assert standing(far.client_id) == "active"
+      assert restore_open(user.id) == nil
+      assert restore_open(other.user.id) == restore_id
+
+      # The credential went with the person's restore.
+      assert {:error, Pairing.kit_refusal()} ==
+               Pairing.reenable(glass(), device.client_id, {:kit, kit(user, digest)})
+
+      assert standing(device.client_id) == "suspended"
+    end
+  end
+
+  # A new session of `user` focused on `athanor`, as signing in again makes.
+  defp signed_in!(user, athanor) do
+    built =
+      Context.build(
+        user_id: user.id,
+        email: user.email,
+        provider: "github",
+        athanor_id: athanor.id,
+        permissions: [:*],
+        auth_method: :oidc,
+        authenticated: true
+      )
+
+    {:ok, session} = Sanctum.TestContext.create_session(built)
+    {:ok, ctx} = Sanctum.Caller.establish(session.token, focus: athanor.id, task_supervisor: nil)
+    ctx
+  end
+
+  # The record the secret `id` names, confirmed by a fresh re-authentication
+  # from a session that names no client: a door's proof.
+  defp door_confirmed!(ctx, id) do
+    {:ok, %{state: "confirmed", confirmed_client_id: nil, confirmed_passkey_id: nil}} =
+      Arca.PendingConfirmations.confirm(Context.actor(ctx), Prima.Confirmation.ref(id), %{
+        proof: "oidc_reauth"
+      })
+  end
+
+  # The confirmed record `id` attributed as `attribution` says, as no
+  # confirmation path writes it for a suspended method.
+  defp attribute!(ctx, id, attribution) do
+    ref = Prima.Confirmation.ref(id)
+
+    {1, _} =
+      Arca.Repo.update_all(
+        from(c in Arca.Schemas.PendingConfirmation,
+          where: c.athanor_id == ^ctx.athanor_id and c.ref == ^ref
+        ),
+        set: attribution
+      )
+  end
+
+  defp suspended_passkeys(user_id) do
+    Arca.Repo.all(
+      from(p in Arca.Schemas.Passkey,
+        where: p.user_id == ^user_id and p.state == "suspended",
+        select: p.id
+      )
+    )
+  end
+
+  defp restore_open(user_id) do
+    {:ok, restore_id} = Arca.SecurityTransitions.restore_open(Prima.Actor.system(), user_id)
+    restore_id
+  end
+
+  defp standing(client_id),
+    do: Arca.Repo.one(from(p in PairedClient, where: p.id == ^client_id, select: p.standing))
+
+  # A kit credential the kit ingress would issue for `user_id`'s open
+  # restore: its challenge held, then redeemed. Answers the credential's
+  # digest.
+  defp kit_credential!(user_id, restore_id) do
+    expires_at = DateTime.add(DateTime.utc_now(), 600, :second)
+    challenge = Prima.Digest.sha256(:crypto.strong_rand_bytes(32))
+    credential = Prima.Digest.sha256(:crypto.strong_rand_bytes(32))
+    system = Prima.Actor.system()
+
+    :ok =
+      Arca.SecurityTransitions.put_kit_challenge(
+        system,
+        user_id,
+        restore_id,
+        challenge,
+        expires_at
+      )
+
+    :ok =
+      Arca.SecurityTransitions.redeem_kit_challenge(
+        system,
+        user_id,
+        restore_id,
+        challenge,
+        credential,
+        expires_at
+      )
+
+    credential
+  end
+
+  defp kit(user, digest), do: %{user_id: user.id, credential_digest: digest}
 
   describe "list/1" do
     test "the person's active clients in the athanor, marking the one asking", %{
