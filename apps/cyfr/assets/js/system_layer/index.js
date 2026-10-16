@@ -606,8 +606,10 @@ export default {
     }
     this.onGlassClick = (event) => this.glassClick(event)
     this.onGlassSubmit = (event) => this.glassSubmit(event)
+    this.onHash = () => this.codeArrived()
     doc.addEventListener("visibilitychange", this.onWake)
     if (globalThis.addEventListener) globalThis.addEventListener("online", this.onWake)
+    if (globalThis.addEventListener) globalThis.addEventListener("hashchange", this.onHash)
     this.el.addEventListener("click", this.onGlassClick)
     this.el.addEventListener("submit", this.onGlassSubmit)
 
@@ -633,6 +635,32 @@ export default {
       // cleared, or a private window): nothing starts, and the page says so.
       this.pairRefused("This browser would not open the store that keeps this device's key. Allow site storage for this page and reload.")
     )
+  },
+
+  // A pairing link opened on the page that already shows this device's
+  // code changes only the address's fragment, and the page does not load
+  // again: the code is taken as an opening takes it, and leaves the
+  // address at once.
+  async codeArrived() {
+    const location = globalThis.location
+    const code = codeFromFragment(location && location.hash)
+    if (!code) return
+    if (globalThis.history) globalThis.history.replaceState(null, "", location.pathname + location.search)
+
+    try {
+      const stored = await this.store.load()
+      switch (openingPlan(code, stored)) {
+        case "ask":
+          this.pendingCode = code
+          return this.drawGlass(this.glass)
+        case "pair":
+          this.pairError = null
+          if ((await this.pairGlass(code)) === "certify") return
+          return this.glass.start()
+      }
+    } catch (_error) {
+      this.pairRefused("This browser would not open the store that keeps this device's key. Allow site storage for this page and reload.")
+    }
   },
 
   // Keep the stored device and forget the code, or unpair the stored
@@ -707,6 +735,7 @@ export default {
   destroyGlass() {
     globalThis.document.removeEventListener("visibilitychange", this.onWake)
     if (globalThis.removeEventListener) globalThis.removeEventListener("online", this.onWake)
+    if (globalThis.removeEventListener) globalThis.removeEventListener("hashchange", this.onHash)
     this.el.removeEventListener("click", this.onGlassClick)
     this.el.removeEventListener("submit", this.onGlassSubmit)
     this.glass.closeSocket()

@@ -1132,6 +1132,35 @@ describe("a glass that holds a device, opened on a pairing link", () => {
     }
   })
 
+  test("a link opened on the page that shows the code, a fragment change alone, pairs with the prepared key", async () => {
+    const page = await mountGlassPage({stored: null, replies, hash: ""})
+    try {
+      const prepared = await page.store.loadPrepared()
+      assert.deepEqual(page.pushed.map((push) => push.event), ["prepared"])
+
+      // The page does not load again: only the address's fragment changes.
+      globalThis.location.hash = "#code=UjcQhGOiIAu_9xjWI7A-Fw"
+      await page.hook.onHash()
+
+      assert.deepEqual(page.pushed.map((push) => push.event), ["prepared", "pair_start", "pair_proof"])
+      assert.equal(page.pushed[1].payload.invitation_secret, "UjcQhGOiIAu_9xjWI7A-Fw")
+      assert.equal(page.pushed[1].payload.key_digest, prepared.keyDigest)
+      // The code left the address at once.
+      assert.equal(page.replaced.at(-1)[2], "/pair")
+      const record = await page.store.load()
+      assert.equal(record.clientId, "pcl_new")
+      assert.equal(record.publicKey, prepared.publicKey)
+      assert.equal(page.sockets.at(-1).url, "wss://alice.example/device/websocket")
+
+      // A fragment naming no code changes nothing.
+      globalThis.location.hash = "#other"
+      await page.hook.onHash()
+      assert.equal(page.pushed.length, 3)
+    } finally {
+      page.restore()
+    }
+  })
+
   test("a refused pairing keeps the prepared key, so the person can approve its code again", async () => {
     const prepared = await preparedKey()
     const refusing = {...replies, pair_start: () => ({error: "This device is not the one the pairing was approved for: approve the code this device shows"})}
