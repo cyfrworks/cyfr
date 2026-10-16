@@ -9,7 +9,7 @@ defmodule Aqua.ToolSeamTest do
   The assistant reads the operation table wherever it needs to
   (`Aqua.Kinds`, `Aqua.Hands`, the loop's policy); what it does not do is
   dispatch past the seam. `Sanctum.Gate.call_external` and
-  `Sanctum.Gate.call_in_chain`, and the `Sanctum.Catalog` functions they
+  `Sanctum.Gate.call_in_chain`, and the `Sanctum.Dispatch` functions they
   delegate to, are called or captured by `Aqua.Ops` alone. The compiled
   beams are the reader (`Prima.Test.Beams`), so a call through an alias
   or an import and a capture are seen and a name inside a string is not,
@@ -24,7 +24,7 @@ defmodule Aqua.ToolSeamTest do
   alias Prima.Test.Beams
 
   @seam Aqua.Ops
-  @gate [Sanctum.Gate, Sanctum.Catalog]
+  @gate [Sanctum.Gate, Sanctum.Dispatch]
   @dispatch [:call_external, :call_in_chain]
 
   test "the assistant dispatches through the gate only at its seam" do
@@ -66,7 +66,7 @@ defmodule Aqua.ToolSeamTest do
       end
 
       defmodule Aqua.PlantedCapture do
-        def plant, do: &Sanctum.Catalog.call_external/3
+        def plant, do: &Sanctum.Dispatch.call_external/3
       end
 
       defmodule Aqua.PlantedString do
@@ -85,7 +85,7 @@ defmodule Aqua.ToolSeamTest do
              Aqua.PlantedDirect => [{Sanctum.Gate, :call_external, 3}],
              Aqua.PlantedAlias => [{Sanctum.Gate, :call_in_chain, 4}],
              Aqua.PlantedImport => [{Sanctum.Gate, :call_external, 4}],
-             Aqua.PlantedCapture => [{Sanctum.Catalog, :call_external, 3}],
+             Aqua.PlantedCapture => [{Sanctum.Dispatch, :call_external, 3}],
              Aqua.PlantedString => []
            }
   end

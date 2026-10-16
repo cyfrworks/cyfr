@@ -100,14 +100,14 @@ defmodule Sanctum.Gate.ProxyTest do
 
     test "a proxied name is dispatched to it, from the caller's plane", %{ctx: ctx} do
       assert {:ok, %{"answered_by" => "stub", "tool" => "echo", "plane" => "external"}} =
-               Sanctum.Catalog.call_external("stub:echo", ctx, %{})
+               Sanctum.Gate.call_external("stub:echo", ctx, %{})
     end
 
     test "a name the port resolves is admitted, then dispatched: one decision", %{ctx: ctx} do
       ctx = %{ctx | request_id: Prima.UUID7.request_id()}
 
       assert {:ok, %{"answered_by" => "stub"}} =
-               Sanctum.Catalog.call_external("stub:echo", ctx, %{})
+               Sanctum.Gate.call_external("stub:echo", ctx, %{})
 
       assert {:ok, [decision]} =
                Arca.DecisionLog.correlate(Sanctum.Context.actor(ctx), ctx.request_id)
@@ -122,7 +122,7 @@ defmodule Sanctum.Gate.ProxyTest do
       ctx = %{ctx | request_id: Prima.UUID7.request_id()}
 
       assert {:error, %Prima.Refusal{stage: :admission, class: :invalid_argument}} =
-               Sanctum.Catalog.call_external("stub:closed", ctx, %{})
+               Sanctum.Gate.call_external("stub:closed", ctx, %{})
 
       assert {:ok, [decision]} =
                Arca.DecisionLog.correlate(Sanctum.Context.actor(ctx), ctx.request_id)
@@ -139,7 +139,7 @@ defmodule Sanctum.Gate.ProxyTest do
                 class: :not_found,
                 reason: {:unknown_tool, "other:echo"},
                 message: "Unknown tool: other:echo"
-              }} = Sanctum.Catalog.call_external("other:echo", ctx, %{})
+              }} = Sanctum.Gate.call_external("other:echo", ctx, %{})
     end
 
     test "consent's view of the tool servers is the port's", %{ctx: ctx} do

@@ -11,7 +11,6 @@ defmodule Sanctum.Gate.CatalogChargeRowTest do
 
   use ExUnit.Case, async: false
 
-  alias Sanctum.Catalog
   alias Prima.Authority
   alias Prima.Authority.Blob
   alias Sanctum.Context
@@ -98,7 +97,7 @@ defmodule Sanctum.Gate.CatalogChargeRowTest do
   end
 
   defp call(ctx, auth, charge, lineage) do
-    Catalog.call_in_chain(
+    Sanctum.Gate.call_in_chain(
       "tincture_visibility",
       ctx,
       %{"action" => "get", "publisher" => "local", "name" => "no-such-tincture"},
@@ -223,7 +222,7 @@ defmodule Sanctum.Gate.CatalogChargeRowTest do
               reason: {:invoke_invalid, {:malformed_target, :await, :tool}},
               message: "The chain named a target that does not exist."
             }} =
-             Catalog.call_in_chain(
+             Sanctum.Gate.call_in_chain(
                "tincture_visibility",
                ctx,
                %{"action" => "get", "publisher" => "local", "name" => "no-such-tincture"},
@@ -240,7 +239,7 @@ defmodule Sanctum.Gate.CatalogChargeRowTest do
     lineage: lineage
   } do
     result =
-      Catalog.call_in_chain(
+      Sanctum.Gate.call_in_chain(
         "tincture_visibility",
         ctx,
         %{"action" => "get", "publisher" => "local", "name" => "no-such-tincture"},
@@ -271,7 +270,7 @@ defmodule Sanctum.Gate.CatalogChargeRowTest do
       )
 
     assert {:error, %Prima.Refusal{stage: :admission, message: msg}} =
-             Catalog.call_in_chain(
+             Sanctum.Gate.call_in_chain(
                "tincture_visibility",
                ctx,
                %{"action" => "get", "publisher" => "local", "name" => "no-such-tincture"},

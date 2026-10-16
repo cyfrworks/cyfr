@@ -159,7 +159,7 @@ defmodule Sanctum.Visibility do
   defp visible_action?(_name, nil, _ctx), do: false
 
   # A context on the guest plane is a running chain's, which only
-  # `Sanctum.Catalog.call_in_chain/5` serves, so it is asked as that entry
+  # `Sanctum.Gate.call_in_chain/5` serves, so it is asked as that entry
   # asks.
   defp visible_action?(name, annotation, ctx),
     do:

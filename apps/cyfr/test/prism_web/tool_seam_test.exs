@@ -7,7 +7,10 @@ defmodule PrismWeb.ToolSeamTest do
   place that splits `"tool/action"`, one `error_message/1` vocabulary.
   `call_tool/3` takes a context, so work handed to `Prism.TaskSupervisor`
   has no reason to reach past it; this test keeps every other console
-  module from calling the catalog directly.
+  module from calling the gate's dispatching entries, `Sanctum.Gate`'s or
+  `Sanctum.Dispatch`'s, directly. The compiled beams are the reader
+  (`Prima.Test.Beams`), so a call through an alias or an import and a
+  capture are seen and a name inside a string is not.
   """
 
   use ExUnit.Case, async: true
@@ -18,8 +21,9 @@ defmodule PrismWeb.ToolSeamTest do
     :ok
   end
 
-  @seam "apps/cyfr/lib/prism_web/ops.ex"
-  @direct_call ~r/\bCatalog\.call_external\(/
+  @seam PrismWeb.Ops
+  @gate [Sanctum.Gate, Sanctum.Dispatch]
+  @dispatch [:call_external, :call_in_chain]
 
   defp root, do: Path.expand("../../../..", __DIR__)
 
@@ -34,30 +38,96 @@ defmodule PrismWeb.ToolSeamTest do
   end
 
   test "the console reaches the tool surface only through its seam" do
+    beams = console_beams()
+    assert beams != [], "no console beam was read"
+
     offenders =
-      console_files()
-      |> Enum.reject(&String.ends_with?(&1, "/ops.ex"))
-      |> Enum.flat_map(fn path ->
-        path
-        |> Prima.Test.SourceTree.read()
-        |> String.split("\n")
-        |> Enum.with_index(1)
-        |> Enum.filter(fn {line, _n} ->
-          Regex.match?(@direct_call, line)
-        end)
-        |> Enum.map(fn {_line, n} -> "#{Path.relative_to(path, root())}:#{n}" end)
-      end)
+      for {module, source, beam} <- beams,
+          module != @seam,
+          {callee, function, arity} <- dispatches(beam),
+          do: "#{source}: #{inspect(module)} reaches #{inspect(callee)}.#{function}/#{arity}"
 
     assert offenders == [],
            """
-           These console modules call the catalog directly instead of
+           These console modules call the gate directly instead of
            `PrismWeb.Ops.call_tool/3`:
 
            #{Enum.map_join(offenders, "\n", &"  #{&1}")}
 
            `call_tool/3` takes a `%Sanctum.Context{}` as well as a socket, so
-           work inside a supervised task has no reason to reach past #{@seam}.
+           work inside a supervised task has no reason to reach past #{inspect(@seam)}.
            """
+
+    # The seam itself makes the reach, so the scan is reading dispatch and
+    # not passing on an empty read.
+    seam = Enum.find_value(beams, fn {module, _source, beam} -> module == @seam and beam end)
+    assert seam, "#{inspect(@seam)} has no beam"
+    assert {Sanctum.Gate, :call_external, 3} in dispatches(seam)
+  end
+
+  test "a planted gate call or dispatch bypass is reported, and a string is not" do
+    compiled =
+      Code.compile_string(~S'''
+      defmodule PrismWeb.PlantedGateCall do
+        alias Sanctum.Gate
+        def plant(ctx, args), do: Gate.call_external("t", ctx, args)
+      end
+
+      defmodule PrismWeb.PlantedDispatchBypass do
+        def plant, do: &Sanctum.Dispatch.call_external/4
+      end
+
+      defmodule PrismWeb.PlantedString do
+        def plant, do: "Sanctum.Gate.call_external(\"t\", ctx, args)"
+      end
+      ''')
+
+    for {module, _beam} <- compiled do
+      :code.purge(module)
+      :code.delete(module)
+    end
+
+    reported = for {module, beam} <- compiled, into: %{}, do: {module, dispatches(beam)}
+
+    assert reported == %{
+             PrismWeb.PlantedGateCall => [{Sanctum.Gate, :call_external, 3}],
+             PrismWeb.PlantedDispatchBypass => [{Sanctum.Dispatch, :call_external, 4}],
+             PrismWeb.PlantedString => []
+           }
+  end
+
+  # Every production beam compiled from a console file, as
+  # `{module, source, path}`.
+  defp console_beams do
+    sources = MapSet.new(console_files(), &Path.relative_to(&1, root()))
+
+    for path <-
+          :cyfr
+          |> Application.app_dir("ebin")
+          |> Path.join("Elixir.*.beam")
+          |> Path.wildcard(),
+        source = beam_source(path),
+        MapSet.member?(sources, source),
+        do: {path |> Path.basename(".beam") |> String.to_atom(), source, String.to_charlist(path)}
+  end
+
+  defp beam_source(path) do
+    case :beam_lib.chunks(String.to_charlist(path), [:compile_info]) do
+      {:ok, {_module, [compile_info: info]}} ->
+        info |> Keyword.get(:source, ~c"") |> to_string() |> Path.relative_to(root())
+
+      _ ->
+        nil
+    end
+  end
+
+  # The gate dispatch `beam` calls or captures.
+  defp dispatches(beam) do
+    for {module, function, arity} <- Prima.Test.Beams.reaches(beam),
+        module in @gate,
+        function in @dispatch,
+        uniq: true,
+        do: {module, function, arity}
   end
 
   # State that exists only because a person is looking at a screen. Every

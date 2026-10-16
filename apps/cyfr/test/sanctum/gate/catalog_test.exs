@@ -171,7 +171,7 @@ defmodule Sanctum.Gate.CatalogTest do
     test "delegates to correct provider module" do
       ctx = Sanctum.TestContext.local()
 
-      {:ok, result} = Catalog.call_external("system", ctx, %{"action" => "status"})
+      {:ok, result} = Sanctum.Gate.call_external("system", ctx, %{"action" => "status"})
 
       assert is_map(result)
       assert Map.has_key?(result, :status)
@@ -181,7 +181,7 @@ defmodule Sanctum.Gate.CatalogTest do
     test "returns error for unknown tool" do
       ctx = Sanctum.TestContext.local()
 
-      result = Catalog.call_external("nonexistent/tool", ctx, %{})
+      result = Sanctum.Gate.call_external("nonexistent/tool", ctx, %{})
 
       assert {:error, %Refusal{stage: :admission, message: message}} = result
       assert message =~ "Unknown tool"
@@ -193,7 +193,7 @@ defmodule Sanctum.Gate.CatalogTest do
       # Call system with invalid action to trigger error — the dispatch
       # gate answers with the typed default-deny.
       {:error, %Refusal{stage: :admission, reason: {:unknown_action, message}}} =
-        Catalog.call_external("system", ctx, %{"action" => "invalid_action"})
+        Sanctum.Gate.call_external("system", ctx, %{"action" => "invalid_action"})
 
       assert message == "system.invalid_action"
     end
@@ -205,7 +205,7 @@ defmodule Sanctum.Gate.CatalogTest do
       # The system tool doesn't expose context directly, but we can verify
       # the call succeeds with valid context
       {:ok, result} =
-        Catalog.call_external("system", ctx, %{"action" => "status", "scope" => "emissary"})
+        Sanctum.Gate.call_external("system", ctx, %{"action" => "status", "scope" => "emissary"})
 
       assert result.status == "ok"
       assert result.services.emissary == "ok"
@@ -219,14 +219,14 @@ defmodule Sanctum.Gate.CatalogTest do
       # An auth refusal, never "Unknown tool" — the gate fires first.
       assert {:error,
               %Refusal{stage: :admission, reason: {:tool_auth_required, "someserver:some_tool"}}} =
-               Catalog.call_external("someserver:some_tool", ctx, %{})
+               Sanctum.Gate.call_external("someserver:some_tool", ctx, %{})
     end
 
     test "authenticated caller with a nonexistent server still gets Unknown tool" do
       ctx = Sanctum.TestContext.local()
 
       assert {:error, %Refusal{stage: :admission, message: message}} =
-               Catalog.call_external("no-such-server:some_tool", ctx, %{})
+               Sanctum.Gate.call_external("no-such-server:some_tool", ctx, %{})
 
       assert message =~ "Unknown tool"
     end
@@ -235,7 +235,7 @@ defmodule Sanctum.Gate.CatalogTest do
       ctx = Context.build(authenticated: false, permissions: [])
 
       assert {:error, %Refusal{stage: :admission, message: message}} =
-               Catalog.call_external("definitely_not_a_tool", ctx, %{})
+               Sanctum.Gate.call_external("definitely_not_a_tool", ctx, %{})
 
       assert message =~ "Unknown tool"
     end
@@ -438,7 +438,7 @@ defmodule Sanctum.Gate.CatalogTest do
 
       # Calling a non-existent action will raise in the provider
       # The registry should catch this and return an error tuple
-      result = Catalog.call_external("system", ctx, %{"action" => "crash_intentionally"})
+      result = Sanctum.Gate.call_external("system", ctx, %{"action" => "crash_intentionally"})
 
       # Should return error instead of crashing — an undeclared action is
       # the typed default-deny, refused before the handler could raise.
@@ -449,7 +449,7 @@ defmodule Sanctum.Gate.CatalogTest do
     test "returns meaningful error for unknown tool" do
       ctx = Sanctum.TestContext.local()
 
-      result = Catalog.call_external("completely/unknown/tool", ctx, %{})
+      result = Sanctum.Gate.call_external("completely/unknown/tool", ctx, %{})
 
       assert {:error, %Refusal{stage: :admission, message: message}} = result
       assert message =~ "Unknown tool"
@@ -464,7 +464,7 @@ defmodule Sanctum.Gate.CatalogTest do
         caller = self()
 
         assert {:error, {:crashed, message}} =
-                 Catalog.call_external(@crash_tool, ctx, %{"action" => "raise"})
+                 Sanctum.Gate.call_external(@crash_tool, ctx, %{"action" => "raise"})
 
         # The tuple names the tool, never the exception's own message — that
         # text can carry a query, a path, or the offending bytes, and this
@@ -477,7 +477,7 @@ defmodule Sanctum.Gate.CatalogTest do
         assert Process.alive?(caller)
 
         assert {:ok, %{"ok" => true}} =
-                 Catalog.call_external(@crash_tool, ctx, %{"action" => "ok"})
+                 Sanctum.Gate.call_external(@crash_tool, ctx, %{"action" => "ok"})
       end)
     end
 
@@ -486,7 +486,7 @@ defmodule Sanctum.Gate.CatalogTest do
         ctx = Sanctum.TestContext.local()
 
         assert {:error, {:exit, message}} =
-                 Catalog.call_external(@crash_tool, ctx, %{"action" => "exit"})
+                 Sanctum.Gate.call_external(@crash_tool, ctx, %{"action" => "exit"})
 
         assert message =~ "exited unexpectedly"
         assert Process.alive?(self())
@@ -503,7 +503,7 @@ defmodule Sanctum.Gate.CatalogTest do
         # on :insufficient_permissions. The handler raised it, so it is the
         # execution's refusal, not the gate's.
         assert {:error, reason} =
-                 Catalog.call_external(@crash_tool, ctx, %{"action" => "unauthorized"})
+                 Sanctum.Gate.call_external(@crash_tool, ctx, %{"action" => "unauthorized"})
 
         assert reason == :missing_tenant
         assert Sanctum.Unauthorized.reason?(reason)
@@ -516,7 +516,7 @@ defmodule Sanctum.Gate.CatalogTest do
 
       # This should fail due to missing required action, but not crash
       assert {:error, %Refusal{stage: :admission, reason: :action_missing}} =
-               Catalog.call_external("system", ctx, %{})
+               Sanctum.Gate.call_external("system", ctx, %{})
     end
 
     test "provider errors are wrapped with context" do
@@ -525,7 +525,7 @@ defmodule Sanctum.Gate.CatalogTest do
       # Invalid action is the dispatcher's typed default-deny, naming the
       # tool.action it refused.
       {:error, %Refusal{stage: :admission, reason: {:unknown_action, message}}} =
-        Catalog.call_external("system", ctx, %{"action" => "nonexistent"})
+        Sanctum.Gate.call_external("system", ctx, %{"action" => "nonexistent"})
 
       assert message == "system.nonexistent"
     end
@@ -543,7 +543,7 @@ defmodule Sanctum.Gate.CatalogTest do
       }
 
       # The tool should handle nil user_id gracefully
-      result = Catalog.call_external("system", ctx, %{"action" => "status"})
+      result = Sanctum.Gate.call_external("system", ctx, %{"action" => "status"})
 
       # Should still work - status doesn't require auth
       assert {:ok, _} = result
@@ -572,7 +572,7 @@ defmodule Sanctum.Gate.CatalogTest do
       tasks =
         for _ <- 1..20 do
           Task.async(fn ->
-            Catalog.call_external("system", ctx, %{"action" => "status"})
+            Sanctum.Gate.call_external("system", ctx, %{"action" => "status"})
           end)
         end
 
@@ -626,7 +626,7 @@ defmodule Sanctum.Gate.CatalogTest do
 
           send(
             caller,
-            {:result, Catalog.call_external(@blocking_tool, ctx, args, runner: :supervised)}
+            {:result, Sanctum.Gate.call_external(@blocking_tool, ctx, args, runner: :supervised)}
           )
         end)
 
@@ -669,7 +669,7 @@ defmodule Sanctum.Gate.CatalogTest do
           send(
             caller,
             {:result,
-             Catalog.call_external(@blocking_tool, ctx, %{"action" => "block"},
+             Sanctum.Gate.call_external(@blocking_tool, ctx, %{"action" => "block"},
                runner: :supervised,
                cancel_handle: handle
              )}
@@ -693,7 +693,7 @@ defmodule Sanctum.Gate.CatalogTest do
       ctx = %{Sanctum.TestContext.local() | request_id: "req_finished"}
 
       {:ok, _} =
-        Catalog.call_external("system", ctx, %{"action" => "status"}, runner: :supervised)
+        Sanctum.Gate.call_external("system", ctx, %{"action" => "status"}, runner: :supervised)
 
       :sys.get_state(Sanctum.RunningTasks)
       assert {:error, :not_found} = Sanctum.RunningTasks.cancel("req_finished")
@@ -707,7 +707,7 @@ defmodule Sanctum.Gate.CatalogTest do
       with_blocking_tool(fn ->
         ctx = %{Sanctum.TestContext.local() | request_id: "req_inline"}
         args = %{"action" => "block", "release" => true}
-        assert {:ok, %{ran_on: pid}} = Catalog.call_external(@blocking_tool, ctx, args)
+        assert {:ok, %{ran_on: pid}} = Sanctum.Gate.call_external(@blocking_tool, ctx, args)
         assert pid == self()
         assert [] = :ets.lookup(Sanctum.RunningTasks, "req_inline")
       end)
@@ -720,7 +720,7 @@ defmodule Sanctum.Gate.CatalogTest do
         log =
           ExUnit.CaptureLog.capture_log(fn ->
             assert {:error, {:crashed, message}} =
-                     Catalog.call_external(@blocking_tool, ctx, %{
+                     Sanctum.Gate.call_external(@blocking_tool, ctx, %{
                        "action" => "block",
                        "crash" => true
                      })
@@ -731,7 +731,7 @@ defmodule Sanctum.Gate.CatalogTest do
         assert log =~ "crashed"
 
         assert {:error, :missing_tenant} =
-                 Catalog.call_external(@blocking_tool, ctx, %{
+                 Sanctum.Gate.call_external(@blocking_tool, ctx, %{
                    "action" => "block",
                    "refuse" => true
                  })
@@ -745,7 +745,7 @@ defmodule Sanctum.Gate.CatalogTest do
 
       # The system tool with an invalid action is refused by the dispatch
       # gate's typed default-deny before any handler could raise.
-      result = Catalog.call_external("system", ctx, %{"action" => "this_will_cause_error"})
+      result = Sanctum.Gate.call_external("system", ctx, %{"action" => "this_will_cause_error"})
 
       assert {:error, %Refusal{stage: :admission, reason: {:unknown_action, message}}} = result
       assert is_binary(message)
@@ -755,7 +755,7 @@ defmodule Sanctum.Gate.CatalogTest do
       ctx = Sanctum.TestContext.local()
 
       # A valid tool call should succeed
-      {:ok, result} = Catalog.call_external("system", ctx, %{"action" => "status"})
+      {:ok, result} = Sanctum.Gate.call_external("system", ctx, %{"action" => "status"})
       assert is_map(result)
     end
 
@@ -763,17 +763,17 @@ defmodule Sanctum.Gate.CatalogTest do
       ctx = Sanctum.TestContext.local()
 
       # First call fails
-      {:error, _} = Catalog.call_external("system", ctx, %{"action" => "bad_action"})
+      {:error, _} = Sanctum.Gate.call_external("system", ctx, %{"action" => "bad_action"})
 
       # Second call should still work
-      {:ok, result} = Catalog.call_external("system", ctx, %{"action" => "status"})
+      {:ok, result} = Sanctum.Gate.call_external("system", ctx, %{"action" => "status"})
       assert result.status in ["ok", "degraded"]
 
       # Third call fails
-      {:error, _} = Catalog.call_external("system", ctx, %{"action" => "another_bad"})
+      {:error, _} = Sanctum.Gate.call_external("system", ctx, %{"action" => "another_bad"})
 
       # Fourth call should still work
-      {:ok, result} = Catalog.call_external("system", ctx, %{"action" => "status"})
+      {:ok, result} = Sanctum.Gate.call_external("system", ctx, %{"action" => "status"})
       assert result.status in ["ok", "degraded"]
     end
 
@@ -781,7 +781,7 @@ defmodule Sanctum.Gate.CatalogTest do
       ctx = Sanctum.TestContext.local()
 
       {:error, %Refusal{stage: :admission, reason: {:unknown_action, message}}} =
-        Catalog.call_external("system", ctx, %{"action" => "unknown_action"})
+        Sanctum.Gate.call_external("system", ctx, %{"action" => "unknown_action"})
 
       # Error should mention the issue
       assert message =~ "Unknown action" or message =~ "unknown_action"
@@ -800,7 +800,7 @@ defmodule Sanctum.Gate.CatalogTest do
       }
 
       # Should not crash the registry
-      result = Catalog.call_external("system", ctx, %{"action" => "status"})
+      result = Sanctum.Gate.call_external("system", ctx, %{"action" => "status"})
 
       # Might succeed or fail gracefully depending on provider
       assert match?({:ok, _}, result) or match?({:error, _}, result)
@@ -814,10 +814,10 @@ defmodule Sanctum.Gate.CatalogTest do
           Task.async(fn ->
             if rem(i, 2) == 0 do
               # Even: valid call
-              Catalog.call_external("system", ctx, %{"action" => "status"})
+              Sanctum.Gate.call_external("system", ctx, %{"action" => "status"})
             else
               # Odd: invalid call
-              Catalog.call_external("system", ctx, %{"action" => "invalid_#{i}"})
+              Sanctum.Gate.call_external("system", ctx, %{"action" => "invalid_#{i}"})
             end
           end)
         end
@@ -841,7 +841,7 @@ defmodule Sanctum.Gate.CatalogTest do
       # Start a tool call
       task =
         Task.async(fn ->
-          Catalog.call_external("system", ctx, %{"action" => "status"})
+          Sanctum.Gate.call_external("system", ctx, %{"action" => "status"})
         end)
 
       # While it's running, list_tools should still work
@@ -860,7 +860,7 @@ defmodule Sanctum.Gate.CatalogTest do
       call_tasks =
         for _ <- 1..10 do
           Task.async(fn ->
-            Catalog.call_external("system", ctx, %{"action" => "status"})
+            Sanctum.Gate.call_external("system", ctx, %{"action" => "status"})
           end)
         end
 
@@ -1068,7 +1068,7 @@ defmodule Sanctum.Gate.CatalogTest do
         call_id = Prima.UUID7.generate_id("call")
 
         assert {:ok, %{"call_id" => ^call_id}} =
-                 Catalog.call_external(Counting.tool(), ctx, %{"action" => "bump"},
+                 Sanctum.Gate.call_external(Counting.tool(), ctx, %{"action" => "bump"},
                    call_id: call_id
                  )
 
@@ -1099,7 +1099,7 @@ defmodule Sanctum.Gate.CatalogTest do
         call_id = Prima.UUID7.generate_id("call")
 
         assert {:ok, %{"looked" => true}} =
-                 Catalog.call_external(Witnessing.tool(), ctx, %{"action" => "look"},
+                 Sanctum.Gate.call_external(Witnessing.tool(), ctx, %{"action" => "look"},
                    call_id: call_id
                  )
 
@@ -1125,7 +1125,7 @@ defmodule Sanctum.Gate.CatalogTest do
         ctx = Sanctum.TestContext.local()
 
         assert {:ok, %{"call_id" => "call_" <> _ = call_id}} =
-                 Catalog.call_external(Counting.tool(), ctx, %{"action" => "bump"})
+                 Sanctum.Gate.call_external(Counting.tool(), ctx, %{"action" => "bump"})
 
         assert {:ok, %{admission: :admitted}} = decision(ctx, call_id)
       end)
@@ -1135,7 +1135,7 @@ defmodule Sanctum.Gate.CatalogTest do
       ctx = Sanctum.TestContext.local()
 
       assert_raise ArgumentError, fn ->
-        Catalog.call_external("system", ctx, %{"action" => "notify"}, call_id: "req_x")
+        Sanctum.Gate.call_external("system", ctx, %{"action" => "notify"}, call_id: "req_x")
       end
     end
 
@@ -1143,7 +1143,7 @@ defmodule Sanctum.Gate.CatalogTest do
       ctx = %{Sanctum.TestContext.local() | request_id: Prima.UUID7.request_id()}
 
       assert {:error, %Refusal{stage: :admission, class: :not_found}} =
-               Catalog.call_external("completely/unknown/tool", ctx, %{"action" => "x"})
+               Sanctum.Gate.call_external("completely/unknown/tool", ctx, %{"action" => "x"})
 
       assert {:ok, [refused]} =
                Arca.DecisionLog.correlate(Sanctum.Context.actor(ctx), ctx.request_id)
@@ -1171,7 +1171,7 @@ defmodule Sanctum.Gate.CatalogTest do
       }
 
       assert {:error, %Refusal{stage: :admission}} =
-               Catalog.call_external("file", key, %{"action" => "offers"})
+               Sanctum.Gate.call_external("file", key, %{"action" => "offers"})
 
       assert {:ok, [refused]} =
                Arca.DecisionLog.correlate(Sanctum.Context.actor(ctx), ctx.request_id)
@@ -1185,7 +1185,7 @@ defmodule Sanctum.Gate.CatalogTest do
       ctx = Context.build(authenticated: false, permissions: [], request_id: request_id)
 
       assert {:error, %Refusal{stage: :admission}} =
-               Catalog.call_external("tools", ctx, %{"action" => "list"})
+               Sanctum.Gate.call_external("tools", ctx, %{"action" => "list"})
 
       assert {:ok, [refused]} =
                Arca.DecisionLog.list_global(%Prima.Actor{platform_admin: true},
@@ -1199,7 +1199,7 @@ defmodule Sanctum.Gate.CatalogTest do
       ctx = %{Sanctum.TestContext.local() | request_id: Prima.UUID7.request_id()}
 
       assert {:ok, %{inbox: _, outbox: _, receipts: _}} =
-               Catalog.call_external("file", ctx, %{"action" => "offers"})
+               Sanctum.Gate.call_external("file", ctx, %{"action" => "offers"})
 
       assert {:ok, []} = Arca.DecisionLog.correlate(Sanctum.Context.actor(ctx), ctx.request_id)
     end
@@ -1209,7 +1209,7 @@ defmodule Sanctum.Gate.CatalogTest do
         ctx = %{Sanctum.TestContext.local() | request_id: Prima.UUID7.request_id()}
 
         assert {:error, {:crashed, _}} =
-                 Catalog.call_external(Probe.Crashing.tool(), ctx, %{"action" => "raise"})
+                 Sanctum.Gate.call_external(Probe.Crashing.tool(), ctx, %{"action" => "raise"})
 
         assert {:ok, [decision]} =
                  Arca.DecisionLog.correlate(Sanctum.Context.actor(ctx), ctx.request_id)
@@ -1230,7 +1230,9 @@ defmodule Sanctum.Gate.CatalogTest do
 
         result =
           without_decision_log(fn ->
-            Catalog.call_external(Counting.tool(), ctx, %{"action" => "bump"}, call_id: call_id)
+            Sanctum.Gate.call_external(Counting.tool(), ctx, %{"action" => "bump"},
+              call_id: call_id
+            )
           end)
 
         assert result == {:ok, %{"bumped" => true, "call_id" => call_id}}

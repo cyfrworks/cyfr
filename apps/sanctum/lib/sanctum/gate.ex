@@ -32,17 +32,17 @@ defmodule Sanctum.Gate do
   classifies them from it, and Aqua and Compendium read it.
   """
 
-  alias Sanctum.Catalog
+  alias Sanctum.Dispatch
 
-  @doc "Call a tool from the external plane (`Sanctum.Catalog.call_external/4`)."
+  @doc "Call a tool from the external plane (`Sanctum.Dispatch.call_external/4`)."
   @spec call_external(String.t(), Sanctum.Context.t(), term(), keyword()) ::
           {:ok, term()} | {:error, term()}
-  defdelegate call_external(name, ctx, args, opts \\ []), to: Catalog
+  defdelegate call_external(name, ctx, args, opts \\ []), to: Dispatch
 
-  @doc "Call a tool from inside a running chain (`Sanctum.Catalog.call_in_chain/5`)."
+  @doc "Call a tool from inside a running chain (`Sanctum.Dispatch.call_in_chain/5`)."
   @spec call_in_chain(String.t(), Sanctum.Context.t(), term(), Prima.Authority.t(), keyword()) ::
           {:ok, term()} | {:error, term()}
-  defdelegate call_in_chain(name, ctx, args, authority, opts \\ []), to: Catalog
+  defdelegate call_in_chain(name, ctx, args, authority, opts \\ []), to: Dispatch
 
   @doc """
   Open a declared stream (`Sanctum.Streams.open/3`): one decision, and a

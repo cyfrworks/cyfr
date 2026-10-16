@@ -62,7 +62,7 @@ defmodule Sanctum.Gate.CatalogCrashLogTest do
     {result, log} = call("put", runner: :supervised)
 
     assert {:error, {:exit, _sentence}} = result
-    assert log =~ "[Sanctum.Catalog] Tool crash_log_probe exited: "
+    assert log =~ "[Sanctum.Dispatch] Tool crash_log_probe exited: "
     assert log =~ "Sanctum.Gate.CatalogCrashLogTest.Probe, :handle, 3,"
     refute log =~ @email
     refute log =~ @value
@@ -81,7 +81,7 @@ defmodule Sanctum.Gate.CatalogCrashLogTest do
 
     Catalog.with_providers([Probe], fn ->
       with_log(fn ->
-        Catalog.call_external(
+        Sanctum.Gate.call_external(
           "crash_log_probe",
           ctx,
           %{"action" => action, "value" => @value},

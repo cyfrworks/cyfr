@@ -322,7 +322,7 @@ defmodule Sanctum.Gate.ProviderContractTest do
     lineage =
       ctx |> Cyfr.Test.AttemptFixtures.lineage!() |> Map.take([:parent_execution_id, :attempt])
 
-    Catalog.call_in_chain(
+    Sanctum.Gate.call_in_chain(
       name,
       Sanctum.Context.enter_guest(ctx),
       %{"action" => "peek"},
@@ -370,7 +370,7 @@ defmodule Sanctum.Gate.ProviderContractTest do
 
         for runner <- [:inline, :supervised] do
           assert {:ok, %{input: input}} =
-                   Catalog.call_external("actor_probe", ctx, %{"action" => "peek"},
+                   Sanctum.Gate.call_external("actor_probe", ctx, %{"action" => "peek"},
                      runner: runner
                    )
 
@@ -380,7 +380,7 @@ defmodule Sanctum.Gate.ProviderContractTest do
 
         # A :context provider is still given the context the gate decided with.
         assert {:ok, %{input: %Sanctum.Context{session_token_hash: "hash-that-must-not-leak"}}} =
-                 Catalog.call_external("context_probe", ctx, %{"action" => "peek"})
+                 Sanctum.Gate.call_external("context_probe", ctx, %{"action" => "peek"})
       end)
     end
 
@@ -402,10 +402,10 @@ defmodule Sanctum.Gate.ProviderContractTest do
         anonymous = %{ctx | authenticated: false}
 
         assert {:error, %Refusal{stage: :admission, reason: {:tool_auth_required, "actor_probe"}}} =
-                 Catalog.call_external("actor_probe", anonymous, %{"action" => "peek"})
+                 Sanctum.Gate.call_external("actor_probe", anonymous, %{"action" => "peek"})
 
         assert {:error, %Refusal{stage: :admission, reason: {:guest_plane_call, "actor_probe"}}} =
-                 Catalog.call_external(
+                 Sanctum.Gate.call_external(
                    "actor_probe",
                    Sanctum.Context.enter_guest(ctx),
                    %{"action" => "peek"}

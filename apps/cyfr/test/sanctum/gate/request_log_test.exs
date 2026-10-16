@@ -559,7 +559,7 @@ defmodule Sanctum.Gate.RequestLogTest do
 
     defp patterned(ctx, args) do
       Sanctum.Catalog.with_providers([__MODULE__.Patterned], fn ->
-        Sanctum.Catalog.call_external(
+        Sanctum.Gate.call_external(
           __MODULE__.Patterned.tool(),
           ctx,
           Map.put(args, "action", "look")
@@ -723,7 +723,7 @@ defmodule Sanctum.Gate.RequestLogTest do
          %{ctx: ctx, key: key} do
       assert {:error, %Prima.Refusal{} = refusal} =
                Sanctum.Catalog.with_providers([__MODULE__.Patterned], fn ->
-                 Sanctum.Catalog.call_external(__MODULE__.Patterned.tool(), ctx, %{
+                 Sanctum.Gate.call_external(__MODULE__.Patterned.tool(), ctx, %{
                    "action" => key
                  })
                end)

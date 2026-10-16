@@ -45,7 +45,14 @@ defmodule Sanctum.Gate.TypedDispatchTest do
   # names in its lineage.
   defp chain(ctx, args, authority, opts \\ []) do
     opts = Keyword.put_new_lazy(opts, :lineage, fn -> caller!(ctx) end)
-    Catalog.call_in_chain("typed_probe", Sanctum.Context.enter_guest(ctx), args, authority, opts)
+
+    Sanctum.Gate.call_in_chain(
+      "typed_probe",
+      Sanctum.Context.enter_guest(ctx),
+      args,
+      authority,
+      opts
+    )
   end
 
   defp caller!(ctx),
@@ -193,7 +200,7 @@ defmodule Sanctum.Gate.TypedDispatchTest do
       assert input["attempt"] == lineage.attempt
 
       assert {:error, %Refusal{stage: :admission, reason: {:invalid_argument, _}}} =
-               Catalog.call_external("typed_probe", ctx, args)
+               Sanctum.Gate.call_external("typed_probe", ctx, args)
     end)
   end
 
