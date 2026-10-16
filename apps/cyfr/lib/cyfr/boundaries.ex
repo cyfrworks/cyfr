@@ -454,7 +454,7 @@ defmodule Cyfr.Boundaries do
       depth: 3,
       allow: ~w(
         Sanctum Sanctum.BearerToken Sanctum.Caller Sanctum.Catalog
-        Sanctum.Catalog.NotLoadedError Sanctum.ClientIp Sanctum.Consent
+        Sanctum.Catalog.NotLoadedError Sanctum.ClientIp Sanctum.Consent Sanctum.Consent.Loader
         Sanctum.Context Sanctum.Decisions Sanctum.DeviceCerts Sanctum.Directory Sanctum.Egress
         Sanctum.ExecutionStanding Sanctum.Gate
         Sanctum.Network Sanctum.Proxy Sanctum.Recovery Sanctum.Refusals Sanctum.Resources
@@ -483,9 +483,12 @@ defmodule Cyfr.Boundaries do
           "vault's OAuth grant and a webhook's row. `Sanctum.Consent` is the tincture " <>
           "data routes' read of the grant revision a frame credential names " <>
           "(`Sanctum.Consent.profiles/2`, `head_consent/2`), read as the shell reads it " <>
-          "when it mints. The directory's routes are `Sanctum.Directory`'s decisions, the " <>
-          "restore ingress `Sanctum.Recovery`'s, and the device channel checks each " <>
-          "certificate and proof through `Sanctum.DeviceCerts`. " <>
+          "when it mints, and `Sanctum.Consent.Loader` their read of that head's grant as " <>
+          "the loader reads a stored head (`admitted_blob/3`, with its one reading of a " <>
+          "damaged head), for the flows the tincture's ingress declares to the origins " <>
+          "its frame connects to. The directory's routes are `Sanctum.Directory`'s " <>
+          "decisions, the restore ingress `Sanctum.Recovery`'s, and the device channel " <>
+          "checks each certificate and proof through `Sanctum.DeviceCerts`. " <>
           "`Sanctum.Gate` is the gate every MCP and HTTP call the adapters make passes. " <>
           "`Sanctum.Catalog` is the table the adapters serve: `tools/list` and a call's " <>
           "tool definition, the stream declarations the tincture data routes read, and " <>
@@ -1741,8 +1744,11 @@ defmodule Cyfr.Boundaries do
     "Sanctum.Consent.Accounts" => [list: 1, resolve: 4],
     "Sanctum.Consent.Components" => [install!: 1],
     # Admission reads the loader's own-head damage through its one
-    # definition, the family and the refusal each member answers.
+    # definition, the family and the refusal each member answers. The
+    # tincture data routes read a frame's grant, for the flows its
+    # tincture's ingress declares, as the loader reads a stored head.
     "Sanctum.Consent.Loader" => [
+      admitted_blob: 3,
       damage?: 1,
       damage_refusal: 3,
       load_root: 3,

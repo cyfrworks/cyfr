@@ -54,6 +54,25 @@ defmodule Emissary.Web.TinctureDataController do
   frame's context; a stream is opened through the gate's one stream entry
   (`Sanctum.Gate.open_stream/3`) and delivered by `CyfrWeb.SSE.deliver/4`.
 
+  ## What it may carry out
+
+  A tincture whose page connects to origins beyond the endpoint
+  (`tincture.connect`, `Compendium.tincture_connect_origins/1`) may send
+  what it reads to each of them, so each is an exit of its frame
+  (`Prima.Flow`). Before anything is read or run, a read is admitted only
+  when every source class it may carry (`Compendium.tincture_read_classes/1`:
+  an invoke's result, an action's answer, a stream's refresh and events)
+  has a flow to every one of those origins, spelled as declared, on the
+  ingress edge of the tincture's node in the grant its route roots at: the
+  owner profile's head at the revision the credential names (read once,
+  with that revision) for a frame, the public profile's head for a public
+  page. A tincture with no grant declares no flow. Otherwise it is refused
+  `forbidden` with the classes and the origin (`Prima.Flow.refusal/2`). An
+  open stream is held to the same check at each revalidation, against the
+  grant as it is read then, and ends with that refusal as its last event.
+  A tincture that connects nowhere, a canvas always, is held to nothing
+  here.
+
   ## A canvas
 
   A canvas (a tincture whose placement is `canvas`) reads its streams on
@@ -206,8 +225,9 @@ defmodule Emissary.Web.TinctureDataController do
 
   # In order: the body, who is asking (on a canvas path, whether it is the
   # frame the path names, before anything else of it is read), where it
-  # may ask, the charge, then the grant. The charge follows the caller, so
-  # a frame's undeclared attempts count against it too.
+  # may ask, the charge, the grant, then whether what the read may carry
+  # may reach every origin the frame connects to. The charge follows the
+  # caller, so a frame's undeclared attempts count against it too.
   defp admit(conn, kind, path) do
     with {:ok, request} <- decode(conn, kind),
          {:ok, caller} <- caller(conn, request, path) do
@@ -215,7 +235,8 @@ defmodule Emissary.Web.TinctureDataController do
 
       with :ok <- placed(caller, path),
            :ok <- charge(caller),
-           :ok <- granted(kind, request, caller) do
+           :ok <- granted(kind, request, caller),
+           :ok <- flowing(kind, request, caller) do
         {:ok, conn, request, caller}
       else
         {:error, refusal} -> {:error, conn, refusal}
@@ -317,9 +338,9 @@ defmodule Emissary.Web.TinctureDataController do
     %{reference: reference, version_digest: digest, grant_revision: revision} = frame
 
     with {:ok, manifest} <- version(ctx, reference, digest),
-         :ok <- grant_revision(ctx, reference, revision),
+         {:ok, head} <- grant_revision(ctx, reference, revision),
          {:ok, declaration} <- declaration(manifest) do
-      {:ok, %{manifest: manifest, declaration: declaration}}
+      {:ok, %{manifest: manifest, declaration: declaration, head: head}}
     end
   end
 
@@ -336,32 +357,35 @@ defmodule Emissary.Web.TinctureDataController do
     end
   end
 
-  # The head revision of the tincture's one active owner profile, or 0
-  # while it holds none — read as the shell reads it when it mints.
+  # The head of the tincture's one active owner profile, whose revision
+  # must be the credential's, or none while it holds none, at revision 0 —
+  # read as the shell reads it when it mints. The head is answered beside
+  # the check, so what the frame is held to later is this same read.
   defp grant_revision(ctx, %{publisher: publisher, name: name}, revision) do
     reference = Prima.ComponentRef.build("tincture", publisher, name)
 
     with {:ok, entries} <- Sanctum.Consent.profiles(ctx, reference),
-         {:ok, current} <- head_revision(ctx, entries) do
-      if current == revision, do: :ok, else: {:error, frame_moved()}
+         {:ok, head} <- head(ctx, Prima.Authority.RootSelect.select(entries, :default)) do
+      if head_revision(head) == revision, do: {:ok, head}, else: {:error, frame_moved()}
     else
       {:error, _unanswered} -> {:error, Prima.Refusal.classify(:unavailable)}
     end
   end
 
-  defp head_revision(ctx, entries) do
-    case Prima.Authority.RootSelect.select(entries, :default) do
-      {:ok, %{id: profile_id}} ->
-        case Sanctum.Consent.head_consent(ctx, profile_id) do
-          {:ok, %{revision: revision}} -> {:ok, revision}
-          {:error, :not_found} -> {:ok, 0}
-          {:error, _unreadable} -> {:error, :unavailable}
-        end
-
-      {:error, _no_active_owner} ->
-        {:ok, 0}
+  # A selected profile's head, `{profile, consent}`, or `:none` for no
+  # profile or no head.
+  defp head(ctx, {:ok, %{id: profile_id} = profile}) do
+    case Sanctum.Consent.head_consent(ctx, profile_id) do
+      {:ok, consent} -> {:ok, {profile, consent}}
+      {:error, :not_found} -> {:ok, :none}
+      {:error, _unreadable} -> {:error, :unavailable}
     end
   end
+
+  defp head(_ctx, {:error, _no_profile}), do: {:ok, :none}
+
+  defp head_revision({_profile, %{revision: revision}}), do: revision
+  defp head_revision(:none), do: 0
 
   # A public tincture's page: the tincture must be public in the athanor
   # its address names, and nothing runs under anything but that
@@ -479,6 +503,101 @@ defmodule Emissary.Web.TinctureDataController do
   end
 
   # ---------------------------------------------------------------------------
+  # What a read may carry out: the frame's flows
+  # ---------------------------------------------------------------------------
+
+  # The page sends what the frame reads wherever it connects, so every
+  # class the read may carry needs a flow to every origin, decided on the
+  # classes the read may carry before it is made: what it then answers
+  # carries no class outside them. A frame that connects nowhere reads
+  # no grant here.
+  defp flowing(kind, request, %{manifest: manifest} = caller) do
+    case Compendium.tincture_connect_origins(manifest) do
+      [] ->
+        :ok
+
+      origins ->
+        classes = Compendium.tincture_read_classes(read(kind, request))
+
+        with {:ok, flows} <- grant_flows(caller) do
+          covered(classes, origins, flows)
+        end
+    end
+  end
+
+  defp read(:invoke, _request), do: :invoke
+  defp read(:action, %{operation: operation}), do: {:action, operation}
+  defp read(:stream_open, %{stream: name}), do: {:stream, name}
+
+  defp covered(classes, origins, flows) do
+    Enum.reduce_while(origins, :ok, fn origin, :ok ->
+      case classes -- Prima.Flow.classes_to(flows, origin) do
+        [] -> {:cont, :ok}
+        uncovered -> {:halt, {:error, flow_refusal(uncovered, origin)}}
+      end
+    end)
+  end
+
+  defp flow_refusal(classes, origin) do
+    classes
+    |> Enum.map(&Prima.Source.new/1)
+    |> Prima.Flow.refusal({:domain, origin})
+    |> Prima.Refusal.classify()
+  end
+
+  # The flows of the grant the route roots at: a frame's is the owner
+  # head its credential's revision was checked against, a public page's
+  # the public profile's head, read now under the address's context.
+  defp grant_flows(%{route: :protected, ctx: ctx, head: head, tincture: tincture}),
+    do: flows(ctx, head, tincture_node(tincture))
+
+  defp grant_flows(%{route: :public, ctx: ctx, tincture: tincture}) do
+    node = tincture_node(tincture)
+
+    with {:ok, entries} <- Sanctum.Consent.profiles(ctx, node),
+         selected =
+           Prima.Authority.RootSelect.select_for_route(entries, :public, ctx.authenticated),
+         {:ok, head} <- head(ctx, selected) do
+      flows(ctx, head, node)
+    else
+      {:error, _unanswered} -> {:error, Prima.Refusal.classify(:unavailable)}
+    end
+  end
+
+  defp tincture_node(%{publisher: publisher, name: name}),
+    do: Prima.ComponentRef.build("tincture", publisher, name)
+
+  # The ingress edge of the tincture's own node, in the head's blob as the
+  # loader reads it (`Sanctum.Consent.Loader.admitted_blob/3`). No grant
+  # declares no flow. A head that cannot be trusted, one without its own
+  # node's ingress among them, is the loader's one reading of that damage
+  # (`Sanctum.Consent.Loader.damage_refusal/3`), and any other refusal of
+  # the loader stands as it gave it.
+  defp flows(_ctx, :none, _node), do: {:ok, []}
+
+  defp flows(ctx, {profile, consent}, node) do
+    with {:ok, blob} <- Sanctum.Consent.Loader.admitted_blob(ctx, profile, consent),
+         {:ok, edge} <- ingress(blob, node) do
+      {:ok, Prima.Authority.Blob.Edge.flows(edge)}
+    else
+      {:error, reason} ->
+        reason =
+          if Sanctum.Consent.Loader.damage?(reason),
+            do: Sanctum.Consent.Loader.damage_refusal(reason, profile.id, node),
+            else: reason
+
+        {:error, Sanctum.Refusals.classify(reason)}
+    end
+  end
+
+  defp ingress(blob, node) do
+    case Prima.Authority.Blob.ingress(blob, node) do
+      {:ok, edge} -> {:ok, edge}
+      {:error, :missing_ingress} -> {:error, {:missing_ingress, node}}
+    end
+  end
+
+  # ---------------------------------------------------------------------------
   # Dispatch
   # ---------------------------------------------------------------------------
 
@@ -537,7 +656,7 @@ defmodule Emissary.Web.TinctureDataController do
   # A frame's stream holds one of its open-stream slots from before the
   # open to the stream's end, whatever ends it. A public page holds none:
   # the gate admits a stream to a signed-in caller alone.
-  defp open_stream(conn, %{stream: name, subject: subject}, caller) do
+  defp open_stream(conn, %{stream: name, subject: subject} = request, caller) do
     ctx = caller.ctx
 
     case claim(ctx) do
@@ -549,7 +668,7 @@ defmodule Emissary.Web.TinctureDataController do
               |> CallIdentity.decided()
               |> CyfrWeb.SSE.deliver(ctx, grant,
                 name: name,
-                revalidate: fn -> revalidate(caller) end
+                revalidate: fn -> revalidate(caller, request) end
               )
 
             {:error, refusal} ->
@@ -624,17 +743,19 @@ defmodule Emissary.Web.TinctureDataController do
   end
 
   # The stream's caller established again, as a request would be: the
-  # credential, the version and the grant.
-  defp revalidate(%{route: :protected, bearer: bearer, client_ip: client_ip}) do
+  # credential, the version, the grant, and what its events may carry to
+  # the origins the frame connects to, against the grant as it is read now.
+  defp revalidate(%{route: :protected, bearer: bearer, client_ip: client_ip} = caller, request) do
     with {:ok, ctx} <- establish(bearer, client_ip),
-         {:ok, _grant} <- frame_grant(ctx) do
+         {:ok, grant} <- frame_grant(ctx),
+         :ok <- flowing(:stream_open, request, Map.merge(caller, grant)) do
       {:ok, ctx}
     end
   end
 
   # A public page holds no credential to establish again, and the gate
   # admits it no stream to hold one for.
-  defp revalidate(%{route: :public}), do: {:error, no_frame()}
+  defp revalidate(%{route: :public}, _request), do: {:error, no_frame()}
 
   # ---------------------------------------------------------------------------
   # Refusals
