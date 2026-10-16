@@ -77,6 +77,9 @@ defmodule PrismWeb.VaultLive do
 
   use PrismWeb, :live_view
 
+  @behaviour PrismWeb.SystemLayer.Hook
+  on_mount PrismWeb.SystemLayer.Hook
+
   alias PrismWeb.SystemLayer
   require Logger
 
@@ -352,6 +355,11 @@ defmodule PrismWeb.VaultLive do
   # PubSub — the callback landing an OAuth grant refreshes the list
   # ---------------------------------------------------------------------------
 
+  # A change this page asked for was confirmed: a grant is started again
+  # here, once; a typed form is submitted again by the browser.
+  @impl PrismWeb.SystemLayer.Hook
+  def system_layer_repeat(:authorize, _tool, args, socket), do: start_grant(socket, args)
+
   @impl true
   def handle_info(:load, socket) do
     {:noreply,
@@ -372,15 +380,6 @@ defmodule PrismWeb.VaultLive do
   # defaults with it, since a deleted entry is no athanor's default.
   def handle_info(%Cyfr.Bus.InstanceEntryChanged{}, socket) do
     {:noreply, socket |> fetch_offered() |> fetch_entries()}
-  end
-
-  # A change this page asked for was confirmed: a grant is started again
-  # here, once; a typed form is submitted again by the browser.
-  def handle_info({:system_layer, _id, _outcome} = report, socket) do
-    case SystemLayer.reported(socket, report) do
-      {:repeat, :authorize, _tool, args, socket} -> start_grant(socket, args)
-      {:ok, socket} -> {:noreply, socket}
-    end
   end
 
   # The create form comes back, drawn from the needs as they now read

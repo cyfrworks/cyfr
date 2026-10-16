@@ -60,6 +60,9 @@ defmodule PrismWeb.CarryLive do
 
   use PrismWeb, :live_view
 
+  @behaviour PrismWeb.SystemLayer.Hook
+  on_mount PrismWeb.SystemLayer.Hook
+
   alias Prima.Identity.Encoding
   alias PrismWeb.SystemLayer
   alias Sanctum.Auth.CyfrDoor
@@ -88,17 +91,16 @@ defmodule PrismWeb.CarryLive do
      |> assign(:notice, nil)}
   end
 
+  # A change this page asked for was confirmed: asked again, once.
+  @impl PrismWeb.SystemLayer.Hook
+  def system_layer_repeat({:assert, _action_id}, _tool, args, socket),
+    do: {:noreply, assert(socket, args)}
+
+  def system_layer_repeat({:certify, _client_id}, _tool, args, socket),
+    do: {:noreply, certify(socket, args)}
+
   @impl true
   def handle_info(:load, socket), do: {:noreply, load(socket)}
-
-  # A change this page asked for was confirmed: asked again, once.
-  def handle_info({:system_layer, _id, _outcome} = report, socket) do
-    case SystemLayer.reported(socket, report) do
-      {:repeat, {:assert, _action_id}, _tool, args, socket} -> {:noreply, assert(socket, args)}
-      {:repeat, {:certify, _client_id}, _tool, args, socket} -> {:noreply, certify(socket, args)}
-      {:ok, socket} -> {:noreply, socket}
-    end
-  end
 
   def handle_info(msg, socket) do
     Prima.LoggerContext.unexpected(__MODULE__, msg, :debug)

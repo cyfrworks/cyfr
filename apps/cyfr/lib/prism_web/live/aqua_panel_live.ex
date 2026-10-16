@@ -50,6 +50,9 @@ defmodule PrismWeb.AquaPanelLive do
 
   on_mount {CyfrWeb.ContextGuard, :protected}
 
+  @behaviour PrismWeb.SystemLayer.Hook
+  on_mount PrismWeb.SystemLayer.Hook
+
   @impl true
   def mount(_params, session, socket) do
     token = session[to_string(CyfrWeb.SignInResponse.session_key())]
@@ -195,13 +198,6 @@ defmodule PrismWeb.AquaPanelLive do
   end
 
   def handle_info({:pane, _pane, _message}, socket), do: {:noreply, socket}
-
-  def handle_info({:system_layer, _id, _outcome} = report, socket) do
-    case SystemLayer.relayed(socket, report) do
-      {:relayed, socket} -> {:noreply, socket}
-      :none -> {:noreply, socket}
-    end
-  end
 
   def handle_info(msg, socket) do
     Prima.LoggerContext.unexpected(__MODULE__, msg, :debug)

@@ -87,6 +87,9 @@ defmodule PrismWeb.SettingsLive do
 
   use PrismWeb, :live_view
 
+  @behaviour PrismWeb.SystemLayer.Hook
+  on_mount PrismWeb.SystemLayer.Hook
+
   require Logger
 
   alias PrismWeb.SystemLayer
@@ -420,6 +423,51 @@ defmodule PrismWeb.SettingsLive do
   def handle_event("instance_delete", %{"id" => id}, socket),
     do: instance_call(socket, "instance_entry/delete", %{"entry_id" => id}, "Entry deleted.")
 
+  # A recovery prompt that ended leaves the identity to be read again; an
+  # instance prompt that saved a key reads the entries again.
+  @impl PrismWeb.SystemLayer.Hook
+  def system_layer_report(prompt_id, outcome, socket) do
+    report = {:system_layer, prompt_id, outcome}
+
+    cond do
+      recovery_prompt?(prompt_id) ->
+        {:noreply, socket |> recovery_ended(report) |> load_identity()}
+
+      instance_prompt?(prompt_id) ->
+        {:noreply, instance_prompt_ended(socket, report)}
+
+      true ->
+        :pass
+    end
+  end
+
+  # A change this page asked for was confirmed: made again, once.
+  @impl PrismWeb.SystemLayer.Hook
+  def system_layer_repeat(:rotate, _tool, %{"request_id" => id}, socket), do: rotate(socket, id)
+
+  def system_layer_repeat({:link, provider}, _tool, %{"ticket" => ticket}, socket),
+    do: link(socket, provider, ticket, [])
+
+  def system_layer_repeat({:unlink, key}, _tool, _args, socket), do: unlink(socket, key)
+
+  def system_layer_repeat(:passkey_register, _tool, %{"credential" => credential}, socket),
+    do: register_passkey(socket, credential)
+
+  def system_layer_repeat({:passkey_revoke, id}, _tool, _args, socket),
+    do: revoke_passkey(socket, id)
+
+  # The proven widening is sent again exactly as confirmed, its
+  # `expected` included: an audience that moved while the prompt was
+  # open is the owner's conflict, never written over.
+  def system_layer_repeat({:instance_audience, _id, _edit} = tag, _tool, args, socket),
+    do: set_audience(socket, tag, args, "Nothing changed.")
+
+  def system_layer_repeat({:instance_policy, id}, _tool, args, socket),
+    do: set_policy(socket, id, args)
+
+  def system_layer_repeat({:instance_rebind, id}, _tool, args, socket),
+    do: rebind_instance(socket, id, args)
+
   @impl true
   def handle_info(:load, socket) do
     socket =
@@ -442,51 +490,6 @@ defmodule PrismWeb.SettingsLive do
 
       nil ->
         {:noreply, socket}
-    end
-  end
-
-  # A change this page asked for was confirmed: made again, once. A
-  # recovery prompt that ended leaves the identity to be read again.
-  def handle_info({:system_layer, prompt_id, _outcome} = report, socket) do
-    case SystemLayer.reported(socket, report) do
-      {:repeat, :rotate, _tool, %{"request_id" => id}, socket} ->
-        rotate(socket, id)
-
-      {:repeat, {:link, provider}, _tool, %{"ticket" => ticket}, socket} ->
-        link(socket, provider, ticket, [])
-
-      {:repeat, {:unlink, key}, _tool, _args, socket} ->
-        unlink(socket, key)
-
-      {:repeat, :passkey_register, _tool, %{"credential" => credential}, socket} ->
-        register_passkey(socket, credential)
-
-      {:repeat, {:passkey_revoke, id}, _tool, _args, socket} ->
-        revoke_passkey(socket, id)
-
-      # The proven widening is sent again exactly as confirmed, its
-      # `expected` included: an audience that moved while the prompt was
-      # open is the owner's conflict, never written over.
-      {:repeat, {:instance_audience, _id, _edit} = tag, _tool, args, socket} ->
-        set_audience(socket, tag, args, "Nothing changed.")
-
-      {:repeat, {:instance_policy, id}, _tool, args, socket} ->
-        set_policy(socket, id, args)
-
-      {:repeat, {:instance_rebind, id}, _tool, args, socket} ->
-        rebind_instance(socket, id, args)
-
-      {:ok, socket} ->
-        cond do
-          recovery_prompt?(prompt_id) ->
-            {:noreply, socket |> recovery_ended(report) |> load_identity()}
-
-          instance_prompt?(prompt_id) ->
-            {:noreply, instance_prompt_ended(socket, report)}
-
-          true ->
-            {:noreply, socket}
-        end
     end
   end
 
@@ -955,7 +958,7 @@ defmodule PrismWeb.SettingsLive do
   # elsewhere since the form was drawn is a conflict, never written over,
   # and the card reloads and says so. An edit that leaves the audience as
   # shown sends nothing. The call is keyed by the edit; a widening's
-  # repeat sends the confirmed request unchanged (`handle_info/2`), and the
+  # repeat sends the confirmed request unchanged (`system_layer_repeat/4`), and the
   # owner's comparison decides it.
   defp save_audience(socket, id, expected, edit) do
     {request, unchanged} = edited_audience(expected, edit)

@@ -5321,4 +5321,213 @@ defmodule PrismWeb.SystemLayerTest do
   end
 
   def held_read(_event, _measurements, _metadata, _config), do: :ok
+
+  describe "the hook a page mounts" do
+    # Each page that embeds the layer mounts `PrismWeb.SystemLayer.Hook`,
+    # which takes every report the layer sends the page: a prompt placed
+    # for a nested view goes back to it, a prompt the page placed and
+    # follows is the page's own, and a change the page asked for that was
+    # confirmed is made again. These run the routed pages themselves.
+    setup %{conn: conn} do
+      user = test_user()
+      conn = log_in_user(conn, user)
+      athanor = seated_athanor()
+      local = %{Sanctum.TestContext.local() | athanor_id: athanor.id, user_id: user.user_id}
+      %{conn: conn, user: user, athanor: athanor, local: local}
+    end
+
+    test "a thread pane's grant is asked in the chat page's layer, and its outcome goes back to " <>
+           "the pane",
+         %{conn: conn, user: user, athanor: athanor, local: local} do
+      app =
+        asking_methods!(local, "hook-relay-#{System.unique_integer([:positive])}", "0.1.0", [
+          "GET"
+        ])
+
+      regrant_key!(local)
+      {:ok, thread} = Arca.ThreadStorage.create(Sanctum.Context.actor(local))
+
+      {:ok, page, _html} =
+        live(
+          conn,
+          PrismWeb.ChatLive.chat_path(Sanctum.Tenancy.Athanors.route_slug(athanor), thread.id)
+        )
+
+      settled_render(page)
+      pane = find_live_child(page, "pane-" <> athanor.id)
+
+      send(pane.pid, %Cyfr.Bus.ThreadEvent{
+        athanor_id: athanor.id,
+        thread_id: thread.id,
+        kind: :consent_required,
+        data: %{ref: app, user_id: user.user_id}
+      })
+
+      render(pane)
+      render(page)
+      assert has_element?(page, ~s(#system-layer-dialog [data-kind="grant"]))
+
+      # The page placed the pane's prompt in its own layer and holds where
+      # the outcome goes.
+      assert %{grant_prompt: prompt_id} = :sys.get_state(pane.pid).socket.assigns
+      assert is_binary(prompt_id)
+
+      assert %{^prompt_id => pane_pid} =
+               :sys.get_state(page.pid).socket.assigns.system_layer_relays
+
+      assert pane_pid == pane.pid
+
+      page |> element(~s(#system-layer-dialog button[phx-click="confirm"])) |> render_click()
+
+      wait_until(
+        fn -> :sys.get_state(pane.pid).socket.assigns.grant_prompt == nil end,
+        5_000,
+        "the pane to hear its grant"
+      )
+
+      # The grant was made, and the page let go of the ended prompt.
+      assert {:ok, [_profile | _]} = Sanctum.Consent.profiles(local, app)
+      assert :sys.get_state(page.pid).socket.assigns.system_layer_relays == %{}
+      Cyfr.Test.Sandbox.end_views()
+    end
+
+    test "an API key the page asked for is minted once its confirmation is proven, and once only",
+         %{conn: conn, local: local} do
+      {view, _html} = mount_athanor(conn, "/api-keys")
+      name = "hook-key-#{System.unique_integer([:positive])}"
+
+      render_submit(view, "create", %{"name" => name, "type" => "application"})
+
+      assert {:ok, [%{ref: ref, operation: "key.create"}]} =
+               Arca.PendingConfirmations.list_open(Sanctum.Context.actor(local), local.user_id)
+
+      refute :sys.get_state(view.pid).socket.assigns.new_key
+      refute Enum.any?(api_keys(local), &(&1.name == name))
+
+      # Confirmed: the hook hands the page its repeat, which mints the key.
+      Sanctum.TestContext.prove!(local, ref)
+
+      wait_until(
+        fn -> :sys.get_state(view.pid).socket.assigns.new_key != nil end,
+        2_000,
+        "the minted key"
+      )
+
+      assert Enum.count(api_keys(local), &(&1.name == name)) == 1
+
+      # The held ask was settled by the repeat: nothing waits, and nothing
+      # is held to send again.
+      assert {:ok, []} =
+               Arca.PendingConfirmations.list_open(Sanctum.Context.actor(local), local.user_id)
+
+      assert Map.get(:sys.get_state(view.pid).socket.assigns, :system_layer_asks, %{}) == %{}
+      Cyfr.Test.Sandbox.end_views()
+    end
+
+    test "Settings' enrollment prompt, dismissed, lets the enrollment go", %{conn: conn} do
+      prior = Application.fetch_env(:sanctum, :directory_url)
+
+      on_exit(fn ->
+        case prior do
+          {:ok, value} -> Application.put_env(:sanctum, :directory_url, value)
+          :error -> Application.delete_env(:sanctum, :directory_url)
+        end
+      end)
+
+      Application.put_env(:sanctum, :directory_url, "https://dir.example")
+      {view, _html} = mount_athanor(conn, "/settings")
+
+      view |> element(~s([data-test="identity-enroll"])) |> render_click()
+      render(view)
+      assert has_element?(view, ~s(#system-layer [data-test="recovery"][data-kind="enrollment"]))
+      assert %{enrolling: "recovery-" <> _} = :sys.get_state(view.pid).socket.assigns
+
+      view |> element(~s(#system-layer [data-test="prompt-dismiss"])) |> render_click()
+
+      wait_until(
+        fn -> :sys.get_state(view.pid).socket.assigns.enrolling == nil end,
+        2_000,
+        "the enrollment let go"
+      )
+
+      refute has_element?(view, ~s(#system-layer [data-test="recovery"]))
+      assert has_element?(view, ~s([data-test="identity-enroll"]))
+    end
+
+    test "a webhook waits on its origin grant, granted with webhooks, before its own confirmation",
+         %{conn: conn, local: local} do
+      wasm = File.read!(Path.join(__DIR__, "../../support/test_wasm/math.wasm"))
+
+      {:ok, _} =
+        Compendium.Registry.publish_bytes(local, wasm, %{
+          name: "hook-layer-target",
+          version: "0.1.0",
+          type: "reagent",
+          description: "webhook target"
+        })
+
+      ref = "reagent:local.hook-layer-target"
+      profile_id = Sanctum.Test.ConsentFixtures.bindable_profile(local, ref)
+      {view, _html} = mount_athanor(conn, "/webhooks")
+      name = "hook-layer-#{System.unique_integer([:positive])}"
+
+      render_click(view, "toggle_create")
+
+      render_submit(view, "submit", %{
+        "name" => name,
+        "target_ref" => ref,
+        "profile_id" => profile_id,
+        "accept_replays" => "on",
+        "input_template" => "{}"
+      })
+
+      render(view)
+      assert has_element?(view, ~s(#system-layer-dialog [data-kind="grant"]))
+      assert {"grant-webhook-" <> _, _args} = :sys.get_state(view.pid).socket.assigns.origin_grant
+
+      view
+      |> element(~s(input[phx-click="toggle_origin"][phx-value-origin="webhook"]))
+      |> render_click()
+
+      render(view)
+      view |> element(~s(#system-layer button[phx-click="confirm"])) |> render_click()
+
+      # The page's own prompt ended granted: the create goes on to the
+      # webhook's own confirmation, and, proven, the webhook is made.
+      wait_until(
+        fn ->
+          render(view)
+
+          match?(
+            {:ok, [%{operation: "webhook.create"}]},
+            Arca.PendingConfirmations.list_open(Sanctum.Context.actor(local), local.user_id)
+          )
+        end,
+        2_000,
+        "the create's confirmation"
+      )
+
+      assert :sys.get_state(view.pid).socket.assigns.origin_grant == nil
+      {:ok, head} = Sanctum.Consent.head_consent(local, profile_id)
+      assert :webhook in head.admitted_origins
+
+      {:ok, [%{ref: confirmation}]} =
+        Arca.PendingConfirmations.list_open(Sanctum.Context.actor(local), local.user_id)
+
+      Sanctum.TestContext.prove!(local, confirmation)
+
+      wait_until(
+        fn -> match?({:ok, _}, Sanctum.Webhook.get(local, name)) end,
+        2_000,
+        "the webhook"
+      )
+
+      Cyfr.Test.Sandbox.end_views()
+    end
+
+    defp api_keys(local) do
+      {:ok, keys} = Sanctum.ApiKey.list(local)
+      keys
+    end
+  end
 end

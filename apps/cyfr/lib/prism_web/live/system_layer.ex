@@ -11,7 +11,8 @@ defmodule PrismWeb.SystemLayer do
   change needs.
 
   Each view that asks for a grant or a sensitive change mounts it once,
-  with the view's `context`, and acts under that context alone: the
+  with the view's `context`, beside its `PrismWeb.SystemLayer.Hook`,
+  and acts under that context alone: the
   shell, the chat and each console page that asks, as `id:
   "system-layer"` (`layer_id/0`); the person's own panel, which sits on
   every page beside the page's own layer, as `id: "system-layer-panel"`.
@@ -32,7 +33,8 @@ defmodule PrismWeb.SystemLayer do
 
   Each prompt's outcome goes to the parent LiveView as
   `{:system_layer, id, :confirmed | :dismissed | {:refused, reason}}`, and
-  safe mode's confirmation as `{:confirmed, offer}`, naming its way out. A
+  safe mode's confirmation as `{:confirmed, offer}`, naming its way out;
+  the view's hook (`PrismWeb.SystemLayer.Hook`) takes it. A
   withdrawn prompt, and a credential entry it raised, report nothing: the
   view that withdrew it has let it go. A
   malformed prompt is not drawn and is `{:refused, :invalid_prompt}`. A
@@ -528,7 +530,8 @@ defmodule PrismWeb.SystemLayer do
   `opts`: `:form`, the DOM id of the form that typed the change, when its
   values must not stay on the server: the browser resubmits it once the
   record is confirmed, and the page dispatches it again as it arrives.
-  Without one, the page repeats from `reported/2`. `:layer`, the id of
+  Without one, the page repeats from `reported/2`, which its hook hands
+  to the page's `c:PrismWeb.SystemLayer.Hook.system_layer_repeat/4`. `:layer`, the id of
   the page's layer (`layer_id/0` when absent). `reported/2` needs no id:
   it reads only what this page holds.
   """
@@ -585,9 +588,10 @@ defmodule PrismWeb.SystemLayer do
   end
 
   @doc """
-  What a page does with what its layer reported: `{:repeat, tag, tool,
-  args, socket}` when a change it asked for was confirmed and the page
-  repeats it (through `call/5`, with the same `tag`), or `{:ok, socket}`.
+  What a page's hook (`PrismWeb.SystemLayer.Hook`) does with what its
+  layer reported: `{:repeat, tag, tool, args, socket}` when a change it
+  asked for was confirmed and the page repeats it (through `call/5`, with
+  the same `tag`), or `{:ok, socket}`.
   A change that ended — dismissed, cancelled, voided or expired — lets
   its secret go.
   """

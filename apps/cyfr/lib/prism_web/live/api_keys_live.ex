@@ -14,6 +14,9 @@ defmodule PrismWeb.ApiKeysLive do
 
   use PrismWeb, :live_view
 
+  @behaviour PrismWeb.SystemLayer.Hook
+  on_mount PrismWeb.SystemLayer.Hook
+
   alias Phoenix.LiveView.JS
   alias PrismWeb.SystemLayer
   require Logger
@@ -153,8 +156,8 @@ defmodule PrismWeb.ApiKeysLive do
   def handle_event("rotate", %{"id" => id}, socket), do: rotate(socket, id)
 
   # Minting and rotating a key each need a fresh confirmation: asked for
-  # through the system layer, and repeated from `handle_info/2` once
-  # confirmed.
+  # through the system layer, and repeated from `system_layer_repeat/4`
+  # once confirmed.
   defp create(socket, args) do
     case SystemLayer.call(socket, :key_create, "key/create", args) do
       {:ok, key, socket} ->
@@ -206,6 +209,11 @@ defmodule PrismWeb.ApiKeysLive do
     {:noreply, socket}
   end
 
+  # A change this page asked for was confirmed: made again, once.
+  @impl PrismWeb.SystemLayer.Hook
+  def system_layer_repeat(:key_create, _tool, args, socket), do: create(socket, args)
+  def system_layer_repeat({:key_rotate, name}, _tool, _args, socket), do: rotate(socket, name)
+
   @impl true
   def handle_info(:load, socket) do
     {:noreply, socket |> fetch_keys() |> assign(:loading, false)}
@@ -213,15 +221,6 @@ defmodule PrismWeb.ApiKeysLive do
 
   def handle_info(%Cyfr.Bus.ApiKeys{}, socket) do
     {:noreply, fetch_keys(socket)}
-  end
-
-  # A change this page asked for was confirmed: made again, once.
-  def handle_info({:system_layer, _id, _outcome} = report, socket) do
-    case SystemLayer.reported(socket, report) do
-      {:repeat, :key_create, _tool, args, socket} -> create(socket, args)
-      {:repeat, {:key_rotate, name}, _tool, _args, socket} -> rotate(socket, name)
-      {:ok, socket} -> {:noreply, socket}
-    end
   end
 
   def handle_info(msg, socket) do

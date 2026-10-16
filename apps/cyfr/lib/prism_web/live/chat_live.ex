@@ -35,6 +35,9 @@ defmodule PrismWeb.ChatLive do
 
   use PrismWeb, :live_view
 
+  @behaviour PrismWeb.SystemLayer.Hook
+  on_mount PrismWeb.SystemLayer.Hook
+
   alias Phoenix.LiveView.JS
 
   alias Arca.ThreadStorage, as: Threads
@@ -716,13 +719,6 @@ defmodule PrismWeb.ChatLive do
   # goes back to the pane.
   def handle_info({:pane, _pane, {:grant, pid, prompt}}, socket) when is_pid(pid) do
     {:noreply, SystemLayer.relay(socket, pid, prompt)}
-  end
-
-  def handle_info({:system_layer, _id, _outcome} = report, socket) do
-    case SystemLayer.relayed(socket, report) do
-      {:relayed, socket} -> {:noreply, socket}
-      :none -> {:noreply, socket}
-    end
   end
 
   # A rename or a settings change re-reads the row; an archive sends the

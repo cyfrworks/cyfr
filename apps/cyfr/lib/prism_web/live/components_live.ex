@@ -3,6 +3,9 @@
 
 defmodule PrismWeb.ComponentsLive do
   use PrismWeb, :live_view
+
+  @behaviour PrismWeb.SystemLayer.Hook
+  on_mount PrismWeb.SystemLayer.Hook
   require Logger
 
   alias PrismWeb.ComponentsLive.Editor
@@ -393,6 +396,25 @@ defmodule PrismWeb.ComponentsLive do
 
   # --- Bus handlers ---
 
+  # The grant this page asked for: granted, the expanded component's
+  # plan is read again; a refused commit leaves the prompt open; anything
+  # else ended it.
+  @impl PrismWeb.SystemLayer.Hook
+  def system_layer_report(id, outcome, %{assigns: %{grant_prompt: id}} = socket) do
+    case outcome do
+      :confirmed ->
+        {:noreply, socket |> assign(:grant_prompt, nil) |> refresh_expanded_plan()}
+
+      {:refused, reason} when reason != :invalid_prompt ->
+        {:noreply, socket}
+
+      _ended ->
+        {:noreply, assign(socket, :grant_prompt, nil)}
+    end
+  end
+
+  def system_layer_report(_id, _outcome, _socket), do: :pass
+
   # A task's answer, taken only under the focus it was started for.
   @impl true
   def handle_info({:deliver, tag, message}, socket),
@@ -429,27 +451,6 @@ defmodule PrismWeb.ComponentsLive do
     else
       {:noreply, socket}
     end
-  end
-
-  # The grant this page asked for: granted, the expanded component's
-  # plan is read again; a refused commit leaves the prompt open; anything
-  # else ended it.
-  def handle_info({:system_layer, id, outcome}, %{assigns: %{grant_prompt: id}} = socket) do
-    case outcome do
-      :confirmed ->
-        {:noreply, socket |> assign(:grant_prompt, nil) |> refresh_expanded_plan()}
-
-      {:refused, reason} when reason != :invalid_prompt ->
-        {:noreply, socket}
-
-      _ended ->
-        {:noreply, assign(socket, :grant_prompt, nil)}
-    end
-  end
-
-  def handle_info({:system_layer, _id, _outcome} = report, socket) do
-    {:ok, socket} = SystemLayer.reported(socket, report)
-    {:noreply, socket}
   end
 
   def handle_info(%Cyfr.Bus.Components{}, socket) do

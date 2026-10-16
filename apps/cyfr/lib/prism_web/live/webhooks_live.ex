@@ -28,6 +28,9 @@ defmodule PrismWeb.WebhooksLive do
 
   use PrismWeb, :live_view
 
+  @behaviour PrismWeb.SystemLayer.Hook
+  on_mount PrismWeb.SystemLayer.Hook
+
   alias Phoenix.LiveView.JS
   alias PrismWeb.SystemLayer
   require Logger
@@ -78,19 +81,11 @@ defmodule PrismWeb.WebhooksLive do
     end
   end
 
-  @impl true
-  def handle_info(:load_data, socket) do
-    {:noreply, socket |> fetch_webhooks() |> assign(:loading, false)}
-  end
-
-  def handle_info(%Cyfr.Bus.Webhooks{}, socket) do
-    {:noreply, fetch_webhooks(socket)}
-  end
-
   # The grant prompt a webhook waited for. A refused commit leaves the
   # prompt open for the person to try again or dismiss; any other end
   # makes no webhook.
-  def handle_info({:system_layer, id, outcome}, %{assigns: %{origin_grant: {id, args}}} = socket) do
+  @impl PrismWeb.SystemLayer.Hook
+  def system_layer_report(id, outcome, %{assigns: %{origin_grant: {id, args}}} = socket) do
     case outcome do
       :confirmed ->
         socket |> assign(:origin_grant, nil) |> origin_granted(args)
@@ -106,13 +101,20 @@ defmodule PrismWeb.WebhooksLive do
     end
   end
 
+  def system_layer_report(_id, _outcome, _socket), do: :pass
+
   # A change this page asked for was confirmed: made again, once.
-  def handle_info({:system_layer, _id, _outcome} = report, socket) do
-    case SystemLayer.reported(socket, report) do
-      {:repeat, :webhook_create, _tool, args, socket} -> create(socket, args)
-      {:repeat, {:webhook_rotate, name}, _tool, _args, socket} -> rotate(socket, name)
-      {:ok, socket} -> {:noreply, socket}
-    end
+  @impl PrismWeb.SystemLayer.Hook
+  def system_layer_repeat(:webhook_create, _tool, args, socket), do: create(socket, args)
+  def system_layer_repeat({:webhook_rotate, name}, _tool, _args, socket), do: rotate(socket, name)
+
+  @impl true
+  def handle_info(:load_data, socket) do
+    {:noreply, socket |> fetch_webhooks() |> assign(:loading, false)}
+  end
+
+  def handle_info(%Cyfr.Bus.Webhooks{}, socket) do
+    {:noreply, fetch_webhooks(socket)}
   end
 
   def handle_info(msg, socket) do
@@ -230,7 +232,7 @@ defmodule PrismWeb.WebhooksLive do
   def handle_event("rotate", %{"id" => name}, socket), do: rotate(socket, name)
 
   # Rotating a secret needs a fresh confirmation: asked for through the
-  # system layer, and repeated from `handle_info/2` once confirmed.
+  # system layer, and repeated from `system_layer_repeat/4` once confirmed.
   defp rotate(socket, name) do
     case SystemLayer.call(socket, {:webhook_rotate, name}, "webhook/rotate", %{"name" => name}) do
       {:ok, result, socket} ->
@@ -311,8 +313,8 @@ defmodule PrismWeb.WebhooksLive do
   end
 
   # Minting a webhook's secret needs a fresh confirmation: asked for
-  # through the system layer, and repeated from `handle_info/2` once
-  # confirmed.
+  # through the system layer, and repeated from `system_layer_repeat/4`
+  # once confirmed.
   defp create(socket, args) do
     case SystemLayer.call(socket, :webhook_create, "webhook/create", args) do
       {:ok, result, socket} ->

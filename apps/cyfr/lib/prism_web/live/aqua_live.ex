@@ -37,6 +37,9 @@ defmodule PrismWeb.AquaLive do
 
   use PrismWeb, :live_view
 
+  @behaviour PrismWeb.SystemLayer.Hook
+  on_mount PrismWeb.SystemLayer.Hook
+
   alias PrismWeb.AquaLive.{AgentsComponent, NotesComponent, RestoreComponent, ScrollsComponent}
   alias PrismWeb.SystemLayer
 
@@ -103,6 +106,28 @@ defmodule PrismWeb.AquaLive do
   # Loads and refreshes
   # ============================================================================
 
+  # The grant this page asked for. Granted, the model got its key: the
+  # kept catalogue predates the key, so it is dropped before the re-read —
+  # a key bound here shows in the picker now, not when the entry lapses.
+  # The same prompt binds a model's key and re-consents a formula whose
+  # closure moved, so what it says names what was consented. A refused
+  # commit leaves the prompt open; anything else ended it.
+  @impl PrismWeb.SystemLayer.Hook
+  def system_layer_report(id, outcome, %{assigns: %{grant_prompt: {id, ref}}} = socket) do
+    case outcome do
+      :confirmed ->
+        {:noreply, socket |> assign(:grant_prompt, nil) |> granted(ref)}
+
+      {:refused, reason} when reason != :invalid_prompt ->
+        {:noreply, socket}
+
+      _ended ->
+        {:noreply, assign(socket, :grant_prompt, nil)}
+    end
+  end
+
+  def system_layer_report(_id, _outcome, _socket), do: :pass
+
   @impl true
   # Everything the load needs is queued from this one message: the
   # provenance is read here, each section's read is the `send_update/3`
@@ -137,30 +162,6 @@ defmodule PrismWeb.AquaLive do
 
   def handle_info({:refresh, section}, socket) when section in @sections do
     {:noreply, load_section(socket, section)}
-  end
-
-  # The grant this page asked for. Granted, the model got its key: the
-  # kept catalogue predates the key, so it is dropped before the re-read —
-  # a key bound here shows in the picker now, not when the entry lapses.
-  # The same prompt binds a model's key and re-consents a formula whose
-  # closure moved, so what it says names what was consented. A refused
-  # commit leaves the prompt open; anything else ended it.
-  def handle_info({:system_layer, id, outcome}, %{assigns: %{grant_prompt: {id, ref}}} = socket) do
-    case outcome do
-      :confirmed ->
-        {:noreply, socket |> assign(:grant_prompt, nil) |> granted(ref)}
-
-      {:refused, reason} when reason != :invalid_prompt ->
-        {:noreply, socket}
-
-      _ended ->
-        {:noreply, assign(socket, :grant_prompt, nil)}
-    end
-  end
-
-  def handle_info({:system_layer, _id, _outcome} = report, socket) do
-    {:ok, socket} = SystemLayer.reported(socket, report)
-    {:noreply, socket}
   end
 
   # The catalogue, async, for the focus it was read under.

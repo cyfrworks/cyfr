@@ -25,6 +25,9 @@ defmodule PrismWeb.SchedulesLive do
 
   use PrismWeb, :live_view
 
+  @behaviour PrismWeb.SystemLayer.Hook
+  on_mount PrismWeb.SystemLayer.Hook
+
   alias PrismWeb.SystemLayer
 
   require Logger
@@ -186,6 +189,28 @@ defmodule PrismWeb.SchedulesLive do
   defp focused_id(id) when is_binary(id) and id != "", do: id
   defp focused_id(_id), do: nil
 
+  # The grant prompt a schedule waited for. A refused commit leaves the
+  # prompt open for the person to try again or dismiss; any other end
+  # makes no schedule.
+  @impl PrismWeb.SystemLayer.Hook
+  def system_layer_report(id, outcome, %{assigns: %{origin_grant: {id, args}}} = socket) do
+    case outcome do
+      :confirmed ->
+        {:noreply, socket |> assign(:origin_grant, nil) |> origin_granted(args)}
+
+      {:refused, reason} when reason != :invalid_prompt ->
+        {:noreply, socket}
+
+      _ended ->
+        {:noreply,
+         socket
+         |> assign(:origin_grant, nil)
+         |> put_flash(:error, "No schedule was made: the grant was not changed.")}
+    end
+  end
+
+  def system_layer_report(_id, _outcome, _socket), do: :pass
+
   @impl true
   def handle_info(:load, socket) do
     {:noreply,
@@ -218,27 +243,6 @@ defmodule PrismWeb.SchedulesLive do
   def handle_info(%Cyfr.Bus.Components{}, socket) do
     {:noreply, fetch_components(socket)}
   end
-
-  # The grant prompt a schedule waited for. A refused commit leaves the
-  # prompt open for the person to try again or dismiss; any other end
-  # makes no schedule.
-  def handle_info({:system_layer, id, outcome}, %{assigns: %{origin_grant: {id, args}}} = socket) do
-    case outcome do
-      :confirmed ->
-        {:noreply, socket |> assign(:origin_grant, nil) |> origin_granted(args)}
-
-      {:refused, reason} when reason != :invalid_prompt ->
-        {:noreply, socket}
-
-      _ended ->
-        {:noreply,
-         socket
-         |> assign(:origin_grant, nil)
-         |> put_flash(:error, "No schedule was made: the grant was not changed.")}
-    end
-  end
-
-  def handle_info({:system_layer, _id, _outcome}, socket), do: {:noreply, socket}
 
   def handle_info(msg, socket) do
     Prima.LoggerContext.unexpected(__MODULE__, msg, :debug)

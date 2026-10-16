@@ -4,6 +4,9 @@
 defmodule PrismWeb.ShellLive do
   use PrismWeb, :live_view
 
+  @behaviour PrismWeb.SystemLayer.Hook
+  on_mount PrismWeb.SystemLayer.Hook
+
   @moduledoc """
   The Prism shell: the person's canvases, the tinctures opened over them,
   the system layer and, when no canvas runs, the tincture picker.
@@ -1853,6 +1856,14 @@ defmodule PrismWeb.ShellLive do
     end
   end
 
+  # Every prompt the shell shows is its own: safe mode, pairing, a
+  # credential entry, a grant.
+  @impl PrismWeb.SystemLayer.Hook
+  def system_layer_report(id, outcome, socket) when is_binary(id),
+    do: {:noreply, prompt_outcome(socket, id, outcome)}
+
+  def system_layer_report(_id, _outcome, _socket), do: :pass
+
   # The refresh's answer, taken only under the focus it was started for.
   @impl true
   def handle_info({:deliver, tag, message}, socket),
@@ -1952,9 +1963,6 @@ defmodule PrismWeb.ShellLive do
       :none -> {:noreply, socket}
     end
   end
-
-  def handle_info({:system_layer, id, outcome}, socket) when is_binary(id),
-    do: {:noreply, prompt_outcome(socket, id, outcome)}
 
   def handle_info(:tinctures_refreshed, socket) do
     {:noreply,
