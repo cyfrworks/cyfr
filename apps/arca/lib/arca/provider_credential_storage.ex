@@ -47,7 +47,9 @@ defmodule Arca.ProviderCredentialStorage do
   `opts` may name the issuance the credentials are written under (`lock:`
   and `verify:`, `Arca.SecurityTransitions.Issuance.held/2`): the row is
   then written in that transaction, once the caller's standing rows are
-  locked and its policy agrees, and a refusal writes nothing.
+  locked and its policy agrees, and a refusal writes nothing. Either way
+  it is written only by a member that still owns its slot, and a stale
+  member writes nothing (`{:error, :not_owner}`).
   """
   @spec put(map(), keyword()) :: :ok | {:error, term()}
   def put(attrs, opts \\ []) when is_map(attrs) and is_list(opts) do

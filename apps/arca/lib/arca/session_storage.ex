@@ -47,7 +47,8 @@ defmodule Arca.SessionStorage do
   `:ok`, or `{:error, reason}` to roll the session back; any other answer
   raises `ArgumentError`, which rolls the session back too.
 
-  Answers `:ok`, or the policy's refusal with nothing written.
+  Answers `:ok`, or the policy's refusal with nothing written, or
+  `{:error, :not_owner}` from a member that no longer owns its slot.
   """
   @spec create_session(binary(), map(), keyword()) :: :ok | {:error, term()}
   def create_session(token_hash, attrs, opts) when is_binary(token_hash) and is_list(opts) do

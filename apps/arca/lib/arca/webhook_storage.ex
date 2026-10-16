@@ -44,7 +44,9 @@ defmodule Arca.WebhookStorage do
   `opts` may name the issuance the secret is written under (`lock:` and
   `verify:`, `Arca.SecurityTransitions.Issuance.held/2`): the row is then
   inserted in that transaction, once the caller's standing rows are
-  locked and its policy agrees, and a refusal writes nothing.
+  locked and its policy agrees, and a refusal writes nothing. Either way
+  it is written only by a member that still owns its slot, and a stale
+  member writes nothing (`{:error, :not_owner}`).
   """
   @spec create_webhook(map(), keyword()) :: :ok | {:error, term()}
   def create_webhook(attrs, opts \\ []) when is_list(opts) do

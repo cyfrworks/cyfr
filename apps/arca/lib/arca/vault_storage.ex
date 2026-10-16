@@ -151,7 +151,9 @@ defmodule Arca.VaultStorage do
   `opts` may name the issuance the entry is written under (`lock:` and
   `verify:`, `Arca.SecurityTransitions.Issuance.held/2`): the row is then
   inserted in that transaction, once the caller's standing rows are
-  locked and its policy agrees, and a refusal writes nothing.
+  locked and its policy agrees, and a refusal writes nothing. Either way
+  it is written only by a member that still owns its slot, and a stale
+  member writes nothing (`{:error, :not_owner}`).
   """
   @spec put(Prima.Actor.t(), map(), keyword()) ::
           {:ok, entry()}
@@ -517,7 +519,9 @@ defmodule Arca.VaultStorage do
   `opts` may name the issuance the material is written under (`lock:` and
   `verify:`, `Arca.SecurityTransitions.Issuance.held/2`): the writes then
   run in that transaction, once the caller's standing rows are locked and
-  its policy agrees, and a refusal writes none of them.
+  its policy agrees, and a refusal writes none of them. Either way they
+  are written only by a member that still owns its slot, and a stale
+  member writes none of them (`{:error, :not_owner}`).
   """
   @spec commit_payload(Prima.Actor.t(), String.t(), payload_plan(), keyword()) ::
           {:ok, %{payload_rev: non_neg_integer(), affected: [String.t()]}}
@@ -559,11 +563,7 @@ defmodule Arca.VaultStorage do
     with :ok <- plan_status(status),
          :ok <- movable_plan(rebind) do
       Arca.Repo.Errors.with_db_rescue("Arca.VaultStorage.commit_payload", fn ->
-        # Under an issuance its transaction is the one the writes share;
-        # without one they take their own.
-        if held?(opts),
-          do: Arca.SecurityTransitions.Issuance.held(opts, commit),
-          else: transact(commit)
+        Arca.SecurityTransitions.Issuance.held(opts, commit)
       end)
     end
   end
@@ -639,8 +639,6 @@ defmodule Arca.VaultStorage do
       {:error, reason} -> {:error, reason}
     end
   end
-
-  defp held?(opts), do: Keyword.has_key?(opts, :lock) or Keyword.has_key?(opts, :verify)
 
   # A plan's status only reactivates an entry.
   defp plan_status(nil), do: :ok

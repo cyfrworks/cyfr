@@ -304,7 +304,7 @@ A count or usage that cannot be read refuses the write as unavailable, for every
 
 ### 6.1 Members and the cell lease
 
-Each control-plane member owns its slot through a database lease, with a generation of its own; a peer joining invalidates no healthy member's slot. Host calls bind to the member that issued them. **A stale owner admits no work, dispenses no credential, emits no result and overwrites no successor's state.** A cached view of ownership is only a fast refusal; the guarantee is verified live in the transaction that writes. Issuance verifies the member's slot in the issuing transaction. *Not built yet:* that check when a session, an API key, a webhook secret, a vault credential or a provider credential is issued; those are issued under the cached view. A stateless asset credential (§7) is minted under the cached ownership check alone and is bounded by its source session or API key, a stated limit.
+Each control-plane member owns its slot through a database lease, with a generation of its own; a peer joining invalidates no healthy member's slot. Host calls bind to the member that issued them. **A stale owner admits no work, dispenses no credential, emits no result and overwrites no successor's state.** A cached view of ownership is only a fast refusal; the guarantee is verified live in the transaction that writes. Issuance verifies the member's slot in the issuing transaction. A stateless asset credential (§7) is minted under the cached ownership check alone and is bounded by its source session or API key, a stated limit.
 
 ### 6.2 Boot and standing transitions
 

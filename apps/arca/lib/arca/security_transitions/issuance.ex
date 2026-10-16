@@ -49,6 +49,16 @@ defmodule Arca.SecurityTransitions.Issuance do
   `write` runs only after `verify` answers `:ok` and answers
   `{:ok, result}` or `{:error, reason}`; either refusal rolls everything
   back.
+
+  Every credential written here is written by a member that still owns
+  its slot. The slot this member believes it holds
+  (`Arca.ControlPlane.member_slot/0`) is verified live as the
+  transaction's first statement (`Arca.ControlPlane.verify_held/1`),
+  before any standing row is locked, and a slot that was taken over, ran
+  out or was released answers `{:error, :not_owner}` with nothing
+  written. A takeover that commits first is read here, and one that
+  starts later waits until this transaction commits or rolls back. Where
+  no claimant runs (`:none`), the check passes with nothing read.
   """
 
   import Ecto.Query
@@ -88,7 +98,10 @@ defmodule Arca.SecurityTransitions.Issuance do
           required(:source) => source()
         }
 
-  @doc "Lock `targets`' rows, ask `verify`, then `write`, in one locking transaction."
+  @doc """
+  Verify the member's slot, lock `targets`' rows, ask `verify`, then
+  `write`, in one locking transaction.
+  """
   @spec run(
           targets(),
           (map() -> :ok | {:error, term()}),
@@ -97,21 +110,11 @@ defmodule Arca.SecurityTransitions.Issuance do
   # arca:db-raise-ok a transaction step: every caller (`Arca.SessionStorage`, `Arca.ApiKeyStorage`) rescues around it.
   def run(%{user_id: user_id} = targets, verify, write)
       when is_binary(user_id) and is_function(verify, 1) and is_function(write, 1) do
-    fn ->
+    owned(fn ->
       projection = locked(targets)
 
-      with :ok <- verify.(projection),
-           {:ok, result} <- write.(projection) do
-        result
-      else
-        {:error, reason} -> Arca.Repo.rollback(reason)
-      end
-    end
-    |> Arca.Repo.locking_transaction()
-    |> case do
-      {:ok, result} -> {:ok, result}
-      {:error, reason} -> {:error, reason}
-    end
+      with :ok <- verify.(projection), do: write.(projection)
+    end)
   end
 
   @doc """
@@ -119,8 +122,10 @@ defmodule Arca.SecurityTransitions.Issuance do
   webhook secret, a vault entry), under the issuance `opts` names: with
   `lock:` and `verify:`, as `run/3` takes them, `write` runs in that
   transaction once the rows are locked and `verify` agrees; with neither,
-  it runs alone, as it would without one. `write` answers `{:ok, result}`
-  or `{:error, reason}`, and a refusal under an issuance rolls it back.
+  it runs in a transaction of its own that locks no standing row. Either
+  way the member's slot is verified first, as `run/3` verifies it, so a
+  stale member writes nothing (`{:error, :not_owner}`). `write` answers
+  `{:ok, result}` or `{:error, reason}`, and a refusal rolls it back.
   Naming one of `lock:` and `verify:` without the other is an
   `ArgumentError`.
   """
@@ -130,13 +135,42 @@ defmodule Arca.SecurityTransitions.Issuance do
   def held(opts, write) when is_list(opts) and is_function(write, 0) do
     case {Keyword.get(opts, :lock), Keyword.get(opts, :verify)} do
       {nil, nil} ->
-        write.()
+        owned(write)
 
       {%{} = targets, verify} when is_function(verify, 1) ->
         run(targets, verify, fn _locked -> write.() end)
 
       _partial ->
         raise ArgumentError, "an issuance names both its targets and its policy, or neither"
+    end
+  end
+
+  # One locking transaction whose first statement verifies the member's
+  # slot live, on the database's clock, before `step` locks or writes
+  # anything: the cached slot is only the claim, and a member holding none
+  # is refused before the transaction opens.
+  defp owned(step) do
+    with {:ok, slot} <- Arca.ControlPlane.member_slot() do
+      fn ->
+        with :ok <- held(slot),
+             {:ok, result} <- step.() do
+          result
+        else
+          {:error, reason} -> Arca.Repo.rollback(reason)
+        end
+      end
+      |> Arca.Repo.locking_transaction()
+      |> case do
+        {:ok, result} -> {:ok, result}
+        {:error, reason} -> {:error, reason}
+      end
+    end
+  end
+
+  defp held(slot) do
+    case Arca.ControlPlane.verify_held(slot) do
+      :ok -> :ok
+      :lost -> {:error, :not_owner}
     end
   end
 

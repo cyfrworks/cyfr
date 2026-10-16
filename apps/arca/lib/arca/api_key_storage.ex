@@ -59,7 +59,8 @@ defmodule Arca.ApiKeyStorage do
   creator's standing rests on and `verify:` is the caller's policy over
   them, asked with them locked. `attrs.athanor_id` names the owning
   athanor; `(athanor_id, name)` is unique among unrevoked keys, and a
-  violation answers `{:error, :already_exists}`.
+  violation answers `{:error, :already_exists}`. A member that no longer
+  owns its slot writes nothing (`{:error, :not_owner}`).
   """
   @spec create_key(map(), keyword()) :: :ok | {:error, term()}
   def create_key(attrs, opts) when is_list(opts) do
@@ -284,7 +285,8 @@ defmodule Arca.ApiKeyStorage do
   row with the same name and settings carries the new secret. A rotation
   is a new credential: anything bound to the old row's id (a tincture
   token derived from it) is retired with it, and no row that follows can
-  take that id back.
+  take that id back. A member that no longer owns its slot rotates
+  nothing (`{:error, :not_owner}`).
   """
   @spec rotate_key(Prima.Actor.t(), String.t(), binary(), String.t(), keyword()) ::
           :ok | {:error, term()}

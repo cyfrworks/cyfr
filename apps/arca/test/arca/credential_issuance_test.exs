@@ -34,6 +34,7 @@ defmodule Arca.CredentialIssuanceTest do
     DeviceCertificate,
     ExternalIdentity,
     Membership,
+    OauthProviderCredential,
     PairedClient,
     PairingInvitation,
     Session,
@@ -316,6 +317,167 @@ defmodule Arca.CredentialIssuanceTest do
 
       assert unboxed(fn ->
                Arca.Repo.one(from(k in ApiKey, where: k.name == ^attrs.name, select: k.revoked))
+             end)
+    end
+  end
+
+  # ---------------------------------------------------------------------------
+  # The member fence
+  # ---------------------------------------------------------------------------
+
+  describe "a member whose slot was taken over" do
+    # Every credential write is verified against the member's live slot as
+    # its transaction's first statement. Here the slot is taken over after
+    # this member cached it, so its cached standing still claims the slot
+    # while the lease row names a successor: each write is refused
+    # `:not_owner` and leaves nothing, whether or not it names an issuance's
+    # `lock:` and `verify:`.
+    setup %{user_id: user_id, athanor_id: athanor_id} do
+      slot = hold_slot!()
+
+      on_exit(fn ->
+        unboxed(fn ->
+          Arca.Repo.delete_all(where(OauthProviderCredential, athanor_id: ^athanor_id))
+        end)
+      end)
+
+      # What a rotation rotates, written while the slot is still held.
+      key = key_attrs(user_id, athanor_id)
+      hook = webhook_attrs(user_id, athanor_id)
+      actor = Prima.Actor.in_athanor(athanor_id)
+
+      {:ok, entry} =
+        unboxed(fn ->
+          :ok =
+            Arca.ApiKeyStorage.create_key(key,
+              lock: targets(user_id, athanor_id),
+              verify: admit()
+            )
+
+          :ok = Arca.WebhookStorage.create_webhook(hook)
+
+          Arca.VaultStorage.put(actor, %{
+            name: "fenced-#{System.unique_integer([:positive])}",
+            kind: "api_key",
+            sealed_payload: "v1",
+            destination: @destination
+          })
+        end)
+
+      {1, _} =
+        unboxed(fn ->
+          Arca.Repo.update_all(from(l in CellLease, where: l.node == ^slot.node),
+            set: [owner: "someone-else", generation: slot.generation + 1]
+          )
+        end)
+
+      assert {:ok, ^slot} = Arca.ControlPlane.member_slot()
+      {:ok, key: key, hook: hook, entry: entry, actor: actor}
+    end
+
+    test "issues no session and no API key", %{user_id: user_id, athanor_id: athanor_id} do
+      hash = :crypto.strong_rand_bytes(32)
+      attrs = key_attrs(user_id, athanor_id)
+
+      assert {:error, :not_owner} =
+               unboxed(fn ->
+                 Arca.SessionStorage.create_session(hash, session_attrs(user_id, athanor_id),
+                   lock: targets(user_id, athanor_id),
+                   verify: admit()
+                 )
+               end)
+
+      assert {:error, :not_owner} =
+               unboxed(fn ->
+                 Arca.ApiKeyStorage.create_key(attrs,
+                   lock: targets(user_id, athanor_id),
+                   verify: admit()
+                 )
+               end)
+
+      refute unboxed(fn -> Arca.Repo.exists?(where(Session, token_hash: ^hash)) end)
+      refute unboxed(fn -> Arca.Repo.exists?(where(ApiKey, name: ^attrs.name)) end)
+    end
+
+    test "rotates no API key and no webhook secret", %{
+      user_id: user_id,
+      athanor_id: athanor_id,
+      key: key,
+      hook: hook,
+      actor: actor
+    } do
+      assert {:error, :not_owner} =
+               unboxed(fn ->
+                 Arca.ApiKeyStorage.rotate_key(
+                   actor,
+                   key.name,
+                   :crypto.hash(:sha256, "rotated"),
+                   "cyfr_sk_rot",
+                   lock: targets(user_id, athanor_id),
+                   verify: admit()
+                 )
+               end)
+
+      grace = DateTime.add(DateTime.utc_now(), 3600, :second)
+
+      assert {:error, :not_owner} =
+               unboxed(fn ->
+                 Arca.WebhookStorage.rotate_secret(actor, hook.name, "rotated", grace)
+               end)
+
+      assert [%{key_hash: key_hash, revoked: false}] =
+               unboxed(fn -> Arca.Repo.all(where(ApiKey, name: ^key.name)) end)
+
+      assert key_hash == key.key_hash
+
+      assert [%{secret_encrypted: secret, previous_secret_encrypted: nil}] =
+               unboxed(fn -> Arca.Repo.all(where(Webhook, name: ^hook.name)) end)
+
+      assert secret == hook.secret_encrypted
+    end
+
+    test "writes no webhook secret, vault credential or provider credential", %{
+      user_id: user_id,
+      athanor_id: athanor_id,
+      entry: entry,
+      actor: actor
+    } do
+      hook = webhook_attrs(user_id, athanor_id)
+      name = "fenced-#{System.unique_integer([:positive])}"
+      plan = %{expected_rev: entry.payload_rev, sealed_payload: "v2", status: nil, rebind: nil}
+
+      for write <- [
+            fn -> Arca.WebhookStorage.create_webhook(hook) end,
+            fn ->
+              Arca.VaultStorage.put(actor, %{
+                name: name,
+                kind: "api_key",
+                sealed_payload: "v1",
+                destination: @destination
+              })
+            end,
+            fn -> Arca.VaultStorage.commit_payload(actor, entry.id, plan) end,
+            fn ->
+              Arca.ProviderCredentialStorage.put(%{
+                athanor_id: athanor_id,
+                provider: "google",
+                payload_ciphertext: "sealed-client"
+              })
+            end
+          ] do
+        assert {:error, :not_owner} = unboxed(write)
+      end
+
+      refute unboxed(fn -> Arca.Repo.exists?(where(Webhook, name: ^hook.name)) end)
+      refute unboxed(fn -> Arca.Repo.exists?(where(VaultEntry, name: ^name)) end)
+
+      assert {:ok, %{sealed_payload: "v1", payload_rev: rev}} =
+               unboxed(fn -> Arca.VaultStorage.get(actor, entry.id) end)
+
+      assert rev == entry.payload_rev
+
+      refute unboxed(fn ->
+               Arca.Repo.exists?(where(OauthProviderCredential, athanor_id: ^athanor_id))
              end)
     end
   end
@@ -638,8 +800,16 @@ defmodule Arca.CredentialIssuanceTest do
   # connection so every connection reads the lease, as
   # `Arca.PairingInvitationsTest` takes it; the lease row, the process-wide
   # standing and the claim switch are given back after the case. The other
-  # writes take no slot.
+  # writes run where no claimant runs, and their fence passes with nothing
+  # read.
   defp slot_for(:invitation_open) do
+    _slot = hold_slot!()
+    :ok
+  end
+
+  defp slot_for(_kind), do: :ok
+
+  defp hold_slot! do
     saved = Map.new(@slot_keys, &{&1, :persistent_term.get(&1, :absent)})
     claim = Application.get_env(:arca, :control_plane_claim_enabled)
     node = "node-#{System.unique_integer([:positive])}"
@@ -659,11 +829,9 @@ defmodule Arca.CredentialIssuanceTest do
     end)
 
     Application.put_env(:arca, :control_plane_claim_enabled, true)
-    {:ok, _slot} = unboxed(fn -> Arca.ControlPlane.take(node, node <> "#boot", 60_000) end)
-    :ok
+    {:ok, slot} = unboxed(fn -> Arca.ControlPlane.take(node, node <> "#boot", 60_000) end)
+    slot
   end
-
-  defp slot_for(_kind), do: :ok
 
   defp webhook_attrs(user_id, athanor_id) do
     n = System.unique_integer([:positive])
