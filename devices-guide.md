@@ -22,18 +22,18 @@ A remote member's device pairs at a hub only under a certificate their own home 
 
 ## Pairing a Device
 
-1. In the shell, open **Devices**. The prompt lists the devices you paired in this athanor, each with when it was paired and when its certificate renews.
-2. Choose **Pair a device**. Pairing is a sensitive change, so it waits for a fresh confirmation (below). Once confirmed, the prompt shows a QR code and the same link, `https://<home>/pair#code=<code>`, with when it expires.
-3. Open the link on the new device, by scanning the code or typing the link. The code is in the link's fragment, which a browser never sends to a server; the `/pair` page reads it and removes it from the address at once.
-4. The page makes the device's key pair. Its private key cannot be exported, and the browser keeps it, with the device's certificate, across reloads. The page sends this home the code and the public key, signs the challenge the home answers with, and receives the device's client id and first certificate. It then connects the device channel under that certificate.
+1. On the new device, open `https://<home>/pair`. The page makes the device's key pair first, before anything is asked of the home. Its private key cannot be exported, and the browser keeps it across reloads. The page shows the key's code, its digest in groups of four characters, with a QR code of it.
+2. On a device of yours signed in to this home, open **Devices** in the shell. The prompt lists the devices you paired in this athanor, each with when it was paired and when its certificate renews.
+3. Type the new device's code, with or without its spaces, and choose **Pair a device**. Pairing is a sensitive change, so it waits for a fresh confirmation (above), whose preview names the code: check it is the one the new device shows. Once confirmed, the prompt shows a QR code and the link `https://<home>/pair#code=<secret>`, the code it is for, and when it expires. `cyfr pair <code>` does the same from the command line and prints the link.
+4. Open the link on the new device, in the browser that showed the code, by scanning the QR code or typing the link. The secret is in the link's fragment, which a browser never sends to a server; the `/pair` page reads it and removes it from the address at once. The page sends this home the secret, the device's public key and its digest, signs the challenge the home answers with, and receives the device's client id and first certificate. It then connects the device channel under that certificate.
 
-The `/pair` page reads no session: a sign-in cookie the browser still holds, even another person's, does not choose who the device belongs to. The code does.
+The `/pair` page reads no session: a sign-in cookie the browser still holds, even another person's, does not choose who the device belongs to. The invitation does.
 
 A browser that already holds a paired device asks before a pairing link replaces it. Keeping the device connects as before. Replacing it is a choice you make: the device's key and certificate are erased from the browser first, and the old device stays listed under **Devices** until you revoke it.
 
-### The pairing code is a bearer invitation
+### The pairing link is bound to one device
 
-Whoever opens the link first, before it expires, pairs a device as you. The code is 128 random bits, lives five minutes, is stored only as a hash, and is used once. If a copy of the link reached anyone else, revoke the device it paired from **Devices**. A code that was already used, or has expired, is refused with that reason; show a new one.
+The link pairs only the device whose code you approved: the invitation names the digest of that device's key, and the home refuses every other key, even one that proves itself, before it issues anything. A link opened in another browser, or after the device made a new key, is refused with that reason; approve the code it shows now. The link's secret is 128 random bits, lives five minutes, is stored only as a hash, and is used once. The passkey or paired device that confirmed the pairing must still stand when the device completes it; one revoked meanwhile leaves the link unusable. A link that was already used, or has expired, is refused with that reason; show a new one.
 
 If the browser closes after the home paired the device but before the answer arrived, the device was paired once and holds no certificate. The same link then answers that the code was already used: show a new code, and revoke the unused device from the list.
 
