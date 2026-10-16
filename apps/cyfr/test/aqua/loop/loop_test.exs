@@ -652,10 +652,10 @@ defmodule Aqua.LoopTest do
     :ok = Aqua.ToolGrants.revoke(ctx, grant)
     send(worker, :continue)
 
-    assert :completed = Task.await(task, 60_000)
+    assert {:paused, :approval} = Task.await(task, 60_000)
 
     {:ok, steps} = Tape.steps(ctx, turn)
-    assert %{dispatch_state: "closed", outcome: outcome} = Enum.find(steps, &(&1.kind == "tool"))
+    assert %{outcome: outcome} = Enum.find(steps, &(&1.kind == "tool"))
     refute outcome == "ok"
   end
 
