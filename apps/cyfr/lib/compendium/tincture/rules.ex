@@ -130,9 +130,9 @@ defmodule Compendium.Tincture.Rules do
   # which the person makes.
   @persons_actions Enum.uniq(Caps.agent_only_tools() ++ ["feed.press"])
 
-  # The stream namespaces whose events carry a conversation's or the
+  # The stream namespaces whose events carry a thread's or the
   # notes' material, which may be of any source class.
-  @conversation_streams ~w(turn thread notes)
+  @thread_streams ~w(turn thread notes)
 
   @origin ~r/\Ahttps?:\/\/(\[[0-9a-fA-F:]+\]|[A-Za-z0-9.-]+)(:[0-9]{1,5})?\z/
   @nonce ~r/\A[A-Za-z0-9+\/_=-]{16,128}\z/
@@ -503,7 +503,7 @@ defmodule Compendium.Tincture.Rules do
 
   def read_classes({:stream, name}) when is_binary(name) do
     [namespace | _rest] = String.split(name, ".")
-    if namespace in @conversation_streams, do: Prima.Source.classes(), else: [:outside]
+    if namespace in @thread_streams, do: Prima.Source.classes(), else: [:outside]
   end
 
   @doc """
