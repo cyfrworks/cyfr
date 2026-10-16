@@ -524,8 +524,12 @@ def test_pinned_egress(stack, plane):
             complete = closes[0]
             expect(complete["op"] == "complete", f"{case}: the guest answered, and its attempt closed completed", complete)
             pins = plane.seen("egress_pin", attempt["execution_id"])
-            expect(len(pins) == 1 and pins[0]["args"] == {"url": url, "purpose": "fetch"},
-                   f"{case}: the runner asked the control plane to pin {url}, once", pins)
+            # A granted pin is asked for again by the relay as the request
+            # leaves, the send decided on the run as it stands then; a
+            # refused one ends the fetch before any send.
+            asks = 2 if case == "fetch" else 1
+            expect(len(pins) == asks and all(p["args"] == {"url": url, "purpose": "fetch"} for p in pins),
+                   f"{case}: the control plane was asked to pin {url} {asks} time(s), runner then relay", pins)
             outputs[case] = complete["args"]["outcome"]["output"]
             if case == "fetch":
                 expect(pins[0]["answered"] == "ok", f"fetch: {host} was pinned to {gateway}", plane.pins[-1:])

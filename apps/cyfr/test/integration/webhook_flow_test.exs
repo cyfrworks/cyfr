@@ -306,7 +306,10 @@ defmodule CyfrWeb.WebhookFlowIntegrationTest do
           "methods" => ["GET"],
           "schemes" => ["http"],
           "private_ips" => ["127.0.0.1"]
-        }
+        },
+        # A webhook's run starts holding its payload, outside material:
+        # the upstream may receive it.
+        "flows" => [%{"from" => "outside", "to" => "127.0.0.1"}]
       }
     }
 
