@@ -477,6 +477,82 @@ defmodule Sanctum.RestoreKitProofTest do
              })
   end
 
+  # ---- the administrator's close ------------------------------------------------------
+
+  # A platform administrator signed in after the restore, in an athanor of
+  # their own: no recovery of theirs is open.
+  defp admin! do
+    n = System.unique_integer([:positive])
+
+    {:ok, user} =
+      Users.upsert_from_provider(%{
+        id: "github|https://github.com|kit-admin-#{n}",
+        provider: "github",
+        email: "kit-admin#{n}@example.com",
+        verified: true
+      })
+
+    {:ok, athanor} = Athanors.create_group(user.id, "Kit admin #{n}")
+
+    ctx =
+      Context.build(
+        user_id: user.id,
+        email: user.email,
+        provider: "github",
+        athanor_id: athanor.id,
+        permissions: [:*],
+        auth_method: :oidc,
+        authenticated: true
+      )
+
+    %{ctx | platform_admin: true}
+  end
+
+  test "person.close_recovery ends one person's recovery and leaves another's; a non-admin is refused",
+       %{directory: directory} do
+    alice = enrolled!(directory)
+    bob = enrolled!(directory)
+    restore_id = restored!()
+    admin = admin!()
+
+    close = fn ctx, person ->
+      Sanctum.Providers.Person.handle(ctx, %{
+        "action" => "close_recovery",
+        "user_id" => person.user.id
+      })
+    end
+
+    # Not a platform administrator: refused, and nothing closes.
+    assert {:error, _refused} = close.(%{admin | platform_admin: false}, alice)
+    assert {:ok, ^restore_id} = restore_open(alice.user.id)
+
+    # The administrator's close, under their fresh confirmation.
+    assert {:ok, %{user_id: closed, closed_restore_ids: [^restore_id]}} =
+             TestContext.confirming(admin, &close.(&1, alice))
+
+    assert closed == alice.user.id
+    assert {:ok, nil} = restore_open(alice.user.id)
+    assert {:ok, ^restore_id} = restore_open(bob.user.id)
+
+    # What the restore suspended stays suspended.
+    assert Arca.Repo.get(Schemas.Passkey, alice.passkey).state == "suspended"
+
+    # A person with no recovery open is answered so.
+    assert {:error, %Prima.Refusal{reason: :not_recovering}} =
+             TestContext.confirming(admin, &close.(&1, alice))
+  end
+
+  test "a person who signs in only through a door has no recovery to make", %{
+    directory: directory
+  } do
+    person = enrolled!(directory)
+    door_only = admin!()
+    restored!()
+
+    assert {:ok, _restore_id} = restore_open(person.user.id)
+    assert {:ok, nil} = restore_open(door_only.user_id)
+  end
+
   # ---- the vectors -------------------------------------------------------------------
 
   test "the kit proof's vectors verify here as the browser signs them" do

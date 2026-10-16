@@ -296,6 +296,53 @@ defmodule Arca.PairingInvitationsTest do
     assert clients(actor) == 1
   end
 
+  test "a device paired fresh ends its person's recovery from a restore and no one else's", %{
+    actor: actor,
+    person: person,
+    membership: m,
+    passkey: passkey
+  } do
+    restore_id = Prima.UUID7.generate_id("rst")
+    other = "usr_other_#{System.unique_integer([:positive])}"
+
+    {:ok, _} =
+      Arca.Users.mint(
+        Prima.Actor.system(),
+        %{
+          id: other,
+          provider: "github",
+          first_seen_at: DateTime.utc_now(),
+          last_seen_at: DateTime.utc_now(),
+          created_at: DateTime.utc_now(),
+          updated_at: DateTime.utc_now()
+        },
+        %{
+          key: "github|https://github.com|#{other}",
+          provider: "github",
+          issuer: "https://github.com",
+          subject: other,
+          first_seen_at: DateTime.utc_now(),
+          last_seen_at: DateTime.utc_now()
+        }
+      )
+
+    {2, _} =
+      Arca.Repo.insert_all(Arca.Schemas.RestorePerson, [
+        %{restore_id: restore_id, user_id: person.id, open: true},
+        %{restore_id: restore_id, user_id: other, open: true}
+      ])
+
+    {_invitation, hash, digest} = open!(actor, person, m, by_passkey(passkey))
+
+    assert {:ok, %{client: _client}} =
+             PairingInvitations.consume(actor, hash, digest, &admits/1, issue(actor))
+
+    assert {:ok, nil} = Arca.SecurityTransitions.restore_open(Prima.Actor.system(), person.id)
+
+    assert {:ok, ^restore_id} =
+             Arca.SecurityTransitions.restore_open(Prima.Actor.system(), other)
+  end
+
   test "a failed issuance rolls everything back and the invitation stays pending", %{
     actor: actor,
     person: person,

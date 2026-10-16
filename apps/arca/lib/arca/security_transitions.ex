@@ -56,7 +56,10 @@ defmodule Arca.SecurityTransitions do
   standing, retires every session, suspends every key, webhook, paired
   client and passkey, blocks every profile and stored credential, drops
   every standing allow, once binding and pending confirmation, settles
-  every open run terminal, and opens one `restore_people` row per person.
+  every open run terminal, and opens one `restore_people` row for each
+  person who held a passkey or device it suspended: a person who signs in
+  only through a door has nothing to re-enable, and every confirmation of
+  theirs already comes from one.
   This module owns those rows — written, read (`restore_open/2`,
   `restore_frozen?/1`, `restore_checklist/3`) and closed
   (`close_restore!/1`) — and the kit's challenges and credential the
@@ -1189,8 +1192,9 @@ defmodule Arca.SecurityTransitions do
   its attempt `lapsed` with outcome `uncertain` and the attempt's pending
   write intents `uncertain`, a turn `uncertain` with its open steps. Rows
   already suspended, blocked, revoked or tombstoned keep their state. It
-  then writes one open `restore_people` row per person and deletes the
-  marker it read, so a retry after commit finds no marker and moves
+  then writes one open `restore_people` row for each person who held a
+  method it suspended — an active passkey or a standing paired client —
+  and deletes the marker it read, so a retry after commit finds no marker and moves
   nothing, and a crash before commit leaves the marker for the next boot.
 
   The membership freeze is what those rows mean: a group athanor with a
@@ -1259,6 +1263,37 @@ defmodule Arca.SecurityTransitions do
     Arca.Repo.delete_all(from(m in ServerMeta, where: m.key == ^kit_key(user_id)))
     Enum.sort(ids || [])
   end
+
+  @doc """
+  A platform administrator's close of the person `user_id`'s recovery from
+  a declared restore (`person.close_recovery`), in one locking
+  transaction: `opts[:verify]` is asked first over `%{user_id: user_id}`
+  (the administrator's confirmation is consumed there, under their own
+  locks), then the person's open row is locked and every open row of
+  theirs closed, with their kit credential. Another person's row is never
+  touched. `{:error, :not_recovering}` when the person has none open.
+  """
+  @spec close_restore(Prima.Actor.t(), String.t(), keyword()) ::
+          {:ok, %{closed_restore_ids: [String.t()]}} | {:error, term()}
+  def close_restore(%Prima.Actor{scope: :platform, system: true}, user_id, opts)
+      when is_binary(user_id) and is_list(opts) do
+    verify = Keyword.fetch!(opts, :verify)
+
+    Arca.Repo.Errors.with_db_rescue("Arca.SecurityTransitions.close_restore", fn ->
+      Arca.Repo.locking_transaction(fn ->
+        with :ok <- verify.(%{user_id: user_id}),
+             restore_id when is_binary(restore_id) <- restore_open!(user_id) do
+          %{closed_restore_ids: close_restore!(user_id)}
+        else
+          nil -> Arca.Repo.rollback(:not_recovering)
+          {:error, reason} -> Arca.Repo.rollback(reason)
+        end
+      end)
+    end)
+    |> Arca.Data.project()
+  end
+
+  def close_restore(%Prima.Actor{}, _user_id, _opts), do: {:error, :cross_tenant}
 
   @doc """
   Whether the actor's athanor is a group frozen by a declared restore: one
@@ -1429,7 +1464,7 @@ defmodule Arca.SecurityTransitions do
         %ServerMeta{value: restore_id} ->
           change = restore_rows(restore_id)
 
-          with :ok <- restore_holds(restore_id),
+          with :ok <- restore_holds(restore_id, change.user_ids),
                :ok <- slot_holds(slot) do
             change
           else
@@ -1461,8 +1496,12 @@ defmodule Arca.SecurityTransitions do
   # arca:unscoped-ok a declared restore moves every person, athanor and credential of the server.
   defp restore_rows(restore_id) do
     now = Arca.ServerMetaStorage.now!()
-    user_ids = lock_all(User)
+    _user_ids = lock_all(User)
     _athanor_ids = lock_all(Athanor)
+
+    # The people whose methods the restore suspends, read before it does:
+    # each has a passkey or device to re-enable, and only they recover.
+    holders = method_holders()
 
     generations = raise_generations(User, now)
     athanor_generations = raise_generations(Athanor, now)
@@ -1541,7 +1580,7 @@ defmodule Arca.SecurityTransitions do
 
     runs = settle_runs(now)
 
-    people = Enum.map(user_ids, &%{restore_id: restore_id, user_id: &1, open: true})
+    people = Enum.map(holders, &%{restore_id: restore_id, user_id: &1, open: true})
     Arca.Repo.insert_all(RestorePerson, people, on_conflict: :nothing)
 
     {1, _} =
@@ -1551,7 +1590,7 @@ defmodule Arca.SecurityTransitions do
 
     Map.merge(runs, %{
       restore_id: restore_id,
-      user_ids: user_ids,
+      user_ids: holders,
       user_generations: generations,
       athanor_generations: athanor_generations,
       revoked_session_hashes: hashes || [],
@@ -1575,6 +1614,19 @@ defmodule Arca.SecurityTransitions do
     from(r in schema, order_by: [asc: r.id], select: r.id)
     |> QueryHelpers.for_update()
     |> Arca.Repo.all()
+  end
+
+  # Everyone holding an active passkey or a standing paired client.
+  # arca:unscoped-ok a declared restore reads every person's methods, across every athanor.
+  defp method_holders do
+    passkeys = from(p in Passkey, where: p.state == "active", select: p.user_id)
+    clients = from(c in PairedClient, where: c.standing == "active", select: c.user_id)
+
+    passkeys
+    |> union(^clients)
+    |> Arca.Repo.all()
+    |> Enum.uniq()
+    |> Enum.sort()
   end
 
   defp raise_generations(schema, now) do
@@ -1650,7 +1702,7 @@ defmodule Arca.SecurityTransitions do
   # moves is left standing, every person holds an open row under it, and
   # its marker is gone.
   # arca:unscoped-ok the postconditions of a declared restore, read across the server.
-  defp restore_holds(restore_id) do
+  defp restore_holds(restore_id, holders) do
     {profile_from, _} = StatusTransitions.restored(:profiles)
     {entry_from, _} = StatusTransitions.restored(:credentials)
 
@@ -1677,12 +1729,13 @@ defmodule Arca.SecurityTransitions do
       from(m in ServerMeta, where: m.key == ^@restore_marker),
       from(u in User,
         where:
-          u.id not in subquery(
-            from(r in RestorePerson,
-              where: r.restore_id == ^restore_id and r.open == true,
-              select: r.user_id
+          u.id in ^holders and
+            u.id not in subquery(
+              from(r in RestorePerson,
+                where: r.restore_id == ^restore_id and r.open == true,
+                select: r.user_id
+              )
             )
-          )
       )
     ]
 

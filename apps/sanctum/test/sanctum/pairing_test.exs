@@ -277,7 +277,8 @@ defmodule Sanctum.PairingTest do
     :key_rotation,
     :sign_in_methods,
     :seal_change,
-    :restore_reenable
+    :restore_reenable,
+    :restore_close
   ]
 
   describe "the action table" do
@@ -328,7 +329,8 @@ defmodule Sanctum.PairingTest do
         "key.reenable" => :restore_reenable,
         "webhook.reenable" => :restore_reenable,
         "pairing.reenable" => :restore_reenable,
-        "passkey.reenable" => :restore_reenable
+        "passkey.reenable" => :restore_reenable,
+        "person.close_recovery" => :restore_close
       }
 
       for {operation, action} <- expected do

@@ -191,6 +191,9 @@ defmodule Arca.PairingInvitations do
                :ok <- latched(current),
                {:ok, result} <- issue.(Arca.Data.project(current)),
                :ok <- consumed!(current, locked.now) do
+            # A device paired fresh ends its person's recovery from a
+            # declared restore, as a re-enabled one does.
+            _closed = Arca.SecurityTransitions.close_restore!(current.user_id)
             {:ok, result}
           end
         end)

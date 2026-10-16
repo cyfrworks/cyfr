@@ -67,7 +67,10 @@ defmodule Arca.Passkeys do
   `:expires_at` (required while pending) and `:identity_recovery_epoch`
   (required for a remote person, refused for a local one). `opts`:
   `first_method: true` claims the local first-method exception, and
-  `also:` runs in the transaction with the row as a plain map.
+  `also:` runs in the transaction with the row as a plain map. A credential
+  registered `active` closes its person's open recovery from a declared
+  restore in the same transaction, once `also:` admitted it
+  (`Arca.SecurityTransitions.close_restore!/1`).
 
   Refusals: `:conflict` (the credential is already live at this RP ID),
   `:first_method_used`, `:identity_key_epoch_required`,
@@ -320,11 +323,21 @@ defmodule Arca.Passkeys do
       passkey = Arca.Repo.get!(Passkey, row.id)
 
       case also.(Arca.Data.project(passkey)) do
-        :ok -> {:ok, passkey}
+        :ok -> {:ok, closed_on_activation(passkey)}
         {:error, _reason} = refusal -> refusal
       end
     end
   end
+
+  # A fresh passkey registered active, under a confirmation the restore
+  # rules admit, ends its person's recovery from a declared restore, as a
+  # re-enabled one does; a pending registration ends nothing yet.
+  defp closed_on_activation(%Passkey{state: "active", user_id: user_id} = passkey) do
+    _closed = close_restore(user_id)
+    passkey
+  end
+
+  defp closed_on_activation(%Passkey{} = passkey), do: passkey
 
   defp first_method(%{state: "active", user_id: user_id}, opts),
     do: mark_first(user_id, Keyword.get(opts, :first_method, false))

@@ -9,8 +9,10 @@ defmodule Sanctum.Providers.Person do
   certificate for another home, and the sign-in carry that begins and
   completes here. The carry stores no saved-home list.
 
-  Every action but one is a person's, on the external plane, through an
-  interactive session (`consent: :interactive`). The exception is
+  Every action but one is on the external plane, through an interactive
+  session (`consent: :interactive`): a person's own, or, for
+  `person.close_recovery`, the platform administrator's (`scope:
+  :platform`). The exception is
   `person.renew_certificate`, `auth: :anonymous` as `pairing.complete` is:
   a device at another home renews here holding no session of this home's,
   and the proof of its device key over this home's challenge is its only
@@ -69,6 +71,11 @@ defmodule Sanctum.Providers.Person do
       for another home, after the `device_pairing` confirmation, recorded
       as a certification here; this home pairs its own devices through
       `pairing`.
+    * `person.close_recovery` (`Sanctum.Recovery.close_recovery/2`) — the
+      platform administrator's end of a person's recovery from a declared
+      restore (`scope: :platform`, under the administrator's fresh
+      confirmation): `%{user_id, closed_restore_ids}`. What the restore
+      suspended stays suspended.
     * `person.renew_certificate` (`Sanctum.RemoteCertification.renew/2`) —
       `%{challenge: _}` for a certificate this home issued, then
       `%{certificate: _}`, its replacement, for the device key's proof
@@ -276,6 +283,22 @@ defmodule Sanctum.Providers.Person do
       ),
       Operation.new(
         "person",
+        "close_recovery",
+        "End a person's recovery from a declared restore",
+        [
+          Arg.new("user_id", :string,
+            required: true,
+            description:
+              "close_recovery: the person whose recovery from the restore ends; what it suspended stays suspended"
+          )
+        ],
+        scope: :platform,
+        kind: :write,
+        planes: [:external],
+        consent: :interactive
+      ),
+      Operation.new(
+        "person",
         "renew_certificate",
         "Renew a device certificate this home issued for another home",
         [
@@ -396,6 +419,9 @@ defmodule Sanctum.Providers.Person do
 
   def handle(%Context{}, %{"action" => "carry_cancel"}),
     do: {:error, {:invalid_argument, "carry_cancel needs the action_id"}}
+
+  def handle(%Context{} = ctx, %{"action" => "close_recovery"} = args),
+    do: answer(Recovery.close_recovery(ctx, Map.get(args, "user_id")))
 
   def handle(%Context{} = ctx, %{"action" => "certify"} = args),
     do: answer(RemoteCertification.certify(ctx, args))

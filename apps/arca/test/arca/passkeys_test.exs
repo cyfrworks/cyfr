@@ -158,6 +158,17 @@ defmodule Arca.PasskeysTest do
 
   defp as(person), do: %Prima.Actor{user_id: person.id}
 
+  defp recovering!(user_id) do
+    restore_id = Prima.UUID7.generate_id("rst")
+
+    {1, _} =
+      Arca.Repo.insert_all(Arca.Schemas.RestorePerson, [
+        %{restore_id: restore_id, user_id: user_id, open: true}
+      ])
+
+    restore_id
+  end
+
   defp suspend!(passkey) do
     {1, _} =
       Arca.Repo.update_all(from(p in Arca.Schemas.Passkey, where: p.id == ^passkey.id),
@@ -335,6 +346,10 @@ defmodule Arca.PasskeysTest do
       person = local!()
       {:ok, passkey} = Passkeys.register(as(person), attrs(person, %{}))
       suspend!(passkey)
+      # Registered before the recovery opens: a registration after it
+      # would end it.
+      {:ok, gone} = Passkeys.register(as(person), attrs(person, %{}))
+      suspend!(gone)
       restore_id = recovering!(person.id)
       ok = fn _row -> :ok end
 
@@ -353,8 +368,6 @@ defmodule Arca.PasskeysTest do
                Passkeys.reenable(server(), person.id, "psk_absent", verify: ok)
 
       # A suspended credential may still be revoked, and is then never revived.
-      {:ok, gone} = Passkeys.register(as(person), attrs(person, %{}))
-      suspend!(gone)
       {:ok, %{passkey: %{state: "revoked"}}} = Passkeys.revoke(as(person), gone.id)
       assert {:error, :revoked} = Passkeys.reenable(server(), person.id, gone.id, verify: ok)
       assert state(gone.id) == "revoked"
@@ -657,6 +670,28 @@ defmodule Arca.PasskeysTest do
              Passkeys.get_by_credential(server(), passkey.rp_id, passkey.credential_id)
 
     assert {:ok, [%{id: ^id}]} = Passkeys.list(as(person), person.id, state: :revoked)
+  end
+
+  test "a fresh passkey registered active ends its person's recovery from a restore and no one else's" do
+    person = local!()
+    other = local!()
+    recovering!(person.id)
+    other_restore = recovering!(other.id)
+
+    assert {:ok, _passkey} =
+             Passkeys.register(as(person), attrs(person, %{}), first_method: true)
+
+    assert {:ok, nil} = Arca.SecurityTransitions.restore_open(server(), person.id)
+    assert {:ok, ^other_restore} = Arca.SecurityTransitions.restore_open(server(), other.id)
+
+    # A pending registration ends nothing yet.
+    assert {:ok, _pending} =
+             Passkeys.register(
+               as(other),
+               attrs(other, %{state: "pending", expires_at: DateTime.add(DateTime.utc_now(), 60)})
+             )
+
+    assert {:ok, ^other_restore} = Arca.SecurityTransitions.restore_open(server(), other.id)
   end
 end
 

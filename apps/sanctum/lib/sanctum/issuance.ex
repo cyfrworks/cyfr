@@ -337,9 +337,13 @@ defmodule Sanctum.Issuance do
     if DateTime.compare(expires_at, now) == :gt, do: :ok, else: {:error, :unauthenticated}
   end
 
-  defp holder(%{kind: :api_key, row: %{revoked: false, athanor_id: athanor_id}}, _now, %{
-         athanor_id: athanor_id
-       }),
+  defp holder(
+         %{kind: :api_key, row: %{revoked: false, suspended: false, athanor_id: athanor_id}},
+         _now,
+         %{
+           athanor_id: athanor_id
+         }
+       ),
        do: :ok
 
   defp holder(

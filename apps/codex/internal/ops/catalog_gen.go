@@ -212,6 +212,7 @@ const (
 	PersonCarryComplete             = "carry_complete"
 	PersonCarryList                 = "carry_list"
 	PersonCertify                   = "certify"
+	PersonCloseRecovery             = "close_recovery"
 	PersonEnroll                    = "enroll"
 	PersonEnrollAbandon             = "enroll_abandon"
 	PersonEnrollHolder              = "enroll_holder"
@@ -344,7 +345,7 @@ var Actions = map[string][]string{
 	"oauth":               {"delete_client", "list", "set_client"},
 	"pairing":             {"begin", "complete", "list", "reenable", "renew", "revoke"},
 	"passkey":             {"list", "recover_admin", "reenable", "register", "revoke"},
-	"person":              {"assert", "carry_begin", "carry_cancel", "carry_complete", "carry_list", "certify", "enroll", "enroll_abandon", "enroll_holder", "kit", "kit_ack", "link_door", "renew_certificate", "rotate", "status", "unlink_door"},
+	"person":              {"assert", "carry_begin", "carry_cancel", "carry_complete", "carry_list", "certify", "close_recovery", "enroll", "enroll_abandon", "enroll_holder", "kit", "kit_ack", "link_door", "renew_certificate", "rotate", "status", "unlink_door"},
 	"policy_log":          {"correlate", "get", "list"},
 	"profile":             {"commit", "grant", "grants", "list", "plan", "preview", "publish", "revoke"},
 	"record":              {"get", "list", "payload"},
@@ -3304,6 +3305,21 @@ func (args PersonCertifyArgs) MarshalJSON() ([]byte, error) {
 		Action string `json:"action"`
 		fields
 	}{Action: PersonCertify, fields: fields(args)})
+}
+
+// PersonCloseRecoveryArgs carries arguments for person.close_recovery.
+type PersonCloseRecoveryArgs struct {
+	// close_recovery: the person whose recovery from the restore ends; what it suspended stays suspended
+	UserId string `json:"user_id"`
+}
+
+// MarshalJSON supplies the operation's fixed action discriminator.
+func (args PersonCloseRecoveryArgs) MarshalJSON() ([]byte, error) {
+	type fields PersonCloseRecoveryArgs
+	return json.Marshal(struct {
+		Action string `json:"action"`
+		fields
+	}{Action: PersonCloseRecovery, fields: fields(args)})
 }
 
 // PersonEnrollArgs carries arguments for person.enroll.

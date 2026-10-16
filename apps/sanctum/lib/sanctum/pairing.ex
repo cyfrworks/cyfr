@@ -167,6 +167,7 @@ defmodule Sanctum.Pairing do
   | `:sign_in_methods` | a fresh confirmation |
   | `:seal_change` | a fresh confirmation |
   | `:restore_reenable` | a fresh confirmation, from a door or the kit while the person recovers |
+  | `:restore_close` | a fresh confirmation, the platform administrator's |
 
   `sensitive?/1` answers the table. `vault_unlock` and `home_transfer`
   have no operation until their features land, and stay sensitive.
@@ -216,7 +217,8 @@ defmodule Sanctum.Pairing do
     key_rotation: :fresh,
     sign_in_methods: :fresh,
     seal_change: :fresh,
-    restore_reenable: :fresh
+    restore_reenable: :fresh,
+    restore_close: :fresh
   }
 
   # Each operation that confirms something, as `tool.action`, the spelling
@@ -258,7 +260,8 @@ defmodule Sanctum.Pairing do
     "key.reenable" => :restore_reenable,
     "webhook.reenable" => :restore_reenable,
     "pairing.reenable" => :restore_reenable,
-    "passkey.reenable" => :restore_reenable
+    "passkey.reenable" => :restore_reenable,
+    "person.close_recovery" => :restore_close
   }
 
   # A pairing invitation: 128 random bits, alive five minutes.
@@ -286,6 +289,7 @@ defmodule Sanctum.Pairing do
           | :sign_in_methods
           | :seal_change
           | :restore_reenable
+          | :restore_close
 
   @typedoc """
   An opened invitation: its raw `invitation_secret` (16 bytes, shown to

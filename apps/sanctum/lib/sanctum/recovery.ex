@@ -904,6 +904,68 @@ defmodule Sanctum.Recovery do
   end
 
   @doc """
+  A platform administrator ends the person `user_id`'s recovery from a
+  declared restore (`person.close_recovery`): their `restore_people` row
+  closes, so a group waiting on them admits members again and their
+  confirmations are no longer held to a door or their kit, while every
+  key, webhook, device and passkey the restore suspended stays suspended.
+  A sensitive change (`restore_close`): the administrator's fresh
+  confirmation is asked first and consumed in the transaction that closes
+  the row, under the restore's own source rule for the administrator
+  (`Sanctum.Pairing.restore_confirmed/1`). Another person's recovery is
+  never touched.
+
+  Refusals: `:platform_admin_required`, a `not_recovering` refusal for a
+  person with no recovery open, the consent signal and the confirmation's
+  own refusals, and `:unavailable`.
+  """
+  @spec close_recovery(Context.t(), term()) :: {:ok, map()} | {:error, term()}
+  def close_recovery(%Context{platform_admin: true} = ctx, user_id) when is_binary(user_id) do
+    change = %{
+      operation: "person.close_recovery",
+      arguments: %{"user_id" => user_id},
+      resource: user_id,
+      details: %{
+        "effect" =>
+          "Ends this person's recovery from the restore: their groups admit members again; " <>
+            "what the restore suspended stays suspended"
+      }
+    }
+
+    with :ok <- Authz.check(ctx, :restore_close, change) do
+      verify = fn _person ->
+        with :ok <- Authz.consume(ctx, {:restore_close, change}),
+             do: Sanctum.Pairing.restore_confirmed(ctx)
+      end
+
+      case Arca.SecurityTransitions.close_restore(system(), user_id, verify: verify) do
+        {:ok, %{closed_restore_ids: ids}} ->
+          Authz.consumed(ctx)
+          {:ok, %{user_id: user_id, closed_restore_ids: ids}}
+
+        {:error, :not_recovering} ->
+          {:error,
+           %Prima.Refusal{
+             class: :not_found,
+             reason: :not_recovering,
+             message: "That person is not recovering from a restore here"
+           }}
+
+        {:error, :database_error} ->
+          {:error, :unavailable}
+
+        {:error, reason} ->
+          {:error, reason}
+      end
+    end
+  end
+
+  def close_recovery(%Context{platform_admin: true}, _user_id),
+    do: {:error, {:invalid_argument, "Name the person whose recovery ends (user_id)"}}
+
+  def close_recovery(%Context{}, _user_id), do: {:error, :platform_admin_required}
+
+  @doc """
   A kit challenge for the person `identifier` names, while their row of a
   declared restore is open (the kit ingress, `POST /restore/kit/challenge`):
   32 random bytes, held by their digest for five minutes on the database's

@@ -893,7 +893,7 @@ restore**); every component grant asks for consent again; standing
 approvals, unused once-bindings and pending confirmations are dropped;
 every stored credential is unusable until it is rotated where it came from
 and entered again; runs open at the backup end uncertain and none resumes;
-and a group admits no new member until each of its members has recovered.
+and a group admits no new member until each of its members who held a passkey or device has recovered, or a platform administrator ends that member's recovery (`person.close_recovery`).
 [identity-guide.md](identity-guide.md) has the person's side. The
 sign-in providers' OAuth client credentials and the registry push tokens
 stay as the backup restored them. An object store (`CYFR_STORAGE=s3`) is

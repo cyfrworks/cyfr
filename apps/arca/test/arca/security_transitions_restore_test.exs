@@ -469,6 +469,8 @@ defmodule Arca.SecurityTransitionsRestoreTest do
   defp home! do
     alice = person!()
     bob = person!()
+    # Carol signs in only through a door: no method for a restore to suspend.
+    carol = person!()
     own = athanor!("person", alice.id)
     seat!(own.id, alice.id)
     group = athanor!("group", alice.id)
@@ -487,9 +489,11 @@ defmodule Arca.SecurityTransitionsRestoreTest do
     %{
       alice: alice,
       bob: bob,
+      carol: carol,
+      bob_passkey: passkey!(bob.id, "active"),
       own: own,
       group: group,
-      sessions: [session!(alice.id), session!(bob.id)],
+      sessions: [session!(alice.id), session!(bob.id), session!(carol.id)],
       key: key!(own.id, alice.id),
       revoked_key: key!(own.id, alice.id, %{revoked: true}),
       webhook: webhook!(own.id, alice.id, profile),
@@ -631,7 +635,7 @@ defmodule Arca.SecurityTransitionsRestoreTest do
       assert get(Schemas.Passkey, fixture.pending_passkey).state == "pending"
       assert get(Schemas.Passkey, fixture.revoked_passkey).state == "revoked"
       assert change.suspended_api_key_ids == [fixture.key]
-      assert change.suspended_passkey_ids == [fixture.passkey]
+      assert change.suspended_passkey_ids == Enum.sort([fixture.passkey, fixture.bob_passkey])
 
       # Pending confirmations are deleted.
       refute get(Schemas.PendingConfirmation, fixture.confirmation)
@@ -687,10 +691,14 @@ defmodule Arca.SecurityTransitionsRestoreTest do
       assert get(Schemas.Approval, fixture.approval).status == "expired"
       assert get(Schemas.Approval, fixture.decided_approval).status == "approved"
 
-      # One open row per person, and the marker is gone.
+      # One open row for each person whose passkey or device the restore
+      # suspended; a door-only person has nothing to recover and no row.
       for person <- [fixture.alice, fixture.bob] do
         assert [%{restore_id: ^restore_id, open: true, closed_at: nil}] = rows(person.id)
       end
+
+      assert change.user_ids == Enum.sort([fixture.alice.id, fixture.bob.id])
+      assert rows(fixture.carol.id) == []
 
       assert is_nil(marker())
     end
@@ -916,7 +924,8 @@ defmodule Arca.SecurityTransitionsRestoreTest do
 
       # Another person's checklist holds nothing of hers.
       assert {:ok, bob} = SecurityTransitions.restore_checklist(server(), f.bob.id)
-      assert bob.api_keys == [] and bob.passkeys == [] and bob.paired_clients == []
+      assert bob.api_keys == [] and bob.paired_clients == []
+      assert Enum.map(bob.passkeys, & &1.id) == [f.bob_passkey]
     end
   end
 

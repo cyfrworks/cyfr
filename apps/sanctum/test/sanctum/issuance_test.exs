@@ -584,6 +584,28 @@ defmodule Sanctum.IssuanceTest do
       assert {{:error, :unauthenticated}, retired} = mint(session_ctx)
       refute minted?(retired)
     end
+
+    test "a key a declared restore suspended issues nothing, whatever the generations say", %{
+      session_ctx: session_ctx
+    } do
+      attrs = %{name: "suspended-by-a-restore"}
+
+      confirmed =
+        Sanctum.TestContext.confirmed(session_ctx, :credential_issuance, key_change(attrs))
+
+      assert {:ok, %{api_key: raw}} = Sanctum.ApiKey.create(confirmed, attrs)
+      {:ok, key_ctx} = Sanctum.Caller.establish({:api_key, raw}, client_ip: @source)
+
+      # The key's row suspended alone, its person's and athanor's standing
+      # untouched: the holder's own check refuses it.
+      {1, _} =
+        Arca.Repo.update_all(from(k in ApiKey, where: k.id == ^key_ctx.api_key_id),
+          set: [suspended: true]
+        )
+
+      assert {{:error, :unauthenticated}, refused} = mint(key_ctx)
+      refute minted?(refused)
+    end
   end
 
   # ---------------------------------------------------------------------------

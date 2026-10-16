@@ -302,6 +302,32 @@ defmodule Sanctum.PasskeysTest do
 
   # A declared restore: its marker written, then consumed as the boot
   # consumes it. Answers the restore's id.
+  # An active passkey of `user_id`'s, written as the store writes one.
+  defp held_passkey!(user_id) do
+    id = Prima.UUID7.generate_id("psk")
+    now = DateTime.utc_now()
+
+    {1, _} =
+      Arca.Repo.insert_all(Arca.Schemas.Passkey, [
+        %{
+          id: id,
+          user_id: user_id,
+          credential_id: "held-#{id}",
+          rp_id: Sanctum.Passkeys.rp_id(),
+          relying_home: Sanctum.Passkeys.origin(),
+          public_key: "cose",
+          sign_count: 0,
+          state: "active",
+          registration_digest: Prima.Digest.sha256("held-#{id}"),
+          possession_verified: true,
+          inserted_at: now,
+          updated_at: now
+        }
+      ])
+
+    id
+  end
+
   defp restored! do
     {:ok, _marked} = Arca.SecurityTransitions.mark_restore(Prima.Actor.system())
     assert {:ok, %{restore_id: restore_id}} = Arca.SecurityTransitions.restore(slot: :none)
@@ -1227,7 +1253,10 @@ defmodule Sanctum.PasskeysTest do
 
     test "after a declared restore, the administrator's activation closes the person's restore alone",
          %{person: person, pending: pending, admin: admin, admin_athanor: admin_athanor} do
+      # The person held a passkey the restore suspends, so they recover.
+      held = held_passkey!(person.id)
       restore_id = restored!()
+      assert Arca.Repo.get(Arca.Schemas.Passkey, held).state == "suspended"
 
       # Every session went with the restore, and the administrator's own
       # passkey is suspended: they confirm through a door.

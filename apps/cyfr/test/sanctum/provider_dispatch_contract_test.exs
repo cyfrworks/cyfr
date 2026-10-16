@@ -74,6 +74,7 @@ defmodule Sanctum.ProviderDispatchContractTest do
       "carry_cancel",
       "carry_list",
       "certify",
+      "close_recovery",
       "renew_certificate",
       "assert"
     ],
