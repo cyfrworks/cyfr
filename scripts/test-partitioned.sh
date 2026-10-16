@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
-# Run isolated OS partitions: scripts/test-partitioned.sh [-n N] [-a sqlite|postgres] [paths and Mix arguments]
+# Run isolated OS partitions: scripts/test-partitioned.sh [-n N] [-a sqlite|postgres] [--cover] [paths and Mix arguments]
 #
 # One partition hands its Mix arguments to `mix test` unchanged. More than
 # one gives each partition an explicit list of the test files the named
@@ -10,6 +10,17 @@
 # total of weights from scripts/test-partition-weights.tsv (CYFR_TEST_WEIGHTS
 # names another table; a file the table lacks weighs its median). A
 # partition left with no file is not started.
+#
+# --cover measures line coverage and reports it, never gating on it. Each
+# partition runs `mix test --cover --export-coverage <run>-p<i>`, so Mix
+# writes apps/<app>/cover/<run>-p<i>.coverdata for every application whose
+# tests it ran (each application's tests cover its own modules, as Mix
+# measures an umbrella). When the partitions have ended, `mix test.coverage`
+# merges every export under apps/*/cover/ and the run prints its Total
+# line; the merge's exit is ignored, so a low figure never fails the run and
+# a failing test still does. The merge is skipped, and says why, when
+# apps/*/cover/ holds an export of another run. Every exit path removes the
+# run's own exports.
 #
 # Stdout begins `_START=<pid>` and ends `_EXIT=<pid> <status>`, unless the
 # heavy-check that runs it (HEAVY_CHECK_HELD) writes them. The status is 0
@@ -21,13 +32,15 @@ set -uo pipefail
 
 PARTITIONS=4
 ADAPTER=sqlite
-usage() { echo "usage: $0 [-n N] [-a sqlite|postgres] [--] [test paths and Mix arguments]"; }
+COVER=false
+usage() { echo "usage: $0 [-n N] [-a sqlite|postgres] [--cover] [--] [test paths and Mix arguments]"; }
 while [ "$#" -gt 0 ]; do
   case "$1" in
     -n|--partitions|-a|--adapter)
       [ "$#" -ge 2 ] && [ -n "$2" ] || { usage >&2; exit 64; }
       case "$1" in -n|--partitions) PARTITIONS=$2 ;; *) ADAPTER=$2 ;; esac
       shift 2 ;;
+    --cover) COVER=true; shift ;;
     -h|--help) usage; exit 0 ;;
     --) shift; break ;;
     *) break ;;
@@ -45,6 +58,7 @@ exec 3>&2
 CONTAIN_CLOSE_FDS="${CONTAIN_CLOSE_FDS:+$CONTAIN_CLOSE_FDS }3"
 
 out_dir=
+checkout=
 registry_owned=false
 finishing=false
 started=()
@@ -100,6 +114,13 @@ finish() {
         done
       fi
     fi
+  fi
+  # The run's coverage exports, once every partition and the merge that
+  # read them have stopped. An application's cover directory goes too when
+  # nothing else is in it.
+  if [ "$COVER" = true ] && [ -n "$out_dir" ] && [ -n "$checkout" ]; then
+    rm -f "$checkout"/apps/*/cover/"${out_dir##*/}"-p*.coverdata || result=1
+    rmdir "$checkout"/apps/*/cover 2>/dev/null || :
   fi
   if [ -n "$out_dir" ]; then
     for ((i=1; i<=PARTITIONS; i++)); do
@@ -174,6 +195,7 @@ failed=false
 stale=false
 selects=false
 warnings_as_errors=false
+mix_cover=false
 value_switches=' --export-coverage --max-cases --max-failures --max-requires --include --exclude --seed --name-pattern -n --only --timeout --formatter --slowest --slowest-modules --partitions --profile-require --exit-status --repeat-until-failure '
 expect_value=false
 paths_only=false
@@ -194,12 +216,16 @@ for ((j=0; j<${#args[@]}; j++)); do
         --stale) stale=true ;;
         --only|--name-pattern|-n) selects=true ;;
         --warnings-as-errors) warnings_as_errors=true ;;
+        --cover|--export-coverage) mix_cover=true ;;
       esac
       continue
     fi
   fi
   path_index[${#path_index[@]}]=$j
 done
+if [ "$COVER" = true ] && [ "$mix_cover" = true ]; then
+  echo "--cover names each partition's export itself: pass Mix neither --cover nor --export-coverage with it" >&2; exit 64
+fi
 if [ "$stale" = true ] && [ "$PARTITIONS" -gt 1 ]; then
   echo '--stale runs one partition: its manifest cannot be merged across partitions' >&2; exit 64
 fi
@@ -355,6 +381,11 @@ run_partition() {
   export ERL_FLAGS="$partition_flags"
   # "$@" handles an empty argument list even under Bash 3.2 + nounset.
   exec mix test --no-compile "$@"
+}
+merge_coverage() {
+  exec >"$out_dir/coverage.log" 2>&1
+  load_partition_env 1 || exit 1
+  exec mix test.coverage
 }
 drop_partition() {
   exec >"$out_dir/cleanup-p$1.log" 2>&1
@@ -708,6 +739,38 @@ if [ "$PARTITIONS" -gt 1 ]; then
   done
 fi
 
+# Merges the run's coverage exports and prints the Total line. Nothing here
+# changes the run's status: the figure is reported, never a floor.
+report_coverage() {
+  local exports=() foreign=() file total merge=0
+  for file in "$checkout"/apps/*/cover/*.coverdata; do
+    [ -e "$file" ] || continue
+    case "${file##*/}" in
+      "${out_dir##*/}"-p*.coverdata) exports[${#exports[@]}]=$file ;;
+      *) foreign[${#foreign[@]}]=${file#"$checkout"/} ;;
+    esac
+  done
+  if [ "${#foreign[@]}" -gt 0 ]; then
+    echo "==> coverage not merged: apps/*/cover/ holds exports of another run: ${foreign[*]}"
+    return 0
+  fi
+  if [ "${#exports[@]}" -eq 0 ]; then
+    echo '==> coverage not merged: no partition exported any'
+    return 0
+  fi
+  contained_wait 900 30 'the coverage merge' merge_coverage || merge=$?
+  # Mix's summary row: `| 61.23% | Total   |`, colored on a terminal.
+  total=$(sed "s/$(printf '\033')\[[0-9;]*m//g" "$out_dir/coverage.log" 2>/dev/null |
+    sed -nE 's/^\| *([0-9]+(\.[0-9]+)?%) *\| Total +\|$/\1/p' | tail -n 1 || :)
+  if [ -n "$total" ]; then
+    echo "==> coverage: $total of lines in total (${#exports[@]} exports merged)"
+  else
+    echo "==> coverage not merged: the merge exited $merge with no Total line; its last lines:"
+    tail -n 5 "$out_dir/coverage.log" 2>/dev/null | sed 's/^/    | /' || :
+  fi
+  return 0
+}
+
 skipped=0
 for ((i=1; i<=PARTITIONS; i++)); do
   started[$i]=false
@@ -747,6 +810,10 @@ for ((i=1; i<=PARTITIONS; i++)); do
     while IFS= read -r -d '' unit; do part_args[${#part_args[@]}]=$unit; done <"$out_dir/assign/p$i"
   else
     part_args=(${args[@]+"${args[@]}"})
+  fi
+  # Ahead of the rest: after a bare `--` Mix reads every argument as a path.
+  if [ "$COVER" = true ]; then
+    part_args=(--cover --export-coverage "${out_dir##*/}-p$i" ${part_args[@]+"${part_args[@]}"})
   fi
   contained 30 run_partition "$i" ${part_args[@]+"${part_args[@]}"}
   partition_pid[$i]=$CONTAIN_PID
@@ -819,6 +886,9 @@ done
 if [ "$selects" = true ] && [ "$any_started" = true ] && [ "$ran_test" = false ]; then
   echo '==> the --only or --name-pattern selection ran no test'
   status=1
+fi
+if [ "$COVER" = true ] && [ "$any_started" = true ]; then
+  report_coverage
 fi
 if [ "$skipped" -gt 0 ]; then
   echo "==> $PARTITIONS partitions ($skipped not started: no test file falls to them), $ADAPTER, $((SECONDS - start))s wall, exit $status"

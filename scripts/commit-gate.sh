@@ -20,7 +20,7 @@
 #             two Python self-checks (worker_auth.py and the backends
 #             harness.py; none needs a database or an image), dialyzer,
 #             the Boundary plants, then the full SQLite suite in N
-#             partitions
+#             partitions, with its merged line coverage reported
 #   postgres  PostgreSQL test compile, then in two partitions the given
 #             test paths or, with none given, the selection: the storage
 #             set (apps/arca/test, apps/cyfr/test/arca) and every tracked
@@ -182,7 +182,9 @@ leg_static() {
   # The Boundary plants: each writes a forbidden edge into a copy of the tree
   # and force-compiles it, so they run once here and never in the partitions.
   step static boundary_plants env MIX_BUILD_PATH=_build/test CYFR_DATABASE=sqlite MIX_ENV=test mix test apps/cyfr/test/cyfr/boundaries_test.exs --only boundary_plant || return
-  step static sqlite_suite env MIX_BUILD_PATH=_build/test scripts/test-partitioned.sh -n "$PARTS" -a sqlite -- --warnings-as-errors || return
+  # --cover: the suite's line coverage, merged across the partitions and
+  # reported as one line; the figure never fails the step.
+  step static sqlite_suite env MIX_BUILD_PATH=_build/test scripts/test-partitioned.sh -n "$PARTS" -a sqlite --cover -- --warnings-as-errors || return
 }
 
 leg_postgres() {
@@ -620,7 +622,7 @@ for leg in static postgres cluster islands; do
       *) continue ;;
     esac
     [ -f "$f" ] || continue
-    printf '    %s: %s\n' "$leg.$name" "$(grep -E '^(Result:|==> [0-9]+ partitions)' "$f" | tr '\n' ' ')"
+    printf '    %s: %s\n' "$leg.$name" "$(grep -E '^(Result:|==> [0-9]+ partitions|==> coverage)' "$f" | tr '\n' ' ')"
   done < "$LOGDIR/$leg.summary"
 done
 if [ "$status" -eq 0 ]; then verdict=passed; else verdict=FAILED; fi

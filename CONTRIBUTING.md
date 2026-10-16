@@ -65,7 +65,7 @@ missing or wrong header fails CI.
 - If you changed a `@spec` or a function's return shape, run `mix dialyzer`.
   CI runs it too. It is fast once the PLT is built, and the findings it
   reports today are recorded in [`.dialyzer_ignore.exs`](.dialyzer_ignore.exs)
-  — fixing one means deleting its line there, since a filter that no longer
-  matches also fails the build.
+  — fixing one means deleting its line and its reason there, since a filter
+  that no longer matches also fails the build.
 - Don't describe the product as "open source" in user-facing copy — it is
   "Fair Source" / "source available" (see [`FAIR_SOURCE.md`](FAIR_SOURCE.md)).
