@@ -1703,14 +1703,19 @@ defmodule Arca.Repo.Migrations.Baseline do
     end
 
     # One row per generation of a path whose object may exist, with the
-    # bytes the mark said its writer will store: the settled generation's
-    # row gives the path's visible bytes, and the rows together are the
-    # home's physical count. Retention deletes the object, then its row.
+    # bytes the mark said its writer will store and the writer's source
+    # ledger as it stood at the mark (`Prima.Source`, canonical JSON), the
+    # provenance of the bytes it covers, so any settlement of it, the
+    # writer's or one made without it, can name its sources: the settled
+    # generation's row gives the path's visible bytes, and the rows
+    # together are the home's physical count. Retention deletes the
+    # object, then its row.
     create table(:object_generations, primary_key: false) do
       add :athanor_id, :string, primary_key: true, null: false
       add :path, :text, primary_key: true, null: false
       add :generation, :bigint, primary_key: true, null: false
       add :bytes, :bigint, null: false
+      add :sources, :text, null: false
       add :marked_at, :utc_datetime_usec, null: false
     end
 

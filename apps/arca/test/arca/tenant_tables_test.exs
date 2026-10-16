@@ -129,9 +129,30 @@ defmodule Arca.TenantTablesTest do
 
       {3, _} =
         Arca.Repo.insert_all(ObjectGeneration, [
-          %{athanor_id: athanor_id, path: "data/a.txt", generation: 1, bytes: 3, marked_at: now},
-          %{athanor_id: athanor_id, path: "data/a.txt", generation: 2, bytes: 5, marked_at: now},
-          %{athanor_id: athanor_id, path: "data/b.txt", generation: 1, bytes: 7, marked_at: now}
+          %{
+            athanor_id: athanor_id,
+            path: "data/a.txt",
+            generation: 1,
+            bytes: 3,
+            sources: "[]",
+            marked_at: now
+          },
+          %{
+            athanor_id: athanor_id,
+            path: "data/a.txt",
+            generation: 2,
+            bytes: 5,
+            sources: "[]",
+            marked_at: now
+          },
+          %{
+            athanor_id: athanor_id,
+            path: "data/b.txt",
+            generation: 1,
+            bytes: 7,
+            sources: "[]",
+            marked_at: now
+          }
         ])
     end
 
