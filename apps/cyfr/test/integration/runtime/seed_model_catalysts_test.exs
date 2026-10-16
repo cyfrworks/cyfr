@@ -160,7 +160,16 @@ defmodule Locus.Runtime.SeedModelCatalystsTest do
   test "a retained disclose-only model refuses an attach-only entry", %{ctx: ctx} do
     ref = "catalyst:local.claude"
     newest = newest_shipped("catalysts", "claude")
-    [retained | _] = "catalysts" |> shipped("claude") |> Enum.reject(&(&1 == newest))
+
+    # The newest retained version that reads its key itself: a retained
+    # version CYFR attaches the key for is no disclose-only model.
+    [retained | _] =
+      for version <- shipped("catalysts", "claude"),
+          version != newest,
+          [need] <- [Needs.from_manifest(shipped_manifest("claude", version))],
+          Needs.disclose_only?(need),
+          do: version
+
     secret = "sk-attach-only-for-a-retained-model"
 
     register!(ctx, "claude", retained)
@@ -347,6 +356,13 @@ defmodule Locus.Runtime.SeedModelCatalystsTest do
   defp calls(callback), do: for(%{callback: ^callback} = call <- TwoServices.calls(), do: call)
 
   defp newest_shipped(plural, name), do: hd(shipped(plural, name))
+
+  defp shipped_manifest(name, version) do
+    [@seed_root, "components/catalysts/local", name, version, "cyfr-manifest.json"]
+    |> Path.join()
+    |> File.read!()
+    |> Jason.decode!()
+  end
 
   # The versions the seed ships of `name`, newest first.
   defp shipped(plural, name) do

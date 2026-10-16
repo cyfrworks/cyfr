@@ -1010,7 +1010,7 @@ A model catalyst fronts an LLM provider. Beyond whatever provider operations it 
 "contracts": ["model/chat@1"]
 ```
 
-The contract is three operations of the ordinary catalyst envelope (`{"operation", "params"}` in, `{"status", "data"}` or `{"status", "error"}` out). The five bundled catalysts (`catalyst:local.{claude,openai,gemini,grok,openrouter}`) implement it in their `src/src/chat.rs`; the provider's request and response shapes are built and read there and never leave the binary. The HTTP call stays in the catalyst: in 1.4.0 the key stays in the host: the catalyst names its `api_key` connection on the call and CYFR attaches the key to it, and a retained 1.3.x version reads its key and sets it on the call itself.
+The contract is three operations of the ordinary catalyst envelope (`{"operation", "params"}` in, `{"status", "data"}` or `{"status", "error"}` out). The five bundled catalysts (`catalyst:local.{claude,openai,gemini,grok,openrouter}`) implement it in their `src/src/chat.rs`; the provider's request and response shapes are built and read there and never leave the binary. The HTTP call stays in the catalyst: in 1.4.x the key stays in the host: the catalyst names its `api_key` connection on the call and CYFR attaches the key to it, and a retained 1.3.x version reads its key and sets it on the call itself.
 
 **`describe`** — what the catalyst can do, answered without a key:
 
@@ -1036,7 +1036,7 @@ With a `model`, the same answer carries that model's `context_window` and, where
   "context_window": 200000, "max_output_tokens": 64000, "...": "the capabilities above"}}
 ```
 
-The window comes from the provider's models API where it reports one (claude, gemini, openrouter — this takes the key) and from a table in the catalyst otherwise (openai, grok), which knows a model only by an id the provider documents for it (and, for openai, its dated snapshots `<id>-YYYY-MM-DD`). A model the catalyst does not know is refused as `unknown_model` (status 404), and so is a model name outside the provider's id grammar — ASCII letters, digits, `.`, `_`, `-`, plus only the separators that provider's ids use, at most 128 bytes, with no `.` or `..` segment — in `describe` and `chat` alike, before any request is made (the 1.4.0 shipped model catalysts read no key, since CYFR attaches it to their requests; the retained 1.3.x versions read theirs). The assistant sizes every request against this answer, and a turn whose model cannot be described does not start.
+The window comes from the provider's models API where it reports one (claude, gemini, openrouter — this takes the key) and from a table in the catalyst otherwise (openai, grok), which knows a model only by an id the provider documents for it (and, for openai, its dated snapshots `<id>-YYYY-MM-DD`). A model the catalyst does not know is refused as `unknown_model` (status 404), and so is a model name outside the provider's id grammar — ASCII letters, digits, `.`, `_`, `-`, plus only the separators that provider's ids use, at most 128 bytes, with no `.` or `..` segment — in `describe` and `chat` alike, before any request is made (the 1.4.x shipped model catalysts read no key, since CYFR attaches it to their requests; the retained 1.3.x versions read theirs). The assistant sizes every request against this answer, and a turn whose model cannot be described does not start.
 
 **`models`** — the models the bound key can reach, in one shape:
 
@@ -1108,7 +1108,7 @@ A refusal is typed, with the provider's own body beside it when the refusal is t
 {"status": 429, "error": {"type": "rate_limited", "message": "…", "provider": {"…": "the provider's body"}}}
 ```
 
-`type` is one of `invalid_request` (the request is off the contract — refused before any request is made — or the provider rejected it), `secret_denied` (answered when the read is refused by a catalyst that reads its own key, one whose need it reads itself — no `attach`, or `disclose: true` — as the retained 1.3.x versions do; the 1.4.0 shipped model catalysts read no key, since CYFR attaches it), `authentication`, `rate_limited`, `overloaded`, `provider_error`, `incomplete_stream` (status 502: the provider's stream ended before its closing signal, so what arrived is not the whole answer; the assistant retries it, as it does `rate_limited` and `overloaded`), `unknown_model`, `unknown_operation`.
+`type` is one of `invalid_request` (the request is off the contract — refused before any request is made — or the provider rejected it), `secret_denied` (answered when the read is refused by a catalyst that reads its own key, one whose need it reads itself — no `attach`, or `disclose: true` — as the retained 1.3.x versions do; the 1.4.x shipped model catalysts read no key, since CYFR attaches it), `authentication`, `rate_limited`, `overloaded`, `provider_error`, `incomplete_stream` (status 502: the provider's stream ended before its closing signal, so what arrived is not the whole answer; the assistant retries it, as it does `rate_limited` and `overloaded`), `unknown_model`, `unknown_operation`.
 
 **Streaming.** While `chat` runs, the catalyst streams the answer as events on its execution's event stream through `cyfr:emit/events.emit`, then answers the whole response as above:
 

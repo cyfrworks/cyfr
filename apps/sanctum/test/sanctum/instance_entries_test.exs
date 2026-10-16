@@ -291,18 +291,18 @@ defmodule Sanctum.InstanceEntriesTest do
     do: %{uri: URI.parse("https://api.openai.com" <> path), method: method}
 
   @custom %{node_ref: "catalyst:local.my-chat:1.0.0", activation_digest: "sha256:custom"}
-  @shipped %{node_ref: "catalyst:local.openai:1.4.0", activation_digest: "sha256:seed-openai"}
+  @shipped %{node_ref: "catalyst:local.openai:1.4.1", activation_digest: "sha256:seed-openai"}
 
   # The custom node a person wrote, the shipped catalyst as the install
   # media ships it, and the facts the port answers for each.
   defp facts! do
     custom = %{component_type: "catalyst", publisher: "local", name: "my-chat", version: "1.0.0"}
-    shipped = %{component_type: "catalyst", publisher: "local", name: "openai", version: "1.4.0"}
+    shipped = %{component_type: "catalyst", publisher: "local", name: "openai", version: "1.4.1"}
 
     Facts.put(
       %{
         {"catalyst", "local", "my-chat", "1.0.0"} => custom,
-        {"catalyst", "local", "openai", "1.4.0"} => shipped
+        {"catalyst", "local", "openai", "1.4.1"} => shipped
       },
       %{"catalyst:local.openai" => "sha256:seed-openai"}
     )

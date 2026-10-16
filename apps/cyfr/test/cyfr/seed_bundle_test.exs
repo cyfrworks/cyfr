@@ -37,6 +37,35 @@ defmodule Cyfr.Test.SeedBundleTest do
     end
   end
 
+  # Every assistant turn's sources hold `pinned`, and its model calls and
+  # hands run as children seeded with them, so a stock catalyst that left
+  # any class without a flow to its own egress would have every send of
+  # every turn refused.
+  test "each stock catalyst's newest version lets every source class reach its egress, and only that" do
+    units = SeedBundle.model_chat_units() ++ [SeedBundle.local_unit!("catalysts", "http")]
+    ledger = Enum.map(Prima.Source.classes(), &Prima.Source.new/1)
+
+    for unit <- units do
+      caps = unit.manifest["caps"]
+      domains = caps["egress"]["domains"]
+      declared = %{domains: domains, needs: Map.keys(unit.manifest["needs"] || %{})}
+
+      assert {:ok, flows} = Prima.Flow.parse(caps["flows"], declared), unit.rel
+
+      expected =
+        for class <- Prima.Source.classes(), domain <- domains, do: %{from: class, to: domain}
+
+      assert {unit.rel, flows} == {unit.rel, Prima.Flow.set(expected)}
+
+      for domain <- domains do
+        host = String.replace_prefix(domain, "*", "any.example")
+
+        assert {unit.rel, Prima.Flow.uncovered(ledger, {:domain, host}, flows: flows)} ==
+                 {unit.rel, []}
+      end
+    end
+  end
+
   test "local_unit! takes the newest shipped version of a named hand" do
     files = SeedBundle.local_unit!("catalysts", "files")
     refute Prima.Model.speaks_chat?(files.manifest)

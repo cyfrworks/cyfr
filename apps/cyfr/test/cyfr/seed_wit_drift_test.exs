@@ -17,9 +17,7 @@ defmodule Cyfr.SeedWitDriftTest do
       immutable (CI's `seed-guards` job), so an older version keeps the
       copy it shipped with when the canonical file's documentation moves
       on, and only the newest, the one a new version copies, is held to
-      it. One newest copy is exempt, by name: `http` 1.1.2's `cyfr-http`
-      predates the documented `connection` member, which it never names;
-      its next version takes the canonical file.
+      it.
     * `world.wit` — a SUBSET: a seed world deliberately imports only what
       its component uses, so every `import` line must exist in the
       canonical world for its type, but not vice versa.
@@ -31,13 +29,6 @@ defmodule Cyfr.SeedWitDriftTest do
   use ExUnit.Case, async: true
 
   @root Path.expand("../../../..", __DIR__)
-
-  # Newest vendored copies a shipped version keeps from before the
-  # canonical file it copies moved on, each with its reason.
-  @shipped_before_canonical %{
-    "seed/components/catalysts/local/http/1.1.2/src/wit/deps/cyfr-http/interfaces.wit" =>
-      "documents no connection member, which this version never names"
-  }
 
   defp canonical_body(rel) do
     [@root, "wit", rel]
@@ -99,22 +90,11 @@ defmodule Cyfr.SeedWitDriftTest do
 
     assert held != []
 
-    offenders = drifted(held) -- Map.keys(@shipped_before_canonical)
+    offenders = drifted(held)
 
     assert offenders == [],
            "seed-vendored WIT drifted from wit/: #{inspect(offenders)} — " <>
              "copy the canonical file (sans SPDX header) into a new version; the ABI is the host's"
-  end
-
-  test "each exempt copy is its component's newest, and still differs from the canonical file" do
-    newest = newest_versions()
-
-    for {rel, reason} <- @shipped_before_canonical do
-      path = Path.join(@root, rel)
-      assert MapSet.member?(newest, version_dir(path)), "#{rel} is no longer newest: drop it"
-      assert drifted([path]) == [rel], "#{rel} matches the canonical file again: drop it"
-      assert reason != ""
-    end
   end
 
   test "vendored world.wit imports are a subset of the canonical world's" do
