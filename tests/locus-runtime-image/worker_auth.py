@@ -406,7 +406,7 @@ def first_member(text):
 # ---------------------------------------------------------------------------
 
 PIN_PURPOSES = ("fetch", "stream", "redirect")
-PIN_REFUSALS = ("denied", "metadata", "resolution", "redirect_credentials", "malformed")
+PIN_REFUSALS = ("denied", "metadata", "resolution", "redirect_credentials", "flow", "malformed")
 PIN_MEMBERS = {"id", "ip", "family", "scheme", "port", "host", "expires_at"}
 PIN_ID = re.compile(r"[A-Za-z0-9_-]{1,128}")
 _LABEL = r"[A-Za-z0-9_](?:[A-Za-z0-9_-]{0,61}[A-Za-z0-9_])?"

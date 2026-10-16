@@ -9,10 +9,11 @@ defmodule Locus.Runtime.EgressTest do
   connection to exactly the pinned address with the hostname kept for TLS
   and the fail-closed transport policy set (`Locus.Runtime.Egress.connect_options/3`). A metadata address is refused even when the host
   answers one; a pin that names another target than the URL is refused;
-  the host's own refusals are answered as the guest's typed errors, marked
-  as the host's. A pin is reused for the same attempt, purpose and target
-  until its `expires_at`, and asked for again after it. Every pin here is
-  the scripted host's, from the table each test sets.
+  the host's own refusals, a flow it refuses among them, are answered as
+  the guest's typed errors, marked as the host's. No pin is reused: every
+  request asks the host for its own, and a request asked again before it
+  is sent is asked as it was. Every pin here is the scripted host's, from
+  the table each test sets.
   """
 
   use ExUnit.Case, async: true
@@ -214,41 +215,75 @@ defmodule Locus.Runtime.EgressTest do
     assert {:error, :dns_error, _} = Egress.pin(client, "http://public.test:443/")
   end
 
-  test "a pin is reused for the same attempt, purpose and target until it expires", %{
+  test "every request asks the host for its own pin: two requests to one host ask twice", %{
     host: host,
     client: client
   } do
-    ScriptedHost.pins(host, %{"public.test" => "203.0.113.10", "other.test" => "203.0.113.11"})
+    ScriptedHost.pins(host, %{"public.test" => "203.0.113.10"})
 
     assert {:ok, first} = Egress.pin(client, "https://public.test/a")
     assert {:ok, second} = Egress.pin(client, "https://PUBLIC.test/b?c=d")
-    assert second.target == first.target
+    assert first.target.id != second.target.id
     assert connection(second)[:url] == "https://203.0.113.10/b?c=d"
-    assert length(ScriptedHost.requests(host, "egress_pin")) == 1
 
-    # Another port, scheme, host or purpose is another target.
-    assert {:ok, _} = Egress.pin(client, "https://public.test:8443/a")
-    assert {:ok, _} = Egress.pin(client, "http://public.test/a")
-    assert {:ok, _} = Egress.pin(client, "https://other.test/a")
-    assert {:ok, _} = Egress.pin(client, "https://public.test/a", purpose: :stream)
-    assert length(ScriptedHost.requests(host, "egress_pin")) == 5
-
-    # Another attempt holds none of this one's pins.
-    other = ScriptedHost.attempt!(host).client
-    assert {:ok, _} = Egress.pin(other, "https://public.test/a")
-    assert length(ScriptedHost.requests(host, "egress_pin")) == 6
+    assert [
+             %{args: %{"url" => "https://public.test/a"}},
+             %{args: %{"url" => "https://PUBLIC.test/b?c=d"}}
+           ] =
+             ScriptedHost.requests(host, "egress_pin")
   end
 
-  test "a pin past its expires_at is used for its own request and asked for again after", %{
+  test "a host refused for want of a flow is the guest's flow_blocked, marked as the host's", %{
     host: host,
     client: client
   } do
-    ScriptedHost.pins(host, %{"public.test" => "203.0.113.10"}, expires_in: -1)
+    ScriptedHost.pins(host, %{"collector.test" => :flow})
 
-    assert {:ok, first} = Egress.pin(client, "https://public.test/a")
-    assert {:ok, second} = Egress.pin(client, "https://public.test/a")
-    assert first.target.id != second.target.id
-    assert length(ScriptedHost.requests(host, "egress_pin")) == 2
+    assert {:refused, :flow_blocked, message} =
+             Egress.pin(client, "https://collector.test/in?k=v")
+
+    assert message ==
+             "HTTP egress to collector.test refused: this run read material its grant " <>
+               "declares no flow of to that host"
+  end
+
+  test "a request asked again is asked as it was, its redirect hop from the same pin, consuming no hop",
+       %{host: host, client: client} do
+    ScriptedHost.pins(host, %{"public.test" => "203.0.113.10"})
+
+    assert {:ok, origin} = Egress.pin(client, "https://public.test/start", purpose: :stream)
+    assert {:ok, again} = Egress.repin(client, "https://public.test/start", origin)
+    assert again.purpose == :stream and again.from == nil
+    assert again.target.id != origin.target.id
+
+    :ok = Egress.redirected(client, origin, "https://public.test/start", "/moved")
+    assert {:ok, hop} = Egress.pin(client, "https://public.test/moved")
+    assert {:ok, hop_again} = Egress.repin(client, "https://public.test/moved", hop)
+    assert hop_again.purpose == :redirect and hop_again.from == origin.target
+
+    assert [_, _, %{args: hop_args}, %{args: hop_again_args}] =
+             ScriptedHost.requests(host, "egress_pin")
+
+    assert hop_args == hop_again_args
+    assert hop_args["from"] == origin.target.id
+
+    # Asked again, a request is decided again: a host refused since is refused.
+    ScriptedHost.pins(host, %{"public.test" => :flow})
+
+    assert {:refused, :flow_blocked, _} =
+             Egress.repin(client, "https://public.test/start", origin)
+  end
+
+  test "a relay's code for a pin it got none for reads back as the refusal of the same reason" do
+    for why <- Prima.PinnedTarget.refusals() ++ [:unavailable, :lost, :elsewhere, :expired] do
+      code = Egress.relay_code(why)
+      assert code =~ ~r/\A[a-z][a-z0-9_]{0,63}\z/, "#{why} is no relay code"
+      assert Egress.relay_refusal(code, "public.test") == Egress.refusal(why, "public.test")
+    end
+
+    assert Egress.relay_code({:uncertain, "unknown"}) == Egress.relay_code(:lost)
+    assert Egress.relay_refusal("rate_limited", "public.test") == :none
+    assert Egress.relay_refusal(nil, "public.test") == :none
   end
 
   test "a redirect's next hop is pinned from the pin it came from, once", %{

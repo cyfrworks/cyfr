@@ -7,11 +7,14 @@ defmodule Locus.Runtime.HttpStreamHandlerBoundaryTest do
   function never raises into WASM. A malformed request, a handle that does
   not exist and a stream that cannot be started each answer the guest a
   typed error, with a host client that holds no context of its own. A
-  stream's address is pinned when it opens: a stream that outlives its pin
-  keeps the connection it opened, and a stream opened past the pin's
-  `expires_at` is pinned again.
+  stream's address is asked of CYFR when it opens and again right before
+  it is sent, and the relay asks once more before it connects: no stream
+  is sent on another's pin, and a stream that outlives its pin keeps the
+  connection it opened.
   """
   use ExUnit.Case, async: true
+
+  import Prima.Test.Wait
 
   alias Locus.Runtime.HttpStreamHandler
   alias Locus.Runtime.Test.{ScriptedHost, ScriptedKeeper}
@@ -58,19 +61,14 @@ defmodule Locus.Runtime.HttpStreamHandlerBoundaryTest do
     end
   end
 
-  test "a stream that outlives its pin keeps its connection; one opened past it is pinned again" do
-    server =
-      start_supervised!({Bandit, plug: Upstream, ip: {127, 0, 0, 1}, port: 0, startup_log: false})
-
-    {:ok, {_ip, port}} = ThousandIsland.listener_info(server)
-
-    host = ScriptedHost.start!()
+  # A client routed as a runner's is, through a relay whose service end
+  # keeps each pin CYFR grants the attempt, for an attempt allowed to reach
+  # `stream.test`; the streaming imports over it, cleaned up with the test.
+  defp relayed_streams(host) do
     ref = "catalyst:local.streamer:0.1.0"
     edge = Locus.Runtime.Test.EdgeFixtures.edge(domains: ["stream.test"], methods: ["GET"])
     authority = ScriptedKeeper.authority(edge, Prima.Limits.defaults(:catalyst))
 
-    # Routed as a runner's is: the relay's service end keeps each pin
-    # CYFR grants the attempt and connects each stream with its own.
     client =
       host
       |> ScriptedHost.attempt!(component_ref: ref, authority: authority)
@@ -81,40 +79,103 @@ defmodule Locus.Runtime.HttpStreamHandlerBoundaryTest do
       HttpStreamHandler.build_stream_imports(edge, Prima.Limits.defaults(:catalyst), client, ref)
 
     on_exit(fn -> HttpStreamHandler.cleanup_registry(exec_ref) end)
-    ns = imports["cyfr:http/streaming@0.1.0"]
+    imports["cyfr:http/streaming@0.1.0"]
+  end
+
+  defp open(ns, url) do
+    request = Jason.encode!(%{"method" => "GET", "url" => url})
+    assert %{"handle" => handle} = ns |> call("request", request) |> Jason.decode!()
+    handle
+  end
+
+  test "each stream asks for its own pin when it opens and again before it is sent, and the relay once more" do
+    server =
+      start_supervised!({Bandit, plug: Upstream, ip: {127, 0, 0, 1}, port: 0, startup_log: false})
+
+    {:ok, {_ip, port}} = ThousandIsland.listener_info(server)
+    host = ScriptedHost.start!()
+    ScriptedHost.pins(host, %{"stream.test" => "127.0.0.1"}, expires_in: 60_000)
+    ns = relayed_streams(host)
     {:fn, read} = ns["read"]
 
-    open = fn path ->
-      request = Jason.encode!(%{"method" => "GET", "url" => "http://stream.test:#{port}#{path}"})
-      assert %{"handle" => handle} = ns |> call("request", request) |> Jason.decode!()
-      handle
-    end
-
-    pins = fn -> length(ScriptedHost.requests(host, "egress_pin")) end
-
-    # A pin already past its expires_at when it is answered: its own
-    # stream connects with it, and the next stream asks again.
-    ScriptedHost.pins(host, %{"stream.test" => "127.0.0.1"}, expires_in: -1)
-    first = open.("/one")
-    second = open.("/two")
-    assert pins.() == 2
-
-    for %{args: args} <- ScriptedHost.requests(host, "egress_pin"),
-        do: assert(args["purpose"] == "stream")
-
-    # The first stream outlived its pin, and reads to its end all the same.
+    first = open(ns, "http://stream.test:#{port}/one")
     assert read_all(read, first) == "streamed /one"
+    second = open(ns, "http://stream.test:#{port}/two")
     assert read_all(read, second) == "streamed /two"
-    call(ns, "close", first)
-    call(ns, "close", second)
 
-    # A pin that holds is the next stream's too.
-    ScriptedHost.pins(host, %{"stream.test" => "127.0.0.1"}, expires_in: 60_000)
-    third = open.("/three")
-    fourth = open.("/four")
-    assert pins.() == 3
-    assert read_all(read, third) == "streamed /three"
-    assert read_all(read, fourth) == "streamed /four"
+    asked = ScriptedHost.requests(host, "egress_pin")
+    assert length(asked) == 6
+
+    for %{args: args} <- asked, do: assert(args["purpose"] == "stream")
+
+    assert asked |> Enum.map(& &1.args["url"]) |> Enum.frequencies() == %{
+             "http://stream.test:#{port}/one" => 3,
+             "http://stream.test:#{port}/two" => 3
+           }
+  end
+
+  test "a stream that outlives its pin keeps the connection it opened" do
+    {:ok, listen} =
+      :gen_tcp.listen(0, [:binary, active: false, reuseaddr: true, ip: {127, 0, 0, 1}])
+
+    {:ok, port} = :inet.port(listen)
+    on_exit(fn -> :gen_tcp.close(listen) end)
+    test = self()
+
+    # Answers the head and a first chunk at once, and the rest only when
+    # the test says so.
+    server =
+      spawn_link(fn ->
+        {:ok, sock} = :gen_tcp.accept(listen, 10_000)
+        _ = :gen_tcp.recv(sock, 0, 5_000)
+
+        :ok =
+          :gen_tcp.send(
+            sock,
+            "HTTP/1.1 200 OK\r\ntransfer-encoding: chunked\r\n\r\n6\r\nfirst \r\n"
+          )
+
+        send(test, :headed)
+
+        receive do
+          :rest -> :ok = :gen_tcp.send(sock, "4\r\nlast\r\n0\r\n\r\n")
+        end
+
+        receive do
+          :done -> :ok
+        end
+      end)
+
+    host = ScriptedHost.start!()
+
+    ScriptedHost.script(host, "egress_pin", fn args, _caller ->
+      {:ok, %{"expires_at" => expires_at}} =
+        answer = ScriptedHost.pin(%{"stream.test" => "127.0.0.1"}, args, 1_500)
+
+      send(test, {:expires_at, expires_at})
+      answer
+    end)
+
+    ns = relayed_streams(host)
+    {:fn, read} = ns["read"]
+    handle = open(ns, "http://stream.test:#{port}/long")
+    assert_receive :headed, 10_000
+
+    # Every pin the stream was answered, when it opened, before its send
+    # and the relay's own, is past its expires_at before the rest of the
+    # answer is sent.
+    latest =
+      for _pin <- 1..3 do
+        assert_received {:expires_at, expires_at}
+        expires_at
+      end
+      |> Enum.max()
+
+    wait_until(fn -> System.system_time(:millisecond) > latest end, 5_000, "the pins to expire")
+    send(server, :rest)
+
+    assert read_all(read, handle) == "first last"
+    send(server, :done)
   end
 
   test "a malformed request is a typed error, not a raise" do

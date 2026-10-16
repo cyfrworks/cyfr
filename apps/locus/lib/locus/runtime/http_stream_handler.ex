@@ -27,20 +27,25 @@ defmodule Locus.Runtime.HttpStreamHandler do
   A request that fails before a response, a stream that stops arriving
   for the node's timeout, and a transport error each answer the read
   after the last buffered chunk with `{"error": {"type", "message"}}`
-  (`request_failed`, `timeout`, `stream_error`).
+  (`request_failed`, `timeout`, `stream_error`); a pin refused right
+  before the request is sent answers it with the refusal's own type, as
+  a refused fetch does (`flow_blocked`, say).
 
   ## Security
 
   All the same edge enforcement as `cyfr:http/fetch` applies — both handlers
   go through `Locus.Runtime.HttpRequestValidation`, the single pre-flight path:
   - Domain/method/scheme allowlisting, and the address CYFR pins under the
-    attempt's authority, taken once, when the stream opens, as a fetch
-    takes it (`Locus.Runtime.Egress.pin/3`): a stream that outlives its pin keeps
-    the connection the relay's service end opened, and a stream opened
-    past the pin's `expires_at` is pinned again
+    attempt's authority, asked when the stream opens, as a fetch asks it
+    (`Locus.Runtime.Egress.pin/3`), and asked again right before the
+    stream's request is sent (`Locus.Runtime.HttpRequestValidation.repin/2`), so
+    a stream opened before the run read more is sent only on a decision
+    taken after it; a stream that outlives its pin keeps the connection
+    the relay's service end opened
   - The runner connects nowhere: the relay's service end (`Locus.Runtime.Relay`)
-    checks the request again, takes it from the consented rate, connects
-    to the pinned address and sends the body on only as far as the credit
+    checks the request again, takes it from the consented rate, asks CYFR
+    for the request's pin once more itself, connects to the address of
+    that answer and sends the body on only as far as the credit
     the guest's reads grant: each chunk a read hands the guest is granted
     back, so a guest that reads slowly holds the service's connection
     waiting, never the runner's memory, and the service ends the stream at
@@ -334,15 +339,26 @@ defmodule Locus.Runtime.HttpStreamHandler do
     safe_encode(%{"handle" => handle_id})
   end
 
+  # The send comes later than the stream's pin, and the run may have read
+  # more in between: CYFR is asked again first, so the stream is sent only
+  # on a decision taken as it leaves.
   defp perform_streaming_request(request, buffer, host, component_ref, timeout_ms, limits) do
     start_time = System.monotonic_time(:millisecond)
 
-    case HttpHandler.relay_fetch(host, request) do
-      {:ok, relay, ref} ->
-        # The reader grants the relay credit for each chunk it hands the
-        # guest, so it must know which fetch the buffer is filled from.
-        update_buffer(buffer, &%{&1 | fetch: {relay, ref}})
-        collect_stream_chunks(ref, buffer, request, component_ref, start_time, timeout_ms, limits)
+    with {:ok, request} <- HttpRequestValidation.repin(request, host),
+         {:ok, relay, ref} <- HttpHandler.relay_fetch(host, request) do
+      # The reader grants the relay credit for each chunk it hands the
+      # guest, so it must know which fetch the buffer is filled from.
+      update_buffer(buffer, &%{&1 | fetch: {relay, ref}})
+      collect_stream_chunks(ref, buffer, request, component_ref, start_time, timeout_ms, limits)
+    else
+      # CYFR refused the pin, and has already recorded the denial.
+      {:refused, type, message} ->
+        park_error(buffer, type, message)
+
+      {:error, type, message} ->
+        HttpHandler.record_refusal(host, type, message)
+        park_error(buffer, type, message)
 
       {:error, reason} ->
         HttpHandler.emit_telemetry(
@@ -393,7 +409,7 @@ defmodule Locus.Runtime.HttpStreamHandler do
         park_error(buffer, :timeout, "No stream data for #{div(timeout_ms, 1000)}s")
 
       {Locus.Runtime.Relay.Runner, ^ref, {:end, code}} ->
-        {type, message} = HttpHandler.fetch_error(code, limits)
+        {_refused_by, type, message} = HttpHandler.relay_ended(code, request, limits)
 
         if status_of(buffer) == nil do
           HttpHandler.emit_telemetry(

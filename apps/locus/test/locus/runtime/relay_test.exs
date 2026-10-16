@@ -11,12 +11,18 @@ defmodule Locus.Runtime.RelayTest do
   signed under another attempt's key, a `take_rate` of the runner's own,
   a fetch naming a pin CYFR never granted to the frame's attempt and a
   frame past the relay's bound. A child CYFR admits is carried, with pins
-  of its own. A fetch through a granted pin connects to the pinned address
-  after the relay takes the rate itself, is checked again against the
-  attempt's edge and limits, and streams back never past the runner's
-  credit: a slow runner holds the service waiting, and the attempt's
-  deadline ends the fetch and closes the upstream connection. Neither end
-  shows an attempt's keys in its status.
+  of its own. A granted pin serves one fetch, and only before its
+  `expires_at`: a fetch naming it again closes the channel. A fetch
+  through a granted pin is checked again against the attempt's edge and
+  limits, taken from the rate by the relay itself, then decided by CYFR
+  again as it leaves — the relay asks `egress_pin` itself, as the runner
+  asked it, and connects only to the address of that answer, so a host
+  CYFR refuses since the runner's pin, an answer naming another target and
+  a lost answer each end the fetch with nothing connected. The answer
+  streams back never past the runner's credit: a slow runner holds the
+  service waiting, and the attempt's deadline ends the fetch and closes
+  the upstream connection. Neither end shows an attempt's keys in its
+  status.
 
   A fetch naming a connection is posted by the service as the host call
   `attached_fetch`, taking no rate and asking no pin, after the attempt's
@@ -358,6 +364,226 @@ defmodule Locus.Runtime.RelayTest do
       assert ScriptedHost.requests(host, "attach") == []
     end
 
+    test "a pin serves one fetch: a second fetch naming it closes the channel and connects nowhere",
+         %{host: host} do
+      port = upstream!()
+      attempt = attempt!(host) |> ScriptedKeeper.relayed!()
+      assert {:ok, pinned} = Egress.pin(attempt.client, "http://api.test:#{port}/once")
+
+      assert {:ok, ref} =
+               Endpoint.fetch(
+                 attempt.endpoint,
+                 attempt.attempt,
+                 pinned.target.id,
+                 "GET",
+                 "/once",
+                 [],
+                 ""
+               )
+
+      assert {_events, nil} = events(attempt.endpoint, ref)
+      assert_received {:upstream, "GET", "/once", _headers}
+      monitor = Process.monitor(attempt.relay)
+
+      assert {:ok, ref} =
+               Endpoint.fetch(
+                 attempt.endpoint,
+                 attempt.attempt,
+                 pinned.target.id,
+                 "GET",
+                 "/twice",
+                 [],
+                 ""
+               )
+
+      assert_receive {Endpoint, ^ref, {:end, "relay_closed"}}, 5_000
+      assert_receive {:DOWN, ^monitor, :process, _, {:shutdown, {:closed, :unknown_pin}}}, 5_000
+      refute_received {:upstream, _, "/twice", _}
+      assert [_once] = ScriptedHost.requests(host, "take_rate")
+    end
+
+    test "a pin a refused fetch named is spent all the same", %{host: host} do
+      port = upstream!()
+      attempt = attempt!(host) |> ScriptedKeeper.relayed!()
+      assert {:ok, pinned} = Egress.pin(attempt.client, "http://api.test:#{port}/x")
+
+      fetch =
+        &Endpoint.fetch(attempt.endpoint, attempt.attempt, pinned.target.id, &1, "/x", [], "")
+
+      assert {:ok, ref} = fetch.("POST")
+      assert {[], "method_blocked"} = events(attempt.endpoint, ref)
+      monitor = Process.monitor(attempt.relay)
+
+      assert {:ok, ref} = fetch.("GET")
+      assert_receive {Endpoint, ^ref, {:end, "relay_closed"}}, 5_000
+      assert_receive {:DOWN, ^monitor, :process, _, {:shutdown, {:closed, :unknown_pin}}}, 5_000
+      refute_received {:upstream, _, _, _}
+    end
+
+    test "a pin past its expires_at is refused before the rate, and nothing is asked or connected",
+         %{host: host} do
+      port = upstream!()
+      attempt = attempt!(host) |> ScriptedKeeper.relayed!()
+      ScriptedHost.pins(host, %{"api.test" => "127.0.0.1"}, expires_in: -1)
+      assert {:ok, pinned} = Egress.pin(attempt.client, "http://api.test:#{port}/late")
+
+      assert {:ok, ref} =
+               Endpoint.fetch(
+                 attempt.endpoint,
+                 attempt.attempt,
+                 pinned.target.id,
+                 "GET",
+                 "/late",
+                 [],
+                 ""
+               )
+
+      assert {[], "pin_expired"} = events(attempt.endpoint, ref)
+      refute_received {:upstream, _, _, _}
+      assert ScriptedHost.requests(host, "take_rate") == []
+      assert [_runner_ask] = ScriptedHost.requests(host, "egress_pin")
+    end
+
+    test "CYFR decides the send itself, after the rate: a host it refuses since the runner's pin connects nowhere",
+         %{host: host} do
+      port = upstream!()
+      attempt = attempt!(host) |> ScriptedKeeper.relayed!()
+
+      # The runner's pin is taken before the run reads more; by the send,
+      # CYFR refuses the host for want of a flow.
+      ScriptedHost.script(host, "egress_pin", [
+        fn args, _caller -> ScriptedHost.pin(%{"api.test" => "127.0.0.1"}, args, 30_000) end,
+        {:error, :flow}
+      ])
+
+      url = "http://api.test:#{port}/send?q=1"
+      assert {:ok, pinned} = Egress.pin(attempt.client, url)
+
+      assert {:ok, ref} =
+               Endpoint.fetch(
+                 attempt.endpoint,
+                 attempt.attempt,
+                 pinned.target.id,
+                 "GET",
+                 "/send?q=1",
+                 [],
+                 ""
+               )
+
+      assert {[], "pin_flow"} = events(attempt.endpoint, ref)
+      refute_received {:upstream, _, _, _}
+
+      # Asked for the request's own URL and purpose, presenting as the
+      # runner under the attempt's keys, once the rate was taken.
+      assert [_runner_ask, relay_ask] = ScriptedHost.requests(host, "egress_pin")
+      assert relay_ask.args == %{"url" => url, "purpose" => "fetch"}
+      assert relay_ask.caller.runner == attempt.runner
+      assert relay_ask.caller.attempt == attempt.attempt
+
+      assert for(%{op: op} <- ScriptedHost.requests(host), op in ~w(egress_pin take_rate), do: op) ==
+               ~w(egress_pin take_rate egress_pin)
+    end
+
+    test "the connection goes to the address of the relay's own answer, never the runner's pin's",
+         %{host: host} do
+      port = upstream!()
+      attempt = attempt!(host) |> ScriptedKeeper.relayed!()
+
+      # The runner's pin names a loopback address nothing listens on; the
+      # answer to the relay's own ask names the upstream's.
+      ScriptedHost.script(host, "egress_pin", [
+        fn args, _caller -> ScriptedHost.pin(%{"api.test" => "127.0.0.2"}, args, 30_000) end,
+        fn args, _caller -> ScriptedHost.pin(%{"api.test" => "127.0.0.1"}, args, 30_000) end
+      ])
+
+      assert {:ok, %{ip: "127.0.0.2"} = pinned} =
+               Egress.pin(attempt.client, "http://api.test:#{port}/fresh")
+
+      assert {:ok, ref} =
+               Endpoint.fetch(
+                 attempt.endpoint,
+                 attempt.attempt,
+                 pinned.target.id,
+                 "GET",
+                 "/fresh",
+                 [],
+                 ""
+               )
+
+      {events, nil} = events(attempt.endpoint, ref)
+      assert body_of(events) == "reached /fresh"
+      assert_received {:upstream, "GET", "/fresh", _headers}
+    end
+
+    test "an answer naming another target, or a lost one, ends the fetch and connects nowhere",
+         %{host: host} do
+      port = upstream!()
+      attempt = attempt!(host) |> ScriptedKeeper.relayed!()
+      pin = fn args, _caller -> ScriptedHost.pin(%{"api.test" => "127.0.0.1"}, args, 30_000) end
+
+      elsewhere = fn args, caller ->
+        {:ok, wire} = pin.(args, caller)
+        {:ok, %{wire | "host" => "elsewhere.test"}}
+      end
+
+      # A lost answer is asked once more, and lost again.
+      ScriptedHost.script(host, "egress_pin", [pin, elsewhere, pin, :drop, :drop])
+
+      for code <- ["pin_elsewhere", "pin_lost"] do
+        assert {:ok, pinned} = Egress.pin(attempt.client, "http://api.test:#{port}/x")
+
+        assert {:ok, ref} =
+                 Endpoint.fetch(
+                   attempt.endpoint,
+                   attempt.attempt,
+                   pinned.target.id,
+                   "GET",
+                   "/x",
+                   [],
+                   ""
+                 )
+
+        assert {[], ^code} = events(attempt.endpoint, ref)
+      end
+
+      refute_received {:upstream, _, _, _}
+    end
+
+    test "a redirect's hop is asked again as the runner asked it, from the pin it came from", %{
+      host: host
+    } do
+      port = upstream!()
+      attempt = attempt!(host) |> ScriptedKeeper.relayed!()
+      origin_url = "http://api.test:#{port}/start"
+      assert {:ok, origin} = Egress.pin(attempt.client, origin_url)
+      :ok = Egress.redirected(attempt.client, origin, origin_url, "/moved")
+      assert {:ok, hop} = Egress.pin(attempt.client, "http://api.test:#{port}/moved")
+      assert hop.from == origin.target
+
+      assert {:ok, ref} =
+               Endpoint.fetch(
+                 attempt.endpoint,
+                 attempt.attempt,
+                 hop.target.id,
+                 "GET",
+                 "/moved",
+                 [],
+                 ""
+               )
+
+      {events, nil} = events(attempt.endpoint, ref)
+      assert body_of(events) == "reached /moved"
+
+      expected = %{
+        "url" => "http://api.test:#{port}/moved",
+        "purpose" => "redirect",
+        "from" => origin.target.id
+      }
+
+      assert [_origin, %{args: ^expected}, %{args: ^expected}] =
+               ScriptedHost.requests(host, "egress_pin")
+    end
+
     test "a rate the host refuses ends the fetch before any connection", %{host: host} do
       port = upstream!()
       attempt = attempt!(host) |> ScriptedKeeper.relayed!()
@@ -386,19 +612,28 @@ defmodule Locus.Runtime.RelayTest do
         attempt!(host, limits: EdgeFixtures.limits(max_request_size: 64))
         |> ScriptedKeeper.relayed!()
 
+      # Each fetch is a request of its own, pinned for itself.
       assert {:ok, pinned} = Egress.pin(attempt.client, "http://api.test:#{port}/x")
-      pin = pinned.target.id
-
-      assert {:ok, ref} =
-               Endpoint.fetch(attempt.endpoint, attempt.attempt, pin, "POST", "/x", [], "")
-
-      assert {[], "method_blocked"} = events(attempt.endpoint, ref)
 
       assert {:ok, ref} =
                Endpoint.fetch(
                  attempt.endpoint,
                  attempt.attempt,
-                 pin,
+                 pinned.target.id,
+                 "POST",
+                 "/x",
+                 [],
+                 ""
+               )
+
+      assert {[], "method_blocked"} = events(attempt.endpoint, ref)
+      assert {:ok, pinned} = Egress.pin(attempt.client, "http://api.test:#{port}/x")
+
+      assert {:ok, ref} =
+               Endpoint.fetch(
+                 attempt.endpoint,
+                 attempt.attempt,
+                 pinned.target.id,
                  "GET",
                  "/x",
                  [],

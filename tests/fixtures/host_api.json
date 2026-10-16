@@ -1106,6 +1106,31 @@
       "answer_iv_hex": "93f5a12d1a494a9a5b36c204",
       "answer_sealed": "k_WhLRpJSppbNsIEIH-6WnIQ_rElP96vAeJA9ClmM8IIyN4l3ovp1ySp2SKt6PStCe0de6OKUf5VgEKTvnN8UoUA",
       "refusals": []
+    },
+    {
+      "name": "flow",
+      "callback": "egress_pin",
+      "fields": {
+        "athanor_id": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+        "execution_id": "exec_01a09fee-07cc-791f-a598-e7f90608c9e2",
+        "attempt": "att_01a09fee-0a31-7a2b-8f0c-3d1e5b7c9a42",
+        "fence": 2,
+        "generation": 7,
+        "service": "wrk_4f3c2a1e9d8b7c6a",
+        "boot": "boot_01a09fee-2e4f-7a5b-9c6d-7e8f9a0b1c2d",
+        "runner": "run_01a09fee-1c2d-7e3f-8a4b-5c6d7e8f9a0b",
+        "member": "cyfr@10.0.0.1#boot_01a09fee-5d7e-7f80-91a2-b3c4d5e6f708",
+        "ts": 1789305250672,
+        "nonce": "n_host_egress_flow"
+      },
+      "body": "{\"v\":1,\"op\":\"egress_pin\",\"args\":{\"purpose\":\"fetch\",\"url\":\"https://collector.example.test/v1/notes\"}}",
+      "body_iv_hex": "05596e5af07d5144076dcf7a",
+      "body_sealed": "BVluWvB9UUQHbc961lqhJMZeq7DoMt7Uesu-YzMRUDjhyJP8YUb-Lbubv-PHsv0geQz6B2KjTbC0tdNKBxZLHppbYHMhSmZgZMaXAiQj-wZ4W0MgvPPf1oFsORYXYZ51cUDmJ0QQErRxTq0HOdVJwbv5L6U6SpL4vZE9UwEK0R4",
+      "header": "v1 kind=call athanor_id=ath_01a09fee-045b-770b-b745-a62792bb8798 execution_id=exec_01a09fee-07cc-791f-a598-e7f90608c9e2 attempt=att_01a09fee-0a31-7a2b-8f0c-3d1e5b7c9a42 fence=2 generation=7 service=wrk_4f3c2a1e9d8b7c6a boot=boot_01a09fee-2e4f-7a5b-9c6d-7e8f9a0b1c2d runner=run_01a09fee-1c2d-7e3f-8a4b-5c6d7e8f9a0b member=cyfr@10.0.0.1#boot_01a09fee-5d7e-7f80-91a2-b3c4d5e6f708 ts=1789305250672 nonce=n_host_egress_flow body=9d9b9863c8721b2ac67b7d44d1b7a98831431c4507825bae3ff6a370c285939c mac=DdwSHLCUjR1oGaEfRnu35sCnHGwlM1RYfdvgcs91whU",
+      "answer": "{\"v\":1,\"error\":\"flow\"}",
+      "answer_iv_hex": "09c2df0991c4a0c7853073e2",
+      "answer_sealed": "CcLfCZHEoMeFMHPinY9nJMhqlUwr5GnEL8oxoCQzqEX6ueA8STeXtFwUYySldvd_yjQ",
+      "refusals": []
     }
   ],
   "egress_policy_cases": [

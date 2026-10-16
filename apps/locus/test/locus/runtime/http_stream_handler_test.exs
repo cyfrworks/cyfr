@@ -605,6 +605,83 @@ defmodule Locus.Runtime.HttpStreamHandlerTest do
     end
   end
 
+  describe "a stream's delayed send" do
+    defmodule Reached do
+      @moduledoc false
+      # A loopback upstream telling the test each request that reached it.
+      @behaviour Plug
+
+      @impl true
+      def init(test), do: test
+
+      @impl true
+      def call(conn, test) do
+        send(test, {:reached, conn.request_path})
+        Plug.Conn.send_resp(conn, 200, "streamed")
+      end
+    end
+
+    test "asks CYFR again before it sends: a host refused for want of a flow since the stream opened is refused, and nothing is sent" do
+      server =
+        start_supervised!(
+          {Bandit, plug: {Reached, self()}, ip: {127, 0, 0, 1}, port: 0, startup_log: false}
+        )
+
+      {:ok, {_ip, port}} = ThousandIsland.listener_info(server)
+      edge = EdgeFixtures.edge(domains: ["localhost"], methods: ["GET"])
+      host = ScriptedHost.start!()
+
+      client =
+        host
+        |> ScriptedHost.attempt!(
+          component_ref: "catalyst:local.test-resend:1.0.0",
+          authority: ScriptedKeeper.authority(edge, EdgeFixtures.limits())
+        )
+        |> ScriptedKeeper.relayed!()
+        |> Map.fetch!(:client)
+
+      # The pin the stream opens with; by its send, the run has read what
+      # its grant declares no flow of to the host.
+      ScriptedHost.script(host, "egress_pin", [
+        fn args, _caller -> ScriptedHost.pin(%{"localhost" => "127.0.0.1"}, args, 30_000) end,
+        {:error, :flow},
+        {:error, :flow}
+      ])
+
+      {imports, exec_ref} =
+        HttpStreamHandler.build_stream_imports(
+          edge,
+          EdgeFixtures.limits(),
+          client,
+          "catalyst:local.test-resend:1.0.0"
+        )
+
+      on_exit(fn -> HttpStreamHandler.cleanup_registry(exec_ref) end)
+
+      %{"request" => {:fn, request_fn}, "read" => {:fn, read_fn}} =
+        imports["cyfr:http/streaming@0.1.0"]
+
+      request =
+        Jason.encode!(%{"method" => "GET", "url" => "http://localhost:#{port}/events"})
+
+      assert %{"handle" => handle} = request_fn.(request) |> Jason.decode!()
+
+      assert %{"error" => %{"type" => "flow_blocked", "message" => message}} =
+               poll_for_error(read_fn, handle, 100)
+
+      assert message =~ "localhost"
+      refute_received {:reached, _path}
+
+      # Refused before the relay was handed the request, so no rate was
+      # taken, and CYFR, not the runner, recorded the refusal.
+      assert ScriptedHost.requests(host, "take_rate") == []
+      assert ScriptedHost.requests(host, "record_denial") == []
+
+      assert [%{args: %{"purpose" => "stream"}}, %{args: %{"purpose" => "stream"}}] =
+               ScriptedHost.requests(host, "egress_pin")
+    end
+  end
+
   describe "a request naming a connection" do
     setup do
       edge = EdgeFixtures.edge(domains: ["api.openai.com"], methods: ["POST"])

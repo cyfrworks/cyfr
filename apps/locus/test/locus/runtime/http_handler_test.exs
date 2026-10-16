@@ -746,6 +746,31 @@ defmodule Locus.Runtime.HttpHandlerTest do
       assert_received {:pinned, %{"purpose" => "fetch"}, {:ok, %{"ip" => "127.0.0.1"}}}
     end
 
+    test "is decided by CYFR again as the request leaves: its refusal there is the guest's, recorded by CYFR alone" do
+      edge = EdgeFixtures.edge(domains: ["api.test"], methods: ["GET"])
+      context = upstream_and_host(%{"api.test" => "127.0.0.1"}, edge)
+      pin = fn args, _caller -> ScriptedHost.pin(%{"api.test" => "127.0.0.1"}, args, 30_000) end
+
+      # The runner's pin is granted; the relay's own ask, as the request
+      # leaves, is refused for want of a flow, then lost twice.
+      ScriptedHost.script(context.host, "egress_pin", [pin, {:error, :flow}, pin, :drop, :drop])
+      url = "http://api.test:#{context.port}/hello"
+
+      assert %{"error" => %{"type" => "flow_blocked", "message" => message}} =
+               fetch(context, edge, url)
+
+      assert message =~ "api.test"
+      assert ScriptedHost.requests(context.host, "record_denial") == []
+
+      # A lost answer is the engine's refusal, which the runner records.
+      assert %{"error" => %{"type" => "dns_error"}} = fetch(context, edge, url)
+
+      assert [%{args: %{"type" => "dns_error"}}] =
+               ScriptedHost.requests(context.host, "record_denial")
+
+      assert context.seen.() == []
+    end
+
     test "is a plain literal for a family 4 pin and a bracketed one for family 6" do
       edge = EdgeFixtures.edge(domains: ["v4.test", "v6.test"], methods: ["GET"])
 

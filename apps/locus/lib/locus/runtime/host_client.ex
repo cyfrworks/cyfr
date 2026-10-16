@@ -11,8 +11,9 @@ defmodule Locus.Runtime.HostClient do
   end (`Locus.Runtime.Relay`) verifies the call under the attempt's keys and posts
   it unchanged with `post_call/4`: every host call reaches CYFR from the
   worker service, never from a runner. The service's own calls for an
-  attempt (the `take_rate` its relay takes before a fetch) are made by a
-  client posting directly (`:host_url`), as are its runner exit reports.
+  attempt (the `take_rate` its relay takes and the `egress_pin` it asks
+  before it connects a fetch) are made by a client posting directly
+  (`:host_url`), as are its runner exit reports.
 
   A client names the attempt (its athanor, execution, attempt id, fence,
   generation and worker service), the runner presenting it, the attempt's

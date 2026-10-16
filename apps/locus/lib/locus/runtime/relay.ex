@@ -45,12 +45,29 @@ defmodule Locus.Runtime.Relay do
 
   A pinned `fetch` names a pin by id and a path, never an address. The
   pin must be one CYFR granted to the frame's attempt in an answer this
-  process relayed, else the channel closes. The request is checked again
+  process relayed, and one no fetch has named yet, else the channel
+  closes: a pin serves exactly one fetch, and is forgotten as that fetch
+  names it, so a runner naming it again names a pin this process holds
+  none of, which a runner asking CYFR for every request never does. A pin
+  past its `expires_at` when its fetch arrives ends the fetch
+  `pin_expired`. The request is checked again
   against the attempt's edge and limits as the runner checked it
   (`Locus.Runtime.EdgeGuard`: method, scheme, the pin's host as
   a domain, the request's size), then taken from the consented rate by a
-  `take_rate` call this process signs for the attempt. It then connects
-  to the address CYFR answered, with the pin's host for TLS and `Host`
+  `take_rate` call this process signs for the attempt.
+
+  The runner's pin is only the precondition for the decision this process
+  asks for itself, immediately before it connects: an `egress_pin` call
+  it signs for the attempt as it signs `take_rate`, for the request's own
+  URL, with the purpose the runner asked the pin with and, for a
+  redirect's hop, the same `from` (both read from the runner's call when
+  its answer was learned). So CYFR decides the send against what the run
+  has read by the time it leaves, flows included. An answer that is
+  refused, lost or names another scheme, host or port than the request's
+  (`Locus.Runtime.Egress.names?/2`) ends the fetch with the code
+  `Locus.Runtime.Egress.relay_code/1` names, and nothing connects. The
+  fetch connects only to the address of that answer, with the pin's host
+  for TLS and `Host`
   (`Locus.Runtime.Egress.connect_options/3`), and streams the answer back as
   `fetch_chunk` frames: the status and headers first, then the body,
   never past the credit the runner granted for the fetch and never past
@@ -417,7 +434,7 @@ defmodule Locus.Runtime.Relay do
     bound = Map.fetch!(state.attempts, frame.attempt)
 
     with {:ok, fields} <- verified(state, bound, frame),
-         :ok <- checked_body(bound, fields, frame) do
+         {:ok, asked} <- checked_body(bound, fields, frame) do
       relay = self()
       {op, header, body, host_url} = {frame.op, frame.header, frame.body, bound.host_url}
 
@@ -426,7 +443,7 @@ defmodule Locus.Runtime.Relay do
           send(relay, {:posted, self(), HostClient.post_call(host_url, op, header, body)})
         end)
 
-      call = %{re: frame.seq, attempt: frame.attempt, op: op, fields: fields}
+      call = %{re: frame.seq, attempt: frame.attempt, op: op, fields: fields, asked: asked}
       {:ok, %{state | calls: Map.put(state.calls, pid, call)}}
     else
       {:refuse, reason} -> close(state, reason) |> as_step()
@@ -457,16 +474,29 @@ defmodule Locus.Runtime.Relay do
   end
 
   # The body opens as the frame's operation at this wire's version, and an
-  # emitted event is within the attempt's `max_request_size`.
+  # emitted event is within the attempt's `max_request_size`. Answers what
+  # an `egress_pin` asked for, which the relay asks again with before it
+  # connects a fetch through the pin answered.
   defp checked_body(bound, fields, frame) do
     with {:ok, json} <- WorkerAuth.open_call(bound.seal_key, :body, fields, frame.body),
          {:ok, decoded} <- Jason.decode(json),
-         {:ok, op, args} when op == frame.op <- WorkerWire.read_request_body(HostAPI, decoded) do
-      events_within(bound, op, args)
+         {:ok, op, args} when op == frame.op <- WorkerWire.read_request_body(HostAPI, decoded),
+         :ok <- events_within(bound, op, args) do
+      {:ok, asked(op, args)}
     else
+      {:refuse, reason} -> {:refuse, reason}
       _ -> {:refuse, :malformed_call}
     end
   end
+
+  defp asked(:egress_pin, args) do
+    case PinnedTarget.read_request(args) do
+      {:ok, %{purpose: purpose, from: from}} -> %{purpose: purpose, from: from}
+      {:error, :malformed} -> nil
+    end
+  end
+
+  defp asked(_op, _args), do: nil
 
   defp events_within(bound, :push_deltas, %{"deltas" => deltas}) when is_list(deltas) do
     oversized =
@@ -503,14 +533,16 @@ defmodule Locus.Runtime.Relay do
     send_frame(state, frame)
   end
 
-  # What an answer the relay passes on grants the attempt: a pin, or a
-  # child the runner will run under keys sealed to this attempt.
-  defp learn(state, %{op: :egress_pin} = call, sealed) do
+  # What an answer the relay passes on grants the attempt: a pin, kept
+  # with the purpose and `from` it was asked with, or a child the runner
+  # will run under keys sealed to this attempt.
+  defp learn(state, %{op: :egress_pin, asked: %{} = asked} = call, sealed) do
     bound = Map.fetch!(state.attempts, call.attempt)
 
     with {:ok, wire} <- opened_answer(bound, call, sealed),
          {:ok, pin} <- PinnedTarget.read(wire) do
-      put_bound(state, call.attempt, %{bound | pins: remember_pin(bound.pins, pin)})
+      pins = remember_pin(bound.pins, Map.put(asked, :pin, pin))
+      put_bound(state, call.attempt, %{bound | pins: pins})
     else
       _ -> state
     end
@@ -556,17 +588,17 @@ defmodule Locus.Runtime.Relay do
       (assignment.host_url == nil or assignment.host_url == parent.host_url)
   end
 
-  # A pin stays the attempt's for the attempt's life, as the runner's
-  # handlers use it: a stream opened with a pin keeps its connection past
-  # the pin's expiry, and whether to ask CYFR again is the runner's. Only
-  # the oldest is forgotten, past the relay's bound on pins.
-  defp remember_pin(pins, pin) do
+  # A pin is held until the one fetch that names it, which forgets it;
+  # one no fetch names is forgotten oldest first, past the relay's bound
+  # on pins. A stream connected through a pin keeps its connection past
+  # the pin's expiry: the pin decides the connect, not the reads after it.
+  defp remember_pin(pins, %{pin: pin} = entry) do
     kept =
       if map_size(pins) >= @max_pins,
-        do: pins |> Enum.sort_by(fn {_id, pin} -> pin.expires_at end) |> tl() |> Map.new(),
+        do: pins |> Enum.sort_by(fn {_id, held} -> held.pin.expires_at end) |> tl() |> Map.new(),
         else: pins
 
-    Map.put(kept, pin.id, pin)
+    Map.put(kept, pin.id, entry)
   end
 
   defp put_bound(state, attempt, bound),
@@ -600,11 +632,16 @@ defmodule Locus.Runtime.Relay do
     end
   end
 
+  # The pin is taken out of the store as the fetch names it, whatever
+  # becomes of the fetch: a pin serves one fetch. A pin the store does not
+  # hold, never granted or already used, closes the channel.
   defp fetch(state, frame) do
     bound = Map.fetch!(state.attempts, frame.attempt)
 
-    case Map.fetch(bound.pins, frame.pin) do
-      {:ok, pin} ->
+    case Map.pop(bound.pins, frame.pin) do
+      {%{pin: _pin} = held, pins} ->
+        bound = %{bound | pins: pins}
+
         fetch = %{
           attempt: frame.attempt,
           worker: nil,
@@ -614,22 +651,27 @@ defmodule Locus.Runtime.Relay do
           timer: nil
         }
 
-        state = %{state | fetches: Map.put(state.fetches, frame.seq, fetch)}
+        state =
+          state
+          |> put_bound(frame.attempt, bound)
+          |> then(&%{&1 | fetches: Map.put(&1.fetches, frame.seq, fetch)})
 
-        case admitted(bound, pin, frame) do
+        case admitted(bound, held, frame) do
           {:ok, request} -> {:ok, start_fetch(state, frame.seq, bound, request)}
           {:refuse, code} -> finish(state, frame.seq, fetch, code) |> as_step()
         end
 
-      :error ->
+      {nil, _pins} ->
         close(state, :unknown_pin) |> as_step()
     end
   end
 
-  # The checks the runner made, made again outside it: the method, the
-  # pin's scheme and host and the request's size are within the attempt's
-  # edge and limits, before the attempt's deadline.
-  defp admitted(bound, pin, frame) do
+  # The checks the runner made, made again outside it: the pin is within
+  # its `expires_at`, and the method, the pin's scheme and host and the
+  # request's size are within the attempt's edge and limits, before the
+  # attempt's deadline. The request carries what the runner's pin was
+  # asked with, for the relay's own ask.
+  defp admitted(bound, %{pin: pin, purpose: purpose, from: from}, frame) do
     now = System.system_time(:millisecond)
     %URI{path: path, query: query} = URI.parse(frame.path)
 
@@ -648,6 +690,9 @@ defmodule Locus.Runtime.Relay do
       now >= bound.deadline ->
         {:refuse, "timeout"}
 
+      PinnedTarget.expired?(pin, now) ->
+        {:refuse, Egress.relay_code(:expired)}
+
       EdgeGuard.check_method(bound.edge, frame.method) != :ok ->
         {:refuse, "method_blocked"}
 
@@ -661,7 +706,14 @@ defmodule Locus.Runtime.Relay do
         {:refuse, "request_too_large"}
 
       true ->
-        {:ok, Map.merge(request, %{pin: pin, uri: uri, method: frame.method})}
+        {:ok,
+         Map.merge(request, %{
+           pin: pin,
+           uri: uri,
+           method: frame.method,
+           purpose: purpose,
+           from: from
+         })}
     end
   end
 
@@ -770,8 +822,9 @@ defmodule Locus.Runtime.Relay do
     }
   end
 
-  # The client the relay takes the rate with: the attempt's own keys,
-  # presenting as the runner, posted to the member the assignment names.
+  # The client the relay takes the rate and asks its own pins with: the
+  # attempt's own keys, presenting as the runner, posted to the member the
+  # assignment names.
   defp rate_client(state, bound) do
     HostClient.new(
       %{attempt: bound.attempt, call: bound.call_key, seal: bound.seal_key},
@@ -781,15 +834,39 @@ defmodule Locus.Runtime.Relay do
     )
   end
 
-  # The fetch itself, beside the relay: the rate, then the pinned connect,
-  # whose answer body reaches the relay one piece at a time, each piece
-  # waiting until the relay has sent it on under the runner's credit. The
-  # wait is bounded by the attempt's deadline, and the relay kills this
-  # process at the deadline, which closes the connection.
+  # The fetch itself, beside the relay: the rate, then CYFR's decision on
+  # the request as it leaves, then the connect to the address CYFR just
+  # answered, whose answer body reaches the relay one piece at a time,
+  # each piece waiting until the relay has sent it on under the runner's
+  # credit. The wait is bounded by the attempt's deadline, and the relay
+  # kills this process at the deadline, which closes the connection.
   defp fetch_worker(relay, re, client, bound, request) do
+    ended =
+      with :ok <- rate(client, bound),
+           {:ok, pin} <- decided(client, request) do
+        connect(relay, re, bound, %{request | pin: pin})
+      end
+
+    send(relay, {:fetch_done, re, ended})
+  end
+
+  defp rate(client, bound) do
     case HostClient.take_rate(client, "http:" <> bound.component_ref) do
-      :ok -> send(relay, {:fetch_done, re, connect(relay, re, bound, request)})
-      {:error, _refused} -> send(relay, {:fetch_done, re, "rate_limited"})
+      :ok -> :ok
+      {:error, _refused} -> "rate_limited"
+    end
+  end
+
+  # CYFR is asked for the request's pin again, as the runner asked it, and
+  # only an answer naming the request's own scheme, host and port is
+  # connected to; anything else ends the fetch, naming why.
+  defp decided(client, request) do
+    case HostClient.egress_pin(client, request.url, purpose: request.purpose, from: request.from) do
+      {:ok, pin} ->
+        if Egress.names?(pin, request.uri), do: {:ok, pin}, else: Egress.relay_code(:elsewhere)
+
+      {:error, why} ->
+        Egress.relay_code(why)
     end
   end
 

@@ -365,7 +365,7 @@ defmodule Locus.Runtime.HostClientTest do
       cases = @host_api["egress_pin_cases"] ++ @host_api["egress_policy_cases"]
 
       assert Enum.map(@host_api["egress_pin_cases"], & &1["name"]) ==
-               ~w(fetch stream redirect denied metadata resolution redirect_credentials)
+               ~w(fetch stream redirect denied metadata resolution redirect_credentials flow)
 
       assert Enum.map(@host_api["egress_policy_cases"], & &1["name"]) ==
                ~w(fetch outside_domains redirect_other_port redirect_default_port

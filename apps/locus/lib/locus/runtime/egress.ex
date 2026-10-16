@@ -11,10 +11,10 @@ defmodule Locus.Runtime.Egress do
   In the runner, `pin/3` asks the attempt's host client for the pin of a
   URL (`Locus.Runtime.HostClient.egress_pin/3`), a call the relay's service end
   reads the answer of and keeps as a pin granted to that attempt, checks
-  that the pin names the URL's own scheme, host and port, and that its
-  address is no metadata address whatever CYFR answered. The runner's
-  handlers then send the request through the relay naming the pin by id
-  (`Locus.Runtime.Relay.Runner.fetch/7`).
+  that the pin names the URL's own scheme, host and port (`names?/2`), and
+  that its address is no metadata address whatever CYFR answered. The
+  runner's handlers then send the request through the relay naming the pin
+  by id (`Locus.Runtime.Relay.Runner.fetch/7`).
 
   In the service, `connect_options/3` builds the request options that
   connect to exactly the pinned address (`Prima.Network.pin/3`). CYFR has
@@ -26,12 +26,21 @@ defmodule Locus.Runtime.Egress do
   is only an address: every request is still checked and charged, by the
   handlers and again by the relay, before it connects.
 
-  A pin is reused for the next request of the same attempt with the same
-  purpose to the same scheme, host and port until its `expires_at`, and
-  asked for again after it. The pins live in the state of the process the
-  guest's host functions run in — the component instance's, which calls
-  every import itself — so they are the attempt's alone and end with its
-  instance.
+  ## One request, one decision
+
+  The engine keeps no pin: every request asks CYFR for its own, and a
+  stream asks again right before its delayed send (`repin/3`). The relay's
+  service end honours a runner's pin for one fetch, only before its
+  `expires_at`, and asks CYFR once more itself, for the request's URL with
+  the purpose (and a redirect hop's `from`) the runner asked with, before
+  it connects to the address of that answer (`Locus.Runtime.Relay`). So
+  CYFR decides each send against what the run has read by the time it
+  leaves, a flow included, never against a pin taken before a read.
+
+  `refusal/2` is how every refused pin reaches the guest, whichever end
+  asked for it: a relay that ends a fetch because its own ask got no pin
+  names why with `relay_code/1`, and the runner's handlers read that code
+  back with `relay_refusal/2`.
 
   ## Redirects
 
@@ -44,7 +53,10 @@ defmodule Locus.Runtime.Egress do
   it again: a hop whose scheme, host or effective port differs from its
   pin's is `cross_origin?/1` (`Prima.Network.same_origin?/2`), and its
   request is sent without the guest's credentials
-  (`Prima.Network.strip_credentials/1`).
+  (`Prima.Network.strip_credentials/1`). The redirects an attempt's
+  handlers remember live in the state of the process the guest's host
+  functions run in — the component instance's, which calls every import
+  itself — so they are the attempt's alone and end with its instance.
   """
 
   alias Locus.Runtime.HostClient
@@ -53,14 +65,15 @@ defmodule Locus.Runtime.Egress do
   @typedoc """
   What `pin/3` answers: the address as text and as a tuple, the URI with
   the pin's host, the pin itself (`:target`), whose id the relay's fetch
-  names, and, for a redirect's next hop, the pin the redirect came from
-  (`:from`).
+  names, the purpose it was asked for (`:purpose`) and, for a redirect's
+  next hop, the pin the redirect came from (`:from`).
   """
   @type pinned :: %{
           ip: String.t(),
           ip_tuple: :inet.ip_address(),
           uri: URI.t(),
           target: PinnedTarget.t(),
+          purpose: :fetch | :stream | :redirect,
           from: PinnedTarget.t() | nil
         }
 
@@ -77,20 +90,40 @@ defmodule Locus.Runtime.Egress do
           req_opts: keyword()
         }
 
-  @typedoc "The guest error type of a refusal `pin/3` answers."
+  @typedoc "The guest error type of a refused pin."
   @type refusal ::
           :invalid_url
           | :invalid_request
           | :dns_error
           | :private_ip_blocked
           | :redirect_credentials
+          | :flow_blocked
+
+  @typedoc """
+  Why a request got no pin: a refusal CYFR answered
+  (`Prima.PinnedTarget.refusals/0`), or the engine's own — CYFR's answer
+  unavailable or lost, a pin naming another target than the request's
+  (`:elsewhere`), or a runner's pin past its `expires_at` when the relay
+  was handed its request (`:expired`).
+  """
+  @type why ::
+          PinnedTarget.refusal() | :unavailable | :lost | :elsewhere | :expired
 
   # The redirects an attempt's handlers remember before the guest follows
   # them; the oldest is forgotten first.
   @max_hops 8
 
+  # The codes a relay ends a fetch with when its own ask for the fetch's
+  # pin got none, each naming why; every one is a `Prima.RunnerRelay` code.
+  @relay_codes Map.new(
+                 PinnedTarget.refusals() ++ [:unavailable, :lost, :elsewhere, :expired],
+                 &{&1, "pin_" <> Atom.to_string(&1)}
+               )
+  @relay_whys Map.new(@relay_codes, fn {why, code} -> {code, why} end)
+
   @doc """
-  Pin `url` for one outbound request of the attempt `client` holds.
+  Pin `url` for one outbound request of the attempt `client` holds: CYFR
+  is asked for every request, and its answer serves that request alone.
 
   ## Options
 
@@ -116,6 +149,21 @@ defmodule Locus.Runtime.Egress do
         :none -> connect(client, url, uri, purpose, nil)
       end
     end
+  end
+
+  @doc """
+  Ask CYFR again for the request `pinned` was answered for, `url`, right
+  before it is sent: with the same purpose and, for a redirect's next hop,
+  from the same pin, so the send is decided against what the run has read
+  by then. Answers as `pin/3` does; consumes no redirect hop.
+  """
+  @spec repin(HostClient.t(), String.t(), pinned()) ::
+          {:ok, pinned()}
+          | {:error, refusal(), String.t()}
+          | {:refused, refusal(), String.t()}
+  def repin(%HostClient{} = client, url, %{purpose: purpose, from: from}) when is_binary(url) do
+    with {:ok, uri} <- Prima.Network.parse_url(url),
+         do: connect(client, url, uri, purpose, from)
   end
 
   @doc """
@@ -162,6 +210,17 @@ defmodule Locus.Runtime.Egress do
     do: %URI{scheme: scheme, host: host, port: port}
 
   @doc """
+  Whether the pin `target` is the URL `uri`'s own: its scheme, its port
+  (the scheme's default when the URL names none) and its host, a hostname
+  in any case or an IP literal, bracketed or not when it is IPv6.
+  """
+  @spec names?(PinnedTarget.t(), URI.t()) :: boolean()
+  def names?(%PinnedTarget{} = target, %URI{} = uri) do
+    target.scheme == uri.scheme and target.port == uri.port and
+      host_key(target.host) == host_key(uri.host || "")
+  end
+
+  @doc """
   The request options that connect to exactly the address `target` pins,
   for `uri` (its path and query the request's), keeping the pin's host for
   TLS SNI, certificate verification and the `Host` header. A metadata
@@ -178,69 +237,96 @@ defmodule Locus.Runtime.Egress do
   def connect_options(%PinnedTarget{} = target, %URI{} = uri, opts) when is_list(opts),
     do: build(uri, target, opts)
 
-  defp connect(client, url, uri, purpose, from) do
-    with {:ok, target} <- target(client, url, uri, purpose, from),
-         {:ok, pinned} <- build(uri, target, []) do
-      if purpose != :redirect, do: remember(client, purpose, uri, target)
+  @doc """
+  How a request to `host` that got no pin, for `why` (`t:why/0`), answers
+  the guest: a refusal CYFR answered as `{:refused, type, message}`, since
+  CYFR has already recorded it as a denial of the attempt; the engine's
+  own as `{:error, type, message}`, which the caller records. A sentence
+  names the host, never the URL, whose path and query can carry a
+  credential.
+  """
+  @spec refusal(term(), String.t()) ::
+          {:refused, refusal(), String.t()} | {:error, refusal(), String.t()}
+  def refusal(:denied, host),
+    do:
+      {:refused, :private_ip_blocked, "Address of #{host} blocked: the egress policy refuses it"}
 
+  def refusal(:metadata, host),
+    do: {:refused, :private_ip_blocked, "metadata IP blocked (resolved from #{host})"}
+
+  def refusal(:resolution, host), do: {:refused, :dns_error, "DNS resolution failed for #{host}"}
+
+  def refusal(:redirect_credentials, host),
+    do:
+      {:refused, :redirect_credentials,
+       "Redirect to #{host} refused: the request's credentials may not follow it"}
+
+  def refusal(:flow, host),
+    do:
+      {:refused, :flow_blocked,
+       "HTTP egress to #{host} refused: this run read material its grant declares no flow of " <>
+         "to that host"}
+
+  def refusal(:malformed, _host), do: {:refused, :invalid_request, "Invalid URL"}
+
+  def refusal(:elsewhere, host),
+    do: {:error, :dns_error, "HTTP egress refused: #{host} was pinned elsewhere"}
+
+  def refusal(:expired, host),
+    do:
+      {:error, :dns_error,
+       "HTTP egress refused: the pin for #{host} expired before its request was sent"}
+
+  def refusal(:unavailable, host),
+    do: {:error, :dns_error, "HTTP egress refused: the address of #{host} could not be pinned"}
+
+  def refusal(_lost, _host),
+    do: {:error, :dns_error, "HTTP egress refused: the execution attempt is not current"}
+
+  @doc """
+  The code a relay ends a fetch with (a `Prima.RunnerRelay` code) when it
+  got no pin for the fetch's request, for `why` as a pin answer names it
+  (`t:why/0`); any other reason is a lost answer, `pin_lost`.
+  """
+  @spec relay_code(term()) :: String.t()
+  def relay_code(why), do: Map.get(@relay_codes, why, @relay_codes.lost)
+
+  @doc """
+  How a fetch the relay ended with `code` answers the guest, for a request
+  to `host`, when the code is a `relay_code/1`: as `refusal/2` answers that
+  reason. Any other code is `:none`.
+  """
+  @spec relay_refusal(term(), String.t()) ::
+          {:refused, refusal(), String.t()} | {:error, refusal(), String.t()} | :none
+  def relay_refusal(code, host) do
+    case Map.fetch(@relay_whys, code) do
+      {:ok, why} -> refusal(why, host)
+      :error -> :none
+    end
+  end
+
+  defp connect(client, url, uri, purpose, from) do
+    with {:ok, target} <- ask(client, url, uri, purpose, from),
+         {:ok, pinned} <- build(uri, target, []) do
       {:ok,
        pinned
        |> Map.delete(:req_opts)
-       |> Map.put(:target, target)
-       |> Map.put(:from, from)}
+       |> Map.merge(%{target: target, purpose: purpose, from: from})}
     end
   end
 
-  # A pin reused while it holds, or asked for. A redirect's hop is always
-  # asked for: CYFR decides each hop from the pin it came from.
-  defp target(client, url, uri, purpose, from) do
-    case cached(client, purpose, uri) do
-      {:ok, target} -> {:ok, target}
-      :none -> ask(client, url, uri, purpose, from)
-    end
-  end
-
+  # Every request is asked for: a pin is never reused, so CYFR decides each
+  # one against what the run has read when it is asked.
   defp ask(client, url, uri, purpose, from) do
     from_id = if from, do: from.id
 
     case HostClient.egress_pin(client, url, purpose: purpose, from: from_id) do
       {:ok, target} ->
-        if names?(target, uri),
-          do: {:ok, target},
-          else: {:error, :dns_error, "HTTP egress refused: #{uri.host} was pinned elsewhere"}
+        if names?(target, uri), do: {:ok, target}, else: refusal(:elsewhere, uri.host)
 
-      {:error, :denied} ->
-        {:refused, :private_ip_blocked,
-         "Address of #{uri.host} blocked: the egress policy refuses it"}
-
-      {:error, :metadata} ->
-        {:refused, :private_ip_blocked, "metadata IP blocked (resolved from #{uri.host})"}
-
-      {:error, :resolution} ->
-        {:refused, :dns_error, "DNS resolution failed for #{uri.host}"}
-
-      {:error, :redirect_credentials} ->
-        {:refused, :redirect_credentials,
-         "Redirect to #{uri.host} refused: the request's credentials may not follow it"}
-
-      {:error, :malformed} ->
-        {:refused, :invalid_request, "Invalid URL"}
-
-      {:error, :unavailable} ->
-        {:error, :dns_error,
-         "HTTP egress refused: the address of #{uri.host} could not be pinned"}
-
-      {:error, _lost} ->
-        {:error, :dns_error, "HTTP egress refused: the execution attempt is not current"}
+      {:error, why} ->
+        refusal(why, uri.host)
     end
-  end
-
-  # The pin must be the URL's own: its scheme, its port (the scheme's
-  # default when it names none) and its host, a hostname in any case or an
-  # IP literal, bracketed when it is IPv6.
-  defp names?(%PinnedTarget{} = target, %URI{} = uri) do
-    target.scheme == uri.scheme and target.port == uri.port and
-      host_key(target.host) == host_key(uri.host)
   end
 
   defp build(uri, target, opts) do
@@ -270,7 +356,7 @@ defmodule Locus.Runtime.Egress do
   end
 
   # ============================================================================
-  # The attempt's pins, in the calling process's state
+  # The attempt's redirects, in the calling process's state
   # ============================================================================
 
   defp take_hop(client, uri) do
@@ -287,34 +373,9 @@ defmodule Locus.Runtime.Egress do
     end
   end
 
-  defp cached(client, purpose, uri) do
-    now = System.system_time(:millisecond)
-
-    case Map.fetch(state(client).pins, key(purpose, uri)) do
-      {:ok, target} -> if PinnedTarget.expired?(target, now), do: :none, else: {:ok, target}
-      :error -> :none
-    end
-  end
-
-  defp remember(client, purpose, uri, target) do
-    now = System.system_time(:millisecond)
-
-    update(client, fn state ->
-      pins =
-        state.pins
-        |> Map.reject(fn {_key, pin} -> PinnedTarget.expired?(pin, now) end)
-        |> Map.put(key(purpose, uri), target)
-
-      %{state | pins: pins}
-    end)
-  end
-
-  defp key(purpose, uri), do: {purpose, uri.scheme, host_key(uri.host), uri.port}
-
   # Keyed by the attempt, so a process that ran another attempt's guest
-  # never hands this one its pins.
-  defp state(client),
-    do: Process.get({__MODULE__, client.attempt}, %{pins: %{}, hops: []})
+  # never hands this one its redirects.
+  defp state(client), do: Process.get({__MODULE__, client.attempt}, %{hops: []})
 
   defp put_state(client, state), do: Process.put({__MODULE__, client.attempt}, state)
 

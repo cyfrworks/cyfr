@@ -13,10 +13,12 @@ defmodule Locus.Runtime.HttpHandler do
 
   - **SSRF Prevention**: the engine resolves no name, and the runner has no
     network. CYFR pins the address each request connects to under the
-    attempt's authority, applying its private-address policy
+    attempt's authority, applying its private-address policy and the
+    flows its grant declares for what the run has read
     (`Locus.Runtime.HostClient.egress_pin/3`); the request goes through the runner's
     relay naming that pin, and the relay's service end (`Locus.Runtime.Relay`)
-    connects to exactly that address, with the original hostname kept for
+    asks CYFR for it once more as it sends, and connects to exactly the
+    address of that answer, with the original hostname kept for
     TLS SNI / certificate verification / the `Host` header, so there is no
     DNS-rebinding gap and no second resolution to rebind. A metadata
     address is refused even when CYFR answers one (`Locus.Runtime.Egress`)
@@ -61,6 +63,7 @@ defmodule Locus.Runtime.HttpHandler do
   alias Prima.Authority.Blob.Edge
   alias Prima.Limits
   alias Locus.Runtime.EdgeGuard
+  alias Locus.Runtime.Egress
   alias Locus.Runtime.HostClient
   alias Locus.Runtime.HttpRequestValidation
 
@@ -252,10 +255,18 @@ defmodule Locus.Runtime.HttpHandler do
         encode_error(:timeout, "HTTP request timed out after #{request_timeout(limits)}ms")
 
       {:error, code} ->
-        {type, message} = fetch_error(code, limits)
         emit_telemetry(component_ref, request, :error, duration_ms)
-        if refusal?(type), do: record_refusal(host, type, message)
-        encode_error(type, message)
+
+        case relay_ended(code, request, limits) do
+          # CYFR refused the relay's own ask for the request's pin, and
+          # has already recorded the denial.
+          {:refused, type, message} ->
+            encode_error(type, message)
+
+          {:error, type, message} ->
+            if refusal?(type), do: record_refusal(host, type, message)
+            encode_error(type, message)
+        end
     end
   end
 
@@ -296,6 +307,27 @@ defmodule Locus.Runtime.HttpHandler do
          ) do
       {:ok, ref} -> {:ok, relay, ref}
       {:error, _reason} -> {:error, :unsendable}
+    end
+  end
+
+  @doc false
+  # How a fetch the relay ended early with `code` answers the guest, for
+  # `request`: a code naming why the relay's own ask for the request's pin
+  # got none answers as that refused pin does
+  # (`Locus.Runtime.Egress.relay_refusal/2`), `:refused` when CYFR refused
+  # it, and so recorded it, and `:error` when the engine did; any other
+  # code as `fetch_error/2` says, `:error`. Shared with
+  # `Locus.Runtime.HttpStreamHandler`.
+  @spec relay_ended(term(), map(), Limits.t()) ::
+          {:refused | :error, atom() | String.t(), String.t()}
+  def relay_ended(code, %{hostname: hostname}, limits) do
+    case Egress.relay_refusal(code, hostname) do
+      :none ->
+        {type, message} = fetch_error(code, limits)
+        {:error, type, message}
+
+      refused ->
+        refused
     end
   end
 
@@ -353,8 +385,9 @@ defmodule Locus.Runtime.HttpHandler do
   def fetch_error(_code, _limits), do: {:http_error, "HTTP request failed"}
 
   # A refusal of the worker service's checks is recorded for the audit
-  # trail, as the runner's own are; a request that was made and failed is
-  # not a refusal.
+  # trail, as the runner's own are, and so is the engine's own refusal of
+  # the pin the relay asked for (`dns_error`, which only a pin answers); a
+  # request that was made and failed is not a refusal.
   defp refusal?(type),
     do:
       type in [
@@ -363,7 +396,8 @@ defmodule Locus.Runtime.HttpHandler do
         :method_blocked,
         :scheme_blocked,
         :domain_blocked,
-        :private_ip_blocked
+        :private_ip_blocked,
+        :dns_error
       ]
 
   # The answer's status, headers and body, reading at most `max_bytes` of

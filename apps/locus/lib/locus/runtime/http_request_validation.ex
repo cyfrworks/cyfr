@@ -19,13 +19,17 @@ defmodule Locus.Runtime.HttpRequestValidation do
   Every check before the pin is the engine's own, made from the
   assignment's edge and limits (`Locus.Runtime.EdgeGuard`). The pin is CYFR's: the
   address the URL may be reached at under the attempt's authority,
-  including its private-address policy (`Locus.Runtime.Egress.pin/3`). The engine
-  resolves no name, and the runner connects nowhere: each handler sends
-  the validated request through the runner's relay naming the pin, and
-  the relay's service end (`Locus.Runtime.Relay`) checks it again, takes it from
-  the consented rate with a `take_rate` host call of its own, so CYFR
-  counts it against the consented limit, and connects to the pinned
-  address. A runner's own `take_rate` is refused there.
+  including its private-address policy and the flows its grant declares
+  for what the run has read (`Locus.Runtime.Egress.pin/3`), asked for
+  every request. The engine resolves no name, and the runner connects
+  nowhere: each handler sends the validated request through the runner's
+  relay naming the pin, and the relay's service end (`Locus.Runtime.Relay`)
+  checks it again, takes it from the consented rate with a `take_rate`
+  host call of its own, so CYFR counts it against the consented limit,
+  asks CYFR for the request's pin once more itself and connects to the
+  address of that answer. A runner's own `take_rate` is refused there. A
+  request sent later than it was validated, as a stream's is, asks again
+  first (`repin/2`).
   A redirect's next hop to another origin than the pin it came from goes
   without any header that carries a credential
   (`Prima.Network.strip_credentials/1`).
@@ -177,15 +181,36 @@ defmodule Locus.Runtime.HttpRequestValidation do
     end
   end
 
-  # Pin through CYFR: the relay's service end keeps the pin for the
-  # attempt and connects to its address.
-  defp pin_url(host, url, purpose) do
-    case Locus.Runtime.Egress.pin(host, url, purpose: purpose) do
-      {:ok, pinned} -> {:ok, pinned}
-      {:error, :invalid_url, message} -> {:error, :invalid_request, message}
-      refusal -> refusal
+  @doc """
+  Ask CYFR again for the pin of a request `validate/6` pinned, right
+  before the request is sent, as it was asked (its purpose, and a
+  redirect's hop from the same pin), so a request sent later than it was
+  validated is decided against what the run has read by then. Answers the
+  request with its fresh pin, or a refusal as `validate/6` answers one. A
+  request naming a connection asks nothing: CYFR pins the request it makes.
+  """
+  @spec repin(validated_request(), HostClient.t()) ::
+          {:ok, validated_request()}
+          | {:error, atom(), String.t()}
+          | {:refused, atom(), String.t()}
+  def repin(%{attached: _attached} = request, %HostClient{}), do: {:ok, request}
+
+  def repin(%{pinned: pinned, url: url} = request, %HostClient{} = host) do
+    with {:ok, fresh} <- pinned_again(host, url, pinned) do
+      {:ok, %{request | ip: fresh.ip, pinned: fresh}}
     end
   end
+
+  # Pin through CYFR: the relay's service end keeps the pin for the
+  # attempt's next fetch and asks CYFR again before it connects.
+  defp pin_url(host, url, purpose),
+    do: host |> Locus.Runtime.Egress.pin(url, purpose: purpose) |> engine_url()
+
+  defp pinned_again(host, url, pinned),
+    do: host |> Locus.Runtime.Egress.repin(url, pinned) |> engine_url()
+
+  defp engine_url({:error, :invalid_url, message}), do: {:error, :invalid_request, message}
+  defp engine_url(answer), do: answer
 
   # A redirect's next hop to another origin carries none of the guest's
   # credentials: they were meant for the origin that redirected.
