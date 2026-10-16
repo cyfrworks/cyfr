@@ -38,6 +38,7 @@ import {
   openingPlan,
   pairRequestMessage,
   promptModel,
+  sealText,
   proofMessage,
   prove,
   publicKeyB64,
@@ -688,6 +689,43 @@ describe("the connection", () => {
     }
   })
 
+  test("reads the person's seal after each pending list, and shows none for a read that fails", async () => {
+    const {glass, h, deviceKey} = await glassWith({certificate})
+    await glass.start()
+    const socket = h.socket()
+    socket.onopen()
+    await proved(socket, deviceKey)
+    home(socket, standing(certificate))
+    await settle()
+
+    const answer = (intent, body) => home(socket, {protocol: device.protocol, type: "answer", id: intent.id, ...body})
+    const last = (operation) => socket.sent.filter((m) => m.operation === operation).at(-1)
+    const entry = {ref: "cnr_x", operation: "vault.create"}
+
+    answer(last("confirmation.pending"), {result: {confirmations: [entry]}})
+    await settle()
+    const read = last("seal.read")
+    assert.deepEqual(read.args, {})
+    // The list is shown with the seal read for it, not before.
+    assert.deepEqual(glass.pending, [])
+
+    answer(read, {result: {seal: {text: "quill zephyr", glyph: "✈"}}})
+    await settle()
+    assert.deepEqual(glass.seal, {text: "quill zephyr", glyph: "✈"})
+    assert.deepEqual(glass.pending, [entry])
+
+    // Read again with the next list: a refused read shows none, and the
+    // list still shows.
+    const again = glass.refresh()
+    answer(last("confirmation.pending"), {result: {confirmations: [entry]}})
+    await settle()
+    answer(last("seal.read"), {error: {class: "forbidden", message: "no"}})
+    await again
+    assert.equal(glass.seal, null)
+    assert.deepEqual(glass.pending, [entry])
+    assert.equal(socket.sent.filter((m) => m.operation === "seal.read").length, 2)
+  })
+
   test("each fact of the stream reads the pending list again; a grant's end opens it again", async () => {
     const {glass, h, deviceKey} = await glassWith({certificate})
     await glass.start()
@@ -807,6 +845,14 @@ describe("the glass's prompt", () => {
     assert.deepEqual(promptModel(entry, {webauthn: false}).offers, ["email", "oidc"])
     assert.deepEqual(promptModel({...entry, methods: []}).offers, [])
     assert.deepEqual(promptModel({...entry, methods: ["passkey"]}).offers, ["passkey"])
+  })
+
+  test("begins with the person's seal, or says that none is chosen, never a default", () => {
+    assert.equal(sealText({text: "quill zephyr", glyph: "✈"}), "quill zephyr ✈")
+    assert.equal(sealText({text: "oak", glyph: null}), "oak")
+    for (const none of [null, undefined, {}, {text: ""}, {text: 7, glyph: "✈"}]) {
+      assert.equal(sealText(none), "No seal chosen yet.", JSON.stringify(none))
+    }
   })
 
   test("names its connection's state", () => {
@@ -981,6 +1027,34 @@ describe("a glass that holds a device, opened on a pairing link", () => {
       return null
     }
   }
+
+  test("each prompt the glass draws begins with the person's seal, or the line that none is chosen", () => {
+    const saved = globalThis.document
+    globalThis.document = {createElement: (tag) => new Node(tag), createTextNode: (text) => ({text})}
+
+    try {
+      const entry = {ref: "cnr_x", operation: "vault.create", preview: {operation: "vault.create"}, methods: []}
+      const hook = Object.assign(Object.create(SystemLayer), {el: new Node("div"), codeSent: new Set()})
+
+      for (const [seal, text, state] of [
+        [{text: "quill zephyr", glyph: "✈"}, "quill zephyr ✈", "set"],
+        [null, "No seal chosen yet.", "none"]
+      ]) {
+        hook.drawGlass({status: "ready", pending: [entry, {...entry, ref: "cnr_y"}], outcome: {}, seal})
+        const prompts = hook.el.children.filter((node) => node.getAttribute("data-test") === "glass-prompt")
+        assert.equal(prompts.length, 2)
+
+        for (const prompt of prompts) {
+          const [first] = prompt.children
+          assert.equal(first.getAttribute("data-test"), "glass-seal")
+          assert.equal(first.getAttribute("data-seal"), state)
+          assert.deepEqual(first.children.map((node) => node.text), [text])
+        }
+      }
+    } finally {
+      globalThis.document = saved
+    }
+  })
 
   async function mountGlassPage({stored, replies, prepared = null, hash = "#code=UjcQhGOiIAu_9xjWI7A-Fw"}) {
     const saved = {document: globalThis.document, location: globalThis.location, history: globalThis.history, WebSocket: globalThis.WebSocket}
