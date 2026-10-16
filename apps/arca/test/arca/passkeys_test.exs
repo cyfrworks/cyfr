@@ -158,6 +158,7 @@ defmodule Arca.PasskeysTest do
 
   defp as(person), do: %Prima.Actor{user_id: person.id}
 
+  # The person's open row of a declared restore, as the transition writes it.
   defp recovering!(user_id) do
     restore_id = Prima.UUID7.generate_id("rst")
 
@@ -176,19 +177,6 @@ defmodule Arca.PasskeysTest do
       )
 
     passkey
-  end
-
-  # The person's open row of a declared restore, as the transition writes it.
-  defp recovering!(user_id) do
-    restore_id = Prima.UUID7.generate_id("rst")
-
-    Arca.Repo.insert!(%Arca.Schemas.RestorePerson{
-      restore_id: restore_id,
-      user_id: user_id,
-      open: true
-    })
-
-    restore_id
   end
 
   defp open?(user_id, restore_id) do

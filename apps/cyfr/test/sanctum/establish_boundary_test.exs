@@ -70,7 +70,10 @@ defmodule Sanctum.EstablishBoundaryTest do
   @recipes [
     ~r/\bSession\.load\(/,
     ~r/\bApiKey\.(?:validate|context_from_metadata)\(/,
-    ~r/\bTinctureAuth\.verify_frame_credential\(/
+    ~r/\bTinctureAuth\.verify_frame_credential\(/,
+    # The restore kit's credential recipe (`establish_kit/2`); `kit_proof/2`
+    # is not one — it mints the credential at the kit's own HTTP ingress.
+    ~r/\bRecovery\.kit_grant\(/
   ]
   @caller "apps/sanctum/lib/sanctum/caller.ex"
 

@@ -1060,6 +1060,18 @@ defmodule Sanctum.ApiKeyTest do
     ApiKey.rotate(confirmed, name, issuance)
   end
 
+  # The re-enable of one kind under a kit, with the row's suspended flag
+  # after it. Two clauses rather than a case inside the generated tests:
+  # each test's kind is a literal there, so the other arm of a case can
+  # never match and the compiler says so.
+  defp reenabled_under_kit(:key, ctx, key_id, _webhook, kit),
+    do: {ApiKey.reenable(ctx, key_id, kit), stored_key(key_id).suspended}
+
+  defp reenabled_under_kit(:webhook, ctx, _key_id, webhook, kit),
+    do:
+      {Sanctum.Webhook.reenable(ctx, webhook.id, kit),
+       Arca.Repo.get!(Arca.Schemas.Webhook, webhook.id).suspended}
+
   # A member whose slot was taken over by a successor writes nothing: the
   # re-enable runs under the live ownership fence, a kit's included.
   for kind <- [:key, :webhook] do
@@ -1116,15 +1128,7 @@ defmodule Sanctum.ApiKeyTest do
 
       assert :lost = Arca.ControlPlane.check_held(slot)
 
-      {answer, suspended} =
-        case kind do
-          :key ->
-            {ApiKey.reenable(ctx, key_id, kit), stored_key(key_id).suspended}
-
-          :webhook ->
-            {Sanctum.Webhook.reenable(ctx, webhook.id, kit),
-             Arca.Repo.get!(Arca.Schemas.Webhook, webhook.id).suspended}
-        end
+      {answer, suspended} = reenabled_under_kit(kind, ctx, key_id, webhook, kit)
 
       assert {:error, :not_owner} = answer
       assert suspended
