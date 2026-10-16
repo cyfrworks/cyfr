@@ -455,6 +455,9 @@ defmodule Opus do
     |> put(:activation_stamp, Keyword.get(opts, :activation_stamp))
     |> put(:client_ip, Keyword.get(opts, :client_ip))
     |> put(:execution_id, Keyword.get(opts, :execution_id))
+    # A frame-invoked root's seed (`Opus.Tincture`); a child's row starts
+    # from its parent's ledger whatever this says (`Opus.Record.new/4`).
+    |> put(:frame_sources, Keyword.get(opts, :frame_sources))
     # Only a root carries a profile; an in-chain child walks its parent's
     # authority.
     |> put(:profile_id, Keyword.get(opts, :profile_id))
