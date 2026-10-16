@@ -760,6 +760,12 @@ defmodule Prima.Refusal do
        "The account this launch was approved for has changed since it was approved, so nothing " <>
          "ran: ask again to approve it as it stands now."}
 
+  defp row(:approved_sources_moved),
+    do:
+      {:conflict,
+       "This conversation read more since the launch was approved, so nothing ran: ask again " <>
+         "to approve it with what it has read now."}
+
   defp row(:approved_grant_moved),
     do:
       {:conflict,
