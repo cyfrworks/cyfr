@@ -77,10 +77,13 @@ defmodule Sanctum.Consent.Commit do
       with them as its `admitted_origins`, and the commit digest binds them.
     * `:subset` — a narrowing: per consent-graph node, the part of the ask
       granted for each kind its enforcement point can narrow, in the wire's
-      string-keyed form (`Sanctum.Consent.Normalize.subset/3`). Each value
-      must lie inside the ask, and a limit inside the ceiling too
+      string-keyed form (`Sanctum.Consent.Normalize.subset/3`), the flows
+      kept to the node's exits (`exits`) among them. Each value must lie
+      inside the ask, and a limit inside the ceiling too
       (`Sanctum.Consent.BlobBuilder.narrow/5`); a superset is refused, since
-      granting more than the ask is the `:override` decision.
+      granting more than the ask is the `:override` decision. The blob
+      holds what a narrowing keeps, so the commit digest binds every flow
+      the revision grants.
 
   ## What preview answers
 
@@ -2655,7 +2658,8 @@ defmodule Sanctum.Consent.Commit do
       binding_digest: selection.binding_digest,
       fields: selection.fields,
       lifetime: selection.lifetime,
-      renew: selection.renew
+      renew: selection.renew,
+      need: selection_need(selection)
     })
   end
 

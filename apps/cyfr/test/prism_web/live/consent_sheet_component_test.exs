@@ -1381,6 +1381,102 @@ defmodule PrismWeb.ConsentSheetComponentTest do
     end
   end
 
+  describe "an exit's flows" do
+    setup %{conn: conn} do
+      user = test_user()
+      conn = log_in_user(conn, user)
+      athanor = seated_athanor()
+      {:ok, view, _html} = live_isolated(conn, PrismWeb.ConsentSheetComponentTest.Host)
+      local = %{Sanctum.TestContext.local() | user_id: user.user_id, athanor_id: athanor.id}
+      name = "sheet-flow-#{System.unique_integer([:positive])}"
+
+      caps = %{
+        "egress" => %{"domains" => ["api.flow.example", "cdn.flow.example"]},
+        "flows" => [
+          %{"from" => "pinned", "to" => "api.flow.example"},
+          %{"from" => "filed", "to" => "api.flow.example"}
+        ]
+      }
+
+      {:ok, _} =
+        Compendium.Registry.publish_bytes(local, @wasm, %{
+          name: name,
+          version: "0.1.0",
+          type: "catalyst",
+          description: "A component that declares flows",
+          manifest: Jason.encode!(%{"caps" => caps})
+        })
+
+      context = :sys.get_state(view.pid).socket.assigns.context
+      node = "catalyst:local.#{name}"
+      {:ok, grant} = PrismWeb.SystemLayer.grant_prompt(context, "g-flow", node)
+      send(view.pid, {:prompt, grant})
+      render(view)
+      render(view)
+
+      %{view: view, node: node}
+    end
+
+    defp toggle(view, class) do
+      view
+      |> element(
+        ~s([data-row="exits"][data-exit="api.flow.example"] input[phx-value-choice="#{class}"])
+      )
+      |> render_click()
+
+      render(view)
+    end
+
+    test "every exit is drawn, an exit with no flow among them, each class a box", %{view: view} do
+      assert has_element?(view, ~s([data-row="exits"][data-exit="api.flow.example"]), "pinned")
+      assert has_element?(view, ~s([data-row="exits"][data-exit="api.flow.example"]), "filed")
+
+      assert has_element?(
+               view,
+               ~s([data-row="exits"][data-exit="cdn.flow.example"]),
+               "nothing it reads"
+             )
+
+      for class <- ["pinned", "filed"] do
+        assert has_element?(
+                 view,
+                 ~s([data-exit="api.flow.example"] input[phx-value-choice="#{class}"][checked])
+               )
+      end
+
+      refute has_element?(view, ~s([data-exit="cdn.flow.example"] input))
+    end
+
+    test "unticking removes a flow, which the decisions send; ticking it again sends nothing",
+         %{view: view, node: node} do
+      toggle(view, "pinned")
+      refute has_element?(view, ~s([data-test="grant-refusal"]))
+
+      assert decisions(view)["subset"] == %{
+               node => %{"exits" => [%{"from" => "filed", "to" => "api.flow.example"}]}
+             }
+
+      # The preview of that decision keeps the one flow, narrowed.
+      assert has_element?(
+               view,
+               ~s([data-row="exits"][data-exit="api.flow.example"]),
+               "narrowed by you"
+             )
+
+      refute has_element?(
+               view,
+               ~s([data-exit="api.flow.example"] input[phx-value-choice="pinned"][checked])
+             )
+
+      toggle(view, "filed")
+      assert decisions(view)["subset"] == %{node => %{"exits" => []}}
+
+      toggle(view, "pinned")
+      toggle(view, "filed")
+      refute Map.has_key?(decisions(view), "subset")
+    end
+  end
+
   test "a grant for another need of the app's own calls lists the default and the account it " <>
          "removes, before the person confirms" do
     ref = "tincture:local.sheet-other-need"

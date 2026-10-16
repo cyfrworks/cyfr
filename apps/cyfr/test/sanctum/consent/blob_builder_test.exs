@@ -6,9 +6,10 @@ defmodule Sanctum.Consent.BlobBuilderTest do
   A narrowing grants the ask intersected with the subset a decision names,
   for each kind whose enforcement point can check a subset: egress domains,
   methods, schemes and private ranges, storage paths and actions, tool
-  actions, and the limits under the ceiling. A value outside the ask is
-  refused as a superset, a kind no enforcement point can narrow is refused
-  rather than shown narrowed, and what is granted is what runs.
+  actions, the limits under the ceiling, and the flows to each exit. A
+  value outside the ask is refused as a superset, a kind no enforcement
+  point can narrow is refused rather than shown narrowed, and what is
+  granted is what runs. Each edge keeps the flows whose exit it binds.
   """
 
   use ExUnit.Case, async: false
@@ -659,7 +660,9 @@ defmodule Sanctum.Consent.BlobBuilderTest do
 
       assert unprovidable == [{"absent", :undeclared}, {"signing", :no_attach}]
 
-      assert resource == %{
+      # Beside the resource rides the need it fills, which `encode/1` reads
+      # for the edge's flows and writes into no blob.
+      assert Map.delete(resource, "__decision__") == %{
                "provided" => %{
                  "destination" => %{"hosts" => ["abc.supabase.co"], "scheme" => "https"},
                  "values" => %{"k" => "v"},
@@ -691,6 +694,285 @@ defmodule Sanctum.Consent.BlobBuilderTest do
                  %{"egress" => %{"domains" => []}, "storage" => %{"paths" => []}},
                  %{}
                )
+    end
+  end
+
+  describe "flows" do
+    @flow_ref "reagent:local.flow-source"
+    @flow_caps %{
+      "egress" => %{"domains" => ["api.one.example", "*.two.example"], "methods" => ["GET"]},
+      "flows" => [
+        %{"from" => "pinned", "to" => "api.one.example"},
+        %{"from" => "filed", "to" => "api.one.example"},
+        %{"from" => "outside", "to" => "*.two.example"},
+        %{"from" => "vault_disclosed", "to" => "server:forecasts"}
+      ]
+    }
+
+    setup %{ctx: ctx} do
+      publish!(ctx, "flow-source", %{"caps" => @flow_caps})
+      :ok
+    end
+
+    defp flow(from, to), do: %{"from" => from, "to" => to}
+
+    # The preview's exits rows of the source, by exit: the classes and
+    # whether the narrowing narrowed them.
+    defp exits(rows) do
+      for %{"kind" => "exits", "node" => @flow_ref, "values" => values} = row <- rows,
+          into: %{},
+          do: {values["exit"], {values["flows"], row["narrowed"]}}
+    end
+
+    defp head_flows!(ctx, profile_id) do
+      {:ok, head} = Arca.ConsentStorage.head_consent(Sanctum.Context.actor(ctx), profile_id)
+      {:ok, blob} = Blob.parse(head.resolved_policy)
+      {:ok, ingress} = Blob.ingress(blob, @flow_ref)
+      Blob.Edge.flows(ingress)
+    end
+
+    test "the plan asks every flow declared; the grant keeps those its edge binds, and runs them",
+         %{ctx: ctx} do
+      {:ok, plan} = Plan.plan(ctx, %{ref: @flow_ref})
+
+      assert exits(plan.rows) == %{
+               "*.two.example" => {["outside"], false},
+               "api.one.example" => {["pinned", "filed"], false},
+               "server:forecasts" => {["vault_disclosed"], false}
+             }
+
+      # The grant binds no tool server, so the flow to one is not kept,
+      # and the exit is not drawn.
+      {:ok, preview} = preview(ctx, %{}, @flow_ref)
+
+      assert exits(preview.rows) == %{
+               "*.two.example" => {["outside"], false},
+               "api.one.example" => {["pinned", "filed"], false}
+             }
+
+      %{profile_id: profile_id} = walk!(ctx, %{}, @flow_ref)
+
+      assert head_flows!(ctx, profile_id) == [
+               %{from: :pinned, to: "api.one.example"},
+               %{from: :filed, to: "api.one.example"},
+               %{from: :outside, to: "*.two.example"}
+             ]
+
+      {:ok, authority} = Opus.authority_for(ctx, :default, @flow_ref)
+      assert Blob.Edge.flows(authority.resources) == head_flows!(ctx, profile_id)
+      # A flow grants no exit: the egress is the ask's, no wider.
+      assert authority.resources.egress.domains == ["*.two.example", "api.one.example"]
+    end
+
+    test "a narrowing keeps the flows it names; none named keeps all, an empty one keeps none",
+         %{ctx: ctx} do
+      kept = %{@flow_ref => %{"exits" => [flow("pinned", "api.one.example")]}}
+      {:ok, preview} = preview(ctx, kept, @flow_ref)
+
+      assert exits(preview.rows) == %{
+               "*.two.example" => {[], true},
+               "api.one.example" => {["pinned"], true}
+             }
+
+      %{profile_id: profile_id} = walk!(ctx, kept, @flow_ref)
+      assert head_flows!(ctx, profile_id) == [%{from: :pinned, to: "api.one.example"}]
+
+      {:ok, none} = preview(ctx, %{@flow_ref => %{"exits" => []}}, @flow_ref)
+
+      assert exits(none.rows) == %{
+               "*.two.example" => {[], true},
+               "api.one.example" => {[], true}
+             }
+
+      %{profile_id: none_id} = walk!(ctx, %{@flow_ref => %{"exits" => []}}, @flow_ref)
+      assert head_flows!(ctx, none_id) == []
+    end
+
+    test "a flow nobody asked for is refused, never granted", %{ctx: ctx} do
+      for flows <- [
+            [flow("vault_disclosed", "api.one.example")],
+            [flow("pinned", "other.example")],
+            [flow("pinned", "api.b.two.example")],
+            [flow("pinned", "api.one.example"), flow("outside", "need:api_key")]
+          ] do
+        assert {:error, {:invalid_argument, why}} =
+                 preview(ctx, %{@flow_ref => %{"exits" => flows}}, @flow_ref),
+               inspect(flows)
+
+        assert why =~ "does not ask for"
+      end
+
+      for malformed <- [[flow("unsettled", "api.one.example")], [%{"from" => "pinned"}], "all"] do
+        assert {:error, {:invalid_argument, why}} =
+                 preview(ctx, %{@flow_ref => %{"exits" => malformed}}, @flow_ref),
+               inspect(malformed)
+
+        assert why =~ "exits"
+      end
+    end
+
+    test "a domain the egress narrowing drops takes its flows; a host under a pattern keeps " <>
+           "the pattern's",
+         %{ctx: ctx} do
+      subset = %{@flow_ref => %{"egress" => %{"domains" => ["api.b.two.example"]}}}
+      {:ok, preview} = preview(ctx, subset, @flow_ref)
+
+      assert exits(preview.rows) == %{
+               "*.two.example" => {["outside"], false},
+               "api.b.two.example" => {[], false}
+             }
+
+      %{profile_id: profile_id} = walk!(ctx, subset, @flow_ref)
+      assert head_flows!(ctx, profile_id) == [%{from: :outside, to: "*.two.example"}]
+    end
+
+    test "equal narrowings are one digest, a changed flow another, and an old proof commits " <>
+           "no changed flow",
+         %{ctx: ctx} do
+      one = flow("pinned", "api.one.example")
+      two = flow("outside", "*.two.example")
+
+      {:ok, plain} = preview(ctx, %{}, @flow_ref)
+      {:ok, both} = preview(ctx, %{@flow_ref => %{"exits" => [one, two]}}, @flow_ref)
+      {:ok, again} = preview(ctx, %{@flow_ref => %{"exits" => [two, one, two]}}, @flow_ref)
+      {:ok, fewer} = preview(ctx, %{@flow_ref => %{"exits" => [one]}}, @flow_ref)
+      {:ok, other} = preview(ctx, %{@flow_ref => %{"exits" => [two]}}, @flow_ref)
+
+      # Ordering and repetition are one decision; each other set of flows,
+      # and the whole ask, is its own.
+      assert both.commit_digest == again.commit_digest
+      digests = Enum.map([plain, both, fewer, other], & &1.commit_digest)
+      assert length(Enum.uniq(digests)) == 4
+
+      # A decision previewed with two flows does not commit one.
+      {:ok, plan} = Plan.plan(ctx, %{ref: @flow_ref})
+
+      assert {:error, {:consent_conflict, %{cause: :digest_changed}}} =
+               Commit.commit(ctx, %{
+                 decisions: %{ref: @flow_ref, subset: %{@flow_ref => %{"exits" => [one]}}},
+                 plan_token: plan.plan_token,
+                 proof: both.proof,
+                 commit_digest: both.commit_digest,
+                 expected_consent_revision: plan.expected_consent_revision
+               })
+    end
+  end
+
+  describe "an edge's flows, as encode/1 writes them" do
+    @dep_ref "reagent:local.flow-dep"
+
+    defp json(flows), do: Prima.Flow.to_json(flows)
+
+    defp flows(edge), do: elem(Prima.Flow.parse(edge["flows"], :any), 1)
+
+    defp bound(need) do
+      BlobBuilder.vault_resource(%{
+        entry_id: "ent_1",
+        binding_digest: "sha256:" <> String.duplicate("a", 64),
+        scope: "athanor",
+        destination: %{"hosts" => ["api.one.example"], "scheme" => "https"},
+        attach: nil,
+        fields: ["api_key"],
+        scopes: [],
+        need: need
+      })
+    end
+
+    test "keep a need flow where the edge fills that need and a server flow where it grants " <>
+           "that server" do
+      asked = [
+        %{from: :pinned, to: "api.one.example"},
+        %{from: :vault_disclosed, to: "need:api_key"},
+        %{from: :vault_disclosed, to: "need:other"},
+        %{from: :outside, to: "server:github"},
+        %{from: :outside, to: "server:elsewhere"}
+      ]
+
+      server = %{
+        "server_digest" => "sha256:srv",
+        "server_name" => "github",
+        "tool_patterns" => []
+      }
+
+      limits = Prima.Limits.to_map(Prima.Limits.defaults(:reagent))
+
+      nodes = %{
+        @ref => %{
+          limits: limits,
+          resources: %{"flows" => json(asked), "__vault__" => bound("api_key")},
+          edges: %{
+            "@ingress" => %{
+              "flows" => json(asked),
+              "tool_servers" => [server],
+              "__vault__" => bound("api_key")
+            },
+            @dep_ref => %{"__dep__" => @dep_ref, "__vault__" => nil}
+          }
+        },
+        @dep_ref => %{
+          limits: limits,
+          resources: %{"flows" => json(asked), "__vault__" => nil},
+          edges: %{}
+        }
+      }
+
+      {:ok, encoded} = BlobBuilder.encode(nodes)
+      edges = Jason.decode!(encoded)["nodes"][@ref]["edges"]
+
+      assert flows(edges["@ingress"]) == [
+               %{from: :pinned, to: "api.one.example"},
+               %{from: :vault_disclosed, to: "need:api_key"},
+               %{from: :outside, to: "server:github"}
+             ]
+
+      # The dependency's edge fills no need and grants no server.
+      assert flows(edges[@dep_ref]) == [%{from: :pinned, to: "api.one.example"}]
+
+      # The blob parses, and no edge writes an empty flow list.
+      assert {:ok, _blob} = Blob.parse(encoded)
+
+      {:ok, no_flows} =
+        BlobBuilder.encode(%{
+          @ref => %{
+            limits: %{},
+            resources: %{},
+            edges: %{"@ingress" => %{"flows" => json([%{from: :pinned, to: "need:x"}])}}
+          }
+        })
+
+      refute Map.has_key?(Jason.decode!(no_flows)["nodes"][@ref]["edges"]["@ingress"], "flows")
+    end
+
+    test "a provided configuration fills its need, and keeps that need's flows" do
+      app = %{
+        "dependencies" => %{"static" => ["reagent:local.db:1.0.0"]},
+        "provides" => %{
+          "reagent:local.db:1.0.0" => %{
+            "database" => %{
+              "destination" => %{"hosts" => ["abc.supabase.co"]},
+              "values" => %{"k" => "v"}
+            }
+          }
+        }
+      }
+
+      %{covered: [{"database", resource}]} =
+        BlobBuilder.provided(app, "reagent:local.db", @dep_needs)
+
+      asked = [%{from: :filed, to: "need:database"}, %{from: :filed, to: "need:signing"}]
+
+      {:ok, encoded} =
+        BlobBuilder.encode(%{
+          @ref => %{
+            limits: %{},
+            resources: %{},
+            edges: %{"@ingress" => %{"flows" => json(asked), "__vault__" => resource}}
+          }
+        })
+
+      ingress = Jason.decode!(encoded)["nodes"][@ref]["edges"]["@ingress"]
+      assert flows(ingress) == [%{from: :filed, to: "need:database"}]
+      assert ingress["vault"]["provided"]["values"] == %{"k" => "v"}
     end
   end
 

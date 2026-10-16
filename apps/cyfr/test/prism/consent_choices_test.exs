@@ -7,7 +7,8 @@ defmodule Prism.ConsentChoicesTest do
   walk's decisions reconstruct to serializes to those decisions again,
   whole; a re-grant reopens on what the plan places, at the `now` it is
   given; a lifetime is computed from that `now`; a lowered limit is at
-  most its ask, with the sheet's own sentences.
+  most its ask, with the sheet's own sentences; a flow to an exit is only
+  ever removed or kept again, never added.
   """
 
   use ExUnit.Case, async: true
@@ -559,5 +560,75 @@ defmodule Prism.ConsentChoicesTest do
 
     assert ConsentChoices.lowered(%{"rate_requests" => "x"}, asked, %{}) ==
              {:error, "The rate must be a whole number of requests."}
+  end
+
+  describe "an exit's flows" do
+    @exits [
+      %{
+        "kind" => "exits",
+        "node" => @ref,
+        "narrowed" => false,
+        "values" => %{"exit" => "api.example.com", "flows" => ["pinned", "filed"]}
+      },
+      %{
+        "kind" => "exits",
+        "node" => @ref,
+        "narrowed" => false,
+        "values" => %{"exit" => "need:api_key", "flows" => []}
+      },
+      %{
+        "kind" => "exits",
+        "node" => @dep,
+        "narrowed" => false,
+        "values" => %{"exit" => "api.db.example", "flows" => ["outside"]}
+      },
+      %{"kind" => "egress", "node" => @ref, "narrowed" => false, "values" => %{}}
+    ]
+
+    defp flow(from, to), do: %{"from" => from, "to" => to}
+
+    test "the flows asked are each class of each of the node's exits" do
+      assert ConsentChoices.asked_flows(@exits, @ref) ==
+               [flow("pinned", "api.example.com"), flow("filed", "api.example.com")]
+
+      assert ConsentChoices.asked_flows(@exits, @dep) == [flow("outside", "api.db.example")]
+      assert ConsentChoices.asked_flows(@exits, "reagent:local.none") == []
+    end
+
+    test "a flow is removed and kept again; at the ask the narrowing names nothing" do
+      asked = ConsentChoices.asked_flows(@exits, @ref)
+      pinned = flow("pinned", "api.example.com")
+      filed = flow("filed", "api.example.com")
+      held = %{@dep => %{"tools" => []}}
+
+      removed = ConsentChoices.toggle_flow(held, @ref, asked, pinned)
+      assert removed == Map.put(held, @ref, %{"exits" => [filed]})
+
+      # Removing the last keeps none, which is an empty list, not the ask.
+      none = ConsentChoices.toggle_flow(removed, @ref, asked, filed)
+      assert none == Map.put(held, @ref, %{"exits" => []})
+
+      # Kept again, the flows come back in the ask's order, and at the
+      # whole ask the node names nothing, as if never narrowed.
+      back = ConsentChoices.toggle_flow(none, @ref, asked, filed)
+      assert back[@ref] == %{"exits" => [filed]}
+      assert ConsentChoices.toggle_flow(back, @ref, asked, pinned) == held
+
+      # The decisions carry the narrowing exactly as held.
+      assert ConsentChoices.decisions(@ref, nil, ["interactive"], removed, %{})["subset"] ==
+               removed
+    end
+
+    test "a flow the ask does not name is never added" do
+      asked = ConsentChoices.asked_flows(@exits, @ref)
+
+      for flow <- [
+            flow("vault_disclosed", "api.example.com"),
+            flow("pinned", "need:api_key"),
+            flow("outside", "api.db.example")
+          ] do
+        assert ConsentChoices.toggle_flow(%{}, @ref, asked, flow) == %{}, inspect(flow)
+      end
+    end
   end
 end

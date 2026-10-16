@@ -106,6 +106,63 @@ func TestRenderPreview_ShowsEveryRowValue(t *testing.T) {
 	}
 }
 
+// Every exit of every node is drawn on its own lines, under its node, with
+// every class its flows let reach it: two exits of one node are two
+// entries, and an exit no flow names says nothing it reads may go there.
+func TestRenderPreview_ShowsEveryExitAndItsFlows(t *testing.T) {
+	v := loadPreviewVectors(t)
+	var out bytes.Buffer
+	renderPreview(&out, v.Preview)
+	text := out.String()
+
+	_, section, found := strings.Cut(text, "\n  "+kindHeadings["exits"]+"\n")
+	if !found {
+		t.Fatalf("no exits heading in\n%s", text)
+	}
+	// The kind's entries end at the blank line before the next section.
+	section, _, _ = strings.Cut(section, "\n\n")
+	section += "\n"
+
+	exits := 0
+	perNode := map[string]int{}
+	rows, _ := v.Preview["rows"].([]any)
+	for _, raw := range rows {
+		row := raw.(map[string]any)
+		if str(row["kind"]) != "exits" {
+			continue
+		}
+		exits++
+		node := str(row["node"])
+		perNode[node]++
+		values := row["values"].(map[string]any)
+		flows := "nothing it reads"
+		if joined := joinStrings(values["flows"]); joined != "" {
+			flows = joined
+		}
+		narrowed := ""
+		if row["narrowed"] == true {
+			narrowed = " (narrowed by you)"
+		}
+		entry := "    " + node + narrowed + "\n" +
+			"      exit: " + str(values["exit"]) + " (" + exitLabel(str(values["exit"])) + ")\n" +
+			"      may carry what it read from: " + flows + "\n"
+		if !strings.Contains(section, entry) {
+			t.Errorf("exit %s of %s is not drawn as\n%s\nin\n%s", values["exit"], node, entry, section)
+		}
+	}
+
+	if got := strings.Count(section, "      exit: "); got != exits {
+		t.Errorf("%d exits drawn, the preview holds %d", got, exits)
+	}
+	several := false
+	for _, n := range perNode {
+		several = several || n > 1
+	}
+	if !several {
+		t.Errorf("the vectors hold no node with several exits")
+	}
+}
+
 // A credential row is one sentence: the app or the dependency that uses
 // it, the entry and whose it is (or the publisher's configuration), the
 // account, where it may go and whether the component holds the value;
@@ -1508,6 +1565,12 @@ func expected(row map[string]any, field string, value any) []string {
 		return nil
 	case field == "binding_key":
 		return []string{"binding: " + str(value)}
+	case field == "exit":
+		return []string{"exit: " + str(value) + " ("}
+	case field == "flows" && joinStrings(value) == "":
+		return []string{"may carry what it read from: nothing it reads"}
+	case field == "flows":
+		return []string{"may carry what it read from: " + joinStrings(value)}
 	case field == "connection":
 		return []string{"as the account '" + str(value) + "'"}
 	}

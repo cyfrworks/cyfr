@@ -4,7 +4,8 @@
 defmodule Prima.ConsentPreviewTest do
   @moduledoc """
   The consent preview as data (`tests/fixtures/consent_preview.json`): the
-  preview holding a row of every kind reads and writes back to itself; a
+  preview holding a row of every kind, one node's several exits among
+  them, reads and writes back to itself; a
   row of an unknown kind, a sentence, a narrowed kind that cannot narrow,
   an origin outside the enum and every other malformed row are refused. A
   credential row is one binding: its source, destination, disclosure,
@@ -34,9 +35,57 @@ defmodule Prima.ConsentPreviewTest do
     assert v["narrowable_kinds"] == Enum.map(ConsentPreview.narrowable_kinds(), &Atom.to_string/1)
   end
 
-  test "the kinds are these nine, in this order" do
+  test "the kinds are these ten, in this order, and five of them narrow" do
     assert vectors()["kinds"] ==
-             ~w(credential egress storage tools tool_servers limits frame streams system_actions)
+             ~w(credential egress storage tools tool_servers limits frame streams system_actions
+                exits)
+
+    assert vectors()["narrowable_kinds"] == ~w(egress storage tools limits exits)
+  end
+
+  test "an exit is one row per node and exit, naming the classes that may reach it" do
+    {:ok, %ConsentPreview{rows: rows}} = ConsentPreview.decode(vectors()["preview"])
+    exits = for %Row{kind: :exits} = row <- rows, do: row
+
+    # One node's several exits are several rows, never one.
+    weather = Enum.filter(exits, &(&1.node == "reagent:local.weather"))
+    assert length(weather) >= 3
+    identities = Enum.map(weather, &Row.identity/1)
+    assert length(Enum.uniq(identities)) == length(weather)
+
+    assert Enum.sort(Enum.map(weather, & &1.values["exit"])) ==
+             ~w(api.weather.example need:api_key server:forecasts)
+
+    # An exit no flow names is a row too, with no class.
+    assert Enum.any?(exits, &(&1.values["flows"] == []))
+
+    # Every class appears, and nothing that is no class.
+    classes = exits |> Enum.flat_map(& &1.values["flows"]) |> Enum.uniq() |> Enum.sort()
+    assert classes == Enum.sort(Enum.map(Prima.Source.classes(), &Atom.to_string/1))
+
+    # A narrowed exit says so; an exit is a kind a decision narrows.
+    assert Enum.any?(exits, & &1.narrowed)
+  end
+
+  test "an exits row is held to the flow grammar's exits and the source classes" do
+    {:ok, %ConsentPreview{rows: rows}} = ConsentPreview.decode(vectors()["preview"])
+    row = Row.encode(Enum.find(rows, &(&1.kind == :exits)))
+
+    for exit <- ["need:", "server:", "", "need:a b", "server:-x"] do
+      assert Row.decode(put_in(row, ["values", "exit"], exit)) ==
+               {:error, {:invalid_field, "exit"}},
+             inspect(exit)
+    end
+
+    for flows <- [["unsettled"], ["pinned", "pinned"], ["Pinned"], "pinned", [nil]] do
+      assert Row.decode(put_in(row, ["values", "flows"], flows)) ==
+               {:error, {:invalid_field, "flows"}},
+             inspect(flows)
+    end
+
+    for exit <- ["api.example.com", "*.example.com", "need:api_key", "server:forecasts"] do
+      assert {:ok, %Row{kind: :exits}} = Row.decode(put_in(row, ["values", "exit"], exit))
+    end
   end
 
   test "every kind decodes from its row, and only a narrowable one may be narrowed" do

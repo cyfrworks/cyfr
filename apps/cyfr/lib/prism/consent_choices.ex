@@ -7,7 +7,7 @@ defmodule Prism.ConsentChoices do
   rows (`Sanctum.Consent.Plan`) and an explicit `now`: the choices a
   grant opens with and a walk reopens on, the decisions they serialize
   to as `profile.preview` and `profile.commit` take them, a binding's
-  lifetime and a narrowed limit. They read no clock, socket, store or
+  lifetime, a narrowed limit and the flows kept to a node's exits. They read no clock, socket, store or
   process and call nothing but Prima's grammars; what a head binding
   binds, where it sits and the need it was bound for are the plan's
   (`head_bindings`), never told here again. `PrismWeb.ConsentSheetComponent`
@@ -897,6 +897,50 @@ defmodule Prism.ConsentChoices do
   end
 
   def candidates_of(need), do: List.wrap(field(need, :candidates))
+
+  @doc """
+  The flows a node's exits ask, as the plan's typed rows name them: one
+  `%{"from" => class, "to" => exit}` per class an exits row of the node
+  lets reach its exit, in the rows' order.
+  """
+  @spec asked_flows([map()], String.t()) :: [%{String.t() => String.t()}]
+  def asked_flows(rows, node) when is_list(rows) do
+    for %{"kind" => "exits", "node" => ^node, "values" => %{"exit" => exit, "flows" => classes}} <-
+          rows,
+        class <- List.wrap(classes),
+        do: %{"from" => class, "to" => exit}
+  end
+
+  @doc """
+  The narrowing `subset` with one asked flow of `node` toggled: a flow
+  the grant keeps is removed, and one it dropped is kept again. A person
+  only removes flows, so a flow `asked` does not name changes nothing.
+  The flows kept are the node's `exits` narrowing, which names nothing
+  while it keeps every flow asked, and an empty list once it keeps none.
+  """
+  @spec toggle_flow(map(), String.t(), [map()], map()) :: map()
+  def toggle_flow(subset, node, asked, %{"from" => _, "to" => _} = flow)
+      when is_map(subset) and is_list(asked) do
+    if flow in asked do
+      granted = get_in(subset, [node, "exits"]) || asked
+
+      chosen =
+        if flow in granted,
+          do: List.delete(granted, flow),
+          else: Enum.filter(asked, &(&1 in [flow | granted]))
+
+      record = Map.get(subset, node, %{})
+
+      record =
+        if Enum.sort(chosen) == Enum.sort(asked),
+          do: Map.delete(record, "exits"),
+          else: Map.put(record, "exits", chosen)
+
+      if record == %{}, do: Map.delete(subset, node), else: Map.put(subset, node, record)
+    else
+      subset
+    end
+  end
 
   @doc "The limits of a limits row the person can lower, the rate's count among them."
   @spec lowerable(map()) :: [String.t()]

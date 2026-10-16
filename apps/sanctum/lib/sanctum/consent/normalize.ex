@@ -367,29 +367,32 @@ defmodule Sanctum.Consent.Normalize do
     end
   end
 
-  # The kinds a subset may name, each with the fields it narrows; `tools`
-  # and the limits are their own shapes below.
+  # The kinds a subset may name, each with the fields it narrows; `tools`,
+  # the limits and the exits are their own shapes below.
   @subset_sets %{
     "egress" => ~w(domains methods schemes private_ips),
     "storage" => ~w(paths actions)
   }
-  @subset_kinds ~w(egress storage tools limits)
+  @subset_kinds ~w(egress storage tools limits exits)
   @limit_integers ~w(max_memory_bytes max_request_size max_response_size max_concurrent_tasks)
   @limit_durations ~w(timeout batch_timeout)
 
   @doc false
   # A narrowing, per consent-graph node: a record of the kinds whose
   # enforcement point can check a subset (`egress`, `storage`, `tools`,
-  # `limits`), each naming only the fields it narrows. The shape alone is
-  # checked here; whether each value lies inside the ask and the ceiling is
-  # the builder's, which knows the ask (`Sanctum.Consent.BlobBuilder`).
+  # `limits`, `exits`), each naming only the fields it narrows. The shape
+  # alone is checked here; whether each value lies inside the ask and the
+  # ceiling is the builder's, which knows the ask
+  # (`Sanctum.Consent.BlobBuilder`).
   #
-  # Sets are sorted and deduplicated. A field left out keeps its ask and is
-  # absent here too, while an explicit empty set grants none and stays an
-  # empty set, so the two never read alike. A kind or node that names no
-  # field names nothing and is dropped, so a decision spelled with empty
-  # records is the same input as one without them. Answers `%{}` when the
-  # map carries no subset.
+  # Sets are sorted and deduplicated, and `exits` — the flows kept, each
+  # `{"from": class, "to": exit}` (`Prima.Flow`) — is a flow set in its
+  # canonical JSON. A field left out keeps its ask and is absent here too,
+  # while an explicit empty set grants none and stays an empty set, so the
+  # two never read alike. A kind or node that names no field names nothing
+  # and is dropped, so a decision spelled with empty records is the same
+  # input as one without them. Answers `%{}` when the map carries no
+  # subset.
   def subset(map, key, tag) do
     case Map.get(map, key, %{}) do
       subset when is_map(subset) and not is_struct(subset) ->
@@ -444,6 +447,24 @@ defmodule Sanctum.Consent.Normalize do
   end
 
   defp subset_kind(node, "limits", value, tag), do: subset_limits(node, value, tag)
+
+  # The flows a person keeps of those asked, never one asked by nobody;
+  # that each lies inside the ask is the builder's to check.
+  defp subset_kind(node, "exits", value, tag) when is_list(value) do
+    case Prima.Flow.parse(value, :any) do
+      {:ok, flows} ->
+        {:ok, Prima.Flow.to_json(flows)}
+
+      {:error, _reason} ->
+        {:error,
+         {tag, :subset, "#{node} exits must be a list of flows, each a from class and a to exit"}}
+    end
+  end
+
+  defp subset_kind(node, "exits", _value, tag),
+    do:
+      {:error,
+       {tag, :subset, "#{node} exits must be a list of flows, each a from class and a to exit"}}
 
   defp subset_kind(node, kind, _value, tag) when is_binary(kind) do
     if kind in Enum.map(Prima.ConsentPreview.kinds(), &Atom.to_string/1) do

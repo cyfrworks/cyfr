@@ -763,6 +763,76 @@ defmodule Prima.Authority.BlobTest do
     end
   end
 
+  # ============================================================================
+  # Flows
+  # ============================================================================
+
+  describe "an edge's flows" do
+    @source "#{@catalyst}|source"
+
+    defp flowing(flows),
+      do: put_in(golden(), ["nodes", @formula, "edges", @source, "flows"], flows)
+
+    test "parse to the edge's flow set, and write back as the stored edge holds them" do
+      flows = [
+        %{"from" => "pinned", "to" => "prod.supabase.co"},
+        %{"from" => "outside", "to" => "server:github"},
+        %{"from" => "vault_disclosed", "to" => "need:source"}
+      ]
+
+      blob = parse!(flowing(flows))
+      edge = blob.nodes[@formula].edges[@source]
+
+      assert Edge.flows(edge) == [
+               %{from: :pinned, to: "prod.supabase.co"},
+               %{from: :vault_disclosed, to: "need:source"},
+               %{from: :outside, to: "server:github"}
+             ]
+
+      # Written back in the set's own order, and read again as the same blob.
+      written = Blob.to_map(blob)
+
+      assert get_in(written, ["nodes", @formula, "edges", @source, "flows"]) ==
+               Prima.Flow.to_json(edge.flows)
+
+      assert Blob.parse(written) == {:ok, blob}
+
+      # An edge with no flows writes none, and reads as none.
+      assert Edge.flows(blob.nodes[@formula].edges["@ingress"]) == []
+      refute Map.has_key?(get_in(written, ["nodes", @formula, "edges", "@ingress"]), "flows")
+      assert Edge.flows(nil) == []
+    end
+
+    test "that are empty, repeat a flow, or break the grammar are refused" do
+      for flows <- [
+            [],
+            [
+              %{"from" => "pinned", "to" => "prod.supabase.co"},
+              %{"from" => "pinned", "to" => "prod.supabase.co"}
+            ],
+            [%{"from" => "unsettled", "to" => "prod.supabase.co"}],
+            [%{"from" => "pinned", "to" => "server:"}],
+            [%{"from" => "pinned", "to" => "prod.supabase.co", "why" => "x"}],
+            [%{"from" => "pinned"}],
+            ["pinned>prod.supabase.co"],
+            %{"from" => "pinned", "to" => "prod.supabase.co"}
+          ] do
+        assert {:error, {:invalid_resource, @formula, @source, :flows, _why}} =
+                 Blob.parse(flowing(flows)),
+               inspect(flows)
+      end
+    end
+
+    test "grant no exit: an edge's domains, servers and vault are what they were" do
+      flows = [%{"from" => "pinned", "to" => "elsewhere.example"}]
+      edge = parse!(flowing(flows)).nodes[@formula].edges[@source]
+      plain = parse!(golden()).nodes[@formula].edges[@source]
+
+      assert %{edge | flows: []} == plain
+      assert Edge.domains(edge) == ["prod.supabase.co"]
+    end
+  end
+
   defp node_stub do
     %{"limits" => limits_map(), "edges" => %{}}
   end

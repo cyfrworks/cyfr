@@ -24,6 +24,13 @@ defmodule Sanctum.Consent.ShapeDerivation do
   limits are omitted: declaring nothing and asking for nothing are the
   same shape.
 
+  A component's exits and flows (`Prima.Flow`) are shape too: `"flows"`
+  lists each declared flow as `<class>><exit>` (a class spells no `>`, so
+  each string is one flow), and `"tincture.connect"` the origins a
+  tincture's frame may reach (`Prima.Manifest.Tincture.connect/1`), which
+  are exits of that frame. A version that declares another flow or origin
+  asks again; one that declares none keeps the digest it had.
+
   A stored manifest that does not decode has no shape: every entry here
   answers `{:error, {:corrupt, {:manifest, source_ref}}}` for it, never the
   empty ask, which would read as a component that asks for nothing.
@@ -127,7 +134,7 @@ defmodule Sanctum.Consent.ShapeDerivation do
          scope: :versionless,
          source_ref: source_ref,
          needs: digest_needs(needs),
-         caps: digest_caps(caps),
+         caps: digest_caps(caps, Tincture.connect(manifest)),
          tool_actions: expand_tools(caps.tools),
          slots: Enum.sort(Enum.map(needs, & &1.name)),
          dependency_releases: releases
@@ -392,7 +399,7 @@ defmodule Sanctum.Consent.ShapeDerivation do
   defp non_empty([]), do: nil
   defp non_empty(list), do: list
 
-  defp digest_caps(caps) do
+  defp digest_caps(caps, connect) do
     %{}
     |> put_list("egress.domains", caps.egress.domains)
     |> put_list("egress.methods", caps.egress.methods)
@@ -400,6 +407,8 @@ defmodule Sanctum.Consent.ShapeDerivation do
     |> put_list("egress.private_ips", caps.egress.private_ips)
     |> put_list("storage.paths", caps.storage.paths)
     |> put_list("storage.actions", caps.storage.actions)
+    |> put_list("flows", Enum.map(caps.flows, &"#{&1.from}>#{&1.to}"))
+    |> put_list("tincture.connect", connect)
     |> put_limits(caps.limits)
   end
 

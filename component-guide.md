@@ -577,11 +577,16 @@ The declared capability **ask**. `caps` is never applied by itself — it is ren
 | `limits.timeout`, `limits.batch_timeout` | string | Durations like `"30s"`, `"3m"` |
 | `limits.max_memory_bytes`, `.max_request_size`, `.max_response_size`, `.max_concurrent_tasks` | int | Positive integers |
 | `limits.rate_limit` | object | `{"requests": N, "window": "1m"}` |
+| `flows` | object[] | Which source classes may reach which exit, each `{"from": class, "to": exit}`. `from` is one of `pinned`, `filed`, `files_by_grant`, `vault_disclosed`, `outside`. `to` is an exit: a domain `egress.domains` names (for a tincture, also an origin `tincture.connect` names), spelled exactly as declared; `need:<name>` for a credential need the `needs` block declares; or `server:<name>` for a tool server a consent may bind. A `from` that is no class, a `to` the manifest does not declare, or an entry with other keys is refused at registration. See [Flows](#flows-capsflows) |
 
 ```json
 "caps": {
   "egress": { "domains": ["api.anthropic.com"], "methods": ["GET", "POST"] },
-  "limits": { "timeout": "3m", "rate_limit": { "requests": 100, "window": "1m" } }
+  "limits": { "timeout": "3m", "rate_limit": { "requests": 100, "window": "1m" } },
+  "flows": [
+    { "from": "pinned", "to": "api.anthropic.com" },
+    { "from": "filed", "to": "api.anthropic.com" }
+  ]
 }
 ```
 
@@ -1182,6 +1187,14 @@ Patterns are `"*"`, exact (`"execution.run"`), or prefix globs (`"component.*"`)
 **Memory and tables.** The engine gives a run one linear memory, which grows no further than the consented `max_memory_bytes` (64 MiB when unasked, at most the platform ceiling's 256 MiB), and at most ten tables of 20,000 elements each, in at most ten instances. A component that declares a second memory, more tables, or a memory or table larger than that is refused when it is instantiated, as `resource_limit`. A `memory.grow` (or `table.grow`) past the bound is refused as WebAssembly specifies: the instruction answers the guest `-1` and the run goes on, so an allocator that cannot grow fails the way its language reports an allocation failure — usually a trap — rather than with `resource_limit`.
 
 **Refused features.** A component may not use the component-model async features (async lifts and lowers, their callbacks, streams, futures and the other async builtins), GC or its reference types (`struct`, `array`, `externref` and the other GC-heap types), or exception handling (tags, `throw`, `try_table`). Each is refused when the component is published, registered or built, and again before it is compiled, with one sentence naming the component's digest. The engine's Wasmtime release has open security advisories in exactly these features, and a GC heap would sit outside the one linear memory above; the refusal lifts with a Wasmtime release that fixes them. The shipped components use none of them. Check yours with `wasm-tools validate --features=-cm-async,-cm-async-stackful,-cm-more-async-builtins,-cm-error-context,-cm-threading,-gc,-gc-types,-exceptions,-legacy-exceptions <component>.wasm`.
+
+### Flows (`caps.flows`)
+
+Every run keeps a ledger of the source classes it has read: `pinned` and `filed` (what the person pinned or filed), `files_by_grant` (storage a grant reaches), `vault_disclosed` (a vault value disclosed to the component) and `outside` (anything from outside, named by its tool, host or feed). A run starts with the classes of the turn or parent that started it, a child's classes join its parent's before any of the child's bytes reach it, and anything with no recorded source counts as `outside`.
+
+An exit is a place the component's bytes can leave: each egress domain, each credential need (`need:<name>`), each tool server its consent binds (`server:<name>`) and, for a tincture, each `tincture.connect` origin. A flow `{"from": class, "to": exit}` lets material of that class go to that exit. The consent sheet shows every exit with the classes allowed to reach it. The person may untick any of them but can never add one, and the consent binds what they keep. A host narrowed under a declared pattern keeps that pattern's flows.
+
+A flow only lets material reach an exit the grant already allows. It grants no domain, method, credential, tool server or storage path. Once a run's ledger holds a class, a request to an exit with no flow for that class is refused, and the refusal is recorded. Ordinary fetches and attached fetches are both checked. The refusal names the classes and the host or server, never the URL. A component that declares no flows keeps working until its run reads a source, so declare a flow for every class your requests may carry. Material a host returned may always go back to that same host, matched by its exact name, never by a wildcard pattern. A `need:` flow is shown and bound and decides no request: an attached request is decided by the flow to its destination domain, since the credential it carries is never disclosed to the component.
 
 ### Versionless by default
 

@@ -3716,10 +3716,11 @@ func (args *ProfileCommitArgsDecisionsToolServersItem) UnmarshalJSON(data []byte
 }
 
 type ProfileCommitArgsDecisionsSubsetItem struct {
-	Egress  Field[ProfileCommitArgsDecisionsSubsetItemEgress]  `json:"egress,omitzero"`
-	Storage Field[ProfileCommitArgsDecisionsSubsetItemStorage] `json:"storage,omitzero"`
-	Tools   Field[[]string]                                    `json:"tools,omitzero"`
-	Limits  Field[ProfileCommitArgsDecisionsSubsetItemLimits]  `json:"limits,omitzero"`
+	Egress  Field[ProfileCommitArgsDecisionsSubsetItemEgress]      `json:"egress,omitzero"`
+	Storage Field[ProfileCommitArgsDecisionsSubsetItemStorage]     `json:"storage,omitzero"`
+	Tools   Field[[]string]                                        `json:"tools,omitzero"`
+	Limits  Field[ProfileCommitArgsDecisionsSubsetItemLimits]      `json:"limits,omitzero"`
+	Exits   Field[[]ProfileCommitArgsDecisionsSubsetItemExitsItem] `json:"exits,omitzero"`
 }
 
 // UnmarshalJSON refuses unknown fields and preserves required presence.
@@ -3801,6 +3802,22 @@ func (args *ProfileCommitArgsDecisionsSubsetItemLimitsRateLimit) UnmarshalJSON(d
 		return err
 	}
 	*args = ProfileCommitArgsDecisionsSubsetItemLimitsRateLimit(value)
+	return nil
+}
+
+type ProfileCommitArgsDecisionsSubsetItemExitsItem struct {
+	From string `json:"from"`
+	To   string `json:"to"`
+}
+
+// UnmarshalJSON refuses unknown fields and preserves required presence.
+func (args *ProfileCommitArgsDecisionsSubsetItemExitsItem) UnmarshalJSON(data []byte) error {
+	type fields ProfileCommitArgsDecisionsSubsetItemExitsItem
+	var value fields
+	if err := decodeRecord(data, &value); err != nil {
+		return err
+	}
+	*args = ProfileCommitArgsDecisionsSubsetItemExitsItem(value)
 	return nil
 }
 
@@ -4077,10 +4094,11 @@ func (args *ProfilePreviewArgsDecisionsToolServersItem) UnmarshalJSON(data []byt
 }
 
 type ProfilePreviewArgsDecisionsSubsetItem struct {
-	Egress  Field[ProfilePreviewArgsDecisionsSubsetItemEgress]  `json:"egress,omitzero"`
-	Storage Field[ProfilePreviewArgsDecisionsSubsetItemStorage] `json:"storage,omitzero"`
-	Tools   Field[[]string]                                     `json:"tools,omitzero"`
-	Limits  Field[ProfilePreviewArgsDecisionsSubsetItemLimits]  `json:"limits,omitzero"`
+	Egress  Field[ProfilePreviewArgsDecisionsSubsetItemEgress]      `json:"egress,omitzero"`
+	Storage Field[ProfilePreviewArgsDecisionsSubsetItemStorage]     `json:"storage,omitzero"`
+	Tools   Field[[]string]                                         `json:"tools,omitzero"`
+	Limits  Field[ProfilePreviewArgsDecisionsSubsetItemLimits]      `json:"limits,omitzero"`
+	Exits   Field[[]ProfilePreviewArgsDecisionsSubsetItemExitsItem] `json:"exits,omitzero"`
 }
 
 // UnmarshalJSON refuses unknown fields and preserves required presence.
@@ -4162,6 +4180,22 @@ func (args *ProfilePreviewArgsDecisionsSubsetItemLimitsRateLimit) UnmarshalJSON(
 		return err
 	}
 	*args = ProfilePreviewArgsDecisionsSubsetItemLimitsRateLimit(value)
+	return nil
+}
+
+type ProfilePreviewArgsDecisionsSubsetItemExitsItem struct {
+	From string `json:"from"`
+	To   string `json:"to"`
+}
+
+// UnmarshalJSON refuses unknown fields and preserves required presence.
+func (args *ProfilePreviewArgsDecisionsSubsetItemExitsItem) UnmarshalJSON(data []byte) error {
+	type fields ProfilePreviewArgsDecisionsSubsetItemExitsItem
+	var value fields
+	if err := decodeRecord(data, &value); err != nil {
+		return err
+	}
+	*args = ProfilePreviewArgsDecisionsSubsetItemExitsItem(value)
 	return nil
 }
 

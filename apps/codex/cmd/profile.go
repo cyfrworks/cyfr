@@ -1482,7 +1482,7 @@ func unresolvedPlan(plan map[string]any) (string, bool) {
 // (tests/fixtures/consent_preview.json holds them).
 var previewKinds = []string{
 	"credential", "egress", "storage", "tools", "tool_servers",
-	"limits", "frame", "streams", "system_actions",
+	"limits", "frame", "streams", "system_actions", "exits",
 }
 
 var kindHeadings = map[string]string{
@@ -1495,6 +1495,7 @@ var kindHeadings = map[string]string{
 	"frame":          "Its frame",
 	"streams":        "Streams it listens to",
 	"system_actions": "System actions it may call",
+	"exits":          "Where what it reads may go",
 }
 
 // renderPreview draws a Prima.ConsentPreview's typed rows in the terminal,
@@ -1641,10 +1642,27 @@ func describeRow(row map[string]any) []string {
 	case "system_actions":
 		return []string{node, "actions: " + listOr(values["actions"], "none")}
 
+	case "exits":
+		return []string{node + narrowed,
+			"exit: " + str(values["exit"]) + " (" + exitLabel(str(values["exit"])) + ")",
+			"may carry what it read from: " + listOr(values["flows"], "nothing it reads")}
+
 	default:
 		raw, _ := json.Marshal(values)
 		return []string{fmt.Sprintf("%s %s: %s", str(row["kind"]), node, raw)}
 	}
+}
+
+// exitLabel says what kind of place an exit is: where a credential goes, a
+// tool server, or a network destination.
+func exitLabel(exit string) string {
+	if need, ok := strings.CutPrefix(exit, "need:"); ok {
+		return "where its " + need + " credential goes"
+	}
+	if server, ok := strings.CutPrefix(exit, "server:"); ok {
+		return "the tool server " + server
+	}
+	return "a network destination"
 }
 
 // removalLine is one binding of the head the grant removes: the need it

@@ -36,17 +36,34 @@ defmodule Sanctum.Consent.BlobBuilder do
   `vault_resource/1` carries them beside the resource, `encode/1` writes
   none of it, and `vault_refs/1` answers them on each binding's row.
 
+  ## Flows
+
+  Every edge into a node carries the flows (`Prima.Flow`) the node's
+  `caps.flows` declares, keeping only those whose exit the edge binds
+  (`Prima.Flow.bound/2`): a domain flow while one of the edge's egress
+  domains is its pattern or lies under it, or while its exit is a
+  tincture's connect origin, which no egress domain binds; a need flow
+  while the edge's vault resource is bound, selected or provided for that
+  need; and a server flow while the edge grants that tool server, which
+  only the source's ingress edge does. A flow lets material reach an exit
+  the edge otherwise allows: it grants no domain, method, credential,
+  tool server or storage path. An edge that keeps no flow writes none.
+
   ## Narrowing
 
   `opts[:subset]` narrows the ask per node (`narrow/5`): each kind whose
   enforcement point checks a subset — egress domains, methods, schemes and
-  private ranges, storage paths and actions, tool actions, and the limits —
-  takes the values the subset names, each of which must lie inside the ask,
-  and the limits inside the platform ceiling too. A value outside is refused
-  as a superset; granting more than the ask is the override decision, never
-  a narrowing. A field the subset leaves out keeps its ask, and an empty set
-  grants none. Credentials, tool servers and a tincture's declarations are
-  granted whole or not at all, so a subset cannot name them
+  private ranges, storage paths and actions, tool actions, the limits and
+  the flows to the node's exits — takes the values the subset names, each
+  of which must lie inside the ask, and the limits inside the platform
+  ceiling too. A value outside is refused as a superset; granting more
+  than the ask is the override decision, never a narrowing. A field the
+  subset leaves out keeps its ask, and an empty set grants none: a subset
+  that names no `exits` keeps every flow asked, and an empty one keeps
+  none. A domain the egress narrowing drops takes its flows with it, and
+  a domain narrowed under a declared pattern keeps that pattern's flows.
+  Credentials, tool servers and a tincture's declarations are granted
+  whole or not at all, so a subset cannot name them
   (`Sanctum.Consent.Normalize.subset/3`).
 
   Inside the ask means inside it as its enforcement point reads it: a
@@ -61,13 +78,17 @@ defmodule Sanctum.Consent.BlobBuilder do
   ## Preview rows
 
   `ask_rows/2` and `grant_rows/4` answer the typed rows of
-  `Prima.ConsentPreview` in their JSON form for the resources, the limits
-  and a tincture's declarations: the ask a plan shows, and the grant a
-  built blob holds. A node whose ask names every tool (`"*"`) and whose
-  grant is that whole ask has one wildcard tools row, as the grant states
-  it, rather than the catalog it expands to. The commit adds the rows only
-  it can name, the credentials, each with the edge it rides, and the tool
-  servers, and `order_rows/1` puts every row in one order.
+  `Prima.ConsentPreview` in their JSON form for the resources, the limits,
+  the exits and a tincture's declarations: the ask a plan shows, and the
+  grant a built blob holds. A node whose ask names every tool (`"*"`) and
+  whose grant is that whole ask has one wildcard tools row, as the grant
+  states it, rather than the catalog it expands to. A node's exits rows
+  are one per exit of its edge — each egress domain, each tool server it
+  grants, each connect origin of a tincture and each exit a flow names —
+  with the classes its flows let reach that exit as declared. The commit
+  adds the rows only it can name, the credentials, each with the edge it
+  rides, and the tool servers, and `order_rows/1` puts every row in one
+  order.
   """
 
   alias Prima.Authority.Blob
@@ -217,7 +238,7 @@ defmodule Sanctum.Consent.BlobBuilder do
           {:ok, resources, limits, kinds} ->
             acc =
               acc
-              |> put_node_resources(source_ref, node_key, resources)
+              |> put_node_resources(source_ref, node_key, {asked, resources, record})
               |> put_in([node_key, "limits"], limits)
 
             {:cont, {:ok, acc, put_narrowed(narrowed, node_key, kinds)}}
@@ -251,8 +272,12 @@ defmodule Sanctum.Consent.BlobBuilder do
     end)
   end
 
-  defp put_node_resources(nodes, source_ref, node_key, resources) do
+  # Every edge into the node takes the narrowed resources. Its flows are
+  # its own, since a need or server flow is bound edge by edge: each edge
+  # keeps those of its flows the narrowing keeps, read against its own.
+  defp put_node_resources(nodes, source_ref, node_key, {asked, resources, record}) do
     narrowed = Map.take(resources || %{}, @resource_kinds)
+    domains = {domains_of(asked), domains_of(resources)}
 
     Map.new(nodes, fn {from, node} ->
       edges =
@@ -263,11 +288,21 @@ defmodule Sanctum.Consent.BlobBuilder do
               {:ok, target} -> target == node_key
             end
 
-          {key, if(into?, do: Map.merge(edge, narrowed), else: edge)}
+          {key, if(into?, do: narrowed_edge(edge, narrowed, domains, record), else: edge)}
         end)
 
       {from, Map.put(node, "edges", edges)}
     end)
+  end
+
+  defp narrowed_edge(edge, narrowed, {asked_domains, domains}, record) do
+    flows =
+      edge
+      |> flows_of()
+      |> keep_chosen(chosen_flows(record))
+      |> rebind(asked_domains, domains)
+
+    edge |> Map.merge(narrowed) |> put_flows(flows)
   end
 
   defp subset_nodes(subset, graph) do
@@ -308,7 +343,7 @@ defmodule Sanctum.Consent.BlobBuilder do
         edges =
           Map.new(node.edges, fn
             {"@ingress" = key, resources} ->
-              {key, resources |> finalize_edge() |> place_vault(node_key, key)}
+              {key, resources |> finalize_edge() |> bind_flows() |> place_vault(node_key, key)}
 
             {dep_key, %{"__dep__" => dep_key} = placeholder} ->
               # A dep key the activation graph does not carry is a
@@ -327,6 +362,7 @@ defmodule Sanctum.Consent.BlobBuilder do
                    dep.resources
                    |> Map.put("__vault__", vault)
                    |> finalize_edge()
+                   |> bind_flows()
                    |> place_vault(node_key, dep_key)}
               end
           end)
@@ -484,14 +520,21 @@ defmodule Sanctum.Consent.BlobBuilder do
   selection for `vault_refs/1`, and are written into no blob.
   """
   @spec vault_resource(map()) :: map()
-  def vault_resource(%{provided: %{destination: destination, values: values, attach: attach}}) do
-    %{
+  def vault_resource(
+        %{provided: %{destination: destination, values: values, attach: attach}} = provided
+      ) do
+    resource = %{
       "provided" => %{
         "destination" => destination,
         "values" => values,
         "attach" => attach
       }
     }
+
+    case Map.get(provided, :need) do
+      need when is_binary(need) -> Map.put(resource, @decision, %{need: need})
+      _unnamed -> resource
+    end
   end
 
   def vault_resource(%{via: label} = selection) when is_binary(label) do
@@ -528,8 +571,14 @@ defmodule Sanctum.Consent.BlobBuilder do
     |> Map.put(@decision, decision(binding))
   end
 
+  # The need a binding fills rides beside its lifetime, so the edge it
+  # sits on keeps the flows to that need's exit (`bind_flows/1`).
   defp decision(binding) do
-    %{lifetime: Map.get(binding, :lifetime) || @standing, renew: Map.get(binding, :renew, false)}
+    %{
+      lifetime: Map.get(binding, :lifetime) || @standing,
+      renew: Map.get(binding, :renew, false),
+      need: Map.get(binding, :need)
+    }
   end
 
   defp projection_map(fields, scopes) do
@@ -574,7 +623,8 @@ defmodule Sanctum.Consent.BlobBuilder do
                 destination: Prima.Destination.to_map(entry.destination),
                 values: entry.values,
                 attach: Prima.Manifest.Needs.attach_to_map(rule)
-              }
+              },
+              need: name
             })
 
           %{acc | covered: acc.covered ++ [{name, resource}]}
@@ -724,7 +774,9 @@ defmodule Sanctum.Consent.BlobBuilder do
 
   # The declared ask becomes the granted resources at this grain (the
   # operator's per-need decisions refine it at commit). Schemes absent
-  # means https-only — the one place the default materializes.
+  # means https-only — the one place the default materializes. The flows
+  # asked are every flow the manifest declares, each to an exit it
+  # declares; which of them an edge keeps is `bind_flows/1`'s.
   defp resource_map_from_caps(caps) do
     %{
       "egress" => %{
@@ -739,6 +791,7 @@ defmodule Sanctum.Consent.BlobBuilder do
       },
       "tools" => Sanctum.Consent.ShapeDerivation.expand_tools(caps.tools)
     }
+    |> put_flows(caps.flows)
   end
 
   @doc """
@@ -758,12 +811,14 @@ defmodule Sanctum.Consent.BlobBuilder do
     with {:ok, egress} <- narrow_sets(node_key, "egress", kind(resources, "egress"), subset),
          {:ok, storage} <- narrow_sets(node_key, "storage", kind(resources, "storage"), subset),
          {:ok, tools} <- narrow_tools(node_key, kind(resources, "tools"), subset["tools"]),
-         {:ok, narrowed_limits} <- narrow_limits(node_key, limits, subset["limits"], ceiling) do
+         {:ok, narrowed_limits} <- narrow_limits(node_key, limits, subset["limits"], ceiling),
+         {:ok, flows} <- narrow_flows(node_key, resources, egress, subset) do
       narrowed_resources =
         resources
         |> put_kind("egress", egress)
         |> put_kind("storage", storage)
         |> put_kind("tools", tools)
+        |> put_narrowed_flows(resources, flows)
 
       changed =
         for kind <- @resource_kinds,
@@ -776,12 +831,139 @@ defmodule Sanctum.Consent.BlobBuilder do
           do: changed ++ ["limits"],
           else: changed
 
+      changed =
+        if Map.has_key?(subset, "exits") and flows != flows_of(resources),
+          do: changed ++ ["exits"],
+          else: changed
+
       {:ok, narrowed_resources, narrowed_limits, changed}
     end
   end
 
   defp kind(nil, _kind), do: nil
   defp kind(resources, kind), do: Map.get(resources, kind)
+
+  # ---- flows ------------------------------------------------------------------
+
+  # The flows an ask, an edge or a narrowing holds, in the blob's JSON form,
+  # read as a `Prima.Flow` set; none for one that holds none. Every such
+  # value was written here, or parsed as a blob, so it reads.
+  defp flows_of(nil), do: []
+
+  defp flows_of(resources) do
+    case Prima.Flow.parse(Map.get(resources, "flows"), :any) do
+      {:ok, flows} -> flows
+      {:error, _unread} -> []
+    end
+  end
+
+  # An edge that keeps no flow carries none: the blob grammar writes no
+  # empty resource.
+  defp put_flows(resources, []), do: Map.delete(resources, "flows")
+  defp put_flows(resources, flows), do: Map.put(resources, "flows", Prima.Flow.to_json(flows))
+
+  # A narrowing writes flows only where the ask had a place for them, so
+  # an ask that holds none reads back unchanged.
+  defp put_narrowed_flows(nil, _resources, _flows), do: nil
+
+  defp put_narrowed_flows(narrowed, resources, flows) do
+    if Map.has_key?(resources || %{}, "flows") or flows != [],
+      do: put_flows(narrowed, flows),
+      else: narrowed
+  end
+
+  # The flows a record keeps: every one asked when it names no `exits`,
+  # else the flows it names (`Sanctum.Consent.Normalize.subset/3` reads
+  # them first, so a narrowing that reaches here names flows).
+  defp chosen_flows(%{"exits" => chosen}) do
+    case Prima.Flow.parse(chosen, :any) do
+      {:ok, flows} -> {:ok, flows}
+      {:error, _reason} -> :error
+    end
+  end
+
+  defp chosen_flows(_record), do: {:ok, :all}
+
+  defp keep_chosen(flows, {:ok, :all}), do: flows
+  defp keep_chosen(flows, {:ok, chosen}), do: Enum.filter(flows, &(&1 in chosen))
+  defp keep_chosen(_flows, :error), do: []
+
+  # The flows a narrowing keeps: those it names, each asked (a flow asked
+  # by nobody is a superset), or every one asked when it names none; then
+  # whichever of them the narrowed egress still binds.
+  defp narrow_flows(node_key, resources, egress, subset) do
+    asked = flows_of(resources)
+    chosen = chosen_flows(subset)
+
+    case chosen do
+      {:ok, :all} -> {:ok, []}
+      {:ok, flows} -> {:ok, flows -- asked}
+      :error -> :error
+    end
+    |> case do
+      {:ok, []} ->
+        kept = keep_chosen(asked, chosen)
+        {:ok, rebind(kept, domains_of(resources), (egress && egress["domains"]) || [])}
+
+      {:ok, [outside | _]} ->
+        superset(node_key, "the flow of #{outside.from} to #{shown(outside.to)}")
+
+      :error ->
+        {:error,
+         {:invalid_argument,
+          "The narrowing of #{node_key} names exits that are not flows, each a from class " <>
+            "and a to exit"}}
+    end
+  end
+
+  defp domains_of(nil), do: []
+  defp domains_of(resources), do: get_in(resources, ["egress", "domains"]) || []
+
+  # The flows still bound once the egress domains are `domains`
+  # (`Prima.Flow.bound/2`): a domain flow while one of them is its pattern
+  # or lies under it, and a flow to an exit no asked domain bound — a
+  # tincture's connect origin, which the egress narrowing does not reach.
+  # Need and server flows are bound edge by edge (`bind_flows/1`).
+  defp rebind(flows, asked_domains, domains) do
+    origins =
+      for %{to: exit} <- flows,
+          not exit_of_kind?(exit),
+          Prima.Flow.bound([%{from: :outside, to: exit}], bound_by(asked_domains)) == [],
+          do: exit
+
+    Prima.Flow.bound(flows, %{
+      domains: domains ++ origins,
+      needs: for(%{to: "need:" <> name} <- flows, do: name),
+      servers: for(%{to: "server:" <> name} <- flows, do: name)
+    })
+  end
+
+  defp bound_by(domains), do: %{domains: domains, needs: [], servers: []}
+
+  defp exit_of_kind?("need:" <> _name), do: true
+  defp exit_of_kind?("server:" <> _name), do: true
+  defp exit_of_kind?(_domain), do: false
+
+  # One edge's flows, as `encode/1` writes it: its domain flows as the
+  # node's narrowing kept them, a need flow while the edge's vault resource
+  # fills that need, and a server flow while the edge grants that tool
+  # server. Runs before `place_vault/3`, which drops the decision naming the
+  # vault's need.
+  defp bind_flows(edge) do
+    flows = flows_of(edge)
+
+    kept =
+      Prima.Flow.bound(flows, %{
+        domains: for(%{to: exit} <- flows, not exit_of_kind?(exit), do: exit),
+        needs: List.wrap(vault_need(Map.get(edge, "vault"))),
+        servers: for(%{"server_name" => name} <- Map.get(edge, "tool_servers") || [], do: name)
+      })
+
+    put_flows(edge, kept)
+  end
+
+  defp vault_need(%{@decision => %{need: need}}) when is_binary(need), do: need
+  defp vault_need(_vault), do: nil
 
   defp put_kind(resources, _kind, nil), do: resources
   defp put_kind(nil, kind, value), do: %{kind => value}
@@ -1050,8 +1232,8 @@ defmodule Sanctum.Consent.BlobBuilder do
   @doc """
   The ask of each node of the closure as preview rows, read from the rows
   the closure resolved (`Sanctum.Consent.Plan.closure_rows/3`): the
-  resources and limits its manifest declares, none narrowed, and a
-  tincture's declarations.
+  resources and limits its manifest declares, every flow it declares to
+  each of its exits, none narrowed, and a tincture's declarations.
   """
   @spec ask_rows(Sanctum.Context.t(), %{String.t() => map()}) ::
           {:ok, [row()]} | {:error, term()}
@@ -1062,7 +1244,8 @@ defmodule Sanctum.Consent.BlobBuilder do
            {:ok, resources, limits} <- node_grant(ctx, node_key, manifest),
            {:ok, wildcard} <- wildcard_ask(node_key, manifest),
            {:ok, declared} <- tincture_rows(node_key, manifest) do
-        {:ok, node_rows(node_key, {resources, wildcard}, limits, []) ++ declared}
+        exits = {Tincture.connect(manifest), flows_of(resources)}
+        {:ok, node_rows(node_key, {resources, wildcard}, limits, [], exits) ++ declared}
       end
     end)
   end
@@ -1070,7 +1253,9 @@ defmodule Sanctum.Consent.BlobBuilder do
   @doc """
   The grant a decoded blob's `nodes` holds as preview rows: each node's
   resources and limits, marked narrowed where `narrowed` names the kind,
-  and a tincture's declarations, which the shape digest binds. Each node's
+  its exits with the flows its edge keeps (an exit marked narrowed where
+  the narrowing kept fewer classes to it than the manifest asks), and a
+  tincture's declarations, which the shape digest binds. Each node's
   manifest is read from `rows`, the closure's rows
   (`Sanctum.Consent.Plan.closure_rows/3`).
   """
@@ -1081,11 +1266,14 @@ defmodule Sanctum.Consent.BlobBuilder do
     collect_rows(nodes |> Map.keys() |> Enum.sort(), fn node_key ->
       with {:ok, row} <- closure_row(rows, node_key),
            manifest = manifest(row, node_key),
+           {:ok, caps} <- Sanctum.Consent.ShapeDerivation.declared_caps(manifest, node_key),
            {:ok, wildcard} <- wildcard_ask(node_key, manifest),
            {:ok, declared} <- tincture_rows(node_key, manifest) do
         resources = {node_resources(nodes, source_ref, node_key), wildcard}
         limits = get_in(nodes, [node_key, "limits"])
-        {:ok, node_rows(node_key, resources, limits, Map.get(narrowed, node_key, [])) ++ declared}
+        exits = {Tincture.connect(manifest), caps.flows}
+        kinds = Map.get(narrowed, node_key, [])
+        {:ok, node_rows(node_key, resources, limits, kinds, exits) ++ declared}
       end
     end)
   end
@@ -1137,8 +1325,8 @@ defmodule Sanctum.Consent.BlobBuilder do
 
   # A resource kind is shown when it grants something or the narrowing
   # changed it, so a kind narrowed to nothing still shows, empty and
-  # narrowed; the limits always show.
-  defp node_rows(node_key, {resources, wildcard}, limits, narrowed) do
+  # narrowed; the limits always show, and so does every exit.
+  defp node_rows(node_key, {resources, wildcard}, limits, narrowed, exits) do
     egress = kind(resources, "egress")
     storage = kind(resources, "storage")
     tools = kind(resources, "tools")
@@ -1150,7 +1338,35 @@ defmodule Sanctum.Consent.BlobBuilder do
       is_map(limits) && row("limits", node_key, limits, "limits" in narrowed)
     ]
     |> Enum.filter(&is_map/1)
+    |> Kernel.++(exits_rows(node_key, resources, narrowed, exits))
   end
+
+  # One row per exit of the node's edge — each egress domain, each tool
+  # server the edge grants, each connect origin of a tincture, and each
+  # exit a flow names — with the classes its flows let reach it, spelled
+  # as declared. An exit is narrowed where the narrowing kept fewer classes
+  # to it than `asked`, the flows the manifest declares.
+  defp exits_rows(node_key, resources, narrowed, {connect, asked}) do
+    flows = flows_of(resources)
+
+    servers =
+      for %{"server_name" => name} <- kind(resources, "tool_servers") || [],
+          do: "server:" <> name
+
+    (domains_of(resources) ++ servers ++ connect ++ Prima.Flow.exits(flows))
+    |> Enum.uniq()
+    |> Enum.sort()
+    |> Enum.map(fn exit ->
+      classes = class_names(flows, exit)
+
+      narrowed? = "exits" in narrowed and classes != class_names(asked, exit)
+
+      row("exits", node_key, %{"exit" => exit, "flows" => classes}, narrowed?)
+    end)
+  end
+
+  defp class_names(flows, exit),
+    do: flows |> Prima.Flow.classes_to(exit) |> Enum.map(&Atom.to_string/1)
 
   defp set_row(node_key, kind, granted, shown_by, narrowed) do
     values = Map.new(Map.fetch!(@set_fields, kind), &{&1, (granted && granted[&1]) || []})

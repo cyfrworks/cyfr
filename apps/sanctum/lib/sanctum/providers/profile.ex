@@ -308,8 +308,9 @@ defmodule Sanctum.Providers.Profile do
   end
 
   # One consent-graph node's narrowing: a closed record per resource kind
-  # its enforcement point can check, and nothing for a credential, a
-  # tincture or arbitrary JSON.
+  # its enforcement point can check, the flows kept to its exits among
+  # them (each a `from` class and a `to` exit, `Prima.Flow`), and nothing
+  # for a credential, a tincture or arbitrary JSON.
   defp subset_node_arg do
     alias Prima.Arg
 
@@ -331,7 +332,16 @@ defmodule Sanctum.Providers.Profile do
          ),
          Arg.new("storage", {:record, [strings.("paths"), strings.("actions")]}),
          strings.("tools"),
-         Arg.new("limits", {:record, limits_subset_fields()})
+         Arg.new("limits", {:record, limits_subset_fields()}),
+         Arg.new(
+           "exits",
+           {:array,
+            Arg.new(
+              nil,
+              {:record,
+               [Arg.new("from", :string, required: true), Arg.new("to", :string, required: true)]}
+            )}
+         )
        ]}
     )
   end
