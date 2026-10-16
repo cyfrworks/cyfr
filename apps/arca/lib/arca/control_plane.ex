@@ -89,6 +89,28 @@ defmodule Arca.ControlPlane do
   `live_member?/1`, `slot/1`) write nothing and stay on the ordinary
   pool, and `verify_held/1` runs in its caller's transaction.
 
+  ## One release per cell
+
+  A cell runs one release: members of two releases on one database would
+  each read the other's rows with code that did not write them. So every
+  slot row carries the release of the boot that holds it
+  (`Prima.Version.current/0`), and a member whose release differs from a
+  live member's is refused its slot: `take/3` answers
+  `{:error, {:mixed_release, other}}` and writes nothing. A live slot that
+  names no release counts as another release, since what it runs is not
+  known to be this one; an expired slot of any release is taken and
+  stamped.
+
+  The check and the write it admits are one transaction, after
+  `Arca.Repo.transaction_lock/1` on a key of the control plane's own and
+  the database clock read after that lock was won. Two first joins on
+  fresh node keys share no row, so on PostgreSQL only the lock makes the
+  second see the first; SQLite's write lock serializes them already.
+  `renew/1` takes the same lock, so a renewal that finds its own lease run
+  out — a revival, which brings a member back into the cell as a take
+  does — runs the same check, and a renewal of a standing lease cannot
+  slip past a take that judged it expired.
+
   What a write won is published only once its transaction has committed:
   a rollback, a raised commit or a store that cannot answer publishes
   nothing, and the standing recorded before runs out on its own. A loss
@@ -119,6 +141,11 @@ defmodule Arca.ControlPlane do
   # rounds whoever keeps winning holds it.
   @rounds 3
 
+  # The server-wide lock a take and a renewal hold while they compare this
+  # member's release with the live slots'. Fixed at compile time, so every
+  # member of every release computes the same key.
+  @release_lock :erlang.phash2("arca:cell_release")
+
   @typedoc """
   What this member holds: its slot for a further `ms` milliseconds on the
   local monotonic clock, its slot indefinitely (no claimant runs, so
@@ -128,14 +155,16 @@ defmodule Arca.ControlPlane do
 
   @typedoc """
   The slot this member won: the row's key, the boot holding it, the
-  generation it stamps outward and the fence its next write names.
+  generation it stamps outward, the fence its next write names and the
+  release the boot runs.
   """
   @type slot :: %{
           node: String.t(),
           owner: String.t(),
           generation: pos_integer(),
           fence: pos_integer(),
-          lease_until: DateTime.t()
+          lease_until: DateTime.t(),
+          release: String.t()
         }
 
   @doc """
@@ -258,22 +287,36 @@ defmodule Arca.ControlPlane do
       outward artifacts are refused by the holders that compare them and
       its own renew writes nothing.
     * A slot a live peer holds answers `{:busy, row}` and writes nothing.
+    * A live slot under another node key whose release is not this
+      boot's, or names none, answers `{:error, {:mixed_release, other}}`
+      and writes nothing.
 
-  The takeover names the fence it read, so a peer racing this take loses
-  its compare-and-set rather than both replacing the same row.
+  The boot's release is `Prima.Version.current/0`; `opts[:release]`
+  names another only for a test standing in for a member of another
+  release. Every write stamps it on the row, and the slot won carries it,
+  so the member's renewals compare and stamp the same one. The takeover
+  names the fence it read, so a peer racing this take loses its
+  compare-and-set rather than both replacing the same row.
   """
-  @spec take(String.t(), String.t(), pos_integer()) ::
-          {:ok, slot()} | {:busy, map()} | {:error, :database_error}
-  def take(node, owner, lease_ms)
+  @spec take(String.t(), String.t(), pos_integer(), keyword()) ::
+          {:ok, slot()}
+          | {:busy, map()}
+          | {:error, :database_error | {:mixed_release, String.t() | nil}}
+  def take(node, owner, lease_ms, opts \\ [])
       when is_binary(node) and node != "" and is_binary(owner) and owner != "" and
-             is_integer(lease_ms) and lease_ms > 0 do
+             is_integer(lease_ms) and lease_ms > 0 and is_list(opts) do
+    release = Keyword.get_lazy(opts, :release, &Prima.Version.current/0)
+
     # Read before the connection, the turn and the lock are waited for, so
     # every wait shortens the countdown and none lengthens it.
     started = System.monotonic_time(:millisecond)
 
-    case write("Arca.ControlPlane.take", fn -> do_take(node, owner, lease_ms, @rounds) end) do
+    take = fn -> admit_and_take(node, owner, lease_ms, release) end
+
+    case write("Arca.ControlPlane.take", take) do
       {:ok, {:ok, row}} -> {:ok, won(row, lease_ms, started)}
       {:ok, {:busy, _row} = busy} -> busy
+      {:ok, {:mixed_release, other}} -> {:error, {:mixed_release, other}}
       _unwritten -> {:error, :database_error}
     end
     |> Arca.Data.project()
@@ -293,14 +336,21 @@ defmodule Arca.ControlPlane do
   A lease that merely ran out is still renewed while the row reads this
   member: nobody has taken it, so it is still this member's. What the
   member believed had already lapsed on its own countdown, so it admitted
-  nothing in the gap.
+  nothing in the gap. Such a renewal is a revival, and it is admitted as a
+  take is: beside a live slot of another release it answers
+  `{:error, {:mixed_release, other}}`, writes nothing and records nothing
+  (see "One release per cell").
 
   `{:error, :database_error}` records nothing: a member that cannot reach
   the row does not know it lost it, and its countdown runs out on its own.
   So does a renewal that could not take the lock within its deadline, and
   one whose transaction did not commit.
   """
-  @spec renew(pos_integer()) :: {:ok, slot()} | :taken | :unclaimed | {:error, :database_error}
+  @spec renew(pos_integer()) ::
+          {:ok, slot()}
+          | :taken
+          | :unclaimed
+          | {:error, :database_error | {:mixed_release, String.t() | nil}}
   def renew(lease_ms) when is_integer(lease_ms) and lease_ms > 0 do
     case held() do
       :none ->
@@ -312,18 +362,41 @@ defmodule Arca.ControlPlane do
         case write("Arca.ControlPlane.renew", fn -> push_out(slot, lease_ms) end) do
           {:ok, {:renewed, renewed}} -> {:ok, won(renewed, lease_ms, started)}
           {:ok, :taken} -> :taken
+          {:ok, {:mixed_release, other}} -> {:error, {:mixed_release, other}}
           _unwritten -> {:error, :database_error}
         end
     end
   end
 
+  # The lock comes before the clock read, so the lease compared below is
+  # judged at an instant no take holding the lock can come after. The
+  # lease is the row's as it reads now, at the fence this member last
+  # wrote; a row that no longer reads this member is the update's to
+  # answer, which writes nothing.
   defp push_out(slot, lease_ms) do
+    :ok = Arca.Repo.transaction_lock(@release_lock)
     now = Arca.ServerMetaStorage.now!()
+    release = slot_release(slot)
 
+    lease = Arca.Repo.one(from(l in mine(slot), select: l.lease_until))
+    revival? = lease != nil and DateTime.compare(lease, now) != :gt
+
+    case if(revival?, do: other_release(slot.node, release, now), else: :none) do
+      :none -> renew_row(slot, release, lease_ms, now)
+      {:other, other} -> {:mixed_release, other}
+    end
+  end
+
+  defp renew_row(slot, release, lease_ms, now) do
     slot
     |> mine()
     |> Arca.Repo.update_all(
-      set: [lease_until: lease_end(now, lease_ms), fence: slot.fence + 1, updated_at: now]
+      set: [
+        lease_until: lease_end(now, lease_ms),
+        fence: slot.fence + 1,
+        release: release,
+        updated_at: now
+      ]
     )
     |> case do
       {1, _} ->
@@ -639,7 +712,8 @@ defmodule Arca.ControlPlane do
       owner: row.owner,
       generation: row.generation,
       fence: row.fence,
-      lease_until: row.lease_until
+      lease_until: row.lease_until,
+      release: row.release
     }
 
     elapsed = System.monotonic_time(:millisecond) - started
@@ -655,6 +729,38 @@ defmodule Arca.ControlPlane do
     forget()
   end
 
+  # The release check and the take it admits, in one transaction, after the
+  # control plane's release lock: the clock every round below reads is
+  # read after the lock was won.
+  defp admit_and_take(node, owner, lease_ms, release) do
+    :ok = Arca.Repo.transaction_lock(@release_lock)
+
+    case other_release(node, release, Arca.ServerMetaStorage.now!()) do
+      :none -> do_take(node, {owner, release}, lease_ms, @rounds)
+      {:other, other} -> {:mixed_release, other}
+    end
+  end
+
+  # A slot under another node key whose lease stands at `now` and whose
+  # release is not this member's: NULL counts, since a slot that names no
+  # release is not known to run this one. This member's own key is left to
+  # the take, where a live row of another boot is `{:busy, row}`.
+  defp other_release(node, mine, now) do
+    query =
+      from(l in CellLease,
+        where: l.node != ^node and l.lease_until > ^now,
+        where: is_nil(l.release) or l.release != ^mine,
+        order_by: [asc: l.node],
+        limit: 1,
+        select: l.release
+      )
+
+    case Arca.Repo.all(query) do
+      [] -> :none
+      [other] -> {:other, other}
+    end
+  end
+
   defp do_take(node, _owner, _lease_ms, 0) do
     case read(node) do
       nil -> {:error, :database_error}
@@ -667,64 +773,76 @@ defmodule Arca.ControlPlane do
   # successor's row and hand this member a generation that is not its
   # own — the quietest way there is to believe a fence that fences
   # nothing.
-  defp do_take(node, owner, lease_ms, rounds) do
+  defp do_take(node, {owner, release} = boot, lease_ms, rounds) do
     now = Arca.ServerMetaStorage.now!()
 
     case read(node) do
       nil ->
-        if insert(node, owner, lease_ms, now),
-          do: {:ok, opened(node, owner, lease_ms, now)},
-          else: do_take(node, owner, lease_ms, rounds - 1)
+        if insert(node, boot, lease_ms, now),
+          do: {:ok, opened(node, boot, lease_ms, now)},
+          else: do_take(node, boot, lease_ms, rounds - 1)
 
       %CellLease{} = row ->
         cond do
           live?(row, now) and row.owner == owner ->
             # This boot's own slot, still standing: pushed out under the
             # same generation. A member is not its own successor.
-            if push(row, lease_ms, now),
-              do: {:ok, pushed(row, lease_ms, now)},
-              else: do_take(node, owner, lease_ms, rounds - 1)
+            if push(row, release, lease_ms, now),
+              do: {:ok, pushed(row, release, lease_ms, now)},
+              else: do_take(node, boot, lease_ms, rounds - 1)
 
           live?(row, now) ->
             {:busy, row}
 
-          take_over(row, owner, lease_ms, now) ->
-            {:ok, taken(row, owner, lease_ms, now)}
+          take_over(row, boot, lease_ms, now) ->
+            {:ok, taken(row, boot, lease_ms, now)}
 
           true ->
-            do_take(node, owner, lease_ms, rounds - 1)
+            do_take(node, boot, lease_ms, rounds - 1)
         end
     end
   end
 
-  defp opened(node, owner, lease_ms, now) do
+  # The release a recorded slot was won under. A slot recorded by hand
+  # (a test putting a member back in a state it held) names none, and is
+  # this build's.
+  defp slot_release(%{release: release}) when is_binary(release), do: release
+  defp slot_release(_slot), do: Prima.Version.current()
+
+  defp opened(node, {owner, release}, lease_ms, now) do
     %CellLease{
       node: node,
       owner: owner,
       generation: 1,
       fence: 1,
       lease_until: lease_end(now, lease_ms),
-      taken_at: now
+      taken_at: now,
+      release: release
     }
   end
 
-  defp taken(%CellLease{} = row, owner, lease_ms, now) do
+  defp taken(%CellLease{} = row, {owner, release}, lease_ms, now) do
     %CellLease{
-      pushed(row, lease_ms, now)
+      pushed(row, release, lease_ms, now)
       | owner: owner,
         generation: row.generation + 1,
         taken_at: now
     }
   end
 
-  defp pushed(%CellLease{} = row, lease_ms, now) do
-    %CellLease{row | fence: row.fence + 1, lease_until: lease_end(now, lease_ms)}
+  defp pushed(%CellLease{} = row, release, lease_ms, now) do
+    %CellLease{
+      row
+      | fence: row.fence + 1,
+        lease_until: lease_end(now, lease_ms),
+        release: release
+    }
   end
 
   # The primary key on `node` decides a race between two first takes: the
   # loser inserts nothing and goes round again, where it finds the
   # winner's row.
-  defp insert(node, owner, lease_ms, now) do
+  defp insert(node, {owner, release}, lease_ms, now) do
     row = %{
       node: node,
       owner: owner,
@@ -732,6 +850,7 @@ defmodule Arca.ControlPlane do
       fence: 1,
       lease_until: lease_end(now, lease_ms),
       taken_at: now,
+      release: release,
       inserted_at: now,
       updated_at: now
     }
@@ -744,7 +863,7 @@ defmodule Arca.ControlPlane do
   # between the read and this write raises the fence, so the take finds a
   # number it did not read and the live claim is kept; and a second taker
   # racing this one loses for the same reason.
-  defp take_over(%CellLease{} = row, owner, lease_ms, now) do
+  defp take_over(%CellLease{} = row, {owner, release}, lease_ms, now) do
     query =
       from(l in CellLease,
         where: l.node == ^row.node and l.fence == ^row.fence,
@@ -760,19 +879,25 @@ defmodule Arca.ControlPlane do
           fence: row.fence + 1,
           lease_until: lease_end(now, lease_ms),
           taken_at: now,
+          release: release,
           updated_at: now
         ]
       )
     )
   end
 
-  defp push(%CellLease{} = row, lease_ms, now) do
+  defp push(%CellLease{} = row, release, lease_ms, now) do
     match?(
       {1, _},
       row
       |> mine()
       |> Arca.Repo.update_all(
-        set: [lease_until: lease_end(now, lease_ms), fence: row.fence + 1, updated_at: now]
+        set: [
+          lease_until: lease_end(now, lease_ms),
+          fence: row.fence + 1,
+          release: release,
+          updated_at: now
+        ]
       )
     )
   end

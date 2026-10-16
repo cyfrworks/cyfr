@@ -318,6 +318,108 @@ defmodule Arca.ControlPlaneTest do
     end
   end
 
+  describe "one release per cell" do
+    test "a take beside a live slot of another release refuses and writes nothing", %{
+      node: node
+    } do
+      peer!(node <> "-peer", "0.0.0-other", 60_000)
+      before = standing()
+
+      assert ControlPlane.take(node, "boot_a", 60_000) ==
+               {:error, {:mixed_release, "0.0.0-other"}}
+
+      assert ControlPlane.slot(node) == {:error, :not_found}
+      assert standing() == before
+    end
+
+    test "a live slot naming no release counts as another release", %{node: node} do
+      peer!(node <> "-peer", nil, 60_000)
+
+      assert ControlPlane.take(node, "boot_a", 60_000) == {:error, {:mixed_release, nil}}
+      assert ControlPlane.slot(node) == {:error, :not_found}
+    end
+
+    test "an expired slot of another release is no bar, and the take stamps this release", %{
+      node: node
+    } do
+      peer!(node <> "-peer", "0.0.0-other", -1_000)
+      peer!(node <> "-unknown", nil, -1_000)
+
+      assert {:ok, slot} = ControlPlane.take(node, "boot_a", 60_000)
+      assert slot.release == Prima.Version.current()
+      assert {:ok, %{release: release}} = ControlPlane.slot(node)
+      assert release == Prima.Version.current()
+    end
+
+    test "a live member of this release is no bar", %{node: node} do
+      peer!(node <> "-peer", Prima.Version.current(), 60_000)
+      assert {:ok, _slot} = ControlPlane.take(node, "boot_a", 60_000)
+    end
+
+    test "the insert, the same boot's take and a takeover each stamp the release", %{node: node} do
+      assert {:ok, %{release: "1.0.0"}} =
+               ControlPlane.take(node, "boot_a", 60_000, release: "1.0.0")
+
+      assert {:ok, %{release: "1.0.0"}} = ControlPlane.slot(node)
+
+      # The row's own key is the take's to judge: a live row of another
+      # boot there is `:busy`, never a mixed release.
+      assert {:busy, _row} = ControlPlane.take(node, "boot_b", 60_000, release: "2.0.0")
+
+      Arca.Repo.update_all(from(l in CellLease, where: l.node == ^node), set: [release: nil])
+
+      assert {:ok, %{release: "1.0.0"}} =
+               ControlPlane.take(node, "boot_a", 60_000, release: "1.0.0")
+
+      assert {:ok, %{release: "1.0.0"}} = ControlPlane.slot(node)
+
+      expire(node)
+
+      assert {:ok, %{release: "2.0.0"}} =
+               ControlPlane.take(node, "boot_b", 60_000, release: "2.0.0")
+
+      assert {:ok, %{owner: "boot_b", release: "2.0.0"}} = ControlPlane.slot(node)
+    end
+
+    test "a renewal of a lapsed lease is a revival: refused beside a live slot of another " <>
+           "release, recording nothing",
+         %{node: node} do
+      assert {:ok, mine} = ControlPlane.take(node, "boot_a", 60_000)
+      expire(node)
+      :ok = ControlPlane.record(:lost)
+      {:ok, row} = ControlPlane.slot(node)
+
+      # A member of another release joined while this one's lease stood
+      # run out.
+      peer!(node <> "-peer", "0.0.0-other", 60_000)
+      before = standing()
+
+      assert ControlPlane.renew(60_000) == {:error, {:mixed_release, "0.0.0-other"}}
+      assert ControlPlane.slot(node) == {:ok, row}
+      assert standing() == before
+      refute ControlPlane.held?()
+      assert ControlPlane.held() == {:ok, mine}
+    end
+
+    test "a renewal of a lapsed lease beside members of its own release revives it and stamps " <>
+           "the slot's release",
+         %{node: node} do
+      assert {:ok, _} = ControlPlane.take(node, "boot_a", 60_000, release: "1.0.0")
+      expire(node)
+      peer!(node <> "-peer", "1.0.0", 60_000)
+
+      assert {:ok, %{release: "1.0.0"}} = ControlPlane.renew(60_000)
+      assert {:ok, %{release: "1.0.0", fence: 2}} = ControlPlane.slot(node)
+    end
+
+    test "a renewal of a standing lease is not a revival and keeps its own path", %{node: node} do
+      assert {:ok, _} = ControlPlane.take(node, "boot_a", 60_000)
+      peer!(node <> "-peer", "0.0.0-other", 60_000)
+
+      assert {:ok, %{fence: 2}} = ControlPlane.renew(60_000)
+    end
+  end
+
   describe "the two clocks" do
     test "a member with a clock ahead of the database cannot hold past the point its row " <>
            "became takeable",
@@ -498,6 +600,33 @@ defmodule Arca.ControlPlaneTest do
     :ok
   end
 
+  # A peer's slot written straight to its row: `release` as the peer's boot
+  # stamped it (nil for a row that names none), live for `lease_ms` on the
+  # cell's clock or, negative, already lapsed.
+  defp peer!(node, release, lease_ms) do
+    now = Arca.ServerMetaStorage.now!()
+
+    {1, _} =
+      Arca.Repo.insert_all(CellLease, [
+        %{
+          node: node,
+          owner: node <> "#boot",
+          generation: 1,
+          fence: 1,
+          lease_until: DateTime.add(now, lease_ms, :millisecond),
+          taken_at: now,
+          release: release,
+          inserted_at: now,
+          updated_at: now
+        }
+      ])
+
+    :ok
+  end
+
+  defp standing,
+    do: Enum.map([@standing_key, @generation_key, @slot_key], &:persistent_term.get(&1, :absent))
+
   defp claimed_here(enabled),
     do: Application.put_env(:arca, :control_plane_claim_enabled, enabled)
 
@@ -589,6 +718,86 @@ defmodule Arca.ControlPlaneLockTest do
     send(releaser.pid, :commit)
     assert {:ok, :ok} = Task.await(releaser, 25_000)
     assert {:ok, :lost} = Task.await(verifier, 25_000)
+  end
+end
+
+defmodule Arca.ControlPlaneReleaseLockTest do
+  @moduledoc """
+  The release check under two real connections, outside the sandbox: two
+  first joins of two releases on fresh node keys share no row, so only the
+  control plane's release lock makes the second wait for the first and
+  read its slot. Both adapters: on PostgreSQL the advisory lock, on SQLite
+  the write lock the locking transaction holds from its start.
+  """
+
+  use ExUnit.Case, async: false
+
+  import Ecto.Query, only: [from: 2]
+
+  alias Arca.ControlPlane
+  alias Arca.Schemas.CellLease
+  alias Ecto.Adapters.SQL.Sandbox
+
+  @keys [
+    {Arca.ControlPlane, :standing},
+    {Arca.ControlPlane, :generation},
+    {Arca.ControlPlane, :slot}
+  ]
+
+  defp unboxed(fun), do: Sandbox.unboxed_run(Arca.Repo, fun)
+
+  setup do
+    saved = Map.new(@keys, &{&1, :persistent_term.get(&1, :absent)})
+    prefix = "node-release-#{System.unique_integer([:positive])}"
+
+    on_exit(fn ->
+      unboxed(fn ->
+        Arca.Repo.delete_all(from(l in CellLease, where: like(l.node, ^"#{prefix}%")))
+      end)
+
+      for {key, value} <- saved do
+        if value == :absent,
+          do: :persistent_term.erase(key),
+          else: :persistent_term.put(key, value)
+      end
+    end)
+
+    {:ok, first: prefix <> "-a", second: prefix <> "-b"}
+  end
+
+  test "two first joins of two releases at once end with the second refused", %{
+    first: first,
+    second: second
+  } do
+    test = self()
+
+    # The first join's take has written its row and holds its transaction
+    # open: the write is made and not yet committed.
+    joining =
+      Task.async(fn ->
+        unboxed(fn ->
+          Arca.Repo.locking_transaction(fn ->
+            {:ok, _slot} = ControlPlane.take(first, "boot_a", 60_000, release: "0.0.0-other")
+            send(test, :written)
+
+            receive do
+              :commit -> :ok
+            end
+          end)
+        end)
+      end)
+
+    assert_receive :written, 5_000
+
+    second_join =
+      Task.async(fn -> unboxed(fn -> ControlPlane.take(second, "boot_b", 60_000) end) end)
+
+    refute Task.yield(second_join, 300), "the second join answered while the first held its lock"
+    send(joining.pid, :commit)
+    assert {:ok, :ok} = Task.await(joining, 25_000)
+
+    assert Task.await(second_join, 25_000) == {:error, {:mixed_release, "0.0.0-other"}}
+    assert unboxed(fn -> ControlPlane.slot(second) end) == {:error, :not_found}
   end
 end
 

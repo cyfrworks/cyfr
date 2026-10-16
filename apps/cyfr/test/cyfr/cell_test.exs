@@ -259,6 +259,46 @@ defmodule Cyfr.CellTest do
       :ok = stop_supervised(Cell)
     end
 
+    test "a member of another release beside a live member of this one refuses to boot, " <>
+           "naming both releases, and writes nothing",
+         %{node: node} do
+      claim_enabled(true)
+      peer = node <> "-peer"
+      now = Arca.ServerMetaStorage.now!()
+
+      # The live member's row, written as its take wrote it; a take here
+      # would record its standing in this process.
+      {1, _} =
+        Arca.Repo.insert_all(CellLease, [
+          %{
+            node: peer,
+            owner: "boot-peer",
+            generation: 1,
+            fence: 1,
+            lease_until: DateTime.add(now, 60_000, :millisecond),
+            taken_at: now,
+            release: Prima.Version.current(),
+            inserted_at: now,
+            updated_at: now
+          }
+        ])
+
+      assert {:error, {%RuntimeError{message: message}, _stack}} =
+               Cell.start_link(
+                 name: nil,
+                 node_name: node,
+                 lease_ms: 60_000,
+                 renew_ms: 60_000,
+                 release: "0.0.0-other"
+               )
+
+      assert message =~ "this member runs release 0.0.0-other"
+      assert message =~ "a live member of this cell runs release #{Prima.Version.current()}"
+      assert ControlPlane.slot(node) == {:error, :not_found}
+      refute ControlPlane.held?()
+      assert ControlPlane.held() == :none
+    end
+
     @tag :capture_log
     test "a member that cannot read its slot refuses to start and holds no generation", %{
       node: node

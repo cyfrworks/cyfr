@@ -5,7 +5,7 @@
 # The `cyfr` release, built as `Dockerfile` builds it (MIX_ENV=prod, the
 # adapter chosen at compile time by CYFR_DATABASE, `mix release cyfr`),
 # booted against a FRESH database of that adapter with auto-migration on
-# (tests/release-boot/release.sh). Three cases, in order:
+# (tests/release-boot/release.sh). Four cases, in order:
 #
 #   boots    the environment `cyfr init` writes — the stack's keys, the
 #            empty CORS allowlist, authentication configured,
@@ -19,6 +19,13 @@
 #            release with authentication configured must refuse at boot.
 #            The release must exit non-zero naming CORS: a boot that raises
 #            is loud, never a container that looks started.
+#
+#   live slots  `Cyfr.Release.live_slots/0`, the offline read `cyfr update`
+#            makes before it snapshots a cell, run as the update runs it
+#            (`bin/cyfr eval`, which starts no application): against the
+#            running cell of the first case it answers that cell's one
+#            slot under this release, and once the cell has stopped it
+#            answers none.
 #
 #   restores a cell's backup, which is four parts copied while the cell is
 #            stopped: the database, the storage root, the keyring and the
@@ -199,7 +206,41 @@ grep -E "== (Running|Migrated)" "$CELL/boot.log"
 curl -fsS -m 10 "http://127.0.0.1:$PORT/api/health" >"$CELL/health.json"
 echo "GET /api/health -> 200 $(cat "$CELL/health.json")"
 
+# The cell's live slots as `cyfr update` reads them, by the expression it
+# runs: the one `CYFR_LIVE_SLOTS=` line, holding this release and the
+# slots. A run that prints no such line, or two, fails the case.
+live_slots() {
+  local out
+  out="$(cell_cyfr "$1" eval \
+    'IO.puts("CYFR_LIVE_SLOTS=" <> JSON.encode!(%{release: Prima.Version.current(), slots: Cyfr.Release.live_slots()}))' \
+    | grep '^CYFR_LIVE_SLOTS=')" || fail "live_slots/0 printed no answer"
+  [ "$(printf '%s\n' "$out" | wc -l)" -eq 1 ] || fail "live_slots/0 answered twice: $out"
+  printf '%s\n' "${out#CYFR_LIVE_SLOTS=}"
+}
+
+step "live slots: the running cell's one slot, under this release"
+VERSION="$(sed -n 's/^ *version: "\([0-9][0-9.]*\)",$/\1/p' "$ROOT/apps/prima/mix.exs")"
+running="$(live_slots "$CELL")"
+printf '%s' "$running" | python3 -c '
+import json, sys
+answer = json.load(sys.stdin)
+node_prefix, version = sys.argv[1] + "@", sys.argv[2]
+slots = answer["slots"]
+ok = (answer["release"] == version and len(slots) == 1
+      and slots[0]["node"].startswith(node_prefix) and slots[0]["release"] == version)
+sys.exit(0 if ok else 1)' "$(cell_node "$CELL")" "$VERSION" ||
+  fail "live slots of the running cell were not its one slot under $VERSION: $running"
+echo "the running cell: $running"
+
 server_stop
+
+step "live slots: none once the cell has stopped"
+stopped="$(live_slots "$CELL")"
+printf '%s' "$stopped" | python3 -c '
+import json, sys
+sys.exit(0 if json.load(sys.stdin)["slots"] == [] else 1)' ||
+  fail "live slots of the stopped cell were not empty: $stopped"
+echo "the stopped cell: $stopped"
 
 after="$(cell_pending "$CELL")"
 if [ "${after:-1}" -ne 0 ]; then

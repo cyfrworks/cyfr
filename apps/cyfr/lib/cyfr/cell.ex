@@ -339,7 +339,18 @@ defmodule Cyfr.Cell do
       do: refuse_unformed_cell!(Keyword.get(opts, :facts, &facts/0)),
       else: refuse_foreign_nodes!()
 
-    state = %{me: me, slot: slot, lease_ms: lease_ms, renew_ms: renew_ms, cluster?: cluster?}
+    # The release this boot runs; a test stands in for a member of another
+    # release by naming one.
+    release = Keyword.get_lazy(opts, :release, &Prima.Version.current/0)
+
+    state = %{
+      me: me,
+      slot: slot,
+      lease_ms: lease_ms,
+      renew_ms: renew_ms,
+      cluster?: cluster?,
+      release: release
+    }
 
     case take_or_wait(state) do
       {:ok, won} ->
@@ -423,7 +434,7 @@ defmodule Cyfr.Cell do
   # longer than a lease of our own — and take it again; a row renewed
   # meanwhile is a live boot's and is refused.
   defp take_or_wait(state) do
-    case Arca.ControlPlane.take(state.slot, state.me, state.lease_ms) do
+    case take(state) do
       {:busy, row} = busy ->
         wait_ms = DateTime.diff(row.lease_until, Arca.ServerMetaStorage.now!(), :millisecond)
 
@@ -435,18 +446,33 @@ defmodule Cyfr.Cell do
           )
 
           Process.sleep(wait_ms + @wait_slack_ms)
-          Arca.ControlPlane.take(state.slot, state.me, state.lease_ms)
+          state |> take() |> refuse_mixed_release!(state)
         else
           busy
         end
 
       other ->
-        other
+        refuse_mixed_release!(other, state)
     end
   end
 
+  # Nothing was written: the boot stops holding no slot, and the live
+  # member of the other release goes on as it was.
+  defp refuse_mixed_release!({:error, {:mixed_release, other}}, state) do
+    raise "[Cyfr] FATAL: this member runs release #{state.release}, and a live member of " <>
+            "this cell runs release #{other || "unknown"}. A cell runs one release: a member " <>
+            "of another reads rows its code did not write. Stop every member before starting " <>
+            "the new release (`cyfr update` does), or start this one on release " <>
+            "#{other || "the cell's"}."
+  end
+
+  defp refuse_mixed_release!(taken, _state), do: taken
+
+  defp take(state),
+    do: Arca.ControlPlane.take(state.slot, state.me, state.lease_ms, release: state.release)
+
   defp reclaim(state) do
-    case Arca.ControlPlane.take(state.slot, state.me, state.lease_ms) do
+    case take(state) do
       {:ok, won} ->
         Logger.warning("[Cyfr.Cell] slot regained")
 
@@ -463,6 +489,12 @@ defmodule Cyfr.Cell do
                 "(#{inspect(reason)}); a peer's list shows none until its next boot"
             )
         end
+
+      {:error, {:mixed_release, other}} ->
+        Logger.error(
+          "[Cyfr.Cell] slot not regained: a live member of this cell runs release " <>
+            "#{other || "unknown"}, and this member runs #{state.release}"
+        )
 
       _refused ->
         :ok

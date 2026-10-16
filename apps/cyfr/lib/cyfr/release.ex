@@ -85,6 +85,57 @@ defmodule Cyfr.Release do
   end
 
   @doc """
+  The cell's live slots, read with the server stopped: every `cell_leases`
+  row whose lease still stands on the database's clock, as
+  `%{node, owner, release, lease_until}` (`lease_until` in ISO 8601), the
+  answer `Arca.ControlPlane.roster/0` gives a running member.
+
+  `cyfr update` runs it once it has stopped its stack and before it
+  snapshots anything, as
+
+      bin/cyfr eval 'IO.puts("CYFR_LIVE_SLOTS=" <> JSON.encode!(%{release: Prima.Version.current(), slots: Cyfr.Release.live_slots()}))'
+
+  where `eval` starts no application: like `migrate/0` it starts the repo
+  alone (`Ecto.Migrator.with_repo/2`), migrates nothing and checks no
+  fingerprint, so it reads a database of the release that wrote it. An
+  empty list is the only answer that lets the update go on. A store that
+  cannot answer raises, so `eval` exits non-zero and the update stops,
+  never reading an error as an empty cell.
+  """
+  @spec live_slots() :: [
+          %{
+            node: String.t(),
+            owner: String.t(),
+            release: String.t() | nil,
+            lease_until: String.t()
+          }
+        ]
+  def live_slots do
+    load_app()
+
+    Enum.flat_map(repos(), fn repo ->
+      {:ok, slots, _} =
+        Ecto.Migrator.with_repo(repo, fn _ ->
+          case Arca.ControlPlane.roster() do
+            {:ok, rows} -> Enum.map(rows, &live_slot/1)
+            {:error, reason} -> raise "the cell's slots could not be read: #{inspect(reason)}"
+          end
+        end)
+
+      slots
+    end)
+  end
+
+  defp live_slot(row) do
+    %{
+      node: row.node,
+      owner: row.owner,
+      release: row.release,
+      lease_until: DateTime.to_iso8601(row.lease_until)
+    }
+  end
+
+  @doc """
   Report which key label every sealed value is encrypted under, each
   sealed column of a row counted, without decrypting anything.
 

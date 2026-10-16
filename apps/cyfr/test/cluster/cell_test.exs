@@ -232,6 +232,35 @@ defmodule Cyfr.Cluster.CellTest do
     end
   end
 
+  describe "one release per cell" do
+    test "a claimant of another release is refused its slot beside the live members, " <>
+           "and writes nothing" do
+      release = Cell.call(:a, Prima.Version, :current, [])
+      slot = "cyfr_cell_other_#{System.unique_integer([:positive])}@127.0.0.1"
+
+      # A second claimant on member b's VM, under a node key of its own and
+      # another release: a member of the next release joining a cell the
+      # current one still runs. Started unlinked, so its refusal ends it
+      # and nothing of the member's own.
+      opts = [name: nil, node_name: slot, release: "0.0.0-other"]
+
+      assert {:error, {%RuntimeError{message: message}, _stack}} =
+               Cell.call(:b, GenServer, :start, [Cyfr.Cell, opts])
+
+      assert message =~ "this member runs release 0.0.0-other"
+      assert message =~ "a live member of this cell runs release #{release}"
+
+      # Read from outside both members: no row for the refused claimant,
+      # and both members still holding rows stamped with their release.
+      assert Observer.slot(slot) == nil
+
+      for id <- [:a, :b] do
+        assert Observer.slot(node_of(id))["release"] == release
+        assert Cell.call(id, Arca.ControlPlane, :held?, [])
+      end
+    end
+  end
+
   defp generation(id) do
     Observer.slot(node_of(id))["generation"]
   end

@@ -1296,10 +1296,13 @@ What a cell changes for a client and an operator:
   its budget reservations and charges, and its storage cap.
 - **Ingress rate limits are each member's too.** The ceiling that sees
   the whole cell is the reverse proxy's; set it there.
-- **An upgrade stops the whole cell.** Stop every member, upgrade, then
-  start them, so two releases never run side by side in one cell. The
-  server does not refuse a member whose release differs from the live
-  members' today, so the operator's stop is the only guard.
+- **A cell runs one release.** Every slot names the release of the
+  member holding it, and a member whose release differs from a live
+  member's is refused its slot and stops at boot, naming both releases; a
+  live slot that names no release counts as another. Stop every member
+  before the new release starts: `cyfr update` refuses while a member
+  outside its own stack is live, and stops, snapshots and switches its
+  own stack only once none is.
 
 ### Execution workers
 

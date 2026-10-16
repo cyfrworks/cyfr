@@ -14,7 +14,10 @@ defmodule Arca.Schemas.CellLease do
   `generation` is the member's, never the cell's: it rises when THIS slot
   is taken over and at no other time, so a member joining or leaving
   invalidates nothing a peer issued. `fence` is the row's write token,
-  raised by every write, so a renew is a compare-and-set.
+  raised by every write, so a renew is a compare-and-set. `release` is the
+  release of the boot holding the slot, stamped by every take and every
+  revival: a cell runs one release, and a live slot of another, or one
+  naming none, refuses a member its take (`Arca.ControlPlane`).
 
   Read through `Arca.ControlPlane` (cached, no query on the hot path) and
   written by the cell's claimant.
