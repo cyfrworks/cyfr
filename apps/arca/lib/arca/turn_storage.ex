@@ -411,6 +411,7 @@ defmodule Arca.TurnStorage do
       Arca.Repo.locking_transaction(fn ->
         turn = own!(athanor_id, turn_id, attrs)
         if turn.status != "running", do: Arca.Repo.rollback(:not_running)
+        lock_root!(athanor_id, turn)
         reason = Map.get(attrs, :reason) || "approval"
         launch_step_id = launch_step!(athanor_id, turn, reason, Map.get(attrs, :launch_step_id))
         ran = pause_owner!(athanor_id, turn)
@@ -456,6 +457,7 @@ defmodule Arca.TurnStorage do
       Arca.Repo.locking_transaction(fn ->
         turn = own!(athanor_id, turn_id, attrs)
         if turn.status != "paused", do: Arca.Repo.rollback(:not_paused)
+        lock_root!(athanor_id, turn)
         grant = stamp!(athanor_id, turn, standing!(athanor_id, turn, attrs, :required))
         until = Arca.ExecutionAttempts.lease_until()
 
@@ -541,6 +543,7 @@ defmodule Arca.TurnStorage do
       Arca.Repo.locking_transaction(fn ->
         turn = own!(athanor_id, turn_id, attrs)
         if turn.status in @terminal, do: Arca.Repo.rollback(:already_finished)
+        lock_root!(athanor_id, turn)
         grant = standing!(athanor_id, turn, attrs, required_for(status))
 
         if status == "completed" and steer_rows(athanor_id, turn) != [],
@@ -633,6 +636,7 @@ defmodule Arca.TurnStorage do
       Arca.Repo.locking_transaction(fn ->
         turn = take!(athanor_id, turn_id, attrs)
         if turn.status not in @held, do: Arca.Repo.rollback(:not_running)
+        lock_root!(athanor_id, turn)
         now = DateTime.utc_now()
 
         ran =
@@ -891,6 +895,7 @@ defmodule Arca.TurnStorage do
         Arca.Repo.locking_transaction(fn ->
           turn = own!(athanor_id, turn_id, attrs)
           if turn.parent_turn_id, do: Arca.Repo.rollback(:clone)
+          lock_root!(athanor_id, turn)
           now = DateTime.utc_now()
           step = step!(athanor_id, Map.fetch!(attrs, :step_id))
           if step.turn_id != turn.id, do: Arca.Repo.rollback(:step_not_found)
@@ -2607,6 +2612,28 @@ defmodule Arca.TurnStorage do
       step_id: step_id,
       data: reject_nil(data)
     )
+
+    :ok
+  end
+
+  # The turn's root execution row, locked once the turn's own row is and
+  # before any step or attempt row: every execution write takes the
+  # execution row before any attempt row (`Arca.Execution.record_end/6`,
+  # `Arca.Execution.mark_failed_if_running/3`,
+  # `Arca.ExecutionAttempts.takeover!/3`), and an admission that locks the
+  # root takes it before the step it binds, so a turn's transition and a
+  # lapse, an end or an admission on its root never wait on each other in
+  # opposite order. A turn with no root yet locks nothing.
+  # arca:db-raise-ok inside the caller's transaction
+  defp lock_root!(_athanor_id, %Turn{root_execution_id: nil}), do: :ok
+
+  defp lock_root!(athanor_id, %Turn{root_execution_id: execution_id}) do
+    from(e in Arca.Schemas.Execution,
+      where: e.athanor_id == ^athanor_id and e.id == ^execution_id,
+      select: e.id
+    )
+    |> Arca.QueryHelpers.for_update()
+    |> Arca.Repo.all()
 
     :ok
   end

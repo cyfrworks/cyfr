@@ -1198,7 +1198,13 @@ defmodule Arca.Execution do
     Arca.Repo.locking_transaction(fn ->
       if grant, do: Arca.ExecutionStanding.verify!(grant, verify)
 
-      open = from(e in Row, where: e.id == ^id and e.status in ^@open_statuses)
+      # The execution row is locked before its attempt is retired, the
+      # order every execution write keeps (`end_owned/7`,
+      # `Arca.ExecutionAttempts.takeover!/3`), so a lapse and the run's own
+      # end never wait on each other in opposite order.
+      open =
+        from(e in Row, where: e.id == ^id and e.status in ^@open_statuses)
+        |> Arca.QueryHelpers.for_update()
 
       row =
         if grant,
@@ -1338,8 +1344,10 @@ defmodule Arca.Execution do
       if grant, do: Arca.ExecutionStanding.verify!(grant, verify)
 
       # The execution row is locked before its attempt is, the order every
-      # execution write keeps, so no source joins the run between this
-      # read and the terminal write (`join_sources/3` locks the row too).
+      # execution write keeps (`fail_open/5`, `Arca.TurnStorage`'s
+      # transitions, `Arca.ExecutionAttempts.takeover!/3`), so no source
+      # joins the run between this read and the terminal write
+      # (`join_sources/3` locks the row too).
       execution =
         from(e in Row, where: e.id == ^id and e.status in ^@open_statuses)
         |> Arca.QueryHelpers.where_tenant_unless_platform(actor)
