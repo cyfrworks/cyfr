@@ -1974,7 +1974,14 @@ defmodule Aqua.Loop do
   # or an allow that covers a keep in this turn as it stands now. Each kept
   # note is asked again as it dispatches.
   defp flush_granted?(%State{} = state, policy) do
-    probe = %Call{kind: :catalog, tool: @flush_tool, action: @flush_action, args: %{}}
+    probe = %Call{
+      kind: :catalog,
+      tool: @flush_tool,
+      action: @flush_action,
+      args: %{},
+      model_name: @flush_key
+    }
+
     Policy.auto?(probe, policy, place(state))
   end
 
