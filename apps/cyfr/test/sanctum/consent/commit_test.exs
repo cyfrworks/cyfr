@@ -946,6 +946,50 @@ defmodule Sanctum.Consent.CommitTest do
       assert instance =~ "instance entry is offered to people"
     end
 
+    test "keeps the owner's flows its edges still bind: a need's only beside its binding",
+         %{ctx: ctx} do
+      ref = "reagent:local.commit-public-flows"
+
+      manifest =
+        put_in(keyed_manifest(), ["caps", "flows"], [
+          %{"from" => "pinned", "to" => "api.openai.com"},
+          %{"from" => "vault_disclosed", "to" => "need:api_key"}
+        ])
+
+      publish!(ctx, "commit-public-flows", "1.0.0", manifest)
+      standing = key!(ctx)
+
+      {:ok, %{profile_id: owner}} =
+        walk!(ctx, ref, %{bindings: [%{need: "api_key", entry_id: standing.id}]})
+
+      # The owner's edge binds the need, so it keeps the flow to it.
+      {:ok, blob} = Prima.Authority.Blob.parse(head!(ctx, owner).resolved_policy)
+      {:ok, ingress} = Prima.Authority.Blob.ingress(blob, ref)
+
+      assert Prima.Authority.Blob.Edge.flows(ingress) == [
+               %{from: :pinned, to: "api.openai.com"},
+               %{from: :vault_disclosed, to: "need:api_key"}
+             ]
+
+      exits = fn rows ->
+        for %{"kind" => "exits", "values" => %{"exit" => exit, "flows" => flows}} <- rows,
+            into: %{},
+            do: {exit, flows}
+      end
+
+      # A twin keeping the binding keeps the need's flow; one dropping it
+      # does not, and keeps the domain's either way.
+      {:ok, keeping} = Commit.stage_publish(ctx, %{profile_id: owner, need_ids: ["@ingress"]})
+
+      assert exits.(keeping.rows) == %{
+               "api.openai.com" => ["pinned"],
+               "need:api_key" => ["vault_disclosed"]
+             }
+
+      {:ok, dropping} = Commit.stage_publish(ctx, %{profile_id: owner, need_ids: []})
+      assert exits.(dropping.rows) == %{"api.openai.com" => ["pinned"]}
+    end
+
     test "a public profile is never staged for a canvas", %{ctx: ctx} do
       ref = canvas!(ctx, "commit-canvas")
       {:ok, %{profile_id: owner}} = walk!(ctx, ref)

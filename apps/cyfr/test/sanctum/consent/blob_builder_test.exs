@@ -858,6 +858,49 @@ defmodule Sanctum.Consent.BlobBuilderTest do
     end
   end
 
+  describe "a public profile's flows" do
+    setup %{ctx: ctx} do
+      publish!(ctx, "flow-source", %{"caps" => @flow_caps})
+      :ok
+    end
+
+    test "are the owner's, narrowed only within them", %{ctx: ctx} do
+      owner_kept = [flow("pinned", "api.one.example"), flow("outside", "*.two.example")]
+      walk!(ctx, %{@flow_ref => %{"exits" => owner_kept}}, @flow_ref)
+      {:ok, [owner]} = Arca.ConsentStorage.profiles(Sanctum.Context.actor(ctx), @flow_ref)
+      {:ok, staged} = Commit.stage_publish(ctx, %{profile_id: owner.id})
+
+      # A flow the manifest asks but the owner's grant does not hold is no
+      # narrowing of the twin.
+      wider = %{@flow_ref => %{"exits" => [flow("filed", "api.one.example")]}}
+
+      assert {:error, {:invalid_argument, why}} =
+               Commit.preview(ctx, Map.put(staged.decisions, :subset, wider))
+
+      assert why =~ "does not ask for"
+
+      narrower = %{@flow_ref => %{"exits" => [flow("outside", "*.two.example")]}}
+      decisions = Map.put(staged.decisions, :subset, narrower)
+      {:ok, preview} = Commit.preview(ctx, decisions)
+
+      assert exits(preview.rows) == %{
+               "*.two.example" => {["outside"], false},
+               "api.one.example" => {[], true}
+             }
+
+      assert {:ok, %{profile_id: public_id}} =
+               Commit.commit(ctx, %{
+                 decisions: decisions,
+                 plan_token: staged.plan_token,
+                 proof: preview.proof,
+                 commit_digest: preview.commit_digest,
+                 expected_consent_revision: staged.expected_consent_revision
+               })
+
+      assert head_flows!(ctx, public_id) == [%{from: :outside, to: "*.two.example"}]
+    end
+  end
+
   describe "an edge's flows, as encode/1 writes them" do
     @dep_ref "reagent:local.flow-dep"
 

@@ -1512,12 +1512,47 @@ defmodule Sanctum.Consent.Commit do
     # is public by its publisher's declaration and is kept.
     edge = Map.delete(edge, "tool_servers")
 
-    case Map.get(edge, "vault") do
-      %{"entry_id" => _} -> if edge_key in need_ids, do: edge, else: Map.delete(edge, "vault")
-      %{"provided" => _} -> edge
-      _ -> Map.delete(edge, "vault")
-    end
+    edge =
+      case Map.get(edge, "vault") do
+        %{"entry_id" => _} -> if edge_key in need_ids, do: edge, else: Map.delete(edge, "vault")
+        %{"provided" => _} -> edge
+        _ -> Map.delete(edge, "vault")
+      end
+
+    public_flows(edge)
   end
+
+  # A public edge keeps the owner's flows whose exit it still binds
+  # (`Prima.Flow.bound/2`): its domain flows; a need flow only while it
+  # keeps the binding the owner's edge kept that flow for; and no server
+  # flow, since it grants no tool server. Flows that do not read are
+  # dropped, which allows less.
+  defp public_flows(%{"flows" => raw} = edge) do
+    kept =
+      case Prima.Flow.parse(raw, :any) do
+        {:ok, flows} ->
+          needs =
+            if Map.has_key?(edge, "vault"),
+              do: for(%{to: "need:" <> need} <- flows, do: need),
+              else: []
+
+          domains =
+            for %{to: exit} <- flows,
+                not String.starts_with?(exit, ["need:", "server:"]),
+                do: exit
+
+          Prima.Flow.bound(flows, %{domains: domains, needs: needs, servers: []})
+
+        {:error, _unread} ->
+          []
+      end
+
+    if kept == [],
+      do: Map.delete(edge, "flows"),
+      else: Map.put(edge, "flows", Prima.Flow.to_json(kept))
+  end
+
+  defp public_flows(edge), do: edge
 
   defp collect_publish_bindings(ctx, nodes) do
     vaults =
