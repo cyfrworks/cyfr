@@ -27,6 +27,7 @@ defmodule Arca.Schemas.ScheduleOccurrence do
     field :claimed_by, :string
     field :claimed_at, :utc_datetime_usec
     field :ended_at, :utc_datetime_usec
+    field :note_revision_read, :integer
   end
 
   @fields [

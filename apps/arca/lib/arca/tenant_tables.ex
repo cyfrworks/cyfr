@@ -90,6 +90,8 @@ defmodule Arca.TenantTables do
     "file_offers",
     "file_receipts",
     "mcp_servers",
+    "consumer_receipts",
+    "outbox_records",
     "schedule_occurrences",
     "cron_schedules",
     "build_records",
@@ -149,6 +151,11 @@ defmodule Arca.TenantTables do
   # `passkeys` are a person's own credentials at this home, revoked with
   # the person (`Arca.SecurityTransitions`), never with an athanor.
   #
+  # `person_seals` and `restore_people` are a person's seal and their
+  # period after a declared restore. Their owner is the person: each row
+  # references `users` and is deleted with it, never with an athanor, and
+  # a person's denial leaves both.
+  #
   # `device_certifications` are what this home certified for its people's
   # devices at other homes: the athanor each names is the other home's,
   # and the row goes with the person.
@@ -173,6 +180,8 @@ defmodule Arca.TenantTables do
     "directory_heads",
     "carry_actions",
     "passkeys",
+    "person_seals",
+    "restore_people",
     "device_certifications",
     "installation_claims",
     "request_rate_windows",

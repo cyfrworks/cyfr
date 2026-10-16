@@ -25,6 +25,7 @@ defmodule Arca.Schemas.Webhook do
     field :input_template, :string
     field :description, :string
     field :enabled, :boolean
+    field :suspended, :boolean, default: false
     field :rate_limit, :string
     field :created_by, :string
     field :profile_id, :string

@@ -57,6 +57,7 @@ defmodule Arca.Schemas.ToolGrant do
     field :lifecycle_id, :string
     field :expires_at, :utc_datetime_usec
     field :constraint, :string
+    field :sources, :string, default: "[]"
   end
 
   @doc "The lifecycles a bounded allow may end with."

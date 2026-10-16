@@ -24,10 +24,10 @@ defmodule Arca.Repo.Migrations.Baseline do
   `external_identities`, `cell_leases`, `job_claims`, `platform_settings`
   and `settings_pins` are not athanor-scoped: the first three are the
   server's own facts and the rest the cell's, and a cell has no athanor.
-  A person's identity, keys, identity attempts, carries and passkeys, the
-  directory's log, the cached heads of other people's logs, the
-  installation claim and the pre-authentication rate windows are not an
-  athanor's either (`people/0`).
+  A person's identity, keys, identity attempts, carries, passkeys, seal and
+  post-restore period, the directory's log, the cached heads of other
+  people's logs, the installation claim and the pre-authentication rate
+  windows are not an athanor's either (`people/0`).
 
   This file is the schema's single source: a change edits it, and
   `Arca.SchemaFingerprint` refuses a database built from a different
@@ -60,6 +60,7 @@ defmodule Arca.Repo.Migrations.Baseline do
     file_offers()
     registrations()
     schedules()
+    outbox()
     threads()
     turns()
     record_fingerprint()
@@ -326,6 +327,9 @@ defmodule Arca.Repo.Migrations.Baseline do
       add :rate_limit, :string
       add :ip_allowlist, :text
       add :revoked, :boolean, null: false, default: false
+      # Held by a declared restore until the person re-enables the key; a
+      # suspended key authenticates nothing, and revocation stays terminal.
+      add :suspended, :boolean, null: false, default: false
       add :created_by, :string
       add :rotated_at, :utc_datetime_usec
       add :athanor_id, :string, null: false
@@ -439,7 +443,7 @@ defmodule Arca.Repo.Migrations.Baseline do
     # table constraint, so each rule is spelled once per adapter.
     standing_known = %{
       name: "paired_clients_standing_known",
-      expr: "standing IN ('active', 'revoked')"
+      expr: "standing IN ('active', 'suspended', 'revoked')"
     }
 
     # One row per client a person holds in an athanor: the credential it
@@ -448,7 +452,8 @@ defmodule Arca.Repo.Migrations.Baseline do
     # (`device_public_key`, for a `device_cert` client) and its standing,
     # which alone decides what the client may do. A revoked row is
     # terminal; a standing transition revokes a person's rows in its own
-    # transaction (`Arca.SecurityTransitions`).
+    # transaction (`Arca.SecurityTransitions`). A declared restore
+    # suspends every standing row until the person re-enables it.
     create table(:paired_clients, primary_key: false) do
       add :id, :string, primary_key: true
       add :athanor_id, :string, null: false
@@ -481,10 +486,10 @@ defmodule Arca.Repo.Migrations.Baseline do
   # People: identity, keys, the directory, carries, passkeys, installation
   # ==========================================================================
 
-  # None of these rows is an athanor's: a person's identity, keys and
-  # passkeys outlive every athanor they sit in, a directory orders
-  # identifiers, and the installation claim and the pre-authentication
-  # rate windows are the node's. Arca stores bytes and hashes here and
+  # None of these rows is an athanor's: a person's identity, keys,
+  # passkeys, seal and post-restore period outlive every athanor they sit
+  # in, a directory orders identifiers, and the installation claim and the
+  # pre-authentication rate windows are the node's. Arca stores bytes and hashes here and
   # verifies no signature.
   defp people do
     sqlite? = repo().__adapter__() == Ecto.Adapters.SQLite3
@@ -715,14 +720,16 @@ defmodule Arca.Repo.Migrations.Baseline do
              name: :carry_actions_receipt_index
            )
 
-    passkey_state = known("passkeys_state_known", "state", ~w(pending active revoked))
+    passkey_state =
+      known("passkeys_state_known", "state", ~w(pending active suspended revoked))
 
     # A person's WebAuthn credentials at this relying home, pinned to its RP
     # ID. A pending registration waits, with its exact registration digest,
     # for activation; a remote person's credential names the
     # `recovery_epoch` it was registered under, and a recovery that replaces
     # the live key revokes the credential, while an ordinary rotation keeps
-    # it.
+    # it. A declared restore suspends an active credential, which then
+    # asserts nothing until the person re-enables it.
     create table(:passkeys, primary_key: false) do
       add :id, :string, primary_key: true
       add :user_id, references(:users, type: :string, on_delete: :delete_all), null: false
@@ -755,6 +762,43 @@ defmodule Arca.Repo.Migrations.Baseline do
              where: "state != 'revoked'",
              name: :passkeys_live_credential_index
            )
+
+    # A person's seal at this home: the words (and optional glyph) the
+    # system layer shows first in every prompt, so the person can tell it
+    # from a page's imitation. Set once at first use and changed only under
+    # a fresh confirmation. Never a `users` column, which every projection
+    # of a person would carry; the seal leaves the store only for the
+    # person's own system layer. The person owns it: it goes with their
+    # `users` row and never with an athanor.
+    create table(:person_seals, primary_key: false) do
+      add :user_id, references(:users, type: :string, on_delete: :delete_all), primary_key: true
+      add :text, :text, null: false
+      add :glyph, :string
+      add :set_at, :utc_datetime_usec, null: false
+    end
+
+    restore_open = %{
+      name: "restore_people_open_until_closed",
+      expr: "open = (closed_at IS NULL)"
+    }
+
+    # The period after a declared restore, one row per person: while a
+    # person's row is open, their confirmation comes from a door this home
+    # re-authenticates or from the recovery kit, never from a suspended
+    # method. The row closes when the person re-enables a method, so each
+    # person recovers on their own. The person owns it: it goes with their
+    # `users` row and never with an athanor.
+    create table(:restore_people, primary_key: false) do
+      add :restore_id, :string, primary_key: true
+
+      add :user_id, references(:users, type: :string, on_delete: :delete_all), primary_key: true
+
+      add :open, :boolean, null: false, default: true, check: if(sqlite?, do: restore_open)
+      add :closed_at, :utc_datetime_usec
+    end
+
+    checked(sqlite?, :restore_people, [restore_open])
+    create index(:restore_people, [:user_id, :open])
 
     claim_state = known("installation_claims_state_known", "state", ~w(pending ended))
 
@@ -962,13 +1006,23 @@ defmodule Arca.Repo.Migrations.Baseline do
              where: "identity_key_epoch IS NOT NULL"
            )
 
-    invitation_state =
-      known("pairing_invitations_state_known", "state", ~w(pending consumed revoked))
+    invitation_checks = [
+      known("pairing_invitations_state_known", "state", ~w(pending consumed revoked)),
+      known("pairing_invitations_confirmer_kind_known", "confirmer_kind", ~w(passkey device)),
+      %{
+        name: "pairing_invitations_confirmer_whole",
+        expr: "(confirmer_kind IS NULL) = (confirmer_id IS NULL)"
+      }
+    ]
 
     # A pairing invitation: the hash of its bearer secret (never the
     # secret), the person and membership it was opened under, the client id
     # it reserves for the device that redeems it, its audience and expiry.
-    # Consumed once with issuance; a closed invitation never reopens.
+    # Consumed once with issuance; a closed invitation never reopens. It
+    # names the digest of the key the new device showed before it opened,
+    # the only key that may complete it, and the passkey or paired client
+    # whose confirmation opened it, which must still stand at completion;
+    # an invitation opened before the person held either names none.
     create table(:pairing_invitations, primary_key: false) do
       add :id, :string, primary_key: true
       add :athanor_id, :string, null: false
@@ -982,15 +1036,20 @@ defmodule Arca.Repo.Migrations.Baseline do
       add :state, :string,
         null: false,
         default: "pending",
-        check: if(sqlite?, do: invitation_state)
+        check: if(sqlite?, do: Enum.at(invitation_checks, 0))
 
       add :consumed_at, :utc_datetime_usec
       add :revoked_at, :utc_datetime_usec
+      add :key_digest, :string
+
+      add :confirmer_kind, :string, check: if(sqlite?, do: Enum.at(invitation_checks, 1))
+
+      add :confirmer_id, :string, check: if(sqlite?, do: Enum.at(invitation_checks, 2))
 
       timestamps(type: :utc_datetime_usec)
     end
 
-    checked(sqlite?, :pairing_invitations, [invitation_state])
+    checked(sqlite?, :pairing_invitations, invitation_checks)
     create unique_index(:pairing_invitations, [:secret_hash])
     create unique_index(:pairing_invitations, [:prospective_client_id])
     create index(:pairing_invitations, [:athanor_id, :user_id, :state])
@@ -2171,6 +2230,10 @@ defmodule Arca.Repo.Migrations.Baseline do
       add :lifecycle_id, :string
       add :expires_at, :utc_datetime_usec
       add :constraint, :text
+      # The outside sources an allow also covers (JSON, a list of
+      # `Prima.Source`): a turn that read an outside source the list does
+      # not name asks again. Empty covers none; a deny names none.
+      add :sources, :text, null: false, default: "[]"
     end
 
     # Each partial key is named for its scope, the name Postgres reports a
@@ -2348,6 +2411,9 @@ defmodule Arca.Repo.Migrations.Baseline do
       add :previous_secret_encrypted, :binary
       add :previous_secret_expires_at, :utc_datetime_usec
       add :profile_id, :string, null: false
+      # Held by a declared restore until the person re-enables the webhook;
+      # a suspended webhook releases no signing secret.
+      add :suspended, :boolean, null: false, default: false
 
       timestamps(type: :utc_datetime_usec)
     end
@@ -2520,6 +2586,10 @@ defmodule Arca.Repo.Migrations.Baseline do
       add :claimed_by, :string
       add :claimed_at, :utc_datetime_usec, null: false
       add :ended_at, :utc_datetime_usec
+      # The revision of the schedule's note as the run first read it, 0 when
+      # there was none; null while the run has read no note. The outcome's
+      # record copies it, so delivery never re-reads the note.
+      add :note_revision_read, :integer
     end
 
     checked(sqlite?, :schedule_occurrences, [occurrence_state])
@@ -2530,6 +2600,54 @@ defmodule Arca.Repo.Migrations.Baseline do
     # (`Arca.ScheduleOccurrences.recoverable/1`); the history, which is
     # kept, is never scanned for them.
     create index(:schedule_occurrences, [:state, :claimed_at])
+  end
+
+  # ==========================================================================
+  # The outbox: facts a source transaction records for later consumers
+  # ==========================================================================
+
+  defp outbox do
+    sqlite? = repo().__adapter__() == Ecto.Adapters.SQLite3
+
+    # One immutable record per fact a source transaction commits
+    # (`Prima.OutboxRecord`): which source, at which revision, and a
+    # snapshot that names no consumer, so a consumer that runs later, on
+    # another member or after the source changed reads the fact as it
+    # stood. A fact is recorded once, whoever retries the source.
+    create table(:outbox_records, primary_key: false) do
+      add :source_kind, :string, primary_key: true
+      add :source_id, :string, primary_key: true
+      add :source_revision, :string, primary_key: true
+      add :kind, :string, primary_key: true
+      add :athanor_id, :string, null: false
+      add :snapshot, :text, null: false
+      add :inserted_at, :utc_datetime_usec, null: false
+    end
+
+    create index(:outbox_records, [:athanor_id, :kind, :inserted_at])
+
+    receipt_outcome =
+      known(
+        "consumer_receipts_outcome_known",
+        "outcome",
+        ~w(applied superseded conflict refused)
+      )
+
+    # What one consumer did with one source revision, written in the
+    # transaction that applied it: a consumer applies a fact once, and a
+    # record is kept until its last consumer's receipt has aged out.
+    create table(:consumer_receipts, primary_key: false) do
+      add :consumer, :string, primary_key: true
+      add :source_kind, :string, primary_key: true
+      add :source_id, :string, primary_key: true
+      add :source_revision, :string, primary_key: true
+      add :athanor_id, :string, null: false
+      add :outcome, :string, null: false, check: if(sqlite?, do: receipt_outcome)
+      add :inserted_at, :utc_datetime_usec, null: false
+    end
+
+    checked(sqlite?, :consumer_receipts, [receipt_outcome])
+    create index(:consumer_receipts, [:athanor_id, :inserted_at])
   end
 
   # ==========================================================================
@@ -2695,6 +2813,10 @@ defmodule Arca.Repo.Migrations.Baseline do
       # How the turn was started (`Prima.Origin`), written when it is
       # accepted, so a turn recovered after a restart resumes under it.
       add :origin, :string
+      # Every source the turn has read (JSON, a list of `Prima.Source`),
+      # grown in the transaction that writes each step, so it survives
+      # compaction and restart.
+      add :sources, :text, null: false, default: "[]"
     end
 
     checked(sqlite?, :turns, [turn_status])

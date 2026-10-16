@@ -4,6 +4,8 @@
 defmodule Sanctum.Tenancy.UsersTest do
   use ExUnit.Case, async: false
 
+  import Ecto.Query, only: [from: 2]
+
   alias Sanctum.Context
   alias Sanctum.Tenancy.{Athanors, Members, Users}
 
@@ -197,6 +199,53 @@ defmodule Sanctum.Tenancy.UsersTest do
     assert Members.member?(u.id, personal.id)
     refute Members.member?(u.id, group.id)
     assert {:error, :revoked} = Sanctum.ApiKey.validate(key, [])
+  end
+
+  test "a seal and a post-restore period are the person's: a denial and an athanor's purge leave them, the users row takes them" do
+    u = person(42)
+    {:ok, group} = Athanors.create_group("github|https://github.com|owner42", "G42")
+    {:ok, :added} = Members.add(group, [user_id: u.id], "owner42")
+    now = DateTime.utc_now()
+
+    {1, _} =
+      Arca.Repo.insert_all(Arca.Schemas.PersonSeal, [
+        %{user_id: u.id, text: "amber heron", glyph: nil, set_at: now}
+      ])
+
+    {1, _} =
+      Arca.Repo.insert_all(Arca.Schemas.RestorePerson, [
+        %{restore_id: "rst_#{System.unique_integer([:positive])}", user_id: u.id}
+      ])
+
+    assert person_rows(u.id) == %{seals: 1, restore_periods: 1}
+
+    assert {:ok, _} = Users.deny(u)
+    assert person_rows(u.id) == %{seals: 1, restore_periods: 1}
+
+    {:ok, archived} = Athanors.archive(group)
+    assert {:ok, counts} = Athanors.destroy(archived)
+    refute Map.has_key?(counts, "person_seals")
+    refute Map.has_key?(counts, "restore_people")
+    assert person_rows(u.id) == %{seals: 1, restore_periods: 1}
+
+    # Their owner is the person's row: deleting it takes both.
+    assert {1, _} = Arca.Repo.delete_all(from(p in Arca.Schemas.User, where: p.id == ^u.id))
+    assert person_rows(u.id) == %{seals: 0, restore_periods: 0}
+  end
+
+  defp person_rows(user_id) do
+    %{
+      seals:
+        Arca.Repo.aggregate(
+          from(s in Arca.Schemas.PersonSeal, where: s.user_id == ^user_id),
+          :count
+        ),
+      restore_periods:
+        Arca.Repo.aggregate(
+          from(r in Arca.Schemas.RestorePerson, where: r.user_id == ^user_id),
+          :count
+        )
+    }
   end
 
   test "deny withdraws the group seats the address was still holding" do

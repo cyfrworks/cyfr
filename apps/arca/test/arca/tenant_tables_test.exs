@@ -6,7 +6,8 @@ defmodule Arca.TenantTablesTest do
   `Arca.TenantTables.delete_all_for/1` removes every row an athanor owns
   from the tables its writers fill, and no other athanor's. Each case
   writes its rows through the table's own writer, purges one athanor and
-  reads both back.
+  reads both back; the outbox's rows, whose writers come later, are
+  written straight to their tables.
 
   The roster's drift against the live schema is
   `apps/cyfr/test/arca/schema_baseline_test.exs`'s.
@@ -19,7 +20,15 @@ defmodule Arca.TenantTablesTest do
 
   alias Arca.FencedPublication
   alias Arca.FencedPublication.Change
-  alias Arca.Schemas.{CellLease, FencedDocument, FencedDocumentFloor, StorageStaging}
+
+  alias Arca.Schemas.{
+    CellLease,
+    ConsumerReceipt,
+    FencedDocument,
+    FencedDocumentFloor,
+    OutboxRecord,
+    StorageStaging
+  }
 
   setup tags do
     Arca.Test.Sandbox.setup!(tags)
@@ -45,6 +54,46 @@ defmodule Arca.TenantTablesTest do
 
     assert %{documents: 0, staging: 0, floor: []} = rows(purged)
     assert %{documents: 1, staging: 3, floor: [2]} = rows(kept)
+  end
+
+  test "an athanor's outbox records and its consumers' receipts go with it" do
+    [purged, kept] = for _ <- 1..2, do: actor()
+    now = DateTime.utc_now()
+
+    for %Prima.Actor{athanor_id: athanor_id} <- [purged, kept] do
+      source = %{
+        source_kind: "schedule_occurrence",
+        source_id: "occ_#{System.unique_integer([:positive])}",
+        source_revision: "1"
+      }
+
+      {1, _} =
+        Arca.Repo.insert_all(OutboxRecord, [
+          Map.merge(source, %{
+            kind: "schedule_outcome",
+            athanor_id: athanor_id,
+            snapshot: "{}",
+            inserted_at: now
+          })
+        ])
+
+      {1, _} =
+        Arca.Repo.insert_all(ConsumerReceipt, [
+          Map.merge(source, %{
+            consumer: "schedule_notes",
+            athanor_id: athanor_id,
+            outcome: "applied",
+            inserted_at: now
+          })
+        ])
+    end
+
+    assert {:ok, counts} = Arca.TenantTables.delete_all_for(purged)
+    assert counts["outbox_records"] == 1
+    assert counts["consumer_receipts"] == 1
+
+    assert outbox_rows(purged) == %{records: 0, receipts: 0}
+    assert outbox_rows(kept) == %{records: 1, receipts: 1}
   end
 
   # ---- helpers ---------------------------------------------------------------
@@ -73,6 +122,18 @@ defmodule Arca.TenantTablesTest do
       floor:
         Arca.Repo.all(
           from(f in FencedDocumentFloor, where: f.athanor_id == ^athanor_id, select: f.floor)
+        )
+    }
+  end
+
+  defp outbox_rows(%Prima.Actor{athanor_id: athanor_id}) do
+    %{
+      records:
+        Arca.Repo.aggregate(from(r in OutboxRecord, where: r.athanor_id == ^athanor_id), :count),
+      receipts:
+        Arca.Repo.aggregate(
+          from(r in ConsumerReceipt, where: r.athanor_id == ^athanor_id),
+          :count
         )
     }
   end

@@ -31,6 +31,9 @@ defmodule Arca.Schemas.PairingInvitation do
     field :state, :string, default: "pending"
     field :consumed_at, :utc_datetime_usec
     field :revoked_at, :utc_datetime_usec
+    field :key_digest, :string
+    field :confirmer_kind, :string
+    field :confirmer_id, :string
     timestamps(type: :utc_datetime_usec)
   end
 end

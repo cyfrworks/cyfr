@@ -22,6 +22,7 @@ defmodule Arca.Schemas.ApiKey do
     field :ip_allowlist, :string
     field :capability, :string
     field :revoked, :boolean
+    field :suspended, :boolean, default: false
     field :created_by, :string
     field :rotated_at, :utc_datetime_usec
     field :athanor_id, :string
