@@ -941,9 +941,10 @@ defmodule Arca.FencedPublicationFloorBudgetTest do
   verified lease has run out rolls back on its budget, writing nothing:
   the floor is taken before the budget is checked, never after it.
 
-  PostgreSQL only: SQLite takes its one write lock at `BEGIN IMMEDIATE`,
-  before the budget's clock starts, so no wait on the floor falls inside
-  a publication there. The wait is observed through `pg_blocking_pids`.
+  PostgreSQL only: on SQLite, `Arca.Repo`'s locking wrapper takes the
+  database's one write lock (a no-row `UPDATE` on `schema_migrations`)
+  before the transaction body runs and the budget's clock starts, so no
+  wait on the floor falls inside a publication there. The wait is observed through `pg_blocking_pids`.
   """
 
   use ExUnit.Case, async: false
