@@ -2214,7 +2214,10 @@ defmodule Sanctum.Consent.Commit do
   # is the one reading of a head binding: a revision's removed bindings
   # are judged on it, and the plan answers its head rows from it
   # (`Sanctum.Consent.Plan`), so the sheet and the preview reopen and
-  # remove the same binding for the same need. `reads` is `{ctx, sources,
+  # remove the same binding for the same need. A dependency's need is told
+  # from every candidate its declaration has, a need the app provides
+  # configuration for included, though the plan offers that need no
+  # candidates. `reads` is `{ctx, sources,
   # built}`: the caller's context, the choice sources
   # (`Sanctum.Consent.Plan.choice_sources/1`) and the grant's
   # `source_ref`, `declared` needs, `graph` and closure `rows`. A row

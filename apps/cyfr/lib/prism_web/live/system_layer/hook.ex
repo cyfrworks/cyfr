@@ -19,7 +19,9 @@ defmodule PrismWeb.SystemLayer.Hook do
     * the default — every other report is the view's held asks'
       (`PrismWeb.SystemLayer.reported/2`): a change it asked for that was
       confirmed is repeated by the view's `c:system_layer_repeat/4`, and a
-      change that ended lets its secret go.
+      change that ended lets its secret go. A report the view holds
+      nothing under, the layer's refusal of a malformed prompt (`id`
+      nil) among them, changes nothing and is said nowhere.
 
   The hook is mounted after `CyfrWeb.ContextGuard`, so the guard's
   freshness rule has run on the view's context before a report can
