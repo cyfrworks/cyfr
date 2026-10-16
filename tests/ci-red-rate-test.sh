@@ -316,5 +316,23 @@ printf '{"jobs":[{"databaseId":1,"name":"Static checks","conclusion":null}]}\n' 
 expect_limit=4 run -n 4
 check stdout_is $'job\tfirst_pass\tfirst_fail\tfirst_cancelled\treruns\trerun_pass\trerun_fail\trerun_cancelled\nBrowser harness\t2\t0\t0\t1\t1\t0\t0\nElixir Tests (sqlite)\t0\t2\t0\t3\t2\t1\t0\nStatic checks\t1\t2\t0\t1\t1\t0\t0\n# runs: 4 listed, 3 completed and counted, 1 not completed and left out: 104\n'
 
+label="multiple run-list JSON documents are refused"
+new_case
+printf '[]\n[]\n' > "$case_dir/list.json"
+run
+check failed_with "red-rate: gh run list answered something other than a list of runs"
+
+label="a malformed first run-list document is not hidden by the last"
+new_case
+printf '{}\n[]\n' > "$case_dir/list.json"
+run
+check failed_with "red-rate: gh run list answered something other than a list of runs"
+
+label="multiple attempt JSON documents are refused"
+main_case
+printf '{"jobs":[{"databaseId":1,"name":"Static checks","conclusion":"success"}]}\n{"jobs":[{"databaseId":1,"name":"Static checks","conclusion":"success"}]}\n' > "$case_dir/view-101-1.json"
+expect_limit=4 run -n 4
+check failed_with "red-rate: gh run view 101 --attempt 1 answered no job list"
+
 echo "$cases cases, $failures failures"
 [ "$failures" -eq 0 ]

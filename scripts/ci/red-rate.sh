@@ -53,13 +53,16 @@ trap 'rm -rf "$scratch"' EXIT
 gh run list --workflow "$WORKFLOW" --branch "$BRANCH" --limit "$RUNS" \
   --json databaseId,attempt,status,conclusion > "$scratch/runs.json" ||
   { echo "red-rate: gh run list failed" >&2; exit 1; }
-# The answer is one JSON document: an array of runs, each an object with a
+# The answer is exactly one JSON document: an array of runs, each an object with a
 # numeric id, a string status, an integer attempt count of one or more and
 # a conclusion that is a string or null. Anything else (no document, an
 # object, a run without them, a fractional or zero attempt, a number for a
 # conclusion) is refused before anything is counted, rather than read as
 # nothing.
-jq -e 'type == "array"' "$scratch/runs.json" >/dev/null 2>&1 ||
+# Slurped, the answer is one array holding every document gh wrote: exactly
+# one, and that one a list; a second document would hide a malformed first
+# or count a run twice.
+jq -es 'length == 1 and (.[0] | type) == "array"' "$scratch/runs.json" >/dev/null 2>&1 ||
   { echo 'red-rate: gh run list answered something other than a list of runs' >&2; exit 1; }
 jq -r '
   .[]
@@ -80,13 +83,14 @@ while IFS=$'\t' read -r id attempts status _conclusion; do
   for ((a = 1; a <= attempts; a++)); do
     gh run view "$id" --attempt "$a" --json jobs > "$scratch/attempt.json" ||
       { echo "red-rate: gh run view $id --attempt $a failed" >&2; exit 1; }
-    # The answer is one JSON document: an object whose jobs are a non-empty
+    # The answer is exactly one JSON document: an object whose jobs are a non-empty
     # array (a completed attempt ran at least one job), each an object with
     # a string name, a numeric id and a conclusion that is a string or null.
     # Anything else is refused before anything is counted. One row per job:
     # run, attempt, job id, conclusion, name, the name last, as it may hold
     # anything but a newline.
-    jq -e 'type == "object" and (.jobs | type) == "array" and .jobs != []' "$scratch/attempt.json" >/dev/null 2>&1 ||
+    jq -es 'length == 1 and (.[0] | type) == "object" and (.[0].jobs | type) == "array" and .[0].jobs != []' \
+      "$scratch/attempt.json" >/dev/null 2>&1 ||
       { echo "red-rate: gh run view $id --attempt $a answered no job list" >&2; exit 1; }
     jq -r --arg run "$id" --arg attempt "$a" '
       .jobs[]
