@@ -364,7 +364,7 @@ defmodule Aqua.Loop do
     |> Enum.filter(&(&1.dispatch_state == "dispatched"))
     |> Enum.reduce_while(:ok, fn step, :ok ->
       with :ok <- held(),
-           :ok <- cancel_aborted_child(ctx, step.child_execution_id) do
+           :ok <- cancel_aborted_child(ctx, cancellable(step)) do
         Aqua.Ops.cancel_call(handle(turn, step))
         guest = Context.enter_guest(ctx)
 
@@ -384,6 +384,13 @@ defmodule Aqua.Loop do
       end
     end)
   end
+
+  # The child a stopped or settled step's run is cancelled by. A launched
+  # app is a root of its own, run because a person approved it: its row
+  # carries the step's id so the step's close can read its ledger, and the
+  # turn's end cancels nothing it started.
+  defp cancellable(%{kind: "launch"}), do: nil
+  defp cancellable(%{child_execution_id: id}), do: id
 
   defp cancel_aborted_child(_ctx, nil), do: :ok
 
@@ -1628,8 +1635,7 @@ defmodule Aqua.Loop do
         :ok
 
       {:ok, %{dispatch_state: "dispatched"} = fresh} ->
-        if fresh.child_execution_id,
-          do: Opus.cancel(ctx(state), fresh.child_execution_id)
+        if id = cancellable(fresh), do: Opus.cancel(ctx(state), id)
 
         why = describe(reason)
 
@@ -1736,7 +1742,7 @@ defmodule Aqua.Loop do
   defp cancel_rest(%State{} = state, rest) do
     Enum.each(rest, fn %{item: %{step: step} = item, task: task} ->
       if task, do: Aqua.Loop.Worker.shutdown(task)
-      if step.child_execution_id, do: Opus.cancel(ctx(state), step.child_execution_id)
+      if id = cancellable(step), do: Opus.cancel(ctx(state), id)
       Aqua.Ops.cancel_call(handle(state, step))
       _ = settle_dead(state, item, :cancelled, :mark)
       Aqua.Ops.release_call(handle(state, step))
@@ -1928,8 +1934,7 @@ defmodule Aqua.Loop do
       open =
         Enum.reduce(steps, [], fn
           %{dispatch_state: "dispatched"} = step, open ->
-            if step.child_execution_id,
-              do: Opus.cancel(ctx(state), step.child_execution_id)
+            if id = cancellable(step), do: Opus.cancel(ctx(state), id)
 
             case Prima.TurnStep.unresolved(step) do
               :unanswered ->
