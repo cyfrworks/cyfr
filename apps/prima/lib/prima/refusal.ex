@@ -392,8 +392,7 @@ defmodule Prima.Refusal do
 
   # A send whose run read a class its grant declares no flow of to the
   # exit (`Prima.Flow`): the classes and the exit's host or server name.
-  defp row({:flow_not_declared, %{classes: [_ | _] = classes, exit: exit}})
-       when is_binary(exit) do
+  defp row({:flow_not_declared, [_ | _] = classes, exit}) when is_binary(exit) do
     if Enum.all?(classes, &(&1 in Prima.Source.classes())),
       do: {:forbidden, Prima.Flow.sentence(classes, exit)}
   end

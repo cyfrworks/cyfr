@@ -132,7 +132,7 @@ defmodule Prima.FlowTest do
 
   test "a refusal names the uncovered classes and the exit, and reads as its Prima.Refusal row" do
     refusal = Flow.refusal([Source.outside("a.test"), Source.new(:filed)], {:domain, "b.test"})
-    assert refusal == {:flow_not_declared, %{classes: [:filed, :outside], exit: "b.test"}}
+    assert refusal == {:flow_not_declared, [:filed, :outside], "b.test"}
 
     assert %Prima.Refusal{class: :forbidden, message: message} = Prima.Refusal.classify(refusal)
 
@@ -140,6 +140,6 @@ defmodule Prima.FlowTest do
              "This run read filed, outside material, and its grant declares no flow of it to b.test"
 
     assert Flow.refusal([Source.new(:pinned)], {:server, "search"}) ==
-             {:flow_not_declared, %{classes: [:pinned], exit: "server:search"}}
+             {:flow_not_declared, [:pinned], "server:search"}
   end
 end

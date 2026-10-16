@@ -6,11 +6,12 @@ defmodule Sanctum.LaunchStampBoundaryTest do
   An approved launch's stamp (`Sanctum.Context`'s `launch`) seeds a root
   and names the classes its tree may send anywhere, so it is written by
   one function, `Sanctum.Context.stamp_launch/2`, called from
-  `Aqua.Launch` alone. Mechanically, over every code line of every app's
-  `lib`: the setter is called in one place, and no other line gives the
-  field a value — a map or struct update naming `launch:` with anything
-  but `nil` (admission's clear) appears only in the setter itself, a
-  function or clause head's pattern being a read.
+  `Aqua.Launch` alone. Mechanically, over the code of every app's `lib`:
+  the setter is called in one place, and nothing else gives the field a
+  value — a map or struct update naming `launch:` with anything but `nil`
+  (admission's clear), whether on one line or spread over several, a
+  `Map` writer, `struct/2` or `put_in` naming it, appears only in the
+  setter itself.
   """
 
   use ExUnit.Case, async: true
@@ -38,21 +39,51 @@ defmodule Sanctum.LaunchStampBoundaryTest do
            "stamp_launch/2 is Aqua.Launch's alone, called once: #{inspect(calls)}"
   end
 
-  test "no line but the setter's gives the launch field a value" do
-    writes =
-      for {rel, lines} <- lib_files(),
-          line <- lines,
-          line =~ ~r/(\|\s*|%[A-Za-z.]*Context\{[^}]*)\blaunch:\s*(?!nil\b)/,
-          # A function head or a clause head matches the field; it writes
-          # nothing.
-          not (line =~ ~r/^\s*defp?\s/ or line =~ ~r/->\s*$/),
-          do: {rel, String.trim(line)}
+  # Every way a code line can give a map or struct the `launch` key a
+  # value, read over a whole file so an update spread over lines is one
+  # match: an update naming `launch:` with anything but `nil`, a `Map`
+  # writer naming `:launch`, `struct/2` or `struct!/2` naming it, and
+  # `put_in` reaching it.
+  @writers [
+    ~r/%[A-Za-z.]*\{[^{}]*?\|[^{}]*?\blaunch:(?!\s*nil\b)/s,
+    ~r/\bMap\.(?:put|put_new|replace|replace!|update|update!)\([^()]*:launch\b/s,
+    ~r/\bMap\.merge\([^()]*\blaunch:/s,
+    ~r/\bstruct!?\([^()]*\blaunch:/s,
+    ~r/\bput_in\([^()]*(?:\.launch\b|:launch\b)/s
+  ]
 
-    assert writes == [
-             {@context,
-              "%{ctx | launch: Map.take(launch, [:sources, :classes, :consent_id, :execution_id])}"}
-           ],
-           "only Sanctum.Context.stamp_launch/2 writes the launch stamp: #{inspect(writes)}"
+  defp writes(text),
+    do: for(re <- @writers, [found] <- Regex.scan(re, text), do: String.trim(found))
+
+  test "no code but the setter's gives the launch field a value" do
+    found =
+      for {rel, lines} <- lib_files(),
+          _write <- writes(Enum.join(lines, "\n")),
+          do: rel
+
+    assert found == [@context],
+           "only Sanctum.Context.stamp_launch/2 writes the launch stamp: #{inspect(found)}"
+  end
+
+  test "each writer form is caught, an update spread over lines among them" do
+    planted = """
+    def a(ctx, stamp), do: Map.put(ctx, :launch, stamp)
+
+    def b(approver, stamp) do
+      %{
+        approver
+        | origin: :interactive,
+          launch: stamp
+      }
+    end
+
+    def c(ctx, stamp), do: struct(ctx, launch: stamp)
+    def d(ctx, stamp), do: put_in(ctx.launch, stamp)
+    def e(ctx, stamp), do: Map.merge(ctx, %{launch: stamp})
+    def cleared(ctx), do: %{ctx | approved_entry: nil, launch: nil}
+    """
+
+    assert length(writes(planted)) == 5
   end
 
   test "the setter refuses a stamp of another shape" do

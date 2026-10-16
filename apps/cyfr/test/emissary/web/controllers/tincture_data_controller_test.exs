@@ -1022,6 +1022,27 @@ defmodule Emissary.Web.TinctureDataControllerTest do
   defp invoked(route), do: Enum.filter(mcp_rows("tincture"), &(&1.action == route))
 
   describe "a frame that connects beyond its endpoint" do
+    test "a file read carries what an unrecorded file is, outside material, beside the grant's own class",
+         %{source: source} do
+      actor = Sanctum.Context.actor(source)
+      assert {:ok, _} = Arca.Files.write(actor, "data/legacy-outside.txt", "OUTSIDE-BYTES")
+      name = "file-flow"
+      digest = tincture!(source, name, %{"connect" => [@origin], "actions" => ["file.read"]}, [])
+      revision = grant!(source, name, :owner, [{:files_by_grant, @origin}])
+      frame = frame!(source, name, digest, revision)
+
+      body =
+        TinctureWire.request(:action, %{
+          operation: "file.read",
+          args: %{"path" => "data/legacy-outside.txt"}
+        })
+
+      conn = data(:action, body, bearer: frame.bearer)
+      assert conn.status == 403
+      assert %{class: "forbidden", message: message} = refused(conn, :action)
+      assert message =~ "outside"
+    end
+
     test "an action whose answer may carry a class with no flow to the origin is refused " <>
            "before it is read; with the flow it is read",
          %{source: source} do
