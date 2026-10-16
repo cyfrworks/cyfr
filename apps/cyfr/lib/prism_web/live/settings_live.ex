@@ -23,7 +23,12 @@ defmodule PrismWeb.SettingsLive do
       enrollment still waiting for the directory whose seed no prompt here
       holds (the browser that began it lost it) is abandoned and begun
       again under a new kit (`person.enroll_abandon`). A person whose keys
-      another home holds is told to change them there.
+      another home holds is told to change them there. A person whose
+      seal is set changes it here: the control raises the system layer's
+      seal prompt, which makes the change under a fresh confirmation
+      (`Sanctum.Seal.change/2`). This page reads only whether a seal is
+      set (`Sanctum.Seal.for_system_layer/1`), never holds the seal, and
+      reads again once the prompt ends.
     * **Doors** — each linked door, unlinked through `person.unlink_door`;
       a GitHub or Google door linked through a device flow that answers a
       link ticket (`Sanctum.Auth.DeviceFlow`'s `poll_for_link/4`), and an
@@ -76,7 +81,7 @@ defmodule PrismWeb.SettingsLive do
   `identity-enroll`, `identity-abandon`, `identity-kit` (with
   `data-attempt`),
   `identity-kit-show`, `identity-add-kit`, `identity-rotate`,
-  `identity-rotation`; `doors`, `door` (with `data-key`), `door-unlink`,
+  `identity-rotation`, `identity-seal-change`; `doors`, `door` (with `data-key`), `door-unlink`,
   `door-link-github`, `door-link-google`, `door-link-oidcc`,
   `door-link-flow`, `door-link-code`, `door-link-cancel`; `passkeys`,
   `passkey` (with `data-id` and `data-state`), `passkey-register` and
@@ -97,6 +102,8 @@ defmodule PrismWeb.SettingsLive do
   alias Sanctum.Auth.DeviceFlow
 
   @default_link_poll_s 5
+  # The id of the seal prompt this page raises.
+  @seal_prompt "seal-change"
   # The doors a device flow links.
   @device_flow_providers Prima.SignInProviders.device_flow()
 
@@ -162,6 +169,7 @@ defmodule PrismWeb.SettingsLive do
       |> assign(:identity, nil)
       |> assign(:identity_error, nil)
       |> assign(:enrolling, nil)
+      |> assign(:seal_set, false)
       |> assign(:passkeys, nil)
       |> assign(:passkeys_error, nil)
       |> assign(:link_flow, nil)
@@ -270,6 +278,15 @@ defmodule PrismWeb.SettingsLive do
 
     rotate(socket, request_id)
   end
+
+  # Offered only while a seal is set: a first seal is chosen in the system
+  # layer's own offer, never here.
+  def handle_event("change_seal", _params, %{assigns: %{seal_set: true}} = socket) do
+    SystemLayer.show(SystemLayer.layer_id(), seal_prompt())
+    {:noreply, socket}
+  end
+
+  def handle_event("change_seal", _params, socket), do: {:noreply, socket}
 
   # ---- doors -----------------------------------------------------------------
 
@@ -436,6 +453,9 @@ defmodule PrismWeb.SettingsLive do
       instance_prompt?(prompt_id) ->
         {:noreply, instance_prompt_ended(socket, report)}
 
+      prompt_id == @seal_prompt ->
+        {:noreply, load_seal(socket)}
+
       true ->
         :pass
     end
@@ -481,6 +501,7 @@ defmodule PrismWeb.SettingsLive do
       |> load_instance_prefill()
       |> load_prefs()
       |> load_identity()
+      |> load_seal()
       |> load_passkeys()
       |> assign(:loading, false)
 
@@ -1151,6 +1172,20 @@ defmodule PrismWeb.SettingsLive do
     end
   end
 
+  # Whether the person's seal is set, and nothing of the seal: the page
+  # offers its change only then.
+  defp load_seal(socket),
+    do:
+      assign(
+        socket,
+        :seal_set,
+        match?({:ok, _seal}, Sanctum.Seal.for_system_layer(socket.assigns.context))
+      )
+
+  # The system layer's prompt that changes the person's seal under a fresh
+  # confirmation.
+  defp seal_prompt, do: %{id: @seal_prompt, kind: :seal, action: :seal_change, subject: %{}}
+
   # The enrollment prompt, at the directory this home pins. Until it ends,
   # its seed is held there, so no abandonment is offered beside it.
   defp enroll(socket) do
@@ -1449,6 +1484,7 @@ defmodule PrismWeb.SettingsLive do
           error={@identity_error}
           remote={remote?(@identity)}
           enrolling={@enrolling}
+          seal_set={@seal_set}
         />
 
         <.doors_card
@@ -1744,6 +1780,7 @@ defmodule PrismWeb.SettingsLive do
   attr :error, :string, default: nil
   attr :remote, :boolean, required: true
   attr :enrolling, :string, default: nil
+  attr :seal_set, :boolean, default: false
 
   # The person's identity: who holds their keys, the identifier and the
   # directory, the kits not yet saved, and what they can do here.
@@ -1868,6 +1905,15 @@ defmodule PrismWeb.SettingsLive do
               </div>
             </div>
           </div>
+        </div>
+
+        <div :if={@seal_set} class="space-y-2">
+          <p class="text-sm text-gray-300">
+            Every prompt this home draws begins with your seal. Changing it needs a fresh confirmation.
+          </p>
+          <.button variant="ghost" phx-click="change_seal" data-test="identity-seal-change">
+            Change your seal
+          </.button>
         </div>
       </section>
     </.card>

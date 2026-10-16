@@ -1873,6 +1873,35 @@ defmodule PrismWeb.SettingsLiveTest do
     end
   end
 
+  describe "your seal" do
+    # A seal set for `person`, as their first choice in the system layer
+    # writes it.
+    defp seal!(person, text) do
+      {1, _} =
+        Arca.Repo.insert_all("person_seals", [
+          %{user_id: person.user_id, text: text, glyph: nil, set_at: DateTime.utc_now()}
+        ])
+
+      :ok
+    end
+
+    test "Change your seal is offered only once a seal is set, and the page holds no seal",
+         %{conn: conn} do
+      person = test_user()
+      conn = log_in_user(conn, person)
+
+      {view, _html} = mount_athanor(conn, "/settings")
+      refute has_element?(view, ~s([data-test="identity-seal-change"]))
+
+      seal!(person, "quill zephyr")
+      {view, html} = mount_athanor(conn, "/settings")
+
+      assert has_element?(view, ~s([data-test="identity-seal-change"]), "Change your seal")
+      refute html =~ "quill zephyr"
+      refute render(view) =~ "quill zephyr"
+    end
+  end
+
   describe "sign-in doors" do
     test "the last door stays while the person holds no passkey here, said in its sentence",
          %{conn: conn} do

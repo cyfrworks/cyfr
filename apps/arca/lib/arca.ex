@@ -169,6 +169,7 @@ defmodule Arca do
       Passkeys,
       PendingConfirmations,
       PersonIdentities,
+      PersonSeals,
       PlatformSettings,
       PolicyLog,
       ProfileStorage,

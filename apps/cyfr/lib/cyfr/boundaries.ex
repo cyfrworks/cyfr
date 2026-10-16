@@ -529,8 +529,8 @@ defmodule Cyfr.Boundaries do
         Sanctum.Annotations Sanctum.ApiKey Sanctum.Auth Sanctum.BearerToken Sanctum.Caller
         Sanctum.Catalog Sanctum.ClientIp Sanctum.Consent Sanctum.Context Sanctum.Decisions
         Sanctum.Door Sanctum.Gate Sanctum.Pairing Sanctum.Passkeys Sanctum.PolicyLog
-        Sanctum.Refusals Sanctum.RequestLog Sanctum.Session Sanctum.SignIn Sanctum.Tenancy
-        Sanctum.TinctureAuth Sanctum.Unauthorized Sanctum.Webhook
+        Sanctum.Refusals Sanctum.RequestLog Sanctum.Seal Sanctum.Session Sanctum.SignIn
+        Sanctum.Tenancy Sanctum.TinctureAuth Sanctum.Unauthorized Sanctum.Webhook
       ),
       reason:
         "the console, its browser sign-in (`PrismWeb.AuthController`, which asks the " <>
@@ -544,6 +544,10 @@ defmodule Cyfr.Boundaries do
           "`Sanctum.Pairing` is the system layer's reading of the action table and of " <>
           "whether this client has a person behind it who can confirm, which hides a " <>
           "control and never decides: the operation a confirmation dispatches decides. " <>
+          "`Sanctum.Seal` is the system layer's read of the person's seal, which it draws " <>
+          "first in every prompt, and the first choice and the confirmed change it makes " <>
+          "from its seal prompt; the settings page reads only whether one is set. No " <>
+          "operation reads it, so no frame, key or data route reaches it. " <>
           "`Sanctum.Passkeys` is the sign-in page's passkey door: the challenge it holds " <>
           "and the answer it verifies into a session, as the device flow's poll is " <>
           "(`sign_in_challenge/0`, `sign_in/2`); `Sanctum.Auth.CyfrDoor` is the `cyfr` door's: " <>
@@ -1814,6 +1818,7 @@ defmodule Cyfr.Boundaries do
     "Sanctum.RequestLog" => [list: 2],
     "Sanctum.Resources" => [list_resource_templates: 0, list_resources: 0, resolve: 1, table: 0],
     "Sanctum.RunningTasks" => [cancel: 1, cancel_handle: 1, release_handle: 1],
+    "Sanctum.Seal" => [for_system_layer: 1],
     "Sanctum.Session" => [cleanup: 0, create: 1, destroy: 1, get: 1],
     "Sanctum.SignIn" => [admitted: 2, link_ticket: 2, record_namespace: 2, suggested_slug: 2],
     "Sanctum.Tenancy" => [
