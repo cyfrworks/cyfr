@@ -689,6 +689,48 @@ async function promptsIn(browser, name, proxy, base, segment, cookie, outDir) {
   }
 }
 
+// A frame that connects to one origin and reads the person's notes: the
+// read is admitted only when every class it may carry has a declared flow
+// to that origin. The probe sends what it read to the origin; the
+// harness's proxy sees every tunnel a browser asks for to it.
+const FLOWS = [
+  { name: "flow_declared_origin", column: "allowed", tincture: "flow-probe-flowed",
+    holds: (r, sent) => r.read && r.read.ok === true && r.sent === true && sent > 0,
+    what: "a frame whose declared reads may flow to its declared origin reads, and its send leaves for that origin" },
+  { name: "flow_read_unflowed", column: "refused", tincture: "flow-probe",
+    holds: (r, sent) =>
+      r.read && r.read.ok === false && /declares no flow/.test(r.read.message || "") && r.sent === false && sent === 0,
+    what: "a frame whose declared read may carry a class with no flow to its declared origin is refused the read, and nothing leaves for the origin" },
+];
+
+const flowReady = () => {
+  const r = document.getElementById("results");
+  return !!r && r.dataset.ready === "yes" && !!window.__flow;
+};
+
+async function flows(browser, browserName, base, proxy, segment, cookie) {
+  const record = { attempts: {} };
+  for (const expected of FLOWS) {
+    const context = await signedIn(browser, base, cookie);
+    try {
+      proxy.seen = [];
+      const page = await context.newPage();
+      await openShell(page, base, segment, expected.tincture);
+      const { frame } = await launch(page, expected.tincture);
+      await frame.waitForFunction(flowReady, null, { timeout: 60_000 });
+      const result = await frame.evaluate(() => window.__flow.run());
+      await sleep(SETTLE_MS);
+      const sent = proxy.seen.filter((entry) => entry.host === ATTACKER).length;
+      const held = result.settled !== false && expected.holds(result, sent);
+      check(held, browserName, "flows", expected.name, expected.what, { frame: result, tunnels_to_origin: sent });
+      record.attempts[expected.name] = { column: expected.column, outcome: held ? "held" : "FAILED", frame: result, sent };
+    } finally {
+      await context.close();
+    }
+  }
+  return record;
+}
+
 const NOT_DRIVEN = [
   ["suspended_on_another_member",
     "an action after the frame was suspended on another member: a browser cell runs one member on SQLite, so it is proven in the cluster suite (apps/cyfr/test/cluster/frame_suspension_test.exs), the suspension made on one member and refused at the credential's next use on the other"],
@@ -713,6 +755,7 @@ async function main() {
       record[name].private = await phase(browser, name, "private", "containment-probe", base, proxy, receiver, segment, cookie, publicNeighbour);
       record[name].public = await phase(browser, name, "public", "containment-probe-public", base, proxy, receiver, segment, cookie, publicNeighbour);
       record[name].prompts = await promptsIn(browser, name, proxy, base, segment, cookie, outDir);
+      record[name].flows = await flows(browser, name, base, proxy, segment, cookie);
     } finally {
       await browser.close();
     }
@@ -745,6 +788,7 @@ async function main() {
       const limit = attempt.detail && attempt.detail.limitation;
       return `${attempt.outcome || "not run"}${limit ? ` (the frame held the pointer over the prompt: ${limit.held_pointer_over_prompt ? "yes" : "no"})` : ""}`;
     }).join(" | ")} |`,
+    ...FLOWS.map((f) => `| ${f.name} | ${f.column} | ${BROWSERS.map((b) => (record[b].flows.attempts[f.name] || {}).outcome || "not run").join(" | ")} |`),
     `| session_blind_page | disclosure | ${blind ? "held" : "FAILED"} (asked of the server, with the cookie and without) |`,
     `| frame_request_refused | refused | ${framed ? "held" : "FAILED"} (asked of the server, as a frame and not) |`,
     ...NOT_DRIVEN.map(([name, why]) => `| ${name} | not driven | ${why} |`),

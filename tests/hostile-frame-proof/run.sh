@@ -85,6 +85,10 @@ status="$(curl -s -m 10 -o /dev/null -w '%{http_code}' "http://127.0.0.1:$PORT/t
 status="$(curl -s -m 10 -o /dev/null -w '%{http_code}' "http://127.0.0.1:$PORT$neighbour_path/neighbour.js")"
 [ "$status" = 200 ] || fail "the public neighbour's script answered $status"
 
+step "a frame that connects to one origin and reads notes, with and without a flow to it"
+server_fixture "$CELL" tincture "$user_id" "$HERE/tinctures/flow-probe" flow-probe private >/dev/null
+server_fixture "$CELL" tincture "$user_id" "$HERE/tinctures/flow-probe-flowed" flow-probe-flowed private >/dev/null
+
 step "the malicious fullscreen frame, and a tincture waiting for its grant"
 server_fixture "$CELL" tincture "$user_id" "$HERE/tinctures/fullscreen-probe" fullscreen-probe private >/dev/null
 server_fixture "$CELL" tincture "$user_id" "$HERE/tinctures/ungranted-probe" ungranted-probe private >/dev/null

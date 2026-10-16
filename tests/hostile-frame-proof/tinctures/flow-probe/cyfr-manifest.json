@@ -1,0 +1,12 @@
+{
+  "name": "flow-probe",
+  "type": "tincture",
+  "version": "1.0.0",
+  "publisher": "local",
+  "description": "The containment proof's flow probe: it connects to one origin and reads the person's notes, declaring no flow of what it reads to that origin.",
+  "tincture": {
+    "entry": "index.html",
+    "connect": ["attacker.test"],
+    "actions": ["notes.list"]
+  }
+}

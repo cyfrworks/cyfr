@@ -1,0 +1,21 @@
+{
+  "name": "flow-probe-flowed",
+  "type": "tincture",
+  "version": "1.0.0",
+  "publisher": "local",
+  "description": "The containment proof's flow control: the flow probe, declaring that what it reads may reach the origin it connects to.",
+  "caps": {
+    "flows": [
+      {"from": "pinned", "to": "attacker.test"},
+      {"from": "filed", "to": "attacker.test"},
+      {"from": "files_by_grant", "to": "attacker.test"},
+      {"from": "vault_disclosed", "to": "attacker.test"},
+      {"from": "outside", "to": "attacker.test"}
+    ]
+  },
+  "tincture": {
+    "entry": "index.html",
+    "connect": ["attacker.test"],
+    "actions": ["notes.list"]
+  }
+}

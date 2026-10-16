@@ -8,6 +8,8 @@ Chromium, Firefox and WebKit. `proof.mjs` drives one attempt at a time and
 reads each where it can be seen: in the frame, at the harness's proxy, at a
 recording endpoint on a foreign origin, in a sibling frame, in the shell.
 
+Beside them, two flow probes (`tinctures/flow-probe/`, `tinctures/flow-probe-flowed/`) declare the recording endpoint's name as their one connect origin and a read of the person's notes, one with no flow of what the read may carry to that origin and one with the flows, and each sends what it read there. The harness serves that name over plain HTTP, so a send under the frame's `https://` connect policy is seen as the tunnel the browser asks the proxy for, not as a request the endpoint records.
+
 A second probe (`tinctures/fullscreen-probe/`) is the malicious fullscreen
 frame: it declares fullscreen and pointer lock, and the `vault.create`
 action a credential prompt needs. One click takes fullscreen and locks the
@@ -100,6 +102,8 @@ Every attempt has one column, and the proof fails when an attempt leaves it:
 | `grant_prompt_fullscreen` | refused | a grant prompt opened over a frame that holds fullscreen and pointer lock is shown, modal in the top layer, only once every frame is hidden and inert and the page left fullscreen; while it shows the frame holds no pointer lock and the page is not fullscreen, and once it closes the frame, shown again, takes back neither without a new gesture |
 | `confirmation_prompt_fullscreen` | refused | the same for the confirmation prompt of a change another session of the person asked for |
 | `pointer_lock_retaken` | disclosure | a frame that opens a credential prompt inside its person's gesture takes the pointer back while hidden behind it (recorded, a limitation); it is hidden and inert, focus is in the prompt, which Tab and Escape operate, Escape ends the lock for good, and nothing the frame does confirms or dismisses the prompt |
+| `flow_declared_origin` | allowed | a frame (`tinctures/flow-probe-flowed/`) that connects to `attacker.test` and declares that what its `notes.list` read may carry may reach it reads the notes, and its send to that origin leaves the frame: the harness's proxy sees the browser ask for a tunnel to it |
+| `flow_read_unflowed` | refused | the same frame declaring no flow (`tinctures/flow-probe/`) is refused the read at the data route (`forbidden`, the run's classes and the origin named), and the proxy sees nothing leave for the origin |
 | `frame_request_refused` | refused | a page that reads the session answers 403 to a request whose destination is a frame, before the session is read, and sets no cookie |
 | `sibling_message` | disclosure | a post to a sibling's window arrives as a message from an opaque origin, and changes neither the sibling's frame identity nor the shell |
 | `shared_credential_url` | disclosure | a credential address serves that version's bytes to whoever holds it, for the credential's window (private only) |
