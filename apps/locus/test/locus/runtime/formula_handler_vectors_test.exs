@@ -12,13 +12,16 @@ defmodule Locus.Runtime.FormulaHandlerVectorsTest do
   storage call CYFR refuses with a guest error answers the envelope of
   each of the vectors' `encode_error` cases of a storage type whose
   message is a sentence: `Locus.Runtime.StorageHandler` hands on the
-  type and the sentence CYFR answered.
+  type and the sentence CYFR answered. A fetch whose pin CYFR refuses for
+  want of a flow answers the envelope of the vectors' `flow_blocked`
+  case: `Locus.Runtime.HttpHandler` names the host CYFR refused, as
+  Prima's reader of the same case answers it.
   """
 
   use ExUnit.Case, async: true
 
-  alias Locus.Runtime.{FormulaHandler, StorageHandler}
-  alias Locus.Runtime.Test.ScriptedHost
+  alias Locus.Runtime.{FormulaHandler, HttpHandler, StorageHandler}
+  alias Locus.Runtime.Test.{EdgeFixtures, ScriptedHost}
 
   @vectors Path.expand("../../../../../tests/fixtures/guest_error.json", __DIR__)
 
@@ -48,6 +51,39 @@ defmodule Locus.Runtime.FormulaHandlerVectorsTest do
       assert Jason.decode!(json) == answer, why
       assert [%{args: %{"action" => "write"}}] = ScriptedHost.requests(host, "storage"), why
     end
+  end
+
+  test "a fetch CYFR refuses for want of a flow answers the flow case's envelope" do
+    assert [%{"why" => why, "message" => message, "answer" => answer}] =
+             for(
+               %{"type" => "flow_blocked"} = vector <-
+                 @vectors |> File.read!() |> Jason.decode!() |> Map.fetch!("encode_error"),
+               do: vector
+             )
+
+    # The case's host is the one its sentence names.
+    [_, host_name] = Regex.run(~r/^HTTP egress to (\S+) refused/, message)
+    edge = EdgeFixtures.edge(domains: [host_name], methods: ["GET"])
+    host = ScriptedHost.start!()
+    ScriptedHost.script(host, "egress_pin", {:error, :flow})
+    attempt = ScriptedHost.attempt!(host)
+
+    json =
+      %{"method" => "GET", "url" => "https://#{host_name}/notes", "headers" => %{}, "body" => ""}
+      |> Jason.encode!()
+      |> HttpHandler.execute(
+        edge,
+        EdgeFixtures.limits(),
+        attempt.client,
+        "catalyst:local.x:1.0.0"
+      )
+
+    assert Jason.decode!(json) == answer, why
+    assert [%{args: %{"url" => url}}] = ScriptedHost.requests(host, "egress_pin"), why
+    assert URI.parse(url).host == host_name, why
+
+    # CYFR recorded the denial as it refused the pin: the engine records none.
+    assert ScriptedHost.requests(host, "record_denial") == [], why
   end
 
   test "a call refused with a setup remediation answers every case's envelope" do
