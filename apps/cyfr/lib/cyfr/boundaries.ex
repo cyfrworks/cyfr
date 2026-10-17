@@ -773,8 +773,7 @@ defmodule Cyfr.Boundaries do
           "declaration, what it invokes, the version an asset credential names, the " <>
           "served types, a document's policy and sandbox and a canvas page's policy " <>
           "through it (`Compendium.tincture_asset_rules/0`, " <>
-          "`Compendium.inspect_component/2`, `Compendium.tincture_csp/2`, " <>
-          "`Compendium.tincture_sandbox_tokens/1`, " <>
+          "`Compendium.inspect_component/2`, `Compendium.tincture_frame_policy/2`, " <>
           "`Compendium.tincture_canvas_page_csp/1`). Every component operation MCP serves " <>
           "is a gate operation, reached through the operation table. " <>
           "Boundary's exports are global, and `Compendium` exports its two paths, " <>

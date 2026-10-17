@@ -115,6 +115,13 @@ defmodule Compendium do
   @spec tincture_csp(map(), Rules.csp_opts()) :: String.t()
   defdelegate tincture_csp(manifest, opts), to: Rules, as: :csp
 
+  @doc """
+  A tincture document's policy, its entry CSP with the `sandbox` directive
+  its declaration opens (`Compendium.Tincture.Rules.frame_policy/2`).
+  """
+  @spec tincture_frame_policy(map(), Rules.csp_opts()) :: String.t()
+  defdelegate tincture_frame_policy(manifest, opts), to: Rules, as: :frame_policy
+
   @doc "The templates a tincture starts from (`Compendium.Tincture.Rules.templates/0`)."
   @spec tincture_templates() :: [Rules.template()]
   defdelegate tincture_templates(), to: Rules, as: :templates

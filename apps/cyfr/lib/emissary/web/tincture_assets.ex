@@ -12,9 +12,9 @@ defmodule Emissary.Web.TinctureAssets do
   adapter produce identical observable behaviour. Which files may be
   served and with which type are the component domain's rules
   (`Compendium.tincture_asset_rules/0`, `Compendium.tincture_served_types/0`),
-  and a document's Content Security Policy and its `sandbox` directive are
-  derived from the version's declaration by the frame's rules
-  (`Compendium.tincture_csp/2`, `Compendium.tincture_sandbox_tokens/1`);
+  and a document's Content Security Policy with its `sandbox` directive is
+  derived whole from the version's declaration by the frame's rules
+  (`Compendium.tincture_frame_policy/2`);
   path validation, the headers, the nonce, compression and the SDK
   injection live here.
 
@@ -138,25 +138,7 @@ defmodule Emissary.Web.TinctureAssets do
   @spec csp(map() | nil, String.t()) :: String.t()
   def csp(manifest, nonce) when is_binary(nonce) do
     manifest = if is_map(manifest), do: manifest, else: %{}
-    policy = Compendium.tincture_csp(manifest, %{endpoint: endpoint_origin(), nonce: nonce})
-    policy <> "; sandbox " <> Enum.join(sandbox_tokens(manifest), " ")
-  end
-
-  defp sandbox_tokens(manifest) do
-    declared =
-      case Compendium.tincture_declaration(manifest) do
-        {:ok, declaration} -> declaration.frame.capabilities
-        {:error, _refused} -> []
-      end
-
-    case Compendium.tincture_sandbox_tokens(declared) do
-      {:ok, tokens} ->
-        tokens
-
-      {:error, _refused} ->
-        {:ok, tokens} = Compendium.tincture_sandbox_tokens([])
-        tokens
-    end
+    Compendium.tincture_frame_policy(manifest, %{endpoint: endpoint_origin(), nonce: nonce})
   end
 
   @doc """

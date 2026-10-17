@@ -18,8 +18,12 @@ defmodule Compendium.Tincture.Rules do
   its workers alike, is `canvas_page_csp/1`.
 
   The publish check reads this module. Every other reader goes through the
-  `Compendium` facade or the data it derives, so no sandbox token or CSP
-  directive is written anywhere else.
+  `Compendium` facade or the data it derives, so no frame's sandbox token
+  and no directive of a frame's page policy (its entry CSP and `sandbox`
+  directive, `frame_policy/2`, or a canvas's, `canvas_page_csp/1`) is
+  written anywhere else. The console's page policy and the API's and the
+  OAuth callback's response policies are their own surfaces', not a
+  frame's, and the seam test rosters each by reason.
 
   ## What the frame is, in every browser
 
@@ -310,6 +314,31 @@ defmodule Compendium.Tincture.Rules do
       "form-action 'none'"
     ]
     |> Enum.join("; ")
+  end
+
+  @doc """
+  A tincture document's whole policy: its `csp/2` under `opts`, with a
+  `sandbox` directive opening exactly what the declaration's frame
+  capabilities open (`sandbox_tokens/1`). A declaration these rules refuse,
+  which the publish check keeps from being installed, opens nothing beyond
+  scripts. The served headers take this value whole, so the frame's
+  sandbox directive has no other writer.
+  """
+  @spec frame_policy(map(), csp_opts()) :: String.t()
+  def frame_policy(manifest, opts) when is_map(manifest) do
+    declared =
+      case validate_declaration(manifest) do
+        {:ok, declaration} -> declaration.frame.capabilities
+        {:error, _refused} -> []
+      end
+
+    tokens =
+      case sandbox_tokens(declared) do
+        {:ok, tokens} -> tokens
+        {:error, _refused} -> @sandbox_always
+      end
+
+    csp(manifest, opts) <> "; sandbox " <> Enum.join(tokens, " ")
   end
 
   @doc """
