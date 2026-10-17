@@ -40,7 +40,7 @@ defmodule Locus.Runtime.RelayTest do
   import Prima.Test.Wait
 
   alias Prima.{Assignment, AttachedRequest, RunnerRelay, WorkerAuth, WorkerWire}
-  alias Locus.Runtime.{Egress, HostClient}
+  alias Locus.Runtime.{Egress, HostClient, HttpHandler}
   alias Locus.Runtime.Relay.Runner, as: Endpoint
   alias Locus.Runtime.Test.{EdgeFixtures, ScriptedHost, ScriptedKeeper}
 
@@ -348,6 +348,144 @@ defmodule Locus.Runtime.RelayTest do
                ScriptedHost.requests(host, "take_rate")
 
       assert bucket == "http:" <> @ref and runner == attempt.runner
+    end
+
+    test "the upstream sees exactly one Host, the pin's host and port, never the guest's",
+         %{host: host} do
+      port = upstream!()
+      attempt = attempt!(host) |> ScriptedKeeper.relayed!()
+
+      # A runner sending the guest's Host and X-Forwarded-Host itself, past
+      # the runner's own validation: the relay refuses the fetch.
+      assert {:ok, pinned} = Egress.pin(attempt.client, "http://api.test:#{port}/hello")
+
+      assert {:ok, ref} =
+               Endpoint.fetch(
+                 attempt.endpoint,
+                 attempt.attempt,
+                 pinned.target.id,
+                 "GET",
+                 "/hello",
+                 [{"host", "admin.internal"}, {"x-forwarded-host", "admin.internal"}],
+                 ""
+               )
+
+      assert {[], "invalid_request"} = events(attempt.endpoint, ref)
+      refute_received {:upstream, _, _, _}
+      assert ScriptedHost.requests(host, "take_rate") == []
+
+      # Without one, the relay sets Host from the pin, port included.
+      assert {:ok, pinned} = Egress.pin(attempt.client, "http://api.test:#{port}/hello")
+
+      assert {:ok, ref} =
+               Endpoint.fetch(
+                 attempt.endpoint,
+                 attempt.attempt,
+                 pinned.target.id,
+                 "GET",
+                 "/hello",
+                 [{"x-trace", "t"}],
+                 ""
+               )
+
+      {events, nil} = events(attempt.endpoint, ref)
+      assert body_of(events) == "reached /hello"
+      assert_received {:upstream, "GET", "/hello", upstream_headers}
+
+      assert Enum.filter(upstream_headers, fn {name, _value} -> name == "host" end) ==
+               [{"host", "api.test:#{port}"}]
+    end
+
+    test "a runner's fetch naming a header that frames, routes or overrides the request ends invalid_request before the rate, nothing connected",
+         %{host: host} do
+      port = upstream!()
+      attempt = attempt!(host) |> ScriptedKeeper.relayed!()
+
+      names = [
+        "host",
+        "HOST",
+        "Content-Length",
+        "transfer-encoding",
+        "Connection",
+        "Forwarded",
+        "Via",
+        "X-Forwarded-Host",
+        "x-forwarded-for",
+        "X-Forwarded-Ssl",
+        "X-HTTP-Method-Override",
+        "x-original-url"
+      ]
+
+      for name <- names do
+        assert {:ok, pinned} = Egress.pin(attempt.client, "http://api.test:#{port}/x")
+
+        assert {:ok, ref} =
+                 Endpoint.fetch(
+                   attempt.endpoint,
+                   attempt.attempt,
+                   pinned.target.id,
+                   "GET",
+                   "/x",
+                   [{"x-trace", "t"}, {name, "admin.internal"}],
+                   ""
+                 )
+
+        assert {[], "invalid_request"} = events(attempt.endpoint, ref), name
+      end
+
+      refute_received {:upstream, _, _, _}
+      assert ScriptedHost.requests(host, "take_rate") == []
+      # Only the runner's pins were asked: the relay asked none of its own.
+      assert length(ScriptedHost.requests(host, "egress_pin")) == length(names)
+    end
+
+    test "a guest's Host on a POST is refused before its pin, and without it the POST reaches the pinned host",
+         %{host: host} do
+      port = upstream!()
+      edge = EdgeFixtures.edge(domains: ["api.test"], methods: ["POST"])
+      limits = EdgeFixtures.limits()
+      attempt = attempt!(host, edge: edge, limits: limits) |> ScriptedKeeper.relayed!()
+
+      for headers <- [%{"Host" => "blocked.test"}, %{"X-Forwarded-Host" => "blocked.test"}] do
+        [{name, _value}] = Map.to_list(headers)
+
+        request =
+          Jason.encode!(%{
+            "method" => "POST",
+            "url" => "http://api.test:#{port}/",
+            "headers" => headers,
+            "body" => "sample"
+          })
+
+        assert %{"error" => %{"type" => "invalid_request", "message" => message}} =
+                 request
+                 |> HttpHandler.execute(edge, limits, attempt.client, @ref)
+                 |> Jason.decode!()
+
+        assert message == "A request cannot set the #{name} header."
+      end
+
+      refute_received {:upstream, _, _, _}
+      assert ScriptedHost.requests(host, "egress_pin") == []
+      assert ScriptedHost.requests(host, "take_rate") == []
+
+      request =
+        Jason.encode!(%{
+          "method" => "POST",
+          "url" => "http://api.test:#{port}/",
+          "body" => "sample"
+        })
+
+      assert %{"status" => 200, "body" => "reached /"} =
+               request
+               |> HttpHandler.execute(edge, limits, attempt.client, @ref)
+               |> Jason.decode!()
+
+      assert_received {:upstream, "POST", "/", upstream_headers}
+      assert {"content-length", "6"} in upstream_headers
+
+      assert Enum.filter(upstream_headers, fn {name, _value} -> name == "host" end) ==
+               [{"host", "api.test:#{port}"}]
     end
 
     test "a pin CYFR never granted closes the channel", %{host: host} do

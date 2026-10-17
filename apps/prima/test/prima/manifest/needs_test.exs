@@ -143,7 +143,10 @@ defmodule Prima.Manifest.NeedsTest do
             "X-Forwarded-Port",
             "X-Forwarded-Prefix",
             "X-Forwarded-Server",
-            "Forwarded"
+            "Forwarded",
+            "Via",
+            "X-Forwarded-For",
+            "X-Forwarded-Ssl"
           ],
           spelled <- [name, String.downcase(name), String.upcase(name)] do
         rule = %{"in" => "header", "name" => spelled, "template" => "{value}"}

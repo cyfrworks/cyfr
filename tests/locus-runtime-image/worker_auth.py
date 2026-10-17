@@ -566,7 +566,8 @@ def attached_header_refusal(name, reserved):
     connection: `credential_header_refused` for a name of the credential
     roster (`Prima.Network.credential_headers/0`), `invalid_request` for
     one of `reserved`, the headers that route or frame the request or
-    override its method or target (`header_rosters`), in any case; None
+    override its method or target (`header_rosters`, its prefixes
+    included), in any case; None
     for the guest's own header, `Idempotency-Key` included."""
     name = name.lower()
     if name in CREDENTIAL_HEADERS:
@@ -576,13 +577,28 @@ def attached_header_refusal(name, reserved):
     return None
 
 
+class ReservedHeaders:
+    """The names a guest request may not set: a roster name, or one starting
+    with a roster prefix (`Prima.Network.framing_or_override_header?/1`)."""
+
+    def __init__(self, names, prefixes):
+        self.names, self.prefixes = frozenset(names), tuple(prefixes)
+
+    def __contains__(self, name):
+        return name in self.names or name.startswith(self.prefixes)
+
+
 def header_rosters(v):
-    """host_api.json's framing_headers and override_headers
-    (`Prima.Network.framing_headers/0` and `override_headers/0`): each a
-    list of distinct lowercase RFC 9110 tokens, the two disjoint and
-    neither naming a credential header. Their union is what an attached
+    """host_api.json's framing_headers, override_headers and
+    override_prefixes (`Prima.Network.framing_headers/0`,
+    `override_headers/0` and `override_prefixes/0`): each roster a list of
+    distinct lowercase RFC 9110 tokens, the two disjoint and neither naming
+    a credential header, and each prefix a nonempty lowercase token start.
+    Their union, a name starting with a prefix included, is what a guest
     request may not set."""
-    framing, override = v["framing_headers"], v["override_headers"]
+    framing, override, prefixes = v["framing_headers"], v["override_headers"], v["override_prefixes"]
+    assert prefixes and all(isinstance(p, str) and p == p.lower() and HEADER_NAME.fullmatch(p) for p in prefixes), \
+        "host_api override_prefixes: lowercase token starts"
     for what, roster in (("framing_headers", framing), ("override_headers", override)):
         assert roster and len(set(roster)) == len(roster), f"host_api {what}: distinct names"
         for name in roster:
@@ -592,7 +608,8 @@ def header_rosters(v):
     assert not (set(framing) | set(override)) & CREDENTIAL_HEADERS, "host_api: no roster names a credential header"
     assert "host" in framing and "x-forwarded-host" in override and "forwarded" in override, \
         "host_api: the rosters name the Host header and a forwarded origin"
-    return frozenset(framing) | frozenset(override)
+    assert "x-forwarded-" in prefixes, "host_api: the prefixes name the forwarded-origin family"
+    return ReservedHeaders(set(framing) | set(override), prefixes)
 
 
 # ---------------------------------------------------------------------------
@@ -1236,6 +1253,7 @@ def check_attached_call(call, args, root, reserved):
     assert attached_header_refusal("Proxy-Authorization", reserved) == "credential_header_refused", f"{what}: the roster"
     assert attached_header_refusal("HOST", reserved) == "invalid_request", f"{what}: a framing header"
     assert attached_header_refusal("X-Forwarded-Host", reserved) == "invalid_request", f"{what}: an override header"
+    assert attached_header_refusal("X-Forwarded-Ssl", reserved) == "invalid_request", f"{what}: an override prefix"
     assert attached_header_refusal("Idempotency-Key", reserved) is None, f"{what}: no suffix rule"
     fields = call["fields"]
     skey = attempt_seal_key(root, fields)

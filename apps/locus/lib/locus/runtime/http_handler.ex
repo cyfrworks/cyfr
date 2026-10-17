@@ -19,11 +19,18 @@ defmodule Locus.Runtime.HttpHandler do
     relay naming that pin, and the relay's service end (`Locus.Runtime.Relay`)
     asks CYFR for it once more as it sends, and connects to exactly the
     address of that answer, with the original hostname kept for
-    TLS SNI / certificate verification / the `Host` header, so there is no
-    DNS-rebinding gap and no second resolution to rebind. A metadata
-    address is refused even when CYFR answers one (`Locus.Runtime.Egress`)
+    TLS SNI / certificate verification and set by the relay as the `Host`
+    header, so there is no DNS-rebinding gap and no second resolution to
+    rebind. A metadata address is refused even when CYFR answers one
+    (`Locus.Runtime.Egress`)
+  - **Pinned identity**: a guest's header that frames or routes the request,
+    or overrides its method or target (`host`, `x-forwarded-host`,
+    `forwarded` and the rest of `Prima.Network.framing_or_override_header?/1`),
+    is refused as `invalid_request` before the pin is asked, so the
+    upstream answers the host CYFR granted and no other name served at
+    that address
   - **Bounds outside the runner**: the relay checks the method, the scheme,
-    the pinned host as a domain and the request's size again, takes the
+    the pinned host as a domain, the request's headers and size again, takes the
     request from the consented rate, and stops the answer at the node's
     `max_response_size` and the attempt's deadline
   - **Full Request Visibility**: Unlike a CONNECT tunnel, the host sees method,

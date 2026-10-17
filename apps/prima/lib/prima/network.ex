@@ -25,11 +25,14 @@ defmodule Prima.Network do
                       upgrade proxy-connection expect)
 
   # Lowercase header names that override a request's method or target, or
-  # claim a forwarded origin: an upstream honouring one answers a request
-  # other than the one a destination admitted.
+  # claim a forwarded origin or a proxy hop: an upstream honouring one
+  # answers a request other than the one a destination admitted. Any name
+  # starting with one of @override_prefixes is one too, since proxies
+  # coin new members of the `x-forwarded-` family.
   @override_headers ~w(x-http-method-override x-http-method x-method-override x-original-url
                        x-rewrite-url x-original-host x-host x-forwarded-host x-forwarded-proto
-                       x-forwarded-port x-forwarded-prefix x-forwarded-server forwarded)
+                       x-forwarded-port x-forwarded-prefix x-forwarded-server forwarded via)
+  @override_prefixes ["x-forwarded-"]
 
   @default_ports %{"http" => 80, "https" => 443}
 
@@ -252,9 +255,8 @@ defmodule Prima.Network do
   The lowercase names of the headers that route or frame a request:
   `host`, `content-length`, `transfer-encoding`, `connection`,
   `keep-alive`, `te`, `trailer`, `upgrade`, `proxy-connection` and
-  `expect`. Only the client making a request sets them, so neither a
-  guest's attached request (`Prima.AttachedRequest`) nor an attach rule
-  (`Prima.Manifest.Needs`) names one, and the request goes to the pinned
+  `expect`. Only the client making a request sets them
+  (`framing_or_override_header?/1`), and the request goes to the pinned
   host as it was framed there.
   """
   @spec framing_headers() :: [String.t()]
@@ -262,17 +264,58 @@ defmodule Prima.Network do
 
   @doc """
   The lowercase names of the headers that override a request's method or
-  target, or claim a forwarded origin: `x-http-method-override`,
-  `x-http-method`, `x-method-override`, `x-original-url`, `x-rewrite-url`,
-  `x-original-host`, `x-host`, `x-forwarded-host`, `x-forwarded-proto`,
-  `x-forwarded-port`, `x-forwarded-prefix`, `x-forwarded-server` and
-  `forwarded`. An upstream honouring one would answer another method or
-  path than the destination admitted, so neither a guest's attached
-  request (`Prima.AttachedRequest`) nor an attach rule
-  (`Prima.Manifest.Needs`) names one.
+  target, or claim a forwarded origin or a proxy hop:
+  `x-http-method-override`, `x-http-method`, `x-method-override`,
+  `x-original-url`, `x-rewrite-url`, `x-original-host`, `x-host`,
+  `x-forwarded-host`, `x-forwarded-proto`, `x-forwarded-port`,
+  `x-forwarded-prefix`, `x-forwarded-server`, `forwarded` and `via`. Any
+  name starting with one of `override_prefixes/0` is one too. An upstream
+  honouring one would answer another host, method or path than the
+  destination admitted.
   """
   @spec override_headers() :: [String.t()]
   def override_headers, do: @override_headers
+
+  @doc """
+  The lowercase prefixes of header names that claim a forwarded origin
+  whatever follows them: `x-forwarded-`.
+  """
+  @spec override_prefixes() :: [String.t()]
+  def override_prefixes, do: @override_prefixes
+
+  @doc """
+  Whether a header `name`, in any case, is one only the client making a
+  request sets: one of `framing_headers/0` or `override_headers/0`, or a
+  name starting with one of `override_prefixes/0`. Neither a guest's
+  request, ordinary (`Locus.Runtime.HttpRequestValidation`, and again at
+  the relay that connects it, `Locus.Runtime.Relay`, which sets `Host`
+  from the pin itself) or attached (`Prima.AttachedRequest`), nor an
+  attach rule (`Prima.Manifest.Needs`) names one, so the upstream answers
+  the identity CYFR granted.
+  """
+  @spec framing_or_override_header?(term()) :: boolean()
+  def framing_or_override_header?(name) when is_binary(name) do
+    name = String.downcase(name)
+
+    name in @framing_headers or name in @override_headers or
+      String.starts_with?(name, @override_prefixes)
+  end
+
+  def framing_or_override_header?(_name), do: false
+
+  @doc """
+  The `Host` header a request to `uri` carries: its host, an IPv6 literal
+  in brackets, with `:port` unless the port is the scheme's default (80
+  for `http`, 443 for `https`) or absent.
+  """
+  @spec host_header(URI.t()) :: String.t()
+  def host_header(%URI{scheme: scheme, host: host, port: port}) when is_binary(host) do
+    host = unbracket(host)
+    host = if String.contains?(host, ":"), do: "[" <> host <> "]", else: host
+    default = Map.get(@default_ports, String.downcase(scheme || ""))
+
+    if port == nil or port == default, do: host, else: host <> ":" <> Integer.to_string(port)
+  end
 
   @doc """
   Whether a header `name`, in any case, carries a credential: one of

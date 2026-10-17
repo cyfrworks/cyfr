@@ -38,10 +38,9 @@ defmodule Prima.Manifest.Needs do
       "name": ..., "template": ...}` (`t:attach/0`). The template holds
       `{value}` exactly once; a header's name is an RFC 9110 token, a
       query key unreserved URI characters, and a header is none of the
-      headers that route or frame a request
-      (`Prima.Network.framing_headers/0`) or override its method or
+      headers that route or frame a request or override its method or
       target or claim a forwarded origin
-      (`Prima.Network.override_headers/0`). An `oauth` need's `attach`
+      (`Prima.Network.framing_or_override_header?/1`). An `oauth` need's `attach`
       that omits `template` takes `Authorization: Bearer {value}`.
     * `hosts` and `paths` — the destination the need speaks to, in
       `Prima.Destination`'s host and path grammar and at most
@@ -279,10 +278,7 @@ defmodule Prima.Manifest.Needs do
   # The headers that route or frame a request are the client's to set, and
   # one that overrides its method or target would take it outside its
   # destination.
-  defp reserved_header?("header", name) do
-    name = String.downcase(name)
-    name in Prima.Network.framing_headers() or name in Prima.Network.override_headers()
-  end
+  defp reserved_header?("header", name), do: Prima.Network.framing_or_override_header?(name)
 
   defp reserved_header?(_where, _name), do: false
 

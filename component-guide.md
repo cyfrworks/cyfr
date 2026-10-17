@@ -788,7 +788,12 @@ CYFR performs that request in the host, attaches the bound value within
 its destination and the component's egress, follows no redirect and masks
 the value from the answer. An attached request carries no credential
 header of its own. Without `connection`, the request is an ordinary pinned
-fetch with the headers the caller supplied.
+fetch with the headers the caller supplied. Either way the host sets the
+headers that frame or route the request: one that the request sets
+(`Host`, `Content-Length`, `Transfer-Encoding`, `Connection`, `Expect`,
+`Forwarded`, `Via`, any `X-Forwarded-*` and the other method or target
+overrides) is refused as `invalid_request`, naming it, and the request goes
+to the pinned host with that host and port as its `Host`.
 
 ### `cyfr:http/streaming` — 3-step polling SSE
 ```

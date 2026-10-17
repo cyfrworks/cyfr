@@ -26,9 +26,8 @@ defmodule Prima.AttachedRequest do
       tab. A header of the credential roster
       (`Prima.Network.credential_headers/0`, in any case) is refused: CYFR
       attaches the credential. A header that routes or frames the request
-      (`Prima.Network.framing_headers/0`) or overrides its method or
-      target or claims a forwarded origin
-      (`Prima.Network.override_headers/0`) is refused too, in any case, so
+      or overrides its method or target or claims a forwarded origin
+      (`Prima.Network.framing_or_override_header?/1`) is refused too, so
       the request reaches the pinned host as CYFR frames it, never another
       virtual host behind its address, and is answered as the method and
       path the destination admitted.
@@ -225,10 +224,7 @@ defmodule Prima.AttachedRequest do
 
   defp named_in?({name, _value}, roster), do: String.downcase(name) in roster
 
-  defp reserved_header?(header) do
-    named_in?(header, Prima.Network.framing_headers()) or
-      named_in?(header, Prima.Network.override_headers())
-  end
+  defp reserved_header?({name, _value}), do: Prima.Network.framing_or_override_header?(name)
 
   # Absent members are an empty body; a present one is base64, declared so.
   defp body(args) do

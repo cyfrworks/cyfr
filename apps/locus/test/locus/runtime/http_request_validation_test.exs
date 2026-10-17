@@ -36,6 +36,9 @@ defmodule Locus.Runtime.HttpRequestValidationTest do
     |> Jason.encode!()
   end
 
+  defp title_case(name),
+    do: name |> String.split("-") |> Enum.map_join("-", &String.capitalize/1)
+
   # An edge that lets validation reach the pin
   defp localhost_edge(opts \\ []) do
     EdgeFixtures.edge(Keyword.merge([domains: ["localhost"], methods: ["GET", "POST"]], opts))
@@ -298,6 +301,66 @@ defmodule Locus.Runtime.HttpRequestValidationTest do
                  ),
                inspect(headers)
       end
+    end
+
+    test "a header that frames, routes or overrides the request is refused, named, before the pin" do
+      {host, client, ref} = attached_host()
+
+      names =
+        Prima.Network.framing_headers() ++
+          Prima.Network.override_headers() ++
+          ["x-forwarded-for", "x-forwarded-ssl", "x-forwarded-uri"]
+
+      for purpose <- [:fetch, :stream],
+          name <- names,
+          spelled <- [name, String.upcase(name), title_case(name)],
+          headers <- [
+            %{spelled => "admin.internal"},
+            [["accept", "*/*"], [spelled, "admin.internal"]]
+          ] do
+        assert HttpRequestValidation.validate(
+                 encode(%{"headers" => headers}),
+                 localhost_edge(),
+                 EdgeFixtures.limits(),
+                 client,
+                 ref,
+                 purpose: purpose
+               ) == {:error, :invalid_request, "A request cannot set the #{spelled} header."},
+               "#{purpose} #{inspect(headers)}"
+      end
+
+      # Repeated in another case, the first is named.
+      assert HttpRequestValidation.validate(
+               encode(%{"headers" => [["Host", "a.internal"], ["HOST", "b.internal"]]}),
+               localhost_edge(),
+               EdgeFixtures.limits(),
+               client,
+               ref
+             ) == {:error, :invalid_request, "A request cannot set the Host header."}
+
+      assert ScriptedHost.requests(host, "egress_pin") == []
+
+      # The guest's own headers, a credential among them, still go.
+      assert {:ok, %{headers: headers}} =
+               HttpRequestValidation.validate(
+                 encode(%{
+                   "headers" => [
+                     ["Authorization", "Bearer a"],
+                     ["X-Forwarded", "kept"],
+                     ["X-Hosted-By", "kept"]
+                   ]
+                 }),
+                 localhost_edge(),
+                 EdgeFixtures.limits(),
+                 client,
+                 ref
+               )
+
+      assert headers == [
+               {"Authorization", "Bearer a"},
+               {"X-Forwarded", "kept"},
+               {"X-Hosted-By", "kept"}
+             ]
     end
 
     test "rejects an edge-allowed but unsupported HTTP verb as method_blocked" do

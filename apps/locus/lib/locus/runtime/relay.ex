@@ -53,7 +53,9 @@ defmodule Locus.Runtime.Relay do
   `pin_expired`. The request is checked again
   against the attempt's edge and limits as the runner checked it
   (`Locus.Runtime.EdgeGuard`: method, scheme, the pin's host as
-  a domain, the request's size), then taken from the consented rate by a
+  a domain, the request's size) and for a header that frames, routes or
+  overrides the request (`Prima.Network.framing_or_override_header?/1`),
+  which ends it `invalid_request`, then taken from the consented rate by a
   `take_rate` call this process signs for the attempt.
 
   The runner's pin is only the precondition for the decision this process
@@ -67,8 +69,9 @@ defmodule Locus.Runtime.Relay do
   (`Locus.Runtime.Egress.names?/2`) ends the fetch with the code
   `Locus.Runtime.Egress.relay_code/1` names, and nothing connects. The
   fetch connects only to the address of that answer, with the pin's host
-  for TLS and `Host`
-  (`Locus.Runtime.Egress.connect_options/3`), and streams the answer back as
+  for TLS (`Locus.Runtime.Egress.connect_options/3`) and as the `Host`
+  this process sets itself, with the pin's port unless it is the scheme's
+  default, and streams the answer back as
   `fetch_chunk` frames: the status and headers first, then the body,
   never past the credit the runner granted for the fetch and never past
   the attempt's `max_response_size`. A refused or failed fetch ends with a
@@ -667,10 +670,11 @@ defmodule Locus.Runtime.Relay do
   end
 
   # The checks the runner made, made again outside it: the pin is within
-  # its `expires_at`, and the method, the pin's scheme and host and the
-  # request's size are within the attempt's edge and limits, before the
-  # attempt's deadline. The request carries what the runner's pin was
-  # asked with, for the relay's own ask.
+  # its `expires_at`, the method, the pin's scheme and host and the
+  # request's size are within the attempt's edge and limits, and no header
+  # frames, routes or overrides the request, before the attempt's
+  # deadline. The request carries what the runner's pin was asked with,
+  # for the relay's own ask.
   defp admitted(bound, %{pin: pin, purpose: purpose, from: from}, frame) do
     now = System.system_time(:millisecond)
     %URI{path: path, query: query} = URI.parse(frame.path)
@@ -701,6 +705,11 @@ defmodule Locus.Runtime.Relay do
 
       EdgeGuard.check_domain(bound.edge, unbracket(pin.host)) != :ok ->
         {:refuse, "domain_blocked"}
+
+      Enum.any?(frame.headers, fn {name, _value} ->
+        Prima.Network.framing_or_override_header?(name)
+      end) ->
+        {:refuse, "invalid_request"}
 
       EdgeGuard.check_request_size(bound.limits, request) != :ok ->
         {:refuse, "request_too_large"}
@@ -903,7 +912,9 @@ defmodule Locus.Runtime.Relay do
       opts =
         pinned.req_opts
         |> Keyword.put(:method, Map.fetch!(@methods, request.method))
-        |> Keyword.put(:headers, request.headers)
+        |> Keyword.put(:headers, [
+          {"host", Prima.Network.host_header(request.uri)} | request.headers
+        ])
         |> Keyword.put(:into, into)
         |> then(&if(request.body != "", do: Keyword.put(&1, :body, request.body), else: &1))
 

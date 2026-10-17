@@ -128,13 +128,17 @@ defmodule Prima.AttachedRequestTest do
       "X-Forwarded-Port",
       "X-Forwarded-Prefix",
       "X-Forwarded-Server",
-      "Forwarded"
+      "Forwarded",
+      "Via"
     ]
 
     assert Enum.sort(Network.override_headers()) ==
              Enum.sort(Enum.map(override, &String.downcase/1))
 
-    for header <- override, name <- [header, String.downcase(header), String.upcase(header)] do
+    assert Network.override_prefixes() == ["x-forwarded-"]
+
+    for header <- override ++ ["X-Forwarded-For", "X-Forwarded-Ssl"],
+        name <- [header, String.downcase(header), String.upcase(header)] do
       headers = [["accept", "*/*"], [name, "v1"]]
 
       assert AttachedRequest.read(args(%{"headers" => headers})) ==

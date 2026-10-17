@@ -98,6 +98,7 @@ defmodule Prima.NetworkTest do
   test "the framing and override rosters are tests/fixtures/host_api.json's, and each is refused" do
     assert @vectors["framing_headers"] == Network.framing_headers()
     assert @vectors["override_headers"] == Network.override_headers()
+    assert @vectors["override_prefixes"] == Network.override_prefixes()
 
     request = %{
       "call_id" => "AAECAwQFBgcICQoLDA0ODw",
@@ -107,12 +108,38 @@ defmodule Prima.NetworkTest do
       "purpose" => "fetch"
     }
 
-    for name <- @vectors["framing_headers"] ++ @vectors["override_headers"],
+    prefixed = Enum.map(@vectors["override_prefixes"], &(&1 <> "anything"))
+
+    for name <- @vectors["framing_headers"] ++ @vectors["override_headers"] ++ prefixed,
         spelled <- [name, String.upcase(name)] do
+      assert Network.framing_or_override_header?(spelled), spelled
+
       assert Prima.AttachedRequest.read(Map.put(request, "headers", [[spelled, "v"]])) ==
                {:error, {:invalid_request, spelled}},
              spelled
     end
+
+    for name <- ["accept", "x-forwarded", "x-hosted", "authorization", nil] do
+      refute Network.framing_or_override_header?(name), inspect(name)
+    end
+  end
+
+  test "a request's Host is its host, an IPv6 literal bracketed, with a port only off the default" do
+    for {url, host} <- [
+          {"http://api.test/x", "api.test"},
+          {"http://api.test:80/x", "api.test"},
+          {"https://api.test:443/x", "api.test"},
+          {"http://api.test:443/x", "api.test:443"},
+          {"https://api.test:8443/x", "api.test:8443"},
+          {"HTTPS://Api.Test:8443/x", "Api.Test:8443"},
+          {"http://[::1]:8080/x", "[::1]:8080"},
+          {"https://[2001:db8::1]/x", "[2001:db8::1]"},
+          {"http://127.0.0.1:4000/", "127.0.0.1:4000"}
+        ] do
+      assert Network.host_header(URI.parse(url)) == host, url
+    end
+
+    assert Network.host_header(%URI{scheme: "https", host: "::1", port: 8443}) == "[::1]:8443"
   end
 
   test "a metadata address is refused however it was pinned" do

@@ -11,10 +11,15 @@ defmodule Locus.Runtime.HttpRequestValidation do
   through before any network I/O:
 
       parse → method → scheme → domain → body decode → request size →
-      pin → method atom
+      headers → pin → method atom
 
   The parse refuses a URL that carries credentials (userinfo), as
-  `Prima.Network.parse_url/1` does.
+  `Prima.Network.parse_url/1` does. A header that frames or routes the
+  request, or overrides its method or target
+  (`Prima.Network.framing_or_override_header?/1`), is refused as
+  `invalid_request`, naming it, before the pin is asked: the relay sets
+  `Host` from the pin itself, so the upstream sees the host CYFR granted
+  and never a name the guest wrote.
 
   Every check before the pin is the engine's own, made from the
   assignment's edge and limits (`Locus.Runtime.EdgeGuard`). The pin is CYFR's: the
@@ -138,7 +143,8 @@ defmodule Locus.Runtime.HttpRequestValidation do
   end
 
   defp pinned(request, host, purpose) do
-    with {:ok, pinned} <- pin_url(host, request.url, purpose),
+    with :ok <- client_headers(request.headers),
+         {:ok, pinned} <- pin_url(host, request.url, purpose),
          {:ok, method_atom} <- validated_method_atom(request.method) do
       {:ok,
        request
@@ -198,6 +204,17 @@ defmodule Locus.Runtime.HttpRequestValidation do
   def repin(%{pinned: pinned, url: url} = request, %HostClient{} = host) do
     with {:ok, fresh} <- pinned_again(host, url, pinned) do
       {:ok, %{request | ip: fresh.ip, pinned: fresh}}
+    end
+  end
+
+  # Refused as an attached request refuses one, naming the header as the
+  # guest spelled it.
+  defp client_headers(headers) do
+    case Enum.find(headers, fn {name, _value} ->
+           Prima.Network.framing_or_override_header?(name)
+         end) do
+      nil -> :ok
+      {name, _value} -> {:error, :invalid_request, "A request cannot set the #{name} header."}
     end
   end
 
