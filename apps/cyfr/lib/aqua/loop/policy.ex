@@ -34,13 +34,14 @@ defmodule Aqua.Loop.Policy do
   rows and the turn's sources as they stand when the call is decided and
   again when it dispatches, never from the turn's start.
 
-  `sources_of/2` names the sources a call's result carries into its
-  turn: `filed` and the notes' own provenance for a notes read,
-  `files_by_grant` for a files or storage read and a component's source,
-  and an outside source named by its origin for an external server's
-  tool, the HTTP hand and a feed's results, and a launched component
-  whose grant reaches the network; and a hand's child its own ledger,
-  as its completion result carries it (`child_ledger/1`).
+  `sources_of/3` names the sources a call's result carries into its
+  turn: a catalog action's as its operation declares them
+  (`Prima.Operation.result_sources/3`, an undeclared one outside),
+  `files_by_grant` for a files or storage read, and an outside source
+  named by its origin for an external server's tool, the HTTP hand and
+  a launched component whose grant reaches the network; and a hand's
+  child its own ledger, as its completion result carries it
+  (`child_ledger/1`).
 
   A launch's card binds what the launch will carry (`launch_flow/3`): the
   turn's sources it seeds the launched root with, the consent revision
@@ -447,25 +448,27 @@ defmodule Aqua.Loop.Policy do
   def child_ledger(_answer), do: :unknown
 
   @doc """
-  The sources `call`'s `result` carries into its turn. A notes read is
-  `filed`, joined by the provenance of every note it answered; a files or
-  storage read and a component's source are `files_by_grant`; an
+  The sources `call`'s `result` carries into its turn, read under `ctx`,
+  the context the call was dispatched under. A catalog action's are its
+  operation's `sources:` declaration's, read from the caller's actor and
+  the answer (`Prima.Operation.result_sources/3`): a success carries the
+  declared classes or the answer's own provenance, an action that
+  declares none is outside, a refusal the gate made at admission carries
+  nothing, and any other failure every class the action may answer. An
   external server's tool is outside, named by its server; the HTTP hand
-  is outside, named by the host its URL names; a feed's listing is
-  outside, named by each feed whose result it carries. A hand also
-  carries its child's ledger, as its completion result carries it
-  (`child_ledger/1`; a hand's failure names none, and the loop reads its
-  child's row). Any other call carries none here: a launched
-  component's are judged from its tree's admitted egress and its
-  result's ledger where its step closes
-  (`Arca.TurnStorage.close_step/4`'s `:launched` and `:sources`). A
-  result is joined whatever its outcome: an error body is read too.
+  is outside, named by the host its URL names; a files or storage read is
+  `files_by_grant`. A hand also carries its child's ledger, as its
+  completion result carries it (`child_ledger/1`; a hand's failure names
+  none, and the loop reads its child's row). Any other call carries none
+  here: a launched component's are judged from its tree's admitted
+  egress and its result's ledger where its step closes
+  (`Arca.TurnStorage.close_step/4`'s `:launched` and `:sources`).
   """
-  @spec sources_of(Call.t(), term()) :: [Prima.Source.t()]
-  def sources_of(%Call{kind: :external, target: target}, _result),
+  @spec sources_of(Call.t(), term(), Sanctum.Context.t()) :: [Prima.Source.t()]
+  def sources_of(%Call{kind: :external, target: target}, _result, _ctx),
     do: [Prima.Source.outside(server_of(target))]
 
-  def sources_of(%Call{kind: :hand} = call, result) do
+  def sources_of(%Call{kind: :hand} = call, result, _ctx) do
     carried =
       case child_ledger(result) do
         {:carried, sources} -> sources
@@ -475,20 +478,33 @@ defmodule Aqua.Loop.Policy do
     hand_sources(call) ++ carried
   end
 
-  def sources_of(%Call{kind: :catalog, tool: "source", action: action}, _result) do
-    if Aqua.Kinds.kind_for("source", action) == :read,
-      do: [Prima.Source.new(:files_by_grant)],
-      else: []
+  def sources_of(
+        %Call{kind: :catalog, tool: tool, action: action},
+        result,
+        %Sanctum.Context{} = ctx
+      ),
+      do:
+        Prima.Operation.result_sources(
+          operation(tool, action),
+          Sanctum.Context.actor(ctx),
+          result
+        )
+
+  def sources_of(%Call{}, _result, _ctx), do: []
+
+  # The catalogued operation a catalog call names, nil when none declares
+  # it (`Prima.Operation.result_sources/3` reads that as outside).
+  defp operation(tool, action) when is_binary(action) do
+    case Sanctum.Catalog.lookup(tool) do
+      {:ok, {_module, %{operations: operations}}} when is_list(operations) ->
+        Enum.find(operations, &(&1.action == action))
+
+      _undeclared ->
+        nil
+    end
   end
 
-  def sources_of(%Call{kind: :catalog, tool: "notes", action: action}, result)
-      when action in ["read", "list", "search"],
-      do: [Prima.Source.new(:filed) | Aqua.Notes.sources_of_answer(result)]
-
-  def sources_of(%Call{kind: :catalog, tool: "feed", action: "list"}, result),
-    do: feed_sources(result)
-
-  def sources_of(%Call{}, _result), do: []
+  defp operation(_tool, _action), do: nil
 
   # What a hand's call names it read, whatever its child answered.
   defp hand_sources(%Call{tool: "http", args: args}),
@@ -518,17 +534,6 @@ defmodule Aqua.Loop.Policy do
   end
 
   defp host_of(_url), do: nil
-
-  # Each feed whose result the listing carries, by its binding; a listing
-  # that cannot be read is an unnamed outside source.
-  defp feed_sources({:ok, %{feeds: feeds}}) when is_list(feeds) do
-    for %{binding_id: id} = feed <- feeds, Map.get(feed, :result) != nil do
-      Prima.Source.outside("feed:#{id}")
-    end
-  end
-
-  defp feed_sources({:ok, _other}), do: [Prima.Source.outside(nil)]
-  defp feed_sources(_failed), do: []
 
   # A launch is an external act, approved one card at a time.
   defp standing(%Call{kind: :launch}), do: Sanctum.Annotations.standing_to_wire(false)

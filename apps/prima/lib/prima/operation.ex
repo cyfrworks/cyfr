@@ -42,9 +42,11 @@ defmodule Prima.Operation do
   is read as `outside`: provenance that is not declared is never the
   athanor's own. `possible_classes/1` is what any answer may carry,
   known before the call: the declared classes, every class for an
-  answer-read declaration, `outside` for none. Like `resource`, it is
-  metadata for the gate, absent from the annotation view and from
-  discovery.
+  answer-read declaration, `outside` for none. `result_sources/3` is
+  what a call carries into its caller's ledger whatever it answered, the
+  one rule every caller that joins a catalog call's provenance reads.
+  Like `resource`, it is metadata for the gate, absent from the
+  annotation view and from discovery.
   """
 
   alias Prima.Arg
@@ -204,6 +206,29 @@ defmodule Prima.Operation do
         [Prima.Source.outside(nil)]
     end
   end
+
+  @doc """
+  The sources a call of `op` carries into its caller's ledger, whatever
+  it answered: a success's are `answer_sources/3`'s; a refusal the gate
+  made at admission, before any handler ran
+  (`%Prima.Refusal{stage: :admission}`), carries nothing; any other
+  result carries every class an answer of `op` may carry
+  (`possible_classes/1`), each unnamed, since a failure's body may hold
+  what the handler read and no answer reader is asked to read it. A call
+  no operation declares (`nil`) is outside, whatever it answered but an
+  admission refusal.
+  """
+  @spec result_sources(t() | nil, Prima.Actor.t(), term()) :: [Prima.Source.t()]
+  def result_sources(nil, _actor, {:ok, _answer}), do: [Prima.Source.outside(nil)]
+
+  def result_sources(%__MODULE__{} = op, actor, {:ok, answer}),
+    do: answer_sources(op, actor, answer)
+
+  def result_sources(_op, _actor, {:error, %Prima.Refusal{stage: :admission}}), do: []
+  def result_sources(nil, _actor, _failed), do: [Prima.Source.outside(nil)]
+
+  def result_sources(%__MODULE__{} = op, _actor, _failed),
+    do: op |> possible_classes() |> Enum.map(&Prima.Source.new/1) |> Prima.Source.set()
 
   @doc """
   Every class an answer of `op` may carry, known before the call: its

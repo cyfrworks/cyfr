@@ -141,4 +141,64 @@ defmodule Compendium.Providers.RegistryTest do
       end
     end
   end
+
+  # Each action as its handler reaches the registry
+  # (`Compendium.Registry.Client`): a POST or PATCH changes something
+  # there, a DELETE deletes it, a GET reads.
+  @remote_changes ~w(probe claim_personal claim_publisher verify_publisher tokens_issue
+                     members_add members_update report legal_accept appeal)
+  @remote_deletes ~w(tokens_revoke members_remove)
+  @reads ~w(tokens_list members_list whoami get_namespace list_my_reports legal_page
+            legal_version)
+
+  describe "an action that changes the registry" do
+    test "is external, or destructive where it deletes, and takes no standing answer; a read stays a read" do
+      operations = Map.new(RegistryProvider.definition().operations, &{&1.action, &1})
+
+      assert Enum.sort(Map.keys(operations)) ==
+               Enum.sort(@remote_changes ++ @remote_deletes ++ @reads)
+
+      for action <- @remote_changes,
+          do: assert(%{kind: :external, standing: false} = operations[action], action)
+
+      for action <- @remote_deletes,
+          do: assert(%{kind: :destructive, standing: false} = operations[action], action)
+
+      for action <- @reads, do: assert(%{kind: :read} = operations[action], action)
+    end
+
+    test "never runs without a card and takes no standing allow at either scope; a deny stands",
+         %{ctx: ctx} do
+      for action <- @remote_changes ++ @remote_deletes do
+        kind = if action in @remote_deletes, do: :destructive, else: :external
+        refute Aqua.Kinds.auto_permitted?("registry", action), action
+
+        for place <- [%{scope: "thread", thread_id: "thr_registry"}, %{scope: "agent"}] do
+          grant = Map.merge(place, %{agent_name: "aqua", tool: "registry", action: action})
+
+          assert {:error, {:scope_not_permitted, ^kind}} =
+                   Sanctum.ToolGrants.grant_row(ctx, Map.put(grant, :effect, "allow")),
+                 action
+
+          assert {:ok, %{effect: "deny"}} =
+                   Sanctum.ToolGrants.grant_row(ctx, Map.put(grant, :effect, "deny")),
+                 action
+        end
+
+        # A row the rule would refuse, read back, is no allow.
+        stored = %{
+          scope: "thread",
+          effect: "allow",
+          thread_id: "thr_registry",
+          agent_name: "aqua",
+          tool: "registry",
+          action: action
+        }
+
+        assert {:error, {:scope_not_permitted, ^kind}} =
+                 Sanctum.ToolGrants.check_standing(stored, DateTime.utc_now()),
+               action
+      end
+    end
+  end
 end

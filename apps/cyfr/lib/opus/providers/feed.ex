@@ -21,6 +21,11 @@ defmodule Opus.Providers.Feed do
       a person's press of a declared control on the visible canvas, and a
       canvas's code has no verb that binds, changes or refreshes a feed.
 
+  `bind`, `list` and `remove` answer the athanor's own binding records,
+  never a feed's arguments or a result's value, so their answers carry
+  no source (`sources: []`). `press` answers what a run of the feed
+  produced and declares none, so its answer is outside.
+
   The streams (`streams/0`) are canvas-readable, each declaring a shape:
 
     * `feed.results` rides the athanor's one feeds topic, and its subject
@@ -108,6 +113,7 @@ defmodule Opus.Providers.Feed do
             )
           ],
           kind: :external,
+          sources: [],
           planes: [:external, :in_chain],
           permission: :execute
         ),
@@ -117,6 +123,7 @@ defmodule Opus.Providers.Feed do
           "List feeds",
           [],
           kind: :read,
+          sources: [],
           planes: [:external, :in_chain]
         ),
         Operation.new(
@@ -125,6 +132,7 @@ defmodule Opus.Providers.Feed do
           "Remove a feed",
           [binding],
           kind: :write,
+          sources: [],
           planes: [:external, :in_chain],
           permission: :execute
         ),

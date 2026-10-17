@@ -333,6 +333,71 @@ defmodule Prima.OperationTest do
     end
   end
 
+  describe "result_sources" do
+    defp read_with(sources),
+      do:
+        Operation.new("sample", "list", "List samples", [],
+          kind: :read,
+          planes: [:in_chain],
+          sources: sources
+        )
+
+    def outside_answer(_actor, %{from: from}), do: [Prima.Source.outside(from)]
+    def outside_answer(_actor, _answer), do: :unreadable
+
+    test "a success is what the declaration reads from the answer; nothing declared is outside" do
+      actor = %Prima.Actor{athanor_id: "ath_1"}
+      reader = read_with({:answer, {__MODULE__, :outside_answer}})
+
+      assert Operation.result_sources(read_with([]), actor, {:ok, %{}}) == []
+
+      assert Operation.result_sources(read_with([:filed]), actor, {:ok, %{}}) ==
+               [Prima.Source.new(:filed)]
+
+      assert Operation.result_sources(reader, actor, {:ok, %{from: "feed"}}) ==
+               [Prima.Source.outside("feed")]
+
+      assert Operation.result_sources(reader, actor, {:ok, :malformed}) ==
+               [Prima.Source.outside(nil)]
+
+      assert Operation.result_sources(read_with(nil), actor, {:ok, %{}}) ==
+               [Prima.Source.outside(nil)]
+
+      assert Operation.result_sources(nil, actor, {:ok, %{}}) == [Prima.Source.outside(nil)]
+    end
+
+    test "an admission refusal carries nothing; any other failure every class the action may answer" do
+      actor = %Prima.Actor{athanor_id: "ath_1"}
+
+      admission = %Prima.Refusal{
+        class: :forbidden,
+        reason: :denied,
+        message: "no",
+        stage: :admission
+      }
+
+      for op <- [nil, read_with(nil), read_with([:filed])],
+          do: assert(Operation.result_sources(op, actor, {:error, admission}) == [])
+
+      failure = {:error, %{admission | stage: :execution}}
+      reader = read_with({:answer, {__MODULE__, :outside_answer}})
+
+      assert Operation.result_sources(read_with([]), actor, failure) == []
+
+      assert Operation.result_sources(read_with([:outside, :filed]), actor, failure) ==
+               [Prima.Source.new(:filed), Prima.Source.outside(nil)]
+
+      assert Operation.result_sources(reader, actor, {:error, :not_found}) ==
+               Enum.map(Prima.Source.classes(), &Prima.Source.new/1)
+
+      assert Operation.result_sources(read_with(nil), actor, {:error, "body"}) ==
+               [Prima.Source.outside(nil)]
+
+      assert Operation.result_sources(nil, actor, {:error, "body"}) == [Prima.Source.outside(nil)]
+      assert Operation.result_sources(nil, actor, :no_result) == [Prima.Source.outside(nil)]
+    end
+  end
+
   test "wire restriction narrows the action enum and keeps everything else" do
     original = Map.put(tool().input_schema, "description", "Unchanged")
     restricted = Operation.restrict_schema(original, ["list", "unknown"])

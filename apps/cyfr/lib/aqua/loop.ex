@@ -33,7 +33,7 @@ defmodule Aqua.Loop do
   compaction summaries among them, an outside source for a turn a webhook
   started and one for the model's own web search when the request offers
   it; a call's result closes with the sources it carries
-  (`Aqua.Loop.Policy.sources_of/2`), and a launched component's with an
+  (`Aqua.Loop.Policy.sources_of/3`), and a launched component's with an
   outside source named by its reference unless its completion result says
   no run of its tree was admitted with egress (`Arca.TurnStorage.close_step/4`). The room excerpt is the athanor's own
   members' words and joins nothing. A standing allow is judged against the
@@ -1482,7 +1482,9 @@ defmodule Aqua.Loop do
             {:uncertain, step, describe(reason)}
 
           result ->
-            sources = Policy.sources_of(call, result) ++ unread_ledger(state, step, call, result)
+            sources =
+              Policy.sources_of(call, result, guest(state)) ++
+                unread_ledger(state, step, call, result)
 
             case close(state, step, call, result, sources) do
               {:ok, _closed} ->
@@ -1536,7 +1538,7 @@ defmodule Aqua.Loop do
     })
   end
 
-  # A hand's child ledger its answer does not carry (`Policy.sources_of/2`
+  # A hand's child ledger its answer does not carry (`Policy.sources_of/3`
   # joins a carried one): read from the child's row, or an unnamed outside
   # source when the row is gone or unreadable. A refusal made before any
   # attempt existed reads nothing.

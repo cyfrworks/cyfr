@@ -74,7 +74,9 @@ defmodule Aqua.Providers.Notes do
     # soul's policy, so from a chain each one is a card a person
     # clicked; the reads are `auto`, bounded to the room by the
     # domain. Interactive on every action — the credential gate is
-    # the same on both planes.
+    # the same on both planes. A write answers only the name it wrote
+    # (`Aqua.Notes.describe/1`), so it carries no source; a read
+    # carries the notes' own provenance (`answer_sources/2`).
     Operation.tool(
       [
         Operation.new(
@@ -100,6 +102,7 @@ defmodule Aqua.Providers.Notes do
             )
           ],
           kind: :write,
+          sources: [],
           planes: [:external, :in_chain],
           consent: :interactive,
           standing: :thread
@@ -127,6 +130,7 @@ defmodule Aqua.Providers.Notes do
             )
           ],
           kind: :write,
+          sources: [],
           planes: [:external, :in_chain],
           consent: :interactive,
           standing: false
@@ -160,6 +164,7 @@ defmodule Aqua.Providers.Notes do
             )
           ],
           kind: :write,
+          sources: [],
           planes: [:external, :in_chain],
           consent: :interactive,
           standing: false
@@ -225,6 +230,7 @@ defmodule Aqua.Providers.Notes do
             )
           ],
           kind: :destructive,
+          sources: [],
           planes: [:external, :in_chain],
           consent: :interactive
         ),

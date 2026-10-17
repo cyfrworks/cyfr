@@ -464,28 +464,13 @@ defmodule Opus.Host.Children do
         [Prima.Source.outside(server)]
 
       _catalog ->
-        catalog_sources(operation_of(name, tool.args), result, Sanctum.Context.actor(chain.ctx))
+        Prima.Operation.result_sources(
+          operation_of(name, tool.args),
+          Sanctum.Context.actor(chain.ctx),
+          result
+        )
     end
   end
-
-  defp catalog_sources(nil, {:ok, _answer}, _actor), do: [Prima.Source.outside(nil)]
-
-  defp catalog_sources(%Prima.Operation{} = op, {:ok, answer}, actor),
-    do: Prima.Operation.answer_sources(op, actor, answer)
-
-  defp catalog_sources(op, {:error, reason}, _actor) do
-    if admission_refusal?(reason) do
-      []
-    else
-      possible = if op, do: Prima.Operation.possible_classes(op), else: [:outside]
-      Enum.map(possible, &Prima.Source.new/1)
-    end
-  end
-
-  # A refusal the gate made before any handler ran carries nothing the
-  # tool read.
-  defp admission_refusal?(%Prima.Refusal{stage: :admission}), do: true
-  defp admission_refusal?(reason), do: Sanctum.Refusals.classify(reason).stage == :admission
 
   defp operation_of(name, args) do
     with action when is_binary(action) <- Map.get(args, "action"),

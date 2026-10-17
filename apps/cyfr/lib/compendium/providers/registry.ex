@@ -28,6 +28,16 @@ defmodule Compendium.Providers.Registry do
   # has not claimed its namespace yet (`auth: :signed_in`, unauthenticated),
   # which the interactive class refuses, so its handler refuses a key.
 
+  # Every action that sends a change to the registry — a POST or PATCH
+  # that claims, verifies, issues, adds, updates, accepts, reports,
+  # appeals, or probes and so issues a push token — reaches outside the
+  # home and is `external`; a DELETE there (`tokens_revoke`,
+  # `members_remove`) is `destructive`. None takes a standing answer
+  # (`standing: false`): an assistant's proposal of one is approved one
+  # card at a time, and an allow stored before is read as no allow
+  # (`Sanctum.ToolGrants`). The reads stay `read`; none declares
+  # `sources`, so each answer is outside material.
+
   @doc false
   # The tool's wire definition — schema and access annotations beside the
   # handler they gate; Compendium.Provider assembles its roster from these.
@@ -63,7 +73,8 @@ defmodule Compendium.Providers.Registry do
             )
           ],
           auth: :signed_in,
-          kind: :execute,
+          kind: :external,
+          standing: false,
           planes: [:external, :in_chain]
         ),
         Operation.new(
@@ -90,7 +101,8 @@ defmodule Compendium.Providers.Registry do
             )
           ],
           auth: :signed_in,
-          kind: :write,
+          kind: :external,
+          standing: false,
           planes: [:external, :in_chain]
         ),
         Operation.new(
@@ -103,7 +115,8 @@ defmodule Compendium.Providers.Registry do
               description: "Namespace slug (publisher or personal)"
             )
           ],
-          kind: :write,
+          kind: :external,
+          standing: false,
           consent: :interactive,
           planes: [:external],
           permission: :component_manage
@@ -118,7 +131,8 @@ defmodule Compendium.Providers.Registry do
               description: "Namespace slug (publisher or personal)"
             )
           ],
-          kind: :write,
+          kind: :external,
+          standing: false,
           consent: :interactive,
           planes: [:external, :in_chain],
           permission: :component_manage
@@ -149,7 +163,8 @@ defmodule Compendium.Providers.Registry do
               description: "Human-readable label for the issued push token"
             )
           ],
-          kind: :write,
+          kind: :external,
+          standing: false,
           consent: :interactive,
           planes: [:external],
           permission: :component_manage
@@ -168,7 +183,8 @@ defmodule Compendium.Providers.Registry do
               description: "Token id (for tokens_revoke)"
             )
           ],
-          kind: :write,
+          kind: :destructive,
+          standing: false,
           consent: :interactive,
           planes: [:external, :in_chain],
           permission: :component_manage
@@ -205,7 +221,8 @@ defmodule Compendium.Providers.Registry do
               enum: ["admin", "member"]
             )
           ],
-          kind: :write,
+          kind: :external,
+          standing: false,
           consent: :interactive,
           planes: [:external],
           permission: :component_manage
@@ -229,7 +246,8 @@ defmodule Compendium.Providers.Registry do
               enum: ["admin", "member"]
             )
           ],
-          kind: :write,
+          kind: :external,
+          standing: false,
           consent: :interactive,
           planes: [:external],
           permission: :component_manage
@@ -248,7 +266,8 @@ defmodule Compendium.Providers.Registry do
               description: "Target user's personal namespace slug (for members_*)"
             )
           ],
-          kind: :write,
+          kind: :destructive,
+          standing: false,
           consent: :interactive,
           planes: [:external],
           permission: :component_manage
@@ -305,7 +324,8 @@ defmodule Compendium.Providers.Registry do
                 "Component reference being reported (for report action; required if no target_namespace)"
             )
           ],
-          kind: :write,
+          kind: :external,
+          standing: false,
           consent: :interactive,
           planes: [:external, :in_chain]
         ),
@@ -367,7 +387,8 @@ defmodule Compendium.Providers.Registry do
             )
           ],
           auth: :signed_in,
-          kind: :write,
+          kind: :external,
+          standing: false,
           planes: [:external, :in_chain]
         ),
         Operation.new(
@@ -402,7 +423,8 @@ defmodule Compendium.Providers.Registry do
               description: "Appeal argument, ≤4000 chars (for appeal action)"
             )
           ],
-          kind: :write,
+          kind: :external,
+          standing: false,
           consent: :interactive,
           planes: [:external, :in_chain]
         )
