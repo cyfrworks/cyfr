@@ -534,6 +534,21 @@ defmodule Arca.ExecutionAttemptsTest do
       assert %{deleted: true, settled_generation: nil} = revision(actor, "data/d.txt")
     end
 
+    test "under a file settled while it was in flight is failed by its shape, and nothing of it published",
+         %{actor: actor} do
+      w = writer!(actor)
+      child = ["data", "shape", "c.txt"]
+
+      settle_parent = fn _mark ->
+        :ok = Arca.put(actor, ["data", "shape"], "a file now", sources: [])
+      end
+
+      assert {:ok, {:failed, {:error, :enotdir}}} = held(w, put(child, "child", settle_parent))
+      assert [%{state: "failed", reason: "enotdir"}] = intents(w)
+      assert {:ok, "a file now"} = Arca.get(actor, ["data", "shape"])
+      assert {:error, :not_found} = Arca.get(actor, child)
+    end
+
     test "a delete stores nothing and tombstones the row at its settlement", %{actor: actor} do
       w = writer!(actor)
       path = ["data", "gone.txt"]
