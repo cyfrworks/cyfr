@@ -162,6 +162,10 @@ defmodule Opus.Host.Egress do
   end
 
   # The run's ledger as it stands, against the edge's flows to this host.
+  # No send here, an attached fetch's pin included, carries bytes of a
+  # guest object's generation that never settled: a reader is handed only
+  # a settled generation (`Arca.ObjectRevisions`), so no ledger holds
+  # unsettled material and `unsettled` needs no refusal of its own.
   defp flows(caller, chain, edge, uri) do
     case Opus.Ledger.check(
            Sanctum.Context.actor(chain.ctx),

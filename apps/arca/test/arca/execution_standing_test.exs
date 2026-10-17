@@ -98,7 +98,7 @@ defmodule Arca.ExecutionStandingTest do
     write = %{
       op: :put,
       path: ["data", "x.txt"],
-      io: fn ->
+      io: fn _mark ->
         send(test, :ran)
         :ok
       end

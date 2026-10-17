@@ -665,12 +665,20 @@ defmodule Arca.ExecutionAttemptsTest do
       assert {:ok, "pending"} = Arca.get(actor, path)
     end
 
-    test "a store call taking a mark is refused outside data/", %{actor: actor} do
+    test "a store call taking a mark is refused outside data/, and one taking none under it",
+         %{actor: actor} do
       w = writer!(actor)
 
       assert_raise ArgumentError, fn ->
         held(w, %{op: :put, path: ["threads", "x.txt"], bytes: 1, io: fn _mark -> :ok end})
       end
+
+      # An unmarked store would write the path itself, which nothing reads.
+      assert_raise ArgumentError, fn ->
+        held(w, %{op: :put, path: ["data", "x.txt"], bytes: 1, io: fn -> flunk("stored") end})
+      end
+
+      assert [] = intents(w)
     end
   end
 end

@@ -37,16 +37,19 @@ defmodule Aqua.Providers.Notes do
   person's own; `forget` is destructive and already takes no standing
   allow. The annotation is the one source for every gate that honours it.
 
-  ## Outside material
+  ## Provenance and outside material
 
-  A note kept in a chain whose turns read an outside source carries those
-  turns' sources in its provenance (`Aqua.Notes.chain_sources/2`, read
-  from the host-stamped root execution, never from what the model wrote),
-  so it reads back as outside material, whatever admitted the keep: an
-  approval admits the action and never endorses the content. Pins are not
-  marked. `endorse` is the one clearing: it names the sources it clears,
-  so the card a person approves shows them, and it writes only while the
-  note still carries exactly those.
+  A note kept in a chain carries every source the chain's turns read in
+  its provenance (`Aqua.Notes.chain_sources/2`, read from the
+  host-stamped root execution, never from what the model wrote), so a
+  turn or a guest that reads it later reads them too: a note made from a
+  disclosed vault value carries `vault_disclosed`, whatever admitted the
+  keep. Of those, the outside sources make it outside material, shown
+  attributed and endorsable: an approval admits the action and never
+  endorses the content. Pins are not marked. `endorse` is the one
+  clearing, of the outside sources only: it names the sources the note
+  carries, so the card a person approves shows them, and it writes only
+  while the note still carries exactly those.
   """
 
   @behaviour Prima.Provider
@@ -359,24 +362,18 @@ defmodule Aqua.Providers.Notes do
   # execution and the thread onto the call as host-only keys
   # (the gate's lineage), and those are the only
   # provenance read there — a value the model put under `thread` or
-  # `execution` is ignored, never recorded. A chain whose turns read an
-  # outside source hands the note their sources. At the door a person says
-  # what they choose to.
+  # `execution` is ignored, never recorded. The chain's turns hand the
+  # note every source they read. At the door a person says what they
+  # choose to.
   defp provenance(args, %Context{plane: :guest} = ctx) do
     [
       thread: args["thread_id"],
       execution: args["root_execution_id"] || args["parent_execution_id"],
-      sources: outside_material(Notes.chain_sources(ctx, args["root_execution_id"]))
+      sources: Notes.chain_sources(ctx, args["root_execution_id"])
     ]
   end
 
   defp provenance(args, _ctx) do
     [thread: args["thread"], execution: args["execution"]]
-  end
-
-  # The chain's sources when any is outside, else none: a note derived
-  # only from the athanor's own material is the athanor's.
-  defp outside_material(sources) do
-    if Enum.any?(sources, &Prima.Source.outside?/1), do: sources, else: []
   end
 end

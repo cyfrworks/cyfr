@@ -542,10 +542,12 @@ defmodule Arca.ExecutionAttempts do
       when is_binary(athanor_id) and athanor_id != "" and is_binary(attempt) and is_integer(fence) and
              is_binary(runner) and op in [:put, :append, :delete] and is_list(path) and
              (is_function(io, 0) or is_function(io, 1)) and is_list(opts) do
-    # A store call that takes a mark writes a guest object by generation,
-    # so only a path under `data/` may name one.
-    if is_function(io, 1) and not Arca.ObjectRevisions.object_path?(path),
-      do: raise(ArgumentError, "only a write under data/ takes a mark")
+    # A guest object is written by generation and only so: a store call
+    # under `data/` takes the mark its intent records, and no other path's
+    # does. An unmarked store there would write the path itself, which
+    # nothing reads.
+    if is_function(io, 1) != Arca.ObjectRevisions.object_path?(path),
+      do: raise(ArgumentError, "a write under data/ takes its mark, and only such a write does")
 
     with {:ok, grant, verify} <-
            Arca.Repo.Errors.with_db_rescue("Arca.ExecutionAttempts.while_held", fn ->
@@ -1351,8 +1353,7 @@ defmodule Arca.ExecutionAttempts do
   end
 
   # A guest object's mark, taken with the ledger as it stands: what the
-  # guest read before it wrote. `:none` for a store call that takes no
-  # mark.
+  # guest read before it wrote. `:none` for any other path.
   # arca:db-raise-ok inside the caller's transaction
   defp mark!(athanor_id, execution_id, %{op: op, path: path, io: io} = write) do
     if is_function(io, 1) do

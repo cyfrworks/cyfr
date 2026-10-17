@@ -66,7 +66,9 @@ defmodule Arca.ExecutionAttemptsWriteTest do
     {:ok, ctx: ctx, actor: actor, execution: execution, attempt: attempt.attempt}
   end
 
-  # One write of the attempt at fence 1; `io` is the store call.
+  # One write of the attempt at fence 1; `io` is the store call. A guest
+  # object is written by generation, so the store call is handed the mark
+  # its intent recorded, which the stores below name (`mark/0`).
   defp write(%{actor: actor, attempt: attempt}, io, opts \\ []) do
     ExecutionAttempts.while_held(
       actor,
@@ -77,14 +79,24 @@ defmodule Arca.ExecutionAttemptsWriteTest do
         op: Keyword.get(opts, :op, :put),
         path: Keyword.get(opts, :path, @path),
         bytes: Keyword.get(opts, :bytes, 5),
-        io: io
+        io: marked(io)
       },
       Arca.Test.Actor.stored()
     )
   end
 
+  defp marked(io) when is_function(io, 0) do
+    fn mark ->
+      Process.put({__MODULE__, :mark}, mark)
+      io.()
+    end
+  end
+
+  # The mark of the store call running in this process.
+  defp mark, do: Process.get({__MODULE__, :mark})
+
   defp put(%{actor: actor}, bytes \\ "bytes"),
-    do: fn -> Arca.put(actor, @path, bytes) end
+    do: fn -> Arca.put(actor, @path, bytes, mark: mark()) end
 
   defp intents(%{actor: actor, attempt: attempt}),
     do: ExecutionAttempts.write_intents(actor, attempt)
@@ -158,7 +170,7 @@ defmodule Arca.ExecutionAttemptsWriteTest do
       io = fn ->
         refute Arca.Repo.in_transaction?()
         Process.put(:in_store_call, true)
-        result = Arca.Adapters.Local.put(test.actor, @path, "bytes")
+        result = Arca.ObjectRevisions.store(test.actor, mark(), "bytes")
         Process.delete(:in_store_call)
         result
       end
@@ -176,13 +188,15 @@ defmodule Arca.ExecutionAttemptsWriteTest do
       :ok = Arca.put(test.actor, @path, "a")
 
       assert {:ok, {:confirmed, :ok}} =
-               write(test, fn -> Arca.append(test.actor, @path, "b") end,
+               write(test, fn -> Arca.append(test.actor, @path, "b", mark: mark()) end,
                  op: :append,
                  bytes: 1
                )
 
+      # A guest object's delete stores nothing: its settlement tombstones
+      # the path.
       assert {:ok, {:confirmed, :ok}} =
-               write(test, fn -> Arca.delete(test.actor, @path) end,
+               write(test, fn -> :ok end,
                  op: :delete,
                  bytes: nil
                )
@@ -199,11 +213,19 @@ defmodule Arca.ExecutionAttemptsWriteTest do
       writers =
         for line <- ["one\n", "two\n"] do
           Task.async(fn ->
+            # Held at its first store; one that re-derives after the other
+            # settled over its base stores again at once.
             io = fn ->
-              send(gate, {:in_store_call, self()})
+              if Process.get(:released) do
+                Arca.append(test.actor, @path, line, mark: mark())
+              else
+                send(gate, {:in_store_call, self()})
 
-              receive do
-                :go -> Arca.append(test.actor, @path, line)
+                receive do
+                  :go ->
+                    Process.put(:released, true)
+                    Arca.append(test.actor, @path, line, mark: mark())
+                end
               end
             end
 
@@ -261,7 +283,8 @@ defmodule Arca.ExecutionAttemptsWriteTest do
 
       assert {:ok, {:uncertain, :hold_lost}} = write(test, io)
       assert [{"uncertain", "cancelled"}] = states(test)
-      assert {:ok, "bytes"} = Arca.get(test.actor, @path)
+      # Its generation was stored and never settled, so nothing reads it.
+      assert {:error, :not_found} = Arca.get(test.actor, @path)
     end
 
     test "after the settlement: the write stays confirmed", test do
@@ -274,6 +297,8 @@ defmodule Arca.ExecutionAttemptsWriteTest do
     end
 
     test "a store that refused after a cancel is still a refusal: nothing was written", test do
+      :ok = Arca.put(test.actor, @path, "kept")
+
       io = fn ->
         cancel!(test)
         {:error, :not_found}
@@ -498,7 +523,7 @@ defmodule Arca.ExecutionAttemptsWriteTest do
                test.attempt,
                1,
                @runner,
-               %{op: :put, path: @path, io: fn -> flunk("the store was touched") end},
+               %{op: :put, path: @path, io: fn _mark -> flunk("the store was touched") end},
                Arca.Test.Actor.stored()
              )
   end

@@ -296,6 +296,32 @@ defmodule Aqua.NotesStoreTest do
       assert {:error, {:not_found, "note", "gone"}} = Notes.endorse(ctx, "gone", [host])
     end
 
+    test "a note carrying only the athanor's own material is no outside material to endorse, and an endorsement keeps what it was made from",
+         %{ctx: ctx} do
+      member!()
+      vault = Prima.Source.new(:vault_disclosed)
+      host = Prima.Source.outside("news.example")
+
+      assert {:ok, _} = Notes.keep(ctx, "derived", "the account's region", sources: [vault])
+      assert {:ok, %{sources: [^vault]}} = read = Notes.read(ctx, "derived")
+      assert Notes.sources_of_answer(read) == [vault]
+
+      assert {:error, {:invalid_argument, message}} =
+               Notes.endorse(ctx, "derived", Prima.Source.to_json_list([vault]))
+
+      assert message =~ "no outside sources"
+
+      assert {:ok, _} =
+               Notes.keep(ctx, "mixed", "the region, as the news put it", sources: [vault, host])
+
+      assert {:ok, %{endorsed: "mixed"}} =
+               Notes.endorse(ctx, "mixed", Prima.Source.to_json_list([vault, host]))
+
+      # The outside material is the person's own now; the disclosed value
+      # it was made from is still what it holds.
+      assert {:ok, %{sources: [^vault]}} = Notes.read(ctx, "mixed")
+    end
+
     test "an endorsement never writes over a note corrected since its read", %{ctx: ctx} do
       member!()
       host = Prima.Source.outside("news.example")
@@ -350,8 +376,9 @@ defmodule Aqua.NotesStoreTest do
 
       assert {:ok, %{sources: []}} = Notes.pinned(ctx)
 
-      # The same keep at the door, and one from a chain that read only the
-      # athanor's own material, carry none.
+      # The same keep at the door carries none; one from a chain that read
+      # only the athanor's own material carries what it read, and is no
+      # outside material.
       assert {:ok, _} =
                Aqua.Providers.Notes.handle("notes", ctx, %{
                  "action" => "keep",
@@ -370,7 +397,10 @@ defmodule Aqua.NotesStoreTest do
                  "root_execution_id" => own
                })
 
-      assert {:ok, %{sources: []}} = Notes.read(ctx, "own")
+      assert {:ok, %{sources: [%Prima.Source{class: :filed}] = own_sources}} =
+               Notes.read(ctx, "own")
+
+      refute Enum.any?(own_sources, &Prima.Source.outside?/1)
     end
   end
 

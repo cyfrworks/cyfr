@@ -92,6 +92,41 @@ defmodule Arca.Providers.FilesTest do
     {:ok, ctx: Sanctum.TestContext.local()}
   end
 
+  test "a read answers a guest object's recorded sources with the files grant, and outside material for a file that records none",
+       %{ctx: ctx} do
+    actor = Sanctum.Context.actor(ctx)
+    vault = Prima.Source.new(:vault_disclosed)
+    grant = Prima.Source.new(:files_by_grant)
+    {:ok, {_module, %{operations: operations}}} = Sanctum.Catalog.lookup("file")
+    read = Enum.find(operations, &(&1.action == "read"))
+
+    :ok = Arca.put(actor, ["data", "region.txt"], "eu-west", sources: [vault])
+
+    assert {:ok, answer} =
+             Tool.handle("file", actor, %{"action" => "read", "path" => "data/region.txt"})
+
+    assert answer.sources == Prima.Source.to_json_list([vault])
+    assert Prima.Operation.answer_sources(read, actor, answer) == [grant, vault]
+
+    :ok = Arca.put(actor, ["data", "clean.txt"], "mine", sources: [])
+
+    assert {:ok, clean} =
+             Tool.handle("file", actor, %{"action" => "read", "path" => "data/clean.txt"})
+
+    assert Prima.Operation.answer_sources(read, actor, clean) == [grant]
+
+    :ok = Arca.ensure_roots(actor)
+    :ok = Arca.put(actor, ["threads", "t1", "note.txt"], "kept")
+
+    assert {:ok, unrecorded} =
+             Tool.handle("file", actor, %{"action" => "read", "path" => "threads/t1/note.txt"})
+
+    refute Map.has_key?(unrecorded, :sources)
+
+    assert Prima.Operation.answer_sources(read, actor, unrecorded) ==
+             [grant, Prima.Source.outside(nil)]
+  end
+
   test "the annotations: reads behind storage_read, changes behind storage_write, no chain" do
     actions = Tool.definition().annotations.actions
 

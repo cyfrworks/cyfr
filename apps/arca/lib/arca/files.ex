@@ -120,36 +120,70 @@ defmodule Arca.Files do
   @doc """
   One file's bytes: as `utf8` text when they are, else `base64`. A file
   past `max_inline_read/0` is refused in words — the download route
-  serves it whole.
+  serves it whole. A file under `data/` is a guest object, and its answer
+  carries `sources`, the canonical JSON of the sources its settled
+  generation was written with (`Arca.ObjectRevisions`), read in the same
+  observation as its bytes; a file anywhere else records none.
   """
   @spec read(Prima.Actor.t(), String.t()) ::
           {:ok,
-           %{path: String.t(), size: non_neg_integer(), content: String.t(), encoding: String.t()}}
+           %{
+             required(:path) => String.t(),
+             required(:size) => non_neg_integer(),
+             required(:content) => String.t(),
+             required(:encoding) => String.t(),
+             optional(:sources) => [%{String.t() => String.t() | nil}]
+           }}
           | {:error, term()}
   def read(%Prima.Actor{} = actor, path) when is_binary(path) do
     with :ok <- tenant(actor),
          {:ok, segments, physical, _tier} <- resolve_file(path),
-         {:ok, bytes} <- get(actor, physical, path) do
-      cond do
-        byte_size(bytes) > @max_inline_read ->
-          {:error,
-           {:invalid_argument,
-            "'#{join(segments)}' is #{byte_size(bytes)} bytes — larger than a read answers " <>
-              "inline (#{@max_inline_read}); download it instead"}}
-
-        text?(bytes) ->
-          {:ok, %{path: join(segments), size: byte_size(bytes), content: bytes, encoding: "utf8"}}
-
-        true ->
-          {:ok,
-           %{
-             path: join(segments),
-             size: byte_size(bytes),
-             content: Base.encode64(bytes),
-             encoding: "base64"
-           }}
-      end
+         {:ok, bytes, sources} <- read_object(actor, physical, path) do
+      bytes
+      |> answer(segments)
+      |> with_sources(sources)
     end
+  end
+
+  defp answer(bytes, segments) do
+    cond do
+      byte_size(bytes) > @max_inline_read ->
+        {:error,
+         {:invalid_argument,
+          "'#{join(segments)}' is #{byte_size(bytes)} bytes — larger than a read answers " <>
+            "inline (#{@max_inline_read}); download it instead"}}
+
+      text?(bytes) ->
+        {:ok, %{path: join(segments), size: byte_size(bytes), content: bytes, encoding: "utf8"}}
+
+      true ->
+        {:ok,
+         %{
+           path: join(segments),
+           size: byte_size(bytes),
+           content: Base.encode64(bytes),
+           encoding: "base64"
+         }}
+    end
+  end
+
+  defp with_sources({:ok, answer}, sources) when is_list(sources),
+    do: {:ok, Map.put(answer, :sources, Prima.Source.to_json_list(sources))}
+
+  defp with_sources(answer, _none), do: answer
+
+  # A guest object's bytes and sources in one observation; any other file
+  # has bytes alone.
+  defp read_object(actor, ["data" | _] = physical, path) do
+    case Arca.ObjectRevisions.read(actor, physical) do
+      {:ok, bytes, sources} -> {:ok, bytes, sources}
+      {:error, :not_found} -> {:error, {:not_found, "File", path}}
+      {:error, reason} -> storage_error("read", path, reason)
+    end
+  end
+
+  defp read_object(actor, physical, path) do
+    with {:ok, bytes} <- get(actor, physical, path), do: {:ok, bytes, nil}
   end
 
   @doc """

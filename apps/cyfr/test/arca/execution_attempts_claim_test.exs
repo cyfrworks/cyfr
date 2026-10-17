@@ -416,7 +416,7 @@ defmodule Arca.ExecutionAttemptsClaimTest do
   end
 
   # A storage write whose store call only reports that it ran.
-  defp write, do: %{op: :put, path: ["data", "claim.txt"], io: &ran/0}
+  defp write, do: %{op: :put, path: ["data", "claim.txt"], io: fn _mark -> ran() end}
 
   defp ran do
     send(self(), :ran)

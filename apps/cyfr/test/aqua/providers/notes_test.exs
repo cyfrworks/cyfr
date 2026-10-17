@@ -107,6 +107,11 @@ defmodule Aqua.Providers.NotesTest do
     Sanctum.Gate.call_in_chain("notes", Context.enter_guest(ctx), args, auth, opts)
   end
 
+  defp turn_row(athanor_id, id) do
+    require Ecto.Query
+    Ecto.Query.from(t in Arca.Schemas.Turn, where: t.athanor_id == ^athanor_id and t.id == ^id)
+  end
+
   defp caller!(ctx),
     do: ctx |> Cyfr.Test.AttemptFixtures.lineage!() |> Map.take([:parent_execution_id, :attempt])
 
@@ -310,6 +315,41 @@ defmodule Aqua.Providers.NotesTest do
       assert spec.planes == [:external, :in_chain], "#{name} is not reachable from a chain"
       assert spec.consent == :interactive, "#{name} is reachable by a standing credential"
     end
+  end
+
+  test "a note kept in a chain records every source the chain's turns read, outside or not",
+       %{ctx: ctx} do
+    auth = granting([{"notes", "keep"}, {"notes", "read"}])
+    actor = Context.actor(ctx)
+    root = "exec_root_#{System.unique_integer([:positive])}"
+    vault = Prima.Source.new(:vault_disclosed)
+
+    # A turn of the chain read a disclosed vault value, and nothing outside.
+    {:ok, thread} = Arca.ThreadStorage.create(actor)
+
+    {:ok, %{turn: turn}} =
+      Arca.TurnStorage.accept_message(actor, thread.id, %{
+        message: %{author: actor.user_id, content: "@aqua go"},
+        turn: %{agent: "aqua", requested_by: actor.user_id, origin: :interactive}
+      })
+
+    {1, _} =
+      Arca.Repo.update_all(
+        turn_row(actor.athanor_id, turn.id),
+        set: [root_execution_id: root, sources: Prima.Source.encode([vault])]
+      )
+
+    args = %{"action" => "keep", "name" => "region", "content" => "eu-west"}
+    lineage = [lineage: %{root_execution_id: root, thread_id: thread.id}]
+    assert {:ok, %{kept: "region"}} = in_chain(ctx, args, auth, lineage)
+
+    # Whoever reads it reads the disclosed value's provenance, which a
+    # flow must let leave; it is no outside material, so nothing marks it.
+    assert {:ok, %{sources: sources} = answer} =
+             in_chain(ctx, %{"action" => "read", "name" => "region"}, auth)
+
+    assert sources == Prima.Source.to_json_list([vault])
+    assert vault in Tool.answer_sources(actor, answer)
   end
 
   test "an approved call keeps a note from inside the chain, and only an OIDC session's chain may",

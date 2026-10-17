@@ -1428,13 +1428,16 @@ defmodule Opus.Attempt do
 
   # What a storage read answers — a file's bytes, a listing's names, a
   # path's existence — reaches the guest only once the run's ledger holds
-  # its provenance. A file is read through the edge's storage grant; an
-  # object under `data/` carries no recorded sources of its own yet, and
-  # provenance that is not recorded is outside. The component's own
-  # artifact and the bare scope listing carry nothing.
+  # its provenance. A file is read through the edge's storage grant. A
+  # guest object's read under `data/` was answered through the hold, which
+  # joined the sources its settled generation was written with before the
+  # bytes came back (`Arca.ExecutionAttempts.while_held/6`); a listing's
+  # names and a path's existence there read no object, so what wrote them
+  # is not recorded, and provenance that is not recorded is outside. The
+  # component's own artifact and the bare scope listing carry nothing.
   defp read_joined(state, {:storage, action, %{"path" => path}}, reply)
        when action in [:read, :list, :exists] do
-    case join(state, storage_sources(path)) do
+    case join(state, storage_sources(action, path)) do
       :ok -> reply
       {:error, :unavailable} -> {:error, :unavailable}
     end
@@ -1442,12 +1445,13 @@ defmodule Opus.Attempt do
 
   defp read_joined(_state, _op, reply), do: reply
 
-  defp storage_sources(""), do: []
+  defp storage_sources(_action, ""), do: []
 
-  defp storage_sources("components/" <> _rest), do: [Prima.Source.new(:files_by_grant)]
-  defp storage_sources("components"), do: [Prima.Source.new(:files_by_grant)]
+  defp storage_sources(_action, "components/" <> _rest), do: [Prima.Source.new(:files_by_grant)]
+  defp storage_sources(_action, "components"), do: [Prima.Source.new(:files_by_grant)]
+  defp storage_sources(:read, "data/" <> _object), do: [Prima.Source.new(:files_by_grant)]
 
-  defp storage_sources(_path),
+  defp storage_sources(_action, _path),
     do: [Prima.Source.new(:files_by_grant), Prima.Source.outside(nil)]
 
   defp names_outcome?(state, %Outcome{} = outcome) do

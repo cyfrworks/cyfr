@@ -74,7 +74,40 @@ defmodule Opus.AttemptLedgerTest do
     assert ledger(fixture) == [Source.new(:vault_disclosed)]
   end
 
-  test "a listing and an existence check join as a read does; the bare scope listing joins nothing" do
+  test "a read of a guest object joins the files grant and the sources it was written with, never an unnamed outside source" do
+    storage_root!()
+
+    fixture =
+      AttemptFixtures.attached!(
+        ctx: Sanctum.TestContext.local(:api),
+        authority: %{
+          Authority.zero()
+          | resources: %Edge{storage: %{paths: ["*"], actions: ["read", "list", "exists"]}}
+        }
+      )
+
+    actor = Sanctum.Context.actor(fixture.ctx)
+    :ok = Arca.put(actor, ["data", "clean.txt"], "mine", sources: [])
+    :ok = Arca.put(actor, ["data", "region.txt"], "eu-west", sources: [Source.new(:filed)])
+
+    assert %{"ok" => %{"content" => _}} =
+             AttemptFixtures.call(fixture, "storage", %{
+               "action" => "read",
+               "path" => "data/clean.txt"
+             })
+
+    assert ledger(fixture) == [Source.new(:files_by_grant)]
+
+    assert %{"ok" => %{"content" => _}} =
+             AttemptFixtures.call(fixture, "storage", %{
+               "action" => "read",
+               "path" => "data/region.txt"
+             })
+
+    assert ledger(fixture) == [Source.new(:filed), Source.new(:files_by_grant)]
+  end
+
+  test "a listing and an existence check join the files grant and outside material, since names record no sources; the bare scope listing joins nothing" do
     storage_root!()
 
     fixture =

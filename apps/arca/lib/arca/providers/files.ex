@@ -15,9 +15,13 @@ defmodule Arca.Providers.Files do
   reaches files through its own consented hands.
 
   A read answers files read through the reader's storage grant
-  (`files_by_grant`), and, since a file records no sources of its own
-  yet, outside material too (`Prima.Source`): provenance that is not
-  recorded is never the athanor's own.
+  (`files_by_grant`) joined with the file's own provenance
+  (`Prima.Source`): a file under `data/` is a guest object, and its read
+  answers the sources its settled generation was written with
+  (`Arca.Files.read/2`, `read_sources/2`); a file anywhere else records
+  none, so it is outside material, since provenance that is not recorded
+  is never the athanor's own. A listing names files without reading them
+  and answers `files_by_grant` and outside material as before.
 
   `list`, `read`, `write` and `delete` name their file or folder by
   `path`, relative to the athanor root, and declare it as their resource
@@ -96,7 +100,7 @@ defmodule Arca.Providers.Files do
         ),
         Operation.new("file", "read", "Read a file as text or base64 bytes", [Arg.required(path)],
           kind: :read,
-          sources: [:files_by_grant, :outside],
+          sources: {:answer, {__MODULE__, :read_sources}},
           planes: [:external],
           permission: :storage_read,
           resource: {"path", :storage_path}
@@ -205,6 +209,25 @@ defmodule Arca.Providers.Files do
   @impl true
   def handle("file", %Prima.Actor{} = actor, args), do: dispatch(actor, args)
   def handle(tool, %Prima.Actor{}, _args), do: {:error, {:not_found, "tool", tool}}
+
+  @doc """
+  What a read's answer carries (its operation's `sources:` declaration,
+  `Prima.Operation.answer_sources/3`): `files_by_grant`, joined with the
+  sources a guest object's answer names, or with an unnamed outside source
+  for a file that records none.
+  """
+  @spec read_sources(Prima.Actor.t() | nil, term()) :: [Prima.Source.t()]
+  def read_sources(_actor, %{sources: sources}) when is_list(sources),
+    do:
+      Prima.Source.set([
+        Prima.Source.new(:files_by_grant) | Enum.map(sources, &Prima.Source.from_json/1)
+      ])
+
+  def read_sources(actor, %{"sources" => sources}) when is_list(sources),
+    do: read_sources(actor, %{sources: sources})
+
+  def read_sources(_actor, _answer),
+    do: [Prima.Source.new(:files_by_grant), Prima.Source.outside(nil)]
 
   defp dispatch(actor, %{"action" => "list"} = args),
     do: Files.list(actor, Map.get(args, "path", ""))

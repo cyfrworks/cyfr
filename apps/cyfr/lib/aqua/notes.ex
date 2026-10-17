@@ -47,13 +47,14 @@ defmodule Aqua.Notes do
   execution it came from, as frontmatter above the body. The reader is the
   one the agent files share, `Compendium.parse_agent_frontmatter/1`.
 
-  A note kept from a chain whose turns read an outside source carries the
-  turns' sources too (`sources`, `Prima.Source`s): it is outside material,
-  never the person's own words, and every read answers it with its
-  sources, so a turn that reads it reads them (`Aqua.Loop.Policy`), and
-  the notes index shows it attributed (`Aqua.Prompt`). Only `endorse/3`,
-  a person's write after a card that names them, clears them. A
-  provenance that cannot be read is an unnamed outside source.
+  A note kept from a chain carries every source the chain's turns read
+  (`sources`, `Prima.Source`s), and every read answers it with them, so a
+  turn or a guest that reads it reads them (`Aqua.Loop.Policy`). One that
+  carries an outside source is outside material, never the person's own
+  words: the notes index shows it attributed (`Aqua.Prompt`), and only
+  `endorse/3`, a person's write after a card that names its sources,
+  clears its outside sources, keeping the rest. A provenance that cannot
+  be read is an unnamed outside source.
 
   This module is the domain. Four callers read or write here:
   `Aqua.Providers.Notes`, the door people and agents come through;
@@ -312,14 +313,17 @@ defmodule Aqua.Notes do
   end
 
   @doc """
-  Make a filed note the person's own: clear the sources its provenance
-  carries, over the revision read just before, after a card that named
-  them. `sources_seen` are the sources the card showed (`Prima.Source`s
-  or their canonical JSON objects); a note whose sources are not exactly
-  those, a note changed since it was read, a note that carries none and a
-  pinned name are refused, and nothing is written. The body is kept as it
-  stands, the thread and execution it came from with it, and the person
-  who endorsed it is who kept it now.
+  Make a filed note's outside material the person's own: clear the
+  outside sources its provenance carries, over the revision read just
+  before, after a card that named its sources. `sources_seen` are the
+  sources the card showed (`Prima.Source`s or their canonical JSON
+  objects); a note whose sources are not exactly those, a note changed
+  since it was read, a note that carries no outside source and a pinned
+  name are refused, and nothing is written. Its other sources stay, since
+  what it was made from inside the athanor (a disclosed vault value, a
+  filed note) is still what it holds; the body is kept as it stands, the
+  thread and execution it came from with it, and the person who endorsed
+  it is who kept it now.
   """
   @spec endorse(Context.t(), String.t(), [Prima.Source.t() | map()]) ::
           {:ok, %{endorsed: String.t(), athanor_id: String.t()}} | {:error, refusal()}
@@ -333,15 +337,19 @@ defmodule Aqua.Notes do
         is_nil(note) ->
           {:error, {:not_found, "note", name}}
 
-        note.sources == [] ->
-          {:error, {:invalid_argument, "'#{name}' carries no sources to clear"}}
+        not Enum.any?(note.sources, &Prima.Source.outside?/1) ->
+          {:error, {:invalid_argument, "'#{name}' carries no outside sources to clear"}}
 
         Prima.Source.set(note.sources) != seen ->
           {:error,
            {:conflict, "'#{name}' carries other sources than the ones shown — read it again"}}
 
         true ->
-          provenance = [thread: note.thread, execution: note.execution]
+          provenance = [
+            thread: note.thread,
+            execution: note.execution,
+            sources: Enum.reject(note.sources, &Prima.Source.outside?/1)
+          ]
 
           with :ok <- publish(ctx, name, encode(ctx, note.content, provenance), revision),
                do: {:ok, %{endorsed: name, athanor_id: Context.athanor!(ctx)}}
