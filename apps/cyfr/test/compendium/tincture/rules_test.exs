@@ -157,6 +157,22 @@ defmodule Compendium.Tincture.RulesTest do
              |> Map.fetch!("frame-ancestors") == ["https://shell.test"]
     end
 
+    test "the document policy is the CSP with the sandbox the declaration opens, whole" do
+      opts = %{endpoint: @endpoint, nonce: @nonce}
+      pointer = manifest(%{"frame" => %{"capabilities" => ["pointer_lock"]}})
+
+      assert Rules.frame_policy(pointer, opts) ==
+               Rules.csp(pointer, opts) <> "; sandbox allow-scripts allow-pointer-lock"
+
+      assert Compendium.tincture_frame_policy(pointer, opts) == Rules.frame_policy(pointer, opts)
+
+      # A declaration the rules refuse opens nothing beyond scripts.
+      refused = manifest(%{"frame" => %{"capabilities" => ["camera"]}})
+
+      assert Rules.frame_policy(refused, opts) ==
+               Rules.csp(refused, opts) <> "; sandbox allow-scripts"
+    end
+
     test "an origin or a nonce outside its grammar raises rather than reaching a header" do
       for bad <- ["https://cyfr.test/path", "cyfr.test", "https://cyfr.test; script-src *"] do
         assert_raise ArgumentError, fn -> Rules.csp(%{}, %{endpoint: bad, nonce: @nonce}) end
