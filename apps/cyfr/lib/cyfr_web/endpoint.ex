@@ -89,6 +89,10 @@ defmodule CyfrWeb.Endpoint do
     ],
     longpoll: false
 
+  # First, so every answer carries it, a refusal raised while parsing
+  # among them (`close_unread/2`).
+  plug(:close_unread)
+
   # Serve at "/" the static files from "priv/static" directory.
   #
   # When code reloading is disabled (e.g., in production),
@@ -125,6 +129,12 @@ defmodule CyfrWeb.Endpoint do
   # reading any of it (`CyfrWeb.Plugs.RawBodyReader.parser_options/1`);
   # every parser failure keeps Phoenix's rendering.
   #
+  # The endpoint parses before any route's rate limit or credential check,
+  # so no caller here is authenticated, and the reader holds every body it
+  # parses to a host call's (`Prima.HostAPI.max_body_bytes/0`, 1 MiB) or
+  # its route's tighter cap: a declared length over it is refused 413
+  # unread, a body of unknown length cut at it.
+  #
   # No route takes a multipart body (LiveView uploads travel over the
   # socket), and the multipart parser reads one without RawBodyReader, so
   # up to the endpoint's length whatever the route's own cap. Multipart is
@@ -153,25 +163,42 @@ defmodule CyfrWeb.Endpoint do
   # The methods whose body `Plug.Parsers` reads.
   @body_methods ~w(POST PUT PATCH DELETE)
 
-  defp parse_body(%Plug.Conn{path_info: ["mcp" | _], method: method} = conn, _opts)
-       when method in @body_methods,
-       do: register_before_send(conn, &close_unread/1)
-
   defp parse_body(%Plug.Conn{path_info: ["mcp" | _]} = conn, _opts), do: conn
   defp parse_body(conn, _opts), do: CyfrWeb.Plugs.ParserErrors.call(conn, @parsers)
 
-  # A `/mcp` answer sent while its body is unread — refused before it was
-  # parsed, or past its cap — ends an HTTP/1 connection, so the server
-  # does not read the rest of the caller's body to keep it alive. HTTP/2
-  # forbids the header (RFC 9113 §8.2.2) and resets the unread stream
-  # itself.
-  defp close_unread(%Plug.Conn{body_params: %Plug.Conn.Unfetched{}} = conn) do
-    if conn |> get_http_protocol() |> Atom.to_string() |> String.starts_with?("HTTP/1"),
-      do: put_resp_header(conn, "connection", "close"),
-      else: conn
+  # An answer sent while the request's body is unread ends an HTTP/1
+  # connection, so the server does not read the rest of the caller's body
+  # to keep it alive: one refused before it was parsed or past its cap, and
+  # one no parser read (a media type passed unparsed, a method whose body is
+  # not parsed). HTTP/2 forbids the header (RFC 9113 §8.2.2) and resets the
+  # unread stream itself.
+  defp close_unread(conn, _opts), do: register_before_send(conn, &close_if_unread/1)
+
+  defp close_if_unread(conn) do
+    if unread?(conn) and
+         conn |> get_http_protocol() |> Atom.to_string() |> String.starts_with?("HTTP/1"),
+       do: put_resp_header(conn, "connection", "close"),
+       else: conn
   end
 
-  defp close_unread(conn), do: conn
+  defp unread?(conn) do
+    not CyfrWeb.Plugs.RawBodyReader.read?(conn) and
+      (unparsed_body_method?(conn) or carries_body?(conn))
+  end
+
+  defp unparsed_body_method?(%Plug.Conn{method: method, body_params: %Plug.Conn.Unfetched{}}),
+    do: method in @body_methods
+
+  defp unparsed_body_method?(_conn), do: false
+
+  # HTTP/1 frames a body by its `content-length` or its `transfer-encoding`.
+  defp carries_body?(conn) do
+    case get_req_header(conn, "content-length") do
+      [] -> get_req_header(conn, "transfer-encoding") != []
+      [length] -> Integer.parse(length) != {0, ""}
+      _many -> true
+    end
+  end
 
   defp dynamic_session(conn, _opts) do
     # Session config is boot-static; the first request pays Plug.Session.init/1

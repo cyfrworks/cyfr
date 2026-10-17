@@ -457,6 +457,7 @@ Declare `pointer_lock`, `fullscreen`, `gamepad` and `audio_autoplay` only as the
 |-------|---------|-------------|
 | Requests per frame | `frame_invocation_max` per `frame_invocation_window_ms` (120 per minute by default), charged on every invoke, action and stream open; a public page is charged per address and tincture | refused `rate_limited` with its retry seconds |
 | Open streams per frame | `frame_stream_max_concurrent` (8) | refused `rate_limited` until one closes |
+| Request body | a host call's body (1 MiB) per invoke, action or stream open | refused 413 before any of it is read, and the call rejects |
 | Frame credential lifetime | `frame_credential_deadline_s` (one hour), capped by the session's own | the shell renews it while the frame runs; past the session's end, refused: open the tincture again |
 | Asset credential window | `asset_credential_window_s` (one hour) | the shell mints the next one |
 | Version size | the registry's decompressed ceiling (256 MiB) | refused at publish |

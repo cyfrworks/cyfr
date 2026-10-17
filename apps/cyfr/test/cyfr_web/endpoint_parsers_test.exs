@@ -10,7 +10,9 @@ defmodule CyfrWeb.EndpointParsersTest do
   body source that reports each one, and a real connection that never
   sends its body is answered and closed. `/mcp`'s body is read in its
   own pipeline, after the rate limit and authentication
-  (`CyfrWeb.EndpointParsersTest.MCPTest`).
+  (`CyfrWeb.EndpointParsersTest.MCPTest`); every body a caller no
+  pipeline has authenticated sends is held to a host call's
+  (`CyfrWeb.EndpointParsersTest.UnauthenticatedBodyTest`).
   """
 
   # Every request here is refused in the endpoint, before any route runs:
@@ -109,7 +111,8 @@ defmodule CyfrWeb.EndpointParsersTest do
   end
 
   # A route's path with each parameter and glob filled in.
-  defp concrete(path) do
+  @doc false
+  def concrete(path) do
     path
     |> String.split("/")
     |> Enum.map_join("/", fn
@@ -767,6 +770,322 @@ defmodule CyfrWeb.EndpointParsersTest.MCPTransportTest do
       {chunk, rest} = receive_bytes(socket, rest, size)
       {"\r\n", rest} = receive_bytes(socket, rest, 2)
       receive_chunks(socket, rest, [chunk | chunks])
+    end
+  end
+end
+
+defmodule CyfrWeb.EndpointParsersTest.UnauthenticatedBodyTest do
+  @moduledoc """
+  No route reads more than a host call's body
+  (`Prima.HostAPI.max_body_bytes/0`) from a caller its pipeline has not
+  authenticated: the endpoint parses before any route's rate limit or
+  credential check, so a declared length over the cap is refused 413
+  before any byte is read, a body of unknown length is cut at the cap,
+  and a valid credential does not lift it where the pipeline authenticates
+  after the read. The routes are the routers' own (`__routes__/0`), each
+  body route naming its cap (`CyfrWeb.Plugs.RawBodyReader.cap/1`). An
+  answer sent with the body unread ends its HTTP/1 connection, a refusal
+  and an answer that left a body unparsed alike; a body read whole keeps
+  it. The attachment allowance after `/mcp`'s rate limit and
+  authentication is `CyfrWeb.EndpointParsersTest.MCPTransportTest`'s.
+  """
+
+  # Through the router: the throttles read their settings, a refusal is
+  # recorded and the test person authenticates, so the module runs alone.
+  use Emissary.Web.ConnCase, async: false
+
+  import CyfrWeb.EndpointParsersTest,
+    only: [request: 4, bytes_read: 0, until_closed: 3, concrete: 1]
+
+  alias CyfrWeb.Plugs.RawBodyReader
+
+  # Under the 28 MB attachment allowance, far over a host call's body.
+  @flood_bytes 27_000_000
+
+  # The verbs whose body the parsers read.
+  @body_verbs [:post, :put, :patch, :delete]
+
+  # The routes the defect named, each with a body no pipeline
+  # authenticated before reading, and `/mcp` beside them.
+  @named [
+    {:post, "/_f/v1/invoke"},
+    {:post, "/_f/v1/action"},
+    {:post, "/_f/v1/stream"},
+    {:post, "/_f/v1/o/x/stream"},
+    {:delete, "/auth/logout"},
+    {:post, "/no-route-matches-this"},
+    {:post, "/mcp"}
+  ]
+
+  setup_all do
+    {:ok, flood: ~s({"pad":") <> :binary.copy(<<?x>>, @flood_bytes) <> ~s("})}
+  end
+
+  setup do
+    Prima.Test.RateLimiter.reset!()
+    on_exit(&Prima.Test.RateLimiter.reset!/0)
+    :ok
+  end
+
+  defp declared(conn, bytes),
+    do: put_req_header(conn, "content-length", Integer.to_string(bytes))
+
+  # The answer the endpoint sent, whether a route returned it or Phoenix
+  # rendered a refusal raised while parsing.
+  defp answer(conn) do
+    try do
+      CyfrWeb.Endpoint.call(conn, CyfrWeb.Endpoint.init([]))
+    rescue
+      _refusal -> :rendered
+    end
+
+    receive do
+      {ref, {status, headers, _body}} when is_reference(ref) -> {status, headers}
+    after
+      0 -> flunk("no answer was sent")
+    end
+  end
+
+  # Every route the routers declare with a verb whose body is parsed.
+  defp body_routes do
+    for %{verb: verb, path: path} <- CyfrWeb.Router.__routes__(),
+        verb in @body_verbs,
+        uniq: true,
+        do: {verb, path}
+  end
+
+  describe "a caller no pipeline has authenticated" do
+    test "is refused a 27 MB body 413 before any byte of it is read, on the frame data " <>
+           "routes, the API's sign-out, a path no route matches and /mcp",
+         %{flood: flood} do
+      for {method, url} <- @named do
+        {status, headers} =
+          method
+          |> request(url, flood, "application/json")
+          |> declared(byte_size(flood))
+          |> answer()
+
+        assert status == 413, "#{method} #{url} answered #{status}"
+        assert bytes_read() == 0, "#{method} #{url} read the refused body"
+        assert {"connection", "close"} in headers
+      end
+    end
+
+    test "of unknown length is read only up to a host call's body, then refused 413",
+         %{flood: flood} do
+      for {method, url} <- @named do
+        {status, headers} = method |> request(url, flood, "application/json") |> answer()
+
+        assert status == 413, "#{method} #{url} answered #{status}"
+        assert bytes_read() == Prima.HostAPI.max_body_bytes(), "#{method} #{url}"
+        assert {"connection", "close"} in headers
+      end
+    end
+
+    @tag auth: :person
+    test "holding a valid credential, is held to a host call's body where the pipeline " <>
+           "authenticates after the read",
+         %{conn: authenticated, flood: flood} do
+      [bearer] = get_req_header(authenticated, "authorization")
+
+      {status, _headers} =
+        :delete
+        |> request("/auth/logout", flood, "application/json")
+        |> put_req_header("authorization", bearer)
+        |> answer()
+
+      assert status == 413
+      assert bytes_read() == Prima.HostAPI.max_body_bytes()
+    end
+
+    test "is answered within a host call's body, read whole, on a connection kept open" do
+      body = ~s({"pad":") <> :binary.copy(<<?x>>, 64) <> ~s("})
+
+      {status, headers} =
+        :delete
+        |> request("/auth/logout", body, "application/json")
+        |> declared(byte_size(body))
+        |> answer()
+
+      assert status == 401
+      assert bytes_read() == byte_size(body)
+      refute List.keymember?(headers, "connection", 0)
+    end
+  end
+
+  describe "the inventory" do
+    test "every route that takes a body names its cap, a host call's body at most, and " <>
+           "refuses a longer declared body unread" do
+      routes = body_routes()
+      paths = Enum.map(routes, &elem(&1, 1))
+
+      # The sweep covers the routes the failure cases name and every capped family.
+      for path <- [
+            "/_f/v1/invoke",
+            "/_f/v1/action",
+            "/_f/v1/stream",
+            "/_f/v1/o/:frame_id/stream",
+            "/auth/logout",
+            "/mcp",
+            "/hooks/:slug",
+            "/directory/v1/genesis",
+            "/certify/v1/renew",
+            "/restore"
+          ] do
+        assert path in paths, "#{path} takes no body"
+      end
+
+      for {verb, path} <- routes do
+        conn = request(verb, concrete(path), "{}", "application/json")
+        cap = RawBodyReader.cap(conn)
+
+        assert cap <= Prima.HostAPI.max_body_bytes(),
+               "#{verb} #{path} reads #{cap} bytes from a caller not authenticated"
+
+        {status, headers} = conn |> declared(cap + 1) |> answer()
+
+        assert status == 413, "#{verb} #{path} answered #{status} past its cap of #{cap}"
+        assert bytes_read() == 0, "#{verb} #{path} read a body declared past its cap"
+        assert {"connection", "close"} in headers
+      end
+    end
+
+    test "the tincture guide states a frame request's bound as the cap" do
+      guide = File.read!(Path.expand("../../../../tincture-guide.md", __DIR__))
+
+      assert Prima.HostAPI.max_body_bytes() == 1_048_576
+
+      assert guide =~
+               "| Request body | a host call's body (1 MiB) per invoke, action or stream open | " <>
+                 "refused 413 before any of it is read"
+    end
+  end
+
+  describe "on a real connection" do
+    setup do
+      {:ok, server} =
+        start_supervised(
+          {Bandit,
+           plug: CyfrWeb.Endpoint, scheme: :http, ip: {127, 0, 0, 1}, port: 0, startup_log: false}
+        )
+
+      {:ok, {_ip, port}} = ThousandIsland.listener_info(server)
+      {:ok, port: port}
+    end
+
+    # Bandit waits 15 seconds for each read of a body it reads, so an
+    # answer and a close well inside that mean no byte of the body was
+    # awaited.
+    @answered_within 5_000
+
+    defp connect(port) do
+      {:ok, socket} =
+        :gen_tcp.connect({127, 0, 0, 1}, port, [:binary, active: false, packet: :raw], 5_000)
+
+      on_exit(fn -> :gen_tcp.close(socket) end)
+      socket
+    end
+
+    defp head(method, path, type, framing) do
+      [
+        "#{method} #{path} HTTP/1.1\r\nhost: localhost\r\naccept: application/json\r\n",
+        "content-type: #{type}\r\n",
+        framing,
+        "\r\n"
+      ]
+    end
+
+    defp closed(socket),
+      do: until_closed(socket, "", System.monotonic_time(:millisecond) + @answered_within)
+
+    test "a declared 27 MB body is answered 413 from its headers alone, and its connection " <>
+           "ends without it",
+         %{port: port} do
+      for {method, path} <- [
+            {"POST", "/_f/v1/invoke"},
+            {"DELETE", "/auth/logout"},
+            {"POST", "/no-route-matches-this"}
+          ] do
+        socket = connect(port)
+
+        :ok =
+          :gen_tcp.send(
+            socket,
+            head(method, path, "application/json", "content-length: #{@flood_bytes}\r\n")
+          )
+
+        response = closed(socket)
+        assert response =~ ~r{\AHTTP/1\.1 413 }, "#{path} answered #{inspect(response)}"
+        assert response =~ ~r{\r\nconnection: close\r\n}i
+      end
+    end
+
+    test "a chunked body stops at its cap without awaiting the withheld remainder", %{
+      port: port
+    } do
+      cap = Prima.HostAPI.max_body_bytes()
+
+      for {method, path} <- [{"POST", "/_f/v1/invoke"}, {"DELETE", "/auth/logout"}] do
+        socket = connect(port)
+
+        :ok =
+          :gen_tcp.send(socket, [
+            head(method, path, "application/json", "transfer-encoding: chunked\r\n"),
+            Integer.to_string(cap + 4096, 16),
+            "\r\n",
+            :binary.copy(" ", cap)
+          ])
+
+        response = closed(socket)
+        assert response =~ ~r{\AHTTP/1\.1 413 }, "#{path} answered #{inspect(response)}"
+        assert response =~ ~r{\r\nconnection: close\r\n}i
+      end
+    end
+
+    test "an answer that leaves a body unparsed ends its connection without awaiting it", %{
+      port: port
+    } do
+      socket = connect(port)
+
+      :ok =
+        :gen_tcp.send(
+          socket,
+          head("DELETE", "/auth/logout", "text/plain", "content-length: #{@flood_bytes}\r\n")
+        )
+
+      response = closed(socket)
+      assert response =~ ~r{\AHTTP/1\.1 401 }, "answered #{inspect(response)}"
+      assert response =~ ~r{\r\nconnection: close\r\n}i
+    end
+
+    test "a body read whole keeps its connection for the next request", %{port: port} do
+      socket = connect(port)
+      body = "{}"
+
+      for _request <- 1..2 do
+        :ok =
+          :gen_tcp.send(socket, [
+            head("DELETE", "/auth/logout", "application/json", "content-length: 2\r\n"),
+            body
+          ])
+
+        response = whole_response(socket, "")
+        assert response =~ ~r{\AHTTP/1\.1 401 }, "answered #{inspect(response)}"
+        refute response =~ ~r{\r\nconnection: close\r\n}i
+      end
+    end
+
+    # One whole response of declared length.
+    defp whole_response(socket, received) do
+      with [head, rest] <- :binary.split(received, "\r\n\r\n"),
+           [_, length] <- Regex.run(~r{\r\ncontent-length: (\d+)\r\n}i, head <> "\r\n"),
+           true <- byte_size(rest) >= String.to_integer(length) do
+        received
+      else
+        _incomplete ->
+          assert {:ok, data} = :gen_tcp.recv(socket, 0, 5_000)
+          whole_response(socket, received <> data)
+      end
     end
   end
 end

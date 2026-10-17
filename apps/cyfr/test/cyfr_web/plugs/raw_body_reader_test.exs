@@ -208,4 +208,50 @@ defmodule CyfrWeb.Plugs.RawBodyReaderTest do
     assert byte_size(conn.assigns[:raw_body]) == 250_000
     assert conn.assigns[:raw_body] == body
   end
+
+  describe "a caller no pipeline has authenticated" do
+    # The webhook cap is configurable, and another module may change it; the
+    # endpoint's own suite covers it.
+    test "is held to a host call's body on every path, the capped families tighter still" do
+      for {path, cap} <- [
+            {"/_f/v1/invoke", Prima.HostAPI.max_body_bytes()},
+            {"/auth/logout", Prima.HostAPI.max_body_bytes()},
+            {"/mcp", Prima.HostAPI.max_body_bytes()},
+            {"/no-route-matches-this", Prima.HostAPI.max_body_bytes()},
+            {"/directory/v1/genesis", Prima.Identity.max_entry_bytes()}
+          ] do
+        conn = build_conn(:post, path, :binary.copy(<<?x>>, cap + 1))
+        assert RawBodyReader.cap(conn) == cap, path
+
+        assert {:more, chunk, _conn} = RawBodyReader.read_body(conn, length: 28_000_000)
+        assert byte_size(chunk) == cap, path
+      end
+    end
+
+    test "a context its pipeline authenticated is granted the attachment allowance, " <>
+           "never past a family's cap" do
+      authenticated = &Plug.Conn.assign(&1, :context, %Sanctum.Context{authenticated: true})
+      unauthenticated = &Plug.Conn.assign(&1, :context, %Sanctum.Context{authenticated: false})
+
+      assert RawBodyReader.cap(authenticated.(build_conn(:post, "/mcp", ""))) == 28_000_000
+
+      assert RawBodyReader.cap(unauthenticated.(build_conn(:post, "/mcp", ""))) ==
+               Prima.HostAPI.max_body_bytes()
+
+      assert RawBodyReader.cap(authenticated.(build_conn(:post, "/restore", ""))) ==
+               Prima.Identity.max_entry_bytes()
+    end
+  end
+
+  test "marks a body read to its end, and only then" do
+    conn = build_conn(:post, "/_f/v1/invoke", :binary.copy(<<?x>>, 250_000))
+    refute RawBodyReader.read?(conn)
+
+    {:more, _chunk, conn} = RawBodyReader.read_body(conn, length: 100_000, read_length: 100_000)
+    refute RawBodyReader.read?(conn)
+
+    {:more, _chunk, conn} = RawBodyReader.read_body(conn, length: 100_000, read_length: 100_000)
+    {:ok, _tail, conn} = RawBodyReader.read_body(conn, length: 100_000, read_length: 100_000)
+    assert RawBodyReader.read?(conn)
+  end
 end

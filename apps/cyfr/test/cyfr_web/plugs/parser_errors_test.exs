@@ -5,7 +5,8 @@ defmodule CyfrWeb.Plugs.ParserErrorsTest do
   @moduledoc """
   `Plug.Parsers` with media types refused before their body is read, one
   path prefix's failures answered through the renderer the caller names,
-  and Phoenix's behaviour for every other parser failure. The endpoint's own wiring is
+  and Phoenix's behaviour for every other parser failure, re-raised with
+  the conn the parse began on. The endpoint's own wiring is
   exercised end to end in `CyfrWeb.EndpointParsersTest` and
   `Emissary.Web.MCPErrorTest`.
   """
@@ -145,14 +146,20 @@ defmodule CyfrWeb.Plugs.ParserErrorsTest do
                {413, :invalid_request, "The request body exceeds the size limit"}
     end
 
-    test "every other path keeps Phoenix's behaviour", %{opts: opts} do
-      assert_raise Plug.Parsers.ParseError, fn ->
-        ParserErrors.call(post_to("/other", ~s({"broken":), "application/json"), opts)
-      end
+    test "every other path keeps Phoenix's behaviour, re-raised with the conn the parse began on",
+         %{opts: opts} do
+      body = ~s({"pad":") <> String.duplicate("a", 128) <> ~s("})
 
-      assert_raise Plug.Parsers.RequestTooLargeError, fn ->
-        body = ~s({"pad":") <> String.duplicate("a", 128) <> ~s("})
-        ParserErrors.call(post_to("/other", body, "application/json"), opts)
+      for {body, reason} <- [
+            {~s({"broken":), Plug.Parsers.ParseError},
+            {body, Plug.Parsers.RequestTooLargeError}
+          ] do
+        conn = "/other" |> post_to(body, "application/json") |> assign(:began, true)
+
+        assert %Plug.Conn.WrapperError{kind: :error, reason: %^reason{}, conn: raised} =
+                 catch_error(ParserErrors.call(conn, opts))
+
+        assert raised.assigns.began
       end
 
       conn = ParserErrors.call(post_to("/other", "plain words", "text/plain"), opts)
@@ -326,9 +333,10 @@ defmodule CyfrWeb.Plugs.ParserErrorsTest do
       conn = ParserErrors.call(post_to("/mcp", "plain words", "text/plain"), opts)
       refute conn.halted
 
-      assert_raise Plug.Parsers.ParseError, fn ->
-        ParserErrors.call(post_to("/mcp", ~s({"broken":), "application/json"), opts)
-      end
+      assert %Plug.Conn.WrapperError{reason: %Plug.Parsers.ParseError{}} =
+               catch_error(
+                 ParserErrors.call(post_to("/mcp", ~s({"broken":), "application/json"), opts)
+               )
     end
   end
 

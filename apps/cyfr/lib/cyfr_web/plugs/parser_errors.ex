@@ -30,8 +30,11 @@ defmodule CyfrWeb.Plugs.ParserErrors do
 
   Every other option is `Plug.Parsers`'. Without `:refuse` and `:jsonrpc`
   the plug is `Plug.Parsers`: no refusal, no gate, and every failure
-  re-raises. A parser failure outside the prefix keeps Phoenix's behaviour
-  the same way.
+  re-raises. A parser failure outside the prefix keeps Phoenix's rendering
+  the same way, re-raised with the conn the parse began on
+  (`Plug.Conn.WrapperError`), so Phoenix renders it there and that conn's
+  before-send callbacks run on the answer: the endpoint's, which ends an
+  HTTP/1 connection whose body is left unread, among them.
   """
 
   @behaviour Plug
@@ -123,14 +126,14 @@ defmodule CyfrWeb.Plugs.ParserErrors do
         # bytes from the body.
         renderer.halt(conn, 400, :parse_error, "The request body is not parseable JSON")
       else
-        reraise e, __STACKTRACE__
+        Plug.Conn.WrapperError.reraise(conn, :error, e, __STACKTRACE__)
       end
 
     e in Plug.Parsers.RequestTooLargeError ->
       if jsonrpc?(conn, prefix) do
         renderer.halt(conn, 413, :invalid_request, "The request body exceeds the size limit")
       else
-        reraise e, __STACKTRACE__
+        Plug.Conn.WrapperError.reraise(conn, :error, e, __STACKTRACE__)
       end
   end
 
