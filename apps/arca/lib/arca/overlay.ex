@@ -73,9 +73,11 @@ defmodule Arca.Overlay do
   reads the row as the holder's first, and the release is refused when
   the token was taken meanwhile, so a stall is never reported as success
   and a holder that lost its lease deletes and serves nothing further.
-  Across members the lease alone is the fence, as it is for every fenced
-  write: a member stalled past the lifetime between that read and its
-  move is the residual.
+  Across members the lease alone is the fence, and it has one window
+  (`ARCHITECTURE.md` §6.3, not built yet): a member stalled past the
+  draft's lifetime between its row read and its store request can still
+  change a unit's served bytes, until units are served from their
+  immutable revision prefixes resolved through the row.
 
   A crash before step 3 publishes nothing: readers keep the previous
   revision, or no unit. A failure in step 4 is never a lost commit: the
