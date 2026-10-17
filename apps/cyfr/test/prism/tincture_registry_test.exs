@@ -723,10 +723,27 @@ defmodule Prism.TinctureRegistryTest do
   end
 
   describe "the registry's acknowledged epoch" do
-    # A unit lands only by a commit, and a commit stamps the components
-    # epoch, so no tincture lands unacknowledged: a read past it finds the
-    # epoch moved since its scan and rescans the athanor.
-    test "a tincture committed after the scan moves the epoch, and the next read lists it" do
+    # Another member's commit: it moves the athanor's components epoch, and
+    # its announcement goes out on that member's bus, never this node's. The
+    # registry is made that member's bystander from inside its own process
+    # (`:sys.replace_state/2` runs the function there): it stops listening
+    # to the athanor's tinctures topic and forgets it watched it, so its
+    # next scan subscribes again.
+    defp unheard!(pid, actor) do
+      :sys.replace_state(pid, fn state ->
+        :ok = Cyfr.Bus.unsubscribe(actor, Cyfr.Bus.tinctures(actor))
+        %{state | watching: MapSet.delete(state.watching, actor.athanor_id)}
+      end)
+    end
+
+    defp held(table, athanor_id) do
+      table
+      |> :ets.match_object({{athanor_id, :_, :_}, :_})
+      |> Enum.map(fn {_key, tincture} -> tincture.name end)
+      |> Enum.sort()
+    end
+
+    test "a read that finds it moved rescans the athanor, with no announcement heard" do
       name = :test_epoch_marker
       {:ok, pid} = TinctureRegistry.start_link(name: name)
       ctx = lookup("ath_test")
@@ -734,8 +751,10 @@ defmodule Prism.TinctureRegistryTest do
 
       assert ["test-dash"] = Enum.map(TinctureRegistry.list_tinctures(name, ctx), & &1.name)
 
-      {:ok, %{acknowledged_epoch: scanned}} =
-        Arca.StorageProjectionRoots.epoch(actor, "components")
+      unheard!(pid, actor)
+      # The positive control: this process hears the announcement the
+      # registry does not.
+      :ok = Cyfr.Bus.subscribe(actor, Cyfr.Bus.tinctures(actor))
 
       lay!("ath_test", "local", "quiet-dash", "0.1.0", %{
         "name" => "quiet-dash",
@@ -745,13 +764,22 @@ defmodule Prism.TinctureRegistryTest do
         "tincture" => %{"entry" => "index.html"}
       })
 
+      # The commit is acknowledged, and announced, before the registry is
+      # read again.
+      assert {:ok, _moved} = Compendium.acknowledged_projection_epoch(ctx, "components")
+      assert_receive %Cyfr.Bus.Tinctures{kind: :changed}, 5_000
+
+      # The registry heard nothing and rescanned nothing: its table still
+      # holds what its scan found, at the epoch the scan began from.
+      _ = :sys.get_state(pid)
+      assert {:messages, []} = Process.info(pid, :messages)
+      assert held(name, "ath_test") == ["test-dash"]
+
+      # The next read finds the epoch moved past the marker and rescans.
       assert ["quiet-dash", "test-dash"] =
                name |> TinctureRegistry.list_tinctures(ctx) |> Enum.map(& &1.name) |> Enum.sort()
 
-      assert {:ok, %{acknowledged_epoch: moved}} =
-               Arca.StorageProjectionRoots.epoch(actor, "components")
-
-      assert moved != scanned
+      assert held(name, "ath_test") == ["quiet-dash", "test-dash"]
 
       GenServer.stop(pid)
     end
