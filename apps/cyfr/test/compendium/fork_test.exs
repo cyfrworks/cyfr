@@ -92,7 +92,12 @@ defmodule Compendium.ForkTest do
       )
 
     if Keyword.get(opts, :with_data_db, false) do
-      File.write!(Path.join(base, "data.db"), "fake-sqlite-db")
+      Arca.Test.UnitFixtures.unit_write!(
+        Sanctum.TestContext.local(),
+        base,
+        "data.db",
+        "fake-sqlite-db"
+      )
     end
 
     base
@@ -124,26 +129,52 @@ defmodule Compendium.ForkTest do
       assert is_list(result.next_steps)
 
       # Verify files at target path
-      target_base =
-        Arca.Adapters.Local.build_path(
-          Sanctum.Context.actor(Sanctum.TestContext.local()),
-          [
-            "components",
-            "catalysts",
-            "local",
-            "my-tool",
-            "1.0.0"
-          ]
-        )
+      target_base = [
+        "components",
+        "catalysts",
+        "local",
+        "my-tool",
+        "1.0.0"
+      ]
 
-      assert File.exists?(Path.join(target_base, "cyfr-manifest.json"))
-      assert File.exists?(Path.join(target_base, "catalyst.wasm"))
-      assert File.exists?(Path.join(target_base, "README.md"))
-      assert File.exists?(Path.join([target_base, "src", "Cargo.toml"]))
-      assert File.exists?(Path.join([target_base, "src", "src", "lib.rs"]))
+      assert Arca.Test.UnitFixtures.unit_exists?(
+               Sanctum.TestContext.local(),
+               target_base,
+               "cyfr-manifest.json"
+             )
+
+      assert Arca.Test.UnitFixtures.unit_exists?(
+               Sanctum.TestContext.local(),
+               target_base,
+               "catalyst.wasm"
+             )
+
+      assert Arca.Test.UnitFixtures.unit_exists?(
+               Sanctum.TestContext.local(),
+               target_base,
+               "README.md"
+             )
+
+      assert Arca.Test.UnitFixtures.unit_exists?(
+               Sanctum.TestContext.local(),
+               target_base,
+               "src/Cargo.toml"
+             )
+
+      assert Arca.Test.UnitFixtures.unit_exists?(
+               Sanctum.TestContext.local(),
+               target_base,
+               "src/src/lib.rs"
+             )
 
       # Verify manifest was rewritten
-      {:ok, manifest_json} = File.read(Path.join(target_base, "cyfr-manifest.json"))
+      manifest_json =
+        Arca.Test.UnitFixtures.unit_file!(
+          Sanctum.TestContext.local(),
+          target_base,
+          "cyfr-manifest.json"
+        )
+
       {:ok, manifest} = Jason.decode(manifest_json)
       assert manifest["publisher"] == "local"
       assert manifest["name"] == "my-tool"
@@ -209,22 +240,37 @@ defmodule Compendium.ForkTest do
       assert result.status == "forked"
       assert result.reference == "tincture:local.my-dash:1.0.0"
 
-      target_base =
-        Arca.Adapters.Local.build_path(
-          Sanctum.Context.actor(Sanctum.TestContext.local()),
-          [
-            "components",
-            "tinctures",
-            "local",
-            "my-dash",
-            "1.0.0"
-          ]
-        )
+      target_base = [
+        "components",
+        "tinctures",
+        "local",
+        "my-dash",
+        "1.0.0"
+      ]
 
-      assert File.exists?(Path.join(target_base, "index.html"))
-      assert File.exists?(Path.join(target_base, "app.js"))
-      assert File.exists?(Path.join(target_base, "style.css"))
-      assert File.exists?(Path.join([target_base, "src", "main.js"]))
+      assert Arca.Test.UnitFixtures.unit_exists?(
+               Sanctum.TestContext.local(),
+               target_base,
+               "index.html"
+             )
+
+      assert Arca.Test.UnitFixtures.unit_exists?(
+               Sanctum.TestContext.local(),
+               target_base,
+               "app.js"
+             )
+
+      assert Arca.Test.UnitFixtures.unit_exists?(
+               Sanctum.TestContext.local(),
+               target_base,
+               "style.css"
+             )
+
+      assert Arca.Test.UnitFixtures.unit_exists?(
+               Sanctum.TestContext.local(),
+               target_base,
+               "src/main.js"
+             )
     end
   end
 
@@ -248,14 +294,12 @@ defmodule Compendium.ForkTest do
     test "refuses rather than copying the source's identity", %{ctx: ctx} do
       create_source_component("catalyst", "acme", "bad-manifest", "1.0.0")
 
-      manifest_path =
-        Compendium.ComponentPath.version_dir("catalyst", "acme", "bad-manifest", "1.0.0") ++
-          [Compendium.ComponentPath.manifest_name()]
-
-      :ok =
-        Arca.Overlay.with_internal_writes(fn ->
-          Arca.put(Sanctum.Context.actor(ctx), manifest_path, "{not json")
-        end)
+      Arca.Test.UnitFixtures.unit_write!(
+        ctx,
+        Compendium.ComponentPath.version_dir("catalyst", "acme", "bad-manifest", "1.0.0"),
+        Compendium.ComponentPath.manifest_name(),
+        "{not json"
+      )
 
       source_ref = parse_ref!("c:acme.bad-manifest:1.0.0")
       assert {:error, reason} = Fork.fork(ctx, source_ref)
@@ -306,19 +350,21 @@ defmodule Compendium.ForkTest do
       assert result.reference == "reagent:local.my-fork:1.0.0"
       assert result.forked_from == "reagent:acme.original:1.0.0"
 
-      target_base =
-        Arca.Adapters.Local.build_path(
-          Sanctum.Context.actor(Sanctum.TestContext.local()),
-          [
-            "components",
-            "reagents",
-            "local",
-            "my-fork",
-            "1.0.0"
-          ]
+      target_base = [
+        "components",
+        "reagents",
+        "local",
+        "my-fork",
+        "1.0.0"
+      ]
+
+      manifest_json =
+        Arca.Test.UnitFixtures.unit_file!(
+          Sanctum.TestContext.local(),
+          target_base,
+          "cyfr-manifest.json"
         )
 
-      {:ok, manifest_json} = File.read(Path.join(target_base, "cyfr-manifest.json"))
       {:ok, manifest} = Jason.decode(manifest_json)
       assert manifest["name"] == "my-fork"
       assert manifest["publisher"] == "local"
@@ -334,19 +380,21 @@ defmodule Compendium.ForkTest do
 
       assert result.reference == "formula:local.my-flow:0.1.0"
 
-      target_base =
-        Arca.Adapters.Local.build_path(
-          Sanctum.Context.actor(Sanctum.TestContext.local()),
-          [
-            "components",
-            "formulas",
-            "local",
-            "my-flow",
-            "0.1.0"
-          ]
+      target_base = [
+        "components",
+        "formulas",
+        "local",
+        "my-flow",
+        "0.1.0"
+      ]
+
+      manifest_json =
+        Arca.Test.UnitFixtures.unit_file!(
+          Sanctum.TestContext.local(),
+          target_base,
+          "cyfr-manifest.json"
         )
 
-      {:ok, manifest_json} = File.read(Path.join(target_base, "cyfr-manifest.json"))
       {:ok, manifest} = Jason.decode(manifest_json)
       assert manifest["version"] == "0.1.0"
     end
@@ -358,38 +406,48 @@ defmodule Compendium.ForkTest do
     test "copies data.db when forking a tincture", %{ctx: ctx} do
       create_tincture_component("acme", "db-dash", "1.0.0", with_data_db: true)
 
-      source_base =
-        Arca.Adapters.Local.build_path(
-          Sanctum.Context.actor(Sanctum.TestContext.local()),
-          [
-            "components",
-            "tinctures",
-            "acme",
-            "db-dash",
-            "1.0.0"
-          ]
-        )
+      source_base = [
+        "components",
+        "tinctures",
+        "acme",
+        "db-dash",
+        "1.0.0"
+      ]
 
-      assert File.exists?(Path.join(source_base, "data.db"))
+      assert Arca.Test.UnitFixtures.unit_exists?(
+               Sanctum.TestContext.local(),
+               source_base,
+               "data.db"
+             )
 
       source_ref = parse_ref!("t:acme.db-dash:1.0.0")
       assert {:ok, _result} = Fork.fork(ctx, source_ref)
 
-      target_base =
-        Arca.Adapters.Local.build_path(
-          Sanctum.Context.actor(Sanctum.TestContext.local()),
-          [
-            "components",
-            "tinctures",
-            "local",
-            "db-dash",
-            "1.0.0"
-          ]
-        )
+      target_base = [
+        "components",
+        "tinctures",
+        "local",
+        "db-dash",
+        "1.0.0"
+      ]
 
-      assert File.exists?(Path.join(target_base, "data.db"))
-      assert File.exists?(Path.join(target_base, "index.html"))
-      assert File.exists?(Path.join(target_base, "cyfr-manifest.json"))
+      assert Arca.Test.UnitFixtures.unit_exists?(
+               Sanctum.TestContext.local(),
+               target_base,
+               "data.db"
+             )
+
+      assert Arca.Test.UnitFixtures.unit_exists?(
+               Sanctum.TestContext.local(),
+               target_base,
+               "index.html"
+             )
+
+      assert Arca.Test.UnitFixtures.unit_exists?(
+               Sanctum.TestContext.local(),
+               target_base,
+               "cyfr-manifest.json"
+             )
     end
   end
 

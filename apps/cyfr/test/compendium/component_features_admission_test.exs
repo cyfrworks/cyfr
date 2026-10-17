@@ -90,15 +90,11 @@ defmodule Compendium.ComponentFeaturesAdmissionTest do
   test "a registration from the stored tree refuses it and leaves no row", %{ctx: ctx} do
     bytes = guest("async_lift")
     segments = ["components", "reagents", "local", "async-lift", "0.1.0"]
-    dir = Arca.Adapters.Local.build_path(Sanctum.Context.actor(ctx), segments)
-    File.mkdir_p!(dir)
 
-    File.write!(
-      Path.join(dir, "cyfr-manifest.json"),
-      Jason.encode!(%{"type" => "reagent", "version" => "0.1.0"})
-    )
-
-    File.write!(Path.join(dir, "reagent.wasm"), bytes)
+    Arca.Test.UnitFixtures.lay_unit!(ctx, segments, [
+      {"cyfr-manifest.json", Jason.encode!(%{"type" => "reagent", "version" => "0.1.0"})},
+      {"reagent.wasm", bytes}
+    ])
 
     capture_log(fn ->
       assert Registry.register_from_arca(ctx, segments) ==

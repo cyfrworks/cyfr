@@ -234,16 +234,15 @@ defmodule Compendium.ProviderTest do
           type: "reagent"
         })
 
-      # Write an asset file into the component's storage directory
-      asset_dir =
-        Arca.Adapters.Local.build_path(
-          Sanctum.Context.actor(ctx),
-          ["components", "reagents", "local", "asset-test", "1.0.0"]
-        )
-
-      File.mkdir_p!(asset_dir)
+      # An asset file inside the component's unit
       asset_content = ~s({"key": "value"})
-      File.write!(Path.join(asset_dir, "config.json"), asset_content)
+
+      Arca.Test.UnitFixtures.unit_write!(
+        ctx,
+        ["components", "reagents", "local", "asset-test", "1.0.0"],
+        "config.json",
+        asset_content
+      )
 
       {:ok, result} = read(ctx, "compendium://assets/r:local.asset-test:1.0.0/config.json")
       assert result.mimeType == "application/octet-stream"
@@ -845,16 +844,10 @@ defmodule Compendium.ProviderTest do
     defp setup_dep_test_dir(_test_dir, type, name, version, manifest) do
       segments = ["components", "#{type}s", "local", name, version]
 
-      comp_dir =
-        Arca.Adapters.Local.build_path(
-          Sanctum.Context.actor(Sanctum.TestContext.local()),
-          segments
-        )
-
-      File.mkdir_p!(comp_dir)
-      File.write!(Path.join(comp_dir, "cyfr-manifest.json"), Jason.encode!(manifest))
-      File.write!(Path.join(comp_dir, "#{type}.wasm"), @dep_test_wasm)
-      segments
+      Arca.Test.UnitFixtures.lay_unit!(Sanctum.TestContext.local(), segments, [
+        {"cyfr-manifest.json", Jason.encode!(manifest)},
+        {"#{type}.wasm", @dep_test_wasm}
+      ])
     end
 
     test "inspect component with no deps has no dependency fields", %{ctx: ctx} do
@@ -1048,16 +1041,10 @@ defmodule Compendium.ProviderTest do
     defp setup_plan_component(_test_dir, type, name, version, manifest) do
       segments = ["components", "#{type}s", "local", name, version]
 
-      comp_dir =
-        Arca.Adapters.Local.build_path(
-          Sanctum.Context.actor(Sanctum.TestContext.local()),
-          segments
-        )
-
-      File.mkdir_p!(comp_dir)
-      File.write!(Path.join(comp_dir, "cyfr-manifest.json"), Jason.encode!(manifest))
-      File.write!(Path.join(comp_dir, "#{type}.wasm"), @setup_plan_wasm)
-      segments
+      Arca.Test.UnitFixtures.lay_unit!(Sanctum.TestContext.local(), segments, [
+        {"cyfr-manifest.json", Jason.encode!(manifest)},
+        {"#{type}.wasm", @setup_plan_wasm}
+      ])
     end
 
     test "returns setup plan for a catalyst with declared needs", %{ctx: ctx, test_dir: test_dir} do
@@ -1338,9 +1325,6 @@ defmodule Compendium.ProviderTest do
 
     test "removes a filesystem component", %{ctx: ctx} do
       segments = ["components", "catalysts", "local", "remove-fs-test", "1.0.0"]
-      comp_dir = Arca.Adapters.Local.build_path(Sanctum.Context.actor(ctx), segments)
-
-      File.mkdir_p!(comp_dir)
 
       manifest = %{
         "type" => "catalyst",
@@ -1348,8 +1332,10 @@ defmodule Compendium.ProviderTest do
         "description" => "FS component to remove"
       }
 
-      File.write!(Path.join(comp_dir, "cyfr-manifest.json"), Jason.encode!(manifest))
-      File.write!(Path.join(comp_dir, "catalyst.wasm"), @valid_wasm)
+      Arca.Test.UnitFixtures.lay_unit!(ctx, segments, [
+        {"cyfr-manifest.json", Jason.encode!(manifest)},
+        {"catalyst.wasm", @valid_wasm}
+      ])
 
       {:ok, _} = Registry.register_from_arca(ctx, segments)
 
@@ -1811,15 +1797,14 @@ defmodule Compendium.ProviderTest do
   describe "component inspect - include_readme" do
     test "inspect with include_readme returns readme content", %{ctx: ctx} do
       segments = ["components", "catalysts", "local", "readme-test", "1.0.0"]
-      comp_dir = Arca.Adapters.Local.build_path(Sanctum.Context.actor(ctx), segments)
-
-      File.mkdir_p!(comp_dir)
-
       readme_content = "# Readme Test Component\n\nThis is the README."
       manifest = %{"type" => "catalyst", "version" => "1.0.0", "name" => "readme-test"}
-      File.write!(Path.join(comp_dir, "cyfr-manifest.json"), Jason.encode!(manifest))
-      File.write!(Path.join(comp_dir, "catalyst.wasm"), @valid_wasm)
-      File.write!(Path.join(comp_dir, "README.md"), readme_content)
+
+      Arca.Test.UnitFixtures.lay_unit!(ctx, segments, [
+        {"cyfr-manifest.json", Jason.encode!(manifest)},
+        {"catalyst.wasm", @valid_wasm},
+        {"README.md", readme_content}
+      ])
 
       {:ok, _} = Registry.register_from_arca(ctx, segments)
 
@@ -1835,14 +1820,13 @@ defmodule Compendium.ProviderTest do
 
     test "inspect without include_readme omits readme", %{ctx: ctx} do
       segments = ["components", "catalysts", "local", "no-readme-flag", "1.0.0"]
-      comp_dir = Arca.Adapters.Local.build_path(Sanctum.Context.actor(ctx), segments)
-
-      File.mkdir_p!(comp_dir)
-
       manifest = %{"type" => "catalyst", "version" => "1.0.0", "name" => "no-readme-flag"}
-      File.write!(Path.join(comp_dir, "cyfr-manifest.json"), Jason.encode!(manifest))
-      File.write!(Path.join(comp_dir, "catalyst.wasm"), @valid_wasm)
-      File.write!(Path.join(comp_dir, "README.md"), "# Has README")
+
+      Arca.Test.UnitFixtures.lay_unit!(ctx, segments, [
+        {"cyfr-manifest.json", Jason.encode!(manifest)},
+        {"catalyst.wasm", @valid_wasm},
+        {"README.md", "# Has README"}
+      ])
 
       {:ok, _} = Registry.register_from_arca(ctx, segments)
 
@@ -1857,13 +1841,12 @@ defmodule Compendium.ProviderTest do
 
     test "inspect with include_readme returns nil when no README", %{ctx: ctx} do
       segments = ["components", "reagents", "local", "no-readme-file", "1.0.0"]
-      comp_dir = Arca.Adapters.Local.build_path(Sanctum.Context.actor(ctx), segments)
-
-      File.mkdir_p!(comp_dir)
-
       manifest = %{"type" => "reagent", "version" => "1.0.0", "name" => "no-readme-file"}
-      File.write!(Path.join(comp_dir, "cyfr-manifest.json"), Jason.encode!(manifest))
-      File.write!(Path.join(comp_dir, "reagent.wasm"), @valid_wasm)
+
+      Arca.Test.UnitFixtures.lay_unit!(ctx, segments, [
+        {"cyfr-manifest.json", Jason.encode!(manifest)},
+        {"reagent.wasm", @valid_wasm}
+      ])
 
       {:ok, _} = Registry.register_from_arca(ctx, segments)
 
@@ -1881,15 +1864,13 @@ defmodule Compendium.ProviderTest do
   describe "component tool - status overview" do
     test "status without a reference answers the whole-athanor overview", %{ctx: ctx} do
       segments = ["components", "reagents", "local", "ov-tool", "1.0.0"]
-      comp_dir = Arca.Adapters.Local.build_path(Sanctum.Context.actor(ctx), segments)
-      File.mkdir_p!(comp_dir)
 
-      File.write!(
-        Path.join(comp_dir, "cyfr-manifest.json"),
-        Jason.encode!(%{"type" => "reagent", "version" => "1.0.0", "name" => "ov-tool"})
-      )
+      Arca.Test.UnitFixtures.lay_unit!(ctx, segments, [
+        {"cyfr-manifest.json",
+         Jason.encode!(%{"type" => "reagent", "version" => "1.0.0", "name" => "ov-tool"})},
+        {"reagent.wasm", @valid_wasm}
+      ])
 
-      File.write!(Path.join(comp_dir, "reagent.wasm"), @valid_wasm)
       {:ok, _} = Registry.register_from_arca(ctx, segments)
 
       {:ok, %{components: components, counts: counts}} =
@@ -2276,20 +2257,10 @@ defmodule Compendium.ProviderTest do
     defp setup_component_dir(_test_dir, type, name, version, manifest) do
       segments = ["components", "#{type}s", "local", name, version]
 
-      comp_dir =
-        Arca.Adapters.Local.build_path(
-          Sanctum.Context.actor(Sanctum.TestContext.local()),
-          segments
-        )
-
-      File.mkdir_p!(comp_dir)
-
-      File.write!(Path.join(comp_dir, "cyfr-manifest.json"), Jason.encode!(manifest))
-
-      wasm_filename = "#{type}.wasm"
-      File.write!(Path.join(comp_dir, wasm_filename), @auto_pull_wasm)
-
-      segments
+      Arca.Test.UnitFixtures.lay_unit!(Sanctum.TestContext.local(), segments, [
+        {"cyfr-manifest.json", Jason.encode!(manifest)},
+        {"#{type}.wasm", @auto_pull_wasm}
+      ])
     end
 
     test "rejects pull of a local formula the server does not ship", %{

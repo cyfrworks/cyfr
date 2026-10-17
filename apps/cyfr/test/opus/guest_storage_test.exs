@@ -384,7 +384,11 @@ defmodule Opus.GuestStorageTest do
     test "several prefixes each allow their own scope", %{ctx: ctx} do
       grants = edge(["data/", "components/catalysts/"], ["read"])
       unit = ["components", "catalysts", "test", "pkg", "0.1.0", "output.json"]
-      :ok = Arca.put(Sanctum.Context.actor(ctx), unit, "{}")
+
+      Arca.Test.UnitFixtures.lay_unit!(ctx, ["components", "catalysts", "test", "pkg", "0.1.0"], [
+        {"cyfr-manifest.json", ~s({"type":"catalyst"})},
+        {"output.json", "{}"}
+      ])
 
       assert {:ok, _} =
                run(ctx, grants, %{"action" => "read", "path" => Enum.join(unit, "/")})
@@ -563,10 +567,7 @@ defmodule Opus.GuestStorageTest do
       assert {:ok, ~s({"seeded":false})} =
                Arca.get(Sanctum.Context.actor(ctx), unit ++ ["config.json"])
 
-      assert Arca.Adapters.Local.exists?(
-               Sanctum.Context.actor(ctx),
-               unit ++ ["cyfr-manifest.json"]
-             )
+      assert Arca.exists?(Sanctum.Context.actor(ctx), unit ++ ["cyfr-manifest.json"])
 
       assert Arca.Overlay.unit_status(Sanctum.Context.actor(ctx), unit) == {:ok, :shipped}
       assert {:ok, true} = Arca.Overlay.edited?(Sanctum.Context.actor(ctx), unit)
@@ -584,7 +585,9 @@ defmodule Opus.GuestStorageTest do
       assert {:ok, %{"written" => true}} = run(ctx, grants, write("data/junk.txt", "fine"))
     end
 
-    test "a write under a pulled publisher is refused; local/ is free", %{ctx: ctx} do
+    test "a write under a pulled publisher is refused; under local/ a component the athanor " <>
+           "made is written into, and one it has not made is not laid by writes",
+         %{ctx: ctx} do
       grants = edge(["data/", "components/"])
 
       assert {"storage_path_denied", message} =
@@ -597,6 +600,26 @@ defmodule Opus.GuestStorageTest do
                )
 
       assert message =~ "fork into local/"
+
+      # A component is created by its own verbs, never laid by writes.
+      assert {"storage_path_denied", message} =
+               refused(
+                 run(
+                   ctx,
+                   grants,
+                   write("components/catalysts/local/mine/0.1.0/output.json", ~s({"ok":true}))
+                 )
+               )
+
+      assert message =~ "scaffold, pull, fork or publish"
+
+      Arca.Test.UnitFixtures.lay_unit!(
+        ctx,
+        ["components", "catalysts", "local", "mine", "0.1.0"],
+        [
+          {"cyfr-manifest.json", ~s({"type":"catalyst"})}
+        ]
+      )
 
       assert {:ok, %{"written" => true}} =
                run(
@@ -743,8 +766,20 @@ defmodule Opus.GuestStorageTest do
       assert {:ok, _} = quota_write(ctx, "data/exact.txt", 90, %{max_bytes: 100, max_files: 50})
 
       grants = ["data/", "components/"]
-      quota = %{max_bytes: 100, max_files: 50}
       unit = "components/catalysts/local/pkg/0.1.0/"
+
+      # The component the guest writes into exists first; what it holds is
+      # counted already, and the quota leaves room for one write of 60.
+      Arca.Test.UnitFixtures.lay_unit!(
+        ctx,
+        ["components", "catalysts", "local", "pkg", "0.1.0"],
+        [
+          {"cyfr-manifest.json", ~s({"type":"catalyst"})}
+        ]
+      )
+
+      {:ok, %{bytes: held}} = Arca.usage(Sanctum.Context.actor(ctx), ["components"])
+      quota = %{max_bytes: held + 100, max_files: 50}
 
       assert {:ok, _} = quota_write(ctx, unit <> "a.txt", 60, quota, grants)
 

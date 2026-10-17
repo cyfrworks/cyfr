@@ -29,10 +29,15 @@ defmodule Compendium.Providers.AquaListTest.UnreadableSoul do
   @moduledoc false
   use Arca.Storage.TestDouble
 
-  @soul Compendium.AquaPath.soul_file()
+  # The soul's one object, read under its revision's prefix as the unit's
+  # own name.
+  @soul List.last(Compendium.AquaPath.soul_file())
 
-  def get(_actor, @soul), do: {:error, :eacces}
-  def get(actor, path), do: Arca.Adapters.Local.get(actor, path)
+  def get(actor, path) do
+    if List.last(path) == @soul,
+      do: {:error, :eacces},
+      else: Arca.Adapters.Local.get(actor, path)
+  end
 end
 
 # A store that cannot give one role's file.
@@ -40,27 +45,16 @@ defmodule Compendium.Providers.AquaListTest.UnreadableRole do
   @moduledoc false
   use Arca.Storage.TestDouble
 
-  @planner Compendium.AquaPath.agent_file("planner")
+  @planner List.last(Compendium.AquaPath.agent_file("planner"))
 
-  def get(_actor, @planner), do: {:error, :eacces}
-  def get(actor, path), do: Arca.Adapters.Local.get(actor, path)
+  def get(actor, path) do
+    if List.last(path) == @planner,
+      do: {:error, :eacces},
+      else: Arca.Adapters.Local.get(actor, path)
+  end
 end
 
 # A store that answers, and holds no soul and no role.
-defmodule Compendium.Providers.AquaListTest.EmptyAqua do
-  @moduledoc false
-  use Arca.Storage.TestDouble
-
-  @roles Compendium.AquaPath.roles_root()
-  @soul Compendium.AquaPath.soul_file()
-
-  def list_typed(_actor, @roles), do: {:ok, []}
-  def list_typed(actor, path), do: Arca.Adapters.Local.list_typed(actor, path)
-
-  def get(_actor, @soul), do: {:error, :not_found}
-  def get(actor, path), do: Arca.Adapters.Local.get(actor, path)
-end
-
 defmodule Compendium.Providers.AquaListTest do
   @moduledoc """
   The `aqua` tool's list answers the agents it read or refuses: a roles
@@ -74,7 +68,6 @@ defmodule Compendium.Providers.AquaListTest do
   use ExUnit.Case, async: false
 
   alias Compendium.Providers.AquaListTest.{
-    EmptyAqua,
     TypedRefusalRoles,
     UnreadableRole,
     UnreadableRoles,
@@ -156,7 +149,13 @@ defmodule Compendium.Providers.AquaListTest do
   end
 
   test "an athanor that holds no agents answers its guides", %{ctx: ctx} do
-    storage!(EmptyAqua)
+    # Every agent the fill shipped goes, unit by unit, as a reset of the
+    # whole root would take them.
+    assert :ok =
+             Arca.Overlay.with_internal_writes(fn ->
+               Arca.delete_tree(Sanctum.Context.actor(ctx), ["aqua"])
+             end)
+
     assert {:ok, listed} = list(ctx)
     assert names(listed) == @guides
   end

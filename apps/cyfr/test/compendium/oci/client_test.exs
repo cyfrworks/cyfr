@@ -188,23 +188,25 @@ defmodule Compendium.OCI.ClientTest do
     end
 
     test "Arca stores and reads manifest json", %{ctx: ctx} do
-      path =
-        ["components", "catalysts", "testpub", "my-tool", "1.0.0"] ++
-          ["cyfr-manifest.json"]
-
+      unit = ["components", "catalysts", "testpub", "my-tool", "1.0.0"]
+      path = unit ++ ["cyfr-manifest.json"]
       content = Jason.encode!(%{"name" => "my-tool", "version" => "1.0.0", "schema" => %{}})
 
-      :ok = Arca.put(Sanctum.Context.actor(ctx), path, content)
+      Arca.Test.UnitFixtures.lay_unit!(ctx, unit, [{"cyfr-manifest.json", content}])
 
       {:ok, read_content} = Arca.get(Sanctum.Context.actor(ctx), path)
       assert read_content == content
     end
 
     test "Arca stores and reads README", %{ctx: ctx} do
-      path = ["components", "reagents", "cyfr", "data-proc", "2.0.0", "README.md"]
+      unit = ["components", "reagents", "cyfr", "data-proc", "2.0.0"]
+      path = unit ++ ["README.md"]
       readme = "# Data Processor\n\nProcesses data."
 
-      :ok = Arca.put(Sanctum.Context.actor(ctx), path, readme)
+      Arca.Test.UnitFixtures.lay_unit!(ctx, unit, [
+        {"cyfr-manifest.json", ~s({"type":"reagent"})},
+        {"README.md", readme}
+      ])
 
       {:ok, read_content} = Arca.get(Sanctum.Context.actor(ctx), path)
       assert read_content == readme
@@ -219,10 +221,12 @@ defmodule Compendium.OCI.ClientTest do
         {["src", "src", "lib.rs"], "fn main() {}"}
       ]
 
-      for {segments, content} <- files do
-        path = base ++ segments
-        :ok = Arca.put(Sanctum.Context.actor(ctx), path, content)
-      end
+      Arca.Test.UnitFixtures.lay_unit!(
+        ctx,
+        base,
+        [{"cyfr-manifest.json", ~s({"type":"catalyst"})}] ++
+          for({segments, content} <- files, do: {Enum.join(segments, "/"), content})
+      )
 
       # Verify files can be read back
       {:ok, cargo_content} = Arca.get(Sanctum.Context.actor(ctx), base ++ ["src", "Cargo.toml"])

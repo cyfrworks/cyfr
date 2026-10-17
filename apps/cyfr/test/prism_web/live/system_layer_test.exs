@@ -5794,15 +5794,10 @@ defmodule PrismWeb.SystemLayerTest do
       "tincture" => tincture
     }
 
-    dir =
-      Arca.Adapters.Local.build_path(
-        Sanctum.Context.actor(ctx),
-        ["components", "tinctures", "local", name, "1.0.0"]
-      )
-
-    File.mkdir_p!(dir)
-    File.write!(Path.join(dir, "cyfr-manifest.json"), Jason.encode!(manifest))
-    for {file, bytes} <- files, do: File.write!(Path.join(dir, file), bytes)
+    Arca.Test.UnitFixtures.tenant_component!(ctx, "tincture", "local", name, "1.0.0",
+      manifest: manifest,
+      files: files
+    )
 
     digest = "sha256:" <> Base.encode16(:crypto.hash(:sha256, name), case: :lower)
     {:ok, release_digest} = Compendium.ReleaseDigest.compute(digest, manifest)

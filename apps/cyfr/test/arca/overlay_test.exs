@@ -271,6 +271,28 @@ defmodule Arca.OverlayTest do
       assert {:ok, [@version_dir]} = Arca.Overlay.shipped_units("components")
     end
 
+    test "a file unit's one object is listed and read from above it, as a directory unit's are",
+         %{actor: actor, seed_dir: seed} do
+      role = ship_role!(seed, "listed.md", "shipped")
+      :ok = Arca.Overlay.pull_shipped(actor, role)
+      mine = ["aqua", "roles", "mine.md"]
+      :ok = own_unit!(actor, mine, "mine")
+
+      assert {:ok, leaves} = Arca.list_recursive(actor, ["aqua"])
+      assert Enum.sort(leaves) == Enum.sort([role, mine])
+      assert {:ok, [{"roles", :dir}]} = Arca.list_typed(actor, ["aqua"])
+
+      assert {:ok, entries} = Arca.list_typed(actor, ["aqua", "roles"])
+      assert Enum.sort(entries) == [{"listed.md", :file}, {"mine.md", :file}]
+
+      assert {:ok, pairs} = Arca.read_subtree(actor, ["aqua", "roles"])
+      assert Enum.sort(pairs) == [{["listed.md"], "shipped"}, {["mine.md"], "mine"}]
+
+      # Dropped, it is listed no more.
+      assert {:ok, :deleted} = Arca.Overlay.drop_unit(actor, mine)
+      assert {:ok, [^role]} = Arca.list_recursive(actor, ["aqua"])
+    end
+
     test "a path outside the seeded roots is untouched", %{actor: actor} do
       assert {:error, :not_found} = Arca.get(actor, ["data", "nope.txt"])
       refute Arca.exists?(actor, ["data", "nope.txt"])
@@ -450,7 +472,8 @@ defmodule Arca.OverlayTest do
       # A plain write into a unit no committed row names is refused: a unit
       # lands by its commit, and writes plainly from then on.
       fresh = ["components", "catalysts", "local", "brand-new", "0.1.0"]
-      assert {:error, :not_found} = Arca.put(actor, fresh ++ ["catalyst.wasm"], "NEW")
+      assert {:error, :no_unit} = Arca.put(actor, fresh ++ ["catalyst.wasm"], "NEW")
+      assert {:error, :no_unit} = Arca.put(actor, fresh ++ [@sentinel], ~s({"type":"catalyst"}))
       assert Arca.Overlay.unit_status(actor, fresh) == {:ok, :absent}
       assert {:ok, []} = Arca.list_typed(actor, fresh)
 
@@ -1690,7 +1713,7 @@ defmodule Arca.OverlayTest do
 
     test "a unit no committed row names has nothing to lay a subtree into", %{actor: actor} do
       :ok = Arca.delete_tree(actor, @built)
-      assert {:error, :not_found} = Arca.put(actor, @built ++ ["src", "main.tsx"], "orphan")
+      assert {:error, :no_unit} = Arca.put(actor, @built ++ ["src", "main.tsx"], "orphan")
 
       assert {:error, :not_found} =
                Arca.Overlay.replace_subtree(
@@ -1972,7 +1995,7 @@ defmodule Arca.OverlayTest do
           "step one: do the thing"
         )
 
-      assert {:error, :not_found} = Arca.put(actor, dir ++ ["reference.md"], "step one")
+      assert {:error, :no_unit} = Arca.put(actor, dir ++ ["reference.md"], "step one")
 
       # The unit is not complete, and says so rather than passing for one.
       assert {:ok, status} = Arca.Overlay.unit_status(actor, dir)

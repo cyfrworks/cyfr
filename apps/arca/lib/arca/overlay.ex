@@ -107,7 +107,12 @@ defmodule Arca.Overlay do
   lock: a plain write into a unit is an edit of the committed revision's
   objects in place, last writer wins per object, a commit replaces the
   unit whole with a new revision, and `update/3` is the read-modify-write
-  that loses neither (`c:Arca.Storage.put_if_match/4`). A pin
+  that loses neither (`c:Arca.Storage.put_if_match/4`). A plain write
+  where no committed row names the unit lands nowhere — refused
+  `{:error, :no_unit}` — except at the completion object of a unit its
+  grammar lets a write create
+  (`c:Arca.Storage.UnitLocator.creates_by_write?/1`: a role, the soul, a
+  scroll), where the write is the unit's one-object commit. A pin
   (`Arca.StorageGC.pin/4`) keeps a revision's prefix from collection; the
   current revision's objects can still be edited in place, as the served
   objects could before.
@@ -340,17 +345,60 @@ defmodule Arca.Overlay do
 
   @impl true
   def put(%Prima.Actor{} = actor, path, content) do
-    with :ok <- writable(path),
-         {:ok, target} <- edit_target(actor, path),
-         do: edit(actor, path, fn -> tenant().put(actor, target, content) end)
+    with :ok <- writable(path) do
+      case edit_target(actor, path) do
+        {:ok, target} -> edit(actor, path, fn -> tenant().put(actor, target, content) end)
+        {:error, :not_found} -> create_by_write(actor, path, content)
+        {:error, _} = refused -> refused
+      end
+    end
   end
 
   @impl true
   def append(%Prima.Actor{} = actor, path, content) do
-    with :ok <- writable(path),
-         {:ok, target} <- edit_target(actor, path),
-         do: edit(actor, path, fn -> tenant().append(actor, target, content) end)
+    with :ok <- writable(path) do
+      case edit_target(actor, path) do
+        {:ok, target} -> edit(actor, path, fn -> tenant().append(actor, target, content) end)
+        {:error, :not_found} -> create_by_write(actor, path, content)
+        {:error, _} = refused -> refused
+      end
+    end
   end
+
+  # A plain write inside a unit no committed row names. At the unit's
+  # completion object — a file unit's file, a directory unit's sentinel —
+  # of a unit its grammar lets a write create
+  # (`Arca.Storage.UnitLocator.creates_by_write?/1`: a role, the soul, a
+  # scroll), it is the unit's one-object commit, so the unit is created by
+  # writing its own file. Anywhere else, or for a unit its verbs create (a
+  # component), it is refused `{:error, :no_unit}`: nothing lands inside a
+  # unit before the unit exists. The facade accounted the written bytes
+  # as a put's and the commit accounted its staged objects as a commit's,
+  # so the counters are dropped to be walked true again.
+  defp create_by_write(actor, path, content) do
+    loc = Arca.Storage.locate(path)
+    unit = unit_of(loc)
+
+    if path == completion_of(loc) and UnitLocator.creates_by_write?(unit) do
+      source =
+        case loc do
+          {:file, ^unit} -> {:files, [{[], content}]}
+          {:dir, ^unit, sentinel} -> {:files, [{[sentinel], content}]}
+        end
+
+      with {:ok, _written} <- commit_unit(actor, unit, source, cap: :exempt) do
+        Arca.Usage.invalidate(actor)
+        :ok
+      end
+    else
+      {:error, :no_unit}
+    end
+  end
+
+  # A conditional write or a tree replacement inside a unit no committed
+  # row names has nothing to land in.
+  defp no_unit({:error, :not_found}), do: {:error, :no_unit}
+  defp no_unit(answer), do: answer
 
   @impl true
   def delete(%Prima.Actor{} = actor, path) do
@@ -691,14 +739,14 @@ defmodule Arca.Overlay do
   @impl true
   def put_if_none_match(%Prima.Actor{} = actor, path, content) do
     with :ok <- writable(path),
-         {:ok, target} <- edit_target(actor, path),
+         {:ok, target} <- no_unit(edit_target(actor, path)),
          do: tenant().put_if_none_match(actor, target, content)
   end
 
   @impl true
   def put_if_match(%Prima.Actor{} = actor, path, content, precondition) do
     with :ok <- writable(path),
-         {:ok, target} <- edit_target(actor, path),
+         {:ok, target} <- no_unit(edit_target(actor, path)),
          do:
            edit(actor, path, fn ->
              tenant().put_if_match(actor, target, content, precondition)
@@ -718,7 +766,7 @@ defmodule Arca.Overlay do
   @impl true
   def replace_tree(%Prima.Actor{} = actor, path, files) do
     with :ok <- replaceable(path),
-         {:ok, target} <- edit_target(actor, path) do
+         {:ok, target} <- no_unit(edit_target(actor, path)) do
       adapter = tenant()
 
       if Code.ensure_loaded?(adapter) and function_exported?(adapter, :replace_tree, 3),
@@ -890,20 +938,31 @@ defmodule Arca.Overlay do
     end
   end
 
+  # Every leaf of one committed unit as the unit's own paths: a file unit's
+  # one object when it is there, a directory unit's prefix listed and
+  # spelled back; a revision still at the unit's own path, listed there.
   defp unit_leaves(actor, unit, revision) do
-    loc = Arca.Storage.locate(unit)
+    case Arca.Storage.locate(unit) do
+      {:file, ^unit} = loc ->
+        cond do
+          tenant().exists?(actor, UnitLocator.in_revision(loc, revision, unit)) -> {:ok, [unit]}
+          legacy?(actor, loc, revision) -> {:ok, [unit]}
+          true -> {:ok, []}
+        end
 
-    case tenant().list_recursive(actor, UnitLocator.in_revision(loc, revision, unit)) do
-      {:ok, []} ->
-        if legacy?(actor, loc, revision),
-          do: tenant().list_recursive(actor, unit),
-          else: {:ok, []}
+      {:dir, ^unit, _sentinel} = loc ->
+        case tenant().list_recursive(actor, UnitLocator.in_revision(loc, revision, unit)) do
+          {:ok, []} ->
+            if legacy?(actor, loc, revision),
+              do: tenant().list_recursive(actor, unit),
+              else: {:ok, []}
 
-      {:ok, keys} ->
-        {:ok, unit_paths(loc, revision, keys)}
+          {:ok, keys} ->
+            {:ok, unit_paths(loc, revision, keys)}
 
-      {:error, _} = error ->
-        error
+          {:error, _} = error ->
+            error
+        end
     end
   end
 

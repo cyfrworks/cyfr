@@ -51,16 +51,24 @@ defmodule Arca.StorageAuthorizePathTest do
   end
 
   test "component paths are tenant-relative — the actor is the only addressing", %{a: a, b: b} do
-    path = ["components", "catalysts", "local", "x", "0.1.0", "cyfr-manifest.json"]
-    assert :ok = Arca.put(a, path, "{}")
+    unit = ["components", "catalysts", "local", "x", "0.1.0"]
+    path = unit ++ ["cyfr-manifest.json"]
+
+    lay = fn actor, bytes ->
+      Arca.Overlay.commit_unit(actor, unit, {:files, [{["cyfr-manifest.json"], bytes}]},
+        cap: :exempt
+      )
+    end
+
+    assert {:ok, _} = lay.(a, "{}")
 
     # The same spelling under b's context is b's own (empty) tree.
     assert {:error, :not_found} = Arca.get(b, path)
     refute Arca.exists?(b, path)
     assert {:ok, []} = Arca.list_recursive(b, ["components"])
 
-    # b writing the same spelling lands in b's tree and leaves a's alone.
-    assert :ok = Arca.put(b, path, "mine")
+    # b landing the same spelling lands in b's tree and leaves a's alone.
+    assert {:ok, _} = lay.(b, "mine")
     assert {:ok, "{}"} = Arca.get(a, path)
     assert {:ok, "mine"} = Arca.get(b, path)
   end

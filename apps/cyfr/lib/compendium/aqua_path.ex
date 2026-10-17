@@ -238,4 +238,9 @@ defmodule Compendium.AquaPath do
   end
 
   def locate(_path), do: :above_unit
+
+  # A role, the soul or a scroll is created by writing its own file: the
+  # write of the unit's one file, or of a scroll's SKILL.md, is its commit.
+  @impl Arca.Storage.UnitLocator
+  def creates_by_write?(_unit), do: true
 end

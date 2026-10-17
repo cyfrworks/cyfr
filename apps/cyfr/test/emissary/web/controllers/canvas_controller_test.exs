@@ -83,7 +83,22 @@ defmodule Emissary.Web.CanvasControllerTest do
         updated_at: now
       })
 
+    acknowledged!(ctx)
     release_digest
+  end
+
+  # The rows these fixtures write are the registry's, as a commit would
+  # have written them: the root's projection is told it holds them after a
+  # row is written and after a unit is laid, so a read derives nothing
+  # over them from the units the fixtures commit.
+  defp acknowledged!(ctx) do
+    actor = Sanctum.Context.actor(ctx)
+    {:ok, token} = Arca.StorageProjectionChanges.snapshot(actor, "components")
+
+    {:ok, :acknowledged} =
+      Arca.StorageProjectionChanges.replace(actor, "components", token, fn -> :acknowledged end)
+
+    :ok
   end
 
   defp canvas!(ctx, name) do
@@ -145,17 +160,13 @@ defmodule Emissary.Web.CanvasControllerTest do
     :ok
   end
 
-  # `files` written into the version `name` of the source's athanor.
+  # `files` landed as the version `name` of the source's athanor, one unit.
   defp lay!(source, name, files) do
-    dir =
-      Arca.Adapters.Local.build_path(
-        Sanctum.Context.actor(source),
-        Prima.ComponentPath.version_dir("tincture", "local", name, @version)
-      )
+    Arca.Test.UnitFixtures.tenant_component!(source, "tincture", "local", name, @version,
+      files: files
+    )
 
-    File.mkdir_p!(dir)
-    for {file, bytes} <- files, do: File.write!(Path.join(dir, file), bytes)
-    :ok
+    acknowledged!(source)
   end
 
   # A file of the version `name` under its served prefix.
@@ -359,14 +370,7 @@ defmodule Emissary.Web.CanvasControllerTest do
       # `<base>` and SDK would be injected.
       module = ~s|export default (c) => c.render({type: "text", text: "<head></head>"});\n|
 
-      dir =
-        Arca.Adapters.Local.build_path(
-          Sanctum.Context.actor(source),
-          Prima.ComponentPath.version_dir("tincture", "local", "page-canvas", @version)
-        )
-
-      File.mkdir_p!(dir)
-      File.write!(Path.join(dir, "canvas.js"), module)
+      lay!(source, "page-canvas", [{"canvas.js", module}])
 
       conn =
         get(

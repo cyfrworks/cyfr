@@ -286,7 +286,9 @@ defmodule Emissary.MCP.ResourceAdmissionTest do
         Jason.encode!(%{"type" => "reagent", "version" => "0.1.0", "description" => description})
       end
 
-      assert {:ok, _} =
+      # A component is created by its own verbs: a write into one no
+      # committed row names is refused, typed.
+      assert {:error, :no_unit} =
                Sanctum.Gate.call_external("file", ctx, %{
                  "action" => "write",
                  "path" => unit <> "/reagent.wasm",
@@ -294,7 +296,10 @@ defmodule Emissary.MCP.ResourceAdmissionTest do
                  "encoding" => "base64"
                })
 
-      assert {:ok, _} = put.(unit <> "/cyfr-manifest.json", manifest.("first"))
+      Arca.Test.UnitFixtures.lay_unit!(ctx, String.split(unit, "/"), [
+        {"reagent.wasm", @valid_wasm},
+        {"cyfr-manifest.json", manifest.("first")}
+      ])
 
       {:ok, _} =
         Compendium.Registry.register_from_arca(ctx, String.split(unit, "/"))

@@ -150,8 +150,8 @@ defmodule Compendium.AutoIndexerTest do
       {:ok, search} = Registry.search(ctx, %{query: "temp-tool"})
       assert search.total == 1
 
-      # Delete the component directory
-      File.rm_rf!(dir)
+      # The component is dropped, unit and row
+      :ok = Arca.delete_tree(Sanctum.Context.actor(ctx), dir)
 
       # Rescan should prune the stale entry
       {:ok, result2} = AutoIndexer.scan(ctx: ctx)
@@ -242,11 +242,9 @@ defmodule Compendium.AutoIndexerTest do
       assert {:ok, %{name: "bundled"}} =
                Arca.ComponentStorage.get_component(Sanctum.Context.actor(ctx), "bundled", "0.1.0")
 
-      assert File.exists?(
-               Arca.Adapters.Local.build_path(
-                 Sanctum.Context.actor(ctx),
-                 ["components", "catalysts", "local", "bundled", "0.1.0", "catalyst.wasm"]
-               )
+      assert Arca.exists?(
+               Sanctum.Context.actor(ctx),
+               ["components", "catalysts", "local", "bundled", "0.1.0", "catalyst.wasm"]
              )
 
       # The rescan rediscovers it the same way — prune must keep the row,
@@ -267,11 +265,13 @@ defmodule Compendium.AutoIndexerTest do
       {:ok, row} =
         Arca.ComponentStorage.get_component(Sanctum.Context.actor(ctx), "dep-regress", "1.0.0")
 
-      # The manifest goes dep-broken on disk; the next scan must not
+      # The manifest goes dep-broken in the tree; the next scan must not
       # replace the standing row with a failure (refs validate before
       # any row moves).
-      File.write!(
-        Path.join(dir, "cyfr-manifest.json"),
+      Arca.Test.UnitFixtures.unit_write!(
+        ctx,
+        dir,
+        "cyfr-manifest.json",
         Jason.encode!(%{
           "type" => "catalyst",
           "version" => "1.0.0",

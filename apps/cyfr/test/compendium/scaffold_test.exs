@@ -163,19 +163,15 @@ defmodule Compendium.ScaffoldTest do
       assert Enum.any?(result.next_steps, &(&1 =~ "cyfr-manifest.json through Files"))
       refute Enum.any?(result.next_steps, &(&1 =~ "Edit cyfr-manifest.json"))
 
-      base =
-        Arca.Adapters.Local.build_path(
-          Sanctum.Context.actor(ctx),
-          ["components", "catalysts", "local", "weather-api", "0.1.0"]
-        )
+      base = ["components", "catalysts", "local", "weather-api", "0.1.0"]
 
-      assert File.exists?(Path.join(base, "cyfr-manifest.json"))
-      assert File.exists?(Path.join([base, "src", "Cargo.toml"]))
-      assert File.exists?(Path.join([base, "src", "src", "lib.rs"]))
-      assert File.exists?(Path.join([base, "src", "wit", "world.wit"]))
+      assert Arca.Test.UnitFixtures.unit_exists?(ctx, base, "cyfr-manifest.json")
+      assert Arca.Test.UnitFixtures.unit_exists?(ctx, base, "src/Cargo.toml")
+      assert Arca.Test.UnitFixtures.unit_exists?(ctx, base, "src/src/lib.rs")
+      assert Arca.Test.UnitFixtures.unit_exists?(ctx, base, "src/wit/world.wit")
 
       # Verify manifest content
-      {:ok, manifest_json} = File.read(Path.join(base, "cyfr-manifest.json"))
+      manifest_json = Arca.Test.UnitFixtures.unit_file!(ctx, base, "cyfr-manifest.json")
       {:ok, manifest} = Jason.decode(manifest_json)
       assert manifest["name"] == "weather-api"
       assert manifest["type"] == "catalyst"
@@ -188,7 +184,7 @@ defmodule Compendium.ScaffoldTest do
       refute Map.has_key?(manifest, "wasi")
 
       # Verify lib.rs contains catalyst pattern
-      {:ok, lib_rs} = File.read(Path.join([base, "src", "src", "lib.rs"]))
+      lib_rs = Arca.Test.UnitFixtures.unit_file!(ctx, base, "src/src/lib.rs")
       assert lib_rs =~ "cyfr::catalyst::run::Guest"
       assert lib_rs =~ "fn run"
       refute lib_rs =~ "vault::read"
@@ -226,7 +222,7 @@ defmodule Compendium.ScaffoldTest do
       assert missing == [], "the catalyst's public scaffold lacks attachment guidance"
 
       # Verify Cargo.toml is for catalyst
-      {:ok, cargo} = File.read(Path.join([base, "src", "Cargo.toml"]))
+      cargo = Arca.Test.UnitFixtures.unit_file!(ctx, base, "src/Cargo.toml")
       assert cargo =~ "cyfr:catalyst"
     end
   end
@@ -236,24 +232,20 @@ defmodule Compendium.ScaffoldTest do
       assert {:ok, result} = Scaffold.create(ctx, "my-workflow", "formula", "0.1.0")
       assert result.reference == "formula:local.my-workflow:0.1.0"
 
-      base =
-        Arca.Adapters.Local.build_path(
-          Sanctum.Context.actor(ctx),
-          ["components", "formulas", "local", "my-workflow", "0.1.0"]
-        )
+      base = ["components", "formulas", "local", "my-workflow", "0.1.0"]
 
-      assert File.exists?(Path.join(base, "cyfr-manifest.json"))
-      assert File.exists?(Path.join([base, "src", "src", "lib.rs"]))
+      assert Arca.Test.UnitFixtures.unit_exists?(ctx, base, "cyfr-manifest.json")
+      assert Arca.Test.UnitFixtures.unit_exists?(ctx, base, "src/src/lib.rs")
 
       # Verify manifest has formula-specific fields
-      {:ok, manifest_json} = File.read(Path.join(base, "cyfr-manifest.json"))
+      manifest_json = Arca.Test.UnitFixtures.unit_file!(ctx, base, "cyfr-manifest.json")
       {:ok, manifest} = Jason.decode(manifest_json)
       assert manifest["type"] == "formula"
       assert is_list(manifest["caps"]["tools"])
       assert is_map(manifest["dependencies"])
 
       # Verify lib.rs contains formula pattern
-      {:ok, lib_rs} = File.read(Path.join([base, "src", "src", "lib.rs"]))
+      lib_rs = Arca.Test.UnitFixtures.unit_file!(ctx, base, "src/src/lib.rs")
       assert lib_rs =~ "cyfr::formula::run::Guest"
       assert lib_rs =~ "invoke"
     end
@@ -264,23 +256,19 @@ defmodule Compendium.ScaffoldTest do
       assert {:ok, result} = Scaffold.create(ctx, "my-transform", "reagent", "0.1.0")
       assert result.reference == "reagent:local.my-transform:0.1.0"
 
-      base =
-        Arca.Adapters.Local.build_path(
-          Sanctum.Context.actor(ctx),
-          ["components", "reagents", "local", "my-transform", "0.1.0"]
-        )
+      base = ["components", "reagents", "local", "my-transform", "0.1.0"]
 
-      assert File.exists?(Path.join(base, "cyfr-manifest.json"))
-      assert File.exists?(Path.join([base, "src", "src", "lib.rs"]))
+      assert Arca.Test.UnitFixtures.unit_exists?(ctx, base, "cyfr-manifest.json")
+      assert Arca.Test.UnitFixtures.unit_exists?(ctx, base, "src/src/lib.rs")
 
       # Verify manifest is minimal for reagent
-      {:ok, manifest_json} = File.read(Path.join(base, "cyfr-manifest.json"))
+      manifest_json = Arca.Test.UnitFixtures.unit_file!(ctx, base, "cyfr-manifest.json")
       {:ok, manifest} = Jason.decode(manifest_json)
       assert manifest["type"] == "reagent"
       refute Map.has_key?(manifest, "setup")
 
       # Verify lib.rs contains reagent pattern
-      {:ok, lib_rs} = File.read(Path.join([base, "src", "src", "lib.rs"]))
+      lib_rs = Arca.Test.UnitFixtures.unit_file!(ctx, base, "src/src/lib.rs")
       assert lib_rs =~ "cyfr::reagent::compute::Guest"
       assert lib_rs =~ "fn compute"
     end
@@ -298,40 +286,32 @@ defmodule Compendium.ScaffoldTest do
       assert result.status == "created"
       assert result.reference == "tincture:local.test-dash:0.1.0"
 
-      base =
-        Arca.Adapters.Local.build_path(
-          Sanctum.Context.actor(ctx),
-          ["components", "tinctures", "local", "test-dash", "0.1.0"]
-        )
+      base = ["components", "tinctures", "local", "test-dash", "0.1.0"]
 
-      assert File.exists?(Path.join(base, "cyfr-manifest.json"))
-      assert File.exists?(Path.join(base, "package.json"))
-      assert File.exists?(Path.join(base, "package-lock.json"))
-      assert File.exists?(Path.join(base, "tsconfig.json"))
-      assert File.exists?(Path.join(base, "vite.config.ts"))
+      assert Arca.Test.UnitFixtures.unit_exists?(ctx, base, "cyfr-manifest.json")
+      assert Arca.Test.UnitFixtures.unit_exists?(ctx, base, "package.json")
+      assert Arca.Test.UnitFixtures.unit_exists?(ctx, base, "package-lock.json")
+      assert Arca.Test.UnitFixtures.unit_exists?(ctx, base, "tsconfig.json")
+      assert Arca.Test.UnitFixtures.unit_exists?(ctx, base, "vite.config.ts")
       # The source entry sits at the root; the build it feeds lands in dist/.
-      assert File.exists?(Path.join(base, "index.html"))
-      refute File.exists?(Path.join(base, "dist"))
-      assert File.exists?(Path.join([base, "src", "main.tsx"]))
-      assert File.exists?(Path.join([base, "src", "App.tsx"]))
-      assert File.exists?(Path.join([base, "src", "index.css"]))
+      assert Arca.Test.UnitFixtures.unit_exists?(ctx, base, "index.html")
+      refute Arca.Test.UnitFixtures.unit_exists?(ctx, base, "dist")
+      assert Arca.Test.UnitFixtures.unit_exists?(ctx, base, "src/main.tsx")
+      assert Arca.Test.UnitFixtures.unit_exists?(ctx, base, "src/App.tsx")
+      assert Arca.Test.UnitFixtures.unit_exists?(ctx, base, "src/index.css")
 
       # No vanilla files
-      refute File.exists?(Path.join(base, "app.js"))
-      refute File.exists?(Path.join(base, "style.css"))
+      refute Arca.Test.UnitFixtures.unit_exists?(ctx, base, "app.js")
+      refute Arca.Test.UnitFixtures.unit_exists?(ctx, base, "style.css")
     end
 
     test "react manifest includes build field", %{ctx: ctx} do
       assert {:ok, _} =
                Scaffold.create(ctx, "build-dash", "tincture", "0.1.0", template: "react")
 
-      base =
-        Arca.Adapters.Local.build_path(
-          Sanctum.Context.actor(ctx),
-          ["components", "tinctures", "local", "build-dash", "0.1.0"]
-        )
+      base = ["components", "tinctures", "local", "build-dash", "0.1.0"]
 
-      {:ok, raw} = File.read(Path.join(base, "cyfr-manifest.json"))
+      raw = Arca.Test.UnitFixtures.unit_file!(ctx, base, "cyfr-manifest.json")
       {:ok, manifest} = Jason.decode(raw)
 
       assert manifest["type"] == "tincture"
@@ -343,13 +323,10 @@ defmodule Compendium.ScaffoldTest do
       for {name, template} <- [{"plain-dash", "vanilla"}, {"hinted-dash", "react"}] do
         assert {:ok, _} = Scaffold.create(ctx, name, "tincture", "0.1.0", template: template)
 
-        base =
-          Arca.Adapters.Local.build_path(
-            Sanctum.Context.actor(ctx),
-            ["components", "tinctures", "local", name, "0.1.0"]
-          )
+        base = ["components", "tinctures", "local", name, "0.1.0"]
 
-        manifest = Jason.decode!(File.read!(Path.join(base, "cyfr-manifest.json")))
+        manifest =
+          Jason.decode!(Arca.Test.UnitFixtures.unit_file!(ctx, base, "cyfr-manifest.json"))
 
         assert %{"entry" => _, "icon" => "palette"} = block = manifest["tincture"]
         refute Map.has_key?(block, "window"), template
@@ -361,13 +338,9 @@ defmodule Compendium.ScaffoldTest do
       assert {:ok, _} =
                Scaffold.create(ctx, "pkg-dash", "tincture", "0.1.0", template: "react")
 
-      base =
-        Arca.Adapters.Local.build_path(
-          Sanctum.Context.actor(ctx),
-          ["components", "tinctures", "local", "pkg-dash", "0.1.0"]
-        )
+      base = ["components", "tinctures", "local", "pkg-dash", "0.1.0"]
 
-      {:ok, raw} = File.read(Path.join(base, "package.json"))
+      raw = Arca.Test.UnitFixtures.unit_file!(ctx, base, "package.json")
       {:ok, pkg} = Jason.decode(raw)
 
       assert Map.has_key?(pkg["dependencies"], "react")
@@ -381,13 +354,9 @@ defmodule Compendium.ScaffoldTest do
       assert {:ok, _} =
                Scaffold.create(ctx, "vite-dash", "tincture", "0.1.0", template: "react")
 
-      base =
-        Arca.Adapters.Local.build_path(
-          Sanctum.Context.actor(ctx),
-          ["components", "tinctures", "local", "vite-dash", "0.1.0"]
-        )
+      base = ["components", "tinctures", "local", "vite-dash", "0.1.0"]
 
-      {:ok, config} = File.read(Path.join(base, "vite.config.ts"))
+      config = Arca.Test.UnitFixtures.unit_file!(ctx, base, "vite.config.ts")
       assert config =~ ~s(base: "./")
     end
 
@@ -404,14 +373,10 @@ defmodule Compendium.ScaffoldTest do
   # Vite Tincture Scaffold, and the lockfiles of the built templates
   # ============================================================================
 
-  defp tincture_base(ctx, name),
-    do:
-      Arca.Adapters.Local.build_path(
-        Sanctum.Context.actor(ctx),
-        ["components", "tinctures", "local", name, "0.1.0"]
-      )
+  defp tincture_base(_ctx, name), do: ["components", "tinctures", "local", name, "0.1.0"]
 
-  defp read_json(base, file), do: base |> Path.join(file) |> File.read!() |> Jason.decode!()
+  defp read_json(ctx, base, file),
+    do: Arca.Test.UnitFixtures.unit_file!(ctx, base, file) |> Jason.decode!()
 
   describe "scaffold for tincture with vite template" do
     test "creates a Vite project that builds into dist/", %{ctx: ctx} do
@@ -422,17 +387,17 @@ defmodule Compendium.ScaffoldTest do
 
       for file <-
             ~w(package.json package-lock.json vite.config.js index.html src/main.js src/style.css) do
-        assert File.exists?(Path.join(base, file)), file
+        assert Arca.Test.UnitFixtures.unit_exists?(ctx, base, file), file
       end
 
-      refute File.exists?(Path.join(base, "tsconfig.json"))
-      refute File.exists?(Path.join(base, "dist"))
+      refute Arca.Test.UnitFixtures.unit_exists?(ctx, base, "tsconfig.json")
+      refute Arca.Test.UnitFixtures.unit_exists?(ctx, base, "dist")
 
-      manifest = read_json(base, "cyfr-manifest.json")
+      manifest = read_json(ctx, base, "cyfr-manifest.json")
       assert get_in(manifest, ["tincture", "build", "tool"]) == "vite"
       assert get_in(manifest, ["tincture", "entry"]) == "dist/index.html"
 
-      assert File.read!(Path.join(base, "vite.config.js")) =~ ~s(base: "./")
+      assert Arca.Test.UnitFixtures.unit_file!(ctx, base, "vite.config.js") =~ ~s(base: "./")
       assert Enum.any?(result.next_steps, &(&1 =~ "build.compile"))
       assert Enum.any?(result.next_steps, &(&1 =~ "package-lock.json"))
     end
@@ -443,7 +408,7 @@ defmodule Compendium.ScaffoldTest do
         name = "every-" <> template.name
         assert {:ok, _} = Scaffold.create(ctx, name, "tincture", "0.1.0", template: template.name)
 
-        tincture = read_json(tincture_base(ctx, name), "cyfr-manifest.json")["tincture"]
+        tincture = read_json(ctx, tincture_base(ctx, name), "cyfr-manifest.json")["tincture"]
         assert tincture["entry"] == template.entry
         assert get_in(tincture, ["build", "tool"]) == template.build
       end
@@ -455,7 +420,9 @@ defmodule Compendium.ScaffoldTest do
 
       assert message =~ "svelte"
       for template <- Compendium.tincture_templates(), do: assert(message =~ template.name)
-      refute File.exists?(tincture_base(ctx, "odd"))
+
+      assert Arca.Overlay.unit_status(Sanctum.Context.actor(ctx), tincture_base(ctx, "odd")) ==
+               {:ok, :absent}
     end
   end
 
@@ -467,8 +434,8 @@ defmodule Compendium.ScaffoldTest do
         assert {:ok, _} = Scaffold.create(ctx, name, "tincture", "0.1.0", template: template)
         base = tincture_base(ctx, name)
 
-        package = read_json(base, "package.json")
-        lock = read_json(base, Compendium.Tincture.Rules.lockfile())
+        package = read_json(ctx, base, "package.json")
+        lock = read_json(ctx, base, Compendium.Tincture.Rules.lockfile())
         root = lock["packages"][""]
 
         # `npm ci` holds the lockfile's root to the package manifest.
@@ -504,8 +471,8 @@ defmodule Compendium.ScaffoldTest do
       assert {:ok, _} = Scaffold.create(ctx, "only-vite", "tincture", "0.1.0", template: "vite")
       assert {:ok, _} = Scaffold.create(ctx, "with-react", "tincture", "0.1.0", template: "react")
 
-      vite = read_json(tincture_base(ctx, "only-vite"), "package-lock.json")["packages"]
-      react = read_json(tincture_base(ctx, "with-react"), "package-lock.json")["packages"]
+      vite = read_json(ctx, tincture_base(ctx, "only-vite"), "package-lock.json")["packages"]
+      react = read_json(ctx, tincture_base(ctx, "with-react"), "package-lock.json")["packages"]
 
       assert Map.has_key?(vite, "node_modules/vite")
       assert Map.has_key?(vite, "node_modules/rolldown")
@@ -534,28 +501,25 @@ defmodule Compendium.ScaffoldTest do
       assert {:ok, result} = Scaffold.create(ctx, "vanilla", "tincture", "0.1.0")
       assert result.status == "created"
 
-      base =
-        Arca.Adapters.Local.build_path(
-          Sanctum.Context.actor(ctx),
-          ["components", "tinctures", "local", "vanilla", "0.1.0"]
-        )
+      base = ["components", "tinctures", "local", "vanilla", "0.1.0"]
 
-      assert File.exists?(Path.join(base, "app.js"))
-      assert File.exists?(Path.join(base, "style.css"))
-      assert File.exists?(Path.join(base, "index.html"))
+      assert Arca.Test.UnitFixtures.unit_exists?(ctx, base, "app.js")
+      assert Arca.Test.UnitFixtures.unit_exists?(ctx, base, "style.css")
+      assert Arca.Test.UnitFixtures.unit_exists?(ctx, base, "index.html")
 
       # No React files
-      refute File.exists?(Path.join(base, "package.json"))
-      refute File.exists?(Path.join(base, "tsconfig.json"))
-      refute File.exists?(Path.join(base, "vite.config.ts"))
+      refute Arca.Test.UnitFixtures.unit_exists?(ctx, base, "package.json")
+      refute Arca.Test.UnitFixtures.unit_exists?(ctx, base, "tsconfig.json")
+      refute Arca.Test.UnitFixtures.unit_exists?(ctx, base, "vite.config.ts")
 
       # Manifest has no build field
-      {:ok, raw} = File.read(Path.join(base, "cyfr-manifest.json"))
+      raw = Arca.Test.UnitFixtures.unit_file!(ctx, base, "cyfr-manifest.json")
       {:ok, manifest} = Jason.decode(raw)
       refute Map.has_key?(manifest["tincture"] || %{}, "build")
 
       # What the scaffold writes passes the publish check as it stands.
-      assert {:ok, _} = Compendium.TinctureValidator.validate(base)
+      {:ok, pairs} = Arca.read_subtree(Sanctum.Context.actor(ctx), base)
+      assert {:ok, _} = Compendium.TinctureValidator.validate_from_pairs(pairs)
     end
   end
 
@@ -566,14 +530,11 @@ defmodule Compendium.ScaffoldTest do
       assert {:ok, result} = Scaffold.create(ctx_other, "other-tool", "catalyst", "0.1.0")
       assert result.status == "created"
 
-      base =
-        Arca.Adapters.Local.build_path(
-          Sanctum.Context.actor(ctx_other),
-          ["components", "catalysts", "local", "other-tool", "0.1.0"]
-        )
+      base = ["components", "catalysts", "local", "other-tool", "0.1.0"]
 
-      assert File.exists?(Path.join(base, "cyfr-manifest.json"))
-      assert File.exists?(Path.join([base, "src", "Cargo.toml"]))
+      assert Arca.Test.UnitFixtures.unit_exists?(ctx_other, base, "cyfr-manifest.json")
+      assert Arca.Test.UnitFixtures.unit_exists?(ctx_other, base, "src/Cargo.toml")
+      refute Arca.Test.UnitFixtures.unit_exists?(ctx, base, "cyfr-manifest.json")
     end
 
     test "the test context scaffolds under its own athanor", %{ctx: ctx} do
@@ -581,13 +542,9 @@ defmodule Compendium.ScaffoldTest do
 
       assert {:ok, _} = Scaffold.create(ctx, "flat-tool", "reagent", "0.1.0")
 
-      base =
-        Arca.Adapters.Local.build_path(
-          Sanctum.Context.actor(ctx),
-          ["components", "reagents", "local", "flat-tool", "0.1.0"]
-        )
+      base = ["components", "reagents", "local", "flat-tool", "0.1.0"]
 
-      assert File.exists?(Path.join(base, "cyfr-manifest.json"))
+      assert Arca.Test.UnitFixtures.unit_exists?(ctx, base, "cyfr-manifest.json")
     end
 
     test "detects duplicate within an athanor", %{ctx: ctx} do
@@ -609,7 +566,7 @@ defmodule Compendium.ScaffoldTest do
         opts = if template, do: [template: template], else: []
         assert {:ok, _} = Scaffold.create(ctx, name, "tincture", "0.1.0", opts)
 
-        source = File.read!(Path.join(tincture_base(ctx, name), file))
+        source = Arca.Test.UnitFixtures.unit_file!(ctx, tincture_base(ctx, name), file)
 
         for call <- @retired, do: refute(source =~ call, "#{file} shows #{call}")
 
@@ -617,7 +574,8 @@ defmodule Compendium.ScaffoldTest do
         assert source =~ "cyfr.ready()", file
       end
 
-      react = File.read!(Path.join(tincture_base(ctx, "sdk-react"), "src/App.tsx"))
+      react =
+        Arca.Test.UnitFixtures.unit_file!(ctx, tincture_base(ctx, "sdk-react"), "src/App.tsx")
 
       for member <- ~w(invoke action stream open close title ready credential),
           do: assert(react =~ ~r/^\s+#{member}\(/m, "App.tsx declares no cyfr.#{member}")

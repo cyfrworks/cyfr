@@ -14,7 +14,10 @@ defmodule Compendium.Builds.ProviderTest do
 
   # Builds are on, against a builder that would refuse any build it was
   # asked for: every refusal below is made here, before one is.
-  setup do
+  setup tags do
+    # A unit is read through its row: the build's own processes read the
+    # tree under the shared sandbox.
+    Cyfr.Test.Sandbox.setup!(tags)
     ScriptedBuilder.start!()
     :ok
   end

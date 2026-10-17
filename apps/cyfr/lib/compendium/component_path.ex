@@ -146,6 +146,12 @@ defmodule Compendium.ComponentPath do
     end
   end
 
+  # A component is created by its own verbs — scaffold, pull, fork,
+  # publish — never laid by writes: a plain write into a version
+  # directory no committed row names is refused, its manifest included.
+  @impl Arca.Storage.UnitLocator
+  def creates_by_write?(_unit), do: false
+
   @doc "Path segments to a component version's manifest."
   @spec manifest_path(String.t(), String.t() | nil, String.t(), String.t()) :: [String.t()]
   def manifest_path(type, publisher, name, version) do

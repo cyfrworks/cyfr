@@ -72,6 +72,11 @@ defmodule Arca.Test.UnitLocator do
       do: {:dir, [@root, "skills", name], @skill_manifest}
 
     def locate(_path), do: :above_unit
+
+    # As the real locator answers: an aqua unit is created by writing its
+    # own file; a component (the Components locator says nothing) is not.
+    @impl Arca.Storage.UnitLocator
+    def creates_by_write?(_unit), do: true
   end
 
   @doc "The registry the suites install through `Arca.Storage.UnitLocator.install!/1`."

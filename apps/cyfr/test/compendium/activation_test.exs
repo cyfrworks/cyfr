@@ -53,14 +53,11 @@ defmodule Compendium.ActivationTest do
   defp rebuild_locally(ctx, name) do
     segments = ["components", "reagents", "local", name, "1.0.0"]
 
-    base = Arca.Adapters.Local.build_path(Sanctum.Context.actor(ctx), segments)
-    File.mkdir_p!(base)
-    File.write!(Path.join(base, "reagent.wasm"), @wasm_variant)
-
-    File.write!(
-      Path.join(base, "cyfr-manifest.json"),
-      Jason.encode!(%{"name" => name, "version" => "1.0.0", "type" => "reagent"})
-    )
+    Arca.Test.UnitFixtures.lay_unit!(ctx, segments, [
+      {"reagent.wasm", @wasm_variant},
+      {"cyfr-manifest.json",
+       Jason.encode!(%{"name" => name, "version" => "1.0.0", "type" => "reagent"})}
+    ])
 
     {:ok, _} = Registry.register_from_arca(ctx, segments)
     :ok

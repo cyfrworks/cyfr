@@ -140,10 +140,10 @@ defmodule Compendium.ReleaseImmutabilityTest do
       segments = ["components", "reagents", "local", "rebuilt", "1.0.0"]
 
       write_component = fn bytes ->
-        base = Arca.Adapters.Local.build_path(Sanctum.Context.actor(ctx), segments)
-        File.mkdir_p!(base)
-        File.write!(Path.join(base, "reagent.wasm"), bytes)
-        File.write!(Path.join(base, "cyfr-manifest.json"), Jason.encode!(manifest))
+        Arca.Test.UnitFixtures.lay_unit!(ctx, segments, [
+          {"reagent.wasm", bytes},
+          {"cyfr-manifest.json", Jason.encode!(manifest)}
+        ])
       end
 
       write_component.(@wasm_a)

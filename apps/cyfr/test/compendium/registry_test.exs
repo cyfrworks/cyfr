@@ -616,16 +616,8 @@ defmodule Compendium.RegistryTest do
 
   describe "register_from_arca/3" do
     setup do
-      # Create a component directory with manifest and WASM
+      # A component unit with its manifest and WASM, landed by its commit
       segments = ["components", "reagents", "local", "test-tool", "0.1.0"]
-
-      comp_dir =
-        Arca.Adapters.Local.build_path(
-          Sanctum.Context.actor(Sanctum.TestContext.local()),
-          segments
-        )
-
-      File.mkdir_p!(comp_dir)
 
       manifest = %{
         "type" => "reagent",
@@ -635,10 +627,12 @@ defmodule Compendium.RegistryTest do
         "tags" => ["test"]
       }
 
-      File.write!(Path.join(comp_dir, "cyfr-manifest.json"), Jason.encode!(manifest))
-      File.write!(Path.join(comp_dir, "reagent.wasm"), @valid_wasm)
+      Arca.Test.UnitFixtures.lay_unit!(Sanctum.TestContext.local(), segments, [
+        {"cyfr-manifest.json", Jason.encode!(manifest)},
+        {"reagent.wasm", @valid_wasm}
+      ])
 
-      {:ok, comp_dir: comp_dir, segments: segments}
+      {:ok, segments: segments}
     end
 
     test "registers a component from its stored tree", %{ctx: ctx, segments: segments} do
@@ -668,14 +662,21 @@ defmodule Compendium.RegistryTest do
       assert {:ok, :unchanged} = Registry.register_from_arca(ctx, segments)
     end
 
-    test "re-registers when manifest changes", %{ctx: ctx, comp_dir: comp_dir, segments: segments} do
+    test "re-registers when manifest changes", %{ctx: ctx, segments: segments} do
       {:ok, _component} = Registry.register_from_arca(ctx, segments)
 
       # Update manifest without changing WASM
-      manifest_path = Path.join(comp_dir, "cyfr-manifest.json")
-      manifest = manifest_path |> File.read!() |> Jason.decode!()
+      manifest =
+        Arca.Test.UnitFixtures.unit_file!(ctx, segments, "cyfr-manifest.json") |> Jason.decode!()
+
       updated = Map.put(manifest, "description", "updated description")
-      File.write!(manifest_path, Jason.encode!(updated))
+
+      Arca.Test.UnitFixtures.unit_write!(
+        ctx,
+        segments,
+        "cyfr-manifest.json",
+        Jason.encode!(updated)
+      )
 
       # Should re-register, not return :unchanged
       assert {:ok, %{name: _}} = Registry.register_from_arca(ctx, segments)
@@ -691,18 +692,13 @@ defmodule Compendium.RegistryTest do
     test "infers name and version from the segment path", %{ctx: ctx} do
       segments = ["components", "catalysts", "local", "my-catalyst", "2.0.0"]
 
-      comp_dir =
-        Arca.Adapters.Local.build_path(
-          Sanctum.Context.actor(Sanctum.TestContext.local()),
-          segments
-        )
-
-      File.mkdir_p!(comp_dir)
-
       # Manifest without name/version — should be inferred from path
       manifest = %{"type" => "catalyst", "description" => "Inferred metadata"}
-      File.write!(Path.join(comp_dir, "cyfr-manifest.json"), Jason.encode!(manifest))
-      File.write!(Path.join(comp_dir, "catalyst.wasm"), @valid_wasm)
+
+      Arca.Test.UnitFixtures.lay_unit!(Sanctum.TestContext.local(), segments, [
+        {"cyfr-manifest.json", Jason.encode!(manifest)},
+        {"catalyst.wasm", @valid_wasm}
+      ])
 
       {:ok, component} = Registry.register_from_arca(ctx, segments)
 
@@ -721,18 +717,12 @@ defmodule Compendium.RegistryTest do
             {"publisher", "acme"}
           ] do
         segments = ["components", "reagents", "local", "identity-#{field}", "0.1.0"]
-
-        comp_dir =
-          Arca.Adapters.Local.build_path(
-            Sanctum.Context.actor(Sanctum.TestContext.local()),
-            segments
-          )
-
-        File.mkdir_p!(comp_dir)
-
         manifest = %{"type" => "reagent", "description" => "lying manifest", field => value}
-        File.write!(Path.join(comp_dir, "cyfr-manifest.json"), Jason.encode!(manifest))
-        File.write!(Path.join(comp_dir, "reagent.wasm"), @valid_wasm)
+
+        Arca.Test.UnitFixtures.lay_unit!(Sanctum.TestContext.local(), segments, [
+          {"cyfr-manifest.json", Jason.encode!(manifest)},
+          {"reagent.wasm", @valid_wasm}
+        ])
 
         assert {:error, {:manifest_identity_mismatch, message}} =
                  Registry.register_from_arca(ctx, segments),
@@ -765,18 +755,12 @@ defmodule Compendium.RegistryTest do
       # A manifest that agrees with (or omits) identity registers with the
       # path's type — the type the artifact was validated under.
       segments = ["components", "reagents", "local", "path-typed", "0.1.0"]
-
-      comp_dir =
-        Arca.Adapters.Local.build_path(
-          Sanctum.Context.actor(Sanctum.TestContext.local()),
-          segments
-        )
-
-      File.mkdir_p!(comp_dir)
-
       manifest = %{"description" => "no identity fields at all"}
-      File.write!(Path.join(comp_dir, "cyfr-manifest.json"), Jason.encode!(manifest))
-      File.write!(Path.join(comp_dir, "reagent.wasm"), @valid_wasm)
+
+      Arca.Test.UnitFixtures.lay_unit!(Sanctum.TestContext.local(), segments, [
+        {"cyfr-manifest.json", Jason.encode!(manifest)},
+        {"reagent.wasm", @valid_wasm}
+      ])
 
       {:ok, component} = Registry.register_from_arca(ctx, segments)
       assert component.component_type == "reagent"
@@ -786,18 +770,12 @@ defmodule Compendium.RegistryTest do
 
     test "rejects non-local publisher namespaces", %{ctx: ctx} do
       segments = ["components", "catalysts", "stripe", "payment", "1.0.0"]
-
-      comp_dir =
-        Arca.Adapters.Local.build_path(
-          Sanctum.Context.actor(Sanctum.TestContext.local()),
-          segments
-        )
-
-      File.mkdir_p!(comp_dir)
-
       manifest = %{"type" => "catalyst", "version" => "1.0.0"}
-      File.write!(Path.join(comp_dir, "cyfr-manifest.json"), Jason.encode!(manifest))
-      File.write!(Path.join(comp_dir, "catalyst.wasm"), @valid_wasm)
+
+      Arca.Test.UnitFixtures.lay_unit!(Sanctum.TestContext.local(), segments, [
+        {"cyfr-manifest.json", Jason.encode!(manifest)},
+        {"catalyst.wasm", @valid_wasm}
+      ])
 
       assert {:error, {:namespace_rejected, msg}} =
                Registry.register_from_arca(ctx, segments)
@@ -808,47 +786,43 @@ defmodule Compendium.RegistryTest do
     test "returns error for missing manifest", %{ctx: ctx} do
       segments = ["components", "reagents", "local", "no-manifest", "0.1.0"]
 
-      comp_dir =
-        Arca.Adapters.Local.build_path(
-          Sanctum.Context.actor(Sanctum.TestContext.local()),
-          segments
-        )
+      # A unit lands by its commit, which needs its manifest: a WASM alone
+      # is no unit, and bytes laid beneath the overlay are nothing a reader
+      # sees.
+      assert {:error, :missing_sentinel} =
+               Arca.Overlay.commit_unit(
+                 Sanctum.Context.actor(ctx),
+                 segments,
+                 {:files, [{["reagent.wasm"], @valid_wasm}]},
+                 cap: :exempt
+               )
 
+      comp_dir = Arca.Adapters.Local.build_path(Sanctum.Context.actor(ctx), segments)
       File.mkdir_p!(comp_dir)
       File.write!(Path.join(comp_dir, "reagent.wasm"), @valid_wasm)
 
-      assert {:error, {:missing_manifest, _}} = Registry.register_from_arca(ctx, segments)
+      assert {:error, _} = Registry.register_from_arca(ctx, segments)
+      assert {:error, :not_found} = Registry.get(ctx, "no-manifest", "0.1.0")
     end
 
     test "returns error for malformed manifest JSON", %{ctx: ctx} do
       segments = ["components", "reagents", "local", "bad-json", "0.1.0"]
 
-      comp_dir =
-        Arca.Adapters.Local.build_path(
-          Sanctum.Context.actor(Sanctum.TestContext.local()),
-          segments
-        )
-
-      File.mkdir_p!(comp_dir)
-      File.write!(Path.join(comp_dir, "cyfr-manifest.json"), "{not json")
-      File.write!(Path.join(comp_dir, "reagent.wasm"), @valid_wasm)
+      Arca.Test.UnitFixtures.lay_unit!(Sanctum.TestContext.local(), segments, [
+        {"cyfr-manifest.json", "{not json"},
+        {"reagent.wasm", @valid_wasm}
+      ])
 
       assert {:error, {:invalid_manifest, _}} = Registry.register_from_arca(ctx, segments)
     end
 
     test "returns error for missing WASM", %{ctx: ctx} do
       segments = ["components", "reagents", "local", "no-wasm", "0.1.0"]
-
-      comp_dir =
-        Arca.Adapters.Local.build_path(
-          Sanctum.Context.actor(Sanctum.TestContext.local()),
-          segments
-        )
-
-      File.mkdir_p!(comp_dir)
-
       manifest = %{"type" => "reagent", "version" => "0.1.0"}
-      File.write!(Path.join(comp_dir, "cyfr-manifest.json"), Jason.encode!(manifest))
+
+      Arca.Test.UnitFixtures.lay_unit!(Sanctum.TestContext.local(), segments, [
+        {"cyfr-manifest.json", Jason.encode!(manifest)}
+      ])
 
       assert {:error, {:missing_wasm, _}} = Registry.register_from_arca(ctx, segments)
     end
@@ -1058,15 +1032,14 @@ defmodule Compendium.RegistryTest do
     test "register_from_arca infers segment metadata under the athanor", %{ctx: ctx} do
       ctx_other = %{ctx | athanor_id: "ath_reg"}
 
-      # Create a component directory under the athanor-scoped path
+      # A component unit under the other athanor
       segments = ["components", "reagents", "local", "other-reg-test", "0.1.0"]
-      comp_dir = Arca.Adapters.Local.build_path(Sanctum.Context.actor(ctx_other), segments)
-
-      File.mkdir_p!(comp_dir)
-
       manifest = %{"type" => "reagent", "version" => "0.1.0", "description" => "Registered"}
-      File.write!(Path.join(comp_dir, "cyfr-manifest.json"), Jason.encode!(manifest))
-      File.write!(Path.join(comp_dir, "reagent.wasm"), @valid_wasm)
+
+      Arca.Test.UnitFixtures.lay_unit!(ctx_other, segments, [
+        {"cyfr-manifest.json", Jason.encode!(manifest)},
+        {"reagent.wasm", @valid_wasm}
+      ])
 
       {:ok, component} = Registry.register_from_arca(ctx_other, segments)
 

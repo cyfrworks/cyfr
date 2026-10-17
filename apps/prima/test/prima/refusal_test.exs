@@ -75,6 +75,7 @@ defmodule Prima.RefusalTest do
     {:stale_writer, :conflict},
     {:stale_revision, :conflict},
     {:missing_unit, :not_found},
+    {:no_unit, :not_found},
     {:invalid_objects, :corrupt},
     {:outcome_unknown, :uncertain},
     {:unavailable, :unavailable},

@@ -108,15 +108,10 @@ defmodule Compendium.Providers.SourceTest do
     :ok = Arca.ensure_roots(Sanctum.Context.actor(ctx))
     segs = String.split(@dir, "/")
 
-    :ok =
-      Arca.put(Sanctum.Context.actor(ctx), segs ++ ["cyfr-manifest.json"], ~s({"name":"widget"}))
-
-    :ok =
-      Arca.put(
-        Sanctum.Context.actor(ctx),
-        segs ++ ["src", "lib.rs"],
-        "fn one() {}\nfn two() {}\nfn three() {}"
-      )
+    Arca.Test.UnitFixtures.lay_unit!(ctx, segs, [
+      {"cyfr-manifest.json", ~s({"name":"widget"})},
+      {"src/lib.rs", "fn one() {}\nfn two() {}\nfn three() {}"}
+    ])
 
     {:ok, ctx: ctx}
   end
@@ -144,7 +139,11 @@ defmodule Compendium.Providers.SourceTest do
   describe "scope" do
     test "another publisher's component is not yours to read or edit", %{ctx: ctx} do
       actor = Sanctum.Context.actor(ctx)
-      :ok = Arca.put(actor, String.split(@pulled, "/") ++ ["src", "lib.rs"], "fn theirs() {}")
+
+      Arca.Test.UnitFixtures.lay_unit!(ctx, String.split(@pulled, "/"), [
+        {"cyfr-manifest.json", ~s({"name":"theirs"})},
+        {"src/lib.rs", "fn theirs() {}"}
+      ])
 
       calls =
         for(path <- ["#{@pulled}/src/lib.rs", @pulled], action <- @actions, do: {action, path}) ++
@@ -546,7 +545,12 @@ defmodule Compendium.Providers.SourceTest do
     test "a pulled component is fork-to-modify at every door", %{ctx: ctx} do
       actor = Sanctum.Context.actor(ctx)
       file = "#{@pulled}/src/lib.rs"
-      :ok = Arca.put(actor, String.split(file, "/"), "fn theirs() {}")
+
+      Arca.Test.UnitFixtures.lay_unit!(ctx, String.split(@pulled, "/"), [
+        {"cyfr-manifest.json", ~s({"name":"theirs"})},
+        {"src/lib.rs", "fn theirs() {}"}
+      ])
+
       fork = Prima.ComponentNamespace.message(:not_local_namespace, "acme")
 
       for action <- @mutations do

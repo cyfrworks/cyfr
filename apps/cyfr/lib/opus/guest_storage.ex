@@ -600,6 +600,11 @@ defmodule Opus.GuestStorage do
 
   defp refused(op, path, :dead), do: dead(Atom.to_string(op), path)
 
+  # Nothing lands inside a component before the component exists: a guest
+  # writes into a unit its verbs made, never lays one by writes.
+  defp refused(_op, _path, :no_unit),
+    do: guest_error(:storage_path_denied, Prima.Refusal.message(:no_unit))
+
   defp refused(:append, path, :precondition_failed) do
     guest_error(
       :storage_conflict,

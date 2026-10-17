@@ -242,8 +242,9 @@ defmodule Arca.FilesTest do
 
     assert msg =~ "fork into local/"
 
-    # The athanor's own unit: written, and deleted whole.
-    assert {:ok, _} =
+    # A component is created by its own verbs, never laid by writes: a
+    # write into one no committed row names is refused, and says so.
+    assert {:error, :no_unit} =
              Files.write(
                actor,
                "components/reagents/local/mine/0.1.0/reagent.wasm",
@@ -251,11 +252,24 @@ defmodule Arca.FilesTest do
                "base64"
              )
 
+    assert Prima.Refusal.message(:no_unit) =~ "scaffold, pull, fork or publish"
+
+    # The athanor's own unit: landed by its commit, written into, and
+    # deleted whole.
+    Arca.Test.UnitFixtures.lay_unit!(
+      Sanctum.TestContext.local(),
+      ["components", "reagents", "local", "mine", "0.1.0"],
+      [
+        {"reagent.wasm", @valid_wasm},
+        {"cyfr-manifest.json", ~s({"type":"reagent","version":"0.1.0"})}
+      ]
+    )
+
     assert {:ok, _} =
              Files.write(
                actor,
                "components/reagents/local/mine/0.1.0/cyfr-manifest.json",
-               ~s({"type":"reagent","version":"0.1.0"})
+               ~s({"type":"reagent","version":"0.1.0","description":"mine"})
              )
 
     assert {:ok, %{entries: [%{name: "mine"}, %{name: "shelf"}]}} =
@@ -388,6 +402,13 @@ defmodule Arca.FilesTest do
   } do
     manifest = "components/reagents/local/mine/0.1.0/cyfr-manifest.json"
     good = ~s({"type":"reagent","version":"0.1.0"})
+
+    Arca.Test.UnitFixtures.lay_unit!(
+      Sanctum.TestContext.local(),
+      ["components", "reagents", "local", "mine", "0.1.0"],
+      [{"cyfr-manifest.json", ~s({"type":"reagent","version":"0.1.0","description":"first"})}]
+    )
+
     assert {:ok, _} = Files.write(actor, manifest, good)
 
     # A block validator's sentence, after the file's name — today's text.

@@ -115,14 +115,11 @@ defmodule Sanctum.Consent.BootstrapSelectionTest do
     mine = ["components", "formulas", "local", "mine", "0.1.0"]
     {:ok, manifest} = Arca.get_json(Sanctum.Context.actor(ctx), shipped ++ ["cyfr-manifest.json"])
     {:ok, wasm} = Arca.get(Sanctum.Context.actor(ctx), shipped ++ ["formula.wasm"])
-    :ok = Arca.put(Sanctum.Context.actor(ctx), mine ++ ["formula.wasm"], wasm)
 
-    :ok =
-      Arca.put_json(Sanctum.Context.actor(ctx), mine ++ ["cyfr-manifest.json"], %{
-        manifest
-        | "name" => "mine",
-          "version" => "0.1.0"
-      })
+    Arca.Test.UnitFixtures.lay_unit!(ctx, mine, [
+      {"formula.wasm", wasm},
+      {"cyfr-manifest.json", Jason.encode!(%{manifest | "name" => "mine", "version" => "0.1.0"})}
+    ])
 
     {:ok, _} = Compendium.Registry.register_from_arca(ctx, mine)
 
@@ -223,16 +220,15 @@ defmodule Sanctum.Consent.BootstrapSelectionTest do
     shipped = ["components", "catalysts", "local", "claude", "9.0.0"]
     {:ok, manifest} = Arca.get_json(Sanctum.Context.actor(ctx), shipped ++ ["cyfr-manifest.json"])
     {:ok, wasm} = Arca.get(Sanctum.Context.actor(ctx), shipped ++ ["catalyst.wasm"])
-    :ok = Arca.put(Sanctum.Context.actor(ctx), own ++ ["catalyst.wasm"], wasm)
 
-    :ok =
-      Arca.put_json(
-        Sanctum.Context.actor(ctx),
-        own ++ ["cyfr-manifest.json"],
-        manifest
-        |> Map.put("version", "9.1.0")
-        |> put_in(["caps", "egress", "methods"], ["GET", "POST", "DELETE", "PUT"])
-      )
+    Arca.Test.UnitFixtures.lay_unit!(ctx, own, [
+      {"catalyst.wasm", wasm},
+      {"cyfr-manifest.json",
+       manifest
+       |> Map.put("version", "9.1.0")
+       |> put_in(["caps", "egress", "methods"], ["GET", "POST", "DELETE", "PUT"])
+       |> Jason.encode!()}
+    ])
 
     {:ok, _} = Compendium.Registry.register_from_arca(ctx, own)
     assert {:ok, %{minted: [], revised: [], skipped: skipped}} = Bootstrap.run(ctx)

@@ -526,6 +526,11 @@ defmodule Arca.Files do
       :storage_unverifiable ->
         {:error, {:unavailable, "Storage usage"}}
 
+      # Nothing lands inside a unit before the unit exists: the refusal
+      # says how a unit is made, and is the vocabulary's own.
+      :no_unit ->
+        {:error, :no_unit}
+
       reason ->
         storage_error("write", path, reason)
     end

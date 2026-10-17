@@ -471,6 +471,15 @@ defmodule Prima.Refusal do
 
   defp row(:missing_unit), do: {:not_found, "This unit was removed while it was being written"}
 
+  # A plain write inside a unit no committed row names: nothing lands
+  # inside a unit before the unit exists, and a component exists by its
+  # own verbs.
+  defp row(:no_unit),
+    do:
+      {:not_found,
+       "Nothing is here to write into yet: a component is created by scaffold, pull, fork " <>
+         "or publish, and a role, the soul or a scroll by writing its own file first"}
+
   defp row(:invalid_objects),
     do:
       {:corrupt, "What was staged for this unit is not what was written — nothing was published"}

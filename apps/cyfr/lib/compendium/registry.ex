@@ -1702,8 +1702,12 @@ defmodule Compendium.Registry do
     case Arca.get(Sanctum.Context.actor(ctx), segments ++ [ComponentPath.manifest_name()]) do
       {:ok, content} ->
         case Jason.decode(content) do
-          {:ok, manifest} ->
+          {:ok, manifest} when is_map(manifest) ->
             {:ok, manifest}
+
+          # Valid JSON that is no object names nothing a manifest names.
+          {:ok, _not_an_object} ->
+            {:error, {:invalid_manifest, "#{ComponentPath.manifest_name()} is not a JSON object"}}
 
           {:error, _} ->
             {:error, {:invalid_manifest, "#{ComponentPath.manifest_name()} is not valid JSON"}}

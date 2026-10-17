@@ -12,13 +12,6 @@ defmodule Emissary.Web.TinctureControllerTest do
   defp digest(name), do: "sha256:" <> Base.encode16(:crypto.hash(:sha256, name), case: :lower)
   defp release_digest(name), do: digest("release:" <> name)
 
-  defp tincture_dir(name) do
-    Arca.Adapters.Local.build_path(
-      Sanctum.Context.actor(Sanctum.TestContext.local()),
-      ["components", "tinctures", "local", name, "1.0.0"]
-    )
-  end
-
   # A version written straight into the registry's storage, past the
   # publish check, with `files` beside its manifest and an active public
   # profile written as a commit would write one.
@@ -38,10 +31,12 @@ defmodule Emissary.Web.TinctureControllerTest do
   # JSON, JSON that is no object, text that is not JSON, or none at all.
   defp stored_version!(name, stored, files) do
     ctx = Sanctum.TestContext.local()
-    dir = tincture_dir(name)
-    File.mkdir_p!(dir)
-    File.write!(Path.join(dir, "cyfr-manifest.json"), stored || "")
-    for {file, bytes} <- files, do: File.write!(Path.join(dir, file), bytes)
+
+    Arca.Test.UnitFixtures.tenant_component!(ctx, "tincture", "local", name, "1.0.0",
+      manifest: stored || "",
+      files: files
+    )
+
     now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
 
     {:ok, _} =
@@ -74,6 +69,20 @@ defmodule Emissary.Web.TinctureControllerTest do
         label: "public",
         status: "active"
       })
+
+    acknowledged!(ctx)
+    :ok
+  end
+
+  # The rows these fixtures write are the registry's as a commit would have
+  # written them: the root's projection is told it holds them, so a read
+  # derives nothing over them from the units the fixtures committed.
+  defp acknowledged!(ctx) do
+    actor = Sanctum.Context.actor(ctx)
+    {:ok, token} = Arca.StorageProjectionChanges.snapshot(actor, "components")
+
+    {:ok, :acknowledged} =
+      Arca.StorageProjectionChanges.replace(actor, "components", token, fn -> :acknowledged end)
 
     :ok
   end
@@ -117,10 +126,6 @@ defmodule Emissary.Web.TinctureControllerTest do
     Application.put_env(:arca, :base_path, base)
 
     # ── Private tincture (auth-dash) ─────────────────────────────────
-    private_dir = tincture_dir("auth-dash")
-
-    File.mkdir_p!(private_dir)
-
     private_manifest = %{
       "name" => "auth-dash",
       "type" => "tincture",
@@ -133,21 +138,22 @@ defmodule Emissary.Web.TinctureControllerTest do
       "schema" => %{"tables" => %{}, "queries" => %{}}
     }
 
-    File.write!(Path.join(private_dir, "cyfr-manifest.json"), Jason.encode!(private_manifest))
-
-    File.write!(
-      Path.join(private_dir, "index.html"),
-      "<html><head></head><body>Auth</body></html>"
-    )
-
-    File.write!(Path.join(private_dir, "app.js"), "// auth app")
-    File.write!(Path.join(private_dir, "data.db"), "secret db")
+    private =
+      Arca.Test.UnitFixtures.tenant_component!(
+        Sanctum.TestContext.local(),
+        "tincture",
+        "local",
+        "auth-dash",
+        "1.0.0",
+        manifest: private_manifest,
+        files: [
+          {"index.html", "<html><head></head><body>Auth</body></html>"},
+          {"app.js", "// auth app"},
+          {"data.db", "secret db"}
+        ]
+      )
 
     # ── Public tincture (pub-dash) ───────────────────────────────────
-    public_dir = tincture_dir("pub-dash")
-
-    File.mkdir_p!(public_dir)
-
     public_manifest = %{
       "name" => "pub-dash",
       "type" => "tincture",
@@ -164,14 +170,19 @@ defmodule Emissary.Web.TinctureControllerTest do
       }
     }
 
-    File.write!(Path.join(public_dir, "cyfr-manifest.json"), Jason.encode!(public_manifest))
-
-    File.write!(
-      Path.join(public_dir, "index.html"),
-      "<html><head></head><body>Public</body></html>"
-    )
-
-    File.write!(Path.join(public_dir, "style.css"), "body { margin: 0; }")
+    public =
+      Arca.Test.UnitFixtures.tenant_component!(
+        Sanctum.TestContext.local(),
+        "tincture",
+        "local",
+        "pub-dash",
+        "1.0.0",
+        manifest: public_manifest,
+        files: [
+          {"index.html", "<html><head></head><body>Public</body></html>"},
+          {"style.css", "body { margin: 0; }"}
+        ]
+      )
 
     # ── Register components ──────────────────────────────────────────
     # The athanor behind the test context must exist as an active row: the
@@ -189,10 +200,10 @@ defmodule Emissary.Web.TinctureControllerTest do
       |> Map.put("name", "nl-dash")
       |> put_in(["tincture", "connect"], ["evil.com\n", "ok.example.com"])
 
-    nl_dir = tincture_dir("nl-dash")
-    File.mkdir_p!(nl_dir)
-    File.write!(Path.join(nl_dir, "cyfr-manifest.json"), Jason.encode!(nl_manifest))
-    File.write!(Path.join(nl_dir, "index.html"), "<html><head></head><body>NL</body></html>")
+    Arca.Test.UnitFixtures.tenant_component!(ctx, "tincture", "local", "nl-dash", "1.0.0",
+      manifest: nl_manifest,
+      files: [{"index.html", "<html><head></head><body>NL</body></html>"}]
+    )
 
     # A built tincture: its entry and assets live in the build's dist/.
     built_manifest =
@@ -201,21 +212,15 @@ defmodule Emissary.Web.TinctureControllerTest do
       |> put_in(["tincture", "entry"], "dist/index.html")
       |> put_in(["tincture", "build"], %{"tool" => "vite"})
 
-    built_dir = tincture_dir("built-dash")
-    File.mkdir_p!(Path.join([built_dir, "dist", "assets"]))
-    File.write!(Path.join(built_dir, "cyfr-manifest.json"), Jason.encode!(built_manifest))
-
-    File.write!(
-      Path.join(built_dir, "index.html"),
-      "<html><head></head><body>Source</body></html>"
+    Arca.Test.UnitFixtures.tenant_component!(ctx, "tincture", "local", "built-dash", "1.0.0",
+      manifest: built_manifest,
+      files: [
+        {"index.html", "<html><head></head><body>Source</body></html>"},
+        {"dist/index.html",
+         ~s(<html><head></head><body>Built<script src="./assets/app.js"></script></body></html>)},
+        {"dist/assets/app.js", "// built"}
+      ]
     )
-
-    File.write!(
-      Path.join([built_dir, "dist", "index.html"]),
-      ~s(<html><head></head><body>Built<script src="./assets/app.js"></script></body></html>)
-    )
-
-    File.write!(Path.join([built_dir, "dist", "assets", "app.js"]), "// built")
 
     for {name, manifest} <- [
           {"auth-dash", private_manifest},
@@ -250,11 +255,10 @@ defmodule Emissary.Web.TinctureControllerTest do
     # Dedicated fixture for the fail-closed test: its policy carries a rate
     # limit from the start, so no mid-test policy swap / cache invalidation
     # is needed (which proved environment-sensitive in CI).
-    rl_dir = tincture_dir("rl-dash")
-
-    File.mkdir_p!(rl_dir)
-    File.write!(Path.join(rl_dir, "cyfr-manifest.json"), Jason.encode!(rl_manifest))
-    File.write!(Path.join(rl_dir, "index.html"), "<html><head></head><body>RL</body></html>")
+    Arca.Test.UnitFixtures.tenant_component!(ctx, "tincture", "local", "rl-dash", "1.0.0",
+      manifest: rl_manifest,
+      files: [{"index.html", "<html><head></head><body>RL</body></html>"}]
+    )
 
     # Public-ness is a published profile now, not a policy bit. Both
     # public fixtures get an active public profile; the pre-dispatch
@@ -272,6 +276,8 @@ defmodule Emissary.Web.TinctureControllerTest do
         })
     end
 
+    acknowledged!(ctx)
+
     on_exit(fn ->
       if original do
         Application.put_env(:arca, :base_path, original)
@@ -282,7 +288,7 @@ defmodule Emissary.Web.TinctureControllerTest do
       File.rm_rf!(base)
     end)
 
-    %{private_dir: private_dir, public_dir: public_dir}
+    %{private: private, public: public}
   end
 
   # ── A private tincture at its address: served to nobody ─────────
@@ -400,13 +406,18 @@ defmodule Emissary.Web.TinctureControllerTest do
     end
 
     test "a second HTML page gets the tincture's CSP, not the asset lockdown",
-         %{conn: conn, public_dir: public_dir} do
+         %{conn: conn, public: public} do
       # A multi-page tincture links from its entry to another page. That page
       # is served by the ASSET route, whose pipeline sets
       # `default-src 'none'; frame-ancestors 'none'` — right for a script,
       # fatal for a document: nothing on the page could load and the iframe
       # could not frame it.
-      File.write!(Path.join(public_dir, "page2.html"), "<html><body>Two</body></html>")
+      Arca.Test.UnitFixtures.unit_write!(
+        Sanctum.TestContext.local(),
+        public,
+        "page2.html",
+        "<html><body>Two</body></html>"
+      )
 
       conn = get(conn, "/t/test/local/pub-dash/page2.html")
 

@@ -54,6 +54,18 @@ defmodule Arca.Storage.UnitLocator do
               | {:file, unit :: Arca.Storage.path()}
               | {:dir, unit :: Arca.Storage.path(), sentinel :: String.t()}
 
+  @doc """
+  Whether a plain write at the unit's completion object — a file unit's
+  file, a directory unit's sentinel — creates the unit when no committed
+  row names it: the write is then the unit's one-object commit
+  (`Arca.Overlay`). A grammar whose units are made by their own verbs
+  answers false, and a plain write into such a unit is refused until
+  the unit exists. False when the locator does not say.
+  """
+  @callback creates_by_write?(unit :: Arca.Storage.path()) :: boolean()
+
+  @optional_callbacks creates_by_write?: 1
+
   defmodule NotInstalledError do
     @moduledoc """
     Raised by `Arca.Storage.UnitLocator.impl!/0` when nothing has installed
@@ -268,4 +280,18 @@ defmodule Arca.Storage.UnitLocator do
   @spec staging?(Arca.Storage.path()) :: boolean()
   def staging?([root, @staging | _rest]), do: root in Arca.Storage.overlay_roots()
   def staging?(_path), do: false
+
+  @doc """
+  Whether a plain write at the unit's completion object creates the
+  unit, as the root's locator answers (`c:creates_by_write?/1`); false
+  for a locator that does not say.
+  """
+  @spec creates_by_write?(Arca.Storage.path()) :: boolean()
+  def creates_by_write?([root | _] = unit) when is_binary(root) do
+    locator = Map.fetch!(impl!(), root)
+
+    if Code.ensure_loaded?(locator) and function_exported?(locator, :creates_by_write?, 1),
+      do: locator.creates_by_write?(unit),
+      else: false
+  end
 end

@@ -123,7 +123,8 @@ defmodule Arca.CopyTreeTest do
   } do
     # The overlay-materialization contract on an object-store deployment:
     # the bundle is read from local disk and only the copies reach the
-    # adapter.
+    # adapter — staged under the unit's revision prefix by the pull's
+    # commit, and read at the unit's own paths through the row.
     version_dir = Path.join([bundle, "catalysts", "local", "x", "1.0.0"])
     File.mkdir_p!(version_dir)
     File.write!(Path.join(version_dir, "cyfr-manifest.json"), "{}")
@@ -146,13 +147,26 @@ defmodule Arca.CopyTreeTest do
         scope: :athanor
     }
 
-    src = Arca.Storage.seed_prefix("components") ++ ["catalysts", "local"]
-    dest = ["components", "catalysts", "local"]
+    unit = ["components", "catalysts", "local", "x", "1.0.0"]
+    assert :ok = Arca.Overlay.pull_shipped(internal, unit)
 
-    assert {:ok, _} = Arca.copy_tree(internal, src, dest)
+    dest_leaf = unit ++ ["cyfr-manifest.json"]
+    staging = Arca.Storage.UnitLocator.staging_prefix(unit)
+    puts = recorded_puts()
 
-    dest_leaf = dest ++ ["x", "1.0.0", "cyfr-manifest.json"]
-    assert_received {:adapter_put, ^dest_leaf}
+    assert Enum.any?(puts, fn key ->
+             List.starts_with?(key, staging) and List.last(key) == "cyfr-manifest.json"
+           end)
+
+    refute dest_leaf in puts
     assert {:ok, "{}"} = Arca.get(internal, dest_leaf)
+  end
+
+  defp recorded_puts(acc \\ []) do
+    receive do
+      {:adapter_put, key} -> recorded_puts([key | acc])
+    after
+      0 -> Enum.reverse(acc)
+    end
   end
 end

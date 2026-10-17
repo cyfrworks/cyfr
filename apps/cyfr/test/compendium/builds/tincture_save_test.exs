@@ -41,19 +41,15 @@ defmodule Compendium.Builds.TinctureSaveTest do
     :ok = Arca.ensure_roots(Sanctum.Context.actor(ctx))
 
     # The unit as an author leaves it: source, the manifest, and the
-    # tincture's own data beside them.
-    :ok = Arca.put(Sanctum.Context.actor(ctx), @base ++ ["cyfr-manifest.json"], @manifest)
-    :ok = Arca.put(Sanctum.Context.actor(ctx), @base ++ ["package.json"], ~s({"name":"saver"}))
-
-    :ok =
-      Arca.put(Sanctum.Context.actor(ctx), @base ++ ["package-lock.json"], ~s({"name":"saver"}))
-
-    :ok = Arca.put(Sanctum.Context.actor(ctx), @base ++ ["index.html"], "<html>source</html>")
-
-    :ok =
-      Arca.put(Sanctum.Context.actor(ctx), @base ++ ["src", "main.tsx"], "console.log('source')")
-
-    :ok = Arca.put(Sanctum.Context.actor(ctx), @base ++ ["data.db"], "rows")
+    # tincture's own data beside them, one commit.
+    Arca.Test.UnitFixtures.lay_unit!(ctx, @base, [
+      {"cyfr-manifest.json", @manifest},
+      {"package.json", ~s({"name":"saver"})},
+      {"package-lock.json", ~s({"name":"saver"})},
+      {"index.html", "<html>source</html>"},
+      {"src/main.tsx", "console.log('source')"},
+      {"data.db", "rows"}
+    ])
 
     {:ok, ctx: ctx}
   end

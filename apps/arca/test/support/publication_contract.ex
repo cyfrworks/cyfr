@@ -1015,12 +1015,17 @@ defmodule Arca.PublicationContract do
                "under its staging is no unit to any reader",
              %{actor: actor, unit: unit} do
           # A plain write into a unit that has no committed revision has
-          # nothing to edit.
-          assert {:error, :not_found} = Arca.put(actor, unit ++ ["a.txt"], "hand-laid")
-          assert {:error, :not_found} = Arca.append(actor, unit ++ ["a.txt"], "hand-laid")
+          # nothing to land in: a component is made by its own verbs, its
+          # sentinel included.
+          assert {:error, :no_unit} = Arca.put(actor, unit ++ ["a.txt"], "hand-laid")
+          assert {:error, :no_unit} = Arca.append(actor, unit ++ ["a.txt"], "hand-laid")
+          assert {:error, :no_unit} = Arca.put(actor, unit ++ [@sentinel], "hand-laid")
 
-          assert {:error, :not_found} =
+          assert {:error, :no_unit} =
                    Arca.put_if_none_match(actor, unit ++ ["a.txt"], "hand-laid")
+
+          assert {:error, :no_unit} =
+                   Arca.replace_tree(actor, unit ++ ["sub"], [{["c.txt"], "c"}], cap: :exempt)
 
           # A complete object set laid under the unit's staging, naming a
           # revision no row names, is at most the collector's.
@@ -1049,6 +1054,36 @@ defmodule Arca.PublicationContract do
           assert {_revision, served} = read(actor, unit)
           assert served == whole("one")
           assert Enum.sort(staged(actor, unit)) == Enum.sort([@sentinel, "a.txt", "b.txt"])
+        end
+
+        test "a role is created by writing its own file, which is its one commit; a scroll by " <>
+               "its SKILL.md, and nothing lands inside it before that",
+             %{actor: actor} do
+          n = System.unique_integer([:positive])
+          role = ["aqua", "roles", "made-#{n}.md"]
+          {root, key} = UnitLocator.unit_key(role)
+
+          assert :ok = Arca.put(actor, role, "# made")
+
+          assert {:ok, %{state: "committed", current_revision: revision, draft_writer_token: nil}} =
+                   StorageUnits.current(actor, root, key)
+
+          assert [%{prior_revision: nil, new_revision: ^revision}] = journal(actor, role)
+          assert {:ok, "# made"} = Arca.get(actor, role)
+          assert Arca.Overlay.unit_status(actor, role) == {:ok, :own}
+
+          # The next write is an edit of the committed revision, not a commit.
+          assert :ok = Arca.put(actor, role, "# edited")
+          assert {:ok, "# edited"} = Arca.get(actor, role)
+          assert [_the_one_commit] = journal(actor, role)
+
+          scroll = ["aqua", "skills", "made-#{n}"]
+          assert {:error, :no_unit} = Arca.put(actor, scroll ++ ["reference.md"], "body")
+          assert :ok = Arca.put(actor, scroll ++ ["SKILL.md"], "# scroll")
+          assert :ok = Arca.put(actor, scroll ++ ["reference.md"], "body")
+          assert {:ok, "body"} = Arca.get(actor, scroll ++ ["reference.md"])
+          assert [_one_commit] = journal(actor, scroll)
+          assert {:ok, :deleted} = Arca.Overlay.drop_unit(actor, scroll)
         end
 
         test "a subtree replacement needs a committed unit", %{actor: actor, unit: unit} do

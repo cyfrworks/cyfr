@@ -94,8 +94,8 @@ defmodule Compendium.AquaTemplateTest do
     assert Enum.map(agents, & &1.name) == ["aqua", "scribe"]
     assert {:ok, %{prompt: "soul prompt v1"}} = AquaAgent.get(ctx, "aqua")
 
-    # Real bytes of the athanor's own.
-    assert {:ok, %{files: 2}} = Arca.usage(Sanctum.Context.actor(ctx), ["aqua"])
+    # Real units of the athanor's own: the soul and the role.
+    assert {:ok, [_, _]} = Arca.list_recursive(Sanctum.Context.actor(ctx), ["aqua"])
   end
 
   test "a release's change to the seed is not pushed; a reset brings it in", %{
@@ -244,7 +244,7 @@ defmodule Compendium.AquaTemplateTest do
 
     assert {:ok, %{prompt: "scribe prompt v1"}} = AquaAgent.get(ctx, "scribe")
     assert {:error, :not_found} = AquaAgent.get(ctx, "mine")
-    assert {:ok, %{files: 2}} = Arca.usage(Sanctum.Context.actor(ctx), ["aqua"])
+    assert {:ok, [_, _]} = Arca.list_recursive(Sanctum.Context.actor(ctx), ["aqua"])
   end
 
   test "reset refuses before changing anything when the install ships no template", %{
