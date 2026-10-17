@@ -23,40 +23,117 @@ defmodule Prima.Cidr do
 
   import Bitwise
 
-  # Instance-metadata endpoints outside the link-local ranges: Alibaba
-  # Cloud, Oracle Cloud, and AWS's IPv6 endpoint.
-  @metadata_addresses [
-    {100, 100, 100, 200},
-    {192, 0, 0, 192},
-    {0xFD00, 0x0EC2, 0, 0, 0, 0, 0, 0x0254}
+  # The address table. An address is a metadata address exactly when it
+  # falls in a metadata row, or is an IPv6 address embedding (@embeddings)
+  # an IPv4 address that falls in one, and a private address likewise with
+  # the private rows. The island egress guards hold the same table:
+  # `address_table/0` expands it, and `mix cyfr.gen.guard_table` writes it
+  # into apps/locus/keeper/guard/cyfr-guard.sh.
+  @metadata_rows [
+    # link-local, where the clouds' IPv4 metadata services sit
+    "169.254.0.0/16",
+    # instance-metadata endpoints outside it: Alibaba Cloud, Oracle Cloud
+    "100.100.100.200/32",
+    "192.0.0.192/32",
+    # IPv6 link-local, and AWS's IPv6 endpoint
+    "fe80::/10",
+    "fd00:ec2::254/128"
   ]
 
-  # Private/reserved IPv4 ranges (CIDR notation as {base, mask} tuples)
-  @private_ranges [
-    # 127.0.0.0/8 - loopback
-    {bsl(127, 24), 0xFF000000},
-    # 10.0.0.0/8 - private class A
-    {bsl(10, 24), 0xFF000000},
-    # 172.16.0.0/12 - private class B
-    {bsl(172, 24) + bsl(16, 16), 0xFFF00000},
-    # 192.168.0.0/16 - private class C
-    {bsl(192, 24) + bsl(168, 16), 0xFFFF0000},
-    # 169.254.0.0/16 - link-local / cloud metadata
-    {bsl(169, 24) + bsl(254, 16), 0xFFFF0000},
-    # 0.0.0.0/8 - current network
-    {0, 0xFF000000},
-    # 100.64.0.0/10 - CGNAT (RFC 6598); internal service ranges on several
-    # clouds and overlay networks
-    {bsl(100, 24) + bsl(64, 16), 0xFFC00000},
-    # 192.0.0.0/24 - IETF protocol assignments (RFC 6890)
-    {bsl(192, 24), 0xFFFFFF00},
-    # 198.18.0.0/15 - benchmarking (RFC 2544)
-    {bsl(198, 24) + bsl(18, 16), 0xFFFE0000},
-    # 224.0.0.0/4 - multicast
-    {bsl(224, 24), 0xF0000000},
-    # 240.0.0.0/4 - reserved, includes 255.255.255.255 broadcast
-    {bsl(240, 24), 0xF0000000}
+  @private_rows [
+    # loopback
+    "127.0.0.0/8",
+    # RFC 1918
+    "10.0.0.0/8",
+    "172.16.0.0/12",
+    "192.168.0.0/16",
+    # link-local
+    "169.254.0.0/16",
+    # current network
+    "0.0.0.0/8",
+    # CGNAT (RFC 6598): internal service ranges on several clouds and
+    # overlay networks
+    "100.64.0.0/10",
+    # IETF protocol assignments (RFC 6890)
+    "192.0.0.0/24",
+    # benchmarking (RFC 2544)
+    "198.18.0.0/15",
+    # multicast
+    "224.0.0.0/4",
+    # reserved, 255.255.255.255 broadcast among them
+    "240.0.0.0/4",
+    # IPv6 loopback and unspecified
+    "::1/128",
+    "::/128",
+    # unique local
+    "fc00::/7",
+    # link-local
+    "fe80::/10",
+    # local-use IPv4/IPv6 translation (RFC 8215)
+    "64:ff9b:1::/48",
+    # multicast
+    "ff00::/8"
   ]
+
+  # The standard embeddings of an IPv4 address in an IPv6 one: the bits
+  # an embedding fixes (a CIDR, or a value and its mask), the bit
+  # offset of each octet of the IPv4 address from the least significant
+  # bit, most significant octet first, and whether the octets are inverted.
+  @embeddings [
+    # IPv4-compatible ::/96 and IPv4-mapped ::ffff:0:0/96 (RFC 4291),
+    # IPv4-translated ::ffff:0:0:0/96 (RFC 2765), NAT64 64:ff9b::/96
+    # (RFC 6052): the low 32 bits
+    {"::/96", [24, 16, 8, 0], false},
+    {"::ffff:0:0/96", [24, 16, 8, 0], false},
+    {"::ffff:0:0:0/96", [24, 16, 8, 0], false},
+    {"64:ff9b::/96", [24, 16, 8, 0], false},
+    # local-use NAT64 64:ff9b:1::/48 (RFC 8215): the address does not carry
+    # its translator's prefix length, so each RFC 6052 placement a prefix
+    # within the /48 can use, /48, /56, /64 and /96, skipping bits 64 to 71
+    {"64:ff9b:1::/48", [72, 64, 48, 40], false},
+    {"64:ff9b:1::/48", [64, 48, 40, 32], false},
+    {"64:ff9b:1::/48", [48, 40, 32, 24], false},
+    {"64:ff9b:1::/48", [24, 16, 8, 0], false},
+    # 6to4 2002::/16 (RFC 3056): bits 16 to 47
+    {"2002::/16", [104, 96, 88, 80], false},
+    # Teredo 2001::/32 (RFC 4380): the server in bits 32 to 63 and the
+    # client, inverted, in the low 32 bits
+    {"2001::/32", [88, 80, 72, 64], false},
+    {"2001::/32", [24, 16, 8, 0], true},
+    # ISATAP (RFC 5214): an interface identifier 0:5efe or 200:5efe
+    # followed by the IPv4 address, under any prefix
+    {{"::5efe:0:0", "::ffff:ffff:0:0"}, [24, 16, 8, 0], false},
+    {{"::200:5efe:0:0", "::ffff:ffff:0:0"}, [24, 16, 8, 0], false}
+  ]
+
+  # Each row and each embedding's fixed bits as {width, value, mask}
+  # integers, parsed once here.
+  to_integer = fn text ->
+    {:ok, ip} = :inet.parse_address(String.to_charlist(text))
+    {width, base} = if tuple_size(ip) == 4, do: {32, 256}, else: {128, 65_536}
+    {width, ip |> Tuple.to_list() |> Enum.reduce(0, &(&2 * base + &1))}
+  end
+
+  row_bits = fn
+    {value, mask} ->
+      {width, v} = to_integer.(value)
+      {^width, m} = to_integer.(mask)
+      if band(v, m) != v, do: raise(ArgumentError, "#{value} sets bits outside #{mask}")
+      {width, v, m}
+
+    cidr ->
+      [address, length] = String.split(cidr, "/")
+      {width, v} = to_integer.(address)
+      length = String.to_integer(length)
+      m = bsl(bsl(1, length) - 1, width - length)
+      if band(v, m) != v, do: raise(ArgumentError, "#{cidr} sets bits outside its prefix")
+      {width, v, m}
+  end
+
+  @metadata_bits Enum.map(@metadata_rows, row_bits)
+  @private_bits Enum.map(@private_rows, row_bits)
+  @embedding_bits for {fixed, octets, inverted} <- @embeddings,
+                      do: {row_bits.(fixed), octets, inverted}
 
   @doc "Parse an IP string to an `:inet` address tuple."
   @spec parse_ip(String.t()) :: {:ok, :inet.ip_address()} | :error
@@ -157,7 +234,8 @@ defmodule Prima.Cidr do
   def ip_in_network?(_, _, _), do: false
 
   @doc """
-  The IPv4 addresses an IPv6 address carries under a standard embedding:
+  The IPv4 addresses an IPv6 address carries, one for each standard
+  embedding it matches, in this order:
 
     * IPv4-compatible `::/96` and IPv4-mapped `::ffff:0:0/96` (RFC 4291),
       IPv4-translated `::ffff:0:0:0/96` (RFC 2765) and NAT64 `64:ff9b::/96`
@@ -170,32 +248,24 @@ defmodule Prima.Cidr do
     * Teredo `2001::/32` (RFC 4380) — the server in bits 32 to 63 and the
       client, inverted, in the low 32 bits;
     * ISATAP (RFC 5214) — an interface identifier `0:5efe` or `200:5efe`
-      followed by the IPv4 address, under any prefix.
+      followed by the IPv4 address, under any prefix, the other prefixes
+      above included.
 
   Any other address, IPv4 included, carries none.
   """
   @spec embedded_ipv4(:inet.ip_address()) :: [:inet.ip4_address()]
-  def embedded_ipv4({0, 0, 0, 0, 0, 0, hi, lo}), do: [v4(hi, lo)]
-  def embedded_ipv4({0, 0, 0, 0, 0, 0xFFFF, hi, lo}), do: [v4(hi, lo)]
-  def embedded_ipv4({0, 0, 0, 0, 0xFFFF, 0, hi, lo}), do: [v4(hi, lo)]
-  def embedded_ipv4({0x64, 0xFF9B, 0, 0, 0, 0, hi, lo}), do: [v4(hi, lo)]
+  def embedded_ipv4({_, _, _, _, _, _, _, _} = ip) do
+    bits = ip_to_integer(ip)
 
-  def embedded_ipv4({0x64, 0xFF9B, 1, h3, h4, h5, h6, h7}) do
-    [
-      {bsr(h3, 8), band(h3, 0xFF), band(h4, 0xFF), bsr(h5, 8)},
-      {band(h3, 0xFF), band(h4, 0xFF), bsr(h5, 8), band(h5, 0xFF)},
-      {band(h4, 0xFF), bsr(h5, 8), band(h5, 0xFF), bsr(h6, 8)},
-      v4(h6, h7)
-    ]
+    for {{128, value, mask}, octets, inverted} <- @embedding_bits, band(bits, mask) == value do
+      octets
+      |> Enum.map(fn offset ->
+        octet = bits |> bsr(offset) |> band(0xFF)
+        if inverted, do: bxor(octet, 0xFF), else: octet
+      end)
+      |> List.to_tuple()
+    end
   end
-
-  def embedded_ipv4({0x2002, hi, lo, _, _, _, _, _}), do: [v4(hi, lo)]
-
-  def embedded_ipv4({0x2001, 0, s_hi, s_lo, _, _, c_hi, c_lo}),
-    do: [v4(s_hi, s_lo), v4(bxor(c_hi, 0xFFFF), bxor(c_lo, 0xFFFF))]
-
-  def embedded_ipv4({_, _, _, _, isatap, 0x5EFE, hi, lo}) when isatap in [0, 0x200],
-    do: [v4(hi, lo)]
 
   def embedded_ipv4(_ip), do: []
 
@@ -207,50 +277,104 @@ defmodule Prima.Cidr do
   addresses (`embedded_ipv4/1`).
   """
   @spec metadata?(:inet.ip_address()) :: boolean()
-  def metadata?(ip) when ip in @metadata_addresses, do: true
-  def metadata?({169, 254, _, _}), do: true
-  def metadata?({_, _, _, _}), do: false
-  def metadata?({w1, _, _, _, _, _, _, _}) when w1 >= 0xFE80 and w1 <= 0xFEBF, do: true
-
-  def metadata?({_, _, _, _, _, _, _, _} = ip),
-    do: Enum.any?(embedded_ipv4(ip), &metadata?/1)
-
+  def metadata?(ip) when tuple_size(ip) in [4, 8], do: in_class?(ip, @metadata_bits)
   def metadata?(_), do: false
 
   @doc """
-  Check if an IP tuple is in a private/reserved range.
+  True for an address in a private or reserved range: IPv4 loopback,
+  RFC 1918, link-local, `0.0.0.0/8`, CGNAT `100.64.0.0/10`, `192.0.0.0/24`,
+  `198.18.0.0/15`, multicast and `240.0.0.0/4`; IPv6 `::1`, `::`,
+  `fc00::/7`, `fe80::/10`, `64:ff9b:1::/48` and multicast `ff00::/8`; and
+  any IPv6 address embedding a private IPv4 address (`embedded_ipv4/1`).
   """
   @spec private_ip?(:inet.ip4_address() | :inet.ip6_address()) :: boolean()
-  def private_ip?({a, b, c, d}) do
-    ip_int = bsl(a, 24) + bsl(b, 16) + bsl(c, 8) + d
+  def private_ip?(ip) when tuple_size(ip) in [4, 8], do: in_class?(ip, @private_bits)
 
-    Enum.any?(@private_ranges, fn {base, mask} ->
-      band(ip_int, mask) == base
-    end)
+  @doc """
+  The address table both egress policies hold, by class: every range
+  `metadata?/1` answers true in, and every range `private_ip?/1` answers
+  true in, IPv4 rows first. The IPv6 rows include each embedding of each
+  IPv4 row of the class (`embedded_ipv4/1`); a row another row of its class
+  contains is left out. A row is `address/length`, or `address/mask` where
+  the embedding's bits leave the mask discontiguous, as `iptables` and
+  `ip6tables` take them: an address is in a class exactly when it falls in
+  one of the class's rows. The island egress guards install this table
+  (`mix cyfr.gen.guard_table`).
+  """
+  @spec address_table() :: %{metadata: [String.t()], private: [String.t()]}
+  def address_table do
+    %{metadata: class_table(@metadata_bits), private: class_table(@private_bits)}
   end
-
-  # IPv6 loopback ::1
-  def private_ip?({0, 0, 0, 0, 0, 0, 0, 1}), do: true
-
-  # IPv6 unspecified ::
-  def private_ip?({0, 0, 0, 0, 0, 0, 0, 0}), do: true
-
-  # IPv6 unique local fc00::/7
-  def private_ip?({w1, _, _, _, _, _, _, _}) when w1 >= 0xFC00 and w1 <= 0xFDFF, do: true
-
-  # IPv6 link-local fe80::/10
-  def private_ip?({w1, _, _, _, _, _, _, _}) when w1 >= 0xFE80 and w1 <= 0xFEBF, do: true
-
-  # Local-use IPv4/IPv6 translation space 64:ff9b:1::/48 (RFC 8215)
-  def private_ip?({0x64, 0xFF9B, 1, _, _, _, _, _}), do: true
-
-  # Any other IPv6 address is private when an IPv4 address it embeds is.
-  def private_ip?({_, _, _, _, _, _, _, _} = ip),
-    do: Enum.any?(embedded_ipv4(ip), &private_ip?/1)
 
   # ============================================================================
   # Internal
   # ============================================================================
+
+  defp in_class?(ip, rows),
+    do: in_rows?(ip, rows) or Enum.any?(embedded_ipv4(ip), &in_rows?(&1, rows))
+
+  defp in_rows?(ip, rows) do
+    width = if tuple_size(ip) == 4, do: 32, else: 128
+    bits = ip_to_integer(ip)
+    Enum.any?(rows, fn {w, value, mask} -> w == width and band(bits, mask) == value end)
+  end
+
+  defp class_table(rows) do
+    embedded =
+      for {{128, e_value, e_mask}, octets, inverted} <- @embedding_bits,
+          {32, value, mask} <- rows do
+        {128, bor(e_value, place(value, octets, inverted, mask)),
+         bor(e_mask, place(mask, octets, false, mask))}
+      end
+
+    all = Enum.uniq(rows ++ embedded)
+
+    all
+    |> Enum.reject(fn row -> Enum.any?(all, &(&1 != row and contains?(&1, row))) end)
+    |> Enum.sort_by(fn {width, _, _} -> width end)
+    |> Enum.map(&format_row/1)
+  end
+
+  # The IPv4 bits `ipv4` (32 bits, its octets most significant first)
+  # placed at the embedding's octet offsets, inverted where the embedding
+  # inverts them, within the bits `mask` fixes.
+  defp place(ipv4, octets, inverted, mask) do
+    octets
+    |> Enum.with_index()
+    |> Enum.reduce(0, fn {offset, index}, acc ->
+      shift = 24 - 8 * index
+      octet = ipv4 |> bsr(shift) |> band(0xFF)
+      fixed = mask |> bsr(shift) |> band(0xFF)
+      octet = if inverted, do: band(bxor(octet, 0xFF), fixed), else: octet
+      bor(acc, bsl(octet, offset))
+    end)
+  end
+
+  defp contains?({width, outer_value, outer_mask}, {width, value, mask}),
+    do: band(mask, outer_mask) == outer_mask and band(value, outer_mask) == outer_value
+
+  defp contains?(_outer, _row), do: false
+
+  defp format_row({width, value, mask}) do
+    length = popcount(mask)
+
+    if mask == bsl(bsl(1, length) - 1, width - length) do
+      "#{address(width, value)}/#{length}"
+    else
+      "#{address(width, value)}/#{address(width, mask)}"
+    end
+  end
+
+  defp address(32, bits), do: bits |> integer_to_ip(4, 8) |> :inet.ntoa() |> to_string()
+  defp address(128, bits), do: bits |> integer_to_ip(8, 16) |> :inet.ntoa() |> to_string()
+
+  defp integer_to_ip(bits, parts, size),
+    do:
+      for(i <- (parts - 1)..0//-1, do: bits |> bsr(i * size) |> band(bsl(1, size) - 1))
+      |> List.to_tuple()
+
+  defp popcount(0), do: 0
+  defp popcount(bits), do: band(bits, 1) + popcount(bsr(bits, 1))
 
   defp coerce_ip(ip) when is_tuple(ip), do: {:ok, ip}
   defp coerce_ip(ip) when is_binary(ip), do: parse_ip(ip)

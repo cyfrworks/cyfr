@@ -29,10 +29,12 @@
   rules: its connections to cyfr's name on the builds network and to
   cyfr's fixed endpoint address (a stand-in answers both to a container
   outside the guard), to the metadata and link-local addresses of both
-  families, to another private address and to the island's own loopback
-  are refused at once, each counted on the guard's own rule; the resolver
-  and the public registry are reached (the registry step is skipped, with
-  its reason, under CYFR_TEST_OFFLINE=1).
+  families, to other private addresses (RFC 1918, CGNAT, benchmarking, a
+  NAT64 form of a private address) and to the island's own loopback are
+  refused at once, and its datagrams to an IPv4 and an IPv6 multicast
+  group are refused as they are sent, each counted on the guard's own
+  rule; the resolver and the public registry are reached (the registry
+  step is skipped, with its reason, under CYFR_TEST_OFFLINE=1).
 - A build's listener on the shared loopback is reached by the container's
   root and refused to a concurrent build of another uid, on the loopback,
   on `::1` and on the island's own address.
@@ -161,17 +163,19 @@ impl Guest for Daemon {
 
 # A build's connection probe: cyfr's name on the builds network and
 # cyfr's fixed endpoint address (the stand-in answers both), the metadata
-# and link-local addresses of both families, a private address, Docker's
-# resolver, the island's own loopback and, unless the host is offline, the
-# public registry. The resolver is also asked for cyfr's name, as a build
-# asks for a registry's.
+# and link-local addresses of both families, private addresses of each
+# kind, Docker's resolver, the island's own loopback and, unless the host
+# is offline, the public registry; and its datagram probe of a multicast
+# group of each family. The resolver is also asked for cyfr's name, as a
+# build asks for a registry's.
 EGRESS = r"""
 set -u
 mkdir -p dist
 getent hosts cyfr > dist/cyfr.txt 2>&1; echo "status=$?" >> dist/cyfr.txt
 node probe.js targets "cyfr:4000" "@STAND_IN_V4@:4000" "[@STAND_IN_V6@]:4000" "@ENDPOINT@:4000" "169.254.169.254:80" \
-  "100.100.100.200:80" "[fd00:ec2::254]:80" "[fe80::1%eth0]:80" "10.1.2.3:80" "127.0.0.11:53" "127.0.0.1:1" \
-  @REGISTRY@ > dist/egress.txt 2>&1
+  "100.100.100.200:80" "192.0.0.192:80" "[fd00:ec2::254]:80" "[fe80::1%eth0]:80" "10.1.2.3:80" "100.64.0.1:80" \
+  "198.18.0.1:80" "[64:ff9b::a01:203]:80" "127.0.0.11:53" "127.0.0.1:1" @REGISTRY@ > dist/egress.txt 2>&1
+node dgram.js targets "224.0.0.1:9" "[ff0e::1]:9" > dist/dgram.txt 2>&1
 if [ -n "@REGISTRY@" ]; then
   curl -sS -o /dev/null -w '%{http_code}' --max-time 20 https://registry.npmjs.org/ > dist/registry.txt 2>&1
 fi
@@ -195,6 +199,31 @@ mkdir -p dist
 id -u > dist/uid.txt
 node probe.js targets "127.0.0.1:@PORT@" "[::1]:@PORT@" "@OWN@:@PORT@" > dist/sibling.txt 2>&1
 """.replace("@PORT@", str(SIBLING_PORT))
+
+
+# A probe of one datagram per target, run by node under a spawn's uid: for
+# each `host:port` after the argument `targets` (an IPv6 host in
+# brackets), the code the send answers with, or `sent`. A TCP connect to a
+# multicast group is refused by the kernel before any rule sees it, so a
+# group is probed with a datagram; the guard's rule drops it, which the
+# send answers EPERM, since no ICMP error answers a multicast destination.
+DGRAM_PROBE = r"""
+const dgram = require("dgram");
+(async () => {
+  const lines = [];
+  for (const target of process.argv.slice(process.argv.indexOf("targets") + 1)) {
+    const at = target.lastIndexOf(":");
+    const host = target.slice(0, at).replace(/^\[|\]$/g, "");
+    const code = await new Promise((resolve) => {
+      const socket = dgram.createSocket(host.includes(":") ? "udp6" : "udp4");
+      socket.on("error", (error) => { socket.close(); resolve(error.code || String(error)); });
+      socket.send("probe", Number(target.slice(at + 1)), host, (error) => { socket.close(); resolve(error ? error.code || String(error) : "sent"); });
+    });
+    lines.push(`${target}=${code}`);
+  }
+  console.log(lines.join("\n"));
+})();
+"""
 
 
 def pool_user(uid):
@@ -378,20 +407,29 @@ def test_egress(stack):
     before = stack.guard_counters()
     script = (EGRESS.replace("@ENDPOINT@", ENDPOINT_ADDRESS).replace("@REGISTRY@", registry)
               .replace("@STAND_IN_V4@", stand_in_v4).replace("@STAND_IN_V6@", stand_in_v6))
-    status, answer = stack.build(tincture(script, {"probe.js": CONNECT_PROBE}), "javascript", "tincture")
+    status, answer = stack.build(tincture(script, {"probe.js": CONNECT_PROBE, "dgram.js": DGRAM_PROBE}), "javascript", "tincture")
     expect(status == 200, "the egress probe build succeeds", brief(answer))
     after = stack.guard_counters()
     codes = fields(output_file(answer, "egress.txt"))
-    detail = {"codes": codes, "cyfr": output_file(answer, "cyfr.txt"), "registry": output_file(answer, "registry.txt")}
+    datagrams = fields(output_file(answer, "dgram.txt"))
+    detail = {"codes": codes, "datagrams": datagrams, "cyfr": output_file(answer, "cyfr.txt"),
+              "registry": output_file(answer, "registry.txt")}
     expect(codes.get("cyfr:4000") in REFUSED and codes.get(f"{stand_in_v4}:4000") in REFUSED
            and codes.get(f"[{stand_in_v6}]:4000") in REFUSED and codes.get(f"{ENDPOINT_ADDRESS}:4000") in REFUSED,
            "a build's connections to cyfr:4000, to cyfr's address of each family on the builds network and to cyfr's fixed "
            "endpoint address are refused by the guard", detail)
-    expect(codes.get("169.254.169.254:80") in REFUSED and codes.get("100.100.100.200:80") in REFUSED,
+    expect(codes.get("169.254.169.254:80") in REFUSED and codes.get("100.100.100.200:80") in REFUSED
+           and codes.get("192.0.0.192:80") in REFUSED,
            "a build's connections to the IPv4 metadata addresses are refused", detail)
     expect(codes.get("[fd00:ec2::254]:80") in REFUSED and codes.get("[fe80::1%eth0]:80") not in (None, "connected"),
            "a build's connections to the IPv6 metadata and link-local addresses are refused", detail)
     expect(codes.get("10.1.2.3:80") in REFUSED, "a build's connection to another private address is refused", detail)
+    expect(codes.get("100.64.0.1:80") in REFUSED and codes.get("198.18.0.1:80") in REFUSED
+           and codes.get("[64:ff9b::a01:203]:80") in REFUSED,
+           "a build's connections to a CGNAT address, a benchmarking address and the NAT64 form of a private address are refused",
+           detail)
+    expect(datagrams.get("224.0.0.1:9") == "EPERM" and datagrams.get("[ff0e::1]:9") == "EPERM",
+           "a build's datagrams to an IPv4 and an IPv6 multicast group are refused as they are sent", detail)
     expect(codes.get("127.0.0.1:1") in REFUSED, "a build's connection to the island's loopback is refused", detail)
     expect(codes.get("127.0.0.11:53") == "connected" and "status=0" in (output_file(answer, "cyfr.txt") or ""),
            "a build reaches Docker's resolver, over TCP and for cyfr's name", detail)
@@ -408,8 +446,9 @@ def test_egress(stack):
     # ip6tables-save prints them compressed.
     rose = {rule: after.get(rule, 0) - before.get(rule, 0) for rule in after}
     matched = {fragment: any(count > 0 for rule, count in rose.items() if fragment in rule)
-               for fragment in ["-d 169.254.0.0/16", "-d 100.100.100.200/32", f"-d {ENDPOINT_ADDRESS}/32",
-                                "-d fe80::/10", "-d fd00:ec2::254/128", "-d 10.0.0.0/8",
+               for fragment in ["-d 169.254.0.0/16", "-d 100.100.100.200/32", "-d 192.0.0.192/32", f"-d {ENDPOINT_ADDRESS}/32",
+                                "-d fe80::/10", "-d fd00:ec2::254/128", "-d 10.0.0.0/8", "-d 100.64.0.0/10",
+                                "-d 198.18.0.0/15", "-d 64:ff9b::a00:0/104", "-d 224.0.0.0/4", "-d ff00::/8",
                                 "--dst-type LOCAL -j REJECT", "--ctorigdst 127.0.0.11"]}
     for address in (stand_in_v4, stand_in_v6):
         matched[f"the island subnet holding {address}"] = island_rule_counted(rose, subnets, address)

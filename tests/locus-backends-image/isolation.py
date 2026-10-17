@@ -27,10 +27,12 @@ Driven only by requests signed as CYFR signs them (harness.py):
   guard's rules: its connections to cyfr's name on the backends network
   and to cyfr's fixed endpoint address (a stand-in answers both to a
   container outside the guard), to the metadata and link-local addresses
-  of both families, to another private address and to the island's own
-  loopback are refused at once, each counted on the guard's own rule; the
-  resolver and the public registry are reached (the registry step is
-  skipped, with its reason, under CYFR_TEST_OFFLINE=1).
+  of both families, to other private addresses (RFC 1918, CGNAT,
+  benchmarking, a NAT64 form of a private address) and to the island's own
+  loopback are refused at once, and its datagrams to an IPv4 and an IPv6
+  multicast group are refused as they are sent, each counted on the
+  guard's own rule; the resolver and the public registry are reached (the
+  registry step is skipped, with its reason, under CYFR_TEST_OFFLINE=1).
 - A backend's listener on the shared loopback is reached by the container's
   root and refused to another owner's backend, on the loopback, on `::1`
   and on the island's own address.
@@ -86,6 +88,30 @@ def inspect_pid(stack, image, script):
 # The port a backend listens on for the sibling case.
 SIBLING_PORT = 47331
 
+# A probe of one datagram per target, run by node as a backend: for each
+# `host:port` after the argument `targets` (an IPv6 host in brackets), the
+# code the send answers with, or `sent`. A TCP connect to a multicast group
+# is refused by the kernel before any rule sees it, so a group is probed
+# with a datagram; the guard's rule drops it, which the send answers EPERM,
+# since no ICMP error answers a multicast destination.
+DGRAM_PROBE = r"""
+const dgram = require("dgram");
+(async () => {
+  const lines = [];
+  for (const target of process.argv.slice(process.argv.indexOf("targets") + 1)) {
+    const at = target.lastIndexOf(":");
+    const host = target.slice(0, at).replace(/^\[|\]$/g, "");
+    const code = await new Promise((resolve) => {
+      const socket = dgram.createSocket(host.includes(":") ? "udp6" : "udp4");
+      socket.on("error", (error) => { socket.close(); resolve(error.code || String(error)); });
+      socket.send("probe", Number(target.slice(at + 1)), host, (error) => { socket.close(); resolve(error ? error.code || String(error) : "sent"); });
+    });
+    lines.push(`${target}=${code}`);
+  }
+  console.log(lines.join("\n"));
+})();
+"""
+
 
 def fields(text):
     return dict(line.split("=", 1) for line in (text or "").splitlines() if "=" in line)
@@ -140,26 +166,36 @@ def test_egress(stack, c, owner):
     stand_in_v4, stand_in_v6 = stand_in_addresses(stack)
     expect(stand_in_v4 and stand_in_v6, "the stand-in holds an address of each family on the backends network", [stand_in_v4, stand_in_v6])
     targets = ["cyfr:4000", f"{stand_in_v4}:4000", f"[{stand_in_v6}]:4000", f"{ENDPOINT_ADDRESS}:4000", "169.254.169.254:80",
-               "100.100.100.200:80", "[fd00:ec2::254]:80", "[fe80::1%eth0]:80", "10.1.2.3:80", "127.0.0.11:53", "127.0.0.1:1"
+               "100.100.100.200:80", "192.0.0.192:80", "[fd00:ec2::254]:80", "[fe80::1%eth0]:80", "10.1.2.3:80",
+               "100.64.0.1:80", "198.18.0.1:80", "[64:ff9b::a01:203]:80", "127.0.0.11:53", "127.0.0.1:1"
                ] + ([] if offline else ["registry.npmjs.org:443"])
     before = stack.guard_counters()
     resolved = c.tool(owner, "probe__run", {"argv": ["getent", "hosts", "cyfr"]})
     probed = c.tool(owner, "probe__run", {"argv": ["node", "-e", CONNECT_PROBE, "targets", *targets]})
+    sent = c.tool(owner, "probe__run", {"argv": ["node", "-e", DGRAM_PROBE, "targets", "224.0.0.1:9", "[ff0e::1]:9"]})
     fetched = None if offline else c.tool(owner, "probe__run", {"argv": ["curl", "-sS", "-o", "/dev/null", "-w", "%{http_code}",
                                                                            "--max-time", "8", "https://registry.npmjs.org/"]})
     after = stack.guard_counters()
     codes = fields(probed.get("stdout"))
-    detail = {"codes": codes, "probe": probed, "resolved": resolved, "fetched": fetched}
-    expect(probed["status"] == 0, "the backend's connection probe ran to its end", detail)
+    datagrams = fields(sent.get("stdout"))
+    detail = {"codes": codes, "probe": probed, "datagrams": sent, "resolved": resolved, "fetched": fetched}
+    expect(probed["status"] == 0 and sent["status"] == 0, "the backend's connection and datagram probes ran to their end", detail)
     expect(codes.get("cyfr:4000") in REFUSED and codes.get(f"{stand_in_v4}:4000") in REFUSED
            and codes.get(f"[{stand_in_v6}]:4000") in REFUSED and codes.get(f"{ENDPOINT_ADDRESS}:4000") in REFUSED,
            "a backend's connections to cyfr:4000, to cyfr's address of each family on the backends network and to cyfr's "
            "fixed endpoint address are refused by the guard", detail)
-    expect(codes.get("169.254.169.254:80") in REFUSED and codes.get("100.100.100.200:80") in REFUSED,
+    expect(codes.get("169.254.169.254:80") in REFUSED and codes.get("100.100.100.200:80") in REFUSED
+           and codes.get("192.0.0.192:80") in REFUSED,
            "a backend's connections to the IPv4 metadata addresses are refused", detail)
     expect(codes.get("[fd00:ec2::254]:80") in REFUSED and codes.get("[fe80::1%eth0]:80") not in (None, "connected"),
            "a backend's connections to the IPv6 metadata and link-local addresses are refused", detail)
     expect(codes.get("10.1.2.3:80") in REFUSED, "a backend's connection to another private address is refused", detail)
+    expect(codes.get("100.64.0.1:80") in REFUSED and codes.get("198.18.0.1:80") in REFUSED
+           and codes.get("[64:ff9b::a01:203]:80") in REFUSED,
+           "a backend's connections to a CGNAT address, a benchmarking address and the NAT64 form of a private address are refused",
+           detail)
+    expect(datagrams.get("224.0.0.1:9") == "EPERM" and datagrams.get("[ff0e::1]:9") == "EPERM",
+           "a backend's datagrams to an IPv4 and an IPv6 multicast group are refused as they are sent", detail)
     expect(codes.get("127.0.0.1:1") in REFUSED, "a backend's connection to the island's loopback is refused", detail)
     expect(codes.get("127.0.0.11:53") == "connected" and resolved["status"] == 0 and "cyfr" in (resolved.get("stdout") or ""),
            "a backend reaches Docker's resolver, over TCP and for cyfr's name", detail)
@@ -176,8 +212,9 @@ def test_egress(stack, c, owner):
     # ip6tables-save prints them compressed.
     rose = {rule: after.get(rule, 0) - before.get(rule, 0) for rule in after}
     matched = {fragment: any(count > 0 for rule, count in rose.items() if fragment in rule)
-               for fragment in ["-d 169.254.0.0/16", "-d 100.100.100.200/32", f"-d {ENDPOINT_ADDRESS}/32",
-                                "-d fe80::/10", "-d fd00:ec2::254/128", "-d 10.0.0.0/8",
+               for fragment in ["-d 169.254.0.0/16", "-d 100.100.100.200/32", "-d 192.0.0.192/32", f"-d {ENDPOINT_ADDRESS}/32",
+                                "-d fe80::/10", "-d fd00:ec2::254/128", "-d 10.0.0.0/8", "-d 100.64.0.0/10",
+                                "-d 198.18.0.0/15", "-d 64:ff9b::a00:0/104", "-d 224.0.0.0/4", "-d ff00::/8",
                                 "--dst-type LOCAL -j REJECT", "--ctorigdst 127.0.0.11"]}
     for address in (stand_in_v4, stand_in_v6):
         matched[f"the island subnet holding {address}"] = island_rule_counted(rose, subnets, address)

@@ -309,8 +309,129 @@ defmodule Prima.CidrTest do
       refute Cidr.private_ip?({0x64, 0xFF9B, 2, 0, 0, 0, 0x0808, 0x0808})
     end
 
+    test "IPv6 multicast (ff00::/8) is private, and no metadata" do
+      assert Cidr.private_ip?({0xFF02, 0, 0, 0, 0, 0, 0, 1})
+      assert Cidr.private_ip?({0xFF0E, 0, 0, 0, 0, 0, 0, 0x101})
+      assert Cidr.private_ip?({0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF})
+      refute Cidr.metadata?({0xFF02, 0, 0, 0, 0, 0, 0, 1})
+      refute Cidr.private_ip?({0xFEFF, 0, 0, 0, 0, 0, 0, 1})
+    end
+
     test "IPv6 public" do
       refute Cidr.private_ip?({0x2607, 0xF8B0, 0x4004, 0x800, 0, 0, 0, 0x200E})
     end
   end
+
+  describe "address_table/0" do
+    test "holds each range of both classes, IPv4 first" do
+      %{metadata: metadata, private: private} = Cidr.address_table()
+
+      assert Enum.take(metadata, 5) ==
+               ~w(169.254.0.0/16 100.100.100.200/32 192.0.0.192/32 fe80::/10 fd00:ec2::254/128)
+
+      assert Enum.take(private, 15) ==
+               ~w(127.0.0.0/8 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16 169.254.0.0/16 0.0.0.0/8
+                  100.64.0.0/10 192.0.0.0/24 198.18.0.0/15 224.0.0.0/4 240.0.0.0/4
+                  fc00::/7 fe80::/10 64:ff9b:1::/48 ff00::/8)
+
+      assert Enum.reject(metadata ++ private, &String.contains?(&1, ":")) ==
+               Enum.take(metadata, 3) ++ Enum.take(private, 11)
+
+      # Embedded forms: NAT64 of 10.0.0.0/8, Teredo's inverted client of it,
+      # ISATAP of 192.0.0.192.
+      assert "64:ff9b::a00:0/104" in private
+      assert "2001::f500:0/ffff:ffff::ff00:0" in private
+      assert "::5efe:c000:c0/::ffff:ffff:ffff:ffff" in metadata
+      # A row another row of its class contains is left out: ::1 sits in
+      # ::/104, the IPv4-compatible form of 0.0.0.0/8.
+      refute "::1/128" in private
+      assert "::/104" in private
+    end
+
+    test "an address is in a class exactly when it falls in one of the class's rows" do
+      %{metadata: metadata, private: private} = Cidr.address_table()
+      metadata = Enum.map(metadata, &table_row/1)
+      private = Enum.map(private, &table_row/1)
+      :rand.seed(:exsss, {7, 11, 13})
+
+      samples =
+        Enum.flat_map(metadata ++ private, &near/1) ++
+          for(_ <- 1..3000, do: random_ip(32)) ++ for(_ <- 1..3000, do: random_ip(128))
+
+      for {width, bits} <- samples do
+        ip = to_ip(width, bits)
+        assert Cidr.metadata?(ip) == in_table?(metadata, width, bits), inspect(ip)
+        assert Cidr.private_ip?(ip) == in_table?(private, width, bits), inspect(ip)
+      end
+    end
+  end
+
+  describe "embedded_ipv4/1 under several embeddings" do
+    test "reads each embedding an address matches" do
+      # 2001:0:808:808::5efe:a00:1, Teredo (server 8.8.8.8, client
+      # 245.255.255.254 inverted) and ISATAP (10.0.0.1)
+      assert Cidr.embedded_ipv4({0x2001, 0, 0x0808, 0x0808, 0, 0x5EFE, 0x0A00, 0x0001}) ==
+               [{8, 8, 8, 8}, {245, 255, 255, 254}, {10, 0, 0, 1}]
+
+      assert Cidr.private_ip?({0x2002, 0x0808, 0x0808, 0, 0x200, 0x5EFE, 0xA9FE, 0xA9FE})
+      assert Cidr.metadata?({0x2002, 0x0808, 0x0808, 0, 0x200, 0x5EFE, 0xA9FE, 0xA9FE})
+    end
+  end
+
+  # A row of the table as {width, value, mask}, parsed here rather than by
+  # the module under test.
+  defp table_row(row) do
+    [address, suffix] = String.split(row, "/")
+    {width, value} = parse(address)
+
+    mask =
+      case Integer.parse(suffix) do
+        {length, ""} -> Bitwise.bsl(Bitwise.bsl(1, length) - 1, width - length)
+        _ -> suffix |> parse() |> elem(1)
+      end
+
+    {width, value, mask}
+  end
+
+  defp parse(text) do
+    {:ok, ip} = :inet.parse_address(String.to_charlist(text))
+    size = if tuple_size(ip) == 4, do: 8, else: 16
+
+    {tuple_size(ip) * size,
+     ip |> Tuple.to_list() |> Enum.reduce(0, &(Bitwise.bsl(&2, size) + &1))}
+  end
+
+  defp in_table?(rows, width, bits),
+    do:
+      Enum.any?(rows, fn {w, value, mask} -> w == width and Bitwise.band(bits, mask) == value end)
+
+  # Addresses at a row's edges and inside it, and each just outside it:
+  # the row's value with one fixed bit flipped.
+  defp near({width, value, mask}) do
+    free = Bitwise.bxor(mask, Bitwise.bsl(1, width) - 1)
+
+    inside =
+      [value, Bitwise.bor(value, free)] ++
+        for(_ <- 1..8, do: Bitwise.bor(value, Bitwise.band(random_bits(width), free)))
+
+    outside =
+      for bit <- 0..(width - 1),
+          Bitwise.band(mask, Bitwise.bsl(1, bit)) != 0,
+          do:
+            Bitwise.bxor(
+              Bitwise.bor(value, Bitwise.band(random_bits(width), free)),
+              Bitwise.bsl(1, bit)
+            )
+
+    Enum.map(inside ++ outside, &{width, &1})
+  end
+
+  defp random_ip(width), do: {width, random_bits(width)}
+  defp random_bits(width), do: :rand.uniform(Bitwise.bsl(1, width)) - 1
+
+  defp to_ip(32, bits),
+    do: List.to_tuple(for(i <- 3..0//-1, do: Bitwise.band(Bitwise.bsr(bits, i * 8), 0xFF)))
+
+  defp to_ip(128, bits),
+    do: List.to_tuple(for(i <- 7..0//-1, do: Bitwise.band(Bitwise.bsr(bits, i * 16), 0xFFFF)))
 end
