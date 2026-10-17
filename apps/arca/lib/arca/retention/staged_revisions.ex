@@ -4,11 +4,10 @@
 defmodule Arca.Retention.StagedRevisions do
   @moduledoc """
   Staged revisions no pointer, draft or pin keeps, older than N days, go
-  (`Arca.StorageGC` owns the roots and the collection order). The same
-  sweep finishes the committed moves that never finished; a repair writes
-  the unit's pending generation before it touches a served byte, so the
-  projection of the root derives the finished unit again with nothing
-  else asked (`Arca.StorageProjectionChanges`).
+  (`Arca.StorageGC` owns the roots and the collection order): a writer's
+  abandoned work, and the revision a commit replaced once N days have
+  passed since that commit. The sweep moves nothing; the collector's audit
+  (`Arca.StorageGC.repair/1`) is asked for.
 
   Collection deletes objects a successor boot may be staging against, so
   it runs only on a member that holds its slot in the cell
@@ -29,7 +28,7 @@ defmodule Arca.Retention.StagedRevisions do
   @impl true
   def unit, do: :days
 
-  @doc "How many prefixes one sweep of one athanor collects or repairs."
+  @doc "How many prefixes one sweep of one athanor collects."
   @spec limit() :: pos_integer()
   def limit, do: Kind.configured(:staging_sweep_limit, 200)
 

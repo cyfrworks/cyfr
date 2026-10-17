@@ -32,23 +32,21 @@ defmodule Arca.Storage.UnitLocator do
   ## Where a unit's bytes live
 
   A unit is published by its `Arca.Schemas.StorageUnit` row, keyed by
-  `unit_key/1`. Its objects have two homes, both spelled here and nowhere
-  else:
+  `unit_key/1`. Its objects have one home, spelled here and nowhere else:
+  a **revision prefix** (`revision_prefix/2`), where one revision's
+  objects are staged before the row's commit names it and served from
+  once it does: `{root}/.staging/{unit…}/{revision}/`, beside the units
+  and never inside one. No locator's grammar claims `.staging`, so the
+  prefix locates `:above_unit`: status walks skip it and no unit's listing
+  or diff sees it as itself. A revision's first object is its in-progress
+  marker (`marker_path/2`), created before any upload.
 
-    * the **served location** (`served_path/1`) is the unit's own path,
-      where every reader of the tree reads;
-    * a **revision prefix** (`revision_prefix/2`) is where one revision's
-      objects are staged before the row's commit names it:
-      `{root}/.staging/{unit…}/{revision}/`, beside the units and never
-      inside one. No locator's grammar claims `.staging`, so the prefix
-      locates `:above_unit`: status walks skip it and no unit's listing
-      or diff sees it. A revision's first object is its in-progress
-      marker (`marker_path/2`), created before any upload.
-
-  After the commit the staged objects are moved to the served location
-  and the prefix is removed; a prefix that still holds objects is a
-  staging in progress, a loser's remains, or a commit whose move has not
-  finished — only the row says which.
+  A reader of a unit path resolves the row and reads the object under the
+  committed revision's prefix (`in_revision/3`); a listing of the prefix
+  is spelled back as the unit's own paths (`from_revision/3`). Nothing is
+  placed at the unit's own path. A prefix the row does not name is a
+  staging in progress, a loser's remains or a revision the pointer has
+  left — only the row says which, and the collector takes the last two.
   """
 
   @callback locate(Arca.Storage.path()) ::
@@ -160,9 +158,17 @@ defmodule Arca.Storage.UnitLocator do
   def unit_path(root, unit_key) when is_binary(root) and is_binary(unit_key),
     do: [root | String.split(unit_key, "/")]
 
-  @doc "Where readers read a unit: the unit's own path."
-  @spec served_path(Arca.Storage.path()) :: Arca.Storage.path()
-  def served_path([_root | [_ | _]] = unit), do: unit
+  @doc """
+  The staging area of a whole root: what every unit's staging prefix
+  under it starts with.
+
+  ## Examples
+
+      iex> Arca.Storage.UnitLocator.staging_area("aqua")
+      ["aqua", ".staging"]
+  """
+  @spec staging_area(String.t()) :: Arca.Storage.path()
+  def staging_area(root) when is_binary(root), do: [root, @staging]
 
   @doc """
   The prefix every revision of a unit is staged under.
@@ -174,6 +180,50 @@ defmodule Arca.Storage.UnitLocator do
   """
   @spec staging_prefix(Arca.Storage.path()) :: Arca.Storage.path()
   def staging_prefix([root | [_ | _] = rest]), do: [root, @staging | rest]
+
+  @doc """
+  Where a reader finds a path at or inside a unit, for the unit's shape
+  as `locate/1` answered it and the revision the row names: the object
+  under that revision's prefix. A directory unit's own path is the prefix
+  itself; a file unit's own path is its one object, and a path below a
+  file unit is below that object, where no adapter has anything.
+
+  ## Examples
+
+      iex> Arca.Storage.UnitLocator.in_revision({:dir, ["aqua", "skills", "pdf"], "SKILL.md"}, "rev_1", ["aqua", "skills", "pdf", "SKILL.md"])
+      ["aqua", ".staging", "skills", "pdf", "rev_1", "SKILL.md"]
+      iex> Arca.Storage.UnitLocator.in_revision({:file, ["aqua", "roles", "a.md"]}, "rev_1", ["aqua", "roles", "a.md"])
+      ["aqua", ".staging", "roles", "a.md", "rev_1", "a.md"]
+  """
+  @spec in_revision(
+          {:file, Arca.Storage.path()} | {:dir, Arca.Storage.path(), String.t()},
+          String.t(),
+          Arca.Storage.path()
+        ) :: Arca.Storage.path()
+  def in_revision({:file, unit}, revision, path),
+    do: staged_object(unit, revision, []) ++ Enum.drop(path, length(unit))
+
+  def in_revision({:dir, unit, _sentinel}, revision, path),
+    do: revision_prefix(unit, revision) ++ Enum.drop(path, length(unit))
+
+  @doc """
+  The inverse of `in_revision/3`: a key listed under the revision's prefix
+  as the unit's own path.
+
+  ## Examples
+
+      iex> Arca.Storage.UnitLocator.from_revision({:dir, ["aqua", "skills", "pdf"], "SKILL.md"}, "rev_1", ["aqua", ".staging", "skills", "pdf", "rev_1", "SKILL.md"])
+      ["aqua", "skills", "pdf", "SKILL.md"]
+  """
+  @spec from_revision(
+          {:file, Arca.Storage.path()} | {:dir, Arca.Storage.path(), String.t()},
+          String.t(),
+          Arca.Storage.path()
+        ) :: Arca.Storage.path()
+  def from_revision({:file, unit}, _revision, _key), do: unit
+
+  def from_revision({:dir, unit, _sentinel}, revision, key),
+    do: unit ++ Enum.drop(key, length(revision_prefix(unit, revision)))
 
   @doc """
   Where one revision's objects are staged: revision-unique, so a plain

@@ -130,8 +130,10 @@ defmodule Arca.StorageGCTest do
   defp commit(actor, unit, tag),
     do: Arca.Overlay.commit_unit(actor, unit, {:files, files(tag)}, cap: :exempt)
 
+  # What a reader reads at the unit's own paths, which the facade resolves
+  # to the committed revision's prefix.
   defp served(actor, unit) do
-    {:ok, read} = Arca.read_subtree(actor, UnitLocator.served_path(unit))
+    {:ok, read} = Arca.read_subtree(actor, unit)
     Map.new(read)
   end
 
@@ -161,8 +163,19 @@ defmodule Arca.StorageGCTest do
     )
   end
 
-  defp served?(path, unit), do: List.starts_with?(path, unit)
   defp staged_object?(path), do: UnitLocator.staging?(path)
+
+  # What one revision's prefix holds, its marker left out.
+  defp revision_bytes(actor, unit, revision) do
+    {:ok, pairs} = Arca.read_subtree(actor, UnitLocator.revision_prefix(unit, revision))
+    pairs |> Enum.reject(fn {rel, _bytes} -> rel == [UnitLocator.marker_name()] end) |> Map.new()
+  end
+
+  # The revision's prefix as begun `ms` ago: its marker dated back.
+  defp begun_ago!(actor, unit, revision, ms) do
+    marker = Jason.encode!(%{"revision" => revision, "started_at" => iso(later(-ms))})
+    :ok = Arca.Adapters.Local.put(actor, UnitLocator.marker_path(unit, revision), marker)
+  end
 
   # A whole revision's objects under a prefix no row names — what a writer
   # that lost, or anyone with a put, leaves behind.
@@ -182,15 +195,70 @@ defmodule Arca.StorageGCTest do
   defp iso(at), do: DateTime.to_iso8601(at)
   defp later(ms), do: DateTime.add(DateTime.utc_now(), ms, :millisecond)
 
-  # A commit whose move to the served location fails: the row and the
-  # journal stand, the revision stays staged.
-  defp commit_unserved(actor, unit, tag) do
-    Adapter.hook(fn op, _actor, path ->
-      if op in [:put, :replace_tree] and served?(path, unit), do: {:error, :enospc}, else: :pass
-    end)
+  # A commit whose writer died between the commit and its release: the row
+  # and the journal stand, the revision is read already, the dead writer's
+  # draft is held until it has outlived its lifetime (`expire!/2`).
+  defp commit_unreleased(actor, unit, tag),
+    do: dies_unreleased(actor, unit, fn -> commit(actor, unit, tag) end)
 
-    assert {:error, {:finish_failed, :enospc}} = commit(actor, unit, tag)
-    Adapter.clear()
+  # A writer of `unit` that dies at the commit's announcement — after the
+  # pointer moved, before the draft is given back. Killed outright there:
+  # an exit raised inside a telemetry handler is caught by telemetry.
+  defp dies_unreleased(actor, unit, commit) do
+    {root, key} = UnitLocator.unit_key(unit)
+    handler = {__MODULE__, make_ref()}
+    on_exit(fn -> :telemetry.detach(handler) end)
+    test_pid = self()
+
+    :ok =
+      :telemetry.attach(
+        handler,
+        Arca.StorageProjectionChanges.event(),
+        fn _event, _measurements, metadata, _config ->
+          if metadata.athanor_id == actor.athanor_id and metadata.root == root and
+               not metadata.ready and self() != test_pid and
+               match?(
+                 {:ok, %{draft_writer_token: token}} when is_binary(token),
+                 StorageUnits.current(actor, root, key)
+               ) do
+            :telemetry.detach(handler)
+            Process.exit(self(), :kill)
+          end
+        end,
+        nil
+      )
+
+    {pid, ref} = spawn_monitor(commit)
+    assert_receive {:DOWN, ^ref, :process, ^pid, :killed}, 30_000
+  end
+
+  # The unit's draft, aged past its lifetime.
+  defp expire!(actor, unit) do
+    {root, key} = UnitLocator.unit_key(unit)
+    long_ago = DateTime.add(DateTime.utc_now(), -2 * StorageUnits.draft_ttl_ms(), :millisecond)
+
+    Arca.Repo.update_all(
+      from(u in StorageUnit,
+        where: u.athanor_id == ^actor.athanor_id and u.root == ^root and u.unit_key == ^key
+      ),
+      set: [updated_at: long_ago]
+    )
+  end
+
+  # A revision served at the unit's own path before units were served
+  # from their prefixes: what a finish moved there, its prefix removed.
+  defp serve_at_unit!(actor, unit) do
+    {:ok, %{current_revision: revision}} = pointer(actor, unit)
+    prefix = UnitLocator.revision_prefix(unit, revision)
+    {:ok, leaves} = Arca.Adapters.Local.list_recursive(actor, prefix)
+
+    for leaf <- leaves, List.last(leaf) != UnitLocator.marker_name() do
+      {:ok, bytes} = Arca.Adapters.Local.get(actor, leaf)
+      :ok = Arca.Adapters.Local.put(actor, unit ++ Enum.drop(leaf, length(prefix)), bytes)
+    end
+
+    :ok = Arca.Adapters.Local.delete_tree(actor, prefix)
+    revision
   end
 
   # A writer that dies with its revision half staged: the draft held, the
@@ -337,13 +405,14 @@ defmodule Arca.StorageGCTest do
       actor: actor,
       unit: unit
     } do
-      commit_unserved(actor, unit, "one")
+      assert {:ok, _} = commit(actor, unit, "one")
       {:ok, %{current_revision: one}} = pointer(actor, unit)
       now = later(2 * @day)
 
       build = start_build(actor)
       assert :ok = StorageGC.pin(actor, unit, one, {:build, build})
       assert {:ok, _} = commit(actor, unit, "two")
+      {:ok, %{current_revision: two}} = pointer(actor, unit)
 
       # A snapshot whose listing did not show the pin yet.
       {:ok, roots} = StorageGC.roots(actor)
@@ -351,6 +420,10 @@ defmodule Arca.StorageGCTest do
       assert {:ok, [%{revision: ^one} = found]} = StorageGC.candidates(actor, blind, now: now)
       assert {:kept, :pinned} = StorageGC.collect(actor, found, now: now)
       assert Map.has_key?(staged(actor, unit), one)
+
+      # The pinned reader still reads the revision it resolved, under the
+      # prefix it pinned.
+      assert revision_bytes(actor, unit, one) == whole("one")
 
       # A snapshot taken now roots it, and a sweep leaves it.
       assert {:ok, %{pins: pins}} = StorageGC.roots(actor)
@@ -360,7 +433,7 @@ defmodule Arca.StorageGCTest do
       :ok = Arca.BuildRecords.record_finished(actor, build, "failed", "stopped")
 
       assert {:ok, %{collected: 1}} = StorageGC.sweep(actor, now: now)
-      assert staged(actor, unit) == %{}
+      assert Map.keys(staged(actor, unit)) == [two]
       assert served(actor, unit) == whole("two")
     end
 
@@ -368,7 +441,7 @@ defmodule Arca.StorageGCTest do
       actor: actor,
       unit: unit
     } do
-      commit_unserved(actor, unit, "one")
+      assert {:ok, _} = commit(actor, unit, "one")
       {:ok, %{current_revision: one}} = pointer(actor, unit)
       turn = open_turn(actor)
 
@@ -385,7 +458,7 @@ defmodule Arca.StorageGCTest do
       actor: actor,
       unit: unit
     } do
-      commit_unserved(actor, unit, "one")
+      assert {:ok, _} = commit(actor, unit, "one")
       {:ok, %{current_revision: one}} = pointer(actor, unit)
       assert {:ok, _} = commit(actor, unit, "two")
 
@@ -415,12 +488,13 @@ defmodule Arca.StorageGCTest do
       assert {:ok, %{current_revision: ^one}} = pointer(actor, unit)
       assert served(actor, unit) == whole("one")
 
-      # Inside the grace it stays; after it, it goes. The pointer never moved.
+      # Inside the grace it stays; after it, it goes. The pointer never
+      # moved, and its own prefix is never a candidate.
       assert {:ok, %{collected: 0}} = StorageGC.sweep(actor)
       assert Map.has_key?(staged(actor, unit), orphan)
 
-      assert {:ok, %{collected: 1, repaired: 0}} = StorageGC.sweep(actor, now: later(2 * @day))
-      assert staged(actor, unit) == %{}
+      assert {:ok, %{collected: 1}} = StorageGC.sweep(actor, now: later(2 * @day))
+      assert Map.keys(staged(actor, unit)) == [one]
       assert {:ok, %{current_revision: ^one}} = pointer(actor, unit)
       assert served(actor, unit) == whole("one")
     end
@@ -528,55 +602,98 @@ defmodule Arca.StorageGCTest do
   # ---------------------------------------------------------------------------
 
   describe "repair/2" do
-    test "finishes the move of the revision the row names", %{actor: actor, unit: unit} do
-      commit_unserved(actor, unit, "one")
+    test "releases the draft of a writer that died after its commit, once it has outlived its lifetime",
+         %{actor: actor, unit: unit} do
+      commit_unreleased(actor, unit, "one")
       {:ok, %{current_revision: one}} = pointer(actor, unit)
-      assert Map.has_key?(staged(actor, unit), one)
 
+      # Published already: the pointer, the prefix, the read; the draft held.
+      assert served(actor, unit) == whole("one")
+      assert Map.keys(staged(actor, unit)) == [one]
+      assert %StorageUnit{draft_writer_token: "wrt_" <> _} = row(actor, unit)
+
+      # Inside the lifetime the draft is its holder's, and the audit says so.
+      assert {:ok, %{repaired: [], left: [{^unit, {:repair_failed, :stale_writer}}]}} =
+               StorageGC.repair(actor)
+
+      expire!(actor, unit)
       assert {:ok, %{repaired: [^unit], left: [], unrecoverable: []}} = StorageGC.repair(actor)
 
+      # Nothing moved: the revision is where it was, the pointer too.
       assert served(actor, unit) == whole("one")
-      assert staged(actor, unit) == %{}
-      assert {:ok, %{current_revision: ^one}} = pointer(actor, unit)
+      assert Map.keys(staged(actor, unit)) == [one]
+      assert {:ok, %{current_revision: ^one, draft_writer_token: nil}} = pointer(actor, unit)
       assert {:ok, %{repaired: [], intact: 1}} = StorageGC.repair(actor)
     end
 
-    test "reads the content identity the overlay recorded", %{actor: actor, unit: unit} do
+    test "reads the content identity the overlay recorded, for both unit shapes", %{
+      actor: actor,
+      unit: unit
+    } do
       # A file unit and a directory unit: the one framing, both shapes.
       agent = ["aqua", "roles", "gc-#{System.unique_integer([:positive])}.md"]
+      commit_unreleased(actor, unit, "one")
 
-      Adapter.hook(fn op, _actor, path ->
-        if op in [:put, :replace_tree] and (served?(path, unit) or served?(path, agent)),
-          do: {:error, :enospc},
-          else: :pass
+      dies_unreleased(actor, agent, fn ->
+        Arca.Overlay.commit_unit(actor, agent, {:files, [{[], "# a role"}]}, cap: :exempt)
       end)
 
-      assert {:error, {:finish_failed, _}} = commit(actor, unit, "one")
+      expire!(actor, unit)
+      expire!(actor, agent)
 
-      assert {:error, {:finish_failed, _}} =
-               Arca.Overlay.commit_unit(actor, agent, {:files, [{[], "# a role"}]}, cap: :exempt)
-
-      Adapter.clear()
-
-      assert {:ok, %{repaired: repaired, left: []}} = StorageGC.repair(actor)
+      assert {:ok, %{repaired: repaired, left: [], unrecoverable: []}} = StorageGC.repair(actor)
       assert Enum.sort(repaired) == Enum.sort([unit, agent])
       assert {:ok, "# a role"} = Arca.get(actor, agent)
+      assert served(actor, unit) == whole("one")
+      assert {:ok, %{repaired: [], intact: 2, left: []}} = StorageGC.repair(actor)
     end
 
-    test "never serves a staged revision that is not what was committed", %{
+    test "reports a committed revision whose completion object is gone, and keeps the row", %{
       actor: actor,
       unit: unit
     } do
       assert {:ok, _} = commit(actor, unit, "one")
-      commit_unserved(actor, unit, "two")
+      assert {:ok, _} = commit(actor, unit, "two")
       {:ok, %{current_revision: two}} = pointer(actor, unit)
 
-      # What a removal that failed part-way leaves of a prefix.
-      :ok = Arca.delete(actor, UnitLocator.staged_object(unit, two, ["a.txt"]))
+      # Damage beneath the overlay: the sentinel of the pointer's prefix goes.
+      :ok = Arca.Adapters.Local.delete(actor, UnitLocator.staged_object(unit, two, [@sentinel]))
 
-      assert {:ok, %{repaired: [], left: [{^unit, :staged_incomplete}]}} = StorageGC.repair(actor)
-      assert served(actor, unit) == whole("one")
+      assert {:ok, %{repaired: [], left: [{^unit, :staged_incomplete}], unrecoverable: []}} =
+               StorageGC.repair(actor)
+
+      assert {:error, :staged_incomplete} = Arca.Overlay.repair_unit(actor, unit)
+
+      # Nothing is moved or invented: the pointer stands, the unit reads
+      # what its prefix holds, and the previous revision is never served
+      # over it — it is the collector's.
       assert {:ok, %{current_revision: ^two}} = pointer(actor, unit)
+      assert served(actor, unit) == Map.delete(whole("two"), [@sentinel])
+      assert {:ok, %{collected: 1}} = StorageGC.sweep(actor, now: later(2 * @day))
+      assert Map.keys(staged(actor, unit)) == [two]
+    end
+
+    test "reports a committed revision edited in place since its commit, and leaves the edit", %{
+      actor: actor,
+      unit: unit
+    } do
+      assert {:ok, _} = commit(actor, unit, "one")
+      {:ok, %{current_revision: one}} = pointer(actor, unit)
+      :ok = Arca.put(actor, unit ++ ["a.txt"], "an edit")
+      :ok = Arca.put(actor, unit ++ ["new.txt"], "new")
+
+      # The edit lands in the pointer's prefix and reads at the unit's
+      # paths; nothing stands at the unit's own path.
+      assert {:ok, "an edit"} = Arca.get(actor, unit ++ ["a.txt"])
+      assert {:ok, "an edit"} = Arca.get(actor, UnitLocator.staged_object(unit, one, ["a.txt"]))
+      assert {:ok, []} = Arca.Adapters.Local.list_recursive(actor, unit)
+
+      # The journal names what was committed; the audit says the prefix
+      # differs, and changes nothing.
+      assert {:ok, %{repaired: [], intact: 0, left: [{^unit, :edited}]}} = StorageGC.repair(actor)
+      assert {:ok, :nothing_pending} = Arca.Overlay.repair_unit(actor, unit)
+      assert {:ok, "an edit"} = Arca.get(actor, unit ++ ["a.txt"])
+      assert {:ok, "new"} = Arca.get(actor, unit ++ ["new.txt"])
     end
 
     test "invents no pointer and no objects for a row whose revision is gone", %{
@@ -587,8 +704,8 @@ defmodule Arca.StorageGCTest do
       {:ok, %{current_revision: one}} = pointer(actor, unit)
       orphan = lay_prefix(actor, unit, StorageUnits.new_revision(), "orphan")
 
-      # The served objects go without the row: beneath the overlay.
-      :ok = Arca.Adapters.Local.delete_tree(actor, unit)
+      # The pointer's prefix goes without the row: beneath the overlay.
+      :ok = Arca.Adapters.Local.delete_tree(actor, UnitLocator.revision_prefix(unit, one))
 
       ExUnit.CaptureLog.capture_log(fn ->
         assert {:ok, %{repaired: [], unrecoverable: [^unit], orphan_commits: []}} =
@@ -598,6 +715,30 @@ defmodule Arca.StorageGCTest do
       assert {:ok, %{current_revision: ^one}} = pointer(actor, unit)
       assert served(actor, unit) == %{}
       assert Map.keys(staged(actor, unit)) == [orphan]
+    end
+
+    test "moves a revision served at the unit's own path before this shape into its prefix", %{
+      actor: actor,
+      unit: unit
+    } do
+      assert {:ok, _} = commit(actor, unit, "one")
+      one = serve_at_unit!(actor, unit)
+      assert staged(actor, unit) == %{}
+
+      # Read where it is until it is moved back, and a complete unit.
+      assert served(actor, unit) == whole("one")
+      assert Arca.Overlay.unit_status(actor, unit) == {:ok, :own}
+      assert {:ok, %{^unit => :own}} = Arca.Overlay.unit_statuses(actor, "components")
+
+      assert {:ok, %{repaired: [^unit], left: [], unrecoverable: []}} = StorageGC.repair(actor)
+
+      # The revision is in its prefix, the unit's own path is cleared, and
+      # the pointer never moved.
+      assert revision_bytes(actor, unit, one) == whole("one")
+      assert served(actor, unit) == whole("one")
+      assert {:ok, []} = Arca.Adapters.Local.list_recursive(actor, unit)
+      assert {:ok, %{current_revision: ^one}} = pointer(actor, unit)
+      assert {:ok, %{repaired: [], intact: 1}} = StorageGC.repair(actor)
     end
   end
 
@@ -610,11 +751,12 @@ defmodule Arca.StorageGCTest do
 
     test "a repair with the revision unchanged raises the unit's generation, then marks it ready",
          %{actor: actor, unit: unit} do
-      commit_unserved(actor, unit, "one")
+      commit_unreleased(actor, unit, "one")
       {:ok, %{current_revision: one}} = pointer(actor, unit)
       committed = change(actor, unit)
       assert %{ready: false, source_revision: ^one, pending: true} = committed
 
+      expire!(actor, unit)
       assert {:ok, %{repaired: [^unit]}} = StorageGC.repair(actor)
 
       repaired = change(actor, unit)
@@ -626,22 +768,31 @@ defmodule Arca.StorageGCTest do
       assert epoch == repaired.generation
     end
 
-    test "a repair whose move fails leaves a pending generation, never a ready one", %{
-      actor: actor,
-      unit: unit
-    } do
-      commit_unserved(actor, unit, "one")
+    test "a move back into the prefix that fails changes no generation, and is made when asked again",
+         %{actor: actor, unit: unit} do
+      assert {:ok, _} = commit(actor, unit, "one")
+      one = serve_at_unit!(actor, unit)
       committed = change(actor, unit)
+      assert %{ready: true, source_revision: ^one} = committed
 
       Adapter.hook(fn op, _actor, path ->
-        if op in [:put, :replace_tree] and served?(path, unit), do: {:error, :enospc}, else: :pass
+        if op == :put and staged_object?(path), do: {:error, :enospc}, else: :pass
       end)
 
-      assert {:ok, %{left: [{^unit, {:repair_failed, _}}]}} = StorageGC.repair(actor)
+      assert {:ok, %{left: [{^unit, {:repair_failed, :enospc}}]}} = StorageGC.repair(actor)
       Adapter.clear()
 
-      assert %{ready: false} = pending = change(actor, unit)
-      assert pending.generation > committed.generation
+      # Nothing was released: the revision is read where it was, and the
+      # unit is free for the next attempt.
+      assert change(actor, unit) == committed
+      assert served(actor, unit) == whole("one")
+      assert %StorageUnit{draft_writer_token: nil} = row(actor, unit)
+
+      assert {:ok, %{repaired: [^unit]}} = StorageGC.repair(actor)
+      repaired = change(actor, unit)
+      assert %{ready: true, source_revision: ^one} = repaired
+      assert repaired.generation > committed.generation
+      assert revision_bytes(actor, unit, one) == whole("one")
     end
 
     test "collection changes no projection", %{actor: actor, unit: unit} do
@@ -656,34 +807,69 @@ defmodule Arca.StorageGCTest do
     end
   end
 
-  describe "a sweep's own repair" do
-    test "finishes a move that outlived the grace", %{actor: actor, unit: unit} do
+  describe "the previous revision" do
+    test "is collected a grace after the commit that left it, and the current never", %{
+      actor: actor,
+      unit: unit
+    } do
       assert {:ok, _} = commit(actor, unit, "one")
-      commit_unserved(actor, unit, "two")
+      {:ok, %{current_revision: one}} = pointer(actor, unit)
+      # Begun long before the grace, as most revisions a commit replaces were.
+      begun_ago!(actor, unit, one, 3 * @day)
 
-      assert {:ok, %{repaired: 0, collected: 0}} = StorageGC.sweep(actor)
-      assert served(actor, unit) == whole("one")
+      assert {:ok, _} = commit(actor, unit, "two")
+      {:ok, %{current_revision: two}} = pointer(actor, unit)
 
-      assert {:ok, %{repaired: 1, collected: 0, pending: []}} =
-               StorageGC.sweep(actor, now: later(2 * @day))
+      # Inside the grace since the commit that left it, the revision stands
+      # whole for a reader that resolved the row before that commit.
+      assert {:ok, %{collected: 0}} = StorageGC.sweep(actor)
+      assert Enum.sort(Map.keys(staged(actor, unit))) == Enum.sort([one, two])
+      assert revision_bytes(actor, unit, one) == whole("one")
 
+      # Past the grace since that commit it goes, and the pointer's prefix
+      # never does, however old.
+      assert {:ok, %{collected: 1}} = StorageGC.sweep(actor, now: later(2 * @day))
+      assert Map.keys(staged(actor, unit)) == [two]
       assert served(actor, unit) == whole("two")
-      assert staged(actor, unit) == %{}
+
+      begun_ago!(actor, unit, two, 30 * @day)
+      assert {:ok, %{collected: 0, examined: 1}} = StorageGC.sweep(actor, now: later(30 * @day))
+      assert Map.keys(staged(actor, unit)) == [two]
+      assert served(actor, unit) == whole("two")
     end
 
-    test "leaves a served location that was written to since", %{actor: actor, unit: unit} do
+    test "a sweep moves nothing: a dead writer's held draft outlives the grace, and the audit releases it",
+         %{actor: actor, unit: unit} do
       assert {:ok, _} = commit(actor, unit, "one")
-      commit_unserved(actor, unit, "two")
-      :ok = Arca.put(actor, unit ++ ["a.txt"], "an edit")
+      {:ok, %{current_revision: one}} = pointer(actor, unit)
+      commit_unreleased(actor, unit, "two")
+      {:ok, %{current_revision: two}} = pointer(actor, unit)
 
-      assert {:ok, %{repaired: 0, pending: [{^unit, :served_diverged}]}} =
-               StorageGC.sweep(actor, now: later(2 * @day))
-
-      assert {:ok, "an edit"} = Arca.get(actor, unit ++ ["a.txt"])
-
-      # Asked for, the move is made.
-      assert {:ok, %{repaired: [^unit]}} = StorageGC.repair(actor)
+      # The pointer's prefix is read already; the one before it is the
+      # collector's once the grace has passed, the held draft notwithstanding.
       assert served(actor, unit) == whole("two")
+      assert {:ok, %{collected: 0}} = StorageGC.sweep(actor)
+      assert Enum.sort(Map.keys(staged(actor, unit))) == Enum.sort([one, two])
+
+      expire!(actor, unit)
+      assert {:ok, report} = StorageGC.sweep(actor, now: later(2 * @day))
+      assert %{collected: 1} = report
+      refute Map.has_key?(report, :repaired)
+      assert Map.keys(staged(actor, unit)) == [two]
+      assert served(actor, unit) == whole("two")
+
+      # The sweep gave the dead draft back and marked nothing: the unit is
+      # intact to the audit, and its commit's generation stays pending
+      # until the settle marks it where it stands.
+      assert %StorageUnit{draft_writer_token: nil} = row(actor, unit)
+      assert {:ok, %{repaired: [], intact: 1, left: []}} = StorageGC.repair(actor)
+      assert %{ready: false, source_revision: ^two} = change(actor, unit)
+      {root, _key} = UnitLocator.unit_key(unit)
+
+      assert {:ok, 1} =
+               Arca.StorageProjectionChanges.settle_stale(actor, root, settle_after_ms: 0)
+
+      assert %{ready: true, source_revision: ^two} = change(actor, unit)
     end
   end
 

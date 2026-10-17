@@ -3,21 +3,22 @@
 
 defmodule Arca.StorageGC do
   @moduledoc """
-  Collection and repair of an athanor's staging areas: the revision
-  prefixes `Arca.Overlay`'s write protocol stages under
+  Collection and audit of an athanor's staging areas: the revision
+  prefixes `Arca.Overlay`'s write protocol stages under and serves from
   (`Arca.Storage.UnitLocator.revision_prefix/2`).
 
-  Only staging is ever collected. A served location is removed by the
-  unit's drop (`Arca.StorageUnits.retire/3` and the overlay's delete
-  path) and by nothing here.
+  Only a prefix no root keeps is ever collected. The pointer's prefix is
+  the unit as readers read it and is removed by the unit's drop
+  (`Arca.StorageUnits.retire/3` and the overlay's delete path), by
+  nothing here.
 
   ## Roots
 
   A revision prefix is kept while any of these names it:
 
     * **the pointer** — the `current_revision` of a committed
-      `storage_units` row: a commit whose move to the served location has
-      not finished, which `repair/2` finishes;
+      `storage_units` row: the revision readers resolve the row to, for
+      as long as the row names it;
     * **a live draft** — the unit's row holds a writer token registered
       within `Arca.StorageUnits.draft_ttl_ms/0` plus the grace, and the
       prefix carries its in-progress marker. The row does not say which
@@ -36,7 +37,8 @@ defmodule Arca.StorageGC do
     2. list every key under each root's staging area;
     3. a prefix is a candidate when the snapshot does not root it, its
        marker is absent or its unit's draft is dead past the lifetime plus
-       the grace, and it is older than the grace;
+       the grace, and it is older than the grace — counted from when it
+       was begun or from the commit that left it, whichever is later;
     4. for one candidate, immediately before its deletion: a draft dead
        past the grace is retired, so its writer can never commit the
        revision; then the pointer, the draft and the pins of that one
@@ -50,26 +52,31 @@ defmodule Arca.StorageGC do
   pins before it resolves the pointer (`pin/4`), so its pin is either
   seen by step 4 or refused because the pointer has moved on. A crash at
   any step leaves a prefix a later sweep collects, or nothing: the marker
-  outlives the objects, and it dates what is left.
+  outlives the objects, and it dates what is left. The previous
+  revision's prefix becomes a candidate at the next commit and is aged
+  from that commit, so it is collected once the grace has passed since
+  the pointer left it, unless a reader pinned it: what an athanor holds
+  of a unit is its current revision and, inside the grace, the one before
+  it. A reader that resolved the row before a commit reads the revision
+  it resolved through that grace, and pins it for longer.
 
-  ## Repair
+  ## Audit
 
-  `repair/2` restores what a committed row names and nothing else. The
-  staged objects of the row's revision are moved to the served location
-  only when the journal's newest commit is that revision and the staged
-  objects hash to the content identity the journal recorded: a prefix a
-  failed removal left partial is never served over a complete unit. That
-  guard is `Arca.Overlay.repair_unit/2`'s, so it holds for every caller
-  of it and not only for this sweep, which reads the same two things to
-  tell a pending move from an unrecoverable row before it asks. Objects
-  alone never make or move a pointer: a complete prefix no row names is
-  collected after the grace like any other.
-
-  A sweep finishes the same moves once they have outlived the grace, and
-  is stricter, since nobody asked for it: it moves only over a served
-  location that is incomplete, or that holds exactly that revision or the
-  one before it. Anything else has been written to since, and is left
-  for `repair/2`.
+  `repair/2` audits every committed unit against its journal and its
+  objects, and moves nothing: the pointer's prefix must hold the
+  revision's completion object, and it is intact when its objects hash to
+  the content identity the journal's newest commit recorded. A prefix
+  whose completion object is gone is reported and left; one that is
+  complete and hashes otherwise has been edited in place since the commit,
+  or damaged, and is reported as such and left; a row whose revision holds
+  no object anywhere is reported as unrecoverable and left. The one thing
+  it gives back is what
+  `Arca.Overlay.repair_unit/2` gives back — the draft of a writer that
+  died after its commit, once the token has outlived the lifetime, and a
+  revision served at the unit's own path before units were served from
+  their prefixes, moved back into its prefix. Objects alone never make or
+  move a pointer: a complete prefix no row names is collected after the
+  grace like any other. A sweep audits nothing; the audit is asked for.
 
   ## Tenancy
 
@@ -98,11 +105,15 @@ defmodule Arca.StorageGC do
   @type holder :: {:turn | :build, String.t()}
   @type revision_key :: {root :: String.t(), unit_key :: String.t(), revision :: String.t()}
 
-  @typedoc "The roots of one athanor, as `roots/1` read them."
+  @typedoc """
+  The roots of one athanor, as `roots/1` read them, and when each
+  revision a later commit replaced stopped being the pointer.
+  """
   @type roots :: %{
           current: MapSet.t(revision_key()),
           drafts: %{{String.t(), String.t()} => DateTime.t()},
-          pins: MapSet.t(revision_key())
+          pins: MapSet.t(revision_key()),
+          superseded: %{revision_key() => DateTime.t()}
         }
 
   @typedoc "One revision prefix the snapshot does not root."
@@ -117,16 +128,13 @@ defmodule Arca.StorageGC do
 
   @typedoc """
   What a sweep did. `kept` counts the candidates a recheck saved, by
-  reason; `pending` the rooted prefixes left for a later repair, with why;
-  `unaged` the prefixes that carried no date and were given one;
+  reason; `unaged` the prefixes that carried no date and were given one;
   `unrecognized` the keys in a staging area that are no revision's.
   """
   @type report :: %{
           examined: non_neg_integer(),
           collected: non_neg_integer(),
           kept: %{atom() => non_neg_integer()},
-          repaired: non_neg_integer(),
-          pending: [{Arca.Storage.path(), term()}],
           unaged: non_neg_integer(),
           unrecognized: non_neg_integer(),
           errors: [{Arca.Storage.path(), term()}]
@@ -187,6 +195,27 @@ defmodule Arca.StorageGC do
     end
   end
 
+  @doc """
+  Whether a live holder pins `revision` of `unit` now — what a removal
+  asks before deleting the revision it retired, leaving a pinned one to
+  the collector. A pin whose holder's row is no longer live pins nothing;
+  a listing that cannot answer is read as a pin, the safe direction.
+  """
+  @spec pinned?(Prima.Actor.t(), Arca.Storage.path(), String.t()) :: boolean()
+  def pinned?(%Prima.Actor{} = actor, unit, revision)
+      when is_list(unit) and is_binary(revision) do
+    case tenant(actor) do
+      {:ok, athanor} ->
+        case not_pinned(athanor, internal_actor(actor), %{unit: unit, revision: revision}) do
+          :ok -> false
+          _pinned_or_unanswered -> true
+        end
+
+      {:error, _} ->
+        true
+    end
+  end
+
   # ---------------------------------------------------------------------------
   # Collection
   # ---------------------------------------------------------------------------
@@ -208,15 +237,12 @@ defmodule Arca.StorageGC do
          {:ok, candidates} <- candidates(actor, roots, Keyword.put(opts, :listing, listing)) do
       limit = Keyword.get(opts, :limit, @default_limit)
       dry_run = Keyword.get(opts, :dry_run, false)
-      {now, grace_ms} = clock(opts)
 
       report =
         %{
           examined: map_size(listing.groups),
           collected: 0,
           kept: %{},
-          repaired: 0,
-          pending: [],
           unaged: 0,
           unrecognized: listing.unrecognized,
           errors: []
@@ -227,11 +253,8 @@ defmodule Arca.StorageGC do
         if dry_run do
           report
         else
-          budget = max(limit - report.collected, 0)
-
           report
           |> date_unaged(actor, listing, roots)
-          |> finish_moves(actor, overdue_moves(listing, roots, now, grace_ms), budget)
           |> drop_dead_pins(actor, listing)
         end
 
@@ -241,8 +264,6 @@ defmodule Arca.StorageGC do
           examined: report.examined,
           collected: report.collected,
           kept: report.kept |> Map.values() |> Enum.sum(),
-          repaired: report.repaired,
-          pending: length(report.pending),
           errors: length(report.errors),
           duration_ms: System.monotonic_time(:millisecond) - started
         },
@@ -256,7 +277,9 @@ defmodule Arca.StorageGC do
   @doc """
   The roots of the actor's athanor, read now: the committed pointers, the
   units whose draft is held (with when it was registered), and the
-  revisions a live holder pins.
+  revisions a live holder pins; with them, when each revision a later
+  commit replaced stopped being the pointer, which dates its prefix for
+  collection.
 
   The rows are read before the pins are listed. A pin stands only if the
   pointer still named its revision after the pin was written, so a
@@ -271,7 +294,8 @@ defmodule Arca.StorageGC do
   # Step 1 and step 2 off one listing: the rows, then the keys.
   defp snapshot(actor) do
     with {:ok, athanor} <- tenant(actor),
-         {:ok, rows} <- rescuing_db("roots", fn -> {:ok, rooted_rows(athanor)} end),
+         {:ok, {rows, superseded}} <-
+           rescuing_db("roots", fn -> {:ok, {rooted_rows(athanor), superseded_at(athanor)}} end),
          {:ok, listing} <- listing(actor),
          {:ok, pins} <- live_pins(athanor, listing.pins) do
       {:ok,
@@ -290,7 +314,8 @@ defmodule Arca.StorageGC do
              into: %{},
              do: {{row.root, row.unit_key}, row.updated_at}
            ),
-         pins: pins
+         pins: pins,
+         superseded: superseded
        }, listing}
     end
   end
@@ -316,7 +341,7 @@ defmodule Arca.StorageGC do
             unit = UnitLocator.unit_path(root, key),
             {:ok, marker?} = {:ok, marker?(keys)},
             not (marker? and live_draft?(Map.get(roots.drafts, {root, key}), now, grace_ms)),
-            older_than?(started_at(inner, unit, revision, marker?), now, grace_ms) do
+            older_than?(aged_from(inner, unit, revision, marker?, roots), now, grace_ms) do
           %{
             root: root,
             unit_key: key,
@@ -358,16 +383,23 @@ defmodule Arca.StorageGC do
 
   @doc """
   Audit every committed unit of the actor's athanor against its journal
-  and its objects, and finish the moves that did not finish.
+  and its objects, giving back what a writer left undone and moving
+  nothing else (the moduledoc's Audit).
 
-  Answers, by unit path: `repaired` — the staged revision the row names
-  was moved to the served location; `intact` (a count) — nothing staged,
-  the completion object served; `left` — staged objects that were not
-  moved, with why (`:journal_mismatch`, `:staged_incomplete`,
-  `{:repair_failed, reason}`); `unrecoverable` — a
-  row whose revision is neither staged nor served, reported and left as
-  it is; `orphan_commits` — journal rows whose unit row is gone, reported
-  and left.
+  Answers, by unit path: `repaired` — a dead writer's draft released, or
+  a revision served at the unit's own path before units were served from
+  their prefixes moved back into it (`Arca.Overlay.repair_unit/2`);
+  `intact` (a count) — the pointer's prefix holds exactly the objects the
+  journal recorded; `left` — a prefix that is not what was committed, with
+  why (`:journal_mismatch` when the newest commit does not name the
+  pointer's revision, `:staged_incomplete` when the revision's completion
+  object is gone, `:edited` when the completion object is there and the
+  objects do not hash to what the commit recorded — edited in place since,
+  or damaged — and `{:repair_failed, reason}` when the give-back or the
+  move back was refused, `:stale_writer` while another writer holds the
+  unit); `unrecoverable` — a row whose revision holds no object anywhere,
+  reported and left as it is; `orphan_commits` — journal rows whose unit
+  row is gone, reported and left.
   """
   @spec repair(Prima.Actor.t(), keyword()) ::
           {:ok,
@@ -405,104 +437,97 @@ defmodule Arca.StorageGC do
     end
   end
 
+  # A unit whose revision is in its prefix is proven against the journal
+  # and, if its writer died holding the draft, given back; one whose
+  # prefix holds no object is the overlay's to move back from the unit's
+  # own path, or unrecoverable.
   defp audit(athanor, inner, row, unit, staged) do
-    if Enum.any?(staged, &(not marker_key?(&1))) do
-      finish_move(athanor, inner, row, unit, :asked)
-    else
-      case served_complete?(inner, unit) do
-        true ->
+    objects = Enum.reject(staged, &marker_key?/1)
+
+    if objects == [] do
+      case Arca.Overlay.repair_unit(inner, unit) do
+        {:ok, :repaired} ->
+          :repaired
+
+        {:ok, :nothing_pending} ->
           :intact
 
-        false ->
+        {:error, :staged_incomplete} ->
           Logger.error(
             "[Arca.StorageGC] #{Enum.join(unit, "/")} is committed at #{row.current_revision} " <>
-              "and that revision is neither staged nor served; the row is left as it is"
+              "and that revision holds no object anywhere; the row is left as it is"
           )
 
           :unrecoverable
+
+        {:error, reason} ->
+          {:left, {:repair_failed, reason}}
+      end
+    else
+      with {:ok, newest} <- journal_of(athanor, row),
+           {:ok, sameness} <- proven(inner, unit, row.current_revision, newest, objects) do
+        case {released(inner, unit), sameness} do
+          {:intact, :differs} -> {:left, :edited}
+          {outcome, _sameness} -> outcome
+        end
+      else
+        {:left, _reason} = left -> left
+        {:error, reason} -> {:left, {:repair_failed, reason}}
       end
     end
   end
 
-  # The one promotion there is: the revision the row names, proven against
-  # the journal before a byte moves.
-  defp finish_move(athanor, inner, %StorageUnit{} = row, unit, asked) do
-    with {:ok, newest, prior} <- journal_of(athanor, row),
-         :ok <- staged_as_committed(inner, unit, row.current_revision, newest),
-         :ok <- if(asked == :asked, do: :ok, else: served_replaceable(inner, unit, newest, prior)) do
-      case Arca.Overlay.repair_unit(inner, unit) do
-        {:ok, _repaired_or_nothing_pending} -> :repaired
-        {:error, reason} -> {:left, {:repair_failed, reason}}
-      end
-    else
-      {:left, _reason} = left -> left
+  # What the overlay gives back for a proven revision: a dead writer's
+  # draft, or nothing.
+  defp released(inner, unit) do
+    case Arca.Overlay.repair_unit(inner, unit) do
+      {:ok, :repaired} -> :repaired
+      {:ok, :nothing_pending} -> :intact
       {:error, reason} -> {:left, {:repair_failed, reason}}
     end
   end
 
   defp journal_of(athanor, %StorageUnit{id: id, current_revision: revision}) do
     rescuing_db("journal_of", fn ->
-      commits =
+      newest =
         from(c in where_athanor(StorageCommit, athanor),
           where: c.storage_unit_id == ^id,
           order_by: [desc: c.committed_at, desc: c.id],
-          limit: 2
+          limit: 1
         )
-        |> Arca.Repo.all()
+        |> Arca.Repo.one()
 
-      case commits do
-        [%StorageCommit{new_revision: ^revision} = newest | rest] ->
-          {:ok, newest, Enum.find(rest, &(&1.new_revision == newest.prior_revision))}
-
-        _no_commit_names_the_pointer ->
-          {:left, :journal_mismatch}
+      case newest do
+        %StorageCommit{new_revision: ^revision} -> {:ok, newest}
+        _no_commit_names_the_pointer -> {:left, :journal_mismatch}
       end
     end)
   end
 
-  defp staged_as_committed(inner, unit, revision, %StorageCommit{content_identity: committed}) do
+  # Whether the prefix holds what the journal recorded for the revision:
+  # `:identical` when every object hashes to the commit's content
+  # identity, `:differs` when the completion object is there and the
+  # objects hash otherwise — edited in place since the commit, or damaged
+  # — and `{:left, :staged_incomplete}` when the completion object is
+  # gone. Nothing here changes a byte.
+  defp proven(inner, unit, revision, %StorageCommit{content_identity: committed}, keys) do
     prefix = UnitLocator.revision_prefix(unit, revision)
 
-    with {:ok, keys} <- list_under(inner, prefix),
-         {:ok, identity} <-
-           identity_of(
-             inner,
-             Enum.reject(keys, &marker_key?/1),
-             &staged_relative(unit, prefix, &1)
-           ) do
-      if identity == committed, do: :ok, else: {:left, :staged_incomplete}
-    end
-  end
-
-  # An incomplete served location is what a move that stopped leaves. A
-  # complete one is replaced only when it is, byte for byte, this revision
-  # or the one before it: anything else has been written to since, and a
-  # move over it would take those writes.
-  defp served_replaceable(inner, unit, newest, prior) do
-    if served_complete?(inner, unit) do
-      known = [newest.content_identity | List.wrap(prior && prior.content_identity)]
-
-      with {:ok, keys} <- served_keys(inner, unit),
-           {:ok, identity} <- identity_of(inner, keys, &served_relative(unit, &1)) do
-        if identity in known, do: :ok, else: {:left, :served_diverged}
+    if completion_key(unit, revision) in keys do
+      with {:ok, identity} <- identity_of(inner, keys, &staged_relative(unit, prefix, &1)) do
+        {:ok, if(identity == committed, do: :identical, else: :differs)}
       end
     else
-      :ok
+      {:left, :staged_incomplete}
     end
   end
 
-  defp served_keys(inner, unit) do
+  # The revision's completion object under its prefix: a directory unit's
+  # sentinel, a file unit's one object.
+  defp completion_key(unit, revision) do
     case Arca.Storage.locate(unit) do
-      {:file, ^unit} -> {:ok, [unit]}
-      {:dir, ^unit, _sentinel} -> Arca.list_recursive(inner, unit)
-    end
-  end
-
-  defp served_complete?(inner, unit) do
-    case Arca.Storage.locate(unit) do
-      {:file, ^unit} -> Arca.exists?(inner, unit)
-      {:dir, ^unit, sentinel} -> Arca.exists?(inner, unit ++ [sentinel])
-      _not_a_unit -> false
+      {:file, ^unit} -> UnitLocator.staged_object(unit, revision, [])
+      {:dir, ^unit, sentinel} -> UnitLocator.staged_object(unit, revision, [sentinel])
     end
   end
 
@@ -514,8 +539,6 @@ defmodule Arca.StorageGC do
       _dir -> Enum.drop(key, length(prefix))
     end
   end
-
-  defp served_relative(unit, key), do: Enum.drop(key, length(unit))
 
   # The content identity of a set of objects, read one at a time and
   # framed by `Arca.Overlay.content_identity/1` — the framing a commit
@@ -572,41 +595,6 @@ defmodule Arca.StorageGC do
     end)
 
     %{report | unaged: length(undated)}
-  end
-
-  # The pointer's own prefixes that have outlived the grace: commits whose
-  # writer never finished the move.
-  defp overdue_moves(listing, roots, now, grace_ms) do
-    for {{root, key, revision} = id, keys} <- listing.groups,
-        MapSet.member?(roots.current, id),
-        Enum.any?(keys, &(not marker_key?(&1))),
-        older_than?(revision_time(revision), now, grace_ms),
-        do: {root, key}
-  end
-
-  defp finish_moves(report, actor, moves, budget) do
-    {:ok, athanor} = tenant(actor)
-    inner = internal_actor(actor)
-
-    moves
-    |> Enum.take(budget)
-    |> Enum.reduce(report, fn {root, key}, acc ->
-      unit = UnitLocator.unit_path(root, key)
-
-      case rescuing_db("finish_moves", fn -> {:ok, fetch(athanor, root, key)} end) do
-        {:ok, %StorageUnit{state: "committed"} = row} ->
-          case finish_move(athanor, inner, row, unit, :unasked) do
-            :repaired -> %{acc | repaired: acc.repaired + 1}
-            {:left, reason} -> %{acc | pending: [{unit, reason} | acc.pending]}
-          end
-
-        {:ok, _dropped_since} ->
-          acc
-
-        {:error, reason} ->
-          %{acc | errors: [{unit, reason} | acc.errors]}
-      end
-    end)
   end
 
   # A pin whose holder is no longer live holds nothing.
@@ -786,9 +774,7 @@ defmodule Arca.StorageGC do
     end
   end
 
-  # The staging area of a whole root: what every unit's staging prefix
-  # starts with.
-  defp staging_area(root), do: [root, "unit"] |> UnitLocator.staging_prefix() |> Enum.drop(-1)
+  defp staging_area(root), do: UnitLocator.staging_area(root)
 
   defp pins_prefix([root | rest]), do: staging_area(root) ++ [@pins | rest]
 
@@ -817,6 +803,21 @@ defmodule Arca.StorageGC do
     do: DateTime.diff(now, at, :millisecond) > grace_ms
 
   defp older_than?(:error, _now, _grace_ms), do: false
+
+  # When a prefix's age counts from: when it was begun, or, for a revision
+  # a later commit replaced, that commit — whichever is later — so the
+  # revision a reader resolved just before a commit stands through the
+  # grace after it, however long it had been the pointer's.
+  defp aged_from(inner, unit, revision, marker?, roots) do
+    {root, key} = UnitLocator.unit_key(unit)
+    left = Map.fetch(Map.get(roots, :superseded, %{}), {root, key, revision})
+
+    case {started_at(inner, unit, revision, marker?), left} do
+      {{:ok, began}, {:ok, at}} -> {:ok, Enum.max([began, at], DateTime)}
+      {:error, {:ok, at}} -> {:ok, at}
+      {began, :error} -> began
+    end
+  end
 
   # When a prefix was begun: its marker says, and a revision name
   # (`Arca.StorageUnits.new_revision/0`) carries its own time.
@@ -927,6 +928,19 @@ defmodule Arca.StorageGC do
   defp fetch(athanor, root, key) do
     from(u in where_athanor(StorageUnit, athanor), where: u.root == ^root and u.unit_key == ^key)
     |> Arca.Repo.one()
+  end
+
+  # When each revision the journal names as a commit's prior stopped being
+  # the pointer: that commit's time, keyed as a revision prefix is.
+  defp superseded_at(athanor) do
+    from(c in where_athanor(StorageCommit, athanor),
+      join: u in StorageUnit,
+      on: u.id == c.storage_unit_id and u.athanor_id == ^athanor,
+      where: not is_nil(c.prior_revision),
+      select: {u.root, u.unit_key, c.prior_revision, c.committed_at}
+    )
+    |> Arca.Repo.all()
+    |> Map.new(fn {root, key, revision, at} -> {{root, key, revision}, at} end)
   end
 
   defp rooted_rows(athanor) do

@@ -48,8 +48,8 @@ defmodule Arca.StorageProjectionChangesTest do
   end
 
   # A commit's row half, answering the generation it stamped; the draft is
-  # released as a finished move releases it, and the generation left for
-  # the test to mark.
+  # released as a writer releases it after its commit, and the generation
+  # left for the test to mark.
   defp commit!(actor, key, revision) do
     token = StorageUnits.new_writer_token()
     {:ok, draft} = StorageUnits.register_draft(actor, @root, key, token)
@@ -90,7 +90,7 @@ defmodule Arca.StorageProjectionChangesTest do
     do: StorageProjectionChanges.replace(actor, @root, token, fn -> :acknowledged end)
 
   describe "a publication" do
-    test "is pending until its move finishes, then ready at the generation its commit stamped",
+    test "is pending until its writer releases it, then ready at the generation its commit stamped",
          %{actor: actor, key: key} do
       generation = commit!(actor, key, "rev_1")
 
@@ -108,7 +108,7 @@ defmodule Arca.StorageProjectionChangesTest do
       second = commit!(actor, key, "rev_2")
       assert second > first
 
-      # The first commit's move finishes after the second commit landed.
+      # The first writer's release comes after the second commit landed.
       assert {:error, :stale_generation} =
                StorageProjectionChanges.mark_ready(actor, @root, key, first, "rev_1")
 
@@ -299,8 +299,8 @@ defmodule Arca.StorageProjectionChangesTest do
          %{actor: actor, key: key} do
       generation = commit!(actor, key, "rev_1")
 
-      # Nothing is staged for rev_1 in this tree, so the settle finds no
-      # move to finish and settles the row where it stands.
+      # Nothing is staged for rev_1 in this tree, so the settle finds
+      # nothing to release and settles the row where it stands.
       assert {:ok, 1} =
                StorageProjectionChanges.settle_stale(actor, @root,
                  settle_after_ms: 0,

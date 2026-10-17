@@ -37,7 +37,7 @@ defmodule Arca.StorageUnitsTest do
   end
 
   # Register, commit `revision` against what the draft answered, and
-  # release the draft as a finished move does.
+  # release the draft as a writer does after its commit.
   defp commit!(actor, key, revision, attrs \\ %{}) do
     token = StorageUnits.new_writer_token()
     {:ok, draft} = StorageUnits.register_draft(actor, @root, key, token)
@@ -149,8 +149,8 @@ defmodule Arca.StorageUnitsTest do
   end
 
   describe "commit/5" do
-    test "moves the pointer, keeps the token and appends exactly one journal row; the finish " <>
-           "releases the token",
+    test "moves the pointer, keeps the token and appends exactly one journal row; the release " <>
+           "clears the token",
          %{
            actor: actor,
            key: key
@@ -160,7 +160,7 @@ defmodule Arca.StorageUnitsTest do
       assert :committed = StorageUnits.commit(actor, draft, nil, "wrt_1", identity("rev_1"))
 
       # The writer still holds the unit: nobody else registers or commits
-      # while the committed revision moves to the served location.
+      # until the writer releases the committed revision.
       assert {:ok, %{state: "committed", current_revision: "rev_1", draft_writer_token: "wrt_1"}} =
                StorageUnits.current(actor, @root, key)
 

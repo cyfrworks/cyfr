@@ -947,15 +947,6 @@ defmodule Compendium.Providers.Aqua do
       {:error, {:limit_reached, _, _} = reason} ->
         {:error, reason}
 
-      # The unit's row is committed and only the move of its bytes did
-      # not finish, so the role IS published: an index that does not name
-      # a published role is a role the runtime never offers. The refusal
-      # still says the bytes are not all served, and the storage sweep's
-      # repair finishes the move.
-      {:error, {:finish_failed, _}} = published ->
-        resync_index(ctx)
-        published
-
       # The store could not say whether the commit landed. The resync
       # reads the tree, so it is right either way.
       {:error, :outcome_unknown} = unknown ->

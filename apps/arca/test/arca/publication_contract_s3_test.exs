@@ -11,8 +11,9 @@ defmodule Arca.PublicationContractS3Test do
   directories and a conditional write it must ask the server for. The
   double stands in for that shape in every run; only a real store proves
   it — the ETag a precondition is, the key listing a staging area is
-  read with, and a move to the served location made object by object
-  because `c:Arca.Storage.replace_tree/3` is not there.
+  read with, and a revision served key by key from the prefix it was
+  staged under, since `c:Arca.Storage.replace_tree/3` is not there and
+  nothing is swapped into place.
 
   Excluded from ordinary runs. The `s3-minio` CI job runs it with
   `mix test --only s3_integration` against its pinned

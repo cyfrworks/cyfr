@@ -227,14 +227,12 @@ defmodule Compendium.Registry do
   # typed refusals are already the vocabulary every surface renders and
   # are passed through rather than flattened into one write failure —
   # `:stale_writer` and `:stale_revision` are another writer, not a
-  # broken store, and two of them say the unit is not the publish's to
-  # clean up: `{:finish_failed, _}` is a PUBLISHED unit whose move to the
-  # served location did not finish, and `:outcome_unknown` is a commit
-  # whose outcome the store could not state. Nothing here deletes the unit
-  # after either — a delete would retire a row that stands, or one that
-  # may stand — and no component row lands, so the tree and the rows
-  # disagree only until the storage sweep repairs the move and the
-  # indexer registers what it finds.
+  # broken store, and `:outcome_unknown` says the unit is not the
+  # publish's to clean up: a commit whose outcome the store could not
+  # state may stand. Nothing here deletes the unit after it — a delete
+  # would retire a row that may stand — and no component row lands, so
+  # the tree and the rows disagree only until the indexer registers what
+  # it finds.
   defp commit_outcome(answer, write_failure) do
     case answer do
       {:ok, _written} = ok ->

@@ -19,11 +19,12 @@ defmodule Arca.StorageProjectionChanges do
 
     * a publication (`Arca.StorageUnits` moving a unit's pointer) writes
       the new revision not ready, and `mark_ready/5` marks it once its
-      move to the served location finishes;
+      writer has released the unit;
     * a retirement writes a tombstone not ready, even for a unit no row
       names, marked ready once the tenant delete returns;
-    * a repair writes the unit's revision not ready before it touches a
-      served byte (`begin_repair/4`), marked ready when it finishes;
+    * a repair writes the unit's revision not ready before it releases a
+      dead writer's draft or moves a revision into its prefix
+      (`begin_repair/4`), marked ready when it finishes;
     * an edit inside a unit writes a pending generation before the write
       (`begin_edit/3`) and a later, ready one after it (`finish_edit/4`).
 
@@ -410,9 +411,10 @@ defmodule Arca.StorageProjectionChanges do
   end
 
   @doc """
-  A repair is about to move `revision` of a unit to the served location:
-  the unit's pending generation, the revision unchanged. Answers the
-  generation `mark_ready/5` is handed when the move finishes.
+  A repair is about to release `revision` of a unit — a dead writer's
+  draft given back, or a revision moved into its prefix: the unit's
+  pending generation, the revision unchanged. Answers the generation
+  `mark_ready/5` is handed when the repair finishes.
   """
   @spec begin_repair(Prima.Actor.t(), String.t(), String.t(), String.t()) ::
           {:ok, pos_integer()} | refusal()
@@ -443,15 +445,15 @@ defmodule Arca.StorageProjectionChanges do
   and last written more than `settle_after_ms:` ago (option, required;
   `now:` for the clock) is repaired or marked ready where it stands.
 
-  Each is first asked of `Arca.Overlay.repair_unit/2`. A move the journal
-  proves is finished there, and the repair marks its own new generation.
-  Nothing to move (an edit, a deletion, a unit laid by hand), or only the
-  remainder of a move that already served the whole revision, and the
-  change is marked ready at its generation: a writer still working marks
-  a newer one when it returns (`finish_edit/4`, `mark_ready/5`), so the
-  projection derives again. A change whose move cannot be proven — a
-  journal that names another revision, a store that does not answer — is
-  left pending. Answers how many changes are ready now.
+  Each is first asked of `Arca.Overlay.repair_unit/2`. A dead writer's
+  draft is released there, and the repair marks its own new generation.
+  Nothing to release (an edit, a deletion, a unit whose draft is free or
+  that no committed row names), or a revision whose completion object is
+  nowhere, and the change is marked ready at its generation: a writer
+  still working marks a newer one when it returns (`finish_edit/4`,
+  `mark_ready/5`), so the projection derives again. A change the repair
+  cannot settle — a draft still inside its lifetime, a store that does
+  not answer — is left pending. Answers how many changes are ready now.
   """
   @spec settle_stale(Prima.Actor.t(), String.t(), keyword()) ::
           {:ok, non_neg_integer()} | refusal()

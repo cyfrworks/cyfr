@@ -131,18 +131,19 @@ end
 defmodule Arca.PublicationContract do
   @moduledoc """
   The publication contract of a unit, as one suite body every adapter it
-  is proven on runs: a database pointer names a committed immutable
-  revision and a journal records the same commit; a complete object set
-  is not proof of publication; repair promotes neither a losing writer's
-  objects nor the remainder of a move that stopped.
+  is proven on runs: a database pointer names a committed revision served
+  from the prefix it was staged under, and a journal records the same
+  commit; a complete object set is not proof of publication; repair moves
+  nothing and invents nothing, and promotes no losing writer's objects.
 
   Every case drives `Arca.Overlay` over the adapter under test, with
   faults injected between the two (`Arca.PublicationContract.Faults`), so
   the contract is the same whatever stores the bytes. The fault-injection
   cases are the crash suite the write protocol owes: a writer that dies
-  before its upload, during it, before the commit and after it; a move to
-  the served location that fails; two writers with one expected revision;
-  objects that are not what was written.
+  before its upload, during it, before the commit and after it; a prefix
+  that is not what was committed; a revision served at the unit's own
+  path before units were served from their prefixes; two writers with one
+  expected revision; objects that are not what was written.
 
   `use` it with the adapters to parameterize over, and `moduletag:` for a
   run that needs a store this one is excluded without:
@@ -229,15 +230,14 @@ defmodule Arca.PublicationContract do
         do: Arca.Overlay.commit_unit(actor, unit, revision(tag), cap: :exempt)
 
       # What a reader reads: the pointer, resolved once, then the unit's
-      # objects where they are served.
+      # objects at the unit's own paths, which the facade resolves to the
+      # committed revision's prefix.
       defp read(actor, unit) do
         {root, key} = UnitLocator.unit_key(unit)
 
         case StorageUnits.current(actor, root, key) do
           {:ok, pointer} ->
-            {:ok, served} =
-              Arca.read_subtree(actor, UnitLocator.served_path(unit))
-
+            {:ok, served} = Arca.read_subtree(actor, unit)
             {pointer.current_revision, Map.new(served)}
 
           {:error, :not_found} ->
@@ -262,17 +262,51 @@ defmodule Arca.PublicationContract do
         end
       end
 
+      # The names staged under revisions other than the one the row names
+      # — a writer's work in progress, a loser's remains, or a revision the
+      # pointer left for the collector. The served revision's own objects
+      # are the unit, read through `read/2`.
       defp staged(actor, unit) do
-        {:ok, leaves} =
-          Arca.list_recursive(actor, UnitLocator.staging_prefix(unit))
+        prefix = UnitLocator.staging_prefix(unit)
+        {:ok, leaves} = Arca.list_recursive(actor, prefix)
 
-        for leaf <- leaves, do: List.last(leaf)
+        current =
+          case read(actor, unit) do
+            {revision, _served} -> revision
+            :unpublished -> nil
+          end
+
+        for leaf <- leaves, Enum.at(leaf, length(prefix)) != current, do: List.last(leaf)
+      end
+
+      # Every revision with a prefix under the unit's staging, the served
+      # one included, sorted.
+      defp staged_revisions(actor, unit) do
+        prefix = UnitLocator.staging_prefix(unit)
+        {:ok, leaves} = Arca.list_recursive(actor, prefix)
+        leaves |> Enum.map(&Enum.at(&1, length(prefix))) |> Enum.uniq() |> Enum.sort()
+      end
+
+      # A revision's marker and objects laid under its prefix through the
+      # facade, as another member's writer stages them.
+      defp lay(actor, unit, revision, tag) do
+        marker =
+          Jason.encode!(%{
+            "revision" => revision,
+            "started_at" => DateTime.to_iso8601(DateTime.utc_now())
+          })
+
+        :ok = Arca.put(actor, UnitLocator.marker_path(unit, revision), marker)
+
+        for {rel, bytes} <- whole(tag),
+            do: :ok = Arca.put(actor, UnitLocator.staged_object(unit, revision, rel), bytes)
+
+        revision
       end
 
       defp staging?(path), do: UnitLocator.staging?(path)
       defp marker?(path), do: List.last(path) == UnitLocator.marker_name()
       defp staged_object?(path), do: staging?(path) and not marker?(path)
-      defp served?(path, unit), do: List.starts_with?(path, unit)
 
       # The unit's change as the root's projection sees it.
       defp change(actor, unit) do
@@ -287,6 +321,38 @@ defmodule Arca.PublicationContract do
         assert_receive {:DOWN, ^ref, :process, ^pid, reason}, 30_000
         Faults.clear()
         reason
+      end
+
+      # A writer that dies between its commit and its release: the commit's
+      # announcement runs in the writer's process, after the pointer moved
+      # and before the draft is given back. Killed outright there — an exit
+      # raised inside a telemetry handler is caught and detached by
+      # telemetry, and the writer would go on.
+      defp dies_after_commit(actor, unit, tag) do
+        {root, key} = UnitLocator.unit_key(unit)
+        handler = {__MODULE__, make_ref()}
+        on_exit(fn -> :telemetry.detach(handler) end)
+        test_pid = self()
+
+        :ok =
+          :telemetry.attach(
+            handler,
+            Arca.StorageProjectionChanges.event(),
+            fn _event, _measurements, metadata, _config ->
+              if metadata.athanor_id == actor.athanor_id and metadata.root == root and
+                   not metadata.ready and self() != test_pid and
+                   match?(
+                     {:ok, %{draft_writer_token: token}} when is_binary(token),
+                     StorageUnits.current(actor, root, key)
+                   ) do
+                :telemetry.detach(handler)
+                Process.exit(self(), :kill)
+              end
+            end,
+            nil
+          )
+
+        writer_dies(fn -> commit(actor, unit, tag) end)
       end
 
       # A writer parked at the operation `fault` waits on.
@@ -335,7 +401,7 @@ defmodule Arca.PublicationContract do
           assert Arca.Overlay.unit_status(actor, unit) == {:ok, :own}
 
           # Stamped for the root's projection by the commit, and ready once
-          # the move finished.
+          # the writer released the unit.
           assert %{ready: true, pending: true, source_revision: ^revision, tombstone: false} =
                    change(actor, unit)
         end
@@ -438,7 +504,8 @@ defmodule Arca.PublicationContract do
           assert [%{new_revision: first}, %{prior_revision: first, new_revision: ^revision}] =
                    journal(actor, unit)
 
-          assert staged(actor, unit) == []
+          # The replaced revision's prefix stands for the collector; nothing else.
+          assert staged_revisions(actor, unit) == Enum.sort([first, revision])
         end
       end
 
@@ -493,13 +560,18 @@ defmodule Arca.PublicationContract do
           assert served == whole("one")
           assert [_only_the_first] = journal(actor, unit)
 
-          # Nothing for repair to promote: it reads the committed revision's
-          # prefix, which is long served and gone.
-          assert {:ok, :nothing_pending} =
-                   Arca.Overlay.repair_unit(actor, unit)
+          # Repair promotes none of it: the dead writer's draft is its
+          # holder's through the lifetime, then given back with the
+          # published revision unchanged; the half-staged prefix is the
+          # collector's.
+          assert {:error, :stale_writer} = Arca.Overlay.repair_unit(actor, unit)
+          expire_drafts!()
+          assert {:ok, :repaired} = Arca.Overlay.repair_unit(actor, unit)
 
           assert {^first, served} = read(actor, unit)
           assert served == whole("one")
+          assert "a.txt" in staged(actor, unit)
+          assert {:ok, :nothing_pending} = Arca.Overlay.repair_unit(actor, unit)
         end
 
         test "before the commit: a complete object set is not a publication", %{
@@ -529,30 +601,25 @@ defmodule Arca.PublicationContract do
           assert read(actor, unit) == :unpublished
         end
 
-        test "after the commit, before its acknowledgement: published, and repairable", %{
+        test "after the commit, before its release: published, and released by repair", %{
           actor: actor,
           unit: unit
         } do
-          Faults.inject(fn op, path ->
-            if op in [:put, :replace_tree] and served?(path, unit),
-              do: exit(:died_after_commit),
-              else: :pass
-          end)
+          assert :killed = dies_after_commit(actor, unit, "one")
 
-          assert :died_after_commit = writer_dies(fn -> commit(actor, unit, "one") end)
-
-          # The commit stands: the pointer, the journal row, the revision's
-          # objects intact under its prefix.
+          # The commit stands and the revision is read already: the pointer,
+          # the journal row, the revision's objects under its prefix.
           {root, key} = UnitLocator.unit_key(unit)
 
           assert {:ok, %{state: "committed", current_revision: revision}} =
                    StorageUnits.current(actor, root, key)
 
           assert [%{new_revision: ^revision}] = journal(actor, unit)
-          assert "a.txt" in staged(actor, unit)
+          assert {^revision, served} = read(actor, unit)
+          assert served == whole("one")
 
           # The dead writer's draft holds the unit through its lifetime, so
-          # repair waits it out, then takes the draft, serves and releases.
+          # repair waits it out, then takes the draft and releases it.
           assert {:error, :stale_writer} = Arca.Overlay.repair_unit(actor, unit)
           expire_drafts!()
           assert {:ok, :repaired} = Arca.Overlay.repair_unit(actor, unit)
@@ -568,21 +635,15 @@ defmodule Arca.PublicationContract do
                    Arca.Overlay.repair_unit(actor, unit)
         end
 
-        test "an interrupted promotion stays pending until the repair marks a newer generation ready",
+        test "a release that never came leaves the generation pending until the repair marks a newer one ready",
              %{actor: actor, unit: unit} do
-          Faults.inject(fn op, path ->
-            if op in [:put, :replace_tree] and served?(path, unit),
-              do: exit(:died_mid_promotion),
-              else: :pass
-          end)
-
-          assert :died_mid_promotion = writer_dies(fn -> commit(actor, unit, "one") end)
+          assert :killed = dies_after_commit(actor, unit, "one")
 
           {root, key} = UnitLocator.unit_key(unit)
           assert {:ok, %{current_revision: revision}} = StorageUnits.current(actor, root, key)
 
           # The commit's generation stands, not ready: the projection must
-          # not take the served location for the revision the row names.
+          # not take the revision as settled before the release it never got.
           committed = change(actor, unit)
           assert %{ready: false, pending: true, source_revision: ^revision} = committed
 
@@ -610,96 +671,114 @@ defmodule Arca.PublicationContract do
       end
 
       # ---------------------------------------------------------------------------
-      # A finish that fails, and a repair that fails
+      # A prefix that is not what was committed, and a revision from before
+      # units were served from their prefixes
       # ---------------------------------------------------------------------------
 
-      describe "a move to the served location that fails" do
-        @tag :capture_log
-        test "is never a lost commit, and a repair that fails part-way is repaired again", %{
+      describe "a committed revision whose completion object is gone" do
+        test "is reported and left, the row kept, and a later commit lands over it", %{
           actor: actor,
-          unit: unit
+          unit: unit,
+          adapter: adapter
         } do
-          fail_serving = fn ->
-            Faults.inject(fn op, path ->
-              cond do
-                op == :replace_tree and served?(path, unit) ->
-                  {:error, :enospc}
+          assert {:ok, _} = commit(actor, unit, "one")
+          {revision, _served} = read(actor, unit)
 
-                op == :put and served?(path, unit) and List.last(path) == "b.txt" ->
-                  {:error, :enospc}
+          # Damage beneath the overlay: the sentinel of the pointer's prefix goes.
+          :ok = adapter.delete(actor, UnitLocator.staged_object(unit, revision, [@sentinel]))
 
-                true ->
-                  :pass
-              end
-            end)
-          end
-
-          fail_serving.()
-          assert {:error, {:finish_failed, :enospc}} = commit(actor, unit, "one")
-
-          {root, key} = UnitLocator.unit_key(unit)
-          assert {:ok, %{current_revision: revision}} = StorageUnits.current(actor, root, key)
-          assert [%{new_revision: ^revision}] = journal(actor, unit)
-          assert %{ready: false} = change(actor, unit)
-
-          # The repair fails where the commit's own move did.
-          assert {:error, {:finish_failed, :enospc}} =
-                   Arca.Overlay.repair_unit(actor, unit)
-
-          assert {:ok, %{current_revision: ^revision}} = StorageUnits.current(actor, root, key)
-          assert "b.txt" in staged(actor, unit)
-          assert %{ready: false} = change(actor, unit)
-
-          Faults.clear()
-          assert {:ok, :repaired} = Arca.Overlay.repair_unit(actor, unit)
+          # Nothing is moved or invented: the pointer and the journal stand,
+          # the remaining objects read, and the unit is no complete copy.
+          assert {:error, :staged_incomplete} = Arca.Overlay.repair_unit(actor, unit)
           assert {^revision, served} = read(actor, unit)
-          assert served == whole("one")
-          assert staged(actor, unit) == []
-          assert [_one_commit_throughout] = journal(actor, unit)
-          assert %{ready: true, source_revision: ^revision} = change(actor, unit)
-        end
-
-        @tag :capture_log
-        test "a prefix a failed removal left partial is never served over the complete unit", %{
-          actor: actor,
-          unit: unit
-        } do
-          # The move served the whole revision and then failed part-way
-          # through removing its prefix: the unit is committed, complete and
-          # served, and what is left staged is a subset of it.
-          Faults.inject(fn op, path ->
-            if op == :delete_tree and staging?(path), do: {:error, :enospc}, else: :pass
-          end)
-
-          assert {:error, {:finish_failed, :enospc}} = commit(actor, unit, "one")
-          Faults.clear()
-
-          assert {revision, served} = read(actor, unit)
-          assert served == whole("one")
-
-          # What the removal got through before it failed.
-          :ok =
-            Arca.delete(
-              actor,
-              UnitLocator.staged_object(unit, revision, ["a.txt"])
-            )
-
-          refute "a.txt" in staged(actor, unit)
-
-          # The remainder is not the revision the journal recorded, so it is
-          # promoted over nothing: the served unit stands whole.
-          assert {:error, :staged_incomplete} =
-                   Arca.Overlay.repair_unit(actor, unit)
-
-          assert {^revision, served} = read(actor, unit)
-          assert served == whole("one")
-          assert Arca.Overlay.unit_status(actor, unit) == {:ok, :own}
-          assert [_one_commit_throughout] = journal(actor, unit)
+          assert served == Map.delete(whole("one"), [@sentinel])
+          assert [_one_commit] = journal(actor, unit)
+          refute Arca.exists?(actor, unit ++ [@sentinel])
 
           # A later commit lands over it as any commit does.
           assert {:ok, _} = commit(actor, unit, "two")
           assert {_next, served} = read(actor, unit)
           assert served == whole("two")
+          assert {:ok, :nothing_pending} = Arca.Overlay.repair_unit(actor, unit)
+        end
+      end
+
+      describe "a revision served at the unit's own path before this shape" do
+        # What the earlier finish left: the revision's objects at the unit's
+        # own path, its prefix removed — laid beneath the overlay.
+        defp serve_at_unit!(actor, unit, adapter) do
+          {revision, _served} = read(actor, unit)
+          prefix = UnitLocator.revision_prefix(unit, revision)
+          {:ok, leaves} = adapter.list_recursive(actor, prefix)
+
+          for leaf <- leaves, List.last(leaf) != UnitLocator.marker_name() do
+            {:ok, bytes} = adapter.get(actor, leaf)
+            :ok = adapter.put(actor, unit ++ Enum.drop(leaf, length(prefix)), bytes)
+          end
+
+          :ok = adapter.delete_tree(actor, prefix)
+          revision
+        end
+
+        test "is read where it is, and the first edit moves it into its prefix under the lease",
+             %{actor: actor, unit: unit, adapter: adapter} do
+          assert {:ok, _} = commit(actor, unit, "one")
+          revision = serve_at_unit!(actor, unit, adapter)
+          assert {:ok, []} = Arca.list_recursive(actor, UnitLocator.staging_prefix(unit))
+
+          # Every reader answers from the unit's own path meanwhile.
+          assert {^revision, served} = read(actor, unit)
+          assert served == whole("one")
+          assert {:ok, "a of one"} = Arca.get(actor, unit ++ ["a.txt"])
+          assert Arca.exists?(actor, unit ++ [@sentinel])
+          assert {:ok, entries} = Arca.list_typed(actor, unit)
+          assert Enum.sort(entries) == [{"a.txt", :file}, {@sentinel, :file}, {"sub", :dir}]
+          assert Arca.Overlay.unit_status(actor, unit) == {:ok, :own}
+          assert {:ok, %{^unit => :own}} = Arca.Overlay.unit_statuses(actor, "components")
+          before = change(actor, unit)
+
+          :ok = Arca.put(actor, unit ++ ["a.txt"], "edited")
+
+          # The revision is in its prefix with the edit, nothing stands at
+          # the unit's own path, and no commit was made: the pointer and
+          # the journal are as they were, the generation newer and ready.
+          edited = Map.put(whole("one"), ["a.txt"], "edited")
+          assert {^revision, served} = read(actor, unit)
+          assert served == edited
+          {:ok, moved} = Arca.read_subtree(actor, UnitLocator.revision_prefix(unit, revision))
+          assert Map.new(moved) == edited
+          assert {:ok, []} = adapter.list_recursive(actor, unit)
+          assert [_still_one_commit] = journal(actor, unit)
+          assert %{ready: true, source_revision: ^revision} = after_edit = change(actor, unit)
+          assert after_edit.generation > before.generation
+          assert {:ok, :nothing_pending} = Arca.Overlay.repair_unit(actor, unit)
+        end
+
+        test "is moved into its prefix by repair, and superseded whole by a commit", %{
+          actor: actor,
+          unit: unit,
+          adapter: adapter
+        } do
+          assert {:ok, _} = commit(actor, unit, "one")
+          revision = serve_at_unit!(actor, unit, adapter)
+
+          assert {:ok, :repaired} = Arca.Overlay.repair_unit(actor, unit)
+          assert {^revision, served} = read(actor, unit)
+          assert served == whole("one")
+          assert {:ok, []} = adapter.list_recursive(actor, unit)
+          assert {:ok, :nothing_pending} = Arca.Overlay.repair_unit(actor, unit)
+
+          # Served at the unit's own path again, a commit supersedes it
+          # whole: the new revision in its prefix, the unit's own path
+          # cleared behind it.
+          serve_at_unit!(actor, unit, adapter)
+          assert {:ok, _} = commit(actor, unit, "two")
+          assert {two, served} = read(actor, unit)
+          assert served == whole("two")
+          refute two == revision
+          assert {:ok, []} = adapter.list_recursive(actor, unit)
+          assert staged_revisions(actor, unit) == [two]
+          assert [_one, %{new_revision: ^two}] = journal(actor, unit)
         end
       end
 
@@ -739,10 +818,12 @@ defmodule Arca.PublicationContract do
           # token: a taker here is refused at once.
           assert {:error, :stale_writer} = commit(actor, unit, "winner")
 
-          # Another member takes the expired lease through the rows alone
-          # and commits against the revision both staged against.
+          # Another member takes the expired lease through the rows alone,
+          # stages its revision under its own prefix and commits against the
+          # revision both staged against.
+          {first, _} = read(actor, unit)
           {:ok, taken} = StorageUnits.register_draft(actor, root, key, "wrt_member")
-          winner = StorageUnits.new_revision()
+          winner = lay(actor, unit, StorageUnits.new_revision(), "winner")
 
           {:committed, _generation} =
             StorageUnits.stamped_commit(actor, taken, taken.current_revision, "wrt_member", %{
@@ -757,9 +838,13 @@ defmodule Arca.PublicationContract do
           assert {:error, :stale_revision} = Task.await(loser, 30_000)
 
           assert [_one, %{new_revision: ^winner}] = journal(actor, unit)
+          assert {^winner, served} = read(actor, unit)
+          assert served == whole("winner")
 
-          # The loser's objects are gone, and repair has nothing of its to find.
-          assert staged(actor, unit) == []
+          # The loser's objects are gone — the staging holds the first
+          # revision, the collector's, and the winner's — and repair has
+          # nothing of the loser's to find.
+          assert staged_revisions(actor, unit) == Enum.sort([first, winner])
           assert {:ok, :nothing_pending} = Arca.Overlay.repair_unit(actor, unit)
 
           # The unit is free again: this node's writer lands whole.
@@ -874,8 +959,11 @@ defmodule Arca.PublicationContract do
           published = change(actor, unit)
           test_pid = self()
 
+          # The edit lands in the committed revision's prefix.
           Faults.inject(fn op, path ->
-            if op == :put and path == unit ++ ["a.txt"], do: park(test_pid), else: :pass
+            if op == :put and staging?(path) and List.last(path) == "a.txt",
+              do: park(test_pid),
+              else: :pass
           end)
 
           edit = Task.async(fn -> Arca.put(actor, unit ++ ["a.txt"], "edited") end)
@@ -922,38 +1010,60 @@ defmodule Arca.PublicationContract do
       # Objects no row names
       # ---------------------------------------------------------------------------
 
-      describe "a complete object set no row names" do
-        test "is not a published unit to any reader", %{actor: actor, unit: unit} do
+      describe "bytes no committed row names" do
+        test "are nothing: a write into a unit no row names is refused, and a complete object set " <>
+               "under its staging is no unit to any reader",
+             %{actor: actor, unit: unit} do
+          # A plain write into a unit that has no committed revision has
+          # nothing to edit.
+          assert {:error, :not_found} = Arca.put(actor, unit ++ ["a.txt"], "hand-laid")
+          assert {:error, :not_found} = Arca.append(actor, unit ++ ["a.txt"], "hand-laid")
+
+          assert {:error, :not_found} =
+                   Arca.put_if_none_match(actor, unit ++ ["a.txt"], "hand-laid")
+
+          # A complete object set laid under the unit's staging, naming a
+          # revision no row names, is at most the collector's.
+          orphan = StorageUnits.new_revision()
+
           for {rel, bytes} <- whole("hand-laid"),
-              do: :ok = Arca.put(actor, unit ++ rel, bytes)
+              do: :ok = Arca.put(actor, UnitLocator.staged_object(unit, orphan, rel), bytes)
 
           assert read(actor, unit) == :unpublished
-          # Bytes the athanor holds, never a complete copy.
-          assert Arca.Overlay.unit_status(actor, unit) == {:ok, :own}
-
-          assert {:ok, %{^unit => :own}} =
-                   Arca.Overlay.unit_statuses(actor, "components")
-
+          assert {:error, :not_found} = Arca.get(actor, unit ++ ["a.txt"])
+          refute Arca.exists?(actor, unit ++ [@sentinel])
+          assert {:ok, []} = Arca.list_recursive(actor, unit)
+          assert Arca.Overlay.unit_status(actor, unit) == {:ok, :absent}
+          assert {:ok, statuses} = Arca.Overlay.unit_statuses(actor, "components")
+          refute Map.has_key?(statuses, unit)
           assert {:error, :not_found} = Arca.Overlay.repair_unit(actor, unit)
 
-          # A create never replaces what stands there; a commit does, whole.
-          assert {:error, :exists} =
+          # A create lands — nothing exists — and a commit lands whole; the
+          # orphan prefix is not theirs.
+          assert {:ok, _} =
                    Arca.Overlay.commit_unit(actor, unit, revision("one"),
                      cap: :exempt,
                      if_absent: true
                    )
 
-          assert {:ok, _} = commit(actor, unit, "one")
           assert {_revision, served} = read(actor, unit)
           assert served == whole("one")
+          assert Enum.sort(staged(actor, unit)) == Enum.sort([@sentinel, "a.txt", "b.txt"])
         end
 
-        test "a subtree replacement carries served objects into the unit's first revision", %{
-          actor: actor,
-          unit: unit
-        } do
-          for {rel, bytes} <- whole("hand-laid"),
-              do: :ok = Arca.put(actor, unit ++ rel, bytes)
+        test "a subtree replacement needs a committed unit", %{actor: actor, unit: unit} do
+          assert {:error, :not_found} =
+                   Arca.Overlay.replace_subtree(
+                     actor,
+                     unit,
+                     ["sub"],
+                     [{["c.txt"], "c"}],
+                     cap: :exempt
+                   )
+
+          assert journal(actor, unit) == []
+
+          assert {:ok, _} = commit(actor, unit, "one")
 
           assert :ok =
                    Arca.Overlay.replace_subtree(
@@ -966,24 +1076,9 @@ defmodule Arca.PublicationContract do
 
           assert {revision, served} = read(actor, unit)
           assert served[["sub", "c.txt"]] == "c"
-          assert served[["a.txt"]] == "a of hand-laid"
+          assert served[["a.txt"]] == "a of one"
           refute Map.has_key?(served, ["sub", "b.txt"])
-          assert [%{prior_revision: nil, new_revision: ^revision}] = journal(actor, unit)
-
-          # With no sentinel served there is no unit to carry over.
-          bare = List.replace_at(unit, 3, "bare-" <> Enum.at(unit, 3))
-          :ok = Arca.put(actor, bare ++ ["a.txt"], "orphan")
-
-          assert {:error, :not_found} =
-                   Arca.Overlay.replace_subtree(
-                     actor,
-                     bare,
-                     ["sub"],
-                     [{["c.txt"], "c"}],
-                     cap: :exempt
-                   )
-
-          assert journal(actor, bare) == []
+          assert [%{prior_revision: nil}, %{new_revision: ^revision}] = journal(actor, unit)
         end
 
         test "a dropped unit is retired before its objects go, and lands again as a new draft", %{

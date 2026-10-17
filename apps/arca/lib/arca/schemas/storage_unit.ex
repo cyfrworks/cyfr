@@ -32,10 +32,10 @@ defmodule Arca.Schemas.StorageUnit do
     * `committed` — the pointer names a revision. A later draft against
       it keeps the state (readers keep the committed revision) and is
       visible as a non-nil `draft_writer_token`; so is the commit's own
-      writer while it moves the revision to the served location, since a
-      commit keeps the token until the move is released.
+      writer until its release, since a commit keeps the token until the
+      revision is released.
     * `retiring` — a removal holds the unit under its own token while it
-      clears the served location; readers see no unit, and no commit,
+      deletes the retired revision's prefix; readers see no unit, and no commit,
       draft or second removal lands until the token is cleared or has
       outlived the draft's lifetime.
     * `retired` — the unit was dropped; the pointer keeps its last

@@ -15,9 +15,9 @@ defmodule Arca.StorageUnits do
   ## The write protocol's row half
 
   The draft is the unit's one write lease: whoever holds it owns every
-  transition of the unit — the next commit, the move of its bytes to the
-  served location, its removal — and nobody else may make one until it is
-  given back or has outlived `draft_ttl_ms/0`.
+  transition of the unit — the next commit, its release, its removal —
+  and nobody else may make one until it is given back or has outlived
+  `draft_ttl_ms/0`.
 
     1. `register_draft/4` gives the unit's one draft to a writer's token.
        Another writer is refused while that draft is live — held, and
@@ -31,9 +31,9 @@ defmodule Arca.StorageUnits do
        the revision the writer staged against and the draft token with the
        writer's, moves the pointer and appends exactly one journal row. Of
        two writers with one expected revision exactly one commits. The
-       token is KEPT: the writer still holds the unit while it moves the
-       committed revision to the served location, so no other commit can
-       land under that move and no removal can delete under it.
+       token is KEPT: the writer still holds the unit until its release,
+       so no other commit can land and no removal can delete between its
+       commit and its release.
     4. `release_served/4` is the finish's one short transaction: it gives
        the draft back only while the pointer still names the revision the
        writer served and the token is still the writer's. A writer whose
@@ -41,8 +41,9 @@ defmodule Arca.StorageUnits do
        `:stale_writer` and has published nothing a reader will keep.
 
   A removal takes the same lease: `stamped_retire/4` moves the row to
-  `retiring` under a token of its own, the deleter clears the served
-  location while it holds it, and `finish_retire/4` retires the row. A
+  `retiring` under a token of its own, the deleter deletes the retired
+  revision's prefix while it holds it, and `finish_retire/4` retires the
+  row. A
   commit, a registration or another removal against a `retiring` row is
   refused `:stale_writer` while that token lives.
 
@@ -113,8 +114,8 @@ defmodule Arca.StorageUnits do
   staged. A `retired` row becomes a `draft` again with no pointer; the
   journal keeps its earlier commits. So does a `retiring` row whose
   deleter's token has outlived the draft's lifetime: the deleter is dead,
-  and what it left at the served location is replaced whole by the next
-  commit. Registering again with the same token holds, and renews the
+  and what it left of the unit is the collector's, and the next commit's
+  to supersede. Registering again with the same token holds, and renews the
   lease. `{:error, :stale_writer}` when another writer's live draft holds
   the unit — a commit being staged or finished, or a removal under way.
   """
@@ -148,9 +149,9 @@ defmodule Arca.StorageUnits do
   end
 
   @doc """
-  The unit's row as `writer_token` holds it — the check a finish, a
-  repair or a removal makes immediately before it touches the served
-  location, under the overlay's node-local fence. `{:error, :stale_writer}`
+  The unit's row as `writer_token` holds it — the check a release, a
+  repair or a removal makes immediately before it touches a revision's
+  prefix, under the overlay's node-local fence. `{:error, :stale_writer}`
   when the row is gone or its draft is no longer this writer's: the token
   was taken after it outlived the draft's lifetime, and the unit is its
   taker's.
@@ -167,8 +168,8 @@ defmodule Arca.StorageUnits do
   @doc """
   The finish's release: one short transaction that gives the draft back
   only while the row is committed at `revision` and the draft is still
-  `writer_token`'s — the served bytes are then the pointer's, and the
-  next writer may take the unit. `{:error, :stale_revision}` when the
+  `writer_token`'s — the revision's prefix is then read through the
+  pointer alone, and the next writer may take the unit. `{:error, :stale_revision}` when the
   token is still the writer's but the pointer does not name `revision`;
   `{:error, :stale_writer}` when the draft is no longer the writer's. In
   neither case is anything changed.
@@ -386,8 +387,8 @@ defmodule Arca.StorageUnits do
   had one — moves the row to `retiring` — readers see no unit from here
   on — and writes the unit's tombstone, not ready, at a new projection
   generation. Answers `{:retiring, generation, token}`:
-  the deleter clears the served location while it holds the token, marks
-  the tombstone ready once the tenant delete returns
+  the deleter deletes the retired revision's prefix while it holds the
+  token, marks the tombstone ready once the tenant delete returns
   (`Arca.StorageProjectionChanges.mark_ready/5`, revision nil) and then
   calls `finish_retire/4`. While the row is `retiring` no commit lands,
   no draft is registered and no second removal begins.
@@ -445,8 +446,9 @@ defmodule Arca.StorageUnits do
   @doc """
   End a unit's removal: the row `stamped_retire/4` moved to `retiring`
   becomes `retired` and its token is cleared, in one short transaction,
-  only while the token is still `token` — the served location is then
-  cleared, or the delete was refused and left bytes a later drop clears.
+  only while the token is still `token` — the retired revision's prefix
+  is then deleted, or the delete was refused and left bytes the collector
+  or a later drop clears.
   `{:error, :stale_writer}` when the row is no longer this deleter's: its
   token outlived the draft's lifetime and a writer took the unit.
   """
@@ -725,8 +727,8 @@ defmodule Arca.StorageUnits do
         do: from(u in held, where: is_nil(u.current_revision)),
         else: from(u in held, where: u.current_revision == ^expected_revision)
 
-    # The token stays: the writer holds the unit through the move of its
-    # bytes, until `release_served/4`.
+    # The token stays: the writer holds the unit until `release_served/4`,
+    # so nothing lands between its commit and its release.
     {_moved, keys} =
       Arca.Repo.update_all(from(u in at_expected, select: {u.root, u.unit_key}),
         set: [

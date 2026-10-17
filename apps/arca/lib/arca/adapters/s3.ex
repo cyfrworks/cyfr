@@ -133,13 +133,10 @@ defmodule Arca.Adapters.S3 do
   `{:error, :atomic_replace_unsupported}` and writes nothing.
 
   A unit commit does not depend on it. Publication is the row
-  (`Arca.StorageUnits`), and the move to the served location falls back to
-  key-by-key where a tree cannot be swapped
-  (`Arca.Overlay`), so a tincture build's `dist/` publishes on this
-  adapter as on a filesystem — with the weaker read the moduledoc of
-  `Arca.Overlay` states: while the move runs, a reader of the unit's
-  objects can see some of the committed revision and some of the one
-  before it.
+  (`Arca.StorageUnits`), and a committed revision is served from the
+  prefix it was staged under, resolved through the row (`Arca.Overlay`),
+  so a tincture build's `dist/` publishes on this adapter as on a
+  filesystem, and a reader of the unit's objects reads one revision.
 
   ## Configuration
 

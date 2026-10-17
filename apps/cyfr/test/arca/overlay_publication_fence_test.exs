@@ -1,42 +1,11 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
-defmodule Arca.OverlayPublicationFenceTest.ParkServe do
-  @moduledoc false
-  # Parks the armed writer's move to the served location, once, so the
-  # test can act inside the window between a unit's commit and its
-  # finish. The park is before the adapter's own call: nothing of the
-  # adapter is held while the writer waits.
-  use Arca.Storage.TestDouble
-
-  @gate {__MODULE__, :gate}
-  def arm(test_pid, writer), do: :persistent_term.put(@gate, {test_pid, writer})
-  def disarm, do: :persistent_term.erase(@gate)
-
-  def replace_tree(actor, path, files) do
-    case :persistent_term.get(@gate, nil) do
-      {test_pid, writer} when writer == self() ->
-        disarm()
-        send(test_pid, {:serving, self()})
-
-        receive do
-          :proceed -> :ok
-        after
-          30_000 -> :ok
-        end
-
-      _ ->
-        :ok
-    end
-
-    Arca.Adapters.Local.replace_tree(actor, path, files)
-  end
-end
-
 defmodule Arca.OverlayPublicationFenceTest.ParkDelete do
   @moduledoc false
-  # Parks the armed remover's tenant delete of the unit, once: the window
-  # between a unit's retirement and its physical delete.
+  # Parks the armed remover's delete of a tree — a removal's delete of the
+  # retired revision's prefix — once: the window between a unit's
+  # retirement and its physical delete.
   use Arca.Storage.TestDouble
 
   @gate {__MODULE__, :gate}
@@ -63,55 +32,30 @@ defmodule Arca.OverlayPublicationFenceTest.ParkDelete do
   end
 end
 
-defmodule Arca.OverlayPublicationFenceTest.DiesAtServe do
-  @moduledoc false
-  # The armed writer dies at its move to the served location: before it
-  # (`:before`) — a death between the commit and the finish — or after
-  # the adapter has made it (`:after`) — a death between the move and the
-  # release of the draft.
-  use Arca.Storage.TestDouble
-
-  @gate {__MODULE__, :gate}
-  def arm(writer, moment), do: :persistent_term.put(@gate, {writer, moment})
-  def disarm, do: :persistent_term.erase(@gate)
-
-  def replace_tree(actor, path, files) do
-    case :persistent_term.get(@gate, nil) do
-      {writer, :before} when writer == self() ->
-        disarm()
-        exit(:writer_died)
-
-      {writer, :after} when writer == self() ->
-        disarm()
-        :ok = Arca.Adapters.Local.replace_tree(actor, path, files)
-        exit(:writer_died)
-
-      _ ->
-        Arca.Adapters.Local.replace_tree(actor, path, files)
-    end
-  end
-end
-
 defmodule Arca.OverlayPublicationFenceTest do
   @moduledoc """
   The unit write protocol's fence: a commit keeps the unit's draft
-  through its finish, so no second commit lands under a move, no removal
-  deletes under one, a create during a finish refuses as `:exists`, a
-  writer whose draft was taken after a stall serves nothing a reader
-  keeps, and a writer that died between its commit and its finish is
-  released by repair once its draft has outlived its lifetime.
+  through its release, so no second commit lands under it, no removal
+  deletes under it, a create during the window refuses as `:exists`, a
+  writer whose lease another member took is told so at its release and
+  serves nothing a reader keeps, and a writer that died between its
+  commit and its release is released by repair once its draft has
+  outlived its lifetime.
 
-  The first three cases adopt the assessment probes of 2026-10-17
-  (Fable2's finish race, Opus's retire race and `if_absent` probes),
-  adapted to the fence: a contender the fence refuses is refused, and
-  lands once the holder is done.
+  The cases adopt the assessment probes of 2026-10-17 (Fable2's finish
+  race, Opus's retire race and `if_absent` probes), re-pointed to units
+  served from their revision prefixes: a publication is parked between
+  its commit and its release by a telemetry handler on the commit's
+  announcement, which runs in the writer's process; a removal at its
+  delete of the retired revision's prefix. A contender the fence refuses
+  is refused, and lands once the holder is done.
   """
 
   use ExUnit.Case, async: false
 
   import Ecto.Query, only: [from: 2]
 
-  alias Arca.OverlayPublicationFenceTest.{DiesAtServe, ParkDelete, ParkServe}
+  alias Arca.OverlayPublicationFenceTest.ParkDelete
   alias Arca.Schemas.StorageUnit
   alias Arca.Storage.UnitLocator
   alias Arca.StorageUnits
@@ -130,9 +74,7 @@ defmodule Arca.OverlayPublicationFenceTest do
       for k <- [:base_path, :seed_path, :storage_adapter], do: {k, Application.get_env(:arca, k)}
 
     on_exit(fn ->
-      ParkServe.disarm()
       ParkDelete.disarm()
-      DiesAtServe.disarm()
       for {k, v} <- prev, do: Application.put_env(:arca, k, v)
       File.rm_rf!(base)
     end)
@@ -168,7 +110,8 @@ defmodule Arca.OverlayPublicationFenceTest do
     )
   end
 
-  # The revisions with objects under the unit's staging area.
+  # The revisions with objects under the unit's staging area — the served
+  # one among them.
   defp staged(actor) do
     prefix = UnitLocator.staging_prefix(@unit)
     {:ok, leaves} = Arca.list_recursive(actor, prefix)
@@ -188,56 +131,91 @@ defmodule Arca.OverlayPublicationFenceTest do
     Arca.Repo.update_all(StorageUnit, set: [updated_at: long_ago])
   end
 
-  # A writer parked at its move to the served location, its commit made.
-  defp park_at_serve(actor, v) do
-    Application.put_env(:arca, :storage_adapter, ParkServe)
+  # A handler on the root's projection announcements that runs `fun` in
+  # the process announcing a unit's commit — the writer's own, after its
+  # pointer moved and before its draft is released — once.
+  defp on_commit(actor, fun) do
+    test_pid = self()
+    handler = {__MODULE__, make_ref()}
+    on_exit(fn -> :telemetry.detach(handler) end)
+    {root, key} = UnitLocator.unit_key(@unit)
+
+    :ok =
+      :telemetry.attach(
+        handler,
+        Arca.StorageProjectionChanges.event(),
+        fn _event, _measurements, metadata, _config ->
+          if metadata.athanor_id == actor.athanor_id and metadata.root == root and
+               not metadata.ready and self() != test_pid and
+               match?({:ok, %{draft_writer_token: t}} when is_binary(t), pointer(actor)) do
+            :telemetry.detach(handler)
+            fun.()
+          end
+        end,
+        nil
+      )
+
+    {root, key}
+  end
+
+  # A writer parked between its commit and its release, its revision
+  # published and its draft held.
+  defp park_after_commit(actor, v) do
     test_pid = self()
 
-    task =
-      Task.async(fn ->
-        ParkServe.arm(test_pid, self())
-        commit(actor, v)
-      end)
+    on_commit(actor, fn ->
+      send(test_pid, {:committed, self()})
 
-    assert_receive {:serving, pid}, 10_000
+      receive do
+        :proceed -> :ok
+      after
+        30_000 -> :ok
+      end
+    end)
+
+    task = Task.async(fn -> commit(actor, v) end)
+    assert_receive {:committed, pid}, 10_000
     {task, pid}
   end
 
-  describe "a commit holds the unit through its finish" do
+  describe "a commit holds the unit through its release" do
     test "a second writer is refused while the first holds the unit, and lands after it — " <>
-           "a late finish never serves older bytes over a newer commit",
+           "a late release never moves what a newer commit published",
          %{actor: actor} do
-      {a, a_pid} = park_at_serve(actor, 1)
+      {a, a_pid} = park_after_commit(actor, 1)
       {:ok, %{current_revision: r1}} = pointer(actor)
 
       # The pointer names revision 1 and its writer still holds the unit:
-      # nothing else lands under the move.
+      # nothing else lands under the release, and the revision is read
+      # already, since a reader resolves the row.
       assert {:error, :stale_writer} = commit(actor, 2)
       assert {:error, :exists} = commit(actor, 2, if_absent: true)
       assert {:error, :stale_writer} = Arca.delete_tree(actor, @unit)
       assert {:ok, %{current_revision: ^r1}} = pointer(actor)
       assert %StorageUnit{state: "committed", draft_writer_token: "wrt_" <> _} = row(actor)
+      assert {:ok, "V1"} = Arca.get(actor, @wasm)
 
       send(a_pid, :proceed)
       assert {:ok, _written} = Task.await(a, 30_000)
 
       assert {:ok, "V1"} = Arca.get(actor, @wasm)
       assert %StorageUnit{state: "committed", draft_writer_token: nil} = row(actor)
-      assert staged(actor) == []
+      assert staged(actor) == [r1]
 
-      # The unit is free: the second writer lands whole.
+      # The unit is free: the second writer lands whole, and the first
+      # revision's prefix is the collector's.
       assert {:ok, _written} = commit(actor, 2)
       {:ok, %{current_revision: r2}} = pointer(actor)
       assert r2 != r1
       assert {:ok, "V2"} = Arca.get(actor, @wasm)
-      assert staged(actor) == []
+      assert Enum.sort([r1, r2]) == staged(actor)
       assert {:ok, :deleted} = Arca.Overlay.drop_unit(actor, @unit)
     end
 
     test "a writer stalled past the lifetime keeps the unit against every taker on this node; " <>
-           "a lease another member takes refuses its release, and its staging stays for collection",
+           "a lease another member takes refuses its release, and its revision is the collector's",
          %{actor: actor} do
-      {a, a_pid} = park_at_serve(actor, 1)
+      {a, a_pid} = park_after_commit(actor, 1)
       {:ok, %{current_revision: r1}} = pointer(actor)
       expire_drafts!()
 
@@ -258,8 +236,9 @@ defmodule Arca.OverlayPublicationFenceTest do
       send(a_pid, :proceed)
       assert {:error, :stale_writer} = Task.await(a, 30_000)
 
-      # The stalled writer is told; the row is the taker's, and the
-      # writer's staged objects stay for the collector.
+      # The stalled writer is told, moved nothing, and the row is the
+      # taker's; the revision it committed is still the pointer's, since
+      # the taker committed nothing.
       assert %StorageUnit{
                state: "committed",
                current_revision: ^r1,
@@ -267,6 +246,7 @@ defmodule Arca.OverlayPublicationFenceTest do
              } =
                row(actor)
 
+      assert {:ok, "V1"} = Arca.get(actor, @wasm)
       assert staged(actor) == [r1]
 
       :ok = StorageUnits.abandon_draft(actor, row(actor), "wrt_thief")
@@ -274,8 +254,8 @@ defmodule Arca.OverlayPublicationFenceTest do
       assert {:ok, "V2"} = Arca.get(actor, @wasm)
     end
 
-    test "a create during the first commit's finish refuses as :exists", %{actor: actor} do
-      {a, a_pid} = park_at_serve(actor, 1)
+    test "a create during the first commit's release refuses as :exists", %{actor: actor} do
+      {a, a_pid} = park_after_commit(actor, 1)
       {:ok, %{current_revision: r1}} = pointer(actor)
 
       assert {:error, :exists} = commit(actor, 2, if_absent: true)
@@ -286,14 +266,15 @@ defmodule Arca.OverlayPublicationFenceTest do
       assert {:ok, "V1"} = Arca.get(actor, @wasm)
     end
 
-    test "an edit inside the unit during its finish is the change that marks the projection; " <>
+    test "an edit inside the unit during its release is the change that marks the projection; " <>
            "the publication answers all the same",
          %{actor: actor} do
-      {a, a_pid} = park_at_serve(actor, 1)
+      {a, a_pid} = park_after_commit(actor, 1)
       {:ok, %{current_revision: r1}} = pointer(actor)
 
-      # A plain edit does not wait for the move; its generation overtakes
-      # the commit's, and its writer marks it ready.
+      # A plain edit does not wait for the release; it lands in the
+      # committed revision, its generation overtakes the commit's, and its
+      # writer marks it ready.
       assert :ok = Arca.put(actor, @unit ++ ["note.txt"], "an edit")
 
       send(a_pid, :proceed)
@@ -301,15 +282,17 @@ defmodule Arca.OverlayPublicationFenceTest do
 
       assert %{ready: true, tombstone: false, source_revision: ^r1} = change(actor)
       assert {:ok, "V1"} = Arca.get(actor, @wasm)
+      assert {:ok, "an edit"} = Arca.get(actor, @unit ++ ["note.txt"])
       assert %StorageUnit{draft_writer_token: nil} = row(actor)
     end
   end
 
   describe "a removal holds the unit through its delete" do
     test "a republish is refused until the delete has returned, and what it then publishes " <>
-           "is kept whole — bytes, row and staging",
+           "is kept whole — bytes, row and prefix",
          %{actor: actor} do
       assert {:ok, _} = commit(actor, 1)
+      {:ok, %{current_revision: r1}} = pointer(actor)
       assert {:ok, "V1"} = Arca.get(actor, @wasm)
 
       Application.put_env(:arca, :storage_adapter, ParkDelete)
@@ -323,13 +306,15 @@ defmodule Arca.OverlayPublicationFenceTest do
 
       # Nothing lands under the delete: no commit, no create, no second
       # removal. The row is retiring under the remover's token; readers see
-      # no unit.
-      assert_receive {:deleting, a_pid, @unit}, 10_000
+      # no unit; the delete names the retired revision's prefix alone.
+      assert_receive {:deleting, a_pid, deleting}, 10_000
+      assert deleting == UnitLocator.revision_prefix(@unit, r1)
       assert {:error, :stale_writer} = commit(actor, 2)
       assert {:error, :stale_writer} = commit(actor, 2, if_absent: true)
       assert {:error, :stale_writer} = Arca.delete_tree(actor, @unit)
       assert %StorageUnit{state: "retiring", draft_writer_token: "wrt_" <> _} = row(actor)
       assert {:error, :not_found} = pointer(actor)
+      assert {:error, :not_found} = Arca.get(actor, @wasm)
 
       send(a_pid, :proceed)
       assert {:ok, :deleted} = Task.await(a, 30_000)
@@ -348,50 +333,45 @@ defmodule Arca.OverlayPublicationFenceTest do
       assert %StorageUnit{state: "committed", current_revision: ^r2, draft_writer_token: nil} =
                row(actor)
 
-      assert staged(actor) == []
+      assert staged(actor) == [r2]
       assert %{ready: true, tombstone: false, source_revision: ^r2} = change(actor)
     end
 
-    test "what a removal that died left behind is cleared under the lease too: a republish " <>
-           "waits for the second removal, and keeps what it then publishes",
+    test "what a removal that died left behind is the collector's: the retired row keeps " <>
+           "readers out, and a republish lands beside it",
          %{actor: actor} do
       assert {:ok, _} = commit(actor, 1)
       {root, key} = UnitLocator.unit_key(@unit)
+      {:ok, %{current_revision: r1}} = pointer(actor)
 
       # A removal that retired the row and died before its delete: the
-      # row is retired, the bytes still there.
+      # row is retired, the revision's prefix still there.
       {:retiring, _generation, token} = StorageUnits.stamped_retire(actor, root, key)
       :ok = StorageUnits.abandon_draft(actor, row(actor), token)
       assert %StorageUnit{state: "retired"} = row(actor)
-      assert {:ok, "V1"} = Arca.get(actor, @wasm)
-      assert Arca.Overlay.unit_status(actor, @unit) == {:ok, :own}
+      assert staged(actor) == [r1]
 
-      Application.put_env(:arca, :storage_adapter, ParkDelete)
-      test_pid = self()
-
-      a =
-        Task.async(fn ->
-          ParkDelete.arm(test_pid, self())
-          Arca.Overlay.drop_unit(actor, @unit)
-        end)
-
-      assert_receive {:deleting, a_pid, @unit}, 10_000
-      assert {:error, :stale_writer} = commit(actor, 2)
-      assert %StorageUnit{state: "retiring", draft_writer_token: "wrt_" <> _} = row(actor)
-
-      send(a_pid, :proceed)
-      assert {:ok, :deleted} = Task.await(a, 30_000)
-      assert %StorageUnit{state: "retired", draft_writer_token: nil} = row(actor)
+      # No reader sees it, and the unit is absent to every surface.
       assert {:error, :not_found} = Arca.get(actor, @wasm)
+      assert Arca.Overlay.unit_status(actor, @unit) == {:ok, :absent}
+      assert {:error, :not_found} = Arca.Overlay.drop_unit(actor, @unit)
 
+      # The collector takes the prefix the pointer no longer names, after
+      # the grace; a republish lands meanwhile, beside it.
       assert {:ok, _written} = commit(actor, 2)
+      {:ok, %{current_revision: r2}} = pointer(actor)
       assert {:ok, "V2"} = Arca.get(actor, @wasm)
-      assert staged(actor) == []
+      assert Enum.sort([r1, r2]) == staged(actor)
+
+      later = DateTime.add(DateTime.utc_now(), :timer.hours(48), :millisecond)
+      assert {:ok, %{collected: 1}} = Arca.StorageGC.sweep(actor, now: later)
+      assert staged(actor) == [r2]
+      assert {:ok, "V2"} = Arca.get(actor, @wasm)
     end
 
     test "a removal is refused while a commit stages, and deletes once the commit has landed",
          %{actor: actor} do
-      {a, a_pid} = park_at_serve(actor, 1)
+      {a, a_pid} = park_after_commit(actor, 1)
 
       assert {:error, :stale_writer} = Arca.delete_tree(actor, @unit)
 
@@ -402,36 +382,33 @@ defmodule Arca.OverlayPublicationFenceTest do
       assert :ok = Arca.delete_tree(actor, @unit)
       assert %StorageUnit{state: "retired"} = row(actor)
       assert {:error, :not_found} = Arca.get(actor, @wasm)
+      assert staged(actor) == []
     end
   end
 
   describe "a writer that dies holding the unit" do
-    defp dies_at_serve(actor, moment) do
-      Application.put_env(:arca, :storage_adapter, DiesAtServe)
-
-      {pid, ref} =
-        spawn_monitor(fn ->
-          DiesAtServe.arm(self(), moment)
-          commit(actor, 1)
-        end)
-
-      assert_receive {:DOWN, ^ref, :process, ^pid, :writer_died}, 30_000
+    # Killed outright at the announcement: an exit raised inside a
+    # telemetry handler is caught and detached by telemetry.
+    defp dies_after_commit(actor) do
+      on_commit(actor, fn -> Process.exit(self(), :kill) end)
+      {pid, ref} = spawn_monitor(fn -> commit(actor, 1) end)
+      assert_receive {:DOWN, ^ref, :process, ^pid, :killed}, 30_000
     end
 
-    test "between its commit and its finish: the unit is held for the draft's lifetime, " <>
-           "then repair serves what it committed and releases it",
+    test "between its commit and its release: the revision is read already, the unit is held " <>
+           "for the draft's lifetime, then repair releases it and marks it ready",
          %{actor: actor} do
-      dies_at_serve(actor, :before)
+      dies_after_commit(actor)
 
       {:ok, %{current_revision: r1}} = pointer(actor)
-      assert {:error, :not_found} = Arca.get(actor, @wasm)
+      assert {:ok, "V1"} = Arca.get(actor, @wasm)
       assert staged(actor) == [r1]
+      assert %{ready: false, source_revision: ^r1} = change(actor)
 
       # Within the lifetime the dead writer's draft still holds the unit:
       # neither a repair nor a commit takes it.
       assert {:error, :stale_writer} = Arca.Overlay.repair_unit(actor, @unit)
       assert {:error, :stale_writer} = commit(actor, 2)
-      assert {:error, :not_found} = Arca.get(actor, @wasm)
       assert %StorageUnit{state: "committed", draft_writer_token: "wrt_" <> _} = row(actor)
 
       expire_drafts!()
@@ -442,39 +419,23 @@ defmodule Arca.OverlayPublicationFenceTest do
       assert %StorageUnit{state: "committed", current_revision: ^r1, draft_writer_token: nil} =
                row(actor)
 
-      assert staged(actor) == []
+      assert staged(actor) == [r1]
       assert %{ready: true, source_revision: ^r1} = change(actor)
       assert {:ok, :nothing_pending} = Arca.Overlay.repair_unit(actor, @unit)
     end
 
-    test "after its move and before its release: repair serves the revision again and " <>
-           "releases it; a commit after the lifetime replaces it whole",
+    test "a commit after the lifetime replaces the dead writer's unit whole, and the dead " <>
+           "writer's revision is the collector's",
          %{actor: actor} do
-      dies_at_serve(actor, :after)
-
+      dies_after_commit(actor)
       {:ok, %{current_revision: r1}} = pointer(actor)
-      assert {:ok, "V1"} = Arca.get(actor, @wasm)
-      assert staged(actor) == [r1]
 
-      assert {:error, :stale_writer} = Arca.Overlay.repair_unit(actor, @unit)
-      assert %StorageUnit{state: "committed", draft_writer_token: "wrt_" <> _} = row(actor)
       expire_drafts!()
-      assert {:ok, :repaired} = Arca.Overlay.repair_unit(actor, @unit)
-      assert {:ok, "V1"} = Arca.get(actor, @wasm)
-      assert %StorageUnit{draft_writer_token: nil} = row(actor)
-      assert staged(actor) == []
-
-      # The same death, and the next writer rather than repair: it takes
-      # the expired draft and replaces the unit whole.
-      dies_at_serve(actor, :after)
+      assert {:ok, _written} = commit(actor, 2)
       {:ok, %{current_revision: r2}} = pointer(actor)
-      assert r2 != r1
-      expire_drafts!()
-      assert {:ok, _written} = commit(actor, 3)
-      assert {:ok, "V3"} = Arca.get(actor, @wasm)
+      assert {:ok, "V2"} = Arca.get(actor, @wasm)
       assert %StorageUnit{state: "committed", draft_writer_token: nil} = row(actor)
-      # The dead writer's staged revision is the collector's, not the commit's.
-      assert r2 in staged(actor)
+      assert Enum.sort([r1, r2]) == staged(actor)
     end
   end
 end

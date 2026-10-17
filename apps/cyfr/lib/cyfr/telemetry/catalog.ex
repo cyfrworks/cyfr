@@ -288,8 +288,8 @@ defmodule Cyfr.Telemetry.Catalog do
     [:cyfr, :storage_gc, :sweep] => %{
       consumers: [:operator],
       note:
-        "one athanor's staged-revision sweep: prefixes examined, collected, kept and repaired, " <>
-          "moves still pending and errors, so an operator sees staging that is not draining"
+        "one athanor's staged-revision sweep: prefixes examined, collected, kept and errors, " <>
+          "so an operator sees staging that is not draining"
     },
     [:cyfr, :opus, :execution, :unreaped_kill] => %{
       consumers: [:operator],

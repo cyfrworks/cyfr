@@ -299,7 +299,10 @@ defmodule Arca.OverlayTest do
       assert {:ok, "fn main() {}"} =
                Arca.get(actor, @version_dir ++ ["src", "lib.rs"])
 
-      assert Arca.Adapters.Local.exists?(actor, @version_dir ++ [@sentinel])
+      # The copy is in its revision's prefix, resolved through the row;
+      # nothing stands at the unit's own path.
+      assert Arca.exists?(actor, @version_dir ++ [@sentinel])
+      refute Arca.Adapters.Local.exists?(actor, @version_dir ++ [@sentinel])
       refute Arca.exists?(actor, @version_dir ++ ["src", "target", "junk.o"])
 
       # The copy is real tenant bytes now — the cap sees it.
@@ -322,7 +325,7 @@ defmodule Arca.OverlayTest do
     } do
       v2 = ship_version!(seed, "bundled", "2.0.0", "V2")
       own = ["components", "catalysts", "local", "brand-new", "0.1.0"]
-      :ok = Arca.put(actor, own ++ ["catalyst.wasm"], "NEW")
+      :ok = own_unit!(actor, own, ~s({"type":"catalyst"}), [{["catalyst.wasm"], "NEW"}])
 
       assert {:ok, copied} =
                Arca.Overlay.materialize_shipped(actor, "components")
@@ -342,18 +345,22 @@ defmodule Arca.OverlayTest do
     end
 
     test "a pull replaces whatever stands at a shipped path", %{actor: actor, seed_dir: seed} do
-      # A crashed copy: some files, no sentinel. It reads as available, and
-      # the next pull replaces it whole.
-      :ok =
-        Arca.put(actor, @version_dir ++ ["src", "lib.rs"], "fn pwned() {}")
+      # Bytes beneath the overlay at the unit's own path and no row: nothing
+      # the athanor holds. The unit reads as available, the pull lands the
+      # shipped revision in its prefix, and the stray bytes go with it.
+      :ok = Arca.Adapters.Local.put(actor, @version_dir ++ ["src", "lib.rs"], "fn pwned() {}")
 
       assert Arca.Overlay.unit_status(actor, @version_dir) ==
                {:ok, :available}
+
+      assert {:error, :not_found} = Arca.get(actor, @version_dir ++ ["src", "lib.rs"])
 
       assert :ok = Arca.Overlay.pull_shipped(actor, @version_dir)
 
       assert {:ok, "fn main() {}"} =
                Arca.get(actor, @version_dir ++ ["src", "lib.rs"])
+
+      assert {:ok, []} = Arca.Adapters.Local.list_recursive(actor, @version_dir)
 
       # A complete unit the athanor wrote at a path a release ships is the
       # shipped copy from then on: a pull puts the shipped bytes there.
@@ -440,12 +447,19 @@ defmodule Arca.OverlayTest do
       assert Arca.Overlay.unit_status(actor, @version_dir) == {:ok, :shipped}
       assert {:ok, true} = Arca.Overlay.edited?(actor, @version_dir)
 
+      # A plain write into a unit no committed row names is refused: a unit
+      # lands by its commit, and writes plainly from then on.
       fresh = ["components", "catalysts", "local", "brand-new", "0.1.0"]
+      assert {:error, :not_found} = Arca.put(actor, fresh ++ ["catalyst.wasm"], "NEW")
+      assert Arca.Overlay.unit_status(actor, fresh) == {:ok, :absent}
+      assert {:ok, []} = Arca.list_typed(actor, fresh)
+
+      :ok = own_unit!(actor, fresh, ~s({"type":"catalyst"}))
       :ok = Arca.put(actor, fresh ++ ["catalyst.wasm"], "NEW")
 
-      assert {:ok, [{"catalyst.wasm", :file}]} =
-               Arca.list_typed(actor, fresh)
-
+      assert {:ok, entries} = Arca.list_typed(actor, fresh)
+      assert Enum.sort(entries) == [{"catalyst.wasm", :file}, {@sentinel, :file}]
+      assert {:ok, "NEW"} = Arca.get(actor, fresh ++ ["catalyst.wasm"])
       assert Arca.Overlay.unit_status(actor, fresh) == {:ok, :own}
     end
 
@@ -489,16 +503,15 @@ defmodule Arca.OverlayTest do
 
     test "the athanor's own unit deletes plainly", %{actor: actor} do
       own = ["components", "catalysts", "local", "brand-new", "0.1.0"]
-      :ok = Arca.put(actor, own ++ [@sentinel], ~s({"type":"catalyst"}))
+      :ok = own_unit!(actor, own, ~s({"type":"catalyst"}))
       assert Arca.Overlay.unit_status(actor, own) == {:ok, :own}
 
       assert :ok = Arca.delete_tree(actor, own)
       assert Arca.Overlay.unit_status(actor, own) == {:ok, :absent}
     end
 
-    test "a delete the store refuses is not a deletion the registry acknowledges", %{
-      actor: actor
-    } do
+    test "a delete the store refuses retires the unit all the same, and leaves its bytes to the collector",
+         %{actor: actor} do
       ctx = Sanctum.TestContext.local()
       name = "undeletable-#{System.unique_integer([:positive])}"
       unit = ["components", "reagents", "local", name, "1.0.0"]
@@ -508,9 +521,14 @@ defmodule Arca.OverlayTest do
           0x03, 0x02, 0x01, 0x00, 0x07, 0x07, 0x01, 0x03, "run", 0x00, 0x00, 0x0A, 0x04, 0x01,
           0x02, 0x00, 0x0B>>
 
-      :ok = Arca.put(actor, unit ++ ["reagent.wasm"], wasm)
-      :ok = Arca.put(actor, unit ++ [@sentinel], ~s({"type":"reagent","description":"kept"}))
+      :ok =
+        own_unit!(actor, unit, ~s({"type":"reagent","description":"kept"}), [
+          {["reagent.wasm"], wasm}
+        ])
+
       assert {:ok, %{description: "kept"}} = Compendium.Registry.get(ctx, name, "1.0.0")
+      {root, key} = Arca.Storage.UnitLocator.unit_key(unit)
+      {:ok, %{current_revision: revision}} = Arca.StorageUnits.current(actor, root, key)
 
       prev_adapter = Application.get_env(:arca, :storage_adapter)
       Application.put_env(:arca, :storage_adapter, Arca.OverlayTest.UndeletableAdapter)
@@ -521,17 +539,26 @@ defmodule Arca.OverlayTest do
           else: Application.delete_env(:arca, :storage_adapter)
       end)
 
-      # The caller is told; the bytes stay, and so does the row derived
-      # from them — the unit's last change is no tombstone, and it is read.
+      # The caller is told. The row is retired whatever the delete
+      # answered: no reader finds the unit, the tombstone is ready, the
+      # registry no longer names it, and the revision's bytes stand under
+      # its prefix for the collector.
       assert {:error, :eacces} = Arca.delete_tree(actor, unit)
-      assert Arca.exists?(actor, unit ++ [@sentinel])
+      refute Arca.exists?(actor, unit ++ [@sentinel])
+      assert Arca.Overlay.unit_status(actor, unit) == {:ok, :absent}
+      assert {:error, :not_found} = Arca.StorageUnits.current(actor, root, key)
 
-      assert {:ok, %{units: [%{tombstone: false, ready: true}]}} =
+      assert Arca.Adapters.Local.exists?(
+               actor,
+               Arca.Storage.UnitLocator.staged_object(unit, revision, [@sentinel])
+             )
+
+      assert {:ok, %{units: [%{tombstone: true, ready: true}]}} =
                Arca.StorageProjectionChanges.snapshot(actor, "components",
                  units: ["reagents/local/#{name}/1.0.0"]
                )
 
-      assert {:ok, %{description: "kept"}} = Compendium.Registry.get(ctx, name, "1.0.0")
+      assert {:error, :not_found} = Compendium.Registry.get(ctx, name, "1.0.0")
 
       assert {:ok, %{epoch: epoch, acknowledged_epoch: epoch}} =
                Arca.StorageProjectionRoots.epoch(actor, "components")
@@ -558,7 +585,7 @@ defmodule Arca.OverlayTest do
       assert Arca.Overlay.unit_status(actor, @version_dir) == {:ok, :shipped}
 
       own = ["components", "catalysts", "local", "brand-new", "0.1.0"]
-      :ok = Arca.put(actor, own ++ ["catalyst.wasm"], "NEW")
+      :ok = own_unit!(actor, own, ~s({"type":"catalyst"}), [{["catalyst.wasm"], "NEW"}])
       assert Arca.Overlay.unit_status(actor, own) == {:ok, :own}
 
       # The athanor's own complete unit at a path a later release ships
@@ -582,7 +609,7 @@ defmodule Arca.OverlayTest do
     test "unit_statuses/2 answers the whole root in two listings, matching unit_status/2",
          %{actor: actor, seed_dir: seed} do
       own = ["components", "catalysts", "local", "brand-new", "0.1.0"]
-      :ok = Arca.put(actor, own ++ ["catalyst.wasm"], "NEW")
+      :ok = own_unit!(actor, own, ~s({"type":"catalyst"}), [{["catalyst.wasm"], "NEW"}])
 
       assert {:ok, %{@version_dir => :available, ^own => :own}} =
                Arca.Overlay.unit_statuses(actor, "components")
@@ -668,7 +695,7 @@ defmodule Arca.OverlayTest do
 
       # The athanor's own work has nothing shipped to restore to.
       own = ["components", "catalysts", "local", "brand-new", "0.1.0"]
-      :ok = Arca.put(actor, own ++ ["catalyst.wasm"], "NEW")
+      :ok = own_unit!(actor, own, ~s({"type":"catalyst"}), [{["catalyst.wasm"], "NEW"}])
       assert {:error, :not_shipped} = Arca.Overlay.pull_shipped(actor, own)
       assert {:ok, "NEW"} = Arca.get(actor, own ++ ["catalyst.wasm"])
 
@@ -685,7 +712,7 @@ defmodule Arca.OverlayTest do
     } do
       # Own work with nothing underneath is simply gone.
       own = ["components", "catalysts", "local", "brand-new", "0.1.0"]
-      :ok = Arca.put(actor, own ++ ["catalyst.wasm"], "NEW")
+      :ok = own_unit!(actor, own, ~s({"type":"catalyst"}), [{["catalyst.wasm"], "NEW"}])
       assert {:ok, :deleted} = Arca.Overlay.drop_unit(actor, own)
       assert Arca.Overlay.unit_status(actor, own) == {:ok, :absent}
 
@@ -1362,10 +1389,20 @@ defmodule Arca.OverlayTest do
       Enum.sort(pairs)
     end
 
-    # What the unit's directory holds on disk, hidden names included: a
-    # staged or retired tree left behind would show here.
+    # What the unit's revision prefix holds on disk, hidden names included
+    # but the prefix's own marker: a tree a replacement staged or left
+    # behind would show here.
     defp on_disk(actor) do
-      actor |> Arca.Adapters.Local.build_path(@built) |> File.ls!() |> Enum.sort()
+      {root, key} = Arca.Storage.UnitLocator.unit_key(@built)
+      {:ok, %{current_revision: revision}} = Arca.StorageUnits.current(actor, root, key)
+
+      actor
+      |> Arca.Adapters.Local.build_path(
+        Arca.Storage.UnitLocator.revision_prefix(@built, revision)
+      )
+      |> File.ls!()
+      |> Enum.reject(&(&1 == Arca.Storage.UnitLocator.marker_name()))
+      |> Enum.sort()
     end
 
     setup %{actor: actor} do
@@ -1577,6 +1614,14 @@ defmodule Arca.OverlayTest do
       {:ok, taken} = Arca.StorageUnits.register_draft(actor, root, key, "wrt_member")
       landed = Arca.StorageUnits.new_revision()
 
+      # The member's revision is staged under its own prefix as any is.
+      for {rel, bytes} <- [
+            {["cyfr-manifest.json"], ~s({"type":"tincture"})},
+            {["dist", "index.html"], "member"}
+          ] do
+        :ok = Arca.put(actor, Arca.Storage.UnitLocator.staged_object(@built, landed, rel), bytes)
+      end
+
       {:committed, _generation} =
         Arca.StorageUnits.stamped_commit(actor, taken, taken.current_revision, "wrt_member", %{
           new_revision: landed,
@@ -1589,15 +1634,17 @@ defmodule Arca.OverlayTest do
       send(replacer, :proceed)
       assert {:error, :stale_revision} = Task.await(replacing, 30_000)
 
-      # The loser's objects are gone and were never served — the subtree
-      # reads as it did — and the unit is free again for this node's writer.
-      assert {:ok, "one"} = Arca.get(actor, @built ++ ["dist", "index.html"])
+      # The loser's objects are gone and were never served: the unit reads
+      # the member's revision, and its staging holds the first revision
+      # (the collector's) and the member's, nothing of the loser's. The
+      # unit is free again for this node's writer.
+      assert {:ok, "member"} = Arca.get(actor, @built ++ ["dist", "index.html"])
+      assert [%{new_revision: first}, %{new_revision: ^landed}] = journal(actor, @built)
+      staging = Arca.Storage.UnitLocator.staging_prefix(@built)
+      {:ok, leaves} = Arca.list_recursive(actor, staging)
 
-      assert {:ok, []} =
-               Arca.list_recursive(
-                 actor,
-                 Arca.Storage.UnitLocator.staging_prefix(@built)
-               )
+      assert leaves |> Enum.map(&Enum.at(&1, length(staging))) |> Enum.uniq() |> Enum.sort() ==
+               Enum.sort([first, landed])
 
       assert {:ok, _written} =
                Arca.Overlay.commit_unit(
@@ -1641,9 +1688,9 @@ defmodule Arca.OverlayTest do
                Arca.get(actor, @built ++ ["cyfr-manifest.json"])
     end
 
-    test "an incomplete unit has nothing to lay a subtree into", %{actor: actor} do
+    test "a unit no committed row names has nothing to lay a subtree into", %{actor: actor} do
       :ok = Arca.delete_tree(actor, @built)
-      :ok = Arca.put(actor, @built ++ ["src", "main.tsx"], "orphan")
+      assert {:error, :not_found} = Arca.put(actor, @built ++ ["src", "main.tsx"], "orphan")
 
       assert {:error, :not_found} =
                Arca.Overlay.replace_subtree(
@@ -1910,13 +1957,28 @@ defmodule Arca.OverlayTest do
       name = "half-written"
       dir = Compendium.AquaPath.skill_dir(name)
 
-      # A crashed `commit_unit`: the body files landed, the sentinel did not.
+      # A crashed `commit_unit`: the body file is staged under the draft's
+      # prefix, the sentinel never was, and no row is committed. A plain
+      # write cannot lay the body at the unit's own path either.
+      {root, key} = Arca.Storage.UnitLocator.unit_key(dir)
+      token = Arca.StorageUnits.new_writer_token()
+      {:ok, _draft} = Arca.StorageUnits.register_draft(actor, root, key, token)
+      revision = Arca.StorageUnits.new_revision()
+
       :ok =
-        Arca.put(actor, dir ++ ["reference.md"], "step one: do the thing")
+        Arca.put(
+          actor,
+          Arca.Storage.UnitLocator.staged_object(dir, revision, ["reference.md"]),
+          "step one: do the thing"
+        )
+
+      assert {:error, :not_found} = Arca.put(actor, dir ++ ["reference.md"], "step one")
 
       # The unit is not complete, and says so rather than passing for one.
       assert {:ok, status} = Arca.Overlay.unit_status(actor, dir)
       refute status == :shipped
+      assert status == :absent
+      assert {:ok, []} = Arca.list_recursive(actor, dir)
 
       # And the instructions are unreachable: SKILL.md IS the sentinel.
       assert {:error, :not_found} =

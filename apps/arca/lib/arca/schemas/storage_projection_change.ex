@@ -8,8 +8,8 @@ defmodule Arca.Schemas.StorageProjectionChange do
   must see it.
 
   `generation` is the root epoch the change took. `ready` says whether the
-  bytes it names are served: a publication and a repair are pending until
-  their move to the served location finishes, an edit until its write
+  bytes it names are served: a publication is pending until its writer
+  releases the unit, a repair until it finishes, an edit until its write
   returns, a deletion until the tenant delete returns. `source_revision`
   is the revision the change names, nil for a deletion (`tombstone`) and
   for a unit no commit has published. `acknowledged_generation` is the

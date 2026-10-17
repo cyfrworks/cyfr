@@ -92,10 +92,12 @@ defmodule Compendium.ProjectionReconcilerTest do
   defp manifest(description),
     do: Jason.encode!(%{"type" => "reagent", "version" => "1.0.0", "description" => description})
 
-  # A unit laid by plain writes, as the Files page or a guest lays one.
+  # A unit landed the one way a unit lands, by its commit; its row is
+  # committed and its generation not yet consumed.
   defp lay!(actor, name, description) do
-    :ok = Arca.put(actor, unit(name) ++ ["reagent.wasm"], @valid_wasm)
-    :ok = Arca.put(actor, unit(name) ++ ["cyfr-manifest.json"], manifest(description))
+    files = [{["reagent.wasm"], @valid_wasm}, {["cyfr-manifest.json"], manifest(description)}]
+    {:ok, _written} = Arca.Overlay.commit_unit(actor, unit(name), {:files, files}, cap: :exempt)
+    :ok
   end
 
   defp stored(actor, name) do
@@ -171,8 +173,13 @@ defmodule Compendium.ProjectionReconcilerTest do
     end
 
     test "of the agent tree observes the role in the index", %{ctx: ctx, actor: actor} do
-      :ok = Arca.put(actor, ["aqua", "aqua.md"], "---\ntitle: Soul\n---\n\nsoul\n")
-      :ok = Arca.put(actor, ["aqua", "roles", "scout.md"], "---\ntitle: Scout\n---\n\nscout\n")
+      # The soul and a role are file units: each lands by its commit.
+      for {unit, body} <- [
+            {["aqua", "aqua.md"], "---\ntitle: Soul\n---\n\nsoul\n"},
+            {["aqua", "roles", "scout.md"], "---\ntitle: Scout\n---\n\nscout\n"}
+          ] do
+        {:ok, _} = Arca.Overlay.commit_unit(actor, unit, {:files, [{[], body}]}, cap: :exempt)
+      end
 
       assert {:ok, rows} = AgentIndex.list(ctx)
       assert "scout" in Enum.map(rows, & &1.name)
@@ -185,19 +192,47 @@ defmodule Compendium.ProjectionReconcilerTest do
   end
 
   describe "a pending change" do
-    # A publication whose move to the served location fails: committed,
-    # its bytes not yet served.
+    # A publication whose writer died between its commit and its release:
+    # committed and read already, its generation not ready, its draft held
+    # — and aged past the draft's lifetime, so a repair may take it.
     defp interrupted!(actor, name) do
-      Adapter.hook(fn op, path ->
-        if op == :put and List.starts_with?(path, unit(name)), do: {:error, :enospc}, else: :pass
-      end)
+      {root, key} = Arca.Storage.UnitLocator.unit_key(unit(name))
+      handler = {__MODULE__, make_ref()}
+      on_exit(fn -> :telemetry.detach(handler) end)
+      test_pid = self()
+
+      :ok =
+        :telemetry.attach(
+          handler,
+          StorageProjectionChanges.event(),
+          fn _event, _measurements, metadata, _config ->
+            if metadata.athanor_id == actor.athanor_id and metadata.root == root and
+                 not metadata.ready and self() != test_pid and
+                 match?(
+                   {:ok, %{draft_writer_token: token}} when is_binary(token),
+                   Arca.StorageUnits.current(actor, root, key)
+                 ) do
+              :telemetry.detach(handler)
+              # Outright: an exit raised in a telemetry handler is caught.
+              Process.exit(self(), :kill)
+            end
+          end,
+          nil
+        )
 
       files = [{["reagent.wasm"], @valid_wasm}, {["cyfr-manifest.json"], manifest("promoted")}]
 
-      assert {:error, {:finish_failed, :enospc}} =
-               Arca.Overlay.commit_unit(actor, unit(name), {:files, files}, cap: :exempt)
+      {pid, ref} =
+        spawn_monitor(fn ->
+          Arca.Overlay.commit_unit(actor, unit(name), {:files, files}, cap: :exempt)
+        end)
 
-      Adapter.clear()
+      assert_receive {:DOWN, ^ref, :process, ^pid, :killed}, 30_000
+
+      long_ago =
+        DateTime.add(DateTime.utc_now(), -2 * Arca.StorageUnits.draft_ttl_ms(), :millisecond)
+
+      Arca.Repo.update_all(Arca.Schemas.StorageUnit, set: [updated_at: long_ago])
     end
 
     test "younger than the settle answers unavailable, never the row before it", %{
@@ -238,14 +273,16 @@ defmodule Compendium.ProjectionReconcilerTest do
       assert {:ok, %{description: "old"}} = Registry.get(ctx, name, "1.0.0")
       :ok = Arca.put(actor, unit(name) ++ ["cyfr-manifest.json"], manifest("new"))
 
-      # Every derivation reads the manifest, and each read lands a change
+      # Every derivation reads the manifest — under the committed revision's
+      # prefix, where the unit's objects are — and each read lands a change
       # elsewhere under the root: every replacement meets an epoch it did
       # not snapshot.
       test = self()
-      manifest_path = unit(name) ++ ["cyfr-manifest.json"]
+      staging = Arca.Storage.UnitLocator.staging_prefix(unit(name))
 
       Adapter.hook(fn op, path ->
-        if op == :get and path == manifest_path do
+        if op == :get and List.starts_with?(path, staging) and
+             List.last(path) == "cyfr-manifest.json" do
           send(test, :derived)
           key = "reagents/local/bystander/#{System.unique_integer([:positive])}"
           {:ok, pending} = StorageProjectionChanges.begin_edit(actor, "components", key)

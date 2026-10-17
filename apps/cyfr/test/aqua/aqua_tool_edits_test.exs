@@ -172,61 +172,57 @@ defmodule Aqua.AquaToolEditsTest do
   end
 
   @tag :capture_log
-  test "a role whose commit could not finish serving is published, and the index names it", %{
-    ctx: ctx
-  } do
-    alias Arca.PublicationContract.Faults
-
-    previous = Application.get_env(:arca, :storage_adapter)
-    Faults.wrap(Arca.Adapters.Local)
-    Application.put_env(:arca, :storage_adapter, Faults)
-
-    on_exit(fn ->
-      Faults.unwrap()
-
-      if previous,
-        do: Application.put_env(:arca, :storage_adapter, previous),
-        else: Application.delete_env(:arca, :storage_adapter)
-    end)
-
-    role = AquaPath.role_file("tracker")
-
-    # The commit lands its row and then cannot write the role where
-    # readers read: the unit is published, its bytes are not all served,
-    # and the storage sweep's repair finishes the move.
-    Faults.inject(fn op, path ->
-      if op == :put and path == role, do: {:error, :enospc}, else: :pass
-    end)
-
-    assert {:error, {:finish_failed, :enospc}} =
-             call(ctx, %{"action" => "create", "name" => "tracker"})
-
-    Faults.clear()
-
-    {root, key} = Arca.Storage.UnitLocator.unit_key(role)
+  test "a role whose writer died after its commit is published, and the index names it once the repair releases it",
+       %{ctx: ctx} do
     actor = Sanctum.Context.actor(ctx)
+    role = AquaPath.role_file("tracker")
+    {root, key} = Arca.Storage.UnitLocator.unit_key(role)
+    handler = {__MODULE__, make_ref()}
+    on_exit(fn -> :telemetry.detach(handler) end)
+    test_pid = self()
+
+    # The writer dies at its commit's announcement: after the pointer
+    # moved, before the draft is given back.
+    :ok =
+      :telemetry.attach(
+        handler,
+        Arca.StorageProjectionChanges.event(),
+        fn _event, _measurements, metadata, _config ->
+          if metadata.athanor_id == actor.athanor_id and metadata.root == root and
+               not metadata.ready and self() != test_pid and
+               match?(
+                 {:ok, %{draft_writer_token: token}} when is_binary(token),
+                 Arca.StorageUnits.current(actor, root, key)
+               ) do
+            :telemetry.detach(handler)
+            # Outright: an exit raised in a telemetry handler is caught.
+            Process.exit(self(), :kill)
+          end
+        end,
+        nil
+      )
+
+    {pid, ref} = spawn_monitor(fn -> call(ctx, %{"action" => "create", "name" => "tracker"}) end)
+    assert_receive {:DOWN, ^ref, :process, ^pid, :killed}, 30_000
+
+    # Published: the row, the journal, and the role reads already.
     assert {:ok, %{state: "committed"}} = Arca.StorageUnits.current(actor, root, key)
     assert {:ok, [_one_commit]} = Arca.StorageUnits.journal(actor, root, key)
+    assert Arca.exists?(actor, role)
 
-    # The refusal is the vocabulary's, not a flattened storage failure,
-    # and it says the unit is published.
-    assert Prima.Refusal.reason?({:finish_failed, :enospc})
-    assert Prima.Refusal.message({:finish_failed, :enospc}) =~ "published"
-
-    # The commit stamped the role pending and its move never finished: the
+    # The commit stamped the role pending and its release never came: the
     # index is behind the tree, and says so rather than answer the rows it
     # held before the role was published.
     assert {:error, :projection_unavailable} = Compendium.AgentIndex.list(ctx)
-    refute Arca.exists?(Sanctum.Context.actor(ctx), role)
 
-    # The move is what was left, and the storage sweep finishes it: its
-    # repair marks the role's change ready at a newer generation, so the
-    # next read of the index derives the role with nothing else asked.
-    # No grace, so the move this commit left is overdue at once.
-    assert {:ok, _collected} =
-             Arca.Retention.StagedRevisions.prune(Sanctum.Context.actor(ctx), 0, false)
+    # Once the dead writer's draft has outlived its lifetime, the
+    # reconciler's repair releases it at a newer, ready generation, and
+    # the next read of the index derives the role with nothing else asked.
+    long_ago =
+      DateTime.add(DateTime.utc_now(), -2 * Arca.StorageUnits.draft_ttl_ms(), :millisecond)
 
-    assert Arca.exists?(Sanctum.Context.actor(ctx), role)
+    Arca.Repo.update_all(Arca.Schemas.StorageUnit, set: [updated_at: long_ago])
+    assert :ok = Compendium.ProjectionReconciler.await(ctx, "aqua", settle_after_ms: 0)
 
     {:ok, rows} = Compendium.AgentIndex.list(ctx)
     assert Enum.any?(rows, &(&1.name == "tracker"))
