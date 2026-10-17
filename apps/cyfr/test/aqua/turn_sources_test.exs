@@ -110,7 +110,10 @@ defmodule Aqua.TurnSourcesTest do
       assert %{outcome: "ok", approval_id: nil} = fourth
       {:ok, ended} = Tape.turn(ctx, turn.id)
       assert {:ok, []} = Tape.pending_approvals(ctx, ended)
-      assert {:ok, %{sources: []}} = Aqua.Notes.read(ctx, "first")
+      # Kept before the outside read, the first note carries what its turn
+      # had read by then and is no outside material.
+      assert {:ok, %{sources: first}} = Aqua.Notes.read(ctx, "first")
+      refute Enum.any?(first, &Prima.Source.outside?/1)
       # Admitted by an allow naming the host, the note is still marked.
       assert {:ok, %{sources: kept}} = Aqua.Notes.read(ctx, "fourth")
       assert host in kept
