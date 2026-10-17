@@ -13,7 +13,7 @@ defmodule Sanctum.RequestLog do
   A row is never written on its own. `Sanctum.Decisions.open/3` appends
   the decision with the start row this module builds (`opened/3`), and
   `Sanctum.Decisions.close/3` records the completion with the columns
-  this module builds (`closed/2`), each in the decision's own transaction
+  this module builds (`closed/3`), each in the decision's own transaction
   (`Arca.DecisionLog`): the row and the decision cannot disagree.
 
   A row's meaning is its decision's: a refused call carries the
@@ -58,7 +58,7 @@ defmodule Sanctum.RequestLog do
   completion's text, reach it already sanitized (`Sanctum.Decisions`), so
   a row's action and error are its decision's. Every text column the row
   stores passes the same redaction once more here, as the columns are
-  built (`opened/3`, `closed/2`): a method a caller named, a completion's
+  built (`opened/3`, `closed/3`): a method a caller named, a completion's
   routing label, or any column added later, carries no credential of a
   shape the platform issues, whichever caller supplied it.
   """

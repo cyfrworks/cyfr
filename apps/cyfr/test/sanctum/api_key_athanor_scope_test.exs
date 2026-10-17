@@ -58,7 +58,7 @@ defmodule Sanctum.ApiKeyAthanorScopeTest do
     {:ok, %{api_key: raw}} = Sanctum.ApiKey.create(issuing, opts)
     {:ok, key_ctx} = Caller.establish({:api_key, raw})
 
-    {:ok, user: user, a: a, b: b, raw: raw, key_ctx: key_ctx}
+    {:ok, user: user, a: a, b: b, raw: raw, key_ctx: key_ctx, session_ctx: session_ctx}
   end
 
   test "a key minted in A neither lists, focuses nor reads B", %{
@@ -109,6 +109,36 @@ defmodule Sanctum.ApiKeyAthanorScopeTest do
 
     assert [%{status: "success", output: %{"id" => ^id}}] =
              Enum.filter(rows, &(&1.action == "get"))
+  end
+
+  test "a tincture the key invokes runs as the key, in the key's athanor alone", %{
+    a: a,
+    b: b,
+    key_ctx: key_ctx,
+    session_ctx: session_ctx
+  } do
+    tincture = %{publisher: "local", name: "key-scope-probe"}
+    run_ctx = Sanctum.build_tincture_context(key_ctx, tincture)
+
+    assert run_ctx.auth_method == :tincture
+    assert run_ctx.user_id == key_ctx.user_id
+    assert run_ctx.athanor_id == a.id
+    assert run_ctx.api_key_id == key_ctx.api_key_id
+    assert run_ctx.credential_binding == key_ctx.credential_binding
+    assert Context.key_bound?(run_ctx)
+
+    assert Enum.map(Sanctum.Tenancy.list_athanors(run_ctx), & &1.id) == [a.id]
+    assert Context.focus(run_ctx, b.id) == {:error, :not_found}
+    assert {:ok, %{athanor_id: athanor_id}} = Context.focus(run_ctx, a.id)
+    assert athanor_id == a.id
+
+    # A person's own invocation still follows their seats, and carries no
+    # sign-in's binding into the run.
+    person_run = Sanctum.build_tincture_context(session_ctx, tincture)
+    refute Context.key_bound?(person_run)
+    assert is_nil(person_run.api_key_id)
+    assert is_nil(person_run.credential_binding)
+    assert b.id in Enum.map(Sanctum.Tenancy.list_athanors(person_run), & &1.id)
   end
 
   test "the key keeps its athanor after its creator leaves it, and gains no other", %{

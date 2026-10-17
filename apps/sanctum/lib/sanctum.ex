@@ -316,6 +316,13 @@ defmodule Sanctum do
   dedicated public-tincture namespace tag. The athanor is inherited from the
   caller and the context stays athanor-scoped (NOT platform-scoped) so tenant
   isolation still applies to the invocation.
+
+  An invocation an API key stands behind (`Sanctum.Context.key_bound?/1`)
+  carries the key's id and binding into the run, so the run is still the
+  key's and works in the key's athanor alone (`Sanctum.Context.focus/2`,
+  `Sanctum.Tenancy.list_athanors/1`) rather than in every athanor the key's
+  creator sits in. Any other caller's binding stays behind: a run is not a
+  sign-in and issues nothing on one.
   """
   @spec build_tincture_context(Context.t(), map()) :: Context.t()
   def build_tincture_context(%Context{} = caller_ctx, tincture) do
@@ -338,6 +345,11 @@ defmodule Sanctum do
         {tincture_id, @public_tincture_namespace, [:execute], true}
       end
 
+    {api_key_id, binding} =
+      if not anonymous and Context.key_bound?(caller_ctx),
+        do: {caller_ctx.api_key_id, caller_ctx.credential_binding},
+        else: {nil, nil}
+
     Context.build(
       user_id: user_id,
       namespace: namespace,
@@ -347,6 +359,8 @@ defmodule Sanctum do
       athanor_id: caller_ctx.athanor_id,
       scope: :athanor,
       auth_method: :tincture,
+      api_key_id: api_key_id,
+      credential_binding: binding,
       authenticated: true,
       anonymous: anonymous
     )
