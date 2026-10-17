@@ -64,15 +64,54 @@ defmodule Opus.GuestStorageTest do
       edge: edge,
       limits: Keyword.get(opts, :limits),
       quota: Keyword.get(opts, :quota),
-      hold: Keyword.get(opts, :hold, &held/1)
+      hold: Keyword.get(opts, :hold, &held(ctx, &1))
     }
 
     GuestStorage.run(scope, String.to_existing_atom(action), Map.delete(request, "action"))
   end
 
-  # A hold that stands from the intent to its settlement: the store call
-  # runs, and a store that answered is confirmed or failed by its answer.
-  defp held(%{op: op, path: [_ | _], io: io}) when op in [:put, :append, :delete] do
+  # A hold that stands from the intent to its settlement, as an attempt's
+  # does with no source in its ledger: a guest object's write is marked,
+  # stored at its generation's key and settled, and a read answers the
+  # settled object; any other store call runs and its answer decides.
+  defp held(ctx, %{op: :read, path: path}) do
+    case Arca.ObjectRevisions.read(Sanctum.Context.actor(ctx), path) do
+      {:ok, bytes, _sources} -> {:ok, {:read, {:ok, bytes}}}
+      {:error, _} = error -> {:ok, {:read, error}}
+    end
+  end
+
+  defp held(ctx, %{op: op, path: [_ | _] = path, io: io} = write)
+       when op in [:put, :append, :delete] and is_function(io, 1) do
+    {:ok, marked} =
+      Arca.Repo.transaction(fn ->
+        Arca.ObjectRevisions.mark!(Sanctum.Context.actor(ctx), path, op, %{
+          bytes: Map.get(write, :bytes) || 0,
+          sources: []
+        })
+      end)
+
+    with {:ok, mark} <- marked,
+         :ok <- io.(mark) do
+      {:ok, settled} =
+        Arca.Repo.transaction(fn ->
+          Arca.ObjectRevisions.settle!(Sanctum.Context.actor(ctx), mark, [])
+        end)
+
+      Arca.Usage.account(Sanctum.Context.actor(ctx), path, :settled, :ok)
+
+      case settled do
+        settled when settled in [:settled, :superseded] -> {:ok, {:confirmed, :ok}}
+        :dead -> {:ok, {:failed, {:error, :dead}}}
+        :base_moved -> {:ok, {:failed, {:error, :precondition_failed}}}
+      end
+    else
+      {:refused, reason} -> {:ok, {:failed, {:error, reason}}}
+      {:error, _reason} = refused -> {:ok, {:failed, refused}}
+    end
+  end
+
+  defp held(_ctx, %{op: op, path: [_ | _], io: io}) when op in [:put, :append, :delete] do
     case io.() do
       :ok -> {:ok, {:confirmed, :ok}}
       {:error, _reason} = refused -> {:ok, {:failed, refused}}
@@ -642,16 +681,21 @@ defmodule Opus.GuestStorageTest do
       assert message =~ "file quota"
     end
 
-    test "usage is cached and bumped per write, and a delete drops it", %{ctx: ctx} do
+    test "every settled write drops the cached usage, and the next read loads it from the rows",
+         %{ctx: ctx} do
       quota = %{max_bytes: 1_000_000, max_files: 10}
+      actor = Sanctum.Context.actor(ctx)
       assert {:ok, _} = quota_write(ctx, "data/a.txt", 4, quota)
 
-      bytes_key = Arca.Cache.Keys.scope_usage_bytes(Sanctum.Context.actor(ctx), "data")
-      files_key = Arca.Cache.Keys.scope_usage_files(Sanctum.Context.actor(ctx), "data")
-      assert {:ok, 4} = Arca.Cache.get(bytes_key)
-      assert {:ok, 1} = Arca.Cache.get(files_key)
+      bytes_key = Arca.Cache.Keys.scope_usage_bytes(actor, "data")
+      files_key = Arca.Cache.Keys.scope_usage_files(actor, "data")
+      assert :miss = Arca.Cache.get(bytes_key)
+      assert :miss = Arca.Cache.get(files_key)
+      assert {:ok, %{files: 1, bytes: 4}} = Arca.Usage.scope_usage(actor, "data")
 
       assert {:ok, _} = quota_write(ctx, "data/b.txt", 6, quota)
+      assert :miss = Arca.Cache.get(bytes_key)
+      assert {:ok, %{files: 2, bytes: 10}} = Arca.Usage.scope_usage(actor, "data")
       assert {:ok, 10} = Arca.Cache.get(bytes_key)
       assert {:ok, 2} = Arca.Cache.get(files_key)
 
@@ -660,6 +704,39 @@ defmodule Opus.GuestStorageTest do
 
       assert :miss = Arca.Cache.get(bytes_key)
       assert :miss = Arca.Cache.get(files_key)
+    end
+
+    test "admission charges the visible delta: an append its suffix, a replacement its bytes less the file it replaces",
+         %{ctx: ctx} do
+      quota = %{max_bytes: 100, max_files: 50}
+      actor = Sanctum.Context.actor(ctx)
+      assert {:ok, %{"written" => true}} = quota_write(ctx, "data/f.txt", 60, quota)
+
+      append = %{"action" => "append", "path" => "data/f.txt", "content" => Base.encode64("z")}
+      assert {:ok, %{"appended" => true}} = run(ctx, edge(["data/"]), append, quota: quota)
+      assert {:ok, %{files: 1, bytes: 61}} = Arca.Usage.scope_usage(actor, "data")
+
+      assert {:ok, %{"written" => true}} = quota_write(ctx, "data/f.txt", 50, quota)
+      assert {:ok, %{files: 1, bytes: 50}} = Arca.Usage.scope_usage(actor, "data")
+
+      # The retired generations are the home's to keep for retention, and
+      # the quota counts none of them.
+      assert {:ok, %{generations: 3, bytes: 171}} = Arca.ObjectRevisions.physical(actor)
+    end
+
+    test "a file at the file quota is replaced and extended; only a new file is refused",
+         %{ctx: ctx} do
+      quota = %{max_bytes: 1_000_000, max_files: 1}
+      assert {:ok, _} = quota_write(ctx, "data/only.txt", 4, quota)
+      assert {:ok, %{"written" => true}} = quota_write(ctx, "data/only.txt", 6, quota)
+
+      append = %{"action" => "append", "path" => "data/only.txt", "content" => Base.encode64("+")}
+      assert {:ok, %{"appended" => true}} = run(ctx, edge(["data/"]), append, quota: quota)
+
+      assert {"storage_quota_exceeded", message} =
+               refused(quota_write(ctx, "data/another.txt", 1, quota))
+
+      assert message =~ "file quota"
     end
 
     test "the incoming size is the decoded content, and components/ counts too", %{ctx: ctx} do
@@ -675,19 +752,25 @@ defmodule Opus.GuestStorageTest do
                refused(quota_write(ctx, unit <> "b.txt", 60, quota, grants))
     end
 
+    # A walked scope, whose usage the store answers; `data/` is counted
+    # from its rows.
     @tag :capture_log
     test "an unreadable usage refuses the public write as storage_unavailable, and nothing is written",
          %{ctx: ctx} do
-      unreadable_usage!(ctx, "data")
+      unreadable_usage!(ctx, "components")
+      unit = "components/catalysts/local/pkg/0.1.0/"
 
-      assert_unavailable(quota_write(ctx, "data/a.txt", 10, %{max_bytes: 100, max_files: 50}))
-      refute Arca.exists?(Sanctum.Context.actor(ctx), ["data", "a.txt"])
+      assert_unavailable(
+        quota_write(ctx, unit <> "a.txt", 10, %{max_bytes: 100, max_files: 50}, ["components/"])
+      )
+
+      refute Arca.exists?(Sanctum.Context.actor(ctx), String.split(unit <> "a.txt", "/"))
     end
 
     test "a public profile's scope carries the configured quota; any other carries none", %{
       ctx: ctx
     } do
-      hold = &held/1
+      hold = &held(ctx, &1)
       public = %{Authority.zero() | profile_kind: :public}
 
       assert %{quota: quota} = GuestStorage.scope(ctx, public, nil, hold)
@@ -715,13 +798,30 @@ defmodule Opus.GuestStorageTest do
     assert message =~ "file ceiling"
   end
 
+  test "a scope at the file ceiling still replaces and extends a file it holds", %{ctx: ctx} do
+    actor = Sanctum.Context.actor(ctx)
+    :ok = Arca.put(actor, ["data", "held.txt"], "x")
+    Arca.Cache.put(Arca.Cache.Keys.scope_usage_files(actor, "data"), 100_000, 60_000)
+    Arca.Cache.put(Arca.Cache.Keys.scope_usage_bytes(actor, "data"), 1_000, 60_000)
+
+    assert {:ok, %{"written" => true}} =
+             run(ctx, edge(["data/"]), write("data/held.txt", "replaced"))
+
+    Arca.Cache.put(Arca.Cache.Keys.scope_usage_files(actor, "data"), 100_000, 60_000)
+    Arca.Cache.put(Arca.Cache.Keys.scope_usage_bytes(actor, "data"), 1_000, 60_000)
+    append = %{"action" => "append", "path" => "data/held.txt", "content" => Base.encode64("+")}
+    assert {:ok, %{"appended" => true}} = run(ctx, edge(["data/"]), append)
+    assert {:ok, "replaced+"} = Arca.get(actor, ["data", "held.txt"])
+  end
+
   @tag :capture_log
   test "an unreadable file count refuses the scope write as storage_unavailable, and nothing is written",
        %{ctx: ctx} do
-    unreadable_usage!(ctx, "data")
+    unreadable_usage!(ctx, "components")
+    path = "components/catalysts/local/pkg/0.1.0/unread.txt"
 
-    assert_unavailable(run(ctx, edge(["data/"]), write("data/unread.txt", "x")))
-    refute Arca.exists?(Sanctum.Context.actor(ctx), ["data", "unread.txt"])
+    assert_unavailable(run(ctx, edge(["components/"]), write(path, "x")))
+    refute Arca.exists?(Sanctum.Context.actor(ctx), String.split(path, "/"))
   end
 
   describe "the athanor's byte cap" do
@@ -766,7 +866,8 @@ defmodule Opus.GuestStorageTest do
   end
 
   describe "the attempt's hold" do
-    test "a refused hold writes, appends and deletes nothing, and reads need none", %{ctx: ctx} do
+    test "a refused hold writes, appends, deletes and reads nothing; a listing and a check need none",
+         %{ctx: ctx} do
       :ok = Arca.put(Sanctum.Context.actor(ctx), ["data", "kept.txt"], "kept")
       test = self()
 
@@ -797,8 +898,16 @@ defmodule Opus.GuestStorageTest do
       refute Arca.exists?(Sanctum.Context.actor(ctx), ["data", "late.txt"])
       assert {:ok, "kept"} = Arca.get(Sanctum.Context.actor(ctx), ["data", "kept.txt"])
 
+      # A guest object's read is answered through the hold, which joins its
+      # sources into the run's ledger before its bytes are handed over.
+      assert {:error, :lost} =
+               run(ctx, edge(["data/"]), %{"action" => "read", "path" => "data/kept.txt"},
+                 hold: lost
+               )
+
+      assert_received :held
+
       for request <- [
-            %{"action" => "read", "path" => "data/kept.txt"},
             %{"action" => "list", "path" => "data"},
             %{"action" => "exists", "path" => "data/kept.txt"}
           ] do
@@ -818,7 +927,7 @@ defmodule Opus.GuestStorageTest do
         send(test, {:write, Map.delete(write, :io)})
         # Nothing moved before the hold ran the store call.
         assert {:ok, "a"} = Arca.get(Sanctum.Context.actor(ctx), ["data", "log.txt"])
-        held(write)
+        held(ctx, write)
       end
 
       append = %{"action" => "append", "path" => "data/log.txt", "content" => Base.encode64("bc")}
@@ -839,7 +948,7 @@ defmodule Opus.GuestStorageTest do
                run(ctx, edge(["data/"]), %{"action" => "delete", "path" => "data/log.txt"},
                  hold: fn write ->
                    send(test, {:write, Map.delete(write, :io)})
-                   held(write)
+                   held(ctx, write)
                  end
                )
 
@@ -917,7 +1026,7 @@ defmodule Opus.GuestStorageTest do
 
       hold = fn write ->
         send(test, :held)
-        held(write)
+        held(ctx, write)
       end
 
       assert {"storage_path_denied", _} =

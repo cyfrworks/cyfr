@@ -53,10 +53,29 @@ defmodule Arca.ExecutionAttempts do
   ## A guest's mutable storage write
 
   A put, an append and a delete are the mutable storage operations a guest
-  reaches, and each runs through `while_held/5` in three steps. No
+  reaches, and each runs through `while_held/6` in three steps. No
   transaction is open while the store is touched, and the store is never
   touched on a check alone: the check and the record of what is about to
   happen commit together.
+
+  A write under `data/` is a guest object's (`Arca.ObjectRevisions`): step
+  1 also marks its generation, recording on the intent the generation it
+  marked and on the generation's row the bytes it will hold and the
+  attempt's ledger as it stands, the provenance of what the guest read
+  before it wrote; step 2 stores at the generation's key, never at the
+  path; and step 3 settles the path's row onto the generation, with the
+  generation's sources joined with the ledger as it stands then, only
+  while the intent is still `pending`. A write whose settlement does not
+  publish never becomes visible: an `uncertain` intent's generation stays
+  pending and is never read, a superseded one is confirmed (a newer write
+  replaced it), and one a delete fenced is `failed` as `dead`. An append
+  whose base moved under it re-derives from the new base under a fresh
+  generation, re-marked under the same hold and recorded on the same
+  intent, within `Arca.ObjectRevisions.append_attempts/0`; past the bound
+  the intent is `failed` as `precondition_failed` with nothing landed. A
+  guest's read of a guest object (`op: :read`) is answered only once its
+  settled sources are in the attempt's run's ledger
+  (`Arca.Execution.join_sources/3`).
 
     1. **Intent.** One short transaction takes the attempt row's lock by
        writing it, requires the hold — the attempt owns its execution, is
@@ -80,11 +99,14 @@ defmodule Arca.ExecutionAttempts do
 
   ### The commit point of each operation
 
-  | Operation | The store's commit point | `confirmed` means |
+  | Operation under `data/` | The commit point | `confirmed` means |
   |---|---|---|
-  | put | the adapter's replacement of the object (Local: the rename over the path; S3: the `PUT` the store acknowledged) | the object holds the bytes, and the attempt held its row before and after |
-  | append | the adapter's extension of the object (Local: the `O_APPEND` write; S3: the conditional `PUT` under the ETag it read) | the bytes were appended once, whole, and the attempt held its row before and after |
-  | delete | the adapter's removal of the object | the object is gone, and the attempt held its row before and after |
+  | put | the settlement onto the generation whose key the store wrote (Local: the rename to the key; S3: the `PUT` the store acknowledged) | the path reads the bytes, or a newer write that replaced them, and the attempt held its row before and after |
+  | append | the settlement onto the generation holding the settled base and the suffix, while the base is still settled | the bytes were appended once, whole, and the attempt held its row before and after |
+  | delete | the settlement that tombstones the path's row | the path reads nothing, and the attempt held its row before and after |
+
+  A write outside `data/` (a unit under `components/`) commits at the
+  adapter's own write of the path, as `Arca` writes it.
 
   The write is the guest's once step 3 commits `confirmed`; until then it
   is answered to nobody as written.
@@ -93,7 +115,7 @@ defmodule Arca.ExecutionAttempts do
 
   For a write the store answered `:ok`:
 
-  | The hold ends | The store | The intent | `while_held/5` answers |
+  | The hold ends | The store | The intent | `while_held/6` answers |
   |---|---|---|---|
   | before step 1 commits | not touched | none | `{:error, :lost}` |
   | between steps 1 and 2 | may be written after the hold ended | `uncertain`, settled by the write that ended the hold | `{:ok, {:uncertain, :hold_lost}}` |
@@ -111,7 +133,7 @@ defmodule Arca.ExecutionAttempts do
 
   ### What the store answered
 
-  | The store | The intent | `while_held/5` answers |
+  | The store | The intent | `while_held/6` answers |
   |---|---|---|
   | `:ok` | as the table above | as the table above |
   | `{:error, :unknown}`: it may have applied the write | `uncertain`, `unknown_outcome` | `{:ok, {:uncertain, :unknown_outcome}}` |
@@ -422,20 +444,34 @@ defmodule Arca.ExecutionAttempts do
   @typedoc """
   A mutable storage write: the operation, the athanor-relative path it
   names, the bytes a put or append carries, and the store call itself,
-  which answers `:ok` or `{:error, reason}` as `Arca.Storage` does.
+  which answers `:ok` or `{:error, reason}` as `Arca.Storage` does. Under
+  `data/` the store call takes the generation's mark
+  (`Arca.ObjectRevisions`) and stores at its key; anywhere else it takes
+  nothing.
   """
   @type write :: %{
           required(:op) => :put | :append | :delete,
           required(:path) => [String.t()],
-          required(:io) => (-> :ok | {:error, term()}),
+          required(:io) =>
+            (-> :ok | {:error, term()})
+            | (Arca.ObjectRevisions.mark() -> :ok | {:error, term()}),
           optional(:bytes) => non_neg_integer() | nil
         }
 
-  @typedoc "What became of a write whose intent was recorded (the moduledoc's tables)."
+  @typedoc "A guest's read of a guest object under `data/`."
+  @type read :: %{required(:op) => :read, required(:path) => [String.t()]}
+
+  @typedoc """
+  What became of a write whose intent was recorded (the moduledoc's
+  tables), or what a read answered: `{:read, {:ok, bytes}}` once the
+  object's sources joined the run's ledger, `{:read, {:error, reason}}`
+  as `Arca.ObjectRevisions.read/2` refused.
+  """
   @type written ::
           {:confirmed, :ok}
           | {:failed, {:error, term()}}
           | {:uncertain, :hold_lost | :unknown_outcome | :io_crashed | :unconfirmed}
+          | {:read, {:ok, binary()} | {:error, term()}}
 
   @doc """
   Run the storage `write` for the attempt `runner` holds at `fence`, under
@@ -451,11 +487,52 @@ defmodule Arca.ExecutionAttempts do
   `:unavailable`) or `{:error, :missing_grant}`, and
   `{:error, :database_error}` when the database cannot answer. In each of
   those the store call did not run and nothing was recorded.
+
+  A `read` of a guest object records no intent and takes no lock: the
+  runner must hold the attempt (`held?/4`), the object is read in one
+  observation and its sources join the attempt's run's ledger before its
+  bytes are answered; a ledger that cannot be joined is
+  `{:error, :database_error}` and answers no bytes.
   """
-  @spec while_held(Prima.Actor.t(), String.t(), pos_integer(), String.t(), write(), keyword()) ::
+  @spec while_held(
+          Prima.Actor.t(),
+          String.t(),
+          pos_integer(),
+          String.t(),
+          write() | read(),
+          keyword()
+        ) ::
           {:ok, written()} | {:error, atom()}
   def while_held(
-        %Prima.Actor{athanor_id: athanor_id},
+        %Prima.Actor{athanor_id: athanor_id} = actor,
+        attempt,
+        fence,
+        runner,
+        %{op: :read, path: path},
+        opts
+      )
+      when is_binary(athanor_id) and athanor_id != "" and is_binary(attempt) and is_integer(fence) and
+             is_binary(runner) and is_list(path) and is_list(opts) do
+    with true <- held?(actor, attempt, fence, runner) || {:error, :lost},
+         {:ok, execution_id} <- execution_of(athanor_id, attempt) do
+      case Arca.ObjectRevisions.read(actor, path) do
+        {:ok, bytes, sources} ->
+          case Arca.Execution.join_sources(actor, execution_id, sources) do
+            :ok -> {:ok, {:read, {:ok, bytes}}}
+            {:error, _unjoined} -> {:error, :database_error}
+          end
+
+        {:error, :database_error} ->
+          {:error, :database_error}
+
+        {:error, reason} ->
+          {:ok, {:read, {:error, reason}}}
+      end
+    end
+  end
+
+  def while_held(
+        %Prima.Actor{athanor_id: athanor_id} = actor,
         attempt,
         fence,
         runner,
@@ -464,12 +541,18 @@ defmodule Arca.ExecutionAttempts do
       )
       when is_binary(athanor_id) and athanor_id != "" and is_binary(attempt) and is_integer(fence) and
              is_binary(runner) and op in [:put, :append, :delete] and is_list(path) and
-             is_function(io, 0) and is_list(opts) do
+             (is_function(io, 0) or is_function(io, 1)) and is_list(opts) do
+    # A store call that takes a mark writes a guest object by generation,
+    # so only a path under `data/` may name one.
+    if is_function(io, 1) and not Arca.ObjectRevisions.object_path?(path),
+      do: raise(ArgumentError, "only a write under data/ takes a mark")
+
     with {:ok, grant, verify} <-
            Arca.Repo.Errors.with_db_rescue("Arca.ExecutionAttempts.while_held", fn ->
              standing_inputs(athanor_id, attempt, opts)
            end) do
       holder = %{
+        actor: actor,
         athanor_id: athanor_id,
         attempt: attempt,
         fence: fence,
@@ -478,14 +561,47 @@ defmodule Arca.ExecutionAttempts do
         verify: verify
       }
 
-      with {:ok, intent} <- record_intent(holder, write) do
-        {:ok, settle(holder, intent, effect(io, intent))}
+      with {:ok, {intent, execution_id, marked}} <- record_intent(holder, write) do
+        {:ok, run_write(Map.put(holder, :execution_id, execution_id), intent, write, marked, 1)}
       end
     end
   end
 
   def while_held(%Prima.Actor{}, _attempt, _fence, _runner, _write, _opts),
     do: {:error, :no_athanor}
+
+  # Steps 2 and 3, and an append's re-derivation: a settlement that finds
+  # the append's base moved re-marks under the same hold and stores again.
+  defp run_write(holder, intent, write, marked, attempt) do
+    case settle(holder, intent, effect(write.io, marked, intent), marked, attempt) do
+      :rederive ->
+        Arca.ObjectRevisions.backoff(attempt)
+
+        case remark(holder, intent, write) do
+          {:ok, marked} -> run_write(holder, intent, write, marked, attempt + 1)
+          {:error, :lost} -> {:uncertain, :hold_lost}
+          {:error, _unanswered} -> {:uncertain, :unconfirmed}
+        end
+
+      written ->
+        written
+    end
+  end
+
+  # The attempt's execution, the ledger its object writes record.
+  defp execution_of(athanor_id, attempt) do
+    Arca.Repo.Errors.with_db_rescue("Arca.ExecutionAttempts.execution_of", fn ->
+      case Arca.Repo.one(
+             from(a in ExecutionAttempt,
+               where: a.athanor_id == ^athanor_id and a.attempt == ^attempt,
+               select: a.execution_id
+             )
+           ) do
+        nil -> {:error, :lost}
+        execution_id -> {:ok, execution_id}
+      end
+    end)
+  end
 
   @doc "The write intents of `attempt`, oldest first."
   @spec write_intents(Prima.Actor.t(), String.t()) ::
@@ -1194,8 +1310,9 @@ defmodule Arca.ExecutionAttempts do
     :ok
   end
 
-  # Step 1: the grant, the hold and the intent commit together, or none
-  # does. The athanor's lock is taken first, then the attempt's.
+  # Step 1: the grant, the hold, a guest object's mark and the intent
+  # commit together, or none does. The athanor's lock is taken first, then
+  # the attempt's, then the object path's row.
   defp record_intent(holder, write) do
     Arca.Repo.Errors.with_db_rescue("Arca.ExecutionAttempts.record_intent", fn ->
       Arca.Repo.locking_transaction(fn ->
@@ -1210,6 +1327,8 @@ defmodule Arca.ExecutionAttempts do
             )
           )
 
+        marked = mark!(holder.athanor_id, execution_id, write)
+
         intent =
           Arca.Repo.insert!(%StorageWriteIntent{
             id: Prima.UUID7.generate_id("swi"),
@@ -1221,20 +1340,97 @@ defmodule Arca.ExecutionAttempts do
             op: Atom.to_string(write.op),
             path: Enum.join(write.path, "/"),
             bytes: Map.get(write, :bytes),
+            generation: marked_generation(marked),
             state: "pending",
             inserted_at: DateTime.utc_now()
           })
 
-        intent.id
+        {intent.id, execution_id, marked}
       end)
     end)
   end
 
+  # A guest object's mark, taken with the ledger as it stands: what the
+  # guest read before it wrote. `:none` for a store call that takes no
+  # mark.
+  # arca:db-raise-ok inside the caller's transaction
+  defp mark!(athanor_id, execution_id, %{op: op, path: path, io: io} = write) do
+    if is_function(io, 1) do
+      Arca.ObjectRevisions.mark!(Prima.Actor.in_athanor(athanor_id), path, op, %{
+        bytes: Map.get(write, :bytes) || 0,
+        sources: ledger!(athanor_id, execution_id)
+      })
+    else
+      :none
+    end
+  end
+
+  defp marked_generation({:ok, mark}), do: mark.generation
+  defp marked_generation(_unmarked), do: nil
+
+  # The run's ledger as its row holds it now (`Arca.Execution.row_ledger/1`:
+  # an absent or unreadable one is an unnamed outside source). Read, not
+  # locked: the execution row is locked before an attempt row, never after.
+  # arca:db-raise-ok inside the caller's transaction
+  defp ledger!(athanor_id, execution_id) do
+    from(e in Arca.Schemas.Execution,
+      where: e.athanor_id == ^athanor_id and e.id == ^execution_id,
+      select: %{sources: e.sources}
+    )
+    |> Arca.Repo.one()
+    |> case do
+      nil -> [Prima.Source.outside(nil)]
+      row -> Arca.Execution.row_ledger(row)
+    end
+  end
+
+  # An append's re-derivation: a fresh mark, under the same grant and hold,
+  # recorded on the same intent while it is still pending.
+  defp remark(holder, intent, write) do
+    Arca.Repo.Errors.with_db_rescue("Arca.ExecutionAttempts.remark", fn ->
+      Arca.Repo.locking_transaction(fn ->
+        Arca.ExecutionStanding.verify!(holder.grant, holder.verify)
+        if not lock_held!(holder), do: Arca.Repo.rollback(:lost)
+        if not pending?(holder, intent), do: Arca.Repo.rollback(:lost)
+
+        marked = mark!(holder.athanor_id, holder.execution_id, write)
+
+        {1, _} =
+          from(i in StorageWriteIntent,
+            where: i.athanor_id == ^holder.athanor_id and i.id == ^intent
+          )
+          |> Arca.Repo.update_all(set: [generation: marked_generation(marked)])
+
+        marked
+      end)
+    end)
+  end
+
+  # arca:db-raise-ok inside the caller's transaction
+  defp pending?(holder, intent) do
+    Arca.Repo.exists?(
+      from(i in StorageWriteIntent,
+        where: i.athanor_id == ^holder.athanor_id and i.id == ^intent and i.state == "pending"
+      )
+    )
+  end
+
   # Step 2: the store call, outside any transaction. A call that did not
-  # answer a storage result leaves what the store did unknown.
-  defp effect(io, intent) do
-    case io.() do
+  # answer a storage result leaves what the store did unknown. A mark that
+  # refused touches nothing; an append whose base is gone stored nothing
+  # and re-derives.
+  defp effect(_io, {:refused, reason}, _intent), do: {:refused, {:error, reason}}
+
+  defp effect(io, marked, intent) do
+    answer =
+      case marked do
+        :none -> io.()
+        {:ok, mark} -> io.(mark)
+      end
+
+    case answer do
       :ok -> :applied
+      {:error, :base_moved} -> :base_moved
       {:error, :unknown} -> {:unknown, :unknown_outcome}
       {:error, _reason} = refused -> {:refused, refused}
       other -> crashed(intent, {:answered, other})
@@ -1261,12 +1457,14 @@ defmodule Arca.ExecutionAttempts do
   end
 
   # Step 3: the intent leaves `pending` by compare-and-set, under the
-  # athanor's lock and then the attempt row's. A write the store applied is
-  # confirmed only while the grant and the hold still stand and the intent
-  # is still pending: a grant retired while the store call ran settles it
-  # uncertain, exactly as a hold that ended does. A refusal and an unknown
-  # outcome are what they are whoever holds the row.
-  defp settle(holder, intent, effect) do
+  # athanor's lock, then the attempt row's, then a guest object's path row.
+  # A write the store applied is confirmed only while the grant and the
+  # hold still stand and the intent is still pending: a grant retired while
+  # the store call ran settles it uncertain, exactly as a hold that ended
+  # does. A guest object's generation is settled in the same transaction,
+  # and only then; what its settlement found decides the intent's state. A
+  # refusal and an unknown outcome are what they are whoever holds the row.
+  defp settle(holder, intent, effect, marked, attempt) do
     settled =
       Arca.Repo.Errors.with_db_rescue("Arca.ExecutionAttempts.settle", fn ->
         Arca.Repo.locking_transaction(fn ->
@@ -1277,25 +1475,93 @@ defmodule Arca.ExecutionAttempts do
               {:error, reason} -> Arca.Repo.rollback(reason)
             end
 
-          {state, reason} = settlement(effect, held?)
+          case published(holder, intent, effect, marked, held?, attempt) do
+            :rederive ->
+              :rederive
 
-          {count, _} =
-            from(i in StorageWriteIntent,
-              where: i.athanor_id == ^holder.athanor_id and i.id == ^intent,
-              where: i.state == "pending"
-            )
-            |> Arca.Repo.update_all(
-              set: [state: state, reason: reason, settled_at: DateTime.utc_now()]
-            )
+            {state, reason, written} ->
+              {count, _} =
+                from(i in StorageWriteIntent,
+                  where: i.athanor_id == ^holder.athanor_id and i.id == ^intent,
+                  where: i.state == "pending"
+                )
+                |> Arca.Repo.update_all(
+                  set: [state: state, reason: reason, settled_at: DateTime.utc_now()]
+                )
 
-          held? and count == 1
+              {held? and count == 1, written}
+          end
         end)
       end)
 
+    answered(effect, settled, holder, marked)
+  end
+
+  # What the settlement writes for a store that applied (or found its base
+  # gone) while the hold stands: a guest object's settlement decides it.
+  # arca:db-raise-ok inside the caller's transaction
+  defp published(holder, intent, effect, {:ok, mark}, true, attempt)
+       when effect in [:applied, :base_moved] do
+    outcome =
+      if pending?(holder, intent) do
+        if effect == :applied,
+          do:
+            Arca.ObjectRevisions.settle!(
+              holder.actor,
+              mark,
+              ledger!(holder.athanor_id, holder.execution_id)
+            ),
+          else: :base_moved
+      else
+        :lost
+      end
+
+    case outcome do
+      settled when settled in [:settled, :superseded] ->
+        {"confirmed", nil, {:confirmed, :ok}}
+
+      :dead ->
+        {"failed", "dead", {:failed, {:error, :dead}}}
+
+      :base_moved ->
+        if attempt < Arca.ObjectRevisions.append_attempts(),
+          do: :rederive,
+          else: {"failed", "precondition_failed", {:failed, {:error, :precondition_failed}}}
+
+      # The generation's row is gone or the hold ended in between: nothing
+      # is published, and the intent the end of the hold settled stays so.
+      _unpublished ->
+        {"uncertain", "unconfirmed", {:uncertain, :unconfirmed}}
+    end
+  end
+
+  # An append whose base moved after its hold ended stored nothing; the
+  # intent the end of the hold settled stays as it is.
+  defp published(_holder, _intent, :base_moved, _marked, _held?, _attempt),
+    do: {"uncertain", "hold_lost", nil}
+
+  defp published(_holder, _intent, effect, _marked, held?, _attempt) do
+    {state, reason} = settlement(effect, held?)
+    {state, reason, nil}
+  end
+
+  defp answered(_effect, {:ok, :rederive}, _holder, _marked), do: :rederive
+
+  defp answered(_effect, {:ok, {true, {:confirmed, :ok} = written}}, holder, {:ok, mark}) do
+    Arca.Usage.account(holder.actor, mark.segments, :settled, :ok)
+    written
+  end
+
+  defp answered(_effect, {:ok, {true, written}}, _holder, _marked) when written != nil,
+    do: written
+
+  defp answered(effect, settled, _holder, _marked) do
     case {effect, settled} do
-      {:applied, {:ok, true}} -> {:confirmed, :ok}
-      {:applied, {:ok, false}} -> {:uncertain, :hold_lost}
+      {:applied, {:ok, {true, _}}} -> {:confirmed, :ok}
+      {:applied, {:ok, {false, _}}} -> {:uncertain, :hold_lost}
       {:applied, {:error, _reason}} -> {:uncertain, :unconfirmed}
+      {:base_moved, {:ok, _settled}} -> {:uncertain, :hold_lost}
+      {:base_moved, {:error, _reason}} -> {:uncertain, :unconfirmed}
       {{:refused, refused}, _settled} -> {:failed, refused}
       {{:unknown, reason}, _settled} -> {:uncertain, reason}
     end

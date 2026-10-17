@@ -1,6 +1,45 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
+defmodule Arca.AppendParityTest.Interloper do
+  @moduledoc false
+  # The Local adapter, with another writer settling a replacement of the
+  # armed guest object each time an append's generation is stored, so the
+  # append's base has always moved when it settles.
+  use Arca.Storage.TestDouble
+
+  @armed {__MODULE__, :armed}
+
+  def arm(actor, path), do: :persistent_term.put(@armed, {actor, path, :counters.new(1, [])})
+  def disarm, do: :persistent_term.erase(@armed)
+
+  def moves do
+    {_actor, _path, counter} = :persistent_term.get(@armed)
+    :counters.get(counter, 1)
+  end
+
+  def put(actor, ["objects", _generation | logical] = key, content) do
+    case {:persistent_term.get(@armed, nil), Process.get(__MODULE__)} do
+      {{armed_actor, ^logical, counter}, nil} ->
+        :counters.add(counter, 1, 1)
+        n = :counters.get(counter, 1)
+
+        Task.async(fn ->
+          Process.put(__MODULE__, :interloping)
+          :ok = Arca.put(armed_actor, logical, "moved-#{n}", cap: :exempt)
+        end)
+        |> Task.await()
+
+        super(actor, key, content)
+
+      _other ->
+        super(actor, key, content)
+    end
+  end
+
+  def put(actor, path, content), do: super(actor, path, content)
+end
+
 defmodule Arca.AppendParityTest do
   @moduledoc """
   Append and conditional-write semantics are the same on both adapters,
@@ -13,7 +52,13 @@ defmodule Arca.AppendParityTest do
     writer's appends keep their order;
   - an append moves the precondition a conditional replace needs;
   - the conditional writes answer the one result vocabulary: `:exists`,
-    `:precondition_failed`, `:missing`, and exactly one winner of a race.
+    `:precondition_failed`, `:missing`, and exactly one winner of a race;
+  - through the facade, a guest object's appends (`Arca.ObjectRevisions`)
+    keep the same contract: two, then five, simultaneous appends all
+    answer `:ok` and each suffix is in the object once, whole, and an
+    append whose base keeps moving refuses with
+    `{:error, :precondition_failed}` past the bound, nothing of it
+    landed.
 
   S3 runs against an in-process store that honours `If-None-Match: *` and
   `If-Match` in one step, and again against MinIO under `:s3_integration`.
@@ -178,7 +223,8 @@ defmodule Arca.AppendParityTest do
   # ---------------------------------------------------------------------------
 
   describe "Arca.Adapters.Local" do
-    setup do
+    setup tags do
+      Arca.Test.Sandbox.setup!(tags)
       test_dir = Path.join(System.tmp_dir!(), "append_parity_#{:rand.uniform(1_000_000)}")
       File.mkdir_p!(test_dir)
       prev_base = Application.fetch_env!(:arca, :base_path)
@@ -208,6 +254,58 @@ defmodule Arca.AppendParityTest do
       :ok = Arca.put(actor, path, "hello ", cap: :exempt)
       assert :ok = Arca.append(actor, path, "world", cap: :exempt)
       assert {:ok, "hello world"} = Arca.get(actor, path)
+    end
+
+    test "simultaneous appends to a guest object through the facade all land, each once, whole",
+         %{actor: actor} do
+      for writers <- [2, 5] do
+        path = ["data", "facade-race-#{writers}.jsonl"]
+        lines = for n <- 1..writers, do: String.duplicate("writer-#{n};", 50) <> "\n"
+
+        answers =
+          lines
+          |> Task.async_stream(&Arca.append(actor, path, &1, cap: :exempt),
+            max_concurrency: writers,
+            ordered: false,
+            timeout: 30_000
+          )
+          |> Enum.map(fn {:ok, answer} -> answer end)
+
+        assert answers == List.duplicate(:ok, writers)
+
+        {:ok, content} = Arca.get(actor, path)
+
+        assert content |> String.split("\n", trim: true) |> Enum.map(&(&1 <> "\n")) |> Enum.sort() ==
+                 Enum.sort(lines)
+      end
+    end
+
+    test "an append whose base keeps moving refuses past the bound, and nothing of it lands",
+         %{actor: actor} do
+      path = ["data", "contended.log"]
+      :ok = Arca.put(actor, path, "base;", cap: :exempt)
+
+      previous = Application.get_env(:arca, :storage_adapter)
+
+      on_exit(fn ->
+        Arca.AppendParityTest.Interloper.disarm()
+
+        if previous,
+          do: Application.put_env(:arca, :storage_adapter, previous),
+          else: Application.delete_env(:arca, :storage_adapter)
+      end)
+
+      Application.put_env(:arca, :storage_adapter, Arca.AppendParityTest.Interloper)
+      Arca.AppendParityTest.Interloper.arm(actor, path)
+
+      assert {:error, :precondition_failed} = Arca.append(actor, path, "suffix", cap: :exempt)
+
+      # Every attempt re-derived from the base it read, and each lost it.
+      attempts = Arca.ObjectRevisions.append_attempts()
+      assert Arca.AppendParityTest.Interloper.moves() == attempts
+      assert {:ok, "moved-#{attempts}"} == Arca.get(actor, path)
+      {:ok, settled, _sources} = Arca.ObjectRevisions.read(actor, path)
+      refute settled =~ "suffix"
     end
 
     test("an append past the ceiling is refused whole", %{actor: actor, dir: dir},

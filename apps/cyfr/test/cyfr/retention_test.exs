@@ -85,17 +85,26 @@ defmodule Arca.RetentionTest do
       assert keys == Enum.uniq(keys)
     end
 
-    test "the outbox records are the last of nineteen kinds, after the frames, the offers and the file receipts" do
-      assert length(Retention.kinds()) == 19
-      assert List.last(Retention.kinds()) == Retention.OutboxRecords
+    test "the object generations are the last of twenty kinds, after the frames, the offers, the file receipts and the outbox records" do
+      assert length(Retention.kinds()) == 20
+      assert List.last(Retention.kinds()) == Retention.ObjectGenerations
 
-      assert Enum.take(Retention.kinds(), -4) ==
+      assert Enum.take(Retention.kinds(), -5) ==
                [
                  Retention.FrameCredentials,
                  Retention.FileOffers,
                  Retention.FileReceipts,
-                 Retention.OutboxRecords
+                 Retention.OutboxRecords,
+                 Retention.ObjectGenerations
                ]
+
+      # A generation outlives the evidence of the write that marked it for
+      # as long, and no longer.
+      assert Retention.ObjectGenerations.key() == "object_generation_days"
+      assert Retention.ObjectGenerations.unit() == :days
+
+      assert Retention.ObjectGenerations.default() ==
+               Retention.WriteIntents.default()
 
       assert Retention.OutboxRecords.key() == "outbox_record_days"
       assert Retention.OutboxRecords.unit() == :days

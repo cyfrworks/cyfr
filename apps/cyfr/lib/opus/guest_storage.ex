@@ -42,8 +42,26 @@ defmodule Opus.GuestStorage do
     8. For a public profile, a write or append keeps its scope within the
        public quota (`config :cyfr, :public_storage_quota`); usage that
        cannot be read refuses the write as `storage_unavailable`.
-    9. A write or append finds its scope under 100,000 files; a count that
-       cannot be read refuses the write as `storage_unavailable`.
+    9. A write or append that adds a file finds its scope under 100,000
+       files; a count that cannot be read refuses the write as
+       `storage_unavailable`.
+
+  The quota and the ceiling read what the scope visibly holds
+  (`Arca.Usage.scope_usage/2`) and admit the visible delta: an append its
+  suffix, a write its bytes less those of the file it replaces. Only a
+  write or append that adds a visible file counts against a file limit,
+  so a file at the limit can still be replaced or extended.
+
+  ## Guest objects
+
+  A path under `data/` is a guest object (`Arca.ObjectRevisions`). A
+  write's store call takes the generation its intent marked and stores at
+  that generation's key; the write becomes visible at its settlement, and
+  a read sees only a settled generation. A read is answered through the
+  hold as well, which joins the object's settled sources into the run's
+  ledger before its bytes are handed over, so a run that reads what an
+  earlier run wrote carries what that run read. A write a delete fenced is
+  `storage_conflict` and wrote nothing.
 
   A read or listing answers at most the node's `max_response_size` bytes.
   The athanor's byte cap is `Arca`'s own write gate.
@@ -55,7 +73,7 @@ defmodule Opus.GuestStorage do
   the store call. The hold records the write's intent while the calling
   attempt holds its row, runs the store call outside any transaction and
   settles the intent against the same hold
-  (`Arca.ExecutionAttempts.while_held/5`). This module never calls the
+  (`Arca.ExecutionAttempts.while_held/6`). This module never calls the
   store for a mutation itself.
 
   | The hold answers | The guest is answered |
@@ -99,7 +117,7 @@ defmodule Opus.GuestStorage do
   `{:error, :unavailable}` when the database cannot say.
   """
   @type hold ::
-          (Arca.ExecutionAttempts.write() ->
+          (Arca.ExecutionAttempts.write() | Arca.ExecutionAttempts.read() ->
              {:ok, Arca.ExecutionAttempts.written()} | {:error, :lost | :unavailable})
 
   @typedoc """
@@ -315,8 +333,9 @@ defmodule Opus.GuestStorage do
 
   defp write_size(_op, _content, _limits), do: :ok
 
-  # Usage is the recursive count and byte total under the write's scope, and
-  # the incoming size is the decoded content.
+  # Usage is what the write's scope visibly holds, and the incoming size is
+  # the visible delta of the decoded content: what it adds to the file it
+  # extends or replaces.
   defp public_quota(op, path, content, %{quota: %{} = quota, ctx: ctx}) when op in @writing do
     %{max_files: max_files, max_bytes: max_bytes} = quota
 
@@ -326,22 +345,10 @@ defmodule Opus.GuestStorage do
         :error -> byte_size(content || "")
       end
 
-    case scope_usage(ctx, path) do
-      {:ok, %{files: files}} when files >= max_files ->
-        guest_error(
-          :storage_quota_exceeded,
-          "Public profile file quota reached (#{max_files} files)"
-        )
-
-      {:ok, %{bytes: used}} when used + incoming > max_bytes ->
-        guest_error(
-          :storage_quota_exceeded,
-          "Public profile storage quota reached (#{max_bytes} bytes)"
-        )
-
-      {:ok, _usage} ->
-        :ok
-
+    with {:ok, file} <- file_usage(ctx, path),
+         {:ok, usage} <- scope_usage(ctx, path) do
+      within_quota(usage, delta(op, incoming, file), file.files == 0, max_files, max_bytes)
+    else
       _unreadable ->
         Logger.warning(
           "[Opus.GuestStorage] public-quota usage unreadable for " <>
@@ -357,7 +364,42 @@ defmodule Opus.GuestStorage do
 
   defp public_quota(_op, _path, _content, _scope), do: :ok
 
+  defp within_quota(usage, delta, adds_file?, max_files, max_bytes) do
+    case usage do
+      %{files: files} when adds_file? and files >= max_files ->
+        guest_error(
+          :storage_quota_exceeded,
+          "Public profile file quota reached (#{max_files} files)"
+        )
+
+      %{bytes: used} when used + delta > max_bytes ->
+        guest_error(
+          :storage_quota_exceeded,
+          "Public profile storage quota reached (#{max_bytes} bytes)"
+        )
+
+      _within ->
+        :ok
+    end
+  end
+
+  # What the write adds to what its scope visibly holds: an append its
+  # suffix, a write its bytes less the file it replaces.
+  defp delta(:append, incoming, _file), do: incoming
+  defp delta(:write, incoming, %{bytes: replaced}), do: incoming - replaced
+
+  # Only a write that adds a file is held to the ceiling.
   defp scope_files(op, path, ctx) when op in @writing do
+    case file_usage(ctx, path) do
+      {:ok, %{files: 0}} -> scope_file_ceiling(ctx, path)
+      {:ok, _replaces_or_extends} -> :ok
+      _unreadable -> unreadable_count(ctx)
+    end
+  end
+
+  defp scope_files(_op, _path, _ctx), do: :ok
+
+  defp scope_file_ceiling(ctx, path) do
     case scope_usage(ctx, path) do
       {:ok, %{files: files}} when files >= @max_scope_files ->
         guest_error(
@@ -369,31 +411,36 @@ defmodule Opus.GuestStorage do
         :ok
 
       _unreadable ->
-        Logger.warning(
-          "[Opus.GuestStorage] file-ceiling count unreadable for " <>
-            "#{ctx.athanor_id}; refusing the write"
-        )
-
-        guest_error(
-          :storage_unavailable,
-          "Storage usage could not be read — nothing was written."
-        )
+        unreadable_count(ctx)
     end
   end
 
-  defp scope_files(_op, _path, _ctx), do: :ok
+  defp unreadable_count(ctx) do
+    Logger.warning(
+      "[Opus.GuestStorage] file-ceiling count unreadable for " <>
+        "#{ctx.athanor_id}; refusing the write"
+    )
+
+    guest_error(
+      :storage_unavailable,
+      "Storage usage could not be read — nothing was written."
+    )
+  end
 
   defp scope_usage(ctx, path) do
     [scope | _] = physical(String.split(path, "/", parts: 2))
     Arca.Usage.scope_usage(Sanctum.Context.actor(ctx), scope)
   end
 
+  # What the path itself visibly holds: one file and its bytes, or none.
+  defp file_usage(ctx, path), do: Arca.usage(Sanctum.Context.actor(ctx), segments(path))
+
   # ---------------------------------------------------------------------------
   # Store calls
   # ---------------------------------------------------------------------------
 
   defp dispatch(:read, path, _content, scope) do
-    case Arca.get(Sanctum.Context.actor(scope.ctx), segments(path)) do
+    case read(scope, segments(path)) do
       {:ok, content} ->
         with :ok <- response_size(scope.limits, "read", byte_size(content)) do
           {:ok,
@@ -407,6 +454,9 @@ defmodule Opus.GuestStorage do
 
       {:error, :not_found} ->
         guest_error(:not_found, "File not found: #{path}")
+
+      {:error, refusal} when refusal in [:lost, :unavailable] ->
+        {:error, refusal}
 
       {:error, reason} ->
         store_fault("read file", reason)
@@ -457,16 +507,19 @@ defmodule Opus.GuestStorage do
   defp dispatch(op, path, content, scope) when op in @writing do
     case Base.decode64(content) do
       {:ok, bytes} ->
-        {verb, store} = if op == :write, do: {:put, &Arca.put/3}, else: {:append, &Arca.append/3}
+        {verb, store} = if op == :write, do: {:put, &Arca.put/4}, else: {:append, &Arca.append/4}
         physical = segments(path)
+        actor = Sanctum.Context.actor(scope.ctx)
+
+        # Under `data/` the store call takes the generation the intent
+        # marked and stores at its key; anywhere else it writes the path.
+        io =
+          if Arca.ObjectRevisions.object_path?(physical),
+            do: fn mark -> store.(actor, physical, bytes, mark: mark) end,
+            else: fn -> store.(actor, physical, bytes, []) end
 
         scope
-        |> held(%{
-          op: verb,
-          path: physical,
-          bytes: byte_size(bytes),
-          io: fn -> store.(Sanctum.Context.actor(scope.ctx), physical, bytes) end
-        })
+        |> held(%{op: verb, path: physical, bytes: byte_size(bytes), io: io})
         |> written(op, path, byte_size(bytes))
 
       :error ->
@@ -480,18 +533,34 @@ defmodule Opus.GuestStorage do
   defp dispatch(:delete, path, _content, scope) do
     physical = segments(path)
 
-    write = %{
-      op: :delete,
-      path: physical,
-      io: fn -> Arca.delete(Sanctum.Context.actor(scope.ctx), physical) end
-    }
+    # A guest object's delete stores nothing: its settlement tombstones the
+    # path's row.
+    io =
+      if Arca.ObjectRevisions.object_path?(physical),
+        do: fn _mark -> :ok end,
+        else: fn -> Arca.delete(Sanctum.Context.actor(scope.ctx), physical) end
 
-    case held(scope, write) do
+    case held(scope, %{op: :delete, path: physical, io: io}) do
       {:ok, {:confirmed, :ok}} -> {:ok, %{"path" => path, "deleted" => true}}
       {:ok, {:failed, {:error, :not_found}}} -> guest_error(:not_found, "File not found: #{path}")
+      {:ok, {:failed, {:error, :dead}}} -> dead("delete", path)
       {:ok, {:failed, {:error, reason}}} -> store_fault("delete file", reason)
       {:ok, {:uncertain, reason}} -> uncertain("delete", path, reason)
       {:error, refusal} -> {:error, refusal}
+    end
+  end
+
+  # A guest object is read through the hold, which joins its settled
+  # sources into the run's ledger before the bytes come back; anything else
+  # is read where it is.
+  defp read(scope, physical) do
+    if Arca.ObjectRevisions.object_path?(physical) do
+      case scope.hold.(%{op: :read, path: physical}) do
+        {:ok, {:read, answer}} -> answer
+        {:error, refusal} when refusal in [:lost, :unavailable] -> {:error, refusal}
+      end
+    else
+      Arca.get(Sanctum.Context.actor(scope.ctx), physical)
     end
   end
 
@@ -529,6 +598,8 @@ defmodule Opus.GuestStorage do
     )
   end
 
+  defp refused(op, path, :dead), do: dead(Atom.to_string(op), path)
+
   defp refused(:append, path, :precondition_failed) do
     guest_error(
       :storage_conflict,
@@ -538,6 +609,15 @@ defmodule Opus.GuestStorage do
   end
 
   defp refused(_op, _path, reason), do: store_fault("write file", reason)
+
+  # A delete of the path was marked after this write: the write is dead
+  # and nothing of it is readable.
+  defp dead(verb, path) do
+    guest_error(
+      :storage_conflict,
+      "'#{path}' was deleted while the #{verb} was in flight; nothing was written."
+    )
+  end
 
   # The write may or may not be in the store: never answered as written,
   # never as refused.

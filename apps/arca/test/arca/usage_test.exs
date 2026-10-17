@@ -3,8 +3,11 @@
 
 defmodule Arca.UsageTest do
   @moduledoc """
-  The usage-cache discipline in one place: creates bump, deletes drop,
-  reads walk once and cache, invalidate/1 clears an athanor whole. The
+  The usage-cache discipline in one place: creates outside `data/` bump,
+  deletes drop, reads load once and cache, invalidate/1 clears an athanor
+  whole. Under `data/` a scope holds what it visibly holds: its settled
+  objects, counted from the rows, never a pending or retired generation,
+  and each settlement drops the counters. The
   two enforcement surfaces (the byte cap, the public scope quota) read
   through this module, so the discipline holds for both by construction.
 
@@ -39,35 +42,35 @@ defmodule Arca.UsageTest do
     {:ok, actor: actor}
   end
 
-  test "reads walk once and cache; creates bump; deletes drop", %{actor: actor} do
-    :ok = Arca.put(actor, ["data", "a.txt"], "aaaa")
+  test "outside data/, reads walk once and cache; creates bump; deletes drop", %{actor: actor} do
+    :ok = Arca.put(actor, ["threads", "a.txt"], "aaaa")
 
     assert {:ok, 4} = Arca.Usage.athanor_bytes(actor)
 
     assert {:ok, %{files: 1, bytes: 4}} =
-             Arca.Usage.scope_usage(actor, "data")
+             Arca.Usage.scope_usage(actor, "threads")
 
     # A successful create bumps the cached counters in place — no walk.
-    :ok = Arca.put(actor, ["data", "b.txt"], "bb")
+    :ok = Arca.put(actor, ["threads", "b.txt"], "bb")
     assert {:ok, 6} = Arca.Usage.athanor_bytes(actor)
 
     assert {:ok, %{files: 2, bytes: 6}} =
-             Arca.Usage.scope_usage(actor, "data")
+             Arca.Usage.scope_usage(actor, "threads")
 
     # A delete drops the entries; the next read walks the truth afresh.
-    :ok = Arca.delete(actor, ["data", "b.txt"])
+    :ok = Arca.delete(actor, ["threads", "b.txt"])
     assert {:ok, 4} = Arca.Usage.athanor_bytes(actor)
 
     assert {:ok, %{files: 1, bytes: 4}} =
-             Arca.Usage.scope_usage(actor, "data")
+             Arca.Usage.scope_usage(actor, "threads")
   end
 
   test "an overwrite over-counts — the safe direction — until invalidated", %{actor: actor} do
-    :ok = Arca.put(actor, ["data", "a.txt"], "aaaa")
+    :ok = Arca.put(actor, ["threads", "a.txt"], "aaaa")
     assert {:ok, 4} = Arca.Usage.athanor_bytes(actor)
 
     # Overwriting the same 4 bytes bumps again: 8 cached over 4 stored.
-    :ok = Arca.put(actor, ["data", "a.txt"], "aaaa")
+    :ok = Arca.put(actor, ["threads", "a.txt"], "aaaa")
     assert {:ok, 8} = Arca.Usage.athanor_bytes(actor)
 
     # invalidate/1 clears the whole athanor — total and scope pairs — and
@@ -76,20 +79,20 @@ defmodule Arca.UsageTest do
     assert {:ok, 4} = Arca.Usage.athanor_bytes(actor)
 
     assert {:ok, %{files: 1, bytes: 4}} =
-             Arca.Usage.scope_usage(actor, "data")
+             Arca.Usage.scope_usage(actor, "threads")
   end
 
   test "a peer's copy is short by what this member wrote, bounded by a TTL no bump extends",
        %{actor: actor} do
     key = Arca.Cache.Keys.athanor_usage(actor)
 
-    :ok = Arca.put(actor, ["data", "a.txt"], "aaaa")
+    :ok = Arca.put(actor, ["threads", "a.txt"], "aaaa")
     assert {:ok, 4} = Arca.Usage.athanor_bytes(actor)
     peers_copy = 4
 
     # The bump is the writing member's own, so a peer's copy does not
     # move with it.
-    :ok = Arca.put(actor, ["data", "b.txt"], "bbbbbb")
+    :ok = Arca.put(actor, ["threads", "b.txt"], "bbbbbb")
     assert {:ok, 10} = Arca.Usage.athanor_bytes(actor)
 
     # A peer, standing in: its entry still reads the total it walked, so
@@ -104,13 +107,83 @@ defmodule Arca.UsageTest do
     # and that is what holds when an announcement is lost.
     assert Arca.Usage.ttl_ms() == :timer.minutes(5)
     [{^key, 4, expires_at}] = :ets.lookup(Arca.Cache.table_name(), key)
-    :ok = Arca.put(actor, ["data", "c.txt"], "cc")
+    :ok = Arca.put(actor, ["threads", "c.txt"], "cc")
     assert [{^key, 6, ^expires_at}] = :ets.lookup(Arca.Cache.table_name(), key)
 
     # And the invalidation a cell-wide announcement lands on drops it at
     # once: the next read walks the tree and counts every member's write.
     Arca.Usage.invalidate(actor)
     assert {:ok, 12} = Arca.Usage.athanor_bytes(actor)
+  end
+
+  describe "guest objects under data/" do
+    # The visible state, with the cached counters dropped first so each
+    # answer is a cold load.
+    defp cold(actor) do
+      Arca.Usage.invalidate(actor)
+      {:ok, bytes} = Arca.Usage.athanor_bytes(actor)
+      Arca.Usage.invalidate(actor)
+      {:ok, scope} = Arca.Usage.scope_usage(actor, "data")
+      {bytes, scope}
+    end
+
+    test "a write, a replacement, a delete and a recreate are counted as visible from the rows",
+         %{actor: actor} do
+      :ok = Arca.put(actor, ["threads", "t.txt"], "ttt")
+
+      :ok = Arca.put(actor, ["data", "a.txt"], String.duplicate("a", 60))
+      assert {63, %{files: 1, bytes: 60}} = cold(actor)
+
+      # A replacement counts its own bytes, never the generation it retired.
+      :ok = Arca.put(actor, ["data", "a.txt"], String.duplicate("b", 50))
+      assert {53, %{files: 1, bytes: 50}} = cold(actor)
+
+      :ok = Arca.delete(actor, ["data", "a.txt"])
+      assert {3, %{files: 0, bytes: 0}} = cold(actor)
+
+      :ok = Arca.put(actor, ["data", "a.txt"], "cc")
+      assert {5, %{files: 1, bytes: 2}} = cold(actor)
+
+      # Three generations are kept for retention, and the quota counts one.
+      assert {:ok, %{generations: 3, bytes: 112}} = Arca.ObjectRevisions.physical(actor)
+    end
+
+    test "a pending generation and a retired one change neither the total nor the scope",
+         %{actor: actor} do
+      :ok = Arca.put(actor, ["data", "a.txt"], "1234")
+      before = cold(actor)
+
+      # A mark whose store landed and that never settled.
+      {:ok, {:ok, mark}} =
+        Arca.Repo.transaction(fn ->
+          Arca.ObjectRevisions.mark!(actor, ["data", "a.txt"], :put, %{
+            bytes: 9,
+            sources: []
+          })
+        end)
+
+      :ok = Arca.ObjectRevisions.store(actor, mark, "pending!!")
+      assert cold(actor) == before
+      assert {:ok, "1234"} = Arca.get(actor, ["data", "a.txt"])
+
+      # A tombstoned path's retained generations count nothing.
+      :ok = Arca.delete(actor, ["data", "a.txt"])
+      assert {0, %{files: 0, bytes: 0}} = cold(actor)
+      assert {:ok, %{generations: 2, bytes: 13}} = Arca.ObjectRevisions.physical(actor)
+    end
+
+    test "a settlement drops the counters, so a cached total never misses a replacement",
+         %{actor: actor} do
+      :ok = Arca.put(actor, ["data", "a.txt"], String.duplicate("a", 10))
+      assert {:ok, 10} = Arca.Usage.athanor_bytes(actor)
+      assert {:ok, %{files: 1, bytes: 10}} = Arca.Usage.scope_usage(actor, "data")
+
+      :ok = Arca.put(actor, ["data", "a.txt"], "a")
+      assert :miss = Arca.Cache.get(Arca.Cache.Keys.athanor_usage(actor))
+      assert :miss = Arca.Cache.get(Arca.Cache.Keys.scope_usage_bytes(actor, "data"))
+      assert {:ok, 1} = Arca.Usage.athanor_bytes(actor)
+      assert {:ok, %{files: 1, bytes: 1}} = Arca.Usage.scope_usage(actor, "data")
+    end
   end
 
   test "an actor with no athanor names no tree, and that is a refusal, not zero",

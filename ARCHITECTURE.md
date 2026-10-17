@@ -316,7 +316,7 @@ Each fenced writer verifies the live slot in its writing transaction, by its own
 
 A removed document's revision is never reused in its athanor, so a writer holding a revision it read before the removal cannot overwrite a document created after it.
 
-Guest objects publish by generation: each write stores its bytes under `objects/` at a generation of its own, the path's row names its settled generation as the read pointer, and nothing mutates a published object in place. *Not built yet:* guest objects by generation; a guest's write replaces the object at its path.
+Guest objects publish by generation: each write stores its bytes under `objects/` at a generation of its own, the path's row names its settled generation as the read pointer, and nothing mutates a published object in place.
 
 ### 6.4 Decision audit
 

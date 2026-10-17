@@ -56,6 +56,19 @@ defmodule Arca do
   list, `authorize_path/2` (the reserved-root gate) and `tenant_segments/1`
   (the canonical tenant-segment builder).
 
+  ## Guest objects
+
+  Every path under `data/` is resolved through `Arca.ObjectRevisions`, never
+  at the path itself: a write marks a generation, stores its bytes at that
+  generation's key under the reserved `objects/` root and settles the
+  path's row onto it, and every read, listing, download, count and copy
+  sees only settled generations. `objects/` itself is refused to every
+  caller (`{:error, :forbidden}`, `false` from `exists?/2`): its pending
+  and retired bytes are nobody's to read. A write under `data/` names the
+  sources of its bytes with `sources:` (`Prima.Source`s; an unnamed outside
+  source when it names none), and a guest's write, whose attempt settles
+  it, carries its mark as `mark:` (`Arca.ExecutionAttempts.while_held/6`).
+
   ## Errors
 
   One rule decides tuple-vs-raise: **typed tuples** for conditions a
@@ -164,6 +177,7 @@ defmodule Arca do
       McpLog,
       McpServerStorage,
       Members,
+      ObjectRevisions,
       Outbox,
       Overlay,
       PairedClients,
@@ -259,7 +273,7 @@ defmodule Arca do
   """
   @spec get(Prima.Actor.t(), Arca.Storage.path()) :: {:ok, binary()} | {:error, term()}
   def get(%Prima.Actor{} = actor, path),
-    do: guarded(actor, normalize(path), fn p -> adapter(p).get(actor, p) end)
+    do: guarded(actor, normalize(path), fn p -> reader(p).get(actor, p) end)
 
   @doc """
   Read content together with the precondition a conditional replace of it
@@ -270,8 +284,13 @@ defmodule Arca do
   """
   @spec get_for_update(Prima.Actor.t(), Arca.Storage.path()) ::
           {:ok, binary(), Arca.Storage.precondition()} | {:error, term()}
-  def get_for_update(%Prima.Actor{} = actor, path),
-    do: guarded(actor, normalize(path), fn p -> adapter(p).get_for_update(actor, p) end)
+  def get_for_update(%Prima.Actor{} = actor, path) do
+    guarded(actor, normalize(path), fn p ->
+      if Arca.ObjectRevisions.object_path?(p),
+        do: Arca.ObjectRevisions.read_for_update(actor, p),
+        else: adapter(p).get_for_update(actor, p)
+    end)
+  end
 
   @doc """
   Read and decode JSON content from storage.
@@ -319,10 +338,7 @@ defmodule Arca do
   """
   @spec put(Prima.Actor.t(), Arca.Storage.path(), binary(), keyword()) :: :ok | {:error, term()}
   def put(%Prima.Actor{} = actor, path, content, opts \\ []),
-    do:
-      mutating(actor, normalize(path), {:create, byte_size(content)}, opts, fn p ->
-        adapter(p).put(actor, p, content)
-      end)
+    do: written(actor, normalize(path), :put, content, opts, &adapter(&1).put(actor, &1, content))
 
   @doc """
   Write content only while the object still holds the version
@@ -343,17 +359,17 @@ defmodule Arca do
           Arca.Storage.precondition(),
           keyword()
         ) :: :ok | {:error, :precondition_failed | :missing | term()}
-  def put_if_match(%Prima.Actor{} = actor, path, content, precondition, opts \\ []),
-    do:
-      mutating(actor, normalize(path), {:create, byte_size(content)}, opts, fn p ->
-        # The new precondition is the adapter's answer to this write; a
-        # caller that needs it reads for update again, so the accounting
-        # this gate does sees the one shape every other write answers.
-        case adapter(p).put_if_match(actor, p, content, precondition) do
-          {:ok, _next_precondition} -> :ok
-          {:error, _} = error -> error
-        end
-      end)
+  def put_if_match(%Prima.Actor{} = actor, path, content, precondition, opts \\ []) do
+    written(actor, normalize(path), {:if_match, precondition}, content, opts, fn p ->
+      # The new precondition is the adapter's answer to this write; a
+      # caller that needs it reads for update again, so the accounting
+      # this gate does sees the one shape every other write answers.
+      case adapter(p).put_if_match(actor, p, content, precondition) do
+        {:ok, _next_precondition} -> :ok
+        {:error, _} = error -> error
+      end
+    end)
+  end
 
   @doc """
   Create the object at `path` only when nothing is there
@@ -369,14 +385,14 @@ defmodule Arca do
   """
   @spec put_if_none_match(Prima.Actor.t(), Arca.Storage.path(), binary(), keyword()) ::
           :ok | {:error, :exists | :unknown | term()}
-  def put_if_none_match(%Prima.Actor{} = actor, path, content, opts \\ []),
-    do:
-      mutating(actor, normalize(path), {:create, byte_size(content)}, opts, fn p ->
-        case adapter(p).put_if_none_match(actor, p, content) do
-          {:ok, _precondition} -> :ok
-          {:error, _} = error -> error
-        end
-      end)
+  def put_if_none_match(%Prima.Actor{} = actor, path, content, opts \\ []) do
+    written(actor, normalize(path), :create, content, opts, fn p ->
+      case adapter(p).put_if_none_match(actor, p, content) do
+        {:ok, _precondition} -> :ok
+        {:error, _} = error -> error
+      end
+    end)
+  end
 
   @doc """
   Encode and write JSON content to storage.
@@ -426,11 +442,16 @@ defmodule Arca do
   """
   @spec append(Prima.Actor.t(), Arca.Storage.path(), binary(), keyword()) ::
           :ok | {:error, term()}
-  def append(%Prima.Actor{} = actor, path, content, opts \\ []),
-    do:
-      mutating(actor, normalize(path), {:create, byte_size(content)}, opts, fn p ->
-        adapter(p).append(actor, p, content)
-      end)
+  def append(%Prima.Actor{} = actor, path, content, opts \\ []) do
+    written(
+      actor,
+      normalize(path),
+      :append,
+      content,
+      opts,
+      &adapter(&1).append(actor, &1, content)
+    )
+  end
 
   @doc """
   Delete content from storage.
@@ -446,8 +467,13 @@ defmodule Arca do
       {:error, :not_found}
   """
   @spec delete(Prima.Actor.t(), Arca.Storage.path()) :: :ok | {:error, term()}
-  def delete(%Prima.Actor{} = actor, path),
-    do: mutating(actor, normalize(path), :delete, [], fn p -> adapter(p).delete(actor, p) end)
+  def delete(%Prima.Actor{} = actor, path) do
+    mutating(actor, normalize(path), :delete, [], fn p ->
+      if Arca.ObjectRevisions.object_path?(p),
+        do: Arca.ObjectRevisions.delete(actor, p),
+        else: adapter(p).delete(actor, p)
+    end)
+  end
 
   @doc """
   List contents at path.
@@ -485,17 +511,41 @@ defmodule Arca do
   @spec list_typed(Prima.Actor.t(), Arca.Storage.path()) ::
           {:ok, [{String.t(), :file | :dir}]} | {:error, term()}
   def list_typed(%Prima.Actor{} = actor, path),
-    do: guarded(actor, normalize(path), fn p -> adapter(p).list_typed(actor, p) end)
+    do: guarded(actor, normalize(path), fn p -> reader(p).list_typed(actor, p) end)
 
   @doc """
   Recursive file count and byte total under a path prefix.
 
   Returns `{:ok, %{files: n, bytes: n}}`. Quota enforcement reads this.
+  Under `data/` it is what the path visibly holds, from the rows
+  (`Arca.ObjectRevisions.usage/2`); the whole tree (`[]`) is every other
+  root's walk plus that, never the retained generations under `objects/`.
   """
   @spec usage(Prima.Actor.t(), Arca.Storage.path()) ::
           {:ok, %{files: non_neg_integer(), bytes: non_neg_integer()}} | {:error, term()}
-  def usage(%Prima.Actor{} = actor, path),
-    do: guarded(actor, normalize(path), fn p -> adapter(p).usage(actor, p) end)
+  def usage(%Prima.Actor{} = actor, path) do
+    guarded(actor, normalize(path), fn
+      [] -> tree(&reader(&1).usage(actor, &1), &sum_usage/2, %{files: 0, bytes: 0})
+      p -> reader(p).usage(actor, p)
+    end)
+  end
+
+  defp sum_usage(%{files: f1, bytes: b1}, %{files: f2, bytes: b2}),
+    do: %{files: f1 + f2, bytes: b1 + b2}
+
+  # The whole tree, root by root, with `data/` read from its rows and
+  # `objects/` left out: what a walk of `[]` would see were the guest
+  # objects stored at their paths.
+  defp tree(read, join, empty) do
+    Arca.Storage.tenant_roots()
+    |> Enum.reject(&(&1 == Arca.ObjectRevisions.objects_root()))
+    |> Enum.reduce_while({:ok, empty}, fn root, {:ok, acc} ->
+      case read.([root]) do
+        {:ok, value} -> {:cont, {:ok, join.(acc, value)}}
+        {:error, _} = error -> {:halt, error}
+      end
+    end)
+  end
 
   @doc """
   Check if path exists — FILES only: a directory answers `false` on every
@@ -527,8 +577,9 @@ defmodule Arca do
 
     with :ok <- Prima.PathSafety.validate_segments(path),
          :ok <- Arca.Storage.authorize_path(actor, path),
+         false <- objects?(path),
          true <- tenant_ctx_ok?(actor, path) do
-      adapter(path).exists?(actor, path)
+      reader(path).exists?(actor, path)
     else
       _refused -> false
     end
@@ -553,11 +604,20 @@ defmodule Arca do
       :ok
   """
   @spec delete_tree(Prima.Actor.t(), Arca.Storage.path()) :: :ok | {:error, term()}
-  def delete_tree(%Prima.Actor{} = actor, path),
-    do:
-      mutating(actor, normalize(path), :delete_tree, [], fn p ->
-        adapter(p).delete_tree(actor, p)
-      end)
+  def delete_tree(%Prima.Actor{} = actor, path) do
+    mutating(actor, normalize(path), :delete_tree, [], fn
+      # The whole tree: the guest objects' rows are tombstoned before the
+      # bytes go, so no row is left naming an object that is gone.
+      [] ->
+        with :ok <- Arca.ObjectRevisions.delete_tree(actor, ["data"]),
+             do: adapter([]).delete_tree(actor, [])
+
+      p ->
+        if Arca.ObjectRevisions.object_path?(p),
+          do: Arca.ObjectRevisions.delete_tree(actor, p),
+          else: adapter(p).delete_tree(actor, p)
+    end)
+  end
 
   @doc """
   Recursively list all leaf paths under a prefix.
@@ -567,8 +627,12 @@ defmodule Arca do
   """
   @spec list_recursive(Prima.Actor.t(), Arca.Storage.path()) ::
           {:ok, [Arca.Storage.path()]} | {:error, term()}
-  def list_recursive(%Prima.Actor{} = actor, path),
-    do: guarded(actor, normalize(path), fn p -> adapter(p).list_recursive(actor, p) end)
+  def list_recursive(%Prima.Actor{} = actor, path) do
+    guarded(actor, normalize(path), fn
+      [] -> tree(&reader(&1).list_recursive(actor, &1), &Kernel.++/2, [])
+      p -> reader(p).list_recursive(actor, p)
+    end)
+  end
 
   @doc """
   Read a whole subtree as `{relative_path, binary}` pairs — the shared
@@ -581,11 +645,22 @@ defmodule Arca do
   """
   @spec read_subtree(Prima.Actor.t(), Arca.Storage.path()) ::
           {:ok, [{Arca.Storage.path(), binary()}]} | {:error, term()}
-  def read_subtree(%Prima.Actor{} = actor, path),
-    do:
-      guarded(actor, normalize(path), fn p ->
-        Arca.Storage.read_subtree_via(adapter(p), actor, p)
-      end)
+  def read_subtree(%Prima.Actor{} = actor, path) do
+    guarded(actor, normalize(path), fn
+      [] ->
+        tree(
+          fn [root] = p ->
+            with {:ok, files} <- Arca.Storage.read_subtree_via(reader(p), actor, p),
+                 do: {:ok, Enum.map(files, fn {rel, bytes} -> {[root | rel], bytes} end)}
+          end,
+          &Kernel.++/2,
+          []
+        )
+
+      p ->
+        Arca.Storage.read_subtree_via(reader(p), actor, p)
+    end)
+  end
 
   @doc """
   Copy a whole subtree from `src` to `dest` (segment prefix → segment prefix).
@@ -609,7 +684,10 @@ defmodule Arca do
   file's bytes between the read and the write — how `Compendium.Fork`
   re-stamps the manifest without holding the whole tree in memory.
   `cap:` is threaded through to each `put/4` (default `:checked`, like
-  any other write).
+  any other write). A file copied from under `data/` keeps the sources its
+  settled generation carries, joined with `sources:` (none by default) in
+  the destination's generation; a file copied from anywhere else carries
+  `sources:` alone, an unnamed outside source when it names none.
   """
   @spec copy_tree(Prima.Actor.t(), Arca.Storage.path(), Arca.Storage.path(), keyword()) ::
           {:ok, [Arca.Storage.path()]} | {:error, term()}
@@ -624,14 +702,9 @@ defmodule Arca do
       |> Enum.map(&Enum.drop(&1, length(src)))
       |> Enum.reject(exclude)
       |> Enum.reduce_while({:ok, []}, fn relative, {:ok, acc} ->
-        case get(actor, src ++ relative) do
-          {:ok, content} ->
-            case put(
-                   actor,
-                   dest ++ relative,
-                   transform.(relative, content),
-                   Keyword.take(opts, [:cap])
-                 ) do
+        case copied(actor, src ++ relative, opts) do
+          {:ok, content, put_opts} ->
+            case put(actor, dest ++ relative, transform.(relative, content), put_opts) do
               :ok -> {:cont, {:ok, [relative | acc]}}
               {:error, reason} -> {:halt, {:error, reason}}
             end
@@ -649,6 +722,23 @@ defmodule Arca do
         {:ok, copied} -> {:ok, Enum.reverse(copied)}
         {:error, _} = error -> error
       end
+    end
+  end
+
+  # A copied file's bytes and the options its write carries: the source's
+  # settled sources joined with the caller's, where the source is a guest
+  # object.
+  defp copied(actor, path, opts) do
+    put_opts = Keyword.take(opts, [:cap, :sources])
+
+    if Arca.ObjectRevisions.object_path?(path) do
+      with {:ok, content, sources} <-
+             guarded(actor, path, &Arca.ObjectRevisions.read(actor, &1)) do
+        {:ok, content,
+         Keyword.put(put_opts, :sources, Prima.Source.union(sources, opts[:sources] || []))}
+      end
+    else
+      with {:ok, content} <- get(actor, path), do: {:ok, content, put_opts}
     end
   end
 
@@ -675,7 +765,10 @@ defmodule Arca do
   `path` or a relative path names the `.tmp.<n>` shape, and
   `{:error, :invalid_path}` for an empty relative path, besides the
   refusals every write answers. A replacement drops the cached usage
-  counters, so the next cap check measures the tree afresh.
+  counters, so the next cap check measures the tree afresh. Guest objects
+  settle one path at a time (`Arca.ObjectRevisions`), so no tree of them
+  can be swapped in whole: `path` at or under `data/`, and the whole tree,
+  refuse with `{:error, :atomic_replace_unsupported}` and write nothing.
   """
   @spec replace_tree(
           Prima.Actor.t(),
@@ -688,6 +781,9 @@ defmodule Arca do
     files = Enum.map(files, fn {rel, content} when is_list(rel) -> {normalize(rel), content} end)
 
     cond do
+      path == [] or Arca.ObjectRevisions.object_path?(path) ->
+        {:error, :atomic_replace_unsupported}
+
       Enum.any?(files, &match?({[], _content}, &1)) ->
         {:error, :invalid_path}
 
@@ -715,7 +811,8 @@ defmodule Arca do
     cond do
       Arca.Storage.classify(path) != :tenant -> {:error, :forbidden}
       path == [] -> {:error, :invalid_path}
-      true -> guarded(actor, path, fn p -> adapter(p).ensure_dir(actor, p) end)
+      # A directory carries no bytes, so `objects/` is made like any root.
+      true -> authorized(actor, path, fn p -> adapter(p).ensure_dir(actor, p) end)
     end
   end
 
@@ -742,7 +839,7 @@ defmodule Arca do
   @spec serve_to_conn(Plug.Conn.t(), Prima.Actor.t(), Arca.Storage.path(), keyword()) ::
           {:ok, Plug.Conn.t()} | {:error, term()}
   def serve_to_conn(conn, %Prima.Actor{} = actor, path, opts \\ []) do
-    guarded(actor, normalize(path), fn p -> adapter(p).serve_to_conn(conn, actor, p, opts) end)
+    guarded(actor, normalize(path), fn p -> reader(p).serve_to_conn(conn, actor, p, opts) end)
   end
 
   @doc """
@@ -793,11 +890,74 @@ defmodule Arca do
   # adapter: the seed bundle and the global roots are the server's own, and
   # every tenant path takes its athanor from the context — there is no path
   # spelling that reaches another athanor's bytes.
-  defp guarded(actor, path, fun) do
+  defp guarded(actor, path, fun),
+    do: authorized(actor, path, fn path -> with :ok <- not_objects(path), do: fun.(path) end)
+
+  defp authorized(actor, path, fun) do
     with :ok <- resolved(actor, path),
          :ok <- Arca.Storage.authorize_path(actor, path) do
       fun.(path)
     end
+  end
+
+  # The generation objects are read and written only by
+  # `Arca.ObjectRevisions`, at the key a row names: no caller reaches a
+  # pending or retired generation's bytes by naming the root.
+  defp not_objects(path), do: if(objects?(path), do: {:error, :forbidden}, else: :ok)
+
+  defp objects?([root | _]), do: root == Arca.ObjectRevisions.objects_root()
+  defp objects?([]), do: false
+
+  # A write: the bytes it adds to what the path visibly held are what the
+  # cap admits (a guest object's replacement charges its delta, an append
+  # its suffix), and a guest object is written by generation, marked and
+  # settled here or, carrying the mark of a guest's attempt, stored for
+  # that attempt to settle.
+  defp written(actor, path, op, content, opts, store) do
+    mark = Keyword.get(opts, :mark)
+
+    cond do
+      Arca.ObjectRevisions.object_path?(path) ->
+        mutating(actor, path, {:create, admitted(actor, path, op, content, mark)}, opts, fn p ->
+          object_write(actor, p, op, content, mark, opts)
+        end)
+
+      mark != nil ->
+        raise ArgumentError, "mark: is only for a path under data/"
+
+      true ->
+        mutating(actor, path, {:create, byte_size(content)}, opts, store)
+    end
+  end
+
+  defp object_write(actor, path, _op, content, %Arca.ObjectRevisions.Mark{} = mark, _opts) do
+    if mark.segments == path,
+      do: Arca.ObjectRevisions.store(actor, mark, content),
+      else: raise(ArgumentError, "mark: names another path")
+  end
+
+  defp object_write(actor, path, op, content, nil, opts),
+    do: Arca.ObjectRevisions.write(actor, path, op, content, Keyword.take(opts, [:sources]))
+
+  # The visible delta (ruling 32): an append its suffix, a replacement its
+  # bytes less the settled bytes it replaces, a new path its bytes. A size
+  # that cannot be read charges the whole content, the side that refuses.
+  defp admitted(_actor, _path, :append, content, _mark), do: byte_size(content)
+
+  defp admitted(_actor, _path, _op, content, %Arca.ObjectRevisions.Mark{} = mark),
+    do: byte_size(content) - mark.visible_bytes
+
+  defp admitted(actor, path, _op, content, nil) do
+    case Arca.ObjectRevisions.visible_size(actor, path) do
+      {:ok, %{bytes: bytes}} -> byte_size(content) - bytes
+      {:error, _unread} -> byte_size(content)
+    end
+  end
+
+  # What a read of `path` is asked of: the guest-object rows under `data/`,
+  # the routed adapter elsewhere.
+  defp reader(path) do
+    if Arca.ObjectRevisions.object_path?(path), do: Arca.ObjectRevisions, else: adapter(path)
   end
 
   # A tenant path is resolved under the ACTOR's athanor and no other, so
@@ -878,9 +1038,21 @@ defmodule Arca do
         # discipline, `Prima.Caps.check_storage/2` the policy.
         with :ok <- check_cap(actor, path, kind, opts) do
           result = guarded(actor, path, fun)
-          Arca.Usage.account(actor, path, kind, result)
+          Arca.Usage.account(actor, path, accounted(path, kind, opts), result)
           result
         end
+    end
+  end
+
+  # A guest object's write changes what is visible only at its settlement:
+  # a stored mark accounts nothing (its attempt's settlement does), and a
+  # write, delete or tree delete under `data/` that settled here drops the
+  # counters, so the next read loads them from the rows.
+  defp accounted(path, kind, opts) do
+    cond do
+      not Arca.ObjectRevisions.object_path?(path) -> kind
+      Keyword.has_key?(opts, :mark) -> :marked
+      true -> :settled
     end
   end
 
@@ -894,6 +1066,11 @@ defmodule Arca do
   defp check_cap(actor, path, {:create, bytes}, opts) do
     if Arca.Storage.classify(path) == :tenant and not Arca.Overlay.internal_writes?() do
       case Keyword.get(opts, :cap, :checked) do
+        # A write that adds no bytes (a guest object replaced by fewer)
+        # checks nothing.
+        :checked when bytes <= 0 ->
+          :ok
+
         :checked ->
           Prima.Caps.check_storage(actor, bytes)
 

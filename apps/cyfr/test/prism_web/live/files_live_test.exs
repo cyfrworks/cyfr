@@ -3,9 +3,9 @@
 
 defmodule PrismWeb.FilesLiveTest.StalledStore do
   @moduledoc false
-  # The Local adapter, with every folder probe under `data/inbox/`
-  # answering an error while armed: an acceptance commits and its
-  # publication cannot start.
+  # The Local adapter, with every read of a custody copy a publication
+  # starts from answering an error while armed: an acceptance commits and
+  # its publication cannot start.
   use Arca.Storage.TestDouble
 
   @armed {__MODULE__, :armed}
@@ -15,11 +15,11 @@ defmodule PrismWeb.FilesLiveTest.StalledStore do
 
   def last_modified(actor, path), do: Arca.Adapters.Local.last_modified(actor, path)
 
-  def list_typed(actor, ["data", "inbox" | _] = path) do
+  def get(actor, ["payloads", "receipts" | _] = path) do
     if :persistent_term.get(@armed, false), do: {:error, :eio}, else: super(actor, path)
   end
 
-  def list_typed(actor, path), do: super(actor, path)
+  def get(actor, path), do: super(actor, path)
 end
 
 defmodule PrismWeb.FilesLiveTest do
@@ -57,6 +57,7 @@ defmodule PrismWeb.FilesLiveTest do
     end
 
     refute html =~ "payloads/"
+    refute html =~ "objects/"
     refute html =~ "guest/"
     refute html =~ "files-upload"
   end
@@ -444,8 +445,8 @@ defmodule PrismWeb.FilesLiveTest do
   # The retention sweep's actor for the athanor: the server's own, narrowed.
   defp sweeper(ctx), do: %{Prima.Actor.system() | athanor_id: ctx.athanor_id, scope: :athanor}
 
-  # Storage under `StalledStore` for the rest of the test, its folder
-  # probes under `data/inbox/` failing until `StalledStore.reset/0`.
+  # Storage under `StalledStore` for the rest of the test, its custody
+  # reads failing until `StalledStore.reset/0`.
   defp stall_publication! do
     previous = Application.get_env(:arca, :storage_adapter)
     Application.put_env(:arca, :storage_adapter, StalledStore)

@@ -259,6 +259,12 @@ defmodule Arca.Storage do
     # staging store's own writes change bytes a `storage_staging` row
     # names.
     {"staging", :tenant_reserved, nil, nil, :system},
+    # Each guest object's generations, `objects/<generation>/<path>`, one
+    # object per generation of a path under `data/` (`Arca.ObjectRevisions`).
+    # Host-only and reserved, and refused to every reader of the facade:
+    # a path's visible bytes are the generation its row settled on, read
+    # through the row, never a generation named here.
+    {"objects", :tenant_reserved, nil, nil, :system},
     {"data", :tenant, "data", nil, :open},
     {"cache", :global, nil, nil, :system},
     {"system", :global, nil, nil, :system}
@@ -333,10 +339,11 @@ defmodule Arca.Storage do
   def key_read_roots, do: @key_read_roots
 
   # Tenant roots only the server's own machinery may mutate: `payloads/`
-  # holds bytes an `execution_payloads` row names by digest and `staging/`
-  # bytes a `storage_staging` row does, so a member-level write there
-  # could put other bytes behind a recorded digest. Reads stay ordinary
-  # tenant reads.
+  # holds bytes an `execution_payloads` row names by digest, `staging/`
+  # bytes a `storage_staging` row does and `objects/` the generations an
+  # `object_generations` row does, so a member-level write there could put
+  # other bytes behind a recorded digest or generation. Reads stay
+  # ordinary tenant reads, but for `objects/`, which the facade refuses.
   @reserved_roots for {root, :tenant_reserved, _guest, _seed, _tier} <- @layout, do: root
 
   @doc """

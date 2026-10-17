@@ -65,7 +65,8 @@ defmodule Arca.Retention do
     Arca.Retention.FrameCredentials,
     Arca.Retention.FileOffers,
     Arca.Retention.FileReceipts,
-    Arca.Retention.OutboxRecords
+    Arca.Retention.OutboxRecords,
+    Arca.Retention.ObjectGenerations
   ]
 
   # The largest integer the settings row's canonical encoding carries

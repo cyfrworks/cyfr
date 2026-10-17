@@ -10,15 +10,19 @@ defmodule Arca.Usage do
   `athanor_bytes/1`, the public per-scope quota (`Opus.GuestStorage`)
   through `scope_usage/2` — under ONE TTL.
 
-  The discipline: a successful create BUMPS the cached totals by what
-  was written (an overwrite over-counts — the safe direction — until the
-  entry's own TTL walks the tree afresh; `Arca.Cache.bump_existing/2`
-  never extends a TTL). Deletes and failed writes DROP the entries, so
+  The discipline: a successful create outside `data/` BUMPS the cached
+  totals by what was written (an overwrite over-counts — the safe
+  direction — until the entry's own TTL walks the tree afresh;
+  `Arca.Cache.bump_existing/2` never extends a TTL). Deletes, failed
+  writes and every settled change under `data/` DROP the entries, so
   reclaimed space is recomputed accurately and a partial write can never
-  be under-counted. Read misses walk the tree once and cache the answer;
-  walk failures are never cached and are the caller's to refuse: a cap,
-  the public quota and the file-count backstop each refuse the write as
-  unavailable on one.
+  be under-counted. Read misses load once and cache the answer: `data/`
+  from its rows, what it visibly holds (`Arca.ObjectRevisions.usage/2`),
+  every other root by a walk, and never the retained generations under
+  `objects/`, which are the home's cost and no tenant's. Load failures
+  are never cached and are the caller's to refuse: a cap, the public
+  quota and the file-count backstop each refuse the write as unavailable
+  on one.
 
   `Arca.Cache.Keys` spells the key shapes; this module is their only
   reader and writer.
@@ -69,11 +73,18 @@ defmodule Arca.Usage do
   Account one facade write against the cached counters — bump on a
   successful create, drop on a delete or a failed write. Called by
   `Arca`'s write gate for every mutation, so a new writer cannot forget.
+
+  A guest object (`Arca.ObjectRevisions`) changes what a scope visibly
+  holds only when a generation settles, a delete tombstones its row or a
+  recreate settles over the tombstone: each of those is accounted
+  `:settled` and drops the athanor total and the scope pair, so the next
+  read loads them from the rows. A mark and a collection change nothing
+  visible: a mark's store is `:marked` and accounts nothing.
   """
   @spec account(Prima.Actor.t(), Arca.Storage.path(), term(), term()) :: :ok
   def account(%Prima.Actor{athanor_id: athanor_id} = actor, path, kind, result)
       when is_binary(athanor_id) and athanor_id != "" do
-    if Arca.Storage.classify(path) == :tenant do
+    if Arca.Storage.classify(path) == :tenant and kind != :marked do
       whole = Arca.Cache.Keys.athanor_usage(actor)
       scope = List.first(path)
 

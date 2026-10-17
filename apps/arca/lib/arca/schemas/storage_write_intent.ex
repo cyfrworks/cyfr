@@ -5,7 +5,7 @@ defmodule Arca.Schemas.StorageWriteIntent do
   @moduledoc """
   Ecto schema for the `storage_write_intents` table: the evidence of one
   mutable storage write a guest asked of its attempt
-  (`Arca.ExecutionAttempts.while_held/5`).
+  (`Arca.ExecutionAttempts.while_held/6`).
 
   A row is inserted `pending` while the attempt at `fence`, claimed by
   `runner`, holds its execution, before the store is touched. It settles

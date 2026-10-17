@@ -1,6 +1,20 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
+defmodule Opus.Host.EgressTest.UncertainStore do
+  @moduledoc false
+  # The Local adapter, with a store of the bytes `"restricted bytes"`
+  # landing and then answering that it cannot say whether it did: an
+  # uncertain write whose bytes are in the store.
+  use Arca.Storage.TestDouble
+
+  def put(actor, path, "restricted bytes" = content) do
+    with :ok <- super(actor, path, content), do: {:error, :unknown}
+  end
+
+  def put(actor, path, content), do: super(actor, path, content)
+end
+
 defmodule Opus.Host.EgressTest do
   @moduledoc """
   A guest's outbound target is pinned by CYFR under the calling attempt's
@@ -166,6 +180,49 @@ defmodule Opus.Host.EgressTest do
     Application.put_env(:arca, :base_path, dir)
   end
 
+  # An edge for a run that writes `data/`: egress to `domains`, every
+  # storage action and exactly `flows`.
+  defp writing!(domains, flows) do
+    AttemptFixtures.attached!(
+      ctx: Sanctum.TestContext.local(:api),
+      authority: %{
+        Authority.zero()
+        | resources: %Edge{
+            egress: %{domains: domains, methods: [], schemes: [], private_ips: []},
+            storage: %{
+              paths: ["data/"],
+              actions: ["read", "write", "append", "list", "delete", "exists"]
+            },
+            flows: flows
+          }
+      }
+    )
+  end
+
+  defp store!(fixture, action, path, bytes) do
+    AttemptFixtures.call(fixture, "storage", %{
+      "action" => action,
+      "path" => path,
+      "content" => Base.encode64(bytes)
+    })
+  end
+
+  # The run's execution row gone, as retention's purge takes it: its
+  # payloads released first, its attempts and write intents with it.
+  defp purge!(fixture) do
+    actor = Prima.Actor.in_athanor(fixture.athanor_id)
+    {:ok, []} = Arca.ExecutionPayloads.release(actor, [fixture.execution_id])
+
+    {:ok, 1} =
+      Arca.Execution.delete_ids([fixture.execution_id], athanor_id: fixture.athanor_id)
+
+    assert {:error, :not_found} = Arca.Execution.sources(actor, fixture.execution_id)
+  end
+
+  # Every class to the host: a run whose ledger holds anything may send it
+  # there.
+  defp every_class(host), do: for(class <- Prima.Source.classes(), do: %{from: class, to: host})
+
   defp read!(fixture, path) do
     assert %{"ok" => %{"content" => _bytes}} =
              AttemptFixtures.call(fixture, "storage", %{"action" => "read", "path" => path})
@@ -287,6 +344,93 @@ defmodule Opus.Host.EgressTest do
       assert Prima.Source.new(:filed) in ledger(fixture)
       refute Prima.Source.outside("api.example.test") in ledger(fixture)
       assert [%{decision: "denied"}] = denials(fixture)
+    end
+
+    @tag :capture_log
+    test "a run that reads what an earlier run wrote carries what that run read: refused where its grant lets that class flow nowhere, also once the writer is purged" do
+      storage_root!()
+      Resolver.script("api.example.test", :inet, [{203, 0, 113, 10}, {203, 0, 113, 10}])
+
+      # Run 1 has read a filed note, and writes what it made of it.
+      writer = writing!(["api.example.test"], [])
+
+      :ok =
+        Opus.Ledger.join(Prima.Actor.in_athanor(writer.athanor_id), writer.execution_id, [
+          Prima.Source.new(:filed)
+        ])
+
+      assert %{"ok" => %{"written" => true}} =
+               store!(writer, "write", "data/x.txt", "from a filed note")
+
+      # Run 2 may send files and outside material to the host, not filed
+      # notes. It reads the object, and the send is refused.
+      flows = [
+        %{from: :files_by_grant, to: "api.example.test"},
+        %{from: :outside, to: "api.example.test"}
+      ]
+
+      reader = flowing!(["api.example.test"], flows)
+      read!(reader, "data/x.txt")
+      assert Prima.Source.new(:filed) in ledger(reader)
+      assert {:error, :flow} = pin(reader, "https://api.example.test/send", :fetch)
+
+      # The writer's execution is purged; the object keeps its sources.
+      purge!(writer)
+      late = flowing!(["api.example.test"], flows)
+      read!(late, "data/x.txt")
+      assert Prima.Source.new(:filed) in ledger(late)
+      assert {:error, :flow} = pin(late, "https://api.example.test/send", :fetch)
+    end
+
+    @tag :capture_log
+    test "an uncertain restricted overwrite that landed is never read: a clean append and an all-class send carry the clean object and its suffix" do
+      storage_root!()
+      previous = Application.get_env(:arca, :storage_adapter)
+
+      on_exit(fn ->
+        if previous,
+          do: Application.put_env(:arca, :storage_adapter, previous),
+          else: Application.delete_env(:arca, :storage_adapter)
+      end)
+
+      Application.put_env(:arca, :storage_adapter, Opus.Host.EgressTest.UncertainStore)
+      Resolver.script("api.example.test", :inet, [{203, 0, 113, 10}])
+      actor = Sanctum.Context.actor(Sanctum.TestContext.local(:api))
+
+      # A clean object, settled.
+      clean = writing!(["api.example.test"], [])
+      assert %{"ok" => %{"written" => true}} = store!(clean, "write", "data/y.txt", "clean;")
+
+      # A restricted writer's overwrite lands and is uncertain.
+      restricted = writing!(["api.example.test"], [])
+
+      :ok =
+        Opus.Ledger.join(actor, restricted.execution_id, [Prima.Source.new(:vault_disclosed)])
+
+      assert %{"error" => "guest_error", "type" => "storage_uncertain"} =
+               store!(restricted, "write", "data/y.txt", "restricted bytes")
+
+      # A clean run appends, and the uncertain writer is purged.
+      assert %{"ok" => %{"appended" => true}} = store!(clean, "append", "data/y.txt", "suffix")
+      purge!(restricted)
+
+      # A run that may send every class reads the clean object and its
+      # suffix, and sends it.
+      sender = flowing!(["api.example.test"], every_class("api.example.test"))
+
+      assert %{"ok" => %{"content" => content}} =
+               AttemptFixtures.call(sender, "storage", %{
+                 "action" => "read",
+                 "path" => "data/y.txt"
+               })
+
+      assert Base.decode64!(content) == "clean;suffix"
+      refute Prima.Source.new(:vault_disclosed) in ledger(sender)
+      assert {:ok, %PinnedTarget{}} = pin(sender, "https://api.example.test/send", :fetch)
+
+      # The restricted bytes are nowhere a reader can name them.
+      assert {:ok, [["data", "y.txt"]]} = Arca.list_recursive(actor, ["data"])
+      assert {:error, :forbidden} = Arca.list_recursive(actor, ["objects"])
     end
 
     test "every spelling of one IPv6 address is one host to the ledger" do

@@ -3,9 +3,9 @@
 
 defmodule Arca.FilesTest.Store do
   @moduledoc false
-  # The Local adapter, with folder probes under `data/` answering
-  # `{:error, :eio}` while held: an acceptance commits and its publication
-  # waits for the next sweep.
+  # The Local adapter, with the read of a custody copy a publication
+  # starts from answering `{:error, :eio}` while held: an acceptance
+  # commits and its publication waits for the next sweep.
   use Arca.Storage.TestDouble
 
   @held {__MODULE__, :held}
@@ -15,11 +15,11 @@ defmodule Arca.FilesTest.Store do
 
   def last_modified(actor, path), do: Arca.Adapters.Local.last_modified(actor, path)
 
-  def list_typed(actor, ["data" | _] = path) do
+  def get(actor, ["payloads", "receipts" | _] = path) do
     if :persistent_term.get(@held, false), do: {:error, :eio}, else: super(actor, path)
   end
 
-  def list_typed(actor, path), do: super(actor, path)
+  def get(actor, path), do: super(actor, path)
 end
 
 defmodule Arca.FilesTest do
@@ -466,7 +466,7 @@ defmodule Arca.FilesTest do
     # the receipt names them; publication waits for the sweep.
     Arca.FilesTest.Store.hold()
 
-    assert {:ok, %{folder: folder, receipts: [%{status: "received", attempt_state: nil}]}} =
+    assert {:ok, %{folder: folder, receipts: [%{status: "received", attempt_state: "chosen"}]}} =
              file(recipient, %{"action" => "accept", "offer_id" => offer_id})
 
     Arca.FilesTest.Store.release()

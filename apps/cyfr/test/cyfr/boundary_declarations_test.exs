@@ -119,6 +119,9 @@ defmodule Cyfr.BoundaryDeclarationsTest do
        "the installation mode Sanctum installs and the first-person mint reads"},
       {~w(StorageReserve),
        "the storage reserve's latch, which the host's monitor sets and Sanctum's gate reads"},
+      {~w(ObjectRevisions),
+       "the guest objects' generations, whose paths the guest storage door tells apart so " <>
+         "a write's store call takes the generation its intent marked"},
       {~w(Providers.Records),
        "the records door the gate's resources read through, whose execution and policy-log " <>
          "projections the request log's correlation renders with"},

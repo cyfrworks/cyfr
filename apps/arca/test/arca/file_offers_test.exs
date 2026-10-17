@@ -6,13 +6,17 @@ defmodule Arca.FileOffersTest.Store do
   # The Local adapter, with the steps a file transfer takes held where a
   # case says: a policy answers a kind of call the same way every time
   # (`policy/1`), and an armed kind asks the test process what to do with
-  # each call and waits for its answer (`arm/2`). Kinds: `:list` (a
-  # folder probe under `data/`), `:get` (a read under `data/`), `:custody`
-  # (a write of a custody copy), `:release` (a delete of one), `:snapshot`
-  # (a write of an offer's snapshot) and `:create` (a conditional create).
-  # Modes: `:proceed`, `:fail` (`{:error, :eio}`, nothing written),
-  # `:unknown` (written, answered `{:error, :unknown}`), `:write_hold`
-  # and `:unknown_hold` (written, then held until `{:release}`).
+  # each call and waits for its answer (`arm/2`). Kinds: `:publish` (the
+  # read of a custody copy a publication starts from, after the
+  # acceptance committed), `:get` (a read of a guest object under
+  # `data/`, at its generation's key), `:custody` (a write of a custody
+  # copy), `:release` (a delete of one), `:snapshot` (a write of an
+  # offer's snapshot) and `:create` (the store of a guest object's
+  # generation under `data/`, which a conditional create settles). A call
+  # the test process makes itself always proceeds. Modes: `:proceed`,
+  # `:fail` (`{:error, :eio}`, nothing written), `:unknown` (written,
+  # answered `{:error, :unknown}`), `:write_hold` and `:unknown_hold`
+  # (written, then held until `{:release}`).
   use Arca.Storage.TestDouble
 
   @policy {__MODULE__, :policy}
@@ -31,19 +35,17 @@ defmodule Arca.FileOffersTest.Store do
 
   def last_modified(actor, path), do: Arca.Adapters.Local.last_modified(actor, path)
 
-  def list_typed(actor, ["data" | _] = path) do
-    case ask(:list, path) do
+  def get(actor, ["payloads", "receipts" | _] = path) do
+    case ask(:publish, path) do
       {:fail, _} -> {:error, :eio}
       _ -> super(actor, path)
     end
   end
 
-  def list_typed(actor, path), do: super(actor, path)
-
-  def get(actor, ["data" | _] = path) do
-    case ask(:get, path) do
+  def get(actor, ["objects", _generation, "data" | rest] = key) do
+    case ask(:get, ["data" | rest]) do
       {:fail, _} -> {:error, :eio}
-      _ -> super(actor, path)
+      _ -> super(actor, key)
     end
   end
 
@@ -63,6 +65,30 @@ defmodule Arca.FileOffersTest.Store do
     end
   end
 
+  def put(actor, ["objects", _generation, "data" | rest] = key, content) do
+    case ask(:create, ["data" | rest]) do
+      {:fail, _} ->
+        {:error, :eio}
+
+      {:unknown, _} ->
+        with :ok <- super(actor, key, content), do: {:error, :unknown}
+
+      {:unknown_hold, pid} ->
+        with :ok <- super(actor, key, content) do
+          hold(pid, ["data" | rest])
+          {:error, :unknown}
+        end
+
+      {:write_hold, pid} ->
+        result = super(actor, key, content)
+        hold(pid, ["data" | rest])
+        result
+
+      _proceed ->
+        super(actor, key, content)
+    end
+  end
+
   def put(actor, path, content), do: super(actor, path, content)
 
   def delete(actor, ["payloads", "receipts" | _] = path) do
@@ -74,30 +100,6 @@ defmodule Arca.FileOffersTest.Store do
 
   def delete(actor, path), do: super(actor, path)
 
-  def put_if_none_match(actor, path, content) do
-    case ask(:create, path) do
-      {:fail, _} ->
-        {:error, :eio}
-
-      {:unknown, _} ->
-        with {:ok, _} <- super(actor, path, content), do: {:error, :unknown}
-
-      {:unknown_hold, pid} ->
-        with {:ok, _} <- super(actor, path, content) do
-          hold(pid, path)
-          {:error, :unknown}
-        end
-
-      {:write_hold, pid} ->
-        result = super(actor, path, content)
-        hold(pid, path)
-        result
-
-      _proceed ->
-        super(actor, path, content)
-    end
-  end
-
   defp ask(kind, path) do
     policy = :persistent_term.get(@policy, %{})
 
@@ -106,7 +108,7 @@ defmodule Arca.FileOffersTest.Store do
         {mode, nil}
 
       {:error, {pid, kinds}} ->
-        if kind in kinds do
+        if kind in kinds and pid != self() do
           send(pid, {kind, self(), path})
 
           receive do
@@ -409,8 +411,11 @@ defmodule Arca.FileOffersTest do
       assert_receive {:create, store, _path}, 5_000
       send(store, {:reply, :write_hold})
       assert_receive {:held, ^store, _path}, 5_000
-      # The write has landed and is not yet accounted: walk the tree.
-      assert {:ok, %{bytes: 100}} = Arca.usage(recipient, [])
+      # The create's bytes are stored at their generation and not yet
+      # settled: nothing reads them, so the tree holds the custody copy
+      # and the filler alone.
+      assert {:ok, %{bytes: 80}} = Arca.usage(recipient, [])
+      assert {:error, :not_found} = Arca.get(recipient, ["data", "inbox", offer_id, "file.txt"])
       send(store, :release)
 
       assert {:ok, %{status: "completed"}} = Task.await(task)
@@ -529,8 +534,8 @@ defmodule Arca.FileOffersTest do
          %{sender: sender, recipient: recipient} do
       offer_id = offered_files!(sender, recipient, [{"a.txt", bytes(3)}, {"b.txt", bytes(4)}])
 
-      # Both receipts are committed and neither has chosen a path.
-      Store.policy(%{list: :fail})
+      # Both receipts are committed and neither has published.
+      Store.policy(%{publish: :fail})
       {:ok, %{receipts: receipts}} = FileOffers.accept(recipient, offer_id, "data/inbox")
       Store.reset()
       [a, b] = Enum.sort_by(receipts, & &1.filename)
@@ -558,7 +563,7 @@ defmodule Arca.FileOffersTest do
     test "two acceptances of one offer: a loser failing after the winner commits releases only its own copy",
          %{sender: sender, recipient: recipient} do
       offer_id = offered!(sender, recipient, "file.txt", bytes(12))
-      Store.arm(self(), [:custody, :list])
+      Store.arm(self(), [:custody, :publish])
 
       # Both read the offer and the snapshot, and each is held before its
       # custody copy.
@@ -570,9 +575,9 @@ defmodule Arca.FileOffersTest do
       assert_receive {:custody, ^loser_pid, _path}, 5_000
 
       # The winner copies and commits, so the sender's snapshot is gone;
-      # its publication is held at its folder probe.
+      # its publication is held at its read of its custody copy.
       send(winner_pid, {:reply, :proceed})
-      assert_receive {:list, ^winner_pid, _folder}, 5_000
+      assert_receive {:publish, ^winner_pid, _custody}, 5_000
 
       # The loser copies after it and its receipt insert meets the
       # winner's: the database answers no outcome it can name
@@ -799,6 +804,9 @@ defmodule Arca.FileOffersTest do
       offer_id = offered!(sender, recipient, "file.txt", bytes(20))
       receipt = stalled_accept!(recipient, offer_id, "data/inbox")
       issued!(receipt.id, "data/inbox/#{offer_id}/file.txt")
+      # The recipient's own file is at the path, so the reconciling read
+      # reaches the store for its bytes.
+      :ok = Arca.put(recipient, ["data", "inbox", offer_id, "file.txt"], "theirs")
       before = row!(receipt.id)
 
       Store.policy(%{get: :fail})
@@ -847,19 +855,26 @@ defmodule Arca.FileOffersTest do
       assert {:error, :not_found} = Arca.get(recipient, custody_of(receipt))
     end
 
-    test "an adapter that creates the object and answers unknown: reconciled by digest, one folder",
+    test "an adapter that stores the object and answers unknown: never read, re-issued at its path, one folder",
          %{sender: sender, recipient: recipient} do
       offer_id = offered!(sender, recipient, "file.txt", bytes(20))
       receipt = stalled_accept!(recipient, offer_id, "data/inbox")
+      path = ["data", "inbox", offer_id, "file.txt"]
 
       Store.arm(self(), [:create])
       task = Task.async(fn -> FileOffers.complete(recipient, receipt.id) end)
-      assert_receive {:create, store, _path}, 5_000
+      assert_receive {:create, store, ^path}, 5_000
       send(store, {:reply, :unknown})
+
+      # The unknown store's generation never settles, so the reconciling
+      # read finds nothing at the path and the create is sent again there.
+      assert_receive {:create, again, ^path}, 5_000
+      assert {:error, :not_found} = Arca.get(recipient, path)
+      send(again, {:reply, :proceed})
 
       assert {:ok, %{status: "completed"}} = Task.await(task)
       assert {:ok, [^offer_id]} = Arca.list(recipient, ["data", "inbox"])
-      refute_received {:create, _, _}
+      assert {:ok, bytes(20)} == Arca.get(recipient, path)
     end
 
     test "a recipient who edits the just-landed file before the comparison: a second folder, both kept",
@@ -1077,7 +1092,7 @@ defmodule Arca.FileOffersTest do
       assert {:ok, _} = Arca.get(recipient, custody_of(receipt))
     end
 
-    test "a create sent to path 1 lands late after a takeover chose path 2: never failed, published at path 1",
+    test "a create sent to path 1 lands late after a delete there: fenced dead, never failed, published at path 2",
          %{sender: sender, recipient: recipient} do
       offer_id = offered!(sender, recipient, "file.txt", bytes(20))
       Caps.ceiling(recipient.athanor_id, 100)
@@ -1110,19 +1125,22 @@ defmodule Arca.FileOffersTest do
       assert Jason.decode!(issued) == ["data/inbox/#{offer_id}/file.txt"]
 
       # The age passes, the intervening file is removed, and the first
-      # create lands late at path 1.
+      # create's store lands late at path 1: it was marked before the
+      # delete, so the deletion fence keeps it dead and path 1 reads
+      # nothing.
       age_receipt!(receipt.id, 10 * 86_400)
       :ok = Arca.delete(recipient, first)
       send(in_flight, {:reply, :proceed})
       assert {:error, :claim_lost} = Task.await(stale)
+      assert {:error, :not_found} = Arca.get(recipient, first)
 
       assert {:ok, _} = Arca.get(recipient, custody_of(receipt))
       assert {:ok, 1} = Arca.Retention.FileReceipts.prune(sweeper(recipient), 7, false)
 
       assert %{status: "completed", attempt_path: landed} = row!(receipt.id)
-      assert landed == "data/inbox/#{offer_id}/file.txt"
-      assert {:ok, bytes(20)} == Arca.get(recipient, first)
-      assert {:ok, []} = Arca.list(recipient, ["data", "inbox", offer_id <> "-2"])
+      assert landed == "data/inbox/#{offer_id}-2/file.txt"
+      assert {:ok, bytes(20)} == Arca.get(recipient, String.split(landed, "/"))
+      assert {:error, :not_found} = Arca.get(recipient, first)
       assert {:error, :not_found} = Arca.get(recipient, custody_of(receipt))
     end
   end
@@ -1358,13 +1376,18 @@ defmodule Arca.FileOffersTest do
   # An acceptance whose commit landed and whose publication has not
   # started: the folder probe cannot answer, so the completion the
   # acceptance runs stops before choosing a path.
+  # The acceptance commits and its publication stops at its first read of
+  # the custody copy: a path chosen, no write ever sent, no claim held.
   defp stalled_accept!(recipient, offer_id, folder) do
-    Store.policy(%{list: :fail})
+    Store.policy(%{publish: :fail})
 
     {:ok, %{receipts: [receipt]}} = FileOffers.accept(recipient, offer_id, folder)
 
     Store.reset()
-    assert %{status: "received", attempt_path: nil, completing_by: nil} = row!(receipt.id)
+
+    assert %{status: "received", attempt_state: "chosen", ever_issued: false, completing_by: nil} =
+             row!(receipt.id)
+
     receipt
   end
 
@@ -1558,7 +1581,7 @@ defmodule Arca.FileOffersRaceTest do
         {:ok, %{offer_id: offer_id}} =
           FileOffers.offer(sender, recipient.user_id, ["data/docs/file.txt"])
 
-        Store.policy(%{list: :fail})
+        Store.policy(%{publish: :fail})
         {:ok, %{receipts: [receipt]}} = FileOffers.accept(recipient, offer_id, "data/inbox")
         Store.reset()
         receipt
