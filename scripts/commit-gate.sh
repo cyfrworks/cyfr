@@ -112,9 +112,15 @@ pg_selection() {
 
 # The test files outside the storage set that name a test support module
 # matching PG_PATTERN, other than PG_SUPPORT_EXEMPT's, or a support module
-# that names one: support wrappers are followed one level, so a test that
-# reaches an adapter branch through a wrapper of a wrapper is not
-# selected for it. Any error, the matcher's included, fails the selection.
+# that names one. The grammar is a reading of the source, not the compiled
+# dependency graph, and has two stated limits: support wrappers are
+# followed one level, so a test that reaches an adapter branch through a
+# wrapper of a wrapper is not selected for it; and an alias of a
+# one-segment root namespace is followed only unrenamed (`alias X`, then
+# the full name), so `alias X, as: Y` and then `Y.Test.Leaf` is not. The
+# close gate (--close), which runs the whole suite on both adapters, is
+# the complete check. Any error, the matcher's included, fails the
+# selection.
 pg_support_users() {
   local mode=$1 s=0 support others wrappers tests modules='' file module
   support=$(git grep -l "$mode" "$PG_PATTERN" -- ':(glob)apps/*/test/support/**/*.ex' \
@@ -151,8 +157,9 @@ pg_unexempt() {
 # The FILES, of those given after MODULES (space-separated), that name one
 # of the modules: by its full name (an alias, import, use or call), by its
 # last segment in a multi-alias of its parent (`alias Parent.{Leaf, ...}`),
-# or through an alias of a namespace above it (`alias X.Test`, then
-# `Test.Leaf`, or `alias X.Test, as: T`, then `T.Leaf`). One Perl process
+# or through an alias of a namespace of two or more segments above it
+# (`alias X.Test`, then `Test.Leaf`, or `alias X.Test, as: T`, then
+# `T.Leaf`). One Perl process
 # reads them all; a file it cannot read, or any other error, exits non-zero.
 pg_naming() {
   local modules=$1

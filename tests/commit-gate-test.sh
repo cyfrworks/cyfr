@@ -356,6 +356,12 @@ printf 'test "i", do: Arca.Test.Sandbox.s()\n' > "$plant/apps/x/test/sandboxed_t
 printf 'defmodule X.Test.Wrapper do\n  def f, do: X.Test.Branching.f()\nend\n' > "$plant/apps/x/test/support/wrapper.ex"
 printf 'alias X.Test\ntest "parent", do: Test.Branching.f()\n' > "$plant/apps/x/test/parent_namespace_test.exs"
 printf 'alias X.Test.Wrapper\ntest "chain", do: Wrapper.f()\n' > "$plant/apps/x/test/support_chain_test.exs"
+# The selection's two stated limits, planted and expected unselected: a
+# wrapper of a wrapper, and a renamed alias of a one-segment root. The
+# close gate's whole suite covers them.
+printf 'defmodule X.Test.Outer do\n  def f, do: X.Test.Wrapper.f()\nend\n' > "$plant/apps/x/test/support/outer.ex"
+printf 'alias X.Test.Outer\ntest "outer", do: Outer.f()\n' > "$plant/apps/x/test/outer_chain_test.exs"
+printf 'alias X, as: T\ntest "root", do: T.Test.Branching.f()\n' > "$plant/apps/x/test/renamed_root_test.exs"
 git -C "$plant" add apps
 printf '@tag :postgres\n' > "$plant/apps/x/test/untracked_test.exs"
 selection "$plant" > "$scratch/plant.txt" || fail 'the selection failed on the planted repository'
