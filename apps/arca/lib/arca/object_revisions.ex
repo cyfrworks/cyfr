@@ -614,6 +614,7 @@ defmodule Arca.ObjectRevisions do
   def mark!(%Prima.Actor{athanor_id: athanor_id}, path, :delete, _what)
       when is_binary(athanor_id) and athanor_id != "" do
     key = key(path)
+    lock_ancestors!(athanor_id, path)
 
     case lock!(athanor_id, key) do
       %ObjectRevision{settled_generation: settled, generation: generation, deleted: false}
@@ -797,8 +798,14 @@ defmodule Arca.ObjectRevisions do
   # arca:db-raise-ok inside the caller's transaction
   def settle!(%Prima.Actor{athanor_id: athanor_id}, %Mark{} = mark, sources, opts \\ [])
       when is_binary(athanor_id) and athanor_id != "" do
+    # Ancestors, own row, then every row under it: the one ascending path
+    # order every locker of these rows takes. The range comes last because
+    # it is what fences a parent marked after this settlement read its
+    # ancestors: whichever of a file and a path under it settles second
+    # waits on the other's row and reads the shape once the first commits.
     lock_ancestors!(athanor_id, mark.segments)
     row = lock!(athanor_id, mark.key)
+    lock_under!(athanor_id, mark.key)
 
     case mark.op do
       :delete -> settle_delete!(athanor_id, row, mark)
@@ -1113,9 +1120,11 @@ defmodule Arca.ObjectRevisions do
     )
   end
 
-  # The rows of the path's ancestors, locked in path order before the
-  # path's own: a write and a write under it take their locks in one
-  # order, so their shape checks never pass each other by.
+  # The rows of the path's ancestors that exist, locked in path order
+  # before the path's own. The order is global: every transaction that
+  # locks object rows (a mark, a settlement, a prefix delete, retention)
+  # takes them in ascending path order, ancestors, own, then those under
+  # it, so no two of them wait on each other in a cycle.
   # arca:db-raise-ok inside the caller's transaction
   defp lock_ancestors!(athanor_id, path) do
     case ancestors(path) do
@@ -1133,6 +1142,22 @@ defmodule Arca.ObjectRevisions do
 
         :ok
     end
+  end
+
+  # The rows strictly under `key`, locked in path order after the path's
+  # own (`settle!/4`).
+  # arca:db-raise-ok inside the caller's transaction
+  defp lock_under!(athanor_id, key) do
+    from(r in ObjectRevision,
+      where: r.athanor_id == ^athanor_id,
+      order_by: [asc: r.path],
+      select: r.path
+    )
+    |> strictly_under(key)
+    |> Arca.QueryHelpers.for_update()
+    |> Arca.Repo.all()
+
+    :ok
   end
 
   # arca:db-raise-ok inside the caller's transaction

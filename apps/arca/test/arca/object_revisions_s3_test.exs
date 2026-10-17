@@ -860,6 +860,37 @@ defmodule Arca.ObjectRevisionsS3Test do
       assert sends?(later, [%{from: :filed, to: "api.example.test"} | flows])
     end
 
+    # The stated limit: S3 caps a key at 1,024 bytes with the tenant's
+    # prefix and `objects/<generation>/` in it, so a logical path near the
+    # 1,024-byte logical ceiling has a key S3 refuses.
+    test "a key S3 refuses after the mark fails the intent, publishes nothing, and leaves a generation retention collects",
+         %{actor: actor} do
+      path =
+        ["data"] ++ List.duplicate(String.duplicate("a", 240), 4) ++ [String.duplicate("b", 55)]
+
+      assert byte_size(Enum.join(path, "/")) == 1024
+      w = writer!(actor)
+
+      assert {:ok, {:failed, {:error, {:s3_error, 400}}}} = held(w, put(w, path, "valid"))
+
+      assert [%{state: "failed", reason: "s3_error"}] =
+               ExecutionAttempts.write_intents(actor, w.attempt)
+
+      assert {:error, :not_found} = Arca.get(actor, path)
+      assert [_generation] = generations(actor, path)
+
+      {1, _} =
+        Arca.Repo.update_all(
+          from(g in ObjectGeneration, where: g.athanor_id == ^actor.athanor_id),
+          set: [marked_at: DateTime.add(DateTime.utc_now(), -40, :day)]
+        )
+
+      assert {:ok, 1} =
+               ObjectRevisions.collect(actor, DateTime.add(DateTime.utc_now(), -30, :day), false)
+
+      assert generations(actor, path) == []
+    end
+
     test "a restricted settled prefix keeps its sources through an attempt's clean append and a clean copy",
          %{actor: actor} do
       path = ["data", "att-h", "p.txt"]

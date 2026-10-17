@@ -19,6 +19,15 @@ defmodule Arca.Adapters.S3 do
   in `Arca.Storage.tenant_roots/0` (`components/`, `data/`, `aqua/`, …)
   and the globals `<prefix>/cache/<rest>`, `<prefix>/system/<rest>`.
 
+  A guest object's bytes are keyed by generation,
+  `<prefix>/athanors/{athanor_id}/objects/<generation>/data/<rest>`
+  (`Arca.ObjectRevisions`). S3 caps a key at 1,024 bytes, so the longest
+  logical path the bucket stores is shorter than the 1,024-byte logical
+  limit (`Arca.Storage.validate_path!/1`) by the prefix, the tenant
+  segments and `objects/<generation>/`, as it was by the prefix and the
+  tenant segments before; a store the bucket refuses for it fails its
+  write, publishes nothing, and leaves a generation retention collects.
+
   An S3 deployment is not a whole-box backup: the bucket holds Arca
   objects; the volume still holds the database (`data/cyfr.db`).
 

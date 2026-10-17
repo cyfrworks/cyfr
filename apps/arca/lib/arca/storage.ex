@@ -711,6 +711,15 @@ defmodule Arca.Storage do
   (`Arca.Adapters.Local.build_path/2`, the S3 adapter's key builder) —
   never per callback on top.
 
+  The limits are logical: 32 segments and 1,024 bytes of path. A guest
+  object's generation key, `objects/<generation>/<path>`, is held to its
+  path's limits, never to them plus its own segments. What a store adds
+  around the logical path is the store's: on S3 the key is the tenant
+  prefix plus `objects/<generation>/<path>`, and S3 caps a key at 1,024
+  bytes, so the longest logical path S3 stores is shorter than the
+  logical limit by the prefix and the key's overhead
+  (`Arca.Adapters.S3`), as it was by the prefix and `data/` before.
+
   ## Examples
 
       iex> Arca.Storage.validate_path!(["data", "notes.txt"])
