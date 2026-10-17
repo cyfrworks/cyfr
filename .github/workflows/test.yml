@@ -1211,7 +1211,8 @@ jobs:
       # Each backend under its own pooled uid, alone in its group, in a 0700
       # home, with an environment of its sealed block alone; none can read
       # another's home or /proc environ or the release's, nor signal
-      # another backend, a relay, the release or cyfr-locus; cyfr-locus
+      # another backend, a relay, the release or cyfr-locus, and each reads
+      # another's command line, the limit the guides state; cyfr-locus
       # holds exactly SETUID|SETGID|KILL and the release none; releasing an
       # owner leaves no process of its uid, a setsid daemon ignoring SIGTERM
       # included, and no home; and when the release dies cyfr-locus

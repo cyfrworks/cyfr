@@ -14,7 +14,9 @@ Driven only by requests signed as CYFR signs them (harness.py):
   reaches no other owner's backends.
 - No backend can read another's home or /proc environ, or the release's
   (which holds LOCUS_BACKENDS_KEY), nor signal another backend, a relay,
-  the release or cyfr-locus.
+  the release or cyfr-locus. Each reads another's command line, the limit
+  README.md and integration-guide.md state: the service runs every backend
+  in one process namespace with an ordinary /proc.
 - Releasing an owner retires every process of its uid, a detached daemon
   that ignores SIGTERM included, its relay and its home; a backend that
   exits is retired and restarts ready in a new home.
@@ -53,8 +55,9 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from harness import (  # noqa: E402
     CONNECT_PROBE, ENDPOINT_ADDRESS, GUARD, HOME_ROOT, KEEPER_CAPS, MCP_VERSION, NETWORK, POOL_FIRST, POOL_LAST, PORT,
-    PROJECT_PREFIX, REFUSED, RELEASE, RELEASE_BIN, RELEASE_UID, RELEASE_USER, ROLE, ROUTES, RUN_DIR, SERVICE, Controller,
-    Stack, eventually, expect, owner_of, owner_key, pool_user, post, probe, require_docker, run, wait_healthy, wire_json,
+    PROBE, PROJECT_PREFIX, REFUSED, RELEASE, RELEASE_BIN, RELEASE_UID, RELEASE_USER, ROLE, ROUTES, RUN_DIR, SERVICE,
+    Controller, Stack, eventually, expect, owner_of, owner_key, pool_user, post, probe, require_docker, run,
+    wait_healthy, wire_json,
 )
 
 # On the path once harness.py is loaded.
@@ -375,6 +378,11 @@ def main():
             refused("read_environ", {"pid": release["pid"]}, "EACCES")
             for target in [other["pid"], release["pid"], keeper["pid"]] + [r["pid"] for r in relays]:
                 refused("signal", {"pid": target, "sig": "SIGKILL"}, "EPERM")
+            # The command line is the one thing of another backend's a backend
+            # reads, which is why a definition keeps credentials out of it.
+            seen = c.tool(self_owner, "probe__run", {"argv": ["cat", f"/proc/{other['pid']}/cmdline"]})
+            expect(seen["status"] == 0 and seen["stdout"].split("\0") == PROBE.split() + [""],
+                   f"{self_owner['athanor']} reads another backend's command line, never its environment", seen)
         expect(c.tool(ALPHA, "probe__whoami")["pid"] == alpha["pid"] and c.tool(BETA, "probe__whoami")["pid"] == beta["pid"],
                "both backends survived each other's attempts")
 
