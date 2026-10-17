@@ -4,11 +4,12 @@
 defmodule Arca.Providers.FilesTest.Store do
   @moduledoc false
   # The Local adapter, with the process that reaches an armed point
-  # killed there: `:probe` (a folder probe under `data/`, after the
-  # acceptance committed and its completer claimed the receipt),
-  # `:create` (a conditional create, killed once its bytes landed and
-  # before it answers) and `:release` (the delete of a custody copy). A
-  # probe may instead `:fail`, answering `{:error, :eio}`.
+  # killed there: `:probe` (the read of the custody copy a publication
+  # starts from, after the acceptance committed and its completer claimed
+  # the receipt and chose a path), `:create` (the store of a guest object's
+  # generation under `data/`, killed once its bytes landed and before it
+  # answers) and `:release` (the delete of a custody copy). A probe may
+  # instead `:fail`, answering `{:error, :eio}`.
   use Arca.Storage.TestDouble
 
   @points {__MODULE__, :points}
@@ -18,7 +19,7 @@ defmodule Arca.Providers.FilesTest.Store do
 
   def last_modified(actor, path), do: Arca.Adapters.Local.last_modified(actor, path)
 
-  def list_typed(actor, ["data" | _] = path) do
+  def get(actor, ["payloads", "receipts" | _] = path) do
     case point(:probe) do
       :kill -> die()
       :fail -> {:error, :eio}
@@ -26,12 +27,14 @@ defmodule Arca.Providers.FilesTest.Store do
     end
   end
 
-  def list_typed(actor, path), do: super(actor, path)
+  def get(actor, path), do: super(actor, path)
 
-  def put_if_none_match(actor, path, content) do
-    result = super(actor, path, content)
+  def put(actor, ["objects", _generation, "data", "inbox" | _] = key, content) do
+    result = super(actor, key, content)
     if point(:create) == :kill, do: die(), else: result
   end
+
+  def put(actor, path, content), do: super(actor, path, content)
 
   def delete(actor, ["payloads", "receipts" | _] = path) do
     if point(:release) == :kill, do: die(), else: super(actor, path)
@@ -322,13 +325,16 @@ defmodule Arca.Providers.FilesTest do
         # What the kill left: the receipt names the next step.
         case point do
           :probe ->
-            assert [%{status: "received", attempt_path: nil}] = receipt_rows(offer_id)
+            assert [%{status: "received", attempt_state: "chosen", ever_issued: false}] =
+                     receipt_rows(offer_id)
 
           create when create in [:create, :published] ->
             assert [%{status: "received", attempt_state: "issued", ever_issued: true}] =
                      receipt_rows(offer_id)
 
-            assert {:ok, ^offered} = Arca.get(recipient.actor, inbox ++ [offer_id, name])
+            # The create's bytes are stored at their generation and never
+            # settled, so nothing reads them.
+            assert {:error, :not_found} = Arca.get(recipient.actor, inbox ++ [offer_id, name])
 
           :release ->
             assert [%{status: "completed"}] = receipt_rows(offer_id)
@@ -336,8 +342,12 @@ defmodule Arca.Providers.FilesTest do
         end
 
         # No storage call separates `published` from `completed`, so the
-        # row is left as a kill between the two would leave it.
-        if point == :published, do: set_receipts!(offer_id, status: "published")
+        # row and the path are left as a kill between the two would leave
+        # them: the create settled, the receipt published.
+        if point == :published do
+          :ok = Arca.put(recipient.actor, inbox ++ [offer_id, name], offered)
+          set_receipts!(offer_id, status: "published")
+        end
 
         # The killed completer's lease runs out; the sweep takes over.
         set_receipts!(offer_id, completing_until: DateTime.add(DateTime.utc_now(), -60, :second))
@@ -655,7 +665,7 @@ defmodule Arca.Providers.FilesTest do
       # The acceptance commits; its publication cannot start yet.
       Store.arm(%{probe: :fail})
 
-      assert {:ok, %{folder: folder, receipts: [%{status: "received", attempt_state: nil}]}} =
+      assert {:ok, %{folder: folder, receipts: [%{status: "received", attempt_state: "chosen"}]}} =
                call(recipient, %{"action" => "accept", "offer_id" => offer_id})
 
       assert folder == "data/inbox/#{sender.id}/#{offer_id}/"
@@ -858,9 +868,15 @@ defmodule Arca.Providers.FilesTest do
                  filename: "a.txt",
                  size: 5,
                  status: "received",
-                 attempt_state: nil
+                 attempt_state: "chosen"
                },
-               %{offer_id: lost, filename: "b.txt", size: 4, status: "failed", attempt_state: nil}
+               %{
+                 offer_id: lost,
+                 filename: "b.txt",
+                 size: 4,
+                 status: "failed",
+                 attempt_state: "chosen"
+               }
              ]
 
       # A receipt that has landed is listed no longer; a failed one stays.

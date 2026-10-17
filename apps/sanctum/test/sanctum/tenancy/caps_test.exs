@@ -237,12 +237,16 @@ defmodule Sanctum.Tenancy.CapsTest do
     assert {:ok, cached} = Arca.Cache.get(key)
     assert is_integer(cached)
 
-    # A write anywhere in the athanor's tree bumps the total by exactly
-    # what was written — no re-walk — components and guest files alike.
+    # A write outside `data/` bumps the total by exactly what was written —
+    # no re-walk.
     :ok = Arca.put(Sanctum.Context.actor(ctx), ["components", "cap-probe.txt"], "bytes")
     assert Arca.Cache.get(key) == {:ok, cached + 5}
 
+    # A guest object's settlement drops the entry, and the next check
+    # loads what the athanor visibly holds from the rows.
     :ok = Arca.put(Sanctum.Context.actor(ctx), ["data", "cap-probe.txt"], "1234567890")
+    assert Arca.Cache.get(key) == :miss
+    assert :ok = Caps.check_storage(Sanctum.Context.actor(ctx), 1)
     assert Arca.Cache.get(key) == {:ok, cached + 15}
 
     # A delete reclaims space: the entry drops so the next check walks the

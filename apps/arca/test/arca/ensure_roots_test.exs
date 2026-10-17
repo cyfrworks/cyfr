@@ -7,7 +7,9 @@ defmodule Arca.EnsureRootsTest do
   # roster and seed gates as any path.
   use ExUnit.Case, async: false
 
-  setup do
+  setup tags do
+    # `data/` is counted from its rows (`Arca.ObjectRevisions`).
+    Arca.Test.Sandbox.setup!(tags)
     base = Path.join(System.tmp_dir!(), "ensure_roots_#{System.unique_integer([:positive])}")
     prev_base = Application.fetch_env!(:arca, :base_path)
     Application.put_env(:arca, :base_path, base)
@@ -34,10 +36,10 @@ defmodule Arca.EnsureRootsTest do
   end
 
   test "ensure_dir/2 refuses what the roster refuses", %{actor: actor} do
-    assert :ok = Arca.ensure_dir(actor, ["data", "reports", "2026"])
+    assert :ok = Arca.ensure_dir(actor, ["threads", "reports", "2026"])
 
     assert {:ok, [{"2026", :dir}]} =
-             Arca.list_typed(actor, ["data", "reports"])
+             Arca.list_typed(actor, ["threads", "reports"])
 
     assert {:error, :forbidden} = Arca.ensure_dir(actor, ["scratch"])
 

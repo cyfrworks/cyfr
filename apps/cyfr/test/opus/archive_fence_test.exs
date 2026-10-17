@@ -134,8 +134,10 @@ defmodule Opus.ArchiveFenceTest do
     })
   end
 
+  # What a reader of the path sees: a guest object is stored at its
+  # generation's key and read through its row (`Arca.ObjectRevisions`).
   defp stored?(fixture, segments),
-    do: Arca.Adapters.Local.exists?(Sanctum.Context.actor(fixture.ctx), segments)
+    do: Arca.exists?(Sanctum.Context.actor(fixture.ctx), segments)
 
   defp row(fixture), do: Arca.Repo.get!(Arca.Schemas.Execution, fixture.execution_id)
 

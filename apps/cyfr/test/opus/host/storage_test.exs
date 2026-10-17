@@ -220,20 +220,26 @@ defmodule Opus.Host.StorageTest do
     end
 
     test "a cancel that commits after a write's checks and before the write refuses it" do
-      fixture = attached(["data/"])
+      # A unit's file is counted by the store's own walk, which the gate
+      # holds (`data/` is counted from its rows).
+      fixture = attached(["components/"])
       gated_adapter()
       Process.register(self(), :host_storage_usage_gate)
+      path = "components/catalysts/local/pkg/0.1.0/between.txt"
 
-      writer = Task.async(fn -> storage(fixture, write("data/between.txt", "late")) end)
+      writer = Task.async(fn -> storage(fixture, write(path, "late")) end)
 
       # The write has passed the row check and stands in the scope's usage
       # walk, before it writes.
       assert_receive {:gated, :host_storage_usage_gate, walker}, 5_000
       assert {:ok, %{cancelled: true}} = Opus.cancel(fixture.ctx, fixture.execution_id)
+      # The checks read the file's usage and the scope's; only the first
+      # waits.
+      Process.unregister(:host_storage_usage_gate)
       send(walker, {:release, :host_storage_usage_gate})
 
       assert %{"error" => "lost"} = Task.await(writer)
-      refute Arca.exists?(Sanctum.Context.actor(fixture.ctx), ["data", "between.txt"])
+      refute Arca.exists?(Sanctum.Context.actor(fixture.ctx), String.split(path, "/"))
       assert row(fixture).status == "cancelled"
     end
 

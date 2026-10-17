@@ -147,6 +147,7 @@ your-project/
             ├── notes/      # What was kept out of a thread — host-only, no guest scope
             ├── payloads/   # Retained execution inputs and results — host-only, by digest
             ├── staging/    # Content staged for a fenced publication — host-only, by digest
+            ├── objects/    # Each guest object's generations — host-only, read through its row
             └── data/       # Files WASM components store — their `data/` scope, and yours
 ```
 
@@ -155,7 +156,7 @@ your-project/
 > `data/` is yours to fill and clear, `components/` and `aqua/` hold shaped
 > units whose files you edit in place, `notes/` and `threads/` are read
 > there and managed on their own pages, and the server's own storage
-> (`payloads/`, `staging/`, the seed, the cache) is not a folder at all.
+> (`payloads/`, `staging/`, `objects/`, the seed, the cache) is not a folder at all.
 
 On **Files**, pick files under `data/` and choose **Send a copy** to offer
 a snapshot to someone you share an athanor with. They accept or decline
