@@ -493,10 +493,12 @@ defmodule Aqua.Loop.Policy do
   def sources_of(%Call{}, _result, _ctx), do: []
 
   # The catalogued operation a catalog call names, nil when none declares
-  # it (`Prima.Operation.result_sources/3` reads that as outside).
+  # it (`Prima.Operation.result_sources/3` reads that as outside), read
+  # from the operation table as a chain's tool call reads it
+  # (`Opus.Host.Children`).
   defp operation(tool, action) when is_binary(action) do
-    case Sanctum.Catalog.lookup(tool) do
-      {:ok, {_module, %{operations: operations}}} when is_list(operations) ->
+    case Map.get(Sanctum.Catalog.operations(), tool) do
+      {_module, %{operations: operations}} when is_list(operations) ->
         Enum.find(operations, &(&1.action == action))
 
       _undeclared ->
