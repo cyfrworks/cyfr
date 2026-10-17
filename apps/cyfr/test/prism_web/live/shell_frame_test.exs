@@ -57,15 +57,10 @@ defmodule PrismWeb.ShellFrameTest do
       "tincture" => %{"entry" => "index.html", "frame" => frame}
     }
 
-    dir =
-      Arca.Adapters.Local.build_path(
-        Sanctum.Context.actor(ctx),
-        ["components", "tinctures", "local", name, "1.0.0"]
-      )
-
-    File.mkdir_p!(dir)
-    File.write!(Path.join(dir, "cyfr-manifest.json"), Jason.encode!(manifest))
-    File.write!(Path.join(dir, "index.html"), "<html><head></head><body>#{name}</body></html>")
+    Arca.Test.UnitFixtures.tenant_component!(ctx, "tincture", "local", name, "1.0.0",
+      manifest: manifest,
+      files: [{"index.html", "<html><head></head><body>#{name}</body></html>"}]
+    )
 
     digest = "sha256:" <> Base.encode16(:crypto.hash(:sha256, name), case: :lower)
     {:ok, release_digest} = Compendium.ReleaseDigest.compute(digest, manifest)
@@ -92,8 +87,23 @@ defmodule PrismWeb.ShellFrameTest do
         updated_at: now
       })
 
+    acknowledged!(ctx)
     Prism.TinctureRegistry.reload_athanor(ctx.athanor_id)
     release_digest
+  end
+
+  # The rows these fixtures write are the registry's, as a commit would
+  # have written them: the root's projection is told it holds them after a
+  # row is written and after a unit is laid, so a read derives nothing
+  # over them from the units the fixtures commit.
+  defp acknowledged!(ctx) do
+    actor = Sanctum.Context.actor(ctx)
+    {:ok, token} = Arca.StorageProjectionChanges.snapshot(actor, "components")
+
+    {:ok, :acknowledged} =
+      Arca.StorageProjectionChanges.replace(actor, "components", token, fn -> :acknowledged end)
+
+    :ok
   end
 
   defp owner_profile!(ctx, name, revision) do

@@ -13,21 +13,6 @@ defmodule PrismWeb.ThreadPaneLiveTest.UnreadableRoles do
   def list_typed(actor, path), do: Arca.Adapters.Local.list_typed(actor, path)
 end
 
-# A store that answers, and holds no soul and no role.
-defmodule PrismWeb.ThreadPaneLiveTest.EmptyAqua do
-  @moduledoc false
-  use Arca.Storage.TestDouble
-
-  @roles Compendium.AquaPath.roles_root()
-  @soul Compendium.AquaPath.soul_file()
-
-  def list_typed(_actor, @roles), do: {:ok, []}
-  def list_typed(actor, path), do: Arca.Adapters.Local.list_typed(actor, path)
-
-  def get(_actor, @soul), do: {:error, :not_found}
-  def get(actor, path), do: Arca.Adapters.Local.get(actor, path)
-end
-
 defmodule PrismWeb.ThreadPaneLiveTest do
   # The pane on its own: what it says when the session is gone, that a
   # refusal reaches the person as a sentence, that what it pushes names
@@ -1426,7 +1411,12 @@ defmodule PrismWeb.ThreadPaneLiveTest do
 
     test "a store that answers with no agents still offers a model to connect",
          %{conn: conn, room: room, in_room: in_room} do
-      storage!(PrismWeb.ThreadPaneLiveTest.EmptyAqua)
+      # Every agent the fill shipped goes, unit by unit, as a reset of the
+      # whole root would take them.
+      assert :ok =
+               Arca.Overlay.with_internal_writes(fn ->
+                 Arca.delete_tree(Sanctum.Context.actor(in_room), ["aqua"])
+               end)
 
       # The room's list reads, and holds the guides alone: no soul, no role.
       assert {:ok, %{guides: guides}} =

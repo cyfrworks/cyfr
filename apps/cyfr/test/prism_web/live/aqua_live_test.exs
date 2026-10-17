@@ -13,21 +13,6 @@ defmodule PrismWeb.AquaLiveTest.UnreadableRoles do
   def list_typed(actor, path), do: Arca.Adapters.Local.list_typed(actor, path)
 end
 
-# A store that answers, and holds no soul and no role.
-defmodule PrismWeb.AquaLiveTest.EmptyAqua do
-  @moduledoc false
-  use Arca.Storage.TestDouble
-
-  @roles Compendium.AquaPath.roles_root()
-  @soul Compendium.AquaPath.soul_file()
-
-  def list_typed(_actor, @roles), do: {:ok, []}
-  def list_typed(actor, path), do: Arca.Adapters.Local.list_typed(actor, path)
-
-  def get(_actor, @soul), do: {:error, :not_found}
-  def get(actor, path), do: Arca.Adapters.Local.get(actor, path)
-end
-
 defmodule PrismWeb.AquaLiveTest do
   # The AQUA page shows the tree of the athanor in focus — a person's own
   # on their page, the group's on the group's — and every write lands
@@ -572,8 +557,17 @@ defmodule PrismWeb.AquaLiveTest do
       refute has_element?(view, "button[phx-click=open_consent]")
     end
 
-    test "a store that answers with no agents still says no soul is here", %{conn: conn} do
-      storage!(PrismWeb.AquaLiveTest.EmptyAqua)
+    test "a store that answers with no agents still says no soul is here", %{
+      conn: conn,
+      ctx: ctx
+    } do
+      # Every agent the fill shipped goes, unit by unit, as a reset of the
+      # whole root would take them.
+      assert :ok =
+               Arca.Overlay.with_internal_writes(fn ->
+                 Arca.delete_tree(Sanctum.Context.actor(ctx), ["aqua"])
+               end)
+
       {view, _html} = mount_athanor(conn, "/aqua")
 
       assert render(view) =~ "No soul here"

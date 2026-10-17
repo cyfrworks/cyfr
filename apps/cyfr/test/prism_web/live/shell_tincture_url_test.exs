@@ -38,16 +38,13 @@ defmodule PrismWeb.ShellTinctureUrlTest do
       "tincture" => %{"entry" => "index.html", "media" => %{"icon" => "icon.svg"}}
     }
 
-    dir =
-      Arca.Adapters.Local.build_path(
-        Sanctum.Context.actor(ctx),
-        ["components", "tinctures", "local", @tincture, "1.0.0"]
-      )
-
-    File.mkdir_p!(dir)
-    File.write!(Path.join(dir, "cyfr-manifest.json"), Jason.encode!(manifest))
-    File.write!(Path.join(dir, "index.html"), "<html><body>url</body></html>")
-    File.write!(Path.join(dir, "icon.svg"), "<svg xmlns=\"http://www.w3.org/2000/svg\"/>")
+    Arca.Test.UnitFixtures.tenant_component!(ctx, "tincture", "local", @tincture, "1.0.0",
+      manifest: manifest,
+      files: [
+        {"index.html", "<html><body>url</body></html>"},
+        {"icon.svg", "<svg xmlns=\"http://www.w3.org/2000/svg\"/>"}
+      ]
+    )
 
     release_digest = register!(ctx, manifest)
     Prism.TinctureRegistry.reload_athanor(athanor.id)
@@ -96,7 +93,22 @@ defmodule PrismWeb.ShellTinctureUrlTest do
         updated_at: now
       })
 
+    acknowledged!(ctx)
     release_digest
+  end
+
+  # The rows these fixtures write are the registry's, as a commit would
+  # have written them: the root's projection is told it holds them after a
+  # row is written and after a unit is laid, so a read derives nothing
+  # over them from the units the fixtures commit.
+  defp acknowledged!(ctx) do
+    actor = Sanctum.Context.actor(ctx)
+    {:ok, token} = Arca.StorageProjectionChanges.snapshot(actor, "components")
+
+    {:ok, :acknowledged} =
+      Arca.StorageProjectionChanges.replace(actor, "components", token, fn -> :acknowledged end)
+
+    :ok
   end
 
   defp public_profile!(ctx) do

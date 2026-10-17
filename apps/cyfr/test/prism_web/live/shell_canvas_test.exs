@@ -69,15 +69,10 @@ defmodule PrismWeb.ShellCanvasTest do
       "tincture" => tincture
     }
 
-    dir =
-      Arca.Adapters.Local.build_path(
-        Sanctum.Context.actor(ctx),
-        ["components", "tinctures", "local", name, version]
-      )
-
-    File.mkdir_p!(dir)
-    File.write!(Path.join(dir, "cyfr-manifest.json"), Jason.encode!(manifest))
-    for {file, bytes} <- files, do: File.write!(Path.join(dir, file), bytes)
+    Arca.Test.UnitFixtures.tenant_component!(ctx, "tincture", "local", name, version,
+      manifest: manifest,
+      files: files
+    )
 
     digest = "sha256:" <> Base.encode16(:crypto.hash(:sha256, name <> version), case: :lower)
     {:ok, release_digest} = Compendium.ReleaseDigest.compute(digest, manifest)
@@ -104,8 +99,23 @@ defmodule PrismWeb.ShellCanvasTest do
         updated_at: now
       })
 
+    acknowledged!(ctx)
     Prism.TinctureRegistry.reload_athanor(ctx.athanor_id)
     release_digest
+  end
+
+  # The rows these fixtures write are the registry's, as a commit would
+  # have written them: the root's projection is told it holds them after a
+  # row is written and after a unit is laid, so a read derives nothing
+  # over them from the units the fixtures commit.
+  defp acknowledged!(ctx) do
+    actor = Sanctum.Context.actor(ctx)
+    {:ok, token} = Arca.StorageProjectionChanges.snapshot(actor, "components")
+
+    {:ok, :acknowledged} =
+      Arca.StorageProjectionChanges.replace(actor, "components", token, fn -> :acknowledged end)
+
+    :ok
   end
 
   defp tincture!(ctx, name, tincture \\ %{}) do
@@ -114,16 +124,16 @@ defmodule PrismWeb.ShellCanvasTest do
     ])
   end
 
-  # Every version of tincture `name` gone from the athanor's tree, and the
-  # registry scanned again.
+  # Every version of tincture `name` gone from the athanor's tree — each
+  # version's unit cleared beneath its name, as a reset of the tree takes
+  # them — and the registry scanned again.
   defp unlay!(ctx, name) do
-    File.rm_rf!(
-      Arca.Adapters.Local.build_path(
-        Sanctum.Context.actor(ctx),
-        ["components", "tinctures", "local", name]
-      )
-    )
+    cleared =
+      Arca.Overlay.with_internal_writes(fn ->
+        Arca.delete_tree(Sanctum.Context.actor(ctx), ["components", "tinctures", "local", name])
+      end)
 
+    true = cleared in [:ok, {:error, :not_found}]
     Prism.TinctureRegistry.reload_athanor(ctx.athanor_id)
   end
 
@@ -153,9 +163,8 @@ defmodule PrismWeb.ShellCanvasTest do
   defp unlay_version!(ctx, name, version) do
     actor = Sanctum.Context.actor(ctx)
 
-    File.rm_rf!(
-      Arca.Adapters.Local.build_path(actor, ["components", "tinctures", "local", name, version])
-    )
+    {:ok, :deleted} =
+      Arca.Overlay.drop_unit(actor, ["components", "tinctures", "local", name, version])
 
     :ok = Arca.ComponentStorage.delete_component(actor, name, version, "local", "tincture")
     Prism.TinctureRegistry.reload_athanor(ctx.athanor_id)

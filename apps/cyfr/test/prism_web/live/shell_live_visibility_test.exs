@@ -28,26 +28,17 @@ defmodule PrismWeb.ShellLiveVisibilityTest do
     original_path = Application.get_env(:arca, :base_path)
     Application.put_env(:arca, :base_path, base)
 
-    dir =
-      Arca.Adapters.Local.build_path(
-        Sanctum.Context.actor(ctx),
-        ["components", "tinctures", "local", @tincture, "1.0.0"]
-      )
-
-    File.mkdir_p!(dir)
-
-    File.write!(
-      Path.join(dir, "cyfr-manifest.json"),
-      Jason.encode!(%{
+    Arca.Test.UnitFixtures.tenant_component!(ctx, "tincture", "local", @tincture, "1.0.0",
+      manifest: %{
         "name" => @tincture,
         "type" => "tincture",
         "version" => "1.0.0",
         "publisher" => "local",
         "tincture" => %{"entry" => "index.html"}
-      })
+      },
+      files: [{"index.html", "<html><body>visibility</body></html>"}]
     )
 
-    File.write!(Path.join(dir, "index.html"), "<html><body>visibility</body></html>")
     Prism.TinctureRegistry.reload_athanor(athanor.id)
 
     on_exit(fn ->
