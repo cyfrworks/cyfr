@@ -100,6 +100,7 @@ defmodule Arca.ObjectRevisions do
   @read_attempts 3
   @settle_within_ms :timer.hours(12)
   @collect_batch 500
+  @tombstone_batch 500
 
   defmodule Mark do
     @moduledoc false
@@ -553,31 +554,40 @@ defmodule Arca.ObjectRevisions do
 
       Arca.Repo.Errors.with_db_rescue("Arca.ObjectRevisions.delete_tree", fn ->
         Arca.Repo.locking_transaction(fn ->
-          # Locked in path order, so two overlapping prefix deletes take
-          # their rows in one order.
-          from(r in ObjectRevision,
-            where: r.athanor_id == ^athanor_id,
-            order_by: [asc: r.path],
-            select: r.path
-          )
-          |> at_or_under(prefix)
-          |> Arca.QueryHelpers.for_update()
-          |> Arca.Repo.all()
+          # Locked in the one ascending path order every locker of these
+          # rows takes, and tombstoned by the paths that lock returned,
+          # never by the prefix again: a row that appears under the prefix
+          # after the scan belongs to a write ordered after this delete,
+          # whose own settlement locks its ancestors, its row and its range
+          # and decides for itself, meeting the fence of the rows
+          # tombstoned here. A rescan would take such a row out of order.
+          locked =
+            from(r in ObjectRevision,
+              where: r.athanor_id == ^athanor_id,
+              order_by: [asc: r.path],
+              select: r.path
+            )
+            |> at_or_under(prefix)
+            |> Arca.QueryHelpers.for_update()
+            |> Arca.Repo.all()
 
-          from(r in ObjectRevision,
-            where: r.athanor_id == ^athanor_id,
-            update: [
-              set: [
-                generation: fragment("? + 1", r.generation),
-                deleted_at_generation: fragment("? + 1", r.generation),
-                settled_generation: nil,
-                deleted: true,
-                settled_at: ^now
+          # In chunks, so a large tree stays under SQLite's bound on the
+          # parameters of one statement.
+          for paths <- Enum.chunk_every(locked, @tombstone_batch) do
+            from(r in ObjectRevision,
+              where: r.athanor_id == ^athanor_id and r.path in ^paths,
+              update: [
+                set: [
+                  generation: fragment("? + 1", r.generation),
+                  deleted_at_generation: fragment("? + 1", r.generation),
+                  settled_generation: nil,
+                  deleted: true,
+                  settled_at: ^now
+                ]
               ]
-            ]
-          )
-          |> at_or_under(prefix)
-          |> Arca.Repo.update_all([])
+            )
+            |> Arca.Repo.update_all([])
+          end
 
           :ok
         end)

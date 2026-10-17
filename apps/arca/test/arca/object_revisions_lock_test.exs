@@ -7,9 +7,10 @@ defmodule Arca.ObjectRevisionsLockTest do
   PostgreSQL concurrency: every transaction that locks object rows takes
   them in one ascending path order (ancestors, the path's own row, then
   every row under it), so a host delete and a mark of the same path never
-  deadlock, and of a file and a path under it settling together, the one
-  that settles second waits on the other's row and refuses by the tree
-  shape, whichever existed first.
+  deadlock, a prefix delete writes only the rows its ordered scan locked,
+  and of a file and a path under it settling together, the one that
+  settles second waits on the other's row and refuses by the tree shape,
+  whichever existed first.
 
   Each case commits its own transactions outside the sandbox and removes
   its athanor's rows on exit; every transaction carries a statement
@@ -25,6 +26,8 @@ defmodule Arca.ObjectRevisionsLockTest do
   alias Ecto.Adapters.SQL.Sandbox
 
   @moduletag :postgres
+
+  @pause_key {__MODULE__, :delete_scan}
 
   setup do
     previous_base = Application.fetch_env!(:arca, :base_path)
@@ -264,5 +267,80 @@ defmodule Arca.ObjectRevisionsLockTest do
       :child -> assert {{:error, :not_found}, {:ok, "child"}} == {parent_read, child_read}
       :parent -> assert {{:ok, "parent"}, {:error, :not_found}} == {parent_read, child_read}
     end
+  end
+
+  # Holds the process marked with `@pause_key` right after its first
+  # locking read of object rows, the prefix delete's ordered scan, before
+  # anything else it does. It changes no query and no answer.
+  def hold_scan(_event, _measurements, metadata, test) do
+    query = metadata[:query] || ""
+
+    if Process.get(@pause_key) == true and String.starts_with?(query, "SELECT") and
+         String.contains?(query, ~s("object_revisions")) and
+         String.contains?(query, "FOR UPDATE") do
+      Process.delete(@pause_key)
+      send(test, {:prefix_scanned, self()})
+
+      receive do
+        :continue_delete -> :ok
+      after
+        8_000 -> raise "the prefix delete's gate did not open"
+      end
+    end
+  end
+
+  test "a prefix delete and a parent added after its scan never take rows in reverse order",
+       %{actor: actor} do
+    parent = ["data", "p"]
+    child = parent ++ ["c"]
+    child_mark = mark(actor, child, "child")
+    :ok = ObjectRevisions.store(actor, child_mark, "child")
+    assert {:error, :not_found} = unboxed(fn -> Arca.get(actor, child) end)
+    test = self()
+    handler = {__MODULE__, make_ref()}
+    on_exit(fn -> :telemetry.detach(handler) end)
+    :ok = :telemetry.attach(handler, [:arca, :repo, :query], &__MODULE__.hold_scan/4, test)
+
+    # The facade's own prefix delete, held after its scan locked the child.
+    deleting =
+      job(fn ->
+        send(test, {:deleting, backend()})
+        Process.put(@pause_key, true)
+        Arca.delete_tree(actor, parent)
+      end)
+
+    assert_receive {:deleting, deleting_backend}, 5_000
+    assert_receive {:prefix_scanned, deleter}, 5_000
+    assert deleter == deleting.pid
+
+    # A parent the scan never saw, sorting before the child it locked.
+    parent_mark = mark(actor, parent, "parent")
+    :ok = ObjectRevisions.store(actor, parent_mark, "parent")
+
+    settling_parent =
+      job(fn ->
+        send(test, {:settling_parent, backend()})
+        ObjectRevisions.settle!(actor, parent_mark, [])
+      end)
+
+    assert_receive {:settling_parent, parent_backend}, 5_000
+
+    wait_blocked(
+      parent_backend,
+      [deleting_backend],
+      "the parent holds its row and waits on the delete's child row"
+    )
+
+    send(deleter, :continue_delete)
+    answers = {Task.await(deleting, 15_000), Task.await(settling_parent, 15_000)}
+
+    refute deadlock?(elem(answers, 0)) or deadlock?(elem(answers, 1)),
+           "40P01: #{inspect(answers)}"
+
+    assert {{:ok, :ok}, {:ok, :settled}} = answers
+
+    # The parent the delete never locked publishes; the child stays dead.
+    assert {{:ok, "parent"}, {:error, :not_found}} ==
+             unboxed(fn -> {Arca.get(actor, parent), Arca.get(actor, child)} end)
   end
 end
