@@ -49,7 +49,8 @@ defmodule Cyfr.ApplicationTest do
     Opus.Schedules.Scheduler => 10_000,
     Prism.TinctureRegistry => 5_000,
     Prism.TaskSupervisor => 30_000,
-    Emissary.Web.TaskSupervisor => 30_000
+    Emissary.Web.TaskSupervisor => 30_000,
+    Cyfr.SeedOffer => 5_000
   }
 
   # A wildcard CORS origin once authentication is configured must fail closed
@@ -355,7 +356,19 @@ defmodule Cyfr.ApplicationTest do
         end
       end
 
-      assert Map.keys(@shutdowns) -- Enum.map(children, & &1.id) == [Cyfr.Cell]
+      assert Enum.sort(Map.keys(@shutdowns) -- Enum.map(children, & &1.id)) ==
+               [Cyfr.Cell, Cyfr.SeedOffer]
+    end
+
+    # The seed offer is boot work, which the suite's boot omits, so the
+    # census reads the spec the boot would start: its bound is stated in
+    # the server's own declaration, not left to the default.
+    test "the seed offer states its stop bound where it is declared" do
+      spec = Cyfr.Application.seed_offer_spec()
+
+      assert %{id: Cyfr.SeedOffer, restart: :temporary, shutdown: bound} = spec
+      assert bound == Map.fetch!(@shutdowns, Cyfr.SeedOffer)
+      assert Map.has_key?(Cyfr.SeedOffer.child_spec([]), :shutdown)
     end
 
     # A tier returns from its stop only once each child is down, a worker

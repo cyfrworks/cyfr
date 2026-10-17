@@ -256,8 +256,8 @@ defmodule Compendium.OCI.Blob do
       {:ok, status, _headers, body} ->
         {:error, Errors.from_response(status, body, registry)}
 
-      # SSRF/DNS validation failures come back as descriptive strings.
-      {:error, reason} when is_binary(reason) ->
+      # The address check's refusal, before any connection.
+      {:error, {:refused, _type, reason}} ->
         {:error,
          %Errors{
            reason: :ssrf_blocked,

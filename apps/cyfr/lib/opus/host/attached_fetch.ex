@@ -365,7 +365,7 @@ defmodule Opus.Host.AttachedFetch do
         {:recorded, "private_ip_blocked", "metadata IP blocked (resolved from #{host})"}
 
       {:error, :resolution} ->
-        {:recorded, "dns_error", "DNS resolution failed for #{host}"}
+        {:recorded, "dns_error", Prima.Network.dns_failure(host)}
 
       # The run read a class its grant declares no flow of to this host:
       # refused before the credential is resolved or any byte leaves.

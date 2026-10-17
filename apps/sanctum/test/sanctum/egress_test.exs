@@ -93,13 +93,17 @@ defmodule Sanctum.EgressTest do
     # The security contract: a private or metadata resolution is rejected BEFORE
     # any connection, and the connection (when allowed) targets the validated IP
     # — so there is no second DNS resolution to rebind.
+    # Each refusal keeps its type, which a caller matches; the sentence is
+    # for a person.
     test "blocks loopback before connecting" do
-      assert {:error, msg} = Egress.pinned_request(:get, "http://127.0.0.1/")
+      assert {:error, {:refused, :private_ip_blocked, msg}} =
+               Egress.pinned_request(:get, "http://127.0.0.1/")
+
       assert msg =~ "private IP"
     end
 
     test "always blocks the metadata endpoint" do
-      assert {:error, msg} =
+      assert {:error, {:refused, :private_ip_blocked, msg}} =
                Egress.pinned_request(:get, "http://169.254.169.254/latest/meta-data/", [], nil,
                  private_policy: :allow_all
                )
@@ -108,12 +112,14 @@ defmodule Sanctum.EgressTest do
     end
 
     test "rejects non-http(s) schemes" do
-      assert {:error, msg} = Egress.pinned_request(:get, "file:///etc/passwd")
+      assert {:error, {:refused, :invalid_url, msg}} =
+               Egress.pinned_request(:get, "file:///etc/passwd")
+
       assert msg =~ "blocked URL scheme"
     end
 
     test "returns a DNS error for an unresolvable host" do
-      assert {:error, msg} =
+      assert {:error, {:refused, :dns_error, msg}} =
                Egress.pinned_request(:get, "https://nonexistent.test/", [], nil, @resolver)
 
       assert msg == "DNS resolution failed for nonexistent.test: non-existing domain"

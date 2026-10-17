@@ -474,7 +474,7 @@ defmodule Sanctum.Providers.System do
 
             {:ok, status_code}
 
-          {:error, reason} when is_binary(reason) ->
+          {:error, {:refused, _type, reason}} ->
             Logger.warning("[Sanctum.Providers.System] Webhook URL blocked: #{reason}")
             {:error, "Webhook URL validation failed: #{reason}"}
 

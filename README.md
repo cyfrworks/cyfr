@@ -1127,11 +1127,13 @@ gh attestation verify cyfr_*.tar.gz --owner cyfrworks
 # Checksum verification (no tools needed)
 sha256sum --check --ignore-missing checksums.txt
 
-# Full Sigstore verification (maximum rigor)
+# Full Sigstore verification (maximum rigor): the release workflow at the
+# tag of the version you downloaded, as install.sh and cyfr upgrade verify it
+VERSION=0.9.0
 cosign verify-blob \
   --bundle checksums.txt.sigstore.json \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com \
-  --certificate-identity-regexp "^https://github.com/cyfrworks/cyfr/" \
+  --certificate-identity "https://github.com/cyfrworks/cyfr/.github/workflows/release.yml@refs/tags/$VERSION" \
   checksums.txt
 ```
 

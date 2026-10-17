@@ -447,12 +447,13 @@ defmodule Sanctum.Directory.Client do
   defp answer({:ok, status, headers, body}),
     do: {:error, refusal(status, error_body(body), headers)}
 
-  # The pinned transport answers a refusal it made before connecting as a
-  # sentence: a DNS failure is the network's, the rest are the address policy's.
-  defp answer({:error, message}) when is_binary(message) do
+  # A refusal the pinned transport made before connecting carries its type:
+  # a host that does not resolve is the network's, and retryable; every
+  # other refusal is the address policy's.
+  defp answer({:error, {:refused, type, message}}) do
     Logger.warning("[Sanctum.Directory.Client] a directory request was refused: #{message}")
 
-    if String.starts_with?(message, "DNS resolution failed"),
+    if type == :dns_error,
       do: {:error, :unreachable},
       else: {:error, :egress_refused}
   end

@@ -301,9 +301,15 @@ defmodule Cyfr.Boundaries do
     Arca.DirectoryHeads Arca.DeviceCertificates Arca.DeviceCertifications
     Arca.PairingInvitations Arca.Passkeys Arca.PendingConfirmations Arca.CarryActions Arca.InstallationClaims
     Arca.RequestRateWindows Arca.InstanceEntries Arca.InstanceEntryUsage
-    Arca.DecisionLog Arca.McpLog Arca.PolicyLog
+    Arca.DecisionLog Arca.McpLog Arca.PolicyLog Arca.SecurityTransitions
   )
   @security_row_readers ["apps/sanctum/lib", "apps/arca/lib"]
+
+  # The host files that run the declared restore's two halves through
+  # `Arca.SecurityTransitions`, each a release-time entry with no person's
+  # context to call Sanctum under: the composition root, which consumes the
+  # marker at boot, and the release task that writes it.
+  @restore_entries ["apps/cyfr/lib/cyfr/application.ex", "apps/cyfr/lib/cyfr/release.ex"]
 
   @surfaces [
     # --- the auth domain's callers, each crossing the licence boundary ---
@@ -1104,6 +1110,7 @@ defmodule Cyfr.Boundaries do
     %{
       from:
         for(%{lib: lib} <- @applications, lib not in @security_row_readers, do: lib <> "/**/*.ex"),
+      except: @restore_entries,
       into: "Arca",
       only: @sanctum_only_storage,
       allow: [],
@@ -1118,11 +1125,28 @@ defmodule Cyfr.Boundaries do
           "the pre-authentication rate windows, the instance's own entries and " <>
           "their use counts, the admission decisions and the request-log rows " <>
           "that project them, and the policy consultation log " <>
-          "are security rows. A domain or a surface learns about them only " <>
+          "are security rows, and the security transitions retire, suspend and " <>
+          "answer them. A domain or a surface learns about them only " <>
           "through Sanctum's entries, which scope by the caller's context. Arca holds " <>
           "the rows and Sanctum reads them; no other tree names the stores. " <>
           "Boundary's exports are global and its membership is by name, so no declaration " <>
-          "exports these stores to Sanctum alone."
+          "exports these stores to Sanctum alone. The declared restore's two release-time " <>
+          "entries are the next row's."
+    },
+    %{
+      from: @restore_entries,
+      into: "Arca",
+      only: @sanctum_only_storage,
+      allow: ~w(Arca.SecurityTransitions),
+      reason:
+        "the declared restore runs at release time with no person's context: the " <>
+          "release task (`Cyfr.Release.mark_restore/0`) writes its marker before the " <>
+          "cell starts, and the composition root (`Cyfr.Application`) consumes it under " <>
+          "its slot before the gate opens, each through the transitions that own it " <>
+          "(`Arca.SecurityTransitions.mark_restore/1`, `restore/1`). Every other security " <>
+          "store stays Sanctum's to read from these files too. " <>
+          "Boundary's exports are global and its membership is by name, so no declaration " <>
+          "exports the transitions to two files alone."
     },
 
     # --- the host names nothing of the island ---
@@ -1278,8 +1302,9 @@ defmodule Cyfr.Boundaries do
   end
 
   # What a surface calls of the storage layer, function by function. A
-  # console page, a console controller or a web-tier plug reads Arca
-  # directly only where a row here names the call and says why; every other
+  # console page, a console controller, a web-tier plug or one of the MCP
+  # surface's web adapters reads Arca directly only where a row here names
+  # the call and says why; every other
   # read goes through the domain that owns the rows, and a security row is
   # Sanctum's whatever this roster says (the security-row surface above).
   # The compiled beams of the surface trees are the reader: a call a
@@ -1294,7 +1319,8 @@ defmodule Cyfr.Boundaries do
     "apps/cyfr/lib/prism_web/**/*.ex",
     "apps/cyfr/lib/prism_web.ex",
     "apps/cyfr/lib/cyfr_web/**/*.ex",
-    "apps/cyfr/lib/cyfr_web.ex"
+    "apps/cyfr/lib/cyfr_web.ex",
+    "apps/cyfr/lib/emissary/web/**/*.ex"
   ]
 
   @surface_reads [
@@ -1498,10 +1524,96 @@ defmodule Cyfr.Boundaries do
       reason:
         "the top bar shows whether the person follows the open thread, read under the " <>
           "actor; following is changed through the assistant."
+    },
+    # --- the MCP surface's web adapters ---
+    %{
+      from: "Emissary.Web.ExecutionEventsController",
+      into: "Arca.Execution",
+      functions: [:get_tenant],
+      reason:
+        "an execution's event stream opens only on an execution the caller's actor " <>
+          "finds in its own tenant, read once before the read is authorized; the " <>
+          "engine owns every execution write."
+    },
+    %{
+      from: "Emissary.Web.HealthController",
+      into: "Arca.Cache",
+      functions: [:get, :table_name],
+      reason:
+        "the readiness probe answers from its last checks within the cache window, " <>
+          "and checks that the cache's table exists: node-local memory, never a row."
+    },
+    %{
+      from: "Emissary.Web.HealthController",
+      into: "Arca.ControlPlane",
+      functions: [:held?],
+      reason:
+        "a member that lost its control-plane slot is not ready: the probe asks " <>
+          "whether this member holds the slot, which reads its own lease state and no row."
+    },
+    %{
+      from: "Emissary.Web.HealthController",
+      into: "Arca.Health",
+      functions: [:check],
+      reason:
+        "the probe asks the storage layer whether the database answers, which " <>
+          "`Arca.Health` owns and which reads no table."
+    },
+    %{
+      from: "Emissary.Web.HealthController",
+      into: "Arca.PlatformSettings",
+      functions: [:effective],
+      reason:
+        "the probe's cache window is a platform setting, read as it stands; no " <>
+          "athanor's row."
+    },
+    %{
+      from: "Emissary.Web.TinctureAssets",
+      into: "Arca",
+      functions: [:get, :serve_to_conn],
+      reason:
+        "a tincture's files are read and streamed from the storage facade under the " <>
+          "frame credential's actor, tenant-relative, once the asset server has found " <>
+          "the version and its served type."
+    },
+    %{
+      from: "Emissary.Web.TinctureDataController",
+      into: "Arca.PlatformSettings",
+      functions: [:effective],
+      reason:
+        "the frame invocation rate's bounds are platform settings, read as they stand " <>
+          "on each request; no athanor's row."
     }
   ]
 
   @surface_writes [
+    %{
+      from: "Emissary.Web.HealthController",
+      into: "Arca.Cache",
+      functions: [:put],
+      reason:
+        "the readiness probe keeps its checks for the cache window, so several " <>
+          "monitors' probes cost one check: node-local memory, never a row."
+    },
+    %{
+      from: "Emissary.Web.HealthController",
+      into: "Arca",
+      functions: [:delete, :put],
+      reason:
+        "the storage check writes and removes one fixed probe object under the " <>
+          "`system/` global root, so a full disk, a read-only volume or a broken " <>
+          "object-store credential flips readiness; it holds no athanor's data."
+    },
+    %{
+      from: "Emissary.Web.WebhookController",
+      into: "Arca.WebhookDeliveryStorage",
+      functions: [:settle],
+      reason:
+        "the delivery task settles the idempotency claim the ingress plug staked " <>
+          "(`CyfrWeb.Plugs.WebhookIdempotency`), the one code that knows how the " <>
+          "delivery ended: kept when it succeeded, re-deliverable when it failed. " <>
+          "The claim holds no athanor's data."
+    },
     %{
       from: "CyfrWeb.Plugs.WebhookIdempotency",
       into: "Arca.WebhookDeliveryStorage",
@@ -1582,7 +1694,9 @@ defmodule Cyfr.Boundaries do
 
   @doc """
   The source trees a surface is: the console's domain code, its pages and
-  controllers, and the web tier's shared plugs. Their compiled modules are
+  controllers, the web tier's shared plugs, and the MCP surface's web
+  adapters (`Emissary.Web`: its controllers, plugs, channel and asset
+  server). Their compiled modules are
   what `surface_reads/0` and `surface_writes/0` read.
   """
   @spec surface_trees() :: [String.t()]

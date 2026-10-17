@@ -66,6 +66,15 @@ defmodule Prima.Network do
   end
 
   @doc """
+  The sentence a refusal of a host that does not resolve carries, wherever
+  the egress check runs: `Sanctum.Network.pin/2`, the attached fetch and the
+  runtime's egress. A caller matches the refusal's type (`:dns_error`),
+  never this sentence.
+  """
+  @spec dns_failure(String.t()) :: String.t()
+  def dns_failure(host), do: "DNS resolution failed for #{host}"
+
+  @doc """
   Validate a resolved address and construct its pinned connection options.
 
   `:private_policy` is `:deny` (default), `:allow_all`, `{:allowlist, targets}`

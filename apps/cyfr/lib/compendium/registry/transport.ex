@@ -138,7 +138,7 @@ defmodule Compendium.Registry.Transport do
         {:ok, status, resp_headers, resp_body}
 
       # An SSRF/DNS validation refusal is a decision, not a fault: never retry.
-      {:error, reason} when is_binary(reason) ->
+      {:error, {:refused, _type, reason}} ->
         Logger.error("[Compendium.Registry.Transport] Blocked request: #{reason}")
         {:error, Errors.api_connection_error(reason)}
 

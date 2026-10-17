@@ -41,7 +41,9 @@ defmodule Cyfr.SeedOffer do
   emits neither.
   """
 
-  use GenServer, restart: :temporary
+  # The stop bound: a stop from the supervisor kills the task outright
+  # (`stop_task/1`) and gives the claim back in one write, well inside it.
+  use GenServer, restart: :temporary, shutdown: 5_000
 
   require Logger
 

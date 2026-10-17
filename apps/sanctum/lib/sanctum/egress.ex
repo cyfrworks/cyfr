@@ -22,7 +22,11 @@ defmodule Sanctum.Egress do
   followed, so callers stay in control of redirect validation.
 
   Returns a Finch-style 4-tuple `{:ok, status, headers, body}` (headers as a
-  `[{name, value}]` list) or `{:error, reason}`.
+  `[{name, value}]` list) or `{:error, reason}`. A request the address
+  check refuses before connecting is `{:error, {:refused, type, message}}`:
+  `type` is `:invalid_url`, `:dns_error` (the host does not resolve) or
+  `:private_ip_blocked` (the policy refuses the address), the one a caller
+  matches; `message` is a sentence for a person, never matched.
 
   ## Options
 
@@ -36,8 +40,11 @@ defmodule Sanctum.Egress do
       at the limit instead of buffering an arbitrarily large body first.
       Exceeding it returns `{:error, {:response_too_large, size, max}}`.
   """
+  @type refusal :: {:refused, :invalid_url | :dns_error | :private_ip_blocked, String.t()}
+
   @spec pinned_request(atom(), String.t(), [{String.t(), String.t()}], binary() | nil, keyword()) ::
-          {:ok, non_neg_integer(), [{String.t(), String.t()}], binary()} | {:error, term()}
+          {:ok, non_neg_integer(), [{String.t(), String.t()}], binary()}
+          | {:error, refusal() | term()}
   def pinned_request(method, url, headers \\ [], body \\ nil, opts \\ []) do
     # The identity semantics matter here: no accept-encoding and no decode
     # (OCI digest verification hashes the body as received), no redirects,
@@ -64,8 +71,8 @@ defmodule Sanctum.Egress do
             {:error, reason}
         end
 
-      {:error, _type, message} ->
-        {:error, message}
+      {:error, type, message} ->
+        {:error, {:refused, type, message}}
     end
   end
 

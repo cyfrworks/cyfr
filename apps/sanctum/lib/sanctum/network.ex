@@ -114,7 +114,7 @@ defmodule Sanctum.Network do
 
           {:error, reason} ->
             {:error, :dns_error,
-             "DNS resolution failed for #{hostname}: #{:inet.format_error(reason)}"}
+             "#{Prima.Network.dns_failure(hostname)}: #{:inet.format_error(reason)}"}
         end
     end
   end

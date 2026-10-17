@@ -233,7 +233,7 @@ defmodule Compendium.OCI.Transport do
           {:ok, status, resp_headers, resp_body}
 
         # SSRF/DNS validation failure — the URL is blocked; never retry.
-        {:error, reason} when is_binary(reason) ->
+        {:error, {:refused, _type, reason}} ->
           Logger.error("[Compendium.OCI.Transport] Blocked request to #{registry}: #{reason}")
           {:error, Errors.connection_error(registry, reason)}
 

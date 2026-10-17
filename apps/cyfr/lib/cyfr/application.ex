@@ -687,13 +687,14 @@ defmodule Cyfr.Application do
   # the boot, and as a temporary child it restarts nothing. The sandboxed
   # test boot omits it with the gate's runtime switch.
   defp seed_offer do
-    if boot_work_enabled?(),
-      do: [
-        Supervisor.child_spec({Cyfr.SeedOffer, sync: &Compendium.sync_seeds/0},
-          restart: :temporary
-        )
-      ],
-      else: []
+    if boot_work_enabled?(), do: [seed_offer_spec()], else: []
+  end
+
+  @doc false
+  # The seed offer's child spec, read by the shutdown census, which the
+  # suite's boot (boot work off) does not start.
+  def seed_offer_spec do
+    Supervisor.child_spec({Cyfr.SeedOffer, sync: &Compendium.sync_seeds/0}, restart: :temporary)
   end
 
   @doc false

@@ -602,7 +602,7 @@ defmodule Cyfr.BoundariesTest do
       assert MapSet.member?(below, "Arca.PolicyLog")
     end
 
-    test "the security-row roster is exactly the thirty-four stores, each a module" do
+    test "the security-row roster is exactly the thirty-four stores and the transitions, each a module" do
       assert Enum.sort(Boundaries.sanctum_only_storage()) ==
                Enum.sort(~w(
                  Arca.ConsentStorage Arca.ConsentProofStorage Arca.ProfileStorage
@@ -615,11 +615,34 @@ defmodule Cyfr.BoundariesTest do
                  Arca.PairingInvitations Arca.Passkeys Arca.PendingConfirmations Arca.CarryActions
                  Arca.InstallationClaims Arca.RequestRateWindows Arca.InstanceEntries
                  Arca.InstanceEntryUsage Arca.DecisionLog Arca.McpLog Arca.PolicyLog
+                 Arca.SecurityTransitions
                ))
 
       for name <- Boundaries.sanctum_only_storage() do
         assert Code.ensure_loaded?(Module.concat([name])), "#{name} is not a module"
       end
+    end
+
+    # The composition root and the release task run the declared restore
+    # through the transitions, and are rostered by that reason alone: every
+    # other security store stays refused in them.
+    test "the declared restore's entries may name the transitions and no store" do
+      row = restore_entries_seam()
+      assert row.only == Boundaries.sanctum_only_storage()
+      assert row.allow == ["Arca.SecurityTransitions"]
+      assert security_row_seam().except == row.from
+
+      planted = [
+        {"apps/cyfr/lib/cyfr/release.ex",
+         CodeLines.aliases(~S'''
+         defmodule Cyfr.Release do
+           def mark_restore, do: Arca.SecurityTransitions.mark_restore(Prima.Actor.system())
+           def admins(actor), do: Arca.Users.list(actor)
+         end
+         ''')}
+      ]
+
+      assert Boundaries.surface_violations(row, planted) == ["Arca.Users"]
     end
 
     test "a row's except names files its sources hold, and they go unread" do
@@ -742,6 +765,10 @@ defmodule Cyfr.BoundariesTest do
       assert {"PrismWeb.ThreadPaneLive", "Arca.ThreadStorage", :get} in reaches
 
       assert {"CyfrWeb.Plugs.WebhookIdempotency", "Arca.WebhookDeliveryStorage", :record} in reaches
+
+      # The MCP surface's web adapters are surfaces too: the scan reads them.
+      assert {"Emissary.Web.WebhookController", "Arca.WebhookDeliveryStorage", :settle} in reaches
+      assert {"Emissary.Web.ExecutionEventsController", "Arca.Execution", :get_tenant} in reaches
 
       assert Boundaries.surface_read_violations(reaches) == [],
              """
@@ -1446,6 +1473,14 @@ defmodule Cyfr.BoundariesTest do
     config_declarations() |> Enum.map(fn {_path, app, key} -> {app, key} end) |> Enum.uniq()
   end
 
+  # The row the declared restore's two release-time entries are held to.
+  defp restore_entries_seam do
+    Enum.find(
+      Boundaries.surfaces(),
+      &(&1.from == ["apps/cyfr/lib/cyfr/application.ex", "apps/cyfr/lib/cyfr/release.ex"])
+    ) || flunk("no surface row holds the declared restore's entries")
+  end
+
   defp security_row_seam do
     Enum.find(Boundaries.surfaces(), &(Map.get(&1, :only) == Boundaries.sanctum_only_storage())) ||
       flunk("no surface row holds the security-row stores to Sanctum")
@@ -1644,6 +1679,19 @@ defmodule Cyfr.BoundariesTest do
 
       assert Boundaries.surface_violations(row, activity) ==
                ["Arca.DecisionLog", "Arca.McpLog", "Arca.PolicyLog"]
+
+      # The security transitions retire, suspend and answer security rows:
+      # a domain that names them is refused like one naming a store.
+      transitions = [
+        {"apps/cyfr/lib/aqua/planted_transitions.ex",
+         CodeLines.aliases(~S'''
+         defmodule Aqua.PlantedTransitions do
+           def deny(user_id), do: Arca.SecurityTransitions.deny_user(Prima.Actor.system(), user_id)
+         end
+         ''')}
+      ]
+
+      assert Boundaries.surface_violations(row, transitions) == ["Arca.SecurityTransitions"]
 
       for name <- Boundaries.sanctum_only_storage() do
         ["Arca", store] = String.split(name, ".")

@@ -1116,7 +1116,7 @@ defmodule Emissary.External.Server do
         end
 
       # SSRF/DNS validation failures are safe, descriptive strings.
-      {:error, reason} when is_binary(reason) ->
+      {:error, {:refused, _type, reason}} ->
         {:error, reason}
 
       # Transport/connection failure — log detail internally, surface a

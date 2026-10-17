@@ -256,7 +256,7 @@ defmodule Locus.Runtime.Egress do
   def refusal(:metadata, host),
     do: {:refused, :private_ip_blocked, "metadata IP blocked (resolved from #{host})"}
 
-  def refusal(:resolution, host), do: {:refused, :dns_error, "DNS resolution failed for #{host}"}
+  def refusal(:resolution, host), do: {:refused, :dns_error, Prima.Network.dns_failure(host)}
 
   def refusal(:redirect_credentials, host),
     do:
