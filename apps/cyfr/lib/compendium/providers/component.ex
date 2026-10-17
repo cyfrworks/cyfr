@@ -434,7 +434,8 @@ defmodule Compendium.Providers.Component do
 
   # A node is its parent's manifest entry; the entries under it were read
   # from the dependency's own manifest. A setup plan's dependencies are
-  # the reference strings of its own manifest, and carry no other text.
+  # maps (`ref`, `optional`, `reason`) read from the root's own manifest,
+  # so their text is the root's and carries no dependency prose.
   defp dependency_authors(nil), do: []
 
   defp dependency_authors(nodes) when is_list(nodes) do
