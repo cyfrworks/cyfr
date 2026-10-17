@@ -14,7 +14,8 @@ defmodule Arca.OneFenceTest do
       `Arca.Repo.locking_transaction/2` itself, or a function of its own or
       of another module that opens one — around code that reaches
       `Arca.ControlPlane.verify_held/1`: directly, or through a function of
-      its own or a public function of another module that does. A call of
+      its own or a public function of another module that does, called or
+      captured (`&fun/1`, `&Mod.fun/1`) and applied or passed on. A call of
       `Arca.Repo.owned/2` or `owned/3` is not one: the write it runs is the
       caller's code;
     * a **reading** is a set of clauses (a `case`, a `fn`, or a function's
@@ -165,13 +166,44 @@ defmodule Arca.OneFenceTest do
         end
 
         def through_owned(write), do: Arca.Repo.owned("Arca.Planted", write)
+
+        # The check two local hops away, called; captured and applied inside
+        # the transaction; and captured as the transaction's own function.
+        defp hop1(slot), do: hop2(slot)
+        defp hop2(slot), do: Arca.ControlPlane.verify_held(slot)
+        defp checked, do: hop2(:none)
+
+        def two_hop(write) do
+          Arca.Repo.locking_transaction(fn ->
+            case hop1(:none) do
+              :ok -> write.()
+              :lost -> Arca.Repo.rollback(:not_owner)
+            end
+          end)
+        end
+
+        def captured(write) do
+          Arca.Repo.locking_transaction(fn ->
+            with :ok <- (&hop2/1).(:none), do: write.()
+          end)
+        end
+
+        def passed, do: Arca.Repo.locking_transaction(&checked/0)
       end
       ''')
 
     %{fences: fences, readings: readings} = scan([planted | tree()])
 
     assert for({"arca/planted.ex", fun} <- fences, do: fun) ==
-             ["fenced/3", "guarded/1", "handed/1", "remote/1"]
+             [
+               "captured/1",
+               "fenced/3",
+               "guarded/1",
+               "handed/1",
+               "passed/0",
+               "remote/1",
+               "two_hop/1"
+             ]
 
     assert for({"arca/planted.ex", fun} <- readings, do: fun) == ["read/1", "settle/1"]
   end
@@ -274,7 +306,9 @@ defmodule Arca.OneFenceTest do
   end
 
   # Whether `ast` calls a function `known` holds: one of its own module's,
-  # or one of another module named by the last part of its alias.
+  # or one of another module named by the last part of its alias. A capture
+  # (`&fun/1`, `&Mod.fun/1`) is a call of the function it captures, applied
+  # where it stands or passed on.
   defp calls?(ast, m, known) do
     remote = MapSet.new(for {name, fun} <- known, name != [], do: {List.last(name), fun})
 
@@ -282,6 +316,14 @@ defmodule Arca.OneFenceTest do
       Macro.prewalk(ast, false, fn
         node, true ->
           {node, true}
+
+        {:&, _, [{:/, _, [{{:., _, [{:__aliases__, _, alias}, fun]}, _, _}, arity]}]}, false
+        when is_atom(fun) and is_integer(arity) ->
+          {nil, MapSet.member?(remote, {List.last(alias), {fun, arity}})}
+
+        {:&, _, [{:/, _, [{fun, _, ctx}, arity]}]}, false
+        when is_atom(fun) and is_atom(ctx) and is_integer(arity) ->
+          {nil, MapSet.member?(known, {m.name, {fun, arity}})}
 
         {{:., _, [{:__aliases__, _, alias}, fun]}, _, args} = node, false when is_list(args) ->
           {node, MapSet.member?(remote, {List.last(alias), {fun, length(args)}})}
