@@ -76,6 +76,7 @@ defmodule Prima.RefusalTest do
     {:stale_revision, :conflict},
     {:missing_unit, :not_found},
     {:no_unit, :not_found},
+    {{:reserved_path, ["aqua", ".staging"]}, :invalid_argument},
     {:invalid_objects, :corrupt},
     {:outcome_unknown, :uncertain},
     {:unavailable, :unavailable},

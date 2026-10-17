@@ -41,7 +41,10 @@ Every folder is laid when the athanor is provisioned. The Files page in the
 console, and the `file` tool behind it, show this tree by tier: `data/` is
 open, `components/` and `aqua/` are shaped, `notes/` and
 `threads/` are read-only there, and `payloads/`, `staging/` and `objects/`
-are the server's own and have no name on the page.
+are the server's own and have no name on the page. Inside `components/` and
+`aqua/`, the server keeps every unit's revisions in a `.staging/` folder the
+page never lists; a write, edit or delete there is refused, and a unit is
+changed or removed at its own path.
 
 Each component directory (note the double `src/` — Cargo's standard layout inside the Cargo project root):
 ```
@@ -1361,6 +1364,7 @@ For the full tincture reference (architecture, manifest, SDK, sandbox constraint
 | `AUTHORIZATION_REQUIRED` | OAuth vault entry has no live grant | Re-authorize the entry (console Vault page) |
 | `DIGEST_MISMATCH` | Binary changed since register | `cyfr register` then re-run |
 | `STORAGE_DENIED` | Path outside the consent | Declare it in `caps.storage.paths` and re-grant |
+| `invalid_argument` (reserved path) | A `file` write, edit or delete named `components/.staging/` or `aqua/.staging/`, the server's store of unit revisions: "This folder holds the server's stored unit revisions and only the server changes it — edit or remove a unit at its own path, one unit at a time" | Edit the unit's own file, or remove the unit at its own path (`cyfr remove <ref>`, the AQUA page) |
 
 For tincture-specific errors, see the [Tincture Reference](tincture-guide.md#error-reference).
 

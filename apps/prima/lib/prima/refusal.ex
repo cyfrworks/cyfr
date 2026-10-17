@@ -480,6 +480,16 @@ defmodule Prima.Refusal do
        "Nothing is here to write into yet: a component is created by scaffold, pull, fork " <>
          "or publish, and a role, the soul or a scroll by writing its own file first"}
 
+  # A plain write, edit or delete in a shaped folder's `.staging/`, where
+  # every unit's revisions are kept and served from: only the server's own
+  # commits, repairs and collector change it, and a unit is changed or
+  # removed at its own path.
+  defp row({:reserved_path, path}) when is_list(path),
+    do:
+      {:invalid_argument,
+       "This folder holds the server's stored unit revisions and only the server changes " <>
+         "it — edit or remove a unit at its own path, one unit at a time"}
+
   defp row(:invalid_objects),
     do:
       {:corrupt, "What was staged for this unit is not what was written — nothing was published"}

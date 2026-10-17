@@ -53,19 +53,22 @@ defmodule Cyfr.RetentionStagedRevisionsTest do
      unit: ["components", "catalysts", "local", name, "1.0.0"]}
   end
 
-  # A whole revision no row names, begun `days` ago by its name's own time.
+  # A whole revision no row names, begun `days` ago by its name's own time,
+  # laid in the internal-write scope as a writer that died leaves it.
   defp lay_orphan(ctx, unit, days) do
     begun = System.system_time(:millisecond) - days * 86_400_000
     revision = "rev_" <> Prima.UUID7.generate_at(begun)
 
-    for {rel, bytes} <- [{[@sentinel], "{}"}, {["a.txt"], "a"}] do
-      :ok =
-        Arca.put(
-          Sanctum.Context.actor(ctx),
-          UnitLocator.staged_object(unit, revision, rel),
-          bytes
-        )
-    end
+    Arca.Overlay.with_internal_writes(fn ->
+      for {rel, bytes} <- [{[@sentinel], "{}"}, {["a.txt"], "a"}] do
+        :ok =
+          Arca.put(
+            Sanctum.Context.actor(ctx),
+            UnitLocator.staged_object(unit, revision, rel),
+            bytes
+          )
+      end
+    end)
 
     revision
   end

@@ -301,7 +301,8 @@ defmodule Arca.PublicationContract do
       end
 
       # A revision's marker and objects laid under its prefix through the
-      # facade, as another member's writer stages them.
+      # facade, as another member's writer stages them: in the
+      # internal-write scope, the only one that writes under a staging area.
       defp lay(actor, unit, revision, tag) do
         marker =
           Jason.encode!(%{
@@ -309,10 +310,12 @@ defmodule Arca.PublicationContract do
             "started_at" => DateTime.to_iso8601(DateTime.utc_now())
           })
 
-        :ok = Arca.put(actor, UnitLocator.marker_path(unit, revision), marker)
+        Arca.Overlay.with_internal_writes(fn ->
+          :ok = Arca.put(actor, UnitLocator.marker_path(unit, revision), marker)
 
-        for {rel, bytes} <- whole(tag),
-            do: :ok = Arca.put(actor, UnitLocator.staged_object(unit, revision, rel), bytes)
+          for {rel, bytes} <- whole(tag),
+              do: :ok = Arca.put(actor, UnitLocator.staged_object(unit, revision, rel), bytes)
+        end)
 
         revision
       end
@@ -1053,12 +1056,18 @@ defmodule Arca.PublicationContract do
           assert {:error, :no_unit} =
                    Arca.replace_tree(actor, unit ++ ["sub"], [{["c.txt"], "c"}], cap: :exempt)
 
-          # A complete object set laid under the unit's staging, naming a
-          # revision no row names, is at most the collector's.
+          # Nor does a plain write land under the unit's staging: the
+          # staging area is reserved to the internal-write scope. A complete
+          # object set a writer that lost left there, naming a revision no
+          # row names, is at most the collector's.
           orphan = StorageUnits.new_revision()
+          planted = UnitLocator.staged_object(unit, orphan, [@sentinel])
+          assert {:error, {:reserved_path, ^planted}} = Arca.put(actor, planted, "hand-laid")
 
-          for {rel, bytes} <- whole("hand-laid"),
-              do: :ok = Arca.put(actor, UnitLocator.staged_object(unit, orphan, rel), bytes)
+          Arca.Overlay.with_internal_writes(fn ->
+            for {rel, bytes} <- whole("hand-laid"),
+                do: :ok = Arca.put(actor, UnitLocator.staged_object(unit, orphan, rel), bytes)
+          end)
 
           assert read(actor, unit) == :unpublished
           assert {:error, :not_found} = Arca.get(actor, unit ++ ["a.txt"])

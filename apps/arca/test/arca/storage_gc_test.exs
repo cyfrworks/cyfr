@@ -193,16 +193,21 @@ defmodule Arca.StorageGCTest do
   end
 
   # A whole revision's objects under a prefix no row names — what a writer
-  # that lost, or anyone with a put, leaves behind.
+  # that lost, or one that died, leaves behind. Laid in the internal-write
+  # scope, the only one that writes under a staging area.
   defp lay_prefix(actor, unit, revision, tag, opts \\ []) do
-    if Keyword.get(opts, :marker, true) do
-      marker = Jason.encode!(%{"revision" => revision, "started_at" => iso(DateTime.utc_now())})
-      :ok = Arca.put(actor, UnitLocator.marker_path(unit, revision), marker)
-    end
+    Arca.Overlay.with_internal_writes(fn ->
+      if Keyword.get(opts, :marker, true) do
+        marker =
+          Jason.encode!(%{"revision" => revision, "started_at" => iso(DateTime.utc_now())})
 
-    for {rel, bytes} <- files(tag) do
-      :ok = Arca.put(actor, UnitLocator.staged_object(unit, revision, rel), bytes)
-    end
+        :ok = Arca.put(actor, UnitLocator.marker_path(unit, revision), marker)
+      end
+
+      for {rel, bytes} <- files(tag) do
+        :ok = Arca.put(actor, UnitLocator.staged_object(unit, revision, rel), bytes)
+      end
+    end)
 
     revision
   end

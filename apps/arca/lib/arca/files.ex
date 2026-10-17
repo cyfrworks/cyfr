@@ -203,7 +203,9 @@ defmodule Arca.Files do
   Put `content` at `path` — `utf8` text, or bytes as `base64`. The tier
   decides whether the write may land and the storage cap whether it fits;
   a read of the registry or the agent index after it observes it. A
-  component's manifest must decode and validate as one.
+  component's manifest must decode and validate as one. The server's
+  store of unit revisions, a shaped folder's `.staging/`, refuses as
+  `{:reserved_path, path}` (`Arca.Overlay.reserved/1`).
   """
   @spec write(Prima.Actor.t(), String.t(), String.t(), String.t()) ::
           {:ok, %{written: String.t(), size: non_neg_integer()}} | {:error, term()}
@@ -249,7 +251,9 @@ defmodule Arca.Files do
   @doc """
   Remove a file, or a folder with everything in it. A unit the server
   ships refuses; a shaped folder above its units refuses too — units go
-  one at a time, by their own verbs.
+  one at a time, by their own verbs. The server's store of unit
+  revisions, a shaped folder's `.staging/`, refuses as
+  `{:reserved_path, path}` (`Arca.Overlay.reserved/1`).
   """
   @spec delete(Prima.Actor.t(), String.t()) :: {:ok, %{deleted: String.t()}} | {:error, term()}
   def delete(%Prima.Actor{} = actor, path) when is_binary(path) do
@@ -311,6 +315,13 @@ defmodule Arca.Files do
   defp writable(:open, _physical, _segments), do: :ok
 
   defp writable(:shaped, physical, segments) do
+    with :ok <- Arca.Overlay.reserved(physical), do: shaped_writable(physical, segments)
+  end
+
+  defp writable(:read, _physical, segments),
+    do: {:error, {:invalid_argument, read_only_message(segments)}}
+
+  defp shaped_writable(physical, segments) do
     case Arca.Storage.locate(physical) do
       :above_unit ->
         {:error, {:invalid_argument, above_unit_message(physical, segments)}}
@@ -326,17 +337,17 @@ defmodule Arca.Files do
     end
   end
 
-  defp writable(:read, _physical, segments),
-    do: {:error, {:invalid_argument, read_only_message(segments)}}
-
   defp deletable(:open, _physical, _segments), do: :ok
 
   # Above the units the storage layer decides: an empty stray folder goes,
-  # one holding units refuses.
+  # one holding units refuses. The revision store refuses before anything
+  # is listed.
   defp deletable(:shaped, physical, segments) do
-    case Arca.Storage.locate(physical) do
-      {:dir, unit, _sentinel} -> local_unit(unit, segments)
-      _above_inside_or_file -> :ok
+    with :ok <- Arca.Overlay.reserved(physical) do
+      case Arca.Storage.locate(physical) do
+        {:dir, unit, _sentinel} -> local_unit(unit, segments)
+        _above_inside_or_file -> :ok
+      end
     end
   end
 

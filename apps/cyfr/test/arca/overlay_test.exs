@@ -1637,13 +1637,17 @@ defmodule Arca.OverlayTest do
       {:ok, taken} = Arca.StorageUnits.register_draft(actor, root, key, "wrt_member")
       landed = Arca.StorageUnits.new_revision()
 
-      # The member's revision is staged under its own prefix as any is.
-      for {rel, bytes} <- [
-            {["cyfr-manifest.json"], ~s({"type":"tincture"})},
-            {["dist", "index.html"], "member"}
-          ] do
-        :ok = Arca.put(actor, Arca.Storage.UnitLocator.staged_object(@built, landed, rel), bytes)
-      end
+      # The member's revision is staged under its own prefix as any is, in
+      # the internal-write scope.
+      Arca.Overlay.with_internal_writes(fn ->
+        for {rel, bytes} <- [
+              {["cyfr-manifest.json"], ~s({"type":"tincture"})},
+              {["dist", "index.html"], "member"}
+            ] do
+          :ok =
+            Arca.put(actor, Arca.Storage.UnitLocator.staged_object(@built, landed, rel), bytes)
+        end
+      end)
 
       {:committed, _generation} =
         Arca.StorageUnits.stamped_commit(actor, taken, taken.current_revision, "wrt_member", %{
@@ -1989,11 +1993,13 @@ defmodule Arca.OverlayTest do
       revision = Arca.StorageUnits.new_revision()
 
       :ok =
-        Arca.put(
-          actor,
-          Arca.Storage.UnitLocator.staged_object(dir, revision, ["reference.md"]),
-          "step one: do the thing"
-        )
+        Arca.Overlay.with_internal_writes(fn ->
+          Arca.put(
+            actor,
+            Arca.Storage.UnitLocator.staged_object(dir, revision, ["reference.md"]),
+            "step one: do the thing"
+          )
+        end)
 
       assert {:error, :no_unit} = Arca.put(actor, dir ++ ["reference.md"], "step one")
 

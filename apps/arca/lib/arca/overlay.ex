@@ -211,7 +211,8 @@ defmodule Arca.Overlay do
 
   @doc """
   Run `fun` with this process exempt from the `:bundled` delete refusal,
-  the above-unit tree-delete refusal and the reserved-root write gate —
+  the above-unit tree-delete refusal, the staging areas' reservation
+  (`reserved/1`) and the reserved-root write gate —
   the shipped copy's and the unit commit's own scope, lexical and
   process-local (`try/after`), so no context shape can carry the
   exemption. Per-process by design: work handed to another process does
@@ -430,8 +431,8 @@ defmodule Arca.Overlay do
 
   @impl true
   def delete_tree(%Prima.Actor{} = actor, path) do
-    with :ok <- tree_deletable(actor, path),
-         :ok <- deletable(path) do
+    with :ok <- deletable(path),
+         :ok <- tree_deletable(actor, path) do
       case {at_unit(path), Arca.Storage.locate(path)} do
         {unit, _loc} when is_list(unit) ->
           removal(actor, unit)
@@ -902,8 +903,9 @@ defmodule Arca.Overlay do
   end
 
   @impl true
-  def ensure_dir(%Prima.Actor{} = actor, path),
-    do: tenant().ensure_dir(actor, path)
+  def ensure_dir(%Prima.Actor{} = actor, path) do
+    with :ok <- reserved(path), do: tenant().ensure_dir(actor, path)
+  end
 
   @impl true
   def serve_to_conn(conn, %Prima.Actor{} = actor, path, opts),
@@ -2427,11 +2429,15 @@ defmodule Arca.Overlay do
   # Write shapes, and the delete refusal
   # ---------------------------------------------------------------------------
 
-  # A tree is replaced inside a directory unit or outside the units: at a
-  # unit, above units, in place of a sentinel or below a file unit it would
-  # take a unit's shape with it. A unit is replaced whole by its commit,
-  # never by a swap at its path.
+  # A tree is replaced inside a directory unit or outside the units, never
+  # in a staging area (`reserved/1`): at a unit, above units, in place of a
+  # sentinel or below a file unit it would take a unit's shape with it. A
+  # unit is replaced whole by its commit, never by a swap at its path.
   defp replaceable(path) do
+    with :ok <- reserved(path), do: replaceable_shape(path)
+  end
+
+  defp replaceable_shape(path) do
     case Arca.Storage.locate(path) do
       :not_overlaid ->
         :ok
@@ -2445,10 +2451,14 @@ defmodule Arca.Overlay do
   end
 
   # A put or append must land inside a unit, or outside the units
-  # altogether: below a file unit there is no interior to write into, and
-  # a put exactly at a directory unit would drop a file where the unit's
-  # tree belongs.
+  # altogether, never in a staging area (`reserved/1`): below a file unit
+  # there is no interior to write into, and a put exactly at a directory
+  # unit would drop a file where the unit's tree belongs.
   defp writable(path) do
+    with :ok <- reserved(path), do: writable_shape(path)
+  end
+
+  defp writable_shape(path) do
     case Arca.Storage.locate(path) do
       loc when loc in [:not_overlaid, :above_unit] -> :ok
       {:file, unit} when unit != path -> {:error, :invalid_path}
@@ -2458,19 +2468,41 @@ defmodule Arca.Overlay do
   end
 
   # Refuse deleting a shipped unit whole: `{:error, :bundled}` for a
-  # delete AT a unit the seed ships. A file inside a directory unit
-  # deletes as an edit; the athanor's own unit deletes normally. Only the
-  # internal-write scope is exempt.
+  # delete AT a unit the seed ships, and anything in a staging area
+  # (`reserved/1`). A file inside a directory unit deletes as an edit;
+  # the athanor's own unit deletes normally. Only the internal-write scope
+  # is exempt.
   defp deletable(path) do
     if internal_writes?() do
       :ok
     else
-      case Arca.Storage.locate(path) do
-        {:file, unit} = loc when unit == path -> refuse_shipped(loc)
-        {:dir, unit, _sentinel} = loc when unit == path -> refuse_shipped(loc)
-        _inside_above_or_outside -> :ok
+      with :ok <- reserved(path) do
+        case Arca.Storage.locate(path) do
+          {:file, unit} = loc when unit == path -> refuse_shipped(loc)
+          {:dir, unit, _sentinel} = loc when unit == path -> refuse_shipped(loc)
+          _inside_above_or_outside -> :ok
+        end
       end
     end
+  end
+
+  @doc """
+  Whether a path a person names may be written, edited or deleted as far
+  as the staging areas go: `{:error, {:reserved_path, path}}` at or inside
+  a seeded root's staging area (`Arca.Storage.UnitLocator.staging?/1`),
+  `:ok` anywhere else. Every unit's revisions are staged and served there,
+  and the row names them, so only the internal-write scope — a commit, a
+  repair, the collector — writes or deletes there: a plain delete of the
+  area would leave every committed row naming bytes that are gone. Every
+  write, edit, delete, tree replacement and directory creation through
+  this module consults it, and `Arca.Files` asks it before its own tier
+  check so the person reads the same refusal at every door.
+  """
+  @spec reserved(Arca.Storage.path()) :: :ok | {:error, {:reserved_path, Arca.Storage.path()}}
+  def reserved(path) do
+    if UnitLocator.staging?(path) and not internal_writes?(),
+      do: {:error, {:reserved_path, path}},
+      else: :ok
   end
 
   defp refuse_shipped(loc) do
