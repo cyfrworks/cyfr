@@ -2151,8 +2151,11 @@ func volumeTarget(entry *yaml.Node, lookup func(string) (string, bool)) (string,
 // has or inherits through YAML merge keys targets it; an entry whose target
 // does not read counts as binding it, and so does any target of a service
 // that extends another when bound is nil, since its volumes are not in
-// this file. A list svc inherits is copied into its own volumes with the
-// mount, never replaced by a list of the mount alone.
+// this file. A list svc inherits, or reaches through an alias another
+// service may share, is copied into its own volumes with the mount, never
+// replaced by a list of the mount alone nor appended to in place; an
+// anchored list of its own, which other services may alias, is left as it
+// is and nothing is added.
 func ensureVolumeTarget(svc *yaml.Node, mount string, lookup func(string) (string, bool), bound map[string]bool) bool {
 	_, want, _ := strings.Cut(mount, ":")
 	want = path.Clean(want)
@@ -2173,7 +2176,11 @@ func ensureVolumeTarget(svc *yaml.Node, mount string, lookup func(string) (strin
 		}
 	}
 	item := &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: mount}
-	if own {
+	direct := mapValue(svc, "volumes")
+	if own && direct != nil && direct.Kind != yaml.AliasNode {
+		if seq.Anchor != "" {
+			return false
+		}
 		seq.Content = append(seq.Content, item)
 		return true
 	}
@@ -2250,7 +2257,9 @@ func ensureSequenceItem(parent *yaml.Node, key, item string) bool {
 		})
 		return true
 	}
-	if seq.Kind != yaml.SequenceNode {
+	// An anchored list may be aliased by another service, which an append
+	// would change too.
+	if seq.Kind != yaml.SequenceNode || seq.Anchor != "" {
 		return false
 	}
 	for _, child := range seq.Content {

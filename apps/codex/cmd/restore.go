@@ -527,20 +527,43 @@ func (r *restorer) publishCompose() error {
 	return errors.Join(d.Sync(), d.Close())
 }
 
+// The file names docker compose loads from the project directory when no
+// file is named, each list in its order of preference: one main file and at
+// most one override file read after it.
+var (
+	composeMainFiles     = []string{"compose.yaml", "compose.yml", "docker-compose.yml", "docker-compose.yaml"}
+	composeOverrideFiles = []string{"compose.override.yml", "compose.override.yaml", "docker-compose.override.yml", "docker-compose.override.yaml"}
+)
+
 // stagedComposeArgs are the compose arguments that read the configuration
-// the staged compose file gives once it is docker-compose.yml: the project
-// directory's override file, when there is one, read after it as compose
-// reads it by default.
-func (r *restorer) stagedComposeArgs(args ...string) []string {
+// the staged compose file gives once it is docker-compose.yml: the file set
+// compose loads by default, the staged file in docker-compose.yml's place.
+// The set is refused when it is not determined: another main file name
+// beside docker-compose.yml, which compose would load instead or warn
+// over, or more than one override file, of which compose picks one by an
+// order the restore does not own.
+func (r *restorer) stagedComposeArgs(args ...string) ([]string, error) {
 	files := []string{"compose", "-f", stagedCompose}
-	for _, name := range []string{"docker-compose.override.yml", "docker-compose.override.yaml"} {
-		if _, err := os.Stat(name); err == nil {
-			files = append(files, "-f", name)
-			break
+	for _, name := range composeMainFiles {
+		if _, err := os.Lstat(name); err == nil && name != "docker-compose.yml" {
+			return nil, fmt.Errorf("the project holds %s beside docker-compose.yml, so docker compose may not load the docker-compose.yml cyfr restore puts back; remove one of them", name)
 		}
 	}
+	var overrides []string
+	for _, name := range composeOverrideFiles {
+		if _, err := os.Lstat(name); err == nil {
+			overrides = append(overrides, name)
+		}
+	}
+	switch len(overrides) {
+	case 0:
+	case 1:
+		files = append(files, "-f", overrides[0])
+	default:
+		return nil, fmt.Errorf("the project holds the override files %s, of which docker compose loads one; keep one", strings.Join(overrides, ", "))
+	}
 	files = append(files, "--project-directory", ".")
-	return slices.Concat(files, profileArgs(r.profiles), args)
+	return slices.Concat(files, profileArgs(r.profiles), args), nil
 }
 
 // putBackHeld writes the held configuration files back.
@@ -593,7 +616,11 @@ func (r *restorer) readRestoredConfig() error {
 	}
 	ctx, cancel := r.detached(composeRunTimeout)
 	defer cancel()
-	raw, err := r.dockerOutput(ctx, nil, r.stagedComposeArgs("config", "--format", "json")...)
+	staged, err := r.stagedComposeArgs("config", "--format", "json")
+	if err != nil {
+		return refuse("%v", err)
+	}
+	raw, err := r.dockerOutput(ctx, nil, staged...)
 	if err != nil {
 		return fmt.Errorf("docker compose could not read the snapshot's configuration (%v)", err)
 	}

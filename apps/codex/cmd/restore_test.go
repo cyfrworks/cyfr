@@ -957,3 +957,32 @@ func TestRestoreReadsTheStagedConfigurationAsComposeWill(t *testing.T) {
 		})
 	}
 }
+
+// A file set compose would not load as the restore reads it refuses before
+// anything lands: another main file name beside docker-compose.yml, or more
+// than one override file.
+func TestRestoreRefusesAComposeFileSetItCannotStage(t *testing.T) {
+	compose := shippedCompose(t)
+	for name, files := range map[string][]string{
+		"another main file":  {"compose.yaml"},
+		"two override files": {"compose.override.yml", "docker-compose.override.yml"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			r := newRestoreScenario(t, compose, nil, nil)
+			for _, file := range files {
+				r.edit(file, "services: {}\n")
+			}
+			r.edit("data/blobs/x", "rewritten")
+			before := read(t, filepath.Join(r.project, "docker-compose.yml"))
+			out, err := r.restore(true)
+			if err == nil || !strings.Contains(err.Error(), files[0]) || !strings.Contains(err.Error(), "nothing of the snapshot was put back") {
+				t.Fatalf("restore answered %v\n%s", err, out)
+			}
+			r.stoppedUndeclared()
+			r.configAsBefore(before, string(r.env))
+			if slices.ContainsFunc(r.log(), func(line string) bool { return strings.Contains(line, " config ") }) {
+				t.Errorf("the restore read a configuration it cannot stage:\n%s", strings.Join(r.log(), "\n"))
+			}
+		})
+	}
+}

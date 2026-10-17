@@ -1890,3 +1890,33 @@ func TestEnsureCyfrComposeFieldsKeepsInheritedMounts(t *testing.T) {
 		}
 	})
 }
+
+// A list the cyfr service anchors, which another service may alias, is not
+// appended to: the other service's mounts and ports stay as they are.
+func TestEnsureCyfrComposeFieldsLeavesAnAnchoredListAlone(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "docker-compose.yml")
+	input := `services:
+  cyfr:
+    image: alpine:3.22
+    container_name: cyfr
+    env_file: &env [.env.shared]
+    ports: &ports
+      - "8080:8080"
+    volumes: &shared
+      - ./alternate-data:/app/data
+  other:
+    image: alpine:3.22
+    env_file: *env
+    ports: *ports
+    volumes: *shared
+`
+	if err := os.WriteFile(path, []byte(input), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if added, err := ensureComposeFields(path, map[string]bool{"/app/data": true}); err != nil || len(added) != 0 {
+		t.Fatalf("ensureComposeFields added %v (error %v) to lists another service aliases", added, err)
+	}
+	if got, _ := os.ReadFile(path); string(got) != input {
+		t.Errorf("docker-compose.yml was rewritten:\n%s", got)
+	}
+}
