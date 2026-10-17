@@ -756,8 +756,10 @@ defmodule Arca do
   adapter's exact guarantee). A failure before the swap answers its error
   and leaves the tree at `path` as it was. An adapter that cannot hide a
   partial tree refuses with `{:error, :atomic_replace_unsupported}` and
-  writes nothing. A write under `path` made during the replacement can
-  land in the tree it retires. Replacing a UNIT's tree is not this call:
+  writes nothing. A write under `path` made during the replacement waits
+  for the swap and lands in the new tree, or was made before it and went
+  with the old one: the adapter holds the tree against every writer
+  beneath it while it swaps. Replacing a UNIT's tree is not this call:
   a unit is replaced whole by its commit (`Arca.Overlay.commit_unit/4`),
   which publishes by its row and needs no tree swap of the adapter.
 
