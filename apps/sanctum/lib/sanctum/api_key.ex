@@ -688,7 +688,10 @@ defmodule Sanctum.ApiKey do
   Build an athanor-scoped `Sanctum.Context` from validated API-key metadata.
 
   Builds an API-key context from the stored key row. The `athanor_id` comes
-  from that row, independent of the creator's current membership. The
+  from that row, independent of the creator's current membership, and is
+  the one athanor the context lists, focuses and reads: the creator's
+  other seats widen nothing (`Sanctum.Context.focus/2`,
+  `Sanctum.Tenancy.list_athanors/1`). The
   namespace is the creator's personal slug from `Sanctum.Namespace.lookup/1`,
   with `_system` as the fallback when no slug is recorded.
 

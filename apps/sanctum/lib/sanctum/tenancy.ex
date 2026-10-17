@@ -74,13 +74,31 @@ defmodule Sanctum.Tenancy do
   The athanors the context may work in — the rows behind the caller's own
   active memberships, and their own athanor. A platform admin sees their
   own memberships like anyone else, and works in no other athanor.
+
+  A context an API key stands behind (`Sanctum.Context.key_bound?/1`) works
+  in the athanor the key was minted in alone, so its list is that athanor
+  while it is active, and its creator's seats name nothing here. Like the
+  roster, an outage lists fewer athanors, never more.
   """
   @spec list_athanors(Context.t()) :: [Sanctum.Tenancy.Athanors.athanor()]
-  def list_athanors(%Context{user_id: user_id}) when is_binary(user_id) do
-    Athanors.list_for_user(user_id)
+  def list_athanors(%Context{} = ctx) do
+    cond do
+      Context.key_bound?(ctx) -> key_athanor(ctx)
+      is_binary(ctx.user_id) -> Athanors.list_for_user(ctx.user_id)
+      true -> []
+    end
   end
 
   def list_athanors(_), do: []
+
+  defp key_athanor(%Context{athanor_id: id}) when is_binary(id) and id != "" do
+    case Athanors.get(id) do
+      {:ok, %{id: ^id, status: "active"} = athanor} -> [athanor]
+      _archived_absent_or_unreadable -> []
+    end
+  end
+
+  defp key_athanor(%Context{}), do: []
 
   # The membership-resolution override is a test-only seam. `do_resolve/1` is
   # defined in two compile-time variants: a production release — compiled with

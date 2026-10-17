@@ -847,19 +847,52 @@ defmodule Sanctum.Context do
   since been archived or bind the context to a generation it no longer
   has. A store that cannot answer either read is `{:error, :unavailable}`,
   never an absence.
+
+  A context an API key stands behind (`key_bound?/1`: the key's own, or a
+  credential derived from it) works in the athanor the key was minted in
+  and no other. Its focus is the key, not a seat: it focuses that athanor
+  whether or not the key's creator still sits there, and any other is
+  answered `{:error, :not_found}` before any row is read, whatever seats
+  the creator holds. Its athanor is archived to it as to a member.
   """
   @spec focus(t(), String.t() | %{required(:id) => String.t(), optional(atom()) => term()}) ::
           {:ok, t()} | {:error, :not_found | :archived | :unavailable}
   def focus(%__MODULE__{} = ctx, %{id: athanor_id}) when is_binary(athanor_id),
     do: focus(ctx, athanor_id)
 
-  def focus(%__MODULE__{} = ctx, athanor_id) when is_binary(athanor_id) do
+  def focus(%__MODULE__{athanor_id: home} = ctx, athanor_id) when is_binary(athanor_id) do
+    cond do
+      not key_bound?(ctx) -> read_and_focus(ctx, athanor_id, &seated/2)
+      athanor_id == home -> read_and_focus(ctx, athanor_id, &keyed/2)
+      true -> {:error, :not_found}
+    end
+  end
+
+  defp read_and_focus(ctx, athanor_id, admit) do
     case Sanctum.Tenancy.Athanors.get(athanor_id) do
-      {:ok, %{id: ^athanor_id} = athanor} -> seated(ctx, athanor)
+      {:ok, %{id: ^athanor_id} = athanor} -> admit.(ctx, athanor)
       {:error, :not_found} -> {:error, :not_found}
       {:error, _unreadable} -> {:error, :unavailable}
     end
   end
+
+  @doc """
+  Whether an API key stands behind the context: the key's own context
+  (`auth_method: :api_key`), or a credential derived from one (its binding's
+  source is the key). Such a context belongs to the athanor the key was
+  minted in, which `Sanctum.ApiKey.context_from_metadata/1` reads from the
+  key's row into `athanor_id`, and `focus/2` never moves it from there.
+  """
+  @spec key_bound?(t()) :: boolean()
+  def key_bound?(%__MODULE__{auth_method: :api_key}), do: true
+  def key_bound?(%__MODULE__{credential_binding: %{source_kind: :api_key}}), do: true
+  def key_bound?(%__MODULE__{}), do: false
+
+  # A key's own athanor: its standing is the key's (`Sanctum.ApiKey`
+  # re-checks the channel on every use), so no seat is read; the athanor's
+  # row and standing are, as for anyone.
+  defp keyed(_ctx, %{status: "archived"}), do: {:error, :archived}
+  defp keyed(ctx, athanor), do: {:ok, refocused(ctx, athanor, :key)}
 
   # The seat first, the standing second: whether an athanor is archived is
   # its members' to hear, and a caller with no seat is told what a missing

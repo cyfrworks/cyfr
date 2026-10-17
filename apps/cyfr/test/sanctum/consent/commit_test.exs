@@ -1223,6 +1223,59 @@ defmodule Sanctum.Consent.CommitTest do
     "reagent:local.commit-two"
   end
 
+  describe "a public profile's one entry" do
+    test "public decisions without publish_from are refused before anything is prepared",
+         %{ctx: ctx} do
+      publish!(ctx, "commit-direct-public")
+      ref = "reagent:local.commit-direct-public"
+
+      sentence =
+        "A public profile is published from an owner profile (profile.publish), never committed directly."
+
+      # What the publish path would pin, zero and drop, asked for directly.
+      direct = %{
+        ref: ref,
+        kind: :public,
+        scope: :versionless,
+        tool_servers: [%{"name" => "elsewhere", "url" => "https://mcp.example.com/mcp"}]
+      }
+
+      {:ok, plan} = Plan.plan(ctx, %{ref: ref, kind: :public})
+      # A proof and digest a preview did mint, so the commit is refused at
+      # its preparation and not for an empty field.
+      {:ok, owner_preview} = Commit.preview(ctx, %{ref: ref})
+
+      for decisions <- [Map.drop(direct, [:scope, :tool_servers]), direct] do
+        assert {:error, {:invalid_argument, ^sentence}} = Commit.preview(ctx, decisions)
+
+        assert {:error, {:invalid_argument, ^sentence}} =
+                 Commit.commit(ctx, %{
+                   decisions: decisions,
+                   plan_token: plan.plan_token,
+                   proof: owner_preview.proof,
+                   commit_digest: owner_preview.commit_digest,
+                   expected_consent_revision: plan.expected_consent_revision
+                 })
+      end
+
+      # The provider's wire spelling reaches the same refusal.
+      assert {:error, _refused} =
+               Profile.handle(ctx, %{
+                 "action" => "commit",
+                 "decisions" => %{"ref" => ref, "kind" => "public"},
+                 "plan_token" => plan.plan_token,
+                 "proof" => "",
+                 "commit_digest" => "",
+                 "expected_consent_revision" => plan.expected_consent_revision
+               })
+
+      # No public profile was written; an owner commit still lands.
+      {:ok, profiles} = Arca.ConsentStorage.profile_entries(Sanctum.Context.actor(ctx), ref)
+      refute Enum.any?(profiles, &(&1.kind == :public))
+      assert {:ok, %{profile_id: _}} = walk!(ctx, ref)
+    end
+  end
+
   describe "matching and lifetimes" do
     test "matching and binding lifetimes are committed per edge without implicit disclosure",
          %{ctx: ctx} do

@@ -281,7 +281,7 @@ defmodule Sanctum.Decisions do
 
     opts =
       if tenant?(ctx),
-        do: [mcp_log: Sanctum.RequestLog.closed(stored, completion)],
+        do: [mcp_log: Sanctum.RequestLog.closed(ctx, stored, completion)],
         else: []
 
     Arca.DecisionLog.finish(actor(ctx), call_id, record, opts)

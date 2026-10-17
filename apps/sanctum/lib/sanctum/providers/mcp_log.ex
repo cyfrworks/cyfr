@@ -13,7 +13,10 @@ defmodule Sanctum.Providers.McpLog do
   residual the annotations cannot express: the log is tenant-scoped, so an
   actor with no athanor is refused before any row is read. An actor of
   `:platform` scope passes that check, and each store's reader decides what
-  it reads: `list` and `stats` read one athanor's rows, the actor's.
+  it reads: `list` and `stats` read one athanor's rows, the actor's. A
+  row's `output` is what the call answered from that athanor; a call that
+  answered from another holds `%{"redacted" => "cross_athanor"}` there
+  instead (`Sanctum.RequestLog`).
 
   `correlate` answers what a request left behind: its request-log rows,
   the executions it started and its policy logs (`correlation/2`, which

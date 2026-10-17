@@ -154,6 +154,7 @@ defmodule Sanctum.Consent.Commit do
 
   @canvas_not_public "A canvas has no public profile: it is the person's own data page."
   @declaration_refused "This tincture's declaration is refused by today's rules, so it has no public profile."
+  @public_needs_publish "A public profile is published from an owner profile (profile.publish), never committed directly."
 
   # ---------------------------------------------------------------------------
   # Preview
@@ -500,6 +501,13 @@ defmodule Sanctum.Consent.Commit do
       )
     end
   end
+
+  # A public profile has one entry, the publish path above: it alone zeroes
+  # the source's limits, drops the tool servers and pins the scope and the
+  # invoke mode. Decisions naming the public kind without it are refused,
+  # for a preview as for a commit.
+  defp prepare(_ctx, %{kind: :public}),
+    do: {:error, {:invalid_argument, @public_needs_publish}}
 
   defp prepare(ctx, decisions), do: prepare_with_blob(ctx, decisions, nil)
 

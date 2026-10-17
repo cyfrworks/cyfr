@@ -10,7 +10,9 @@ defmodule Sanctum.Providers.Athanor do
   group with the caller as its only member. There is no delete: a group is
   archived, and archived by its last member leaving. Mutations are a
   person's act — an API-key context is refused, since a key belongs to one
-  athanor and is nobody's identity.
+  athanor and is nobody's identity. For the same reason a key lists and
+  reads the athanor it was minted in and no other, whatever seats its
+  creator holds (`Sanctum.Context.focus/2`, `Sanctum.Tenancy.list_athanors/1`).
 
   Every verb but two acts in an athanor the caller holds a seat in, and
   anyone without a current seat is answered as if the athanor did not

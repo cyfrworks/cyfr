@@ -28,6 +28,17 @@ defmodule Sanctum.RequestLog do
   the decision alone. A public tincture's calls carry the tincture's
   athanor.
 
+  A row's output is the athanor's only when the output came from it. A
+  call may read another athanor its caller sits in — a note from the
+  person's own athanor, the members or facts of another group — and the
+  members of the athanor it ran in must not read that through its log. An
+  answer names each athanor it read from (`athanor_id`, `athanor`, or an
+  athanor row's `id`), so a success whose answer names any athanor other
+  than the row's stores `%{"redacted" => "cross_athanor"}` in place of its
+  output, beside the row's operation and status. The caller's own answer is
+  untouched, and an answer that names only the row's athanor, or none, is
+  stored as it is.
+
   ## Reading the log
 
   The rows are security rows: Sanctum is their only reader, and a reader
@@ -54,6 +65,9 @@ defmodule Sanctum.RequestLog do
 
   alias Prima.Decision
   alias Sanctum.Context
+
+  @cross_athanor %{"redacted" => "cross_athanor"}
+  @locators [:id, :athanor_id, :athanor, "id", "athanor_id", "athanor"]
 
   # ============================================================================
   # Projections
@@ -115,19 +129,23 @@ defmodule Sanctum.RequestLog do
     do: Arca.McpLog.list(Context.actor(ctx), opts)
 
   @doc """
-  The completion columns of a call's row: `"success"` with its sanitized
-  output, or `"error"` with the refusal's sentence (`text`, rendered by the
-  caller from the reason). `:duration_ms` and `:routed_to` label either;
-  an absent one is left as the row has it.
+  The completion columns of a call's row, filed under `ctx`'s athanor:
+  `"success"` with its sanitized output — or the `cross_athanor` marker in
+  its place when the answer names another athanor (the module doc) — or
+  `"error"` with the refusal's sentence (`text`, rendered by the caller
+  from the reason). `:duration_ms` and `:routed_to` label either; an
+  absent one is left as the row has it.
   """
-  @spec closed({:ok, term()} | {:error, String.t()}, map()) :: map()
-  def closed({:ok, output}, meta) when is_map(meta) do
-    %{status: "success", output: encode_json(sanitize_output(output))}
+  @spec closed(Context.t(), {:ok, term()} | {:error, String.t()}, map()) :: map()
+  def closed(%Context{athanor_id: athanor_id}, {:ok, output}, meta) when is_map(meta) do
+    stored = if foreign?(output, athanor_id), do: @cross_athanor, else: sanitize_output(output)
+
+    %{status: "success", output: encode_json(stored)}
     |> labelled(meta, [:duration_ms, :routed_to])
     |> redacted_texts()
   end
 
-  def closed({:error, text}, meta) when is_binary(text) and is_map(meta) do
+  def closed(%Context{}, {:error, text}, meta) when is_binary(text) and is_map(meta) do
     %{status: "error", error: text}
     |> labelled(meta, [:duration_ms, :routed_to])
     |> redacted_texts()
@@ -152,6 +170,36 @@ defmodule Sanctum.RequestLog do
       end
     end)
   end
+
+  # Whether an answer names an athanor other than `home`, the row's. The
+  # locator keys are the ones answers name their athanor under; prose under
+  # any other key is a body, never read as a locator. A tools/call text
+  # block carries its structured answer as JSON text, so it is decoded and
+  # read as the structure it is.
+  defp foreign?(%{"type" => "text", "text" => text} = block, home) when is_binary(text) do
+    decoded =
+      case Jason.decode(text) do
+        {:ok, structured} when is_map(structured) or is_list(structured) -> structured
+        _prose -> nil
+      end
+
+    foreign?(decoded, home) or foreign?(Map.delete(block, "text"), home)
+  end
+
+  # A struct is read by its fields (a clock, a source); it enumerates nothing.
+  defp foreign?(%_{} = struct, home), do: foreign?(Map.from_struct(struct), home)
+
+  defp foreign?(%{} = map, home) do
+    Enum.any?(map, fn {key, value} ->
+      (key in @locators and other_athanor?(value, home)) or foreign?(value, home)
+    end)
+  end
+
+  defp foreign?(list, home) when is_list(list), do: Enum.any?(list, &foreign?(&1, home))
+  defp foreign?(_leaf, _home), do: false
+
+  defp other_athanor?(value, home),
+    do: Sanctum.Tenancy.Athanors.athanor_id?(value) and value != home
 
   # ============================================================================
   # Input Sanitization

@@ -495,17 +495,18 @@ defmodule Sanctum.Gate.RequestLogTest do
       assert RequestLog.opened(Sanctum.Context.internal(), decision(ctx), %{}) == nil
     end
 
-    test "a completion's columns leave out what it does not name, and never a code" do
-      assert RequestLog.closed({:error, "No."}, %{duration_ms: 3}) ==
+    test "a completion's columns leave out what it does not name, and never a code",
+         %{ctx: ctx} do
+      assert RequestLog.closed(ctx, {:error, "No."}, %{duration_ms: 3}) ==
                %{status: "error", error: "No.", duration_ms: 3}
 
       assert %{status: "success", routed_to: "arca"} =
-               RequestLog.closed({:ok, %{}}, %{routed_to: "arca"})
+               RequestLog.closed(ctx, {:ok, %{}}, %{routed_to: "arca"})
 
       # A JSON-RPC code is a transport's rendering of a class: a caller's
       # code is not a column the gate's rows write.
-      refute Map.has_key?(RequestLog.closed({:error, "No."}, %{error_code: -1}), :error_code)
-      refute Map.has_key?(RequestLog.closed({:ok, %{}}, %{error_code: -1}), :error_code)
+      refute Map.has_key?(RequestLog.closed(ctx, {:error, "No."}, %{error_code: -1}), :error_code)
+      refute Map.has_key?(RequestLog.closed(ctx, {:ok, %{}}, %{error_code: -1}), :error_code)
     end
   end
 
@@ -830,12 +831,15 @@ defmodule Sanctum.Gate.RequestLogTest do
       assert pending.status == "pending"
       for text <- texts.(pending), do: refute(text =~ key)
 
-      failed = Sanctum.RequestLog.closed({:error, "upstream said #{key}"}, %{routed_to: key})
+      failed =
+        Sanctum.RequestLog.closed(ctx, {:error, "upstream said #{key}"}, %{routed_to: key})
+
       assert failed.error == "upstream said [REDACTED]"
       assert failed.routed_to == "[REDACTED]"
 
       succeeded =
         Sanctum.RequestLog.closed(
+          ctx,
           {:ok, %{"content" => [%{"type" => "text", "text" => key}]}},
           %{routed_to: "external:#{key}:lookup", duration_ms: 3}
         )

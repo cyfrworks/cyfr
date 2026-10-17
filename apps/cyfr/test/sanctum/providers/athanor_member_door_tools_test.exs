@@ -223,15 +223,20 @@ defmodule Sanctum.Providers.AthanorMemberDoorToolsTest do
            )
   end
 
-  test "an API key cannot create groups or add members", %{alice: alice, ctx: ctx} do
-    k = ctx.(alice, Sanctum.TestContext.athanor_id(), auth_method: :api_key)
+  test "an API key cannot create groups or add members, and lists its own athanor alone",
+       %{alice: alice, ctx: ctx, n: n} do
+    {:ok, home} = Athanors.create_group(alice, "Key home #{n}")
+    {:ok, other} = Athanors.create_group(alice, "Elsewhere #{n}")
+    k = ctx.(alice, home.id, auth_method: :api_key)
 
     assert {:error, msg} = call(k, "athanor", %{"action" => "create", "name" => "Nope"})
     assert Refusals.render(msg) =~ "person's act"
     assert {:error, msg} = call(k, "member", %{"action" => "add", "email" => "x@example.com"})
     assert Refusals.render(msg) =~ "person's act"
-    # reads are fine
-    assert {:ok, %{athanors: _}} = call(k, "athanor", %{"action" => "list"})
+    # Reads are the key's athanor's, never its creator's other seats.
+    assert {:ok, %{athanors: [%{id: id}], count: 1}} = call(k, "athanor", %{"action" => "list"})
+    assert id == home.id
+    refute id == other.id
   end
 
   test "a person's own athanor cannot be archived here",
