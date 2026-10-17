@@ -110,6 +110,7 @@ defmodule Arca.TurnStorage do
   @step_kinds Prima.TurnState.step_kinds()
   @outcomes Prima.TurnState.outcomes()
   @decisions Prima.TurnState.decisions()
+  @invalidated Prima.TurnState.invalidated()
   # The open turns a suspend or a takeover moves: an `accepted` turn has
   # no root attempt yet, so nothing of it is held to suspend or take over.
   @held @open -- ["accepted"]
@@ -1503,13 +1504,13 @@ defmodule Arca.TurnStorage do
           where: a.athanor_id == ^athanor_id and a.id == ^step.approval_id,
           where: a.status == "pending"
         )
-        |> Arca.Repo.update_all(set: [status: "invalidated", decided_at: DateTime.utc_now()])
+        |> Arca.Repo.update_all(set: [status: @invalidated, decided_at: DateTime.utc_now()])
 
         from(m in Message,
           where: m.athanor_id == ^athanor_id and m.approval_id == ^step.approval_id,
           where: m.status == "pending"
         )
-        |> Arca.Repo.update_all(set: [status: "invalidated"])
+        |> Arca.Repo.update_all(set: [status: @invalidated])
       end
 
       %{step: closed} =

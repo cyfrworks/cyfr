@@ -42,6 +42,12 @@ defmodule Prima.TurnStateTest do
              ["ok", "error", "denied", "skipped", "cancelled", "uncertain"]
 
     assert TurnState.decisions() == ["approved", "declined", "expired", "error"]
+
+    assert TurnState.approval_statuses() ==
+             ["pending", "approved", "declined", "expired", "error", "invalidated"]
+
+    assert TurnState.invalidated() == "invalidated"
+    refute TurnState.invalidated() in TurnState.decisions()
     assert TurnState.pause_reasons() == ["approval", "launch"]
     assert TurnState.opening_states() == ["proposed", "dispatched"]
     assert TurnState.recoveries() == ["replay_safe"]

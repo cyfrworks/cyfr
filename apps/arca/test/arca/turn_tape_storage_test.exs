@@ -704,6 +704,8 @@ defmodule Arca.TurnTapeStorageTest do
       assert {:ok, %{status: "invalidated"}} = TurnStorage.approval(actor, approval.id)
 
       assert %{status: "invalidated"} = Arca.Repo.get!(Message, card.id)
+      # The status it took is one the turn vocabulary names.
+      assert "invalidated" in Prima.TurnState.approval_statuses()
       # The dispatched step is untouched.
       assert {:ok, %{dispatch_state: "dispatched"}} = TurnStorage.step(actor, s1.id)
     end

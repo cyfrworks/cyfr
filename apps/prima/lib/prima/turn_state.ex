@@ -7,7 +7,8 @@ defmodule Prima.TurnState do
   them still own work and which are over, the kinds a turn step has, the
   states a step is recorded in, the recovery a call may be reviewed
   with, the outcomes a step closes with, the decisions an approval takes
-  and the resolution each writes, the reasons a runner pauses a turn
+  and the resolution each writes, the statuses an approval carries, the
+  reasons a runner pauses a turn
   for, and what a turn's terminal status writes on its root attempt and
   root execution.
 
@@ -22,6 +23,8 @@ defmodule Prima.TurnState do
   @step_kinds ["model", "tool", "ui", "approval", "clone", "launch"]
   @outcomes ["ok", "error", "denied", "skipped", "cancelled", "uncertain"]
   @decisions ["approved", "declined", "expired", "error"]
+  @invalidated "invalidated"
+  @approval_statuses ["pending" | @decisions] ++ [@invalidated]
   @pause_reasons ["approval", "launch"]
   @opening_states ["proposed", "dispatched"]
   @recoveries ["replay_safe"]
@@ -56,6 +59,22 @@ defmodule Prima.TurnState do
   @doc "Every decision an approval can take."
   @spec decisions() :: [String.t()]
   def decisions, do: @decisions
+
+  @doc """
+  Every status an approval and its card carry: `pending` until it is
+  answered, then the decision it took (`decisions/0`), or `invalidated`
+  when its step was skipped before anyone answered (`invalidated/0`).
+  """
+  @spec approval_statuses() :: [String.t()]
+  def approval_statuses, do: @approval_statuses
+
+  @doc """
+  The status a pending approval and its card take when the step it asks
+  about is skipped before a decision: no decision was made, so it is none
+  of `decisions/0`.
+  """
+  @spec invalidated() :: String.t()
+  def invalidated, do: @invalidated
 
   @doc """
   The reasons a runner pauses its running turn for: a card waiting on a

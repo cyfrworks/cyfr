@@ -2758,7 +2758,8 @@ defmodule Arca.Repo.Migrations.Baseline do
       # data/athanors/{athanor_id}/threads/{thread}/{msg}/), an error's
       # source.
       add :payload, :text
-      # Approvals: pending | running | approved | declined | error.
+      # Approvals: pending | running | approved | declined | expired | error |
+      # invalidated.
       add :status, :string
       add :resolved_by, :string
       add :resolved_at, :utc_datetime_usec
@@ -2943,7 +2944,8 @@ defmodule Arca.Repo.Migrations.Baseline do
       add :thread_id, :string
       add :step_id, :string
       add :message_id, :string
-      # pending | approved | declined | expired | error
+      # pending | approved | declined | expired | error | invalidated
+      # (Prima.TurnState.approval_statuses/0)
       add :status, :string, null: false
       add :scope, :string
       add :proposal_digest, :string, null: false
