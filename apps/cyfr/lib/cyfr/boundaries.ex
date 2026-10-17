@@ -1060,6 +1060,7 @@ defmodule Cyfr.Boundaries do
         CyfrWeb.Pipelines CyfrWeb.Plugs.ApiSecurityHeaders CyfrWeb.Plugs.AuthRateLimit
         CyfrWeb.Plugs.Authenticate CyfrWeb.Plugs.CORS CyfrWeb.Plugs.CallIdentity
         CyfrWeb.Plugs.FrameRequest CyfrWeb.Plugs.MCPOrigin CyfrWeb.Plugs.MCPRateLimit
+        CyfrWeb.Plugs.ParserErrors CyfrWeb.Plugs.RawBodyReader
         CyfrWeb.Plugs.ScrubTinctureCredentials CyfrWeb.Plugs.TinctureRateLimit
         CyfrWeb.Plugs.VerifyWebhookSignature CyfrWeb.Plugs.WebhookIdempotency
         CyfrWeb.Plugs.WebhookRateLimit CyfrWeb.SSE CyfrWeb.SignInResponse
@@ -1071,7 +1072,10 @@ defmodule Cyfr.Boundaries do
           "(`CyfrWeb.MinimalPage`), the API's sign-out drops the cookie session through " <>
           "the sign-in response (`CyfrWeb.SignInResponse`), and `Emissary.Router` " <>
           "declares the OAuth callback throttle from the shared pipelines " <>
-          "(`CyfrWeb.Pipelines`). " <>
+          "(`CyfrWeb.Pipelines`). The MCP pipeline parses its body behind the transport's " <>
+          "rate limit and authentication with the host's one parser definition " <>
+          "(`CyfrWeb.Plugs.ParserErrors` under `CyfrWeb.Plugs.RawBodyReader`'s options and " <>
+          "caps), which the endpoint parses every other body with. " <>
           "Boundary's exports are global, and `CyfrWeb` exports more of the shared tier than " <>
           "this roster to every surface that lists it, so no declaration can say it."
     },

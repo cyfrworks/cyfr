@@ -751,7 +751,7 @@ defmodule CyfrWeb.EndpointParsersTest.MCPTransportTest do
   end
 
   defp receive_bytes(_socket, received, size) do
-    <<body::binary-size(size), rest::binary>> = received
+    <<body::binary-size(^size), rest::binary>> = received
     {body, rest}
   end
 

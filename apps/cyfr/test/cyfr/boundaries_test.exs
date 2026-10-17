@@ -864,7 +864,7 @@ defmodule Cyfr.BoundariesTest do
           def kept(key), do: Arca.Cache.get(key)
           def taken(key), do: Arca.Cache.take(key)
           def threads(actor), do: Threads.list(actor)
-          def runs, do: &Arca.Execution.list/1
+          def runs, do: &Arca.Execution.list/2
           def consultations(actor), do: Arca.PolicyLog.list(actor, [])
         end
         ''')
