@@ -685,9 +685,11 @@ defmodule Arca do
   re-stamps the manifest without holding the whole tree in memory.
   `cap:` is threaded through to each `put/4` (default `:checked`, like
   any other write). A file copied from under `data/` keeps the sources its
-  settled generation carries, joined with `sources:` (none by default) in
-  the destination's generation; a file copied from anywhere else carries
-  `sources:` alone, an unnamed outside source when it names none.
+  settled generation carries, joined with `sources:` in the destination's
+  generation; a file copied from anywhere else carries `sources:` alone.
+  Either way a copy that names no `sources:` is a host write that names
+  none: an unnamed outside source joins, since a `transform:` may have
+  written anything; `sources: []` names none.
   """
   @spec copy_tree(Prima.Actor.t(), Arca.Storage.path(), Arca.Storage.path(), keyword()) ::
           {:ok, [Arca.Storage.path()]} | {:error, term()}
@@ -734,8 +736,8 @@ defmodule Arca do
     if Arca.ObjectRevisions.object_path?(path) do
       with {:ok, content, sources} <-
              guarded(actor, path, &Arca.ObjectRevisions.read(actor, &1)) do
-        {:ok, content,
-         Keyword.put(put_opts, :sources, Prima.Source.union(sources, opts[:sources] || []))}
+        writer = Keyword.get_lazy(opts, :sources, fn -> [Prima.Source.outside(nil)] end)
+        {:ok, content, Keyword.put(put_opts, :sources, Prima.Source.union(sources, writer))}
       end
     else
       with {:ok, content} <- get(actor, path), do: {:ok, content, put_opts}

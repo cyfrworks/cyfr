@@ -594,4 +594,124 @@ defmodule Arca.ObjectRevisionsTest do
     assert {:ok, "was a file"} = stored(actor, old, ["data", "a"])
     assert {:error, :not_found} = Arca.get(actor, ["data", "a"])
   end
+
+  # ---------------------------------------------------------------------------
+  # Tree shape at settlement, names, limits, abandoned marks and copies
+  # ---------------------------------------------------------------------------
+
+  test "of a file and a path under it marked together, the second to settle refuses and the first stays readable",
+       %{actor: actor} do
+    for {first, second, refusal} <- [{:child, :parent, :eisdir}, {:parent, :child, :enotdir}] do
+      parent = ["data", "shape-#{first}"]
+      paths = %{parent: parent, child: parent ++ ["c"]}
+      p = mark(actor, paths.parent, :put, 6, [])
+      c = mark(actor, paths.child, :put, 5, [])
+      marks = %{parent: p, child: c}
+      :ok = ObjectRevisions.store(actor, p, "parent")
+      :ok = ObjectRevisions.store(actor, c, "child")
+
+      assert settle(actor, marks[first]) == :settled
+      assert settle(actor, marks[second]) == refusal
+
+      assert {:ok, _bytes} = Arca.get(actor, paths[first])
+      assert {:error, :not_found} = Arca.get(actor, paths[second])
+    end
+  end
+
+  test "a name with a combining mark lists, counts and deletes what lies under it, and is no file over it",
+       %{actor: actor} do
+    dir = ["data", "é"]
+    :ok = Arca.put(actor, dir ++ ["child"], "child", sources: [])
+
+    assert {:ok, [{"child", :file}]} = Arca.list_typed(actor, dir)
+    assert {:ok, [["data", "é", "child"]]} = Arca.list_recursive(actor, dir)
+    assert {:ok, %{files: 1, bytes: 5}} = cold_usage(actor, dir)
+    assert {:error, :eisdir} = Arca.put(actor, dir, "parent", sources: [])
+
+    assert :ok = Arca.delete_tree(actor, dir)
+    assert {:error, :not_found} = Arca.get(actor, dir ++ ["child"])
+  end
+
+  test "a path at the logical limits stays writable, whatever its generation's key adds",
+       %{actor: actor} do
+    deep = ["data" | Enum.map(1..31, &Integer.to_string/1)]
+    assert :ok = Prima.PathSafety.validate_segments!(deep)
+    assert :ok = Arca.put(actor, deep, "deep", sources: [])
+    assert {:ok, "deep"} = Arca.get(actor, deep)
+
+    long =
+      ["data"] ++ List.duplicate(String.duplicate("a", 240), 4) ++ [String.duplicate("b", 55)]
+
+    assert byte_size(Enum.join(long, "/")) == 1024
+    assert :ok = Arca.put(actor, long, "long", sources: [])
+    assert {:ok, "long"} = Arca.get(actor, long)
+
+    # Its generation gaining a digit lengthens its key, never its path.
+    near =
+      ["data"] ++ List.duplicate(String.duplicate("a", 240), 4) ++ [String.duplicate("c", 45)]
+
+    for n <- 1..10, do: assert(:ok = Arca.put(actor, near, Integer.to_string(n), sources: []))
+    assert {:ok, "10"} = Arca.get(actor, near)
+    assert Enum.max(generations(actor, near)) >= 10
+
+    # Past the logical limits nothing is marked.
+    assert_raise ArgumentError, fn -> Arca.put(actor, deep ++ ["x"], "x", sources: []) end
+    assert row(actor, deep ++ ["x"]) == nil
+  end
+
+  test "a mark abandoned past its settling window is collected, though it is its path's last",
+       %{actor: actor} do
+    path = ["data", "abandoned.txt"]
+    m = mark(actor, path, :put, 15, [])
+    :ok = ObjectRevisions.store(actor, m, "never published")
+    old = DateTime.add(DateTime.utc_now(), -40, :day)
+
+    {1, _} =
+      Arca.Repo.update_all(
+        from(g in ObjectGeneration,
+          where:
+            g.athanor_id == ^actor.athanor_id and g.path == ^m.key and
+              g.generation == ^m.generation
+        ),
+        set: [marked_at: old]
+      )
+
+    {:ok, :expired} =
+      Arca.Repo.transaction(fn -> ObjectRevisions.settle!(actor, m, [], fresh: true) end)
+
+    assert {:ok, 1} =
+             ObjectRevisions.collect(actor, DateTime.add(DateTime.utc_now(), -30, :day), false)
+
+    assert {:error, :not_found} = stored(actor, m.generation, path)
+    assert generations(actor, path) == []
+
+    # One marked now stays while its writer may still settle it.
+    fresh = mark(actor, path, :put, 5, [])
+    :ok = ObjectRevisions.store(actor, fresh, "fresh")
+
+    assert {:ok, 0} =
+             ObjectRevisions.collect(
+               actor,
+               DateTime.add(DateTime.utc_now(), 86_400, :second),
+               false
+             )
+
+    assert {:ok, "fresh"} = stored(actor, fresh.generation, path)
+  end
+
+  test "a copy naming no sources joins an unnamed outside source, and sources: [] joins none",
+       %{actor: actor} do
+    :ok = Arca.put(actor, ["data", "src", "f"], "clean", sources: [])
+
+    assert {:ok, [["f"]]} =
+             Arca.copy_tree(actor, ["data", "src"], ["data", "dst"],
+               transform: fn _relative, _content -> "outside material" end
+             )
+
+    assert {:ok, "outside material", [%Prima.Source{class: :outside, name: nil}]} =
+             ObjectRevisions.read(actor, ["data", "dst", "f"])
+
+    assert {:ok, [["f"]]} = Arca.copy_tree(actor, ["data", "src"], ["data", "own"], sources: [])
+    assert {:ok, "clean", []} = ObjectRevisions.read(actor, ["data", "own", "f"])
+  end
 end

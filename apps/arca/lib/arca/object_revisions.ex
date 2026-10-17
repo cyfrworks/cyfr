@@ -131,7 +131,15 @@ defmodule Arca.ObjectRevisions do
 
   @typedoc "What a settlement did (`settle!/3`)."
   @type settlement ::
-          :settled | :superseded | :dead | :base_moved | :exists | :missing | :precondition_failed
+          :settled
+          | :superseded
+          | :dead
+          | :base_moved
+          | :exists
+          | :missing
+          | :precondition_failed
+          | :enotdir
+          | :eisdir
 
   @doc "Whether `path` (normalized segments) names the guest-object tree, `data/` or below."
   @spec object_path?(Arca.Storage.path()) :: boolean()
@@ -451,7 +459,8 @@ defmodule Arca.ObjectRevisions do
       {:ok, :dead} when op == :create ->
         {:error, :unknown}
 
-      {:ok, outcome} when outcome in [:dead, :exists, :missing, :precondition_failed] ->
+      {:ok, outcome}
+      when outcome in [:dead, :exists, :missing, :precondition_failed, :enotdir, :eisdir] ->
         {:error, outcome}
 
       # Past its settling window, or a database that could not answer once
@@ -631,6 +640,7 @@ defmodule Arca.ObjectRevisions do
   def mark!(%Prima.Actor{athanor_id: athanor_id}, path, op, %{bytes: bytes, sources: sources})
       when is_binary(athanor_id) and athanor_id != "" do
     key = key(path)
+    lock_ancestors!(athanor_id, path)
     ensure_row!(athanor_id, key)
     row = lock!(athanor_id, key)
     visible = if is_integer(row.settled_generation), do: visible_bytes!(athanor_id, key)
@@ -787,6 +797,7 @@ defmodule Arca.ObjectRevisions do
   # arca:db-raise-ok inside the caller's transaction
   def settle!(%Prima.Actor{athanor_id: athanor_id}, %Mark{} = mark, sources, opts \\ [])
       when is_binary(athanor_id) and athanor_id != "" do
+    lock_ancestors!(athanor_id, mark.segments)
     row = lock!(athanor_id, mark.key)
 
     case mark.op do
@@ -819,9 +830,20 @@ defmodule Arca.ObjectRevisions do
     generation = generation!(athanor_id, mark)
 
     cond do
-      is_nil(generation) or (fresh? and stale?(generation)) -> :expired
-      mark.generation <= (row.deleted_at_generation || 0) -> :dead
-      true -> settle_condition(athanor_id, row, mark, op, generation, sources)
+      is_nil(generation) or (fresh? and stale?(generation)) ->
+        :expired
+
+      mark.generation <= (row.deleted_at_generation || 0) ->
+        :dead
+
+      true ->
+        # The shape the mark checked, checked again under the locks of the
+        # path and its ancestors: of a file and a path under it marked
+        # together, the second to settle refuses.
+        case shape(athanor_id, mark.segments, mark.key) do
+          :ok -> settle_condition(athanor_id, row, mark, op, generation, sources)
+          {:refused, reason} -> reason
+        end
     end
   end
 
@@ -849,6 +871,9 @@ defmodule Arca.ObjectRevisions do
     :settled
   end
 
+  # Since when a write with no attempt may still settle what it marked.
+  defp settling_since, do: DateTime.add(DateTime.utc_now(), -@settle_within_ms, :millisecond)
+
   defp stale?(%ObjectGeneration{marked_at: marked_at}),
     do: DateTime.diff(DateTime.utc_now(), marked_at, :millisecond) > @settle_within_ms
 
@@ -868,7 +893,8 @@ defmodule Arca.ObjectRevisions do
   Collect the athanor's generations marked before `cutoff` that nothing
   can read or settle any more — neither the pointer, nor a pending
   intent's mark, nor the row's last generation while it is above the
-  pointer and the fence (a write with no attempt in flight) — deleting
+  pointer and the fence and inside the settling window of a write with no
+  attempt (twelve hours: such a write in flight) — deleting
   each object, then its row, so a pass that dies between the two leaves a
   row the next pass collects; then the objects under `objects/` no row
   names once older than `cutoff`. `dry_run: true` counts. `{:ok, count}`.
@@ -910,7 +936,8 @@ defmodule Arca.ObjectRevisions do
       where:
         not (g.generation == r.generation and
                g.generation > coalesce(r.settled_generation, 0) and
-               g.generation > coalesce(r.deleted_at_generation, 0)),
+               g.generation > coalesce(r.deleted_at_generation, 0) and
+               g.marked_at > ^settling_since()),
       where:
         not exists(
           from(i in StorageWriteIntent,
@@ -1086,6 +1113,28 @@ defmodule Arca.ObjectRevisions do
     )
   end
 
+  # The rows of the path's ancestors, locked in path order before the
+  # path's own: a write and a write under it take their locks in one
+  # order, so their shape checks never pass each other by.
+  # arca:db-raise-ok inside the caller's transaction
+  defp lock_ancestors!(athanor_id, path) do
+    case ancestors(path) do
+      [] ->
+        :ok
+
+      ancestors ->
+        from(r in ObjectRevision,
+          where: r.athanor_id == ^athanor_id and r.path in ^ancestors,
+          order_by: [asc: r.path],
+          select: r.path
+        )
+        |> Arca.QueryHelpers.for_update()
+        |> Arca.Repo.all()
+
+        :ok
+    end
+  end
+
   # arca:db-raise-ok inside the caller's transaction
   defp lock!(athanor_id, key) do
     from(r in ObjectRevision, where: r.athanor_id == ^athanor_id and r.path == ^key)
@@ -1113,7 +1162,7 @@ defmodule Arca.ObjectRevisions do
 
   defp at_or_under(query, prefix) do
     below = prefix <> "/"
-    n = String.length(below)
+    n = code_points(below)
 
     from(r in query,
       where: r.path == ^prefix or fragment("substr(?, 1, ?)", r.path, ^n) == ^below
@@ -1126,9 +1175,13 @@ defmodule Arca.ObjectRevisions do
 
   defp strictly_under(query, prefix) do
     below = prefix <> "/"
-    n = String.length(below)
+    n = code_points(below)
     from(r in query, where: fragment("substr(?, 1, ?)", r.path, ^n) == ^below)
   end
+
+  # A prefix's length as SQL's `substr` counts it, in code points (a
+  # grapheme can be several).
+  defp code_points(text), do: text |> String.to_charlist() |> length()
 
   # ---------------------------------------------------------------------------
   # Keys

@@ -719,7 +719,21 @@ defmodule Arca.Storage do
       iex> Arca.Storage.validate_path!(["data", "..", "..", "etc", "passwd"])
       ** (ArgumentError) Path traversal rejected: segment \"..\" is not allowed
   """
-  defdelegate validate_path!(segments), to: Prima.PathSafety, as: :validate_segments!
+  # A guest object's generation key, `objects/<generation>/<path>`
+  # (`Arca.ObjectRevisions`), is held to the logical limits of its path
+  # under `data/`, never to them plus its own two segments: every path a
+  # guest may write has a key every adapter admits.
+  @spec validate_path!([String.t()]) :: :ok
+  def validate_path!(["objects", generation, "data" | _] = segments) when is_binary(generation) do
+    if generation =~ ~r/\A[1-9][0-9]{0,18}\z/ do
+      [_objects, _generation | logical] = segments
+      Prima.PathSafety.validate_segments!(logical)
+    else
+      Prima.PathSafety.validate_segments!(segments)
+    end
+  end
+
+  def validate_path!(segments), do: Prima.PathSafety.validate_segments!(segments)
 
   @doc "Read content from storage"
   @callback get(Prima.Actor.t(), path()) :: {:ok, binary()} | error()

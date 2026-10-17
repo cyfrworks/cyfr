@@ -5,10 +5,12 @@ defmodule Opus.AttemptLedgerTest do
   @moduledoc """
   What an attempt hands its guest joins the run's source ledger before the
   runner is answered (`Opus.Ledger.join/3`): an entry's disclosed fields
-  and a dispensed token as vault-disclosed material; a storage read, a
-  listing and an existence check as material read through the storage
-  grant, a `data/` object carrying no recorded sources of its own and so
-  outside too. The bare scope listing carries nothing.
+  and a dispensed token as vault-disclosed material; a storage read as
+  material read through the storage grant, joined for a `data/` object
+  with the sources its settled generation was written with; a listing and
+  an existence check through the storage grant and as outside material
+  too, since a name records no sources. The bare scope listing carries
+  nothing.
   """
 
   use ExUnit.Case, async: false

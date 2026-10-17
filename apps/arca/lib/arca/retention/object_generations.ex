@@ -11,7 +11,9 @@ defmodule Arca.Retention.ObjectGenerations do
   A path's settled generation is never collected, whatever its age: it is
   what the path reads. Neither is the generation a pending intent marked,
   nor the path's last generation while it stands above the pointer and
-  the deletion fence, a write with no attempt still in flight. The object
+  the deletion fence inside the twelve hours a write with no attempt may
+  still settle it in: past that, an abandoned mark goes like any other
+  generation. The object
   goes before its row, so a pass that stops between the two leaves a row
   the next pass collects; an object whose row is already gone (a store
   that landed after its generation was collected) is deleted once older

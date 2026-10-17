@@ -1524,6 +1524,11 @@ defmodule Arca.ExecutionAttempts do
       :dead ->
         {"failed", "dead", {:failed, {:error, :dead}}}
 
+      # A file and a path under it marked together: the second to settle
+      # refuses, nothing of it published.
+      shape when shape in [:enotdir, :eisdir] ->
+        {"failed", Atom.to_string(shape), {:failed, {:error, shape}}}
+
       :base_moved ->
         if attempt < Arca.ObjectRevisions.append_attempts(),
           do: :rederive,
