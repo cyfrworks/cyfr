@@ -62,13 +62,18 @@ defmodule Compendium.Tincture.PolicyWritersTest do
   end
 
   defp joined({:<<>>, meta, parts}) when is_list(parts) do
-    case Enum.chunk_while(parts, [], &run/2, &flush/1) do
+    case parts |> Enum.map(&segment/1) |> Enum.chunk_while([], &run/2, &flush/1) do
       [text] when is_binary(text) -> text
       joined -> {:<<>>, meta, joined}
     end
   end
 
   defp joined(node), do: node
+
+  # A literal segment is read as its literal whatever its specifier
+  # (`::binary`, `::utf8`, a size); an interpolation's segment is not one.
+  defp segment({:"::", _, [literal, _specifier]}) when is_binary(literal), do: literal
+  defp segment(part), do: part
 
   defp run(part, [text]) when is_binary(part) and is_binary(text), do: {:cont, [text <> part]}
   defp run(part, []), do: {:cont, [part]}
@@ -245,5 +250,39 @@ defmodule Compendium.Tincture.PolicyWritersTest do
     assert %{"built.ex" => hits} = writers([{"built.ex", source}])
     assert Enum.sort(hits) == ["allow-forms", "frame-ancestors 'none'"]
     assert %{"built.ex" => [{".wasm", "application/wasm"}]} = type_tables([{"built.ex", source}])
+  end
+
+  test "a directive built from typed literal binary segments is found" do
+    assert <<"script"::binary, "-src 'none'">> == "script-src 'none'"
+
+    source = ~S"""
+    defmodule TypedPolicy do
+      def policy, do: <<"script"::binary, "-src 'none'">>
+    end
+    """
+
+    assert Map.has_key?(writers([{"typed_policy.ex", source}]), "typed_policy.ex")
+  end
+
+  test "a sandbox token built from typed literal binary segments is found" do
+    assert <<"allow-"::binary, "scripts">> == "allow-scripts"
+
+    source = ~S"""
+    defmodule TypedSandbox do
+      def token, do: <<"allow-"::binary, "scripts">>
+    end
+    """
+
+    assert Map.has_key?(writers([{"typed_sandbox.ex", source}]), "typed_sandbox.ex")
+  end
+
+  test "a served type pair built from typed literal binary segments is found" do
+    source = ~S"""
+    defmodule TypedTypes do
+      def types, do: %{<<"."::binary, "html">> => <<"text/"::binary, "html">>}
+    end
+    """
+
+    assert Map.has_key?(type_tables([{"typed_types.ex", source}]), "typed_types.ex")
   end
 end
