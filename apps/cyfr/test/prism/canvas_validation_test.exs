@@ -52,7 +52,7 @@ defmodule Prism.CanvasValidationTest do
     {:ok, conn: conn, user: user, athanor: athanor, ctx: ctx}
   end
 
-  # A canvas version laid in the athanor's tree with its component row.
+  # A canvas version committed in the athanor's tree with its component row.
   defp canvas!(ctx, name, version) do
     manifest = %{
       "name" => name,
@@ -66,15 +66,10 @@ defmodule Prism.CanvasValidationTest do
       }
     }
 
-    dir =
-      Arca.Adapters.Local.build_path(
-        Sanctum.Context.actor(ctx),
-        ["components", "tinctures", "local", name, version]
-      )
-
-    File.mkdir_p!(dir)
-    File.write!(Path.join(dir, "cyfr-manifest.json"), Jason.encode!(manifest))
-    File.write!(Path.join(dir, "canvas.js"), "export default (c) => c.render({type: \"spacer\"})")
+    Arca.Test.UnitFixtures.tenant_component!(ctx, "tincture", "local", name, version,
+      manifest: manifest,
+      files: [{"canvas.js", "export default (c) => c.render({type: \"spacer\"})"}]
+    )
 
     digest = "sha256:" <> Base.encode16(:crypto.hash(:sha256, name <> version), case: :lower)
     {:ok, release_digest} = Compendium.ReleaseDigest.compute(digest, manifest)

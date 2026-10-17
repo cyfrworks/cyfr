@@ -4,6 +4,7 @@
 defmodule Prism.TinctureRegistryTest do
   use ExUnit.Case, async: false
 
+  alias Arca.Test.UnitFixtures
   alias Prism.TinctureRegistry
 
   # The registry resolves every tincture's athanor to a route segment, so the
@@ -17,9 +18,6 @@ defmodule Prism.TinctureRegistryTest do
     base = Path.join(System.tmp_dir!(), "tincture_reg_test_#{:rand.uniform(1_000_000)}")
     original_path = Application.get_env(:arca, :base_path)
     Application.put_env(:arca, :base_path, base)
-
-    tincture_dir = fixture_dir(athanor.id, "local", "test-dash", "1.0.0")
-    File.mkdir_p!(tincture_dir)
 
     manifest = %{
       "name" => "test-dash",
@@ -39,9 +37,6 @@ defmodule Prism.TinctureRegistryTest do
       }
     }
 
-    File.write!(Path.join(tincture_dir, "cyfr-manifest.json"), Jason.encode!(manifest))
-    File.write!(Path.join(tincture_dir, "index.html"), "<html><body>Test</body></html>")
-
     on_exit(fn ->
       if original_path do
         Application.put_env(:arca, :base_path, original_path)
@@ -52,17 +47,25 @@ defmodule Prism.TinctureRegistryTest do
       File.rm_rf!(base)
     end)
 
-    %{base: base, tincture_dir: tincture_dir, athanor: athanor}
+    unit =
+      lay!(athanor.id, "local", "test-dash", "1.0.0", manifest, [
+        {"index.html", "<html><body>Test</body></html>"}
+      ])
+
+    %{base: base, unit: unit, athanor: athanor}
   end
 
-  defp fixture_dir(athanor_id, publisher, name, version) do
-    ctx = Sanctum.Context.build(user_id: "fixture", athanor_id: athanor_id, authenticated: true)
-
-    Arca.Adapters.Local.build_path(
-      Sanctum.Context.actor(ctx),
-      ["components", "tinctures", publisher, name, version]
+  # A tincture unit committed in `athanor_id`'s tree through the facade,
+  # the one way a unit lands. Returns its path segments.
+  defp lay!(athanor_id, publisher, name, version, manifest, files \\ []) do
+    UnitFixtures.tenant_component!(fixture_ctx(athanor_id), "tincture", publisher, name, version,
+      manifest: manifest,
+      files: files
     )
   end
+
+  defp fixture_ctx(athanor_id),
+    do: Sanctum.Context.build(user_id: "fixture", athanor_id: athanor_id, authenticated: true)
 
   describe "GenServer lifecycle" do
     test "starts and loads tinctures" do
@@ -106,9 +109,13 @@ defmodule Prism.TinctureRegistryTest do
     # The setup's manifest declares `tincture.window`, as the shipped seed
     # versions still do: an extra nothing reads, registered without it.
     test "a manifest declaring window hints registers, and its entry carries none", %{
-      tincture_dir: tincture_dir
+      unit: unit
     } do
-      manifest = Jason.decode!(File.read!(Path.join(tincture_dir, "cyfr-manifest.json")))
+      manifest =
+        Jason.decode!(
+          UnitFixtures.unit_file!(fixture_ctx("ath_test"), unit, "cyfr-manifest.json")
+        )
+
       assert %{"window" => %{"width" => 800}} = manifest["tincture"]
 
       name = :test_window_extra
@@ -131,13 +138,12 @@ defmodule Prism.TinctureRegistryTest do
 
     test "a window hint of any shape registers, ignored and unrefused", %{
       athanor: athanor,
-      tincture_dir: tincture_dir
+      unit: unit
     } do
+      index = UnitFixtures.unit_file!(fixture_ctx(athanor.id), unit, "index.html")
+
       for {window, n} <- Enum.with_index(["800x600", 800]) do
         name = "hinted-#{n}"
-        dir = fixture_dir(athanor.id, "local", name, "1.0.0")
-        File.mkdir_p!(dir)
-        File.cp!(Path.join(tincture_dir, "index.html"), Path.join(dir, "index.html"))
 
         manifest = %{
           "name" => name,
@@ -147,7 +153,7 @@ defmodule Prism.TinctureRegistryTest do
           "tincture" => %{"entry" => "index.html", "window" => window}
         }
 
-        File.write!(Path.join(dir, "cyfr-manifest.json"), Jason.encode!(manifest))
+        lay!(athanor.id, "local", name, "1.0.0", manifest, [{"index.html", index}])
       end
 
       name = :test_window_any_shape
@@ -189,9 +195,6 @@ defmodule Prism.TinctureRegistryTest do
   describe "version resolution" do
     test "picks latest version when multiple exist" do
       # Add a newer version
-      v2_dir = fixture_dir("ath_test", "local", "test-dash", "2.0.0")
-      File.mkdir_p!(v2_dir)
-
       manifest = %{
         "name" => "test-dash",
         "type" => "tincture",
@@ -201,7 +204,7 @@ defmodule Prism.TinctureRegistryTest do
         "tincture" => %{"entry" => "index.html", "public" => true}
       }
 
-      File.write!(Path.join(v2_dir, "cyfr-manifest.json"), Jason.encode!(manifest))
+      lay!("ath_test", "local", "test-dash", "2.0.0", manifest)
 
       name = :test_version
       {:ok, pid} = TinctureRegistry.start_link(name: name)
@@ -218,9 +221,6 @@ defmodule Prism.TinctureRegistryTest do
     # A release must sort after its prereleases regardless of storage listing order.
     test "a prerelease never outranks its release" do
       for version <- ["1.0.0-rc1", "1.0.0"] do
-        dir = fixture_dir("ath_test", "local", "test-pre", version)
-        File.mkdir_p!(dir)
-
         manifest = %{
           "name" => "test-pre",
           "type" => "tincture",
@@ -230,7 +230,7 @@ defmodule Prism.TinctureRegistryTest do
           "tincture" => %{"entry" => "index.html", "public" => true}
         }
 
-        File.write!(Path.join(dir, "cyfr-manifest.json"), Jason.encode!(manifest))
+        lay!("ath_test", "local", "test-pre", version, manifest)
       end
 
       name = :test_prerelease
@@ -258,9 +258,6 @@ defmodule Prism.TinctureRegistryTest do
       assert length(TinctureRegistry.list_tinctures(name, lookup("ath_test"))) == 1
 
       # Add a new tincture
-      new_dir = fixture_dir("ath_test", "local", "new-tincture", "0.1.0")
-      File.mkdir_p!(new_dir)
-
       manifest = %{
         "name" => "new-tincture",
         "type" => "tincture",
@@ -269,7 +266,7 @@ defmodule Prism.TinctureRegistryTest do
         "tincture" => %{"entry" => "index.html"}
       }
 
-      File.write!(Path.join(new_dir, "cyfr-manifest.json"), Jason.encode!(manifest))
+      lay!("ath_test", "local", "new-tincture", "0.1.0", manifest)
 
       :ok = TinctureRegistry.reload(name)
 
@@ -291,19 +288,13 @@ defmodule Prism.TinctureRegistryTest do
           created_by: "test"
         })
 
-      other_dir = fixture_dir(other.id, "bystander", "other-dash", "0.1.0")
-      File.mkdir_p!(other_dir)
-
-      File.write!(
-        Path.join(other_dir, "cyfr-manifest.json"),
-        Jason.encode!(%{
-          "name" => "other-dash",
-          "type" => "tincture",
-          "version" => "0.1.0",
-          "publisher" => "bystander",
-          "tincture" => %{"entry" => "index.html"}
-        })
-      )
+      lay!(other.id, "bystander", "other-dash", "0.1.0", %{
+        "name" => "other-dash",
+        "type" => "tincture",
+        "version" => "0.1.0",
+        "publisher" => "bystander",
+        "tincture" => %{"entry" => "index.html"}
+      })
 
       name = :test_reload_scoped
       {:ok, pid} = TinctureRegistry.start_link(name: name)
@@ -312,19 +303,13 @@ defmodule Prism.TinctureRegistryTest do
       assert length(TinctureRegistry.list_tinctures(name, lookup(other.id))) == 1
       before_count = length(TinctureRegistry.list_tinctures(name, lookup("ath_test")))
 
-      scoped_dir = fixture_dir("ath_test", "local", "scoped-add", "0.1.0")
-      File.mkdir_p!(scoped_dir)
-
-      File.write!(
-        Path.join(scoped_dir, "cyfr-manifest.json"),
-        Jason.encode!(%{
-          "name" => "scoped-add",
-          "type" => "tincture",
-          "version" => "0.1.0",
-          "publisher" => "local",
-          "tincture" => %{"entry" => "index.html"}
-        })
-      )
+      lay!("ath_test", "local", "scoped-add", "0.1.0", %{
+        "name" => "scoped-add",
+        "type" => "tincture",
+        "version" => "0.1.0",
+        "publisher" => "local",
+        "tincture" => %{"entry" => "index.html"}
+      })
 
       :ok = TinctureRegistry.reload_athanor(name, "ath_test")
 
@@ -337,14 +322,14 @@ defmodule Prism.TinctureRegistryTest do
       GenServer.stop(pid)
     end
 
-    test "an athanor's own removal is pruned by its own reload" do
+    test "an athanor's own removal is pruned by its own reload", %{unit: unit} do
       name = :test_reload_prune
       {:ok, pid} = TinctureRegistry.start_link(name: name)
       :sys.get_state(pid)
 
       assert length(TinctureRegistry.list_tinctures(name, lookup("ath_test"))) == 1
 
-      File.rm_rf!(fixture_dir("ath_test", "local", "test-dash", "1.0.0"))
+      :ok = Arca.delete_tree(Sanctum.Context.actor(fixture_ctx("ath_test")), unit)
       :ok = TinctureRegistry.reload_athanor(name, "ath_test")
 
       assert TinctureRegistry.list_tinctures(name, lookup("ath_test")) == []
@@ -363,10 +348,6 @@ defmodule Prism.TinctureRegistryTest do
           created_by: "test"
         })
 
-      # Physical layout: athanors/{athanor_id}/components/tinctures/{publisher}/{name}/{version}/
-      other_dir = fixture_dir(other.id, "acme", "acme-dash", "0.1.0")
-      File.mkdir_p!(other_dir)
-
       manifest = %{
         "name" => "acme-dash",
         "type" => "tincture",
@@ -375,7 +356,7 @@ defmodule Prism.TinctureRegistryTest do
         "tincture" => %{"entry" => "index.html"}
       }
 
-      File.write!(Path.join(other_dir, "cyfr-manifest.json"), Jason.encode!(manifest))
+      lay!(other.id, "acme", "acme-dash", "0.1.0", manifest)
 
       name = :test_ext_athanor
       {:ok, pid} = TinctureRegistry.start_link(name: name)
@@ -406,12 +387,9 @@ defmodule Prism.TinctureRegistryTest do
           created_by: "test"
         })
 
-      {:ok, _} = Sanctum.Tenancy.Athanors.archive(archived)
-
+      # Each tree holds a committed tincture; the archive comes after, as
+      # an athanor holding units is archived.
       for athanor_id <- [archived.id, "ath_ghost"] do
-        dir = fixture_dir(athanor_id, "local", "orphan", "0.1.0")
-        File.mkdir_p!(dir)
-
         manifest = %{
           "name" => "orphan",
           "type" => "tincture",
@@ -420,8 +398,10 @@ defmodule Prism.TinctureRegistryTest do
           "tincture" => %{"entry" => "index.html"}
         }
 
-        File.write!(Path.join(dir, "cyfr-manifest.json"), Jason.encode!(manifest))
+        lay!(athanor_id, "local", "orphan", "0.1.0", manifest)
       end
+
+      {:ok, _} = Sanctum.Tenancy.Athanors.archive(archived)
 
       name = :test_orphans
       {:ok, pid} = TinctureRegistry.start_link(name: name)
@@ -482,9 +462,6 @@ defmodule Prism.TinctureRegistryTest do
 
   describe "skips non-tincture manifests" do
     test "ignores type=app manifests" do
-      app_dir = fixture_dir("ath_test", "local", "legacy-app", "1.0.0")
-      File.mkdir_p!(app_dir)
-
       manifest = %{
         "name" => "legacy-app",
         "type" => "app",
@@ -492,7 +469,7 @@ defmodule Prism.TinctureRegistryTest do
         "publisher" => "local"
       }
 
-      File.write!(Path.join(app_dir, "cyfr-manifest.json"), Jason.encode!(manifest))
+      lay!("ath_test", "local", "legacy-app", "1.0.0", manifest)
 
       name = :test_skip_app
       {:ok, pid} = TinctureRegistry.start_link(name: name)
@@ -512,9 +489,6 @@ defmodule Prism.TinctureRegistryTest do
   # `tincture.media.icon` or `tincture.media.previews`. SVG is allowed.
   describe "raster image-asset reject — launch constraint" do
     test "rejects tincture with manifest-declared PNG icon" do
-      dir = fixture_dir("ath_test", "local", "has-png-icon", "1.0.0")
-      File.mkdir_p!(dir)
-
       manifest = %{
         "name" => "has-png-icon",
         "type" => "tincture",
@@ -526,7 +500,7 @@ defmodule Prism.TinctureRegistryTest do
         }
       }
 
-      File.write!(Path.join(dir, "cyfr-manifest.json"), Jason.encode!(manifest))
+      lay!("ath_test", "local", "has-png-icon", "1.0.0", manifest)
 
       name = :test_reject_png_icon
       {:ok, pid} = TinctureRegistry.start_link(name: name)
@@ -542,9 +516,6 @@ defmodule Prism.TinctureRegistryTest do
     end
 
     test "rejects tincture with JPEG preview" do
-      dir = fixture_dir("ath_test", "local", "has-jpg-preview", "1.0.0")
-      File.mkdir_p!(dir)
-
       manifest = %{
         "name" => "has-jpg-preview",
         "type" => "tincture",
@@ -556,7 +527,7 @@ defmodule Prism.TinctureRegistryTest do
         }
       }
 
-      File.write!(Path.join(dir, "cyfr-manifest.json"), Jason.encode!(manifest))
+      lay!("ath_test", "local", "has-jpg-preview", "1.0.0", manifest)
 
       name = :test_reject_jpg_preview
       {:ok, pid} = TinctureRegistry.start_link(name: name)
@@ -572,10 +543,6 @@ defmodule Prism.TinctureRegistryTest do
     end
 
     test "rejects tincture with convention-discovered PNG icon" do
-      dir = fixture_dir("ath_test", "local", "conv-png", "1.0.0")
-
-      File.mkdir_p!(Path.join(dir, "public/media"))
-
       manifest = %{
         "name" => "conv-png",
         "type" => "tincture",
@@ -584,10 +551,11 @@ defmodule Prism.TinctureRegistryTest do
         "tincture" => %{"entry" => "index.html"}
       }
 
-      File.write!(Path.join(dir, "cyfr-manifest.json"), Jason.encode!(manifest))
       # discover_media/1 auto-finds this icon by convention even though the
       # manifest doesn't declare it — the validator must still reject it.
-      File.write!(Path.join([dir, "public/media/icon.png"]), <<137, 80, 78, 71>>)
+      lay!("ath_test", "local", "conv-png", "1.0.0", manifest, [
+        {"public/media/icon.png", <<137, 80, 78, 71>>}
+      ])
 
       name = :test_reject_conv_png
       {:ok, pid} = TinctureRegistry.start_link(name: name)
@@ -603,9 +571,6 @@ defmodule Prism.TinctureRegistryTest do
     end
 
     test "allows SVG icon" do
-      dir = fixture_dir("ath_test", "local", "svg-ok", "1.0.0")
-      File.mkdir_p!(dir)
-
       manifest = %{
         "name" => "svg-ok",
         "type" => "tincture",
@@ -617,7 +582,7 @@ defmodule Prism.TinctureRegistryTest do
         }
       }
 
-      File.write!(Path.join(dir, "cyfr-manifest.json"), Jason.encode!(manifest))
+      lay!("ath_test", "local", "svg-ok", "1.0.0", manifest)
 
       name = :test_allow_svg
       {:ok, pid} = TinctureRegistry.start_link(name: name)
@@ -633,9 +598,6 @@ defmodule Prism.TinctureRegistryTest do
     end
 
     test "extension check is case-insensitive" do
-      dir = fixture_dir("ath_test", "local", "upper-png", "1.0.0")
-      File.mkdir_p!(dir)
-
       manifest = %{
         "name" => "upper-png",
         "type" => "tincture",
@@ -647,7 +609,7 @@ defmodule Prism.TinctureRegistryTest do
         }
       }
 
-      File.write!(Path.join(dir, "cyfr-manifest.json"), Jason.encode!(manifest))
+      lay!("ath_test", "local", "upper-png", "1.0.0", manifest)
 
       name = :test_upper_png
       {:ok, pid} = TinctureRegistry.start_link(name: name)
@@ -665,9 +627,6 @@ defmodule Prism.TinctureRegistryTest do
 
   describe "the declared frame" do
     defp lay(name, tincture) do
-      dir = fixture_dir("ath_test", "local", name, "1.0.0")
-      File.mkdir_p!(dir)
-
       manifest = %{
         "name" => name,
         "type" => "tincture",
@@ -676,8 +635,7 @@ defmodule Prism.TinctureRegistryTest do
         "tincture" => Map.put(tincture, "entry", "index.html")
       }
 
-      File.write!(Path.join(dir, "cyfr-manifest.json"), Jason.encode!(manifest))
-      File.write!(Path.join(dir, "index.html"), "<html></html>")
+      lay!("ath_test", "local", name, "1.0.0", manifest, [{"index.html", "<html></html>"}])
     end
 
     defp listed(server) do
@@ -711,9 +669,6 @@ defmodule Prism.TinctureRegistryTest do
     end
 
     test "a canvas is listed with its placement, its module as its entry" do
-      dir = fixture_dir("ath_test", "local", "home-canvas", "1.0.0")
-      File.mkdir_p!(dir)
-
       manifest = %{
         "name" => "home-canvas",
         "type" => "tincture",
@@ -726,8 +681,9 @@ defmodule Prism.TinctureRegistryTest do
         }
       }
 
-      File.write!(Path.join(dir, "cyfr-manifest.json"), Jason.encode!(manifest))
-      File.write!(Path.join(dir, "canvas.js"), "export default () => {}")
+      lay!("ath_test", "local", "home-canvas", "1.0.0", manifest, [
+        {"canvas.js", "export default () => {}"}
+      ])
 
       row = listed(:test_canvas_row)["home-canvas"]
       assert %{placement: "canvas", background: false, capabilities: []} = row.frame
@@ -767,45 +723,35 @@ defmodule Prism.TinctureRegistryTest do
   end
 
   describe "the registry's acknowledged epoch" do
-    # A tincture laid beneath the storage layer: nothing stamps it, and
-    # nothing announces it.
-    defp lay_quietly(name) do
-      dir = fixture_dir("ath_test", "local", name, "0.1.0")
-      File.mkdir_p!(dir)
-
-      File.write!(
-        Path.join(dir, "cyfr-manifest.json"),
-        Jason.encode!(%{
-          "name" => name,
-          "type" => "tincture",
-          "version" => "0.1.0",
-          "publisher" => "local",
-          "tincture" => %{"entry" => "index.html"}
-        })
-      )
-    end
-
-    test "a read that finds it moved rescans the athanor, with no announcement heard" do
+    # A unit lands only by a commit, and a commit stamps the components
+    # epoch, so no tincture lands unacknowledged: a read past it finds the
+    # epoch moved since its scan and rescans the athanor.
+    test "a tincture committed after the scan moves the epoch, and the next read lists it" do
       name = :test_epoch_marker
       {:ok, pid} = TinctureRegistry.start_link(name: name)
       ctx = lookup("ath_test")
-
-      assert ["test-dash"] = Enum.map(TinctureRegistry.list_tinctures(name, ctx), & &1.name)
-
-      lay_quietly("quiet-dash")
-
-      # The marker still stands at the epoch the scan began from.
-      assert ["test-dash"] = Enum.map(TinctureRegistry.list_tinctures(name, ctx), & &1.name)
-
-      # Any change under components/ the registry acknowledges moves the
-      # epoch — here one that touches no tincture, so nothing announces it.
       actor = Sanctum.Context.actor(ctx)
-      key = "catalysts/local/elsewhere-#{System.unique_integer([:positive])}/1.0.0"
-      {:ok, pending} = Arca.StorageProjectionChanges.begin_edit(actor, "components", key)
-      {:ok, _} = Arca.StorageProjectionChanges.finish_edit(actor, "components", key, pending)
+
+      assert ["test-dash"] = Enum.map(TinctureRegistry.list_tinctures(name, ctx), & &1.name)
+
+      {:ok, %{acknowledged_epoch: scanned}} =
+        Arca.StorageProjectionRoots.epoch(actor, "components")
+
+      lay!("ath_test", "local", "quiet-dash", "0.1.0", %{
+        "name" => "quiet-dash",
+        "type" => "tincture",
+        "version" => "0.1.0",
+        "publisher" => "local",
+        "tincture" => %{"entry" => "index.html"}
+      })
 
       assert ["quiet-dash", "test-dash"] =
                name |> TinctureRegistry.list_tinctures(ctx) |> Enum.map(& &1.name) |> Enum.sort()
+
+      assert {:ok, %{acknowledged_epoch: moved}} =
+               Arca.StorageProjectionRoots.epoch(actor, "components")
+
+      assert moved != scanned
 
       GenServer.stop(pid)
     end

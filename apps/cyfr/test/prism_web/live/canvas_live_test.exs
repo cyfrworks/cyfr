@@ -42,7 +42,7 @@ defmodule PrismWeb.CanvasLiveTest do
     {:ok, conn: conn, user: user, ctx: ctx}
   end
 
-  # A tincture version in the athanor's tree and its component row, with
+  # A tincture version committed in the athanor's tree and its component row, with
   # `tincture` its manifest's block and `files` its files.
   defp lay!(ctx, name, tincture, files) do
     manifest = %{
@@ -53,15 +53,10 @@ defmodule PrismWeb.CanvasLiveTest do
       "tincture" => tincture
     }
 
-    dir =
-      Arca.Adapters.Local.build_path(
-        Sanctum.Context.actor(ctx),
-        ["components", "tinctures", "local", name, "1.0.0"]
-      )
-
-    File.mkdir_p!(dir)
-    File.write!(Path.join(dir, "cyfr-manifest.json"), Jason.encode!(manifest))
-    for {file, bytes} <- files, do: File.write!(Path.join(dir, file), bytes)
+    Arca.Test.UnitFixtures.tenant_component!(ctx, "tincture", "local", name, "1.0.0",
+      manifest: manifest,
+      files: files
+    )
 
     digest = "sha256:" <> Base.encode16(:crypto.hash(:sha256, name), case: :lower)
     {:ok, release_digest} = Compendium.ReleaseDigest.compute(digest, manifest)

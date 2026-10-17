@@ -16,6 +16,7 @@ defmodule MultiTenantIsolationTest do
 
   use ExUnit.Case, async: false
 
+  alias Arca.Test.UnitFixtures
   alias Sanctum.Tenancy.Athanors
 
   @permissions [:execute, :storage_read, :storage_write, :vault_read, :admin]
@@ -304,8 +305,13 @@ defmodule MultiTenantIsolationTest do
 
     test "the components tree is tenant-relative: the same spelling is each athanor's own",
          %{a: ctx_a, b: ctx_b} do
-      path = ["components", "catalysts", "local", "tool", "1.0.0", "x.txt"]
-      :ok = Arca.put(Sanctum.Context.actor(ctx_a), path, "compiled")
+      # A component lands as a committed unit, the one way a unit lands.
+      unit =
+        UnitFixtures.tenant_component!(ctx_a, "catalyst", "local", "tool", "1.0.0",
+          files: [{"x.txt", "compiled"}]
+        )
+
+      path = unit ++ ["x.txt"]
 
       # b's context addresses b's tree — a's bytes are unreachable, not
       # merely refused: no path spelling names another athanor.
@@ -313,6 +319,13 @@ defmodule MultiTenantIsolationTest do
       assert {:error, :not_found} = Arca.get(Sanctum.Context.actor(ctx_b), path)
       refute Arca.exists?(Sanctum.Context.actor(ctx_b), path)
       assert {:error, :not_found} = Arca.delete(Sanctum.Context.actor(ctx_b), path)
+
+      # b's own unit at the same spelling is b's alone, and b's write
+      # inside it reaches no byte of a's.
+      assert ^unit =
+               UnitFixtures.tenant_component!(ctx_b, "catalyst", "local", "tool", "1.0.0",
+                 files: [{"x.txt", "b's first"}]
+               )
 
       assert :ok = Arca.put(Sanctum.Context.actor(ctx_b), path, "b's own")
       assert {:ok, "compiled"} = Arca.get(Sanctum.Context.actor(ctx_a), path)
