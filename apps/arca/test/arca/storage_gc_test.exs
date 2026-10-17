@@ -732,12 +732,19 @@ defmodule Arca.StorageGCTest do
 
       assert {:ok, %{repaired: [^unit], left: [], unrecoverable: []}} = StorageGC.repair(actor)
 
-      # The revision is in its prefix, the unit's own path is cleared, and
-      # the pointer never moved.
-      assert revision_bytes(actor, unit, one) == whole("one")
+      # Adopted as a revision of its own: the pointer names it, its prefix
+      # holds the revision whole, the unit's own path is cleared, and the
+      # journal records the adoption with the content it had.
+      {:ok, %{current_revision: adopted}} = pointer(actor, unit)
+      refute adopted == one
+      assert Map.keys(staged(actor, unit)) == [adopted]
+      assert revision_bytes(actor, unit, adopted) == whole("one")
       assert served(actor, unit) == whole("one")
       assert {:ok, []} = Arca.Adapters.Local.list_recursive(actor, unit)
-      assert {:ok, %{current_revision: ^one}} = pointer(actor, unit)
+      {root, key} = UnitLocator.unit_key(unit)
+      {:ok, [first, adoption]} = StorageUnits.journal(actor, root, key)
+      assert %{prior_revision: ^one, new_revision: ^adopted} = adoption
+      assert adoption.content_identity == first.content_identity
       assert {:ok, %{repaired: [], intact: 1}} = StorageGC.repair(actor)
     end
   end
@@ -789,10 +796,11 @@ defmodule Arca.StorageGCTest do
       assert %StorageUnit{draft_writer_token: nil} = row(actor, unit)
 
       assert {:ok, %{repaired: [^unit]}} = StorageGC.repair(actor)
+      {:ok, %{current_revision: adopted}} = pointer(actor, unit)
       repaired = change(actor, unit)
-      assert %{ready: true, source_revision: ^one} = repaired
+      assert %{ready: true, source_revision: ^adopted} = repaired
       assert repaired.generation > committed.generation
-      assert revision_bytes(actor, unit, one) == whole("one")
+      assert revision_bytes(actor, unit, adopted) == whole("one")
     end
 
     test "collection changes no projection", %{actor: actor, unit: unit} do
@@ -946,6 +954,119 @@ defmodule Arca.StorageGCTest do
       touched = storage_messages()
       assert Enum.any?(touched, &match?({:list, _athanor}, &1))
       assert touched |> Enum.map(&elem(&1, 1)) |> Enum.uniq() == [actor.athanor_id]
+    end
+  end
+
+  describe "Astra T1b review regressions" do
+    test "an interrupted legacy adoption keeps the whole legacy tree readable", %{
+      actor: actor,
+      unit: unit
+    } do
+      assert {:ok, _} = commit(actor, unit, "one")
+      _one = serve_at_unit!(actor, unit)
+
+      # The adoption stages the legacy objects under a prefix of its own,
+      # the completion object last: that write fails.
+      Adapter.hook(fn op, _actor, path ->
+        if op == :put and staged_object?(path) and List.last(path) == @sentinel,
+          do: {:error, :enospc},
+          else: :pass
+      end)
+
+      assert {:error, :enospc} = Arca.Overlay.repair_unit(actor, unit)
+      Adapter.clear()
+      assert served(actor, unit) == whole("one")
+    end
+
+    test "a live reader's pin keeps legacy bytes across explicit removal", %{
+      actor: actor,
+      unit: unit
+    } do
+      assert {:ok, _} = commit(actor, unit, "one")
+      one = serve_at_unit!(actor, unit)
+      build = start_build(actor)
+      assert :ok = StorageGC.pin(actor, unit, one, {:build, build})
+      assert {:ok, :deleted} = Arca.Overlay.drop_unit(actor, unit)
+      assert StorageGC.pinned?(actor, unit, one)
+      assert {:ok, old_pairs} = Arca.Storage.read_subtree_via(Arca.Adapters.Local, actor, unit)
+
+      assert revision_bytes(actor, unit, one) == whole("one") or
+               Map.new(old_pairs) == whole("one")
+    end
+
+    test "a candidate committed and replaced after its snapshot keeps the replacement grace", %{
+      actor: actor,
+      unit: unit
+    } do
+      {root, key} = UnitLocator.unit_key(unit)
+      token = StorageUnits.new_writer_token()
+      {:ok, draft} = StorageUnits.register_draft(actor, root, key, token)
+      one = lay_prefix(actor, unit, StorageUnits.new_revision(), "one")
+      begun_ago!(actor, unit, one, 3 * @day)
+
+      # The writer was paused long enough that its staged prefix qualified
+      # before it resumed. Advancing a fixture's dates avoids a two-day sleep.
+      Arca.Repo.update_all(
+        from(u in StorageUnit,
+          where: u.athanor_id == ^actor.athanor_id and u.id == ^draft.id
+        ),
+        set: [updated_at: later(-3 * @day)]
+      )
+
+      {:ok, roots} = StorageGC.roots(actor)
+      assert {:ok, [%{revision: ^one} = candidate]} = StorageGC.candidates(actor, roots)
+
+      manifest =
+        for {rel, bytes} <- files("one"),
+            do: {rel, Prima.Digest.sha256(bytes), byte_size(bytes)}
+
+      # Both commits happen after the snapshot and before its final check.
+      # A reader could resolve `one` between these commits.
+      assert :committed =
+               StorageUnits.commit(actor, draft, nil, token, %{
+                 new_revision: one,
+                 content_identity: Arca.Overlay.content_identity(manifest),
+                 commit_identity: actor.user_id
+               })
+
+      assert :ok = StorageUnits.release_served(actor, draft, token, one)
+      assert {:ok, _} = commit(actor, unit, "two")
+      assert served(actor, unit) == whole("two")
+
+      StorageGC.collect(actor, candidate)
+      assert revision_bytes(actor, unit, one) == whole("one")
+    end
+
+    test "an audit retries an adoption that copied objects before its completion write failed", %{
+      actor: actor,
+      unit: unit
+    } do
+      assert {:ok, _} = commit(actor, unit, "one")
+      one = serve_at_unit!(actor, unit)
+
+      Adapter.hook(fn op, _actor, path ->
+        if op == :put and staged_object?(path) and List.last(path) == @sentinel,
+          do: {:error, :enospc},
+          else: :pass
+      end)
+
+      assert {:ok, %{left: [{^unit, {:repair_failed, :enospc}}]}} = StorageGC.repair(actor)
+      Adapter.clear()
+
+      # The adoption that stopped staged under a prefix of its own and gave
+      # it back: the pointer's revision holds nothing in a prefix, the
+      # legacy source stands whole, and nothing was invented.
+      assert revision_bytes(actor, unit, one) == %{}
+      assert served(actor, unit) == whole("one")
+      assert {:ok, %{current_revision: ^one}} = pointer(actor, unit)
+
+      # The same public audit that began adoption must be able to finish it.
+      assert {:ok, %{repaired: [^unit], left: [], unrecoverable: []}} = StorageGC.repair(actor)
+      {:ok, %{current_revision: adopted}} = pointer(actor, unit)
+      refute adopted == one
+      assert revision_bytes(actor, unit, adopted) == whole("one")
+      assert served(actor, unit) == whole("one")
+      assert {:ok, []} = Arca.Adapters.Local.list_recursive(actor, unit)
     end
   end
 end

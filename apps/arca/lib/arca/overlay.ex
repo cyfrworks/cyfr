@@ -119,12 +119,16 @@ defmodule Arca.Overlay do
 
   A revision committed before units were served from their prefixes was
   moved to the unit's own path and its prefix removed. Such a revision is
-  read where it is until it has been moved back into its prefix, which
-  the first edit of the unit and `repair_unit/2` (the collector's audit)
-  do under the lease; nothing is ever written at a unit's own path again.
-  A publication over such a revision clears the unit's own path once its
-  own revision is released, since no reader resolves the row to it any
-  more, and a removal clears whatever a revision left there.
+  read where it is until it is adopted: the first edit of the unit,
+  `repair_unit/2` and the collector's audit commit it as a revision of
+  its own — its objects staged under a new prefix from the unit's own
+  path, the pointer moved to it under the lease like any publication's —
+  so two adopters never share a prefix and a stalled one is refused at
+  its commit; nothing is ever written at a unit's own path again. The
+  unit's own path is cleared once the adopting, or any later, publication
+  is released, unless a live pin names the revision it served, and then
+  the collector clears it once the pin is gone (`collect_unit_path/2`); a
+  removal leaves it to the collector the same way.
 
   ## Whose unit it is
 
@@ -329,7 +333,7 @@ defmodule Arca.Overlay do
 
           true ->
             with {:ok, revision} <- revision_of(actor, loc),
-                 :ok <- in_prefix(actor, loc, revision) do
+                 {:ok, revision} <- adopted_revision(actor, loc, revision) do
               {:ok, UnitLocator.in_revision(loc, revision, path)}
             end
         end
@@ -522,13 +526,11 @@ defmodule Arca.Overlay do
   # out.
   defp delete_revision(actor, unit, revision) do
     internal = internal_actor(actor)
+    pinned? = is_binary(revision) and Arca.StorageGC.pinned?(actor, unit, revision)
 
     prefix =
       cond do
-        is_nil(revision) ->
-          :ok
-
-        Arca.StorageGC.pinned?(actor, unit, revision) ->
+        is_nil(revision) or pinned? ->
           :ok
 
         true ->
@@ -537,12 +539,74 @@ defmodule Arca.Overlay do
           end)
       end
 
-    with :ok <- prefix do
+    # The unit's own path holds the retired revision when it was served
+    # there before this shape: a pin keeps it as it keeps the prefix.
+    with :ok <- prefix, false <- pinned? do
       case tenant().delete_tree(actor, unit) do
         :ok -> :ok
         {:error, :not_found} -> :ok
         {:error, _} = error -> error
       end
+    else
+      true -> :ok
+      {:error, _} = error -> error
+    end
+  end
+
+  @doc """
+  Delete what a revision served at the unit's own path before units were
+  served from their prefixes left there, once nothing reads it: when the
+  unit's row is retired or never committed, or committed with its
+  revision's completion object in its prefix, and no live pin names a
+  revision of the unit (`Arca.StorageGC.pinned_unit?/2`). The collector's
+  call, made under the unit's node-local lock. `{:ok, :collected}` when
+  it went or nothing stood there, `{:ok, :kept}` when a reader may still
+  find it there, `{:error, :stale_writer}` while a writer holds the unit,
+  `{:error, :not_a_unit}` for a path that is no unit.
+  """
+  @spec collect_unit_path(Prima.Actor.t(), Arca.Storage.path()) ::
+          {:ok, :collected | :kept} | {:error, :stale_writer | :not_a_unit | term()}
+  def collect_unit_path(%Prima.Actor{} = actor, unit) do
+    case Arca.Storage.locate(unit) do
+      loc when loc in [:not_overlaid, :above_unit] ->
+        {:error, :not_a_unit}
+
+      loc ->
+        if unit_of(loc) == unit,
+          do: collect_at_unit(actor, loc),
+          else: {:error, :not_a_unit}
+    end
+  end
+
+  defp collect_at_unit(actor, loc) do
+    unit = unit_of(loc)
+
+    fenced(actor, unit, fn ->
+      with {:ok, false} <- read_at_unit_path?(actor, loc),
+           false <- Arca.StorageGC.pinned_unit?(actor, unit) do
+        case tenant().delete_tree(actor, unit) do
+          :ok -> {:ok, :collected}
+          {:error, :not_found} -> {:ok, :collected}
+          {:error, _} = error -> error
+        end
+      else
+        {:ok, true} -> {:ok, :kept}
+        true -> {:ok, :kept}
+        {:error, _} = error -> error
+      end
+    end)
+  end
+
+  # Whether the unit's own path is where its readers read now: a committed
+  # row whose revision has not been adopted. A row that is not committed
+  # has no reader there.
+  defp read_at_unit_path?(actor, loc) do
+    {root, key} = UnitLocator.unit_key(unit_of(loc))
+
+    case StorageUnits.current(actor, root, key) do
+      {:ok, %{current_revision: revision}} -> {:ok, legacy?(actor, loc, revision)}
+      {:error, :not_found} -> {:ok, false}
+      {:error, _} = error -> error
     end
   end
 
@@ -775,8 +839,24 @@ defmodule Arca.Overlay do
     end
   end
 
+  # Bytes held. Above the units, and outside them, the tenant's tree
+  # there — the staging areas included, since every revision a unit holds
+  # is bytes the athanor holds. At or inside a unit, the object or subtree
+  # readers read, from the revision the row names: what a file's size is.
   @impl true
-  def usage(%Prima.Actor{} = actor, path), do: tenant().usage(actor, path)
+  def usage(%Prima.Actor{} = actor, path) do
+    case Arca.Storage.locate(path) do
+      loc when loc in [:not_overlaid, :above_unit] ->
+        tenant().usage(actor, path)
+
+      loc ->
+        case revision_of(actor, loc) do
+          {:ok, revision} -> tenant().usage(actor, source_of(actor, loc, revision, path))
+          {:error, :not_found} -> tenant().usage(actor, path)
+          {:error, _} = error -> error
+        end
+    end
+  end
 
   @impl true
   def ensure_dir(%Prima.Actor{} = actor, path),
@@ -806,18 +886,9 @@ defmodule Arca.Overlay do
       loc ->
         case revision_of(actor, loc) do
           {:ok, revision} ->
-            case tenant().list_typed(actor, UnitLocator.in_revision(loc, revision, path)) do
-              {:ok, []} = empty ->
-                if legacy?(actor, loc, revision),
-                  do: tenant().list_typed(actor, path),
-                  else: empty
-
-              {:ok, entries} ->
-                {:ok, without_marker(loc, path, entries)}
-
-              {:error, _} = error ->
-                error
-            end
+            with {:ok, entries} <-
+                   tenant().list_typed(actor, source_of(actor, loc, revision, path)),
+                 do: {:ok, without_marker(loc, path, entries)}
 
           # A unit no committed row names lists as a missing directory does.
           {:error, :not_found} ->
@@ -851,17 +922,12 @@ defmodule Arca.Overlay do
       loc ->
         case revision_of(actor, loc) do
           {:ok, revision} ->
-            case tenant().list_recursive(actor, UnitLocator.in_revision(loc, revision, path)) do
-              {:ok, []} = empty ->
-                if legacy?(actor, loc, revision),
-                  do: tenant().list_recursive(actor, path),
-                  else: empty
-
-              {:ok, keys} ->
-                {:ok, unit_paths(loc, revision, keys)}
-
-              {:error, _} = error ->
-                error
+            if legacy?(actor, loc, revision) do
+              tenant().list_recursive(actor, path)
+            else
+              with {:ok, keys} <-
+                     tenant().list_recursive(actor, UnitLocator.in_revision(loc, revision, path)),
+                   do: {:ok, unit_paths(loc, revision, keys)}
             end
 
           {:error, :not_found} ->
@@ -951,19 +1017,27 @@ defmodule Arca.Overlay do
         end
 
       {:dir, ^unit, _sentinel} = loc ->
-        case tenant().list_recursive(actor, UnitLocator.in_revision(loc, revision, unit)) do
-          {:ok, []} ->
-            if legacy?(actor, loc, revision),
-              do: tenant().list_recursive(actor, unit),
-              else: {:ok, []}
-
-          {:ok, keys} ->
-            {:ok, unit_paths(loc, revision, keys)}
-
-          {:error, _} = error ->
-            error
+        if legacy?(actor, loc, revision) do
+          tenant().list_recursive(actor, unit)
+        else
+          with {:ok, keys} <-
+                 tenant().list_recursive(actor, UnitLocator.in_revision(loc, revision, unit)),
+               do: {:ok, unit_paths(loc, revision, keys)}
         end
     end
+  end
+
+  # Where a unit's objects are listed and read whole from: the committed
+  # revision's prefix once its completion object is there; the unit's own
+  # path while a revision served there before this shape has not been
+  # adopted — an adoption that stops leaves it whole, and no reader is
+  # answered from a prefix the pointer's revision is not complete in; the
+  # prefix otherwise, so a damaged revision reads as what its prefix
+  # holds.
+  defp source_of(actor, loc, revision, path) do
+    if legacy?(actor, loc, revision),
+      do: path,
+      else: UnitLocator.in_revision(loc, revision, path)
   end
 
   # The keys under a revision's prefix as the unit's own paths, the
@@ -973,10 +1047,108 @@ defmodule Arca.Overlay do
     for key <- keys, key != marker, do: UnitLocator.from_revision(loc, revision, key)
   end
 
-  # No read_subtree here: the facade's shared algorithm
-  # (`Arca.Storage.read_subtree_via/4`) runs over this module's
-  # `list_recursive/2` + `get/2`, which resolve the row once for the
-  # listing and once per leaf.
+  @doc """
+  Read a whole subtree as `{relative_path, bytes}` pairs, resolving a
+  unit's row once for the whole read: at or inside a unit the committed
+  revision's prefix — or the unit's own path, for a revision not yet
+  adopted — is listed and read as one revision, so a commit landing
+  meanwhile changes nothing of what this read answers; above the units,
+  the tenant's own leaves there and every committed unit's beneath, each
+  unit resolved once. `Arca.read_subtree/2` runs this for the overlaid
+  roots; `Arca.Storage.read_subtree_via/4` is the walk over the physical
+  paths it names. A path no committed row names reads empty, as a
+  missing directory does; a file unit's own path reads as a file does.
+  """
+  @spec read_subtree(Prima.Actor.t(), Arca.Storage.path()) ::
+          {:ok, [{Arca.Storage.path(), binary()}]} | {:error, term()}
+  def read_subtree(%Prima.Actor{} = actor, path) do
+    case Arca.Storage.locate(path) do
+      :not_overlaid ->
+        Arca.Storage.read_subtree_via(tenant(), actor, path)
+
+      :above_unit ->
+        if UnitLocator.staging?(path),
+          do: Arca.Storage.read_subtree_via(tenant(), actor, path),
+          else: subtree_above_units(actor, path)
+
+      loc ->
+        case revision_of(actor, loc) do
+          {:ok, revision} -> unit_subtree(actor, loc, revision, path)
+          {:error, :not_found} -> {:ok, []}
+          {:error, _} = error -> error
+        end
+    end
+  end
+
+  # Above the units: the tenant's own leaves under the path — nothing of
+  # the staging areas, nothing under a unit's path — and each committed
+  # unit beneath, read from its revision once.
+  defp subtree_above_units(actor, [root | _] = path) do
+    with {:ok, leaves} <- tenant().list_recursive(actor, path),
+         {:ok, plain} <-
+           bytes_of(
+             actor,
+             Enum.reject(leaves, &(UnitLocator.staging?(&1) or leaf_loc(&1) != nil)),
+             path
+           ),
+         {:ok, pointers} <- StorageUnits.current_under(actor, root) do
+      pointers
+      |> Enum.map(fn {key, %{current_revision: revision}} ->
+        {UnitLocator.unit_path(root, key), revision}
+      end)
+      |> Enum.filter(fn {unit, _revision} -> List.starts_with?(unit, path) end)
+      |> Enum.reduce_while({:ok, plain}, fn {unit, revision}, {:ok, acc} ->
+        case unit_pairs(actor, Arca.Storage.locate(unit), revision) do
+          {:ok, pairs} ->
+            below = Enum.drop(unit, length(path))
+            {:cont, {:ok, acc ++ for({rel, bytes} <- pairs, do: {below ++ rel, bytes})}}
+
+          {:error, _} = error ->
+            {:halt, error}
+        end
+      end)
+    end
+  end
+
+  # The bytes of the tenant's own leaves, relative to `path`; a leaf that
+  # vanished between the listing and its read is no error of the read.
+  defp bytes_of(actor, leaves, path) do
+    Enum.reduce_while(leaves, {:ok, []}, fn leaf, {:ok, acc} ->
+      case tenant().get(actor, leaf) do
+        {:ok, bytes} -> {:cont, {:ok, acc ++ [{Enum.drop(leaf, length(path)), bytes}]}}
+        {:error, :not_found} -> {:cont, {:ok, acc}}
+        {:error, _} = error -> {:halt, error}
+      end
+    end)
+  end
+
+  # One committed unit's objects relative to the unit, read from one
+  # revision: a directory unit's subtree, a file unit's one object at
+  # `[]` (what `read_subtree_via/4` cannot list, a file being no
+  # directory).
+  defp unit_pairs(actor, {:file, unit} = loc, revision) do
+    case tenant().get(actor, source_of(actor, loc, revision, unit)) do
+      {:ok, bytes} -> {:ok, [{[], bytes}]}
+      {:error, :not_found} -> {:ok, []}
+      {:error, _} = error -> error
+    end
+  end
+
+  defp unit_pairs(actor, {:dir, unit, _sentinel} = loc, revision),
+    do: unit_subtree(actor, loc, revision, unit)
+
+  # One unit's subtree at `path` — the unit or a path inside it — read
+  # whole from one revision (`source_of/4`), the prefix's marker left out.
+  # A file unit's own path answers as a file's does under a subtree read:
+  # `{:error, :enotdir}` on every adapter.
+  defp unit_subtree(actor, loc, revision, path) do
+    marker = [UnitLocator.marker_name()]
+    source = source_of(actor, loc, revision, path)
+
+    with {:ok, pairs} <- Arca.Storage.read_subtree_via(tenant(), actor, source) do
+      {:ok, Enum.reject(pairs, &(elem(&1, 0) == marker))}
+    end
+  end
 
   # ---------------------------------------------------------------------------
   # Unit status — the public questions the tree can answer about itself.
@@ -1161,19 +1333,7 @@ defmodule Arca.Overlay do
   end
 
   defp held_subtree(actor, {:dir, unit, _sentinel} = loc) do
-    case revision_of(actor, loc) do
-      {:ok, revision} ->
-        base = UnitLocator.in_revision(loc, revision, unit)
-
-        with {:ok, pairs} <- Arca.Storage.read_subtree_via(tenant(), actor, base) do
-          if pairs == [] and legacy?(actor, loc, revision),
-            do: Arca.Storage.read_subtree_via(tenant(), actor, unit),
-            else: {:ok, Enum.reject(pairs, &(elem(&1, 0) == [UnitLocator.marker_name()]))}
-        end
-
-      {:error, _} = error ->
-        error
-    end
+    with {:ok, revision} <- revision_of(actor, loc), do: unit_subtree(actor, loc, revision, unit)
   end
 
   @doc """
@@ -1558,8 +1718,9 @@ defmodule Arca.Overlay do
   the draft, marks the revision's generation ready and releases it,
   `{:ok, :repaired}`; a live draft is its holder's, `{:error, :stale_writer}`.
   A revision served at the unit's own path before units were served from
-  their prefixes is moved back into its prefix under the lease and the
-  unit's own path cleared, `{:ok, :repaired}`. A committed revision whose
+  their prefixes is adopted — committed as a revision of its own from the
+  unit's own path, under the lease — and the unit's own path cleared,
+  `{:ok, :repaired}`. A committed revision whose
   completion object is in its prefix and whose draft is free has nothing
   pending, `{:ok, :nothing_pending}`; one whose completion object is
   nowhere is `{:error, :staged_incomplete}`, reported and left. The
@@ -1593,7 +1754,7 @@ defmodule Arca.Overlay do
             release_dead(actor, loc, revision)
 
           completion_at_unit?(actor, loc) ->
-            with :ok <- in_prefix(actor, loc, revision), do: {:ok, :repaired}
+            with {:ok, _adopted} <- adopt(actor, loc), do: {:ok, :repaired}
 
           true ->
             {:error, :staged_incomplete}
@@ -1794,7 +1955,13 @@ defmodule Arca.Overlay do
           case gate.(draft) do
             {:ok, entries} ->
               with_internal_writes(fn ->
-                publish(actor, internal, loc, draft, token, entries, commit_opts)
+                case publish(actor, internal, loc, draft, token, entries, commit_opts) do
+                  {:served, revision, generation, relatives} ->
+                    {:served, revision, generation, relatives, draft.current_revision}
+
+                  other ->
+                    other
+                end
               end)
 
             {:error, _} = refusal ->
@@ -1805,9 +1972,9 @@ defmodule Arca.Overlay do
       end)
 
     case served do
-      {:served, revision, generation, relatives} ->
+      {:served, revision, generation, relatives, prior} ->
         marked(actor, unit, revision, generation)
-        cleared_unit_path(actor, loc)
+        cleared_unit_path(actor, loc, prior)
         {:ok, relatives}
 
       other ->
@@ -1817,10 +1984,12 @@ defmodule Arca.Overlay do
 
   # What a revision served at the unit's own path before units were served
   # from their prefixes left there is superseded by a publication into a
-  # prefix: no reader resolves the row to it any more, and it goes. A
-  # refusal is logged — the publication stands, and a removal clears the
-  # path again.
-  defp cleared_unit_path(actor, loc) do
+  # prefix: no reader resolves the row to it any more, and it goes —
+  # unless a live pin names the revision it served (`prior`, the pointer
+  # the publication replaced), which keeps it for the pinned reader until
+  # the collector takes it. A refusal is logged — the publication stands,
+  # and a removal or the collector clears the path again.
+  defp cleared_unit_path(actor, loc, prior) do
     unit = unit_of(loc)
 
     standing? =
@@ -1829,12 +1998,22 @@ defmodule Arca.Overlay do
         {:dir, ^unit, _sentinel} -> match?({:ok, [_ | _]}, tenant().list_recursive(actor, unit))
       end
 
-    with true <- standing?, {:error, reason} <- tenant().delete_tree(actor, unit) do
-      if reason != :not_found do
-        Logger.warning(
-          "[Arca.Overlay] #{Enum.join(unit, "/")}: what an earlier revision left at the unit's " <>
-            "own path could not be removed (#{inspect(reason)}); a removal clears it"
-        )
+    with true <- standing?,
+         false <- is_binary(prior) and Arca.StorageGC.pinned?(actor, unit, prior) do
+      case tenant().delete_tree(actor, unit) do
+        # The bytes left the tree beneath the facade's accounting: the
+        # counters are dropped, to be walked true again.
+        :ok ->
+          Arca.Usage.invalidate(actor)
+
+        {:error, :not_found} ->
+          :ok
+
+        {:error, reason} ->
+          Logger.warning(
+            "[Arca.Overlay] #{Enum.join(unit, "/")}: what an earlier revision left at the " <>
+              "unit's own path could not be removed (#{inspect(reason)}); the collector clears it"
+          )
       end
     end
 
@@ -2113,87 +2292,37 @@ defmodule Arca.Overlay do
   end
 
   # A revision served at the unit's own path before units were served
-  # from their prefixes is moved back into its prefix, under the lease:
-  # the draft taken (`{:error, :stale_writer}` while another writer holds
-  # it), every object copied through the facade, the draft released at a
-  # repair's generation, and the unit's own path cleared. `:ok` when the
-  # revision is in its prefix afterwards.
-  defp in_prefix(actor, loc, revision) do
-    if completion_in_prefix?(actor, loc, revision) or not completion_at_unit?(actor, loc) do
-      :ok
-    else
-      unit = unit_of(loc)
-      {root, key} = UnitLocator.unit_key(unit)
-      token = StorageUnits.new_writer_token()
+  # from their prefixes is adopted by a commit of its own: every object
+  # at the unit's own path is staged under a new revision's prefix and
+  # the pointer moved to it under the lease, as any publication is — so
+  # no two adopters ever write into one prefix, a stalled adopter is
+  # refused at its commit (`{:error, :stale_writer}`) and its prefix is
+  # the collector's, and an adoption that dies leaves the unit's own path
+  # whole for the next. The unit's own path is cleared once the new
+  # revision is released, unless a live pin names the revision it served
+  # (`cleared_unit_path/3`). Answers the revision readers resolve the row
+  # to afterwards.
+  defp adopt(actor, {:file, unit} = loc) do
+    internal = internal_actor(actor)
+    adopted(actor, loc, {:files, [{[], fn -> Arca.get(internal, unit) end}]})
+  end
 
-      moved =
-        fenced(actor, unit, fn ->
-          with {:ok, _draft} <- StorageUnits.register_draft(actor, root, key, token),
-               :ok <- copy_back(actor, loc, revision, token) do
-            release(actor, loc, token, revision, fn ->
-              StorageProjectionChanges.begin_repair(actor, root, key, revision)
-            end)
-          end
-        end)
+  defp adopt(actor, {:dir, unit, _sentinel} = loc), do: adopted(actor, loc, {:tree, unit, []})
 
-      with {:served, ^revision, generation} <- moved do
-        marked(actor, unit, revision, generation)
+  defp adopted(actor, loc, source) do
+    unit = unit_of(loc)
+    {root, key} = UnitLocator.unit_key(unit)
 
-        case tenant().delete_tree(actor, unit) do
-          :ok -> :ok
-          {:error, :not_found} -> :ok
-          {:error, _} = error -> error
-        end
-      end
+    with {:ok, _written} <- commit_unit(actor, unit, source, cap: :exempt),
+         {:ok, %{current_revision: revision}} <- StorageUnits.current(actor, root, key) do
+      {:ok, revision}
     end
   end
 
-  # Every object at the unit's own path, copied into the revision's
-  # prefix through the facade, so the bytes stay in the athanor's
-  # accounting — the completion object last, so a copy that stops part
-  # way leaves a prefix that reads incomplete and is completed by the next
-  # attempt; the draft is given back if a copy fails.
-  defp copy_back(actor, loc, revision, token) do
-    unit = unit_of(loc)
-    internal = internal_actor(actor)
-    completion = completion_of(loc)
-
-    objects =
-      case loc do
-        {:file, ^unit} ->
-          {:ok, [unit]}
-
-        {:dir, ^unit, _sentinel} ->
-          with {:ok, leaves} <- tenant().list_recursive(actor, unit),
-               do: {:ok, Enum.sort_by(leaves, &(&1 == completion))}
-      end
-
-    copied =
-      with {:ok, leaves} <- objects do
-        with_internal_writes(fn ->
-          Enum.reduce_while(leaves, :ok, fn leaf, :ok ->
-            with {:ok, bytes} <- tenant().get(actor, leaf),
-                 :ok <- Arca.put(internal, UnitLocator.in_revision(loc, revision, leaf), bytes) do
-              {:cont, :ok}
-            else
-              {:error, _} = error -> {:halt, error}
-            end
-          end)
-        end)
-      end
-
-    case copied do
-      :ok ->
-        :ok
-
-      {:error, _} = error ->
-        {root, key} = UnitLocator.unit_key(unit)
-
-        with {:ok, row} <- StorageUnits.held(actor, root, key, token),
-             do: StorageUnits.abandon_draft(actor, row, token)
-
-        error
-    end
+  # The revision an edit lands in: the pointer's, once a revision still at
+  # the unit's own path has been adopted into a prefix of its own.
+  defp adopted_revision(actor, loc, revision) do
+    if legacy?(actor, loc, revision), do: adopt(actor, loc), else: {:ok, revision}
   end
 
   # An internal context focused on the caller's athanor, writing back

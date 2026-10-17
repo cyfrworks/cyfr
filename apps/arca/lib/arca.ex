@@ -635,11 +635,12 @@ defmodule Arca do
   end
 
   @doc """
-  Read a whole subtree as `{relative_path, binary}` pairs — the shared
-  algorithm over the routed adapter's `list_recursive/2` + `get/2`
-  (`Arca.Storage.read_subtree_via/4`), so the overlay's union emerges
-  compositionally and every adapter answers a file path the same way
-  (`{:error, :enotdir}`).
+  Read a whole subtree as `{relative_path, binary}` pairs. Under the
+  overlaid roots the overlay reads it (`Arca.Overlay.read_subtree/2`),
+  resolving each unit's row once for the whole read, so one read answers
+  one revision of a unit; elsewhere the shared algorithm over the routed
+  adapter's `list_recursive/2` + `get/2` (`Arca.Storage.read_subtree_via/4`),
+  so every adapter answers a file path the same way (`{:error, :enotdir}`).
 
   Memory-bounded; for large single files use `serve_to_conn/4` instead.
   """
@@ -650,7 +651,7 @@ defmodule Arca do
       [] ->
         tree(
           fn [root] = p ->
-            with {:ok, files} <- Arca.Storage.read_subtree_via(reader(p), actor, p),
+            with {:ok, files} <- subtree(actor, p),
                  do: {:ok, Enum.map(files, fn {rel, bytes} -> {[root | rel], bytes} end)}
           end,
           &Kernel.++/2,
@@ -658,8 +659,15 @@ defmodule Arca do
         )
 
       p ->
-        Arca.Storage.read_subtree_via(reader(p), actor, p)
+        subtree(actor, p)
     end)
+  end
+
+  defp subtree(actor, path) do
+    case reader(path) do
+      Arca.Overlay -> Arca.Overlay.read_subtree(actor, path)
+      adapter -> Arca.Storage.read_subtree_via(adapter, actor, path)
+    end
   end
 
   @doc """

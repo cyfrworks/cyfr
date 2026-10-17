@@ -739,17 +739,23 @@ defmodule Arca.PublicationContract do
 
           :ok = Arca.put(actor, unit ++ ["a.txt"], "edited")
 
-          # The revision is in its prefix with the edit, nothing stands at
-          # the unit's own path, and no commit was made: the pointer and
-          # the journal are as they were, the generation newer and ready.
+          # The revision was adopted as a revision of its own — the pointer
+          # moved to it, the journal records the adoption with the content
+          # the revision had — and the edit landed in its prefix; nothing
+          # stands at the unit's own path, the generation is newer and ready.
           edited = Map.put(whole("one"), ["a.txt"], "edited")
-          assert {^revision, served} = read(actor, unit)
+          assert {adopted, served} = read(actor, unit)
+          refute adopted == revision
           assert served == edited
-          {:ok, moved} = Arca.read_subtree(actor, UnitLocator.revision_prefix(unit, revision))
-          assert Map.new(moved) == edited
+          {:ok, moved} = Arca.read_subtree(actor, UnitLocator.revision_prefix(unit, adopted))
+          assert moved |> Map.new() |> Map.delete([UnitLocator.marker_name()]) == edited
           assert {:ok, []} = adapter.list_recursive(actor, unit)
-          assert [_still_one_commit] = journal(actor, unit)
-          assert %{ready: true, source_revision: ^revision} = after_edit = change(actor, unit)
+
+          assert [first, %{prior_revision: ^revision, new_revision: ^adopted} = adoption] =
+                   journal(actor, unit)
+
+          assert adoption.content_identity == first.content_identity
+          assert %{ready: true, source_revision: ^adopted} = after_edit = change(actor, unit)
           assert after_edit.generation > before.generation
           assert {:ok, :nothing_pending} = Arca.Overlay.repair_unit(actor, unit)
         end
@@ -763,9 +769,14 @@ defmodule Arca.PublicationContract do
           revision = serve_at_unit!(actor, unit, adapter)
 
           assert {:ok, :repaired} = Arca.Overlay.repair_unit(actor, unit)
-          assert {^revision, served} = read(actor, unit)
+          assert {adopted, served} = read(actor, unit)
+          refute adopted == revision
           assert served == whole("one")
           assert {:ok, []} = adapter.list_recursive(actor, unit)
+
+          assert [_one, %{prior_revision: ^revision, new_revision: ^adopted}] =
+                   journal(actor, unit)
+
           assert {:ok, :nothing_pending} = Arca.Overlay.repair_unit(actor, unit)
 
           # Served at the unit's own path again, a commit supersedes it
@@ -775,10 +786,12 @@ defmodule Arca.PublicationContract do
           assert {:ok, _} = commit(actor, unit, "two")
           assert {two, served} = read(actor, unit)
           assert served == whole("two")
-          refute two == revision
+          refute two in [revision, adopted]
           assert {:ok, []} = adapter.list_recursive(actor, unit)
           assert staged_revisions(actor, unit) == [two]
-          assert [_one, %{new_revision: ^two}] = journal(actor, unit)
+
+          assert [_one, _adoption, %{prior_revision: ^adopted, new_revision: ^two}] =
+                   journal(actor, unit)
         end
       end
 

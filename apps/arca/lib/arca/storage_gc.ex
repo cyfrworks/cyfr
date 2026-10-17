@@ -41,8 +41,10 @@ defmodule Arca.StorageGC do
        was begun or from the commit that left it, whichever is later;
     4. for one candidate, immediately before its deletion: a draft dead
        past the grace is retired, so its writer can never commit the
-       revision; then the pointer, the draft and the pins of that one
-       prefix are read again, and any of them keeps it;
+       revision; then the pointer, the draft, the pins and the commit
+       that replaced the revision are read again, and any of them keeps
+       it — a revision the pointer left since the snapshot stands through
+       the grace after the commit that left it;
     5. its objects are deleted, then its marker, last;
     6. the emptied revision directory is removed where the adapter has
        directories, with the dead pins recorded against it.
@@ -59,6 +61,13 @@ defmodule Arca.StorageGC do
   of a unit is its current revision and, inside the grace, the one before
   it. A reader that resolved the row before a commit reads the revision
   it resolved through that grace, and pins it for longer.
+
+  A unit that held a revision at its own path before units were served
+  from their prefixes may still hold those bytes once the revision was
+  adopted into a prefix or the unit removed, when a live pin named it
+  then. Every sweep lists each root's tree and asks the overlay to clear
+  what such a unit still holds at its own path, which it does once no
+  live pin names a revision of the unit (`Arca.Overlay.collect_unit_path/2`).
 
   ## Audit
 
@@ -129,7 +138,9 @@ defmodule Arca.StorageGC do
   @typedoc """
   What a sweep did. `kept` counts the candidates a recheck saved, by
   reason; `unaged` the prefixes that carried no date and were given one;
-  `unrecognized` the keys in a staging area that are no revision's.
+  `unrecognized` the keys in a staging area that are no revision's;
+  `leftovers` the unit paths cleared of what a revision served there
+  before units were served from their prefixes left behind.
   """
   @type report :: %{
           examined: non_neg_integer(),
@@ -137,6 +148,7 @@ defmodule Arca.StorageGC do
           kept: %{atom() => non_neg_integer()},
           unaged: non_neg_integer(),
           unrecognized: non_neg_integer(),
+          leftovers: non_neg_integer(),
           errors: [{Arca.Storage.path(), term()}]
         }
 
@@ -216,6 +228,25 @@ defmodule Arca.StorageGC do
     end
   end
 
+  @doc """
+  Whether a live holder pins any revision of `unit` now — what keeps the
+  bytes a revision left at the unit's own path, before units were served
+  from their prefixes, from the collector and from a publication that
+  supersedes them (`Arca.Overlay.collect_unit_path/2`). A listing that
+  cannot answer is read as a pin, the safe direction.
+  """
+  @spec pinned_unit?(Prima.Actor.t(), Arca.Storage.path()) :: boolean()
+  def pinned_unit?(%Prima.Actor{} = actor, unit) when is_list(unit) do
+    with {:ok, athanor} <- tenant(actor),
+         {:ok, keys} <- list_under(internal_actor(actor), pins_prefix(unit)),
+         holders = for(key <- keys, {:ok, holder} <- [parse_holder(List.last(key))], do: holder),
+         {:ok, live} <- live_holders(athanor, holders) do
+      Enum.any?(holders, &MapSet.member?(live, &1))
+    else
+      _unanswered -> true
+    end
+  end
+
   # ---------------------------------------------------------------------------
   # Collection
   # ---------------------------------------------------------------------------
@@ -245,6 +276,7 @@ defmodule Arca.StorageGC do
           kept: %{},
           unaged: 0,
           unrecognized: listing.unrecognized,
+          leftovers: 0,
           errors: []
         }
         |> collect_each(actor, Enum.take(candidates, limit), opts, dry_run)
@@ -256,6 +288,7 @@ defmodule Arca.StorageGC do
           report
           |> date_unaged(actor, listing, roots)
           |> drop_dead_pins(actor, listing)
+          |> collect_leftovers(actor)
         end
 
       :telemetry.execute(
@@ -358,12 +391,16 @@ defmodule Arca.StorageGC do
 
   @doc """
   Collect one candidate, or keep it: the moduledoc's steps 4 to 6. The
-  pointer, the draft and the pins are read again here, whatever the
-  snapshot said. Answers `:collected`, or `{:kept, reason}` with
-  `:committed`, `:live_draft` or `:pinned`.
+  pointer, the draft, the pins and the commit that replaced the revision
+  are read again here, whatever the snapshot said. Answers `:collected`,
+  or `{:kept, reason}` with `:committed`, `:live_draft`, `:pinned` or
+  `:replaced` — the pointer left the revision inside the grace.
   """
   @spec collect(Prima.Actor.t(), candidate(), keyword()) ::
-          :collected | {:kept, :committed | :live_draft | :pinned} | {:error, term()} | refusal()
+          :collected
+          | {:kept, :committed | :live_draft | :pinned | :replaced}
+          | {:error, term()}
+          | refusal()
   def collect(%Prima.Actor{} = actor, %{unit: unit, revision: revision} = candidate, opts \\ [])
       when is_binary(revision) do
     with {:ok, athanor} <- tenant(actor) do
@@ -371,7 +408,8 @@ defmodule Arca.StorageGC do
       inner = internal_actor(actor)
 
       with :ok <- retire_dead_draft(actor, athanor, candidate, now, grace_ms),
-           :ok <- unrooted(athanor, inner, candidate, now, grace_ms) do
+           :ok <- unrooted(athanor, inner, candidate, now, grace_ms),
+           :ok <- outside_replacement_grace(athanor, candidate, now, grace_ms) do
         delete_prefix(inner, unit, revision)
       end
     end
@@ -597,6 +635,44 @@ defmodule Arca.StorageGC do
     %{report | unaged: length(undated)}
   end
 
+  # What a revision served at the unit's own path before units were served
+  # from their prefixes left there, once its unit is retired or adopted
+  # and no live pin names a revision of the unit: one listing of each
+  # root's tree, its staging areas and the units' own paths told apart by
+  # the grammar, and the overlay's call for each unit that still holds
+  # bytes at its own path (`Arca.Overlay.collect_unit_path/2`), which
+  # keeps what a reader may still find there.
+  defp collect_leftovers(report, actor) do
+    inner = internal_actor(actor)
+
+    Enum.reduce(Arca.Storage.overlay_roots(), report, fn root, acc ->
+      case list_under(inner, [root]) do
+        {:ok, keys} ->
+          keys
+          |> Enum.reject(&UnitLocator.staging?/1)
+          |> Enum.map(&Arca.Storage.locate/1)
+          |> Enum.uniq()
+          |> Enum.reduce(acc, fn
+            {:file, unit}, acc -> collect_leftover(acc, inner, unit)
+            {:dir, unit, _sentinel}, acc -> collect_leftover(acc, inner, unit)
+            _above_or_outside, acc -> acc
+          end)
+
+        {:error, reason} ->
+          %{acc | errors: [{[root], reason} | acc.errors]}
+      end
+    end)
+  end
+
+  defp collect_leftover(report, inner, unit) do
+    case Arca.Overlay.collect_unit_path(inner, unit) do
+      {:ok, :collected} -> %{report | leftovers: report.leftovers + 1}
+      {:ok, :kept} -> report
+      {:error, :stale_writer} -> report
+      {:error, reason} -> %{report | errors: [{unit, reason} | report.errors]}
+    end
+  end
+
   # A pin whose holder is no longer live holds nothing.
   defp drop_dead_pins(report, actor, listing) do
     {:ok, athanor} = tenant(actor)
@@ -647,6 +723,33 @@ defmodule Arca.StorageGC do
     do: {:kept, :committed}
 
   defp not_the_pointer(_row, _revision), do: :ok
+
+  # Step 4's last look, read after the draft is retired so no commit can
+  # name the candidate afterwards: a candidate the pointer has left since
+  # the snapshot is aged from the commit that replaced it, as the
+  # snapshot aged it — a reader that resolved the row before that commit
+  # reads the revision through the grace.
+  defp outside_replacement_grace(
+         athanor,
+         %{root: root, unit_key: key, revision: revision},
+         now,
+         grace_ms
+       ) do
+    rescuing_db("replacement_grace", fn ->
+      replaced_at =
+        from(c in where_athanor(StorageCommit, athanor),
+          join: u in StorageUnit,
+          on: u.id == c.storage_unit_id and u.athanor_id == ^athanor,
+          where: u.root == ^root and u.unit_key == ^key and c.prior_revision == ^revision,
+          select: max(c.committed_at)
+        )
+        |> Arca.Repo.one()
+
+      if is_nil(replaced_at) or DateTime.diff(now, replaced_at, :millisecond) > grace_ms,
+        do: :ok,
+        else: {:kept, :replaced}
+    end)
+  end
 
   # The marker is looked for again: a prefix listed without one may be a
   # writer's that had not created it yet on a store that lists late.
