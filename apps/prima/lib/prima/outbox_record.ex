@@ -19,6 +19,11 @@ defmodule Prima.OutboxRecord do
       the close that answered it, JSON-encoded when it is not a string
       and cut to `max_output_bytes/0` on a character boundary with
       `truncated` set; nil when the schedule did not ask to keep it;
+    * `sources` — the run's source ledger (`Prima.Source`) as the
+      finish's own transaction read it, canonical JSON objects beside the
+      output they describe, so a kept note carries the classes the run
+      read without a later read of an execution row retention may have
+      removed; nil when the schedule did not ask to keep the output;
     * `keep_outcome` and `note_name` — the schedule's choice at the
       finish, the pair its stored metadata states (`keep_pair/1`);
     * `schedule_revision` — the schedule's revision, the same instant as
@@ -76,8 +81,9 @@ defmodule Prima.OutboxRecord do
   read in its transaction: `occurrence` (`id`, `athanor_id`,
   `scheduled_for`, `execution_id`, `note_revision_read`), `schedule`
   (`id`, `profile_id`, `updated_at`), `consent_revision`, the parsed
-  `keep` pair `{keep_outcome, note_name}` and the run's raw `output`,
-  kept only when the schedule asked to keep it.
+  `keep` pair `{keep_outcome, note_name}`, the run's raw `output` and
+  its ledger `sources`, both kept only when the schedule asked to keep
+  the output.
   """
   @spec schedule_outcome(map()) :: t()
   def schedule_outcome(%{
@@ -85,10 +91,11 @@ defmodule Prima.OutboxRecord do
         schedule: %{id: schedule_id, profile_id: profile_id, updated_at: %DateTime{} = updated},
         consent_revision: consent_revision,
         keep: {keep?, note_name},
-        output: output
+        output: output,
+        sources: sources
       })
       when is_binary(occurrence_id) and is_binary(athanor_id) and athanor_id != "" and
-             is_binary(schedule_id) and is_boolean(keep?) and
+             is_binary(schedule_id) and is_boolean(keep?) and is_list(sources) and
              (is_integer(consent_revision) or is_nil(consent_revision)) do
     revision = instant(updated)
     {output, truncated?} = if keep?, do: output(output), else: {nil, false}
@@ -102,6 +109,7 @@ defmodule Prima.OutboxRecord do
       snapshot: %{
         "output" => output,
         "truncated" => truncated?,
+        "sources" => if(keep?, do: stored_sources(sources)),
         "keep_outcome" => keep?,
         "note_name" => if(keep?, do: note_name(note_name)),
         "schedule_revision" => revision,
@@ -164,6 +172,18 @@ defmodule Prima.OutboxRecord do
 
   def note_revision_read(%__MODULE__{}), do: :absent
 
+  @doc """
+  The sources a `schedule_outcome` snapshot records for its kept output
+  (`Prima.Source`). A snapshot that records none it can read is one
+  unnamed outside source, never none: provenance that cannot be read is
+  not the athanor's own.
+  """
+  @spec sources(t()) :: [Prima.Source.t()]
+  def sources(%__MODULE__{snapshot: %{"sources" => sources}}) when is_list(sources),
+    do: sources |> Enum.map(&Prima.Source.from_json/1) |> Prima.Source.set()
+
+  def sources(%__MODULE__{}), do: [Prima.Source.outside(nil)]
+
   @doc "The snapshot as the canonical JSON text it is stored as."
   @spec encode_snapshot(t()) :: {:ok, String.t()} | {:error, :unencodable}
   def encode_snapshot(%__MODULE__{snapshot: snapshot}) when is_map(snapshot) do
@@ -211,6 +231,14 @@ defmodule Prima.OutboxRecord do
 
   defp revision_read(read) when is_integer(read) and read >= 0, do: read
   defp revision_read(nil), do: "absent"
+
+  # A source's canonical object without the name it does not carry: JCS
+  # has no null, and `Prima.Source.from_json/1` reads an absent name as
+  # none.
+  defp stored_sources(sources) do
+    for json <- Prima.Source.to_json_list(sources),
+        do: Map.reject(json, fn {_key, value} -> is_nil(value) end)
+  end
 
   defp note_name(name) when is_binary(name) and name != "", do: name
   defp note_name(_), do: nil

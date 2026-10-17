@@ -452,6 +452,83 @@ defmodule Aqua.ScheduleNotesTest do
       assert byte_size(note.content) <= 64 * 1024 + 100
     end
 
+    test "the note carries the sources the run read, after its execution row is gone, and a send its flows do not cover is refused",
+         %{athanor: athanor, ctx: ctx} = context do
+      schedule = keeping(context, "nightly")
+      {_occurrence, execution_id} = started = started!(schedule, 60)
+      actor = Sanctum.Context.actor(ctx)
+      vault = Prima.Source.new(:vault_disclosed)
+
+      # The run read a disclosed vault value, and ended.
+      {:ok, %{execution: row}} =
+        Arca.Execution.admit(
+          %{
+            id: execution_id,
+            reference: schedule.resolved_reference,
+            profile_id: schedule.profile_id,
+            user_id: ctx.user_id,
+            athanor_id: ctx.athanor_id,
+            component_type: "reagent",
+            origin: :schedule,
+            sources: []
+          },
+          Arca.Test.Actor.standing(ctx.athanor_id)
+        )
+
+      assert :ok = Opus.Ledger.join(actor, execution_id, [vault])
+
+      {:ok, _ended} =
+        Arca.Execution.record_end(
+          actor,
+          execution_id,
+          "completed",
+          %{completed_at: DateTime.utc_now(), duration_ms: 1},
+          row.current_attempt,
+          Arca.Test.Actor.stored()
+        )
+
+      finished!(started, "the run's list")
+
+      # Retention removes the run's row before the note is delivered.
+      {1, _} =
+        Arca.Repo.delete_all(
+          from(e in Arca.Schemas.Execution,
+            where: e.athanor_id == ^ctx.athanor_id and e.id == ^execution_id
+          )
+        )
+
+      assert {:ok, %{"applied" => 1}} = drain(athanor)
+      assert {:ok, %{note: note}} = note(ctx, "nightly")
+      assert note.sources == [vault]
+
+      # A run that reads the note may send it only where a flow lets the
+      # vault's class leave.
+      reader = Prima.UUID7.execution_id()
+
+      {:ok, _reader} =
+        Arca.Execution.admit(
+          %{
+            id: reader,
+            reference: "catalyst:local.reader:1.0.0",
+            user_id: ctx.user_id,
+            athanor_id: ctx.athanor_id,
+            component_type: "catalyst",
+            origin: :programmatic
+          },
+          Arca.Test.Actor.standing(ctx.athanor_id)
+        )
+
+      {:ok, answer} = Aqua.Notes.read(ctx, "nightly")
+
+      assert :ok =
+               Opus.Ledger.join(actor, reader, Aqua.Providers.Notes.answer_sources(actor, answer))
+
+      filed_only = %Prima.Authority.Blob.Edge{flows: [%{from: :filed, to: "export.example"}]}
+
+      assert {:refused, _uncovered} =
+               Opus.Ledger.check(actor, reader, filed_only, {:domain, "export.example"})
+    end
+
     test "a note_name no note may carry is refused, and the id is not used instead",
          %{athanor: athanor, ctx: ctx} = context do
       for name <- ["nightly: sync", "../escape", "about-us"] do
@@ -656,7 +733,8 @@ defmodule Aqua.ScheduleNotesTest do
         schedule: %{id: "sched_unkept", profile_id: "prof_unkept", updated_at: now},
         consent_revision: nil,
         keep: {false, nil},
-        output: "not for keeping"
+        output: "not for keeping",
+        sources: []
       })
 
     :ok = Arca.Outbox.put!(actor, record)
