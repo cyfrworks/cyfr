@@ -893,9 +893,11 @@ defmodule Arca.OverlayTest do
       assert Arca.Overlay.unit_status(actor, @version_dir) == {:ok, :shipped}
     end
 
-    test "a unit dropped inside a commit's window is not published by that commit", %{
-      actor: actor
-    } do
+    test "a drop inside a commit's window is refused as the committer's; the commit lands " <>
+           "and the drop then deletes it whole",
+         %{
+           actor: actor
+         } do
       # `component.delete` and the publish rollback both reach
       # `Arca.delete_tree` on a version dir. A dir with NO seed behind it,
       # so "gone" reads `:absent` and nothing else.
@@ -912,13 +914,19 @@ defmodule Arca.OverlayTest do
           )
         end)
 
+      # The committer holds the unit's draft: the drop is another writer's
+      # to make once the committer is done, and deletes nothing now.
       assert_receive {:staging, committer_pid}, 10_000
-      assert :ok = Arca.delete_tree(actor, dir)
+      assert {:error, :stale_writer} = Arca.delete_tree(actor, dir)
       send(committer_pid, :proceed)
 
-      # The drop retired the row the commit staged against, so the commit
-      # is refused and leaves nothing: no served object, no staged one.
-      assert {:error, :missing_unit} = Task.await(committer, 30_000)
+      assert {:ok, _written} = Task.await(committer, 30_000)
+      assert Arca.Overlay.unit_status(actor, dir) == {:ok, :own}
+      assert {:ok, "A"} = Arca.get(actor, dir ++ ["a.txt"])
+      assert [_the_commit] = journal(actor, dir)
+
+      # Done, the unit is the drop's: served objects, staging and row.
+      assert :ok = Arca.delete_tree(actor, dir)
       assert Arca.Overlay.unit_status(actor, dir) == {:ok, :absent}
       refute Arca.exists?(actor, dir ++ [@sentinel])
       refute Arca.exists?(actor, dir ++ ["a.txt"])
@@ -929,7 +937,7 @@ defmodule Arca.OverlayTest do
                  Arca.Storage.UnitLocator.staging_prefix(dir)
                )
 
-      assert journal(actor, dir) == []
+      assert [_the_commit] = journal(actor, dir)
     end
 
     test "a tree delete above units is refused while a unit stands beneath it", %{

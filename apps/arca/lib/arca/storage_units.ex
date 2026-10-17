@@ -14,6 +14,11 @@ defmodule Arca.StorageUnits do
 
   ## The write protocol's row half
 
+  The draft is the unit's one write lease: whoever holds it owns every
+  transition of the unit — the next commit, the move of its bytes to the
+  served location, its removal — and nobody else may make one until it is
+  given back or has outlived `draft_ttl_ms/0`.
+
     1. `register_draft/4` gives the unit's one draft to a writer's token.
        Another writer is refused while that draft is live — held, and
        registered within `draft_ttl_ms/0` — so a writer that died cannot
@@ -24,11 +29,25 @@ defmodule Arca.StorageUnits do
        member still holds its slot in the cell, rechecks that the row is
        the actor's athanor's and not retired, compares the pointer with
        the revision the writer staged against and the draft token with the
-       writer's, moves the pointer, clears the token and appends exactly
-       one journal row. Of two writers with one expected revision exactly
-       one commits.
+       writer's, moves the pointer and appends exactly one journal row. Of
+       two writers with one expected revision exactly one commits. The
+       token is KEPT: the writer still holds the unit while it moves the
+       committed revision to the served location, so no other commit can
+       land under that move and no removal can delete under it.
+    4. `release_served/4` is the finish's one short transaction: it gives
+       the draft back only while the pointer still names the revision the
+       writer served and the token is still the writer's. A writer whose
+       token was taken — it stalled past the draft's lifetime — is told
+       `:stale_writer` and has published nothing a reader will keep.
 
-  `abandon_draft/3` gives a draft back without committing.
+  A removal takes the same lease: `stamped_retire/4` moves the row to
+  `retiring` under a token of its own, the deleter clears the served
+  location while it holds it, and `finish_retire/4` retires the row. A
+  commit, a registration or another removal against a `retiring` row is
+  refused `:stale_writer` while that token lives.
+
+  `abandon_draft/3` gives a draft back without committing, and is how a
+  finish that could not move its bytes hands the unit to repair.
 
   ## The projection generation
 
@@ -36,12 +55,13 @@ defmodule Arca.StorageUnits do
   must show, so each raises the root's epoch in its own transaction and
   writes the unit's change row at that generation, not ready
   (`Arca.StorageProjectionRoots.advance!/3`); it is announced once the
-  transaction commits. `stamped_commit/5` and `stamped_retire/3` answer
-  the generation, which the writer marks ready when the move or the delete
-  it names has finished (`Arca.StorageProjectionChanges.mark_ready/5`). A
-  retirement writes its tombstone even for a unit no row names: the bytes
-  it deletes may have been laid by hand. Registering, abandoning and
-  releasing a draft change nothing a reader sees, and stamp nothing.
+  transaction commits. `stamped_commit/6` and `stamped_retire/4` answer
+  the generation, which the writer marks ready once the move or the delete
+  it names has finished and the draft is given back
+  (`Arca.StorageProjectionChanges.mark_ready/5`). A retirement writes its tombstone even
+  for a unit no row names: the bytes it deletes may have been laid by
+  hand. Registering, abandoning and releasing a draft change nothing a
+  reader sees, and stamp nothing.
 
   ## Tenancy
 
@@ -90,9 +110,12 @@ defmodule Arca.StorageUnits do
   A unit never seen gets a `draft` row. A `committed` row keeps its state
   and its pointer — readers keep the committed revision while the next is
   staged. A `retired` row becomes a `draft` again with no pointer; the
-  journal keeps its earlier commits. Registering again with the same
-  token holds. `{:error, :stale_writer}` when another writer's live draft
-  holds the unit.
+  journal keeps its earlier commits. So does a `retiring` row whose
+  deleter's token has outlived the draft's lifetime: the deleter is dead,
+  and what it left at the served location is replaced whole by the next
+  commit. Registering again with the same token holds, and renews the
+  lease. `{:error, :stale_writer}` when another writer's live draft holds
+  the unit — a commit being staged or finished, or a removal under way.
   """
   @spec register_draft(Prima.Actor.t(), String.t(), String.t(), String.t()) ::
           {:ok, StorageUnit.t()} | {:error, :stale_writer} | refusal()
@@ -110,14 +133,74 @@ defmodule Arca.StorageUnits do
 
   @doc """
   Give a draft back without committing: the token is cleared if it is
-  still `writer_token`, and a unit that was never committed is retired.
-  Idempotent — a draft another writer has since taken is left alone.
+  still `writer_token`; a unit that was never committed is retired, a
+  committed unit keeps its pointer, and a `retiring` unit — its deleter
+  giving up or dead — is retired. Idempotent — a draft another writer has
+  since taken is left alone.
   """
   @spec abandon_draft(Prima.Actor.t(), StorageUnit.t(), String.t()) :: :ok | refusal()
   def abandon_draft(%Prima.Actor{} = actor, %StorageUnit{} = unit, writer_token)
       when is_binary(writer_token) do
     with {:ok, athanor} <- tenant(actor) do
       rescuing_db("abandon_draft", fn -> release_draft(athanor, unit.id, writer_token) end)
+    end
+  end
+
+  @doc """
+  The unit's row as `writer_token` holds it — the check a finish, a
+  repair or a removal makes immediately before it touches the served
+  location, under the overlay's node-local fence. `{:error, :stale_writer}`
+  when the row is gone or its draft is no longer this writer's: the token
+  was taken after it outlived the draft's lifetime, and the unit is its
+  taker's.
+  """
+  @spec held(Prima.Actor.t(), String.t(), String.t(), String.t()) ::
+          {:ok, StorageUnit.t()} | {:error, :stale_writer} | refusal()
+  def held(%Prima.Actor{} = actor, root, unit_key, writer_token)
+      when is_binary(root) and is_binary(unit_key) and is_binary(writer_token) do
+    with {:ok, athanor} <- tenant(actor) do
+      rescuing_db("held", fn -> held_by(fetch(athanor, root, unit_key), writer_token) end)
+    end
+  end
+
+  @doc """
+  The finish's release: one short transaction that gives the draft back
+  only while the row is committed at `revision` and the draft is still
+  `writer_token`'s — the served bytes are then the pointer's, and the
+  next writer may take the unit. `{:error, :stale_revision}` when the
+  token is still the writer's but the pointer does not name `revision`;
+  `{:error, :stale_writer}` when the draft is no longer the writer's. In
+  neither case is anything changed.
+  """
+  @spec release_served(Prima.Actor.t(), StorageUnit.t(), String.t(), String.t()) ::
+          :ok | {:error, :stale_revision | :stale_writer} | refusal()
+  def release_served(%Prima.Actor{} = actor, %StorageUnit{} = unit, writer_token, revision)
+      when is_binary(writer_token) and is_binary(revision) do
+    with {:ok, athanor} <- tenant(actor),
+         :ok <- owned(athanor, unit) do
+      rescuing_db("release_served", fn ->
+        served =
+          from(u in where_athanor(StorageUnit, athanor),
+            where:
+              u.id == ^unit.id and u.state == "committed" and
+                u.current_revision == ^revision and u.draft_writer_token == ^writer_token
+          )
+
+        case Arca.Repo.update_all(served,
+               set: [draft_writer_token: nil, updated_at: DateTime.utc_now()]
+             ) do
+          {1, _} ->
+            :ok
+
+          {0, _} ->
+            case Arca.Repo.one(
+                   from(u in where_athanor(StorageUnit, athanor), where: u.id == ^unit.id)
+                 ) do
+              %StorageUnit{draft_writer_token: ^writer_token} -> {:error, :stale_revision}
+              _taken_or_gone -> {:error, :stale_writer}
+            end
+        end
+      end)
     end
   end
 
@@ -141,12 +224,14 @@ defmodule Arca.StorageUnits do
   @doc """
   Publish a staged revision: one transaction that moves the pointer from
   `expected_revision` (nil for a unit never committed) to
-  `identity.new_revision`, sets the state `committed`, clears the draft
-  token and appends one journal row — or does none of it. Answers `t:Arca.Schemas.StorageUnit.commit_result/0`:
+  `identity.new_revision`, sets the state `committed` and appends one
+  journal row — or does none of it. The draft token stays the writer's:
+  the writer holds the unit until `release_served/4`, so nothing lands
+  over the revision while its bytes move. Answers `t:Arca.Schemas.StorageUnit.commit_result/0`:
   `:stale_revision` when the pointer moved, `:stale_writer` when the draft
   is no longer the writer's, `:missing_unit` for a row that is absent,
-  retired or another athanor's, `:not_owner` when the writing member no
-  longer holds its slot in the cell.
+  retired, retiring or another athanor's, `:not_owner` when the writing
+  member no longer holds its slot in the cell.
 
   The slot is the one this member holds as the commit begins
   (`Arca.ControlPlane.member_slot/0`, a term read), and the transaction
@@ -249,8 +334,8 @@ defmodule Arca.StorageUnits do
 
   @doc """
   The committed pointer of one unit, for a reader to resolve once per
-  operation. A draft never committed and a retired unit are
-  `{:error, :not_found}`: readers see no unit.
+  operation. A draft never committed, a unit being removed and a retired
+  unit are `{:error, :not_found}`: readers see no unit.
   """
   @spec current(Prima.Actor.t(), String.t(), String.t()) ::
           {:ok, map()} | {:error, :not_found} | refusal()
@@ -278,27 +363,43 @@ defmodule Arca.StorageUnits do
   end
 
   @doc """
-  Retire a unit — the drop: readers see no unit from here on, the draft
-  token is cleared, and the pointer keeps its last revision for the
-  journal's sake. `{:error, :not_found}` for a unit with no row or one
-  already retired.
+  Retire a unit's row — the drop, rows only: readers see no unit from
+  here on, the draft token is cleared, and the pointer keeps its last
+  revision for the journal's sake. `stamped_retire/4` and
+  `finish_retire/4` with nothing between them. `{:error, :not_found}` for
+  a unit with no row; `{:error, :stale_writer}` while another writer's
+  live draft holds the unit.
   """
-  @spec retire(Prima.Actor.t(), String.t(), String.t()) :: :ok | {:error, :not_found} | refusal()
+  @spec retire(Prima.Actor.t(), String.t(), String.t()) ::
+          :ok | {:error, :not_found | :stale_writer} | refusal()
   def retire(%Prima.Actor{} = actor, root, unit_key) do
     case stamped_retire(actor, root, unit_key) do
-      {:retired, _generation} -> :ok
+      {:retiring, _generation, token} -> finish_retire(actor, root, unit_key, token)
       {:not_found, _generation} -> {:error, :not_found}
       {:error, _} = refusal -> refusal
     end
   end
 
   @doc """
-  `retire/3` as one locking transaction that also writes the unit's
-  tombstone, not ready, at a new projection generation — whether or not a
-  row named the unit — and answers that generation beside what became of
-  the row: `:retired`, or `:not_found` for no row or one already retired.
-  The deleter marks the tombstone ready once the tenant delete returns
-  (`Arca.StorageProjectionChanges.mark_ready/5`, revision nil).
+  Begin a unit's removal: one locking transaction that takes the unit's
+  draft under a fresh token, moves the row to `retiring` — readers see no
+  unit from here on — and writes the unit's tombstone, not ready, at a
+  new projection generation. Answers `{:retiring, generation, token}`:
+  the deleter clears the served location while it holds the token, marks
+  the tombstone ready once the tenant delete returns
+  (`Arca.StorageProjectionChanges.mark_ready/5`, revision nil) and then
+  calls `finish_retire/4`. While the row is `retiring` no commit lands,
+  no draft is registered and no second removal begins.
+
+  A unit already retired is taken the same way: a removal that died or
+  whose delete was refused left bytes the next removal clears under the
+  lease. `{:not_found, generation}` for no row at all: the tombstone is
+  still written — the bytes a deleter clears may have been laid by hand —
+  and the deleter holds nothing, so a first publication landing at that
+  moment is not fenced against it. `{:error, :stale_writer}` when another
+  writer's live draft holds the unit — a commit being staged or finished,
+  or another removal — and nothing is written: the caller asks again once
+  that writer is done.
 
   `:claim` in `opts` is `stamped_commit/6`'s: a provisioning attempt's
   retirement — the cleanup of a unit its own publish committed — lands
@@ -308,39 +409,79 @@ defmodule Arca.StorageUnits do
   stale attempt never retires its successor's unit.
   """
   @spec stamped_retire(Prima.Actor.t(), String.t(), String.t(), keyword()) ::
-          {:retired | :not_found, pos_integer()} | {:error, :not_owner} | refusal()
+          {:retiring, pos_integer(), String.t()}
+          | {:not_found, pos_integer()}
+          | {:error, :not_owner | :stale_writer}
+          | refusal()
   def stamped_retire(%Prima.Actor{} = actor, root, unit_key, opts \\ [])
       when is_binary(root) and is_binary(unit_key) and is_list(opts) do
     with {:ok, athanor} <- tenant(actor) do
+      token = new_writer_token()
+
       answer =
         rescuing_db("retire", fn ->
           Arca.Repo.locking_transaction(fn ->
             if not retires?(actor, Keyword.get(opts, :claim)),
               do: Arca.Repo.rollback(:not_owner)
 
-            retired = retire_row(athanor, root, unit_key)
-
-            generation =
-              StorageProjectionRoots.advance!(actor, root, %{
-                unit_key: unit_key,
-                ready: false,
-                tombstone: true,
-                source_revision: nil
-              })
-
-            {retired, generation}
+            case retire_row(athanor, root, unit_key, token) do
+              :stale_writer -> Arca.Repo.rollback(:stale_writer)
+              outcome -> {outcome, tombstone!(actor, root, unit_key)}
+            end
           end)
         end)
 
       case answer do
-        {:ok, {retired, generation}} ->
+        {:ok, {:retiring, generation}} ->
           StorageProjectionChanges.announce(athanor, root, generation, false)
-          {retired, generation}
+          {:retiring, generation, token}
+
+        {:ok, {:not_found, generation}} ->
+          StorageProjectionChanges.announce(athanor, root, generation, false)
+          {:not_found, generation}
 
         {:error, _} = refusal ->
           refusal
       end
     end
+  end
+
+  @doc """
+  End a unit's removal: the row `stamped_retire/4` moved to `retiring`
+  becomes `retired` and its token is cleared, in one short transaction,
+  only while the token is still `token` — the served location is then
+  cleared, or the delete was refused and left bytes a later drop clears.
+  `{:error, :stale_writer}` when the row is no longer this deleter's: its
+  token outlived the draft's lifetime and a writer took the unit.
+  """
+  @spec finish_retire(Prima.Actor.t(), String.t(), String.t(), String.t()) ::
+          :ok | {:error, :stale_writer} | refusal()
+  def finish_retire(%Prima.Actor{} = actor, root, unit_key, token)
+      when is_binary(root) and is_binary(unit_key) and is_binary(token) do
+    with {:ok, athanor} <- tenant(actor) do
+      rescuing_db("finish_retire", fn ->
+        retiring =
+          from(u in by_key(where_athanor(StorageUnit, athanor), root, unit_key),
+            where: u.state == "retiring" and u.draft_writer_token == ^token
+          )
+
+        case Arca.Repo.update_all(retiring,
+               set: [state: "retired", draft_writer_token: nil, updated_at: DateTime.utc_now()]
+             ) do
+          {1, _} -> :ok
+          {0, _} -> {:error, :stale_writer}
+        end
+      end)
+    end
+  end
+
+  defp tombstone!(actor, root, unit_key) do
+    StorageProjectionRoots.advance!(actor, root, %{
+      unit_key: unit_key,
+      ready: false,
+      tombstone: true,
+      source_revision: nil
+    })
   end
 
   @doc """
@@ -420,20 +561,21 @@ defmodule Arca.StorageUnits do
 
   # One conditional update each, so the take is atomic on every adapter:
   # a draft is free when nobody holds it, when this writer already does,
-  # or when its holder registered longer ago than the draft lives.
+  # or when its holder registered longer ago than the draft lives. A
+  # retired row, and a retiring one whose deleter's token has outlived
+  # the lifetime, come back as a draft with no pointer.
   defp take_draft(athanor, root, unit_key, writer_token) do
     now = DateTime.utc_now()
-    expiry = DateTime.add(now, -@draft_ttl_ms, :millisecond)
 
     free =
       from(u in by_key(where_athanor(StorageUnit, athanor), root, unit_key),
         where:
           is_nil(u.draft_writer_token) or u.draft_writer_token == ^writer_token or
-            u.updated_at < ^expiry
+            u.updated_at < ^expiry(now)
       )
 
     {revived, _} =
-      Arca.Repo.update_all(from(u in free, where: u.state == "retired"),
+      Arca.Repo.update_all(from(u in free, where: u.state in ["retired", "retiring"]),
         set: [
           state: "draft",
           current_revision: nil,
@@ -443,13 +585,16 @@ defmodule Arca.StorageUnits do
       )
 
     if revived == 0 do
-      Arca.Repo.update_all(from(u in free, where: u.state != "retired"),
+      Arca.Repo.update_all(from(u in free, where: u.state in ["draft", "committed"]),
         set: [draft_writer_token: writer_token, updated_at: now]
       )
     end
 
     :ok
   end
+
+  # When a token registered before this moment has outlived the draft.
+  defp expiry(now), do: DateTime.add(now, -@draft_ttl_ms, :millisecond)
 
   defp held_by(%StorageUnit{draft_writer_token: token} = unit, token), do: {:ok, unit}
   defp held_by(_another_writers_or_gone, _token), do: {:error, :stale_writer}
@@ -462,7 +607,7 @@ defmodule Arca.StorageUnits do
         where: u.id == ^id and u.draft_writer_token == ^writer_token
       )
 
-    Arca.Repo.update_all(from(u in held, where: u.state == "draft"),
+    Arca.Repo.update_all(from(u in held, where: u.state in ["draft", "retiring"]),
       set: [state: "retired", draft_writer_token: nil, updated_at: now]
     )
 
@@ -473,17 +618,31 @@ defmodule Arca.StorageUnits do
     :ok
   end
 
-  defp retire_row(athanor, root, unit_key) do
-    live =
+  # The removal's take of the lease: a row whose draft nobody holds, or
+  # whose holder's token has outlived the lifetime, moves to `retiring`
+  # under the deleter's token in one conditional update, whatever its
+  # state — a retired row too, since what an earlier removal left behind
+  # is cleared under the lease as well. A live token is another writer's
+  # — a commit staging or finishing, or a removal under way — and refuses.
+  defp retire_row(athanor, root, unit_key, token) do
+    now = DateTime.utc_now()
+
+    takeable =
       from(u in by_key(where_athanor(StorageUnit, athanor), root, unit_key),
-        where: u.state != "retired"
+        where: is_nil(u.draft_writer_token) or u.updated_at < ^expiry(now)
       )
 
-    case Arca.Repo.update_all(live,
-           set: [state: "retired", draft_writer_token: nil, updated_at: DateTime.utc_now()]
+    case Arca.Repo.update_all(takeable,
+           set: [state: "retiring", draft_writer_token: token, updated_at: now]
          ) do
-      {0, _} -> :not_found
-      {_retired, _} -> :retired
+      {1, _} ->
+        :retiring
+
+      {0, _} ->
+        case fetch(athanor, root, unit_key) do
+          nil -> :not_found
+          %StorageUnit{} -> :stale_writer
+        end
     end
   end
 
@@ -562,7 +721,9 @@ defmodule Arca.StorageUnits do
   defp swap(athanor, id, expected_revision, writer_token, identity, now) do
     held =
       from(u in where_athanor(StorageUnit, athanor),
-        where: u.id == ^id and u.state != "retired" and u.draft_writer_token == ^writer_token
+        where:
+          u.id == ^id and u.state in ["draft", "committed"] and
+            u.draft_writer_token == ^writer_token
       )
 
     at_expected =
@@ -570,12 +731,13 @@ defmodule Arca.StorageUnits do
         do: from(u in held, where: is_nil(u.current_revision)),
         else: from(u in held, where: u.current_revision == ^expected_revision)
 
+    # The token stays: the writer holds the unit through the move of its
+    # bytes, until `release_served/4`.
     {_moved, keys} =
       Arca.Repo.update_all(from(u in at_expected, select: {u.root, u.unit_key}),
         set: [
           state: "committed",
           current_revision: identity.new_revision,
-          draft_writer_token: nil,
           updated_at: now
         ]
       )
@@ -604,7 +766,7 @@ defmodule Arca.StorageUnits do
   defp refusal(athanor, id, expected_revision) do
     case Arca.Repo.one(from(u in where_athanor(StorageUnit, athanor), where: u.id == ^id)) do
       nil -> :missing_unit
-      %StorageUnit{state: "retired"} -> :missing_unit
+      %StorageUnit{state: gone} when gone in ["retired", "retiring"] -> :missing_unit
       %StorageUnit{current_revision: ^expected_revision} -> :stale_writer
       %StorageUnit{} -> :stale_revision
     end

@@ -36,7 +36,8 @@ defmodule Arca.StorageUnitsTest do
     )
   end
 
-  # Register, then commit `revision` against what the draft answered.
+  # Register, commit `revision` against what the draft answered, and
+  # release the draft as a finished move does.
   defp commit!(actor, key, revision, attrs \\ %{}) do
     token = StorageUnits.new_writer_token()
     {:ok, draft} = StorageUnits.register_draft(actor, @root, key, token)
@@ -50,6 +51,7 @@ defmodule Arca.StorageUnitsTest do
                identity(revision, attrs)
              )
 
+    assert :ok = StorageUnits.release_served(actor, draft, token, revision)
     draft
   end
 
@@ -147,16 +149,43 @@ defmodule Arca.StorageUnitsTest do
   end
 
   describe "commit/5" do
-    test "moves the pointer, clears the token and appends exactly one journal row", %{
-      actor: actor,
-      key: key
-    } do
+    test "moves the pointer, keeps the token and appends exactly one journal row; the finish " <>
+           "releases the token",
+         %{
+           actor: actor,
+           key: key
+         } do
       {:ok, draft} = StorageUnits.register_draft(actor, @root, key, "wrt_1")
 
       assert :committed = StorageUnits.commit(actor, draft, nil, "wrt_1", identity("rev_1"))
 
-      assert {:ok, %{state: "committed", current_revision: "rev_1", draft_writer_token: nil}} =
+      # The writer still holds the unit: nobody else registers or commits
+      # while the committed revision moves to the served location.
+      assert {:ok, %{state: "committed", current_revision: "rev_1", draft_writer_token: "wrt_1"}} =
                StorageUnits.current(actor, @root, key)
+
+      assert {:error, :stale_writer} = StorageUnits.register_draft(actor, @root, key, "wrt_2")
+
+      assert {:ok, %StorageUnit{id: held_id, draft_writer_token: "wrt_1"}} =
+               StorageUnits.held(actor, @root, key, "wrt_1")
+
+      assert held_id == draft.id
+      assert {:error, :stale_writer} = StorageUnits.held(actor, @root, key, "wrt_2")
+
+      # Released only at the revision it serves and under its own token.
+      assert {:error, :stale_revision} =
+               StorageUnits.release_served(actor, draft, "wrt_1", "rev_other")
+
+      assert {:error, :stale_writer} = StorageUnits.release_served(actor, draft, "wrt_2", "rev_1")
+      assert %{draft_writer_token: "wrt_1"} = row(draft.id)
+
+      assert :ok = StorageUnits.release_served(actor, draft, "wrt_1", "rev_1")
+
+      assert %{state: "committed", current_revision: "rev_1", draft_writer_token: nil} =
+               row(draft.id)
+
+      assert {:error, :stale_writer} = StorageUnits.release_served(actor, draft, "wrt_1", "rev_1")
+      assert {:ok, _next} = StorageUnits.register_draft(actor, @root, key, "wrt_2")
 
       assert {:ok, [%{id: _} = commit]} = StorageUnits.journal(actor, @root, key)
 
@@ -246,9 +275,21 @@ defmodule Arca.StorageUnitsTest do
       assert row(draft.id).draft_writer_token == "wrt_1"
     end
 
-    test "a retired unit, and a unit with no row, are missing", %{actor: actor, key: key} do
+    test "a retired unit, a retiring unit and a unit with no row are missing", %{
+      actor: actor,
+      key: key
+    } do
       {:ok, draft} = StorageUnits.register_draft(actor, @root, key, "wrt_1")
-      assert :ok = StorageUnits.retire(actor, @root, key)
+
+      # The writer's draft outlived its lifetime: a removal takes the unit
+      # over, and the writer's commit finds no unit of its own.
+      age_draft!(draft.id)
+      assert {:retiring, _generation, token} = StorageUnits.stamped_retire(actor, @root, key)
+
+      assert {:error, :missing_unit} =
+               StorageUnits.commit(actor, draft, nil, "wrt_1", identity("rev_1"))
+
+      assert :ok = StorageUnits.finish_retire(actor, @root, key, token)
 
       assert {:error, :missing_unit} =
                StorageUnits.commit(actor, draft, nil, "wrt_1", identity("rev_1"))
@@ -325,10 +366,15 @@ defmodule Arca.StorageUnitsTest do
     } do
       commit!(actor, key, "rev_1")
 
-      assert {:retired, retired} = StorageUnits.stamped_retire(actor, @root, key)
+      assert {:retiring, retired, token} = StorageUnits.stamped_retire(actor, @root, key)
 
       assert %{generation: ^retired, tombstone: true, ready: false, source_revision: nil} =
                change(actor, key)
+
+      # The tombstone is the removal's to mark, and stands once the row is
+      # retired.
+      assert :ok = StorageUnits.finish_retire(actor, @root, key, token)
+      assert %{generation: ^retired, tombstone: true, ready: false} = change(actor, key)
 
       assert {:not_found, absent} = StorageUnits.stamped_retire(other, @root, key)
       assert %{generation: ^absent, tombstone: true} = change(other, key)
@@ -357,23 +403,105 @@ defmodule Arca.StorageUnitsTest do
       assert row(draft.id).draft_writer_token == "wrt_3"
     end
 
-    test "retire/3 hides the unit, keeps its last revision and clears the draft", %{
-      actor: actor,
-      key: key
-    } do
+    test "retire/3 hides the unit and keeps its last revision; a live draft refuses it, and " <>
+           "one that outlived its lifetime does not",
+         %{
+           actor: actor,
+           key: key
+         } do
       draft = commit!(actor, key, "rev_1")
-      {:ok, _next} = StorageUnits.register_draft(actor, @root, key, "wrt_2")
+      {:ok, next} = StorageUnits.register_draft(actor, @root, key, "wrt_2")
 
+      # The unit is another writer's while its draft lives.
+      assert {:error, :stale_writer} = StorageUnits.retire(actor, @root, key)
+      assert {:ok, %{current_revision: "rev_1"}} = StorageUnits.current(actor, @root, key)
+      assert %{draft_writer_token: "wrt_2"} = row(draft.id)
+
+      assert :ok = StorageUnits.abandon_draft(actor, next, "wrt_2")
       assert :ok = StorageUnits.retire(actor, @root, key)
       assert {:error, :not_found} = StorageUnits.current(actor, @root, key)
 
       assert %{state: "retired", current_revision: "rev_1", draft_writer_token: nil} =
                row(draft.id)
 
-      assert {:error, :not_found} = StorageUnits.retire(actor, @root, key)
+      # A retired unit is taken again — what an earlier removal left is
+      # cleared under the lease — and a unit with no row is not found.
+      assert :ok = StorageUnits.retire(actor, @root, key)
+      assert %{state: "retired", current_revision: "rev_1"} = row(draft.id)
 
       assert {:error, :not_found} =
                StorageUnits.retire(actor, @root, "catalysts/local/none/9.9.9")
+
+      # A draft that outlived its lifetime is a dead writer's, and no bar.
+      {:ok, revived} = StorageUnits.register_draft(actor, @root, key, "wrt_3")
+      age_draft!(revived.id)
+      assert :ok = StorageUnits.retire(actor, @root, key)
+      assert %{state: "retired", draft_writer_token: nil} = row(draft.id)
+    end
+
+    test "a removal holds the unit as `retiring` under its token until finish_retire/4", %{
+      actor: actor,
+      key: key
+    } do
+      draft = commit!(actor, key, "rev_1")
+
+      assert {:retiring, generation, token} = StorageUnits.stamped_retire(actor, @root, key)
+      assert is_integer(generation) and is_binary(token)
+
+      assert %{state: "retiring", current_revision: "rev_1", draft_writer_token: ^token} =
+               row(draft.id)
+
+      # Readers see no unit; no writer, creator or second removal lands.
+      assert {:error, :not_found} = StorageUnits.current(actor, @root, key)
+      assert {:error, :stale_writer} = StorageUnits.register_draft(actor, @root, key, "wrt_2")
+      assert {:error, :stale_writer} = StorageUnits.stamped_retire(actor, @root, key)
+
+      assert {:error, :missing_unit} =
+               StorageUnits.commit(actor, draft, "rev_1", token, identity("rev_2"))
+
+      assert {:ok, %{state: "retiring"}} = StorageUnits.held(actor, @root, key, token)
+
+      assert {:error, :stale_writer} = StorageUnits.finish_retire(actor, @root, key, "wrt_other")
+      assert :ok = StorageUnits.finish_retire(actor, @root, key, token)
+
+      assert %{state: "retired", current_revision: "rev_1", draft_writer_token: nil} =
+               row(draft.id)
+
+      assert {:error, :stale_writer} = StorageUnits.finish_retire(actor, @root, key, token)
+
+      # Retired, the unit is the next writer's: the row is reused.
+      assert {:ok, %{id: id, state: "draft", current_revision: nil}} =
+               StorageUnits.register_draft(actor, @root, key, "wrt_2")
+
+      assert id == draft.id
+    end
+
+    test "a removal that is abandoned, or whose deleter died, gives the unit back", %{
+      actor: actor,
+      key: key
+    } do
+      draft = commit!(actor, key, "rev_1")
+      {:retiring, _generation, token} = StorageUnits.stamped_retire(actor, @root, key)
+
+      # Abandoned: retired, with the pointer kept for the journal.
+      assert :ok = StorageUnits.abandon_draft(actor, draft, token)
+
+      assert %{state: "retired", current_revision: "rev_1", draft_writer_token: nil} =
+               row(draft.id)
+
+      # Dead: once the deleter's token has outlived the lifetime, a writer
+      # takes the unit as a draft with no pointer, and a removal takes it
+      # over.
+      commit!(actor, key, "rev_2")
+      {:retiring, _generation, dead} = StorageUnits.stamped_retire(actor, @root, key)
+      age_draft!(draft.id)
+
+      assert {:ok, %{state: "draft", current_revision: nil}} =
+               StorageUnits.register_draft(actor, @root, key, "wrt_4")
+
+      assert {:error, :stale_writer} = StorageUnits.finish_retire(actor, @root, key, dead)
+      age_draft!(draft.id)
+      assert {:retiring, _generation, _token} = StorageUnits.stamped_retire(actor, @root, key)
     end
 
     test "current_under/2 answers the committed pointers of one root, by key", %{

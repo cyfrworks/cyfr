@@ -29,12 +29,22 @@ defmodule Arca.Adapters.Local do
   and a reader never opens a partial file. A conditional replace re-reads
   the object, compares its digest and renames the new bytes over it.
 
-  Every conditional write on one path runs under a lock on this node, so
-  a replace's read and write cannot interleave with another conditional
-  write's. The adapter is single-node by definition — one boot owns the
-  volume — so the node-local lock is the whole serialization. A plain
-  `put/3` or `append/3` is not under it: a key written conditionally is
-  written conditionally by every writer.
+  Every write of one file runs under a lock on that file's physical path
+  on this node — a plain `put/3`, `append/3` and `delete/2` as much as the
+  conditional writes — so a replace's read and write cannot interleave
+  with any other writer's, and a plain write cannot land between a
+  replace's precondition read and its rename. A tree swap
+  (`replace_tree/3`) and a tree delete (`delete_tree/2`) hold the tree's
+  lock and the lock of every file they replace or remove, taken in path
+  order after the tree's, so a replace of a file inside a tree being
+  swapped lands before the swap or reads what the swap installed, never
+  over it; a file a plain write creates inside a tree while it is being
+  swapped or deleted is the one write no lock covers, and lands in
+  whichever tree is there, as the facade says of a write under a
+  replacement. The adapter is single-node by definition — one boot owns
+  the volume — so the node-local lock is the whole serialization; an
+  object store serializes the same writes itself, on the key's own
+  version (`Arca.Adapters.S3`).
 
   The one result vocabulary, shared with `Arca.Adapters.S3` for the same
   situations:
@@ -119,7 +129,8 @@ defmodule Arca.Adapters.Local do
   @impl true
   def put(%Prima.Actor{} = actor, path, content) do
     refuse_seed_write!(path)
-    write_via_rename(build_path(actor, path), content)
+    full_path = build_path(actor, path)
+    serialized(full_path, fn -> write_via_rename(full_path, content) end)
   end
 
   # Write-then-rename is atomic for readers: they see complete old or new
@@ -160,17 +171,19 @@ defmodule Arca.Adapters.Local do
     # is the same residual `get/2` carries — only the walks lstat every
     # level). Checked before mkdir_p: lstat on a missing target is
     # `:undefined`, and a refused call should create no directories.
-    case lstat_type(full_path) do
-      :symlink ->
-        Logger.warning("[Arca.Local.append] refusing symlink at #{full_path}")
-        {:error, :symlink_denied}
+    serialized(full_path, fn ->
+      case lstat_type(full_path) do
+        :symlink ->
+          Logger.warning("[Arca.Local.append] refusing symlink at #{full_path}")
+          {:error, :symlink_denied}
 
-      _ ->
-        with :ok <- check_append_ceiling(full_path, content),
-             :ok <- full_path |> Path.dirname() |> File.mkdir_p() do
-          File.write(full_path, content, [:append])
-        end
-    end
+        _ ->
+          with :ok <- check_append_ceiling(full_path, content),
+               :ok <- full_path |> Path.dirname() |> File.mkdir_p() do
+            File.write(full_path, content, [:append])
+          end
+      end
+    end)
   end
 
   # The same append ceiling the S3 adapter enforces, from the same
@@ -296,12 +309,61 @@ defmodule Arca.Adapters.Local do
 
   defp precondition(bytes), do: Prima.Digest.sha256_hex(bytes)
 
-  # One conditional write (or tree swap) in flight per physical path on
-  # this node: its check and its write cannot interleave with another's.
-  # Node-local by design (the moduledoc says why). `:aborted` only with
-  # `retries` of zero, when the lock is held.
-  defp serialized(full_path, fun, retries \\ :infinity) do
-    :global.trans({{__MODULE__, full_path}, self()}, fun, [node()], retries)
+  # One write (or tree swap, or tree delete) in flight per physical path
+  # on this node: its check and its write cannot interleave with
+  # another's. Node-local by design (the moduledoc says why).
+  defp serialized(full_path, fun), do: holding([full_path], fun)
+
+  # `fun` with every path in `paths` locked, taken in the order given and
+  # given back whatever `fun` does. Every holder takes its paths in
+  # ascending path order — a tree before the files under it — so two
+  # holders never wait on each other in a cycle. A lock is a `:global`
+  # lock of this node alone; the lock of a process that dies is released
+  # with it. Waiting polls rather than taking `:global.trans/4`'s
+  # randomized sleeps, which reach seconds under contention.
+  defp holding(paths, fun) do
+    ids = for path <- paths, do: {{__MODULE__, path}, self()}
+    Enum.each(ids, &acquire/1)
+
+    try do
+      fun.()
+    after
+      ids |> Enum.reverse() |> Enum.each(&:global.del_lock(&1, [node()]))
+    end
+  end
+
+  defp acquire(id, wait_ms \\ 1) do
+    if :global.set_lock(id, [node()], 0) do
+      :ok
+    else
+      Process.sleep(wait_ms)
+      acquire(id, min(wait_ms * 2, 16))
+    end
+  end
+
+  # `fun` under the path's lock only if it is free now, `:aborted` when a
+  # writer holds it.
+  defp try_serialized(full_path, fun) do
+    id = {{__MODULE__, full_path}, self()}
+
+    if :global.set_lock(id, [node()], 0) do
+      try do
+        fun.()
+      after
+        :global.del_lock(id, [node()])
+      end
+    else
+      :aborted
+    end
+  end
+
+  # The locks a tree swap or a tree delete takes beside the tree's own:
+  # every file now under the tree and every file the swap installs, in
+  # path order. Taken under the tree's lock, which every other swap or
+  # delete of the tree waits on first.
+  defp tree_file_locks(live, installed) do
+    leaves = if File.dir?(live), do: walk_files(live), else: []
+    (leaves ++ installed) |> Enum.uniq() |> Enum.sort()
   end
 
   @doc """
@@ -343,11 +405,13 @@ defmodule Arca.Adapters.Local do
     refuse_seed_write!(path)
     full_path = build_path(actor, path)
 
-    case File.rm(full_path) do
-      :ok -> :ok
-      {:error, :enoent} -> {:error, :not_found}
-      {:error, reason} -> {:error, reason}
-    end
+    serialized(full_path, fn ->
+      case File.rm(full_path) do
+        :ok -> :ok
+        {:error, :enoent} -> {:error, :not_found}
+        {:error, reason} -> {:error, reason}
+      end
+    end)
   end
 
   @impl true
@@ -399,15 +463,21 @@ defmodule Arca.Adapters.Local do
     lstat_type(full_path) == :regular
   end
 
+  # Under the tree's lock and every file's beneath it, so a conditional
+  # replace of a file inside the tree never lands after the tree is gone.
   @impl true
   def delete_tree(%Prima.Actor{} = actor, path) do
     refuse_seed_write!(path)
     full_path = build_path(actor, path)
 
-    case File.rm_rf(full_path) do
-      {:ok, _} -> :ok
-      {:error, reason, _} -> {:error, reason}
-    end
+    serialized(full_path, fn ->
+      holding(tree_file_locks(full_path, []), fn ->
+        case File.rm_rf(full_path) do
+          {:ok, _} -> :ok
+          {:error, reason, _} -> {:error, reason}
+        end
+      end)
+    end)
   end
 
   @impl true
@@ -552,9 +622,10 @@ defmodule Arca.Adapters.Local do
       when is_list(files) do
     refuse_seed_write!(path)
     swap = swap_names(build_path(actor, path))
+    installed = for {rel, _content} <- files, do: Path.join([swap.live | rel])
 
     with :ok <- stage(actor, path, swap.staged, files),
-         :ok <- swap(swap) do
+         :ok <- swap(swap, installed) do
       :ok
     else
       {:error, _} = error ->
@@ -605,26 +676,31 @@ defmodule Arca.Adapters.Local do
   defp file_bytes(bytes) when is_binary(bytes), do: {:ok, bytes}
   defp file_bytes(fun) when is_function(fun, 0), do: fun.()
 
-  # The journal is written inside the lock, so a journal on disk with the
-  # lock free belongs to a swap that crashed or whose cleanup failed —
-  # what the sweep may settle without racing a swap in flight.
-  defp swap(%{live: live} = names) do
+  # The journal is written inside the tree's lock, so a journal on disk
+  # with the lock free belongs to a swap that crashed or whose cleanup
+  # failed — what the sweep may settle without racing a swap in flight.
+  # The files the swap replaces or installs are locked under it, so a
+  # conditional replace of one of them is wholly before the swap or
+  # wholly after it.
+  defp swap(%{live: live} = names, installed) do
     with :ok <- File.mkdir_p(Path.dirname(live)) do
       serialized(live, fn ->
-        with :ok <- write_journal(names) do
-          renamed =
-            case File.rename(live, names.retired) do
-              :ok -> File.rename(names.staged, live)
-              {:error, :enoent} -> File.rename(names.staged, live)
-              {:error, _} = error -> error
-            end
+        holding(tree_file_locks(live, installed), fn ->
+          with :ok <- write_journal(names) do
+            renamed =
+              case File.rename(live, names.retired) do
+                :ok -> File.rename(names.staged, live)
+                {:error, :enoent} -> File.rename(names.staged, live)
+                {:error, _} = error -> error
+              end
 
-          case {settle(names), renamed} do
-            {:new, _} -> :ok
-            {_old_or_none, {:error, _} = error} -> error
-            {_old_or_none, :ok} -> {:error, :swap_unsettled}
+            case {settle(names), renamed} do
+              {:new, _} -> :ok
+              {_old_or_none, {:error, _} = error} -> error
+              {_old_or_none, :ok} -> {:error, :swap_unsettled}
+            end
           end
-        end
+        end)
       end)
     end
   end
@@ -858,7 +934,7 @@ defmodule Arca.Adapters.Local do
   defp settle_journal(journal) do
     case read_journal(journal) do
       {:ok, names} ->
-        serialized(names.live, fn -> settle(names) end, 0)
+        try_serialized(names.live, fn -> settle(names) end)
 
         if File.exists?(journal),
           do: {:standing, [Path.basename(names.staged), Path.basename(names.retired)]},

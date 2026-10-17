@@ -551,6 +551,10 @@ defmodule Arca.PublicationContract do
           assert [%{new_revision: ^revision}] = journal(actor, unit)
           assert "a.txt" in staged(actor, unit)
 
+          # The dead writer's draft holds the unit through its lifetime, so
+          # repair waits it out, then takes the draft, serves and releases.
+          assert {:error, :stale_writer} = Arca.Overlay.repair_unit(actor, unit)
+          expire_drafts!()
           assert {:ok, :repaired} = Arca.Overlay.repair_unit(actor, unit)
 
           assert {^revision, served} = read(actor, unit)
@@ -558,6 +562,7 @@ defmodule Arca.PublicationContract do
           assert staged(actor, unit) == []
           assert Arca.Overlay.unit_status(actor, unit) == {:ok, :own}
           assert [_still_one] = journal(actor, unit)
+          assert {:ok, %{draft_writer_token: nil}} = StorageUnits.current(actor, root, key)
 
           assert {:ok, :nothing_pending} =
                    Arca.Overlay.repair_unit(actor, unit)
@@ -581,7 +586,9 @@ defmodule Arca.PublicationContract do
           committed = change(actor, unit)
           assert %{ready: false, pending: true, source_revision: ^revision} = committed
 
-          # Nor may the dead writer's mark land after a repair took over.
+          # Nor may the dead writer's mark land after a repair took over —
+          # once the dead writer's draft has outlived its lifetime.
+          expire_drafts!()
           assert {:ok, :repaired} = Arca.Overlay.repair_unit(actor, unit)
           repaired = change(actor, unit)
           assert %{ready: true, source_revision: ^revision, tombstone: false} = repaired

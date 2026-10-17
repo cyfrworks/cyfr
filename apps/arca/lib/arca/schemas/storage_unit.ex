@@ -28,15 +28,24 @@ defmodule Arca.Schemas.StorageUnit do
       and readers see no unit.
     * `committed` — the pointer names a revision. A later draft against
       it keeps the state (readers keep the committed revision) and is
-      visible as a non-nil `draft_writer_token`.
+      visible as a non-nil `draft_writer_token`; so is the commit's own
+      writer while it moves the revision to the served location, since a
+      commit keeps the token until the move is released.
+    * `retiring` — a removal holds the unit under its own token while it
+      clears the served location; readers see no unit, and no commit,
+      draft or second removal lands until the token is cleared or has
+      outlived the draft's lifetime.
     * `retired` — the unit was dropped; the pointer keeps its last
       revision for the journal's sake and readers see no unit.
 
   Transitions: `draft → committed` on the first commit; `committed →
   committed` on every later one; `draft → retired` when an abandoned
-  draft is cleaned up; `committed → retired` on a drop; `retired →
-  draft` when a writer registers the same key again — the row is reused,
-  the journal keeps every earlier commit.
+  draft is cleaned up; `draft → retiring` and `committed → retiring` when
+  a removal takes the unit; `retiring → retired` when its delete has
+  returned, or when the removal is abandoned; `retired → draft` when a
+  writer registers the same key again — the row is reused, the journal
+  keeps every earlier commit — and `retiring → draft` likewise once the
+  deleter's token has outlived the draft's lifetime.
 
   Owned by the athanor.
   """
@@ -73,7 +82,7 @@ defmodule Arca.Schemas.StorageUnit do
              | :invalid_objects
              | :outcome_unknown}
 
-  @states ~w(draft committed retired)
+  @states ~w(draft committed retiring retired)
 
   schema "storage_units" do
     field :athanor_id, :string

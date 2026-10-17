@@ -47,7 +47,9 @@ defmodule Arca.StorageProjectionChangesTest do
     }
   end
 
-  # A commit's row half, answering the generation it stamped.
+  # A commit's row half, answering the generation it stamped; the draft is
+  # released as a finished move releases it, and the generation left for
+  # the test to mark.
   defp commit!(actor, key, revision) do
     token = StorageUnits.new_writer_token()
     {:ok, draft} = StorageUnits.register_draft(actor, @root, key, token)
@@ -55,6 +57,14 @@ defmodule Arca.StorageProjectionChangesTest do
     {:committed, generation} =
       StorageUnits.stamped_commit(actor, draft, draft.current_revision, token, identity(revision))
 
+    :ok = StorageUnits.release_served(actor, draft, token, revision)
+    generation
+  end
+
+  # A retirement's row half, the row retired as a finished delete leaves it.
+  defp retire!(actor, key) do
+    {:retiring, generation, token} = StorageUnits.stamped_retire(actor, @root, key)
+    :ok = StorageUnits.finish_retire(actor, @root, key, token)
     generation
   end
 
@@ -138,7 +148,7 @@ defmodule Arca.StorageProjectionChangesTest do
     } do
       published = commit!(actor, key, "rev_1")
 
-      assert {:retired, deleted} = StorageUnits.stamped_retire(actor, @root, key)
+      deleted = retire!(actor, key)
       assert deleted > published
 
       assert %{generation: ^deleted, tombstone: true, ready: false, source_revision: nil} =
@@ -186,7 +196,7 @@ defmodule Arca.StorageProjectionChangesTest do
       before = snapshot(actor)
 
       # Deleted and recreated at the very revision name the token saw.
-      {:retired, deleted} = StorageUnits.stamped_retire(actor, @root, key)
+      deleted = retire!(actor, key)
       :ok = StorageProjectionChanges.mark_ready(actor, @root, key, deleted, nil)
       again = commit!(actor, key, "rev_1")
       :ok = StorageProjectionChanges.mark_ready(actor, @root, key, again, "rev_1")
