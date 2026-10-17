@@ -118,6 +118,11 @@ defmodule Cyfr.AdmissionOriginTest do
       end
     end)
 
+    # Registered after the directory's removal, so it runs before it: the
+    # work a case started (a scheduled run, a delivery, a frame's run, a
+    # child) stops before the directory it writes into is removed.
+    Cyfr.Test.Sandbox.stop_work_on_exit()
+
     :ok
   end
 
@@ -329,7 +334,9 @@ defmodule Cyfr.AdmissionOriginTest do
         user_id: ctx.user_id,
         athanor_id: ctx.athanor_id,
         name: "origin-#{System.unique_integer([:positive])}",
-        cron_expression: "0 * * * *",
+        # An hourly time half an hour away whenever the case runs: no tick
+        # reaches it again while the case does.
+        cron_expression: "#{DateTime.add(DateTime.utc_now(), 1_800, :second).minute} * * * *",
         reference: "#{@dep}:0.1.0",
         resolved_reference: @dep_ref,
         profile_id: "prof_origin_dep",
