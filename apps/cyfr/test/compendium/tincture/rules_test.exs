@@ -933,9 +933,16 @@ defmodule Compendium.Tincture.RulesTest do
 
     test "an action carries what its catalogued operation declares, every class when the " <>
            "catalog holds none" do
-      assert Rules.read_classes({:action, "system.status"}) == [:outside]
+      assert Rules.read_classes({:action, "system.status"}) == []
+      assert Rules.read_classes({:action, "component.search"}) == [:outside]
 
-      for operation <- ["system.status", "execution.list", "notes.read", "notes.search"] do
+      for operation <- [
+            "system.status",
+            "component.search",
+            "execution.list",
+            "notes.read",
+            "notes.search"
+          ] do
         [tool, action] = String.split(operation, ".")
         {:ok, {_provider, %{operations: operations}}} = Sanctum.Catalog.lookup(tool)
         declared = Enum.find(operations, &(&1.action == action))

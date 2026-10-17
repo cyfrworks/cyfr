@@ -149,10 +149,12 @@ defmodule Sanctum.Gate.Probe.Typed do
             Arg.new("enabled", :boolean),
             Arg.new("mode", :string, enum: ["auto", "ask"])
           ],
+          sources: [],
           kind: :read,
           planes: [:external, :in_chain]
         ),
         Operation.new("typed_probe", "empty", "No arguments", [],
+          sources: [],
           kind: :read,
           planes: [:external, :in_chain]
         ),
@@ -161,6 +163,7 @@ defmodule Sanctum.Gate.Probe.Typed do
           "admin_echo",
           "Gated echo",
           [Arg.new("secret", :string, required: true)],
+          sources: [],
           kind: :read,
           planes: [:external, :in_chain],
           permission: :admin
@@ -284,6 +287,7 @@ defmodule Sanctum.Gate.Probe.Input do
   def tool(name) do
     Operation.tool([
       Operation.new(name, "peek", "Answer the handler's input", [],
+        sources: [],
         kind: :read,
         planes: [:external, :in_chain]
       )

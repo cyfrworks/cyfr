@@ -37,6 +37,7 @@ defmodule Sanctum.Providers.TinctureVisibility do
             Arg.new("name", :string, required: true, description: "Tincture name")
           ],
           kind: :read,
+          sources: [],
           planes: [:external, :in_chain],
           permission: :storage_read
         )

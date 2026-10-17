@@ -63,6 +63,7 @@ defmodule Compendium.Providers.Layout do
             )
           ],
           kind: :read,
+          sources: [],
           planes: [:external, :in_chain]
         ),
         Operation.new(
@@ -85,6 +86,7 @@ defmodule Compendium.Providers.Layout do
             )
           ],
           kind: :write,
+          sources: [],
           planes: [:external, :in_chain]
         )
       ],

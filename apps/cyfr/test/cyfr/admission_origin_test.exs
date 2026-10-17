@@ -21,6 +21,7 @@ defmodule Cyfr.AdmissionOriginTest.Probe do
     [
       Operation.tool([
         Operation.new(@tool, "peek", "Answer the handler's origin", [Arg.new("origin", :string)],
+          sources: [],
           kind: :read,
           planes: [:external, :in_chain]
         )

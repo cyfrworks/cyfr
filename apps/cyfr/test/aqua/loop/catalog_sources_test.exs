@@ -72,6 +72,110 @@ defmodule Aqua.Loop.CatalogSourcesTest do
     {:ok, ctx: ctx, thread: thread, bypass: bypass}
   end
 
+  describe "the soul's own catalog reads" do
+    test "carry nothing into the turn, so a thread's allow still covers the next call",
+         %{ctx: ctx, thread: thread} do
+      {:ok, _} = allow!(ctx, thread, "notes", "keep")
+      turn = accept!(ctx, thread, "@aqua look around and keep a note")
+
+      script!([
+        calls([
+          {"c1", "system.status", %{}},
+          {"c2", "component.list", %{}},
+          {"c3", "aqua.list", %{}}
+        ]),
+        calls([{"c4", "notes.keep", %{"name" => "status", "content" => "all well"}}]),
+        reply("kept")
+      ])
+
+      assert :completed = run(ctx, turn)
+
+      for call <- ["c1", "c2", "c3"],
+          do: assert(%{outcome: "ok"} = step(ctx, turn, call), call)
+
+      assert %{outcome: "ok", approval_id: nil} = step(ctx, turn, "c4")
+      refute Enum.any?(sources(ctx, turn), &Source.outside?/1)
+    end
+  end
+
+  describe "a local component's inspection" do
+    # Sol's T6b review regression (F1): the inspection of a local root
+    # carries the entries a pulled dependency's own manifest declares.
+    test "keeps a pulled dependency's prose outside before a standing allow is judged",
+         %{ctx: ctx, thread: thread} do
+      remote_reason = "REMOTE_PROSE_FROM_ACME"
+
+      entries = [
+        {"acme", "sol-loop-dep",
+         %{
+           "dependencies" => %{
+             "static" => [
+               %{
+                 "ref" => "reagent:local.sol-optional-leaf:1.0.0",
+                 "optional" => true,
+                 "reason" => remote_reason
+               }
+             ]
+           }
+         }},
+        {"local", "sol-loop-root",
+         %{"dependencies" => %{"static" => [%{"ref" => "reagent:acme.sol-loop-dep:1.0.0"}]}}}
+      ]
+
+      wasm = File.read!(Path.expand("../../support/test_wasm/math.wasm", __DIR__))
+
+      for {publisher, name, extra} <- entries do
+        manifest =
+          Map.merge(
+            %{
+              "name" => name,
+              "version" => "1.0.0",
+              "type" => "reagent",
+              "publisher" => publisher
+            },
+            extra
+          )
+
+        assert {:ok, _} =
+                 Compendium.Registry.publish_bytes(
+                   ctx,
+                   wasm,
+                   %{
+                     name: name,
+                     version: "1.0.0",
+                     type: "reagent",
+                     publisher: publisher,
+                     manifest: Jason.encode!(manifest)
+                   },
+                   origin: if(publisher == "local", do: :local, else: :remote)
+                 )
+      end
+
+      {:ok, _} = allow!(ctx, thread, "notes", "keep")
+      turn = accept!(ctx, thread, "@aqua inspect the local root and keep what it says")
+
+      script!([
+        calls([
+          {"c1", "component.inspect", %{"reference" => "reagent:local.sol-loop-root:1.0.0"}}
+        ]),
+        calls([{"c2", "notes.keep", %{"name" => "dependency-info", "content" => remote_reason}}]),
+        reply("kept")
+      ])
+
+      outcome = run(ctx, turn)
+
+      # The inspection answered, and its answer carries the pulled
+      # dependency's prose.
+      assert %{outcome: "ok", content: content} = step_result(ctx, turn, "c1")
+      assert content =~ remote_reason
+
+      assert Source.outside("reagent:acme.sol-loop-dep") in sources(ctx, turn)
+      assert outcome == {:paused, :approval}
+      assert %{approval_id: approval_id} = step(ctx, turn, "c2")
+      assert is_binary(approval_id)
+    end
+  end
+
   describe "a registry read" do
     test "is outside material on the turn before the next call is decided, so a thread's allow that names no outside source asks",
          %{ctx: ctx, thread: thread, bypass: bypass} do

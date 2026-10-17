@@ -30,6 +30,7 @@ defmodule Sanctum.Gate.CatalogTest.Counting do
     [
       Prima.Operation.tool([
         Prima.Operation.new("decision_counter", "bump", "Count a run", [],
+          sources: [],
           kind: :write,
           planes: [:external, :in_chain]
         )
@@ -61,6 +62,7 @@ defmodule Sanctum.Gate.CatalogTest.Witnessing do
     [
       Prima.Operation.tool([
         Prima.Operation.new("decision_witness", "look", "Read its own decision", [],
+          sources: [],
           kind: :write,
           planes: [:external, :in_chain]
         )

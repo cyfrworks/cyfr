@@ -22,6 +22,7 @@ defmodule Sanctum.Gate.AdmissionLatencyTest.NoOp do
       Operation.tool(
         [
           Operation.new(@tool, "run", "Admission benchmark no-op", [],
+            sources: [],
             kind: :read,
             planes: [:external, :in_chain]
           )

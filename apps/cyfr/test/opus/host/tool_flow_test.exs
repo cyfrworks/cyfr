@@ -141,7 +141,7 @@ defmodule Opus.Host.ToolFlowTest do
     {:ok, digest} = Sanctum.ToolServerDigest.from_server(server)
 
     %{
-      "tools" => ["execution.logs", "notes.read", "component.categories"],
+      "tools" => ["execution.logs", "notes.read", "component.categories", "component.search"],
       "tool_servers" => [
         %{"server_digest" => digest, "server_name" => @server, "tool_patterns" => ["probe__echo"]}
       ],
@@ -373,10 +373,19 @@ defmodule Opus.Host.ToolFlowTest do
     assert Source.new(:vault_disclosed) in ledger(fixture)
   end
 
-  test "a catalog read that declares no sources is outside material",
+  test "a catalog read of the athanor's own records carries nothing; one that reaches outside is outside, whatever it answers",
        %{ctx: ctx, server: server} do
     fixture = formula!(ctx, authority(server, []))
     assert %{"ok" => _} = tool(fixture, "component", %{"action" => "categories"})
+    assert ledger(fixture) == []
+
+    _answered =
+      tool(fixture, "component", %{
+        "action" => "search",
+        "query" => "weather",
+        "source" => "local"
+      })
+
     assert ledger(fixture) == [Source.outside(nil)]
   end
 

@@ -376,9 +376,9 @@ defmodule Opus.TinctureTest do
     end
 
     test "starts holding only what the tincture's declared reads may carry", %{ctx: ctx} do
-      # No static dependency, and an action whose answers declare nothing:
+      # No static dependency, and an action whose answers are outside:
       # outside alone. The profile's grant still reaches the dependency.
-      node = tincture!(ctx, "tinc-narrow", %{"actions" => ["system.status"]}, [])
+      node = tincture!(ctx, "tinc-narrow", %{"actions" => ["component.search"]}, [])
       _owner = profile!(ctx, node, :owner)
       worker!([%{"answer" => 2}])
       ScriptedWorker.fresh_limits!(ctx, [@dep_ref])

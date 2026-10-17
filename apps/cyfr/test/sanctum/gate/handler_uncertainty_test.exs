@@ -42,10 +42,12 @@ defmodule Sanctum.Gate.HandlerUncertaintyTest do
         Operation.tool([
           Operation.new("uncertainty_probe", "effect", "Act, then fail", args,
             kind: :write,
+            sources: [],
             planes: [:external, :in_chain]
           ),
           Operation.new("uncertainty_probe", "peek", "Read, then fail", args,
             kind: :read,
+            sources: [],
             planes: [:external, :in_chain],
             recovery: :replay_safe
           )

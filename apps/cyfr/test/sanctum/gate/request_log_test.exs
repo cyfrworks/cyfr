@@ -25,6 +25,7 @@ defmodule Sanctum.Gate.RequestLogTest.Patterned do
             Prima.Arg.new("count", :integer),
             Prima.Arg.new("label", :string)
           ],
+          sources: [],
           kind: :read,
           planes: [:external, :in_chain]
         )

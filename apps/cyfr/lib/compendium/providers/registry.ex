@@ -35,8 +35,9 @@ defmodule Compendium.Providers.Registry do
   # `members_remove`) is `destructive`. None takes a standing answer
   # (`standing: false`): an assistant's proposal of one is approved one
   # card at a time, and an allow stored before is read as no allow
-  # (`Sanctum.ToolGrants`). The reads stay `read`; none declares
-  # `sources`, so each answer is outside material.
+  # (`Sanctum.ToolGrants`). The reads stay `read`. Every action declares
+  # `sources: [:outside]`: whatever it answers, an error body included,
+  # the registry wrote.
 
   @doc false
   # The tool's wire definition — schema and access annotations beside the
@@ -74,6 +75,7 @@ defmodule Compendium.Providers.Registry do
           ],
           auth: :signed_in,
           kind: :external,
+          sources: [:outside],
           standing: false,
           planes: [:external, :in_chain]
         ),
@@ -102,6 +104,7 @@ defmodule Compendium.Providers.Registry do
           ],
           auth: :signed_in,
           kind: :external,
+          sources: [:outside],
           standing: false,
           planes: [:external, :in_chain]
         ),
@@ -116,6 +119,7 @@ defmodule Compendium.Providers.Registry do
             )
           ],
           kind: :external,
+          sources: [:outside],
           standing: false,
           consent: :interactive,
           planes: [:external],
@@ -132,6 +136,7 @@ defmodule Compendium.Providers.Registry do
             )
           ],
           kind: :external,
+          sources: [:outside],
           standing: false,
           consent: :interactive,
           planes: [:external, :in_chain],
@@ -148,6 +153,7 @@ defmodule Compendium.Providers.Registry do
             )
           ],
           kind: :read,
+          sources: [:outside],
           planes: [:external, :in_chain]
         ),
         Operation.new(
@@ -164,6 +170,7 @@ defmodule Compendium.Providers.Registry do
             )
           ],
           kind: :external,
+          sources: [:outside],
           standing: false,
           consent: :interactive,
           planes: [:external],
@@ -184,6 +191,7 @@ defmodule Compendium.Providers.Registry do
             )
           ],
           kind: :destructive,
+          sources: [:outside],
           standing: false,
           consent: :interactive,
           planes: [:external, :in_chain],
@@ -200,6 +208,7 @@ defmodule Compendium.Providers.Registry do
             )
           ],
           kind: :read,
+          sources: [:outside],
           planes: [:external, :in_chain]
         ),
         Operation.new(
@@ -222,6 +231,7 @@ defmodule Compendium.Providers.Registry do
             )
           ],
           kind: :external,
+          sources: [:outside],
           standing: false,
           consent: :interactive,
           planes: [:external],
@@ -247,6 +257,7 @@ defmodule Compendium.Providers.Registry do
             )
           ],
           kind: :external,
+          sources: [:outside],
           standing: false,
           consent: :interactive,
           planes: [:external],
@@ -267,6 +278,7 @@ defmodule Compendium.Providers.Registry do
             )
           ],
           kind: :destructive,
+          sources: [:outside],
           standing: false,
           consent: :interactive,
           planes: [:external],
@@ -274,6 +286,7 @@ defmodule Compendium.Providers.Registry do
         ),
         Operation.new("registry", "whoami", "Whoami registry", [],
           kind: :read,
+          sources: [:outside],
           planes: [:external, :in_chain]
         ),
         Operation.new(
@@ -287,6 +300,7 @@ defmodule Compendium.Providers.Registry do
             )
           ],
           kind: :read,
+          sources: [:outside],
           planes: [:external, :in_chain]
         ),
         Operation.new(
@@ -325,6 +339,7 @@ defmodule Compendium.Providers.Registry do
             )
           ],
           kind: :external,
+          sources: [:outside],
           standing: false,
           consent: :interactive,
           planes: [:external, :in_chain]
@@ -342,6 +357,7 @@ defmodule Compendium.Providers.Registry do
             )
           ],
           kind: :read,
+          sources: [:outside],
           planes: [:external, :in_chain]
         ),
         Operation.new(
@@ -357,11 +373,13 @@ defmodule Compendium.Providers.Registry do
           ],
           auth: :signed_in,
           kind: :read,
+          sources: [:outside],
           planes: [:external, :in_chain]
         ),
         Operation.new("registry", "legal_version", "Legal version registry", [],
           auth: :signed_in,
           kind: :read,
+          sources: [:outside],
           planes: [:external, :in_chain]
         ),
         Operation.new(
@@ -388,6 +406,7 @@ defmodule Compendium.Providers.Registry do
           ],
           auth: :signed_in,
           kind: :external,
+          sources: [:outside],
           standing: false,
           planes: [:external, :in_chain]
         ),
@@ -424,6 +443,7 @@ defmodule Compendium.Providers.Registry do
             )
           ],
           kind: :external,
+          sources: [:outside],
           standing: false,
           consent: :interactive,
           planes: [:external, :in_chain]

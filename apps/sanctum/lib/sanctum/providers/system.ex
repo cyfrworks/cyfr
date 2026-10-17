@@ -66,6 +66,7 @@ defmodule Sanctum.Providers.System do
             ],
             auth: :anonymous,
             kind: :read,
+            sources: [],
             planes: [:external, :in_chain]
           ),
           Operation.new(
@@ -106,6 +107,7 @@ defmodule Sanctum.Providers.System do
               )
             ],
             kind: :read,
+            sources: {:answer, {__MODULE__, :answer_sources}},
             planes: [:external, :in_chain]
           )
         ],
@@ -138,6 +140,32 @@ defmodule Sanctum.Providers.System do
       )
     ]
   end
+
+  @doc """
+  What a tool listing carries (the `tools.list` operation's `sources:`
+  declaration, `Prima.Operation.answer_sources/3`): an outside source
+  named by each external MCP server whose tools it lists (`server:tool`),
+  whose names, descriptions and schemas that server wrote; the catalog's
+  own tools carry none. An answer that is no listing is an unnamed
+  outside source.
+  """
+  @spec answer_sources(Prima.Actor.t() | nil, term()) :: [Prima.Source.t()]
+  def answer_sources(_actor, %{tools: tools}) when is_list(tools) do
+    tools
+    |> Enum.flat_map(fn
+      %{"name" => name} when is_binary(name) ->
+        case String.split(name, ":", parts: 2) do
+          [server, _tool] -> [Prima.Source.outside(server)]
+          [_catalogued] -> []
+        end
+
+      _unnamed ->
+        [Prima.Source.outside(nil)]
+    end)
+    |> Prima.Source.set()
+  end
+
+  def answer_sources(_actor, _answer), do: [Prima.Source.outside(nil)]
 
   @impl true
   def resources, do: []

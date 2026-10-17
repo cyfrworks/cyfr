@@ -405,21 +405,23 @@ defmodule Aqua.Loop.PolicyTest do
 
     # Opus's assessment probe (Sol-2): the same reads, resolved as the
     # model names them, carry an outside source into the turn.
-    test "a catalog read with no sources declaration carries an outside source into the turn" do
+    test "a registry read carries an outside source into the turn" do
       ctx = %{ctx() | athanor_id: "ath_probe"}
 
       results =
         for action <- ["get_namespace", "legal_page"] do
           operation = registry_operation(action)
-          assert %Prima.Operation{kind: :read, sources: nil} = operation
+          assert %Prima.Operation{kind: :read, sources: [:outside]} = operation
           call = resolve!("registry", %{"action" => action, "slug" => "acme", "name" => "terms"})
           answer = %{content: "outside registry content"}
           expected = Prima.Operation.answer_sources(operation, Sanctum.Context.actor(ctx), answer)
           {action, expected, Policy.sources_of(call, {:ok, answer}, ctx)}
         end
 
-      for {action, expected, actual} <- results,
-          do: assert({action, actual} == {action, expected})
+      for {action, expected, actual} <- results do
+        assert {action, actual} == {action, expected}
+        assert expected == [Prima.Source.outside(nil)]
+      end
     end
 
     test "every catalogued action's success is what its declaration reads from the answer" do
@@ -440,13 +442,15 @@ defmodule Aqua.Loop.PolicyTest do
     test "an explicit empty declaration carries nothing; an omitted one, and an action nothing declares, is outside" do
       ctx = ctx()
       list = %Binding.Call{kind: :catalog, tool: "feed", action: "list", args: %{}}
-      status = %Binding.Call{kind: :catalog, tool: "system", action: "status", args: %{}}
+      # An action served only outside a chain need not declare; one that
+      # does not is outside.
+      push = %Binding.Call{kind: :catalog, tool: "component", action: "push", args: %{}}
       unknown = %Binding.Call{kind: :catalog, tool: "nonesuch", action: "read", args: %{}}
 
       assert %Prima.Operation{sources: []} = operation("feed", "list")
-      assert %Prima.Operation{sources: nil} = operation("system", "status")
+      assert %Prima.Operation{sources: nil, planes: [:external]} = operation("component", "push")
       assert Policy.sources_of(list, {:ok, %{feeds: []}}, ctx) == []
-      assert Policy.sources_of(status, {:ok, %{}}, ctx) == [Prima.Source.outside(nil)]
+      assert Policy.sources_of(push, {:ok, %{}}, ctx) == [Prima.Source.outside(nil)]
       assert Policy.sources_of(unknown, {:ok, %{}}, ctx) == [Prima.Source.outside(nil)]
       assert Policy.sources_of(unknown, {:error, "no"}, ctx) == [Prima.Source.outside(nil)]
     end

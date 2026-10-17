@@ -78,6 +78,7 @@ defmodule Compendium.Providers.Component do
             )
           ],
           kind: :read,
+          sources: [:outside],
           planes: [:external, :in_chain]
         ),
         Operation.new(
@@ -95,6 +96,7 @@ defmodule Compendium.Providers.Component do
             )
           ],
           kind: :read,
+          sources: {:answer, {__MODULE__, :answer_sources}},
           planes: [:external, :in_chain],
           recovery: :replay_safe
         ),
@@ -113,6 +115,7 @@ defmodule Compendium.Providers.Component do
             )
           ],
           kind: :write,
+          sources: [:outside],
           planes: [:external, :in_chain],
           permission: :component_manage
         ),
@@ -158,6 +161,7 @@ defmodule Compendium.Providers.Component do
         ),
         Operation.new("component", "categories", "Categories component", [],
           kind: :read,
+          sources: [],
           planes: [:external, :in_chain]
         ),
         Operation.new(
@@ -171,6 +175,7 @@ defmodule Compendium.Providers.Component do
             )
           ],
           kind: :read,
+          sources: [:outside],
           planes: [:external, :in_chain],
           permission: :component_read
         ),
@@ -192,6 +197,7 @@ defmodule Compendium.Providers.Component do
             )
           ],
           kind: :read,
+          sources: [:outside],
           planes: [:external, :in_chain],
           permission: :component_read
         ),
@@ -207,6 +213,7 @@ defmodule Compendium.Providers.Component do
             )
           ],
           kind: :read,
+          sources: {:answer, {__MODULE__, :answer_sources}},
           planes: [:external, :in_chain]
         ),
         Operation.new(
@@ -225,6 +232,7 @@ defmodule Compendium.Providers.Component do
             )
           ],
           kind: :read,
+          sources: {:answer, {__MODULE__, :answer_sources}},
           planes: [:external, :in_chain],
           recovery: :replay_safe
         ),
@@ -239,6 +247,7 @@ defmodule Compendium.Providers.Component do
             )
           ],
           kind: :read,
+          sources: [],
           planes: [:external, :in_chain]
         ),
         Operation.new(
@@ -300,6 +309,7 @@ defmodule Compendium.Providers.Component do
             )
           ],
           kind: :write,
+          sources: [],
           planes: [:external, :in_chain],
           permission: :component_manage
         ),
@@ -320,6 +330,7 @@ defmodule Compendium.Providers.Component do
             Arg.new("version", :string, description: "Semver version (create/fork action)")
           ],
           kind: :write,
+          sources: [],
           planes: [:external, :in_chain],
           permission: :component_manage
         ),
@@ -340,6 +351,7 @@ defmodule Compendium.Providers.Component do
             )
           ],
           kind: :destructive,
+          sources: [:outside],
           planes: [:external, :in_chain],
           permission: :component_manage
         ),
@@ -359,6 +371,7 @@ defmodule Compendium.Providers.Component do
             )
           ],
           kind: :destructive,
+          sources: [:outside],
           planes: [:external, :in_chain],
           permission: :component_manage
         ),
@@ -388,6 +401,78 @@ defmodule Compendium.Providers.Component do
       title: "Component"
     )
   end
+
+  @doc """
+  What an answer describing installed components carries (the `inspect`,
+  `setup_plan` and `list` operations' `sources:` declaration,
+  `Prima.Operation.answer_sources/3`): an outside source named by each
+  pulled component whose text the answer carries, a component outside
+  the `local` namespace (`Compendium.NamespacePolicy`: remote content
+  never enters it), whose manifest, description and readme its publisher
+  wrote; the athanor's own components carry none. Whose text an answer
+  carries: each component it describes, and in an inspection's
+  dependency tree (`Compendium.DependencyResolver.resolve_tree/3`) each
+  dependency whose own manifest supplied the entries under it, a node's
+  `children`, so a local root that depends on a pulled component carries
+  that component's prose. A component the answer cannot name is an
+  unnamed outside source.
+  """
+  @spec answer_sources(Prima.Actor.t() | nil, term()) :: [Prima.Source.t()]
+  def answer_sources(_actor, %{components: components}) when is_list(components),
+    do: components |> Enum.flat_map(&described/1) |> Prima.Source.set()
+
+  def answer_sources(_actor, %{} = component),
+    do:
+      Prima.Source.set(
+        described(component) ++ dependency_authors(field(component, :dependencies))
+      )
+
+  def answer_sources(_actor, _answer), do: [Prima.Source.outside(nil)]
+
+  defp described(%{} = component), do: authored(field(component, :component_ref))
+  defp described(_component), do: [Prima.Source.outside(nil)]
+
+  # A node is its parent's manifest entry; the entries under it were read
+  # from the dependency's own manifest. A setup plan's dependencies are
+  # the reference strings of its own manifest, and carry no other text.
+  defp dependency_authors(nil), do: []
+
+  defp dependency_authors(nodes) when is_list(nodes) do
+    Enum.flat_map(nodes, fn
+      %{} = node ->
+        case field(node, :children) do
+          empty when empty in [nil, []] ->
+            []
+
+          children ->
+            authored(field(node, :dependency_ref)) ++ dependency_authors(children)
+        end
+
+      ref when is_binary(ref) ->
+        []
+
+      _unreadable ->
+        [Prima.Source.outside(nil)]
+    end)
+  end
+
+  defp dependency_authors(_unreadable), do: [Prima.Source.outside(nil)]
+
+  defp authored(ref) when is_binary(ref) do
+    case Prima.ComponentRef.parse(ref) do
+      {:ok, %Prima.ComponentRef{namespace: namespace} = parsed} when is_binary(namespace) ->
+        if Prima.ComponentPath.local_publisher?(namespace),
+          do: [],
+          else: [Prima.Source.outside(Prima.ComponentRef.to_name_ref(parsed))]
+
+      _unparsed ->
+        [Prima.Source.outside(nil)]
+    end
+  end
+
+  defp authored(_ref), do: [Prima.Source.outside(nil)]
+
+  defp field(map, key), do: Map.get(map, key, Map.get(map, Atom.to_string(key)))
 
   def handle(%Context{} = ctx, %{"action" => "search"} = args) do
     filters = %{
