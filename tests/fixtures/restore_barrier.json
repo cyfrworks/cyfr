@@ -1,0 +1,7 @@
+{
+  "barred_exit": 78,
+  "comment": "The restore's bar, one definition for every side that spells it. `cyfr restore` (apps/codex/cmd/restore.go) sets `name` in the project's .env, which the cyfr service takes as its environment (env_file), from before the first part of a snapshot lands until the restore is declared, and sets it empty in the one-off container of each offline eval it runs; docker-entrypoint.sh refuses to run anything while it is non-empty, exiting `barred_exit`; the server's settings roster declares it as a name the CLI and the entrypoint own (Cyfr.Platform.Settings.Roster.foreign/0), so a boot whose environment carries it empty is not refused. `declare_expr` is the `bin/cyfr eval` expression that declares the restore in the restored database, printing one line that begins `declared_prefix` and carries the restore's id. apps/codex/cmd/restore_test.go, apps/cyfr/test/cyfr/platform_settings_roster_test.exs and tests/compose-proof/run.sh --case restore (on the built image) each hold their side to this file.",
+  "declare_expr": "IO.puts(\"CYFR_RESTORE_ID=\" <> Cyfr.Release.mark_restore())",
+  "declared_prefix": "CYFR_RESTORE_ID=",
+  "name": "CYFR_RESTORE_INCOMPLETE"
+}

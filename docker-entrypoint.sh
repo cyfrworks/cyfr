@@ -7,7 +7,9 @@ set -e
 # service reads, from before the first part of a snapshot lands until the
 # restore is declared; until then the database may be the snapshot's with
 # nothing to suspend the authority it carried, so nothing runs. The
-# restore's own offline evals set it empty.
+# restore's own offline evals set it empty. The name and the exit are
+# tests/fixtures/restore_barrier.json's, which the CLI's tests and the
+# Compose proof's restore case hold this test to.
 if [ -n "${CYFR_RESTORE_INCOMPLETE:-}" ]; then
     echo "cyfr: the restore of ${CYFR_RESTORE_INCOMPLETE} has not been declared (CYFR_RESTORE_INCOMPLETE is set in .env); refusing to start. Run 'cyfr restore ${CYFR_RESTORE_INCOMPLETE}' again." >&2
     exit 78

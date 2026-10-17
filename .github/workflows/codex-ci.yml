@@ -19,6 +19,9 @@ on:
       # TestMissingStackServices its service roster, and
       # TestUpdateLeavesShippedComposeAlone its cyfr service's fields.
       - 'docker-compose.yml'
+      # TestEntrypointRefusesWhileTheRestoreIsBarred runs the image's
+      # entrypoint against the restore's bar (tests/fixtures/restore_barrier.json).
+      - 'docker-entrypoint.sh'
       - 'tests/fixtures/**'
       - 'seed/aqua/**'
       # TestShippedGuidesAreManaged reads the tarball's ITEMS list.
@@ -31,6 +34,7 @@ on:
       - 'apps/codex/**'
       - '.env.example'
       - 'docker-compose.yml'
+      - 'docker-entrypoint.sh'
       - 'tests/fixtures/**'
       - 'seed/aqua/**'
       - 'scripts/scaffold-tarball.sh'

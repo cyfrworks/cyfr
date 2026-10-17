@@ -189,8 +189,11 @@ refused, naming the variable or key and the form it must take.
 
 ## Names other programs own
 
-A shell may export these beside a server: the process environment
-tolerates them, and a `.env` file that assigns one refuses the boot.
+A shell may export these beside a server, and compose hands the cyfr
+service each one the project's `.env` assigns (its `env_file`) the same
+way: the process environment tolerates them, while a `.env` file the
+release itself sources, at its `RELEASE_ROOT`, refuses the boot when it
+assigns one.
 
 | Name | Owner |
 |---|---|
@@ -201,6 +204,7 @@ tolerates them, and a `.env` file that assigns one refuses the boot.
 | `CYFR_ALLOW_UNVERIFIED` | the installer: installs without cosign or the release's signature, on the checksum alone |
 | `CYFR_VERSION` | the installer: the release it installs |
 | `CYFR_IMAGE` | the installer: the image the stack it writes runs |
+| `CYFR_RESTORE_INCOMPLETE` | the Codex CLI and the image's entrypoint: the restore's bar, which `cyfr restore` sets in the project's `.env` (the cyfr service's `env_file`) until the restore is declared and sets empty for its own offline evals; the entrypoint refuses to start anything while it is non-empty |
 | `CYFR_TEST_…` (every name it begins) | the test harness: its partition, run root and object-store fixtures |
 | `CYFR_CLUSTER_DATABASE_URL` | the test harness: the cluster suite's shared database |
 | `CYFR_GOLDEN_RECORD` | the test harness: rewrites the consent bootstrap's golden file |

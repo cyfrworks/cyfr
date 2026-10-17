@@ -1248,7 +1248,13 @@ jobs:
       # loopback port and Caddy reaching readiness, no Locus network reaching
       # the endpoint. shutdown: `docker compose stop cyfr` ends within its
       # stop_grace_period, cyfr exiting on its own while it holds a stream
-      # and a running call.
+      # and a running call. restore: with the restore's bar in .env the
+      # cyfr service is refused at the entrypoint, and the declaration
+      # `cyfr restore` runs, the bar set empty in its one-off container,
+      # boots and declares. Each run fails when its teardown leaves the
+      # project behind, which the teardown's stand-in cases hold.
+      - name: The Compose proof's teardown against stand-ins
+        run: bash tests/compose-proof/cleanup-test.sh
       - name: The Compose proof's image
         run: docker tag cyfr:push cyfr:compose-proof
       - name: The Compose proof (bind)
@@ -1259,6 +1265,10 @@ jobs:
         env:
           COMPOSE_PROOF_SKIP_BUILD: '1'
         run: tests/compose-proof/run.sh --case shutdown
+      - name: The Compose proof (restore)
+        env:
+          COMPOSE_PROOF_SKIP_BUILD: '1'
+        run: tests/compose-proof/run.sh --case restore
 
       # The app image is built here, and this is the one push-time build of
       # it — so it is scanned here, where a finding stops the commit that

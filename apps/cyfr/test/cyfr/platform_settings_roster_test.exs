@@ -878,12 +878,36 @@ defmodule Cyfr.PlatformSettingsRosterTest do
     end
 
     test "every foreign name says whose it is" do
-      for {name, owner} <- Roster.foreign() do
-        assert String.starts_with?(name, "CYFR_")
-        assert is_binary(owner) and String.length(owner) > 10, name
-      end
+      assert ownerless(Roster.foreign()) == []
+      assert ownerless([{"CYFR_PLANTED", ""} | Roster.foreign()]) == ["CYFR_PLANTED"]
+      assert ownerless([{"PLANTED", "the planted program: a name outside the prefix"}]) == ["PLANTED"]
     end
   end
+
+  # The foreign rows whose name is not under the prefix or whose owner
+  # sentence is missing.
+  defp ownerless(rows) do
+    for {name, owner} <- rows,
+        not (String.starts_with?(name, "CYFR_") and is_binary(owner) and String.length(owner) > 10),
+        do: name
+  end
+
+  describe "the restore's bar" do
+    # `cyfr restore` puts its bar's name into the environment of every
+    # one-off container it runs (`-e NAME=`), and the boot judges names, not
+    # values: the name is the CLI's and the entrypoint's, spelled once in
+    # the shared fixture.
+    test "is a name the CLI and the image's entrypoint own, spelled as the shared fixture spells it" do
+      %{"name" => name} = restore_barrier()
+
+      assert [owner] = for({^name, owner} <- Roster.foreign(), do: owner)
+      assert owner =~ "Codex CLI" and owner =~ "entrypoint"
+      assert Roster.unknown([], [name]) == []
+    end
+  end
+
+  defp restore_barrier,
+    do: Jason.decode!(File.read!(Path.join(@root, "tests/fixtures/restore_barrier.json")))
 
   # ---------------------------------------------------------------------------
   # The boot, evaluated
@@ -1019,6 +1043,15 @@ defmodule Cyfr.PlatformSettingsRosterTest do
 
       # Another program's name in the shell is not the server's to refuse.
       with_env(%{"CYFR_TOKEN" => "a-session", "CYFR_TEST_ANYTHING" => "1"}, fn ->
+        assert is_list(read_prod_config!())
+      end)
+    end
+
+    test "a boot whose environment carries the restore's bar empty, as the restore's offline evals run, is not refused" do
+      %{"name" => name} = restore_barrier()
+
+      with_env(%{name => ""}, fn ->
+        assert Map.has_key?(System.get_env(), name)
         assert is_list(read_prod_config!())
       end)
     end

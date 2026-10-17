@@ -57,9 +57,13 @@ A failure leaves the stack stopped and says what to do; from step 3 until the de
 }
 
 const (
+	// restoreDeclared begins the one line markRestoreExpr prints, the
+	// restore's id after it.
+	restoreDeclared = "CYFR_RESTORE_ID="
+
 	// markRestoreExpr declares the restore in the restored database and
 	// prints its id.
-	markRestoreExpr = `IO.puts("CYFR_RESTORE_ID=" <> Cyfr.Release.mark_restore())`
+	markRestoreExpr = `IO.puts("` + restoreDeclared + `" <> Cyfr.Release.mark_restore())`
 
 	// restoreBarrier is the .env setting that bars the cell from starting
 	// while a restore has not been declared, its value the snapshot being
@@ -67,7 +71,11 @@ const (
 	// docker-entrypoint.sh refuses to run while it is set, so it reaches
 	// every start of a new container of any configuration; 'cyfr up' and
 	// 'cyfr update' refuse it too. The restore's own offline runs set it
-	// empty for their one-off container.
+	// empty for their one-off container, which the server's settings
+	// roster admits as a name the CLI and the entrypoint own. The name,
+	// the entrypoint's exit and the declaration are spelled once, in
+	// tests/fixtures/restore_barrier.json, which restore_test.go holds
+	// these constants to.
 	restoreBarrier = "CYFR_RESTORE_INCOMPLETE"
 
 	// restoreScript empties the database's public schema and loads the
@@ -1065,7 +1073,7 @@ func (r *restorer) declare() error {
 	if err != nil {
 		return fmt.Errorf("Cyfr.Release.mark_restore/0 failed in release %s's image (%v)", r.snap.manifest.Version, err)
 	}
-	id, err := markedLine(output, "CYFR_RESTORE_ID=")
+	id, err := markedLine(output, restoreDeclared)
 	if err == nil && !restoreIDPattern.MatchString(id) {
 		err = fmt.Errorf("the restore id %q does not read", id)
 	}

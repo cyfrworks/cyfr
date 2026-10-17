@@ -130,8 +130,11 @@ defmodule Mix.Tasks.Cyfr.Gen.ConfigurationGuide do
 
     ## Names other programs own
 
-    A shell may export these beside a server: the process environment
-    tolerates them, and a `.env` file that assigns one refuses the boot.
+    A shell may export these beside a server, and compose hands the cyfr
+    service each one the project's `.env` assigns (its `env_file`) the same
+    way: the process environment tolerates them, while a `.env` file the
+    release itself sources, at its `RELEASE_ROOT`, refuses the boot when it
+    assigns one.
 
     | Name | Owner |
     |---|---|

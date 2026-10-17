@@ -278,8 +278,11 @@ defmodule Cyfr.Platform.Settings.Roster do
   ]
 
   # Names under the prefix that other programs own. A trailing `*` is a
-  # prefix. Only the process environment may carry them: a `.env` file is
-  # the server's, and one of these in it is a mistake the boot names.
+  # prefix. Only the process environment may carry them: a `.env` file the
+  # boot sources is the server's, and one of these in it is a mistake the
+  # boot names. The restore's bar is spelled once, in
+  # `tests/fixtures/restore_barrier.json`, which the roster's test holds
+  # this row to.
   @foreign [
     {"CYFR_TOKEN", "the Codex CLI: the session token its non-interactive path signs in with"},
     {"CYFR_NO_UPDATE_CHECK", "the Codex CLI: turns off its release check"},
@@ -290,6 +293,8 @@ defmodule Cyfr.Platform.Settings.Roster do
      "the installer: installs without cosign or the release's signature, on the checksum alone"},
     {"CYFR_VERSION", "the installer: the release it installs"},
     {"CYFR_IMAGE", "the installer: the image the stack it writes runs"},
+    {"CYFR_RESTORE_INCOMPLETE",
+     "the Codex CLI and the image's entrypoint: the restore's bar, which `cyfr restore` sets in the project's `.env` (the cyfr service's `env_file`) until the restore is declared and sets empty for its own offline evals; the entrypoint refuses to start anything while it is non-empty"},
     {"CYFR_TEST_*", "the test harness: its partition, run root and object-store fixtures"},
     {"CYFR_CLUSTER_DATABASE_URL", "the test harness: the cluster suite's shared database"},
     {"CYFR_GOLDEN_RECORD", "the test harness: rewrites the consent bootstrap's golden file"}

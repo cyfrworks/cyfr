@@ -35,21 +35,33 @@
 #          grace, the container's exit and how the stream and the call
 #          ended.
 #
+#   restore
+#          The restore's bar on the built image, as `cyfr restore` raises
+#          and lifts it (tests/fixtures/restore_barrier.json, the bar's one
+#          definition): with the stack stopped, the cyfr container removed
+#          and the bar in .env, a start of the cyfr service is refused at
+#          the entrypoint with the fixture's exit, and the declaration the
+#          restore runs, `docker compose run --rm --no-deps -T -e <bar>= cyfr
+#          bin/cyfr eval <declaration>`, boots past the release's
+#          configuration and answers the restore's id.
+#
 # The project is the run's own: a unique name, the containers named from
 # it, host ports Docker picks on the loopback, a scratch directory holding
 # the environment `cyfr init` writes, and `down -v` of that project alone
-# when the run ends, however it ends. Nothing of a deployed stack on the
-# same host is touched.
+# when the run ends, however it ends (tests/compose-proof/cleanup.sh: a
+# removal that fails three times fails the run, naming the project).
+# Nothing of a deployed stack on the same host is touched.
 #
-# Usage: tests/compose-proof/run.sh --case bind|shutdown
-# COMPOSE_PROOF_SKIP_BUILD=1 reuses the image a previous run built
-# (cyfr:compose-proof); COMPOSE_PROOF_KEEP=1 keeps the scratch directory.
-# test.yml's locus-backends-image job runs both cases on the app image it
-# builds, tagged cyfr:compose-proof.
+# Usage: tests/compose-proof/run.sh --case bind|shutdown|restore
+# COMPOSE_PROOF_IMAGE names the app image (default cyfr:compose-proof);
+# COMPOSE_PROOF_SKIP_BUILD=1 reuses that image as a previous run or build
+# left it; COMPOSE_PROOF_KEEP=1 keeps the scratch directory. test.yml's
+# locus-backends-image job runs every case on the app image it builds,
+# tagged cyfr:compose-proof.
 set -euo pipefail
 
 usage() {
-  echo "usage: $0 --case bind|shutdown" >&2
+  echo "usage: $0 --case bind|shutdown|restore" >&2
   exit 2
 }
 
@@ -63,11 +75,11 @@ while [ $# -gt 0 ]; do
     *) usage ;;
   esac
 done
-case "$CASE" in bind | shutdown) ;; *) usage ;; esac
+case "$CASE" in bind | shutdown | restore) ;; *) usage ;; esac
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$HERE/../.." && pwd)"
-IMAGE="cyfr:compose-proof"
+IMAGE="${COMPOSE_PROOF_IMAGE:-cyfr:compose-proof}"
 RUN="cyfr-compose-proof-$$-$(od -An -N4 -tx1 /dev/urandom | tr -d ' \n')"
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/cyfr-compose-proof-XXXXXX")"
 PORT=4000
@@ -79,33 +91,8 @@ compose() {
     -f "$ROOT/docker-compose.yml" -f "$HERE/compose.yml" --profile tls "$@"
 }
 
-# The project goes whole, its volumes with it, however the run ends; a
-# failed run prints the containers' last lines first.
-cleanup() {
-  local code=$?
-  if [ "$code" -ne 0 ]; then
-    echo "----- the last lines of the project's logs -----" >&2
-    compose logs --no-color --tail 60 cyfr caddy >&2 2>/dev/null || true
-  fi
-  # The shutdown case's clients and its upstream go first: the upstream
-  # holds a place on the project's network, which `down` removes.
-  local job
-  for job in $(jobs -p); do
-    pkill -P "$job" 2>/dev/null || true
-    kill "$job" 2>/dev/null || true
-  done
-  [ -z "$UPSTREAM" ] || docker rm --force "$UPSTREAM" >/dev/null 2>&1 || true
-  compose down --volumes --remove-orphans --timeout 30 >/dev/null 2>&1 || true
-  if [ "${COMPOSE_PROOF_KEEP:-}" = 1 ]; then
-    echo "kept $WORK"
-  else
-    # The entrypoint gave the data and template directories to the image's
-    # user; they are taken back before the scratch directory goes.
-    docker run --rm --volume "$WORK:/work" --entrypoint chown "$IMAGE" -R "$(id -u):$(id -g)" /work >/dev/null 2>&1 || true
-    rm -rf "$WORK"
-  fi
-  exit "$code"
-}
+# shellcheck source=tests/compose-proof/cleanup.sh
+. "$HERE/cleanup.sh"
 trap cleanup EXIT
 
 step() { echo; echo "==> $*"; }
@@ -113,6 +100,12 @@ ok() { echo "ok: $*"; }
 fail() {
   echo "::error::$*" >&2
   exit 1
+}
+
+# A field of the restore's bar (tests/fixtures/restore_barrier.json).
+barrier() {
+  python3 -I -c 'import json, sys; print(json.load(open(sys.argv[1]))[sys.argv[2]])' \
+    "$ROOT/tests/fixtures/restore_barrier.json" "$1"
 }
 
 # A field of the role table's vector file (tests/fixtures/locus_roles.json).
@@ -393,6 +386,53 @@ assert created["status"] == "ready" and created["tool_names"] == ["hold"], creat
   ok "cyfr stopped in ${stop_s} s of its ${grace} s grace and exited ${exit_code} on its own"
 }
 
+restore_case() {
+  local name barred_exit expr prefix snapshot container exit_code logs out restore_id
+  name="$(barrier name)"
+  barred_exit="$(barrier barred_exit)"
+  expr="$(barrier declare_expr)"
+  prefix="$(barrier declared_prefix)"
+  snapshot="/srv/cyfr/backups/20261018T000000Z"
+
+  step "the stack stopped and its cyfr container removed, as cyfr restore leaves it before a part lands"
+  compose stop cyfr caddy >"$WORK/stop.log" 2>&1 || fail "docker compose stop failed: $(cat "$WORK/stop.log")"
+  compose rm --force cyfr >"$WORK/rm.log" 2>&1 || fail "docker compose rm cyfr failed: $(cat "$WORK/rm.log")"
+  ok "stopped; no cyfr container is left to start with its old environment"
+
+  step "the bar in .env: $name"
+  printf "%s='%s'\n" "$name" "$snapshot" >>"$WORK/.env"
+  ok "$name='$snapshot'"
+
+  step "a start of the cyfr service while barred is refused at the entrypoint"
+  # The container compose creates from .env as it now stands, started
+  # once: its restart policy is set to none first, so the exit read is the
+  # refusal's, not a restart's.
+  compose up --no-start --no-deps cyfr >"$WORK/up.log" 2>&1 || fail "docker compose up --no-start cyfr failed: $(cat "$WORK/up.log")"
+  container="$(compose ps --all --quiet cyfr)"
+  [ -n "$container" ] || fail "compose created no cyfr container"
+  docker update --restart no "$container" >/dev/null
+  docker start "$container" >/dev/null
+  exit_code="$(timeout 60 docker wait "$container")" || exit_code="none within 60 s"
+  logs="$(docker logs "$container" 2>&1 | tail -n 20)"
+  compose rm --stop --force cyfr >"$WORK/rm.log" 2>&1 || fail "docker compose rm cyfr failed: $(cat "$WORK/rm.log")"
+  [ "$exit_code" = "$barred_exit" ] || fail "the barred cyfr container exited $exit_code, not $barred_exit: $logs"
+  case "$logs" in
+    *"has not been declared"*"cyfr restore $snapshot"*) ;;
+    *) fail "the barred cyfr container's refusal does not name the restore: $logs" ;;
+  esac
+  ok "exit $barred_exit: $(printf '%s\n' "$logs" | grep -m1 'has not been declared')"
+
+  step "the declaration, as cyfr restore runs it: the bar set empty in a one-off cyfr container"
+  out="$(compose run --rm --no-deps -T -e "$name=" cyfr bin/cyfr eval "$expr" 2>&1)" ||
+    fail "the declaration failed: $(printf '%s\n' "$out" | tail -n 20)"
+  restore_id="$(printf '%s\n' "$out" | sed -n "s/^$prefix//p" | tail -n 1)"
+  case "$restore_id" in
+    rst_?*) ;;
+    *) fail "the declaration printed no restore id: $(printf '%s\n' "$out" | tail -n 20)" ;;
+  esac
+  ok "declared: $prefix$restore_id"
+}
+
 if [ "${COMPOSE_PROOF_SKIP_BUILD:-}" != 1 ]; then
   step "building the app image from this tree as the publication job does"
   docker build -f "$ROOT/Dockerfile" --build-arg "APT_REFRESH=$(date -u +%F)" -t "$IMAGE" "$ROOT" \
@@ -489,6 +529,13 @@ if [ "$CASE" = shutdown ]; then
   shutdown_case
   echo
   echo "compose proof: shutdown passed"
+  exit 0
+fi
+
+if [ "$CASE" = restore ]; then
+  restore_case
+  echo
+  echo "compose proof: restore passed"
   exit 0
 fi
 

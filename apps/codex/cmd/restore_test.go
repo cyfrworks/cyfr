@@ -871,17 +871,67 @@ func TestRestoreBarReadsEveryAssignment(t *testing.T) {
 	}
 }
 
+// restoreBarrierFixture is tests/fixtures/restore_barrier.json, the one
+// definition of the restore's bar the CLI, the server's settings roster
+// and the image's entrypoint each hold their side to.
+type restoreBarrierFixture struct {
+	Name           string `json:"name"`
+	BarredExit     int    `json:"barred_exit"`
+	DeclareExpr    string `json:"declare_expr"`
+	DeclaredPrefix string `json:"declared_prefix"`
+}
+
+func readRestoreBarrierFixture(t *testing.T) restoreBarrierFixture {
+	t.Helper()
+	raw, err := os.ReadFile(filepath.Join("..", "..", "..", "tests", "fixtures", "restore_barrier.json"))
+	if err != nil {
+		t.Fatalf("read the fixture: %v", err)
+	}
+	var f restoreBarrierFixture
+	if err := json.Unmarshal(raw, &f); err != nil {
+		t.Fatal(err)
+	}
+	if f.Name == "" || f.BarredExit == 0 || f.DeclareExpr == "" || f.DeclaredPrefix == "" {
+		t.Fatalf("the fixture lacks what this test reads: %+v", f)
+	}
+	return f
+}
+
+// The bar's name, the declaration the restore runs, the line it reads
+// back and the offline eval's form are the shared fixture's: the
+// scenario tests hold every offline eval to testOffline and the
+// declaration to testMark, and this holds both to the fixture.
+func TestRestoreBarrierIsTheSharedFixture(t *testing.T) {
+	f := readRestoreBarrierFixture(t)
+	for _, c := range []struct{ what, got, want string }{
+		{"restoreBarrier", restoreBarrier, f.Name},
+		{"markRestoreExpr", markRestoreExpr, f.DeclareExpr},
+		{"restoreDeclared", restoreDeclared, f.DeclaredPrefix},
+		{"testMark", testMark, f.DeclareExpr},
+		{"testOffline", testOffline, "run --rm --no-deps -T -e " + f.Name + "= cyfr bin/cyfr eval "},
+	} {
+		if c.got != c.want {
+			t.Errorf("%s is %q; the fixture gives %q", c.what, c.got, c.want)
+		}
+	}
+	if !strings.Contains(f.DeclareExpr, `"`+f.DeclaredPrefix+`"`) {
+		t.Errorf("the fixture's declaration %q does not print %q", f.DeclareExpr, f.DeclaredPrefix)
+	}
+}
+
 // The image's entrypoint refuses to run anything while the bar is set,
-// and runs the command when it is unset or empty, as the restore's own
-// offline evals set it; it spells the setting restoreBarrier names.
+// exiting as the shared fixture says, and runs the command when it is
+// unset or empty, as the restore's own offline evals set it; it spells the
+// fixture's name.
 func TestEntrypointRefusesWhileTheRestoreIsBarred(t *testing.T) {
+	f := readRestoreBarrierFixture(t)
 	entrypoint := filepath.Join("..", "..", "..", "docker-entrypoint.sh")
 	source, err := os.ReadFile(entrypoint)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(source), `[ -n "${`+restoreBarrier+`:-}" ]`) {
-		t.Fatalf("docker-entrypoint.sh does not test %s", restoreBarrier)
+	if !strings.Contains(string(source), `[ -n "${`+f.Name+`:-}" ]`) {
+		t.Fatalf("docker-entrypoint.sh does not test %s", f.Name)
 	}
 	bin := t.TempDir()
 	ran := filepath.Join(bin, "ran")
@@ -900,15 +950,15 @@ func TestEntrypointRefusesWhileTheRestoreIsBarred(t *testing.T) {
 		out, err := cmd.CombinedOutput()
 		return string(out), err
 	}
-	out, err := run(restoreBarrier + "=/p/backups/20261016T120000Z")
+	out, err := run(f.Name + "=/p/backups/20261016T120000Z")
 	var exit *exec.ExitError
-	if !errors.As(err, &exit) || exit.ExitCode() != 78 || !strings.Contains(out, "has not been declared") || !strings.Contains(out, "cyfr restore /p/backups/20261016T120000Z") {
+	if !errors.As(err, &exit) || exit.ExitCode() != f.BarredExit || !strings.Contains(out, "has not been declared") || !strings.Contains(out, "cyfr restore /p/backups/20261016T120000Z") {
 		t.Errorf("the barred entrypoint answered %v:\n%s", err, out)
 	}
 	if _, err := os.Stat(ran); !errors.Is(err, fs.ErrNotExist) {
 		t.Errorf("the barred entrypoint ran its command")
 	}
-	for _, env := range [][]string{nil, {restoreBarrier + "="}} {
+	for _, env := range [][]string{nil, {f.Name + "="}} {
 		if out, err := run(env...); err != nil {
 			t.Errorf("the entrypoint with %v answered %v:\n%s", env, err, out)
 		}
