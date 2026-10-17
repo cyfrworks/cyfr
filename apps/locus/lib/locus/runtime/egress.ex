@@ -20,8 +20,9 @@ defmodule Locus.Runtime.Egress do
   connect to exactly the pinned address (`Prima.Network.pin/3`). CYFR has
   already applied the attempt's private-address policy to that address,
   so the options are built under `:allow_all`, and a metadata address is
-  still refused there. The pin's host is kept for TLS SNI, certificate
-  verification and the `Host` header, and the transport policy stays
+  still refused there. The pin's host is kept for TLS SNI and certificate
+  verification, and the relay sets the `Host` header from the pin itself
+  (`Locus.Runtime.Relay`); the transport policy stays
   closed: no redirect, no retry, no compression, no body decoding. A pin
   is only an address: every request is still checked and charged, by the
   handlers and again by the relay, before it connects.
@@ -223,7 +224,8 @@ defmodule Locus.Runtime.Egress do
   @doc """
   The request options that connect to exactly the address `target` pins,
   for `uri` (its path and query the request's), keeping the pin's host for
-  TLS SNI, certificate verification and the `Host` header. A metadata
+  TLS SNI and certificate verification; the relay sets the `Host` header
+  from the pin itself (`Locus.Runtime.Relay`). A metadata
   address is `{:error, :private_ip_blocked, message}`.
 
   ## Options

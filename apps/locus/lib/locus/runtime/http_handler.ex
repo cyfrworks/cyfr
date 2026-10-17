@@ -377,6 +377,14 @@ defmodule Locus.Runtime.HttpHandler do
       when code in ["method_blocked", "scheme_blocked", "domain_blocked"],
       do: {String.to_existing_atom(code), "HTTP egress refused by the worker service's check"}
 
+  # The relay refused a header that frames, routes or overrides the
+  # request, as validation refuses one before the pin.
+  def fetch_error("invalid_request", _limits),
+    do:
+      {:invalid_request,
+       "HTTP egress refused by the worker service's check: the request sets a header " <>
+         "only the client making it sets"}
+
   def fetch_error("private_ip_blocked", _limits),
     do: {:private_ip_blocked, "metadata IP blocked"}
 

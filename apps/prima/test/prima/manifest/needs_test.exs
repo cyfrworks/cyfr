@@ -145,6 +145,8 @@ defmodule Prima.Manifest.NeedsTest do
             "X-Forwarded-Server",
             "Forwarded",
             "Via",
+            "X-Real-IP",
+            "True-Client-IP",
             "X-Forwarded-For",
             "X-Forwarded-Ssl"
           ],

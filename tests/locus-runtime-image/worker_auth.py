@@ -1254,6 +1254,7 @@ def check_attached_call(call, args, root, reserved):
     assert attached_header_refusal("HOST", reserved) == "invalid_request", f"{what}: a framing header"
     assert attached_header_refusal("X-Forwarded-Host", reserved) == "invalid_request", f"{what}: an override header"
     assert attached_header_refusal("X-Forwarded-Ssl", reserved) == "invalid_request", f"{what}: an override prefix"
+    assert attached_header_refusal("X-Real-IP", reserved) == "invalid_request", f"{what}: a client-address claim"
     assert attached_header_refusal("Idempotency-Key", reserved) is None, f"{what}: no suffix rule"
     fields = call["fields"]
     skey = attempt_seal_key(root, fields)

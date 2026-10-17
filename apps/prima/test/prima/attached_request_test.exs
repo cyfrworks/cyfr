@@ -129,7 +129,9 @@ defmodule Prima.AttachedRequestTest do
       "X-Forwarded-Prefix",
       "X-Forwarded-Server",
       "Forwarded",
-      "Via"
+      "Via",
+      "X-Real-IP",
+      "True-Client-IP"
     ]
 
     assert Enum.sort(Network.override_headers()) ==

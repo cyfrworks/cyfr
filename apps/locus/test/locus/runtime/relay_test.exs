@@ -409,6 +409,8 @@ defmodule Locus.Runtime.RelayTest do
         "Connection",
         "Forwarded",
         "Via",
+        "X-Real-IP",
+        "True-Client-IP",
         "X-Forwarded-Host",
         "x-forwarded-for",
         "X-Forwarded-Ssl",
@@ -446,7 +448,12 @@ defmodule Locus.Runtime.RelayTest do
       limits = EdgeFixtures.limits()
       attempt = attempt!(host, edge: edge, limits: limits) |> ScriptedKeeper.relayed!()
 
-      for headers <- [%{"Host" => "blocked.test"}, %{"X-Forwarded-Host" => "blocked.test"}] do
+      for headers <- [
+            %{"Host" => "blocked.test"},
+            %{"X-Forwarded-Host" => "blocked.test"},
+            %{"X-Real-IP" => "127.0.0.1"},
+            %{"True-Client-IP" => "10.0.0.1"}
+          ] do
         [{name, _value}] = Map.to_list(headers)
 
         request =
@@ -486,6 +493,34 @@ defmodule Locus.Runtime.RelayTest do
 
       assert Enum.filter(upstream_headers, fn {name, _value} -> name == "host" end) ==
                [{"host", "api.test:#{port}"}]
+    end
+
+    test "a runner's header the relay refuses answers the guest invalid_request, not an HTTP failure",
+         %{host: host} do
+      port = upstream!()
+      limits = EdgeFixtures.limits()
+      attempt = attempt!(host, limits: limits) |> ScriptedKeeper.relayed!()
+      assert {:ok, pinned} = Egress.pin(attempt.client, "http://api.test:#{port}/")
+
+      assert {:ok, ref} =
+               Endpoint.fetch(
+                 attempt.endpoint,
+                 attempt.attempt,
+                 pinned.target.id,
+                 "GET",
+                 "/",
+                 [{"Host", "admin.internal"}],
+                 ""
+               )
+
+      assert {[], "invalid_request" = code} = events(attempt.endpoint, ref)
+      refute_received {:upstream, _, _, _}
+      assert ScriptedHost.requests(host, "take_rate") == []
+
+      assert {:error, :invalid_request, message} =
+               HttpHandler.relay_ended(code, %{hostname: "api.test"}, limits)
+
+      assert message =~ "worker service's check"
     end
 
     test "a pin CYFR never granted closes the channel", %{host: host} do

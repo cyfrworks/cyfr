@@ -25,13 +25,15 @@ defmodule Prima.Network do
                       upgrade proxy-connection expect)
 
   # Lowercase header names that override a request's method or target, or
-  # claim a forwarded origin or a proxy hop: an upstream honouring one
-  # answers a request other than the one a destination admitted. Any name
+  # claim a forwarded origin, a proxy hop or a client address: an upstream
+  # honouring one answers a request other than the one a destination
+  # admitted, or as if another client sent it. Any name
   # starting with one of @override_prefixes is one too, since proxies
   # coin new members of the `x-forwarded-` family.
   @override_headers ~w(x-http-method-override x-http-method x-method-override x-original-url
                        x-rewrite-url x-original-host x-host x-forwarded-host x-forwarded-proto
-                       x-forwarded-port x-forwarded-prefix x-forwarded-server forwarded via)
+                       x-forwarded-port x-forwarded-prefix x-forwarded-server forwarded via
+                       x-real-ip true-client-ip)
   @override_prefixes ["x-forwarded-"]
 
   @default_ports %{"http" => 80, "https" => 443}
@@ -264,14 +266,15 @@ defmodule Prima.Network do
 
   @doc """
   The lowercase names of the headers that override a request's method or
-  target, or claim a forwarded origin or a proxy hop:
+  target, or claim a forwarded origin, a proxy hop or a client address:
   `x-http-method-override`, `x-http-method`, `x-method-override`,
   `x-original-url`, `x-rewrite-url`, `x-original-host`, `x-host`,
   `x-forwarded-host`, `x-forwarded-proto`, `x-forwarded-port`,
-  `x-forwarded-prefix`, `x-forwarded-server`, `forwarded` and `via`. Any
-  name starting with one of `override_prefixes/0` is one too. An upstream
-  honouring one would answer another host, method or path than the
-  destination admitted.
+  `x-forwarded-prefix`, `x-forwarded-server`, `forwarded`, `via`,
+  `x-real-ip` and `true-client-ip`. Any name starting with one of
+  `override_prefixes/0` is one too. An upstream honouring one would
+  answer another host, method or path than the destination admitted, or
+  trust the request as coming from an address it does not.
   """
   @spec override_headers() :: [String.t()]
   def override_headers, do: @override_headers
