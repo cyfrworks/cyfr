@@ -196,8 +196,9 @@ tolerates them, and a `.env` file that assigns one refuses the boot.
 |---|---|
 | `CYFR_TOKEN` | the Codex CLI: the session token its non-interactive path signs in with |
 | `CYFR_NO_UPDATE_CHECK` | the Codex CLI: turns off its release check |
-| `CYFR_INSECURE_SKIP_VERIFY` | the Codex CLI: skips TLS verification of the server it calls |
+| `CYFR_INSECURE_SKIP_VERIFY` | the Codex CLI: skips TLS verification of the server it calls; the installer: skips verifying the download |
 | `CYFR_INSTALL_DIR` | the installer (scripts/install.sh): where it puts the CLI |
+| `CYFR_ALLOW_UNVERIFIED` | the installer: installs without cosign or the release's signature, on the checksum alone |
 | `CYFR_VERSION` | the installer: the release it installs |
 | `CYFR_IMAGE` | the installer: the image the stack it writes runs |
 | `CYFR_TEST_…` (every name it begins) | the test harness: its partition, run root and object-store fixtures |

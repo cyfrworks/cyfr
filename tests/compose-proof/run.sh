@@ -44,6 +44,8 @@
 # Usage: tests/compose-proof/run.sh --case bind|shutdown
 # COMPOSE_PROOF_SKIP_BUILD=1 reuses the image a previous run built
 # (cyfr:compose-proof); COMPOSE_PROOF_KEEP=1 keeps the scratch directory.
+# test.yml's locus-backends-image job runs both cases on the app image it
+# builds, tagged cyfr:compose-proof.
 set -euo pipefail
 
 usage() {

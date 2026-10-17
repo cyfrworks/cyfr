@@ -24,6 +24,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
 
 # Prefixed to every compose project and container of a run, and so to its
 # project directory and network, for a host that tells one run's Docker
@@ -37,12 +38,22 @@ PROJECT_PREFIX = os.environ.get("STACK_PROJECT_PREFIX", "")
 # killed midway and leave the project behind.
 SIGNALLED_STOP_S = 10
 
+# How many times `down` runs `docker compose down` on a project before it
+# reports the teardown failed, and how long it waits between attempts: a
+# daemon that answers again within a few seconds loses no project.
+DOWN_ATTEMPTS = 3
+DOWN_RETRY_S = 2
+
 # The signal the suite was stopped by, once one arrived.
 _signalled = []
 # Every stack not yet torn down and every temporary directory not yet
-# removed, oldest first, for the exit hook.
+# removed, oldest first, for the exit hook. A stack stays here until its
+# `docker compose down` succeeds.
 _stacks = []
 _directories = []
+# Set while the exit hook runs: a teardown that fails there is reported by
+# the exit status, not by a SystemExit an exit hook cannot raise.
+_exiting = []
 
 
 def run(*args, check=True, env=None, timeout=None):
@@ -131,17 +142,33 @@ class Stack:
     def down(self):
         """Removes the project, its volumes and its directory, whether or not the stack came up.
 
-        The directory goes only after compose has answered, since compose
-        reads the project's .env from it; a down that a signal interrupts
-        is run again at exit.
+        `docker compose down` runs up to DOWN_ATTEMPTS times until it
+        succeeds. The directory goes only after compose has succeeded, since
+        compose reads the project's .env from it; until then the stack stays
+        registered, so a down that fails or that a signal interrupts is run
+        again at exit. A teardown that fails every attempt says so on stderr
+        and fails the run: by SystemExit when nothing else is failing it,
+        and by the exit status when it fails again at exit.
         """
         if os.environ.get("CI"):
             print(self.logs())
         stop = ["--timeout", str(SIGNALLED_STOP_S)] if signalled() else []
-        self.compose("down", "--volumes", "--remove-orphans", *stop, check=False)
-        shutil.rmtree(self.project_dir, ignore_errors=True)
-        if self in _stacks:
-            _stacks.remove(self)
+        for attempt in range(1, DOWN_ATTEMPTS + 1):
+            result = self.compose("down", "--volumes", "--remove-orphans", *stop, check=False)
+            if result.returncode == 0:
+                shutil.rmtree(self.project_dir, ignore_errors=True)
+                if self in _stacks:
+                    _stacks.remove(self)
+                return
+            print(f"docker compose down of {self.project} exited {result.returncode} "
+                  f"(attempt {attempt} of {DOWN_ATTEMPTS})\n{result.stdout}{result.stderr}", file=sys.stderr, flush=True)
+            if attempt < DOWN_ATTEMPTS:
+                time.sleep(DOWN_RETRY_S)
+        message = (f"FAIL: docker compose down of {self.project} failed {DOWN_ATTEMPTS} times; "
+                   "its containers, networks and volumes may be left behind")
+        print(message, file=sys.stderr, flush=True)
+        if not _exiting and sys.exc_info()[0] is None:
+            sys.exit(message)
 
 
 @atexit.register
@@ -150,7 +177,11 @@ def _leftovers():
     # interrupted, and a directory made before the `try` that removes it,
     # are removed here, however the suite ends short of os._exit. A first
     # signal arriving here interrupts one stack's teardown, which runs once
-    # more: every later signal is ignored.
+    # more: every later signal is ignored. A stack whose down still fails
+    # fails the run's exit status: the suite cannot pass with a project left
+    # behind.
+    _exiting.append(True)
+    failed = []
     for stack in reversed(list(_stacks)):
         for attempt in (1, 2):
             try:
@@ -159,6 +190,13 @@ def _leftovers():
             except (Exception, SystemExit) as error:
                 if attempt == 2:
                     print(f"teardown of {stack.project} failed: {error!r}", file=sys.stderr)
-                    shutil.rmtree(stack.project_dir, ignore_errors=True)
+        if stack in _stacks:
+            failed.append(stack.project)
+            _stacks.remove(stack)
+            shutil.rmtree(stack.project_dir, ignore_errors=True)
     for path in list(_directories):
         remove_directory(path)
+    if failed:
+        print(f"FAIL: the teardown of {', '.join(failed)} failed; the run fails", file=sys.stderr, flush=True)
+        sys.stdout.flush()
+        os._exit(128 + _signalled[0] if _signalled else 1)

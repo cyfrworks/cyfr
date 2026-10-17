@@ -10,16 +10,20 @@ set -eu
 # Environment variables:
 #   CYFR_VERSION              - specific version to install (default: latest)
 #   CYFR_INSTALL_DIR          - installation directory (default: /usr/local/bin or ~/.local/bin)
-#   CYFR_REQUIRE_SIGNATURE    - set to 1 to REQUIRE cosign signature verification
-#                               (fails if cosign is missing or the signature is invalid)
+#   CYFR_ALLOW_UNVERIFIED     - set to 1 to install without cosign, or without the
+#                               release's signature bundle: checksums.txt's
+#                               signature is then NOT verified (the checksum is)
 #   CYFR_INSECURE_SKIP_VERIFY - set to 1 to skip checksum/signature verification
 #                               (NOT recommended; for airgapped/bootstrap edge cases)
 #
-# Integrity: the SHA-256 checksum of the downloaded archive is ALWAYS verified
-# against the release's checksums.txt and the install fails on any mismatch or
-# missing tooling (unless CYFR_INSECURE_SKIP_VERIFY=1). checksums.txt itself is
-# signed with cosign (keyless, GitHub Actions OIDC); when cosign is on PATH the
-# signature is verified strictly, otherwise a notice is printed.
+# Integrity: checksums.txt must carry the release workflow's keyless cosign
+# signature for the version installed (the certificate identity exactly
+# https://github.com/cyfrworks/cyfr/.github/workflows/release.yml@refs/tags/<version>,
+# GitHub Actions' OIDC issuer), as `cyfr upgrade` verifies it in process;
+# without cosign or the signature the install refuses unless
+# CYFR_ALLOW_UNVERIFIED=1. The archive's SHA-256 checksum is then verified
+# against checksums.txt, and the install fails on any mismatch or missing
+# tooling. CYFR_INSECURE_SKIP_VERIFY=1 skips both.
 
 GITHUB_REPO="cyfrworks/cyfr"
 BINARY_NAME="cyfr"
@@ -53,7 +57,7 @@ main() {
     printf "Downloading checksums...\n"
     download "$checksums_url" "$tmpdir/checksums.txt"
 
-    verify_signature "$tmpdir" "$sig_bundle_url"
+    verify_signature "$tmpdir" "$sig_bundle_url" "$version"
     verify_checksum "$tmpdir" "$archive"
 
     printf "Extracting...\n"
@@ -153,6 +157,10 @@ skip_verify() {
     [ "${CYFR_INSECURE_SKIP_VERIFY:-}" = "1" ]
 }
 
+allow_unverified() {
+    [ "${CYFR_ALLOW_UNVERIFIED:-}" = "1" ]
+}
+
 verify_checksum() {
     dir="$1"
     file="$2"
@@ -192,14 +200,16 @@ verify_checksum() {
     printf "Checksum verified.\n"
 }
 
-# Verify the cosign keyless signature over checksums.txt. The bundle is
-# produced by the release workflow (GitHub Actions OIDC identity), so a valid
-# signature proves checksums.txt came from this repo's release pipeline.
-# Strict when cosign is available or CYFR_REQUIRE_SIGNATURE=1; a notice
-# otherwise (curl|sh users typically don't have cosign installed).
+# Verify the cosign keyless signature over checksums.txt as the release
+# workflow's for this version: the certificate identity is exactly
+# release.yml at the version's tag, under GitHub Actions' OIDC issuer — the
+# identity `cyfr upgrade` and `cyfr update` verify (internal/release). Without
+# cosign or the bundle the install refuses unless CYFR_ALLOW_UNVERIFIED=1,
+# which installs on the checksum alone.
 verify_signature() {
     dir="$1"
     bundle_url="$2"
+    version="$3"
 
     if skip_verify; then
         printf "WARNING: CYFR_INSECURE_SKIP_VERIFY=1 — signature verification SKIPPED.\n" >&2
@@ -207,33 +217,37 @@ verify_signature() {
     fi
 
     if ! command -v cosign >/dev/null 2>&1; then
-        if [ "${CYFR_REQUIRE_SIGNATURE:-}" = "1" ]; then
-            printf "Error: CYFR_REQUIRE_SIGNATURE=1 but cosign is not installed — refusing to install.\n" >&2
-            exit 1
+        if allow_unverified; then
+            printf "WARNING: CYFR_ALLOW_UNVERIFIED=1 and cosign is not installed — checksums.txt's\n" >&2
+            printf "         signature is NOT verified; only the archive's checksum is.\n" >&2
+            return
         fi
-        printf "Notice: cosign not found — checksums will be verified, but the checksum file's\n" >&2
-        printf "        signature will NOT be. Install cosign for full supply-chain verification.\n" >&2
-        return
+        printf "Error: cosign is required to verify that checksums.txt is the release workflow's — refusing to install.\n" >&2
+        printf "Install cosign (https://docs.sigstore.dev/cosign/system_config/installation/), or set\n" >&2
+        printf "CYFR_ALLOW_UNVERIFIED=1 to install on the checksum alone.\n" >&2
+        exit 1
     fi
 
     if ! download "$bundle_url" "$dir/checksums.txt.sigstore.json"; then
-        if [ "${CYFR_REQUIRE_SIGNATURE:-}" = "1" ]; then
-            printf "Error: CYFR_REQUIRE_SIGNATURE=1 but the signature bundle could not be downloaded.\n" >&2
-            exit 1
+        if allow_unverified; then
+            printf "WARNING: CYFR_ALLOW_UNVERIFIED=1 and the signature bundle could not be downloaded —\n" >&2
+            printf "         checksums.txt's signature is NOT verified; only the archive's checksum is.\n" >&2
+            return
         fi
-        printf "Notice: signature bundle not available for this release — skipping signature check.\n" >&2
-        return
+        printf "Error: the signature bundle for checksums.txt could not be downloaded — refusing to install.\n" >&2
+        printf "Set CYFR_ALLOW_UNVERIFIED=1 to install on the checksum alone.\n" >&2
+        exit 1
     fi
 
     if cosign verify-blob \
         --bundle "$dir/checksums.txt.sigstore.json" \
-        --certificate-identity-regexp "^https://github.com/${GITHUB_REPO}/" \
+        --certificate-identity "https://github.com/${GITHUB_REPO}/.github/workflows/release.yml@refs/tags/${version}" \
         --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
         "$dir/checksums.txt" >/dev/null 2>&1; then
-        printf "Signature verified (cosign keyless, GitHub Actions OIDC).\n"
+        printf "Signature verified (the release workflow of %s, cosign keyless).\n" "$version"
     else
         printf "Error: cosign signature verification FAILED for checksums.txt — refusing to install.\n" >&2
-        printf "The release may have been tampered with.\n" >&2
+        printf "It is not signed by the release workflow of %s; the release may have been tampered with.\n" "$version" >&2
         exit 1
     fi
 }

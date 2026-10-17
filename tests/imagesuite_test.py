@@ -3,7 +3,9 @@
 # Copyright 2026 CYFR Works Inc.
 """The image suites' shared plumbing, without Docker: a suite that TERM or INT
 stops tears its stacks and temporary directories down, a second signal does
-not cut that teardown short, the runtime suite's namespace prerequisite
+not cut that teardown short, a `docker compose down` that fails is retried
+a bounded number of times and a teardown that never succeeds keeps its stack
+registered and fails the run, the runtime suite's namespace prerequisite
 refuses the hosts it names and passes the others, the runtime stack waits
 out a restart Docker reports running before the container is started again
 and a port compose publishes late, and fails within its bound where either
@@ -33,15 +35,19 @@ SUITES = ("builder-image", "locus-runtime-image", "locus-backends-image")
 
 # A suite as the harnesses run one: a stack whose compose records its calls
 # instead of calling Docker, a temporary directory, and a body that waits.
-# `down` sleeps when told to, so a second signal can arrive inside it.
+# `down` sleeps when told to, so a second signal can arrive inside it, and
+# fails as many times as the suite's fourth argument says ("always" for
+# every time).
 SUITE = r"""
-import json, os, sys, time
+import json, os, subprocess, sys, time
 sys.dont_write_bytecode = True
 sys.path.append(sys.argv[1])
 import imagesuite
 
 imagesuite.stop_on_signals()
-calls, slow, body = sys.argv[2], sys.argv[3] == "slow", sys.argv[4]
+imagesuite.DOWN_RETRY_S = 0.05
+calls, slow, body, failing = sys.argv[2], sys.argv[3] == "slow", sys.argv[4], sys.argv[5]
+downs = []
 
 
 class Fake(imagesuite.Stack):
@@ -52,6 +58,11 @@ class Fake(imagesuite.Stack):
             time.sleep(1.5)
         with open(calls, "a") as f:
             f.write(json.dumps(["end", *args]) + "\n")
+        if args[0] == "down":
+            downs.append(True)
+            if failing == "always" or len(downs) <= int(failing):
+                return subprocess.CompletedProcess(args, 1, "", "Cannot connect to the Docker daemon\n")
+        return subprocess.CompletedProcess(args, 0, "", "")
 
     def logs(self):
         return ""
@@ -67,15 +78,22 @@ if body == "guarded":
         stack.down()
 elif body == "bare":
     time.sleep(60)
+elif body == "returns":
+    try:
+        pass
+    finally:
+        stack.down()
+    print(json.dumps({"registered": stack in imagesuite._stacks}), flush=True)
 """
 
 
 class Teardown(unittest.TestCase):
-    def suite(self, slow=False, body="guarded"):
+    def suite(self, slow=False, body="guarded", failing="0"):
         calls = os.path.join(self.scratch, "calls")
         process = subprocess.Popen(
-            [sys.executable, "-I", "-c", SUITE, TESTS, calls, "slow" if slow else "fast", body],
-            stdout=subprocess.PIPE, text=True)
+            [sys.executable, "-I", "-c", SUITE, TESTS, calls, "slow" if slow else "fast", body, failing],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        self.addCleanup(process.stderr.close)
         self.addCleanup(process.stdout.close)
         self.addCleanup(lambda: process.poll() is None and process.kill())
         paths = json.loads(process.stdout.readline())
@@ -141,6 +159,72 @@ class Teardown(unittest.TestCase):
         self.assertEqual(downs, [["start", "down", "--volumes", "--remove-orphans"],
                                  ["start", "down", "--volumes", "--remove-orphans", "--timeout", "10"],
                                  ["end", "down", "--volumes", "--remove-orphans", "--timeout", "10"]])
+
+
+    def downs(self, calls):
+        return [record for record in self.records(calls) if record[:2] == ["end", "down"]]
+
+    def test_a_down_that_fails_is_retried_until_it_succeeds(self):
+        process, paths, calls = self.suite(body="returns", failing="2")
+        self.assertEqual(json.loads(process.stdout.readline()), {"registered": False})
+        self.assertEqual(process.wait(timeout=30), 0)
+        self.assertEqual(len(self.downs(calls)), 3)
+        self.assertFalse(os.path.exists(paths["project"]), "the project directory is left behind")
+        self.assertIn("attempt 2 of 3", process.stderr.read())
+
+    def test_a_down_that_always_fails_keeps_the_stack_and_fails_the_run(self):
+        # Sol's fault probe (assessment 2026-10-17, Sol-5): the daemon does
+        # not answer the teardown. The stack stays registered with its
+        # project directory, the run ends with the FAIL named, and the exit
+        # hook's retries do not turn it into a pass.
+        process, paths, calls = self.suite(body="returns", failing="always")
+        stderr = process.stderr.read()
+        self.assertNotEqual(process.wait(timeout=30), 0)
+        self.assertIn("FAIL: docker compose down of imagesuite-test failed 3 times", stderr)
+        self.assertEqual(len(self.downs(calls)), 3 + 3, "the exit hook retried the down once more, bounded")
+        self.assertFalse(os.path.exists(paths["project"]), "the exit hook left the project directory behind")
+
+    def test_a_down_that_fails_beside_a_failing_suite_keeps_its_failure(self):
+        # The suite fails first; the teardown in its `finally` fails too and
+        # says so without hiding the suite's own failure, and the exit hook
+        # fails the run however its retries end.
+        process, paths, calls = self.suite(failing="always")
+        process.send_signal(signal.SIGTERM)
+        stderr = process.stderr.read()
+        self.assertEqual(process.wait(timeout=30), 128 + signal.SIGTERM)
+        self.assertIn("FAIL: docker compose down of imagesuite-test failed 3 times", stderr)
+        self.assertIn("FAIL: the teardown of imagesuite-test failed; the run fails", stderr)
+        for path in paths.values():
+            self.assertFalse(os.path.exists(path), f"{path} is left behind")
+
+
+class FailedDown(unittest.TestCase):
+    def test_a_failed_down_stays_registered_with_its_directory(self):
+        # Sol's probe in process: a down whose compose exits 1 every time
+        # keeps the stack for the exit hook to retry, with the project
+        # directory whose .env compose reads.
+        sys.path.insert(0, TESTS)
+        self.addCleanup(sys.path.remove, TESTS)
+        import imagesuite
+
+        class Failing(imagesuite.Stack):
+            def compose(self, *args, check=True):
+                return subprocess.CompletedProcess(args, 1, "", "daemon unavailable")
+
+            def logs(self):
+                return ""
+
+        patched = mock.patch.object(imagesuite, "DOWN_RETRY_S", 0)
+        patched.start()
+        self.addCleanup(patched.stop)
+        stack = Failing("sol-assessment-probe")
+        self.addCleanup(shutil.rmtree, stack.project_dir, True)
+        self.addCleanup(lambda: stack in imagesuite._stacks and imagesuite._stacks.remove(stack))
+        with self.assertRaises(SystemExit) as raised:
+            stack.down()
+        self.assertIn("failed 3 times", str(raised.exception))
+        self.assertIn(stack, imagesuite._stacks)
+        self.assertTrue(os.path.isfile(os.path.join(stack.project_dir, ".env")))
 
 
 class NamespacePrerequisite(unittest.TestCase):

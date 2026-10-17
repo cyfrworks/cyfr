@@ -2,7 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 #
-# Regression cases for scripts/ci/seed-guard.sh and scripts/ci/config-seam.sh.
+# Regression cases for scripts/ci/seed-guard.sh and scripts/ci/config-seam.sh,
+# and for scripts/release.sh's use of the seed guard.
 # Each case builds its own scratch git repository and runs the scripts there
 # by path, so nothing in this file reimplements their rules.
 #
@@ -441,6 +442,35 @@ commit modify
 TMPDIR="$scratch/tmpdir" bash "$seed_guard" "$base" > "$scratch/out" 2> "$scratch/err"
 code=$?
 if [ "$passed" -eq 0 ] && [ "$code" -eq 1 ] && [ -z "$(ls -A "$scratch/tmpdir")" ]; then pass "$label"; else fail "$label"; fi
+
+# --- scripts/release.sh runs the seed guard against the last tag ---
+
+# A seed repository whose base is tagged as a release, holding release.sh
+# and the seed guard as the repository does, so release.sh runs the guard
+# at its own path.
+release_repo() {
+  seed_repo
+  mkdir -p scripts/ci
+  cp "$root/scripts/release.sh" scripts/release.sh
+  cp "$seed_guard" scripts/ci/seed-guard.sh
+  commit "release scripts"
+  git tag 0.1.0
+}
+
+label="release.sh refuses a file replaced by a symlink in a version the last tag shipped"
+release_repo
+rm "$v1/a.txt"
+ln -s b.txt "$v1/a.txt"
+commit typechange
+run scripts/release.sh 0.1.1
+if [ "$code" -eq 1 ] && has_err "$v1/a.txt" && grep -qF "shipped by 0.1.0" "$scratch/out" && ! git rev-parse --verify --quiet 0.1.1 > /dev/null; then pass "$label"; else fail "$label"; fi
+
+label="release.sh refuses a modified file in a version the last tag shipped"
+release_repo
+printf 'changed\n' > "$v1/a.txt"
+commit modify
+run scripts/release.sh 0.1.1
+if [ "$code" -eq 1 ] && has_err "$v1/a.txt" && ! git rev-parse --verify --quiet 0.1.1 > /dev/null; then pass "$label"; else fail "$label"; fi
 
 cd "$root" || exit 1
 echo "$((cases - failures)) of $cases cases passed"

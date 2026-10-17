@@ -39,6 +39,9 @@ on:
       # Release-critical surfaces with no workflow of their own: run the
       # suite so a change here at least builds against a green tree.
       - 'Dockerfile*'
+      # Dockerfile.locus installs the Rust release it names, so the Locus
+      # image jobs rebuild on a change to it.
+      - 'rust-toolchain.toml'
       - 'docker-compose.yml'
       - 'Caddyfile'
       - 'docker-entrypoint.sh'
@@ -95,6 +98,9 @@ on:
       # Release-critical surfaces with no workflow of their own: run the
       # suite so a change here at least builds against a green tree.
       - 'Dockerfile*'
+      # Dockerfile.locus installs the Rust release it names, so the Locus
+      # image jobs rebuild on a change to it.
+      - 'rust-toolchain.toml'
       - 'docker-compose.yml'
       - 'Caddyfile'
       - 'docker-entrypoint.sh'
@@ -1133,9 +1139,9 @@ jobs:
   # run here, in the workflow the tag's `verify` calls, so the release gates
   # on them.
   locus-backends-image:
-    name: Backends image (end to end, isolation, refusals, residue, memory bound)
+    name: Backends image (end to end, isolation, refusals, residue, memory bound) and the Compose proof
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     needs: locus-image
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -1234,6 +1240,25 @@ jobs:
       # running, and it restarts.
       - name: Every backend's memory bound
         run: python3 tests/locus-backends-image/memory.py cyfr-locus:backends
+
+      # The Compose proof (tests/compose-proof/run.sh) on the app image
+      # built above, as the proof's own build would make it: the shipped
+      # docker-compose.yml brought up as a project of its own. bind: cyfr's
+      # endpoint and host API each bound to its fixed address alone, the
+      # loopback port and Caddy reaching readiness, no Locus network reaching
+      # the endpoint. shutdown: `docker compose stop cyfr` ends within its
+      # stop_grace_period, cyfr exiting on its own while it holds a stream
+      # and a running call.
+      - name: The Compose proof's image
+        run: docker tag cyfr:push cyfr:compose-proof
+      - name: The Compose proof (bind)
+        env:
+          COMPOSE_PROOF_SKIP_BUILD: '1'
+        run: tests/compose-proof/run.sh --case bind
+      - name: The Compose proof (shutdown)
+        env:
+          COMPOSE_PROOF_SKIP_BUILD: '1'
+        run: tests/compose-proof/run.sh --case shutdown
 
       # The app image is built here, and this is the one push-time build of
       # it — so it is scanned here, where a finding stops the commit that

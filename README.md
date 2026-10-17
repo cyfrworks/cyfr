@@ -1105,13 +1105,15 @@ Every setting of the control plane is a `CYFR_` variable; a part named with a pr
 
 ## Verifying Releases
 
-The install script verifies the SHA-256 checksum of every download against
-the release's `checksums.txt` and **fails closed** on any mismatch or missing
-tooling. If `cosign` is on your PATH it also strictly verifies the cosign
-signature over `checksums.txt`. Two knobs adjust the policy:
+The install script verifies the cosign signature over the release's
+`checksums.txt` as the release workflow's for the version it installs
+(identity exactly `release.yml@refs/tags/<version>`, as `cyfr upgrade` checks
+it in process), then the SHA-256 checksum of the download against it, and
+**fails closed** on any mismatch or missing tooling: without `cosign` on your
+PATH it refuses. Two knobs adjust the policy:
 
-- `CYFR_REQUIRE_SIGNATURE=1` — hard-require the cosign signature (the install
-  fails if cosign is missing or verification fails).
+- `CYFR_ALLOW_UNVERIFIED=1` — install without cosign or without the
+  signature bundle: the checksum is still verified, the signature is not.
 - `CYFR_INSECURE_SKIP_VERIFY=1` — skip verification entirely (not
   recommended; for airgapped/bootstrap edge cases).
 

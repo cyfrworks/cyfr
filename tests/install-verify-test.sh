@@ -2,7 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 # Unit tests for scripts/install.sh verification behavior (fail-closed
-# checksum, cosign signature policy, explicit skip escape hatch).
+# checksum, the release workflow's cosign signature required unless
+# CYFR_ALLOW_UNVERIFIED=1, explicit skip escape hatch).
 #
 # Usage: sh tests/install-verify-test.sh
 set -u
@@ -131,15 +132,89 @@ run_case "CYFR_INSECURE_SKIP_VERIFY=1 bypasses with a warning" ok \
 # Restore the fixture
 printf 'binary-bytes-v1' > "$fixture/cyfr_test.tar.gz"
 
-run_case "CYFR_REQUIRE_SIGNATURE=1 without cosign fails closed" fail \
-    "CYFR_REQUIRE_SIGNATURE=1
-     export CYFR_REQUIRE_SIGNATURE
-     PATH='/nonexistent'
-     verify_signature '$fixture' 'https://example.invalid/checksums.txt.sigstore.json'"
+bundle_url='https://example.invalid/checksums.txt.sigstore.json'
 
-run_case "cosign absent without strict mode degrades to a notice" ok \
+run_case "cosign absent refuses" fail \
     "PATH='/nonexistent'
-     verify_signature '$fixture' 'https://example.invalid/checksums.txt.sigstore.json'"
+     verify_signature '$fixture' '$bundle_url' 1.2.3" \
+    "cosign is required"
+
+run_case "cosign absent with CYFR_ALLOW_UNVERIFIED=1 installs on the checksum, with a warning" ok \
+    "CYFR_ALLOW_UNVERIFIED=1
+     PATH='/nonexistent'
+     verify_signature '$fixture' '$bundle_url' 1.2.3" \
+    "signature is NOT verified"
+
+run_case "CYFR_ALLOW_UNVERIFIED set to anything but 1 still refuses" fail \
+    "CYFR_ALLOW_UNVERIFIED=yes
+     PATH='/nonexistent'
+     verify_signature '$fixture' '$bundle_url' 1.2.3" \
+    "cosign is required"
+
+run_case "CYFR_INSECURE_SKIP_VERIFY=1 skips the signature with a warning" ok \
+    "CYFR_INSECURE_SKIP_VERIFY=1
+     PATH='/nonexistent'
+     verify_signature '$fixture' '$bundle_url' 1.2.3" \
+    "signature verification SKIPPED"
+
+# A cosign on PATH that writes its arguments one per line to cosign.args and
+# exits with the status in cosign.exit (0 when absent). The bundle downloads
+# through an override of download, so no case reaches the network.
+cosign_bin="$fixture/cosign-bin"
+mkdir "$cosign_bin"
+printf '#!/bin/sh\nprintf "%%s\\n" "$@" > "%s/cosign.args"\nexit "$(cat "%s/cosign.exit" 2>/dev/null || echo 0)"\n' \
+    "$fixture" "$fixture" > "$cosign_bin/cosign"
+chmod +x "$cosign_bin/cosign"
+with_cosign="PATH='$cosign_bin:$PATH'"
+bundle_ok='download() { printf bundle > "$2"; }'
+bundle_missing='download() { return 22; }'
+
+run_case "the release workflow's signature for the version passes" ok \
+    "$with_cosign
+     $bundle_ok
+     verify_signature '$fixture' '$bundle_url' 1.2.3" \
+    "Signature verified (the release workflow of 1.2.3"
+
+# The identity cosign was given is exactly the release workflow's at the
+# version's tag, under GitHub Actions' issuer; no regexp admits another.
+desc="cosign verifies the exact identity release.yml@refs/tags/<version>"
+args="$(cat "$fixture/cosign.args" 2>/dev/null)"
+expected_args="verify-blob
+--bundle
+$fixture/checksums.txt.sigstore.json
+--certificate-identity
+https://github.com/cyfrworks/cyfr/.github/workflows/release.yml@refs/tags/1.2.3
+--certificate-oidc-issuer
+https://token.actions.githubusercontent.com
+$fixture/checksums.txt"
+if [ "$args" = "$expected_args" ]; then
+    printf 'PASS: %s\n' "$desc"
+else
+    printf 'FAIL: %s\n' "$desc"
+    printf '%s\n' "$args" | sed 's/^/    /'
+    failures=$((failures + 1))
+fi
+
+printf '1' > "$fixture/cosign.exit"
+run_case "a signature cosign refuses fails closed" fail \
+    "$with_cosign
+     $bundle_ok
+     verify_signature '$fixture' '$bundle_url' 1.2.3" \
+    "verification FAILED"
+rm -f "$fixture/cosign.exit"
+
+run_case "a signature bundle that does not download refuses" fail \
+    "$with_cosign
+     $bundle_missing
+     verify_signature '$fixture' '$bundle_url' 1.2.3" \
+    "could not be downloaded"
+
+run_case "a missing bundle with CYFR_ALLOW_UNVERIFIED=1 installs on the checksum, with a warning" ok \
+    "CYFR_ALLOW_UNVERIFIED=1
+     $with_cosign
+     $bundle_missing
+     verify_signature '$fixture' '$bundle_url' 1.2.3" \
+    "signature is NOT verified"
 
 if [ "$failures" -gt 0 ]; then
     printf '\n%s test(s) failed\n' "$failures" >&2
