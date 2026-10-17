@@ -13,7 +13,11 @@
 #   static    SQLite test compile and forced dev compile (warnings as
 #             errors, so every Boundary declaration is checked), format,
 #             credo, ops.gen.cli --check, cyfr.gen.configuration_guide
-#             --check, the console's JavaScript tests, CI's built-SDK and
+#             --check, the console's JavaScript tests and its lint (npm ci
+#             and npx eslint, as CI's JavaScript job), the test WASM
+#             fixtures against their sources (scripts/check-test-wasm.sh,
+#             with the pinned wasm-tools and the Rust toolchain the
+#             fixtures' build script pins), CI's built-SDK and
 #             built-toolkit checks (their scripts read from test.yml), the
 #             release-boot names test, the canary's own checks, the image
 #             suites' shared plumbing (tests/imagesuite_test.py) and the
@@ -21,12 +25,15 @@
 #             harness.py; none needs a database or an image), dialyzer,
 #             the Boundary plants, then the full SQLite suite in N
 #             partitions
-#   postgres  PostgreSQL test compile, then in two partitions the given
+#   postgres  PostgreSQL test compile and forced dev compile (warnings as
+#             errors; the dev build in _build/dev_pg, beside the SQLite
+#             one), then in two partitions the given
 #             test paths or, with none given, the selection: the storage
 #             set (apps/arca/test, apps/cyfr/test/arca) and every tracked
 #             apps/*/test test file outside it that tags a test for one
-#             adapter or branches on the adapter (PG_PATTERN below), each
-#             path once. Its summary counts the paths handed to the runner
+#             adapter or branches on the adapter (PG_PATTERN below), or
+#             names a test support module that does, each path once. Its
+#             summary counts the paths handed to the runner
 #             as `pg_selection=<n>`, the report says so, and
 #             postgres.pg_selection.txt lists them. With --close the whole
 #             suite in N partitions instead, started once the SQLite
@@ -35,19 +42,22 @@
 #   cluster   with --close only, after every other leg: the real-member
 #             suite alone on its own database
 #   vocab     the CI vocabulary job's own script, read from test.yml
-#   islands   prima, arca and sanctum compiled and tested from a copy that
-#             holds only what CI gives them, once the SQLite suite's
+#   islands   prima, arca and sanctum compiled and tested under
+#             MIX_ENV=test, as CI's island jobs are, so each island's
+#             test/support compiles with warnings as errors, from a copy
+#             that holds only what CI gives them, once the SQLite suite's
 #             partitions have exited; locus with --close
 # Every gate forces the test rebuild on both adapters. Each leg discards
 # the caller's MIX_BUILD_PATH: static builds its MIX_ENV=test steps in
 # _build/test and its MIX_ENV=dev steps in Mix's default, postgres and
-# cluster build in _build/test_pg, and an island builds inside its copy.
+# cluster build in _build/test_pg (postgres its dev compile in
+# _build/dev_pg), and an island builds inside its copy.
 # Not part of this gate, so a closing record names each with its own
 # result: the model catalysts' tests, the seed guests' builds and stamps,
 # the partition scripts' own tests, the image suites, the S3 suite, the
-# release boots, the browser harness and its proofs, the seed and
-# configuration guards, the Go checks, the license and security scanners,
-# and the benchmark.
+# release boots, the compose proof (tests/compose-proof), the browser
+# harness and its proofs, the seed and configuration guards, the Go
+# checks, the license and security scanners, and the benchmark.
 # Without -n a suite runs in eight partitions on a host of sixteen cores
 # or more (two schedulers each) and in four on a smaller one. A PostgreSQL
 # partition holds twenty connections, so the server allows twenty times
@@ -76,25 +86,61 @@ usage() { echo "usage: $0 [-l LOGDIR] [-n N] [--close] [-- PostgreSQL test paths
 # adapter tag, an adapter predicate, or a read of the configured adapter.
 PG_PATTERN='@(module|describe)?tag :(postgres|sqlite)\b|(^|[^_a-z])(postgres|sqlite)\?\(\)|@sqlite\?|Arca\.Repo\.adapter\(\)|Arca\.Test\.Adapter\.|__adapter__|compile_env\(:arca, *:adapter|repo_adapter\(\)'
 
+# Test support modules that match PG_PATTERN and whose users are not
+# selected for it: the test database's own setup, which every test that
+# touches the database passes through, so its users would be most of the
+# suite. The storage set runs it on PostgreSQL on every gate.
+PG_SUPPORT_EXEMPT='Arca.Test.Sandbox'
+
 # The postgres leg's default selection, one path a line, read from the
 # tracked files of the current directory's repository: the storage set,
-# then the matching files outside it, so no file is named twice. macOS git
-# grep -E ignores \b, so there the pattern runs as PCRE, which reads it the
-# same way.
+# then, sorted, the test files outside it that match PG_PATTERN or name a
+# support module that does, so no file is named twice. A test file names
+# a module by its full name (an alias, import, use or call) or by its last
+# segment in a multi-alias (`alias Parent.{Leaf, ...}`). macOS git grep -E
+# ignores \b, so there the pattern runs as PCRE, which reads it the same
+# way.
 pg_selection() {
-  local s=0 mode=-E
+  local s=0 mode=-E direct users
   [ "$(uname -s)" != Darwin ] || mode=-P
-  printf '%s\n' apps/arca/test apps/cyfr/test/arca
-  git grep -l "$mode" "$PG_PATTERN" -- ':(glob)apps/*/test/**/*_test.exs' \
-    ':(exclude,glob)apps/arca/test/**' ':(exclude,glob)apps/cyfr/test/arca/**' || s=$?
+  direct=$(git grep -l "$mode" "$PG_PATTERN" -- ':(glob)apps/*/test/**/*_test.exs' \
+    ':(exclude,glob)apps/arca/test/**' ':(exclude,glob)apps/cyfr/test/arca/**') || s=$?
   # git grep answers 1 when nothing matches.
-  [ "$s" -le 1 ]
+  [ "$s" -le 1 ] || return 1
+  users=$(pg_support_users "$mode") || return 1
+  printf '%s\n' apps/arca/test apps/cyfr/test/arca
+  printf '%s\n%s\n' "$direct" "$users" | sed '/^$/d' | LC_ALL=C sort -u
+}
+
+# The test files outside the storage set that name a tracked test support
+# module matching PG_PATTERN, other than PG_SUPPORT_EXEMPT's.
+pg_support_users() {
+  local mode=$1 s=0 support file module parent leaf candidates
+  support=$(git grep -l "$mode" "$PG_PATTERN" -- ':(glob)apps/*/test/support/**' \
+    ':(exclude,glob)apps/*/test/support/**/*_test.exs') || s=$?
+  [ "$s" -le 1 ] || return 1
+  for file in $support; do
+    module=$(sed -n 's/^defmodule \([A-Za-z0-9_.]*\) do$/\1/p' "$file" | head -n 1)
+    [ -n "$module" ] || continue
+    case " $PG_SUPPORT_EXEMPT " in *" $module "*) continue ;; esac
+    parent=${module%.*} leaf=${module##*.} s=0
+    candidates=$(git grep -l -F -e "$module" -e "$parent.{" -- ':(glob)apps/*/test/**/*_test.exs' \
+      ':(exclude,glob)apps/arca/test/**' ':(exclude,glob)apps/cyfr/test/arca/**') || s=$?
+    [ "$s" -le 1 ] || return 1
+    for file in $candidates; do
+      M=$module P=$parent L=$leaf perl -0ne '
+        exit((/\Q$ENV{M}\E(?![A-Za-z0-9_])/ ||
+              /\Q$ENV{P}\E\.\{[^}]*(?<![A-Za-z0-9_.])\Q$ENV{L}\E(?![A-Za-z0-9_])[^}]*\}/) ? 0 : 1)' "$file" &&
+        printf '%s\n' "$file"
+    done
+  done
+  return 0
 }
 
 deadline_for() {
   if [ -n "${GATE_STEP_DEADLINE:-}" ]; then echo "$GATE_STEP_DEADLINE"; return; fi
   case "$1" in
-    fossils|format|credo|opsgen|confguide|js_suite|sdk_bundle|toolkit_bundle|boot_names|canary_checks|imagesuite_checks|worker_auth_check|backends_check|island_compile|island_test) echo 600 ;;
+    fossils|format|credo|opsgen|confguide|js_suite|eslint|wasm_tools|test_wasm|sdk_bundle|toolkit_bundle|boot_names|canary_checks|imagesuite_checks|worker_auth_check|backends_check|island_compile|island_test) echo 600 ;;
     compile_*|boundary_plants) echo 1200 ;;
     # A first run builds the PLT.
     dialyzer) echo 2400 ;;
@@ -103,11 +149,11 @@ deadline_for() {
 }
 
 # The steps of a leg, for the deadline of a leg that waits on it.
-STATIC_STEPS='compile_sqlite_test compile_sqlite_dev format credo opsgen confguide js_suite sdk_bundle toolkit_bundle boot_names canary_checks imagesuite_checks worker_auth_check backends_check dialyzer boundary_plants sqlite_suite'
+STATIC_STEPS='compile_sqlite_test compile_sqlite_dev format credo opsgen confguide js_suite eslint wasm_tools test_wasm sdk_bundle toolkit_bundle boot_names canary_checks imagesuite_checks worker_auth_check backends_check dialyzer boundary_plants sqlite_suite'
 steps_of() {
   case "$1" in
     static) echo "$STATIC_STEPS" ;;
-    postgres) if $CLOSE; then echo 'compile_pg_test pg_suite'; else echo 'compile_pg_test pg_tests'; fi ;;
+    postgres) if $CLOSE; then echo 'compile_pg_test compile_pg_dev pg_suite'; else echo 'compile_pg_test compile_pg_dev pg_tests'; fi ;;
   esac
 }
 
@@ -162,6 +208,20 @@ leg_static() {
   step static opsgen mix ops.gen.cli --check || return
   step static confguide mix cyfr.gen.configuration_guide --check || return
   step static js_suite apps/cyfr/assets/test/run.sh || return
+  # CI's JavaScript job: the lint tools as package-lock.json pins them,
+  # with no install script run, then eslint over the console and the SDK.
+  # npm would otherwise keep Node's compile cache in TMPDIR, which the gate
+  # leaves as it found it.
+  step static eslint env NODE_DISABLE_COMPILE_CACHE=1 \
+    bash -c 'cd apps/cyfr/assets && npm ci --ignore-scripts --no-audit --no-fund && npx eslint .' || return
+  # Every checked-in test WASM fixture is its source's build, with the
+  # pinned wasm-tools and the Rust toolchain the fixtures' build script
+  # pins (CI reads the same pin), from rustup's bin directory.
+  step static wasm_tools scripts/wasm-tools.sh install _tools || return
+  local rustc
+  rustc=$(sed -n 's/^rustc_version=//p' apps/cyfr/test/support/test_wasm/build-fixture.sh)
+  step static test_wasm env PATH="${CARGO_HOME:-$HOME/.cargo}/bin:$PATH" RUSTUP_TOOLCHAIN="$rustc" \
+    scripts/check-test-wasm.sh || return
   # Each rebuilds its bundle into the checkout and fails when the tracked
   # file is not the build, as CI's test job runs it.
   local sdk="$LOGDIR/static.sdk_bundle.sh" toolkit="$LOGDIR/static.toolkit_bundle.sh"
@@ -189,6 +249,10 @@ leg_postgres() {
   export MIX_BUILD_PATH=_build/test_pg
   # Forced for the stale inferred signatures leg_static names.
   step postgres compile_pg_test env CYFR_DATABASE=postgres MIX_ENV=test mix compile --force --warnings-as-errors || return
+  # CI compiles the dev target on each adapter: an adapter branch under
+  # compile_env compiles only on its own. In a build directory of its own,
+  # so the SQLite dev build in _build/dev is never the other adapter's.
+  step postgres compile_pg_dev env MIX_BUILD_PATH=_build/dev_pg CYFR_DATABASE=postgres MIX_ENV=dev mix compile --force --warnings-as-errors || return
   if $CLOSE; then
     # One adapter's suite has the host at a time: the PostgreSQL suite's
     # partitions start once the SQLite suite's have exited.
@@ -236,7 +300,9 @@ leg_vocab() {
 island_phase() {
   local name=$1 phase=$2 status=0
   shift 2
-  if contain_start -g 180 env CYFR_DATABASE=sqlite MIX_OS_CONCURRENCY_LOCK=0 "$@" >>"$ISLAND_LOG" 2>&1 </dev/null; then
+  # MIX_ENV=test as CI's island jobs run under it: the compile phase then
+  # builds the island's test/support with warnings as errors too.
+  if contain_start -g 180 env MIX_ENV=test CYFR_DATABASE=sqlite MIX_OS_CONCURRENCY_LOCK=0 "$@" >>"$ISLAND_LOG" 2>&1 </dev/null; then
     contain_wait "$CONTAIN_PID" "$(deadline_for "island_$phase")" 180 || status=$?
     if [ "$status" -eq 124 ]; then
       echo "==> islands.$name stopped at its deadline" | tee -a "$ISLAND_LOG" >&2

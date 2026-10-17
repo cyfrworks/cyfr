@@ -53,6 +53,7 @@ first_line() { head -n 1 "$1"; }
 last_line() { tail -n 1 "$1"; }
 
 mkdir -p "$scratch/bin"
+REAL_MIX=$(command -v mix) || fail 'no Mix on PATH for the fixtures recipe the stand-in hands on'
 cat > "$scratch/bin/mix" <<'FAKE'
 #!/usr/bin/env bash
 # Stands in for Mix. Each call appends one record to $TRACE/mix.calls:
@@ -69,6 +70,15 @@ case "$PWD" in
     [ "${MIX_OS_CONCURRENCY_LOCK:-}" = 0 ] || echo "$PWD $1" >> "$TRACE/island-with-build-lock" ;;
   *) key="${CYFR_DATABASE:-none}_${MIX_ENV:-dev}_$1" ;;
 esac
+# The Rust test fixtures' recipe writes each fixture's Cargo.toml with
+# `MIX_ENV=test mix run --no-start -e ...` (build-fixture.sh), which the
+# gate's check of the test WASM fixtures runs: the real Mix answers it,
+# its build lock in a directory of the trace's rather than the case's
+# TMPDIR, which a case holds to what the gate itself leaves there.
+if [ "$1" = run ] && [ "${2:-}" = --no-start ] && [ "${3:-}" = -e ] && [ -n "${CARGO_TOML:-}" ]; then
+  mkdir -p "$TRACE/real-mix-tmp"
+  TMPDIR="$TRACE/real-mix-tmp" exec "$REAL_MIX" "$@"
+fi
 # The runner's assignment, as T03's tests stand in for it: `mix run
 # --no-start --no-compile HELPER assign DIR COUNT TABLE REQUIRED FAILED --
 # NAMES...` writes DIR/assign/p1..pCOUNT, each the partition's units,
@@ -127,7 +137,7 @@ start_gate() {
   mkdir -p "$scratch/$name.trace"
   contain_start -g 60 perl -e '$SIG{INT} = $SIG{HUP} = "DEFAULT"; exec @ARGV or die "exec $ARGV[0]: $!\n"' \
     env -u HEAVY_CHECK_HELD -u CONTAIN_REGISTRY -u CONTAIN_CLOSE_FDS -u CONTAIN_HOLD_FDS \
-    TRACE="$scratch/$name.trace" PATH="$scratch/bin:$PATH" CYFR_DATABASE_URL='postgres://u:p@host/base' \
+    TRACE="$scratch/$name.trace" PATH="$scratch/bin:$PATH" REAL_MIX="$REAL_MIX" CYFR_DATABASE_URL='postgres://u:p@host/base' \
     ${vars[@]+"${vars[@]}"} bash "$@" >"$scratch/$name.out" 2>"$scratch/$name.err" </dev/null
   gate_pid=$CONTAIN_PID
 }
@@ -142,6 +152,13 @@ framed() {
   [ "$(grep -c '^_START=' "$scratch/$1.out")" = 1 ] && [ "$(grep -c '^_EXIT=' "$scratch/$1.out")" = 1 ] ||
     fail "$1: a terminal line that is not the gate's own: $(grep -E '^_(START|EXIT)=' "$scratch/$1.out" | tr '\n' ' ')"
 }
+
+# --- what the gate leaves out ------------------------------------------------
+# The header's list of what the gate leaves to CI and the closing record
+# names the compose proof, which no gate leg runs.
+sed -n '/^# Not part of this gate/,/^# Without -n/p' "$gate" | tr '\n' ' ' | grep -q 'compose proof (tests/compose-proof)' ||
+  fail "the gate's exclusion list does not name the compose proof"
+echo 'ok: what the gate leaves out'
 
 # --- scoped refusal ----------------------------------------------------------
 run_gate scoped HEAVY_CHECK_HELD=scoped -- "$gate" -l "$scratch/scoped.log"; [ "$gate_rc" = 64 ] || fail 'the gate ran as a scoped check'
@@ -224,16 +241,16 @@ start_leg() {
   mkdir -p "$scratch/$name.log"
   start_gate "$name" GATE_LEG_LOGDIR="$scratch/$name.log" GATE_LEG_PARTS=2 GATE_LEG_CLOSE=false "$@" -- "$gate" --leg "$leg"
 }
-# A selection git cannot read fails the postgres leg after its compile,
+# A selection git cannot read fails the postgres leg after its compiles,
 # with its marker, and no test runs.
 start_leg pgread postgres GIT_DIR=/nonexistent
 gate_status "$gate_pid"
 [ "$gate_rc" = 1 ] || fail "a postgres leg whose selection could not be read exited $gate_rc"
-[ "$(tr '\n' ' ' < "$scratch/pgread.log/postgres.summary")" = 'compile_pg_test=0 pg_selection_read=1 ' ] ||
+[ "$(tr '\n' ' ' < "$scratch/pgread.log/postgres.summary")" = 'compile_pg_test=0 compile_pg_dev=0 pg_selection_read=1 ' ] ||
   fail "an unreadable selection was not recorded: $(tr '\n' ' ' < "$scratch/pgread.log/postgres.summary")"
 [ -e "$scratch/pgread.log/postgres.done" ] || fail 'the postgres leg left no marker after an unreadable selection'
-[ "$(awk -F'|' '{ print $6 }' "$scratch/pgread.trace/mix.calls")" = 'compile --force --warnings-as-errors' ] ||
-  fail "the postgres leg ran more than its compile: $(tr '\n' ' ' < "$scratch/pgread.trace/mix.calls")"
+[ "$(awk -F'|' '{ print $1 ":" $6 }' "$scratch/pgread.trace/mix.calls" | tr '\n' ' ')" = 'test:compile --force --warnings-as-errors dev:compile --force --warnings-as-errors ' ] ||
+  fail "the postgres leg ran more than its compiles: $(tr '\n' ' ' < "$scratch/pgread.trace/mix.calls")"
 no_line '^_(START|EXIT)=' "$scratch/pgread.out" || fail 'a leg wrote a terminal line'
 # An island phase the containment library refuses ends the leg with the
 # refusal, as a refused step does: 64 on a bad descriptor base, 69 with
@@ -295,9 +312,24 @@ for f in \
   apps/sanctum/test/sanctum/issuance_test.exs \
   apps/sanctum/test/sanctum/validation_credential_test.exs \
   apps/sanctum/test/sanctum/consent/authz_test.exs \
-  apps/cyfr/test/aqua/loop/flush_test.exs; do
+  apps/cyfr/test/aqua/loop/flush_test.exs \
+  apps/cyfr/test/integration/runtime/attached_fetch_test.exs \
+  apps/cyfr/test/integration/runtime/model_contract_test.exs \
+  apps/cyfr/test/integration/runtime/secret_audit_test.exs \
+  apps/cyfr/test/integration/runtime/seed_model_catalysts_test.exs; do
   [ -f "$root/$f" ] || fail "a listed adapter-branching file is gone: $f"
   grep -qxF "$f" "$scratch/selection.txt" || fail "the selection misses $f"
+done
+# The last four name Cyfr.Test.ChatFixture, whose adapter branch is in
+# the support module: three of them through a multi-alias alone.
+grep -qE "$(. "$gate" && echo "$PG_PATTERN")" "$root/apps/cyfr/test/support/chat_fixture.ex" ||
+  fail 'Cyfr.Test.ChatFixture no longer branches on the adapter: name another support case'
+# Each exempt support module still matches the pattern, in a tracked
+# support file that defines it: an exemption with nothing to exempt is stale.
+for m in $(. "$gate" && echo "$PG_SUPPORT_EXEMPT"); do
+  f=$(cd "$root" && git grep -l -E "^defmodule ${m//./\\.} do\$" -- ':(glob)apps/*/test/support/**')
+  [ -n "$f" ] || fail "the exempt support module $m is defined in no tracked support file"
+  grep -qE "$(. "$gate" && echo "$PG_PATTERN")" "$root/$f" || fail "the exempt support module $m no longer matches the pattern"
 done
 no_line '^apps/cyfr/test/cyfr/cell_test.exs$' "$scratch/selection.txt" || fail 'the selection holds cell_test.exs, which does not branch'
 # Planted in a repository of their own: git grep reads tracked files only.
@@ -311,10 +343,20 @@ printf 'test "d", do: my_postgres?()\n' > "$plant/apps/x/test/lookalike_test.exs
 printf '@tag :postgres\n' > "$plant/apps/arca/test/stored_test.exs"
 printf '@tag :postgres\n' > "$plant/apps/x/test/support/case.ex"
 printf '@tag :postgres\n' > "$plant/apps/x/lib/thing_test.exs"
+# A support module that branches on the adapter, named in full, in a
+# multi-alias across lines, and by a longer name or a longer leaf that are
+# not it; and one exempt support module, whose users are not selected.
+printf 'defmodule X.Test.Branching do\n  def f, do: Arca.Test.Adapter.postgres?()\nend\n' > "$plant/apps/x/test/support/branching.ex"
+printf 'defmodule Arca.Test.Sandbox do\n  def s, do: Arca.Repo.adapter()\nend\n' > "$plant/apps/x/test/support/sandbox.ex"
+printf 'test "e", do: X.Test.Branching.f()\n' > "$plant/apps/x/test/full_test.exs"
+printf 'alias X.Test.{\n  Other,\n  Branching\n}\ntest "f", do: Branching.f()\n' > "$plant/apps/x/test/alias_test.exs"
+printf 'test "g", do: X.Test.BranchingMore.f()\n' > "$plant/apps/x/test/longer_test.exs"
+printf 'alias X.Test.{Other, Branchings}\ntest "h", do: :ok\n' > "$plant/apps/x/test/leaf_test.exs"
+printf 'test "i", do: Arca.Test.Sandbox.s()\n' > "$plant/apps/x/test/sandboxed_test.exs"
 git -C "$plant" add apps
 printf '@tag :postgres\n' > "$plant/apps/x/test/untracked_test.exs"
 selection "$plant" > "$scratch/plant.txt" || fail 'the selection failed on the planted repository'
-[ "$(tr '\n' ' ' < "$scratch/plant.txt")" = 'apps/arca/test apps/cyfr/test/arca apps/x/test/branch_test.exs apps/x/test/tagged_test.exs ' ] ||
+[ "$(tr '\n' ' ' < "$scratch/plant.txt")" = 'apps/arca/test apps/cyfr/test/arca apps/x/test/alias_test.exs apps/x/test/branch_test.exs apps/x/test/full_test.exs apps/x/test/tagged_test.exs ' ] ||
   fail "the planted selection is wrong: $(tr '\n' ' ' < "$scratch/plant.txt")"
 echo 'ok: the PostgreSQL selection'
 
@@ -361,9 +403,10 @@ framed a "$a" 1
 has_line '^prima=0$' "$scratch/a.log/islands.summary" || fail 'the prima island did not pass beside the stalled one'
 has_line '^sanctum=0$' "$scratch/a.log/islands.summary" || fail 'the sanctum island did not pass beside the stalled one'
 has_line '^==> islands.arca stopped at its deadline$' "$scratch/a.err" || fail 'the stalled island was not reported'
-for s in compile_sqlite_test compile_sqlite_dev js_suite sdk_bundle toolkit_bundle canary_checks imagesuite_checks worker_auth_check backends_check dialyzer boundary_plants sqlite_suite; do
+for s in compile_sqlite_test compile_sqlite_dev js_suite eslint wasm_tools test_wasm sdk_bundle toolkit_bundle canary_checks imagesuite_checks worker_auth_check backends_check dialyzer boundary_plants sqlite_suite; do
   has_line "^$s=0$" "$scratch/a.log/static.summary" || fail "the static step $s did not pass: $(tr '\n' ' ' < "$scratch/a.log/static.summary")"
 done
+has_line '^compile_pg_dev=0$' "$scratch/a.log/postgres.summary" || fail "the PostgreSQL dev compile did not pass: $(tr '\n' ' ' < "$scratch/a.log/postgres.summary")"
 has_line '^pg_tests=0$' "$scratch/a.log/postgres.summary" || fail "the PostgreSQL tests did not pass: $(tr '\n' ' ' < "$scratch/a.log/postgres.summary")"
 has_line '^fossils=0$' "$scratch/a.log/vocab.summary" || fail 'the vocabulary leg did not pass'
 has_line '^==> islands +FAILED ' "$scratch/a.out" || fail 'the islands leg was not reported failed'
@@ -405,9 +448,18 @@ build_path "^test\|sqlite\|[^|]*\|-\|$root\|test apps/cyfr/test/cyfr/boundaries_
 build_path '^test\|sqlite\|[^|]*\|[0-9]+\|[^|]*\|test ' _build/test
 build_path '^test\|sqlite\|[^|]*\|[^|]*\|[^|]*\|esbuild ' _build/test
 build_path "^dev\|sqlite\|[^|]*\|-\|$root\|compile --force" -
+build_path "^dev\|postgres\|[^|]*\|-\|$root\|compile --force" _build/dev_pg
 build_path "^-\|-\|[^|]*\|-\|$root\|(format|credo|ops.gen.cli|cyfr.gen.configuration_guide|dialyzer)" -
 build_path '^test\|postgres\|' _build/test_pg
 build_path '^[^|]*\|[^|]*\|[^|]*\|[^|]*\|[^|]*/island_[^|]*\|' -
+# Every island phase runs under MIX_ENV=test, as CI's island jobs do, so
+# its compile builds the island's test/support with warnings as errors.
+for isl in prima arca sanctum; do
+  grep -qE "^test\|sqlite\|[^|]*\|-\|[^|]*/island_${isl}\.[^|]*/apps/${isl}\|compile --warnings-as-errors\$" "$calls" ||
+    fail "the $isl island did not compile under MIX_ENV=test: $(grep "/island_${isl}" "$calls" | tr '\n' ' ')"
+done
+[ -z "$(awk -F'|' '$5 ~ /\/island_/ && $1 != "test"' "$calls")" ] ||
+  fail "an island phase ran outside MIX_ENV=test: $(awk -F'|' '$5 ~ /\/island_/ && $1 != "test"' "$calls" | tr '\n' ' ')"
 echo 'ok: inherited build paths, the pg selection and its two partitions'
 
 # --- TERM: the gate stops its legs, each leg its steps, an island its own --------
