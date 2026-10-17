@@ -352,6 +352,26 @@ defmodule Aqua.Providers.NotesTest do
     assert vault in Tool.answer_sources(actor, answer)
   end
 
+  test "a note kept by a component that runs no turn records the calling execution's ledger",
+       %{ctx: ctx} do
+    auth = granting([{"notes", "keep"}, {"notes", "read"}])
+    actor = Context.actor(ctx)
+    vault = Prima.Source.new(:vault_disclosed)
+
+    # The calling execution read a disclosed vault value; no turn runs in
+    # its chain.
+    caller = caller!(ctx)
+    assert :ok = Opus.Ledger.join(actor, caller.parent_execution_id, [vault])
+
+    args = %{"action" => "keep", "name" => "standalone", "content" => "eu-west"}
+    assert {:ok, %{kept: "standalone"}} = in_chain(ctx, args, auth, lineage: caller)
+
+    assert {:ok, %{sources: sources}} =
+             in_chain(ctx, %{"action" => "read", "name" => "standalone"}, auth)
+
+    assert sources == Prima.Source.to_json_list([vault])
+  end
+
   test "an approved call keeps a note from inside the chain, and only an OIDC session's chain may",
        %{ctx: ctx, athanor: athanor} do
     auth = granting([{"notes", "keep"}, {"notes", "read"}])

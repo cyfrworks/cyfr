@@ -39,10 +39,12 @@ defmodule Aqua.Providers.Notes do
 
   ## Provenance and outside material
 
-  A note kept in a chain carries every source the chain's turns read in
-  its provenance (`Aqua.Notes.chain_sources/2`, read from the
-  host-stamped root execution, never from what the model wrote), so a
-  turn or a guest that reads it later reads them too: a note made from a
+  A note kept in a chain carries in its provenance every source the
+  chain's turns read (`Aqua.Notes.chain_sources/2`) and the calling
+  execution's own ledger (`Opus.sources/2`), both read from the
+  host-stamped lineage, never from what the model wrote, so a turn or a
+  guest that reads it later reads them too, and a component that runs no
+  turn keeps what it read as a turn does: a note made from a
   disclosed vault value carries `vault_disclosed`, whatever admitted the
   keep. Of those, the outside sources make it outside material, shown
   attributed and endorsable: an approval admits the action and never
@@ -362,18 +364,37 @@ defmodule Aqua.Providers.Notes do
   # execution and the thread onto the call as host-only keys
   # (the gate's lineage), and those are the only
   # provenance read there — a value the model put under `thread` or
-  # `execution` is ignored, never recorded. The chain's turns hand the
-  # note every source they read. At the door a person says what they
-  # choose to.
+  # `execution` is ignored, never recorded. The note carries every source
+  # the chain's turns read and the calling execution's own ledger, so a
+  # component that runs no turn keeps what it read too. At the door a
+  # person says what they choose to.
   defp provenance(args, %Context{plane: :guest} = ctx) do
     [
       thread: args["thread_id"],
       execution: args["root_execution_id"] || args["parent_execution_id"],
-      sources: Notes.chain_sources(ctx, args["root_execution_id"])
+      sources:
+        Prima.Source.union(
+          Notes.chain_sources(ctx, args["root_execution_id"]),
+          caller_sources(ctx, args["parent_execution_id"])
+        )
     ]
   end
 
   defp provenance(args, _ctx) do
     [thread: args["thread"], execution: args["execution"]]
   end
+
+  # The ledger of the execution that called (`Opus.sources/2`), the
+  # lineage's `parent_execution_id`, which the gate admits a call in a
+  # chain only with, read as the call keeps the note. That execution is
+  # running, so a row it no longer finds, or a ledger that cannot be
+  # read, is one unnamed outside source, never none.
+  defp caller_sources(ctx, execution_id) when is_binary(execution_id) do
+    case Opus.sources(ctx, execution_id) do
+      {:ok, sources} -> sources
+      {:error, _unread} -> [Prima.Source.outside(nil)]
+    end
+  end
+
+  defp caller_sources(_ctx, _none), do: []
 end
