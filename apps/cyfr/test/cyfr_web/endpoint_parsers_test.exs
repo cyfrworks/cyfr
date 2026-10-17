@@ -506,3 +506,267 @@ defmodule CyfrWeb.EndpointParsersTest.MCPTest do
     end
   end
 end
+
+defmodule CyfrWeb.EndpointParsersTest.MCPTransportTest do
+  @moduledoc """
+  `/mcp`'s bounds at their edges and over a real HTTP/1 connection: an
+  authenticated caller's body of exactly the endpoint's 28,000,000 bytes
+  is read whole and answered, one declared a byte longer is refused
+  unread; a chunked anonymous body stops at a host call's body and its
+  connection closes without the withheld remainder being awaited; and an
+  authenticated connection stays reusable after a large chunked call and
+  after an SSE answer.
+  """
+
+  use Emissary.Web.ConnCase, async: false
+
+  import CyfrWeb.EndpointParsersTest, only: [request: 4, bytes_read: 0, until_closed: 3]
+
+  alias Prima.MCP.Protocol
+
+  setup do
+    on_exit(&Prima.Test.RateLimiter.reset!/0)
+    Prima.Test.RateLimiter.reset!()
+    :ok
+  end
+
+  defp body(method \\ "tools/list", params \\ %{}) do
+    meta = %{
+      Protocol.meta_protocol_version_key() => Protocol.version(),
+      Protocol.meta_client_info_key() => %{"name" => "test", "version" => "0.0.0"},
+      Protocol.meta_client_capabilities_key() => %{}
+    }
+
+    Jason.encode!(%{
+      "jsonrpc" => "2.0",
+      "id" => 812,
+      "method" => method,
+      "params" => Map.put(params, "_meta", meta)
+    })
+  end
+
+  defp padded_body(size) do
+    json = body()
+    :binary.copy(" ", size - byte_size(json)) <> json
+  end
+
+  @tag auth: :person
+  test "the authenticated boundary accepts exactly 28 million bytes", %{conn: authenticated} do
+    [bearer] = get_req_header(authenticated, "authorization")
+    payload = padded_body(28_000_000)
+
+    conn =
+      request(:post, "/mcp", payload, "application/json")
+      |> put_req_header("authorization", bearer)
+      |> put_req_header("mcp-protocol-version", Protocol.version())
+      |> put_req_header("mcp-method", "tools/list")
+      |> put_req_header("content-length", Integer.to_string(byte_size(payload)))
+      |> CyfrWeb.Endpoint.call(CyfrWeb.Endpoint.init([]))
+
+    assert conn.status == 200
+    assert %{"id" => 812, "result" => %{"tools" => [_ | _]}} = Jason.decode!(conn.resp_body)
+    assert get_resp_header(conn, "connection") == []
+    assert bytes_read() == 28_000_000
+  end
+
+  @tag auth: :person
+  test "an authenticated declared length above 28 million bytes is refused unread", %{
+    conn: authenticated
+  } do
+    [bearer] = get_req_header(authenticated, "authorization")
+
+    conn =
+      request(:post, "/mcp", body(), "application/json")
+      |> put_req_header("authorization", bearer)
+      |> put_req_header("mcp-protocol-version", Protocol.version())
+      |> put_req_header("mcp-method", "tools/list")
+      |> put_req_header("content-length", "28000001")
+      |> CyfrWeb.Endpoint.call(CyfrWeb.Endpoint.init([]))
+
+    assert conn.status == 413
+    assert Jason.decode!(conn.resp_body)["id"] == nil
+    assert get_resp_header(conn, "connection") == ["close"]
+    assert bytes_read() == 0
+  end
+
+  describe "real HTTP/1 transport" do
+    setup do
+      {:ok, server} =
+        start_supervised(
+          {Bandit,
+           plug: CyfrWeb.Endpoint, scheme: :http, ip: {127, 0, 0, 1}, port: 0, startup_log: false}
+        )
+
+      {:ok, {_ip, port}} = ThousandIsland.listener_info(server)
+      {:ok, port: port}
+    end
+
+    test "a chunked anonymous body stops at its cap without awaiting the withheld remainder", %{
+      port: port
+    } do
+      socket = connect(port)
+      cap = Prima.HostAPI.max_body_bytes()
+
+      :ok =
+        :gen_tcp.send(socket, [
+          headers("transfer-encoding: chunked\r\n"),
+          Integer.to_string(cap + 4096, 16),
+          "\r\n",
+          :binary.copy(" ", cap)
+        ])
+
+      response =
+        until_closed(
+          socket,
+          "",
+          System.monotonic_time(:millisecond) + 5_000
+        )
+
+      assert response =~ ~r/\AHTTP\/1\.1 413 /
+      assert response =~ ~r/\r\nconnection: close\r\n/i
+      assert response =~ ~s("id":null)
+      assert response =~ ~s("code":-32600)
+    end
+
+    @tag auth: :person
+    test "an authenticated large chunked call keeps its connection for the next call", %{
+      port: port,
+      conn: authenticated
+    } do
+      [bearer] = get_req_header(authenticated, "authorization")
+      socket = connect(port)
+      payload = padded_body(2 * Prima.HostAPI.max_body_bytes())
+
+      :ok =
+        :gen_tcp.send(socket, [
+          headers("authorization: #{bearer}\r\ntransfer-encoding: chunked\r\n"),
+          Integer.to_string(byte_size(payload), 16),
+          "\r\n",
+          payload,
+          "\r\n0\r\n\r\n"
+        ])
+
+      {status, response_headers, response, rest} = receive_response(socket)
+      assert status == 200
+      refute response_headers["connection"] == "close"
+      assert %{"id" => 812, "result" => %{"tools" => [_ | _]}} = Jason.decode!(response)
+      assert rest == ""
+
+      send_json(socket, body(), bearer)
+      {200, response_headers, response, ""} = receive_response(socket)
+      refute response_headers["connection"] == "close"
+      assert Jason.decode!(response)["id"] == 812
+    end
+
+    @tag auth: :person
+    test "an authenticated SSE answer finishes and permits a further request on its connection",
+         %{
+           port: port,
+           conn: authenticated
+         } do
+      Cyfr.Test.Settings.put("mcp_subscription_max_ms", 150)
+      [bearer] = get_req_header(authenticated, "authorization")
+      socket = connect(port)
+      payload = body("subscriptions/listen", %{"notifications" => %{"toolsListChanged" => true}})
+      send_json(socket, payload, bearer, "subscriptions/listen")
+
+      {200, response_headers, response, ""} = receive_response(socket)
+      assert response_headers["content-type"] =~ "text/event-stream"
+      refute response_headers["connection"] == "close"
+      assert response =~ "notifications/subscriptions/acknowledged"
+      assert response =~ ~s("id":812)
+      assert response =~ ~s("resultType":"complete")
+
+      send_json(socket, body(), bearer)
+      {200, response_headers, response, ""} = receive_response(socket)
+      refute response_headers["connection"] == "close"
+      assert Jason.decode!(response)["id"] == 812
+    end
+  end
+
+  defp connect(port) do
+    {:ok, socket} =
+      :gen_tcp.connect({127, 0, 0, 1}, port, [:binary, active: false, packet: :raw], 5_000)
+
+    on_exit(fn -> :gen_tcp.close(socket) end)
+    socket
+  end
+
+  defp headers(extra, method \\ "tools/list") do
+    [
+      "POST /mcp HTTP/1.1\r\nhost: localhost\r\naccept: application/json, text/event-stream\r\n",
+      "content-type: application/json\r\nmcp-protocol-version: #{Protocol.version()}\r\n",
+      "mcp-method: #{method}\r\n",
+      extra,
+      "\r\n"
+    ]
+  end
+
+  defp send_json(socket, payload, bearer, method \\ "tools/list") do
+    :ok =
+      :gen_tcp.send(socket, [
+        headers(
+          "authorization: #{bearer}\r\ncontent-length: #{byte_size(payload)}\r\n",
+          method
+        ),
+        payload
+      ])
+  end
+
+  defp receive_response(socket) do
+    {head, rest} = receive_until(socket, "", "\r\n\r\n")
+    [status_line | fields] = String.split(head, "\r\n")
+    ["HTTP/1.1", status | _] = String.split(status_line, " ")
+
+    response_headers =
+      Map.new(fields, fn field ->
+        [name, value] = String.split(field, ":", parts: 2)
+        {String.downcase(name), String.trim(value)}
+      end)
+
+    {response, rest} =
+      if response_headers["transfer-encoding"] == "chunked" do
+        receive_chunks(socket, rest, [])
+      else
+        receive_bytes(socket, rest, String.to_integer(response_headers["content-length"]))
+      end
+
+    {String.to_integer(status), response_headers, response, rest}
+  end
+
+  defp receive_until(socket, received, separator) do
+    case :binary.split(received, separator) do
+      [head, rest] ->
+        {head, rest}
+
+      [_] ->
+        assert {:ok, data} = :gen_tcp.recv(socket, 0, 5_000)
+        receive_until(socket, received <> data, separator)
+    end
+  end
+
+  defp receive_bytes(socket, received, size) when byte_size(received) < size do
+    assert {:ok, data} = :gen_tcp.recv(socket, 0, 5_000)
+    receive_bytes(socket, received <> data, size)
+  end
+
+  defp receive_bytes(_socket, received, size) do
+    <<body::binary-size(size), rest::binary>> = received
+    {body, rest}
+  end
+
+  defp receive_chunks(socket, received, chunks) do
+    {size_line, rest} = receive_until(socket, received, "\r\n")
+    size = String.to_integer(size_line, 16)
+
+    if size == 0 do
+      {"", rest} = receive_bytes(socket, rest, 0)
+      {"\r\n", rest} = receive_bytes(socket, rest, 2)
+      {chunks |> Enum.reverse() |> IO.iodata_to_binary(), rest}
+    else
+      {chunk, rest} = receive_bytes(socket, rest, size)
+      {"\r\n", rest} = receive_bytes(socket, rest, 2)
+      receive_chunks(socket, rest, [chunk | chunks])
+    end
+  end
+end

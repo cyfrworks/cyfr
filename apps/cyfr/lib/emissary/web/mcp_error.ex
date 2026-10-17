@@ -5,13 +5,17 @@ defmodule Emissary.Web.MCPError do
   @moduledoc """
   Sends a JSON-RPC error response from the MCP ingress plugs and controllers.
 
-  Formats pre-router rejections as JSON-RPC errors and echoes a valid
-  request id so clients can correlate failures.
+  Formats the MCP pipeline's rejections as JSON-RPC errors and echoes a
+  valid request id so clients can correlate failures.
 
-  The id is recovered from the parsed body, which is available here because
-  `Plug.Parsers` runs in the endpoint, ahead of the router pipeline. It is
-  genuinely absent for a GET (no body) and for a batch, and `nil` is correct in
-  those cases — which is the only case JSON-RPC allows it.
+  The id is recovered from the parsed body. `/mcp`'s pipeline parses the
+  body only after the transport's rate limit and authentication
+  (`Emissary.Router`), so a refusal sent before the read — a throttled
+  request, a credential refused, a body over its cap or of a media type
+  refused — carries a null id: the body is never read to recover one. The
+  id is genuinely absent for a GET (no body) and for a batch too, and
+  `nil` is correct in those cases, as JSON-RPC allows for an id that
+  cannot be determined.
 
   A rejection rendered here is the request's refused decision, recorded
   once (`CyfrWeb.Plugs.CallIdentity.refused/2`) when the pipeline
