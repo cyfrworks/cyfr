@@ -473,7 +473,7 @@ defmodule Arca.SecurityTransitions do
         end
       end
 
-    committed(result)
+    committed_change(result)
   end
 
   # The athanors a denial touches: the person's own and every one a row of
@@ -769,7 +769,7 @@ defmodule Arca.SecurityTransitions do
         end
       end
 
-    committed(result)
+    committed_change(result)
   end
 
   defp allow_row(%User{status: "active", security_generation: generation}, _now),
@@ -869,7 +869,7 @@ defmodule Arca.SecurityTransitions do
         end
       end
 
-    committed(result)
+    committed_change(result)
   end
 
   defp unarchive(athanor_id, verify) do
@@ -905,7 +905,7 @@ defmodule Arca.SecurityTransitions do
         end
       end
 
-    committed(result)
+    committed_change(result)
   end
 
   defp archive_rows([], _now), do: {:ok, %{}}
@@ -1046,7 +1046,7 @@ defmodule Arca.SecurityTransitions do
         end
       end
 
-    committed(result)
+    committed_change(result)
   end
 
   # The leaving person's row, locked, or nil: a membership names its person
@@ -2134,8 +2134,12 @@ defmodule Arca.SecurityTransitions do
 
   # ---- the answer ------------------------------------------------------------
 
-  defp committed(%{} = change), do: change
-  defp committed({:error, reason}), do: Arca.Repo.rollback(reason)
+  # A transition's answer inside its transaction: the change map it
+  # committed, or the rollback of its `{:error, reason}`. Not
+  # `Arca.Repo.committed/1`, which takes `{:ok, value}`: a transition's body
+  # answers its change bare.
+  defp committed_change(%{} = change), do: change
+  defp committed_change({:error, reason}), do: Arca.Repo.rollback(reason)
 
   defp merged_ids(left, right), do: Enum.sort(Enum.uniq(left ++ right))
 

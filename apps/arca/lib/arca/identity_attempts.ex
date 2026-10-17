@@ -78,6 +78,10 @@ defmodule Arca.IdentityAttempts do
   alias Arca.{InstallationClaims, PersonIdentities}
   alias Arca.Schemas.{IdentityAttempt, PersonIdentity}
 
+  # Opening and advancing an attempt widen what a person's identity may do,
+  # so each transaction first proves this member still owns its slot
+  # (`Arca.Repo.owned/2`): a stale owner writes nothing.
+
   @paths %{
     "enrollment" => %{
       "staged" => ["submitted", "superseded"],
@@ -171,10 +175,7 @@ defmodule Arca.IdentityAttempts do
 
     with :ok <- opens?(actor, attrs),
          {:ok, row} <- build(attrs) do
-      Arca.Repo.Errors.with_db_rescue("Arca.IdentityAttempts.open", fn ->
-        fenced(fn -> open_in(row, also) end)
-      end)
-      |> Arca.Data.project()
+      Arca.Repo.owned("Arca.IdentityAttempts.open", fn -> open_in(row, also) end)
     end
   end
 
@@ -204,16 +205,13 @@ defmodule Arca.IdentityAttempts do
           {:ok, row()} | {:error, term()}
   def advance(%Prima.Actor{} = actor, id, from, to, attrs \\ %{})
       when is_binary(id) and is_binary(from) and is_binary(to) and is_map(attrs) do
-    Arca.Repo.Errors.with_db_rescue("Arca.IdentityAttempts.advance", fn ->
-      fenced(fn ->
-        with {:ok, attempt} <- held(actor, id),
-             :ok <- allowed(attempt, from, to),
-             :ok <- person_first(attempt, to) do
-          move(attempt, from, to, Map.new(attrs))
-        end
-      end)
+    Arca.Repo.owned("Arca.IdentityAttempts.advance", fn ->
+      with {:ok, attempt} <- held(actor, id),
+           :ok <- allowed(attempt, from, to),
+           :ok <- person_first(attempt, to) do
+        move(attempt, from, to, Map.new(attrs))
+      end
     end)
-    |> Arca.Data.project()
   end
 
   @doc """
@@ -232,7 +230,7 @@ defmodule Arca.IdentityAttempts do
         with {:ok, attempt} <- held(actor, id) do
           acknowledged(attempt)
         end
-        |> committed()
+        |> Arca.Repo.committed()
       end)
     end)
     |> Arca.Data.project()
@@ -366,10 +364,9 @@ defmodule Arca.IdentityAttempts do
       )
       when is_binary(id) do
     if Prima.Identity.Encoding.digest?(digest) do
-      Arca.Repo.Errors.with_db_rescue("Arca.IdentityAttempts.put_reproof", fn ->
-        fenced(fn -> reproof(id, digest: digest, expires_at: expires_at) end)
+      Arca.Repo.owned("Arca.IdentityAttempts.put_reproof", fn ->
+        reproof(id, digest: digest, expires_at: expires_at)
       end)
-      |> Arca.Data.project()
     else
       {:error, {:invalid, %{reproof_challenge_digest: ["is not a sha256 digest"]}}}
     end
@@ -407,10 +404,9 @@ defmodule Arca.IdentityAttempts do
           {:ok, row()} | {:error, term()}
   def consume_reproof(%Prima.Actor{scope: :platform, system: true}, id, digest)
       when is_binary(id) and is_binary(digest) do
-    Arca.Repo.Errors.with_db_rescue("Arca.IdentityAttempts.consume_reproof", fn ->
-      fenced(fn -> reproof(id, consume: digest) end)
+    Arca.Repo.owned("Arca.IdentityAttempts.consume_reproof", fn ->
+      reproof(id, consume: digest)
     end)
-    |> Arca.Data.project()
   end
 
   def consume_reproof(%Prima.Actor{}, _id, _digest), do: {:error, :cross_tenant}
@@ -924,21 +920,4 @@ defmodule Arca.IdentityAttempts do
   # A caller's instant stored at the column's microsecond precision,
   # whatever precision it arrived with.
   defp usec(%DateTime{microsecond: {us, _precision}} = at), do: %{at | microsecond: {us, 6}}
-
-  # Opening and advancing an attempt widen what a person's identity may do,
-  # so each transaction first proves this member still owns its slot
-  # (`Arca.ControlPlane.verify_held/1`): a stale owner writes nothing.
-  defp fenced(write) do
-    with {:ok, slot} <- Arca.ControlPlane.member_slot() do
-      Arca.Repo.locking_transaction(fn ->
-        case Arca.ControlPlane.verify_held(slot) do
-          :ok -> committed(write.())
-          :lost -> Arca.Repo.rollback(:not_owner)
-        end
-      end)
-    end
-  end
-
-  defp committed({:ok, value}), do: value
-  defp committed({:error, reason}), do: Arca.Repo.rollback(reason)
 end

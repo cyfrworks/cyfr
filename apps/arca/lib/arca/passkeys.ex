@@ -57,6 +57,10 @@ defmodule Arca.Passkeys do
   alias Arca.{PendingConfirmations, PersonIdentities}
   alias Arca.Schemas.Passkey
 
+  # Registering and activating a credential widen what the person may
+  # confirm, so each transaction first proves this member still owns its
+  # slot on the database's clock (`Arca.Repo.owned/2`).
+
   @typedoc "A passkey row, as a plain map."
   @type row :: map()
 
@@ -83,10 +87,7 @@ defmodule Arca.Passkeys do
 
     with :ok <- person(actor, attrs[:user_id]),
          {:ok, row} <- build(attrs) do
-      Arca.Repo.Errors.with_db_rescue("Arca.Passkeys.register", fn ->
-        fenced(fn -> register_in(row, opts) end)
-      end)
-      |> Arca.Data.project()
+      Arca.Repo.owned("Arca.Passkeys.register", fn -> register_in(row, opts) end)
     end
   end
 
@@ -111,17 +112,14 @@ defmodule Arca.Passkeys do
   """
   @spec activate(Prima.Actor.t(), String.t(), keyword()) :: {:ok, row()} | {:error, term()}
   def activate(%Prima.Actor{} = actor, id, opts) when is_binary(id) and is_list(opts) do
-    Arca.Repo.Errors.with_db_rescue("Arca.Passkeys.activate", fn ->
-      fenced(fn ->
-        with {:ok, passkey} <- held(actor, id) do
-          # The person first, the head of the standing order, then the
-          # credential read again under that lock.
-          _locked = Arca.DirectoryHeads.lock_person!(passkey.user_id)
-          activate_in(Arca.Repo.get!(Passkey, passkey.id), opts)
-        end
-      end)
+    Arca.Repo.owned("Arca.Passkeys.activate", fn ->
+      with {:ok, passkey} <- held(actor, id) do
+        # The person first, the head of the standing order, then the
+        # credential read again under that lock.
+        _locked = Arca.DirectoryHeads.lock_person!(passkey.user_id)
+        activate_in(Arca.Repo.get!(Passkey, passkey.id), opts)
+      end
     end)
-    |> Arca.Data.project()
   end
 
   @doc "The credential `id`, if the actor may read it."
@@ -201,7 +199,7 @@ defmodule Arca.Passkeys do
             {0, _} -> {:error, :stale}
           end
         end
-        |> committed()
+        |> Arca.Repo.committed()
       end)
     end)
     |> Arca.Data.project()
@@ -228,7 +226,7 @@ defmodule Arca.Passkeys do
     Arca.Repo.Errors.with_db_rescue("Arca.Passkeys.revoke", fn ->
       Arca.Repo.locking_transaction(fn ->
         case held(actor, id) do
-          {:ok, passkey} -> committed(revoke_in(passkey, also))
+          {:ok, passkey} -> Arca.Repo.committed(revoke_in(passkey, also))
           {:error, reason} -> Arca.Repo.rollback(reason)
         end
       end)
@@ -266,10 +264,7 @@ defmodule Arca.Passkeys do
       when is_binary(user_id) and is_binary(id) and is_list(opts) do
     verify = Keyword.fetch!(opts, :verify)
 
-    Arca.Repo.Errors.with_db_rescue("Arca.Passkeys.reenable", fn ->
-      fenced(fn -> reenable_in(user_id, id, verify) end)
-    end)
-    |> Arca.Data.project()
+    Arca.Repo.owned("Arca.Passkeys.reenable", fn -> reenable_in(user_id, id, verify) end)
   end
 
   def reenable(%Prima.Actor{}, _user_id, _id, _opts), do: {:error, :cross_tenant}
@@ -557,21 +552,4 @@ defmodule Arca.Passkeys do
   # A caller's instant stored at the column's microsecond precision,
   # whatever precision it arrived with.
   defp usec(%DateTime{microsecond: {us, _precision}} = at), do: %{at | microsecond: {us, 6}}
-
-  # Registering and activating a credential widen what the person may
-  # confirm, so each transaction first proves this member still owns its
-  # slot on the database's clock (`Arca.ControlPlane.verify_held/1`).
-  defp fenced(write) do
-    with {:ok, slot} <- Arca.ControlPlane.member_slot() do
-      Arca.Repo.locking_transaction(fn ->
-        case Arca.ControlPlane.verify_held(slot) do
-          :ok -> committed(write.())
-          :lost -> Arca.Repo.rollback(:not_owner)
-        end
-      end)
-    end
-  end
-
-  defp committed({:ok, value}), do: value
-  defp committed({:error, reason}), do: Arca.Repo.rollback(reason)
 end

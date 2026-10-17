@@ -31,6 +31,10 @@ defmodule Arca.PersonSeals do
 
   alias Arca.Schemas.PersonSeal
 
+  # A write of a person's row: its transaction first proves this member
+  # still owns its slot on the database's clock
+  # (`Arca.Repo.owned/2`), so a stale owner writes nothing.
+
   # The longest words and glyph a row holds, in bytes; `Sanctum.Seal`
   # decides which words and glyphs a seal is made of.
   @text_bytes 64
@@ -70,10 +74,7 @@ defmodule Arca.PersonSeals do
   def choose(%Prima.Actor{} = actor, user_id, attrs) when is_binary(user_id) and is_map(attrs) do
     with :ok <- own(actor, user_id),
          {:ok, fields} <- build(attrs) do
-      Arca.Repo.Errors.with_db_rescue("Arca.PersonSeals.choose", fn ->
-        fenced(fn -> insert(user_id, fields) end)
-      end)
-      |> Arca.Data.project()
+      Arca.Repo.owned("Arca.PersonSeals.choose", fn -> insert(user_id, fields) end)
     end
   end
 
@@ -100,12 +101,9 @@ defmodule Arca.PersonSeals do
 
     with :ok <- own(actor, user_id),
          {:ok, fields} <- build(attrs) do
-      Arca.Repo.Errors.with_db_rescue("Arca.PersonSeals.change", fn ->
-        fenced(fn ->
-          with :ok <- also.(), do: replace(user_id, fields)
-        end)
+      Arca.Repo.owned("Arca.PersonSeals.change", fn ->
+        with :ok <- also.(), do: replace(user_id, fields)
       end)
-      |> Arca.Data.project()
     end
   end
 
@@ -159,21 +157,4 @@ defmodule Arca.PersonSeals do
 
   defp found(nil), do: {:error, :not_found}
   defp found(%PersonSeal{} = row), do: {:ok, row}
-
-  # A write of a person's row: its transaction first proves this member
-  # still owns its slot on the database's clock
-  # (`Arca.ControlPlane.verify_held/1`), so a stale owner writes nothing.
-  defp fenced(write) do
-    with {:ok, slot} <- Arca.ControlPlane.member_slot() do
-      Arca.Repo.locking_transaction(fn ->
-        case Arca.ControlPlane.verify_held(slot) do
-          :ok -> committed(write.())
-          :lost -> Arca.Repo.rollback(:not_owner)
-        end
-      end)
-    end
-  end
-
-  defp committed({:ok, value}), do: value
-  defp committed({:error, reason}), do: Arca.Repo.rollback(reason)
 end

@@ -59,6 +59,11 @@ defmodule Arca.Members do
   alias Arca.{ControlPlane, JobClaims, QueryHelpers}
   alias Arca.Schemas.{Athanor, Membership, Session, User}
 
+  # An identifier invitation, written or claimed, widens who reaches an
+  # athanor, so its transaction first proves this member still owns its
+  # slot on the database's clock (`Arca.Repo.owned/2`): a stale owner seats
+  # nobody. A seat that names no identifier is a locking transaction alone.
+
   @type refusal :: {:error, :cross_tenant | :database_error}
   @type write_refusal ::
           {:error,
@@ -141,25 +146,23 @@ defmodule Arca.Members do
       when is_binary(athanor_id) and athanor_id != "" and is_map(attrs) do
     reserve = reserve!(opts)
 
-    Arca.Repo.Errors.with_db_rescue("Arca.Members.seat", fn ->
-      write = fn ->
-        with :ok <- hold_person(Map.get(attrs, :user_id)),
-             :ok <- seatable(athanor_id),
-             :ok <- not_frozen(athanor_id),
-             :ok <- reserve.(),
-             {:ok, row} <-
-               attrs |> defaults() |> Map.put(:athanor_id, athanor_id) |> do_insert() do
-          row
-        else
-          {:error, reason} -> Arca.Repo.rollback(reason)
-        end
+    write = fn ->
+      with :ok <- hold_person(Map.get(attrs, :user_id)),
+           :ok <- seatable(athanor_id),
+           :ok <- not_frozen(athanor_id),
+           :ok <- reserve.() do
+        attrs |> defaults() |> Map.put(:athanor_id, athanor_id) |> do_insert()
       end
+    end
 
-      if is_nil(Map.get(attrs, :person_identifier)),
-        do: Arca.Repo.locking_transaction(write),
-        else: fenced(write)
-    end)
-    |> Arca.Data.project()
+    if is_nil(Map.get(attrs, :person_identifier)) do
+      Arca.Repo.Errors.with_db_rescue("Arca.Members.seat", fn ->
+        Arca.Repo.locking_transaction(fn -> write.() |> Arca.Repo.committed() end)
+      end)
+      |> Arca.Data.project()
+    else
+      Arca.Repo.owned("Arca.Members.seat", write)
+    end
   end
 
   def seat(%Prima.Actor{}, _attrs, opts) do
@@ -734,36 +737,34 @@ defmodule Arca.Members do
         %DateTime{} = now
       )
       when is_binary(user_id) and is_binary(identifier) do
-    Arca.Repo.Errors.with_db_rescue("Arca.Members.activate_invited_identifier", fn ->
-      invited =
-        from(m in Membership,
-          where:
-            m.person_identifier == ^identifier and m.status == "invited" and m.scope == "athanor"
-        )
+    invited =
+      from(m in Membership,
+        where:
+          m.person_identifier == ^identifier and m.status == "invited" and m.scope == "athanor"
+      )
 
-      superseded =
-        from(m in invited,
-          where:
-            m.athanor_id in subquery(
-              from(a in Membership,
-                where: a.user_id == ^user_id and a.scope == "athanor" and a.status == "active",
-                select: a.athanor_id
-              )
+    superseded =
+      from(m in invited,
+        where:
+          m.athanor_id in subquery(
+            from(a in Membership,
+              where: a.user_id == ^user_id and a.scope == "athanor" and a.status == "active",
+              select: a.athanor_id
             )
+          )
+      )
+
+    Arca.Repo.owned("Arca.Members.activate_invited_identifier", fn ->
+      :ok = hold_person(user_id)
+      locked = lock_invited_athanors(invited)
+      Arca.Repo.delete_all(superseded)
+
+      {_count, athanor_ids} =
+        Arca.Repo.update_all(from(m in unfrozen(invited, locked), select: m.athanor_id),
+          set: [user_id: user_id, status: "active", person_identifier: nil, updated_at: now]
         )
 
-      fenced(fn ->
-        :ok = hold_person(user_id)
-        locked = lock_invited_athanors(invited)
-        Arca.Repo.delete_all(superseded)
-
-        {_count, athanor_ids} =
-          Arca.Repo.update_all(from(m in unfrozen(invited, locked), select: m.athanor_id),
-            set: [user_id: user_id, status: "active", person_identifier: nil, updated_at: now]
-          )
-
-        athanor_ids || []
-      end)
+      {:ok, athanor_ids || []}
     end)
   end
 
@@ -1049,21 +1050,6 @@ defmodule Arca.Members do
     |> Map.put_new(:id, Prima.UUID7.generate_id("mem"))
     |> Map.put_new(:created_at, now)
     |> Map.put_new(:updated_at, now)
-  end
-
-  # An identifier invitation, written or claimed, widens who reaches an
-  # athanor, so its transaction first proves this member still owns its
-  # slot on the database's clock (`Arca.ControlPlane.verify_held/1`): a
-  # stale owner seats nobody.
-  defp fenced(write) do
-    with {:ok, slot} <- Arca.ControlPlane.member_slot() do
-      Arca.Repo.locking_transaction(fn ->
-        case Arca.ControlPlane.verify_held(slot) do
-          :ok -> write.()
-          :lost -> Arca.Repo.rollback(:not_owner)
-        end
-      end)
-    end
   end
 
   # The person a membership row names, locked: the first lock of the

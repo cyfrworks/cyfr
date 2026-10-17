@@ -14,7 +14,8 @@ defmodule Arca.DbRescueCoverageTest do
   refused.
 
   A function counts as covered when its body runs under `with_db_rescue`
-  (or the local `rescuing_db` wrapper), carries its own `rescue`, or is
+  (or the local `rescuing_db` wrapper, or `Arca.Repo.owned/2` and
+  `owned/3`, which run their write under it), carries its own `rescue`, or is
   tagged `# arca:db-raise-ok <why>` — for the sites where raising is the
   contract (a step inside a caller's `Repo.transaction/1` must raise to
   roll the transaction back, and a private helper is covered by the public
@@ -29,7 +30,7 @@ defmodule Arca.DbRescueCoverageTest do
   # `insert!`, …) match through the `\b` before their `!`; `Arca.Repo`'s
   # own transactions and its transaction lock raise too, so they are listed.
   @repo_call ~r/\b(?:Arca\.)?Repo\.(?:(?:all|one|update_all|delete_all|aggregate|get|get_by|insert|insert_all|insert_or_update|update|delete|transaction|locking_transaction|read_transaction|transaction_lock|rollback)\b|exists\?|query!?)/
-  @covered ~r/with_db_rescue|rescuing_db|^\s*rescue\b/m
+  @covered ~r/with_db_rescue|rescuing_db|Arca\.Repo\.owned\(|^\s*rescue\b/m
   @tag_marker ~r/#\s*arca:db-raise-ok\s+\S/
 
   defp sources do
@@ -131,6 +132,8 @@ defmodule Arca.DbRescueCoverageTest do
          def f, do: Arca.Repo.transaction_lock(2)
 
          def g, do: :ok
+
+         def i(query), do: Arca.Repo.owned("Arca.Planted.i", fn -> {:ok, Arca.Repo.all(query)} end)
 
          @doc """
          Not one of these: it reads nothing through Arca.Repo.all/1 or

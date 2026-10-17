@@ -84,6 +84,11 @@ defmodule Arca.PendingConfirmations do
   alias Prima.Confirmation
   alias Prima.Confirmation.Preview
 
+  # Confirming, and holding the challenge a proof answers, widen what the
+  # record lets a change do, so their transaction first proves this member
+  # still owns its slot on the database's clock
+  # (`Arca.Repo.owned/2`): a stale owner confirms nothing.
+
   @open ~w(pending confirmed)
   @max_asker 4096
   # The open records one opener holds in an athanor, at most.
@@ -140,7 +145,7 @@ defmodule Arca.PendingConfirmations do
         with {:ok, asker} <- asker(Map.get(attrs, :asker)) do
           Arca.Repo.Errors.with_db_rescue("Arca.PendingConfirmations.open", fn ->
             Arca.Repo.locking_transaction(fn ->
-              committed(
+              Arca.Repo.committed(
                 open_in(
                   athanor_id,
                   record,
@@ -179,10 +184,7 @@ defmodule Arca.PendingConfirmations do
   def confirm(%Prima.Actor{athanor_id: athanor_id} = actor, ref, proof)
       when is_binary(athanor_id) and athanor_id != "" and is_binary(ref) and is_map(proof) do
     with {:ok, proof} <- proof(proof) do
-      Arca.Repo.Errors.with_db_rescue("Arca.PendingConfirmations.confirm", fn ->
-        fenced(fn -> confirm_in(actor, ref, proof) end)
-      end)
-      |> Arca.Data.project()
+      Arca.Repo.owned("Arca.PendingConfirmations.confirm", fn -> confirm_in(actor, ref, proof) end)
     end
   end
 
@@ -213,7 +215,7 @@ defmodule Arca.PendingConfirmations do
       when is_binary(athanor_id) and athanor_id != "" and is_binary(id) and is_map(expected) do
     Arca.Repo.Errors.with_db_rescue("Arca.PendingConfirmations.consume", fn ->
       Arca.Repo.locking_transaction(fn ->
-        committed(consume_in(actor, Confirmation.ref(id), expected))
+        Arca.Repo.committed(consume_in(actor, Confirmation.ref(id), expected))
       end)
     end)
     |> Arca.Data.project()
@@ -249,7 +251,7 @@ defmodule Arca.PendingConfirmations do
       when is_binary(athanor_id) and athanor_id != "" and is_binary(ref) do
     Arca.Repo.Errors.with_db_rescue("Arca.PendingConfirmations.cancel", fn ->
       Arca.Repo.locking_transaction(fn ->
-        committed(close(actor, ref, "cancelled"))
+        Arca.Repo.committed(close(actor, ref, "cancelled"))
       end)
     end)
     |> Arca.Data.project()
@@ -353,21 +355,18 @@ defmodule Arca.PendingConfirmations do
       end
 
     if set do
-      Arca.Repo.Errors.with_db_rescue("Arca.PendingConfirmations.put_challenge", fn ->
-        fenced(fn ->
-          now = Arca.ServerMetaStorage.now!()
+      Arca.Repo.owned("Arca.PendingConfirmations.put_challenge", fn ->
+        now = Arca.ServerMetaStorage.now!()
 
-          PendingConfirmation
-          |> QueryHelpers.where_tenant(actor)
-          |> where([c], c.ref == ^ref and c.state == "pending" and c.expires_at > ^now)
-          |> Arca.Repo.update_all(set: Keyword.put(set, :updated_at, now))
-          |> case do
-            {1, _} -> {:ok, Arca.Repo.get!(PendingConfirmation, ref)}
-            {0, _} -> {:error, :not_pending}
-          end
-        end)
+        PendingConfirmation
+        |> QueryHelpers.where_tenant(actor)
+        |> where([c], c.ref == ^ref and c.state == "pending" and c.expires_at > ^now)
+        |> Arca.Repo.update_all(set: Keyword.put(set, :updated_at, now))
+        |> case do
+          {1, _} -> {:ok, Arca.Repo.get!(PendingConfirmation, ref)}
+          {0, _} -> {:error, :not_pending}
+        end
       end)
-      |> Arca.Data.project()
     else
       {:error, {:invalid, %{challenge: ["is a reauth_nonce or an email_code_hash"]}}}
     end
@@ -764,22 +763,4 @@ defmodule Arca.PendingConfirmations do
 
   defp found(nil), do: {:error, :not_found}
   defp found(%PendingConfirmation{} = row), do: {:ok, row}
-
-  # Confirming, and holding the challenge a proof answers, widen what the
-  # record lets a change do, so their transaction first proves this member
-  # still owns its slot on the database's clock
-  # (`Arca.ControlPlane.verify_held/1`): a stale owner confirms nothing.
-  defp fenced(write) do
-    with {:ok, slot} <- Arca.ControlPlane.member_slot() do
-      Arca.Repo.locking_transaction(fn ->
-        case Arca.ControlPlane.verify_held(slot) do
-          :ok -> committed(write.())
-          :lost -> Arca.Repo.rollback(:not_owner)
-        end
-      end)
-    end
-  end
-
-  defp committed({:ok, value}), do: value
-  defp committed({:error, reason}), do: Arca.Repo.rollback(reason)
 end

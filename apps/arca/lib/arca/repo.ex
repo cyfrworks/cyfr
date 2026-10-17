@@ -122,22 +122,35 @@ defmodule Arca.Repo do
   `{:error, :not_owner}` and one that starts later waits for it.
 
   `write` answers `{:ok, value}` or `{:error, reason}`, and an error
-  rolls the transaction back (`committed/1`). A store that cannot answer
-  is `{:error, :database_error}`, logged under `tag`; the answer is
-  projected through `Arca.Data.project/1`.
+  rolls the transaction back (`committed/1`). A member that holds no slot
+  is refused `{:error, :not_owner}` before the transaction opens. A store
+  that cannot answer is `{:error, :database_error}`, logged under `tag`;
+  the answer is projected through `Arca.Data.project/1`.
+
+  This is the one fence of a holder-only write: every Arca module whose
+  write must not outlive its member's slot runs it here.
   """
   @spec owned(String.t(), (-> {:ok, term()} | {:error, term()})) ::
           {:ok, term()} | {:error, term()}
   def owned(tag, write) when is_binary(tag) and is_function(write, 0) do
+    with {:ok, slot} <- Arca.ControlPlane.member_slot(), do: owned(tag, slot, write)
+  end
+
+  @doc """
+  `owned/2` under `slot`, the slot the caller read earlier, such as the
+  one a claimant read when it claimed the sequence number the write is
+  for: the write is refused when that slot no longer stands.
+  """
+  @spec owned(String.t(), Arca.ControlPlane.slot() | :none, (-> {:ok, term()} | {:error, term()})) ::
+          {:ok, term()} | {:error, term()}
+  def owned(tag, slot, write) when is_binary(tag) and is_function(write, 0) do
     Arca.Repo.Errors.with_db_rescue(tag, fn ->
-      with {:ok, slot} <- Arca.ControlPlane.member_slot() do
-        locking_transaction(fn ->
-          case Arca.ControlPlane.verify_held(slot) do
-            :ok -> write.() |> committed()
-            :lost -> rollback(:not_owner)
-          end
-        end)
-      end
+      locking_transaction(fn ->
+        case Arca.ControlPlane.verify_held(slot) do
+          :ok -> write.() |> committed()
+          :lost -> rollback(:not_owner)
+        end
+      end)
     end)
     |> Arca.Data.project()
   end

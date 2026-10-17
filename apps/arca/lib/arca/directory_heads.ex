@@ -63,6 +63,11 @@ defmodule Arca.DirectoryHeads do
   alias Arca.{DeviceCertificates, Passkeys, PendingConfirmations, SessionStorage}
   alias Arca.Schemas.{DirectoryHead, Membership, PersonIdentity, User}
 
+  # Publishing a head decides which remote credentials this home accepts,
+  # so each write first proves this member still owns its slot on the
+  # database's clock (`Arca.Repo.owned/2`): a stale owner
+  # publishes nothing.
+
   @typedoc "A cached head, as a plain map."
   @type row :: map()
 
@@ -137,31 +142,28 @@ defmodule Arca.DirectoryHeads do
              :recovery_epoch,
              :state
            ]) do
-      Arca.Repo.Errors.with_db_rescue("Arca.DirectoryHeads.put", fn ->
-        fenced(fn ->
-          now = Arca.ServerMetaStorage.now!()
+      Arca.Repo.owned("Arca.DirectoryHeads.put", fn ->
+        now = Arca.ServerMetaStorage.now!()
 
-          row = %{
-            identifier: attrs.identifier,
-            genesis: attrs.genesis,
-            directory_url: attrs.directory_url,
-            head_hash: attrs.head_hash,
-            key_epoch: attrs.key_epoch,
-            recovery_epoch: attrs.recovery_epoch,
-            state: attrs.state,
-            verified_at: now,
-            revision: 1,
-            inserted_at: now,
-            updated_at: now
-          }
+        row = %{
+          identifier: attrs.identifier,
+          genesis: attrs.genesis,
+          directory_url: attrs.directory_url,
+          head_hash: attrs.head_hash,
+          key_epoch: attrs.key_epoch,
+          recovery_epoch: attrs.recovery_epoch,
+          state: attrs.state,
+          verified_at: now,
+          revision: 1,
+          inserted_at: now,
+          updated_at: now
+        }
 
-          case Arca.Repo.insert_all(DirectoryHead, [row], on_conflict: :nothing) do
-            {1, _} -> {:ok, Arca.Repo.get!(DirectoryHead, attrs.identifier)}
-            {0, _} -> {:error, :exists}
-          end
-        end)
+        case Arca.Repo.insert_all(DirectoryHead, [row], on_conflict: :nothing) do
+          {1, _} -> {:ok, Arca.Repo.get!(DirectoryHead, attrs.identifier)}
+          {0, _} -> {:error, :exists}
+        end
       end)
-      |> Arca.Data.project()
     end
   end
 
@@ -196,10 +198,9 @@ defmodule Arca.DirectoryHeads do
              :recovery_epoch,
              :state
            ]) do
-      Arca.Repo.Errors.with_db_rescue("Arca.DirectoryHeads.advance", fn ->
-        fenced(fn -> advance_in(identifier, expected_head, attrs) end)
+      Arca.Repo.owned("Arca.DirectoryHeads.advance", fn ->
+        advance_in(identifier, expected_head, attrs)
       end)
-      |> Arca.Data.project()
     end
   end
 
@@ -214,19 +215,16 @@ defmodule Arca.DirectoryHeads do
           {:ok, row()} | {:error, :stale | :cross_tenant | :database_error}
   def touch(%Prima.Actor{scope: :platform, system: true}, identifier, head_hash)
       when is_binary(identifier) and is_binary(head_hash) do
-    Arca.Repo.Errors.with_db_rescue("Arca.DirectoryHeads.touch", fn ->
-      fenced(fn ->
-        now = Arca.ServerMetaStorage.now!()
+    Arca.Repo.owned("Arca.DirectoryHeads.touch", fn ->
+      now = Arca.ServerMetaStorage.now!()
 
-        from(h in DirectoryHead, where: h.identifier == ^identifier and h.head_hash == ^head_hash)
-        |> Arca.Repo.update_all(set: [verified_at: now, updated_at: now])
-        |> case do
-          {1, _} -> {:ok, Arca.Repo.get!(DirectoryHead, identifier)}
-          {0, _} -> {:error, :stale}
-        end
-      end)
+      from(h in DirectoryHead, where: h.identifier == ^identifier and h.head_hash == ^head_hash)
+      |> Arca.Repo.update_all(set: [verified_at: now, updated_at: now])
+      |> case do
+        {1, _} -> {:ok, Arca.Repo.get!(DirectoryHead, identifier)}
+        {0, _} -> {:error, :stale}
+      end
     end)
-    |> Arca.Data.project()
   end
 
   def touch(%Prima.Actor{}, _identifier, _head_hash), do: {:error, :cross_tenant}
@@ -544,24 +542,6 @@ defmodule Arca.DirectoryHeads do
     |> Arca.QueryHelpers.for_update()
     |> Arca.Repo.one()
   end
-
-  # Publishing a head decides which remote credentials this home accepts,
-  # so each write first proves this member still owns its slot on the
-  # database's clock (`Arca.ControlPlane.verify_held/1`): a stale owner
-  # publishes nothing.
-  defp fenced(write) do
-    with {:ok, slot} <- Arca.ControlPlane.member_slot() do
-      Arca.Repo.locking_transaction(fn ->
-        case Arca.ControlPlane.verify_held(slot) do
-          :ok -> committed(write.())
-          :lost -> Arca.Repo.rollback(:not_owner)
-        end
-      end)
-    end
-  end
-
-  defp committed({:ok, value}), do: value
-  defp committed({:error, reason}), do: Arca.Repo.rollback(reason)
 
   defp nothing_retired,
     do: %{session_hashes: [], passkey_ids: [], confirmation_ids: [], certificate_ids: []}

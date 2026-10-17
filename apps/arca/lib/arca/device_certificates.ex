@@ -36,6 +36,10 @@ defmodule Arca.DeviceCertificates do
   alias Arca.QueryHelpers
   alias Arca.Schemas.{DeviceCertificate, PairedClient}
 
+  # Recording a certificate widens what a device may do, so its transaction
+  # first proves this member still owns its slot on the database's clock
+  # (`Arca.Repo.owned/2`): a stale owner records nothing.
+
   @typedoc "A certificate row, as a plain map with its `status`."
   @type row :: map()
 
@@ -65,10 +69,7 @@ defmodule Arca.DeviceCertificates do
   def record(%Prima.Actor{athanor_id: athanor_id} = actor, attrs)
       when is_binary(athanor_id) and athanor_id != "" and is_map(attrs) do
     with {:ok, row} <- build(QueryHelpers.stamp_tenant!(actor, Map.new(attrs))) do
-      Arca.Repo.Errors.with_db_rescue("Arca.DeviceCertificates.record", fn ->
-        fenced(fn -> record_in(athanor_id, row) end)
-      end)
-      |> Arca.Data.project()
+      Arca.Repo.owned("Arca.DeviceCertificates.record", fn -> record_in(athanor_id, row) end)
     end
   end
 
@@ -367,21 +368,4 @@ defmodule Arca.DeviceCertificates do
   # A caller's instant stored at the column's microsecond precision,
   # whatever precision it arrived with.
   defp usec(%DateTime{microsecond: {us, _precision}} = at), do: %{at | microsecond: {us, 6}}
-
-  # Recording a certificate widens what a device may do, so its transaction
-  # first proves this member still owns its slot on the database's clock
-  # (`Arca.ControlPlane.verify_held/1`): a stale owner records nothing.
-  defp fenced(write) do
-    with {:ok, slot} <- Arca.ControlPlane.member_slot() do
-      Arca.Repo.locking_transaction(fn ->
-        case Arca.ControlPlane.verify_held(slot) do
-          :ok -> committed(write.())
-          :lost -> Arca.Repo.rollback(:not_owner)
-        end
-      end)
-    end
-  end
-
-  defp committed({:ok, value}), do: value
-  defp committed({:error, reason}), do: Arca.Repo.rollback(reason)
 end

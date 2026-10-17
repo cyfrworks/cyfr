@@ -36,6 +36,11 @@ defmodule Arca.DeviceCertifications do
 
   alias Arca.Schemas.{DeviceCertification, PersonIdentity, User}
 
+  # A certification lets a device act for its person at another home, so
+  # each write first proves this member still owns its slot on the
+  # database's clock (`Arca.Repo.owned/2`): a stale owner
+  # writes nothing.
+
   @fields [
     :user_id,
     :identifier,
@@ -98,10 +103,7 @@ defmodule Arca.DeviceCertifications do
 
     with :ok <- person(actor, attrs[:user_id]),
          {:ok, row} <- build(attrs) do
-      Arca.Repo.Errors.with_db_rescue("Arca.DeviceCertifications.certify", fn ->
-        fenced(fn -> certify_in(row, verify) end)
-      end)
-      |> Arca.Data.project()
+      Arca.Repo.owned("Arca.DeviceCertifications.certify", fn -> certify_in(row, verify) end)
     end
   end
 
@@ -140,10 +142,9 @@ defmodule Arca.DeviceCertifications do
   """
   @spec renew(Prima.Actor.t(), String.t(), renewal()) :: {:ok, row()} | {:error, term()}
   def renew(%Prima.Actor{} = actor, id, %{expires_at: %DateTime{}} = attrs) when is_binary(id) do
-    Arca.Repo.Errors.with_db_rescue("Arca.DeviceCertifications.renew", fn ->
-      fenced(fn -> renew_in(actor, id, Map.update!(attrs, :expires_at, &usec/1)) end)
+    Arca.Repo.owned("Arca.DeviceCertifications.renew", fn ->
+      renew_in(actor, id, Map.update!(attrs, :expires_at, &usec/1))
     end)
-    |> Arca.Data.project()
   end
 
   # ---- internals -------------------------------------------------------------
@@ -332,22 +333,4 @@ defmodule Arca.DeviceCertifications do
   defp usec(%DateTime{microsecond: {value, _precision}} = at), do: %{at | microsecond: {value, 6}}
 
   defp nonempty?(value), do: is_binary(value) and value != ""
-
-  # A certification lets a device act for its person at another home, so
-  # each write first proves this member still owns its slot on the
-  # database's clock (`Arca.ControlPlane.verify_held/1`): a stale owner
-  # writes nothing.
-  defp fenced(write) do
-    with {:ok, slot} <- Arca.ControlPlane.member_slot() do
-      Arca.Repo.locking_transaction(fn ->
-        case Arca.ControlPlane.verify_held(slot) do
-          :ok -> committed(write.())
-          :lost -> Arca.Repo.rollback(:not_owner)
-        end
-      end)
-    end
-  end
-
-  defp committed({:ok, value}), do: value
-  defp committed({:error, reason}), do: Arca.Repo.rollback(reason)
 end

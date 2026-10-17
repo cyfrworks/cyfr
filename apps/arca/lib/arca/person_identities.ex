@@ -34,6 +34,10 @@ defmodule Arca.PersonIdentities do
 
   alias Arca.Schemas.PersonIdentity
 
+  # A write that widens what a person may sign: its transaction first proves
+  # this member still owns its slot on the database's clock
+  # (`Arca.Repo.owned/2`), so a stale owner writes nothing.
+
   @key_bytes 32
 
   @typedoc "A person's identity row, as a plain map."
@@ -62,10 +66,7 @@ defmodule Arca.PersonIdentities do
           | {:error, :conflict | :cross_tenant | :not_owner | :database_error | {:invalid, map()}}
   def create(%Prima.Actor{scope: :platform}, attrs) when is_map(attrs) do
     with {:ok, row} <- build(Map.new(attrs)) do
-      Arca.Repo.Errors.with_db_rescue("Arca.PersonIdentities.create", fn ->
-        fenced(fn -> insert(row) end)
-      end)
-      |> Arca.Data.project()
+      Arca.Repo.owned("Arca.PersonIdentities.create", fn -> insert(row) end)
     end
   end
 
@@ -385,21 +386,4 @@ defmodule Arca.PersonIdentities do
 
   defp found(nil), do: {:error, :not_found}
   defp found(%PersonIdentity{} = row), do: {:ok, row}
-
-  # A write that widens what a person may sign: its transaction first proves
-  # this member still owns its slot on the database's clock
-  # (`Arca.ControlPlane.verify_held/1`), so a stale owner writes nothing.
-  defp fenced(write) do
-    with {:ok, slot} <- Arca.ControlPlane.member_slot() do
-      Arca.Repo.locking_transaction(fn ->
-        case Arca.ControlPlane.verify_held(slot) do
-          :ok -> committed(write.())
-          :lost -> Arca.Repo.rollback(:not_owner)
-        end
-      end)
-    end
-  end
-
-  defp committed({:ok, value}), do: value
-  defp committed({:error, reason}), do: Arca.Repo.rollback(reason)
 end

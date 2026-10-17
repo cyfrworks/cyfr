@@ -81,6 +81,13 @@ defmodule Arca.CronSchedule do
   alias Arca.Schemas.CronSchedule, as: Row
   alias Prima.Feed.Binding
 
+  # A schedule's create and every feed write run as `Arca.Repo.owned/2`: one
+  # locking transaction whose first step checks the member's slot on the
+  # database's clock, so a takeover that committed first refuses it and one
+  # that starts later waits for it. A feed's result is accepted, and its
+  # acceptance checked, under the slot its claimant read when it claimed
+  # the seq (`Arca.Repo.owned/3`).
+
   @kinds Row.kinds()
 
   @doc "The status vocabulary this table's rows may hold."
@@ -117,7 +124,7 @@ defmodule Arca.CronSchedule do
   def create(%Prima.Actor{athanor_id: athanor_id} = actor, %{} = attrs)
       when is_binary(athanor_id) and athanor_id != "" do
     with {:ok, row, cap} <- schedule_row(actor, attrs) do
-      fenced("CronSchedule.create", fn -> insert_schedule(actor, row, cap) end)
+      Arca.Repo.owned("CronSchedule.create", fn -> insert_schedule(actor, row, cap) end)
     end
   end
 
@@ -385,7 +392,7 @@ defmodule Arca.CronSchedule do
   def create_feed(%Prima.Actor{athanor_id: athanor_id} = actor, %{} = attrs)
       when is_binary(athanor_id) and athanor_id != "" do
     with {:ok, row, cap} <- feed_row(actor, attrs) do
-      fenced("CronSchedule.create_feed", fn -> insert_feed(actor, row, cap) end)
+      Arca.Repo.owned("CronSchedule.create_feed", fn -> insert_feed(actor, row, cap) end)
     end
   end
 
@@ -403,7 +410,7 @@ defmodule Arca.CronSchedule do
           | {:error, :not_found | :not_owner | :no_athanor | :database_error}
   def claim_feed_seq(%Prima.Actor{athanor_id: athanor_id} = actor, binding_id)
       when is_binary(athanor_id) and athanor_id != "" and is_binary(binding_id) do
-    fenced("CronSchedule.claim_feed_seq", fn -> claim_seq(actor, binding_id) end)
+    Arca.Repo.owned("CronSchedule.claim_feed_seq", fn -> claim_seq(actor, binding_id) end)
   end
 
   def claim_feed_seq(%Prima.Actor{}, _binding_id), do: {:error, :no_athanor}
@@ -442,7 +449,7 @@ defmodule Arca.CronSchedule do
       )
       when is_binary(athanor_id) and athanor_id != "" and is_binary(binding_id) and
              is_integer(seq) and is_binary(result_json) and (slot == :none or is_map(slot)) do
-    fenced("CronSchedule.accept_feed_result", slot, fn ->
+    Arca.Repo.owned("CronSchedule.accept_feed_result", slot, fn ->
       accept_result(actor, binding_id, seq, result_json)
     end)
   end
@@ -472,7 +479,7 @@ defmodule Arca.CronSchedule do
   def check_feed_acceptance(%Prima.Actor{athanor_id: athanor_id} = actor, binding_id, seq, slot)
       when is_binary(athanor_id) and athanor_id != "" and is_binary(binding_id) and
              is_integer(seq) and (slot == :none or is_map(slot)) do
-    case fenced("CronSchedule.check_feed_acceptance", slot, fn ->
+    case Arca.Repo.owned("CronSchedule.check_feed_acceptance", slot, fn ->
            with {:ok, _row} <- acceptable(unlocked_feed(actor, binding_id), seq), do: {:ok, :ok}
          end) do
       {:ok, :ok} -> :ok
@@ -493,7 +500,7 @@ defmodule Arca.CronSchedule do
           {:ok, map()} | {:error, :not_found | :not_owner | :no_athanor | :database_error}
   def remove_feed(%Prima.Actor{athanor_id: athanor_id} = actor, binding_id)
       when is_binary(athanor_id) and athanor_id != "" and is_binary(binding_id) do
-    fenced("CronSchedule.remove_feed", fn -> soft_delete_feed(actor, binding_id) end)
+    Arca.Repo.owned("CronSchedule.remove_feed", fn -> soft_delete_feed(actor, binding_id) end)
   end
 
   def remove_feed(%Prima.Actor{}, _binding_id), do: {:error, :no_athanor}
@@ -677,31 +684,6 @@ defmodule Arca.CronSchedule do
     end
   end
 
-  # A feed write or a schedule's create: one locking transaction whose
-  # first step checks `slot`, the member's slot, on the database's clock,
-  # so a takeover that committed first refuses it and one that starts
-  # later waits for it.
-  # `fenced/2` reads the slot now; `fenced/3` takes the one a claimant read
-  # when it claimed the seq the write is for.
-  defp fenced(tag, write) do
-    case Arca.ControlPlane.member_slot() do
-      {:ok, slot} -> fenced(tag, slot, write)
-      {:error, :not_owner} = refused -> refused
-    end
-  end
-
-  defp fenced(tag, slot, write) do
-    Errors.with_db_rescue(tag, fn ->
-      Arca.Repo.locking_transaction(fn ->
-        case held(slot) do
-          :ok -> write.() |> committed()
-          {:error, :not_owner} -> Arca.Repo.rollback(:not_owner)
-        end
-      end)
-    end)
-    |> Arca.Data.project()
-  end
-
   # The fence's one check, inside the caller's locking transaction: the
   # slot still names the member under a standing lease.
   defp held(slot) do
@@ -719,7 +701,7 @@ defmodule Arca.CronSchedule do
     Arca.Repo.locking_transaction(fn ->
       with {:ok, row} <- locked_tenant(actor, id),
            :ok <- slot_fence() do
-        write.(row) |> committed()
+        write.(row) |> Arca.Repo.committed()
       else
         {:error, reason} -> Arca.Repo.rollback(reason)
       end
@@ -749,9 +731,6 @@ defmodule Arca.CronSchedule do
   def slot_fence do
     with {:ok, slot} <- Arca.ControlPlane.member_slot(), do: held(slot)
   end
-
-  defp committed({:ok, value}), do: value
-  defp committed({:error, reason}), do: Arca.Repo.rollback(reason)
 
   # In the bind's transaction: the athanor's row is locked before the
   # count, so binds into one athanor count and insert one at a time.

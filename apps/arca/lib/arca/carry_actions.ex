@@ -49,6 +49,12 @@ defmodule Arca.CarryActions do
 
   alias Arca.Schemas.{CarryAction, User}
 
+  # Opening an action, attaching its challenge, recording its assertion and
+  # recording a receipt widen what a signing home will sign and what a
+  # relying home admitted, so each transaction first proves this member
+  # still owns its slot on the database's clock
+  # (`Arca.Repo.owned/2`): a stale owner writes nothing.
+
   @lifetime_ms 5 * 60 * 1000
   @retention_ms 24 * 60 * 60 * 1000
   @max_pending 20
@@ -90,10 +96,7 @@ defmodule Arca.CarryActions do
 
     with :ok <- person(actor, attrs[:user_id]),
          {:ok, row} <- build_source(attrs) do
-      Arca.Repo.Errors.with_db_rescue("Arca.CarryActions.open", fn ->
-        fenced(fn -> open_in(row) end)
-      end)
-      |> Arca.Data.project()
+      Arca.Repo.owned("Arca.CarryActions.open", fn -> open_in(row) end)
     end
   end
 
@@ -281,10 +284,7 @@ defmodule Arca.CarryActions do
   @spec record_receipt(Prima.Actor.t(), map()) :: {:ok, row()} | {:error, term()}
   def record_receipt(%Prima.Actor{scope: :platform, system: true}, attrs) when is_map(attrs) do
     with {:ok, row} <- build_receipt(Map.new(attrs)) do
-      Arca.Repo.Errors.with_db_rescue("Arca.CarryActions.record_receipt", fn ->
-        fenced(fn -> receipt_in(row) end)
-      end)
-      |> Arca.Data.project()
+      Arca.Repo.owned("Arca.CarryActions.record_receipt", fn -> receipt_in(row) end)
     end
   end
 
@@ -510,31 +510,28 @@ defmodule Arca.CarryActions do
         with {:ok, action} <- locked(actor, id) do
           decide.(action, now)
         end
-        |> committed()
+        |> Arca.Repo.committed()
       end)
     end)
     |> Arca.Data.project()
   end
 
   # A challenge or an assertion, once: what the action will sign or carry,
-  # so the write is fenced (`fenced/1`) as well as locked, the action's
+  # so the write is fenced (`Arca.Repo.owned/2`) as well as locked, the action's
   # person first (`lock_owner!/2`).
   defp once(actor, id, tag, decide) do
-    Arca.Repo.Errors.with_db_rescue(tag, fn ->
-      fenced(fn ->
-        now = Arca.ServerMetaStorage.now!()
-        _owner = lock_owner!(actor, id)
+    Arca.Repo.owned(tag, fn ->
+      now = Arca.ServerMetaStorage.now!()
+      _owner = lock_owner!(actor, id)
 
-        with {:ok, action} <- locked(actor, id) do
-          cond do
-            action.phase not in @open -> {:error, :not_open}
-            expired?(action, now) -> {:error, :expired}
-            true -> decide.(action, now)
-          end
+      with {:ok, action} <- locked(actor, id) do
+        cond do
+          action.phase not in @open -> {:error, :not_open}
+          expired?(action, now) -> {:error, :expired}
+          true -> decide.(action, now)
         end
-      end)
+      end
     end)
-    |> Arca.Data.project()
   end
 
   defp write_once(action, set, now), do: moved(action, action.phase, set, now)
@@ -735,23 +732,4 @@ defmodule Arca.CarryActions do
   end
 
   defp nonempty?(value), do: is_binary(value) and value != ""
-
-  # Opening an action, attaching its challenge, recording its assertion and
-  # recording a receipt widen what a signing home will sign and what a
-  # relying home admitted, so each transaction first proves this member
-  # still owns its slot on the database's clock
-  # (`Arca.ControlPlane.verify_held/1`): a stale owner writes nothing.
-  defp fenced(write) do
-    with {:ok, slot} <- Arca.ControlPlane.member_slot() do
-      Arca.Repo.locking_transaction(fn ->
-        case Arca.ControlPlane.verify_held(slot) do
-          :ok -> committed(write.())
-          :lost -> Arca.Repo.rollback(:not_owner)
-        end
-      end)
-    end
-  end
-
-  defp committed({:ok, value}), do: value
-  defp committed({:error, reason}), do: Arca.Repo.rollback(reason)
 end

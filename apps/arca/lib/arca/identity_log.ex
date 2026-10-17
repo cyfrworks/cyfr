@@ -540,28 +540,16 @@ defmodule Arca.IdentityLog do
   defp valid?(:request_digest, value), do: Prima.Identity.Encoding.digest?(value)
   defp valid?(:expected_revision, value), do: is_integer(value) and value >= 0
 
-  # One write: a locking transaction that proves this member still owns its
-  # slot (`Arca.ControlPlane.verify_held/1`), then decides under the usage
-  # lock. A recorded refusal commits and is answered as the refusal.
+  # One write: fenced (`Arca.Repo.owned/2`), then decided under the usage
+  # lock. A recorded refusal commits: the write answers it as its value,
+  # and the caller is answered the refusal.
   defp write(tag, decide) do
-    Arca.Repo.Errors.with_db_rescue(tag, fn ->
-      with {:ok, slot} <- Arca.ControlPlane.member_slot() do
-        Arca.Repo.locking_transaction(fn ->
-          case Arca.ControlPlane.verify_held(slot) do
-            :ok -> decided(decide.())
-            :lost -> Arca.Repo.rollback(:not_owner)
-          end
-        end)
-        |> case do
-          {:ok, {:refused, reason}} -> {:error, reason}
-          other -> other
-        end
-      end
-    end)
-    |> Arca.Data.project()
+    case Arca.Repo.owned(tag, fn -> decided(decide.()) end) do
+      {:ok, {:refused, reason}} -> {:error, reason}
+      other -> other
+    end
   end
 
-  defp decided({:ok, value}), do: value
-  defp decided({:refused, _reason} = refused), do: refused
-  defp decided({:error, reason}), do: Arca.Repo.rollback(reason)
+  defp decided({:refused, _reason} = refused), do: {:ok, refused}
+  defp decided(answer), do: answer
 end
