@@ -95,11 +95,9 @@ PG_SUPPORT_EXEMPT='Arca.Test.Sandbox'
 # The postgres leg's default selection, one path a line, read from the
 # tracked files of the current directory's repository: the storage set,
 # then, sorted, the test files outside it that match PG_PATTERN or name a
-# support module that does, so no file is named twice. A test file names
-# a module by its full name (an alias, import, use or call) or by its last
-# segment in a multi-alias (`alias Parent.{Leaf, ...}`). macOS git grep -E
-# ignores \b, so there the pattern runs as PCRE, which reads it the same
-# way.
+# support module that does (pg_support_users), so no file is named twice.
+# macOS git grep -E ignores \b, so there the pattern runs as PCRE, which
+# reads it the same way.
 pg_selection() {
   local s=0 mode=-E direct users
   [ "$(uname -s)" != Darwin ] || mode=-P
@@ -112,29 +110,84 @@ pg_selection() {
   printf '%s\n%s\n' "$direct" "$users" | sed '/^$/d' | LC_ALL=C sort -u
 }
 
-# The test files outside the storage set that name a tracked test support
-# module matching PG_PATTERN, other than PG_SUPPORT_EXEMPT's.
+# The test files outside the storage set that name a test support module
+# matching PG_PATTERN, other than PG_SUPPORT_EXEMPT's, or a support module
+# that names one: support wrappers are followed one level, so a test that
+# reaches an adapter branch through a wrapper of a wrapper is not
+# selected for it. Any error, the matcher's included, fails the selection.
 pg_support_users() {
-  local mode=$1 s=0 support file module parent leaf candidates
-  support=$(git grep -l "$mode" "$PG_PATTERN" -- ':(glob)apps/*/test/support/**' \
-    ':(exclude,glob)apps/*/test/support/**/*_test.exs') || s=$?
+  local mode=$1 s=0 support others wrappers tests modules='' file module
+  support=$(git grep -l "$mode" "$PG_PATTERN" -- ':(glob)apps/*/test/support/**/*.ex' \
+    ':(glob)apps/*/test/support/**/*.exs' ':(exclude,glob)apps/*/test/support/**/*_test.exs') || s=$?
   [ "$s" -le 1 ] || return 1
-  for file in $support; do
-    module=$(sed -n 's/^defmodule \([A-Za-z0-9_.]*\) do$/\1/p' "$file" | head -n 1)
-    [ -n "$module" ] || continue
-    case " $PG_SUPPORT_EXEMPT " in *" $module "*) continue ;; esac
-    parent=${module%.*} leaf=${module##*.} s=0
-    candidates=$(git grep -l -F -e "$module" -e "$parent.{" -- ':(glob)apps/*/test/**/*_test.exs' \
-      ':(exclude,glob)apps/arca/test/**' ':(exclude,glob)apps/cyfr/test/arca/**') || s=$?
-    [ "$s" -le 1 ] || return 1
-    for file in $candidates; do
-      M=$module P=$parent L=$leaf perl -0ne '
-        exit((/\Q$ENV{M}\E(?![A-Za-z0-9_])/ ||
-              /\Q$ENV{P}\E\.\{[^}]*(?<![A-Za-z0-9_.])\Q$ENV{L}\E(?![A-Za-z0-9_])[^}]*\}/) ? 0 : 1)' "$file" &&
-        printf '%s\n' "$file"
-    done
-  done
-  return 0
+  for file in $support; do modules="$modules $(pg_module_of "$file")"; done
+  modules=$(pg_unexempt $modules)
+  [ -n "$modules" ] || return 0
+  others=$(git ls-files -- ':(glob)apps/*/test/support/**/*.ex' ':(glob)apps/*/test/support/**/*.exs' \
+    ':(exclude,glob)apps/*/test/support/**/*_test.exs') || return 1
+  # grep -v answers 1 when no other support file is left.
+  others=$(printf '%s\n' $others | grep -vxF -e "${support:-/}") || { [ "$?" -eq 1 ] || return 1; }
+  # shellcheck disable=SC2086
+  wrappers=$(pg_naming "$modules" $others) || return 1
+  for file in $wrappers; do modules="$modules $(pg_module_of "$file")"; done
+  modules=$(pg_unexempt $modules)
+  tests=$(git ls-files -- ':(glob)apps/*/test/**/*_test.exs' \
+    ':(exclude,glob)apps/arca/test/**' ':(exclude,glob)apps/cyfr/test/arca/**') || return 1
+  # shellcheck disable=SC2086
+  pg_naming "$modules" $tests
+}
+
+# The module a support file defines first, or nothing.
+pg_module_of() { sed -n 's/^defmodule \([A-Za-z0-9_.]*\) do$/\1/p' "$1" | head -n 1; }
+
+# The modules given, without PG_SUPPORT_EXEMPT's, each once.
+pg_unexempt() {
+  local m
+  for m in "$@"; do
+    case " $PG_SUPPORT_EXEMPT " in *" $m "*) ;; *) echo "$m" ;; esac
+  done | LC_ALL=C sort -u | tr '\n' ' '
+}
+
+# The FILES, of those given after MODULES (space-separated), that name one
+# of the modules: by its full name (an alias, import, use or call), by its
+# last segment in a multi-alias of its parent (`alias Parent.{Leaf, ...}`),
+# or through an alias of a namespace above it (`alias X.Test`, then
+# `Test.Leaf`, or `alias X.Test, as: T`, then `T.Leaf`). One Perl process
+# reads them all; a file it cannot read, or any other error, exits non-zero.
+pg_naming() {
+  local modules=$1
+  shift
+  [ "$#" -gt 0 ] || return 0
+  PG_MODULES=$modules perl -e '
+    use strict;
+    use warnings;
+    my @modules = split " ", $ENV{PG_MODULES};
+    sub names {
+      my ($text, $module) = @_;
+      my @s = split /\./, $module;
+      return 1 if $text =~ /(?<![A-Za-z0-9_.])\Q$module\E(?![A-Za-z0-9_])/;
+      return 0 if @s < 2;
+      my $parent = join ".", @s[0 .. $#s - 1];
+      return 1 if $text =~ /\Q$parent\E\.\{[^}]*(?<![A-Za-z0-9_.])\Q$s[-1]\E(?![A-Za-z0-9_])[^}]*\}/;
+      for my $k (1 .. $#s - 1) {
+        my $prefix = join ".", @s[0 .. $k];
+        my $rest = join ".", @s[$k + 1 .. $#s];
+        while ($text =~ /^[ \t]*alias[ \t]+\Q$prefix\E[ \t]*(?:,[ \t]*as:[ \t]*([A-Z][A-Za-z0-9_]*))?[ \t]*$/mg) {
+          my $name = defined $1 ? $1 : $s[$k];
+          return 1 if $text =~ /(?<![A-Za-z0-9_.])\Q$name.$rest\E(?![A-Za-z0-9_])/;
+        }
+      }
+      return 0;
+    }
+    for my $file (@ARGV) {
+      open(my $in, "<", $file) or die "$file: $!\n";
+      my $text = do { local $/; <$in> };
+      close $in or die "$file: $!\n";
+      for my $module (@modules) {
+        if (names($text, $module)) { print "$file\n"; last }
+      }
+    }
+  ' -- "$@"
 }
 
 deadline_for() {

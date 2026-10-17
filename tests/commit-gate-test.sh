@@ -327,7 +327,7 @@ grep -qE "$(. "$gate" && echo "$PG_PATTERN")" "$root/apps/cyfr/test/support/chat
 # Each exempt support module still matches the pattern, in a tracked
 # support file that defines it: an exemption with nothing to exempt is stale.
 for m in $(. "$gate" && echo "$PG_SUPPORT_EXEMPT"); do
-  f=$(cd "$root" && git grep -l -E "^defmodule ${m//./\\.} do\$" -- ':(glob)apps/*/test/support/**')
+  f=$(cd "$root" && git grep -l -E "^defmodule ${m//./\\.} do\$" -- ':(glob)apps/*/test/support/**') || f=
   [ -n "$f" ] || fail "the exempt support module $m is defined in no tracked support file"
   grep -qE "$(. "$gate" && echo "$PG_PATTERN")" "$root/$f" || fail "the exempt support module $m no longer matches the pattern"
 done
@@ -353,11 +353,19 @@ printf 'alias X.Test.{\n  Other,\n  Branching\n}\ntest "f", do: Branching.f()\n'
 printf 'test "g", do: X.Test.BranchingMore.f()\n' > "$plant/apps/x/test/longer_test.exs"
 printf 'alias X.Test.{Other, Branchings}\ntest "h", do: :ok\n' > "$plant/apps/x/test/leaf_test.exs"
 printf 'test "i", do: Arca.Test.Sandbox.s()\n' > "$plant/apps/x/test/sandboxed_test.exs"
+printf 'defmodule X.Test.Wrapper do\n  def f, do: X.Test.Branching.f()\nend\n' > "$plant/apps/x/test/support/wrapper.ex"
+printf 'alias X.Test\ntest "parent", do: Test.Branching.f()\n' > "$plant/apps/x/test/parent_namespace_test.exs"
+printf 'alias X.Test.Wrapper\ntest "chain", do: Wrapper.f()\n' > "$plant/apps/x/test/support_chain_test.exs"
 git -C "$plant" add apps
 printf '@tag :postgres\n' > "$plant/apps/x/test/untracked_test.exs"
 selection "$plant" > "$scratch/plant.txt" || fail 'the selection failed on the planted repository'
-[ "$(tr '\n' ' ' < "$scratch/plant.txt")" = 'apps/arca/test apps/cyfr/test/arca apps/x/test/alias_test.exs apps/x/test/branch_test.exs apps/x/test/full_test.exs apps/x/test/tagged_test.exs ' ] ||
+[ "$(tr '\n' ' ' < "$scratch/plant.txt")" = 'apps/arca/test apps/cyfr/test/arca apps/x/test/alias_test.exs apps/x/test/branch_test.exs apps/x/test/full_test.exs apps/x/test/parent_namespace_test.exs apps/x/test/support_chain_test.exs apps/x/test/tagged_test.exs ' ] ||
   fail "the planted selection is wrong: $(tr '\n' ' ' < "$scratch/plant.txt")"
+# A matcher that cannot run fails the selection rather than answering it
+# incomplete: the planted repository's selection succeeds with Perl and is
+# refused with a Perl that exits 2.
+(cd "$plant" && . "$gate" && perl() { return 2; } && ! pg_selection > "$scratch/plant-matcher-error.txt") ||
+  fail "the selection succeeded with a matcher that exits 2: $(tr '\n' ' ' < "$scratch/plant-matcher-error.txt")"
 echo 'ok: the PostgreSQL selection'
 
 # --- a whole gate that passes ------------------------------------------------------
