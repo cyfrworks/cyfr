@@ -35,7 +35,7 @@ defmodule Aqua.Loop.WorkerTest do
       end)
 
     assert_receive {:workers, outer, inner}, 5_000
-    refs = Enum.map([outer, inner], &Process.monitor/1)
+    refs = monitored([outer, inner])
 
     Process.exit(loop, :kill)
 
@@ -87,7 +87,7 @@ defmodule Aqua.Loop.WorkerTest do
     true = :erlang.resume_process(outer)
 
     assert_receive {:workers, ^outer, inner}, 5_000
-    refs = Enum.map([outer, inner], &Process.monitor/1)
+    refs = monitored([outer, inner])
 
     Process.exit(loop, :kill)
 
@@ -145,6 +145,24 @@ defmodule Aqua.Loop.WorkerTest do
   end
 
   # The caller of the first start queued at the manager, if any.
+  # A monitor request is a signal, and `Process.monitor/1` returns before
+  # the worker has taken it: under a full suite's load the kill, three hops
+  # away through the manager, has reached the worker first, and a monitor
+  # taken while the worker exits answers `:noproc`. The worker's answer to
+  # `Process.info/2` is queued behind that signal, so a monitor it names has
+  # landed before the loop is killed (201 of 4,000 unconfirmed runs saw the
+  # `:noproc`; none of 1,000 confirmed ones).
+  defp monitored(pids) do
+    refs = Enum.map(pids, &Process.monitor/1)
+
+    for pid <- pids do
+      assert {:monitored_by, monitors} = Process.info(pid, :monitored_by)
+      assert self() in monitors
+    end
+
+    refs
+  end
+
   defp queued_start(manager) do
     {:messages, messages} = Process.info(manager, :messages)
 
