@@ -35,10 +35,52 @@ defmodule Compendium.Tincture.PolicyWritersTest do
 
   @docs [:moduledoc, :doc, :typedoc, :shortdoc]
 
+  # A module's quoted source with every run of adjacent literal fragments
+  # joined into one literal: a `<>` chain and a binary construction are
+  # read as the text they build, so a directive, a token or a type split
+  # across literals is still the literal it spells.
+  defp quoted(source, file) do
+    source
+    |> Code.string_to_quoted!(file: file, columns: false)
+    |> Macro.postwalk(&joined/1)
+  end
+
+  defp joined({:<>, meta, [left, right]}) do
+    case {left, right} do
+      {left, right} when is_binary(left) and is_binary(right) ->
+        left <> right
+
+      {left, {:<>, inner, [head, rest]}} when is_binary(left) and is_binary(head) ->
+        {:<>, inner, [left <> head, rest]}
+
+      {{:<>, inner, [rest, tail]}, right} when is_binary(tail) and is_binary(right) ->
+        {:<>, inner, [rest, tail <> right]}
+
+      _apart ->
+        {:<>, meta, [left, right]}
+    end
+  end
+
+  defp joined({:<<>>, meta, parts}) when is_list(parts) do
+    case Enum.chunk_while(parts, [], &run/2, &flush/1) do
+      [text] when is_binary(text) -> text
+      joined -> {:<<>>, meta, joined}
+    end
+  end
+
+  defp joined(node), do: node
+
+  defp run(part, [text]) when is_binary(part) and is_binary(text), do: {:cont, [text <> part]}
+  defp run(part, []), do: {:cont, [part]}
+  defp run(part, [previous]), do: {:cont, previous, [part]}
+
+  defp flush([]), do: {:cont, []}
+  defp flush([last]), do: {:cont, last, []}
+
   # The string literals of a module's source, its docs left out.
   defp literals(source, file) do
     source
-    |> Code.string_to_quoted!(file: file, columns: false)
+    |> quoted(file)
     |> Macro.prewalk([], fn
       {:@, _, [{doc, _, _}]}, acc when doc in @docs -> {nil, acc}
       literal, acc when is_binary(literal) -> {literal, [literal | acc]}
@@ -104,7 +146,7 @@ defmodule Compendium.Tincture.PolicyWritersTest do
 
   defp served_type_pairs(source, file) do
     source
-    |> Code.string_to_quoted!(file: file, columns: false)
+    |> quoted(file)
     # A map's pairs are two-element tuples in the quoted form too.
     |> Macro.prewalk([], fn
       {_extension, _type} = pair, acc ->
@@ -158,5 +200,50 @@ defmodule Compendium.Tincture.PolicyWritersTest do
     '''
 
     assert writers([{"quiet.ex", documented}]) == %{}
+  end
+
+  test "a directive assembled from literal fragments still has a policy writer" do
+    source = ~S'''
+    defmodule SplitPolicy do
+      def policy, do: "script" <> "-src 'none'"
+    end
+    '''
+
+    assert Map.has_key?(writers([{"split_policy.ex", source}]), "split_policy.ex")
+  end
+
+  test "a sandbox token assembled from literal fragments still has a policy writer" do
+    source = ~S'''
+    defmodule SplitSandbox do
+      def token, do: "allow-" <> "scripts"
+    end
+    '''
+
+    assert Map.has_key?(writers([{"split_sandbox.ex", source}]), "split_sandbox.ex")
+  end
+
+  test "an extension and media type assembled from literal fragments still have a type writer" do
+    source = ~S'''
+    defmodule SplitTypes do
+      def types, do: %{"." <> "html" => "text/" <> "html"}
+    end
+    '''
+
+    assert Map.has_key?(type_tables([{"split_types.ex", source}]), "split_types.ex")
+  end
+
+  test "a binary construction and a parenthesised chain of literals are read as the text they build" do
+    source = ~S'''
+    defmodule Built do
+      def token, do: <<"allow-", "forms">>
+      def policy, do: ("frame-" <> "ancestors") <> " 'none'"
+      def type, do: {<<".", "wasm">>, "application/" <> "wasm"}
+      def interpolated(x), do: "frame-#{x}"
+    end
+    '''
+
+    assert %{"built.ex" => hits} = writers([{"built.ex", source}])
+    assert Enum.sort(hits) == ["allow-forms", "frame-ancestors 'none'"]
+    assert %{"built.ex" => [{".wasm", "application/wasm"}]} = type_tables([{"built.ex", source}])
   end
 end
