@@ -109,9 +109,14 @@ resolve_version() {
         return
     fi
 
-    # List recent releases and pick the newest CLI release (a bare-semver tag,
-    # e.g. `0.5.0`). Anything not starting with a digit (legacy `v*` releases or
-    # `porta-v*` desktop releases) is skipped implicitly by the match below.
+    # List recent releases and pick the newest CLI release, as `cyfr upgrade`
+    # does (internal/release.Latest): the greatest bare MAJOR.MINOR.PATCH tag,
+    # compared numerically, whatever order the API lists them in, drafts and
+    # pre-releases skipped. Legacy `v*` releases and `porta-v*` desktop
+    # releases are no bare version. Each release's tag_name, draft and
+    # prerelease are its own top-level keys, tag_name first; a string value
+    # cannot hold an unescaped quote, so no release body matches them. A
+    # release whose flags are not both read is skipped.
     api_url="https://api.github.com/repos/${GITHUB_REPO}/releases?per_page=20"
     if command -v curl >/dev/null 2>&1; then
         response="$(curl -fsSL "$api_url")"
@@ -122,15 +127,30 @@ resolve_version() {
         exit 1
     fi
 
-    version=""
-    for tag in $(printf '%s\n' "$response" | grep '"tag_name"' | sed 's/.*"tag_name":[[:space:]]*"\([^"]*\)".*/\1/'); do
-        case "$tag" in
-            [0-9]*)
-                version="$tag"
-                break
-                ;;
-        esac
-    done
+    version="$(printf '%s\n' "$response" | tr -d '\n' |
+        grep -oE '"(tag_name|draft|prerelease)":[[:space:]]*("[^"]*"|true|false)' |
+        awk '
+            function newer(a, b,    x, y, i) {
+                split(a, x, ".")
+                split(b, y, ".")
+                for (i = 1; i <= 3; i++)
+                    if (x[i] + 0 != y[i] + 0) return x[i] + 0 > y[i] + 0
+                return 0
+            }
+            function flush() {
+                if (tag ~ /^[0-9]+\.[0-9]+\.[0-9]+$/ && draft == "false" && pre == "false" && (best == "" || newer(tag, best)))
+                    best = tag
+                tag = ""; draft = ""; pre = ""
+            }
+            {
+                key = $0; sub(/":.*/, "", key); sub(/^"/, "", key)
+                value = $0; sub(/^[^:]*:[[:space:]]*/, "", value); gsub(/"/, "", value)
+            }
+            key == "tag_name" { flush(); tag = value }
+            key == "draft" { draft = value }
+            key == "prerelease" { pre = value }
+            END { flush(); print best }
+        ')"
 
     if [ -z "$version" ]; then
         printf "Error: could not determine latest CLI version\n" >&2
