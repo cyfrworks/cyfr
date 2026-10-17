@@ -379,7 +379,9 @@ defmodule Cyfr.SeedOfferTest do
 
   # The work the boot's offer runs is the component domain's facade entry,
   # and the composition root names it: the host names no domain. A capture
-  # is no call, so it is read off the compiled definition.
+  # is no call, so it is read off the compiled definitions of the offer
+  # (`seed_offer/0`) and of the spec it starts (`seed_offer_spec/0`, which
+  # the shutdown census reads too), and off the spec itself.
   test "the composition root offers Compendium.sync_seeds/0" do
     {:ok, {_, [debug_info: {:debug_info_v1, backend, data}]}} =
       :beam_lib.chunks(:code.which(Cyfr.Application), [:debug_info])
@@ -387,16 +389,22 @@ defmodule Cyfr.SeedOfferTest do
     {:ok, %{definitions: definitions}} =
       backend.debug_info(:elixir_v1, Cyfr.Application, data, [])
 
-    {_offer, _kind, _meta, clauses} =
-      Enum.find(definitions, &match?({{:seed_offer, 0}, _, _, _}, &1))
-
     captured =
-      for {_meta, _args, _guards, body} <- clauses,
+      for name <- [:seed_offer, :seed_offer_spec],
+          {_offer, _kind, _meta, clauses} =
+            Enum.find(definitions, &match?({{^name, 0}, _, _, _}, &1)) ||
+              flunk("Cyfr.Application defines no #{name}/0"),
+          {_meta, _args, _guards, body} <- clauses,
           {_ast, found} = Macro.prewalk(body, [], &capture/2),
           mfa <- found,
           do: mfa
 
     assert captured == [{Compendium, :sync_seeds, 0}]
+
+    assert %{id: SeedOffer, start: {SeedOffer, :start_link, [[sync: sync]]}} =
+             Cyfr.Application.seed_offer_spec()
+
+    assert sync == (&Compendium.sync_seeds/0)
   end
 
   defp capture({:&, _, [{:/, _, [{{:., _, [module, fun]}, _, []}, arity]}]} = node, acc),
