@@ -150,6 +150,18 @@ defmodule Opus.Schedules.SchedulerTest do
     %{schedule | next_run_at: past}
   end
 
+  # Not due for a day: no tick fires it until the case dues it again.
+  defp park!(schedule) do
+    later = DateTime.add(DateTime.utc_now(), 86_400, :second)
+
+    {1, _} =
+      Arca.Repo.update_all(from(s in ScheduleRow, where: s.id == ^schedule.id),
+        set: [next_run_at: later]
+      )
+
+    %{schedule | next_run_at: later}
+  end
+
   defp occurrences(ctx, schedule) do
     {:ok, rows} = ScheduleOccurrences.list(Sanctum.Context.actor(ctx), schedule.id, limit: 100)
     rows
@@ -751,16 +763,39 @@ defmodule Opus.Schedules.SchedulerTest do
   test "a missed occurrence fires once under catch_up with a limit of 1, and not at all under skip",
        %{ctx: ctx} do
     script!([%{"ran" => true}])
-    once = due!(create_schedule(ctx, %{missed_runs: "catch_up", catch_up_limit: 1}), 7_200)
-    skipped = due!(create_schedule(ctx), 7_200)
+
+    # An expression whose next time is half an hour away whenever the case
+    # runs: no time of either cadence comes due while it does, so the
+    # occurrences are the missed run's alone.
+    once =
+      due!(
+        create_schedule(ctx, %{
+          cron_expression: offset_hourly(),
+          missed_runs: "catch_up",
+          catch_up_limit: 1
+        }),
+        7_200
+      )
+
+    skipped = due!(create_schedule(ctx, %{cron_expression: offset_hourly()}), 7_200)
     scheduler = scheduler!()
 
-    wait_until(fn -> match?([%{state: "completed"}], occurrences(ctx, once)) end)
+    # The first tick's run, and the cursor it moves, under the suite's load:
+    # bounded as the other runs of this file are.
+    wait_until(
+      fn -> match?([%{state: "completed"}], occurrences(ctx, once)) end,
+      30_000,
+      "the missed run to complete under catch_up"
+    )
 
-    wait_until(fn ->
-      {:ok, row} = CronSchedule.get_for_daemon(skipped.id)
-      DateTime.compare(row.next_run_at, skipped.next_run_at) == :gt
-    end)
+    wait_until(
+      fn ->
+        {:ok, row} = CronSchedule.get_for_daemon(skipped.id)
+        DateTime.compare(row.next_run_at, skipped.next_run_at) == :gt
+      end,
+      30_000,
+      "the skipped schedule's cursor to move past its missed times"
+    )
 
     for schedule <- [once, skipped], do: send(scheduler, {:fire, schedule.id})
     _ = :sys.get_state(scheduler)
@@ -1251,9 +1286,12 @@ defmodule Opus.Schedules.SchedulerTest do
         "url" => "http://127.0.0.1:#{port}/scheduled"
       }
 
+      # Its cadence's next time is half an hour away: only the fires this
+      # case makes run it.
       schedule =
         due!(
           create_schedule(ctx, %{
+            cron_expression: offset_hourly(),
             reference: reference,
             resolved_reference: reference,
             profile_id: profile_id,
@@ -1270,6 +1308,10 @@ defmodule Opus.Schedules.SchedulerTest do
       assert %{"status" => 200, "body" => "scheduled upstream"} = scheduled_answer(first)
       assert_receive {:upstream, sent}, 5_000
       assert sent.path == "/scheduled" and {"x-api-key", @attached_secret} in sent.headers
+
+      # Held across the binding's instant: no tick fires the schedule while
+      # the case waits it out, so the one fire after it is the case's own.
+      park!(schedule)
 
       wait_until(
         fn -> DateTime.compare(DateTime.utc_now(), until) == :gt end,
