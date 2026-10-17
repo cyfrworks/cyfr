@@ -3,6 +3,16 @@
 # Copyright 2026 CYFR Works Inc.
 set -e
 
+# `cyfr restore` sets CYFR_RESTORE_INCOMPLETE in .env, which the cyfr
+# service reads, from before the first part of a snapshot lands until the
+# restore is declared; until then the database may be the snapshot's with
+# nothing to suspend the authority it carried, so nothing runs. The
+# restore's own offline evals set it empty.
+if [ -n "${CYFR_RESTORE_INCOMPLETE:-}" ]; then
+    echo "cyfr: the restore of ${CYFR_RESTORE_INCOMPLETE} has not been declared (CYFR_RESTORE_INCOMPLETE is set in .env); refusing to start. Run 'cyfr restore ${CYFR_RESTORE_INCOMPLETE}' again." >&2
+    exit 78
+fi
+
 # Seed /app/seed/aqua from /app/aqua-defaults when the soul file is absent.
 # This supports both image filesystems and host mounts. Preserve the mount
 # on subsequent starts so operator edits remain intact.

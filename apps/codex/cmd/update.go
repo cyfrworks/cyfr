@@ -45,10 +45,10 @@ var updateCmd = &cobra.Command{
 
 1. Fetch the release's signed manifest (release.json) and verify it; a manifest that does not verify, or no network access to it, refuses.
 2. Read docker-compose.yml. Every bundled service (locus-runtime, locus-builds, locus-backends and both egress guards) must be present; one missing refuses, naming 'cyfr init --force'. An image line naming ghcr.io/cyfrworks/cyfr, ghcr.io/cyfrworks/cyfr-locus or the bundled Caddy is managed; any other image is an override, left as written and reported.
-3. While the stack still runs: read its configuration, pull every managed image by the manifest's digest, read the cell's roster, refusing while a member outside this stack holds a live slot on another release than this one (a host of the cell already updated stays), then update the scaffold files (guides, WIT definitions, the keeper's seccomp profile, the shipped AQUA prompts).
+3. While the stack still runs: read its configuration, naming the storage root it snapshots, pull every managed image by the manifest's digest, read the cell's roster, refusing while a member outside this stack holds a live slot on another release than this one (a host of the cell already updated stays), then fetch and verify the release's scaffold files (guides, WIT definitions, the keeper's seccomp profile, the shipped AQUA prompts) without writing them. A restore that has not finished (CYFR_RESTORE_INCOMPLETE in .env) refuses.
 4. Stop every service, timing each, and re-read the roster offline until no slot of another release than this one is live (at most one lease); one still live restarts the old stack and refuses.
-5. Snapshot the database, the local storage root, the keyring, .env and docker-compose.yml as it stands into backups/<UTC timestamp>/, snapshot.json last.
-6. Rewrite the managed image lines to <image>:<version>@<digest> (Caddy keeps its tag) and start the stack, waiting for every service to be healthy. A failure from here leaves the stack stopped and prints the snapshot and the restore command; old code never starts over migrated data.
+5. Snapshot the database, the local storage root, every scaffold file the release manages as it stands, the keyring, .env and docker-compose.yml as it stands into backups/<UTC timestamp>/, snapshot.json last.
+6. Write the release's scaffold files and rewrite the managed image lines to <image>:<version>@<digest> (Caddy keeps its tag); a failure of either puts the scaffold files back from the snapshot and starts the old stack again. Then start the stack, waiting for every service to be healthy. A failure from here leaves the stack stopped and prints the snapshot and the restore command; old code never starts over migrated data.
 
 An interrupt before the stop changes nothing. From the stop until the switch, the running step finishes and the update ends as that step's failure would. Once the switch begins, the switch and the start run to their end, so the stack is never left half-switched; an interrupt then is reported, not acted on.`,
 	GroupID: "server",
@@ -60,10 +60,16 @@ An interrupt before the stop changes nothing. From the stop until the switch, th
 
 // The release's manifest and the scaffold files, each a package variable so
 // tests substitute them; production calls the verified release fetch and
-// the checksum-verified scaffold update.
+// the checksum-verified scaffold fetch.
 var (
-	fetchManifest  = release.FetchManifest
-	updateScaffold = scaffold.Update
+	fetchManifest = release.FetchManifest
+	fetchScaffold = func(version string) (scaffoldRelease, error) {
+		r, err := scaffold.Fetch(version)
+		if err != nil {
+			return nil, err
+		}
+		return r, nil
+	}
 	// updateNow names the snapshot directory and stamps snapshot.json.
 	updateNow = time.Now
 	// liveSlotsWindow bounds the offline re-read, measured from the end of
@@ -204,6 +210,13 @@ func takeUpdateLock(command string) (func(), error) {
 	return func() { os.Remove(updateLockName) }, nil
 }
 
+// scaffoldRelease is a release's scaffold fetched and verified, nothing of
+// it written (scaffold.Release).
+type scaffoldRelease interface {
+	Managed() []string
+	Write(overwriteManaged bool) error
+}
+
 // updater carries one update's state from step to step.
 type updater struct {
 	ctx         context.Context
@@ -223,6 +236,12 @@ type updater struct {
 	// oldRelease is the old stack's version, as its image answers it.
 	oldRelease string
 	snapshot   string
+	// scaffold is the release's scaffold, written only after the snapshot
+	// holds every file of it that it manages.
+	scaffold scaffoldRelease
+	// offlineEnv are the settings each offline eval sets in its one-off
+	// container: a restore's lifts its own bar (restoreBarrier).
+	offlineEnv []string
 }
 
 type serviceStop struct {
@@ -246,9 +265,8 @@ func (u *updater) run() error {
 
 	// Every step before the stop runs under ctx and changes no deployment
 	// state, so an interrupt or a failure here leaves the stack running on
-	// the compose file as it was. The scaffold files, the one write of these
-	// steps, come after every refusal.
-	steps := []func() error{u.readConfig, u.probePostgres, u.pull, u.readRoster, u.updateScaffold}
+	// the compose file and the scaffold files as they were.
+	steps := []func() error{u.readConfig, u.probePostgres, u.pull, u.readRoster, u.fetchScaffold}
 	for _, step := range steps {
 		if err := step(); err != nil {
 			if u.ctx.Err() != nil {
@@ -285,8 +303,14 @@ func (u *updater) run() error {
 	if u.ctx.Err() != nil {
 		return u.restartOld(fmt.Errorf("cyfr update was interrupted during the snapshot (complete at %s)", u.snapshot))
 	}
+	// The scaffold files and the compose file are written only now, with
+	// the snapshot holding both as they stood; a failure puts the scaffold
+	// files back, so the old stack starts again under its own.
+	if err := u.writeScaffold(); err != nil {
+		return u.revertScaffold(err)
+	}
 	if err := u.switchImages(); err != nil {
-		return u.restartOld(err)
+		return u.revertScaffold(err)
 	}
 	if err := u.up(); err != nil {
 		return u.stopAfterSwitch(err)
@@ -602,6 +626,17 @@ func ownProcessGroup() *syscall.SysProcAttr {
 	return attr
 }
 
+// offlineEval answers the compose arguments that run expr through
+// `bin/cyfr eval` in a one-off cyfr container with nothing of the stack
+// running, each of offlineEnv set in it.
+func (u *updater) offlineEval(expr string) []string {
+	args := []string{"run", "--rm", "--no-deps", "-T"}
+	for _, setting := range u.offlineEnv {
+		args = append(args, "-e", setting)
+	}
+	return u.composeArgs(append(args, "cyfr", "bin/cyfr", "eval", expr)...)
+}
+
 // composeArgs prefixes args with `compose` and the project's profiles.
 func (u *updater) composeArgs(args ...string) []string {
 	return slices.Concat([]string{"compose"}, profileArgs(u.profiles), args)
@@ -780,6 +815,9 @@ func (u *updater) readConfig() error {
 		return err
 	}
 	env := func(name string) string { return serviceSetting(cyfr.Environment, name) }
+	if snapshot := env(restoreBarrier); snapshot != "" {
+		return fmt.Errorf("A cyfr restore of %s has not finished (%s is set in .env), so the cell may hold the snapshot's data undeclared; run 'cyfr restore %s' again before updating; nothing was changed", snapshot, restoreBarrier, snapshot)
+	}
 	containerToHost := func(p string) (string, bool) { return mountedHost(mounts, p) }
 	// nestedMounts answers every mount whose target lies strictly under the
 	// container path root, shallower first, refusing one that is not a bind:
@@ -862,6 +900,13 @@ func (u *updater) readConfig() error {
 			return err
 		}
 		c.storageMounts = append([]storageMount{{host: resolved, dir: true}}, nested...)
+		// The root the snapshot copies is the one compose resolves, which
+		// the switch keeps: ensureCyfrComposeFields adds no mount at a
+		// target already bound.
+		fmt.Fprintf(u.out, "Storage root %s is %s on the host.\n", dataPath, resolved)
+		for _, n := range nested {
+			fmt.Fprintf(u.out, "  %s is %s on the host.\n", path.Join(dataPath, n.rel), n.host)
+		}
 	case "s3":
 		c.storage = "s3"
 	default:
@@ -1059,14 +1104,41 @@ func (u *updater) pull() error {
 	return nil
 }
 
-// updateScaffold refreshes the scaffold files from the release, whose
-// checksums the scaffold update verifies itself.
-func (u *updater) updateScaffold() error {
-	if err := updateScaffold(u.version); err != nil {
-		return fmt.Errorf("Failed to update scaffold files (%v); docker-compose.yml and the running stack are unchanged", err)
+// fetchScaffold fetches the release's scaffold, whose checksums the
+// scaffold fetch verifies itself, and refuses a managed path that is there
+// as something other than a regular file, which the snapshot cannot hold.
+func (u *updater) fetchScaffold() error {
+	r, err := fetchScaffold(u.version)
+	if err != nil {
+		return fmt.Errorf("Failed to fetch the scaffold files (%v); docker-compose.yml and the running stack are unchanged", err)
+	}
+	for _, name := range r.Managed() {
+		if info, err := os.Lstat(name); err == nil && !info.Mode().IsRegular() {
+			return fmt.Errorf("%s, a scaffold file cyfr update replaces, is not a regular file, so the snapshot cannot hold it; nothing was changed", name)
+		}
+	}
+	u.scaffold = r
+	return nil
+}
+
+// writeScaffold writes the release's scaffold files over the project's.
+func (u *updater) writeScaffold() error {
+	if err := u.scaffold.Write(true); err != nil {
+		return fmt.Errorf("Writing the scaffold files failed (%v)", err)
 	}
 	fmt.Fprintf(u.out, "Scaffold files updated (%s, wit/, aqua/).\n", strings.Join(scaffold.Guides, ", "))
 	return nil
+}
+
+// revertScaffold puts the scaffold files back from the snapshot after a
+// failure before the start, then starts the old stack as restartOld does;
+// scaffold files it cannot put back leave the stack stopped, since the old
+// stack must not start under the new release's files.
+func (u *updater) revertScaffold(reason error) error {
+	if err := putScaffoldBack(u.snapshot, u.scaffold.Managed()); err != nil {
+		return fmt.Errorf("%v.\nThe scaffold files could not be put back from the snapshot (%v), so the stack is left stopped; restore the snapshot with:\n  cyfr restore %s", u.redact(reason.Error()), err, u.snapshot)
+	}
+	return u.restartOld(fmt.Errorf("%v; the scaffold files were put back from the snapshot %s", reason, u.snapshot))
 }
 
 // rosterSlot is one live slot as the roster and the offline read answer it.
@@ -1233,7 +1305,7 @@ func (u *updater) waitLiveSlots(admit func(rosterSlot) bool) (string, []rosterSl
 	deadline := time.Now().Add(liveSlotsWindow)
 	for {
 		ctx, cancel := u.detached(composeRunTimeout)
-		output, err := u.dockerOutput(ctx, nil, u.composeArgs("run", "--rm", "--no-deps", "-T", "cyfr", "bin/cyfr", "eval", liveSlotsExpr)...)
+		output, err := u.dockerOutput(ctx, nil, u.offlineEval(liveSlotsExpr)...)
 		cancel()
 		if err != nil {
 			return "", nil, fmt.Errorf("The offline roster read failed (%v)", err)
@@ -1281,16 +1353,25 @@ type snapshotManifest struct {
 	TakenAt        string   `json:"taken_at"`
 	Parts          []string `json:"parts"`
 	StorageAdapter string   `json:"storage_adapter"`
-	Complete       bool     `json:"complete"`
+	// Scaffold names every scaffold file the update replaces
+	// (scaffold.IsManaged), each held under scaffold/ when it was there
+	// before the update and absent from it when the update created it.
+	Scaffold []string `json:"scaffold"`
+	Complete bool     `json:"complete"`
 }
 
 // takeSnapshot copies the stopped cell into backups/<UTC timestamp>/: the
-// database, the local storage root, the keyring, .env and the compose file
-// as it stood before the switch, then snapshot.json. Directories are 0700
-// and files 0600.
+// database, the local storage root, the scaffold files the release
+// replaces, the keyring, .env and the compose file as it stood before the
+// switch, then snapshot.json. Directories are 0700 and files 0600.
+// backups/ holds a .gitignore ignoring all of it, since a snapshot holds
+// the keyring.
 func (u *updater) takeSnapshot() error {
 	now := updateNow().UTC()
 	if err := os.Mkdir("backups", 0700); err != nil && !errors.Is(err, fs.ErrExist) {
+		return err
+	}
+	if err := writeNewFile(filepath.Join("backups", ".gitignore"), []byte(backupsIgnore)); err != nil && !errors.Is(err, fs.ErrExist) {
 		return err
 	}
 	dir := filepath.Join("backups", now.Format("20060102T150405Z"))
@@ -1339,6 +1420,12 @@ func (u *updater) takeSnapshot() error {
 		fmt.Fprintln(u.out, s3OutsideSnapshot)
 	}
 
+	managed := u.scaffold.Managed()
+	if err := copyScaffold(managed, filepath.Join(dir, "scaffold")); err != nil {
+		return err
+	}
+	parts = append(parts, "scaffold")
+
 	if err := writeNewFile(filepath.Join(dir, "keyring"), []byte(c.keyring)); err != nil {
 		return err
 	}
@@ -1359,6 +1446,7 @@ func (u *updater) takeSnapshot() error {
 		TakenAt:        now.Format(time.RFC3339),
 		Parts:          parts,
 		StorageAdapter: c.storage,
+		Scaffold:       managed,
 		Complete:       true,
 	}, "", "  ")
 	if err != nil {
@@ -1376,6 +1464,37 @@ func (u *updater) takeSnapshot() error {
 	if d, err := os.Open(dir); err == nil {
 		d.Sync()
 		d.Close()
+	}
+	return nil
+}
+
+// backupsIgnore is backups/.gitignore: nothing under backups/ is tracked.
+const backupsIgnore = "# Snapshots hold the keyring and the database; never commit them.\n*\n"
+
+// copyScaffold copies each of the scaffold files names that is there into
+// dst at its own relative path, the absent ones left out.
+func copyScaffold(names []string, dst string) error {
+	if err := os.Mkdir(dst, 0700); err != nil {
+		return err
+	}
+	for _, name := range names {
+		info, err := os.Lstat(name)
+		if errors.Is(err, fs.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		if !info.Mode().IsRegular() {
+			return fmt.Errorf("%s is not a regular file", name)
+		}
+		target := filepath.Join(dst, name)
+		if err := os.MkdirAll(filepath.Dir(target), 0700); err != nil {
+			return err
+		}
+		if err := copyFile(name, target); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -1580,8 +1699,9 @@ func (u *updater) report() {
 	}
 }
 
-// requiredVolumes maps a host path to its container mount path. Each entry
-// must appear in the cyfr service's volumes list.
+// requiredVolumes are the cyfr service's default mounts, each added only when
+// no volume of the service, in short or long syntax, already targets its
+// container path: a customized source keeps its own.
 var requiredVolumes = []string{
 	"./data:/app/data",
 	"./aqua:/app/seed/aqua",
@@ -1668,9 +1788,13 @@ func ensureCyfrComposeFields(path string) ([]string, error) {
 		added = append(added, "container_name: cyfr")
 	}
 
-	// volumes — ensure each required mount is present.
+	// volumes — ensure each required mount's target is bound, matched by
+	// the container path as compose reads it, its variables taken from the
+	// environment and the project's .env, so a customized source is never
+	// shadowed by a second mount at its target.
+	lookup := composeEnv(filepath.Join(filepath.Dir(path), ".env"))
 	for _, mount := range requiredVolumes {
-		if ensureSequenceItem(cyfrNode, "volumes", mount) {
+		if ensureVolumeTarget(cyfrNode, mount, lookup) {
 			added = append(added, "volumes: "+mount)
 		}
 	}
@@ -1682,7 +1806,6 @@ func ensureCyfrComposeFields(path string) ([]string, error) {
 	// publishing no tcp mapping of that port, a udp-only one included, gets
 	// the loopback-bound entry added (existing 0.0.0.0 publishes are left
 	// alone).
-	lookup := composeEnv(filepath.Join(filepath.Dir(path), ".env"))
 	for _, port := range requiredPorts {
 		if ensurePublishedPort(cyfrNode, port, lookup) {
 			added = append(added, "ports: "+port)
@@ -1965,6 +2088,66 @@ func ensurePublishedPort(svc *yaml.Node, want string, lookup func(string) (strin
 		}
 	}
 	return ensureSequenceItem(svc, "ports", want)
+}
+
+// volumeTarget answers the container path a volumes entry mounts at, as
+// compose reads it: a long-syntax mapping's target, or a short-syntax
+// [SOURCE:]TARGET[:MODE] string's TARGET, its variables interpolated with
+// lookup. ok is false for an entry whose target does not read.
+func volumeTarget(entry *yaml.Node, lookup func(string) (string, bool)) (string, bool) {
+	if entry.Kind == yaml.AliasNode && entry.Alias != nil {
+		entry = entry.Alias
+	}
+	var target string
+	switch entry.Kind {
+	case yaml.MappingNode:
+		t := mapValue(entry, "target")
+		if t == nil || t.Kind != yaml.ScalarNode {
+			return "", false
+		}
+		target = t.Value
+	case yaml.ScalarNode:
+		spec, ok := interpolate(entry.Value, lookup)
+		if !ok {
+			return "", false
+		}
+		parts := strings.Split(spec, ":")
+		// A Windows drive letter (C:\...) splits off a one-letter field.
+		if len(parts) > 2 && len(parts[0]) == 1 && strings.HasPrefix(parts[1], `\`) {
+			parts = append([]string{parts[0] + ":" + parts[1]}, parts[2:]...)
+		}
+		switch len(parts) {
+		case 1:
+			target = parts[0]
+		default:
+			target = parts[1]
+		}
+		return path.Clean(target), target != ""
+	default:
+		return "", false
+	}
+	target, ok := interpolate(target, lookup)
+	return path.Clean(target), ok && target != ""
+}
+
+// ensureVolumeTarget appends mount ("SOURCE:TARGET") to svc's volumes
+// unless an entry already targets TARGET, and reports whether it did. An
+// entry whose target does not read counts as binding TARGET, so nothing is
+// added beside a mount cyfr cannot place.
+func ensureVolumeTarget(svc *yaml.Node, mount string, lookup func(string) (string, bool)) bool {
+	_, want, _ := strings.Cut(mount, ":")
+	if seq := mapValue(svc, "volumes"); seq != nil {
+		if seq.Kind != yaml.SequenceNode {
+			return false
+		}
+		for _, entry := range seq.Content {
+			target, ok := volumeTarget(entry, lookup)
+			if !ok || target == path.Clean(want) {
+				return false
+			}
+		}
+	}
+	return ensureSequenceItem(svc, "volumes", mount)
 }
 
 // ensureSequenceItem makes sure that the sequence at parent[key] contains

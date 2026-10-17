@@ -5,12 +5,12 @@ package scaffold
 
 import (
 	"archive/tar"
-	"bufio"
 	"bytes"
 	"compress/gzip"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -31,27 +31,109 @@ var (
 )
 
 const (
-	maxFileSize      = 10 << 20 // 10 MB per file
-	maxTarballSize   = 64 << 20 // 64 MB whole tarball
-	maxChecksumsSize = 1 << 20  // checksums.txt and its bundle, each
-	requestTimeout   = 60 * time.Second
+	maxFileSize    = 10 << 20 // 10 MB per file
+	maxTarballSize = 64 << 20 // 64 MB whole tarball
+	requestTimeout = 60 * time.Second
 )
 
 // Download fetches the scaffold tarball for the given version and extracts it
 // into the current working directory. Files that already exist on disk are
 // skipped (idempotent). Version "dev" or "" is a no-op.
 func Download(version string) error {
-	return extract(version, false)
+	r, err := Fetch(version)
+	if err != nil {
+		return err
+	}
+	return r.Write(false)
 }
 
-// Update fetches the scaffold tarball for the given version and extracts it
-// into the current working directory. Managed files (guides, wit/
-// definitions, the keeper's seccomp profile, the shipped AQUA soul, roles
-// and scrolls) are overwritten
-// with the latest content. Component files that already exist are skipped;
-// new components are created. Version "dev" or "" is a no-op.
-func Update(version string) error {
-	return extract(version, true)
+// Release is a release's scaffold tarball, verified and read whole, with
+// nothing of it written yet: `cyfr update` fetches it before the stack
+// stops, snapshots the bytes of every file it manages (Managed), and
+// writes it (Write(true)) only once the snapshot is complete.
+type Release struct {
+	entries []entry
+}
+
+// entry is one tarball entry kept: a directory, or a regular file and its
+// bytes.
+type entry struct {
+	name string
+	dir  bool
+	mode os.FileMode
+	data []byte
+}
+
+// Managed answers the managed files Write(true) overwrites or creates, in
+// the tarball's order.
+func (r *Release) Managed() []string {
+	var names []string
+	for _, e := range r.entries {
+		if !e.dir && IsManaged(e.name) {
+			names = append(names, e.name)
+		}
+	}
+	return names
+}
+
+// Write extracts the release into the current working directory. When
+// overwriteManaged is true, managed files are replaced with the tarball
+// contents, each through a temporary file renamed over it, so a managed
+// file is its old bytes or its new ones; other files retain the
+// skip-if-exists behavior.
+func (r *Release) Write(overwriteManaged bool) error {
+	for _, e := range r.entries {
+		if e.dir {
+			if err := os.MkdirAll(e.name, 0755); err != nil {
+				return fmt.Errorf("mkdir %s: %w", e.name, err)
+			}
+			continue
+		}
+		managed := overwriteManaged && IsManaged(e.name)
+		// Skip non-managed files that already exist (idempotent).
+		if !managed {
+			if _, err := os.Stat(e.name); err == nil {
+				continue
+			}
+		}
+		if err := os.MkdirAll(filepath.Dir(e.name), 0755); err != nil {
+			return fmt.Errorf("mkdir parent %s: %w", e.name, err)
+		}
+		if managed {
+			if err := ReplaceFile(e.name, e.data, e.mode); err != nil {
+				return fmt.Errorf("write %s: %w", e.name, err)
+			}
+			continue
+		}
+		f, err := os.OpenFile(e.name, os.O_CREATE|os.O_WRONLY|os.O_EXCL, e.mode)
+		if err != nil {
+			if os.IsExist(err) {
+				continue // race: created between Stat and OpenFile
+			}
+			return fmt.Errorf("create %s: %w", e.name, err)
+		}
+		_, err = f.Write(e.data)
+		if err = errors.Join(err, f.Close()); err != nil {
+			return fmt.Errorf("write %s: %w", e.name, err)
+		}
+	}
+	return nil
+}
+
+// ReplaceFile writes data over the file at name, mode, through a synced
+// temporary file beside it renamed into place, so name holds its old
+// bytes or data whole.
+func ReplaceFile(name string, data []byte, mode os.FileMode) error {
+	tmp, err := os.CreateTemp(filepath.Dir(name), "."+filepath.Base(name)+".scaffold-*")
+	if err != nil {
+		return err
+	}
+	defer os.Remove(tmp.Name())
+	_, err = tmp.Write(data)
+	if err = errors.Join(err, tmp.Chmod(mode), tmp.Sync(), tmp.Close()); err != nil {
+		return err
+	}
+	return os.Rename(tmp.Name(), name)
 }
 
 // The AQUA files the scaffold ships and owns, so `cyfr update` refreshes
@@ -113,10 +195,12 @@ var Guides = []string{
 	"devices-guide.md",
 }
 
-// isManaged returns true for files that are maintained by cyfr and should be
+// IsManaged returns true for files that are maintained by cyfr and should be
 // overwritten during an upgrade (guides, WIT interface definitions, the
 // keeper's seccomp profile, and the shipped AQUA soul, roles and scrolls).
-func isManaged(path string) bool {
+// It is the one policy for what `cyfr update` overwrites, snapshots and
+// `cyfr restore` puts back.
+func IsManaged(path string) bool {
 	if path == SeccompProfile || slices.Contains(Guides, path) {
 		return true
 	}
@@ -129,15 +213,13 @@ func isManaged(path string) bool {
 	return isManagedAqua(path)
 }
 
-// extract fetches the scaffold tarball and extracts it. When overwriteManaged
-// is true, managed files are replaced with the tarball contents; other files
-// retain the existing skip-if-exists behavior. Every integrity failure — a
-// checksums.txt that does not verify, a tarball that is not the one it
-// names — wraps release.ErrUnverified and extracts nothing; only a download
-// that fails is a transport error.
-func extract(version string, overwriteManaged bool) error {
+// Fetch downloads the scaffold tarball for version and reads it whole,
+// writing nothing. Every integrity failure — a checksums.txt that does not
+// verify, a tarball that is not the one it names — wraps release.ErrUnverified; only a download that fails is a
+// transport error. Version "dev" or "" answers an empty release.
+func Fetch(version string) (*Release, error) {
 	if version == "dev" || version == "" {
-		return nil
+		return &Release{}, nil
 	}
 
 	url := fmt.Sprintf(urlTemplate, version)
@@ -148,44 +230,45 @@ func extract(version string, overwriteManaged bool) error {
 	// up` will pull and run (cyfr, cyfr-locus and caddy) — verify it
 	// against the release's checksums.txt, itself verified as signed by
 	// the release workflow for this version, before downloading or
-	// extracting a byte of it. The release binary itself gets the same
-	// treatment from install.sh.
+	// extracting a byte of it. `cyfr upgrade` verifies the CLI's archive
+	// the same way (release.FetchBinary).
 	want, err := fetchScaffoldChecksum(client, version)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	resp, err := client.Get(url)
 	if err != nil {
-		return fmt.Errorf("download scaffold: %w", err)
+		return nil, fmt.Errorf("download scaffold: %w", err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("download scaffold: HTTP %d from %s", resp.StatusCode, url)
+		return nil, fmt.Errorf("download scaffold: HTTP %d from %s", resp.StatusCode, url)
 	}
 
 	tarball, err := io.ReadAll(io.LimitReader(resp.Body, maxTarballSize+1))
 	if err != nil {
-		return fmt.Errorf("download scaffold: %w", err)
+		return nil, fmt.Errorf("download scaffold: %w", err)
 	}
 	if len(tarball) > maxTarballSize {
 		// Larger than any scaffold a release ships, so not the one its
 		// signed checksums.txt names.
-		return fmt.Errorf("%w: the scaffold download exceeds the %d-byte limit", release.ErrUnverified, int64(maxTarballSize))
+		return nil, fmt.Errorf("%w: the scaffold download exceeds the %d-byte limit", release.ErrUnverified, int64(maxTarballSize))
 	}
 
 	got := sha256.Sum256(tarball)
 	if hex.EncodeToString(got[:]) != want {
-		return fmt.Errorf("%w: scaffold checksum mismatch for %s: the download does not match the release's signed checksums.txt", release.ErrUnverified, version)
+		return nil, fmt.Errorf("%w: scaffold checksum mismatch for %s: the download does not match the release's signed checksums.txt", release.ErrUnverified, version)
 	}
 
 	gr, err := gzip.NewReader(bytes.NewReader(tarball))
 	if err != nil {
-		return fmt.Errorf("decompress scaffold: %w", err)
+		return nil, fmt.Errorf("decompress scaffold: %w", err)
 	}
 	defer gr.Close()
 
+	r := &Release{}
 	tr := tar.NewReader(gr)
 	for {
 		hdr, err := tr.Next()
@@ -193,7 +276,7 @@ func extract(version string, overwriteManaged bool) error {
 			break
 		}
 		if err != nil {
-			return fmt.Errorf("read scaffold tar: %w", err)
+			return nil, fmt.Errorf("read scaffold tar: %w", err)
 		}
 
 		name := filepath.Clean(hdr.Name)
@@ -205,94 +288,28 @@ func extract(version string, overwriteManaged bool) error {
 
 		switch hdr.Typeflag {
 		case tar.TypeDir:
-			if err := os.MkdirAll(name, 0755); err != nil {
-				return fmt.Errorf("mkdir %s: %w", name, err)
-			}
+			r.entries = append(r.entries, entry{name: name, dir: true})
 
 		case tar.TypeReg:
-			managed := overwriteManaged && isManaged(name)
-
-			// Skip non-managed files that already exist (idempotent).
-			if !managed {
-				if _, err := os.Stat(name); err == nil {
-					continue
-				}
-			}
-
-			if err := os.MkdirAll(filepath.Dir(name), 0755); err != nil {
-				return fmt.Errorf("mkdir parent %s: %w", name, err)
-			}
-
-			var flags int
-			if managed {
-				flags = os.O_CREATE | os.O_WRONLY | os.O_TRUNC
-			} else {
-				flags = os.O_CREATE | os.O_WRONLY | os.O_EXCL
-			}
-
-			f, err := os.OpenFile(name, flags, os.FileMode(hdr.Mode)&0755|0644)
+			data, err := io.ReadAll(io.LimitReader(tr, maxFileSize+1))
 			if err != nil {
-				if os.IsExist(err) {
-					continue // race: created between Stat and OpenFile
-				}
-				return fmt.Errorf("create %s: %w", name, err)
+				return nil, fmt.Errorf("read %s: %w", name, err)
 			}
-
-			written, err := io.Copy(f, io.LimitReader(tr, maxFileSize+1))
-			if err != nil {
-				f.Close()
-				return fmt.Errorf("write %s: %w", name, err)
+			if len(data) > maxFileSize {
+				return nil, fmt.Errorf("%s exceeds the %d-byte scaffold file limit", name, int64(maxFileSize))
 			}
-			if written > maxFileSize {
-				f.Close()
-				return fmt.Errorf("%s exceeds the %d-byte scaffold file limit", name, int64(maxFileSize))
-			}
-			f.Close()
+			r.entries = append(r.entries, entry{name: name, mode: os.FileMode(hdr.Mode)&0755 | 0644, data: data})
 		}
 	}
 
-	return nil
+	return r, nil
 }
 
-// fetchScaffoldChecksum reads the release's checksums.txt, verifies its
-// sigstore bundle as the release workflow's keyless signature for version
-// under release.TrustMaterial, and only then returns the expected sha256
-// (hex) for cyfr-scaffold.tar.gz from the verified bytes. A checksums.txt
-// that fails verification refuses with an error wrapping
-// release.ErrUnverified; a download that fails is a transport error. A
-// release without an entry fails closed as unverified — the CLI and the
+// fetchScaffoldChecksum answers the sha256 (hex) the release's signed
+// checksums.txt names for cyfr-scaffold.tar.gz (release.VerifiedChecksum).
+// A release without an entry fails closed as unverified — the CLI and the
 // release ship in lockstep, so a missing line means a broken release, never
 // an older layout to tolerate.
 func fetchScaffoldChecksum(client *http.Client, version string) (string, error) {
-	ctx := context.Background()
-	url := fmt.Sprintf(checksumTemplate, version)
-
-	checksums, err := release.FetchBounded(ctx, client, url, maxChecksumsSize)
-	if err != nil {
-		return "", fmt.Errorf("checksums.txt: %w", err)
-	}
-	bundle, err := release.FetchBounded(ctx, client, url+release.BundleSuffix, maxChecksumsSize)
-	if err != nil {
-		return "", fmt.Errorf("checksums.txt's signature: %w", err)
-	}
-	trusted, err := release.TrustMaterial(ctx)
-	if err != nil {
-		return "", err
-	}
-	if err := release.VerifyBlob(checksums, bundle, version, trusted); err != nil {
-		return "", fmt.Errorf("checksums.txt for %s: %w", version, err)
-	}
-
-	scanner := bufio.NewScanner(bytes.NewReader(checksums))
-	for scanner.Scan() {
-		fields := strings.Fields(scanner.Text())
-		if len(fields) == 2 && filepath.Base(fields[1]) == "cyfr-scaffold.tar.gz" {
-			return strings.ToLower(fields[0]), nil
-		}
-	}
-	if err := scanner.Err(); err != nil {
-		return "", fmt.Errorf("read checksums.txt: %w", err)
-	}
-
-	return "", fmt.Errorf("%w: the signed checksums.txt for %s has no cyfr-scaffold.tar.gz entry", release.ErrUnverified, version)
+	return release.VerifiedChecksum(context.Background(), client, fmt.Sprintf(checksumTemplate, version), version, "cyfr-scaffold.tar.gz")
 }

@@ -19,8 +19,8 @@ import (
 // on a stalled connection. `http.DefaultClient` has no timeout at all.
 var httpClient = &http.Client{Timeout: 10 * time.Second}
 
-// bareSemver accepts only MAJOR.MINOR.PATCH without a prefix.
-// Release tags must be safe to interpolate into the upgrade shell command.
+// bareSemver accepts only MAJOR.MINOR.PATCH without a prefix: a release tag
+// names the URLs and file names `cyfr upgrade` and `cyfr update` read.
 var bareSemver = regexp.MustCompile(`^\d+\.\d+\.\d+$`)
 
 // apiURL is the GitHub releases endpoint for the CYFR repo. It is a package
@@ -28,8 +28,10 @@ var bareSemver = regexp.MustCompile(`^\d+\.\d+\.\d+$`)
 var apiURL = "https://api.github.com/repos/cyfrworks/cyfr/releases?per_page=20"
 
 // Latest returns the newest published CYFR release as a bare semver string
-// (e.g. "0.5.4"). It selects the first tag that starts with a digit, so legacy
-// "v*" releases and "porta-v*" desktop releases are skipped.
+// (e.g. "0.5.4"): the greatest bare MAJOR.MINOR.PATCH tag by IsNewer, so the
+// order the API lists releases in never picks an older line's later patch,
+// and legacy "v*" releases, "porta-v*" desktop releases, drafts and
+// pre-releases are skipped.
 func Latest(ctx context.Context) (string, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, apiURL, nil)
 	if err != nil {
@@ -46,18 +48,27 @@ func Latest(ctx context.Context) (string, error) {
 	}
 
 	var releases []struct {
-		TagName string `json:"tag_name"`
+		TagName    string `json:"tag_name"`
+		Draft      bool   `json:"draft"`
+		Prerelease bool   `json:"prerelease"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&releases); err != nil {
 		return "", err
 	}
 
+	latest := ""
 	for _, r := range releases {
-		if bareSemver.MatchString(r.TagName) {
-			return r.TagName, nil
+		if r.Draft || r.Prerelease || !bareSemver.MatchString(r.TagName) {
+			continue
+		}
+		if latest == "" || IsNewer(r.TagName, latest) {
+			latest = r.TagName
 		}
 	}
-	return "", fmt.Errorf("no CYFR release found")
+	if latest == "" {
+		return "", fmt.Errorf("no CYFR release found")
+	}
+	return latest, nil
 }
 
 // IsNewer reports whether latest is a strictly greater bare MAJOR.MINOR.PATCH

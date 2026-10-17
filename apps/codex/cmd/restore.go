@@ -22,6 +22,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/cyfr/codex/internal/scaffold"
 	"github.com/spf13/cobra"
 )
 
@@ -39,13 +40,14 @@ var restoreCmd = &cobra.Command{
 
 1. Read the snapshot: snapshot.json must be there and say complete, and its parts must be exactly what the directory holds; an incomplete snapshot or a layout cyfr restore cannot invert refuses before anything stops.
 2. Stop this host's stack, timing each service.
-3. Put the snapshot's docker-compose.yml and .env back, and read the configuration they give cyfr: the database, the storage root and every bind mounted under it must be where the snapshot can be put back, and the keyring must be the snapshot's. A refusal here puts the two files back as they were.
-4. Read the cell's live slots offline, in the snapshot's image: a live member on any host refuses, whatever its release, since the database is shared by every member.
-5. Put the storage root back, each bind mounted under it at its own source, then the database (the SQLite file, or the dump through pg_restore in the PostgreSQL server's own major).
-6. Declare the restore: bin/cyfr eval 'IO.puts("CYFR_RESTORE_ID=" <> Cyfr.Release.mark_restore())' in the snapshot's image. A restore that is not declared never starts.
-7. Start the stack and wait for every service to be healthy, unless --no-start.
+3. Bar the cell from starting: set CYFR_RESTORE_INCOMPLETE=<snapshot> in .env, synced, and remove the stopped cyfr container, so every start of the cyfr service until the restore is declared is a new container that reads the setting and refuses (the image's entrypoint), and 'cyfr up' and 'cyfr update' refuse it too.
+4. Put the snapshot's docker-compose.yml and .env (with the setting) back, and read the configuration they give cyfr: the setting must reach the cyfr service, the database, the storage root and every bind mounted under it must be where the snapshot can be put back, and the keyring must be the snapshot's. A refusal here puts the two files back as they were, which lifts the bar.
+5. Read the cell's live slots offline, in the snapshot's image: a live member on any host refuses, whatever its release, since the database is shared by every member.
+6. Put the scaffold files back as they stood before the update (the keeper's seccomp profile among them), then the storage root, each bind mounted under it at its own source, then the database (the SQLite file, or the dump through pg_restore in the PostgreSQL server's own major).
+7. Declare the restore: bin/cyfr eval 'IO.puts("CYFR_RESTORE_ID=" <> Cyfr.Release.mark_restore())' in the snapshot's image, then take CYFR_RESTORE_INCOMPLETE out of .env. A restore that is not declared never starts.
+8. Start the stack and wait for every service to be healthy, unless --no-start.
 
-A failure leaves the stack stopped and says what to do. An object store (S3) is outside the snapshot: objects written since it was taken stay, and objects deleted since come back only from the bucket's own versioning.`,
+A failure leaves the stack stopped and says what to do; from step 3 until the declaration, a crash leaves it barred, and 'cyfr restore <snapshot>' run again puts every part back from the start. An object store (S3) is outside the snapshot: objects written since it was taken stay, and objects deleted since come back only from the bucket's own versioning.`,
 	GroupID: "server",
 	Example: "  cyfr restore backups/20261016T120000Z",
 	Args:    cobra.ExactArgs(1),
@@ -59,6 +61,15 @@ const (
 	// prints its id.
 	markRestoreExpr = `IO.puts("CYFR_RESTORE_ID=" <> Cyfr.Release.mark_restore())`
 
+	// restoreBarrier is the .env setting that bars the cell from starting
+	// while a restore has not been declared, its value the snapshot being
+	// put back. The cyfr service reads .env (env_file) on every start, and
+	// docker-entrypoint.sh refuses to run while it is set, so it reaches
+	// every start of a new container of any configuration; 'cyfr up' and
+	// 'cyfr update' refuse it too. The restore's own offline runs set it
+	// empty for their one-off container.
+	restoreBarrier = "CYFR_RESTORE_INCOMPLETE"
+
 	// restoreScript empties the database's public schema and loads the
 	// custom-format dump on stdin in one transaction: the dump is first
 	// turned into SQL whole, so a dump that does not read changes nothing,
@@ -68,7 +79,7 @@ const (
 
 // snapshotParts are the parts a snapshot may hold, in the order update
 // writes them.
-var snapshotParts = []string{"database", "database-wal", "storage", "keyring", ".env", "compose"}
+var snapshotParts = []string{"database", "database-wal", "storage", "scaffold", "keyring", ".env", "compose"}
 
 var restoreIDPattern = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
 
@@ -93,8 +104,10 @@ func (s *snapshotFiles) path(part string) string { return filepath.Join(s.dir, p
 // readSnapshot reads the snapshot at dir and refuses one it cannot put
 // back: no snapshot.json or one not complete, a part listed twice, unknown
 // or missing, an entry no part names, a database of neither kind, a WAL
-// beside a dump, storage/ against the storage adapter, or a keyring file
-// with no key.
+// beside a dump, storage/ against the storage adapter, scaffold files
+// snapshot.json does not list as managed ones, or a keyring file with no
+// key. A snapshot without the scaffold part, which no released cyfr took,
+// is refused as one it cannot put back whole.
 func readSnapshot(dir string) (*snapshotFiles, error) {
 	refuse := func(format string, args ...any) error {
 		return fmt.Errorf("%s cannot be restored: %s; nothing was changed", dir, fmt.Sprintf(format, args...))
@@ -133,7 +146,7 @@ func readSnapshot(dir string) (*snapshotFiles, error) {
 		}
 		s.parts[part] = true
 	}
-	for _, part := range []string{"database", "keyring", ".env", "compose"} {
+	for _, part := range []string{"database", "scaffold", "keyring", ".env", "compose"} {
 		if !s.parts[part] {
 			return nil, refuse("snapshot.json does not list the part %s", part)
 		}
@@ -155,11 +168,14 @@ func readSnapshot(dir string) (*snapshotFiles, error) {
 		switch {
 		case err != nil:
 			return nil, refuse("snapshot.json lists %s, which is not there", part)
-		case part == "storage" && !info.IsDir():
-			return nil, refuse("storage is not a directory")
-		case part != "storage" && !info.Mode().IsRegular():
+		case (part == "storage" || part == "scaffold") && !info.IsDir():
+			return nil, refuse("%s is not a directory", part)
+		case part != "storage" && part != "scaffold" && !info.Mode().IsRegular():
 			return nil, refuse("%s is not a regular file", part)
 		}
+	}
+	if err := checkScaffoldPart(s); err != nil {
+		return nil, refuse("%v", err)
 	}
 	head := make([]byte, len(sqliteMagic))
 	f, err := os.Open(s.path("database"))
@@ -190,6 +206,68 @@ func readSnapshot(dir string) (*snapshotFiles, error) {
 	return s, nil
 }
 
+// checkScaffoldPart checks snapshot.json's scaffold list against the
+// scaffold owner's policy and the scaffold/ directory: each name a local,
+// clean path that scaffold.IsManaged admits, listed once, and every file
+// under scaffold/ a regular file the list names.
+func checkScaffoldPart(s *snapshotFiles) error {
+	listed := map[string]bool{}
+	for _, name := range s.manifest.Scaffold {
+		switch {
+		case !filepath.IsLocal(name) || filepath.Clean(name) != name:
+			return fmt.Errorf("snapshot.json lists the scaffold file %q, which is no path in the project", name)
+		case !scaffold.IsManaged(name):
+			return fmt.Errorf("snapshot.json lists the scaffold file %s, which cyfr update does not manage", name)
+		case listed[name]:
+			return fmt.Errorf("snapshot.json lists the scaffold file %s twice", name)
+		}
+		listed[name] = true
+	}
+	root := s.path("scaffold")
+	return filepath.WalkDir(root, func(p string, entry fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if entry.IsDir() {
+			return nil
+		}
+		rel, err := filepath.Rel(root, p)
+		if err != nil {
+			return err
+		}
+		if !entry.Type().IsRegular() || !listed[rel] {
+			return fmt.Errorf("scaffold/ holds %s, which snapshot.json does not list as a scaffold file", rel)
+		}
+		return nil
+	})
+}
+
+// putScaffoldBack puts each of the scaffold files names back as the
+// snapshot at dir holds it, as it stood before the update: the snapshot's
+// bytes where scaffold/ holds the file, and no file where the update
+// created it.
+func putScaffoldBack(dir string, names []string) error {
+	for _, name := range names {
+		data, err := os.ReadFile(filepath.Join(dir, "scaffold", name))
+		if errors.Is(err, fs.ErrNotExist) {
+			if err := os.Remove(name); err != nil && !errors.Is(err, fs.ErrNotExist) {
+				return err
+			}
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		if err := os.MkdirAll(filepath.Dir(name), 0755); err != nil {
+			return err
+		}
+		if err := scaffold.ReplaceFile(name, data, 0644); err != nil {
+			return fmt.Errorf("put %s back: %w", name, err)
+		}
+	}
+	return nil
+}
+
 // runRestore is `cyfr restore <snapshot>` in the working directory. ctx is
 // cancelled by SIGINT or SIGTERM: before the stop the cancellation ends the
 // restore with nothing changed; from the stop until the parts are put back
@@ -217,6 +295,9 @@ func runRestore(ctx context.Context, snapshot string, start bool, out, errOut io
 	snap, err := readSnapshot(dir)
 	if err != nil {
 		return err
+	}
+	if _, ok := dotenvLine(restoreBarrier, dir); !ok {
+		return fmt.Errorf("%s cannot be restored: its path holds both quote characters or a line break, which .env cannot carry; nothing was changed", dir)
 	}
 	unlock, err := takeUpdateLock("restore")
 	if err != nil {
@@ -273,7 +354,7 @@ func (r *restorer) run() error {
 	if r.ctx.Err() != nil {
 		return errors.New("cyfr restore was interrupted during the stop; the stack is left stopped and nothing was restored. Start it again with 'cyfr up'")
 	}
-	steps := []func() error{r.putConfigFiles, r.readRestoredConfig, r.probeRestoredPostgres, r.refuseLiveMembers}
+	steps := []func() error{r.holdConfigFiles, r.raiseBarrier, r.putConfigFiles, r.readRestoredConfig, r.probeRestoredPostgres, r.refuseLiveMembers}
 	for _, step := range steps {
 		err := step()
 		if err == nil && r.ctx.Err() != nil {
@@ -287,10 +368,13 @@ func (r *restorer) run() error {
 	// Putting the parts back and declaring the restore run to their end, so
 	// the cell is never left half-restored by an interrupt.
 	if err := r.putParts(); err != nil {
-		return fmt.Errorf("Putting the snapshot back failed: %v.\nThe stack is left stopped and is not declared restored, so it must not start; docker-compose.yml and .env are the snapshot's. Fix the cause and run 'cyfr restore %s' again, which puts every part back from the start", r.redact(err.Error()), r.snap.dir)
+		return fmt.Errorf("Putting the snapshot back failed: %v.\nThe stack is left stopped and is not declared restored, so it stays barred from starting (%s in .env); docker-compose.yml and .env are the snapshot's. Fix the cause and run 'cyfr restore %s' again, which puts every part back from the start", r.redact(err.Error()), restoreBarrier, r.snap.dir)
 	}
 	if err := r.declare(); err != nil {
-		return fmt.Errorf("Every part of the snapshot is back, but the restore could not be declared: %v.\nThe stack is left stopped and must not start undeclared. Fix the cause and run 'cyfr restore %s' again, or declare it by hand before the first start with:\n  docker compose run --rm --no-deps -T cyfr bin/cyfr eval '%s'", r.redact(err.Error()), r.snap.dir, markRestoreExpr)
+		return fmt.Errorf("Every part of the snapshot is back, but the restore could not be declared: %v.\nThe stack is left stopped and barred from starting undeclared (%s in .env). Fix the cause and run 'cyfr restore %s' again, or declare it by hand with:\n  docker compose run --rm --no-deps -T -e %s= cyfr bin/cyfr eval '%s'\nthen take the %s line out of .env", r.redact(err.Error()), restoreBarrier, r.snap.dir, restoreBarrier, markRestoreExpr, restoreBarrier)
+	}
+	if err := r.lowerBarrier(); err != nil {
+		return fmt.Errorf("The restore %s is declared, but %s could not be taken out of .env (%v); take that line out of .env and start the stack with 'cyfr up'", r.restoreID, restoreBarrier, err)
 	}
 	fmt.Fprintf(r.out, "Declared restore %s; the first start suspends every credential and method the backup carried until its owner re-enables it.\n", r.restoreID)
 	if !r.start {
@@ -319,17 +403,14 @@ func (r *restorer) run() error {
 func (r *restorer) refuseStopped(reason error) error {
 	message := fmt.Sprintf("%v.\nThe stack is left stopped and nothing of the snapshot was put back", r.redact(reason.Error()))
 	if err := r.putBackHeld(); err != nil {
-		return fmt.Errorf("%s; docker-compose.yml and .env could not be put back as they were (%v), so they may be the snapshot's", message, err)
+		return fmt.Errorf("%s; docker-compose.yml and .env could not be put back as they were (%v), so they may be the snapshot's, and the stack stays barred from starting until 'cyfr restore %s' runs again", message, err, r.snap.dir)
 	}
 	return fmt.Errorf("%s; docker-compose.yml and .env are as they were. Start the stack again with 'cyfr up'", message)
 }
 
-// putConfigFiles writes the snapshot's docker-compose.yml and .env over the
-// project's, holding the project's for a refusal to put back: the
-// configuration they give cyfr is the one the snapshot was taken under,
-// whose mounts the storage part follows. .env is 0600; the compose file
-// keeps its mode.
-func (r *restorer) putConfigFiles() error {
+// holdConfigFiles reads the project's docker-compose.yml and .env, for a
+// refusal to put back.
+func (r *restorer) holdConfigFiles() error {
 	r.held = map[string][]byte{}
 	for _, f := range restoreFiles {
 		data, err := os.ReadFile(f.file)
@@ -342,16 +423,82 @@ func (r *restorer) putConfigFiles() error {
 			r.held[f.file] = data
 		}
 	}
+	return nil
+}
+
+// withBarrier answers the dotenv text env with restoreBarrier set to the
+// snapshot, every earlier assignment of it taken out, so no later line can
+// set it empty.
+func withBarrier(env []byte, snapshot string) []byte {
+	line, _ := dotenvLine(restoreBarrier, snapshot)
+	f := parseEnvFile(string(env))
+	for _, i := range slices.Backward(f.assignments(restoreBarrier)) {
+		f.lines = slices.Delete(f.lines, i, i+1)
+	}
+	text := strings.TrimSuffix(f.String(), "\n")
+	if text != "" {
+		text += "\n"
+	}
+	return []byte(text + line + "\n")
+}
+
+// writeDurable writes data over the file at name as writeFileAtomic does,
+// then syncs the directory, so the rename survives a crash.
+func writeDurable(name string, data []byte, mode os.FileMode) error {
+	if err := writeFileAtomic(name, data, mode); err != nil {
+		return err
+	}
+	d, err := os.Open(filepath.Dir(name))
+	if err != nil {
+		return err
+	}
+	return errors.Join(d.Sync(), d.Close())
+}
+
+// raiseBarrier sets restoreBarrier in the project's .env, durably, before
+// any part lands, then removes the stopped cyfr container: a stopped
+// container starts again with the environment it was created with, so
+// only a new one, created from .env as it now stands, is barred.
+func (r *restorer) raiseBarrier() error {
+	r.offlineEnv = []string{restoreBarrier + "="}
+	if err := writeDurable(".env", withBarrier(r.held[".env"], r.snap.dir), 0600); err != nil {
+		return fmt.Errorf("cyfr restore could not bar the cell from starting (%v)", err)
+	}
+	ctx, cancel := r.detached(composeRunTimeout)
+	defer cancel()
+	if err := r.docker(ctx, nil, nil, r.composeArgs("rm", "--force", "cyfr")...); err != nil {
+		return fmt.Errorf("docker compose rm cyfr failed (%v), so the stopped cyfr container could start without the bar", err)
+	}
+	return nil
+}
+
+// lowerBarrier puts the snapshot's .env back as the snapshot holds it,
+// without restoreBarrier, once the restore is declared.
+func (r *restorer) lowerBarrier() error {
+	data, err := os.ReadFile(r.snap.path(".env"))
+	if err != nil {
+		return err
+	}
+	return writeDurable(".env", data, 0600)
+}
+
+// putConfigFiles writes the snapshot's docker-compose.yml and .env over the
+// project's, .env with the barrier: the configuration they give cyfr is
+// the one the snapshot was taken under, whose mounts the storage part
+// follows. .env is 0600; the compose file keeps its mode.
+func (r *restorer) putConfigFiles() error {
 	for _, f := range restoreFiles {
 		data, err := os.ReadFile(r.snap.path(f.part))
 		if err != nil {
 			return err
 		}
 		mode := os.FileMode(0600)
-		if info, err := os.Stat(f.file); err == nil && f.file != ".env" {
+		if f.file == ".env" {
+			data = withBarrier(data, r.snap.dir)
+		} else if info, err := os.Stat(f.file); err == nil {
 			mode = info.Mode().Perm()
 		}
-		if err := writeFileAtomic(f.file, data, mode); err != nil {
+		if err := writeDurable(f.file, data, mode); err != nil {
 			return err
 		}
 	}
@@ -369,13 +516,15 @@ func (r *restorer) putBackHeld() error {
 		case data == nil:
 			if err := os.Remove(f.file); err != nil && !errors.Is(err, fs.ErrNotExist) {
 				errs = append(errs, err)
+			} else if d, err := os.Open("."); err == nil {
+				errs = append(errs, d.Sync(), d.Close())
 			}
 		default:
 			mode := os.FileMode(0600)
 			if info, err := os.Stat(f.file); err == nil {
 				mode = info.Mode().Perm()
 			}
-			errs = append(errs, writeFileAtomic(f.file, data, mode))
+			errs = append(errs, writeDurable(f.file, data, mode))
 		}
 	}
 	r.profiles = composeProfiles(".env")
@@ -414,6 +563,9 @@ func (r *restorer) readRestoredConfig() error {
 		return refuse("%v", err)
 	}
 	env := func(name string) string { return serviceSetting(cyfr.Environment, name) }
+	if env(restoreBarrier) != r.snap.dir {
+		return refuse("the cyfr service does not take %s from .env (its env_file), so nothing would bar it from starting before the restore is declared", restoreBarrier)
+	}
 	settingPath := func(name, fallback string) (string, error) {
 		value, ok := settingPathIn(cyfr.Environment, name, fallback)
 		if !ok {
@@ -609,11 +761,16 @@ func (r *restorer) refuseLiveMembers() error {
 	return nil
 }
 
-// putParts puts the storage root back, each mount under it at its own
-// source, then the database. Each part is replaced whole, so a restore run
-// again after a failure puts every part back from the start.
+// putParts puts the scaffold files back, then the storage root, each mount
+// under it at its own source, then the database. Each part is replaced
+// whole, so a restore run again after a failure puts every part back from
+// the start.
 func (r *restorer) putParts() error {
 	c := r.config
+	fmt.Fprintln(r.out, "Putting the scaffold files back...")
+	if err := putScaffoldBack(r.snap.dir, r.snap.manifest.Scaffold); err != nil {
+		return err
+	}
 	if c.storage == "local" {
 		fmt.Fprintln(r.out, "Putting the storage root back...")
 		keep := map[string]bool{}
@@ -827,7 +984,7 @@ func (r *restorer) restorePostgres() error {
 func (r *restorer) declare() error {
 	ctx, cancel := r.detached(composeRunTimeout)
 	defer cancel()
-	output, err := r.dockerOutput(ctx, nil, r.composeArgs("run", "--rm", "--no-deps", "-T", "cyfr", "bin/cyfr", "eval", markRestoreExpr)...)
+	output, err := r.dockerOutput(ctx, nil, r.offlineEval(markRestoreExpr)...)
 	if err != nil {
 		return fmt.Errorf("Cyfr.Release.mark_restore/0 failed in release %s's image (%v)", r.snap.manifest.Version, err)
 	}

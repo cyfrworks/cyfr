@@ -77,8 +77,9 @@ release:
   make_latest: false
   extra_files:
     - glob: cyfr-scaffold.tar.gz
-    # Publish the installer as a release asset so `cyfr upgrade` can fetch a
-    # tag-pinned installer instead of piping main-branch HEAD to sh.
+    # Publish the installer as a release asset, pinned to its tag. `cyfr
+    # upgrade` runs no installer: it verifies the archive itself against the
+    # signed checksums.txt (internal/release.FetchBinary).
     - glob: ../../scripts/install.sh
     # The release's manifest and its keyless signature, which the release
     # workflow writes and signs outside the checkout before this runs:

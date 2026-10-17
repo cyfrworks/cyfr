@@ -52,7 +52,7 @@ func TestIsManaged(t *testing.T) {
 		"aqua/skills/capability-acquisition/references/notes.md",
 	}
 	for _, p := range managed {
-		if !isManaged(p) {
+		if !IsManaged(p) {
 			t.Errorf("expected %q to be managed (overwritten on update)", p)
 		}
 	}
@@ -73,7 +73,7 @@ func TestIsManaged(t *testing.T) {
 		"aqua/skills/capability-acquisition", // a scroll is the files inside its directory
 	}
 	for _, p := range notManaged {
-		if isManaged(p) {
+		if IsManaged(p) {
 			t.Errorf("expected %q NOT to be managed (must be preserved on update)", p)
 		}
 	}
@@ -113,7 +113,7 @@ func TestShippedGuidesAreManaged(t *testing.T) {
 		t.Errorf("the tarball ships the guides %v, and Guides names %v", shipped, want)
 	}
 	for _, guide := range shipped {
-		if !isManaged(guide) {
+		if !IsManaged(guide) {
 			t.Errorf("the tarball ships %s, which `cyfr update` does not refresh", guide)
 		}
 	}
@@ -157,7 +157,7 @@ func TestShippedProfileIsManaged(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(root, source[1])); err != nil {
 		t.Errorf("the profile the tarball ships: %v", err)
 	}
-	if !isManaged(SeccompProfile) {
+	if !IsManaged(SeccompProfile) {
 		t.Errorf("the tarball ships %s, which `cyfr update` does not refresh", SeccompProfile)
 	}
 	compose, err := os.ReadFile(filepath.Join(root, "docker-compose.yml"))
@@ -199,7 +199,7 @@ func TestBundledPromptsMatchSeed(t *testing.T) {
 		switch {
 		case rel == "aqua.md":
 			soulShipped = true
-			if !isManaged(tarPath) {
+			if !IsManaged(tarPath) {
 				t.Errorf("the soul %q is not managed — `cyfr update` will never refresh it", tarPath)
 			}
 		case strings.HasPrefix(rel, "roles/"):
@@ -208,7 +208,7 @@ func TestBundledPromptsMatchSeed(t *testing.T) {
 				return nil
 			}
 			seedRoles[name] = true
-			if !isManaged(tarPath) {
+			if !IsManaged(tarPath) {
 				t.Errorf("shipped role %q is not managed — `cyfr update` will never refresh it", tarPath)
 			}
 		case strings.HasPrefix(rel, "skills/"):
@@ -217,7 +217,7 @@ func TestBundledPromptsMatchSeed(t *testing.T) {
 				return nil
 			}
 			seedScrolls[name] = true
-			if !isManaged(tarPath) {
+			if !IsManaged(tarPath) {
 				t.Errorf("shipped scroll %q is not managed — `cyfr update` will never refresh it", tarPath)
 			}
 		}
@@ -255,7 +255,7 @@ func TestBundledPromptsMatchSeed(t *testing.T) {
 		t.Fatalf("the seed tree ships a role or scroll named %q; pick another name for the member-owned check", custom)
 	}
 	for _, p := range []string{"aqua/roles/custom.md", "aqua/skills/custom/SKILL.md"} {
-		if isManaged(p) {
+		if IsManaged(p) {
 			t.Errorf("expected member-owned %q NOT to be managed (must be preserved on update)", p)
 		}
 	}
@@ -474,5 +474,40 @@ func TestScaffoldMismatchIsUnverified(t *testing.T) {
 	}
 	if got := extracted(t); len(got) != 0 {
 		t.Fatalf("extracted %v from a tarball the signed checksums.txt does not name", got)
+	}
+}
+
+// Fetch verifies and reads the release, writing nothing; Managed names the
+// managed files Write(true) then replaces, and a file the member owns is
+// left as it is.
+func TestFetchWritesNothingUntilWrite(t *testing.T) {
+	sc := readSignedChecksums(t)
+	serveScaffold(t, sc, sc.version, signedAssets(sc))
+	for name, body := range map[string]string{"configuration-guide.md": "an older guide\n", "docker-compose.yml": "services: {mine: {}}\n"} {
+		if err := os.WriteFile(name, []byte(body), 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	r, err := Fetch(sc.version)
+	if err != nil {
+		t.Fatalf("Fetch: %v", err)
+	}
+	if got, _ := os.ReadFile("configuration-guide.md"); string(got) != "an older guide\n" {
+		t.Errorf("Fetch wrote the guide: %q", got)
+	}
+	if got := r.Managed(); !slices.Equal(got, []string{"configuration-guide.md"}) {
+		t.Errorf("Managed() = %v", got)
+	}
+	if err := r.Write(true); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	if got, _ := os.ReadFile("configuration-guide.md"); string(got) != "# Configuration\n" {
+		t.Errorf("Write(true) left the guide %q", got)
+	}
+	if got, _ := os.ReadFile("docker-compose.yml"); string(got) != "services: {mine: {}}\n" {
+		t.Errorf("Write(true) replaced the member's docker-compose.yml: %q", got)
+	}
+	if got := extracted(t); !slices.Equal(got, []string{"configuration-guide.md", "docker-compose.yml"}) {
+		t.Errorf("Write left %v; a temporary file stayed behind", got)
 	}
 }

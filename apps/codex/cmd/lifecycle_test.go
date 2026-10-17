@@ -808,3 +808,28 @@ func TestInitRefusesAlteredScaffold(t *testing.T) {
 		t.Errorf("init warned %q and stopped; a verification failure is no warning", warning.String())
 	}
 }
+
+// `cyfr init` ignores the snapshots `cyfr update` takes under backups/,
+// each of which holds the keyring and the database, beside the runtime
+// state and the environment files.
+func TestInitIgnoresTheSnapshots(t *testing.T) {
+	t.Chdir(t.TempDir())
+	fake := t.TempDir()
+	if err := os.WriteFile(filepath.Join(fake, "docker"), []byte("#!/bin/sh\nexit 0\n"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", fake+string(os.PathListSeparator)+os.Getenv("PATH"))
+	if err := initCmd.RunE(initCmd, nil); err != nil {
+		t.Fatalf("cyfr init: %v", err)
+	}
+	got, err := os.ReadFile(".gitignore")
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(string(got), "\n")
+	for _, want := range []string{"/backups/", "/data/", ".env", ".env.local", ".env.*.local"} {
+		if !slices.Contains(lines, want) {
+			t.Errorf(".gitignore lacks %s:\n%s", want, got)
+		}
+	}
+}

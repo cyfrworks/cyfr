@@ -12,16 +12,19 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
+	"syscall"
 	"testing"
 )
 
 // restoreFakeDocker is fakeDocker with the two offline evals told apart:
 // the declaration answers from mark.*, the live read as fakeDocker's eval;
 // pg_restore keeps its stdin in pgrestore.stdin and answers from
-// pgrestore.*.
+// pgrestore.*; <key>.kill kills the calling process with SIGKILL, as a
+// crash would.
 const restoreFakeDocker = `#!/bin/bash
 d="$FAKE_DOCKER_DIR"
 note=""
@@ -29,7 +32,10 @@ args=("$@")
 for ((i = 0; i < ${#args[@]}; i++)); do
   if [ "${args[i]}" = -e ]; then
     name="${args[i+1]}"
-    if [ -n "${!name+x}" ]; then note+=" {env $name set}"; else note+=" {env $name unset}"; fi
+    case "$name" in
+      *=*) ;;
+      *) if [ -n "${!name+x}" ]; then note+=" {env $name set}"; else note+=" {env $name unset}"; fi ;;
+    esac
   fi
 done
 read -r _ _ _ _ pgrp _ < /proc/$$/stat
@@ -37,6 +43,7 @@ read -r _ _ _ _ pgrp _ < /proc/$$/stat
 printf '%s%s\n' "$*" "$note" >> "$d/log"
 answer() {
   printf '%s %s\n' "$1" "$(md5sum < docker-compose.yml | cut -c1-32)" >> "$d/state"
+  if [ -f "$d/$1.kill" ]; then kill -KILL "$PPID"; exit 0; fi
   [ -f "$d/$1.signal" ] && kill -TERM "$PPID"
   [ -f "$d/$1.out" ] && cat "$d/$1.out"
   exit "$(cat "$d/$1.exit" 2>/dev/null || echo 0)"
@@ -49,6 +56,17 @@ if [ "$1" = compose ]; then
   case "$sub" in
     exec) answer rpc ;;
     stop) answer "stop-${1:-all}" ;;
+    config)
+      # compose merges .env (env_file) into the service's environment, so
+      # the restore's bar reaches the answer as .env sets it.
+      v="$(sed -n "s/^CYFR_RESTORE_INCOMPLETE='\(.*\)'\$/\1/p" .env 2>/dev/null | tail -n 1)"
+      if [ -n "$v" ] && [ ! -f "$d/config.nobar" ]; then
+        printf 'config %s\n' "$(md5sum < docker-compose.yml | cut -c1-32)" >> "$d/state"
+        if [ -f "$d/config.kill" ]; then kill -KILL "$PPID"; exit 0; fi
+        sed "s|\"environment\":{|\"environment\":{\"CYFR_RESTORE_INCOMPLETE\":\"$v\",|" "$d/config.out"
+        exit "$(cat "$d/config.exit" 2>/dev/null || echo 0)"
+      fi
+      answer config ;;
     run)
       case "$*" in *mark_restore*) answer mark ;; esac
       n="$(cat "$d/eval.live" 2>/dev/null || echo 0)"
@@ -74,6 +92,9 @@ exit 0
 `
 
 const (
+	// testOffline is an offline eval the restore runs, its own bar lifted
+	// in the one-off container.
+	testOffline  = "run --rm --no-deps -T -e CYFR_RESTORE_INCOMPLETE= cyfr bin/cyfr eval "
 	testMark     = `IO.puts("CYFR_RESTORE_ID=" <> Cyfr.Release.mark_restore())`
 	testRestored = "rst_0192f0a1-7c4e-7d2a-9b1e-3f5a6b7c8d9e"
 	sqliteBytes  = "SQLite format 3\x00main"
@@ -247,21 +268,23 @@ func TestRestorePutsEveryPartBackAndDeclaresBeforeTheStart(t *testing.T) {
 		profiles + "stop locus-builds-guard",
 		profiles + "stop locus-backends-guard",
 		profiles + "stop",
+		profiles + "rm --force cyfr",
 		profiles + "config --format json",
-		profiles + "run --rm --no-deps -T cyfr bin/cyfr eval " + testLive,
-		profiles + "run --rm --no-deps -T cyfr bin/cyfr eval " + testMark,
+		profiles + testOffline + testLive,
+		profiles + testOffline + testMark,
 		profiles + "up -d --wait --wait-timeout 900",
 	}
 	if got := r.log(); !slices.Equal(got, want) {
 		t.Fatalf("docker ran\n%s\nwant\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
 	}
-	// The stop saw the switched compose file; from the configuration read
-	// on, every call saw the snapshot's.
+	// The stop and the removal of the stopped cyfr container saw the switched
+	// compose file; from the configuration read on, every call saw the
+	// snapshot's.
 	sum := func(data []byte) string { return fmt.Sprintf("%x", md5.Sum(data)) }
 	for _, line := range strings.Split(strings.TrimSpace(read(t, filepath.Join(r.fake, "state"))), "\n") {
 		fields := strings.Fields(line)
 		wantSum := sum([]byte(compose))
-		if fields[0] == "ps" || strings.HasPrefix(fields[0], "stop-") {
+		if fields[0] == "ps" || fields[0] == "rm" || strings.HasPrefix(fields[0], "stop-") {
 			wantSum = sum(switched([]byte(compose)))
 		}
 		if fields[1] != wantSum {
@@ -282,6 +305,11 @@ func TestRestorePutsEveryPartBackAndDeclaresBeforeTheStart(t *testing.T) {
 		"data/components/covered":     "covered, edited",
 		"data/components/acme/c.wasm": "component-bytes",
 		"data/components/kept":        "<absent>",
+		// The scaffold files as they stood before the update, the keeper's
+		// seccomp profile among them; the one the update created is gone.
+		"keeper.seccomp.json":    oldScaffold["keeper.seccomp.json"],
+		"configuration-guide.md": oldScaffold["configuration-guide.md"],
+		"wit/cyfr/added.wit":     "<absent>",
 	} {
 		if got := read(t, filepath.Join(r.project, rel)); got != content {
 			t.Errorf("%s holds %q, want %q", rel, got, content)
@@ -368,7 +396,8 @@ func TestRestoreRefusesALiveMemberOfAnyRelease(t *testing.T) {
 }
 
 // A declaration that fails, prints no id or prints one that does not read
-// leaves the stack stopped and never starts it, the parts being back.
+// leaves the stack stopped and never starts it, the parts being back; the
+// bar stays in .env, so a later 'cyfr up' refuses too.
 func TestRestoreNeverStartsAnUndeclaredRestore(t *testing.T) {
 	compose := shippedCompose(t)
 	for name, answer := range map[string]struct{ out, exit string }{
@@ -384,11 +413,11 @@ func TestRestoreNeverStartsAnUndeclaredRestore(t *testing.T) {
 			r.answer("mark.out", answer.out)
 			r.answer("mark.exit", answer.exit)
 			out, err := r.restore(true)
-			if err == nil || !strings.Contains(err.Error(), "could not be declared") || !strings.Contains(err.Error(), "must not start undeclared") || !strings.Contains(err.Error(), testMark) {
+			if err == nil || !strings.Contains(err.Error(), "could not be declared") || !strings.Contains(err.Error(), "barred from starting undeclared") || !strings.Contains(err.Error(), testMark) {
 				t.Fatalf("restore answered %v\n%s", err, out)
 			}
 			log := r.log()
-			if last := log[len(log)-1]; last != profiles+"run --rm --no-deps -T cyfr bin/cyfr eval "+testMark {
+			if last := log[len(log)-1]; last != profiles+testOffline+testMark {
 				t.Errorf("the restore went on past the failed declaration to %q", last)
 			}
 			if slices.ContainsFunc(log, func(line string) bool { return strings.Contains(line, " up ") || strings.HasSuffix(line, " start") }) {
@@ -397,7 +426,28 @@ func TestRestoreNeverStartsAnUndeclaredRestore(t *testing.T) {
 			if got := read(t, filepath.Join(r.project, "data", "blobs", "x")); got != "blob" {
 				t.Errorf("blobs/x holds %q, want the snapshot's", got)
 			}
+			r.barred()
+			if got, want := read(t, filepath.Join(r.project, ".env")), string(withBarrier(r.env, r.dir)); got != want {
+				t.Errorf(".env holds %q, want the snapshot's with the bar, %q", got, want)
+			}
 		})
+	}
+}
+
+// barred fails unless .env bars the snapshot's restore and 'cyfr up'
+// refuses before any docker call.
+func (r *restoreScenario) barred() {
+	r.t.Helper()
+	if snapshot, ok := restoreBarred(filepath.Join(r.project, ".env")); !ok || snapshot != r.dir {
+		r.t.Errorf(".env bars %q (%v), want the restore of %s barred", snapshot, ok, r.dir)
+	}
+	calls := len(r.log())
+	err := upCmd.RunE(upCmd, nil)
+	if err == nil || !strings.Contains(err.Error(), "has not been declared") || !strings.Contains(err.Error(), "cyfr restore "+r.dir) {
+		r.t.Errorf("cyfr up answered %v, want the refusal of an undeclared restore", err)
+	}
+	if got := r.log(); len(got) != calls {
+		r.t.Errorf("cyfr up ran docker on a barred cell: %s", strings.Join(got[calls:], "\n"))
 	}
 }
 
@@ -409,7 +459,7 @@ func TestRestoreNoStartDeclaresAndLeavesTheStackStopped(t *testing.T) {
 		t.Fatalf("restore: %v\n%s", err, out)
 	}
 	log := r.log()
-	if last := log[len(log)-1]; last != profiles+"run --rm --no-deps -T cyfr bin/cyfr eval "+testMark {
+	if last := log[len(log)-1]; last != profiles+testOffline+testMark {
 		t.Errorf("the restore ended with %q, want the declaration", last)
 	}
 	if !strings.Contains(out, "Declared restore "+testRestored) || !strings.Contains(out, "left stopped (--no-start)") {
@@ -451,7 +501,7 @@ func TestRestoreLoadsTheDumpWithoutTheURLOnArgv(t *testing.T) {
 	load := "run --rm -i --network host -e CYFR_UPDATE_PG_URL postgres:17 sh -c " + restoreScript + " {env CYFR_UPDATE_PG_URL set}"
 	log := r.log()
 	at := func(line string) int { return slices.Index(log, line) }
-	config, live, mark := at(profiles+"config --format json"), at(profiles+"run --rm --no-deps -T cyfr bin/cyfr eval "+testLive), at(profiles+"run --rm --no-deps -T cyfr bin/cyfr eval "+testMark)
+	config, live, mark := at(profiles+"config --format json"), at(profiles+testOffline+testLive), at(profiles+testOffline+testMark)
 	if !(config >= 0 && config < at(probe) && at(probe) < live && live < at(load) && at(load) < mark && mark < at(profiles+"up -d --wait --wait-timeout 900")) {
 		t.Errorf("the probe, the live read, the load and the declaration are out of order:\n%s", strings.Join(log, "\n"))
 	}
@@ -473,6 +523,7 @@ func TestRestoreLoadsTheDumpWithoutTheURLOnArgv(t *testing.T) {
 		t.Errorf("the refusal holds the database password")
 	}
 	r.stoppedUndeclared()
+	r.barred()
 }
 
 // With an S3 store the restore says the object store is outside the
@@ -531,12 +582,21 @@ func TestRestoreRefusesASnapshotItCannotInvert(t *testing.T) {
 		{"unknown field", manifest(func(m map[string]any) { m["mounts"] = []string{"components"} }), "not a snapshot's"},
 		{"unknown part", manifest(func(m map[string]any) { m["parts"] = append(m["parts"].([]any), "caddy") }), `lists "caddy"`},
 		{"part twice", manifest(func(m map[string]any) { m["parts"] = append(m["parts"].([]any), "keyring") }), "twice"},
-		{"part unlisted", manifest(func(m map[string]any) { m["parts"] = []any{"database", "database-wal", "storage", ".env", "compose"} }), "does not list the part keyring"},
+		{"part unlisted", manifest(func(m map[string]any) {
+			m["parts"] = []any{"database", "database-wal", "storage", "scaffold", ".env", "compose"}
+		}), "does not list the part keyring"},
 		{"storage against s3", manifest(func(m map[string]any) { m["storage_adapter"] = "s3" }), "lists storage true"},
 		{"part missing", remove("database-wal"), "lists database-wal, which is not there"},
 		{"entry unlisted", file("notes", "mine"), "holds notes"},
 		{"database of no kind", file("database", "not a database"), "neither a SQLite file nor"},
 		{"keyring with no key", file("keyring", "OTHER='x'\n"), "holds neither"},
+		{"no scaffold part", manifest(func(m map[string]any) {
+			m["parts"] = []any{"database", "database-wal", "storage", "keyring", ".env", "compose"}
+		}), "does not list the part scaffold"},
+		{"scaffold file not managed", manifest(func(m map[string]any) { m["scaffold"] = []any{"docker-compose.yml"} }), "which cyfr update does not manage"},
+		{"scaffold path outside", manifest(func(m map[string]any) { m["scaffold"] = []any{"../keeper.seccomp.json"} }), "which is no path in the project"},
+		{"scaffold file twice", manifest(func(m map[string]any) { m["scaffold"] = append(m["scaffold"].([]any), "keeper.seccomp.json") }), "scaffold file keeper.seccomp.json twice"},
+		{"scaffold file unlisted", file("scaffold/notes.md", "mine"), "scaffold/ holds notes.md"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -611,7 +671,7 @@ func TestRestoreRefusesAConfigurationTheSnapshotDoesNotFit(t *testing.T) {
 				t.Errorf("the refusal holds a secret")
 			}
 			r.stoppedUndeclared()
-			if slices.Contains(r.log(), profiles+"run --rm --no-deps -T cyfr bin/cyfr eval "+testLive) {
+			if slices.Contains(r.log(), profiles+testOffline+testLive) {
 				t.Errorf("the restore read the live slots of a configuration it refuses")
 			}
 			r.configAsBefore(before, editedEnv)
@@ -658,5 +718,195 @@ func TestRestoreSharesTheUpdateLock(t *testing.T) {
 	}
 	if log := r.log(); log != nil {
 		t.Errorf("docker ran:\n%s", strings.Join(log, "\n"))
+	}
+}
+
+// TestRestoreProcessHelper is `cyfr restore` in a process of its own, for
+// TestRestoreCrashLeavesTheCellBarredOrUntouched to kill; it runs only
+// under that test.
+func TestRestoreProcessHelper(t *testing.T) {
+	snapshot := os.Getenv("CYFR_TEST_RESTORE_SNAPSHOT")
+	if snapshot == "" {
+		t.Skip("run by TestRestoreCrashLeavesTheCellBarredOrUntouched")
+	}
+	if err := runRestore(context.Background(), snapshot, true, os.Stdout, os.Stderr); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	os.Exit(0)
+}
+
+// A restore killed at any step leaves a cell that either is untouched
+// (killed before the bar) or is barred from starting: .env carries the bar,
+// so 'cyfr up' refuses and the image's entrypoint refuses every new
+// container, and the stopped cyfr container that predates the bar is gone
+// before anything of the snapshot lands. Killed once the restore is
+// declared, the bar is down. Run again, the restore puts every part back
+// and declares it.
+func TestRestoreCrashLeavesTheCellBarredOrUntouched(t *testing.T) {
+	compose := shippedCompose(t)
+	for _, c := range []struct {
+		kill string
+		// barred: the bar is up; landed: the parts are back.
+		barred, landed bool
+	}{
+		{"stop-cyfr", false, false},
+		{"rm", true, false},
+		{"config", true, false},
+		{"eval", true, false},
+		{"mark", true, true},
+		{"up", false, true},
+	} {
+		t.Run(c.kill, func(t *testing.T) {
+			r := newRestoreScenario(t, compose, nil, nil)
+			r.edit(".env", editedEnv)
+			r.edit("data/blobs/x", "rewritten")
+			r.answer(c.kill+".kill", "")
+			cmd := exec.Command(os.Args[0], "-test.run=^TestRestoreProcessHelper$", "-test.count=1")
+			cmd.Env = append(os.Environ(), "CYFR_TEST_RESTORE_SNAPSHOT="+r.dir)
+			out, err := cmd.CombinedOutput()
+			var exit *exec.ExitError
+			if !errors.As(err, &exit) || exit.Sys().(syscall.WaitStatus).Signal() != syscall.SIGKILL {
+				t.Fatalf("the restore was not killed at %s (%v):\n%s", c.kill, err, out)
+			}
+
+			log := r.log()
+			rm := slices.Index(log, profiles+"rm --force cyfr")
+			if c.kill != "stop-cyfr" && (rm < 0 || slices.Index(log, profiles+"config --format json") >= 0 && slices.Index(log, profiles+"config --format json") < rm) {
+				t.Errorf("the stopped cyfr container was not removed before the configuration read:\n%s", strings.Join(log, "\n"))
+			}
+			snapshot, barred := restoreBarred(filepath.Join(r.project, ".env"))
+			if barred != c.barred || barred && snapshot != r.dir {
+				t.Errorf("killed at %s, .env bars %q (%v), want barred %v", c.kill, snapshot, barred, c.barred)
+			}
+			if got, want := read(t, filepath.Join(r.project, "data", "blobs", "x")), map[bool]string{true: "blob", false: "rewritten"}[c.landed]; got != want {
+				t.Errorf("killed at %s, blobs/x holds %q, want %q", c.kill, got, want)
+			}
+			switch {
+			case c.barred:
+				r.barred()
+			case !c.landed:
+				if got := read(t, filepath.Join(r.project, ".env")); got != editedEnv {
+					t.Errorf("killed before the bar, .env holds %q, want it as it was", got)
+				}
+			default:
+				if got := read(t, filepath.Join(r.project, ".env")); got != string(r.env) {
+					t.Errorf("killed after the declaration, .env holds %q, want the snapshot's", got)
+				}
+			}
+
+			// The lock a killed restore leaves names it; once removed, the
+			// restore runs again from the start and lowers the bar.
+			if err := os.Remove(filepath.Join(r.project, updateLockName)); err != nil {
+				t.Fatalf("the killed restore left no lock: %v", err)
+			}
+			if err := os.Remove(filepath.Join(r.fake, c.kill+".kill")); err != nil {
+				t.Fatal(err)
+			}
+			if out, err := r.restore(true); err != nil {
+				t.Fatalf("the restore run again: %v\n%s", err, out)
+			}
+			if _, barred := restoreBarred(filepath.Join(r.project, ".env")); barred {
+				t.Errorf("the restore run again left the bar up")
+			}
+			if got := read(t, filepath.Join(r.project, "data", "blobs", "x")); got != "blob" {
+				t.Errorf("the restore run again left blobs/x %q", got)
+			}
+		})
+	}
+}
+
+// A snapshot's compose file that does not give the cyfr service .env
+// refuses before any part lands: nothing would bar a start. The two files
+// go back as they were, which lowers the bar.
+func TestRestoreRefusesAConfigurationTheBarCannotReach(t *testing.T) {
+	r := newRestoreScenario(t, shippedCompose(t), nil, nil)
+	r.edit(".env", editedEnv)
+	r.edit("data/blobs/x", "rewritten")
+	r.answer("config.nobar", "")
+	before := read(t, filepath.Join(r.project, "docker-compose.yml"))
+	out, err := r.restore(true)
+	if err == nil || !strings.Contains(err.Error(), "does not take CYFR_RESTORE_INCOMPLETE from .env") || !strings.Contains(err.Error(), "nothing of the snapshot was put back") {
+		t.Fatalf("restore answered %v\n%s", err, out)
+	}
+	r.stoppedUndeclared()
+	r.configAsBefore(before, editedEnv)
+	if got := read(t, filepath.Join(r.project, "data", "blobs", "x")); got != "rewritten" {
+		t.Errorf("a part was put back: blobs/x holds %q", got)
+	}
+}
+
+// restoreBarred reads the bar from any assignment, quoted or not, since
+// compose takes a later assignment over an earlier one; withBarrier takes
+// every earlier assignment out, so the one it writes is the only one.
+func TestRestoreBarReadsEveryAssignment(t *testing.T) {
+	for text, want := range map[string]string{
+		"A=1\n":                      "",
+		"CYFR_RESTORE_INCOMPLETE=\n": "",
+		"CYFR_RESTORE_INCOMPLETE='/p/backups/x'\n":                 "/p/backups/x",
+		"CYFR_RESTORE_INCOMPLETE=\nCYFR_RESTORE_INCOMPLETE=/p/b\n": "/p/b",
+		"# CYFR_RESTORE_INCOMPLETE=/p/b\n":                         "",
+	} {
+		path := filepath.Join(t.TempDir(), ".env")
+		if err := os.WriteFile(path, []byte(text), 0600); err != nil {
+			t.Fatal(err)
+		}
+		if got, barred := restoreBarred(path); got != want || barred != (want != "") {
+			t.Errorf("restoreBarred(%q) = %q, %v; want %q", text, got, barred, want)
+		}
+	}
+	got := string(withBarrier([]byte("A=1\nCYFR_RESTORE_INCOMPLETE='old'\nB=2\nCYFR_RESTORE_INCOMPLETE=\n"), "/p/backups/x"))
+	if want := "A=1\nB=2\nCYFR_RESTORE_INCOMPLETE='/p/backups/x'\n"; got != want {
+		t.Errorf("withBarrier answered %q, want %q", got, want)
+	}
+	if got := string(withBarrier(nil, "/p/b")); got != "CYFR_RESTORE_INCOMPLETE='/p/b'\n" {
+		t.Errorf("withBarrier of no .env answered %q", got)
+	}
+}
+
+// The image's entrypoint refuses to run anything while the bar is set,
+// and runs the command when it is unset or empty, as the restore's own
+// offline evals set it; it spells the setting restoreBarrier names.
+func TestEntrypointRefusesWhileTheRestoreIsBarred(t *testing.T) {
+	entrypoint := filepath.Join("..", "..", "..", "docker-entrypoint.sh")
+	source, err := os.ReadFile(entrypoint)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(source), `[ -n "${`+restoreBarrier+`:-}" ]`) {
+		t.Fatalf("docker-entrypoint.sh does not test %s", restoreBarrier)
+	}
+	bin := t.TempDir()
+	ran := filepath.Join(bin, "ran")
+	for name, body := range map[string]string{
+		"setpriv": "#!/bin/sh\necho \"$@\" > " + ran + "\n",
+		"chown":   "#!/bin/sh\nexit 0\n",
+	} {
+		if err := os.WriteFile(filepath.Join(bin, name), []byte(body), 0755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	run := func(env ...string) (string, error) {
+		os.Remove(ran)
+		cmd := exec.Command("sh", entrypoint, "bin/cyfr", "start")
+		cmd.Env = append([]string{"PATH=" + bin + string(os.PathListSeparator) + os.Getenv("PATH")}, env...)
+		out, err := cmd.CombinedOutput()
+		return string(out), err
+	}
+	out, err := run(restoreBarrier + "=/p/backups/20261016T120000Z")
+	var exit *exec.ExitError
+	if !errors.As(err, &exit) || exit.ExitCode() != 78 || !strings.Contains(out, "has not been declared") || !strings.Contains(out, "cyfr restore /p/backups/20261016T120000Z") {
+		t.Errorf("the barred entrypoint answered %v:\n%s", err, out)
+	}
+	if _, err := os.Stat(ran); !errors.Is(err, fs.ErrNotExist) {
+		t.Errorf("the barred entrypoint ran its command")
+	}
+	for _, env := range [][]string{nil, {restoreBarrier + "="}} {
+		if out, err := run(env...); err != nil {
+			t.Errorf("the entrypoint with %v answered %v:\n%s", env, err, out)
+		}
+		if got := read(t, ran); !strings.Contains(got, "bin/cyfr start") {
+			t.Errorf("the entrypoint with %v ran %q, want the command", env, got)
+		}
 	}
 }

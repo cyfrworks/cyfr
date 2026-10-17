@@ -14,7 +14,9 @@ import (
 	"io/fs"
 	"maps"
 	"os"
+	"os/exec"
 	"os/signal"
+	"path"
 	"path/filepath"
 	"reflect"
 	"regexp"
@@ -297,7 +299,8 @@ func TestEnsureCyfrComposeFieldsKeepsTheLocusRoleBlock(t *testing.T) {
 // group of its own; it appends the compose file's hash and the count of
 // complete snapshots at the call to state. It answers each call from the
 // scenario's files: <key>.out on stdout and <key>.exit as its status;
-// <key>.signal sends SIGTERM to the updating process first and <key>.block
+// <key>.edit is appended to docker-compose.yml, as an edit made while the
+// update runs; <key>.signal sends SIGTERM to the updating process first and <key>.block
 // waits for <key>.release. eval.live answers that many live reads first.
 const fakeDocker = `#!/bin/bash
 d="$FAKE_DOCKER_DIR"
@@ -306,7 +309,10 @@ args=("$@")
 for ((i = 0; i < ${#args[@]}; i++)); do
   if [ "${args[i]}" = -e ]; then
     name="${args[i+1]}"
-    if [ -n "${!name+x}" ]; then note+=" {env $name set}"; else note+=" {env $name unset}"; fi
+    case "$name" in
+      *=*) ;;
+      *) if [ -n "${!name+x}" ]; then note+=" {env $name set}"; else note+=" {env $name unset}"; fi ;;
+    esac
   fi
 done
 read -r _ _ _ _ pgrp _ < /proc/$$/stat
@@ -314,6 +320,7 @@ read -r _ _ _ _ pgrp _ < /proc/$$/stat
 printf '%s%s\n' "$*" "$note" >> "$d/log"
 answer() {
   printf '%s %s %s\n' "$1" "$(md5sum < docker-compose.yml | cut -c1-32)" "$(ls backups/*/snapshot.json 2>/dev/null | wc -l)" >> "$d/state"
+  [ -f "$d/$1.edit" ] && cat "$d/$1.edit" >> docker-compose.yml
   [ -f "$d/$1.signal" ] && kill -TERM "$PPID"
   if [ -f "$d/$1.block" ]; then while [ ! -f "$d/$1.release" ]; do sleep 0.02; done; fi
   [ -f "$d/$1.out" ] && cat "$d/$1.out"
@@ -375,6 +382,63 @@ type updateScenario struct {
 	fake     string
 	compose  []byte
 	scaffold int
+	// scaffoldFail names the scaffold file whose write fails, the files
+	// before it written.
+	scaffoldFail string
+}
+
+// The scaffold files the scenarios' release manages: two the project
+// holds before the update, at oldScaffold, and one the update creates.
+var (
+	newScaffold = []struct{ name, content string }{
+		{"keeper.seccomp.json", `{"defaultAction":"SCMP_ACT_ERRNO","release":"0.9.0"}` + "\n"},
+		{"configuration-guide.md", "# Configuration 0.9.0\n"},
+		{"wit/cyfr/added.wit", "package cyfr:added;\n"},
+	}
+	oldScaffold = map[string]string{
+		"keeper.seccomp.json":    `{"defaultAction":"SCMP_ACT_ERRNO","release":"0.8.0"}` + "\n",
+		"configuration-guide.md": "# Configuration 0.8.0\n",
+	}
+)
+
+// fakeScaffold is the scenarios' release scaffold: Write writes
+// newScaffold into the project for real, logging SCAFFOLD WRITE.
+type fakeScaffold struct{ s *updateScenario }
+
+func (f fakeScaffold) Managed() []string {
+	var names []string
+	for _, file := range newScaffold {
+		names = append(names, file.name)
+	}
+	return names
+}
+
+func (f fakeScaffold) Write(overwriteManaged bool) error {
+	f.s.logLine("SCAFFOLD WRITE")
+	for _, file := range newScaffold {
+		if file.name == f.s.scaffoldFail {
+			return errors.New("no space left on device")
+		}
+		if err := os.MkdirAll(filepath.Dir(filepath.Join(f.s.project, file.name)), 0755); err != nil {
+			return err
+		}
+		if err := os.WriteFile(filepath.Join(f.s.project, file.name), []byte(file.content), 0644); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// logLine appends line to the fake docker's log.
+func (s *updateScenario) logLine(line string) {
+	f, err := os.OpenFile(filepath.Join(s.fake, "log"), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	if err != nil {
+		s.t.Fatal(err)
+	}
+	fmt.Fprintln(f, line)
+	if err := f.Close(); err != nil {
+		s.t.Fatal(err)
+	}
 }
 
 // shippedCompose is the repository's docker-compose.yml.
@@ -413,6 +477,9 @@ func newUpdateScenario(t *testing.T, compose []byte, env map[string]string) *upd
 	write("data/cyfr.db-shm", "sqlite-shm", 0644)
 	write("data/components/acme/c.wasm", "component-bytes", 0644)
 	write("data/blobs/x", "blob", 0600)
+	for name, content := range oldScaffold {
+		write(name, content, 0644)
+	}
 	if err := os.Symlink("components/acme", filepath.Join("data", "current")); err != nil {
 		t.Fatal(err)
 	}
@@ -440,24 +507,20 @@ func newUpdateScenario(t *testing.T, compose []byte, env map[string]string) *upd
 	s.answer("probe.out", "180006\n")
 	s.answer("dump.out", "PGDMP custom-format dump")
 
-	oldVersion, oldFetch, oldScaffold, oldNow := version.Version, fetchManifest, updateScaffold, updateNow
-	oldWindow, oldPoll := liveSlotsWindow, liveSlotsPoll
+	savedVersion, savedFetch, savedScaffold, savedNow := version.Version, fetchManifest, fetchScaffold, updateNow
+	savedWindow, savedPoll := liveSlotsWindow, liveSlotsPoll
 	t.Cleanup(func() {
-		version.Version, fetchManifest, updateScaffold, updateNow = oldVersion, oldFetch, oldScaffold, oldNow
-		liveSlotsWindow, liveSlotsPoll = oldWindow, oldPoll
+		version.Version, fetchManifest, fetchScaffold, updateNow = savedVersion, savedFetch, savedScaffold, savedNow
+		liveSlotsWindow, liveSlotsPoll = savedWindow, savedPoll
 	})
 	version.Version = testVersion
 	fetchManifest = func(ctx context.Context, v string) (*release.Manifest, error) {
 		return &release.Manifest{Version: v, Images: release.Images{Cyfr: digestCyfr, CyfrLocus: digestLocus, Caddy: digestCaddy}}, nil
 	}
-	updateScaffold = func(v string) error {
+	fetchScaffold = func(v string) (scaffoldRelease, error) {
 		s.scaffold++
-		f, err := os.OpenFile(filepath.Join(s.fake, "log"), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
-		if err != nil {
-			return err
-		}
-		fmt.Fprintf(f, "SCAFFOLD %s\n", v)
-		return f.Close()
+		s.logLine("SCAFFOLD FETCH " + v)
+		return fakeScaffold{s}, nil
 	}
 	updateNow = func() time.Time { return takenAt }
 	liveSlotsWindow, liveSlotsPoll = 400*time.Millisecond, 20*time.Millisecond
@@ -603,7 +666,7 @@ func TestUpdateRunsTheCeremonyInOrder(t *testing.T) {
 		"pull caddy@" + digestCaddy,
 		profiles + "ps --services --status running",
 		profiles + "exec -T cyfr bin/cyfr rpc " + testRoster,
-		"SCAFFOLD " + testVersion,
+		"SCAFFOLD FETCH " + testVersion,
 		profiles + "stop caddy",
 		profiles + "stop cyfr",
 		profiles + "stop locus-runtime",
@@ -614,6 +677,7 @@ func TestUpdateRunsTheCeremonyInOrder(t *testing.T) {
 		profiles + "stop",
 		profiles + "run --rm --no-deps -T cyfr bin/cyfr eval " + testLive,
 		profiles + "run --rm --no-deps -T cyfr bin/cyfr eval " + testLive,
+		"SCAFFOLD WRITE",
 		profiles + "up -d --wait --wait-timeout 900",
 	}
 	if got := s.log(); !slices.Equal(got, want) {
@@ -660,12 +724,14 @@ func TestUpdateRunsTheCeremonyInOrder(t *testing.T) {
 	checkMode(filepath.Join(s.project, "backups"), 0700)
 	checkMode(dir, 0700)
 	files := map[string]string{
-		"database":                       "sqlite-main",
-		"database-wal":                   "sqlite-wal",
-		".env":                           "CYFR_BEHIND_PROXY=true\nCYFR_LOCUS_BUILDS_URL=http://locus-builds:4100\nCYFR_PORT=4000\n",
-		"storage/components/acme/c.wasm": "component-bytes",
-		"storage/blobs/x":                "blob",
-		"compose":                        string(s.compose),
+		"database":                        "sqlite-main",
+		"database-wal":                    "sqlite-wal",
+		".env":                            "CYFR_BEHIND_PROXY=true\nCYFR_LOCUS_BUILDS_URL=http://locus-builds:4100\nCYFR_PORT=4000\n",
+		"storage/components/acme/c.wasm":  "component-bytes",
+		"storage/blobs/x":                 "blob",
+		"compose":                         string(s.compose),
+		"scaffold/keeper.seccomp.json":    oldScaffold["keeper.seccomp.json"],
+		"scaffold/configuration-guide.md": oldScaffold["configuration-guide.md"],
 	}
 	for name, content := range files {
 		path := filepath.Join(dir, name)
@@ -704,8 +770,9 @@ func TestUpdateRunsTheCeremonyInOrder(t *testing.T) {
 	wantSnapshot := map[string]any{
 		"version":         "0.8.0",
 		"taken_at":        "2026-10-16T12:00:00Z",
-		"parts":           []any{"database", "database-wal", "storage", "keyring", ".env", "compose"},
+		"parts":           []any{"database", "database-wal", "storage", "scaffold", "keyring", ".env", "compose"},
 		"storage_adapter": "local",
+		"scaffold":        []any{"keeper.seccomp.json", "configuration-guide.md", "wit/cyfr/added.wit"},
 		"complete":        true,
 	}
 	if !reflect.DeepEqual(snapshot, wantSnapshot) {
@@ -716,11 +783,29 @@ func TestUpdateRunsTheCeremonyInOrder(t *testing.T) {
 	for _, e := range entries {
 		names = append(names, e.Name())
 	}
-	if !slices.Equal(names, []string{".env", "compose", "database", "database-wal", "keyring", "snapshot.json", "storage"}) {
+	if !slices.Equal(names, []string{".env", "compose", "database", "database-wal", "keyring", "scaffold", "snapshot.json", "storage"}) {
 		t.Errorf("the snapshot holds %v", names)
 	}
+	// The snapshot holds the scaffold files as they stood before the
+	// update, and none the update created; the project holds the
+	// release's.
+	if _, err := os.Lstat(filepath.Join(dir, "scaffold", "wit")); !errors.Is(err, fs.ErrNotExist) {
+		t.Errorf("the snapshot holds a scaffold file the update created (%v)", err)
+	}
+	for _, file := range newScaffold {
+		if got := read(t, filepath.Join(s.project, file.name)); got != file.content {
+			t.Errorf("the updated project's %s holds %q, want the release's", file.name, got)
+		}
+	}
+	if got := read(t, filepath.Join(s.project, "backups", ".gitignore")); !strings.Contains(got, "\n*\n") {
+		t.Errorf("backups/.gitignore is %q, want it to ignore everything", got)
+	}
 
-	for _, line := range []string{"stopped caddy in ", "stopped cyfr in ", "stopped locus-backends-guard in ", "stopped sidecar in ", "Updated to release 0.9.0.", "Snapshot of release 0.8.0: " + dir} {
+	if !slices.Equal(snapshotParts, []string{"database", "database-wal", "storage", "scaffold", "keyring", ".env", "compose"}) {
+		t.Errorf("snapshotParts %v is not the roster this snapshot was taken with", snapshotParts)
+	}
+	storageRoot := "Storage root /app/data is " + filepath.Join(s.project, "data") + " on the host."
+	for _, line := range []string{storageRoot, "stopped caddy in ", "stopped cyfr in ", "stopped locus-backends-guard in ", "stopped sidecar in ", "Updated to release 0.9.0.", "Snapshot of release 0.8.0: " + dir} {
 		if !strings.Contains(out, line) {
 			t.Errorf("the output lacks %q:\n%s", line, out)
 		}
@@ -748,7 +833,7 @@ func TestUpdateDumpsPostgresWithoutTheURLOnArgv(t *testing.T) {
 	dump := `run --rm --network host -e CYFR_UPDATE_PG_URL postgres:18 sh -c exec pg_dump --format=custom --no-owner "$CYFR_UPDATE_PG_URL" {env CYFR_UPDATE_PG_URL set}`
 	log := s.log()
 	at := func(line string) int { return slices.Index(log, line) }
-	if at(profiles+"config --format json") != 0 || at(probe) != 1 || at("pull postgres:18") < 2 || at("pull postgres:18") > at("SCAFFOLD 0.9.0") {
+	if at(profiles+"config --format json") != 0 || at(probe) != 1 || at("pull postgres:18") < 2 || at("pull postgres:18") > at("SCAFFOLD FETCH 0.9.0") {
 		t.Errorf("the probe does not run before the pulls, the dump image among them:\n%s", strings.Join(log, "\n"))
 	}
 	eval := at(profiles + "run --rm --no-deps -T cyfr bin/cyfr eval " + testLive)
@@ -764,7 +849,7 @@ func TestUpdateDumpsPostgresWithoutTheURLOnArgv(t *testing.T) {
 	}
 	var snapshot snapshotManifest
 	data, _ := os.ReadFile(filepath.Join(s.snapshotDir(), "snapshot.json"))
-	if json.Unmarshal(data, &snapshot) != nil || !slices.Equal(snapshot.Parts, []string{"database", "storage", "keyring", ".env", "compose"}) {
+	if json.Unmarshal(data, &snapshot) != nil || !slices.Equal(snapshot.Parts, []string{"database", "storage", "scaffold", "keyring", ".env", "compose"}) {
 		t.Errorf("snapshot.json is %s", data)
 	}
 	// The SQLite files under the storage root are not the database here and
@@ -789,7 +874,7 @@ func TestUpdateSnapshotsWithoutTheS3Store(t *testing.T) {
 	}
 	var snapshot snapshotManifest
 	data, _ := os.ReadFile(filepath.Join(s.snapshotDir(), "snapshot.json"))
-	if json.Unmarshal(data, &snapshot) != nil || snapshot.StorageAdapter != "s3" || !slices.Equal(snapshot.Parts, []string{"database", "database-wal", "keyring", ".env", "compose"}) {
+	if json.Unmarshal(data, &snapshot) != nil || snapshot.StorageAdapter != "s3" || !slices.Equal(snapshot.Parts, []string{"database", "database-wal", "scaffold", "keyring", ".env", "compose"}) {
 		t.Errorf("snapshot.json is %s", data)
 	}
 }
@@ -1548,4 +1633,200 @@ func TestUpdateSnapshotsNestedMountsInAnyOrder(t *testing.T) {
 			t.Errorf("storage/%s, a covered file, is in the snapshot (%v)", rel, err)
 		}
 	}
+}
+
+// A failure writing the scaffold files, or a switch that fails after them,
+// puts every scaffold file back from the snapshot, the one the update
+// created removed, and starts the old stack again under its own files.
+func TestUpdatePutsTheScaffoldBackWhenTheSwitchFails(t *testing.T) {
+	for name, prepare := range map[string]func(s *updateScenario){
+		"the scaffold write": func(s *updateScenario) { s.scaffoldFail = "wit/cyfr/added.wit" },
+		"the switch":         func(s *updateScenario) { s.answer("stop-cyfr.edit", "# edited while the update ran\n") },
+	} {
+		t.Run(name, func(t *testing.T) {
+			s := newUpdateScenario(t, shippedCompose(t), nil)
+			prepare(s)
+			out, err := s.run(context.Background())
+			if err == nil || !strings.Contains(err.Error(), "the scaffold files were put back from the snapshot "+s.snapshotDir()) || !strings.Contains(err.Error(), "The old stack was started again") {
+				t.Fatalf("update answered %v\n%s", err, out)
+			}
+			if !s.hasCall(profiles+"start") || s.hasCall(profiles+"up") {
+				t.Errorf("the old stack was not started again, or the new one was:\n%s", strings.Join(s.log(), "\n"))
+			}
+			for name, content := range oldScaffold {
+				if got := read(t, filepath.Join(s.project, name)); got != content {
+					t.Errorf("%s holds %q, want it as it stood before the update", name, got)
+				}
+			}
+			if got := read(t, filepath.Join(s.project, "wit", "cyfr", "added.wit")); got != "<absent>" {
+				t.Errorf("the scaffold file the update created stayed: %q", got)
+			}
+		})
+	}
+
+	// Scaffold files that cannot be put back leave the stack stopped: the
+	// old stack never starts under the release's files.
+	s := newUpdateScenario(t, shippedCompose(t), nil)
+	s.scaffoldFail = "wit/cyfr/added.wit"
+	saved := fetchScaffold
+	fetchScaffold = func(v string) (scaffoldRelease, error) {
+		r, err := saved(v)
+		return unreadableSnapshot{r, s}, err
+	}
+	out, err := s.run(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "could not be put back from the snapshot") || !strings.Contains(err.Error(), "left stopped") || !strings.Contains(err.Error(), "cyfr restore "+s.snapshotDir()) {
+		t.Fatalf("update answered %v\n%s", err, out)
+	}
+	if s.hasCall(profiles+"start") || s.hasCall(profiles+"up") {
+		t.Errorf("a stack was started under scaffold files not put back:\n%s", strings.Join(s.log(), "\n"))
+	}
+}
+
+// unreadableSnapshot is a scaffold whose Write first turns the snapshot's
+// copy of the seccomp profile into a directory, which does not read as the
+// file, then writes as fakeScaffold does.
+type unreadableSnapshot struct {
+	scaffoldRelease
+	s *updateScenario
+}
+
+func (u unreadableSnapshot) Write(overwriteManaged bool) error {
+	held := filepath.Join(u.s.snapshotDir(), "scaffold", "keeper.seccomp.json")
+	if err := os.Remove(held); err != nil {
+		return err
+	}
+	if err := os.Mkdir(held, 0700); err != nil {
+		return err
+	}
+	return u.scaffoldRelease.Write(overwriteManaged)
+}
+
+// A restore that has not been declared refuses the update before anything
+// is pulled or stopped.
+func TestUpdateRefusesAnUndeclaredRestore(t *testing.T) {
+	s := newUpdateScenario(t, shippedCompose(t), map[string]string{restoreBarrier: "/p/backups/20261016T120000Z"})
+	out, err := s.run(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "has not finished") || !strings.Contains(err.Error(), "cyfr restore /p/backups/20261016T120000Z") {
+		t.Fatalf("update answered %v\n%s", err, out)
+	}
+	s.nothingStopped()
+	s.noBackups()
+	if s.hasCall("pull ") || s.scaffold != 0 {
+		t.Errorf("the update pulled or fetched the scaffold before refusing:\n%s", strings.Join(s.log(), "\n"))
+	}
+}
+
+// opusProbeCompose is the assessment probe's project: a cyfr service whose
+// data mount has another source than the default.
+const opusProbeCompose = `services:
+  cyfr:
+    image: alpine:3.22
+    container_name: cyfr
+    env_file:
+      - .env
+    ports:
+      - "127.0.0.1:${CYFR_PORT:-4000}:${CYFR_PORT:-4000}"
+    volumes:
+VOLUMES`
+
+// A mount at a default's container target, whatever its syntax, keeps its
+// source: no second mount at /app/data or /app/seed/aqua is added beside
+// it, so compose resolves the target to the customized source, before and
+// after. A target bound by no entry gets the default once.
+func TestEnsureCyfrComposeFieldsKeepsACustomizedMount(t *testing.T) {
+	cases := map[string]struct{ volumes, env string }{
+		"short":              {"      - ./alternate-data:/app/data\n      - ./my-aqua:/app/seed/aqua\n", ""},
+		"short with options": {"      - ./alternate-data:/app/data:rw,z\n      - ./my-aqua:/app/seed/aqua:ro\n", ""},
+		"trailing slash":     {"      - ./alternate-data:/app/data/\n      - ./my-aqua:/app/seed/aqua/\n", ""},
+		"long": {"      - type: bind\n        source: ./alternate-data\n        target: /app/data\n" +
+			"      - type: bind\n        source: ./my-aqua\n        target: /app/seed/aqua\n        read_only: true\n", ""},
+		"interpolated source": {"      - ${DATA_DIR:-./alternate-data}:/app/data\n      - ./my-aqua:/app/seed/aqua\n", ""},
+		"interpolated target": {"      - ./alternate-data:${DATA_TARGET}\n      - ./my-aqua:/app/seed/aqua\n", "DATA_TARGET=/app/data\n"},
+	}
+	for name, c := range cases {
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+			path := filepath.Join(dir, "docker-compose.yml")
+			input := strings.Replace(opusProbeCompose, "VOLUMES", c.volumes, 1)
+			if err := os.WriteFile(path, []byte(input), 0644); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(dir, ".env"), []byte("CYFR_PORT=4000\n"+c.env), 0600); err != nil {
+				t.Fatal(err)
+			}
+			before := resolvedDataSource(t, dir)
+			added, err := ensureCyfrComposeFields(path)
+			if err != nil || len(added) != 0 {
+				t.Fatalf("ensureCyfrComposeFields added %v (error %v) to a project binding both targets", added, err)
+			}
+			if got, _ := os.ReadFile(path); string(got) != input {
+				t.Errorf("docker-compose.yml was rewritten:\n%s", got)
+			}
+			if after := resolvedDataSource(t, dir); before != "" && after != before {
+				t.Errorf("compose resolves /app/data to %s after the update, %s before", after, before)
+			}
+		})
+	}
+
+	// An anchored entry is read through its alias.
+	t.Run("alias", func(t *testing.T) {
+		dir := t.TempDir()
+		path := filepath.Join(dir, "docker-compose.yml")
+		input := "x-data: &data ./alternate-data:/app/data\n" + strings.Replace(opusProbeCompose, "VOLUMES", "      - *data\n      - ./my-aqua:/app/seed/aqua\n", 1)
+		if err := os.WriteFile(path, []byte(input), 0644); err != nil {
+			t.Fatal(err)
+		}
+		if added, err := ensureCyfrComposeFields(path); err != nil || len(added) != 0 {
+			t.Fatalf("ensureCyfrComposeFields added %v (error %v)", added, err)
+		}
+	})
+
+	// The defaults land once, and a second run adds nothing.
+	t.Run("missing", func(t *testing.T) {
+		dir := t.TempDir()
+		path := filepath.Join(dir, "docker-compose.yml")
+		if err := os.WriteFile(path, []byte(strings.Replace(opusProbeCompose, "    volumes:\nVOLUMES", "", 1)), 0644); err != nil {
+			t.Fatal(err)
+		}
+		added, err := ensureCyfrComposeFields(path)
+		if err != nil || !slices.Equal(added, []string{"volumes: ./data:/app/data", "volumes: ./aqua:/app/seed/aqua"}) {
+			t.Fatalf("ensureCyfrComposeFields added %v (error %v)", added, err)
+		}
+		if added, err := ensureCyfrComposeFields(path); err != nil || len(added) != 0 {
+			t.Errorf("a second run added %v (error %v)", added, err)
+		}
+		got, _ := os.ReadFile(path)
+		if n := strings.Count(string(got), ":/app/data"); n != 1 {
+			t.Errorf("docker-compose.yml mounts /app/data %d times:\n%s", n, got)
+		}
+	})
+}
+
+// resolvedDataSource answers the source compose resolves the cyfr
+// service's /app/data mount to in the project at dir, "" when no docker
+// compose is on PATH to ask.
+func resolvedDataSource(t *testing.T, dir string) string {
+	t.Helper()
+	if exec.Command("docker", "compose", "version").Run() != nil {
+		t.Log("no docker compose on PATH: the resolution is not compared")
+		return ""
+	}
+	out, err := exec.Command("docker", "compose", "--project-directory", dir, "-f", filepath.Join(dir, "docker-compose.yml"), "config", "--format", "json").Output()
+	if err != nil {
+		t.Fatalf("docker compose config: %v", err)
+	}
+	var config composeConfig
+	if err := json.Unmarshal(out, &config); err != nil {
+		t.Fatal(err)
+	}
+	var sources []string
+	for _, v := range config.Services["cyfr"].Volumes {
+		if path.Clean(v.Target) == "/app/data" {
+			sources = append(sources, v.Source)
+		}
+	}
+	if len(sources) != 1 || !strings.HasSuffix(sources[0], "alternate-data") {
+		t.Errorf("compose resolves /app/data to %v, want the customized source alone", sources)
+	}
+	return strings.Join(sources, ",")
 }

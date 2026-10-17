@@ -99,7 +99,7 @@ func TestLatestNoReleases(t *testing.T) {
 	}
 }
 
-// `cyfr upgrade` interpolates the tag into a shell command line, so a tag
+// `cyfr upgrade` names release URLs and file names from the tag, so a tag
 // that is not plain MAJOR.MINOR.PATCH must never be selected.
 func TestLatestRejectsShellMetacharacters(t *testing.T) {
 	withAPIURL(t, `[
@@ -115,5 +115,26 @@ func TestLatestRejectsShellMetacharacters(t *testing.T) {
 	}
 	if got != "0.5.4" {
 		t.Errorf("Latest = %q, want %q", got, "0.5.4")
+	}
+}
+
+// The greatest version wins whatever order the API lists releases in: a
+// later-published patch of an older line is not the latest, versions
+// compare numerically, and drafts and pre-releases are skipped.
+func TestLatestPicksTheGreatestVersion(t *testing.T) {
+	withAPIURL(t, `[
+		{"tag_name": "0.5.12"},
+		{"tag_name": "0.11.0", "draft": true},
+		{"tag_name": "0.10.0", "prerelease": true},
+		{"tag_name": "0.9.1"},
+		{"tag_name": "0.6.3"}
+	]`, http.StatusOK)
+
+	got, err := Latest(context.Background())
+	if err != nil {
+		t.Fatalf("Latest returned error: %v", err)
+	}
+	if got != "0.9.1" {
+		t.Errorf("Latest = %q, want %q", got, "0.9.1")
 	}
 }

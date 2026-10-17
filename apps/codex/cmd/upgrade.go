@@ -5,13 +5,14 @@ package cmd
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
-	"syscall"
 	"time"
 
 	"github.com/cyfr/codex/internal/release"
@@ -26,120 +27,154 @@ func init() {
 var upgradeCmd = &cobra.Command{
 	Use:     "upgrade",
 	Short:   "Upgrade the CYFR Codex binary",
-	Long:    "Upgrade the CYFR Codex binary (system-wide). Run 'cyfr update' in each project directory to pull the latest Docker image and update scaffold files.",
+	Long:    "Upgrade the CYFR Codex binary (system-wide) to the newest release, when it is newer than this one. A Homebrew cask install upgrades through brew; any other install downloads the release's archive for this platform, verifies it against the release's checksums.txt signed by the release workflow for that tag, and only then replaces this binary in place. Run 'cyfr update' in each project directory to pull the latest Docker image and update scaffold files.",
 	GroupID: "server",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		// Find the latest published CYFR release (bare-semver version).
-		ctx, cancel := context.WithTimeout(cmd.Context(), 30*time.Second)
-		defer cancel()
-		latest, err := release.Latest(ctx)
-		if err != nil {
-			return fmt.Errorf("Failed to check for updates: %w", err)
-		}
-
-		// Compare to the current version — only upgrade if not already current.
-		current := strings.TrimPrefix(version.Version, "v")
-		cliUpToDate := current == latest
-
-		if cliUpToDate {
-			fmt.Printf("CYFR Codex already up to date (%s)\n", current)
-		} else {
-			fmt.Printf("Upgrading CYFR Codex from %s to %s...\n", current, latest)
-
-			// Check if installed via the Homebrew cask (--cask avoids the same-name formula->cask ambiguity)
-			brewPath, err := exec.LookPath("brew")
-			brewInstall := false
-			if err == nil && brewPath != "" {
-				check := exec.Command("brew", "list", "--cask", "cyfr")
-				check.Stdout = nil
-				check.Stderr = nil
-				if check.Run() == nil {
-					brewInstall = true
-				}
-			}
-
-			if brewInstall {
-				update := exec.Command("brew", "update")
-				update.Stdout = os.Stdout
-				update.Stderr = os.Stderr
-				if err := update.Run(); err != nil {
-					return fmt.Errorf("brew update failed: %w", err)
-				}
-
-				upgrade := exec.Command("brew", "upgrade", "--cask", "cyfr")
-				upgrade.Stdout = os.Stdout
-				upgrade.Stderr = os.Stderr
-				upgradeErr := upgrade.Run()
-
-				// Homebrew can exit successfully without changing the installed version.
-				// Verify the installed version before reporting an upgrade.
-				switch installed := installedCaskVersion(); {
-				case upgradeErr != nil:
-					fmt.Printf("Warning: brew upgrade --cask cyfr: %v\n", upgradeErr)
-				case installed == latest:
-					fmt.Printf("CYFR Codex upgraded to %s\n", latest)
-				case installed != "":
-					fmt.Printf("Warning: brew exited cleanly but cyfr is still %s (expected %s).\n", installed, latest)
-					fmt.Println("  Try `brew update-reset` then `cyfr upgrade` again, or reinstall with `brew uninstall --cask cyfr && brew install --cask cyfr`.")
-				default:
-					fmt.Println("Warning: could not verify the installed cyfr version; check with `brew list --cask --versions cyfr`.")
-				}
-			} else {
-				// Install to the same directory as the currently running binary
-				// so upgrades don't create duplicates in different locations.
-				fmt.Println("Upgrading via install script...")
-				env := os.Environ()
-				if selfPath, err := os.Executable(); err == nil {
-					env = append(env, "CYFR_INSTALL_DIR="+filepath.Dir(selfPath))
-				}
-				// Install exactly the release we resolved, not whatever the
-				// installer would re-resolve as latest in the meantime.
-				env = append(env, "CYFR_VERSION="+latest)
-				// Fetch the installer pinned to the resolved release's asset.
-				// Piping main-branch HEAD would let a repo compromise on main
-				// alter the installer for every upgrader without a release ever
-				// being cut.
-				installerURL := fmt.Sprintf("https://github.com/cyfrworks/cyfr/releases/download/%s/install.sh", latest)
-				// On Linux, `cp /tmp/cyfr /usr/local/bin/cyfr` fails with
-				// "text file busy" if the destination is a binary that's
-				// currently being executed — and that's exactly us. Hand off
-				// via execve(2) so this Go process is gone (and its mapping
-				// of /usr/local/bin/cyfr released) by the time the installer
-				// runs cp. We tack on the post-install reminder via the same
-				// shell command since after exec we can't print anything more.
-				// Windows has no execve; fall back to cmd.Run there.
-				cmdline := fmt.Sprintf("curl -fsSL %s | sh", installerURL) +
-					" && printf '\\nRun '\\''cyfr update'\\'' in each project directory to pull the latest Docker images and update scaffold files.\\n'"
-
-				if runtime.GOOS == "windows" {
-					script := exec.Command("sh", "-c", cmdline)
-					script.Stdout = os.Stdout
-					script.Stderr = os.Stderr
-					script.Env = env
-					if err := script.Run(); err != nil {
-						fmt.Printf("Install script failed: %v\n", err)
-						fmt.Printf("Download manually from: https://github.com/cyfrworks/cyfr/releases/tag/%s\n", latest)
-					}
-					return nil
-				}
-
-				shPath, err := exec.LookPath("sh")
-				if err != nil {
-					return fmt.Errorf("sh not found in PATH: %w", err)
-				}
-				// syscall.Exec replaces this process; control never returns on
-				// success. The installer's stdout/stderr inherit our terminal.
-				if err := syscall.Exec(shPath, []string{"sh", "-c", cmdline}, env); err != nil {
-					fmt.Printf("Failed to launch installer: %v\n", err)
-					fmt.Printf("Download manually from: https://github.com/cyfrworks/cyfr/releases/tag/%s\n", latest)
-				}
-				return nil
-			}
-		}
-
-		fmt.Println("\nRun 'cyfr update' in each project directory to pull the latest Docker images and update scaffold files.")
-		return nil
+		return runUpgrade(cmd.Context(), cmd.OutOrStdout())
 	},
+}
+
+// The release lookups and the install, each a package variable so tests
+// substitute them.
+var (
+	latestRelease = release.Latest
+	fetchBinary   = release.FetchBinary
+	caskInstalled = func() bool {
+		if _, err := exec.LookPath("brew"); err != nil {
+			return false
+		}
+		// --cask avoids the same-name formula->cask ambiguity.
+		return exec.Command("brew", "list", "--cask", "cyfr").Run() == nil
+	}
+	selfExecutable = os.Executable
+)
+
+// fetchBinaryTimeout bounds the archive's download and verification.
+const fetchBinaryTimeout = 10 * time.Minute
+
+const updateReminder = "Run 'cyfr update' in each project directory to pull the latest Docker images and update scaffold files."
+
+// runUpgrade is `cyfr upgrade`. A release is installed only when
+// release.IsNewer says it is newer than this one, so an older line's later
+// patch never downgrades the CLI and a development build is never
+// replaced. Outside Homebrew, nothing is written before the archive
+// verifies, and the binary is replaced by a rename, so a failure leaves
+// the running one in place.
+func runUpgrade(ctx context.Context, out io.Writer) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	lookup, cancel := context.WithTimeout(ctx, 30*time.Second)
+	latest, err := latestRelease(lookup)
+	cancel()
+	if err != nil {
+		return fmt.Errorf("Failed to check for updates: %w", err)
+	}
+
+	current := strings.TrimPrefix(version.Version, "v")
+	switch {
+	case current == latest:
+		fmt.Fprintf(out, "CYFR Codex already up to date (%s)\n", current)
+		fmt.Fprintln(out, "\n"+updateReminder)
+		return nil
+	case !release.IsNewer(latest, current):
+		fmt.Fprintf(out, "CYFR Codex %s is not older than the latest release %s; nothing was upgraded.\n", current, latest)
+		return nil
+	}
+	fmt.Fprintf(out, "Upgrading CYFR Codex from %s to %s...\n", current, latest)
+
+	if caskInstalled() {
+		return upgradeCask(out, latest)
+	}
+
+	self, err := selfExecutable()
+	if err == nil {
+		self, err = filepath.EvalSymlinks(self)
+	}
+	if err != nil {
+		return fmt.Errorf("cyfr upgrade could not find its own binary (%v); nothing was upgraded", err)
+	}
+	fmt.Fprintf(out, "Downloading and verifying release %s for %s/%s...\n", latest, runtime.GOOS, runtime.GOARCH)
+	fetch, cancel := context.WithTimeout(ctx, fetchBinaryTimeout)
+	binary, err := fetchBinary(fetch, latest, runtime.GOOS, runtime.GOARCH)
+	cancel()
+	switch {
+	case errors.Is(err, release.ErrUnverified):
+		return fmt.Errorf("Release %s did not verify (%v); %s is unchanged", latest, err, self)
+	case err != nil:
+		return fmt.Errorf("cyfr upgrade could not download release %s (%v); %s is unchanged. Download it from https://github.com/cyfrworks/cyfr/releases/tag/%s", latest, err, self, latest)
+	}
+	if err := replaceExecutable(self, binary); err != nil {
+		return fmt.Errorf("Release %s verified but could not be installed at %s (%v); the binary there is unchanged. Run 'sudo cyfr upgrade' if its directory is not yours to write", latest, self, err)
+	}
+	fmt.Fprintf(out, "CYFR Codex upgraded to %s (%s)\n", latest, self)
+	fmt.Fprintln(out, "\n"+updateReminder)
+	return nil
+}
+
+// upgradeCask upgrades a Homebrew cask install and checks the version brew
+// installed.
+func upgradeCask(out io.Writer, latest string) error {
+	update := exec.Command("brew", "update")
+	update.Stdout = out
+	update.Stderr = os.Stderr
+	if err := update.Run(); err != nil {
+		return fmt.Errorf("brew update failed: %w", err)
+	}
+
+	upgrade := exec.Command("brew", "upgrade", "--cask", "cyfr")
+	upgrade.Stdout = out
+	upgrade.Stderr = os.Stderr
+	upgradeErr := upgrade.Run()
+
+	// Homebrew can exit successfully without changing the installed version.
+	// Verify the installed version before reporting an upgrade.
+	switch installed := installedCaskVersion(); {
+	case upgradeErr != nil:
+		fmt.Fprintf(out, "Warning: brew upgrade --cask cyfr: %v\n", upgradeErr)
+	case installed == latest:
+		fmt.Fprintf(out, "CYFR Codex upgraded to %s\n", latest)
+	case installed != "":
+		fmt.Fprintf(out, "Warning: brew exited cleanly but cyfr is still %s (expected %s).\n", installed, latest)
+		fmt.Fprintln(out, "  Try `brew update-reset` then `cyfr upgrade` again, or reinstall with `brew uninstall --cask cyfr && brew install --cask cyfr`.")
+	default:
+		fmt.Fprintln(out, "Warning: could not verify the installed cyfr version; check with `brew list --cask --versions cyfr`.")
+	}
+	fmt.Fprintln(out, "\n"+updateReminder)
+	return nil
+}
+
+// replaceExecutable writes binary beside self, synced and with self's
+// mode, and renames it over self, so self is the old binary or the new one
+// whole; renaming over a running binary is allowed where writing into it is
+// not. Windows cannot rename over a running executable, so there the old
+// one is renamed aside first and back again if the new one does not land.
+func replaceExecutable(self string, binary []byte) error {
+	mode := os.FileMode(0755)
+	if info, err := os.Stat(self); err == nil {
+		mode = info.Mode().Perm() | 0100
+	}
+	tmp, err := os.CreateTemp(filepath.Dir(self), "."+filepath.Base(self)+".upgrade-*")
+	if err != nil {
+		return err
+	}
+	defer os.Remove(tmp.Name())
+	_, err = tmp.Write(binary)
+	if err = errors.Join(err, tmp.Chmod(mode), tmp.Sync(), tmp.Close()); err != nil {
+		return err
+	}
+	if runtime.GOOS != "windows" {
+		return os.Rename(tmp.Name(), self)
+	}
+	aside := self + ".old"
+	os.Remove(aside)
+	if err := os.Rename(self, aside); err != nil {
+		return err
+	}
+	if err := os.Rename(tmp.Name(), self); err != nil {
+		return errors.Join(err, os.Rename(aside, self))
+	}
+	return nil
 }
 
 // installedCaskVersion returns the version Homebrew reports for the cyfr cask

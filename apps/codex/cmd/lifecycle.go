@@ -524,15 +524,8 @@ database_path: ./data/cyfr.db
 
 		// Generate .gitignore if it doesn't already exist (idempotent)
 		gitignoreCreated := false
-		gitignoreContent := `# CYFR project — all runtime state (every athanor's data and
-# components, the database, caches) lives under data/.
-/data/
-.env
-.env.local
-.env.*.local
-`
 		if _, err := os.Stat(".gitignore"); os.IsNotExist(err) {
-			if err := os.WriteFile(".gitignore", []byte(gitignoreContent), 0644); err != nil {
+			if err := os.WriteFile(".gitignore", []byte(projectGitignore), 0644); err != nil {
 				return fmt.Errorf("Failed to write .gitignore: %w", err)
 			}
 			gitignoreCreated = true
@@ -616,6 +609,20 @@ database_path: ./data/cyfr.db
 		return nil
 	},
 }
+
+// projectGitignore is the .gitignore `cyfr init` writes into a project that
+// has none: the runtime state under data/, the snapshots `cyfr update`
+// takes under backups/ (each holds the keyring and the database) and the
+// environment files.
+const projectGitignore = `# CYFR project — all runtime state (every athanor's data and
+# components, the database, caches) lives under data/.
+/data/
+# Snapshots cyfr update takes: each holds the keyring and the database.
+/backups/
+.env
+.env.local
+.env.*.local
+`
 
 // fileExists reports whether path exists (file or directory).
 func fileExists(path string) bool {
@@ -776,6 +783,9 @@ cyfr, locus-runtime and locus-backends always start. locus-builds starts when CY
 
 		// `cyfr init` writes CYFR_BEHIND_PROXY=true into .env on TLS-yes;
 		// .env's settings select the caddy and locus-builds profiles here.
+		if snapshot, barred := restoreBarred(".env"); barred {
+			return fmt.Errorf("A cyfr restore of %s has not been declared (%s is set in .env), so the stack must not start: the restored database would keep every credential the backup carried. Run 'cyfr restore %s' again, which puts every part back from the start and declares it", snapshot, restoreBarrier, snapshot)
+		}
 		profiles := composeProfiles(".env")
 		tls := slices.Contains(profiles, "tls")
 		composeArgs := append(append([]string{"compose"}, profileArgs(profiles)...), "up", "-d")
@@ -851,6 +861,23 @@ var downCmd = &cobra.Command{
 		fmt.Println("CYFR server stopped.")
 		return nil
 	},
+}
+
+// restoreBarred reports whether the dotenv file at path sets
+// restoreBarrier non-empty on any of its assignments, and the snapshot the
+// first such one names.
+func restoreBarred(path string) (string, bool) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return "", false
+	}
+	f := parseEnvFile(string(data))
+	for _, i := range f.assignments(restoreBarrier) {
+		if value, _ := (&envFile{lines: f.lines[i : i+1]}).value(restoreBarrier); value != "" {
+			return value, true
+		}
+	}
+	return "", false
 }
 
 // envFlagTrue reports whether `key=` in the dotenv-style file `path` is a
