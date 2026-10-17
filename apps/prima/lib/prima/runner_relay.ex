@@ -146,7 +146,7 @@ defmodule Prima.RunnerRelay do
   The channel is at fault on any refusal, and nothing after it is read.
   """
 
-  alias Prima.{HostAPI, PinnedTarget}
+  alias Prima.{AttachedRequest, HostAPI, PinnedTarget}
 
   @version 1
 
@@ -157,11 +157,12 @@ defmodule Prima.RunnerRelay do
   # @max_header_name_bytes and @max_header_value_bytes, a path of at most
   # @max_path_bytes) keep them under the margin.
   @max_frame_bytes 8 * 1024 * 1024
-  @max_headers 128
-  @max_header_name_bytes 256
-  @max_header_value_bytes 8192
+  # A fetch's head is held to the attached request's bounds, its owner.
+  @max_headers AttachedRequest.max_headers()
+  @max_header_name_bytes AttachedRequest.max_header_name_bytes()
+  @max_header_value_bytes AttachedRequest.max_header_value_bytes()
   @max_path_bytes 8192
-  @max_url_bytes 8192
+  @max_url_bytes AttachedRequest.max_url_bytes()
   @max_signed_header_bytes Prima.WorkerAuth.max_host_call_header_bytes()
   @max_answer_frame_bytes Prima.WorkerAuth.max_frame_bytes()
 
@@ -411,7 +412,7 @@ defmodule Prima.RunnerRelay do
   defp write(:op, _name, op) when op in @ops, do: Atom.to_string(op)
 
   defp write(:call_id, name, value),
-    do: if(Prima.AttachedRequest.valid_call_id?(value), do: value, else: invalid(name))
+    do: if(AttachedRequest.valid_call_id?(value), do: value, else: invalid(name))
 
   defp write(:connection, name, value), do: write_matching(@connection, name, value)
   defp write(:purpose, _name, value) when value in @purposes, do: value
@@ -598,7 +599,7 @@ defmodule Prima.RunnerRelay do
   end
 
   defp read(:call_id, name, value) when is_binary(value) do
-    if Prima.AttachedRequest.valid_call_id?(value),
+    if AttachedRequest.valid_call_id?(value),
       do: {:ok, value},
       else: {:error, {:invalid_field, name}}
   end

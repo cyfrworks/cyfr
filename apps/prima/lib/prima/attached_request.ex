@@ -93,6 +93,26 @@ defmodule Prima.AttachedRequest do
   def purposes, do: [:fetch, :stream]
 
   @doc """
+  The most headers a request's head carries. A fetch's head is held to the
+  same bounds wherever it travels, the runner relay's included
+  (`Prima.RunnerRelay`), so they are spelled here alone.
+  """
+  @spec max_headers() :: pos_integer()
+  def max_headers, do: @max_headers
+
+  @doc "The longest header name a request's head carries, in bytes."
+  @spec max_header_name_bytes() :: pos_integer()
+  def max_header_name_bytes, do: @max_header_name_bytes
+
+  @doc "The longest header value a request's head carries, in bytes."
+  @spec max_header_value_bytes() :: pos_integer()
+  def max_header_value_bytes, do: @max_header_value_bytes
+
+  @doc "The longest URL a request names, in bytes."
+  @spec max_url_bytes() :: pos_integer()
+  def max_url_bytes, do: @max_url_bytes
+
+  @doc """
   Whether `call_id` is a call id: 16 bytes as unpadded base64url, spelled
   exactly as encoding those bytes spells them.
   """

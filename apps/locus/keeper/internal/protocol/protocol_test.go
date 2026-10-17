@@ -25,12 +25,16 @@ type frameVector struct {
 }
 
 type vectors struct {
-	ReservedEnvPrefixes []string          `json:"reserved_env_prefixes"`
-	Frames              []frameVector     `json:"frames"`
-	ControlFrames       []frameVector     `json:"control_frames"`
-	RelayFrames         []frameVector     `json:"relay_frames"`
-	ValidRequests       []json.RawMessage `json:"valid_requests"`
-	InvalidRequests     []struct {
+	ReservedEnvPrefixes []string `json:"reserved_env_prefixes"`
+	Bounds              struct {
+		MaxFramePayloadBytes int `json:"max_frame_payload_bytes"`
+		MaxLineBytes         int `json:"max_line_bytes"`
+	} `json:"bounds"`
+	Frames          []frameVector     `json:"frames"`
+	ControlFrames   []frameVector     `json:"control_frames"`
+	RelayFrames     []frameVector     `json:"relay_frames"`
+	ValidRequests   []json.RawMessage `json:"valid_requests"`
+	InvalidRequests []struct {
 		Why     string          `json:"why"`
 		Code    string          `json:"code"`
 		ID      string          `json:"id"`
@@ -51,6 +55,18 @@ func loadVectors(t *testing.T) vectors {
 		t.Fatal(err)
 	}
 	return v
+}
+
+// The frame and line bounds are each side's own constants; the vectors pin
+// both sides to the same numbers.
+func TestSharedBounds(t *testing.T) {
+	v := loadVectors(t)
+	if v.Bounds.MaxFramePayloadBytes != frame.MaxPayload {
+		t.Fatalf("frame.MaxPayload is %d, the vectors pin %d", frame.MaxPayload, v.Bounds.MaxFramePayloadBytes)
+	}
+	if v.Bounds.MaxLineBytes != MaxLineBytes {
+		t.Fatalf("MaxLineBytes is %d, the vectors pin %d", MaxLineBytes, v.Bounds.MaxLineBytes)
+	}
 }
 
 func TestSharedFrameVectors(t *testing.T) {

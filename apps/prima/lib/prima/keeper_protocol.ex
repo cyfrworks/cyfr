@@ -73,6 +73,8 @@ defmodule Prima.KeeperProtocol do
   """
 
   @version 1
+  # The keeper spells these as frame.MaxPayload and protocol.MaxLineBytes;
+  # the vectors' `bounds` pin both sides to the same numbers.
   @max_frame_bytes 65_536
   @max_line_bytes 1_048_576
   @token_hex_bytes 64

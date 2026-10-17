@@ -29,7 +29,7 @@ defmodule Prima.KeeperProtocolTest do
            |> File.read!()
            |> Jason.decode!()
 
-  @categories ~w(reserved_env_prefixes frames control_frames relay_frames relay_streams valid_requests invalid_requests replies)
+  @categories ~w(reserved_env_prefixes bounds frames control_frames relay_frames relay_streams valid_requests invalid_requests replies)
 
   @request_types %{"spawn" => :spawn, "signal" => :signal, "release" => :release, "pool" => :pool}
 
@@ -129,6 +129,13 @@ defmodule Prima.KeeperProtocolTest do
       for category <- @categories do
         assert @vectors[category] not in [nil, []], "#{category} is empty"
       end
+    end
+
+    test "pin the frame and line bounds this side spells" do
+      assert @vectors["bounds"] == %{
+               "max_frame_payload_bytes" => KeeperProtocol.max_frame_bytes(),
+               "max_line_bytes" => KeeperProtocol.max_line_bytes()
+             }
     end
 
     test "every frame encodes to its bytes and parses back" do

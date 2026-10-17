@@ -664,6 +664,36 @@ defmodule Prima.RunnerRelayTest do
       end
     end
 
+    test "a fetch's head is held to the attached request's bounds, at them and one past" do
+      runner = RunnerRelay.new(:runner, @attempt)
+      url = "https://api.example.com/"
+      name = String.duplicate("n", AttachedRequest.max_header_name_bytes())
+      value = String.duplicate("v", AttachedRequest.max_header_value_bytes())
+
+      at_bounds = %{
+        kind: :fetch,
+        attempt: @attempt,
+        call_id: "AAECAwQFBgcICQoLDA0ODw",
+        connection: "api_key",
+        purpose: "fetch",
+        method: "GET",
+        url: url <> String.duplicate("a", AttachedRequest.max_url_bytes() - byte_size(url)),
+        headers: [{name, value} | List.duplicate({"x", "y"}, AttachedRequest.max_headers() - 1)],
+        body: ""
+      }
+
+      assert {:ok, _bytes, _runner} = RunnerRelay.encode(runner, at_bounds)
+
+      for over <- [
+            %{at_bounds | url: at_bounds.url <> "a"},
+            %{at_bounds | headers: [{"x", "y"} | at_bounds.headers]},
+            %{at_bounds | headers: [{name <> "n", "v"}]},
+            %{at_bounds | headers: [{"x", value <> "v"}]}
+          ] do
+        assert_raise ArgumentError, fn -> RunnerRelay.encode(runner, over) end
+      end
+    end
+
     test "a close carries a refusal's code" do
       assert RunnerRelay.close_code(:credit_exceeded) == "credit_exceeded"
       assert RunnerRelay.close_code({:unknown_field, "x"}) == "malformed"
