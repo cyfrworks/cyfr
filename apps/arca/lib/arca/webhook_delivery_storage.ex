@@ -11,7 +11,8 @@ defmodule Arca.WebhookDeliveryStorage do
   and the caller treats it as a duplicate.
 
   The claim status tracks work that outlives the HTTP response. Tasks
-  call `settle/3`: success retains the claim, while failure permits retry.
+  call `settle/3`: success retains the claim, a run whose outcome is
+  unknown retains it too, and failure permits retry.
 
   Rows are swept UNCONDITIONALLY on the `Cyfr.RetentionScheduler` cadence
   (its sweep roster runs whether or not per-kind retention policy is set),
@@ -28,7 +29,8 @@ defmodule Arca.WebhookDeliveryStorage do
     * `:fresh` if this is the first time we've seen `(webhook_id, key)`,
       or if the previous attempt is recorded `failed` and may be retried.
     * `{:duplicate, first_seen_at}` if a live claim already exists —
-      `claimed` (in flight) or `succeeded` (already ran).
+      `claimed` (in flight), `succeeded` (already ran) or `uncertain` (ran
+      with its outcome unknown, so it may have taken effect).
     * `{:error, reason}` for unexpected DB errors.
   """
   @spec record(String.t(), String.t()) ::
@@ -74,7 +76,11 @@ defmodule Arca.WebhookDeliveryStorage do
   Record how a claimed delivery ended.
 
   `:succeeded` keeps the claim — the sender's retry is a genuine
-  duplicate. `:failed` makes the delivery re-deliverable: the row stays,
+  duplicate. `:uncertain` keeps it as well: the run ended with its outcome
+  unknown, so its effect may have happened, and a retry that ran it again
+  could repeat an effect no contract proves safe to repeat; the delivery
+  is spent, and the sender's retry answers duplicate. `:failed` makes the
+  delivery re-deliverable: the row stays,
   so the sweep still bounds the table, but `record/2` will re-claim it,
   because a delivery that did not run is one the sender is entitled to
   retry.
@@ -82,10 +88,11 @@ defmodule Arca.WebhookDeliveryStorage do
   The controller returns 200 when it spawns the task. The task must
   report its own failure to release the claim for retry.
   """
-  @spec settle(String.t(), String.t(), :succeeded | :failed) :: :ok | {:error, term()}
+  @spec settle(String.t(), String.t(), :succeeded | :uncertain | :failed) ::
+          :ok | {:error, term()}
   def settle(webhook_id, idempotency_key, outcome)
       when is_binary(webhook_id) and is_binary(idempotency_key) and
-             outcome in [:succeeded, :failed] do
+             outcome in [:succeeded, :uncertain, :failed] do
     Arca.Repo.Errors.with_db_rescue("WebhookDeliveryStorage.settle", fn ->
       now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
 

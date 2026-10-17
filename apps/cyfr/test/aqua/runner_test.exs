@@ -1846,4 +1846,87 @@ defmodule Aqua.RunnerTest do
     assert {:ok, %{status: "completed", recovery_attempts: 1}} = Tape.turn(ctx, turn.id)
     assert {:ok, %{status: "completed"}} = Tape.turn(ctx, second)
   end
+
+  test "a restarted runner stops the surviving catalog handler of its first interrupted call before pausing uncertain",
+       %{ctx: ctx, thread: thread} do
+    start_supervised!(
+      {ScriptedWorker,
+       ref: [@model, "catalyst:local.http"],
+       script: [
+         call("c1", "http", %{"action" => "get", "url" => "https://example.test/x"}),
+         {:probe, self()},
+         reply("never sent")
+       ]}
+    )
+
+    {:ok, %{turn_id: turn_id}} = Runner.send_message(ctx, thread.id, "@aqua fetch")
+    pids = running!(thread)
+    {:ok, turn} = Tape.turn(ctx, turn_id)
+    {:ok, steps} = Tape.steps(ctx, turn)
+    get = Enum.find(steps, &(&1.action == "get"))
+    assert get.dispatch_state == "dispatched"
+    assert Prima.TurnStep.unresolved(get) == :uncertain
+    handle = {turn_id, get.id, get.generation}
+    test = self()
+
+    # The gate task is independent of the Aqua worker tree. Plant the
+    # same claimed and registered handle a catalog dispatch owns while
+    # this real turn is running. Its claimer goes with the loop, while
+    # async_nolink leaves the handler for the continuation to cancel.
+    claimer =
+      spawn(fn ->
+        loop_ref = Process.monitor(pids.loop)
+
+        receive do
+          :claim ->
+            :ok = Sanctum.RunningTasks.claim(handle)
+
+            Task.Supervisor.async_nolink(Sanctum.Gate.TaskSupervisor, fn ->
+              :ok = Sanctum.RunningTasks.register_handle(handle, self())
+              send(test, {:recovery_handler_registered, self()})
+              Process.sleep(:infinity)
+            end)
+        end
+
+        receive do
+          {:DOWN, ^loop_ref, :process, _, _} -> exit(:killed)
+        end
+      end)
+
+    # Registered before the claim starts: even an earlier assertion
+    # failure stops our claimer and any registered task before storage
+    # and the runner fixture are released.
+    on_exit(fn ->
+      Process.exit(claimer, :kill)
+      Aqua.Ops.cancel_call(handle)
+      Aqua.Ops.release_call(handle)
+    end)
+
+    claimer_ref = Process.monitor(claimer)
+    send(claimer, :claim)
+    assert_receive {:recovery_handler_registered, handler}, 5_000
+    handler_ref = Process.monitor(handler)
+    assert Process.alive?(handler)
+
+    # Kill the owning Runner itself. Its restart recovers the real
+    # dispatched step through takeover/adoption and Loop.settle/1;
+    # the dead Runner cannot call its ordinary Loop.abort crash path.
+    :ok = kill_and_await!(pids)
+    assert_receive {:DOWN, ^claimer_ref, :process, ^claimer, :killed}, 5_000
+
+    assert_receive %ThreadEvent{
+                     kind: :turn_paused,
+                     data: %{turn_id: ^turn_id, reason: :uncertain}
+                   },
+                   60_000
+
+    refute Runner.whereis(thread.id) in [nil, pids.runner]
+
+    assert {:ok, %{status: "paused", paused_reason: "uncertain", recovery_attempts: 1}} =
+             Tape.turn(ctx, turn_id)
+
+    assert {:ok, %{dispatch_state: "uncertain", outcome: "uncertain"}} = Tape.step(ctx, get.id)
+    assert_receive {:DOWN, ^handler_ref, :process, ^handler, :cancelled}, 1_000
+    assert Enum.count(ScriptedWorker.calls(), &(&1.input["operation"] == "chat")) == 1
+  end
 end

@@ -1980,9 +1980,10 @@ defmodule Aqua.Loop do
   # Settling open steps on a continuation
   # ---------------------------------------------------------------------------
 
-  # A step found open settles by `Prima.TurnStep.unresolved/1`: a model step
-  # without its response closes as an error (its request cannot be
-  # rebuilt); a dispatched call that is safe to run again is opened afresh;
+  # A step found open has what it started stopped (`interrupted/2`), then
+  # settles by `Prima.TurnStep.unresolved/1`: a model step without its
+  # response closes as an error (its request cannot be rebuilt); a
+  # dispatched call that is safe to run again is opened afresh;
   # a flush's dispatched call closes with its outcome unknown and its
   # unstarted ones are skipped; a dispatched call whose effect is unknown
   # stops the turn on it — a person continues, never a replay; an approved
@@ -1995,7 +1996,7 @@ defmodule Aqua.Loop do
       open =
         Enum.reduce(steps, [], fn
           %{dispatch_state: "dispatched"} = step, open ->
-            if id = cancellable(step), do: Opus.cancel(ctx(state), id)
+            interrupted(state, step)
 
             case Prima.TurnStep.unresolved(step) do
               :unanswered ->
@@ -2064,6 +2065,18 @@ defmodule Aqua.Loop do
     else
       {:error, reason} -> {:halt, {:failed, reason}, state}
     end
+  end
+
+  # What an interrupted step started stops before the step is settled,
+  # advanced or closed: its child execution, and the in-process handler
+  # the gate runs under the step's handle, which outlives the worker and
+  # the runner that dispatched it (`Sanctum.RunningTasks`). The handle names
+  # the step's own generation, so no other turn's call or successor
+  # generation is touched.
+  defp interrupted(%State{} = state, step) do
+    if id = cancellable(step), do: Opus.cancel(ctx(state), id)
+    Aqua.Ops.cancel_call(handle(state, step))
+    Aqua.Ops.release_call(handle(state, step))
   end
 
   defp proposed_items(%State{} = state) do

@@ -318,6 +318,20 @@ defmodule CyfrWeb.Plugs.WebhookIdempotencyTest do
       assert {:duplicate, _} = Arca.WebhookDeliveryStorage.record(hook.id, "evt-1")
     end
 
+    test "a delivery whose run ended uncertain is spent: its retry is a duplicate", %{ctx: ctx} do
+      hook =
+        create_hook!(ctx, "idem-unknown-#{:rand.uniform(1_000_000)}", %{
+          idempotency_key_header: "x-delivery-id"
+        })
+
+      assert :fresh = Arca.WebhookDeliveryStorage.record(hook.id, "evt-u")
+
+      # The run may have taken effect: running it again could repeat it.
+      :ok = Arca.WebhookDeliveryStorage.settle(hook.id, "evt-u", :uncertain)
+      assert {:duplicate, _} = Arca.WebhookDeliveryStorage.record(hook.id, "evt-u")
+      assert {:duplicate, _} = Arca.WebhookDeliveryStorage.record(hook.id, "evt-u")
+    end
+
     test "a claim in flight is a duplicate — settling is not the same as never having run",
          %{ctx: ctx} do
       hook =

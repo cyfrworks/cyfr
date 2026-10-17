@@ -17,7 +17,8 @@ defmodule Arca.Schemas.WebhookDelivery do
     field :webhook_id, :string
     field :idempotency_key, :string
     field :first_seen_at, :utc_datetime_usec
-    # Track claimed, succeeded and failed deliveries; failed claims can be retried.
+    # claimed | succeeded | uncertain | failed: only a failed claim can be
+    # retried (`Arca.WebhookDeliveryStorage.settle/3`).
     field :status, :string, default: "claimed"
     field :settled_at, :utc_datetime_usec
   end

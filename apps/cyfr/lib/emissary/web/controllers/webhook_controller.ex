@@ -261,9 +261,12 @@ defmodule Emissary.Web.WebhookController do
 
   # The claim the idempotency plug staked, settled by the only code that
   # knows how the delivery ended. `succeeded` keeps it — the sender's retry
-  # is a genuine duplicate. `failed` makes it re-deliverable, which is the
-  # case the plug's `register_before_send` could never reach: the response
-  # went out as `200 accepted` when this task SPAWNED.
+  # is a genuine duplicate. `uncertain` keeps it too: the run may have taken
+  # effect, and a delivery id proves nothing about the target's own
+  # idempotence, so running it again could repeat that effect. `failed`
+  # makes it re-deliverable, which is the case the plug's
+  # `register_before_send` could never reach: the response went out as
+  # `200 accepted` when this task SPAWNED.
   defp settle_claim(nil, _outcome), do: :ok
 
   defp settle_claim({webhook_id, key}, outcome) do
@@ -315,6 +318,9 @@ defmodule Emissary.Web.WebhookController do
         {:error, reason} ->
           duration_ms = duration_ms(start_time)
           Logger.warning("[WebhookInvoke] error slug=#{webhook.slug}: #{inspect(reason)}")
+          # A run whose outcome is unknown (its runner lost after it may
+          # have acted, or its result not kept) is no failure to retry.
+          unknown? = Sanctum.Refusals.classify(reason).class == :uncertain
 
           Sanctum.Decisions.close(ctx, ctx.call_id, %{
             result: {:error, reason},
@@ -328,10 +334,12 @@ defmodule Emissary.Web.WebhookController do
           :telemetry.execute(
             [:cyfr, :emissary, :webhook, :invoke, :stop],
             %{duration_ms: duration_ms},
-            telemetry_meta |> Map.put(:status, :error) |> Map.put(:error, "execution_failed")
+            telemetry_meta
+            |> Map.put(:status, :error)
+            |> Map.put(:error, if(unknown?, do: "execution_uncertain", else: "execution_failed"))
           )
 
-          :failed
+          if unknown?, do: :uncertain, else: :failed
       end
     rescue
       e ->
@@ -357,6 +365,10 @@ defmodule Emissary.Web.WebhookController do
           |> Map.put(:status, :error)
           |> Map.put(:error, "execution_crashed")
         )
+
+        # Whether the run began before the raise is not known here: the
+        # delivery is spent rather than offered again.
+        :uncertain
     end
   end
 

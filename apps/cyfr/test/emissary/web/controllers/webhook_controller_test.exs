@@ -352,15 +352,22 @@ defmodule Emissary.Web.WebhookControllerTest do
     # A hook whose target runs: a published component, its profile's head
     # consent activating that release, and a scripted worker service that
     # answers the run.
-    defp runnable_hook!(ctx) do
+    @catalyst_wasm_path Path.expand(
+                          "../../../../../locus/test/support/runtime/test_wasm/hostile/attached_header_probe.wasm",
+                          __DIR__
+                        )
+
+    defp runnable_hook!(ctx, opts \\ %{}) do
+      {type, opts} = Map.pop(opts, :test_component_type, "reagent")
+      wasm_path = if type == "catalyst", do: @catalyst_wasm_path, else: @math_wasm_path
       name = "wh-run-#{System.unique_integer([:positive])}"
-      reference = "reagent:local.#{name}"
+      reference = "#{type}:local.#{name}"
 
       {:ok, component} =
-        Compendium.Registry.publish_bytes(ctx, File.read!(@math_wasm_path), %{
+        Compendium.Registry.publish_bytes(ctx, File.read!(wasm_path), %{
           name: name,
           version: "1.0.0",
-          type: "reagent"
+          type: type
         })
 
       profile_id = "prof_#{name}"
@@ -412,12 +419,18 @@ defmodule Emissary.Web.WebhookControllerTest do
       start_supervised!({Cyfr.Test.ScriptedWorker, ref: reference, script: [%{"ran" => true}]})
 
       {:ok, hook} =
-        Sanctum.TestContext.create_webhook(ctx, %{
-          name: "audited",
-          target_ref: "#{reference}:1.0.0",
-          profile_id: profile_id,
-          replay_protection: "none"
-        })
+        Sanctum.TestContext.create_webhook(
+          ctx,
+          Map.merge(
+            %{
+              name: "audited",
+              target_ref: "#{reference}:1.0.0",
+              profile_id: profile_id,
+              replay_protection: "none"
+            },
+            opts
+          )
+        )
 
       hook
     end
@@ -474,6 +487,110 @@ defmodule Emissary.Web.WebhookControllerTest do
       assert execution.status == "completed"
 
       refute_received {:decision_lost, _}
+    end
+
+    test "a delivery whose runner stops uncertain keeps its key against another run", %{
+      conn: conn,
+      ctx: ctx
+    } do
+      %{slug: slug, secret: secret} =
+        runnable_hook!(ctx, %{
+          idempotency_key_header: "X-Cyfr-Delivery",
+          test_component_type: "catalyst"
+        })
+
+      # End spawned work before the helper restores worker routing and the
+      # sandbox owner releases its database connection, including on failure.
+      Cyfr.Test.Sandbox.stop_work_on_exit()
+      handler_id = {__MODULE__, :uncertain_delivery, make_ref()}
+      test_pid = self()
+      on_exit(fn -> :telemetry.detach(handler_id) end)
+
+      :ok =
+        :telemetry.attach(
+          handler_id,
+          [:cyfr, :emissary, :webhook, :invoke, :stop],
+          fn _event, _measurements, metadata, _config ->
+            send(test_pid, {:delivery_task, self(), metadata.request_id})
+          end,
+          nil
+        )
+
+      # Stop telemetry precedes claim settlement. Waiting for this task to
+      # exit observes the finished settlement without mutating the claim or
+      # prescribing which non-retryable status the implementation must use.
+      await_delivery = fn request_id ->
+        assert_receive {:telemetry, [:cyfr, :emissary, :webhook, :invoke, :stop], _,
+                        %{request_id: ^request_id}},
+                       10_000
+
+        assert_receive {:delivery_task, task, ^request_id}, 5_000
+        monitor = Process.monitor(task)
+        assert_receive {:DOWN, ^monitor, :process, ^task, _}, 5_000
+        :ok = Cyfr.Test.ScriptedWorker.await_reports()
+      end
+
+      body = ~s({"event":"once-even-when-the-answer-is-unknown"})
+      key = "evt-uncertain-#{System.unique_integer([:positive])}"
+      # The scripted worker exposes duplicate admission of a catalyst;
+      # this check does not claim an actual upstream side effect occurred.
+      :ok = Cyfr.Test.ScriptedWorker.script([{:probe, self()}, :hang])
+
+      first =
+        conn
+        |> put_req_header("x-cyfr-delivery", key)
+        |> post_signed(slug, secret, body)
+        |> json_response(200)
+
+      assert first["status"] == "accepted"
+      assert_receive {:scripted_probe, first_runner, first_execution}, 10_000
+      Process.exit(first_runner, :kill)
+      await_delivery.(first["request_id"])
+
+      assert [decision] = decisions_for(first["request_id"])
+      assert decision.completion == "uncertain"
+      actor = Prima.Actor.in_athanor(ctx.athanor_id)
+      assert %{outcome: "uncertain"} = Arca.ExecutionAttempts.current(actor, first_execution)
+      {:ok, hook} = Arca.WebhookStorage.get_by_slug(slug)
+
+      settled_claim =
+        Arca.Repo.get_by!(Arca.Schemas.WebhookDelivery,
+          webhook_id: hook.id,
+          idempotency_key: key
+        )
+
+      # Replacing the script also discards the old :hang item: the first
+      # runner was killed while paused at its probe, before consuming it.
+      :ok = Cyfr.Test.ScriptedWorker.script([{:probe, self()}, %{"ran" => true}])
+
+      retry =
+        build_conn()
+        |> put_req_header("x-cyfr-delivery", key)
+        |> post_signed(slug, secret, body)
+        |> json_response(200)
+
+      # Drain an incorrectly admitted second run before asserting the
+      # contract, so the failing regression leaves no asynchronous work.
+      second_execution =
+        if retry["status"] == "accepted" do
+          assert_receive {:scripted_probe, second_runner, execution}, 10_000
+          send(second_runner, :continue)
+          await_delivery.(retry["request_id"])
+          execution
+        end
+
+      observed = %{
+        first_execution: first_execution,
+        first_outcome: decision.completion,
+        settled_claim: settled_claim.status,
+        second_execution: second_execution,
+        retry_status: retry["status"]
+      }
+
+      assert retry["status"] == "duplicate",
+             "uncertain delivery must not be readmitted: #{inspect(observed)}"
+
+      assert Enum.map(Cyfr.Test.ScriptedWorker.calls(), & &1.execution_id) == [first_execution]
     end
 
     test "a delivery refused for want of an engine is closed once, failed", %{
