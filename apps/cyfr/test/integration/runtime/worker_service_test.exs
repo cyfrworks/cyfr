@@ -159,7 +159,7 @@ defmodule Locus.Runtime.WorkerServiceWireTest do
 
     kill_runner_process!(exited_runner)
 
-    assert_receive {:ran, ^exited, {:error, @lapsed}}, 10_000
+    assert_receive {:ran, ^exited, {:error, {:uncertain, @lapsed}}}, 10_000
     assert %{status: "failed", error_message: @lapsed} = row(exited)
     assert %{state: "lapsed", outcome: "uncertain"} = attempt_row(ctx, exited)
     wait_until(fn -> reported_exit?(exited_runner) end, 10_000, "the runner's exit report")
@@ -222,7 +222,7 @@ defmodule Locus.Runtime.WorkerServiceWireTest do
 
     kill_runner_process!(runner)
 
-    assert_receive {:root, {:error, @lapsed}}, 10_000
+    assert_receive {:root, {:error, {:uncertain, @lapsed}}}, 10_000
     assert %{status: "failed", error_message: @lapsed} = row(root_id)
 
     # The service reported the formula and every child it said it started.

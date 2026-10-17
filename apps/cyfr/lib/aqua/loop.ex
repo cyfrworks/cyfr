@@ -1475,7 +1475,10 @@ defmodule Aqua.Loop do
     case Tape.mark_dispatched(guest(state), state.turn, step) do
       {:ok, step} ->
         case normalise(execute(state, step, call)) do
+          # A hand's child read what its row holds whatever its outcome: an
+          # unknown one joins it too, as a dead worker's does.
           {:uncertain, reason} ->
+            _ = Tape.join_sources(guest(state), state.turn, unknown_ledger(state, step, call))
             {:uncertain, step, describe(reason)}
 
           result ->
@@ -1545,6 +1548,11 @@ defmodule Aqua.Loop do
   end
 
   defp unread_ledger(_state, _step, %Call{}, _result), do: []
+
+  defp unknown_ledger(state, step, %Call{kind: :hand}),
+    do: read_ledger(state, step.child_execution_id)
+
+  defp unknown_ledger(_state, _step, %Call{}), do: []
 
   # One outcome vocabulary at the loop's boundary: an effect that may
   # have happened with no result (`uncertain`), one that happened whose
@@ -1617,9 +1625,9 @@ defmodule Aqua.Loop do
   defp render(%Call{} = call, result), do: Binding.render(call, result)
 
   # A worker that died or timed out: a step it never dispatched is
-  # skipped; a dispatched one settles by `Prima.TurnStep.unresolved/1` — one safe
-  # to run again closes as an error the model may retry, a flush's closes
-  # with its outcome unknown, and one whose effect is unknown is reported
+  # skipped; a dispatched one has what it started stopped, then settles by
+  # `Prima.TurnStep.unresolved/1` — one safe to run again closes as an
+  # error the model may retry, a flush's closes with its outcome unknown, and one whose effect is unknown is reported
   # (`:report`, the default) so the loop stops the turn on it, or marked in
   # place (`:mark`) once the turn's stop already covers it.
   defp settle_dead(%State{} = state, %{step: step, call: call}, reason, mode \\ :report) do
@@ -1635,7 +1643,13 @@ defmodule Aqua.Loop do
         :ok
 
       {:ok, %{dispatch_state: "dispatched"} = fresh} ->
+        # What the step started stops before the step settles: its child
+        # execution, and the in-process handler the gate runs under the
+        # step's handle, which outlives the worker that claimed it
+        # (`Sanctum.RunningTasks`). The handle is the dead worker's own
+        # generation's, so a successor generation's call is untouched.
         if id = cancellable(fresh), do: Opus.cancel(ctx(state), id)
+        Aqua.Ops.cancel_call(handle(state, step))
 
         why = describe(reason)
         # A dead waiter handed back no completion result, so what its run
@@ -1793,21 +1807,27 @@ defmodule Aqua.Loop do
           {:ok, state} ->
             case worker(fn -> Aqua.Launch.run(ctx(state), step) end, @launch_timeout_ms) do
               {:ok, {:ok, %{execution_id: id, result: result}}} ->
-                {:ok,
-                 state |> close_launch(step, unwrap(call), {:ok, id, result}) |> resume_root(0)}
+                state |> close_launch(step, unwrap(call), {:ok, id, result}) |> resumed()
 
               {:ok, {:refused, reason}} ->
-                {:ok,
-                 state |> close_launch(step, unwrap(call), {:refused, reason}) |> resume_root(0)}
+                state |> close_launch(step, unwrap(call), {:refused, reason}) |> resumed()
 
+              # The application's run ended with its outcome unknown: the
+              # turn stops here as it does on a launch whose start is not
+              # known.
               {:ok, {:error, reason}} ->
-                {:ok,
-                 state |> close_launch(step, unwrap(call), {:error, reason}) |> resume_root(0)}
+                case normalise({:error, reason}) do
+                  {:uncertain, why} ->
+                    launch_unknown(state, step, why)
+
+                  _failed ->
+                    state |> close_launch(step, unwrap(call), {:error, reason}) |> resumed()
+                end
 
               # Whether the application started is not known: the turn
               # stops here, its root already let go.
               {:exit, reason} ->
-                stop_uncertain(state, step, describe(reason), [])
+                launch_unknown(state, step, reason)
             end
 
           # The root did not let go: the launch never started.
@@ -1819,6 +1839,14 @@ defmodule Aqua.Loop do
       _ ->
         {:ok, state}
     end
+  end
+
+  # A launch whose outcome is unknown: what its tree read joins the turn,
+  # from its root's row or as an unnamed outside source, and the turn
+  # stops on the step, its root already let go.
+  defp launch_unknown(%State{} = state, step, reason) do
+    _ = Tape.join_sources(guest(state), state.turn, read_ledger(state, step.child_execution_id))
+    stop_uncertain(state, step, describe(reason), [])
   end
 
   # The launched tree's ledger joins the turn in the transaction that
@@ -1915,24 +1943,36 @@ defmodule Aqua.Loop do
     end
   end
 
+  # The launch's step is closed; the group goes on only once the root is
+  # taken back. A root that cannot be taken back leaves the turn paused
+  # around its launch, as its rows already say, and stops the group: no
+  # call after the launch, and no model round, runs without the root's
+  # slot. The runner continues the paused turn from its rows.
+  defp resumed(%State{} = state) do
+    case resume_root(state, 0) do
+      {:ok, state} -> {:ok, state}
+      {:error, _reason} -> {:halt, {:paused, :launch}, state}
+    end
+  end
+
   defp resume_root(%State{} = state, tries) do
     case Opus.resume_turn_root(ctx(state), state.turn.root_execution_id,
            turn_id: state.turn.id,
            fence: state.turn.fence
          ) do
       {:ok, %{turn: resumed} = claim} ->
-        %{state | turn: resumed, claim: claim, since: now(), active_ms: resumed.active_ms}
+        {:ok, %{state | turn: resumed, claim: claim, since: now(), active_ms: resumed.active_ms}}
 
       {:error, _reason} when tries < length(@resume_backoff_ms) ->
         Process.sleep(Enum.at(@resume_backoff_ms, tries))
         resume_root(state, tries + 1)
 
-      {:error, reason} ->
+      {:error, reason} = error ->
         Logger.warning(
           "[Aqua.Loop] turn #{state.turn.id} stays paused after its launch: #{inspect(reason)}"
         )
 
-        state
+        error
     end
   end
 

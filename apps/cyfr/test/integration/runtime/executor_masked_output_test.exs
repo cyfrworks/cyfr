@@ -225,7 +225,7 @@ defmodule Locus.Runtime.ExecutorMaskedOutputTest do
     assert_receive {:DOWN, ^ref, :process, ^attempt, :killed}
     TwoServices.release!(held)
 
-    assert {:error, message} = Task.await(run, 60_000)
+    assert {:error, {:uncertain, message}} = Task.await(run, 60_000)
     assert message == "Execution attempt ended before it closed"
 
     row = Arca.Repo.get!(Arca.Schemas.Execution, id)

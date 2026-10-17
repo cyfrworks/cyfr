@@ -48,6 +48,17 @@ defmodule Sanctum.Dispatch do
   under `Sanctum.Gate.TaskSupervisor` with a timeout, registered with
   `Sanctum.RunningTasks` so a cancel stops it (`call_external/4`'s
   `:runner`).
+
+  ## A handler that does not answer
+
+  A handler that raises, exits, times out or is cancelled once it may
+  have run answers `{:error, {:uncertain, _}}` on either plane and under
+  either runner, unless its action is declared `recovery: :replay_safe`:
+  an effect it made before it stopped is not undone by its stopping, so
+  its caller learns the outcome is unknown, never that it failed. A
+  replay-safe action answers the ordinary `:crashed`, `:exit`, `:timeout`
+  or `:cancelled`, as does a call cancelled before its handler started,
+  and a raised authorization refusal is the refusal it is.
   """
 
   require Logger
@@ -60,6 +71,10 @@ defmodule Sanctum.Dispatch do
 
   # Default tool execution timeout (5 minutes)
   @tool_timeout_ms :timer.minutes(5)
+
+  # The exit of a supervised task whose registration was refused: its
+  # handler never ran.
+  @not_started {__MODULE__, :not_started}
 
   @doc """
   Call a tool from the **external plane** — an ingress outside any running
@@ -136,9 +151,9 @@ defmodule Sanctum.Dispatch do
   stops the supervised handler alone), plus `call_external/4`'s
   options. The runner defaults to `:supervised` here: the handler runs on
   a guest's behalf, and a crash or a hang inside it must not take the
-  chain's host process with it. A supervised handler that dies, exits or
-  times out answers `{:error, {:uncertain, _}}` unless the action is
-  declared `recovery: :replay_safe`: its effect may have happened.
+  chain's host process with it. A handler that does not answer is
+  answered as on the external plane (the moduledoc's "A handler that
+  does not answer").
   """
   def call_in_chain(name, ctx, args, authority, opts \\ [])
 
@@ -911,14 +926,18 @@ defmodule Sanctum.Dispatch do
   # The adapter's runner. Inline is the in-process call: the handler on the
   # caller's own process, with a raised authorization refusal answered as
   # the refusal it is and any other crash contained to this call.
+  # A handler that does not answer is answered by `unanswered/4`, on
+  # either plane and under either runner.
   defp execute_tool_call(name, ctx, opts, execute_fn) do
+    action = Keyword.get(opts, :action)
+
     case Keyword.get(opts, :runner, :inline) do
-      :inline -> run_inline(name, execute_fn)
-      :supervised -> run_supervised(name, ctx, opts, execute_fn)
+      :inline -> run_inline({name, action}, execute_fn)
+      :supervised -> run_supervised({name, action}, ctx, opts, execute_fn)
     end
   end
 
-  defp run_inline(name, execute_fn) do
+  defp run_inline({name, _action} = op, execute_fn) do
     execute_fn.()
   rescue
     refusal in Sanctum.UnauthorizedError ->
@@ -930,32 +949,32 @@ defmodule Sanctum.Dispatch do
           Prima.LogFilter.format_exception(:error, exception, __STACKTRACE__)
       )
 
-      {:error, {:crashed, "Tool #{name} crashed"}}
+      unanswered(op, "crashed", {:crashed, "Tool #{name} crashed"})
   catch
     :exit, reason ->
       Logger.error(
         "[Sanctum.Dispatch] Tool #{name} exited: #{Prima.LogFilter.inspect_reason(reason)}"
       )
 
-      {:error, {:exit, "Tool #{name} exited unexpectedly"}}
+      unanswered(op, "exited", {:exit, "Tool #{name} exited unexpectedly"})
   end
 
-  defp run_supervised(name, ctx, opts, execute_fn) do
+  defp run_supervised({name, _action} = op, ctx, opts, execute_fn) do
     case Keyword.get(opts, :cancel_handle) do
       nil ->
-        supervise(name, ctx, opts, nil, execute_fn)
+        supervise(op, ctx, nil, execute_fn)
 
       handle ->
         # Claimed before the task exists, so a cancel that lands first is
         # seen when the task registers, and the handler never runs.
         case Sanctum.RunningTasks.claim(handle) do
-          :ok -> supervise(name, ctx, opts, handle, execute_fn)
+          :ok -> supervise(op, ctx, handle, execute_fn)
           :cancelled -> {:error, {:cancelled, "Tool #{name} was cancelled"}}
         end
     end
   end
 
-  defp supervise(name, ctx, opts, handle, execute_fn) do
+  defp supervise({name, _action} = op, ctx, handle, execute_fn) do
     # Registered under the server-minted request id, which is also the
     # request's progress topic (`Cyfr.Bus.progress/2`) — one identity per
     # request across both subsystems. The transport cancels through this when its caller hangs up;
@@ -976,18 +995,13 @@ defmodule Sanctum.Dispatch do
       Task.Supervisor.async_nolink(Sanctum.Gate.TaskSupervisor, fn ->
         Prima.LoggerContext.restore(logger_metadata)
 
+        # A refused registration exits with a reason of its own: the
+        # handler never ran, so the call is cancelled whatever its action.
         case register_task(request_id, claim, handle) do
           :ok -> execute_fn.()
-          _refused -> exit(:cancelled)
+          _refused -> exit(@not_started)
         end
       end)
-
-    # An in-chain effect the handler may have made before it died is not
-    # undone by its death: unless the action is reviewed as replay-safe,
-    # the caller learns that the outcome is unknown, not that it failed.
-    uncertain? =
-      Keyword.get(opts, :in_chain, false) and
-        not replay_safe?(name, Keyword.get(opts, :action))
 
     result =
       case Task.yield(task, @tool_timeout_ms) || Task.shutdown(task, :brutal_kill) do
@@ -1013,35 +1027,45 @@ defmodule Sanctum.Dispatch do
           # The tuple carries only the tool's name — the exception's own
           # message can hold a query, a path, or the offending bytes, and
           # this tuple renders verbatim on the wire (`Prima.Refusal.message/1`).
-          if uncertain?,
-            do: {:error, {:uncertain, "Tool #{name} crashed; its outcome is unknown"}},
-            else: {:error, {:crashed, "Tool #{name} crashed"}}
+          unanswered(op, "crashed", {:crashed, "Tool #{name} crashed"})
+
+        {:exit, @not_started} ->
+          {:error, {:cancelled, "Tool #{name} was cancelled"}}
 
         {:exit, :cancelled} ->
-          if uncertain?,
-            do: {:error, {:uncertain, "Tool #{name} was cancelled; its outcome is unknown"}},
-            else: {:error, {:cancelled, "Tool #{name} was cancelled"}}
+          unanswered(op, "was cancelled", {:cancelled, "Tool #{name} was cancelled"})
 
         {:exit, reason} ->
           Logger.error(
             "[Sanctum.Dispatch] Tool #{name} exited: #{Prima.LogFilter.inspect_reason(reason)}"
           )
 
-          if uncertain?,
-            do: {:error, {:uncertain, "Tool #{name} exited; its outcome is unknown"}},
-            else: {:error, {:exit, "Tool #{name} exited unexpectedly"}}
+          unanswered(op, "exited", {:exit, "Tool #{name} exited unexpectedly"})
 
         nil ->
           Logger.error("[Sanctum.Dispatch] Tool #{name} timed out after #{@tool_timeout_ms}ms")
 
-          if uncertain?,
-            do: {:error, {:uncertain, "Tool #{name} timed out; its outcome is unknown"}},
-            else: {:error, {:timeout, "Tool #{name} timed out after #{@tool_timeout_ms}ms"}}
+          unanswered(
+            op,
+            "timed out",
+            {:timeout, "Tool #{name} timed out after #{@tool_timeout_ms}ms"}
+          )
       end
 
     if claim, do: Sanctum.RunningTasks.unregister(request_id, claim)
     if handle, do: Sanctum.RunningTasks.release_handle(handle)
     result
+  end
+
+  # A handler that ended without answering once it may have run. An effect
+  # it made before it stopped is not undone by its stopping: unless its
+  # action is reviewed as replay-safe (the operation's declaration, read
+  # here and nowhere else), its caller learns the outcome is unknown, not
+  # that it failed; a replay-safe read answers the ordinary typed error.
+  defp unanswered({name, action}, how, ordinary) do
+    if replay_safe?(name, action),
+      do: {:error, ordinary},
+      else: {:error, {:uncertain, "Tool #{name} #{how}; its outcome is unknown"}}
   end
 
   # Run from inside the task. `:cancelled` or `:released` from either

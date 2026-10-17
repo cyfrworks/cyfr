@@ -67,6 +67,12 @@ defmodule Opus.HostTest do
     })
   end
 
+  defp fail(fixture, error) do
+    AttemptFixtures.call(fixture, "fail", %{
+      "outcome" => AttemptFixtures.outcome(fixture, "failed", %{"error" => error})
+    })
+  end
+
   defp renew(fixture, attempts \\ nil, opts \\ []) do
     AttemptFixtures.call(
       fixture,
@@ -438,7 +444,7 @@ defmodule Opus.HostTest do
       assert %{"error" => "lost"} = push(fixture, %{"type" => "note"})
       wait_until(fn -> not Process.alive?(fixture.pid) end)
 
-      assert {:error, "Execution attempt ended before it closed"} =
+      assert {:error, {:uncertain, "Execution attempt ended before it closed"}} =
                Dispatch.await(fixture.pid, fixture.close)
 
       assert %{status: "running", current_attempt: current} = row(fixture)
@@ -548,6 +554,45 @@ defmodule Opus.HostTest do
     end
   end
 
+  describe "a lost close of a row still running" do
+    test "fails the row with its attempt uncertain, and answers the outcome unknown" do
+      fixture = AttemptFixtures.attached!(ctx: Sanctum.TestContext.local(:api))
+
+      attempt = fixture.pid
+      ref = Process.monitor(attempt)
+      Process.exit(attempt, :kill)
+      assert_receive {:DOWN, ^ref, :process, ^attempt, :killed}
+
+      assert {:error, {:uncertain, "Execution attempt ended before it closed"}} =
+               Dispatch.await(attempt, fixture.close)
+
+      assert %{status: "failed", error_message: "Execution attempt ended before it closed"} =
+               row(fixture)
+
+      assert %{state: "failed", outcome: "uncertain"} =
+               Arca.ExecutionAttempts.get(
+                 Prima.Actor.in_athanor(fixture.athanor_id),
+                 fixture.attempt
+               )
+    end
+
+    test "a row its own attempt failed answers the failure it recorded" do
+      fixture = AttemptFixtures.attached!(ctx: Sanctum.TestContext.local(:api))
+
+      assert %{"ok" => _} = fail(fixture, "the component gave up")
+      assert {:error, message} = Dispatch.await(fixture.pid, fixture.close)
+      assert is_binary(message)
+
+      assert %{state: "failed", outcome: "error"} =
+               Arca.ExecutionAttempts.get(
+                 Prima.Actor.in_athanor(fixture.athanor_id),
+                 fixture.attempt
+               )
+
+      assert {:error, ^message} = Close.lost(fixture.close)
+    end
+  end
+
   describe "a boot that does not hold the control plane" do
     setup do
       on_exit(fn -> Arca.ControlPlane.record(:unclaimed) end)
@@ -573,7 +618,7 @@ defmodule Opus.HostTest do
                  AttemptFixtures.caller(fixture)
                )
 
-      assert {:error, "Execution attempt ended before it closed"} =
+      assert {:error, {:uncertain, "Execution attempt ended before it closed"}} =
                Dispatch.await(fixture.pid, fixture.close)
 
       assert Arca.Repo.get!(Arca.Schemas.ExecutionAttempt, fixture.attempt).claimed_by == nil
@@ -603,7 +648,7 @@ defmodule Opus.HostTest do
       assert %{"error" => "lost"} = renew(fixture)
       assert %{"error" => "lost"} = complete(fixture, %{"said" => "done"})
 
-      assert {:error, "Execution attempt ended before it closed"} =
+      assert {:error, {:uncertain, "Execution attempt ended before it closed"}} =
                Dispatch.await(fixture.pid, fixture.close)
 
       refute Process.alive?(fixture.pid)
@@ -699,7 +744,7 @@ defmodule Opus.HostTest do
 
       assert %{"ok" => true} = report(fixture)
 
-      assert {:error, "Execution terminated: runner stopped without cleanup"} =
+      assert {:error, {:uncertain, "Execution terminated: runner stopped without cleanup"}} =
                Dispatch.await(fixture.pid, fixture.close)
 
       assert %{status: "failed"} = row(fixture)
@@ -725,13 +770,13 @@ defmodule Opus.HostTest do
       assert message == "Parent execution (#{fixture.execution_id}) terminated"
     end
 
-    test "a waiter admitted on the guest plane answers the lapsed row's error" do
+    test "a waiter admitted on the guest plane answers the lapsed row's uncertainty" do
       guest = Sanctum.Context.enter_guest(Sanctum.TestContext.local(:api))
       fixture = AttemptFixtures.attached!(ctx: guest, service_id: @service)
 
       assert %{"ok" => true} = report(fixture)
 
-      assert {:error, "Execution terminated: runner stopped without cleanup"} =
+      assert {:error, {:uncertain, "Execution terminated: runner stopped without cleanup"}} =
                Dispatch.await(fixture.pid, fixture.close)
 
       assert fixture.close.ctx.plane == :guest
@@ -1047,7 +1092,7 @@ defmodule Opus.HostTest do
       assert Jason.decode!(report["answer"]) ==
                report_of(fixture, %{args | "member" => fixture.member})
 
-      assert {:error, "Execution terminated: runner stopped without cleanup"} =
+      assert {:error, {:uncertain, "Execution terminated: runner stopped without cleanup"}} =
                Dispatch.await(fixture.pid, fixture.close)
     end
   end

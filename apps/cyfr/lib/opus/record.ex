@@ -789,19 +789,40 @@ defmodule Opus.Record do
   def write_failed(record, event_data \\ %{})
 
   def write_failed(%__MODULE__{status: status} = record, event_data)
-      when status in [:failed, :cancelled] and is_map(event_data) do
+      when status in [:failed, :cancelled] and is_map(event_data),
+      do: write_ended(record, event_data, nil)
+
+  def write_failed(%__MODULE__{status: status}, _event_data) do
+    {:error, "Cannot write failed record for status: #{status}"}
+  end
+
+  @doc """
+  `write_failed/2` for a run its attempt stopped holding before it closed
+  the run: the attempt closes with outcome `uncertain`, since what the
+  run did before it ended is not known, and the row fails as
+  `write_failed/2` fails it. `record` is one `fail/2` made.
+  """
+  @spec write_uncertain(t()) :: :ok | {:error, term()}
+  def write_uncertain(%__MODULE__{status: :failed} = record),
+    do: write_ended(record, %{}, "uncertain")
+
+  defp write_ended(%__MODULE__{status: status} = record, event_data, outcome) do
     ctx = record_to_ctx(record)
 
     case Arca.Execution.record_end(
            Sanctum.Context.actor(ctx),
            record.id,
            Atom.to_string(status),
-           %{
-             completed_at: record.completed_at,
-             duration_ms: record.duration_ms,
-             error_message: record.error,
-             event: event_data
-           },
+           Prima.MapUtil.put_present(
+             %{
+               completed_at: record.completed_at,
+               duration_ms: record.duration_ms,
+               error_message: record.error,
+               event: event_data
+             },
+             :outcome,
+             outcome
+           ),
            record.attempt,
            grant: record.grant || :stored,
            verify: &Sanctum.ExecutionStanding.stamp_only/1
@@ -819,9 +840,23 @@ defmodule Opus.Record do
     end
   end
 
-  def write_failed(%__MODULE__{status: status}, _event_data) do
-    {:error, "Cannot write failed record for status: #{status}"}
+  @doc """
+  The outcome the attempt that owns the row `record` was reread as
+  (`reread/1`) closed with — `"ok"`, `"error"`, `"uncertain"`,
+  `"result_lost"` or `"cancelled"` — read in the record's own athanor.
+  `{:error, :not_found}` for a record with no attempt or an attempt not
+  yet closed, `{:error, reason}` when the store cannot answer.
+  """
+  @spec ended_outcome(t()) :: {:ok, String.t()} | {:error, term()}
+  def ended_outcome(%__MODULE__{attempt: attempt} = record) when is_binary(attempt) do
+    case Arca.ExecutionAttempts.get(Sanctum.Context.actor(record_to_ctx(record)), attempt) do
+      %{outcome: outcome} when is_binary(outcome) -> {:ok, outcome}
+      {:error, _} = error -> error
+      _open_or_missing -> {:error, :not_found}
+    end
   end
+
+  def ended_outcome(%__MODULE__{}), do: {:error, :not_found}
 
   @doc """
   Load an execution record by ID.

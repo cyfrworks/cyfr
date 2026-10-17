@@ -61,7 +61,7 @@ defmodule Sanctum.Gate.CatalogCrashLogTest do
   test "a supervised handler's crash names the handler by arity, never the context or arguments" do
     {result, log} = call("put", runner: :supervised)
 
-    assert {:error, {:exit, _sentence}} = result
+    assert {:error, {:uncertain, _sentence}} = result
     assert log =~ "[Sanctum.Dispatch] Tool crash_log_probe exited: "
     assert log =~ "Sanctum.Gate.CatalogCrashLogTest.Probe, :handle, 3,"
     refute log =~ @email
@@ -71,7 +71,7 @@ defmodule Sanctum.Gate.CatalogCrashLogTest do
   test "an inline handler's exit names the call it made by arity, never its request" do
     {result, log} = call("call", runner: :inline)
 
-    assert {:error, {:exit, _sentence}} = result
+    assert {:error, {:uncertain, _sentence}} = result
     assert log =~ "{GenServer, :call, 3}"
     refute log =~ @value
   end

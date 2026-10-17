@@ -159,7 +159,7 @@ defmodule Opus.AttemptMaskingTest do
     assert %{"error" => "lost"} = token(fixture)
     assert %{"error" => "lost"} = push(fixture, %{"text" => @token})
 
-    assert {:error, "Execution attempt ended before it closed"} =
+    assert {:error, {:uncertain, "Execution attempt ended before it closed"}} =
              Dispatch.await(attempt, fixture.close)
 
     row = Arca.Repo.get!(Arca.Schemas.Execution, id)

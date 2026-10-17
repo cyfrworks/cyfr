@@ -501,7 +501,7 @@ defmodule Cyfr.TwoWorkersTest do
       # boot's attempts.
       release!(close, :drop)
 
-      assert {:error, @lapsed} = Task.await(root, 30_000)
+      assert {:error, {:uncertain, @lapsed}} = Task.await(root, 30_000)
       assert %{status: "failed", error_message: @lapsed} = row(root_id)
 
       assert %{state: "lapsed", outcome: "uncertain", boot_id: ^old_boot} =

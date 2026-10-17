@@ -2009,4 +2009,114 @@ defmodule Aqua.LoopTest do
     assert said =~ "execution.run is not in the agent's policy"
     refute Enum.any?(ScriptedWorker.calls(), &(&1.input == %{}))
   end
+
+  # What a hand's child read before its runner was lost: a source no other
+  # step of the turn holds.
+  @lost_read Prima.Source.outside("lost-read.example")
+
+  test "a hand whose runner is lost answers its outcome unknown: the turn stops on it, and what the child read joins the turn",
+       %{ctx: ctx, thread: thread} do
+    turn = accept!(ctx, thread, "@aqua fetch it")
+    start_supervised!({ScriptedWorker, ref: [@model, "catalyst:local.http"], script: []})
+
+    ScriptedWorker.script([
+      calls([{"c1", "http", %{"action" => "get", "url" => "https://example.test/x"}}]),
+      {:probe, self()},
+      reply("fetched")
+    ])
+
+    task = run(ctx, turn)
+    assert_receive {:scripted_probe, runner, child}, 30_000
+    :ok = Opus.Ledger.join(Sanctum.Context.actor(ctx), child, [@lost_read])
+
+    # The runner ends while it holds the run: its worker service reports
+    # the exit, the attempt lapses, and the waiting worker is answered.
+    Process.exit(runner, :kill)
+
+    assert {:paused, :uncertain} = Task.await(task, 60_000)
+    assert {:ok, %{status: "paused", paused_reason: "uncertain"}} = Tape.turn(ctx, turn.id)
+    {:ok, steps} = Tape.steps(ctx, turn)
+
+    assert %{dispatch_state: "uncertain", outcome: "uncertain"} =
+             Enum.find(steps, &(&1.action == "get"))
+
+    # No model round follows the lost call: the model never hears an
+    # ordinary error it could answer by calling again.
+    assert Enum.count(steps, &(&1.kind == "model")) == 1
+    assert @lost_read in turn_sources(ctx, turn)
+  end
+
+  test "a worker that dies with its call's in-process handler still running stops the handler before the step settles",
+       %{ctx: ctx, thread: thread} do
+    turn = accept!(ctx, thread, "@aqua fetch it")
+    start_supervised!({ScriptedWorker, ref: [@model, "catalyst:local.http"], script: []})
+
+    ScriptedWorker.script([
+      calls([{"c1", "http", %{"action" => "get", "url" => "https://example.test/x"}}]),
+      {:probe, self()},
+      reply("fetched")
+    ])
+
+    task = run(ctx, turn)
+    assert_receive {:scripted_probe, _runner, child}, 30_000
+    {:ok, steps} = Tape.steps(ctx, turn)
+    get = Enum.find(steps, &(&1.action == "get"))
+
+    # A handler the gate runs under the step's handle, registered: it
+    # outlives the process that claimed the handle, as a catalog call's
+    # handler outlives the worker that dispatched it.
+    handle = {turn.id, get.id, get.generation}
+    test = self()
+
+    claimer =
+      spawn(fn ->
+        send(test, {:claimed, Sanctum.RunningTasks.claim(handle)})
+        Process.sleep(:infinity)
+      end)
+
+    assert_receive {:claimed, :ok}, 5_000
+    handler = spawn(fn -> Process.sleep(:infinity) end)
+    handler_ref = Process.monitor(handler)
+    assert :ok = Sanctum.RunningTasks.register_handle(handle, handler)
+    Process.exit(claimer, :kill)
+
+    # The loop's worker waits on the call's child: it dies.
+    %{waiter: worker} = :sys.get_state(Opus.Attempt.whereis(child))
+    Process.exit(worker, :kill)
+
+    assert_receive {:DOWN, ^handler_ref, :process, ^handler, :cancelled}, 10_000
+    assert {:paused, :uncertain} = Task.await(task, 60_000)
+    assert {:ok, %{dispatch_state: "uncertain"}} = Tape.step(ctx, get.id)
+
+    Prima.Test.Wait.wait_until(
+      fn -> :ets.lookup(Sanctum.RunningTasks.Handles, handle) == [] end,
+      5_000,
+      "the handle's row to go with its handler"
+    )
+  end
+
+  test "a launch whose root cannot be taken back stops the turn paused around it, and nothing after it runs",
+       %{ctx: ctx, thread: thread} do
+    {:ok, athanor} = Sanctum.Tenancy.Athanors.get(ctx.athanor_id)
+
+    # The athanor is archived while the launched app runs, and the app then
+    # fails on its own: its failure is known, and the turn's root no longer
+    # stands, so no try takes it back.
+    %{turn: turn, result: result} =
+      launch_through_loop!(ctx, thread, {:error, "the app failed"}, fn _root_id ->
+        assert {:ok, %{status: "archived"}} =
+                 Sanctum.Tenancy.Athanors.archive(athanor, force: true)
+      end)
+
+    assert result == {:paused, :launch}
+    assert {:ok, %{status: "paused", paused_reason: "launch"}} = Tape.turn(ctx, turn.id)
+    {:ok, steps} = Tape.steps(ctx, turn)
+    assert %{dispatch_state: "closed", outcome: "error"} =
+             Enum.find(steps, &(&1.kind == "launch"))
+
+    assert Enum.count(steps, &(&1.kind == "model")) == 1
+
+    assert [_proposed_the_launch] =
+             Enum.filter(ScriptedWorker.calls(), &(&1.input["operation"] == "chat"))
+  end
 end

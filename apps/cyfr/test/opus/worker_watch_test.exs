@@ -296,7 +296,7 @@ defmodule Opus.WorkerWatchTest do
 
       Worker.script!(self(), [@not_a_status])
 
-      assert {:error, @lapsed} = Dispatch.await(fixture.pid, fixture.close)
+      assert {:error, {:uncertain, @lapsed}} = Dispatch.await(fixture.pid, fixture.close)
       assert %{status: "failed", error_message: @lapsed} = row(fixture)
       assert %{state: "lapsed", outcome: "uncertain", boot_id: "boot_1"} = attempt_row(fixture)
       execution_id = fixture.execution_id
@@ -319,7 +319,7 @@ defmodule Opus.WorkerWatchTest do
       refute_received %Cyfr.Bus.ExecutionEvent{type: "execution.lapsed"}
 
       Worker.script!(self(), [status("boot_1", [later.attempt]), @not_a_status])
-      assert {:error, @lapsed} = Dispatch.await(later.pid, later.close)
+      assert {:error, {:uncertain, @lapsed}} = Dispatch.await(later.pid, later.close)
       assert %{status: "failed", error_message: @lapsed} = row(later)
     end
 
@@ -361,7 +361,7 @@ defmodule Opus.WorkerWatchTest do
       malformed = status("boot_1", [fixture.attempt], %{runners: %{fresh: -1}})
       Worker.script!(self(), [elsewhere, malformed, elsewhere])
 
-      assert {:error, @lapsed} = Dispatch.await(fixture.pid, fixture.close)
+      assert {:error, {:uncertain, @lapsed}} = Dispatch.await(fixture.pid, fixture.close)
       assert %{status: "failed", error_message: @lapsed} = row(fixture)
       assert %{lapsed: true} = seen(watch)
     end
@@ -503,7 +503,7 @@ defmodule Opus.WorkerWatchTest do
 
       Worker.script!(self(), [status("boot_2")])
 
-      assert {:error, @lapsed} = Dispatch.await(old.pid, old.close)
+      assert {:error, {:uncertain, @lapsed}} = Dispatch.await(old.pid, old.close)
       assert %{status: "failed", error_message: @lapsed} = row(old)
       assert %{state: "lapsed", outcome: "uncertain", boot_id: "boot_1"} = attempt_row(old)
       old_id = old.execution_id

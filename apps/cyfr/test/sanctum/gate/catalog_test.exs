@@ -463,13 +463,15 @@ defmodule Sanctum.Gate.CatalogTest do
         ctx = Sanctum.TestContext.local()
         caller = self()
 
-        assert {:error, {:crashed, message}} =
+        # The action is no reviewed read, so its outcome is unknown, never
+        # a failure: it may have acted before it raised.
+        assert {:error, {:uncertain, message}} =
                  Sanctum.Gate.call_external(@crash_tool, ctx, %{"action" => "raise"})
 
         # The tuple names the tool, never the exception's own message — that
         # text can carry a query, a path, or the offending bytes, and this
         # tuple renders verbatim on the wire.
-        assert message == "Tool #{@crash_tool} crashed"
+        assert message == "Tool #{@crash_tool} crashed; its outcome is unknown"
         refute message =~ "boom from provider"
 
         # The whole point: Task.async would have propagated a link exit and killed
@@ -485,10 +487,10 @@ defmodule Sanctum.Gate.CatalogTest do
       Catalog.with_providers([Probe.Crashing], fn ->
         ctx = Sanctum.TestContext.local()
 
-        assert {:error, {:exit, message}} =
+        assert {:error, {:uncertain, message}} =
                  Sanctum.Gate.call_external(@crash_tool, ctx, %{"action" => "exit"})
 
-        assert message =~ "exited unexpectedly"
+        assert message == "Tool #{@crash_tool} exited; its outcome is unknown"
         assert Process.alive?(self())
       end)
     end
@@ -644,10 +646,11 @@ defmodule Sanctum.Gate.CatalogTest do
         assert :ok = Sanctum.RunningTasks.cancel("req_tracked")
 
         # Killing the handler surfaces to the caller as a typed error rather than
-        # taking the dispatcher down with it.
-        assert_receive {:result, {:error, {:cancelled, message} = reason}}, 5_000
-        assert message =~ "cancelled"
-        assert %Prima.Refusal{class: :cancelled} = Sanctum.Refusals.classify(reason)
+        # taking the dispatcher down with it; the handler had run, and its
+        # action is no reviewed read, so its outcome is unknown.
+        assert_receive {:result, {:error, {:uncertain, message} = reason}}, 5_000
+        assert message =~ "was cancelled; its outcome is unknown"
+        assert %Prima.Refusal{class: :uncertain} = Sanctum.Refusals.classify(reason)
 
         # A second cancel, once the first one's unregister has run, finds nothing.
         :sys.get_state(Sanctum.RunningTasks)
@@ -682,7 +685,7 @@ defmodule Sanctum.Gate.CatalogTest do
 
         assert :ok = Sanctum.RunningTasks.cancel_handle(handle)
         assert_receive {:DOWN, ^ref, :process, _, :cancelled}, 5_000
-        assert_receive {:result, {:error, {:cancelled, "Tool " <> _}}}, 5_000
+        assert_receive {:result, {:error, {:uncertain, "Tool " <> _}}}, 5_000
 
         assert :ok = Sanctum.RunningTasks.cancel_handle(handle)
         assert [] = :ets.lookup(Sanctum.RunningTasks.Handles, handle)
@@ -719,13 +722,13 @@ defmodule Sanctum.Gate.CatalogTest do
 
         log =
           ExUnit.CaptureLog.capture_log(fn ->
-            assert {:error, {:crashed, message}} =
+            assert {:error, {:uncertain, message}} =
                      Sanctum.Gate.call_external(@blocking_tool, ctx, %{
                        "action" => "block",
                        "crash" => true
                      })
 
-            assert message =~ "crashed"
+            assert message =~ "crashed; its outcome is unknown"
           end)
 
         assert log =~ "crashed"
@@ -1205,18 +1208,34 @@ defmodule Sanctum.Gate.CatalogTest do
     end
 
     test "a failure the handler answers is an admitted decision whose completion failed" do
-      Catalog.with_providers([Probe.Crashing], fn ->
+      Catalog.with_providers([Probe.Refusing], fn ->
         ctx = %{Sanctum.TestContext.local() | request_id: Prima.UUID7.request_id()}
 
-        assert {:error, {:crashed, _}} =
-                 Sanctum.Gate.call_external(Probe.Crashing.tool(), ctx, %{"action" => "raise"})
+        assert {:error, {:invalid_argument, _}} =
+                 Sanctum.Gate.call_external("refusing_probe", ctx, %{"action" => "invalid"})
 
         assert {:ok, [decision]} =
                  Arca.DecisionLog.correlate(Sanctum.Context.actor(ctx), ctx.request_id)
 
         assert decision.admission == :admitted
         assert decision.completion == :failed
-        assert decision.completion_class == :internal
+        assert decision.completion_class == :invalid_argument
+      end)
+    end
+
+    test "a handler that raised after it may have acted is an admitted decision whose completion is uncertain" do
+      Catalog.with_providers([Probe.Crashing], fn ->
+        ctx = %{Sanctum.TestContext.local() | request_id: Prima.UUID7.request_id()}
+
+        assert {:error, {:uncertain, _}} =
+                 Sanctum.Gate.call_external(Probe.Crashing.tool(), ctx, %{"action" => "raise"})
+
+        assert {:ok, [decision]} =
+                 Arca.DecisionLog.correlate(Sanctum.Context.actor(ctx), ctx.request_id)
+
+        assert decision.admission == :admitted
+        assert decision.completion == :uncertain
+        assert decision.completion_class == :uncertain
       end)
     end
 

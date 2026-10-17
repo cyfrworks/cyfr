@@ -879,6 +879,14 @@ defmodule Opus.Provider do
     {:error, "invalid_reference: #{reason}"}
   end
 
+  # A run whose outcome is unknown — its attempt ended before it closed
+  # it, or its result was not kept — stays typed, so its caller (a turn's
+  # launch, the gate's decision) records an unknown outcome, never a
+  # failure (`Opus.Close.lost/1`).
+  defp format_root_result({:error, {tag, message}} = unknown)
+       when tag in [:uncertain, :result_lost] and is_binary(message),
+       do: unknown
+
   defp format_root_result({:error, reason}) when not is_binary(reason) do
     # Render refusals through the gate's renderer; an internal term reads
     # as the fixed sentence and is logged by its shape.

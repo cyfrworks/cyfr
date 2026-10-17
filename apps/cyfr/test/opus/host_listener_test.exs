@@ -298,7 +298,7 @@ defmodule Opus.HostListenerTest do
 
       assert {200, %{"ok" => true}} = report(url, fixture)
 
-      assert {:error, "Execution terminated: runner stopped without cleanup"} =
+      assert {:error, {:uncertain, "Execution terminated: runner stopped without cleanup"}} =
                Dispatch.await(fixture.pid, fixture.close)
 
       assert %{state: "lapsed"} =
@@ -518,7 +518,7 @@ defmodule Opus.HostListenerTest do
 
       assert {200, %{"ok" => true}} = report(url, fixture)
 
-      assert {:error, "Execution terminated: runner stopped without cleanup"} =
+      assert {:error, {:uncertain, "Execution terminated: runner stopped without cleanup"}} =
                Dispatch.await(fixture.pid, fixture.close)
 
       assert {200, %{"error" => "lost"}} = push(url, fixture, "after the lapse")

@@ -181,25 +181,42 @@ defmodule Opus.Close do
   message is fixed and carries nothing the guest produced, so it needs no
   masking set.
 
+  What the run did before its attempt ended is not known: a step past
+  which nothing is replay-safe may have taken effect. The row closes
+  failed with its attempt's outcome `uncertain`
+  (`Opus.Record.write_uncertain/1`), and the answer is
+  `{:error, {:uncertain, message}}`, never an ordinary failure.
+
   The write is fenced on the run's attempt. When the row is no longer
   running under it (the attempt wrote its terminal row before it ended, a
-  cancel closed the row, or another attempt took it over), nothing is
-  written, no failure telemetry fires and no child is failed, and the
-  answer is the row's: its result when it completed, its error when it
-  failed or was cancelled, and the fixed message otherwise. A boot that
-  does not hold the control plane (`Arca.ControlPlane.held?/0`) writes
-  nothing and answers the same way.
+  cancel closed the row, a lapse closed it, or another attempt took it
+  over), nothing is written, no failure telemetry fires and no child is
+  failed, and the answer is the row's: its result when it completed, its
+  error when it was cancelled, and when it failed, as the attempt that
+  ended it closed (`Opus.Record.ended_outcome/1`) — `{:uncertain, error}`
+  for `uncertain` (a lapse's), `{:result_lost, error}` for `result_lost`,
+  the error itself for `error`. A row still open under another attempt,
+  one that cannot be read and a failed one whose attempt's outcome cannot
+  be read answer `{:error, {:uncertain, message}}`. A boot that does not
+  hold the control plane (`Arca.ControlPlane.held?/0`) writes nothing and
+  answers the same way.
   """
-  @spec lost(t()) :: {:ok, map()} | {:error, String.t()}
+  @spec lost(t()) ::
+          {:ok, map()}
+          | {:error, String.t() | {:uncertain, String.t()} | {:result_lost, String.t()}}
   def lost(%__MODULE__{record: record} = close) do
     message = "Execution attempt ended before it closed"
 
     if Arca.ControlPlane.held?() do
       failed_record = Record.fail(record, message)
 
-      case Record.write_failed(failed_record) do
-        {:error, :not_running} -> closed_answer(close, message)
-        written -> ended_failed(failed_record, written, message)
+      case Record.write_uncertain(failed_record) do
+        {:error, :not_running} ->
+          closed_answer(close, message)
+
+        written ->
+          {:error, message} = ended_failed(failed_record, written, message)
+          {:error, {:uncertain, message}}
       end
     else
       closed_answer(close, message)
@@ -233,11 +250,20 @@ defmodule Opus.Close do
            sources: row.sources
          }}
 
-      {:ok, %Record{status: status, error: error}} when status in [:failed, :cancelled] ->
-        {:error, error || "Execution #{status}"}
+      {:ok, %Record{status: :cancelled, error: error}} ->
+        {:error, error || "Execution cancelled"}
 
-      _ ->
-        {:error, message}
+      {:ok, %Record{status: :failed, error: error} = row} ->
+        error = error || "Execution failed"
+
+        case Record.ended_outcome(row) do
+          {:ok, "error"} -> {:error, error}
+          {:ok, "result_lost"} -> {:error, {:result_lost, error}}
+          _uncertain_or_unread -> {:error, {:uncertain, error}}
+        end
+
+      _open_elsewhere_or_unread ->
+        {:error, {:uncertain, message}}
     end
   end
 

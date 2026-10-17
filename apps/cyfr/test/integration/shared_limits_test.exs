@@ -351,7 +351,7 @@ defmodule Cyfr.SharedLimitsTest do
 
     :ok = Sweeper.sweep()
 
-    assert {{:error, @lapsed}, _id} = Task.await(on_runtime.task, 30_000)
+    assert {{:error, {:uncertain, @lapsed}}, _id} = Task.await(on_runtime.task, 30_000)
     assert %{state: "lapsed", boot_id: ^old_boot} = attempt(ctx, on_runtime.id)
     assert_held(ctx, authority, [on_scripted], before)
 
@@ -365,7 +365,7 @@ defmodule Cyfr.SharedLimitsTest do
 
     # The scripted service's runner dies, and its service reports the exit.
     Process.exit(runner, :kill)
-    assert {{:error, @lapsed}, _id} = Task.await(on_scripted.task, 30_000)
+    assert {{:error, {:uncertain, @lapsed}}, _id} = Task.await(on_scripted.task, 30_000)
     assert %{state: "lapsed", service_id: @other} = attempt(ctx, on_scripted.id)
     assert_held(ctx, authority, [again], before)
 

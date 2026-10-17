@@ -354,7 +354,8 @@ defmodule Cyfr.Test.ScriptedWorkerTest do
     # The runner ends while it holds the run, its attempt still open.
     Process.exit(runner, :kill)
 
-    assert {:error, "Execution terminated: runner stopped without cleanup"} = Task.await(task)
+    assert {:error, {:uncertain, "Execution terminated: runner stopped without cleanup"}} =
+             Task.await(task)
 
     # `Dispatch.run/3` answers the caller before the attempt process is
     # done: the attempt closes the row, settles the accounting and then
@@ -664,7 +665,7 @@ defmodule Cyfr.Test.ScriptedWorkerTest do
       # The report naming this member lapses the attempt its runner held.
       assert {200, %{"v" => 1, "ok" => true}} = exit_report(url, fixture, fixture.member)
 
-      assert {:error, "Execution terminated: runner stopped without cleanup"} =
+      assert {:error, {:uncertain, "Execution terminated: runner stopped without cleanup"}} =
                Dispatch.await(fixture.pid, fixture.close)
 
       assert %{state: "lapsed"} = attempt_row(fixture)
