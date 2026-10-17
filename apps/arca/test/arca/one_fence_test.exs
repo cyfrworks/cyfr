@@ -66,23 +66,16 @@ defmodule Arca.OneFenceTest do
     {"arca/security_transitions.ex", "restore/1"} =>
       "the restore transition under the slot the boot names, refused as `:slot_lost`, within its deadline",
     {"arca/security_transitions/issuance.ex", "owned/1"} =>
-      "the issuance's fence: `Arca.Repo.owned/2`'s shape without its rescue and projection, which `Issuance.run/3`'s callers apply",
+      "a transaction step its callers rescue around: `Arca.ApiKeyStorage.create_key/2` and `Arca.WebhookStorage.create_webhook/2` read a raised unique-index violation as `{:error, :already_exists}`, which `owned/2`'s own rescue would answer `{:error, :database_error}`",
     {"arca/storage_units.ex", "move_pointer/7"} =>
       "a pointer move: the slot under the lease row's shared lock beside an attempt's claim row, the compare in the update's WHERE",
     {"arca/storage_units.ex", "stamped_retire/4"} =>
       "a retire under the slot and an attempt's claim row, as a pointer move is"
   }
 
-  # Functions that read a step's answer inline, inside a transaction of
-  # their own whose other refusals `committed/1` does not carry.
-  @readings %{
-    {"arca/component_storage.ex", "under_claim/3"} =>
-      "the write's answer inside the claim's transaction, beside its `:not_owner` rollback",
-    {"arca/execution.ex", "admit/4"} =>
-      "the execution row's insert inside the admission, whose changeset is the rollback",
-    {"arca/fenced_publication.ex", "fenced/2"} =>
-      "a publication step's revision, whose refusals the step's closure tags (`{Arca.FencedPublication, :closure, reason}`)"
-  }
+  # Functions that read a step's answer themselves, each with why it is
+  # not `committed/1`'s reading.
+  @readings %{}
 
   test "no Arca module writes its own fence or its own reading" do
     modules = tree()

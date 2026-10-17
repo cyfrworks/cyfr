@@ -245,10 +245,7 @@ defmodule Arca.Execution do
       attrs = seed!(athanor_id, attrs, Keyword.get(opts, :step))
 
       execution =
-        case Arca.Repo.insert(Row.start_changeset(attrs)) do
-          {:ok, row} -> row
-          {:error, changeset} -> Arca.Repo.rollback(changeset)
-        end
+        attrs |> Row.start_changeset() |> Arca.Repo.insert() |> Arca.Repo.committed()
 
       attempt =
         Arca.ExecutionAttempts.open!(Prima.Actor.in_athanor(athanor_id), execution.id,

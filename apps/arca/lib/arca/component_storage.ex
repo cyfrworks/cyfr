@@ -145,10 +145,7 @@ defmodule Arca.ComponentStorage do
   defp under_claim(actor, %{owner: owner, fence: fence, slot: slot}, write) do
     Arca.Repo.locking_transaction(fn ->
       if Arca.ProvisioningClaims.hold?(actor, owner, fence, slot) do
-        case write.() do
-          {:ok, written} -> written
-          {:error, reason} -> Arca.Repo.rollback(reason)
-        end
+        write.() |> Arca.Repo.committed()
       else
         Arca.Repo.rollback(:not_owner)
       end

@@ -276,12 +276,7 @@ defmodule Arca.FencedPublication do
   # own leave it.
   defp fenced(label, step) do
     Arca.Repo.Errors.with_db_rescue(label, fn ->
-      Arca.Repo.locking_transaction(fn ->
-        case step.() do
-          {:ok, revision} -> revision
-          {:error, reason} -> Arca.Repo.rollback(reason)
-        end
-      end)
+      Arca.Repo.locking_transaction(fn -> step.() |> Arca.Repo.committed() end)
       |> case do
         {:ok, revision} when is_integer(revision) and revision >= 0 -> {:ok, revision}
         {:error, {__MODULE__, :closure, reason}} -> {:error, reason}
