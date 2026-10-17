@@ -246,7 +246,7 @@ defmodule Arca.AstraT1bBackendReviewTest do
   end
 
   # A removal parked at its delete of the retired revision's prefix.
-  defp park_delete(actor, fun) do
+  defp park_delete(_actor, fun) do
     test = self()
 
     task =
