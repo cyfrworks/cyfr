@@ -982,7 +982,7 @@ Every CLI command has an MCP equivalent that formulas can call programmatically:
 | `cyfr build compile` | `build` | `compile` | `reference` (auto-registers) |
 | `cyfr build validate` | `build` | `validate` | `wasm_base64` |
 | `cyfr build toolchains` | `build` | `toolchains` | — |
-| `cyfr new` | `component` | `new` | `type`, `name`, `version` |
+| `cyfr new` | `component` | `create` | `type`, `name`, `version`, `template` |
 | `cyfr search` | `component` | `search` | `query`, `type`, `category`, `tags`, `source`, `limit` |
 | `cyfr inspect` | `component` | `inspect` | `reference` |
 | `cyfr list` | `component` | `list` | `type` |

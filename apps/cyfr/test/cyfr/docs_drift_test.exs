@@ -1336,14 +1336,14 @@ defmodule Cyfr.DocsDriftTest do
   # integration-guide's scope, key-type, vault and consent-walk tables
   # ==========================================================================
 
-  # The rows of the first table under `heading`, up to the next heading,
-  # each as its trimmed cells.
-  defp guide_table(heading) do
-    guide = File.read!(@integration_guide)
+  # The rows of the first table under `heading` in `path` (the integration
+  # guide unless named), up to the next heading, each as its trimmed cells.
+  defp guide_table(heading, path \\ @integration_guide) do
+    guide = File.read!(path)
 
     [_, section] =
       Regex.run(~r/^#{Regex.escape(heading)}\n(.*?)(?=^#)/ms, guide) ||
-        flunk("integration-guide.md has no section #{inspect(heading)}")
+        flunk("#{Path.basename(path)} has no section #{inspect(heading)}")
 
     rows =
       for line <- String.split(section, "\n"),
@@ -1433,6 +1433,44 @@ defmodule Cyfr.DocsDriftTest do
 
   test "the guide's canvas table is the canvas tool's operations" do
     assert_action_table("### Canvases (`canvas` tool)", "canvas")
+  end
+
+  # component-guide's CLI-to-MCP table names, for each command, the tool
+  # and the actions a formula calls in its place: every pair is one the
+  # catalog serves, and every argument the key-args column backquotes as a
+  # bare name is one those actions declare or enumerate. A value it shows
+  # in another shape (a flag, an answer's fields) is not an argument.
+  test "component-guide's CLI-to-MCP table names only operations the catalog serves" do
+    rows =
+      guide_table("#### CLI → MCP Tool Reference", Path.join(@repo_root, "component-guide.md"))
+
+    for [cli, tool, actions, args] <- rows do
+      [tool] = backquoted(tool)
+      operations = operations(tool)
+      named = backquoted(actions)
+      assert named != [], "component-guide.md's row for #{cli} names no action"
+
+      for action <- named do
+        assert Map.has_key?(operations, action),
+               "component-guide.md maps #{cli} to #{tool}.#{action}, which the catalog does " <>
+                 "not serve; #{tool} declares #{inspect(Enum.sort(Map.keys(operations)))}"
+      end
+
+      known =
+        for action <- named,
+            %Prima.Operation{args: declared} <- [Map.fetch!(operations, action)],
+            arg <- declared,
+            name <- [arg.name | arg.enum || []],
+            do: name
+
+      [asked | _returned] = String.split(args, "→")
+
+      for name <- backquoted(asked), name =~ ~r/^[a-z_]+$/ do
+        assert name in known,
+               "component-guide.md names `#{name}` for #{cli} (#{tool}.#{Enum.join(named, "/")}), " <>
+                 "which declares none such"
+      end
+    end
   end
 
   # A feed's press is an external operation and nothing narrower: the shell
