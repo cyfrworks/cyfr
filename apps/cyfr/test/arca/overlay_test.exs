@@ -1550,9 +1550,11 @@ defmodule Arca.OverlayTest do
 
       assert_receive {:staging, replacer}, 5_000
 
-      # The replacement's draft is live, so another writer is refused; once
-      # the draft has outlived its lifetime another writer takes it, and
-      # the replacement has lost the unit.
+      # The replacement's draft is live, so another writer is refused — and
+      # on this node still refused once the draft has outlived its
+      # lifetime, since the replacement holds the unit's lock while it
+      # stages. Another member takes the expired lease through the rows
+      # alone and commits, and the replacement has lost the unit.
       assert {:error, :stale_writer} =
                Arca.Overlay.commit_unit(
                  actor,
@@ -1563,6 +1565,40 @@ defmodule Arca.OverlayTest do
 
       expire_drafts!()
 
+      assert {:error, :stale_writer} =
+               Arca.Overlay.commit_unit(
+                 actor,
+                 @built,
+                 {:files, [{["cyfr-manifest.json"], "{}"}]},
+                 cap: :exempt
+               )
+
+      {root, key} = Arca.Storage.UnitLocator.unit_key(@built)
+      {:ok, taken} = Arca.StorageUnits.register_draft(actor, root, key, "wrt_member")
+      landed = Arca.StorageUnits.new_revision()
+
+      {:committed, _generation} =
+        Arca.StorageUnits.stamped_commit(actor, taken, taken.current_revision, "wrt_member", %{
+          new_revision: landed,
+          content_identity: Prima.Digest.sha256("member"),
+          commit_identity: "member"
+        })
+
+      :ok = Arca.StorageUnits.release_served(actor, taken, "wrt_member", landed)
+
+      send(replacer, :proceed)
+      assert {:error, :stale_revision} = Task.await(replacing, 30_000)
+
+      # The loser's objects are gone and were never served — the subtree
+      # reads as it did — and the unit is free again for this node's writer.
+      assert {:ok, "one"} = Arca.get(actor, @built ++ ["dist", "index.html"])
+
+      assert {:ok, []} =
+               Arca.list_recursive(
+                 actor,
+                 Arca.Storage.UnitLocator.staging_prefix(@built)
+               )
+
       assert {:ok, _written} =
                Arca.Overlay.commit_unit(
                  actor,
@@ -1571,18 +1607,8 @@ defmodule Arca.OverlayTest do
                  cap: :exempt
                )
 
-      send(replacer, :proceed)
-      assert {:error, :stale_revision} = Task.await(replacing, 30_000)
-
-      # The loser's objects are gone and were never served.
       assert {:ok, "{}"} = Arca.get(actor, @built ++ ["cyfr-manifest.json"])
       refute Arca.exists?(actor, @built ++ ["dist", "index.html"])
-
-      assert {:ok, []} =
-               Arca.list_recursive(
-                 actor,
-                 Arca.Storage.UnitLocator.staging_prefix(@built)
-               )
     end
 
     test "a tree is replaced only inside a unit, never at one, above one or at its sentinel",

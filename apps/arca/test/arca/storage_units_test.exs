@@ -376,9 +376,13 @@ defmodule Arca.StorageUnitsTest do
       assert :ok = StorageUnits.finish_retire(actor, @root, key, token)
       assert %{generation: ^retired, tombstone: true, ready: false} = change(actor, key)
 
-      assert {:not_found, absent} = StorageUnits.stamped_retire(other, @root, key)
+      # A unit the other athanor never had gets a row of its own there,
+      # taken for the removal and retired by it; the tombstone is written.
+      assert {:retiring, absent, their_token} = StorageUnits.stamped_retire(other, @root, key)
       assert %{generation: ^absent, tombstone: true} = change(other, key)
       assert {:error, :not_found} = StorageUnits.current(other, @root, key)
+      assert :ok = StorageUnits.finish_retire(other, @root, key, their_token)
+      assert {:ok, []} = StorageUnits.journal(other, @root, key)
     end
   end
 
@@ -425,12 +429,18 @@ defmodule Arca.StorageUnitsTest do
                row(draft.id)
 
       # A retired unit is taken again — what an earlier removal left is
-      # cleared under the lease — and a unit with no row is not found.
+      # cleared under the lease — and a unit with no row gets a retired one.
       assert :ok = StorageUnits.retire(actor, @root, key)
       assert %{state: "retired", current_revision: "rev_1"} = row(draft.id)
 
       assert {:error, :not_found} =
-               StorageUnits.retire(actor, @root, "catalysts/local/none/9.9.9")
+               StorageUnits.journal(actor, @root, "catalysts/local/none/9.9.9")
+
+      assert :ok = StorageUnits.retire(actor, @root, "catalysts/local/none/9.9.9")
+      assert {:ok, []} = StorageUnits.journal(actor, @root, "catalysts/local/none/9.9.9")
+
+      assert {:error, :not_found} =
+               StorageUnits.current(actor, @root, "catalysts/local/none/9.9.9")
 
       # A draft that outlived its lifetime is a dead writer's, and no bar.
       {:ok, revived} = StorageUnits.register_draft(actor, @root, key, "wrt_3")
@@ -541,9 +551,14 @@ defmodule Arca.StorageUnitsTest do
 
       assert {:error, :not_found} = StorageUnits.current(other, @root, key)
       assert {:error, :not_found} = StorageUnits.journal(other, @root, key)
-      assert {:error, :not_found} = StorageUnits.retire(other, @root, key)
       assert {:ok, pointers} = StorageUnits.current_under(other, @root)
       refute Map.has_key?(pointers, key)
+
+      # The other athanor's removal makes and retires a row of its own, and
+      # leaves this athanor's unit as it stands.
+      assert :ok = StorageUnits.retire(other, @root, key)
+      assert %{state: "committed", current_revision: "rev_1"} = row(draft.id)
+      assert {:ok, %{current_revision: "rev_1"}} = StorageUnits.current(actor, @root, key)
 
       # A row handed across is still the other athanor's.
       {:ok, held} = StorageUnits.register_draft(actor, @root, key, "wrt_2")

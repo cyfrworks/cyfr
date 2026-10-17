@@ -188,15 +188,6 @@ defmodule Arca.OverlayPublicationFenceTest do
     Arca.Repo.update_all(StorageUnit, set: [updated_at: long_ago])
   end
 
-  # A bounded wait on an observable condition.
-  defp wait_until(fun, left \\ 100) do
-    cond do
-      fun.() -> :ok
-      left == 0 -> flunk("the condition never held")
-      true -> Process.sleep(50) && wait_until(fun, left - 1)
-    end
-  end
-
   # A writer parked at its move to the served location, its commit made.
   defp park_at_serve(actor, v) do
     Application.put_env(:arca, :storage_adapter, ParkServe)
@@ -243,29 +234,44 @@ defmodule Arca.OverlayPublicationFenceTest do
       assert {:ok, :deleted} = Arca.Overlay.drop_unit(actor, @unit)
     end
 
-    test "a writer whose draft was taken after it stalled past the lifetime serves nothing " <>
-           "a reader keeps, is told so, and leaves its staging for collection",
+    test "a writer stalled past the lifetime keeps the unit against every taker on this node; " <>
+           "a lease another member takes refuses its release, and its staging stays for collection",
          %{actor: actor} do
       {a, a_pid} = park_at_serve(actor, 1)
       {:ok, %{current_revision: r1}} = pointer(actor)
       expire_drafts!()
 
-      # The taker commits revision 2 while the stalled writer is parked
-      # inside its own move; its own move waits on the unit's fence.
-      b = Task.async(fn -> commit(actor, 2) end)
-      wait_until(fn -> match?({:ok, %{current_revision: r}} when r != r1, pointer(actor)) end)
-      {:ok, %{current_revision: r2}} = pointer(actor)
+      # On this node the stalled writer's lock keeps the unit however old
+      # its token: a taker is refused at once and takes nothing.
+      assert {:error, :stale_writer} = commit(actor, 2)
+      assert {:error, :stale_writer} = Arca.delete_tree(actor, @unit)
+      assert {:ok, %{current_revision: ^r1}} = pointer(actor)
+      assert %StorageUnit{draft_writer_token: "wrt_" <> _ = held} = row(actor)
+      assert held != "wrt_thief"
+
+      # Another member takes the expired lease through the rows alone.
+      {root, key} = UnitLocator.unit_key(@unit)
+
+      assert {:ok, %StorageUnit{draft_writer_token: "wrt_thief"}} =
+               StorageUnits.register_draft(actor, root, key, "wrt_thief")
 
       send(a_pid, :proceed)
       assert {:error, :stale_writer} = Task.await(a, 30_000)
-      assert {:ok, _written} = Task.await(b, 30_000)
 
-      # The row and the served bytes are the taker's, and the stalled
+      # The stalled writer is told; the row is the taker's, and the
       # writer's staged objects stay for the collector.
-      assert {:ok, %{current_revision: ^r2}} = pointer(actor)
-      assert {:ok, "V2"} = Arca.get(actor, @wasm)
-      assert %StorageUnit{state: "committed", draft_writer_token: nil} = row(actor)
+      assert %StorageUnit{
+               state: "committed",
+               current_revision: ^r1,
+               draft_writer_token: "wrt_thief"
+             } =
+               row(actor)
+
       assert staged(actor) == [r1]
+
+      :ok = StorageUnits.abandon_draft(actor, row(actor), "wrt_thief")
+      assert {:ok, _written} = commit(actor, 2)
+      assert {:ok, "V2"} = Arca.get(actor, @wasm)
     end
 
     test "a create during the first commit's finish refuses as :exists", %{actor: actor} do

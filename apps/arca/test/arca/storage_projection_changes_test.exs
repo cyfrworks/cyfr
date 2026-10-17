@@ -169,8 +169,9 @@ defmodule Arca.StorageProjectionChangesTest do
       actor: actor,
       key: key
     } do
-      assert {:not_found, generation} = StorageUnits.stamped_retire(actor, @root, key)
-      assert {:error, :not_found} = StorageUnits.retire(actor, @root, key)
+      # The removal makes the row it deletes under, and retires it.
+      generation = retire!(actor, key)
+      assert :ok = StorageUnits.retire(actor, @root, key)
 
       assert %{tombstone: true, ready: false} = row(actor, key)
       assert row(actor, key).generation > generation
@@ -337,9 +338,9 @@ defmodule Arca.StorageProjectionChangesTest do
     test "prune_acknowledged_tombstones/3 takes only consumed deletion evidence, and the epoch stays",
          %{actor: actor, key: key} do
       other = "catalysts/local/kept-#{System.unique_integer([:positive])}/1.0.0"
-      {:not_found, gone} = StorageUnits.stamped_retire(actor, @root, key)
+      gone = retire!(actor, key)
       :ok = StorageProjectionChanges.mark_ready(actor, @root, key, gone, nil)
-      {:not_found, _unconsumed} = StorageUnits.stamped_retire(actor, @root, other)
+      _unconsumed = retire!(actor, other)
 
       later = DateTime.add(DateTime.utc_now(), 1, :second)
 
@@ -363,9 +364,9 @@ defmodule Arca.StorageProjectionChangesTest do
     test "prune_acknowledged_tombstones/3 on a dry run counts what it would take, and takes nothing",
          %{actor: actor, key: key} do
       other = "catalysts/local/kept-#{System.unique_integer([:positive])}/1.0.0"
-      {:not_found, gone} = StorageUnits.stamped_retire(actor, @root, key)
+      gone = retire!(actor, key)
       :ok = StorageProjectionChanges.mark_ready(actor, @root, key, gone, nil)
-      {:not_found, _unconsumed} = StorageUnits.stamped_retire(actor, @root, other)
+      _unconsumed = retire!(actor, other)
       assert {:ok, :acknowledged} = acknowledge(actor, snapshot(actor))
 
       later = DateTime.add(DateTime.utc_now(), 1, :second)

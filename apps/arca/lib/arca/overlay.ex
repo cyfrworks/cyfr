@@ -61,15 +61,21 @@ defmodule Arca.Overlay do
   is refused, and the row is `retired` only once the delete has returned.
   A repair takes the lease too, and only when it is free.
 
-  On one node every finish, repair and removal of a unit also runs under
-  one node-local lock on the unit, and reads the row inside it before it
-  touches a served byte, so a late finisher whose token was taken — it
-  stalled past the draft's lifetime — serves nothing and leaves its
-  staged objects for collection, and the taker's bytes are the ones a
-  reader keeps. Across members the lease alone is the fence, as it is for
-  every fenced write: a member stalled past the lifetime between that
-  read and its move is the residual, and its release is refused so the
-  stall is never reported as success.
+  On one node the lease is taken and held under one node-local lock on
+  the unit as well: a writer holds it from its registration to its
+  release, a removal from its retirement to its retired row, a repair
+  from its registration to its release, and a lease take finding the
+  lock held answers `{:error, :stale_writer}` at once rather than wait.
+  So on one node nothing takes a draft, however old its holder's token,
+  while the holder is inside its publication or removal; a stalled
+  holder's token can be taken only by another member or once the holder
+  is gone. Every step that touches the served location or the staging
+  reads the row as the holder's first, and the release is refused when
+  the token was taken meanwhile, so a stall is never reported as success
+  and a holder that lost its lease deletes and serves nothing further.
+  Across members the lease alone is the fence, as it is for every fenced
+  write: a member stalled past the lifetime between that read and its
+  move is the residual.
 
   A crash before step 3 publishes nothing: readers keep the previous
   revision, or no unit. A failure in step 4 is never a lost commit: the
@@ -124,10 +130,11 @@ defmodule Arca.Overlay do
   `delete_tree/2` at a shipped unit refuse as `{:error, :bundled}`, and
   `drop_unit/2` says the same. A delete inside a shipped copy is an
   edit. The athanor's own units delete plainly, and a delete AT a unit
-  takes the unit's draft and moves its row to `retiring` first, clears
-  the served tree and the unit's staging while it holds the draft, and
-  retires the row last; while another writer's draft is live the delete
-  is refused `{:error, :stale_writer}` and deletes nothing.
+  takes the unit's draft and moves its row to `retiring` first — a unit
+  that never had a row gets one — clears the served tree and the unit's
+  staging while it holds the draft, and retires the row last; while
+  another writer's draft is live the delete is refused
+  `{:error, :stale_writer}` and deletes nothing.
 
   ## What the root's projection is told
 
@@ -268,25 +275,27 @@ defmodule Arca.Overlay do
          do: removal(actor, path, fn -> tenant().delete_tree(actor, path) end)
   end
 
-  # A delete AT a unit is the unit's removal, so its row goes first: it
-  # takes the unit's draft and moves to `retiring`, and a reader never
-  # finds a committed pointer over a tree being cleared. The served tree
-  # and the unit's staging are cleared under the fence — the row re-read
-  # as the deleter's, inside the unit's node-local lock — so no commit
-  # lands under the delete and no successor's bytes are deleted by it;
-  # the row is retired last. Another writer's live draft refuses the
-  # removal as `{:error, :stale_writer}`, with nothing deleted. Inside
-  # `with_claim/2` the retirement names the attempt's claim
+  # A delete AT a unit is the unit's removal, so its row goes first: under
+  # the unit's node-local lock it takes the unit's draft — making the row
+  # when the unit never had one, so bytes no row names are removed under
+  # the same lease a first publication must take — and moves to
+  # `retiring`, and a reader never finds a committed pointer over a tree
+  # being cleared. The served tree and the unit's staging are cleared
+  # while it holds the lock and the lease, the row re-read as the
+  # deleter's before each, so no commit lands under the delete and no
+  # successor's bytes are deleted by it; the row is retired last. Another
+  # writer's live draft, or a holder of the lock, refuses the removal as
+  # `{:error, :stale_writer}`, with nothing deleted. Inside `with_claim/2`
+  # the retirement names the attempt's claim
   # (`Arca.StorageUnits.stamped_retire/4`), and a refusal deletes nothing.
-  # A unit already retired is taken the same way — what a removal that
-  # died or was refused left behind is cleared under the lease too; a unit
-  # with no row deletes as plain bytes, with nothing to hold. Either way
-  # the root's projection is told the unit is going — a tombstone, pending
-  # until the tenant delete returns. Only a delete that
-  # answered `:ok` marks it ready: any other answer leaves bytes the
-  # projection must still see, so the unit takes a ready generation that
-  # is no tombstone instead, as a failed edit does, and is derived again
-  # from what is there. A delete below a unit's root is an edit.
+  # A unit already retired is taken the same way: what a removal that
+  # died or was refused left behind is cleared under the lease too. The
+  # root's projection is told the unit is going — a tombstone, pending
+  # until the tenant delete returns. Only a delete that answered `:ok`
+  # marks it ready: any other answer leaves bytes the projection must
+  # still see, so the unit takes a ready generation that is no tombstone
+  # instead, as a failed edit does, and is derived again from what is
+  # there. A delete below a unit's root is an edit.
   defp removal(actor, path, delete) do
     case at_unit(path) do
       nil ->
@@ -295,84 +304,68 @@ defmodule Arca.Overlay do
       unit ->
         {root, key} = UnitLocator.unit_key(unit)
 
-        case StorageUnits.stamped_retire(actor, root, key, retire_opts()) do
-          {:retiring, generation, token} ->
-            retire_served(actor, unit, token, generation, delete)
+        deleted =
+          fenced(actor, unit, fn ->
+            case StorageUnits.stamped_retire(actor, root, key, retire_opts()) do
+              {:retiring, generation, token} ->
+                retire_held(actor, unit, token, generation, delete)
 
-          {:not_found, generation} ->
-            cleared(actor, unit, generation, delete.())
+              {:error, _} = error ->
+                error
+            end
+          end)
 
-          {:error, _} = error ->
-            error
+        # The tombstone is marked outside the fence, as a finish marks.
+        case deleted do
+          {:deleted, generation, :ok, staging} ->
+            actor |> mark_ready(root, key, generation, nil) |> report_readiness(unit, generation)
+            staging
+
+          {:deleted, generation, failed, _staging} ->
+            still_there(actor, unit, generation)
+            failed
+
+          {:error, _} = refused ->
+            refused
         end
     end
   end
 
-  # The removal's step under the fence. The row must still be this
-  # deleter's `retiring` row when the delete begins; a token that was
-  # taken since — the deleter stalled past the draft's lifetime and a
-  # writer revived the unit — deletes nothing. The row is retired whatever
+  # The removal's steps under the fence, each made only while the row is
+  # still this deleter's `retiring` row: the served tree is cleared, the
+  # row read again, the unit's staging cleared, and the row retired. A
+  # token taken meanwhile — the deleter's lease given back by the
+  # collector, or taken by another member — ends the removal as
+  # `{:error, :stale_writer}` with nothing further deleted: what the
+  # taker staged or served is the taker's. The row is retired whatever
   # the delete answered: a refused delete leaves bytes a later drop
   # clears, never a unit a reader sees.
-  defp retire_served(actor, unit, token, generation, delete) do
+  defp retire_held(actor, unit, token, generation, delete) do
     {root, key} = UnitLocator.unit_key(unit)
 
-    deleted =
-      fenced(actor, unit, fn ->
-        case StorageUnits.held(actor, root, key, token) do
-          {:ok, %{state: "retiring"}} ->
-            answer = delete.()
-            staging = if answer == :ok, do: clear_staging_at_unit(actor, unit), else: answer
+    with {:ok, _row} <- retiring(actor, root, key, token),
+         answer = delete.(),
+         {:ok, _row} <- retiring(actor, root, key, token),
+         staging = if(answer == :ok, do: clear_staging_at_unit(actor, unit), else: answer),
+         :ok <- StorageUnits.finish_retire(actor, root, key, token) do
+      {:deleted, generation, answer, staging}
+    else
+      {:error, _} = lost ->
+        Logger.error(
+          "[Arca.Overlay] the removal of #{Enum.join(unit, "/")} lost the unit's lease " <>
+            "(#{inspect(lost)}); nothing further of it is deleted"
+        )
 
-            case StorageUnits.finish_retire(actor, root, key, token) do
-              :ok ->
-                :ok
-
-              {:error, reason} ->
-                Logger.error(
-                  "[Arca.Overlay] #{Enum.join(unit, "/")} was cleared but its row could not " <>
-                    "be retired (#{inspect(reason)})"
-                )
-            end
-
-            {:deleted, answer, staging}
-
-          {:ok, _not_retiring} ->
-            {:error, :stale_writer}
-
-          {:error, _} = lost ->
-            lost
-        end
-      end)
-
-    # The tombstone is marked outside the fence, as a finish marks.
-    case deleted do
-      {:deleted, :ok, staging} ->
-        actor |> mark_ready(root, key, generation, nil) |> report_readiness(unit, generation)
-        staging
-
-      {:deleted, failed, _staging} ->
-        still_there(actor, unit, generation)
-        failed
-
-      {:error, _} = refused ->
-        refused
+        {:error, :stale_writer}
     end
   end
 
-  # What the tenant delete answered for a unit no row held, and what
-  # follows it: a cleared unit marks its tombstone ready and takes its
-  # staging with it; bytes the store refused to delete are the tree's
-  # still.
-  defp cleared(actor, unit, generation, :ok) do
-    {root, key} = UnitLocator.unit_key(unit)
-    actor |> mark_ready(root, key, generation, nil) |> report_readiness(unit, generation)
-    clear_staging_at_unit(actor, unit)
-  end
-
-  defp cleared(actor, unit, generation, failed) do
-    still_there(actor, unit, generation)
-    failed
+  defp retiring(actor, root, key, token) do
+    case StorageUnits.held(actor, root, key, token) do
+      {:ok, %{state: "retiring"}} = held -> held
+      {:ok, _not_retiring} -> {:error, :stale_writer}
+      {:error, _} = lost -> lost
+    end
   end
 
   # A removal whose tenant delete failed: the bytes are the tree's still,
@@ -478,14 +471,27 @@ defmodule Arca.Overlay do
   defp clear_staging_at_unit(actor, unit),
     do: tenant().delete_tree(actor, UnitLocator.staging_prefix(unit))
 
-  # The node-local half of the fence: one finish, repair or removal of a
-  # unit at a time on this node, each reading the row inside it before it
-  # touches the served location, so a late finisher whose token was taken
-  # cannot move a byte between the taker's check and the taker's move.
-  # The lease is taken before the lock, never inside it, and no
-  # transaction waits on it.
-  defp fenced(%Prima.Actor{athanor_id: athanor}, unit, fun) when is_function(fun, 0),
-    do: :global.trans({{__MODULE__, athanor, unit}, self()}, fun, [node()])
+  # The node-local half of the fence: one publication, repair or removal
+  # of a unit at a time on this node, from its lease take to its release.
+  # The lock is never waited for: a unit whose lock is held is another
+  # writer's, `{:error, :stale_writer}`, the answer the row gives for a
+  # live draft, so a holder stalled inside its section — a token even the
+  # lease would let go of — keeps the unit against every taker on this
+  # node until it is done or dead. The lock of a process that dies is
+  # released with it; no transaction waits on it.
+  defp fenced(%Prima.Actor{athanor_id: athanor}, unit, fun) when is_function(fun, 0) do
+    id = {{__MODULE__, athanor, unit}, self()}
+
+    if :global.set_lock(id, [node()], 0) do
+      try do
+        fun.()
+      after
+        :global.del_lock(id, [node()])
+      end
+    else
+      {:error, :stale_writer}
+    end
+  end
 
   defp at_unit(path) do
     case Arca.Storage.locate(path) do
@@ -871,8 +877,12 @@ defmodule Arca.Overlay do
   edited or not, refuses as `{:error, :bundled}` — it is restored, never
   deleted — and a unit the athanor does not hold as `{:error, :not_found}`.
   The same disposition vocabulary `Compendium.Registry.delete/4` speaks.
-  The unit's row is retired before its objects are removed, and what it
-  staged goes with it.
+  The unit's row is `retiring` under the removal's lease before its
+  objects are removed, what it staged goes with them, and the row is
+  retired last; `{:error, :stale_writer}` while another writer holds the
+  unit — a publication staging or finishing, or another removal — and the
+  caller asks again once it is done, which a writer that died holds off
+  for the draft's lifetime (`Arca.StorageUnits.draft_ttl_ms/0`).
   """
   @spec drop_unit(Prima.Actor.t(), Arca.Storage.path()) ::
           {:ok, :deleted} | {:error, :bundled | :not_found | :not_overlaid | term()}
@@ -959,10 +969,12 @@ defmodule Arca.Overlay do
   staged objects where they are: the outcome is unknown.
   `{:error, {:finish_failed, reason}}` is a published unit whose move to
   the served location did not finish (`repair_unit/2`).
-  `{:error, :stale_writer}` after the commit is a writer that stalled past
-  the draft's lifetime between its commit and its finish and found the
-  unit taken: the row is the taker's, nothing of this revision is served
-  over the taker's bytes, and its staged objects stay for collection.
+  `{:error, :stale_writer}` after the commit is a writer whose draft was
+  taken between its commit and its finish — by another member once the
+  token outlived the draft's lifetime, or by the collector giving back a
+  draft that looked dead: the row is the taker's, nothing of this
+  revision is served over the taker's bytes, and its staged objects stay
+  for collection.
   """
   @spec commit_unit(Prima.Actor.t(), Arca.Storage.path(), commit_source(), keyword()) ::
           {:ok, [Arca.Storage.path()]} | {:error, term()}
@@ -1166,21 +1178,27 @@ defmodule Arca.Overlay do
         relatives ->
           token = StorageUnits.new_writer_token()
 
-          # The unit's pending generation is written under the fence,
-          # before the move touches a served byte, and marked ready once
-          # the move has finished.
-          with :ok <- staged_as_committed(actor, internal, loc, revision, relatives),
-               {:ok, _draft} <- StorageUnits.register_draft(actor, root, key, token),
-               {:ok, _written} <-
-                 finish(
-                   actor,
-                   internal,
-                   loc,
-                   token,
-                   revision,
-                   fn -> StorageProjectionChanges.begin_repair(actor, root, key, revision) end,
-                   in_write_order(loc, relatives)
-                 ) do
+          # The draft is taken and the move made under the fence; the
+          # unit's pending generation is written before the move touches
+          # a served byte, and marked ready once the move has finished.
+          served =
+            fenced(actor, unit, fn ->
+              with :ok <- staged_as_committed(actor, internal, loc, revision, relatives),
+                   {:ok, _draft} <- StorageUnits.register_draft(actor, root, key, token) do
+                finish(
+                  actor,
+                  internal,
+                  loc,
+                  token,
+                  revision,
+                  fn -> StorageProjectionChanges.begin_repair(actor, root, key, revision) end,
+                  in_write_order(loc, relatives)
+                )
+              end
+            end)
+
+          with {:served, ^revision, generation, moved} <- served,
+               {:ok, _moved} <- marked(actor, internal, unit, revision, generation, moved) do
             {:ok, :repaired}
           end
       end
@@ -1375,26 +1393,40 @@ defmodule Arca.Overlay do
   defp check_commit_cap(actor, {:checked, bytes}) when is_integer(bytes) and bytes >= 0,
     do: Prima.Caps.check_storage(actor, bytes)
 
-  # Step 1's row half. `gate` is asked while this writer holds the draft,
-  # so no other commit can land between its answer and this commit; it
-  # answers what to write, or the refusal. `commit_opts` name the writer
-  # the row commit verifies (`Arca.StorageUnits.stamped_commit/6`).
+  # Steps 1 to 4 under the fence: the draft is registered, `gate` asked
+  # while this writer holds it — so no other commit can land between its
+  # answer and this commit; it answers what to write, or the refusal — and
+  # the revision staged, committed, served and released, all under the
+  # unit's node-local lock. The generation is marked and the prefix
+  # removed outside it. `commit_opts` name the writer the row commit
+  # verifies (`Arca.StorageUnits.stamped_commit/6`).
   defp write(actor, internal, loc, gate, commit_opts \\ []) do
-    actor = actor
-    {root, key} = UnitLocator.unit_key(unit_of(loc))
+    unit = unit_of(loc)
+    {root, key} = UnitLocator.unit_key(unit)
     token = StorageUnits.new_writer_token()
 
-    with {:ok, draft} <- StorageUnits.register_draft(actor, root, key, token) do
-      case gate.(draft) do
-        {:ok, entries} ->
-          with_internal_writes(fn ->
-            publish(actor, internal, loc, draft, token, entries, commit_opts)
-          end)
+    served =
+      fenced(actor, unit, fn ->
+        with {:ok, draft} <- StorageUnits.register_draft(actor, root, key, token) do
+          case gate.(draft) do
+            {:ok, entries} ->
+              with_internal_writes(fn ->
+                publish(actor, internal, loc, draft, token, entries, commit_opts)
+              end)
 
-        {:error, _} = refusal ->
-          StorageUnits.abandon_draft(actor, draft, token)
-          refusal
-      end
+            {:error, _} = refusal ->
+              StorageUnits.abandon_draft(actor, draft, token)
+              refusal
+          end
+        end
+      end)
+
+    case served do
+      {:served, revision, generation, relatives} ->
+        marked(actor, internal, unit, revision, generation, relatives)
+
+      other ->
+        other
     end
   end
 
@@ -1617,43 +1649,31 @@ defmodule Arca.Overlay do
     :ok
   end
 
-  # Step 4, for a commit and for a repair alike: the writer holds the
-  # unit's draft under `token`, and `stamp` answers the projection
-  # generation the move is to mark ready — the commit's own, or a repair's
-  # written here, before a served byte moves. Under the fence the row is
-  # read as this writer's and as naming `revision`, the revision is
-  # served and the draft released only while the pointer still names it;
-  # then the generation is marked and the prefix removed. The commit
-  # stands whatever happens here: a move that fails gives the draft back
-  # and leaves the staged objects under their prefix for `repair_unit/2`;
-  # a writer whose token was taken serves nothing and keeps them too.
+  # Step 4, for a commit and for a repair alike, inside the fence: the
+  # writer holds the unit's draft under `token`, and `stamp` answers the
+  # projection generation the move is to mark ready — the commit's own,
+  # or a repair's written here, before a served byte moves. The row is
+  # read as this writer's and as naming `revision`, the revision is served
+  # and the draft released only while the pointer still names it. Answers
+  # `{:served, revision, generation, relatives}` for `marked/6` to mark
+  # and tidy outside the fence. The commit stands whatever happens here: a
+  # move that fails gives the draft back and leaves the staged objects
+  # under their prefix for `repair_unit/2`; a writer whose token was taken
+  # — by another member, or by the collector giving a dead-looking draft
+  # back — serves nothing and keeps them too.
   defp finish(actor, internal, loc, token, revision, stamp, relatives) do
     unit = unit_of(loc)
     {root, key} = UnitLocator.unit_key(unit)
 
     served =
-      fenced(actor, unit, fn ->
-        case StorageUnits.held(actor, root, key, token) do
-          {:ok, row} -> holding(actor, internal, loc, row, token, revision, stamp, relatives)
-          {:error, _} = taken -> taken
-        end
-      end)
+      case StorageUnits.held(actor, root, key, token) do
+        {:ok, row} -> holding(actor, internal, loc, row, token, revision, stamp, relatives)
+        {:error, _} = taken -> taken
+      end
 
     case served do
       {:released, generation} ->
-        # Marked and tidied outside the fence: the mark announces the
-        # change, and what a listener does with it must not hold the
-        # unit's lock or its lease.
-        actor
-        |> mark_ready(root, key, generation, revision)
-        |> report_readiness(unit, generation)
-
-        case with_internal_writes(fn ->
-               Arca.delete_tree(internal, UnitLocator.revision_prefix(unit, revision))
-             end) do
-          :ok -> {:ok, relatives}
-          {:error, reason} -> finish_failed(unit, revision, reason)
-        end
+        {:served, revision, generation, relatives}
 
       {:error, {:finish_failed, reason}} ->
         finish_failed(unit, revision, reason)
@@ -1661,14 +1681,34 @@ defmodule Arca.Overlay do
       {:error, taken} when taken in [:stale_writer, :stale_revision] ->
         Logger.error(
           "[Arca.Overlay] revision #{revision} of #{Enum.join(unit, "/")} was committed but " <>
-            "its writer stalled past the draft's lifetime and the unit was taken " <>
-            "(#{inspect(taken)}); nothing of it is served and its staged objects await collection"
+            "the unit was taken from its writer (#{inspect(taken)}); nothing of it is served " <>
+            "and its staged objects await collection"
         )
 
         {:error, :stale_writer}
 
       {:error, _} = refused ->
         refused
+    end
+  end
+
+  # What follows a served revision, outside the fence: the mark announces
+  # the change, and what a listener does with it must not hold the unit's
+  # lock or its lease; then the prefix goes. A prefix that cannot be
+  # removed is a finish that did not finish: `repair_unit/2` serves the
+  # revision again, as it stands, and removes it.
+  defp marked(actor, internal, unit, revision, generation, relatives) do
+    {root, key} = UnitLocator.unit_key(unit)
+
+    actor
+    |> mark_ready(root, key, generation, revision)
+    |> report_readiness(unit, generation)
+
+    case with_internal_writes(fn ->
+           Arca.delete_tree(internal, UnitLocator.revision_prefix(unit, revision))
+         end) do
+      :ok -> {:ok, relatives}
+      {:error, reason} -> finish_failed(unit, revision, reason)
     end
   end
 

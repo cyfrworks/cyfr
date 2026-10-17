@@ -494,11 +494,11 @@ defmodule Arca.RetentionTest do
       unready = unit_key("unready")
 
       # Three deletions: two whose delete returned, one whose did not.
-      {:not_found, gone} = StorageUnits.stamped_retire(actor, @root, consumed)
+      gone = tombstone!(actor, consumed)
       :ok = StorageProjectionChanges.mark_ready(actor, @root, consumed, gone, nil)
-      {:not_found, kept} = StorageUnits.stamped_retire(actor, @root, young)
+      kept = tombstone!(actor, young)
       :ok = StorageProjectionChanges.mark_ready(actor, @root, young, kept, nil)
-      {:not_found, _unready} = StorageUnits.stamped_retire(actor, @root, unready)
+      _unready = tombstone!(actor, unready)
 
       # The projection consumes what is ready; then one pending deletion
       # more, which it has not.
@@ -508,7 +508,7 @@ defmodule Arca.RetentionTest do
         StorageProjectionChanges.replace(actor, @root, token, fn -> :acknowledged end)
 
       pending = unit_key("pending")
-      {:not_found, last} = StorageUnits.stamped_retire(actor, @root, pending)
+      last = tombstone!(actor, pending)
       :ok = StorageProjectionChanges.mark_ready(actor, @root, pending, last, nil)
 
       backdate!(actor, [consumed, unready, pending], 10)
@@ -532,6 +532,15 @@ defmodule Arca.RetentionTest do
     end
 
     defp unit_key(name), do: "catalysts/local/#{name}-#{System.unique_integer([:positive])}/1.0.0"
+
+    # A removal's row half: the unit's row — made here, since none named
+    # the unit — taken, tombstoned and retired. Answers the tombstone's
+    # generation.
+    defp tombstone!(actor, key) do
+      {:retiring, generation, token} = StorageUnits.stamped_retire(actor, @root, key)
+      :ok = StorageUnits.finish_retire(actor, @root, key, token)
+      generation
+    end
 
     defp change(actor, key) do
       Arca.Repo.one(

@@ -732,24 +732,41 @@ defmodule Arca.PublicationContract do
           loser: loser,
           writer: writer
         } do
+          {root, key} = UnitLocator.unit_key(unit)
           expire_drafts!()
-          assert {:ok, _} = commit(actor, unit, "winner")
+
+          # On this node the stalled writer keeps the unit however old its
+          # token: a taker here is refused at once.
+          assert {:error, :stale_writer} = commit(actor, unit, "winner")
+
+          # Another member takes the expired lease through the rows alone
+          # and commits against the revision both staged against.
+          {:ok, taken} = StorageUnits.register_draft(actor, root, key, "wrt_member")
+          winner = StorageUnits.new_revision()
+
+          {:committed, _generation} =
+            StorageUnits.stamped_commit(actor, taken, taken.current_revision, "wrt_member", %{
+              new_revision: winner,
+              content_identity: Prima.Digest.sha256("winner"),
+              commit_identity: "member"
+            })
+
+          :ok = StorageUnits.release_served(actor, taken, "wrt_member", winner)
 
           send(writer, :proceed)
           assert {:error, :stale_revision} = Task.await(loser, 30_000)
 
-          assert {revision, served} = read(actor, unit)
-          assert served == whole("winner")
-          assert [_one, %{new_revision: ^revision}] = journal(actor, unit)
+          assert [_one, %{new_revision: ^winner}] = journal(actor, unit)
 
           # The loser's objects are gone, and repair has nothing of its to find.
           assert staged(actor, unit) == []
+          assert {:ok, :nothing_pending} = Arca.Overlay.repair_unit(actor, unit)
 
-          assert {:ok, :nothing_pending} =
-                   Arca.Overlay.repair_unit(actor, unit)
-
-          assert {^revision, served} = read(actor, unit)
-          assert served == whole("winner")
+          # The unit is free again: this node's writer lands whole.
+          assert {:ok, _} = commit(actor, unit, "third")
+          assert {revision, served} = read(actor, unit)
+          assert served == whole("third")
+          assert [_one, _winner, %{new_revision: ^revision}] = journal(actor, unit)
         end
 
         test "a stale draft token: the writer that lost its draft commits nothing", %{

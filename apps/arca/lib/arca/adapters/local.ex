@@ -31,20 +31,20 @@ defmodule Arca.Adapters.Local do
 
   Every write of one file runs under a lock on that file's physical path
   on this node — a plain `put/3`, `append/3` and `delete/2` as much as the
-  conditional writes — so a replace's read and write cannot interleave
-  with any other writer's, and a plain write cannot land between a
-  replace's precondition read and its rename. A tree swap
-  (`replace_tree/3`) and a tree delete (`delete_tree/2`) hold the tree's
-  lock and the lock of every file they replace or remove, taken in path
-  order after the tree's, so a replace of a file inside a tree being
-  swapped lands before the swap or reads what the swap installed, never
-  over it; a file a plain write creates inside a tree while it is being
-  swapped or deleted is the one write no lock covers, and lands in
-  whichever tree is there, as the facade says of a write under a
-  replacement. The adapter is single-node by definition — one boot owns
-  the volume — so the node-local lock is the whole serialization; an
-  object store serializes the same writes itself, on the key's own
-  version (`Arca.Adapters.S3`).
+  conditional writes — and under a shared lock on each directory above
+  it, so a replace's read and write cannot interleave with any other
+  writer's, and a plain write cannot land between a replace's
+  precondition read and its rename. A tree swap (`replace_tree/3`) and a
+  tree delete (`delete_tree/2`) hold the tree's lock exclusively, the
+  shared locks of the directories above it, and the lock of every file
+  they replace or remove: a write anywhere under the tree, of a file that
+  was there or of one created meanwhile, holds the tree's shared lock and
+  so is wholly before the swap or the delete or wholly after it. A
+  conditional replace of a file the tree operation removed then finds it
+  missing, never recreates it. The adapter is single-node by definition —
+  one boot owns the volume — so the node-local locks are the whole
+  serialization; an object store serializes the same writes itself, on
+  the key's own version (`Arca.Adapters.S3`).
 
   The one result vocabulary, shared with `Arca.Adapters.S3` for the same
   situations:
@@ -88,6 +88,9 @@ defmodule Arca.Adapters.Local do
   @behaviour Arca.Storage
 
   require Logger
+
+  # The one requester every shared holder of a directory lock names.
+  @shared {__MODULE__, :shared}
 
   @impl true
   def get(%Prima.Actor{} = actor, path) do
@@ -311,18 +314,32 @@ defmodule Arca.Adapters.Local do
 
   # One write (or tree swap, or tree delete) in flight per physical path
   # on this node: its check and its write cannot interleave with
-  # another's. Node-local by design (the moduledoc says why).
-  defp serialized(full_path, fun), do: holding([full_path], fun)
+  # another's, and a tree operation above the path waits for it or is
+  # waited for. Node-local by design (the moduledoc says why).
+  defp serialized(full_path, fun),
+    do: sharing(ancestors(full_path), fn -> holding([full_path], fun) end)
 
   # `fun` with every path in `paths` locked, taken in the order given and
   # given back whatever `fun` does. Every holder takes its paths in
-  # ascending path order — a tree before the files under it — so two
+  # ascending path order — a directory before anything under it — so two
   # holders never wait on each other in a cycle. A lock is a `:global`
   # lock of this node alone; the lock of a process that dies is released
   # with it. Waiting polls rather than taking `:global.trans/4`'s
   # randomized sleeps, which reach seconds under contention.
-  defp holding(paths, fun) do
-    ids = for path <- paths, do: {{__MODULE__, path}, self()}
+  defp holding(paths, fun), do: locked(paths, self(), fun)
+
+  # `fun` with the directories in `dirs` held shared: every writer under a
+  # directory holds its shared lock, so an exclusive holder of the
+  # directory — a swap or a delete of the tree — waits for every write in
+  # flight beneath it and keeps new ones out until it is done, whether or
+  # not the file they write was there when it began. A shared lock is a
+  # `:global` lock set under one requester every sharer names, which the
+  # name server grants to any number of processes at once and to no
+  # process naming another requester.
+  defp sharing(dirs, fun), do: locked(dirs, @shared, fun)
+
+  defp locked(paths, requester, fun) do
+    ids = for path <- paths, do: {{__MODULE__, path}, requester}
     Enum.each(ids, &acquire/1)
 
     try do
@@ -339,6 +356,20 @@ defmodule Arca.Adapters.Local do
       Process.sleep(wait_ms)
       acquire(id, min(wait_ms * 2, 16))
     end
+  end
+
+  # The directories above a physical path, the storage root excluded,
+  # nearest the root first: what a writer of the path holds shared.
+  defp ancestors(full_path) do
+    base = base_path()
+
+    full_path
+    |> Path.dirname()
+    |> Stream.unfold(fn
+      dir when dir == base or dir == "/" or dir == "." -> nil
+      dir -> {dir, Path.dirname(dir)}
+    end)
+    |> Enum.reverse()
   end
 
   # `fun` under the path's lock only if it is free now, `:aborted` when a
@@ -463,8 +494,10 @@ defmodule Arca.Adapters.Local do
     lstat_type(full_path) == :regular
   end
 
-  # Under the tree's lock and every file's beneath it, so a conditional
-  # replace of a file inside the tree never lands after the tree is gone.
+  # Under the tree's lock, exclusive against every writer beneath it, and
+  # every file's beneath it, so a conditional replace of a file inside the
+  # tree — one that was there or one created while the delete waited —
+  # never lands after the tree is gone.
   @impl true
   def delete_tree(%Prima.Actor{} = actor, path) do
     refuse_seed_write!(path)
@@ -679,9 +712,10 @@ defmodule Arca.Adapters.Local do
   # The journal is written inside the tree's lock, so a journal on disk
   # with the lock free belongs to a swap that crashed or whose cleanup
   # failed — what the sweep may settle without racing a swap in flight.
-  # The files the swap replaces or installs are locked under it, so a
-  # conditional replace of one of them is wholly before the swap or
-  # wholly after it.
+  # The tree's lock is exclusive against every writer beneath it, and the
+  # files the swap replaces or installs are locked under it besides, so a
+  # conditional replace of any file under the tree is wholly before the
+  # swap or wholly after it.
   defp swap(%{live: live} = names, installed) do
     with :ok <- File.mkdir_p(Path.dirname(live)) do
       serialized(live, fn ->
