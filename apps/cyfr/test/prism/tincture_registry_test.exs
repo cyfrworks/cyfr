@@ -257,6 +257,8 @@ defmodule Prism.TinctureRegistryTest do
 
       assert length(TinctureRegistry.list_tinctures(name, lookup("ath_test"))) == 1
 
+      unheard!(pid, Sanctum.Context.actor(lookup("ath_test")))
+
       # Add a new tincture
       manifest = %{
         "name" => "new-tincture",
@@ -268,7 +270,10 @@ defmodule Prism.TinctureRegistryTest do
 
       lay!("ath_test", "local", "new-tincture", "0.1.0", manifest)
 
+      assert {:ok, _} = Compendium.acknowledged_projection_epoch(lookup("ath_test"), "components")
+      assert held(name, "ath_test") == ["test-dash"]
       :ok = TinctureRegistry.reload(name)
+      assert held(name, "ath_test") == ["new-tincture", "test-dash"]
 
       tinctures = TinctureRegistry.list_tinctures(name, lookup("ath_test"))
       assert length(tinctures) == 2
@@ -302,6 +307,7 @@ defmodule Prism.TinctureRegistryTest do
 
       assert length(TinctureRegistry.list_tinctures(name, lookup(other.id))) == 1
       before_count = length(TinctureRegistry.list_tinctures(name, lookup("ath_test")))
+      unheard!(pid, Sanctum.Context.actor(lookup("ath_test")))
 
       lay!("ath_test", "local", "scoped-add", "0.1.0", %{
         "name" => "scoped-add",
@@ -311,7 +317,11 @@ defmodule Prism.TinctureRegistryTest do
         "tincture" => %{"entry" => "index.html"}
       })
 
+      assert {:ok, _} = Compendium.acknowledged_projection_epoch(lookup("ath_test"), "components")
+      assert held(name, "ath_test") == ["test-dash"]
       :ok = TinctureRegistry.reload_athanor(name, "ath_test")
+      assert held(name, "ath_test") == ["scoped-add", "test-dash"]
+      assert held(name, other.id) == ["other-dash"]
 
       assert length(TinctureRegistry.list_tinctures(name, lookup("ath_test"))) ==
                before_count + 1
@@ -329,8 +339,12 @@ defmodule Prism.TinctureRegistryTest do
 
       assert length(TinctureRegistry.list_tinctures(name, lookup("ath_test"))) == 1
 
+      unheard!(pid, Sanctum.Context.actor(lookup("ath_test")))
       :ok = Arca.delete_tree(Sanctum.Context.actor(fixture_ctx("ath_test")), unit)
+      assert {:ok, _} = Compendium.acknowledged_projection_epoch(lookup("ath_test"), "components")
+      assert held(name, "ath_test") == ["test-dash"]
       :ok = TinctureRegistry.reload_athanor(name, "ath_test")
+      assert held(name, "ath_test") == []
 
       assert TinctureRegistry.list_tinctures(name, lookup("ath_test")) == []
 
