@@ -409,10 +409,7 @@ defmodule Arca.Members do
         |> Map.put(:scope, "platform")
         |> Map.put(:athanor_id, nil)
         |> do_insert()
-        |> case do
-          {:ok, row} -> row
-          {:error, reason} -> Arca.Repo.rollback(reason)
-        end
+        |> Arca.Repo.committed()
       end)
     end)
     |> Arca.Data.project()
