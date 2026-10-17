@@ -746,13 +746,14 @@ defmodule Sanctum.Catalog do
   defp reserve_refusal, do: Prima.Refusal.classify(Arca.StorageReserve.refusal())
 
   @doc """
-  A proxied `server:tool` call's admission under the storage reserve: the
-  table declares no such tool, so none is a read or takes authority away,
-  and while the reserve is depleted each is refused as every other such
-  operation is (`Sanctum.Dispatch`).
+  The admission under the storage reserve of a write the table declares
+  no operation for: a proxied `server:tool` call (`Sanctum.Dispatch`) and
+  the person's seal (`Sanctum.Seal`). None is a read or takes authority
+  away, so while the reserve is depleted each is refused as every other
+  such operation is, before anything is written.
   """
-  @spec proxied_admission() :: :ok | {:error, Prima.Refusal.t()}
-  def proxied_admission do
+  @spec undeclared_write_admission() :: :ok | {:error, Prima.Refusal.t()}
+  def undeclared_write_admission do
     if Arca.StorageReserve.depleted?(), do: {:error, reserve_refusal()}, else: :ok
   end
 

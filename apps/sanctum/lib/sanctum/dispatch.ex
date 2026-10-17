@@ -523,11 +523,11 @@ defmodule Sanctum.Dispatch do
   # keep their existing proxied authorization, and while the storage
   # reserve is depleted an authenticated caller's are refused here, before
   # any budget is taken, as every operation that is no read and takes no
-  # authority away is (`Sanctum.Catalog.proxied_admission/0`); an
+  # authority away is (`Sanctum.Catalog.undeclared_write_admission/0`); an
   # unauthenticated caller is still refused for that first.
   defp authorize_declared_action(name, ctx, args, in_chain?) do
     if String.contains?(name, ":") do
-      if ctx.authenticated, do: Catalog.proxied_admission(), else: :ok
+      if ctx.authenticated, do: Catalog.undeclared_write_admission(), else: :ok
     else
       case Catalog.lookup(name) do
         {:ok, {_module, meta}} -> authorize_declared_action(name, meta, ctx, args, in_chain?)

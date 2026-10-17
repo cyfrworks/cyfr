@@ -47,10 +47,16 @@ defmodule Sanctum.Seal do
       preview names nothing of the seal, so neither the record nor its
       listing carries it. A person with no seal yet is `:not_set`, and no
       confirmation is opened for it.
+
+  Both are ordinary writes under the storage reserve
+  (`Sanctum.Catalog.undeclared_write_admission/0`): while it is depleted
+  a choice or a change is refused `{:unavailable, :storage_reserve}`
+  before any row is written or any confirmation opened, and admitted
+  again once it clears.
   """
 
   alias Arca.PersonSeals
-  alias Sanctum.{Context, DeviceCerts}
+  alias Sanctum.{Catalog, Context, DeviceCerts}
   alias Sanctum.Consent.Authz
 
   @operation "seal.change"
@@ -86,9 +92,12 @@ defmodule Sanctum.Seal do
     * `:already_set` — a first choice when a seal is set;
     * `:not_set` — a change when none is;
     * `:unavailable` — the store could not answer, or this member no
-      longer owns its slot.
+      longer owns its slot;
+    * the storage reserve's refusal (`Prima.Refusal`) — the home's
+      storage reserve is depleted.
   """
-  @type refusal :: :refused | :invalid_seal | :already_set | :not_set | :unavailable
+  @type refusal ::
+          :refused | :invalid_seal | :already_set | :not_set | :unavailable | Prima.Refusal.t()
 
   @doc "The words a seal is made of."
   @spec words() :: [String.t()]
@@ -133,7 +142,8 @@ defmodule Sanctum.Seal do
   @spec choose(Context.t(), map()) :: {:ok, t()} | {:error, refusal()}
   def choose(%Context{} = ctx, attrs) when is_map(attrs) do
     with :ok <- interactive(ctx),
-         {:ok, fields} <- fields(attrs) do
+         {:ok, fields} <- fields(attrs),
+         :ok <- Catalog.undeclared_write_admission() do
       ctx
       |> Context.actor()
       |> PersonSeals.choose(ctx.user_id, fields)
@@ -155,6 +165,7 @@ defmodule Sanctum.Seal do
     with :ok <- interactive(ctx),
          {:ok, fields} <- fields(attrs),
          :ok <- set(ctx),
+         :ok <- Catalog.undeclared_write_admission(),
          change = %{operation: @operation, arguments: arguments(fields)},
          :ok <- Authz.check(ctx, :seal_change, change) do
       also = fn -> Authz.consume(ctx, {:seal_change, change}) end

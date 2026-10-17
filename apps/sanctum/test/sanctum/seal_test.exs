@@ -401,6 +401,64 @@ defmodule Sanctum.SealTest do
     end
   end
 
+  describe "under a depleted storage reserve" do
+    # The latch is the node's: put back as it was, the restore registered
+    # before the change.
+    defp depleted! do
+      before = Arca.StorageReserve.state()
+      on_exit(fn -> Arca.StorageReserve.put(before) end)
+      :ok = Arca.StorageReserve.put(:depleted)
+    end
+
+    defp reserve_refused?(answer),
+      do: match?({:error, %Prima.Refusal{reason: {:unavailable, :storage_reserve}}}, answer)
+
+    test "a first choice is refused, writes nothing, and is made once the reserve clears",
+         %{ctx: ctx} do
+      depleted!()
+
+      assert reserve_refused?(Seal.choose(ctx, %{text: "oak"}))
+      assert stored(ctx.user_id) == nil
+
+      :ok = Arca.StorageReserve.put(:ok)
+      assert {:ok, %Seal{text: "oak"}} = Seal.choose(ctx, %{text: "oak"})
+    end
+
+    test "a change is refused before its confirmation opens, and asks once the reserve clears",
+         %{ctx: ctx} do
+      chosen!(ctx, %{text: "oak"})
+      depleted!()
+
+      assert reserve_refused?(Seal.change(ctx, %{text: "pine"}))
+      assert records(ctx.user_id) == []
+      assert stored(ctx.user_id) == %{text: "oak", glyph: nil}
+
+      :ok = Arca.StorageReserve.put(:ok)
+      assert {:error, {:confirmation_required, _ask}} = Seal.change(ctx, %{text: "pine"})
+    end
+
+    test "a proven change is refused without spending its proof, which replaces the seal once the reserve clears",
+         %{ctx: ctx} do
+      chosen!(ctx, %{text: "oak"})
+
+      proven =
+        Sanctum.TestContext.confirmed(ctx, :seal_change, %{
+          operation: "seal.change",
+          arguments: %{"text" => "pine", "glyph" => nil}
+        })
+
+      depleted!()
+
+      assert reserve_refused?(Seal.change(proven, %{text: "pine"}))
+      assert stored(ctx.user_id) == %{text: "oak", glyph: nil}
+      refute Enum.any?(records(ctx.user_id), &(&1.state == "consumed"))
+
+      :ok = Arca.StorageReserve.put(:ok)
+      assert {:ok, %Seal{text: "pine"}} = Seal.change(proven, %{text: "pine"})
+      assert [%{state: "consumed"}] = records(ctx.user_id)
+    end
+  end
+
   describe "where the seal never appears" do
     test "no read of the person carries it, and a seal inspects without its words",
          %{ctx: ctx, user: user} do
