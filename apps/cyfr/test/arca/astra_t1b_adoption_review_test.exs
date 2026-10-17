@@ -136,18 +136,19 @@ defmodule Arca.AstraT1bAdoptionReviewTest do
                set: [updated_at: long_ago]
              )
 
-    adopt_on_other_member(actor, adapter, revision)
+    successor = adopt_on_other_member(actor, adapter, revision)
+    refute successor == revision
     assert :ok = Arca.put(actor, @manifest, @two)
     assert {:ok, @two} = Arca.get(actor, @manifest)
 
-    assert {:ok, %{current_revision: ^revision, draft_writer_token: nil}} =
+    assert {:ok, %{current_revision: ^successor, draft_writer_token: nil}} =
              StorageUnits.current(actor, root, key)
 
     send(old, :proceed)
-    assert_receive {:answer, ^old, {:error, :stale_writer}}, 10_000
+    assert_receive {:answer, ^old, {:error, :stale_revision}}, 10_000
     assert_receive {:DOWN, ^monitor, :process, ^old, :normal}, 5_000
 
-    assert {:ok, %{current_revision: ^revision, draft_writer_token: nil}} =
+    assert {:ok, %{current_revision: ^successor, draft_writer_token: nil}} =
              StorageUnits.current(actor, root, key)
 
     assert {:ok, :nothing_pending} = Arca.Overlay.repair_unit(actor, @unit)
@@ -157,7 +158,8 @@ defmodule Arca.AstraT1bAdoptionReviewTest do
   defp adopt_on_other_member(actor, adapter, revision) do
     {root, key} = UnitLocator.unit_key(@unit)
     token = StorageUnits.new_writer_token()
-    assert {:ok, _draft} = StorageUnits.register_draft(actor, root, key, token)
+    assert {:ok, draft} = StorageUnits.register_draft(actor, root, key, token)
+    successor = StorageUnits.new_revision()
 
     internal = %{
       Prima.Actor.system()
@@ -168,19 +170,45 @@ defmodule Arca.AstraT1bAdoptionReviewTest do
 
     assert {:ok, leaves} = adapter.list_recursive(actor, @unit)
 
-    Arca.Overlay.with_internal_writes(fn ->
-      for leaf <- Enum.sort_by(leaves, &(&1 == @manifest)) do
-        assert {:ok, bytes} = adapter.get(actor, leaf)
-        rel = Enum.drop(leaf, length(@unit))
-        assert :ok = Arca.put(internal, UnitLocator.staged_object(@unit, revision, rel), bytes)
-      end
-    end)
+    manifest =
+      Arca.Overlay.with_internal_writes(fn ->
+        marker =
+          Jason.encode!(%{
+            "revision" => successor,
+            "prior_revision" => revision,
+            "started_at" => DateTime.to_iso8601(DateTime.utc_now())
+          })
+
+        assert :ok = Arca.put(internal, UnitLocator.marker_path(@unit, successor), marker)
+
+        for leaf <- Enum.sort_by(leaves, &(&1 == @manifest)) do
+          assert {:ok, bytes} = adapter.get(actor, leaf)
+          rel = Enum.drop(leaf, length(@unit))
+          assert :ok = Arca.put(internal, UnitLocator.staged_object(@unit, successor, rel), bytes)
+          {rel, Prima.Digest.sha256(bytes), byte_size(bytes)}
+        end
+      end)
 
     assert {:ok, held} = StorageUnits.held(actor, root, key, token)
     assert held.current_revision == revision
-    assert {:ok, generation} = StorageProjectionChanges.begin_repair(actor, root, key, revision)
-    assert :ok = StorageUnits.release_served(actor, held, token, revision)
-    assert :ok = StorageProjectionChanges.mark_ready(actor, root, key, generation, revision)
+
+    assert {:committed, generation} =
+             StorageUnits.stamped_commit(
+               actor,
+               draft,
+               revision,
+               token,
+               %{
+                 new_revision: successor,
+                 content_identity: Arca.Overlay.content_identity(manifest),
+                 commit_identity: actor.user_id
+               },
+               []
+             )
+
+    assert :ok = StorageUnits.release_served(actor, held, token, successor)
+    assert :ok = StorageProjectionChanges.mark_ready(actor, root, key, generation, successor)
     assert :ok = adapter.delete_tree(actor, @unit)
+    successor
   end
 end

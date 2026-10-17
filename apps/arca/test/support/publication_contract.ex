@@ -126,6 +126,19 @@ defmodule Arca.PublicationContract.Faults do
 
   @impl true
   def list_prefix(actor, prefix), do: base().list_prefix(actor, prefix)
+
+  # The typed probe the overlay decides a revision's source by; an
+  # adapter that does not export it answers as the facade does for one.
+  @impl true
+  def last_modified(actor, path) do
+    through(:last_modified, path, fn ->
+      adapter = base()
+
+      if Code.ensure_loaded?(adapter) and function_exported?(adapter, :last_modified, 2),
+        do: adapter.last_modified(actor, path),
+        else: {:error, :unsupported}
+    end)
+  end
 end
 
 defmodule Arca.PublicationContract do

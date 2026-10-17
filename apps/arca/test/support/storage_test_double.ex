@@ -40,6 +40,7 @@ defmodule Arca.Storage.TestDouble do
       defdelegate usage(actor, path), to: Arca.Adapters.Local
       defdelegate ensure_dir(actor, path), to: Arca.Adapters.Local
       defdelegate serve_to_conn(conn, actor, path, opts), to: Arca.Adapters.Local
+      defdelegate last_modified(actor, path), to: Arca.Adapters.Local
 
       def put_if_none_match(actor, path, content) do
         bytes = IO.iodata_to_binary(content)
@@ -102,7 +103,8 @@ defmodule Arca.Storage.TestDouble do
                      put_if_none_match: 3,
                      put_if_match: 4,
                      get_for_update: 2,
-                     list_prefix: 2
+                     list_prefix: 2,
+                     last_modified: 2
     end
   end
 

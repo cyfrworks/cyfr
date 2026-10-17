@@ -27,6 +27,15 @@ defmodule Arca.StorageGCTest.Adapter do
     end
   end
 
+  # Exists is the storage contract's total boolean probe. Real S3 answers
+  # false on a refused/timed-out HEAD too; GET/list/delete may still work.
+  def exists?(actor, path) do
+    case through(:exists, actor, path, fn -> Arca.Adapters.Local.exists?(actor, path) end) do
+      {:error, _reason} -> false
+      answer -> answer
+    end
+  end
+
   def put(actor, path, content),
     do:
       through(:put, actor, path, fn ->
@@ -1067,6 +1076,77 @@ defmodule Arca.StorageGCTest do
       assert revision_bytes(actor, unit, adopted) == whole("one")
       assert served(actor, unit) == whole("one")
       assert {:ok, []} = Arca.Adapters.Local.list_recursive(actor, unit)
+    end
+  end
+
+  describe "Astra T1b r2 legacy pin continuation regressions" do
+    test "a legacy reader's pin survives publication after adoption", %{actor: actor, unit: unit} do
+      assert {:ok, _} = commit(actor, unit, "one")
+      legacy = serve_at_unit!(actor, unit)
+      build = start_build(actor)
+      assert :ok = StorageGC.pin(actor, unit, legacy, {:build, build})
+
+      assert {:ok, :repaired} = Arca.Overlay.repair_unit(actor, unit)
+      assert {:ok, %{current_revision: adopted}} = pointer(actor, unit)
+      refute adopted == legacy
+      assert {:ok, before} = Arca.Storage.read_subtree_via(Arca.Adapters.Local, actor, unit)
+      assert Map.new(before) == whole("one")
+
+      assert {:ok, _} = commit(actor, unit, "two")
+      assert served(actor, unit) == whole("two")
+      assert StorageGC.pinned?(actor, unit, legacy)
+
+      assert {:ok, after_publish} =
+               Arca.Storage.read_subtree_via(Arca.Adapters.Local, actor, unit)
+
+      assert Map.new(after_publish) == whole("one")
+    end
+
+    test "a legacy reader's pin survives explicit removal after adoption", %{
+      actor: actor,
+      unit: unit
+    } do
+      assert {:ok, _} = commit(actor, unit, "one")
+      legacy = serve_at_unit!(actor, unit)
+      build = start_build(actor)
+      assert :ok = StorageGC.pin(actor, unit, legacy, {:build, build})
+
+      assert {:ok, :repaired} = Arca.Overlay.repair_unit(actor, unit)
+      assert {:ok, %{current_revision: adopted}} = pointer(actor, unit)
+      refute adopted == legacy
+      assert {:ok, before} = Arca.Storage.read_subtree_via(Arca.Adapters.Local, actor, unit)
+      assert Map.new(before) == whole("one")
+
+      assert {:ok, :deleted} = Arca.Overlay.drop_unit(actor, unit)
+      assert StorageGC.pinned?(actor, unit, legacy)
+      assert {:ok, after_drop} = Arca.Storage.read_subtree_via(Arca.Adapters.Local, actor, unit)
+      assert Map.new(after_drop) == whole("one")
+    end
+  end
+
+  describe "Astra T1b r2 collector probe refusal regression" do
+    test "a transient completion probe refusal does not collect the current legacy revision", %{
+      actor: actor,
+      unit: unit
+    } do
+      assert {:ok, _} = commit(actor, unit, "one")
+      legacy = serve_at_unit!(actor, unit)
+      assert served(actor, unit) == whole("one")
+      assert Arca.Adapters.Local.exists?(actor, unit ++ [@sentinel])
+
+      # S3's total exists? probe maps a failed HEAD to false. The listing
+      # and reads still return the complete current legacy bytes.
+      Adapter.hook(fn op, _actor, path ->
+        if op == :exists and path == unit ++ [@sentinel],
+          do: {:error, :timeout},
+          else: :pass
+      end)
+
+      assert {:ok, _report} = StorageGC.sweep(actor)
+      Adapter.clear()
+      assert {:ok, %{current_revision: ^legacy}} = pointer(actor, unit)
+      assert {:ok, remaining} = Arca.Storage.read_subtree_via(Arca.Adapters.Local, actor, unit)
+      assert Map.new(remaining) == whole("one")
     end
   end
 end

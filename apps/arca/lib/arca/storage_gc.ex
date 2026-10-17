@@ -72,7 +72,7 @@ defmodule Arca.StorageGC do
   ## Audit
 
   `repair/2` audits every committed unit against its journal and its
-  objects, and moves nothing: the pointer's prefix must hold the
+  objects, and alters no committed revision: the pointer's prefix must hold the
   revision's completion object, and it is intact when its objects hash to
   the content identity the journal's newest commit recorded. A prefix
   whose completion object is gone is reported and left; one that is
@@ -83,9 +83,10 @@ defmodule Arca.StorageGC do
   `Arca.Overlay.repair_unit/2` gives back — the draft of a writer that
   died after its commit, once the token has outlived the lifetime, and a
   revision served at the unit's own path before units were served from
-  their prefixes, moved back into its prefix. Objects alone never make or
-  move a pointer: a complete prefix no row names is collected after the
-  grace like any other. A sweep audits nothing; the audit is asked for.
+  their prefixes, adopted into a prefix of its own as a revision of its
+  own. Objects alone never make or move a pointer: a complete prefix no
+  row names is collected after the grace like any other. A sweep audits
+  nothing; the audit is asked for.
 
   ## Tenancy
 
@@ -421,12 +422,13 @@ defmodule Arca.StorageGC do
 
   @doc """
   Audit every committed unit of the actor's athanor against its journal
-  and its objects, giving back what a writer left undone and moving
-  nothing else (the moduledoc's Audit).
+  and its objects, giving back what a writer left undone and altering
+  no committed revision (the moduledoc's Audit).
 
   Answers, by unit path: `repaired` — a dead writer's draft released, or
   a revision served at the unit's own path before units were served from
-  their prefixes moved back into it (`Arca.Overlay.repair_unit/2`);
+  their prefixes adopted into a prefix of its own
+  (`Arca.Overlay.repair_unit/2`);
   `intact` (a count) — the pointer's prefix holds exactly the objects the
   journal recorded; `left` — a prefix that is not what was committed, with
   why (`:journal_mismatch` when the newest commit does not name the
