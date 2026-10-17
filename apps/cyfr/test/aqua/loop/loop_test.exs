@@ -2111,6 +2111,7 @@ defmodule Aqua.LoopTest do
     assert result == {:paused, :launch}
     assert {:ok, %{status: "paused", paused_reason: "launch"}} = Tape.turn(ctx, turn.id)
     {:ok, steps} = Tape.steps(ctx, turn)
+
     assert %{dispatch_state: "closed", outcome: "error"} =
              Enum.find(steps, &(&1.kind == "launch"))
 
