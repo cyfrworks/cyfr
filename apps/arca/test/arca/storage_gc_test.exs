@@ -36,6 +36,12 @@ defmodule Arca.StorageGCTest.Adapter do
     end
   end
 
+  def last_modified(actor, path),
+    do:
+      through(:last_modified, actor, path, fn ->
+        Arca.Adapters.Local.last_modified(actor, path)
+      end)
+
   def put(actor, path, content),
     do:
       through(:put, actor, path, fn ->
@@ -1147,6 +1153,51 @@ defmodule Arca.StorageGCTest do
       assert {:ok, %{current_revision: ^legacy}} = pointer(actor, unit)
       assert {:ok, remaining} = Arca.Storage.read_subtree_via(Arca.Adapters.Local, actor, unit)
       assert Map.new(remaining) == whole("one")
+    end
+  end
+
+  describe "Astra T1b r3 typed source probe coverage" do
+    for source <- [:prefix, :legacy] do
+      @source source
+      test "a failed #{@source} probe is propagated without changing committed legacy bytes", %{
+        actor: actor,
+        unit: unit
+      } do
+        assert {:ok, _} = commit(actor, unit, "one")
+        legacy = serve_at_unit!(actor, unit)
+        manifest = unit ++ [@sentinel]
+
+        probe =
+          case @source do
+            :prefix -> UnitLocator.revision_prefix(unit, legacy) ++ [@sentinel]
+            :legacy -> manifest
+          end
+
+        parent = self()
+
+        Adapter.hook(fn op, _actor, path ->
+          if op == :last_modified and path == probe do
+            send(parent, :typed_probe_failed)
+            {:error, :probe_unavailable}
+          else
+            :pass
+          end
+        end)
+
+        assert {:error, :probe_unavailable} = Arca.get(actor, manifest)
+        assert_receive :typed_probe_failed
+        assert {:error, :probe_unavailable} = Arca.list_recursive(actor, unit)
+        assert {:error, :probe_unavailable} = Arca.list_typed(actor, unit)
+        assert {:error, :probe_unavailable} = Arca.read_subtree(actor, unit)
+        assert {:error, :probe_unavailable} = Arca.usage(actor, unit)
+        assert {:error, :probe_unavailable} = Arca.put(actor, manifest, "changed")
+        assert {:error, :probe_unavailable} = Arca.Overlay.repair_unit(actor, unit)
+        assert {:error, :probe_unavailable} = Arca.Overlay.collect_unit_path(actor, unit)
+        Adapter.clear()
+        assert {:ok, %{current_revision: ^legacy, draft_writer_token: nil}} = pointer(actor, unit)
+        assert {:ok, remaining} = Arca.Storage.read_subtree_via(Arca.Adapters.Local, actor, unit)
+        assert Map.new(remaining) == whole("one")
+      end
     end
   end
 end
