@@ -129,6 +129,7 @@ defmodule Compendium.FacadeTest do
     tincture_entry: 1,
     tincture_frame_capabilities: 0,
     tincture_frame_classes: 1,
+    tincture_frame_policy: 2,
     tincture_grant_revision: 2,
     tincture_invokes?: 2,
     tincture_lockfile_required?: 1,

@@ -4,7 +4,8 @@
 defmodule Compendium.Tincture.PolicyWritersTest do
   @moduledoc """
   A frame's policy has one writer: no library source but the tincture
-  rules writes a Content Security Policy directive or a sandbox token.
+  rules writes a Content Security Policy directive or a sandbox token, or
+  pairs a file extension with the type it is served as.
   Every string literal of every library module and template is read, and
   documentation is not code, so a module's docs may name a directive. The
   console's page policy and the API's and the OAuth callback's response
@@ -79,6 +80,59 @@ defmodule Compendium.Tincture.PolicyWritersTest do
            policy joins the roster with its reason, and an entry that no longer writes
            one is removed.
            """
+  end
+
+  # A served type is an extension paired with the media type it is served
+  # as, in a map or a two-element tuple; the tincture rules hold the one
+  # table of them (`Compendium.Tincture.Rules.served_types/0`).
+  @extension ~r/^\.[a-z0-9]+$/
+  @media_type ~r/^[a-z]+\/[a-z0-9.+-]+$/
+
+  defp served_type?({extension, type}) when is_binary(extension) and is_binary(type),
+    do: extension =~ @extension and type =~ @media_type
+
+  defp served_type?(_pair), do: false
+
+  defp type_tables(sources) do
+    for {path, source} <- sources,
+        String.ends_with?(path, ".ex"),
+        pairs = served_type_pairs(source, path),
+        pairs != [],
+        into: %{},
+        do: {path, pairs}
+  end
+
+  defp served_type_pairs(source, file) do
+    source
+    |> Code.string_to_quoted!(file: file, columns: false)
+    # A map's pairs are two-element tuples in the quoted form too.
+    |> Macro.prewalk([], fn
+      {_extension, _type} = pair, acc ->
+        {pair, if(served_type?(pair), do: [pair | acc], else: acc)}
+
+      node, acc ->
+        {node, acc}
+    end)
+    |> elem(1)
+  end
+
+  test "no library source but the tincture rules pairs an extension with a served type" do
+    found = type_tables(library_sources())
+
+    assert Map.has_key?(found, @rules)
+    assert found |> Map.delete(@rules) |> Map.keys() == []
+  end
+
+  test "the type scan finds a table in a map and in tuples" do
+    table = ~S"""
+    defmodule Types do
+      @types %{".html" => "text/html"}
+      def more, do: [{".wasm", "application/wasm"}, {"name", "value"}]
+    end
+    """
+
+    assert %{"types.ex" => pairs} = type_tables([{"types.ex", table}])
+    assert Enum.sort(pairs) == [{".html", "text/html"}, {".wasm", "application/wasm"}]
   end
 
   test "the scan finds a composed directive and a token, and leaves docs alone" do
