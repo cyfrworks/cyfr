@@ -35,6 +35,14 @@ defmodule Emissary.Router do
         # Before Authenticate so unauthenticated floods never touch DB state.
         plug CyfrWeb.Plugs.MCPRateLimit, errors: Emissary.Web.MCPError
         plug CyfrWeb.Plugs.Authenticate, errors: Emissary.Web.MCPError
+        # The body is read only here, after the rate limit and the caller's
+        # context (the endpoint parses no `/mcp` body): every refusal above
+        # answers before any byte of it is read, and a caller not
+        # authenticated is held to a host call's body
+        # (`CyfrWeb.Plugs.RawBodyReader`). Failures answer in JSON-RPC.
+        plug CyfrWeb.Plugs.ParserErrors,
+             CyfrWeb.Plugs.RawBodyReader.parser_options(jsonrpc: {"/mcp", Emissary.Web.MCPError})
+
         plug Emissary.Web.Plugs.MCPRequestMetadata
       end
 

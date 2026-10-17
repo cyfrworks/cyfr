@@ -351,9 +351,12 @@ defmodule Emissary.Web.MCPConfirmationRepeatTest do
 
       Logger.configure(level: previous)
 
+      # Phoenix names the parameters as the router dispatches, before
+      # `/mcp`'s pipeline has read the body; were they logged later, the
+      # endpoint's filter would hide the key's value.
       assert log =~ "Parameters:"
-      assert log =~ ~s("#{@key}" => "[FILTERED]")
       refute log =~ id
+      assert Phoenix.Logger.filter_values(%{@key => id}) == %{@key => "[FILTERED]"}
     end
   end
 

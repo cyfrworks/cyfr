@@ -39,6 +39,7 @@
           "CyfrWeb.Plugs.MCPOrigin",
           "CyfrWeb.Plugs.MCPRateLimit",
           "CyfrWeb.Plugs.Authenticate",
+          "CyfrWeb.Plugs.ParserErrors",
           "Emissary.Web.Plugs.MCPRequestMetadata"
         ],
         "oauth_callback" => [":accepts", "CyfrWeb.Plugs.ApiSecurityHeaders"],

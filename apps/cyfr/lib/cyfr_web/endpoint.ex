@@ -122,30 +122,22 @@ defmodule CyfrWeb.Endpoint do
   plug(Plug.Telemetry, event_prefix: [:phoenix, :endpoint])
 
   # Plug.Parsers behind the wrapper that refuses a multipart body before
-  # reading any of it, answers /mcp parser failures in JSON-RPC (-32700)
-  # and gates its content type; every other parser failure keeps Phoenix's
-  # rendering.
+  # reading any of it (`CyfrWeb.Plugs.RawBodyReader.parser_options/1`);
+  # every parser failure keeps Phoenix's rendering.
   #
   # No route takes a multipart body (LiveView uploads travel over the
   # socket), and the multipart parser reads one without RawBodyReader, so
-  # up to this length whatever the route's own cap. Multipart is therefore
-  # not parsed, and a multipart request is refused 415 before any byte of
-  # its body is read, in JSON-RPC under /mcp and through CyfrWeb.ApiError
-  # elsewhere: every body the parsers read passes RawBodyReader.
-  plug(CyfrWeb.Plugs.ParserErrors,
-    jsonrpc: {"/mcp", Emissary.Web.MCPError},
-    refuse: {["multipart/*"], :multipart_refused},
-    parsers: [:urlencoded, :json],
-    pass: ["*/*"],
-    json_decoder: Phoenix.json_library(),
-    # Sized for the 20 MB attachment cap the chat enforces (ThreadPaneLive's
-    # max_file_size):
-    # attachments arrive base64-encoded through POST /mcp, so 20 MB × 4/3
-    # plus JSON envelope headroom. Webhooks, the directory and the restore
-    # ingress keep their own smaller caps in RawBodyReader.
-    length: 28_000_000,
-    body_reader: {CyfrWeb.Plugs.RawBodyReader, :read_body, []}
-  )
+  # up to the endpoint's length whatever the route's own cap. Multipart is
+  # therefore not parsed, and a multipart request is refused 415 before
+  # any byte of its body is read: every body the parsers read passes
+  # RawBodyReader, whose caps hold for webhooks, the directory, the
+  # restore ingress and a renewal.
+  #
+  # `/mcp`'s body is not read here. Its pipeline (`Emissary.Router`)
+  # parses it under the same options, answered in JSON-RPC, only after
+  # the transport's rate limit and authentication, so a flood or an
+  # anonymous caller costs no read and decode of 28 MB.
+  plug(:parse_body)
 
   plug(Plug.MethodOverride)
   plug(Plug.Head)
@@ -155,6 +147,31 @@ defmodule CyfrWeb.Endpoint do
   # the browser pipeline the LiveView-compatible one
   # (`CyfrWeb.Plugs.BrowserCSP`), and tinctures their own.
   plug(CyfrWeb.Router)
+
+  @parsers CyfrWeb.Plugs.ParserErrors.init(CyfrWeb.Plugs.RawBodyReader.parser_options())
+
+  # The methods whose body `Plug.Parsers` reads.
+  @body_methods ~w(POST PUT PATCH DELETE)
+
+  defp parse_body(%Plug.Conn{path_info: ["mcp" | _], method: method} = conn, _opts)
+       when method in @body_methods,
+       do: register_before_send(conn, &close_unread/1)
+
+  defp parse_body(%Plug.Conn{path_info: ["mcp" | _]} = conn, _opts), do: conn
+  defp parse_body(conn, _opts), do: CyfrWeb.Plugs.ParserErrors.call(conn, @parsers)
+
+  # A `/mcp` answer sent while its body is unread — refused before it was
+  # parsed, or past its cap — ends an HTTP/1 connection, so the server
+  # does not read the rest of the caller's body to keep it alive. HTTP/2
+  # forbids the header (RFC 9113 §8.2.2) and resets the unread stream
+  # itself.
+  defp close_unread(%Plug.Conn{body_params: %Plug.Conn.Unfetched{}} = conn) do
+    if conn |> get_http_protocol() |> Atom.to_string() |> String.starts_with?("HTTP/1"),
+      do: put_resp_header(conn, "connection", "close"),
+      else: conn
+  end
+
+  defp close_unread(conn), do: conn
 
   defp dynamic_session(conn, _opts) do
     # Session config is boot-static; the first request pays Plug.Session.init/1

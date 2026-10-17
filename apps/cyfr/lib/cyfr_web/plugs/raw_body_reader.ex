@@ -39,6 +39,25 @@ defmodule CyfrWeb.Plugs.RawBodyReader do
   is a certified device's renewal (`/certify…`), which a device sends
   holding no session.
 
+  ## `/mcp`'s body before a caller is established
+
+  `/mcp`'s body is parsed in its own pipeline, after the transport's rate
+  limit and `CyfrWeb.Plugs.Authenticate` (`Emissary.Router`), never by
+  the endpoint. A request whose context is not authenticated — no
+  credential, or one that established no one — is bounded to a host
+  call's body (`Prima.HostAPI.max_body_bytes/0`, 1 MiB) the same way; an
+  authenticated caller keeps the endpoint's length, which carries the
+  chat's base64 attachments.
+
+  ## A declared length over the cap
+
+  A request whose `content-length` is above the cap that applies to it is
+  refused before any byte of its body is read: the reader answers
+  `{:more, "", conn}`, which `Plug.Parsers` raises as
+  `Plug.Parsers.RequestTooLargeError`. A body of unknown length is read
+  only up to the cap, and no single read asks the adapter for more than
+  it (`:read_length`).
+
   ## Every parsed body
 
   Every body the endpoint's parsers read passes through here, so these
@@ -64,6 +83,33 @@ defmodule CyfrWeb.Plugs.RawBodyReader do
   # The directory's write-body limit is its largest entry.
   @directory_max_body_bytes Prima.Identity.max_entry_bytes()
 
+  # `/mcp`'s limit before a caller is established is a host call's body.
+  @anonymous_mcp_max_body_bytes Prima.HostAPI.max_body_bytes()
+
+  # Sized for the 20 MB attachment cap the chat enforces (ThreadPaneLive's
+  # max_file_size): attachments arrive base64-encoded through POST /mcp, so
+  # 20 MB × 4/3 plus JSON envelope headroom.
+  @max_body_bytes 28_000_000
+
+  @doc """
+  The options of `CyfrWeb.Plugs.ParserErrors` every body is parsed under,
+  with `extra` (`:jsonrpc`, say) added: urlencoded and JSON bodies through
+  this reader, up to the endpoint's length, a multipart body refused 415
+  before any of it is read. The endpoint parses every path's body but
+  `/mcp`'s with these, and `/mcp`'s pipeline its own.
+  """
+  @spec parser_options(keyword()) :: keyword()
+  def parser_options(extra \\ []) do
+    [
+      refuse: {["multipart/*"], :multipart_refused},
+      parsers: [:urlencoded, :json],
+      pass: ["*/*"],
+      json_decoder: Phoenix.json_library(),
+      length: @max_body_bytes,
+      body_reader: {__MODULE__, :read_body, []}
+    ] ++ extra
+  end
+
   @doc """
   Plug.Parsers `:body_reader` callback.
 
@@ -73,11 +119,24 @@ defmodule CyfrWeb.Plugs.RawBodyReader do
   verify HMAC signatures against the complete body, and the `:length` opt
   is tightened to the webhook-specific cap so oversized bodies surface as 413.
   Under `/directory/*`, `/restore*` and `/certify/*` the `:length` opt is tightened to
-  the directory's 16 KiB write-body limit the same way.
+  the directory's 16 KiB write-body limit the same way, and under `/mcp`,
+  for a caller not authenticated, to a host call's body. A declared
+  length above the cap reads nothing and answers `{:more, "", conn}`.
   """
   def read_body(conn, opts) do
-    opts = conn |> maybe_cap_length_for_webhook(opts) |> cap_length_for_directory(conn)
+    opts =
+      conn
+      |> maybe_cap_length_for_webhook(opts)
+      |> cap_length_for_directory(conn)
+      |> cap_length_for_anonymous_mcp(conn)
+      |> cap_read_length()
 
+    if declared_over?(conn, Keyword.fetch!(opts, :length)),
+      do: {:more, "", conn},
+      else: read_capped(conn, opts)
+  end
+
+  defp read_capped(conn, opts) do
     case Plug.Conn.read_body(conn, opts) do
       {:ok, body, conn} ->
         conn = if hooks_path?(conn), do: append_raw_body(conn, body), else: conn
@@ -105,6 +164,17 @@ defmodule CyfrWeb.Plugs.RawBodyReader do
 
   defp directory_path?(_), do: false
 
+  defp mcp_path?(%Plug.Conn{path_info: ["mcp" | _]}), do: true
+  defp mcp_path?(_), do: false
+
+  # Established by `CyfrWeb.Plugs.Authenticate`, which runs before `/mcp`'s
+  # body is read: a credential that established no one leaves the context
+  # unauthenticated, so a header alone never lifts the cap.
+  defp authenticated?(%Plug.Conn{assigns: %{context: %Sanctum.Context{authenticated: true}}}),
+    do: true
+
+  defp authenticated?(_conn), do: false
+
   defp append_raw_body(conn, chunk) do
     existing = Map.get(conn.assigns, :raw_body, "")
     Plug.Conn.assign(conn, :raw_body, existing <> chunk)
@@ -120,6 +190,43 @@ defmodule CyfrWeb.Plugs.RawBodyReader do
       Keyword.put(opts, :length, min(existing, cap))
     else
       opts
+    end
+  end
+
+  # `/mcp` takes no body past a host call's from a caller not established,
+  # whatever the endpoint's own cap: the smaller of the two applies.
+  defp cap_length_for_anonymous_mcp(opts, conn) do
+    if mcp_path?(conn) and not authenticated?(conn) do
+      existing = Keyword.get(opts, :length, 8_000_000)
+      Keyword.put(opts, :length, min(existing, @anonymous_mcp_max_body_bytes))
+    else
+      opts
+    end
+  end
+
+  # No read asks the adapter for more than the cap (`Plug.Conn.read_body/2`'s
+  # 1 MB default above it).
+  defp cap_read_length(opts) do
+    length = Keyword.get(opts, :length, 8_000_000)
+
+    opts
+    |> Keyword.put(:length, length)
+    |> Keyword.put(:read_length, min(Keyword.get(opts, :read_length, 1_000_000), length))
+  end
+
+  # A body its own `content-length` says is over the cap is refused unread.
+  # Unparseable or repeated lengths are left to the adapter, which refuses
+  # them, and the read stays bounded by the cap either way.
+  defp declared_over?(conn, length) do
+    case Plug.Conn.get_req_header(conn, "content-length") do
+      [declared] ->
+        case Integer.parse(declared) do
+          {bytes, ""} -> bytes > length
+          _other -> false
+        end
+
+      _none_or_many ->
+        false
     end
   end
 
