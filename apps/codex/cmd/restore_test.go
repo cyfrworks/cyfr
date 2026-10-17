@@ -27,6 +27,7 @@ import (
 // crash would.
 const restoreFakeDocker = `#!/bin/bash
 d="$FAKE_DOCKER_DIR"
+file=docker-compose.yml
 note=""
 args=("$@")
 for ((i = 0; i < ${#args[@]}; i++)); do
@@ -42,7 +43,7 @@ read -r _ _ _ _ pgrp _ < /proc/$$/stat
 [ "$pgrp" = "$$" ] || note+=" {shared process group}"
 printf '%s%s\n' "$*" "$note" >> "$d/log"
 answer() {
-  printf '%s %s\n' "$1" "$(md5sum < docker-compose.yml | cut -c1-32)" >> "$d/state"
+  printf '%s %s\n' "$1" "$(md5sum < "$file" | cut -c1-32)" >> "$d/state"
   if [ -f "$d/$1.kill" ]; then kill -KILL "$PPID"; exit 0; fi
   [ -f "$d/$1.signal" ] && kill -TERM "$PPID"
   [ -f "$d/$1.out" ] && cat "$d/$1.out"
@@ -50,7 +51,10 @@ answer() {
 }
 if [ "$1" = compose ]; then
   shift
-  while [ "$1" = --profile ]; do shift 2; done
+  while [ "$1" = -f ] || [ "$1" = --project-directory ] || [ "$1" = --profile ]; do
+    if [ "$1" = -f ] && [ "$file" = docker-compose.yml ]; then file="$2"; fi
+    shift 2
+  done
   sub="$1"
   shift
   case "$sub" in
@@ -61,7 +65,7 @@ if [ "$1" = compose ]; then
       # the restore's bar reaches the answer as .env sets it.
       v="$(sed -n "s/^CYFR_RESTORE_INCOMPLETE='\(.*\)'\$/\1/p" .env 2>/dev/null | tail -n 1)"
       if [ -n "$v" ] && [ ! -f "$d/config.nobar" ]; then
-        printf 'config %s\n' "$(md5sum < docker-compose.yml | cut -c1-32)" >> "$d/state"
+        printf 'config %s\n' "$(md5sum < "$file" | cut -c1-32)" >> "$d/state"
         if [ -f "$d/config.kill" ]; then kill -KILL "$PPID"; exit 0; fi
         sed "s|\"environment\":{|\"environment\":{\"CYFR_RESTORE_INCOMPLETE\":\"$v\",|" "$d/config.out"
         exit "$(cat "$d/config.exit" 2>/dev/null || echo 0)"
@@ -94,11 +98,14 @@ exit 0
 const (
 	// testOffline is an offline eval the restore runs, its own bar lifted
 	// in the one-off container.
-	testOffline  = "run --rm --no-deps -T -e CYFR_RESTORE_INCOMPLETE= cyfr bin/cyfr eval "
-	testMark     = `IO.puts("CYFR_RESTORE_ID=" <> Cyfr.Release.mark_restore())`
-	testRestored = "rst_0192f0a1-7c4e-7d2a-9b1e-3f5a6b7c8d9e"
-	sqliteBytes  = "SQLite format 3\x00main"
-	editedEnv    = "CYFR_BEHIND_PROXY=true\nCYFR_LOCUS_BUILDS_URL=http://locus-builds:4100\nCYFR_PORT=4999\n"
+	testOffline = "run --rm --no-deps -T -e CYFR_RESTORE_INCOMPLETE= cyfr bin/cyfr eval "
+	// testStagedConfig is the restore's read of the configuration the
+	// snapshot's compose file gives, staged beside docker-compose.yml.
+	testStagedConfig = "compose -f " + stagedCompose + " --project-directory . --profile tls --profile locus-builds config --format json"
+	testMark         = `IO.puts("CYFR_RESTORE_ID=" <> Cyfr.Release.mark_restore())`
+	testRestored     = "rst_0192f0a1-7c4e-7d2a-9b1e-3f5a6b7c8d9e"
+	sqliteBytes      = "SQLite format 3\x00main"
+	editedEnv        = "CYFR_BEHIND_PROXY=true\nCYFR_LOCUS_BUILDS_URL=http://locus-builds:4100\nCYFR_PORT=4999\n"
 )
 
 // restoreScenario is an update scenario whose update has taken a snapshot,
@@ -269,7 +276,7 @@ func TestRestorePutsEveryPartBackAndDeclaresBeforeTheStart(t *testing.T) {
 		profiles + "stop locus-backends-guard",
 		profiles + "stop",
 		profiles + "rm --force cyfr",
-		profiles + "config --format json",
+		testStagedConfig,
 		profiles + testOffline + testLive,
 		profiles + testOffline + testMark,
 		profiles + "up -d --wait --wait-timeout 900",
@@ -501,7 +508,7 @@ func TestRestoreLoadsTheDumpWithoutTheURLOnArgv(t *testing.T) {
 	load := "run --rm -i --network host -e CYFR_UPDATE_PG_URL postgres:17 sh -c " + restoreScript + " {env CYFR_UPDATE_PG_URL set}"
 	log := r.log()
 	at := func(line string) int { return slices.Index(log, line) }
-	config, live, mark := at(profiles+"config --format json"), at(profiles+testOffline+testLive), at(profiles+testOffline+testMark)
+	config, live, mark := at(testStagedConfig), at(profiles+testOffline+testLive), at(profiles+testOffline+testMark)
 	if !(config >= 0 && config < at(probe) && at(probe) < live && live < at(load) && at(load) < mark && mark < at(profiles+"up -d --wait --wait-timeout 900")) {
 		t.Errorf("the probe, the live read, the load and the declaration are out of order:\n%s", strings.Join(log, "\n"))
 	}
@@ -772,7 +779,7 @@ func TestRestoreCrashLeavesTheCellBarredOrUntouched(t *testing.T) {
 
 			log := r.log()
 			rm := slices.Index(log, profiles+"rm --force cyfr")
-			if c.kill != "stop-cyfr" && (rm < 0 || slices.Index(log, profiles+"config --format json") >= 0 && slices.Index(log, profiles+"config --format json") < rm) {
+			if c.kill != "stop-cyfr" && (rm < 0 || slices.Index(log, testStagedConfig) >= 0 && slices.Index(log, testStagedConfig) < rm) {
 				t.Errorf("the stopped cyfr container was not removed before the configuration read:\n%s", strings.Join(log, "\n"))
 			}
 			snapshot, barred := restoreBarred(filepath.Join(r.project, ".env"))
@@ -908,5 +915,45 @@ func TestEntrypointRefusesWhileTheRestoreIsBarred(t *testing.T) {
 		if got := read(t, ran); !strings.Contains(got, "bin/cyfr start") {
 			t.Errorf("the entrypoint with %v ran %q, want the command", env, got)
 		}
+	}
+}
+
+// The staged configuration is read as compose will read it in place: with
+// the project's override file after it. COMPOSE_FILE, naming other files
+// than the one the restore puts back, refuses before anything lands.
+func TestRestoreReadsTheStagedConfigurationAsComposeWill(t *testing.T) {
+	compose := shippedCompose(t)
+	r := newRestoreScenario(t, compose, nil, nil)
+	r.edit("docker-compose.override.yml", "services: {}\n")
+	if out, err := r.restore(false); err != nil {
+		t.Fatalf("restore: %v\n%s", err, out)
+	}
+	if !slices.Contains(r.log(), "compose -f "+stagedCompose+" -f docker-compose.override.yml --project-directory . --profile tls --profile locus-builds config --format json") {
+		t.Errorf("the staged configuration was read without the override file:\n%s", strings.Join(r.log(), "\n"))
+	}
+
+	for name, set := range map[string]func(t *testing.T, r *restoreScenario){
+		"the environment": func(t *testing.T, _ *restoreScenario) { t.Setenv("COMPOSE_FILE", "other.yml") },
+		"the snapshot's .env": func(t *testing.T, r *restoreScenario) {
+			if err := os.WriteFile(filepath.Join(r.dir, ".env"), append(slices.Clone(r.env), "COMPOSE_FILE=other.yml\n"...), 0600); err != nil {
+				t.Fatal(err)
+			}
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			r := newRestoreScenario(t, compose, nil, nil)
+			set(t, r)
+			r.edit("data/blobs/x", "rewritten")
+			before := read(t, filepath.Join(r.project, "docker-compose.yml"))
+			out, err := r.restore(true)
+			if err == nil || !strings.Contains(err.Error(), "COMPOSE_FILE=other.yml") || !strings.Contains(err.Error(), "nothing of the snapshot was put back") {
+				t.Fatalf("restore answered %v\n%s", err, out)
+			}
+			r.stoppedUndeclared()
+			r.configAsBefore(before, string(r.env))
+			if got := read(t, filepath.Join(r.project, "data", "blobs", "x")); got != "rewritten" {
+				t.Errorf("a part was put back: blobs/x holds %q", got)
+			}
+		})
 	}
 }

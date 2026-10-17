@@ -41,7 +41,7 @@ var restoreCmd = &cobra.Command{
 1. Read the snapshot: snapshot.json must be there and say complete, and its parts must be exactly what the directory holds; an incomplete snapshot or a layout cyfr restore cannot invert refuses before anything stops.
 2. Stop this host's stack, timing each service.
 3. Bar the cell from starting: set CYFR_RESTORE_INCOMPLETE=<snapshot> in .env, synced, and remove the stopped cyfr container, so every start of the cyfr service until the restore is declared is a new container that reads the setting and refuses (the image's entrypoint), and 'cyfr up' and 'cyfr update' refuse it too.
-4. Put the snapshot's docker-compose.yml and .env (with the setting) back, and read the configuration they give cyfr: the setting must reach the cyfr service, the database, the storage root and every bind mounted under it must be where the snapshot can be put back, and the keyring must be the snapshot's. A refusal here puts the two files back as they were, which lifts the bar.
+4. Put the snapshot's .env (with the setting) back and its docker-compose.yml beside the project's, and read the configuration they give cyfr: the setting must reach the cyfr service, the database, the storage root and every bind mounted under it must be where the snapshot can be put back, and the keyring must be the snapshot's. Only then does the snapshot's docker-compose.yml replace the project's, so the compose file in place delivers the setting at every step. A refusal here puts the two files back as they were, which lifts the bar.
 5. Read the cell's live slots offline, in the snapshot's image: a live member on any host refuses, whatever its release, since the database is shared by every member.
 6. Put the scaffold files back as they stood before the update (the keeper's seccomp profile among them), then the storage root, each bind mounted under it at its own source, then the database (the SQLite file, or the dump through pg_restore in the PostgreSQL server's own major).
 7. Declare the restore: bin/cyfr eval 'IO.puts("CYFR_RESTORE_ID=" <> Cyfr.Release.mark_restore())' in the snapshot's image, then take CYFR_RESTORE_INCOMPLETE out of .env. A restore that is not declared never starts.
@@ -325,9 +325,9 @@ type restorer struct {
 	restoreID  string
 }
 
-// restoreFiles are the configuration files the restore puts back first, each
-// with the snapshot's part holding it.
-var restoreFiles = []struct{ file, part string }{{"docker-compose.yml", "compose"}, {".env", ".env"}}
+// restoreFiles are the configuration files the restore replaces with the
+// snapshot's, held to be put back on a refusal.
+var restoreFiles = []struct{ file string }{{"docker-compose.yml"}, {".env"}}
 
 func (r *restorer) run() error {
 	m := r.snap.manifest
@@ -354,7 +354,7 @@ func (r *restorer) run() error {
 	if r.ctx.Err() != nil {
 		return errors.New("cyfr restore was interrupted during the stop; the stack is left stopped and nothing was restored. Start it again with 'cyfr up'")
 	}
-	steps := []func() error{r.holdConfigFiles, r.raiseBarrier, r.putConfigFiles, r.readRestoredConfig, r.probeRestoredPostgres, r.refuseLiveMembers}
+	steps := []func() error{r.holdConfigFiles, r.raiseBarrier, r.putConfigFiles, r.readRestoredConfig, r.publishCompose, r.probeRestoredPostgres, r.refuseLiveMembers}
 	for _, step := range steps {
 		err := step()
 		if err == nil && r.ctx.Err() != nil {
@@ -482,28 +482,65 @@ func (r *restorer) lowerBarrier() error {
 	return writeDurable(".env", data, 0600)
 }
 
-// putConfigFiles writes the snapshot's docker-compose.yml and .env over the
-// project's, .env with the barrier: the configuration they give cyfr is
-// the one the snapshot was taken under, whose mounts the storage part
-// follows. .env is 0600; the compose file keeps its mode.
+// stagedCompose is where the restore writes the snapshot's compose file
+// until the configuration it gives cyfr is read and carries the bar; only
+// then is it renamed over docker-compose.yml (publishCompose), so the
+// compose file in place delivers the bar at every step.
+const stagedCompose = ".docker-compose.yml.restore"
+
+// putConfigFiles writes the snapshot's .env over the project's, with the
+// barrier, and the snapshot's compose file at stagedCompose: the
+// configuration they give cyfr is the one the snapshot was taken under,
+// whose mounts the storage part follows. .env is 0600; the compose file
+// keeps docker-compose.yml's mode.
 func (r *restorer) putConfigFiles() error {
-	for _, f := range restoreFiles {
-		data, err := os.ReadFile(r.snap.path(f.part))
-		if err != nil {
-			return err
-		}
-		mode := os.FileMode(0600)
-		if f.file == ".env" {
-			data = withBarrier(data, r.snap.dir)
-		} else if info, err := os.Stat(f.file); err == nil {
-			mode = info.Mode().Perm()
-		}
-		if err := writeDurable(f.file, data, mode); err != nil {
-			return err
-		}
+	env, err := os.ReadFile(r.snap.path(".env"))
+	if err != nil {
+		return err
+	}
+	if err := writeDurable(".env", withBarrier(env, r.snap.dir), 0600); err != nil {
+		return err
 	}
 	r.profiles = composeProfiles(".env")
-	return nil
+	compose, err := os.ReadFile(r.snap.path("compose"))
+	if err != nil {
+		return err
+	}
+	mode := os.FileMode(0600)
+	if info, err := os.Stat("docker-compose.yml"); err == nil {
+		mode = info.Mode().Perm()
+	}
+	return writeDurable(stagedCompose, compose, mode)
+}
+
+// publishCompose renames the staged compose file, whose configuration
+// readRestoredConfig read with the bar reaching cyfr, over
+// docker-compose.yml.
+func (r *restorer) publishCompose() error {
+	if err := os.Rename(stagedCompose, "docker-compose.yml"); err != nil {
+		return err
+	}
+	d, err := os.Open(".")
+	if err != nil {
+		return err
+	}
+	return errors.Join(d.Sync(), d.Close())
+}
+
+// stagedComposeArgs are the compose arguments that read the configuration
+// the staged compose file gives once it is docker-compose.yml: the project
+// directory's override file, when there is one, read after it as compose
+// reads it by default.
+func (r *restorer) stagedComposeArgs(args ...string) []string {
+	files := []string{"compose", "-f", stagedCompose}
+	for _, name := range []string{"docker-compose.override.yml", "docker-compose.override.yaml"} {
+		if _, err := os.Stat(name); err == nil {
+			files = append(files, "-f", name)
+			break
+		}
+	}
+	files = append(files, "--project-directory", ".")
+	return slices.Concat(files, profileArgs(r.profiles), args)
 }
 
 // putBackHeld writes the held configuration files back.
@@ -527,6 +564,9 @@ func (r *restorer) putBackHeld() error {
 			errs = append(errs, writeDurable(f.file, data, mode))
 		}
 	}
+	if err := os.Remove(stagedCompose); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		errs = append(errs, err)
+	}
 	r.profiles = composeProfiles(".env")
 	return errors.Join(errs...)
 }
@@ -541,9 +581,19 @@ func (r *restorer) readRestoredConfig() error {
 	refuse := func(format string, args ...any) error {
 		return fmt.Errorf("The snapshot does not fit the configuration its docker-compose.yml and .env give cyfr: %s", fmt.Sprintf(format, args...))
 	}
+	// COMPOSE_FILE names other files than docker-compose.yml, which the
+	// restore puts back, so what it reads would not be what starts.
+	for _, env := range []func() (string, bool){
+		func() (string, bool) { return os.LookupEnv("COMPOSE_FILE") },
+		func() (string, bool) { return envValue(".env", "COMPOSE_FILE") },
+	} {
+		if value, ok := env(); ok && value != "" {
+			return refuse("COMPOSE_FILE=%s names the compose files docker compose reads, so the docker-compose.yml cyfr restore puts back may not be the one that starts; unset it", value)
+		}
+	}
 	ctx, cancel := r.detached(composeRunTimeout)
 	defer cancel()
-	raw, err := r.dockerOutput(ctx, nil, r.composeArgs("config", "--format", "json")...)
+	raw, err := r.dockerOutput(ctx, nil, r.stagedComposeArgs("config", "--format", "json")...)
 	if err != nil {
 		return fmt.Errorf("docker compose could not read the snapshot's configuration (%v)", err)
 	}

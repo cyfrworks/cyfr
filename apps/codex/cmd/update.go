@@ -242,6 +242,10 @@ type updater struct {
 	// offlineEnv are the settings each offline eval sets in its one-off
 	// container: a restore's lifts its own bar (restoreBarrier).
 	offlineEnv []string
+	// boundTargets are the container paths compose resolves a mount of the
+	// cyfr service at, through every form compose reads (merge keys,
+	// extends, override files), so the switch adds no default mount at one.
+	boundTargets map[string]bool
 }
 
 type serviceStop struct {
@@ -813,6 +817,10 @@ func (u *updater) readConfig() error {
 	mounts, err := cyfr.mounts()
 	if err != nil {
 		return err
+	}
+	u.boundTargets = map[string]bool{}
+	for _, m := range mounts {
+		u.boundTargets[path.Clean(m.Target)] = true
 	}
 	env := func(name string) string { return serviceSetting(cyfr.Environment, name) }
 	if snapshot := env(restoreBarrier); snapshot != "" {
@@ -1640,7 +1648,7 @@ func (u *updater) switchImages() error {
 	if err := writeFileAtomic(u.compose.path, u.compose.rewritten, info.Mode().Perm()); err != nil {
 		return err
 	}
-	if added, err := ensureCyfrComposeFields(u.compose.path); err != nil {
+	if added, err := ensureComposeFields(u.compose.path, u.boundTargets); err != nil {
 		fmt.Fprintf(u.errOut, "Note: %v\n", err)
 	} else if len(added) > 0 {
 		fmt.Fprintf(u.out, "Added missing fields to docker-compose.yml: %v\n", added)
@@ -1730,6 +1738,13 @@ var requiredEnvFiles = []string{
 // nothing was missing). Returns an error if the file can't be parsed as YAML
 // or if no cyfr service can be found.
 func ensureCyfrComposeFields(path string) ([]string, error) {
+	return ensureComposeFields(path, nil)
+}
+
+// ensureComposeFields is ensureCyfrComposeFields with bound, when not nil,
+// the container paths compose itself resolves a mount of the cyfr service
+// at: no default mount is added at one of them, whatever form binds it.
+func ensureComposeFields(path string, bound map[string]bool) ([]string, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("docker-compose.yml not found")
@@ -1794,7 +1809,7 @@ func ensureCyfrComposeFields(path string) ([]string, error) {
 	// shadowed by a second mount at its target.
 	lookup := composeEnv(filepath.Join(filepath.Dir(path), ".env"))
 	for _, mount := range requiredVolumes {
-		if ensureVolumeTarget(cyfrNode, mount, lookup) {
+		if ensureVolumeTarget(cyfrNode, mount, lookup, bound) {
 			added = append(added, "volumes: "+mount)
 		}
 	}
@@ -2130,24 +2145,93 @@ func volumeTarget(entry *yaml.Node, lookup func(string) (string, bool)) (string,
 	return path.Clean(target), ok && target != ""
 }
 
-// ensureVolumeTarget appends mount ("SOURCE:TARGET") to svc's volumes
-// unless an entry already targets TARGET, and reports whether it did. An
-// entry whose target does not read counts as binding TARGET, so nothing is
-// added beside a mount cyfr cannot place.
-func ensureVolumeTarget(svc *yaml.Node, mount string, lookup func(string) (string, bool)) bool {
+// ensureVolumeTarget adds mount ("SOURCE:TARGET") to svc's volumes unless
+// TARGET is bound, and reports whether it did. TARGET is bound when bound
+// names it (compose's own resolution), or when an entry of the volumes svc
+// has or inherits through YAML merge keys targets it; an entry whose target
+// does not read counts as binding it, and so does any target of a service
+// that extends another when bound is nil, since its volumes are not in
+// this file. A list svc inherits is copied into its own volumes with the
+// mount, never replaced by a list of the mount alone.
+func ensureVolumeTarget(svc *yaml.Node, mount string, lookup func(string) (string, bool), bound map[string]bool) bool {
 	_, want, _ := strings.Cut(mount, ":")
-	if seq := mapValue(svc, "volumes"); seq != nil {
-		if seq.Kind != yaml.SequenceNode {
+	want = path.Clean(want)
+	if bound[want] || bound == nil && mapValue(svc, "extends") != nil {
+		return false
+	}
+	seq, own := serviceVolumes(svc, 0)
+	if seq == nil {
+		return ensureSequenceItem(svc, "volumes", mount)
+	}
+	if seq.Kind != yaml.SequenceNode {
+		return false
+	}
+	for _, entry := range seq.Content {
+		target, ok := volumeTarget(entry, lookup)
+		if !ok || target == want {
 			return false
 		}
-		for _, entry := range seq.Content {
-			target, ok := volumeTarget(entry, lookup)
-			if !ok || target == path.Clean(want) {
-				return false
-			}
+	}
+	item := &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: mount}
+	if own {
+		seq.Content = append(seq.Content, item)
+		return true
+	}
+	inherited := &yaml.Node{Kind: yaml.SequenceNode, Tag: "!!seq"}
+	for _, entry := range seq.Content {
+		inherited.Content = append(inherited.Content, copyNode(entry))
+	}
+	inherited.Content = append(inherited.Content, item)
+	setMapValue(svc, "volumes", inherited)
+	return true
+}
+
+// serviceVolumes answers the volumes sequence of the service mapping svc,
+// its own key or, as serviceImage reads the image, the one it inherits
+// through YAML merge keys; own reports whether it is svc's own.
+func serviceVolumes(svc *yaml.Node, depth int) (seq *yaml.Node, own bool) {
+	if svc != nil && svc.Kind == yaml.AliasNode {
+		svc = svc.Alias
+	}
+	if svc == nil || svc.Kind != yaml.MappingNode || depth > 16 {
+		return nil, false
+	}
+	if node := mapValue(svc, "volumes"); node != nil {
+		if node.Kind == yaml.AliasNode {
+			node = node.Alias
+		}
+		return node, depth == 0
+	}
+	merge := mapValue(svc, "<<")
+	if merge == nil {
+		return nil, false
+	}
+	sources := []*yaml.Node{merge}
+	if merge.Kind == yaml.SequenceNode {
+		sources = merge.Content
+	}
+	for _, source := range sources {
+		if node, _ := serviceVolumes(source, depth+1); node != nil {
+			return node, false
 		}
 	}
-	return ensureSequenceItem(svc, "volumes", mount)
+	return nil, false
+}
+
+// copyNode answers a deep copy of node without its anchors, so the copy
+// adds no second anchor of one name to the file; an alias stays the alias
+// it is.
+func copyNode(node *yaml.Node) *yaml.Node {
+	if node.Kind == yaml.AliasNode {
+		return node
+	}
+	c := *node
+	c.Anchor = ""
+	c.Content = nil
+	for _, child := range node.Content {
+		c.Content = append(c.Content, copyNode(child))
+	}
+	return &c
 }
 
 // ensureSequenceItem makes sure that the sequence at parent[key] contains

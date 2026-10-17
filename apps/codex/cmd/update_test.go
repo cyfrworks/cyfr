@@ -1830,3 +1830,63 @@ func resolvedDataSource(t *testing.T, dir string) string {
 	}
 	return strings.Join(sources, ",")
 }
+
+// A target missing from a list the service inherits through a YAML merge
+// key is added to a copy of that list, which keeps every inherited mount;
+// a service that extends another adds nothing unless compose's own
+// resolution says the target is unbound, and that resolution decides.
+func TestEnsureCyfrComposeFieldsKeepsInheritedMounts(t *testing.T) {
+	write := func(t *testing.T, input string) (string, string) {
+		dir := t.TempDir()
+		path := filepath.Join(dir, "docker-compose.yml")
+		if err := os.WriteFile(path, []byte(input), 0644); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, ".env"), []byte("CYFR_PORT=4000\n"), 0600); err != nil {
+			t.Fatal(err)
+		}
+		return dir, path
+	}
+	const service = `    image: alpine:3.22
+    container_name: cyfr
+    env_file: [.env]
+    ports:
+      - "127.0.0.1:${CYFR_PORT:-4000}:${CYFR_PORT:-4000}"
+`
+	t.Run("merge key, one target inherited", func(t *testing.T) {
+		dir, path := write(t, "x-base: &base\n  volumes:\n    - ./alternate-data:/app/data\nservices:\n  cyfr:\n    <<: *base\n"+service)
+		before := resolvedDataSource(t, dir)
+		added, err := ensureCyfrComposeFields(path)
+		if err != nil || !slices.Equal(added, []string{"volumes: ./aqua:/app/seed/aqua"}) {
+			t.Fatalf("ensureCyfrComposeFields added %v (error %v)", added, err)
+		}
+		if after := resolvedDataSource(t, dir); after != before {
+			t.Errorf("compose resolves /app/data to %s after, %s before", after, before)
+		}
+		got, _ := os.ReadFile(path)
+		var root yaml.Node
+		if err := yaml.Unmarshal(got, &root); err != nil {
+			t.Fatalf("the written file is not YAML: %v\n%s", err, got)
+		}
+		volumes, own := serviceVolumes(mapValue(mapValue(root.Content[0], "services"), "cyfr"), 0)
+		if !own || len(volumes.Content) != 2 || volumes.Content[0].Value != "./alternate-data:/app/data" {
+			t.Errorf("the cyfr service's own volumes are %v, want the inherited mount and the added one:\n%s", volumes, got)
+		}
+	})
+	t.Run("extends", func(t *testing.T) {
+		_, path := write(t, "services:\n  base:\n    image: alpine:3.22\n    volumes:\n      - ./alternate-data:/app/data\n      - ./my-aqua:/app/seed/aqua\n  cyfr:\n    extends: base\n"+service)
+		if added, err := ensureCyfrComposeFields(path); err != nil || len(added) != 0 {
+			t.Fatalf("ensureCyfrComposeFields added %v (error %v) to a service whose volumes another file holds", added, err)
+		}
+		if added, err := ensureComposeFields(path, map[string]bool{"/app/data": true}); err != nil || !slices.Equal(added, []string{"volumes: ./aqua:/app/seed/aqua"}) {
+			t.Fatalf("ensureComposeFields added %v (error %v), want the one target compose resolves unbound", added, err)
+		}
+	})
+	t.Run("resolved by compose", func(t *testing.T) {
+		// An override file binds both targets: the file alone shows none.
+		_, path := write(t, "services:\n  cyfr:\n"+service)
+		if added, err := ensureComposeFields(path, map[string]bool{"/app/data": true, "/app/seed/aqua": true}); err != nil || len(added) != 0 {
+			t.Fatalf("ensureComposeFields added %v (error %v) at targets compose resolves bound", added, err)
+		}
+	})
+}
