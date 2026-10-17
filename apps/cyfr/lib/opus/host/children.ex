@@ -490,7 +490,13 @@ defmodule Opus.Host.Children do
   end
 
   # The typed setup and consent refusals carry their structural cause, so
-  # they are analyzed before they are rendered.
+  # they are analyzed before they are rendered. A call whose handler
+  # stopped once it may have acted is `uncertain`, never a failure: its
+  # effect may stand, and a guest that read `dispatch_error` would repeat
+  # it.
+  defp tool_refusal({:uncertain, _message} = reason, _chain),
+    do: guest_error(:uncertain, render(reason))
+
   defp tool_refusal(reason, chain) do
     message = render(reason)
 

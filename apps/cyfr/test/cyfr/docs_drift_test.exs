@@ -1163,6 +1163,37 @@ defmodule Cyfr.DocsDriftTest do
     end
   end
 
+  # Two guest error rows quote what the guest reads. A write into a version
+  # directory no committed revision names reaches a storage guest as
+  # `storage_path_denied` with the `:no_unit` refusal's sentence
+  # (`Opus.GuestStorage`); an in-chain call whose handler stopped once it
+  # may have acted reaches a formula as `uncertain` with the gate's
+  # sentence (`Sanctum.Dispatch`, through `Opus.Host.Children`).
+  test "component-guide's storage_path_denied and uncertain rows quote the sentences the guest reads" do
+    guide = File.read!(Path.join(@repo_root, "component-guide.md"))
+
+    row = fn type ->
+      case Regex.scan(~r/^\| `#{type}` \| (.*) \|$/m, guide, capture: :all_but_first) do
+        [[text]] -> text
+        rows -> flunk("component-guide.md has #{length(rows)} #{type} rows, not one")
+      end
+    end
+
+    assert row.("storage_path_denied") =~ ~s("#{Prima.Refusal.message(:no_unit)}"),
+           "component-guide.md's storage_path_denied row does not quote the no_unit sentence"
+
+    dispatch = File.read!(Path.join(@repo_root, "apps/sanctum/lib/sanctum/dispatch.ex"))
+
+    assert [[how_tail]] =
+             Regex.scan(~r/\{:uncertain, "Tool #\{name\} #\{how\}(; [^"]+)"\}/, dispatch,
+               capture: :all_but_first
+             ),
+           "Sanctum.Dispatch no longer spells one uncertain sentence"
+
+    assert row.("uncertain") =~ ~s("Tool <name> crashed#{how_tail}"),
+           "component-guide.md's uncertain row does not quote the gate's sentence"
+  end
+
   test "the guides' tincture-block keys are ones the code actually reads" do
     # Documented tincture keys must match validator and consumer support.
     documented_only = ~w(sandbox)

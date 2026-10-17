@@ -575,7 +575,7 @@ The declared capability **ask**. `caps` is never applied by itself — it is ren
 | `egress.methods` | string[] | HTTP methods (e.g. `["GET", "POST"]`) |
 | `egress.schemes` | string[] | URL schemes. Omitted = `["https"]` at consent |
 | `egress.private_ips` | string[] | Private IPs/CIDRs to reach (SSRF exception; `169.254.0.0/16` always blocked) |
-| `storage.paths` | string[] | Storage paths for `cyfr:storage/files`. `"data/"` is the component-private scope and the default choice; `"components/"` reaches the athanor's real component trees (writes copy-on-write whole version directories against the storage cap) — grant it only when the component genuinely manages components. Writes land only under `local/`: pulled publishers are fork-to-modify, refused at the boundary. A `local/` write grant is code-mutation power — a rewrite re-registers on the next scan and runs at the same version |
+| `storage.paths` | string[] | Storage paths for `cyfr:storage/files`. `"data/"` is the component-private scope and the default choice; `"components/"` reaches the athanor's real component trees (a write edits a file of an existing version directory in place, in its current revision, against the storage cap; a version directory is made by scaffold, pull, fork or publish, never by a write) — grant it only when the component genuinely manages components. Writes land only under `local/`: pulled publishers are fork-to-modify, refused at the boundary. A `local/` write grant is code-mutation power — a rewrite re-registers on the next scan and runs at the same version |
 | `storage.actions` | string[] | Storage actions (`read`, `write`, `append`, `list`, `delete`, `exists`) |
 | `tools` | string[] | MCP tool patterns (formulas): `"*"`, exact (`"execution.run"`), or prefix glob (`"component.*"`). `feed.bind`, `feed.remove`, `layout.edit`, `schedule.create` and `schedule.update` are an agent's alone, by exact name: a manifest of any other type naming one is refused, and no pattern grants them |
 | `limits.timeout`, `limits.batch_timeout` | string | Durations like `"30s"`, `"3m"` |
@@ -910,7 +910,7 @@ Error: `{"error": {"type": "...", "message": "..."}}`.
 
 | `type` | What it means |
 |---|---|
-| `storage_path_denied` | The path is outside the granted scopes, or not a path at all |
+| `storage_path_denied` | The path is outside the granted scopes, or not a path at all; or a write names a version directory that does not exist yet: "Nothing is here to write into yet: a component is created by scaffold, pull, fork or publish, and a role, the soul or a scroll by writing its own file first" |
 | `action_denied` | The action is not one this component was granted |
 | `request_too_large` / `response_too_large` | The request, or what a read would answer, is past the node's size limits |
 | `storage_quota_exceeded` | The athanor's storage cap, or the public profile's quota, would be passed |
@@ -1387,7 +1387,7 @@ Errors returned by `invoke::call`/`invoke::spawn` as `{"error": {"type": "...", 
 | `tool_denied` | MCP tool not covered by the granted tool patterns |
 | `flow_blocked` | A tool server's tool refused before its arguments left: the run read a source class its grant declares no flow of to `server:<name>` |
 | `encoding_error` | A tool's result could not be encoded as JSON |
-| `uncertain` | The host call's answer was lost after the call may have taken effect, so its outcome is unknown |
+| `uncertain` | The call may have taken effect and no result says whether it did: its handler stopped once it may have acted ("Tool <name> crashed; its outcome is unknown", or exited, timed out or was cancelled), or the host call's answer was lost. Check before repeating it |
 | `unknown` | The host produced a result in an unexpected shape |
 
 `setup_required` errors include a `remediation` field with machine-readable fix actions (naming the unbound need, with a `fix` pointing at `profile.plan` and a `cyfr profile grant <ref>` command). Formulas can surface this to users via `emit`.

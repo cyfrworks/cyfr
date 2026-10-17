@@ -16,8 +16,10 @@ defmodule Opus.Host.ChildrenTest do
   runner sends stands in for the authority, the roster or the lineage: a
   widened authority in a body grants nothing, a tampered assignment does
   not attach, a roster the runner claims is never read, and a tool call's
-  lineage is the header's. A formula whose attempt has a cancel asked of
-  it, or has ended, admits no child and makes no tool call.
+  lineage is the header's. A tool call whose handler stopped once it may
+  have acted reads `uncertain`, never a failure the guest could repeat. A
+  formula whose attempt has a cancel asked of it, or has ended, admits no
+  child and makes no tool call.
   """
 
   use ExUnit.Case, async: false
@@ -29,6 +31,44 @@ defmodule Opus.Host.ChildrenTest do
   alias Opus.Attempt
   alias Cyfr.Test.{AttemptFixtures, ScriptedWorker}
   alias Prima.Test.AuthorityFixtures, as: Graph
+
+  defmodule ActThenRaise do
+    @moduledoc false
+    # Tells the process registered as `:children_act_then_raise` that it
+    # acted, then raises: a write, so the effect may stand; and a
+    # replay-safe read, which may simply fail.
+    @behaviour Prima.Provider
+
+    alias Prima.Operation
+
+    @impl true
+    def service, do: "probe"
+
+    @impl true
+    def tools do
+      [
+        Operation.tool([
+          Operation.new("act_then_raise", "effect", "Act, then raise", [],
+            kind: :write,
+            sources: [],
+            planes: [:in_chain]
+          ),
+          Operation.new("act_then_raise", "peek", "Read, then raise", [],
+            kind: :read,
+            sources: [],
+            planes: [:in_chain],
+            recovery: :replay_safe
+          )
+        ])
+      ]
+    end
+
+    @impl true
+    def handle("act_then_raise", _ctx, %{"action" => action}) do
+      send(:children_act_then_raise, {:acted, action})
+      raise "failed after its effect: planted-exception-text-31d9"
+    end
+  end
 
   @math_wasm_path Path.expand("../../support/test_wasm/math.wasm", __DIR__)
   @formula "formula:local.children-formula"
@@ -605,6 +645,37 @@ defmodule Opus.Host.ChildrenTest do
       assert call.completion == :succeeded
 
       assert %{"ok" => _} = fail!(child, "done")
+    end
+
+    test "answers uncertain for a call whose handler raised once it may have acted, and the ordinary failure for a replay-safe read",
+         %{ctx: ctx} do
+      Process.register(self(), :children_act_then_raise)
+
+      {answers, _log} =
+        ExUnit.CaptureLog.with_log(fn ->
+          Sanctum.Catalog.with_providers([ActThenRaise], fn ->
+            fixture =
+              formula!(ctx, authority(tools: ["act_then_raise.effect", "act_then_raise.peek"]))
+
+            {tool(fixture, "act_then_raise", %{"action" => "effect"}),
+             tool(fixture, "act_then_raise", %{"action" => "peek"})}
+          end)
+        end)
+
+      {effect, peek} = answers
+
+      assert_received {:acted, "effect"}
+      assert_received {:acted, "peek"}
+
+      assert %{
+               "error" => "guest_error",
+               "type" => "uncertain",
+               "message" => "Tool act_then_raise crashed; its outcome is unknown"
+             } = effect
+
+      assert %{"error" => "guest_error", "type" => "dispatch_error", "message" => crashed} = peek
+      assert crashed == "Tool act_then_raise crashed"
+      refute inspect({effect, peek}) =~ "planted-exception-text"
     end
 
     test "is refused on the in-chain plane for an action no chain may run", %{ctx: ctx} do
