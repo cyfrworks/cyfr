@@ -145,9 +145,19 @@ Adding a server takes a signed-in session (cyfr login); an API key cannot.`,
 					fmt.Printf("  Tools: %s\n", strings.Join(strs, ", "))
 				}
 			}
+			printWarnings(result)
 		}
 		return nil
 	},
+}
+
+// printWarnings writes each warning the server's definition carries (the
+// answer's warnings list) after the confirmation, one per line.
+func printWarnings(result map[string]any) {
+	warnings, _ := result["warnings"].([]any)
+	for _, w := range warnings {
+		fmt.Printf("  Warning: %v\n", w)
+	}
 }
 
 var mcpUpdateCmd = &cobra.Command{
@@ -188,6 +198,7 @@ key cannot.`,
 			output.JSON(result)
 		} else {
 			fmt.Printf("Server '%s' updated (%v).\n", name, result["status"])
+			printWarnings(result)
 		}
 		return nil
 	},
