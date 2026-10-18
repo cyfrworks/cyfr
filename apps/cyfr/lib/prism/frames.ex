@@ -332,11 +332,16 @@ defmodule Prism.Frames do
     do: Prima.ComponentRef.build("tincture", publisher, name)
 
   @doc """
-  The reference pinned to the version the card lists: what its frame opens
-  and what the grant it waits for is planned for.
+  The reference pinned to the version a card, or a frame's `reference`,
+  names: what its frame opens and what the grant it waits for is planned
+  for.
   """
-  @spec version_ref(%{publisher: String.t(), name: String.t(), version: String.t()}) ::
-          String.t()
+  @spec version_ref(%{
+          required(:publisher) => String.t(),
+          required(:name) => String.t(),
+          required(:version) => String.t(),
+          optional(atom()) => term()
+        }) :: String.t()
   def version_ref(%{publisher: publisher, name: name, version: version}),
     do: Prima.ComponentRef.build("tincture", publisher, name, version)
 
