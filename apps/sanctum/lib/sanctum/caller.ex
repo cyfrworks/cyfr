@@ -236,7 +236,8 @@ defmodule Sanctum.Caller do
               reference: authority.reference,
               version_digest: authority.version_digest,
               grant_revision: authority.grant_revision,
-              mode: authority.mode
+              mode: authority.mode,
+              current: authority.current
             },
             authenticated: true
           )

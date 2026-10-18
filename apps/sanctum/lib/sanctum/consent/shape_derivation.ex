@@ -101,27 +101,36 @@ defmodule Sanctum.Consent.ShapeDerivation do
     epoch = epoch(ctx)
     key = live_shape_key(ctx, source_ref)
 
-    case key && Arca.Cache.get(key) do
-      {:ok, digest} when is_binary(digest) ->
+    case cached(key, epoch) do
+      {:ok, digest} ->
         {:ok, digest}
 
-      _ ->
+      :miss ->
         with {:ok, digest} <- digest(ctx, source_ref, :latest),
-             do: stored(ctx, key, digest, epoch)
+             do: stored(key, digest, epoch)
     end
   end
 
-  # A derived shape is kept only while the athanor's live-shape epoch it
-  # read before reading anything it was derived from still stands after it
-  # is stored. The registry's sweep moves the epoch before it drops the
-  # stored shapes, so a derivation that read the registry before a change
-  # and stores after its sweep drops its own entry, and one whose store
-  # lands before the sweep is dropped by the sweep: no stored shape
-  # outlives what it was derived from.
-  defp stored(ctx, key, digest, epoch) do
-    if key do
-      Arca.Cache.put(key, digest, @live_cache_ttl_ms)
-      unless epoch != nil and current_epoch(ctx) == epoch, do: Arca.Cache.invalidate(key)
+  # A stored shape carries the athanor's live-shape epoch its derivation
+  # read before reading anything it was derived from, and a read takes it
+  # only when that is the epoch it reads now. The registry's sweep moves
+  # the epoch before it drops the stored shapes, so a shape derived from
+  # what the registry held before a change answers no read that begins
+  # after the change's sweep, whenever it is stored; the sweep's own drop
+  # is cleanup.
+  defp cached(nil, _epoch), do: :miss
+  defp cached(_key, nil), do: :miss
+
+  defp cached(key, epoch) do
+    case Arca.Cache.get(key) do
+      {:ok, {^epoch, digest}} when is_binary(digest) -> {:ok, digest}
+      _stale_or_absent -> :miss
+    end
+  end
+
+  defp stored(key, digest, epoch) do
+    if key != nil and epoch != nil do
+      Arca.Cache.put(key, {epoch, digest}, @live_cache_ttl_ms)
     end
 
     {:ok, digest}
@@ -145,15 +154,6 @@ defmodule Sanctum.Consent.ShapeDerivation do
             Arca.Cache.put(key, epoch, :timer.hours(1))
             epoch
         end
-    end
-  end
-
-  defp current_epoch(ctx) do
-    with key when key != nil <- epoch_key(ctx),
-         {:ok, epoch} <- Arca.Cache.get(key) do
-      epoch
-    else
-      _ -> nil
     end
   end
 
@@ -181,9 +181,9 @@ defmodule Sanctum.Consent.ShapeDerivation do
   release digest its row holds now, so a version rebuilt in place under
   the same number, whose release digest moves with its bytes or its
   manifest, is never answered the shape it had before. A dependency's
-  change reaches it through the registry's sweep of the athanor's live
-  shapes, and a derivation that read the closure before that sweep keeps
-  nothing after it, as `live_digest/2`'s does.
+  change reaches it through the athanor's live-shape epoch, which the
+  registry's sweep moves: a shape derived before the sweep answers no read
+  that begins after it, nor does one `live_digest/2` stores.
   """
   @spec version_digest(Sanctum.Context.t(), String.t(), String.t()) ::
           {:ok, String.t()} | {:error, term()}
@@ -193,14 +193,14 @@ defmodule Sanctum.Consent.ShapeDerivation do
     with {:ok, row, manifest} <- manifest_row(ctx, source_ref, version) do
       key = version_shape_key(ctx, source_ref, version, row)
 
-      case key && Arca.Cache.get(key) do
-        {:ok, digest} when is_binary(digest) ->
+      case cached(key, epoch) do
+        {:ok, digest} ->
           {:ok, digest}
 
-        _ ->
+        :miss ->
           with {:ok, input} <- row_shape_input(ctx, source_ref, row, manifest),
                {:ok, digest} <- ShapeDigest.compute(input),
-               do: stored(ctx, key, digest, epoch)
+               do: stored(key, digest, epoch)
       end
     end
   end

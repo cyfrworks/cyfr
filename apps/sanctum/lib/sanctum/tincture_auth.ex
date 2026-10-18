@@ -95,6 +95,7 @@ defmodule Sanctum.TinctureAuth do
           grant_revision: non_neg_integer(),
           mode: frame_mode(),
           deadline: DateTime.t(),
+          current: boolean(),
           credential_binding: Context.credential_binding()
         }
 
@@ -573,7 +574,10 @@ defmodule Sanctum.TinctureAuth do
   version (`reference`) and its digest, the grant revision, the frame id,
   the row's id, its mode (`:live` or `:validation`), its deadline (the
   row's, or the bearer's own when that is earlier: a bearer a renewal
-  replaced keeps the deadline it was signed with) and the source binding
+  replaced keeps the deadline it was signed with), whether it is the
+  row's `current` bearer (signed with the deadline the row's latest mint,
+  renewal or resume wrote, which every earlier bearer of the row was
+  signed without) and the source binding
   — or `:invalid_credential` for a bearer this server did not sign as one,
   `:suspended`, `:revoked`, `:expired_credential` past either deadline,
   and a source's or a standing's refusal (`:not_standing`, `:not_member`,
@@ -614,6 +618,7 @@ defmodule Sanctum.TinctureAuth do
            grant_revision: row.grant_revision,
            mode: frame_mode(row.purpose),
            deadline: deadline,
+           current: DateTime.compare(bound.deadline, row.deadline) == :eq,
            credential_binding: claims_binding(claims)
          }}
       else

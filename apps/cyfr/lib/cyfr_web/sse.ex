@@ -133,15 +133,23 @@ defmodule CyfrWeb.SSE do
   context is counted per frame credential: one frame's streams never
   draw on another's budget.
 
+  A claim is one reservation: the slots held under the key are read and
+  the new one registered under one lock on the key, so two claims never
+  both take the last slot, nor both one stream's replacement.
+
   `opts[:stream]` names the stream a frame opens (its name and subject)
   and `opts[:bearer]` a digest of the bearer it opens under. A frame's
   renewed bearer names the same credential, so its streams count against
   the same slots, and a stream opened again under it is the toolkit
-  moving an open one onto it: a stream of the same name and subject as
-  one held under another bearer of the credential, which no other stream
-  replaces yet, counts against that one's slot, so the pair is one
-  stream of the cap until the old one ends. Each held stream is replaced
-  once; the old connection ends when its client lets go of it, which the
+  moving an open one onto it. A slot holds at most two connections: the
+  one it admitted and one replacement, a stream of the same name and
+  subject under a newer bearer of the credential, its current one
+  (`Sanctum.TinctureAuth.verify_frame_credential/2`), which is not the one
+  the held stream was opened under. The replacement counts against that
+  slot until the connection it replaces ends, and then holds it alone.
+  A second replacement while the first is held, or a replacement of a
+  replacement whose predecessor is still connected, is refused at the
+  cap. The old connection ends when its client lets go of it, which the
   endpoint finds at its next write, and at its own bearer's deadline at
   the latest.
   """
@@ -150,48 +158,72 @@ defmodule CyfrWeb.SSE do
       when is_atom(tag) and limit_key in @limits do
     key = slot_key(tag, ctx)
     limit = setting(limit_key)
+
+    slot = %{
+      stream: Keyword.get(opts, :stream),
+      bearer: Keyword.get(opts, :bearer),
+      current: current_bearer?(ctx),
+      replaces: nil
+    }
+
+    :global.trans({{__MODULE__, key}, self()}, fn -> reserve(key, limit, slot) end, [node()])
+  end
+
+  # Under the key's lock: an ordinary stream while a slot is free, or the
+  # replacement of a held stream that has none.
+  defp reserve(key, limit, slot) do
     held = CyfrWeb.SSE.Registry.entries(key)
-    replaced = MapSet.new(held, fn {_pid, slot} -> slot_replaces(slot) end)
-    open = Enum.count(held, fn {pid, _slot} -> not MapSet.member?(replaced, pid) end)
-    stream = Keyword.get(opts, :stream)
-    bearer = Keyword.get(opts, :bearer)
+    live = MapSet.new(held, fn {pid, _slot} -> pid end)
+    riding = Enum.filter(held, fn {_pid, held_slot} -> replacing?(held_slot, live) end)
 
     cond do
-      open < limit ->
-        register_slot(key, stream, bearer, nil)
+      length(held) - length(riding) < limit ->
+        register_slot(key, slot)
 
-      old = replaced_stream(held, replaced, stream, bearer) ->
-        register_slot(key, stream, bearer, old)
+      old = replaced_stream(held, live, riding, slot) ->
+        register_slot(key, %{slot | replaces: old})
 
       true ->
         {:error, :stream_limit}
     end
   end
 
-  defp register_slot(key, stream, bearer, replaces) do
-    {:ok, _} =
-      CyfrWeb.SSE.Registry.register(key, %{stream: stream, bearer: bearer, replaces: replaces})
-
+  defp register_slot(key, slot) do
+    {:ok, _} = CyfrWeb.SSE.Registry.register(key, slot)
     :ok
   end
 
-  # The held stream a new one of the same name and subject replaces: one
-  # opened under another bearer of the same credential, not replaced yet.
-  defp replaced_stream(_held, _replaced, stream, bearer) when is_nil(stream) or is_nil(bearer),
-    do: nil
+  # A held stream whose slot takes `slot` as its replacement: of the same
+  # name and subject, held alone in its slot (no replacement of its own,
+  # and no predecessor still connected), opened under another bearer than
+  # the new one, which is the credential's current bearer.
+  defp replaced_stream(_held, _live, _riding, %{stream: stream, bearer: bearer, current: current})
+       when is_nil(stream) or is_nil(bearer) or current != true,
+       do: nil
 
-  defp replaced_stream(held, replaced, stream, bearer) do
-    Enum.find_value(held, fn
-      {pid, %{stream: ^stream, bearer: other}} when is_binary(other) and other != bearer ->
-        if not MapSet.member?(replaced, pid), do: pid
+  defp replaced_stream(held, live, riding, slot) do
+    taken = MapSet.new(riding, fn {_pid, %{replaces: pid}} -> pid end)
 
-      _other ->
-        nil
+    Enum.find_value(held, fn {pid, held_slot} ->
+      if replaceable?(held_slot, slot, live) and not MapSet.member?(taken, pid), do: pid
     end)
   end
 
-  defp slot_replaces(%{replaces: pid}), do: pid
-  defp slot_replaces(_slot), do: nil
+  defp replaceable?(
+         %{stream: stream, bearer: older} = held_slot,
+         %{stream: stream, bearer: newer},
+         live
+       )
+       when is_binary(older) and older != newer,
+       do: not replacing?(held_slot, live)
+
+  defp replaceable?(_held_slot, _slot, _live), do: false
+
+  defp replacing?(%{replaces: pid}, live) when is_pid(pid), do: MapSet.member?(live, pid)
+  defp replacing?(_slot, _live), do: false
+
+  defp current_bearer?(%Context{frame: %{current: true}}), do: true
+  defp current_bearer?(%Context{}), do: false
 
   @doc """
   Release the calling process's slots under `tag` for the caller: a stream

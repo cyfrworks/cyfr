@@ -1918,9 +1918,10 @@ defmodule Compendium.Registry do
 
     Arca.Cache.delete_match(Arca.Cache.Keys.match_activation(Prima.Actor.in_athanor(athanor_id)))
 
-    # The epoch moves before the shapes go, so a shape derived from what
-    # the registry held before this change and stored after it is dropped
-    # by its own deriver (`Sanctum.Consent.ShapeDerivation`).
+    # The epoch moves before the shapes go: a shape derived from what the
+    # registry held before this change, stored before or after this sweep,
+    # answers no read that begins after it (`Sanctum.Consent.ShapeDerivation`
+    # takes a stored shape only under the epoch it reads).
     Arca.Cache.put(
       Arca.Cache.Keys.live_shape_epoch(Prima.Actor.in_athanor(athanor_id)),
       System.unique_integer([:positive, :monotonic]),

@@ -145,17 +145,19 @@ defmodule Sanctum.Context do
   (`Sanctum.Caller.establish({:frame_credential, bearer}, …)`): the
   credential row's `id`, the shell's `frame_id`, the tincture version the
   frame opened (`reference`) and its release digest (`version_digest`),
-  the `grant_revision` the frame was opened under, and its `mode`:
-  `:live` for a frame that shows its tincture, `:validation` for a
-  candidate version's hidden trial.
+  the `grant_revision` the frame was opened under, its `mode`: `:live`
+  for a frame that shows its tincture, `:validation` for a candidate
+  version's hidden trial, and whether the bearer is the credential's
+  `current` one, the one its latest rotation signed.
   """
   @type frame :: %{
-          id: String.t(),
-          frame_id: String.t(),
-          reference: %{publisher: String.t(), name: String.t(), version: String.t()},
-          version_digest: String.t(),
-          grant_revision: non_neg_integer(),
-          mode: :live | :validation
+          required(:id) => String.t(),
+          required(:frame_id) => String.t(),
+          required(:reference) => %{publisher: String.t(), name: String.t(), version: String.t()},
+          required(:version_digest) => String.t(),
+          required(:grant_revision) => non_neg_integer(),
+          required(:mode) => :live | :validation,
+          optional(:current) => boolean()
         }
 
   @type t :: %__MODULE__{

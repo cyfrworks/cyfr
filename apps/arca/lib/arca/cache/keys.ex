@@ -79,8 +79,10 @@ defmodule Arca.Cache.Keys do
 
   @doc """
   The epoch of one athanor's live shape digests: a value the registry's
-  sweep replaces before it drops them, so a shape derived across a sweep
-  is not kept (`Sanctum.Consent.ShapeDerivation`).
+  sweep replaces before it drops them. Each stored shape carries the epoch
+  it was derived under and is read only under that epoch, so a shape
+  derived across a sweep answers no later read
+  (`Sanctum.Consent.ShapeDerivation`).
   """
   def live_shape_epoch(%Prima.Actor{athanor_id: athanor_id})
       when is_binary(athanor_id) and athanor_id != "",

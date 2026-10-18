@@ -141,7 +141,8 @@ defmodule Sanctum.ValidationCredentialTest do
                reference: @tincture,
                version_digest: @digest,
                grant_revision: 2,
-               mode: :validation
+               mode: :validation,
+               current: true
              }
 
       assert framed.auth_method == :tincture
