@@ -100,6 +100,9 @@ func Derive(t Target, cur Current, join *Join) (Derivation, error) {
 		}
 		h.Host, h.NodeID, h.PublicURL = join.Name, join.NodeID, "https://"+join.Name
 	case ModePublic:
+		if domain == "" {
+			return Derivation{}, refuse("reach_public_host_invalid", nil)
+		}
 		if !PublicDomain(domain) {
 			return Derivation{}, invalid(t.Domain, "domain", domainRule)
 		}

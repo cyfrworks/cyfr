@@ -216,3 +216,17 @@ func TestOptionOutsideItsMode(t *testing.T) {
 		}
 	}
 }
+
+// A public home asked for without a domain reads as the boot's absent
+// host, word for word, never as an empty value that is not a domain.
+func TestPublicWithoutADomainReadsAsAnAbsentHost(t *testing.T) {
+	_, err := Derive(Target{Mode: ModePublic}, Current{Port: 4000}, nil)
+	var r *Refusal
+	if !errors.As(err, &r) {
+		t.Fatalf("Derive without a domain: %v", err)
+	}
+	want := "CYFR_REACH is `public`, but CYFR_HOST is not set to a public domain name (not localhost, an IP address or a ts.net name). Run `cyfr reach public --domain <your domain>`."
+	if got := r.Sentence(); got != want {
+		t.Errorf("sentence\n got %s\nwant %s", got, want)
+	}
+}

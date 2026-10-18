@@ -567,13 +567,9 @@
         "port": 4000
       },
       "refusal": {
-        "code": "reach_invalid",
+        "code": "reach_public_host_invalid",
         "class": "invalid_argument",
-        "payload": {
-          "input": "",
-          "kind": "domain",
-          "rule": "a domain is two or more labels of letters, digits and hyphens, and not localhost, an IP address or a ts.net name"
-        }
+        "payload": {}
       }
     },
     {
