@@ -140,6 +140,7 @@ defmodule Arca do
       BudgetReservations,
       BuildRecords,
       Cache,
+      Cache.Epoch,
       Cache.Keys,
       CanvasVersions,
       CarryActions,
