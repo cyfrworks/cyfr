@@ -98,10 +98,11 @@ defmodule Locus.Runtime.HttpRequestValidation do
   limits, and pin its URL through CYFR (`Locus.Runtime.Egress.pin/3`) with `host`.
 
   Returns `{:ok, validated_request}` with `:ip` (the pinned address),
-  `:pinned` (the pin) and `:method_atom` (the Req method) added, and the guest's
-  credentials dropped from a cross-origin redirect hop's headers, or, for
+  `:pinned` (the pin) and `:method_atom` (the Req method) added, or, for
   a request naming a connection, with `:attached` added and no pin;
-  `{:error, type, message}` for a refusal the caller records; or
+  `{:error, type, message}` for a refusal the caller records, a redirect's
+  next hop to another origin than its pin's among them
+  (`redirect_credentials`), even when a pin was answered for it; or
   `{:refused, type, message}` for a refusal of CYFR's, which CYFR has
   already recorded.
 

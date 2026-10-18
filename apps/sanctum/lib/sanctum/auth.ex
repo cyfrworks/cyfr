@@ -45,9 +45,15 @@ defmodule Sanctum.Auth do
   `nil` when the request carries none it recognises.
 
   Sessions and API keys are this server's credentials, established by
-  `Sanctum.Caller.establish/2` before the provider is asked; a provider
-  answers here only for a token it issued itself (an IdP access token,
-  say). The shipped providers issue none and answer `nil`.
+  `Sanctum.Caller.establish/2` before the provider is asked. A release
+  configures `Sanctum.Auth.OAuth`, `Sanctum.Auth.OIDC` or none
+  (`Cyfr.RuntimeConfig.resolve_auth_provider/1`), and both issue no
+  credential of their own and answer `nil`, so in production this asks
+  and is told nothing. The callback is the test harness's seam:
+  `CyfrWeb.ConnCase` signs a test in through `Emissary.TestAuthProvider`,
+  whose bearer this callback reads into a person's context, and
+  `CyfrWeb.Plugs.Authenticate` takes a context answered here through the
+  same establish recipe as a session's.
   """
   @callback current_user(conn :: Plug.Conn.t()) :: Context.t() | nil
 end

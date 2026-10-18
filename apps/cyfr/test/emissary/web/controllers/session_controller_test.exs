@@ -51,29 +51,7 @@ defmodule Emissary.Web.SessionControllerTest do
     test "a session's sign-out is the gate's session logout, and leaves its decision row", %{
       conn: conn
     } do
-      n = System.unique_integer([:positive])
-
-      {:ok, user} =
-        Sanctum.Tenancy.Users.upsert_from_provider(%{
-          id: "github|https://github.com|logout-#{n}",
-          provider: "github",
-          email: "logout#{n}@example.com",
-          verified: true
-        })
-
-      {:ok, athanor} = Sanctum.Tenancy.Athanors.create_group(user.id, "Sign-out #{n}")
-
-      {:ok, session} =
-        Sanctum.Context.build(
-          user_id: user.id,
-          email: user.email,
-          provider: "github",
-          athanor_id: athanor.id,
-          permissions: [:*],
-          auth_method: :oidc,
-          authenticated: true
-        )
-        |> Sanctum.TestContext.create_session()
+      {user, session} = person_session!()
 
       conn =
         conn
@@ -82,17 +60,44 @@ defmodule Emissary.Web.SessionControllerTest do
 
       assert %{"ok" => true} = json_response(conn, 200)
       assert {:error, _gone} = Sanctum.Session.get(session.token)
+      assert_logout_decided(user)
+    end
 
-      rows = fn ->
-        Arca.Repo.all(
-          from(d in Arca.Schemas.DecisionLog,
-            where: d.tool == "session" and d.action == "logout" and d.user_id == ^user.id
-          )
-        )
-      end
+    test "a person denied at the door since signs out through the gate too", %{conn: conn} do
+      {user, session} = person_session!()
 
-      assert [%{admission: "admitted"}] = rows.()
-      Prima.Test.Wait.wait_until(fn -> match?([%{completion: "succeeded"}], rows.()) end)
+      Arca.Schemas.User
+      |> Arca.Repo.get!(user.id)
+      |> Ecto.Changeset.change(status: "denied")
+      |> Arca.Repo.update!()
+
+      assert {:error, {:denied, _ctx}} =
+               Sanctum.Caller.establish({:session, session.token}, refresh: false)
+
+      conn =
+        conn
+        |> put_req_header("authorization", "Bearer #{session.token}")
+        |> delete(~p"/auth/logout")
+
+      assert %{"ok" => true} = json_response(conn, 200)
+      assert {:error, _gone} = Sanctum.Session.get(session.token)
+      assert_logout_decided(user)
+    end
+
+    test "a store that cannot establish the caller answers 503 and signs nothing out", %{
+      conn: conn
+    } do
+      {_user, session} = person_session!()
+      Arca.Repo.query!("ALTER TABLE users RENAME TO users_unavailable")
+
+      conn =
+        conn
+        |> put_req_header("authorization", "Bearer #{session.token}")
+        |> delete(~p"/auth/logout")
+
+      assert json_response(conn, 503)
+      Arca.Repo.query!("ALTER TABLE users_unavailable RENAME TO users")
+      assert {:ok, _still} = Sanctum.Session.get(session.token)
     end
 
     test "accepts token via Bearer header", %{conn: conn} do
@@ -105,6 +110,49 @@ defmodule Emissary.Web.SessionControllerTest do
       response = json_response(conn, 200)
       assert response["ok"] == true
     end
+  end
+
+  # A person seated in a group of their own, and a session of theirs.
+  defp person_session! do
+    n = System.unique_integer([:positive])
+
+    {:ok, user} =
+      Sanctum.Tenancy.Users.upsert_from_provider(%{
+        id: "github|https://github.com|logout-#{n}",
+        provider: "github",
+        email: "logout#{n}@example.com",
+        verified: true
+      })
+
+    {:ok, athanor} = Sanctum.Tenancy.Athanors.create_group(user.id, "Sign-out #{n}")
+
+    {:ok, session} =
+      Sanctum.Context.build(
+        user_id: user.id,
+        email: user.email,
+        provider: "github",
+        athanor_id: athanor.id,
+        permissions: [:*],
+        auth_method: :oidc,
+        authenticated: true
+      )
+      |> Sanctum.TestContext.create_session()
+
+    {user, session}
+  end
+
+  # The gate's session logout, admitted and completed, under the person.
+  defp assert_logout_decided(user) do
+    rows = fn ->
+      Arca.Repo.all(
+        from(d in Arca.Schemas.DecisionLog,
+          where: d.tool == "session" and d.action == "logout" and d.user_id == ^user.id
+        )
+      )
+    end
+
+    assert [%{admission: "admitted"}] = rows.()
+    Prima.Test.Wait.wait_until(fn -> match?([%{completion: "succeeded"}], rows.()) end)
   end
 
   describe "whoami/2" do
