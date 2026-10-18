@@ -124,6 +124,14 @@ defmodule Locus.Runtime.KeeperMemoryTest do
 
   defp reply(keeper, message), do: :ok = :socket.send(keeper, [Jason.encode!(message), ?\n])
 
+  # Whether the keeper's attach is queued for the (suspended) handle `pid`:
+  # the message it acts on, so the channel's loss cannot be queued ahead of
+  # it once this holds.
+  defp attach_queued?(pid) do
+    {:messages, messages} = Process.info(pid, :messages)
+    Enum.any?(messages, &match?({Locus.Keeper, _ref, :attached}, &1))
+  end
+
   defp attach!(dir, token) do
     {:ok, relay} =
       :gen_tcp.connect({:local, Path.join(dir, "attach.sock")}, 0, [:binary, active: false])
@@ -315,6 +323,21 @@ defmodule Locus.Runtime.KeeperMemoryTest do
   end
 
   describe "no credential on an exit path" do
+    # Planted: another of the keeper's events reaching the suspended handle
+    # first holds a wait on any message, though the attach is not queued;
+    # a wait on the attach itself holds only once it is.
+    test "the wait on a suspended handle holds for the attach itself, not for what arrived first" do
+      handle = spawn(fn -> Process.sleep(:infinity) end)
+      on_exit(fn -> Process.exit(handle, :kill) end)
+
+      send(handle, {Locus.Keeper, make_ref(), {:log, "a line before the attach"}})
+      assert Process.info(handle, :message_queue_len) != {:message_queue_len, 0}
+      refute attach_queued?(handle)
+
+      send(handle, {Locus.Keeper, make_ref(), :attached})
+      assert attach_queued?(handle)
+    end
+
     # A key planted as an assign's call and seal keys, and a secret as the
     # runners' environment value, absent from every line logged.
     test "the pool's log of a send that found its client gone and of a lost channel holds no key or environment value",
@@ -379,7 +402,7 @@ defmodule Locus.Runtime.KeeperMemoryTest do
           # held assign is written to a client that is gone.
           :ok = :sys.suspend(pid)
           _relay = attach!(ctx.dir, token)
-          wait_until(fn -> Process.info(pid, :message_queue_len) != {:message_queue_len, 0} end)
+          wait_until(fn -> attach_queued?(pid) end)
           monitor = Process.monitor(client)
           :socket.close(keeper)
           assert_receive {:DOWN, ^monitor, :process, ^client, _reason}, 5_000
