@@ -14,6 +14,12 @@ defmodule Emissary.Web.SessionController do
   Each accepts the credential only from the `Authorization: Bearer`
   header. The browser signs out through its own route, `POST /auth/logout`,
   which reads only the cookie session.
+
+  A sign-out of a session the token establishes, its person's door since
+  closed included, is the gate's `session logout` (`Sanctum.Gate`), so it
+  leaves the decision row that operation leaves over `/mcp`. A token that
+  establishes no caller holds no authority to take away: its row, if one
+  is left, is removed and the answer is the same success.
   """
 
   use Emissary.Web, :controller
@@ -30,19 +36,39 @@ defmodule Emissary.Web.SessionController do
     token = get_bearer_token(conn)
 
     if token && token != "" do
-      case Session.destroy(token) do
-        :ok ->
-          conn
-          |> SignInResponse.safe_drop_session()
-          |> json(%{ok: true, message: "Logged out successfully"})
-
-        {:error, reason} ->
-          CyfrWeb.ApiError.refuse(conn, reason)
-      end
+      conn |> sign_out(token) |> logged_out(conn)
     else
       CyfrWeb.ApiError.refuse(conn, :missing_token)
     end
   end
+
+  # The caller the token establishes signs out through the gate, as an API
+  # call over `/mcp` would; a door-denied one too, since the operation is
+  # anonymous and ends the session the context names. A session about to
+  # end is not slid.
+  defp sign_out(conn, token) do
+    case Sanctum.Caller.establish({:session, token}, refresh: false) do
+      {:ok, ctx} -> gate_logout(conn, ctx)
+      {:error, {:denied, ctx}} -> gate_logout(conn, ctx)
+      {:error, :unavailable} -> {:error, :unavailable}
+      {:error, _establishes_no_caller} -> Session.destroy(token)
+    end
+  end
+
+  defp gate_logout(conn, ctx) do
+    ctx = %{ctx | origin: :programmatic, client_ip: Sanctum.ClientIp.resolve(conn)}
+
+    with {:ok, _answer} <- Sanctum.Gate.call_external("session", ctx, %{"action" => "logout"}),
+         do: :ok
+  end
+
+  defp logged_out(:ok, conn) do
+    conn
+    |> SignInResponse.safe_drop_session()
+    |> json(%{ok: true, message: "Logged out successfully"})
+  end
+
+  defp logged_out({:error, reason}, conn), do: CyfrWeb.ApiError.refuse(conn, reason)
 
   @doc """
   Returns current session info.

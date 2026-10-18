@@ -11,6 +11,8 @@ defmodule Emissary.Web.SessionControllerTest do
   """
   use CyfrWeb.ConnCase
 
+  import Ecto.Query, only: [from: 2]
+
   describe "logout/2" do
     test "returns error when no token provided via Bearer header", %{conn: conn} do
       # Use Bearer auth header (no session cookie)
@@ -44,6 +46,53 @@ defmodule Emissary.Web.SessionControllerTest do
         |> delete(~p"/auth/logout", Jason.encode!(%{"token" => "nonexistent_token"}))
 
       assert json_response(conn, 401)["code"] == "unauthenticated"
+    end
+
+    test "a session's sign-out is the gate's session logout, and leaves its decision row", %{
+      conn: conn
+    } do
+      n = System.unique_integer([:positive])
+
+      {:ok, user} =
+        Sanctum.Tenancy.Users.upsert_from_provider(%{
+          id: "github|https://github.com|logout-#{n}",
+          provider: "github",
+          email: "logout#{n}@example.com",
+          verified: true
+        })
+
+      {:ok, athanor} = Sanctum.Tenancy.Athanors.create_group(user.id, "Sign-out #{n}")
+
+      {:ok, session} =
+        Sanctum.Context.build(
+          user_id: user.id,
+          email: user.email,
+          provider: "github",
+          athanor_id: athanor.id,
+          permissions: [:*],
+          auth_method: :oidc,
+          authenticated: true
+        )
+        |> Sanctum.TestContext.create_session()
+
+      conn =
+        conn
+        |> put_req_header("authorization", "Bearer #{session.token}")
+        |> delete(~p"/auth/logout")
+
+      assert %{"ok" => true} = json_response(conn, 200)
+      assert {:error, _gone} = Sanctum.Session.get(session.token)
+
+      rows = fn ->
+        Arca.Repo.all(
+          from(d in Arca.Schemas.DecisionLog,
+            where: d.tool == "session" and d.action == "logout" and d.user_id == ^user.id
+          )
+        )
+      end
+
+      assert [%{admission: "admitted"}] = rows.()
+      Prima.Test.Wait.wait_until(fn -> match?([%{completion: "succeeded"}], rows.()) end)
     end
 
     test "accepts token via Bearer header", %{conn: conn} do
