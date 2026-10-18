@@ -2813,6 +2813,51 @@ defmodule Cyfr.Boundaries do
       plane: :external,
       origin: :none
     },
+    # The identity directory's routes, which `Sanctum.Directory` decides:
+    # a node serving no directory, an unknown identifier or request, a
+    # write its chain does not verify, the directory's windows and
+    # capacity. No person of this home admits a directory request; the
+    # identifier's own chain authorizes each write.
+    %{module: Emissary.Web.DirectoryController, site: :register, plane: :external, origin: :none},
+    %{module: Emissary.Web.DirectoryController, site: :resolve, plane: :external, origin: :none},
+    %{module: Emissary.Web.DirectoryController, site: :append, plane: :external, origin: :none},
+    %{module: Emissary.Web.DirectoryController, site: :recover, plane: :external, origin: :none},
+    %{module: Emissary.Web.DirectoryController, site: :outcome, plane: :external, origin: :none},
+    # Restore, an entry path because no person exists yet to admit an
+    # operation, and the recovery kit, its own ingress: the installation
+    # capability, the kit, its proof and the kit credential. The kit
+    # credential's context is `Sanctum.Caller.establish_kit/2`'s and names
+    # no origin.
+    %{module: Emissary.Web.RestoreController, site: :restore, plane: :external, origin: :none},
+    %{module: Emissary.Web.RestoreController, site: :challenge, plane: :external, origin: :none},
+    %{module: Emissary.Web.RestoreController, site: :reproof, plane: :external, origin: :none},
+    %{
+      module: Emissary.Web.RestoreController,
+      site: :kit_challenge,
+      plane: :external,
+      origin: :none
+    },
+    %{module: Emissary.Web.RestoreController, site: :kit, plane: :external, origin: :none},
+    %{
+      module: Emissary.Web.RestoreController,
+      site: :kit_reenable,
+      plane: :external,
+      origin: :none
+    },
+    # The OAuth callback, which completes a `vault.authorize` the gate
+    # admitted: a state no admission left, a provider's denial, and the
+    # grant's refusals once the originating context's standing is read
+    # again.
+    %{
+      module: Emissary.Web.OAuthCallbackController,
+      site: :callback,
+      plane: :external,
+      origin: :none
+    },
+    # The pre-session throttle on the routes whose pipeline mints a call
+    # identity: restore, the OAuth callback and a device's certificate
+    # renewal.
+    %{module: CyfrWeb.Plugs.AuthRateLimit, site: :call, plane: :external, origin: :none},
     # The scheduler's fire: its own admission is the occurrence claimed
     # under a held generation, and a run admission refusal is that fire's
     # failed completion.

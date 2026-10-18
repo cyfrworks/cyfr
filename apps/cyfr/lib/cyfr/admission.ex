@@ -10,7 +10,11 @@ defmodule Cyfr.Admission do
 
     * `:http` — the endpoint: the MCP transport, the HTTP API and its
       event streams, webhooks, tinctures and their data routes, and the
-      console's LiveView socket, each through the gate.
+      console's LiveView socket, each through the gate but at the entries
+      that admit for themselves: a webhook's delivery, an execution's
+      event stream, and what no person of this home admits, the identity
+      directory, restore, the recovery kit and the OAuth callback that
+      completes a `vault.authorize`.
     * `:host_api` — the HostAPI listener: a running chain's host calls,
       each admitted as a child through Opus.
     * `:scheduler` — the scheduler's fire, which listens on nothing: its
@@ -78,6 +82,10 @@ defmodule Cyfr.Admission do
         "Emissary.Web.TinctureDataController",
         "Emissary.Web.WebhookController",
         "Emissary.Web.ExecutionEventsController",
+        "Emissary.Web.DirectoryController",
+        "Emissary.Web.RestoreController",
+        "Emissary.Web.OAuthCallbackController",
+        "CyfrWeb.Plugs.AuthRateLimit",
         "CyfrWeb.Plugs.Authenticate",
         "CyfrWeb.Plugs.ControlPlaneOwnership",
         "CyfrWeb.Plugs.FrameRequest",
@@ -91,7 +99,15 @@ defmodule Cyfr.Admission do
       reason:
         "the one endpoint: its pipelines' plugs, controllers and the MCP router refuse " <>
           "before the gate, and every operation and stream they admit, and every one the " <>
-          "console's LiveView socket dispatches, enters through the gate's external heads"
+          "console's LiveView socket dispatches, enters through the gate's external heads, " <>
+          "but at the entries that admit for themselves and record their own decisions: a " <>
+          "webhook's delivery, admitted under its row and run as its bound profile's root; " <>
+          "an execution's event stream, read under the caller's own standing; and what no " <>
+          "person of this home admits: the identity directory, whose writes the " <>
+          "identifier's own chain authorizes, restore, an entry path that runs before its " <>
+          "person exists, and the recovery kit, its own ingress (§9.1, §6.9), and the OAuth " <>
+          "callback, which completes the vault.authorize the gate admitted under the state " <>
+          "it left"
     },
     %{
       path: :host_api,

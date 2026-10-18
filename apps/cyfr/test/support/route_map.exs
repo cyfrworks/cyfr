@@ -29,6 +29,11 @@
           "CyfrWeb.Plugs.CORS",
           "CyfrWeb.Plugs.AuthRateLimit"
         ],
+        "directory" => [
+          "CyfrWeb.Plugs.CallIdentity",
+          ":accepts",
+          "CyfrWeb.Plugs.ApiSecurityHeaders"
+        ],
         "health_throttle" => ["CyfrWeb.Plugs.AuthRateLimit"],
         "mcp" => [
           "CyfrWeb.Plugs.CallIdentity",
@@ -42,9 +47,14 @@
           "CyfrWeb.Plugs.ParserErrors",
           "Emissary.Web.Plugs.MCPRequestMetadata"
         ],
-        "oauth_callback" => [":accepts", "CyfrWeb.Plugs.ApiSecurityHeaders"],
+        "oauth_callback" => [
+          "CyfrWeb.Plugs.CallIdentity",
+          ":accepts",
+          "CyfrWeb.Plugs.ApiSecurityHeaders"
+        ],
         "oauth_callback_throttle" => ["CyfrWeb.Plugs.AuthRateLimit"],
         "restore" => [
+          "CyfrWeb.Plugs.CallIdentity",
           ":accepts",
           "CyfrWeb.Plugs.ApiSecurityHeaders",
           "CyfrWeb.Plugs.FrameRequest",
@@ -250,7 +260,7 @@
           plug_opts: ":resolve",
           auth: "public_directory",
           live_view: nil,
-          pipe_through: ["api"]
+          pipe_through: ["directory"]
         },
         %{
           verb: "POST",
@@ -259,7 +269,7 @@
           plug_opts: ":append",
           auth: "directory_signed",
           live_view: nil,
-          pipe_through: ["api"]
+          pipe_through: ["directory"]
         },
         %{
           verb: "POST",
@@ -268,7 +278,7 @@
           plug_opts: ":recover",
           auth: "directory_signed",
           live_view: nil,
-          pipe_through: ["api"]
+          pipe_through: ["directory"]
         },
         %{
           verb: "GET",
@@ -277,7 +287,7 @@
           plug_opts: ":outcome",
           auth: "public_directory",
           live_view: nil,
-          pipe_through: ["api"]
+          pipe_through: ["directory"]
         },
         %{
           verb: "POST",
@@ -286,7 +296,7 @@
           plug_opts: ":register",
           auth: "public_directory",
           live_view: nil,
-          pipe_through: ["api"]
+          pipe_through: ["directory"]
         },
         %{
           verb: "POST",

@@ -15,6 +15,12 @@ defmodule Emissary.Web.OAuthCallbackController do
   target vault entry that the resulting tokens are stored under; the
   grant re-establishes that context's standing before it writes, so a
   session revoked in between writes nothing.
+
+  The callback completes an admission the gate made and decides its own
+  refusals, so each error page is also the request's refused decision,
+  recorded once with no person or athanor under the class it names
+  (`CyfrWeb.Plugs.CallIdentity.refused/2`); a provider's own error text
+  is shown on the page and never recorded.
   """
 
   use Emissary.Web, :controller
@@ -33,36 +39,61 @@ defmodule Emissary.Web.OAuthCallbackController do
         success_page(conn, result.provider, result.name)
 
       {:error, :unknown_state} ->
-        error_page(conn, "Authorization failed", "invalid or expired state parameter")
+        error_page(conn, :not_found, "Authorization failed", "invalid or expired state parameter")
 
       {:error, :unauthenticated} ->
         error_page(
           conn,
+          :unauthenticated,
           "Authorization failed",
           "the session that started this authorization is no longer signed in here"
         )
 
       {:error, :unavailable} ->
-        error_page(conn, 503, "Authorization failed", "Try again shortly")
+        error_page(conn, 503, :unavailable, "Authorization failed", "Try again shortly")
 
       {:error, :scopes_not_requested} ->
         error_page(
           conn,
+          :forbidden,
           "Authorization failed",
           "The provider granted scopes this connection did not ask for; nothing was stored."
         )
 
       {:error, reason} ->
-        error_page(conn, "Authorization failed", fmt_reason(reason))
+        {class, recorded} = recorded(reason)
+
+        conn
+        |> refused(class, recorded)
+        |> page_error("Authorization failed", fmt_reason(reason))
     end
   end
 
   def callback(conn, %{"error" => error}) do
-    error_page(conn, "Authorization denied", error)
+    conn
+    |> refused(:forbidden, "the provider denied the authorization")
+    |> page_error("Authorization denied", error)
   end
 
   def callback(conn, _params) do
-    error_page(conn, "Invalid callback", "Missing authorization parameters. Please try again.")
+    error_page(
+      conn,
+      :invalid_argument,
+      "Invalid callback",
+      "Missing authorization parameters. Please try again."
+    )
+  end
+
+  # A typed reason is recorded as its refusal; anything else, a producer's
+  # sentence included, as internal under a fixed sentence, so nothing a
+  # provider answered reaches the decision record.
+  defp recorded(reason) do
+    if Sanctum.Refusals.known?(reason) do
+      %Prima.Refusal{class: class, message: message} = Sanctum.Refusals.classify(reason)
+      {class, message}
+    else
+      {:internal, "the authorization could not be completed"}
+    end
   end
 
   defp fmt_reason(reason) when is_binary(reason), do: reason
@@ -105,9 +136,25 @@ defmodule Emissary.Web.OAuthCallbackController do
     )
   end
 
-  defp error_page(conn, title, message), do: error_page(conn, 400, title, message)
+  defp error_page(conn, class, title, message), do: error_page(conn, 400, class, title, message)
 
-  defp error_page(conn, status, title, message) do
+  defp error_page(conn, status, class, title, message) do
+    conn
+    |> refused(class, message)
+    |> page_error(status, title, message)
+  end
+
+  defp refused(conn, class, message),
+    do:
+      CyfrWeb.Plugs.CallIdentity.refused(conn, %Prima.Refusal{
+        class: class,
+        reason: class,
+        message: message
+      })
+
+  defp page_error(conn, title, message), do: page_error(conn, 400, title, message)
+
+  defp page_error(conn, status, title, message) do
     send_page(
       conn,
       status,

@@ -36,7 +36,10 @@ defmodule Emissary.Web.DirectoryController do
 
   ## Refusals
 
-  The directory's own JSON, `{"error": code, …}`:
+  The directory's own JSON, `{"error": code, …}`. The directory decides
+  every request itself, so each refusal is also the request's refused
+  decision, recorded once with the class its row names and its code as
+  the reason, and no person or athanor:
 
   | Status | `error` | With |
   |---|---|---|
@@ -184,56 +187,71 @@ defmodule Emissary.Web.DirectoryController do
     end
   end
 
+  # Every refusal is the request's refused decision, recorded once under
+  # its call id (`CyfrWeb.Plugs.CallIdentity.refused/2`) with the class its
+  # row names and its wire code as the reason: the directory decides for
+  # itself, so it records for itself.
   defp refuse(conn, reason) do
-    {status, body, headers} = refusal(reason)
+    {status, class, %{"error" => code} = body, headers} = refusal(reason)
 
     headers
     |> Enum.reduce(conn, fn {name, value}, conn -> put_resp_header(conn, name, value) end)
+    |> CyfrWeb.Plugs.CallIdentity.refused(%Prima.Refusal{
+      class: class,
+      reason: reason,
+      message: code
+    })
     |> put_status(status)
     |> json(body)
   end
 
-  defp refusal(:not_served), do: {404, %{"error" => "not_served"}, []}
-  defp refusal(:not_found), do: {404, %{"error" => "not_found"}, []}
-  defp refusal(:read_only), do: {405, %{"error" => "read_only"}, [{"allow", "GET"}]}
+  defp refusal(:not_served), do: {404, :not_found, %{"error" => "not_served"}, []}
+  defp refusal(:not_found), do: {404, :not_found, %{"error" => "not_found"}, []}
+  defp refusal(:read_only), do: {405, :forbidden, %{"error" => "read_only"}, [{"allow", "GET"}]}
 
   defp refusal({:stale_head, head}),
-    do: {409, %{"error" => "stale_head", "head" => head}, []}
+    do: {409, :conflict, %{"error" => "stale_head", "head" => head}, []}
 
   defp refusal({:stale_policy, recorded}),
-    do: {409, %{"error" => "stale_policy", "recorded" => recorded}, []}
+    do: {409, :conflict, %{"error" => "stale_policy", "recorded" => recorded}, []}
 
-  defp refusal(:request_id_reused), do: {409, %{"error" => "request_id_reused"}, []}
-  defp refusal(:conflict), do: {409, %{"error" => "conflict"}, []}
+  defp refusal(:request_id_reused), do: {409, :conflict, %{"error" => "request_id_reused"}, []}
+  defp refusal(:conflict), do: {409, :conflict, %{"error" => "conflict"}, []}
 
   defp refusal({:invalid, {tag, field}}),
-    do: {422, %{"error" => "invalid", "reason" => Atom.to_string(tag), "field" => field}, []}
+    do:
+      {422, :invalid_argument,
+       %{"error" => "invalid", "reason" => Atom.to_string(tag), "field" => field}, []}
 
   defp refusal({:invalid, reason}),
-    do: {422, %{"error" => "invalid", "reason" => Atom.to_string(reason)}, []}
+    do: {422, :invalid_argument, %{"error" => "invalid", "reason" => Atom.to_string(reason)}, []}
 
   defp refusal({:unverified, reason}),
-    do: {422, %{"error" => "unverified", "reason" => Atom.to_string(reason)}, []}
+    do:
+      {422, :unauthenticated, %{"error" => "unverified", "reason" => Atom.to_string(reason)}, []}
 
-  defp refusal(:wrong_identifier), do: {422, %{"error" => "wrong_identifier"}, []}
+  defp refusal(:wrong_identifier),
+    do: {422, :invalid_argument, %{"error" => "wrong_identifier"}, []}
 
   defp refusal({:rate_limited, seconds}),
     do:
-      {429, %{"error" => "rate_limited", "retry_after" => seconds},
+      {429, :rate_limited, %{"error" => "rate_limited", "retry_after" => seconds},
        [{"retry-after", Integer.to_string(seconds)}]}
 
-  defp refusal(:corrupt), do: {500, %{"error" => "corrupt"}, []}
+  defp refusal(:corrupt), do: {500, :corrupt, %{"error" => "corrupt"}, []}
 
   defp refusal({:capacity, which}),
     do:
-      {503, %{"error" => "capacity", "exhausted" => Atom.to_string(which)},
+      {503, :unavailable, %{"error" => "capacity", "exhausted" => Atom.to_string(which)},
        [{"retry-after", "60"}]}
 
   defp refusal({:capacity, :rotations, seconds}),
     do:
-      {503, %{"error" => "capacity", "exhausted" => "rotations"},
+      {503, :unavailable, %{"error" => "capacity", "exhausted" => "rotations"},
        [{"retry-after", Integer.to_string(seconds)}]}
 
-  defp refusal(:busy), do: {503, %{"error" => "busy"}, [{"retry-after", "1"}]}
-  defp refusal(:unavailable), do: {503, %{"error" => "unavailable"}, [{"retry-after", "1"}]}
+  defp refusal(:busy), do: {503, :unavailable, %{"error" => "busy"}, [{"retry-after", "1"}]}
+
+  defp refusal(:unavailable),
+    do: {503, :unavailable, %{"error" => "unavailable"}, [{"retry-after", "1"}]}
 end

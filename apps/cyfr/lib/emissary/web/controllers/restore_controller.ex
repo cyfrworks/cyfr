@@ -27,7 +27,10 @@ defmodule Emissary.Web.RestoreController do
       `restore` session once the first one's window has closed with no
       method installed: answered as `POST /restore` is.
 
-  Refusals are this route's own JSON, `{"error": code}`:
+  Every refusal on these routes, the kit's included, is also the
+  request's refused decision, recorded once with no person or athanor and
+  the code as its reason: restore and the kit decide for themselves, not
+  through the gate. Refusals are this route's own JSON, `{"error": code}`:
 
     * `404 restore_disabled` — this node configures no restore token;
     * `401 invalid_token` — the capability is absent or not this node's;
@@ -80,6 +83,8 @@ defmodule Emissary.Web.RestoreController do
   """
 
   use Emissary.Web, :controller
+
+  alias CyfrWeb.Plugs.CallIdentity
 
   @kit_fields ["identifier", "directory_url", "recovery_secret"]
 
@@ -159,20 +164,21 @@ defmodule Emissary.Web.RestoreController do
   end
 
   defp kit_refuse(conn, {:rate_limited, retry_after_ms}),
-    do: retry(conn, "rate_limited", max(div(retry_after_ms + 999, 1000), 1))
+    do: retry(conn, :rate_limited, "rate_limited", max(div(retry_after_ms + 999, 1000), 1))
 
   defp kit_refuse(conn, reason) when reason in [:directory_unavailable, :unavailable, :not_owner],
-    do: retry(conn, "unavailable", 1)
+    do: retry(conn, :unavailable, "unavailable", 1)
 
-  defp kit_refuse(conn, %Prima.Refusal{class: class, reason: reason, message: message}) do
+  defp kit_refuse(conn, %Prima.Refusal{class: class, reason: reason, message: message} = refusal) do
     conn
+    |> CallIdentity.refused(refusal)
     |> put_status(refusal_status(class))
     |> json(%{error: Atom.to_string(reason), message: message})
   end
 
   defp kit_refuse(conn, reason) do
     {status, code} = kit_status(reason)
-    conn |> put_status(status) |> json(%{error: code})
+    conn |> recorded(status, code) |> put_status(status) |> json(%{error: code})
   end
 
   defp kit_status(:not_recovering), do: {404, "not_recovering"}
@@ -216,23 +222,41 @@ defmodule Emissary.Web.RestoreController do
   end
 
   defp refuse(conn, {:retry, phase, seconds}) when is_binary(phase) and is_integer(seconds),
-    do: retry(conn, phase, seconds)
+    do: retry(conn, :unavailable, phase, seconds)
 
-  defp refuse(conn, {:limit_reached, _key, _cap}), do: retry(conn, "minted", 60)
+  defp refuse(conn, {:limit_reached, _key, _cap}), do: retry(conn, :unavailable, "minted", 60)
 
   defp refuse(conn, reason) do
     case status(reason) do
-      {status, code} -> conn |> put_status(status) |> json(%{error: code})
-      nil -> retry(conn, "unavailable", 1)
+      {status, code} ->
+        conn |> recorded(status, code) |> put_status(status) |> json(%{error: code})
+
+      nil ->
+        retry(conn, :unavailable, "unavailable", 1)
     end
   end
 
-  defp retry(conn, phase, seconds) do
+  defp retry(conn, class, phase, seconds) do
     conn
+    |> CallIdentity.refused(%Prima.Refusal{class: class, reason: phase, message: phase})
     |> put_resp_header("retry-after", Integer.to_string(seconds))
     |> put_status(503)
     |> json(%{status: phase, retry_after: seconds})
   end
+
+  # Restore is an entry path and the kit its own ingress, so every refusal
+  # here is the request's refused decision, recorded once under its call id
+  # (`CyfrWeb.Plugs.CallIdentity.refused/2`), with no person or athanor,
+  # the class its status means on these routes, and its code as the reason.
+  defp recorded(conn, status, code),
+    do:
+      CallIdentity.refused(conn, %Prima.Refusal{class: class(status), reason: code, message: code})
+
+  defp class(401), do: :unauthenticated
+  defp class(403), do: :forbidden
+  defp class(404), do: :not_found
+  defp class(409), do: :conflict
+  defp class(422), do: :invalid_argument
 
   defp status(:restore_disabled), do: {404, "restore_disabled"}
   defp status(:invalid_token), do: {401, "invalid_token"}

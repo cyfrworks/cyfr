@@ -84,7 +84,12 @@ defmodule Emissary.Router do
       # The OAuth grant callback serves a BROWSER page (CyfrWeb.MinimalPage,
       # no session) — `:api`'s `accepts ["json"]` 406'd any client that sent a
       # strict `Accept: text/html`, which is what a browser redirect carries.
+      #
+      # It completes a `vault.authorize` the gate admitted, under the state
+      # that admission left, and records its own refusals: an admission
+      # entry of its own (`Cyfr.Boundaries.admission_entries/0`).
       pipeline :oauth_callback do
+        plug CyfrWeb.Plugs.CallIdentity, tool: "vault"
         plug :accepts, ["html", "json"]
         plug CyfrWeb.Plugs.ApiSecurityHeaders
       end
@@ -177,8 +182,11 @@ defmodule Emissary.Router do
       # capability is an authorization header no cross-site form can set and
       # no CORS answer admits; the cookie session is fetched only to hand the
       # restored person their session. Metered per address, before Sanctum
-      # checks the capability.
+      # checks the capability. Restore is an entry path and the kit its own
+      # ingress, not gate operations, so the routes record their own
+      # refusals.
       pipeline :restore do
+        plug CyfrWeb.Plugs.CallIdentity, tool: "restore"
         plug :accepts, ["json"]
         plug CyfrWeb.Plugs.ApiSecurityHeaders
         plug CyfrWeb.Plugs.FrameRequest
@@ -188,6 +196,16 @@ defmodule Emissary.Router do
           bucket: :restore,
           max_requests: 10,
           window_ms: 60_000
+      end
+
+      # The identity directory's routes (`Sanctum.Directory`), which decide
+      # every request and record their own refusals: a directory request is
+      # admitted by the identifier's own chain, never by a person of this
+      # home.
+      pipeline :directory do
+        plug CyfrWeb.Plugs.CallIdentity, tool: "directory"
+        plug :accepts, ["json"]
+        plug CyfrWeb.Plugs.ApiSecurityHeaders
       end
 
       # A certified device's renewal at its person's home
@@ -336,7 +354,7 @@ defmodule Emissary.Router do
       # signature is checked. The literal `genesis` is declared above the
       # `:identifier` routes.
       scope "/directory/v1", Emissary.Web do
-        pipe_through :api
+        pipe_through :directory
 
         post "/genesis", DirectoryController, :register, metadata: %{auth: :public_directory}
         get "/:identifier", DirectoryController, :resolve, metadata: %{auth: :public_directory}

@@ -88,6 +88,19 @@ defmodule Cyfr.AdmissionEntriesSeamTest do
     {CyfrWeb.Plugs.WebhookIdempotency, :call} => :webhook_missing_idempotency_key,
     {CyfrWeb.Plugs.WebhookRateLimit, :call} => :webhook_rate_limited,
     {Emissary.Web.ExecutionEventsController, :stream} => :execution_events_unknown,
+    {Emissary.Web.DirectoryController, :register} => :directory_register_unserved,
+    {Emissary.Web.DirectoryController, :resolve} => :directory_resolve_bad_position,
+    {Emissary.Web.DirectoryController, :append} => :directory_append_unserved,
+    {Emissary.Web.DirectoryController, :recover} => :directory_recover_unserved,
+    {Emissary.Web.DirectoryController, :outcome} => :directory_outcome_unserved,
+    {Emissary.Web.RestoreController, :restore} => :restore_disabled,
+    {Emissary.Web.RestoreController, :challenge} => :restore_challenge_disabled,
+    {Emissary.Web.RestoreController, :reproof} => :restore_reproof_disabled,
+    {Emissary.Web.RestoreController, :kit_challenge} => :restore_kit_challenge_not_recovering,
+    {Emissary.Web.RestoreController, :kit} => :restore_kit_invalid_proof,
+    {Emissary.Web.RestoreController, :kit_reenable} => :restore_kit_reenable_unnamed,
+    {Emissary.Web.OAuthCallbackController, :callback} => :oauth_callback_unknown_state,
+    {CyfrWeb.Plugs.AuthRateLimit, :call} => :restore_rate_limited,
     {Opus.Schedules.Scheduler, :handle_info} => :schedule_fire_refused,
     {Opus.Host.Children, :call} => :host_api_lost_attempt,
     {Emissary.Web.DeviceChannel, :handle_in} => :device_channel_unproven
@@ -455,6 +468,97 @@ defmodule Cyfr.AdmissionEntriesSeamTest do
     second = conn |> recycle() |> post_signed(slug, secret, ~s({}))
     assert second.status == 429
     {request_id_of(second), refused("rate_limited", :none)}
+  end
+
+  # ==========================================================================
+  # Drivers: the entries that admit for themselves
+  # ==========================================================================
+
+  # This node serves no directory, so each of its routes refuses as
+  # `not_served`; a malformed position is refused before the directory is
+  # asked.
+  defp directory_unserved(method, path) do
+    Cyfr.Test.Settings.put("directory_serve", "off")
+
+    conn =
+      build_conn()
+      |> put_req_header("content-type", "application/json")
+      |> dispatch(@endpoint, method, path, "{}")
+
+    assert json_response(conn, 404) == %{"error" => "not_served"}
+    {request_id_of(conn), refused("not_found", :none)}
+  end
+
+  def directory_register_unserved(_conn, _ctx),
+    do: directory_unserved(:post, "/directory/v1/genesis")
+
+  def directory_append_unserved(_conn, _ctx),
+    do: directory_unserved(:post, "/directory/v1/per_seam/entries")
+
+  def directory_recover_unserved(_conn, _ctx),
+    do: directory_unserved(:post, "/directory/v1/per_seam/recover")
+
+  def directory_outcome_unserved(_conn, _ctx),
+    do: directory_unserved(:get, "/directory/v1/per_seam/requests/req_seam")
+
+  def directory_resolve_bad_position(_conn, _ctx) do
+    conn = get(build_conn(), "/directory/v1/per_seam?after=x")
+    assert %{"error" => "invalid", "field" => "after"} = json_response(conn, 422)
+    {request_id_of(conn), refused("invalid_argument", :none)}
+  end
+
+  # This node configures no restore token, so the capability's routes
+  # refuse as `restore_disabled`; the kit's routes need no token and refuse
+  # what they were given.
+  defp restore_post(path, body) do
+    build_conn()
+    |> put_req_header("content-type", "application/json")
+    |> post(path, Jason.encode!(body))
+  end
+
+  defp restore_disabled_at(path) do
+    conn = restore_post(path, %{})
+    assert json_response(conn, 404) == %{"error" => "restore_disabled"}
+    {request_id_of(conn), refused("not_found", :none)}
+  end
+
+  def restore_disabled(_conn, _ctx), do: restore_disabled_at("/restore")
+  def restore_challenge_disabled(_conn, _ctx), do: restore_disabled_at("/restore/challenge")
+  def restore_reproof_disabled(_conn, _ctx), do: restore_disabled_at("/restore/reproof")
+
+  def restore_kit_challenge_not_recovering(_conn, _ctx) do
+    conn = restore_post("/restore/kit/challenge", %{"identifier" => "per_seam"})
+    assert json_response(conn, 404) == %{"error" => "not_recovering"}
+    {request_id_of(conn), refused("not_found", :none)}
+  end
+
+  def restore_kit_invalid_proof(_conn, _ctx) do
+    conn = restore_post("/restore/kit", %{"proof" => "not a proof"})
+    assert json_response(conn, 422) == %{"error" => "invalid_proof"}
+    {request_id_of(conn), refused("invalid_argument", :none)}
+  end
+
+  def restore_kit_reenable_unnamed(_conn, _ctx) do
+    conn = restore_post("/restore/kit/reenable", %{})
+    assert json_response(conn, 403) == %{"error" => "operation_not_permitted"}
+    {request_id_of(conn), refused("forbidden", :none)}
+  end
+
+  # The restore routes' budget is ten requests a minute an address.
+  def restore_rate_limited(_conn, _ctx) do
+    Prima.Test.RateLimiter.reset!()
+    for _ <- 1..10, do: assert(restore_post("/restore/kit", %{}).status == 422)
+
+    conn = restore_post("/restore/kit", %{})
+    assert conn.status == 429
+    {request_id_of(conn), refused("rate_limited", :none)}
+  end
+
+  def oauth_callback_unknown_state(_conn, _ctx) do
+    conn = get(build_conn(), "/auth/oauth/callback", %{"code" => "c", "state" => "no-such-state"})
+    assert conn.status == 400
+    assert conn.resp_body =~ "invalid or expired state parameter"
+    {request_id_of(conn), refused("not_found", :none)}
   end
 
   # ==========================================================================
