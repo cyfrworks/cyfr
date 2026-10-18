@@ -149,12 +149,11 @@ defmodule Arca.Athanors do
   def insert(%Prima.Actor{}, _attrs), do: {:error, :cross_tenant}
 
   @doc """
-  Mint an athanor, the checks that must pass first and the rows that must
+  Mint an athanor, the caps it must pass first and the rows that must
   land with it, as ONE transaction. Any refusal rolls all of it back, so
   a mint that trips a cap leaves no athanor row and no membership.
 
-  The caller's decisions arrive as functions, run in this order with the
-  transaction open, with the census lock taken between the first two:
+  Run in this order with the transaction open:
 
     * `:hold` — the person ids whose `users` rows are held for the length
       of the transaction. Held in sorted order, so two mints naming the
@@ -163,31 +162,37 @@ defmodule Arca.Athanors do
       cap.
     * the census lock (`Arca.AthanorCensus.lock/0`), so two mints by
       different people cannot both count the server's last place free.
-    * `:guards` — zero-arity functions answering `:ok` or
-      `{:error, reason}`. The caps live above this layer; what they read
-      is counted here, and they are asked with the rows already held.
-    * `:attrs` — a zero-arity function answering `{:ok, attrs}` or
-      `{:error, reason}`. A function rather than a value because the slug
-      is resolved against rows this transaction can see.
-    * `:seats` — a one-arity function taking the inserted athanor, as
-      the plain map the mint answers, and answering `:ok` or
-      `{:error, reason}`: the memberships an athanor is born with.
+    * `:caps` — the ceilings the mint must stay under, each counted here
+      with the rows already held and asked of the caps port
+      (`Prima.Caps.check_counted/3`): `:max_athanors`, the server's
+      active athanors; `{:max_groups_per_person, user_id}`, the open
+      groups that person created; `{:max_pairs_per_person, user_id}`, the
+      pairs that person sits in. A cap refused is the port's answer.
+    * the slug: `:attrs` is the row, and `:slugs`, when given, the
+      candidates for its slug in order of preference — the first the
+      athanor's kind does not hold in this transaction is the slug. None
+      free is `:slug_taken`, as a slug the unique index refuses is.
+    * `:also` — a one-arity function taking the inserted athanor, as the
+      plain map the mint answers, and answering `:ok` or
+      `{:error, reason}`: the memberships an athanor is born with, which
+      the owner of memberships writes beside the row (§4.4).
   """
+  @type cap :: :max_athanors | {:max_groups_per_person | :max_pairs_per_person, String.t()}
+
   @spec mint(Prima.Actor.t(), keyword()) :: {:ok, map()} | {:error, term()}
-  def mint(%Prima.Actor{scope: :platform}, opts) when is_list(opts) do
-    hold = Keyword.get(opts, :hold, [])
-    guards = Keyword.get(opts, :guards, [])
-    attrs_fun = Keyword.fetch!(opts, :attrs)
-    seats_fun = Keyword.get(opts, :seats, fn _athanor -> :ok end)
+  def mint(%Prima.Actor{scope: :platform} = actor, opts) when is_list(opts) do
+    opts = Keyword.validate!(opts, [:attrs, :also, hold: [], caps: [], slugs: nil])
+    attrs = Map.new(Keyword.fetch!(opts, :attrs))
+    also = Keyword.get(opts, :also, fn _athanor -> :ok end)
 
     Arca.Repo.Errors.with_db_rescue("Arca.Athanors.mint", fn ->
       Arca.Repo.transaction(fn ->
-        with :ok <- hold_people(hold),
+        with :ok <- hold_people(opts[:hold]),
              :ok <- Arca.AthanorCensus.lock(),
-             :ok <- run_guards(guards),
-             {:ok, attrs} <- attrs_fun.(),
+             :ok <- check_caps(actor, opts[:caps]),
+             {:ok, attrs} <- slugged(attrs, opts[:slugs]),
              {:ok, athanor} <- do_insert(attrs),
-             :ok <- seats_fun.(Arca.Data.project(athanor)) do
+             :ok <- also.(Arca.Data.project(athanor)) do
           athanor
         else
           {:error, reason} -> Arca.Repo.rollback(reason)
@@ -315,7 +320,7 @@ defmodule Arca.Athanors do
   @spec count_active(Prima.Actor.t()) :: {:ok, non_neg_integer()} | refusal()
   def count_active(%Prima.Actor{scope: :platform}) do
     Arca.Repo.Errors.with_db_rescue("Arca.Athanors.count_active", fn ->
-      counted(from(a in Athanor, where: a.status == "active", select: count(a.id)))
+      counted(active_athanors())
     end)
   end
 
@@ -346,14 +351,7 @@ defmodule Arca.Athanors do
           {:ok, non_neg_integer()} | refusal()
   def count_groups_created_by(%Prima.Actor{scope: :platform}, user_id) when is_binary(user_id) do
     Arca.Repo.Errors.with_db_rescue("Arca.Athanors.count_groups_created_by", fn ->
-      counted(
-        from(a in Athanor,
-          where:
-            a.kind == "group" and a.roster == "open" and
-              a.created_by == ^user_id and a.status == "active",
-          select: count(a.id)
-        )
-      )
+      counted(groups_created_by(user_id))
     end)
   end
 
@@ -367,16 +365,7 @@ defmodule Arca.Athanors do
   @spec count_pairs_of(Prima.Actor.t(), String.t()) :: {:ok, non_neg_integer()} | refusal()
   def count_pairs_of(%Prima.Actor{scope: :platform}, user_id) when is_binary(user_id) do
     Arca.Repo.Errors.with_db_rescue("Arca.Athanors.count_pairs_of", fn ->
-      counted(
-        from(a in Athanor,
-          join: m in Membership,
-          on: m.athanor_id == a.id,
-          where:
-            m.user_id == ^user_id and m.scope == "athanor" and m.status == "active" and
-              a.roster == "frozen" and a.status == "active",
-          select: count(a.id)
-        )
-      )
+      counted(pairs_of(user_id))
     end)
   end
 
@@ -412,14 +401,44 @@ defmodule Arca.Athanors do
     end)
   end
 
-  defp run_guards(guards) do
-    Enum.reduce_while(guards, :ok, fn guard, :ok ->
-      case guard.() do
+  # Each cap counted under the rows `hold_people/1` and the census lock
+  # hold, so what it counts cannot move before the row lands.
+  defp check_caps(actor, caps) do
+    Enum.reduce_while(caps, :ok, fn cap, :ok ->
+      {key, count} = cap_count(cap)
+
+      case Prima.Caps.check_counted(actor, key, count) do
         :ok -> {:cont, :ok}
         {:error, _} = err -> {:halt, err}
       end
     end)
   end
+
+  defp cap_count(:max_athanors),
+    do: {:max_athanors, fn -> counted(active_athanors()) end}
+
+  defp cap_count({:max_groups_per_person, user_id}) when is_binary(user_id),
+    do: {:max_groups_per_person, fn -> counted(groups_created_by(user_id)) end}
+
+  defp cap_count({:max_pairs_per_person, user_id}) when is_binary(user_id),
+    do: {:max_pairs_per_person, fn -> counted(pairs_of(user_id)) end}
+
+  defp slugged(attrs, nil), do: {:ok, attrs}
+
+  defp slugged(%{kind: kind} = attrs, candidates) when is_list(candidates) do
+    case Enum.find(candidates, &slug_free?(kind, &1)) do
+      nil -> {:error, :slug_taken}
+      slug -> {:ok, Map.put(attrs, :slug, slug)}
+    end
+  end
+
+  defp slug_free?(kind, slug) when is_binary(slug),
+    do:
+      is_nil(
+        Arca.Repo.one(
+          from(a in Athanor, where: a.kind == ^kind and a.slug == ^slug, select: a.id)
+        )
+      )
 
   defp read(id), do: found(Arca.Repo.get(Athanor, id))
 
@@ -427,6 +446,29 @@ defmodule Arca.Athanors do
   defp found(%Athanor{} = athanor), do: {:ok, athanor}
 
   defp counted(query), do: {:ok, Arca.Repo.one(query) || 0}
+
+  # What each cap counts, one definition for the mint and the reads.
+  defp active_athanors, do: from(a in Athanor, where: a.status == "active", select: count(a.id))
+
+  defp groups_created_by(user_id) do
+    from(a in Athanor,
+      where:
+        a.kind == "group" and a.roster == "open" and
+          a.created_by == ^user_id and a.status == "active",
+      select: count(a.id)
+    )
+  end
+
+  defp pairs_of(user_id) do
+    from(a in Athanor,
+      join: m in Membership,
+      on: m.athanor_id == a.id,
+      where:
+        m.user_id == ^user_id and m.scope == "athanor" and m.status == "active" and
+          a.roster == "frozen" and a.status == "active",
+      select: count(a.id)
+    )
+  end
 
   defp settled({:ok, %Athanor{} = athanor}), do: {:ok, athanor}
   defp settled({:error, %Ecto.Changeset{} = changeset}), do: {:error, refusal(changeset)}

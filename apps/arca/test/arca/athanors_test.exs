@@ -108,7 +108,7 @@ defmodule Arca.AthanorsTest do
       member = in_athanor("ath_somewhere")
 
       assert {:error, :cross_tenant} = Athanors.insert(member, %{kind: "group"})
-      assert {:error, :cross_tenant} = Athanors.mint(member, attrs: fn -> {:ok, %{}} end)
+      assert {:error, :cross_tenant} = Athanors.mint(member, attrs: %{})
       assert {:error, :cross_tenant} = Athanors.get(member, "ath_elsewhere")
       assert {:error, :cross_tenant} = Athanors.get_by_owner(member, "usr_1")
       assert {:error, :cross_tenant} = Athanors.get_by_slug(member, "group", "g")
@@ -216,18 +216,16 @@ defmodule Arca.AthanorsTest do
   end
 
   describe "mint/2 is one transaction" do
-    test "the row, its seats and its guards land together" do
+    test "the row and its seats land together, under the caps it names" do
       n = System.unique_integer([:positive])
       creator = "usr_mint_#{n}"
 
       assert {:ok, athanor} =
                Athanors.mint(server(),
                  hold: [creator],
-                 guards: [fn -> :ok end],
-                 attrs: fn ->
-                   {:ok, %{kind: "group", name: "M#{n}", slug: "m-#{n}", created_by: creator}}
-                 end,
-                 seats: fn minted ->
+                 caps: [{:max_groups_per_person, creator}, :max_athanors],
+                 attrs: %{kind: "group", name: "M#{n}", slug: "m-#{n}", created_by: creator},
+                 also: fn minted ->
                    with {:ok, _} <-
                           Arca.Members.seat(in_athanor(minted.id), %{
                             user_id: creator,
@@ -242,31 +240,28 @@ defmodule Arca.AthanorsTest do
       assert {:ok, [^creator]} = Arca.Members.active_user_ids(in_athanor(athanor.id))
     end
 
-    test "a guard that refuses commits nothing — no athanor row and no membership" do
+    # A cap the port refuses is the tenancy domain's to configure, so that
+    # case lives where both sides of the port are
+    # (`Sanctum.Tenancy.AthanorsTest`); what is Arca's is the slug.
+    test "the slug is the first candidate the kind does not hold, and none free is :slug_taken" do
       n = System.unique_integer([:positive])
-      creator = "usr_capped_#{n}"
-      slug = "capped-#{n}"
+      taken = group!()
 
-      assert {:error, {:limit_reached, :max_groups_per_person, 1}} =
+      assert {:ok, %{slug: slug}} =
                Athanors.mint(server(),
-                 hold: [creator],
-                 guards: [fn -> {:error, {:limit_reached, :max_groups_per_person, 1}} end],
-                 attrs: fn ->
-                   {:ok, %{kind: "group", name: "C#{n}", slug: slug, created_by: creator}}
-                 end,
-                 seats: fn minted ->
-                   with {:ok, _} <-
-                          Arca.Members.seat(in_athanor(minted.id), %{
-                            user_id: creator,
-                            scope: "athanor",
-                            added_by: creator
-                          }),
-                        do: :ok
-                 end
+                 attrs: %{kind: "group", name: "Next #{n}", created_by: "system"},
+                 slugs: [taken.slug, "next-#{n}", "after-#{n}"]
                )
 
-      assert {:error, :not_found} = Athanors.get_by_slug(server(), "group", slug)
-      assert {:ok, []} = Athanors.list_for_user(server(), creator)
+      assert slug == "next-#{n}"
+
+      assert {:error, :slug_taken} =
+               Athanors.mint(server(),
+                 attrs: %{kind: "group", name: "None #{n}", created_by: "system"},
+                 slugs: [taken.slug, "next-#{n}"]
+               )
+
+      assert {:error, :not_found} = Athanors.get_by_slug(server(), "group", "none-#{n}")
     end
 
     test "a seat that refuses takes the athanor row with it" do
@@ -275,10 +270,8 @@ defmodule Arca.AthanorsTest do
 
       assert {:error, :nope} =
                Athanors.mint(server(),
-                 attrs: fn ->
-                   {:ok, %{kind: "group", name: "S#{n}", slug: slug, created_by: "system"}}
-                 end,
-                 seats: fn _minted -> {:error, :nope} end
+                 attrs: %{kind: "group", name: "S#{n}", slug: slug, created_by: "system"},
+                 also: fn _minted -> {:error, :nope} end
                )
 
       assert {:error, :not_found} = Athanors.get_by_slug(server(), "group", slug)
@@ -289,9 +282,7 @@ defmodule Arca.AthanorsTest do
 
       assert {:error, :slug_taken} =
                Athanors.mint(server(),
-                 attrs: fn ->
-                   {:ok, %{kind: "group", name: "Dup", slug: athanor.slug, created_by: "system"}}
-                 end
+                 attrs: %{kind: "group", name: "Dup", slug: athanor.slug, created_by: "system"}
                )
     end
   end

@@ -48,6 +48,16 @@ defmodule Cyfr.TransactionClosureScopeTest do
   The scan reads code, not text: a comment, a documentation string or a
   string literal that names a refused call is no call.
 
+  Those three names are every closure an Arca function takes, and that is
+  derived from Arca's code rather than assumed: every option an Arca
+  function reads out of its keyword list and treats as a function —
+  defaults to an `fn`, applies (`also.(row)`), checks with `is_function/2`,
+  hands to `Enum` as the function, iterates applying each element, or
+  passes to a local function that does any of these — is one of them, or
+  one of `@not_in_transaction`, the closures Arca applies with no
+  transaction open, each with its reason. A closure under any other name
+  would reach a transaction the scan does not read, so it fails here.
+
   Its blind spots: a variable bound more than once in its clause, or bound
   by a parameter, a clause head, a generator or a pattern (`also: also`
   passed through from a caller), is not followed; neither is a qualified
@@ -61,6 +71,17 @@ defmodule Cyfr.TransactionClosureScopeTest do
   alias Prima.Test.SourceTree
 
   @keys [:verify, :also, :reserve]
+
+  # The closures an Arca function takes that run with no transaction open,
+  # by the function that applies them. Exact: an entry the derivation no
+  # longer finds fails as one a closure under another name does.
+  @not_in_transaction %{
+    {"Arca", :copy_tree, :exclude} =>
+      "a filter on the relative paths of a tree being listed, applied before any write",
+    {"Arca", :copy_tree, :transform} =>
+      "a file's bytes rewritten between their read and their write, each `put/4` its own write",
+    {"Arca.Overlay", :entries, :exclude} => "a filter on the relative paths of a listing, a read"
+  }
 
   # The modules a closure may not call, each with its submodules, and the
   # Erlang modules that open a connection or resolve a name.
@@ -609,6 +630,264 @@ defmodule Cyfr.TransactionClosureScopeTest do
       """
     end
   end
+
+  describe "every closure an Arca function takes" do
+    test "is verify:, also: or reserve:, or applied with no transaction open" do
+      derived = arca_closure_options(arca_tree())
+
+      # The derivation reads code before its answer is believed: each of
+      # the three is taken somewhere, and a reader that found none of them
+      # would pass by finding nothing.
+      for key <- @keys,
+          do:
+            assert(
+              Enum.any?(derived, &match?({_, _, ^key}, &1)),
+              "no Arca function takes #{key}:"
+            )
+
+      named =
+        for {module, function, key} <- derived,
+            key not in @keys,
+            uniq: true,
+            do: {module, function, key}
+
+      assert Enum.sort(named) == Enum.sort(Map.keys(@not_in_transaction)), """
+      Arca functions take closures under names the transaction scan does not
+      read, or `@not_in_transaction` names one Arca no longer takes:
+
+      #{Enum.map_join(Enum.sort(named -- Map.keys(@not_in_transaction)), "\n", &"  taken: #{inspect(&1)}")}
+      #{Enum.map_join(Enum.sort(Map.keys(@not_in_transaction) -- named), "\n", &"  stale: #{inspect(&1)}")}
+
+      A closure an Arca transaction runs is verify:, also: or reserve:
+      (`ARCHITECTURE.md` §4.4).
+      """
+    end
+
+    test "is found under any name, however the function reaches it" do
+      source = """
+      defmodule Arca.Planted do
+        def mint(actor, opts) do
+          guards = Keyword.get(opts, :guards, [])
+          attrs = Keyword.fetch!(opts, :attrs)
+          seats = Keyword.get(opts, :seats, fn _row -> :ok end)
+          hold = Keyword.get(opts, :hold, [])
+          Arca.Repo.transaction(fn -> held(hold) && run(guards) && attrs.() && seats.(actor) end)
+        end
+
+        def seat(opts), do: reserve!(opts).()
+
+        defp reserve!(opts) do
+          case Keyword.get(opts, :reserve) do
+            reserve when is_function(reserve, 0) -> reserve
+          end
+        end
+
+        defp run(guards), do: Enum.reduce_while(guards, :ok, fn guard, :ok -> {:cont, guard.()} end)
+        defp held(ids), do: ids |> Enum.sort() |> Enum.each(&IO.inspect/1)
+      end
+      """
+
+      assert Enum.sort(arca_closure_options([{"planted.ex", source}])) == [
+               {"Arca.Planted", :mint, :attrs},
+               {"Arca.Planted", :mint, :guards},
+               {"Arca.Planted", :mint, :seats},
+               {"Arca.Planted", :reserve!, :reserve}
+             ]
+    end
+  end
+
+  # ---- the closures Arca takes -----------------------------------------------
+
+  defp arca_tree do
+    for path <- SourceTree.files!(Path.join(root(), "apps/arca/lib/**/*.ex")),
+        do: {Path.relative_to(path, root()), SourceTree.read(path)}
+  end
+
+  # `{module, function, key}` for each option a function of `sources` reads
+  # out of a keyword list and treats as a function.
+  defp arca_closure_options(sources) do
+    for {path, source} <- sources,
+        {module, defs} <- option_modules(path, source),
+        {{name, _arity}, clauses} <- defs,
+        {_params, body} <- clauses,
+        {key, evidence} <- option_reads(body),
+        closure_evidence?(evidence, body, defs),
+        uniq: true,
+        do: {module, name, key}
+  end
+
+  defp option_modules(path, source) do
+    {_ast, found} =
+      source
+      |> Code.string_to_quoted!(file: path)
+      |> Macro.prewalk([], fn
+        {:defmodule, _meta, [{:__aliases__, _, parts}, [do: body]]} = node, acc ->
+          {node, [{Enum.map_join(parts, ".", &Atom.to_string/1), option_defs(body)} | acc]}
+
+        node, acc ->
+          {node, acc}
+      end)
+
+    found
+  end
+
+  defp option_defs(body) do
+    {_ast, defs} =
+      Macro.prewalk(body, %{}, fn
+        {:defmodule, _meta, _args}, acc ->
+          {:skip, acc}
+
+        {kind, _meta, [head, [do: fbody]]} = node, acc when kind in [:def, :defp] ->
+          {name, params} = option_head(head)
+
+          {node,
+           Map.update(acc, {name, length(params)}, [{params, fbody}], &(&1 ++ [{params, fbody}]))}
+
+        node, acc ->
+          {node, acc}
+      end)
+
+    defs
+  end
+
+  defp option_head({:when, _meta, [head | _guards]}), do: option_head(head)
+  defp option_head({name, _meta, params}) when is_atom(name), do: {name, List.wrap(params)}
+
+  # Every read of an option in `body`: the variables it is bound to (a match
+  # or a `case` on it) and the arguments after the key (a default), or a
+  # read applied where it is made.
+  defp option_reads(body) do
+    {_ast, reads} =
+      Macro.prewalk(body, [], fn
+        {:=, _meta, [lhs, rhs]} = node, acc ->
+          {node, with_read(acc, rhs, &{&1, {:bound, pattern_names(lhs), &2}})}
+
+        {:case, _meta, [subject, [do: clauses]]} = node, acc ->
+          names =
+            Enum.flat_map(clauses, fn {:->, _, [[pattern], _]} -> pattern_names(pattern) end)
+
+          {node, with_read(acc, subject, &{&1, {:bound, names, &2}})}
+
+        {{:., _meta, [applied]}, _, _args} = node, acc ->
+          {node, with_read(acc, applied, fn key, _rest -> {key, :applied} end)}
+
+        node, acc ->
+          {node, with_read(acc, node, &{&1, {:bound, [], &2}})}
+      end)
+
+    reads
+  end
+
+  defp with_read(acc, node, entry) do
+    case option_read(node) do
+      {key, rest} -> [entry.(key, rest) | acc]
+      nil -> acc
+    end
+  end
+
+  # A lazy default is a default's thunk, never the option.
+  defp option_read({{:., _, [{:__aliases__, _, [:Keyword]}, :get_lazy]}, _, [_, key | _]})
+       when is_atom(key),
+       do: {key, []}
+
+  defp option_read({{:., _, [{:__aliases__, _, [:Keyword]}, reader]}, _, [_, key | rest]})
+       when reader in [:get, :fetch!, :fetch, :pop] and is_atom(key),
+       do: {key, rest}
+
+  defp option_read({{:., _, [Access, :get]}, _, [_, key]}) when is_atom(key), do: {key, []}
+  defp option_read(_node), do: nil
+
+  defp pattern_names(pattern) do
+    {_ast, names} =
+      Macro.prewalk(pattern, [], fn
+        {name, _meta, ctx} = node, acc when is_atom(name) and is_atom(ctx) ->
+          if String.starts_with?(Atom.to_string(name), "_"),
+            do: {node, acc},
+            else: {node, [name | acc]}
+
+        node, acc ->
+          {node, acc}
+      end)
+
+    names
+  end
+
+  defp closure_evidence?(:applied, _body, _defs), do: true
+
+  defp closure_evidence?({:bound, names, rest}, body, defs),
+    do:
+      Enum.any?(rest, &function_form?/1) or
+        Enum.any?(names, &applied?(&1, body, defs, MapSet.new()))
+
+  defp function_form?({:fn, _, _}), do: true
+  defp function_form?({:&, _, _}), do: true
+  defp function_form?(_other), do: false
+
+  # The `Enum` and `Stream` functions whose last argument is the function
+  # they apply.
+  @applying ~w(all? any? count each filter find find_value flat_map group_by map map_reduce
+               max_by min_by reduce reduce_while reject sort_by split_with take_while
+               drop_while uniq_by)a
+
+  # Whether `body` treats the variable `name` as a function: applies it,
+  # checks it with `is_function`, hands it to `Enum` as the function,
+  # iterates it applying each element, or passes it to a local function
+  # whose parameter in that place is so treated.
+  defp applied?(name, body, defs, seen) do
+    {_ast, found} =
+      Macro.prewalk(body, false, fn
+        node, true ->
+          {node, true}
+
+        {{:., _, [{^name, _, ctx}]}, _, _} = node, _ when is_atom(ctx) ->
+          {node, true}
+
+        {:is_function, _, [{^name, _, ctx} | _]} = node, _ when is_atom(ctx) ->
+          {node, true}
+
+        {:|>, _, [lhs, {{:., _, [{:__aliases__, _, [m]}, f]}, _, args}]} = node, _
+        when m in [:Enum, :Stream] and f in @applying ->
+          {node, enum_applies?(name, lhs, args)}
+
+        {{:., _, [{:__aliases__, _, [m]}, f]}, _, [first | args]} = node, _
+        when m in [:Enum, :Stream] and f in @applying ->
+          {node, enum_applies?(name, first, args)}
+
+        {local, _, args} = node, _ when is_atom(local) and is_list(args) ->
+          places = for {arg, place} <- Enum.with_index(args), variable?(arg, name), do: place
+          {node, Enum.any?(places, &parameter_applied?({local, length(args)}, &1, defs, seen))}
+
+        node, acc ->
+          {node, acc}
+      end)
+
+    found
+  end
+
+  defp enum_applies?(name, enumerable, args) do
+    (args != [] and variable?(List.last(args), name)) or
+      (variable?(enumerable, name) and Enum.any?(args, &applies_element?/1))
+  end
+
+  defp applies_element?({:fn, _, [{:->, _, [[element | _], fbody]}]}),
+    do: Enum.any?(pattern_names(element), &applied?(&1, fbody, %{}, MapSet.new()))
+
+  defp applies_element?(_other), do: false
+
+  defp parameter_applied?(function, place, defs, seen) do
+    if MapSet.member?(seen, {function, place}) or not Map.has_key?(defs, function) do
+      false
+    else
+      seen = MapSet.put(seen, {function, place})
+
+      Enum.any?(defs[function], fn {params, body} ->
+        params |> Enum.at(place) |> pattern_names() |> Enum.any?(&applied?(&1, body, defs, seen))
+      end)
+    end
+  end
+
+  defp variable?({name, _meta, ctx}, name) when is_atom(ctx), do: true
+  defp variable?(_node, _name), do: false
 
   describe "a planted closure" do
     @refusals [

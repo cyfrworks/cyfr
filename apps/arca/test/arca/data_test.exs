@@ -214,11 +214,13 @@ defmodule Arca.DataTest do
 
       assert {:ok, minted} =
                Arca.Athanors.mint(server(),
-                 attrs: fn ->
-                   {:ok,
-                    %{kind: "group", name: "Data #{n}", slug: "data-#{n}", created_by: "usr_d"}}
-                 end,
-                 seats: fn athanor ->
+                 attrs: %{
+                   kind: "group",
+                   name: "Data #{n}",
+                   slug: "data-#{n}",
+                   created_by: "usr_d"
+                 },
+                 also: fn athanor ->
                    send(test, {:seated, athanor})
                    :ok
                  end

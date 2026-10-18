@@ -47,11 +47,7 @@ defmodule Sanctum.Tenancy.Athanors do
   def create(attrs) do
     attrs = Map.new(attrs)
 
-    Arca.Athanors.mint(server(),
-      hold: owner(attrs),
-      guards: [fn -> Caps.check_counted(:max_athanors, &count/0) end],
-      attrs: fn -> {:ok, attrs} end
-    )
+    Arca.Athanors.mint(server(), hold: owner(attrs), caps: [:max_athanors], attrs: attrs)
   end
 
   defp owner(%{owner_user_id: user_id}) when is_binary(user_id), do: [user_id]
@@ -90,46 +86,42 @@ defmodule Sanctum.Tenancy.Athanors do
     end
   end
 
-  # The cap, the slug, the row and the creator's seat in one transaction,
+  # The caps, the slug, the row and the creator's seat in one transaction,
   # serialized per creator by a write to their user row: two creations by
   # one person cannot both pass the cap, and a seat that fails leaves no
-  # group. A derived slug another creation took first is derived again.
+  # group. The slug is the first candidate free in the mint's own
+  # transaction; a derived one another creation took first is derived again.
   defp mint_group(creator_user_id, name, explicit_slug, attempts) do
-    result =
-      Arca.Athanors.mint(server(),
-        hold: [creator_user_id],
-        guards: [
-          fn ->
-            Caps.check_counted(:max_groups_per_person, fn ->
-              Arca.Athanors.count_groups_created_by(server(), creator_user_id)
-            end)
-          end,
-          fn -> Caps.check_counted(:max_athanors, &count/0) end
-        ],
-        attrs: fn ->
-          with {:ok, slug} <- resolve_slug(explicit_slug, name) do
-            {:ok, %{kind: "group", name: name, slug: slug, created_by: creator_user_id}}
+    with {:ok, slugs} <- slug_candidates(explicit_slug, name) do
+      result =
+        Arca.Athanors.mint(server(),
+          hold: [creator_user_id],
+          caps: [{:max_groups_per_person, creator_user_id}, :max_athanors],
+          attrs: %{kind: "group", name: name, created_by: creator_user_id},
+          slugs: slugs,
+          also: fn athanor ->
+            with {:ok, _} <-
+                   Sanctum.Tenancy.Members.create(%{
+                     user_id: creator_user_id,
+                     scope: "athanor",
+                     athanor_id: athanor.id,
+                     added_by: creator_user_id
+                   }) do
+              :ok
+            end
           end
-        end,
-        seats: fn athanor ->
-          with {:ok, _} <-
-                 Sanctum.Tenancy.Members.create(%{
-                   user_id: creator_user_id,
-                   scope: "athanor",
-                   athanor_id: athanor.id,
-                   added_by: creator_user_id
-                 }) do
-            :ok
-          end
-        end
-      )
+        )
 
-    case result do
-      {:error, :slug_taken} when is_nil(explicit_slug) and attempts > 1 ->
-        mint_group(creator_user_id, name, nil, attempts - 1)
+      case result do
+        {:error, :slug_taken} when is_nil(explicit_slug) and attempts > 1 ->
+          mint_group(creator_user_id, name, nil, attempts - 1)
 
-      result ->
-        result
+        {:error, :slug_taken} ->
+          {:error, :slug_taken_or_invalid}
+
+        result ->
+          result
+      end
     end
   end
 
@@ -210,38 +202,28 @@ defmodule Sanctum.Tenancy.Athanors do
     name = pair_name(user_a, user_b)
 
     result =
-      Arca.Athanors.mint(server(),
-        hold: [user_a, user_b],
-        guards:
-          Enum.map([user_a, user_b], fn user_id ->
-            fn ->
-              Caps.check_counted(:max_pairs_per_person, fn ->
-                Arca.Athanors.count_pairs_of(server(), user_id)
-              end)
-            end
-          end) ++ [fn -> Caps.check_counted(:max_athanors, &count/0) end],
-        attrs: fn ->
-          with {:ok, slug} <- resolve_slug(nil, name) do
-            {:ok,
-             %{
-               kind: "group",
-               roster: "frozen",
-               pair_key: key,
-               name: name,
-               slug: slug,
-               created_by: user_a
-             }}
+      with {:ok, slugs} <- slug_candidates(nil, name) do
+        Arca.Athanors.mint(server(),
+          hold: [user_a, user_b],
+          caps: [{:max_pairs_per_person, user_a}, {:max_pairs_per_person, user_b}, :max_athanors],
+          attrs: %{
+            kind: "group",
+            roster: "frozen",
+            pair_key: key,
+            name: name,
+            created_by: user_a
+          },
+          slugs: slugs,
+          also: fn athanor ->
+            Enum.reduce_while([user_a, user_b], :ok, fn user_id, :ok ->
+              case seat(athanor, user_id) do
+                {:ok, _} -> {:cont, :ok}
+                {:error, _} = err -> {:halt, err}
+              end
+            end)
           end
-        end,
-        seats: fn athanor ->
-          Enum.reduce_while([user_a, user_b], :ok, fn user_id, :ok ->
-            case seat(athanor, user_id) do
-              {:ok, _} -> {:cont, :ok}
-              {:error, _} = err -> {:halt, err}
-            end
-          end)
-        end
-      )
+        )
+      end
 
     case result do
       {:ok, athanor} ->
@@ -782,13 +764,22 @@ defmodule Sanctum.Tenancy.Athanors do
 
   # A slug given explicitly must be valid and free; one derived from the name
   # gets a numeric suffix when taken.
-  defp resolve_slug(explicit, _name) when is_binary(explicit) do
-    if Sanctum.Slug.valid?(explicit) and slug_free?("group", explicit),
-      do: {:ok, explicit},
+  # The slugs a mint may take, in order of preference, for the mint to
+  # choose from inside its own transaction (`Arca.Athanors.mint/2`): an
+  # explicit one alone, when the grammar admits it; otherwise one derived
+  # from the name and its numbered successors.
+  defp slug_candidates(explicit, _name) when is_binary(explicit) do
+    if Sanctum.Slug.valid?(explicit),
+      do: {:ok, [explicit]},
       else: {:error, :slug_taken_or_invalid}
   end
 
-  defp resolve_slug(nil, name), do: derived_slug("group", name)
+  defp slug_candidates(nil, name) do
+    case Sanctum.Slug.from_name(name) do
+      nil -> {:error, :invalid_name}
+      base -> {:ok, derived_candidates(base)}
+    end
+  end
 
   @doc """
   A free slug for a person's own athanor: `hint` (their cyfr.run namespace,
@@ -811,14 +802,16 @@ defmodule Sanctum.Tenancy.Athanors do
         {:error, :invalid_name}
 
       base ->
-        stem = suffixable(base)
-        candidates = [base | Enum.map(2..50, &"#{stem}-#{&1}")]
-
-        case Enum.find(candidates, &slug_free?(kind, &1)) do
+        case Enum.find(derived_candidates(base), &slug_free?(kind, &1)) do
           nil -> {:error, :slug_taken_or_invalid}
           slug -> {:ok, slug}
         end
     end
+  end
+
+  defp derived_candidates(base) do
+    stem = suffixable(base)
+    [base | Enum.map(2..50, &"#{stem}-#{&1}")]
   end
 
   # The stem a numeric suffix is appended to: truncated to leave room, and
