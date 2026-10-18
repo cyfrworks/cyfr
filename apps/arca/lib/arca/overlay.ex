@@ -1881,7 +1881,8 @@ defmodule Arca.Overlay do
   `{:error, :conflict}` when the object was still moving after the last
   attempt: nothing was written and asking again is safe.
   `{:error, :not_found}` when nothing is at `path`,
-  `{:error, :not_overlaid}` for a path no unit covers, and
+  `{:error, {:reserved_path, path}}` in a staging area (`reserved/1`),
+  `{:error, :not_overlaid}` for any other path no unit covers, and
   `{:error, :unsupported}` from a store that can give no proof of the
   version it read — an update is refused there rather than made a
   last-writer-wins put.
@@ -1890,11 +1891,20 @@ defmodule Arca.Overlay do
           Prima.Actor.t(),
           Arca.Storage.path(),
           (binary() -> {:ok, binary()} | {:error, term()})
-        ) :: :ok | {:error, :conflict | :not_found | :not_overlaid | term()}
+        ) ::
+          :ok
+          | {:error,
+             :conflict
+             | :not_found
+             | :not_overlaid
+             | {:reserved_path, Arca.Storage.path()}
+             | term()}
   def update(%Prima.Actor{} = actor, path, fun) when is_function(fun, 1) do
-    case Arca.Storage.locate(path) do
-      loc when loc in [:not_overlaid, :above_unit] -> {:error, :not_overlaid}
-      _inside_a_unit -> compare_and_set(actor, path, fun, 1)
+    with :ok <- reserved(path) do
+      case Arca.Storage.locate(path) do
+        loc when loc in [:not_overlaid, :above_unit] -> {:error, :not_overlaid}
+        _inside_a_unit -> compare_and_set(actor, path, fun, 1)
+      end
     end
   end
 
@@ -2494,9 +2504,10 @@ defmodule Arca.Overlay do
   and the row names them, so only the internal-write scope — a commit, a
   repair, the collector — writes or deletes there: a plain delete of the
   area would leave every committed row naming bytes that are gone. Every
-  write, edit, delete, tree replacement and directory creation through
-  this module consults it, and `Arca.Files` asks it before its own tier
-  check so the person reads the same refusal at every door.
+  write, edit (`update/3` included), delete, tree replacement and
+  directory creation through this module consults it, and `Arca.Files`
+  asks it before its own tier check so the person reads the same refusal
+  at every door.
   """
   @spec reserved(Arca.Storage.path()) :: :ok | {:error, {:reserved_path, Arca.Storage.path()}}
   def reserved(path) do

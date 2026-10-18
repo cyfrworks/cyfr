@@ -24,6 +24,9 @@ defmodule Arca.RevisionStoreReservedTest do
 
   @mine "---\ntitle: Mine\n---\n\nmine\n"
 
+  @reserved_sentence "This folder holds the server's stored unit revisions and only the server " <>
+                       "changes it — edit or remove a unit at its own path, one unit at a time"
+
   setup tags do
     Cyfr.Test.Sandbox.setup!(tags)
 
@@ -84,9 +87,7 @@ defmodule Arca.RevisionStoreReservedTest do
       assert %Prima.Refusal{class: :invalid_argument, message: message} =
                Prima.Refusal.classify(reason)
 
-      assert message ==
-               "This folder holds the server's stored unit revisions and only the server " <>
-                 "changes it — edit or remove a unit at its own path, one unit at a time"
+      assert message == @reserved_sentence
 
       assert_own_role_intact(actor)
     end
@@ -178,6 +179,43 @@ defmodule Arca.RevisionStoreReservedTest do
                Arca.replace_tree(actor, prefix, [{["mine.md"], "swapped"}], cap: :exempt)
 
       assert_own_role_intact(actor)
+    end
+  end
+
+  describe "the reserved-path refusal at every door" do
+    test "an overlay edit names the reserved path before any rewrite", %{actor: actor} do
+      revision = own_role!(actor)
+      object = ["aqua", ".staging", "roles", "mine.md", revision, "mine.md"]
+      rewrite = fn _bytes -> flunk("a reserved path reached the rewrite") end
+
+      assert {:error, {:reserved_path, ^object}} = Arca.Overlay.update(actor, object, rewrite)
+
+      planted = ["aqua", ".staging", "roles", "mine.md", "rev_planted", "mine.md"]
+      assert {:error, {:reserved_path, ^planted}} = Arca.Overlay.update(actor, planted, rewrite)
+
+      assert_own_role_intact(actor)
+    end
+
+    test "the console and MCP show a person the same sentence", %{ctx: ctx} do
+      args = %{"action" => "write", "path" => "aqua/.staging/roles/no-unit.md", "content" => "x"}
+
+      assert {:error, reason} = PrismWeb.Ops.call_tool(ctx, "file", args)
+      assert %Prima.Refusal{class: :invalid_argument} = Sanctum.Refusals.classify(reason)
+      assert PrismWeb.Ops.error_message(reason) == @reserved_sentence
+
+      message = %Prima.MCP.Message{
+        type: :request,
+        id: 1,
+        method: "tools/call",
+        params: %{"name" => "file", "arguments" => args}
+      }
+
+      assert {:ok,
+              %{
+                "isError" => true,
+                "content" => [%{"type" => "text", "text" => @reserved_sentence}]
+              }} =
+               Emissary.MCP.Router.dispatch(ctx, message)
     end
   end
 

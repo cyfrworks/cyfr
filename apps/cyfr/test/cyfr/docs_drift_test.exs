@@ -1135,6 +1135,34 @@ defmodule Cyfr.DocsDriftTest do
            "component-guide.md's setup_required row does not name its #{setup_member} member"
   end
 
+  # Guide table rows that quote a refusal's sentence, each held to
+  # `Prima.Refusal`: exactly one row whose first cell is the entry's,
+  # quoting the sentence the person or guest reads. `{class}` in a cell is
+  # the refusal's class, so a row that names its class holds that too.
+  @quoted_refusals [
+    {{:reserved_path, ["aqua", ".staging"]}, "`{class}` (reserved path)"}
+  ]
+
+  test "component-guide's rows that quote a refusal hold its class and sentence" do
+    guide = File.read!(Path.join(@repo_root, "component-guide.md"))
+
+    for {reason, cell} <- @quoted_refusals do
+      %Prima.Refusal{class: class, message: message} = Prima.Refusal.classify(reason)
+      cell = String.replace(cell, "{class}", Atom.to_string(class))
+
+      rows =
+        Regex.scan(~r/^\| #{Regex.escape(cell)} \|(.*)\|$/m, guide, capture: :all_but_first)
+
+      assert length(rows) == 1,
+             "component-guide.md has #{length(rows)} rows whose first cell is #{cell}, not one"
+
+      [[row]] = rows
+
+      assert row =~ ~s("#{message}"),
+             "component-guide.md's #{cell} row does not quote #{inspect(reason)}'s sentence"
+    end
+  end
+
   test "the guides' tincture-block keys are ones the code actually reads" do
     # Documented tincture keys must match validator and consumer support.
     documented_only = ~w(sandbox)
