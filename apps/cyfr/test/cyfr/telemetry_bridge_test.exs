@@ -93,7 +93,7 @@ defmodule Cyfr.TelemetryBridgeTest do
       {[:cyfr, :sanctum, :frame_credential, :changed],
        %{user_id: @user, credential_id: "fcr_1", change: :suspended},
        Bus.frame_credentials(@user),
-       {FrameCredential, %{kind: :suspended, user_id: @user, credential_id: "fcr_1"}}},
+       {FrameCredential, %{kind: :suspended, user_id: @user, id: "fcr_1"}}},
       {[:cyfr, :sanctum, :membership, :changed],
        %{user_id: @user, athanor_id: @athanor, change: :joined}, Bus.memberships(@user),
        {Membership, %{user_id: @user, change: :joined}}},

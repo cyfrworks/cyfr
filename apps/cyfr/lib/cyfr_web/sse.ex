@@ -516,7 +516,7 @@ defmodule CyfrWeb.SSE do
   defp about?(%Membership{}, _ctx), do: true
   defp about?(%CallerInvalidated{}, _ctx), do: true
 
-  defp about?(%FrameCredential{credential_id: id}, %Context{frame: %{id: frame_credential}}),
+  defp about?(%FrameCredential{id: id}, %Context{frame: %{id: frame_credential}}),
     do: id == frame_credential
 
   defp about?(%FrameCredential{}, _ctx), do: false
