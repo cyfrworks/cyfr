@@ -140,7 +140,7 @@ Owns component kinds, manifests, the registry, activation, provenance, scaffoldi
 Owns threads, rooms, direct threads, turns and their loop, approvals and standing approvals (§10), notes, attachments, agent configuration, model orchestration and memory (§11).
 
 - **Model orchestration has one plane.** A small or local model is an ordinary provider under the same grant and the same turn, chosen for a step by Aqua's model policy. There is no second pipeline beside the turn. *Not built yet:* Aqua's model policy; every step of a turn runs on the model the turn started with.
-- **Chat is Aqua's state and Prism's trusted surface.** The conversation in a thread, a room or a two-person direct thread, whether a line starts the assistant, following, and saying a line aloud into a room are Aqua state machines; the room's and the pair's membership lifecycle is Sanctum's. Prism draws them above every canvas, not as tinctures, so a broken canvas never takes the assistant with it. A tincture reaches a thread only through declared operations and streams.
+- **Chat is Aqua's state and Prism's trusted surface.** The chat in a thread, a room or a two-person direct thread, whether a line starts the assistant, following, and saying a line aloud into a room are Aqua state machines; the room's and the pair's membership lifecycle is Sanctum's. Prism draws them above every canvas, not as tinctures, so a broken canvas never takes the assistant with it. A tincture reaches a thread only through declared operations and streams.
 - Turn transitions persist through their owning transaction and broadcast committed state.
 
 ### Opus: execution
