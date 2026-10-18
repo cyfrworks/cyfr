@@ -4316,7 +4316,7 @@ func (args RegistryAppealArgs) MarshalJSON() ([]byte, error) {
 type RegistryClaimPersonalArgs struct {
 	// Desired personal-namespace slug (for claim_personal)
 	Username string `json:"username"`
-	// OAuth provider (for probe / claim_personal)
+	// The sign-in provider the claimant's identity is proven through (for claim_personal: any sign-in provider, an OpenID Connect one included)
 	Provider string `json:"provider"`
 	// IdP access token (for probe / claim_personal). Used once to prove provider identity.
 	AccessToken string `json:"access_token"`

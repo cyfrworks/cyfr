@@ -242,14 +242,15 @@ defmodule PrismWeb.ClaimNamespaceControllerTest do
     # A signed-in person with no publisher namespace yet: a users row
     # without one, a seat of their own, and an ordinary session — the
     # session the claim establishes and revalidates before it writes.
-    defp unclaimed_person do
+    defp unclaimed_person(provider \\ "github") do
       n = System.unique_integer([:positive])
-      user_id = "github|https://github.com|claim-#{n}"
+      issuer = if provider == "github", do: "https://github.com", else: "https://issuer.example"
+      user_id = "#{provider}|#{issuer}|claim-#{n}"
 
       {:ok, %{id: person_id}} =
         Sanctum.Tenancy.Users.upsert_from_provider(%{
           id: user_id,
-          provider: "github",
+          provider: provider,
           email: "claim#{n}@example.com",
           verified: true
         })
@@ -263,7 +264,7 @@ defmodule PrismWeb.ClaimNamespaceControllerTest do
         Sanctum.Context.build(
           user_id: person_id,
           email: "claim#{n}@example.com",
-          provider: "github",
+          provider: provider,
           athanor_id: athanor.id,
           permissions: [:*]
         )
@@ -464,7 +465,8 @@ defmodule PrismWeb.ClaimNamespaceControllerTest do
       assert {:ok, %{namespace: nil}} = Sanctum.Tenancy.Users.get(user_id)
     end
 
-    test "a claim answered without a token still records the identity", %{bypass: bypass} do
+    test "a claim answered without a token still records the identity, and says the push credential did not sync",
+         %{bypass: bypass} do
       {user_id, token, slug} = unclaimed_person()
 
       Bypass.expect_once(bypass, "POST", "/v1/namespaces/personal/claim", fn c ->
@@ -473,12 +475,51 @@ defmodule PrismWeb.ClaimNamespaceControllerTest do
         |> Plug.Conn.resp(200, Jason.encode!(%{"slug" => slug}))
       end)
 
-      conn = submit(slug, token)
+      conn = submit(slug, token, {198, 51, 100, 72})
       assert redirected_to(conn) == "/"
       assert {:ok, %{namespace: ^slug}} = Sanctum.Tenancy.Users.get(user_id)
       assert {:ok, %{authenticated: true}} = Sanctum.Session.load(token, surface: :console)
 
       assert {:error, :not_found} =
+               Compendium.Registry.CredentialStore.get(as(user_id), "registry.test", slug)
+
+      assert Phoenix.Flash.get(conn.assigns.flash, :error) =~ "push credential didn't sync yet"
+    end
+
+    test "a person signed in through OpenID Connect claims through the registry with that provider",
+         %{bypass: bypass} do
+      {user_id, token, slug} = unclaimed_person("oidcc")
+      owner = self()
+
+      Bypass.expect_once(bypass, "POST", "/v1/namespaces/personal/claim", fn c ->
+        {:ok, body, c} = Plug.Conn.read_body(c)
+        send(owner, {:claim_provider, Jason.decode!(body)["provider"]})
+
+        c
+        |> Plug.Conn.put_resp_header("content-type", "application/json")
+        |> Plug.Conn.resp(200, Jason.encode!(%{"slug" => slug, "token" => "cyfr_pt_oidcc"}))
+      end)
+
+      conn = submit(slug, token, {198, 51, 100, 71})
+      assert redirected_to(conn) == "/"
+      assert_receive {:claim_provider, "oidcc"}
+      assert {:ok, %{namespace: ^slug}} = Sanctum.Tenancy.Users.get(user_id)
+    end
+
+    test "a registry answer naming no slug claimed the username asked for", %{bypass: bypass} do
+      {user_id, token, slug} = unclaimed_person()
+
+      Bypass.expect_once(bypass, "POST", "/v1/namespaces/personal/claim", fn c ->
+        c
+        |> Plug.Conn.put_resp_header("content-type", "application/json")
+        |> Plug.Conn.resp(200, Jason.encode!(%{"token" => "cyfr_pt_no_slug"}))
+      end)
+
+      conn = submit(slug, token, {198, 51, 100, 73})
+      assert redirected_to(conn) == "/"
+      assert {:ok, %{namespace: ^slug}} = Sanctum.Tenancy.Users.get(user_id)
+
+      assert {:ok, %{token: "cyfr_pt_no_slug"}} =
                Compendium.Registry.CredentialStore.get(as(user_id), "registry.test", slug)
     end
   end

@@ -90,8 +90,10 @@ defmodule Compendium.Providers.Registry do
             ),
             Arg.new("provider", :string,
               required: true,
-              description: "OAuth provider (for probe / claim_personal)",
-              enum: Prima.SignInProviders.device_flow()
+              description:
+                "The sign-in provider the claimant's identity is proven through (for " <>
+                  "claim_personal: any sign-in provider, an OpenID Connect one included)",
+              enum: Prima.SignInProviders.all()
             ),
             Arg.new("access_token", :string,
               required: true,
@@ -535,7 +537,9 @@ defmodule Compendium.Providers.Registry do
         # Bearer / no hydrated Sanctum session), skip storage — the client
         # must subsequently call /v1/identity/probe after establishing a
         # session to provision the credential locally.
-        maybe_store_personal_credential(ctx, body)
+        # A registry answer that names no slug claimed the one asked for,
+        # as the claim page always read it.
+        maybe_store_personal_credential(ctx, Map.put_new(body, "slug", username))
 
       {:error, err} ->
         {:error, Shared.refusal(err)}

@@ -845,8 +845,9 @@ defmodule Cyfr.Boundaries do
       allow: ~w(Compendium),
       reason:
         "the console reads components, agents, path grammars, the projection epoch " <>
-          "and the registry's claim and legal pages through the component domain's " <>
-          "root facade, and a registry refusal reaches it as a `%Prima.Refusal{}`; " <>
+          "and the registry's legal pages through the component domain's root facade " <>
+          "(the claim page claims through the gate, `registry.claim_personal`), and a " <>
+          "registry refusal reaches it as a `%Prima.Refusal{}`; " <>
           "the publisher and version vocabularies it reads are Prima's. " <>
           "Boundary's exports are global, and `Compendium` exports its two paths, " <>
           "`ConsentFacts`, `Providers.Component` and `Supervisor` beside its root to every " <>

@@ -70,10 +70,11 @@ defmodule PrismWeb.ClaimNamespaceController do
   # ============================================================================
 
   # The claim landed on the users row; a push token the operation could not
-  # cache is re-minted at the next sign-in or probe.
+  # cache, or that the registry did not answer, is re-minted at the next
+  # sign-in or probe.
   defp claimed(conn, body) do
     conn =
-      if Map.get(body, "local_store_failed") do
+      if Map.get(body, "local_store_failed") == true or Map.get(body, "token") in [nil, ""] do
         Logger.warning(
           "[ClaimNamespaceController] push token for #{body["slug"]} was not cached — a " <>
             "later probe re-mints it"
