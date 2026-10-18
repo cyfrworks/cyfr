@@ -805,7 +805,7 @@ defmodule Arca.StorageGCTest do
       assert served(actor, unit) == whole("two")
     end
 
-    test "a sweep moves nothing: a dead writer's held draft outlives the grace, and the audit releases it",
+    test "a sweep releases a dead draft without marking its committed generation ready",
          %{actor: actor, unit: unit} do
       assert {:ok, _} = commit(actor, unit, "one")
       {:ok, %{current_revision: one}} = pointer(actor, unit)
