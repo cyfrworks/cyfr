@@ -44,7 +44,11 @@ defmodule Prima.CanvasWire do
       and `height`, each a non-negative number;
     * `installed {tinctures}`, at most 512 objects of exactly `ref` (a
       tincture reference) and `name` (1 to 128 code points);
-    * `state {state}`, `live` or `frozen`.
+    * `state {state}`, `live` or `frozen`;
+    * `credential {credential}`, the frame credential Prism renewed while
+      the canvas is shown, a non-empty string: the toolkit hands it to
+      its streams worker alone, which opens every later stream under it
+      and moves every open one onto it.
 
   `decode/1` reads a message of either direction, and a receiver holds its
   verb to the set its direction names. An unknown verb, an extra or a
@@ -72,7 +76,7 @@ defmodule Prima.CanvasWire do
   @version 1
 
   @to_prism ~w(ready tree open press failed)a
-  @to_toolkit ~w(boot posture covered installed state)a
+  @to_toolkit ~w(boot posture covered installed state credential)a
 
   @page_prefix "/_c/v1/"
   @data_prefix "/_f/v1/o/"
@@ -101,6 +105,7 @@ defmodule Prima.CanvasWire do
           | :covered
           | :installed
           | :state
+          | :credential
 
   @typedoc "A message: its verb, its frame id and its string-keyed arguments."
   @type message :: %{verb: verb(), frame: String.t(), args: map()}
@@ -285,6 +290,11 @@ defmodule Prima.CanvasWire do
   defp verb_args(:state, args, _frame) do
     with :ok <- exact(args, ~w(state), "state"),
          do: check(args["state"] in @states, "state is live or frozen")
+  end
+
+  defp verb_args(:credential, args, _frame) do
+    with :ok <- exact(args, ~w(credential), "credential"),
+         do: check(credential?(args["credential"]), "credential carries the frame credential")
   end
 
   defp tincture_ref?(ref) when is_binary(ref),

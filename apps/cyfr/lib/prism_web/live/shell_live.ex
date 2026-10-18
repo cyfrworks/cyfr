@@ -126,11 +126,14 @@ defmodule PrismWeb.ShellLive do
   again the view pushes `frame_state`, which the canvas hook relays to the
   frame's bridge.
 
-  A live frame that is not a canvas's has its credential renewed before
-  its deadline while this view holds it (`Prism.Frames.renew/4`), and a
-  frame shown again is resumed under a new bearer: the view pushes each
-  new bearer as `frame_bearer`, which the canvas hook relays to that
-  frame's bridge alone, and keeps none. A frozen frame is not renewed.
+  A live frame that is not a validation's, a shown canvas's included, has
+  its credential renewed before its deadline while this view holds it
+  (`Prism.Frames.renew/4`), and a frame that is not a canvas's is resumed
+  under a new bearer when it is shown again: the view pushes each new
+  bearer as `frame_bearer`, which the canvas hook relays to that frame's
+  bridge alone, a canvas's bridge sending it over the canvas wire as
+  `credential`, and keeps none. A frozen frame is not renewed, so a canvas
+  hidden past its deadline is refused when it is shown again.
 
   While a full frame is shown it covers everything under it, so the
   shell sets `covered`: the layout takes its chrome (the top bar, the

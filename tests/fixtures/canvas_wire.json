@@ -13,7 +13,8 @@
     "posture",
     "covered",
     "installed",
-    "state"
+    "state",
+    "credential"
   ],
   "messages": {
     "valid": [
@@ -88,6 +89,10 @@
       {
         "direction": "to_toolkit",
         "message": {"v": 1, "verb": "state", "frame": "frm_8f3c2a1b9d", "args": {"state": "frozen"}}
+      },
+      {
+        "direction": "to_toolkit",
+        "message": {"v": 1, "verb": "credential", "frame": "frm_8f3c2a1b9d", "args": {"credential": "frm.v1.cmVuZXdlZC1mcmFtZS1jcmVkZW50aWFs"}}
       }
     ],
     "invalid": [
@@ -314,6 +319,22 @@
       {
         "why": "an unknown state",
         "message": {"v": 1, "verb": "state", "frame": "frm_8f3c2a1b9d", "args": {"state": "paused"}}
+      },
+      {
+        "why": "a renewed credential that is empty",
+        "message": {"v": 1, "verb": "credential", "frame": "frm_8f3c2a1b9d", "args": {"credential": ""}}
+      },
+      {
+        "why": "a renewed credential that is not a string",
+        "message": {"v": 1, "verb": "credential", "frame": "frm_8f3c2a1b9d", "args": {"credential": 7}}
+      },
+      {
+        "why": "a renewed credential with another key",
+        "message": {"v": 1, "verb": "credential", "frame": "frm_8f3c2a1b9d", "args": {"credential": "frm.v1.cmVuZXdlZC1mcmFtZS1jcmVkZW50aWFs", "deadline": "2026-10-18T12:00:00Z"}}
+      },
+      {
+        "why": "a renewed credential missing",
+        "message": {"v": 1, "verb": "credential", "frame": "frm_8f3c2a1b9d", "args": {}}
       }
     ]
   },

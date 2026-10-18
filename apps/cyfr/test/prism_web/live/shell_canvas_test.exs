@@ -60,7 +60,7 @@ defmodule PrismWeb.ShellCanvasTest do
   # A tincture version laid in the athanor's tree with its component row:
   # `tincture` its manifest's block, `files` its files. Answers the row's
   # release digest.
-  defp lay!(ctx, name, version, tincture, files) do
+  defp lay!(ctx, name, version, tincture, files, opts \\ []) do
     manifest = %{
       "name" => name,
       "type" => "tincture",
@@ -100,6 +100,10 @@ defmodule PrismWeb.ShellCanvasTest do
       })
 
     acknowledged!(ctx)
+
+    if Keyword.get(opts, :granted, true),
+      do: Sanctum.Test.ConsentFixtures.grant_tincture!(ctx, "tincture:local.#{name}")
+
     Prism.TinctureRegistry.reload_athanor(ctx.athanor_id)
     release_digest
   end
@@ -137,7 +141,15 @@ defmodule PrismWeb.ShellCanvasTest do
     Prism.TinctureRegistry.reload_athanor(ctx.athanor_id)
   end
 
-  defp canvas!(ctx, name, version \\ "1.0.0", streams \\ [%{"name" => "runs.changes"}]) do
+  # A canvas version, granted as the person would grant it unless
+  # `granted: false` leaves the grant as it was.
+  defp canvas!(
+         ctx,
+         name,
+         version \\ "1.0.0",
+         streams \\ [%{"name" => "runs.changes"}],
+         opts \\ []
+       ) do
     lay!(
       ctx,
       name,
@@ -147,7 +159,8 @@ defmodule PrismWeb.ShellCanvasTest do
         "canvas" => %{"module" => "canvas.js", "toolkit" => 1},
         "streams" => streams
       },
-      [{"canvas.js", "export default (canvas) => canvas.render({type: \"spacer\"})"}]
+      [{"canvas.js", "export default (canvas) => canvas.render({type: \"spacer\"})"}],
+      opts
     )
   end
 
@@ -1285,6 +1298,38 @@ defmodule PrismWeb.ShellCanvasTest do
       refute_push_event(view, "frame_bearer", %{frame: ^home_id})
     end
 
+    test "a shown canvas's credential is renewed before its deadline and its new bearer pushed for its wire; hidden, it is renewed no more",
+         %{conn: conn, ctx: ctx, user: user, athanor: athanor} do
+      two_canvases!(ctx, user, athanor)
+      view = shell!(conn)
+      home = canvas(view)
+      home_id = home.id
+      old = handshake!(view, home_id)["credential"]
+      %{deadline: deadline} = row(home_id)
+
+      assert %{^home_id => {timer, token}} = assigns(view).renewals
+      Process.cancel_timer(timer)
+      send(view.pid, {:frame_renewal, home_id, deadline, token})
+      _ = render(view)
+
+      assert_push_event(view, "frame_bearer", %{frame: ^home_id, credential: new})
+      refute new == old
+      assert {:ok, %{frame_id: ^home_id, deadline: renewed}} = verify(new)
+      assert DateTime.compare(renewed, deadline) == :gt
+      assert %{state: "active", deadline: ^renewed} = row(home_id)
+      assert %{state: :live, deadline: ^renewed, bearer: nil} = canvas(view)
+
+      # The bearer it replaced keeps its own deadline.
+      assert {:ok, %{frame_id: ^home_id, deadline: ^deadline}} = verify(old)
+
+      # Armed again for the new deadline while shown; hidden, it is not.
+      assert %{^home_id => {_next, next_token}} = assigns(view).renewals
+      refute next_token == token
+      render_hook(view, "switch_canvas", %{"canvas" => "work"})
+      assert row(home_id).state == "suspended"
+      refute Map.has_key?(assigns(view).renewals, home_id)
+    end
+
     test "a canvas shown again after its deadline passed is refused, as before",
          %{conn: conn, ctx: ctx, user: user, athanor: athanor} do
       deadline_setting!(2)
@@ -1389,31 +1434,61 @@ defmodule PrismWeb.ShellCanvasTest do
   describe "a validation's grant prompt" do
     # A canvas tincture's owner profile, markets' unless named: `status`
     # :needs_consent while its grant waits for the person, :active once the
-    # person granted it.
+    # person granted it its newest version's shape.
     defp owner_head!(ctx, name \\ "markets", status) do
       :ok =
         Sanctum.Test.ConsentFixtures.seed_head!(
           ctx,
           %{
-            id: "prof_#{name}_canvas",
+            id: "prof_#{String.replace(name, "-", "_")}",
             kind: :owner,
             source_ref: "tincture:local.#{name}",
             label: "owner",
             status: status
           },
           %{
-            id: "cons_#{name}_canvas",
+            id: "cons_#{String.replace(name, "-", "_")}",
             revision: 1,
             scope: :versionless,
             pinned_version: "",
             invoke_mode: :open_inert,
-            shape_digest: "sha256:shape",
+            shape_digest: :live,
             commit_digest: "sha256:commit",
-            blob_digest: Prima.JCS.hash_binary("{}"),
-            resolved_policy: "{}",
-            activation: %{}
+            resolved_policy: Sanctum.Test.ConsentFixtures.empty_policy("tincture:local.#{name}"),
+            activation: %{"tincture:local.#{name}" => "sha256:act"}
           }
         )
+    end
+
+    test "a version that reads a stream its grant does not name is refused at its trial's open and asks again; confirmed, it is validated under the grant that names it",
+         %{conn: conn, ctx: ctx, user: user, athanor: athanor} do
+      canvas!(ctx, "markets")
+      versions!(ctx, "markets", %{working: "1.0.0"})
+
+      canvas!(
+        ctx,
+        "markets",
+        "1.0.1",
+        [%{"name" => "runs.changes"}, %{"name" => "mcp_servers.changes"}],
+        granted: false
+      )
+
+      layout!(user, athanor, [entry("home", "tincture:local.markets")])
+      view = shell!(conn)
+
+      # The grant names 1.0.0's streams: 1.0.1's trial opens nothing and
+      # the grant is asked for again.
+      settle!(view, fn -> assigns(view).grant_prompts != %{} end)
+      assert validation(view) == nil
+      refute Enum.any?(rows(), &(&1.version == "1.0.1"))
+      assert render(view) =~ "Grant tincture:local.markets"
+
+      view |> element(~s(#system-layer-dialog button[phx-click="confirm"])) |> render_click()
+      wait_until(fn -> assigns(view).grant_prompts == %{} end, 5_000, "the grant")
+
+      settle!(view, fn -> match?(%{state: :live}, validation(view)) end)
+      assert %{reference: %{name: "markets", version: "1.0.1"}} = trial = validation(view)
+      assert row(trial.id).state == "active"
     end
 
     test "a trial refused at its open for want of the grant is torn down at once and asks for it; dismissed, the canvas shows its refusal; confirmed, it is validated again",

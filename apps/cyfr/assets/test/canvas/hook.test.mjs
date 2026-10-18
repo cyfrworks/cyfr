@@ -615,7 +615,7 @@ describe("a rotated credential", () => {
     }
   })
 
-  test("a canvas's frame is never handed one", async () => {
+  test("a canvas's frame is handed one over its canvas wire as credential, never as cyfr:credential", async () => {
     const boot = {
       mode: "live",
       credential: "frm.v1.c2lnbmVkLWZyYW1lLWNyZWRlbnRpYWw",
@@ -630,10 +630,15 @@ describe("a rotated credential", () => {
       await eventually(() => canvas.heard.length >= 1)
       const {handlers} = mountCanvas(canvasElement({frames: [canvas.el]}))
       handlers.frame_bearer({frame: FRAME, credential: RENEWED})
+      handlers.frame_bearer({frame: FRAME, credential: ""})
 
+      await eventually(() => canvas.heard.some((message) => message.verb === "credential"))
       await new Promise((resolve) => setTimeout(resolve, 20))
+      assert.deepEqual(
+        canvas.heard.filter((message) => message.verb === "credential"),
+        [{v: 1, verb: "credential", frame: FRAME, args: {credential: RENEWED}}]
+      )
       assert.ok(canvas.heard.every((message) => message.type !== "cyfr:credential"))
-      assert.ok(!JSON.stringify(canvas.heard).includes(RENEWED))
     } finally {
       canvas.hook.destroyed()
       canvas.port?.close()

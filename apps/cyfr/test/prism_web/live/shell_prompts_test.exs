@@ -63,7 +63,8 @@ defmodule PrismWeb.ShellPromptsTest do
   end
 
   # A tincture version in the athanor's tree and its component row, with
-  # `tincture` merged into its `tincture` block.
+  # `tincture` merged into its `tincture` block, granted as the person
+  # would grant it (`Sanctum.Test.ConsentFixtures.grant_tincture!/3`).
   defp lay!(ctx, name, tincture, files) do
     manifest = %{
       "name" => name,
@@ -104,6 +105,7 @@ defmodule PrismWeb.ShellPromptsTest do
       })
 
     acknowledged!(ctx)
+    Sanctum.Test.ConsentFixtures.grant_tincture!(ctx, "tincture:local.#{name}")
     Prism.TinctureRegistry.reload_athanor(ctx.athanor_id)
     release_digest
   end

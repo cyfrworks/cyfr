@@ -16,7 +16,7 @@ export {isFrameId}
 export const VERSION = 1
 
 export const TO_PRISM_VERBS = Object.freeze(["ready", "tree", "open", "press", "failed"])
-export const TO_TOOLKIT_VERBS = Object.freeze(["boot", "posture", "covered", "installed", "state"])
+export const TO_TOOLKIT_VERBS = Object.freeze(["boot", "posture", "covered", "installed", "state", "credential"])
 
 // The toolkit majors this toolkit draws.
 export const TOOLKIT_MAJORS = Object.freeze([1])
@@ -259,6 +259,11 @@ function argsError(verb, args, frame) {
       )
     case "state":
       return exact(args, ["state"], "state") || check(STATES.includes(args.state), "state is live or frozen")
+    case "credential":
+      return (
+        exact(args, ["credential"], "credential") ||
+        check(typeof args.credential === "string" && args.credential !== "", "credential carries the frame credential")
+      )
     default:
       return "unknown verb"
   }
@@ -345,9 +350,10 @@ export const toModule = Object.freeze({
   stream: (m) => ({t: "stream", m})
 })
 
-// Host to the streams worker.
+// Host to the streams worker: its boot, then each renewed credential.
 export const toStreams = Object.freeze({
-  boot: (credential, dataUrl, streams, port) => ({t: "boot", credential, data_url: dataUrl, streams, port})
+  boot: (credential, dataUrl, streams, port) => ({t: "boot", credential, data_url: dataUrl, streams, port}),
+  credential: (credential) => ({t: "credential", credential})
 })
 
 // Module worker to host.
@@ -451,9 +457,14 @@ export function decodeToModule(data) {
   return null
 }
 
+// What the streams worker reads on its own channel: a boot, a renewed
+// credential (`{t: "credential", credential}`), or null.
 export function decodeToStreams(data) {
-  if (!isPlainObject(data) || data.t !== "boot") return null
-  if (!sameKeys(data, ["credential", "data_url", "port", "streams", "t"])) return null
+  if (!isPlainObject(data)) return null
+  if (data.t === "credential" && sameKeys(data, ["credential", "t"])) {
+    return typeof data.credential === "string" && data.credential !== "" ? data : null
+  }
+  if (data.t !== "boot" || !sameKeys(data, ["credential", "data_url", "port", "streams", "t"])) return null
   if (typeof data.credential !== "string" || data.credential === "" || typeof data.data_url !== "string") return null
   return isStreams(data.streams) && isPort(data.port) ? data : null
 }

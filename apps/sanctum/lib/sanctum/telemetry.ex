@@ -53,6 +53,7 @@ defmodule Sanctum.Telemetry do
   @athanor_archived_event [:cyfr, :sanctum, :athanor, :archived]
   @api_keys_event [:cyfr, :sanctum, :api_keys, :changed]
   @webhooks_event [:cyfr, :sanctum, :webhooks, :changed]
+  @frame_credential_event [:cyfr, :sanctum, :frame_credential, :changed]
 
   # A remote identity's head as this home reads it from its directory.
   @identity_not_descendant_event [:cyfr, :sanctum, :identity, :not_descendant]
@@ -146,7 +147,12 @@ defmodule Sanctum.Telemetry do
   @spec session_created() :: :ok
   def session_created, do: :telemetry.execute(@session_created_event, %{count: 1}, %{})
 
-  @doc "Every session of `user_id` was retired; their sockets must let go."
+  @doc """
+  Sessions of `user_id` were retired, every one or only some (those a
+  refreshed identity head retired, `Sanctum.Caller.drop_retired/2`):
+  whatever holds a context of theirs establishes it again and lets go of
+  one that no longer stands.
+  """
   @spec sessions_revoked(String.t()) :: :ok
   def sessions_revoked(user_id),
     do: :telemetry.execute(@sessions_revoked_event, %{count: 1}, %{user_id: user_id})
@@ -195,6 +201,21 @@ defmodule Sanctum.Telemetry do
   @spec webhooks_changed(String.t()) :: :ok
   def webhooks_changed(athanor_id) when is_binary(athanor_id),
     do: :telemetry.execute(@webhooks_event, %{count: 1}, %{athanor_id: athanor_id})
+
+  @doc """
+  The frame credential `credential_id` of `user_id` was suspended or
+  revoked: whatever holds an open stream under it re-establishes it at
+  once rather than at its next revalidation. No bearer travels.
+  """
+  @spec frame_credential_changed(String.t(), String.t(), :suspended | :revoked) :: :ok
+  def frame_credential_changed(user_id, credential_id, change)
+      when is_binary(user_id) and is_binary(credential_id) and change in [:suspended, :revoked] do
+    :telemetry.execute(@frame_credential_event, %{count: 1}, %{
+      user_id: user_id,
+      credential_id: credential_id,
+      change: change
+    })
+  end
 
   @doc """
   The directory `directory` served a log of `identifier` that does not

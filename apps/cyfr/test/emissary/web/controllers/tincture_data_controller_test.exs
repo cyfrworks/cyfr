@@ -178,6 +178,7 @@ defmodule Emissary.Web.TinctureDataControllerTest do
     issuer = Sanctum.TestContext.issuer!(Sanctum.TestContext.local())
     {:ok, session} = Sanctum.TestContext.create_session(issuer)
     {:ok, source} = Sanctum.Caller.establish(session.token)
+    echo!(source)
 
     {:ok, source: source, session: session}
   end
@@ -217,7 +218,20 @@ defmodule Emissary.Web.TinctureDataControllerTest do
     })
   end
 
-  defp put_version!(ctx, name, manifest) do
+  # The reagent the fixtures' tinctures name as their static dependency,
+  # installed so a tincture's closure resolves as an installed one does.
+  defp echo!(ctx) do
+    put_row!(ctx, "reagent", "echo", %{
+      "name" => "echo",
+      "type" => "reagent",
+      "version" => @version,
+      "publisher" => "local"
+    })
+  end
+
+  defp put_version!(ctx, name, manifest), do: put_row!(ctx, "tincture", name, manifest)
+
+  defp put_row!(ctx, type, name, manifest) do
     digest = "sha256:" <> Base.encode16(:crypto.hash(:sha256, name), case: :lower)
     {:ok, release_digest} = Compendium.ReleaseDigest.compute(digest, manifest)
     now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
@@ -226,8 +240,8 @@ defmodule Emissary.Web.TinctureDataControllerTest do
       Arca.ComponentStorage.put_component(Sanctum.Context.actor(ctx), %{
         id: "cmp_#{name}_#{System.unique_integer([:positive])}",
         name: name,
-        version: @version,
-        component_type: "tincture",
+        version: Map.get(manifest, "version", @version),
+        component_type: type,
         description: name,
         tags: "[]",
         digest: digest,
@@ -272,15 +286,29 @@ defmodule Emissary.Web.TinctureDataControllerTest do
   end
 
   # The frame the shell would open for `name`: its credential, row id and
-  # frame id.
-  defp frame!(source, name, digest, revision \\ 0) do
+  # frame id, minted at `revision`, or by default at the revision of the
+  # grant the version opens under, granted first as the person would grant
+  # it (`Sanctum.Test.ConsentFixtures.grant_tincture!/3`) when it holds none.
+  defp frame!(source, name, digest, revision \\ nil) do
     reference = %{publisher: "local", name: name, version: @version}
+    revision = revision || standing_revision!(source, name)
     frame = frame_id()
 
     {:ok, %{credential: bearer, id: id}} =
       TinctureAuth.mint_frame_credential(source, reference, digest, revision, frame)
 
     %{bearer: bearer, id: id, frame_id: frame}
+  end
+
+  defp standing_revision!(source, name) do
+    case Sanctum.Consent.tincture_grant(source, "tincture:local.#{name}:#{@version}") do
+      {:ok, %{revision: revision}} ->
+        revision
+
+      {:error, :ungranted} ->
+        Sanctum.Test.ConsentFixtures.grant_tincture!(source, "tincture:local.#{name}")
+        1
+    end
   end
 
   defp data(kind, body, opts \\ []) do
@@ -430,30 +458,69 @@ defmodule Emissary.Web.TinctureDataControllerTest do
       assert %{class: "forbidden", stage: "admission"} = refused(conn, :action)
     end
 
+    test "a tincture with no grant reaches nothing: its declaration is never its grant, and it is asked for one",
+         %{source: source} do
+      frame = frame!(source, "bare-dash", declared!(source, "bare-dash"), 0)
+
+      conn = action(frame.bearer, "system.status")
+      assert %{class: "consent_required", stage: "admission"} = refused(conn, :action)
+
+      body = TinctureWire.request(:stream_open, %{stream: "mcp_servers.changes", subject: nil})
+      conn = data(:stream_open, body, bearer: frame.bearer)
+      assert %{class: "consent_required", stage: "admission"} = refused(conn, :stream_open)
+    end
+
+    test "a version that reads more than its grant names reaches nothing and is asked again",
+         %{source: source} do
+      # 1.0.0 declares a stream; the newest, 1.0.1, which the grant was
+      # made for, declares none.
+      older = declared!(source, "more-dash")
+
+      put_version!(source, "more-dash", %{
+        "name" => "more-dash",
+        "type" => "tincture",
+        "version" => "1.0.1",
+        "publisher" => "local",
+        "tincture" => %{"entry" => "index.html", "actions" => ["system.status"]},
+        "dependencies" => %{"static" => [%{"ref" => "reagent:local.echo", "reason" => "echo"}]}
+      })
+
+      Sanctum.Test.ConsentFixtures.grant_tincture!(source, "tincture:local.more-dash")
+      frame = frame!(source, "more-dash", older, 1)
+
+      conn = action(frame.bearer, "system.status")
+      assert %{class: "consent_required", stage: "admission"} = refused(conn, :action)
+
+      body = TinctureWire.request(:stream_open, %{stream: "mcp_servers.changes", subject: nil})
+      conn = data(:stream_open, body, bearer: frame.bearer)
+      assert %{class: "consent_required", stage: "admission"} = refused(conn, :stream_open)
+    end
+
     test "a credential presented for another grant is refused", %{source: source} do
-      frame = frame!(source, "grant-dash", declared!(source, "grant-dash"), 0)
+      frame = frame!(source, "grant-dash", declared!(source, "grant-dash"))
       assert action(frame.bearer, "system.status").status == 200
 
       :ok =
         Sanctum.Test.ConsentFixtures.seed_head!(
           source,
           %{
-            id: "prof_data_grant",
+            id: "prof_grant_dash",
             kind: :owner,
             source_ref: "tincture:local.grant-dash",
             label: "owner",
             status: :active
           },
           %{
-            id: "cons_data_grant",
+            id: "cons_grant_dash",
             revision: 2,
             scope: :versionless,
             pinned_version: "",
             invoke_mode: :open_inert,
-            shape_digest: "sha256:shape",
+            shape_digest: :live,
             commit_digest: "sha256:commit",
-            resolved_policy: "{}",
-            activation: %{}
+            resolved_policy:
+              Sanctum.Test.ConsentFixtures.empty_policy("tincture:local.grant-dash"),
+            activation: %{"tincture:local.grant-dash" => "sha256:act"}
           }
         )
 
@@ -836,6 +903,39 @@ defmodule Emissary.Web.TinctureDataControllerTest do
              )
     end
 
+    for act <- [:suspend_frame, :revoke_frame] do
+      @tag act: act
+      test "ends at once when its frame's credential is #{act}, its announcement and not the freshness bound closing it",
+           %{source: source, frame: frame, act: act} do
+        # A freshness bound no case outlasts: only the announcement can
+        # close the stream within this case.
+        bound = Application.get_env(:sanctum, :caller_memo_ttl_ms)
+
+        on_exit(fn ->
+          if bound,
+            do: Application.put_env(:sanctum, :caller_memo_ttl_ms, bound),
+            else: Application.delete_env(:sanctum, :caller_memo_ttl_ms)
+        end)
+
+        Application.put_env(:sanctum, :caller_memo_ttl_ms, 600_000)
+
+        stream = open_stream(frame.bearer)
+        wait_until(fn -> subscribed?(source) end, @stream_ms)
+
+        {:ok, _} = apply(TinctureAuth, act, [source, frame.id])
+        assert {:ok, conn} = Task.yield(stream, 5_000) || Task.shutdown(stream)
+
+        # A suspended frame is the shell's to show again; a revoked bearer
+        # opens nothing.
+        class = if act == :suspend_frame, do: "forbidden", else: "unauthenticated"
+
+        assert [%{event: "refusal", data: %{"class" => ^class}}] =
+                 TinctureWire.decode_stream(conn.resp_body)
+
+        refute subscribed?(source)
+      end
+    end
+
     test "bound to its holder is each person's own, and a named subject is refused",
          %{source: source} do
       digest =
@@ -958,7 +1058,13 @@ defmodule Emissary.Web.TinctureDataControllerTest do
   defp grant!(source, name, kind, flows, revision \\ 1, policy \\ nil) do
     node = "tincture:local.#{name}"
     policy = policy || policy(name, flows)
-    id = "prof_flows_#{name}_#{kind}"
+
+    # An owner grant replaces the one a frame was granted under
+    # (`Sanctum.Test.ConsentFixtures.grant_tincture!/3`'s profile).
+    id =
+      if kind == :owner,
+        do: "prof_" <> String.replace(name, "-", "_"),
+        else: "prof_flows_#{name}_#{kind}"
 
     :ok =
       Sanctum.Test.ConsentFixtures.seed_head!(
@@ -970,7 +1076,7 @@ defmodule Emissary.Web.TinctureDataControllerTest do
           scope: :versionless,
           pinned_version: "",
           invoke_mode: if(kind == :public, do: :edge_only, else: :open_inert),
-          shape_digest: "sha256:shape",
+          shape_digest: :live,
           commit_digest: "sha256:commit",
           resolved_policy: policy,
           activation: %{node => "sha256:act"}
@@ -1243,7 +1349,9 @@ defmodule Emissary.Web.TinctureDataControllerTest do
       policy = policy(name, [])
 
       :ok =
-        Sanctum.Test.ConsentFixtures.hand_edit_head!(source, "prof_flows_#{name}_owner",
+        Sanctum.Test.ConsentFixtures.hand_edit_head!(
+          source,
+          "prof_" <> String.replace(name, "-", "_"),
           resolved_policy: policy,
           blob_digest: Prima.JCS.hash_binary(policy)
         )
@@ -1293,16 +1401,16 @@ defmodule Emissary.Web.TinctureDataControllerTest do
 
     test "a tincture that connects nowhere, and a canvas, read nothing of the grant",
          %{source: source} do
-      # A head whose grant does not even parse, which the frame's revision
-      # names: nothing reads its flows.
-      revision = grant!(source, "plain-flows", :owner, [], 1, "{}")
+      # A head whose ingress declares no flow at all, which the frame's
+      # revision names: nothing it reads needs one.
       digest = declared!(source, "plain-flows")
+      revision = grant!(source, "plain-flows", :owner, [])
       frame = frame!(source, "plain-flows", digest, revision)
 
       assert action(frame.bearer, "system.status").status == 200
 
       canvas = canvas!(source, "flow-canvas", [%{"name" => "mcp_servers.changes"}])
-      grant!(source, "flow-canvas", :owner, [], 1, "{}")
+      grant!(source, "flow-canvas", :owner, [])
       mine = frame!(source, "flow-canvas", canvas, 1)
 
       stream =
@@ -1331,9 +1439,10 @@ defmodule Emissary.Web.TinctureDataControllerTest do
   defp validation!(source, name, digest) do
     reference = %{publisher: "local", name: name, version: @version}
     frame = frame_id()
+    revision = standing_revision!(source, name)
 
     {:ok, %{credential: bearer, id: id}} =
-      TinctureAuth.mint_validation_credential(source, reference, digest, 0, frame)
+      TinctureAuth.mint_validation_credential(source, reference, digest, revision, frame)
 
     %{bearer: bearer, id: id, frame_id: frame}
   end

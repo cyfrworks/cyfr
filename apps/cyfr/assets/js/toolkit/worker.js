@@ -17,7 +17,8 @@
 //     installs the record first.
 //
 // Each worker takes its boot from the host alone: the first trusted message
-// on its own global channel, never a port.
+// on its own global channel, never a port. After its boot the streams worker
+// reads only a renewed credential there.
 
 import {
   BEARER_HEADER,
@@ -263,10 +264,13 @@ export function startStreamsWorker(scope, {fetchFn}) {
   let port = null
   const subs = new Map()
 
+  // The boot is the first trusted message on the worker's own channel; after
+  // it, only a renewed credential is read there.
   scope.addEventListener("message", (event) => {
-    if (event.isTrusted !== true || booted) return
+    if (event.isTrusted !== true) return
+    if (booted) return renewed(decodeToStreams(event.data))
     const boot = decodeToStreams(event.data)
-    if (boot === null) return
+    if (boot === null || boot.t !== "boot") return
 
     booted = true
     credential = boot.credential
@@ -279,6 +283,19 @@ export function startStreamsWorker(scope, {fetchFn}) {
     if (typeof port.addEventListener === "function") port.addEventListener("close", () => post(fromStreams.lost()))
   })
 
+  // A renewed credential opens every later stream, and every stream already
+  // open is opened again under it: the new connection takes over once the
+  // endpoint answers it, and only then is the old one let go, so a stream
+  // outlives the deadline of the bearer it was first opened under. The
+  // module worker hears nothing of it but the events the new connection
+  // carries, its refresh among them. A takeover the endpoint refuses leaves
+  // the old connection as it was, ending at its own deadline.
+  function renewed(message) {
+    if (message === null || message.t !== "credential") return
+    credential = message.credential
+    for (const sub of subs.values()) if (sub.opened) takeOver(sub)
+  }
+
   function onRequest(data) {
     const req = decodeRequest(data)
     if (req === null) return
@@ -288,7 +305,8 @@ export function startStreamsWorker(scope, {fetchFn}) {
       if (sub) {
         subs.delete(req.sub)
         sub.closing = true
-        sub.controller.abort()
+        sub.attempt.controller.abort()
+        if (sub.pending) sub.pending.controller.abort()
       }
       return
     }
@@ -303,66 +321,113 @@ export function startStreamsWorker(scope, {fetchFn}) {
       return send(answer.refused(req.sub, "forbidden", "This canvas does not declare that stream.", "admission"))
     }
 
-    const sub = {controller: new AbortController(), closing: false}
+    const sub = {req, send, viaHost, attempt: attempt(), pending: null, opened: false, closing: false}
     subs.set(req.sub, sub)
-    open(req, sub, send, viaHost).catch(() => {
+    open(sub).catch(() => {
       // Whatever broke, the stream ends here and its reader hears of it.
-      sub.controller.abort()
+      sub.attempt.controller.abort()
+      if (sub.pending) sub.pending.controller.abort()
       if (subs.get(req.sub) === sub) subs.delete(req.sub)
       if (!sub.closing) send(answer.closed(req.sub, "unavailable"))
       sub.closing = true
     })
   }
 
-  async function open(req, sub, send, viaHost) {
-    const ended = (error) => {
-      if (subs.get(req.sub) === sub) subs.delete(req.sub)
-      if (!sub.closing) send(answer.closed(req.sub, error))
-    }
-    const refused = (code, message, stage = null) => {
-      if (subs.get(req.sub) === sub) subs.delete(req.sub)
-      if (!sub.closing) send(answer.refused(req.sub, code, message, stage))
+  // One connection of a stream, under the credential held when it is made.
+  const attempt = () => ({controller: new AbortController(), credential})
+
+  function ended(sub, error) {
+    if (subs.get(sub.req.sub) === sub) subs.delete(sub.req.sub)
+    if (!sub.closing) sub.send(answer.closed(sub.req.sub, error))
+  }
+
+  async function open(sub) {
+    const first = sub.attempt
+    const answered = await connect(sub.req, first)
+    if (!answered.ok) {
+      if (subs.get(sub.req.sub) === sub) subs.delete(sub.req.sub)
+      if (!sub.closing) sub.send(answer.refused(sub.req.sub, answered.code, answered.message, answered.stage))
+      return
     }
 
+    if (sub.closing) return first.controller.abort()
+    sub.opened = true
+    sub.send(answer.opened(sub.req.sub))
+    // A credential renewed while this connection was being made opens it
+    // again under the newest.
+    if (first.credential !== credential) takeOver(sub)
+    await pump(sub, first, answered.response)
+  }
+
+  function takeOver(sub) {
+    if (sub.pending) sub.pending.controller.abort()
+    const next = attempt()
+    sub.pending = next
+    connect(sub.req, next)
+      .then((answered) => {
+        if (sub.pending !== next) return
+        sub.pending = null
+        if (!answered.ok || sub.closing || subs.get(sub.req.sub) !== sub) return next.controller.abort()
+        const previous = sub.attempt
+        sub.attempt = next
+        previous.controller.abort()
+        if (next.credential !== credential) takeOver(sub)
+        return pump(sub, next, answered.response)
+      })
+      .catch(() => {
+        next.controller.abort()
+        if (sub.pending === next) sub.pending = null
+        if (sub.attempt === next) ended(sub, "unavailable")
+      })
+  }
+
+  // The stream request under `conn`'s credential: `{ok: true, response}` for
+  // a stream, or the refusal its reader hears.
+  async function connect(req, conn) {
     let response
     try {
       response = await fetchFn(streamUrl, {
         method: "POST",
-        headers: {"content-type": "application/json", [BEARER_HEADER]: bearer(credential)},
+        headers: {"content-type": "application/json", [BEARER_HEADER]: bearer(conn.credential)},
         body: JSON.stringify(httpRequest("stream_open", {stream: req.name, subject: req.subject})),
         credentials: "omit",
         cache: "no-store",
         redirect: "error",
-        signal: sub.controller.signal
+        signal: conn.controller.signal
       })
     } catch (_error) {
-      return refused("unavailable", "The endpoint could not be reached.")
+      return {ok: false, code: "unavailable", message: "The endpoint could not be reached.", stage: null}
     }
 
     const type = (response.headers.get("content-type") || "").split(";")[0].trim()
-    if (type !== STREAM_CONTENT_TYPE) {
-      let body = null
-      try {
-        body = await response.json()
-      } catch (_error) {
-        body = null
-      }
-      sub.controller.abort()
-      const decoded = decodeHttpAnswer("stream_open", body)
-      if (decoded.refusal) return refused(decoded.refusal.class, decoded.refusal.message, decoded.refusal.stage)
-      return refused("invalid_answer", "The endpoint's answer could not be read.")
-    }
+    if (type === STREAM_CONTENT_TYPE) return {ok: true, response}
 
-    if (sub.closing) return sub.controller.abort()
-    send(answer.opened(req.sub))
+    let body = null
+    try {
+      body = await response.json()
+    } catch (_error) {
+      body = null
+    }
+    conn.controller.abort()
+    const decoded = decodeHttpAnswer("stream_open", body)
+    if (decoded.refusal) {
+      return {ok: false, code: decoded.refusal.class, message: decoded.refusal.message, stage: decoded.refusal.stage}
+    }
+    return {ok: false, code: "invalid_answer", message: "The endpoint's answer could not be read.", stage: null}
+  }
+
+  // A connection's events reach the stream's reader only while it is the
+  // stream's own; one taken over or let go says nothing more.
+  async function pump(sub, conn, response) {
+    const own = () => sub.attempt === conn && !sub.closing
 
     // A record is made only here: from an event of a feed's stream this
     // worker opened for a declared pair, and only for that pair's feed,
     // whatever feed the event's own data names.
     const parser = sseParser((event) => {
-      if (sub.closing) return
-      const record = viaHost ? recordFromEnvelope(event.data, req.subject) : null
-      send(answer.event(req.sub, event), record)
+      if (!own()) return
+      const record = sub.viaHost ? recordFromEnvelope(event.data, sub.req.subject) : null
+      sub.send(answer.event(sub.req.sub, event), record)
     })
 
     const decoder = new TextDecoder()
@@ -375,10 +440,10 @@ export function startStreamsWorker(scope, {fetchFn}) {
         parser.push(decoder.decode(value, {stream: true}))
       }
       parser.push(decoder.decode())
-      ended(null)
+      if (sub.attempt === conn) ended(sub, null)
     } catch (_error) {
-      sub.controller.abort()
-      ended("unavailable")
+      conn.controller.abort()
+      if (sub.attempt === conn) ended(sub, "unavailable")
     } finally {
       parser.end()
     }

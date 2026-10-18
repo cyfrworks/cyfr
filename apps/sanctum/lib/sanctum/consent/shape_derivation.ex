@@ -105,8 +105,7 @@ defmodule Sanctum.Consent.ShapeDerivation do
         {:ok, digest}
 
       _ ->
-        with {:ok, input} <- shape_input(ctx, source_ref),
-             {:ok, digest} <- ShapeDigest.compute(input) do
+        with {:ok, digest} <- digest(ctx, source_ref, :latest) do
           if key, do: Arca.Cache.put(key, digest, @live_cache_ttl_ms)
           {:ok, digest}
         end
@@ -120,13 +119,33 @@ defmodule Sanctum.Consent.ShapeDerivation do
   defp live_shape_key(_ctx, _source_ref), do: nil
 
   @doc """
+  The shape digest of the installed version `version` of the name-level
+  `source_ref`, derived fresh as `live_digest/2` derives the newest's:
+  what a frame that opens that version asks for, compared with its
+  consent's shape as a run compares the newest's. `{:error, reason}` as
+  `live_digest/2`'s, a version no row holds among them.
+  """
+  @spec version_digest(Sanctum.Context.t(), String.t(), String.t()) ::
+          {:ok, String.t()} | {:error, term()}
+  def version_digest(ctx, source_ref, version) when is_binary(version),
+    do: digest(ctx, source_ref, version)
+
+  defp digest(ctx, source_ref, version) do
+    with {:ok, input} <- shape_input(ctx, source_ref, version) do
+      ShapeDigest.compute(input)
+    end
+  end
+
+  @doc """
   The `ShapeDigest.compute/1` input derived from live state. An agent
   source's shape also carries its model target (`catalyst#model`): the
   model an agent runs on is what it may do, so changing it re-asks.
   """
   @spec shape_input(Sanctum.Context.t(), String.t()) :: {:ok, map()} | {:error, term()}
-  def shape_input(ctx, source_ref) do
-    with {:ok, row, manifest} <- manifest_row(ctx, source_ref),
+  def shape_input(ctx, source_ref), do: shape_input(ctx, source_ref, :latest)
+
+  defp shape_input(ctx, source_ref, version) do
+    with {:ok, row, manifest} <- manifest_row(ctx, source_ref, version),
          {:ok, releases} <- dependency_releases(ctx, row, source_ref),
          needs = Needs.from_manifest(manifest) || [],
          :ok <- check_vault_projections(needs, source_ref),
@@ -271,7 +290,7 @@ defmodule Sanctum.Consent.ShapeDerivation do
   @spec manifest_blocks(Sanctum.Context.t(), String.t()) ::
           {:ok, [map()] | nil, map() | nil} | {:error, term()}
   def manifest_blocks(ctx, source_ref) do
-    with {:ok, _row, manifest} <- manifest_row(ctx, source_ref),
+    with {:ok, _row, manifest} <- manifest_row(ctx, source_ref, :latest),
          {:ok, caps} <- declared_caps(manifest, source_ref) do
       {:ok, Needs.from_manifest(manifest), if(Map.has_key?(manifest, "caps"), do: caps)}
     end
@@ -318,9 +337,9 @@ defmodule Sanctum.Consent.ShapeDerivation do
   # The row rides along for `shape_input/2`, which needs it to resolve the
   # activation closure; `manifest_blocks/2` above keeps the narrower shape
   # its other callers read.
-  defp manifest_row(ctx, source_ref) do
+  defp manifest_row(ctx, source_ref, version) do
     with {:ok, ref} <- Prima.ComponentRef.parse(source_ref),
-         {:ok, row} <- Components.get_latest(ctx, ref.name, ref.namespace, ref.type),
+         {:ok, row} <- row(ctx, ref, version),
          {:ok, manifest} <- manifest(row, source_ref) do
       {:ok, row, manifest}
     else
@@ -331,6 +350,11 @@ defmodule Sanctum.Consent.ShapeDerivation do
         error
     end
   end
+
+  defp row(ctx, ref, :latest), do: Components.get_latest(ctx, ref.name, ref.namespace, ref.type)
+
+  defp row(ctx, ref, version),
+    do: Components.get_component(ctx, ref.name, version, ref.namespace, ref.type)
 
   @doc """
   Expand tool patterns against the registered tool catalog. Grants are

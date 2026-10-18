@@ -96,6 +96,7 @@ defmodule Prism.CanvasValidationTest do
         updated_at: now
       })
 
+    Sanctum.Test.ConsentFixtures.grant_tincture!(ctx, "tincture:local.#{name}")
     Prism.TinctureRegistry.reload_athanor(ctx.athanor_id)
   end
 
@@ -352,14 +353,14 @@ defmodule Prism.CanvasValidationTest do
         Sanctum.Test.ConsentFixtures.seed_head!(
           ctx,
           %{
-            id: "prof_markets_canvas",
+            id: "prof_markets",
             kind: :owner,
             source_ref: "tincture:local.markets",
             label: "owner",
             status: :needs_consent
           },
           %{
-            id: "cons_markets_canvas",
+            id: "cons_markets",
             revision: 1,
             scope: :versionless,
             pinned_version: "",

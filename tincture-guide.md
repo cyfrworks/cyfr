@@ -15,7 +15,7 @@ The shell is the one place a tincture's frame is created. Launching a tincture:
 3. The shell mints a **frame credential** for this open, bound to the person, the tincture version and its release digest, the grant revision of the tincture's owner profile and a fresh frame id.
 4. On the frame's first load the shell posts it one handshake carrying a `MessagePort` and the frame id, and sends the frame credential over that port only. The SDK accepts the handshake only from its parent window, and only once.
 
-A canvas opens the same way, except that its page is the toolkit's host page and the toolkit, not the SDK, accepts the handshake, holds its end of the port and speaks the canvas's own wire (`Prima.CanvasWire`: `ready`, `tree`, `open`, `press` and `failed` to the shell; `boot`, `posture`, `covered`, `installed` and `state` from it), so the shell verbs below do not apply to it ([The Canvas](#the-canvas)).
+A canvas opens the same way, except that its page is the toolkit's host page and the toolkit, not the SDK, accepts the handshake, holds its end of the port and speaks the canvas's own wire (`Prima.CanvasWire`: `ready`, `tree`, `open`, `press` and `failed` to the shell; `boot`, `posture`, `covered`, `installed`, `state` and `credential` from it), so the shell verbs below do not apply to it ([The Canvas](#the-canvas)).
 
 From then on the SDK sends data requests to the endpoint with the frame credential as a bearer, and the shell verbs (`open`, `close`, `title`, `ready`, `credential`) over the port. The shell listens to no window message; anything arriving on the port that is not a shell verb for that frame is dropped. A reload or a navigation inside the frame gets no second handshake: the frame is spent until the person opens the tincture again.
 
@@ -73,7 +73,7 @@ A tincture is a canvas only when it names `frame.placement: "canvas"` and declar
 
 ### The toolkit and the tree
 
-A canvas does not load the SDK. Its frame's page is the toolkit's host page, `GET /_c/v1/<asset credential>/<frame id>`, which the shell frames for one open: the toolkit's host script, admitted by a nonce fresh to each page, and the toolkit's worker code as inert data the page never executes. The host script starts two workers from that data: the **module worker**, which imports the canvas's module from the version's files and calls its default export with the `canvas` object, and the **streams worker**, the only worker that holds the frame credential, which opens only the streams the version declares. The module runs with no window, no document, no port to the shell and no credential, and reaches the screen only through the trees it answers. The page and both workers run under one policy, which names only the open's own data path (`/_f/v1/o/<frame id>/`) and the version's files, under a sandbox of `allow-scripts` alone, and nothing on those paths redirects. The page's path carries the asset credential, so no proxy may log `/_c/v1/` paths either.
+A canvas does not load the SDK. Its frame's page is the toolkit's host page, `GET /_c/v1/<asset credential>/<frame id>`, which the shell frames for one open: the toolkit's host script, admitted by a nonce fresh to each page, and the toolkit's worker code as inert data the page never executes. The host script starts two workers from that data: the **module worker**, which imports the canvas's module from the version's files and calls its default export with the `canvas` object, and the **streams worker**, the only worker that holds the frame credential, which opens only the streams the version declares. While the canvas is shown the shell renews its credential and sends each new one as `credential`, which the host hands to the streams worker alone: later streams open under it, and each open stream is opened again under it and let go of on the old one once the endpoint answers, so a reader may read a stream's refresh again then. The module runs with no window, no document, no port to the shell and no credential, and reaches the screen only through the trees it answers. The page and both workers run under one policy, which names only the open's own data path (`/_f/v1/o/<frame id>/`) and the version's files, under a sandbox of `allow-scripts` alone, and nothing on those paths redirects. The page's path carries the asset credential, so no proxy may log `/_c/v1/` paths either.
 
 The module's `canvas` object:
 
@@ -268,7 +268,7 @@ data/athanors/{athanor_id}/components/tinctures/local/my-game/0.1.0/
 
 ### The declaration
 
-`frame`, `canvas`, `streams` and `actions` are the tincture's declaration. It is held to the rules at publish and read again at every open and every request: the declaration is the grant, and anything a frame asks for outside it is refused before it is dispatched. A version that declares more is consented to again.
+`frame`, `canvas`, `streams` and `actions` are the tincture's declaration. It is held to the rules at publish and read again at every open and every request, and it is never the grant: a version opens only under its owner profile's grant whose shape names what the version declares, so a tincture with no grant, or a version that declares more than its grant names, opens nothing and the shell asks the person for the grant instead. Anything a frame asks for outside its declaration is refused before it is dispatched.
 
 <!-- tincture:declaration -->
 | Block | Keys |
@@ -458,7 +458,7 @@ Declare `pointer_lock`, `fullscreen`, `gamepad` and `audio_autoplay` only as the
 | Requests per frame | `frame_invocation_max` per `frame_invocation_window_ms` (120 per minute by default), charged on every invoke, action and stream open; a public page is charged per address and tincture | refused `rate_limited` with its retry seconds |
 | Open streams per frame | `frame_stream_max_concurrent` (8) | refused `rate_limited` until one closes |
 | Request body | a host call's body (1 MiB) per invoke, action or stream open | a declared length over it is refused 413 before any of the body is read; a body of undeclared length is read up to it, then refused 413; either way the call rejects |
-| Frame credential lifetime | `frame_credential_deadline_s` (one hour), capped by the session's own | the shell renews it while the frame runs; past the session's end, refused: open the tincture again |
+| Frame credential lifetime | `frame_credential_deadline_s` (one hour), capped by the session's own | the shell renews it while the frame runs, a canvas's while it is shown; past the session's end, or a canvas hidden past it, refused: open the tincture again |
 | Asset credential window | `asset_credential_window_s` (one hour) | the shell mints the next one |
 | Version size | the registry's decompressed ceiling (256 MiB) | refused at publish |
 | Handshake wait | 30 seconds | the SDK rejects with `no_frame` |
@@ -469,7 +469,7 @@ Each setting is a platform setting (see the [Configuration Guide](configuration-
 
 ## Security Model
 
-- **The declaration is the grant.** A frame reaches only the components in `dependencies.static`, the actions in `actions` and the streams in `streams`; everything else is refused before dispatch, and every request is recorded as the gate's decision.
+- **The grant names the declaration.** A frame opens, and each of its requests is admitted, only under a grant whose shape names what its version declares. It reaches only the components in `dependencies.static`, the actions in `actions` and the streams in `streams`; everything else is refused before dispatch, and every request is recorded as the gate's decision.
 - **One credential per open.** The frame credential is minted for one frame of one person, held to that person's session or key at every request, suspended with its frame and revoked when it closes. A copy of it carries exactly the frame's authority for its remaining life and nothing wider.
 - **Files by path.** A private version's files open only under an asset credential that names that version's digest; a credential leaked in a URL opens that version's bytes for its window and nothing more.
 - **No secrets in the frame.** Component credentials are resolved server-side and outputs are secret-masked before they reach the browser.
@@ -495,7 +495,7 @@ RECOMMENDED:
 | `forbidden` (`frame_suspended`) | the frame is hidden and does not declare `frame.background` | act when shown, or declare `background` |
 | `forbidden` (`frame_moved`) | the version or its owner profile's grant changed since the frame opened | open the tincture again |
 | `forbidden` (undeclared) | the component, action or stream is not in the declaration | declare it and publish a new version |
-| `consent_required` | the tincture has no active profile for the route | grant its owner profile, or publish its public one |
+| `consent_required` | the tincture has no grant for the route that names what its version declares: none at all, one waiting for the person, or one made before the version declared more | grant it when the shell asks, or publish its public one |
 | `rate_limited` | the frame's request rate or open streams are over their bound | wait the seconds it names; invoke on events, not per frame |
 | `invalid_argument` | a request that does not match the wire | pass a reference, an operation name and an object |
 | `unavailable` | the server could not answer | retry |

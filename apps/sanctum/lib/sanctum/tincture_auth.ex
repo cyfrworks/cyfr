@@ -627,14 +627,16 @@ defmodule Sanctum.TinctureAuth do
   opens nothing until `resume_frame/2`. `:not_found` for a row that is
   not the person's in the context's athanor; `:revoked` for one revoked;
   `:validation` for a validation credential, which is never suspended and
-  stays as it is.
+  stays as it is. A suspension is announced once it is stored
+  (`Sanctum.Telemetry.frame_credential_changed/3`).
   """
   @spec suspend_frame(Context.t(), String.t()) ::
           {:ok, frame_row()}
           | {:error, :not_found | :revoked | :validation | :no_athanor | :unavailable}
   def suspend_frame(%Context{} = ctx, id) when is_binary(id) do
-    with {:ok, _row} <- own_frame(ctx, id) do
-      stored(Arca.FrameCredentials.suspend(Context.actor(ctx), id))
+    with {:ok, _row} <- own_frame(ctx, id),
+         {:ok, row} <- stored(Arca.FrameCredentials.suspend(Context.actor(ctx), id)) do
+      announced(row, :suspended)
     end
   end
 
@@ -651,9 +653,10 @@ defmodule Sanctum.TinctureAuth do
   and the answer is a new bearer for it.
 
   With `rotate: false` nothing is signed and the row keeps its deadline,
-  for a frame whose bearer is never replaced (a canvas's, whose wire
-  carries no second bearer): the row is resumed only before that
-  deadline, and the answer is its id and deadline.
+  for a frame that is not resumed past its deadline (a canvas's, which
+  lapses while hidden and is renewed only while shown): the row is
+  resumed only before that deadline, and the answer is its id and
+  deadline.
 
   `:expired` for a row past its deadline (a suspended one only with
   `rotate: false`), `:revoked` for one revoked, `:validation` for a
@@ -751,14 +754,24 @@ defmodule Sanctum.TinctureAuth do
   @doc """
   Revoke the frame credential `id` of the context's person, as the shell
   discards its frame. Revoking a revoked row answers it as it is; a
-  member that lost its slot may still revoke.
+  member that lost its slot may still revoke. A revocation is announced
+  once it is stored (`Sanctum.Telemetry.frame_credential_changed/3`).
   """
   @spec revoke_frame(Context.t(), String.t()) ::
           {:ok, frame_row()} | {:error, :not_found | :no_athanor | :unavailable}
   def revoke_frame(%Context{} = ctx, id) when is_binary(id) do
-    with {:ok, _row} <- own_frame(ctx, id) do
-      stored(Arca.FrameCredentials.revoke(Context.actor(ctx), id))
+    with {:ok, _row} <- own_frame(ctx, id),
+         {:ok, row} <- stored(Arca.FrameCredentials.revoke(Context.actor(ctx), id)) do
+      announced(row, :revoked)
     end
+  end
+
+  # A suspension or a revocation is a standing change, announced once it
+  # is stored, so a stream held open under the credential on any member
+  # is re-established at once.
+  defp announced(row, change) do
+    Sanctum.Telemetry.frame_credential_changed(row.user_id, row.id, change)
+    {:ok, row}
   end
 
   @doc """

@@ -203,12 +203,19 @@ defmodule Sanctum.Test.ConsentFixtures do
   Each vault entry a ref names is minted first if it does not exist: a
   reference row carries a foreign key to the entry, so a case that spells
   a binding spells an entry that is there, as a commit's would be.
+
+  `shape_digest: :live` is the shape of the source's newest installed
+  version, derived as `Sanctum.Consent.ShapeDerivation.live_digest/2`
+  derives it, as a commit made now records it, so the head stands for
+  that version: a tincture's frame opens under it, and a version that
+  reads more asks again. A source with none installed, and a case that
+  spells a digest of its own, hold a head that matches no version.
   """
   def seed_head!(%Context{} = ctx, profile, consent) do
     consent =
-      Map.put_new_lazy(consent, :blob_digest, fn ->
-        Prima.JCS.hash_binary(consent.resolved_policy)
-      end)
+      consent
+      |> Map.put_new_lazy(:blob_digest, fn -> Prima.JCS.hash_binary(consent.resolved_policy) end)
+      |> live_shape(ctx, profile)
 
     forget!(ctx, profile.id)
     vault_refs = Map.get(consent, :vault_refs, [])
@@ -222,6 +229,76 @@ defmodule Sanctum.Test.ConsentFixtures do
       )
 
     :ok
+  end
+
+  # Derived fresh, never from the live-shape cache: a case's rows are
+  # written beside the registry, whose sweep would drop a shape an earlier
+  # case cached for the same source. A source with no installed version
+  # has no shape, and its head names one no version has.
+  defp live_shape(%{shape_digest: :live} = consent, ctx, %{source_ref: source_ref}) do
+    digest =
+      case Sanctum.Consent.ShapeDerivation.shape_input(ctx, source_ref) do
+        {:ok, input} ->
+          {:ok, digest} = Sanctum.Consent.ShapeDigest.compute(input)
+          digest
+
+        {:error, _no_installed_version} ->
+          "sha256:no-installed-version"
+      end
+
+    %{consent | shape_digest: digest}
+  end
+
+  defp live_shape(consent, _ctx, _profile), do: consent
+
+  @doc """
+  Grant the tincture `ref` (name-level) as the person would for its newest
+  installed version: an active owner profile and an open, versionless head
+  at `revision` whose shape is that version's and whose policy grants its
+  own node an ingress edge with nothing on it, so its frame opens. The
+  profile is `prof_<name>`, `-` spelled `_`, under the label a commit's
+  default grant takes, so a case that seeds that id later replaces this
+  grant and a commit the person makes revises it. Answers the profile id.
+  """
+  def grant_tincture!(%Context{} = ctx, ref, revision \\ 1) do
+    {:ok, %{name: name}} = Prima.ComponentRef.parse(ref)
+    profile_id = "prof_" <> String.replace(name, "-", "_")
+
+    :ok =
+      seed_head!(
+        ctx,
+        %{id: profile_id, kind: :owner, source_ref: ref, label: "default", status: :active},
+        %{
+          id: "cons_" <> String.replace(name, "-", "_"),
+          revision: revision,
+          scope: :versionless,
+          pinned_version: "",
+          invoke_mode: :open_inert,
+          shape_digest: :live,
+          commit_digest: "sha256:commit",
+          resolved_policy: empty_policy(ref),
+          activation: %{ref => "sha256:act"}
+        }
+      )
+
+    profile_id
+  end
+
+  @doc """
+  The policy of a grant of the source `ref` (name-level) that gives its
+  own node an ingress edge with nothing on it: a head the loader admits,
+  granting nothing.
+  """
+  def empty_policy(ref) when is_binary(ref) do
+    Jason.encode!(%{
+      "canonical" => "jcs-1",
+      "nodes" => %{
+        ref => %{
+          "limits" => Prima.Test.AuthorityFixtures.limits_map(),
+          "edges" => %{"@ingress" => %{}}
+        }
+      }
+    })
   end
 
   @doc """

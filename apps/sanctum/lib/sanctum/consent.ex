@@ -230,6 +230,20 @@ defmodule Sanctum.Consent do
   end
 
   @doc """
+  The grant the installed tincture version `reference` (pinned to its
+  version) opens under: its one active owner profile's head, held to that
+  version by the decision a run is held to, so a version that reads more
+  than the consent's shape asks again (`Sanctum.Consent.TinctureGrant`).
+  `{:error, :ungranted}` while the person has to consent, a tincture with
+  no grant at all among them; `{:error, :unavailable}` when it could not
+  be read; `{:error, {:refused, reason}}` for damage no consent repairs.
+  """
+  @spec tincture_grant(Sanctum.Context.t(), String.t()) ::
+          {:ok, Sanctum.Consent.TinctureGrant.t()}
+          | {:error, Sanctum.Consent.TinctureGrant.refusal()}
+  defdelegate tincture_grant(ctx, reference), to: Sanctum.Consent.TinctureGrant, as: :fetch
+
+  @doc """
   What one vault row of the head revision `consent` (from
   `head_consent/2`) binds now, read by its tag: the athanor's own entry,
   a selection of another profile's key resolved as a run resolves it

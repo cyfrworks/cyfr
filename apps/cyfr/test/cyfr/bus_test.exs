@@ -113,6 +113,7 @@ defmodule Cyfr.BusTest do
                "sanctum:athanor_archived",
                "sanctum:caller_invalidated",
                "sanctum:sessions",
+               "sanctum:frame_credentials:<user_id>",
                "sanctum:memberships:<user_id>",
                "platform:notify",
                "health_check:<nonce>",

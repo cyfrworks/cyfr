@@ -19,11 +19,13 @@ defmodule Emissary.Web.TinctureDataController do
   request. The context it builds is the frame's person in the frame's
   athanor, bound to the tincture version the frame opened. That version
   is read again (`Compendium.inspect_component/2`) and must still carry
-  the release digest the credential names, and the tincture's one active
-  owner profile must still be at the grant revision it names (0 while it
-  has none): a credential presented for another version or another grant
-  is refused. A bearer copied out of its frame carries exactly this
-  authority and nothing wider.
+  the release digest the credential names, and the grant that version
+  opens under must still be the revision it names
+  (`Sanctum.Consent.tincture_grant/2`): a credential presented for
+  another version or another grant is refused, and one whose version
+  reads more than its grant's shape, or whose tincture holds no grant, is
+  refused `consent_required`. A bearer copied out of its frame carries
+  exactly this authority and nothing wider.
 
   A public tincture's page names the tincture as `public` and presents no
   bearer: it is admitted only for a tincture that is public, under the
@@ -42,9 +44,10 @@ defmodule Emissary.Web.TinctureDataController do
 
   ## What it may reach
 
-  The tincture's declaration is the grant: an invoke names a component
-  among its `dependencies.static` (`Compendium.tincture_invokes?/2`), an
-  action one of its `actions`, a stream one of its `streams` with a
+  Under that grant, the tincture's declaration bounds what it reaches:
+  an invoke names a component among its `dependencies.static`
+  (`Compendium.tincture_invokes?/2`), an action one of its `actions`, a
+  stream one of its `streams` with a
   subject that declaration takes — and none for a stream bound to its
   holder, whose subject the gate supplies. Anything else is refused before
   dispatch. An admitted invoke runs
@@ -66,7 +69,7 @@ defmodule Emissary.Web.TinctureDataController do
   ingress edge of the tincture's node in the grant its route roots at: the
   owner profile's head at the revision the credential names (read once,
   with that revision) for a frame, the public profile's head for a public
-  page. A tincture with no grant declares no flow. Otherwise it is refused
+  page. A public page with no grant declares no flow. Otherwise it is refused
   `forbidden` with the classes and the origin (`Prima.Flow.refusal/2`). An
   open stream is held to the same check at each revalidation, against the
   grant as it is read then, and ends with that refusal as its last event.
@@ -357,18 +360,30 @@ defmodule Emissary.Web.TinctureDataController do
     end
   end
 
-  # The head of the tincture's one active owner profile, whose revision
-  # must be the credential's, or none while it holds none, at revision 0 —
-  # read as the shell reads it when it mints. The head is answered beside
-  # the check, so what the frame is held to later is this same read.
-  defp grant_revision(ctx, %{publisher: publisher, name: name}, revision) do
-    reference = Prima.ComponentRef.build("tincture", publisher, name)
+  # The grant the version opens under (`Sanctum.Consent.tincture_grant/2`,
+  # read as the shell reads it when it mints), whose revision must be the
+  # credential's: a version that reads more than the grant names, or a
+  # tincture with no grant, waits for the person and reaches nothing. The
+  # head is answered beside the check, so what the frame is held to later
+  # is this same read.
+  defp grant_revision(ctx, %{publisher: publisher, name: name, version: version}, revision) do
+    reference = Prima.ComponentRef.build("tincture", publisher, name, version)
 
-    with {:ok, entries} <- Sanctum.Consent.profiles(ctx, reference),
-         {:ok, head} <- head(ctx, Prima.Authority.RootSelect.select(entries, :default)) do
-      if head_revision(head) == revision, do: {:ok, head}, else: {:error, frame_moved()}
-    else
-      {:error, _unanswered} -> {:error, Prima.Refusal.classify(:unavailable)}
+    case Sanctum.Consent.tincture_grant(ctx, reference) do
+      {:ok, %{revision: ^revision, profile: profile, consent: consent}} ->
+        {:ok, {profile, consent}}
+
+      {:ok, _another_revision} ->
+        {:error, frame_moved()}
+
+      {:error, :ungranted} ->
+        {:error, Prima.Refusal.classify(:consent_required)}
+
+      {:error, :unavailable} ->
+        {:error, Prima.Refusal.classify(:unavailable)}
+
+      {:error, {:refused, reason}} ->
+        {:error, Sanctum.Refusals.classify(reason)}
     end
   end
 
@@ -383,9 +398,6 @@ defmodule Emissary.Web.TinctureDataController do
   end
 
   defp head(_ctx, {:error, _no_profile}), do: {:ok, :none}
-
-  defp head_revision({_profile, %{revision: revision}}), do: revision
-  defp head_revision(:none), do: 0
 
   # A public tincture's page: the tincture must be public in the athanor
   # its address names, and nothing runs under anything but that

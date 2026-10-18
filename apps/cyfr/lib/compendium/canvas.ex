@@ -160,7 +160,7 @@ defmodule Compendium.Canvas do
          {:ok, outcome} <- outcome(Map.get(args, "outcome")),
          {:ok, digest} <- release_digest(ctx, name, version),
          :ok <- consume(ctx, frame, digest),
-         :ok <- granted(ctx, name, outcome),
+         :ok <- granted(ctx, name, version, outcome),
          {:ok, stored, revision} <- document(ctx, name),
          {:ok, document, published} <- trial(ctx, name, stored, revision, version, outcome) do
       {:ok,
@@ -195,7 +195,7 @@ defmodule Compendium.Canvas do
          {:ok, kept} <- kept(stored, name),
          {:ok, installed} <- installed(ctx, name),
          :ok <- still_installed(installed, name, kept),
-         :ok <- granted(ctx, name, "tree"),
+         :ok <- granted(ctx, name, kept, "tree"),
          restored = %{stored | working: kept, kept: stored.working},
          {:ok, published} <- publish(ctx, name, restored, revision) do
       {:ok, %{canvas: name, revision: published, document: restored}}
@@ -485,16 +485,18 @@ defmodule Compendium.Canvas do
   end
 
   # Only a tree activates, and a version activates only under the grant
-  # its tincture holds now.
-  defp granted(ctx, name, "tree") do
-    case Compendium.tincture_grant_revision(ctx, reference(name)) do
+  # its tincture holds now, held to that version: one that reads more than
+  # the grant names waits for the person as one with no grant does.
+  defp granted(ctx, name, version, "tree") do
+    case Compendium.tincture_grant_revision(ctx, reference(name, version)) do
       {:ok, _revision} -> :ok
       {:error, :ungranted} -> {:error, :consent_required}
       {:error, :unavailable} -> {:error, {:unavailable, "Consent"}}
+      {:error, {:refused, reason}} -> {:error, reason}
     end
   end
 
-  defp granted(_ctx, _name, _outcome), do: :ok
+  defp granted(_ctx, _name, _version, _outcome), do: :ok
 
   # A tree for the version already working changes nothing: publishing it
   # would make the working version its own kept one and lose the way back.

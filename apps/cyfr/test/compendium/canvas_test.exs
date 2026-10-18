@@ -404,12 +404,12 @@ defmodule Compendium.CanvasTest do
     test "activation re-checks the grant though validation ran under it", %{ctx: ctx} do
       v1 = write!(ctx)
       owner_profile!(ctx, :active)
-      assert {:ok, 1} = Compendium.tincture_grant_revision(ctx, @reference)
+      assert {:ok, 1} = Compendium.tincture_grant_revision(ctx, "#{@reference}:#{v1}")
       trial = trial!(ctx, v1)
 
       # The owner profile waits for the person again: nothing activates.
       owner_profile!(ctx, :needs_consent)
-      assert {:error, :ungranted} = Compendium.tincture_grant_revision(ctx, @reference)
+      assert {:error, :ungranted} = Compendium.tincture_grant_revision(ctx, "#{@reference}:#{v1}")
 
       %{revision: revision} = versions!(ctx)
       assert {:error, :consent_required} = activate(ctx, v1, trial.frame)
@@ -746,8 +746,11 @@ defmodule Compendium.CanvasTest do
     )
   end
 
+  # A version written and granted as the person would grant it, at
+  # revision 1 (`owner_profile!/2`).
   defp write!(ctx) do
     {:ok, %{version: version}} = Canvas.write(ctx, write_args())
+    owner_profile!(ctx, :active)
     version
   end
 
@@ -812,7 +815,7 @@ defmodule Compendium.CanvasTest do
 
     revision =
       revision ||
-        case Compendium.tincture_grant_revision(ctx, @reference) do
+        case Compendium.tincture_grant_revision(ctx, "#{@reference}:#{version}") do
           {:ok, revision} -> revision
         end
 
@@ -832,29 +835,29 @@ defmodule Compendium.CanvasTest do
 
   # The canvas's one owner profile, active or waiting for the person.
   defp owner_profile!(ctx, status) do
-    policy = "{}"
+    policy = ConsentFixtures.empty_policy(@reference)
 
     :ok =
       ConsentFixtures.seed_head!(
         ctx,
         %{
-          id: "prof_canvas_markets",
+          id: "prof_markets",
           kind: :owner,
           source_ref: @reference,
           label: "owner",
           status: status
         },
         %{
-          id: "cons_canvas_markets",
+          id: "cons_markets",
           revision: 1,
           scope: :versionless,
           pinned_version: "",
           invoke_mode: :open_inert,
-          shape_digest: "sha256:shape",
+          shape_digest: :live,
           commit_digest: "sha256:commit",
           blob_digest: Prima.JCS.hash_binary(policy),
           resolved_policy: policy,
-          activation: %{}
+          activation: %{@reference => "sha256:act"}
         }
       )
   end

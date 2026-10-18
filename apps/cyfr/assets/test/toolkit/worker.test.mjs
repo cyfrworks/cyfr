@@ -265,6 +265,27 @@ describe("the shell's values and the canvas's answers", () => {
   })
 })
 
+describe("a renewed credential", () => {
+  const RENEWED = "frm.v1.cmVuZXdlZC1mcmFtZS1jcmVkZW50aWFs"
+
+  test("goes to the streams worker alone, and a thawed generation starts under it", () => {
+    const host = playedHost()
+    host.boot()
+    const [module, streams] = [host.workers.module(), host.workers.streams()]
+
+    host.shell.send("credential", {credential: RENEWED})
+    host.shell.send("credential", {credential: ""})
+    assert.deepEqual(streams.posted.at(-1).data, {t: "credential", credential: RENEWED})
+    assert.equal(streams.posted.filter(({data}) => data.t === "credential").length, 1)
+    assert.ok(!JSON.stringify(module.posted.map(({data}) => data.t === "boot" ? {...data, port: null} : data)).includes(RENEWED))
+    assert.deepEqual(failedWith(host), [])
+
+    host.shell.send("state", {state: "frozen"})
+    host.shell.send("state", {state: "live"})
+    assert.equal(host.workers.streams().posted[0].data.credential, RENEWED)
+  })
+})
+
 describe("lifecycle", () => {
   test("freezing terminates both workers; thawing starts a new generation and rejects the earlier one's messages", () => {
     const host = playedHost()
@@ -567,6 +588,96 @@ export default async function (canvas) {
 })
 
 // ---- the workers' code, run in the test's own thread -------------------------------------
+
+describe("the streams worker moves its open streams onto a renewed credential", () => {
+  const RENEWED = "frm.v1.cmVuZXdlZC1mcmFtZS1jcmVkZW50aWFs"
+  const declared = [
+    {name: "runs.changes", subject: null},
+    {name: "mcp_servers.changes", subject: null}
+  ]
+
+  // A streams worker against an endpoint whose every stream sends one event
+  // naming the bearer it was opened under and stays open, unless `refuse`
+  // says that bearer is refused. `connections` holds each stream's response
+  // and whether the worker let go of it.
+  async function renewing({refuse = () => false} = {}) {
+    const connections = []
+    const endpoint = await stubEndpoint((request) => {
+      if (refuse(request.headers.authorization)) {
+        return {status: 403, body: {v: 1, ok: false, error: {class: "forbidden", message: "Not granted.", stage: "admission"}}}
+      }
+      return {
+        stream: (res) => {
+          const connection = {res, request, closed: false}
+          res.on("close", () => (connection.closed = true))
+          connections.push(connection)
+          res.write(sse({id: 1, event: "x", data: {bearer: request.headers.authorization}}))
+        }
+      }
+    })
+    cleanups.push(() => endpoint.close())
+    const scope = workerScope(ROLES.streams)
+    startStreamsWorker(scope, {fetchFn: fetch})
+
+    const channel = new MessageChannel()
+    const answers = []
+    channel.port1.onmessage = ({data: message}) => answers.push(message)
+    cleanups.push(() => channel.port1.close())
+    scope.deliver({t: "boot", credential: CREDENTIAL, data_url: `${endpoint.origin}/_f/v1/o/${FRAME}/`, streams: declared, port: channel.port2})
+    return {scope, endpoint, connections, answers, ask: (message) => channel.port1.postMessage(message)}
+  }
+
+  const events = (answers, sub) => answers.filter((m) => m.sub === sub && m.t === "event").map((m) => m.event.data)
+  const lifecycle = (answers, sub) => answers.filter((m) => m.sub === sub && m.t !== "event").map((m) => m.t)
+
+  test("an open stream is opened again under it and the old connection let go only once the new one answers; later streams open under it", async () => {
+    const {scope, endpoint, connections, answers, ask} = await renewing()
+    ask({t: "open", sub: 0, name: "runs.changes", subject: null})
+    await eventually(() => events(answers, 0).length === 1)
+
+    // A credential from the module worker's end of the channel is no
+    // credential; only the worker's own channel carries one.
+    ask({t: "credential", credential: "frm.v1.forged"})
+    scope.deliver({t: "credential", credential: RENEWED})
+
+    await eventually(() => connections.length === 2 && connections[0].closed)
+    assert.equal(connections[1].request.headers.authorization, `Bearer ${RENEWED}`)
+    assert.equal(connections[1].closed, false)
+
+    // The reader heard the new connection's events and nothing of the move.
+    await eventually(() => events(answers, 0).length === 2)
+    connections[1].res.write(sse({id: 2, event: "x", data: {after: true}}))
+    await eventually(() => events(answers, 0).length === 3)
+    assert.deepEqual(events(answers, 0), [{bearer: `Bearer ${CREDENTIAL}`}, {bearer: `Bearer ${RENEWED}`}, {after: true}])
+    assert.deepEqual(lifecycle(answers, 0), ["opened"])
+
+    ask({t: "open", sub: 1, name: "mcp_servers.changes", subject: null})
+    await eventually(() => connections.length === 3)
+    assert.equal(connections[2].request.headers.authorization, `Bearer ${RENEWED}`)
+    assert.ok(endpoint.requests.every((request) => request.headers.authorization !== "Bearer frm.v1.forged"))
+
+    // Closed by its reader, it lets go of the connection it holds now.
+    ask({t: "close", sub: 0})
+    await eventually(() => connections[1].closed)
+    assert.deepEqual(lifecycle(answers, 0), ["opened"])
+  })
+
+  test("a move the endpoint refuses leaves the open stream on its old connection", async () => {
+    const {scope, endpoint, connections, answers, ask} = await renewing({refuse: (bearer) => bearer === `Bearer ${RENEWED}`})
+    ask({t: "open", sub: 0, name: "runs.changes", subject: null})
+    await eventually(() => events(answers, 0).length === 1)
+
+    scope.deliver({t: "credential", credential: RENEWED})
+    await eventually(() => endpoint.requests.length === 2)
+    await pause(30)
+
+    assert.equal(connections.length, 1)
+    assert.equal(connections[0].closed, false)
+    connections[0].res.write(sse({id: 2, event: "x", data: {kept: true}}))
+    await eventually(() => events(answers, 0).length === 2)
+    assert.deepEqual(lifecycle(answers, 0), ["opened"])
+  })
+})
 
 describe("the streams worker makes binding records only from its own feed subscriptions", () => {
   const btc = feedEnvelopes.find((row) => row.envelope.feed === "btc").envelope

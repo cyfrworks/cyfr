@@ -11,9 +11,10 @@
 //
 //   * the module worker imports the canvas's module and runs the `canvas`
 //     API; it never holds the bearer;
-//   * the streams worker holds the bearer and opens only the streams the
-//     version declares (`boot.streams`); it never imports a module, and it
-//     is the only source of the binding records controls are labelled from.
+//   * the streams worker holds the bearer, and each one Prism renews it
+//     with, and opens only the streams the version declares
+//     (`boot.streams`); it never imports a module, and it is the only
+//     source of the binding records controls are labelled from.
 //
 // Every message is authenticated by the channel it arrives on. A binding
 // record, or anything else but a tree or a failure, on the module worker's
@@ -132,9 +133,18 @@ export function createHost(env) {
         return value("installed", args.tinctures)
       case "state":
         return args.state === "frozen" ? freeze() : thaw()
+      case "credential":
+        return renew(args.credential)
       default:
         return
     }
+  }
+
+  // A renewed credential goes to the streams worker alone, and is the one a
+  // thawed generation starts with.
+  function renew(credential) {
+    boot.credential = credential
+    if (current) current.streams.postMessage(toStreams.credential(credential))
   }
 
   function post(verb, args) {

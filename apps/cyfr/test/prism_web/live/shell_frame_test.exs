@@ -47,8 +47,10 @@ defmodule PrismWeb.ShellFrameTest do
   end
 
   # A tincture version in the athanor's tree and its component row, with
-  # `frame` as its `tincture.frame` block. Answers the row's release digest.
-  defp tincture!(ctx, name, frame \\ %{}) do
+  # `frame` as its `tincture.frame` block, granted at revision 1 as the
+  # person would grant it (`owner_profile!/3`) unless `granted: false`.
+  # Answers the row's release digest.
+  defp tincture!(ctx, name, frame \\ %{}, opts \\ []) do
     manifest = %{
       "name" => name,
       "type" => "tincture",
@@ -88,6 +90,7 @@ defmodule PrismWeb.ShellFrameTest do
       })
 
     acknowledged!(ctx)
+    if Keyword.get(opts, :granted, true), do: owner_profile!(ctx, name, 1)
     Prism.TinctureRegistry.reload_athanor(ctx.athanor_id)
     release_digest
   end
@@ -107,7 +110,7 @@ defmodule PrismWeb.ShellFrameTest do
   end
 
   defp owner_profile!(ctx, name, revision) do
-    policy = "{}"
+    policy = ConsentFixtures.empty_policy("tincture:local.#{name}")
 
     :ok =
       ConsentFixtures.seed_head!(
@@ -125,11 +128,11 @@ defmodule PrismWeb.ShellFrameTest do
           scope: :versionless,
           pinned_version: "",
           invoke_mode: :open_inert,
-          shape_digest: "sha256:shape",
+          shape_digest: :live,
           commit_digest: "sha256:commit",
           blob_digest: Prima.JCS.hash_binary(policy),
           resolved_policy: policy,
-          activation: %{}
+          activation: %{"tincture:local.#{name}" => "sha256:act"}
         }
       )
   end
@@ -395,12 +398,18 @@ defmodule PrismWeb.ShellFrameTest do
       assert {:error, :revoked} = verify(bearer)
     end
 
-    test "a tincture without an owner consent binds grant revision 0", %{conn: conn, ctx: ctx} do
-      tincture!(ctx, "plain-dash")
+    test "a tincture with no grant opens nothing and is asked for its grant", %{
+      conn: conn,
+      ctx: ctx
+    } do
+      tincture!(ctx, "plain-dash", %{}, granted: false)
       view = shell!(conn)
-      open!(view, "plain-dash")
+      html = open!(view, "plain-dash")
 
-      assert row(frame_id(view, "plain-dash")).grant_revision == 0
+      assert html =~ ~s(data-tincture-state="ungranted")
+      refute html =~ "<iframe"
+      assert rows() == []
+      assert render(view) =~ "Grant tincture:local.plain-dash"
     end
 
     test "closing a frame revokes it, and reopening mints a new frame and credential",

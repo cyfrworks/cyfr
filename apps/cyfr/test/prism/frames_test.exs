@@ -417,13 +417,14 @@ defmodule Prism.FramesTest do
   end
 
   describe "renewal" do
-    test "only a live frame that is neither a canvas's nor a validation's is renewed" do
+    test "a live frame holding a deadline is renewed, a shown canvas's included; a hidden canvas and a validation's never are" do
       assert Frames.renewable?(launch("a"))
       assert Frames.renewable?(app("home", "b", {:column, 0}))
+      assert Frames.renewable?(canvas_frame(:canvas, "home"))
       refute Frames.renewable?(launch("c", state: :frozen))
       refute Frames.renewable?(launch("d", state: :refused))
       refute Frames.renewable?(launch("e", deadline: nil))
-      refute Frames.renewable?(canvas_frame(:canvas, "home"))
+      refute Frames.renewable?(canvas_frame(:canvas, "home", state: :frozen, visible: false))
       refute Frames.renewable?(canvas_frame(:validation, "home"))
     end
 

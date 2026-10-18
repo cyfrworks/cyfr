@@ -33,9 +33,9 @@ defmodule Prism.Frames do
 
   An open reads the version's declaration through `Compendium`, and mints
   the frame's credential bound to the person, the tincture version and its
-  release digest, the grant revision of the tincture's owner profile
-  (`Compendium.tincture_grant_revision/2`) and a fresh frame id. No URL
-  carries the frame credential.
+  release digest, the grant revision of the tincture's owner profile held
+  to that version (`Compendium.tincture_grant_revision/2`) and a fresh
+  frame id. No URL carries the frame credential.
 
     * A canvas or validation frame opens only a version whose placement is
       `canvas`, and an app, a floating or a launched frame never opens one;
@@ -58,7 +58,8 @@ defmodule Prism.Frames do
 
   A step that refuses leaves a frame in state `:refused` that renders its
   refusal and holds no credential. A tincture whose one owner profile waits
-  for the person to consent again is refused as `:ungranted`. A frame
+  for the person to consent again, that holds no grant, or whose version
+  reads more than its grant's shape is refused as `:ungranted`. A frame
   remembers the actions its version declares (`actions`), which is what the
   shell reads before it honours a verb that needs one.
 
@@ -79,20 +80,22 @@ defmodule Prism.Frames do
   credential is resumed before it is signalled live, and the resume
   rotates its bearer (`Sanctum.TinctureAuth.resume_frame/3`); a resume
   that fails revokes the credential and leaves the frame showing its
-  refusal. A canvas is never handed a second bearer, so its resume keeps
-  its row's deadline and signs nothing, and a canvas whose deadline
-  passed while it was hidden is refused at its resume. A validation frame
-  is never frozen or thawed: its credential is never suspended.
+  refusal. A canvas's resume keeps its row's deadline and signs nothing,
+  so a canvas whose deadline passed while it was hidden is refused at its
+  resume. A validation frame is never frozen or thawed: its credential is
+  never suspended.
 
   ## Renewal
 
   A frame remembers its credential's `deadline`. While it is live, a
-  frame that is neither a canvas's nor a validation's is renewed before
-  that deadline (`renew/4`, `Sanctum.TinctureAuth.renew_frame/2`): its
-  bearer is rotated and its deadline moves. A new bearer from a renewal
-  or a resume replaces the frame's own while its handshake has not
-  happened, and is otherwise queued for the view to hand the frame over
-  its port (`take_replacements/1`), never kept.
+  frame that is not a validation's, a shown canvas's included, is renewed
+  before that deadline (`renew/4`, `Sanctum.TinctureAuth.renew_frame/2`):
+  its bearer is rotated and its deadline moves. A new bearer from a
+  renewal or a resume replaces the frame's own while its handshake has
+  not happened, and is otherwise queued for the view to hand the frame
+  over its port (`take_replacements/1`), never kept: a canvas's over its
+  wire as `credential` (`Prima.CanvasWire`), any other frame's as the
+  handshake's credential message.
 
   ## Attribution and the handshake
 
@@ -296,11 +299,12 @@ defmodule Prism.Frames do
 
   @doc """
   Whether the frame is one the view renews: live, holding a deadline, and
-  neither a canvas's nor a validation's, whose wire carries no second
-  bearer.
+  not a validation's, whose credential is never renewed. A shown canvas is
+  renewed as any frame is; a hidden one is frozen, so it is not.
   """
   @spec renewable?(frame()) :: boolean()
-  def renewable?(%{state: :live, key: key, deadline: %DateTime{}}), do: not canvas_key?(key)
+  def renewable?(%{state: :live, key: {:validation, _id}}), do: false
+  def renewable?(%{state: :live, deadline: %DateTime{}}), do: true
   def renewable?(_frame), do: false
 
   @doc "Whether `key` is a canvas-placement frame's: a canvas's or a validation's."
@@ -326,6 +330,9 @@ defmodule Prism.Frames do
   @spec ref_of(card()) :: ref()
   def ref_of(%{publisher: publisher, name: name}),
     do: Prima.ComponentRef.build("tincture", publisher, name)
+
+  defp version_ref(card),
+    do: Prima.ComponentRef.build("tincture", card.publisher, card.name, card.version)
 
   # ============================================================================
   # Pure: the declaration and the layout
@@ -939,9 +946,8 @@ defmodule Prism.Frames do
   @doc """
   Renew the live frame `frame_id` whose credential's deadline is
   `deadline` (`Sanctum.TinctureAuth.renew_frame/2`): its bearer is rotated
-  and its deadline moves. A frame not held, not live, a canvas's or a
-  validation's, or held at another deadline is `:stale` and nothing is
-  done. Otherwise the refusal decides:
+  and its deadline moves. A frame not held, not live, a validation's, or
+  held at another deadline is `:stale` and nothing is done. Otherwise the refusal decides:
 
   | refusal | renewal |
   |---|---|
@@ -990,8 +996,7 @@ defmodule Prism.Frames do
   end
 
   # A rotated bearer replaces the frame's own until its handshake hands it
-  # over, and is queued for the view after; a canvas's frame keeps its
-  # boot's bearer and its deadline.
+  # over, a canvas's inside its boot, and is queued for the view after.
   defp rotated(t, key, %{credential: bearer, deadline: deadline}) do
     case get(t, key) do
       nil ->
@@ -999,9 +1004,6 @@ defmodule Prism.Frames do
 
       %{bearer: held, id: id} = frame ->
         cond do
-          canvas_key?(key) ->
-            t
-
           is_nil(held) ->
             t
             |> put_frame(key, %{frame | deadline: deadline})
@@ -1044,9 +1046,7 @@ defmodule Prism.Frames do
   @spec version_digest(Context.t(), card()) ::
           {:ok, String.t()} | {:error, :unregistered | :unavailable}
   def version_digest(%Context{} = ctx, card) do
-    ref = Prima.ComponentRef.build("tincture", card.publisher, card.name, card.version)
-
-    case Compendium.inspect_component(ctx, ref) do
+    case Compendium.inspect_component(ctx, version_ref(card)) do
       {:ok, %{"release_digest" => "sha256:" <> _ = digest}} -> {:ok, digest}
       {:ok, _unreleased} -> {:error, :unregistered}
       {:error, {:not_found, _}} -> {:error, :unregistered}
@@ -1161,7 +1161,7 @@ defmodule Prism.Frames do
          {:ok, attributes} <- frame_attributes(declaration, declaration.frame.capabilities),
          {:ok, digest} <- version_digest(ctx, card),
          {:ok, src} <- frame_src(ctx, card, digest),
-         {:ok, revision} <- Compendium.tincture_grant_revision(ctx, ref_of(card)),
+         {:ok, revision} <- Compendium.tincture_grant_revision(ctx, version_ref(card)),
          {:ok, minted} <-
            TinctureAuth.mint_frame_credential(ctx, base.reference, digest, revision, frame_id) do
       %{
@@ -1195,7 +1195,7 @@ defmodule Prism.Frames do
          {:ok, module} <- Compendium.tincture_canvas_module(card.manifest),
          {:ok, digest} <- version_digest(ctx, card),
          {:ok, %{credential: asset}} <- TinctureAuth.mint_asset_credential(ctx, digest),
-         {:ok, revision} <- Compendium.tincture_grant_revision(ctx, ref_of(card)),
+         {:ok, revision} <- Compendium.tincture_grant_revision(ctx, version_ref(card)),
          {:ok, minted} <- mint.(ctx, base.reference, digest, revision, frame_id) do
       %{
         base

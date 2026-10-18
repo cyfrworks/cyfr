@@ -54,8 +54,9 @@ import {TO_PRISM_VERBS, decode as decodeCanvas, encode as encodeCanvas, isPlainO
  * runs or resuming it once shown again, the canvas signals
  * `cyfr:frame-bearer` on that frame's element, and the bridge sends the
  * new credential over the port it handed the frame, as the handshake's
- * `cyfr:credential` message. A canvas's frame is never sent one, and one
- * that arrives before the handshake or after a later load goes nowhere.
+ * `cyfr:credential` message, or to a canvas's frame as the canvas wire's
+ * `credential` once it has booted. One that arrives before the handshake
+ * or after a later load goes nowhere.
  *
  * When the credential prompt a frame's `credential` verb asked for closes,
  * the canvas signals `cyfr:credential-closed` on the frame's element with
@@ -92,7 +93,8 @@ const IframeBridge = {
   },
 
   _replace(credential) {
-    if (this._canvas || !this._port || typeof credential !== "string" || credential === "") return
+    if (!this._port || typeof credential !== "string" || credential === "") return
+    if (this._canvas) return this._post("credential", {credential})
     this._port.postMessage({v: VERSION, type: CREDENTIAL, frame: this._frameId, credential})
   },
 

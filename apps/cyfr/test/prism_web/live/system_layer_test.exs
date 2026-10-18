@@ -5113,6 +5113,8 @@ defmodule PrismWeb.SystemLayerTest do
         unit
       end
 
+      Sanctum.Test.ConsentFixtures.grant_tincture!(ctx, "tincture:local.markets")
+
       {:ok, _} =
         Arca.CanvasVersions.publish(
           Context.actor(ctx),
@@ -5238,14 +5240,14 @@ defmodule PrismWeb.SystemLayerTest do
         Sanctum.Test.ConsentFixtures.seed_head!(
           ctx,
           %{
-            id: "prof_markets_restore",
+            id: "prof_markets",
             kind: :owner,
             source_ref: "tincture:local.markets",
             label: "owner",
             status: :needs_consent
           },
           %{
-            id: "cons_markets_restore",
+            id: "cons_markets",
             revision: 1,
             scope: :versionless,
             pinned_version: "",
@@ -5287,14 +5289,14 @@ defmodule PrismWeb.SystemLayerTest do
         Sanctum.Test.ConsentFixtures.seed_head!(
           ctx,
           %{
-            id: "prof_markets_dismiss",
+            id: "prof_markets",
             kind: :owner,
             source_ref: "tincture:local.markets",
             label: "owner",
             status: :needs_consent
           },
           %{
-            id: "cons_markets_dismiss",
+            id: "cons_markets",
             revision: 1,
             scope: :versionless,
             pinned_version: "",
@@ -5815,7 +5817,8 @@ defmodule PrismWeb.SystemLayerTest do
   end
 
   # A tincture version in the athanor's tree and its component row, with
-  # `tincture` its manifest's block and `files` its files.
+  # `tincture` its manifest's block and `files` its files, granted as the
+  # person would grant it.
   defp lay!(ctx, name, tincture, files) do
     manifest = %{
       "name" => name,
@@ -5855,6 +5858,7 @@ defmodule PrismWeb.SystemLayerTest do
         updated_at: now
       })
 
+    Sanctum.Test.ConsentFixtures.grant_tincture!(ctx, "tincture:local.#{name}")
     Prism.TinctureRegistry.reload_athanor(ctx.athanor_id)
     :ok
   end

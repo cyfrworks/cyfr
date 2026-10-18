@@ -51,6 +51,7 @@ defmodule Cyfr.Bus do
     ExecutionEvent,
     FeedPublished,
     FileOffer,
+    FrameCredential,
     InstanceEntryChanged,
     LayoutPublished,
     McpServers,
@@ -353,6 +354,18 @@ defmodule Cyfr.Bus do
       producers: ["Cyfr.TelemetryBridge"],
       consumers: ["CyfrWeb.ContextGuard"],
       reason: "an internal auth signal keyed by person; a revocation reaches every socket"
+    },
+    %{
+      key: :frame_credentials,
+      scope: :global,
+      struct: FrameCredential,
+      match: {:prefix, "sanctum:frame_credentials:"},
+      template: "sanctum:frame_credentials:<user_id>",
+      producers: ["Cyfr.TelemetryBridge"],
+      consumers: ["CyfrWeb.SSE"],
+      reason:
+        "the subject is the person whose frame it is: a stream held open under a " <>
+          "suspended or revoked frame credential ends at once on every member"
     },
     %{
       key: :memberships,
@@ -691,6 +704,11 @@ defmodule Cyfr.Bus do
   @spec memberships(String.t()) :: String.t()
   def memberships(user_id) when is_binary(user_id) and user_id != "",
     do: "sanctum:memberships:" <> user_id
+
+  @doc "One person's frame credentials suspended or revoked (`Cyfr.Bus.FrameCredential`)."
+  @spec frame_credentials(String.t()) :: String.t()
+  def frame_credentials(user_id) when is_binary(user_id) and user_id != "",
+    do: "sanctum:frame_credentials:" <> user_id
 
   @doc "Server-level events for platform admins (`Cyfr.Bus.Notify`, `athanor_id: :platform`)."
   @spec platform_notify() :: String.t()

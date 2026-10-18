@@ -216,37 +216,25 @@ defmodule Compendium do
   defdelegate tincture_canvas_sandbox_tokens(), to: Rules, as: :canvas_sandbox_tokens
 
   @doc """
-  The grant revision a tincture's frame opens under: the head revision of
-  the tincture's one active owner profile, the consent the shell's
-  invocations root on, or 0 while the tincture holds none. `reference` is
-  the tincture's name-level reference (`tincture:<publisher>.<name>`), the
-  source its profiles are keyed by.
+  The grant revision a tincture version's frame opens under: the head
+  revision of the tincture's one active owner profile, the consent the
+  shell's invocations root on, held to the version `reference` names
+  (`tincture:<publisher>.<name>:<version>`) by the decision a run is held
+  to (`Sanctum.Consent.tincture_grant/2`).
 
-  `{:error, :ungranted}` while that owner profile waits for the person to
-  consent again, so nothing opens or activates under it, and
-  `{:error, :unavailable}` when consent cannot be read.
+  `{:error, :ungranted}` while the person has to consent: the owner
+  profile waits for them, the tincture holds no grant at all, or the
+  version reads more than the consent's shape. So nothing opens or
+  activates under a grant that does not name what the version reads.
+  `{:error, :unavailable}` when consent cannot be read, and
+  `{:error, {:refused, reason}}` for damage no consent repairs.
   """
   @spec tincture_grant_revision(Context.t(), String.t()) ::
-          {:ok, non_neg_integer()} | {:error, :ungranted | :unavailable}
+          {:ok, pos_integer()} | {:error, :ungranted | :unavailable | {:refused, term()}}
   def tincture_grant_revision(%Context{} = ctx, reference) when is_binary(reference) do
-    case Sanctum.Consent.profiles(ctx, reference) do
-      {:ok, entries} ->
-        case Prima.Authority.RootSelect.select(entries, :default) do
-          {:ok, %{id: profile_id}} -> head_revision(ctx, profile_id)
-          {:error, {:profile_unavailable, :needs_consent}} -> {:error, :ungranted}
-          {:error, _no_active_owner} -> {:ok, 0}
-        end
-
-      {:error, _unreadable} ->
-        {:error, :unavailable}
-    end
-  end
-
-  defp head_revision(ctx, profile_id) do
-    case Sanctum.Consent.head_consent(ctx, profile_id) do
+    case Sanctum.Consent.tincture_grant(ctx, reference) do
       {:ok, %{revision: revision}} -> {:ok, revision}
-      {:error, :not_found} -> {:ok, 0}
-      {:error, _unreadable} -> {:error, :unavailable}
+      {:error, _refusal} = refused -> refused
     end
   end
 

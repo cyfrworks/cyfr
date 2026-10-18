@@ -83,6 +83,7 @@ defmodule PrismWeb.CanvasLiveTest do
         updated_at: now
       })
 
+    Sanctum.Test.ConsentFixtures.grant_tincture!(ctx, "tincture:local.#{name}")
     Prism.TinctureRegistry.reload_athanor(ctx.athanor_id)
     :ok
   end

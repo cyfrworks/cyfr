@@ -452,7 +452,7 @@ ${range(8).map((i) => `.cyfr-chart-key.cyfr-series-${i} { color: var(--cyfr-seri
   // js/toolkit/wire.js
   var VERSION2 = 1;
   var TO_PRISM_VERBS = Object.freeze(["ready", "tree", "open", "press", "failed"]);
-  var TO_TOOLKIT_VERBS = Object.freeze(["boot", "posture", "covered", "installed", "state"]);
+  var TO_TOOLKIT_VERBS = Object.freeze(["boot", "posture", "covered", "installed", "state", "credential"]);
   var TOOLKIT_MAJORS = Object.freeze([1]);
   var MODES = ["live", "validation"];
   var STAGES = ["load", "tree", "runtime"];
@@ -578,6 +578,8 @@ ${range(8).map((i) => `.cyfr-chart-key.cyfr-series-${i} { color: var(--cyfr-seri
         return exact(args, ["tinctures"], "installed") || check(bounded(args.tinctures, MAX_TINCTURES, isInstalled), "installed names at most 512 tinctures of ref and name");
       case "state":
         return exact(args, ["state"], "state") || check(STATES.includes(args.state), "state is live or frozen");
+      case "credential":
+        return exact(args, ["credential"], "credential") || check(typeof args.credential === "string" && args.credential !== "", "credential carries the frame credential");
       default:
         return "unknown verb";
     }
@@ -615,7 +617,8 @@ ${range(8).map((i) => `.cyfr-chart-key.cyfr-series-${i} { color: var(--cyfr-seri
     stream: (m) => ({ t: "stream", m })
   });
   var toStreams = Object.freeze({
-    boot: (credential, dataUrl, streams, port) => ({ t: "boot", credential, data_url: dataUrl, streams, port })
+    boot: (credential, dataUrl, streams, port) => ({ t: "boot", credential, data_url: dataUrl, streams, port }),
+    credential: (credential) => ({ t: "credential", credential })
   });
   var fromModule = Object.freeze({
     tree: (json) => ({ t: "tree", json }),
@@ -1062,9 +1065,15 @@ ${range(8).map((i) => `.cyfr-chart-key.cyfr-series-${i} { color: var(--cyfr-seri
           return value("installed", args.tinctures);
         case "state":
           return args.state === "frozen" ? freeze() : thaw();
+        case "credential":
+          return renew(args.credential);
         default:
           return;
       }
+    }
+    function renew(credential) {
+      boot.credential = credential;
+      if (current) current.streams.postMessage(toStreams.credential(credential));
     }
     function post(verb, args) {
       port.postMessage(encode(verb, frame, args));

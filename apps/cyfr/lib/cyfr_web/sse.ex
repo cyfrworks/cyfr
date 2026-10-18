@@ -43,11 +43,13 @@ defmodule CyfrWeb.SSE do
     * at the grant's deadline;
     * when the caller's context no longer stands: it is established again
       (the `:revalidate` function) on every standing announcement about
-      the caller, before an event is delivered once it is past the
-      session-freshness bound (`Sanctum.Caller.fresh?/1`), and on a timer
-      that fires within that bound, so a suspended or revoked frame's
-      stream is closed within the bound, and a refusal ends the stream
-      with that refusal as its last event;
+      the caller (a frame's stream hears its own credential suspended or
+      revoked, `Cyfr.Bus.FrameCredential`), before an event is delivered
+      once it is past the session-freshness bound
+      (`Sanctum.Caller.fresh?/1`), and on a timer that fires within that
+      bound, so a suspended or revoked frame's stream is closed at its
+      announcement and within the bound without one, and a refusal ends
+      the stream with that refusal as its last event;
     * on overflow: a connection whose mailbox holds more than the backlog
       bound has fallen too far behind to deliver faithfully, and the
       stream ends with a typed refusal event (`overflow/0`), never by
@@ -57,7 +59,7 @@ defmodule CyfrWeb.SSE do
   A reconnect is a new open under the gate.
   """
 
-  alias Cyfr.Bus.{AthanorArchived, CallerInvalidated, Membership, Session}
+  alias Cyfr.Bus.{AthanorArchived, CallerInvalidated, FrameCredential, Membership, Session}
   alias Prima.{StreamGrant, TinctureWire}
   alias Sanctum.Context
 
@@ -216,6 +218,7 @@ defmodule CyfrWeb.SSE do
     # so the bus's tenant check cannot refuse it.
     :ok = Cyfr.Bus.subscribe(actor, topic)
     :ok = Cyfr.Bus.subscribe_standing(ctx.user_id)
+    :ok = subscribe_frame(ctx)
 
     ref = make_ref()
     remaining = max(DateTime.diff(grant.deadline, DateTime.utc_now(), :millisecond), 0)
@@ -251,6 +254,7 @@ defmodule CyfrWeb.SSE do
       cancel_ticks(ref)
       Cyfr.Bus.unsubscribe(actor, topic)
       Cyfr.Bus.unsubscribe_standing(ctx.user_id)
+      unsubscribe_frame(ctx)
       flush(ref)
     end
   end
@@ -344,7 +348,8 @@ defmodule CyfrWeb.SSE do
 
       message
       when is_struct(message, Session) or is_struct(message, CallerInvalidated) or
-             is_struct(message, AthanorArchived) or is_struct(message, Membership) ->
+             is_struct(message, AthanorArchived) or is_struct(message, Membership) or
+             is_struct(message, FrameCredential) ->
         if about?(message, state.ctx) do
           case state.revalidate.() do
             {:ok, ctx} -> loop(conn, %{state | ctx: ctx})
@@ -415,6 +420,24 @@ defmodule CyfrWeb.SSE do
   defp about?(%AthanorArchived{athanor_id: athanor_id}, ctx), do: athanor_id == ctx.athanor_id
   defp about?(%Membership{}, _ctx), do: true
   defp about?(%CallerInvalidated{}, _ctx), do: true
+
+  defp about?(%FrameCredential{credential_id: id}, %Context{frame: %{id: frame_credential}}),
+    do: id == frame_credential
+
+  defp about?(%FrameCredential{}, _ctx), do: false
+
+  # A frame's stream also hears its own person's frame credentials
+  # suspended or revoked, so it ends at once rather than at its next
+  # revalidation.
+  defp subscribe_frame(%Context{frame: %{}, user_id: user_id}) when is_binary(user_id),
+    do: Cyfr.Bus.subscribe_global(Cyfr.Bus.frame_credentials(user_id))
+
+  defp subscribe_frame(%Context{}), do: :ok
+
+  defp unsubscribe_frame(%Context{frame: %{}, user_id: user_id}) when is_binary(user_id),
+    do: Cyfr.Bus.unsubscribe_global(Cyfr.Bus.frame_credentials(user_id))
+
+  defp unsubscribe_frame(%Context{}), do: :ok
 
   # The payload's sequence number, where its topic carries one.
   defp sequence(message) do

@@ -114,7 +114,15 @@ defmodule Cyfr.Telemetry.Catalog do
     },
     [:cyfr, :sanctum, :sessions, :revoked] => %{
       consumers: [:bridge],
-      note: "every session of a person was retired; their sockets must let go"
+      note:
+        "sessions of a person were retired, every one or only some; whatever holds a " <>
+          "context of theirs establishes it again and lets go of one that no longer stands"
+    },
+    [:cyfr, :sanctum, :frame_credential, :changed] => %{
+      consumers: [:bridge],
+      note:
+        "a person's frame credential was suspended or revoked; a stream held open " <>
+          "under it ends at once on every member"
     },
     [:cyfr, :sanctum, :membership, :changed] => %{
       consumers: [:bridge],

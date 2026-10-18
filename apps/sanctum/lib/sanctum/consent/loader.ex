@@ -195,6 +195,27 @@ defmodule Sanctum.Consent.Loader do
   end
 
   @doc """
+  Whether `consent`, the head of `profile`, stands for the installed
+  release the options name, decided as `load_root/3` decides it: the
+  profile's status, the head's own checks (`admitted_blob/3`), then the
+  `Sanctum.Consent.Loader.Decision` table over the granted activation and
+  shape against `:live` and `:live_shape_digest` (the options
+  `load_root/3` takes), without building an authority. A release whose
+  shape differs from the consent's, or whose shape is unknown, is
+  `{:consent_required, …}` as a run's is; a pinned consent asks again for
+  any other release.
+  """
+  @spec evaluate_head(Context.t(), map(), map(), keyword()) :: :ok | {:error, load_error()}
+  def evaluate_head(%Context{} = ctx, profile, consent, opts)
+      when is_map(profile) and is_map(consent) do
+    with :ok <- check_profile_status(profile),
+         {:ok, _blob} <- admitted_blob(ctx, profile, consent),
+         {:ok, _running} <- evaluate_activation(ctx, profile, consent, opts) do
+      :ok
+    end
+  end
+
+  @doc """
   The blob a stored head grants, as `load_root/3` carries it, or the
   refusal that stops `load_root/3` on the head itself: checks 4 to 9 of
   the module's order, in that order, under the context's origin. A read

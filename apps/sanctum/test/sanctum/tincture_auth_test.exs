@@ -273,6 +273,38 @@ defmodule Sanctum.TinctureAuthTest do
       assert {:error, :revoked} = TinctureAuth.resume_frame(ctx, id)
     end
 
+    for {change, act} <- [suspended: :suspend_frame, revoked: :revoke_frame] do
+      @tag change: change, act: act
+      test "#{act} announces the standing change once it is stored, naming the credential and never its bearer",
+           %{source: ctx, change: change, act: act} do
+        {:ok, %{credential: bearer, id: id}} =
+          TinctureAuth.mint_frame_credential(ctx, @tincture, @digest, 1, frame_id())
+
+        handler = "frame-credential-#{change}-#{System.unique_integer([:positive])}"
+        test_pid = self()
+
+        :ok =
+          :telemetry.attach(
+            handler,
+            [:cyfr, :sanctum, :frame_credential, :changed],
+            fn _event, measurements, metadata, _config ->
+              send(test_pid, {:frame_credential_changed, measurements, metadata})
+            end,
+            nil
+          )
+
+        on_exit(fn -> :telemetry.detach(handler) end)
+
+        assert {:ok, %{id: ^id}} = apply(TinctureAuth, act, [ctx, id])
+        assert %{state: stored} = Arca.Repo.get(Arca.Schemas.FrameCredential, id)
+        assert stored == Atom.to_string(change)
+
+        assert_receive {:frame_credential_changed, %{count: 1}, metadata}
+        assert metadata == %{user_id: ctx.user_id, credential_id: id, change: change}
+        refute inspect(metadata) =~ bearer
+      end
+    end
+
     test "another person's frame reads as absent", %{source: ctx} do
       {:ok, %{id: id}} =
         TinctureAuth.mint_frame_credential(ctx, @tincture, @digest, 1, frame_id())

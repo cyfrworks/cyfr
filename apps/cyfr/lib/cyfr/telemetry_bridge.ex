@@ -44,6 +44,7 @@ defmodule Cyfr.TelemetryBridge do
     Confirmation,
     Execution,
     FileOffer,
+    FrameCredential,
     InstanceEntryChanged,
     Membership,
     Notify,
@@ -254,6 +255,14 @@ defmodule Cyfr.TelemetryBridge do
   defp messages([:cyfr, :sanctum, :sessions, :revoked], _measurements, %{user_id: user_id})
        when is_binary(user_id),
        do: [{:global, Bus.sessions(), Session.new(:revoked, user_id)}]
+
+  defp messages(
+         [:cyfr, :sanctum, :frame_credential, :changed],
+         _measurements,
+         %{user_id: user_id, credential_id: id, change: change}
+       )
+       when is_binary(user_id) and is_binary(id),
+       do: [{:global, Bus.frame_credentials(user_id), FrameCredential.new(change, user_id, id)}]
 
   defp messages(
          [:cyfr, :sanctum, :membership, :changed],

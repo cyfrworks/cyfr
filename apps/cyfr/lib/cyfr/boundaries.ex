@@ -1898,7 +1898,15 @@ defmodule Cyfr.Boundaries do
     "Sanctum.Cipher" => [keyring!: 0],
     "Sanctum.Cipher.Rotation" => [audit: 0, reencrypt_all: 1],
     "Sanctum.ClientIp" => [from_connect_info: 1, resolve: 1],
-    "Sanctum.Consent" => [head_consent: 2, profiles: 2, revoke_source: 2, row_binding: 3],
+    # A tincture version's frame opens, and its data routes answer, under
+    # the grant held to that version by the decision a run is held to.
+    "Sanctum.Consent" => [
+      head_consent: 2,
+      profiles: 2,
+      revoke_source: 2,
+      row_binding: 3,
+      tincture_grant: 2
+    ],
     # The assistant reads which named accounts an app's own ingress binds
     # and which entry a name resolves to, never a value, never a write.
     "Sanctum.Consent.Accounts" => [list: 1, resolve: 4],

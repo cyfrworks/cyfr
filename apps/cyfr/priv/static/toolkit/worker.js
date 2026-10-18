@@ -118,7 +118,7 @@
 
   // js/toolkit/wire.js
   var TO_PRISM_VERBS = Object.freeze(["ready", "tree", "open", "press", "failed"]);
-  var TO_TOOLKIT_VERBS = Object.freeze(["boot", "posture", "covered", "installed", "state"]);
+  var TO_TOOLKIT_VERBS = Object.freeze(["boot", "posture", "covered", "installed", "state", "credential"]);
   var TOOLKIT_MAJORS = Object.freeze([1]);
   var MODES = ["live", "validation"];
   var MAX_STREAMS = 64;
@@ -160,7 +160,8 @@
     stream: (m) => ({ t: "stream", m })
   });
   var toStreams = Object.freeze({
-    boot: (credential, dataUrl, streams, port) => ({ t: "boot", credential, data_url: dataUrl, streams, port })
+    boot: (credential, dataUrl, streams, port) => ({ t: "boot", credential, data_url: dataUrl, streams, port }),
+    credential: (credential) => ({ t: "credential", credential })
   });
   var fromModule = Object.freeze({
     tree: (json) => ({ t: "tree", json }),
@@ -216,8 +217,11 @@
     return null;
   }
   function decodeToStreams(data) {
-    if (!isPlainObject(data) || data.t !== "boot") return null;
-    if (!sameKeys(data, ["credential", "data_url", "port", "streams", "t"])) return null;
+    if (!isPlainObject(data)) return null;
+    if (data.t === "credential" && sameKeys(data, ["credential", "t"])) {
+      return typeof data.credential === "string" && data.credential !== "" ? data : null;
+    }
+    if (data.t !== "boot" || !sameKeys(data, ["credential", "data_url", "port", "streams", "t"])) return null;
     if (typeof data.credential !== "string" || data.credential === "" || typeof data.data_url !== "string") return null;
     return isStreams(data.streams) && isPort(data.port) ? data : null;
   }
@@ -440,9 +444,10 @@
     let port = null;
     const subs = /* @__PURE__ */ new Map();
     scope.addEventListener("message", (event) => {
-      if (event.isTrusted !== true || booted) return;
+      if (event.isTrusted !== true) return;
+      if (booted) return renewed(decodeToStreams(event.data));
       const boot = decodeToStreams(event.data);
-      if (boot === null) return;
+      if (boot === null || boot.t !== "boot") return;
       booted = true;
       credential = boot.credential;
       streamUrl = boot.data_url + STREAM_ROUTE;
@@ -451,6 +456,11 @@
       port.onmessage = (message) => onRequest(message.data);
       if (typeof port.addEventListener === "function") port.addEventListener("close", () => post(fromStreams.lost()));
     });
+    function renewed(message) {
+      if (message === null || message.t !== "credential") return;
+      credential = message.credential;
+      for (const sub of subs.values()) if (sub.opened) takeOver(sub);
+    }
     function onRequest(data) {
       const req = decodeRequest(data);
       if (req === null) return;
@@ -459,7 +469,8 @@
         if (sub2) {
           subs.delete(req.sub);
           sub2.closing = true;
-          sub2.controller.abort();
+          sub2.attempt.controller.abort();
+          if (sub2.pending) sub2.pending.controller.abort();
         }
         return;
       }
@@ -469,57 +480,90 @@
       if (!declared.has(pairKey(req))) {
         return send(answer.refused(req.sub, "forbidden", "This canvas does not declare that stream.", "admission"));
       }
-      const sub = { controller: new AbortController(), closing: false };
+      const sub = { req, send, viaHost, attempt: attempt(), pending: null, opened: false, closing: false };
       subs.set(req.sub, sub);
-      open(req, sub, send, viaHost).catch(() => {
-        sub.controller.abort();
+      open(sub).catch(() => {
+        sub.attempt.controller.abort();
+        if (sub.pending) sub.pending.controller.abort();
         if (subs.get(req.sub) === sub) subs.delete(req.sub);
         if (!sub.closing) send(answer.closed(req.sub, "unavailable"));
         sub.closing = true;
       });
     }
-    async function open(req, sub, send, viaHost) {
-      const ended = (error) => {
-        if (subs.get(req.sub) === sub) subs.delete(req.sub);
-        if (!sub.closing) send(answer.closed(req.sub, error));
-      };
-      const refused = (code, message, stage = null) => {
-        if (subs.get(req.sub) === sub) subs.delete(req.sub);
-        if (!sub.closing) send(answer.refused(req.sub, code, message, stage));
-      };
+    const attempt = () => ({ controller: new AbortController(), credential });
+    function ended(sub, error) {
+      if (subs.get(sub.req.sub) === sub) subs.delete(sub.req.sub);
+      if (!sub.closing) sub.send(answer.closed(sub.req.sub, error));
+    }
+    async function open(sub) {
+      const first = sub.attempt;
+      const answered = await connect(sub.req, first);
+      if (!answered.ok) {
+        if (subs.get(sub.req.sub) === sub) subs.delete(sub.req.sub);
+        if (!sub.closing) sub.send(answer.refused(sub.req.sub, answered.code, answered.message, answered.stage));
+        return;
+      }
+      if (sub.closing) return first.controller.abort();
+      sub.opened = true;
+      sub.send(answer.opened(sub.req.sub));
+      if (first.credential !== credential) takeOver(sub);
+      await pump(sub, first, answered.response);
+    }
+    function takeOver(sub) {
+      if (sub.pending) sub.pending.controller.abort();
+      const next = attempt();
+      sub.pending = next;
+      connect(sub.req, next).then((answered) => {
+        if (sub.pending !== next) return;
+        sub.pending = null;
+        if (!answered.ok || sub.closing || subs.get(sub.req.sub) !== sub) return next.controller.abort();
+        const previous = sub.attempt;
+        sub.attempt = next;
+        previous.controller.abort();
+        if (next.credential !== credential) takeOver(sub);
+        return pump(sub, next, answered.response);
+      }).catch(() => {
+        next.controller.abort();
+        if (sub.pending === next) sub.pending = null;
+        if (sub.attempt === next) ended(sub, "unavailable");
+      });
+    }
+    async function connect(req, conn) {
       let response;
       try {
         response = await fetchFn(streamUrl, {
           method: "POST",
-          headers: { "content-type": "application/json", [BEARER_HEADER]: bearer(credential) },
+          headers: { "content-type": "application/json", [BEARER_HEADER]: bearer(conn.credential) },
           body: JSON.stringify(request("stream_open", { stream: req.name, subject: req.subject })),
           credentials: "omit",
           cache: "no-store",
           redirect: "error",
-          signal: sub.controller.signal
+          signal: conn.controller.signal
         });
       } catch (_error) {
-        return refused("unavailable", "The endpoint could not be reached.");
+        return { ok: false, code: "unavailable", message: "The endpoint could not be reached.", stage: null };
       }
       const type = (response.headers.get("content-type") || "").split(";")[0].trim();
-      if (type !== STREAM_CONTENT_TYPE) {
-        let body = null;
-        try {
-          body = await response.json();
-        } catch (_error) {
-          body = null;
-        }
-        sub.controller.abort();
-        const decoded = decodeAnswer("stream_open", body);
-        if (decoded.refusal) return refused(decoded.refusal.class, decoded.refusal.message, decoded.refusal.stage);
-        return refused("invalid_answer", "The endpoint's answer could not be read.");
+      if (type === STREAM_CONTENT_TYPE) return { ok: true, response };
+      let body = null;
+      try {
+        body = await response.json();
+      } catch (_error) {
+        body = null;
       }
-      if (sub.closing) return sub.controller.abort();
-      send(answer.opened(req.sub));
+      conn.controller.abort();
+      const decoded = decodeAnswer("stream_open", body);
+      if (decoded.refusal) {
+        return { ok: false, code: decoded.refusal.class, message: decoded.refusal.message, stage: decoded.refusal.stage };
+      }
+      return { ok: false, code: "invalid_answer", message: "The endpoint's answer could not be read.", stage: null };
+    }
+    async function pump(sub, conn, response) {
+      const own = () => sub.attempt === conn && !sub.closing;
       const parser = sseParser((event) => {
-        if (sub.closing) return;
-        const record = viaHost ? recordFromEnvelope(event.data, req.subject) : null;
-        send(answer.event(req.sub, event), record);
+        if (!own()) return;
+        const record = sub.viaHost ? recordFromEnvelope(event.data, sub.req.subject) : null;
+        sub.send(answer.event(sub.req.sub, event), record);
       });
       const decoder = new TextDecoder();
       try {
@@ -530,10 +574,10 @@
           parser.push(decoder.decode(value, { stream: true }));
         }
         parser.push(decoder.decode());
-        ended(null);
+        if (sub.attempt === conn) ended(sub, null);
       } catch (_error) {
-        sub.controller.abort();
-        ended("unavailable");
+        conn.controller.abort();
+        if (sub.attempt === conn) ended(sub, "unavailable");
       } finally {
         parser.end();
       }

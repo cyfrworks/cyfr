@@ -802,7 +802,19 @@ defmodule Cyfr.AdmissionOriginTest do
     issuer = Sanctum.TestContext.issuer!(Sanctum.TestContext.local())
     {:ok, session} = Sanctum.TestContext.create_session(issuer)
     {:ok, source} = Sanctum.Caller.establish(session.token)
+    echo!(source)
     source
+  end
+
+  # The reagent the frames' tinctures name as their static dependency,
+  # installed so a tincture's closure resolves as an installed one does.
+  defp echo!(ctx) do
+    put_row!(ctx, "reagent", "echo", %{
+      "name" => "echo",
+      "type" => "reagent",
+      "version" => "1.0.0",
+      "publisher" => "local"
+    })
   end
 
   # A tincture version in the source's athanor declaring `block` and the
@@ -837,7 +849,9 @@ defmodule Cyfr.AdmissionOriginTest do
   end
 
   # A version's row, as the registry records it. Answers its reference.
-  defp put_version!(ctx, name, manifest) do
+  defp put_version!(ctx, name, manifest), do: put_row!(ctx, "tincture", name, manifest)
+
+  defp put_row!(ctx, type, name, manifest) do
     digest = "sha256:" <> Base.encode16(:crypto.hash(:sha256, name), case: :lower)
     {:ok, release_digest} = Compendium.ReleaseDigest.compute(digest, manifest)
     now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
@@ -847,7 +861,7 @@ defmodule Cyfr.AdmissionOriginTest do
         id: "cmp_#{name}_#{System.unique_integer([:positive])}",
         name: name,
         version: "1.0.0",
-        component_type: "tincture",
+        component_type: type,
         description: name,
         tags: "[]",
         digest: digest,
@@ -958,7 +972,10 @@ defmodule Cyfr.AdmissionOriginTest do
 
   # The frame the shell would open for `name`: its credential, row id and
   # frame id.
-  defp frame!(source, name, digest, revision \\ 0) do
+  # A frame the shell would open for `name`, minted at `revision`, or by
+  # default at revision 1 of a grant made as the person would make it.
+  defp frame!(source, name, digest, revision \\ nil) do
+    revision = revision || granted!(source, name)
     reference = %{publisher: "local", name: name, version: "1.0.0"}
     frame_id = "frm_origin_#{System.unique_integer([:positive])}"
 
@@ -966,6 +983,11 @@ defmodule Cyfr.AdmissionOriginTest do
       TinctureAuth.mint_frame_credential(source, reference, digest, revision, frame_id)
 
     %{bearer: bearer, id: id, frame_id: frame_id}
+  end
+
+  defp granted!(source, name) do
+    Sanctum.Test.ConsentFixtures.grant_tincture!(source, "tincture:local.#{name}")
+    1
   end
 
   # A data request, at the kind's shared route or at `path:`.
