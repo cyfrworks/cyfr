@@ -66,6 +66,7 @@ defmodule Sanctum.Providers.System do
             ],
             auth: :anonymous,
             kind: :read,
+            recorded: false,
             sources: [],
             planes: [:external, :in_chain]
           ),
@@ -107,6 +108,7 @@ defmodule Sanctum.Providers.System do
               )
             ],
             kind: :read,
+            recorded: false,
             sources: {:answer, {__MODULE__, :answer_sources}},
             planes: [:external, :in_chain]
           )

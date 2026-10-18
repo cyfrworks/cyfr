@@ -159,6 +159,11 @@ defmodule Arca.Providers.Files do
             "or that failed to land",
           [],
           kind: :read,
+          # The shell reads the caller's own inbox on every navigation and
+          # every offer message; recording it would bury the person's own
+          # Activities under rows they never chose. Their own offer, accept,
+          # decline and withdraw stay recorded.
+          recorded: false,
           sources: [:files_by_grant, :outside],
           planes: [:external],
           permission: :storage_read,

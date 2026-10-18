@@ -62,11 +62,13 @@ defmodule Sanctum.Providers.Decision do
       [
         Operation.new("decision", "list", "List decision", filters,
           kind: :read,
+          recorded: false,
           planes: [:external],
           permission: :storage_read
         ),
         Operation.new("decision", "get", "Get decision", call_id,
           kind: :read,
+          recorded: false,
           planes: [:external],
           permission: :storage_read
         ),
@@ -82,6 +84,7 @@ defmodule Sanctum.Providers.Decision do
             )
           ],
           kind: :read,
+          recorded: false,
           planes: [:external],
           permission: :storage_read
         ),
@@ -96,12 +99,14 @@ defmodule Sanctum.Providers.Decision do
               )
             ],
           kind: :read,
+          recorded: false,
           planes: [:external],
           scope: :platform,
           permission: :storage_read
         ),
         Operation.new("decision", "get_global", "Get global decision", call_id,
           kind: :read,
+          recorded: false,
           planes: [:external],
           scope: :platform,
           permission: :storage_read

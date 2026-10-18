@@ -47,6 +47,13 @@ defmodule Prima.Operation do
   one rule every caller that joins a catalog call's provenance reads.
   Like `resource`, it is metadata for the gate, absent from the
   annotation view and from discovery.
+
+  `recorded: false` marks a read whose admitted call the gate's decision
+  audit leaves out (`Sanctum.Catalog.recorded?/2`): discovery, the audit's
+  own reads, and the reads the shell makes of the caller's own state on
+  its own initiative. Only a read may be unrecorded; a refusal of any
+  action is recorded whatever it declares. It is metadata for the gate,
+  absent from the annotation view and from discovery.
   """
 
   alias Prima.Arg
@@ -69,7 +76,8 @@ defmodule Prima.Operation do
     :sources,
     auth: :required,
     resource_schemes: [],
-    reduces_authority: false
+    reduces_authority: false,
+    recorded: true
   ]
 
   @type t :: %__MODULE__{
@@ -89,6 +97,7 @@ defmodule Prima.Operation do
           resource: {String.t(), resource_kind()} | nil,
           resource_schemes: [String.t()],
           reduces_authority: boolean(),
+          recorded: boolean(),
           sources: sources() | nil
         }
 
@@ -129,7 +138,13 @@ defmodule Prima.Operation do
   def new(tool, action, description, args, opts) do
     unknown =
       Keyword.keys(opts) --
-        [:resource, :resource_schemes, :reduces_authority, :sources | @annotation_fields]
+        [
+          :resource,
+          :resource_schemes,
+          :reduces_authority,
+          :recorded,
+          :sources | @annotation_fields
+        ]
 
     if unknown != [], do: raise(ArgumentError, "unknown operation annotations")
 
@@ -156,7 +171,7 @@ defmodule Prima.Operation do
              op.consent in [nil, :interactive, :staging] and
              op.scope in [nil, :platform] and op.standing in [nil, false, :thread] and
              op.recovery in [nil, :replay_safe] and
-             is_boolean(op.reduces_authority) and
+             is_boolean(op.reduces_authority) and is_boolean(op.recorded) and
              (is_nil(op.permission) or is_atom(op.permission)),
            do: raise(ArgumentError, "invalid operation annotation")
 
@@ -165,6 +180,9 @@ defmodule Prima.Operation do
 
     if op.reduces_authority and op.kind == :read,
       do: raise(ArgumentError, "a read takes no authority away")
+
+    if not op.recorded and op.kind != :read,
+      do: raise(ArgumentError, "only a read may go unrecorded")
 
     if Enum.any?(op.args, &(&1.name == "action")),
       do: raise(ArgumentError, "action is the operation discriminator")

@@ -783,6 +783,24 @@ defmodule Sanctum.Catalog do
     end
   end
 
+  @doc """
+  Whether an admitted call of `tool.action` is recorded by the decision
+  audit (`Sanctum.Decisions`): false for an action the table declares
+  `recorded: false` (`Prima.Operation`), which only a read may be; true
+  for every other, an action the table does not hold among them.
+  """
+  @spec recorded?(term(), term()) :: boolean()
+  def recorded?(tool, action) when is_binary(tool) and is_binary(action) do
+    with {:ok, {_module, meta}} <- lookup(tool),
+         %Operation{recorded: false} <- declared_operation(meta, action) do
+      false
+    else
+      _ -> true
+    end
+  end
+
+  def recorded?(_tool, _action), do: true
+
   # An action name holds no dot, so a pair splits at the last one.
   defp split_action(name) do
     case String.split(name, ".") do
@@ -801,16 +819,6 @@ defmodule Sanctum.Catalog do
     case lookup(name) do
       {:ok, {_module, meta}} -> Operation.cast(meta, args)
       :miss -> {:error, {:not_found, "tool", name}}
-    end
-  end
-
-  @doc """
-  Check if a tool exists.
-  """
-  def exists?(name) do
-    case lookup(name) do
-      {:ok, _} -> true
-      :miss -> false
     end
   end
 
@@ -1037,33 +1045,8 @@ defmodule Sanctum.Catalog do
     end)
   end
 
-  @doc """
-  Every `tool.action` declared `recovery: :replay_safe`, derived from the
-  declarations — the table's, or the named providers' — : the operations
-  a recovered turn may still dispatch past an uncertain step. There is no
-  second list.
-  """
-  @spec replay_safe_actions(:table | [module()]) :: [String.t()]
-  def replay_safe_actions(source \\ :table) do
-    source
-    |> declared_tools()
-    |> Enum.flat_map(fn tool ->
-      tool
-      |> Annotations.declared_actions()
-      |> Enum.filter(fn {_verb, annotation} ->
-        Annotations.recovery_of(annotation) == :replay_safe
-      end)
-      |> Enum.map(fn {verb, _} -> "#{tool.name}.#{verb}" end)
-    end)
-    |> Enum.sort()
-  end
-
-  # The tools a derivation reads: the table's, or — for an audit of
-  # providers not loaded — the named providers' own declarations.
-  defp declared_tools(:table), do: for({_name, {_module, tool}} <- operations(), do: tool)
-
-  defp declared_tools(providers) when is_list(providers),
-    do: Enum.flat_map(providers, & &1.tools())
+  # The tools a derivation reads: the table's.
+  defp declared_tools, do: for({_name, {_module, tool}} <- operations(), do: tool)
 
   # `Operation.validate!/1` has already established that a non-nil
   # permission is an atom by the time the audit reaches this check.
@@ -1114,7 +1097,7 @@ defmodule Sanctum.Catalog do
   """
   @spec external_tool_actions() :: [String.t()]
   def external_tool_actions do
-    for tool <- declared_tools(:table),
+    for tool <- declared_tools(),
         {action, annotation} <- Annotations.actions_of(tool),
         :external in Map.get(annotation, :planes, []),
         do: "#{tool.name}.#{action}"
@@ -1128,7 +1111,7 @@ defmodule Sanctum.Catalog do
   @spec host_intercepted_actions() :: [String.t()]
   def host_intercepted_actions do
     Enum.sort(
-      for tool <- declared_tools(:table),
+      for tool <- declared_tools(),
           {action, _annotation} <- Annotations.actions_of(tool),
           Annotations.host_intercepted?(tool, action),
           do: "#{tool.name}.#{action}"
@@ -1143,7 +1126,7 @@ defmodule Sanctum.Catalog do
   def tool_actions do
     read_hook()
 
-    for tool <- declared_tools(:table),
+    for tool <- declared_tools(),
         {action, _annotation} <- Annotations.actions_of(tool),
         do: "#{tool.name}.#{action}"
   end

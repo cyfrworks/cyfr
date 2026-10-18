@@ -50,7 +50,8 @@ defmodule Sanctum.Decisions do
   ## What is not recorded
 
   Admitted discovery, the audit's own reads, and the reads the shell makes
-  of the caller's own state on its own initiative (`recorded?/2`): what a
+  of the caller's own state on its own initiative, each a read its
+  declaration marks `recorded: false` (`Sanctum.Catalog.recorded?/2`): what a
   caller is admitted to read to learn what exists or what was decided,
   and what the console reads again of the person's own state as they
   navigate, is neither appended nor emitted. A refusal of any call is
@@ -84,34 +85,6 @@ defmodule Sanctum.Decisions do
   alias Sanctum.Context
 
   @unknown "unknown"
-
-  # The tools whose every action reads what exists or what was decided.
-  @unrecorded_tools ~w(decision mcp_log record)
-
-  # Single actions of tools that also act, unrecorded when admitted: a
-  # discovery read, or a read the shell makes of the caller's own state on
-  # its own initiative. A refusal of one is recorded like any other.
-  @unrecorded_actions [
-    {"tools", "list"},
-    {"system", "status"},
-    # The shell reads the caller's own inbox on every navigation and every
-    # offer message; recording it would bury the person's own Activities
-    # under rows they never chose. Their own offer, accept, decline and
-    # withdraw stay recorded.
-    {"file", "offers"}
-  ]
-
-  @doc """
-  Whether an admitted call of `tool.action` is recorded. False for
-  discovery, the audit's own reads, and the reads the shell makes of the
-  caller's own state on its own initiative: every `decision`, `mcp_log`
-  and `record` action, `tools.list`, `system.status` and `file.offers`.
-  Every other admitted call — every `tools/call` and `resources/read`
-  among them — is, and a refused call is recorded whatever this answers.
-  """
-  @spec recorded?(term(), term()) :: boolean()
-  def recorded?(tool, _action) when tool in @unrecorded_tools, do: false
-  def recorded?(tool, action), do: {tool, action} not in @unrecorded_actions
 
   @doc """
   The call's identity: `id` when the entry minted one before its own

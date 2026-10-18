@@ -601,7 +601,7 @@ defmodule Sanctum.Dispatch do
       tool: bounded(name),
       name: name,
       inserted_at: inserted_at,
-      recorded?: Sanctum.Decisions.recorded?(name, action),
+      recorded?: Sanctum.Catalog.recorded?(name, action),
       projection: %{method: Keyword.get(opts, :method) || "tools/call", input: logged_args}
     }
 
@@ -692,7 +692,7 @@ defmodule Sanctum.Dispatch do
     end
   end
 
-  # An admitted call `Sanctum.Decisions.recorded?/2` leaves out (discovery,
+  # An admitted call `Sanctum.Catalog.recorded?/2` leaves out (discovery,
   # the audit's own reads, the shell's reads of the caller's own state) is
   # neither appended nor emitted. A refusal of any call is both: it is what
   # an audit exists to see.

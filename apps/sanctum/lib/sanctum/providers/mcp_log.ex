@@ -61,6 +61,7 @@ defmodule Sanctum.Providers.McpLog do
               Arg.new("limit", :integer, description: "Max results (default: 20)")
             ],
             kind: :read,
+            recorded: false,
             planes: [:external],
             permission: :storage_read
           ),
@@ -70,6 +71,7 @@ defmodule Sanctum.Providers.McpLog do
             "Get mcp log",
             [Arg.new("id", :string, required: true, description: "Request ID")],
             kind: :read,
+            recorded: false,
             planes: [:external],
             permission: :storage_read
           ),
@@ -85,6 +87,7 @@ defmodule Sanctum.Providers.McpLog do
               )
             ],
             kind: :read,
+            recorded: false,
             planes: [:external],
             permission: :storage_read
           ),
@@ -99,6 +102,7 @@ defmodule Sanctum.Providers.McpLog do
               )
             ],
             kind: :read,
+            recorded: false,
             planes: [:external],
             permission: :storage_read
           ),
@@ -112,6 +116,7 @@ defmodule Sanctum.Providers.McpLog do
               )
             ],
             kind: :read,
+            recorded: false,
             planes: [:external],
             permission: :storage_read
           )

@@ -13,7 +13,7 @@ defmodule Sanctum.Gate.DecisionsTest do
   """
   use ExUnit.Case, async: false
 
-  alias Sanctum.Decisions
+  alias Sanctum.{Catalog, Decisions}
   alias Prima.{Decision, UUID7}
 
   @root Path.expand("../../../../..", __DIR__)
@@ -101,42 +101,59 @@ defmodule Sanctum.Gate.DecisionsTest do
     )
   end
 
-  describe "recorded?/2" do
+  describe "the calls the audit leaves out (Sanctum.Catalog.recorded?/2)" do
     test "discovery and the audit's own reads are not recorded" do
       for action <- ~w(list get correlate fan_outs stats) do
-        refute Decisions.recorded?("mcp_log", action)
+        refute Catalog.recorded?("mcp_log", action)
       end
 
       for action <- ~w(get list payload) do
-        refute Decisions.recorded?("record", action)
+        refute Catalog.recorded?("record", action)
       end
 
       for action <- ~w(list get correlate list_global get_global) do
-        refute Decisions.recorded?("decision", action)
+        refute Catalog.recorded?("decision", action)
       end
 
-      refute Decisions.recorded?("tools", "list")
-      refute Decisions.recorded?("system", "status")
+      refute Catalog.recorded?("tools", "list")
+      refute Catalog.recorded?("system", "status")
     end
 
     # The shell reads the caller's own inbox on every navigation and every
     # offer message; what the person does with an offer is theirs to see.
     test "the shell's read of the caller's own offers is not recorded; acting on one is" do
-      refute Decisions.recorded?("file", "offers")
+      refute Catalog.recorded?("file", "offers")
 
       for action <- ~w(offer accept decline withdraw list read write delete) do
-        assert Decisions.recorded?("file", action), "file.#{action} is not recorded"
+        assert Catalog.recorded?("file", action), "file.#{action} is not recorded"
       end
     end
 
+    test "the unrecorded calls are the table's reads declared recorded: false, and no others" do
+      unrecorded =
+        for {_name, {_module, tool}} <- Catalog.operations(),
+            %Prima.Operation{recorded: false} = operation <- tool.operations,
+            do: {operation.tool, operation.action, operation.kind}
+
+      assert Enum.all?(unrecorded, fn {_tool, _action, kind} -> kind == :read end)
+
+      assert unrecorded
+             |> Enum.map(fn {tool, action, _} -> "#{tool}.#{action}" end)
+             |> Enum.sort() ==
+               ~w(decision.correlate decision.get decision.get_global decision.list
+                  decision.list_global file.offers mcp_log.correlate mcp_log.fan_outs mcp_log.get
+                  mcp_log.list mcp_log.stats record.get record.list record.payload system.status
+                  tools.list)
+    end
+
     test "every other call is recorded, discovery tools' other actions among them" do
-      assert Decisions.recorded?("tools", "call")
-      assert Decisions.recorded?("system", "notify")
-      assert Decisions.recorded?("execution", "run")
-      assert Decisions.recorded?("policy_log", "list")
-      assert Decisions.recorded?("storage", "read")
-      assert Decisions.recorded?("notion:create_page", nil)
-      assert Decisions.recorded?("unknown", 42)
+      assert Catalog.recorded?("tools", "call")
+      assert Catalog.recorded?("system", "notify")
+      assert Catalog.recorded?("execution", "run")
+      assert Catalog.recorded?("policy_log", "list")
+      assert Catalog.recorded?("storage", "read")
+      assert Catalog.recorded?("notion:create_page", nil)
+      assert Catalog.recorded?("unknown", 42)
     end
 
     test "the gate neither appends nor emits an unrecorded call" do

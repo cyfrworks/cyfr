@@ -243,16 +243,6 @@ defmodule Sanctum.Gate.CatalogTest do
     end
   end
 
-  describe "exists?/1" do
-    test "returns true for existing tool" do
-      assert Catalog.exists?("system") == true
-    end
-
-    test "returns false for non-existent tool" do
-      assert Catalog.exists?("nonexistent/tool") == false
-    end
-  end
-
   describe "the table" do
     test "holds every configured provider's tools, as their declarations built them" do
       for provider <- Catalog.available_providers(), tool <- provider.tools() do
@@ -280,14 +270,14 @@ defmodule Sanctum.Gate.CatalogTest do
     end
 
     test "a planted provider is in the table for its block, and gone after" do
-      refute Catalog.exists?(Probe.Crashing.tool())
+      assert Catalog.lookup(Probe.Crashing.tool()) == :miss
 
       Catalog.with_providers([Probe.Crashing], fn ->
-        assert Catalog.exists?(Probe.Crashing.tool())
+        assert {:ok, {Probe.Crashing, _}} = Catalog.lookup(Probe.Crashing.tool())
         assert Enum.any?(Catalog.list_tools(), &(&1["name"] == Probe.Crashing.tool()))
       end)
 
-      refute Catalog.exists?(Probe.Crashing.tool())
+      assert Catalog.lookup(Probe.Crashing.tool()) == :miss
       refute Enum.any?(Catalog.list_tools(), &(&1["name"] == Probe.Crashing.tool()))
     end
 
@@ -342,7 +332,7 @@ defmodule Sanctum.Gate.CatalogTest do
     test "a planted provider loads it for the block, and the block leaves it unloaded" do
       unloaded(fn ->
         Catalog.with_providers([Probe.Crashing], fn ->
-          assert Catalog.exists?(Probe.Crashing.tool())
+          assert {:ok, {Probe.Crashing, _}} = Catalog.lookup(Probe.Crashing.tool())
           assert %{resources: _} = Sanctum.Resources.table()
         end)
 
@@ -883,15 +873,15 @@ defmodule Sanctum.Gate.CatalogTest do
           end)
         end
 
-      exists_tasks =
+      lookup_tasks =
         for _ <- 1..10 do
           Task.async(fn ->
-            Catalog.exists?("system")
+            Catalog.lookup("system")
           end)
         end
 
       # All should complete successfully
-      all_tasks = call_tasks ++ list_tasks ++ get_tasks ++ exists_tasks
+      all_tasks = call_tasks ++ list_tasks ++ get_tasks ++ lookup_tasks
       results = Task.await_many(all_tasks, 10_000)
 
       assert length(results) == 40

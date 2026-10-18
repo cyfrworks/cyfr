@@ -4,9 +4,10 @@
 defmodule Sanctum.Gate.ReplaySafeAuditTest do
   @moduledoc """
   `recovery: :replay_safe` is a reviewed property of a read: the boot
-  audit refuses it on any other kind, any other value; the reader answers it for a read alone; the set
-  a recovered turn may re-dispatch is derived from the declarations, and
-  that derived set is the review record.
+  audit refuses it on any other kind, any other value; the reader answers
+  it for a read alone; the set a recovered turn may re-dispatch is what
+  the reader answers over the declarations, and that set is the review
+  record.
   """
 
   use ExUnit.Case, async: true
@@ -63,8 +64,18 @@ defmodule Sanctum.Gate.ReplaySafeAuditTest do
     assert Annotations.recovery(tool, "nope") == nil
   end
 
+  # Every `tool.action` the reader answers replay-safe, over `tools`.
+  defp replay_safe(tools) do
+    for tool <- tools,
+        {action, _annotation} <- Annotations.declared_actions(tool),
+        Annotations.recovery(tool, action) == :replay_safe,
+        do: "#{tool.name}.#{action}"
+  end
+
   test "the derived set is the review record" do
-    assert Catalog.replay_safe_actions() == [
+    table = for {_name, {_module, tool}} <- Catalog.operations(), do: tool
+
+    assert Enum.sort(replay_safe(table)) == [
              "aqua.skill_get",
              "aqua.skill_list",
              "component.inspect",
@@ -85,7 +96,7 @@ defmodule Sanctum.Gate.ReplaySafeAuditTest do
              "source.tree"
            ]
 
-    assert Catalog.replay_safe_actions([Carrier]) == ["carrier.peek"]
+    assert replay_safe(Carrier.tools()) == ["carrier.peek"]
     assert Aqua.Ops.replay_safe?("notes", "read")
     refute Aqua.Ops.replay_safe?("notes", "keep")
     refute Aqua.Ops.replay_safe?("http", "get")

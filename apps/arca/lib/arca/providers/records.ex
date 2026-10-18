@@ -66,6 +66,7 @@ defmodule Arca.Providers.Records do
             "Get record",
             [Arg.new("id", :string, required: true, description: "Execution ID")],
             kind: :read,
+            recorded: false,
             planes: [:external],
             permission: :storage_read
           ),
@@ -86,6 +87,7 @@ defmodule Arca.Providers.Records do
               )
             ],
             kind: :read,
+            recorded: false,
             planes: [:external],
             permission: :storage_read
           ),
@@ -105,6 +107,7 @@ defmodule Arca.Providers.Records do
               )
             ],
             kind: :read,
+            recorded: false,
             sources: [:outside],
             planes: [:external, :in_chain],
             permission: :storage_read

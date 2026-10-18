@@ -218,6 +218,36 @@ defmodule Prima.OperationTest do
       assert_raise ArgumentError, fn -> Operation.validate!(%{op | resource_schemes: nil}) end
     end
 
+    test "only a read may go unrecorded, and every action is recorded unless it says otherwise" do
+      read = Operation.new("probe", "peek", "Peek", [], kind: :read, planes: [:external])
+      assert read.recorded
+
+      assert %Operation{recorded: false} =
+               Operation.new("probe", "peek", "Peek", [],
+                 kind: :read,
+                 recorded: false,
+                 planes: [:external]
+               )
+
+      for kind <- [:write, :execute, :destructive, :external] do
+        assert_raise ArgumentError, "only a read may go unrecorded", fn ->
+          Operation.new("probe", "act", "Act", [],
+            kind: kind,
+            recorded: false,
+            planes: [:external]
+          )
+        end
+      end
+
+      assert_raise ArgumentError, "invalid operation annotation", fn ->
+        Operation.new("probe", "peek", "Peek", [],
+          kind: :read,
+          recorded: nil,
+          planes: [:external]
+        )
+      end
+    end
+
     test "a resource read is an external, consent-free, replay-safe read of one required uri" do
       for opts <- [
             [kind: :write, recovery: nil],
