@@ -57,14 +57,15 @@ defmodule Cyfr.Integration.Locus.CompileLockTest do
 
     ctx = Sanctum.TestContext.local()
     :ok = Arca.ensure_roots(Sanctum.Context.actor(ctx))
-    :ok = Arca.put(Sanctum.Context.actor(ctx), @src ++ ["src", "lib.rs"], @lib_rs)
 
-    :ok =
-      Arca.put(
-        Sanctum.Context.actor(ctx),
-        @src ++ ["Cargo.toml"],
-        Prima.CargoToml.template(:reagent)
-      )
+    # The component is created as an author creates one, by its scaffold
+    # (a component is never laid by writes), with the reagent's Cargo.toml
+    # template; its source is then edited inside the unit the scaffold
+    # committed.
+    assert {:ok, %{reference: @reference}} =
+             Compendium.Scaffold.create(ctx, "locker", "reagent", "0.1.0")
+
+    :ok = Arca.put(Sanctum.Context.actor(ctx), @src ++ ["src", "lib.rs"], @lib_rs)
 
     {:ok, ctx: ctx}
   end
