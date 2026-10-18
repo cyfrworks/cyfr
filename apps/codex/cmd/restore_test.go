@@ -14,6 +14,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"syscall"
@@ -848,6 +849,89 @@ func TestRestoreRefusesAConfigurationTheBarCannotReach(t *testing.T) {
 	}
 }
 
+// A legitimate snapshot can predate env_file: the update adds that field
+// only after taking its snapshot. Kill restore at its read of the
+// snapshot's configuration, before it can validate and reject that config.
+// The compose file in place must still carry the durable bar to boot: the
+// snapshot's, which would not, is staged beside it and never in place.
+func TestRestoreKilledAtItsConfigurationReadLeavesComposeBarred(t *testing.T) {
+	requireCompose(t)
+	realDocker, err := exec.LookPath("docker")
+	if err != nil {
+		t.Fatal(err)
+	}
+	compose := string(shippedCompose(t))
+	const envFile = "    env_file:\n      - .env\n"
+	if !strings.Contains(compose, envFile) {
+		t.Fatal("fixture no longer contains cyfr env_file")
+	}
+	compose = strings.Replace(compose, envFile, "", 1)
+	// The old deployment can supply its settings explicitly rather than
+	// loading the whole .env into the container; that is valid Compose.
+	compose = strings.Replace(compose, "    environment:\n", "    environment:\n      - CYFR_SECRET_KEY_BASE="+keyBase+"\n      - 'CYFR_CRYPTO_KEYRING="+keyring+"'\n", 1)
+	r := newRestoreScenario(t, []byte(compose), nil, nil)
+	before := read(t, filepath.Join(r.project, "docker-compose.yml"))
+	if before == compose {
+		t.Fatal("update did not install its new compose configuration")
+	}
+	r.edit("data/blobs/x", "post-update bytes")
+	r.answer("config.kill", "")
+	cmd := exec.Command(os.Args[0], "-test.run=^TestRestoreProcessHelper$", "-test.count=1")
+	cmd.Env = append(os.Environ(), "CYFR_TEST_RESTORE_SNAPSHOT="+r.dir)
+	out, err := cmd.CombinedOutput()
+	var exit *exec.ExitError
+	if !errors.As(err, &exit) || exit.Sys().(syscall.WaitStatus).Signal() != syscall.SIGKILL {
+		t.Fatalf("restore was not killed at config: %v\n%s", err, out)
+	}
+	if got := read(t, filepath.Join(r.project, "docker-compose.yml")); got == compose {
+		t.Fatal("the snapshot's compose, which gives cyfr no bar, was put in place before its configuration was read")
+	}
+	if got := read(t, filepath.Join(r.project, stagedCompose)); got != compose {
+		t.Fatal("the snapshot's compose was not staged beside docker-compose.yml")
+	}
+	if got := read(t, filepath.Join(r.project, "data/blobs/x")); got != "post-update bytes" {
+		t.Fatalf("unexpected data replacement before config: %q", got)
+	}
+	if snapshot, barred := restoreBarred(filepath.Join(r.project, ".env")); !barred || snapshot != r.dir {
+		t.Fatalf("host marker missing: %q, %v", snapshot, barred)
+	}
+	r.barred() // The CLI refuses; verify the independent container route.
+	cmd = exec.Command(realDocker, "compose", "--project-directory", r.project, "-f", filepath.Join(r.project, "docker-compose.yml"), "config", "--format", "json")
+	var stderr strings.Builder
+	cmd.Stderr = &stderr
+	out, err = cmd.Output()
+	if err != nil {
+		t.Fatalf("real compose config: %v\n%s", err, &stderr)
+	}
+	var config composeConfig
+	if err := json.Unmarshal(out, &config); err != nil {
+		t.Fatal(err)
+	}
+	got := serviceSetting(config.Services["cyfr"].Environment, restoreBarrier)
+	if got != r.dir {
+		t.Fatalf("snapshot compose is live over post-update data, but real Compose gives boot %s=%q; host .env is barred and declaration never ran", restoreBarrier, got)
+	}
+
+	// Run to its end, the restore refuses the snapshot whose compose file
+	// gives cyfr no bar, and puts the configuration back as it was.
+	if err := os.Remove(filepath.Join(r.project, updateLockName)); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(filepath.Join(r.fake, "config.kill")); err != nil {
+		t.Fatal(err)
+	}
+	r.answer("config.nobar", "")
+	if out, err := r.restore(true); err == nil || !strings.Contains(err.Error(), "does not take CYFR_RESTORE_INCOMPLETE from .env") {
+		t.Fatalf("restore answered %v\n%s", err, out)
+	}
+	if got := read(t, filepath.Join(r.project, "docker-compose.yml")); got != before {
+		t.Error("the refused restore left another compose file in place")
+	}
+	if got := read(t, filepath.Join(r.project, stagedCompose)); got != "<absent>" {
+		t.Error("the refused restore left its staged compose file")
+	}
+}
+
 // restoreBarred reads the bar from any assignment, quoted or not, since
 // compose takes a later assignment over an earlier one; withBarrier takes
 // every earlier assignment out, so the one it writes is the only one.
@@ -1008,6 +1092,44 @@ func TestRestoreReadsTheStagedConfigurationAsComposeWill(t *testing.T) {
 			r.configAsBefore(before, string(r.env))
 			if got := read(t, filepath.Join(r.project, "data", "blobs", "x")); got != "rewritten" {
 				t.Errorf("a part was put back: blobs/x holds %q", got)
+			}
+		})
+	}
+}
+
+// All four default override filenames are tested with docker-compose.yml
+// as the sole base file. Explicit -f selection must resolve the same
+// configuration that a normal compose invocation sees after publication.
+func TestRestoreStagedComposeResolvesAsTheDefaultOverrideSet(t *testing.T) {
+	requireCompose(t)
+	for _, override := range []string{"compose.override.yml", "compose.override.yaml", "docker-compose.override.yml", "docker-compose.override.yaml"} {
+		t.Run(override, func(t *testing.T) {
+			t.Chdir(t.TempDir())
+			const base = "services:\n  cyfr:\n    image: alpine:3.22\n    env_file: [.env]\n"
+			for name, content := range map[string]string{
+				"docker-compose.yml": base,
+				stagedCompose:        base,
+				".env":               restoreBarrier + "=/snapshot\n",
+				override:             "services:\n  cyfr:\n    environment:\n      " + restoreBarrier + ": ''\n      CYFR_DATA_PATH: /custom-data\n",
+			} {
+				if err := os.WriteFile(name, []byte(content), 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			r := &restorer{}
+			args, err := r.stagedComposeArgs("config", "--format", "json")
+			if err != nil {
+				t.Fatal(err)
+			}
+			staged := composeConfigOf(t, args...).Services["cyfr"]
+			if err := r.publishCompose(); err != nil {
+				t.Fatal(err)
+			}
+			active := composeConfigOf(t, "compose", "config", "--format", "json").Services["cyfr"]
+			if !reflect.DeepEqual(staged.Environment, active.Environment) {
+				t.Fatalf("staged resolution differs from default Compose with %s: barrier staged=%q active=%q; data path staged=%q active=%q", override,
+					serviceSetting(staged.Environment, restoreBarrier), serviceSetting(active.Environment, restoreBarrier),
+					serviceSetting(staged.Environment, "CYFR_DATA_PATH"), serviceSetting(active.Environment, "CYFR_DATA_PATH"))
 			}
 		})
 	}

@@ -84,6 +84,20 @@ jobs:
           go test ./... -race -coverprofile="$RUNNER_TEMP/cover.out"
           echo "apps/codex coverage: $(go tool cover -func "$RUNNER_TEMP/cover.out" | tail -1)" >> "$GITHUB_STEP_SUMMARY"
 
+      # These tests ask real Docker Compose how it resolves the files the
+      # CLI writes or stages, and skip where `docker compose version` fails,
+      # as on the macOS runner. This runner has Compose, so a skip here, or
+      # a test that no longer runs, fails the step. The list is exactly the
+      # tests that call requireCompose (TestComposeTestsAreTheOnesCIRequires).
+      - name: go test (the Docker Compose tests ran and passed)
+        env:
+          COMPOSE_TESTS: TestEnsureCyfrComposeFieldsAddsNothingWhenAMergeKeyBindsBothTargets TestEnsureComposeFieldsCopiesASharedAnchorBeforeAddingADefault TestRestoreKilledAtItsConfigurationReadLeavesComposeBarred TestRestoreStagedComposeResolvesAsTheDefaultOverrideSet
+        run: |
+          set -euo pipefail
+          docker compose version
+          go test ./cmd/ -race -count=1 -v -run "^(${COMPOSE_TESTS// /|})\$" 2>&1 | tee "$RUNNER_TEMP/compose-tests.log"
+          for t in $COMPOSE_TESTS; do grep -q -- "--- PASS: $t " "$RUNNER_TEMP/compose-tests.log" || { echo "::error::the Docker Compose test $t did not run and pass"; exit 1; }; done
+
       - name: go build
         run: go build ./...
 

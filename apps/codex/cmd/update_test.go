@@ -10,6 +10,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"io"
 	"io/fs"
 	"maps"
@@ -1930,6 +1933,181 @@ func TestEnsureCyfrComposeFieldsLeavesAnAnchoredListAlone(t *testing.T) {
 	}
 	if got, _ := os.ReadFile(path); string(got) != input {
 		t.Errorf("docker-compose.yml was rewritten:\n%s", got)
+	}
+}
+
+// requireCompose skips t, naming why, where `docker compose version` fails:
+// t asks real Docker Compose how it resolves the files the CLI writes or
+// stages. The macOS runner has no Docker; codex-ci.yml's Linux job has it
+// and requires every test that calls this to pass.
+func requireCompose(t *testing.T) {
+	t.Helper()
+	if out, err := exec.Command("docker", "compose", "version").CombinedOutput(); err != nil {
+		t.Skipf("needs real Docker Compose, and `docker compose version` failed: %v\n%s", err, out)
+	}
+}
+
+// The tests that call requireCompose are exactly the ones codex-ci.yml's
+// Linux job requires to pass, so none of them can skip there unseen.
+func TestComposeTestsAreTheOnesCIRequires(t *testing.T) {
+	sources, err := filepath.Glob("*_test.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var calling []string
+	fset := token.NewFileSet()
+	for _, name := range sources {
+		file, err := parser.ParseFile(fset, name, nil, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, decl := range file.Decls {
+			fn, ok := decl.(*ast.FuncDecl)
+			if !ok || fn.Body == nil || !strings.HasPrefix(fn.Name.Name, "Test") {
+				continue
+			}
+			ast.Inspect(fn.Body, func(node ast.Node) bool {
+				if call, ok := node.(*ast.CallExpr); ok {
+					if ident, ok := call.Fun.(*ast.Ident); ok && ident.Name == "requireCompose" {
+						calling = append(calling, fn.Name.Name)
+						return false
+					}
+				}
+				return true
+			})
+		}
+	}
+	slices.Sort(calling)
+	calling = slices.Compact(calling)
+
+	data, err := os.ReadFile(filepath.Join("..", "..", "..", ".github", "workflows", "codex-ci.yml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var workflow struct {
+		Jobs map[string]struct {
+			Steps []struct {
+				Env map[string]string `yaml:"env"`
+			} `yaml:"steps"`
+		} `yaml:"jobs"`
+	}
+	if err := yaml.Unmarshal(data, &workflow); err != nil {
+		t.Fatal(err)
+	}
+	var required []string
+	for _, step := range workflow.Jobs["test"].Steps {
+		required = append(required, strings.Fields(step.Env["COMPOSE_TESTS"])...)
+	}
+	slices.Sort(required)
+	if len(calling) == 0 || !slices.Equal(calling, required) {
+		t.Errorf("the tests that call requireCompose are %v; codex-ci.yml's test job requires %v", calling, required)
+	}
+}
+
+// composeConfigOf runs docker with args, COMPOSE_FILE left out of its
+// environment, and answers the configuration it prints.
+func composeConfigOf(t *testing.T, args ...string) composeConfig {
+	t.Helper()
+	cmd := exec.Command("docker", args...)
+	for _, entry := range os.Environ() {
+		if !strings.HasPrefix(entry, "COMPOSE_FILE=") {
+			cmd.Env = append(cmd.Env, entry)
+		}
+	}
+	var stderr strings.Builder
+	cmd.Stderr = &stderr
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("docker %v: %v\n%s", args, err, &stderr)
+	}
+	var config composeConfig
+	if err := json.Unmarshal(out, &config); err != nil {
+		t.Fatal(err)
+	}
+	return config
+}
+
+// The updater already accepts service-level YAML merges (serviceImage).
+// Adding a direct volumes key must not shadow mounts inherited that way.
+func TestEnsureCyfrComposeFieldsAddsNothingWhenAMergeKeyBindsBothTargets(t *testing.T) {
+	requireCompose(t)
+	dir := t.TempDir()
+	file := filepath.Join(dir, "docker-compose.yml")
+	input := `x-base: &base
+  volumes:
+    - ./alternate-data:/app/data
+    - ./my-aqua:/app/seed/aqua
+services:
+  cyfr:
+    <<: *base
+    image: alpine:3.22
+    container_name: cyfr
+    env_file: [.env]
+    ports:
+      - "127.0.0.1:${CYFR_PORT:-4000}:${CYFR_PORT:-4000}"
+`
+	if err := os.WriteFile(file, []byte(input), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, ".env"), []byte("CYFR_PORT=4000\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	before := resolvedDataSource(t, dir)
+	added, err := ensureCyfrComposeFields(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	after := resolvedDataSource(t, dir)
+	if len(added) != 0 || after != before {
+		t.Fatalf("inherited target changed: added=%v, /app/data before=%s after=%s", added, before, after)
+	}
+}
+
+// A list referenced by cyfr is not owned solely by cyfr. Adding a missing
+// default must materialize a private list, preserving the shared anchor.
+func TestEnsureComposeFieldsCopiesASharedAnchorBeforeAddingADefault(t *testing.T) {
+	requireCompose(t)
+	dir := t.TempDir()
+	t.Chdir(dir)
+	const input = `x-volumes: &shared
+  - ./alternate-data:/app/data
+services:
+  cyfr:
+    image: alpine:3.22
+    container_name: cyfr
+    env_file: [.env]
+    ports:
+      - "127.0.0.1:${CYFR_PORT:-4000}:${CYFR_PORT:-4000}"
+    volumes: *shared
+  other:
+    image: alpine:3.22
+    volumes: *shared
+`
+	if err := os.WriteFile("docker-compose.yml", []byte(input), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(".env", []byte("CYFR_PORT=4000\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	before := composeConfigOf(t, "compose", "config", "--format", "json")
+	// This is the switchImages path, supplied with preflight's resolved
+	// targets, not just the standalone ensureCyfrComposeFields helper.
+	added, err := ensureComposeFields(filepath.Join(dir, "docker-compose.yml"), map[string]bool{"/app/data": true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	after := composeConfigOf(t, "compose", "config", "--format", "json")
+	if !reflect.DeepEqual(before.Services["other"].Volumes, after.Services["other"].Volumes) {
+		t.Fatalf("adding cyfr defaults %v changed another service's mounts: before=%+v after=%+v", added, before.Services["other"].Volumes, after.Services["other"].Volumes)
+	}
+	found := false
+	for _, volume := range after.Services["cyfr"].Volumes {
+		if volume.Target == "/app/seed/aqua" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("cyfr did not receive its missing default mount")
 	}
 }
 
