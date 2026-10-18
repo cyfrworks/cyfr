@@ -325,8 +325,14 @@ defmodule Sanctum.Provisioning do
           {:ok, Sanctum.Tenancy.Athanors.athanor()} | {:error, term()}
   def provision(%{provisioned_at: %DateTime{}} = athanor, _ctx), do: {:ok, athanor}
 
-  def provision(athanor, acting_ctx),
-    do: Sanctum.Consent.Components.fill(athanor, acting_ctx, "provision")
+  # The port's fill answers :ok only for a hook's entry kinds, which start
+  # in the background; the explicit verb answers where the athanor stands.
+  def provision(athanor, acting_ctx) do
+    case Sanctum.Consent.Components.fill(athanor, acting_ctx, "provision") do
+      {:ok, _athanor} = filled -> filled
+      {:error, _reason} = refused -> refused
+    end
+  end
 
   # ---- the athanor's filler ---------------------------------------------------
 
