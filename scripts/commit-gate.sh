@@ -69,6 +69,7 @@
 #   security.yml installer-verify
 #   security.yml repo-scan
 #   security.yml npm-audit
+#   test.yml static: Read the Rust fixtures' toolchain pin
 #   test.yml static: Test the model catalysts
 #   test.yml static: Every stamped seed guest is built from its source
 #   test.yml static: Every seed guest carries a stamp, and its crate version is its own
@@ -77,9 +78,11 @@
 #   test.yml static: The tag pipeline's graph
 #   test.yml static: The containerd image store switch's cases
 #   test.yml static: The tag pipeline's image publication
+#   test.yml test: Read the Rust fixtures' toolchain pin
 #   test.yml s3-minio
 #   test.yml locus-image
 #   test.yml builder-image
+#   test.yml locus-runtime-image: Docker Engine 28 or later on cgroup v2
 #   test.yml locus-runtime-image: Runner kills, memory bound, settlement and cleanup
 #   test.yml locus-runtime-image: Each runner in namespaces of its own
 #   test.yml locus-runtime-image: The credential canary

@@ -155,16 +155,19 @@ framed() {
 
 # --- what the gate leaves out ------------------------------------------------
 # ci_roster GATE WORKFLOWS: every step of every workflow a pull request
-# runs is one of three things, and nothing else: run by a step of the gate
+# runs is one of four things, and nothing else: run by a step of the gate
 # (CI_RUNS below, each naming gate steps the gate has), named on the gate's
-# "Not part of this gate" list (a job there covers every step of it), or
-# setup that checks nothing (CI_SETUP). A list entry, a run or a setup name
-# that matches no step fails too, so the list is the workflows' exactly. A
-# step is keyed by its name, or unnamed by `uses: ACTION` or by its whole
-# script, `run: LINE; LINE…`, so an unnamed step is setup only when every
-# command in it is the setup listed, and one that adds a check to a setup
-# command is a step of its own. release.yml runs on a tag alone, and its
-# checks are these workflows, which it calls.
+# "Not part of this gate" list (a job there covers every step of it),
+# setup that checks nothing, or a report of a failed job. One rule makes a
+# step setup, named or not: it uses a listed action (SETUP_ACTIONS), or
+# every command its script runs is a listed setup command (SETUP_COMMANDS),
+# so a setup step that gains a check is no longer setup. A step whose `if:`
+# is `failure()`, alone or and-ed, runs only once its job has failed, so it
+# cannot decide a pass: a report. A list entry, a run, a setup action or a
+# setup command that matches no step fails too, so the list is the
+# workflows' exactly. A step is keyed by its name, or unnamed by
+# `uses: ACTION` or by its whole script, `run: LINE; LINE…`. release.yml
+# runs on a tag alone, and its checks are these workflows, which it calls.
 ci_roster() {
   python3 -I - "$1" "$2" <<'PY'
 import glob, os, re, sys, yaml
@@ -215,15 +218,75 @@ CI_RUNS = {
     ("test.yml", "release-boot", "Each run names and drops databases of its own"): ["boot_names"],
     ("test.yml", "vocabulary-gate", "Tier A/B fossil patterns must be absent"): ["fossils"],
 }
-CI_SETUP = {
-    "uses: actions/checkout", "uses: actions/setup-node", "uses: ./.github/actions/setup-elixir",
-    "run: mix deps.get", "Cache deps", "Cache deps and build", "Cache deps and the prod build",
-    "Read the Rust fixtures' toolchain pin", "Cache cargo-component", "Install cargo-component",
-    "Install the Rust fixtures' toolchain", "Install dependencies", "Use the containerd image store",
-    "Prepare the failed run's kept directory", "Upload the failed run's kept directory",
-    "Start MinIO", "Wait for MinIO", "MinIO logs",
-    "Docker Engine 28 or later on cgroup v2", "Fetch the Locus image", "Load the Locus image",
+SETUP_ACTIONS = {
+    "actions/checkout", "actions/setup-node", "./.github/actions/setup-elixir", "actions/cache",
+    "actions/upload-artifact", "actions/download-artifact",
 }
+# Each a whole command, as the script spells it with its continuations
+# joined: installs, a container started for a suite, a wait for it, an
+# image loaded and tagged.
+SETUP_COMMANDS = [
+    r"set -euo pipefail",
+    r"mix deps\.get",
+    r"sudo scripts/ci/containerd-image-store\.sh",
+    r"rustup (?:target add|toolchain install) [^;&|<>`$()]*(?:\"\$[A-Z_]+\"[^;&|<>`()]*)*",
+    r'if \[ "\$CACHE_HIT" != "true" \]; then',
+    r'cargo install cargo-component --version "\$CARGO_COMPONENT_VERSION" --locked',
+    r"cargo-component --version",
+    r"docker run -d --name minio [^;&|<>`$()]*",
+    r"for i in \$\(seq 1 \d+\); do",
+    r"curl -sf http://127\.0\.0\.1:9000/minio/health/live && exit 0",
+    r"sleep \d+",
+    r'echo "MinIO did not become healthy" >&2',
+    r"docker logs minio \|\| true",
+    r"exit 1",
+    r'zstd -dc "\$RUNNER_TEMP/locus-image/cyfr-locus\.tar\.zst" \| docker load',
+    r"docker tag cyfr-locus:ci cyfr-locus:[a-z-]+",
+]
+SHAPE = {"then", "else", "fi", "do", "done", "{", "}"}
+
+# The commands of a script: its lines with continuations joined, less blank
+# lines, comments, a heredoc's body and the words that only shape it.
+def commands(script):
+    out, joined, heredoc = [], "", None
+    for line in script.split("\n"):
+        if heredoc is not None:
+            if line.strip() == heredoc:
+                heredoc = None
+            continue
+        if line.endswith("\\"):
+            joined += line[:-1].strip() + " "
+            continue
+        line, joined = (joined + line.strip()).strip(), ""
+        if not line or line.startswith("#") or line in SHAPE:
+            continue
+        m = re.search(r"<<-?\s*'?([A-Za-z_]+)'?", line)
+        if m:
+            heredoc = m.group(1)
+        out.append(line)
+    return out
+
+setup_used = set()
+def unlisted(s):
+    """The commands of a run step that are no setup command, or None for a
+    step that uses an action: [] for setup."""
+    if "uses" in s:
+        action = s["uses"].split("@")[0]
+        if action in SETUP_ACTIONS:
+            setup_used.add(action)
+            return []
+        return [action]
+    left = []
+    for c in commands(s["run"]):
+        hit = next((p for p in SETUP_COMMANDS if re.fullmatch(p, c)), None)
+        if hit is None:
+            left.append(c)
+        else:
+            setup_used.add(hit)
+    return left
+
+def report(s):
+    return re.fullmatch(r"failure\(\)(\s*&&.*)?", str(s.get("if", "")).strip()) is not None
 
 def key(s):
     if s.get("name"):
@@ -233,7 +296,7 @@ def key(s):
     lines = [l.strip() for l in s["run"].strip().split("\n") if l.strip()]
     return "run: " + "; ".join(lines)
 
-errors, runs_seen, setup_seen = [], set(), set()
+errors, runs_seen = [], set()
 for path in sorted(glob.glob(os.path.join(wf_dir, "*.yml"))):
     wf = os.path.basename(path)
     spec = yaml.safe_load(open(path))
@@ -253,12 +316,15 @@ for path in sorted(glob.glob(os.path.join(wf_dir, "*.yml"))):
             if (wf, job, k) in CI_RUNS:
                 runs_seen.add((wf, job, k))
                 where.append("a gate step")
-            if k in CI_SETUP:
-                setup_seen.add(k)
+            left = unlisted(s)
+            if not where and report(s):
+                where.append("a report")
+            elif not where and left == []:
                 where.append("setup")
             if len(where) != 1:
+                why = f" (it runs {', '.join(map(repr, left))}, no setup command)" if not where and left else ""
                 errors.append(f"{wf} {job}: {k!r} is " + (" and ".join(where) if where else
-                              "neither run by the gate nor on its list"))
+                              "neither run by the gate nor on its list") + why)
 for (wf, job, k), n in roster.items():
     if n == 0:
         errors.append(f"the list names {wf} {job}" + (f": {k}" if k else "") + ", which no pull request runs")
@@ -266,16 +332,17 @@ for entry, names in CI_RUNS.items():
     if entry not in runs_seen:
         errors.append(f"the test's run map names {entry}, which no pull request runs")
     errors += [f"the test's run map names the gate step {n}, which the gate has not" for n in names if n not in have]
-errors += [f"the test's setup names {k!r}, which no step is" for k in sorted(CI_SETUP - setup_seen)]
+errors += [f"the test's setup names {k!r}, which no step is"
+           for k in sorted(SETUP_ACTIONS - setup_used) + [p for p in SETUP_COMMANDS if p not in setup_used]]
 for e in errors:
     print(e, file=sys.stderr)
 sys.exit(1 if errors else 0)
 PY
 }
 ci_roster "$gate" "$root/.github/workflows" || fail "the gate's exclusion list is not CI's checks less the gate's"
-# Planted: a check added to CI, named and unnamed behind a setup command, a
-# job taken off the list, and a list entry CI no longer has each fail it,
-# with the reason.
+# Planted: a check added to CI, unnamed behind a setup command, a named
+# setup step that gains a check, a job taken off the list, and a list
+# entry CI no longer has each fail it, with the reason.
 mkdir -p "$scratch/roster/wf"
 cp "$root"/.github/workflows/*.yml "$scratch/roster/wf/"
 python3 -I - "$scratch/roster/wf/test.yml" <<'PY'
@@ -302,6 +369,20 @@ PY
   fail 'an unnamed CI check behind a setup command passed as setup'
 has_line "^test.yml static: 'run: mix deps.get; test -f newly-required-ci-asset' is neither run by the gate nor on its list" \
   "$scratch/roster/unnamed.err" || fail "an unnamed CI check failed without its reason: $(cat "$scratch/roster/unnamed.err")"
+mkdir -p "$scratch/roster/named"
+cp "$root"/.github/workflows/*.yml "$scratch/roster/named/"
+python3 -I - "$scratch/roster/named/test.yml" <<'PY'
+import sys
+p = sys.argv[1]; s = open(p).read()
+setup = "      - name: Install dependencies\n        run: mix deps.get\n"
+assert setup in s
+named = "      - name: Install dependencies\n        run: |\n          mix deps.get\n          test -f newly-required-ci-asset\n"
+open(p, "w").write(s.replace(setup, named, 1))
+PY
+! ci_roster "$gate" "$scratch/roster/named" 2>"$scratch/roster/named.err" ||
+  fail 'a named setup step that gained a check passed as setup'
+has_line "^test.yml static: 'Install dependencies' is neither run by the gate nor on its list \(it runs 'test -f newly-required-ci-asset', no setup command\)" \
+  "$scratch/roster/named.err" || fail "a named setup step with a check failed without its reason: $(cat "$scratch/roster/named.err")"
 grep -vxF '#   test.yml browser' "$gate" > "$scratch/roster/dropped.sh"
 ! ci_roster "$scratch/roster/dropped.sh" "$root/.github/workflows" 2>"$scratch/roster/dropped.err" ||
   fail 'a CI job taken off the list passed'
