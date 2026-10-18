@@ -78,9 +78,10 @@ server_fixture "$CELL" tincture "$user_id" "$HERE/tinctures/containment-probe" c
 server_fixture "$CELL" tincture "$user_id" "$HERE/tinctures/containment-neighbour" containment-neighbour private >/dev/null
 server_fixture "$CELL" tincture "$user_id" "$WORK/containment-probe-public" containment-probe-public public >/dev/null
 # The shell opens a tincture's frame only under the person's grant: each
-# probe the proof opens is granted its whole ask, as the consent walk
-# grants it. The neighbour is never opened, only reached from a probe.
+# tincture the shell opens in the proof, the neighbour a probe asks it to
+# open among them, is granted its whole ask, as the consent walk grants it.
 server_fixture "$CELL" grant "$token" containment-probe >/dev/null
+server_fixture "$CELL" grant "$token" containment-neighbour >/dev/null
 server_fixture "$CELL" grant "$token" containment-probe-public >/dev/null
 neighbour="$(server_fixture "$CELL" tincture "$user_id" "$ROOT/tests/browser/tinctures/frame-neighbour" frame-neighbour public)"
 neighbour_path="$(field "$neighbour" path)"

@@ -4,8 +4,9 @@
 that declares nothing can do from inside the frame the Prism shell creates
 for it. The probe (`tinctures/containment-probe/`) is published twice into a
 signed-in person's athanor, private and public, and opened from the shell in
-Chromium, Firefox and WebKit. Every probe the proof opens is granted its
-whole ask through the consent walk first (`grant` in
+Chromium, Firefox and WebKit. Every tincture the shell opens in the proof,
+the sibling a probe asks it to open among them, is granted its whole ask
+through the consent walk first (`grant` in
 `tests/release-boot/fixture.exs`), since the shell opens a tincture's frame
 only under its owner's grant. `proof.mjs` drives one attempt at a time and
 reads each where it can be seen: in the frame, at the harness's proxy, at a
