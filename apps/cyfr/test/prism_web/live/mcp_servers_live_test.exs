@@ -5,8 +5,9 @@ defmodule PrismWeb.McpServersLiveTest do
   @moduledoc """
   The MCP servers page adds a stdio server through its form, sends its env
   lines as the backend's env, says why a server was not added, says why
-  a server it added or tested could not connect, and offers Restart for a
-  stdio server only.
+  a server it added or tested could not connect, shows the warnings a
+  server it added carries in the flash and on its row, and offers Restart
+  for a stdio server only.
   """
   use PrismWeb.ConnCase, async: false
 
@@ -42,6 +43,54 @@ defmodule PrismWeb.McpServersLiveTest do
   end
 
   defp flash(view, kind), do: :sys.get_state(view.pid).socket.assigns.flash[kind]
+
+  @root :crypto.strong_rand_bytes(32)
+
+  test "a stdio server whose command expands a vault-bound name is added with its warning",
+       %{conn: conn, athanor: athanor, user: user} do
+    # The control plane the controller takes is put back however the test
+    # ends, registered before it is taken.
+    on_exit(fn ->
+      :persistent_term.erase({Arca.ControlPlane, :generation})
+      Arca.ControlPlane.record(:unclaimed)
+    end)
+
+    fake = Cyfr.Test.ScriptedBackends.start(self(), @root)
+
+    Cyfr.Test.ScriptedBackends.supervise_controller(
+      url: fake.url,
+      root: @root,
+      tick_ms: 3_600_000
+    )
+
+    assert_receive {:control, "reconcile", _reconcile, _fields}, 2_000
+    entry!(user, athanor, "gh", %{"hosts" => ["api.github.com"]}, true)
+
+    {view, _html} = mount_athanor(conn, "/mcp-servers", athanor)
+    view |> element("button", "Add stdio server") |> render_click()
+
+    view
+    |> form("form[phx-submit=add_stdio]", %{
+      "name" => "github",
+      "backend" => "github",
+      "command" => "npx -y @modelcontextprotocol/server-github --token $GITHUB_TOKEN",
+      "env" => "GITHUB_TOKEN=vault:gh"
+    })
+    |> render_submit()
+
+    warning =
+      "Backend 'github' expands GITHUB_TOKEN, a vault-bound env name, in its command: the " <>
+        "value is placed on the command line, where every process on the backends service, " <>
+        "other athanors' backends included, can read it; the safe route is to let the " <>
+        "program read it from its environment."
+
+    assert flash(view, "info") == "Server 'github' added (ready)."
+    assert flash(view, "warning") == warning
+    assert_received {:control, "sync", _sync, _fields}
+
+    html = view |> element("tr[phx-value-name=github]") |> render_click()
+    assert html =~ "expands GITHUB_TOKEN, a vault-bound env name, in its command"
+  end
 
   test "the stdio form refuses a malformed env line, and a server the catalog refuses",
        %{conn: conn, athanor: athanor, user: user} do

@@ -105,6 +105,67 @@ defmodule Cyfr.Test.ScriptedBackends do
 
   def set(%{agent: agent}, key, value), do: Agent.update(agent, &Map.put(&1, key, value))
 
+  defmodule Teardown do
+    @moduledoc false
+    # Runs `stop` as the test's supervisor stops it: before every child
+    # started ahead of it, while they all still run.
+    use GenServer
+
+    def start_link(stop), do: GenServer.start_link(__MODULE__, stop)
+
+    @impl true
+    def init(stop) do
+      Process.flag(:trap_exit, true)
+      {:ok, stop}
+    end
+
+    @impl true
+    def terminate(_reason, stop), do: stop.()
+  end
+
+  @doc """
+  The backends controller (`Emissary.External.Backends`) under the calling
+  test, started with `opts`, and stopped when the test ends as the
+  application stops it: after the server processes, which release their
+  owners through it as they stop, and only once it has nothing left to
+  send. Stopped with a message in flight, it would cut off the request the
+  script is serving.
+  """
+  def supervise_controller(opts) do
+    controller = ExUnit.Callbacks.start_supervised!({Emissary.External.Backends, opts})
+    ExUnit.Callbacks.start_supervised!({Teardown, &quiesce/0}, shutdown: 10_000)
+    controller
+  end
+
+  defp quiesce(deadline \\ System.monotonic_time(:millisecond) + 3_000) do
+    for {_id, pid, _type, _modules} <-
+          DynamicSupervisor.which_children(Emissary.External.ServerSupervisor) do
+      DynamicSupervisor.terminate_child(Emissary.External.ServerSupervisor, pid)
+    end
+
+    state = :sys.get_state(Emissary.External.Backends)
+
+    settled =
+      state.owners == %{} and state.releases == %{} and state.claims == %{} and
+        state.releasing == %{} and state.inflight == nil and :queue.is_empty(state.urgent) and
+        :queue.is_empty(state.queue)
+
+    cond do
+      settled ->
+        :ok
+
+      System.monotonic_time(:millisecond) > deadline ->
+        ExUnit.Assertions.flunk(
+          "timed out waiting for the controller to run no owner, hold no claim and " <>
+            "have nothing left to send"
+        )
+
+      true ->
+        Process.sleep(10)
+        quiesce(deadline)
+    end
+  end
+
   @doc "What the owner of `server` reports: its state and rev."
   def readiness(%{agent: agent}, server, state, rev),
     do: Agent.update(agent, &put_in(&1, [:readiness, server], %{state: state, rev: rev}))

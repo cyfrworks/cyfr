@@ -20,15 +20,6 @@ defmodule Emissary.External.BackendDefinition do
       `Prima.LocusBackends.max_command_bytes/0` bytes with no NUL byte and
       no `vault:` — every process on the service can read a command line,
       so a credential never goes in one;
-    * a command holds none of its own vault-bound env names as an
-      expansion (`$NAME`, `${NAME…}`, quoted or escaped alike), and, beside
-      any vault-bound name, holds no command substitution, arithmetic
-      expansion or indirection (`$(`, a backtick, `$[`, `${!`, `${ `, `${|`),
-      read with its line continuations joined: the value reaches the
-      program through its environment, never its command line. The check
-      reads the command's text, not what a program it starts does:
-      `printenv NAME | xargs …` or a program that passes the value to a
-      child still puts it on a command line;
     * an env name matches `^[A-Z_][A-Z0-9_]{0,63}$` and is none of the
       wire's reserved names (`Prima.LocusBackends.reserved_env_names/0`:
       `PATH HOME USER LOGNAME SHELL TMPDIR PWD`), nor prefixed with one of
@@ -38,6 +29,16 @@ defmodule Emissary.External.BackendDefinition do
     * an env value is a vault template (`Prima.VaultRef`); only the
       non-secret names in `literal_names/0` may hold a literal, of at most
       4096 bytes, instead.
+
+  `warnings/1` answers what a definition does that the administrator may
+  choose but is told of, one sentence each: a command that holds one of
+  its own vault-bound env names as an expansion (`$NAME`, `${NAME…}`,
+  quoted or escaped alike), or, beside a vault-bound name, a command
+  substitution, arithmetic expansion or indirection (`$(`, a backtick,
+  `$[`, `${!`, `${ `, `${|`), read with its line continuations joined,
+  places the value on the command line. The check reads the command's
+  text, not what a program it starts does: `printenv NAME | xargs …` or a
+  program that passes the value to a child puts it on a command line too.
   """
 
   alias Prima.{LocusBackends, VaultRef}
@@ -95,11 +96,65 @@ defmodule Emissary.External.BackendDefinition do
 
   def entry_names(_backends), do: []
 
+  @doc """
+  The warnings a stdio server's backends carry, in backend order: each
+  vault-bound env name a command expands, then, beside the vault-bound
+  names it does not expand, the first form that computes a value when the
+  shell runs it. Empty when there is nothing to warn of.
+  """
+  @spec warnings(term()) :: [String.t()]
+  def warnings(backends) when is_list(backends), do: Enum.flat_map(backends, &backend_warnings/1)
+  def warnings(_backends), do: []
+
+  # The command runs as `/bin/sh -c command` (Locus.Backends.Backend), so a
+  # vault-bound name the shell expands puts the disclosed value in a child's
+  # argv, which every process on the backends service can read. The forms
+  # that compute a value at run time can expand any name. A
+  # backslash-newline is joined before the shell reads a word, so it is
+  # joined here too.
+  @computed ["$(", "`", "$[", "${!", "${ ", "${\t", "${\n", "${|"]
+
+  defp backend_warnings(%{"name" => name, "command" => command} = backend)
+       when is_binary(command) do
+    bound =
+      case Map.get(backend, "env") do
+        %{} = env -> for {key, value} <- Enum.sort(env), VaultRef.vault_ref?(value), do: key
+        _absent -> []
+      end
+
+    text = String.replace(command, "\\\n", "")
+    {expanded, beside} = Enum.split_with(bound, &expands?(text, &1))
+    form = if beside != [], do: Enum.find(@computed, &String.contains?(text, &1))
+
+    Enum.map(expanded, &warning(name, {:expands, &1})) ++
+      if(form, do: [warning(name, {:computes, form, beside})], else: [])
+  end
+
+  defp backend_warnings(_backend), do: []
+
+  defp expands?(text, key) do
+    Regex.match?(~r/\$\{?#{Regex.escape(key)}(?![A-Za-z0-9_])/, text)
+  end
+
+  @exposed "on the command line, where every process on the backends service, other " <>
+             "athanors' backends included, can read it; the safe route is to let the " <>
+             "program read it from its environment"
+
+  defp warning(backend, {:expands, var}) do
+    "Backend '#{backend}' expands #{var}, a vault-bound env name, in its command: " <>
+      "the value is placed #{@exposed}."
+  end
+
+  defp warning(backend, {:computes, form, vars}) do
+    "Backend '#{backend}' has #{inspect(form)} in its command beside the vault-bound " <>
+      "#{Enum.join(vars, ", ")}: a command substitution, arithmetic expansion or " <>
+      "indirection can place the value #{@exposed}."
+  end
+
   defp backend(%{"name" => name, "command" => command} = backend) do
     with :ok <- check_name(name),
-         {:ok, env} <- check_env(name, Map.get(backend, "env", %{})),
          :ok <- check_command(name, command),
-         :ok <- check_expansions(name, command, env),
+         {:ok, env} <- check_env(name, Map.get(backend, "env", %{})),
          :ok <- only_keys(name, backend) do
       {:ok, %{"name" => name, "command" => command, "env" => env}}
     end
@@ -147,47 +202,6 @@ defmodule Emissary.External.BackendDefinition do
   end
 
   defp check_command(name, _command), do: invalid("Backend '#{name}' needs a command string")
-
-  # The command runs as `/bin/sh -c command` (Locus.Backends.Backend), so a
-  # vault-bound name the shell expands puts the disclosed value in a child's
-  # argv, which every process on the backends service can read. The forms
-  # that compute a value at run time can expand any name, so beside a
-  # vault-bound name none is accepted. A backslash-newline is joined before
-  # the shell reads a word, so it is joined here too.
-  @computed ["$(", "`", "$[", "${!", "${ ", "${\t", "${\n", "${|"]
-
-  defp check_expansions(name, command, env) do
-    bound = for {key, value} <- env, VaultRef.vault_ref?(value), do: key
-    text = String.replace(command, "\\\n", "")
-
-    cond do
-      bound == [] ->
-        :ok
-
-      expanded = Enum.find(bound, &expands?(text, &1)) ->
-        invalid(
-          "Backend '#{name}' expands #{expanded}, a vault-bound env name, in its command — " <>
-            "command lines are visible to every process on the backends service; the value " <>
-            "must reach the program through its environment, not its command line"
-        )
-
-      token = Enum.find(@computed, &String.contains?(text, &1)) ->
-        invalid(
-          "Backend '#{name}' has #{inspect(token)} in its command beside " <>
-            "the vault-bound #{Enum.join(bound, ", ")} — a command substitution, arithmetic " <>
-            "expansion or indirection can expand it, and command lines are visible to every " <>
-            "process on the backends service; the value must reach the program through its " <>
-            "environment, not its command line"
-        )
-
-      true ->
-        :ok
-    end
-  end
-
-  defp expands?(text, key) do
-    Regex.match?(~r/\$\{?#{key}(?![A-Za-z0-9_])/, text)
-  end
 
   defp check_env(name, env) when is_map(env) do
     env

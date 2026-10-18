@@ -4,9 +4,10 @@
 defmodule Emissary.External.BackendDefinitionTest do
   @moduledoc """
   A stdio server's backends: named, capped per server, a command that
-  names no vault entry and expands no vault-bound env name, env names that
-  are neither malformed nor reserved, and env values that are vault
-  templates except for the non-secret names that may hold literals.
+  names no vault entry, env names that are neither malformed nor reserved,
+  and env values that are vault templates except for the non-secret names
+  that may hold literals; a command that places a vault-bound value on the
+  command line is accepted and warned of.
   """
   use ExUnit.Case, async: true
 
@@ -79,8 +80,21 @@ defmodule Emissary.External.BackendDefinitionTest do
              ])
   end
 
-  describe "a vault-bound env name never reaches the command line" do
-    test "a command that expands a vault-bound name is refused, naming it" do
+  # A definition whose command places a vault-bound value on the command
+  # line is the administrator's to make: it is accepted as written and
+  # carries the warning.
+  defp warned(backends) do
+    assert {:ok, normalized} = BackendDefinition.validate(backends)
+    assert normalized == Enum.map(backends, &Map.put_new(&1, "env", %{}))
+    BackendDefinition.warnings(normalized)
+  end
+
+  @exposed "on the command line, where every process on the backends service, other " <>
+             "athanors' backends included, can read it; the safe route is to let the " <>
+             "program read it from its environment."
+
+  describe "a vault-bound env name on the command line is warned of" do
+    test "a command that expands a vault-bound name is accepted, with a warning naming it" do
       for command <- [
             ~s(npx server --token "$GITHUB_PERSONAL_ACCESS_TOKEN"),
             "npx server --token $GITHUB_PERSONAL_ACCESS_TOKEN",
@@ -91,18 +105,15 @@ defmodule Emissary.External.BackendDefinitionTest do
             "npx server --token $\\\nGITHUB_PERSONAL_ACCESS_TOKEN",
             "npx server --token $GITHUB_PERSONAL_\\\nACCESS_TOKEN"
           ] do
-        message = refused(token(command))
-
-        assert message ==
-                 "Backend 'github' expands GITHUB_PERSONAL_ACCESS_TOKEN, a vault-bound env name, " <>
-                   "in its command — command lines are visible to every process on the backends " <>
-                   "service; the value must reach the program through its environment, not its " <>
-                   "command line",
+        assert warned(token(command)) == [
+                 "Backend 'github' expands GITHUB_PERSONAL_ACCESS_TOKEN, a vault-bound env " <>
+                   "name, in its command: the value is placed " <> @exposed
+               ],
                command
       end
     end
 
-    test "beside a vault-bound name, no form that computes a value at run time is accepted" do
+    test "beside a vault-bound name, a form that computes a value at run time is warned of" do
       for {command, form} <- [
             {"npx server --token \"$(printenv GITHUB_PERSONAL_ACCESS_TOKEN)\"", "$("},
             {"npx server --token `printenv GITHUB_PERSONAL_ACCESS_TOKEN`", "`"},
@@ -113,20 +124,37 @@ defmodule Emissary.External.BackendDefinitionTest do
             {"bash -c 'npx server --token ${|REPLY=x;}'", "${|"},
             {"npx server --token $\\\n(printenv GITHUB_PERSONAL_ACCESS_TOKEN)", "$("}
           ] do
-        message = refused(token(command))
-
-        assert message =~
-                 "Backend 'github' has #{inspect(form)} in its command beside the vault-bound GITHUB_PERSONAL_ACCESS_TOKEN",
+        assert warned(token(command)) == [
+                 "Backend 'github' has #{inspect(form)} in its command beside the vault-bound " <>
+                   "GITHUB_PERSONAL_ACCESS_TOKEN: a command substitution, arithmetic expansion " <>
+                   "or indirection can place the value " <> @exposed
+               ],
                command
-
-        assert message =~ "must reach the program through its environment, not its command line"
       end
 
       env = %{"B_TOKEN" => "vault:b", "A_TOKEN" => "Bearer vault:a", "NODE_ENV" => "production"}
-      assert refused(token("run $(pwd)", env)) =~ "beside the vault-bound A_TOKEN, B_TOKEN —"
+      assert [warning] = warned(token("run $(pwd)", env))
+      assert warning =~ "beside the vault-bound A_TOKEN, B_TOKEN: "
     end
 
-    test "a command that reads the value from its environment is accepted" do
+    test "every expanded name is warned of, then a computing form beside the others" do
+      env = %{"A_TOKEN" => "vault:a", "B_TOKEN" => "vault:b", "C_TOKEN" => "vault:c"}
+
+      backends =
+        token("run --a $A_TOKEN --c ${C_TOKEN} --d $(date)", env) ++
+          [%{"name" => "other", "command" => "run --b $B_TOKEN", "env" => env}]
+
+      assert [a, c, computed, b] = warned(backends)
+      assert a =~ "Backend 'github' expands A_TOKEN, a vault-bound env name"
+      assert c =~ "Backend 'github' expands C_TOKEN, a vault-bound env name"
+
+      assert computed =~
+               ~s(Backend 'github' has "$(" in its command beside the vault-bound B_TOKEN: )
+
+      assert b =~ "Backend 'other' expands B_TOKEN, a vault-bound env name"
+    end
+
+    test "a command that reads the value from its environment carries no warning" do
       for command <- [
             "npx server",
             "npx -y @modelcontextprotocol/server-github --stdio",
@@ -135,22 +163,24 @@ defmodule Emissary.External.BackendDefinitionTest do
             "npx server --price 5$ --len ${#GITHUB_PERSONAL_ACCESS_TOKEN}"
           ] do
         env = %{"GITHUB_PERSONAL_ACCESS_TOKEN" => "vault:gh-token", "NODE_ENV" => "production"}
-        assert {:ok, [%{"command" => ^command}]} = BackendDefinition.validate(token(command, env))
+        assert warned(token(command, env)) == [], command
       end
 
       # With no vault-bound name a command may compute what it likes, and
       # expand the literal names it holds.
       env = %{"NODE_ENV" => "production"}
       command = "node \"$(npm root -g)/server/index.js\" --env $NODE_ENV `date +%s`"
-      assert {:ok, _} = BackendDefinition.validate(token(command, env))
-      assert {:ok, _} = BackendDefinition.validate(token(command, %{}))
+      assert warned(token(command, env)) == []
+      assert warned(token(command, %{})) == []
+      assert warned([%{"name" => "bare", "command" => command}]) == []
     end
 
     test "a literal-name entry bound to the vault is vault-bound too" do
-      assert refused(token("run --log $DEBUG", %{"DEBUG" => "vault:dbg"})) =~ "expands DEBUG"
+      assert [warning] = warned(token("run --log $DEBUG", %{"DEBUG" => "vault:dbg"}))
+      assert warning =~ "Backend 'github' expands DEBUG"
     end
 
-    test "the literal vault: refusal stands beside the expansion check" do
+    test "the literal vault: refusal stands beside the warning" do
       assert refused(token("run --token vault:gh-token")) =~ "names a vault entry in its command"
 
       assert refused(token("run --token VAULT:gh-token", %{})) =~

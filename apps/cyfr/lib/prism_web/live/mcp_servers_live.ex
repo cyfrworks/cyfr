@@ -22,10 +22,12 @@ defmodule PrismWeb.McpServersLive do
 
   A definition the catalog refuses says why in its form. A server saved
   whose connect is refused, and a Test whose connect is refused, say why
-  in the flash.
+  in the flash. A server saved with warnings (a command that places a
+  vault-bound value on the command line) shows them in a warning flash.
 
-  An expanded stdio server shows what the backends service reports for each backend
-  and offers Restart, which releases its backends and starts them again.
+  An expanded stdio server shows its warnings and what the backends service
+  reports for each backend, and offers Restart, which releases its backends
+  and starts them again.
   """
 
   use PrismWeb, :live_view
@@ -247,7 +249,8 @@ defmodule PrismWeb.McpServersLive do
          |> refresh_servers()
          |> assign(:show_add, nil)
          |> assign(:form_error, nil)
-         |> added_flash(name, result)}
+         |> added_flash(name, result)
+         |> warnings_flash(result)}
 
       {:error, reason} ->
         {:noreply, assign(socket, :form_error, "Failed to add: #{error_message(reason)}")}
@@ -261,6 +264,11 @@ defmodule PrismWeb.McpServersLive do
 
   defp added_flash(socket, name, result),
     do: put_flash(socket, :info, "Server '#{name}' added (#{result[:status] || "saved"}).")
+
+  defp warnings_flash(socket, %{warnings: [_ | _] = warnings}),
+    do: put_flash(socket, :warning, Enum.join(warnings, " "))
+
+  defp warnings_flash(socket, _result), do: socket
 
   # One `NAME=value` per line; blank lines are skipped.
   defp parse_env(text) do
@@ -338,7 +346,8 @@ defmodule PrismWeb.McpServersLive do
     "error" => :error,
     "count" => :count,
     "servers" => :servers,
-    "action" => :action
+    "action" => :action,
+    "warnings" => :warnings
   }
 
   defp normalize_keys(%{} = map) do
@@ -488,6 +497,12 @@ defmodule PrismWeb.McpServersLive do
                 <tr :if={@expanded_name == server[:name]} class="bg-gray-900/60">
                   <td colspan="4" class="px-4 py-4">
                     <div class="space-y-4">
+                      <div
+                        :for={warning <- (@detail && @detail[:warnings]) || []}
+                        class="text-sm text-yellow-300"
+                      >
+                        {warning}
+                      </div>
                       <div :if={@detail && (@detail[:backends] || []) != []} class="space-y-2">
                         <h4 class="text-sm font-medium text-gray-400 mb-2">Backends</h4>
                         <div

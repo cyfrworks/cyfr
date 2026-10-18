@@ -49,24 +49,6 @@ defmodule Emissary.External.BackendsTest do
   # test's own delta on a key nothing else in the suite writes.
   @peer "peer@cell#boot_0199a000-0000-7000-8000-00000000cell"
 
-  defmodule Teardown do
-    @moduledoc false
-    # Runs `stop` as the test's supervisor stops it: before every child
-    # started ahead of it, while they all still run.
-    use GenServer
-
-    def start_link(stop), do: GenServer.start_link(__MODULE__, stop)
-
-    @impl true
-    def init(stop) do
-      Process.flag(:trap_exit, true)
-      {:ok, stop}
-    end
-
-    @impl true
-    def terminate(_reason, stop), do: stop.()
-  end
-
   # The sandbox owner is not the test process: the controller, which reads
   # the store, still has it while it is stopped after the test.
   setup do
@@ -94,32 +76,7 @@ defmodule Emissary.External.BackendsTest do
     controller
   end
 
-  # The controller, stopped when the test ends as the application stops it:
-  # after the server processes, which release their owners through it as
-  # they stop, and only once it has nothing left to send. Stopped with a
-  # message in flight, it would cut off the request the fake is serving.
-  defp supervise_controller(opts) do
-    controller = start_supervised!({Backends, opts})
-    start_supervised!({Teardown, &quiesce/0}, shutdown: 10_000)
-    controller
-  end
-
-  defp quiesce do
-    for {_id, pid, _type, _modules} <-
-          DynamicSupervisor.which_children(Emissary.External.ServerSupervisor) do
-      DynamicSupervisor.terminate_child(Emissary.External.ServerSupervisor, pid)
-    end
-
-    eventually(
-      fn ->
-        state = :sys.get_state(Backends)
-
-        state.owners == %{} and state.releases == %{} and state.claims == %{} and
-          state.releasing == %{} and idle?(state)
-      end,
-      "the controller to run no owner, hold no claim and have nothing left to send"
-    )
-  end
+  defp supervise_controller(opts), do: Scripted.supervise_controller(opts)
 
   defp tick(controller) do
     send(controller, :tick)
@@ -1098,6 +1055,126 @@ defmodule Emissary.External.BackendsTest do
 
     assert_receive {:control, "status", %{"owners" => [%{"server" => server}]}, _fields}, 2_000
     assert server == row.id
+  end
+
+  test "a command that expands a vault-bound name is saved with its warning, and its backends start",
+       %{ctx: ctx, fake: fake} do
+    start_controller(fake)
+    vault_entry(ctx)
+    admin = %{ctx | permissions: MapSet.new([:*])}
+    actor = Sanctum.Context.actor(ctx)
+
+    config = fn command ->
+      %{
+        "transport" => "stdio",
+        "backends" => [
+          %{
+            "name" => "github",
+            "command" => command,
+            "env" => %{"GITHUB_TOKEN" => "vault:gh-token"}
+          }
+        ]
+      }
+    end
+
+    expanding = ~s(npx -y @modelcontextprotocol/server-github --token "$GITHUB_TOKEN")
+
+    warning =
+      "Backend 'github' expands GITHUB_TOKEN, a vault-bound env name, in its command: the " <>
+        "value is placed on the command line, where every process on the backends service, " <>
+        "other athanors' backends included, can read it; the safe route is to let the " <>
+        "program read it from its environment."
+
+    log =
+      capture_log(fn ->
+        assert {:ok, %{status: "ready", warnings: [^warning]}} =
+                 Provider.handle("mcp_servers", admin, %{
+                   "action" => "create",
+                   "name" => "expanding",
+                   "config" => config.(expanding)
+                 })
+      end)
+
+    # The definition is stored as written, its backends run with the value
+    # in their env, and the start says so once in the log.
+    assert {:ok, %{epoch: 1} = row} = Arca.McpServerStorage.get(actor, "expanding")
+    assert [%{"command" => ^expanding}] = Arca.McpServerStorage.config(row)["backends"]
+    assert_receive {:control, "sync", %{"e" => 1}, _fields}, 2_000
+    assert_receive {:sealed_env, _server, %{"github" => %{"GITHUB_TOKEN" => @secret}}}, 2_000
+    assert [_once] = Regex.scan(~r/starts with a warning: #{Regex.escape(warning)}/, log)
+
+    # A later reader sees it on the server.
+    assert {:ok, %{warnings: [^warning]}} =
+             Provider.handle("mcp_servers", admin, %{"action" => "get", "name" => "expanding"})
+
+    # An update keeps the warning while the command expands the name, and
+    # drops it once the program reads the value from its environment.
+    update = fn epoch, command ->
+      Provider.handle("mcp_servers", admin, %{
+        "action" => "update",
+        "name" => "expanding",
+        "epoch" => epoch,
+        "config" => config.(command)
+      })
+    end
+
+    assert capture_log(fn ->
+             assert {:ok, %{status: "ready", warnings: [^warning], epoch: 2}} =
+                      update.(1, expanding <> " --stdio")
+           end) =~ "starts with a warning"
+
+    refute capture_log(fn ->
+             assert {:ok, %{status: "ready", warnings: [], epoch: 3}} =
+                      update.(2, "npx -y @modelcontextprotocol/server-github")
+           end) =~ "starts with a warning"
+
+    assert {:ok, %{warnings: []}} =
+             Provider.handle("mcp_servers", admin, %{"action" => "get", "name" => "expanding"})
+  end
+
+  test "a stored row whose command places a vault-bound value on the command line syncs at start",
+       %{ctx: ctx, fake: fake} do
+    start_controller(fake)
+    vault_entry(ctx)
+
+    {:ok, row} =
+      Arca.McpServerStorage.insert(Sanctum.Context.actor(ctx), %{
+        cap: 0,
+        name: "stored",
+        transport: "stdio",
+        url: nil,
+        config_json:
+          Jason.encode!(%{
+            "backends" => [
+              %{
+                "name" => "github",
+                "command" => "npx server --token $GITHUB_TOKEN --at `date`",
+                "env" => %{"GITHUB_TOKEN" => "vault:gh-token", "NODE_TOKEN" => "vault:gh-token"}
+              }
+            ]
+          })
+      })
+
+    owner = %{athanor_id: ctx.athanor_id, server_id: row.id, epoch: row.epoch}
+
+    log =
+      capture_log(fn ->
+        assert {:ok, %{epoch: epoch}} = Backends.sync(owner)
+        assert epoch == row.epoch
+      end)
+
+    assert_received {:control, "sync", %{"e" => e}, _fields}
+    assert e == row.epoch
+
+    assert_received {:sealed_env, _server,
+                     %{"github" => %{"GITHUB_TOKEN" => @secret, "NODE_TOKEN" => @secret}}}
+
+    assert log =~ "starts with a warning: Backend 'github' expands GITHUB_TOKEN, "
+
+    assert log =~
+             ~s(starts with a warning: Backend 'github' has "`" in its command beside the vault-bound NODE_TOKEN: )
+
+    Backends.release(owner)
   end
 
   describe "status" do

@@ -1144,6 +1144,15 @@ defmodule Emissary.External.Backends do
          {:ok, backends} <- BackendDefinition.validate(config["backends"]),
          :ok <- within_shares(spec, row.created_by, length(backends)),
          {:ok, sealed} <- seal_env(spec, keys.seal, backends) do
+      # A definition's warnings never stop its backends: the administrator
+      # was told when it was saved, and each start says so once in the log.
+      for warning <- BackendDefinition.warnings(backends) do
+        Logger.warning(
+          "[Emissary.External.Backends] server #{spec.server_id} of athanor " <>
+            "#{spec.athanor_id} starts with a warning: #{warning}"
+        )
+      end
+
       body = %{
         type: :sync,
         owner: %{athanor: spec.athanor_id, server: spec.server_id},

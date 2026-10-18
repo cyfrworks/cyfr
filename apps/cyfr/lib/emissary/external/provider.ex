@@ -352,7 +352,7 @@ defmodule Emissary.External.Provider do
 
       case Arca.McpServerStorage.insert(Sanctum.Context.actor(ctx), attrs) do
         {:ok, server} ->
-          {:ok, connect(ctx, server)}
+          {:ok, ctx |> connect(server) |> with_warnings(server)}
 
         {:error, :exists} ->
           {:error, {:conflict, "Server '#{name}' already exists — change it with update"}}
@@ -378,12 +378,12 @@ defmodule Emissary.External.Provider do
       case Arca.McpServerStorage.update(Sanctum.Context.actor(ctx), name, attrs, epoch) do
         {:ok, %{enabled: true} = server} ->
           stop_process(ctx, name)
-          {:ok, connect(ctx, server)}
+          {:ok, ctx |> connect(server) |> with_warnings(server)}
 
         {:ok, server} ->
           stop_process(ctx, name)
           changed(ctx)
-          {:ok, summary(server, %{status: "disabled"})}
+          {:ok, server |> summary(%{status: "disabled"}) |> with_warnings(server)}
 
         {:error, :not_found} ->
           {:error, {:not_found, "Server", name}}
@@ -642,6 +642,16 @@ defmodule Emissary.External.Provider do
     end
   end
 
+  # What the stored definition does that its administrator chose and is
+  # told of (`Emissary.External.BackendDefinition.warnings/1`): the answer
+  # to a create or update and `get` carry it, empty when there is none.
+  defp with_warnings(result, server), do: Map.put(result, :warnings, warnings(server))
+
+  defp warnings(%{transport: "stdio"} = server),
+    do: BackendDefinition.warnings(Servers.config_map(server)["backends"])
+
+  defp warnings(_server), do: []
+
   defp summary(server, extra) do
     Map.merge(
       %{
@@ -785,7 +795,8 @@ defmodule Emissary.External.Provider do
              status: format_status(status),
              server_info: format_server_info(status),
              tools: tools,
-             backends: backend_status(ctx, server)
+             backends: backend_status(ctx, server),
+             warnings: warnings(server)
            })}
 
         {:error, :not_found} ->

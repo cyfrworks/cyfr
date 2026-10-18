@@ -131,7 +131,8 @@ defmodule Emissary.External.ProviderTest do
           "config" => %{"url" => "https://localhost:99999/mcp"}
         })
 
-      assert {:ok, %{name: "test-save", id: id, transport: "http", epoch: 1}} = result
+      assert {:ok, %{name: "test-save", id: id, transport: "http", epoch: 1, warnings: []}} =
+               result
 
       # Verify it was persisted
       assert {:ok, server} = Arca.McpServerStorage.get(Sanctum.Context.actor(ctx), "test-save")
@@ -179,7 +180,7 @@ defmodule Emissary.External.ProviderTest do
 
       {:ok, %{epoch: epoch}} = Arca.McpServerStorage.get(Sanctum.Context.actor(ctx), "kept")
 
-      assert {:ok, %{status: "disabled", epoch: new_epoch}} =
+      assert {:ok, %{status: "disabled", epoch: new_epoch, warnings: []}} =
                Provider.handle("mcp_servers", ctx, %{
                  "action" => "update",
                  "name" => "kept",
@@ -578,6 +579,39 @@ defmodule Emissary.External.ProviderTest do
                })
     end
 
+    test "get shows the warnings a stored definition carries, and none when it carries none",
+         %{ctx: ctx} do
+      [backend] = @stdio_config["backends"]
+
+      expanding =
+        Map.put(@stdio_config, "backends", [
+          %{backend | "command" => "npx server --token ${GITHUB_PERSONAL_ACCESS_TOKEN}"}
+        ])
+
+      for {name, config} <- [{"warned", expanding}, {"quiet", @stdio_config}] do
+        Arca.McpServerStorage.insert(Sanctum.Context.actor(ctx), %{
+          cap: 0,
+          name: name,
+          transport: "stdio",
+          url: nil,
+          enabled: false,
+          config_json: Jason.encode!(config)
+        })
+      end
+
+      assert {:ok, %{warnings: [warning]}} =
+               Provider.handle("mcp_servers", ctx, %{"action" => "get", "name" => "warned"})
+
+      assert warning ==
+               "Backend 'github' expands GITHUB_PERSONAL_ACCESS_TOKEN, a vault-bound env name, " <>
+                 "in its command: the value is placed on the command line, where every process " <>
+                 "on the backends service, other athanors' backends included, can read it; the " <>
+                 "safe route is to let the program read it from its environment."
+
+      assert {:ok, %{warnings: []}} =
+               Provider.handle("mcp_servers", ctx, %{"action" => "get", "name" => "quiet"})
+    end
+
     test "list names the transport and the vault entries the env reads", %{ctx: ctx} do
       Arca.McpServerStorage.insert(Sanctum.Context.actor(ctx), %{
         cap: 0,
@@ -878,7 +912,7 @@ defmodule Emissary.External.ProviderTest do
         url: "https://x.com/mcp"
       })
 
-      assert {:ok, %{name: "get-test", url: "https://x.com/mcp"}} =
+      assert {:ok, %{name: "get-test", url: "https://x.com/mcp", warnings: []}} =
                Provider.handle("mcp_servers", ctx, %{
                  "action" => "get",
                  "name" => "get-test"
