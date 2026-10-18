@@ -246,17 +246,9 @@ defmodule Emissary.Web.RestoreController do
 
   # Restore is an entry path and the kit its own ingress, so every refusal
   # here is the request's refused decision, recorded once under its call id
-  # (`CyfrWeb.Plugs.CallIdentity.refused/2`), with no person or athanor,
-  # the class its status means on these routes, and its code as the reason.
-  defp recorded(conn, status, code),
-    do:
-      CallIdentity.refused(conn, %Prima.Refusal{class: class(status), reason: code, message: code})
-
-  defp class(401), do: :unauthenticated
-  defp class(403), do: :forbidden
-  defp class(404), do: :not_found
-  defp class(409), do: :conflict
-  defp class(422), do: :invalid_argument
+  # (`CyfrWeb.Plugs.CallIdentity.refused/3`), with no person or athanor,
+  # the class its status means, and its code as the reason.
+  defp recorded(conn, status, code), do: CallIdentity.refused(conn, status, code)
 
   defp status(:restore_disabled), do: {404, "restore_disabled"}
   defp status(:invalid_token), do: {401, "invalid_token"}

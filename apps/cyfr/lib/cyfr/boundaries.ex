@@ -975,13 +975,16 @@ defmodule Cyfr.Boundaries do
       allow: ~w(
         CyfrWeb CyfrWeb.ContextGuard CyfrWeb.Endpoint CyfrWeb.MinimalPage CyfrWeb.PendingProbe
         CyfrWeb.Pipelines CyfrWeb.Plugs.ApiSecurityHeaders CyfrWeb.Plugs.AuthRateLimit
-        CyfrWeb.Plugs.BrowserCSP CyfrWeb.Plugs.ConfiguredUeberauth CyfrWeb.Plugs.FrameRequest
+        CyfrWeb.Plugs.BrowserCSP CyfrWeb.Plugs.CallIdentity CyfrWeb.Plugs.ConfiguredUeberauth
+        CyfrWeb.Plugs.FrameRequest
         CyfrWeb.Plugs.Headless CyfrWeb.Router CyfrWeb.SafeRedirect CyfrWeb.SignInResponse
       ),
       reason:
         "the console reads the host's shared web tier and the composition triple its " <>
           "verified routes need, and never another adapter. Browser sign-in answers its " <>
-          "refusals on the no-session page (`CyfrWeb.MinimalPage`) and runs the " <>
+          "refusals on the no-session page (`CyfrWeb.MinimalPage`), records each as the " <>
+          "request's refused decision under the identity its pipeline mints, as every " <>
+          "admission entry does (`CyfrWeb.Plugs.CallIdentity`), and runs the " <>
           "configured providers' strategy (`CyfrWeb.Plugs.ConfiguredUeberauth`). " <>
           "Building a copy-link's " <>
           "public URL reads a global fact off the endpoint, `PrismWeb.verified_routes/0` " <>
@@ -2854,9 +2857,30 @@ defmodule Cyfr.Boundaries do
       plane: :external,
       origin: :none
     },
+    # The browser's sign-in, re-authentication and policy acceptance, which
+    # admit before any context of the person's exists: a sign-in's start,
+    # its tickets, callbacks and door link, a fresh sign-in's proof of a
+    # confirmation and the answer to it, and the registry policy a sign-in
+    # accepts. The browser's sign-out decides nothing and is no entry.
+    %{module: PrismWeb.AuthController, site: :link_start, plane: :external, origin: :none},
+    %{module: PrismWeb.AuthController, site: :request, plane: :external, origin: :none},
+    %{module: PrismWeb.AuthController, site: :device_complete, plane: :external, origin: :none},
+    %{module: PrismWeb.AuthController, site: :cyfr_callback, plane: :external, origin: :none},
+    %{module: PrismWeb.AuthController, site: :callback, plane: :external, origin: :none},
+    %{
+      module: PrismWeb.AuthController,
+      site: :post_legal_accept,
+      plane: :external,
+      origin: :none
+    },
+    %{module: PrismWeb.PasskeyController, site: :complete, plane: :external, origin: :none},
+    %{module: PrismWeb.ReauthController, site: :callback, plane: :external, origin: :none},
+    %{module: PrismWeb.ReauthController, site: :decide, plane: :external, origin: :none},
+    %{module: PrismWeb.LegalAcceptController, site: :show, plane: :external, origin: :none},
+    %{module: PrismWeb.LegalAcceptController, site: :submit, plane: :external, origin: :none},
     # The pre-session throttle on the routes whose pipeline mints a call
-    # identity: restore, the OAuth callback and a device's certificate
-    # renewal.
+    # identity: restore, the OAuth callback, a device's certificate
+    # renewal, and the browser's sign-in and policy acceptance.
     %{module: CyfrWeb.Plugs.AuthRateLimit, site: :call, plane: :external, origin: :none},
     # The scheduler's fire: its own admission is the occurrence claimed
     # under a held generation, and a run admission refusal is that fire's

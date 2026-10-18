@@ -13,8 +13,9 @@ defmodule Cyfr.Admission do
       console's LiveView socket, each through the gate but at the entries
       that admit for themselves: a webhook's delivery, an execution's
       event stream, and what no person of this home admits, the identity
-      directory, restore, the recovery kit and the OAuth callback that
-      completes a `vault.authorize`.
+      directory, restore, the recovery kit, the OAuth callback that
+      completes a `vault.authorize`, and the browser's sign-in,
+      re-authentication and policy acceptance.
     * `:host_api` — the HostAPI listener: a running chain's host calls,
       each admitted as a child through Opus.
     * `:scheduler` — the scheduler's fire, which listens on nothing: its
@@ -85,6 +86,10 @@ defmodule Cyfr.Admission do
         "Emissary.Web.DirectoryController",
         "Emissary.Web.RestoreController",
         "Emissary.Web.OAuthCallbackController",
+        "PrismWeb.AuthController",
+        "PrismWeb.PasskeyController",
+        "PrismWeb.ReauthController",
+        "PrismWeb.LegalAcceptController",
         "CyfrWeb.Plugs.AuthRateLimit",
         "CyfrWeb.Plugs.Authenticate",
         "CyfrWeb.Plugs.ControlPlaneOwnership",
@@ -105,9 +110,10 @@ defmodule Cyfr.Admission do
           "an execution's event stream, read under the caller's own standing; and what no " <>
           "person of this home admits: the identity directory, whose writes the " <>
           "identifier's own chain authorizes, restore, an entry path that runs before its " <>
-          "person exists, and the recovery kit, its own ingress (§9.1, §6.9), and the OAuth " <>
+          "person exists, and the recovery kit, its own ingress (§9.1, §6.9), the OAuth " <>
           "callback, which completes the vault.authorize the gate admitted under the state " <>
-          "it left"
+          "it left, and the browser's sign-in, re-authentication and policy acceptance, " <>
+          "which run before any context of the person's exists"
     },
     %{
       path: :host_api,

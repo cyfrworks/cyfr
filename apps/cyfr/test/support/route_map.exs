@@ -447,7 +447,8 @@
         "legal_accept_throttle" => ["CyfrWeb.Plugs.AuthRateLimit"],
         "oauth_callback_throttle" => ["CyfrWeb.Plugs.AuthRateLimit"],
         "oauth_start_throttle" => ["CyfrWeb.Plugs.AuthRateLimit"],
-        "passkey_complete_throttle" => ["CyfrWeb.Plugs.AuthRateLimit"]
+        "passkey_complete_throttle" => ["CyfrWeb.Plugs.AuthRateLimit"],
+        "sign_in_identity" => ["CyfrWeb.Plugs.CallIdentity"]
       },
       routes: [
         %{
@@ -673,7 +674,7 @@
           plug_opts: ":request",
           auth: "browser_oauth_start",
           live_view: nil,
-          pipe_through: ["auth_browser", "oauth_start_throttle"]
+          pipe_through: ["sign_in_identity", "auth_browser", "oauth_start_throttle"]
         },
         %{
           verb: "GET",
@@ -682,7 +683,7 @@
           plug_opts: ":callback",
           auth: "browser_oauth_callback",
           live_view: nil,
-          pipe_through: ["auth_browser", "oauth_callback_throttle"]
+          pipe_through: ["sign_in_identity", "auth_browser", "oauth_callback_throttle"]
         },
         %{
           verb: "POST",
@@ -691,7 +692,7 @@
           plug_opts: ":cyfr_callback",
           auth: "browser_cyfr_callback",
           live_view: nil,
-          pipe_through: ["auth_browser", "oauth_callback_throttle"]
+          pipe_through: ["sign_in_identity", "auth_browser", "oauth_callback_throttle"]
         },
         %{
           verb: "GET",
@@ -700,7 +701,7 @@
           plug_opts: ":device_complete",
           auth: "browser_oauth_flow",
           live_view: nil,
-          pipe_through: ["auth_browser", "device_complete_throttle"]
+          pipe_through: ["sign_in_identity", "auth_browser", "device_complete_throttle"]
         },
         %{
           verb: "POST",
@@ -709,7 +710,7 @@
           plug_opts: ":link_start",
           auth: "browser_session",
           live_view: nil,
-          pipe_through: ["auth_browser", "oauth_start_throttle"]
+          pipe_through: ["sign_in_identity", "auth_browser", "oauth_start_throttle"]
         },
         %{
           verb: "POST",
@@ -718,7 +719,7 @@
           plug_opts: ":browser_logout",
           auth: "browser_public_auth",
           live_view: nil,
-          pipe_through: ["auth_browser"]
+          pipe_through: ["sign_in_identity", "auth_browser"]
         },
         %{
           verb: "GET",
@@ -727,7 +728,7 @@
           plug_opts: ":callback",
           auth: "browser_oauth_callback",
           live_view: nil,
-          pipe_through: ["auth_browser", "oauth_callback_throttle"]
+          pipe_through: ["sign_in_identity", "auth_browser", "oauth_callback_throttle"]
         },
         %{
           verb: "POST",
@@ -736,7 +737,7 @@
           plug_opts: ":decide",
           auth: "browser_oauth_flow",
           live_view: nil,
-          pipe_through: ["auth_browser", "oauth_callback_throttle"]
+          pipe_through: ["sign_in_identity", "auth_browser", "oauth_callback_throttle"]
         },
         %{
           verb: "GET",
@@ -745,7 +746,7 @@
           plug_opts: ":complete",
           auth: "browser_oauth_flow",
           live_view: nil,
-          pipe_through: ["auth_browser", "passkey_complete_throttle"]
+          pipe_through: ["sign_in_identity", "auth_browser", "passkey_complete_throttle"]
         },
         %{
           verb: "GET",
@@ -754,7 +755,7 @@
           plug_opts: ":post_legal_accept",
           auth: "browser_oauth_flow",
           live_view: nil,
-          pipe_through: ["auth_browser"]
+          pipe_through: ["sign_in_identity", "auth_browser"]
         },
         %{
           verb: "GET",
@@ -799,7 +800,7 @@
           plug_opts: ":show",
           auth: "browser_public_legal",
           live_view: nil,
-          pipe_through: ["browser", "legal_accept_throttle"]
+          pipe_through: ["sign_in_identity", "browser", "legal_accept_throttle"]
         },
         %{
           verb: "POST",
@@ -808,7 +809,7 @@
           plug_opts: ":submit",
           auth: "browser_public_legal",
           live_view: nil,
-          pipe_through: ["browser", "legal_accept_throttle"]
+          pipe_through: ["sign_in_identity", "browser", "legal_accept_throttle"]
         },
         %{
           verb: "GET",

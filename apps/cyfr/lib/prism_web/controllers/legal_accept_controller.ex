@@ -27,6 +27,7 @@ defmodule PrismWeb.LegalAcceptController do
   require Logger
 
   alias CyfrWeb.PendingProbe
+  alias CyfrWeb.Plugs.CallIdentity
 
   def show(conn, params) do
     case Compendium.registry_legal_version() do
@@ -93,7 +94,9 @@ defmodule PrismWeb.LegalAcceptController do
         error_page(conn, 400, "Login session expired. Please re-authenticate and try again.")
 
       {:not_logged_in, conn} ->
-        conn |> redirect(to: "/login")
+        conn
+        |> CallIdentity.refused(401, "This browser's session no longer stands.")
+        |> redirect(to: "/login")
 
       {:error, %Prima.Refusal{reason: {:registry, :policy_version_mismatch, _}} = refusal} ->
         required = Compendium.registry_required_version(refusal)
@@ -105,7 +108,9 @@ defmodule PrismWeb.LegalAcceptController do
             do: "?required=" <> URI.encode_www_form(required),
             else: ""
 
-        conn |> redirect(to: "/legal/accept" <> query)
+        conn
+        |> CallIdentity.refused(409, "The registry's policy version moved; read it again.")
+        |> redirect(to: "/legal/accept" <> query)
 
       {:error, %Prima.Refusal{reason: {:registry, :unauthorized}}} ->
         # 403 IDENTITY_BANNED at the accept endpoint. Surface as a flat error.
@@ -118,6 +123,7 @@ defmodule PrismWeb.LegalAcceptController do
       {:error, %Prima.Refusal{reason: :invalid_access_token}} ->
         # IdP token expired between OAuth callback and accept submit.
         conn
+        |> CallIdentity.refused(401, "The sign-in this acceptance belongs to expired.")
         |> PendingProbe.clear()
         |> redirect(to: "/login")
 
@@ -208,8 +214,14 @@ defmodule PrismWeb.LegalAcceptController do
     )
   end
 
+  # Policy acceptance completes a sign-in before any person's context
+  # exists, so it decides for itself: every error page and every refusal
+  # that sends the browser elsewhere is the request's refused decision,
+  # recorded once under its sentence with no person or athanor
+  # (`CyfrWeb.Plugs.CallIdentity.refused/3`).
   defp error_page(conn, status, message) do
     conn
+    |> CallIdentity.refused(status, message)
     |> put_status(status)
     |> render(:error, message: message)
   end

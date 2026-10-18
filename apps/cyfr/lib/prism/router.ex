@@ -32,6 +32,15 @@ defmodule Prism.Router do
       # browser pipeline sets no root layout.
       CyfrWeb.Pipelines.browser(:auth_browser)
 
+      # The browser's sign-in, re-authentication and policy acceptance
+      # admit before any person's context exists, so they decide for
+      # themselves and record their own refusals: an admission entry each
+      # (`Cyfr.Boundaries.admission_entries/0`), under the identity minted
+      # here before the browser pipeline's first check.
+      pipeline :sign_in_identity do
+        plug CyfrWeb.Plugs.CallIdentity, tool: "sign_in"
+      end
+
       # OAuth kickoff gets a conservative per-IP throttle; callbacks get the
       # generous :oauth_callback_throttle below.
       pipeline :oauth_start_throttle do
@@ -117,7 +126,7 @@ defmodule Prism.Router do
       # the API's `/auth` paths and the OAuth grant callback are expanded
       # before this scope by the composition router.
       scope "/auth", PrismWeb do
-        pipe_through :auth_browser
+        pipe_through [:sign_in_identity, :auth_browser]
 
         # POST, never GET: signing someone out must not be one <img src> away
         # — the browser pipeline's CSRF token guards the state change. The
@@ -213,7 +222,7 @@ defmodule Prism.Router do
       # cyfr.run /v1/legal/accept. Used after a 412 POLICY_ACCEPTANCE_REQUIRED
       # response or during post-login setup.
       scope "/legal/accept", PrismWeb do
-        pipe_through [:browser, :legal_accept_throttle]
+        pipe_through [:sign_in_identity, :browser, :legal_accept_throttle]
 
         get "/", LegalAcceptController, :show, metadata: %{auth: :browser_public_legal}
         post "/submit", LegalAcceptController, :submit, metadata: %{auth: :browser_public_legal}

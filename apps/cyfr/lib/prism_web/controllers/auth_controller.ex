@@ -76,6 +76,7 @@ defmodule PrismWeb.AuthController do
 
   plug CyfrWeb.Plugs.ConfiguredUeberauth
 
+  alias CyfrWeb.Plugs.CallIdentity
   alias CyfrWeb.SignInResponse
   alias Sanctum.Session
 
@@ -120,9 +121,7 @@ defmodule PrismWeb.AuthController do
         |> redirect(to: "/auth/oidcc")
 
       {:error, _no_session} ->
-        conn
-        |> SignInResponse.put_flash_if_available(:error, "Sign in, then link the door again.")
-        |> redirect(to: "/login")
+        to_login(conn, 401, "Sign in, then link the door again.")
     end
   end
 
@@ -150,12 +149,11 @@ defmodule PrismWeb.AuthController do
               "one that started it — refusing"
           )
 
-          conn
-          |> SignInResponse.put_flash_if_available(
-            :error,
+          to_login(
+            conn,
+            403,
             "That sign-in was started in a different browser. Please sign in again."
           )
-          |> redirect(to: "/login")
         end
 
       _miss ->
@@ -167,7 +165,7 @@ defmodule PrismWeb.AuthController do
 
   def request(conn, _params) do
     # Render the no-strategy branch as HTML; Ueberauth handles configured redirects.
-    CyfrWeb.MinimalPage.send_page(
+    page(
       conn,
       404,
       "Unknown sign-in provider",
@@ -197,28 +195,20 @@ defmodule PrismWeb.AuthController do
               "that started the flow — refusing"
           )
 
-          conn
-          |> SignInResponse.put_flash_if_available(
-            :error,
+          to_login(
+            conn,
+            403,
             "That sign-in link was started in a different browser. Please sign in again."
           )
-          |> redirect(to: "/login")
         end
 
       :miss ->
-        conn
-        |> SignInResponse.put_flash_if_available(
-          :error,
-          "That sign-in expired. Please try again."
-        )
-        |> redirect(to: "/login")
+        to_login(conn, 404, "That sign-in expired. Please try again.")
     end
   end
 
   def device_complete(conn, _params) do
-    conn
-    |> SignInResponse.put_flash_if_available(:error, "That sign-in expired. Please try again.")
-    |> redirect(to: "/login")
+    to_login(conn, 404, "That sign-in expired. Please try again.")
   end
 
   @doc """
@@ -241,7 +231,7 @@ defmodule PrismWeb.AuthController do
         )
 
       {:error, {:door, _reason}} ->
-        CyfrWeb.MinimalPage.send_page(
+        page(
           conn,
           403,
           "Not allowed on this server",
@@ -250,7 +240,7 @@ defmodule PrismWeb.AuthController do
         )
 
       {:error, reason} when reason in [:identity_stale, :unavailable] ->
-        CyfrWeb.MinimalPage.send_page(
+        page(
           conn,
           503,
           "Try again shortly",
@@ -263,7 +253,7 @@ defmodule PrismWeb.AuthController do
           "[AuthController] a cyfr sign-in was refused: " <> Prima.LoggerContext.shape(reason)
         )
 
-        CyfrWeb.MinimalPage.send_page(
+        page(
           conn,
           401,
           "Sign-in failed",
@@ -307,9 +297,7 @@ defmodule PrismWeb.AuthController do
   end
 
   defp cyfr_expired(conn) do
-    conn
-    |> SignInResponse.put_flash_if_available(:error, "That sign-in expired. Please try again.")
-    |> redirect(to: "/login")
+    to_login(conn, 404, "That sign-in expired. Please try again.")
   end
 
   # The ticket names the browser that minted it (LoginLive binds the
@@ -338,9 +326,7 @@ defmodule PrismWeb.AuthController do
   end
 
   defp apply_device_ticket(conn, _payload) do
-    conn
-    |> SignInResponse.put_flash_if_available(:error, "That sign-in expired. Please try again.")
-    |> redirect(to: "/login")
+    to_login(conn, 404, "That sign-in expired. Please try again.")
   end
 
   @doc """
@@ -370,7 +356,7 @@ defmodule PrismWeb.AuthController do
   def callback(%{assigns: %{ueberauth_failure: failure}} = conn, _params) do
     {conn, _intent} = take_link_intent(conn)
 
-    CyfrWeb.MinimalPage.send_page(
+    page(
       conn,
       401,
       "Sign-in failed",
@@ -380,7 +366,7 @@ defmodule PrismWeb.AuthController do
   end
 
   def callback(conn, _params) do
-    CyfrWeb.MinimalPage.send_page(
+    page(
       conn,
       400,
       "Invalid sign-in callback",
@@ -407,7 +393,7 @@ defmodule PrismWeb.AuthController do
       |> redirect(to: intent["return_to"])
     else
       {:error, {:door, _reason}} ->
-        CyfrWeb.MinimalPage.send_page(
+        page(
           conn,
           403,
           "Not allowed on this server",
@@ -415,7 +401,7 @@ defmodule PrismWeb.AuthController do
         )
 
       {:error, :unavailable} ->
-        CyfrWeb.MinimalPage.send_page(
+        page(
           conn,
           503,
           "Temporarily unavailable",
@@ -423,7 +409,7 @@ defmodule PrismWeb.AuthController do
         )
 
       {:error, _refused} ->
-        CyfrWeb.MinimalPage.send_page(
+        page(
           conn,
           401,
           "The door was not linked",
@@ -527,7 +513,7 @@ defmodule PrismWeb.AuthController do
       {:error, {:door, _reason}} ->
         # Refused at the door: no session, no cookie, no cyfr.run call. One
         # message whichever branch refused.
-        CyfrWeb.MinimalPage.send_page(
+        page(
           conn,
           403,
           "Not allowed on this server",
@@ -537,7 +523,7 @@ defmodule PrismWeb.AuthController do
       {:error, :unavailable} ->
         # A transient membership read during authenticate — a 503, never a
         # 401: the person's credentials were fine and retrying fixes it.
-        CyfrWeb.MinimalPage.send_page(
+        page(
           conn,
           503,
           "Temporarily unavailable",
@@ -547,7 +533,7 @@ defmodule PrismWeb.AuthController do
         )
 
       {:error, reason} ->
-        CyfrWeb.MinimalPage.send_page(
+        page(
           conn,
           401,
           "Sign-in failed",
@@ -578,7 +564,9 @@ defmodule PrismWeb.AuthController do
             "redirecting to login"
         )
 
-        conn |> redirect(to: "/login")
+        conn
+        |> CallIdentity.refused(404, "The sign-in this acceptance belongs to expired.")
+        |> redirect(to: "/login")
     end
   end
 
@@ -605,7 +593,7 @@ defmodule PrismWeb.AuthController do
       # A store that cannot answer, or a remote person whose identity could
       # not be confirmed fresh: the session stands, and nothing was probed.
       {:error, reason} when reason in [:unavailable, :identity_stale] ->
-        CyfrWeb.MinimalPage.send_page(
+        page(
           conn,
           503,
           "Try again shortly",
@@ -614,7 +602,9 @@ defmodule PrismWeb.AuthController do
         )
 
       _ ->
-        conn |> redirect(to: "/login")
+        conn
+        |> CallIdentity.refused(401, "This browser's session no longer stands.")
+        |> redirect(to: "/login")
     end
   end
 
@@ -646,6 +636,24 @@ defmodule PrismWeb.AuthController do
   # ============================================================================
   # Private Helpers
   # ============================================================================
+
+  # Sign-in admits before any person's context exists, so it decides for
+  # itself: every refusal this controller answers, a page with an error
+  # status or a flash back to the sign-in page, is the request's refused
+  # decision, recorded once under its sentence with no person or athanor
+  # (`CyfrWeb.Plugs.CallIdentity.refused/3`).
+  defp page(conn, status, title, inner) do
+    conn
+    |> CallIdentity.refused(status, title)
+    |> CyfrWeb.MinimalPage.send_page(status, title, inner)
+  end
+
+  defp to_login(conn, status, message) do
+    conn
+    |> CallIdentity.refused(status, message)
+    |> SignInResponse.put_flash_if_available(:error, message)
+    |> redirect(to: "/login")
+  end
 
   # The door, then what sign-in records — before any session exists and
   # before cyfr.run hears of the identity. It runs here, at the one place the

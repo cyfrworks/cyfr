@@ -7,7 +7,10 @@ defmodule CyfrWeb.Plugs.CallIdentity do
   first check.
 
   The first plug of every pipeline that admits work — `/mcp`, the
-  authenticated API, the tincture routes and the webhook route — mints
+  authenticated API, the tincture routes, the webhook route, and the
+  entries that admit for themselves: the identity directory, restore, the
+  OAuth callback and the browser's sign-in, re-authentication and policy
+  acceptance — mints
   the request's correlation id (`req_…`, `Prima.UUID7.request_id/0`) and
   the admission's call id (`call_…`, `Prima.UUID7.generate_id/1`), assigns
   both, sets the request id on the log lines and answers it in
@@ -32,7 +35,7 @@ defmodule CyfrWeb.Plugs.CallIdentity do
   renders a gate result marks the request decided first (`decided/1`),
   and the renderer appends nothing. A request outside these pipelines
   carries no call id and records nothing: an error before routing, a
-  sign-in throttle, a page nobody defined are not admission entries.
+  page nobody defined is not an admission entry.
 
   ## Options
 
@@ -118,6 +121,32 @@ defmodule CyfrWeb.Plugs.CallIdentity do
   end
 
   def refused(%Plug.Conn{} = conn, _reason), do: conn
+
+  @doc """
+  Record the refusal an entry answers as the HTTP `status` it renders,
+  with `sentence` as its reason (`refused/2`): the class is the status's
+  on such an entry's own pages and JSON (`class/1`).
+  """
+  @spec refused(Plug.Conn.t(), pos_integer(), String.t()) :: Plug.Conn.t()
+  def refused(%Plug.Conn{} = conn, status, sentence)
+      when is_integer(status) and is_binary(sentence),
+      do: refused(conn, %Prima.Refusal{class: class(status), reason: status, message: sentence})
+
+  @doc """
+  The refusal class an entry's own HTTP status means: the entries whose
+  wire answer is a status of their own (restore, the browser's sign-in
+  pages) record under it.
+  """
+  @spec class(pos_integer()) :: Prima.Refusal.class()
+  def class(status) when status in [400, 405, 413, 422], do: :invalid_argument
+  def class(401), do: :unauthenticated
+  def class(403), do: :forbidden
+  def class(404), do: :not_found
+  def class(409), do: :conflict
+  def class(429), do: :rate_limited
+  def class(status) when status in [502, 503], do: :unavailable
+  def class(504), do: :timeout
+  def class(status) when is_integer(status), do: :internal
 
   @doc """
   Mark the request's decision recorded — by the gate, whose result the

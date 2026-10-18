@@ -68,7 +68,16 @@ defmodule CyfrWeb.SignInResponse do
       end
 
     {title, inner} = unavailable_page(reason, Keyword.get(opts, :retry_path, "/login"))
-    CyfrWeb.MinimalPage.send_page(conn, 503, title, inner)
+    refusal_page(conn, 503, title, inner)
+  end
+
+  # A sign-in that does not finish is the request's refused decision,
+  # recorded once under its title (`CyfrWeb.Plugs.CallIdentity.refused/3`)
+  # where the route minted a call identity, and answered as a page.
+  defp refusal_page(conn, status, title, inner) do
+    conn
+    |> CyfrWeb.Plugs.CallIdentity.refused(status, title)
+    |> CyfrWeb.MinimalPage.send_page(status, title, inner)
   end
 
   # The post-login landing, or the verified `:to` its caller named.
@@ -140,7 +149,7 @@ defmodule CyfrWeb.SignInResponse do
           # a store that could not answer: the sign-in pauses, retryable,
           # never a failure of this server.
           {:error, reason} when reason in [:identity_stale, :unavailable] ->
-            CyfrWeb.MinimalPage.send_page(
+            refusal_page(
               conn,
               503,
               "Temporarily unavailable",
@@ -167,7 +176,7 @@ defmodule CyfrWeb.SignInResponse do
             Logger.error("[CyfrWeb.SignInResponse] session create failed: #{inspect(reason)}")
 
             # Render browser sign-in failures as a page.
-            CyfrWeb.MinimalPage.send_page(
+            refusal_page(
               conn,
               500,
               "Couldn't finish signing in",

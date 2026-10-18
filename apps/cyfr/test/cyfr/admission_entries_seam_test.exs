@@ -101,6 +101,17 @@ defmodule Cyfr.AdmissionEntriesSeamTest do
     {Emissary.Web.RestoreController, :kit_reenable} => :restore_kit_reenable_unnamed,
     {Emissary.Web.OAuthCallbackController, :callback} => :oauth_callback_unknown_state,
     {CyfrWeb.Plugs.AuthRateLimit, :call} => :restore_rate_limited,
+    {PrismWeb.AuthController, :link_start} => :sign_in_link_unsigned,
+    {PrismWeb.AuthController, :request} => :sign_in_cyfr_hop_expired,
+    {PrismWeb.AuthController, :device_complete} => :sign_in_device_ticket_unknown,
+    {PrismWeb.AuthController, :cyfr_callback} => :sign_in_cyfr_callback_expired,
+    {PrismWeb.AuthController, :callback} => :sign_in_callback_empty,
+    {PrismWeb.AuthController, :post_legal_accept} => :sign_in_post_legal_no_probe,
+    {PrismWeb.PasskeyController, :complete} => :sign_in_passkey_ticket_unknown,
+    {PrismWeb.ReauthController, :callback} => :reauth_callback_unstated,
+    {PrismWeb.ReauthController, :decide} => :reauth_decide_no_ticket,
+    {PrismWeb.LegalAcceptController, :show} => :legal_show_registry_unreachable,
+    {PrismWeb.LegalAcceptController, :submit} => :legal_submit_no_version,
     {Opus.Schedules.Scheduler, :handle_info} => :schedule_fire_refused,
     {Opus.Host.Children, :call} => :host_api_lost_attempt,
     {Emissary.Web.DeviceChannel, :handle_in} => :device_channel_unproven
@@ -560,6 +571,64 @@ defmodule Cyfr.AdmissionEntriesSeamTest do
     assert conn.resp_body =~ "invalid or expired state parameter"
     {request_id_of(conn), refused("not_found", :none)}
   end
+
+  # The browser's sign-in, re-authentication and policy acceptance: each
+  # refused before any person's context exists.
+  defp sign_in_refused(conn, status, class) do
+    assert conn.status == status
+    {request_id_of(conn), refused(class, :none)}
+  end
+
+  def sign_in_link_unsigned(_conn, _ctx),
+    do: build_conn() |> post("/auth/link/oidcc", %{}) |> sign_in_refused(302, "unauthenticated")
+
+  def sign_in_cyfr_hop_expired(_conn, _ctx),
+    do: build_conn() |> get("/auth/cyfr") |> sign_in_refused(302, "not_found")
+
+  def sign_in_device_ticket_unknown(_conn, _ctx),
+    do: build_conn() |> get("/auth/device/complete/nope") |> sign_in_refused(302, "not_found")
+
+  def sign_in_cyfr_callback_expired(_conn, _ctx),
+    do: build_conn() |> post("/auth/cyfr/callback", %{}) |> sign_in_refused(302, "not_found")
+
+  def sign_in_callback_empty(_conn, _ctx),
+    do:
+      build_conn()
+      |> get("/auth/nobody/callback")
+      |> sign_in_refused(400, "invalid_argument")
+
+  def sign_in_post_legal_no_probe(_conn, _ctx),
+    do: build_conn() |> get("/auth/post-legal-accept") |> sign_in_refused(302, "not_found")
+
+  def sign_in_passkey_ticket_unknown(_conn, _ctx),
+    do: build_conn() |> get("/auth/passkey/complete/nope") |> sign_in_refused(302, "not_found")
+
+  def reauth_callback_unstated(_conn, _ctx),
+    do: build_conn() |> get("/auth/oidcc/reauth") |> sign_in_refused(401, "unauthenticated")
+
+  def reauth_decide_no_ticket(_conn, _ctx),
+    do: build_conn() |> post("/auth/oidcc/reauth", %{}) |> sign_in_refused(409, "conflict")
+
+  # The registry at an address nothing answers on: its policies cannot be
+  # read.
+  def legal_show_registry_unreachable(_conn, _ctx) do
+    original = Application.get_env(:cyfr, :registry_url)
+
+    on_exit(fn ->
+      if original,
+        do: Application.put_env(:cyfr, :registry_url, original),
+        else: Application.delete_env(:cyfr, :registry_url)
+    end)
+
+    Application.put_env(:cyfr, :registry_url, "127.0.0.1:19")
+    build_conn() |> get("/legal/accept") |> sign_in_refused(502, "unavailable")
+  end
+
+  def legal_submit_no_version(_conn, _ctx),
+    do:
+      build_conn()
+      |> post("/legal/accept/submit", %{})
+      |> sign_in_refused(400, "invalid_argument")
 
   # ==========================================================================
   # Drivers: the execution-events stream

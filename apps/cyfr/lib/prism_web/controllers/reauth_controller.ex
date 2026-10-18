@@ -188,12 +188,22 @@ defmodule PrismWeb.ReauthController do
 
   defp details(_none), do: []
 
+  # Every page with an error status is the request's refused decision,
+  # recorded once under its sentence with no person or athanor
+  # (`CyfrWeb.Plugs.CallIdentity.refused/3`): a re-authentication admits
+  # before any context of the person's exists, and decides for itself.
   defp page(conn, status, title, sentence) do
-    MinimalPage.send_page(
-      conn,
+    conn
+    |> refused(status, sentence)
+    |> MinimalPage.send_page(
       status,
       title,
       "<p>#{MinimalPage.h(sentence)}</p><p><a href=\"/\">Back</a></p>"
     )
   end
+
+  defp refused(conn, status, sentence) when status >= 400,
+    do: CyfrWeb.Plugs.CallIdentity.refused(conn, status, sentence)
+
+  defp refused(conn, _status, _sentence), do: conn
 end

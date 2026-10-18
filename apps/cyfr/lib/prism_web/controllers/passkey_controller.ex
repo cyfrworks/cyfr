@@ -34,15 +34,19 @@ defmodule PrismWeb.PasskeyController do
               "one that signed in — refusing"
           )
 
-          expired(conn, "That sign-in was started in a different browser. Please sign in again.")
+          refused(
+            conn,
+            403,
+            "That sign-in was started in a different browser. Please sign in again."
+          )
         end
 
       _missing ->
-        expired(conn, "That sign-in expired. Please try again.")
+        refused(conn, 404, "That sign-in expired. Please try again.")
     end
   end
 
-  def complete(conn, _params), do: expired(conn, "That sign-in expired. Please try again.")
+  def complete(conn, _params), do: refused(conn, 404, "That sign-in expired. Please try again.")
 
   defp same_browser?(conn, %{browser_binding: binding}) when is_binary(binding) do
     case get_session(conn, "_csrf_token") do
@@ -56,8 +60,13 @@ defmodule PrismWeb.PasskeyController do
 
   defp same_browser?(_conn, _payload), do: false
 
-  defp expired(conn, message) do
+  # A sign-in refused here is the request's refused decision, recorded
+  # once under its sentence with no person or athanor
+  # (`CyfrWeb.Plugs.CallIdentity.refused/3`), and the browser goes back to
+  # the sign-in page.
+  defp refused(conn, status, message) do
     conn
+    |> CyfrWeb.Plugs.CallIdentity.refused(status, message)
     |> SignInResponse.put_flash_if_available(:error, message)
     |> redirect(to: "/login")
   end
