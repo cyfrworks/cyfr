@@ -21,6 +21,20 @@ defmodule Aqua.Providers.ThreadTest do
 
   defp call(ctx, args), do: Tool.handle("thread", ctx, args)
 
+  defp attach(ctx, thread, message_id, bytes) do
+    call(ctx, %{
+      "action" => "attach",
+      "thread" => thread.id,
+      "message_id" => message_id,
+      "files" => [
+        %{"filename" => "note.txt", "media_type" => "text/plain", "data" => Base.encode64(bytes)}
+      ]
+    })
+  end
+
+  defp discard(ctx, thread, message_id),
+    do: call(ctx, %{"action" => "discard", "thread" => thread.id, "message_id" => message_id})
+
   # A card as the loop opens it: a turn with its root, the model step, the
   # call, and the approval on the tape; the intent is the card's.
   defp card!(ctx, thread, intent) do
@@ -244,7 +258,7 @@ defmodule Aqua.Providers.ThreadTest do
     test "every action is external-plane only and interactive-only" do
       actions = Tool.definition().annotations.actions
 
-      assert map_size(actions) == 16
+      assert map_size(actions) == 17
 
       for {name, spec} <- actions do
         assert spec.planes == [:external], "#{name} is reachable in-chain"
@@ -652,6 +666,64 @@ defmodule Aqua.Providers.ThreadTest do
                call(ctx, %{"action" => "messages", "thread" => thread.id})
 
       assert is_integer(cursor)
+    end
+
+    test "discard removes only what the caller's own session attached under an unsent message",
+         %{ctx: ctx, thread: thread} do
+      mine = %{ctx | session_token_hash: :crypto.hash(:sha256, "mine")}
+      theirs = %{ctx | session_token_hash: :crypto.hash(:sha256, "theirs")}
+      message_id = Prima.UUID7.generate_id("msg")
+      {:ok, %{attachments: [ref]}} = attach(mine, thread, message_id, "mine")
+      {:ok, blob} = Aqua.attachment_blob_path(thread.id, message_id, ref)
+
+      assert {:ok, %{discarded: []}} = discard(theirs, thread, message_id)
+      assert {:ok, "mine"} = Arca.get(Sanctum.Context.actor(ctx), blob)
+
+      assert {:ok, %{discarded: [name]}} = discard(mine, thread, message_id)
+      assert name == ref["stored_name"]
+      refute Arca.exists?(Sanctum.Context.actor(ctx), blob)
+      assert {:ok, %{discarded: []}} = discard(mine, thread, message_id)
+    end
+
+    test "a sent message's files stay: discard refuses them and attach writes over none",
+         %{ctx: ctx, thread: thread} do
+      mine = %{ctx | session_token_hash: :crypto.hash(:sha256, "mine")}
+      theirs = %{ctx | session_token_hash: :crypto.hash(:sha256, "theirs")}
+      message_id = Prima.UUID7.generate_id("msg")
+      {:ok, %{attachments: [ref]}} = attach(mine, thread, message_id, "sent bytes")
+      {:ok, blob} = Aqua.attachment_blob_path(thread.id, message_id, ref)
+
+      assert {:ok, %{accepted: true}} =
+               call(mine, %{
+                 "action" => "send",
+                 "thread" => thread.id,
+                 "message" => "with a file",
+                 "id" => message_id,
+                 "attachments" => [ref],
+                 "client_id" => "c-sent"
+               })
+
+      for who <- [mine, theirs] do
+        assert {:error, {:conflict, _}} = discard(who, thread, message_id)
+        assert {:error, {:conflict, _}} = attach(who, thread, message_id, "over")
+      end
+
+      assert {:ok, "sent bytes"} = Arca.get(Sanctum.Context.actor(ctx), blob)
+    end
+
+    test "attach writes over an unsent message's file only for the session that stored it",
+         %{ctx: ctx, thread: thread} do
+      mine = %{ctx | session_token_hash: :crypto.hash(:sha256, "mine")}
+      theirs = %{ctx | session_token_hash: :crypto.hash(:sha256, "theirs")}
+      message_id = Prima.UUID7.generate_id("msg")
+      {:ok, %{attachments: [ref]}} = attach(mine, thread, message_id, "first")
+      {:ok, blob} = Aqua.attachment_blob_path(thread.id, message_id, ref)
+
+      assert {:error, {:conflict, _}} = attach(theirs, thread, message_id, "theirs")
+      assert {:ok, "first"} = Arca.get(Sanctum.Context.actor(ctx), blob)
+
+      assert {:ok, %{attachments: [_]}} = attach(mine, thread, message_id, "again")
+      assert {:ok, "again"} = Arca.get(Sanctum.Context.actor(ctx), blob)
     end
 
     test "a room beside the thread is read for the send and never stored", %{

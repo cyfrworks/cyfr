@@ -115,25 +115,6 @@ defmodule Aqua do
   @spec attachment_limits() :: %{max_files: pos_integer(), max_file_bytes: pos_integer()}
   defdelegate attachment_limits(), to: Attachments, as: :limits
 
-  @doc "Remove a message's stored attachments (`Aqua.Attachments.discard/4`)."
-  @spec discard_attachments(Context.t(), String.t(), String.t(), [Attachments.ref()]) :: :ok
-  defdelegate discard_attachments(ctx, thread_id, message_id, refs),
-    to: Attachments,
-    as: :discard
-
-  @doc "Store a message's attachments, all or none (`Aqua.Attachments.store/4`)."
-  @spec store_attachments(Context.t(), String.t(), String.t(), [Attachments.file()]) ::
-          {:ok, [Attachments.ref()]}
-          | {:error,
-             :too_many_attachments
-             | :attachment_too_large
-             | :storage_full
-             | :storage_unverifiable
-             | :storage_error}
-  defdelegate store_attachments(ctx, thread_id, message_id, files),
-    to: Attachments,
-    as: :store
-
   @doc "What the assistant classifies `tool.action` as, or nil (`Aqua.Kinds.kind_for/2`)."
   @spec tool_kind(String.t(), String.t()) :: atom() | nil
   defdelegate tool_kind(tool, action), to: Kinds, as: :kind_for

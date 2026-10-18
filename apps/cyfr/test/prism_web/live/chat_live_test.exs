@@ -7,6 +7,8 @@ defmodule PrismWeb.ChatLiveTest do
   # closed. Driven against the real loop and a scripted model.
   use PrismWeb.ConnCase, async: false
 
+  require Ecto.Query
+
   import Prima.Test.Wait
 
   alias Arca.ThreadStorage, as: Threads
@@ -725,6 +727,16 @@ defmodule PrismWeb.ChatLiveTest do
     [ref] = Aqua.attachment_refs(msg)
     {:ok, blob} = Aqua.attachment_blob_path(thread.id, msg.id, ref)
     assert {:ok, "alice's bytes"} = Arca.get(Sanctum.Context.actor(ctx), blob)
+
+    # The pane stored the file through the gate: one admitted decision of
+    # Alice's for `thread/attach`.
+    assert [%{admission: "admitted"}] =
+             Arca.Repo.all(
+               Ecto.Query.from(d in Arca.Schemas.DecisionLog,
+                 where:
+                   d.tool == "thread" and d.action == "attach" and d.user_id == ^alice.user_id
+               )
+             )
 
     # Bob's browser offers back a "held send" naming Alice's sent message
     # and its file, with a text the send refuses: the refusal discards

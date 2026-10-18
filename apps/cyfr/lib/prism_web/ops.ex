@@ -12,12 +12,12 @@ defmodule PrismWeb.Ops do
 
   ## Mutation scope
 
-  Component, execution, schedule, credential, webhook, connection, and
-  admission changes use the operation catalog and its authorization gate.
+  Component, execution, schedule, credential, webhook, connection,
+  admission and chat changes, a message's attachments among them, use the
+  operation catalog and its authorization gate.
 
-  UI preferences, cache invalidation, and authenticated chat operations
-  call their domain functions directly. `Aqua.Providers.Thread` exposes chat
-  operations separately to external OIDC-interactive clients.
+  A person's own UI preferences and cache invalidation call their domain
+  functions directly.
 
   PrismWeb.ToolSeamTest checks the allowed direct domain calls.
 

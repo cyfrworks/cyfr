@@ -157,19 +157,7 @@ defmodule PrismWeb.ToolSeamTest do
     # minting the person's identity, before any athanor exists to run a tool
     # in; `Compendium.Providers.Shared.namespace_bearer/2` reads it afterwards.
     {"apps/cyfr/lib/prism_web/controllers/claim_namespace_controller.ex",
-     "Compendium.store_push_token"},
-    # Chat IS on the wire now (`thread.*`, external-plane and
-    # OIDC-only, so no agent and no API key reaches it) — and the console
-    # is a deliberate in-process client of the same domain functions
-    # rather than a caller of its own tool: the LiveView already holds an
-    # authenticated member context, and the registry gate exists for
-    # surfaces that do not. Same functions, two doors —
-    # `PrismWeb.Ops` states the rule.
-    # Attachments a person drags into their own chat, and the same call
-    # undone when the message they belonged to is not sent. Storage-capped by
-    # `Sanctum.Tenancy.Caps.check_storage/2` like every other tenant write.
-    {"apps/cyfr/lib/prism_web/live/thread_pane_live.ex", "Aqua.store_attachments"},
-    {"apps/cyfr/lib/prism_web/live/thread_pane_live.ex", "Aqua.discard_attachments"}
+     "Compendium.store_push_token"}
   ]
 
   # The namespaces whose state the console must not change behind the tool
@@ -292,8 +280,8 @@ defmodule PrismWeb.ToolSeamTest do
   # answer's bounds, as the wire's `approval` tool does.
   @chat_verbs %{
     "apps/cyfr/lib/prism_web/live/thread_pane_live.ex" =>
-      ~w(thread/create thread/send thread/stop approval/resolve thread/revoke_grant
-         thread/restart_for_consent),
+      ~w(thread/create thread/attach thread/send thread/discard thread/stop approval/resolve
+         thread/revoke_grant thread/restart_for_consent),
     "apps/cyfr/lib/prism_web/live/chat_live.ex" => ~w(thread/follow thread/unfollow thread/delete)
   }
 

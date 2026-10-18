@@ -130,7 +130,6 @@ defmodule PrismWeb.ThreadPaneLive do
       |> assign(:own?, Users.own_athanor?(ctx.user_id, ctx.athanor_id))
       |> assign(:links, [])
       |> assign(:held_send, nil)
-      |> assign(:stored_attachments, %{})
       |> assign(:model_override, nil)
       |> assign(:models_by_provider, %{})
       |> assign(:models_loaded, false)
@@ -853,17 +852,15 @@ defmodule PrismWeb.ThreadPaneLive do
   # ---------------------------------------------------------------------------
 
   # The message id is minted here so the attachment bytes can be written
-  # under it — by this member, in this process — before the runner sees
-  # the message; the runner then only records the refs.
+  # under it — by this member's session, through `thread/attach` — before
+  # the runner sees the message; the runner then only records the refs.
   defp send_message(socket, message, files) do
     ctx = socket.assigns.context
     message_id = Prima.UUID7.generate_id("msg")
 
     with {:ok, thread, created?} <- current_or_new(socket),
          {room, socket} = room_context(socket, thread),
-         {:ok, refs} <- Aqua.store_attachments(ctx, thread.id, message_id, files) do
-      socket = update(socket, :stored_attachments, &Map.put(&1, message_id, stored_names(refs)))
-
+         {:ok, refs} <- attach(ctx, thread.id, message_id, files) do
       envelope = %{
         thread_id: thread.id,
         client_id: Prima.UUID7.generate_id("snd"),
@@ -886,7 +883,7 @@ defmodule PrismWeb.ThreadPaneLive do
   # own when the fill completes, or one after a reload — offers the same
   # send and is accepted once. The athanor being prepared holds the send
   # with its attachments in place; any other refusal is final, and the
-  # bytes this pane wrote under the message id are discarded
+  # files this session stored under the message id are discarded
   # (`discard_stored/2`), since a refused send would otherwise leave blobs
   # that belong to no row.
   defp deliver(socket, envelope, created) do
@@ -896,7 +893,6 @@ defmodule PrismWeb.ThreadPaneLive do
       {:ok, _} ->
         {:noreply,
          socket
-         |> update(:stored_attachments, &Map.delete(&1, envelope.message_id))
          |> assign(:held_send, nil)
          |> assign(:input, "")
          |> mirror(nil)
@@ -920,30 +916,45 @@ defmodule PrismWeb.ThreadPaneLive do
     end
   end
 
-  # The bytes a refused or discarded send leaves are removed only when
-  # this pane wrote them, in this process, under that message id: an
-  # envelope the browser offers back names its message and refs itself,
-  # and a member's browser could name another member's sent message, so
-  # what a restored envelope names is never deleted. A send restored
-  # after a reload and then refused leaves its blobs in the athanor's
-  # storage, counted against its cap.
-  defp discard_stored(socket, envelope) do
-    {own, stored} = Map.pop(socket.assigns.stored_attachments, envelope.message_id, [])
-    refs = Enum.filter(envelope.attachments, &(&1["stored_name"] in own))
+  # The message's files go through the gate (`thread/attach`) under the
+  # message id minted for this send, before the send names them.
+  defp attach(_ctx, _thread_id, _message_id, []), do: {:ok, []}
 
-    if refs != [] do
-      Aqua.discard_attachments(
-        socket.assigns.context,
-        envelope.thread_id,
-        envelope.message_id,
-        refs
-      )
+  defp attach(ctx, thread_id, message_id, files) do
+    args = %{
+      "thread" => thread_id,
+      "message_id" => message_id,
+      "files" =>
+        for file <- files do
+          %{
+            "filename" => file["filename"],
+            "media_type" => file["media_type"] || Prima.MediaType.binary(),
+            "data" => Base.encode64(file["bytes"] || "")
+          }
+        end
+    }
+
+    with {:ok, %{attachments: refs}} <- PrismWeb.Ops.call_tool(ctx, "thread/attach", args) do
+      {:ok, refs}
     end
-
-    assign(socket, :stored_attachments, stored)
   end
 
-  defp stored_names(refs), do: for(%{"stored_name" => name} <- refs, do: name)
+  # The files a refused or given-up send leaves go through the gate
+  # (`thread/discard`), which removes only what this person's own session
+  # stored under the message and nothing of a sent one, whatever the
+  # envelope (which a reload hands back from the browser) names. A send
+  # with no files has nothing to discard.
+  defp discard_stored(socket, %{attachments: []}), do: socket
+
+  defp discard_stored(socket, envelope) do
+    _ =
+      PrismWeb.Ops.call_tool(socket.assigns.context, "thread/discard", %{
+        "thread" => envelope.thread_id,
+        "message_id" => envelope.message_id
+      })
+
+    socket
+  end
 
   defp send_args(envelope) do
     %{

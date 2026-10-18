@@ -286,6 +286,7 @@ const (
 	ThreadCreate                    = "create"
 	ThreadDecline                   = "decline"
 	ThreadDelete                    = "delete"
+	ThreadDiscard                   = "discard"
 	ThreadEvents                    = "events"
 	ThreadFollow                    = "follow"
 	ThreadGet                       = "get"
@@ -356,7 +357,7 @@ var Actions = map[string][]string{
 	"session":             {"device_init", "device_poll", "login", "logout", "read_resource", "use", "whoami"},
 	"settings":            {"list", "reset", "set"},
 	"system":              {"notify", "status"},
-	"thread":              {"aloud", "approve", "attach", "create", "decline", "delete", "events", "follow", "get", "list", "messages", "restart_for_consent", "revoke_grant", "send", "stop", "unfollow"},
+	"thread":              {"aloud", "approve", "attach", "create", "decline", "delete", "discard", "events", "follow", "get", "list", "messages", "restart_for_consent", "revoke_grant", "send", "stop", "unfollow"},
 	"tincture":            {"invoke_protected", "invoke_public"},
 	"tincture_visibility": {"get"},
 	"tools":               {"list"},
@@ -5192,6 +5193,23 @@ func (args ThreadDeleteArgs) MarshalJSON() ([]byte, error) {
 		Action string `json:"action"`
 		fields
 	}{Action: ThreadDelete, fields: fields(args)})
+}
+
+// ThreadDiscardArgs carries arguments for thread.discard.
+type ThreadDiscardArgs struct {
+	// Thread id (all actions except create and list)
+	Thread string `json:"thread"`
+	// discard: the unsent message whose files this session attached, which go
+	MessageId string `json:"message_id"`
+}
+
+// MarshalJSON supplies the operation's fixed action discriminator.
+func (args ThreadDiscardArgs) MarshalJSON() ([]byte, error) {
+	type fields ThreadDiscardArgs
+	return json.Marshal(struct {
+		Action string `json:"action"`
+		fields
+	}{Action: ThreadDiscard, fields: fields(args)})
 }
 
 // ThreadEventsArgs carries arguments for thread.events.

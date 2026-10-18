@@ -29,6 +29,7 @@ defmodule Aqua.Attachments do
   @max_files 10
   @max_file_bytes 20_000_000
   @name_max 120
+  @unsent_ttl_ms 24 * 60 * 60 * 1000
 
   @type file :: %{required(String.t()) => term()}
   @type ref :: %{required(String.t()) => term()}
@@ -42,6 +43,11 @@ defmodule Aqua.Attachments do
   and return their refs, in order. Nothing is written when any bound is
   broken, and a write that fails mid-batch removes the files already
   written — a message never references a partial set.
+
+  The files go only under a message that has not been sent, and a file
+  already stored under it is written over only by the session that
+  stored it: anything else is refused before the first byte. What a
+  session stored is remembered for it (`discard_unsent/3`).
   """
   @spec store(Context.t(), String.t(), String.t(), [file()]) ::
           {:ok, [ref()]}
@@ -50,20 +56,25 @@ defmodule Aqua.Attachments do
              | :attachment_too_large
              | :storage_full
              | :storage_unverifiable
-             | :storage_error}
+             | :storage_error
+             | :message_sent
+             | :attachment_exists
+             | :database_error}
   def store(_ctx, _thread_id, _message_id, []), do: {:ok, []}
 
   def store(%Context{} = ctx, thread_id, message_id, files) when is_list(files) do
     with :ok <- check_count(files),
          :ok <- check_sizes(files),
-         :ok <- check_quota(ctx, files) do
+         :ok <- check_quota(ctx, files),
+         :ok <- unsent(ctx, message_id),
+         :ok <- writable(ctx, thread_id, message_id, files) do
       files
       |> Enum.with_index()
       |> Enum.reduce_while({:ok, []}, fn {file, index}, {:ok, refs} ->
         # The index prefix makes two same-named uploads distinct blobs —
         # and distinctly addressable. The path is blob_path/3's — the
         # same spelling the read side and the rollback resolve.
-        stored_name = "#{index}-#{safe_filename(file["filename"])}"
+        stored_name = stored_name(file, index)
         {:ok, path} = blob_path(thread_id, message_id, %{"stored_name" => stored_name})
         bytes = file["bytes"] || ""
 
@@ -94,17 +105,22 @@ defmodule Aqua.Attachments do
         end
       end)
       |> case do
-        {:ok, refs} -> {:ok, Enum.reverse(refs)}
-        error -> error
+        {:ok, refs} ->
+          refs = Enum.reverse(refs)
+          remember(ctx, thread_id, message_id, refs)
+          {:ok, refs}
+
+        error ->
+          error
       end
     end
   end
 
   @doc """
-  Remove blobs written for a message that never landed.
-
-  A send may be refused after attachments are stored. Call this to reclaim
-  those unreferenced bytes when the enclosing send fails.
+  Remove the files `refs` names under a message whose row never landed,
+  for a caller holding refs `store/4` just answered it in the same
+  process (`Aqua.Aloud`), never refs a client names: a client's discard
+  is `discard_unsent/3`.
   """
   @spec discard(Context.t(), String.t(), String.t(), [ref()]) :: :ok
   def discard(%Context{} = ctx, thread_id, message_id, refs) when is_list(refs) do
@@ -114,6 +130,117 @@ defmodule Aqua.Attachments do
       end
     end)
   end
+
+  @doc """
+  Remove the files the caller's own session stored for a message that has
+  not been sent: a send refused after its files were stored, or a held
+  send the person gives up. Only the names `store/4` remembered for this
+  session under this thread and message are removed, never what a
+  caller names, so no one removes another session's files; a message
+  already sent keeps its files (`:message_sent`).
+
+  The memory is the node's (`Arca.Cache`, for a day): it only narrows
+  what a discard reaches, so a session whose memory is gone, or that
+  stored on another node, removes nothing and its files stay counted
+  against the athanor's storage. Answers the names removed.
+  """
+  @spec discard_unsent(Context.t(), String.t(), String.t()) ::
+          {:ok, [String.t()]} | {:error, :message_sent | :database_error}
+  def discard_unsent(%Context{} = ctx, thread_id, message_id)
+      when is_binary(thread_id) and is_binary(message_id) do
+    with :ok <- unsent(ctx, message_id) do
+      case holder(ctx) do
+        nil ->
+          {:ok, []}
+
+        holder ->
+          case Arca.Cache.take(unsent_key(holder, message_id)) do
+            {:ok, %{thread_id: ^thread_id, names: names}} ->
+              for name <- names do
+                {:ok, blob} = blob_path(thread_id, message_id, %{"stored_name" => name})
+                Arca.delete(Sanctum.Context.actor(ctx), blob)
+              end
+
+              {:ok, names}
+
+            _none ->
+              {:ok, []}
+          end
+      end
+    end
+  end
+
+  # A message with a row was sent: its files are its record.
+  defp unsent(ctx, message_id) do
+    case Arca.ThreadStorage.get_message(Sanctum.Context.actor(ctx), message_id) do
+      {:ok, _sent} -> {:error, :message_sent}
+      {:error, :not_found} -> :ok
+      {:error, :database_error} -> {:error, :database_error}
+      {:error, :no_athanor} -> {:error, :message_sent}
+    end
+  end
+
+  # A file already under the message is written over only by the session
+  # that stored it there.
+  defp writable(ctx, thread_id, message_id, files) do
+    own = owned(ctx, thread_id, message_id)
+    actor = Sanctum.Context.actor(ctx)
+
+    taken? =
+      files
+      |> Enum.with_index()
+      |> Enum.any?(fn {file, index} ->
+        name = stored_name(file, index)
+        {:ok, path} = blob_path(thread_id, message_id, %{"stored_name" => name})
+        name not in own and Arca.exists?(actor, path)
+      end)
+
+    if taken?, do: {:error, :attachment_exists}, else: :ok
+  end
+
+  defp owned(ctx, thread_id, message_id) do
+    with holder when holder != nil <- holder(ctx),
+         {:ok, %{thread_id: ^thread_id, names: names}} <-
+           Arca.Cache.get(unsent_key(holder, message_id)) do
+      names
+    else
+      _ -> []
+    end
+  end
+
+  defp remember(ctx, thread_id, message_id, refs) do
+    case holder(ctx) do
+      nil ->
+        :ok
+
+      holder ->
+        names =
+          Enum.uniq(owned(ctx, thread_id, message_id) ++ for(r <- refs, do: r["stored_name"]))
+
+        Arca.Cache.put(
+          unsent_key(holder, message_id),
+          %{thread_id: thread_id, names: names},
+          @unsent_ttl_ms
+        )
+    end
+  end
+
+  # The session a call came from: its session, its key or its paired
+  # client, with its person and athanor. A context with none of them
+  # stores no memory and discards nothing.
+  defp holder(%Context{user_id: user_id, athanor_id: athanor_id} = ctx)
+       when is_binary(user_id) and is_binary(athanor_id) do
+    case ctx.session_token_hash || ctx.api_key_id || ctx.client_id do
+      nil -> nil
+      credential -> {athanor_id, user_id, credential}
+    end
+  end
+
+  defp holder(_ctx), do: nil
+
+  defp unsent_key(holder, message_id), do: {:aqua_unsent_attachments, holder, message_id}
+
+  defp stored_name(file, index), do: "#{index}-#{safe_filename(file["filename"])}"
 
   @doc """
   One ref's blob location, rebuilt from the owning row's identity — the

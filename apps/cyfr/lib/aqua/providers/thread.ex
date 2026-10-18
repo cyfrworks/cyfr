@@ -238,6 +238,25 @@ defmodule Aqua.Providers.Thread do
         ),
         Operation.new(
           "thread",
+          "discard",
+          "Discard thread attachments",
+          [
+            Arg.new("thread", :string,
+              required: true,
+              description: "Thread id (all actions except create and list)"
+            ),
+            Arg.new("message_id", :string,
+              required: true,
+              description:
+                "discard: the unsent message whose files this session attached, which go"
+            )
+          ],
+          kind: :write,
+          planes: [:external],
+          consent: :interactive
+        ),
+        Operation.new(
+          "thread",
           "stop",
           "Stop thread",
           [
@@ -665,6 +684,9 @@ defmodule Aqua.Providers.Thread do
       {:error, {:invalid_argument, _} = reason} ->
         {:error, reason}
 
+      {:error, reason} when reason in [:message_sent, :attachment_exists, :database_error] ->
+        {:error, attachment_refusal(reason)}
+
       {:error, reason} ->
         {:error, {:invalid_argument, "attach refused: " <> Sanctum.Refusals.render(reason)}}
     end
@@ -672,6 +694,22 @@ defmodule Aqua.Providers.Thread do
 
   defp act("attach", _ctx, _id, _args),
     do: {:error, {:invalid_argument, "attach requires 'message_id' and 'files'"}}
+
+  # A send refused after its files were stored, or a held one given up:
+  # the files this caller's own session stored under the message go, and
+  # nothing anyone else stored (`Aqua.Attachments.discard_unsent/3`).
+  defp act("discard", ctx, id, %{"message_id" => message_id}) when is_binary(message_id) do
+    with {:ok, _thread} <- Arca.ThreadStorage.get(Sanctum.Context.actor(ctx), id),
+         {:ok, names} <- Aqua.Attachments.discard_unsent(ctx, id, message_id) do
+      {:ok, %{message_id: message_id, discarded: names}}
+    else
+      {:error, :not_found} -> {:error, {:not_found, "thread", id}}
+      {:error, reason} -> {:error, attachment_refusal(reason)}
+    end
+  end
+
+  defp act("discard", _ctx, _id, _args),
+    do: {:error, {:invalid_argument, "discard requires 'message_id'"}}
 
   defp act("revoke_grant", ctx, id, %{
          "agent_name" => agent,
@@ -883,6 +921,14 @@ defmodule Aqua.Providers.Thread do
   defp put_opt(opts, _key, nil), do: opts
   defp put_opt(opts, _key, ""), do: opts
   defp put_opt(opts, key, value), do: Keyword.put(opts, key, value)
+
+  defp attachment_refusal(:message_sent),
+    do: {:conflict, "That message was sent; its attachments stay as they are"}
+
+  defp attachment_refusal(:attachment_exists),
+    do: {:conflict, "Another session stored a file under that message"}
+
+  defp attachment_refusal(:database_error), do: {:unavailable, "Storage"}
 
   defp decode_files(files) do
     Enum.reduce_while(files, {:ok, []}, fn
