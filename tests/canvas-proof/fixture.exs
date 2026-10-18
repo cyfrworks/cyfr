@@ -400,7 +400,11 @@ fn args ->
 
       {:ok, parsed} = Prima.ComponentRef.parse(reference)
       ref = %{publisher: parsed.namespace, name: parsed.name, version: parsed.version}
-      {:ok, revision} = Compendium.tincture_grant_revision(ctx, Prima.ComponentRef.build("tincture", parsed.namespace, parsed.name))
+      {:ok, revision} =
+        Compendium.tincture_grant_revision(
+          ctx,
+          Prima.ComponentRef.build("tincture", parsed.namespace, parsed.name, parsed.version)
+        )
       frame_id = "frm_" <> Base.url_encode64(:crypto.strong_rand_bytes(15), padding: false)
       {:ok, minted} = Sanctum.TinctureAuth.mint_frame_credential(ctx, ref, digest, revision, frame_id)
       answer.(%{bearer: minted.credential, frame: frame_id})

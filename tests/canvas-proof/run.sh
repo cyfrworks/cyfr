@@ -175,6 +175,9 @@ for published in \
   read -r dir name <<<"$published"
   answer="$(server_fixture "$CELL" tincture "$user_id" "$dir" "$name" private)"
   printf '%s' "$answer" | grep -q '"component":"' || fail "$name was not published: $answer"
+  # A tincture's frame, a canvas's among them, opens only under the
+  # person's grant.
+  server_fixture "$CELL" grant "$TOKEN" "$name" >/dev/null
 done
 
 source_answer="$(canvas_fixture source "$TOKEN" candles)"
@@ -244,6 +247,7 @@ for written in "markets $READS_CANDLES" "labels $READS_CANDLES" "measure []"; do
   read -r canvas streams <<<"$written"
   answer="$(canvas_fixture write "$TOKEN" "$canvas" "$canvas" "$streams")"
   printf '%s' "$answer" | grep -q '"ok"' || fail "canvas $canvas was not written: $answer"
+  server_fixture "$CELL" grant "$TOKEN" "$canvas" "$(field "$answer" ok version)" >/dev/null
 done
 
 # The person's layout, version 2, published through the console at the
@@ -274,7 +278,15 @@ answer_ask() {
   op="$(asked "$ask" op)"
   case "$op" in
     write)
-      ANSWER="$(canvas_fixture write "$TOKEN" "$(asked "$ask" canvas)" "$(asked "$ask" module)" "$(asked "$ask" streams)")"
+      # The written version granted as the person grants it from the
+      # shell's prompt, before the proof shows it: a write whose version is
+      # left ungranted answers the grant's failure instead.
+      arg="$(asked "$ask" canvas)"
+      ANSWER="$(canvas_fixture write "$TOKEN" "$arg" "$(asked "$ask" module)" "$(asked "$ask" streams)")"
+      if printf '%s' "$ANSWER" | grep -q '"ok"' &&
+        ! server_fixture "$CELL" grant "$TOKEN" "$arg" "$(field "$ANSWER" ok version)" >/dev/null; then
+        ANSWER="{\"error\":\"the written version of $arg was not granted\"}"
+      fi
       ;;
     versions)
       ANSWER="$(console canvas/versions "{\"canvas\":\"$(asked "$ask" canvas)\"}")"

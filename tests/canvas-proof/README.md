@@ -60,7 +60,15 @@ is narrowed and never passes.
 
 What the person does goes through the console's own path and the gate
 (the release fixture's `console`): the layout, `canvas.write`, `feed.bind`,
-`feed.remove` and `feed.press`. `fixture.exs` holds the rest, which a
+`feed.remove` and `feed.press`. A tincture's frame, a canvas's validation
+and activation among them, opens only under its owner's grant, so the
+person grants each published tincture and each written version before the
+proof shows it, through the release fixture's `grant`, the consent walk's
+plan, preview and commit; a written version that reads what the grant
+names already asks nothing. Where a version reads other streams than the
+grant names, the shell's own grant prompt asks again, and the steps that
+meet it confirm it in the prompt (`validation_failures`,
+`crash_safe_mode`). `fixture.exs` holds the rest, which a
 person cannot do from a browser and a run would otherwise do: the feed's
 source and its profile, each fixed result, the feed's row as the store
 reads it, the scheduler's failed fire, and the foreign bearer. `proof.mjs`
@@ -117,8 +125,8 @@ instrument (below).
 | `feed_chart` | the feed `candles`' fixed result is drawn by the chart element as six candles at the accepted revision; the observation says the result is fixed and no run executed |
 | `app_over_canvas` | `canvas-full` opens full from the shipped canvas's launcher (one `open`), the canvas under it frozen; on a switch the full frame is frozen and inert; switched back it is live again over its canvas, and closing it shows the canvas's same frame live |
 | `worker_stop` | switched away, `canvas-probe`'s module worker is terminated (the browser closes it) and the counter stops where it was; switched back, the same frame starts a new generation, whose counter ticks and whose stream delivers its refresh |
-| `validation_failures` | `canvas-broken` 1.0.0 is working; a later version that answers no tree is recorded `no_tree` at its deadline, and one that dies on its stream's fixture (the shell's receipt of its validation frame's `failed`) is recorded `died`; each time the working version, 1.0.0, opens |
-| `crash_safe_mode` | a version that answers its fixture is activated, then crashes live on the feed's accepted result: safe mode `crashed`, offering retry, the kept version and the shipped canvas; the kept version is restored and opens |
+| `validation_failures` | `canvas-broken` 1.0.0 is working; a later version that answers no tree is recorded `no_tree` at its deadline, and one that dies on its stream's fixture (the shell's receipt of its validation frame's `failed`) is recorded `died`; each later version reads a stream 1.0.0 does not, so once its validation fails the working version, 1.0.0, opens nothing (the canvas shows its `ungranted` refusal) and the shell's grant prompt asks for 1.0.0 itself; the person confirms it in the prompt and 1.0.0 opens |
+| `crash_safe_mode` | a version that answers its fixture is activated, then crashes live on the feed's accepted result: safe mode `crashed`, offering retry, the kept version and the shipped canvas; the kept version reads no stream, so choosing it raises the grant prompt for the kept version in front of safe mode, with nothing restored and no canvas frame open; the person confirms it in the prompt, and the kept version is restored and opens |
 | `exits` | each exit below, with what the worker saw and what reached the server |
 | `worker_policy` | the eight results below, in each browser, with the browser's version |
 | `labels` | two controls of one look show different labels, `Buy` and `Refresh`, each from its binding; a binding record the module posts itself, labelling `buy` as "Refresh", relabels nothing: every label seen until the canvas fails closed is the declared one, every control is disabled, the shell receives its `failed` and enters safe mode `crashed`, and a retry draws the declared labels again |

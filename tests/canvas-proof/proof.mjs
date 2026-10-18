@@ -495,6 +495,34 @@ async function chooseOffer(page, offer) {
   }, { timeoutMs: 20_000, what: `safe mode left by ${offer}` });
 }
 
+// The grant prompt a canvas version raises when what it reads differs from
+// today's grant (`Compendium.Canvas`): the shell's for the working version
+// a failed validation falls back to, safe mode's for the kept version it
+// restores. `ref` is the version it must ask for. While it
+// is open the shown canvas place is read and `whileOpen` is asked, and the
+// person then confirms it in the prompt's own sheet, which walks the
+// consent plan, preview and commit. Answers the prompt's title, what the
+// place held and what `whileOpen` answered.
+async function confirmRegrant(page, ref, { timeoutMs = 45_000, whileOpen = async () => null } = {}) {
+  const asked = await lib.waitFor(async () => {
+    const p = await prompt(page);
+    return p && p.kind === "grant" ? p : null;
+  }, { timeoutMs, stepMs: 50, what: `the grant prompt for ${ref}` });
+  const place = await page.evaluate(() => {
+    const shown = document.querySelector('[data-canvas-place="canvas"][data-canvas-shown="true"]');
+    const refused = shown && shown.querySelector("[data-tincture-state]");
+    const iframe = shown && shown.querySelector('iframe[data-frame-wire="canvas"]');
+    return { refusal: refused ? refused.dataset.tinctureState : null, frame: iframe ? iframe.getAttribute("data-frame-state") : null };
+  });
+  const meanwhile = await whileOpen();
+  await page.locator('#system-layer-dialog [data-test="prompt-confirm"]').click({ timeout: timeoutMs });
+  await lib.waitFor(async () => {
+    const p = await prompt(page);
+    return !p || p.kind !== "grant" ? true : null;
+  }, { timeoutMs, what: `the grant prompt for ${ref} confirmed` });
+  return { title: asked.title, asked_for: asked.title === `Grant ${ref}`, place, meanwhile };
+}
+
 // What the shell draws, for a step that did not find what it expected.
 async function diagnose(page) {
   const frames = await page.$$eval("[data-canvas-frame]", (els) => els.map((e) => {
@@ -1346,6 +1374,13 @@ async function stepValidationFailures(page, name) {
     if (!OK(written)) throw new Error(`canvas.write refused canvas-broken: ${JSON.stringify(written)}`);
     await publish(page, layout([{ id, tincture: "tincture:local.canvas-broken" }], { without: ["broken"] }));
     const from = (await instrument(page)).receipts.length;
+    // The written version reads a stream the working version does not, and
+    // was granted before it was shown: once its validation fails, the
+    // working version waits for its own grant again and opens nothing
+    // until the person confirms it.
+    await lib.waitFor(async () => (await switcherIds(page)).includes(id), { timeoutMs: 30_000, what: `the switcher to list ${id}` });
+    await page.click(`#canvas-switcher button[data-canvas="${id}"]`);
+    const regrant = await confirmRegrant(page, `tincture:local.canvas-broken:${start.working}`);
     const shown = await showCanvas(page, id);
     const d = await drawn(shown.frame, (x) => x.texts.includes(`broken ${start.working}`), "the working version opened");
     const marks = await instrument(page);
@@ -1355,6 +1390,7 @@ async function stepValidationFailures(page, name) {
       validation: { trees: receiptsOf(marks, from, null, "tree").length, failed: receiptsOf(marks, from, null, "failed").filter((r) => r.frame !== shown.id).length },
       recorded: after.failed,
       working: after.working,
+      regrant,
       opened: d.texts[0],
       expected: outcome,
     };
@@ -1364,10 +1400,11 @@ async function stepValidationFailures(page, name) {
 
   const q = outcomes["broken-quiet"];
   const die = outcomes["broken-die"];
+  const waited = (o) => o.regrant.asked_for && o.regrant.place.refusal === "ungranted" && o.regrant.place.frame === null;
   note("validation_failures", name,
     start.working === "1.0.0" &&
-      q.validation.trees === 0 && q.recorded && q.recorded.version === q.version && q.recorded.outcome === "no_tree" && q.working === "1.0.0" && q.opened === "broken 1.0.0" &&
-      die.validation.trees === 0 && die.validation.failed === 1 && die.recorded && die.recorded.version === die.version && die.recorded.outcome === "died" && die.working === "1.0.0" && die.opened === "broken 1.0.0",
+      q.validation.trees === 0 && q.recorded && q.recorded.version === q.version && q.recorded.outcome === "no_tree" && q.working === "1.0.0" && waited(q) && q.opened === "broken 1.0.0" &&
+      die.validation.trees === 0 && die.validation.failed === 1 && die.recorded && die.recorded.version === die.version && die.recorded.outcome === "died" && die.working === "1.0.0" && waited(die) && die.opened === "broken 1.0.0",
     { first: { working: start.working }, no_tree: q, died: die });
 }
 
@@ -1385,7 +1422,14 @@ async function stepCrashSafeMode(page, name) {
   const marks = await instrument(page);
   const activated = await versions("canvas-broken");
   const kept = safe.offers.find((o) => o.offer === "kept");
+  // The kept version reads no stream, the crashed one's grant names one:
+  // its restore waits for its own grant, asked in front of safe mode, and
+  // nothing is restored or opened until the person confirms it, when the
+  // restore is asked again.
   await chooseOffer(page, "kept");
+  const regrant = await confirmRegrant(page, `tincture:local.canvas-broken:${before.working}`, {
+    whileOpen: () => versions("canvas-broken"),
+  });
   const shown = await showCanvas(page, "crash");
   const d = await drawn(shown.frame, (x) => x.texts.includes(`broken ${before.working}`), "the kept version opened");
   const restored = await versions("canvas-broken");
@@ -1396,10 +1440,13 @@ async function stepCrashSafeMode(page, name) {
     activated.working === written.ok.version && activated.kept === before.working &&
       receiptsOf(marks, from, null, "tree").length === 1 && receiptsOf(marks, from, null, "failed").length >= 1 &&
       safe.kind === "safe_mode" && !!kept && safe.offers.some((o) => o.offer === "retry") && safe.offers.some((o) => o.offer === "shipped") &&
+      regrant.asked_for && regrant.meanwhile.working === written.ok.version && regrant.meanwhile.kept === before.working &&
+      regrant.place.frame === null &&
       restored.working === before.working && restored.kept === written.ok.version && d.texts.includes(`broken ${before.working}`),
     {
       activated: { version: written.ok.version, working: activated.working, kept: activated.kept, validation_trees: receiptsOf(marks, from, null, "tree").length },
       crashed: { live_failed_verbs: receiptsOf(marks, from, null, "failed").length, safe_mode: safe.description, offers: safe.offers.map((o) => o.offer), kept_offer: kept && kept.label },
+      regrant: { title: regrant.title, asked_for: regrant.asked_for, place: regrant.place, working: regrant.meanwhile.working, kept: regrant.meanwhile.kept },
       restored: { working: restored.working, kept: restored.kept, opened: d.texts[0] },
     });
 }
