@@ -33,8 +33,11 @@ defmodule Cyfr.ContextSwapTest do
     "apps/sanctum/lib/sanctum/context.ex" => 3,
     # The tenancy-resolver override exists only when compiled with
     # `:allow_tenancy_resolver_override` (test builds); production
-    # compiles the branch out entirely.
-    "apps/sanctum/lib/sanctum/tenancy.ex" => 1,
+    # compiles the branch out entirely. And revalidating an API key's
+    # context whose athanor is archived or gone empties the athanor
+    # (`keyless_athanor/1`): it narrows onto none, and a key never acts in
+    # an athanor other than its own, which `refocus/2` would admit.
+    "apps/sanctum/lib/sanctum/tenancy.ex" => 2,
     # `resolve/3` narrows through `focus/2`; the one swap left is its
     # open of an ARCHIVED athanor for `get`/`unarchive`, hand-built under
     # the one admission focus grants (a seat) because `focus/2` rightly

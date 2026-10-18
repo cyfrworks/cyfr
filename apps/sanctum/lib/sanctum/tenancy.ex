@@ -364,13 +364,18 @@ defmodule Sanctum.Tenancy do
   defp revalidate_key(%Context{athanor_id: id} = ctx) when is_binary(id) and id != "" do
     case Athanors.get(id) do
       {:ok, %{id: ^id, status: "active"}} -> {:ok, ctx}
-      {:ok, %{id: ^id}} -> {:ok, %{ctx | athanor_id: nil}}
-      {:error, :not_found} -> {:ok, %{ctx | athanor_id: nil}}
+      {:ok, %{id: ^id}} -> {:ok, keyless_athanor(ctx)}
+      {:error, :not_found} -> {:ok, keyless_athanor(ctx)}
       {:error, reason} -> unavailable("athanor", ctx.user_id, reason)
     end
   end
 
   defp revalidate_key(%Context{} = ctx), do: {:ok, ctx}
+
+  # A key acts in the one athanor it was minted in: once that athanor is
+  # archived or gone, the key's context holds none, and narrows onto no
+  # other.
+  defp keyless_athanor(%Context{} = ctx), do: %{ctx | athanor_id: nil}
 
   @doc """
   The context a recovered turn continues under: the person-shaped
