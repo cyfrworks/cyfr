@@ -224,14 +224,20 @@ func runUpdate(ctx context.Context, out, errOut io.Writer) error {
 	return u.run()
 }
 
-// takeUpdateLock creates the lock `cyfr update` and `cyfr restore` share,
-// refusing while either holds it, and answers the function that removes it;
-// command names the one taking it.
+// takeUpdateLock creates the lock `cyfr update`, `cyfr restore` and
+// `cyfr up` share, refusing at once while any of them holds it, and
+// answers the function that removes it; command names the one taking it.
+// An update or a restore holds it from before the stop to its end, an up
+// across its start, so a start never runs while the stack is stopped for a
+// snapshot or a restore, and neither begins while a start runs. A lock
+// file its holder left behind (a process killed outright) is refused the
+// same way, naming the pid it records, never waited on: the person removes
+// it once no cyfr up, update or restore runs.
 func takeUpdateLock(command string) (func(), error) {
 	f, err := os.OpenFile(updateLockName, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
 	if errors.Is(err, fs.ErrExist) {
 		abs, holder := updateLockHolder()
-		return nil, fmt.Errorf("Another cyfr update or restore holds %s (%s). If neither is running, remove the file and run 'cyfr %s' again", abs, holder, command)
+		return nil, lockHeldError{path: abs, holder: holder, command: command}
 	}
 	if err != nil {
 		return nil, fmt.Errorf("could not take the update lock %s: %w", updateLockName, err)
@@ -244,6 +250,14 @@ func takeUpdateLock(command string) (func(), error) {
 	return func() { os.Remove(updateLockName) }, nil
 }
 
+// lockHeldError is takeUpdateLock's refusal: the lock's file, the holder it
+// records and the command that was refused.
+type lockHeldError struct{ path, holder, command string }
+
+func (e lockHeldError) Error() string {
+	return fmt.Sprintf("Another cyfr up, update or restore holds %s (%s). If none is running, remove the file and run 'cyfr %s' again", e.path, e.holder, e.command)
+}
+
 // updateLockHolder names the update lock's file and the holder it records,
 // for a refusal while the lock stands.
 func updateLockHolder() (path, holder string) {
@@ -253,14 +267,6 @@ func updateLockHolder() (path, holder string) {
 	}
 	path, _ = filepath.Abs(updateLockName)
 	return path, holder
-}
-
-// updateLockHeld reports whether the update lock's file stands, as
-// takeUpdateLock would refuse it; a file that cannot be asked about counts
-// as held.
-func updateLockHeld() bool {
-	_, err := os.Lstat(updateLockName)
-	return !errors.Is(err, fs.ErrNotExist)
 }
 
 // scaffoldRelease is a release's scaffold fetched and verified, nothing of
@@ -355,7 +361,7 @@ func (u *updater) run() error {
 		if u.snapshot != "" {
 			where = "the partial snapshot is " + u.snapshot
 		}
-		return fmt.Errorf("The snapshot failed: %v.\nThe stack is left stopped and docker-compose.yml is unchanged; %s. Fix the cause and run 'cyfr update' again, or start the old stack with 'cyfr up'", u.redact(err.Error()), where)
+		return fmt.Errorf("The snapshot failed: %v.\nThe stack is left stopped and %s; %s. Fix the cause and run 'cyfr update' again, or start the old stack with 'cyfr up'", u.redact(err.Error()), u.composeAsRead(), where)
 	}
 	if u.ctx.Err() != nil {
 		return u.restartOld(fmt.Errorf("cyfr update was interrupted during the snapshot (complete at %s)", u.snapshot))
@@ -1737,7 +1743,13 @@ func (u *updater) up() error {
 // when no byte has been migrated, and refuses with reason.
 func (u *updater) restartOld(reason error) error {
 	if len(u.running) == 0 {
-		return fmt.Errorf("%v.\nThe stack was not running before the update; docker-compose.yml is unchanged", u.redact(reason.Error()))
+		return fmt.Errorf("%v.\nThe stack was not running before the update; %s", u.redact(reason.Error()), u.composeAsRead())
+	}
+	// The old stack starts again only under the compose file the update
+	// read: one that changed since is the person's, kept as it is, and the
+	// stack stays stopped rather than start under a file nothing checked.
+	if current, err := os.ReadFile(u.compose.path); err != nil || !bytes.Equal(current, u.compose.original) {
+		return fmt.Errorf("%v.\nThe old stack is left stopped: %s, so it is not started under it. Start the stack with 'cyfr up' once docker-compose.yml is the configuration you mean to run", u.redact(reason.Error()), u.composeAsRead())
 	}
 	fmt.Fprintln(u.out, "Starting the old stack again...")
 	ctx, cancel := u.detached(stopTimeout)
@@ -1746,6 +1758,20 @@ func (u *updater) restartOld(reason error) error {
 		return fmt.Errorf("%v.\nThe old stack did not start again (%v); docker-compose.yml is unchanged, so 'cyfr up' starts it", u.redact(reason.Error()), err)
 	}
 	return fmt.Errorf("%v.\nThe old stack was started again; docker-compose.yml is unchanged", u.redact(reason.Error()))
+}
+
+// composeAsRead says whether the compose file is still the bytes the
+// update read, for an exit's report: the update writes it only in the
+// switch, so a difference before the switch is someone else's edit.
+func (u *updater) composeAsRead() string {
+	current, err := os.ReadFile(u.compose.path)
+	switch {
+	case err != nil:
+		return fmt.Sprintf("%s could not be read (%v)", u.compose.path, err)
+	case !bytes.Equal(current, u.compose.original):
+		return fmt.Sprintf("%s changed while cyfr update ran and is kept as it is", u.compose.path)
+	}
+	return "docker-compose.yml is unchanged"
 }
 
 // stopAfterSwitch leaves the stack stopped after a failure from the switch

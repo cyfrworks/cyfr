@@ -1640,19 +1640,25 @@ func TestUpdateSnapshotsNestedMountsInAnyOrder(t *testing.T) {
 // puts every scaffold file back from the snapshot, the one the update
 // created removed, and starts the old stack again under its own files.
 func TestUpdatePutsTheScaffoldBackWhenTheSwitchFails(t *testing.T) {
-	for name, prepare := range map[string]func(s *updateScenario){
-		"the scaffold write": func(s *updateScenario) { s.scaffoldFail = "wit/cyfr/added.wit" },
-		"the switch":         func(s *updateScenario) { s.answer("stop-cyfr.edit", "# edited while the update ran\n") },
+	// A compose file edited while the update ran is the person's: the switch
+	// refuses it and the old stack stays stopped rather than start under it.
+	for name, c := range map[string]struct {
+		prepare func(s *updateScenario)
+		restart bool
+		want    string
+	}{
+		"the scaffold write": {func(s *updateScenario) { s.scaffoldFail = "wit/cyfr/added.wit" }, true, "The old stack was started again"},
+		"the switch":         {func(s *updateScenario) { s.answer("stop-cyfr.edit", "# edited while the update ran\n") }, false, "The old stack is left stopped"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			s := newUpdateScenario(t, shippedCompose(t), nil)
-			prepare(s)
+			c.prepare(s)
 			out, err := s.run(context.Background())
-			if err == nil || !strings.Contains(err.Error(), "the scaffold files were put back from the snapshot "+s.snapshotDir()) || !strings.Contains(err.Error(), "The old stack was started again") {
+			if err == nil || !strings.Contains(err.Error(), "the scaffold files were put back from the snapshot "+s.snapshotDir()) || !strings.Contains(err.Error(), c.want) {
 				t.Fatalf("update answered %v\n%s", err, out)
 			}
-			if !s.hasCall(profiles+"start") || s.hasCall(profiles+"up") {
-				t.Errorf("the old stack was not started again, or the new one was:\n%s", strings.Join(s.log(), "\n"))
+			if s.hasCall(profiles+"start") != c.restart || s.hasCall(profiles+"up") {
+				t.Errorf("the old stack started again: %v, want %v; or the new one was started:\n%s", s.hasCall(profiles+"start"), c.restart, strings.Join(s.log(), "\n"))
 			}
 			for name, content := range oldScaffold {
 				if got := read(t, filepath.Join(s.project, name)); got != content {

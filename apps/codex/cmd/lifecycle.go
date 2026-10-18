@@ -18,10 +18,13 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"regexp"
 	"slices"
 	"strings"
+	"sync"
+	"syscall"
 	"time"
 
 	"github.com/cyfr/codex/internal/config"
@@ -379,6 +382,59 @@ func forceRefetched(releaseBuild bool) []string {
 	return []string{"docker-compose.yml", "Caddyfile", scaffold.SeccompProfile}
 }
 
+// downloadScaffold lays the release's scaffold files down, keeping every
+// file that exists; a variable so a test substitutes the download.
+var downloadScaffold = scaffold.Download
+
+// forceRemovalRefusal is init --force's refusal when files it re-fetches
+// could not be removed: those files kept as they were, and of the ones it
+// removed, which are on disk again and which are missing because the
+// download did not lay them down.
+func forceRemovalRefusal(unremoved, removed []string) error {
+	var back, missing []string
+	for _, name := range removed {
+		if fileExists(name) {
+			back = append(back, name)
+		} else {
+			missing = append(missing, name)
+		}
+	}
+	message := fmt.Sprintf("cyfr init --force could not remove %s, so %s kept as %s and not fetched again.", joinNames(unremoved), plural(unremoved, "it is", "they are"), plural(unremoved, "it was", "they were"))
+	if len(back) > 0 {
+		message += fmt.Sprintf(" %s %s laid down again.", joinNames(back), plural(back, "was", "were"))
+	}
+	if len(missing) > 0 {
+		message += fmt.Sprintf(" %s %s removed and %s missing: the download did not lay %s down again.", joinNames(missing), plural(missing, "was", "were"), plural(missing, "is", "are"), plural(missing, "it", "them"))
+	}
+	return errors.New(message + " Fix the cause and run 'cyfr init --force' again")
+}
+
+// joinNames spells names as a list a person reads: "a", "a and b",
+// "a, b and c".
+func joinNames(names []string) string {
+	if len(names) < 2 {
+		return strings.Join(names, "")
+	}
+	return strings.Join(names[:len(names)-1], ", ") + " and " + names[len(names)-1]
+}
+
+// plural answers one for a single name and many for several.
+func plural(names []string, one, many string) string {
+	if len(names) == 1 {
+		return one
+	}
+	return many
+}
+
+// refuseUndeclaredRestore refuses a start while .env bars a restore that
+// has not been declared.
+func refuseUndeclaredRestore() error {
+	if snapshot, barred := restoreBarred(".env"); barred {
+		return fmt.Errorf("A cyfr restore of %s has not been declared (%s is set in .env), so the stack must not start: the restored database would keep every credential the backup carried. Run 'cyfr restore %s' again, which puts every part back from the start and declares it", snapshot, restoreBarrier, snapshot)
+	}
+	return nil
+}
+
 func init() {
 	initCmd.Flags().Bool("force", false, "Re-fetch docker-compose.yml, Caddyfile and keeper.seccomp.json and regenerate cyfr.yaml even if they already exist (never replaces .env or .env.example)")
 	rootCmd.AddCommand(initCmd)
@@ -420,11 +476,14 @@ Re-running in an existing project is safe: docker-compose.yml, Caddyfile, cyfr.y
 		// re-extracts them, and regenerate cyfr.yaml. .env / .env.example are
 		// deliberately never removed. A file that cannot be removed would be
 		// kept as it is by the download, which skips an existing file, so
-		// init refuses once what was removed is laid down again.
-		var unremoved []string
+		// init refuses after the download, naming what is on disk then.
+		var removed, unremoved []string
 		if force {
 			for _, name := range append(forceRefetched(releaseBuild), "cyfr.yaml") {
-				if err := os.Remove(name); err != nil && !errors.Is(err, fs.ErrNotExist) {
+				switch err := os.Remove(name); {
+				case err == nil:
+					removed = append(removed, name)
+				case !errors.Is(err, fs.ErrNotExist):
 					unremoved = append(unremoved, fmt.Sprintf("%s (%v)", name, err))
 				}
 			}
@@ -436,7 +495,7 @@ Re-running in an existing project is safe: docker-compose.yml, Caddyfile, cyfr.y
 		// for dev builds (version.Version=="dev"/""). A download that fails
 		// warns and init goes on; a release that fails verification stops
 		// it (scaffoldDownloadFailure).
-		if err := scaffold.Download(version.Version); err != nil {
+		if err := downloadScaffold(version.Version); err != nil {
 			if stop := scaffoldDownloadFailure(version.Version, err, os.Stderr); stop != nil {
 				return stop
 			}
@@ -459,7 +518,7 @@ database_path: ./data/cyfr.db
 			configCreated = true
 		}
 		if len(unremoved) > 0 {
-			return fmt.Errorf("cyfr init --force could not remove %s, so the old file is kept and was not fetched again; the files it removed are laid down again. Fix the cause and run 'cyfr init --force' again", strings.Join(unremoved, ", "))
+			return forceRemovalRefusal(unremoved, removed)
 		}
 
 		// Generate .env from the .env.example template laid down by the scaffold,
@@ -791,15 +850,32 @@ cyfr, locus-runtime and locus-backends always start. locus-builds starts when CY
 
 		// `cyfr init` writes CYFR_BEHIND_PROXY=true into .env on TLS-yes;
 		// .env's settings select the caddy and locus-builds profiles here.
-		if snapshot, barred := restoreBarred(".env"); barred {
-			return fmt.Errorf("A cyfr restore of %s has not been declared (%s is set in .env), so the stack must not start: the restored database would keep every credential the backup carried. Run 'cyfr restore %s' again, which puts every part back from the start and declares it", snapshot, restoreBarrier, snapshot)
+		if err := refuseUndeclaredRestore(); err != nil {
+			return err
 		}
-		// An update or a restore stops the stack and copies or replaces its
-		// data while it holds the lock; a start in that window writes under
-		// the copy.
-		if updateLockHeld() {
-			lock, holder := updateLockHolder()
-			return fmt.Errorf("A cyfr update or restore holds %s (%s), so the stack must not start: it stops the stack while it copies or puts back the data. Wait for it to end; if neither is running, remove the file and run 'cyfr up' again", lock, holder)
+		// The start holds the lock an update and a restore hold while they
+		// stop the stack and copy or put back its data (takeUpdateLock), so
+		// neither runs inside a start, nor a start inside them. An interrupt
+		// waits for docker compose to end, so the lock goes with the start.
+		unlock, err := takeUpdateLock("up")
+		var held lockHeldError
+		if errors.As(err, &held) {
+			return fmt.Errorf("Another cyfr up, update or restore holds %s (%s), so the stack must not start now: an update or a restore stops the stack while it copies or puts back the data, and a start holds the lock until docker compose has started it. Wait for it to end; if none is running, remove the file and run 'cyfr up' again", held.path, held.holder)
+		}
+		if err != nil {
+			return err
+		}
+		interrupts := make(chan os.Signal, 1)
+		signal.Notify(interrupts, os.Interrupt, syscall.SIGTERM)
+		release := sync.OnceFunc(func() {
+			signal.Stop(interrupts)
+			unlock()
+		})
+		defer release()
+		// Asked again under the lock: a restore raises the bar only while
+		// it holds the lock, so the answer now stands until the start ends.
+		if err := refuseUndeclaredRestore(); err != nil {
+			return err
 		}
 		profiles := composeProfiles(".env")
 		tls := slices.Contains(profiles, "tls")
@@ -808,8 +884,15 @@ cyfr, locus-runtime and locus-backends always start. locus-builds starts when CY
 		c := exec.Command("docker", composeArgs...)
 		c.Stdout = os.Stdout
 		c.Stderr = os.Stderr
-		if err := c.Run(); err != nil {
-			return fmt.Errorf("Failed to start: %w", err)
+		runErr := c.Run()
+		release()
+		select {
+		case <-interrupts:
+			return errors.New("cyfr up was interrupted; docker compose has ended and the lock is released. Run 'docker compose ps' to see what started")
+		default:
+		}
+		if runErr != nil {
+			return fmt.Errorf("Failed to start: %w", runErr)
 		}
 		fmt.Println("CYFR server started.")
 
