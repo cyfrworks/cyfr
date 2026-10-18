@@ -3,9 +3,9 @@
 
 defmodule PrismWeb.SystemLayer.RestoreChecklist do
   @moduledoc """
-  The restore checklist (`ARCHITECTURE.md` §6.9), which only the system
-  layer draws, for a person whose home was restored from a backup: what
-  the declared restore suspended or asks for again, as
+  The restore checklist, which only the system layer draws, for a person
+  whose home was restored from a backup: what the declared restore
+  (`ARCHITECTURE.md` §6.9) suspended or asks for again, as
   `Sanctum.Recovery.checklist/1` lists it.
 
     * Passkeys and paired devices to re-enable. While the person's

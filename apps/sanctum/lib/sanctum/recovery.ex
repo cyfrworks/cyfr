@@ -870,8 +870,8 @@ defmodule Sanctum.Recovery do
   @type kit_grant :: %{user_id: String.t(), restore_id: String.t(), credential_digest: String.t()}
 
   @doc """
-  The person's restore checklist (`ARCHITECTURE.md` §6.9) while they
-  recover from a declared restore: every key, webhook, paired device and
+  The person's restore checklist while they recover from a declared
+  restore (`ARCHITECTURE.md` §6.9): every key, webhook, paired device and
   passkey of theirs held suspended, every profile to re-consent and every
   vault entry to rotate in the athanors they sit in, and every instance
   entry to rotate when they administer the platform

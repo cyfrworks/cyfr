@@ -1384,7 +1384,7 @@ defmodule Emissary.Web.DeviceChannelTest do
         Sanctum.TestContext.confirming(session_ctx, &Sanctum.Pairing.revoke(&1, device.client_id))
 
       # The ping is 30 s away; a standing change reaches an open stream
-      # within 2 s (ARCHITECTURE.md §6.6).
+      # within 2 s (the caller bound, `Sanctum.Caller.fresh?/1`).
       assert_receive %Cyfr.Bus.Session{kind: :revoked, user_id: ^user_id} = announcement, 2_000
 
       assert {:stop, :normal, {4403, "forbidden"}, frames, state} =
@@ -2440,7 +2440,7 @@ defmodule Emissary.Web.DeviceChannelTest do
     bytes
   end
 
-  # The standing bound a revocation's close is held to (§6.6).
+  # The standing bound a revocation's close is held to (`Sanctum.Caller.fresh?/1`).
   defp two_second_deadline, do: System.monotonic_time(:millisecond) + 2_000
 
   # Every frame up to and including the close, all before `deadline`.

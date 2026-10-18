@@ -1,9 +1,9 @@
 # The file-offer proof
 
 `run.sh` proves, on the browser harness (`tests/browser/`), that a file
-reaches another person only by an offer they accept, as a snapshot taken
-when it was offered (`ARCHITECTURE.md` §5.1), and that the storage counts
-move as the offer's lifecycle states (`Arca.FileOffers`). The home is one
+reaches another person only by an offer they accept (`ARCHITECTURE.md`
+§5.1), as a snapshot taken when it was offered, and that the storage counts
+move as the offer's lifecycle states (`Arca.FileOffers` holds both). The home is one
 `cyfr` release on a SQLite cell, `home.test`, behind the harness's HTTPS
 front (`browser_home`). `fixture.exs` signs three people in, as the release
 fixture's door does (`tests/release-boot/fixture.exs` `person`): the

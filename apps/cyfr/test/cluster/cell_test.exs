@@ -146,8 +146,8 @@ defmodule Cyfr.Cluster.CellTest do
       # The slot is keyed by node name and not by boot, so a successor's
       # generation carries on from its predecessor's: a member that came
       # back must never reissue a generation a worker has already retired
-      # (ARCHITECTURE.md §6.1). Measured as a delta, never against an absolute — the row
-      # outlives every run against this database.
+      # (`Arca.ControlPlane`, "The row"). Measured as a delta, never against
+      # an absolute — the row outlives every run against this database.
       assert after_restart["generation"] == before["generation"] + 1
       assert after_restart["owner"] != before["owner"]
     end
