@@ -617,11 +617,12 @@ matter. They are platform settings in
 [configuration-guide.md](configuration-guide.md): the `tenancy` group's
 athanors on the server, groups one person creates, DMs one person holds,
 seats in a group, threads in an athanor and the bytes one athanor holds,
-and the athanors minted per hour (`CYFR_MINT_PER_HOUR`, a rate). Each cap
+and the athanors minted per hour (`CYFR_MINT_PER_HOUR`, a rate). Each count
 ships with a generous default — 10,000 athanors, 50 groups, 200 DMs, 1,000
-seats, 1,000 threads and 10 GiB — and each is turned off with `0`. The mint
-rate is a bound that is never 0: `CYFR_MINT_PER_HOUR=0` refuses the boot,
-and unset is no bound.
+seats and 1,000 threads — and each is turned off with `0`; the bytes one
+athanor holds have no ceiling until you set one. The mint rate is a bound
+that is never 0: `CYFR_MINT_PER_HOUR=0` refuses the boot, and unset is no
+bound.
 
 A new athanor is provisioned with its own copy of the shipped bundle and
 AQUA tree, so the athanor cap bounds tenancy and the storage cap each

@@ -321,7 +321,7 @@ defmodule Cyfr.Platform.Settings.Roster do
     "mint_per_hour" =>
       "Personal athanors minted per hour: how fast strangers can arrive through an open door. Unset, no bound; 0 is refused, so `CYFR_MINT_PER_HOUR=0` stops the boot rather than turning the bound off. A stored value outside 1 to 1,000,000 refuses every stranger's mint as unavailable, while operators still mint their own, until the setting is reset.",
     "athanor_storage_bytes" =>
-      "Bytes one athanor may hold, its whole tree including its copies of the shipped bundle; unset, 10 GiB, and 0 removes the ceiling.",
+      "Bytes one athanor may hold, its whole tree including its copies of the shipped bundle. Unset, no ceiling, and 0 is the same; an administrator who wants one sets it.",
     "opus_max_concurrent" =>
       "Concurrent WASM executions on each member, at least 32 so the chain children's reserve holds a chain of the full depth.",
     "opus_max_concurrent_per_tenant" =>
@@ -426,7 +426,7 @@ defmodule Cyfr.Platform.Settings.Roster do
         app: :sanctum,
         variable: "CYFR_ATHANOR_STORAGE_BYTES",
         type: :integer,
-        default: 10_737_418_240,
+        default: nil,
         validator: byte_count(0..@max_bytes),
         group: :tenancy,
         scope: :live,

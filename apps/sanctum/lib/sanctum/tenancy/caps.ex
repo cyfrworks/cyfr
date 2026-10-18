@@ -13,11 +13,11 @@ defmodule Sanctum.Tenancy.Caps do
   refuses the next creation over it with no restart (`CYFR_MAX_ATHANORS`,
   `CYFR_MAX_GROUPS_PER_PERSON`, `CYFR_MAX_PAIRS_PER_PERSON`,
   `CYFR_MAX_MEMBERS_PER_GROUP`, `CYFR_MAX_THREADS_PER_ATHANOR` and
-  `CYFR_ATHANOR_STORAGE_BYTES` pin them). A `0` cap is off. Each ships a
-  generous default, so a server nobody configured is still bounded: an
-  athanor's bytes at 10 GiB beside the per-call `max_request_size` and the
-  per-scope file backstop, and an operator exposing the box sets the caps
-  to what it can hold.
+  `CYFR_ATHANOR_STORAGE_BYTES` pin them). A `0` cap is off. Each count
+  ships a generous default, so a server nobody configured is still bounded
+  in how many it holds; an athanor's bytes ship with no ceiling (unset, as
+  `0`), beside the per-call `max_request_size` and the per-scope file
+  backstop, and an administrator who wants one sets it.
 
   How fast personal athanors are minted (`CYFR_MINT_PER_HOUR`) is a rate
   bound, not a cap: `Sanctum.Provisioning` reads it, and only unset leaves
@@ -29,9 +29,9 @@ defmodule Sanctum.Tenancy.Caps do
   stale value, so a store that has been unreachable past the accessor's
   cache is never read as a server with no caps.
 
-  Every cap ships on: the athanors at 10,000, the groups at 50, the pairs
-  at 200, the members at 1,000, the threads at 1000 and the bytes at
-  10 GiB (`0` turns any of them off). A thread is
+  Every count ships on: the athanors at 10,000, the groups at 50, the
+  pairs at 200, the members at 1,000 and the threads at 1000 (`0` turns
+  any of them off); the bytes ship off. A thread is
   a row any member — or any headless client of theirs — can mint from the
   wire (`thread.create`), each with a follow row of its own, so an
   athanor's thread count needs a ceiling the way its DMs do. A DM is minted from the wire against anyone
@@ -98,7 +98,7 @@ defmodule Sanctum.Tenancy.Caps do
       {:ok, n} when is_integer(n) and n > 0 ->
         {:ok, n}
 
-      # 0 is off.
+      # 0 is off, and so is an unset storage cap.
       {:ok, _off} ->
         {:ok, nil}
 

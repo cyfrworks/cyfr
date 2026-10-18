@@ -378,13 +378,14 @@ defmodule Cyfr.PlatformSettingsRosterTest do
       end
     end
 
-    # Sanctum's three ceilings that once shipped unset: each has a generous
-    # default, and 0 removes it.
-    test "the server's athanors, a group's seats and an athanor's bytes ship bounded" do
+    # Sanctum's ceilings on the server's athanors and a group's seats ship
+    # with a generous default, and 0 removes each; an athanor's bytes ship
+    # with no ceiling, which an administrator sets.
+    test "the server's athanors and a group's seats ship bounded, an athanor's bytes unbounded" do
       for {key, default, said} <- [
             {"max_athanors", 10_000, "Unset, 10,000, and 0 removes the ceiling"},
             {"max_members_per_group", 1_000, "unset, 1,000, and 0 removes the ceiling"},
-            {"athanor_storage_bytes", 10_737_418_240, "unset, 10 GiB, and 0 removes the ceiling"}
+            {"athanor_storage_bytes", nil, "Unset, no ceiling, and 0 is the same"}
           ] do
         {:ok, entry} = Roster.fetch(key)
 

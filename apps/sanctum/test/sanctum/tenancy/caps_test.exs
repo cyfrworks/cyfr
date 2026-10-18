@@ -12,8 +12,9 @@ end
 
 defmodule Sanctum.Tenancy.CapsTest do
   @moduledoc """
-  The public-door caps: each ships a generous default, 0 turns it off,
-  and it is enforced where it applies — athanors per server, groups per person, members per group,
+  The public-door caps: each count ships a generous default and the bytes
+  per athanor ship with none, 0 turns any of them off, and each is
+  enforced where it applies — athanors per server, groups per person, members per group,
   bytes per athanor. Each is a platform setting, set here
   as an operator's write leaves it and read on the next check, and a cap
   the store cannot answer refuses.
@@ -80,7 +81,7 @@ defmodule Sanctum.Tenancy.CapsTest do
     end
   end
 
-  test "an unset cap is its generous shipped default, 0 removes it, and a set cap is a ceiling" do
+  test "an unset count cap is its generous shipped default, the storage cap is absent unless set, 0 removes each, and a set cap is a ceiling" do
     reset_caps()
 
     assert Map.new(Prima.Caps.keys(), &{&1, Caps.get(&1)}) == %{
@@ -89,7 +90,7 @@ defmodule Sanctum.Tenancy.CapsTest do
              max_pairs_per_person: {:ok, 200},
              max_members_per_group: {:ok, 1_000},
              max_threads_per_athanor: {:ok, 1_000},
-             athanor_storage_bytes: {:ok, 10_737_418_240}
+             athanor_storage_bytes: {:ok, nil}
            }
 
     assert {:error, {:limit_reached, :max_athanors, 10_000}} = Caps.check(:max_athanors, 10_000)
@@ -230,9 +231,12 @@ defmodule Sanctum.Tenancy.CapsTest do
 
     assert log =~ "usage walk failed"
 
-    # With the cap off, no walk runs — the broken adapter is never even
-    # asked.
+    # With the cap off, set to 0 or unset as it ships, no walk runs — the
+    # broken adapter is never even asked.
     put_caps(athanor_storage_bytes: 0)
+    assert :ok = Caps.check_storage(Sanctum.Context.actor(ctx), 50)
+
+    reset_caps()
     assert :ok = Caps.check_storage(Sanctum.Context.actor(ctx), 50)
   end
 
