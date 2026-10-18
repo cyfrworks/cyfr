@@ -115,6 +115,9 @@ defmodule Cyfr.BoundaryDeclarationsTest do
           ThreadStorage ThreadSubscriptionStorage TurnStorage Usage VaultDefaults
           WebhookDeliveryStorage),
        "the storage, lease, claim, outbox and cache facades the layers above call downward"},
+      {~w(Cache.Epoch),
+       "the cache's one epoch rule, which Sanctum's shape derivation and Compendium read " <>
+         "beside Cache and Cache.Keys"},
       {~w(InstallationClaims),
        "the installation mode Sanctum installs and the first-person mint reads"},
       {~w(StorageReserve),
