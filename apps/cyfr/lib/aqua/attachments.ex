@@ -44,10 +44,12 @@ defmodule Aqua.Attachments do
   broken, and a write that fails mid-batch removes the files already
   written — a message never references a partial set.
 
-  The files go only under a message that has not been sent, and a file
-  already stored under it is written over only by the session that
-  stored it: anything else is refused before the first byte. What a
-  session stored is remembered for it (`discard_unsent/3`).
+  The files go only under a message that has not been sent, and each is
+  created only where nothing is (`Arca.put_if_none_match/4`): no call,
+  the storing session's own included, writes over a file already under
+  the message, which `discard_unsent/3` removes first. A file found there
+  refuses the call as `:attachment_exists`, and the files it already wrote
+  go. What a session stored is remembered for it (`discard_unsent/3`).
   """
   @spec store(Context.t(), String.t(), String.t(), [file()]) ::
           {:ok, [ref()]}
@@ -66,8 +68,7 @@ defmodule Aqua.Attachments do
     with :ok <- check_count(files),
          :ok <- check_sizes(files),
          :ok <- check_quota(ctx, files),
-         :ok <- unsent(ctx, message_id),
-         :ok <- writable(ctx, thread_id, message_id, files) do
+         :ok <- unsent(ctx, message_id) do
       files
       |> Enum.with_index()
       |> Enum.reduce_while({:ok, []}, fn {file, index}, {:ok, refs} ->
@@ -78,7 +79,10 @@ defmodule Aqua.Attachments do
         {:ok, path} = blob_path(thread_id, message_id, %{"stored_name" => stored_name})
         bytes = file["bytes"] || ""
 
-        case Arca.put(Sanctum.Context.actor(ctx), path, bytes) do
+        # Created only where nothing is: the check and the write are one
+        # step, so a member racing another on the same name never writes
+        # over the other's bytes, sent or not.
+        case Arca.put_if_none_match(Sanctum.Context.actor(ctx), path, bytes) do
           :ok ->
             ref = %{
               "filename" => safe_filename(file["filename"]),
@@ -101,7 +105,7 @@ defmodule Aqua.Attachments do
               end
             end)
 
-            {:halt, {:error, :storage_error}}
+            {:halt, {:error, if(reason == :exists, do: :attachment_exists, else: :storage_error)}}
         end
       end)
       |> case do
@@ -178,24 +182,6 @@ defmodule Aqua.Attachments do
       {:error, :database_error} -> {:error, :database_error}
       {:error, :no_athanor} -> {:error, :message_sent}
     end
-  end
-
-  # A file already under the message is written over only by the session
-  # that stored it there.
-  defp writable(ctx, thread_id, message_id, files) do
-    own = owned(ctx, thread_id, message_id)
-    actor = Sanctum.Context.actor(ctx)
-
-    taken? =
-      files
-      |> Enum.with_index()
-      |> Enum.any?(fn {file, index} ->
-        name = stored_name(file, index)
-        {:ok, path} = blob_path(thread_id, message_id, %{"stored_name" => name})
-        name not in own and Arca.exists?(actor, path)
-      end)
-
-    if taken?, do: {:error, :attachment_exists}, else: :ok
   end
 
   defp owned(ctx, thread_id, message_id) do

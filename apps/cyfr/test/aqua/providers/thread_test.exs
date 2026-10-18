@@ -711,7 +711,7 @@ defmodule Aqua.Providers.ThreadTest do
       assert {:ok, "sent bytes"} = Arca.get(Sanctum.Context.actor(ctx), blob)
     end
 
-    test "attach writes over an unsent message's file only for the session that stored it",
+    test "attach writes over no file under an unsent message, the storing session's own included; discarded, the name is free again",
          %{ctx: ctx, thread: thread} do
       mine = %{ctx | session_token_hash: :crypto.hash(:sha256, "mine")}
       theirs = %{ctx | session_token_hash: :crypto.hash(:sha256, "theirs")}
@@ -719,9 +719,12 @@ defmodule Aqua.Providers.ThreadTest do
       {:ok, %{attachments: [ref]}} = attach(mine, thread, message_id, "first")
       {:ok, blob} = Aqua.attachment_blob_path(thread.id, message_id, ref)
 
-      assert {:error, {:conflict, _}} = attach(theirs, thread, message_id, "theirs")
-      assert {:ok, "first"} = Arca.get(Sanctum.Context.actor(ctx), blob)
+      for who <- [theirs, mine] do
+        assert {:error, {:conflict, _}} = attach(who, thread, message_id, "over")
+        assert {:ok, "first"} = Arca.get(Sanctum.Context.actor(ctx), blob)
+      end
 
+      assert {:ok, %{discarded: [_]}} = discard(mine, thread, message_id)
       assert {:ok, %{attachments: [_]}} = attach(mine, thread, message_id, "again")
       assert {:ok, "again"} = Arca.get(Sanctum.Context.actor(ctx), blob)
     end
