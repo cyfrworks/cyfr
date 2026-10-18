@@ -904,9 +904,12 @@ defmodule Sanctum.Pairing do
   Revoke the paired client `client_id`, one of the context person's in
   the athanor in focus, with its certificates and the confirmations it
   confirmed (`Arca.PairedClients.revoke/2`). A sensitive change
-  (`pairing_revocation`, `Sanctum.Consent.Authz.confirm/3`). Its device
-  channel refuses the client's next request, and closes at its next
-  standing check. Answers the client's row as revoked.
+  (`pairing_revocation`, `Sanctum.Consent.Authz.confirm/3`). Once the
+  revocation commits it is announced as a standing change of the person
+  (`Sanctum.Telemetry.sessions_revoked/1`), so every holder of their
+  context, the client's device channel among them, reads the standing
+  again at once rather than at its next ping, and the channel refuses the
+  client and closes. Answers the client's row as revoked.
   """
   @spec revoke(Context.t(), String.t()) :: {:ok, map()} | {:error, refusal()}
   def revoke(%Context{} = ctx, client_id) when is_binary(client_id) do
@@ -919,9 +922,18 @@ defmodule Sanctum.Pairing do
              resource: client.label || client_id
            }) do
       case Arca.PairedClients.revoke(Context.actor(ctx), client_id) do
-        {:ok, row} -> {:ok, row}
-        {:error, :database_error} -> {:error, :unavailable}
-        {:error, reason} -> {:error, reason}
+        {:ok, row} ->
+          # The announcement makes each listener revalidate, never drop
+          # unread: a holder of the person's context whose own credential
+          # still stands keeps it, and only the revoked client's goes.
+          :ok = Sanctum.Telemetry.sessions_revoked(row.user_id)
+          {:ok, row}
+
+        {:error, :database_error} ->
+          {:error, :unavailable}
+
+        {:error, reason} ->
+          {:error, reason}
       end
     end
   end

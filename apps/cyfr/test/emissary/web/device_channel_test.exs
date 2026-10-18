@@ -1180,6 +1180,30 @@ defmodule Emissary.Web.DeviceChannelTest do
                Enum.map(frames, fn {:text, json} -> decoded(json) end)
     end
 
+    test "revoking the pairing is announced on the bus, so an idle stream ends within the standing bound, not at the next ping",
+         %{session_ctx: session_ctx, user: user} do
+      device = pair!(session_ctx)
+      state = proven(device)
+      {grant_id, _grant, state} = open_stream!(state, "s1")
+      user_id = user.id
+
+      {:ok, _row} =
+        Sanctum.TestContext.confirming(session_ctx, &Sanctum.Pairing.revoke(&1, device.client_id))
+
+      # The ping is 30 s away; a standing change reaches an open stream
+      # within 2 s (ARCHITECTURE.md §6.6).
+      assert_receive %Cyfr.Bus.Session{kind: :revoked, user_id: ^user_id} = announcement, 2_000
+
+      assert {:stop, :normal, {4403, "forbidden"}, frames, state} =
+               DeviceChannel.handle_info(announcement, state)
+
+      assert [{:revoke, %{grant_id: ^grant_id}}, {:revoke, pairing}] =
+               Enum.map(frames, fn {:text, json} -> decoded(json) end)
+
+      assert pairing == %{client_id: device.client_id}
+      assert state.closed
+    end
+
     test "a certificate expiring ends its streams with revoke, then closes 4408", %{
       session_ctx: session_ctx
     } do
