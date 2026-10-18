@@ -535,8 +535,7 @@ defmodule Compendium.Providers.Registry do
         # Bearer / no hydrated Sanctum session), skip storage — the client
         # must subsequently call /v1/identity/probe after establishing a
         # session to provision the credential locally.
-        body_with_warning = maybe_store_personal_credential(ctx, body)
-        {:ok, body_with_warning}
+        maybe_store_personal_credential(ctx, body)
 
       {:error, err} ->
         {:error, Shared.refusal(err)}
@@ -752,48 +751,77 @@ defmodule Compendium.Providers.Registry do
   defp personal_bearer(_), do: {:error, {:invalid_argument, "authentication required"}}
 
   # A claim made by a signed-in person is their identity from here on: it
-  # lands on their users row (`Sanctum.SignIn.record_namespace/2`) and the
+  # lands on their users row (`Sanctum.SignIn.record_claim/2`) and the
   # push token is cached best-effort. A claim from a session that is still
   # ahead of its own claim counts too — that is exactly when the CLI makes
-  # it. Returns the body unchanged, or with a `"local_store_failed": true`
-  # marker when the token could not be cached, so the CLI can say so.
+  # it, and the console's claim page calls this same operation. Answers the
+  # body, with a `"local_store_failed": true` marker when the token could
+  # not be cached, so the CLI and the page can say so; or a refusal, with
+  # nothing written, when the caller no longer stands or the namespace
+  # cannot be recorded here.
   defp maybe_store_personal_credential(%Context{user_id: user_id} = ctx, body)
        when is_binary(user_id) and user_id != "" do
     slug = body["slug"]
 
-    if is_binary(slug) do
-      case Sanctum.SignIn.record_namespace(user_id, slug) do
-        {:ok, _} ->
-          :ok
-
-        {:error, reason} ->
-          require Logger
-
-          Logger.warning(
-            "[Compendium.Providers.Registry] claim_personal: namespace #{slug} not recorded for #{user_id}: " <>
-              inspect(reason)
-          )
-      end
-
+    # The registry answered after a round trip: the caller's standing is
+    # read again before anything is written under it, so a session, key or
+    # device revoked meanwhile records nothing.
+    with true <- is_binary(slug),
+         {:ok, fresh} <- record_claim(ctx, user_id, slug) do
       registry = Compendium.RegistryHost.canonical_host()
 
       case Compendium.Registry.CredentialStore.put_push_token(
-             ctx,
+             fresh,
              registry,
              slug,
              body["token"],
              "personal"
            ) do
-        :ok -> body
-        :skipped -> body
-        {:error, _} -> Map.put(body, "local_store_failed", true)
+        :ok -> {:ok, body}
+        :skipped -> {:ok, body}
+        {:error, _} -> {:ok, Map.put(body, "local_store_failed", true)}
       end
     else
-      body
+      false -> {:ok, body}
+      {:error, _reason} = refused -> refused
     end
   end
 
-  defp maybe_store_personal_credential(_ctx, body), do: body
+  defp maybe_store_personal_credential(_ctx, body), do: {:ok, body}
+
+  # The claim is the person's identity from here on, so it lands on the
+  # users row before the token is cached, and only while the caller still
+  # stands (`Sanctum.SignIn.record_claim/2`): a store that cannot answer, or
+  # a remote person whose identity could not be confirmed fresh, is a "try
+  # again" and the session stands, and any other standing refusal is a
+  # caller no longer signed in. A namespace this server cannot record is a
+  # refusal, and its token is not kept; the namespace stays claimed at the
+  # registry, and the next sign-in's probe records it.
+  defp record_claim(ctx, user_id, slug) do
+    case Sanctum.SignIn.record_claim(ctx, slug) do
+      {:ok, fresh} ->
+        {:ok, fresh}
+
+      {:error, reason} when reason in [:unauthenticated, :unavailable, :identity_stale] ->
+        {:error, reason}
+
+      {:error, :namespace_owned_by_another_identity} ->
+        {:error,
+         {:conflict,
+          "Namespace claimed on cyfr.run but another identity on this server already " <>
+            "holds that namespace — ask the operator."}}
+
+      {:error, reason} ->
+        require Logger
+
+        Logger.error(
+          "[Compendium.Providers.Registry] claim_personal: namespace #{slug} claimed on " <>
+            "cyfr.run for #{user_id} but not recorded locally: #{inspect(reason)}"
+        )
+
+        {:error, {:unavailable, "Storage"}}
+    end
+  end
 
   # A probe made by a signed-in person records their namespace and caches
   # every push token in the answer (`Sanctum.SignIn.absorb_probe/2`) —

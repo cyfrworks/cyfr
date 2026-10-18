@@ -86,7 +86,6 @@ defmodule Compendium.FacadeTest do
     agents: 1,
     canvas_catalog: 1,
     canvas_versions: 2,
-    claim_personal_namespace: 3,
     complete_sign_in: 4,
     discover_components: 1,
     enabled_agent_roster: 1,
@@ -113,7 +112,6 @@ defmodule Compendium.FacadeTest do
     skills_index: 2,
     skills_index_limit: 0,
     soul_agent_file?: 1,
-    store_push_token: 3,
     sync_seeds: 0,
     tincture_allow_attribute: 1,
     tincture_asset_rules: 0,
@@ -235,7 +233,7 @@ defmodule Compendium.FacadeTest do
     end
   end
 
-  describe "claim_personal_namespace/3" do
+  describe "the registry's policy acceptance" do
     setup do
       bypass = Bypass.open()
       original_url = Application.get_env(:cyfr, :registry_url)
@@ -261,48 +259,6 @@ defmodule Compendium.FacadeTest do
       conn
       |> Plug.Conn.put_resp_header("content-type", "application/json")
       |> Plug.Conn.resp(status, Jason.encode!(body))
-    end
-
-    test "a claim answers the namespace and its push token, and stores nothing", %{
-      bypass: bypass,
-      ctx: ctx
-    } do
-      Bypass.expect_once(bypass, "POST", "/v1/namespaces/personal/claim", fn conn ->
-        json_resp(conn, 200, %{"slug" => "alice", "token" => "cyfr_pt_claimed"})
-      end)
-
-      assert {:ok, %{slug: "alice", token: "cyfr_pt_claimed"}} =
-               Compendium.claim_personal_namespace("alice", :github, "gho_access")
-
-      assert {:error, :not_found} =
-               Compendium.Registry.CredentialStore.get(
-                 ctx,
-                 Compendium.RegistryHost.canonical_host(),
-                 "alice"
-               )
-    end
-
-    test "a policy the person has not accepted is the registry's refusal", %{bypass: bypass} do
-      Bypass.expect_once(bypass, "POST", "/v1/namespaces/personal/claim", fn conn ->
-        json_resp(conn, 412, %{"errors" => [%{"code" => "POLICY_ACCEPTANCE_REQUIRED"}]})
-      end)
-
-      assert {:error, %Prima.Refusal{reason: {:registry, :policy_acceptance_required}}} =
-               Compendium.claim_personal_namespace("alice", :github, "gho_access")
-    end
-
-    test "a spent IdP token and an unreachable registry are refusals too", %{bypass: bypass} do
-      Bypass.expect_once(bypass, "POST", "/v1/namespaces/personal/claim", fn conn ->
-        json_resp(conn, 401, %{"errors" => [%{"code" => "INVALID_ACCESS_TOKEN"}]})
-      end)
-
-      assert {:error, %Prima.Refusal{class: :unauthenticated, reason: :invalid_access_token}} =
-               Compendium.claim_personal_namespace("alice", :github, "gho_spent")
-
-      Bypass.down(bypass)
-
-      assert {:error, %Prima.Refusal{class: :unavailable, reason: {:registry, _}}} =
-               Compendium.claim_personal_namespace("alice", :github, "gho_access")
     end
 
     test "a policy acceptance the registry refuses is its refusal, with the version it requires",
@@ -335,25 +291,6 @@ defmodule Compendium.FacadeTest do
 
       assert {:error, %Prima.Refusal{class: :unavailable}} = Compendium.registry_legal_version()
       assert {:error, %Prima.Refusal{class: :unavailable}} = Compendium.registry_legal_page("tos")
-    end
-  end
-
-  describe "store_push_token/3" do
-    test "stores the token as the caller's, for this deployment's registry", %{ctx: ctx} do
-      registry = Compendium.RegistryHost.canonical_host()
-
-      assert :ok = Compendium.store_push_token(ctx, "alice", "cyfr_pt_stored")
-
-      assert {:ok, %{type: :push_token, token: "cyfr_pt_stored", role: "personal"}} =
-               Compendium.Registry.CredentialStore.get(ctx, registry, "alice")
-
-      other = %{ctx | user_id: "local|idp|facade-other-#{System.unique_integer([:positive])}"}
-      assert {:error, _} = Compendium.Registry.CredentialStore.get(other, registry, "alice")
-    end
-
-    test "a token that is not one is skipped, as the credential store skips it", %{ctx: ctx} do
-      assert :skipped = Compendium.store_push_token(ctx, "alice", nil)
-      assert :skipped = Compendium.store_push_token(ctx, "alice", "")
     end
   end
 

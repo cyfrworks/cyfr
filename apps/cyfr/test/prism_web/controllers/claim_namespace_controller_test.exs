@@ -5,11 +5,9 @@ defmodule PrismWeb.ClaimNamespaceControllerTest do
   @moduledoc """
   Tests for the publisher-namespace claim page.
 
-  Happy-path POST `/submit` requires a mocked `Registry.Client.claim_personal_namespace/4`
-  response which the repo has no infrastructure for; those cases are deliberately
-  not covered here (they land with codex integration tests). The error cases
-  below exercise the controller's cookie/session guards and form rendering
-  without making any HTTP calls to cyfr.run.
+  The cookie and session guards and the form run without any call to
+  cyfr.run; the claim itself runs against a local registry (Bypass), through
+  `registry.claim_personal`, the one place its push token is minted.
   """
   use CyfrWeb.ConnCase
 
@@ -369,6 +367,17 @@ defmodule PrismWeb.ClaimNamespaceControllerTest do
 
       assert {:ok, %{token: "cyfr_pt_new"}} =
                Compendium.Registry.CredentialStore.get(as(user_id), "registry.test", slug)
+
+      # The token was minted through the operation, whose decision is the
+      # claim's record.
+      assert [%{admission: "admitted"}] =
+               Arca.Repo.all(
+                 from(d in Arca.Schemas.DecisionLog,
+                   where:
+                     d.tool == "registry" and d.action == "claim_personal" and
+                       d.user_id == ^user_id
+                 )
+               )
     end
 
     test "a session revoked with nobody told claims nothing and records nothing", %{

@@ -2013,7 +2013,13 @@ defmodule Cyfr.Boundaries do
       words: 0
     ],
     "Sanctum.Session" => [cleanup: 0, create: 1, destroy: 1, get: 1],
-    "Sanctum.SignIn" => [admitted: 2, link_ticket: 2, record_namespace: 2, suggested_slug: 2],
+    "Sanctum.SignIn" => [
+      admitted: 2,
+      link_ticket: 2,
+      record_claim: 2,
+      record_namespace: 2,
+      suggested_slug: 2
+    ],
     "Sanctum.Tenancy" => [
       channel_active?: 2,
       continuation: 3,

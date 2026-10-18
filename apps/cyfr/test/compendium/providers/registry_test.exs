@@ -4,6 +4,8 @@
 defmodule Compendium.Providers.RegistryTest do
   use ExUnit.Case, async: false
 
+  import Ecto.Query, only: [from: 2]
+
   alias Compendium.Providers.Registry, as: RegistryProvider
   alias Sanctum.Refusals
 
@@ -199,6 +201,156 @@ defmodule Compendium.Providers.RegistryTest do
                Sanctum.TestContext.confirming(person, &RegistryProvider.handle(&1, args))
 
       assert inspect(body) =~ "cyfr_pt_issued"
+    end
+  end
+
+  describe "claiming a personal namespace" do
+    setup do
+      bypass = Bypass.open()
+      original_url = Application.get_env(:cyfr, :registry_url)
+      original_scheme = Application.get_env(:cyfr, :registry_scheme)
+
+      on_exit(fn ->
+        restore_env(:cyfr, :registry_url, original_url)
+        restore_env(:cyfr, :registry_scheme, original_scheme)
+      end)
+
+      Application.put_env(:cyfr, :registry_url, "127.0.0.1:#{bypass.port}")
+      Application.put_env(:cyfr, :registry_scheme, "http")
+      {:ok, bypass: bypass}
+    end
+
+    # A signed-in person with no namespace yet, as the context their session
+    # establishes, and the session's token.
+    defp signed_in_person do
+      n = System.unique_integer([:positive])
+
+      {:ok, %{id: person_id}} =
+        Sanctum.Tenancy.Users.upsert_from_provider(%{
+          id: "github|https://github.com|claim-op-#{n}",
+          provider: "github",
+          email: "claim-op#{n}@example.com",
+          verified: true
+        })
+
+      {:ok, athanor} = Sanctum.Tenancy.Athanors.create_group(person_id, "Claim op #{n}")
+
+      {:ok, session} =
+        Sanctum.TestContext.create_session(
+          Sanctum.Context.build(
+            user_id: person_id,
+            email: "claim-op#{n}@example.com",
+            provider: "github",
+            athanor_id: athanor.id,
+            permissions: [:*],
+            auth_method: :oidc,
+            authenticated: true
+          )
+        )
+
+      {:ok, ctx} = Sanctum.Caller.establish(session.token, refresh: false)
+      {ctx, session.token, "claimed-op#{n}"}
+    end
+
+    defp claimed(bypass, slug, before_answer \\ fn -> :ok end) do
+      Bypass.expect_once(bypass, "POST", "/v1/namespaces/personal/claim", fn conn ->
+        before_answer.()
+
+        conn
+        |> Plug.Conn.put_resp_header("content-type", "application/json")
+        |> Plug.Conn.resp(200, Jason.encode!(%{"slug" => slug, "token" => "cyfr_pt_claimed"}))
+      end)
+    end
+
+    defp claim(ctx, slug) do
+      RegistryProvider.handle(ctx, %{
+        "action" => "claim_personal",
+        "username" => slug,
+        "provider" => "github",
+        "access_token" => "gho_access"
+      })
+    end
+
+    defp push_token(ctx, slug),
+      do:
+        Compendium.Registry.CredentialStore.get(
+          ctx,
+          Compendium.RegistryHost.canonical_host(),
+          slug
+        )
+
+    test "a session revoked while the registry answered records nothing", %{bypass: bypass} do
+      {ctx, token, slug} = signed_in_person()
+      hash = Sanctum.Session.token_hash(token)
+
+      claimed(bypass, slug, fn ->
+        Arca.Repo.delete_all(from(s in Arca.Schemas.Session, where: s.token_hash == ^hash))
+      end)
+
+      assert {:error, :unauthenticated} = claim(ctx, slug)
+      assert {:ok, %{namespace: nil}} = Sanctum.Tenancy.Users.get(ctx.user_id)
+      assert {:error, :not_found} = push_token(ctx, slug)
+    end
+
+    test "a namespace this server cannot record is refused, and its token is not kept", %{
+      bypass: bypass
+    } do
+      {ctx, _token, slug} = signed_in_person()
+      {holder, _token, _slug} = signed_in_person()
+      {:ok, holder_row} = Sanctum.Tenancy.Users.get(holder.user_id)
+      {:ok, _} = Sanctum.Tenancy.Users.set_namespace(holder_row, slug)
+      claimed(bypass, slug)
+
+      assert {:error, {:conflict, message}} = claim(ctx, slug)
+      assert message =~ "another identity on this server already holds that namespace"
+      assert {:ok, %{namespace: nil}} = Sanctum.Tenancy.Users.get(ctx.user_id)
+      assert {:error, :not_found} = push_token(ctx, slug)
+    end
+
+    test "a standing caller's claim lands on the users row and caches its push token", %{
+      bypass: bypass
+    } do
+      {ctx, _token, slug} = signed_in_person()
+      claimed(bypass, slug)
+
+      assert {:ok, %{"slug" => ^slug}} = claim(ctx, slug)
+      assert {:ok, %{namespace: ^slug}} = Sanctum.Tenancy.Users.get(ctx.user_id)
+      assert {:ok, %{token: "cyfr_pt_claimed"}} = push_token(ctx, slug)
+    end
+
+    test "the registry's refusals answer as the claim's", %{bypass: bypass} do
+      {ctx, _token, slug} = signed_in_person()
+
+      Bypass.expect_once(bypass, "POST", "/v1/namespaces/personal/claim", fn conn ->
+        conn
+        |> Plug.Conn.put_resp_header("content-type", "application/json")
+        |> Plug.Conn.resp(
+          412,
+          Jason.encode!(%{"errors" => [%{"code" => "POLICY_ACCEPTANCE_REQUIRED"}]})
+        )
+      end)
+
+      assert {:error, %Prima.Refusal{reason: {:registry, :policy_acceptance_required}}} =
+               claim(ctx, slug)
+
+      Bypass.expect_once(bypass, "POST", "/v1/namespaces/personal/claim", fn conn ->
+        conn
+        |> Plug.Conn.put_resp_header("content-type", "application/json")
+        |> Plug.Conn.resp(
+          401,
+          Jason.encode!(%{"errors" => [%{"code" => "INVALID_ACCESS_TOKEN"}]})
+        )
+      end)
+
+      assert {:error, %Prima.Refusal{class: :unauthenticated, reason: :invalid_access_token}} =
+               claim(ctx, slug)
+
+      Bypass.down(bypass)
+
+      assert {:error, %Prima.Refusal{class: :unavailable, reason: {:registry, _}}} =
+               claim(ctx, slug)
+
+      assert {:error, :not_found} = push_token(ctx, slug)
     end
   end
 

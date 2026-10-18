@@ -232,6 +232,41 @@ defmodule Sanctum.SignIn do
   end
 
   @doc """
+  Record a personal namespace a registry just answered for the caller,
+  only while the caller stands: their standing is read again first
+  (`Sanctum.Caller.revalidate_session/1`), so a session, key or device
+  revoked while the registry answered records nothing, then the slug is
+  recorded (`record_namespace/2`). Answers the context as it was read
+  again, for the writes that follow under it. A store that cannot
+  answer, or a remote person whose identity could not be confirmed
+  fresh, is `:unavailable` or `:identity_stale` and the session stands;
+  any other standing refusal is `:unauthenticated`.
+  """
+  @spec record_claim(Context.t(), String.t()) ::
+          {:ok, Context.t()}
+          | {:error,
+             :unauthenticated
+             | :unavailable
+             | :identity_stale
+             | :not_found
+             | :invalid_slug
+             | :namespace_owned_by_another_identity
+             | term()}
+  def record_claim(%Context{user_id: user_id} = ctx, slug)
+      when is_binary(user_id) and is_binary(slug) do
+    case Sanctum.Caller.revalidate_session(ctx) do
+      {:ok, fresh} ->
+        with {:ok, _user} <- record_namespace(user_id, slug), do: {:ok, fresh}
+
+      {:error, reason} when reason in [:unavailable, :identity_stale] ->
+        {:error, reason}
+
+      {:error, _reason} ->
+        {:error, :unauthenticated}
+    end
+  end
+
+  @doc """
   Record the person's cyfr.run namespace: the durable copy on `users.namespace`
   that every request reads. Their own athanor was minted at admission; this
   only reruns the provisioning hook so a namespace-holding person's groups

@@ -10,13 +10,11 @@ defmodule PrismWeb.ClaimNamespaceController do
   - `GET /claim-namespace` — renders a form prompting the user for a slug
     (default = a suggestion from their screen name or email).
   - `POST /claim-namespace/submit` — reads the pending-probe cookie
-    (`CyfrWeb.PendingProbe`), claims the namespace
-    (`Compendium.claim_personal_namespace/3`), records it, stores the issued
-    push token (`Compendium.store_push_token/3`), and redirects to the
-    configured post-login landing target via `CyfrWeb.SafeRedirect`.
-
-  Accepted cross-layer coupling — this controller is part of the auth
-  sliver in spirit but calls Compendium for the post-claim token storage.
+    (`CyfrWeb.PendingProbe`), claims the namespace through the gate
+    (`registry.claim_personal`, which records it on the users row and
+    stores the issued push token), and redirects to the configured
+    post-login landing target via `CyfrWeb.SafeRedirect`; a refusal the
+    operation answers is rendered as this page.
   """
 
   use PrismWeb, :controller
@@ -40,49 +38,16 @@ defmodule PrismWeb.ClaimNamespaceController do
     # instead of a surprise the day a clause above starts assigning.
     with {:ok, popped, access_token} <- PendingProbe.pop(conn),
          {:ok, ctx} <- standing_caller(popped),
-         {:ok, provider} <- current_provider(popped, params),
-         {:ok, %{slug: slug, token: push_token}} <-
-           Compendium.claim_personal_namespace(username, provider, access_token),
-         # The registry answered after a round trip: the session is read
-         # again before anything is written under it.
-         {:ok, %{user_id: user_id} = fresh} <- still_standing(popped, ctx) do
-      conn = popped
+         {:ok, provider} <- current_provider(popped, params) do
+      # The claim, its users-row record and its push token are the
+      # operation's (`registry.claim_personal`), which re-reads the
+      # caller's standing after the registry answers and records its
+      # decision; the page renders what it answered.
+      args = %{"username" => username, "provider" => provider, "access_token" => access_token}
 
-      # The claim is the person's identity from here on: it lands on the
-      # users row first, and that is what lets them through. The push token
-      # is cached best-effort — a later probe re-mints it.
-      case Sanctum.SignIn.record_namespace(user_id, slug) do
-        {:ok, _user} ->
-          conn =
-            case Compendium.store_push_token(fresh, slug, push_token) do
-              :ok ->
-                conn
-
-              _ ->
-                Logger.warning(
-                  "[ClaimNamespaceController] push token for #{user_id}/#{slug} was not " <>
-                    "cached — a later probe re-mints it"
-                )
-
-                put_flash(
-                  conn,
-                  :error,
-                  "Your namespace is claimed; the push credential didn't sync yet — " <>
-                    "it is re-minted at your next sign-in or `cyfr registry probe`."
-                )
-            end
-
-          conn
-          |> PendingProbe.clear()
-          |> CyfrWeb.SafeRedirect.post_login()
-
-        {:error, reason} ->
-          Logger.error(
-            "[ClaimNamespaceController] namespace #{slug} claimed on cyfr.run for " <>
-              "#{user_id} but not recorded locally: #{inspect(reason)}"
-          )
-
-          send_store_error_page(conn, username, reason)
+      case PrismWeb.Ops.call_tool(ctx, "registry/claim_personal", args) do
+        {:ok, body} -> claimed(popped, body)
+        {:error, reason} -> refused(popped, username, reason)
       end
     else
       {:expired, conn} ->
@@ -94,34 +59,7 @@ defmodule PrismWeb.ClaimNamespaceController do
         |> redirect(to: "/login")
 
       {:unavailable, conn} ->
-        page(
-          conn,
-          503,
-          username,
-          "We could not confirm your session just now. Try again shortly."
-        )
-
-      {:error, %Prima.Refusal{reason: :invalid_access_token}} ->
-        # IdP access_token expired between the callback-side cookie stash and
-        # the claim submission. Can't recover; bounce back through login.
-        # Clear the dead cookie so the fresh auth round starts clean.
-        conn
-        |> PendingProbe.clear()
-        |> redirect(to: "/login")
-
-      {:error, %Prima.Refusal{reason: {:registry, :policy_acceptance_required}}} ->
-        # cyfr.run wants the user to clickwrap-accept the current bundled
-        # policy before claiming. Don't clear _cyfr_pending_probe — the
-        # accept flow consumes it, and the user can return here to retry
-        # the claim.
-        conn
-        |> redirect(to: "/legal/accept")
-
-      {:error, err} ->
-        # 422: the claim was refused and the form re-renders for a retry —
-        # a 200 said "fine" about a failure. The refusal's sentence is
-        # what the page shows; an internal term reads as the fixed one.
-        page(conn, 422, username, Sanctum.Refusals.render(err))
+        unavailable(conn, username)
     end
   end
 
@@ -131,21 +69,80 @@ defmodule PrismWeb.ClaimNamespaceController do
   # Internal
   # ============================================================================
 
-  # Renders a 500 page when the claim succeeded on cyfr.run but the users
-  # row could not record it. Session keys are preserved; the next sign-in
-  # probes the registry, finds the claim, and records it then.
-  defp send_store_error_page(conn, username, reason) do
-    detail =
-      case reason do
-        :namespace_owned_by_another_identity ->
-          "another identity on this server already holds that namespace — ask the operator."
+  # The claim landed on the users row; a push token the operation could not
+  # cache is re-minted at the next sign-in or probe.
+  defp claimed(conn, body) do
+    conn =
+      if Map.get(body, "local_store_failed") do
+        Logger.warning(
+          "[ClaimNamespaceController] push token for #{body["slug"]} was not cached — a " <>
+            "later probe re-mints it"
+        )
 
-        _ ->
-          "we couldn't record it locally. Sign out and sign back in to retry."
+        put_flash(
+          conn,
+          :error,
+          "Your namespace is claimed; the push credential didn't sync yet — " <>
+            "it is re-minted at your next sign-in or `cyfr registry probe`."
+        )
+      else
+        conn
       end
 
-    page(conn, 500, username, "Namespace claimed on cyfr.run but " <> detail)
+    conn
+    |> PendingProbe.clear()
+    |> CyfrWeb.SafeRedirect.post_login()
   end
+
+  # The operation's refusal as this page answers it.
+  defp refused(conn, username, reason) do
+    case Sanctum.Refusals.classify(reason) do
+      # The IdP access_token expired between the callback-side cookie stash
+      # and the claim submission: bounce back through login, with the dead
+      # cookie cleared so the fresh auth round starts clean.
+      %Prima.Refusal{reason: :invalid_access_token} ->
+        conn
+        |> PendingProbe.clear()
+        |> redirect(to: "/login")
+
+      # cyfr.run wants the current policy accepted first. The pending probe
+      # stays: the accept flow consumes it, and the claim can be retried.
+      %Prima.Refusal{reason: {:registry, :policy_acceptance_required}} ->
+        redirect(conn, to: "/legal/accept")
+
+      # The caller stopped standing while the registry answered.
+      %Prima.Refusal{reason: :unauthenticated} ->
+        conn
+        |> put_status(:unauthorized)
+        |> redirect(to: "/login")
+
+      %Prima.Refusal{reason: reason} when reason in [:unavailable, :identity_stale] ->
+        unavailable(conn, username)
+
+      # Claimed at the registry, but not recorded here: the session stands,
+      # and the next sign-in's probe finds and records the claim.
+      %Prima.Refusal{reason: {:conflict, message}} ->
+        page(conn, 500, username, message)
+
+      %Prima.Refusal{reason: {:unavailable, "Storage"}} ->
+        page(
+          conn,
+          500,
+          username,
+          "Namespace claimed on cyfr.run but we couldn't record it locally. Sign out and " <>
+            "sign back in to retry."
+        )
+
+      # 422: the claim was refused and the form re-renders for a retry. The
+      # refusal's sentence is what the page shows.
+      %Prima.Refusal{message: message} ->
+        page(conn, 422, username, message)
+    end
+  end
+
+  defp unavailable(conn, username),
+    do:
+      page(conn, 503, username, "We could not confirm your session just now. Try again shortly.")
 
   # The one page this controller renders — the form, in the Prism root
   # layout the :browser pipeline set, with or without an error line.
@@ -179,17 +176,11 @@ defmodule PrismWeb.ClaimNamespaceController do
   defp standing_caller(conn) do
     token = get_session(conn, CyfrWeb.SignInResponse.session_key())
 
-    with {:ok, ctx} <- Sanctum.Caller.establish(token, refresh: false) do
-      still_standing(conn, ctx)
+    with {:ok, ctx} <- Sanctum.Caller.establish(token, refresh: false),
+         {:ok, %Sanctum.Context{user_id: id} = fresh} when is_binary(id) <-
+           Sanctum.Caller.revalidate_session(ctx) do
+      {:ok, fresh}
     else
-      {:error, reason} when reason in [:unavailable, :identity_stale] -> {:unavailable, conn}
-      _ -> {:not_logged_in, conn}
-    end
-  end
-
-  defp still_standing(conn, ctx) do
-    case Sanctum.Caller.revalidate_session(ctx) do
-      {:ok, %Sanctum.Context{user_id: id} = fresh} when is_binary(id) -> {:ok, fresh}
       {:error, reason} when reason in [:unavailable, :identity_stale] -> {:unavailable, conn}
       _ -> {:not_logged_in, conn}
     end

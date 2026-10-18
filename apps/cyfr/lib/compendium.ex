@@ -608,41 +608,6 @@ defmodule Compendium do
     as: :complete
 
   @doc """
-  Claim `username` as the person's personal namespace on the registry,
-  proving their identity with the IdP `access_token`: `{:ok, %{slug,
-  token}}` with the namespace claimed and its fresh push token, which
-  nothing has stored yet (`store_push_token/3`). A refusal is the
-  registry's, as `Compendium.Providers.Shared.refusal/1` renders it: a
-  policy the person has not accepted is the reason
-  `{:registry, :policy_acceptance_required}`, a spent IdP token
-  `:invalid_access_token`.
-  """
-  @spec claim_personal_namespace(String.t(), atom() | String.t(), String.t()) ::
-          {:ok, %{slug: String.t(), token: String.t() | nil}} | {:error, Prima.Refusal.t()}
-  def claim_personal_namespace(username, provider, access_token) do
-    case Client.claim_personal_namespace(username, provider, access_token) do
-      {:ok, body} -> {:ok, %{slug: body["slug"] || username, token: body["token"]}}
-      {:error, reason} -> {:error, Compendium.Providers.Shared.refusal(reason)}
-    end
-  end
-
-  @doc """
-  Store a personal namespace's push token as the caller's credential for
-  this deployment's registry (`Compendium.Registry.CredentialStore.put_push_token/5`).
-  """
-  @spec store_push_token(Context.t(), String.t(), String.t() | nil) ::
-          :ok | :skipped | {:error, :unavailable | :forbidden}
-  def store_push_token(%Context{} = ctx, slug, token) do
-    Registry.CredentialStore.put_push_token(
-      ctx,
-      Compendium.RegistryHost.canonical_host(),
-      slug,
-      token,
-      "personal"
-    )
-  end
-
-  @doc """
   The registry's current policy version and policies
   (`Compendium.Registry.Client.get_legal_version/0`); a failure is the
   registry's refusal, as `Compendium.Providers.Shared.refusal/1` renders it.

@@ -153,12 +153,7 @@ defmodule PrismWeb.ToolSeamTest do
     # The browser's own sign-out: it retires the session its cookie names and
     # nothing else. It reads only that cookie and runs before any caller
     # context exists, so it cannot pass the gate as `session/logout` does.
-    {"apps/cyfr/lib/prism_web/controllers/auth_controller.ex", "Sanctum.Session.destroy"},
-    # Recording the registry push token the claim flow just obtained. Part of
-    # minting the person's identity, before any athanor exists to run a tool
-    # in; `Compendium.Providers.Shared.namespace_bearer/2` reads it afterwards.
-    {"apps/cyfr/lib/prism_web/controllers/claim_namespace_controller.ex",
-     "Compendium.store_push_token"}
+    {"apps/cyfr/lib/prism_web/controllers/auth_controller.ex", "Sanctum.Session.destroy"}
   ]
 
   # The namespaces whose state the console must not change behind the tool
