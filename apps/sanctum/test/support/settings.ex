@@ -25,12 +25,12 @@ defmodule Sanctum.Test.Settings do
   @boot {__MODULE__, :boot_installation}
 
   @defaults %{
-    "max_athanors" => %{default: nil, stale: :refuse},
+    "max_athanors" => %{default: 10_000, stale: :refuse},
     "max_groups_per_person" => %{default: 50, stale: :refuse},
     "max_pairs_per_person" => %{default: 200, stale: :refuse},
-    "max_members_per_group" => %{default: nil, stale: :refuse},
+    "max_members_per_group" => %{default: 1_000, stale: :refuse},
     "max_threads_per_athanor" => %{default: 1000, stale: :refuse},
-    "athanor_storage_bytes" => %{default: nil, stale: :refuse},
+    "athanor_storage_bytes" => %{default: 10_737_418_240, stale: :refuse},
     # A rate bound, not a cap: a rate limit that refuses a stale value.
     "mint_per_hour" => %{default: nil, stale: :refuse},
     "session_ttl_hours" => %{default: 720, stale: :refuse},

@@ -12,8 +12,8 @@ end
 
 defmodule Sanctum.Tenancy.CapsTest do
   @moduledoc """
-  The public-door caps: off unless set, and when set, enforced where each
-  applies — athanors per server, groups per person, members per group,
+  The public-door caps: each ships a generous default, 0 turns it off,
+  and it is enforced where it applies — athanors per server, groups per person, members per group,
   bytes per athanor. Each is a platform setting, set here
   as an operator's write leaves it and read on the next check, and a cap
   the store cannot answer refuses.
@@ -32,13 +32,12 @@ defmodule Sanctum.Tenancy.CapsTest do
   defp put_caps(caps),
     do: Enum.each(caps, fn {key, value} -> Settings.put(Atom.to_string(key), value) end)
 
-  # Every cap back to its default: off, but for the group, pair and
-  # thread caps that ship on.
+  # Every cap back to its shipped default.
   defp reset_caps, do: Enum.each(Prima.Caps.keys(), &Settings.reset(Atom.to_string(&1)))
 
   test "check_counted/2 counts only while the cap is on, and refuses an uncountable current" do
     # Cap off: the count is never even asked for.
-    reset_caps()
+    put_caps(max_athanors: 0)
     assert :ok = Caps.check_counted(:max_athanors, fn -> raise "must not be called" end)
 
     put_caps(max_athanors: 3)
@@ -81,18 +80,30 @@ defmodule Sanctum.Tenancy.CapsTest do
     end
   end
 
-  test "an unset cap is off; a set cap is a ceiling" do
+  test "an unset cap is its generous shipped default, 0 removes it, and a set cap is a ceiling" do
     reset_caps()
+
+    assert Map.new(Prima.Caps.keys(), &{&1, Caps.get(&1)}) == %{
+             max_athanors: {:ok, 10_000},
+             max_groups_per_person: {:ok, 50},
+             max_pairs_per_person: {:ok, 200},
+             max_members_per_group: {:ok, 1_000},
+             max_threads_per_athanor: {:ok, 1_000},
+             athanor_storage_bytes: {:ok, 10_737_418_240}
+           }
+
+    assert {:error, {:limit_reached, :max_athanors, 10_000}} = Caps.check(:max_athanors, 10_000)
+
+    # Zero turns a cap off, never "nothing allowed".
+    put_caps(max_athanors: 0, max_members_per_group: 0, athanor_storage_bytes: 0)
     assert Caps.get(:max_athanors) == {:ok, nil}
+    assert Caps.get(:max_members_per_group) == {:ok, nil}
+    assert Caps.get(:athanor_storage_bytes) == {:ok, nil}
     assert :ok = Caps.check(:max_athanors, 1_000_000)
 
-    # The group cap ships on; zero turns it off, never "nothing allowed".
-    assert Caps.get(:max_groups_per_person) == {:ok, 50}
-
-    put_caps(max_athanors: 3, max_groups_per_person: 0)
+    put_caps(max_athanors: 3)
     assert :ok = Caps.check(:max_athanors, 2)
     assert {:error, {:limit_reached, :max_athanors, 3}} = Caps.check(:max_athanors, 3)
-    assert Caps.get(:max_groups_per_person) == {:ok, nil}
   end
 
   test "a cap the store cannot answer refuses, never reads as off" do
@@ -219,9 +230,9 @@ defmodule Sanctum.Tenancy.CapsTest do
 
     assert log =~ "usage walk failed"
 
-    # With no cap configured, no walk runs — the broken adapter is never
-    # even asked.
-    reset_caps()
+    # With the cap off, no walk runs — the broken adapter is never even
+    # asked.
+    put_caps(athanor_storage_bytes: 0)
     assert :ok = Caps.check_storage(Sanctum.Context.actor(ctx), 50)
   end
 

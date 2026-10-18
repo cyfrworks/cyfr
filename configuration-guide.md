@@ -125,15 +125,15 @@ refused, naming the variable or key and the form it must take.
 
 | Variable | Key | Type | Default | Group | Scope | Stale | What it sets |
 |---|---|---|---|---|---|---|---|
-| `CYFR_MAX_ATHANORS` | `max_athanors` | `integer` | none | `tenancy` | live | refuse | Active athanors on this server; an archived one frees its place. Unset, no cap. |
+| `CYFR_MAX_ATHANORS` | `max_athanors` | `integer` | `10000` | `tenancy` | live | refuse | Active athanors on this server; an archived one frees its place. Unset, 10,000, and 0 removes the ceiling. |
 | `CYFR_MAX_GROUPS_PER_PERSON` | `max_groups_per_person` | `integer` | `50` | `tenancy` | live | refuse | Groups one person may create (they may belong to more); 0 turns the cap off. |
 | `CYFR_MAX_PAIRS_PER_PERSON` | `max_pairs_per_person` | `integer` | `200` | `tenancy` | live | refuse | DMs one person may hold open; a DM is minted for two, so either person at the cap refuses it, and an ended DM frees its place. 0 turns the cap off. |
-| `CYFR_MAX_MEMBERS_PER_GROUP` | `max_members_per_group` | `integer` | none | `tenancy` | live | refuse | Seats in one group, invitations included. Unset, no cap. |
+| `CYFR_MAX_MEMBERS_PER_GROUP` | `max_members_per_group` | `integer` | `1000` | `tenancy` | live | refuse | Seats in one group, invitations included; unset, 1,000, and 0 removes the ceiling. |
 | `CYFR_MAX_THREADS_PER_ATHANOR` | `max_threads_per_athanor` | `integer` | `1000` | `tenancy` | live | refuse | Threads one athanor may hold, each a row any member's client can mint; 0 turns the cap off. |
 | `CYFR_MAX_SCHEDULES_PER_ATHANOR` | `max_schedules_per_athanor` | `integer` | `1000` | `tenancy` | live | refuse | Schedules one athanor may hold, a paused one included and a deleted one or a feed not; unset, 1,000, and 0 removes the ceiling. |
 | `CYFR_MAX_FEEDS_PER_ATHANOR` | `max_feeds_per_athanor` | `integer` | `1000` | `tenancy` | live | refuse | Live feeds one athanor may hold, a deleted one or a schedule not; unset, 1,000, and 0 removes the ceiling. |
 | `CYFR_MAX_EXTERNAL_SERVERS_PER_ATHANOR` | `max_external_servers_per_athanor` | `integer` | `1000` | `tenancy` | live | refuse | External MCP servers one athanor may register; unset, 1,000, and 0 removes the ceiling. |
-| `CYFR_ATHANOR_STORAGE_BYTES` | `athanor_storage_bytes` | `integer` | none | `tenancy` | live | refuse | Bytes one athanor may hold, its whole tree including its copies of the shipped bundle. Unset, no cap. |
+| `CYFR_ATHANOR_STORAGE_BYTES` | `athanor_storage_bytes` | `integer` | `10737418240` | `tenancy` | live | refuse | Bytes one athanor may hold, its whole tree including its copies of the shipped bundle; unset, 10 GiB, and 0 removes the ceiling. |
 | `CYFR_OPUS_MAX_CONCURRENT` | `opus_max_concurrent` | `integer` | `128` | `execution` | restart | serve | Concurrent WASM executions on each member, at least 32 so the chain children's reserve holds a chain of the full depth. |
 | `CYFR_OPUS_MAX_CONCURRENT_PER_TENANT` | `opus_max_concurrent_per_tenant` | `integer` | `16` | `execution` | restart | serve | Concurrent WASM executions one athanor may hold on each member. |
 | `CYFR_MCP_RATE_LIMIT_MAX` | `mcp_rate_limit_max` | `integer` | `120` | `rate_limits` | live | serve | Requests and stream opens per client address per window on the MCP endpoint; streams already open are unaffected. |

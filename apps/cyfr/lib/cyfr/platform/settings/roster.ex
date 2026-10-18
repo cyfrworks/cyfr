@@ -303,12 +303,13 @@ defmodule Cyfr.Platform.Settings.Roster do
   # Each setting's sentence, by key: every entry's `doc`.
   @setting_docs %{
     "max_athanors" =>
-      "Active athanors on this server; an archived one frees its place. Unset, no cap.",
+      "Active athanors on this server; an archived one frees its place. Unset, 10,000, and 0 removes the ceiling.",
     "max_groups_per_person" =>
       "Groups one person may create (they may belong to more); 0 turns the cap off.",
     "max_pairs_per_person" =>
       "DMs one person may hold open; a DM is minted for two, so either person at the cap refuses it, and an ended DM frees its place. 0 turns the cap off.",
-    "max_members_per_group" => "Seats in one group, invitations included. Unset, no cap.",
+    "max_members_per_group" =>
+      "Seats in one group, invitations included; unset, 1,000, and 0 removes the ceiling.",
     "max_threads_per_athanor" =>
       "Threads one athanor may hold, each a row any member's client can mint; 0 turns the cap off.",
     "max_schedules_per_athanor" =>
@@ -320,7 +321,7 @@ defmodule Cyfr.Platform.Settings.Roster do
     "mint_per_hour" =>
       "Personal athanors minted per hour: how fast strangers can arrive through an open door. Unset, no bound; 0 is refused, so `CYFR_MINT_PER_HOUR=0` stops the boot rather than turning the bound off. A stored value outside 1 to 1,000,000 refuses every stranger's mint as unavailable, while operators still mint their own, until the setting is reset.",
     "athanor_storage_bytes" =>
-      "Bytes one athanor may hold, its whole tree including its copies of the shipped bundle. Unset, no cap.",
+      "Bytes one athanor may hold, its whole tree including its copies of the shipped bundle; unset, 10 GiB, and 0 removes the ceiling.",
     "opus_max_concurrent" =>
       "Concurrent WASM executions on each member, at least 32 so the chain children's reserve holds a chain of the full depth.",
     "opus_max_concurrent_per_tenant" =>
@@ -400,10 +401,10 @@ defmodule Cyfr.Platform.Settings.Roster do
   def entries do
     [
       # ——— tenancy caps: each gates a creation, so each refuses stale ———
-      cap(:max_athanors, "CYFR_MAX_ATHANORS", nil, "athanors"),
+      cap(:max_athanors, "CYFR_MAX_ATHANORS", 10_000, "athanors"),
       cap(:max_groups_per_person, "CYFR_MAX_GROUPS_PER_PERSON", 50, "groups"),
       cap(:max_pairs_per_person, "CYFR_MAX_PAIRS_PER_PERSON", 200, "pairs"),
-      cap(:max_members_per_group, "CYFR_MAX_MEMBERS_PER_GROUP", nil, "members"),
+      cap(:max_members_per_group, "CYFR_MAX_MEMBERS_PER_GROUP", 1_000, "members"),
       cap(:max_threads_per_athanor, "CYFR_MAX_THREADS_PER_ATHANOR", 1000, "threads"),
       cap(
         :max_schedules_per_athanor,
@@ -425,7 +426,7 @@ defmodule Cyfr.Platform.Settings.Roster do
         app: :sanctum,
         variable: "CYFR_ATHANOR_STORAGE_BYTES",
         type: :integer,
-        default: nil,
+        default: 10_737_418_240,
         validator: byte_count(0..@max_bytes),
         group: :tenancy,
         scope: :live,

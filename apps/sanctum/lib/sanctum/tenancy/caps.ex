@@ -13,12 +13,11 @@ defmodule Sanctum.Tenancy.Caps do
   refuses the next creation over it with no restart (`CYFR_MAX_ATHANORS`,
   `CYFR_MAX_GROUPS_PER_PERSON`, `CYFR_MAX_PAIRS_PER_PERSON`,
   `CYFR_MAX_MEMBERS_PER_GROUP`, `CYFR_MAX_THREADS_PER_ATHANOR` and
-  `CYFR_ATHANOR_STORAGE_BYTES` pin them). A `nil` or `0` cap is off. A
-  private box needs none of them; a `*` server sets them — and a default
-  install therefore has NO total-byte ceiling on authenticated guest
-  writes (only the per-call `max_request_size` and the per-scope file
-  backstop): an operator exposing the box sets the storage cap
-  deliberately.
+  `CYFR_ATHANOR_STORAGE_BYTES` pin them). A `0` cap is off. Each ships a
+  generous default, so a server nobody configured is still bounded: an
+  athanor's bytes at 10 GiB beside the per-call `max_request_size` and the
+  per-scope file backstop, and an operator exposing the box sets the caps
+  to what it can hold.
 
   How fast personal athanors are minted (`CYFR_MINT_PER_HOUR`) is a rate
   bound, not a cap: `Sanctum.Provisioning` reads it, and only unset leaves
@@ -30,8 +29,9 @@ defmodule Sanctum.Tenancy.Caps do
   stale value, so a store that has been unreachable past the accessor's
   cache is never read as a server with no caps.
 
-  The group, pair and thread caps ship on: their defaults are 50, 200 and
-  1000 (`0` turns any of them off). A thread is
+  Every cap ships on: the athanors at 10,000, the groups at 50, the pairs
+  at 200, the members at 1,000, the threads at 1000 and the bytes at
+  10 GiB (`0` turns any of them off). A thread is
   a row any member — or any headless client of theirs — can mint from the
   wire (`thread.create`), each with a follow row of its own, so an
   athanor's thread count needs a ceiling the way its DMs do. A DM is minted from the wire against anyone
@@ -98,7 +98,7 @@ defmodule Sanctum.Tenancy.Caps do
       {:ok, n} when is_integer(n) and n > 0 ->
         {:ok, n}
 
-      # Unset, and 0, are off.
+      # 0 is off.
       {:ok, _off} ->
         {:ok, nil}
 
