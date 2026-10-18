@@ -4941,6 +4941,37 @@ defmodule PrismWeb.SystemLayerTest do
       assert_receive {:DOWN, ^monitor, :process, ^pid, :normal}, 2_000
       end_views()
     end
+
+    test "ends on overflow, telling the layer, and hands on no fact it fell behind on",
+         %{view: view} do
+      ctx = view_context(view)
+      tag = CyfrWeb.ContextGuard.capture(ctx)
+      layer = "listener-overflow"
+      {:ok, grant} = Sanctum.Gate.open_stream(ctx, PrismWeb.SystemLayer.stream(), nil)
+      {:ok, pid} = PrismWeb.SystemLayer.Listener.start(self(), layer, ctx, grant, tag)
+      monitor = Process.monitor(pid)
+
+      fact =
+        Cyfr.Bus.Confirmation.new(Context.actor(ctx), :opened,
+          ref: "rcf_listener_overflow",
+          operation: "vault.create",
+          expires_at: DateTime.utc_now()
+        )
+
+      # Held while its mailbox fills past the bound, so the first fact it
+      # reads finds more than 1,000 behind it.
+      :erlang.suspend_process(pid)
+      for _ <- 1..1_002, do: send(pid, fact)
+      :erlang.resume_process(pid)
+
+      assert_receive {:phoenix, :send_update,
+                      {{PrismWeb.SystemLayer, ^layer}, %{id: ^layer, listen: :ended}}},
+                     2_000
+
+      assert_receive {:DOWN, ^monitor, :process, ^pid, :normal}, 2_000
+      refute_received {:phoenix, :send_update, {{PrismWeb.SystemLayer, ^layer}, %{fact: _}}}
+      end_views()
+    end
   end
 
   describe "while the store cannot answer" do

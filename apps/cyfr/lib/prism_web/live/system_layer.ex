@@ -3642,8 +3642,15 @@ defmodule PrismWeb.SystemLayer.Listener do
   # to the grant's fields, ends when the view does, and at the grant's
   # deadline tells the layer, which opens the stream again through the
   # gate. It reaches no store.
+  #
+  # A listener whose mailbox holds more than 1,000 messages has fallen too
+  # far behind to hand its facts on faithfully: it ends as at its deadline,
+  # rather than drop one, and the layer opens the stream again and reads
+  # what is pending afresh.
 
   alias Sanctum.Context
+
+  @max_backlog 1_000
 
   @doc false
   # Started subscribed, so no fact published after the grant is missed.
@@ -3703,6 +3710,13 @@ defmodule PrismWeb.SystemLayer.Listener do
     end
   end
 
+  defp overflowing? do
+    case Process.info(self(), :message_queue_len) do
+      {:message_queue_len, depth} -> depth > @max_backlog
+      nil -> false
+    end
+  end
+
   # The one struct the grant's topic carries (the bus roster's); anything
   # else in the mailbox is not the stream's to hand on.
   defp payload_struct(%Prima.StreamGrant{topic: key}),
@@ -3720,13 +3734,17 @@ defmodule PrismWeb.SystemLayer.Listener do
         Phoenix.LiveView.send_update(view, PrismWeb.SystemLayer, id: layer, listen: :ended)
 
       %{__struct__: ^payload} = fact ->
-        Phoenix.LiveView.send_update(view, PrismWeb.SystemLayer,
-          id: layer,
-          fact: Prima.StreamGrant.project(grant, Map.from_struct(fact)),
-          tag: tag
-        )
+        if overflowing?() do
+          Phoenix.LiveView.send_update(view, PrismWeb.SystemLayer, id: layer, listen: :ended)
+        else
+          Phoenix.LiveView.send_update(view, PrismWeb.SystemLayer,
+            id: layer,
+            fact: Prima.StreamGrant.project(grant, Map.from_struct(fact)),
+            tag: tag
+          )
 
-        loop(to, monitor, grant, tag, payload)
+          loop(to, monitor, grant, tag, payload)
+        end
 
       _other ->
         loop(to, monitor, grant, tag, payload)
