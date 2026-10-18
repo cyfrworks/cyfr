@@ -924,6 +924,45 @@ defmodule Opus.Host.AttachedFetchTest do
       assert received_upstream().path == "/hello"
       assert Prima.Source.outside("127.0.0.1") in ledger(fixture)
     end
+
+    test "with a flow of that class to the need the request carries, the same request is made",
+         %{ctx: ctx, port: port} do
+      scenario = scenario!(ctx, port)
+
+      %{authority: authority} =
+        put_in(scenario.authority.resources.flows, [%{from: :filed, to: "need:api_key"}])
+
+      fixture = attempt!(ctx, authority, scenario.component_ref, scenario.limits, [])
+      read_class!(fixture, :filed)
+
+      assert :ok = fetched(fixture, request("http://127.0.0.1:#{port}/hello"))
+      assert received_upstream().path == "/hello"
+      assert Prima.Source.outside("127.0.0.1") in ledger(fixture)
+    end
+
+    test "a class with no flow to the need the request carries is refused flow_blocked, though another class and another need have one",
+         %{ctx: ctx, port: port} do
+      scenario = scenario!(ctx, port)
+
+      %{authority: authority} =
+        put_in(scenario.authority.resources.flows, [
+          %{from: :pinned, to: "need:api_key"},
+          %{from: :filed, to: "need:other"}
+        ])
+
+      fixture = attempt!(ctx, authority, scenario.component_ref, scenario.limits, [])
+      read_class!(fixture, :filed)
+
+      fixture
+      |> fetched(request("http://127.0.0.1:#{port}/hello"))
+      |> refused!("flow_blocked")
+
+      refute_received {:upstream, _, _}
+      assert pins(fixture) == []
+      assert [denial] = denials(fixture)
+      assert denial.decision_reason =~ "attached: This run read filed material"
+      assert denial.decision_reason =~ "need:api_key at 127.0.0.1"
+    end
   end
 
   describe "an admitted request" do

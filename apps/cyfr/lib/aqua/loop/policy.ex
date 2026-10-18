@@ -422,7 +422,9 @@ defmodule Aqua.Loop.Policy do
 
   # The exits a send through an edge is decided at: each egress domain as
   # the edge allows it, and each tool server it binds. A credential need
-  # is no exit any send is decided at.
+  # is an exit only of an attached request, which is decided at its host
+  # too, and a need's flows only cover: what one leaves uncovered its
+  # host's domain already does.
   defp exits(%Edge{tool_servers: servers} = edge) do
     Enum.map(Edge.domains(edge), &{:domain, &1}) ++
       for(%{server_name: name} when is_binary(name) <- servers, do: {:server, name})

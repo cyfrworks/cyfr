@@ -23,13 +23,14 @@ defmodule Opus.Host.Egress do
        host no pattern matches are `denied`;
     2. the run's source ledger, read as it stands now
        (`Opus.Ledger.check/4`), holds no class the edge's flows
-       (`Prima.Flow`) do not let reach the URL's host — an outside
-       source named by that exact host is its own, and the classes an
-       approved launch let flow count — else `flow`; a ledger that
-       cannot be read is `unavailable`. A grant that declares no flow
-       keeps sending until its run reads a source. The ledger is read
-       and decided once more after the address is checked (below), and
-       the pin is answered only on that second decision;
+       (`Prima.Flow`) do not let reach the URL's host, or, for an
+       attached request, its host or the need whose credential it
+       carries — an outside source named by that exact host is its own,
+       and the classes an approved launch let flow count — else `flow`;
+       a ledger that cannot be read is `unavailable`. A grant that
+       declares no flow keeps sending until its run reads a source. The
+       ledger is read and decided once more after the address is checked
+       (below), and the pin is answered only on that second decision;
     3. a `redirect` names, as `from`, a pin this attempt was answered
        within the last two windows, and its URL has that pin's origin
        (`Prima.Network.same_origin?/2`: scheme, host and effective port);
@@ -68,7 +69,8 @@ defmodule Opus.Host.Egress do
 
   `pin/3` takes the purposes a runner may ask for and `:attached`, the pin
   CYFR takes for an attached request (`Opus.Host.AttachedFetch`), which
-  is decided the same way and recorded as its own; a runner's
+  names the need it carries (`:need`), is decided the same way with that
+  need as an exit beside its host, and is recorded as its own; a runner's
   `egress_pin` naming `attached` never reaches here, since its args do not
   read (`Prima.PinnedTarget.read_request/1`).
 
@@ -93,6 +95,9 @@ defmodule Opus.Host.Egress do
   @keep_ms 2 * @window_ms
   @table __MODULE__
 
+  @typedoc "An attached request's pin: the URL and the need whose credential it carries."
+  @type attached :: %{url: String.t(), purpose: :attached, from: nil, need: String.t()}
+
   @typedoc "What `pin/3` answers."
   @type answer ::
           {:ok, PinnedTarget.t()}
@@ -104,7 +109,7 @@ defmodule Opus.Host.Egress do
   the clock) and `:resolver` (a module answering `getaddr/2` as `:inet`
   does, default `:inet`), which `Opus.Host` never passes.
   """
-  @spec pin(Attempt.caller(), PinnedTarget.request(), keyword()) :: answer()
+  @spec pin(Attempt.caller(), PinnedTarget.request() | attached(), keyword()) :: answer()
   def pin(caller, %{url: url, purpose: _purpose} = request, opts \\ []) when is_binary(url) do
     now = Keyword.get_lazy(opts, :now, fn -> System.system_time(:millisecond) end)
     resolver = Keyword.get(opts, :resolver, :inet)
@@ -149,35 +154,43 @@ defmodule Opus.Host.Egress do
     # looked up, and neither is one the run's ledger may not reach.
     with {:ok, uri} <- parse(request.url),
          :ok <- domain_allowed(uri, edge),
-         :ok <- flows(caller, chain, edge, uri),
+         :ok <- flows(caller, request, chain, edge, uri),
          :ok <- same_origin(caller, request, uri, now),
          {:ok, pinned} <- resolve(request.url, resolver),
          :ok <- permitted(pinned, private_ips(edge)),
          # Decided again once the name has resolved: a source the run
          # joined while it resolved is in the ledger the pin is answered
          # on, and the pin is answered only on this second decision.
-         :ok <- flows(caller, chain, edge, uri) do
+         :ok <- flows(caller, request, chain, edge, uri) do
       pinned(pinned, now)
     end
   end
 
-  # The run's ledger as it stands, against the edge's flows to this host.
+  # The run's ledger as it stands, against the edge's flows to this host,
+  # and for an attached request to the need it carries as well.
   # No send here, an attached fetch's pin included, carries bytes of a
   # guest object's generation that never settled: a reader is handed only
   # a settled generation (`Arca.ObjectRevisions`), so no ledger holds
   # unsettled material and `unsettled` needs no refusal of its own.
-  defp flows(caller, chain, edge, uri) do
+  defp flows(caller, request, chain, edge, uri) do
     case Opus.Ledger.check(
            Sanctum.Context.actor(chain.ctx),
            caller.execution_id,
            edge,
-           {:domain, canonical_host(host_of(uri))}
+           flow_exit(request, canonical_host(host_of(uri)))
          ) do
       :ok -> :ok
       {:refused, refusal} -> {:refused, :flow, Prima.Refusal.message(refusal)}
       {:error, :unavailable} -> {:unavailable, :ledger}
     end
   end
+
+  # An attached request reaches the need whose credential it carries as
+  # well as its host; anything else reaches its host.
+  defp flow_exit(%{purpose: :attached, need: need}, host) when is_binary(need),
+    do: {:need, need, host}
+
+  defp flow_exit(_request, host), do: {:domain, host}
 
   defp parse(url) do
     case Prima.Network.parse_url(url) do

@@ -109,7 +109,7 @@ defmodule Prima.FlowTest do
                [Source.outside(nil)]
     end
 
-    test "a server flow reaches only its server, a need flow reaches no send, and launch classes reach every exit" do
+    test "a server flow reaches only its server, a need flow only an attached request carrying its need, and launch classes reach every exit" do
       ledger = [Source.new(:vault_disclosed)]
 
       assert Flow.uncovered(ledger, {:server, "search"},
@@ -124,9 +124,57 @@ defmodule Prima.FlowTest do
                flows: [%{from: :vault_disclosed, to: "need:api_key"}]
              ) == ledger
 
+      assert Flow.uncovered(ledger, {:server, "api_key"},
+               flows: [%{from: :vault_disclosed, to: "need:api_key"}]
+             ) == ledger
+
       assert Flow.uncovered(ledger, {:domain, "api.example.test"},
                launch_classes: [:vault_disclosed]
              ) == []
+    end
+  end
+
+  describe "an attached request reaches its need and its host" do
+    test "a flow of a class to the need it carries covers that class, and to another need does not" do
+      ledger = [Source.new(:vault_disclosed), Source.new(:filed)]
+      exit = {:need, "api_key", "api.example.test"}
+
+      assert Flow.uncovered(ledger, exit,
+               flows: [
+                 %{from: :filed, to: "need:api_key"},
+                 %{from: :vault_disclosed, to: "need:api_key"}
+               ]
+             ) == []
+
+      assert Flow.uncovered(ledger, exit, flows: [%{from: :filed, to: "need:api_key"}]) ==
+               [Source.new(:vault_disclosed)]
+
+      assert Flow.uncovered(ledger, exit,
+               flows: [
+                 %{from: :filed, to: "need:other"},
+                 %{from: :vault_disclosed, to: "need:other"}
+               ]
+             ) == Source.set(ledger)
+    end
+
+    test "a domain flow to its host and the host's own outside source cover it as they cover a guest's own request" do
+      exit = {:need, "api_key", "api.example.test"}
+
+      assert Flow.uncovered([Source.new(:filed)], exit,
+               flows: [%{from: :filed, to: "*.example.test"}]
+             ) == []
+
+      assert Flow.uncovered([Source.outside("api.example.test")], exit, flows: []) == []
+
+      assert Flow.uncovered([Source.outside("other.test")], exit, flows: []) ==
+               [Source.outside("other.test")]
+
+      assert Flow.uncovered([Source.new(:filed)], exit, launch_classes: [:filed]) == []
+    end
+
+    test "its refusal names the need and the host" do
+      assert Flow.refusal([Source.new(:filed)], {:need, "api_key", "api.example.test"}) ==
+               {:flow_not_declared, [:filed], "need:api_key at api.example.test"}
     end
   end
 

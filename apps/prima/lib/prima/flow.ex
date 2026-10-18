@@ -28,12 +28,16 @@ defmodule Prima.Flow do
   ## The decision
 
   `uncovered/2` answers the sources of a run's ledger that nothing lets
-  reach a request's exit. A source is covered when:
+  reach a request's exit. An attached request (`{:need, name, host}`)
+  reaches two exits, the need whose credential it carries and the host
+  it is sent to; a guest's own request reaches its host, and a tool call
+  its server. A source is covered when:
 
     * a flow names its class and an exit the request reaches: a domain
       flow whose pattern matches the request's host (`Prima.Network.domain_allowed?/2`,
       so a host narrowed under a declared pattern keeps the pattern's
-      flows), or a server flow naming the request's server;
+      flows), a need flow naming the need an attached request carries,
+      or a server flow naming the request's server;
     * the run's launch let its class flow (`:launch_classes`, the classes a
       person let flow to every exit of a launched tree);
     * it is an outside source named by the request's own canonical host,
@@ -52,6 +56,7 @@ defmodule Prima.Flow do
   @typedoc "The exit a request reaches."
   @type exit ::
           {:domain, host :: String.t()}
+          | {:need, name :: String.t(), host :: String.t()}
           | {:server, name :: String.t()}
 
   @typedoc "What the manifest declares a flow's `to` may name."
@@ -221,22 +226,34 @@ defmodule Prima.Flow do
     end)
   end
 
-  defp own_host?(%Source{class: :outside, name: name}, {:domain, host})
-       when is_binary(name),
-       do: name == host
+  defp own_host?(%Source{class: :outside, name: name}, exit) when is_binary(name),
+    do: name == host_of(exit)
 
   defp own_host?(_source, _exit), do: false
 
+  defp reaches?("need:" <> name, {:need, need, _host}), do: name == need
   defp reaches?("need:" <> _name, _exit), do: false
   defp reaches?("server:" <> name, {:server, server}), do: name == server
   defp reaches?("server:" <> _name, _exit), do: false
-  defp reaches?(pattern, {:domain, host}), do: Prima.Network.domain_allowed?(host, [pattern])
-  defp reaches?(_pattern, _exit), do: false
+
+  defp reaches?(pattern, exit) do
+    case host_of(exit) do
+      nil -> false
+      host -> Prima.Network.domain_allowed?(host, [pattern])
+    end
+  end
+
+  # The host a request is sent to: a guest's own and an attached one have
+  # one, a tool call none.
+  defp host_of({:domain, host}), do: host
+  defp host_of({:need, _name, host}), do: host
+  defp host_of(_exit), do: nil
 
   @doc """
   The refusal a send refused for want of a flow answers
   (`Prima.Refusal`'s `:flow_not_declared` row): the classes that had no
-  flow and the exit, by host or server, never a URL, a path or a value.
+  flow and the exit, by host, need and host, or server, never a URL, a
+  path or a value.
   """
   @spec refusal([Source.t()], exit()) ::
           {:flow_not_declared, [Source.class()], String.t()}
@@ -251,5 +268,6 @@ defmodule Prima.Flow do
   end
 
   defp exit_name({:domain, host}), do: host
+  defp exit_name({:need, name, host}), do: "need:" <> name <> " at " <> host
   defp exit_name({:server, name}), do: "server:" <> name
 end

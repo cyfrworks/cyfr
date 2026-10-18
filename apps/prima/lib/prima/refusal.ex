@@ -391,7 +391,8 @@ defmodule Prima.Refusal do
   defp row(:action_missing), do: {:invalid_argument, "Missing required argument: action"}
 
   # A send whose run read a class its grant declares no flow of to the
-  # exit (`Prima.Flow`): the classes and the exit's host or server name.
+  # exit (`Prima.Flow`): the classes and the exit, by its host, a need and
+  # its host, or a server name.
   defp row({:flow_not_declared, [_ | _] = classes, exit}) when is_binary(exit) do
     if Enum.all?(classes, &(&1 in Prima.Source.classes())),
       do: {:forbidden, Prima.Flow.sentence(classes, exit)}
