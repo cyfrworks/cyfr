@@ -880,7 +880,10 @@ defmodule Cyfr.PlatformSettingsRosterTest do
     test "every foreign name says whose it is" do
       assert ownerless(Roster.foreign()) == []
       assert ownerless([{"CYFR_PLANTED", ""} | Roster.foreign()]) == ["CYFR_PLANTED"]
-      assert ownerless([{"PLANTED", "the planted program: a name outside the prefix"}]) == ["PLANTED"]
+
+      assert ownerless([{"PLANTED", "the planted program: a name outside the prefix"}]) == [
+               "PLANTED"
+             ]
     end
   end
 
