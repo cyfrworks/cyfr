@@ -268,8 +268,8 @@ defmodule Cyfr.Bus do
       producers: ["Opus.Events"],
       consumers: ["Emissary.Web.ExecutionEventsController", "Aqua.Loop.Stream"],
       reason:
-        "one execution's stream: durable rows after commit, deltas before the " <>
-          "write-behind sink keeps them, numbered for replay"
+        "one execution's stream: durable rows after commit, and deltas numbered for " <>
+          "replay, kept only in the bounded replay buffer and never persisted"
     },
     %{
       key: :layouts,
