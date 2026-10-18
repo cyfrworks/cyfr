@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
-defmodule Arca.AstraT1R2LifetimeTest.Park do
+defmodule Arca.UnitHolderKilledTest.Park do
   @moduledoc false
   # Parks the armed holder at its delete of a tree — a removal's delete
   # of the retired revision's prefix — once.
@@ -32,11 +32,10 @@ defmodule Arca.AstraT1R2LifetimeTest.Park do
   end
 end
 
-defmodule Arca.AstraT1R2LifetimeTest do
+defmodule Arca.UnitHolderKilledTest do
   @moduledoc """
-  A holder killed with an untrappable exit while it holds the unit:
-  adopted from Astra's second T1 review and re-pointed to units served
-  from their revision prefixes. The publication holder is parked after
+  A holder killed with an untrappable exit while it holds a unit served
+  from its revision prefixes. The publication holder is parked after
   its commit and before its release, where the lease is held and the
   revision already published; the removal holder at its delete of the
   retired revision's prefix. The node lock releases with the process, the
@@ -47,7 +46,7 @@ defmodule Arca.AstraT1R2LifetimeTest do
 
   import Ecto.Query, only: [from: 2]
 
-  alias Arca.AstraT1R2LifetimeTest.Park
+  alias Arca.UnitHolderKilledTest.Park
   alias Arca.Schemas.StorageUnit
   alias Arca.Storage.UnitLocator
   alias Arca.StorageUnits
@@ -57,7 +56,9 @@ defmodule Arca.AstraT1R2LifetimeTest do
 
   setup tags do
     Cyfr.Test.Sandbox.setup!(tags)
-    base = Path.join(System.tmp_dir!(), "astra_t1_kill_#{System.unique_integer([:positive])}")
+
+    base =
+      Path.join(System.tmp_dir!(), "unit_holder_killed_#{System.unique_integer([:positive])}")
 
     previous =
       for key <- [:base_path, :seed_path, :storage_adapter],

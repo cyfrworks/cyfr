@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
-defmodule Arca.AstraT1CrossmemberReviewTest.ParkIO do
+defmodule Arca.UnitSuccessorMembersTest.ParkIO do
   @moduledoc false
   # Like S3, this double cannot swap a tree. It parks the armed writer
   # once: at its delete of a tree — a removal's delete of the retired
@@ -45,11 +45,10 @@ defmodule Arca.AstraT1CrossmemberReviewTest.ParkIO do
   end
 end
 
-defmodule Arca.AstraT1CrossmemberReviewTest do
+defmodule Arca.UnitSuccessorMembersTest do
   @moduledoc """
-  A deterministic simulation of another member's independent lock,
-  adopted from Astra's second T1 review and re-pointed to units served
-  from their revision prefixes. The old writer or remover runs the actual
+  A deterministic simulation of another member's independent lock, over
+  units served from their revision prefixes. The old writer or remover runs the actual
   public overlay operation and is parked where it last touches the store
   or the rows before its release; the successor runs its public row and
   prefix protocol, omitting only the node-local overlay lock, which
@@ -60,7 +59,7 @@ defmodule Arca.AstraT1CrossmemberReviewTest do
   """
   use ExUnit.Case, async: false
   import Ecto.Query, only: [from: 2]
-  alias Arca.AstraT1CrossmemberReviewTest.ParkIO
+  alias Arca.UnitSuccessorMembersTest.ParkIO
   alias Arca.Schemas.StorageUnit
   alias Arca.Storage.UnitLocator
   alias Arca.StorageUnits

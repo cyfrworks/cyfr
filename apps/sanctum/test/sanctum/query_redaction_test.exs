@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: FSL-1.1-Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
-defmodule Sanctum.S7RedactionTest do
+defmodule Sanctum.QueryRedactionTest do
   @moduledoc """
   Checks redaction of credential query parameters before logging or error reporting.
   """

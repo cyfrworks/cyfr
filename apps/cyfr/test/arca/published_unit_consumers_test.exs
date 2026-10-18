@@ -1,14 +1,17 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
-defmodule Arca.AstraT1bConsumersReviewTest do
+defmodule Arca.PublishedUnitConsumersTest do
   use ExUnit.Case, async: false
 
   setup tags do
     Cyfr.Test.Sandbox.setup!(tags)
 
     base =
-      Path.join(System.tmp_dir!(), "astra_t1b_consumers_#{System.unique_integer([:positive])}")
+      Path.join(
+        System.tmp_dir!(),
+        "published_unit_consumers_#{System.unique_integer([:positive])}"
+      )
 
     previous = Application.fetch_env!(:arca, :base_path)
     ctx = Sanctum.TestContext.local()

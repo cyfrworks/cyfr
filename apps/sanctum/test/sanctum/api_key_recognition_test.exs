@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: FSL-1.1-Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
-defmodule Sanctum.S2LooksLikeKeyTest do
+defmodule Sanctum.ApiKeyRecognitionTest do
   @moduledoc """
   Checks shared API-key recognition and dummy hashing for malformed keys.
   """

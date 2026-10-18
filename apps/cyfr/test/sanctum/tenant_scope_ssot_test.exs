@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
-defmodule Sanctum.S1TenantScopeSSOTTest do
+defmodule Sanctum.TenantScopeSSOTTest do
   @moduledoc """
   Webhook + ApiKey derive their athanor through the single tenant gate
   (`Sanctum.Context.require_tenant!/1` → `Sanctum.TenantPolicy`), and the

@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
-defmodule Arca.AstraT1ReviewTest.ParkDelete do
+defmodule Arca.ExpiredRemoverTest.ParkDelete do
   @moduledoc false
   use Arca.Storage.TestDouble
   @gate {__MODULE__, :gate}
@@ -28,20 +28,20 @@ defmodule Arca.AstraT1ReviewTest.ParkDelete do
   end
 end
 
-defmodule Arca.AstraT1ReviewTest do
+defmodule Arca.ExpiredRemoverTest do
   use ExUnit.Case, async: false
   import Ecto.Query, only: [from: 2]
-  alias Arca.AstraT1ReviewTest.ParkDelete
+  alias Arca.ExpiredRemoverTest.ParkDelete
   alias Arca.Schemas.StorageUnit
   alias Arca.Storage.UnitLocator
   alias Arca.StorageUnits
 
-  @unit ["components", "catalysts", "local", "astra-review", "1.0.0"]
+  @unit ["components", "catalysts", "local", "expired-remover", "1.0.0"]
   @wasm @unit ++ ["catalyst.wasm"]
 
   setup tags do
     Cyfr.Test.Sandbox.setup!(tags)
-    base = Path.join(System.tmp_dir!(), "astra_t1_#{System.unique_integer([:positive])}")
+    base = Path.join(System.tmp_dir!(), "expired_remover_#{System.unique_integer([:positive])}")
 
     previous =
       for key <- [:base_path, :seed_path, :storage_adapter],

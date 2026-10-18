@@ -177,7 +177,7 @@ defmodule Arca.ApiKeyStorageTest do
     # athanor is read back from the row; the tenant binding is then enforced
     # on the context the identity domain builds from it and by
     # `Arca.QueryHelpers.where_tenant/2` on the reads that follow (covered by
-    # Arca.R6AthanorLessFailClosedTest and that domain's API key tests), not
+    # Arca.AthanorLessFailClosedTest and that domain's API key tests), not
     # by a tenant-scoped storage lookup.
   end
 

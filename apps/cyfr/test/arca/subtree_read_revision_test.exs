@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
-defmodule Arca.AstraT1bReadReviewTest.ParkRead do
+defmodule Arca.SubtreeReadRevisionTest.ParkRead do
   use Arca.Storage.TestDouble
   @gate {__MODULE__, :gate}
   def arm(parent, prefix), do: :persistent_term.put(@gate, {parent, prefix})
@@ -31,14 +31,17 @@ defmodule Arca.AstraT1bReadReviewTest.ParkRead do
   end
 end
 
-defmodule Arca.AstraT1bReadReviewTest do
+defmodule Arca.SubtreeReadRevisionTest do
   use ExUnit.Case, async: false
-  alias Arca.AstraT1bReadReviewTest.ParkRead
+  alias Arca.SubtreeReadRevisionTest.ParkRead
   alias Arca.Storage.UnitLocator
 
   setup tags do
     Cyfr.Test.Sandbox.setup!(tags)
-    base = Path.join(System.tmp_dir!(), "astra_t1b_read_#{System.unique_integer([:positive])}")
+
+    base =
+      Path.join(System.tmp_dir!(), "subtree_read_revision_#{System.unique_integer([:positive])}")
+
     actor = Sanctum.Context.actor(Sanctum.TestContext.local())
 
     previous =

@@ -365,14 +365,14 @@ defmodule Locus.ListenerTest do
       {:ok, port: port, host: host, key: ScriptedHost.dispatch_key(host), boot: boot}
     end
 
-    test "R1: a method or path that is no worker route is not_found", ctx do
+    test "a method or path that is no worker route is not_found", ctx do
       for {method, path} <- [{"GET", "/worker/v1/status"}, {"POST", "/host/v1/status"}] do
         client = ctx.port |> connect() |> send_request(method, path, [], "")
         assert_refused(client, 404, wl(:not_found), :close)
       end
     end
 
-    test "R2: an unsigned request to a path that is no callback is not_found", ctx do
+    test "an unsigned request to a path that is no callback is not_found", ctx do
       client =
         ctx.port
         |> connect()
@@ -381,7 +381,7 @@ defmodule Locus.ListenerTest do
       assert_refused(client, 404, wl(:not_found), :close, @unread_ms)
     end
 
-    test "R3: a service without its credentials is unavailable before any header", ctx do
+    test "a service without its credentials is unavailable before any header", ctx do
       credentials = Locus.Runtime.Credentials.current()
       :persistent_term.erase({Locus.Runtime.Credentials, :current})
 
@@ -397,7 +397,7 @@ defmodule Locus.ListenerTest do
       end
     end
 
-    test "R4: no header, or two, is malformed", ctx do
+    test "no header, or two, is malformed", ctx do
       header = runtime_header(ctx, status_body())
 
       for headers <- [[], [{"x-cyfr-auth", header}, {"x-cyfr-auth", header}]] do
@@ -410,7 +410,7 @@ defmodule Locus.ListenerTest do
       end
     end
 
-    test "R5: a header at another version is unknown_version, answered before the body", ctx do
+    test "a header at another version is unknown_version, answered before the body", ctx do
       "v1 " <> rest = runtime_header(ctx, status_body())
 
       client =
@@ -427,7 +427,7 @@ defmodule Locus.ListenerTest do
       assert_refused(client, 401, wl(:unknown_version), :close, @unread_ms)
     end
 
-    test "R6: a header that does not parse is malformed", ctx do
+    test "a header that does not parse is malformed", ctx do
       client =
         ctx.port
         |> connect()
@@ -442,7 +442,7 @@ defmodule Locus.ListenerTest do
       assert_refused(client, 401, wl(:malformed), :close, @unread_ms)
     end
 
-    test "R7: a header two windows old is outside_window", ctx do
+    test "a header two windows old is outside_window", ctx do
       header = runtime_header(ctx, status_body(), ts: system_now() - 2 * WorkerAuth.window_ms())
 
       client =
@@ -453,7 +453,7 @@ defmodule Locus.ListenerTest do
       assert_refused(client, 401, wl(:outside_window), :close, @unread_ms)
     end
 
-    test "R8: another service's key is bad_mac, answered before the body", ctx do
+    test "another service's key is bad_mac, answered before the body", ctx do
       stranger = ScriptedHost.dispatch_key(ctx.host, "wrk_other")
       header = runtime_header(ctx, status_body(), key: stranger)
 
@@ -465,7 +465,7 @@ defmodule Locus.ListenerTest do
       assert_refused(client, 401, wl(:bad_mac), :close, @unread_ms)
     end
 
-    test "R9: a header for another service is malformed, and keeps no nonce", ctx do
+    test "a header for another service is malformed, and keeps no nonce", ctx do
       nonce = nonce()
       header = runtime_header(ctx, status_body(), service: "wrk_other", nonce: nonce)
 
@@ -480,7 +480,7 @@ defmodule Locus.ListenerTest do
       assert_status_answered(ctx, connect(ctx.port), nonce: nonce)
     end
 
-    test "R10: a nonce presented twice is replayed", ctx do
+    test "a nonce presented twice is replayed", ctx do
       nonce = nonce()
       assert_status_answered(ctx, connect(ctx.port), nonce: nonce)
 
@@ -494,7 +494,7 @@ defmodule Locus.ListenerTest do
       assert_refused(client, 401, wl(:replayed), :close, @unread_ms)
     end
 
-    test "R10b: a verified header's nonce is spent before its body is checked", ctx do
+    test "a verified header's nonce is spent before its body is checked", ctx do
       header = runtime_header(ctx, status_body())
       other = kill_body()
 
@@ -512,7 +512,7 @@ defmodule Locus.ListenerTest do
       assert_refused(client, 401, wl(:replayed), :close)
     end
 
-    test "R11: an over-bound body is read to the bound before it is refused", ctx do
+    test "an over-bound body is read to the bound before it is refused", ctx do
       max = HostAPI.max_body_bytes()
       huge = String.duplicate("x", max + 1)
       header = runtime_header(ctx, huge)
@@ -532,7 +532,7 @@ defmodule Locus.ListenerTest do
       client |> send_bytes(binary_part(huge, max, 1)) |> assert_closed()
     end
 
-    test "R12: a body that cannot be read is malformed", ctx do
+    test "a body that cannot be read is malformed", ctx do
       answer =
         unread(Locus.Runtime.WorkerListener, [], status_route(), [
           {"x-cyfr-auth", runtime_header(ctx, status_body())}
@@ -541,7 +541,7 @@ defmodule Locus.ListenerTest do
       assert_answer(answer, 400, wl(:malformed), :close)
     end
 
-    test "R13: a body other than the signed one is bad_mac, the connection kept", ctx do
+    test "a body other than the signed one is bad_mac, the connection kept", ctx do
       header = runtime_header(ctx, status_body())
 
       client =
@@ -553,7 +553,7 @@ defmodule Locus.ListenerTest do
       assert_status_answered(ctx, client)
     end
 
-    test "R14: a body without the wire's version, or at another, is unknown_version", ctx do
+    test "a body without the wire's version, or at another, is unknown_version", ctx do
       client =
         Enum.reduce(
           [
@@ -573,7 +573,7 @@ defmodule Locus.ListenerTest do
       assert_status_answered(ctx, client)
     end
 
-    test "R15: a body naming another callback, or not JSON, is malformed", ctx do
+    test "a body naming another callback, or not JSON, is malformed", ctx do
       client =
         Enum.reduce([kill_body(), "not json"], connect(ctx.port), fn body, client ->
           headers = [{"x-cyfr-auth", runtime_header(ctx, body)}]

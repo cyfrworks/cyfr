@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: FSL-1.1-Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
-defmodule Sanctum.S4PlatformAuditTest do
+defmodule Sanctum.PlatformContextAuditTest do
   @moduledoc """
   Platform-context construction emits audit telemetry, and nothing else
   does. Internal builders are sanctioned; direct Context.build attempts
@@ -87,7 +87,7 @@ defmodule Sanctum.S4PlatformAuditTest do
       n = System.unique_integer([:positive])
       alice = "github|https://github.com|s4-alice-#{n}"
       ops = "github|https://github.com|s4-ops-#{n}"
-      {:ok, group} = Sanctum.Tenancy.Athanors.create_group(alice, "S4 #{n}")
+      {:ok, group} = Sanctum.Tenancy.Athanors.create_group(alice, "Audit #{n}")
       {:ok, _} = Sanctum.Tenancy.Members.ensure_platform(ops)
 
       person = fn user_id, athanor_id, admin? ->

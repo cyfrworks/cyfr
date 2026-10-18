@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
-defmodule Arca.Adapters.AstraT1ReviewTest do
+defmodule Arca.Adapters.TreeDeleteCasTest do
   use ExUnit.Case, async: false
 
   alias Arca.Adapters.Local
@@ -11,7 +11,7 @@ defmodule Arca.Adapters.AstraT1ReviewTest do
 
   setup do
     previous = Application.fetch_env!(:arca, :base_path)
-    base = Path.join(System.tmp_dir!(), "astra_t1_locks_#{System.unique_integer([:positive])}")
+    base = Path.join(System.tmp_dir!(), "tree_delete_cas_#{System.unique_integer([:positive])}")
 
     # Registered before mutation; worker cleanup callbacks are registered
     # later and therefore run before the fixture and trace patterns go.
@@ -193,7 +193,7 @@ defmodule Arca.Adapters.AstraT1ReviewTest do
       receive do
         {:DOWN, ^ref, :process, ^pid, _reason} -> :ok
       after
-        5_000 -> flunk("review worker failed to stop")
+        5_000 -> flunk("a worker failed to stop")
       end
     end)
 

@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
-defmodule Arca.R6AthanorLessFailClosedTest do
+defmodule Arca.AthanorLessFailClosedTest do
   @moduledoc """
   Defense-in-depth: an actor carrying no athanor must never alias another
   athanor's rows or files.

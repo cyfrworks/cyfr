@@ -68,7 +68,7 @@
 0.0	apps/arca/test/arca/publication_contract_s3_test.exs
 0.7	apps/arca/test/arca/publication_contract_test.exs
 0.7	apps/arca/test/arca/query_helpers_test.exs
-0.0	apps/arca/test/arca/r6_athanor_less_fail_closed_test.exs
+0.0	apps/arca/test/arca/athanor_less_fail_closed_test.exs
 0.1	apps/arca/test/arca/rate_windows_test.exs
 0.0	apps/arca/test/arca/registry_token_storage_test.exs
 0.7	apps/arca/test/arca/request_rate_windows_test.exs
@@ -643,7 +643,7 @@
 0.2	apps/cyfr/test/sanctum/provisioning_readiness_test.exs
 5.6	apps/cyfr/test/sanctum/provisioning_remote_deps_test.exs
 4.7	apps/cyfr/test/sanctum/provisioning_test.exs
-0.2	apps/cyfr/test/sanctum/s1_tenant_scope_ssot_test.exs
+0.2	apps/cyfr/test/sanctum/tenant_scope_ssot_test.exs
 0.6	apps/cyfr/test/sanctum/session_test.exs
 0.4	apps/cyfr/test/sanctum/tenancy/archive_test.exs
 0.4	apps/cyfr/test/sanctum/tenancy/athanor_census_test.exs
@@ -886,11 +886,11 @@
 0.1	apps/sanctum/test/sanctum/redaction_roster_test.exs
 0.1	apps/sanctum/test/sanctum/registry_credentials_test.exs
 2.5	apps/sanctum/test/sanctum/remote_certification_test.exs
-0.0	apps/sanctum/test/sanctum/s2_looks_like_key_test.exs
-0.1	apps/sanctum/test/sanctum/s3_client_ip_test.exs
-0.0	apps/sanctum/test/sanctum/s4_platform_audit_test.exs
-0.0	apps/sanctum/test/sanctum/s5_execution_authz_test.exs
-0.0	apps/sanctum/test/sanctum/s7_redaction_test.exs
+0.0	apps/sanctum/test/sanctum/api_key_recognition_test.exs
+0.1	apps/sanctum/test/sanctum/client_ip_proxy_trust_test.exs
+0.0	apps/sanctum/test/sanctum/platform_context_audit_test.exs
+0.0	apps/sanctum/test/sanctum/execution_read_authorization_test.exs
+0.0	apps/sanctum/test/sanctum/query_redaction_test.exs
 1.1	apps/sanctum/test/sanctum/sign_in_test.exs
 0.0	apps/sanctum/test/sanctum/slug_test.exs
 0.0	apps/sanctum/test/sanctum/strict_authorize_tenant_test.exs

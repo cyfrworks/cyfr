@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: FSL-1.1-Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
-defmodule Sanctum.S5ExecutionAuthzTest do
+defmodule Sanctum.ExecutionReadAuthorizationTest do
   @moduledoc """
   The execution-events controller delegates to the single authorization
   chokepoint `Sanctum.Context.authorize(ctx, :storage_read, {:execution, exec})`. This

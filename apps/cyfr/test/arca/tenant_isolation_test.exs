@@ -895,7 +895,7 @@ defmodule Arca.TenantIsolationTest do
       # API keys are athanor credentials: the (sole) hash lookup returns the
       # key's OWN athanor from the row. Cross-tenant rejection happens on the
       # resulting Sanctum.Context (require_tenant!), covered by
-      # Arca.R6AthanorLessFailClosedTest and Sanctum.ApiKeyTest.
+      # Arca.AthanorLessFailClosedTest and Sanctum.ApiKeyTest.
       {:ok, row} = Arca.ApiKeyStorage.get_key_by_hash(key_hash)
       assert row.athanor_id == "ath_alpha"
     end

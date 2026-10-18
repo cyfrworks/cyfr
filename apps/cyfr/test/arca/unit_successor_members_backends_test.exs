@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
-defmodule Arca.AstraT1bBackendReviewTest.ParkIO do
+defmodule Arca.UnitSuccessorMembersBackendsTest.ParkIO do
   @moduledoc false
   # Backend-preserving instrumentation. It parks the armed writer
   # once: at its delete of a tree — a removal's delete of the retired
@@ -59,10 +59,11 @@ defmodule Arca.AstraT1bBackendReviewTest.ParkIO do
   end
 end
 
-defmodule Arca.AstraT1bBackendReviewTest do
+defmodule Arca.UnitSuccessorMembersBackendsTest do
   @moduledoc """
-  Review-only backend extension of the adopted cross-member simulation.
-  The test bodies and public successor protocol are unchanged. The park
+  The cross-member simulation of `Arca.UnitSuccessorMembersTest` over the
+  real storage backends, pinning the same contract: its test bodies and
+  public successor protocol are that module's. The park
   delegates all operations to real Local or S3, preserving each adapter's
   conditionals and listing. The S3 fixtures own a distinct prefix per test.
   Both variants run only under :s3_integration so one exclusive host check
@@ -75,7 +76,7 @@ defmodule Arca.AstraT1bBackendReviewTest do
 
   @moduletag :s3_integration
   import Ecto.Query, only: [from: 2]
-  alias Arca.AstraT1bBackendReviewTest.ParkIO
+  alias Arca.UnitSuccessorMembersBackendsTest.ParkIO
   alias Arca.Schemas.StorageUnit
   alias Arca.Storage.UnitLocator
   alias Arca.StorageUnits

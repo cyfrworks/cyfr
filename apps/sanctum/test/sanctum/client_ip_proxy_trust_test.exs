@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: FSL-1.1-Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
-defmodule Sanctum.S3ClientIpTest do
+defmodule Sanctum.ClientIpProxyTrustTest do
   @moduledoc """
   Checks trusted proxy handling and non-nil client-IP resolution.
   A missing address resolves to `0.0.0.0` for allowlist checks.
