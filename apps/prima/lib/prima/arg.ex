@@ -15,6 +15,11 @@ defmodule Prima.Arg do
 
   Bounds measure numeric value, Unicode code points for strings, array
   items or object properties, matching the generated JSON Schema.
+
+  A string declared `bulk: true` carries content (a file's bytes, a
+  binary, a file's text) rather than a value a reader of the call needs:
+  `logged/2` is the call as a log records it, each bulk value replaced by
+  its size and digest, so no log holds the content itself.
   """
 
   @enforce_keys [:name, :type]
@@ -28,6 +33,7 @@ defmodule Prima.Arg do
     :pattern,
     required: false,
     nullable: false,
+    bulk: false,
     default: :unset
   ]
 
@@ -50,6 +56,7 @@ defmodule Prima.Arg do
           min: number() | nil,
           max: number() | nil,
           pattern: String.t() | nil,
+          bulk: boolean(),
           default: term()
         }
 
@@ -65,6 +72,65 @@ defmodule Prima.Arg do
   @spec required(t(), boolean()) :: t()
   def required(%__MODULE__{} = arg, required \\ true) when is_boolean(required),
     do: %{arg | required: required}
+
+  @doc """
+  `input` as a log records it: every value at a position `args` declares
+  `bulk: true` is replaced by `%{"size" => bytes, "digest" => "sha256:…"}`,
+  nested arrays, records and maps included. A value whose shape does not
+  match a declaration that holds bulk content is measured whole, so a
+  malformed call is logged without its content too. Positions that hold
+  no bulk content, and keys no declaration names, are kept as they are.
+  """
+  @spec logged([t()], term()) :: term()
+  def logged(args, input) when is_list(args) and is_map(input) and not is_struct(input) do
+    Enum.reduce(args, input, fn arg, logged ->
+      case Map.fetch(logged, arg.name) do
+        {:ok, value} -> Map.put(logged, arg.name, logged_value(arg, value))
+        :error -> logged
+      end
+    end)
+  end
+
+  def logged(_args, input), do: input
+
+  @doc "Whether `arg` is, or holds at any depth, a bulk content position."
+  @spec bulk?(t()) :: boolean()
+  def bulk?(%__MODULE__{bulk: true}), do: true
+  def bulk?(%__MODULE__{type: {:array, item}}), do: bulk?(item)
+  def bulk?(%__MODULE__{type: {:map, value}}), do: bulk?(value)
+  def bulk?(%__MODULE__{type: {:record, fields}}), do: Enum.any?(fields, &bulk?/1)
+  def bulk?(%__MODULE__{}), do: false
+
+  defp logged_value(_arg, nil), do: nil
+  defp logged_value(%__MODULE__{bulk: true}, value), do: measured(value)
+
+  defp logged_value(%__MODULE__{type: type} = arg, value) do
+    if bulk?(arg), do: logged_nested(type, value), else: value
+  end
+
+  defp logged_nested({:array, item}, list) when is_list(list),
+    do: Enum.map(list, &logged_value(item, &1))
+
+  defp logged_nested({:record, fields}, %{} = record) when not is_struct(record),
+    do: logged(fields, record)
+
+  defp logged_nested({:map, value}, %{} = map) when not is_struct(map),
+    do: Map.new(map, fn {key, entry} -> {key, logged_value(value, entry)} end)
+
+  defp logged_nested(_type, value), do: measured(value)
+
+  defp measured(value) do
+    bytes =
+      case value do
+        binary when is_binary(binary) -> binary
+        other -> :erlang.term_to_binary(other)
+      end
+
+    %{
+      "size" => byte_size(bytes),
+      "digest" => "sha256:" <> Base.encode16(:crypto.hash(:sha256, bytes), case: :lower)
+    }
+  end
 
   @doc "Validate a closed object and normalize declared integers, or return a safe error."
   @spec cast([t()], term()) :: {:ok, map()} | {:error, String.t()}
@@ -305,8 +371,11 @@ defmodule Prima.Arg do
 
   defp validate_declaration!(%__MODULE__{} = arg) do
     unless (is_nil(arg.name) or (is_binary(arg.name) and arg.name != "")) and
-             is_boolean(arg.required) and is_boolean(arg.nullable),
+             is_boolean(arg.required) and is_boolean(arg.nullable) and is_boolean(arg.bulk),
            do: raise(ArgumentError, "invalid argument declaration")
+
+    if arg.bulk and arg.type != :string,
+      do: raise(ArgumentError, "only a string argument carries bulk content")
 
     unless is_nil(arg.description) or is_binary(arg.description),
       do: raise(ArgumentError, "description must be a string")

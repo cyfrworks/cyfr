@@ -69,6 +69,7 @@ defmodule Compendium.Builds.Provider do
             [
               Arg.new("wasm_base64", :string,
                 required: true,
+                bulk: true,
                 description: "Base64-encoded WASM binary (validate action)"
               )
             ],

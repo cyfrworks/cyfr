@@ -113,6 +113,7 @@ defmodule Arca.Providers.Files do
             Arg.required(path),
             Arg.new("content", :string,
               required: true,
+              bulk: true,
               description: "Text or base64-encoded content"
             ),
             Arg.new("encoding", :string,

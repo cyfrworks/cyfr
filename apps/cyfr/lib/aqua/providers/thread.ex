@@ -225,7 +225,7 @@ defmodule Aqua.Providers.Thread do
                   [
                     Arg.new("filename", :string, required: true),
                     Arg.new("media_type", :string, required: true),
-                    Arg.new("data", :string, required: true)
+                    Arg.new("data", :string, required: true, bulk: true)
                   ]}
                )},
               required: true,

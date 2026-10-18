@@ -537,4 +537,19 @@ defmodule Prima.Operation do
   end
 
   def cast(_definition, _input), do: {:error, {:invalid_argument, "Arguments must be an object"}}
+
+  @doc """
+  A call's arguments as a log records them (`Prima.Arg.logged/2`) under
+  the declaration of the action it names: bulk content measured, never
+  kept. A call naming no declared action is returned as it is.
+  """
+  @spec logged(map(), term()) :: term()
+  def logged(%{operations: operations}, %{} = input) when not is_struct(input) do
+    case Enum.find(operations, &(&1.action == Map.get(input, "action"))) do
+      nil -> input
+      operation -> Arg.logged(operation.args, input)
+    end
+  end
+
+  def logged(_definition, input), do: input
 end

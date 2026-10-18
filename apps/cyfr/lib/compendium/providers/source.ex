@@ -131,6 +131,7 @@ defmodule Compendium.Providers.Source do
             path,
             Arg.new("content", :string,
               required: true,
+              bulk: true,
               description: "write: the file's new content"
             )
           ],
@@ -159,7 +160,7 @@ defmodule Compendium.Providers.Source do
                     ),
                     Arg.new("start", :integer, required: true),
                     Arg.new("end", :integer),
-                    Arg.new("content", :string)
+                    Arg.new("content", :string, bulk: true)
                   ]}
                )},
               required: true,

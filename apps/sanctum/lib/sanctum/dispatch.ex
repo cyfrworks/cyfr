@@ -591,7 +591,12 @@ defmodule Sanctum.Dispatch do
     ctx = %{ctx | call_id: call_id}
 
     action = args["action"] || args[:action]
-    logged_args = if in_chain?, do: put_lineage(args, Keyword.get(opts, :lineage)), else: args
+    # The request log never holds an argument's bulk content, only its
+    # size and digest (`Sanctum.Catalog.logged_input/2`).
+    logged_args = Catalog.logged_input(name, args)
+
+    logged_args =
+      if in_chain?, do: put_lineage(logged_args, Keyword.get(opts, :lineage)), else: logged_args
 
     audit = %{
       ctx: ctx,

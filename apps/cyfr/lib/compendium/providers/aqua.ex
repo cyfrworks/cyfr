@@ -152,6 +152,7 @@ defmodule Compendium.Providers.Aqua do
                 "Per-(tool,action) allowlist for this agent. Keys are 'tool.action' or 'tool.*' strings (a bare 'native_search' key grants the provider-native search tool); values are 'auto' (directly callable) or 'ask' (reachable only through user approval). A pair missing from the map is not callable at all. Each action's risk level is derived from its `kind` annotation (read/write/execute/destructive/external) — color/UI treatment uses the kind, not the policy mode. The policy is the athanor's: every member edits the same allowlist."
             ),
             Arg.new("content", :string,
+              bulk: true,
               description:
                 "Prompt content in markdown (create/update), or the scroll's body (skill_create/skill_update)"
             )
@@ -200,6 +201,7 @@ defmodule Compendium.Providers.Aqua do
                 "update only: the allowlist keys to change, applied to the policy as it is when the write lands — 'ask' or 'auto' sets a key, null takes it off; keys not named are kept. Two members editing different keys at once keep both. Not with tool_policy."
             ),
             Arg.new("content", :string,
+              bulk: true,
               description:
                 "Prompt content in markdown (create/update), or the scroll's body (skill_create/skill_update)"
             ),
@@ -297,6 +299,7 @@ defmodule Compendium.Providers.Aqua do
             ),
             Arg.new("content", :string,
               required: true,
+              bulk: true,
               description:
                 "Prompt content in markdown (create/update), or the scroll's body (skill_create/skill_update)"
             )
@@ -323,6 +326,7 @@ defmodule Compendium.Providers.Aqua do
                 "Role description the soul reads when choosing a role (create/update), or the one line a scroll's index shows (skill_create/skill_update)"
             ),
             Arg.new("content", :string,
+              bulk: true,
               description:
                 "Prompt content in markdown (create/update), or the scroll's body (skill_create/skill_update)"
             )

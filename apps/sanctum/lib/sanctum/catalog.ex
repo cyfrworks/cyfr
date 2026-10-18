@@ -784,6 +784,20 @@ defmodule Sanctum.Catalog do
   end
 
   @doc """
+  A call's arguments as the request log records them: every argument
+  its action declares as bulk content replaced by its size and digest
+  (`Prima.Operation.logged/2`). A tool the catalog does not hold, a
+  proxied one among them, is returned as it is.
+  """
+  @spec logged_input(String.t(), term()) :: term()
+  def logged_input(name, args) when is_binary(name) do
+    case lookup(name) do
+      {:ok, {_module, meta}} -> Operation.logged(meta, args)
+      :miss -> args
+    end
+  end
+
+  @doc """
   Whether an admitted call of `tool.action` is recorded by the decision
   audit (`Sanctum.Decisions`): false for an action the table declares
   `recorded: false` (`Prima.Operation`), which only a read may be; true
