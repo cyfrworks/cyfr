@@ -202,6 +202,63 @@ defmodule PrismWeb.AuthControllerTest do
       # The token travels in the cookie only.
       refute conn.resp_body =~ token
     end
+
+    test "a door a recovery retires during the sign-in through it is refused as a sign-in, with no session and no error",
+         %{conn: conn} do
+      alias Sanctum.Test.DirectoryServer
+
+      tls = DirectoryServer.tls()
+      DirectoryServer.listen!()
+      DirectoryServer.seam!(tls)
+      directory = DirectoryServer.start!(tls)
+      identity = DirectoryServer.identity!(directory.dir, directory.url)
+
+      # A person whose keys are at another home, signing in here through an
+      # OpenID Connect door of theirs.
+      uid = "recovered-#{System.unique_integer([:positive])}"
+      key = "oidcc|https://idp.test|#{uid}"
+
+      {:ok, user} =
+        Sanctum.Tenancy.Users.upsert_from_provider(%{
+          id: key,
+          provider: "oidcc",
+          verified: :unknown
+        })
+
+      :ok = DirectoryServer.remote_person!(user.id, identity)
+
+      signed_in =
+        conn
+        |> Plug.Test.init_test_session(%{})
+        |> Phoenix.ConnTest.fetch_flash()
+        |> assign(:ueberauth_auth, oidcc_auth(uid, nil))
+        |> PrismWeb.AuthController.callback(%{})
+
+      assert is_binary(Plug.Conn.get_session(signed_in, :sanctum_session_token))
+
+      # They recover with new keys at their directory. The next sign-in's
+      # fresh read finds the recovery and retires the door it came through
+      # before its session is issued.
+      DirectoryServer.recover!(directory.dir, identity)
+
+      {refused, log} =
+        ExUnit.CaptureLog.with_log(fn ->
+          build_conn()
+          |> Plug.Test.init_test_session(%{})
+          |> Phoenix.ConnTest.fetch_flash()
+          |> assign(:ueberauth_auth, oidcc_auth(uid, nil))
+          |> PrismWeb.AuthController.callback(%{})
+        end)
+
+      assert refused.status == 401
+      assert refused.resp_body =~ "Sign in again"
+      assert refused.resp_body =~ ~s(href="/login")
+      refute Plug.Conn.get_session(refused, :sanctum_session_token)
+      # No fault logged for it: the unreachable registry's probe, which
+      # runs before the session, logs its own.
+      refute log =~ "CyfrWeb.SignInResponse"
+      assert {:error, :not_found} = Sanctum.Tenancy.Users.get_by_identity(key)
+    end
   end
 
   describe "callback/2 — probe integration (Bypass)" do

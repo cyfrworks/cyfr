@@ -26,7 +26,8 @@ defmodule Sanctum.Test.AltAuthProvider do
   @moduledoc """
   Alternate auth provider test double for tests that need a browser-callback
   `Sanctum.Auth` implementation without an issuer to configure: it names the
-  person from the Ueberauth struct under a fixed test issuer and does not
+  person from the Ueberauth struct under a fixed test issuer, names that
+  identity as the context's door as `Sanctum.Auth.OIDC` does, and does not
   pre-set `authenticated:` — the controller creates the session.
   """
   @behaviour Sanctum.Auth
@@ -44,6 +45,7 @@ defmodule Sanctum.Test.AltAuthProvider do
     ctx =
       Context.build(
         user_id: user_id,
+        door: user_id,
         email: email,
         provider: to_string(provider),
         namespace: Sanctum.Namespace.lookup(user_id),

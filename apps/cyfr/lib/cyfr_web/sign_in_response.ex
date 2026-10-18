@@ -148,6 +148,21 @@ defmodule CyfrWeb.SignInResponse do
                 "<p><a href=\"/login\">Back to sign-in</a></p>"
             )
 
+          # What the sign-in stood on went while it ran: the door it came
+          # through was retired, by a recovery of the person's keys that the
+          # session's fresh read found or by an unlink, or the person's
+          # standing changed (`Sanctum.Session.create/2`). A refusal, never
+          # a fault of this server: the person signs in again.
+          {:error, :unauthenticated} ->
+            CyfrWeb.MinimalPage.send_page(
+              conn,
+              401,
+              "Sign-in failed",
+              "<p>What this sign-in came through no longer admits you here. " <>
+                "Sign in again.</p>" <>
+                "<p><a href=\"/login\">Sign in again</a></p>"
+            )
+
           {:error, reason} ->
             Logger.error("[CyfrWeb.SignInResponse] session create failed: #{inspect(reason)}")
 
