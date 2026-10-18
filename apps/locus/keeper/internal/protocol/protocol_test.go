@@ -26,10 +26,17 @@ type frameVector struct {
 
 type vectors struct {
 	ReservedEnvPrefixes []string `json:"reserved_env_prefixes"`
+	ReservedEnv         []string `json:"reserved_env"`
+	Signals             []string `json:"signals"`
 	Bounds              struct {
 		MaxFramePayloadBytes int `json:"max_frame_payload_bytes"`
 		MaxLineBytes         int `json:"max_line_bytes"`
 	} `json:"bounds"`
+	RequestBounds map[string]uint64 `json:"request_bounds"`
+	Rlimits       map[string]struct {
+		Least uint64 `json:"least"`
+		Most  uint64 `json:"most"`
+	} `json:"rlimits"`
 	Frames          []frameVector     `json:"frames"`
 	ControlFrames   []frameVector     `json:"control_frames"`
 	RelayFrames     []frameVector     `json:"relay_frames"`
@@ -100,6 +107,45 @@ func TestSharedFrameVectors(t *testing.T) {
 		stream, decoded, err := frame.Read(bytes.NewReader(encoded), scratch)
 		if err != nil || stream != f.Stream || !bytes.Equal(decoded, payload) {
 			t.Errorf("stream %d: decoded %d %x %v", f.Stream, stream, decoded, err)
+		}
+	}
+}
+
+// The request ceilings, the signals, the reserved names and the rlimits
+// are each side's own; the vectors pin both sides to the same ones.
+func TestSharedRequestBounds(t *testing.T) {
+	v := loadVectors(t)
+	want := map[string]uint64{
+		"max_args":              MaxArgs,
+		"max_env":               MaxEnv,
+		"max_value_bytes":       MaxValueBytes,
+		"max_spec_bytes":        MaxSpecBytes,
+		"max_grace_ms":          MaxGraceMs,
+		"max_socket_path_bytes": MaxSocketPath,
+		"min_memory_bytes":      MinMemoryBytes,
+		"max_memory_bytes":      MaxMemoryBytes,
+	}
+	if !reflect.DeepEqual(v.RequestBounds, want) {
+		t.Fatalf("the request bounds are %v, the vectors pin %v", want, v.RequestBounds)
+	}
+	if !reflect.DeepEqual(Signals, v.Signals) {
+		t.Fatalf("Signals = %q, the vectors say %q", Signals, v.Signals)
+	}
+	if !reflect.DeepEqual(ReservedEnv, v.ReservedEnv) {
+		t.Fatalf("ReservedEnv = %q, the vectors say %q", ReservedEnv, v.ReservedEnv)
+	}
+	limits := map[string][2]uint64{
+		"nofile": {Floors.Nofile, Ceilings.Nofile},
+		"nproc":  {Floors.Nproc, Ceilings.Nproc},
+		"core":   {Floors.Core, Ceilings.Core},
+		"fsize":  {Floors.Fsize, Ceilings.Fsize},
+	}
+	if len(v.Rlimits) != len(limits) {
+		t.Fatalf("the vectors pin the rlimits %v, the keeper has %v", v.Rlimits, limits)
+	}
+	for name, r := range v.Rlimits {
+		if got, ok := limits[name]; !ok || got != [2]uint64{r.Least, r.Most} {
+			t.Fatalf("rlimits.%s is %v here, the vectors pin %d..%d", name, got, r.Least, r.Most)
 		}
 	}
 }

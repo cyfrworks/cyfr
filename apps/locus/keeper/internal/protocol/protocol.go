@@ -120,7 +120,9 @@ const (
 	CodeMemoryUnavailable = "memory_unavailable"
 )
 
-// Bounds on a request.
+// Bounds on a request. These, Signals, ReservedEnv, Ceilings and Floors
+// are the shared vectors' request_bounds, signals, reserved_env and
+// rlimits, which CYFR's codec holds too.
 const (
 	MaxLineBytes  = 1 << 20
 	MaxArgs       = 256
@@ -170,6 +172,9 @@ type Limits struct {
 // Ceilings are the default limits and the most a request may ask for.
 var Ceilings = Limits{Nofile: 1024, Nproc: 128, Core: 0, Fsize: 256 << 20}
 
+// Floors are the least a request may lower each limit to.
+var Floors = Limits{Nofile: 16, Nproc: 1, Core: 0, Fsize: 1}
+
 // Rlimits is a request's optional lowering of the ceilings.
 type Rlimits struct {
 	Nofile *uint64 `json:"nofile,omitempty"`
@@ -205,10 +210,10 @@ func (r *Rlimits) validate() error {
 		ceiling uint64
 		min     uint64
 	}{
-		{"nofile", r.Nofile, Ceilings.Nofile, 16},
-		{"nproc", r.Nproc, Ceilings.Nproc, 1},
-		{"core", r.Core, Ceilings.Core, 0},
-		{"fsize", r.Fsize, Ceilings.Fsize, 1},
+		{"nofile", r.Nofile, Ceilings.Nofile, Floors.Nofile},
+		{"nproc", r.Nproc, Ceilings.Nproc, Floors.Nproc},
+		{"core", r.Core, Ceilings.Core, Floors.Core},
+		{"fsize", r.Fsize, Ceilings.Fsize, Floors.Fsize},
 	} {
 		if f.v != nil && (*f.v > f.ceiling || *f.v < f.min) {
 			return fmt.Errorf("rlimits.%s must be within %d..%d", f.name, f.min, f.ceiling)

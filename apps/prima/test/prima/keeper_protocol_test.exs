@@ -29,7 +29,7 @@ defmodule Prima.KeeperProtocolTest do
            |> File.read!()
            |> Jason.decode!()
 
-  @categories ~w(reserved_env_prefixes bounds frames control_frames relay_frames relay_streams valid_requests invalid_requests replies)
+  @categories ~w(reserved_env_prefixes reserved_env signals bounds request_bounds rlimits frames control_frames relay_frames relay_streams valid_requests invalid_requests replies)
 
   @request_types %{"spawn" => :spawn, "signal" => :signal, "release" => :release, "pool" => :pool}
 
@@ -128,6 +128,49 @@ defmodule Prima.KeeperProtocolTest do
 
       for category <- @categories do
         assert @vectors[category] not in [nil, []], "#{category} is empty"
+      end
+    end
+
+    test "pin the reserved names, the signals, the request ceilings and the rlimits this side spells" do
+      assert @vectors["reserved_env"] == KeeperProtocol.reserved_env_names()
+      assert @vectors["reserved_env_prefixes"] == KeeperProtocol.reserved_env_prefixes()
+      assert @vectors["signals"] == KeeperProtocol.signals()
+
+      assert @vectors["request_bounds"] ==
+               Map.new(KeeperProtocol.request_bounds(), fn {k, v} -> {to_string(k), v} end)
+
+      assert @vectors["rlimits"] ==
+               Map.new(KeeperProtocol.rlimits(), fn {k, {least, most}} ->
+                 {to_string(k), %{"least" => least, "most" => most}}
+               end)
+
+      # What the codec does with them, not only what it names.
+      for name <- @vectors["reserved_env"] do
+        assert refused(spawn_request(%{env: %{name => "t"}})) =~ ~r/\Aenv /
+      end
+
+      for sig <- @vectors["signals"] do
+        assert %{"sig" => ^sig} =
+                 Jason.decode!(line(%{type: :signal, spawn_id: @spawn_id, sig: sig}))
+      end
+
+      bounds = @vectors["request_bounds"]
+
+      assert refused(spawn_request(%{argv: List.duplicate("a", bounds["max_args"] + 1)})) =~
+               ~r/\Aargv /
+
+      assert line(spawn_request(%{argv: List.duplicate("a", bounds["max_args"])}))
+
+      env = Map.new(1..(bounds["max_env"] + 1), &{"V#{&1}", "v"})
+      assert refused(spawn_request(%{env: env})) =~ ~r/\Aenv /
+
+      for {limit, %{"least" => least, "most" => most}} <- @vectors["rlimits"] do
+        key = String.to_existing_atom(limit)
+        assert line(spawn_request(%{rlimits: %{key => most}}))
+        assert refused(spawn_request(%{rlimits: %{key => most + 1}})) =~ ~r/\Arlimits\./
+
+        if least > 0,
+          do: assert(refused(spawn_request(%{rlimits: %{key => least - 1}})) =~ ~r/\Arlimits\./)
       end
     end
 

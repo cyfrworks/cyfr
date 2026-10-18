@@ -84,7 +84,9 @@ defmodule Prima.KeeperProtocol do
   @stream_name Map.new(@streams, fn {name, byte} -> {byte, name} end)
   @attach_stream Keyword.fetch!(@streams, :attach)
 
-  # The keeper's request bounds (`apps/locus/keeper/internal/protocol`).
+  # The keeper's request bounds, signals and reserved names
+  # (`apps/locus/keeper/internal/protocol`); the vectors' `request_bounds`,
+  # `rlimits`, `signals` and `reserved_env` pin both sides to the same ones.
   @max_args 256
   @max_env 256
   @max_value_bytes 32 * 1024
@@ -238,6 +240,34 @@ defmodule Prima.KeeperProtocol do
   @doc "The values a spawn's `isolation` may take."
   @spec isolations() :: [String.t()]
   def isolations, do: @isolations
+
+  @doc "The signals a `signal` request may name."
+  @spec signals() :: [String.t()]
+  def signals, do: @signals
+
+  @doc """
+  A request's ceilings: the most argv and env entries, the most bytes of
+  one value, of argv and env together and of an attach path, the longest
+  grace a release may ask for, and the least and most of a spawn's
+  `memory_bytes`.
+  """
+  @spec request_bounds() :: %{atom() => non_neg_integer()}
+  def request_bounds do
+    %{
+      max_args: @max_args,
+      max_env: @max_env,
+      max_value_bytes: @max_value_bytes,
+      max_spec_bytes: @max_spec_bytes,
+      max_grace_ms: @max_grace_ms,
+      max_socket_path_bytes: @max_socket_path,
+      min_memory_bytes: @min_memory_bytes,
+      max_memory_bytes: @max_memory_bytes
+    }
+  end
+
+  @doc "Each resource limit a spawn may lower, with its least and its most, the keeper's ceiling."
+  @spec rlimits() :: [{atom(), {non_neg_integer(), non_neg_integer()}}]
+  def rlimits, do: @rlimits
 
   @doc "The variable names no spawn's `env` may carry."
   @spec reserved_env_names() :: [String.t()]
