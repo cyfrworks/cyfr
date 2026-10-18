@@ -42,6 +42,8 @@ defmodule Prima.Device do
     * `grant` — a stream granted to the client: `grant_id`, `stream`,
       `subject` (when it has one), `projection` and `expires_at`.
     * `event` — one fact of a granted stream: `grant_id` and `payload`.
+      A stream that declares a refresh answers its current state after
+      the `grant` as `event`s whose payload carries `"refresh": true`.
     * `revoke` — the pairing of `client_id` has ended, or, with `grant_id`,
       that one grant.
 

@@ -894,6 +894,38 @@ defmodule Emissary.Web.DeviceChannelTest do
       refute state.closed
     end
 
+    test "a stream that declares a refresh answers its current state after the grant, at every open",
+         %{session_ctx: session_ctx} do
+      record =
+        Opus.Record.new(%{session_ctx | origin: :interactive}, "reagent:local.test:0.1.0", %{})
+
+      :ok = Opus.Record.write_started(record)
+      device = pair!(session_ctx)
+
+      # A first connection, and the reconnect after it: each open is a new
+      # admission, and each answers what the stream holds before any fact.
+      for {connection, intent} <- [{1, "r1"}, {2, "r2"}] do
+        state = proven(device)
+
+        assert {:push, [{:text, answer}, {:text, grant}, {:text, refreshed}], _state} =
+                 send_frame(
+                   state,
+                   intent_message(intent, "streams.open", %{"stream" => "runs.changes"})
+                 ),
+               "connection #{connection}"
+
+        assert {:answer, %{id: ^intent, result: %{"grant_id" => grant_id}}} = decoded(answer)
+        assert {:grant, %{grant_id: ^grant_id, stream: "runs.changes"}} = decoded(grant)
+        assert {:event, %{grant_id: ^grant_id, payload: payload}} = decoded(refreshed)
+
+        assert %{"refresh" => true, "kind" => "started", "execution_id" => execution_id} = payload
+        assert execution_id == record.id
+
+        assert Map.keys(payload) --
+                 ["refresh" | Opus.Providers.Feed.streams() |> runs_projection()] == []
+      end
+    end
+
     test "the glass reads the preview and the asker, and confirms another client's request by its ref",
          %{session_ctx: session_ctx, user: user} do
       authenticator = Sanctum.TestContext.passkey!(user.id)
@@ -1676,6 +1708,9 @@ defmodule Emissary.Web.DeviceChannelTest do
     assert Map.has_key?(state.grants, grant_id)
     {grant_id, body, state}
   end
+
+  defp runs_projection(streams),
+    do: Enum.find_value(streams, &(&1.name == "runs.changes" && &1.projection))
 
   # The next fact the grant's forwarder handed the channel, delivered.
   defp event!(state, grant_id) do

@@ -309,6 +309,20 @@
     },
     {
       "message": {
+        "grant_id": "sgr_1",
+        "payload": {
+          "kind": "started",
+          "refresh": true,
+          "status": "running"
+        },
+        "protocol": "cyfr-device/v1",
+        "type": "event"
+      },
+      "name": "a stream's current state, which its declared refresh answers after the grant",
+      "sender": "home"
+    },
+    {
+      "message": {
         "client_id": "pcl_01a09fee-7c1d-7e2f-8a3b-4c5d6e7f8091",
         "grant_id": "sgr_1",
         "protocol": "cyfr-device/v1",

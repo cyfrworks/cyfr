@@ -53,6 +53,15 @@ defmodule Emissary.Web.DeviceChannel do
   grant's fields, by a forwarder process per grant that ends with the
   channel. A connection holds at most 16 grants.
 
+  A stream that declares a refresh (`Prima.Provider.Stream`'s `refresh`)
+  answers its current state when it opens, and so after every reconnect,
+  each open being a new admission: the refresh is read once the forwarder
+  is subscribed, and each item follows the `grant` as an `event` whose
+  payload, projected to the grant's fields, carries `"refresh": true`. A
+  fact published while it is read arrives after it, so the glass may see
+  an item twice and never misses one. A refresh that cannot be read is
+  answered as an open whose forwarder cannot start.
+
   A stream ends, with `revoke` naming its grant:
 
     * at its deadline, which is never later than the certificate it was
@@ -676,7 +685,7 @@ defmodule Emissary.Web.DeviceChannel do
          :ok <- grant_room(state) do
       case Sanctum.Gate.open_stream(ctx, name, subject) do
         {:ok, grant} ->
-          granted(id, name, grant, state)
+          granted(id, name, grant, ctx, state)
 
         {:error, refusal} ->
           {:reply, :ok, {:text, wire({:answer, %{id: id, error: error(refusal)}})}, state}
@@ -712,16 +721,43 @@ defmodule Emissary.Web.DeviceChannel do
   defp grant_room(_state), do: {:error, :stream_limit}
 
   # An admitted open: its forwarder subscribed to the one topic the grant
-  # admits before the grant is answered, and its deadline armed; the
-  # person's standing announcements are heard from before the open's
-  # standing read (`admit/2`).
-  defp granted(id, name, grant, state) do
+  # admits before the grant is answered, its declared refresh read after
+  # that, and its deadline armed; the person's standing announcements are
+  # heard from before the open's standing read (`admit/2`).
+  defp granted(id, name, grant, ctx, state) do
     actor = Context.actor(state.client)
     topic = Cyfr.Bus.granted_topic(actor, grant)
 
-    case Forwarder.start(self(), grant.grant_id, actor, topic, payload_struct(grant)) do
-      {:ok, forwarder} -> deliver_grant(id, name, grant, forwarder, state)
+    with {:ok, forwarder} <-
+           Forwarder.start(self(), grant.grant_id, actor, topic, payload_struct(grant)) do
+      case refreshed(name, ctx, grant) do
+        {:ok, items} ->
+          deliver_grant(id, name, grant, forwarder, items, state)
+
+        :unread ->
+          Forwarder.stop(forwarder)
+          undeliverable(id, grant, state)
+      end
+    else
       {:error, _unstarted} -> undeliverable(id, grant, state)
+    end
+  end
+
+  # The stream's current state, as its declaration reads it, each item
+  # projected to the grant's fields and marked `refresh`. A stream that
+  # declares none has none to give.
+  defp refreshed(name, ctx, grant) do
+    with {:ok, {_provider, %Prima.Provider.Stream{refresh: {module, function}}}} <-
+           Sanctum.Catalog.lookup_stream(name) do
+      case apply(module, function, [ctx, grant.subject]) do
+        {:ok, items} when is_list(items) ->
+          {:ok, Enum.map(items, &Map.put(StreamGrant.project(grant, &1), "refresh", true))}
+
+        _unread ->
+          :unread
+      end
+    else
+      _no_refresh -> {:ok, []}
     end
   end
 
@@ -741,7 +777,7 @@ defmodule Emissary.Web.DeviceChannel do
     {:push, Enum.map(frames, &{:text, wire(&1)}), state}
   end
 
-  defp deliver_grant(id, name, grant, forwarder, state) do
+  defp deliver_grant(id, name, grant, forwarder, refresh, state) do
     timer =
       timer(
         nil,
@@ -769,10 +805,11 @@ defmodule Emissary.Web.DeviceChannel do
         if grant.subject, do: Map.put(body, :subject, grant.subject), else: body
       end)
 
-    frames = [
-      {:answer, %{id: id, result: %{"grant_id" => grant.grant_id}}},
-      {:grant, body}
-    ]
+    frames =
+      [
+        {:answer, %{id: id, result: %{"grant_id" => grant.grant_id}}},
+        {:grant, body}
+      ] ++ Enum.map(refresh, &{:event, %{grant_id: grant.grant_id, payload: &1}})
 
     {:push, Enum.map(frames, &{:text, wire(&1)}), state}
   end
