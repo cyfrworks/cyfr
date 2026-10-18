@@ -387,11 +387,18 @@ func forceRefetched(releaseBuild bool) []string {
 var downloadScaffold = scaffold.Download
 
 // forceRemovalRefusal is init --force's refusal when files it re-fetches
-// could not be removed: those files kept as they were, and of the ones it
-// removed, which are on disk again and which are missing because the
-// download did not lay them down.
+// could not be removed (forceRemovalState).
 func forceRemovalRefusal(unremoved, removed []string) error {
-	var back, missing []string
+	return errors.New(forceRemovalState(unremoved, removed) + " Fix the cause and run 'cyfr init --force' again")
+}
+
+// forceRemovalState says what init --force's removals left on disk: the
+// files it could not remove, kept as they were, and of the ones it
+// removed, which are on disk again and which are missing because the
+// download did not lay them down. Empty when it removed nothing and every
+// removal held.
+func forceRemovalState(unremoved, removed []string) string {
+	var back, missing, parts []string
 	for _, name := range removed {
 		if fileExists(name) {
 			back = append(back, name)
@@ -399,14 +406,16 @@ func forceRemovalRefusal(unremoved, removed []string) error {
 			missing = append(missing, name)
 		}
 	}
-	message := fmt.Sprintf("cyfr init --force could not remove %s, so %s kept as %s and not fetched again.", joinNames(unremoved), plural(unremoved, "it is", "they are"), plural(unremoved, "it was", "they were"))
+	if len(unremoved) > 0 {
+		parts = append(parts, fmt.Sprintf("cyfr init --force could not remove %s, so %s kept as %s and not fetched again.", joinNames(unremoved), plural(unremoved, "it is", "they are"), plural(unremoved, "it was", "they were")))
+	}
 	if len(back) > 0 {
-		message += fmt.Sprintf(" %s %s laid down again.", joinNames(back), plural(back, "was", "were"))
+		parts = append(parts, fmt.Sprintf("%s %s laid down again.", joinNames(back), plural(back, "was", "were")))
 	}
 	if len(missing) > 0 {
-		message += fmt.Sprintf(" %s %s removed and %s missing: the download did not lay %s down again.", joinNames(missing), plural(missing, "was", "were"), plural(missing, "is", "are"), plural(missing, "it", "them"))
+		parts = append(parts, fmt.Sprintf("%s %s removed and %s missing: the download did not lay %s down again.", joinNames(missing), plural(missing, "was", "were"), plural(missing, "is", "are"), plural(missing, "it", "them")))
 	}
-	return errors.New(message + " Fix the cause and run 'cyfr init --force' again")
+	return strings.Join(parts, " ")
 }
 
 // joinNames spells names as a list a person reads: "a", "a and b",
@@ -497,6 +506,11 @@ Re-running in an existing project is safe: docker-compose.yml, Caddyfile, cyfr.y
 		// it (scaffoldDownloadFailure).
 		if err := downloadScaffold(version.Version); err != nil {
 			if stop := scaffoldDownloadFailure(version.Version, err, os.Stderr); stop != nil {
+				// What --force removed is named here too: the refusal
+				// extracts nothing, so it is missing until init runs again.
+				if state := forceRemovalState(unremoved, removed); state != "" {
+					return fmt.Errorf("%w.\n%s Fix the cause and run 'cyfr init --force' again", stop, state)
+				}
 				return stop
 			}
 		}

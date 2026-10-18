@@ -14,8 +14,11 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
+
+	"github.com/cyfr/codex/internal/release"
 )
 
 // A start and an update never overlap: while cyfr up is inside its
@@ -170,5 +173,149 @@ func TestInitForceDescribesFilesMissingAfterDownloadFailure(t *testing.T) {
 				t.Errorf("init claims a missing file was laid down again: %v", err)
 			}
 		})
+	}
+}
+
+// An update that ends before the stop, by an interrupt, a failed pull or a
+// failed scaffold fetch, reports the compose file as it is: an edit made
+// while it pulled is kept and named, never reported as unchanged.
+func TestPreStopExitsReportTheComposeFileAsItIs(t *testing.T) {
+	for _, phase := range []string{"interrupt", "pull failure", "scaffold fetch failure"} {
+		t.Run(phase, func(t *testing.T) {
+			s := newUpdateScenario(t, shippedCompose(t), nil)
+			s.answer("pull.edit", "\nname: person-edited-before-stop\n")
+			if phase == "pull failure" {
+				s.answer("pull.fail", "cyfr-locus")
+			}
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			originalFetch := fetchScaffold
+			t.Cleanup(func() { fetchScaffold = originalFetch })
+			fetchScaffold = func(v string) (scaffoldRelease, error) {
+				if phase == "scaffold fetch failure" {
+					return nil, fmt.Errorf("scaffold unavailable")
+				}
+				got, err := originalFetch(v)
+				cancel()
+				return got, err
+			}
+			out, err := s.run(ctx)
+			want := map[string]string{"interrupt": "interrupted before anything stopped", "pull failure": "docker pull", "scaffold fetch failure": "scaffold unavailable"}[phase]
+			if err == nil || !strings.Contains(err.Error(), want) {
+				t.Fatalf("update answered %v, want %q\n%s", err, want, out)
+			}
+			data, readErr := os.ReadFile(filepath.Join(s.project, "docker-compose.yml"))
+			if readErr != nil || !strings.Contains(string(data), "person-edited-before-stop") {
+				t.Fatalf("the edit is not on disk: %v", readErr)
+			}
+			s.nothingStopped()
+			if strings.Contains(err.Error(), "unchanged") || !strings.Contains(err.Error(), "docker-compose.yml changed while cyfr update ran and is kept as it is") {
+				t.Errorf("the refusal does not report the edited compose file as it is: %v", err)
+			}
+		})
+	}
+}
+
+// init --force whose download fails verification still names what its
+// removals left: the file it could not remove and the ones it removed,
+// missing since the refusal extracts nothing.
+func TestInitForceReportsItsRemovalsWhenVerificationFails(t *testing.T) {
+	for _, c := range []struct {
+		name       string
+		obstructed bool
+		want       []string
+	}{
+		{"a removal failed", true, []string{"could not remove Caddyfile", "docker-compose.yml, keeper.seccomp.json and cyfr.yaml were removed and are missing"}},
+		{"every removal held", false, []string{"docker-compose.yml, Caddyfile, keeper.seccomp.json and cyfr.yaml were removed and are missing"}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			s := newUpdateScenario(t, shippedCompose(t), nil)
+			for _, name := range []string{"keeper.seccomp.json", "cyfr.yaml"} {
+				if err := os.WriteFile(filepath.Join(s.project, name), []byte("{}\n"), 0644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			caddyfile := filepath.Join(s.project, "Caddyfile")
+			if c.obstructed {
+				if err := os.MkdirAll(filepath.Join(caddyfile, "kept"), 0755); err != nil {
+					t.Fatal(err)
+				}
+			} else if err := os.WriteFile(caddyfile, []byte(":80\n"), 0644); err != nil {
+				t.Fatal(err)
+			}
+			savedDownload := downloadScaffold
+			t.Cleanup(func() { downloadScaffold = savedDownload })
+			downloadScaffold = func(string) error { return fmt.Errorf("signature refused: %w", release.ErrUnverified) }
+			savedForce, _ := initCmd.Flags().GetBool("force")
+			t.Cleanup(func() { _ = initCmd.Flags().Set("force", fmt.Sprint(savedForce)) })
+			if err := initCmd.Flags().Set("force", "true"); err != nil {
+				t.Fatal(err)
+			}
+			err := initCmd.RunE(initCmd, nil)
+			if err == nil || !errors.Is(err, release.ErrUnverified) || !strings.Contains(err.Error(), "failed verification") {
+				t.Fatalf("init answered %v, want the verification refusal", err)
+			}
+			for _, want := range append(c.want, "run 'cyfr init --force' again") {
+				if !strings.Contains(err.Error(), want) {
+					t.Errorf("the refusal does not say %q: %v", want, err)
+				}
+			}
+			for _, name := range []string{"docker-compose.yml", "keeper.seccomp.json", "cyfr.yaml"} {
+				if _, statErr := os.Stat(filepath.Join(s.project, name)); !errors.Is(statErr, fs.ErrNotExist) {
+					t.Errorf("%s: %v, want it removed as the refusal says", name, statErr)
+				}
+			}
+		})
+	}
+}
+
+// An interrupt during cyfr up's docker compose up keeps the lock until the
+// compose child ends: an update in that window refuses, and the start then
+// answers the interrupt and releases the lock.
+func TestUpInterruptHoldsTheLockUntilComposeEnds(t *testing.T) {
+	s := newUpdateScenario(t, shippedCompose(t), nil)
+	s.answer("up.block", "")
+	result := make(chan error, 1)
+	t.Cleanup(func() {
+		s.answer("up.release", "")
+		select {
+		case <-result:
+		case <-time.After(5 * time.Second):
+		}
+	})
+	go func() { result <- upCmd.RunE(upCmd, nil) }()
+	deadline := time.Now().Add(5 * time.Second)
+	for !s.hasCall(profiles + "up -d") {
+		if time.Now().After(deadline) {
+			t.Fatal("cyfr up did not reach docker compose up")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if err := syscall.Kill(os.Getpid(), syscall.SIGINT); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err := <-result:
+		t.Fatalf("cyfr up ended before its compose child: %v", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+	if _, err := os.Stat(filepath.Join(s.project, updateLockName)); err != nil {
+		t.Fatalf("cyfr up released its lock before compose ended: %v", err)
+	}
+	if err := runUpdate(context.Background(), io.Discard, io.Discard); err == nil || !strings.Contains(err.Error(), updateLockName) {
+		t.Fatalf("an update was admitted inside the interrupted start: %v", err)
+	}
+	s.answer("up.release", "")
+	select {
+	case err := <-result:
+		if err == nil || !strings.Contains(err.Error(), "interrupted") {
+			t.Fatalf("cyfr up answered %v, want the interrupt", err)
+		}
+		result <- err
+	case <-time.After(5 * time.Second):
+		t.Fatal("cyfr up did not end after compose")
+	}
+	if _, err := os.Lstat(filepath.Join(s.project, updateLockName)); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("cyfr up left its lock behind: %v", err)
 	}
 }

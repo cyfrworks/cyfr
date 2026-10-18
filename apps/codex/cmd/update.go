@@ -193,8 +193,9 @@ func missingStackServices(path string) []string {
 }
 
 // errUpdateInterrupted is the refusal of an update a signal ended before
-// anything stopped.
-var errUpdateInterrupted = errors.New("cyfr update was interrupted before anything stopped; the running stack and docker-compose.yml are unchanged")
+// anything stopped; once the compose file is read, the refusal says what
+// it is now (composeAsRead).
+var errUpdateInterrupted = errors.New("cyfr update was interrupted before anything stopped; it changed nothing and the running stack was not touched")
 
 // runUpdate is `cyfr update` in the working directory. ctx is cancelled by
 // SIGINT or SIGTERM (main's signal context): before the stop step the
@@ -333,12 +334,12 @@ func (u *updater) run() error {
 	for _, step := range steps {
 		if err := step(); err != nil {
 			if u.ctx.Err() != nil {
-				return errUpdateInterrupted
+				return fmt.Errorf("%w; %s", errUpdateInterrupted, u.composeAsRead())
 			}
 			return err
 		}
 		if u.ctx.Err() != nil {
-			return errUpdateInterrupted
+			return fmt.Errorf("%w; %s", errUpdateInterrupted, u.composeAsRead())
 		}
 	}
 
@@ -1169,7 +1170,7 @@ func (u *updater) pull() error {
 		err := u.docker(ctx, nil, nil, "pull", ref)
 		cancel()
 		if err != nil {
-			return fmt.Errorf("docker pull %s failed (%v); docker-compose.yml and the running stack are unchanged", ref, err)
+			return fmt.Errorf("docker pull %s failed (%v); the running stack was not touched, and %s", ref, err, u.composeAsRead())
 		}
 		if u.ctx.Err() != nil {
 			return errUpdateInterrupted
@@ -1184,7 +1185,7 @@ func (u *updater) pull() error {
 func (u *updater) fetchScaffold() error {
 	r, err := fetchScaffold(u.version)
 	if err != nil {
-		return fmt.Errorf("Failed to fetch the scaffold files (%v); docker-compose.yml and the running stack are unchanged", err)
+		return fmt.Errorf("Failed to fetch the scaffold files (%v); the running stack was not touched, and %s", err, u.composeAsRead())
 	}
 	for _, name := range r.Managed() {
 		if info, err := os.Lstat(name); err == nil && !info.Mode().IsRegular() {
@@ -1762,7 +1763,8 @@ func (u *updater) restartOld(reason error) error {
 
 // composeAsRead says whether the compose file is still the bytes the
 // update read, for an exit's report: the update writes it only in the
-// switch, so a difference before the switch is someone else's edit.
+// switch, so a difference before the switch is someone else's edit. Every
+// exit after the read that reports the file reports it through here.
 func (u *updater) composeAsRead() string {
 	current, err := os.ReadFile(u.compose.path)
 	switch {
