@@ -12,6 +12,9 @@ harness (`tests/browser/`):
 - **Published through the publish check.** The version (source, lockfile and
   the build's `dist/`) is registered private (`Compendium.Registry`, which runs
   `Compendium.Tincture.check_version/2`); its public address answers 404.
+  The person grants it its whole ask through the consent walk (`grant` in
+  `tests/release-boot/fixture.exs`), since the shell opens a tincture's
+  frame only under its owner's grant.
 - **Opened from the shell.** `proof.mjs` signs in, opens the game from the
   Prism shell in Chromium, Firefox and WebKit, and checks the frame's
   `sandbox` (`allow-scripts allow-pointer-lock`), `allow`

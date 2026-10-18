@@ -27,6 +27,20 @@
 #       profile is there after and the route's own read
 #       (`Sanctum.TinctureAccess.get_public/3`) finds the tincture.
 #
+#   grant SESSION_TOKEN NAME [VERSION]
+#       The person's grant of their local tincture NAME as the consent walk
+#       makes it (plan, preview, commit) under their session on the
+#       interactive path, granting the whole ask, its flows among it: the
+#       owner profile and head a frame of the tincture's VERSION (default
+#       1.0.0) opens under, since a tincture's declaration is never its
+#       grant. As the shell asks for a grant only for a version that does
+#       not open, a VERSION that opens under the person's grant already is
+#       left as it is. A plan the components projection cannot answer yet
+#       is asked again, for up to ten seconds. The fixture fails unless the
+#       frame open's own read (`Compendium.tincture_grant_revision/2`)
+#       finds the grant for VERSION after. Answers the head's revision and
+#       whether this walk committed it.
+#
 #   thread USER_ID TEXT
 #       A thread in the person's athanor holding one message, TEXT.
 #
@@ -218,6 +232,62 @@ fn args ->
         path: Prima.TinctureUrl.path(segment.(ctx.athanor_id), "local", name),
         component: is_map(component) and Map.get(component, :id)
       })
+
+    ["grant", token, name | version] when length(version) <= 1 ->
+      {:ok, console} = Sanctum.Caller.establish({:session, token})
+      ctx = %{console | origin: :interactive}
+      ref = "tincture:local." <> name
+      pinned = ref <> ":" <> List.first(version, "1.0.0")
+
+      # The components projection may still be behind the unit the proof
+      # just wrote, which the plan and the open's read answer as unavailable
+      # rather than waiting: each is asked again, for up to ten seconds.
+      settled = fn ask ->
+        Enum.reduce_while(1..100, nil, fn _try, _ ->
+          case ask.() do
+            {:error, :unavailable} ->
+              Process.sleep(100)
+              {:cont, nil}
+
+            {:error, {:unavailable, _what}} ->
+              Process.sleep(100)
+              {:cont, nil}
+
+            answered ->
+              {:halt, answered}
+          end
+        end) || raise("#{ref} was unavailable for ten seconds")
+      end
+
+      opens = fn -> settled.(fn -> Compendium.tincture_grant_revision(ctx, pinned) end) end
+
+      committed =
+        case opens.() do
+          {:ok, _revision} ->
+            false
+
+          {:error, :ungranted} ->
+            decisions = %{ref: ref, origins: [:interactive]}
+            {:ok, plan} = settled.(fn -> Sanctum.Consent.Plan.plan(ctx, %{ref: ref}) end)
+
+            {:ok, preview} = Sanctum.Consent.Commit.preview(ctx, decisions)
+
+            {:ok, _committed} =
+              Sanctum.Consent.Commit.commit(ctx, %{
+                decisions: decisions,
+                plan_token: plan.plan_token,
+                proof: preview.proof,
+                commit_digest: preview.commit_digest,
+                expected_consent_revision: plan.expected_consent_revision
+              })
+
+            true
+        end
+
+      case opens.() do
+        {:ok, revision} -> answer.(%{revision: revision, committed: committed})
+        other -> raise "#{pinned} opens under no grant after the walk: #{inspect(other)}"
+      end
 
     ["console", token, tool, arguments] ->
       # What the console does when the person runs a tool: the session

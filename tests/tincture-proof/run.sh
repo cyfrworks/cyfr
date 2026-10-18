@@ -5,9 +5,9 @@
 # The tincture proof (README.md): proof-game (game/), built from its
 # lockfile in the Locus builds image (build.py), published private through
 # the publish check into a signed-in person's athanor of a `cyfr` release
-# started as the browser harness starts one (tests/browser/harness.sh), and
-# opened from the Prism shell in every browser of the harness's matrix
-# (proof.mjs).
+# started as the browser harness starts one (tests/browser/harness.sh),
+# granted by that person, and opened from the Prism shell in every browser
+# of the harness's matrix (proof.mjs).
 #
 # Usage: tests/tincture-proof/run.sh LOCUS_IMAGE [OPENS]
 # LOCUS_IMAGE is an image built from Dockerfile.locus; OPENS (default 50)
@@ -56,14 +56,17 @@ browser_cell "$CELL"
 step "starting the release on a fresh SQLite cell, as cyfr.test"
 server_start "$CELL"
 
-step "publishing proof-game, private, through the publish check"
+step "publishing proof-game, private, through the publish check, and granting it"
 person="$(server_fixture "$CELL" person operator@example.com tincture-proof)"
 [ -n "$person" ] || fail "the fixture signed nobody in"
 segment="$(field "$person" segment)"
-cookie="$(browser_cookie "$CELL" "$(field "$person" token)")"
-browser_picker_layout "$CELL" "$(field "$person" token)"
+token="$(field "$person" token)"
+cookie="$(browser_cookie "$CELL" "$token")"
+browser_picker_layout "$CELL" "$token"
 published="$(server_fixture "$CELL" tincture "$(field "$person" user_id)" "$WORK/proof-game" proof-game private)"
 [ -n "$published" ] || fail "proof-game was not published"
+# The shell opens a tincture's frame only under the person's grant.
+server_fixture "$CELL" grant "$token" proof-game >/dev/null
 status="$(curl -s -m 10 -o /dev/null -w '%{http_code}' "http://127.0.0.1:$PORT/t/$segment/local/proof-game")"
 [ "$status" = 404 ] || fail "the private tincture's public address answered $status"
 

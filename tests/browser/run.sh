@@ -6,9 +6,10 @@
 # starts one (tests/release-boot/release.sh), on SQLite, under the name
 # cyfr.test (tests/browser/harness.sh), with the two tinctures of
 # tests/browser/tinctures/ published publicly in a signed-in person's
-# athanor, and the frame-facts experiment (frame-facts.mjs) run against it
-# in every browser the official Playwright image ships: the person opens
-# frame-probe from the Prism shell, which creates its frame.
+# athanor and frame-probe granted by that person, and the frame-facts
+# experiment (frame-facts.mjs) run against it in every browser the official
+# Playwright image ships: the person opens frame-probe from the Prism shell,
+# which creates its frame.
 #
 # Usage: tests/browser/run.sh
 # Writes frame-facts.json and frame-facts.md into BROWSER_OUT (default: the
@@ -49,16 +50,19 @@ browser_cell "$CELL"
 step "starting the release on a fresh SQLite cell, as cyfr.test"
 server_start "$CELL"
 
-step "publishing frame-probe and frame-neighbour, public, in a signed-in person's athanor"
+step "publishing frame-probe and frame-neighbour, public, in a signed-in person's athanor, and granting frame-probe"
 person="$(server_fixture "$CELL" person operator@example.com browser-harness)"
 [ -n "$person" ] || fail "the fixture signed nobody in"
 user_id="$(field "$person" user_id)"
 segment="$(field "$person" segment)"
-cookie="$(browser_cookie "$CELL" "$(field "$person" token)")"
-browser_picker_layout "$CELL" "$(field "$person" token)"
+token="$(field "$person" token)"
+cookie="$(browser_cookie "$CELL" "$token")"
+browser_picker_layout "$CELL" "$token"
 server_fixture "$CELL" tincture "$user_id" "$HERE/tinctures/frame-neighbour" frame-neighbour public >/dev/null
 probe="$(server_fixture "$CELL" tincture "$user_id" "$HERE/tinctures/frame-probe" frame-probe public)"
 probe_path="$(field "$probe" path)"
+# The shell opens a tincture's frame only under the person's grant.
+server_fixture "$CELL" grant "$token" frame-probe >/dev/null
 status="$(curl -s -m 10 -o /dev/null -w '%{http_code}' "http://127.0.0.1:$PORT$probe_path")"
 [ "$status" = 200 ] || fail "the public page $probe_path answered $status"
 echo "serving $probe_path"

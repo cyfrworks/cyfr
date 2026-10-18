@@ -77,6 +77,11 @@ sed -i 's/"name": "containment-probe"/"name": "containment-probe-public"/' \
 server_fixture "$CELL" tincture "$user_id" "$HERE/tinctures/containment-probe" containment-probe private >/dev/null
 server_fixture "$CELL" tincture "$user_id" "$HERE/tinctures/containment-neighbour" containment-neighbour private >/dev/null
 server_fixture "$CELL" tincture "$user_id" "$WORK/containment-probe-public" containment-probe-public public >/dev/null
+# The shell opens a tincture's frame only under the person's grant: each
+# probe the proof opens is granted its whole ask, as the consent walk
+# grants it. The neighbour is never opened, only reached from a probe.
+server_fixture "$CELL" grant "$token" containment-probe >/dev/null
+server_fixture "$CELL" grant "$token" containment-probe-public >/dev/null
 neighbour="$(server_fixture "$CELL" tincture "$user_id" "$ROOT/tests/browser/tinctures/frame-neighbour" frame-neighbour public)"
 neighbour_path="$(field "$neighbour" path)"
 
@@ -88,13 +93,14 @@ status="$(curl -s -m 10 -o /dev/null -w '%{http_code}' "http://127.0.0.1:$PORT$n
 step "a frame that connects to one origin and lists files, with and without a flow to it"
 server_fixture "$CELL" tincture "$user_id" "$HERE/tinctures/flow-probe" flow-probe private >/dev/null
 server_fixture "$CELL" tincture "$user_id" "$HERE/tinctures/flow-probe-flowed" flow-probe-flowed private >/dev/null
-granted="$(cell_cyfr "$CELL" rpc \
-  "{answer, _} = Code.eval_file(\"$HERE/granted.exs\"); IO.puts(answer.([\"$token\", \"flow-probe-flowed\"]))" |
-  sed -n 's/^GRANTED=//p' | tail -1)"
-[ -n "$granted" ] || fail "the flowed control's grant was not committed"
+# Each granted its whole ask: the flowed control's holds its declared
+# flows, and the probe's, declaring none, holds none.
+server_fixture "$CELL" grant "$token" flow-probe >/dev/null
+server_fixture "$CELL" grant "$token" flow-probe-flowed >/dev/null
 
 step "the malicious fullscreen frame, and a tincture waiting for its grant"
 server_fixture "$CELL" tincture "$user_id" "$HERE/tinctures/fullscreen-probe" fullscreen-probe private >/dev/null
+server_fixture "$CELL" grant "$token" fullscreen-probe >/dev/null
 server_fixture "$CELL" tincture "$user_id" "$HERE/tinctures/ungranted-probe" ungranted-probe private >/dev/null
 ungranted="$(cell_cyfr "$CELL" rpc \
   "{answer, _} = Code.eval_file(\"$HERE/ungranted.exs\"); IO.puts(answer.([\"$user_id\", \"ungranted-probe\"]))" |
