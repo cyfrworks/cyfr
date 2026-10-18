@@ -88,6 +88,7 @@
 #   test.yml static: The containerd image store switch's cases
 #   test.yml static: The tag pipeline's image publication
 #   test.yml test: Read the Rust fixtures' toolchain pin
+#   test.yml test: Install cargo-component
 #   test.yml s3-minio
 #   test.yml locus-image
 #   test.yml builder-image
