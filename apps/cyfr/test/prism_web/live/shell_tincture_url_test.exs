@@ -94,6 +94,9 @@ defmodule PrismWeb.ShellTinctureUrlTest do
       })
 
     acknowledged!(ctx)
+    # A version opens only under a grant naming what it reads: the person's
+    # grant of this version, as a commit made now records it.
+    ConsentFixtures.grant_tincture!(ctx, @source)
     release_digest
   end
 
@@ -112,7 +115,7 @@ defmodule PrismWeb.ShellTinctureUrlTest do
   end
 
   defp public_profile!(ctx) do
-    policy = "{}"
+    policy = ConsentFixtures.empty_policy(@source)
 
     :ok =
       ConsentFixtures.seed_head!(
@@ -130,11 +133,11 @@ defmodule PrismWeb.ShellTinctureUrlTest do
           scope: :pinned,
           pinned_version: "1.0.0",
           invoke_mode: :open_inert,
-          shape_digest: "sha256:shape",
+          shape_digest: :live,
           commit_digest: "sha256:commit",
           blob_digest: Prima.JCS.hash_binary(policy),
           resolved_policy: policy,
-          activation: %{}
+          activation: %{@source => "sha256:act"}
         }
       )
   end
