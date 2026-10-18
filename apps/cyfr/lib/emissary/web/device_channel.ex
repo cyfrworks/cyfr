@@ -65,8 +65,9 @@ defmodule Emissary.Web.DeviceChannel do
       unannounced;
     * when the client's standing ends: each fact is delivered under a
       standing read within the freshness bound, a standing announcement
-      about the person reads it again at once, and so does every intent
-      and ping. A refusal revokes each grant, then, when the client's
+      about the person, heard from before the first stream's open reads
+      the standing, reads it again at once, and so does every intent and
+      ping. A refusal revokes each grant, then, when the client's
       standing ended, the client's own pairing (`revoke` naming no grant),
       then closes `4403`; an expired certificate revokes each grant and
       closes `4408`.
@@ -574,8 +575,14 @@ defmodule Emissary.Web.DeviceChannel do
 
   # An intent is dispatched only under a certificate and a standing read
   # now; a client whose certificate or standing no longer holds is
-  # answered, then closed.
+  # answered, then closed. A stream's open hears the person's standing
+  # announcements before that read: one that lands after the read, while
+  # the gate admits the stream or before its grant is delivered, waits in
+  # the mailbox and closes the channel once the grant is out, rather than
+  # passing unheard until the next ping.
   defp admit(%{id: id, operation: operation} = intent, state) do
+    state = if operation == @open_stream, do: hear_standing(state), else: state
+
     case Sanctum.DeviceCerts.verify_request(state.cert, state.client, []) do
       {:ok, client} ->
         dispatch(intent, %{state | client: carried(client, state)})
@@ -705,8 +712,9 @@ defmodule Emissary.Web.DeviceChannel do
   defp grant_room(_state), do: {:error, :stream_limit}
 
   # An admitted open: its forwarder subscribed to the one topic the grant
-  # admits before the grant is answered, its deadline armed, and the
-  # person's standing announcements heard.
+  # admits before the grant is answered, and its deadline armed; the
+  # person's standing announcements are heard from before the open's
+  # standing read (`admit/2`).
   defp granted(id, name, grant, state) do
     actor = Context.actor(state.client)
     topic = Cyfr.Bus.granted_topic(actor, grant)
@@ -749,7 +757,6 @@ defmodule Emissary.Web.DeviceChannel do
         forwarder: forwarder,
         timer: timer
       })
-      |> hear_standing()
 
     body =
       %{

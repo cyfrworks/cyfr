@@ -1180,6 +1180,167 @@ defmodule Emissary.Web.DeviceChannelTest do
                Enum.map(frames, fn {:text, json} -> decoded(json) end)
     end
 
+    test "over a real WebSocket, an idle stream closes within two seconds of its pairing's revocation",
+         %{session_ctx: session_ctx} do
+      device = pair!(session_ctx)
+
+      {:ok, server} =
+        start_supervised(
+          {Bandit,
+           plug: CyfrWeb.Endpoint, scheme: :http, ip: {127, 0, 0, 1}, port: 0, startup_log: false}
+        )
+
+      {:ok, {_ip, port}} = ThousandIsland.listener_info(server)
+      socket = ws_open(port)
+      on_exit(fn -> :gen_tcp.close(socket) end)
+
+      :ok = ws_send(socket, Jason.encode!(connect_message(device)))
+      {1, challenge_json} = ws_recv(socket, two_second_deadline())
+      assert {:challenge, %{challenge: challenge}} = decoded(challenge_json)
+      :ok = ws_send(socket, Jason.encode!(proof_message(challenge, device)))
+      {1, standing_json} = ws_recv(socket, two_second_deadline())
+      assert {:standing, _standing} = decoded(standing_json)
+
+      :ok =
+        ws_send(
+          socket,
+          Jason.encode!(
+            intent_message("s1", "streams.open", %{"stream" => "confirmation.changes"})
+          )
+        )
+
+      {1, answer_json} = ws_recv(socket, two_second_deadline())
+      assert {:answer, %{id: "s1", result: %{"grant_id" => grant_id}}} = decoded(answer_json)
+      {1, grant_json} = ws_recv(socket, two_second_deadline())
+      assert {:grant, %{grant_id: ^grant_id}} = decoded(grant_json)
+
+      # The test invokes no callback: the transport hears the
+      # announcement, reads the pairing again and sends every frame itself.
+      deadline = two_second_deadline()
+
+      assert {:ok, _row} =
+               Sanctum.TestContext.confirming(
+                 session_ctx,
+                 &Sanctum.Pairing.revoke(&1, device.client_id)
+               )
+
+      frames = frames_until_close(socket, deadline, [])
+      assert List.last(frames) == {8, <<4403::16, "forbidden">>}
+
+      revokes =
+        for {1, json} <- frames,
+            {:revoke, body} <- [decoded(json)],
+            do: body
+
+      assert revokes == [
+               %{client_id: device.client_id, grant_id: grant_id},
+               %{client_id: device.client_id}
+             ]
+    end
+
+    test "a revocation landing between a first stream's admission and its grant is still heard, and closes the channel",
+         %{session_ctx: session_ctx} do
+      device = pair!(session_ctx)
+      state = proven(device)
+      handler = {__MODULE__, :revoke_after_admission, make_ref()}
+      key = {__MODULE__, :revoke_after_admission}
+      Process.put(key, {session_ctx, device.client_id})
+      on_exit(fn -> :telemetry.detach(handler) end)
+
+      :ok =
+        :telemetry.attach(
+          handler,
+          [:cyfr, :sanctum, :decision, :admitted],
+          &__MODULE__.revoke_after_admission/4,
+          nil
+        )
+
+      deadline = two_second_deadline()
+      {grant_id, _grant, state} = open_stream!(state, "s1")
+      assert_received {:revoked_after_admission, {:ok, %{standing: "revoked"}}}
+
+      assert {:error, :revoked} =
+               Sanctum.DeviceCerts.verify_request(state.cert, state.client, [])
+
+      refute state.closed
+      assert Map.has_key?(state.grants, grant_id)
+      user_id = session_ctx.user_id
+
+      # The admission event runs in the channel's process after its
+      # standing read and the gate's admission, before the grant is
+      # delivered. The revocation's commit and announcement have both
+      # completed by then, and no stream fact or intent follows to hide a
+      # missing announcement: the channel hears it only because it
+      # subscribed to the person's standing before reading it.
+      left = max(deadline - System.monotonic_time(:millisecond), 0)
+      assert left > 0, "streams.open/revocation exceeded the two-second bound"
+      assert_receive %Cyfr.Bus.Session{kind: :revoked, user_id: ^user_id} = announcement, left
+
+      assert {:stop, :normal, {4403, "forbidden"}, _frames, _closed} =
+               DeviceChannel.handle_info(announcement, state)
+    end
+
+    test "over a real WebSocket, a revocation made during a first stream's admission closes the channel within two seconds",
+         %{session_ctx: session_ctx} do
+      device = pair!(session_ctx)
+
+      {:ok, server} =
+        start_supervised(
+          {Bandit,
+           plug: CyfrWeb.Endpoint, scheme: :http, ip: {127, 0, 0, 1}, port: 0, startup_log: false}
+        )
+
+      {:ok, {_ip, port}} = ThousandIsland.listener_info(server)
+      socket = ws_open(port)
+      on_exit(fn -> :gen_tcp.close(socket) end)
+
+      :ok = ws_send(socket, Jason.encode!(connect_message(device)))
+      {1, challenge_json} = ws_recv(socket, two_second_deadline())
+      assert {:challenge, %{challenge: challenge}} = decoded(challenge_json)
+      :ok = ws_send(socket, Jason.encode!(proof_message(challenge, device)))
+      {1, standing_json} = ws_recv(socket, two_second_deadline())
+      assert {:standing, _standing} = decoded(standing_json)
+
+      handler = {__MODULE__, :revoke_after_socket_admission, make_ref()}
+      on_exit(fn -> :telemetry.detach(handler) end)
+
+      :ok =
+        :telemetry.attach(
+          handler,
+          [:cyfr, :sanctum, :decision, :admitted],
+          &__MODULE__.revoke_after_socket_admission/4,
+          {session_ctx, device.client_id, self(), handler}
+        )
+
+      :ok =
+        ws_send(
+          socket,
+          Jason.encode!(
+            intent_message("s1", "streams.open", %{"stream" => "confirmation.changes"})
+          )
+        )
+
+      assert_receive {:revoked_after_socket_admission, {:ok, %{standing: "revoked"}},
+                      committed_at},
+                     2_000
+
+      deadline = committed_at + 2_000
+      {1, answer_json} = ws_recv(socket, deadline)
+      assert {:answer, %{id: "s1", result: %{"grant_id" => grant_id}}} = decoded(answer_json)
+      {1, grant_json} = ws_recv(socket, deadline)
+      assert {:grant, %{grant_id: ^grant_id}} = decoded(grant_json)
+
+      assert {:ok, clients} =
+               Arca.PairedClients.list(Context.actor(session_ctx),
+                 user_id: session_ctx.user_id,
+                 standing: :all
+               )
+
+      assert Enum.any?(clients, &(&1.id == device.client_id and &1.standing == "revoked"))
+      frames = frames_until_close(socket, deadline, [])
+      assert List.last(frames) == {8, <<4403::16, "forbidden">>}
+    end
+
     test "revoking the pairing is announced on the bus, so an idle stream ends within the standing bound, not at the next ping",
          %{session_ctx: session_ctx, user: user} do
       device = pair!(session_ctx)
@@ -2195,10 +2356,17 @@ defmodule Emissary.Web.DeviceChannelTest do
     end
   end
 
-  # One masked text frame, as a client sends it.
-  defp ws_send(socket, payload) when byte_size(payload) < 126 do
+  # One masked text frame, as a client sends it; a 16-bit length covers the
+  # signed connect and proof frames.
+  defp ws_send(socket, payload) do
     mask = :crypto.strong_rand_bytes(4)
-    header = <<1::1, 0::3, 1::4, 1::1, byte_size(payload)::7>>
+    length = byte_size(payload)
+
+    header =
+      if length < 126,
+        do: <<1::1, 0::3, 1::4, 1::1, length::7>>,
+        else: <<1::1, 0::3, 1::4, 1::1, 126::7, length::16>>
+
     :gen_tcp.send(socket, [header, mask, masked(payload, mask)])
   end
 
@@ -2212,21 +2380,85 @@ defmodule Emissary.Web.DeviceChannelTest do
     |> :binary.list_to_bin()
   end
 
-  # One unmasked frame, as the server sends it: its opcode and payload.
-  defp ws_recv(socket) do
-    {:ok, <<_fin::1, _rsv::3, opcode::4, 0::1, length::7>>} = :gen_tcp.recv(socket, 2, 5_000)
+  # One unmasked frame, as the server sends it: its opcode and payload,
+  # all of it read before `deadline` (monotonic milliseconds).
+  defp ws_recv(socket, deadline \\ System.monotonic_time(:millisecond) + 5_000) do
+    <<_fin::1, _rsv::3, opcode::4, 0::1, short::7>> = bounded_recv(socket, 2, deadline)
 
     length =
-      case length do
+      case short do
         126 ->
-          {:ok, <<extended::16>>} = :gen_tcp.recv(socket, 2, 5_000)
+          <<extended::16>> = bounded_recv(socket, 2, deadline)
           extended
 
         short ->
           short
       end
 
-    {:ok, payload} = if length > 0, do: :gen_tcp.recv(socket, length, 5_000), else: {:ok, ""}
+    payload = if length > 0, do: bounded_recv(socket, length, deadline), else: ""
     {opcode, payload}
   end
+
+  defp bounded_recv(socket, length, deadline) do
+    left = max(deadline - System.monotonic_time(:millisecond), 0)
+    assert {:ok, bytes} = :gen_tcp.recv(socket, length, left)
+    bytes
+  end
+
+  # The standing bound a revocation's close is held to (§6.6).
+  defp two_second_deadline, do: System.monotonic_time(:millisecond) + 2_000
+
+  # Every frame up to and including the close, all before `deadline`.
+  defp frames_until_close(socket, deadline, frames) do
+    frame = ws_recv(socket, deadline)
+    frames = [frame | frames]
+
+    case frame do
+      {8, _close} -> Enum.reverse(frames)
+      _other -> frames_until_close(socket, deadline, frames)
+    end
+  end
+
+  # A telemetry handler: on the first stream's admission, the stream's
+  # pairing is revoked in the channel's own process, after admission read
+  # the pairing and before the grant is delivered.
+  @doc false
+  def revoke_after_admission(
+        _event,
+        _measurements,
+        %{tool: "stream:confirmation.changes"},
+        _config
+      ) do
+    key = {__MODULE__, :revoke_after_admission}
+
+    case Process.delete(key) do
+      {ctx, client_id} ->
+        answer = Sanctum.TestContext.confirming(ctx, &Sanctum.Pairing.revoke(&1, client_id))
+        send(self(), {:revoked_after_admission, answer})
+
+      nil ->
+        :ok
+    end
+  end
+
+  def revoke_after_admission(_event, _measurements, _metadata, _config),
+    do: :ok
+
+  # The same over a real socket: the revocation runs in the transport's
+  # process, once, and tells the test when it committed.
+  @doc false
+  def revoke_after_socket_admission(
+        _event,
+        _measurements,
+        %{tool: "stream:confirmation.changes"},
+        {ctx, client_id, owner, marker}
+      ) do
+    unless Process.get(marker) do
+      Process.put(marker, true)
+      answer = Sanctum.TestContext.confirming(ctx, &Sanctum.Pairing.revoke(&1, client_id))
+      send(owner, {:revoked_after_socket_admission, answer, System.monotonic_time(:millisecond)})
+    end
+  end
+
+  def revoke_after_socket_admission(_event, _measurements, _metadata, _config), do: :ok
 end
