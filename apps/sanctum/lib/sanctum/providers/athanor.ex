@@ -375,11 +375,8 @@ defmodule Sanctum.Providers.Athanor do
   def handle(%Context{} = ctx, %{"action" => "destroy"} = args) do
     with {:ok, athanor} <- platform_target(ctx, args) do
       case Athanors.destroy(athanor) do
-        {:ok, counts} ->
-          {:ok,
-           reclaimed(athanor)
-           |> Map.put("destroyed", true)
-           |> Map.put("rows_deleted", Enum.sum(Map.values(counts)))}
+        {:ok, _counts} ->
+          {:ok, Map.put(reclaimed(athanor), "destroyed", true)}
 
         {:error, :not_archived} ->
           {:error,

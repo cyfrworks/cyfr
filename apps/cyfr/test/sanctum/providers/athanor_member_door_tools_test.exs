@@ -956,12 +956,8 @@ defmodule Sanctum.Providers.AthanorMemberDoorToolsTest do
     assert {:ok, destroyed} =
              call(operator, "athanor", %{"action" => "destroy", "athanor" => group.id})
 
-    assert %{:id => id, :status => "archived", "destroyed" => true, "rows_deleted" => rows} =
-             destroyed
-
-    assert map_size(destroyed) == 4
-    assert id == group.id
-    assert rows > 0
+    # The id and status alone: no count of the rows the reclaim removed.
+    assert destroyed == %{:id => group.id, :status => "archived", "destroyed" => true}
 
     # Only the archived tombstone survives, and nobody sits in it.
     assert {:ok, %{status: "archived"}} = Athanors.get(group.id)
