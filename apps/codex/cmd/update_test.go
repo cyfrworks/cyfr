@@ -315,11 +315,16 @@ for ((i = 0; i < ${#args[@]}; i++)); do
     esac
   fi
 done
-read -r _ _ _ _ pgrp _ < /proc/$$/stat
+# ps, not /proc/$$/stat: macOS has no /proc. An empty answer reads as
+# a shared group, so a failed lookup never passes the check.
+pgrp="$(ps -o pgid= -p $$ 2>/dev/null)"
+pgrp="${pgrp//[[:space:]]/}"
 [ "$pgrp" = "$$" ] || note+=" {shared process group}"
 printf '%s%s\n' "$*" "$note" >> "$d/log"
+# md5sum where it exists, BSD md5 otherwise: the bare hex digest either way.
+digest() { if command -v md5sum >/dev/null; then md5sum | cut -c1-32; else md5 -q; fi; }
 answer() {
-  printf '%s %s %s\n' "$1" "$(md5sum < docker-compose.yml | cut -c1-32)" "$(ls backups/*/snapshot.json 2>/dev/null | wc -l)" >> "$d/state"
+  printf '%s %s %s\n' "$1" "$(digest < docker-compose.yml)" "$(ls backups/*/snapshot.json 2>/dev/null | wc -l)" >> "$d/state"
   [ -f "$d/$1.edit" ] && cat "$d/$1.edit" >> docker-compose.yml
   [ -f "$d/$1.signal" ] && kill -TERM "$PPID"
   if [ -f "$d/$1.block" ]; then while [ ! -f "$d/$1.release" ]; do sleep 0.02; done; fi

@@ -39,11 +39,16 @@ for ((i = 0; i < ${#args[@]}; i++)); do
     esac
   fi
 done
-read -r _ _ _ _ pgrp _ < /proc/$$/stat
+# ps, not /proc/$$/stat: macOS has no /proc. An empty answer reads as
+# a shared group, so a failed lookup never passes the check.
+pgrp="$(ps -o pgid= -p $$ 2>/dev/null)"
+pgrp="${pgrp//[[:space:]]/}"
 [ "$pgrp" = "$$" ] || note+=" {shared process group}"
 printf '%s%s\n' "$*" "$note" >> "$d/log"
+# md5sum where it exists, BSD md5 otherwise: the bare hex digest either way.
+digest() { if command -v md5sum >/dev/null; then md5sum | cut -c1-32; else md5 -q; fi; }
 answer() {
-  printf '%s %s\n' "$1" "$(md5sum < "$file" | cut -c1-32)" >> "$d/state"
+  printf '%s %s\n' "$1" "$(digest < "$file")" >> "$d/state"
   if [ -f "$d/$1.kill" ]; then kill -KILL "$PPID"; exit 0; fi
   [ -f "$d/$1.signal" ] && kill -TERM "$PPID"
   [ -f "$d/$1.out" ] && cat "$d/$1.out"
@@ -65,7 +70,7 @@ if [ "$1" = compose ]; then
       # the restore's bar reaches the answer as .env sets it.
       v="$(sed -n "s/^CYFR_RESTORE_INCOMPLETE='\(.*\)'\$/\1/p" .env 2>/dev/null | tail -n 1)"
       if [ -n "$v" ] && [ ! -f "$d/config.nobar" ]; then
-        printf 'config %s\n' "$(md5sum < "$file" | cut -c1-32)" >> "$d/state"
+        printf 'config %s\n' "$(digest < "$file")" >> "$d/state"
         if [ -f "$d/config.kill" ]; then kill -KILL "$PPID"; exit 0; fi
         sed "s|\"environment\":{|\"environment\":{\"CYFR_RESTORE_INCOMPLETE\":\"$v\",|" "$d/config.out"
         exit "$(cat "$d/config.exit" 2>/dev/null || echo 0)"
