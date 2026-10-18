@@ -96,6 +96,21 @@ defmodule Cyfr.AsyncEnvGuardTest do
                scan([{"plant/async_write_test.exs", source}]).violations
     end
 
+    test "a write in a function whose name is unquoted is found in its async module" do
+      source = """
+      defmodule Plant.UnquotedTest do
+        use ExUnit.Case, async: true
+
+        for name <- [:a, :b] do
+          def unquote(name)(value), do: Application.put_env(:plant, unquote(name), value)
+        end
+      end
+      """
+
+      assert [%{file: "plant/unquoted_test.exs", line: 5, module: "Plant.UnquotedTest"}] =
+               scan([{"plant/unquoted_test.exs", source}]).violations
+    end
+
     test "an async module that calls a helper which writes is found, at the call" do
       helper = """
       defmodule Plant.Helper do
@@ -818,6 +833,10 @@ defmodule Cyfr.AsyncEnvGuardTest do
   end
 
   defp head_name({:when, _, [head | _]}), do: head_name(head)
+  # `def unquote(name)(…)` in a `for` names its function at compile time: the
+  # scan cannot read which, so its body is one function of its own that no
+  # call resolves to, and a write in it still sits in its module.
+  defp head_name({{:unquote, _, _}, _, _args}), do: :__unquoted__
   defp head_name({name, _, args}) when is_atom(name) and is_list(args), do: name
   defp head_name({name, _, _context}) when is_atom(name), do: name
 
