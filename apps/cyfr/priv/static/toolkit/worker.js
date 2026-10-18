@@ -493,6 +493,10 @@
     const attempt = () => ({ controller: new AbortController(), credential });
     function ended(sub, error) {
       if (subs.get(sub.req.sub) === sub) subs.delete(sub.req.sub);
+      if (sub.pending) {
+        sub.pending.controller.abort();
+        sub.pending = null;
+      }
       if (!sub.closing) sub.send(answer.closed(sub.req.sub, error));
     }
     async function open(sub) {

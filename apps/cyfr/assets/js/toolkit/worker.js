@@ -288,8 +288,10 @@ export function startStreamsWorker(scope, {fetchFn}) {
   // endpoint answers it, and only then is the old one let go, so a stream
   // outlives the deadline of the bearer it was first opened under. The
   // module worker hears nothing of it but the events the new connection
-  // carries, its refresh among them. A takeover the endpoint refuses leaves
-  // the old connection as it was, ending at its own deadline.
+  // carries, its refresh among them. The endpoint counts the new connection
+  // against the old one's slot until the old one ends, so a move fits the
+  // frame's stream cap. A takeover the endpoint refuses leaves the old
+  // connection as it was, ending at its own deadline.
   function renewed(message) {
     if (message === null || message.t !== "credential") return
     credential = message.credential
@@ -336,8 +338,14 @@ export function startStreamsWorker(scope, {fetchFn}) {
   // One connection of a stream, under the credential held when it is made.
   const attempt = () => ({controller: new AbortController(), credential})
 
+  // A stream that ends takes a replacement still being opened with it: a
+  // subscription its reader has heard end holds no connection at all.
   function ended(sub, error) {
     if (subs.get(sub.req.sub) === sub) subs.delete(sub.req.sub)
+    if (sub.pending) {
+      sub.pending.controller.abort()
+      sub.pending = null
+    }
     if (!sub.closing) sub.send(answer.closed(sub.req.sub, error))
   }
 

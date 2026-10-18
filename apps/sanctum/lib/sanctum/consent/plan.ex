@@ -402,6 +402,13 @@ defmodule Sanctum.Consent.Plan do
     end
   end
 
+  defp asked_ref(source_ref, nil), do: source_ref
+
+  defp asked_ref(source_ref, version) do
+    {:ok, parsed} = Prima.ComponentRef.parse(source_ref)
+    Prima.ComponentRef.to_string(%{parsed | version: version})
+  end
+
   defp row(ctx, parsed, nil),
     do: Components.get_latest(ctx, parsed.name, parsed.namespace, parsed.type)
 
@@ -409,12 +416,13 @@ defmodule Sanctum.Consent.Plan do
     do: Components.get_component(ctx, parsed.name, version, parsed.namespace, parsed.type)
 
   # The source's row as a plan reads it: a component the athanor does not
-  # hold is not found (`Prima.Refusal`'s row), and the rest as
-  # `fetch_component/3` answers it.
+  # hold, or a version of it the athanor does not hold, is not found under
+  # the reference the person asked for (`Prima.Refusal`'s row), and the
+  # rest as `fetch_component/3` answers it.
   defp source_component(ctx, source_ref, version) do
     case fetch_component(ctx, source_ref, version) do
       {:error, {:component_not_found, :not_found}} ->
-        {:error, {:not_found, {:component, source_ref}}}
+        {:error, {:not_found, {:component, asked_ref(source_ref, version)}}}
 
       answer ->
         answer

@@ -14,6 +14,12 @@ defmodule Sanctum.Consent.TinctureGrant do
   A tincture whose owner profile waits for the person, or that holds no
   active owner profile or no head at all, is ungranted: its declaration
   is never its grant, so it opens nothing until the person consents.
+
+  A version opens in a frame, and a frame is admitted on the interactive
+  path whoever asks (the shell, a canvas's activation or restore, a data
+  route), so the head is held to the origins it admits for `:interactive`:
+  a grant that admits only another origin, a schedule's say, is ungranted
+  here as it is for an interactive run.
   """
 
   alias Prima.Authority.RootSelect
@@ -143,7 +149,10 @@ defmodule Sanctum.Consent.TinctureGrant do
   end
 
   defp standing(ctx, profile, consent, live, shape) do
-    case Loader.evaluate_head(ctx, profile, consent, live: live, live_shape_digest: shape) do
+    case Loader.evaluate_head(%{ctx | origin: :interactive}, profile, consent,
+           live: live,
+           live_shape_digest: shape
+         ) do
       :ok -> :ok
       {:error, {:consent_required, _ask}} -> {:error, :ungranted}
       {:error, {:profile_unavailable, _status}} -> {:error, :ungranted}

@@ -77,6 +77,18 @@ defmodule Arca.Cache.Keys do
   def live_shape(%Prima.Actor{}, _source_ref),
     do: Arca.QueryHelpers.no_athanor!("Arca.Cache.Keys.live_shape/2")
 
+  @doc """
+  The epoch of one athanor's live shape digests: a value the registry's
+  sweep replaces before it drops them, so a shape derived across a sweep
+  is not kept (`Sanctum.Consent.ShapeDerivation`).
+  """
+  def live_shape_epoch(%Prima.Actor{athanor_id: athanor_id})
+      when is_binary(athanor_id) and athanor_id != "",
+      do: {:live_shape_epoch, athanor_id}
+
+  def live_shape_epoch(%Prima.Actor{}),
+    do: Arca.QueryHelpers.no_athanor!("Arca.Cache.Keys.live_shape_epoch/1")
+
   @doc "Match spec shape for every live shape digest of one athanor."
   def match_live_shape(%Prima.Actor{athanor_id: athanor_id})
       when is_binary(athanor_id) and athanor_id != "",

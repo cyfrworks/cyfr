@@ -98,6 +98,7 @@ defmodule Sanctum.Consent.ShapeDerivation do
 
   @spec live_digest(Sanctum.Context.t(), String.t()) :: {:ok, String.t()} | {:error, term()}
   def live_digest(ctx, source_ref) do
+    epoch = epoch(ctx)
     key = live_shape_key(ctx, source_ref)
 
     case key && Arca.Cache.get(key) do
@@ -105,12 +106,62 @@ defmodule Sanctum.Consent.ShapeDerivation do
         {:ok, digest}
 
       _ ->
-        with {:ok, digest} <- digest(ctx, source_ref, :latest) do
-          if key, do: Arca.Cache.put(key, digest, @live_cache_ttl_ms)
-          {:ok, digest}
+        with {:ok, digest} <- digest(ctx, source_ref, :latest),
+             do: stored(ctx, key, digest, epoch)
+    end
+  end
+
+  # A derived shape is kept only while the athanor's live-shape epoch it
+  # read before reading anything it was derived from still stands after it
+  # is stored. The registry's sweep moves the epoch before it drops the
+  # stored shapes, so a derivation that read the registry before a change
+  # and stores after its sweep drops its own entry, and one whose store
+  # lands before the sweep is dropped by the sweep: no stored shape
+  # outlives what it was derived from.
+  defp stored(ctx, key, digest, epoch) do
+    if key do
+      Arca.Cache.put(key, digest, @live_cache_ttl_ms)
+      unless epoch != nil and current_epoch(ctx) == epoch, do: Arca.Cache.invalidate(key)
+    end
+
+    {:ok, digest}
+  end
+
+  # The epoch a derivation starts under: the stored one, or a fresh one
+  # stored for an athanor whose epoch is not held (never swept, or its
+  # entry expired), which the next sweep replaces as it would any.
+  defp epoch(ctx) do
+    case epoch_key(ctx) do
+      nil ->
+        nil
+
+      key ->
+        case Arca.Cache.get(key) do
+          {:ok, epoch} ->
+            epoch
+
+          :miss ->
+            epoch = System.unique_integer([:positive, :monotonic])
+            Arca.Cache.put(key, epoch, :timer.hours(1))
+            epoch
         end
     end
   end
+
+  defp current_epoch(ctx) do
+    with key when key != nil <- epoch_key(ctx),
+         {:ok, epoch} <- Arca.Cache.get(key) do
+      epoch
+    else
+      _ -> nil
+    end
+  end
+
+  defp epoch_key(%Sanctum.Context{athanor_id: athanor_id})
+       when is_binary(athanor_id) and athanor_id != "",
+       do: Arca.Cache.Keys.live_shape_epoch(Prima.Actor.in_athanor(athanor_id))
+
+  defp epoch_key(_ctx), do: nil
 
   defp live_shape_key(%Sanctum.Context{athanor_id: athanor_id}, source_ref)
        when is_binary(athanor_id) and athanor_id != "" and
@@ -129,12 +180,16 @@ defmodule Sanctum.Consent.ShapeDerivation do
   It is cached by the version's identity, its pinned reference and the
   release digest its row holds now, so a version rebuilt in place under
   the same number, whose release digest moves with its bytes or its
-  manifest, is never answered the shape it had before; the registry's
-  sweep of the athanor's live shapes drops these entries with the rest.
+  manifest, is never answered the shape it had before. A dependency's
+  change reaches it through the registry's sweep of the athanor's live
+  shapes, and a derivation that read the closure before that sweep keeps
+  nothing after it, as `live_digest/2`'s does.
   """
   @spec version_digest(Sanctum.Context.t(), String.t(), String.t()) ::
           {:ok, String.t()} | {:error, term()}
   def version_digest(ctx, source_ref, version) when is_binary(version) do
+    epoch = epoch(ctx)
+
     with {:ok, row, manifest} <- manifest_row(ctx, source_ref, version) do
       key = version_shape_key(ctx, source_ref, version, row)
 
@@ -144,10 +199,8 @@ defmodule Sanctum.Consent.ShapeDerivation do
 
         _ ->
           with {:ok, input} <- row_shape_input(ctx, source_ref, row, manifest),
-               {:ok, digest} <- ShapeDigest.compute(input) do
-            if key, do: Arca.Cache.put(key, digest, @live_cache_ttl_ms)
-            {:ok, digest}
-          end
+               {:ok, digest} <- ShapeDigest.compute(input),
+               do: stored(ctx, key, digest, epoch)
       end
     end
   end

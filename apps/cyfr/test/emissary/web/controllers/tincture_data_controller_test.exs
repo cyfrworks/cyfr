@@ -1843,4 +1843,83 @@ defmodule Emissary.Web.TinctureDataControllerTest do
       end)
     end
   end
+
+  describe "a renewed credential at the stream cap" do
+    test "a shown canvas moves a stream onto its renewed credential at a stream cap of one", %{
+      source: source
+    } do
+      Cyfr.Test.Settings.put("frame_stream_max_concurrent", 1)
+
+      digest = canvas!(source, "renewal-at-cap", [%{"name" => "mcp_servers.changes"}])
+      frame = frame!(source, "renewal-at-cap", digest)
+
+      old =
+        Task.async(fn ->
+          canvas_stream(frame.frame_id, "mcp_servers.changes", nil, bearer: frame.bearer)
+        end)
+
+      on_exit(fn ->
+        if Process.alive?(old.pid), do: Process.exit(old.pid, :kill)
+      end)
+
+      wait_until(
+        fn ->
+          Enum.any?(Registry.lookup(Cyfr.PubSub, topic(source)), &(elem(&1, 0) == old.pid))
+        end,
+        @stream_ms
+      )
+
+      {:ok, %{credential: renewed}} = TinctureAuth.renew_frame(source, frame.id)
+
+      # The toolkit keeps the old stream until the replacement's endpoint
+      # answers, so both requests overlap under this same frame id.
+      replacement =
+        Task.async(fn ->
+          canvas_stream(frame.frame_id, "mcp_servers.changes", nil, bearer: renewed)
+        end)
+
+      on_exit(fn ->
+        if Process.alive?(replacement.pid), do: Process.exit(replacement.pid, :kill)
+      end)
+
+      try do
+        wait_until(
+          fn ->
+            not Process.alive?(replacement.pid) or
+              Enum.any?(
+                Registry.lookup(Cyfr.PubSub, topic(source)),
+                &(elem(&1, 0) == replacement.pid)
+              )
+          end,
+          @stream_ms
+        )
+
+        # The pair is one stream of the cap, and only once: another open
+        # under the renewed bearer, of the same stream, replaces nothing.
+        if Process.alive?(replacement.pid) do
+          third = canvas_stream(frame.frame_id, "mcp_servers.changes", nil, bearer: renewed)
+          assert %{class: "rate_limited"} = refused(third, :stream_open)
+        end
+
+        # Complete both endpoint calls before asserting, so the failing
+        # reproduction leaves no stream or slot behind.
+        {:ok, _} = TinctureAuth.revoke_frame(source, frame.id)
+        old_conn = Task.await(old, @stream_ms)
+        replacement_conn = Task.await(replacement, @stream_ms)
+
+        assert old_conn.status == 200
+
+        assert replacement_conn.status == 200,
+               "renewal must keep a shown canvas working at its valid stream cap; " <>
+                 "the overlapping replacement answered #{replacement_conn.status}: " <>
+                 replacement_conn.resp_body
+      after
+        TinctureAuth.revoke_frame(source, frame.id)
+
+        for task <- [old, replacement], Process.alive?(task.pid) do
+          Task.shutdown(task, :brutal_kill)
+        end
+      end
+    end
+  end
 end

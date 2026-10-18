@@ -662,6 +662,44 @@ describe("the streams worker moves its open streams onto a renewed credential", 
     assert.deepEqual(lifecycle(answers, 0), ["opened"])
   })
 
+  test("a stream that ends while its move is still being opened takes the move with it", async () => {
+    // A streams worker whose fetch is the test's: the first stream stays
+    // open, a replacement never answers its headers until it is aborted.
+    let listener
+    const answers = []
+    const calls = []
+    let currentBody
+    const port = {onmessage: null, postMessage: (message) => answers.push(message), addEventListener() {}}
+    const scope = {postMessage() {}, addEventListener: (_type, callback) => (listener = callback)}
+    startStreamsWorker(scope, {
+      fetchFn: (_url, options) => {
+        calls.push(options)
+        if (calls.length === 1) {
+          const body = new ReadableStream({start: (controller) => (currentBody = controller)})
+          return Promise.resolve(new Response(body, {headers: {"content-type": "text/event-stream"}}))
+        }
+        return new Promise((_resolve, reject) => {
+          options.signal.addEventListener("abort", () => reject(new DOMException("Aborted", "AbortError")), {once: true})
+        })
+      }
+    })
+    const deliver = (data) => listener({isTrusted: true, data})
+    deliver({t: "boot", credential: CREDENTIAL, data_url: `https://cyfr.example/_f/v1/o/${FRAME}/`, streams: declared, port})
+
+    port.onmessage({data: {t: "open", sub: 0, name: "runs.changes", subject: null}})
+    await eventually(() => answers.some((answer) => answer.t === "opened"))
+    deliver({t: "credential", credential: RENEWED})
+    await eventually(() => calls.length === 2)
+    assert.equal(calls[0].signal.aborted, false)
+    assert.equal(calls[1].signal.aborted, false)
+
+    // The old connection ends before the move answers: the reader hears
+    // its stream end, and nothing of the move is left open.
+    currentBody.close()
+    await eventually(() => answers.some((answer) => answer.t === "closed"))
+    assert.equal(calls[1].signal.aborted, true)
+  })
+
   test("a move the endpoint refuses leaves the open stream on its old connection", async () => {
     const {scope, endpoint, connections, answers, ask} = await renewing({refuse: (bearer) => bearer === `Bearer ${RENEWED}`})
     ask({t: "open", sub: 0, name: "runs.changes", subject: null})

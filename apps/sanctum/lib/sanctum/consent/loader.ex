@@ -186,31 +186,40 @@ defmodule Sanctum.Consent.Loader do
 
     with :ok <- check_profile_status(profile),
          {:ok, consent} <- fetch_head(actor, profile),
-         :ok <- check_origin(ctx, profile, consent),
-         {:ok, blob} <- admitted_blob(ctx, profile, consent),
-         {:ok, running} <- evaluate_activation(ctx, profile, consent, opts),
+         {:ok, blob, running} <- head_stands(ctx, profile, consent, opts),
          {:ok, authority} <- build_root(profile, consent, blob, running, opts) do
       {:ok, authority, %{activation_digest: running.digest, activation_graph: running.graph}}
     end
   end
 
+  # What `load_root/3` and `evaluate_head/4` hold a head to once it is
+  # read, in the one order: the origin the head admits for the context,
+  # the head's own checks, then the decision table over the live release.
+  defp head_stands(ctx, profile, consent, opts) do
+    with :ok <- check_origin(ctx, profile, consent),
+         {:ok, blob} <- admitted_blob(ctx, profile, consent),
+         {:ok, running} <- evaluate_activation(ctx, profile, consent, opts) do
+      {:ok, blob, running}
+    end
+  end
+
   @doc """
   Whether `consent`, the head of `profile`, stands for the installed
-  release the options name, decided as `load_root/3` decides it: the
-  profile's status, the head's own checks (`admitted_blob/3`), then the
-  `Sanctum.Consent.Loader.Decision` table over the granted activation and
-  shape against `:live` and `:live_shape_digest` (the options
-  `load_root/3` takes), without building an authority. A release whose
-  shape differs from the consent's, or whose shape is unknown, is
-  `{:consent_required, …}` as a run's is; a pinned consent asks again for
-  any other release.
+  release the options name, decided by `load_root/3`'s own checks in its
+  order, without building an authority: the profile's status, the origin
+  the head admits for the context's (a head that does not admit it is
+  `{:consent_required, …}`), the head's own checks (`admitted_blob/3`),
+  then the `Sanctum.Consent.Loader.Decision` table over the granted
+  activation and shape against `:live` and `:live_shape_digest` (the
+  options `load_root/3` takes). A release whose shape differs from the
+  consent's, or whose shape is unknown, is `{:consent_required, …}` as a
+  run's is; a pinned consent asks again for any other release.
   """
   @spec evaluate_head(Context.t(), map(), map(), keyword()) :: :ok | {:error, load_error()}
   def evaluate_head(%Context{} = ctx, profile, consent, opts)
       when is_map(profile) and is_map(consent) do
     with :ok <- check_profile_status(profile),
-         {:ok, _blob} <- admitted_blob(ctx, profile, consent),
-         {:ok, _running} <- evaluate_activation(ctx, profile, consent, opts) do
+         {:ok, _blob, _running} <- head_stands(ctx, profile, consent, opts) do
       :ok
     end
   end

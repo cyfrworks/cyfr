@@ -106,6 +106,10 @@ defmodule Emissary.Web.TinctureDataController do
   every request to any of these routes (`frame_invocation_max` per
   `frame_invocation_window_ms`), and a count of concurrently open streams
   (`frame_stream_max_concurrent`), released when a stream closes. A
+  stream opened again under the frame's renewed bearer, of the same name
+  and subject as one held under another bearer of the credential, counts
+  against that one's slot until it ends (`CyfrWeb.SSE.claim_slot/4`), so
+  a shown canvas moves its streams onto a renewed credential at its cap. A
   public page is charged the same rate per address and tincture. Each is
   refused over its bound with a typed refusal.
 
@@ -308,7 +312,7 @@ defmodule Emissary.Web.TinctureDataController do
          {:ok, grant} <- frame_grant(ctx) do
       {:ok,
        Map.merge(grant, %{
-         ctx: conn |> CallIdentity.stamp(ctx) |> interactive(),
+         ctx: CallIdentity.stamp(conn, ctx),
          route: :protected,
          tincture: ctx.frame.reference,
          bearer: bearer,
@@ -318,9 +322,11 @@ defmodule Emissary.Web.TinctureDataController do
     end
   end
 
+  # The context carries the frame path's origin from here on, so the grant
+  # the frame is held to (`frame_grant/1`) is read for that origin.
   defp establish(bearer, client_ip) do
     case Sanctum.Caller.establish({:frame_credential, bearer}, client_ip: client_ip) do
-      {:ok, %Context{frame: %{}} = ctx} -> {:ok, ctx}
+      {:ok, %Context{frame: %{}} = ctx} -> {:ok, interactive(ctx)}
       {:error, reason} -> {:error, credential_refusal(reason)}
     end
   end
@@ -674,7 +680,7 @@ defmodule Emissary.Web.TinctureDataController do
   defp open_stream(conn, %{stream: name, subject: subject} = request, caller) do
     ctx = caller.ctx
 
-    case claim(ctx) do
+    case claim(ctx, {name, subject}, Map.get(caller, :bearer)) do
       :ok ->
         try do
           case Sanctum.Gate.open_stream(ctx, name, subject) do
@@ -698,10 +704,19 @@ defmodule Emissary.Web.TinctureDataController do
     end
   end
 
-  defp claim(%Context{frame: %{}} = ctx),
+  # The slot names the stream and a digest of the bearer it is opened
+  # under, never the bearer itself.
+  defp claim(%Context{frame: %{}} = ctx, stream, bearer) when is_binary(bearer) do
+    CyfrWeb.SSE.claim_slot(@slot_tag, ctx, :frame_stream_max_concurrent,
+      stream: stream,
+      bearer: :crypto.hash(:sha256, bearer)
+    )
+  end
+
+  defp claim(%Context{frame: %{}} = ctx, _stream, _no_bearer),
     do: CyfrWeb.SSE.claim_slot(@slot_tag, ctx, :frame_stream_max_concurrent)
 
-  defp claim(%Context{}), do: :ok
+  defp claim(%Context{}, _stream, _bearer), do: :ok
 
   defp release(%Context{frame: %{}} = ctx), do: CyfrWeb.SSE.release_slot(@slot_tag, ctx)
   defp release(%Context{}), do: :ok
