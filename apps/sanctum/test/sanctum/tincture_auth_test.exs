@@ -305,20 +305,6 @@ defmodule Sanctum.TinctureAuthTest do
       end
     end
 
-    test "a renewal's bearer is the credential's current one, and the bearer it replaced is not",
-         %{source: ctx} do
-      {:ok, %{credential: first, id: id}} =
-        TinctureAuth.mint_frame_credential(ctx, @tincture, @digest, 1, frame_id())
-
-      assert {:ok, %{current: true}} = TinctureAuth.verify_frame_credential(first)
-
-      {:ok, %{credential: renewed, id: ^id}} = TinctureAuth.renew_frame(ctx, id)
-      refute renewed == first
-
-      assert {:ok, %{current: true}} = TinctureAuth.verify_frame_credential(renewed)
-      assert {:ok, %{current: false}} = TinctureAuth.verify_frame_credential(first)
-    end
-
     test "another person's frame reads as absent", %{source: ctx} do
       {:ok, %{id: id}} =
         TinctureAuth.mint_frame_credential(ctx, @tincture, @digest, 1, frame_id())
@@ -399,8 +385,7 @@ defmodule Sanctum.TinctureAuthTest do
                reference: @tincture,
                version_digest: @digest,
                grant_revision: 2,
-               mode: :live,
-               current: true
+               mode: :live
              }
 
       assert {framed.user_id, framed.athanor_id} == {ctx.user_id, "ath_acme"}

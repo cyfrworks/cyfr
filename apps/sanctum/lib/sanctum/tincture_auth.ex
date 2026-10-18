@@ -95,7 +95,6 @@ defmodule Sanctum.TinctureAuth do
           grant_revision: non_neg_integer(),
           mode: frame_mode(),
           deadline: DateTime.t(),
-          current: boolean(),
           credential_binding: Context.credential_binding()
         }
 
@@ -570,14 +569,19 @@ defmodule Sanctum.TinctureAuth do
   (`Sanctum.Caller.fresh?/1`). `client_ip:` is the request's address, for
   a key's allowlist.
 
+  `held: true` reads it for a stream it already opened, which is held to
+  the row: the bearer's own signed deadline and age end nothing, and the
+  deadline answered is the row's, which a renewal or a resume moves. So a
+  renewal keeps every open stream of the frame, and its suspension,
+  revocation or the row's deadline ends each of them. A request is never
+  read this way: a bearer a renewal replaced opens nothing past its own
+  deadline.
+
   Answers the frame's authority — the person, the athanor, the tincture
   version (`reference`) and its digest, the grant revision, the frame id,
   the row's id, its mode (`:live` or `:validation`), its deadline (the
   row's, or the bearer's own when that is earlier: a bearer a renewal
-  replaced keeps the deadline it was signed with), whether it is the
-  row's `current` bearer (signed with the deadline the row's latest mint,
-  renewal or resume wrote, which every earlier bearer of the row was
-  signed without) and the source binding
+  replaced keeps the deadline it was signed with) and the source binding
   — or `:invalid_credential` for a bearer this server did not sign as one,
   `:suspended`, `:revoked`, `:expired_credential` past either deadline,
   and a source's or a standing's refusal (`:not_standing`, `:not_member`,
@@ -598,13 +602,16 @@ defmodule Sanctum.TinctureAuth do
              | :identity_stale
              | :unavailable}
   def verify_frame_credential(bearer, opts \\ []) when is_binary(bearer) and is_list(opts) do
-    with {:ok, id, athanor_id, bound} <- frame_bearer(bearer),
+    held? = Keyword.get(opts, :held, false)
+
+    with {:ok, id, athanor_id, bound} <- frame_bearer(bearer, held?),
          {:ok, row} <- frame_row(athanor_id, id),
          :ok <- frame_state(row),
          claims = frame_claims(row, bound),
          {:ok, %{now: now}} <-
            Sanctum.Caller.derived_standing(claims, client_ip: Keyword.get(opts, :client_ip)) do
-      deadline = Enum.min([row.deadline, bound.deadline], DateTime)
+      deadline =
+        if held?, do: row.deadline, else: Enum.min([row.deadline, bound.deadline], DateTime)
 
       if DateTime.compare(deadline, now) == :gt do
         {:ok,
@@ -618,7 +625,6 @@ defmodule Sanctum.TinctureAuth do
            grant_revision: row.grant_revision,
            mode: frame_mode(row.purpose),
            deadline: deadline,
-           current: DateTime.compare(bound.deadline, row.deadline) == :eq,
            credential_binding: claims_binding(claims)
          }}
       else
@@ -911,8 +917,13 @@ defmodule Sanctum.TinctureAuth do
       else: {:error, :expired_credential}
   end
 
-  defp frame_bearer(bearer) do
-    case Plug.Crypto.verify(signing_secret(), @frame_credential_salt, bearer) do
+  # A held stream's bearer is read for the row it names whatever its own
+  # age: the stream is held to the row, so the bearer's signed deadline is
+  # not what ends it.
+  defp frame_bearer(bearer, held?) do
+    opts = if held?, do: [max_age: :infinity], else: []
+
+    case Plug.Crypto.verify(signing_secret(), @frame_credential_salt, bearer, opts) do
       {:ok, [@frame_version, id, athanor_id, user_gen, ath_gen, basis, deadline]}
       when is_binary(id) and id != "" and is_binary(athanor_id) and athanor_id != "" and
              is_integer(deadline) ->

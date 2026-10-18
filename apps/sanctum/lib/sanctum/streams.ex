@@ -108,7 +108,8 @@ defmodule Sanctum.Streams do
          :ok <- tenant(ctx),
          {:ok, subject} <- bound_subject(stream, ctx, subject),
          :ok <- subject(stream, subject),
-         {:ok, deadline} <- deadline(stream, ctx, now),
+         bound = DateTime.add(now, stream.deadline_bound, :second),
+         {:ok, deadline} <- deadline(bound, ctx, now),
          :ok <- shaped_for_canvas(stream, ctx) do
       {:ok,
        %Prima.StreamGrant{
@@ -116,6 +117,7 @@ defmodule Sanctum.Streams do
          projection: stream.projection,
          subject: subject,
          deadline: deadline,
+         bound: bound,
          grant_id: Prima.UUID7.generate_id("sgr")
        }}
     end
@@ -221,9 +223,7 @@ defmodule Sanctum.Streams do
 
   # Never later than the stream's bound, nor the credential the open was
   # made under; a credential already ended opens nothing.
-  defp deadline(stream, %Context{credential_deadline: credential}, now) do
-    bound = DateTime.add(now, stream.deadline_bound, :second)
-
+  defp deadline(bound, %Context{credential_deadline: credential}, now) do
     case credential do
       nil ->
         {:ok, bound}

@@ -78,18 +78,18 @@ defmodule Arca.Cache.Keys do
     do: Arca.QueryHelpers.no_athanor!("Arca.Cache.Keys.live_shape/2")
 
   @doc """
-  The epoch of one athanor's live shape digests: a value the registry's
-  sweep replaces before it drops them. Each stored shape carries the epoch
-  it was derived under and is read only under that epoch, so a shape
-  derived across a sweep answers no later read
-  (`Sanctum.Consent.ShapeDerivation`).
+  The epoch of what one athanor's registry derives (`Arca.Cache.Epoch`):
+  the registry's sweep advances it before it drops the resolved
+  activations and the live shape digests, each stored under the epoch it
+  was derived in and read only under that epoch
+  (`Compendium.Activation`, `Sanctum.Consent.ShapeDerivation`).
   """
-  def live_shape_epoch(%Prima.Actor{athanor_id: athanor_id})
+  def registry_epoch(%Prima.Actor{athanor_id: athanor_id})
       when is_binary(athanor_id) and athanor_id != "",
-      do: {:live_shape_epoch, athanor_id}
+      do: {:registry_epoch, athanor_id}
 
-  def live_shape_epoch(%Prima.Actor{}),
-    do: Arca.QueryHelpers.no_athanor!("Arca.Cache.Keys.live_shape_epoch/1")
+  def registry_epoch(%Prima.Actor{}),
+    do: Arca.QueryHelpers.no_athanor!("Arca.Cache.Keys.registry_epoch/1")
 
   @doc "Match spec shape for every live shape digest of one athanor."
   def match_live_shape(%Prima.Actor{athanor_id: athanor_id})

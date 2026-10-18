@@ -53,9 +53,15 @@ defmodule Emissary.Web.ExecutionEventsController do
              :ok <- CyfrWeb.SSE.claim_slot(:sse_slot, ctx, :opus_events_max_concurrent) do
           cursor = parse_last_event_id(conn)
 
-          conn
-          |> CyfrWeb.SSE.open()
-          |> stream_events(ctx, execution_id, cursor, exec)
+          # The slot goes with the stream on every path, so a kept-alive
+          # connection's next request is counted afresh.
+          try do
+            conn
+            |> CyfrWeb.SSE.open()
+            |> stream_events(ctx, execution_id, cursor, exec)
+          after
+            CyfrWeb.SSE.release_slot(:sse_slot, ctx)
+          end
         else
           {:auth, _} ->
             CyfrWeb.ApiError.send(conn, 401, :unauthenticated, nil)

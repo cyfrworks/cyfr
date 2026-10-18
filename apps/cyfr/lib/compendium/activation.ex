@@ -62,8 +62,11 @@ defmodule Compendium.Activation do
           | :no_athanor
 
   # A resolved graph is a function of the athanor's registered rows; it is
-  # cached briefly per root (node key + release digest) and swept when the
-  # athanor's registry changes (`Compendium.Registry.invalidate_executor_caches/1`).
+  # cached briefly per root (node key + release digest) under the registry
+  # epoch read before its walk, and read only under the epoch current then
+  # (`Arca.Cache.Epoch`): the registry's sweep advances the epoch before it
+  # drops the entries (`Compendium.Registry.invalidate_executor_caches/1`),
+  # so a graph walked before a change answers no read that begins after it.
   @cache_ttl_ms :timer.seconds(60)
 
   @doc """
@@ -85,19 +88,24 @@ defmodule Compendium.Activation do
         resolve_uncached(ctx, component)
 
       key ->
-        case Arca.Cache.get(key) do
+        epoch = Arca.Cache.Epoch.current(epoch_key(ctx))
+
+        case Arca.Cache.Epoch.get(key, epoch) do
           {:ok, %{digest: _, graph: _} = activation} ->
             emit_resolve(ctx, component, true)
             {:ok, activation}
 
           _ ->
             with {:ok, activation} <- resolve_uncached(ctx, component) do
-              Arca.Cache.put(key, activation, @cache_ttl_ms)
+              Arca.Cache.Epoch.put(key, epoch, activation, @cache_ttl_ms)
               {:ok, activation}
             end
         end
     end
   end
+
+  defp epoch_key(%Context{athanor_id: athanor_id}),
+    do: Arca.Cache.Keys.registry_epoch(Prima.Actor.in_athanor(athanor_id))
 
   defp resolve_uncached(ctx, component) do
     with {:ok, rows} <- walk(ctx, component, %{}, 0),

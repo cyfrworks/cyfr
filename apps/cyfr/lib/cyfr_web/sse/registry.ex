@@ -3,7 +3,7 @@
 
 defmodule CyfrWeb.SSE.Registry do
   @moduledoc """
-  The stream slots `CyfrWeb.SSE.claim_slot/4` counts: duplicate keys, one
+  The stream slots `CyfrWeb.SSE.claim_slot/3` counts: duplicate keys, one
   entry per open stream. A stream that ends releases its entry
   (`CyfrWeb.SSE.release_slot/2`), and an entry dies with the process that
   registered it, so a vanished client frees its slot without bookkeeping.
@@ -16,10 +16,6 @@ defmodule CyfrWeb.SSE.Registry do
   @doc "How many streams are open under `key`."
   @spec count(term()) :: non_neg_integer()
   def count(key), do: length(Registry.lookup(__MODULE__, key))
-
-  @doc "The open streams under `key`: each one's process and what it registered."
-  @spec entries(term()) :: [{pid(), term()}]
-  def entries(key), do: Registry.lookup(__MODULE__, key)
 
   @doc "Register the calling process as one open stream under `key`."
   @spec register(term(), term()) :: {:ok, pid()} | {:error, {:already_registered, pid()}}

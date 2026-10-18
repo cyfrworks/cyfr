@@ -245,7 +245,14 @@ defmodule Emissary.Web.MCPController do
     else
       case CyfrWeb.SSE.claim_slot(:mcp_listen, context, :mcp_subscription_max_concurrent) do
         :ok ->
-          open_subscription_stream(conn, context, params, request_id, id)
+          # The slot goes with the request on every path, a refused
+          # admission included, so a kept-alive connection's next request
+          # is counted afresh.
+          try do
+            open_subscription_stream(conn, context, params, request_id, id)
+          after
+            CyfrWeb.SSE.release_slot(:mcp_listen, context)
+          end
 
         {:error, :stream_limit} ->
           listen_error(

@@ -589,7 +589,7 @@ export default async function (canvas) {
 
 // ---- the workers' code, run in the test's own thread -------------------------------------
 
-describe("the streams worker moves its open streams onto a renewed credential", () => {
+describe("the streams worker opens later streams under a renewed credential", () => {
   const RENEWED = "frm.v1.cmVuZXdlZC1mcmFtZS1jcmVkZW50aWFs"
   const declared = [
     {name: "runs.changes", subject: null},
@@ -597,24 +597,18 @@ describe("the streams worker moves its open streams onto a renewed credential", 
   ]
 
   // A streams worker against an endpoint whose every stream sends one event
-  // naming the bearer it was opened under and stays open, unless `refuse`
-  // says that bearer is refused. `connections` holds each stream's response
-  // and whether the worker let go of it.
-  async function renewing({refuse = () => false} = {}) {
+  // naming the bearer it was opened under and stays open. `connections`
+  // holds each stream's response and whether the worker let go of it.
+  async function renewing() {
     const connections = []
-    const endpoint = await stubEndpoint((request) => {
-      if (refuse(request.headers.authorization)) {
-        return {status: 403, body: {v: 1, ok: false, error: {class: "forbidden", message: "Not granted.", stage: "admission"}}}
+    const endpoint = await stubEndpoint((request) => ({
+      stream: (res) => {
+        const connection = {res, request, closed: false}
+        res.on("close", () => (connection.closed = true))
+        connections.push(connection)
+        res.write(sse({id: 1, event: "x", data: {bearer: request.headers.authorization}}))
       }
-      return {
-        stream: (res) => {
-          const connection = {res, request, closed: false}
-          res.on("close", () => (connection.closed = true))
-          connections.push(connection)
-          res.write(sse({id: 1, event: "x", data: {bearer: request.headers.authorization}}))
-        }
-      }
-    })
+    }))
     cleanups.push(() => endpoint.close())
     const scope = workerScope(ROLES.streams)
     startStreamsWorker(scope, {fetchFn: fetch})
@@ -630,7 +624,7 @@ describe("the streams worker moves its open streams onto a renewed credential", 
   const events = (answers, sub) => answers.filter((m) => m.sub === sub && m.t === "event").map((m) => m.event.data)
   const lifecycle = (answers, sub) => answers.filter((m) => m.sub === sub && m.t !== "event").map((m) => m.t)
 
-  test("an open stream is opened again under it and the old connection let go only once the new one answers; later streams open under it", async () => {
+  test("a stream open before the renewal stays on its connection, and a later one opens under the renewed credential", async () => {
     const {scope, endpoint, connections, answers, ask} = await renewing()
     ask({t: "open", sub: 0, name: "runs.changes", subject: null})
     await eventually(() => events(answers, 0).length === 1)
@@ -640,80 +634,17 @@ describe("the streams worker moves its open streams onto a renewed credential", 
     ask({t: "credential", credential: "frm.v1.forged"})
     scope.deliver({t: "credential", credential: RENEWED})
 
-    await eventually(() => connections.length === 2 && connections[0].closed)
-    assert.equal(connections[1].request.headers.authorization, `Bearer ${RENEWED}`)
-    assert.equal(connections[1].closed, false)
-
-    // The reader heard the new connection's events and nothing of the move.
-    await eventually(() => events(answers, 0).length === 2)
-    connections[1].res.write(sse({id: 2, event: "x", data: {after: true}}))
-    await eventually(() => events(answers, 0).length === 3)
-    assert.deepEqual(events(answers, 0), [{bearer: `Bearer ${CREDENTIAL}`}, {bearer: `Bearer ${RENEWED}`}, {after: true}])
-    assert.deepEqual(lifecycle(answers, 0), ["opened"])
-
     ask({t: "open", sub: 1, name: "mcp_servers.changes", subject: null})
-    await eventually(() => connections.length === 3)
-    assert.equal(connections[2].request.headers.authorization, `Bearer ${RENEWED}`)
-    assert.ok(endpoint.requests.every((request) => request.headers.authorization !== "Bearer frm.v1.forged"))
+    await eventually(() => connections.length === 2)
+    assert.equal(connections[1].request.headers.authorization, `Bearer ${RENEWED}`)
 
-    // Closed by its reader, it lets go of the connection it holds now.
-    ask({t: "close", sub: 0})
-    await eventually(() => connections[1].closed)
-    assert.deepEqual(lifecycle(answers, 0), ["opened"])
-  })
-
-  test("a stream that ends while its move is still being opened takes the move with it", async () => {
-    // A streams worker whose fetch is the test's: the first stream stays
-    // open, a replacement never answers its headers until it is aborted.
-    let listener
-    const answers = []
-    const calls = []
-    let currentBody
-    const port = {onmessage: null, postMessage: (message) => answers.push(message), addEventListener() {}}
-    const scope = {postMessage() {}, addEventListener: (_type, callback) => (listener = callback)}
-    startStreamsWorker(scope, {
-      fetchFn: (_url, options) => {
-        calls.push(options)
-        if (calls.length === 1) {
-          const body = new ReadableStream({start: (controller) => (currentBody = controller)})
-          return Promise.resolve(new Response(body, {headers: {"content-type": "text/event-stream"}}))
-        }
-        return new Promise((_resolve, reject) => {
-          options.signal.addEventListener("abort", () => reject(new DOMException("Aborted", "AbortError")), {once: true})
-        })
-      }
-    })
-    const deliver = (data) => listener({isTrusted: true, data})
-    deliver({t: "boot", credential: CREDENTIAL, data_url: `https://cyfr.example/_f/v1/o/${FRAME}/`, streams: declared, port})
-
-    port.onmessage({data: {t: "open", sub: 0, name: "runs.changes", subject: null}})
-    await eventually(() => answers.some((answer) => answer.t === "opened"))
-    deliver({t: "credential", credential: RENEWED})
-    await eventually(() => calls.length === 2)
-    assert.equal(calls[0].signal.aborted, false)
-    assert.equal(calls[1].signal.aborted, false)
-
-    // The old connection ends before the move answers: the reader hears
-    // its stream end, and nothing of the move is left open.
-    currentBody.close()
-    await eventually(() => answers.some((answer) => answer.t === "closed"))
-    assert.equal(calls[1].signal.aborted, true)
-  })
-
-  test("a move the endpoint refuses leaves the open stream on its old connection", async () => {
-    const {scope, endpoint, connections, answers, ask} = await renewing({refuse: (bearer) => bearer === `Bearer ${RENEWED}`})
-    ask({t: "open", sub: 0, name: "runs.changes", subject: null})
-    await eventually(() => events(answers, 0).length === 1)
-
-    scope.deliver({t: "credential", credential: RENEWED})
-    await eventually(() => endpoint.requests.length === 2)
-    await pause(30)
-
-    assert.equal(connections.length, 1)
+    // The first stream keeps its own connection and hears its events there.
     assert.equal(connections[0].closed, false)
     connections[0].res.write(sse({id: 2, event: "x", data: {kept: true}}))
     await eventually(() => events(answers, 0).length === 2)
+    assert.deepEqual(events(answers, 0), [{bearer: `Bearer ${CREDENTIAL}`}, {kept: true}])
     assert.deepEqual(lifecycle(answers, 0), ["opened"])
+    assert.ok(endpoint.requests.every((request) => request.headers.authorization !== "Bearer frm.v1.forged"))
   })
 })
 

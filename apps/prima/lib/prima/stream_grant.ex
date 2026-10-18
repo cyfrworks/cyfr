@@ -19,6 +19,10 @@ defmodule Prima.StreamGrant do
     * `deadline` — when the grant ends: never later than the stream's
       `deadline_bound` from the open, nor the credential it was opened
       under.
+    * `bound` — the stream's `deadline_bound` from the open, which no
+      deadline the grant is held to passes: a frame's stream, held to its
+      credential's row, follows a renewal of the row up to it. A grant
+      built with none is held to its `deadline` alone.
     * `grant_id` — the grant's own identifier, which a holder names to
       close it and a revocation names to end it.
   """
@@ -28,11 +32,12 @@ defmodule Prima.StreamGrant do
           projection: [String.t()],
           subject: String.t() | nil,
           deadline: DateTime.t(),
+          bound: DateTime.t() | nil,
           grant_id: String.t()
         }
 
   @enforce_keys [:topic, :projection, :subject, :deadline, :grant_id]
-  defstruct [:topic, :projection, :subject, :deadline, :grant_id]
+  defstruct [:topic, :projection, :subject, :deadline, :bound, :grant_id]
 
   @doc """
   The fields of `payload` the grant forwards: the projection's, by name,

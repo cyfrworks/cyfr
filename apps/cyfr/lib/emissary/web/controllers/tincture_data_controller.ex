@@ -105,12 +105,10 @@ defmodule Emissary.Web.TinctureDataController do
   Each frame credential holds two limits: an invocation rate, charged on
   every request to any of these routes (`frame_invocation_max` per
   `frame_invocation_window_ms`), and a count of concurrently open streams
-  (`frame_stream_max_concurrent`), released when a stream closes. A
-  stream opened again under the frame's renewed bearer, of the same name
-  and subject as one held under another bearer of the credential, counts
-  against that one's slot until it ends (`CyfrWeb.SSE.claim_slot/4`), so
-  a shown canvas moves its streams onto a renewed credential at its cap. A
-  public page is charged the same rate per address and tincture. Each is
+  (`frame_stream_max_concurrent`), released when a stream closes. An open
+  stream is held to the frame credential's row, not to the bearer it
+  opened with, so a renewal keeps it in its slot, with no new connection.
+  A public page is charged the same rate per address and tincture. Each is
   refused over its bound with a typed refusal.
 
   Every answer, a refusal included, is the wire's own shape; a refusal
@@ -324,8 +322,8 @@ defmodule Emissary.Web.TinctureDataController do
 
   # The context carries the frame path's origin from here on, so the grant
   # the frame is held to (`frame_grant/1`) is read for that origin.
-  defp establish(bearer, client_ip) do
-    case Sanctum.Caller.establish({:frame_credential, bearer}, client_ip: client_ip) do
+  defp establish(bearer, client_ip, opts \\ []) do
+    case Sanctum.Caller.establish({:frame_credential, bearer}, [client_ip: client_ip] ++ opts) do
       {:ok, %Context{frame: %{}} = ctx} -> {:ok, interactive(ctx)}
       {:error, reason} -> {:error, credential_refusal(reason)}
     end
@@ -680,7 +678,7 @@ defmodule Emissary.Web.TinctureDataController do
   defp open_stream(conn, %{stream: name, subject: subject} = request, caller) do
     ctx = caller.ctx
 
-    case claim(ctx, {name, subject}, Map.get(caller, :bearer)) do
+    case claim(ctx) do
       :ok ->
         try do
           case Sanctum.Gate.open_stream(ctx, name, subject) do
@@ -704,19 +702,10 @@ defmodule Emissary.Web.TinctureDataController do
     end
   end
 
-  # The slot names the stream and a digest of the bearer it is opened
-  # under, never the bearer itself.
-  defp claim(%Context{frame: %{}} = ctx, stream, bearer) when is_binary(bearer) do
-    CyfrWeb.SSE.claim_slot(@slot_tag, ctx, :frame_stream_max_concurrent,
-      stream: stream,
-      bearer: :crypto.hash(:sha256, bearer)
-    )
-  end
-
-  defp claim(%Context{frame: %{}} = ctx, _stream, _no_bearer),
+  defp claim(%Context{frame: %{}} = ctx),
     do: CyfrWeb.SSE.claim_slot(@slot_tag, ctx, :frame_stream_max_concurrent)
 
-  defp claim(%Context{}, _stream, _bearer), do: :ok
+  defp claim(%Context{}), do: :ok
 
   defp release(%Context{frame: %{}} = ctx), do: CyfrWeb.SSE.release_slot(@slot_tag, ctx)
   defp release(%Context{}), do: :ok
@@ -772,11 +761,14 @@ defmodule Emissary.Web.TinctureDataController do
     end)
   end
 
-  # The stream's caller established again, as a request would be: the
-  # credential, the version, the grant, and what its events may carry to
-  # the origins the frame connects to, against the grant as it is read now.
+  # The stream's caller established again, as a request would be, but held
+  # to its credential's row rather than to the bearer it opened with
+  # (`held:`): the credential, the version, the grant, and what its events
+  # may carry to the origins the frame connects to, against the grant as it
+  # is read now. A renewal moves the row's deadline, so the stream lives on
+  # under it; suspension, revocation or the row's deadline end it.
   defp revalidate(%{route: :protected, bearer: bearer, client_ip: client_ip} = caller, request) do
-    with {:ok, ctx} <- establish(bearer, client_ip),
+    with {:ok, ctx} <- establish(bearer, client_ip, held: true),
          {:ok, grant} <- frame_grant(ctx),
          :ok <- flowing(:stream_open, request, Map.merge(caller, grant)) do
       {:ok, ctx}

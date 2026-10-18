@@ -15,8 +15,9 @@ defmodule CyfrWeb.SSE do
   reaches the streams opened after it. Slots are counted per member, in
   this member's registry, so a caller's budget is per member of the cell.
   A slot is released when the stream releases it (`release_slot/2`) or
-  when the connection process exits. Count and register are separate
-  steps, so bursts can briefly exceed the cap.
+  when the connection process exits. A claim counts the key's slots and
+  registers its own under one lock on the key (`claim_slot/3`), so
+  concurrent opens never take more slots than the cap.
 
   ## Delivery under a grant
 
@@ -40,7 +41,12 @@ defmodule CyfrWeb.SSE do
 
   The grant is enforced until the stream closes:
 
-    * at the grant's deadline;
+    * at the grant's deadline. A frame's stream is held to its frame
+      credential's row rather than to the bearer it opened with: each
+      revalidation reads the row's current deadline, which a renewal
+      moves, and the grant's deadline follows it up to the stream's own
+      bound from the open (`Prima.StreamGrant`), so a renewal keeps every
+      open stream of the frame with no new connection;
     * when the caller's context no longer stands: it is established again
       (the `:revalidate` function) on every standing announcement about
       the caller (a frame's stream hears its own credential suspended or
@@ -133,97 +139,25 @@ defmodule CyfrWeb.SSE do
   context is counted per frame credential: one frame's streams never
   draw on another's budget.
 
-  A claim is one reservation: the slots held under the key are read and
-  the new one registered under one lock on the key, so two claims never
-  both take the last slot, nor both one stream's replacement.
-
-  `opts[:stream]` names the stream a frame opens (its name and subject)
-  and `opts[:bearer]` a digest of the bearer it opens under. A frame's
-  renewed bearer names the same credential, so its streams count against
-  the same slots, and a stream opened again under it is the toolkit
-  moving an open one onto it. A slot holds at most two connections: the
-  one it admitted and one replacement, a stream of the same name and
-  subject under a newer bearer of the credential, its current one
-  (`Sanctum.TinctureAuth.verify_frame_credential/2`), which is not the one
-  the held stream was opened under. The replacement counts against that
-  slot until the connection it replaces ends, and then holds it alone.
-  A second replacement while the first is held, or a replacement of a
-  replacement whose predecessor is still connected, is refused at the
-  cap. The old connection ends when its client lets go of it, which the
-  endpoint finds at its next write, and at its own bearer's deadline at
-  the latest.
+  A claim is one reservation: the slots held under the key are counted
+  and the new one registered under one lock on the key, so two claims
+  never both take the last slot.
   """
-  @spec claim_slot(atom(), Context.t(), atom(), keyword()) :: :ok | {:error, :stream_limit}
-  def claim_slot(tag, %Context{} = ctx, limit_key, opts \\ [])
-      when is_atom(tag) and limit_key in @limits do
+  @spec claim_slot(atom(), Context.t(), atom()) :: :ok | {:error, :stream_limit}
+  def claim_slot(tag, %Context{} = ctx, limit_key) when is_atom(tag) and limit_key in @limits do
     key = slot_key(tag, ctx)
     limit = setting(limit_key)
-
-    slot = %{
-      stream: Keyword.get(opts, :stream),
-      bearer: Keyword.get(opts, :bearer),
-      current: current_bearer?(ctx),
-      replaces: nil
-    }
-
-    :global.trans({{__MODULE__, key}, self()}, fn -> reserve(key, limit, slot) end, [node()])
+    :global.trans({{__MODULE__, key}, self()}, fn -> reserve(key, limit) end, [node()])
   end
 
-  # Under the key's lock: an ordinary stream while a slot is free, or the
-  # replacement of a held stream that has none.
-  defp reserve(key, limit, slot) do
-    held = CyfrWeb.SSE.Registry.entries(key)
-    live = MapSet.new(held, fn {pid, _slot} -> pid end)
-    riding = Enum.filter(held, fn {_pid, held_slot} -> replacing?(held_slot, live) end)
-
-    cond do
-      length(held) - length(riding) < limit ->
-        register_slot(key, slot)
-
-      old = replaced_stream(held, live, riding, slot) ->
-        register_slot(key, %{slot | replaces: old})
-
-      true ->
-        {:error, :stream_limit}
+  defp reserve(key, limit) do
+    if CyfrWeb.SSE.Registry.count(key) >= limit do
+      {:error, :stream_limit}
+    else
+      {:ok, _} = CyfrWeb.SSE.Registry.register(key, :stream)
+      :ok
     end
   end
-
-  defp register_slot(key, slot) do
-    {:ok, _} = CyfrWeb.SSE.Registry.register(key, slot)
-    :ok
-  end
-
-  # A held stream whose slot takes `slot` as its replacement: of the same
-  # name and subject, held alone in its slot (no replacement of its own,
-  # and no predecessor still connected), opened under another bearer than
-  # the new one, which is the credential's current bearer.
-  defp replaced_stream(_held, _live, _riding, %{stream: stream, bearer: bearer, current: current})
-       when is_nil(stream) or is_nil(bearer) or current != true,
-       do: nil
-
-  defp replaced_stream(held, live, riding, slot) do
-    taken = MapSet.new(riding, fn {_pid, %{replaces: pid}} -> pid end)
-
-    Enum.find_value(held, fn {pid, held_slot} ->
-      if replaceable?(held_slot, slot, live) and not MapSet.member?(taken, pid), do: pid
-    end)
-  end
-
-  defp replaceable?(
-         %{stream: stream, bearer: older} = held_slot,
-         %{stream: stream, bearer: newer},
-         live
-       )
-       when is_binary(older) and older != newer,
-       do: not replacing?(held_slot, live)
-
-  defp replaceable?(_held_slot, _slot, _live), do: false
-
-  defp replacing?(%{replaces: pid}, live) when is_pid(pid), do: MapSet.member?(live, pid)
-  defp replacing?(_slot, _live), do: false
-
-  defp current_bearer?(%Context{frame: %{current: true}}), do: true
-  defp current_bearer?(%Context{}), do: false
 
   @doc """
   Release the calling process's slots under `tag` for the caller: a stream
@@ -300,8 +234,7 @@ defmodule CyfrWeb.SSE do
     :ok = subscribe_frame(ctx)
 
     ref = make_ref()
-    remaining = max(DateTime.diff(grant.deadline, DateTime.utc_now(), :millisecond), 0)
-    deadline = Process.send_after(self(), {__MODULE__, :deadline, ref}, remaining)
+    arm_deadline(ref, grant.deadline)
 
     state = %{
       ctx: ctx,
@@ -329,7 +262,7 @@ defmodule CyfrWeb.SSE do
       # Every exit path: the timers, the subscriptions and any timer
       # message already queued go with the stream, so a kept-alive
       # connection's next request finds none of them.
-      Process.cancel_timer(deadline)
+      cancel_deadline(ref)
       cancel_ticks(ref)
       Cyfr.Bus.unsubscribe(actor, topic)
       Cyfr.Bus.unsubscribe_standing(ctx.user_id)
@@ -431,7 +364,7 @@ defmodule CyfrWeb.SSE do
              is_struct(message, FrameCredential) ->
         if about?(message, state.ctx) do
           case state.revalidate.() do
-            {:ok, ctx} -> loop(conn, %{state | ctx: ctx})
+            {:ok, ctx} -> loop(conn, revalidated(state, ctx))
             {:error, refusal} -> close(conn, refusal)
           end
         else
@@ -472,8 +405,57 @@ defmodule CyfrWeb.SSE do
     if Sanctum.Caller.fresh?(ctx) do
       {:ok, state}
     else
-      with {:ok, ctx} <- state.revalidate.(), do: {:ok, %{state | ctx: ctx}}
+      with {:ok, ctx} <- state.revalidate.(), do: {:ok, revalidated(state, ctx)}
     end
+  end
+
+  # The context established again, and for a frame's stream the grant's
+  # deadline moved with its credential's row, never past the stream's own
+  # bound from the open: the timer is armed again for the later deadline.
+  defp revalidated(%{grant: grant, ref: ref} = state, ctx) do
+    case extended(grant, ctx) do
+      nil ->
+        %{state | ctx: ctx}
+
+      deadline ->
+        arm_deadline(ref, deadline)
+        %{state | ctx: ctx, grant: %{grant | deadline: deadline}}
+    end
+  end
+
+  defp extended(
+         %StreamGrant{deadline: current, bound: %DateTime{} = bound},
+         %Context{frame: %{}, credential_deadline: %DateTime{} = credential}
+       ) do
+    next = Enum.min([bound, credential], DateTime)
+    if DateTime.compare(next, current) == :gt, do: next
+  end
+
+  defp extended(_grant, _ctx), do: nil
+
+  # The deadline's one timer, kept under the stream's ref like its ticks,
+  # so arming it again cancels the earlier one and every exit cancels it.
+  defp arm_deadline(ref, deadline) do
+    cancel_deadline(ref)
+    remaining = max(DateTime.diff(deadline, DateTime.utc_now(), :millisecond), 0)
+    timer = Process.send_after(self(), {__MODULE__, :deadline, ref}, remaining)
+    Process.put({__MODULE__, :deadline, ref}, timer)
+    timer
+  end
+
+  # A timer that fired before it was cancelled has queued its message,
+  # which goes with it: a deadline armed again is never met by the old one.
+  defp cancel_deadline(ref) do
+    with timer when timer != nil <- Process.delete({__MODULE__, :deadline, ref}),
+         false <- Process.cancel_timer(timer) do
+      receive do
+        {__MODULE__, :deadline, ^ref} -> :ok
+      after
+        0 -> :ok
+      end
+    end
+
+    :ok
   end
 
   defp backlog(max) do

@@ -35,7 +35,10 @@ defmodule Sanctum.Caller do
       the frame id, the row's id and its mode, `:live` or `:validation`
       for a candidate version's trial), with the frame's deadline as its
       credential deadline and no interactive class. A holder that keeps it
-      establishes the bearer again rather than revalidating the context.
+      establishes the bearer again rather than revalidating the context;
+      `held: true` establishes it for a stream it already opened, whose
+      credential deadline is then the row's (`held:` of
+      `Sanctum.TinctureAuth.verify_frame_credential/2`).
     * `{:webhook, webhook}` — a verified webhook row (`request_id:`).
       Stands while its athanor is open and its creator is not denied.
 
@@ -216,7 +219,8 @@ defmodule Sanctum.Caller do
 
   def establish({:frame_credential, bearer}, opts) when is_binary(bearer) do
     case Sanctum.TinctureAuth.verify_frame_credential(bearer,
-           client_ip: Keyword.get(opts, :client_ip)
+           client_ip: Keyword.get(opts, :client_ip),
+           held: Keyword.get(opts, :held, false)
          ) do
       {:ok, authority} ->
         ctx =
@@ -236,8 +240,7 @@ defmodule Sanctum.Caller do
               reference: authority.reference,
               version_digest: authority.version_digest,
               grant_revision: authority.grant_revision,
-              mode: authority.mode,
-              current: authority.current
+              mode: authority.mode
             },
             authenticated: true
           )

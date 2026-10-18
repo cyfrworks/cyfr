@@ -144,7 +144,7 @@ defmodule Sanctum.Consent.ShapeCachePublicationWindowTest do
 
     source_file = module.module_info(:compile) |> Keyword.fetch!(:source) |> to_string()
     source = File.read!(source_file)
-    insertion = "      Arca.Cache.put(key, {epoch, digest}, @live_cache_ttl_ms)"
+    insertion = "    Arca.Cache.Epoch.put(key, epoch, digest, @live_cache_ttl_ms)"
     assert length(String.split(source, insertion)) == 2, "post-put instrumentation site moved"
 
     pause = """

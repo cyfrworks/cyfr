@@ -47,8 +47,9 @@ defmodule Prima.CanvasWire do
     * `state {state}`, `live` or `frozen`;
     * `credential {credential}`, the frame credential Prism renewed while
       the canvas is shown, a non-empty string: the toolkit hands it to
-      its streams worker alone, which opens every later stream under it
-      and moves every open one onto it.
+      its streams worker alone, which opens every later stream under it;
+      a stream already open stays on its connection, which the endpoint
+      holds to the credential's row.
 
   `decode/1` reads a message of either direction, and a receiver holds its
   verb to the set its direction names. An unknown verb, an extra or a
