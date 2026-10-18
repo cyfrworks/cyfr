@@ -160,9 +160,11 @@ framed() {
 # "Not part of this gate" list (a job there covers every step of it), or
 # setup that checks nothing (CI_SETUP). A list entry, a run or a setup name
 # that matches no step fails too, so the list is the workflows' exactly. A
-# step is keyed by its name, or unnamed by `uses: ACTION` or `run: FIRST
-# LINE`. release.yml runs on a tag alone, and its checks are these
-# workflows, which it calls.
+# step is keyed by its name, or unnamed by `uses: ACTION` or by its whole
+# script, `run: LINE; LINE…`, so an unnamed step is setup only when every
+# command in it is the setup listed, and one that adds a check to a setup
+# command is a step of its own. release.yml runs on a tag alone, and its
+# checks are these workflows, which it calls.
 ci_roster() {
   python3 -I - "$1" "$2" <<'PY'
 import glob, os, re, sys, yaml
@@ -228,7 +230,8 @@ def key(s):
         return s["name"]
     if "uses" in s:
         return "uses: " + s["uses"].split("@")[0]
-    return "run: " + s["run"].strip().split("\n")[0]
+    lines = [l.strip() for l in s["run"].strip().split("\n") if l.strip()]
+    return "run: " + "; ".join(lines)
 
 errors, runs_seen, setup_seen = [], set(), set()
 for path in sorted(glob.glob(os.path.join(wf_dir, "*.yml"))):
@@ -270,8 +273,9 @@ sys.exit(1 if errors else 0)
 PY
 }
 ci_roster "$gate" "$root/.github/workflows" || fail "the gate's exclusion list is not CI's checks less the gate's"
-# Planted: a check added to CI, a job taken off the list, and a list entry
-# CI no longer has each fail it, with the reason.
+# Planted: a check added to CI, named and unnamed behind a setup command, a
+# job taken off the list, and a list entry CI no longer has each fail it,
+# with the reason.
 mkdir -p "$scratch/roster/wf"
 cp "$root"/.github/workflows/*.yml "$scratch/roster/wf/"
 python3 -I - "$scratch/roster/wf/test.yml" <<'PY'
@@ -284,6 +288,20 @@ PY
 ! ci_roster "$gate" "$scratch/roster/wf" 2>"$scratch/roster/added.err" || fail 'a CI check neither run by the gate nor on its list passed'
 has_line "'A planted check' is neither run by the gate nor on its list" "$scratch/roster/added.err" ||
   fail "an added CI check failed without its reason: $(cat "$scratch/roster/added.err")"
+mkdir -p "$scratch/roster/unnamed"
+cp "$root"/.github/workflows/*.yml "$scratch/roster/unnamed/"
+python3 -I - "$scratch/roster/unnamed/test.yml" <<'PY'
+import sys
+p = sys.argv[1]; s = open(p).read()
+anchor = "      - name: Compile with warnings as errors\n"
+assert anchor in s
+step = "      - run: |\n          mix deps.get\n          test -f newly-required-ci-asset\n"
+open(p, "w").write(s.replace(anchor, step + anchor, 1))
+PY
+! ci_roster "$gate" "$scratch/roster/unnamed" 2>"$scratch/roster/unnamed.err" ||
+  fail 'an unnamed CI check behind a setup command passed as setup'
+has_line "^test.yml static: 'run: mix deps.get; test -f newly-required-ci-asset' is neither run by the gate nor on its list" \
+  "$scratch/roster/unnamed.err" || fail "an unnamed CI check failed without its reason: $(cat "$scratch/roster/unnamed.err")"
 grep -vxF '#   test.yml browser' "$gate" > "$scratch/roster/dropped.sh"
 ! ci_roster "$scratch/roster/dropped.sh" "$root/.github/workflows" 2>"$scratch/roster/dropped.err" ||
   fail 'a CI job taken off the list passed'
