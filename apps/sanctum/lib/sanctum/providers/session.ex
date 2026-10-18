@@ -248,6 +248,10 @@ defmodule Sanctum.Providers.Session do
 
         {:error, {:unknown_provider, name}} ->
           {:error, {:invalid_argument, unknown_provider_message(name)}}
+
+        # The init budget of this address or of the server is spent.
+        {:error, {:rate_limited, _retry_after_s} = limited} ->
+          {:error, limited}
       end
     else
       {:error, {:invalid_argument, device_flow_disabled_message()}}

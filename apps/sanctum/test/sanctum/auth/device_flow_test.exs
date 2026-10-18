@@ -105,7 +105,7 @@ defmodule Sanctum.Auth.DeviceFlowTest do
     defp init_from(ip), do: DeviceFlow.init_device_flow("github", ip)
 
     defp admitted?({:error, {:client_id_not_configured, :github}}), do: true
-    defp admitted?({:error, "Too many sign-in attempts" <> _}), do: false
+    defp admitted?({:error, {:rate_limited, retry_after_s}}) when retry_after_s > 0, do: false
 
     test "one address exhausts only its own init budget" do
       noisy = "198.51.100.9"
@@ -288,6 +288,59 @@ defmodule Sanctum.Auth.DeviceFlowTest do
 
       assert Application.get_env(:sanctum, :device_flow_last_ip) == "203.0.113.9",
              "the MCP device flow was charged no address"
+    end
+  end
+
+  describe "a device sign-in over its init budget" do
+    test "is told to wait, as a typed rate limit, on the MCP surface too" do
+      ip = "198.51.100.77"
+      ctx = %{Sanctum.TestContext.local() | client_ip: ip, authenticated: false}
+      prev_flow = Application.get_env(:sanctum, :device_flow)
+      prev_provider = Application.get_env(:sanctum, :auth_provider)
+      prev_client = Application.fetch_env(:sanctum, :github_client_id)
+      prev_client_env = System.get_env("CYFR_GITHUB_CLIENT_ID")
+
+      on_exit(fn ->
+        Prima.Test.RateLimiter.reset!()
+
+        case prev_client do
+          {:ok, id} -> Application.put_env(:sanctum, :github_client_id, id)
+          :error -> Application.delete_env(:sanctum, :github_client_id)
+        end
+
+        if prev_client_env, do: System.put_env("CYFR_GITHUB_CLIENT_ID", prev_client_env)
+
+        if prev_flow,
+          do: Application.put_env(:sanctum, :device_flow, prev_flow),
+          else: Application.delete_env(:sanctum, :device_flow)
+
+        if prev_provider,
+          do: Application.put_env(:sanctum, :auth_provider, prev_provider),
+          else: Application.delete_env(:sanctum, :auth_provider)
+      end)
+
+      Prima.Test.RateLimiter.reset!()
+      Application.delete_env(:sanctum, :device_flow)
+      Application.put_env(:sanctum, :auth_provider, Sanctum.Auth.OAuth)
+      # No client id, so an admitted init stops at the configuration and
+      # never reaches a provider.
+      Application.delete_env(:sanctum, :github_client_id)
+      System.delete_env("CYFR_GITHUB_CLIENT_ID")
+
+      # Spend this address's init budget, whatever its number is.
+      outcomes = for _ <- 1..200, do: DeviceFlow.init_device_flow("github", ip)
+      assert {:error, {:rate_limited, retry_after_s}} = List.last(outcomes)
+      assert retry_after_s > 0
+
+      # The wait is read again, so it may have ticked down a second.
+      assert {:error, {:rate_limited, wait_s} = limited} =
+               Sanctum.Providers.Session.handle(ctx, %{
+                 "action" => "device_init",
+                 "provider" => "github"
+               })
+
+      assert wait_s > 0 and wait_s <= retry_after_s
+      assert %Prima.Refusal{class: :rate_limited} = Prima.Refusal.classify(limited)
     end
   end
 

@@ -26,8 +26,6 @@ defmodule Sanctum.ProseErrorInventoryTest do
   # {file, function} => prose `{:error, …}` returns remaining.
   @inventory %{
     {"apps/sanctum/lib/sanctum/api_key.ex", "Sanctum.ApiKey.create/3"} => 1,
-    {"apps/sanctum/lib/sanctum/auth/device_flow.ex",
-     "Sanctum.Auth.DeviceFlow.check_init_budget/1"} => 1,
     {"apps/sanctum/lib/sanctum/catalog.ex", "Sanctum.Catalog.in_chain_reachability/2"} => 2,
     {"apps/sanctum/lib/sanctum/consent/blob_builder.ex",
      "Sanctum.Consent.BlobBuilder.narrow_limit/3"} => 14,

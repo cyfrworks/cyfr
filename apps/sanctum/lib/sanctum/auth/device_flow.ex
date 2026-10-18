@@ -151,7 +151,9 @@ defmodule Sanctum.Auth.DeviceFlow do
            Prima.RateLimiter.check({:device_init, :all}, @init_global_max, @poll_window_ms) do
       :ok
     else
-      {:deny, _retry_ms} -> {:error, "Too many sign-in attempts — try again shortly"}
+      # Typed, as the other sign-in capacity refusals are: the caller is told
+      # to wait, in whole seconds rounded up.
+      {:deny, retry_ms} -> {:error, {:rate_limited, div(retry_ms + 999, 1000)}}
     end
   end
 
