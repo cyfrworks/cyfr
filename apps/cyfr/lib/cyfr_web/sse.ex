@@ -65,7 +65,10 @@ defmodule CyfrWeb.SSE do
       dropping what it could not keep up with;
     * when the client goes away, which the next write finds.
 
-  A reconnect is a new open under the gate.
+  A reconnect is a new open under the gate. Nothing published while the
+  subscriber was away is kept for it: the reopened stream hands it the
+  declared refresh, if any, and then only what is published after its
+  new subscription.
   """
 
   alias Cyfr.Bus.{AthanorArchived, CallerInvalidated, FrameCredential, Membership, Session}

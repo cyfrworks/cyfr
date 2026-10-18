@@ -160,7 +160,10 @@ defmodule Cyfr.Application do
     # endpoints drain before infra goes down, and every child that holds a
     # claim has stopped before this tree returns, so the `arca`
     # application, which this one depends on and which stops after it,
-    # still has its pool open for every claim they release.
+    # still has its pool open for every claim they release. Every
+    # long-running child states its stop bound (`shutdown:`) in the spec
+    # that declares it; a supervisor waits for its own children and keeps
+    # `:infinity`.
     children = Enum.map(layout(), &tier/1)
 
     opts = [strategy: :rest_for_one, name: Cyfr.Supervisor, max_restarts: 10, max_seconds: 60]

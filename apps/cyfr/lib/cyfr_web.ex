@@ -18,6 +18,12 @@ defmodule CyfrWeb do
   Do NOT define functions inside the quoted expressions
   below. Instead, define additional modules and import
   those modules here.
+
+  The shared web helpers this namespace exports, among them the pipelines
+  (`CyfrWeb.Pipelines`), the ingress plugs and the error-rendering
+  contract with its JSON renderers (`CyfrWeb.ErrorRenderer`), are the
+  host's, beside the endpoint and the root router: the surfaces the
+  router mounts use them, and they name no surface.
   """
 
   use Boundary,

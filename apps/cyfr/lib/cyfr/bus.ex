@@ -33,8 +33,9 @@ defmodule Cyfr.Bus do
   the committed change. The foundations below the host emit `:telemetry`
   and never touch this module; the host's bridge (`Cyfr.TelemetryBridge`)
   is the one place an event becomes a message. Execution deltas are the
-  documented exception: buffered and broadcast before the write-behind
-  sink persists them, numbered for replay.
+  documented exception: numbered for replay and broadcast as they are
+  pushed, kept only in `Opus.Events`' bounded replay buffer and never
+  persisted.
   """
 
   alias Prima.Actor

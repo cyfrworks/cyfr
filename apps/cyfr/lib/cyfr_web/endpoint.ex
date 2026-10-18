@@ -196,6 +196,9 @@ defmodule CyfrWeb.Endpoint do
   # it — the endpoint's telemetry span, Phoenix's request log line, a
   # refusal of the ownership plug — while routing still reads `path_info`.
   plug(CyfrWeb.Plugs.ScrubTinctureCredentials)
+  # The host's own metrics export (`/metrics`), the one adapter behind the
+  # endpoint that is neither Emissary's nor Prism's: every route the
+  # composition router serves is one of theirs.
   plug(CyfrWeb.MetricsPlug)
   plug(Plug.RequestId)
   # A boot that lost the control plane serves nothing but health.

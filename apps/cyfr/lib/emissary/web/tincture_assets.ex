@@ -25,7 +25,9 @@ defmodule Emissary.Web.TinctureAssets do
     * `Cache-Control` as the route asks: `public` for a public tincture's
       files, `no-cache` for its address (which follows its latest
       version), and `private` with `max-age` never above the asset
-      credential's remaining seconds for a private one's;
+      credential's remaining seconds for a private one's. Bytes a browser
+      already holds are not recalled: a retired credential refuses the
+      next fetch, and a cached copy serves until its `max-age` runs out;
     * `Access-Control-Allow-Origin: *`: the consumer is a sandboxed frame
       with an opaque origin (`Origin: null`), whose fetches could not read
       these responses otherwise. What authorizes a read is the URL — a

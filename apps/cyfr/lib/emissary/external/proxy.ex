@@ -15,7 +15,10 @@ defmodule Emissary.External.Proxy do
 
   This module is the one implementation of `Sanctum.Proxy`, the port the
   operation table asks about proxied tools through; `Cyfr.Application`
-  installs it at boot.
+  installs it at boot. It is the one surface module that implements a
+  foundation port: the outbound integration shares Emissary's name for
+  economy of vocabulary, not as a precedent for another surface
+  implementing one.
 
   Managing the connections themselves is the `mcp_servers` tool
   (`Emissary.External.Provider`); the config both build a server from is

@@ -45,7 +45,12 @@ defmodule Cyfr.StorageReserve do
   the local storage roots alone are read, with the same mark and the same
   way back; with no local root either, nothing is read and the latch is
   `ok`. A database volume the reserve does not share and an S3 store are
-  outside it, the stated limits.
+  outside it, the stated limits. So is a burst of authority-reducing
+  writes larger than the reserve: a revocation whose commit then fails
+  does not take effect and is answered as the store's failure
+  (`:database_error`, refused as unavailable). Retained object
+  generations, stored execution payloads and the decision audit have no
+  byte ceiling, since their retention is by age (`Arca.Retention`).
 
   ## The boot's refusals
 

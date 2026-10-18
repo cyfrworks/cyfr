@@ -12,8 +12,11 @@ defmodule Cyfr.Boundaries do
   depends on it.
 
   The Boundary declarations make an edge between two boundaries of one
-  application a compile error, and a surface row the compiler holds whole
-  is not here: its plant in `Cyfr.BoundariesTest.CompilerPlants` is its
+  application a compile error, and a reference to a module the target
+  boundary does not export is one too, which keeps every boundary's reach
+  into another to the modules that one exports. A surface row the
+  compiler holds whole is not here: its plant in
+  `Cyfr.BoundariesTest.CompilerPlants` is its
   proof. The catalog holds what that compiler cannot see: the edges out of
   Prima and the islands, which run no Boundary compiler, and out of a
   foundation, whose build does not see the boundaries above it; a roster
