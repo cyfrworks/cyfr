@@ -265,7 +265,7 @@ The screen, the command line, the wire and the assistant share one operation dec
 ### 5.4 Consent
 
 - A consent binds to the exact action and resources shown in its preview: a component's needs, a tincture's frame capabilities, system actions, streams and placement. A version that asks for more asks again, and a layout edit never widens a grant. Shape, decision, policy, activation and credential-binding digests keep distinct meanings.
-- Who may consent is decided by how the caller authenticated, not by what it holds: an interactive session or a paired client may, a key only for the one exact commit its capability names, and nothing on the guest plane, a tincture session, a webhook or a schedule may. Granting a component more than its author declared is always interactive. *Not built yet:* issuing a key's consent capability, so no key consents today.
+- Who may consent is decided by how the caller authenticated, not by what it holds: an interactive session or a paired client may, a key only for the one exact commit its capability names, and nothing on the guest plane, a tincture session, a webhook or a schedule may. Granting a component more than its author declared is always interactive. *Not built yet:* a declared operation that issues a key's consent capability; `Sanctum.ApiKey.create/3` mints one and a key holding one commits its consent, but `key.create` passes none.
 - Human approval unblocks an action that is already authorized and grants nothing more. A child execution holds only authority derived from its parent. Entering a guest context is irreversible.
 - A grant's structured preview, narrowing, origin and lifetime are §10's.
 
