@@ -90,9 +90,13 @@ elif body == "returns":
 class Teardown(unittest.TestCase):
     def suite(self, slow=False, body="guarded", failing="0"):
         calls = os.path.join(self.scratch, "calls")
+        # The suite's stdout carries only its JSON lines, and its stderr
+        # names its project, wherever this runs: under CI `down` prints the
+        # stack's logs to stdout, and STACK_PROJECT_PREFIX renames the project.
+        env = {name: value for name, value in os.environ.items() if name not in ("CI", "STACK_PROJECT_PREFIX")}
         process = subprocess.Popen(
             [sys.executable, "-I", "-c", SUITE, TESTS, calls, "slow" if slow else "fast", body, failing],
-            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env)
         self.addCleanup(process.stderr.close)
         self.addCleanup(process.stdout.close)
         self.addCleanup(lambda: process.poll() is None and process.kill())
