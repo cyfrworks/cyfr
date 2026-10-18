@@ -1917,14 +1917,15 @@ defmodule Aqua.LoopTest do
 
   test "a launch the soul's own policy runs at once still asks, and never answers not approved",
        %{ctx: ctx, thread: thread} do
-    # The soul's own definition says execution.run runs at once, and its
-    # grant is walked again for the shape that moved.
-    {:ok, _} =
-      Aqua.AgentConfig.call_aqua(ctx, %{
-        "action" => "update",
-        "name" => "aqua",
-        "tool_policy_patch" => %{"execution.run" => "auto"}
-      })
+    # The soul's own file says execution.run runs at once, written past
+    # the door that refuses it, and its grant is walked again for the
+    # shape that moved.
+    actor = Sanctum.Context.actor(ctx)
+    {:ok, binary} = Arca.get(actor, Compendium.AquaPath.soul_file())
+    {:ok, soul} = Compendium.AquaAgent.parse("aqua", binary)
+    soul = %{soul | tool_policy: Map.put(soul.tool_policy, "execution.run", "auto")}
+    :ok = Arca.put(actor, Compendium.AquaPath.soul_file(), Compendium.AquaAgent.serialize(soul))
+    {:ok, _} = Compendium.AgentIndex.sync(ctx)
 
     walk!(ctx, %{ref: @soul, selections: [%{dep: "catalyst:local.claude", label: "default"}]})
 

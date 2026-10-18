@@ -164,6 +164,31 @@ defmodule Compendium.AquaAgentTest do
                AquaAgent.validate_tool_policy(%{"files.write" => "auto"}, AquaAgent.soul_type())
     end
 
+    test "an action declared to take no standing allow is never auto, on any agent" do
+      # A pin, an endorsement, a scroll's writes and a launch are asked at
+      # every call, so an authored auto would be a standing answer they
+      # never take.
+      for key <-
+            ~w(notes.pin notes.endorse aqua.skill_create aqua.skill_update execution.run) do
+        assert {:error, msg} =
+                 AquaAgent.validate_tool_policy(%{key => "auto"}, AquaAgent.soul_type())
+
+        assert msg == "#{key} always asks — it cannot be set to auto"
+        assert :ok = AquaAgent.validate_tool_policy(%{key => "ask"}, AquaAgent.soul_type())
+      end
+
+      assert {:error, "notes.pin always asks — it cannot be set to auto"} =
+               AquaAgent.validate_tool_policy(%{"notes.pin" => "auto"}, AquaAgent.role_type())
+
+      assert {:error, msg} =
+               AquaAgent.validate_tool_policy(%{"notes.*" => "auto"}, AquaAgent.soul_type())
+
+      assert msg =~ "notes.pin"
+
+      assert :ok =
+               AquaAgent.validate_tool_policy(%{"notes.read" => "auto"}, AquaAgent.soul_type())
+    end
+
     test "a glob at auto that covers a destructive action is refused with the actions named" do
       assert {:error, msg} =
                AquaAgent.validate_tool_policy(%{"files.*" => "auto"}, AquaAgent.soul_type())

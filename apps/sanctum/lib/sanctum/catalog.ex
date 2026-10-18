@@ -1132,6 +1132,32 @@ defmodule Sanctum.Catalog do
   end
 
   @doc """
+  Whether `tool.action` may ever run without a card: its declaration's
+  kind is one `Sanctum.VirtualTools.auto_permitted_kind?/1` admits (a
+  read, write or execute) and the declaration takes a standing allow
+  (`standing` is not `false`, the rule `Sanctum.ToolGrants.check_standing/2`
+  applies to a standing answer). An authored `auto` is a standing answer
+  the agent's file gives for every call, so it obeys the same rule: an
+  action asked on every call, such as `notes.pin`, is never `auto`. A
+  destructive, external or undeclared action is `false` too. The one
+  predicate the assistant's runtime ceiling (`Aqua.Kinds.auto_permitted?/2`)
+  and the `aqua` tool's write door
+  (`Compendium.AquaAgent.validate_tool_policy/2`) read.
+  """
+  @spec auto_permitted?(String.t(), String.t()) :: boolean()
+  def auto_permitted?(tool, action) when is_binary(tool) and is_binary(action) do
+    case declaration(tool, action) do
+      {:ok, %{kind: kind, standing: standing}} ->
+        Sanctum.VirtualTools.auto_permitted_kind?(kind) and standing != false
+
+      {:error, :not_found} ->
+        false
+    end
+  end
+
+  def auto_permitted?(_tool, _action), do: false
+
+  @doc """
   One `tool.action` as the standing rule reads it, by its name, classified
   as `tool_kind/2` classifies it: a virtual hand from its table, an
   upstream `server:tool` as external (it declares no standing and names no

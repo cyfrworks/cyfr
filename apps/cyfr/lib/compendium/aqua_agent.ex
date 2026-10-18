@@ -325,9 +325,10 @@ defmodule Compendium.AquaAgent do
 
   An action's kind is the gate's classification (`Sanctum.Catalog.tool_kind/2`:
   a virtual hand's from `Sanctum.VirtualTools`, `:external` for a
-  `server:tool`, else the catalogued tool's annotation); only a kind
-  `Sanctum.VirtualTools.auto_permitted_kind?/1` admits may be `auto`, and an
-  action whose kind is unknown is left to that ceiling.
+  `server:tool`, else the catalogued tool's annotation); only an action
+  `Sanctum.Catalog.auto_permitted?/2` admits may be `auto` (a kind that may
+  run without a card, declared to take a standing allow), and an action
+  whose kind is unknown is left to that ceiling.
 
   `:ok`, a typed refusal, or `{:error, sentence}` — the sentence is the
   person's. A key with no effect on a role is refused at any value, the
@@ -424,8 +425,7 @@ defmodule Compendium.AquaAgent do
   # a `server:tool`, else the catalogued tool's annotation, nil unknown.
   defp kind_for(tool, action), do: Sanctum.Catalog.tool_kind(tool, action)
 
-  defp auto_permitted?(tool, action),
-    do: VirtualTools.auto_permitted_kind?(kind_for(tool, action))
+  defp auto_permitted?(tool, action), do: Sanctum.Catalog.auto_permitted?(tool, action)
 
   # What a `tool.*` glob stands for, in declared order.
   defp actions_of(tool), do: Sanctum.Catalog.tool_actions(tool)

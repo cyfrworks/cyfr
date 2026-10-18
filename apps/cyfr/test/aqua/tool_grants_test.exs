@@ -157,6 +157,40 @@ defmodule Aqua.ToolGrantsTest do
       assert ToolGrants.resolve(%{"http.*" => "auto"}, [])["http.delete"] == "ask"
     end
 
+    test "the ceiling demotes an automatic action declared to take no standing allow, written or globbed" do
+      # A pin, an endorsement and a scroll's writes are asked at every
+      # call: a file that says auto for one reaches the guest as ask.
+      authored = %{
+        "notes.pin" => "auto",
+        "notes.endorse" => "auto",
+        "aqua.skill_create" => "auto",
+        "aqua.skill_update" => "auto",
+        "notes.read" => "auto"
+      }
+
+      assert ToolGrants.resolve(authored, []) == %{
+               "notes.pin" => "ask",
+               "notes.endorse" => "ask",
+               "aqua.skill_create" => "ask",
+               "aqua.skill_update" => "ask",
+               "notes.read" => "auto"
+             }
+
+      globbed = ToolGrants.resolve(%{"notes.*" => "auto"}, [])
+      assert globbed["notes.pin"] == "ask"
+      assert globbed["notes.endorse"] == "ask"
+      assert globbed["notes.read"] == "auto"
+
+      for {tool, action} <- [{"notes", "pin"}, {"aqua", "skill_create"}] do
+        assert {:ok, %{kind: :write, standing: false}} =
+                 Sanctum.Catalog.action_declaration("#{tool}.#{action}")
+
+        refute Aqua.Kinds.auto_permitted?(tool, action)
+      end
+
+      assert Aqua.Kinds.auto_permitted?("notes", "read")
+    end
+
     test "an HTTP post, put or patch the author made automatic asks; a GET stays automatic" do
       # Each call resolves through the binding the loop uses, and its decision
       # reads the key the binding names, from the ceiling's own effective map.

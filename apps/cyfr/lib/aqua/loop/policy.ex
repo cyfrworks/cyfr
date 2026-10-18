@@ -9,11 +9,12 @@ defmodule Aqua.Loop.Policy do
 
   The policy is `Aqua.ToolGrants.resolve/2`'s guest spelling
   (`"tool.action" => "auto" | "ask" | "deny"`, `"role.*" => "auto"`),
-  already under the kind ceiling: a destructive or external action is
-  never `auto` without a standing grant. A hand or catalog call reads its
-  own key; a clone reads its role's glob; the `ui` event runs at once; an
-  external server's tool always asks; a launch asks, whatever the
-  agent's own policy or a standing answer says, since `Aqua.Launch` runs
+  already under the kind ceiling: a destructive or external action, or
+  one declared to take no standing allow, is never `auto`, and the others
+  only by the author's `auto` or a standing grant. A hand or catalog call
+  reads its own key; a clone reads its role's glob; the `ui` event runs
+  at once; an external server's tool always asks; a launch asks, whatever
+  the agent's own policy or a standing answer says, since `Aqua.Launch` runs
   only a launch a person approved on its card: it is refused when its
   reference is no component, and denied when the agent's policy denies
   `execution.run` or names it not at all. Reads run beside each other;

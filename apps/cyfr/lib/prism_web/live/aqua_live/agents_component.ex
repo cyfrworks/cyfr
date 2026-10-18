@@ -272,9 +272,10 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
   # Toggle a write/execute capability between "ask" (request approval) and
   # "auto" (run without asking) — on the soul only: a role holds every
   # hand at "auto" (it has no card to raise), and a destructive or
-  # external action is never "auto" anywhere. Both rules are enforced
-  # here, on the derived kind, whatever the client sent; the `aqua` door
-  # holds the same rule for every other writer.
+  # external action, or one declared to take no standing allow, is never
+  # "auto" anywhere. Both rules are enforced here, on the action's
+  # declaration, whatever the client sent; the `aqua` door holds the same
+  # rule for every other writer.
   def handle_event(
         "editor_set_capability_mode",
         %{"name" => name, "key" => key, "mode" => mode},

@@ -1836,6 +1836,7 @@ defmodule Cyfr.Boundaries do
     "Sanctum.Carry" => [sweep: 1],
     "Sanctum.Catalog" => [
       action_declaration: 1,
+      auto_permitted?: 2,
       chain_reachable?: 2,
       configured_providers: 0,
       get_tool: 1,
@@ -2041,7 +2042,6 @@ defmodule Cyfr.Boundaries do
       action_pairs: 0,
       actions_of: 1,
       auto_only?: 2,
-      auto_permitted_kind?: 1,
       catalyst_for: 1,
       catalysts: 0,
       kind_for: 2,

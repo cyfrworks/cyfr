@@ -117,8 +117,10 @@ defmodule Aqua.ToolGrants do
   plain `:auto`; a standing deny KEEPS its pair, as `:deny` — an absent
   key would let a surviving glob answer, and the guest stops at a
   present one. Last the
-  ceiling: an `:auto` on a destructive or external action, or on an
-  action whose kind is unknown, becomes `:ask`; an action a catalogued
+  ceiling: an `:auto` on a destructive or external action, on one
+  declared to take no standing allow (`standing: false`), or on an
+  action whose kind is unknown, becomes `:ask`
+  (`Aqua.Kinds.auto_permitted?/2`); an action a catalogued
   tool does not have is dropped. A hand-edited file reaches the guest
   already within the rule.
   """
