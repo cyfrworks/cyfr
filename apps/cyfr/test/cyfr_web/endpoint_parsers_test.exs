@@ -786,7 +786,8 @@ defmodule CyfrWeb.EndpointParsersTest.UnauthenticatedBodyTest do
   body route naming its cap (`CyfrWeb.Plugs.RawBodyReader.cap/1`). An
   answer sent with the body unread ends its HTTP/1 connection, a refusal
   and an answer that left a body unparsed alike; a body read whole keeps
-  it. The attachment allowance after `/mcp`'s rate limit and
+  it. Every WebSocket transport names its frame bound, and `/live`'s takes
+  the Files editor's worst-case save whole and refuses a longer frame. The attachment allowance after `/mcp`'s rate limit and
   authentication is `CyfrWeb.EndpointParsersTest.MCPTransportTest`'s.
   """
 
@@ -964,6 +965,28 @@ defmodule CyfrWeb.EndpointParsersTest.UnauthenticatedBodyTest do
                  "either way the call rejects |"
     end
 
+    test "every WebSocket transport the endpoint mounts names its frame bound, /live's the " <>
+           "Files editor's worst-case save" do
+      bounds =
+        for {path, _socket, opts} <- CyfrWeb.Endpoint.__sockets__(),
+            config = Keyword.get(opts, :websocket, true),
+            config != false,
+            do: {path, if(config == true, do: nil, else: config[:max_frame_size])}
+
+      for {path, bound} <- bounds do
+        assert is_integer(bound) and bound > 0, "#{path}'s WebSocket names no frame bound"
+      end
+
+      assert {"/device", 131_072} in bounds
+
+      {"/live", live} = List.keyfind(bounds, "/live", 0)
+
+      # Above the editor's save of a file it opens inline, every byte
+      # encoded as three, and under the adapter's 10 MB default it replaces.
+      assert live > 3 * Arca.Files.max_inline_read()
+      assert live < 10_000_000
+    end
+
     test "every socket transport the endpoint mounts takes no body past a host call's, " <>
            "and none at all but a POST of declared length, refused before any byte is read" do
       transports = CyfrWeb.Endpoint.socket_transports()
@@ -1108,6 +1131,117 @@ defmodule CyfrWeb.EndpointParsersTest.UnauthenticatedBodyTest do
     # answer and a close well inside that mean no byte of the body was
     # awaited.
     @answered_within 5_000
+
+    test "a /live WebSocket frame past its bound is refused from its header alone, and the " <>
+           "socket closes",
+         %{port: port} do
+      socket = websocket(port, "/live/websocket?vsn=2.0.0")
+      bound = live_frame_bound()
+
+      # The header of a masked text frame one byte past the bound, and its
+      # mask: none of the payload is sent.
+      :ok = :gen_tcp.send(socket, [frame_header(bound + 1), <<1, 2, 3, 4>>])
+
+      assert <<0x88, _length, 1009::16, _reason::binary>> = closed(socket)
+    end
+
+    test "a /live WebSocket frame carrying the Files editor's save of a file it opens " <>
+           "inline, every byte encoded as three, is taken whole",
+         %{port: port} do
+      socket = websocket(port, "/live/websocket?vsn=2.0.0")
+
+      # Two-byte characters, each byte of which URLSearchParams writes as
+      # %XX: the inline-read limit's worst case.
+      content = :binary.copy("é", div(Arca.Files.max_inline_read(), 2))
+      assert byte_size(content) == Arca.Files.max_inline_read()
+
+      save =
+        Jason.encode!([
+          "1",
+          "1",
+          "lv:phx-files",
+          "event",
+          %{
+            "type" => "form",
+            "event" => "save",
+            "value" => URI.encode_query(%{"content" => content})
+          }
+        ])
+
+      assert byte_size(save) > 3 * Arca.Files.max_inline_read()
+
+      :ok = send_text(socket, save)
+      :ok = send_text(socket, Jason.encode!([nil, "2", "phoenix", "heartbeat", %{}]))
+
+      assert [nil, "2", "phoenix", "phx_reply", %{"status" => "ok"}] = reply(socket, "2")
+    end
+
+    defp live_frame_bound do
+      {"/live", _socket, opts} = List.keyfind(CyfrWeb.Endpoint.__sockets__(), "/live", 0)
+      bound = opts |> Keyword.fetch!(:websocket) |> Keyword.get(:max_frame_size)
+      assert is_integer(bound), "/live's WebSocket names no frame bound"
+      bound
+    end
+
+    defp websocket(port, path) do
+      socket = connect(port)
+
+      :ok =
+        :gen_tcp.send(socket, [
+          "GET #{path} HTTP/1.1\r\nhost: localhost\r\nupgrade: websocket\r\n",
+          "connection: Upgrade\r\nsec-websocket-key: dGhlIHNhbXBsZSBub25jZQ==\r\n",
+          "sec-websocket-version: 13\r\n\r\n"
+        ])
+
+      assert {:ok, "HTTP/1.1 101 " <> _rest} = upgraded(socket, "")
+      socket
+    end
+
+    defp upgraded(socket, received) do
+      if String.contains?(received, "\r\n\r\n") do
+        {:ok, received}
+      else
+        assert {:ok, data} = :gen_tcp.recv(socket, 0, 5_000)
+        upgraded(socket, received <> data)
+      end
+    end
+
+    # A client frame's header: FIN, text, masked, a 64-bit length.
+    defp frame_header(length), do: <<1::1, 0::3, 1::4, 1::1, 127::7, length::64>>
+
+    defp send_text(socket, payload) do
+      mask = :crypto.strong_rand_bytes(4)
+      size = byte_size(payload)
+      key = mask |> :binary.copy(div(size, 4) + 1) |> binary_part(0, size)
+      :gen_tcp.send(socket, [frame_header(size), mask, :crypto.exor(payload, key)])
+    end
+
+    # The decoded text frame answering `ref`, skipping the others.
+    defp reply(socket, ref, buffer \\ "") do
+      case server_frame(buffer) do
+        {:ok, payload, rest} ->
+          case Jason.decode!(payload) do
+            [_join, ^ref | _] = message -> message
+            _other -> reply(socket, ref, rest)
+          end
+
+        :more ->
+          assert {:ok, data} = :gen_tcp.recv(socket, 0, 5_000)
+          reply(socket, ref, buffer <> data)
+      end
+    end
+
+    defp server_frame(<<_fin_op, 127, size::64, payload::binary-size(size), rest::binary>>),
+      do: {:ok, payload, rest}
+
+    defp server_frame(<<_fin_op, 126, size::16, payload::binary-size(size), rest::binary>>),
+      do: {:ok, payload, rest}
+
+    defp server_frame(<<_fin_op, size, payload::binary-size(size), rest::binary>>)
+         when size < 126,
+         do: {:ok, payload, rest}
+
+    defp server_frame(_partial), do: :more
 
     test "a long-poll POST past its cap, or of undeclared length, is answered from its " <>
            "headers alone, and its connection ends without its body",

@@ -69,10 +69,22 @@ defmodule CyfrWeb.Endpoint do
   # registry appeal) has to budget by IP itself.
   @live_connect_info [:peer_data, :x_headers, session: {__MODULE__, :session_options, []}]
 
+  # A `/live` frame is bounded by the largest event a LiveView sends
+  # legitimately: the Files editor's save of a file it opens inline
+  # (`Arca.Files.max_inline_read/0`), submitted as a form, which LiveView
+  # encodes with `URLSearchParams`, so a byte outside its unreserved set
+  # takes three. The envelope margin covers the rest of the event (the join
+  # and message references, the topic, the event's type, name and field
+  # name), which is under a kilobyte. The socket takes its first frames
+  # before anyone is signed in, so the bound is the editor's worst case and
+  # no more, moving with the inline-read limit.
+  @live_envelope_bytes 65_536
+  @live_max_frame_bytes Arca.Files.max_inline_read() * 3 + @live_envelope_bytes
+
   # The socket refuses every connect once a graceful stop begins
   # (`CyfrWeb.LiveSocket.drain/0`), on either transport.
   socket "/live", CyfrWeb.LiveSocket,
-    websocket: [connect_info: @live_connect_info],
+    websocket: [connect_info: @live_connect_info, max_frame_size: @live_max_frame_bytes],
     longpoll: [connect_info: @live_connect_info]
 
   # A paired glass's device channel: the device protocol over a raw
