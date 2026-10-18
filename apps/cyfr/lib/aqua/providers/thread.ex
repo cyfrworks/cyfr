@@ -926,7 +926,10 @@ defmodule Aqua.Providers.Thread do
     do: {:conflict, "That message was sent; its attachments stay as they are"}
 
   defp attachment_refusal(:attachment_exists),
-    do: {:conflict, "Another session stored a file under that message"}
+    do:
+      {:conflict,
+       "A file of that name is already under that message; discard the message's files " <>
+         "(thread.discard) first to replace it"}
 
   defp attachment_refusal(:database_error), do: {:unavailable, "Storage"}
 

@@ -720,8 +720,14 @@ defmodule Aqua.Providers.ThreadTest do
       {:ok, blob} = Aqua.attachment_blob_path(thread.id, message_id, ref)
 
       for who <- [theirs, mine] do
-        assert {:error, {:conflict, _}} = attach(who, thread, message_id, "over")
+        assert {:error, {:conflict, sentence}} = attach(who, thread, message_id, "over")
         assert {:ok, "first"} = Arca.get(Sanctum.Context.actor(ctx), blob)
+
+        # The answer says what is there and how to replace it, and blames no
+        # other session: the storing session's own retry gets it too.
+        assert sentence =~ "already under that message"
+        assert sentence =~ "thread.discard"
+        refute String.downcase(sentence) =~ "another session"
       end
 
       assert {:ok, %{discarded: [_]}} = discard(mine, thread, message_id)
