@@ -124,11 +124,12 @@ defmodule Sanctum.Pairing do
   other change, and not these. Before the first passkey or device, a fresh
   re-authentication bootstraps the first, and the bootstrap is latched by
   whichever first method commits first (`Arca.PersonIdentities`, its
-  `first_method_at`): the first passkey's registration or the first
-  device's completed pairing, each setting the mark in the transaction that
-  writes it, under the person's lock. Revoking every passkey and device
-  never reopens it: a person who has lost them recovers with their kit or
-  through the administrator's recovery. `addition_confirmed/1` decides it
+  `first_method_at`): the first passkey's registration, the first
+  device's completed pairing or its first remote certification, each
+  setting the mark in the transaction that writes it, under the person's
+  lock. Revoking every passkey and device never reopens it: a person who
+  has lost them recovers with their kit or through the administrator's
+  recovery. `addition_confirmed/1` decides it
   for a write that runs in the person's transaction after the
   confirmation's consumption; the pairing's own invitation records its
   confirmer, and an invitation that names none completes only as the

@@ -21,7 +21,10 @@ defmodule Sanctum.RemoteCertification do
   (`Arca.DeviceCertifications.certify/3`) only while the person's head is
   the certificate's `key_epoch`. Once a passkey or a paired device ever
   existed for the person here, one of them must have given that confirmation
-  (`Sanctum.Pairing`, its module doc). Only then is the certificate
+  (`Sanctum.Pairing`, its module doc); the certification itself sets the
+  person's first-method latch, so one certified on a fresh
+  re-authentication is the bootstrap, and removing every passkey and
+  device never reopens it. Only then is the certificate
   answered; a transaction that refuses leaves the signed certificate
   unanswered and the confirmation unconsumed.
 

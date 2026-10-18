@@ -89,7 +89,9 @@ defmodule Arca.DeviceCertifications do
   `verify` run (the person's confirmation consumed there, `:ok` or
   `{:error, reason}`, which leaves nothing written), the identity row
   read, which must be the person's own local identity under `identifier`
-  with its head at `key_epoch`, and the row inserted or replaced.
+  with its head at `key_epoch`, the person's first-method latch set
+  (`Arca.PersonIdentities.first_method!/1`), and the row inserted or
+  replaced.
 
   Refusals: `:unknown_person`, `:stale_key_epoch` (the head is another, or
   the identity is not this person's local one), `verify`'s own,
@@ -154,7 +156,8 @@ defmodule Arca.DeviceCertifications do
 
     with {:ok, _user} <- lock_person(row.user_id),
          :ok <- verified(verify.()),
-         :ok <- head(row.user_id, row.identifier, row.key_epoch, :stale_key_epoch) do
+         :ok <- head(row.user_id, row.identifier, row.key_epoch, :stale_key_epoch),
+         :ok <- first_method(row.user_id) do
       existing =
         binding(row.user_id, row.audience_home, row.client_id)
         |> Arca.QueryHelpers.for_update()
@@ -164,6 +167,20 @@ defmodule Arca.DeviceCertifications do
         nil -> insert(row, now)
         %DeviceCertification{} = held -> replace(held, row, now)
       end
+    end
+  end
+
+  # A certified device is one of the person's methods: the certification
+  # sets the first-method latch in its own transaction, under the person's
+  # lock it already holds, as a passkey's registration and a pairing's
+  # completion do, so removing every device never reopens the bootstrap.
+  # `verify` has already refused a confirmation no passkey or paired
+  # client gave once the latch was set (`Sanctum.Pairing.addition_confirmed/1`).
+  defp first_method(user_id) do
+    case Arca.PersonIdentities.first_method!(user_id) do
+      :marked -> :ok
+      :already -> :ok
+      :no_identity -> {:error, :stale_key_epoch}
     end
   end
 

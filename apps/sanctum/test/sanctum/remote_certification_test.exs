@@ -140,6 +140,19 @@ defmodule Sanctum.RemoteCertificationTest do
     certificate
   end
 
+  # A certification confirmed by a fresh re-authentication that no passkey
+  # and no paired client gave.
+  defp reauthenticated(ctx, args) do
+    {:error, {:confirmation_required, %{id: id}}} = RemoteCertification.certify(ctx, args)
+
+    {:ok, %{state: "confirmed", confirmed_passkey_id: nil, confirmed_client_id: nil}} =
+      Arca.PendingConfirmations.confirm(Context.actor(ctx), Prima.Confirmation.ref(id), %{
+        proof: "oidc_reauth"
+      })
+
+    RemoteCertification.certify(%{ctx | confirmation_id: id}, args)
+  end
+
   defp glass(source \\ @source), do: Context.build(%{authenticated: false, client_ip: source})
 
   defp renew(certificate, proof \\ nil, source \\ @source) do
@@ -283,6 +296,26 @@ defmodule Sanctum.RemoteCertificationTest do
 
       assert {:ok, _cert} = DeviceCert.decode(certificate)
       assert [_record] = records(user)
+    end
+
+    test "a certification a re-authentication alone confirmed sets the first-method latch: with every device gone, another such re-authentication certifies nothing",
+         %{ctx: ctx, user: user, device: device} do
+      assert is_nil(Arca.Repo.get_by!(PersonIdentity, user_id: user.id).first_method_at)
+
+      # The bootstrap: a fresh re-authentication no passkey or device gave.
+      assert {:ok, %{certificate: _}} = reauthenticated(ctx, args(device))
+      refute is_nil(Arca.Repo.get_by!(PersonIdentity, user_id: user.id).first_method_at)
+
+      # Every device gone, and no passkey ever held: the latch stays set.
+      {1, _} = Arca.Repo.delete_all(from(c in DeviceCertification, where: c.user_id == ^user.id))
+
+      assert {:ok, false} =
+               Arca.PersonIdentities.first_method_open?(Prima.Actor.system(), user.id)
+
+      assert reauthenticated(ctx, args(device, %{"client_id" => "pcl_other"})) ==
+               {:error, Sanctum.Pairing.addition_refusal()}
+
+      assert records(user) == []
     end
 
     test "this home, a malformed request and an unenrolled person certify nothing",

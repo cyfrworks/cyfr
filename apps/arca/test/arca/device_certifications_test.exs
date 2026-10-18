@@ -185,6 +185,40 @@ defmodule Arca.DeviceCertificationsTest do
       assert rows(person) == []
     end
 
+    test "a certification sets the person's first-method latch in its transaction, and one refused sets nothing",
+         %{person: person} do
+      first_method_at = fn ->
+        Arca.Repo.get_by!(PersonIdentity, user_id: person.id).first_method_at
+      end
+
+      assert {:error, :refused_here} =
+               DeviceCertifications.certify(as(person), attrs(person), fn ->
+                 {:error, :refused_here}
+               end)
+
+      assert is_nil(first_method_at.())
+
+      move_head!(person)
+
+      assert {:error, :stale_key_epoch} =
+               DeviceCertifications.certify(as(person), attrs(person), ok())
+
+      assert is_nil(first_method_at.())
+
+      person = %{person | head: Arca.Repo.get_by!(PersonIdentity, user_id: person.id).head_hash}
+      assert {:ok, _row} = DeviceCertifications.certify(as(person), attrs(person), ok())
+      marked = first_method_at.()
+      refute is_nil(marked)
+
+      # Set once and for good: the row's removal and a later
+      # certification leave the mark as it was.
+      {1, _} =
+        Arca.Repo.delete_all(from(c in DeviceCertification, where: c.user_id == ^person.id))
+
+      assert {:ok, _row} = DeviceCertifications.certify(as(person), attrs(person), ok())
+      assert first_method_at.() == marked
+    end
+
     test "a person reaches only their own; a malformed one is refused before any write",
          %{person: person} do
       someone = enrolled!()
