@@ -130,6 +130,10 @@ defmodule Cyfr.Application do
     # only surface as a 500 at the user's login callback.
     validate_oidc_issuer_config!()
 
+    # A webhook's body cap above a host call's body would read more than
+    # an unauthenticated caller may send; refused here, not clamped.
+    validate_webhook_max_body_bytes!()
+
     # Warn (don't block) if auth is configured but no platform admin is
     # declared — no user could access the system until one is seeded.
     warn_if_no_platform_admin()
@@ -1062,6 +1066,13 @@ defmodule Cyfr.Application do
     do: Code.ensure_loaded?(module) and function_exported?(module, function, 2)
 
   defp refresh_exported?(_refresh), do: false
+
+  defp validate_webhook_max_body_bytes! do
+    case Cyfr.RuntimeConfig.webhook_max_body_bytes() do
+      {:ok, _bytes} -> :ok
+      {:error, message} -> raise "[Cyfr] FATAL: #{message}"
+    end
+  end
 
   # OIDC issuer reserved-host check. A generic-OIDC issuer pointed at a
   # reserved direct-provider host (github.com, accounts.google.com) would

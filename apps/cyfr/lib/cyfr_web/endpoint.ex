@@ -89,6 +89,45 @@ defmodule CyfrWeb.Endpoint do
     ],
     longpoll: false
 
+  # A socket transport takes its request from `socket_dispatch`, the
+  # plug `use Phoenix.Endpoint` declares ahead of every plug here, and the
+  # long-poll transport reads a POST's body itself, up to 8 MB and under
+  # no cap of these parsers, from whoever holds a transport token, which
+  # it hands to anyone who asks. So a request to a socket transport's path
+  # is bounded before that dispatch: a POST declares its length, within
+  # the cap `CyfrWeb.Plugs.RawBodyReader.cap/1` names for it (a host
+  # call's body), and any other request carries no body. Every other one
+  # is refused before any byte of its body is read, 413 (411 for a POST
+  # whose length is undeclared), and its HTTP/1 connection ends.
+  @impl Plug
+  def call(conn, opts) do
+    case socket_body(conn) do
+      :ok -> super(conn, opts)
+      {:refused, status, reason} -> refuse_socket_body(conn, status, reason)
+    end
+  end
+
+  @doc """
+  Each socket transport the endpoint mounts, with the routed path
+  (`path_info`) Phoenix dispatches it on: a mount's path joined with each
+  enabled transport's `:path` (`__sockets__/0`).
+  """
+  @spec socket_transports() :: [{:websocket | :longpoll, [String.t()]}]
+  def socket_transports do
+    for {path, _socket, opts} <- __sockets__(),
+        {transport, default, transport_path} <- [
+          {:websocket, true, "/websocket"},
+          {:longpoll, false, "/longpoll"}
+        ],
+        config = Keyword.get(opts, transport, default),
+        config != false do
+      config = if config == true, do: [], else: config
+
+      {transport,
+       String.split(path <> Keyword.get(config, :path, transport_path), "/", trim: true)}
+    end
+  end
+
   # First, so every answer carries it, a refusal raised while parsing
   # among them (`close_unread/2`).
   plug(:close_unread)
@@ -175,10 +214,43 @@ defmodule CyfrWeb.Endpoint do
   defp close_unread(conn, _opts), do: register_before_send(conn, &close_if_unread/1)
 
   defp close_if_unread(conn) do
-    if unread?(conn) and
-         conn |> get_http_protocol() |> Atom.to_string() |> String.starts_with?("HTTP/1"),
-       do: put_resp_header(conn, "connection", "close"),
-       else: conn
+    if unread?(conn), do: close_http1(conn), else: conn
+  end
+
+  defp close_http1(conn) do
+    if conn |> get_http_protocol() |> Atom.to_string() |> String.starts_with?("HTTP/1"),
+      do: put_resp_header(conn, "connection", "close"),
+      else: conn
+  end
+
+  defp socket_body(%Plug.Conn{path_info: path_info} = conn) do
+    if Enum.any?(socket_transports(), &(elem(&1, 1) == path_info)),
+      do: socket_body_bounded(conn),
+      else: :ok
+  end
+
+  defp socket_body_bounded(%Plug.Conn{method: "POST"} = conn) do
+    {:ok, cap} = CyfrWeb.Plugs.RawBodyReader.cap(conn)
+
+    case get_req_header(conn, "content-length") do
+      [declared] ->
+        case Integer.parse(declared) do
+          {bytes, ""} when bytes in 0..cap//1 -> :ok
+          _over_or_unparseable -> {:refused, 413, :socket_body_too_large}
+        end
+
+      _undeclared_or_repeated ->
+        {:refused, 411, :socket_body_length_required}
+    end
+  end
+
+  defp socket_body_bounded(conn),
+    do: if(carries_body?(conn), do: {:refused, 413, :socket_body_too_large}, else: :ok)
+
+  defp refuse_socket_body(conn, status, reason) do
+    conn
+    |> close_http1()
+    |> CyfrWeb.ApiError.halt(status, reason, nil)
   end
 
   defp unread?(conn) do

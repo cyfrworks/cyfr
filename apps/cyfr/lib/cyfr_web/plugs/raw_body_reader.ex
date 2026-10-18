@@ -19,10 +19,11 @@ defmodule CyfrWeb.Plugs.RawBodyReader do
   ## Per-feature length cap
 
   For `/hooks/*` paths we tighten the body length cap to a webhook-specific
-  limit (default 1 MB, configurable via `:webhook_max_body_bytes`). Webhooks
-  rarely need >100 KB; the tighter cap reduces memory churn from misbehaving
-  senders. A sender is not authenticated before its body is read, so a host
-  call's body bounds a larger configured cap (below).
+  limit (default 1 MB, configurable via `:webhook_max_body_bytes` up to a
+  host call's body, `Cyfr.RuntimeConfig.webhook_max_body_bytes/0`).
+  Webhooks rarely need >100 KB; the tighter cap reduces memory churn from
+  misbehaving senders. A value outside that range refuses the boot, and
+  set after it, every webhook read: it is never clamped.
 
   Bodies larger than the cap cause `Plug.Conn.read_body/2` to return
   `{:more, _, _}` — `Plug.Parsers` then raises `Plug.Parsers.RequestTooLargeError`,
@@ -86,10 +87,6 @@ defmodule CyfrWeb.Plugs.RawBodyReader do
   payloads that exceed the per-chunk read length.
   """
 
-  # The shared 1 MiB default (`Prima.Limits.default_max_request_size/0`),
-  # spelled by its owner rather than a sixth literal.
-  @default_webhook_max_body_bytes Prima.Limits.default_max_request_size()
-
   # The directory's write-body limit is its largest entry.
   @directory_max_body_bytes Prima.Identity.max_entry_bytes()
 
@@ -130,16 +127,20 @@ defmodule CyfrWeb.Plugs.RawBodyReader do
   authenticated, the attachment allowance (28 MB) for one its pipeline
   has; never more than the webhook cap under `/hooks/*`, nor the
   directory's 16 KiB write-body limit under `/directory/*`, `/restore*`
-  and `/certify/*`.
+  and `/certify/*`. `{:error, message}` when the webhook cap's
+  configuration is out of its range.
   """
-  @spec cap(Plug.Conn.t()) :: pos_integer()
+  @spec cap(Plug.Conn.t()) :: {:ok, pos_integer()} | {:error, String.t()}
   def cap(conn) do
-    Enum.min([
-      @max_body_bytes,
-      unauthenticated_cap(conn),
-      webhook_cap(conn),
-      directory_cap(conn)
-    ])
+    with {:ok, webhook_cap} <- webhook_cap(conn) do
+      {:ok,
+       Enum.min([
+         @max_body_bytes,
+         unauthenticated_cap(conn),
+         webhook_cap,
+         directory_cap(conn)
+       ])}
+    end
   end
 
   @doc """
@@ -157,20 +158,24 @@ defmodule CyfrWeb.Plugs.RawBodyReader do
   body past it surfaces as 413. When the request path matches `/hooks/*`,
   every chunk is appended to `conn.assigns[:raw_body]` so downstream plugs
   can verify HMAC signatures against the complete body. A declared length
-  above the cap reads nothing and answers `{:more, "", conn}`.
+  above the cap reads nothing and answers `{:more, "", conn}`; a webhook
+  cap configured out of its range reads nothing and answers
+  `{:error, message}`, which `Plug.Parsers` refuses 400.
   """
   def read_body(conn, opts) do
-    # Never above the parser's own `:length`: the smaller applies.
-    length = min(Keyword.get(opts, :length, 8_000_000), cap(conn))
+    with {:ok, cap} <- cap(conn) do
+      # Never above the parser's own `:length`: the smaller applies.
+      length = min(Keyword.get(opts, :length, 8_000_000), cap)
 
-    opts =
-      opts
-      |> Keyword.put(:length, length)
-      |> cap_read_length()
+      opts =
+        opts
+        |> Keyword.put(:length, length)
+        |> cap_read_length()
 
-    if declared_over?(conn, length),
-      do: {:more, "", conn},
-      else: read_capped(conn, opts)
+      if declared_over?(conn, length),
+        do: {:more, "", conn},
+        else: read_capped(conn, opts)
+    end
   end
 
   defp read_capped(conn, opts) do
@@ -215,11 +220,11 @@ defmodule CyfrWeb.Plugs.RawBodyReader do
     Plug.Conn.assign(conn, :raw_body, existing <> chunk)
   end
 
-  # The webhook cap, configurable, under `/hooks/*`.
+  # The webhook cap, configurable within its range, under `/hooks/*`.
   defp webhook_cap(conn) do
     if hooks_path?(conn),
-      do: Application.get_env(:cyfr, :webhook_max_body_bytes, @default_webhook_max_body_bytes),
-      else: @max_body_bytes
+      do: Cyfr.RuntimeConfig.webhook_max_body_bytes(),
+      else: {:ok, @max_body_bytes}
   end
 
   # The directory's routes take no body past their largest entry.

@@ -146,6 +146,40 @@ defmodule Cyfr.RuntimeConfig do
   def cookie_secure?, do: Application.get_env(:cyfr, :cookie_secure, false)
 
   @doc """
+  The most bytes of a webhook's body read (`:webhook_max_body_bytes`):
+  `{:ok, bytes}`, the shared 1 MiB default
+  (`Prima.Limits.default_max_request_size/0`) when unset, or
+  `{:error, message}` for a value that is not an integer from 1 to a host
+  call's body (`Prima.HostAPI.max_body_bytes/0`): a webhook's sender is
+  not authenticated before its body is read, so no larger cap holds.
+  `Cyfr.Application` refuses the boot on the error, and
+  `CyfrWeb.Plugs.RawBodyReader` refuses the read.
+  """
+  @spec webhook_max_body_bytes() :: {:ok, pos_integer()} | {:error, String.t()}
+  def webhook_max_body_bytes do
+    max = Prima.HostAPI.max_body_bytes()
+
+    case Application.get_env(
+           :cyfr,
+           :webhook_max_body_bytes,
+           Prima.Limits.default_max_request_size()
+         ) do
+      bytes when is_integer(bytes) and bytes in 1..max//1 ->
+        {:ok, bytes}
+
+      other ->
+        got =
+          if is_integer(other),
+            do: Integer.to_string(other),
+            else: Prima.LoggerContext.shape(other)
+
+        {:error,
+         ":webhook_max_body_bytes must be an integer from 1 to #{max} bytes " <>
+           "(a host call's body), got #{got}"}
+    end
+  end
+
+  @doc """
   Whether this node is headless (`CYFR_HEADLESS`): the API, MCP and public
   tinctures are served and every browser route answers 404 — a Codex-only
   node. Read at request time by `CyfrWeb.Plugs.Headless`.

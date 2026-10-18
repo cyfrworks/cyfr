@@ -832,15 +832,17 @@ defmodule CyfrWeb.EndpointParsersTest.UnauthenticatedBodyTest do
 
   # The answer the endpoint sent, whether a route returned it or Phoenix
   # rendered a refusal raised while parsing.
-  defp answer(conn) do
+  defp answer(%Plug.Conn{adapter: {_adapter, %{ref: ref}}} = conn) do
     try do
       CyfrWeb.Endpoint.call(conn, CyfrWeb.Endpoint.init([]))
     rescue
       _refusal -> :rendered
     end
 
+    # This request's answer, by its own reference: an earlier request's
+    # may still be in the mailbox.
     receive do
-      {ref, {status, headers, _body}} when is_reference(ref) -> {status, headers}
+      {^ref, {status, headers, _body}} -> {status, headers}
     after
       0 -> flunk("no answer was sent")
     end
@@ -937,7 +939,7 @@ defmodule CyfrWeb.EndpointParsersTest.UnauthenticatedBodyTest do
 
       for {verb, path} <- routes do
         conn = request(verb, concrete(path), "{}", "application/json")
-        cap = RawBodyReader.cap(conn)
+        {:ok, cap} = RawBodyReader.cap(conn)
 
         assert cap <= Prima.HostAPI.max_body_bytes(),
                "#{verb} #{path} reads #{cap} bytes from a caller not authenticated"
@@ -957,7 +959,136 @@ defmodule CyfrWeb.EndpointParsersTest.UnauthenticatedBodyTest do
 
       assert guide =~
                "| Request body | a host call's body (1 MiB) per invoke, action or stream open | " <>
-                 "refused 413 before any of it is read"
+                 "a declared length over it is refused 413 before any of the body is read; " <>
+                 "a body of undeclared length is read up to it, then refused 413; " <>
+                 "either way the call rejects |"
+    end
+
+    test "every socket transport the endpoint mounts takes no body past a host call's, " <>
+           "and none at all but a POST of declared length, refused before any byte is read" do
+      transports = CyfrWeb.Endpoint.socket_transports()
+
+      # Derived from the mounts (`__sockets__/0`): these are the ones the
+      # endpoint declares today, and a new mount or transport joins the sweep.
+      for transport <- [
+            {:websocket, ["live", "websocket"]},
+            {:longpoll, ["live", "longpoll"]},
+            {:websocket, ["device", "websocket"]}
+          ] do
+        assert transport in transports
+      end
+
+      {:ok, cap} = RawBodyReader.cap(request(:post, "/live/longpoll", "{}", "application/json"))
+      assert cap == Prima.HostAPI.max_body_bytes()
+
+      for {_transport, path_info} <- transports do
+        url = "/" <> Enum.join(path_info, "/") <> "?vsn=2.0.0"
+
+        for {method, framing, status} <- [
+              {:post, &declared(&1, cap + 1), 413},
+              {:post, & &1, 411},
+              {:post, &put_req_header(&1, "transfer-encoding", "chunked"), 411},
+              {:get, &declared(&1, 2), 413}
+            ] do
+          {answered, headers} =
+            method |> request(url, "{}", "application/json") |> framing.() |> answer()
+
+          assert answered == status, "#{method} #{url} answered #{answered}"
+          assert bytes_read() == 0, "#{method} #{url} read a body it refused"
+          assert {"connection", "close"} in headers
+        end
+      end
+    end
+  end
+
+  describe "the long-poll transport" do
+    # A transport token is handed to anyone who opens a session.
+    defp longpoll_token do
+      opened = :get |> Plug.Test.conn("/live/longpoll?vsn=2.0.0") |> call()
+      %{"token" => token} = Jason.decode!(opened.resp_body)
+
+      {:ok, {:v1, _id, pid, _topic}} =
+        Phoenix.Token.verify(
+          CyfrWeb.Endpoint,
+          Atom.to_string(CyfrWeb.Endpoint.config(:pubsub_server)),
+          token,
+          max_age: 1_209_600
+        )
+
+      on_exit(fn ->
+        DynamicSupervisor.terminate_child(Phoenix.Transports.LongPoll.Supervisor, pid)
+      end)
+
+      token
+    end
+
+    defp call(conn), do: CyfrWeb.Endpoint.call(conn, CyfrWeb.Endpoint.init([]))
+
+    defp heartbeat(pad) do
+      Jason.encode!([nil, "1", "phoenix", "heartbeat", %{"pad" => pad}])
+    end
+
+    test "reads no message past a host call's body from a caller holding the token anyone may take" do
+      token = longpoll_token()
+      body = heartbeat(:binary.copy("x", 2 * Prima.HostAPI.max_body_bytes()))
+
+      {status, headers} =
+        :post
+        |> request("/live/longpoll?vsn=2.0.0", body, "application/json")
+        |> put_req_header("x-phoenix-longpoll-token", token)
+        |> declared(byte_size(body))
+        |> answer()
+
+      assert status == 413
+      assert bytes_read() == 0
+      assert {"connection", "close"} in headers
+    end
+
+    test "reads a message within a host call's body whole, and keeps the connection" do
+      token = longpoll_token()
+      body = heartbeat("x")
+
+      {status, headers} =
+        :post
+        |> request("/live/longpoll?vsn=2.0.0", body, "application/json")
+        |> put_req_header("x-phoenix-longpoll-token", token)
+        |> declared(byte_size(body))
+        |> answer()
+
+      assert status == 200
+      assert bytes_read() == byte_size(body)
+      refute List.keymember?(headers, "connection", 0)
+    end
+  end
+
+  describe "the webhook cap's configuration" do
+    test "above a host call's body is refused, naming the setting and its range, and no " <>
+           "webhook body is read under it" do
+      previous = Application.fetch_env(:cyfr, :webhook_max_body_bytes)
+
+      on_exit(fn ->
+        case previous do
+          {:ok, value} -> Application.put_env(:cyfr, :webhook_max_body_bytes, value)
+          :error -> Application.delete_env(:cyfr, :webhook_max_body_bytes)
+        end
+      end)
+
+      max = Prima.HostAPI.max_body_bytes()
+
+      for value <- [2 * max, max + 1, 0, -1, "1048576", nil] do
+        Application.put_env(:cyfr, :webhook_max_body_bytes, value)
+
+        assert {:error, message} = Cyfr.RuntimeConfig.webhook_max_body_bytes()
+        assert message =~ ":webhook_max_body_bytes must be an integer from 1 to #{max} bytes"
+
+        conn = request(:post, "/hooks/wh_any", "{}", "application/json")
+        assert {:error, ^message} = RawBodyReader.read_body(conn, [])
+        assert {400, _headers} = answer(conn)
+        assert bytes_read() == 0
+      end
+
+      Application.put_env(:cyfr, :webhook_max_body_bytes, max)
+      assert Cyfr.RuntimeConfig.webhook_max_body_bytes() == {:ok, max}
     end
   end
 
@@ -977,6 +1108,29 @@ defmodule CyfrWeb.EndpointParsersTest.UnauthenticatedBodyTest do
     # answer and a close well inside that mean no byte of the body was
     # awaited.
     @answered_within 5_000
+
+    test "a long-poll POST past its cap, or of undeclared length, is answered from its " <>
+           "headers alone, and its connection ends without its body",
+         %{port: port} do
+      cap = Prima.HostAPI.max_body_bytes()
+
+      for {framing, status} <- [
+            {"content-length: #{cap + 1}\r\n", 413},
+            {"transfer-encoding: chunked\r\n", 411}
+          ] do
+        socket = connect(port)
+
+        :ok =
+          :gen_tcp.send(
+            socket,
+            head("POST", "/live/longpoll?vsn=2.0.0", "application/json", framing)
+          )
+
+        response = closed(socket)
+        assert response =~ ~r{\AHTTP/1\.1 #{status} }, "answered #{inspect(response)}"
+        assert response =~ ~r{\r\nconnection: close\r\n}i
+      end
+    end
 
     defp connect(port) do
       {:ok, socket} =

@@ -221,7 +221,7 @@ defmodule CyfrWeb.Plugs.RawBodyReaderTest do
             {"/directory/v1/genesis", Prima.Identity.max_entry_bytes()}
           ] do
         conn = build_conn(:post, path, :binary.copy(<<?x>>, cap + 1))
-        assert RawBodyReader.cap(conn) == cap, path
+        assert RawBodyReader.cap(conn) == {:ok, cap}, path
 
         assert {:more, chunk, _conn} = RawBodyReader.read_body(conn, length: 28_000_000)
         assert byte_size(chunk) == cap, path
@@ -233,13 +233,13 @@ defmodule CyfrWeb.Plugs.RawBodyReaderTest do
       authenticated = &Plug.Conn.assign(&1, :context, %Sanctum.Context{authenticated: true})
       unauthenticated = &Plug.Conn.assign(&1, :context, %Sanctum.Context{authenticated: false})
 
-      assert RawBodyReader.cap(authenticated.(build_conn(:post, "/mcp", ""))) == 28_000_000
+      assert RawBodyReader.cap(authenticated.(build_conn(:post, "/mcp", ""))) == {:ok, 28_000_000}
 
       assert RawBodyReader.cap(unauthenticated.(build_conn(:post, "/mcp", ""))) ==
-               Prima.HostAPI.max_body_bytes()
+               {:ok, Prima.HostAPI.max_body_bytes()}
 
       assert RawBodyReader.cap(authenticated.(build_conn(:post, "/restore", ""))) ==
-               Prima.Identity.max_entry_bytes()
+               {:ok, Prima.Identity.max_entry_bytes()}
     end
   end
 

@@ -754,6 +754,13 @@ defmodule Prima.Refusal do
   # The endpoint's parsers: a multipart body is refused before it is read.
   defp row(:multipart_refused), do: {:invalid_argument, "This endpoint takes no multipart bodies"}
 
+  # A socket transport's body, bounded before the transport reads any of it.
+  defp row(:socket_body_too_large),
+    do: {:invalid_argument, "The request body exceeds the size limit"}
+
+  defp row(:socket_body_length_required),
+    do: {:invalid_argument, "The request body's length must be declared"}
+
   defp row(:internal_error), do: {:internal, "Internal error"}
 
   defp row({:bootstrap_refused, sub}) when is_map_key(@bootstrap, sub),
