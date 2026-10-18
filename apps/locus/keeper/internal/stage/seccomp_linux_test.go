@@ -264,12 +264,37 @@ func runHelper(t *testing.T, mode string) kernelAnswers {
 	return kernelAnswers{}
 }
 
+// seccompMode is the Seccomp: field of this process's /proc/self/status,
+// "" where the kernel shows none.
+func seccompMode(t *testing.T) string {
+	t.Helper()
+	status, err := os.ReadFile("/proc/self/status")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, line := range strings.Split(string(status), "\n") {
+		if mode, ok := strings.CutPrefix(line, "Seccomp:"); ok {
+			return strings.TrimSpace(mode)
+		}
+	}
+	return ""
+}
+
 // Installed on a thread that holds no_new_privs, the filter stays with the
 // program that thread executes: there the kernel never sees a namespace
 // call (each is refused EPERM where, unfiltered, the kernel answers
 // EINVAL), clone3 answers ENOSYS, and the program still runs threads and
 // starts a child process.
+//
+// The control is the kernel's own answer only in a process no filter
+// covers, since a filter outlives exec and covers every child. Under one,
+// as under seccomp/keeper.json in keeper-ci.yml's real-kernel step, which
+// itself refuses unshare and clone3, the test skips. That workflow runs it
+// unfiltered as well and requires it to pass.
 func TestRunnerFilterInstalls(t *testing.T) {
+	if mode := seccompMode(t); mode != "" && mode != "0" {
+		t.Skipf("this process already runs under seccomp (Seccomp: %s in /proc/self/status), so the control cannot show the kernel's own answers", mode)
+	}
 	control := runHelper(t, "control")
 	if control.Unshare != "EINVAL" || control.Clone != "EINVAL" || control.Clone3 != "EINVAL" {
 		t.Fatalf("unfiltered, the kernel answers %+v, not EINVAL to each invalid call", control)

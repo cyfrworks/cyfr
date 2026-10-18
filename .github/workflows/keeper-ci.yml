@@ -61,6 +61,17 @@ jobs:
           go test ./... -race -coverprofile="$RUNNER_TEMP/cover.out"
           echo "apps/locus/keeper coverage: $(go tool cover -func "$RUNNER_TEMP/cover.out" | tail -1)" >> "$GITHUB_STEP_SUMMARY"
 
+      # TestRunnerFilterInstalls holds the runner's filter against what the
+      # kernel answers with no filter at all, so it skips under one, as in
+      # the real-kernel step below, where seccomp/keeper.json already refuses
+      # unshare and clone3. Here, as the runner's user, no filter covers the
+      # tests: the control is the kernel's own, and the test must pass.
+      - name: go test (the runner filter against an unfiltered control)
+        run: |
+          set -euo pipefail
+          go test ./internal/stage/ -race -count=1 -v -run '^TestRunnerFilterInstalls$' 2>&1 | tee "$RUNNER_TEMP/runner-filter.log"
+          grep -q -- '--- PASS: TestRunnerFilterInstalls ' "$RUNNER_TEMP/runner-filter.log" || { echo "::error::TestRunnerFilterInstalls did not run and pass against an unfiltered control"; exit 1; }
+
       # The keeper's real-kernel tests start processes under pooled uids and
       # hold each spawn to a memory bound in a cgroup v2 group of its own, so
       # they need root and a cgroup namespace whose root is mounted writable:
