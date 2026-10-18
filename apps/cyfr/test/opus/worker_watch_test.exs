@@ -241,11 +241,13 @@ defmodule Opus.WorkerWatchTest do
     {answered, lapsed} = terminal_writers(order, fixture, outcome)
     completed = %{"v" => 1, "ok" => %{"round" => round}}
     lost = %{"v" => 1, "error" => "lost"}
+    closed = %{"v" => 1, "error" => "failed", "message" => "Execution failed"}
 
     # Exactly one writer's row stands. A complete that found the row
     # lapsed already is answered lost by an attempt that stops; one held
-    # when it was checked, whose write the lapse beat, is answered its
-    # output while the lapsed row stands.
+    # when it was checked, whose write the lapse beat, is answered the
+    # lapsed row (`Opus.Close.complete/4` answers a row closed before its
+    # result), a failure, never its output.
     case lapsed do
       [] ->
         assert order in [:complete_first, :race]
@@ -256,7 +258,7 @@ defmodule Opus.WorkerWatchTest do
       [%{attempt: attempt}] ->
         assert order in [:lapse_first, :race]
         assert attempt == fixture.attempt
-        assert answered == lost or (order == :race and answered == completed)
+        assert answered == lost or (order == :race and answered == closed)
         assert %{status: "failed", error_message: @lapsed} = row(fixture)
         assert %{state: "lapsed", outcome: "uncertain"} = attempt_row(fixture)
     end
