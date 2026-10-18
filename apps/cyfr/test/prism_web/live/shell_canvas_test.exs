@@ -1491,6 +1491,58 @@ defmodule PrismWeb.ShellCanvasTest do
       assert row(trial.id).state == "active"
     end
 
+    test "after a wider version's trial fails, the working version asks for its own grant and, granted, opens with no prompt again",
+         %{conn: conn, ctx: ctx, user: user, athanor: athanor} do
+      canvas!(ctx, "markets")
+      versions!(ctx, "markets", %{working: "1.0.0"})
+
+      canvas!(
+        ctx,
+        "markets",
+        "1.0.1",
+        [%{"name" => "runs.changes"}, %{"name" => "mcp_servers.changes"}],
+        granted: false
+      )
+
+      layout!(user, athanor, [entry("home", "tincture:local.markets")])
+      view = shell!(conn)
+
+      # 1.0.1's trial asks for 1.0.1's grant; granted, it is trialled, and
+      # it fails.
+      settle!(view, fn -> assigns(view).grant_prompts != %{} end)
+      assert render(view) =~ "Grant tincture:local.markets:1.0.1"
+      view |> element(~s(#system-layer-dialog button[phx-click="confirm"])) |> render_click()
+      wait_until(fn -> assigns(view).grant_prompts == %{} end, 5_000, "the grant")
+      settle!(view, fn -> match?(%{state: :live}, validation(view)) end)
+      trial = validation(view)
+      canvas_verb!(view, trial.id, :failed, %{"stage" => "tree"})
+
+      # The grant now names 1.0.1, so the working 1.0.0 asks for its own.
+      settle!(view, fn -> assigns(view).grant_prompts != %{} end)
+      assert validation(view) == nil
+      assert %{working: "1.0.0", failed: %{version: "1.0.1"}} = versions(ctx, "markets")
+      assert render(view) =~ "Grant tincture:local.markets:1.0.0"
+      view |> element(~s(#system-layer-dialog button[phx-click="confirm"])) |> render_click()
+
+      wait_until(
+        fn -> assigns(view).grant_prompts == %{} end,
+        5_000,
+        "the working version's grant"
+      )
+
+      # Granted, 1.0.0 opens, and showing it again asks nothing more.
+      settle!(view, fn -> match?(%{state: :live}, canvas(view)) end)
+      assert %{reference: %{version: "1.0.0"}} = canvas(view)
+
+      layout!(user, athanor, [])
+      settle!(view, fn -> canvas(view) == nil end)
+      layout!(user, athanor, [entry("home", "tincture:local.markets")])
+      settle!(view, fn -> match?(%{state: :live}, canvas(view)) end)
+      assert %{reference: %{version: "1.0.0"}} = canvas(view)
+      assert assigns(view).grant_prompts == %{}
+      refute render(view) =~ ~s(data-kind="grant")
+    end
+
     test "a trial refused at its open for want of the grant is torn down at once and asks for it; dismissed, the canvas shows its refusal; confirmed, it is validated again",
          %{conn: conn, ctx: ctx, user: user, athanor: athanor} do
       canvas!(ctx, "markets")

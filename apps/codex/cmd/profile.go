@@ -154,7 +154,10 @@ var profileGrantCmd = &cobra.Command{
 		"The grant admits the runs --origin names. With no --origin, a first grant " +
 		"admits interactive alone and a re-grant keeps the origins the grant " +
 		"already admits, so an agent, a script, a schedule or a webhook runs the " +
-		"component only under a grant that names its origin.",
+		"component only under a grant that names its origin.\n\n" +
+		"A name-level reference grants what the newest installed version asks for; a " +
+		"reference pinned to an installed version (c:local.model:1.2.0) grants what " +
+		"that version asks for.",
 	Example: `  cyfr profile grant c:moonmoon69.gmail
   cyfr profile grant f:local.daily-report --entry @ingress=vlt_abc123
   cyfr profile grant c:local.model --entry api_key=ine_abc123:1h

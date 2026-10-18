@@ -199,6 +199,12 @@ defmodule Sanctum.Consent.Plan do
   @doc """
   Stage a consent: facts, candidates, and the plan token.
 
+  `ref` names the source, its profiles keyed by its name-level ref. A
+  name-level ref plans the newest installed version; a ref pinned to an
+  installed version plans that version, so the head a commit of it writes
+  records that version's shape. The preview and the commit read the
+  decisions' `ref` the same way.
+
   A dependency's lenders are read as the loader reads a selection's
   (`Sanctum.Consent.Loader`), keeping a store that cannot answer, a
   damaged row and an absent one apart, never a plan with that lender
@@ -245,10 +251,12 @@ defmodule Sanctum.Consent.Plan do
 
     with :ok <- Authz.authorize_staging(ctx),
          :ok <- RootSelect.check_label(label),
-         {:ok, source_ref} <- name_ref(ref),
-         {:ok, component} <- source_component(ctx, source_ref),
+         {:ok, source_ref, version} <- planned_source(ref),
+         {:ok, component} <- source_component(ctx, source_ref, version),
          {:ok, shape_input} <-
-           ctx |> ShapeDerivation.shape_input(source_ref) |> read({:components, source_ref}),
+           ctx
+           |> ShapeDerivation.shape_input(source_ref, version || :latest)
+           |> read({:components, source_ref}),
          {:ok, shape_digest} <- ShapeDigest.compute(shape_input),
          {:ok, profile_id, expected_revision, head} <-
            ctx |> locate_head(source_ref, label, kind) |> read(:profiles),
@@ -354,6 +362,19 @@ defmodule Sanctum.Consent.Plan do
   end
 
   @doc false
+  # The source a plan, a preview and a commit grant: the name-level ref
+  # its profiles are keyed by, and the version planned, nil for the
+  # newest. A ref pinned to a version (`Prima.ComponentRef`'s grammar)
+  # plans that installed version: its row, its closure and its shape, so
+  # the head records what that version reads.
+  def planned_source(ref) do
+    case Prima.ComponentRef.parse(ref) do
+      {:ok, parsed} -> {:ok, Prima.ComponentRef.to_name_ref(parsed), parsed.version}
+      {:error, reason} -> {:error, {:invalid_ref, reason}}
+    end
+  end
+
+  @doc false
   def name_ref(ref) do
     case Prima.ComponentRef.to_name_ref(ref) do
       {:ok, name_ref} -> {:ok, name_ref}
@@ -366,15 +387,14 @@ defmodule Sanctum.Consent.Plan do
   @outages [:database_error, :unavailable]
 
   @doc false
-  # The source's newest row, as the plan, the preview, the commit and the
-  # grant read it: a store that could not answer is the components
-  # unavailable, never a component that is not there; any other refusal,
-  # one the athanor does not hold among them, is
+  # The source's newest row, or the row of `version`, as the plan, the
+  # preview, the commit and the grant read it: a store that could not
+  # answer is the components unavailable, never a component that is not
+  # there; any other refusal, one the athanor does not hold among them, is
   # `{:component_not_found, reason}`.
-  def fetch_component(ctx, source_ref) do
+  def fetch_component(ctx, source_ref, version \\ nil) do
     with {:ok, parsed} <- Prima.ComponentRef.parse(source_ref),
-         {:ok, component} <-
-           Components.get_latest(ctx, parsed.name, parsed.namespace, parsed.type) do
+         {:ok, component} <- row(ctx, parsed, version) do
       {:ok, component}
     else
       {:error, outage} when Components.is_outage(outage) -> {:error, {:unavailable, "Components"}}
@@ -382,11 +402,17 @@ defmodule Sanctum.Consent.Plan do
     end
   end
 
+  defp row(ctx, parsed, nil),
+    do: Components.get_latest(ctx, parsed.name, parsed.namespace, parsed.type)
+
+  defp row(ctx, parsed, version),
+    do: Components.get_component(ctx, parsed.name, version, parsed.namespace, parsed.type)
+
   # The source's row as a plan reads it: a component the athanor does not
   # hold is not found (`Prima.Refusal`'s row), and the rest as
-  # `fetch_component/2` answers it.
-  defp source_component(ctx, source_ref) do
-    case fetch_component(ctx, source_ref) do
+  # `fetch_component/3` answers it.
+  defp source_component(ctx, source_ref, version) do
+    case fetch_component(ctx, source_ref, version) do
       {:error, {:component_not_found, :not_found}} ->
         {:error, {:not_found, {:component, source_ref}}}
 

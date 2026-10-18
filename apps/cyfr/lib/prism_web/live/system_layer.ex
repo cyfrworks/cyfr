@@ -1981,10 +1981,12 @@ defmodule PrismWeb.SystemLayer do
     end
   end
 
-  defp restore_grant(socket, %{subject: %SafeMode{tincture: ref}} = prompt, reason) do
+  # The grant is asked for the kept version itself, so the head it writes
+  # records what that version reads, whatever the newest reads.
+  defp restore_grant(socket, %{subject: %SafeMode{tincture: ref, kept: kept}} = prompt, reason) do
     grant_id = "restore-grant-#{System.unique_integer([:positive])}"
 
-    with {:ok, grant} <- grant_prompt(socket, grant_id, ref),
+    with {:ok, grant} <- grant_prompt(socket, grant_id, kept_ref(ref, kept)),
          {:ok, grant} <- Prompt.validate(grant) do
       socket
       |> assign(current: grant, queue: [prompt | socket.assigns.queue], error: nil)
@@ -1994,6 +1996,15 @@ defmodule PrismWeb.SystemLayer do
       _unread -> refuse(socket, prompt, reason, Ops.error_message(reason))
     end
   end
+
+  defp kept_ref(ref, kept) when is_binary(kept) do
+    case Prima.ComponentRef.parse(ref) do
+      {:ok, parsed} -> Prima.ComponentRef.to_string(%{parsed | version: kept})
+      {:error, _unparsed} -> ref
+    end
+  end
+
+  defp kept_ref(ref, _no_kept), do: ref
 
   # A grant raised for a restore ended: confirmed, the restore is asked
   # again once safe mode is shown again; dismissed, safe mode is shown as

@@ -95,6 +95,52 @@ defmodule Sanctum.Consent.ShapeDerivationTest do
              {:ok, consent.shape_digest}
   end
 
+  describe "one version's shape" do
+    test "is the version's own, and a version changed in place is never answered the shape it had",
+         %{ctx: ctx} do
+      publish!(ctx, "shape-work", "1.0.0")
+      publish!(ctx, "shape-work", "1.0.1", %{manifest: roll_manifest("newer")})
+      ref = "reagent:local.shape-work"
+
+      {:ok, before} = ShapeDerivation.version_digest(ctx, ref, "1.0.0")
+      {:ok, input} = ShapeDerivation.shape_input(ctx, ref, "1.0.0")
+      assert {:ok, before} == Sanctum.Consent.ShapeDigest.compute(input)
+      refute {:ok, before} == ShapeDerivation.live_digest(ctx, ref)
+
+      # 1.0.0 rebuilt under the same number with a need it did not ask for,
+      # its row changed in place with no registry sweep after it: what is
+      # cached for the bytes it had is not what it is answered.
+      changed =
+        %{
+          "name" => "shape-work",
+          "type" => "reagent",
+          "version" => "1.0.0",
+          "publisher" => "local"
+        }
+        |> Map.merge(roll_manifest("added"))
+
+      [row] =
+        Arca.Repo.all(
+          Ecto.Query.from(c in Arca.Schemas.Component,
+            where: c.name == "shape-work" and c.version == "1.0.0"
+          )
+        )
+
+      {:ok, release} = Compendium.ReleaseDigest.compute(row.digest, changed)
+
+      {1, _} =
+        Arca.Repo.update_all(
+          Ecto.Query.from(c in Arca.Schemas.Component, where: c.id == ^row.id),
+          set: [manifest: Jason.encode!(changed), release_digest: release]
+        )
+
+      {:ok, after_change} = ShapeDerivation.version_digest(ctx, ref, "1.0.0")
+      {:ok, input} = ShapeDerivation.shape_input(ctx, ref, "1.0.0")
+      refute after_change == before
+      assert {:ok, after_change} == Sanctum.Consent.ShapeDigest.compute(input)
+    end
+  end
+
   @tag :shape_outage
   test "an unreadable dependency closure has no shape, even when the source row was read",
        %{ctx: ctx} do

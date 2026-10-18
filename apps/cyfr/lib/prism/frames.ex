@@ -331,8 +331,14 @@ defmodule Prism.Frames do
   def ref_of(%{publisher: publisher, name: name}),
     do: Prima.ComponentRef.build("tincture", publisher, name)
 
-  defp version_ref(card),
-    do: Prima.ComponentRef.build("tincture", card.publisher, card.name, card.version)
+  @doc """
+  The reference pinned to the version the card lists: what its frame opens
+  and what the grant it waits for is planned for.
+  """
+  @spec version_ref(%{publisher: String.t(), name: String.t(), version: String.t()}) ::
+          String.t()
+  def version_ref(%{publisher: publisher, name: name, version: version}),
+    do: Prima.ComponentRef.build("tincture", publisher, name, version)
 
   # ============================================================================
   # Pure: the declaration and the layout

@@ -5086,8 +5086,10 @@ defmodule PrismWeb.SystemLayerTest do
       })
     end
 
-    # Markets installed at `versions`, its versions document `fields`.
-    defp markets!(ctx, versions, fields) do
+    # Markets installed at `versions`, each reading the streams `streams`
+    # names for it (none unless named), granted as the person would grant
+    # its newest, its versions document `fields`.
+    defp markets!(ctx, versions, fields, streams \\ %{}) do
       for version <- versions do
         unit =
           Arca.Test.UnitFixtures.tenant_component!(ctx, "tincture", "local", "markets", version,
@@ -5098,7 +5100,7 @@ defmodule PrismWeb.SystemLayerTest do
               "tincture" => %{
                 "frame" => %{"placement" => "canvas"},
                 "canvas" => %{"module" => "canvas.js", "toolkit" => 1},
-                "streams" => []
+                "streams" => Map.get(streams, version, [])
               }
             },
             files: [{"canvas.js", "// markets #{version}"}]
@@ -5276,6 +5278,30 @@ defmodule PrismWeb.SystemLayerTest do
       assert outcome(grant) == :confirmed
 
       # Confirmed, the restore is asked again, and safe mode ends with it.
+      assert outcome("safe") == {:confirmed, :kept}
+      assert %{document: %{working: "1.0.0", kept: "1.0.1"}} = versions(ctx)
+      assert open_prompt(view) == nil
+    end
+
+    test "a kept version whose streams differ from the newest's asks for its own grant, and once it is confirmed the restore passes",
+         %{view: view, ctx: ctx} do
+      markets!(ctx, ["1.0.0", "1.0.1"], %{working: "1.0.1", kept: "1.0.0"}, %{
+        "1.0.1" => [%{"name" => "runs.changes"}]
+      })
+
+      # The grant names the newest, 1.0.1; the kept 1.0.0 reads another
+      # set of streams.
+      prompt(view, %{id: "safe", kind: :safe_mode, action: nil, subject: safe_mode()})
+      view |> element(~s(button[phx-value-offer="kept"])) |> render_click()
+
+      html = render(view)
+      assert html =~ ~s(data-kind="grant")
+      assert html =~ "Grant tincture:local.markets:1.0.0"
+      no_outcome("safe")
+      grant = open_prompt(view)
+
+      view |> element(~s(#system-layer-dialog button[phx-click="confirm"])) |> render_click()
+      assert outcome(grant) == :confirmed
       assert outcome("safe") == {:confirmed, :kept}
       assert %{document: %{working: "1.0.0", kept: "1.0.1"}} = versions(ctx)
       assert open_prompt(view) == nil

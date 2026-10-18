@@ -1418,15 +1418,14 @@ defmodule PrismWeb.ShellLive do
   end
 
   # A frame refused because the person has not granted what its tincture
-  # declares now: the grant prompt, whose sheet draws the preview's rows,
-  # the tincture's frame, streams and system actions among them,
-  # and binds the vault entries it needs, when the consent walk's plan and
-  # preview can be read for it (`PrismWeb.SystemLayer.grant_prompt/4`).
-  # Otherwise the frame shows its refusal.
+  # version declares: the grant prompt for that version, whose sheet draws
+  # the preview's rows, the tincture's frame, streams and system actions
+  # among them, and binds the vault entries it needs, when the consent
+  # walk's plan and preview can be read for it
+  # (`PrismWeb.SystemLayer.grant_prompt/4`). Otherwise the frame shows its
+  # refusal.
   defp offer_grant(socket, %{key: key, tincture_id: tincture_id, reference: reference}) do
-    ref = Prima.ComponentRef.build("tincture", reference.publisher, reference.name)
-
-    case grant_prompt(socket, key, tincture_id, ref) do
+    case grant_prompt(socket, key, tincture_id, Frames.version_ref(reference)) do
       {:ok, asked} -> asked
       :error -> socket
     end
@@ -1434,16 +1433,18 @@ defmodule PrismWeb.ShellLive do
 
   # The canvas's grant waits for the person — a validation's activation
   # answered `consent_required`, or a trial or the live canvas was refused
-  # at its open for want of it: the grant prompt for the tincture of the
-  # card whose open it was (the shipped canvas's own on safe mode's
-  # shipped path, never the layout's), kept as `{:activation, canvas_id}`,
+  # at its open for want of it: the grant prompt for the tincture version
+  # of the card whose open it was, so the grant records what that version
+  # reads, a working version's as a trial's (the shipped canvas's own on
+  # safe mode's shipped path, never the layout's), kept as
+  # `{:activation, canvas_id}`,
   # once, and answering the canvas's latest decision. While one is open
   # for the canvas and that tincture, deciding the canvas again asks
   # nothing more: that prompt stands, as the latest decision's. Confirmed,
   # the canvas is decided again.
   defp ask_canvas_grant(socket, %{id: canvas_id}, card) do
     case asking(socket.assigns.grant_prompts, canvas_id, card.id) do
-      nil -> grant_prompt(socket, {:activation, canvas_id}, card.id, Frames.ref_of(card))
+      nil -> grant_prompt(socket, {:activation, canvas_id}, card.id, Frames.version_ref(card))
       prompt_id -> {:ok, answering(socket, prompt_id, {:activation, canvas_id})}
     end
   end

@@ -113,22 +113,54 @@ defmodule Sanctum.Consent.ShapeDerivation do
   end
 
   defp live_shape_key(%Sanctum.Context{athanor_id: athanor_id}, source_ref)
-       when is_binary(athanor_id) and athanor_id != "" and is_binary(source_ref),
+       when is_binary(athanor_id) and athanor_id != "" and
+              (is_binary(source_ref) or is_tuple(source_ref)),
        do: Arca.Cache.Keys.live_shape(Prima.Actor.in_athanor(athanor_id), source_ref)
 
   defp live_shape_key(_ctx, _source_ref), do: nil
 
   @doc """
   The shape digest of the installed version `version` of the name-level
-  `source_ref`, derived fresh as `live_digest/2` derives the newest's:
-  what a frame that opens that version asks for, compared with its
-  consent's shape as a run compares the newest's. `{:error, reason}` as
+  `source_ref`, derived as `live_digest/2` derives the newest's: what a
+  frame that opens that version asks for, compared with its consent's
+  shape as a run compares the newest's. `{:error, reason}` as
   `live_digest/2`'s, a version no row holds among them.
+
+  It is cached by the version's identity, its pinned reference and the
+  release digest its row holds now, so a version rebuilt in place under
+  the same number, whose release digest moves with its bytes or its
+  manifest, is never answered the shape it had before; the registry's
+  sweep of the athanor's live shapes drops these entries with the rest.
   """
   @spec version_digest(Sanctum.Context.t(), String.t(), String.t()) ::
           {:ok, String.t()} | {:error, term()}
-  def version_digest(ctx, source_ref, version) when is_binary(version),
-    do: digest(ctx, source_ref, version)
+  def version_digest(ctx, source_ref, version) when is_binary(version) do
+    with {:ok, row, manifest} <- manifest_row(ctx, source_ref, version) do
+      key = version_shape_key(ctx, source_ref, version, row)
+
+      case key && Arca.Cache.get(key) do
+        {:ok, digest} when is_binary(digest) ->
+          {:ok, digest}
+
+        _ ->
+          with {:ok, input} <- row_shape_input(ctx, source_ref, row, manifest),
+               {:ok, digest} <- ShapeDigest.compute(input) do
+            if key, do: Arca.Cache.put(key, digest, @live_cache_ttl_ms)
+            {:ok, digest}
+          end
+      end
+    end
+  end
+
+  defp version_shape_key(ctx, source_ref, version, row) do
+    with {:ok, ref} <- Prima.ComponentRef.parse(source_ref),
+         release when is_binary(release) and release != "" <-
+           Prima.ComponentRow.field(row, :release_digest) do
+      live_shape_key(ctx, {Prima.ComponentRef.to_string(%{ref | version: version}), release})
+    else
+      _unidentified -> nil
+    end
+  end
 
   defp digest(ctx, source_ref, version) do
     with {:ok, input} <- shape_input(ctx, source_ref, version) do
@@ -144,9 +176,20 @@ defmodule Sanctum.Consent.ShapeDerivation do
   @spec shape_input(Sanctum.Context.t(), String.t()) :: {:ok, map()} | {:error, term()}
   def shape_input(ctx, source_ref), do: shape_input(ctx, source_ref, :latest)
 
-  defp shape_input(ctx, source_ref, version) do
+  @doc """
+  `shape_input/2` for the installed version `version` of the name-level
+  `source_ref`, `:latest` its newest: what a consent made for that
+  version records, and what a frame opening it is compared with.
+  """
+  @spec shape_input(Sanctum.Context.t(), String.t(), String.t() | :latest) ::
+          {:ok, map()} | {:error, term()}
+  def shape_input(ctx, source_ref, version) do
     with {:ok, row, manifest} <- manifest_row(ctx, source_ref, version),
-         {:ok, releases} <- dependency_releases(ctx, row, source_ref),
+         do: row_shape_input(ctx, source_ref, row, manifest)
+  end
+
+  defp row_shape_input(ctx, source_ref, row, manifest) do
+    with {:ok, releases} <- dependency_releases(ctx, row, source_ref),
          needs = Needs.from_manifest(manifest) || [],
          :ok <- check_vault_projections(needs, source_ref),
          {:ok, tincture_digest} <- tincture_digest(manifest, source_ref),

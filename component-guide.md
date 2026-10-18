@@ -492,7 +492,7 @@ See the bundled `seed/components/formulas/local/list-models` formula for a produ
 
 ## Manifest (`cyfr-manifest.json`)
 
-The manifest is the component's machine-readable contract. `needs` and `caps` are the component's *ask* — rendered on the consent sheet when an operator grants the component (`cyfr profile grant <ref>` or the console's Vault page).
+The manifest is the component's machine-readable contract. `needs` and `caps` are the component's *ask* — rendered on the consent sheet when an operator grants the component (`cyfr profile grant <ref>` or the console's Vault page). A name-level `<ref>` grants what the newest installed version asks for; one pinned to an installed version, what that version asks for.
 
 ### Field Reference
 

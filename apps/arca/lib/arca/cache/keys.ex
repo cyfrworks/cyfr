@@ -65,7 +65,11 @@ defmodule Arca.Cache.Keys do
   def match_activation(%Prima.Actor{}),
     do: Arca.QueryHelpers.no_athanor!("Arca.Cache.Keys.match_activation/1")
 
-  @doc "The live shape digest of a versionless source ref within an athanor."
+  @doc """
+  The live shape digest of a source within an athanor: a versionless
+  ref's for its newest release, or `{pinned_ref, release_digest}`'s for
+  one installed version as its row holds it now.
+  """
   def live_shape(%Prima.Actor{athanor_id: athanor_id}, source_ref)
       when is_binary(athanor_id) and athanor_id != "",
       do: {:live_shape, athanor_id, source_ref}
