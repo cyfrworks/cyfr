@@ -65,22 +65,22 @@ func TestDecisionListArgs_SendsOnlyTheActionByDefault(t *testing.T) {
 func TestDecisionListArgs_GlobalReadsListGlobal(t *testing.T) {
 	args, err := decisionListArgs(listFlags(t, map[string]string{
 		"global":    "true",
-		"athanor":   "none",
 		"admission": "refused",
 	}))
 	if err != nil {
 		t.Fatalf("unexpected err: %v", err)
 	}
-	want := `{"action":"list_global","admission":"refused","athanor_id":"none"}`
+	want := `{"action":"list_global","admission":"refused"}`
 	if got := encode(t, args); got != want {
 		t.Errorf("want %s, got %s", want, got)
 	}
 }
 
-func TestDecisionListArgs_AthanorNeedsGlobal(t *testing.T) {
-	_, err := decisionListArgs(listFlags(t, map[string]string{"athanor": "ath_1"}))
-	if err == nil || !strings.Contains(err.Error(), "--global") {
-		t.Errorf("want an error naming --global, got %v", err)
+func TestDecisionListFlags_NameNoAthanor(t *testing.T) {
+	flags := pflag.NewFlagSet("list", pflag.ContinueOnError)
+	addDecisionListFlags(flags)
+	if flags.Lookup("athanor") != nil {
+		t.Errorf("the list takes an athanor to read; the global read is the host's own")
 	}
 }
 

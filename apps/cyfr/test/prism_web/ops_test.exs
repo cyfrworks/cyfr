@@ -258,7 +258,9 @@ defmodule PrismWeb.OpsTest do
       end)
     end
 
-    # Every decision made under `request_id`, whatever its tenant or none.
+    # The host's own decisions under `request_id`, the rows naming no
+    # athanor, which is what each refusal here must be: a refusal that kept
+    # its tenant is not among them, so the match on one row fails.
     defp global_decisions(request_id),
       do:
         Arca.DecisionLog.list_global(%Prima.Actor{platform_admin: true},

@@ -1460,8 +1460,6 @@ type DecisionListGlobalArgs struct {
 	Since Field[string] `json:"since,omitzero"`
 	// Max results (default: 20)
 	Limit Field[int] `json:"limit,omitzero"`
-	// global only: one athanor's decisions, or none for the host's own
-	AthanorId Field[string] `json:"athanor_id,omitzero"`
 }
 
 // MarshalJSON supplies the operation's fixed action discriminator.

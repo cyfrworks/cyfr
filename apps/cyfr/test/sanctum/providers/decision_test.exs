@@ -217,7 +217,7 @@ defmodule Sanctum.Providers.DecisionTest do
       {:ok, request_id: request_id, tenant: tenant, host: host, admin: admin}
     end
 
-    test "a platform admin reads every tenant's decisions and the host's", %{
+    test "a platform admin reads the host's own decisions and no athanor's", %{
       admin: admin,
       request_id: request_id,
       tenant: tenant,
@@ -229,7 +229,7 @@ defmodule Sanctum.Providers.DecisionTest do
                  "request_id" => request_id
                })
 
-      assert ids(rows) == Enum.sort([tenant.call_id, host.call_id])
+      assert ids(rows) == [host.call_id]
 
       assert {:ok, %{decision: %{"call_id" => call_id, "athanor_id" => nil}}} =
                Sanctum.Gate.call_external("decision", admin, %{
@@ -238,35 +238,27 @@ defmodule Sanctum.Providers.DecisionTest do
                })
 
       assert call_id == host.call_id
+
+      # An athanor's decision answers as one never made, the operator's own
+      # athanor's included: they read that one as a member, through `get`.
+      assert {:error, {:not_found, "Decision", missing}} =
+               MCP.handle("decision", actor(admin), %{
+                 "action" => "get_global",
+                 "call_id" => tenant.call_id
+               })
+
+      assert missing == tenant.call_id
+
+      assert {:ok, %{decision: %{"call_id" => ^missing}}} =
+               Sanctum.Gate.call_external("decision", admin, %{
+                 "action" => "get",
+                 "call_id" => tenant.call_id
+               })
     end
 
-    test "athanor_id none answers only the host's rows, an id only that athanor's", %{
-      ctx: ctx,
-      admin: admin,
-      request_id: request_id,
-      tenant: tenant,
-      host: host
-    } do
-      list = fn athanor ->
-        {:ok, %{decisions: rows}} =
-          MCP.handle("decision", actor(admin), %{
-            "action" => "list_global",
-            "request_id" => request_id,
-            "athanor_id" => athanor
-          })
-
-        ids(rows)
-      end
-
-      assert list.("none") == [host.call_id]
-      assert list.(ctx.athanor_id) == [tenant.call_id]
-      assert list.("ath_nobody") == []
-
-      assert {:error, {:invalid_argument, _}} =
-               MCP.handle("decision", actor(admin), %{
-                 "action" => "list_global",
-                 "athanor_id" => ""
-               })
+    test "the global list takes no athanor to read" do
+      tool = Enum.find(MCP.tools(), &(&1.name == "decision"))
+      refute Map.has_key?(action_schema(tool, "list_global")["properties"], "athanor_id")
     end
 
     test "the gate refuses a caller without the operator capability", %{ctx: ctx, host: host} do

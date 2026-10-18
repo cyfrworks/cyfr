@@ -844,13 +844,13 @@ cyfr log get <call_id>                     # Full details for a specific log ent
 cyfr log correlate <request_id>            # Find related log entries and decisions
 ```
 
-Every call the server admitted or refused is also recorded once as an admission decision under its call ID — all but discovery (`tools.list`, `system.status`), the audit's own reads (every `decision`, `mcp_log` and `record` action) and the reads the shell makes of the caller's own state on its own initiative (`file.offers`), which are not recorded when admitted; a refusal of any call is recorded — with how the admitted work ended — whichever route it arrived by: `/mcp`, a tincture's routes, a webhook, an execution's event stream, the identity directory, restore, the OAuth callback, a schedule's fire, or a running component's call to a tool, and a refusal made before the gate (an unknown tool, a bad credential, a rate limit) as much as one the gate makes. Recording never changes a call's outcome: a decision the server could not write is counted (the `cyfr_sanctum_decision_lost_total` metric), never retried, and a decision with no recorded end has an unknown outcome, not a success. Inspect decisions via Sanctum's `decision` tool (service `sanctum`) or `cyfr decision` CLI commands; a platform admin reads every athanor's decisions and the host's own with `--global`:
+Every call the server admitted or refused is also recorded once as an admission decision under its call ID — all but discovery (`tools.list`, `system.status`), the audit's own reads (every `decision`, `mcp_log` and `record` action) and the reads the shell makes of the caller's own state on its own initiative (`file.offers`), which are not recorded when admitted; a refusal of any call is recorded — with how the admitted work ended — whichever route it arrived by: `/mcp`, a tincture's routes, a webhook, an execution's event stream, the identity directory, restore, the OAuth callback, a schedule's fire, or a running component's call to a tool, and a refusal made before the gate (an unknown tool, a bad credential, a rate limit) as much as one the gate makes. Recording never changes a call's outcome: a decision the server could not write is counted (the `cyfr_sanctum_decision_lost_total` metric), never retried, and a decision with no recorded end has an unknown outcome, not a success. Inspect decisions via Sanctum's `decision` tool (service `sanctum`) or `cyfr decision` CLI commands. An athanor's decisions are its members'; a platform admin reads the host's own, the ones made before any athanor was resolved, with `--global`, and never an athanor's:
 
 ```bash
 cyfr decision list --admission refused     # Recent refusals
 cyfr decision get <call_id>                # One decision
 cyfr decision correlate <request_id>       # A request's decisions, logs and executions
-cyfr decision list --global --athanor none # The host's own decisions (platform admins)
+cyfr decision list --global               # The host's own decisions (platform admins)
 ```
 
 ### Concrete Example: User Management
@@ -1243,10 +1243,14 @@ bytes should actually be reclaimed, a platform admin runs `athanor.purge`
 blobs only, rows remain — and is final. `athanor.destroy` deletes the rows
 too, leaving only the archived tombstone, and refuses a person's own athanor.
 Both are platform-scope operations: they need no seat in the athanor, never
-read the one in focus, and open nothing in it. An operator with no seat may
-read an archived athanor's public facts with `athanor.get` (its id, name,
-status and when it was archived) and nothing it holds; `athanor.unarchive`
-and every other verb refuse them like any non-member. A purged athanor that
+read the one in focus, and open nothing in it. What they reach is what the
+instance holds for its operator to reclaim, an athanor its members archived,
+whose storage and rows stay on the instance's store until then: each answers
+the reclaimed athanor's id and status alone, and `destroy` refusing a
+person's own athanor says so. An athanor still open answers an operator with
+no seat as a missing one does. `athanor.get`, `athanor.unarchive` and every
+other verb refuse them like any non-member, for an archived athanor as for
+an open one. A purged athanor that
 is later unarchived comes back with empty storage. A group whose members were
 all denied keeps no member to unarchive it — allowing them again at the door
 reopens only their own athanors — so it can be purged or destroyed, and

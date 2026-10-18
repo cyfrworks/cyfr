@@ -1414,8 +1414,19 @@ defmodule Opus.ProviderTest do
 
       {:ok, result} = Provider.handle("execution", admin_ctx, %{"action" => "force_release"})
       assert result.force_released == true
-      # an operator sees the whole diagnostic
-      assert Map.has_key?(result, :tenants)
+    end
+
+    test "a platform administrator's status and release name no athanor: the instance's totals and the focused athanor's count alone" do
+      admin_ctx = %{Sanctum.TestContext.local(:api) | platform_admin: true}
+
+      for action <- ["status", "force_release"] do
+        {:ok, result} = Provider.handle("execution", admin_ctx, %{"action" => action})
+
+        refute Map.has_key?(result, :tenants), "execution.#{action} named the executing athanors"
+        refute Map.has_key?(result, :holders), "execution.#{action} named the slots' holders"
+        assert is_integer(result.tenant_active)
+        assert is_integer(result.tenant_max)
+      end
     end
 
     test "dispatch refuses a member and hides the action from them", %{ctx: ctx} do

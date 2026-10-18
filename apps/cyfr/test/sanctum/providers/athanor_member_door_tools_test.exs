@@ -786,7 +786,7 @@ defmodule Sanctum.Providers.AthanorMemberDoorToolsTest do
     assert {:error, :person_athanor} = Members.remove_member(personal, user_id: alice)
   end
 
-  test "an archived athanor refuses every mutation by id, for a member and for an operator; a member reads and unarchives it, an operator with no seat reads its public facts alone",
+  test "an archived athanor refuses every mutation by id, for a member and for an operator; a member reads and unarchives it, and an operator with no seat is answered as for a missing athanor",
        %{alice: alice, bob: bob, ops: ops, ctx: ctx, n: n} do
     a = ctx.(alice, Sanctum.TestContext.athanor_id(), [])
     assert {:ok, group} = call(a, "athanor", %{"action" => "create", "name" => "Closed #{n}"})
@@ -820,14 +820,15 @@ defmodule Sanctum.Providers.AthanorMemberDoorToolsTest do
     assert {:ok, %{members: [_]}} =
              call(a, "member", %{"action" => "list", "athanor" => group.id})
 
-    # An operator who was never a member reads the archived row's public
-    # facts through the platform scope, and nothing the athanor holds: not
-    # its members, and no reopening it.
-    assert {:ok, facts} = call(operator, "athanor", %{"action" => "get", "athanor" => group.id})
-    assert Map.keys(facts) |> Enum.sort() == [:archived_at, :id, :name, :status]
+    # An operator who was never a member hears nothing of it, not even that
+    # it is archived: their capability is over the instance, not a seat,
+    # and each read answers as it does for an athanor that does not exist.
+    missing = "ath_" <> Prima.UUID7.generate()
 
-    assert %{id: id, name: name, status: "archived", archived_at: %DateTime{}} = facts
-    assert {id, name} == {group.id, "Closed #{n}"}
+    for named <- [group.id, missing] do
+      assert {:error, {:not_found, "Athanor", ^named}} =
+               call(operator, "athanor", %{"action" => "get", "athanor" => named})
+    end
 
     for {tool, action} <- [{"member", "list"}, {"athanor", "unarchive"}] do
       assert {:error, {:not_found, "Athanor", id}} =
@@ -890,18 +891,16 @@ defmodule Sanctum.Providers.AthanorMemberDoorToolsTest do
     assert {:ok, %{status: "denied"}} = Users.get(alice)
     assert {:ok, %{status: "archived"}} = Athanors.get(personal.id)
 
-    # The operator holds no seat in it, so unarchive refuses them as it
-    # refuses any non-member; its public facts are theirs to read.
-    assert {:error, msg} =
-             call(operator, "athanor", %{"action" => "unarchive", "athanor" => personal.id})
+    # The operator holds no seat in it, so unarchive and get refuse them as
+    # they refuse any non-member, as for an athanor that does not exist.
+    for action <- ["unarchive", "get"] do
+      assert {:error, msg} =
+               call(operator, "athanor", %{"action" => action, "athanor" => personal.id})
 
-    assert Refusals.render(msg) =~ "not found"
+      assert Refusals.render(msg) =~ "not found"
+    end
+
     assert {:ok, %{status: "archived"}} = Athanors.get(personal.id)
-
-    assert {:ok, %{id: id, status: "archived"}} =
-             call(operator, "athanor", %{"action" => "get", "athanor" => personal.id})
-
-    assert id == personal.id
 
     # Allowing her again at the door reopens it and seats her in it.
     assert {:ok, _} = call(operator, "door", %{"action" => "allow", "value" => email})
@@ -910,17 +909,28 @@ defmodule Sanctum.Providers.AthanorMemberDoorToolsTest do
     assert Members.member?(alice, personal.id)
   end
 
-  test "purge and destroy are platform-scope: an operator with no seat reclaims an archived group, and a member who is not an operator is refused at admission",
+  test "purge and destroy are platform-scope: an operator with no seat reclaims an archived group and learns its id and status alone, an open one answers them as a missing one does, and a member who is not an operator is refused at admission",
        %{alice: alice, ops: ops, ctx: ctx, n: n} do
     a = ctx.(alice, Sanctum.TestContext.athanor_id(), [])
     {:ok, group} = call(a, "athanor", %{"action" => "create", "name" => "Reclaim #{n}"})
     operator = ctx.(ops, Sanctum.TestContext.athanor_id(), platform_admin: true)
     refute Members.member?(ops, group.id)
 
-    # Still open, it is not the operator's to reclaim: purge waits for its
-    # archive.
+    # Still open, it is its members' alone: to the seatless operator it is
+    # what a missing athanor is, by id and by slug, for both verbs. A member
+    # who is an operator is told to archive it first.
+    missing = "ath_" <> Prima.UUID7.generate()
+
+    for action <- ["purge", "destroy"], named <- [group.id, group.slug, missing] do
+      assert {:error, {:not_found, "Athanor", ^named}} =
+               call(operator, "athanor", %{"action" => action, "athanor" => named}),
+             "athanor.#{action} told a seatless operator of #{named}"
+    end
+
+    seated_operator = ctx.(alice, group.id, platform_admin: true)
+
     assert {:error, msg} =
-             call(operator, "athanor", %{"action" => "purge", "athanor" => group.id})
+             call(seated_operator, "athanor", %{"action" => "purge", "athanor" => group.id})
 
     assert Refusals.render(msg) =~ "archive it first"
 
@@ -935,15 +945,22 @@ defmodule Sanctum.Providers.AthanorMemberDoorToolsTest do
     end
 
     # The operator, seated nowhere in it, purges by slug and then destroys
-    # by id: neither focuses the athanor, so no seat is asked for.
-    assert {:ok, %{"purged" => true, id: purged}} =
+    # by id: neither focuses the athanor, so no seat is asked for. Each
+    # answers the instance's record of what it reclaimed, the id and the
+    # status, and nothing the athanor held.
+    assert {:ok, purged} =
              call(operator, "athanor", %{"action" => "purge", "athanor" => group.slug})
 
-    assert purged == group.id
+    assert purged == %{:id => group.id, :status => "archived", "purged" => true}
 
-    assert {:ok, %{"destroyed" => true, "rows_deleted" => rows}} =
+    assert {:ok, destroyed} =
              call(operator, "athanor", %{"action" => "destroy", "athanor" => group.id})
 
+    assert %{:id => id, :status => "archived", "destroyed" => true, "rows_deleted" => rows} =
+             destroyed
+
+    assert map_size(destroyed) == 4
+    assert id == group.id
     assert rows > 0
 
     # Only the archived tombstone survives, and nobody sits in it.

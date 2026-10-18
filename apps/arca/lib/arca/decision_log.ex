@@ -656,40 +656,49 @@ defmodule Arca.DecisionLog do
   def correlate(%Prima.Actor{}, request_id) when is_binary(request_id), do: {:error, :no_athanor}
 
   # ============================================================================
-  # Global readers — the platform admin's
+  # Global readers — the platform admin's, over the host's own rows
   # ============================================================================
 
+  # A platform administrator holds a capability over the instance, not a
+  # seat (`ARCHITECTURE.md` §5.1): the rows these read are the host's own,
+  # the decisions made before any athanor was resolved, and never an
+  # athanor's. An athanor's decisions are its members' (`list/2`, `get/2`),
+  # an administrator's included only through a seat of their own there.
+
   @doc """
-  The decision under `call_id` whatever its tenant, the host's rows
-  included. The actor must be a platform admin (`:forbidden` otherwise).
+  The host's own decision under `call_id`: a row no athanor holds. The
+  actor must be a platform admin (`:forbidden` otherwise); an athanor's
+  decision is `:not_found` here, as a missing one is.
   """
   @spec get_global(Prima.Actor.t(), String.t()) ::
           {:ok, Decision.t()} | {:error, :forbidden | :not_found | :database_error}
-  # arca:unscoped-ok platform-admin global audit read
+  # arca:unscoped-ok platform-admin audit read of the host's own rows, which name no athanor
   def get_global(%Prima.Actor{platform_admin: true}, call_id) when is_binary(call_id) do
     Arca.Repo.Errors.with_db_rescue("DecisionLog.get_global", fn ->
-      Row |> Arca.Repo.get(call_id) |> found()
+      from(r in Row, where: r.call_id == ^call_id)
+      |> host_rows()
+      |> Arca.Repo.one()
+      |> found()
     end)
   end
 
   def get_global(%Prima.Actor{}, call_id) when is_binary(call_id), do: {:error, :forbidden}
 
   @doc """
-  Decisions across every tenant and the host's own, newest first. The
+  The host's own decisions, newest first: the rows no athanor holds. The
   actor must be a platform admin (`:forbidden` otherwise). Options are
-  `list/2`'s, plus `:athanor_id` — one tenant's, or `:none` for the rows
-  without one.
+  `list/2`'s.
   """
   @spec list_global(Prima.Actor.t(), keyword()) ::
           {:ok, [Decision.t()]} | {:error, :forbidden | :database_error}
   def list_global(actor, opts \\ [])
 
-  # arca:unscoped-ok platform-admin global audit read
+  # arca:unscoped-ok platform-admin audit read of the host's own rows, which name no athanor
   def list_global(%Prima.Actor{platform_admin: true}, opts) when is_list(opts) do
     Arca.Repo.Errors.with_db_rescue("DecisionLog.list_global", fn ->
       rows =
         Row
-        |> by_tenant(Keyword.get(opts, :athanor_id))
+        |> host_rows()
         |> filtered(opts)
         |> order_by([r], desc: r.inserted_at, desc: r.call_id)
         |> limit(^limit(opts))
@@ -701,9 +710,7 @@ defmodule Arca.DecisionLog do
 
   def list_global(%Prima.Actor{}, opts) when is_list(opts), do: {:error, :forbidden}
 
-  defp by_tenant(query, nil), do: query
-  defp by_tenant(query, :none), do: where(query, [r], is_nil(r.athanor_id))
-  defp by_tenant(query, id) when is_binary(id), do: Arca.QueryHelpers.where_athanor(query, id)
+  defp host_rows(query), do: where(query, [r], is_nil(r.athanor_id))
 
   defp filtered(query, opts) do
     Enum.reduce(opts, query, fn

@@ -906,12 +906,13 @@ defmodule Opus.Provider do
   end
 
   # The status is global: every athanor currently executing, with live
-  # counts and holder pids. The operator (and the server's own contexts)
-  # keep the full diagnostic; a member gets the shared totals plus their
-  # own athanor's count — other athanors' identifiers and activity levels
-  # are not theirs to enumerate.
+  # counts and holder pids. The server's own contexts keep the full
+  # diagnostic; a person gets the shared totals plus the count of the
+  # athanor in focus — other athanors' identifiers and activity levels are
+  # not theirs to enumerate. A platform administrator is answered as any
+  # person is: their capability is over the instance, whose slots the
+  # totals describe, and not a seat in the athanors holding them.
   defp scoped_slot_status(%Context{scope: :platform}, status), do: status
-  defp scoped_slot_status(%Context{platform_admin: true}, status), do: status
 
   defp scoped_slot_status(%Context{} = ctx, status) do
     status

@@ -21,12 +21,15 @@ defmodule Sanctum.Providers.Athanor do
   `purge` and `destroy` are the operator's platform-scope operations
   (`scope: :platform`, checked at admission): they reclaim an archived
   athanor the operator need not belong to, focus nothing, and read it
-  through the server's own platform context. That instance capability is
-  also the one way past the single refusal: a platform administrator with
-  no seat may `get` an archived athanor's public facts and nothing more,
-  and a caller without the capability, a former member or any other
-  non-member, never reaches that read. Every other verb refuses an
-  operator like anyone else.
+  through the server's own platform context. That is the one way past the
+  single refusal, and it reaches only what the instance holds for them to
+  reclaim: an athanor its members archived, whose storage and rows stay on
+  the instance's store until reclaimed. A seatless operator who names an
+  archived athanor learns that the name is an archived athanor's by the
+  reclaim it performs, which answers its id and status alone, and from
+  `destroy` that it is a person's own when it refuses one; an athanor
+  still open answers them as a missing one does. Every other verb, `get`
+  included, refuses an operator like anyone else.
   """
 
   require Logger
@@ -211,9 +214,8 @@ defmodule Sanctum.Providers.Athanor do
   end
 
   def handle(%Context{} = ctx, %{"action" => "get"} = args) do
-    case resolve(ctx, args, include_archived: true) do
-      {:ok, athanor, _focused} -> {:ok, render(athanor)}
-      {:error, refusal} -> archived_facts(ctx, args, refusal)
+    with {:ok, athanor, _focused} <- resolve(ctx, args, include_archived: true) do
+      {:ok, render(athanor)}
     end
   end
 
@@ -345,12 +347,13 @@ defmodule Sanctum.Providers.Athanor do
   # remain, and a purged athanor that reopens comes back with empty storage.
   # `destroy` below is the verb that also deletes the rows. Who may call
   # either is the declaration's `scope: :platform`, which the gate checks
-  # before this runs (`platform_admin_required`).
-  def handle(%Context{}, %{"action" => "purge"} = args) do
-    with {:ok, athanor} <- platform_target(args) do
+  # before this runs (`platform_admin_required`); what they reach is
+  # `platform_target/2`'s.
+  def handle(%Context{} = ctx, %{"action" => "purge"} = args) do
+    with {:ok, athanor} <- platform_target(ctx, args) do
       case Athanors.purge_storage(athanor) do
         :ok ->
-          {:ok, Map.put(render(athanor), "purged", true)}
+          {:ok, Map.put(reclaimed(athanor), "purged", true)}
 
         {:error, :not_archived} ->
           {:error,
@@ -369,12 +372,12 @@ defmodule Sanctum.Providers.Athanor do
   # tombstone survives. It refuses a personal athanor —
   # `users.personal_athanor_id` would go on naming a row whose data is gone,
   # and erasing a person is a different act.
-  def handle(%Context{}, %{"action" => "destroy"} = args) do
-    with {:ok, athanor} <- platform_target(args) do
+  def handle(%Context{} = ctx, %{"action" => "destroy"} = args) do
+    with {:ok, athanor} <- platform_target(ctx, args) do
       case Athanors.destroy(athanor) do
         {:ok, counts} ->
           {:ok,
-           render(athanor)
+           reclaimed(athanor)
            |> Map.put("destroyed", true)
            |> Map.put("rows_deleted", Enum.sum(Map.values(counts)))}
 
@@ -477,37 +480,36 @@ defmodule Sanctum.Providers.Athanor do
       else: {:error, {:invalid_argument, "That athanor is archived"}}
   end
 
-  # The athanor a platform-scope operation names, archived ones included,
-  # looked up through the server's own platform context
-  # (`Sanctum.system_context/0`), which focuses nothing and names no
-  # athanor of its own: the operator holds no seat in what they reclaim,
-  # and the athanor they work in decides nothing here.
-  defp platform_target(args),
-    do: lookup(Sanctum.system_context(), Map.get(args, "athanor"), include_archived: true)
+  # The athanor a reclaim names, looked up through the server's own
+  # platform context (`Sanctum.system_context/0`), which focuses nothing and
+  # names no athanor of its own, so the athanor the operator works in
+  # decides nothing here. A platform administrator holds a capability over
+  # the instance, not a seat (`ARCHITECTURE.md` §5.1): what the instance
+  # holds for them to reclaim is an athanor its members archived, whose
+  # storage tree and rows stay on the instance's store until reclaimed. An
+  # athanor still open is its members' alone, so to a caller with no seat in
+  # it, the operator included, it answers as a missing athanor does; a
+  # member is told to archive it first.
+  defp platform_target(%Context{} = ctx, args) do
+    named = Map.get(args, "athanor")
 
-  # What an operator who holds no seat may learn of an archived athanor:
-  # its public facts, read through the same platform scope, and nothing it
-  # holds — no members, thread, file or vault. This is the instance
-  # capability, not a seat: an athanor still open is its members' alone,
-  # and a caller without the capability is refused as any non-member is,
-  # with the missing-athanor refusal `resolve/3` gave.
-  defp archived_facts(%Context{platform_admin: true}, args, {:not_found, "Athanor", _} = refusal) do
-    case platform_target(args) do
-      {:ok, %{status: "archived"} = athanor} ->
-        {:ok,
-         %{
-           id: athanor.id,
-           name: athanor.name,
-           status: athanor.status,
-           archived_at: athanor.archived_at
-         }}
-
-      _not_archived ->
-        {:error, refusal}
+    with {:ok, athanor} <- lookup(Sanctum.system_context(), named, include_archived: true) do
+      if athanor.status == "archived" do
+        {:ok, athanor}
+      else
+        case Context.focus(ctx, athanor) do
+          {:ok, _seated} -> {:ok, athanor}
+          {:error, :unavailable} -> {:error, {:unavailable, "Storage"}}
+          {:error, _no_seat} -> {:error, {:not_found, "Athanor", named}}
+        end
+      end
     end
   end
 
-  defp archived_facts(_ctx, _args, refusal), do: {:error, refusal}
+  # What a reclaim answers: the archived athanor's id and status, the
+  # instance's own record of what it reclaimed, and nothing the athanor
+  # held — no name, members or settings.
+  defp reclaimed(athanor), do: %{id: athanor.id, status: athanor.status}
 
   defp lookup(%Context{athanor_id: id}, nil, _opts) when is_binary(id), do: get(id)
 

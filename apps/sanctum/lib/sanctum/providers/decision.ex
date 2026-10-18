@@ -12,10 +12,11 @@ defmodule Sanctum.Providers.Decision do
   `Prima.Actor` it projects, and nothing else.
 
   `list`, `get` and `correlate` read the caller's athanor's decisions,
-  never a row without a tenant. `list_global` and `get_global` read every
-  tenant's and the host's own: they are the platform admin's
-  (`scope: :platform`, which the gate checks against the operator
-  capability), and the log refuses any other actor again.
+  never a row without a tenant. `list_global` and `get_global` read the
+  host's own, the rows no athanor holds, and never an athanor's: they are
+  the platform admin's (`scope: :platform`, which the gate checks against
+  the operator capability), whose capability is over the instance and
+  not a seat, and the log refuses any other actor again.
 
   `correlate` joins the request's decisions to what else it left behind,
   through the request log's correlation (`Sanctum.Providers.McpLog`).
@@ -34,8 +35,9 @@ defmodule Sanctum.Providers.Decision do
   @impl true
   def tools, do: [decision_tool()]
 
-  # The tenant readers take `storage_read`; the global readers are the
-  # platform admin's, which the gate checks as the operation's scope.
+  # The tenant readers take `storage_read`; the global readers, over the
+  # host's own rows, are the platform admin's, which the gate checks as
+  # the operation's scope.
   defp decision_tool do
     alias Prima.{Arg, Operation}
 
@@ -92,12 +94,7 @@ defmodule Sanctum.Providers.Decision do
           "decision",
           "list_global",
           "List global decision",
-          filters ++
-            [
-              Arg.new("athanor_id", :string,
-                description: "global only: one athanor's decisions, or none for the host's own"
-              )
-            ],
+          filters,
           kind: :read,
           recorded: false,
           planes: [:external],
@@ -157,8 +154,7 @@ defmodule Sanctum.Providers.Decision do
   end
 
   def handle("decision", %Prima.Actor{} = actor, %{"action" => "list_global"} = args) do
-    with {:ok, opts} <- decision_filters(args),
-         {:ok, opts} <- global_tenant(opts, args["athanor_id"]) do
+    with {:ok, opts} <- decision_filters(args) do
       actor |> Arca.DecisionLog.list_global(opts) |> decisions_answer()
     end
   end
@@ -243,15 +239,6 @@ defmodule Sanctum.Providers.Decision do
       atom -> {:ok, Keyword.put(opts, key, atom)}
     end
   end
-
-  defp global_tenant(opts, nil), do: {:ok, opts}
-  defp global_tenant(opts, "none"), do: {:ok, Keyword.put(opts, :athanor_id, :none)}
-
-  defp global_tenant(opts, id) when is_binary(id) and id != "",
-    do: {:ok, Keyword.put(opts, :athanor_id, id)}
-
-  defp global_tenant(_opts, _id),
-    do: {:error, {:invalid_argument, "athanor_id must be an athanor id or none"}}
 
   # ============================================================================
   # Internal

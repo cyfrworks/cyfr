@@ -307,7 +307,7 @@ defmodule Arca.DecisionLogTest do
       assert call_id == decision.call_id
     end
 
-    test "read every tenant and the host's rows, or one of them", %{actor: actor, other: other} do
+    test "read the host's own rows and never an athanor's", %{actor: actor, other: other} do
       host = refused(request_id: "req_global")
       mine = admitted(request_id: "req_global")
       theirs = admitted(request_id: "req_global")
@@ -315,23 +315,17 @@ defmodule Arca.DecisionLogTest do
       :ok = DecisionLog.append(actor, mine)
       :ok = DecisionLog.append(other, theirs)
 
-      assert {:ok, all} = DecisionLog.list_global(admin(), request_id: "req_global")
-
-      assert Enum.sort(Enum.map(all, & &1.call_id)) ==
-               Enum.sort([host.call_id, mine.call_id, theirs.call_id])
-
-      assert {:ok, [only_host]} =
-               DecisionLog.list_global(admin(), request_id: "req_global", athanor_id: :none)
-
+      assert {:ok, [only_host]} = DecisionLog.list_global(admin(), request_id: "req_global")
       assert only_host.call_id == host.call_id
 
-      assert {:ok, [only_mine]} =
-               DecisionLog.list_global(admin(),
-                 request_id: "req_global",
-                 athanor_id: actor.athanor_id
-               )
+      # An athanor's decision is as missing to the global read as one that
+      # was never made; its members read it.
+      for tenant_row <- [mine, theirs] do
+        assert {:error, :not_found} = DecisionLog.get_global(admin(), tenant_row.call_id)
+      end
 
-      assert only_mine.call_id == mine.call_id
+      assert {:error, :not_found} = DecisionLog.get_global(admin(), "call_never_made")
+      assert {:ok, _} = DecisionLog.get(other, theirs.call_id)
     end
   end
 
