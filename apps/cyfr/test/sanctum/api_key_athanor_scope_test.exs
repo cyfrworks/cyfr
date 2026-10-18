@@ -4,9 +4,9 @@
 defmodule Sanctum.ApiKeyAthanorScopeTest do
   @moduledoc """
   An API key is a credential of the one athanor it was minted in: it
-  lists, focuses and reads that athanor alone, whatever other seats its
-  creator holds, and its focus there is the key's, so its creator
-  leaving the group does not take the athanor from it.
+  lists, focuses, revalidates into and reads that athanor alone, whatever
+  other seats its creator holds, and its focus there is the key's, so its
+  creator leaving the group does not take the athanor from it.
   """
   use ExUnit.Case, async: false
 
@@ -157,6 +157,29 @@ defmodule Sanctum.ApiKeyAthanorScopeTest do
     assert {:ok, %{athanor_id: athanor_id}} = Context.focus(key_ctx, a.id)
     assert athanor_id == a.id
     assert Context.focus(key_ctx, b.id) == {:error, :not_found}
+  end
+
+  test "revalidation keeps the key in its athanor, never its creator's other seat", %{
+    user: user,
+    a: a,
+    raw: raw
+  } do
+    {:ok, key_ctx} = Caller.establish({:api_key, raw})
+    assert {:ok, %{athanor_id: athanor_id}} = Sanctum.Tenancy.revalidate(key_ctx)
+    assert athanor_id == a.id
+
+    other = "github|https://github.com|stays-#{System.unique_integer([:positive])}"
+    {:ok, _} = Members.ensure(other, scope: "athanor", athanor_id: a.id)
+    :ok = Members.remove_member(a, user_id: user.id)
+
+    {:ok, key_ctx} = Caller.establish({:api_key, raw})
+    assert {:ok, revalidated} = Sanctum.Tenancy.revalidate(key_ctx)
+    assert revalidated.athanor_id == a.id
+    assert Context.key_bound?(revalidated)
+    refute revalidated.platform_admin
+
+    {:ok, _} = Athanors.archive(a)
+    assert {:ok, %{athanor_id: nil}} = Sanctum.Tenancy.revalidate(key_ctx)
   end
 
   test "an archived key athanor is refused as archived, and lists nothing", %{

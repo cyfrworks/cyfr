@@ -321,6 +321,12 @@ defmodule Sanctum.Tenancy do
   and no own athanor is dropped to an athanor-less context (the tenant
   gate then rejects tenant-scoped routes).
 
+  A context an API key stands behind (`Sanctum.Context.key_bound?/1`)
+  keeps the athanor the key was minted in, as `Sanctum.Context.focus/2`
+  and `list_athanors/1` do: its creator's seats never move it. Its
+  creator's denial drops it like any other; an athanor since archived or
+  removed leaves it athanor-less.
+
   Cost: one `users` read and one `Members.list_by_user/1` query per restored
   request (both indexed). It trades those for immediate revocation instead
   of waiting out the session TTL.
@@ -337,10 +343,7 @@ defmodule Sanctum.Tenancy do
         {:ok, %{ctx | authenticated: false, athanor_id: nil, platform_admin: false}}
 
       {:ok, user} ->
-        case Members.list_by_user(user_id) do
-          {:ok, memberships} -> {:ok, ctx |> apply_membership(memberships, user) |> elem(0)}
-          {:error, reason} -> unavailable("memberships", user_id, reason)
-        end
+        if Context.key_bound?(ctx), do: revalidate_key(ctx), else: revalidate_seats(ctx, user)
 
       {:error, reason} ->
         unavailable("user", user_id, reason)
@@ -348,6 +351,24 @@ defmodule Sanctum.Tenancy do
   end
 
   def revalidate(%Context{} = ctx), do: {:ok, ctx}
+
+  defp revalidate_seats(%Context{user_id: user_id} = ctx, user) do
+    case Members.list_by_user(user_id) do
+      {:ok, memberships} -> {:ok, ctx |> apply_membership(memberships, user) |> elem(0)}
+      {:error, reason} -> unavailable("memberships", user_id, reason)
+    end
+  end
+
+  defp revalidate_key(%Context{athanor_id: id} = ctx) when is_binary(id) and id != "" do
+    case Athanors.get(id) do
+      {:ok, %{id: ^id, status: "active"}} -> {:ok, ctx}
+      {:ok, %{id: ^id}} -> {:ok, %{ctx | athanor_id: nil}}
+      {:error, :not_found} -> {:ok, %{ctx | athanor_id: nil}}
+      {:error, reason} -> unavailable("athanor", ctx.user_id, reason)
+    end
+  end
+
+  defp revalidate_key(%Context{} = ctx), do: {:ok, ctx}
 
   @doc """
   The context a recovered turn continues under: the person-shaped
