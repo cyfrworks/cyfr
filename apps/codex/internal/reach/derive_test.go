@@ -21,8 +21,8 @@ func TestDeriveVectors(t *testing.T) {
 				t.Errorf("%s: %v, want refusal %s", v.Name, err, v.Refusal.Code)
 				continue
 			}
-			if r.Code != v.Refusal.Code || !reflect.DeepEqual(r.Payload, v.Refusal.Payload) {
-				t.Errorf("%s: refusal %s %v, want %s %v", v.Name, r.Code, r.Payload, v.Refusal.Code, v.Refusal.Payload)
+			if r.Code != v.Refusal.Code || r.Class != v.Refusal.Class || !reflect.DeepEqual(r.Payload, v.Refusal.Payload) {
+				t.Errorf("%s: refusal %s %s %v, want %s %s %v", v.Name, r.Code, r.Class, r.Payload, v.Refusal.Code, v.Refusal.Class, v.Refusal.Payload)
 			}
 			continue
 		}
@@ -86,8 +86,8 @@ func TestBootVectors(t *testing.T) {
 				t.Errorf("%s: %v, want refusal %s", v.Name, err, v.Refusal.Code)
 				continue
 			}
-			if r.Code != v.Refusal.Code || !reflect.DeepEqual(r.Payload, v.Refusal.Payload) {
-				t.Errorf("%s: refusal %s %v, want %s %v", v.Name, r.Code, r.Payload, v.Refusal.Code, v.Refusal.Payload)
+			if r.Code != v.Refusal.Code || r.Class != v.Refusal.Class || !reflect.DeepEqual(r.Payload, v.Refusal.Payload) {
+				t.Errorf("%s: refusal %s %s %v, want %s %s %v", v.Name, r.Code, r.Class, r.Payload, v.Refusal.Code, v.Refusal.Class, v.Refusal.Payload)
 			}
 			if got := r.Sentence(); got != v.Refusal.Sentence {
 				t.Errorf("%s: sentence\n got %s\nwant %s", v.Name, got, v.Refusal.Sentence)
@@ -153,5 +153,66 @@ func bootJSON(b Boot) map[string]any {
 		"hsts":          b.HSTS,
 		"check_origins": origins,
 		"assertion":     b.Assertion,
+	}
+}
+
+// A malformed builds URL is refused before a head is made from it, at boot
+// and when a head is derived.
+func TestMalformedBuildsURLRefuses(t *testing.T) {
+	for _, raw := range []string{"http://locus-builds:bad", "http://locus-builds:4100/path", "http://locus-builds:4100?token=x", "http://user@locus-builds:4100", "ftp://locus-builds:4100", "not-a-url"} {
+		want := map[string]string{"key": "CYFR_LOCUS_BUILDS_URL", "value": raw}
+		_, err := ResolveBoot(BootInput{Process: map[string]string{"CYFR_REACH": "local", "CYFR_LOCUS_BUILDS_URL": raw}, Release: true})
+		var r *Refusal
+		if !errors.As(err, &r) || r.Code != "reach_setting_invalid" || !reflect.DeepEqual(r.Payload, want) {
+			t.Errorf("ResolveBoot with builds URL %q: %v", raw, err)
+		}
+		_, err = Derive(Target{Mode: ModeLocal}, Current{Port: 4000, BuildsURL: raw}, nil)
+		if !errors.As(err, &r) || r.Code != "reach_setting_invalid" || !reflect.DeepEqual(r.Payload, want) {
+			t.Errorf("Derive with builds URL %q: %v", raw, err)
+		}
+	}
+}
+
+// A value that is not UTF-8 is refused by its name, never carried into a
+// head's canonical bytes or a sentence.
+func TestInvalidUTF8Refuses(t *testing.T) {
+	public := map[string]string{"CYFR_REACH": "public", "CYFR_HOST": "cyfr.example.com", "CYFR_PUBLIC_URL": "https://cyfr.example.com"}
+	for _, key := range []string{"CADDY_ACME_EMAIL", "CYFR_LOCUS_BUILDS_URL", "CYFR_HOST", "CYFR_REACH", "CYFR_PORT"} {
+		env := map[string]string{}
+		for k, v := range public {
+			env[k] = v
+		}
+		env[key] = "a" + string([]byte{255})
+		_, err := ResolveBoot(BootInput{Process: env, Release: true})
+		var r *Refusal
+		if !errors.As(err, &r) || r.Code != "reach_setting_invalid" || !reflect.DeepEqual(r.Payload, map[string]string{"key": key}) {
+			t.Errorf("ResolveBoot with non-UTF-8 %s: %v", key, err)
+		}
+	}
+	_, err := Derive(Target{Mode: ModeLocal}, Current{Port: 4000, BuildsURL: "http://locus-builds:4100/" + string([]byte{255})}, nil)
+	var r *Refusal
+	if !errors.As(err, &r) || r.Code != "reach_setting_invalid" {
+		t.Errorf("Derive with a non-UTF-8 builds URL: %v", err)
+	}
+}
+
+// An option that only a public home takes, given for another mode, is
+// refused as that option, never as an invalid value.
+func TestOptionOutsideItsMode(t *testing.T) {
+	for _, c := range []struct {
+		target Target
+		join   *Join
+		option string
+	}{
+		{Target{Mode: ModeLocal, Domain: "cyfr.example.com"}, nil, "--domain"},
+		{Target{Mode: ModeTailnet, ACMEEmail: "ops@example.com"}, &Join{Name: "cyfr.tail1a2b3c.ts.net", NodeID: "n1"}, "--acme-email"},
+		{Target{Mode: ModeLocal, ACMEEmail: "ops@example.com"}, nil, "--acme-email"},
+	} {
+		_, err := Derive(c.target, Current{Port: 4000}, c.join)
+		var r *Refusal
+		want := map[string]string{"option": c.option, "mode": c.target.Mode}
+		if !errors.As(err, &r) || r.Code != "reach_option_outside_mode" || !reflect.DeepEqual(r.Payload, want) {
+			t.Errorf("%+v: %v", c.target, err)
+		}
 	}
 }

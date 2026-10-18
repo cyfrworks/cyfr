@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 )
 
 // Target is the reach a person asks for.
@@ -67,16 +68,23 @@ const (
 func Derive(t Target, cur Current, join *Join) (Derivation, error) {
 	domain := strings.ToLower(strings.TrimSpace(t.Domain))
 	email := strings.TrimSpace(t.ACMEEmail)
+	buildsURL := strings.TrimSpace(cur.BuildsURL)
+	if t.Mode != ModeLocal && t.Mode != ModeTailnet && t.Mode != ModePublic {
+		return Derivation{}, refuse("reach_unknown_mode", readable(map[string]string{"value": t.Mode}))
+	}
 	if cur.Port < 1 || cur.Port > 65535 {
 		return Derivation{}, refuse("reach_setting_invalid", map[string]string{"key": "CYFR_PORT", "value": strconv.Itoa(cur.Port)})
 	}
+	if buildsURL != "" && !BuildsURL(buildsURL) {
+		return Derivation{}, settingInvalid("CYFR_LOCUS_BUILDS_URL", buildsURL)
+	}
 	if t.Mode != ModePublic && domain != "" {
-		return Derivation{}, invalid(t.Domain, "domain", "only a public home has a domain")
+		return Derivation{}, refuse("reach_option_outside_mode", map[string]string{"option": "--domain", "mode": t.Mode})
 	}
 	if t.Mode != ModePublic && email != "" {
-		return Derivation{}, invalid(email, "email", "only a public home has a certificate email")
+		return Derivation{}, refuse("reach_option_outside_mode", map[string]string{"option": "--acme-email", "mode": t.Mode})
 	}
-	h := Head{Mode: t.Mode, Port: cur.Port, BuildsURL: strings.TrimSpace(cur.BuildsURL)}
+	h := Head{Mode: t.Mode, Port: cur.Port, BuildsURL: buildsURL}
 	switch t.Mode {
 	case ModeLocal:
 		h.Host = "localhost"
@@ -99,8 +107,6 @@ func Derive(t Target, cur Current, join *Join) (Derivation, error) {
 			return Derivation{}, invalid(email, "email", emailRule)
 		}
 		h.Host, h.PublicURL, h.ACMEEmail = domain, "https://"+domain, email
-	default:
-		return Derivation{}, refuse("reach_unknown_mode", map[string]string{"value": t.Mode})
 	}
 	h.Profiles = Profiles(h.Mode, h.BuildsURL)
 
@@ -116,7 +122,16 @@ func Derive(t Target, cur Current, join *Join) (Derivation, error) {
 }
 
 func invalid(input, kind, rule string) *Refusal {
-	return refuse("reach_invalid", map[string]string{"input": input, "kind": kind, "rule": rule})
+	return refuse("reach_invalid", readable(map[string]string{"input": input, "kind": kind, "rule": rule}))
+}
+
+// readable keeps a payload's text UTF-8, so no sentence carries bytes that
+// are not: each run of invalid bytes reads as U+FFFD.
+func readable(payload map[string]string) map[string]string {
+	for k, v := range payload {
+		payload[k] = strings.ToValidUTF8(v, "\uFFFD")
+	}
+	return payload
 }
 
 func validEmail(email string) bool {
@@ -170,12 +185,26 @@ var reachKeys = []string{
 
 const assertionKey = "CYFR_LOCAL_INGRESS_ASSERTED"
 
+// readKeys are every name the boot reads, in byte order.
+var readKeys = func() []string {
+	keys := append([]string{assertionKey}, reachKeys...)
+	slices.Sort(keys)
+	return keys
+}()
+
 // ResolveBoot answers what Cyfr.RuntimeConfig.resolve_reach/1 answers for
 // the same input, a refusal by the same code and payload: the first in
 // the order that function documents.
 func ResolveBoot(in BootInput) (Boot, error) {
 	get := func(key string) string { return strings.TrimSpace(in.Process[key]) }
 
+	// A value no rule can read is refused before any rule reads it, by
+	// its name alone.
+	for _, key := range readKeys {
+		if !utf8.ValidString(in.File[key]) || !utf8.ValidString(in.Process[key]) {
+			return Boot{}, refuse("reach_setting_invalid", map[string]string{"key": key})
+		}
+	}
 	for _, key := range reachKeys {
 		if file := strings.TrimSpace(in.File[key]); file != "" && file != get(key) {
 			return Boot{}, refuse("reach_source_conflict", map[string]string{"key": key, "file_value": file, "process_value": get(key)})
@@ -286,6 +315,9 @@ func bootHead(mode string, get func(string) string) (Head, error) {
 	p, err := port(get, "CYFR_PORT", 4000)
 	if err != nil {
 		return Head{}, err
+	}
+	if buildsURL != "" && !BuildsURL(buildsURL) {
+		return Head{}, settingInvalid("CYFR_LOCUS_BUILDS_URL", buildsURL)
 	}
 	if host == "" {
 		host = "localhost"

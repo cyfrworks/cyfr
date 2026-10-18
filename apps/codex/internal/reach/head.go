@@ -12,11 +12,11 @@ package reach
 import (
 	"crypto/sha256"
 	"encoding/hex"
-	"net/url"
 	"regexp"
 	"slices"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 )
 
 // The three ways a home is reached.
@@ -44,11 +44,34 @@ type Head struct {
 	Profiles  []string `json:"profiles"`
 }
 
-// Refusal is a reach refusal: the code of its Prima.Refusal row and the
-// payload its sentence is rendered from. No payload carries a secret.
+// Refusal is a reach refusal: the code of its Prima.Refusal row, the
+// row's class, and the payload its sentence is rendered from. No payload
+// carries a secret.
 type Refusal struct {
 	Code    string
+	Class   string
 	Payload map[string]string
+}
+
+// classes are the Prima.Refusal classes of the codes this package refuses
+// with; the vectors hold both sides to them.
+var classes = map[string]string{
+	"reach_source_conflict":       "conflict",
+	"reach_assertion_from_file":   "forbidden",
+	"reach_missing":               "setup_required",
+	"reach_unknown_mode":          "invalid_argument",
+	"reach_local_mismatch":        "invalid_argument",
+	"reach_tailnet_host_invalid":  "invalid_argument",
+	"reach_tailnet_node_invalid":  "invalid_argument",
+	"reach_public_host_invalid":   "invalid_argument",
+	"reach_public_url_mismatch":   "invalid_argument",
+	"reach_key_outside_mode":      "invalid_argument",
+	"reach_setting_invalid":       "invalid_argument",
+	"reach_bind_not_loopback":     "forbidden",
+	"reach_invalid":               "invalid_argument",
+	"reach_option_outside_mode":   "invalid_argument",
+	"tailnet_not_joined":          "setup_required",
+	"tailnet_node_id_unsupported": "invalid_argument",
 }
 
 func (r *Refusal) Error() string {
@@ -68,7 +91,11 @@ func refuse(code string, payload map[string]string) *Refusal {
 	if payload == nil {
 		payload = map[string]string{}
 	}
-	return &Refusal{Code: code, Payload: payload}
+	class, ok := classes[code]
+	if !ok {
+		class = "internal"
+	}
+	return &Refusal{Code: code, Class: class, Payload: payload}
 }
 
 // Profiles is a head's complete compose selection, sorted: the mode's
@@ -79,10 +106,8 @@ func Profiles(mode, buildsURL string) []string {
 	if mode != ModeLocal {
 		profiles = append(profiles, mode)
 	}
-	if buildsURL != "" {
-		if u, err := url.Parse(buildsURL); err == nil && u.Hostname() == buildsService {
-			profiles = append(profiles, buildsService)
-		}
+	if host, ok := buildsHost(buildsURL); ok && host == buildsService {
+		profiles = append(profiles, buildsService)
 	}
 	slices.Sort(profiles)
 	return profiles
@@ -173,6 +198,40 @@ func writeString(b *strings.Builder, s string) {
 		}
 	}
 	b.WriteByte('"')
+}
+
+// buildsURLGrammar is Cyfr.RuntimeConfig's @builds_url, anchored the Go
+// way: http or https, a host, an optional port, and nothing after but one
+// slash.
+var buildsURLGrammar = regexp.MustCompile(`^(?:http|https)://(\[[0-9A-Fa-f:.]+\]|[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*)(?::([0-9]{1,5}))?/?$`)
+
+// BuildsURL reports whether raw is a builds service's URL: http or https,
+// a host (a DNS name, an IPv4 address or a bracketed IPv6 address), an
+// optional port from 1 to 65535, and nothing after but one slash: no
+// path, query, fragment or credentials.
+func BuildsURL(raw string) bool {
+	_, ok := buildsHost(raw)
+	return ok
+}
+
+// buildsHost is a builds URL's host, lowercased.
+func buildsHost(raw string) (string, bool) {
+	m := buildsURLGrammar.FindStringSubmatch(raw)
+	if m == nil || !utf8.ValidString(raw) {
+		return "", false
+	}
+	if m[2] != "" {
+		if n, err := strconv.Atoi(m[2]); err != nil || n < 1 || n > 65535 {
+			return "", false
+		}
+	}
+	if strings.HasPrefix(m[1], "[") {
+		address := strings.TrimSuffix(strings.TrimPrefix(m[1], "["), "]")
+		if !strings.Contains(address, ":") || ipLiteral(address) == nil {
+			return "", false
+		}
+	}
+	return strings.ToLower(m[1]), true
 }
 
 var (

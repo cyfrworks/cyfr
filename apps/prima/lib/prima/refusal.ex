@@ -342,14 +342,16 @@ defmodule Prima.Refusal do
     "CYFR_PROXY_BIND_ADDRESS" => "an IPv4 or IPv6 address",
     "CYFR_LOCAL_INGRESS_ASSERTED" => "true, the one value the compose file asserts",
     "CYFR_TRUSTED_PROXY_HOPS" => "a whole number of proxy hops from 0 to 16",
-    "CYFR_TRUSTED_PROXY_CIDRS" => "a comma-separated list of IP addresses and CIDRs"
+    "CYFR_TRUSTED_PROXY_CIDRS" => "a comma-separated list of IP addresses and CIDRs",
+    "CYFR_LOCUS_BUILDS_URL" =>
+      "an http or https URL with a host, an optional port and no path, query or credentials"
   }
 
   # What a `cyfr reach` input was meant to be.
   @reach_input_kinds %{
-    domain: "domain",
-    tailnet_name: "tailnet machine name",
-    email: "email address"
+    "domain" => "domain",
+    "tailnet_name" => "tailnet machine name",
+    "email" => "email address"
   }
 
   # Why a setup token cannot be used, and the fix for each.
@@ -1097,6 +1099,21 @@ defmodule Prima.Refusal do
          {:invalid_argument,
           "`#{key}` is `#{value}`, which is not #{Map.fetch!(@reach_setting_forms, key)}. " <>
             "Nothing started. Correct it, or remove it to take the default."}
+
+  # A value no rule can read: its name alone, never its bytes.
+  defp row({:reach_setting_invalid, %{key: key} = payload})
+       when is_binary(key) and map_size(payload) == 1,
+       do:
+         {:invalid_argument,
+          "`#{key}` is not valid UTF-8 text. Nothing started. Correct it, or remove it."}
+
+  # A `cyfr reach` option only a public home takes, given for another mode.
+  defp row({:reach_option_outside_mode, %{option: option, mode: mode}})
+       when option in ["--domain", "--acme-email"] and mode in ["local", "tailnet"],
+       do:
+         {:invalid_argument,
+          "`#{option}` is for a public home, and this command chooses `#{mode}`. Nothing was " <>
+            "changed. Run it again without `#{option}`, or run `cyfr reach public` with it."}
 
   defp row({:tailnet_node_id_unsupported, %{value: value}}) when is_binary(value),
     do:

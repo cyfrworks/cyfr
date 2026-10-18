@@ -47,6 +47,7 @@ var settingForms = map[string]string{
 	"CYFR_LOCAL_INGRESS_ASSERTED": "true, the one value the compose file asserts",
 	"CYFR_TRUSTED_PROXY_HOPS":     "a whole number of proxy hops from 0 to 16",
 	"CYFR_TRUSTED_PROXY_CIDRS":    "a comma-separated list of IP addresses and CIDRs",
+	"CYFR_LOCUS_BUILDS_URL":       "an http or https URL with a host, an optional port and no path, query or credentials",
 }
 
 // Sentence is a boot refusal's sentence, word for word the release's
@@ -98,6 +99,9 @@ func (r *Refusal) Sentence() string {
 	case "reach_bind_not_loopback":
 		return "CYFR_BIND_ADDRESS `" + p["address"] + "` is not a loopback address, so other machines could reach this home's loopback listener. Bind 127.0.0.1 or ::1; a home reached from other devices uses CYFR_REACH=tailnet or public."
 	case "reach_setting_invalid":
+		if _, ok := p["value"]; !ok {
+			return "`" + p["key"] + "` is not valid UTF-8 text. Nothing started. Correct it, or remove it."
+		}
 		return "`" + p["key"] + "` is `" + p["value"] + "`, which is not " + settingForms[p["key"]] + ". Nothing started. Correct it, or remove it to take the default."
 	}
 	return r.Code

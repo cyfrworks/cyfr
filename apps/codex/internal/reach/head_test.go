@@ -23,6 +23,7 @@ type vectors struct {
 		TailnetNames []nameVector `json:"tailnet_names"`
 		NodeIDs      []nameVector `json:"node_ids"`
 		Domains      []nameVector `json:"domains"`
+		BuildsURLs   []nameVector `json:"builds_urls"`
 	} `json:"names"`
 	Words []wordsVector `json:"words"`
 }
@@ -107,7 +108,8 @@ func readVectors(t *testing.T) vectors {
 		t.Fatalf("decode reach_modes.json: %v", err)
 	}
 	if len(v.Derive) == 0 || len(v.Boot) == 0 || len(v.Profiles) == 0 || len(v.Words) == 0 ||
-		len(v.Names.TailnetNames) == 0 || len(v.Names.NodeIDs) == 0 || len(v.Names.Domains) == 0 {
+		len(v.Names.TailnetNames) == 0 || len(v.Names.NodeIDs) == 0 || len(v.Names.Domains) == 0 ||
+		len(v.Names.BuildsURLs) == 0 {
 		t.Fatal("reach_modes.json has an empty or missing section")
 	}
 	return v
@@ -131,6 +133,7 @@ func TestNamesVectors(t *testing.T) {
 		{"TailnetName", TailnetName, v.Names.TailnetNames},
 		{"NodeID", NodeID, v.Names.NodeIDs},
 		{"PublicDomain", PublicDomain, v.Names.Domains},
+		{"BuildsURL", BuildsURL, v.Names.BuildsURLs},
 	} {
 		var valid, invalid int
 		for _, c := range set.cases {

@@ -668,6 +668,22 @@ defmodule Cyfr.RuntimeConfigTest do
         refute vector["canonical"] =~ "null"
       end
 
+      # Every refused derivation is a row of the refusal table, of its class.
+      refused = for %{"refusal" => refusal} = vector <- derive, do: {refusal, vector["name"]}
+      assert refused != []
+
+      for {%{"code" => code, "class" => class, "payload" => payload}, name} <- refused do
+        reason =
+          {String.to_existing_atom(code),
+           Map.new(payload, fn {key, value} -> {String.to_existing_atom(key), value} end)}
+
+        assert %Prima.Refusal{class: refused_class, message: message} =
+                 Prima.Refusal.classify(reason)
+
+        assert Atom.to_string(refused_class) == class, name
+        assert message != Prima.Refusal.unconfirmed(), name
+      end
+
       # Each derived head is its own: a change of port, email, builds URL
       # or node gives a new digest.
       digests = for {_head, vector} <- heads, do: vector["digest"]
@@ -690,7 +706,8 @@ defmodule Cyfr.RuntimeConfigTest do
       for {section, check} <- [
             {"tailnet_names", &RuntimeConfig.tailnet_name?/1},
             {"node_ids", &RuntimeConfig.tailnet_node_id?/1},
-            {"domains", &RuntimeConfig.public_domain?/1}
+            {"domains", &RuntimeConfig.public_domain?/1},
+            {"builds_urls", &RuntimeConfig.builds_url?/1}
           ] do
         cases = names[section]
         assert Enum.any?(cases, & &1["valid"]) and Enum.any?(cases, &(not &1["valid"])), section
@@ -740,6 +757,65 @@ defmodule Cyfr.RuntimeConfigTest do
                    process: process,
                    release?: true
                  })
+      end
+    end
+  end
+
+  describe "resolve_reach/1's input rules" do
+    defp resolve_local(extra) do
+      RuntimeConfig.resolve_reach(%{
+        file: nil,
+        process: Map.merge(%{"CYFR_REACH" => "local"}, extra),
+        release?: true
+      })
+    end
+
+    test "a value that is not UTF-8 is refused by its name, never a crash" do
+      public = %{
+        "CYFR_REACH" => "public",
+        "CYFR_HOST" => "cyfr.example.com",
+        "CYFR_PUBLIC_URL" => "https://cyfr.example.com"
+      }
+
+      for key <- ~w(CADDY_ACME_EMAIL CYFR_LOCUS_BUILDS_URL CYFR_HOST CYFR_REACH CYFR_PORT) do
+        assert {:error,
+                %{
+                  code: :reach_setting_invalid,
+                  class: :invalid_argument,
+                  payload: %{key: ^key} = payload
+                }} =
+                 resolve_local(Map.put(public, key, "a" <> <<255>>)),
+               key
+
+        refute Map.has_key?(payload, :value), key
+        assert String.valid?(Prima.Refusal.message({:reach_setting_invalid, payload}))
+      end
+
+      # The file's own read is held to the same rule.
+      assert {:error, %{code: :reach_setting_invalid, payload: %{key: "CYFR_HOST"}}} =
+               RuntimeConfig.resolve_reach(%{
+                 file: %{"CYFR_HOST" => <<255>>},
+                 process: %{"CYFR_REACH" => "local", "CYFR_HOST" => <<255>>},
+                 release?: true
+               })
+    end
+
+    test "a malformed builds URL is refused before the head or its profiles" do
+      for url <- [
+            "http://locus-builds:bad",
+            "http://locus-builds:4100/path",
+            "http://locus-builds:4100?token=x",
+            "http://user@locus-builds:4100",
+            "ftp://locus-builds:4100",
+            "not-a-url"
+          ] do
+        assert {:error,
+                %{
+                  code: :reach_setting_invalid,
+                  payload: %{key: "CYFR_LOCUS_BUILDS_URL", value: ^url}
+                }} =
+                 resolve_local(%{"CYFR_LOCUS_BUILDS_URL" => url}),
+               url
       end
     end
   end

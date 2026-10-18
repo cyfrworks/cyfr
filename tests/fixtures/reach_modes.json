@@ -1,5 +1,5 @@
 {
-  "about": "The reach head, its derivation, its canonical bytes and digest, the boot's resolution of a deployment's reach settings, the compose selections, the name grammars and the words a person reads. Cyfr.RuntimeConfig (Elixir) generates every canonical, digest and boot answer; apps/codex/internal/reach (Go) agrees with them. The derive vectors' .env assignments and removals are Go's alone.",
+  "about": "The reach head, its derivation, its canonical bytes and digest, the boot's resolution of a deployment's reach settings, the compose selections, the name grammars and the words a person reads. Cyfr.RuntimeConfig (Elixir) generates every canonical, digest, class and boot answer; apps/codex/internal/reach (Go) agrees with them. The derive vectors' .env assignments and removals are Go's alone.",
   "derive": [
     {
       "name": "local, builds on, default port",
@@ -455,6 +455,7 @@
       },
       "refusal": {
         "code": "tailnet_not_joined",
+        "class": "setup_required",
         "payload": {}
       }
     },
@@ -472,6 +473,7 @@
       },
       "refusal": {
         "code": "tailnet_node_id_unsupported",
+        "class": "invalid_argument",
         "payload": {
           "value": "n/bad"
         }
@@ -491,6 +493,7 @@
       },
       "refusal": {
         "code": "reach_invalid",
+        "class": "invalid_argument",
         "payload": {
           "input": "cyfr.example.com",
           "kind": "tailnet_name",
@@ -509,6 +512,7 @@
       },
       "refusal": {
         "code": "reach_invalid",
+        "class": "invalid_argument",
         "payload": {
           "input": "cyfr.tail1a2b3c.ts.net",
           "kind": "domain",
@@ -527,6 +531,7 @@
       },
       "refusal": {
         "code": "reach_invalid",
+        "class": "invalid_argument",
         "payload": {
           "input": "192.0.2.10",
           "kind": "domain",
@@ -545,6 +550,7 @@
       },
       "refusal": {
         "code": "reach_invalid",
+        "class": "invalid_argument",
         "payload": {
           "input": "https://cyfr.example.com",
           "kind": "domain",
@@ -562,6 +568,7 @@
       },
       "refusal": {
         "code": "reach_invalid",
+        "class": "invalid_argument",
         "payload": {
           "input": "",
           "kind": "domain",
@@ -581,6 +588,7 @@
       },
       "refusal": {
         "code": "reach_invalid",
+        "class": "invalid_argument",
         "payload": {
           "input": "ops at example.com",
           "kind": "email",
@@ -602,11 +610,11 @@
         "node_id": "nAbc123XYZ1CNTRL"
       },
       "refusal": {
-        "code": "reach_invalid",
+        "code": "reach_option_outside_mode",
+        "class": "invalid_argument",
         "payload": {
-          "input": "ops@example.com",
-          "kind": "email",
-          "rule": "only a public home has a certificate email"
+          "option": "--acme-email",
+          "mode": "tailnet"
         }
       }
     },
@@ -620,11 +628,47 @@
         "port": 4000
       },
       "refusal": {
-        "code": "reach_invalid",
+        "code": "reach_option_outside_mode",
+        "class": "invalid_argument",
         "payload": {
-          "input": "cyfr.example.com",
-          "kind": "domain",
-          "rule": "only a public home has a domain"
+          "option": "--domain",
+          "mode": "local"
+        }
+      }
+    },
+    {
+      "name": "local, an email",
+      "target": {
+        "mode": "local",
+        "acme_email": "ops@example.com"
+      },
+      "current": {
+        "port": 4000
+      },
+      "refusal": {
+        "code": "reach_option_outside_mode",
+        "class": "invalid_argument",
+        "payload": {
+          "option": "--acme-email",
+          "mode": "local"
+        }
+      }
+    },
+    {
+      "name": "a malformed builds URL",
+      "target": {
+        "mode": "local"
+      },
+      "current": {
+        "port": 4000,
+        "builds_url": "http://locus-builds:bad"
+      },
+      "refusal": {
+        "code": "reach_setting_invalid",
+        "class": "invalid_argument",
+        "payload": {
+          "key": "CYFR_LOCUS_BUILDS_URL",
+          "value": "http://locus-builds:bad"
         }
       }
     },
@@ -638,6 +682,7 @@
       },
       "refusal": {
         "code": "reach_unknown_mode",
+        "class": "invalid_argument",
         "payload": {
           "value": "lan"
         }
@@ -653,6 +698,7 @@
       },
       "refusal": {
         "code": "reach_setting_invalid",
+        "class": "invalid_argument",
         "payload": {
           "key": "CYFR_PORT",
           "value": "70000"
@@ -2159,6 +2205,102 @@
       }
     },
     {
+      "name": "a malformed builds URL",
+      "input": {
+        "file": {
+          "CYFR_REACH": "local",
+          "CYFR_LOCUS_BUILDS_URL": "http://locus-builds:bad"
+        },
+        "process": {
+          "CYFR_REACH": "local",
+          "CYFR_LOCUS_BUILDS_URL": "http://locus-builds:bad"
+        },
+        "release?": true
+      },
+      "refusal": {
+        "class": "invalid_argument",
+        "code": "reach_setting_invalid",
+        "payload": {
+          "key": "CYFR_LOCUS_BUILDS_URL",
+          "value": "http://locus-builds:bad"
+        },
+        "sentence": "`CYFR_LOCUS_BUILDS_URL` is `http://locus-builds:bad`, which is not an http or https URL with a host, an optional port and no path, query or credentials. Nothing started. Correct it, or remove it to take the default."
+      }
+    },
+    {
+      "name": "a builds URL with a path",
+      "input": {
+        "file": {
+          "CYFR_REACH": "local",
+          "CYFR_LOCUS_BUILDS_URL": "http://locus-builds:4100/v1"
+        },
+        "process": {
+          "CYFR_REACH": "local",
+          "CYFR_LOCUS_BUILDS_URL": "http://locus-builds:4100/v1"
+        },
+        "release?": true
+      },
+      "refusal": {
+        "class": "invalid_argument",
+        "code": "reach_setting_invalid",
+        "payload": {
+          "key": "CYFR_LOCUS_BUILDS_URL",
+          "value": "http://locus-builds:4100/v1"
+        },
+        "sentence": "`CYFR_LOCUS_BUILDS_URL` is `http://locus-builds:4100/v1`, which is not an http or https URL with a host, an optional port and no path, query or credentials. Nothing started. Correct it, or remove it to take the default."
+      }
+    },
+    {
+      "name": "precedence: a malformed port before a malformed builds URL",
+      "input": {
+        "file": {
+          "CYFR_REACH": "local",
+          "CYFR_PORT": "x",
+          "CYFR_LOCUS_BUILDS_URL": "bad"
+        },
+        "process": {
+          "CYFR_REACH": "local",
+          "CYFR_PORT": "x",
+          "CYFR_LOCUS_BUILDS_URL": "bad"
+        },
+        "release?": true
+      },
+      "refusal": {
+        "class": "invalid_argument",
+        "code": "reach_setting_invalid",
+        "payload": {
+          "key": "CYFR_PORT",
+          "value": "x"
+        },
+        "sentence": "`CYFR_PORT` is `x`, which is not a port from 1 to 65535. Nothing started. Correct it, or remove it to take the default."
+      }
+    },
+    {
+      "name": "precedence: a malformed builds URL before the bind",
+      "input": {
+        "file": {
+          "CYFR_REACH": "local",
+          "CYFR_LOCUS_BUILDS_URL": "bad",
+          "CYFR_BIND_ADDRESS": "0.0.0.0"
+        },
+        "process": {
+          "CYFR_REACH": "local",
+          "CYFR_LOCUS_BUILDS_URL": "bad",
+          "CYFR_BIND_ADDRESS": "0.0.0.0"
+        },
+        "release?": true
+      },
+      "refusal": {
+        "class": "invalid_argument",
+        "code": "reach_setting_invalid",
+        "payload": {
+          "key": "CYFR_LOCUS_BUILDS_URL",
+          "value": "bad"
+        },
+        "sentence": "`CYFR_LOCUS_BUILDS_URL` is `bad`, which is not an http or https URL with a host, an optional port and no path, query or credentials. Nothing started. Correct it, or remove it to take the default."
+      }
+    },
+    {
       "name": "precedence: a source conflict before the assertion from the file",
       "input": {
         "file": {
@@ -2438,6 +2580,26 @@
         "locus-builds",
         "public"
       ]
+    },
+    {
+      "mode": "local",
+      "builds_url": "http://LOCUS-BUILDS:4100",
+      "profiles": [
+        "locus-builds"
+      ]
+    },
+    {
+      "mode": "tailnet",
+      "builds_url": "https://locus-builds/",
+      "profiles": [
+        "locus-builds",
+        "tailnet"
+      ]
+    },
+    {
+      "mode": "local",
+      "builds_url": "http://[::1]:4100",
+      "profiles": []
     }
   ],
   "names": {
@@ -2558,6 +2720,123 @@
         "value": "n=1",
         "valid": false,
         "why": "an equals sign"
+      }
+    ],
+    "builds_urls": [
+      {
+        "value": "http://locus-builds:4100",
+        "valid": true,
+        "why": "the compose service"
+      },
+      {
+        "value": "https://builds.example.net",
+        "valid": true,
+        "why": "a custom builder, no port"
+      },
+      {
+        "value": "http://locus-builds:4100/",
+        "valid": true,
+        "why": "one trailing slash"
+      },
+      {
+        "value": "http://192.0.2.10:4100",
+        "valid": true,
+        "why": "an IPv4 host"
+      },
+      {
+        "value": "http://[2001:db8::1]:4100",
+        "valid": true,
+        "why": "a bracketed IPv6 host"
+      },
+      {
+        "value": "HTTP://locus-builds:4100",
+        "valid": false,
+        "why": "an uppercase scheme"
+      },
+      {
+        "value": "http://locus-builds:bad",
+        "valid": false,
+        "why": "a port that is not a number"
+      },
+      {
+        "value": "http://locus-builds:0",
+        "valid": false,
+        "why": "port 0"
+      },
+      {
+        "value": "http://locus-builds:65536",
+        "valid": false,
+        "why": "a port past 65535"
+      },
+      {
+        "value": "http://locus-builds:4100/path",
+        "valid": false,
+        "why": "a path"
+      },
+      {
+        "value": "http://locus-builds:4100//",
+        "valid": false,
+        "why": "two slashes"
+      },
+      {
+        "value": "http://locus-builds:4100?token=x",
+        "valid": false,
+        "why": "a query"
+      },
+      {
+        "value": "http://locus-builds:4100#x",
+        "valid": false,
+        "why": "a fragment"
+      },
+      {
+        "value": "http://user@locus-builds:4100",
+        "valid": false,
+        "why": "credentials"
+      },
+      {
+        "value": "ftp://locus-builds:4100",
+        "valid": false,
+        "why": "another scheme"
+      },
+      {
+        "value": "locus-builds:4100",
+        "valid": false,
+        "why": "no scheme"
+      },
+      {
+        "value": "not-a-url",
+        "valid": false,
+        "why": "not a URL"
+      },
+      {
+        "value": "http://",
+        "valid": false,
+        "why": "no host"
+      },
+      {
+        "value": "http://-builds:4100",
+        "valid": false,
+        "why": "a label that starts with a hyphen"
+      },
+      {
+        "value": "http://[::g]:4100",
+        "valid": false,
+        "why": "a bracketed host that is no IPv6 address"
+      },
+      {
+        "value": "http://[192.0.2.10]:4100",
+        "valid": false,
+        "why": "IPv4 in brackets"
+      },
+      {
+        "value": "http://locus_builds:4100",
+        "valid": false,
+        "why": "an underscore"
+      },
+      {
+        "value": "http://bücher.example",
+        "valid": false,
+        "why": "non-ASCII"
       }
     ],
     "domains": [

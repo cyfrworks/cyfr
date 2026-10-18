@@ -49,6 +49,21 @@ defmodule Cyfr.CrossLanguageDriftTest do
              "matches before a trailing newline — use \\A..\\z"
   end
 
+  test "the reach engine's builds URL grammar is Cyfr.RuntimeConfig's" do
+    # Spelled the same on both sides, each anchored its own way; the
+    # vectors' builds_urls hold the two to the same verdicts.
+    [_, elixir] =
+      Regex.run(~r/@builds_url ~r\/\\A(.+)\\z\//, read!("apps/cyfr/lib/cyfr/runtime_config.ex"))
+
+    [_, go] =
+      Regex.run(
+        ~r/buildsURLGrammar = regexp\.MustCompile\(`\^(.+)\$`\)/,
+        read!("apps/codex/internal/reach/head.go")
+      )
+
+    assert String.replace(elixir, "\\/", "/") == go
+  end
+
   # ==========================================================================
   # ComponentRef: verdict-level binding + the constants the regex test skips
   # ==========================================================================

@@ -853,6 +853,12 @@ defmodule Cyfr.RuntimeConfig do
   @node_id ~r/\A[A-Za-z0-9._-]{1,128}\z/
   @digits ~r/\A[0-9]{1,5}\z/
 
+  # A builds service's URL: http or https, a host (a DNS name, an IPv4
+  # address or a bracketed IPv6 address), an optional port and nothing
+  # after but one slash. `tests/fixtures/reach_modes.json` holds the
+  # grammar's answers, which the reach engine's twin of it gives too.
+  @builds_url ~r/\A(?:http|https):\/\/(\[[0-9A-Fa-f:.]+\]|[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*)(?::([0-9]{1,5}))?\/?\z/
+
   @doc """
   Resolve how this home is reached from what the boot read
   (`t:reach_input/0`): `{:ok, reach}`, or `{:error, %{code, class,
@@ -860,12 +866,15 @@ defmodule Cyfr.RuntimeConfig do
   (`Prima.Refusal.message({code, payload})`) the boot prints after
   `[Cyfr] FATAL:`. Blank values count as unset.
 
-  When several refusals apply, the first in this order is answered: a
-  source conflict (the first such name in byte order), the assertion
-  assigned in `.env`, the mode (unset in a release, then unknown), the
-  host, the node id, the public URL, a key outside its mode (the email
-  before the node id), a malformed port, address, assertion or proxy
-  trust, and the loopback listener's bind. `tests/fixtures/reach_modes.json`
+  A value that is not UTF-8, in `.env` or the merged environment, is
+  refused first, by the first such name in byte order and without its
+  value, since no other rule can read it. Then, when several refusals
+  apply, the first in this order is answered: a source conflict (the
+  first such name in byte order), the assertion assigned in `.env`, the
+  mode (unset in a release, then unknown), the host, the node id, the
+  public URL, a key outside its mode (the email before the node id), a
+  malformed port, builds URL, address, assertion or proxy trust, and the
+  loopback listener's bind. `tests/fixtures/reach_modes.json`
   holds the answers; the reach engine reads the same file.
   """
   @spec resolve_reach(reach_input()) :: {:ok, reach()} | {:error, reach_refusal()}
@@ -874,7 +883,8 @@ defmodule Cyfr.RuntimeConfig do
     get = fn key -> blank_to_nil(Map.get(process, key)) end
 
     result =
-      with :ok <- reach_sources(file || %{}, process),
+      with :ok <- reach_encoding(file || %{}, process),
+           :ok <- reach_sources(file || %{}, process),
            {:ok, mode} <- reach_mode(get.("CYFR_REACH"), release?),
            {:ok, head} <- reach_head(mode, get),
            {:ok, settings} <- reach_settings(mode, head["port"], get),
@@ -921,11 +931,41 @@ defmodule Cyfr.RuntimeConfig do
     proxy = if mode == "local", do: [], else: [mode]
 
     builds =
-      if is_binary(builds_url) and URI.parse(builds_url).host == @builds_service,
-        do: [@builds_service],
-        else: []
+      case builds_url && builds_host(builds_url) do
+        @builds_service -> [@builds_service]
+        _ -> []
+      end
 
     Enum.sort(proxy ++ builds)
+  end
+
+  @doc """
+  Whether `url` is a builds service's URL: `http` or `https`, a host (a
+  DNS name, an IPv4 address or a bracketed IPv6 address), an optional
+  port from 1 to 65535, and nothing after but one slash: no path, query,
+  fragment or credentials.
+  """
+  @spec builds_url?(String.t()) :: boolean()
+  def builds_url?(url) when is_binary(url), do: builds_host(url) != nil
+
+  # The URL's host, lowercased, or nil when it is no builds URL.
+  defp builds_host(url) do
+    with true <- String.valid?(url),
+         [_, host | port] <- Regex.run(@builds_url, url),
+         true <- builds_port?(port),
+         true <- not String.starts_with?(host, "[") or bracketed_ipv6?(host) do
+      String.downcase(host)
+    else
+      _ -> nil
+    end
+  end
+
+  defp builds_port?([]), do: true
+  defp builds_port?([port]), do: String.to_integer(port) in 1..65_535
+
+  defp bracketed_ipv6?(host) do
+    address = host |> String.trim_leading("[") |> String.trim_trailing("]")
+    String.contains?(address, ":") and ip_literal(address) != nil
   end
 
   @doc """
@@ -994,6 +1034,19 @@ defmodule Cyfr.RuntimeConfig do
 
   defp dns_label?(label), do: Regex.match?(@dns_label, label)
 
+  # Every value either map holds for a name the resolver reads is UTF-8,
+  # or the first name in byte order that holds one that is not is refused.
+  defp reach_encoding(file, process) do
+    unreadable =
+      Enum.find(Enum.sort([@assertion | @reach_keys]), fn key ->
+        Enum.any?([file[key], process[key]], &(is_binary(&1) and not String.valid?(&1)))
+      end)
+
+    if unreadable,
+      do: {:error, {:reach_setting_invalid, %{key: unreadable}}},
+      else: :ok
+  end
+
   # `.env` against the merged environment: a name `.env` assigns that the
   # merged read holds otherwise was overridden by the process, and the
   # compose file's assertion never comes from `.env`.
@@ -1040,7 +1093,8 @@ defmodule Cyfr.RuntimeConfig do
          :ok <- reach_url(mode, host, url),
          :ok <- reach_outside(mode, "CADDY_ACME_EMAIL", email, "public"),
          :ok <- reach_outside(mode, "CYFR_TAILNET_NODE_ID", node_id, "tailnet"),
-         {:ok, port} <- reach_port(get, "CYFR_PORT", @default_port) do
+         {:ok, port} <- reach_port(get, "CYFR_PORT", @default_port),
+         :ok <- reach_builds_url(builds_url) do
       head =
         %{
           "mode" => mode,
@@ -1056,6 +1110,14 @@ defmodule Cyfr.RuntimeConfig do
 
       {:ok, head}
     end
+  end
+
+  defp reach_builds_url(nil), do: :ok
+
+  defp reach_builds_url(url) do
+    if builds_url?(url),
+      do: :ok,
+      else: {:error, {:reach_setting_invalid, %{key: "CYFR_LOCUS_BUILDS_URL", value: url}}}
   end
 
   defp reach_host("local", host) when host in [nil, "localhost"], do: :ok
