@@ -61,7 +61,7 @@ defmodule Prima.NetworkTest do
     end
   end
 
-  test "the credential roster a hop strips is what an attached request refuses, and no more" do
+  test "the credential roster is what an attached request refuses, and no more" do
     request = %{
       "call_id" => "AAECAwQFBgcICQoLDA0ODw",
       "connection" => "api_key",
@@ -74,18 +74,17 @@ defmodule Prima.NetworkTest do
       Network.credential_headers() ++ Enum.map(Network.credential_headers(), &String.upcase/1)
 
     for name <- roster do
-      assert Network.strip_credentials([{name, "v"}, {"accept", "*/*"}]) == [{"accept", "*/*"}],
-             name
+      assert Network.credential_header?(name), name
 
       assert Prima.AttachedRequest.read(Map.put(request, "headers", [[name, "v"]])) ==
                {:error, :credential_header_refused},
              name
     end
 
-    # A name that only ends like a credential leaves with no hop to another
-    # origin, and is the guest's own on an attached request.
+    # A name that only ends like a credential is one to redact, and the
+    # guest's own on an attached request.
     for name <- ["X-Session-Token", "X-Signing-Key", "X-Client-Secret", "Idempotency-Key"] do
-      assert Network.strip_credentials([{name, "v"}]) == [], name
+      assert Network.credential_header?(name), name
 
       assert {:ok, _request} =
                Prima.AttachedRequest.read(Map.put(request, "headers", [[name, "v"]]))
@@ -93,6 +92,10 @@ defmodule Prima.NetworkTest do
 
     assert {:ok, _request} =
              Prima.AttachedRequest.read(Map.put(request, "headers", [["accept", "*/*"]]))
+  end
+
+  test "the credential roster is tests/fixtures/host_api.json's" do
+    assert @vectors["credential_headers"] == Network.credential_headers()
   end
 
   test "the framing and override rosters are tests/fixtures/host_api.json's, and each is refused" do

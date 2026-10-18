@@ -35,9 +35,9 @@ defmodule Locus.Runtime.HttpRequestValidation do
   address of that answer. A runner's own `take_rate` is refused there. A
   request sent later than it was validated, as a stream's is, asks again
   first (`repin/2`).
-  A redirect's next hop to another origin than the pin it came from goes
-  without any header that carries a credential
-  (`Prima.Network.strip_credentials/1`).
+  A redirect's next hop to another origin than the pin it came from is
+  refused, by CYFR and again by the engine (`Locus.Runtime.Egress.pin/3`):
+  the request carries the guest's credentials.
 
   `validate/6` returns a validated request map (including the pinned
   address, the pin and the Req method atom) that each handler then
@@ -71,15 +71,11 @@ defmodule Locus.Runtime.HttpRequestValidation do
   alias Prima.Authority.Blob.Edge
   alias Prima.Limits
 
-  @valid_http_methods %{
-    "GET" => :get,
-    "POST" => :post,
-    "PUT" => :put,
-    "DELETE" => :delete,
-    "PATCH" => :patch,
-    "HEAD" => :head,
-    "OPTIONS" => :options
-  }
+  # The engine's method atom for each method a destination may name.
+  @valid_http_methods Map.new(
+                        Prima.Destination.methods(),
+                        &{&1, &1 |> String.downcase() |> String.to_atom()}
+                      )
 
   @type validated_request :: %{
           required(:method) => String.t(),
@@ -150,8 +146,7 @@ defmodule Locus.Runtime.HttpRequestValidation do
        request
        |> Map.put(:ip, pinned.ip)
        |> Map.put(:pinned, pinned)
-       |> Map.put(:method_atom, method_atom)
-       |> hop_headers(pinned)}
+       |> Map.put(:method_atom, method_atom)}
     end
   end
 
@@ -228,14 +223,6 @@ defmodule Locus.Runtime.HttpRequestValidation do
 
   defp engine_url({:error, :invalid_url, message}), do: {:error, :invalid_request, message}
   defp engine_url(answer), do: answer
-
-  # A redirect's next hop to another origin carries none of the guest's
-  # credentials: they were meant for the origin that redirected.
-  defp hop_headers(request, pinned) do
-    if Locus.Runtime.Egress.cross_origin?(pinned),
-      do: %{request | headers: Prima.Network.strip_credentials(request.headers)},
-      else: request
-  end
 
   @doc """
   The node's consented timeout in milliseconds.
@@ -336,16 +323,17 @@ defmodule Locus.Runtime.HttpRequestValidation do
 
   # Headers are an object of names to values or an array of `[name, value]`
   # pairs, each read into a `{name, value}` pair, the one shape every later
-  # check — the request size, the credential strip of a cross-origin hop —
-  # reads. An array holding anything else, or a value that is not a
-  # scalar, is refused rather than passed on unread.
+  # check — the request size, the framing and override refusals, an
+  # attached request's credential refusal — reads. A member that is neither,
+  # an array holding anything else, or a value that is not a scalar, is
+  # refused rather than passed on unread.
   defp parse_headers(nil), do: {:ok, []}
 
   defp parse_headers(headers) when is_map(headers),
     do: headers |> Enum.map(fn {name, value} -> [name, value] end) |> parse_header_pairs()
 
   defp parse_headers(headers) when is_list(headers), do: parse_header_pairs(headers)
-  defp parse_headers(_), do: {:ok, []}
+  defp parse_headers(_other), do: invalid_headers()
 
   defp parse_header_pairs(pairs) do
     Enum.reduce_while(pairs, {:ok, []}, fn

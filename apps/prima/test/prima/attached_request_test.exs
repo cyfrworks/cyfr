@@ -75,8 +75,6 @@ defmodule Prima.AttachedRequestTest do
       assert AttachedRequest.read(args(%{"headers" => headers})) ==
                {:error, :credential_header_refused},
              name
-
-      assert Network.strip_credentials([{name, "v"}]) == [], name
     end
   end
 

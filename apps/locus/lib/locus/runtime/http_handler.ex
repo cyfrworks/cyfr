@@ -39,8 +39,7 @@ defmodule Locus.Runtime.HttpHandler do
   - **Redirects**: `redirect: false`; a guest that follows a redirect makes
     its next hop as a request of its own, pinned from the pin the redirect
     came from, and CYFR refuses a hop to another origin; were one pinned,
-    it would go without any header that carries a credential
-    (`Prima.Network.strip_credentials/1`)
+    the engine refuses it too (`Locus.Runtime.Egress.pin/3`)
   - **Attached requests**: a request naming a `connection` carries no
     credential of its own and asks for no pin. CYFR makes it, attaching
     the credential its need is bound to, and its answer comes back sealed

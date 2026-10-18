@@ -22,9 +22,7 @@ defmodule Prima.HostAPITest do
   Every `egress_policy` case reproduces and reads the same way, and its
   answer is the policy's: pinned only for a host its `domains` match
   (`Prima.Network.domain_allowed?/2`) and, for a redirect, a URL with the
-  origin of the pin it follows (`Prima.Network.same_origin?/2`); the
-  headers a hop to another origin keeps are
-  `Prima.Network.strip_credentials/1`'s.
+  origin of the pin it follows (`Prima.Network.same_origin?/2`).
 
   The `attached_fetch` call reads as a `Prima.AttachedRequest`, carries no
   single answer and is refused only by sealed guest errors naming its
@@ -337,7 +335,7 @@ defmodule Prima.HostAPITest do
 
       assert Enum.map(cases, & &1["name"]) ==
                ~w(fetch outside_domains redirect_other_port redirect_default_port
-                  redirect_strip_credentials fetch_ipv6 redirect_ipv6_spelling)
+                  redirect_other_host fetch_ipv6 redirect_ipv6_spelling)
 
       # The URL each pin was answered for, by its id, for the hops naming it.
       pinned_urls =
@@ -373,22 +371,6 @@ defmodule Prima.HostAPITest do
             assert error == expected, name
         end
       end
-    end
-
-    test "a hop to another origin keeps the headers that carry no credential, in order" do
-      [call] = Enum.filter(@vectors["egress_policy_cases"], &Map.has_key?(&1, "headers_before"))
-      assert call["expect"]["same_origin"] == false
-      before = Enum.map(call["headers_before"], fn [name, value] -> {name, value} end)
-      kept = Enum.map(call["headers_after"], fn [name, value] -> {name, value} end)
-
-      assert Network.strip_credentials(before) == kept
-      refute Enum.any?(kept, fn {name, _value} -> Network.credential_header?(name) end)
-
-      # The hop carries every name of the roster, and some in another case
-      # than the roster's.
-      dropped = Enum.map(before -- kept, fn {name, _value} -> name end)
-      assert Network.credential_headers() -- Enum.map(dropped, &String.downcase/1) == []
-      assert Enum.any?(dropped, &(&1 != String.downcase(&1)))
     end
   end
 

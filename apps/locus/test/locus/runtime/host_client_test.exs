@@ -369,7 +369,7 @@ defmodule Locus.Runtime.HostClientTest do
 
       assert Enum.map(@host_api["egress_policy_cases"], & &1["name"]) ==
                ~w(fetch outside_domains redirect_other_port redirect_default_port
-                  redirect_strip_credentials fetch_ipv6 redirect_ipv6_spelling)
+                  redirect_other_host fetch_ipv6 redirect_ipv6_spelling)
 
       for vector <- cases do
         %{"v" => 1, "op" => "egress_pin", "args" => args} = Jason.decode!(vector["body"])

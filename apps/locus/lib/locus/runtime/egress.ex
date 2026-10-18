@@ -50,11 +50,11 @@ defmodule Locus.Runtime.Egress do
   guest's next request to that URL is the redirect's next hop, pinned
   with `purpose: :redirect` naming the pin the redirecting answer came
   from, and the hop is consumed. CYFR refuses a hop to another origin
-  than the pin it came from (`redirect_credentials`). The engine checks
-  it again: a hop whose scheme, host or effective port differs from its
-  pin's is `cross_origin?/1` (`Prima.Network.same_origin?/2`), and its
-  request is sent without the guest's credentials
-  (`Prima.Network.strip_credentials/1`). The redirects an attempt's
+  than the pin it came from (`redirect_credentials`), since the request
+  carries the guest's credentials. The engine checks it again: a pin
+  answered for a hop whose scheme, host or effective port differs from
+  its pin's (`Prima.Network.same_origin?/2`) is refused the same way, as
+  the engine's own, and nothing is sent. The redirects an attempt's
   handlers remember live in the state of the process the guest's host
   functions run in — the component instance's, which calls every import
   itself — so they are the attempt's alone and end with its instance.
@@ -104,11 +104,12 @@ defmodule Locus.Runtime.Egress do
   Why a request got no pin: a refusal CYFR answered
   (`Prima.PinnedTarget.refusals/0`), or the engine's own — CYFR's answer
   unavailable or lost, a pin naming another target than the request's
-  (`:elsewhere`), or a runner's pin past its `expires_at` when the relay
-  was handed its request (`:expired`).
+  (`:elsewhere`), a pin for a redirect's next hop to another origin than
+  the pin it came from (`:cross_origin`), or a runner's pin past its
+  `expires_at` when the relay was handed its request (`:expired`).
   """
   @type why ::
-          PinnedTarget.refusal() | :unavailable | :lost | :elsewhere | :expired
+          PinnedTarget.refusal() | :unavailable | :lost | :elsewhere | :cross_origin | :expired
 
   # The redirects an attempt's handlers remember before the guest follows
   # them; the oldest is forgotten first.
@@ -197,20 +198,6 @@ defmodule Locus.Runtime.Egress do
   end
 
   @doc """
-  Whether `pinned` is a redirect's next hop to another origin than the pin
-  its redirect came from (`Prima.Network.same_origin?/2`: scheme, host and
-  effective port): a request its credentials must not follow.
-  """
-  @spec cross_origin?(pinned()) :: boolean()
-  def cross_origin?(%{from: nil}), do: false
-
-  def cross_origin?(%{from: %PinnedTarget{} = from, target: %PinnedTarget{} = target}),
-    do: not Prima.Network.same_origin?(origin(from), origin(target))
-
-  defp origin(%PinnedTarget{scheme: scheme, host: host, port: port}),
-    do: %URI{scheme: scheme, host: host, port: port}
-
-  @doc """
   Whether the pin `target` is the URL `uri`'s own: its scheme, its port
   (the scheme's default when the URL names none) and its host, a hostname
   in any case or an IP literal, bracketed or not when it is IPv6.
@@ -259,9 +246,7 @@ defmodule Locus.Runtime.Egress do
   def refusal(:resolution, host), do: {:refused, :dns_error, Prima.Network.dns_failure(host)}
 
   def refusal(:redirect_credentials, host),
-    do:
-      {:refused, :redirect_credentials,
-       "Redirect to #{host} refused: the request's credentials may not follow it"}
+    do: {:refused, :redirect_credentials, redirect_refused(host)}
 
   def refusal(:flow, host),
     do:
@@ -273,6 +258,8 @@ defmodule Locus.Runtime.Egress do
 
   def refusal(:elsewhere, host),
     do: {:error, :dns_error, "HTTP egress refused: #{host} was pinned elsewhere"}
+
+  def refusal(:cross_origin, host), do: {:error, :redirect_credentials, redirect_refused(host)}
 
   def refusal(:expired, host),
     do:
@@ -318,18 +305,35 @@ defmodule Locus.Runtime.Egress do
   end
 
   # Every request is asked for: a pin is never reused, so CYFR decides each
-  # one against what the run has read when it is asked.
+  # one against what the run has read when it is asked. A pin CYFR answered
+  # for a redirect's next hop to another origin is refused as CYFR refuses
+  # one: the request carries the guest's credentials.
   defp ask(client, url, uri, purpose, from) do
     from_id = if from, do: from.id
 
     case HostClient.egress_pin(client, url, purpose: purpose, from: from_id) do
       {:ok, target} ->
-        if names?(target, uri), do: {:ok, target}, else: refusal(:elsewhere, uri.host)
+        cond do
+          not names?(target, uri) -> refusal(:elsewhere, uri.host)
+          not same_origin?(from, target) -> refusal(:cross_origin, uri.host)
+          true -> {:ok, target}
+        end
 
       {:error, why} ->
         refusal(why, uri.host)
     end
   end
+
+  defp same_origin?(nil, _target), do: true
+
+  defp same_origin?(%PinnedTarget{} = from, %PinnedTarget{} = target),
+    do: Prima.Network.same_origin?(origin(from), origin(target))
+
+  defp origin(%PinnedTarget{scheme: scheme, host: host, port: port}),
+    do: %URI{scheme: scheme, host: host, port: port}
+
+  defp redirect_refused(host),
+    do: "Redirect to #{host} refused: the request's credentials may not follow it"
 
   defp build(uri, target, opts) do
     Prima.Network.pin(

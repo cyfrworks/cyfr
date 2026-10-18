@@ -138,15 +138,11 @@ defmodule Locus.Runtime.Relay do
 
   @purposes %{"fetch" => :fetch, "stream" => :stream}
 
-  @methods %{
-    "GET" => :get,
-    "HEAD" => :head,
-    "POST" => :post,
-    "PUT" => :put,
-    "PATCH" => :patch,
-    "DELETE" => :delete,
-    "OPTIONS" => :options
-  }
+  # The engine's method atom for each method a destination may name.
+  @methods Map.new(
+             Prima.Destination.methods(),
+             &{&1, &1 |> String.downcase() |> String.to_atom()}
+           )
 
   @typedoc "What `bind/2` binds the channel to: the assignment token, the opened keys and the configured host address."
   @type binding :: %{

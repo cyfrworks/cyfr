@@ -448,7 +448,7 @@ defmodule Opus.Host.EgressTest do
 
       assert Enum.map(cases, & &1["name"]) ==
                ~w(fetch outside_domains redirect_other_port redirect_default_port
-                  redirect_strip_credentials fetch_ipv6 redirect_ipv6_spelling)
+                  redirect_other_host fetch_ipv6 redirect_ipv6_spelling)
 
       [domains] = cases |> Enum.map(& &1["domains"]) |> Enum.uniq()
 

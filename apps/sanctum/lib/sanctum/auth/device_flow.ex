@@ -60,6 +60,10 @@ defmodule Sanctum.Auth.DeviceFlow do
                        provider in Enum.map(Map.keys(@provider_urls), &Atom.to_string/1),
                        do: provider
 
+  # The same providers as atoms, each one a key of `@provider_urls`.
+  @provider_atoms Enum.map(@known_providers, &String.to_existing_atom/1)
+  @provider_by_name Map.new(@provider_atoms, &{Atom.to_string(&1), &1})
+
   # The endpoints a flow talks to. A suite points them at a stand-in IdP
   # with `config :sanctum, :device_flow_endpoints, %{github: %{token: url}}`,
   # so the sign-in it drives is this module's own; like `impl/0` it is a
@@ -378,7 +382,7 @@ defmodule Sanctum.Auth.DeviceFlow do
   # Device Code Request
   # ============================================================================
 
-  defp request_device_code(provider, client_id) when provider in [:github, :google] do
+  defp request_device_code(provider, client_id) when provider in @provider_atoms do
     urls = urls(provider)
 
     body =
@@ -417,7 +421,7 @@ defmodule Sanctum.Auth.DeviceFlow do
   # Token Request
   # ============================================================================
 
-  defp request_token(provider, client_id, device_code) when provider in [:github, :google] do
+  defp request_token(provider, client_id, device_code) when provider in @provider_atoms do
     urls = urls(provider)
 
     # Google's device-flow token endpoint REQUIRES client_secret in the body
@@ -730,7 +734,7 @@ defmodule Sanctum.Auth.DeviceFlow do
   Google device flow requires both the client id and token-exchange secret.
   """
   @spec configured_providers() :: [atom()]
-  def configured_providers, do: Enum.filter([:github, :google], &configured?/1)
+  def configured_providers, do: Enum.filter(@provider_atoms, &configured?/1)
 
   # GitHub issues device-flow apps without a secret by design; Google's token
   # endpoint requires one, so a Google client id on its own is not a usable
@@ -756,10 +760,7 @@ defmodule Sanctum.Auth.DeviceFlow do
     end
   end
 
-  defp normalize_provider("github"), do: :github
-  defp normalize_provider(:github), do: :github
-  defp normalize_provider("google"), do: :google
-  defp normalize_provider(:google), do: :google
+  defp normalize_provider(name) when is_binary(name), do: Map.get(@provider_by_name, name, name)
   defp normalize_provider(other), do: other
 
   defp normalize_token_type(nil), do: "bearer"

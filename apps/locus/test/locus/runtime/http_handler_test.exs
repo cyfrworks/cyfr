@@ -820,8 +820,7 @@ defmodule Locus.Runtime.HttpHandlerTest do
           %{
             "api.test" => "127.0.0.1",
             "other.test" => "127.0.0.1",
-            "login.other.test" => :redirect_credentials,
-            "meta.other.test" => "169.254.169.254"
+            "login.other.test" => :redirect_credentials
           },
           edge
         )
@@ -871,7 +870,7 @@ defmodule Locus.Runtime.HttpHandlerTest do
       assert {"x-trace", "t"} in headers
     end
 
-    test "a cross-origin hop goes without the guest's Authorization and Cookie", %{
+    test "a hop to another origin that a pin was answered for is refused, and nothing is sent", %{
       context: context,
       edge: edge,
       credentials: credentials
@@ -879,15 +878,16 @@ defmodule Locus.Runtime.HttpHandlerTest do
       url = "http://other.test:#{context.port}/elsewhere"
       pin = redirected(context, edge, credentials, url)
 
-      assert %{"status" => 200} = fetch(context, edge, url, credentials)
+      assert %{"error" => %{"type" => "redirect_credentials", "message" => message}} =
+               fetch(context, edge, url, credentials)
+
+      assert message =~ "other.test"
       assert_received {:pinned, %{"purpose" => "redirect", "from" => ^pin}, {:ok, _}}
+      assert [%{path: "/redirect"}] = context.seen.()
 
-      assert [_redirect, %{path: "/elsewhere", host: "other.test", headers: headers}] =
-               context.seen.()
-
-      refute List.keymember?(headers, "authorization", 0)
-      refute List.keymember?(headers, "cookie", 0)
-      assert {"x-trace", "t"} in headers
+      # The refusal is the engine's own, which the runner records.
+      assert [%{args: %{"type" => "redirect_credentials"}}] =
+               ScriptedHost.requests(context.host, "record_denial")
 
       # The hop was the redirect's alone: the next request there is the
       # guest's own, and carries what the guest sends.
@@ -922,8 +922,17 @@ defmodule Locus.Runtime.HttpHandlerTest do
       edge: edge,
       credentials: credentials
     } do
-      url = "http://meta.other.test:#{context.port}/latest"
-      pin = redirected(context, edge, credentials, url)
+      pin = redirected(context, edge, credentials, "/latest")
+      url = "http://api.test:#{context.port}/latest"
+
+      # CYFR pins the hop, on its pin's origin, to a metadata address.
+      test = self()
+
+      ScriptedHost.script(context.host, "egress_pin", fn args, _caller ->
+        answer = ScriptedHost.pin(%{"api.test" => "169.254.169.254"}, args, 30_000)
+        send(test, {:pinned, args, answer})
+        answer
+      end)
 
       assert %{"error" => %{"type" => "private_ip_blocked", "message" => message}} =
                fetch(context, edge, url, credentials)

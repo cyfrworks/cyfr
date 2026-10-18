@@ -255,9 +255,8 @@ defmodule Prima.Network do
   `authorization`, `cookie`, `proxy-authorization`, `x-api-key`,
   `x-auth-token`, `x-access-token` and `x-csrf-token`. Any name ending in
   `-token`, `-key` or `-secret` carries one too (`credential_header?/1`).
-  `strip_credentials/1` drops this roster and those names from a hop to
-  another origin; `Prima.AttachedRequest` refuses this roster alone, in
-  any case, beside a named connection, so the two read one list.
+  `Prima.AttachedRequest` refuses this roster alone, in any case, beside a
+  named connection.
   """
   @spec credential_headers() :: [String.t()]
   def credential_headers, do: @credential_headers
@@ -340,17 +339,6 @@ defmodule Prima.Network do
   end
 
   def credential_header?(_name), do: false
-
-  @doc """
-  `headers` without any `{name, value}` pair whose name
-  `credential_header?/1` accepts, the rest in their order.
-  """
-  @spec strip_credentials([{String.t(), String.t()}]) :: [{String.t(), String.t()}]
-  def strip_credentials(headers) when is_list(headers),
-    do: Enum.reject(headers, &credential_pair?/1)
-
-  defp credential_pair?({name, _value}), do: credential_header?(name)
-  defp credential_pair?(_header), do: false
 
   @doc """
   Whether `host` matches one of the `egress.domains` `patterns`.

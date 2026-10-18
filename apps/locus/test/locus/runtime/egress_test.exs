@@ -293,18 +293,17 @@ defmodule Locus.Runtime.EgressTest do
     ScriptedHost.pins(host, %{"public.test" => "203.0.113.10", "other.test" => "203.0.113.11"})
 
     assert {:ok, origin} = Egress.pin(client, "https://public.test/start")
-    refute Egress.cross_origin?(origin)
+    assert origin.from == nil
 
     :ok = Egress.redirected(client, origin, "https://public.test/start", "/moved")
     :ok = Egress.redirected(client, origin, "https://public.test/start", "https://other.test/x")
 
     assert {:ok, same} = Egress.pin(client, "https://public.test/moved")
     assert same.from == origin.target
-    refute Egress.cross_origin?(same)
 
-    assert {:ok, cross} = Egress.pin(client, "https://other.test/x")
-    assert cross.from == origin.target
-    assert Egress.cross_origin?(cross)
+    # A pin answered for a hop to another origin is the engine's refusal.
+    assert {:error, :redirect_credentials, message} = Egress.pin(client, "https://other.test/x")
+    assert message =~ "other.test"
 
     assert [_fetch, hop1, hop2] = ScriptedHost.requests(host, "egress_pin")
     from = origin.target.id
@@ -326,7 +325,7 @@ defmodule Locus.Runtime.EgressTest do
     assert again.from == nil
   end
 
-  test "a hop is cross-origin by its scheme, host or effective port, as Prima compares them", %{
+  test "a hop to another scheme, host or effective port is refused, as Prima compares them", %{
     host: host,
     client: client
   } do
@@ -336,11 +335,18 @@ defmodule Locus.Runtime.EgressTest do
       "2001:0db8:0:0:0:0:0:20" => "2001:db8::20"
     })
 
-    hop = fn origin, request_url, to ->
+    # Whether the hop to `to` is refused as one to another origin.
+    refused? = fn origin, request_url, to ->
       :ok = Egress.redirected(client, origin, request_url, to)
-      assert {:ok, pinned} = Egress.pin(client, to)
-      assert pinned.from == origin.target
-      pinned
+
+      case Egress.pin(client, to) do
+        {:ok, pinned} ->
+          assert pinned.from == origin.target
+          false
+
+        {:error, :redirect_credentials, _message} ->
+          true
+      end
     end
 
     assert {:ok, origin} = Egress.pin(client, "https://public.test/start")
@@ -351,20 +357,19 @@ defmodule Locus.Runtime.EgressTest do
           {"https://public.test:8443/port", true},
           {"http://public.test/scheme", true}
         ] do
-      assert Egress.cross_origin?(hop.(origin, "https://public.test/start", to)) == cross?, to
+      assert refused?.(origin, "https://public.test/start", to) == cross?, to
     end
 
     # An IPv6 literal is one host however it is spelled.
     assert {:ok, v6} = Egress.pin(client, "http://[2001:db8::20]:8080/events", purpose: :stream)
 
-    spelled =
-      hop.(v6, "http://[2001:db8::20]:8080/events", "http://[2001:0db8:0:0:0:0:0:20]:8080/n")
-
-    refute Egress.cross_origin?(spelled)
-
-    assert Egress.cross_origin?(
-             hop.(v6, "http://[2001:db8::20]:8080/events", "http://[2001:db8::20]:8081/n")
+    refute refused?.(
+             v6,
+             "http://[2001:db8::20]:8080/events",
+             "http://[2001:0db8:0:0:0:0:0:20]:8080/n"
            )
+
+    assert refused?.(v6, "http://[2001:db8::20]:8080/events", "http://[2001:db8::20]:8081/n")
   end
 
   test "a scheme other than http or https, and a missing host, are invalid URLs, asked of no one",

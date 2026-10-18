@@ -20,7 +20,7 @@ version, is `unknown_version` once opened and before its `op` is read. A
 guest's outbound target is an `egress_pin` host call answered with a
 `Prima.PinnedTarget` or refused by name (`read_pin_request`, `read_pin`),
 under the egress policy's pure matchers as `Prima.Network` answers them
-(`domain_allowed`, `same_origin`, `credential_header`). An attached
+(`domain_allowed`, `same_origin`). An attached
 request's answer is a stream of sealed frames (`Prima.WorkerAuth`'s
 `seal_frame/7`, `read_frame/2`): `seal_frame`, `split_frames` and
 `read_frame` spell them, for the runner's `call_id` (`valid_call_id`).
@@ -504,10 +504,21 @@ def read_pin(wire):
 # The egress policy's pure matchers, as `Prima.Network` answers them
 # ---------------------------------------------------------------------------
 
-CREDENTIAL_HEADERS = {"authorization", "cookie", "proxy-authorization", "x-api-key", "x-auth-token",
-                      "x-access-token", "x-csrf-token"}
-CREDENTIAL_SUFFIXES = ("-token", "-key", "-secret")
+def _credential_headers():
+    """host_api.json's credential_headers (`Prima.Network.credential_headers/0`):
+    a nonempty list of distinct lowercase RFC 9110 tokens."""
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "fixtures", "host_api.json")
+    with open(path, encoding="utf-8") as f:
+        roster = json.load(f)["credential_headers"]
+    assert roster and len(set(roster)) == len(roster), "host_api credential_headers: distinct names"
+    for name in roster:
+        assert isinstance(name, str) and name == name.lower() and HEADER_NAME.fullmatch(name), \
+            f"host_api credential_headers: {name!r} is a lowercase token"
+    return frozenset(roster)
+
+
 HEADER_NAME = re.compile(r"[!#$%&'*+\-.^_`|~0-9A-Za-z]+")
+CREDENTIAL_HEADERS = _credential_headers()
 
 
 def _fold_host(host):
@@ -553,12 +564,6 @@ def origin(url):
 def same_origin(a, b):
     """`Prima.Network.same_origin?/2`."""
     return origin(a) is not None and origin(a) == origin(b)
-
-
-def credential_header(name):
-    """`Prima.Network.credential_header?/1`."""
-    name = name.lower()
-    return name in CREDENTIAL_HEADERS or name.endswith(CREDENTIAL_SUFFIXES)
 
 
 def attached_header_refusal(name, reserved):
@@ -1169,11 +1174,7 @@ def check_host_api(path, primitives):
             refusal = "denied" if not allowed else "redirect_credentials"
             assert answer[0] == "error" and answer[1] == refusal, f"{what}: refused as {refusal}"
             outcomes.add(refusal)
-        if "headers_before" in case:
-            kept = [pair for pair in case["headers_before"] if not credential_header(pair[0])]
-            assert kept == case["headers_after"], f"{what}: the headers a hop to another origin keeps"
-            outcomes.add("stripped")
-    assert outcomes == {"pinned", "denied", "redirect_credentials", "stripped"}, "host_api: every egress policy outcome"
+    assert outcomes == {"pinned", "denied", "redirect_credentials"}, "host_api: every egress policy outcome"
 
     for refusal in v["pre_body_refusals"]:
         what = f"host_api pre-body {refusal['name']}"

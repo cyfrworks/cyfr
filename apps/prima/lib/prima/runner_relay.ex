@@ -174,7 +174,7 @@ defmodule Prima.RunnerRelay do
   # runner's host call.
   @ops HostAPI.callbacks() -- [:runner_exited, :attached_fetch]
   @op_by_name Map.new(@ops, &{Atom.to_string(&1), &1})
-  @methods ~w(GET HEAD POST PUT PATCH DELETE OPTIONS)
+  @methods Prima.Destination.methods()
 
   @id ~r/\A[\x21-\x7E]{1,256}\z/
   @signed_header ~r/\A[\x20-\x7E]+\z/

@@ -176,30 +176,6 @@ defmodule Prima.NetworkPureTest do
         refute Network.credential_header?(name), inspect(name)
       end
     end
-
-    test "are stripped from a header list, the rest kept in order" do
-      headers = [
-        {"Accept", "application/json"},
-        {"Authorization", "Bearer vector"},
-        {"X-Monkey", "kept"},
-        {"cookie", "session=vector"},
-        {"X-API-KEY", "vector"},
-        {"User-Agent", "cyfr-vector"},
-        {"X-Refresh-Token", "vector"},
-        {:authorization, "not a header name"},
-        :not_a_pair
-      ]
-
-      assert Network.strip_credentials(headers) == [
-               {"Accept", "application/json"},
-               {"X-Monkey", "kept"},
-               {"User-Agent", "cyfr-vector"},
-               {:authorization, "not a header name"},
-               :not_a_pair
-             ]
-
-      assert Network.strip_credentials([]) == []
-    end
   end
 
   describe "domain_allowed?/2" do
