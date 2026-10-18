@@ -173,7 +173,7 @@ defmodule Sanctum.Providers.Key do
           {:ok, result}
 
         {:error, :already_exists} ->
-          {:error, "Key already exists: #{name}"}
+          {:error, {:conflict, "Key already exists: #{name}"}}
 
         {:error, {:invalid_key_type, type}} ->
           {:error, "Invalid key type: #{type}. Use: application, service, or admin"}

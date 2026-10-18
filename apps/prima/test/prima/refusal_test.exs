@@ -94,6 +94,8 @@ defmodule Prima.RefusalTest do
     {:rate_limited, :rate_limited},
     {:stream_limit, :rate_limited},
     {{:limit_reached, :athanors, 3}, :rate_limited},
+    {{:limit_reached, :mint_per_hour, 10}, :rate_limited},
+    {{:limit_reached, :max_athanors, 100}, :rate_limited},
     {:invalid_bearer, :unauthenticated},
     {:invalid_api_key, :unauthenticated},
     {:api_key_revoked, :unauthenticated},

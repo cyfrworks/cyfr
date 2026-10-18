@@ -63,13 +63,10 @@ defmodule Sanctum.Gate.ErrorAdoptionTest do
     # offered; the two that were the tool's catch-alls are typed now, so
     # the action-coverage case reads one vocabulary.
     "apps/cyfr/lib/opus/schedules/provider.ex" => 16,
-    "apps/sanctum/lib/sanctum/providers/webhook.ex" => 18,
     "apps/cyfr/lib/opus/provider.ex" => 12,
     # An upstream registry's own diagnostics, which are its words and not
     # this vocabulary's.
     "apps/cyfr/lib/compendium/oci/client.ex" => 12,
-    "apps/sanctum/lib/sanctum/providers/system.ex" => 12,
-    "apps/sanctum/lib/sanctum/providers/key.ex" => 11,
     # What is wrong with a cron expression, said in the expression's own
     # terms.
     "apps/cyfr/lib/opus/schedules/cron.ex" => 10,
@@ -79,8 +76,6 @@ defmodule Sanctum.Gate.ErrorAdoptionTest do
     # The entry rule's sentences, which the tincture validators return to
     # a publisher; the facade answers the same rule typed.
     "apps/cyfr/lib/compendium/tincture.ex" => 7,
-    "apps/sanctum/lib/sanctum/providers/profile.ex" => 8,
-    "apps/sanctum/lib/sanctum/webhook.ex" => 6,
     "apps/cyfr/lib/emissary/external/provider.ex" => 5,
     "apps/cyfr/lib/compendium/fork.ex" => 5,
     "apps/cyfr/lib/compendium/oci/reference.ex" => 5,
@@ -90,24 +85,14 @@ defmodule Sanctum.Gate.ErrorAdoptionTest do
     # write — never a refusal on the wire; reached because the decision
     # provider renders decisions.
     "apps/prima/lib/prima/decision.ex" => 13,
-    "apps/sanctum/lib/sanctum/provider_credentials.ex" => 5,
     "apps/cyfr/lib/aqua/approvals.ex" => 4,
     "apps/cyfr/lib/compendium/component.ex" => 3,
     "apps/cyfr/lib/compendium/providers/shared.ex" => 4,
     "apps/cyfr/lib/compendium/registry.ex" => 4,
-    "apps/sanctum/lib/sanctum/catalog.ex" => 2,
-    # A chain's call that names no action, said in the gate's words.
-    "apps/sanctum/lib/sanctum/dispatch.ex" => 1,
     # The build orchestration behind `Compendium.Builds.Provider`: the
     # three this ratchet could not see until the scan followed a tool
     # module into what it calls.
     "apps/cyfr/lib/compendium/builds.ex" => 3,
-    "apps/sanctum/lib/sanctum/providers/oauth.ex" => 3,
-    # Two of the three are the capacity refusals a poller sees when the
-    # server will not mint them an athanor: remediation prose (wait, or ask
-    # the operator), not a resource that is missing or briefly away.
-    "apps/sanctum/lib/sanctum/providers/session.ex" => 3,
-    "apps/sanctum/lib/sanctum/vault/oauth_grant.ex" => 3,
     # The authored-policy door's sentences, the person's own, which the
     # `aqua` tool wraps as `{:invalid_argument, …}`.
     "apps/cyfr/lib/compendium/aqua_agent.ex" => 2,
@@ -116,13 +101,7 @@ defmodule Sanctum.Gate.ErrorAdoptionTest do
     "apps/cyfr/lib/compendium/builds/provider.ex" => 2,
     "apps/cyfr/lib/opus/record.ex" => 2,
     "apps/prima/lib/prima/arg.ex" => 2,
-    "apps/sanctum/lib/sanctum/provider.ex" => 1,
-    "apps/cyfr/lib/compendium/pull.ex" => 1,
-    "apps/sanctum/lib/sanctum/api_key.ex" => 1,
-    "apps/sanctum/lib/sanctum/auth/device_flow.ex" => 1,
-    "apps/sanctum/lib/sanctum/providers/athanor.ex" => 1,
-    "apps/sanctum/lib/sanctum/providers/tincture_visibility.ex" => 1,
-    "apps/sanctum/lib/sanctum/vault.ex" => 1
+    "apps/cyfr/lib/compendium/pull.ex" => 1
   }
 
   # module path => `inspect` calls inside a `raise` or an `IO` call whose
@@ -185,13 +164,12 @@ defmodule Sanctum.Gate.ErrorAdoptionTest do
     end)
   end
 
-  # The gate's dispatch, which every tool's call passes and which no tool
-  # names: `Sanctum.Gate` delegates to it.
-  @gate_dispatch ["apps/sanctum/lib/sanctum/dispatch.ex"]
-
   # The tool modules, and every module of this umbrella they name. A
   # refusal a tool returns is often produced a call deeper, and a scan
-  # that stops at the tool counts the wrong number.
+  # that stops at the tool counts the wrong number. Sanctum's are left to
+  # `Sanctum.ProseErrorInventoryTest`, which counts every one of its
+  # files, function by function and a return written over several lines
+  # too, so no site is counted twice.
   defp scanned_modules do
     by_module =
       for path <- lib_files(),
@@ -208,7 +186,9 @@ defmodule Sanctum.Gate.ErrorAdoptionTest do
           path = Map.get(by_module, name),
           do: path
 
-    Enum.uniq(tools ++ reached ++ Enum.map(@gate_dispatch, &Path.join(root(), &1)))
+    (tools ++ reached)
+    |> Enum.uniq()
+    |> Enum.reject(&String.starts_with?(Path.relative_to(&1, root()), "apps/sanctum/lib/"))
   end
 
   defp defmodule_name(path) do

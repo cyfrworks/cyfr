@@ -615,6 +615,15 @@ defmodule Prima.Refusal do
   defp row(:stream_limit),
     do: {:rate_limited, "Too many open streams — close one and retry"}
 
+  # The two ceilings a sign-in meets minting the person their athanor:
+  # how fast strangers arrive, and how many athanors the server holds.
+  defp row({:limit_reached, :mint_per_hour, _limit}),
+    do:
+      {:rate_limited, "This server is admitting new people slowly right now — try again shortly"}
+
+  defp row({:limit_reached, :max_athanors, _limit}),
+    do: {:rate_limited, "This server holds as many athanors as it may — ask its operator"}
+
   defp row({:limit_reached, _what, _limit}),
     do: {:rate_limited, "A limit on this account was reached — try again later"}
 

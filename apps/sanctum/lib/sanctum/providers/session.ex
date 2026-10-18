@@ -297,12 +297,10 @@ defmodule Sanctum.Providers.Session do
 
         # The server is at capacity: a person admitted without an athanor
         # would hold a session with nowhere to work, so the door refuses and
-        # the poller is told why rather than "sign-in failed".
-        {:error, {:limit_reached, :mint_per_hour, _cap}} ->
-          {:error, "This server is admitting new people slowly right now — try again shortly"}
-
-        {:error, {:limit_reached, _key, _cap}} ->
-          {:error, "This server is full and cannot make you an athanor — ask its operator"}
+        # the poller is told why rather than "sign-in failed" — a rate
+        # limit, whose sentence is the refusal vocabulary's.
+        {:error, {:limit_reached, _key, _cap}} = limit ->
+          limit
 
         {:error, {:unknown_provider, name}} ->
           {:error, {:invalid_argument, unknown_provider_message(name)}}

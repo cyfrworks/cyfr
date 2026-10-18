@@ -241,7 +241,7 @@ defmodule Sanctum.Providers.Webhook do
         {:ok, result}
 
       {:error, :already_exists} ->
-        {:error, "Webhook already exists: #{name}"}
+        {:error, {:conflict, "Webhook already exists: #{name}"}}
 
       {:error, :reserved_key} ->
         {:error, "input_template must not contain reserved key '_webhook'"}

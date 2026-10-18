@@ -298,8 +298,11 @@ defmodule Sanctum.ProviderTest do
     test "create duplicate key returns error", %{ctx: ctx} do
       key_tool(ctx, %{"action" => "create", "name" => "dup-key"})
 
-      {:error, msg} = key_tool(ctx, %{"action" => "create", "name" => "dup-key"})
-      assert err_msg(msg) =~ "already exists"
+      {:error, reason} = key_tool(ctx, %{"action" => "create", "name" => "dup-key"})
+
+      # A duplicate is a conflict the person can act on, never internal.
+      assert %Prima.Refusal{class: :conflict, message: "Key already exists: dup-key"} =
+               Sanctum.Refusals.classify(reason)
     end
 
     test "revoke a key", %{ctx: ctx} do

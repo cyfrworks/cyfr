@@ -108,7 +108,7 @@ defmodule Sanctum.WebhookMCPTest do
         "profile_id" => "prof-handler"
       })
 
-      {:error, msg} =
+      {:error, reason} =
         handle(ctx, %{
           "action" => "create",
           "name" => "dup",
@@ -117,7 +117,9 @@ defmodule Sanctum.WebhookMCPTest do
           "profile_id" => "prof-handler"
         })
 
-      assert msg =~ "already exists"
+      # A duplicate is a conflict the person can act on, never internal.
+      assert %Prima.Refusal{class: :conflict, message: "Webhook already exists: dup"} =
+               Sanctum.Refusals.classify(reason)
     end
 
     test "rejects reserved input_template key", %{ctx: ctx} do

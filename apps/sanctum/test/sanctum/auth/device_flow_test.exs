@@ -293,7 +293,11 @@ defmodule Sanctum.Auth.DeviceFlowTest do
 
   defmodule FullServerDeviceFlow do
     # A server at capacity: the door refuses the mint, so `admitted/2`
-    # refuses the sign-in and the poll carries that reason out.
+    # refuses the sign-in and the poll carries that reason out — the
+    # athanors it holds, or how fast it admits strangers.
+    def poll_for_session(_provider, "dc_slow", _client_ip),
+      do: {:error, {:limit_reached, :mint_per_hour, 10}}
+
     def poll_for_session(_provider, _device_code, _client_ip),
       do: {:error, {:limit_reached, :max_athanors, 1}}
   end
@@ -614,18 +618,24 @@ defmodule Sanctum.Auth.DeviceFlowTest do
       :ok
     end
 
-    test "the poller is told the server is full, not that sign-in failed" do
+    test "the poller is told the server is at capacity, as a rate limit and never an internal failure" do
       ctx = %{Sanctum.TestContext.local() | authenticated: false}
 
-      assert {:error, message} =
-               Sanctum.Providers.Session.handle(ctx, %{
-                 "action" => "device_poll",
-                 "provider" => "github",
-                 "device_code" => "dc_full"
-               })
+      for {code, sentence} <- [
+            {"dc_full", "This server holds as many athanors as it may — ask its operator"},
+            {"dc_slow",
+             "This server is admitting new people slowly right now — try again shortly"}
+          ] do
+        assert {:error, reason} =
+                 Sanctum.Providers.Session.handle(ctx, %{
+                   "action" => "device_poll",
+                   "provider" => "github",
+                   "device_code" => code
+                 })
 
-      assert message =~ "full"
-      refute match?({:unavailable, _}, message)
+        assert %Prima.Refusal{class: :rate_limited, message: ^sentence} =
+                 Sanctum.Refusals.classify(reason)
+      end
     end
   end
 end
