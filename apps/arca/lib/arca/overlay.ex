@@ -413,9 +413,9 @@ defmodule Arca.Overlay do
 
   # A delete AT a unit is the unit's removal, so its row goes first: under
   # the unit's node-local lock it takes the unit's draft — making the row
-  # when the unit never had one, so bytes no row names are removed under
-  # the same lease a first publication must take — and moves to
-  # `retiring`, and a reader never finds a committed pointer over a
+  # when the unit never had one, so the removal holds the lease a first
+  # publication must take, with no revision of its own to delete — and
+  # moves to `retiring`, and a reader never finds a committed pointer over a
   # revision being deleted. The retired revision's prefix is deleted while
   # it holds the lock and the lease, the row re-read as the deleter's before
   # and after, so no commit lands under the delete and no successor's

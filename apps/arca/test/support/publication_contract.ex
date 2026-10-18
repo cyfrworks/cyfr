@@ -146,17 +146,17 @@ defmodule Arca.PublicationContract do
   The publication contract of a unit, as one suite body every adapter it
   is proven on runs: a database pointer names a committed revision served
   from the prefix it was staged under, and a journal records the same
-  commit; a complete object set is not proof of publication; repair moves
-  nothing and invents nothing, and promotes no losing writer's objects.
+  commit; a complete object set is not proof of publication; repair
+  writes no object and invents none, and promotes no losing writer's
+  objects.
 
   Every case drives `Arca.Overlay` over the adapter under test, with
   faults injected between the two (`Arca.PublicationContract.Faults`), so
   the contract is the same whatever stores the bytes. The fault-injection
   cases are the crash suite the write protocol owes: a writer that dies
   before its upload, during it, before the commit and after it; a prefix
-  that is not what was committed; a revision served at the unit's own
-  path before units were served from their prefixes; two writers with one
-  expected revision; objects that are not what was written.
+  that is not what was committed; two writers with one expected
+  revision; objects that are not what was written.
 
   `use` it with the adapters to parameterize over, and `moduletag:` for a
   run that needs a store this one is excluded without:

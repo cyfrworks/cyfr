@@ -79,15 +79,17 @@ defmodule Arca.StorageGCTest do
   draft keep a staged revision, read again immediately before its
   deletion; everything else goes after the grace, marker last. Every age
   is judged on the cell's clock unless a case names the instant.
-  Repair moves only the revision a row names, proven against the journal,
-  and objects alone never make a pointer.
+  Repair proves the revision a row names against the journal and gives
+  back a dead writer's draft; it writes no object, and objects alone
+  never make a pointer.
   """
 
   use ExUnit.Case, async: false
 
   import Ecto.Query, only: [from: 2]
 
-  # A move that fails is logged by the overlay, as it should be.
+  # What the audit leaves and a refused delete or release is logged, as it
+  # should be.
   @moduletag :capture_log
 
   alias Arca.Schemas.StorageUnit
