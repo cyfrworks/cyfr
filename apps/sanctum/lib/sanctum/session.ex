@@ -596,9 +596,10 @@ defmodule Sanctum.Session do
   @doc """
   Clean up expired sessions.
 
-  Returns the number of sessions removed.
+  Returns `{:ok, count}`, the number of sessions removed, or
+  `{:error, :database_error}` when the store cannot answer.
   """
-  @spec cleanup() :: {:ok, non_neg_integer()} | {:error, term()}
+  @spec cleanup() :: {:ok, non_neg_integer()} | {:error, :database_error}
   def cleanup do
     Arca.SessionStorage.cleanup_expired_sessions()
   end

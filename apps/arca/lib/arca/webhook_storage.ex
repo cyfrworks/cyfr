@@ -212,9 +212,10 @@ defmodule Arca.WebhookStorage do
   @doc """
   Update mutable fields on an existing webhook (target_ref, signature_header,
   input_template, description, rate_limit). Does NOT change the secret or slug.
+  Refuses `{:error, :no_fields}` when `fields` names none of them.
   """
   @spec update_webhook(Prima.Actor.t(), String.t(), map()) ::
-          :ok | {:error, :no_athanor | :not_found | :database_error}
+          :ok | {:error, :no_athanor | :no_fields | :not_found | :database_error}
   def update_webhook(%Prima.Actor{athanor_id: athanor_id}, name, fields)
       when is_binary(athanor_id) and athanor_id != "" and is_map(fields) do
     Arca.Repo.Errors.with_db_rescue("WebhookStorage.update_webhook", fn ->

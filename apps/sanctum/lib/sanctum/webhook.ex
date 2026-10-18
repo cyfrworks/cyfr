@@ -293,7 +293,8 @@ defmodule Sanctum.Webhook do
   @doc """
   Soft-disable a webhook. Subsequent inbound POSTs to its slug return 404.
   """
-  @spec revoke(Context.t(), String.t()) :: :ok | {:error, :not_found}
+  @spec revoke(Context.t(), String.t()) ::
+          :ok | {:error, :no_athanor | :not_found | :database_error}
   def revoke(%Context{} = ctx, name) when is_binary(name) do
     WebhookStorage.set_disabled(actor!(ctx), name)
   end

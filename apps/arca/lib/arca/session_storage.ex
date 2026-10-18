@@ -258,9 +258,10 @@ defmodule Arca.SessionStorage do
   @doc """
   Delete all expired sessions globally. Used by daemon processes for housekeeping.
 
-  Returns `{:ok, count}`.
+  Returns `{:ok, count}`, or `{:error, :database_error}` when the store
+  cannot answer.
   """
-  @spec cleanup_expired_sessions() :: {:ok, non_neg_integer()}
+  @spec cleanup_expired_sessions() :: {:ok, non_neg_integer()} | {:error, :database_error}
   # arca:unscoped-ok expiry is server-wide housekeeping over a column that
   # has nothing to do with tenancy.
   def cleanup_expired_sessions do

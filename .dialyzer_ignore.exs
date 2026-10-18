@@ -63,10 +63,6 @@
   # the {date, time} tuple Logger hands a formatter, and Dialyzer reads the
   # unknown type as any().
   {"lib/prima/json_formatter.ex", :unknown_type},
-  # Arca.SessionStorage.cleanup_expired_sessions/0's spec states only
-  # {:ok, count}, but its with_db_rescue/2 answers {:error, :database_error}
-  # on a database fault; the sweep's error branch handles that answer.
-  {"lib/cyfr/retention_scheduler.ex", :pattern_match},
   # The plug's refusal mapping and its telemetry each end in a clause for a
   # reason outside today's closed set of atoms (a tuple clause and two
   # catch-alls), so a reason added later still answers 500 and is counted
@@ -115,18 +111,6 @@
   # session.use's lookups refuse with atoms only today; the clause that
   # passes a readable binary refusal through is the provider convention.
   {"lib/sanctum/providers/session.ex", :guard_fail},
-  # Arca.WebhookStorage.update_webhook/3's spec omits the
-  # {:error, :no_fields} its body answers for an update with nothing to set;
-  # the provider maps that answer.
-  {"lib/sanctum/providers/webhook.ex", :pattern_match},
-  # Sanctum.Webhook.revoke/2's spec states only {:error, :not_found}, but
-  # Arca.WebhookStorage.set_disabled/2 beneath it also answers
-  # :database_error and :no_athanor; the provider's general clause logs them.
-  {"lib/sanctum/providers/webhook.ex", :pattern_match_cov},
-  # Sanctum.Session.cleanup/0 keeps the {:error, term()} the storage answers
-  # on a database fault; the storage's own spec leaves it out, so Dialyzer
-  # infers {:ok, count} alone (the retention_scheduler.ex entry's cause).
-  {"lib/sanctum/session.ex", :extra_range},
   # `valid_personal_slug?(slug) || {:error, :invalid_slug}` answers the
   # refusal for false; Dialyzer does not narrow false out of the `||`'s
   # other branch, so it sees the `with` fall through on false.
