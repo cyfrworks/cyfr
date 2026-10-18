@@ -126,6 +126,9 @@ defmodule Aqua.Approvals do
   `settings["approvals"]["expiry_hours"]` (a positive integer, read
   defensively — member-writable settings are not trusted to have a
   shape), else `config :cyfr, Aqua.Approvals, expiry_hours:`.
+
+  A card expires so that a home back from a long absence asks again
+  rather than running a queue of old proposals.
   """
   @spec ttl_seconds(Context.t()) :: pos_integer()
   def ttl_seconds(%Context{} = ctx) do

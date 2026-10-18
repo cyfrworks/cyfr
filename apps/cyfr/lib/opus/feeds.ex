@@ -49,7 +49,8 @@ defmodule Opus.Feeds do
   caller's athanor is `not_found`, so a control drawn for a binding
   removed or rebound since never presses the new one. A `refresh`
   claims a fresh seq and accepts the run's result as a fire does, and
-  publishes it; a `run` runs its own operation and arguments and publishes
+  publishes it; a `run` runs its own operation of the binding's
+  component, with the arguments the binding fixed, and publishes
   nothing. Only a person's press of a control Prism draws reaches it: the
   operation is external only, and a canvas's code has no verb that binds,
   changes or refreshes a feed.

@@ -34,6 +34,11 @@ defmodule Compendium.Canvas do
       is still installed and under today's grant, and keeps the one it
       replaces.
 
+  A canvas never writes its own source, so nothing it reads reaches a
+  version: it declares no system action and its credential reaches no
+  route but its own open's streams, so it cannot call `write/2`, and the
+  catalog a writer reads answers shapes, never values.
+
   The refusals are `Prima.Refusal`'s classes: a `forbidden` one carries
   its code at the end of its sentence (`not_validated`, `not_primary`);
   `consent_required` and `not_owner` are the table's fixed answers. A

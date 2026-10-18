@@ -11,11 +11,14 @@ defmodule PrismWeb.CanvasLive do
   bottom: the visible canvas's frame filling the layer (a hidden canvas's
   frame is held invisible and frozen, and a validation frame is hidden and
   inert), the `column` apps beside it, the floating tinctures above them,
-  and the active `full` frame above those, with its capsule. A floating
-  entry naming a tincture nobody installed draws a placeholder and opens
-  nothing. In safe mode (`safe_mode`) nothing of the layout is drawn. While
-  a full frame is shown every other layer is `inert`, so no key reaches a
-  control it covers; the full frame and its capsule stay reachable.
+  and the active `full` frame above those, with its capsule. The
+  assistant's panel (`PrismWeb.AquaPanelLive`), which the app layout draws
+  over the page, sits above the column apps and the floating tinctures. A
+  floating entry naming a tincture nobody installed draws a placeholder
+  and opens nothing. In safe mode (`safe_mode`) nothing of the layout is
+  drawn. While a full frame is shown every other layer is `inert`, so no
+  key reaches a control it covers; the full frame and its capsule stay
+  reachable.
 
   With more than one canvas it draws the switcher (`#canvas-switcher`), one
   button per canvas carrying `data-canvas`, which asks the shell to show it

@@ -7,7 +7,15 @@ defmodule PrismWeb do
 
   Prism is the LiveView face served by the one endpoint
   (`CyfrWeb.Endpoint`); its routes are `Prism.Router`'s, composed into
-  `CyfrWeb.Router`. This can be used in your application as:
+  `CyfrWeb.Router`.
+
+  A default that decides authority when nobody chooses is read from the
+  module that owns its policy, never set here: an API key's default
+  scopes are `Sanctum.ApiKey.default_scopes/1`'s, and a consent sheet
+  opens on what the grant's head binds and the suggestions of Sanctum's
+  plan rows (`Prism.ConsentChoices.initial_choices/2`).
+
+  This can be used in your application as:
 
       use PrismWeb, :controller
       use PrismWeb, :live_view

@@ -1709,6 +1709,10 @@ defmodule Opus.Schedules.Scheduler do
     })
   end
 
+  # A fire acts as the person the row names (the schedule's maker, or the
+  # person who bound the feed) in the athanor the row is in, so its run is
+  # attributed to them and charged to that athanor; its grant is the row's
+  # bound profile.
   defp context_of(schedule),
     do: Sanctum.Context.for_scheduled(schedule.user_id, athanor_id: schedule.athanor_id)
 

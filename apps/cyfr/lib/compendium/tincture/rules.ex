@@ -46,6 +46,10 @@ defmodule Compendium.Tincture.Rules do
   The sandbox never carries `allow-same-origin`, `allow-top-navigation` or
   `allow-popups` (or their variants), nor `allow-forms`: the map from
   capabilities to tokens is checked when this module compiles.
+
+  These rules hold a first-party tincture as they hold any other: the
+  shipped canvas and the console's tinctures are untrusted code here, and
+  none is exempt from a sandbox token or a page policy.
   """
 
   alias Prima.Manifest.Caps
@@ -107,6 +111,10 @@ defmodule Compendium.Tincture.Rules do
   # granted: it declares no capability.
   @canvas_sandbox ["allow-scripts"]
   @sandbox_by_capability %{"pointer_lock" => ["allow-pointer-lock"]}
+  # A capability only delegates a browser feature to the frame through its
+  # `allow` attribute; whatever permission the browser or the operating
+  # system asks for that feature it still asks for itself, and no
+  # capability or grant here answers it.
   @allow_by_capability %{
     "fullscreen" => "fullscreen",
     "gamepad" => "gamepad",
@@ -277,10 +285,17 @@ defmodule Compendium.Tincture.Rules do
   The entry page's `Content-Security-Policy` header value, derived from
   the manifest's declaration: `connect-src` names the endpoint's origin
   and the manifest's `tincture.connect` domains (over `https`), never
-  `'self'`; `script-src` carries the page's nonce and
-  `'wasm-unsafe-eval'`; `worker-src` admits `blob:`; `frame-ancestors`
-  names the shell (the endpoint unless `shell:` says otherwise); and
-  `form-action` is `'none'`.
+  `'self'`; `script-src` admits `'self'`, the page's nonce and
+  `'wasm-unsafe-eval'`, and `style-src` `'self'` and inline styles, so the
+  page's scripts and styles come from the site origin alone; `worker-src`
+  admits `blob:`; `frame-ancestors` names the shell (the endpoint unless
+  `shell:` says otherwise); and `form-action` is `'none'`.
+
+  A document with an opaque origin starts no worker from a URL of the
+  site, so the page starts its workers from `blob:` URLs its own scripts
+  make. A frame's opaque origin is never the shell's either, so only a
+  page of the shell's origin frames a tincture's page and no tincture
+  parents another.
 
   `endpoint` and `shell` are origins (`scheme://host[:port]`) and `nonce`
   the page's own; a value outside those grammars raises, since each comes

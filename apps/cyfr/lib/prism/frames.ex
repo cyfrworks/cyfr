@@ -37,6 +37,12 @@ defmodule Prism.Frames do
   to that version (`Compendium.tincture_grant_revision/2`) and a fresh
   frame id. No URL carries the frame credential.
 
+  A frame's sandbox isolates the tincture's code, not what it is handed:
+  whatever a frame is given, its bearer included, is disclosed to the
+  tincture, so what a frame may be given is bounded where it is handed
+  out — by its grant, its declaration and its credential — never by the
+  sandbox.
+
     * A canvas or validation frame opens only a version whose placement is
       `canvas`, and an app, a floating or a launched frame never opens one;
       a floating frame needs the placement `float`. Anything else is

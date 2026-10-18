@@ -405,6 +405,8 @@ defmodule PrismWeb.ThreadPaneLive do
     end
   end
 
+  # Approving every pending card decides each one on its own, once: one
+  # exact decision per action, never a standing answer for the batch.
   def handle_event("approve_all_pending", _params, socket) do
     socket =
       Enum.reduce(socket.assigns.pending_approvals, socket, fn msg, acc ->

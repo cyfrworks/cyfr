@@ -10,6 +10,11 @@
 // never anything the canvas wrote. An effect that does not resolve draws
 // the control disabled, labelled with the toolkit's own word.
 //
+// Which controls a tree shows at all is the canvas's own choice, so the
+// presence of a control can still carry something the canvas read. That
+// residual is accepted, not closed: each control the canvas shows is
+// visible to the person and labelled from the declaration.
+//
 // A press is one genuine activation: a `click`, or a `keydown` of Enter or
 // Space, whose event the browser marks trusted. Each event is consumed once
 // and dispatched at once, inside its handler; nothing is held, queued,

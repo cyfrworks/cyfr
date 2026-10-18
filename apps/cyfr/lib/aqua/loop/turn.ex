@@ -17,6 +17,9 @@ defmodule Aqua.Loop.Turn do
 
   A clone's spec is built the same way from the role's definition, under
   the parent's authority and catalyst.
+
+  Every model round of a spec runs on the model it resolved, compaction
+  included: nothing chooses another model for a step.
   """
 
   alias Aqua.Loop.Request
@@ -235,7 +238,9 @@ defmodule Aqua.Loop.Turn do
   # The catalyst release a turn runs on: once its row pins one, exactly
   # that release; before, the agent's catalyst resolved against the working
   # athanor's listing, a clone falling back to the parent's. It must be
-  # installed and speak `model/chat@1`.
+  # installed and speak `model/chat@1`. A switch of the agent's catalyst
+  # reaches the next turn; what a turn already sent to its provider stays
+  # that provider's.
   defp model(ctx, turn, agent, opts) do
     listing =
       case Aqua.AgentConfig.catalyst_listing(ctx) do
