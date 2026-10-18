@@ -59,7 +59,7 @@ The order describes dependencies, not a request's path. Only Host's composition 
 ### Prima: shared contracts
 
 - The actor, authority data, operation declarations, refusals and the provider, host and worker behaviours.
-- Every wire shape and signing domain; each protocol is versioned, with one vector file tested on every side.
+- Every wire shape and every signing domain two sides share; each protocol is versioned, with one vector file tested on every side.
 - The pure network policy and the Locus role table (`Prima.LocusRoles`); no process, persistence or product policy.
 
 ### Arca: persistence
@@ -239,7 +239,7 @@ A standing or credential change reaches a new admission at once on the member th
 
 ### 6.7 Schema
 
-Until the first release one baseline migration is the schema; after it, dated migrations follow and the fingerprint names the applied set. Both adapters hold the same constraints, and a cell upgrades with every member stopped. *Not built yet:* dated migrations and their fingerprint, and the export and import that move a home between adapters.
+Until the first release one baseline migration is the schema; after it, dated migrations follow and the fingerprint names the applied set. Both adapters hold the same constraints, and a cell upgrades with every member stopped. *Not built yet:* dated migrations, a fingerprint of the applied set and a refusal that names the migration to run, and the export and import that move a home between adapters.
 
 ### 6.8 Configuration and settings
 
@@ -261,7 +261,7 @@ Prism is one screen: everything on it is a tincture, untrusted code in a frame, 
 
 - **The system layer** draws every grant, confirmation and credential entry above every frame, and is the one place the screen presents a consent, from Sanctum's preview; the command line shows the same preview in the terminal. *Not built yet:* unlocking the vault, and a tincture's request for a consent.
 - **Frames.** Prism creates every frame under the sandbox the tincture rules derive, and a frame reaches data only under a per-open credential Sanctum mints and revokes (`Sanctum.TinctureAuth`).
-- **Canvases** are the person's pages: a canvas reads only what its grant names, shows outside data only through feeds (`Opus.Feeds`), and lets what it reads leave only as controls the person sees. *Not built yet:* a canvas's read operations, and a feed from a run that stays open.
+- **Canvases** are the person's pages: a canvas reads only what its grant names, shows outside data only through feeds (`Opus.Feeds`), and lets what it reads leave only as controls the person sees. *Not built yet:* a canvas's read operations, a feed from a run that stays open, and telling a canvas which tinctures are open over it; it learns only the rectangles they cover.
 - **Code and layout are separate**: a code change is a new version, a version that reads more asks again, and the way back from a broken canvas is outside every canvas.
 - Emissary serves every tincture's files and data routes, and a public tincture runs under its own profile, never a viewer's session.
 
@@ -271,9 +271,9 @@ Prism is one screen: everything on it is a tincture, untrusted code in a frame, 
 
 ## 8. Homes, glasses and hubs
 
-- Every athanor has exactly one home; a cell is several members acting as that one home on one database (§6.1). *Not built yet:* replicas and home transfer; a node is the home of every athanor its store holds.
-- The glass is the client: display, input and device keys it never exports, bound to each home separately. *Not built yet:* an application that hosts Prism, a client shell with its own home switcher, and listening and notices without a page.
-- A hub is the always-on home of shared athanors and an instance that offers entries to its people. *Not built yet:* the hub as a model provider and as a standby, and the governance floor, which shows every member of a group a consent that exports their contributions and lets each withhold what they authored.
+- Every athanor has exactly one home; a cell is several members acting as that one home on one database (§6.1). *Not built yet:* replicas and their journal, and home transfer; a node is the home of every athanor its store holds.
+- The glass is the client: display, input and device keys it never exports, bound to each home separately. *Not built yet:* an application that hosts Prism, a client shell with its own home switcher, listening without a page, notices and their read state across homes, and push delivery.
+- A hub is the always-on home of shared athanors and an instance that offers entries to its people. *Not built yet:* the hub as a model provider and as a standby, the governance floor, which shows every member of a group a consent that exports their contributions and lets each withhold what they authored, and a join that requires a company's single sign-on beside the person's own identity.
 - Every wire between homes names its version, and CYFR has no relay.
 
 **Why.** A decision about an athanor is made in one place, so no node acts for a home because a lease looks expired or a clock says it is lost.
@@ -282,7 +282,7 @@ Prism is one screen: everything on it is a tincture, untrusted code in a frame, 
 
 ### 9.1 Identity
 
-An enrolled person is an identifier, the hash of the genesis of a log their own keys extend, ordered by one directory (`Sanctum.Directory`); a person who never enrolls keeps their keys, home and local devices without one. A live key at their home signs for them, an operational key rotates it, and recovery keys in a printed kit replace both (`Sanctum.Recovery`). A home reads a remote person's head fresh within a bound (`Sanctum.IdentityFreshness`); doors are sign-in methods at a relying home; restore is an entry path, not an operation. *Not built yet:* memberships and attribution by identifier, delegated work, and the email door.
+An enrolled person is an identifier, the hash of the genesis of a log their own keys extend, ordered by one directory (`Sanctum.Directory`); a person who never enrolls keeps their keys, home and local devices without one. A live key at their home signs for them, an operational key rotates it, and recovery keys in a printed kit replace both (`Sanctum.Recovery`). A home reads a remote person's head fresh within a bound (`Sanctum.IdentityFreshness`); doors are sign-in methods at a relying home; restore is an entry path, not an operation. *Not built yet:* memberships and attribution by identifier, delegated work, the email door, and the mail transport it and an emailed confirmation code need.
 
 ### 9.2 Joining a home that is not your own
 
@@ -290,7 +290,7 @@ A person signs in at another home through the CYFR door (`Sanctum.Auth.CyfrDoor`
 
 ### 9.3 Devices and fresh confirmation
 
-Who a person is, which devices they connected and whether a change needs a fresh confirmation are three separate facts, and no client holds a rank. Everyday work needs only the session; changes to keys, devices, doors, passkeys, recovery material, the seal and credentials that outlive the session need a fresh confirmation at the deciding home (`Sanctum.Pairing`). *Not built yet:* the display and pointer-input contracts, athanor policies that add changes, and a defence against a copied home certifying devices.
+Who a person is, which devices they connected and whether a change needs a fresh confirmation are three separate facts, and no client holds a rank. Everyday work needs only the session; changes to keys, devices, doors, passkeys, recovery material, the seal and credentials that outlive the session need a fresh confirmation at the deciding home (`Sanctum.Pairing`). *Not built yet:* the display and pointer-input contracts, athanor policies that add changes, and, against a copied home certifying devices, a survivor's countersignature verified at a relying home and a directory-published device anchor.
 
 ### 9.4 Communication
 
@@ -303,10 +303,10 @@ People talk by sharing an athanor whose home is always on; there is no messaging
 Consented work runs unattended under its grant; a person is asked only about what no grant covers, and an uncovered external or destructive proposal is approved once, never banked.
 
 - Component grants and standing approvals are the two kinds of grant, under one set of rules.
-- A preview is typed rows bound by a digest; narrowing is validated by its owner, and widening is interactive.
+- A preview is typed rows bound by a digest; narrowing is validated by its owner, and widening is interactive. *Not built yet:* an instance entry's use cap on the preview's credential row.
 - Every run carries the origin its admission path set, and a grant names the origins it admits.
 - **A standing approval is bounded.** It ends with its lifecycle or deadline and holds to its resource constraint, and an external or destructive action never takes a standing allow.
-- Every turn records the source classes it read (`Prima.Source`), and a send to an exit is refused when the run has read a class with no declared flow to it (`Prima.Flow`).
+- Every turn records the source classes it read (`Prima.Source`), and every send to an exit is held to the flows its grant declares, which `Prima.Flow` decides.
 - A standing grant never stands in for a fresh confirmation. *Not built yet:* declared reads of standing approvals.
 
 **Why.** The person decides once, on a preview that says exactly what is granted, and whatever the grant does not cover is asked about each time.
