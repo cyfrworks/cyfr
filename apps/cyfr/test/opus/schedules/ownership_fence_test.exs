@@ -11,7 +11,11 @@ defmodule Opus.Schedules.OwnershipFenceTest do
   recovery, with nothing written and no error recorded. A finish or a
   dead runner's settlement answered `:stale` found the occurrence another
   member's now: the decision this member opened is closed with the run's
-  answer, and nothing else is written.
+  answer, and nothing else is written. A finish refused `:not_owner` found
+  this member's slot taken over, in the finish's own transaction: the
+  occurrence is not ended and no outcome is recorded, the decision is
+  closed with the run's answer, no run is recorded on the schedule, and
+  the occurrence is left to recovery.
 
   The fires run through the real scheduler path with the scripted worker
   service the scheduler's own suite uses: everything but the component is
@@ -238,6 +242,62 @@ defmodule Opus.Schedules.OwnershipFenceTest do
     # This member's own decision is still closed, with the run's answer.
     assert [%{completion: "succeeded"}] = fire_decisions()
     assert log =~ "stale"
+  end
+
+  test "a completion whose finish is refused :not_owner records no outcome and no run, and leaves the occurrence to recovery",
+       %{ctx: ctx, actor: actor} do
+    slot = claimant!(Prima.Boot.id())
+    script!([{:probe, self()}, %{"ran" => true}])
+    watch_outcomes()
+    :ok = Cyfr.Bus.subscribe_global(Cyfr.Bus.schedule_completions())
+    schedule = due!(create_schedule(ctx))
+    scheduler = scheduler!()
+    assert_receive {:scripted_probe, worker, _execution_id}, 10_000
+    _ = :sys.get_state(scheduler)
+    [task] = running_tasks()
+    ref = Process.monitor(task)
+
+    # A successor takes the slot over while the run is in flight; this
+    # member still believes it holds it, so only the finish's own check
+    # refuses the end.
+    take_over!(slot)
+    assert Arca.ControlPlane.held?()
+    released = System.monotonic_time(:millisecond)
+
+    log =
+      capture_log(fn ->
+        send(worker, :continue)
+        assert_receive {:DOWN, ^ref, :process, ^task, {:shutdown, :left_to_recovery}}, 10_000
+        _ = :sys.get_state(scheduler)
+      end)
+
+    # Not ended, and no outcome filed for it: the occurrence is still this
+    # member's started claim, for recovery to reach.
+    boot = Prima.Boot.id()
+
+    assert [%{id: occurrence_id, state: "started", claimed_by: ^boot, ended_at: nil}] =
+             occurrences(actor, schedule.id)
+
+    assert [] =
+             Arca.Repo.all(
+               from(r in Arca.Schemas.OutboxRecord,
+                 where: r.source_kind == "schedule_occurrence" and r.source_id == ^occurrence_id
+               )
+             )
+
+    # No run is recorded on the schedule's row and nothing is published or
+    # announced; this member's own decision is closed with the run's answer.
+    assert {:ok, %{run_count: 0, last_run_at: nil, last_execution_id: nil}} =
+             CronSchedule.get_for_daemon(schedule.id)
+
+    refute_received %ScheduleCompleted{}
+    refute_received {:schedule_outcome, _}
+    assert [%{completion: "succeeded"}] = fire_decisions()
+    assert log =~ "no longer owns its slot"
+
+    state = :sys.get_state(scheduler)
+    assert is_reference(state.recovery_ref)
+    assert state.recovery_due >= due_after(released)
   end
 
   test "a dead runner whose occurrence another closer ended writes nothing",

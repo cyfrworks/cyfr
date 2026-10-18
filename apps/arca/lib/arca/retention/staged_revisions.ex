@@ -3,7 +3,7 @@
 
 defmodule Arca.Retention.StagedRevisions do
   @moduledoc """
-  Staged revisions no pointer, draft or pin keeps, older than N days, go
+  Staged revisions no pointer or draft keeps, older than N days, go
   (`Arca.StorageGC` owns the roots and the collection order): a writer's
   abandoned work, and the revision a commit replaced once N days have
   passed since that commit. The sweep moves nothing; the collector's audit

@@ -57,10 +57,11 @@ defmodule Opus.Schedules.Scheduler do
 
   Those gates read the cached standing, and are the fast path only. The
   writes that take or end an occurrence check for themselves, in their
-  own statements: the claim and the run's admission verify the member's
-  slot on the database (`:not_owner` otherwise), and an occurrence is
-  ended only by a compare-and-set on its claimant and the execution this
-  member minted for the run before it spawned it (`:stale` otherwise).
+  own transactions: the claim, the run's admission and the occurrence's
+  end verify the member's slot on the database (`:not_owner` otherwise),
+  and an occurrence is ended only by a compare-and-set on its claimant
+  and the execution this member minted for the run before it spawned it
+  (`:stale` otherwise).
 
     * A claim refused `:not_owner` wrote nothing and opened no decision:
       the schedule is deferred and looked at again later, and recovery
@@ -72,13 +73,19 @@ defmodule Opus.Schedules.Scheduler do
     * An end answered `:stale` found the occurrence another member's: the
       decision this member opened is still closed with the run's answer,
       and nothing else is written, recorded, published or announced.
+    * An end refused `:not_owner` found this member's slot taken over,
+      in the end's own transaction: it moved nothing and recorded no
+      outcome, the decision this member opened is still closed with the
+      run's answer, nothing else is written, recorded, published or
+      announced, and the occurrence is left to recovery.
 
   An occurrence left to recovery is reached by a recovery pass, even when
   the member that left it is still live. Every task that leaves one (an
   admission refused for the slot, a feed's seq claim or result refused
-  `:not_owner`, a task that finds its cached standing gone before it
-  starts the run, writes its answer or ends a refused seq, or one whose
-  own end of the occurrence did not happen) ends with
+  `:not_owner`, an end of the occurrence refused `:not_owner`, a task
+  that finds its cached standing gone before it starts the run, writes
+  its answer or ends a refused seq, or one whose own end of the
+  occurrence did not happen) ends with
   `{:shutdown, :left_to_recovery}`, whatever the standing reads by the
   time the scheduler sees the exit. The task is monitored before it runs
   (`Task.Supervisor.async_nolink/3`), so that reason reaches the
@@ -621,7 +628,8 @@ defmodule Opus.Schedules.Scheduler do
   defp left_open(state), do: request_recovery(state, left_to_recovery_ms())
 
   # An end of this member's own occurrence that did not happen leaves it
-  # open. Ended, or another member's now (`:stale`), it asks for nothing.
+  # open, an end refused for the slot (`:not_owner`) included. Ended, or
+  # another member's now (`:stale`), it asks for nothing.
   defp left_open_unless_ended(state, {:ok, _ended}), do: state
   defp left_open_unless_ended(state, {:error, :stale}), do: state
   defp left_open_unless_ended(state, _not_ended), do: left_open(state)
@@ -656,7 +664,8 @@ defmodule Opus.Schedules.Scheduler do
                 )
 
                 # Ended only as it was read: a row another member moved since
-                # is `:stale`, and left alone.
+                # is `:stale`, and left alone; a member whose slot is gone
+                # (`:not_owner`) ends nothing and leaves it to the holder.
                 ScheduleOccurrences.finish(
                   Prima.Actor.in_athanor(occurrence.athanor_id),
                   occurrence.id,
@@ -756,7 +765,7 @@ defmodule Opus.Schedules.Scheduler do
         # re-took and did not end is left open.
         ended = fail_recovered(occurrence, generation)
 
-        if ended != nil and ended != {:error, :stale} do
+        if ended != nil and not refused?(ended) do
           ctx = context_of(schedule)
           record_error(ctx, schedule.id, "Athanor or creator no longer active — run skipped")
           emit_schedule_failed(schedule.id, ctx, "athanor_or_creator_inactive")
@@ -1022,7 +1031,7 @@ defmodule Opus.Schedules.Scheduler do
           # an end that did not happen leaves the claim open.
           ended = finish(occurrence, execution_id, "failed")
 
-          unless ended == {:error, :stale} do
+          unless refused?(ended) do
             emit_schedule_failed(schedule.id, ctx, {:spawn_failed, reason})
             record_error(ctx, schedule.id, Sanctum.Refusals.render(:unavailable))
           end
@@ -1091,7 +1100,7 @@ defmodule Opus.Schedules.Scheduler do
   defp seq_refused(schedule, occurrence, ctx, reason, execution_id) do
     ended = finish(occurrence, execution_id, "failed")
 
-    unless ended == {:error, :stale} do
+    unless refused?(ended) do
       Logger.warning(
         "[Opus.Schedules.Scheduler] feed #{schedule.id} seq not claimed (#{inspect(reason)}) — not run"
       )
@@ -1189,6 +1198,13 @@ defmodule Opus.Schedules.Scheduler do
               # still closed, and nothing else is written or announced.
               Sanctum.Decisions.close(ctx, call_id, closed)
 
+            {:error, :not_owner} ->
+              # This member's slot was taken over: the end moved nothing
+              # and recorded no outcome, this member's decision is still
+              # closed, and the occurrence is left to recovery.
+              Sanctum.Decisions.close(ctx, call_id, closed)
+              left_to_recovery()
+
             finished ->
               recorded = record_run(ctx, schedule.id, execution_id)
               Sanctum.Decisions.close(ctx, call_id, closed)
@@ -1253,7 +1269,7 @@ defmodule Opus.Schedules.Scheduler do
             routed_to: Opus.service()
           })
 
-          unless ended == {:error, :stale} do
+          unless refused?(ended) do
             Logger.warning(
               "[Opus.Schedules.Scheduler] schedule #{schedule.id} failed: #{inspect(reason)}"
             )
@@ -1311,7 +1327,7 @@ defmodule Opus.Schedules.Scheduler do
         reason = refused_result(refusal)
         ended = finish(occurrence, fired.execution_id, "failed")
 
-        unless ended == {:error, :stale} do
+        unless refused?(ended) do
           Logger.warning(
             "[Opus.Schedules.Scheduler] feed #{schedule.id} seq #{feed.seq} failed: " <>
               Sanctum.Refusals.render(reason)
@@ -1326,7 +1342,7 @@ defmodule Opus.Schedules.Scheduler do
       {:error, reason} ->
         ended = finish(occurrence, fired.execution_id, "failed")
 
-        unless ended == {:error, :stale} do
+        unless refused?(ended) do
           Logger.warning(
             "[Opus.Schedules.Scheduler] feed #{schedule.id} seq #{feed.seq} failed: #{inspect(reason)}"
           )
@@ -1366,7 +1382,7 @@ defmodule Opus.Schedules.Scheduler do
   defp feed_ended(schedule, occurrence, ctx, feed, fired, outcome) do
     ended = finish(occurrence, fired.execution_id, "completed")
 
-    unless ended == {:error, :stale} do
+    unless refused?(ended) do
       _ = record_run(ctx, schedule.id, fired.execution_id)
 
       :telemetry.execute(
@@ -1441,7 +1457,7 @@ defmodule Opus.Schedules.Scheduler do
   # which publishes only over nothing or over this schedule's own earlier
   # outcome, never over a note the run did not read.
   @spec complete(map(), map(), String.t(), term(), String.t()) ::
-          {:ok, 1} | {:error, :stale | :no_athanor | :database_error | term()}
+          {:ok, 1} | {:error, :stale | :not_owner | :no_athanor | :database_error | term()}
   def complete(schedule, occurrence, execution_id, output, claimed_by \\ claimant()) do
     ScheduleOccurrences.finish(
       Prima.Actor.in_athanor(occurrence.athanor_id),
@@ -1504,7 +1520,17 @@ defmodule Opus.Schedules.Scheduler do
     do: %{occurrence | note_revision_read: nil}
 
   # An end answered `:stale` found the occurrence another member's now,
-  # or already ended: one line says so, and the answer is handed on.
+  # or already ended; one refused `:not_owner` found this member's slot
+  # taken over. One line says so, and the answer is handed on.
+  defp logged_stale({:error, :not_owner} = lost, occurrence) do
+    Logger.warning(
+      "[Opus.Schedules.Scheduler] occurrence #{occurrence.id} of #{occurrence.schedule_id} " <>
+        "not ended: this member no longer owns its slot — nothing more written"
+    )
+
+    lost
+  end
+
   defp logged_stale({:error, :stale} = stale, occurrence) do
     Logger.warning(
       "[Opus.Schedules.Scheduler] occurrence #{occurrence.id} of #{occurrence.schedule_id} " <>
@@ -1515,6 +1541,12 @@ defmodule Opus.Schedules.Scheduler do
   end
 
   defp logged_stale(answer, _occurrence), do: answer
+
+  # An end that moved no row: the occurrence is another member's now
+  # (`:stale`), or this member's slot is gone (`:not_owner`). Nothing more
+  # is written, recorded or announced after either.
+  defp refused?({:error, reason}) when reason in [:stale, :not_owner], do: true
+  defp refused?(_answer), do: false
 
   # The run task's end when it leaves its claimed occurrence to recovery:
   # the exit reason tells the scheduler (`handle_info({:DOWN, …})`) to ask
@@ -1562,7 +1594,7 @@ defmodule Opus.Schedules.Scheduler do
       )
       |> logged_stale(%{id: task.occurrence_id, schedule_id: schedule_id})
 
-    unless settled == {:error, :stale},
+    unless refused?(settled),
       do: record_error(task.ctx, schedule_id, Sanctum.Refusals.render(reason))
 
     settled

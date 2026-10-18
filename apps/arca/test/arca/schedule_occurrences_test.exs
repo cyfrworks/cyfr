@@ -994,7 +994,7 @@ defmodule Arca.ScheduleOccurrencesTakeoverTest do
   end
 
   for writer <- [:finish, :settle_dead] do
-    test "an old member's late #{writer}, after a successor recovered and started the occurrence, is :stale",
+    test "an old member's late #{writer}, after a successor took its slot and recovered and started the occurrence, is :not_owner",
          %{actor: actor, slot: slot} do
       schedule = unboxed(fn -> due!(actor) end)
 
@@ -1020,7 +1020,10 @@ defmodule Arca.ScheduleOccurrencesTakeoverTest do
           recovered_and_started
         )
 
-      assert answer == {:error, :stale}
+      # The slot is checked under the row lock before the claimant and the
+      # execution are compared: a member whose slot was taken over is
+      # refused for the slot, whoever holds the occurrence now.
+      assert answer == {:error, :not_owner}
 
       assert {:ok, %{state: "started", claimed_by: ^successor, execution_id: "exec_successor"}} =
                unboxed(fn -> ScheduleOccurrences.get(actor, occurrence.id) end)

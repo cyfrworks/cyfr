@@ -167,9 +167,11 @@ defmodule Compendium.RegistryRemoveCascadeTest do
       slot = claimant!()
       feed = feed!(ctx, "cascade-fenced")
 
-      # A successor takes the slot over: this member still believes it
-      # holds it, so only the feed row's own fenced write refuses.
-      take_over!(slot)
+      # A successor takes the slot over once the version's bytes are
+      # removed, under the live slot as every unit removal is, and as its
+      # row goes: this member still believes it holds the slot, so only
+      # the feed row's own fenced write refuses.
+      take_over_at_row_delete!(slot)
 
       log =
         ExUnit.CaptureLog.capture_log(fn ->
@@ -235,6 +237,28 @@ defmodule Compendium.RegistryRemoveCascadeTest do
     node = "node-cascade-#{System.unique_integer([:positive])}"
     {:ok, slot} = Arca.ControlPlane.take(node, node <> "#boot_a", 60_000)
     slot
+  end
+
+  # The slot taken over the moment the component's row is deleted, in the
+  # deleting process: after the version's bytes are removed, before the
+  # removal reaches the component's registrations.
+  defp take_over_at_row_delete!(slot) do
+    test = self()
+    handler = "cascade-takeover-#{System.unique_integer([:positive])}"
+    on_exit(fn -> :telemetry.detach(handler) end)
+
+    :telemetry.attach(
+      handler,
+      [:arca, :repo, :query],
+      fn _event, _measurements, meta, _config ->
+        if self() == test and meta[:source] == "components" and is_binary(meta[:query]) and
+             String.starts_with?(meta[:query], "DELETE") do
+          :telemetry.detach(handler)
+          take_over!(slot)
+        end
+      end,
+      nil
+    )
   end
 
   defp take_over!(%{node: node, generation: generation}) do

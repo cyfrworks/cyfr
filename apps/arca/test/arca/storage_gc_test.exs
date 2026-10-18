@@ -75,9 +75,10 @@ end
 
 defmodule Arca.StorageGCTest do
   @moduledoc """
-  What the collector keeps and what it takes: the pointer, a live draft
-  and a live holder's pin keep a staged revision, read again immediately
-  before its deletion; everything else goes after the grace, marker last.
+  What the collector keeps and what it takes: the pointer and a live
+  draft keep a staged revision, read again immediately before its
+  deletion; everything else goes after the grace, marker last. Every age
+  is judged on the cell's clock unless a case names the instant.
   Repair moves only the revision a row names, proven against the journal,
   and objects alone never make a pointer.
   """
@@ -317,24 +318,6 @@ defmodule Arca.StorageGCTest do
     end
   end
 
-  defp start_build(actor) do
-    id = Prima.UUID7.build_id()
-    :ok = Arca.BuildRecords.record_started(actor, id, "c:local.gc:1.0.0")
-    id
-  end
-
-  defp open_turn(actor) do
-    {:ok, thread} = Arca.ThreadStorage.create(actor)
-
-    {:ok, %{turn: turn}} =
-      Arca.TurnStorage.accept_message(actor, thread.id, %{
-        message: %{author: actor.user_id, content: "@aqua go"},
-        turn: %{agent: "aqua", requested_by: actor.user_id, origin: :interactive}
-      })
-
-    turn
-  end
-
   # ---------------------------------------------------------------------------
   # Drafts
   # ---------------------------------------------------------------------------
@@ -367,6 +350,29 @@ defmodule Arca.StorageGCTest do
       assert staged(actor, unit) == %{}
       assert %StorageUnit{state: "retired", draft_writer_token: nil} = row(actor, unit)
       assert {:error, :not_found} = pointer(actor, unit)
+    end
+
+    test "is judged on the cell's clock it was registered on, which only a clock twenty minutes ahead would read as dead",
+         %{actor: actor, unit: unit} do
+      writer_dies_staging(actor, unit, "one")
+      assert [{revision, [".in-progress" | _half]}] = Map.to_list(staged(actor, unit))
+
+      # Registered just now on the cell's clock, the draft is live to a
+      # collector reading that clock, however short the grace.
+      assert {:kept, :live_draft} =
+               StorageGC.collect(actor, candidate(unit, revision), grace_ms: 0)
+
+      assert %StorageUnit{draft_writer_token: "wrt_" <> _} = row(actor, unit)
+
+      # Judged on a clock twenty minutes ahead of the cell's — a member's
+      # own, drifted — the same draft is dead past its lifetime and taken
+      # from its writer: the skew the cell's clock keeps out.
+      skewed = DateTime.add(Arca.ServerMetaStorage.now!(), 20, :minute)
+
+      assert :collected =
+               StorageGC.collect(actor, candidate(unit, revision), now: skewed, grace_ms: 0)
+
+      assert %StorageUnit{state: "retired", draft_writer_token: nil} = row(actor, unit)
     end
 
     test "retired by the collector can no longer commit the revision it staged", %{
@@ -420,75 +426,6 @@ defmodule Arca.StorageGCTest do
       assert Map.has_key?(staged(actor, unit), revision)
       assert {:ok, %{current_revision: ^revision}} = pointer(actor, unit)
     end
-
-    test "a reader's pin: the prefix survives until the holder is done", %{
-      actor: actor,
-      unit: unit
-    } do
-      assert {:ok, _} = commit(actor, unit, "one")
-      {:ok, %{current_revision: one}} = pointer(actor, unit)
-      now = later(2 * @day)
-
-      build = start_build(actor)
-      assert :ok = StorageGC.pin(actor, unit, one, {:build, build})
-      assert {:ok, _} = commit(actor, unit, "two")
-      {:ok, %{current_revision: two}} = pointer(actor, unit)
-
-      # A snapshot whose listing did not show the pin yet.
-      {:ok, roots} = StorageGC.roots(actor)
-      blind = %{roots | pins: MapSet.new()}
-      assert {:ok, [%{revision: ^one} = found]} = StorageGC.candidates(actor, blind, now: now)
-      assert {:kept, :pinned} = StorageGC.collect(actor, found, now: now)
-      assert Map.has_key?(staged(actor, unit), one)
-
-      # The pinned reader still reads the revision it resolved, under the
-      # prefix it pinned.
-      assert revision_bytes(actor, unit, one) == whole("one")
-
-      # A snapshot taken now roots it, and a sweep leaves it.
-      assert {:ok, %{pins: pins}} = StorageGC.roots(actor)
-      assert MapSet.size(pins) == 1
-      assert {:ok, %{collected: 0}} = StorageGC.sweep(actor, now: now)
-
-      :ok = Arca.BuildRecords.record_finished(actor, build, "failed", "stopped")
-
-      assert {:ok, %{collected: 1}} = StorageGC.sweep(actor, now: now)
-      assert Map.keys(staged(actor, unit)) == [two]
-      assert served(actor, unit) == whole("two")
-    end
-
-    test "an open turn pins as a started build does, and a finished one does not", %{
-      actor: actor,
-      unit: unit
-    } do
-      assert {:ok, _} = commit(actor, unit, "one")
-      {:ok, %{current_revision: one}} = pointer(actor, unit)
-      turn = open_turn(actor)
-
-      assert :ok = StorageGC.pin(actor, unit, one, {:turn, turn.id})
-      assert {:ok, _} = commit(actor, unit, "two")
-      assert {:kept, :pinned} = StorageGC.collect(actor, candidate(unit, one), now: later(@day))
-
-      {:ok, _} = Arca.TurnStorage.finish(actor, turn.id, "cancelled", %{fence: turn.fence})
-
-      assert :collected = StorageGC.collect(actor, candidate(unit, one), now: later(@day))
-    end
-
-    test "a pin on a revision the pointer has left is refused, and leaves nothing", %{
-      actor: actor,
-      unit: unit
-    } do
-      assert {:ok, _} = commit(actor, unit, "one")
-      {:ok, %{current_revision: one}} = pointer(actor, unit)
-      assert {:ok, _} = commit(actor, unit, "two")
-
-      build = start_build(actor)
-      assert {:error, :stale_revision} = StorageGC.pin(actor, unit, one, {:build, build})
-      assert {:error, :invalid_holder} = StorageGC.pin(actor, unit, one, {:build, "../x"})
-      assert {:ok, %{pins: pins}} = StorageGC.roots(actor)
-      assert MapSet.size(pins) == 0
-      assert :collected = StorageGC.collect(actor, candidate(unit, one), now: later(@day))
-    end
   end
 
   # ---------------------------------------------------------------------------
@@ -531,16 +468,24 @@ defmodule Arca.StorageGCTest do
       assert Arca.Overlay.unit_status(actor, unit) == {:ok, :absent}
     end
 
-    test "that carries no date is given one, and collected a grace later", %{
+    test "that carries no date is dated on the sweep's clock, and collected a grace after it", %{
       actor: actor,
       unit: unit
     } do
       lay_prefix(actor, unit, "hand-laid", "orphan", marker: false)
 
-      assert {:ok, %{collected: 0, unaged: 1}} = StorageGC.sweep(actor, now: later(2 * @day))
+      # The sweep's clock two days from the host's: the date it writes is
+      # that clock's, never the host's.
+      dated = later(2 * @day)
+      assert {:ok, %{collected: 0, unaged: 1}} = StorageGC.sweep(actor, now: dated)
       assert ".in-progress" in staged(actor, unit)["hand-laid"]
 
-      assert {:ok, %{collected: 1, unaged: 0}} = StorageGC.sweep(actor, now: later(2 * @day))
+      inside = DateTime.add(dated, @day - :timer.minutes(1), :millisecond)
+      assert {:ok, %{collected: 0, unaged: 0}} = StorageGC.sweep(actor, now: inside)
+      assert Map.has_key?(staged(actor, unit), "hand-laid")
+
+      past = DateTime.add(dated, @day + :timer.minutes(1), :millisecond)
+      assert {:ok, %{collected: 1, unaged: 0}} = StorageGC.sweep(actor, now: past)
       assert staged(actor, unit) == %{}
     end
 
@@ -922,16 +867,10 @@ defmodule Arca.StorageGCTest do
       assert {:error, :no_athanor} = StorageGC.sweep(nobody)
       assert {:error, :no_athanor} = StorageGC.roots(nobody)
       assert {:error, :no_athanor} = StorageGC.repair(nobody)
-      assert {:error, :no_athanor} = StorageGC.pin(nobody, unit, "rev_1", {:build, "build_1"})
-      assert {:error, :no_athanor} = StorageGC.unpin(nobody, unit, "rev_1", {:build, "build_1"})
       assert {:error, :no_athanor} = StorageGC.collect(nobody, candidate(unit, "rev_1"))
 
       assert {:error, :no_athanor} =
-               StorageGC.candidates(nobody, %{
-                 current: MapSet.new(),
-                 drafts: %{},
-                 pins: MapSet.new()
-               })
+               StorageGC.candidates(nobody, %{current: MapSet.new(), drafts: %{}})
 
       assert {:error, :no_athanor} = StorageGC.sweep(%Prima.Actor{athanor_id: ""})
       refute_received {:storage, _op, _path}
@@ -996,22 +935,6 @@ defmodule Arca.StorageGCTest do
       assert {:error, :enospc} = Arca.Overlay.repair_unit(actor, unit)
       Adapter.clear()
       assert served(actor, unit) == whole("one")
-    end
-
-    test "a live reader's pin keeps legacy bytes across explicit removal", %{
-      actor: actor,
-      unit: unit
-    } do
-      assert {:ok, _} = commit(actor, unit, "one")
-      one = serve_at_unit!(actor, unit)
-      build = start_build(actor)
-      assert :ok = StorageGC.pin(actor, unit, one, {:build, build})
-      assert {:ok, :deleted} = Arca.Overlay.drop_unit(actor, unit)
-      assert StorageGC.pinned?(actor, unit, one)
-      assert {:ok, old_pairs} = Arca.Storage.read_subtree_via(Arca.Adapters.Local, actor, unit)
-
-      assert revision_bytes(actor, unit, one) == whole("one") or
-               Map.new(old_pairs) == whole("one")
     end
 
     test "a candidate committed and replaced after its snapshot keeps the replacement grace", %{
@@ -1087,51 +1010,6 @@ defmodule Arca.StorageGCTest do
       assert revision_bytes(actor, unit, adopted) == whole("one")
       assert served(actor, unit) == whole("one")
       assert {:ok, []} = Arca.Adapters.Local.list_recursive(actor, unit)
-    end
-  end
-
-  describe "Astra T1b r2 legacy pin continuation regressions" do
-    test "a legacy reader's pin survives publication after adoption", %{actor: actor, unit: unit} do
-      assert {:ok, _} = commit(actor, unit, "one")
-      legacy = serve_at_unit!(actor, unit)
-      build = start_build(actor)
-      assert :ok = StorageGC.pin(actor, unit, legacy, {:build, build})
-
-      assert {:ok, :repaired} = Arca.Overlay.repair_unit(actor, unit)
-      assert {:ok, %{current_revision: adopted}} = pointer(actor, unit)
-      refute adopted == legacy
-      assert {:ok, before} = Arca.Storage.read_subtree_via(Arca.Adapters.Local, actor, unit)
-      assert Map.new(before) == whole("one")
-
-      assert {:ok, _} = commit(actor, unit, "two")
-      assert served(actor, unit) == whole("two")
-      assert StorageGC.pinned?(actor, unit, legacy)
-
-      assert {:ok, after_publish} =
-               Arca.Storage.read_subtree_via(Arca.Adapters.Local, actor, unit)
-
-      assert Map.new(after_publish) == whole("one")
-    end
-
-    test "a legacy reader's pin survives explicit removal after adoption", %{
-      actor: actor,
-      unit: unit
-    } do
-      assert {:ok, _} = commit(actor, unit, "one")
-      legacy = serve_at_unit!(actor, unit)
-      build = start_build(actor)
-      assert :ok = StorageGC.pin(actor, unit, legacy, {:build, build})
-
-      assert {:ok, :repaired} = Arca.Overlay.repair_unit(actor, unit)
-      assert {:ok, %{current_revision: adopted}} = pointer(actor, unit)
-      refute adopted == legacy
-      assert {:ok, before} = Arca.Storage.read_subtree_via(Arca.Adapters.Local, actor, unit)
-      assert Map.new(before) == whole("one")
-
-      assert {:ok, :deleted} = Arca.Overlay.drop_unit(actor, unit)
-      assert StorageGC.pinned?(actor, unit, legacy)
-      assert {:ok, after_drop} = Arca.Storage.read_subtree_via(Arca.Adapters.Local, actor, unit)
-      assert Map.new(after_drop) == whole("one")
     end
   end
 

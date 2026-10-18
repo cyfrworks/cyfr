@@ -61,11 +61,12 @@ defmodule Arca.Overlay do
   pointer cannot move under a release and a revision cannot be deleted
   under one: a second writer is refused `{:error, :stale_writer}` at step
   1 and asks again. A removal takes the same lease
-  (`Arca.StorageUnits.stamped_retire/4`): its row is `retiring` under the
-  deleter's token while the retired revision's prefix is deleted, a
-  commit against it is refused, and the row is `retired` only once the
-  delete has returned. A repair takes the lease too, and only when it is
-  free.
+  (`Arca.StorageUnits.stamped_retire/4`), under the member's live slot
+  verified in its own transaction as a commit's is: its row is
+  `retiring` under the deleter's token while the retired revision's
+  prefix is deleted, a commit against it is refused, and the row is
+  `retired` only once the delete has returned. A repair takes the lease
+  too, and only when it is free.
 
   On one node the lease is taken and held under one node-local lock on
   the unit as well: a writer holds it from its registration to its
@@ -112,10 +113,7 @@ defmodule Arca.Overlay do
   `{:error, :no_unit}` — except at the completion object of a unit its
   grammar lets a write create
   (`c:Arca.Storage.UnitLocator.creates_by_write?/1`: a role, the soul, a
-  scroll), where the write is the unit's one-object commit. A pin
-  (`Arca.StorageGC.pin/4`) keeps a revision's prefix from collection; the
-  current revision's objects can still be edited in place, as the served
-  objects could before.
+  scroll), where the write is the unit's one-object commit.
 
   A revision committed before units were served from their prefixes was
   moved to the unit's own path and its prefix removed. Such a revision is
@@ -127,11 +125,9 @@ defmodule Arca.Overlay do
   — so two adopters never share a prefix and a stalled one is refused at
   its commit; nothing is ever written at a unit's own path again. The
   unit's own path is cleared once the adopting, or any later, publication
-  is released, unless a live pin names a revision of the unit — a pin
-  keeps the bytes its reader resolved, and the unit's own path can hold
-  any revision served there before this shape — and then the collector
-  clears it once the pins are gone (`collect_unit_path/2`); a removal
-  leaves it to the collector the same way. Where a revision is served
+  is released (`cleared_unit_path/2`), and by the unit's removal; what a
+  refused clearing leaves there, the collector clears once nothing reads
+  it (`collect_unit_path/2`). Where a revision is served
   from is decided by probes whose failure is typed (`source_state/3`): a
   probe that cannot answer is never read as an absence, so nothing is
   deleted, adopted or answered on an outage.
@@ -460,9 +456,14 @@ defmodule Arca.Overlay do
   # revision is deleted by it: a successor's revision is another prefix,
   # and the unit's other prefixes are the collector's. The row is retired
   # last. Another writer's live draft, or a holder of the lock, refuses
-  # the removal as `{:error, :stale_writer}`, with nothing deleted. Inside
-  # `with_claim/2` the retirement names the attempt's claim
-  # (`Arca.StorageUnits.stamped_retire/4`), and a refusal deletes nothing.
+  # the removal as `{:error, :stale_writer}`, with nothing deleted. The
+  # retirement lands only under the member's live slot, verified in its
+  # own transaction as a commit's is (`Arca.StorageUnits.stamped_retire/4`):
+  # a member whose slot a successor took over is refused
+  # `{:error, :not_owner}` with nothing retired and nothing deleted,
+  # however its cached standing reads — the gate a removal passed on its
+  # way in never stands in for it. Inside `with_claim/2` the retirement
+  # names the attempt's claim instead, and a refusal deletes nothing.
   # A unit already retired is taken the same way: what a removal that
   # died or was refused left behind is cleared under the lease too. The
   # root's projection is told the unit is going — a tombstone, pending
@@ -530,40 +531,27 @@ defmodule Arca.Overlay do
   # What a removal deletes: the retired revision's prefix (through the
   # facade, so its bytes leave the athanor's accounting), and the unit's
   # own path, where a revision served before this shape may still stand.
-  # A row that never named a revision has only the latter. A revision a
-  # live reader has pinned (`Arca.StorageGC.pin/4`) is left to the
-  # collector, which takes it once the pin is gone: the pin keeps the
-  # bytes the reader resolved, and the retired row keeps every new reader
-  # out. The unit's own path is kept while a live pin names any revision
-  # of the unit, since the revision it holds is whichever was served
-  # there — the retired one, or an earlier one adopted since.
+  # A row that never named a revision has only the latter. The prefix goes
+  # at once: the retired row keeps every new reader out, and a reader that
+  # resolved the row before the removal reads `{:error, :not_found}` from
+  # here on, as at any unit no committed row names.
   defp delete_revision(actor, unit, revision) do
     internal = internal_actor(actor)
-    pinned? = is_binary(revision) and Arca.StorageGC.pinned?(actor, unit, revision)
 
     prefix =
-      cond do
-        is_nil(revision) or pinned? ->
-          :ok
-
-        true ->
+      if is_nil(revision),
+        do: :ok,
+        else:
           with_internal_writes(fn ->
             Arca.delete_tree(internal, UnitLocator.revision_prefix(unit, revision))
           end)
-      end
 
-    # The unit's own path holds a revision served there before this shape:
-    # a live pin on any revision of the unit keeps it as a pin keeps a
-    # prefix.
-    with :ok <- prefix, false <- Arca.StorageGC.pinned_unit?(actor, unit) do
+    with :ok <- prefix do
       case tenant().delete_tree(actor, unit) do
         :ok -> :ok
         {:error, :not_found} -> :ok
         {:error, _} = error -> error
       end
-    else
-      true -> :ok
-      {:error, _} = error -> error
     end
   end
 
@@ -571,8 +559,7 @@ defmodule Arca.Overlay do
   Delete what a revision served at the unit's own path before units were
   served from their prefixes left there, once nothing reads it: when the
   unit's row is retired or never committed, or committed with its
-  revision's completion object in its prefix, and no live pin names a
-  revision of the unit (`Arca.StorageGC.pinned_unit?/2`). The collector's
+  revision's completion object in its prefix. The collector's
   call, made under the unit's node-local lock. `{:ok, :collected}` when
   it went or nothing stood there, `{:ok, :kept}` when a reader may still
   find it there — the row's revision is served there, or is complete
@@ -601,8 +588,7 @@ defmodule Arca.Overlay do
     unit = unit_of(loc)
 
     fenced(actor, unit, fn ->
-      with {:ok, :unread} <- unit_path_standing(actor, loc),
-           false <- Arca.StorageGC.pinned_unit?(actor, unit) do
+      with {:ok, :unread} <- unit_path_standing(actor, loc) do
         case tenant().delete_tree(actor, unit) do
           # The bytes left the tree beneath the facade's accounting.
           :ok ->
@@ -617,7 +603,6 @@ defmodule Arca.Overlay do
         end
       else
         {:ok, :read} -> {:ok, :kept}
-        true -> {:ok, :kept}
         {:error, _} = error -> error
       end
     end)
@@ -1535,6 +1520,8 @@ defmodule Arca.Overlay do
   unit — a publication staging or finishing, or another removal — and the
   caller asks again once it is done, which a writer that died holds off
   for the draft's lifetime (`Arca.StorageUnits.draft_ttl_ms/0`).
+  `{:error, :not_owner}` from a member whose slot is not live, with
+  nothing retired and nothing deleted.
   """
   @spec drop_unit(Prima.Actor.t(), Arca.Storage.path()) ::
           {:ok, :deleted} | {:error, :bundled | :not_found | :not_overlaid | term()}
@@ -2053,14 +2040,9 @@ defmodule Arca.Overlay do
 
   # What a revision served at the unit's own path before units were served
   # from their prefixes left there is superseded by a publication into a
-  # prefix: no reader resolves the row to it any more, and it goes —
-  # unless a live pin names a revision of the unit
-  # (`Arca.StorageGC.pinned_unit?/2`), which keeps it for the pinned
-  # reader until the collector takes it: the revision there is whichever
-  # was served there before this shape — the one this publication
-  # replaced, or an earlier one adopted since — and a pin on it outlives
-  # the adoption. A refusal is logged — the publication stands, and a
-  # removal or the collector clears the path again.
+  # prefix: no reader resolves the row to it any more, and it goes. A
+  # refusal is logged — the publication stands, and a removal or the
+  # collector clears the path again.
   defp cleared_unit_path(actor, loc) do
     unit = unit_of(loc)
 
@@ -2070,8 +2052,7 @@ defmodule Arca.Overlay do
         {:dir, ^unit, _sentinel} -> match?({:ok, [_ | _]}, tenant().list_recursive(actor, unit))
       end
 
-    with true <- standing?,
-         false <- Arca.StorageGC.pinned_unit?(actor, unit) do
+    if standing? do
       case tenant().delete_tree(actor, unit) do
         # The bytes left the tree beneath the facade's accounting: the
         # counters are dropped, to be walked true again.
@@ -2378,9 +2359,8 @@ defmodule Arca.Overlay do
   # and only then the unit's own path listed and read, so a read paused
   # before the lease can never become what a later lease publishes over
   # a successor's acknowledged edit. The unit's own path is cleared once
-  # the new revision is released, unless a live pin names a revision of
-  # the unit (`cleared_unit_path/2`). Answers the revision readers
-  # resolve the row to afterwards.
+  # the new revision is released (`cleared_unit_path/2`). Answers the
+  # revision readers resolve the row to afterwards.
   defp adopt(actor, loc, observed) do
     unit = unit_of(loc)
     internal = internal_actor(actor)

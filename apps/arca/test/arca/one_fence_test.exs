@@ -64,6 +64,8 @@ defmodule Arca.OneFenceTest do
       "a write whose answer commits whatever it is, under the caller's slot",
     {"arca/schedule_occurrences.ex", "claim/3"} =>
       "an occurrence claim: the schedule row locked first, then the slot checked (`Arca.CronSchedule.slot_fence/0`)",
+    {"arca/schedule_occurrences.ex", "ending/3"} =>
+      "an occurrence's end (`finish/6`, `settle_dead/4`): the occurrence row locked first, then the slot checked (`Arca.CronSchedule.slot_fence/0`), then the compare-and-set on its claimant and execution",
     {"arca/security_transitions.ex", "restore/1"} =>
       "the restore transition under the slot the boot names, refused as `:slot_lost`, within its deadline",
     {"arca/security_transitions/issuance.ex", "owned/1"} =>

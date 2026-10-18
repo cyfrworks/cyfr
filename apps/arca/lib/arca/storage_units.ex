@@ -40,12 +40,18 @@ defmodule Arca.StorageUnits do
        token was taken — it stalled past the draft's lifetime — is told
        `:stale_writer` and has published nothing a reader will keep.
 
-  A removal takes the same lease: `stamped_retire/4` moves the row to
-  `retiring` under a token of its own, the deleter deletes the retired
-  revision's prefix while it holds it, and `finish_retire/4` retires the
-  row. A
+  A removal takes the same lease: `stamped_retire/4` verifies the
+  writing member's slot as a commit does, moves the row to `retiring`
+  under a token of its own, the deleter deletes the retired revision's
+  prefix while it holds it, and `finish_retire/4` retires the row. A
   commit, a registration or another removal against a `retiring` row is
   refused `:stale_writer` while that token lives.
+
+  The draft's lifetime is judged on the cell's clock
+  (`Arca.ServerMetaStorage.now!/0`), as every lease in the cell is: the
+  instant a draft is registered, taken or given back is written from it
+  and compared against it, so members whose own clocks have drifted
+  agree which draft is live.
 
   `abandon_draft/3` gives a draft back without committing, and is how a
   finish that could not move its bytes hands the unit to repair.
@@ -126,8 +132,9 @@ defmodule Arca.StorageUnits do
              writer_token != "" do
     with {:ok, athanor} <- tenant(actor) do
       rescuing_db("register_draft", fn ->
-        ensure_row(athanor, root, unit_key)
-        take_draft(athanor, root, unit_key, writer_token)
+        now = Arca.ServerMetaStorage.now!()
+        ensure_row(athanor, root, unit_key, now)
+        take_draft(athanor, root, unit_key, writer_token, now)
         held_by(fetch(athanor, root, unit_key), writer_token)
       end)
     end
@@ -189,7 +196,7 @@ defmodule Arca.StorageUnits do
           )
 
         case Arca.Repo.update_all(served,
-               set: [draft_writer_token: nil, updated_at: DateTime.utc_now()]
+               set: [draft_writer_token: nil, updated_at: Arca.ServerMetaStorage.now!()]
              ) do
           {1, _} ->
             :ok
@@ -310,8 +317,9 @@ defmodule Arca.StorageUnits do
     end
   end
 
-  # Who the commit is written for: the member as it stands, or the
-  # provisioning attempt a claim names, with the slot it was taken under.
+  # Who a commit or a removal is written for: the member as it stands, or
+  # the provisioning attempt a claim names, with the slot it was taken
+  # under. A member that holds no slot is refused before any transaction.
   defp writer(nil) do
     with {:ok, slot} <- Arca.ControlPlane.member_slot(), do: {:ok, {:member, slot}}
   end
@@ -320,15 +328,8 @@ defmodule Arca.StorageUnits do
        when is_binary(owner) and is_integer(fence),
        do: {:ok, {:claim, owner, fence, slot}}
 
-  # A retirement names a claim only for an attempt's own cleanup; without
-  # one it is checked as it always was, by the deleter's own gates.
-  defp retires?(_actor, nil), do: true
-
-  defp retires?(actor, %{owner: owner, fence: fence, slot: slot}),
-    do: Arca.ProvisioningClaims.hold?(actor, owner, fence, slot)
-
-  # Inside the commit's locking transaction: the member's slot verified
-  # live, or the attempt's slot verified and its claim held.
+  # Inside the commit's or the removal's locking transaction: the member's
+  # slot verified live, or the attempt's slot verified and its claim held.
   defp writes?(_actor, {:member, slot}), do: Arca.ControlPlane.verify_held(slot) == :ok
 
   defp writes?(actor, {:claim, owner, fence, slot}),
@@ -370,10 +371,11 @@ defmodule Arca.StorageUnits do
   revision for the journal's sake. `stamped_retire/4` and
   `finish_retire/4` with nothing between them; a unit that never had a
   row gets a retired one. `{:error, :stale_writer}` while another
-  writer's live draft holds the unit.
+  writer's live draft holds the unit, and `{:error, :not_owner}` from a
+  member whose slot is not live, as `stamped_retire/4` answers.
   """
   @spec retire(Prima.Actor.t(), String.t(), String.t()) ::
-          :ok | {:error, :stale_writer} | refusal()
+          :ok | {:error, :not_owner | :stale_writer} | refusal()
   def retire(%Prima.Actor{} = actor, root, unit_key) do
     case stamped_retire(actor, root, unit_key) do
       {:retiring, _generation, token} -> finish_retire(actor, root, unit_key, token)
@@ -403,10 +405,17 @@ defmodule Arca.StorageUnits do
   commit being staged or finished, or another removal — and nothing is
   written: the caller asks again once that writer is done.
 
-  `:claim` in `opts` is `stamped_commit/6`'s: a provisioning attempt's
-  retirement — the cleanup of a unit its own publish committed — lands
-  only while the attempt still holds its claim and the slot it was taken
-  under, both held in this transaction before the row moves, and answers
+  The writer is verified before the row moves, in this transaction, as
+  `stamped_commit/6` verifies a commit's: the slot this member holds as
+  the removal begins (`Arca.ControlPlane.member_slot/0`), verified live
+  (`Arca.ControlPlane.verify_held/1`, which holds the slot's lease row
+  until commit), so a member whose slot a successor took over retires
+  nothing and deletes nothing, however its cached standing reads, and is
+  answered `{:error, :not_owner}`. `:claim` in `opts` is
+  `stamped_commit/6`'s: a provisioning attempt's retirement — the cleanup
+  of a unit its own publish committed — lands only while the attempt
+  still holds its claim and the slot it was taken under, both held in
+  this transaction before the row moves, and answers
   `{:error, :not_owner}` with nothing retired otherwise, so a resumed
   stale attempt never retires its successor's unit.
   """
@@ -416,14 +425,14 @@ defmodule Arca.StorageUnits do
           | refusal()
   def stamped_retire(%Prima.Actor{} = actor, root, unit_key, opts \\ [])
       when is_binary(root) and is_binary(unit_key) and is_list(opts) do
-    with {:ok, athanor} <- tenant(actor) do
+    with {:ok, athanor} <- tenant(actor),
+         {:ok, writer} <- writer(Keyword.get(opts, :claim)) do
       token = new_writer_token()
 
       answer =
         rescuing_db("retire", fn ->
           Arca.Repo.locking_transaction(fn ->
-            if not retires?(actor, Keyword.get(opts, :claim)),
-              do: Arca.Repo.rollback(:not_owner)
+            unless writes?(actor, writer), do: Arca.Repo.rollback(:not_owner)
 
             case retire_row(athanor, root, unit_key, token) do
               :stale_writer -> Arca.Repo.rollback(:stale_writer)
@@ -464,7 +473,11 @@ defmodule Arca.StorageUnits do
           )
 
         case Arca.Repo.update_all(retiring,
-               set: [state: "retired", draft_writer_token: nil, updated_at: DateTime.utc_now()]
+               set: [
+                 state: "retired",
+                 draft_writer_token: nil,
+                 updated_at: Arca.ServerMetaStorage.now!()
+               ]
              ) do
           {1, _} -> :ok
           {0, _} -> {:error, :stale_writer}
@@ -538,9 +551,7 @@ defmodule Arca.StorageUnits do
 
   # Insert-if-absent, so two first writers of one key both find a row to
   # contend for instead of one of them raising on the unique index.
-  defp ensure_row(athanor, root, unit_key) do
-    now = DateTime.utc_now()
-
+  defp ensure_row(athanor, root, unit_key, now) do
     row = %{
       id: Prima.UUID7.generate_id("unit"),
       athanor_id: athanor,
@@ -559,12 +570,11 @@ defmodule Arca.StorageUnits do
 
   # One conditional update each, so the take is atomic on every adapter:
   # a draft is free when nobody holds it, when this writer already does,
-  # or when its holder registered longer ago than the draft lives. A
-  # retired row, and a retiring one whose deleter's token has outlived
-  # the lifetime, come back as a draft with no pointer.
-  defp take_draft(athanor, root, unit_key, writer_token) do
-    now = DateTime.utc_now()
-
+  # or when its holder registered longer ago than the draft lives, on the
+  # cell's clock `now` was read from. A retired row, and a retiring one
+  # whose deleter's token has outlived the lifetime, come back as a draft
+  # with no pointer.
+  defp take_draft(athanor, root, unit_key, writer_token, now) do
     free =
       from(u in by_key(where_athanor(StorageUnit, athanor), root, unit_key),
         where:
@@ -591,14 +601,15 @@ defmodule Arca.StorageUnits do
     :ok
   end
 
-  # When a token registered before this moment has outlived the draft.
+  # When a token registered before this moment, on the cell's clock, has
+  # outlived the draft.
   defp expiry(now), do: DateTime.add(now, -@draft_ttl_ms, :millisecond)
 
   defp held_by(%StorageUnit{draft_writer_token: token} = unit, token), do: {:ok, unit}
   defp held_by(_another_writers_or_gone, _token), do: {:error, :stale_writer}
 
   defp release_draft(athanor, id, writer_token) do
-    now = DateTime.utc_now()
+    now = Arca.ServerMetaStorage.now!()
 
     held =
       from(u in where_athanor(StorageUnit, athanor),
@@ -626,8 +637,8 @@ defmodule Arca.StorageUnits do
   # as well. A live token is another writer's — a commit staging or
   # finishing, or a removal under way — and refuses.
   defp retire_row(athanor, root, unit_key, token) do
-    now = DateTime.utc_now()
-    ensure_row(athanor, root, unit_key)
+    now = Arca.ServerMetaStorage.now!()
+    ensure_row(athanor, root, unit_key, now)
 
     takeable =
       from(u in by_key(where_athanor(StorageUnit, athanor), root, unit_key),
@@ -681,7 +692,7 @@ defmodule Arca.StorageUnits do
          identity,
          writer
        ) do
-    now = DateTime.utc_now()
+    now = Arca.ServerMetaStorage.now!()
 
     Arca.Repo.locking_transaction(fn ->
       unless writes?(actor, writer), do: Arca.Repo.rollback(:not_owner)

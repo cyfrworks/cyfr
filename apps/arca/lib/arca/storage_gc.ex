@@ -23,11 +23,14 @@ defmodule Arca.StorageGC do
       within `Arca.StorageUnits.draft_ttl_ms/0` plus the grace, and the
       prefix carries its in-progress marker. The row does not say which
       revision its writer stages, so every marked prefix of the unit is
-      kept while the draft lives;
-    * **a pin** — `pin/4` recorded a holder against the revision, and the
-      holder's row is live: an open turn, or a build still `started`. The
-      pin is an object beside the revision prefixes and its life is the
-      holder's row, so a holder that died pins nothing.
+      kept while the draft lives.
+
+  Every age is judged on the cell's clock (`Arca.ServerMetaStorage.now!/0`),
+  read once as a sweep begins, before its snapshot: a draft's
+  registration and the commit that left a revision are written from that
+  clock (`Arca.StorageUnits`), so a member whose own clock has drifted
+  neither keeps a dead draft nor takes a live one. A caller may name the
+  instant (`now:`), as the tests do.
 
   ## Collection order
 
@@ -41,33 +44,35 @@ defmodule Arca.StorageGC do
        was begun or from the commit that left it, whichever is later;
     4. for one candidate, immediately before its deletion: a draft dead
        past the grace is retired, so its writer can never commit the
-       revision; then the pointer, the draft, the pins and the commit
-       that replaced the revision are read again, and any of them keeps
-       it — a revision the pointer left since the snapshot stands through
-       the grace after the commit that left it;
+       revision; then the pointer, the draft and the commit that replaced
+       the revision are read again, and any of them keeps it — a revision
+       the pointer left since the snapshot stands through the grace after
+       the commit that left it;
     5. its objects are deleted, then its marker, last;
     6. the emptied revision directory is removed where the adapter has
-       directories, with the dead pins recorded against it.
+       directories.
 
   After step 4 no commit can name the revision: a commit needs the draft
-  token its writer registered, and the row no longer holds it. A reader
-  pins before it resolves the pointer (`pin/4`), so its pin is either
-  seen by step 4 or refused because the pointer has moved on. A crash at
+  token its writer registered, and the row no longer holds it. A crash at
   any step leaves a prefix a later sweep collects, or nothing: the marker
   outlives the objects, and it dates what is left. The previous
   revision's prefix becomes a candidate at the next commit and is aged
   from that commit, so it is collected once the grace has passed since
-  the pointer left it, unless a reader pinned it: what an athanor holds
-  of a unit is its current revision and, inside the grace, the one before
-  it. A reader that resolved the row before a commit reads the revision
-  it resolved through that grace, and pins it for longer.
+  the pointer left it: what an athanor holds of a unit is its current
+  revision and, inside the grace, the one before it. A reader that
+  resolved the row before a commit reads the revision it resolved through
+  that grace, and no longer: the grace is the whole of what a reader
+  across a commit is given. A unit's removal deletes the retired
+  revision's prefix at once (`Arca.Overlay`'s delete path), and a reader
+  across it reads `{:error, :not_found}` from then on, as at any unit no
+  committed row names.
 
   A unit that held a revision at its own path before units were served
   from their prefixes may still hold those bytes once the revision was
-  adopted into a prefix or the unit removed, when a live pin named it
-  then. Every sweep lists each root's tree and asks the overlay to clear
-  what such a unit still holds at its own path, which it does once no
-  live pin names a revision of the unit (`Arca.Overlay.collect_unit_path/2`).
+  adopted into a prefix or the unit removed, when the clearing was
+  refused then. Every sweep lists each root's tree and asks the overlay
+  to clear what such a unit still holds at its own path, which it does
+  once nothing reads it there (`Arca.Overlay.collect_unit_path/2`).
 
   ## Audit
 
@@ -102,17 +107,14 @@ defmodule Arca.StorageGC do
 
   require Logger
 
-  alias Arca.Schemas.{BuildRecord, StorageCommit, StorageUnit, Turn}
+  alias Arca.Schemas.{StorageCommit, StorageUnit}
   alias Arca.Storage.UnitLocator
   alias Arca.StorageUnits
 
   @default_grace_ms :timer.hours(24)
   @default_limit 200
-  @pins ".pins"
-  @holder_kinds ~w(turn build)
 
   @type refusal :: {:error, :no_athanor | :unavailable}
-  @type holder :: {:turn | :build, String.t()}
   @type revision_key :: {root :: String.t(), unit_key :: String.t(), revision :: String.t()}
 
   @typedoc """
@@ -122,7 +124,6 @@ defmodule Arca.StorageGC do
   @type roots :: %{
           current: MapSet.t(revision_key()),
           drafts: %{{String.t(), String.t()} => DateTime.t()},
-          pins: MapSet.t(revision_key()),
           superseded: %{revision_key() => DateTime.t()}
         }
 
@@ -158,113 +159,24 @@ defmodule Arca.StorageGC do
   def default_grace_ms, do: @default_grace_ms
 
   # ---------------------------------------------------------------------------
-  # Pins
-  # ---------------------------------------------------------------------------
-
-  @doc """
-  Pin `revision` of `unit` for a reader: `{:turn, id}` or `{:build, id}`,
-  the row whose life is the pin's. The pin is written first and the
-  pointer read after it, so a pin that answers `:ok` is one every later
-  collection sees; a pointer that has moved on answers
-  `{:error, :stale_revision}` and leaves no pin — the reader resolves the
-  row again.
-  """
-  @spec pin(Prima.Actor.t(), Arca.Storage.path(), String.t(), holder()) ::
-          :ok | {:error, :stale_revision | :invalid_holder | term()} | refusal()
-  def pin(%Prima.Actor{} = actor, unit, revision, holder) when is_binary(revision) do
-    with {:ok, _athanor} <- tenant(actor),
-         {:ok, path} <- pin_path(unit, revision, holder) do
-      inner = internal_actor(actor)
-      {root, key} = UnitLocator.unit_key(unit)
-
-      with :ok <- internally(fn -> Arca.put(inner, path, pin_body(holder), cap: :exempt) end) do
-        case StorageUnits.current(actor, root, key) do
-          {:ok, %{current_revision: ^revision}} ->
-            :ok
-
-          {:ok, _moved_on} ->
-            remove(inner, path)
-            {:error, :stale_revision}
-
-          {:error, :not_found} ->
-            remove(inner, path)
-            {:error, :stale_revision}
-
-          {:error, _} = error ->
-            remove(inner, path)
-            error
-        end
-      end
-    end
-  end
-
-  @doc "Give a pin back. Idempotent."
-  @spec unpin(Prima.Actor.t(), Arca.Storage.path(), String.t(), holder()) ::
-          :ok | {:error, :invalid_holder | term()} | refusal()
-  def unpin(%Prima.Actor{} = actor, unit, revision, holder) when is_binary(revision) do
-    with {:ok, _athanor} <- tenant(actor),
-         {:ok, path} <- pin_path(unit, revision, holder) do
-      remove(internal_actor(actor), path)
-    end
-  end
-
-  @doc """
-  Whether a live holder pins `revision` of `unit` now — what a removal
-  asks before deleting the revision it retired, leaving a pinned one to
-  the collector. A pin whose holder's row is no longer live pins nothing;
-  a listing that cannot answer is read as a pin, the safe direction.
-  """
-  @spec pinned?(Prima.Actor.t(), Arca.Storage.path(), String.t()) :: boolean()
-  def pinned?(%Prima.Actor{} = actor, unit, revision)
-      when is_list(unit) and is_binary(revision) do
-    case tenant(actor) do
-      {:ok, athanor} ->
-        case not_pinned(athanor, internal_actor(actor), %{unit: unit, revision: revision}) do
-          :ok -> false
-          _pinned_or_unanswered -> true
-        end
-
-      {:error, _} ->
-        true
-    end
-  end
-
-  @doc """
-  Whether a live holder pins any revision of `unit` now — what keeps the
-  bytes a revision left at the unit's own path, before units were served
-  from their prefixes, from the collector and from a publication that
-  supersedes them (`Arca.Overlay.collect_unit_path/2`). A listing that
-  cannot answer is read as a pin, the safe direction.
-  """
-  @spec pinned_unit?(Prima.Actor.t(), Arca.Storage.path()) :: boolean()
-  def pinned_unit?(%Prima.Actor{} = actor, unit) when is_list(unit) do
-    with {:ok, athanor} <- tenant(actor),
-         {:ok, keys} <- list_under(internal_actor(actor), pins_prefix(unit)),
-         holders = for(key <- keys, {:ok, holder} <- [parse_holder(List.last(key))], do: holder),
-         {:ok, live} <- live_holders(athanor, holders) do
-      Enum.any?(holders, &MapSet.member?(live, &1))
-    else
-      _unanswered -> true
-    end
-  end
-
-  # ---------------------------------------------------------------------------
   # Collection
   # ---------------------------------------------------------------------------
 
   @doc """
   One bounded sweep of the actor's athanor, in the moduledoc's order.
 
-  Options: `grace_ms:` (default a day), `limit:` — how many prefixes one
-  sweep collects or repairs, oldest first (default #{@default_limit}) —
-  and `dry_run: true`, which counts what the snapshot would collect and
-  touches nothing.
+  Options: `grace_ms:` (default a day), `now:` (default the cell's
+  clock), `limit:` — how many prefixes one sweep collects or repairs,
+  oldest first (default #{@default_limit}) — and `dry_run: true`, which
+  counts what the snapshot would collect and touches nothing.
   """
   @spec sweep(Prima.Actor.t(), keyword()) :: {:ok, report()} | {:error, term()} | refusal()
   def sweep(%Prima.Actor{} = actor, opts \\ []) do
     started = System.monotonic_time(:millisecond)
 
     with {:ok, athanor} <- tenant(actor),
+         {:ok, {now, _grace_ms}} <- clock(opts),
+         opts = Keyword.put(opts, :now, now),
          {:ok, roots, listing} <- snapshot(actor),
          {:ok, candidates} <- candidates(actor, roots, Keyword.put(opts, :listing, listing)) do
       limit = Keyword.get(opts, :limit, @default_limit)
@@ -287,8 +199,7 @@ defmodule Arca.StorageGC do
           report
         else
           report
-          |> date_unaged(actor, listing, roots)
-          |> drop_dead_pins(actor, listing)
+          |> date_unaged(actor, listing, roots, now)
           |> collect_leftovers(actor)
         end
 
@@ -309,16 +220,10 @@ defmodule Arca.StorageGC do
   end
 
   @doc """
-  The roots of the actor's athanor, read now: the committed pointers, the
-  units whose draft is held (with when it was registered), and the
-  revisions a live holder pins; with them, when each revision a later
-  commit replaced stopped being the pointer, which dates its prefix for
-  collection.
-
-  The rows are read before the pins are listed. A pin stands only if the
-  pointer still named its revision after the pin was written, so a
-  snapshot whose rows show a later pointer lists after every pin on the
-  earlier one was written, and sees it.
+  The roots of the actor's athanor, read now: the committed pointers and
+  the units whose draft is held (with when it was registered); with them,
+  when each revision a later commit replaced stopped being the pointer,
+  which dates its prefix for collection.
   """
   @spec roots(Prima.Actor.t()) :: {:ok, roots()} | {:error, term()} | refusal()
   def roots(%Prima.Actor{} = actor) do
@@ -330,8 +235,7 @@ defmodule Arca.StorageGC do
     with {:ok, athanor} <- tenant(actor),
          {:ok, {rows, superseded}} <-
            rescuing_db("roots", fn -> {:ok, {rooted_rows(athanor), superseded_at(athanor)}} end),
-         {:ok, listing} <- listing(actor),
-         {:ok, pins} <- live_pins(athanor, listing.pins) do
+         {:ok, listing} <- listing(actor) do
       {:ok,
        %{
          current:
@@ -348,30 +252,28 @@ defmodule Arca.StorageGC do
              into: %{},
              do: {{row.root, row.unit_key}, row.updated_at}
            ),
-         pins: pins,
          superseded: superseded
        }, listing}
     end
   end
 
   @doc """
-  The prefixes `roots` does not keep, oldest first: not the pointer's and
-  not pinned, the marker absent or the unit's draft dead past the
-  lifetime plus the grace, and older than the grace. A prefix that
-  carries no date is not a candidate.
+  The prefixes `roots` does not keep, oldest first: not the pointer's,
+  the marker absent or the unit's draft dead past the lifetime plus the
+  grace, and older than the grace. A prefix that carries no date is not
+  a candidate.
   """
   @spec candidates(Prima.Actor.t(), roots(), keyword()) ::
           {:ok, [candidate()]} | {:error, term()} | refusal()
-  def candidates(%Prima.Actor{} = actor, %{current: _, drafts: _, pins: _} = roots, opts \\ []) do
+  def candidates(%Prima.Actor{} = actor, %{current: _, drafts: _} = roots, opts \\ []) do
     with {:ok, _athanor} <- tenant(actor),
+         {:ok, {now, grace_ms}} <- clock(opts),
          {:ok, listing} <- given_listing(actor, opts) do
-      {now, grace_ms} = clock(opts)
       inner = internal_actor(actor)
 
       found =
         for {{root, key, revision} = id, keys} <- listing.groups,
             not MapSet.member?(roots.current, id),
-            not MapSet.member?(roots.pins, id),
             unit = UnitLocator.unit_path(root, key),
             {:ok, marker?} = {:ok, marker?(keys)},
             not (marker? and live_draft?(Map.get(roots.drafts, {root, key}), now, grace_ms)),
@@ -392,20 +294,20 @@ defmodule Arca.StorageGC do
 
   @doc """
   Collect one candidate, or keep it: the moduledoc's steps 4 to 6. The
-  pointer, the draft, the pins and the commit that replaced the revision
-  are read again here, whatever the snapshot said. Answers `:collected`,
-  or `{:kept, reason}` with `:committed`, `:live_draft`, `:pinned` or
-  `:replaced` — the pointer left the revision inside the grace.
+  pointer, the draft and the commit that replaced the revision are read
+  again here, whatever the snapshot said. Answers `:collected`, or
+  `{:kept, reason}` with `:committed`, `:live_draft` or `:replaced` — the
+  pointer left the revision inside the grace.
   """
   @spec collect(Prima.Actor.t(), candidate(), keyword()) ::
           :collected
-          | {:kept, :committed | :live_draft | :pinned | :replaced}
+          | {:kept, :committed | :live_draft | :replaced}
           | {:error, term()}
           | refusal()
   def collect(%Prima.Actor{} = actor, %{unit: unit, revision: revision} = candidate, opts \\ [])
       when is_binary(revision) do
-    with {:ok, athanor} <- tenant(actor) do
-      {now, grace_ms} = clock(opts)
+    with {:ok, athanor} <- tenant(actor),
+         {:ok, {now, grace_ms}} <- clock(opts) do
       inner = internal_actor(actor)
 
       with :ok <- retire_dead_draft(actor, athanor, candidate, now, grace_ms),
@@ -618,9 +520,11 @@ defmodule Arca.StorageGC do
   end
 
   # A prefix with neither a marker nor a dated revision name says nothing
-  # of its age. It is given a marker now, and a later sweep reads it.
-  defp date_unaged(report, actor, listing, roots) do
+  # of its age. It is given a marker now, dated on the sweep's clock, and
+  # a later sweep reads it.
+  defp date_unaged(report, actor, listing, roots, now) do
     inner = internal_actor(actor)
+    body = Jason.encode!(%{"observed_at" => DateTime.to_iso8601(now)})
 
     undated =
       for {{root, key, revision} = id, keys} <- listing.groups,
@@ -630,7 +534,6 @@ defmodule Arca.StorageGC do
           do: UnitLocator.marker_path(UnitLocator.unit_path(root, key), revision)
 
     Enum.each(undated, fn path ->
-      body = Jason.encode!(%{"observed_at" => DateTime.to_iso8601(DateTime.utc_now())})
       internally(fn -> Arca.put(inner, path, body, cap: :exempt) end)
     end)
 
@@ -639,7 +542,7 @@ defmodule Arca.StorageGC do
 
   # What a revision served at the unit's own path before units were served
   # from their prefixes left there, once its unit is retired or adopted
-  # and no live pin names a revision of the unit: one listing of each
+  # and nothing reads it there: one listing of each
   # root's tree, its staging areas and the units' own paths told apart by
   # the grammar, and the overlay's call for each unit that still holds
   # bytes at its own path (`Arca.Overlay.collect_unit_path/2`), which
@@ -675,21 +578,6 @@ defmodule Arca.StorageGC do
     end
   end
 
-  # A pin whose holder is no longer live holds nothing.
-  defp drop_dead_pins(report, actor, listing) do
-    {:ok, athanor} = tenant(actor)
-    inner = internal_actor(actor)
-    holders = for {_id, holder, _path} <- listing.pins, do: holder
-
-    with {:ok, live} <- live_holders(athanor, holders) do
-      for {_id, holder, path} <- listing.pins, not MapSet.member?(live, holder) do
-        remove(inner, path)
-      end
-    end
-
-    report
-  end
-
   # ---------------------------------------------------------------------------
   # One candidate
   # ---------------------------------------------------------------------------
@@ -715,9 +603,8 @@ defmodule Arca.StorageGC do
   # Step 4's second half: the roots of this one prefix, read now.
   defp unrooted(athanor, inner, %{root: root, unit_key: key} = candidate, now, grace_ms) do
     with {:ok, row} <- rescuing_db("unrooted", fn -> {:ok, fetch(athanor, root, key)} end),
-         :ok <- not_the_pointer(row, candidate.revision),
-         :ok <- no_live_draft(inner, row, candidate, now, grace_ms) do
-      not_pinned(athanor, inner, candidate)
+         :ok <- not_the_pointer(row, candidate.revision) do
+      no_live_draft(inner, row, candidate, now, grace_ms)
     end
   end
 
@@ -770,14 +657,6 @@ defmodule Arca.StorageGC do
 
   defp no_live_draft(_inner, _row, _candidate, _now, _grace_ms), do: :ok
 
-  defp not_pinned(athanor, inner, %{unit: unit, revision: revision}) do
-    with {:ok, keys} <- list_under(inner, pins_prefix(unit) ++ [revision]),
-         holders = for(key <- keys, {:ok, holder} <- [parse_holder(List.last(key))], do: holder),
-         {:ok, live} <- live_holders(athanor, holders) do
-      if Enum.any?(holders, &MapSet.member?(live, &1)), do: {:kept, :pinned}, else: :ok
-    end
-  end
-
   # Steps 5 and 6. The marker outlives every object, so what a crash leaves
   # is still a dated prefix.
   defp delete_prefix(inner, unit, revision) do
@@ -787,8 +666,7 @@ defmodule Arca.StorageGC do
     with {:ok, keys} <- list_under(inner, prefix),
          :ok <- remove_each(inner, Enum.reject(keys, &(&1 == marker))),
          :ok <- remove(inner, marker),
-         :ok <- internally(fn -> Arca.delete_tree(inner, prefix) end),
-         :ok <- internally(fn -> Arca.delete_tree(inner, pins_prefix(unit) ++ [revision]) end) do
+         :ok <- internally(fn -> Arca.delete_tree(inner, prefix) end) do
       :collected
     end
   end
@@ -822,14 +700,14 @@ defmodule Arca.StorageGC do
   end
 
   # Every key under the athanor's staging areas, sorted into revision
-  # prefixes, pins and the rest. One listing per overlaid root, inside the
+  # prefixes and the rest. One listing per overlaid root, inside the
   # actor's athanor.
   defp listing(actor) do
     inner = internal_actor(actor)
 
     Enum.reduce_while(
       Arca.Storage.overlay_roots(),
-      {:ok, %{groups: %{}, pins: [], unrecognized: 0}},
+      {:ok, %{groups: %{}, unrecognized: 0}},
       fn root, {:ok, acc} ->
         case list_under(inner, staging_area(root)) do
           {:ok, keys} -> {:cont, {:ok, Enum.reduce(keys, acc, &sort_key(root, &1, &2))}}
@@ -837,19 +715,6 @@ defmodule Arca.StorageGC do
         end
       end
     )
-  end
-
-  defp sort_key(root, [root, _staging, @pins | rest] = path, acc) do
-    case staged_at(root, rest) do
-      {:ok, key, revision, [name]} ->
-        case parse_holder(name) do
-          {:ok, holder} -> %{acc | pins: [{{root, key, revision}, holder, path} | acc.pins]}
-          :error -> %{acc | unrecognized: acc.unrecognized + 1}
-        end
-
-      _not_a_pin ->
-        %{acc | unrecognized: acc.unrecognized + 1}
-    end
   end
 
   defp sort_key(root, [root, _staging | rest] = path, acc) do
@@ -881,8 +746,6 @@ defmodule Arca.StorageGC do
 
   defp staging_area(root), do: UnitLocator.staging_area(root)
 
-  defp pins_prefix([root | rest]), do: staging_area(root) ++ [@pins | rest]
-
   # Every adapter answers the prefix listing (`c:Arca.Storage.list_prefix/2`),
   # so a staging area is read as keys, never walked as a tree.
   defp list_under(inner, prefix), do: Arca.Storage.list_prefix(inner, prefix)
@@ -894,8 +757,16 @@ defmodule Arca.StorageGC do
   # Ages
   # ---------------------------------------------------------------------------
 
+  # The sweep's clock and grace: the cell's clock
+  # (`Arca.ServerMetaStorage.now!/0`), the one every lease is written
+  # from, unless the caller names the instant. A store that cannot answer
+  # is `{:error, :unavailable}`.
   defp clock(opts) do
-    {Keyword.get(opts, :now, DateTime.utc_now()), Keyword.get(opts, :grace_ms, @default_grace_ms)}
+    rescuing_db("clock", fn ->
+      {:ok,
+       {Keyword.get_lazy(opts, :now, &Arca.ServerMetaStorage.now!/0),
+        Keyword.get(opts, :grace_ms, @default_grace_ms)}}
+    end)
   end
 
   defp live_draft?(nil, _now, _grace_ms), do: false
@@ -953,78 +824,6 @@ defmodule Arca.StorageGC do
 
   defp ok_or_error({:ok, %DateTime{}} = ok), do: ok
   defp ok_or_error(_), do: :error
-
-  # ---------------------------------------------------------------------------
-  # Pins and their holders
-  # ---------------------------------------------------------------------------
-
-  defp pin_path(unit, revision, {kind, id})
-       when kind in [:turn, :build] and is_binary(id) and is_list(unit) do
-    case Arca.Storage.locate(unit) do
-      loc when loc in [:not_overlaid, :above_unit] ->
-        {:error, :invalid_holder}
-
-      _unit ->
-        if segment?(id) and segment?(revision),
-          do: {:ok, pins_prefix(unit) ++ [revision, "#{kind}.#{id}"]},
-          else: {:error, :invalid_holder}
-    end
-  end
-
-  defp pin_path(_unit, _revision, _holder), do: {:error, :invalid_holder}
-
-  defp pin_body({kind, id}) do
-    Jason.encode!(%{
-      "holder" => "#{kind}.#{id}",
-      "pinned_at" => DateTime.to_iso8601(DateTime.utc_now())
-    })
-  end
-
-  defp parse_holder(name) do
-    with [kind, id] when kind in @holder_kinds <- String.split(name, ".", parts: 2),
-         true <- segment?(id) do
-      {:ok, {String.to_existing_atom(kind), id}}
-    else
-      _ -> :error
-    end
-  end
-
-  # A holder id and a revision are each one path segment of a pin's key.
-  defp segment?(name), do: Regex.match?(~r/\A[A-Za-z0-9_-]+\z/, name)
-
-  defp live_pins(athanor, pins) do
-    with {:ok, live} <- live_holders(athanor, for({_id, holder, _path} <- pins, do: holder)) do
-      {:ok,
-       for({id, holder, _path} <- pins, MapSet.member?(live, holder), into: MapSet.new(), do: id)}
-    end
-  end
-
-  # A pin lives as long as its holder's row does: an open turn, a build
-  # still started.
-  defp live_holders(_athanor, []), do: {:ok, MapSet.new()}
-
-  defp live_holders(athanor, holders) do
-    turn_ids = for {:turn, id} <- holders, do: id
-    build_ids = for {:build, id} <- holders, do: id
-
-    rescuing_db("live_holders", fn ->
-      turns =
-        from(t in where_athanor(Turn, athanor),
-          where: t.id in ^turn_ids and t.status in ^Prima.TurnState.open_statuses(),
-          select: t.id
-        )
-        |> Arca.Repo.all()
-
-      builds =
-        from(b in where_athanor(BuildRecord, athanor),
-          where: b.id in ^build_ids and b.status == "started",
-          select: b.id
-        )
-        |> Arca.Repo.all()
-
-      {:ok, MapSet.new(Enum.map(turns, &{:turn, &1}) ++ Enum.map(builds, &{:build, &1}))}
-    end)
-  end
 
   # ---------------------------------------------------------------------------
   # Rows
@@ -1094,8 +893,8 @@ defmodule Arca.StorageGC do
 
   # Focused on the actor's athanor and no other; the user_id is
   # attribution only. The server's own actor NARROWED to this athanor:
-  # `system: true` is what lets the sweep write the pin and date files
-  # under a reserved root, and `scope: :athanor` is what keeps its
+  # `system: true` is what lets the sweep write the date files under a
+  # reserved root, and `scope: :athanor` is what keeps its
   # listings inside the one athanor. A bare `Prima.Actor.system/0` here
   # would widen every sweep to platform scope with nothing to fail.
   defp internal_actor(%Prima.Actor{athanor_id: athanor}) do

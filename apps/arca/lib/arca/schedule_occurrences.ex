@@ -18,13 +18,18 @@ defmodule Arca.ScheduleOccurrences do
   from `Arca.Execution.admit/2`), and only for the boot that claims it:
   a member whose claim a recoverer took over (`recover/4`) starts
   nothing, so only the recoverer's re-run runs. A `claimed` occurrence is
-  one nothing ever invoked, and the run's end closes it (`finish/5`).
+  one nothing ever invoked, and the run's end closes it (`finish/6`).
 
   An occurrence is ended only by the claimant that holds it, for the
-  execution it intends to end: `finish/5` and `settle_dead/4` are each a
-  compare-and-set on the claimant and the execution, so a member whose
-  occurrence a successor recovered and started ends nothing of the
-  successor's (`:stale`).
+  execution it intends to end, and only under the member's live slot:
+  `finish/6` and `settle_dead/4` each lock the occurrence's row, check
+  the slot under that lock (`Arca.CronSchedule.slot_fence/0`) and then
+  compare-and-set the claimant and the execution, in the one transaction
+  that writes the terminal state and the outcome's record. A member whose
+  slot a successor took over ends nothing and records nothing, however
+  its cached standing reads (`:not_owner`); one whose occurrence a
+  successor recovered and started ends nothing of the successor's
+  (`:stale`).
 
   `claimed_by` names the BOOT that took the occurrence (`Prima.Boot.id/0`),
   not its node: an occurrence is held while its claimant is a live member
@@ -343,6 +348,12 @@ defmodule Arca.ScheduleOccurrences do
   rolls the finish back and is answered as it is; any other answer
   raises `ArgumentError`, which rolls it back too.
 
+  The occurrence's row is locked first and the member's slot checked
+  under that lock (`Arca.CronSchedule.slot_fence/0`), in the transaction
+  that moves the row and runs the closure, so a member whose slot was
+  taken over, even while it waited on the lock, moves nothing and
+  records nothing: `{:error, :not_owner}`.
+
   Answers `{:ok, 1}`, or `{:error, :stale}` when nothing matched: the
   occurrence was ended already, or another claimant or execution holds
   it now, and nothing moved.
@@ -355,7 +366,7 @@ defmodule Arca.ScheduleOccurrences do
           String.t(),
           keyword()
         ) ::
-          {:ok, 1} | {:error, :stale | :no_athanor | :database_error | term()}
+          {:ok, 1} | {:error, :stale | :not_owner | :no_athanor | :database_error | term()}
   def finish(actor, occurrence_id, claimed_by, execution_id, state, opts \\ [])
 
   def finish(
@@ -374,33 +385,57 @@ defmodule Arca.ScheduleOccurrences do
       |> open_held_by(occurrence_id, claimed_by)
       |> where_execution(execution_id)
 
-    Errors.with_db_rescue("ScheduleOccurrences.finish", fn ->
-      case Keyword.fetch(opts, :also) do
-        :error ->
-          ended(query, state)
+    also = Keyword.get(opts, :also)
 
-        {:ok, also} when is_function(also, 1) ->
-          ended_with(query, state, athanor_id, occurrence_id, also)
-      end
+    Errors.with_db_rescue("ScheduleOccurrences.finish", fn ->
+      ending(athanor_id, occurrence_id, fn ->
+        with {:ok, 1} <- ended(query, state),
+             :ok <- ran(also, athanor_id, occurrence_id) do
+          {:ok, 1}
+        end
+      end)
     end)
   end
 
   def finish(%Prima.Actor{}, _occurrence_id, _claimed_by, _execution_id, _state, _opts),
     do: {:error, :no_athanor}
 
-  # The finish and the owner's closure in one transaction: the closure
-  # runs only once the row moved, and a refusal rolls the move back.
+  # An occurrence's end (`finish/6`, `settle_dead/4`): one locking
+  # transaction that locks the occurrence's row, checks the member's slot
+  # under that lock (`Arca.CronSchedule.slot_fence/0`) and only then runs
+  # `write`, whose `{:ok, value}` commits and whose `{:error, reason}`
+  # rolls the transaction back (`Arca.Repo.committed/1`). The lock is
+  # taken before the slot is read, so a member whose slot was taken over
+  # while it waited on the lock writes nothing, and a takeover that starts
+  # after the check waits for the end to commit.
   # arca:db-raise-ok inside the caller's rescue
-  defp ended_with(query, state, athanor_id, occurrence_id, also) do
+  defp ending(athanor_id, occurrence_id, write) do
     Arca.Repo.locking_transaction(fn ->
-      with {:ok, 1} <- ended(query, state),
-           :ok <- also_ran(also.(finished(athanor_id, occurrence_id))) do
-        1
-      else
-        {:error, reason} -> Arca.Repo.rollback(reason)
-      end
+      lock_occurrence(athanor_id, occurrence_id)
+
+      with {:error, reason} <- Arca.CronSchedule.slot_fence(),
+           do: Arca.Repo.rollback(reason)
+
+      write.() |> Arca.Repo.committed()
     end)
   end
+
+  # arca:db-raise-ok inside the end's transaction
+  defp lock_occurrence(athanor_id, occurrence_id) do
+    from(o in ScheduleOccurrence,
+      where: o.athanor_id == ^athanor_id and o.id == ^occurrence_id,
+      select: o.id
+    )
+    |> Arca.QueryHelpers.for_update()
+    |> Arca.Repo.one()
+  end
+
+  # The owner's closure, run once the row moved and handed what the end
+  # read there; an end that carries none runs nothing.
+  defp ran(nil, _athanor_id, _occurrence_id), do: :ok
+
+  defp ran(also, athanor_id, occurrence_id) when is_function(also, 1),
+    do: also_ran(also.(finished(athanor_id, occurrence_id)))
 
   # What the finish hands its closure, read in its transaction.
   # arca:db-raise-ok inside the finish's transaction
@@ -600,35 +635,39 @@ defmodule Arca.ScheduleOccurrences do
   holds it: one never invoked (`claimed`, with no execution) `failed`,
   one started under `execution_id` `uncertain`, since the execution may
   have had its effect. Each is a statement guarded on the occurrence's
-  state, claimant and execution; nothing is read first.
+  state, claimant and execution, made under the occurrence's row lock and
+  the member's slot as `finish/6`'s is (`{:error, :not_owner}` for a
+  member whose slot was taken over, with nothing moved).
 
   Answers the state written, or `{:error, :stale}` when neither matched:
   the occurrence was ended already, or another claimant or execution
   holds it now, and nothing moved.
   """
   @spec settle_dead(Prima.Actor.t(), String.t(), String.t() | nil, String.t() | nil) ::
-          {:ok, String.t()} | {:error, :stale | :no_athanor | :database_error}
+          {:ok, String.t()} | {:error, :stale | :not_owner | :no_athanor | :database_error}
   def settle_dead(%Prima.Actor{athanor_id: athanor_id}, occurrence_id, claimed_by, execution_id)
       when is_binary(athanor_id) and athanor_id != "" and
              (is_binary(claimed_by) or is_nil(claimed_by)) and
              (is_binary(execution_id) or is_nil(execution_id)) do
     Errors.with_db_rescue("ScheduleOccurrences.settle_dead", fn ->
-      never_invoked =
-        athanor_id
-        |> open_held_by(occurrence_id, claimed_by)
-        |> where_execution(nil)
-        |> ended("failed")
+      ending(athanor_id, occurrence_id, fn ->
+        never_invoked =
+          athanor_id
+          |> open_held_by(occurrence_id, claimed_by)
+          |> where_execution(nil)
+          |> ended("failed")
 
-      case {never_invoked, execution_id} do
-        {{:ok, 1}, _execution_id} ->
-          {:ok, "failed"}
+        case {never_invoked, execution_id} do
+          {{:ok, 1}, _execution_id} ->
+            {:ok, "failed"}
 
-        {{:error, :stale}, nil} ->
-          {:error, :stale}
+          {{:error, :stale}, nil} ->
+            {:error, :stale}
 
-        {{:error, :stale}, execution_id} ->
-          started_uncertain(athanor_id, occurrence_id, claimed_by, execution_id)
-      end
+          {{:error, :stale}, execution_id} ->
+            started_uncertain(athanor_id, occurrence_id, claimed_by, execution_id)
+        end
+      end)
     end)
   end
 
@@ -678,9 +717,12 @@ defmodule Arca.ScheduleOccurrences do
     )
   end
 
+  # The end is dated on the cell's clock, as the claim is.
   # arca:db-raise-ok inside the caller's rescue
   defp ended(query, state) do
-    case Arca.Repo.update_all(query, set: [state: state, ended_at: DateTime.utc_now()]) do
+    case Arca.Repo.update_all(query,
+           set: [state: state, ended_at: Arca.ServerMetaStorage.now!()]
+         ) do
       {1, _} -> {:ok, 1}
       {0, _} -> {:error, :stale}
     end
