@@ -7,8 +7,12 @@ defmodule PrismWeb.FileController do
   `GET /a/:athanor/files/download/*path`, where the path is the console's
   (`data/reports/q3.csv`).
 
-  The session cookie names the person; the URL's athanor is focused the
-  way a LiveView mount focuses it (so a non-member gets nothing); the
+  The session cookie names the person, who is established before the
+  URL's athanor is resolved: a visitor with no standing session is sent
+  to sign in whether the athanor exists or not, so the route tells an
+  outsider nothing of which athanors exist. The athanor is then focused
+  the way a LiveView mount focuses it (so a non-member gets the 404 a
+  missing athanor gets); the
   path is resolved by `Arca.Files.locate/2`, so only a shown folder can
   be named and the server's own storage has no address. What comes back
   is a download with a content type from a short allowlist (anything
@@ -26,7 +30,8 @@ defmodule PrismWeb.FileController do
   def show(conn, %{"athanor" => route, "path" => segments}) when is_list(segments) do
     token = get_session(conn, CyfrWeb.SignInResponse.session_key())
 
-    with {:ok, athanor} <- Athanors.by_route_slug(route),
+    with {:ok, _person} <- authenticate(token, nil),
+         {:ok, athanor} <- Athanors.by_route_slug(route),
          {:ok, ctx} <- authenticate(token, athanor.id),
          {:ok, physical} <- located(ctx, Enum.join(segments, "/")) do
       name = List.last(segments)

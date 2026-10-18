@@ -8,9 +8,12 @@ defmodule PrismWeb.AttachmentController do
   where the last segment is the ref's STORED name (`<n>-<basename>` — the
   index makes two same-named uploads separately addressable).
 
-  The session cookie names the person; the URL's athanor is focused the
-  way a LiveView mount focuses it (`Sanctum.Context.focus/2`, so a
-  non-member gets nothing); the message is read tenant-scoped, the file
+  The session cookie names the person, who is established before the
+  URL's athanor is resolved: a visitor with no standing session is sent
+  to sign in whether the athanor exists or not, so the route tells an
+  outsider nothing of which athanors exist. The athanor is then focused
+  the way a LiveView mount focuses it (`Sanctum.Context.focus/2`, so a
+  non-member gets the 404 a missing athanor gets); the message is read tenant-scoped, the file
   must be one of the message's own refs, and the path served is rebuilt
   from the row's identity (`Aqua.attachment_blob_path/3`) — never taken
   from the URL or the stored payload. What comes back is a download with
@@ -31,7 +34,8 @@ defmodule PrismWeb.AttachmentController do
   def show(conn, %{"athanor" => route, "message_id" => message_id, "filename" => filename}) do
     token = get_session(conn, CyfrWeb.SignInResponse.session_key())
 
-    with {:ok, athanor} <- Athanors.by_route_slug(route),
+    with {:ok, _person} <- CyfrWeb.ContextGuard.authenticate(token),
+         {:ok, athanor} <- Athanors.by_route_slug(route),
          {:ok, ctx} <- CyfrWeb.ContextGuard.authenticate(token, athanor.id),
          {:ok, msg} <- Threads.get_message(Sanctum.Context.actor(ctx), message_id),
          {:ok, ref} <- find_ref(msg, filename),
