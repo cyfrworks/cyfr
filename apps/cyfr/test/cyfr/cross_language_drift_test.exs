@@ -304,30 +304,310 @@ defmodule Cyfr.CrossLanguageDriftTest do
   # The readers of the shared vector files
   # ==========================================================================
 
-  # One vector file consumed by a test on every side: each reader names its
-  # file and every section it holds its module to. The values are each
-  # reader's own assertions; this roster fails when a reader stops reading.
-  test "each side's test reads the shared vectors it is held to" do
-    for {test_file, vectors, sections} <- [
-          {"apps/prima/test/prima/consent_signal_test.exs", "confirmation.json", [~s("signal")]},
-          {"apps/prima/test/prima/mcp/message_test.exs", "confirmation.json", [~s("signal")]},
-          {"apps/cyfr/test/cyfr_web/controllers/api_error_test.exs", "confirmation.json",
-           [~s("signal")]},
-          {"apps/codex/cmd/consent_error_test.go", "confirmation.json", [~s("signal")]},
-          {"apps/cyfr/assets/test/carrier/carry.test.mjs", "carry.json",
-           ~w(vectors.fragments.parse vectors.fragments.valid vectors.max_fragment_bytes
-              vectors.returns)},
-          {"apps/cyfr/assets/test/system_layer/device_key.test.mjs", "device_cert.json",
-           ~w(certs.challenge_refusals certs.proof_cases certs.refusals certs.proof_protocol
-              certs.purposes)}
-        ] do
-      source = read!(test_file)
-      assert source =~ vectors, "#{test_file} does not read #{vectors}"
+  # One vector file consumed by a test on every side: every vector file
+  # under tests/fixtures, each with every file that reads it, on any side
+  # (a suite, a test support module, an image harness, a proof), and every
+  # section that reader holds its side to. The values are each reader's own
+  # assertions; this roster fails when a vector file has no row, a row
+  # names a file that is gone, or a reader stops reading its file or a
+  # section of it. A section is a top-level key, read as the reader's
+  # language spells a read of it (`sections_read/3`); `a.b` is the nested
+  # path `.a.b` a JavaScript reader names.
+  @vector_readers %{
+    "account_names.json" => [
+      {"apps/codex/cmd/profile_test.go", ~w(unicode keys same different)},
+      {"apps/prima/test/prima/authority/blob_test.exs", ~w(unicode keys same different)}
+    ],
+    "canvas_shape.json" => [
+      {"apps/cyfr/assets/test/toolkit/tree.test.mjs", ~w(times)},
+      {"apps/prima/test/prima/canvas/shape_test.exs",
+       ~w(types max_depth reasons shapes canonical spellings times values results)},
+      {"apps/prima/test/prima/manifest/results_test.exs", ~w(values results)}
+    ],
+    "canvas_wire.json" => [
+      {"apps/cyfr/assets/test/toolkit/support.mjs", ~w()},
+      {"apps/prima/test/prima/canvas_wire_test.exs",
+       ~w(version to_prism_verbs to_toolkit_verbs messages paths)}
+    ],
+    "carry.json" => [
+      {"apps/cyfr/assets/test/carrier/carry.test.mjs",
+       ~w(fragments.parse fragments.valid max_fragment_bytes payload returns)},
+      {"apps/prima/test/prima/carry_test.exs",
+       ~w(envelopes fragments identity keys max_fragment_bytes max_payload_bytes operations outcomes payload payload_digest protocol replay returns verify)}
+    ],
+    "component_refs.json" => [
+      {"apps/codex/internal/ref/ref_fixture_test.go", ~w(cases version_ordering)},
+      {"apps/cyfr/assets/test/sdk/wire.test.mjs", ~w(tincture_urls)},
+      {"apps/prima/test/prima/tincture_wire_test.exs", ~w(tincture_urls)}
+    ],
+    "confirmation.json" => [
+      {"apps/codex/cmd/consent_error_test.go", ~w(ref signal)},
+      {"apps/codex/internal/confirmation/confirmation_test.go", ~w(protocol ref)},
+      {"apps/cyfr/test/cyfr_web/controllers/api_error_test.exs", ~w(signal)},
+      {"apps/prima/test/prima/confirmation_test.exs",
+       ~w(digest protocol record ref refusals variations)},
+      {"apps/prima/test/prima/consent_signal_test.exs", ~w(record ref signal)},
+      {"apps/prima/test/prima/mcp/message_test.exs", ~w(signal)}
+    ],
+    "consent_preview.json" => [
+      {"apps/codex/cmd/profile_test.go", ~w(kinds preview)},
+      {"apps/cyfr/test/cyfr/consent_preview_render_test.exs", ~w(origins preview)},
+      {"apps/prima/test/prima/consent_preview_test.exs",
+       ~w(kinds narrowable_kinds origins preview refusals version)},
+      {"apps/prima/test/prima/origin_test.exs", ~w(origins)}
+    ],
+    "device.json" => [
+      {"apps/cyfr/assets/test/system_layer/device_key.test.mjs",
+       ~w(continuous_fields key_digest messages protocol refusals types)},
+      {"apps/cyfr/test/emissary/web/device_channel_test.exs", ~w(messages refusals)},
+      {"apps/prima/test/prima/device_test.exs",
+       ~w(continuous_fields key_digest messages protocol refusals types)}
+    ],
+    "device_cert.json" => [
+      {"apps/cyfr/assets/test/system_layer/device_key.test.mjs",
+       ~w(certificates challenge_refusals challenges keys proof_cases proof_protocol proofs purposes refusals verify)},
+      {"apps/prima/test/prima/device_cert_test.exs",
+       ~w(certificate_protocol certificates challenge_refusals challenges homes issued_at keys lifetime_ms proof_cases proof_protocol proofs purposes refusals reserved_client_ids verify)}
+    ],
+    "feed.json" => [
+      {"apps/cyfr/assets/test/toolkit/support.mjs", ~w(results envelopes)},
+      {"apps/cyfr/test/opus/feeds_test.exs", ~w(bindings outputs)},
+      {"apps/prima/test/prima/canvas/shape_test.exs", ~w(reasons bindings results)},
+      {"apps/prima/test/prima/feed_test.exs",
+       ~w(intervals args_max_bytes result_max_bytes reasons bindings binding_ids inputs crons results envelopes bounds)}
+    ],
+    "guest_error.json" => [
+      {"apps/cyfr/test/cyfr/docs_drift_test.exs", ~w(envelope fallback)},
+      {"apps/locus/test/locus/runtime/formula_handler_vectors_test.exs",
+       ~w(encode_error setup_required)},
+      {"apps/prima/test/prima/wit_response_vectors_test.exs", ~w(envelope fallback)}
+    ],
+    "host_api.json" => [
+      {"apps/cyfr/test/opus/host/attached_fetch_test.exs", ~w(version calls)},
+      {"apps/cyfr/test/opus/host_egress_test.exs", ~w(egress_pin_cases egress_policy_cases)},
+      {"apps/cyfr/test/opus/host_listener_test.exs", ~w(calls pre_body_refusals body_refusals)},
+      {"apps/cyfr/test/opus/host_test.exs", ~w(version calls report connection_cases)},
+      {"apps/locus/test/locus/runtime/formula_handler_runner_test.exs", ~w(connection_cases)},
+      {"apps/locus/test/locus/runtime/host_client_test.exs",
+       ~w(connection_cases egress_pin_cases egress_policy_cases)},
+      {"apps/prima/test/prima/host_api_test.exs",
+       ~w(routes retries timeouts_ms max_body_bytes max_answer_bytes window_ms standing keys calls pre_body_refusals report retry_identity connection_cases egress_pin_cases egress_policy_cases egress_pin_internal_purposes frame_cases)},
+      {"apps/prima/test/prima/network_test.exs",
+       ~w(framing_headers override_headers override_prefixes credential_headers)},
+      {"apps/prima/test/prima/runner_relay_test.exs", ~w(version max_body_bytes keys calls)},
+      {"apps/prima/test/prima/worker_auth_test.exs", ~w(keys report)},
+      {"apps/prima/test/prima/worker_wire_test.exs",
+       ~w(version auth_header routes calls body_refusals report egress_pin_cases egress_pin_internal_purposes)},
+      {"tests/locus-runtime-image/control_plane.py", ~w()},
+      {"tests/locus-runtime-image/runners.py", ~w(report)},
+      {"tests/locus-runtime-image/worker_auth.py",
+       ~w(version auth_header routes retries timeouts_ms window_ms standing keys calls pre_body_refusals body_refusals report retry_identity connection_cases egress_pin_cases egress_policy_cases egress_pin_internal_purposes frame_cases framing_headers override_headers override_prefixes credential_headers)}
+    ],
+    "identity.json" => [
+      {"apps/codex/cmd/member_test.go", ~w(identifiers)},
+      {"apps/prima/test/prima/identity_test.exs",
+       ~w(chains directory entries identifiers keys kinds kits locate max_entry_bytes prefix protocol requests)}
+    ],
+    "keeper_protocol.json" => [
+      {"apps/cyfr/test/emissary/external/backend_definition_test.exs", ~w(reserved_env_prefixes)},
+      {"apps/locus/keeper/internal/protocol/protocol_test.go",
+       ~w(reserved_env_prefixes reserved_env signals bounds request_bounds rlimits frames control_frames relay_frames valid_requests invalid_requests replies)},
+      {"apps/locus/keeper/internal/relay/relay_test.go", ~w(relay_streams)},
+      {"apps/locus/test/locus/config_test.exs", ~w(valid_requests invalid_requests)},
+      {"apps/locus/test/locus/keeper_test.exs", ~w(valid_requests)},
+      {"apps/locus/test/locus/keeper_vectors_test.exs",
+       ~w(control_frames relay_frames valid_requests replies)},
+      {"apps/locus/test/locus/runtime/keeper_channel_test.exs",
+       ~w(control_frames valid_requests replies)},
+      {"apps/locus/test/locus/runtime/keeper_memory_test.exs", ~w(valid_requests replies)},
+      {"apps/prima/test/prima/keeper_protocol_test.exs",
+       ~w(reserved_env_prefixes reserved_env signals bounds request_bounds rlimits frames control_frames relay_frames relay_streams valid_requests invalid_requests replies)}
+    ],
+    "layout.json" => [
+      {"apps/prima/test/prima/layout_test.exs", ~w(valid canonical digest invalid)}
+    ],
+    "locus_backends.json" => [
+      {"apps/cyfr/test/emissary/external/backend_definition_test.exs",
+       ~w(reserved_env_prefixes literal_env_names)},
+      {"apps/cyfr/test/emissary/external/backends_test.exs",
+       ~w(version bounds owner sync status)},
+      {"apps/locus/test/locus/backends/auth_test.exs",
+       ~w(auth_header routes key_hex builds_key_hex sync status invoke auth_rejected)},
+      {"apps/locus/test/locus/backends/service_test.exs",
+       ~w(version routes key_hex owner hello sync release status invoke invalid_messages fence_rejected refusals)},
+      {"apps/locus/test/locus/listener_test.exs", ~w(version service key_hex owner hello sync)},
+      {"apps/prima/test/prima/locus_backends_test.exs",
+       ~w(version domain service label auth_header boot_header window_ms routes statuses bounds reserved_env_prefixes literal_env_names key_hex control_key_hex seal_key_hex owner owner_key_hex builds_key_hex key_text hello sync release status invoke seal header_parse valid_fields invalid_fields invalid_messages auth_rejected fence_rejected refusals masking)},
+      {"tests/locus-backends-image/harness.py",
+       ~w(version service label auth_header boot_header window_ms routes statuses bounds key_hex control_key_hex seal_key_hex owner owner_key_hex release status invoke seal refusals)}
+    ],
+    "locus_builds.json" => [
+      {"apps/cyfr/test/support/scripted_builder.ex", ~w(key_hex request_key_hex lines)},
+      {"apps/locus/test/locus/backends/auth_test.exs",
+       ~w(auth_header routes key_hex backends_key_hex request auth_rejected)},
+      {"apps/locus/test/locus/builds_vectors_test.exs",
+       ~w(auth_header routes statuses bounds key_hex request_key_hex request health_request lines invalid_requests auth_rejected)},
+      {"apps/prima/test/prima/builder_protocol_test.exs",
+       ~w(version domain service label auth_header window_ms routes statuses bounds languages language_for stages component_wasm component_lockfile key_hex request_key_hex backends_key_hex backends_request_key_hex key_text request health_request lines invalid_requests invalid_lines auth_rejected)},
+      {"tests/builder-image/stack.py",
+       ~w(version service label auth_header routes statuses key_hex request_key_hex request)}
+    ],
+    "locus_roles.json" => [
+      {"apps/prima/test/prima/locus_roles_test.exs", ~w(release roles)},
+      {"tests/builder-image/stack.py", ~w(release roles)},
+      {"tests/compose-proof/run.sh", ~w(release)},
+      {"tests/locus-backends-image/harness.py", ~w(release roles)},
+      {"tests/locus-runtime-image/stack.py", ~w(release roles)}
+    ],
+    "mcp_wire.json" => [
+      {"apps/codex/internal/mcp/wire_vectors_test.go",
+       ~w(protocol_version supported meta header_values named_subject error_codes consent_tags consent_errors)},
+      {"apps/prima/test/prima/mcp/wire_vectors_test.exs",
+       ~w(protocol_version supported meta error_codes consent_tags)}
+    ],
+    "person_assertion.json" => [
+      {"apps/prima/test/prima/person_assertion_test.exs",
+       ~w(assertions identity keys protocol refusals transport verify)}
+    ],
+    "release_manifest.json" => [
+      {"apps/codex/cmd/lifecycle_test.go", ~w(valid signature)},
+      {"apps/codex/internal/release/manifest_test.go", ~w(valid refused signature)},
+      {"apps/codex/internal/scaffold/scaffold_test.go", ~w(signature)},
+      {"tests/ci-release-graph.py", ~w(valid refused signature)}
+    ],
+    "restore_barrier.json" => [
+      {"apps/codex/cmd/restore_test.go", ~w(barred_exit declare_expr declared_prefix name)},
+      {"apps/cyfr/test/cyfr/platform_settings_roster_test.exs", ~w(name)},
+      {"tests/compose-proof/run.sh", ~w()}
+    ],
+    "restore_kit.json" => [
+      {"apps/cyfr/assets/test/system_layer/recovery.test.mjs",
+       ~w(challenge_bytes kit other_kit protocol refused valid)},
+      {"apps/cyfr/test/sanctum/restore_kit_proof_test.exs", ~w(kit refused valid)},
+      {"apps/prima/test/prima/identity_restore_kit_test.exs",
+       ~w(challenge_bytes kit other_kit protocol refused valid)}
+    ],
+    "runner_control.json" => [
+      {"apps/locus/test/locus/runtime/runner_control_vectors_test.exs",
+       ~w(max_line_bytes valid invalid)},
+      {"apps/prima/test/prima/runner_control_test.exs",
+       ~w(version max_line_bytes max_input_bytes max_open valid invalid)}
+    ],
+    "runner_relay.json" => [
+      {"apps/locus/test/locus/runtime/relay_vectors_test.exs",
+       ~w(attempt initial_credit exchange refusals)},
+      {"apps/prima/test/prima/runner_relay_test.exs",
+       ~w(version attempt max_body_bytes max_frame_bytes initial_credit exchange refusals)}
+    ],
+    "tincture_wire.json" => [
+      {"apps/cyfr/assets/test/sdk/support.mjs", ~w()},
+      {"apps/prima/test/prima/tincture_wire_test.exs",
+       ~w(version bearer_header routes requests public_request answers refusal stream shell)}
+    ],
+    "worker_api.json" => [
+      {"apps/cyfr/test/opus/worker_client_test.exs", ~w(requests status)},
+      {"apps/locus/test/locus/runtime/worker_listener_test.exs", ~w(requests status)},
+      {"apps/prima/test/prima/worker_api_test.exs",
+       ~w(version routes retries timeouts_ms requests status)},
+      {"apps/prima/test/prima/worker_auth_test.exs", ~w(status)},
+      {"apps/prima/test/prima/worker_protocol_test.exs", ~w(retries timeouts_ms status)},
+      {"apps/prima/test/prima/worker_wire_test.exs", ~w(version routes requests)},
+      {"tests/locus-runtime-image/runners.py", ~w(status)},
+      {"tests/locus-runtime-image/worker_auth.py",
+       ~w(version routes retries timeouts_ms requests status)}
+    ],
+    "worker_auth.json" => [
+      {"apps/codex/cmd/lifecycle_test.go", ~w(keys root_hex root_text service)},
+      {"apps/cyfr/test/cyfr/locus_runtime_key_task_test.exs",
+       ~w(keys root_hex root_text service)},
+      {"apps/locus/test/locus/runtime/relay_vectors_test.exs",
+       ~w(assignment attempt call host_url keys)},
+      {"apps/prima/test/prima/runner_control_test.exs",
+       ~w(attempt call keys root_hex sealed_attempt_keys service)},
+      {"apps/prima/test/prima/runner_relay_test.exs", ~w(attempt call keys service)},
+      {"apps/prima/test/prima/worker_api_test.exs", ~w(keys root_hex service)},
+      {"apps/prima/test/prima/worker_auth_test.exs",
+       ~w(assignment attempt boot call host_url keys member report request root_hex root_text sealed_attempt_keys sealed_call sealed_frames service)},
+      {"tests/locus-runtime-image/runners.py", ~w(attempt boot report service)},
+      {"tests/locus-runtime-image/worker_auth.py",
+       ~w(assignment attempt boot call host_url keys member report root_hex root_text sealed_attempt_keys sealed_call sealed_frames service)}
+    ]
+  }
 
-      for section <- sections do
-        assert source =~ section, "#{test_file} does not read #{vectors}'s #{section}"
-      end
+  # The files under tests/fixtures that are no vector file.
+  @not_vectors %{
+    "residue-canary.go" =>
+      "the residue probe the image suites build and run inside the image " <>
+        "(tests/locus-backends-image/residue.py, tests/builder-image/stack.py): a program, " <>
+        "not data two sides read"
+  }
+
+  # The spellings of a read of `section` in a reader of `path`'s language.
+  defp section_reads(path, section) do
+    key = Regex.escape(section)
+
+    case Path.extname(path) do
+      ".go" -> [~r/json:"#{key}"/]
+      ext when ext in [".py", ".sh"] -> [~r/\["#{key}"\]/, ~r/\.get\("#{key}"/]
+      ".mjs" -> [~r/\.#{key}\b/, ~r/\["#{key}"\]/]
+      _elixir -> [~r/\["#{key}"\]/, ~r/"#{key}" =>/, ~r/"#{key}"\)/]
     end
+  end
+
+  # Every row of `readers` whose file does not read its vector file or a
+  # section it names, as `file what`.
+  defp unread(readers) do
+    for {vectors, files} <- readers,
+        {file, sections} <- files,
+        missing <- unread(file, vectors, sections),
+        do: "#{file} #{missing}"
+  end
+
+  defp unread(file, vectors, sections) do
+    if File.exists?(Path.join(@root, file)) do
+      source = read!(file)
+
+      if(String.contains?(source, vectors), do: [], else: ["does not read #{vectors}"]) ++
+        for section <- sections,
+            not Enum.any?(section_reads(file, section), &Regex.match?(&1, source)),
+            do: "does not read #{vectors}'s #{section}"
+    else
+      ["is gone"]
+    end
+  end
+
+  test "every file under tests/fixtures is a vector file with its readers, or says what it is" do
+    files = File.ls!(Path.join(@root, "tests/fixtures")) |> Enum.sort()
+    named = Enum.sort(Map.keys(@vector_readers) ++ Map.keys(@not_vectors))
+
+    assert files -- named == [], "no row for: #{inspect(files -- named)}"
+    assert named -- files == [], "rows for files that are gone: #{inspect(named -- files)}"
+
+    for {vectors, readers} <- @vector_readers do
+      assert String.ends_with?(vectors, ".json"), "#{vectors} is not a vector file"
+      assert readers != [], "#{vectors} names no reader"
+    end
+  end
+
+  test "each side's test reads the shared vectors it is held to" do
+    assert unread(@vector_readers) == []
+
+    # Planted: a reader of another file, a section it does not read, and a
+    # file that is gone are each reported.
+    planted = %{
+      "carry.json" => [
+        {"apps/prima/test/prima/layout_test.exs", ~w(fragments)},
+        {"apps/prima/test/prima/carry_test.exs", ~w(no_such_section)},
+        {"apps/prima/test/prima/planted_test.exs", ~w(fragments)}
+      ]
+    }
+
+    assert unread(planted) == [
+             "apps/prima/test/prima/layout_test.exs does not read carry.json",
+             "apps/prima/test/prima/layout_test.exs does not read carry.json's fragments",
+             "apps/prima/test/prima/carry_test.exs does not read carry.json's no_such_section",
+             "apps/prima/test/prima/planted_test.exs is gone"
+           ]
   end
 
   # ==========================================================================
