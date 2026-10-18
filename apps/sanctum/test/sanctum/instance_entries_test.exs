@@ -29,6 +29,11 @@ defmodule Sanctum.InstanceEntriesTest do
     """
     @behaviour Sanctum.Consent.Components
 
+    # Fills nothing: Sanctum's own build has no component domain.
+    @impl true
+    def fill(_athanor, _ctx, "provision"), do: {:error, :unavailable}
+    def fill(_athanor, _ctx, _entry_kind), do: :ok
+
     @rows {__MODULE__, :rows}
     @shipped {__MODULE__, :shipped}
 

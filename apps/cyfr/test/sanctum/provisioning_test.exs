@@ -964,11 +964,11 @@ defmodule Sanctum.ProvisioningTest do
   test "the athanor's half of provisioning names nothing above Sanctum" do
     # The split is the point: identity keeps the claim, the readiness and
     # failure writes, the consent bootstrap and the tenancy writes, and
-    # announces that an athanor needs filling; the component domain reacts
-    # and calls down. Sanctum declares neither the host nor the component
-    # domain as a dependency, so a name reaching up here is an undefined
-    # module in the standalone Sanctum suite — and the seam between the
-    # halves would be a call rather than an announcement.
+    # asks for the fill through the component-facts port; the component
+    # domain implements it and calls down. Sanctum declares neither the
+    # host nor the component domain as a dependency, so a name reaching up
+    # here is an undefined module in the standalone Sanctum suite — and the
+    # seam between the halves would be a direct call rather than the port.
     path = Path.expand("../../../sanctum/lib/sanctum/provisioning.ex", __DIR__)
     named = Prima.Test.SourceTree.aliases(path)
     file = Path.relative_to_cwd(path)
@@ -986,8 +986,8 @@ defmodule Sanctum.ProvisioningTest do
 
     assert Cyfr.Boundaries.dependency_violations(:sanctum, [{file, named}], contracts) == []
 
-    # And the check reports: the module this one announces to, planted in
-    # the same scan, is named as the reach it would be.
+    # And the check reports: the module that fills, planted in the same
+    # scan, is named as the reach it would be.
     assert [reported] =
              Cyfr.Boundaries.dependency_violations(
                :sanctum,
@@ -997,10 +997,10 @@ defmodule Sanctum.ProvisioningTest do
 
     assert reported =~ "Compendium.Provisioning"
 
-    # And the other half of the split: the component domain is reached by
-    # the announcement alone.
-    assert Sanctum.Provisioning.fill_event() ==
-             [:cyfr, :sanctum, :provisioning, :fill_requested]
+    # And the other half of the split: the component domain is reached
+    # through the port alone, which the host installed.
+    assert {:fill, 3} in Sanctum.Consent.Components.behaviour_info(:callbacks)
+    assert Sanctum.Consent.Components.impl!() == Compendium.ConsentFacts
   end
 
   describe "the member's slot" do
@@ -1287,6 +1287,80 @@ defmodule Sanctum.ProvisioningTest do
         Arca.Repo.update_all(from(l in Arca.Schemas.CellLease, where: l.node == ^node), set: set)
 
       :ok
+    end
+  end
+
+  describe "the fill, asked through the component-facts port" do
+    test "an athanor nothing can fill raises: the port was never installed" do
+      n = System.unique_integer([:positive])
+      ctx = %{Sanctum.TestContext.local() | user_id: "github|https://github.com|creator-#{n}"}
+      {:ok, group} = Athanors.create_group(ctx.user_id, "Unfillable #{n}")
+
+      real = Sanctum.Consent.Components.impl!()
+      on_exit(fn -> Sanctum.Consent.Components.install!(real) end)
+      Sanctum.Consent.Components.reset()
+
+      assert_raise Sanctum.Consent.Components.NotInstalledError, fn ->
+        Provisioning.provision(group, nil)
+      end
+
+      assert_raise Sanctum.Consent.Components.NotInstalledError, fn ->
+        Provisioning.start_provisioning(%{ctx | athanor_id: group.id})
+      end
+    end
+
+    test "athanor.provision asks the port with no transaction open, and answers its attempt",
+         %{bundle_dir: bundle_dir} do
+      write_bundle!(bundle_dir)
+      n = System.unique_integer([:positive])
+      ctx = %{Sanctum.TestContext.local() | user_id: "github|https://github.com|creator-#{n}"}
+      {:ok, group} = Athanors.create_group(ctx.user_id, "Asked #{n}")
+      Cyfr.Test.FillWatch.watch!(group.id)
+
+      assert {:ok, %{id: id, provisioned: true}} =
+               Sanctum.Providers.Athanor.handle(ctx, %{
+                 "action" => "provision",
+                 "athanor" => group.id
+               })
+
+      assert id == group.id
+      # The fill calls back down into the identity domain for the claim
+      # and the consents, so no lock of the caller's may be held across it.
+      assert_received {:fill_requested, ^id, "provision", false}
+    end
+
+    # A step that raises stands in for any defect in a fill: the context
+    # is no context, which the agent index refuses by raising.
+    test "an attempt that raises is a failure on the row, for the verb and for a hook",
+         %{bundle_dir: bundle_dir} do
+      write_bundle!(bundle_dir)
+      n = System.unique_integer([:positive])
+      ctx = %{Sanctum.TestContext.local() | user_id: "github|https://github.com|creator-#{n}"}
+
+      {:ok, asked} = Athanors.create_group(ctx.user_id, "Raised #{n}")
+
+      {result, _log} = with_log(fn -> Filler.provision(asked, :no_context) end)
+
+      assert {:error, {:provisioning_failed, :interrupted, {:raised, FunctionClauseError}}} =
+               result
+
+      {:ok, asked} = Athanors.get(asked.id)
+      refute asked.provisioned_at
+      assert %{step: "interrupted"} = Athanors.provisioning_failure(asked)
+      assert Provisioning.status(%{ctx | athanor_id: asked.id}) == :failed
+
+      # A hook's attempt, in the background, leaves the same record.
+      {:ok, hooked} = Athanors.create_group(ctx.user_id, "Raised hook #{n}")
+      {answer, _log} = with_log(fn -> Filler.request(hooked, :no_context, "first_need") end)
+      assert answer == :ok
+
+      Prima.Test.Wait.wait_until(fn ->
+        Provisioning.status(%{ctx | athanor_id: hooked.id}) == :failed
+      end)
+
+      {:ok, hooked} = Athanors.get(hooked.id)
+      refute hooked.provisioned_at
+      assert %{step: "interrupted"} = Athanors.provisioning_failure(hooked)
     end
   end
 

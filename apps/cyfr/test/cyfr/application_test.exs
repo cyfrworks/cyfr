@@ -31,7 +31,6 @@ defmodule Cyfr.ApplicationTest do
     Sanctum.Gate.TaskSupervisor => 30_000,
     Compendium.Builds.TaskSupervisor => 30_000,
     Compendium.ProvisioningSupervisor => 30_000,
-    Compendium.Provisioning => 5_000,
     Compendium.ProjectionReconciler => 5_000,
     Opus.Slots => 5_000,
     Opus.Events.Sequence => 5_000,
@@ -218,7 +217,6 @@ defmodule Cyfr.ApplicationTest do
              [
                Compendium.Builds.TaskSupervisor,
                Compendium.ProvisioningSupervisor,
-               Compendium.Provisioning,
                Compendium.ProjectionReconciler
              ]},
             {Opus.Supervisor,

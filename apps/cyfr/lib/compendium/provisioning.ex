@@ -23,12 +23,23 @@ defmodule Compendium.Provisioning do
   calls down into. It never reads a tenancy row or mints a consent
   itself.
 
-  Identity announces that an athanor needs filling
-  (`Sanctum.Provisioning.fill_event/0`) and this module is what reacts.
-  The reaction is synchronous for the explicit `provision` verb — a
-  person is holding the request open and gets the attempt's own answer,
-  replied to the asking process — and backgrounded for the first-need
-  hook and the sign-in retries, which no request path may wait on.
+  Identity asks for a fill through the component-facts port
+  (`Sanctum.Consent.Components.fill/3`, implemented by
+  `Compendium.ConsentFacts`), and `request/3` here answers it. The
+  answer is synchronous for the explicit `provision` verb — a person is
+  holding the request open and gets the attempt's own answer — and
+  backgrounded for the first-need hook and the sign-in retries, which no
+  request path may wait on. A background attempt runs under
+  `Compendium.ProvisioningSupervisor`, the task supervisor that owns
+  every fill and pull this module starts.
+
+  Every attempt ends in a state the athanor's claim and row can name. A
+  step that fails, a pull cut at its deadline and an attempt that raises
+  are recorded on the row as a failure (`Sanctum.Provisioning.record_failure/4`),
+  which is what the explicit verb answers with and what a reader backs
+  off from; a claim lost to a successor writes nothing and the athanor is
+  the successor's. An attempt killed where it stands runs no code: its
+  claim's keeper gives the athanor back, and the next request fills it.
 
   Required dependency pulls run under one deadline per attempt
   (`:provisioning_required_pull_budget_ms`); optional pulls under a
@@ -39,8 +50,6 @@ defmodule Compendium.Provisioning do
   started and stopped by the athanor's claim
   (`Sanctum.Provisioning.bounded_work/3`) and never outlives it.
   """
-
-  use GenServer
 
   require Logger
 
@@ -59,87 +68,25 @@ defmodule Compendium.Provisioning do
   # as a courtesy with a budget of their own.
   @optional_pull_budget_ms 10_000
 
-  @handler_id "compendium-provisioning-fill"
-
   # ---------------------------------------------------------------------------
   # The filler
   # ---------------------------------------------------------------------------
 
-  @spec start_link(keyword()) :: GenServer.on_start()
-  def start_link(opts \\ []), do: GenServer.start_link(__MODULE__, opts, name: __MODULE__)
+  @doc """
+  The component-facts port's fill (`Sanctum.Consent.Components.fill/3`).
+  `provision` is the explicit verb: the attempt runs here, in the asking
+  process, and this answers with its outcome. Every other entry kind is a
+  hook: the attempt is started under `Compendium.ProvisioningSupervisor`
+  and this answers `:ok` at once — a request path must never wait on a
+  registry.
+  """
+  @spec request(athanor(), Context.t() | nil, String.t()) ::
+          :ok | {:ok, athanor()} | {:error, term()}
+  def request(athanor, ctx, "provision"), do: provision(athanor, ctx)
+  def request(athanor, ctx, "sign_in"), do: claim_then_background(athanor, ctx)
 
-  @impl true
-  def init(_opts) do
-    attach()
-    {:ok, %{}}
-  end
-
-  # Handlers are global to the node, not owned by this process, so a
-  # restart would otherwise leave the pre-restart attach in place and
-  # `attach/4` would answer `{:error, :already_exists}`. Detaching first
-  # makes the attach mean what it says.
-  @impl true
-  def terminate(_reason, _state) do
-    :telemetry.detach(@handler_id)
-    :ok
-  end
-
-  defp attach do
-    :telemetry.detach(@handler_id)
-
-    case :telemetry.attach(
-           @handler_id,
-           Athanor.fill_event(),
-           &__MODULE__.handle_fill_request/4,
-           nil
-         ) do
-      :ok ->
-        :ok
-
-      {:error, reason} ->
-        Logger.error(
-          "[Compendium.Provisioning] could not attach the athanor filler: " <>
-            "#{inspect(reason)} — no athanor will be filled on this node"
-        )
-    end
-  end
-
-  @impl true
-  def handle_info(msg, state) do
-    Prima.LoggerContext.unexpected(__MODULE__, msg)
-    {:noreply, state}
-  end
-
-  @doc false
-  # The reaction to `Sanctum.Provisioning`'s announcement. `provision` is
-  # the explicit verb: it runs here, in the asking process, and replies
-  # with the attempt's own answer. Everything else is a hook and is
-  # backgrounded — a request path must never wait on a registry.
-  def handle_fill_request(_event, _measurements, metadata, _config) do
-    %{athanor: athanor, acting_ctx: ctx, entry_kind: entry_kind} = metadata
-
-    case entry_kind do
-      "provision" -> reply(metadata, provision(athanor, ctx))
-      "sign_in" -> claim_then_background(athanor, ctx)
-      _hook -> background(fn -> attempt(athanor, ctx, entry_kind) end)
-    end
-
-    :ok
-  rescue
-    # A raising handler is detached by the telemetry library, and every
-    # athanor on the node would stop filling with it.
-    e ->
-      Logger.error(
-        "[Compendium.Provisioning] fill request raised: #{Prima.LogFilter.exception_message(e)}"
-      )
-
-      :ok
-  end
-
-  defp reply(%{reply_to: pid, ref: ref}, outcome) when is_pid(pid),
-    do: send(pid, {:provisioning_filled, ref, outcome})
-
-  defp reply(_metadata, _outcome), do: :ok
+  def request(athanor, ctx, entry_kind) when is_binary(entry_kind),
+    do: background(fn -> attempt(athanor, ctx, entry_kind) end)
 
   # The claim is taken before the task starts, so a reader arriving with
   # the session already finds the athanor being filled; the task is what
@@ -191,7 +138,7 @@ defmodule Compendium.Provisioning do
           fun.()
         end
 
-        case Task.Supervisor.start_child(Compendium.ProvisioningSupervisor, task_fun) do
+        case start_background(task_fun) do
           {:ok, _pid} ->
             :ok
 
@@ -204,6 +151,15 @@ defmodule Compendium.Provisioning do
             :ok
         end
     end
+  end
+
+  # A supervisor not yet started (a request during boot) or already gone
+  # (one during shutdown) exits the caller instead of answering; either is
+  # a fill that did not start.
+  defp start_background(task_fun) do
+    Task.Supervisor.start_child(Compendium.ProvisioningSupervisor, task_fun)
+  catch
+    :exit, reason -> {:error, {:supervisor_down, reason}}
   end
 
   @doc """
@@ -241,6 +197,21 @@ defmodule Compendium.Provisioning do
       {:ok, fresh} -> do_fill(claim, fresh, acting_ctx)
       _ -> do_fill(claim, athanor, acting_ctx)
     end
+  rescue
+    e -> interrupted(claim, athanor, {:raised, e.__struct__})
+  catch
+    :exit, _reason -> interrupted(claim, athanor, :exited)
+    :throw, _value -> interrupted(claim, athanor, :thrown)
+  end
+
+  # An attempt that raised is a failure like any step's, recorded on the
+  # row under the claim it still holds: left unrecorded, the next reader
+  # would start the same attempt at once and it would raise again. What is
+  # recorded names how it ended, never the exception's words, which may
+  # carry a credential or a path.
+  defp interrupted(claim, athanor, how) do
+    Logger.error("[Provisioning] #{athanor.id}: the attempt ended abnormally (#{inspect(how)})")
+    Athanor.record_failure(claim, athanor, :interrupted, how)
   end
 
   defp do_fill(claim, %{id: athanor_id} = athanor, acting_ctx) do

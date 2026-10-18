@@ -77,7 +77,6 @@ defmodule Cyfr.StartupAdmissionBarrierTest do
      [
        Compendium.Builds.TaskSupervisor,
        Compendium.ProvisioningSupervisor,
-       Compendium.Provisioning,
        Compendium.ProjectionReconciler
      ]},
     {Opus.Supervisor,
@@ -175,7 +174,6 @@ defmodule Cyfr.StartupAdmissionBarrierTest do
     Opus.Registry,
     Opus.Slots,
     Compendium.ProjectionReconciler,
-    Compendium.Provisioning,
     Compendium.ProvisioningSupervisor,
     Compendium.Builds.TaskSupervisor,
     Sanctum.Gate.TaskSupervisor,

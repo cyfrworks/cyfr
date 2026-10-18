@@ -24,9 +24,11 @@ defmodule Sanctum.Provisioning do
   owns them. This module owns the athanor's **claim**, the **consent
   bootstrap** the fill mints, the **readiness and failure writes** on the
   row, and the **tenancy writes** that mint a person their own athanor. It
-  announces that an athanor needs filling
-  (`[:cyfr, :sanctum, :provisioning, :fill_requested]`) and the component
-  domain reacts; nothing here names it.
+  asks for the fill through the component-facts port
+  (`Sanctum.Consent.Components.fill/3`), which the component domain
+  implements; nothing here names it. The port is asked with no transaction
+  open, because the fill calls back down into this module for the claim
+  and the consents.
 
   ## Entry points
 
@@ -38,17 +40,17 @@ defmodule Sanctum.Provisioning do
   held:
 
     * `after_sign_in/1`'s personal fill (`sign_in`): the row and the seat
-      are written on the sign-in; the fill is announced and runs in the
+      are written on the sign-in; the fill is asked for and runs in the
       background under its own claim. A held claim means someone is
       filling already, and the sign-in adds nothing. The group retries are
-      announced the same way. No backoff.
+      asked for the same way. No backoff.
     * `start_provisioning/1`, `ready/1` and `status/1` (`first_need`):
       readers never claim and never wait. They read the claim once and
-      answer — filled, filling, failed — and announce a fill only when
+      answer — filled, filling, failed — and ask for a fill only when
       nothing holds the claim and no fill failed within the last minute.
-      Readers that announce at once coalesce on the claim.
+      Readers that ask at once coalesce on the claim.
     * `provision/2`, behind the explicit `athanor.provision`
-      (`provision`): announces an attempt and answers where the athanor
+      (`provision`): asks for an attempt and answers where the athanor
       stands once it has run. No backoff: a person who asks is never told
       to wait out a failure, and a claim another attempt holds answers
       `{:error, :provisioning_busy}` rather than queueing behind it.
@@ -138,7 +140,7 @@ defmodule Sanctum.Provisioning do
   @doc """
   Called once the person is admitted, and again whenever their namespace
   is recorded (`Sanctum.SignIn.record_namespace/2`): mints their own
-  athanor if they have none, and announces a retry for any group of theirs
+  athanor if they have none, and asks for a retry of any group of theirs
   whose provisioning failed earlier. Admission is enough — a person needs
   no registry, no namespace and no claim to have a furnace of their own.
   """
@@ -162,7 +164,7 @@ defmodule Sanctum.Provisioning do
   The person's own athanor: the one their `users` row records, else a
   fresh one (kind person, a slug of this server's — their namespace when
   they have one and it is free, otherwise derived from their name — the
-  person its only member), announced for filling if not yet filled, and
+  person its only member), asked to be filled if not yet filled, and
   recorded on the row. Idempotent.
   """
   @spec ensure_personal_athanor(Sanctum.Tenancy.Users.user()) ::
@@ -316,63 +318,22 @@ defmodule Sanctum.Provisioning do
   filler runs the attempt in this process, so this answers for the
   attempt it asked for: an attempt another caller holds is
   `{:error, :provisioning_busy}` at once, one that failed says where and
-  why, and the outcome is on the row either way. A deployment with no
-  filler attached answers `{:error, :unavailable}` — an athanor nothing
-  can fill is neither busy nor failed.
+  why, and the outcome is on the row either way. A boot that installed no
+  filler raises (`Sanctum.Consent.Components.NotInstalledError`).
   """
   @spec provision(Sanctum.Tenancy.Athanors.athanor(), Context.t() | nil) ::
           {:ok, Sanctum.Tenancy.Athanors.athanor()} | {:error, term()}
   def provision(%{provisioned_at: %DateTime{}} = athanor, _ctx), do: {:ok, athanor}
 
-  def provision(athanor, acting_ctx) do
-    ref = make_ref()
-    request_fill(athanor, acting_ctx, "provision", %{reply_to: self(), ref: ref})
-
-    # The filler runs this attempt in the asking process — that is what
-    # makes the explicit verb synchronous, exactly as it was when this
-    # module ran the attempt itself — so its answer is already in the
-    # mailbox when the announcement returns. A deployment with no filler
-    # attached has an athanor nothing can fill, which is neither busy nor
-    # failed.
-    receive do
-      {:provisioning_filled, ^ref, outcome} -> outcome
-    after
-      0 -> {:error, :unavailable}
-    end
-  end
+  def provision(athanor, acting_ctx),
+    do: Sanctum.Consent.Components.fill(athanor, acting_ctx, "provision")
 
   # ---- the athanor's filler ---------------------------------------------------
 
-  @fill_event [:cyfr, :sanctum, :provisioning, :fill_requested]
-
-  @doc """
-  The event this module announces an athanor needs filling with. Named
-  here so the component domain attaches to one spelling.
-  """
-  @spec fill_event() :: [atom(), ...]
-  def fill_event, do: @fill_event
-
-  # An athanor needs filling. A foundation below the host announces and
-  # never calls up: the component domain attaches to this event and does
-  # the work — in the background for the hooks, in the caller's process
-  # for the explicit verb, which is what makes `provision/2` answer for
-  # the attempt it asked for.
-  defp request_fill(athanor, acting_ctx, entry_kind, extra \\ %{}) do
-    :telemetry.execute(
-      @fill_event,
-      %{count: 1},
-      Map.merge(
-        %{
-          athanor: athanor,
-          athanor_id: athanor.id,
-          acting_ctx: acting_ctx,
-          entry_kind: entry_kind
-        },
-        extra
-      )
-    )
-
-    :ok
+  # A hook's fill: the component domain starts it in the background and
+  # answers at once, so no request path waits on a registry.
+  defp request_fill(athanor, acting_ctx, entry_kind) do
+    :ok = Sanctum.Consent.Components.fill(athanor, acting_ctx, entry_kind)
   end
 
   # ---- the claim -------------------------------------------------------------
@@ -1035,7 +996,7 @@ defmodule Sanctum.Provisioning do
   # ---- the person's own athanor ----------------------------------------------
 
   # A person's unprovisioned groups are retried with their credential — the
-  # announcement is what starts them, and a fill may pull from the registry,
+  # request starts them in the background, and a fill may pull from the registry,
   # so a sign-in never hangs on an unreachable one. Bounded per sign-in; a
   # failure lands on the group's row and the next sign-in (or a member's
   # `athanor.provision`) tries again.

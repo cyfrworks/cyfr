@@ -701,18 +701,7 @@ defmodule Opus.ProviderTest do
           set: [provisioned_at: nil]
         )
 
-      handler = "fill-#{ctx.athanor_id}"
-
-      :ok =
-        :telemetry.attach(
-          handler,
-          Sanctum.Provisioning.fill_event(),
-          &__MODULE__.fill_requested/4,
-          {self(), ctx.athanor_id}
-        )
-
-      on_exit(fn -> :telemetry.detach(handler) end)
-      :ok
+      Cyfr.Test.FillWatch.watch!(ctx.athanor_id)
     end
 
     test "execution.run answers not_provisioned, asks for the fill and starts nothing",
@@ -727,7 +716,7 @@ defmodule Opus.ProviderTest do
                  "input" => %{"a" => 1, "b" => 2}
                })
 
-      assert_receive {:fill_requested, _athanor_id}
+      assert_receive {:fill_requested, _athanor_id, "first_need", _in_transaction}
       assert {started(ctx), slots(ctx)} == {before, slots}
 
       Sanctum.TestContext.ready!(ctx.athanor_id)
@@ -752,7 +741,7 @@ defmodule Opus.ProviderTest do
         "unavailable"
       )
 
-      assert_receive {:fill_requested, _athanor_id}
+      assert_receive {:fill_requested, _athanor_id, "first_need", _in_transaction}
     end
 
     # `run_stream` answers before its background run is admitted, so a
@@ -772,7 +761,7 @@ defmodule Opus.ProviderTest do
                  "input" => %{"a" => 1, "b" => 2}
                })
 
-      assert_receive {:fill_requested, _athanor_id}, 5_000
+      assert_receive {:fill_requested, _athanor_id, "first_need", _in_transaction}, 5_000
 
       # The background run registered under the id before it asked for the
       # fill, and its entry goes when it ends.
@@ -787,12 +776,6 @@ defmodule Opus.ProviderTest do
       assert conn.status == 404
     end
   end
-
-  @doc false
-  def fill_requested(_event, _measurements, %{athanor_id: id}, {test, id}),
-    do: send(test, {:fill_requested, id})
-
-  def fill_requested(_event, _measurements, _metadata, _config), do: :ok
 
   # The execution slots the context's athanor holds.
   defp slots(ctx), do: Map.get(Prima.Slots.status(Opus.Slots).keys, ctx.athanor_id, 0)

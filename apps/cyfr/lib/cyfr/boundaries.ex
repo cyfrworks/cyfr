@@ -1965,7 +1965,6 @@ defmodule Cyfr.Boundaries do
       bootstrap_consents: 2,
       bootstrap_consents_for: 3,
       bounded_work: 3,
-      fill_event: 0,
       filled_athanors: 0,
       hold: 3,
       holding: 2,
@@ -2662,7 +2661,9 @@ defmodule Cyfr.Boundaries do
     },
     %{
       behaviour: "Sanctum.Consent.Components",
-      what: "component facts for consent and the gate's stream admission",
+      what:
+        "component facts for consent and the gate's stream admission, " <>
+          "and filling an athanor with its components",
       declared_by: :sanctum,
       implemented_by: "Compendium.ConsentFacts",
       written_at_boot_by: @boot_writer

@@ -726,6 +726,10 @@ defmodule Sanctum.Consent.PlanTest do
     @moduledoc false
     @behaviour Sanctum.Consent.Components
 
+    # Filling is not what this stand-in is for: the component domain fills.
+    @impl true
+    defdelegate fill(athanor, ctx, entry_kind), to: Compendium.ConsentFacts
+
     @impl true
     def resolve(ctx, component),
       do: answer(:resolve, fn -> real().resolve(ctx, component) end)

@@ -12,6 +12,10 @@ defmodule Sanctum.TinctureAccessTest do
     @moduledoc false
     @behaviour Sanctum.Consent.Components
 
+    # Filling is not what this stand-in is for: the component domain fills.
+    @impl true
+    defdelegate fill(athanor, ctx, entry_kind), to: Compendium.ConsentFacts
+
     @canary "T8_RAW_STORAGE_ERROR_CANARY"
     def canary, do: @canary
 
@@ -36,6 +40,10 @@ defmodule Sanctum.TinctureAccessTest do
   defmodule MalformedFacts do
     @moduledoc false
     @behaviour Sanctum.Consent.Components
+
+    # Filling is not what this stand-in is for: the component domain fills.
+    @impl true
+    defdelegate fill(athanor, ctx, entry_kind), to: Compendium.ConsentFacts
 
     @impl true
     def resolve(_ctx, _component), do: failed()

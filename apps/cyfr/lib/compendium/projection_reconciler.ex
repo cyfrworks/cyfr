@@ -56,7 +56,7 @@ defmodule Compendium.ProjectionReconciler do
 
   ## The process
 
-  Started after `Compendium.Provisioning` with `enabled: true`, it attaches
+  Started after `Compendium.ProvisioningSupervisor` with `enabled: true`, it attaches
   to the storage change notification (`Cyfr.Telemetry.Catalog.consumed_by(:projection)`),
   whose handler only sends to this process's registered name, and
   reconciles the athanor a ready change names. It recovers every athanor a

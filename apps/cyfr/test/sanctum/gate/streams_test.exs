@@ -31,6 +31,10 @@ defmodule Sanctum.Gate.StreamsTest do
     @moduledoc false
     @behaviour Sanctum.Consent.Components
 
+    # Filling is not what this stand-in is for: the component domain fills.
+    @impl true
+    defdelegate fill(athanor, ctx, entry_kind), to: Compendium.ConsentFacts
+
     @impl true
     def get_component(ctx, name, version, publisher, type) do
       send(self(), {:component_read, {name, version, publisher, type}})
@@ -61,6 +65,10 @@ defmodule Sanctum.Gate.StreamsTest do
   defmodule FactsWithoutPlacement do
     @moduledoc false
     @behaviour Sanctum.Consent.Components
+
+    # Filling is not what this stand-in is for: the component domain fills.
+    @impl true
+    defdelegate fill(athanor, ctx, entry_kind), to: Compendium.ConsentFacts
 
     @impl true
     defdelegate resolve(ctx, row), to: Compendium.ConsentFacts

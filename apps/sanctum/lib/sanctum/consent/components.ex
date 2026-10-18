@@ -3,7 +3,8 @@
 
 defmodule Sanctum.Consent.Components do
   @moduledoc """
-  The component facts a consent decision rests on.
+  The component facts a consent decision rests on, and the filling of an
+  athanor with its components.
 
   A consent governs the shape of what a component may do, so deciding one
   means reading what the athanor actually holds: the activation a ref
@@ -22,7 +23,18 @@ defmodule Sanctum.Consent.Components do
   `Prima.Manifest.Needs`, `Prima.Manifest.Caps`, `Prima.ComponentPath`,
   `Prima.ComponentRow` and `Prima.AgentRef`. Carrying them through a
   callback would be an indirection around data that changes nothing.
-  What is here takes a context and reads state.
+  What is here takes a context and reads state, except `fill/3`.
+
+  ## Filling an athanor
+
+  An athanor holds no components until the component domain fills it:
+  the seed bundle copied in and registered, the published closure pulled,
+  the agents indexed. Identity owns the athanor's claim, the baseline
+  consents the fill mints and the readiness written on the row
+  (`Sanctum.Provisioning`), and asks for the fill through `fill/3`, the
+  one upward call this port carries that writes. The implementation calls
+  back down into `Sanctum.Provisioning` for the claim and the consents, so
+  `fill/3` is asked with no transaction open and no lock held.
 
   The implementation is written at boot: `Cyfr.Application` installs it
   with `install!/1`, and `impl!/0` reads it.
@@ -38,7 +50,8 @@ defmodule Sanctum.Consent.Components do
   must never read as a component that does not exist, and neither must
   read as a denial. `impl!/0`, which a caller asks only when it needs
   the module itself, raises `Sanctum.Consent.Components.NotInstalledError`
-  instead.
+  instead, and so does `fill/3`: an athanor nothing can fill is a boot
+  that wired no port, not an athanor that failed.
   """
 
   alias Sanctum.Context
@@ -137,6 +150,22 @@ defmodule Sanctum.Consent.Components do
   """
   @callback tincture_placement(Context.t(), map()) ::
               {:ok, String.t() | nil} | {:error, term()}
+
+  @doc """
+  Fill `athanor` with its components, acting as `acting_ctx` (the
+  person's context focused on the athanor, whose pull credential is used;
+  nil fills as the server).
+
+  `entry_kind` names who asked, as the athanor's claim records it.
+  `"provision"` is the explicit verb: the attempt runs in the caller's
+  process and the answer is the attempt's own — `{:ok, athanor}` filled,
+  `{:error, :provisioning_busy}` while another attempt holds the athanor,
+  `{:error, {:provisioning_failed, step, detail}}` with the failure on the
+  row. Every other kind is a hook no request path may wait on: the attempt
+  is started in the background and `:ok` answers at once.
+  """
+  @callback fill(map(), Context.t() | nil, String.t()) ::
+              :ok | {:ok, map()} | {:error, term()}
 
   @optional_callbacks tincture_placement: 2
 
@@ -251,6 +280,17 @@ defmodule Sanctum.Consent.Components do
         else: {:error, :component_facts_unavailable}
     end)
   end
+
+  @doc """
+  Fill `athanor`, as `c:fill/3` describes. Raises
+  `Sanctum.Consent.Components.NotInstalledError` when no implementation is
+  installed.
+  """
+  @spec fill(map(), Context.t() | nil, String.t()) :: :ok | {:ok, map()} | {:error, term()}
+  def fill(%{id: athanor_id} = athanor, acting_ctx, entry_kind)
+      when is_binary(athanor_id) and (is_nil(acting_ctx) or is_struct(acting_ctx, Context)) and
+             is_binary(entry_kind),
+      do: impl!().fill(athanor, acting_ctx, entry_kind)
 
   # An uninstalled port is an unreadable athanor, not an empty one: every
   # caller refuses on this word, and none of them may mistake it for

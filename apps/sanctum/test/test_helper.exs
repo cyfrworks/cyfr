@@ -15,6 +15,12 @@ rescue
   Prima.Caps.NotInstalledError -> Prima.Caps.install!(Sanctum.Tenancy.Caps)
 end
 
+# The component-facts port, which every sign-in asks to fill the person's
+# athanor. Sanctum's own build has no component domain, so the suite
+# installs one that fills nothing (`Sanctum.Test.Components`) where no
+# boot installed the host's.
+Sanctum.Test.Components.install!()
+
 # The platform settings Sanctum reads (the caps, the session idle timeout,
 # the webhook skew window). The host installs every setting's declaration
 # at its boot, which an umbrella run has done and Sanctum's own build has

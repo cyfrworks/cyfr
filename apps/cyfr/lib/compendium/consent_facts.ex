@@ -21,6 +21,9 @@ defmodule Compendium.ConsentFacts do
   A row the seed does not ship, or ships in a form that cannot be read, is
   simply absent from the map: absent means "not vouched for by the
   operator", which is what the bootstrap walk does with it.
+
+  `fill/3` is the one answer that writes: filling an athanor with its
+  components, which `Compendium.Provisioning.request/3` does.
   """
 
   @behaviour Sanctum.Consent.Components
@@ -49,6 +52,10 @@ defmodule Compendium.ConsentFacts do
 
   @impl Sanctum.Consent.Components
   def agent_rows(%Context{} = ctx), do: AgentSource.rows(ctx)
+
+  @impl Sanctum.Consent.Components
+  def fill(athanor, acting_ctx, entry_kind),
+    do: Compendium.Provisioning.request(athanor, acting_ctx, entry_kind)
 
   @impl Sanctum.Consent.Components
   def shipped_nodes(%Context{} = ctx, rows) do

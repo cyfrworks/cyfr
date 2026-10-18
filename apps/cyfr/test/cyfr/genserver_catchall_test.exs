@@ -29,7 +29,6 @@ defmodule Cyfr.GenServerCatchallTest do
     {Prima.RateLimiter, "RateLimiter"},
     {Opus.Slots, "Slots"},
     {Opus.Events.Sequence, "Events.Sequence"},
-    {Compendium.Provisioning, "Provisioning"},
     {Compendium.ProjectionReconciler, "ProjectionReconciler"}
   ]
 

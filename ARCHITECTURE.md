@@ -206,7 +206,7 @@ Foundations below Host emit telemetry; Host's bridge is the one place telemetry 
 | Upward need | Declared by | Implemented by |
 |---|---|---|
 | The storage and counted cap decision (`Prima.Caps`) | Prima | Sanctum |
-| Component facts for consent and the gate's stream admission (`Sanctum.Consent.Components`) | Sanctum | Compendium |
+| Component facts for consent and the gate's stream admission, and filling an athanor with its components (`Sanctum.Consent.Components`) | Sanctum | Compendium |
 | Proxied tool resolution (`Sanctum.Proxy`) | Sanctum | Emissary's external half |
 | Where a storage unit's bytes live (`Arca.Storage.UnitLocator`) | Arca | Compendium's component and AQUA path grammars |
 

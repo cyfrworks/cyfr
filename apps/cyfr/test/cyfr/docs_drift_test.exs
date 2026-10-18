@@ -137,14 +137,19 @@ defmodule Cyfr.DocsDriftTest do
         capture: :all_but_first
       )
 
+    # Each row's upward need, as the roster words what the port carries.
     documented =
       for line <- String.split(section, "\n"),
           String.starts_with?(line, "| "),
-          [behaviour] <-
-            Regex.scan(~r/^\| [^|]*\(`([A-Za-z.]+)`\)/, line, capture: :all_but_first),
-          do: behaviour
+          [need, behaviour] <-
+            Regex.scan(~r/^\| ([^|]*?) \(`([A-Za-z.]+)`\)/, line, capture: :all_but_first),
+          do: {behaviour, need}
 
-    rostered = Enum.map(Cyfr.Boundaries.ports(), & &1.behaviour)
+    rostered =
+      Enum.map(Cyfr.Boundaries.ports(), fn port ->
+        {first, rest} = String.split_at(port.what, 1)
+        {port.behaviour, String.upcase(first) <> rest}
+      end)
 
     assert length(documented) == 4
 

@@ -33,10 +33,6 @@ defmodule Compendium.Supervisor do
         Supervisor.child_spec({Task.Supervisor, name: Compendium.ProvisioningSupervisor},
           shutdown: 30_000
         ),
-        # The athanor filler itself — it reacts to the identity domain's
-        # announcement that an athanor needs filling. 5 s: its stop, which
-        # holds no work in flight.
-        Supervisor.child_spec(Compendium.Provisioning, shutdown: 5_000),
         # The registry and the agent index follow the seeded roots' changes:
         # it reconciles the athanor a change names, and recovers every athanor
         # a root is behind in once started and on every tick this member

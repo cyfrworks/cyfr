@@ -17,10 +17,6 @@ defmodule Cyfr.Telemetry.Catalog do
   - `:metrics` — `CyfrWeb.Telemetry` metric definitions. Pinned equal
     by test.
   - `:log` — a dedicated Logger attach (`Cyfr.Application`).
-  - `:athanor` — `Compendium.Provisioning`, the component domain's answer
-    to the identity domain's "this athanor needs filling". A foundation
-    below the host announces and never calls up, and this is the one
-    event whose consumer does work rather than fan out.
   - `:projection` — `Compendium.ProjectionReconciler`, which reconciles
     the component registry and the agent index when a seeded root's unit
     changes. Its attach is this roster (`consumed_by(:projection)`), and
@@ -163,13 +159,6 @@ defmodule Cyfr.Telemetry.Catalog do
     },
     [:cyfr, :sanctum, :api_keys, :changed] => %{consumers: [:bridge]},
     [:cyfr, :sanctum, :webhooks, :changed] => %{consumers: [:bridge]},
-    [:cyfr, :sanctum, :provisioning, :fill_requested] => %{
-      consumers: [:athanor],
-      note:
-        "an athanor needs filling; the component domain fills it " <>
-          "(`Compendium.Provisioning`) — the identity domain owns the claim and the " <>
-          "consents, not the bundle"
-    },
     [:cyfr, :sanctum, :provisioning, :failed] => %{
       consumers: [:operator],
       note: "athanor provisioning failed mid-way; the sign-in path logs and surfaces it"
