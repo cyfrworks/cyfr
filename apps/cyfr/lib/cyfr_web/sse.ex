@@ -46,7 +46,10 @@ defmodule CyfrWeb.SSE do
       revalidation reads the row's current deadline, which a renewal
       moves, and the grant's deadline follows it up to the stream's own
       bound from the open (`Prima.StreamGrant`), so a renewal keeps every
-      open stream of the frame with no new connection;
+      open stream of the frame with no new connection. At the grant's
+      deadline before that bound, the row is read again whatever the
+      context's freshness, so a renewal the last revalidation did not see
+      still keeps the stream;
     * when the caller's context no longer stands: it is established again
       (the `:revalidate` function) on every standing announcement about
       the caller (a frame's stream hears its own credential suspended or
@@ -345,7 +348,7 @@ defmodule CyfrWeb.SSE do
   defp loop(conn, %{ref: ref, payload: payload} = state) do
     receive do
       {__MODULE__, :deadline, ^ref} ->
-        conn
+        at_deadline(conn, state)
 
       {__MODULE__, :tick, ^ref} ->
         arm(state)
@@ -406,6 +409,37 @@ defmodule CyfrWeb.SSE do
       {:ok, state}
     else
       with {:ok, ctx} <- state.revalidate.(), do: {:ok, revalidated(state, ctx)}
+    end
+  end
+
+  # A frame's stream at its grant's deadline, before its own bound from the
+  # open, reads its credential's row again whatever the context's
+  # freshness: a renewal moved the deadline, and the timer is armed again
+  # for it, never past the bound; a credential that no longer stands
+  # closes the stream with its refusal. At the bound, and for any other
+  # stream, the deadline ends it.
+  defp at_deadline(
+         conn,
+         %{grant: %StreamGrant{bound: %DateTime{} = bound}, ctx: %Context{frame: %{}}} = state
+       ) do
+    if DateTime.compare(DateTime.utc_now(), bound) == :lt do
+      case state.revalidate.() do
+        {:ok, ctx} -> held_on(conn, revalidated(state, ctx))
+        {:error, refusal} -> close(conn, refusal)
+      end
+    else
+      conn
+    end
+  end
+
+  defp at_deadline(conn, _state), do: conn
+
+  defp held_on(conn, %{grant: %StreamGrant{deadline: deadline}, ref: ref} = state) do
+    if DateTime.compare(deadline, DateTime.utc_now()) == :gt do
+      arm_deadline(ref, deadline)
+      loop(conn, state)
+    else
+      conn
     end
   end
 
