@@ -693,6 +693,58 @@ defmodule PrismWeb.ChatLiveTest do
     Cyfr.Test.Sandbox.end_views()
   end
 
+  test "a draft offered back after a reload deletes no attachment its pane did not store, another member's sent one included",
+       %{conn: conn} do
+    alice = test_user()
+    bob = test_user()
+
+    {:ok, group} =
+      Sanctum.Tenancy.Athanors.create_group(alice.user_id, "Drafts #{alice.namespace}")
+
+    {:ok, _} = Sanctum.Tenancy.Athanors.mark_provisioned(group)
+    ready_athanor!(group.id, alice.user_id)
+    Cyfr.Test.ScriptedWorker.script([model_reply("Kept.")])
+    alice_conn = log_in_user(conn, alice, athanor_id: group.id)
+    bob_conn = log_in_user(build_conn(), bob, athanor_id: group.id)
+
+    {alice_view, _} = mount_chat(alice_conn, group)
+
+    pane(alice_view)
+    |> file_input("form[phx-submit=submit]", :attachments, [
+      %{name: "note.txt", content: "alice's bytes", type: "text/plain"}
+    ])
+    |> render_upload("note.txt")
+
+    pane(alice_view)
+    |> form("form[phx-submit=submit]", %{"message" => "@aqua keep this"})
+    |> render_submit()
+
+    ctx = member_ctx(alice, group)
+    thread = settled_thread!(ctx)
+    [msg | _] = Threads.messages(Sanctum.Context.actor(ctx), thread.id)
+    [ref] = Aqua.attachment_refs(msg)
+    {:ok, blob} = Aqua.attachment_blob_path(thread.id, msg.id, ref)
+    assert {:ok, "alice's bytes"} = Arca.get(Sanctum.Context.actor(ctx), blob)
+
+    # Bob's browser offers back a "held send" naming Alice's sent message
+    # and its file, with a text the send refuses: the refusal discards
+    # nothing this pane did not store itself.
+    {bob_view, _} = mount_chat(bob_conn, group, thread.id)
+
+    render_hook(pane(bob_view), "restore_draft", %{
+      "thread_id" => thread.id,
+      "client_id" => Prima.UUID7.generate_id("snd"),
+      "message_id" => msg.id,
+      "text" => String.duplicate("x", 40_000),
+      "attachments" => [ref]
+    })
+
+    _ = render(pane(bob_view))
+    assert {:ok, "alice's bytes"} = Arca.get(Sanctum.Context.actor(ctx), blob)
+
+    Cyfr.Test.Sandbox.end_views()
+  end
+
   test "an athanor still being set up says so, and any member can retry from the chat", %{
     conn: conn
   } do
