@@ -658,7 +658,8 @@ jobs:
           cache-key-prefix: mix-cluster
       # CYFR_CLUSTER=1 refuses local storage: two members would each hold
       # half of every athanor. The same image and credentials the s3-minio
-      # job uses, pinned by digest like every other image here.
+      # job uses, pinned by digest; the PostgreSQL service images in this
+      # workflow are pinned by tag (postgres:18.6).
       - name: Start MinIO
         run: |
           docker run -d --name minio -p 9000:9000 \
@@ -869,8 +870,9 @@ jobs:
           # the server in February 2026; pgsty/silo (formerly pgsty/minio) is
           # the maintained community build of the same server, with the same
           # variables and health route. Pinned by digest
-          # (RELEASE.2026-09-16T00-00-00Z, the multi-arch index) like every
-          # other image and action in these workflows.
+          # (RELEASE.2026-09-16T00-00-00Z, the multi-arch index), as every
+          # action this workflow uses is; the PostgreSQL service images are
+          # pinned by tag (postgres:18.6).
           docker run -d --name minio -p 9000:9000 \
             -e MINIO_ROOT_USER=cyfrtest -e MINIO_ROOT_PASSWORD=cyfrtest123 \
             pgsty/silo@sha256:635197cb9f36d01bee221d34d1c7d7960f6a95c48b0b6c01d99cd13bdae51a46 \
