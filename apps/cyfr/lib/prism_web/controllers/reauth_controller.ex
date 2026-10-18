@@ -190,8 +190,9 @@ defmodule PrismWeb.ReauthController do
 
   # Every page with an error status is the request's refused decision,
   # recorded once under its sentence with no person or athanor
-  # (`CyfrWeb.Plugs.CallIdentity.refused/3`): a re-authentication admits
-  # before any context of the person's exists, and decides for itself.
+  # (`CyfrWeb.Plugs.CallIdentity.refused/3`): a re-authentication proves a
+  # sign-in fresh rather than acting under a context the gate admitted,
+  # and decides for itself.
   defp page(conn, status, title, sentence) do
     conn
     |> refused(status, sentence)

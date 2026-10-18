@@ -214,8 +214,8 @@ defmodule PrismWeb.LegalAcceptController do
     )
   end
 
-  # Policy acceptance completes a sign-in before any person's context
-  # exists, so it decides for itself: every error page and every refusal
+  # Policy acceptance completes a sign-in rather than acting under a
+  # context the gate admitted, so it decides for itself: every error page and every refusal
   # that sends the browser elsewhere is the request's refused decision,
   # recorded once under its sentence with no person or athanor
   # (`CyfrWeb.Plugs.CallIdentity.refused/3`).

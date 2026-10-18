@@ -573,7 +573,7 @@ defmodule Cyfr.AdmissionEntriesSeamTest do
   end
 
   # The browser's sign-in, re-authentication and policy acceptance: each
-  # refused before any person's context exists.
+  # refused with no person or athanor recorded.
   defp sign_in_refused(conn, status, class) do
     assert conn.status == status
     {request_id_of(conn), refused(class, :none)}

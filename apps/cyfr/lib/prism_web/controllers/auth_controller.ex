@@ -637,8 +637,9 @@ defmodule PrismWeb.AuthController do
   # Private Helpers
   # ============================================================================
 
-  # Sign-in admits before any person's context exists, so it decides for
-  # itself: every refusal this controller answers, a page with an error
+  # Sign-in establishes a person's sign-in, or completes one (the policy
+  # acceptance's re-probe), rather than acting under a context the gate
+  # admitted, so it decides for itself: every refusal this controller answers, a page with an error
   # status or a flash back to the sign-in page, is the request's refused
   # decision, recorded once under its sentence with no person or athanor
   # (`CyfrWeb.Plugs.CallIdentity.refused/3`).

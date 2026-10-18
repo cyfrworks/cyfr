@@ -2858,7 +2858,8 @@ defmodule Cyfr.Boundaries do
       origin: :none
     },
     # The browser's sign-in, re-authentication and policy acceptance, which
-    # admit before any context of the person's exists: a sign-in's start,
+    # establish a person's sign-in, prove it fresh or complete it rather
+    # than act under a context the gate admitted: a sign-in's start,
     # its tickets, callbacks and door link, a fresh sign-in's proof of a
     # confirmation and the answer to it, and the registry policy a sign-in
     # accepts. The browser's sign-out decides nothing and is no entry.

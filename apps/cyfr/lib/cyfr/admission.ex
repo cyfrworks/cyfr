@@ -113,7 +113,8 @@ defmodule Cyfr.Admission do
           "person exists, and the recovery kit, its own ingress (§9.1, §6.9), the OAuth " <>
           "callback, which completes the vault.authorize the gate admitted under the state " <>
           "it left, and the browser's sign-in, re-authentication and policy acceptance, " <>
-          "which run before any context of the person's exists"
+          "which establish a person's sign-in, prove it fresh or complete it rather than " <>
+          "act under a context the gate admitted"
     },
     %{
       path: :host_api,

@@ -33,7 +33,8 @@ defmodule Prism.Router do
       CyfrWeb.Pipelines.browser(:auth_browser)
 
       # The browser's sign-in, re-authentication and policy acceptance
-      # admit before any person's context exists, so they decide for
+      # establish a person's sign-in, prove it fresh or complete it rather
+      # than act under a context the gate admitted, so they decide for
       # themselves and record their own refusals: an admission entry each
       # (`Cyfr.Boundaries.admission_entries/0`), under the identity minted
       # here before the browser pipeline's first check.
