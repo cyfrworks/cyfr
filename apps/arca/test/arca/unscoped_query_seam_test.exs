@@ -29,14 +29,15 @@ defmodule Arca.UnscopedQuerySeamTest do
   @root Path.expand("../../../..", __DIR__)
 
   # The functions of Arca.Repo that read or write rows: Ecto.Repo's
-  # queries and Ecto.Adapters.SQL's. Every other function Arca.Repo has is
-  # in @not_queries, and a test holds the two to Arca.Repo's functions
-  # exactly, so an Ecto release that adds a query fails here rather than
-  # slipping past the scan.
-  @queries ~w(aggregate all all_by delete delete! delete_all exists? get get! get_by get_by!
-              insert insert! insert_all insert_or_update insert_or_update! one one! preload
-              query query! query_many query_many! reload reload! stream transact transaction
-              update update! update_all)
+  # queries and Ecto.Adapters.SQL's, explain among them, which under
+  # `analyze: true` runs the query it plans. Every other function Arca.Repo
+  # has is in @not_queries, and a test holds the two to Arca.Repo's
+  # functions exactly, so an Ecto release that adds a query fails here
+  # rather than slipping past the scan.
+  @queries ~w(aggregate all all_by delete delete! delete_all exists? explain get get! get_by
+              get_by! insert insert! insert_all insert_or_update insert_or_update! one one!
+              preload query query! query_many query_many! reload reload! stream transact
+              transaction update update! update_all)
   @not_queries %{
     "__adapter__" => "the adapter module",
     "adapter" => "the configured adapter module",
@@ -48,7 +49,6 @@ defmodule Arca.UnscopedQuerySeamTest do
     "config" => "the repository's configuration",
     "default_options" => "the options every operation starts from",
     "disconnect_all" => "closes the pool's connections",
-    "explain" => "plans a query without reading a row",
     "get_dynamic_repo" => "the process's repository",
     "in_transaction?" => "whether this process is inside a transaction",
     "load" => "builds a struct from data already read",
@@ -266,6 +266,37 @@ defmodule Arca.UnscopedQuerySeamTest do
       scoped = String.replace(source, "where: r.id", "where: r.athanor_id == ^x and r.id")
       assert offenders([{path, scoped}], schemas) == []
     end
+  end
+
+  # Planted: explain under `analyze: true` executes the query it plans, a
+  # delete as much as a read, so an unscoped one is found as the same query
+  # through Repo.all is.
+  test "an unscoped explain, which runs its query under analyze, is a row query" do
+    schemas = tenant_schemas()
+    table = schemas |> Enum.sort() |> hd()
+    short = table |> String.split(".") |> List.last()
+
+    planted = fn call ->
+      {"apps/arca/lib/arca/explain_probe.ex",
+       """
+       defmodule Arca.ExplainProbe do
+         alias #{table}
+         def planted(x) do
+           #{call}
+         end
+       end
+       """}
+    end
+
+    ordinary = "Repo.all(from(r in #{short}, where: r.id == ^x))"
+    assert length(offenders([planted.(ordinary)], schemas)) == 1
+
+    explained =
+      "Repo.explain(:delete_all, from(r in #{short}, where: r.id == ^x), " <>
+        "analyze: true, wrap_in_transaction: false)"
+
+    found = offenders([planted.(explained)], schemas)
+    assert length(found) == 1, "an unscoped Repo.explain(analyze: true) was not found"
   end
 
   test "an unscoped query over a tenant-keyed table says why" do
