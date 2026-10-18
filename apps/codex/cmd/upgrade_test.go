@@ -147,7 +147,12 @@ func TestUpgradeRefusesWhatDoesNotVerify(t *testing.T) {
 			s := newUpgradeScenario(t, "0.9.0", "0.9.1")
 			s.answer = func() ([]byte, error) { return nil, c.err }
 			out, err := s.run()
-			if err == nil || !strings.Contains(err.Error(), c.says) || !strings.Contains(err.Error(), s.self+" is unchanged") {
+			// The upgrade names its binary with its links resolved.
+			self, resolveErr := filepath.EvalSymlinks(s.self)
+			if resolveErr != nil {
+				t.Fatal(resolveErr)
+			}
+			if err == nil || !strings.Contains(err.Error(), c.says) || !strings.Contains(err.Error(), "; "+self+" is unchanged") {
 				t.Fatalf("cyfr upgrade answered %v:\n%s", err, out)
 			}
 			s.unchanged()
