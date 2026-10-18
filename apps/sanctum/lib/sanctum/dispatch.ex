@@ -131,7 +131,9 @@ defmodule Sanctum.Dispatch do
   decision, a refusal included, whose parent call is `opts[:lineage]`'s
   `call_id` — the call that admitted the calling execution. Each refusal
   it makes carries `stage: :admission`. Guest-supplied lineage and call
-  keys are discarded before dispatch.
+  keys are discarded before dispatch. No person is asked at the call: an
+  action the chain's grant names runs unattended once the conjunction
+  admits it, an external action included.
 
   The grant is the one the calling execution's attempt stores, found by
   the host-stamped `opts[:lineage]`: its `attempt` must be an open attempt
@@ -520,7 +522,9 @@ defmodule Sanctum.Dispatch do
   # someone forgets to drop when the row changes, and the row itself is
   # handed on to dispatch so both see one revision. A missing or
   # unreadable server resolves to no row and a digest no edge can name —
-  # fail closed, not fail absent.
+  # fail closed, not fail absent. The row is read under the caller's actor,
+  # so a chain reaches only a server its own athanor holds, and it is read
+  # before the authority's step and any handler.
   defp resolve_server(ctx, server_name) do
     with {:ok, server} <- Arca.McpServerStorage.get(Sanctum.Context.actor(ctx), server_name),
          {:ok, digest} <- Sanctum.ToolServerDigest.from_server(server) do

@@ -42,6 +42,12 @@ defmodule Sanctum.VaultReader do
   destination, and a stdio backend's env entry with `unseal_disclosed/2`,
   held to its disclosure; each refuses before anything is unsealed.
 
+  Both read only the athanor's own entries by name
+  (`Arca.VaultStorage.get_by_name/2`), and an instance entry is no
+  athanor's. An instance entry is never named by a definition whose URL a
+  member chose: a name only an instance entry carries is not found, and
+  that entry is neither unsealed nor used.
+
   ## The payload
 
   The sealed payload (`Sanctum.Vault.Payload`) carries the material

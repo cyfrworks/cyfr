@@ -109,9 +109,16 @@ defmodule Sanctum.Recovery do
        provisioned, and a session issued with the reserved provider
        `restore` to the holder of the capability, before the attempt ends.
        Superseded after the mint, the attempt ends `superseded` with no
-       athanor provisioned and no session, and the person it minted stays;
+       athanor provisioned and no session, and the person it minted stays,
+       under keys their head no longer names and with no linked door or
+       passkey, so the node is no longer empty for another restore;
        a session issued as a concurrent request superseded it is deleted,
        never answered.
+
+  A restore brings back the identity alone: the person, their keys, a
+  door entry and their own athanor. It restores no private data, and a
+  membership an athanor's home revoked stays revoked, since each
+  membership is kept at its athanor's home.
 
   A directory that cannot answer a read before the mint or the session
   leaves the attempt where it stands, answered `:unavailable`.
@@ -1098,6 +1105,11 @@ defmodule Sanctum.Recovery do
   that item re-enabled, the credential read standing again in the
   write's own transaction. Re-enabling a device or a passkey closes the
   person's row, and with it the credential.
+
+  The kit is an ingress, not a gate operation, so a kit re-enable is
+  admitted while the home's storage reserve is depleted
+  (`Arca.StorageReserve`), though the gate refuses the same re-enable
+  then: a re-enable gives authority back rather than taking it away.
   """
   @spec kit_reenable(Context.t(), kit_grant(), String.t(), map()) ::
           {:ok, map()} | {:error, term()}

@@ -8,6 +8,26 @@ defmodule Sanctum.Egress do
   Every request connects to the validated address with the original TLS
   hostname and Host identity. Redirects, retries and content decoding remain
   disabled; callers validate and pin any subsequent destination themselves.
+
+  It carries the control plane's own requests, each made by the module
+  that owns it: registry, OCI, MCP, OAuth token, identity directory and
+  webhook notification requests, and those to the Locus backends service.
+  A new outside service the control plane calls joins through this
+  transport.
+
+  A guest's request never comes here. Opus pins its target under the
+  attempt's authority (`Opus.Host.Egress`); the runtime service connects
+  a guest's own fetch to that pin for its runners (`Locus.Runtime.Relay`),
+  and the control plane connects a guest's attached request to it on a
+  connection of its own (`Opus.Host.AttachedFetch`). Beside that attached
+  request, the control plane's other outbound HTTP is a closed inventory
+  of sites that connect for themselves: the object store at its
+  configured endpoint (`Arca.Adapters.S3`); the identity provider's device
+  flow, on a pool of its own to the provider's fixed hosts
+  (`Sanctum.Auth.DeviceFlow`); and the signed wires to the worker and
+  builds services the deployment names (`Opus.WorkerClient`,
+  `Compendium.Builds.Client`). `Cyfr.EgressInventoryTest` fails on any
+  outbound HTTP site it does not classify.
   """
 
   import Prima.MapUtil, only: [put_unless_nil: 3]

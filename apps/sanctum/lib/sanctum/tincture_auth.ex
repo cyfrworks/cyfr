@@ -36,7 +36,9 @@ defmodule Sanctum.TinctureAuth do
 
   A resume and a renew rotate the bearer, never extend it: each signs a
   new bearer naming the same row, with a deadline of its own, and moves
-  the row's deadline to match. Every bearer carries the deadline it was
+  the row's deadline to match. A canvas's resume signs nothing and keeps
+  the row's deadline (`resume_frame/3` with `rotate: false`), so a canvas
+  hidden past its deadline lapses. Every bearer carries the deadline it was
   signed with and is refused past it whatever the row's, so a copy of an
   earlier bearer gains nothing from a renewal, and a frame no shell renews
   ends at its deadline.
@@ -143,7 +145,12 @@ defmodule Sanctum.TinctureAuth do
 
   # ---- minting ---------------------------------------------------------------
 
-  # A member that does not hold the control plane dispenses nothing.
+  # A member that does not hold the control plane dispenses nothing. A
+  # frame credential is also written under the live slot
+  # (`Arca.FrameCredentials`); an asset credential writes no row, so this
+  # cached check alone stands for its ownership, a stated limit: what a
+  # stale member mints is bounded by its source session or key, whose
+  # rows every fetch reads again.
   defp owner, do: if(Arca.ControlPlane.held?(), do: :ok, else: {:error, :not_owner})
 
   # A person's session or an athanor's key, as established — never a

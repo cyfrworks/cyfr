@@ -22,7 +22,8 @@ defmodule Sanctum.Providers.Confirmation do
       (`Sanctum.Auth.EmailVerification.verify_code/3`), exactly one of the
       two. A forced-fresh OpenID Connect login confirms the record on its
       own page, once the person approves the preview it shows there
-      (`Sanctum.Auth.OIDC.reauth_callback/1`, `reauth_decide/3`).
+      (`Sanctum.Auth.OIDC.reauth_callback/1`, `reauth_decide/3`). A click
+      or a tap alone proves nothing: only these proofs confirm a record.
     * `reauth` begins that login, answering the issuer's URL, or sends the
       code.
     * `pending` answers the person's open confirmations, or with a

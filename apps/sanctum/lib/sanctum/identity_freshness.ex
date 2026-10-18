@@ -16,7 +16,9 @@ defmodule Sanctum.IdentityFreshness do
   directory is the one the genesis names: the cached genesis when there
   is one, and only when nothing is cached the `:genesis` the caller
   passes. Freshness never comes from the person's own home, which may be
-  the stolen one.
+  the stolen one. The bound limits how long an honest directory's answer
+  is reused here; it limits nothing a dishonest directory does, since an
+  old head it keeps serving still verifies as current.
 
   Past the bound with the directory unreachable, or serving a log that
   does not contain the head this home verified, the answer is

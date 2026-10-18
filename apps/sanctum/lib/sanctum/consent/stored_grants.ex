@@ -169,7 +169,11 @@ defmodule Sanctum.Consent.StoredGrants do
 
   # The cell's one announcement of this list. The claim is given up whatever
   # happened under it, a raise included, so the next boot never waits out a
-  # lease nobody is using; its `detail` survives the release.
+  # lease nobody is using; its `detail` survives the release. A shutdown
+  # under the claim is the exception: the task traps no exits, so it dies
+  # before either release runs, the member keeps the cell-wide claim through
+  # its shutdown, as the retention sweep's is kept, and a peer takes it over
+  # once the lease lapses.
   defp announce_once(found, opts) do
     key = Keyword.get(opts, :key, JobClaims.cell_key())
     owner = Keyword.get(opts, :owner, Prima.Boot.id())

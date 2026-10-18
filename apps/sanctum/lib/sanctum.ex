@@ -115,6 +115,10 @@ defmodule Sanctum do
       Visibility,
       Webhook
     ],
+    # Sanctum holds no Ecto: these applications are checked and none is in
+    # `deps`, so the boundary check of a dev or release compile refuses any
+    # reference to Ecto, a driver or an adapter, and every row Sanctum reads
+    # or writes goes through Arca.
     check: [aliases: true, apps: [:ecto, :ecto_sql, :postgrex, :exqlite, :ecto_sqlite3]]
 
   alias Sanctum.Context

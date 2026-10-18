@@ -364,6 +364,10 @@ defmodule Sanctum.Caller do
   `Sanctum.Pairing.renew/2`, takes no other. Nothing is memoized: the
   channel reads it all again on every request.
 
+  It holds a signed-in person's permissions (`Context.person_permissions/0`)
+  and nothing more: connecting a device grants no authority the person's
+  session lacks.
+
   Host's export roster (`Cyfr.Boundaries`) does not name this function.
   """
   @spec establish_device(device(), keyword()) :: {:ok, Context.t()} | {:error, refusal()}

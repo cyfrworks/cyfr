@@ -44,8 +44,10 @@ defmodule Sanctum.Directory do
        refused `{:capacity, :rotations, seconds}`, the seconds left in the
        window; a recovery is exempt.
 
-  An overload that refuses a recovery answers `{:rate_limited, seconds}`,
-  retryable, and never a stale policy.
+  Every bound is admitted before the log is written, so no bound changes
+  an identifier's order: an overload answers `{:rate_limited, seconds}`,
+  retryable, and one that refuses a recovery is never recorded as a stale
+  policy.
 
   ## What every acceptance checks
 
@@ -72,10 +74,15 @@ defmodule Sanctum.Directory do
   identifier may have accepted: at most 100 in a day window, so at most
   200 across one window's boundary. A recovery re-bases up to 200 times
   and answers `:busy`, retryable, only on the 201st moved head, which no
-  sequence of rotations reaches within a day. A recovery request whose
-  revision is no longer current is recorded as a stale-policy refusal once
-  its signature verifies under the recovery set of the revision it names,
-  so a retry answers the same refusal whatever the log does next.
+  sequence of rotations reaches within a day, so an owner recovering from
+  a stolen operational key never has to win a race against its
+  rotations. A recovery request whose revision is no longer current is
+  recorded as a stale-policy refusal once its signature verifies under
+  the recovery set of the revision it names, so a retry answers the same
+  refusal whatever the log does next.
+
+  An accepted recovery is in force at once: there is no delay or contest
+  period in which the keys it replaces could hold it off.
 
   An exact retry answers its recorded outcome without spending an
   allowance: the rotation that is the head, a recovery request id already

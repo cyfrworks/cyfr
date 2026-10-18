@@ -1080,6 +1080,9 @@ defmodule Sanctum.Catalog do
 
   The single reader of `:sanctum, :tool_providers` — config always sets the
   key, so the default is an empty list, never a hidden second roster.
+  Every module in an application's `lib/` that implements `Prima.Provider`
+  is on it: the table is built from this roster alone, so a provider left
+  off would declare operations no gate serves.
   """
   @spec configured_providers() :: [module()]
   def configured_providers, do: Application.get_env(:sanctum, :tool_providers, [])

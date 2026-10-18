@@ -37,13 +37,17 @@ defmodule Sanctum.Streams do
   `stream:<name>`, whose request-log row's method is `streams/open`,
   appended under the log's own budget like an operation's. An admitted
   open's work is the grant it answers, so the decision closes as
-  succeeded once the grant exists.
+  succeeded once the grant exists. What the stream then carries is
+  delivery under that grant, not an operation: the events it delivers
+  record no decision.
 
   The grant names the stream's `Cyfr.Bus` roster key and its subject,
   never a concrete topic: the gate never names the bus. The delivery owner
   above it resolves the topic (`Cyfr.Bus.granted_topic/2`), subscribes,
-  and keeps enforcing the grant — its deadline, the caller's standing,
-  overflow. Nothing here subscribes to anything, and a reconnect is a new
+  and keeps enforcing the grant: it closes the stream at the grant's
+  deadline, on overflow, and when a revalidation on a standing change
+  refuses the caller, as one does for a frame's stream once its frame is
+  suspended. Nothing here subscribes to anything, and a reconnect is a new
   open.
   """
 

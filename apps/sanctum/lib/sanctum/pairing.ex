@@ -182,7 +182,8 @@ defmodule Sanctum.Pairing do
   `fresh_required?/2` is what the deciding sites ask
   (`Sanctum.Consent.Authz.confirm/3`): the table's answer, so a sensitive
   change needs a pending confirmation proven by a passkey assertion or a
-  fresh re-authentication, whoever makes it.
+  fresh re-authentication, whoever makes it. No setting or client turns a
+  row off: the table is this module's constant, the same at every home.
 
   ## Who can confirm
 
@@ -912,6 +913,11 @@ defmodule Sanctum.Pairing do
   context, the client's device channel among them, reads the standing
   again at once rather than at its next ping, and the channel refuses the
   client and closes. Answers the client's row as revoked.
+
+  Until a lost device's pairing is revoked, what it cached and the device
+  key it holds are the exposure: that key renews its certificate while the
+  pairing stands (`renew/2`), so a certificate's expiry does not end it.
+  The revocation erases nothing the device already received.
   """
   @spec revoke(Context.t(), String.t()) :: {:ok, map()} | {:error, refusal()}
   def revoke(%Context{} = ctx, client_id) when is_binary(client_id) do

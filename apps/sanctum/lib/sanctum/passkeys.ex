@@ -12,6 +12,11 @@ defmodule Sanctum.Passkeys do
   `wax_`, whose calls are rescued: a malformed ceremony is a refusal,
   never a crash.
 
+  A passkey answers only under the RP ID it was registered at: one of
+  another RP ID signs no one in and proves nothing here, so once the
+  home's host changes, a person registers a passkey again or uses
+  another method.
+
   ## Registration
 
   `register/2` without a credential answers the creation options: user

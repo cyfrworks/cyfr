@@ -31,7 +31,8 @@ defmodule Sanctum.Tenancy.Members do
   Their other memberships, their identity and their door entry stand: a
   removal is not a deny, so they may still sign in, admitted to nothing
   they were removed from. An address a client saved for this home grants
-  nothing either way.
+  nothing either way. A removal reads no directory, so it takes effect at
+  once even while a remote person's identity head cannot be read fresh.
 
   Every change is announced (`Sanctum.Telemetry.membership_changed/3`),
   keyed by the person, so a mounted LiveView can re-derive what it shows.

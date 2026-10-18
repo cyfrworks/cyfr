@@ -27,6 +27,12 @@ defmodule Sanctum.VirtualTools do
       and `http` a URL, so neither declares one and neither takes a
       constraint.
 
+  An `http` action is classed by what it does at its destination: `put`,
+  `patch` and `post` write there and are `:external`, and `delete` is
+  `:destructive`, so none of them takes a standing allow
+  (`Sanctum.ToolGrants`); `get`, `head`, `options`, `read`, `links` and
+  `metadata` are `:read` and may take one.
+
   Every function is a pure read of the table.
   """
 

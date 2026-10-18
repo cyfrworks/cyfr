@@ -238,7 +238,10 @@ defmodule Sanctum.Attach do
   # lender's profile, consent and row as well. A `once` row is consumed by
   # the root through `Arca.ConsentStorage.consume_once/5`, under the
   # profile's lock and against the pinned consent. A missing consent or
-  # row is `:grant_expired`, never a standing binding.
+  # row is `:grant_expired`, never a standing binding. The lifetime is
+  # read at each use, whatever the run's origin: a scheduled or webhook run
+  # uses an `until` binding while it is live and is refused once it has
+  # passed.
   @spec lifetime(Context.t(), map(), map()) :: :ok | {:error, :grant_expired | :unavailable}
   def lifetime(%Context{} = ctx, %{binding_key: key} = resource, %{} = use) when is_binary(key) do
     # The pins a run under `use` carries for this binding: the root's, and

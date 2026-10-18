@@ -13,7 +13,9 @@ defmodule Sanctum.Consent.TinctureGrant do
 
   A tincture whose owner profile waits for the person, or that holds no
   active owner profile or no head at all, is ungranted: its declaration
-  is never its grant, so it opens nothing until the person consents.
+  is never its grant, so it opens nothing until the person consents. A
+  canvas is held to this too, though it has no way out: reading is itself
+  a trust decision, so its grant names every stream it reads.
 
   A version opens in a frame, and a frame is admitted on the interactive
   path whoever asks (the shell, a canvas's activation or restore, a data

@@ -40,7 +40,8 @@ defmodule Sanctum.Telemetry do
   @auth_event [:cyfr, :sanctum, :auth]
   @platform_context_event [:cyfr, :sanctum, :platform_context]
 
-  # The standing changes this domain announces. Sanctum never broadcasts:
+  # The standing changes this domain announces: every standing change
+  # emits its event once it commits. Sanctum never broadcasts:
   # a foundation below the host emits telemetry, and the host's bridge is
   # the one place an event becomes a bus message
   # (`Cyfr.Telemetry.Catalog` lists each with its consumer).

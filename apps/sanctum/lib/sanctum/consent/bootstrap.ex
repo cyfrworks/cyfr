@@ -4,6 +4,11 @@ defmodule Sanctum.Consent.Bootstrap do
   @moduledoc """
   Mint first consents for the **seed bundle** — the operator's own code.
 
+  These are the one consent no person gives: provisioning grants the
+  shipped seed components their declared shape so the assistant works on
+  a new athanor, and the person revokes each like any other consent
+  (`profile.revoke`).
+
   For every executable local component without a profile, mints an owner
   profile and a revision-1 consent whose blob grants each closure node its
   manifest-declared caps (the empty ask when a manifest declares none):

@@ -21,6 +21,10 @@ defmodule Sanctum.Decisions do
   store past the log's own budget (`Arca.DecisionLog.budget_ms/0`); a
   write past the node's writer cap waits for nothing at all.
 
+  Batching decisions, or dropping a class of them, changes the one record
+  per call this module keeps: it is a measured design change, never a
+  tuning of the writers or the budget.
+
   The loss event is the audit's alarm. A gap in the trail is visible only
   here, so it is catalogued with a metric an operator alerts on
   (`cyfr_sanctum_decision_lost_total`, by stage and kind — `capacity`

@@ -254,7 +254,8 @@ defmodule Sanctum.Providers.Athanor do
   # only drawn in the UI, so the wire cannot be a directory: a user id you
   # cannot see on any members list answers exactly like one that does not
   # exist. The row is minted lazily (no provisioning) and the caller opens
-  # its chat by focusing it, like any athanor.
+  # its chat by focusing it, like any athanor. The pair is homed here, at
+  # the home where the two already share an athanor.
   def handle(%Context{} = ctx, %{"action" => "pair", "user" => other} = _args)
       when is_binary(other) and other != "" do
     cond do
