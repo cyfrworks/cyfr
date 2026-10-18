@@ -241,6 +241,135 @@ defmodule Prima.Refusal do
     exception: {:internal, "Start-up failed unexpectedly"}
   }
 
+  # The first-run setup page's refusals. Each says what changed — nothing —
+  # and the one next step.
+  @setup %{
+    setup_not_local:
+      {:forbidden,
+       "Setting up this home is done on the machine itself: on its own screen, or through " <>
+         "its loopback address. Nothing was changed. Open the link `cyfr setup link` " <>
+         "prints, on the machine."},
+    setup_token_invalid:
+      {:unauthenticated,
+       "This setup link is not this home's. Nothing was changed. Run `cyfr setup link` on " <>
+         "the machine and open the link it prints."},
+    setup_token_spent:
+      {:conflict,
+       "This setup link has been used, and this home is set up. Nothing was changed. Sign " <>
+         "in instead."},
+    setup_claimed:
+      {:conflict,
+       "Someone finished setting up this home a moment ago, so it already has its " <>
+         "administrator. Nothing was changed for you. Sign in; if that was not you, tell " <>
+         "whoever runs the machine."},
+    setup_closed:
+      {:forbidden,
+       "Whoever runs the machine names this home's administrators, so it has no setup " <>
+         "step. Nothing was changed. Sign in, or ask them to add you."},
+    setup_expired:
+      {:cancelled,
+       "This setup attempt ended before it finished: it expired, was cancelled, or the " <>
+         "home restarted while it waited. Nothing was changed. Start again."},
+    setup_cancel_too_late:
+      {:conflict,
+       "Too late to cancel: this setup had already finished, and the account you approved " <>
+         "on your phone is this home's administrator. Sign in to continue; if that account " <>
+         "is wrong, whoever runs the machine can name the administrators in its deployment " <>
+         "file."},
+    setup_denied:
+      {:cancelled,
+       "The sign-in was declined on your phone. Nothing was changed. Start again with the " <>
+         "account that should run this home."},
+    setup_unverified_email:
+      {:forbidden,
+       "That account has no email address GitHub or Google has verified, and this home's " <>
+         "administrator needs one. Nothing was changed. Verify an address with them, then " <>
+         "start again."},
+    setup_provider_unavailable:
+      {:unavailable,
+       "GitHub or Google did not answer. Nothing was changed. Start again in a moment."},
+    setup_failed:
+      {:unavailable,
+       "This home could not finish creating your account. Nothing was changed. Start " <>
+         "again; if it keeps failing, the home's log on the machine says why."},
+    setup_ticket_invalid:
+      {:unauthenticated,
+       "This sign-in belongs to another browser or has been used. Nothing was changed. Sign " <>
+         "in on this screen."}
+  }
+
+  # How the home is reached: the boot's and the reach engine's refusals
+  # that carry nothing but their code.
+  @reach %{
+    reach_missing:
+      {:setup_required,
+       "CYFR_REACH is not set in .env, so this home does not know how it is reached. " <>
+         "Nothing started. Run `cyfr init` for a new home, or `cyfr reach " <>
+         "local|tailnet|public` for this one."},
+    reach_assertion_from_file:
+      {:forbidden,
+       "CYFR_LOCAL_INGRESS_ASSERTED is the compose file's assertion and cannot come from " <>
+         ".env. Remove it from .env."},
+    setup_token_with_admins:
+      {:invalid_argument,
+       "CYFR_SETUP_TOKEN is set, but CYFR_PLATFORM_ADMIN_EMAILS already names this home's " <>
+         "administrators, so no setup can use it. Nothing started. Delete the " <>
+         "CYFR_SETUP_TOKEN line from .env, then run `cyfr up`."},
+    reach_request_reused:
+      {:conflict,
+       "This request names a different change than the one first sent under its id. " <>
+         "Nothing was changed. Send it again under a new id."},
+    tailnet_not_joined:
+      {:setup_required,
+       "This machine has not joined your tailnet. Nothing was changed. Run `cyfr reach " <>
+         "tailnet` and approve the machine with the link it prints."},
+    tailnet_join_expired:
+      {:timeout,
+       "The approval link expired before the machine was approved. How this home is " <>
+         "reached was not changed. Run `cyfr reach tailnet` for a new link."},
+    tailnet_join_cancelled:
+      {:cancelled,
+       "Joining your tailnet was cancelled. How this home is reached was not changed."},
+    tailnet_join_not_current:
+      {:conflict, "That join attempt is no longer the one in progress. Nothing was changed."}
+  }
+
+  # The form a reach setting's value must take, by the setting.
+  @reach_setting_forms %{
+    "CYFR_PORT" => "a port from 1 to 65535",
+    "CYFR_PROXY_PORT" => "a port from 1 to 65535",
+    "CYFR_BIND_ADDRESS" => "an IPv4 or IPv6 address",
+    "CYFR_PROXY_BIND_ADDRESS" => "an IPv4 or IPv6 address",
+    "CYFR_LOCAL_INGRESS_ASSERTED" => "true, the one value the compose file asserts",
+    "CYFR_TRUSTED_PROXY_HOPS" => "a whole number of proxy hops from 0 to 16",
+    "CYFR_TRUSTED_PROXY_CIDRS" => "a comma-separated list of IP addresses and CIDRs"
+  }
+
+  # What a `cyfr reach` input was meant to be.
+  @reach_input_kinds %{
+    domain: "domain",
+    tailnet_name: "tailnet machine name",
+    email: "email address"
+  }
+
+  # Why a setup token cannot be used, and the fix for each.
+  @setup_token_refusals %{
+    malformed:
+      {"it is not 64 lowercase hexadecimal characters",
+       "Replace it with 64 lowercase hexadecimal characters, such as `openssl rand -hex 32` " <>
+         "prints"},
+    restore_token: {"CYFR_RESTORE_TOKEN also reserves the first person", "Remove one of the two"},
+    headless:
+      {"a headless node has no setup page",
+       "Set CYFR_PLATFORM_ADMIN_EMAILS instead and delete CYFR_SETUP_TOKEN"},
+    oidc:
+      {"the setup signs in through GitHub or Google, and this home uses an OIDC issuer",
+       "Set CYFR_PLATFORM_ADMIN_EMAILS instead and delete CYFR_SETUP_TOKEN"},
+    no_provider:
+      {"the setup signs in through GitHub or Google, and this home uses neither",
+       "Set CYFR_PLATFORM_ADMIN_EMAILS instead and delete CYFR_SETUP_TOKEN"}
+  }
+
   @doc "The sixteen refusal classes."
   @spec classes() :: [class()]
   def classes, do: @classes
@@ -861,11 +990,243 @@ defmodule Prima.Refusal do
   defp row(:attachment_too_large), do: {:invalid_argument, "An attachment is too large"}
   defp row(:storage_error), do: {:internal, "Storage failed"}
 
+  defp row(reason) when is_map_key(@setup, reason), do: Map.fetch!(@setup, reason)
+  defp row(reason) when is_map_key(@reach, reason), do: Map.fetch!(@reach, reason)
+
+  # A reach code carried with its payload, as the boot's resolver answers
+  # it, reads as the same row.
+  defp row({reason, payload})
+       when is_map_key(@reach, reason) and is_map(payload) and map_size(payload) == 0,
+       do: Map.fetch!(@reach, reason)
+
+  # How the home is reached, as the boot reads it (`Cyfr.RuntimeConfig.resolve_reach/1`):
+  # each sentence names what is wrong and the command that writes it right.
+  # Every payload is a setting's name or its non-secret value.
+  defp row({:reach_unknown_mode, %{value: value}}) when is_binary(value),
+    do:
+      {:invalid_argument,
+       "CYFR_REACH is `#{value}`; it must be `local`, `tailnet` or `public`. Run " <>
+         "`cyfr reach <mode>` to set it with the address it implies."}
+
+  defp row({:reach_local_mismatch, %{key: key, value: value}})
+       when key in ["CYFR_HOST", "CYFR_PUBLIC_URL"] and is_binary(value) do
+    what = "#{key} is `#{value}`"
+
+    {:invalid_argument,
+     "CYFR_REACH is `local`, which serves this computer alone at its localhost address, " <>
+       "but #{what}. Run `cyfr reach local` to write the matching settings, or " <>
+       "`cyfr reach tailnet|public` to reach it from other devices."}
+  end
+
+  defp row({:reach_tailnet_host_invalid, payload}) when is_map(payload) do
+    what =
+      case payload do
+        %{host: host} when is_binary(host) -> "CYFR_HOST `#{host}` is not"
+        _ -> "CYFR_HOST is not set to"
+      end
+
+    {:invalid_argument,
+     tailnet_sentence("#{what} a tailnet machine name (<machine>.<tailnet>.ts.net)")}
+  end
+
+  defp row({:reach_tailnet_node_invalid, payload}) when is_map(payload) do
+    what =
+      case payload do
+        %{value: value} when is_binary(value) ->
+          "CYFR_TAILNET_NODE_ID `#{value}` is malformed"
+
+        _ ->
+          "CYFR_TAILNET_NODE_ID is missing"
+      end
+
+    {:invalid_argument, tailnet_sentence(what)}
+  end
+
+  defp row({:reach_public_host_invalid, payload}) when is_map(payload) do
+    what =
+      case payload do
+        %{host: host} when is_binary(host) -> "CYFR_HOST `#{host}` is not"
+        _ -> "CYFR_HOST is not set to"
+      end
+
+    {:invalid_argument,
+     "CYFR_REACH is `public`, but #{what} a public domain name (not localhost, an IP address " <>
+       "or a ts.net name). Run `cyfr reach public --domain <your domain>`."}
+  end
+
+  defp row({:reach_public_url_mismatch, %{mode: mode, expected: expected} = payload})
+       when mode in ["tailnet", "public"] and is_binary(expected) do
+    now =
+      case payload do
+        %{value: url} when is_binary(url) -> "it is `#{url}`"
+        _ -> "it is not set"
+      end
+
+    {:invalid_argument,
+     "CYFR_PUBLIC_URL must be exactly #{expected} when CYFR_REACH is `#{mode}`; #{now}. " <>
+       "Run `cyfr reach #{mode}` to rewrite both."}
+  end
+
+  defp row({:reach_key_outside_mode, %{key: key, mode: mode, needs: needs}})
+       when key in ["CADDY_ACME_EMAIL", "CYFR_TAILNET_NODE_ID"] and
+              mode in ["local", "tailnet", "public"] and needs in ["tailnet", "public"],
+       do:
+         {:invalid_argument,
+          "`#{key}` is set, but only a `#{needs}` home uses it (CYFR_REACH is `#{mode}`). " <>
+            "Remove it, or run `cyfr reach #{needs}`."}
+
+  defp row({:reach_source_conflict, %{key: key, file_value: file, process_value: process}})
+       when is_binary(key) and is_binary(file) and is_binary(process) do
+    there = if process == "", do: "blank", else: "`#{process}`"
+
+    {:conflict,
+     "`#{key}` is `#{file}` in .env and #{there} in this process's environment; a home has " <>
+       "one reach. Remove one of them."}
+  end
+
+  defp row({:reach_bind_not_loopback, %{address: address}}) when is_binary(address),
+    do:
+      {:forbidden,
+       "CYFR_BIND_ADDRESS `#{address}` is not a loopback address, so other machines could " <>
+         "reach this home's loopback listener. Bind 127.0.0.1 or ::1; a home reached from " <>
+         "other devices uses CYFR_REACH=tailnet or public."}
+
+  defp row({:reach_setting_invalid, %{key: key, value: value}})
+       when is_map_key(@reach_setting_forms, key) and is_binary(value),
+       do:
+         {:invalid_argument,
+          "`#{key}` is `#{value}`, which is not #{Map.fetch!(@reach_setting_forms, key)}. " <>
+            "Nothing started. Correct it, or remove it to take the default."}
+
+  defp row({:tailnet_node_id_unsupported, %{value: value}}) when is_binary(value),
+    do:
+      {:invalid_argument,
+       "Tailscale reported a machine identity this home cannot store (`#{value}`). How this " <>
+         "home is reached was not changed. Report this with your Tailscale version."}
+
+  defp row({:setup_token_refused, %{why: why}}) when is_map_key(@setup_token_refusals, why) do
+    {because, fix} = Map.fetch!(@setup_token_refusals, why)
+
+    {:invalid_argument,
+     "CYFR_SETUP_TOKEN cannot be used here: #{because}. Nothing started. #{fix}."}
+  end
+
+  defp row({:compose_env_refused, %{key: "COMPOSE_" <> _ = key}}),
+    do:
+      {:invalid_argument,
+       "`.env` sets `#{key}`, which Docker Compose would read to choose this stack's files, " <>
+         "project or services behind cyfr's back. Nothing started. Remove it; cyfr chooses " <>
+         "them from CYFR_REACH and CYFR_LOCUS_BUILDS_URL."}
+
+  # The reach engine's refusals and outcomes, in the words `cyfr reach`
+  # prints them. A sentence that follows a change that may have landed
+  # says so and names the recovery, never a bare "try again".
+  defp row({:reach_busy, %{holder: holder, pid: pid, until: until}})
+       when is_binary(holder) and is_binary(pid) and is_binary(until),
+       do:
+         {:conflict,
+          "Another cyfr command holds this home (`#{holder}`), or a docker command it " <>
+            "started is still running (watchdog pid `#{pid}`, which ends by `#{until}` at the " <>
+            "latest). Nothing was changed. Wait until it has finished, then run this command " <>
+            "again; if the holder was interrupted, run `cyfr reach --resume` after that time."}
+
+  defp row({:reach_stale, %{words: words}}) when is_binary(words),
+    do:
+      {:conflict,
+       "How this home is reached changed after the change was shown to you (it is now: " <>
+         "#{words}). Nothing was changed. Run the command again to review the change."}
+
+  defp row({:reach_unchanged, %{address: address}}) when is_binary(address),
+    do:
+      {:invalid_argument,
+       "This home is already reached that way, at #{address}. Nothing was changed."}
+
+  defp row({:reach_invalid, %{input: input, kind: kind, rule: rule}})
+       when is_binary(input) and is_map_key(@reach_input_kinds, kind) and is_binary(rule),
+       do:
+         {:invalid_argument,
+          "`#{input}` is not a valid #{Map.fetch!(@reach_input_kinds, kind)}: #{rule}. " <>
+            "Nothing was changed. Correct it and run the command again."}
+
+  defp row({:tailnet_https_off, %{name: name}}) when is_binary(name),
+    do:
+      {:setup_required,
+       "This machine joined your tailnet as `#{name}`, but your tailnet has HTTPS " <>
+         "certificates turned off, and this home needs them. How this home is reached was " <>
+         "not changed. Turn on HTTPS on the DNS page of the Tailscale admin console, then " <>
+         "run `cyfr reach tailnet` again, which uses this machine as it is. If you do not " <>
+         "want it in your tailnet, remove `#{name}` on the Machines page of the admin console."}
+
+  defp row({:tailnet_active, %{name: name}}) when is_binary(name),
+    do:
+      {:conflict,
+       "This home is already on your tailnet as `#{name}`. Nothing was changed. To give it " <>
+         "another name, run `cyfr reach local`, then `cyfr reach tailnet --new-node`, and " <>
+         "remove `#{name}` on the Machines page of the Tailscale admin console."}
+
+  defp row({:tailnet_name_changed, %{frozen: frozen, now: now}})
+       when is_binary(frozen) and is_binary(now),
+       do:
+         {:conflict,
+          "The machine's tailnet name or identity changed from `#{frozen}` to `#{now}` after " <>
+            "the change was shown. Nothing was changed. Run the command again to review it."}
+
+  defp row({:tailnet_node_mismatch, %{node: node, env: env}})
+       when is_binary(node) and is_binary(env),
+       do:
+         {:conflict,
+          "This machine's tailnet identity is `#{node}`, but .env says this home is " <>
+            "`#{env}`, so it is not being served on your tailnet: it answers on this machine " <>
+            "only, and nothing else was changed. Run `cyfr reach tailnet`, which offers to " <>
+            "move the home to https://#{node} after you confirm."}
+
+  defp row({:docker_unavailable, %{reason: why}}) when is_binary(why),
+    do:
+      {:unavailable,
+       "Docker did not answer (#{why}) before the change was accepted. Nothing was changed. " <>
+         "Start Docker, then run the command again."}
+
+  defp row({:reach_rolled_back, %{new: new, old: old, reason: why}})
+       when is_binary(new) and is_binary(old) and is_binary(why),
+       do:
+         {:conflict,
+          "This home could not start as #{new} (#{why}). What it started was stopped and " <>
+            "checked stopped, and the home was put back: it is reached as before, #{old}, and " <>
+            "running. Fix what the reason names, then run the command again."}
+
+  defp row({:reach_failed, %{new: new, env: env}}) when is_binary(new) and is_binary(env),
+    do:
+      {:unavailable,
+       "This home could not start as #{new}, nor as before; everything was stopped and " <>
+         "checked stopped. .env says: #{env}. Run `cyfr up` to start it as .env says, or " <>
+         "`cyfr reach <mode>` to choose again."}
+
+  defp row({:reach_uncertain, %{observed: observed}}) when is_binary(observed),
+    do:
+      {:uncertain,
+       "This home could not be brought to a known state: #{observed} were still running " <>
+         "after the stop. It may be partly reachable. Nothing more was done. On the machine, " <>
+         "run `cyfr reach --resume`, which stops what is running, checks, and starts the " <>
+         "home as .env says; if it reports the same, run `cyfr down`, check `docker ps`, " <>
+         "then `cyfr up`."}
+
+  defp row({:reach_outcome_unknown, %{reason: why}}) when is_binary(why),
+    do:
+      {:uncertain,
+       "This command lost track of the change before it finished (#{why}), so it may have " <>
+         "been applied. Do not ask for it again: run `cyfr reach --resume`, which finishes it " <>
+         "under the lock and reports what happened."}
+
   # A crafted sentence a producer returned as a bare binary: internal,
   # and its words as they are.
   defp row(reason) when is_binary(reason), do: {:internal, Prima.Sanitizer.sanitize(reason)}
 
   defp row(_reason), do: nil
+
+  defp tailnet_sentence(what),
+    do:
+      "CYFR_REACH is `tailnet`, but #{what}. Run `cyfr reach tailnet`, which reads both from " <>
+        "Tailscale."
 
   defp signal_class(:setup_required), do: :setup_required
   defp signal_class(:consent_required), do: :consent_required

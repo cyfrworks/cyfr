@@ -469,6 +469,10 @@ defmodule Cyfr.CrossLanguageDriftTest do
       {"apps/prima/test/prima/person_assertion_test.exs",
        ~w(assertions identity keys protocol refusals transport verify)}
     ],
+    "reach_modes.json" => [
+      {"apps/codex/internal/reach/head_test.go", ~w(derive boot profiles names words)},
+      {"apps/cyfr/test/cyfr/runtime_config_test.exs", ~w(derive boot profiles names words)}
+    ],
     "release_manifest.json" => [
       {"apps/codex/cmd/lifecycle_test.go", ~w(valid signature)},
       {"apps/codex/internal/release/manifest_test.go", ~w(valid refused signature)},

@@ -1,0 +1,2766 @@
+{
+  "about": "The reach head, its derivation, its canonical bytes and digest, the boot's resolution of a deployment's reach settings, the compose selections, the name grammars and the words a person reads. Cyfr.RuntimeConfig (Elixir) generates every canonical, digest and boot answer; apps/codex/internal/reach (Go) agrees with them. The derive vectors' .env assignments and removals are Go's alone.",
+  "derive": [
+    {
+      "name": "local, builds on, default port",
+      "target": {
+        "mode": "local"
+      },
+      "current": {
+        "port": 4000,
+        "builds_url": "http://locus-builds:4100"
+      },
+      "head": {
+        "mode": "local",
+        "host": "localhost",
+        "port": 4000,
+        "builds_url": "http://locus-builds:4100",
+        "profiles": [
+          "locus-builds"
+        ]
+      },
+      "canonical": "{\"builds_url\":\"http://locus-builds:4100\",\"host\":\"localhost\",\"mode\":\"local\",\"port\":4000,\"profiles\":[\"locus-builds\"]}",
+      "digest": "sha256:045d84baadbecefbea57533074fe686071cd6f80bddf58c442e84d04d69a9ba0",
+      "assignments": {
+        "CYFR_HOST": "localhost",
+        "CYFR_LOCUS_BUILDS_URL": "http://locus-builds:4100",
+        "CYFR_PORT": "4000",
+        "CYFR_REACH": "local"
+      },
+      "removals": [
+        "CADDY_ACME_EMAIL",
+        "CYFR_PUBLIC_URL",
+        "CYFR_TAILNET_NODE_ID"
+      ]
+    },
+    {
+      "name": "local, builds off",
+      "target": {
+        "mode": "local"
+      },
+      "current": {
+        "port": 4000
+      },
+      "head": {
+        "mode": "local",
+        "host": "localhost",
+        "port": 4000,
+        "profiles": []
+      },
+      "canonical": "{\"host\":\"localhost\",\"mode\":\"local\",\"port\":4000,\"profiles\":[]}",
+      "digest": "sha256:7300d73c8b043098a710c0a5d7b0a2ce4cecdefb1b288912e8387aeb9428627f",
+      "assignments": {
+        "CYFR_HOST": "localhost",
+        "CYFR_PORT": "4000",
+        "CYFR_REACH": "local"
+      },
+      "removals": [
+        "CADDY_ACME_EMAIL",
+        "CYFR_LOCUS_BUILDS_URL",
+        "CYFR_PUBLIC_URL",
+        "CYFR_TAILNET_NODE_ID"
+      ]
+    },
+    {
+      "name": "local, custom port",
+      "target": {
+        "mode": "local"
+      },
+      "current": {
+        "port": 8080,
+        "builds_url": "http://locus-builds:4100"
+      },
+      "head": {
+        "mode": "local",
+        "host": "localhost",
+        "port": 8080,
+        "builds_url": "http://locus-builds:4100",
+        "profiles": [
+          "locus-builds"
+        ]
+      },
+      "canonical": "{\"builds_url\":\"http://locus-builds:4100\",\"host\":\"localhost\",\"mode\":\"local\",\"port\":8080,\"profiles\":[\"locus-builds\"]}",
+      "digest": "sha256:bb16e8fa5f9abf33afb32216cfd4b3f1cbf6f77c7050dc97dddbd075afc6a6be",
+      "assignments": {
+        "CYFR_HOST": "localhost",
+        "CYFR_LOCUS_BUILDS_URL": "http://locus-builds:4100",
+        "CYFR_PORT": "8080",
+        "CYFR_REACH": "local"
+      },
+      "removals": [
+        "CADDY_ACME_EMAIL",
+        "CYFR_PUBLIC_URL",
+        "CYFR_TAILNET_NODE_ID"
+      ]
+    },
+    {
+      "name": "local, a custom builder keeps its URL without the locus-builds profile",
+      "target": {
+        "mode": "local"
+      },
+      "current": {
+        "port": 4000,
+        "builds_url": "https://builds.example.net"
+      },
+      "head": {
+        "mode": "local",
+        "host": "localhost",
+        "port": 4000,
+        "builds_url": "https://builds.example.net",
+        "profiles": []
+      },
+      "canonical": "{\"builds_url\":\"https://builds.example.net\",\"host\":\"localhost\",\"mode\":\"local\",\"port\":4000,\"profiles\":[]}",
+      "digest": "sha256:beb1a39f613d6540dc3acddd7195b190d7ed02f869e0c1eb0df721f370e6a5d7",
+      "assignments": {
+        "CYFR_HOST": "localhost",
+        "CYFR_LOCUS_BUILDS_URL": "https://builds.example.net",
+        "CYFR_PORT": "4000",
+        "CYFR_REACH": "local"
+      },
+      "removals": [
+        "CADDY_ACME_EMAIL",
+        "CYFR_PUBLIC_URL",
+        "CYFR_TAILNET_NODE_ID"
+      ]
+    },
+    {
+      "name": "local, the builds URL changes with builds still on",
+      "target": {
+        "mode": "local"
+      },
+      "current": {
+        "port": 4000,
+        "builds_url": "http://locus-builds:4200"
+      },
+      "head": {
+        "mode": "local",
+        "host": "localhost",
+        "port": 4000,
+        "builds_url": "http://locus-builds:4200",
+        "profiles": [
+          "locus-builds"
+        ]
+      },
+      "canonical": "{\"builds_url\":\"http://locus-builds:4200\",\"host\":\"localhost\",\"mode\":\"local\",\"port\":4000,\"profiles\":[\"locus-builds\"]}",
+      "digest": "sha256:6928ac0444fb4f5b756ba5512e720e35c80ec4e84c6931b0d253dd8d74ec75dc",
+      "assignments": {
+        "CYFR_HOST": "localhost",
+        "CYFR_LOCUS_BUILDS_URL": "http://locus-builds:4200",
+        "CYFR_PORT": "4000",
+        "CYFR_REACH": "local"
+      },
+      "removals": [
+        "CADDY_ACME_EMAIL",
+        "CYFR_PUBLIC_URL",
+        "CYFR_TAILNET_NODE_ID"
+      ]
+    },
+    {
+      "name": "tailnet, builds on",
+      "target": {
+        "mode": "tailnet"
+      },
+      "current": {
+        "port": 4000,
+        "builds_url": "http://locus-builds:4100"
+      },
+      "join": {
+        "name": "cyfr.tail1a2b3c.ts.net",
+        "node_id": "nAbc123XYZ1CNTRL"
+      },
+      "head": {
+        "mode": "tailnet",
+        "host": "cyfr.tail1a2b3c.ts.net",
+        "port": 4000,
+        "node_id": "nAbc123XYZ1CNTRL",
+        "public_url": "https://cyfr.tail1a2b3c.ts.net",
+        "builds_url": "http://locus-builds:4100",
+        "profiles": [
+          "locus-builds",
+          "tailnet"
+        ]
+      },
+      "canonical": "{\"builds_url\":\"http://locus-builds:4100\",\"host\":\"cyfr.tail1a2b3c.ts.net\",\"mode\":\"tailnet\",\"node_id\":\"nAbc123XYZ1CNTRL\",\"port\":4000,\"profiles\":[\"locus-builds\",\"tailnet\"],\"public_url\":\"https://cyfr.tail1a2b3c.ts.net\"}",
+      "digest": "sha256:e39efceb8e42a786479a384ff9bfca85fecf85985341e50efe7e24b51806d508",
+      "assignments": {
+        "CYFR_HOST": "cyfr.tail1a2b3c.ts.net",
+        "CYFR_LOCUS_BUILDS_URL": "http://locus-builds:4100",
+        "CYFR_PORT": "4000",
+        "CYFR_PUBLIC_URL": "https://cyfr.tail1a2b3c.ts.net",
+        "CYFR_REACH": "tailnet",
+        "CYFR_TAILNET_NODE_ID": "nAbc123XYZ1CNTRL"
+      },
+      "removals": [
+        "CADDY_ACME_EMAIL"
+      ]
+    },
+    {
+      "name": "tailnet, builds off, custom port",
+      "target": {
+        "mode": "tailnet"
+      },
+      "current": {
+        "port": 8080
+      },
+      "join": {
+        "name": "cyfr.tail1a2b3c.ts.net",
+        "node_id": "nAbc123XYZ1CNTRL"
+      },
+      "head": {
+        "mode": "tailnet",
+        "host": "cyfr.tail1a2b3c.ts.net",
+        "port": 8080,
+        "node_id": "nAbc123XYZ1CNTRL",
+        "public_url": "https://cyfr.tail1a2b3c.ts.net",
+        "profiles": [
+          "tailnet"
+        ]
+      },
+      "canonical": "{\"host\":\"cyfr.tail1a2b3c.ts.net\",\"mode\":\"tailnet\",\"node_id\":\"nAbc123XYZ1CNTRL\",\"port\":8080,\"profiles\":[\"tailnet\"],\"public_url\":\"https://cyfr.tail1a2b3c.ts.net\"}",
+      "digest": "sha256:d700fcc24acb8f46532300c415ce6d63c2a557dd9ae3d7902d905363047cadbc",
+      "assignments": {
+        "CYFR_HOST": "cyfr.tail1a2b3c.ts.net",
+        "CYFR_PORT": "8080",
+        "CYFR_PUBLIC_URL": "https://cyfr.tail1a2b3c.ts.net",
+        "CYFR_REACH": "tailnet",
+        "CYFR_TAILNET_NODE_ID": "nAbc123XYZ1CNTRL"
+      },
+      "removals": [
+        "CADDY_ACME_EMAIL",
+        "CYFR_LOCUS_BUILDS_URL"
+      ]
+    },
+    {
+      "name": "tailnet, another node of the same name",
+      "target": {
+        "mode": "tailnet"
+      },
+      "current": {
+        "port": 4000,
+        "builds_url": "http://locus-builds:4100"
+      },
+      "join": {
+        "name": "cyfr.tail1a2b3c.ts.net",
+        "node_id": "nDifferent9CNTRL"
+      },
+      "head": {
+        "mode": "tailnet",
+        "host": "cyfr.tail1a2b3c.ts.net",
+        "port": 4000,
+        "node_id": "nDifferent9CNTRL",
+        "public_url": "https://cyfr.tail1a2b3c.ts.net",
+        "builds_url": "http://locus-builds:4100",
+        "profiles": [
+          "locus-builds",
+          "tailnet"
+        ]
+      },
+      "canonical": "{\"builds_url\":\"http://locus-builds:4100\",\"host\":\"cyfr.tail1a2b3c.ts.net\",\"mode\":\"tailnet\",\"node_id\":\"nDifferent9CNTRL\",\"port\":4000,\"profiles\":[\"locus-builds\",\"tailnet\"],\"public_url\":\"https://cyfr.tail1a2b3c.ts.net\"}",
+      "digest": "sha256:8edb80c61eaf06bd54e0ad0b686f87de9da97abbf2cfcbb2436a65c89287618d",
+      "assignments": {
+        "CYFR_HOST": "cyfr.tail1a2b3c.ts.net",
+        "CYFR_LOCUS_BUILDS_URL": "http://locus-builds:4100",
+        "CYFR_PORT": "4000",
+        "CYFR_PUBLIC_URL": "https://cyfr.tail1a2b3c.ts.net",
+        "CYFR_REACH": "tailnet",
+        "CYFR_TAILNET_NODE_ID": "nDifferent9CNTRL"
+      },
+      "removals": [
+        "CADDY_ACME_EMAIL"
+      ]
+    },
+    {
+      "name": "public, with an email",
+      "target": {
+        "mode": "public",
+        "domain": "cyfr.example.com",
+        "acme_email": "ops@example.com"
+      },
+      "current": {
+        "port": 4000,
+        "builds_url": "http://locus-builds:4100"
+      },
+      "head": {
+        "mode": "public",
+        "host": "cyfr.example.com",
+        "port": 4000,
+        "public_url": "https://cyfr.example.com",
+        "acme_email": "ops@example.com",
+        "builds_url": "http://locus-builds:4100",
+        "profiles": [
+          "locus-builds",
+          "public"
+        ]
+      },
+      "canonical": "{\"acme_email\":\"ops@example.com\",\"builds_url\":\"http://locus-builds:4100\",\"host\":\"cyfr.example.com\",\"mode\":\"public\",\"port\":4000,\"profiles\":[\"locus-builds\",\"public\"],\"public_url\":\"https://cyfr.example.com\"}",
+      "digest": "sha256:2c30a6570b161fc6dcd3a0df15246f2b8a27cf0cc4793f9d8608f601bcde1969",
+      "assignments": {
+        "CADDY_ACME_EMAIL": "ops@example.com",
+        "CYFR_HOST": "cyfr.example.com",
+        "CYFR_LOCUS_BUILDS_URL": "http://locus-builds:4100",
+        "CYFR_PORT": "4000",
+        "CYFR_PUBLIC_URL": "https://cyfr.example.com",
+        "CYFR_REACH": "public"
+      },
+      "removals": [
+        "CYFR_TAILNET_NODE_ID"
+      ]
+    },
+    {
+      "name": "public, an email-only change",
+      "target": {
+        "mode": "public",
+        "domain": "cyfr.example.com",
+        "acme_email": "admin@example.com"
+      },
+      "current": {
+        "port": 4000,
+        "builds_url": "http://locus-builds:4100"
+      },
+      "head": {
+        "mode": "public",
+        "host": "cyfr.example.com",
+        "port": 4000,
+        "public_url": "https://cyfr.example.com",
+        "acme_email": "admin@example.com",
+        "builds_url": "http://locus-builds:4100",
+        "profiles": [
+          "locus-builds",
+          "public"
+        ]
+      },
+      "canonical": "{\"acme_email\":\"admin@example.com\",\"builds_url\":\"http://locus-builds:4100\",\"host\":\"cyfr.example.com\",\"mode\":\"public\",\"port\":4000,\"profiles\":[\"locus-builds\",\"public\"],\"public_url\":\"https://cyfr.example.com\"}",
+      "digest": "sha256:e2d8201d3e78c7ce80a746df569ade1c69469e804ba1cad2658b27c1b173c3fe",
+      "assignments": {
+        "CADDY_ACME_EMAIL": "admin@example.com",
+        "CYFR_HOST": "cyfr.example.com",
+        "CYFR_LOCUS_BUILDS_URL": "http://locus-builds:4100",
+        "CYFR_PORT": "4000",
+        "CYFR_PUBLIC_URL": "https://cyfr.example.com",
+        "CYFR_REACH": "public"
+      },
+      "removals": [
+        "CYFR_TAILNET_NODE_ID"
+      ]
+    },
+    {
+      "name": "public, no email",
+      "target": {
+        "mode": "public",
+        "domain": "cyfr.example.com"
+      },
+      "current": {
+        "port": 4000,
+        "builds_url": "http://locus-builds:4100"
+      },
+      "head": {
+        "mode": "public",
+        "host": "cyfr.example.com",
+        "port": 4000,
+        "public_url": "https://cyfr.example.com",
+        "builds_url": "http://locus-builds:4100",
+        "profiles": [
+          "locus-builds",
+          "public"
+        ]
+      },
+      "canonical": "{\"builds_url\":\"http://locus-builds:4100\",\"host\":\"cyfr.example.com\",\"mode\":\"public\",\"port\":4000,\"profiles\":[\"locus-builds\",\"public\"],\"public_url\":\"https://cyfr.example.com\"}",
+      "digest": "sha256:f6a9a07b273deb300fc1c8537a5e9a9c629072cf1c1a37c2148a1c8b94c72588",
+      "assignments": {
+        "CYFR_HOST": "cyfr.example.com",
+        "CYFR_LOCUS_BUILDS_URL": "http://locus-builds:4100",
+        "CYFR_PORT": "4000",
+        "CYFR_PUBLIC_URL": "https://cyfr.example.com",
+        "CYFR_REACH": "public"
+      },
+      "removals": [
+        "CADDY_ACME_EMAIL",
+        "CYFR_TAILNET_NODE_ID"
+      ]
+    },
+    {
+      "name": "public, a domain is read without case",
+      "target": {
+        "mode": "public",
+        "domain": "CYFR.Example.COM"
+      },
+      "current": {
+        "port": 4000
+      },
+      "head": {
+        "mode": "public",
+        "host": "cyfr.example.com",
+        "port": 4000,
+        "public_url": "https://cyfr.example.com",
+        "profiles": [
+          "public"
+        ]
+      },
+      "canonical": "{\"host\":\"cyfr.example.com\",\"mode\":\"public\",\"port\":4000,\"profiles\":[\"public\"],\"public_url\":\"https://cyfr.example.com\"}",
+      "digest": "sha256:d2675f15d62d707ad4cfe9063d85e4bff85773f81483ede01ce53d39caacdf04",
+      "assignments": {
+        "CYFR_HOST": "cyfr.example.com",
+        "CYFR_PORT": "4000",
+        "CYFR_PUBLIC_URL": "https://cyfr.example.com",
+        "CYFR_REACH": "public"
+      },
+      "removals": [
+        "CADDY_ACME_EMAIL",
+        "CYFR_LOCUS_BUILDS_URL",
+        "CYFR_TAILNET_NODE_ID"
+      ]
+    },
+    {
+      "name": "public, a CYFR_PORT change",
+      "target": {
+        "mode": "public",
+        "domain": "cyfr.example.com"
+      },
+      "current": {
+        "port": 4443,
+        "builds_url": "http://locus-builds:4100"
+      },
+      "head": {
+        "mode": "public",
+        "host": "cyfr.example.com",
+        "port": 4443,
+        "public_url": "https://cyfr.example.com",
+        "builds_url": "http://locus-builds:4100",
+        "profiles": [
+          "locus-builds",
+          "public"
+        ]
+      },
+      "canonical": "{\"builds_url\":\"http://locus-builds:4100\",\"host\":\"cyfr.example.com\",\"mode\":\"public\",\"port\":4443,\"profiles\":[\"locus-builds\",\"public\"],\"public_url\":\"https://cyfr.example.com\"}",
+      "digest": "sha256:6e57f8e03ec1a332f3de8e7b44d7d57ecf25dbdba713b5b8fc1b481b1182013d",
+      "assignments": {
+        "CYFR_HOST": "cyfr.example.com",
+        "CYFR_LOCUS_BUILDS_URL": "http://locus-builds:4100",
+        "CYFR_PORT": "4443",
+        "CYFR_PUBLIC_URL": "https://cyfr.example.com",
+        "CYFR_REACH": "public"
+      },
+      "removals": [
+        "CADDY_ACME_EMAIL",
+        "CYFR_TAILNET_NODE_ID"
+      ]
+    },
+    {
+      "name": "tailnet, not joined",
+      "target": {
+        "mode": "tailnet"
+      },
+      "current": {
+        "port": 4000
+      },
+      "refusal": {
+        "code": "tailnet_not_joined",
+        "payload": {}
+      }
+    },
+    {
+      "name": "tailnet, a node id outside the grammar",
+      "target": {
+        "mode": "tailnet"
+      },
+      "current": {
+        "port": 4000
+      },
+      "join": {
+        "name": "cyfr.tail1a2b3c.ts.net",
+        "node_id": "n/bad"
+      },
+      "refusal": {
+        "code": "tailnet_node_id_unsupported",
+        "payload": {
+          "value": "n/bad"
+        }
+      }
+    },
+    {
+      "name": "tailnet, a name that is not a tailnet name",
+      "target": {
+        "mode": "tailnet"
+      },
+      "current": {
+        "port": 4000
+      },
+      "join": {
+        "name": "cyfr.example.com",
+        "node_id": "nAbc123XYZ1CNTRL"
+      },
+      "refusal": {
+        "code": "reach_invalid",
+        "payload": {
+          "input": "cyfr.example.com",
+          "kind": "tailnet_name",
+          "rule": "a tailnet machine name is <machine>.<tailnet>.ts.net"
+        }
+      }
+    },
+    {
+      "name": "public, a ts.net domain",
+      "target": {
+        "mode": "public",
+        "domain": "cyfr.tail1a2b3c.ts.net"
+      },
+      "current": {
+        "port": 4000
+      },
+      "refusal": {
+        "code": "reach_invalid",
+        "payload": {
+          "input": "cyfr.tail1a2b3c.ts.net",
+          "kind": "domain",
+          "rule": "a domain is two or more labels of letters, digits and hyphens, and not localhost, an IP address or a ts.net name"
+        }
+      }
+    },
+    {
+      "name": "public, an IP address",
+      "target": {
+        "mode": "public",
+        "domain": "192.0.2.10"
+      },
+      "current": {
+        "port": 4000
+      },
+      "refusal": {
+        "code": "reach_invalid",
+        "payload": {
+          "input": "192.0.2.10",
+          "kind": "domain",
+          "rule": "a domain is two or more labels of letters, digits and hyphens, and not localhost, an IP address or a ts.net name"
+        }
+      }
+    },
+    {
+      "name": "public, a URL for a domain",
+      "target": {
+        "mode": "public",
+        "domain": "https://cyfr.example.com"
+      },
+      "current": {
+        "port": 4000
+      },
+      "refusal": {
+        "code": "reach_invalid",
+        "payload": {
+          "input": "https://cyfr.example.com",
+          "kind": "domain",
+          "rule": "a domain is two or more labels of letters, digits and hyphens, and not localhost, an IP address or a ts.net name"
+        }
+      }
+    },
+    {
+      "name": "public, no domain",
+      "target": {
+        "mode": "public"
+      },
+      "current": {
+        "port": 4000
+      },
+      "refusal": {
+        "code": "reach_invalid",
+        "payload": {
+          "input": "",
+          "kind": "domain",
+          "rule": "a domain is two or more labels of letters, digits and hyphens, and not localhost, an IP address or a ts.net name"
+        }
+      }
+    },
+    {
+      "name": "public, a malformed email",
+      "target": {
+        "mode": "public",
+        "domain": "cyfr.example.com",
+        "acme_email": "ops at example.com"
+      },
+      "current": {
+        "port": 4000
+      },
+      "refusal": {
+        "code": "reach_invalid",
+        "payload": {
+          "input": "ops at example.com",
+          "kind": "email",
+          "rule": "an email address is a name of letters, digits, dots, plus signs, hyphens and underscores, then @ and a domain"
+        }
+      }
+    },
+    {
+      "name": "tailnet, an email",
+      "target": {
+        "mode": "tailnet",
+        "acme_email": "ops@example.com"
+      },
+      "current": {
+        "port": 4000
+      },
+      "join": {
+        "name": "cyfr.tail1a2b3c.ts.net",
+        "node_id": "nAbc123XYZ1CNTRL"
+      },
+      "refusal": {
+        "code": "reach_invalid",
+        "payload": {
+          "input": "ops@example.com",
+          "kind": "email",
+          "rule": "only a public home has a certificate email"
+        }
+      }
+    },
+    {
+      "name": "local, a domain",
+      "target": {
+        "mode": "local",
+        "domain": "cyfr.example.com"
+      },
+      "current": {
+        "port": 4000
+      },
+      "refusal": {
+        "code": "reach_invalid",
+        "payload": {
+          "input": "cyfr.example.com",
+          "kind": "domain",
+          "rule": "only a public home has a domain"
+        }
+      }
+    },
+    {
+      "name": "an unknown mode",
+      "target": {
+        "mode": "lan"
+      },
+      "current": {
+        "port": 4000
+      },
+      "refusal": {
+        "code": "reach_unknown_mode",
+        "payload": {
+          "value": "lan"
+        }
+      }
+    },
+    {
+      "name": "a port outside 1 to 65535",
+      "target": {
+        "mode": "local"
+      },
+      "current": {
+        "port": 70000
+      },
+      "refusal": {
+        "code": "reach_setting_invalid",
+        "payload": {
+          "key": "CYFR_PORT",
+          "value": "70000"
+        }
+      }
+    }
+  ],
+  "boot": [
+    {
+      "name": "local, as cyfr init writes it",
+      "input": {
+        "file": {
+          "CYFR_REACH": "local",
+          "CYFR_HOST": "localhost",
+          "CYFR_PORT": "4000",
+          "CYFR_LOCUS_BUILDS_URL": "http://locus-builds:4100"
+        },
+        "process": {
+          "CYFR_REACH": "local",
+          "CYFR_HOST": "localhost",
+          "CYFR_PORT": "4000",
+          "CYFR_LOCUS_BUILDS_URL": "http://locus-builds:4100"
+        },
+        "release?": true
+      },
+      "reach": {
+        "assertion": "absent",
+        "canonical": "{\"builds_url\":\"http://locus-builds:4100\",\"host\":\"localhost\",\"mode\":\"local\",\"port\":4000,\"profiles\":[\"locus-builds\"]}",
+        "check_origins": [
+          "http://localhost:4000",
+          "https://localhost:4000",
+          "http://127.0.0.1:4000",
+          "https://127.0.0.1:4000",
+          "http://[::1]:4000",
+          "https://[::1]:4000"
+        ],
+        "digest": "sha256:045d84baadbecefbea57533074fe686071cd6f80bddf58c442e84d04d69a9ba0",
+        "head": {
+          "builds_url": "http://locus-builds:4100",
+          "host": "localhost",
+          "mode": "local",
+          "port": 4000,
+          "profiles": [
+            "locus-builds"
+          ]
+        },
+        "hsts": "none",
+        "listeners": {
+          "loopback": [
+            "127.0.0.1",
+            4000
+          ],
+          "proxy": "none"
+        },
+        "mode": "local",
+        "origin": "http://localhost:4000",
+        "trust": "none"
+      }
+    },
+    {
+      "name": "local, defaults",
+      "input": {
+        "file": {
+          "CYFR_REACH": "local"
+        },
+        "process": {
+          "CYFR_REACH": "local"
+        },
+        "release?": true
+      },
+      "reach": {
+        "assertion": "absent",
+        "canonical": "{\"host\":\"localhost\",\"mode\":\"local\",\"port\":4000,\"profiles\":[]}",
+        "check_origins": [
+          "http://localhost:4000",
+          "https://localhost:4000",
+          "http://127.0.0.1:4000",
+          "https://127.0.0.1:4000",
+          "http://[::1]:4000",
+          "https://[::1]:4000"
+        ],
+        "digest": "sha256:7300d73c8b043098a710c0a5d7b0a2ce4cecdefb1b288912e8387aeb9428627f",
+        "head": {
+          "host": "localhost",
+          "mode": "local",
+          "port": 4000,
+          "profiles": []
+        },
+        "hsts": "none",
+        "listeners": {
+          "loopback": [
+            "127.0.0.1",
+            4000
+          ],
+          "proxy": "none"
+        },
+        "mode": "local",
+        "origin": "http://localhost:4000",
+        "trust": "none"
+      }
+    },
+    {
+      "name": "dev with the mode unset is local",
+      "input": {
+        "file": {},
+        "process": {},
+        "release?": false
+      },
+      "reach": {
+        "assertion": "absent",
+        "canonical": "{\"host\":\"localhost\",\"mode\":\"local\",\"port\":4000,\"profiles\":[]}",
+        "check_origins": [
+          "http://localhost:4000",
+          "https://localhost:4000",
+          "http://127.0.0.1:4000",
+          "https://127.0.0.1:4000",
+          "http://[::1]:4000",
+          "https://[::1]:4000"
+        ],
+        "digest": "sha256:7300d73c8b043098a710c0a5d7b0a2ce4cecdefb1b288912e8387aeb9428627f",
+        "head": {
+          "host": "localhost",
+          "mode": "local",
+          "port": 4000,
+          "profiles": []
+        },
+        "hsts": "none",
+        "listeners": {
+          "loopback": [
+            "127.0.0.1",
+            4000
+          ],
+          "proxy": "none"
+        },
+        "mode": "local",
+        "origin": "http://localhost:4000",
+        "trust": "none"
+      }
+    },
+    {
+      "name": "a release with the mode unset",
+      "input": {
+        "file": {},
+        "process": {},
+        "release?": true
+      },
+      "refusal": {
+        "class": "setup_required",
+        "code": "reach_missing",
+        "payload": {},
+        "sentence": "CYFR_REACH is not set in .env, so this home does not know how it is reached. Nothing started. Run `cyfr init` for a new home, or `cyfr reach local|tailnet|public` for this one."
+      }
+    },
+    {
+      "name": "a release with the mode blank",
+      "input": {
+        "file": {
+          "CYFR_REACH": "  "
+        },
+        "process": {
+          "CYFR_REACH": "  "
+        },
+        "release?": true
+      },
+      "refusal": {
+        "class": "setup_required",
+        "code": "reach_missing",
+        "payload": {},
+        "sentence": "CYFR_REACH is not set in .env, so this home does not know how it is reached. Nothing started. Run `cyfr init` for a new home, or `cyfr reach local|tailnet|public` for this one."
+      }
+    },
+    {
+      "name": "an unknown mode",
+      "input": {
+        "file": {
+          "CYFR_REACH": "lan"
+        },
+        "process": {
+          "CYFR_REACH": "lan"
+        },
+        "release?": true
+      },
+      "refusal": {
+        "class": "invalid_argument",
+        "code": "reach_unknown_mode",
+        "payload": {
+          "value": "lan"
+        },
+        "sentence": "CYFR_REACH is `lan`; it must be `local`, `tailnet` or `public`. Run `cyfr reach <mode>` to set it with the address it implies."
+      }
+    },
+    {
+      "name": "the mode is read as written",
+      "input": {
+        "file": {
+          "CYFR_REACH": "Local"
+        },
+        "process": {
+          "CYFR_REACH": "Local"
+        },
+        "release?": true
+      },
+      "refusal": {
+        "class": "invalid_argument",
+        "code": "reach_unknown_mode",
+        "payload": {
+          "value": "Local"
+        },
+        "sentence": "CYFR_REACH is `Local`; it must be `local`, `tailnet` or `public`. Run `cyfr reach <mode>` to set it with the address it implies."
+      }
+    },
+    {
+      "name": "local with a host",
+      "input": {
+        "file": {
+          "CYFR_REACH": "local",
+          "CYFR_HOST": "cyfr.example.com"
+        },
+        "process": {
+          "CYFR_REACH": "local",
+          "CYFR_HOST": "cyfr.example.com"
+        },
+        "release?": true
+      },
+      "refusal": {
+        "class": "invalid_argument",
+        "code": "reach_local_mismatch",
+        "payload": {
+          "key": "CYFR_HOST",
+          "value": "cyfr.example.com"
+        },
+        "sentence": "CYFR_REACH is `local`, which serves this computer alone at its localhost address, but CYFR_HOST is `cyfr.example.com`. Run `cyfr reach local` to write the matching settings, or `cyfr reach tailnet|public` to reach it from other devices."
+      }
+    },
+    {
+      "name": "local with a public URL",
+      "input": {
+        "file": {
+          "CYFR_REACH": "local",
+          "CYFR_PUBLIC_URL": "https://cyfr.example.com"
+        },
+        "process": {
+          "CYFR_REACH": "local",
+          "CYFR_PUBLIC_URL": "https://cyfr.example.com"
+        },
+        "release?": true
+      },
+      "refusal": {
+        "class": "invalid_argument",
+        "code": "reach_local_mismatch",
+        "payload": {
+          "key": "CYFR_PUBLIC_URL",
+          "value": "https://cyfr.example.com"
+        },
+        "sentence": "CYFR_REACH is `local`, which serves this computer alone at its localhost address, but CYFR_PUBLIC_URL is `https://cyfr.example.com`. Run `cyfr reach local` to write the matching settings, or `cyfr reach tailnet|public` to reach it from other devices."
+      }
+    },
+    {
+      "name": "local with an email",
+      "input": {
+        "file": {
+          "CYFR_REACH": "local",
+          "CADDY_ACME_EMAIL": "ops@example.com"
+        },
+        "process": {
+          "CYFR_REACH": "local",
+          "CADDY_ACME_EMAIL": "ops@example.com"
+        },
+        "release?": true
+      },
+      "refusal": {
+        "class": "invalid_argument",
+        "code": "reach_key_outside_mode",
+        "payload": {
+          "key": "CADDY_ACME_EMAIL",
+          "mode": "local",
+          "needs": "public"
+        },
+        "sentence": "`CADDY_ACME_EMAIL` is set, but only a `public` home uses it (CYFR_REACH is `local`). Remove it, or run `cyfr reach public`."
+      }
+    },
+    {
+      "name": "local with a node id",
+      "input": {
+        "file": {
+          "CYFR_REACH": "local",
+          "CYFR_TAILNET_NODE_ID": "nAbc123XYZ1CNTRL"
+        },
+        "process": {
+          "CYFR_REACH": "local",
+          "CYFR_TAILNET_NODE_ID": "nAbc123XYZ1CNTRL"
+        },
+        "release?": true
+      },
+      "refusal": {
+        "class": "invalid_argument",
+        "code": "reach_key_outside_mode",
+        "payload": {
+          "key": "CYFR_TAILNET_NODE_ID",
+          "mode": "local",
+          "needs": "tailnet"
+        },
+        "sentence": "`CYFR_TAILNET_NODE_ID` is set, but only a `tailnet` home uses it (CYFR_REACH is `local`). Remove it, or run `cyfr reach tailnet`."
+      }
+    },
+    {
+      "name": "tailnet",
+      "input": {
+        "file": {
+          "CYFR_REACH": "tailnet",
+          "CYFR_HOST": "cyfr.tail1a2b3c.ts.net",
+          "CYFR_TAILNET_NODE_ID": "nAbc123XYZ1CNTRL",
+          "CYFR_PUBLIC_URL": "https://cyfr.tail1a2b3c.ts.net",
+          "CYFR_LOCUS_BUILDS_URL": "http://locus-builds:4100"
+        },
+        "process": {
+          "CYFR_REACH": "tailnet",
+          "CYFR_HOST": "cyfr.tail1a2b3c.ts.net",
+          "CYFR_TAILNET_NODE_ID": "nAbc123XYZ1CNTRL",
+          "CYFR_PUBLIC_URL": "https://cyfr.tail1a2b3c.ts.net",
+          "CYFR_LOCUS_BUILDS_URL": "http://locus-builds:4100"
+        },
+        "release?": true
+      },
+      "reach": {
+        "assertion": "absent",
+        "canonical": "{\"builds_url\":\"http://locus-builds:4100\",\"host\":\"cyfr.tail1a2b3c.ts.net\",\"mode\":\"tailnet\",\"node_id\":\"nAbc123XYZ1CNTRL\",\"port\":4000,\"profiles\":[\"locus-builds\",\"tailnet\"],\"public_url\":\"https://cyfr.tail1a2b3c.ts.net\"}",
+        "check_origins": [
+          "https://cyfr.tail1a2b3c.ts.net",
+          "http://localhost:4000",
+          "https://localhost:4000",
+          "http://127.0.0.1:4000",
+          "https://127.0.0.1:4000",
+          "http://[::1]:4000",
+          "https://[::1]:4000"
+        ],
+        "digest": "sha256:e39efceb8e42a786479a384ff9bfca85fecf85985341e50efe7e24b51806d508",
+        "head": {
+          "builds_url": "http://locus-builds:4100",
+          "host": "cyfr.tail1a2b3c.ts.net",
+          "mode": "tailnet",
+          "node_id": "nAbc123XYZ1CNTRL",
+          "port": 4000,
+          "profiles": [
+            "locus-builds",
+            "tailnet"
+          ],
+          "public_url": "https://cyfr.tail1a2b3c.ts.net"
+        },
+        "hsts": "endpoint_on_proxy",
+        "listeners": {
+          "loopback": [
+            "127.0.0.1",
+            4000
+          ],
+          "proxy": [
+            "127.0.0.1",
+            4001
+          ]
+        },
+        "mode": "tailnet",
+        "origin": "https://cyfr.tail1a2b3c.ts.net",
+        "trust": {
+          "hops": 1
+        }
+      }
+    },
+    {
+      "name": "tailnet, a custom proxy listener and CIDRs",
+      "input": {
+        "file": {
+          "CYFR_REACH": "tailnet",
+          "CYFR_HOST": "cyfr.tail1a2b3c.ts.net",
+          "CYFR_TAILNET_NODE_ID": "nAbc123XYZ1CNTRL",
+          "CYFR_PUBLIC_URL": "https://cyfr.tail1a2b3c.ts.net",
+          "CYFR_PROXY_BIND_ADDRESS": "172.16.234.2",
+          "CYFR_PROXY_PORT": "4001",
+          "CYFR_TRUSTED_PROXY_CIDRS": "172.16.234.3, 172.16.234.4"
+        },
+        "process": {
+          "CYFR_REACH": "tailnet",
+          "CYFR_HOST": "cyfr.tail1a2b3c.ts.net",
+          "CYFR_TAILNET_NODE_ID": "nAbc123XYZ1CNTRL",
+          "CYFR_PUBLIC_URL": "https://cyfr.tail1a2b3c.ts.net",
+          "CYFR_PROXY_BIND_ADDRESS": "172.16.234.2",
+          "CYFR_PROXY_PORT": "4001",
+          "CYFR_TRUSTED_PROXY_CIDRS": "172.16.234.3, 172.16.234.4"
+        },
+        "release?": true
+      },
+      "reach": {
+        "assertion": "absent",
+        "canonical": "{\"host\":\"cyfr.tail1a2b3c.ts.net\",\"mode\":\"tailnet\",\"node_id\":\"nAbc123XYZ1CNTRL\",\"port\":4000,\"profiles\":[\"tailnet\"],\"public_url\":\"https://cyfr.tail1a2b3c.ts.net\"}",
+        "check_origins": [
+          "https://cyfr.tail1a2b3c.ts.net",
+          "http://localhost:4000",
+          "https://localhost:4000",
+          "http://127.0.0.1:4000",
+          "https://127.0.0.1:4000",
+          "http://[::1]:4000",
+          "https://[::1]:4000"
+        ],
+        "digest": "sha256:12838274123aeeb461b3411a5baf75c89a707320930efd039d09e4a881505cfd",
+        "head": {
+          "host": "cyfr.tail1a2b3c.ts.net",
+          "mode": "tailnet",
+          "node_id": "nAbc123XYZ1CNTRL",
+          "port": 4000,
+          "profiles": [
+            "tailnet"
+          ],
+          "public_url": "https://cyfr.tail1a2b3c.ts.net"
+        },
+        "hsts": "endpoint_on_proxy",
+        "listeners": {
+          "loopback": [
+            "127.0.0.1",
+            4000
+          ],
+          "proxy": [
+            "172.16.234.2",
+            4001
+          ]
+        },
+        "mode": "tailnet",
+        "origin": "https://cyfr.tail1a2b3c.ts.net",
+        "trust": {
+          "cidrs": [
+            "172.16.234.3",
+            "172.16.234.4"
+          ]
+        }
+      }
+    },
+    {
+      "name": "tailnet, hops",
+      "input": {
+        "file": {
+          "CYFR_REACH": "tailnet",
+          "CYFR_HOST": "cyfr.tail1a2b3c.ts.net",
+          "CYFR_TAILNET_NODE_ID": "nAbc123XYZ1CNTRL",
+          "CYFR_PUBLIC_URL": "https://cyfr.tail1a2b3c.ts.net",
+          "CYFR_TRUSTED_PROXY_HOPS": "2"
+        },
+        "process": {
+          "CYFR_REACH": "tailnet",
+          "CYFR_HOST": "cyfr.tail1a2b3c.ts.net",
+          "CYFR_TAILNET_NODE_ID": "nAbc123XYZ1CNTRL",
+          "CYFR_PUBLIC_URL": "https://cyfr.tail1a2b3c.ts.net",
+          "CYFR_TRUSTED_PROXY_HOPS": "2"
+        },
+        "release?": true
+      },
+      "reach": {
+        "assertion": "absent",
+        "canonical": "{\"host\":\"cyfr.tail1a2b3c.ts.net\",\"mode\":\"tailnet\",\"node_id\":\"nAbc123XYZ1CNTRL\",\"port\":4000,\"profiles\":[\"tailnet\"],\"public_url\":\"https://cyfr.tail1a2b3c.ts.net\"}",
+        "check_origins": [
+          "https://cyfr.tail1a2b3c.ts.net",
+          "http://localhost:4000",
+          "https://localhost:4000",
+          "http://127.0.0.1:4000",
+          "https://127.0.0.1:4000",
+          "http://[::1]:4000",
+          "https://[::1]:4000"
+        ],
+        "digest": "sha256:12838274123aeeb461b3411a5baf75c89a707320930efd039d09e4a881505cfd",
+        "head": {
+          "host": "cyfr.tail1a2b3c.ts.net",
+          "mode": "tailnet",
+          "node_id": "nAbc123XYZ1CNTRL",
+          "port": 4000,
+          "profiles": [
+            "tailnet"
+          ],
+          "public_url": "https://cyfr.tail1a2b3c.ts.net"
+        },
+        "hsts": "endpoint_on_proxy",
+        "listeners": {
+          "loopback": [
+            "127.0.0.1",
+            4000
+          ],
+          "proxy": [
+            "127.0.0.1",
+            4001
+          ]
+        },
+        "mode": "tailnet",
+        "origin": "https://cyfr.tail1a2b3c.ts.net",
+        "trust": {
+          "hops": 2
+        }
+      }
+    },
+    {
+      "name": "tailnet without a host",
+      "input": {
+        "file": {
+          "CYFR_REACH": "tailnet",
+          "CYFR_TAILNET_NODE_ID": "nAbc123XYZ1CNTRL",
+          "CYFR_PUBLIC_URL": "https://cyfr.tail1a2b3c.ts.net"
+        },
+        "process": {
+          "CYFR_REACH": "tailnet",
+          "CYFR_TAILNET_NODE_ID": "nAbc123XYZ1CNTRL",
+          "CYFR_PUBLIC_URL": "https://cyfr.tail1a2b3c.ts.net"
+        },
+        "release?": true
+      },
+      "refusal": {
+        "class": "invalid_argument",
+        "code": "reach_tailnet_host_invalid",
+        "payload": {},
+        "sentence": "CYFR_REACH is `tailnet`, but CYFR_HOST is not set to a tailnet machine name (<machine>.<tailnet>.ts.net). Run `cyfr reach tailnet`, which reads both from Tailscale."
+      }
+    },
+    {
+      "name": "tailnet with a domain for a host",
+      "input": {
+        "file": {
+          "CYFR_REACH": "tailnet",
+          "CYFR_HOST": "cyfr.example.com",
+          "CYFR_TAILNET_NODE_ID": "nAbc123XYZ1CNTRL",
+          "CYFR_PUBLIC_URL": "https://cyfr.example.com"
+        },
+        "process": {
+          "CYFR_REACH": "tailnet",
+          "CYFR_HOST": "cyfr.example.com",
+          "CYFR_TAILNET_NODE_ID": "nAbc123XYZ1CNTRL",
+          "CYFR_PUBLIC_URL": "https://cyfr.example.com"
+        },
+        "release?": true
+      },
+      "refusal": {
+        "class": "invalid_argument",
+        "code": "reach_tailnet_host_invalid",
+        "payload": {
+          "host": "cyfr.example.com"
+        },
+        "sentence": "CYFR_REACH is `tailnet`, but CYFR_HOST `cyfr.example.com` is not a tailnet machine name (<machine>.<tailnet>.ts.net). Run `cyfr reach tailnet`, which reads both from Tailscale."
+      }
+    },
+    {
+      "name": "tailnet without a node id",
+      "input": {
+        "file": {
+          "CYFR_REACH": "tailnet",
+          "CYFR_HOST": "cyfr.tail1a2b3c.ts.net",
+          "CYFR_PUBLIC_URL": "https://cyfr.tail1a2b3c.ts.net"
+        },
+        "process": {
+          "CYFR_REACH": "tailnet",
+          "CYFR_HOST": "cyfr.tail1a2b3c.ts.net",
+          "CYFR_PUBLIC_URL": "https://cyfr.tail1a2b3c.ts.net"
+        },
+        "release?": true
+      },
+      "refusal": {
+        "class": "invalid_argument",
+        "code": "reach_tailnet_node_invalid",
+        "payload": {},
+        "sentence": "CYFR_REACH is `tailnet`, but CYFR_TAILNET_NODE_ID is missing. Run `cyfr reach tailnet`, which reads both from Tailscale."
+      }
+    },
+    {
+      "name": "tailnet with a malformed node id",
+      "input": {
+        "file": {
+          "CYFR_REACH": "tailnet",
+          "CYFR_HOST": "cyfr.tail1a2b3c.ts.net",
+          "CYFR_TAILNET_NODE_ID": "n/bad",
+          "CYFR_PUBLIC_URL": "https://cyfr.tail1a2b3c.ts.net"
+        },
+        "process": {
+          "CYFR_REACH": "tailnet",
+          "CYFR_HOST": "cyfr.tail1a2b3c.ts.net",
+          "CYFR_TAILNET_NODE_ID": "n/bad",
+          "CYFR_PUBLIC_URL": "https://cyfr.tail1a2b3c.ts.net"
+        },
+        "release?": true
+      },
+      "refusal": {
+        "class": "invalid_argument",
+        "code": "reach_tailnet_node_invalid",
+        "payload": {
+          "value": "n/bad"
+        },
+        "sentence": "CYFR_REACH is `tailnet`, but CYFR_TAILNET_NODE_ID `n/bad` is malformed. Run `cyfr reach tailnet`, which reads both from Tailscale."
+      }
+    },
+    {
+      "name": "tailnet without a public URL",
+      "input": {
+        "file": {
+          "CYFR_REACH": "tailnet",
+          "CYFR_HOST": "cyfr.tail1a2b3c.ts.net",
+          "CYFR_TAILNET_NODE_ID": "nAbc123XYZ1CNTRL"
+        },
+        "process": {
+          "CYFR_REACH": "tailnet",
+          "CYFR_HOST": "cyfr.tail1a2b3c.ts.net",
+          "CYFR_TAILNET_NODE_ID": "nAbc123XYZ1CNTRL"
+        },
+        "release?": true
+      },
+      "refusal": {
+        "class": "invalid_argument",
+        "code": "reach_public_url_mismatch",
+        "payload": {
+          "expected": "https://cyfr.tail1a2b3c.ts.net",
+          "mode": "tailnet"
+        },
+        "sentence": "CYFR_PUBLIC_URL must be exactly https://cyfr.tail1a2b3c.ts.net when CYFR_REACH is `tailnet`; it is not set. Run `cyfr reach tailnet` to rewrite both."
+      }
+    },
+    {
+      "name": "tailnet with an http URL",
+      "input": {
+        "file": {
+          "CYFR_REACH": "tailnet",
+          "CYFR_HOST": "cyfr.tail1a2b3c.ts.net",
+          "CYFR_TAILNET_NODE_ID": "nAbc123XYZ1CNTRL",
+          "CYFR_PUBLIC_URL": "http://cyfr.tail1a2b3c.ts.net"
+        },
+        "process": {
+          "CYFR_REACH": "tailnet",
+          "CYFR_HOST": "cyfr.tail1a2b3c.ts.net",
+          "CYFR_TAILNET_NODE_ID": "nAbc123XYZ1CNTRL",
+          "CYFR_PUBLIC_URL": "http://cyfr.tail1a2b3c.ts.net"
+        },
+        "release?": true
+      },
+      "refusal": {
+        "class": "invalid_argument",
+        "code": "reach_public_url_mismatch",
+        "payload": {
+          "expected": "https://cyfr.tail1a2b3c.ts.net",
+          "mode": "tailnet",
+          "value": "http://cyfr.tail1a2b3c.ts.net"
+        },
+        "sentence": "CYFR_PUBLIC_URL must be exactly https://cyfr.tail1a2b3c.ts.net when CYFR_REACH is `tailnet`; it is `http://cyfr.tail1a2b3c.ts.net`. Run `cyfr reach tailnet` to rewrite both."
+      }
+    },
+    {
+      "name": "tailnet with a trailing slash on the URL",
+      "input": {
+        "file": {
+          "CYFR_REACH": "tailnet",
+          "CYFR_HOST": "cyfr.tail1a2b3c.ts.net",
+          "CYFR_TAILNET_NODE_ID": "nAbc123XYZ1CNTRL",
+          "CYFR_PUBLIC_URL": "https://cyfr.tail1a2b3c.ts.net/"
+        },
+        "process": {
+          "CYFR_REACH": "tailnet",
+          "CYFR_HOST": "cyfr.tail1a2b3c.ts.net",
+          "CYFR_TAILNET_NODE_ID": "nAbc123XYZ1CNTRL",
+          "CYFR_PUBLIC_URL": "https://cyfr.tail1a2b3c.ts.net/"
+        },
+        "release?": true
+      },
+      "refusal": {
+        "class": "invalid_argument",
+        "code": "reach_public_url_mismatch",
+        "payload": {
+          "expected": "https://cyfr.tail1a2b3c.ts.net",
+          "mode": "tailnet",
+          "value": "https://cyfr.tail1a2b3c.ts.net/"
+        },
+        "sentence": "CYFR_PUBLIC_URL must be exactly https://cyfr.tail1a2b3c.ts.net when CYFR_REACH is `tailnet`; it is `https://cyfr.tail1a2b3c.ts.net/`. Run `cyfr reach tailnet` to rewrite both."
+      }
+    },
+    {
+      "name": "tailnet with an email",
+      "input": {
+        "file": {
+          "CYFR_REACH": "tailnet",
+          "CYFR_HOST": "cyfr.tail1a2b3c.ts.net",
+          "CYFR_TAILNET_NODE_ID": "nAbc123XYZ1CNTRL",
+          "CYFR_PUBLIC_URL": "https://cyfr.tail1a2b3c.ts.net",
+          "CADDY_ACME_EMAIL": "ops@example.com"
+        },
+        "process": {
+          "CYFR_REACH": "tailnet",
+          "CYFR_HOST": "cyfr.tail1a2b3c.ts.net",
+          "CYFR_TAILNET_NODE_ID": "nAbc123XYZ1CNTRL",
+          "CYFR_PUBLIC_URL": "https://cyfr.tail1a2b3c.ts.net",
+          "CADDY_ACME_EMAIL": "ops@example.com"
+        },
+        "release?": true
+      },
+      "refusal": {
+        "class": "invalid_argument",
+        "code": "reach_key_outside_mode",
+        "payload": {
+          "key": "CADDY_ACME_EMAIL",
+          "mode": "tailnet",
+          "needs": "public"
+        },
+        "sentence": "`CADDY_ACME_EMAIL` is set, but only a `public` home uses it (CYFR_REACH is `tailnet`). Remove it, or run `cyfr reach public`."
+      }
+    },
+    {
+      "name": "public with an email",
+      "input": {
+        "file": {
+          "CYFR_REACH": "public",
+          "CYFR_HOST": "cyfr.example.com",
+          "CYFR_PUBLIC_URL": "https://cyfr.example.com",
+          "CADDY_ACME_EMAIL": "ops@example.com",
+          "CYFR_LOCUS_BUILDS_URL": "https://builds.example.net"
+        },
+        "process": {
+          "CYFR_REACH": "public",
+          "CYFR_HOST": "cyfr.example.com",
+          "CYFR_PUBLIC_URL": "https://cyfr.example.com",
+          "CADDY_ACME_EMAIL": "ops@example.com",
+          "CYFR_LOCUS_BUILDS_URL": "https://builds.example.net"
+        },
+        "release?": true
+      },
+      "reach": {
+        "assertion": "absent",
+        "canonical": "{\"acme_email\":\"ops@example.com\",\"builds_url\":\"https://builds.example.net\",\"host\":\"cyfr.example.com\",\"mode\":\"public\",\"port\":4000,\"profiles\":[\"public\"],\"public_url\":\"https://cyfr.example.com\"}",
+        "check_origins": [
+          "https://cyfr.example.com",
+          "http://localhost:4000",
+          "https://localhost:4000",
+          "http://127.0.0.1:4000",
+          "https://127.0.0.1:4000",
+          "http://[::1]:4000",
+          "https://[::1]:4000"
+        ],
+        "digest": "sha256:528f5be8c66b9e3b59f150e4e320d74d6b6ae7963a2ee1deb50b9018d8f10808",
+        "head": {
+          "acme_email": "ops@example.com",
+          "builds_url": "https://builds.example.net",
+          "host": "cyfr.example.com",
+          "mode": "public",
+          "port": 4000,
+          "profiles": [
+            "public"
+          ],
+          "public_url": "https://cyfr.example.com"
+        },
+        "hsts": "caddy",
+        "listeners": {
+          "loopback": [
+            "127.0.0.1",
+            4000
+          ],
+          "proxy": [
+            "127.0.0.1",
+            4001
+          ]
+        },
+        "mode": "public",
+        "origin": "https://cyfr.example.com",
+        "trust": {
+          "hops": 1
+        }
+      }
+    },
+    {
+      "name": "public without a host",
+      "input": {
+        "file": {
+          "CYFR_REACH": "public"
+        },
+        "process": {
+          "CYFR_REACH": "public"
+        },
+        "release?": true
+      },
+      "refusal": {
+        "class": "invalid_argument",
+        "code": "reach_public_host_invalid",
+        "payload": {},
+        "sentence": "CYFR_REACH is `public`, but CYFR_HOST is not set to a public domain name (not localhost, an IP address or a ts.net name). Run `cyfr reach public --domain <your domain>`."
+      }
+    },
+    {
+      "name": "public with localhost",
+      "input": {
+        "file": {
+          "CYFR_REACH": "public",
+          "CYFR_HOST": "localhost",
+          "CYFR_PUBLIC_URL": "https://localhost"
+        },
+        "process": {
+          "CYFR_REACH": "public",
+          "CYFR_HOST": "localhost",
+          "CYFR_PUBLIC_URL": "https://localhost"
+        },
+        "release?": true
+      },
+      "refusal": {
+        "class": "invalid_argument",
+        "code": "reach_public_host_invalid",
+        "payload": {
+          "host": "localhost"
+        },
+        "sentence": "CYFR_REACH is `public`, but CYFR_HOST `localhost` is not a public domain name (not localhost, an IP address or a ts.net name). Run `cyfr reach public --domain <your domain>`."
+      }
+    },
+    {
+      "name": "public with an IP address",
+      "input": {
+        "file": {
+          "CYFR_REACH": "public",
+          "CYFR_HOST": "192.0.2.10",
+          "CYFR_PUBLIC_URL": "https://192.0.2.10"
+        },
+        "process": {
+          "CYFR_REACH": "public",
+          "CYFR_HOST": "192.0.2.10",
+          "CYFR_PUBLIC_URL": "https://192.0.2.10"
+        },
+        "release?": true
+      },
+      "refusal": {
+        "class": "invalid_argument",
+        "code": "reach_public_host_invalid",
+        "payload": {
+          "host": "192.0.2.10"
+        },
+        "sentence": "CYFR_REACH is `public`, but CYFR_HOST `192.0.2.10` is not a public domain name (not localhost, an IP address or a ts.net name). Run `cyfr reach public --domain <your domain>`."
+      }
+    },
+    {
+      "name": "public with a ts.net name",
+      "input": {
+        "file": {
+          "CYFR_REACH": "public",
+          "CYFR_HOST": "cyfr.tail1a2b3c.ts.net",
+          "CYFR_PUBLIC_URL": "https://cyfr.tail1a2b3c.ts.net"
+        },
+        "process": {
+          "CYFR_REACH": "public",
+          "CYFR_HOST": "cyfr.tail1a2b3c.ts.net",
+          "CYFR_PUBLIC_URL": "https://cyfr.tail1a2b3c.ts.net"
+        },
+        "release?": true
+      },
+      "refusal": {
+        "class": "invalid_argument",
+        "code": "reach_public_host_invalid",
+        "payload": {
+          "host": "cyfr.tail1a2b3c.ts.net"
+        },
+        "sentence": "CYFR_REACH is `public`, but CYFR_HOST `cyfr.tail1a2b3c.ts.net` is not a public domain name (not localhost, an IP address or a ts.net name). Run `cyfr reach public --domain <your domain>`."
+      }
+    },
+    {
+      "name": "public with another host's URL",
+      "input": {
+        "file": {
+          "CYFR_REACH": "public",
+          "CYFR_HOST": "cyfr.example.com",
+          "CYFR_PUBLIC_URL": "https://other.example.com"
+        },
+        "process": {
+          "CYFR_REACH": "public",
+          "CYFR_HOST": "cyfr.example.com",
+          "CYFR_PUBLIC_URL": "https://other.example.com"
+        },
+        "release?": true
+      },
+      "refusal": {
+        "class": "invalid_argument",
+        "code": "reach_public_url_mismatch",
+        "payload": {
+          "expected": "https://cyfr.example.com",
+          "mode": "public",
+          "value": "https://other.example.com"
+        },
+        "sentence": "CYFR_PUBLIC_URL must be exactly https://cyfr.example.com when CYFR_REACH is `public`; it is `https://other.example.com`. Run `cyfr reach public` to rewrite both."
+      }
+    },
+    {
+      "name": "public with a node id",
+      "input": {
+        "file": {
+          "CYFR_REACH": "public",
+          "CYFR_HOST": "cyfr.example.com",
+          "CYFR_PUBLIC_URL": "https://cyfr.example.com",
+          "CYFR_TAILNET_NODE_ID": "nAbc123XYZ1CNTRL"
+        },
+        "process": {
+          "CYFR_REACH": "public",
+          "CYFR_HOST": "cyfr.example.com",
+          "CYFR_PUBLIC_URL": "https://cyfr.example.com",
+          "CYFR_TAILNET_NODE_ID": "nAbc123XYZ1CNTRL"
+        },
+        "release?": true
+      },
+      "refusal": {
+        "class": "invalid_argument",
+        "code": "reach_key_outside_mode",
+        "payload": {
+          "key": "CYFR_TAILNET_NODE_ID",
+          "mode": "public",
+          "needs": "tailnet"
+        },
+        "sentence": "`CYFR_TAILNET_NODE_ID` is set, but only a `tailnet` home uses it (CYFR_REACH is `public`). Remove it, or run `cyfr reach tailnet`."
+      }
+    },
+    {
+      "name": "a source conflict",
+      "input": {
+        "file": {
+          "CYFR_REACH": "local",
+          "CYFR_PORT": "4000"
+        },
+        "process": {
+          "CYFR_REACH": "local",
+          "CYFR_PORT": "4100"
+        },
+        "release?": true
+      },
+      "refusal": {
+        "class": "conflict",
+        "code": "reach_source_conflict",
+        "payload": {
+          "file_value": "4000",
+          "key": "CYFR_PORT",
+          "process_value": "4100"
+        },
+        "sentence": "`CYFR_PORT` is `4000` in .env and `4100` in this process's environment; a home has one reach. Remove one of them."
+      }
+    },
+    {
+      "name": "a source conflict, the first name in byte order",
+      "input": {
+        "file": {
+          "CYFR_REACH": "local",
+          "CYFR_PORT": "4000",
+          "CYFR_HOST": "localhost"
+        },
+        "process": {
+          "CYFR_REACH": "local",
+          "CYFR_PORT": "4100",
+          "CYFR_HOST": "cyfr.example.com"
+        },
+        "release?": true
+      },
+      "refusal": {
+        "class": "conflict",
+        "code": "reach_source_conflict",
+        "payload": {
+          "file_value": "localhost",
+          "key": "CYFR_HOST",
+          "process_value": "cyfr.example.com"
+        },
+        "sentence": "`CYFR_HOST` is `localhost` in .env and `cyfr.example.com` in this process's environment; a home has one reach. Remove one of them."
+      }
+    },
+    {
+      "name": "a blank process value overrides .env",
+      "input": {
+        "file": {
+          "CYFR_REACH": "local",
+          "CYFR_PORT": "4000"
+        },
+        "process": {
+          "CYFR_REACH": "local",
+          "CYFR_PORT": ""
+        },
+        "release?": true
+      },
+      "refusal": {
+        "class": "conflict",
+        "code": "reach_source_conflict",
+        "payload": {
+          "file_value": "4000",
+          "key": "CYFR_PORT",
+          "process_value": ""
+        },
+        "sentence": "`CYFR_PORT` is `4000` in .env and blank in this process's environment; a home has one reach. Remove one of them."
+      }
+    },
+    {
+      "name": "the process agrees with .env",
+      "input": {
+        "file": {
+          "CYFR_REACH": "local",
+          "CYFR_PORT": "4000"
+        },
+        "process": {
+          "CYFR_REACH": "local",
+          "CYFR_PORT": " 4000 "
+        },
+        "release?": true
+      },
+      "reach": {
+        "assertion": "absent",
+        "canonical": "{\"host\":\"localhost\",\"mode\":\"local\",\"port\":4000,\"profiles\":[]}",
+        "check_origins": [
+          "http://localhost:4000",
+          "https://localhost:4000",
+          "http://127.0.0.1:4000",
+          "https://127.0.0.1:4000",
+          "http://[::1]:4000",
+          "https://[::1]:4000"
+        ],
+        "digest": "sha256:7300d73c8b043098a710c0a5d7b0a2ce4cecdefb1b288912e8387aeb9428627f",
+        "head": {
+          "host": "localhost",
+          "mode": "local",
+          "port": 4000,
+          "profiles": []
+        },
+        "hsts": "none",
+        "listeners": {
+          "loopback": [
+            "127.0.0.1",
+            4000
+          ],
+          "proxy": "none"
+        },
+        "mode": "local",
+        "origin": "http://localhost:4000",
+        "trust": "none"
+      }
+    },
+    {
+      "name": "no .env was read: no source rule applies",
+      "input": {
+        "file": null,
+        "process": {
+          "CYFR_REACH": "local",
+          "CYFR_BIND_ADDRESS": "172.16.230.2",
+          "CYFR_LOCAL_INGRESS_ASSERTED": "true"
+        },
+        "release?": true
+      },
+      "reach": {
+        "assertion": "process",
+        "canonical": "{\"host\":\"localhost\",\"mode\":\"local\",\"port\":4000,\"profiles\":[]}",
+        "check_origins": [
+          "http://localhost:4000",
+          "https://localhost:4000",
+          "http://127.0.0.1:4000",
+          "https://127.0.0.1:4000",
+          "http://[::1]:4000",
+          "https://[::1]:4000"
+        ],
+        "digest": "sha256:7300d73c8b043098a710c0a5d7b0a2ce4cecdefb1b288912e8387aeb9428627f",
+        "head": {
+          "host": "localhost",
+          "mode": "local",
+          "port": 4000,
+          "profiles": []
+        },
+        "hsts": "none",
+        "listeners": {
+          "loopback": [
+            "172.16.230.2",
+            4000
+          ],
+          "proxy": "none"
+        },
+        "mode": "local",
+        "origin": "http://localhost:4000",
+        "trust": "none"
+      }
+    },
+    {
+      "name": "the assertion from the file",
+      "input": {
+        "file": {
+          "CYFR_REACH": "local",
+          "CYFR_LOCAL_INGRESS_ASSERTED": "false"
+        },
+        "process": {
+          "CYFR_REACH": "local",
+          "CYFR_LOCAL_INGRESS_ASSERTED": "false"
+        },
+        "release?": true
+      },
+      "refusal": {
+        "class": "forbidden",
+        "code": "reach_assertion_from_file",
+        "payload": {},
+        "sentence": "CYFR_LOCAL_INGRESS_ASSERTED is the compose file's assertion and cannot come from .env. Remove it from .env."
+      }
+    },
+    {
+      "name": "the assertion from the file, blank",
+      "input": {
+        "file": {
+          "CYFR_REACH": "local",
+          "CYFR_LOCAL_INGRESS_ASSERTED": ""
+        },
+        "process": {
+          "CYFR_REACH": "local"
+        },
+        "release?": true
+      },
+      "refusal": {
+        "class": "forbidden",
+        "code": "reach_assertion_from_file",
+        "payload": {},
+        "sentence": "CYFR_LOCAL_INGRESS_ASSERTED is the compose file's assertion and cannot come from .env. Remove it from .env."
+      }
+    },
+    {
+      "name": "the assertion from the process accepts a non-loopback bind",
+      "input": {
+        "file": {
+          "CYFR_REACH": "local",
+          "CYFR_BIND_ADDRESS": "172.16.230.2"
+        },
+        "process": {
+          "CYFR_REACH": "local",
+          "CYFR_BIND_ADDRESS": "172.16.230.2",
+          "CYFR_LOCAL_INGRESS_ASSERTED": "true"
+        },
+        "release?": true
+      },
+      "reach": {
+        "assertion": "process",
+        "canonical": "{\"host\":\"localhost\",\"mode\":\"local\",\"port\":4000,\"profiles\":[]}",
+        "check_origins": [
+          "http://localhost:4000",
+          "https://localhost:4000",
+          "http://127.0.0.1:4000",
+          "https://127.0.0.1:4000",
+          "http://[::1]:4000",
+          "https://[::1]:4000"
+        ],
+        "digest": "sha256:7300d73c8b043098a710c0a5d7b0a2ce4cecdefb1b288912e8387aeb9428627f",
+        "head": {
+          "host": "localhost",
+          "mode": "local",
+          "port": 4000,
+          "profiles": []
+        },
+        "hsts": "none",
+        "listeners": {
+          "loopback": [
+            "172.16.230.2",
+            4000
+          ],
+          "proxy": "none"
+        },
+        "mode": "local",
+        "origin": "http://localhost:4000",
+        "trust": "none"
+      }
+    },
+    {
+      "name": "an assertion other than true",
+      "input": {
+        "file": {
+          "CYFR_REACH": "local"
+        },
+        "process": {
+          "CYFR_REACH": "local",
+          "CYFR_LOCAL_INGRESS_ASSERTED": "yes"
+        },
+        "release?": true
+      },
+      "refusal": {
+        "class": "invalid_argument",
+        "code": "reach_setting_invalid",
+        "payload": {
+          "key": "CYFR_LOCAL_INGRESS_ASSERTED",
+          "value": "yes"
+        },
+        "sentence": "`CYFR_LOCAL_INGRESS_ASSERTED` is `yes`, which is not true, the one value the compose file asserts. Nothing started. Correct it, or remove it to take the default."
+      }
+    },
+    {
+      "name": "a non-loopback bind without the assertion",
+      "input": {
+        "file": {
+          "CYFR_REACH": "local",
+          "CYFR_BIND_ADDRESS": "172.16.230.2"
+        },
+        "process": {
+          "CYFR_REACH": "local",
+          "CYFR_BIND_ADDRESS": "172.16.230.2"
+        },
+        "release?": true
+      },
+      "refusal": {
+        "class": "forbidden",
+        "code": "reach_bind_not_loopback",
+        "payload": {
+          "address": "172.16.230.2"
+        },
+        "sentence": "CYFR_BIND_ADDRESS `172.16.230.2` is not a loopback address, so other machines could reach this home's loopback listener. Bind 127.0.0.1 or ::1; a home reached from other devices uses CYFR_REACH=tailnet or public."
+      }
+    },
+    {
+      "name": "the unspecified address",
+      "input": {
+        "file": {
+          "CYFR_REACH": "local",
+          "CYFR_BIND_ADDRESS": "0.0.0.0"
+        },
+        "process": {
+          "CYFR_REACH": "local",
+          "CYFR_BIND_ADDRESS": "0.0.0.0"
+        },
+        "release?": true
+      },
+      "refusal": {
+        "class": "forbidden",
+        "code": "reach_bind_not_loopback",
+        "payload": {
+          "address": "0.0.0.0"
+        },
+        "sentence": "CYFR_BIND_ADDRESS `0.0.0.0` is not a loopback address, so other machines could reach this home's loopback listener. Bind 127.0.0.1 or ::1; a home reached from other devices uses CYFR_REACH=tailnet or public."
+      }
+    },
+    {
+      "name": "IPv6 loopback",
+      "input": {
+        "file": {
+          "CYFR_REACH": "local",
+          "CYFR_BIND_ADDRESS": "::1"
+        },
+        "process": {
+          "CYFR_REACH": "local",
+          "CYFR_BIND_ADDRESS": "::1"
+        },
+        "release?": true
+      },
+      "reach": {
+        "assertion": "absent",
+        "canonical": "{\"host\":\"localhost\",\"mode\":\"local\",\"port\":4000,\"profiles\":[]}",
+        "check_origins": [
+          "http://localhost:4000",
+          "https://localhost:4000",
+          "http://127.0.0.1:4000",
+          "https://127.0.0.1:4000",
+          "http://[::1]:4000",
+          "https://[::1]:4000"
+        ],
+        "digest": "sha256:7300d73c8b043098a710c0a5d7b0a2ce4cecdefb1b288912e8387aeb9428627f",
+        "head": {
+          "host": "localhost",
+          "mode": "local",
+          "port": 4000,
+          "profiles": []
+        },
+        "hsts": "none",
+        "listeners": {
+          "loopback": [
+            "::1",
+            4000
+          ],
+          "proxy": "none"
+        },
+        "mode": "local",
+        "origin": "http://localhost:4000",
+        "trust": "none"
+      }
+    },
+    {
+      "name": "IPv4 loopback, another address",
+      "input": {
+        "file": {
+          "CYFR_REACH": "local",
+          "CYFR_BIND_ADDRESS": "127.0.0.2"
+        },
+        "process": {
+          "CYFR_REACH": "local",
+          "CYFR_BIND_ADDRESS": "127.0.0.2"
+        },
+        "release?": true
+      },
+      "reach": {
+        "assertion": "absent",
+        "canonical": "{\"host\":\"localhost\",\"mode\":\"local\",\"port\":4000,\"profiles\":[]}",
+        "check_origins": [
+          "http://localhost:4000",
+          "https://localhost:4000",
+          "http://127.0.0.1:4000",
+          "https://127.0.0.1:4000",
+          "http://[::1]:4000",
+          "https://[::1]:4000"
+        ],
+        "digest": "sha256:7300d73c8b043098a710c0a5d7b0a2ce4cecdefb1b288912e8387aeb9428627f",
+        "head": {
+          "host": "localhost",
+          "mode": "local",
+          "port": 4000,
+          "profiles": []
+        },
+        "hsts": "none",
+        "listeners": {
+          "loopback": [
+            "127.0.0.2",
+            4000
+          ],
+          "proxy": "none"
+        },
+        "mode": "local",
+        "origin": "http://localhost:4000",
+        "trust": "none"
+      }
+    },
+    {
+      "name": "IPv4-mapped loopback is not loopback",
+      "input": {
+        "file": {
+          "CYFR_REACH": "local",
+          "CYFR_BIND_ADDRESS": "::ffff:127.0.0.1"
+        },
+        "process": {
+          "CYFR_REACH": "local",
+          "CYFR_BIND_ADDRESS": "::ffff:127.0.0.1"
+        },
+        "release?": true
+      },
+      "refusal": {
+        "class": "forbidden",
+        "code": "reach_bind_not_loopback",
+        "payload": {
+          "address": "::ffff:127.0.0.1"
+        },
+        "sentence": "CYFR_BIND_ADDRESS `::ffff:127.0.0.1` is not a loopback address, so other machines could reach this home's loopback listener. Bind 127.0.0.1 or ::1; a home reached from other devices uses CYFR_REACH=tailnet or public."
+      }
+    },
+    {
+      "name": "a short IPv4 form",
+      "input": {
+        "file": {
+          "CYFR_REACH": "local",
+          "CYFR_BIND_ADDRESS": "127.1"
+        },
+        "process": {
+          "CYFR_REACH": "local",
+          "CYFR_BIND_ADDRESS": "127.1"
+        },
+        "release?": true
+      },
+      "refusal": {
+        "class": "invalid_argument",
+        "code": "reach_setting_invalid",
+        "payload": {
+          "key": "CYFR_BIND_ADDRESS",
+          "value": "127.1"
+        },
+        "sentence": "`CYFR_BIND_ADDRESS` is `127.1`, which is not an IPv4 or IPv6 address. Nothing started. Correct it, or remove it to take the default."
+      }
+    },
+    {
+      "name": "a zoned address",
+      "input": {
+        "file": {
+          "CYFR_REACH": "local",
+          "CYFR_BIND_ADDRESS": "fe80::1%eth0"
+        },
+        "process": {
+          "CYFR_REACH": "local",
+          "CYFR_BIND_ADDRESS": "fe80::1%eth0"
+        },
+        "release?": true
+      },
+      "refusal": {
+        "class": "invalid_argument",
+        "code": "reach_setting_invalid",
+        "payload": {
+          "key": "CYFR_BIND_ADDRESS",
+          "value": "fe80::1%eth0"
+        },
+        "sentence": "`CYFR_BIND_ADDRESS` is `fe80::1%eth0`, which is not an IPv4 or IPv6 address. Nothing started. Correct it, or remove it to take the default."
+      }
+    },
+    {
+      "name": "a port with a sign",
+      "input": {
+        "file": {
+          "CYFR_REACH": "local",
+          "CYFR_PORT": "+4000"
+        },
+        "process": {
+          "CYFR_REACH": "local",
+          "CYFR_PORT": "+4000"
+        },
+        "release?": true
+      },
+      "refusal": {
+        "class": "invalid_argument",
+        "code": "reach_setting_invalid",
+        "payload": {
+          "key": "CYFR_PORT",
+          "value": "+4000"
+        },
+        "sentence": "`CYFR_PORT` is `+4000`, which is not a port from 1 to 65535. Nothing started. Correct it, or remove it to take the default."
+      }
+    },
+    {
+      "name": "port 0",
+      "input": {
+        "file": {
+          "CYFR_REACH": "local",
+          "CYFR_PORT": "0"
+        },
+        "process": {
+          "CYFR_REACH": "local",
+          "CYFR_PORT": "0"
+        },
+        "release?": true
+      },
+      "refusal": {
+        "class": "invalid_argument",
+        "code": "reach_setting_invalid",
+        "payload": {
+          "key": "CYFR_PORT",
+          "value": "0"
+        },
+        "sentence": "`CYFR_PORT` is `0`, which is not a port from 1 to 65535. Nothing started. Correct it, or remove it to take the default."
+      }
+    },
+    {
+      "name": "a malformed proxy port",
+      "input": {
+        "file": {
+          "CYFR_REACH": "tailnet",
+          "CYFR_HOST": "cyfr.tail1a2b3c.ts.net",
+          "CYFR_TAILNET_NODE_ID": "nAbc123XYZ1CNTRL",
+          "CYFR_PUBLIC_URL": "https://cyfr.tail1a2b3c.ts.net",
+          "CYFR_PROXY_PORT": "http"
+        },
+        "process": {
+          "CYFR_REACH": "tailnet",
+          "CYFR_HOST": "cyfr.tail1a2b3c.ts.net",
+          "CYFR_TAILNET_NODE_ID": "nAbc123XYZ1CNTRL",
+          "CYFR_PUBLIC_URL": "https://cyfr.tail1a2b3c.ts.net",
+          "CYFR_PROXY_PORT": "http"
+        },
+        "release?": true
+      },
+      "refusal": {
+        "class": "invalid_argument",
+        "code": "reach_setting_invalid",
+        "payload": {
+          "key": "CYFR_PROXY_PORT",
+          "value": "http"
+        },
+        "sentence": "`CYFR_PROXY_PORT` is `http`, which is not a port from 1 to 65535. Nothing started. Correct it, or remove it to take the default."
+      }
+    },
+    {
+      "name": "a malformed CIDR",
+      "input": {
+        "file": {
+          "CYFR_REACH": "tailnet",
+          "CYFR_HOST": "cyfr.tail1a2b3c.ts.net",
+          "CYFR_TAILNET_NODE_ID": "nAbc123XYZ1CNTRL",
+          "CYFR_PUBLIC_URL": "https://cyfr.tail1a2b3c.ts.net",
+          "CYFR_TRUSTED_PROXY_CIDRS": "172.16.234.3/33"
+        },
+        "process": {
+          "CYFR_REACH": "tailnet",
+          "CYFR_HOST": "cyfr.tail1a2b3c.ts.net",
+          "CYFR_TAILNET_NODE_ID": "nAbc123XYZ1CNTRL",
+          "CYFR_PUBLIC_URL": "https://cyfr.tail1a2b3c.ts.net",
+          "CYFR_TRUSTED_PROXY_CIDRS": "172.16.234.3/33"
+        },
+        "release?": true
+      },
+      "refusal": {
+        "class": "invalid_argument",
+        "code": "reach_setting_invalid",
+        "payload": {
+          "key": "CYFR_TRUSTED_PROXY_CIDRS",
+          "value": "172.16.234.3/33"
+        },
+        "sentence": "`CYFR_TRUSTED_PROXY_CIDRS` is `172.16.234.3/33`, which is not a comma-separated list of IP addresses and CIDRs. Nothing started. Correct it, or remove it to take the default."
+      }
+    },
+    {
+      "name": "hops past 16",
+      "input": {
+        "file": {
+          "CYFR_REACH": "tailnet",
+          "CYFR_HOST": "cyfr.tail1a2b3c.ts.net",
+          "CYFR_TAILNET_NODE_ID": "nAbc123XYZ1CNTRL",
+          "CYFR_PUBLIC_URL": "https://cyfr.tail1a2b3c.ts.net",
+          "CYFR_TRUSTED_PROXY_HOPS": "17"
+        },
+        "process": {
+          "CYFR_REACH": "tailnet",
+          "CYFR_HOST": "cyfr.tail1a2b3c.ts.net",
+          "CYFR_TAILNET_NODE_ID": "nAbc123XYZ1CNTRL",
+          "CYFR_PUBLIC_URL": "https://cyfr.tail1a2b3c.ts.net",
+          "CYFR_TRUSTED_PROXY_HOPS": "17"
+        },
+        "release?": true
+      },
+      "refusal": {
+        "class": "invalid_argument",
+        "code": "reach_setting_invalid",
+        "payload": {
+          "key": "CYFR_TRUSTED_PROXY_HOPS",
+          "value": "17"
+        },
+        "sentence": "`CYFR_TRUSTED_PROXY_HOPS` is `17`, which is not a whole number of proxy hops from 0 to 16. Nothing started. Correct it, or remove it to take the default."
+      }
+    },
+    {
+      "name": "precedence: a source conflict before the assertion from the file",
+      "input": {
+        "file": {
+          "CYFR_REACH": "local",
+          "CYFR_HOST": "a.example.com",
+          "CYFR_LOCAL_INGRESS_ASSERTED": "true"
+        },
+        "process": {
+          "CYFR_REACH": "local",
+          "CYFR_HOST": "b.example.com",
+          "CYFR_LOCAL_INGRESS_ASSERTED": "true"
+        },
+        "release?": true
+      },
+      "refusal": {
+        "class": "conflict",
+        "code": "reach_source_conflict",
+        "payload": {
+          "file_value": "a.example.com",
+          "key": "CYFR_HOST",
+          "process_value": "b.example.com"
+        },
+        "sentence": "`CYFR_HOST` is `a.example.com` in .env and `b.example.com` in this process's environment; a home has one reach. Remove one of them."
+      }
+    },
+    {
+      "name": "precedence: the assertion from the file before the mode",
+      "input": {
+        "file": {
+          "CYFR_LOCAL_INGRESS_ASSERTED": "true"
+        },
+        "process": {
+          "CYFR_LOCAL_INGRESS_ASSERTED": "true"
+        },
+        "release?": true
+      },
+      "refusal": {
+        "class": "forbidden",
+        "code": "reach_assertion_from_file",
+        "payload": {},
+        "sentence": "CYFR_LOCAL_INGRESS_ASSERTED is the compose file's assertion and cannot come from .env. Remove it from .env."
+      }
+    },
+    {
+      "name": "precedence: the host before the node id and the URL",
+      "input": {
+        "file": {
+          "CYFR_REACH": "tailnet",
+          "CYFR_HOST": "bad"
+        },
+        "process": {
+          "CYFR_REACH": "tailnet",
+          "CYFR_HOST": "bad"
+        },
+        "release?": true
+      },
+      "refusal": {
+        "class": "invalid_argument",
+        "code": "reach_tailnet_host_invalid",
+        "payload": {
+          "host": "bad"
+        },
+        "sentence": "CYFR_REACH is `tailnet`, but CYFR_HOST `bad` is not a tailnet machine name (<machine>.<tailnet>.ts.net). Run `cyfr reach tailnet`, which reads both from Tailscale."
+      }
+    },
+    {
+      "name": "precedence: the node id before the URL",
+      "input": {
+        "file": {
+          "CYFR_REACH": "tailnet",
+          "CYFR_HOST": "cyfr.tail1a2b3c.ts.net",
+          "CYFR_TAILNET_NODE_ID": "n/bad",
+          "CYFR_PUBLIC_URL": "http://x"
+        },
+        "process": {
+          "CYFR_REACH": "tailnet",
+          "CYFR_HOST": "cyfr.tail1a2b3c.ts.net",
+          "CYFR_TAILNET_NODE_ID": "n/bad",
+          "CYFR_PUBLIC_URL": "http://x"
+        },
+        "release?": true
+      },
+      "refusal": {
+        "class": "invalid_argument",
+        "code": "reach_tailnet_node_invalid",
+        "payload": {
+          "value": "n/bad"
+        },
+        "sentence": "CYFR_REACH is `tailnet`, but CYFR_TAILNET_NODE_ID `n/bad` is malformed. Run `cyfr reach tailnet`, which reads both from Tailscale."
+      }
+    },
+    {
+      "name": "precedence: the URL before a key outside the mode",
+      "input": {
+        "file": {
+          "CYFR_REACH": "public",
+          "CYFR_HOST": "cyfr.example.com",
+          "CYFR_PUBLIC_URL": "http://x",
+          "CYFR_TAILNET_NODE_ID": "nAbc123XYZ1CNTRL"
+        },
+        "process": {
+          "CYFR_REACH": "public",
+          "CYFR_HOST": "cyfr.example.com",
+          "CYFR_PUBLIC_URL": "http://x",
+          "CYFR_TAILNET_NODE_ID": "nAbc123XYZ1CNTRL"
+        },
+        "release?": true
+      },
+      "refusal": {
+        "class": "invalid_argument",
+        "code": "reach_public_url_mismatch",
+        "payload": {
+          "expected": "https://cyfr.example.com",
+          "mode": "public",
+          "value": "http://x"
+        },
+        "sentence": "CYFR_PUBLIC_URL must be exactly https://cyfr.example.com when CYFR_REACH is `public`; it is `http://x`. Run `cyfr reach public` to rewrite both."
+      }
+    },
+    {
+      "name": "precedence: the host before the public URL in local",
+      "input": {
+        "file": {
+          "CYFR_REACH": "local",
+          "CYFR_HOST": "x.example.com",
+          "CYFR_PUBLIC_URL": "https://x.example.com"
+        },
+        "process": {
+          "CYFR_REACH": "local",
+          "CYFR_HOST": "x.example.com",
+          "CYFR_PUBLIC_URL": "https://x.example.com"
+        },
+        "release?": true
+      },
+      "refusal": {
+        "class": "invalid_argument",
+        "code": "reach_local_mismatch",
+        "payload": {
+          "key": "CYFR_HOST",
+          "value": "x.example.com"
+        },
+        "sentence": "CYFR_REACH is `local`, which serves this computer alone at its localhost address, but CYFR_HOST is `x.example.com`. Run `cyfr reach local` to write the matching settings, or `cyfr reach tailnet|public` to reach it from other devices."
+      }
+    },
+    {
+      "name": "precedence: the email before the node id",
+      "input": {
+        "file": {
+          "CYFR_REACH": "local",
+          "CADDY_ACME_EMAIL": "ops@example.com",
+          "CYFR_TAILNET_NODE_ID": "nAbc123XYZ1CNTRL"
+        },
+        "process": {
+          "CYFR_REACH": "local",
+          "CADDY_ACME_EMAIL": "ops@example.com",
+          "CYFR_TAILNET_NODE_ID": "nAbc123XYZ1CNTRL"
+        },
+        "release?": true
+      },
+      "refusal": {
+        "class": "invalid_argument",
+        "code": "reach_key_outside_mode",
+        "payload": {
+          "key": "CADDY_ACME_EMAIL",
+          "mode": "local",
+          "needs": "public"
+        },
+        "sentence": "`CADDY_ACME_EMAIL` is set, but only a `public` home uses it (CYFR_REACH is `local`). Remove it, or run `cyfr reach public`."
+      }
+    },
+    {
+      "name": "precedence: a key outside the mode before the bind",
+      "input": {
+        "file": {
+          "CYFR_REACH": "local",
+          "CADDY_ACME_EMAIL": "ops@example.com",
+          "CYFR_BIND_ADDRESS": "0.0.0.0"
+        },
+        "process": {
+          "CYFR_REACH": "local",
+          "CADDY_ACME_EMAIL": "ops@example.com",
+          "CYFR_BIND_ADDRESS": "0.0.0.0"
+        },
+        "release?": true
+      },
+      "refusal": {
+        "class": "invalid_argument",
+        "code": "reach_key_outside_mode",
+        "payload": {
+          "key": "CADDY_ACME_EMAIL",
+          "mode": "local",
+          "needs": "public"
+        },
+        "sentence": "`CADDY_ACME_EMAIL` is set, but only a `public` home uses it (CYFR_REACH is `local`). Remove it, or run `cyfr reach public`."
+      }
+    },
+    {
+      "name": "precedence: a malformed port before the bind",
+      "input": {
+        "file": {
+          "CYFR_REACH": "local",
+          "CYFR_PORT": "x",
+          "CYFR_BIND_ADDRESS": "0.0.0.0"
+        },
+        "process": {
+          "CYFR_REACH": "local",
+          "CYFR_PORT": "x",
+          "CYFR_BIND_ADDRESS": "0.0.0.0"
+        },
+        "release?": true
+      },
+      "refusal": {
+        "class": "invalid_argument",
+        "code": "reach_setting_invalid",
+        "payload": {
+          "key": "CYFR_PORT",
+          "value": "x"
+        },
+        "sentence": "`CYFR_PORT` is `x`, which is not a port from 1 to 65535. Nothing started. Correct it, or remove it to take the default."
+      }
+    }
+  ],
+  "profiles": [
+    {
+      "mode": "local",
+      "profiles": []
+    },
+    {
+      "mode": "local",
+      "builds_url": "http://locus-builds:4100",
+      "profiles": [
+        "locus-builds"
+      ]
+    },
+    {
+      "mode": "local",
+      "builds_url": "https://builds.example.net",
+      "profiles": []
+    },
+    {
+      "mode": "local",
+      "builds_url": "http://locus-builds.example.net:4100",
+      "profiles": []
+    },
+    {
+      "mode": "tailnet",
+      "profiles": [
+        "tailnet"
+      ]
+    },
+    {
+      "mode": "tailnet",
+      "builds_url": "http://locus-builds:4100",
+      "profiles": [
+        "locus-builds",
+        "tailnet"
+      ]
+    },
+    {
+      "mode": "public",
+      "profiles": [
+        "public"
+      ]
+    },
+    {
+      "mode": "public",
+      "builds_url": "http://locus-builds:4100",
+      "profiles": [
+        "locus-builds",
+        "public"
+      ]
+    },
+    {
+      "mode": "public",
+      "builds_url": "http://locus-builds:4200",
+      "profiles": [
+        "locus-builds",
+        "public"
+      ]
+    }
+  ],
+  "names": {
+    "tailnet_names": [
+      {
+        "value": "cyfr.tail1a2b3c.ts.net",
+        "valid": true,
+        "why": "machine, tailnet, ts.net"
+      },
+      {
+        "value": "my-pc.tail-net.ts.net",
+        "valid": true,
+        "why": "hyphens inside labels"
+      },
+      {
+        "value": "cyfr.ts.net",
+        "valid": false,
+        "why": "no tailnet label"
+      },
+      {
+        "value": "a.b.tail.ts.net",
+        "valid": false,
+        "why": "one label too many"
+      },
+      {
+        "value": "Cyfr.tail1a2b3c.ts.net",
+        "valid": false,
+        "why": "uppercase"
+      },
+      {
+        "value": "cyfr.tail1a2b3c.ts.net.",
+        "valid": false,
+        "why": "trailing dot"
+      },
+      {
+        "value": "cyfr.tail1a2b3c.ts.net.evil.com",
+        "valid": false,
+        "why": "suffix not at the end"
+      },
+      {
+        "value": "cyfr.tail1a2b3c.xts.net",
+        "valid": false,
+        "why": "suffix boundary"
+      },
+      {
+        "value": "-cyfr.tail1a2b3c.ts.net",
+        "valid": false,
+        "why": "label starts with a hyphen"
+      },
+      {
+        "value": "cyfr..ts.net",
+        "valid": false,
+        "why": "empty label"
+      },
+      {
+        "value": "https://cyfr.tail1a2b3c.ts.net",
+        "valid": false,
+        "why": "a URL"
+      },
+      {
+        "value": "localhost",
+        "valid": false,
+        "why": "localhost"
+      },
+      {
+        "value": "",
+        "valid": false,
+        "why": "empty"
+      }
+    ],
+    "node_ids": [
+      {
+        "value": "nAbc123XYZ1CNTRL",
+        "valid": true,
+        "why": "the hosted control server's shape"
+      },
+      {
+        "value": "12345",
+        "valid": true,
+        "why": "digits"
+      },
+      {
+        "value": "node.a_b-c",
+        "valid": true,
+        "why": "dots, underscores, hyphens"
+      },
+      {
+        "value": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "valid": true,
+        "why": "128 bytes"
+      },
+      {
+        "value": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "valid": false,
+        "why": "129 bytes"
+      },
+      {
+        "value": "",
+        "valid": false,
+        "why": "empty"
+      },
+      {
+        "value": "n bad",
+        "valid": false,
+        "why": "a space"
+      },
+      {
+        "value": "n/bad",
+        "valid": false,
+        "why": "a slash"
+      },
+      {
+        "value": "nAbcé",
+        "valid": false,
+        "why": "non-ASCII"
+      },
+      {
+        "value": "n=1",
+        "valid": false,
+        "why": "an equals sign"
+      }
+    ],
+    "domains": [
+      {
+        "value": "cyfr.example.com",
+        "valid": true,
+        "why": "a domain"
+      },
+      {
+        "value": "example.io",
+        "valid": true,
+        "why": "two labels"
+      },
+      {
+        "value": "xn--bcher-kva.example",
+        "valid": true,
+        "why": "punycode"
+      },
+      {
+        "value": "a-b.c-d.example.org",
+        "valid": true,
+        "why": "hyphens inside labels"
+      },
+      {
+        "value": "localhost",
+        "valid": false,
+        "why": "localhost"
+      },
+      {
+        "value": "cyfr.localhost",
+        "valid": false,
+        "why": "a .localhost name"
+      },
+      {
+        "value": "192.0.2.10",
+        "valid": false,
+        "why": "IPv4"
+      },
+      {
+        "value": "::1",
+        "valid": false,
+        "why": "IPv6"
+      },
+      {
+        "value": "[2001:db8::1]",
+        "valid": false,
+        "why": "bracketed IPv6"
+      },
+      {
+        "value": "cyfr.tail1a2b3c.ts.net",
+        "valid": false,
+        "why": "a ts.net name"
+      },
+      {
+        "value": "ts.net",
+        "valid": false,
+        "why": "ts.net itself"
+      },
+      {
+        "value": "cyfrts.net",
+        "valid": true,
+        "why": "ts.net only as a whole label"
+      },
+      {
+        "value": "example",
+        "valid": false,
+        "why": "one label"
+      },
+      {
+        "value": "Example.com",
+        "valid": false,
+        "why": "uppercase"
+      },
+      {
+        "value": "example.com.",
+        "valid": false,
+        "why": "trailing dot"
+      },
+      {
+        "value": "https://example.com",
+        "valid": false,
+        "why": "a URL"
+      },
+      {
+        "value": "example.com:443",
+        "valid": false,
+        "why": "a port"
+      },
+      {
+        "value": "ex_ample.com",
+        "valid": false,
+        "why": "an underscore"
+      },
+      {
+        "value": "-example.com",
+        "valid": false,
+        "why": "a leading hyphen"
+      },
+      {
+        "value": "example.123",
+        "valid": false,
+        "why": "an all-digit top label"
+      },
+      {
+        "value": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.com",
+        "valid": false,
+        "why": "over 253 bytes"
+      },
+      {
+        "value": "",
+        "valid": false,
+        "why": "empty"
+      }
+    ]
+  },
+  "words": [
+    {
+      "head": {
+        "mode": "local",
+        "host": "localhost",
+        "port": 4000,
+        "builds_url": "http://locus-builds:4100",
+        "profiles": [
+          "locus-builds"
+        ]
+      },
+      "sentences": [
+        "Who can reach this home: only this computer",
+        "Address: http://localhost:4000",
+        "Certificate email: none",
+        "Ports opened on this machine: none"
+      ]
+    },
+    {
+      "head": {
+        "mode": "local",
+        "host": "localhost",
+        "port": 8080,
+        "profiles": []
+      },
+      "sentences": [
+        "Who can reach this home: only this computer",
+        "Address: http://localhost:8080",
+        "Certificate email: none",
+        "Ports opened on this machine: none"
+      ]
+    },
+    {
+      "head": {
+        "mode": "tailnet",
+        "host": "cyfr.tail1a2b3c.ts.net",
+        "port": 4000,
+        "node_id": "nAbc123XYZ1CNTRL",
+        "public_url": "https://cyfr.tail1a2b3c.ts.net",
+        "builds_url": "http://locus-builds:4100",
+        "profiles": [
+          "locus-builds",
+          "tailnet"
+        ]
+      },
+      "sentences": [
+        "Who can reach this home: your devices on Tailscale, and people you share this machine with",
+        "Address: https://cyfr.tail1a2b3c.ts.net",
+        "Certificate email: none",
+        "Ports opened on this machine: none"
+      ]
+    },
+    {
+      "head": {
+        "mode": "public",
+        "host": "cyfr.example.com",
+        "port": 4000,
+        "public_url": "https://cyfr.example.com",
+        "acme_email": "ops@example.com",
+        "builds_url": "http://locus-builds:4100",
+        "profiles": [
+          "locus-builds",
+          "public"
+        ]
+      },
+      "sentences": [
+        "Who can reach this home: anyone on the internet, who still has to sign in",
+        "Address: https://cyfr.example.com",
+        "Certificate email: ops@example.com",
+        "Ports opened on this machine: 80 and 443"
+      ]
+    },
+    {
+      "head": {
+        "mode": "public",
+        "host": "cyfr.example.com",
+        "port": 4000,
+        "public_url": "https://cyfr.example.com",
+        "profiles": [
+          "public"
+        ]
+      },
+      "sentences": [
+        "Who can reach this home: anyone on the internet, who still has to sign in",
+        "Address: https://cyfr.example.com",
+        "Certificate email: none",
+        "Ports opened on this machine: 80 and 443"
+      ]
+    }
+  ]
+}

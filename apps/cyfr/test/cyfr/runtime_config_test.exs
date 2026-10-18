@@ -569,4 +569,178 @@ defmodule Cyfr.RuntimeConfigTest do
       assert msg =~ "CYFR_DATABASE_URL"
     end
   end
+
+  describe "resolve_reach/1, as tests/fixtures/reach_modes.json holds it" do
+    # The reach engine (apps/codex/internal/reach) reads the same file and
+    # agrees with every answer here.
+    @reach_vectors Path.expand("../../../../tests/fixtures/reach_modes.json", __DIR__)
+
+    defp reach_vectors, do: @reach_vectors |> File.read!() |> Jason.decode!()
+
+    defp reach_input(%{"file" => file, "process" => process, "release?" => release?}),
+      do: %{file: file, process: process, release?: release?}
+
+    # A result in the vector file's shape.
+    defp reach_json({:ok, reach}) do
+      listener = fn
+        :none -> "none"
+        {address, port} -> [address, port]
+      end
+
+      trust =
+        case reach.trust do
+          :none -> "none"
+          {:cidrs, cidrs} -> %{"cidrs" => cidrs}
+          {:hops, hops} -> %{"hops" => hops}
+        end
+
+      assert Map.keys(reach) |> Enum.sort() ==
+               ~w(assertion canonical check_origins digest head hsts listeners mode origin trust)a
+
+      %{
+        "reach" => %{
+          "mode" => Atom.to_string(reach.mode),
+          "head" => reach.head,
+          "canonical" => reach.canonical,
+          "digest" => reach.digest,
+          "origin" => reach.origin,
+          "listeners" => %{
+            "loopback" => listener.(reach.listeners.loopback),
+            "proxy" => listener.(reach.listeners.proxy)
+          },
+          "trust" => trust,
+          "hsts" => Atom.to_string(reach.hsts),
+          "check_origins" => reach.check_origins,
+          "assertion" => Atom.to_string(reach.assertion)
+        }
+      }
+    end
+
+    defp reach_json({:error, %{code: code, class: class, payload: payload} = refusal}) do
+      assert map_size(refusal) == 3
+
+      %{
+        "refusal" => %{
+          "code" => Atom.to_string(code),
+          "class" => Atom.to_string(class),
+          "payload" => Map.new(payload, fn {key, value} -> {Atom.to_string(key), value} end),
+          "sentence" => Prima.Refusal.message({code, payload})
+        }
+      }
+    end
+
+    test "every boot vector resolves to its answer, refusals to their code, class, payload and sentence" do
+      boot = reach_vectors()["boot"]
+      assert boot != []
+
+      for vector <- boot do
+        expected = Map.take(vector, ["reach", "refusal"])
+        assert map_size(expected) == 1, vector["name"]
+
+        assert reach_json(RuntimeConfig.resolve_reach(reach_input(vector["input"]))) == expected,
+               vector["name"]
+      end
+
+      codes = for %{"refusal" => %{"code" => code}} <- boot, uniq: true, do: code
+
+      # Every boot refusal of the plan's table, and the malformed setting,
+      # is among the vectors.
+      assert Enum.sort(codes) ==
+               Enum.sort(~w(reach_source_conflict reach_assertion_from_file reach_missing
+                            reach_unknown_mode reach_local_mismatch reach_tailnet_host_invalid
+                            reach_tailnet_node_invalid reach_public_host_invalid
+                            reach_public_url_mismatch reach_key_outside_mode
+                            reach_bind_not_loopback reach_setting_invalid))
+    end
+
+    test "the canonical bytes and digest of every derived head are these" do
+      derive = reach_vectors()["derive"]
+      heads = for %{"head" => head} = vector <- derive, do: {head, vector}
+      assert heads != []
+
+      for {head, vector} <- heads do
+        assert RuntimeConfig.reach_digest(head) ==
+                 %{canonical: vector["canonical"], digest: vector["digest"]},
+               vector["name"]
+
+        assert {:ok, digest} = Prima.JCS.hash(head)
+        assert digest == vector["digest"]
+        refute vector["canonical"] =~ "null"
+      end
+
+      # Each derived head is its own: a change of port, email, builds URL
+      # or node gives a new digest.
+      digests = for {_head, vector} <- heads, do: vector["digest"]
+      assert Enum.uniq(digests) == digests
+    end
+
+    test "the compose selection of a head" do
+      profiles = reach_vectors()["profiles"]
+      assert profiles != []
+
+      for %{"mode" => mode, "profiles" => expected} = vector <- profiles do
+        assert RuntimeConfig.reach_profiles(mode, vector["builds_url"]) == expected,
+               inspect(vector)
+      end
+    end
+
+    test "the names a reach is written with" do
+      names = reach_vectors()["names"]
+
+      for {section, check} <- [
+            {"tailnet_names", &RuntimeConfig.tailnet_name?/1},
+            {"node_ids", &RuntimeConfig.tailnet_node_id?/1},
+            {"domains", &RuntimeConfig.public_domain?/1}
+          ] do
+        cases = names[section]
+        assert Enum.any?(cases, & &1["valid"]) and Enum.any?(cases, &(not &1["valid"])), section
+
+        for %{"value" => value, "valid" => valid, "why" => why} <- cases do
+          assert check.(value) == valid, "#{section} #{inspect(value)} (#{why})"
+        end
+      end
+    end
+
+    test "the words a person reads for a head" do
+      words = reach_vectors()["words"]
+      assert words != []
+
+      for %{"head" => head, "sentences" => sentences} <- words do
+        assert RuntimeConfig.reach_words(head) == sentences
+
+        for sentence <- sentences, term <- ~w(profile compose caddy CYFR_ node_id < %) do
+          refute sentence =~ term, "#{sentence} names #{term}"
+        end
+      end
+    end
+
+    test "a dev or test run without a mode is local, and a release without one is refused" do
+      assert {:ok, %{mode: :local, assertion: :absent}} =
+               RuntimeConfig.resolve_reach(%{file: nil, process: %{}, release?: false})
+
+      assert {:error, %{code: :reach_missing, class: :setup_required, payload: %{}}} =
+               RuntimeConfig.resolve_reach(%{file: nil, process: %{}, release?: true})
+    end
+
+    test "with no .env read, the process alone decides and no source rule applies" do
+      process = %{
+        "CYFR_REACH" => "local",
+        "CYFR_BIND_ADDRESS" => "172.16.230.2",
+        "CYFR_LOCAL_INGRESS_ASSERTED" => "true"
+      }
+
+      assert {:ok, %{assertion: :process, listeners: %{loopback: {"172.16.230.2", 4000}}}} =
+               RuntimeConfig.resolve_reach(%{file: nil, process: process, release?: true})
+
+      # The same assignment read from .env is refused, whatever its value.
+      for value <- ["true", "false", ""] do
+        assert {:error, %{code: :reach_assertion_from_file}} =
+                 RuntimeConfig.resolve_reach(%{
+                   file: %{"CYFR_LOCAL_INGRESS_ASSERTED" => value},
+                   process: process,
+                   release?: true
+                 })
+      end
+    end
+  end
 end

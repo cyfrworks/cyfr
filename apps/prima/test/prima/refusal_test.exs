@@ -14,6 +14,116 @@ defmodule Prima.RefusalTest do
 
   alias Prima.Refusal
 
+  # The reach and first-run setup rows: each code with its class and the
+  # sentence it reads as, word for word. The boot's own rows are held to
+  # the same words by tests/fixtures/reach_modes.json, on both sides.
+  @reach_rows [
+    {:setup_not_local, :forbidden,
+     "Setting up this home is done on the machine itself: on its own screen, or through its loopback address. Nothing was changed. Open the link `cyfr setup link` prints, on the machine."},
+    {:setup_token_invalid, :unauthenticated,
+     "This setup link is not this home's. Nothing was changed. Run `cyfr setup link` on the machine and open the link it prints."},
+    {:setup_token_spent, :conflict,
+     "This setup link has been used, and this home is set up. Nothing was changed. Sign in instead."},
+    {:setup_claimed, :conflict,
+     "Someone finished setting up this home a moment ago, so it already has its administrator. Nothing was changed for you. Sign in; if that was not you, tell whoever runs the machine."},
+    {:setup_closed, :forbidden,
+     "Whoever runs the machine names this home's administrators, so it has no setup step. Nothing was changed. Sign in, or ask them to add you."},
+    {:setup_expired, :cancelled,
+     "This setup attempt ended before it finished: it expired, was cancelled, or the home restarted while it waited. Nothing was changed. Start again."},
+    {:setup_cancel_too_late, :conflict,
+     "Too late to cancel: this setup had already finished, and the account you approved on your phone is this home's administrator. Sign in to continue; if that account is wrong, whoever runs the machine can name the administrators in its deployment file."},
+    {:setup_denied, :cancelled,
+     "The sign-in was declined on your phone. Nothing was changed. Start again with the account that should run this home."},
+    {:setup_unverified_email, :forbidden,
+     "That account has no email address GitHub or Google has verified, and this home's administrator needs one. Nothing was changed. Verify an address with them, then start again."},
+    {:setup_provider_unavailable, :unavailable,
+     "GitHub or Google did not answer. Nothing was changed. Start again in a moment."},
+    {:setup_failed, :unavailable,
+     "This home could not finish creating your account. Nothing was changed. Start again; if it keeps failing, the home's log on the machine says why."},
+    {:setup_ticket_invalid, :unauthenticated,
+     "This sign-in belongs to another browser or has been used. Nothing was changed. Sign in on this screen."},
+    {:reach_missing, :setup_required,
+     "CYFR_REACH is not set in .env, so this home does not know how it is reached. Nothing started. Run `cyfr init` for a new home, or `cyfr reach local|tailnet|public` for this one."},
+    {{:reach_missing, %{}}, :setup_required,
+     "CYFR_REACH is not set in .env, so this home does not know how it is reached. Nothing started. Run `cyfr init` for a new home, or `cyfr reach local|tailnet|public` for this one."},
+    {{:reach_assertion_from_file, %{}}, :forbidden,
+     "CYFR_LOCAL_INGRESS_ASSERTED is the compose file's assertion and cannot come from .env. Remove it from .env."},
+    {{:reach_unknown_mode, %{value: "lan"}}, :invalid_argument,
+     "CYFR_REACH is `lan`; it must be `local`, `tailnet` or `public`. Run `cyfr reach <mode>` to set it with the address it implies."},
+    {{:reach_source_conflict, %{key: "CYFR_PORT", file_value: "4000", process_value: "4100"}},
+     :conflict,
+     "`CYFR_PORT` is `4000` in .env and `4100` in this process's environment; a home has one reach. Remove one of them."},
+    {{:reach_bind_not_loopback, %{address: "0.0.0.0"}}, :forbidden,
+     "CYFR_BIND_ADDRESS `0.0.0.0` is not a loopback address, so other machines could reach this home's loopback listener. Bind 127.0.0.1 or ::1; a home reached from other devices uses CYFR_REACH=tailnet or public."},
+    {{:reach_key_outside_mode, %{key: "CADDY_ACME_EMAIL", mode: "tailnet", needs: "public"}},
+     :invalid_argument,
+     "`CADDY_ACME_EMAIL` is set, but only a `public` home uses it (CYFR_REACH is `tailnet`). Remove it, or run `cyfr reach public`."},
+    {:setup_token_with_admins, :invalid_argument,
+     "CYFR_SETUP_TOKEN is set, but CYFR_PLATFORM_ADMIN_EMAILS already names this home's administrators, so no setup can use it. Nothing started. Delete the CYFR_SETUP_TOKEN line from .env, then run `cyfr up`."},
+    {{:setup_token_refused, %{why: :malformed}}, :invalid_argument,
+     "CYFR_SETUP_TOKEN cannot be used here: it is not 64 lowercase hexadecimal characters. Nothing started. Replace it with 64 lowercase hexadecimal characters, such as `openssl rand -hex 32` prints."},
+    {{:setup_token_refused, %{why: :restore_token}}, :invalid_argument,
+     "CYFR_SETUP_TOKEN cannot be used here: CYFR_RESTORE_TOKEN also reserves the first person. Nothing started. Remove one of the two."},
+    {{:setup_token_refused, %{why: :headless}}, :invalid_argument,
+     "CYFR_SETUP_TOKEN cannot be used here: a headless node has no setup page. Nothing started. Set CYFR_PLATFORM_ADMIN_EMAILS instead and delete CYFR_SETUP_TOKEN."},
+    {{:setup_token_refused, %{why: :oidc}}, :invalid_argument,
+     "CYFR_SETUP_TOKEN cannot be used here: the setup signs in through GitHub or Google, and this home uses an OIDC issuer. Nothing started. Set CYFR_PLATFORM_ADMIN_EMAILS instead and delete CYFR_SETUP_TOKEN."},
+    {{:setup_token_refused, %{why: :no_provider}}, :invalid_argument,
+     "CYFR_SETUP_TOKEN cannot be used here: the setup signs in through GitHub or Google, and this home uses neither. Nothing started. Set CYFR_PLATFORM_ADMIN_EMAILS instead and delete CYFR_SETUP_TOKEN."},
+    {{:compose_env_refused, %{key: "COMPOSE_PROFILES"}}, :invalid_argument,
+     "`.env` sets `COMPOSE_PROFILES`, which Docker Compose would read to choose this stack's files, project or services behind cyfr's back. Nothing started. Remove it; cyfr chooses them from CYFR_REACH and CYFR_LOCUS_BUILDS_URL."},
+    {{:reach_busy, %{holder: "cyfr update on host1, pid 4242", pid: "4250", until: "14:03:00"}},
+     :conflict,
+     "Another cyfr command holds this home (`cyfr update on host1, pid 4242`), or a docker command it started is still running (watchdog pid `4250`, which ends by `14:03:00` at the latest). Nothing was changed. Wait until it has finished, then run this command again; if the holder was interrupted, run `cyfr reach --resume` after that time."},
+    {{:reach_stale, %{words: "your devices on Tailscale, at https://cyfr.tail1a2b3c.ts.net"}},
+     :conflict,
+     "How this home is reached changed after the change was shown to you (it is now: your devices on Tailscale, at https://cyfr.tail1a2b3c.ts.net). Nothing was changed. Run the command again to review the change."},
+    {{:reach_unchanged, %{address: "http://localhost:4000"}}, :invalid_argument,
+     "This home is already reached that way, at http://localhost:4000. Nothing was changed."},
+    {{:reach_invalid,
+      %{input: "192.0.2.10", kind: :domain, rule: "an IP address is not a domain"}},
+     :invalid_argument,
+     "`192.0.2.10` is not a valid domain: an IP address is not a domain. Nothing was changed. Correct it and run the command again."},
+    {:reach_request_reused, :conflict,
+     "This request names a different change than the one first sent under its id. Nothing was changed. Send it again under a new id."},
+    {:tailnet_not_joined, :setup_required,
+     "This machine has not joined your tailnet. Nothing was changed. Run `cyfr reach tailnet` and approve the machine with the link it prints."},
+    {{:tailnet_https_off, %{name: "cyfr.tail1a2b3c.ts.net"}}, :setup_required,
+     "This machine joined your tailnet as `cyfr.tail1a2b3c.ts.net`, but your tailnet has HTTPS certificates turned off, and this home needs them. How this home is reached was not changed. Turn on HTTPS on the DNS page of the Tailscale admin console, then run `cyfr reach tailnet` again, which uses this machine as it is. If you do not want it in your tailnet, remove `cyfr.tail1a2b3c.ts.net` on the Machines page of the admin console."},
+    {{:tailnet_active, %{name: "cyfr.tail1a2b3c.ts.net"}}, :conflict,
+     "This home is already on your tailnet as `cyfr.tail1a2b3c.ts.net`. Nothing was changed. To give it another name, run `cyfr reach local`, then `cyfr reach tailnet --new-node`, and remove `cyfr.tail1a2b3c.ts.net` on the Machines page of the Tailscale admin console."},
+    {{:tailnet_name_changed,
+      %{frozen: "cyfr.tail1a2b3c.ts.net", now: "cyfr-2.tail1a2b3c.ts.net"}}, :conflict,
+     "The machine's tailnet name or identity changed from `cyfr.tail1a2b3c.ts.net` to `cyfr-2.tail1a2b3c.ts.net` after the change was shown. Nothing was changed. Run the command again to review it."},
+    {{:tailnet_node_mismatch, %{node: "b.tail1a2b3c.ts.net", env: "a.tail1a2b3c.ts.net"}},
+     :conflict,
+     "This machine's tailnet identity is `b.tail1a2b3c.ts.net`, but .env says this home is `a.tail1a2b3c.ts.net`, so it is not being served on your tailnet: it answers on this machine only, and nothing else was changed. Run `cyfr reach tailnet`, which offers to move the home to https://b.tail1a2b3c.ts.net after you confirm."},
+    {{:tailnet_node_id_unsupported, %{value: "n/bad"}}, :invalid_argument,
+     "Tailscale reported a machine identity this home cannot store (`n/bad`). How this home is reached was not changed. Report this with your Tailscale version."},
+    {:tailnet_join_expired, :timeout,
+     "The approval link expired before the machine was approved. How this home is reached was not changed. Run `cyfr reach tailnet` for a new link."},
+    {:tailnet_join_cancelled, :cancelled,
+     "Joining your tailnet was cancelled. How this home is reached was not changed."},
+    {:tailnet_join_not_current, :conflict,
+     "That join attempt is no longer the one in progress. Nothing was changed."},
+    {{:docker_unavailable, %{reason: "the daemon socket refused the connection"}}, :unavailable,
+     "Docker did not answer (the daemon socket refused the connection) before the change was accepted. Nothing was changed. Start Docker, then run the command again."},
+    {{:reach_rolled_back,
+      %{
+        new: "your devices on Tailscale",
+        old: "only this computer",
+        reason: "cyfr did not become healthy"
+      }}, :conflict,
+     "This home could not start as your devices on Tailscale (cyfr did not become healthy). What it started was stopped and checked stopped, and the home was put back: it is reached as before, only this computer, and running. Fix what the reason names, then run the command again."},
+    {{:reach_failed, %{new: "your devices on Tailscale", env: "only this computer"}},
+     :unavailable,
+     "This home could not start as your devices on Tailscale, nor as before; everything was stopped and checked stopped. .env says: only this computer. Run `cyfr up` to start it as .env says, or `cyfr reach <mode>` to choose again."},
+    {{:reach_uncertain, %{observed: "cyfr and tailscale"}}, :uncertain,
+     "This home could not be brought to a known state: cyfr and tailscale were still running after the stop. It may be partly reachable. Nothing more was done. On the machine, run `cyfr reach --resume`, which stops what is running, checks, and starts the home as .env says; if it reports the same, run `cyfr down`, check `docker ps`, then `cyfr up`."},
+    {{:reach_outcome_unknown, %{reason: "the command was interrupted"}}, :uncertain,
+     "This command lost track of the change before it finished (the command was interrupted), so it may have been applied. Do not ask for it again: run `cyfr reach --resume`, which finishes it under the lock and reports what happened."}
+  ]
+
   # One exemplar per rostered reason, with the class it classifies to.
   # The authorization vocabulary (`Sanctum.Unauthorized`) classifies its
   # own reasons and is not here.
@@ -237,6 +347,9 @@ defmodule Prima.RefusalTest do
     {"No provider found for scheme ftp", :internal}
   ]
 
+  # The reach and setup rows are rostered with their classes too.
+  @rostered @rostered ++ for({reason, class, _sentence} <- @reach_rows, do: {reason, class})
+
   # What a guest error's type reads as.
   @guest_types %{
     "invalid_request" => :invalid_argument,
@@ -300,6 +413,35 @@ defmodule Prima.RefusalTest do
       for class <- Refusal.classes() do
         {reason, ^class} = Enum.find(@rostered, &(elem(&1, 1) == class))
         assert Refusal.classify(reason).message =~ ~r/\w/
+      end
+    end
+
+    test "every reach and setup row reads as its class and its words" do
+      for {reason, class, sentence} <- @reach_rows do
+        assert %Refusal{class: ^class, message: ^sentence} = Refusal.classify(reason),
+               "#{inspect(reason)} reads as #{inspect(Refusal.classify(reason))}"
+      end
+    end
+
+    test "a reach row whose payload lacks a part is no sentence of its own" do
+      for reason <- [
+            {:reach_unknown_mode, %{}},
+            {:reach_source_conflict, %{key: "CYFR_PORT", file_value: "4000"}},
+            {:reach_bind_not_loopback, %{address: {0, 0, 0, 0}}},
+            {:reach_key_outside_mode, %{key: "CYFR_PORT", mode: "local", needs: "public"}},
+            {:reach_public_url_mismatch, %{mode: "local", expected: "https://x.example"}},
+            {:reach_setting_invalid, %{key: "CYFR_HOST", value: "x"}},
+            {:setup_token_refused, %{why: :other}},
+            {:compose_env_refused, %{key: "CYFR_PORT"}},
+            {:reach_busy, %{holder: "x"}},
+            {:reach_invalid, %{input: "x", kind: :port, rule: "y"}},
+            {:setup_not_local, %{}},
+            {:tailnet_join_expired, %{reason: "x"}}
+          ] do
+        assert capture_log(fn ->
+                 assert %Refusal{class: :internal, message: message} = Refusal.classify(reason)
+                 assert message == Refusal.unconfirmed()
+               end) =~ "Prima.Refusal"
       end
     end
 
