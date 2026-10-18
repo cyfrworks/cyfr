@@ -128,7 +128,7 @@ defmodule Prima.Arg do
 
     %{
       "size" => byte_size(bytes),
-      "digest" => "sha256:" <> Base.encode16(:crypto.hash(:sha256, bytes), case: :lower)
+      "digest" => Prima.Digest.sha256(bytes)
     }
   end
 
