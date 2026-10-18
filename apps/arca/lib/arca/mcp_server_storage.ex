@@ -27,10 +27,11 @@ defmodule Arca.McpServerStorage do
   - inserted_at/updated_at: Timestamps
 
   Every write that changes a row raises its epoch and its revision in the
-  same statement. `bump_epoch/3` is a host-owned write, published under
-  this member's live ownership of its slot and the revision it read
-  (`Arca.FencedPublication`); the others answer the written row as the
-  database returned it.
+  same statement. `bump_epoch/3` is the one host-owned write, published
+  under this member's live ownership of its slot and the revision it read
+  (`Arca.FencedPublication`). The others (`insert/2`, `update/4`,
+  `delete/2`) are a person's writes, made without the slot check, and
+  answer the written row as the database returned it.
 
   `insert/2` counts the athanor's servers against the caller's cap and
   inserts in one locking transaction under the athanor's row lock.

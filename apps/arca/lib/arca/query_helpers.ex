@@ -11,6 +11,13 @@ defmodule Arca.QueryHelpers do
   no coercion: a `nil`/`""` athanor on an actor is an identity that was
   never resolved, never a value to normalize into some default row set.
 
+  A query that crosses athanors serves a responsibility of the system's
+  own and names it on or above its function head: `# arca:unscoped-ok`
+  and the reason. A platform reader goes through
+  `where_tenant_unless_platform/2` instead. A person's work in another
+  athanor is never such a query: it is a change of focus the identity
+  domain authorizes, which hands this layer that athanor's actor.
+
   ## Relationship to the trust boundary
 
   These helpers are a fail-closed **backstop**, not the authoritative

@@ -105,7 +105,9 @@ defmodule Arca.Schemas.Execution do
     # parent call.
     field :call_id, :string
     # How the run started (`Prima.Origin`'s wire spelling): the admission
-    # path names it for a root, and a child carries its parent's.
+    # path names it for a root, and a child carries its parent's. It is
+    # recorded on the row, not in the authority a runner receives
+    # (`Prima.Authority`), which carries no origin.
     field :origin, :string
     # The run's source ledger (`Prima.Source`, canonical JSON): seeded at
     # admission and only ever grown.

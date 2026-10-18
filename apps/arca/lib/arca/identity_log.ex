@@ -27,6 +27,9 @@ defmodule Arca.IdentityLog do
       A head that moved while the revision still stands is `:stale` and
       recorded nothing: the caller rebuilds its entry on the new head.
 
+  Order is the position and the `prev` link alone: the times a row
+  records are never compared, so no clock decides which write lands.
+
   ## Quotas
 
   Every write is decided under one lock, the directory's usage row in

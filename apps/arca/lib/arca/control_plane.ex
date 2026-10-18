@@ -92,10 +92,10 @@ defmodule Arca.ControlPlane do
   ## One release per cell
 
   A cell runs one release: members of two releases on one database would
-  each read the other's rows with code that did not write them. So every
-  slot row carries the release of the boot that holds it
-  (`Prima.Version.current/0`), and a member whose release differs from a
-  live member's is refused its slot: `take/3` answers
+  each read the other's rows, and the bus payloads the other broadcasts,
+  with code that did not write them. So every slot row carries the release
+  of the boot that holds it (`Prima.Version.current/0`), and a member whose
+  release differs from a live member's is refused its slot: `take/3` answers
   `{:error, {:mixed_release, other}}` and writes nothing. A live slot that
   names no release counts as another release, since what it runs is not
   known to be this one; an expired slot of any release is taken and
