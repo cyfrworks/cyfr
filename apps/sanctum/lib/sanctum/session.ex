@@ -139,6 +139,13 @@ defmodule Sanctum.Session do
   mints nothing (`{:error, :identity_stale}`). A local person's session
   records none.
 
+  A sign-in a door admitted stands on that door (the context's `door`,
+  which its binding names): the session is issued only while the door is
+  still the person's, read under the person's lock in the issuing
+  transaction (`{:error, :unauthenticated}` otherwise). So a door the
+  fresh read above retired, because the head it found is a recovery that
+  replaced the live key (`Arca.DirectoryHeads`), signs no one in.
+
   ## The epoch a door verified under
 
   `key_epoch:` is the `key_epoch` of the head the door verified the

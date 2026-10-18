@@ -127,6 +127,27 @@ defmodule Arca.DirectoryHeadsTest do
     person
   end
 
+  # A door the person linked at this home: a GitHub identity beside the
+  # `cyfr` door they were admitted through.
+  defp door!(user_id) do
+    n = System.unique_integer([:positive])
+
+    {:ok, %{identity: door, linked: true}} =
+      Users.link_identity(server(), user_id, %{
+        key: "github|https://github.com|dh-#{n}",
+        provider: "github",
+        issuer: "https://github.com",
+        subject: "dh-#{n}"
+      })
+
+    door
+  end
+
+  defp door_keys(user_id) do
+    {:ok, doors} = Users.identities(server(), user_id)
+    doors |> Enum.map(& &1.key) |> Enum.sort()
+  end
+
   defp session!(user_id, epoch) do
     hash = :crypto.strong_rand_bytes(32)
     :ok = try_session(user_id, epoch, hash)
@@ -316,13 +337,14 @@ defmodule Arca.DirectoryHeadsTest do
              session_hashes: [],
              passkey_ids: [],
              confirmation_ids: [],
-             certificate_ids: []
+             certificate_ids: [],
+             door_ids: []
            }
 
     assert {:error, :not_found} = DirectoryHeads.advance(server(), identifier(), epoch, attrs)
   end
 
-  test "a rotation retires what was bound to the old key_epoch, which then binds nothing, and keeps the passkeys" do
+  test "a rotation retires what was bound to the old key_epoch, which then binds nothing, and keeps the passkeys and doors" do
     id = identifier()
     old = digest("old")
     new = digest("new")
@@ -337,6 +359,7 @@ defmodule Arca.DirectoryHeadsTest do
     confirmation = confirmation!(athanor, person.id, old)
     client = device_client!(athanor, person.id)
     certificate = certificate!(athanor, client, id, old)
+    door = door!(person.id)
 
     # What another identifier's person holds is not this head's to retire.
     cached!(other_identifier(other), old)
@@ -357,7 +380,8 @@ defmodule Arca.DirectoryHeadsTest do
              session_hashes: [session],
              passkey_ids: [],
              confirmation_ids: [confirmation.ref],
-             certificate_ids: [certificate.id]
+             certificate_ids: [certificate.id],
+             door_ids: []
            }
 
     assert [] = Arca.Repo.all(from(s in Session, where: s.user_id == ^person.id))
@@ -365,6 +389,7 @@ defmodule Arca.DirectoryHeadsTest do
     assert {:ok, %{state: "active"}} = Passkeys.get(server(), passkey.id)
     assert {:ok, %{state: "voided"}} = PendingConfirmations.get(athanor, confirmation.ref)
     assert {:ok, %{status: "revoked"}} = DeviceCertificates.get(athanor, certificate.id)
+    assert door.key in door_keys(person.id)
 
     # The retired epoch binds nothing new, on every write that binds one.
     assert {:error, :stale_key_epoch} = try_session(person.id, old)
@@ -390,17 +415,21 @@ defmodule Arca.DirectoryHeadsTest do
     assert {:ok, _} = DeviceCertificates.record(athanor, certificate_attrs(client, id, new))
   end
 
-  test "a recovery that replaces the live key retires the passkeys registered under the old recovery_epoch" do
+  test "a recovery that replaces the live key retires the passkeys and the doors linked under the old recovery_epoch, and keeps the cyfr door" do
     id = identifier()
     old = digest("old")
     recovered = digest("recovered")
     cached!(id, old)
     person = remote_person!(id)
     athanor = Prima.Actor.in_athanor("ath_dh_#{System.unique_integer([:positive])}")
+    other = remote_person!(identifier())
 
     session = session!(person.id, old)
     passkey = passkey!(person.id, old)
     confirmation = confirmation!(athanor, person.id, old)
+    door = door!(person.id)
+    # Another identifier's person keeps the door they linked.
+    other_door = door!(other.id)
 
     assert {:ok, %{retired: retired}} =
              DirectoryHeads.advance(server(), id, old, %{
@@ -416,23 +445,27 @@ defmodule Arca.DirectoryHeadsTest do
              session_hashes: [session],
              passkey_ids: [passkey.id],
              confirmation_ids: [confirmation.ref],
-             certificate_ids: []
+             certificate_ids: [],
+             door_ids: [door.id]
            }
 
+    assert door_keys(person.id) == ["cyfr|https://dir.example|#{id}"]
+    assert other_door.key in door_keys(other.id)
     assert {:ok, %{state: "revoked"}} = Passkeys.get(server(), passkey.id)
     assert {:error, :stale_key_epoch} = Passkeys.register(server(), passkey_attrs(person.id, old))
     assert {:ok, _} = Passkeys.register(server(), passkey_attrs(person.id, recovered))
   end
 
-  test "a recover that keeps the live key (one adding a holder) moves the key epoch alone, and keeps the passkeys" do
+  test "a recover that keeps the live key (one adding a holder) moves the key epoch alone, and keeps the passkeys and doors" do
     id = identifier()
     old = digest("old")
     holder = digest("holder")
     cached!(id, old)
     person = remote_person!(id)
     passkey = passkey!(person.id, old)
+    door = door!(person.id)
 
-    assert {:ok, %{retired: %{passkey_ids: []}}} =
+    assert {:ok, %{retired: %{passkey_ids: [], door_ids: []}}} =
              DirectoryHeads.advance(server(), id, old, %{
                genesis: "genesis-bytes",
                directory_url: "https://dir.example",
@@ -443,6 +476,7 @@ defmodule Arca.DirectoryHeadsTest do
              })
 
     assert {:ok, %{state: "active"}} = Passkeys.get(server(), passkey.id)
+    assert door.key in door_keys(person.id)
   end
 
   test "a passkey binds a remote person's current recovery epoch under their lock, and a local person's none" do

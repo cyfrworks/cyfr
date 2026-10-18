@@ -56,9 +56,11 @@ defmodule Sanctum.Tenancy do
   credential yet — an admitted sign-in, the only caller that passes
   `force: true` — is stamped `source_kind: :identity` with the person's
   and the chosen athanor's generations and the membership that granted it,
-  read after the door's verdict; a session or key context keeps its
-  source and person generation and takes the new athanor's. A person with
-  no `users` row carries no binding, and can be issued nothing.
+  read after the door's verdict, and the door it came through
+  (`Sanctum.Context`'s `door`) as its source; a session or key context
+  keeps its source and person generation and takes the new athanor's. A
+  person with no `users` row carries no binding, and can be issued
+  nothing.
   """
   @spec resolve_status(Context.t(), keyword()) :: {:ok, Context.t()} | {:error, :unavailable}
   def resolve_status(ctx, opts \\ [])
@@ -198,7 +200,7 @@ defmodule Sanctum.Tenancy do
       ctx
       | credential_binding: %{
           source_kind: :identity,
-          source_id: nil,
+          source_id: ctx.door,
           focus_basis: focus_basis(ctx, athanor, memberships),
           user_generation: user.security_generation,
           athanor_generation: athanor && athanor.security_generation

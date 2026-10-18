@@ -24,10 +24,14 @@ defmodule Arca.DirectoryHeads do
   (`Arca.DeviceCertificates`) and their open confirmations that depend on
   it (`Arca.PendingConfirmations`). A changed `recovery_epoch` (a recovery
   that replaced the live key) retires their passkeys registered under it
-  (`Arca.Passkeys`): a passkey registered at this home never depended on
-  the live key an ordinary rotation replaces, so it outlives that
-  rotation, and a recover that only adds a recovery holder. The answer
-  names what retired, for the caller to announce after commit.
+  (`Arca.Passkeys`) and the doors linked here
+  (`Arca.Schemas.ExternalIdentity` rows other than the `cyfr` door's,
+  which names the identifier itself and is verified against the current
+  head at every sign-in): a passkey
+  or a door linked at this home never depended on the live key an
+  ordinary rotation replaces, so it outlives that rotation, and a recover
+  that only adds a recovery holder. The answer names what retired, for
+  the caller to announce after commit.
 
   ## One order with every epoch-bound write
 
@@ -61,7 +65,7 @@ defmodule Arca.DirectoryHeads do
   import Ecto.Query
 
   alias Arca.{DeviceCertificates, Passkeys, PendingConfirmations, SessionStorage}
-  alias Arca.Schemas.{DirectoryHead, Membership, PersonIdentity, User}
+  alias Arca.Schemas.{DirectoryHead, ExternalIdentity, Membership, PersonIdentity, User}
 
   # Publishing a head decides which remote credentials this home accepts,
   # so each write first proves this member still owns its slot on the
@@ -76,7 +80,8 @@ defmodule Arca.DirectoryHeads do
           session_hashes: [binary()],
           passkey_ids: [String.t()],
           confirmation_ids: [String.t()],
-          certificate_ids: [String.t()]
+          certificate_ids: [String.t()],
+          door_ids: [String.t()]
         }
 
   @doc "The cached head of `identifier`."
@@ -359,8 +364,12 @@ defmodule Arca.DirectoryHeads do
   # What this home bound to an epoch the advance replaced, for the
   # identifier's people, in the standing order: sessions and certificates
   # bound to the old `key_epoch`, passkeys registered under the old
-  # `recovery_epoch` (with the confirmations they proved), and the open
-  # confirmations bound to the old `key_epoch`. Only a recovery that
+  # `recovery_epoch` (with the confirmations they proved), the open
+  # confirmations bound to the old `key_epoch`, and, under a new
+  # `recovery_epoch`, the doors linked here. Every door the advance finds
+  # was linked under the old one: a link is consumed with a confirmation
+  # bound to the cached `key_epoch` under the person's lock, and a remote
+  # person's confirmation reads the head fresh first. Only a recovery that
   # replaced the live key moves the `recovery_epoch`.
   defp retire!(_identifier, {key, key}, {recovery, recovery}), do: nothing_retired()
 
@@ -382,12 +391,35 @@ defmodule Arca.DirectoryHeads do
     confirmation_ids =
       if key_moved?, do: PendingConfirmations.void_key_epoch!(user_ids, old_key), else: []
 
+    door_ids = if old_recovery != new_recovery, do: unlink_doors!(user_ids), else: []
+
     %{
       session_hashes: session_hashes,
       certificate_ids: certificate_ids,
       passkey_ids: passkey_ids,
-      confirmation_ids: confirmation_ids
+      confirmation_ids: confirmation_ids,
+      door_ids: door_ids
     }
+  end
+
+  # The doors the people linked at this home, removed: every identity that
+  # names them but the `cyfr` door's, whose key is the identifier at its
+  # directory and which admits only against the current head. A sign-in
+  # through a removed door issues nothing (`Arca.SecurityTransitions.Issuance`
+  # reads the door under the person's lock this advance holds).
+  defp unlink_doors!([]), do: []
+
+  defp unlink_doors!(user_ids) do
+    doors =
+      from(i in ExternalIdentity,
+        where: i.user_id in ^user_ids and i.provider != "cyfr",
+        order_by: [asc: i.id],
+        select: i.id
+      )
+
+    ids = Arca.Repo.all(doors)
+    Arca.Repo.delete_all(from(i in ExternalIdentity, where: i.id in ^ids))
+    ids
   end
 
   defp people_of(identifier) do
@@ -544,7 +576,13 @@ defmodule Arca.DirectoryHeads do
   end
 
   defp nothing_retired,
-    do: %{session_hashes: [], passkey_ids: [], confirmation_ids: [], certificate_ids: []}
+    do: %{
+      session_hashes: [],
+      passkey_ids: [],
+      confirmation_ids: [],
+      certificate_ids: [],
+      door_ids: []
+    }
 
   defp valid(attrs, fields) do
     errors =

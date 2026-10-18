@@ -76,7 +76,9 @@ defmodule Sanctum.Context do
   row id, `:key` for an athanor's key, or nil where no row does), and the
   person's and the focused athanor's standing generations. A freshly
   admitted sign-in, which holds no credential yet, carries
-  `source_kind: :identity` and `source_id: nil`.
+  `source_kind: :identity` and as `source_id` the identity key of the door
+  it came through (the context's `door`), or nil where the door named
+  none; the issuance stands on that door still being the person's.
 
   A paired device's context carries `source_kind: :device`, its paired
   client's id as `source_id`, and `identity`: the identity row a person
@@ -170,6 +172,7 @@ defmodule Sanctum.Context do
           call_id: String.t() | nil,
           api_key_id: String.t() | nil,
           session_token_hash: binary() | nil,
+          door: String.t() | nil,
           credential_binding: credential_binding() | nil,
           credential_deadline: DateTime.t() | nil,
           validated_at: DateTime.t() | nil,
@@ -205,6 +208,12 @@ defmodule Sanctum.Context do
     # identifier as :api_key_id, and what `session.logout` needs to retire
     # exactly the session that called it.
     :session_token_hash,
+    # The identity key (`Sanctum.Auth.Identity.key/3`) of the door that
+    # admitted a sign-in, on the context that door built, or nil. The
+    # sign-in's binding names it (`Sanctum.Tenancy.resolve_status/2`), so
+    # the session is issued only while that door is still the person's: a
+    # recovery that retired it, or an unlink, in between issues nothing.
+    :door,
     # What this context's credential was issued against and the
     # generations it read (`t:credential_binding/0`). Stamped together
     # with `:session_token_hash` or `:api_key_id` by the one assembly path
@@ -336,6 +345,7 @@ defmodule Sanctum.Context do
   - `:api_key_type` - API key type atom
   - `:api_key_id` - API key identifier
   - `:session_token_hash` - session row key (SHA-256 of the session token)
+  - `:door` - the identity key of the door that admitted a sign-in
   - `:request_id` - MCP request ID
   - `:call_id` - the admission the context is inside (`call_<uuid7>`)
   - `:client_id` - the paired client the device channel authenticated
@@ -405,7 +415,8 @@ defmodule Sanctum.Context do
           :api_key_id,
           :client_ip,
           :client_id,
-          :confirmation_id
+          :confirmation_id,
+          :door
         ] do
       val = Map.get(attrs, field)
 
@@ -466,6 +477,7 @@ defmodule Sanctum.Context do
       call_id: Map.get(attrs, :call_id),
       api_key_id: Map.get(attrs, :api_key_id),
       session_token_hash: Map.get(attrs, :session_token_hash),
+      door: Map.get(attrs, :door),
       credential_binding: binding!(Map.get(attrs, :credential_binding), attrs),
       credential_deadline: deadline!(Map.get(attrs, :credential_deadline)),
       validated_at: validated_at!(Map.get(attrs, :validated_at)),

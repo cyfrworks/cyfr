@@ -46,11 +46,12 @@ defmodule Sanctum.IdentityFreshness do
   which need a live read.
 
   A refreshed head that changes the `key_epoch` retires, in the cache's
-  own transaction, every session, passkey, identity-subject certificate
-  and pending confirmation bound to the old one (`Arca.DirectoryHeads`),
-  and the head is published only with that retirement committed. The
-  retired sessions' memos are then dropped on every member
-  (`Sanctum.Caller.drop_retired/2`).
+  own transaction, every session, identity-subject certificate and pending
+  confirmation bound to the old one, and one that changes the
+  `recovery_epoch` every passkey registered and door linked here under the
+  old one (`Arca.DirectoryHeads`); the head is published only with that
+  retirement committed. The retired sessions' memos are then dropped on
+  every member (`Sanctum.Caller.drop_retired/2`).
 
   A local identity is never refreshed for its freshness: local work, local
   passkeys and local pairing use the stored identity. Only a rotation,

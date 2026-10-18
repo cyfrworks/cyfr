@@ -587,6 +587,7 @@ defmodule Sanctum.Auth.DeviceFlow do
       ctx =
         Context.build(
           user_id: user.id,
+          door: identity,
           email: user_info.email,
           provider: to_string(provider),
           # Start athanor-less; the establish recipe fills the athanor from

@@ -182,6 +182,7 @@ defmodule Sanctum.Auth.OIDC do
         ctx =
           Context.build(
             user_id: identity,
+            door: identity,
             email: email,
             provider: to_string(provider),
             namespace: nil,

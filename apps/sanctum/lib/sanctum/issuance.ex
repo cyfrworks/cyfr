@@ -202,6 +202,12 @@ defmodule Sanctum.Issuance do
   defp source(%Context{auth_method: :device}, _binding), do: {:error, :missing_generation}
   defp source(_ctx, %{source_kind: :device}), do: {:error, :missing_generation}
 
+  # An admitted sign-in holds no credential yet; the door it came through,
+  # where the door named itself (`Sanctum.Context`'s `door`), is what it
+  # stands on, and must still be the person's when the session is issued.
+  defp source(_ctx, %{source_kind: :identity, source_id: key}) when is_binary(key),
+    do: {:ok, {:door, key}}
+
   defp source(_ctx, %{source_kind: :identity}), do: {:ok, nil}
 
   defp source(%Context{session_token_hash: hash}, %{source_kind: :session, source_id: id})
@@ -356,6 +362,14 @@ defmodule Sanctum.Issuance do
        do: :ok,
        else: {:error, :not_standing}
   end
+
+  # A door a recovery retired, or the person unlinked, since the sign-in
+  # came through it admits no one.
+  defp holder(%{kind: :door, row: %{key: key, user_id: user_id}}, _now, %{
+         source: {:door, key},
+         user_id: user_id
+       }),
+       do: :ok
 
   defp holder(_source, _now, %{source: {:device, _id, _deadline}}), do: {:error, :not_standing}
   defp holder(_source, _now, _expectation), do: {:error, :unauthenticated}

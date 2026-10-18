@@ -14,7 +14,8 @@ defmodule Arca.SecurityTransitions.Issuance do
   credential works in (`:athanor_id`, or nil), the membership that
   authorized the caller's focus (`:membership_id`, or nil) and the
   credential the caller holds (`:source`: `{:session, token_hash}`,
-  `{:api_key, id}`, `{:device, client_id, expires_at}`, or nil). They are
+  `{:api_key, id}`, `{:device, client_id, expires_at}`, the door an
+  admitted sign-in came through as `{:door, identity_key}`, or nil). They are
   locked in the order every standing transition takes
   (`Arca.SecurityTransitions`): person, athanor, membership, then the
   session, the key, or the paired client and its certificates; the
@@ -70,6 +71,7 @@ defmodule Arca.SecurityTransitions.Issuance do
     Athanor,
     DeviceCertificate,
     DirectoryHead,
+    ExternalIdentity,
     Membership,
     PairedClient,
     PersonIdentity,
@@ -90,6 +92,7 @@ defmodule Arca.SecurityTransitions.Issuance do
           {:session, binary()}
           | {:api_key, String.t()}
           | {:device, String.t(), DateTime.t()}
+          | {:door, String.t()}
           | nil
   @type targets :: %{
           required(:user_id) => String.t(),
@@ -259,6 +262,20 @@ defmodule Arca.SecurityTransitions.Issuance do
       identity: narrowed(identity, @person_identity),
       head: narrowed(cached_head(identity), @directory_head)
     }
+  end
+
+  # The door the person signed in through, read under the person's lock;
+  # nil row for a door no longer theirs.
+  defp lock_source({:door, key}, user_id) when is_binary(key) do
+    door =
+      Arca.Repo.one(
+        from(i in ExternalIdentity,
+          where: i.key == ^key and i.user_id == ^user_id,
+          select: %{key: i.key, user_id: i.user_id}
+        )
+      )
+
+    %{kind: :door, row: door}
   end
 
   defp lock_source(_source, _user_id), do: nil

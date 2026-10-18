@@ -833,6 +833,79 @@ defmodule Sanctum.SignInTest do
       assert {:error, :not_found} = Arca.SessionStorage.get_session(linked.session_token_hash)
     end
 
+    test "a door a remote person linked here signs them in no more once a recovery replaced their live key, and is no fresh method" do
+      tls = Sanctum.Test.DirectoryServer.tls()
+      Sanctum.Test.DirectoryServer.listen!()
+      Sanctum.Test.DirectoryServer.seam!(tls)
+      directory = Sanctum.Test.DirectoryServer.start!(tls)
+      identity = Sanctum.Test.DirectoryServer.identity!(directory.dir, directory.url)
+
+      person = seated!(%{email: nil, verified: :unknown})
+      :ok = Sanctum.Test.DirectoryServer.remote_person!(person.user.id, identity)
+      person = %{person | ctx: session_ctx(person.user, person.athanor)}
+      # A door that names no email, so no one-time code is a fresh method
+      # of theirs here either.
+      door = oidc(System.unique_integer([:positive]), %{email: nil, verified: :unknown})
+      ticket = ticket!(person, door)
+      authorized_passkey!(person, identity)
+
+      assert {:ok, %{linked: true}} =
+               Sanctum.TestContext.confirming(person.ctx, &SignIn.link_door(&1, "oidcc", ticket))
+
+      # Linked, the door signs the person in.
+      assert {:ok, %{id: user_id}, _session} = door_sign_in(door)
+      assert user_id == person.user.id
+
+      # The person recovers at their directory with new keys. This home has
+      # not read the new head yet, so the door still names them here until
+      # the sign-in's own fresh read finds the recovery, which retires the
+      # door before any session is issued through it.
+      Sanctum.Test.DirectoryServer.recover!(directory.dir, identity)
+      assert {:ok, %{id: ^user_id}} = Users.get_by_identity(door.key)
+
+      assert {:error, :unauthenticated} = door_sign_in(door)
+      assert {:error, :not_found} = Users.get_by_identity(door.key)
+
+      # With the passkey the recovery retired, the door was their fresh
+      # method here; it is not one any more.
+      refute Sanctum.Passkeys.fresh_method?(person.ctx)
+
+      # The door names no one of theirs: signing in through it again is a
+      # stranger's first sign-in, never the recovered person's.
+      assert {:ok, %{id: stranger}, _session} = door_sign_in(door)
+      refute stranger == person.user.id
+    end
+
+    # A sign-in through a door as the browser callback runs it
+    # (`PrismWeb.AuthController`): the door's context names the identity
+    # and the door itself, the sign-in is recorded, the context is renamed
+    # to the person and resolved, and the session is issued.
+    defp door_sign_in(identity) do
+      ctx =
+        Sanctum.Context.build(
+          user_id: identity.key,
+          door: identity.key,
+          email: identity.email,
+          provider: identity.provider,
+          athanor_id: nil,
+          permissions: Sanctum.Context.person_permissions()
+        )
+
+      user_info = %{
+        id: identity.key,
+        provider: identity.provider,
+        email: identity.email,
+        verified: identity.verified,
+        name: nil
+      }
+
+      with {:ok, user} <- SignIn.admitted(user_info, :allowed),
+           {:ok, ctx} <- Sanctum.Tenancy.resolve_status(%{ctx | user_id: user.id}, force: true),
+           {:ok, session} <- Sanctum.Session.create(ctx) do
+        {:ok, user, session}
+      end
+    end
+
     # The person's software passkey registered here and activated as the
     # administrator's authorization activates it, bound to their recovery
     # epoch: the remote person's one way to a fresh proof here.
