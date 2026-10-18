@@ -1011,8 +1011,9 @@ defmodule Emissary.External.BackendsTest do
   end
 
   # An instance entry is never disclosed nor named by a definition a member
-  # wrote (§5.5): an env naming one by name finds no athanor entry of that
-  # name, and the instance entry is neither unsealed nor used.
+  # wrote (`Sanctum.VaultReader`): an env naming one by name finds no
+  # athanor entry of that name, and the instance entry is neither unsealed
+  # nor used.
   test "an env naming only an instance entry is unresolved and reads nothing of it", %{
     ctx: ctx,
     fake: fake

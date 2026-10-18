@@ -233,8 +233,9 @@ milliseconds of each number, labelled with its clock. The host is its name,
 CPU model, core count (`cores`) and host class (`class`), on the record and
 on its measurement alike.
 
-**The budget.** Each number's p95 is bound to the canvas budget
-`ARCHITECTURE.md` §6.9 states for the run's host class, at both viewports:
+**The budget.** Each number's p95 is bound to its canvas budget
+(`ARCHITECTURE.md` §6.9 names the two) for the run's host class, at both
+viewports:
 on the `reference` class, the host the budget was stated on, a frame open
 within 100 ms and a validation within 100 ms; on the `github-hosted` class,
 the GitHub-hosted runner, the same measurement on a slower host, each

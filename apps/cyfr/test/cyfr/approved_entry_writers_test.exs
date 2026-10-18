@@ -278,8 +278,9 @@ defmodule Cyfr.ApprovedEntryWritersTest do
 
            Only `Aqua.Launch` sets the account an approval bound, and only
            the root's admission reads and clears it. A new writer of it is a
-           change to that rule, made in `ARCHITECTURE.md` and here with its
-           reason, never added to pass this check.
+           change to that rule, made in the field's documentation in
+           `Sanctum.Context` and here with its reason, never added to pass
+           this check.
            """
 
     for {rel, expected} <- @rostered do

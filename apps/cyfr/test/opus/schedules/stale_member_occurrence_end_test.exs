@@ -3,9 +3,9 @@
 
 defmodule Opus.Schedules.StaleMemberOccurrenceEndTest do
   @moduledoc """
-  An occurrence's end is the slot holder's: ARCHITECTURE.md §6.3 has
-  schedule outcomes verify the live slot under the row lock, and §6.1 a
-  stale owner emit no result. The occurrence's finish and a dead runner's
+  An occurrence's end is the slot holder's: ARCHITECTURE.md §6.3 has each
+  fenced writer verify its live slot in its writing transaction, and §6.1
+  a stale owner emit no result. The occurrence's finish and a dead runner's
   settlement (`Arca.ScheduleOccurrences.finish/6`, `settle_dead/4`) lock
   the occurrence's row and check the member's slot under it, in the
   transaction that would write the terminal state and the outcome's

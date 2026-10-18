@@ -24,8 +24,9 @@
 // (INSTRUMENT) that records the click and wraps the shell's port handlers.
 // It changes no message and records nothing of a boot, bearer, argument or
 // stream payload. Each number's p95 is held to its budget (BUDGET_MS, the
-// canvas budgets ARCHITECTURE.md §6.9 states) for the host class the run
-// names, at both viewports, and a record over either fails the run.
+// values of the canvas budgets ARCHITECTURE.md §6.9 names) for the host
+// class the run names, at both viewports, and a record over either fails
+// the run.
 //
 // The server's part of each fixture action is run.sh's, asked for through
 // OUT_DIR (`ask-N.json`, answered `answer-N.json`); a request carries the

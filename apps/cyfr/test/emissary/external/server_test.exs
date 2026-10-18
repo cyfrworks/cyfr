@@ -324,8 +324,9 @@ defmodule Emissary.External.ServerTest do
     end
 
     # An instance entry is never named by a definition whose URL a member
-    # chose (§5.5): a header naming one by name finds no athanor entry of
-    # that name, and the instance entry is neither unsealed nor used.
+    # chose (`Sanctum.VaultReader`): a header naming one by name finds no
+    # athanor entry of that name, and the instance entry is neither
+    # unsealed nor used.
     test "a header naming only an instance entry fails to connect and reads nothing of it", %{
       name: name
     } do
