@@ -15,8 +15,8 @@
 #       the route segment of that athanor and the session token.
 #
 #   tincture USER_ID DIR NAME public|private
-#       The files under DIR written into the person's athanor as the local
-#       tincture NAME at 1.0.0 and registered from the tree
+#       The files under DIR committed into the person's athanor as the
+#       local tincture NAME at 1.0.0, one unit, and registered from the tree
 #       (`Compendium.Registry.register_from_arca/3`), as a locally built
 #       tincture is, once the fill the person's sign-in started has let go
 #       of their athanor. `public` also leaves the active public profile
@@ -158,11 +158,15 @@ fn args ->
       unit = ["components", "tinctures", "local", name, "1.0.0"]
       :ok = fill_settled.(ctx)
 
-      for file <- Path.wildcard(Path.join(dir, "**/*"), match_dot: false),
-          File.regular?(file) do
-        relative = Path.relative_to(file, dir)
-        :ok = Arca.put(actor, unit ++ Path.split(relative), File.read!(file))
-      end
+      # One commit of the whole unit, its row and its revision, as a
+      # local build lands one (`Arca.Overlay.commit_unit/4`): a plain write
+      # under `components/` needs a unit already committed there.
+      files =
+        for file <- Path.wildcard(Path.join(dir, "**/*"), match_dot: false),
+            File.regular?(file),
+            do: {Path.split(Path.relative_to(file, dir)), File.read!(file)}
+
+      {:ok, _written} = Arca.Overlay.commit_unit(actor, unit, {:files, files}, cap: :exempt)
 
       {:ok, component} = Compendium.Registry.register_from_arca(ctx, unit, force: true)
 
