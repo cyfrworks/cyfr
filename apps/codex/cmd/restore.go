@@ -822,6 +822,9 @@ func (r *restorer) probeRestoredPostgres() error {
 	if err != nil {
 		return fmt.Errorf("cyfr restore could not read the version of the PostgreSQL server at the snapshot's CYFR_DATABASE_URL (%v)", err)
 	}
+	if _, err := pgClientImage(major); err != nil {
+		return fmt.Errorf("cyfr restore refuses: %w", err)
+	}
 	r.config.pgMajor = major
 	return nil
 }

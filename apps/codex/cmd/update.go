@@ -94,9 +94,10 @@ const (
 	// raises on any error, so an answer is a read.
 	liveSlotsExpr = `IO.puts("CYFR_LIVE_SLOTS=" <> JSON.encode!(%{release: Prima.Version.current(), slots: Cyfr.Release.live_slots()}))`
 
-	// pgImageProbe is the client image the server's major is read with; the
-	// dump runs in postgres:<that major>.
-	pgImageProbe = "postgres:18"
+	// pgProbeMajor is the major of the client image the server's major is
+	// read with (pgClientImages); the dump and the restore then run in the
+	// server's own major.
+	pgProbeMajor = 18
 	// pgURLVariable carries the database URL into a postgres container
 	// through the child's environment, never its argv.
 	pgURLVariable = "CYFR_UPDATE_PG_URL"
@@ -127,6 +128,43 @@ var stopOrder = []string{"caddy", "cyfr", "locus-runtime", "locus-builds", "locu
 var managedRepositories = []string{release.RepoCyfr, release.RepoCyfrLocus, release.RepoCaddy}
 
 var manifestDigest = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
+
+// pgClientImages are the PostgreSQL client images the update and the
+// restore run, given the database URL on the host's network, by the server
+// major each serves: every one pinned by digest, never a tag a registry
+// may move, and a server major not named here is refused before anything
+// changes (errPostgresMajorUnpinned). They are the supported PostgreSQL
+// majors' current releases, 18 the one CI's PostgreSQL service runs;
+// TestPostgresClientImagesArePinned holds the table to that shape and to
+// CI's service image.
+var pgClientImages = map[int]string{
+	14: "postgres:14.24@sha256:14bfab572eec6abf65892e1db7c3ba8d41b2a2855c1b143664907d6e146eb6e1",
+	15: "postgres:15.19@sha256:c961aa287d8698297cb26cdfadfbe9fd2cbaf77e53cfffe9636e8d8a1e4d842c",
+	16: "postgres:16.15@sha256:ca0bd484cb98bf4b24eb1010e73fb3fcbd6714d240fbc1a10eea5b7dbecb641d",
+	17: "postgres:17.11@sha256:2d2b8998d31037bf721cfdf764d76ba74171b4fab3431b7f72c27c56ddbdf9e3",
+	18: "postgres:18.6@sha256:74935e72241653ca55e0414067e6d8763aceb8a810eb51b452253ec3dcfc4336",
+}
+
+// errPostgresMajorUnpinned is the refusal of a PostgreSQL server whose
+// major no pinned client image serves.
+type errPostgresMajorUnpinned struct{ major int }
+
+func (e errPostgresMajorUnpinned) Error() string {
+	majors := slices.Sorted(maps.Keys(pgClientImages))
+	names := make([]string, len(majors))
+	for i, m := range majors {
+		names[i] = strconv.Itoa(m)
+	}
+	return fmt.Sprintf("the PostgreSQL server is version %d, and this cyfr pins a client image for PostgreSQL %s only; a cyfr release that pins one for %d is needed ('cyfr upgrade')", e.major, strings.Join(names, ", "), e.major)
+}
+
+// pgClientImage is the pinned client image of the server major `major`.
+func pgClientImage(major int) (string, error) {
+	if image, ok := pgClientImages[major]; ok {
+		return image, nil
+	}
+	return "", errPostgresMajorUnpinned{major}
+}
 
 // missingStackServices returns the bundled services the compose file at
 // path lacks, in bundledServices' order; nil when it has them all or cannot
@@ -192,11 +230,7 @@ func runUpdate(ctx context.Context, out, errOut io.Writer) error {
 func takeUpdateLock(command string) (func(), error) {
 	f, err := os.OpenFile(updateLockName, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
 	if errors.Is(err, fs.ErrExist) {
-		holder := "an unknown process"
-		if data, err := os.ReadFile(updateLockName); err == nil && strings.TrimSpace(string(data)) != "" {
-			holder = "pid " + strings.TrimSpace(string(data))
-		}
-		abs, _ := filepath.Abs(updateLockName)
+		abs, holder := updateLockHolder()
 		return nil, fmt.Errorf("Another cyfr update or restore holds %s (%s). If neither is running, remove the file and run 'cyfr %s' again", abs, holder, command)
 	}
 	if err != nil {
@@ -208,6 +242,25 @@ func takeUpdateLock(command string) (func(), error) {
 		return nil, fmt.Errorf("could not take the update lock %s: %w", updateLockName, err)
 	}
 	return func() { os.Remove(updateLockName) }, nil
+}
+
+// updateLockHolder names the update lock's file and the holder it records,
+// for a refusal while the lock stands.
+func updateLockHolder() (path, holder string) {
+	holder = "an unknown process"
+	if data, err := os.ReadFile(updateLockName); err == nil && strings.TrimSpace(string(data)) != "" {
+		holder = "pid " + strings.TrimSpace(string(data))
+	}
+	path, _ = filepath.Abs(updateLockName)
+	return path, holder
+}
+
+// updateLockHeld reports whether the update lock's file stands, as
+// takeUpdateLock would refuse it; a file that cannot be asked about counts
+// as held.
+func updateLockHeld() bool {
+	_, err := os.Lstat(updateLockName)
+	return !errors.Is(err, fs.ErrNotExist)
 }
 
 // scaffoldRelease is a release's scaffold fetched and verified, nothing of
@@ -314,6 +367,9 @@ func (u *updater) run() error {
 		return u.revertScaffold(err)
 	}
 	if err := u.switchImages(); err != nil {
+		if errors.Is(err, errComposeLeftSwitched) {
+			return fmt.Errorf("%v.\nThe stack is left stopped; restore the snapshot of release %s with:\n  cyfr restore %s", u.redact(err.Error()), u.oldRelease, u.snapshot)
+		}
 		return u.revertScaffold(err)
 	}
 	if err := u.up(); err != nil {
@@ -1062,6 +1118,9 @@ func (u *updater) probePostgres() error {
 	if err != nil {
 		return fmt.Errorf("cyfr update could not reach the PostgreSQL server at CYFR_DATABASE_URL to read its version (%v); nothing was changed", err)
 	}
+	if _, err := pgClientImage(major); err != nil {
+		return fmt.Errorf("cyfr update refuses: %w; nothing was changed", err)
+	}
 	u.config.pgMajor = major
 	return nil
 }
@@ -1075,7 +1134,7 @@ var errServerVersion = errors.New("the server's version does not read")
 // through its environment.
 func (u *updater) serverMajor(ctx context.Context) (int, error) {
 	answer, err := u.dockerOutput(ctx, []string{pgURLVariable + "=" + u.config.pgURL},
-		"run", "--rm", "--network", "host", "-e", pgURLVariable, pgImageProbe,
+		"run", "--rm", "--network", "host", "-e", pgURLVariable, pgClientImages[pgProbeMajor],
 		"sh", "-c", `exec psql "$`+pgURLVariable+`" -tAc "SHOW server_version_num"`)
 	if err != nil {
 		return 0, err
@@ -1087,8 +1146,9 @@ func (u *updater) serverMajor(ctx context.Context) (int, error) {
 	return num / 10000, nil
 }
 
-// pgImage is the dump's image, the server's own major.
-func (u *updater) pgImage() string { return "postgres:" + strconv.Itoa(u.config.pgMajor) }
+// pgImage is the dump's image, the pinned client of the server's own
+// major, which the probe has refused unless pgClientImages names it.
+func (u *updater) pgImage() string { return pgClientImages[u.config.pgMajor] }
 
 // pull fetches every managed image by the manifest's digest, and the dump's
 // image, before anything stops: a failure leaves the deployment as it was.
@@ -1648,13 +1708,23 @@ func (u *updater) switchImages() error {
 	if err := writeFileAtomic(u.compose.path, u.compose.rewritten, info.Mode().Perm()); err != nil {
 		return err
 	}
-	if added, err := ensureComposeFields(u.compose.path, u.boundTargets); err != nil {
-		fmt.Fprintf(u.errOut, "Note: %v\n", err)
-	} else if len(added) > 0 {
+	added, err := ensureComposeFields(u.compose.path, u.boundTargets)
+	if err != nil {
+		// The old stack starts again under the file it was created from.
+		if perr := replaceCompose(u.compose.path, u.compose.original, info.Mode().Perm()); perr != nil {
+			return fmt.Errorf("%w: %s could not gain the fields cyfr requires (%v), and the file the update read could not be put back (%v)", errComposeLeftSwitched, u.compose.path, err, perr)
+		}
+		return fmt.Errorf("%s could not gain the fields cyfr requires (%v); it was put back as the update read it", u.compose.path, err)
+	}
+	if len(added) > 0 {
 		fmt.Fprintf(u.out, "Added missing fields to docker-compose.yml: %v\n", added)
 	}
 	return nil
 }
+
+// errComposeLeftSwitched is a switch that failed with the switched compose
+// file still in place, so the old stack must not start under it.
+var errComposeLeftSwitched = errors.New("the compose file is left switched")
 
 // up starts the switched stack and waits for every service to be healthy;
 // the cyfr image's health check is its readiness.
@@ -1849,11 +1919,20 @@ func ensureComposeFields(path string, bound map[string]bool) ([]string, error) {
 	if err := enc.Close(); err != nil {
 		return nil, fmt.Errorf("failed to close encoder: %w", err)
 	}
-	if err := os.WriteFile(path, []byte(buf.String()), 0644); err != nil {
+	info, err := os.Stat(path)
+	if err != nil {
+		return nil, fmt.Errorf("failed to write docker-compose.yml: %w", err)
+	}
+	if err := replaceCompose(path, []byte(buf.String()), info.Mode().Perm()); err != nil {
 		return nil, fmt.Errorf("failed to write docker-compose.yml: %w", err)
 	}
 	return added, nil
 }
+
+// replaceCompose replaces the compose file whole with the mode given, so a
+// write that fails or dies leaves the file as it was: the fields' rewrite
+// and the switch's put-back. A variable so a test can fail it.
+var replaceCompose = writeFileAtomic
 
 // mapValue returns the value node for the given key in a mapping node, or
 // nil if the key is absent or the node isn't a mapping.

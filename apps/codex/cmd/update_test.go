@@ -829,11 +829,12 @@ func TestUpdateDumpsPostgresWithoutTheURLOnArgv(t *testing.T) {
 	if err != nil {
 		t.Fatalf("update: %v\n%s", err, out)
 	}
-	probe := `run --rm --network host -e CYFR_UPDATE_PG_URL postgres:18 sh -c exec psql "$CYFR_UPDATE_PG_URL" -tAc "SHOW server_version_num" {env CYFR_UPDATE_PG_URL set}`
-	dump := `run --rm --network host -e CYFR_UPDATE_PG_URL postgres:18 sh -c exec pg_dump --format=custom --no-owner "$CYFR_UPDATE_PG_URL" {env CYFR_UPDATE_PG_URL set}`
+	pg18 := pgClientImages[18]
+	probe := `run --rm --network host -e CYFR_UPDATE_PG_URL ` + pg18 + ` sh -c exec psql "$CYFR_UPDATE_PG_URL" -tAc "SHOW server_version_num" {env CYFR_UPDATE_PG_URL set}`
+	dump := `run --rm --network host -e CYFR_UPDATE_PG_URL ` + pg18 + ` sh -c exec pg_dump --format=custom --no-owner "$CYFR_UPDATE_PG_URL" {env CYFR_UPDATE_PG_URL set}`
 	log := s.log()
 	at := func(line string) int { return slices.Index(log, line) }
-	if at(profiles+"config --format json") != 0 || at(probe) != 1 || at("pull postgres:18") < 2 || at("pull postgres:18") > at("SCAFFOLD FETCH 0.9.0") {
+	if at(profiles+"config --format json") != 0 || at(probe) != 1 || at("pull "+pg18) < 2 || at("pull "+pg18) > at("SCAFFOLD FETCH 0.9.0") {
 		t.Errorf("the probe does not run before the pulls, the dump image among them:\n%s", strings.Join(log, "\n"))
 	}
 	eval := at(profiles + "run --rm --no-deps -T cyfr bin/cyfr eval " + testLive)
@@ -1074,7 +1075,7 @@ func TestUpdateLeavesTheStackStoppedAfterAFailedSnapshot(t *testing.T) {
 		s := newUpdateScenario(t, shippedCompose(t), map[string]string{"CYFR_DATABASE": "postgres", "CYFR_DATABASE_URL": pgURL})
 		s.answer("dump.exit", "1")
 		out, err := s.run(context.Background())
-		if err == nil || !strings.Contains(err.Error(), "The snapshot failed: pg_dump in postgres:18 failed") || !strings.Contains(err.Error(), "left stopped") || !strings.Contains(err.Error(), s.snapshotDir()) {
+		if err == nil || !strings.Contains(err.Error(), "The snapshot failed: pg_dump in "+pgClientImages[18]+" failed") || !strings.Contains(err.Error(), "left stopped") || !strings.Contains(err.Error(), s.snapshotDir()) {
 			t.Fatalf("update answered %v\n%s", err, out)
 		}
 		if s.hasCall(profiles+"start") || s.hasCall(profiles+"up") {
@@ -1918,5 +1919,204 @@ func TestEnsureCyfrComposeFieldsLeavesAnAnchoredListAlone(t *testing.T) {
 	}
 	if got, _ := os.ReadFile(path); string(got) != input {
 		t.Errorf("docker-compose.yml was rewritten:\n%s", got)
+	}
+}
+
+// unpinnedPostgresImages answers the entries of images that are not the
+// pinned client of the major they are keyed by: postgres:<major>.<minor>
+// and a sha256 digest, the major the key.
+func unpinnedPostgresImages(images map[int]string) []string {
+	pinned := regexp.MustCompile(`^postgres:([0-9]+)\.[0-9]+@sha256:[0-9a-f]{64}$`)
+	var bad []string
+	for _, major := range slices.Sorted(maps.Keys(images)) {
+		m := pinned.FindStringSubmatch(images[major])
+		if m == nil || m[1] != fmt.Sprint(major) {
+			bad = append(bad, fmt.Sprintf("%d: %s", major, images[major]))
+		}
+	}
+	return bad
+}
+
+// The PostgreSQL client images the update and the restore run with the
+// database URL are each pinned by digest to the major they serve, the
+// probe's among them; no other PostgreSQL image is spelled in the CLI's
+// sources; and the pin of each major CI's PostgreSQL service runs is the
+// release CI runs.
+func TestPostgresClientImagesArePinned(t *testing.T) {
+	if bad := unpinnedPostgresImages(pgClientImages); len(bad) != 0 {
+		t.Errorf("unpinned PostgreSQL client images: %v", bad)
+	}
+	for name, planted := range map[string]map[int]string{
+		"a floating tag":         {18: "postgres:18"},
+		"a tag without a digest": {18: "postgres:18.6"},
+		"another major's image":  {17: pgClientImages[18]},
+	} {
+		if bad := unpinnedPostgresImages(planted); len(bad) != 1 {
+			t.Errorf("%s was not refused: %v", name, bad)
+		}
+	}
+	if _, ok := pgClientImages[pgProbeMajor]; !ok {
+		t.Errorf("the probe's major %d has no pinned image", pgProbeMajor)
+	}
+
+	sources, err := filepath.Glob("*.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	spelled := 0
+	for _, name := range sources {
+		if strings.HasSuffix(name, "_test.go") {
+			continue
+		}
+		data, err := os.ReadFile(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		spelled += strings.Count(string(data), `"postgres:`)
+	}
+	if spelled != len(pgClientImages) {
+		t.Errorf("the CLI's sources spell %d PostgreSQL images, want only the %d pins", spelled, len(pgClientImages))
+	}
+
+	workflow, err := os.ReadFile(filepath.Join("..", "..", "..", ".github", "workflows", "test.yml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	services := regexp.MustCompile(`(?m)^\s*image:\s*postgres:(([0-9]+)\.[0-9]+)\s*$`).FindAllStringSubmatch(string(workflow), -1)
+	if len(services) == 0 {
+		t.Fatal("test.yml runs no PostgreSQL service image this test can read")
+	}
+	for _, service := range services {
+		var major int
+		fmt.Sscan(service[2], &major)
+		if pin := pgClientImages[major]; !strings.HasPrefix(pin, "postgres:"+service[1]+"@") {
+			t.Errorf("CI's PostgreSQL service runs postgres:%s, and the CLI pins %q for %d", service[1], pin, major)
+		}
+	}
+}
+
+// A PostgreSQL server of a major no pinned client serves refuses the
+// update before anything is pulled or stopped, naming the major.
+func TestUpdateRefusesAPostgresMajorWithoutAPinnedClient(t *testing.T) {
+	s := newUpdateScenario(t, shippedCompose(t), map[string]string{"CYFR_DATABASE": "postgres", "CYFR_DATABASE_URL": pgURL})
+	s.answer("probe.out", "190001\n")
+	out, err := s.run(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "the PostgreSQL server is version 19") || !strings.Contains(err.Error(), "nothing was changed") {
+		t.Fatalf("update answered %v\n%s", err, out)
+	}
+	if s.hasCall("pull ") || slices.ContainsFunc(s.log(), func(line string) bool { return strings.Contains(line, "postgres:19") }) {
+		t.Errorf("the update pulled or ran an image for the unpinned major:\n%s", strings.Join(s.log(), "\n"))
+	}
+	s.nothingStopped()
+	s.composeUnchanged()
+	s.noBackups()
+}
+
+// A compose file whose missing fields cannot be written fails the switch:
+// the file the update read is put back whole and the old stack starts
+// again under it, and nothing is passed off as a note. When the file
+// cannot be put back either, the old stack is not started under the
+// switched file and the snapshot is named.
+func TestSwitchFailsWhenTheComposeFieldsCannotBeWritten(t *testing.T) {
+	// cyfr's container_name, a field the switch adds when it is missing.
+	const name = "    container_name: cyfr\n"
+	shipped := string(shippedCompose(t))
+	if !strings.Contains(shipped, name) {
+		t.Fatal("the shipped compose file names no container_name: cyfr")
+	}
+	compose := []byte(strings.Replace(shipped, name, "", 1))
+	for _, c := range []struct {
+		name     string
+		failures int
+		want     string
+		restart  bool
+	}{
+		{"the fields' write fails", 1, "it was put back as the update read it", true},
+		{"the put-back fails too", 2, "cyfr restore ", false},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			s := newUpdateScenario(t, compose, nil)
+			calls := 0
+			original := replaceCompose
+			t.Cleanup(func() { replaceCompose = original })
+			replaceCompose = func(path string, data []byte, mode os.FileMode) error {
+				if calls++; calls <= c.failures {
+					return fmt.Errorf("write %s: planted failure", path)
+				}
+				return original(path, data, mode)
+			}
+			out, err := s.run(context.Background())
+			if err == nil || !strings.Contains(err.Error(), "could not gain the fields cyfr requires") || !strings.Contains(err.Error(), c.want) {
+				t.Fatalf("update answered %v\n%s", err, out)
+			}
+			if strings.Contains(out, "Note:") {
+				t.Errorf("the failure was reported as a note:\n%s", out)
+			}
+			if s.hasCall(profiles + "up ") {
+				t.Errorf("the new release was started:\n%s", strings.Join(s.log(), "\n"))
+			}
+			if got := s.hasCall(profiles + "start"); got != c.restart {
+				t.Errorf("the old stack started again: %v, want %v\n%s", got, c.restart, strings.Join(s.log(), "\n"))
+			}
+			if c.restart {
+				s.composeUnchanged()
+			}
+		})
+	}
+}
+
+// The fields' rewrite replaces the compose file whole and keeps its mode.
+func TestComposeFieldsRewriteKeepsTheFileMode(t *testing.T) {
+	const aqua = "      - ./aqua:/app/seed/aqua\n"
+	path := filepath.Join(t.TempDir(), "docker-compose.yml")
+	if err := os.WriteFile(path, []byte(strings.Replace(string(shippedCompose(t)), aqua, "", 1)), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if added, err := ensureCyfrComposeFields(path); err != nil || len(added) == 0 {
+		t.Fatalf("added %v (error %v)", added, err)
+	}
+	info, err := os.Stat(path)
+	if err != nil || info.Mode().Perm() != 0600 {
+		t.Errorf("the rewritten compose file is %v (error %v), want 0600", info.Mode().Perm(), err)
+	}
+	if entries, _ := os.ReadDir(filepath.Dir(path)); len(entries) != 1 {
+		t.Errorf("the rewrite left %d files beside the compose file", len(entries)-1)
+	}
+}
+
+// 'cyfr up' refuses while an update holds the lock, in the window where the
+// update has stopped the stack and copies its data, and runs no docker.
+func TestUpRefusesWhileAnUpdateHoldsTheLock(t *testing.T) {
+	s := newUpdateScenario(t, shippedCompose(t), nil)
+	s.answer("eval.block", "")
+	done := make(chan error, 1)
+	go func() { done <- runUpdate(context.Background(), io.Discard, io.Discard) }()
+	offline := profiles + "run --rm --no-deps -T cyfr bin/cyfr eval " + testLive
+	deadline := time.Now().Add(10 * time.Second)
+	for !s.hasCall(offline) {
+		if time.Now().After(deadline) {
+			s.answer("eval.release", "")
+			t.Fatal("the update never reached its offline read")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if !s.hasCall(profiles + "stop") {
+		t.Fatalf("the update reached its offline read with nothing stopped:\n%s", strings.Join(s.log(), "\n"))
+	}
+	calls := len(s.log())
+	err := upCmd.RunE(upCmd, nil)
+	s.answer("eval.release", "")
+	lock := filepath.Join(s.project, updateLockName)
+	if err == nil || !strings.Contains(err.Error(), lock) || !strings.Contains(err.Error(), fmt.Sprintf("pid %d", os.Getpid())) || !strings.Contains(err.Error(), "must not start") {
+		t.Errorf("cyfr up answered %v, want the refusal naming the lock and its holder", err)
+	}
+	if got := s.log(); len(got) != calls {
+		t.Errorf("cyfr up ran docker while the update held the lock: %s", strings.Join(got[calls:], "\n"))
+	}
+	if err := <-done; err != nil {
+		t.Fatalf("the update: %v", err)
+	}
+	if _, err := os.Lstat(lock); !errors.Is(err, fs.ErrNotExist) {
+		t.Errorf("the lock stands after the update (%v), so cyfr up would still refuse", err)
 	}
 }

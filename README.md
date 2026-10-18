@@ -423,9 +423,9 @@ Then open `https://<your-domain>/` (TLS) or `http://localhost:4000/` (direct), s
 **Upgrading.** `cyfr update` installs the release the `cyfr` CLI itself is (`cyfr upgrade` moves the CLI first), and two releases never run side by side on one database. In order, it:
 
 1. fetches the release's `release.json` and its signature and verifies them: signed keyless by the release workflow of that version's tag, naming that version. Without network access to the release, or with a manifest that does not verify, it refuses and changes nothing;
-2. pulls every image the manifest names by its digest, and fetches and verifies the release's managed scaffold files without writing them, while the stack still runs; a failed pull changes nothing. It names the storage root it will snapshot as compose resolves it;
+2. pulls every image the manifest names by its digest, and fetches and verifies the release's managed scaffold files without writing them, while the stack still runs; a failed pull changes nothing. It names the storage root it will snapshot as compose resolves it. On PostgreSQL it first reads the server's major through a client image the CLI pins by digest, one for each of PostgreSQL 14 to 18, and pulls the pin of that major for the dump; a server of another major refuses the update before anything changes;
 3. refuses while a member of the [cell](#several-members-on-one-database-a-cell) on another release than this one runs outside this stack, and while `docker-compose.yml` lacks a service of the bundled stack (`cyfr init --force` regenerates the file and keeps `.env`);
-4. stops every service, printing how long each took, and reads the cell's slots with the server stopped: any member of another release still holding one after a lease (15 s) starts the old stack again and ends the update;
+4. stops every service, printing how long each took (`cyfr up` refuses while the update runs, which holds `.cyfr-update.lock` in the project directory, as `cyfr restore` does), and reads the cell's slots with the server stopped: any member of another release still holding one after a lease (15 s) starts the old stack again and ends the update;
 5. copies the cell into `backups/<timestamp>/`: the database (the SQLite file, or a `pg_dump` in the PostgreSQL server's own major version), the storage root, every managed scaffold file the release replaces as it stood (part `scaffold`, the keeper's seccomp profile among them), the keyring, `.env` and `docker-compose.yml` as it stood (part `compose`), with `snapshot.json` written last, so a backup without it is incomplete. `backups/` ignores itself for git, since a snapshot holds the keyring; An object store (`CYFR_STORAGE=s3`) is outside the snapshot: it relies on the bucket's own versioning;
 6. writes the managed scaffold files, putting them back from the snapshot and starting the old stack again if that or the next step fails, rewrites the `image:` lines naming `ghcr.io/cyfrworks/cyfr`, `ghcr.io/cyfrworks/cyfr-locus` and the bundled caddy to the release's version and digest, leaving and reporting any other image, then starts the stack and waits for readiness. A release that fails to migrate or start leaves the stack stopped, since old code never starts over migrated bytes, and the update prints the backup's path and `cyfr restore <backup>`.
 
@@ -877,21 +877,23 @@ layout it cannot put back, stops the stack and bars the cell from starting
 before anything lands: it sets `CYFR_RESTORE_INCOMPLETE` in `.env`, which
 the image's entrypoint, `cyfr up` and `cyfr update` refuse, and removes the
 stopped `cyfr` container. It refuses while any member of the cell still
-runs, on any host and of any release, and otherwise puts back the managed
+runs, on any host and of any release, or while the PostgreSQL server is of
+a major the CLI pins no client image for, and otherwise puts back the managed
 scaffold files as they stood before the update, the database, the storage
 root (each nested mount's bytes at its own source), the keyring, `.env`
-and `docker-compose.yml`, and declares the restore before anything starts:
+and `docker-compose.yml`, and declares the restore before anything starts,
+in a one-off container that sets the bar empty for itself alone:
 
 ```sh
-docker compose run --rm --no-deps -T cyfr bin/cyfr eval 'IO.puts("CYFR_RESTORE_ID=" <> Cyfr.Release.mark_restore())'
+docker compose run --rm --no-deps -T -e CYFR_RESTORE_INCOMPLETE= cyfr bin/cyfr eval 'IO.puts("CYFR_RESTORE_ID=" <> Cyfr.Release.mark_restore())'
 ```
 
 and only then takes the bar out of `.env` and starts the stack
 (`--no-start` leaves it stopped). A restore cut short anywhere leaves the
 bar up; `cyfr restore <backup>` run again puts every part back and
-declares it. A backup
-put back by hand is declared the same way, with the whole cell stopped,
-before its first start. The next boot retires what the backup's authority
+declares it. A backup put back by hand, with no bar in `.env`, is declared
+by the same command, with the whole cell stopped, before its first start.
+The next boot retires what the backup's authority
 could still do before it admits anything: every session ends; API keys,
 webhook secrets, paired devices and passkeys are suspended until their
 person re-enables them from the system layer's checklist under a door's

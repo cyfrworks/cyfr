@@ -833,3 +833,30 @@ func TestInitIgnoresTheSnapshots(t *testing.T) {
 		}
 	}
 }
+
+// `cyfr init --force` that cannot remove a file it re-fetches or
+// regenerates refuses, naming the file, instead of keeping the old one and
+// reporting the project ready.
+func TestInitForceRefusesAFileItCannotRemove(t *testing.T) {
+	t.Chdir(t.TempDir())
+	fake := t.TempDir()
+	if err := os.WriteFile(filepath.Join(fake, "docker"), []byte("#!/bin/sh\nexit 0\n"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", fake+string(os.PathListSeparator)+os.Getenv("PATH"))
+	// A directory with an entry in it: no remove takes it, whoever runs.
+	if err := os.MkdirAll(filepath.Join("cyfr.yaml", "kept"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { initCmd.Flags().Set("force", "false") })
+	if err := initCmd.Flags().Set("force", "true"); err != nil {
+		t.Fatal(err)
+	}
+	err := initCmd.RunE(initCmd, nil)
+	if err == nil || !strings.Contains(err.Error(), "could not remove cyfr.yaml") || !strings.Contains(err.Error(), "cyfr init --force") {
+		t.Fatalf("cyfr init --force answered %v", err)
+	}
+	if info, statErr := os.Stat("cyfr.yaml"); statErr != nil || !info.IsDir() {
+		t.Errorf("cyfr.yaml is %v (%v), want the directory left as it was", info, statErr)
+	}
+}

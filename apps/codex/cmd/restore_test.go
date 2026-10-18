@@ -504,8 +504,8 @@ func TestRestoreLoadsTheDumpWithoutTheURLOnArgv(t *testing.T) {
 	if err != nil {
 		t.Fatalf("restore: %v\n%s", err, out)
 	}
-	probe := `run --rm --network host -e CYFR_UPDATE_PG_URL postgres:18 sh -c exec psql "$CYFR_UPDATE_PG_URL" -tAc "SHOW server_version_num" {env CYFR_UPDATE_PG_URL set}`
-	load := "run --rm -i --network host -e CYFR_UPDATE_PG_URL postgres:17 sh -c " + restoreScript + " {env CYFR_UPDATE_PG_URL set}"
+	probe := `run --rm --network host -e CYFR_UPDATE_PG_URL ` + pgClientImages[18] + ` sh -c exec psql "$CYFR_UPDATE_PG_URL" -tAc "SHOW server_version_num" {env CYFR_UPDATE_PG_URL set}`
+	load := "run --rm -i --network host -e CYFR_UPDATE_PG_URL " + pgClientImages[17] + " sh -c " + restoreScript + " {env CYFR_UPDATE_PG_URL set}"
 	log := r.log()
 	at := func(line string) int { return slices.Index(log, line) }
 	config, live, mark := at(testStagedConfig), at(profiles+testOffline+testLive), at(profiles+testOffline+testMark)
@@ -523,7 +523,7 @@ func TestRestoreLoadsTheDumpWithoutTheURLOnArgv(t *testing.T) {
 	r.answer("pgrestore.out", "pg_restore: error: "+pgURL+"\n")
 	r.answer("pgrestore.exit", "1")
 	out, err = r.restore(true)
-	if err == nil || !strings.Contains(err.Error(), "pg_restore in postgres:17 failed") || !strings.Contains(err.Error(), "not declared restored") {
+	if err == nil || !strings.Contains(err.Error(), "pg_restore in "+pgClientImages[17]+" failed") || !strings.Contains(err.Error(), "not declared restored") {
 		t.Fatalf("restore answered %v\n%s", err, out)
 	}
 	if strings.Contains(err.Error()+out, pgPassword) {
@@ -1034,5 +1034,22 @@ func TestRestoreRefusesAComposeFileSetItCannotStage(t *testing.T) {
 				t.Errorf("the restore read a configuration it cannot stage:\n%s", strings.Join(r.log(), "\n"))
 			}
 		})
+	}
+}
+
+// A restore onto a PostgreSQL server of a major no pinned client serves
+// refuses before any part lands, naming the major, and pulls nothing.
+func TestRestoreRefusesAPostgresMajorWithoutAPinnedClient(t *testing.T) {
+	pg := map[string]string{"CYFR_DATABASE": "postgres", "CYFR_DATABASE_URL": pgURL}
+	r := newRestoreScenario(t, shippedCompose(t), pg, func(s *updateScenario) { s.answer("dump.out", "PGDMP custom-format dump") })
+	r.answer("probe.out", "130022\n")
+	out, err := r.restore(true)
+	if err == nil || !strings.Contains(err.Error(), "the PostgreSQL server is version 13") {
+		t.Fatalf("restore answered %v\n%s", err, out)
+	}
+	if slices.ContainsFunc(r.log(), func(line string) bool {
+		return strings.Contains(line, "pg_restore") || strings.Contains(line, "postgres:13")
+	}) {
+		t.Errorf("the restore loaded the dump or ran an image for the unpinned major:\n%s", strings.Join(r.log(), "\n"))
 	}
 }

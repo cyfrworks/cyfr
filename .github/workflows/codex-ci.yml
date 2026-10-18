@@ -28,6 +28,9 @@ on:
       - 'scripts/scaffold-tarball.sh'
       # TestReadmeCLITablesAreTheCommandTree reads the README's CLI tables.
       - 'README.md'
+      # TestPostgresClientImagesArePinned holds the PostgreSQL client pins
+      # to the service image test.yml runs.
+      - '.github/workflows/test.yml'
       - '.github/workflows/codex-ci.yml'
   pull_request:
     paths:
@@ -39,6 +42,7 @@ on:
       - 'seed/aqua/**'
       - 'scripts/scaffold-tarball.sh'
       - 'README.md'
+      - '.github/workflows/test.yml'
       - '.github/workflows/codex-ci.yml'
   workflow_call:
 

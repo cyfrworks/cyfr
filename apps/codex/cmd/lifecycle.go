@@ -13,6 +13,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"net/http"
 	"net/url"
 	"os"
@@ -417,12 +418,16 @@ Re-running in an existing project is safe: docker-compose.yml, Caddyfile, cyfr.y
 
 		// On --force, drop the tarball's deploy files so scaffold.Download
 		// re-extracts them, and regenerate cyfr.yaml. .env / .env.example are
-		// deliberately never removed.
+		// deliberately never removed. A file that cannot be removed would be
+		// kept as it is by the download, which skips an existing file, so
+		// init refuses once what was removed is laid down again.
+		var unremoved []string
 		if force {
-			for _, name := range forceRefetched(releaseBuild) {
-				_ = os.Remove(name)
+			for _, name := range append(forceRefetched(releaseBuild), "cyfr.yaml") {
+				if err := os.Remove(name); err != nil && !errors.Is(err, fs.ErrNotExist) {
+					unremoved = append(unremoved, fmt.Sprintf("%s (%v)", name, err))
+				}
 			}
-			_ = os.Remove("cyfr.yaml")
 		}
 
 		// Download scaffold files: guides, wit/, aqua/, and the deploy
@@ -452,6 +457,9 @@ database_path: ./data/cyfr.db
 				return fmt.Errorf("Failed to write cyfr.yaml: %w", err)
 			}
 			configCreated = true
+		}
+		if len(unremoved) > 0 {
+			return fmt.Errorf("cyfr init --force could not remove %s, so the old file is kept and was not fetched again; the files it removed are laid down again. Fix the cause and run 'cyfr init --force' again", strings.Join(unremoved, ", "))
 		}
 
 		// Generate .env from the .env.example template laid down by the scaffold,
@@ -785,6 +793,13 @@ cyfr, locus-runtime and locus-backends always start. locus-builds starts when CY
 		// .env's settings select the caddy and locus-builds profiles here.
 		if snapshot, barred := restoreBarred(".env"); barred {
 			return fmt.Errorf("A cyfr restore of %s has not been declared (%s is set in .env), so the stack must not start: the restored database would keep every credential the backup carried. Run 'cyfr restore %s' again, which puts every part back from the start and declares it", snapshot, restoreBarrier, snapshot)
+		}
+		// An update or a restore stops the stack and copies or replaces its
+		// data while it holds the lock; a start in that window writes under
+		// the copy.
+		if updateLockHeld() {
+			lock, holder := updateLockHolder()
+			return fmt.Errorf("A cyfr update or restore holds %s (%s), so the stack must not start: it stops the stack while it copies or puts back the data. Wait for it to end; if neither is running, remove the file and run 'cyfr up' again", lock, holder)
 		}
 		profiles := composeProfiles(".env")
 		tls := slices.Contains(profiles, "tls")
