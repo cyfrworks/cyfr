@@ -2878,22 +2878,74 @@ defmodule Cyfr.Boundaries do
     # its tickets, callbacks and door link, a fresh sign-in's proof of a
     # confirmation and the answer to it, and the registry policy a sign-in
     # accepts. The browser's sign-out decides nothing and is no entry.
-    %{module: PrismWeb.AuthController, site: :link_start, plane: :external, origin: :none},
-    %{module: PrismWeb.AuthController, site: :request, plane: :external, origin: :none},
-    %{module: PrismWeb.AuthController, site: :device_complete, plane: :external, origin: :none},
-    %{module: PrismWeb.AuthController, site: :cyfr_callback, plane: :external, origin: :none},
-    %{module: PrismWeb.AuthController, site: :callback, plane: :external, origin: :none},
+    # Cyfr's boundary does not depend on PrismWeb, so these rows name their
+    # controllers by string, as this module's other rosters name PrismWeb's.
     %{
-      module: PrismWeb.AuthController,
+      module: Module.concat(["PrismWeb", "AuthController"]),
+      site: :link_start,
+      plane: :external,
+      origin: :none
+    },
+    %{
+      module: Module.concat(["PrismWeb", "AuthController"]),
+      site: :request,
+      plane: :external,
+      origin: :none
+    },
+    %{
+      module: Module.concat(["PrismWeb", "AuthController"]),
+      site: :device_complete,
+      plane: :external,
+      origin: :none
+    },
+    %{
+      module: Module.concat(["PrismWeb", "AuthController"]),
+      site: :cyfr_callback,
+      plane: :external,
+      origin: :none
+    },
+    %{
+      module: Module.concat(["PrismWeb", "AuthController"]),
+      site: :callback,
+      plane: :external,
+      origin: :none
+    },
+    %{
+      module: Module.concat(["PrismWeb", "AuthController"]),
       site: :post_legal_accept,
       plane: :external,
       origin: :none
     },
-    %{module: PrismWeb.PasskeyController, site: :complete, plane: :external, origin: :none},
-    %{module: PrismWeb.ReauthController, site: :callback, plane: :external, origin: :none},
-    %{module: PrismWeb.ReauthController, site: :decide, plane: :external, origin: :none},
-    %{module: PrismWeb.LegalAcceptController, site: :show, plane: :external, origin: :none},
-    %{module: PrismWeb.LegalAcceptController, site: :submit, plane: :external, origin: :none},
+    %{
+      module: Module.concat(["PrismWeb", "PasskeyController"]),
+      site: :complete,
+      plane: :external,
+      origin: :none
+    },
+    %{
+      module: Module.concat(["PrismWeb", "ReauthController"]),
+      site: :callback,
+      plane: :external,
+      origin: :none
+    },
+    %{
+      module: Module.concat(["PrismWeb", "ReauthController"]),
+      site: :decide,
+      plane: :external,
+      origin: :none
+    },
+    %{
+      module: Module.concat(["PrismWeb", "LegalAcceptController"]),
+      site: :show,
+      plane: :external,
+      origin: :none
+    },
+    %{
+      module: Module.concat(["PrismWeb", "LegalAcceptController"]),
+      site: :submit,
+      plane: :external,
+      origin: :none
+    },
     # The pre-session throttle on the routes whose pipeline mints a call
     # identity: restore, the OAuth callback, a device's certificate
     # renewal, and the browser's sign-in and policy acceptance.
