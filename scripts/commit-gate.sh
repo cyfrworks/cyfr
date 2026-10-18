@@ -32,7 +32,9 @@
 #             set (apps/arca/test, apps/cyfr/test/arca) and every tracked
 #             apps/*/test test file outside it that tags a test for one
 #             adapter or branches on the adapter (PG_PATTERN below), or
-#             names a test support module that does, each path once. Its
+#             names a test support module that does, or carries
+#             :requires_cargo_component (CARGO_PATTERN below), as CI's
+#             PostgreSQL job runs those too, each path once. Its
 #             summary counts the paths handed to the runner
 #             as `pg_selection=<n>`, the report says so, and
 #             postgres.pg_selection.txt lists them. With --close the whole
@@ -55,6 +57,13 @@
 # _build/test and its MIX_ENV=dev steps in Mix's default, postgres and
 # cluster build in _build/test_pg (postgres its dev compile in
 # _build/dev_pg), and an island builds inside its copy.
+# Every leg runs with ${CARGO_HOME:-$HOME/.cargo}/bin ahead on its PATH,
+# where rustup and `cargo install` put their tools, so the tests tagged
+# :requires_cargo_component, which the test helpers exclude where
+# cargo-component is not on PATH, run as CI's test jobs run them. A gate
+# that finds no cargo-component there or on PATH is refused with 69,
+# naming where it looked, before any leg starts: passing with those tests
+# excluded would hold a commit to less than CI does.
 # Not part of this gate, so a closing record names each with its own
 # result: these checks of the workflows a pull request runs, each a job
 # (every step of it) or one step of a job, by the names the workflows give
@@ -117,6 +126,10 @@ set -uo pipefail
 
 usage() { echo "usage: $0 [-l LOGDIR] [-n N] [--close] [-- PostgreSQL test paths]"; }
 
+# Test files that build real components with cargo-component: CI runs
+# them on both adapters.
+CARGO_PATTERN=':requires_cargo_component\b'
+
 # Test files that run on one adapter only or assert per adapter: an
 # adapter tag, an adapter predicate, or a read of the configured adapter.
 PG_PATTERN='@(module|describe)?tag :(postgres|sqlite)\b|(^|[^_a-z])(postgres|sqlite)\?\(\)|@sqlite\?|Arca\.Repo\.adapter\(\)|Arca\.Test\.Adapter\.|__adapter__|compile_env\(:arca, *:adapter|repo_adapter\(\)'
@@ -129,20 +142,24 @@ PG_SUPPORT_EXEMPT='Arca.Test.Sandbox'
 
 # The postgres leg's default selection, one path a line, read from the
 # tracked files of the current directory's repository: the storage set,
-# then, sorted, the test files outside it that match PG_PATTERN or name a
-# support module that does (pg_support_users), so no file is named twice.
+# then, sorted, the test files outside it that match PG_PATTERN or
+# CARGO_PATTERN or name a support module that matches PG_PATTERN
+# (pg_support_users), so no file is named twice.
 # macOS git grep -E ignores \b, so there the pattern runs as PCRE, which
 # reads it the same way.
 pg_selection() {
-  local s=0 mode=-E direct users
+  local s=0 mode=-E direct cargo users
   [ "$(uname -s)" != Darwin ] || mode=-P
   direct=$(git grep -l "$mode" "$PG_PATTERN" -- ':(glob)apps/*/test/**/*_test.exs' \
     ':(exclude,glob)apps/arca/test/**' ':(exclude,glob)apps/cyfr/test/arca/**') || s=$?
   # git grep answers 1 when nothing matches.
   [ "$s" -le 1 ] || return 1
+  cargo=$(git grep -l "$mode" "$CARGO_PATTERN" -- ':(glob)apps/*/test/**/*_test.exs' \
+    ':(exclude,glob)apps/arca/test/**' ':(exclude,glob)apps/cyfr/test/arca/**') || s=$?
+  [ "$s" -le 1 ] || return 1
   users=$(pg_support_users "$mode") || return 1
   printf '%s\n' apps/arca/test apps/cyfr/test/arca
-  printf '%s\n%s\n' "$direct" "$users" | sed '/^$/d' | LC_ALL=C sort -u
+  printf '%s\n%s\n%s\n' "$direct" "$cargo" "$users" | sed '/^$/d' | LC_ALL=C sort -u
 }
 
 # The test files outside the storage set that name a test support module
@@ -311,12 +328,12 @@ leg_static() {
     bash -c 'cd apps/cyfr/assets && npm ci --ignore-scripts --no-audit --no-fund && npx eslint .' || return
   # Every checked-in test WASM fixture is its source's build, with the
   # pinned wasm-tools and the Rust toolchain the fixtures' build script
-  # pins (CI reads the same pin), from rustup's bin directory.
+  # pins (CI reads the same pin), from rustup's bin directory, which the
+  # gate put on PATH.
   step static wasm_tools scripts/wasm-tools.sh install _tools || return
   local rustc
   rustc=$(sed -n 's/^rustc_version=//p' apps/cyfr/test/support/test_wasm/build-fixture.sh)
-  step static test_wasm env PATH="${CARGO_HOME:-$HOME/.cargo}/bin:$PATH" RUSTUP_TOOLCHAIN="$rustc" \
-    scripts/check-test-wasm.sh || return
+  step static test_wasm env RUSTUP_TOOLCHAIN="$rustc" scripts/check-test-wasm.sh || return
   # Each rebuilds its bundle into the checkout and fails when the tracked
   # file is not the build, as CI's test job runs it.
   local sdk="$LOGDIR/static.sdk_bundle.sh" toolkit="$LOGDIR/static.toolkit_bundle.sh"
@@ -667,6 +684,15 @@ if $TERMINAL; then echo "_START=$$"; STARTED=true; fi
 case "${GATE_STEP_DEADLINE:-1}" in
   ''|*[!0-9]*|0*|???????*) echo 'GATE_STEP_DEADLINE must be positive decimal seconds, at most six digits' >&2; exit 64 ;;
 esac
+
+# Every leg takes rustup's bin directory on its PATH, and a gate that
+# finds no cargo-component is refused before it touches the log directory.
+CARGO_BIN="${CARGO_HOME:-$HOME/.cargo}/bin"
+export PATH="$CARGO_BIN:$PATH"
+if ! command -v cargo-component >/dev/null 2>&1; then
+  echo "==> cargo-component is neither in $CARGO_BIN nor on PATH: the tests tagged :requires_cargo_component would be excluded, and CI runs them (cargo install cargo-component --locked, with rustup's wasm32-wasip2 target)" >&2
+  exit 69
+fi
 
 # A log directory holds this run's logs alone, so the verdict reads
 # nothing an earlier run left.

@@ -47,6 +47,14 @@ missing or wrong header fails CI.
   refuses to start without it: install it once with
   `scripts/wasm-tools.sh install _tools` (`scripts/test-partitioned.sh`
   installs it when it is missing).
+- The tests tagged `:requires_cargo_component` build real components, and
+  the test helpers exclude them where `cargo-component` is not on `PATH`.
+  CI runs them on both adapters, so install it
+  (`cargo install cargo-component --locked`) with the `wasm32-wasip1` and
+  `wasm32-wasip2` targets on rustup's default toolchain: a build runs
+  outside the checkout, where `rust-toolchain.toml` does not choose the
+  toolchain. `scripts/commit-gate.sh` looks for it in
+  `${CARGO_HOME:-~/.cargo}/bin` and on `PATH`, and refuses to run without it.
 - Run the tests for what you touched as operating-system partitions:
   `scripts/test-partitioned.sh <test paths>` on SQLite, and
   `scripts/test-partitioned.sh -a postgres <test paths>` on PostgreSQL.

@@ -495,6 +495,33 @@ has_line 'needs setsid' "$scratch/nosetsid.err" || fail "a gate without setsid o
 no_mix_ran nosetsid || fail 'a gate without setsid or perl went on to the legs'
 echo 'ok: a refused start'
 
+# --- cargo-component missing -------------------------------------------------------
+# CARGO_HOME names an empty directory and no directory on PATH holds the
+# tool: refused with 69, naming the tool and where it looked, before the
+# log directory is made or any leg starts.
+mkdir -p "$scratch/empty-cargo"
+nocargo_path=
+IFS=: read -r -a path_dirs <<<"$scratch/bin:$PATH"
+for d in "${path_dirs[@]}"; do
+  [ -x "$d/cargo-component" ] || nocargo_path="${nocargo_path:+$nocargo_path:}$d"
+done
+run_gate nocargo CARGO_HOME="$scratch/empty-cargo" PATH="$nocargo_path" -- "$gate" -l "$scratch/nocargo.log"
+[ "$gate_rc" = 69 ] || fail "a gate without cargo-component exited $gate_rc: $(cat "$scratch/nocargo.err")"
+framed nocargo "$gate_pid" 69
+has_line "cargo-component is neither in $scratch/empty-cargo/bin nor on PATH" "$scratch/nocargo.err" ||
+  fail "a gate without cargo-component gave no reason naming where it looked: $(cat "$scratch/nocargo.err")"
+no_mix_ran nocargo || fail 'a gate without cargo-component went on to the legs'
+[ ! -e "$scratch/nocargo.log" ] || fail 'a gate without cargo-component made its log directory'
+# The same PATH with the tool in CARGO_HOME's bin passes the check: the
+# gate goes on to its log directory check, which refuses a file.
+mkdir -p "$scratch/stub-cargo/bin"
+printf '#!/bin/sh\nexit 0\n' > "$scratch/stub-cargo/bin/cargo-component"
+chmod +x "$scratch/stub-cargo/bin/cargo-component"
+run_gate cargo-home CARGO_HOME="$scratch/stub-cargo" PATH="$nocargo_path" -- "$gate" -l "$scratch/a-file"
+[ "$gate_rc" = 64 ] || fail "a gate finding cargo-component in CARGO_HOME exited $gate_rc: $(cat "$scratch/cargo-home.err")"
+no_line 'cargo-component' "$scratch/cargo-home.err" || fail "a gate refused cargo-component in CARGO_HOME's bin: $(cat "$scratch/cargo-home.err")"
+echo 'ok: cargo-component missing'
+
 # --- a leg run alone ----------------------------------------------------------------
 # start_leg NAME LEG [VAR=value...]: the leg as the gate starts it, with a
 # fresh log directory and the gate's options in its environment.
@@ -595,6 +622,14 @@ for m in $(. "$gate" && echo "$PG_SUPPORT_EXEMPT"); do
   grep -qE "$(. "$gate" && echo "$PG_PATTERN")" "$root/$f" || fail "the exempt support module $m no longer matches the pattern"
 done
 no_line '^apps/cyfr/test/cyfr/cell_test.exs$' "$scratch/selection.txt" || fail 'the selection holds cell_test.exs, which does not branch'
+# Every test file carrying :requires_cargo_component, as CI's PostgreSQL
+# job runs them.
+cargo_files=$(cd "$root" && git grep -l -E ':requires_cargo_component\b' -- ':(glob)apps/*/test/**/*_test.exs') ||
+  fail 'no test file carries :requires_cargo_component: the selection check has nothing to hold'
+for f in $cargo_files; do grep -qxF "$f" "$scratch/selection.txt" || fail "the selection misses the cargo-tagged $f"; done
+for f in apps/cyfr/test/integration/locus/compile_lock_test.exs apps/locus/test/locus/builder_test.exs; do
+  grep -qxF "$f" "$scratch/selection.txt" || fail "the selection misses $f"
+done
 # Planted in a repository of their own: git grep reads tracked files only.
 plant="$scratch/plant"
 mkdir -p "$plant/apps/x/test/support" "$plant/apps/x/lib" "$plant/apps/arca/test"
@@ -604,6 +639,7 @@ printf '@tag :sqlite\ntest "b", do: :ok\n' > "$plant/apps/x/test/tagged_test.exs
 printf 'test "c", do: assert 1 == 1\n' > "$plant/apps/x/test/plain_test.exs"
 printf 'test "d", do: my_postgres?()\n' > "$plant/apps/x/test/lookalike_test.exs"
 printf '@tag :postgres\n' > "$plant/apps/arca/test/stored_test.exs"
+printf '@moduletag :requires_cargo_component\n' > "$plant/apps/x/test/cargo_test.exs"
 printf '@tag :postgres\n' > "$plant/apps/x/test/support/case.ex"
 printf '@tag :postgres\n' > "$plant/apps/x/lib/thing_test.exs"
 # A support module that branches on the adapter, named in full, in a
@@ -628,7 +664,7 @@ printf 'alias X, as: T\ntest "root", do: T.Test.Branching.f()\n' > "$plant/apps/
 git -C "$plant" add apps
 printf '@tag :postgres\n' > "$plant/apps/x/test/untracked_test.exs"
 selection "$plant" > "$scratch/plant.txt" || fail 'the selection failed on the planted repository'
-[ "$(tr '\n' ' ' < "$scratch/plant.txt")" = 'apps/arca/test apps/cyfr/test/arca apps/x/test/alias_test.exs apps/x/test/branch_test.exs apps/x/test/full_test.exs apps/x/test/parent_namespace_test.exs apps/x/test/support_chain_test.exs apps/x/test/tagged_test.exs ' ] ||
+[ "$(tr '\n' ' ' < "$scratch/plant.txt")" = 'apps/arca/test apps/cyfr/test/arca apps/x/test/alias_test.exs apps/x/test/branch_test.exs apps/x/test/cargo_test.exs apps/x/test/full_test.exs apps/x/test/parent_namespace_test.exs apps/x/test/support_chain_test.exs apps/x/test/tagged_test.exs ' ] ||
   fail "the planted selection is wrong: $(tr '\n' ' ' < "$scratch/plant.txt")"
 # A matcher that cannot run fails the selection rather than answering it
 # incomplete: the planted repository's selection succeeds with Perl and is
