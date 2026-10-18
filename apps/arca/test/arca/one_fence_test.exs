@@ -10,9 +10,10 @@ defmodule Arca.OneFenceTest do
   The scan reads each module's syntax tree, so a comment, a renamed
   variable or a helper in between changes nothing:
 
-    * a **fence** is a function that opens a locking transaction — through
-      `Arca.Repo.locking_transaction/2` itself, or a function of its own or
-      of another module that opens one — around code that reaches
+    * a **fence** is a function that opens a transaction — through
+      `Arca.Repo.transaction/1,2` or `transact/1,2` (which
+      `locking_transaction/2` and `read_transaction/1` run), or a function
+      of its own or of another module that opens one — around code that reaches
       `Arca.ControlPlane.verify_held/1`: directly, or through a function of
       its own or a public function of another module that does, called or
       captured (`&fun/1`, `&Mod.fun/1`) and applied or passed on. A call of
@@ -191,6 +192,22 @@ defmodule Arca.OneFenceTest do
         end
 
         def passed, do: Arca.Repo.locking_transaction(&checked/0)
+
+        # The same check inside Repo.transaction and Repo.transact, which
+        # locking_transaction/2 runs, called as the alias names them.
+        def plain(write) do
+          Arca.Repo.transaction(fn ->
+            with :ok <- hop2(:none), do: write.()
+          end)
+        end
+
+        def transacted(write) do
+          Repo.transact(fn -> with :ok <- hop2(:none), do: write.() end, [])
+        end
+
+        def read_fenced(write) do
+          Arca.Repo.read_transaction(fn -> with :ok <- hop2(:none), do: write.() end)
+        end
       end
       ''')
 
@@ -203,7 +220,10 @@ defmodule Arca.OneFenceTest do
                "guarded/1",
                "handed/1",
                "passed/0",
+               "plain/1",
+               "read_fenced/1",
                "remote/1",
+               "transacted/1",
                "two_hop/1"
              ]
 
@@ -264,6 +284,10 @@ defmodule Arca.OneFenceTest do
 
     openers =
       grown(modules, &opens?/3, [
+        {[:Arca, :Repo], {:transaction, 1}},
+        {[:Arca, :Repo], {:transaction, 2}},
+        {[:Arca, :Repo], {:transact, 1}},
+        {[:Arca, :Repo], {:transact, 2}},
         {[:Arca, :Repo], {:locking_transaction, 1}},
         {[:Arca, :Repo], {:locking_transaction, 2}}
       ])

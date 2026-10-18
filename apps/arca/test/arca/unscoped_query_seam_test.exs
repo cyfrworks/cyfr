@@ -28,10 +28,51 @@ defmodule Arca.UnscopedQuerySeamTest do
 
   @root Path.expand("../../../..", __DIR__)
 
-  # Match reads and writes through Repo and Arca.Repo.
-  # exists? and query! need alternatives without a trailing word boundary
-  # between their punctuation and the opening parenthesis.
-  @repo_verbs ~r/\bRepo\.(?:(?:all|one|update_all|delete_all|aggregate|get|get_by|insert|insert_all|update|delete|transaction)\b|exists\?|query!?)/
+  # The functions of Arca.Repo that read or write rows: Ecto.Repo's
+  # queries and Ecto.Adapters.SQL's. Every other function Arca.Repo has is
+  # in @not_queries, and a test holds the two to Arca.Repo's functions
+  # exactly, so an Ecto release that adds a query fails here rather than
+  # slipping past the scan.
+  @queries ~w(aggregate all all_by delete delete! delete_all exists? get get! get_by get_by!
+              insert insert! insert_all insert_or_update insert_or_update! one one! preload
+              query query! query_many query_many! reload reload! stream transact transaction
+              update update! update_all)
+  @not_queries %{
+    "__adapter__" => "the adapter module",
+    "adapter" => "the configured adapter module",
+    "busy_timeout_ms" => "a configuration read",
+    "checked_out?" => "whether this process holds a connection",
+    "checkout" => "holds one connection for a function, whose own queries the scan reads",
+    "child_spec" => "the supervisor's start specification",
+    "committed" => "unwraps a result inside a transaction, or rolls it back",
+    "config" => "the repository's configuration",
+    "default_options" => "the options every operation starts from",
+    "disconnect_all" => "closes the pool's connections",
+    "explain" => "plans a query without reading a row",
+    "get_dynamic_repo" => "the process's repository",
+    "in_transaction?" => "whether this process is inside a transaction",
+    "load" => "builds a struct from data already read",
+    "locking_transaction" => "a transaction, whose own queries the scan reads",
+    "migrations_path" => "where the migrations live",
+    "owned" => "runs a write under an ownership fence, whose own queries the scan reads",
+    "prepare_query" => "the query hook",
+    "prepare_transaction" => "the transaction hook",
+    "put_dynamic_repo" => "sets the process's repository",
+    "read_transaction" => "a transaction, whose own queries the scan reads",
+    "rollback" => "ends a transaction",
+    "start_link" => "starts the repository",
+    "stop" => "stops the repository",
+    "to_sql" => "renders a query without running it",
+    "transaction_lock" => "takes an advisory lock inside a transaction"
+  }
+  # Longest first, and no name character after, so `get` is never read as
+  # `get_by` and `exists?` and `query!` match with their punctuation.
+  @repo_verbs_source "\\bRepo\\.(?:" <>
+                       (@queries
+                        |> Enum.sort_by(&(-String.length(&1)))
+                        |> Enum.map_join("|", &Regex.escape/1)) <> ")(?![\\w?!])"
+  defp repo_verbs, do: Regex.compile!(@repo_verbs_source)
+
   # Scoped means the athanor column is USED — compared, bound or set —
   # not merely mentioned. `stamp_tenant!` is the write-side spelling
   # (Arca.QueryHelpers). It is read with every join condition and select
@@ -154,27 +195,86 @@ defmodule Arca.UnscopedQuerySeamTest do
     |> Enum.uniq()
   end
 
+  # The unscoped queries over a tenant-keyed table among `files`, each a
+  # path and its source, as `path:line: head (tables)`.
+  defp offenders(files, schemas) do
+    by_short = for s <- schemas, into: %{}, do: {s |> String.split(".") |> List.last(), s}
+    verbs = repo_verbs()
+
+    for {path, source} <- files,
+        [_, enclosing] = Regex.run(~r/^defmodule ([\w.]+) do/m, source) || [nil, nil],
+        {line, body} <- functions(String.split(source, "\n")),
+        body =~ verbs,
+        not (own_clauses(body) =~ @scoped),
+        not (body =~ @tag_marker),
+        tables = queried_schemas(body, enclosing, schemas, by_short),
+        tables != [] do
+      head = body |> String.split("\n") |> hd() |> String.trim()
+      "#{Path.relative_to(path, @root)}:#{line}: #{head} (#{Enum.join(tables, ", ")})"
+    end
+  end
+
+  test "the scan's verbs are every query Arca.Repo has" do
+    functions =
+      Arca.Repo.__info__(:functions) |> Enum.map(&to_string(elem(&1, 0))) |> MapSet.new()
+
+    named = MapSet.union(MapSet.new(@queries), MapSet.new(Map.keys(@not_queries)))
+
+    assert MapSet.disjoint?(MapSet.new(@queries), MapSet.new(Map.keys(@not_queries)))
+    assert MapSet.difference(functions, named) |> Enum.sort() == []
+    assert MapSet.difference(named, functions) |> Enum.sort() == []
+
+    verbs = repo_verbs()
+
+    for verb <- @queries do
+      assert "Repo.#{verb}(x)" =~ verbs, "the scan does not read Repo.#{verb}"
+    end
+
+    for name <- Map.keys(@not_queries) do
+      refute "Repo.#{name}(x)" =~ verbs, "the scan reads Repo.#{name} as a query"
+    end
+  end
+
+  # Planted: each unscoped query over a tenant-keyed table, in a module the
+  # scan reads as it reads lib, is found; the same function tagged or
+  # scoped is not.
+  test "the scan finds a planted unscoped query of every verb" do
+    schemas = tenant_schemas()
+    table = schemas |> Enum.sort() |> hd()
+    short = table |> String.split(".") |> List.last()
+
+    planted = fn verb, extra ->
+      {"apps/arca/lib/arca/planted_#{String.replace(verb, ~r/[?!]/, "")}.ex",
+       """
+       defmodule Arca.Planted do
+         alias #{table}
+
+       #{extra}  def planted(x) do
+           Repo.#{verb}(from(r in #{short}, where: r.id == ^x))
+         end
+       end
+       """}
+    end
+
+    for verb <- @queries do
+      found = offenders([planted.(verb, "")], schemas)
+      assert length(found) == 1, "a planted unscoped Repo.#{verb} over #{table} was not found"
+      assert hd(found) =~ "planted_" and hd(found) =~ table
+      assert offenders([planted.(verb, "  # arca:unscoped-ok planted\n")], schemas) == []
+
+      {path, source} = planted.(verb, "")
+      scoped = String.replace(source, "where: r.id", "where: r.athanor_id == ^x and r.id")
+      assert offenders([{path, scoped}], schemas) == []
+    end
+  end
+
   test "an unscoped query over a tenant-keyed table says why" do
     schemas = tenant_schemas()
 
     assert MapSet.size(schemas) > 10,
            "expected the tenant-keyed schemas to be found, got #{MapSet.size(schemas)}"
 
-    by_short = for s <- schemas, into: %{}, do: {s |> String.split(".") |> List.last(), s}
-
-    offenders =
-      for path <- sources(),
-          source = Prima.Test.SourceTree.read(path),
-          [_, enclosing] = Regex.run(~r/^defmodule ([\w.]+) do/m, source) || [nil, nil],
-          {line, body} <- functions(String.split(source, "\n")),
-          body =~ @repo_verbs,
-          not (own_clauses(body) =~ @scoped),
-          not (body =~ @tag_marker),
-          tables = queried_schemas(body, enclosing, schemas, by_short),
-          tables != [] do
-        head = body |> String.split("\n") |> hd() |> String.trim()
-        "#{Path.relative_to(path, @root)}:#{line}: #{head} (#{Enum.join(tables, ", ")})"
-      end
+    offenders = offenders(Enum.map(sources(), &{&1, Prima.Test.SourceTree.read(&1)}), schemas)
 
     assert offenders == [],
            """
@@ -228,12 +328,14 @@ defmodule Arca.UnscopedQuerySeamTest do
   end
 
   test "the tag is only on functions that actually query" do
+    verbs = repo_verbs()
+
     stale =
       for path <- sources(),
           source = Prima.Test.SourceTree.read(path),
           {line, body} <- functions(String.split(source, "\n")),
           body =~ @tag_marker,
-          not (body =~ @repo_verbs) do
+          not (body =~ verbs) do
         head = body |> String.split("\n") |> hd() |> String.trim()
         "#{Path.relative_to(path, @root)}:#{line}: #{head}"
       end
