@@ -69,22 +69,25 @@ defmodule CyfrWeb.Endpoint do
   # registry appeal) has to budget by IP itself.
   @live_connect_info [:peer_data, :x_headers, session: {__MODULE__, :session_options, []}]
 
-  # A `/live` frame is bounded by the largest event a LiveView sends
+  # `/live`'s messages are bounded by the largest a LiveView sends
   # legitimately: the Files editor's save of a file it opens inline
   # (`Arca.Files.max_inline_read/0`), submitted as a form, which LiveView
   # encodes with `URLSearchParams`, so a byte outside its unreserved set
-  # takes three. The envelope margin covers the rest of the event (the join
-  # and message references, the topic, the event's type, name and field
-  # name), which is under a kilobyte. The socket takes its first frames
-  # before anyone is signed in, so the bound is the editor's worst case and
-  # no more, moving with the inline-read limit.
-  @live_envelope_bytes 65_536
-  @live_max_frame_bytes Arca.Files.max_inline_read() * 3 + @live_envelope_bytes
+  # takes three. The long-poll client posts up to 100 queued messages in
+  # one body, so the margin is a host call's body
+  # (`Prima.HostAPI.max_body_bytes/0`): the save's own envelope, under a
+  # kilobyte, and whatever else rides in its batch. A WebSocket frame and a
+  # long-poll POST are held to the same bound (`socket_transports/0`), which
+  # sits under the 8,000,000 bytes Phoenix's long-poll transport reads at
+  # most. The socket takes its first messages before anyone is signed in,
+  # so the bound is the editor's worst case and no more, moving with the
+  # inline-read limit.
+  @live_max_message_bytes Arca.Files.max_inline_read() * 3 + Prima.HostAPI.max_body_bytes()
 
   # The socket refuses every connect once a graceful stop begins
   # (`CyfrWeb.LiveSocket.drain/0`), on either transport.
   socket "/live", CyfrWeb.LiveSocket,
-    websocket: [connect_info: @live_connect_info, max_frame_size: @live_max_frame_bytes],
+    websocket: [connect_info: @live_connect_info, max_frame_size: @live_max_message_bytes],
     longpoll: [connect_info: @live_connect_info]
 
   # A paired glass's device channel: the device protocol over a raw
@@ -107,10 +110,10 @@ defmodule CyfrWeb.Endpoint do
   # no cap of these parsers, from whoever holds a transport token, which
   # it hands to anyone who asks. So a request to a socket transport's path
   # is bounded before that dispatch: a POST declares its length, within
-  # the cap `CyfrWeb.Plugs.RawBodyReader.cap/1` names for it (a host
-  # call's body), and any other request carries no body. Every other one
-  # is refused before any byte of its body is read, 413 (411 for a POST
-  # whose length is undeclared), and its HTTP/1 connection ends.
+  # the transport's bound (`socket_transports/0`), and any other request
+  # carries no body. Every other one is refused before any byte of its
+  # body is read, 413 (411 for a POST whose length is undeclared), and its
+  # HTTP/1 connection ends.
   @impl Plug
   def call(conn, opts) do
     case socket_body(conn) do
@@ -121,24 +124,47 @@ defmodule CyfrWeb.Endpoint do
 
   @doc """
   Each socket transport the endpoint mounts, with the routed path
-  (`path_info`) Phoenix dispatches it on: a mount's path joined with each
-  enabled transport's `:path` (`__sockets__/0`).
+  (`path_info`) Phoenix dispatches it on, a mount's path joined with each
+  enabled transport's `:path` (`__sockets__/0`), and the most bytes a
+  POST to it may declare. A long-poll POST carries the messages its
+  mount's WebSocket frames would, so it is held to that frame bound
+  (`:max_frame_size`), or to a host call's body
+  (`Prima.HostAPI.max_body_bytes/0`) when the mount names none; a POST to
+  a WebSocket's path carries no message and is held to a host call's body.
   """
-  @spec socket_transports() :: [{:websocket | :longpoll, [String.t()]}]
+  @spec socket_transports() :: [{:websocket | :longpoll, [String.t()], pos_integer()}]
   def socket_transports do
     for {path, _socket, opts} <- __sockets__(),
         {transport, default, transport_path} <- [
           {:websocket, true, "/websocket"},
           {:longpoll, false, "/longpoll"}
         ],
-        config = Keyword.get(opts, transport, default),
+        config = transport_config(opts, transport, default),
         config != false do
-      config = if config == true, do: [], else: config
-
       {transport,
-       String.split(path <> Keyword.get(config, :path, transport_path), "/", trim: true)}
+       String.split(path <> Keyword.get(config, :path, transport_path), "/", trim: true),
+       post_bound(transport, opts)}
     end
   end
+
+  defp transport_config(opts, transport, default) do
+    case Keyword.get(opts, transport, default) do
+      true -> []
+      config -> config
+    end
+  end
+
+  defp post_bound(:longpoll, opts) do
+    case transport_config(opts, :websocket, true) do
+      config when is_list(config) ->
+        Keyword.get(config, :max_frame_size, Prima.HostAPI.max_body_bytes())
+
+      false ->
+        Prima.HostAPI.max_body_bytes()
+    end
+  end
+
+  defp post_bound(:websocket, _opts), do: Prima.HostAPI.max_body_bytes()
 
   # First, so every answer carries it, a refusal raised while parsing
   # among them (`close_unread/2`).
@@ -236,14 +262,13 @@ defmodule CyfrWeb.Endpoint do
   end
 
   defp socket_body(%Plug.Conn{path_info: path_info} = conn) do
-    if Enum.any?(socket_transports(), &(elem(&1, 1) == path_info)),
-      do: socket_body_bounded(conn),
-      else: :ok
+    case Enum.find(socket_transports(), &(elem(&1, 1) == path_info)) do
+      {_transport, _path_info, bound} -> socket_body_bounded(conn, bound)
+      nil -> :ok
+    end
   end
 
-  defp socket_body_bounded(%Plug.Conn{method: "POST"} = conn) do
-    {:ok, cap} = CyfrWeb.Plugs.RawBodyReader.cap(conn)
-
+  defp socket_body_bounded(%Plug.Conn{method: "POST"} = conn, cap) do
     case get_req_header(conn, "content-length") do
       [declared] ->
         case Integer.parse(declared) do
@@ -256,7 +281,7 @@ defmodule CyfrWeb.Endpoint do
     end
   end
 
-  defp socket_body_bounded(conn),
+  defp socket_body_bounded(conn, _cap),
     do: if(carries_body?(conn), do: {:refused, 413, :socket_body_too_large}, else: :ok)
 
   defp refuse_socket_body(conn, status, reason) do
