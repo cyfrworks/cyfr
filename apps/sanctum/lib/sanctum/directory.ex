@@ -66,11 +66,16 @@ defmodule Sanctum.Directory do
   the write. The store then serializes: a rotation names the head it extends
   (`{:stale_head, head}` when another landed first); a recovery is applied
   against the current policy revision, and a head moved by a rotation in
-  between is re-based on the new head, at most three times, before
-  answering `:busy`. A recovery request whose revision is no longer
-  current is recorded as a stale-policy refusal once its signature
-  verifies under the recovery set of the revision it names, so a retry
-  answers the same refusal whatever the log does next.
+  between is re-based on the new head and verified again. Only rotations
+  move a head while the revision stands, and each re-base follows one the
+  store accepted, so the re-bases are bounded by the rotations an
+  identifier may have accepted: at most 100 in a day window, so at most
+  200 across one window's boundary. A recovery re-bases up to 200 times
+  and answers `:busy`, retryable, only on the 201st moved head, which no
+  sequence of rotations reaches within a day. A recovery request whose
+  revision is no longer current is recorded as a stale-policy refusal once
+  its signature verifies under the recovery set of the revision it names,
+  so a retry answers the same refusal whatever the log does next.
 
   An exact retry answers its recorded outcome without spending an
   allowance: the rotation that is the head, a recovery request id already
@@ -114,7 +119,11 @@ defmodule Sanctum.Directory do
   @page_bytes 65_536
   @envelope_bytes 1_024
 
-  @rebases 3
+  # The re-bases one recovery may make: every re-base follows a rotation
+  # the store accepted, and the identifier's fixed day window accepts at
+  # most `@rotations_per_day`, so at most twice that across one boundary.
+  # Rotations alone never exhaust it; past it the answer is `:busy`.
+  @rebases 2 * @rotations_per_day
   @max_position 2_147_483_647
 
   @typedoc "The caller's address, the key of its per-source limits."
@@ -776,8 +785,8 @@ defmodule Sanctum.Directory do
         end
 
       # A rotation moved the head between the read and the write, and the
-      # revision still stands: the recovery is never refused for that; it
-      # is built again on the new head and verified again.
+      # revision still stands: the recovery is built again on the new head
+      # and verified again, within the bound `@rebases` states.
       {:error, :stale} when rebases > 0 ->
         with {:ok, log} <- current(identifier),
              {:ok, entry} <- recoverable(log, request),

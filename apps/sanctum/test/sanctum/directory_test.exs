@@ -579,17 +579,45 @@ defmodule Sanctum.DirectoryTest do
                Identity.verify_chain(maps)
     end
 
-    test "a recovery the head keeps moving under is busy after three re-bases, and retryable" do
+    test "a recovery re-based on every rotation landing under it commits on the head it finds" do
+      alice = register!(person())
+      {req, {new_op, _}} = request(alice)
+      pause_log_reads!()
+
+      # The first read and each re-base's read, a rotation behind each:
+      # more moves than any fixed count of tries, and the recovery commits.
+      moves = 12
+      recovery = Task.async(fn -> paused(moves, fn -> recover(alice.identifier, req) end) end)
+      rotated = Enum.reduce(1..moves, alice, fn _, person -> rotate_behind!(person) end)
+
+      assert {:ok, %{seq: seq, entry: bytes}} = Task.await(recovery, 30_000)
+      assert seq == moves + 1
+      assert {:ok, %Entry{prev: prev, request: ^req}} = bytes |> Jason.decode!() |> Entry.decode()
+      assert prev == rotated.head
+
+      maps = for row <- log(alice.identifier), do: Jason.decode!(row.entry)
+
+      assert {:ok, %{operational_key: ^new_op, revision: 1, length: length}} =
+               Identity.verify_chain(maps)
+
+      assert length == moves + 2
+    end
+
+    test "a recovery is busy, retryable, only once the head moved more often than an identifier's rotation caps allow in a day" do
       alice = register!(person())
       {req, _} = request(alice)
       pause_log_reads!()
 
-      # The first read and each of the three re-bases' reads.
-      recovery = Task.async(fn -> paused(4, fn -> recover(alice.identifier, req) end) end)
-      Enum.reduce(1..4, alice, fn _, person -> rotate_behind!(person) end)
+      # The day window accepts 100 rotations, so 200 across one boundary:
+      # the first read and 200 re-bases each find a rotation behind them.
+      moves = 201
+      recovery = Task.async(fn -> paused(moves, fn -> recover(alice.identifier, req) end) end)
+      Enum.reduce(1..moves, alice, fn _, person -> rotate_behind!(person) end)
 
-      assert {:error, :busy} = Task.await(recovery)
-      assert length(log(alice.identifier)) == 5
+      assert {:error, :busy} = Task.await(recovery, 120_000)
+
+      assert {:ok, %{seq: ^moves, kind: "rotate"}} =
+               Arca.IdentityLog.head(Prima.Actor.system(), alice.identifier)
 
       assert {:error, :not_found} =
                Directory.outcome(%{
@@ -598,7 +626,8 @@ defmodule Sanctum.DirectoryTest do
                  source: source()
                })
 
-      assert {:ok, %{seq: 5}} = recover(alice.identifier, req)
+      assert {:ok, %{seq: seq}} = recover(alice.identifier, req)
+      assert seq == moves + 1
     end
   end
 
@@ -680,9 +709,10 @@ defmodule Sanctum.DirectoryTest do
 
   # A process that marked itself `paused(n, …)` stops after each of its
   # next `n` unlocked reads of a log (the ordered entries query
-  # `Sanctum.Directory` reads a log whole with), tells the test and waits
-  # for it: the point between a decision's read and its write, where no
-  # lock is held.
+  # `Sanctum.Directory` reads a log whole with, page by page, paused after
+  # its last page, the one shorter than a full page), tells the test and
+  # waits for it: the point between a decision's read and its write, where
+  # no lock is held.
   defp pause_log_reads! do
     id = "directory-test-pause-#{System.unique_integer([:positive])}"
     :ok = :telemetry.attach(id, [:arca, :repo, :query], &__MODULE__.pause/4, self())
@@ -695,7 +725,7 @@ defmodule Sanctum.DirectoryTest do
     query = meta[:query]
 
     if pauses > 0 and is_binary(query) and query =~ ~s(FROM "identity_log_entries") and
-         query =~ ~s("seq" >) do
+         query =~ ~s("seq" >) and last_page?(meta[:result]) do
       Process.put({__MODULE__, :pauses}, pauses - 1)
       send(test, {:paused, self()})
 
@@ -704,6 +734,9 @@ defmodule Sanctum.DirectoryTest do
       end
     end
   end
+
+  defp last_page?({:ok, %{num_rows: rows}}), do: rows < Arca.IdentityLog.max_page()
+  defp last_page?(_result), do: false
 
   defp paused(count, fun) do
     Process.put({__MODULE__, :pauses}, count)

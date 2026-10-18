@@ -53,7 +53,7 @@ defmodule Emissary.Web.DirectoryController do
   | 429 | `rate_limited` | `retry_after` seconds, and the header |
   | 500 | `corrupt` | the stored log does not verify |
   | 503 | `capacity` | `exhausted`: `identities` or `log_bytes` with `retry-after: 60`, or `rotations` (the identifier's 100 a day) with the seconds left in its window |
-  | 503 | `busy` | a recovery re-based three times; `retry-after: 1` |
+  | 503 | `busy` | a recovery the head moved under more often than an identifier's rotation caps allow in a day (`Sanctum.Directory`); `retry-after: 1` |
   | 503 | `unavailable` | the store or settings did not answer; `retry-after: 1` |
   """
 
