@@ -525,6 +525,75 @@ defmodule Sanctum.Auth.DeviceFlowTest do
     end
   end
 
+  describe "poll_for_session/3 — a door a recovery retires while the sign-in runs" do
+    setup tags do
+      Arca.Test.Sandbox.setup!(tags)
+      Arca.Cache.init()
+      Prima.Test.RateLimiter.reset!()
+      endpoints = Application.get_env(:sanctum, :device_flow_endpoints)
+      {:ok, _} = Sanctum.Door.Store.allow("wildcard", "*", "test")
+
+      on_exit(fn ->
+        if endpoints,
+          do: Application.put_env(:sanctum, :device_flow_endpoints, endpoints),
+          else: Application.delete_env(:sanctum, :device_flow_endpoints)
+
+        Arca.Cache.delete_match({:established, :_, :_, :_})
+        Arca.Cache.delete_match(Arca.Cache.Keys.match_identity_unreachable())
+        Prima.Test.RateLimiter.reset!()
+      end)
+
+      Application.put_env(:sanctum, :github_client_id, "recovered-client")
+      :ok
+    end
+
+    test "the poller is told to sign in again, and no fault is logged" do
+      alias Sanctum.Test.DirectoryServer
+
+      tls = DirectoryServer.tls()
+      DirectoryServer.listen!()
+      DirectoryServer.seam!(tls)
+      directory = DirectoryServer.start!(tls)
+      identity = DirectoryServer.identity!(directory.dir, directory.url)
+
+      # A person whose keys are at another home, signing in here through
+      # their GitHub door, the identity the provider authorizes.
+      n = idp!(%{"access_token" => "gho_recovered", "token_type" => "bearer"})
+      key = Sanctum.Auth.Identity.builtin_key(:github, to_string(n))
+
+      {:ok, user} =
+        Sanctum.Tenancy.Users.upsert_from_provider(%{
+          id: key,
+          provider: "github",
+          verified: :unknown
+        })
+
+      :ok = DirectoryServer.remote_person!(user.id, identity)
+
+      assert {:ok, %{status: "complete", session_token: token}} =
+               DeviceFlow.poll_for_session(:github, "dc_before_#{n}", "203.0.113.20")
+
+      assert is_binary(token)
+
+      # They recover with new keys at their directory. The next sign-in's
+      # fresh read finds the recovery and retires the door it came through
+      # before its session is issued.
+      DirectoryServer.recover!(directory.dir, identity)
+
+      {answer, log} =
+        ExUnit.CaptureLog.with_log(fn ->
+          DeviceFlow.poll_for_session(:github, "dc_after_#{n}", "203.0.113.21")
+        end)
+
+      assert {:ok, %{status: "error", message: message} = refused} = answer
+      assert message =~ "cyfr login"
+      refute Map.has_key?(refused, :session_token)
+      refute log =~ "session create failed"
+      refute log =~ "[error]"
+      assert {:error, :not_found} = Sanctum.Tenancy.Users.get_by_identity(key)
+    end
+  end
+
   describe "a full server, seen from the CLI" do
     setup do
       prev_flow = Application.get_env(:sanctum, :device_flow)

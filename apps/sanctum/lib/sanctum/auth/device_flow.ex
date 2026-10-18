@@ -655,6 +655,21 @@ defmodule Sanctum.Auth.DeviceFlow do
             |> Map.put(:session_token, session.token)
             |> Map.merge(extras)
 
+          # What the sign-in stood on went while it ran: the door it came
+          # through was retired, by a recovery of the person's keys that
+          # the session's fresh read found or by an unlink, or the
+          # person's standing changed (`Sanctum.Session.create/2`). A
+          # refusal of the sign-in, never a fault: the person signs in
+          # again, as the browser's callback tells them
+          # (`CyfrWeb.SignInResponse`).
+          {:error, :unauthenticated} ->
+            %{
+              status: "error",
+              message:
+                "What this sign-in came through no longer admits you here. " <>
+                  "Run `cyfr login` again."
+            }
+
           {:error, reason} ->
             Logger.error("[Auth.DeviceFlow] session create failed: #{inspect(reason)}")
 
