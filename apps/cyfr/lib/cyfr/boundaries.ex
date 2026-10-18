@@ -33,7 +33,9 @@ defmodule Cyfr.Boundaries do
       its `mix.exs` declares it, and the layer each module namespace sits
       in. This is the dependency check: `arca` names nothing above the
       contracts, `sanctum` nothing above Arca, the host names neither
-      island, and each island names nothing of the control plane.
+      island, and each island names nothing of the control plane. Beside
+      it, `adapter_names/0`: no application but Arca names a database
+      adapter module.
     * `surfaces/0` — the directed reaches inside an application, which a
       dependency graph cannot express: which Sanctum namespaces the
       console may name, what the auth domain may name of the transport,
@@ -272,6 +274,41 @@ defmodule Cyfr.Boundaries do
         found = layer(module, contracts),
         found not in allowed,
         do: "#{path}:#{line} names #{module} (#{found}); #{app} may name #{inspect(allowed)}"
+  end
+
+  # The database adapter is Arca's to name: its repository and its rows
+  # are built for one, and a layer above that needs to know which asks
+  # `Arca.adapter_facts/0`, whose answer stays the same if an adapter
+  # module is renamed or a third one is added.
+  @adapter_names %{
+    namespace: "Ecto.Adapters",
+    owner: "apps/arca/lib",
+    reason:
+      "nothing above Arca names the database adapter: a layer above branches on " <>
+        "`Arca.adapter_facts/0`'s `adapter`, `:sqlite` or `:postgres`. The dependency " <>
+        "graph cannot hold this, since every application that depends on Arca reaches " <>
+        "Ecto through it, and an adapter module sits outside every layer."
+  }
+
+  @doc """
+  Where the database adapter's modules may be named: `namespace` is theirs,
+  `owner` the one tree that names them.
+  """
+  @spec adapter_names() :: map()
+  def adapter_names, do: @adapter_names
+
+  @doc """
+  Every name in `named`, outside Arca's tree, of a database adapter module,
+  as `path:line names Module`.
+  """
+  @spec adapter_violations(named()) :: [String.t()]
+  def adapter_violations(named) do
+    for {path, names} <- named,
+        not String.starts_with?(path, @adapter_names.owner <> "/"),
+        {module, number} <- names,
+        root?(module, @adapter_names.namespace),
+        uniq: true,
+        do: "#{path}:#{number} names #{module}"
   end
 
   @doc """

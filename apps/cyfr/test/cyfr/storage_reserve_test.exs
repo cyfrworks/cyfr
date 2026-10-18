@@ -264,8 +264,8 @@ defmodule Cyfr.StorageReserveTest do
     end
 
     test "the size is a whole number of bytes from 1, defaulting to 64 MiB; 0 is refused" do
-      sqlite = Ecto.Adapters.SQLite3
-      postgres = Ecto.Adapters.Postgres
+      sqlite = :sqlite
+      postgres = :postgres
       env = fn vars -> &Map.get(vars, &1) end
 
       assert {:ok, %{bytes: 67_108_864, path: "/srv/cyfr/db"}} =

@@ -391,8 +391,9 @@ defmodule Cyfr.RuntimeConfig do
   end
 
   @doc """
-  Resolve the storage reserve (`Cyfr.StorageReserve`) for a build of
-  `adapter`, whose SQLite file, under SQLite, is `database_path`:
+  Resolve the storage reserve (`Cyfr.StorageReserve`) for a deployment
+  whose database is `database` (`Arca.adapter_facts/0`'s `adapter`) and
+  whose SQLite file, under SQLite, is `database_path`:
 
     * `CYFR_STORAGE_RESERVE_BYTES` — the mark and the reserve file's size,
       a whole number of bytes from 1 to 1 TiB (default 64 MiB). 0 is
@@ -407,17 +408,18 @@ defmodule Cyfr.RuntimeConfig do
   boot's check on the host it runs on (`Cyfr.StorageReserve`). Returns
   `{:ok, %{bytes: _, path: path | nil}}` or `{:error, message}`.
   """
-  @spec resolve_storage_reserve(getenv, module(), Path.t()) ::
+  @spec resolve_storage_reserve(getenv, :sqlite | :postgres, Path.t()) ::
           {:ok, %{bytes: pos_integer(), path: Path.t() | nil}} | {:error, String.t()}
-  def resolve_storage_reserve(getenv, adapter, database_path)
-      when is_function(getenv, 1) and is_atom(adapter) and is_binary(database_path) do
+  def resolve_storage_reserve(getenv, database, database_path)
+      when is_function(getenv, 1) and database in [:sqlite, :postgres] and
+             is_binary(database_path) do
     with {:ok, bytes} <-
            Prima.EnvValue.bytes(
              getenv,
              "CYFR_STORAGE_RESERVE_BYTES",
              1..@max_storage_reserve_bytes
            ),
-         {:ok, path} <- storage_reserve_path(getenv, adapter, database_path) do
+         {:ok, path} <- storage_reserve_path(getenv, database, database_path) do
       {:ok, %{bytes: bytes || @default_storage_reserve_bytes, path: path}}
     end
   end
@@ -426,9 +428,9 @@ defmodule Cyfr.RuntimeConfig do
   @spec default_storage_reserve_bytes() :: pos_integer()
   def default_storage_reserve_bytes, do: @default_storage_reserve_bytes
 
-  defp storage_reserve_path(getenv, adapter, database_path) do
+  defp storage_reserve_path(getenv, database, database_path) do
     case getenv.("CYFR_STORAGE_RESERVE_PATH") do
-      nil when adapter == Ecto.Adapters.SQLite3 -> {:ok, Path.dirname(Path.expand(database_path))}
+      nil when database == :sqlite -> {:ok, Path.dirname(Path.expand(database_path))}
       nil -> {:ok, nil}
       _set -> path_var(getenv, "CYFR_STORAGE_RESERVE_PATH", nil)
     end

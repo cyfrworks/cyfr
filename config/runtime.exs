@@ -588,7 +588,11 @@ if config_env() != :test do
   # The storage reserve (`Cyfr.StorageReserve`): its size, and the
   # directory holding its file, the database's under SQLite unless set.
   # The boot checks the directory on the host it runs on.
-  case Cyfr.RuntimeConfig.resolve_storage_reserve(getenv, built_adapter, paths.database_path) do
+  case Cyfr.RuntimeConfig.resolve_storage_reserve(
+         getenv,
+         Arca.adapter_facts().adapter,
+         paths.database_path
+       ) do
     {:ok, reserve} ->
       config :cyfr, :storage_reserve_bytes, reserve.bytes
       config :cyfr, :storage_reserve_path, reserve.path

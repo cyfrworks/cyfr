@@ -66,6 +66,24 @@ defmodule Cyfr.RuntimeConfigWiringTest do
       end)
     end
 
+    test "and keeps the storage reserve beside the SQLite file, and nowhere by default on PostgreSQL" do
+      with_env(
+        %{
+          "CYFR_DATABASE" => nil,
+          "CYFR_STORAGE_RESERVE_PATH" => nil,
+          "CYFR_DATABASE_PATH" => "/srv/cyfr/db/cyfr.db"
+        },
+        fn ->
+          cyfr = read_prod_config!()[:cyfr]
+
+          case Arca.adapter_facts().adapter do
+            :sqlite -> assert Keyword.fetch!(cyfr, :storage_reserve_path) == "/srv/cyfr/db"
+            :postgres -> assert Keyword.fetch!(cyfr, :storage_reserve_path) == nil
+          end
+        end
+      )
+    end
+
     test "and supplies connection config for the adapter that was built" do
       with_env(%{"CYFR_DATABASE" => nil}, fn ->
         repo_config = read_prod_config!() |> get_in([:arca, Arca.Repo])

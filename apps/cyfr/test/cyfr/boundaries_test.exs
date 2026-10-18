@@ -292,6 +292,48 @@ defmodule Cyfr.BoundariesTest do
              """
     end
 
+    test "no application above Arca names a database adapter module" do
+      row = Boundaries.adapter_names()
+
+      above =
+        for app <- Boundaries.applications(),
+            app.lib != row.owner,
+            file <- names(app.lib <> "/**/*.ex"),
+            do: file
+
+      assert length(above) > 500, "the adapter scan read no code — it is not reading"
+
+      assert Boundaries.adapter_violations(above) == [],
+             Enum.join(Boundaries.adapter_violations(above), "\n")
+
+      # Arca's own tree names them, and the scan sees it there.
+      arca = names(row.owner <> "/**/*.ex")
+
+      assert Enum.any?(arca, fn {_path, n} ->
+               Enum.any?(n, &match?({"Ecto.Adapters.SQLite3", _}, &1))
+             end)
+
+      planted = ~S'''
+      defmodule Cyfr.Planted do
+        alias Ecto.Adapters.SQLite3
+        def a(adapter), do: adapter == SQLite3
+        def b(adapter), do: adapter == Ecto.Adapters.Postgres
+      end
+      '''
+
+      assert Boundaries.adapter_violations([
+               {"apps/cyfr/lib/cyfr/planted.ex", CodeLines.aliases(planted)}
+             ]) ==
+               [
+                 "apps/cyfr/lib/cyfr/planted.ex:2 names Ecto.Adapters.SQLite3",
+                 "apps/cyfr/lib/cyfr/planted.ex:4 names Ecto.Adapters.Postgres"
+               ]
+
+      assert Boundaries.adapter_violations([
+               {"apps/arca/lib/arca/planted.ex", CodeLines.aliases(planted)}
+             ]) == []
+    end
+
     test "no application's compiled calls reach a layer its dependencies do not" do
       contracts = contracts_modules()
 
