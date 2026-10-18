@@ -4,10 +4,10 @@
 defmodule Sanctum.Gate.BulkContentRefusalLogTest do
   @moduledoc """
   A refused call's request-log row holds its bulk content as size and
-  digest too: a canvas module the handler refuses, a source edit the
-  handler refuses (whose sentence names the edit by position and kind,
-  never its content), and a call refused at admission whose arguments
-  are valid.
+  digest too: a note's body, a canvas module the handler refuses, a
+  source edit the handler refuses (whose sentence names the edit by
+  position and kind, never its content), and a call refused at admission
+  whose arguments are valid.
   """
 
   use ExUnit.Case, async: false
@@ -136,6 +136,24 @@ defmodule Sanctum.Gate.BulkContentRefusalLogTest do
 
     assert %{status: "error", input: input} = Arca.Repo.get(Arca.Schemas.McpLog, call_id)
     assert Jason.decode!(input)["content"] == measured(content)
+  end
+
+  for action <- ["keep", "pin"] do
+    @action action
+    test "a note's body a refused notes.#{action} carries is logged as its size and digest", %{
+      ctx: ctx
+    } do
+      content = "BULK_NOTE_BODY_MARKER"
+      args = %{"action" => @action, "name" => "../not-a-note", "content" => content}
+      {:ok, {_provider, definition}} = Sanctum.Catalog.lookup("notes")
+      assert {:ok, ^args} = Prima.Operation.cast(definition, args)
+      call_id = Prima.UUID7.generate_id("call")
+
+      assert {:error, _} = Sanctum.Gate.call_external("notes", ctx, args, call_id: call_id)
+      assert %{status: "error", input: input} = Arca.Repo.get(Arca.Schemas.McpLog, call_id)
+      refute input =~ content
+      assert Jason.decode!(input)["content"] == measured(content)
+    end
   end
 
   defp source_authority do

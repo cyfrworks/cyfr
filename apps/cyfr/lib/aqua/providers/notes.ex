@@ -90,6 +90,7 @@ defmodule Aqua.Providers.Notes do
             ),
             Arg.new("content", :string,
               required: true,
+              bulk: true,
               description: "keep: what to file. pin: the page — empty content clears it"
             ),
             Arg.new("thread", :string,
@@ -118,6 +119,7 @@ defmodule Aqua.Providers.Notes do
             ),
             Arg.new("content", :string,
               required: true,
+              bulk: true,
               description: "keep: what to file. pin: the page — empty content clears it"
             ),
             Arg.new("thread", :string,

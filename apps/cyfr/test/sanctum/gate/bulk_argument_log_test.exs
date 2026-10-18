@@ -92,6 +92,8 @@ defmodule Sanctum.Gate.BulkArgumentLogTest do
                "build.validate wasm_base64",
                "canvas.write module",
                "file.write content",
+               "notes.keep content",
+               "notes.pin content",
                "source.edit edits[].content",
                "source.write content",
                "thread.attach files[].data"
