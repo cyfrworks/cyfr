@@ -923,10 +923,17 @@ defmodule Compendium.Providers.Registry do
     {:error, {:invalid_argument, "registry.verify_publisher requires 'slug'"}}
   end
 
+  # A push token outlives the session that asks for it: the issuing is
+  # confirmed fresh (`Sanctum.RegistryCredentials.confirm_issuance/4`)
+  # once the caller is known to hold the namespace's bearer, and before
+  # the registry is asked. The label is settled first, so the preview
+  # names the one the token will carry.
   defp handle_gated(%Context{} = ctx, %{"action" => "tokens_issue", "slug" => slug} = args) do
-    label = Map.get(args, "label")
+    label = Map.get(args, "label") || Compendium.Registry.CredentialStore.device_label()
+    registry = Compendium.RegistryHost.canonical_host()
 
     with {:ok, bearer} <- Shared.namespace_bearer(ctx, slug),
+         :ok <- Sanctum.RegistryCredentials.confirm_issuance(ctx, registry, slug, label),
          {:ok, body} <- Compendium.Registry.Client.issue_additional_token(slug, bearer, label) do
       {:ok, body}
     else

@@ -312,6 +312,7 @@ defmodule Sanctum.PairingTest do
         "key.rotate" => :credential_issuance,
         "webhook.create" => :credential_issuance,
         "webhook.rotate" => :credential_issuance,
+        "registry.tokens_issue" => :credential_issuance,
         "pairing.revoke" => :pairing_revocation,
         "person.enroll" => :recovery_material,
         "person.kit" => :recovery_material,

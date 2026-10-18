@@ -125,6 +125,86 @@ defmodule Compendium.Providers.RegistryTest do
     end
   end
 
+  # A push token outlives the session that asks for it (`ARCHITECTURE.md`
+  # §9.3): issuing one waits on a fresh confirmation, whose preview names
+  # what is issued and holds no secret. The registry is a Bypass server,
+  # which fails the test on any request it expects none of.
+  describe "issuing another push token" do
+    setup do
+      bypass = Bypass.open()
+      original_url = Application.get_env(:cyfr, :registry_url)
+      original_scheme = Application.get_env(:cyfr, :registry_scheme)
+
+      on_exit(fn ->
+        restore_env(:cyfr, :registry_url, original_url)
+        restore_env(:cyfr, :registry_scheme, original_scheme)
+      end)
+
+      Application.put_env(:cyfr, :registry_url, "127.0.0.1:#{bypass.port}")
+      Application.put_env(:cyfr, :registry_scheme, "http")
+
+      {person, _user} = Sanctum.TestContext.person!(Sanctum.TestContext.local(:prism))
+      registry = Compendium.RegistryHost.canonical_host()
+
+      :ok =
+        Compendium.Registry.CredentialStore.put_push_token(
+          person,
+          registry,
+          "alice",
+          "cyfr_pt_held_bearer",
+          "personal"
+        )
+
+      {:ok, bypass: bypass, person: person}
+    end
+
+    test "asks a fresh confirmation and reaches no registry until it is proven",
+         %{person: person} do
+      args = %{"action" => "tokens_issue", "slug" => "alice", "label" => "ci-runner"}
+
+      assert {:error, {:confirmation_required, %{id: id, operation: "registry.tokens_issue"}}} =
+               RegistryProvider.handle(person, args)
+
+      {:ok, row} =
+        Arca.PendingConfirmations.get(
+          Sanctum.Context.actor(person),
+          Prima.Confirmation.ref(id)
+        )
+
+      assert row.action == "credential_issuance"
+      preview = Jason.decode!(row.preview)
+      assert preview["operation"] == "registry.tokens_issue"
+      assert preview["resource"] == "alice"
+      assert preview["details"]["label"] == "ci-runner"
+      refute inspect(row) =~ "cyfr_pt_"
+    end
+
+    test "issues the token once the person proves it", %{bypass: bypass, person: person} do
+      Bypass.expect_once(bypass, "POST", "/v1/namespaces/alice/tokens", fn conn ->
+        assert Plug.Conn.get_req_header(conn, "authorization") == [
+                 "Bearer cyfr_pt_held_bearer"
+               ]
+
+        {:ok, raw, conn} = Plug.Conn.read_body(conn)
+        assert Jason.decode!(raw) == %{"label" => "ci-runner"}
+
+        conn
+        |> Plug.Conn.put_resp_header("content-type", "application/json")
+        |> Plug.Conn.resp(201, Jason.encode!(%{"id" => "tok_2", "token" => "cyfr_pt_issued"}))
+      end)
+
+      args = %{"action" => "tokens_issue", "slug" => "alice", "label" => "ci-runner"}
+
+      assert {:ok, body} =
+               Sanctum.TestContext.confirming(person, &RegistryProvider.handle(&1, args))
+
+      assert inspect(body) =~ "cyfr_pt_issued"
+    end
+  end
+
+  defp restore_env(app, key, nil), do: Application.delete_env(app, key)
+  defp restore_env(app, key, value), do: Application.put_env(app, key, value)
+
   describe "gated identity mutations still refuse incomplete args" do
     test "each arg-missing arm answers its own sentence", %{ctx: ctx} do
       for {action, sentence} <- [

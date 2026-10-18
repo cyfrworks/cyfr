@@ -28,6 +28,13 @@ defmodule Sanctum.RegistryCredentials do
         role: "personal", issued_at: iso8601, label: "host-name"}
 
   `label` is stored only when the caller gives one.
+
+  ## Issuing another token
+
+  A push token outlives the session that asks for it, so issuing one at
+  the registry for a namespace the caller holds is a sensitive change
+  (`credential_issuance`, `ARCHITECTURE.md` §9.3), decided by
+  `confirm_issuance/4` before the registry is asked.
   """
 
   require Logger
@@ -152,6 +159,30 @@ defmodule Sanctum.RegistryCredentials do
         {:error, _unreadable} -> {:error, :unavailable}
       end
     end
+  end
+
+  @doc """
+  Decide the caller's issuing of another push token for `namespace_slug`
+  at `registry`, labelled `label`: a credential that outlives the
+  session, so the fresh confirmation `credential_issuance` needs
+  (`Sanctum.Consent.Authz.confirm/3`), consumed at once, since the
+  issuance is one call to the registry that follows. The preview names
+  the namespace, the registry and the label; neither the bearer the
+  registry is asked with nor the token it issues is an argument.
+
+  Answers `:ok`, the consent signal `{:error, {:confirmation_required,
+  ...}}`, or the confirmation's own refusal (`Sanctum.Consent.Authz`).
+  """
+  @spec confirm_issuance(Context.t(), String.t(), String.t(), String.t()) ::
+          :ok | {:error, term()}
+  def confirm_issuance(%Context{} = ctx, registry, namespace_slug, label)
+      when is_binary(registry) and is_binary(namespace_slug) and is_binary(label) do
+    Sanctum.Consent.Authz.confirm(ctx, :credential_issuance, %{
+      operation: "registry.tokens_issue",
+      arguments: %{"registry" => registry, "slug" => namespace_slug, "label" => label},
+      resource: namespace_slug,
+      details: %{"registry" => registry, "label" => label}
+    })
   end
 
   # ---------------------------------------------------------------------------

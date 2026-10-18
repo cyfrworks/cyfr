@@ -413,7 +413,8 @@ defmodule Cyfr.Boundaries do
           "the readiness and failure writes on the row. `Compendium.Provisioning` owns " <>
           "the component work and calls down into it. OCI and registry transports " <>
           "use Sanctum.Network and Sanctum.Egress for validated outbound requests. " <>
-          "A person's push tokens are sealed and read by `Sanctum.RegistryCredentials`; " <>
+          "A person's push tokens are sealed and read by `Sanctum.RegistryCredentials`, " <>
+          "which also decides the fresh confirmation issuing another one needs; " <>
           "removing a component's last version revokes its profiles " <>
           "(`Sanctum.Consent.revoke_source/2`) and disables its webhooks " <>
           "(`Sanctum.Webhook.disable_for_component/2`). " <>
@@ -1991,7 +1992,13 @@ defmodule Cyfr.Boundaries do
       restore_challenge: 1
     ],
     "Sanctum.Refusals" => [classify: 1, classify: 2, code_override: 1, known?: 1, render: 1],
-    "Sanctum.RegistryCredentials" => [delete: 3, get: 3, list: 2, put_push_token: 6],
+    "Sanctum.RegistryCredentials" => [
+      confirm_issuance: 4,
+      delete: 3,
+      get: 3,
+      list: 2,
+      put_push_token: 6
+    ],
     "Sanctum.RequestLog" => [list: 2],
     "Sanctum.Resources" => [list_resource_templates: 0, list_resources: 0, resolve: 1, table: 0],
     "Sanctum.RunningTasks" => [cancel: 1, cancel_handle: 1, release_handle: 1],

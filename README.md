@@ -1017,7 +1017,7 @@ Commands marked with `[i]` support interactive selection when run without argume
 | `cyfr registry probe` | Force a re-probe against cyfr.run (re-mints push tokens) |
 | `cyfr registry get-namespace <slug>` | Inspect a cyfr.run namespace |
 | `cyfr registry publisher claim/verify <domain>` | Claim + DNS-verify a publisher namespace `[i]` |
-| `cyfr registry tokens list/issue/revoke <ns>` | Manage push tokens for a namespace `[i]` |
+| `cyfr registry tokens list/issue/revoke <ns>` | Manage push tokens for a namespace; issuing one needs a fresh confirmation given in Prism `[i]` |
 | `cyfr registry members list/add/update/remove <ns>` | Manage members of a publisher namespace `[i]` |
 | `cyfr registry discover <registry>` | Inspect OCI registry capabilities (distribution discovery) |
 | `cyfr webhook create/get/list/update/revoke/rotate` | Manage inbound HMAC-signed webhooks that trigger a component `[i]` |
