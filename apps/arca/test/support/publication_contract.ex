@@ -719,98 +719,6 @@ defmodule Arca.PublicationContract do
         end
       end
 
-      describe "a revision served at the unit's own path before this shape" do
-        # What the earlier finish left: the revision's objects at the unit's
-        # own path, its prefix removed — laid beneath the overlay.
-        defp serve_at_unit!(actor, unit, adapter) do
-          {revision, _served} = read(actor, unit)
-          prefix = UnitLocator.revision_prefix(unit, revision)
-          {:ok, leaves} = adapter.list_recursive(actor, prefix)
-
-          for leaf <- leaves, List.last(leaf) != UnitLocator.marker_name() do
-            {:ok, bytes} = adapter.get(actor, leaf)
-            :ok = adapter.put(actor, unit ++ Enum.drop(leaf, length(prefix)), bytes)
-          end
-
-          :ok = adapter.delete_tree(actor, prefix)
-          revision
-        end
-
-        test "is read where it is, and the first edit moves it into its prefix under the lease",
-             %{actor: actor, unit: unit, adapter: adapter} do
-          assert {:ok, _} = commit(actor, unit, "one")
-          revision = serve_at_unit!(actor, unit, adapter)
-          assert {:ok, []} = Arca.list_recursive(actor, UnitLocator.staging_prefix(unit))
-
-          # Every reader answers from the unit's own path meanwhile.
-          assert {^revision, served} = read(actor, unit)
-          assert served == whole("one")
-          assert {:ok, "a of one"} = Arca.get(actor, unit ++ ["a.txt"])
-          assert Arca.exists?(actor, unit ++ [@sentinel])
-          assert {:ok, entries} = Arca.list_typed(actor, unit)
-          assert Enum.sort(entries) == [{"a.txt", :file}, {@sentinel, :file}, {"sub", :dir}]
-          assert Arca.Overlay.unit_status(actor, unit) == {:ok, :own}
-          assert {:ok, %{^unit => :own}} = Arca.Overlay.unit_statuses(actor, "components")
-          before = change(actor, unit)
-
-          :ok = Arca.put(actor, unit ++ ["a.txt"], "edited")
-
-          # The revision was adopted as a revision of its own — the pointer
-          # moved to it, the journal records the adoption with the content
-          # the revision had — and the edit landed in its prefix; nothing
-          # stands at the unit's own path, the generation is newer and ready.
-          edited = Map.put(whole("one"), ["a.txt"], "edited")
-          assert {adopted, served} = read(actor, unit)
-          refute adopted == revision
-          assert served == edited
-          {:ok, moved} = Arca.read_subtree(actor, UnitLocator.revision_prefix(unit, adopted))
-          assert moved |> Map.new() |> Map.delete([UnitLocator.marker_name()]) == edited
-          assert {:ok, []} = adapter.list_recursive(actor, unit)
-
-          assert [first, %{prior_revision: ^revision, new_revision: ^adopted} = adoption] =
-                   journal(actor, unit)
-
-          assert adoption.content_identity == first.content_identity
-          assert %{ready: true, source_revision: ^adopted} = after_edit = change(actor, unit)
-          assert after_edit.generation > before.generation
-          assert {:ok, :nothing_pending} = Arca.Overlay.repair_unit(actor, unit)
-        end
-
-        test "is moved into its prefix by repair, and superseded whole by a commit", %{
-          actor: actor,
-          unit: unit,
-          adapter: adapter
-        } do
-          assert {:ok, _} = commit(actor, unit, "one")
-          revision = serve_at_unit!(actor, unit, adapter)
-
-          assert {:ok, :repaired} = Arca.Overlay.repair_unit(actor, unit)
-          assert {adopted, served} = read(actor, unit)
-          refute adopted == revision
-          assert served == whole("one")
-          assert {:ok, []} = adapter.list_recursive(actor, unit)
-
-          assert [_one, %{prior_revision: ^revision, new_revision: ^adopted}] =
-                   journal(actor, unit)
-
-          assert {:ok, :nothing_pending} = Arca.Overlay.repair_unit(actor, unit)
-
-          # Served at the unit's own path again, a commit supersedes it
-          # whole: the new revision in its prefix, the unit's own path
-          # cleared behind it.
-          serve_at_unit!(actor, unit, adapter)
-          assert {:ok, _} = commit(actor, unit, "two")
-          assert {two, served} = read(actor, unit)
-          assert served == whole("two")
-          refute two in [revision, adopted]
-          assert {:ok, []} = adapter.list_recursive(actor, unit)
-          assert staged_revisions(actor, unit) == [two]
-
-          assert [_one, _adoption, %{prior_revision: ^adopted, new_revision: ^two}] =
-                   journal(actor, unit)
-        end
-      end
-
       # ---------------------------------------------------------------------------
       # Writers that lose
       # ---------------------------------------------------------------------------
@@ -998,7 +906,7 @@ defmodule Arca.PublicationContract do
           edit = Task.async(fn -> Arca.put(actor, unit ++ ["a.txt"], "edited") end)
           assert_receive {:parked, writer}, 10_000
 
-          # While the bytes move the unit is pending, never ready.
+          # While the edit is written the unit is pending, never ready.
           pending = change(actor, unit)
           assert %{ready: false} = pending
           assert pending.generation > published.generation
@@ -1017,10 +925,13 @@ defmodule Arca.PublicationContract do
           unit: unit
         } do
           assert {:ok, _} = commit(actor, unit, "one")
+          {revision, _served} = read(actor, unit)
+          retired = UnitLocator.revision_prefix(unit, revision)
           test_pid = self()
 
+          # The removal's tenant delete is the retired revision's prefix.
           Faults.inject(fn op, path ->
-            if op == :delete_tree and path == unit, do: park(test_pid), else: :pass
+            if op == :delete_tree and path == retired, do: park(test_pid), else: :pass
           end)
 
           drop = Task.async(fn -> Arca.Overlay.drop_unit(actor, unit) end)

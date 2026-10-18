@@ -67,13 +67,6 @@ defmodule Arca.StorageGC do
   across it reads `{:error, :not_found}` from then on, as at any unit no
   committed row names.
 
-  A unit that held a revision at its own path before units were served
-  from their prefixes may still hold those bytes once the revision was
-  adopted into a prefix or the unit removed, when the clearing was
-  refused then. Every sweep lists each root's tree and asks the overlay
-  to clear what such a unit still holds at its own path, which it does
-  once nothing reads it there (`Arca.Overlay.collect_unit_path/2`).
-
   ## Audit
 
   `repair/2` audits every committed unit against its journal and its
@@ -86,10 +79,8 @@ defmodule Arca.StorageGC do
   no object anywhere is reported as unrecoverable and left. The one thing
   it gives back is what
   `Arca.Overlay.repair_unit/2` gives back — the draft of a writer that
-  died after its commit, once the token has outlived the lifetime, and a
-  revision served at the unit's own path before units were served from
-  their prefixes, adopted into a prefix of its own as a revision of its
-  own. Objects alone never make or move a pointer: a complete prefix no
+  died after its commit, once the token has outlived the lifetime.
+  Objects alone never make or move a pointer: a complete prefix no
   row names is collected after the grace like any other. A sweep audits
   nothing; the audit is asked for.
 
@@ -140,9 +131,7 @@ defmodule Arca.StorageGC do
   @typedoc """
   What a sweep did. `kept` counts the candidates a recheck saved, by
   reason; `unaged` the prefixes that carried no date and were given one;
-  `unrecognized` the keys in a staging area that are no revision's;
-  `leftovers` the unit paths cleared of what a revision served there
-  before units were served from their prefixes left behind.
+  and `unrecognized` the keys in a staging area that are no revision's.
   """
   @type report :: %{
           examined: non_neg_integer(),
@@ -150,7 +139,6 @@ defmodule Arca.StorageGC do
           kept: %{atom() => non_neg_integer()},
           unaged: non_neg_integer(),
           unrecognized: non_neg_integer(),
-          leftovers: non_neg_integer(),
           errors: [{Arca.Storage.path(), term()}]
         }
 
@@ -189,19 +177,14 @@ defmodule Arca.StorageGC do
           kept: %{},
           unaged: 0,
           unrecognized: listing.unrecognized,
-          leftovers: 0,
           errors: []
         }
         |> collect_each(actor, Enum.take(candidates, limit), opts, dry_run)
 
       report =
-        if dry_run do
-          report
-        else
-          report
-          |> date_unaged(actor, listing, roots, now)
-          |> collect_leftovers(actor)
-        end
+        if dry_run,
+          do: report,
+          else: date_unaged(report, actor, listing, roots, now)
 
       :telemetry.execute(
         [:cyfr, :storage_gc, :sweep],
@@ -327,9 +310,7 @@ defmodule Arca.StorageGC do
   and its objects, giving back what a writer left undone and altering
   no committed revision (the moduledoc's Audit).
 
-  Answers, by unit path: `repaired` — a dead writer's draft released, or
-  a revision served at the unit's own path before units were served from
-  their prefixes adopted into a prefix of its own
+  Answers, by unit path: `repaired` — a dead writer's draft released
   (`Arca.Overlay.repair_unit/2`);
   `intact` (a count) — the pointer's prefix holds exactly the objects the
   journal recorded; `left` — a prefix that is not what was committed, with
@@ -337,9 +318,9 @@ defmodule Arca.StorageGC do
   pointer's revision, `:staged_incomplete` when the revision's completion
   object is gone, `:edited` when the completion object is there and the
   objects do not hash to what the commit recorded — edited in place since,
-  or damaged — and `{:repair_failed, reason}` when the give-back or the
-  move back was refused, `:stale_writer` while another writer holds the
-  unit); `unrecoverable` — a row whose revision holds no object anywhere,
+  or damaged — and `{:repair_failed, reason}` when the give-back was
+  refused, `:stale_writer` while another writer holds the unit);
+  `unrecoverable` — a row whose revision holds no object anywhere,
   reported and left as it is; `orphan_commits` — journal rows whose unit
   row is gone, reported and left.
   """
@@ -381,30 +362,17 @@ defmodule Arca.StorageGC do
 
   # A unit whose revision is in its prefix is proven against the journal
   # and, if its writer died holding the draft, given back; one whose
-  # prefix holds no object is the overlay's to move back from the unit's
-  # own path, or unrecoverable.
+  # prefix holds no object is unrecoverable, and left.
   defp audit(athanor, inner, row, unit, staged) do
     objects = Enum.reject(staged, &marker_key?/1)
 
     if objects == [] do
-      case Arca.Overlay.repair_unit(inner, unit) do
-        {:ok, :repaired} ->
-          :repaired
+      Logger.error(
+        "[Arca.StorageGC] #{Enum.join(unit, "/")} is committed at #{row.current_revision} " <>
+          "and that revision holds no object anywhere; the row is left as it is"
+      )
 
-        {:ok, :nothing_pending} ->
-          :intact
-
-        {:error, :staged_incomplete} ->
-          Logger.error(
-            "[Arca.StorageGC] #{Enum.join(unit, "/")} is committed at #{row.current_revision} " <>
-              "and that revision holds no object anywhere; the row is left as it is"
-          )
-
-          :unrecoverable
-
-        {:error, reason} ->
-          {:left, {:repair_failed, reason}}
-      end
+      :unrecoverable
     else
       with {:ok, newest} <- journal_of(athanor, row),
            {:ok, sameness} <- proven(inner, unit, row.current_revision, newest, objects) do
@@ -538,44 +506,6 @@ defmodule Arca.StorageGC do
     end)
 
     %{report | unaged: length(undated)}
-  end
-
-  # What a revision served at the unit's own path before units were served
-  # from their prefixes left there, once its unit is retired or adopted
-  # and nothing reads it there: one listing of each
-  # root's tree, its staging areas and the units' own paths told apart by
-  # the grammar, and the overlay's call for each unit that still holds
-  # bytes at its own path (`Arca.Overlay.collect_unit_path/2`), which
-  # keeps what a reader may still find there.
-  defp collect_leftovers(report, actor) do
-    inner = internal_actor(actor)
-
-    Enum.reduce(Arca.Storage.overlay_roots(), report, fn root, acc ->
-      case list_under(inner, [root]) do
-        {:ok, keys} ->
-          keys
-          |> Enum.reject(&UnitLocator.staging?/1)
-          |> Enum.map(&Arca.Storage.locate/1)
-          |> Enum.uniq()
-          |> Enum.reduce(acc, fn
-            {:file, unit}, acc -> collect_leftover(acc, inner, unit)
-            {:dir, unit, _sentinel}, acc -> collect_leftover(acc, inner, unit)
-            _above_or_outside, acc -> acc
-          end)
-
-        {:error, reason} ->
-          %{acc | errors: [{[root], reason} | acc.errors]}
-      end
-    end)
-  end
-
-  defp collect_leftover(report, inner, unit) do
-    case Arca.Overlay.collect_unit_path(inner, unit) do
-      {:ok, :collected} -> %{report | leftovers: report.leftovers + 1}
-      {:ok, :kept} -> report
-      {:error, :stale_writer} -> report
-      {:error, reason} -> %{report | errors: [{unit, reason} | report.errors]}
-    end
   end
 
   # ---------------------------------------------------------------------------

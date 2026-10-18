@@ -124,12 +124,13 @@ defmodule Arca.AstraT1ReviewTest do
     result
   end
 
-  defp park_delete(actor) do
+  # A removal of the unit, parked at the tenant's delete of `path`.
+  defp park_delete(actor, path) do
     test = self()
 
     task =
       worker(fn ->
-        ParkDelete.arm(test, self(), @unit)
+        ParkDelete.arm(test, self(), path)
         Arca.delete_tree(actor, @unit)
       end)
 
@@ -153,7 +154,7 @@ defmodule Arca.AstraT1ReviewTest do
   test "an expired remover cannot delete a successor's committed staging", %{actor: actor} do
     assert {:ok, _} = commit(actor, 1)
     {:ok, %{current_revision: before}} = pointer(actor)
-    {removal, remover} = park_delete(actor)
+    {removal, remover} = park_delete(actor, UnitLocator.revision_prefix(@unit, before))
     expire(actor)
     publication = worker(fn -> commit(actor, 2) end)
 
@@ -175,41 +176,5 @@ defmodule Arca.AstraT1ReviewTest do
     assert {:ok, "V2"} = served, inspect(observed)
     assert {:ok, %{current_revision: successor}} = pointer(actor)
     assert successor != before
-  end
-
-  test "a rowless delete cannot erase a first publication that finishes while it is paused", %{
-    actor: actor
-  } do
-    assert {:error, :not_found} = pointer(actor)
-    {removal, remover} = park_delete(actor)
-    publication = {publisher, publisher_ref} = worker(fn -> commit(actor, 1) end)
-
-    early =
-      receive do
-        {:answer, ^publisher, result} ->
-          assert_receive {:DOWN, ^publisher_ref, :process, ^publisher, :normal}, 5_000
-          {:done, result}
-      after
-        1_000 -> :waiting
-      end
-
-    if match?({:done, {:ok, _}}, early), do: assert({:ok, "V1"} = Arca.get(actor, @wasm))
-    send(remover, :proceed)
-    dropped = answer(removal)
-
-    published =
-      case early do
-        {:done, result} -> result
-        :waiting -> answer(publication)
-      end
-
-    published = if published == {:error, :stale_writer}, do: commit(actor, 1), else: published
-    served = Arca.get(actor, @wasm)
-    repair = Arca.Overlay.repair_unit(actor, @unit)
-    observed = %{early: early, drop: dropped, publish: published, repair: repair}
-
-    assert {:ok, _} = published, inspect(observed)
-    assert {:ok, "V1"} = served, inspect(observed)
-    assert {:ok, %{state: "committed"}} = pointer(actor)
   end
 end

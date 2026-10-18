@@ -46,18 +46,20 @@ end
 
 defmodule Arca.OverlayTest.ListingBarrierAdapter do
   @moduledoc false
-  # Parks one writer right after it listed `components/`: the listing it
-  # answers is the real one, taken before the park, so the writer goes on
-  # from what it saw while the test changes the world under it.
+  # Parks one writer right after it listed `components/`'s staging area,
+  # where a root's statuses are read from: the listing it answers is the
+  # real one, taken before the park, so the writer goes on from what it
+  # saw while the test changes the world under it.
   use Arca.Storage.TestDouble
 
   @gate {__MODULE__, :gate}
+  @staging Arca.Storage.UnitLocator.staging_area("components")
 
   # Armed by the writer itself, so a listing by anyone else passes.
   def arm(test_pid), do: :persistent_term.put(@gate, {test_pid, self()})
   def disarm, do: :persistent_term.erase(@gate)
 
-  def list_recursive(actor, ["components"] = path) do
+  def list_recursive(actor, @staging = path) do
     listed = Arca.Adapters.Local.list_recursive(actor, path)
 
     case :persistent_term.get(@gate, nil) do
@@ -366,10 +368,14 @@ defmodule Arca.OverlayTest do
       assert {:ok, "edited"} = Arca.get(actor, @version_dir ++ ["notes.txt"])
     end
 
-    test "a pull replaces whatever stands at a shipped path", %{actor: actor, seed_dir: seed} do
+    test "a pull lands the shipped revision whatever stands at a shipped path", %{
+      actor: actor,
+      seed_dir: seed
+    } do
       # Bytes beneath the overlay at the unit's own path and no row: nothing
       # the athanor holds. The unit reads as available, the pull lands the
-      # shipped revision in its prefix, and the stray bytes go with it.
+      # shipped revision in its prefix, and readers read that, never the
+      # stray bytes.
       :ok = Arca.Adapters.Local.put(actor, @version_dir ++ ["src", "lib.rs"], "fn pwned() {}")
 
       assert Arca.Overlay.unit_status(actor, @version_dir) ==
@@ -381,8 +387,6 @@ defmodule Arca.OverlayTest do
 
       assert {:ok, "fn main() {}"} =
                Arca.get(actor, @version_dir ++ ["src", "lib.rs"])
-
-      assert {:ok, []} = Arca.Adapters.Local.list_recursive(actor, @version_dir)
 
       # A complete unit the athanor wrote at a path a release ships is the
       # shipped copy from then on: a pull puts the shipped bytes there.

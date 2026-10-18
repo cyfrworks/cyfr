@@ -17,7 +17,7 @@ defmodule Arca.StorageAuthorizePathTest do
 
   setup tags do
     # A write inside a unit stamps the unit's pending generation for the
-    # root's projection before its bytes move.
+    # root's projection before its bytes are written.
     Arca.Test.Sandbox.setup!(tags)
 
     base = Path.join(System.tmp_dir!(), "arca_authz_#{System.unique_integer([:positive])}")

@@ -12,10 +12,12 @@ defmodule Compendium.ProjectionReconciler do
   ## The contract it consumes
 
   Arca stamps every change of a unit under a seeded root with a
-  generation, the root's new epoch, pending while its bytes move and
-  ready once they are served (`Arca.StorageProjectionChanges`). The root's
-  row says how far its projection has acknowledged. This module never
-  reads a unit's bytes to learn whether it changed.
+  generation, the root's new epoch, pending while its writer is at work
+  and ready once the change is what readers see — a commit released, a
+  removal's delete returned, an edit written
+  (`Arca.StorageProjectionChanges`). The root's row says how far its
+  projection has acknowledged. This module never reads a unit's bytes to
+  learn whether it changed.
 
   ## The barrier
 
@@ -24,11 +26,11 @@ defmodule Compendium.ProjectionReconciler do
   acknowledged. Equal, and the rows stand. Behind, and the read reconciles
   the root itself, in its own process, before it answers — so a read that
   follows a successful write observes that write with no notification
-  delivered. A change still pending (a move not finished, a write not
+  delivered. A change still pending (a commit not released, a write not
   returned) older than `settle_after_ms` gets one repair attempt through
   the storage API (`Arca.Overlay.repair_unit/2`); a younger one is a
   writer still at work, and the read answers unavailable rather than race
-  its move. What cannot be made ready answers
+  it. What cannot be made ready answers
   `{:error, :projection_unavailable}`; a journal that names another
   revision stays so until the unit is dropped or republished. The read
   path never sleeps.
@@ -226,7 +228,7 @@ defmodule Compendium.ProjectionReconciler do
   end
 
   # One repair attempt for each pending change old enough that its writer
-  # is gone; a younger one is a move still running, never raced. Answers
+  # is gone; a younger one is a writer still at work, never raced. Answers
   # how many were repaired.
   defp repair(actor, root, stuck, opts) do
     cutoff = DateTime.add(DateTime.utc_now(), -settle_after_ms(opts), :millisecond)

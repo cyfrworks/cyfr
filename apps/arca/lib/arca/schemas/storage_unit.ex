@@ -13,7 +13,7 @@ defmodule Arca.Schemas.StorageUnit do
   `current_revision` names the committed, immutable revision readers see
   — a complete object set under the unit's prefix is staging until a
   commit names it. `draft_writer_token` is held by the one writer that
-  owns the unit's next transition — the writer staging and then moving
+  owns the unit's next transition — the writer staging and then committing
   the next revision, or the remover clearing the unit: a commit compares
   it and keeps it, the finish's release and the removal's end clear it,
   so a writer that lost the token cannot commit what it staged or serve

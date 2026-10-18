@@ -53,8 +53,9 @@ defmodule Arca.StorageUnits do
   and compared against it, so members whose own clocks have drifted
   agree which draft is live.
 
-  `abandon_draft/3` gives a draft back without committing, and is how a
-  finish that could not move its bytes hands the unit to repair.
+  `abandon_draft/3` gives a draft back without committing: a writer whose
+  revision was refused or whose finish failed hands the unit back
+  through it, and the collector gives back a dead writer's draft.
 
   ## The projection generation
 
@@ -63,11 +64,11 @@ defmodule Arca.StorageUnits do
   writes the unit's change row at that generation, not ready
   (`Arca.StorageProjectionRoots.advance!/3`); it is announced once the
   transaction commits. `stamped_commit/6` and `stamped_retire/4` answer
-  the generation, which the writer marks ready once the move or the delete
-  it names has finished and the draft is given back
-  (`Arca.StorageProjectionChanges.mark_ready/5`). A retirement writes its tombstone even
-  for a unit no row named before it: the bytes it deletes may have been
-  laid by hand, and the row it makes is the lease it deletes under.
+  the generation, which the writer marks ready once the release or the
+  delete it names has finished and the draft is given back
+  (`Arca.StorageProjectionChanges.mark_ready/5`). A retirement writes its
+  tombstone even for a unit no row named before it, and the row it makes
+  is the lease it holds.
   Registering, abandoning and releasing a draft change nothing a reader
   sees, and stamp nothing.
 
@@ -236,7 +237,7 @@ defmodule Arca.StorageUnits do
   `identity.new_revision`, sets the state `committed` and appends one
   journal row — or does none of it. The draft token stays the writer's:
   the writer holds the unit until `release_served/4`, so nothing lands
-  over the revision while its bytes move. Answers `t:Arca.Schemas.StorageUnit.commit_result/0`:
+  over the revision between its commit and its release. Answers `t:Arca.Schemas.StorageUnit.commit_result/0`:
   `:stale_revision` when the pointer moved, `:stale_writer` when the draft
   is no longer the writer's, `:missing_unit` for a row that is absent,
   retired, retiring or another athanor's, `:not_owner` when the writing
@@ -398,9 +399,9 @@ defmodule Arca.StorageUnits do
   A unit already retired is taken the same way: a removal that died or
   whose delete was refused left bytes the next removal clears under the
   lease. A unit that never had a row gets one, as a writer's registration
-  would give it, and is taken the same way: the bytes a deleter clears
-  may have been laid by hand, and a first publication landing meanwhile
-  is refused or refuses the delete, never erased by it. `{:error,
+  would give it, and is taken the same way: it has no revision to
+  delete, and a first publication landing meanwhile is refused or
+  refuses the removal. `{:error,
   :stale_writer}` when another writer's live draft holds the unit — a
   commit being staged or finished, or another removal — and nothing is
   written: the caller asks again once that writer is done.
