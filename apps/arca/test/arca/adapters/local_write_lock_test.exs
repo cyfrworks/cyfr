@@ -9,11 +9,14 @@ defmodule Arca.Adapters.LocalWriteLockTest do
   read and its rename are one step against every writer, and a reset
   that lands after an edit is what readers keep.
 
-  Adopts Astra's Local CAS probe of 2026-10-17, in the legal order: the
-  replace that owns the lock lands, then the writer that waited for it.
-  The replace is parked between its precondition read and its rename by
-  tracing the adapter's private rename helper in the replace's process
-  and suspending it there.
+  The replace that owns the lock lands, then the writer that waited for
+  it. The replace is parked under the file's lock, at its first call to
+  the VM's file server, the precondition's read, by suspending the file
+  server before the replace starts: it takes the lock, which asks the
+  file server nothing, and stops at its next file operation, wherever the
+  schedule puts it, until the file server is resumed. While it is
+  suspended the test reads files through `:prim_file`, which does not ask
+  the file server.
   """
 
   use ExUnit.Case, async: false
@@ -21,7 +24,6 @@ defmodule Arca.Adapters.LocalWriteLockTest do
   alias Arca.Adapters.Local
 
   @base Path.join(System.tmp_dir!(), "arca_write_lock_#{System.unique_integer([:positive])}")
-  @rename {Local, :write_via_rename, 2}
 
   setup do
     prev_base = Application.fetch_env!(:arca, :base_path)
@@ -32,46 +34,69 @@ defmodule Arca.Adapters.LocalWriteLockTest do
       File.rm_rf!(@base)
     end)
 
-    # Call tracing of the rename helper, on the replace's process alone;
-    # the pattern is the VM's and is restored first. The pattern matches
-    # only a loaded module.
-    on_exit(fn -> :erlang.trace_pattern(@rename, false, [:local]) end)
-    Code.ensure_loaded!(Local)
-    1 = :erlang.trace_pattern(@rename, true, [:local])
-
     {:ok, actor: Arca.Test.Actor.local()}
   end
 
   # A conditional replace of `path` with `bytes`, in a process of its own,
-  # suspended after it has read the precondition and before it renames
-  # its bytes into place. Answers the process; `resume/1` lets it finish
-  # and answers what the replace answered.
+  # parked under the file's lock at its first file operation: the file
+  # server is suspended before it starts. Answers what `resume/1` takes.
   defp park_replace(actor, path, bytes, precondition) do
     test = self()
+    server = Process.whereis(:file_server_2)
+
+    # Registered before the suspend: the file server is the whole VM's.
+    on_exit(fn -> resume_file_server(server) end)
+    true = :erlang.suspend_process(server)
 
     writer =
       spawn(fn ->
-        receive do
-          :go ->
-            send(test, {:replaced, self(), Local.put_if_match(actor, path, bytes, precondition)})
-        end
+        send(test, {:replaced, self(), Local.put_if_match(actor, path, bytes, precondition)})
       end)
 
     on_exit(fn -> if Process.alive?(writer), do: Process.exit(writer, :kill) end)
-    1 = :erlang.trace(writer, true, [:call, {:tracer, test}])
-    send(writer, :go)
 
-    assert_receive {:trace, ^writer, :call, {Local, :write_via_rename, [_physical, ^bytes]}},
-                   5_000
+    # The replace holds the file's lock, and every other writer of the file
+    # waits for it; it cannot have read the file or written anything, since
+    # each needs the file server.
+    Prima.Test.Wait.wait_until(
+      fn -> owns_file_lock?(actor, path) end,
+      5_000,
+      "the replace's lock"
+    )
 
-    true = :erlang.suspend_process(writer)
-    writer
+    %{writer: writer, server: server, physical: Local.build_path(actor, path)}
   end
 
-  defp resume(writer) do
-    true = :erlang.resume_process(writer)
+  # The bytes at the parked replace's path, read past the suspended file
+  # server.
+  defp parked_bytes(%{physical: physical}), do: :prim_file.read_file(physical)
+
+  # Resumes the file server, which lets the replace read, rename and answer,
+  # and answers what it answered.
+  defp resume(%{writer: writer, server: server}) do
+    resume_file_server(server)
     assert_receive {:replaced, ^writer, answer}, 5_000
     answer
+  end
+
+  defp resume_file_server(server) do
+    :erlang.resume_process(server)
+  catch
+    # Not suspended by this test any more.
+    :error, :badarg -> :ok
+  end
+
+  # Whether another process holds `path`'s file lock (`Local`'s own lock
+  # name): this process cannot take it.
+  defp owns_file_lock?(actor, path) do
+    id = {{Local, Local.build_path(actor, path)}, self()}
+
+    if :global.set_lock(id, [node()], 0) do
+      :global.del_lock(id, [node()])
+      false
+    else
+      true
+    end
   end
 
   # `fun` in a process of its own, reporting its answer as `{tag, answer}`.
@@ -87,14 +112,15 @@ defmodule Arca.Adapters.LocalWriteLockTest do
     :ok = Local.put(actor, path, "original")
     {:ok, "original", precondition} = Local.get_for_update(actor, path)
 
-    writer = park_replace(actor, path, "original+edit", precondition)
+    parked = park_replace(actor, path, "original+edit", precondition)
 
-    # The reset cannot land between the replace's read and its rename.
+    # The reset cannot land while the replace holds the file's lock, before
+    # it has read its precondition or renamed its bytes into place.
     concurrently(:reset, fn -> Local.put(actor, path, "reset") end)
     refute_receive {:reset, _}, 300
-    assert {:ok, "original"} = Local.get(actor, path)
+    assert {:ok, "original"} = parked_bytes(parked)
 
-    assert {:ok, _precondition} = resume(writer)
+    assert {:ok, _precondition} = resume(parked)
     assert_receive {:reset, :ok}, 5_000
     assert {:ok, "reset"} = Local.get(actor, path)
   end
@@ -108,16 +134,16 @@ defmodule Arca.Adapters.LocalWriteLockTest do
     :ok = Local.put(actor, dir ++ ["notes.md"], "notes")
     {:ok, "original", precondition} = Local.get_for_update(actor, file)
 
-    writer = park_replace(actor, file, "original+edit", precondition)
+    parked = park_replace(actor, file, "original+edit", precondition)
 
     concurrently(:reset, fn ->
       Local.replace_tree(actor, dir, [{["SKILL.md"], "reset"}, {["other.md"], "other"}])
     end)
 
     refute_receive {:reset, _}, 300
-    assert {:ok, "original"} = Local.get(actor, file)
+    assert {:ok, "original"} = parked_bytes(parked)
 
-    assert {:ok, _precondition} = resume(writer)
+    assert {:ok, _precondition} = resume(parked)
     assert_receive {:reset, :ok}, 5_000
     assert {:ok, "reset"} = Local.get(actor, file)
     assert {:ok, "other"} = Local.get(actor, dir ++ ["other.md"])
@@ -132,13 +158,13 @@ defmodule Arca.Adapters.LocalWriteLockTest do
     :ok = Local.put(actor, file, "original")
     {:ok, "original", precondition} = Local.get_for_update(actor, file)
 
-    writer = park_replace(actor, file, "original+edit", precondition)
+    parked = park_replace(actor, file, "original+edit", precondition)
 
     concurrently(:delete, fn -> Local.delete_tree(actor, dir) end)
     refute_receive {:delete, _}, 300
-    assert {:ok, "original"} = Local.get(actor, file)
+    assert {:ok, "original"} = parked_bytes(parked)
 
-    assert {:ok, _precondition} = resume(writer)
+    assert {:ok, _precondition} = resume(parked)
     assert_receive {:delete, :ok}, 5_000
     assert {:error, :not_found} = Local.get(actor, file)
     assert {:ok, []} = Local.list_recursive(actor, dir)
