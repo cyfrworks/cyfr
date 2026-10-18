@@ -40,8 +40,7 @@ defmodule Sanctum.Gate.ErrorRenderersTest do
     :stale_revision,
     :missing_unit,
     :invalid_objects,
-    :outcome_unknown,
-    {:finish_failed, :enospc}
+    :outcome_unknown
   ]
 
   describe "a unit commit's refusals" do
@@ -56,10 +55,8 @@ defmodule Sanctum.Gate.ErrorRenderersTest do
       # shortly".
       assert Refusal.message(:stale_writer) =~ "fifteen minutes"
 
-      # The two that do not mean "nothing was written": one says the
-      # unit is published, the other that nothing may be assumed — so
-      # neither tells the caller to simply retry.
-      assert Refusal.message({:finish_failed, :enospc}) =~ "published"
+      # The one that does not mean "nothing was written": nothing may be
+      # assumed, so it does not tell the caller to simply retry.
       assert Refusal.message(:outcome_unknown) =~ "check before asking again"
       refute Refusal.message(:outcome_unknown) =~ "retry"
 

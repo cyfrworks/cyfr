@@ -134,7 +134,7 @@ defmodule Arca.CarryActionsTest do
     test "refuses an oversize payload, a twenty-first pending action and another person's", %{
       person: person
     } do
-      big = String.duplicate("x", CarryActions.max_payload_bytes() + 1)
+      big = String.duplicate("x", Prima.Carry.max_payload_bytes() + 1)
 
       assert {:error, :carry_too_large} =
                CarryActions.open(as(person), source(person, %{payload: big}))

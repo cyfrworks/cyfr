@@ -13,9 +13,10 @@ defmodule Arca.CarryActions do
   the fixed return URL, the operation (`join`), the immutable payload and
   its digest, the `key_epoch` and a five-minute lifetime on the database's
   clock. A person holds at most 20 unexpired pending actions, and a
-  payload is at most 8 KiB (`:carry_too_large`). Opening one first ends
-  the person's own actions past their expiry, in the same transaction,
-  clearing their payloads before the bound is counted.
+  payload is at most `Prima.Carry.max_payload_bytes/0`
+  (`:carry_too_large`). Opening one first ends the person's own actions
+  past their expiry, in the same transaction, clearing their payloads
+  before the bound is counted.
 
   Its phases are `pending | delivered | completed | cancelled | expired`,
   each move a conditional write on the phase and revision the caller read.
@@ -58,7 +59,6 @@ defmodule Arca.CarryActions do
   @lifetime_ms 5 * 60 * 1000
   @retention_ms 24 * 60 * 60 * 1000
   @max_pending 20
-  @max_payload_bytes 8 * 1024
   @open ~w(pending delivered)
   @sweep_batch 500
 
@@ -76,10 +76,6 @@ defmodule Arca.CarryActions do
   @doc "The most unexpired pending actions one person holds."
   @spec max_pending() :: pos_integer()
   def max_pending, do: @max_pending
-
-  @doc "The largest payload, in bytes."
-  @spec max_payload_bytes() :: pos_integer()
-  def max_payload_bytes, do: @max_payload_bytes
 
   @doc """
   Open a pending source action: `attrs` names the `:user_id` (the
@@ -644,7 +640,7 @@ defmodule Arca.CarryActions do
       errors != %{} ->
         {:error, {:invalid, errors}}
 
-      byte_size(payload) > @max_payload_bytes ->
+      byte_size(payload) > Prima.Carry.max_payload_bytes() ->
         {:error, :carry_too_large}
 
       true ->

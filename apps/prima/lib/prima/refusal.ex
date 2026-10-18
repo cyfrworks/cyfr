@@ -505,13 +505,6 @@ defmodule Prima.Refusal do
   # A store or a check that could not answer, where nothing was done.
   defp row(:unavailable), do: {:unavailable, "The service could not answer — retry shortly"}
 
-  # The row is committed. The unit is published; only the move of its
-  # objects to where readers read did not finish, and the storage sweep
-  # finishes it.
-  defp row({:finish_failed, _reason}),
-    do:
-      {:internal, "This unit is published; serving its files did not finish and will be repaired"}
-
   # A host call CYFR could not answer at all.
   defp row(:lost),
     do:

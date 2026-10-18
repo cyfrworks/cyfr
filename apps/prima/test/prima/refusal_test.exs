@@ -80,7 +80,6 @@ defmodule Prima.RefusalTest do
     {:invalid_objects, :corrupt},
     {:outcome_unknown, :uncertain},
     {:unavailable, :unavailable},
-    {{:finish_failed, :enospc}, :internal},
     {:lost, :uncertain},
     {{:guest_error, "tool_denied", "Denied"}, :forbidden},
     {{:guest_error, "setup_required", "Set up", %{"need" => "k"}}, :setup_required},
