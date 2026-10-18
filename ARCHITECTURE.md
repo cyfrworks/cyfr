@@ -80,7 +80,7 @@ The order describes dependencies. A request does not have to pass through every 
 
 **Placement.** A new concern goes in the lowest layer whose neighbours do not need it; if two foundations need it, it goes in Prima. A domain owns its state machine, one facade and its providers; a surface owns adapters only.
 
-Two edges the diagram does not draw, both declared in the table: Host's composition modules (`Cyfr.Application`, `CyfrWeb.Endpoint`, `CyfrWeb.Router`) name domains and surfaces to wire them, and a surface reads domain facades directly for the screen's trusted reads (§7) beside dispatching through the gate. No other module copies either edge. The boundary catalog, `Cyfr.Boundaries` (§12), names every module it judges, the surfaces among them, to declare their rows; it is a boundary of its own beside Host's modules rather than one of them, its dependencies are the boundaries its rows name, and nothing depends on it.
+Two edges the diagram does not draw, both declared in the table: Host's composition modules (`Cyfr.Application`, `CyfrWeb.Endpoint`, `CyfrWeb.Router`) name domains and surfaces to wire them, and a surface reads domain facades directly for the screen's trusted reads (§7), and writes a person's own presentation preferences, which carry no authority, beside dispatching through the gate. No other module copies either edge. The boundary catalog, `Cyfr.Boundaries` (§12), names every module it judges, the surfaces among them, to declare their rows; it is a boundary of its own beside Host's modules rather than one of them, its dependencies are the boundaries its rows name, and nothing depends on it.
 
 Emissary is the one surface that also implements a foundation port (§4.2). Its protocol adapters are a surface and its outbound MCP integration implements the proxy port; it is one name for economy of vocabulary, not a precedent for another surface implementing a port. Nothing names Emissary except Host's wiring and the boundary catalog.
 
@@ -162,7 +162,7 @@ A component's egress stays Opus's (§5.6), the control plane's own outbound call
 
 ### Prism: the screen
 
-Owns the system layer, the frame manager, the shell, the server side of the canvases and of the console's tinctures (§7), and the pages and callbacks of browser sign-in, passkey ceremonies included. It authenticates through `Sanctum.Caller`, dispatches mutations and stream opens through the gate, and reads domain facades directly for the shell's own trusted reads.
+Owns the system layer, the frame manager, the shell, the server side of the canvases and of the console's tinctures (§7), and the pages and callbacks of browser sign-in, passkey ceremonies included. It authenticates through `Sanctum.Caller`, dispatches mutations and stream opens through the gate, but for a person's own presentation preferences, which carry no authority and which it writes through Sanctum's facade, and reads domain facades directly for the shell's own trusted reads.
 
 ### Codex: the command line
 
