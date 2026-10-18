@@ -21,8 +21,8 @@
 #       The database's time (`Arca.ServerMetaStorage.now!/0`).
 #
 #   publish SESSION_TOKEN DIR NAME VERSION
-#       The tincture under DIR written into the person's athanor as the
-#       local tincture NAME at VERSION and registered from the tree
+#       The tincture under DIR committed into the person's athanor as the
+#       local tincture NAME at VERSION, one unit, and registered from the tree
 #       (`Compendium.Registry.register_from_arca/3`), the release's own
 #       install path, as tests/grant-proof/fixture.exs publishes its own.
 #
@@ -191,10 +191,15 @@ fn args ->
       actor = Sanctum.Context.actor(ctx)
       unit = ["components", "tinctures", "local", name, version]
 
-      for file <- Path.wildcard(Path.join(dir, "**/*"), match_dot: false), File.regular?(file) do
-        :ok = Arca.put(actor, unit ++ Path.split(Path.relative_to(file, dir)), File.read!(file))
-      end
+      # One commit of the whole unit, its row and its revision, as a local
+      # build lands one (`Arca.Overlay.commit_unit/4`): a plain write under
+      # `components/` needs a unit already committed there.
+      files =
+        for file <- Path.wildcard(Path.join(dir, "**/*"), match_dot: false),
+            File.regular?(file),
+            do: {Path.split(Path.relative_to(file, dir)), File.read!(file)}
 
+      {:ok, _written} = Arca.Overlay.commit_unit(actor, unit, {:files, files}, cap: :exempt)
       {:ok, component} = Compendium.Registry.register_from_arca(ctx, unit, force: true)
       answer.(%{name: name, version: version, component: Map.get(component, :id)})
 

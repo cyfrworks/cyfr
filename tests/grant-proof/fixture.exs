@@ -10,10 +10,10 @@
 # admission, as a run started on Prism's path is admitted.
 #
 #   publish USER_ID DIR NAME VERSION VARIANT
-#       The tincture under DIR written into the person's athanor as the
-#       local tincture NAME at VERSION and registered from the tree, its
-#       manifest as DIR has it but for its version and VARIANT: `base`
-#       as it is, `background` asking to keep running when hidden,
+#       The tincture under DIR committed into the person's athanor as the
+#       local tincture NAME at VERSION, one unit, and registered from the
+#       tree, its manifest as DIR has it but for its version and VARIANT:
+#       `base` as it is, `background` asking to keep running when hidden,
 #       `reworded` that and its need's reason in other words, and `flows`
 #       that and a flow of outside material to the host it keeps.
 #
@@ -109,13 +109,17 @@ fn args ->
         end
         |> Map.put("version", version)
 
-      for file <- Path.wildcard(Path.join(dir, "**/*"), match_dot: false),
-          File.regular?(file),
-          Path.basename(file) != "cyfr-manifest.json" do
-        :ok = Arca.put(actor, unit ++ Path.split(Path.relative_to(file, dir)), File.read!(file))
-      end
+      # One commit of the whole unit, its row and its revision, as a local
+      # build lands one (`Arca.Overlay.commit_unit/4`): a plain write under
+      # `components/` needs a unit already committed there.
+      files =
+        for file <- Path.wildcard(Path.join(dir, "**/*"), match_dot: false),
+            File.regular?(file),
+            Path.basename(file) != "cyfr-manifest.json",
+            do: {Path.split(Path.relative_to(file, dir)), File.read!(file)}
 
-      :ok = Arca.put(actor, unit ++ ["cyfr-manifest.json"], Jason.encode!(manifest))
+      files = files ++ [{["cyfr-manifest.json"], Jason.encode!(manifest)}]
+      {:ok, _written} = Arca.Overlay.commit_unit(actor, unit, {:files, files}, cap: :exempt)
       {:ok, component} = Compendium.Registry.register_from_arca(ctx, unit, force: true)
       answer.(%{name: name, version: version, component: Map.get(component, :id)})
 
