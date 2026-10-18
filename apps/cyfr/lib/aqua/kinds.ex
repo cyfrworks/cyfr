@@ -24,14 +24,15 @@ defmodule Aqua.Kinds do
 
   @doc """
   Whether `tool.action` may ever run without a card: only a read, write or
-  execute kind whose declaration takes a standing allow
+  execute kind whose declaration takes a standing allow at agent scope
   (`Sanctum.Catalog.auto_permitted?/2`). Destructive and external actions
   always ask, so does an action declared `standing: false` (a pin, a
-  scroll's write), and an action whose kind is unknown is refused too —
-  "not known" and "not yet loaded" read the same here, and only the
-  second could otherwise run something destructive with no card. The one
-  rule the AQUA page and the runtime ceiling (`Aqua.ToolGrants.effective/2`)
-  read; the kinds it admits are `Sanctum.VirtualTools.auto_permitted_kinds/0`.
+  scroll's write) or `standing: :thread` (a kept note), and an action
+  whose kind is unknown is refused too — "not known" and "not yet
+  loaded" read the same here, and only the second could otherwise run
+  something destructive with no card. The one rule the AQUA page and the
+  runtime ceiling (`Aqua.ToolGrants.effective/2`) read; the kinds it
+  admits are `Sanctum.VirtualTools.auto_permitted_kinds/0`.
   """
 
   @spec auto_permitted?(String.t(), String.t()) :: boolean()

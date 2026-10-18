@@ -1134,12 +1134,14 @@ defmodule Sanctum.Catalog do
   @doc """
   Whether `tool.action` may ever run without a card: its declaration's
   kind is one `Sanctum.VirtualTools.auto_permitted_kind?/1` admits (a
-  read, write or execute) and the declaration takes a standing allow
-  (`standing` is not `false`, the rule `Sanctum.ToolGrants.check_standing/2`
-  applies to a standing answer). An authored `auto` is a standing answer
-  the agent's file gives for every call, so it obeys the same rule: an
-  action asked on every call, such as `notes.pin`, is never `auto`. A
-  destructive, external or undeclared action is `false` too. The one
+  read, write or execute) and the declaration takes a standing allow at
+  agent scope (no `standing` of its own, the rule
+  `Sanctum.ToolGrants.check_standing/2` applies to a standing answer). An
+  authored `auto` is a standing answer the agent's file gives for every
+  call in every thread, so it obeys the same rule: an action asked on
+  every call (`standing: false`, such as `notes.pin`) or allowed only for
+  one thread (`standing: :thread`, such as `notes.keep`) is never `auto`.
+  A destructive, external or undeclared action is `false` too. The one
   predicate the assistant's runtime ceiling (`Aqua.Kinds.auto_permitted?/2`)
   and the `aqua` tool's write door
   (`Compendium.AquaAgent.validate_tool_policy/2`) read.
@@ -1148,7 +1150,7 @@ defmodule Sanctum.Catalog do
   def auto_permitted?(tool, action) when is_binary(tool) and is_binary(action) do
     case declaration(tool, action) do
       {:ok, %{kind: kind, standing: standing}} ->
-        Sanctum.VirtualTools.auto_permitted_kind?(kind) and standing != false
+        Sanctum.VirtualTools.auto_permitted_kind?(kind) and is_nil(standing)
 
       {:error, :not_found} ->
         false

@@ -210,7 +210,10 @@ defmodule Emissary.MCP.InChainIdentityTest do
       # — the tool_policy it runs under is not its own to widen.
       {"aqua", "create"},
       {"aqua", "update"},
-      {"aqua", "delete"}
+      {"aqua", "delete"},
+      {"aqua", "reset"},
+      {"aqua", "skill_delete"},
+      {"aqua", "skill_reset"}
     ]
 
     auth = granting_authority(in_chain_pairs() ++ verbs)

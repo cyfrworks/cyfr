@@ -118,7 +118,8 @@ defmodule Aqua.ToolGrants do
   key would let a surviving glob answer, and the guest stops at a
   present one. Last the
   ceiling: an `:auto` on a destructive or external action, on one
-  declared to take no standing allow (`standing: false`), or on an
+  declared to take no standing allow at agent scope (`standing: false`
+  or `:thread`), or on an
   action whose kind is unknown, becomes `:ask`
   (`Aqua.Kinds.auto_permitted?/2`); an action a catalogued
   tool does not have is dropped. A hand-edited file reaches the guest

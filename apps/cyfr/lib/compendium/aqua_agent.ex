@@ -327,8 +327,8 @@ defmodule Compendium.AquaAgent do
   a virtual hand's from `Sanctum.VirtualTools`, `:external` for a
   `server:tool`, else the catalogued tool's annotation); only an action
   `Sanctum.Catalog.auto_permitted?/2` admits may be `auto` (a kind that may
-  run without a card, declared to take a standing allow), and an action
-  whose kind is unknown is left to that ceiling.
+  run without a card, declared to take a standing allow at agent scope),
+  and an action whose kind is unknown is left to that ceiling.
 
   `:ok`, a typed refusal, or `{:error, sentence}` — the sentence is the
   person's. A key with no effect on a role is refused at any value, the

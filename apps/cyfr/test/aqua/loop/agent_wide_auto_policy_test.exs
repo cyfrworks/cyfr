@@ -1,13 +1,15 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
-defmodule Aqua.Loop.NeverStandingPolicyTest do
+defmodule Aqua.Loop.AgentWideAutoPolicyTest do
   @moduledoc """
-  An action declared to take no standing allow (`standing: false`: a pin,
-  a scroll's write) is asked on a card at every call, whatever the agent's
-  own file says: the `aqua` tool's door refuses an `auto` for it with the
-  person's sentence, and a stored file that says `auto` anyway reaches the
-  turn demoted to `ask`.
+  An agent's policy holds for every thread, so its `auto` is an
+  agent-wide standing allow: an action declared to take none
+  (`standing: false`: a pin, a scroll's write) or one only for a thread
+  (`standing: :thread`: a kept note) is asked on a card at its call,
+  whatever the agent's own file says. The `aqua` tool's door refuses an
+  `auto` for it with the person's sentence, and a stored file that says
+  `auto` anyway reaches the turn demoted to `ask`.
 
   The loop, the door, the gate and the cards are real; the model is
   scripted.
@@ -25,8 +27,9 @@ defmodule Aqua.Loop.NeverStandingPolicyTest do
   @soul "agent:local.aqua"
   @model "catalyst:local.claude"
 
-  @never_standing [
+  @not_agent_wide [
     {"notes.pin", %{"name" => "page", "content" => "the pinned page"}},
+    {"notes.keep", %{"name" => "status", "content" => "all well"}},
     {"aqua.skill_create", %{"name" => "tidy", "description" => "Tidy up", "content" => "# Tidy"}}
   ]
 
@@ -67,7 +70,7 @@ defmodule Aqua.Loop.NeverStandingPolicyTest do
   end
 
   describe "the aqua tool's door" do
-    for {key, _args} <- @never_standing do
+    for {key, _args} <- @not_agent_wide do
       test "refuses #{key} at auto on the soul with a sentence, and leaves the file as it was",
            %{ctx: ctx} do
         key = unquote(key)
@@ -100,7 +103,7 @@ defmodule Aqua.Loop.NeverStandingPolicyTest do
   end
 
   describe "a stored policy that says auto" do
-    for {key, args} <- @never_standing do
+    for {key, args} <- @not_agent_wide do
       test "for #{key} still raises a card at the call", %{ctx: ctx, thread: thread} do
         key = unquote(key)
         args = unquote(Macro.escape(args))

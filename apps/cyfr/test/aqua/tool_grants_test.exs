@@ -157,11 +157,13 @@ defmodule Aqua.ToolGrantsTest do
       assert ToolGrants.resolve(%{"http.*" => "auto"}, [])["http.delete"] == "ask"
     end
 
-    test "the ceiling demotes an automatic action declared to take no standing allow, written or globbed" do
+    test "the ceiling demotes an automatic action declared to take no agent-wide standing allow, written or globbed" do
       # A pin, an endorsement and a scroll's writes are asked at every
-      # call: a file that says auto for one reaches the guest as ask.
+      # call, and a kept note takes a standing allow for one thread only:
+      # a file that says auto for one reaches the guest as ask.
       authored = %{
         "notes.pin" => "auto",
+        "notes.keep" => "auto",
         "notes.endorse" => "auto",
         "aqua.skill_create" => "auto",
         "aqua.skill_update" => "auto",
@@ -170,6 +172,7 @@ defmodule Aqua.ToolGrantsTest do
 
       assert ToolGrants.resolve(authored, []) == %{
                "notes.pin" => "ask",
+               "notes.keep" => "ask",
                "notes.endorse" => "ask",
                "aqua.skill_create" => "ask",
                "aqua.skill_update" => "ask",
@@ -179,10 +182,15 @@ defmodule Aqua.ToolGrantsTest do
       globbed = ToolGrants.resolve(%{"notes.*" => "auto"}, [])
       assert globbed["notes.pin"] == "ask"
       assert globbed["notes.endorse"] == "ask"
+      assert globbed["notes.keep"] == "ask"
       assert globbed["notes.read"] == "auto"
 
-      for {tool, action} <- [{"notes", "pin"}, {"aqua", "skill_create"}] do
-        assert {:ok, %{kind: :write, standing: false}} =
+      for {tool, action, standing} <- [
+            {"notes", "pin", false},
+            {"aqua", "skill_create", false},
+            {"notes", "keep", :thread}
+          ] do
+        assert {:ok, %{kind: :write, standing: ^standing}} =
                  Sanctum.Catalog.action_declaration("#{tool}.#{action}")
 
         refute Aqua.Kinds.auto_permitted?(tool, action)

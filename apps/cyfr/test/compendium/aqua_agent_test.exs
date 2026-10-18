@@ -164,12 +164,13 @@ defmodule Compendium.AquaAgentTest do
                AquaAgent.validate_tool_policy(%{"files.write" => "auto"}, AquaAgent.soul_type())
     end
 
-    test "an action declared to take no standing allow is never auto, on any agent" do
+    test "an action declared to take no agent-wide standing allow is never auto, on any agent" do
       # A pin, an endorsement, a scroll's writes and a launch are asked at
-      # every call, so an authored auto would be a standing answer they
-      # never take.
+      # every call, and a kept note takes a standing allow for one thread
+      # only, so an authored auto, which holds in every thread, would be a
+      # standing answer they never take.
       for key <-
-            ~w(notes.pin notes.endorse aqua.skill_create aqua.skill_update execution.run) do
+            ~w(notes.pin notes.endorse notes.keep aqua.skill_create aqua.skill_update execution.run) do
         assert {:error, msg} =
                  AquaAgent.validate_tool_policy(%{key => "auto"}, AquaAgent.soul_type())
 
