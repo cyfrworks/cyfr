@@ -40,7 +40,10 @@
 #             suite's partitions have exited (four pools across the
 #             adapter jobs)
 #   cluster   with --close only, after every other leg: the real-member
-#             suite alone on its own database
+#             suite alone on its own database, against an object store
+#             the gate does not start (CYFR_CLUSTER=1 refuses local
+#             storage): the one at CYFR_TEST_S3_ENDPOINT, by default
+#             http://127.0.0.1:9000, as CI's cluster job starts MinIO there
 #   vocab     the CI vocabulary job's own script, read from test.yml
 #   islands   prima, arca and sanctum compiled and tested under
 #             MIX_ENV=test, as CI's island jobs are, so each island's
@@ -53,11 +56,40 @@
 # cluster build in _build/test_pg (postgres its dev compile in
 # _build/dev_pg), and an island builds inside its copy.
 # Not part of this gate, so a closing record names each with its own
-# result: the model catalysts' tests, the seed guests' builds and stamps,
-# the partition scripts' own tests, the image suites, the S3 suite, the
-# release boots, the compose proof (tests/compose-proof), the browser
-# harness and its proofs, the seed and configuration guards, the Go
-# checks, the license and security scanners, and the benchmark.
+# result: these checks of the workflows a pull request runs, each a job
+# (every step of it) or one step of a job, by the names the workflows give
+# them (tests/commit-gate-test.sh holds the list to the workflows exactly):
+#   codex-ci.yml test
+#   codex-ci.yml test-macos
+#   keeper-ci.yml keeper
+#   license-lint.yml spdx-headers
+#   security.yml elixir-audit
+#   security.yml go-audit
+#   security.yml security-scan-harness
+#   security.yml installer-verify
+#   security.yml repo-scan
+#   security.yml npm-audit
+#   test.yml static: Test the model catalysts
+#   test.yml static: Every stamped seed guest is built from its source
+#   test.yml static: Every seed guest carries a stamp, and its crate version is its own
+#   test.yml static: Verify partition infrastructure
+#   test.yml static: The release proofs' shared plumbing
+#   test.yml static: The tag pipeline's graph
+#   test.yml static: The containerd image store switch's cases
+#   test.yml static: The tag pipeline's image publication
+#   test.yml s3-minio
+#   test.yml locus-image
+#   test.yml builder-image
+#   test.yml locus-runtime-image: Runner kills, memory bound, settlement and cleanup
+#   test.yml locus-runtime-image: Each runner in namespaces of its own
+#   test.yml locus-runtime-image: The credential canary
+#   test.yml locus-runtime-image: Scan the image
+#   test.yml locus-backends-image
+#   test.yml release-boot: Boot the release against a fresh ${{ matrix.db }} database
+#   test.yml browser
+#   test.yml seed-guards
+#   test.yml config-seam
+# and, outside CI, the step benchmark (mix cyfr.bench.step).
 # Without -n a suite runs in eight partitions on a host of sixteen cores
 # or more (two schedulers each) and in four on a smaller one. A PostgreSQL
 # partition holds twenty connections, so the server allows twenty times

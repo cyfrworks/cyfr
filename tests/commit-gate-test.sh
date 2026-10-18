@@ -154,10 +154,145 @@ framed() {
 }
 
 # --- what the gate leaves out ------------------------------------------------
-# The header's list of what the gate leaves to CI and the closing record
-# names the compose proof, which no gate leg runs.
-sed -n '/^# Not part of this gate/,/^# Without -n/p' "$gate" | tr '\n' ' ' | grep -q 'compose proof (tests/compose-proof)' ||
-  fail "the gate's exclusion list does not name the compose proof"
+# ci_roster GATE WORKFLOWS: every step of every workflow a pull request
+# runs is one of three things, and nothing else: run by a step of the gate
+# (CI_RUNS below, each naming gate steps the gate has), named on the gate's
+# "Not part of this gate" list (a job there covers every step of it), or
+# setup that checks nothing (CI_SETUP). A list entry, a run or a setup name
+# that matches no step fails too, so the list is the workflows' exactly. A
+# step is keyed by its name, or unnamed by `uses: ACTION` or `run: FIRST
+# LINE`. release.yml runs on a tag alone, and its checks are these
+# workflows, which it calls.
+ci_roster() {
+  python3 -I - "$1" "$2" <<'PY'
+import glob, os, re, sys, yaml
+
+gate_path, wf_dir = sys.argv[1], sys.argv[2]
+gate = open(gate_path).read()
+lines = gate.split("\n")
+start = next(i for i, l in enumerate(lines) if l.startswith("# Not part of this gate"))
+roster = {}
+for l in lines[start + 1:]:
+    if l.startswith("# Without -n"):
+        break
+    m = re.fullmatch(r"#   (\S+\.yml) ([a-z0-9_-]+)(?:: (.+))?", l)
+    if m:
+        roster[(m[1], m[2], m[3])] = 0
+have = set(re.findall(r"\bstep (?:static|postgres|vocab|cluster) ([a-z_]+)", gate))
+have |= {"islands:" + a for a in re.findall(r"'(prima|arca|sanctum|locus) apps/", gate)}
+
+CI_RUNS = {
+    ("dialyzer.yml", "dialyzer", "run: mix compile --warnings-as-errors"): ["compile_sqlite_dev"],
+    ("dialyzer.yml", "dialyzer", "Build PLT"): ["dialyzer"],
+    ("dialyzer.yml", "dialyzer", "Dialyzer"): ["dialyzer"],
+    ("test.yml", "static", "Install the pinned wasm-tools"): ["wasm_tools"],
+    ("test.yml", "static", "Compile with warnings as errors"): ["compile_sqlite_test"],
+    ("test.yml", "static", "Boundary plants"): ["boundary_plants"],
+    ("test.yml", "static", "Static analysis"): ["credo"],
+    ("test.yml", "static", "Check formatting"): ["format"],
+    ("test.yml", "static", "The CLI catalog is the operation table's"): ["opsgen"],
+    ("test.yml", "static", "The configuration guide is the roster's"): ["confguide"],
+    ("test.yml", "static", "The built SDK is its source's"): ["sdk_bundle"],
+    ("test.yml", "static", "The built toolkit is its source's"): ["toolkit_bundle"],
+    ("test.yml", "static", "Every test WASM fixture is its source's build"): ["test_wasm"],
+    ("test.yml", "static", "The image suites' shared plumbing"): ["imagesuite_checks"],
+    ("test.yml", "js-unit", "Install the lint and coverage tools"): ["eslint"],
+    ("test.yml", "js-unit", "Lint the console's JavaScript and the SDK"): ["eslint"],
+    ("test.yml", "js-unit", "The console's JavaScript tests (the SDK, the canvas toolkit, the canvas, the carrier, the system layer and the markdown hook's parse step)"): ["js_suite"],
+    ("test.yml", "test", "Install the pinned wasm-tools"): ["wasm_tools"],
+    ("test.yml", "test", "Compile with warnings as errors"): ["compile_sqlite_test", "compile_pg_test"],
+    ("test.yml", "test", "Compile the dev target with warnings as errors"): ["compile_sqlite_dev", "compile_pg_dev"],
+    ("test.yml", "test", "Run tests"): ["sqlite_suite", "pg_tests", "pg_suite"],
+    ("test.yml", "cluster", "Compile with warnings as errors"): ["compile_pg_test"],
+    ("test.yml", "cluster", "Run the two-node suite"): ["cluster"],
+    ("test.yml", "prima-independence", "Compile and test Prima alone"): ["islands:prima"],
+    ("test.yml", "arca-independence", "Compile and test Arca from its declared apps alone"): ["islands:arca"],
+    ("test.yml", "sanctum-independence", "Compile and test Sanctum from its declared apps alone"): ["islands:sanctum"],
+    ("test.yml", "locus-independence", "Compile and test Locus from its declared apps alone"): ["islands:locus"],
+    ("test.yml", "locus-runtime-image", "The credential canary's own checks"): ["canary_checks"],
+    ("test.yml", "release-boot", "Each run names and drops databases of its own"): ["boot_names"],
+    ("test.yml", "vocabulary-gate", "Tier A/B fossil patterns must be absent"): ["fossils"],
+}
+CI_SETUP = {
+    "uses: actions/checkout", "uses: actions/setup-node", "uses: ./.github/actions/setup-elixir",
+    "run: mix deps.get", "Cache deps", "Cache deps and build", "Cache deps and the prod build",
+    "Read the Rust fixtures' toolchain pin", "Cache cargo-component", "Install cargo-component",
+    "Install the Rust fixtures' toolchain", "Install dependencies", "Use the containerd image store",
+    "Prepare the failed run's kept directory", "Upload the failed run's kept directory",
+    "Start MinIO", "Wait for MinIO", "MinIO logs",
+    "Docker Engine 28 or later on cgroup v2", "Fetch the Locus image", "Load the Locus image",
+}
+
+def key(s):
+    if s.get("name"):
+        return s["name"]
+    if "uses" in s:
+        return "uses: " + s["uses"].split("@")[0]
+    return "run: " + s["run"].strip().split("\n")[0]
+
+errors, runs_seen, setup_seen = [], set(), set()
+for path in sorted(glob.glob(os.path.join(wf_dir, "*.yml"))):
+    wf = os.path.basename(path)
+    spec = yaml.safe_load(open(path))
+    on = spec.get(True, spec.get("on")) or {}
+    if "pull_request" not in on:
+        continue
+    for job, body in spec["jobs"].items():
+        if (wf, job, None) in roster:
+            roster[(wf, job, None)] += 1
+            continue
+        for s in body.get("steps", []):
+            k = key(s)
+            where = []
+            if (wf, job, k) in roster:
+                roster[(wf, job, k)] += 1
+                where.append("the list")
+            if (wf, job, k) in CI_RUNS:
+                runs_seen.add((wf, job, k))
+                where.append("a gate step")
+            if k in CI_SETUP:
+                setup_seen.add(k)
+                where.append("setup")
+            if len(where) != 1:
+                errors.append(f"{wf} {job}: {k!r} is " + (" and ".join(where) if where else
+                              "neither run by the gate nor on its list"))
+for (wf, job, k), n in roster.items():
+    if n == 0:
+        errors.append(f"the list names {wf} {job}" + (f": {k}" if k else "") + ", which no pull request runs")
+for entry, names in CI_RUNS.items():
+    if entry not in runs_seen:
+        errors.append(f"the test's run map names {entry}, which no pull request runs")
+    errors += [f"the test's run map names the gate step {n}, which the gate has not" for n in names if n not in have]
+errors += [f"the test's setup names {k!r}, which no step is" for k in sorted(CI_SETUP - setup_seen)]
+for e in errors:
+    print(e, file=sys.stderr)
+sys.exit(1 if errors else 0)
+PY
+}
+ci_roster "$gate" "$root/.github/workflows" || fail "the gate's exclusion list is not CI's checks less the gate's"
+# Planted: a check added to CI, a job taken off the list, and a list entry
+# CI no longer has each fail it, with the reason.
+mkdir -p "$scratch/roster/wf"
+cp "$root"/.github/workflows/*.yml "$scratch/roster/wf/"
+python3 -I - "$scratch/roster/wf/test.yml" <<'PY'
+import sys
+p = sys.argv[1]; s = open(p).read()
+anchor = "      - name: Tier A/B fossil patterns must be absent\n"
+assert anchor in s
+open(p, "w").write(s.replace(anchor, "      - name: A planted check\n        run: \"true\"\n" + anchor))
+PY
+! ci_roster "$gate" "$scratch/roster/wf" 2>"$scratch/roster/added.err" || fail 'a CI check neither run by the gate nor on its list passed'
+has_line "'A planted check' is neither run by the gate nor on its list" "$scratch/roster/added.err" ||
+  fail "an added CI check failed without its reason: $(cat "$scratch/roster/added.err")"
+grep -vxF '#   test.yml browser' "$gate" > "$scratch/roster/dropped.sh"
+! ci_roster "$scratch/roster/dropped.sh" "$root/.github/workflows" 2>"$scratch/roster/dropped.err" ||
+  fail 'a CI job taken off the list passed'
+has_line "^test.yml browser: 'The frame-facts experiment' is neither" "$scratch/roster/dropped.err" ||
+  fail "a job taken off the list failed without its reason: $(cat "$scratch/roster/dropped.err")"
+sed 's/^#   test.yml config-seam$/&\n#   test.yml static: A check CI dropped/' "$gate" > "$scratch/roster/stale.sh"
+! ci_roster "$scratch/roster/stale.sh" "$root/.github/workflows" 2>"$scratch/roster/stale.err" || fail 'a stale list entry passed'
+has_line '^the list names test.yml static: A check CI dropped, which no pull request runs' "$scratch/roster/stale.err" ||
+  fail "a stale list entry failed without its reason: $(cat "$scratch/roster/stale.err")"
 echo 'ok: what the gate leaves out'
 
 # --- scoped refusal ----------------------------------------------------------
