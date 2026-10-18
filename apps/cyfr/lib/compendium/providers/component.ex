@@ -759,6 +759,11 @@ defmodule Compendium.Providers.Component do
           {:error, :projection_unavailable} ->
             index_unavailable()
 
+          # This member's slot is not live: nothing was removed, and the
+          # refusal reads as itself.
+          {:error, :not_owner} = refused ->
+            refused
+
           {:error, reason} ->
             Logger.error(
               "[Compendium.Providers.Component] component.delete failed: #{inspect(reason)}"

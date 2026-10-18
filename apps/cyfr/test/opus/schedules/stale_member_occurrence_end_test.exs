@@ -12,7 +12,8 @@ defmodule Opus.Schedules.StaleMemberOccurrenceEndTest do
   record, so a member whose slot a successor took over ends nothing,
   records nothing and is told `{:error, :not_owner}` — while its cached
   standing still says it holds the slot, as the scheduler's own gates
-  read it.
+  read it. A stale member's recovery (`recover/4`) moves only the claim:
+  no end under it lands, and the successor's end stands.
   """
 
   # Writes the process-wide standing record and the claimant switch; each
@@ -61,7 +62,7 @@ defmodule Opus.Schedules.StaleMemberOccurrenceEndTest do
       # Control: the schedule row's writer is refused by the slot fence.
       assert {:error, :not_owner} = CronSchedule.record_run(actor, schedule.id, "exec_control")
 
-      {:ok, schedule: row, occurrence: occurrence, boot: boot}
+      {:ok, schedule: row, occurrence: occurrence, boot: boot, slot: slot}
     end
 
     test "the finish moves nothing and runs no outcome closure", %{
@@ -111,15 +112,76 @@ defmodule Opus.Schedules.StaleMemberOccurrenceEndTest do
       assert [%{state: "claimed", claimed_by: ^boot, ended_at: nil}] =
                occurrences(actor, schedule.id)
 
-      occurrence_id = occurrence.id
-
-      assert [] =
-               Arca.Repo.all(
-                 from(r in Arca.Schemas.OutboxRecord,
-                   where: r.source_kind == "schedule_occurrence" and r.source_id == ^occurrence_id
-                 )
-               )
+      assert outcomes(occurrence.id) == []
     end
+
+    test "a stale member's recovery moves only the claim: it ends nothing under it, and the successor's end stands",
+         %{actor: actor, schedule: schedule, occurrence: occurrence, boot: boot, slot: slot} do
+      # Recovery is not an end: the stale member can move the claim ...
+      assert :ok = ScheduleOccurrences.recover(actor, occurrence.id, boot, "stale-recoverer")
+
+      assert {:ok, %{state: "claimed", claimed_by: "stale-recoverer", ended_at: nil}} =
+               ScheduleOccurrences.get(actor, occurrence.id)
+
+      # ... but ends nothing under it and files no outcome.
+      assert {:error, :not_owner} =
+               ScheduleOccurrences.finish(
+                 actor,
+                 occurrence.id,
+                 "stale-recoverer",
+                 nil,
+                 "completed"
+               )
+
+      assert {:error, :not_owner} =
+               ScheduleOccurrences.settle_dead(actor, occurrence.id, "stale-recoverer", nil)
+
+      assert {:error, :not_owner} =
+               Scheduler.complete(
+                 schedule,
+                 occurrence,
+                 "exec_stale",
+                 %{"ran" => true},
+                 "stale-recoverer"
+               )
+
+      assert outcomes(occurrence.id) == []
+
+      # The successor, holding the slot, recovers the claim and ends it ...
+      successor = %{slot | owner: slot.node <> "#boot_b", generation: slot.generation + 1}
+      ControlPlane.record_slot(successor)
+      ControlPlane.record_generation(successor.generation)
+
+      assert :ok =
+               ScheduleOccurrences.recover(
+                 actor,
+                 occurrence.id,
+                 "stale-recoverer",
+                 successor.owner
+               )
+
+      assert {:ok, 1} =
+               ScheduleOccurrences.finish(actor, occurrence.id, successor.owner, nil, "completed")
+
+      # ... and a later recovery by the stale member cannot take the ended row.
+      ControlPlane.record_slot(slot)
+      ControlPlane.record_generation(slot.generation)
+      assert :held = ScheduleOccurrences.recover(actor, occurrence.id, successor.owner, boot)
+
+      owner = successor.owner
+
+      assert {:ok, %{state: "completed", claimed_by: ^owner}} =
+               ScheduleOccurrences.get(actor, occurrence.id)
+    end
+  end
+
+  # The outcome records filed for one occurrence.
+  defp outcomes(occurrence_id) do
+    Arca.Repo.all(
+      from(r in Arca.Schemas.OutboxRecord,
+        where: r.source_kind == "schedule_occurrence" and r.source_id == ^occurrence_id
+      )
+    )
   end
 
   defp create_schedule(ctx) do

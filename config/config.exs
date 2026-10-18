@@ -299,7 +299,7 @@ config :arca, Arca.Retention,
   # of an uncertain write, so it is kept as long as a retained payload and
   # not as long as the execution row it hangs from.
   write_intent_days: 30,
-  # Days a staged unit revision no pointer, draft or pin keeps is left
+  # Days a staged unit revision no pointer or draft keeps is left
   # before the storage sweep collects it (`Arca.StorageGC`). One day is
   # longer than any commit and short enough that a writer that died does
   # not hold its bytes against the athanor's cap for a week.

@@ -883,13 +883,15 @@ defmodule Compendium.Registry do
   Returns `{:error, :bundled}` for a bundled component, edited or not;
   `reset/4` restores one. User and remote components are deleted from
   storage before their rows and associations; storage failure retains the
-  row. Returns `{:ok, :deleted}`.
+  row. A member whose slot is not live removes nothing and is answered
+  the ownership refusal itself, `{:error, :not_owner}`, never a storage
+  failure. Returns `{:ok, :deleted}`.
 
   Optionally pass a publisher to disambiguate components with the same
   name/version.
   """
   @spec delete(Context.t(), String.t(), String.t(), String.t() | nil) ::
-          {:ok, :deleted} | {:error, :not_found | :bundled | term()}
+          {:ok, :deleted} | {:error, :not_found | :bundled | :not_owner | term()}
   def delete(%Context{} = ctx, name, version, publisher_filter \\ nil)
       when is_binary(name) and is_binary(version) do
     with :ok <- ProjectionReconciler.await(ctx, @root),
@@ -1891,6 +1893,11 @@ defmodule Compendium.Registry do
         maybe_remove_empty_dir(ctx, publisher_dir)
 
         :ok
+
+      # The member's slot is not live: the unit's retirement refused it with
+      # nothing removed, and the caller is told so as itself.
+      {:error, :not_owner} = refused ->
+        refused
 
       {:error, reason} ->
         {:error, {:storage_delete_failed, reason}}

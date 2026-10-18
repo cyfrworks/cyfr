@@ -585,6 +585,11 @@ defmodule Compendium.Providers.Aqua do
         {:error, :not_found} ->
           {:error, {:not_found, "Soul or role", name}}
 
+        # This member's slot is not live: nothing was removed, and the
+        # refusal reads as itself.
+        {:error, :not_owner} = refused ->
+          refused
+
         {:error, reason} ->
           Logger.error(
             "[Compendium.Providers.Aqua] aqua.delete #{name} failed: #{inspect(reason)}"
@@ -615,6 +620,11 @@ defmodule Compendium.Providers.Aqua do
         resync_index(ctx)
         files = Enum.map(Compendium.AquaTemplate.files(), &Enum.join(&1, "/"))
         {:ok, %{reset: true, reverted: reverted, kept: kept, files: files}}
+
+      # A removal or a restore refused for this member's slot: the reset
+      # stopped there, and the refusal reads as itself.
+      {:error, :not_owner} = refused ->
+        refused
 
       {:error, reason} ->
         Logger.error("[Compendium.Providers.Aqua] aqua.reset failed: #{inspect(reason)}")
@@ -805,6 +815,9 @@ defmodule Compendium.Providers.Aqua do
 
         {:error, :not_found} ->
           {:error, {:not_found, "Scroll", name}}
+
+        {:error, :not_owner} = refused ->
+          refused
 
         {:error, reason} ->
           Logger.error(

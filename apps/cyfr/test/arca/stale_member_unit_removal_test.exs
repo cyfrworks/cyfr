@@ -12,6 +12,11 @@ defmodule Arca.StaleMemberUnitRemovalTest do
   holds the slot, or has already read it lost while a handler admitted
   earlier goes on. The fence is the retirement's own transaction, never
   the entry gate the removal passed on its way in.
+
+  The refusal reaches the person as itself: a component's deletion, an
+  AQUA role's and a file's each answer `:not_owner`, so the console and
+  an MCP caller read the ownership refusal's class and sentence, never a
+  storage failure.
   """
 
   # Writes the process-wide standing record, the claimant switch and the
@@ -26,6 +31,7 @@ defmodule Arca.StaleMemberUnitRemovalTest do
   alias Arca.StorageUnits
 
   @sentinel "cyfr-manifest.json"
+  @wasm File.read!(Path.join(__DIR__, "../support/test_wasm/math.wasm"))
   @observer :stale_member_unit_removal_observer
 
   @slot_keys [
@@ -183,6 +189,89 @@ defmodule Arca.StaleMemberUnitRemovalTest do
         assert Arca.Adapters.Local.get(actor, physical) == {:ok, body("two")}
       end)
     end
+  end
+
+  describe "a removal refused for the slot, as its caller is told" do
+    setup do
+      Arca.Cache.init()
+      api = Sanctum.TestContext.local(:api)
+      Sanctum.TestContext.ready!(api.athanor_id)
+      {:ok, api: api}
+    end
+
+    test "a component's deletion answers the ownership refusal and keeps the component",
+         %{ctx: ctx, api: api, actor: actor} do
+      slot = claimant!("component")
+      name = "fence-component-#{System.unique_integer([:positive])}"
+
+      assert {:ok, _} =
+               Compendium.Registry.publish_bytes(api, @wasm, %{
+                 name: name,
+                 version: "1.0.0",
+                 type: "catalyst"
+               })
+
+      unit = ["components", "catalysts", "local", name, "1.0.0"]
+      assert {:ok, manifest} = Arca.get(actor, unit ++ [@sentinel])
+      :ok = take_over!(slot)
+
+      args = %{"action" => "delete", "reference" => "catalyst:local.#{name}:1.0.0"}
+      assert {:error, :not_owner} = Compendium.Providers.Component.handle(api, args)
+      assert_ownership_refusal(ctx, "component", args)
+
+      assert {:ok, ^manifest} = Arca.get(actor, unit ++ [@sentinel])
+      assert {:ok, _} = Compendium.Registry.get(api, name, "1.0.0", "local")
+    end
+
+    test "an AQUA role's deletion answers the ownership refusal and keeps the role",
+         %{ctx: ctx, api: api, actor: actor} do
+      slot = claimant!("aqua")
+      name = "fence-role-#{System.unique_integer([:positive])}"
+      role = Compendium.AquaPath.role_file(name)
+      assert :ok = Arca.put(actor, role, "# #{name}\n")
+      :ok = take_over!(slot)
+
+      args = %{"action" => "delete", "name" => name}
+      assert {:error, :not_owner} = Compendium.Providers.Aqua.handle(api, args)
+      assert_ownership_refusal(ctx, "aqua", args)
+
+      assert Arca.get(actor, role) == {:ok, "# #{name}\n"}
+    end
+
+    test "a file's removal through the file tool answers the ownership refusal and keeps the file",
+         %{ctx: ctx, actor: actor} do
+      slot = claimant!("file")
+      name = "fence-file-#{System.unique_integer([:positive])}"
+      role = Compendium.AquaPath.role_file(name)
+      assert :ok = Arca.put(actor, role, "# #{name}\n")
+      :ok = take_over!(slot)
+
+      path = Enum.join(role, "/")
+      assert {:error, :not_owner} = Arca.Files.delete(actor, path)
+      assert_ownership_refusal(ctx, "file", %{"action" => "delete", "path" => path})
+
+      assert Arca.get(actor, role) == {:ok, "# #{name}\n"}
+    end
+  end
+
+  # The refusal as the console shows it and as an MCP caller reads it: the
+  # ownership refusal's own class and sentence.
+  defp assert_ownership_refusal(ctx, tool, args) do
+    sentence = Prima.Refusal.message(:not_owner)
+
+    assert {:error, reason} = PrismWeb.Ops.call_tool(ctx, tool, args)
+    assert %Prima.Refusal{class: :not_owner} = Sanctum.Refusals.classify(reason)
+    assert PrismWeb.Ops.error_message(reason) == sentence
+
+    message = %Prima.MCP.Message{
+      type: :request,
+      id: 1,
+      method: "tools/call",
+      params: %{"name" => tool, "arguments" => args}
+    }
+
+    assert {:ok, %{"isError" => true, "content" => [%{"type" => "text", "text" => ^sentence}]}} =
+             Emissary.MCP.Router.dispatch(ctx, message)
   end
 
   defp body(tag), do: ~s({"type":"catalyst","revision":"#{tag}"})

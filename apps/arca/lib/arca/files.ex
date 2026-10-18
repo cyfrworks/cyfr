@@ -253,7 +253,9 @@ defmodule Arca.Files do
   ships refuses; a shaped folder above its units refuses too — units go
   one at a time, by their own verbs. The server's store of unit
   revisions, a shaped folder's `.staging/`, refuses as
-  `{:reserved_path, path}` (`Arca.Overlay.reserved/1`).
+  `{:reserved_path, path}` (`Arca.Overlay.reserved/1`). A unit's removal
+  by a member whose slot is not live removes nothing and refuses as
+  `:not_owner`.
   """
   @spec delete(Prima.Actor.t(), String.t()) :: {:ok, %{deleted: String.t()}} | {:error, term()}
   def delete(%Prima.Actor{} = actor, path) when is_binary(path) do
@@ -597,6 +599,10 @@ defmodule Arca.Files do
 
   defp cap_message(cap),
     do: "The athanor's storage is at its limit (#{cap} bytes) — remove something first"
+
+  # A write or removal refused for this member's slot (a unit's commit or
+  # retirement) changed nothing, and reads as the ownership refusal itself.
+  defp storage_error(_verb, _path, :not_owner), do: {:error, :not_owner}
 
   defp storage_error(verb, path, reason) do
     Logger.error("[Arca.Files] #{verb} #{path} failed: #{inspect(reason)}")
