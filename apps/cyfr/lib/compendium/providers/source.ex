@@ -431,13 +431,32 @@ defmodule Compendium.Providers.Source do
   # later one names.
   defp apply_edits(lines, edits) do
     edits
-    |> Enum.sort_by(&(-start_of(&1)))
-    |> Enum.reduce_while({:ok, lines}, fn edit, {:ok, acc} ->
+    |> Enum.with_index(1)
+    |> Enum.sort_by(fn {edit, _position} -> -start_of(edit) end)
+    |> Enum.reduce_while({:ok, lines}, fn {edit, position}, {:ok, acc} ->
       case apply_edit(acc, edit) do
         {:ok, next} -> {:cont, {:ok, next}}
+        :malformed -> {:halt, malformed(edit, position)}
         error -> {:halt, error}
       end
     end)
+  end
+
+  # An edit off its shape is named by its position in the list and its
+  # kind, never by its content, which a refusal's sentence would carry into
+  # the request log's error (the argument itself is logged as its size and
+  # digest).
+  defp malformed(edit, position) do
+    kind =
+      case edit do
+        %{"action" => action} when action in ["replace", "insert", "delete"] -> action
+        _ -> "an unknown kind"
+      end
+
+    {:error,
+     {:invalid_argument,
+      "edit #{position} (#{kind}) is not {action: replace|insert|delete, start, end, " <>
+        "content}: replace and delete take start and end, insert takes start"}}
   end
 
   defp start_of(%{"start" => start}) when is_integer(start), do: start
@@ -466,11 +485,7 @@ defmodule Compendium.Providers.Source do
     end
   end
 
-  defp apply_edit(_lines, edit),
-    do:
-      {:error,
-       {:invalid_argument,
-        "each edit is {action: replace|insert|delete, start, end, content}: #{inspect(edit)}"}}
+  defp apply_edit(_lines, _edit), do: :malformed
 
   defp content_of(%{"content" => content}) when is_binary(content), do: content
   defp content_of(_), do: ""

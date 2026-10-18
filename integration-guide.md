@@ -835,7 +835,7 @@ cyfr schedule update <schedule_id> --missed-runs skip
 
 ### MCP Request Logs
 
-Every MCP tool call is recorded with its input and output, status, and duration; an argument that carries file content (a file's or an attachment's bytes, a role file's text, a WASM binary) is recorded as its size and SHA-256 digest, never its content. Inspect logs via Sanctum's `mcp_log` tool (service `sanctum`) or `cyfr log` CLI commands:
+Every MCP tool call is recorded with its input and output, status, and duration; an argument that carries file content (a file's or an attachment's bytes, a role file's text, a canvas's module, a WASM binary) is recorded as its size and SHA-256 digest, never its content. Inspect logs via Sanctum's `mcp_log` tool (service `sanctum`) or `cyfr log` CLI commands:
 
 ```bash
 cyfr log list                              # Recent logs

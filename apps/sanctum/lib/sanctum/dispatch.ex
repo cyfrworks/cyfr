@@ -607,7 +607,11 @@ defmodule Sanctum.Dispatch do
       name: name,
       inserted_at: inserted_at,
       recorded?: Sanctum.Catalog.recorded?(name, action),
-      projection: %{method: Keyword.get(opts, :method) || "tools/call", input: logged_args}
+      projection: %{method: Keyword.get(opts, :method) || "tools/call", input: logged_args},
+      # The arguments as the caller sent them, held for a refusal's check
+      # against their declarations (`undeclared_withheld/1`) and never
+      # stored: the row holds `logged_args`.
+      raw_input: args
     }
 
     opts = opts |> Keyword.put(:action, action) |> Keyword.put(:audit, audit)
@@ -657,20 +661,26 @@ defmodule Sanctum.Dispatch do
   end
 
   # A refused call's row holds no argument its own declaration refuses:
-  # each top-level argument the operation declares whose value fails that
-  # declaration, as the cast checks it (`Prima.Arg.cast/2`), is the
-  # sanitizer's placeholder, so a malformed value — whatever it carries —
-  # never reaches the log. An argument the operation does not declare, and
-  # a tool the catalog does not hold, are left to the row's sanitizer
+  # each top-level argument the operation declares whose value, as the
+  # caller sent it, fails that declaration, as the cast checks it
+  # (`Prima.Arg.cast/2`), is the sanitizer's placeholder, so a malformed
+  # value — whatever it carries — never reaches the log; one that passes
+  # is logged as the row's projection holds it, bulk content as its size
+  # and digest. An argument the operation does not declare, and a tool the
+  # catalog does not hold, are left to the row's sanitizer
   # (`Sanctum.RequestLog`), as every input is.
-  defp undeclared_withheld(%{projection: %{input: input} = projection} = audit)
-       when is_map(input) do
-    case declared_args(audit.name, input) do
+  defp undeclared_withheld(%{projection: %{input: input} = projection, raw_input: raw} = audit)
+       when is_map(input) and is_map(raw) do
+    case declared_args(audit.name, raw) do
       declared when map_size(declared) == 0 ->
         audit
 
       declared ->
-        input = Map.new(input, fn {key, value} -> {key, withheld(declared, key, value)} end)
+        input =
+          Map.new(input, fn {key, logged} ->
+            {key, withheld(declared, key, Map.get(raw, key), logged)}
+          end)
+
         %{audit | projection: %{projection | input: input}}
     end
   end
@@ -688,12 +698,12 @@ defmodule Sanctum.Dispatch do
     end
   end
 
-  defp withheld(declared, key, value) do
+  defp withheld(declared, key, sent, logged) do
     with %Prima.Arg{} = arg <- Map.get(declared, key),
-         {:error, _message} <- Prima.Arg.cast([arg], %{key => value}) do
+         {:error, _message} <- Prima.Arg.cast([arg], %{key => sent}) do
       Prima.Sanitizer.placeholder()
     else
-      _ -> value
+      _ -> logged
     end
   end
 

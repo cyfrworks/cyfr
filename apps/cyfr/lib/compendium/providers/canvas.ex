@@ -77,6 +77,7 @@ defmodule Compendium.Providers.Canvas do
             ),
             Arg.new("module", :string,
               required: true,
+              bulk: true,
               description:
                 "write: the canvas's module, the JavaScript the toolkit runs " <>
                   "(at most #{Compendium.Canvas.module_max_bytes()} bytes)"
