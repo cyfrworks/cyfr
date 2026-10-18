@@ -423,7 +423,7 @@ The frame's document is sandboxed without `allow-same-origin`, so its origin is 
 | Directive | Value | So the tincture |
 |---|---|---|
 | `script-src` | `'self'`, the page's nonce, `'wasm-unsafe-eval'` | loads scripts and module scripts from the origin and compiles WebAssembly; no inline script but the SDK, no `eval` |
-| `worker-src` | `'self' blob:` | runs workers from its own files or from `blob:` URLs (inline workers) |
+| `worker-src` | `'self' blob:` | runs workers from `blob:` URLs its page makes from code the site served: a frame's origin is `null`, so it starts no worker from a URL of the site |
 | `connect-src` | the endpoint's origin and `https://` each `tincture.connect` domain | fetches only its own files, the endpoint and the domains it declares; each declared domain is an exit, reached only by the source classes its `caps.flows` lets go there |
 | `img-src`, `media-src`, `font-src` | the origin, plus `data:` and `blob:` where they apply | decodes images, audio and fonts it ships or generates |
 | `style-src` | `'self' 'unsafe-inline'` | uses stylesheets and inline styles |

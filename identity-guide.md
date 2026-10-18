@@ -15,7 +15,7 @@ Both are sealed at your home, each under its own purpose, apart from every athan
 
 **Enrolling** gives you an identifier (`per_…`), the hash of the first entry of your identity's log. It never changes. The log lives at one **directory**, which orders every change of your keys; homes that rely on your identity read your current keys there, never from your home, which may be the stolen one. A person who never enrolls keeps their keys, their home and their local devices, and never touches a directory.
 
-Your home's settings page shows your identifier, the directory, and the head of your log (its `key_epoch`: the entry that introduced your current live key).
+Your home's settings page shows your identifier, the directory, and the head of your log (its `key_epoch`: the hash of the entry at the log's head, which every rotation and every recovery moves).
 
 ### Choosing the directory
 
