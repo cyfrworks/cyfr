@@ -926,7 +926,7 @@ defmodule Sanctum.Dispatch do
   # The adapter's runner. Inline is the in-process call: the handler on the
   # caller's own process, with a raised authorization refusal answered as
   # the refusal it is and any other crash contained to this call.
-  # A handler that does not answer is answered by `unanswered/4`, on
+  # A handler that does not answer is answered by `unanswered/3`, on
   # either plane and under either runner.
   defp execute_tool_call(name, ctx, opts, execute_fn) do
     action = Keyword.get(opts, :action)
@@ -949,14 +949,14 @@ defmodule Sanctum.Dispatch do
           Prima.LogFilter.format_exception(:error, exception, __STACKTRACE__)
       )
 
-      unanswered(op, "crashed", {:crashed, "Tool #{name} crashed"})
+      unanswered(op, :crashed, {:crashed, "Tool #{name} crashed"})
   catch
     :exit, reason ->
       Logger.error(
         "[Sanctum.Dispatch] Tool #{name} exited: #{Prima.LogFilter.inspect_reason(reason)}"
       )
 
-      unanswered(op, "exited", {:exit, "Tool #{name} exited unexpectedly"})
+      unanswered(op, :exited, {:exit, "Tool #{name} exited unexpectedly"})
   end
 
   defp run_supervised({name, _action} = op, ctx, opts, execute_fn) do
@@ -1027,27 +1027,27 @@ defmodule Sanctum.Dispatch do
           # The tuple carries only the tool's name — the exception's own
           # message can hold a query, a path, or the offending bytes, and
           # this tuple renders verbatim on the wire (`Prima.Refusal.message/1`).
-          unanswered(op, "crashed", {:crashed, "Tool #{name} crashed"})
+          unanswered(op, :crashed, {:crashed, "Tool #{name} crashed"})
 
         {:exit, @not_started} ->
           {:error, {:cancelled, "Tool #{name} was cancelled"}}
 
         {:exit, :cancelled} ->
-          unanswered(op, "was cancelled", {:cancelled, "Tool #{name} was cancelled"})
+          unanswered(op, :cancelled, {:cancelled, "Tool #{name} was cancelled"})
 
         {:exit, reason} ->
           Logger.error(
             "[Sanctum.Dispatch] Tool #{name} exited: #{Prima.LogFilter.inspect_reason(reason)}"
           )
 
-          unanswered(op, "exited", {:exit, "Tool #{name} exited unexpectedly"})
+          unanswered(op, :exited, {:exit, "Tool #{name} exited unexpectedly"})
 
         nil ->
           Logger.error("[Sanctum.Dispatch] Tool #{name} timed out after #{@tool_timeout_ms}ms")
 
           unanswered(
             op,
-            "timed out",
+            :timed_out,
             {:timeout, "Tool #{name} timed out after #{@tool_timeout_ms}ms"}
           )
       end
@@ -1065,8 +1065,27 @@ defmodule Sanctum.Dispatch do
   defp unanswered({name, action}, how, ordinary) do
     if replay_safe?(name, action),
       do: {:error, ordinary},
-      else: {:error, {:uncertain, "Tool #{name} #{how}; its outcome is unknown"}}
+      else: {:error, {:uncertain, uncertain_message(name, how)}}
   end
+
+  @stopped %{
+    crashed: "crashed",
+    exited: "exited",
+    cancelled: "was cancelled",
+    timed_out: "timed out"
+  }
+
+  @doc """
+  The sentence a call answers `{:error, {:uncertain, sentence}}` with when
+  tool `name`'s handler stopped once it may have acted, by how it stopped:
+  `"Tool <name> crashed; its outcome is unknown"`, and likewise for
+  `:exited`, `:cancelled` and `:timed_out`. Its one definition: the gate
+  answers with it and the component guide quotes it.
+  """
+  @spec uncertain_message(String.t(), :crashed | :exited | :cancelled | :timed_out) ::
+          String.t()
+  def uncertain_message(name, how) when is_map_key(@stopped, how),
+    do: "Tool #{name} #{Map.fetch!(@stopped, how)}; its outcome is unknown"
 
   # Run from inside the task. `:cancelled` or `:released` from either
   # registration means the handler must not run.

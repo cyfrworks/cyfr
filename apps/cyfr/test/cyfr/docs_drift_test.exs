@@ -1139,8 +1139,16 @@ defmodule Cyfr.DocsDriftTest do
   # `Prima.Refusal`: exactly one row whose first cell is the entry's,
   # quoting the sentence the person or guest reads. `{class}` in a cell is
   # the refusal's class, so a row that names its class holds that too.
+  # A write into a version directory no committed revision names reaches a
+  # storage guest as `storage_path_denied` with the `:no_unit` sentence
+  # (`Opus.GuestStorage`); an in-chain call whose handler stopped once it
+  # may have acted reaches a formula as `uncertain` with the gate's
+  # sentence (`Sanctum.Dispatch.uncertain_message/2`, through
+  # `Opus.Host.Children`).
   @quoted_refusals [
-    {{:reserved_path, ["aqua", ".staging"]}, "`{class}` (reserved path)"}
+    {{:reserved_path, ["aqua", ".staging"]}, "`{class}` (reserved path)"},
+    {:no_unit, "`storage_path_denied`"},
+    {{:uncertain, Sanctum.Dispatch.uncertain_message("<name>", :crashed)}, "`uncertain`"}
   ]
 
   test "component-guide's rows that quote a refusal hold its class and sentence" do
@@ -1161,37 +1169,6 @@ defmodule Cyfr.DocsDriftTest do
       assert row =~ ~s("#{message}"),
              "component-guide.md's #{cell} row does not quote #{inspect(reason)}'s sentence"
     end
-  end
-
-  # Two guest error rows quote what the guest reads. A write into a version
-  # directory no committed revision names reaches a storage guest as
-  # `storage_path_denied` with the `:no_unit` refusal's sentence
-  # (`Opus.GuestStorage`); an in-chain call whose handler stopped once it
-  # may have acted reaches a formula as `uncertain` with the gate's
-  # sentence (`Sanctum.Dispatch`, through `Opus.Host.Children`).
-  test "component-guide's storage_path_denied and uncertain rows quote the sentences the guest reads" do
-    guide = File.read!(Path.join(@repo_root, "component-guide.md"))
-
-    row = fn type ->
-      case Regex.scan(~r/^\| `#{type}` \| (.*) \|$/m, guide, capture: :all_but_first) do
-        [[text]] -> text
-        rows -> flunk("component-guide.md has #{length(rows)} #{type} rows, not one")
-      end
-    end
-
-    assert row.("storage_path_denied") =~ ~s("#{Prima.Refusal.message(:no_unit)}"),
-           "component-guide.md's storage_path_denied row does not quote the no_unit sentence"
-
-    dispatch = File.read!(Path.join(@repo_root, "apps/sanctum/lib/sanctum/dispatch.ex"))
-
-    assert [[how_tail]] =
-             Regex.scan(~r/\{:uncertain, "Tool #\{name\} #\{how\}(; [^"]+)"\}/, dispatch,
-               capture: :all_but_first
-             ),
-           "Sanctum.Dispatch no longer spells one uncertain sentence"
-
-    assert row.("uncertain") =~ ~s("Tool <name> crashed#{how_tail}"),
-           "component-guide.md's uncertain row does not quote the gate's sentence"
   end
 
   test "the guides' tincture-block keys are ones the code actually reads" do

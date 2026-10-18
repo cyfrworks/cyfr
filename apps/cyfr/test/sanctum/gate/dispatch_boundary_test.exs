@@ -66,14 +66,20 @@ defmodule Sanctum.Gate.DispatchBoundaryTest do
              "and a second public entry is a second admission path"
   end
 
-  test "the dispatch exports the two entries and nothing else" do
+  # `uncertain_message/2` dispatches nothing: it is the one definition, on
+  # its producer, of the sentence an unanswered handler's call answers
+  # with, and only tests name it (the component guide's drift check,
+  # `Cyfr.DocsDriftTest`). The beam scan above, which lets no production
+  # module but `Sanctum.Gate` name `Sanctum.Dispatch`, is unchanged.
+  test "the dispatch exports the two entries and the uncertain sentence, nothing else" do
     assert {:module, @dispatch} = Code.ensure_loaded(@dispatch)
 
     assert Enum.sort(@dispatch.__info__(:functions)) == [
              call_external: 3,
              call_external: 4,
              call_in_chain: 4,
-             call_in_chain: 5
+             call_in_chain: 5,
+             uncertain_message: 2
            ]
   end
 
