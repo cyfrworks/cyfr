@@ -31,6 +31,9 @@ defmodule Prima.MixProject do
   # ComponentFeatures. This app starts no process; applications own process
   # instances, install the Caps port, the log filter and the component
   # validator.
+  # A module lives in Prima only when a wire shape, a vector file, a trust
+  # island, a Go, Python or JavaScript consumer, or two apps above Prima
+  # reference it; `Prima.Hex` is the one exception, as its moduledoc says.
   # Network only parses URLs, checks supplied addresses and builds options:
   # DNS/configuration and HTTP stay in the applications that own those effects.
   defp deps do

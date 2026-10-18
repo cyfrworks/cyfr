@@ -19,6 +19,9 @@ type Config struct {
 // Context is a named server connection.
 //
 // Token holds a bearer credential from cyfr login or a cyfr_ API key.
+// The config's owner-only bits keep it from other users, not from this
+// user's own processes: any process running as the user, a shell an agent
+// launched included, can read the token and act with it.
 type Context struct {
 	URL   string `json:"url"`
 	Token string `json:"token,omitempty"`

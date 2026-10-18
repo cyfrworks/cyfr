@@ -42,6 +42,9 @@ defmodule Prima.Manifest.Needs do
       target or claim a forwarded origin
       (`Prima.Network.framing_or_override_header?/1`). An `oauth` need's `attach`
       that omits `template` takes `Authorization: Bearer {value}`.
+      A `query` rule puts the value in the request's URL, which a
+      destination may write to its logs, so a credential attached that
+      way can reach them.
     * `hosts` and `paths` — the destination the need speaks to, in
       `Prima.Destination`'s host and path grammar and at most
       `Prima.Destination.max_entries/0` distinct entries each, as a

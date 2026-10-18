@@ -19,6 +19,9 @@ defmodule Prima.Identity.Encoding do
     * **Signatures.** Each signed shape carries its protocol string as a
       field inside what it signs. An Ed25519 signature, the field `sig`,
       covers the JCS bytes (`Prima.JCS`) of the shape's map without its `sig`.
+      A decoder takes only its own protocol string (`protocol/2`) and
+      answers any other `:wrong_protocol`, so a shape at a version this
+      side does not know is refused, never read as one it knows.
     * **Timestamps** are integer Unix milliseconds, within JCS's integer
       domain.
     * **A home** is named by its origin: `http` or `https`, a lowercase host
@@ -783,7 +786,7 @@ defmodule Prima.Identity.State do
   What a verified identity log answers (`Prima.Identity.verify_chain/1`):
   the identifier; the directory that orders it; `head`, the hash of the
   last entry; `key_epoch`, the hash of the genesis, rotate or recover
-  entry that introduced the current live key; `recovery_epoch`, the hash
+  entry at the head, the same hash as `head`; `recovery_epoch`, the hash
   of the genesis, or of the latest recover entry that replaced the live
   key; the current live, operational and recovery public keys; the
   recovery policy revision; the number of entries; and the request ids

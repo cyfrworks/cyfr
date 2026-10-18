@@ -46,6 +46,11 @@ defmodule Prima.Flow do
 
   A ledger that holds nothing is covered whatever the flows, so a grant
   that declares none keeps working until its run reads a source.
+
+  Nothing here narrows a declaration: a component whose egress domains
+  include `*` and whose flows let every class reach it is held to
+  exactly that, since the bound is what its manifest declares and its
+  consent binds.
   """
 
   alias Prima.Source

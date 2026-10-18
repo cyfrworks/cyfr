@@ -10,7 +10,9 @@ defmodule Prima.ComponentFeatures do
   again before it is compiled (`Locus.Runtime.ComponentCache` and the
   engine's uncached compile), by the pinned `wasm-tools`
   (`scripts/wasm-tools.sh`), whose wasmparser decodes the async canonical
-  options and builtins as the engine's does.
+  options and builtins as the engine's does. The check before a compile
+  is what holds a component stored before the admission checks existed:
+  no stored row runs a refused feature.
 
   ## A security constraint, and its condition
 

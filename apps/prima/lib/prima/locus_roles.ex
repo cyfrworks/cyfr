@@ -36,6 +36,15 @@ defmodule Prima.LocusRoles do
   (`network_mode: service:<guard>`) and starts behind; the runtime, whose
   runners have no network, has none (`nil`).
 
+  A role whose `isolation` is `nil` spawns into its container's own
+  namespaces, so every spawn of the island shares the island's network
+  namespace and the container's one IPC namespace (compose's
+  `ipc: none`). An abstract unix socket one spawn binds is therefore
+  reachable by its siblings whatever their uid, since the kernel checks
+  no owner on one. A System V object one spawn makes is kept from its
+  siblings by its owner's uid and mode, and retirement removes it with
+  the uid.
+
   `tests/fixtures/locus_roles.json` holds the same table for the image
   suites, which cannot read this module: `Prima.LocusRolesTest` holds the
   file to it value by value. `Locus.Application` selects a node's roles

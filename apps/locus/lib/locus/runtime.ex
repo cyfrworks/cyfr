@@ -21,6 +21,11 @@ defmodule Locus.Runtime do
   output goes to standard error, so standard output carries frames alone
   when the channel is there. The runner's end ends the VM
   (`Locus.Runtime.Release`).
+
+  A guest in a runner sits inside four bounds, each holding without the
+  others: the engine's WebAssembly sandbox, the runner's pooled uid, the
+  cgroup that bounds its memory, and the network namespace whose only way
+  out is the relay.
   """
 
   @doc """
