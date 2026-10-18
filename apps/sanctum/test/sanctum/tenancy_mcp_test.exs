@@ -267,8 +267,10 @@ defmodule Sanctum.TenancyMCPTest do
       # group with no members is not a group anyone can act in — and the
       # second attempt is refused for the missing seat before the archive
       # is read. The former member reads nothing of it, not even that it is
-      # archived; an operator, who holds no seat either, reads its public
-      # facts and nothing it holds.
+      # archived, and neither does an operator, who holds no seat either:
+      # athanor.get answers a seatless administrator as it answers for a
+      # missing athanor, and the archive is theirs to reach only through
+      # purge and destroy.
       id = created.id
 
       assert {:error, {:not_found, "Athanor", ^id}} =
@@ -290,7 +292,7 @@ defmodule Sanctum.TenancyMCPTest do
 
       on_exit(fn -> :telemetry.detach(handler) end)
 
-      assert {:ok, %{status: "archived"} = facts} =
+      assert {:error, {:not_found, "Athanor", ^id}} =
                Provider.handle("athanor", %{ctx | platform_admin: true}, %{
                  "action" => "get",
                  "athanor" => created.id
@@ -298,11 +300,8 @@ defmodule Sanctum.TenancyMCPTest do
 
       :telemetry.detach(handler)
 
-      assert Map.keys(facts) |> Enum.sort() == [:archived_at, :id, :name, :status]
-      assert %DateTime{} = facts.archived_at
-
       # The row and the seat check, and nothing the athanor holds: no
-      # thread, file, vault or member list is read for the answer.
+      # thread, file, vault or member list is read for the refusal.
       assert Enum.reject(reads(), &(&1 in ["athanors", "memberships"])) == []
 
       assert {:error, {:not_found, "Athanor", ^id}} =
