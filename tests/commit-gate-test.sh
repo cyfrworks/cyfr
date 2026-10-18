@@ -162,8 +162,11 @@ framed() {
 # step setup, named or not: it uses a listed action (SETUP_ACTIONS), or
 # every command its script runs is a listed setup command (SETUP_COMMANDS),
 # so a setup step that gains a check is no longer setup. A step whose `if:`
-# is `failure()`, alone or and-ed, runs only once its job has failed, so it
-# cannot decide a pass: a report. A list entry, a run, a setup action or a
+# is false whenever its job has not failed runs only once it has, so it
+# cannot decide a pass: a report. Its condition is `failure()` alone or
+# `failure() && REST`, REST holding no `||` and no other status function,
+# so the whole is a conjunction with failure() in it; any other condition,
+# `failure() && x || success()` among them, makes no report. A list entry, a run, a setup action or a
 # setup command that matches no step fails too, so the list is the
 # workflows' exactly. A step is keyed by its name, or unnamed by
 # `uses: ACTION` or by its whole script, `run: LINE; LINE…`. release.yml
@@ -286,7 +289,14 @@ def unlisted(s):
     return left
 
 def report(s):
-    return re.fullmatch(r"failure\(\)(\s*&&.*)?", str(s.get("if", "")).strip()) is not None
+    cond = str(s.get("if", "")).strip()
+    m = re.fullmatch(r"\$\{\{(.*)\}\}", cond, re.S)
+    cond = (m.group(1) if m else cond).strip()
+    m = re.fullmatch(r"failure\(\)(?:\s*&&(.*))?", cond, re.S)
+    if m is None:
+        return False
+    rest = m.group(1) or ""
+    return "||" not in rest and re.search(r"\b(?:success|always|cancelled|failure)\s*\(", rest) is None
 
 def key(s):
     if s.get("name"):
@@ -341,8 +351,9 @@ PY
 }
 ci_roster "$gate" "$root/.github/workflows" || fail "the gate's exclusion list is not CI's checks less the gate's"
 # Planted: a check added to CI, unnamed behind a setup command, a named
-# setup step that gains a check, a job taken off the list, and a list
-# entry CI no longer has each fail it, with the reason.
+# setup step that gains a check, a check whose condition also runs on a
+# job that has not failed, a job taken off the list, and a list entry CI
+# no longer has each fail it, with the reason.
 mkdir -p "$scratch/roster/wf"
 cp "$root"/.github/workflows/*.yml "$scratch/roster/wf/"
 python3 -I - "$scratch/roster/wf/test.yml" <<'PY'
@@ -383,6 +394,24 @@ PY
   fail 'a named setup step that gained a check passed as setup'
 has_line "^test.yml static: 'Install dependencies' is neither run by the gate nor on its list \(it runs 'test -f newly-required-ci-asset', no setup command\)" \
   "$scratch/roster/named.err" || fail "a named setup step with a check failed without its reason: $(cat "$scratch/roster/named.err")"
+for spec in 'or:failure() && true || success()' 'success:success()' 'always:failure() && always()' \
+  'not:${{ !failure() }}'; do
+  name=${spec%%:*} cond=${spec#*:}
+  mkdir -p "$scratch/roster/if-$name"
+  cp "$root"/.github/workflows/*.yml "$scratch/roster/if-$name/"
+  python3 -I - "$scratch/roster/if-$name/test.yml" "$cond" <<'PY'
+import sys
+p, cond = sys.argv[1], sys.argv[2]; s = open(p).read()
+anchor = "      - name: Compile with warnings as errors\n"
+assert anchor in s
+step = "      - name: A conditioned check\n        if: " + cond + "\n        run: test -f newly-required-ci-asset\n"
+open(p, "w").write(s.replace(anchor, step + anchor, 1))
+PY
+  ! ci_roster "$gate" "$scratch/roster/if-$name" 2>"$scratch/roster/if-$name.err" ||
+    fail "a check under if: $cond passed as a report"
+  has_line "^test.yml static: 'A conditioned check' is neither run by the gate nor on its list" "$scratch/roster/if-$name.err" ||
+    fail "a check under if: $cond failed without its reason: $(cat "$scratch/roster/if-$name.err")"
+done
 grep -vxF '#   test.yml browser' "$gate" > "$scratch/roster/dropped.sh"
 ! ci_roster "$scratch/roster/dropped.sh" "$root/.github/workflows" 2>"$scratch/roster/dropped.err" ||
   fail 'a CI job taken off the list passed'
