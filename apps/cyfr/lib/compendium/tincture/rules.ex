@@ -286,16 +286,16 @@ defmodule Compendium.Tincture.Rules do
   the manifest's declaration: `connect-src` names the endpoint's origin
   and the manifest's `tincture.connect` domains (over `https`), never
   `'self'`; `script-src` admits `'self'`, the page's nonce and
-  `'wasm-unsafe-eval'`, and `style-src` `'self'` and inline styles, so the
-  page's scripts and styles come from the site origin alone; `worker-src`
-  admits `blob:`; `frame-ancestors` names the shell (the endpoint unless
-  `shell:` says otherwise); and `form-action` is `'none'`.
+  `'wasm-unsafe-eval'`, and `style-src` `'self'` and inline styles;
+  `worker-src` admits `'self'` and `blob:`; `frame-ancestors` names the
+  shell (the endpoint unless `shell:` says otherwise); and `form-action`
+  is `'none'`.
 
-  A document with an opaque origin starts no worker from a URL of the
-  site, so the page starts its workers from `blob:` URLs its own scripts
-  make. A frame's opaque origin is never the shell's either, so only a
-  page of the shell's origin frames a tincture's page and no tincture
-  parents another.
+  `frame-ancestors` admits only the shell's origin, which a frame's
+  opaque origin never is, so no tincture's page is framed by another's.
+  A page starts its workers from `blob:` URLs its own scripts make; the
+  browser's side is shown by the hostile-frame proof (`blob_worker`) and,
+  for a canvas, by the canvas proof (`worker_policy`).
 
   `endpoint` and `shell` are origins (`scheme://host[:port]`) and `nonce`
   the page's own; a value outside those grammars raises, since each comes
