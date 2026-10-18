@@ -39,13 +39,23 @@ defmodule CyfrWeb.Plugs.ParserErrors do
 
   @behaviour Plug
 
-  # The methods whose body `Plug.Parsers` reads; a refusal answers exactly
-  # the requests the parsers would otherwise read the body of.
+  # The methods whose body `Plug.Parsers` reads, its own roster, which it
+  # does not export; a refusal answers exactly the requests the parsers
+  # would otherwise read the body of. A narrower meaning than the methods
+  # a destination may name (`Prima.Destination.methods/0`).
   @body_methods ~w(POST PUT PATCH DELETE)
 
   @default_errors CyfrWeb.ApiError
 
   @media_type ~r{\A[a-z0-9][a-z0-9!#$&^_.+-]*/(\*|[a-z0-9][a-z0-9!#$&^_.+-]*)\z}
+
+  @doc """
+  The methods whose body `Plug.Parsers` reads: the requests this plug
+  parses or refuses a body of, and the ones whose unparsed body
+  `CyfrWeb.Endpoint` counts as left unread.
+  """
+  @spec body_methods() :: [String.t()]
+  def body_methods, do: @body_methods
 
   @impl true
   def init(opts) do

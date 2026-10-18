@@ -238,7 +238,7 @@ defmodule CyfrWeb.Endpoint do
   @parsers CyfrWeb.Plugs.ParserErrors.init(CyfrWeb.Plugs.RawBodyReader.parser_options())
 
   # The methods whose body `Plug.Parsers` reads.
-  @body_methods ~w(POST PUT PATCH DELETE)
+  @body_methods CyfrWeb.Plugs.ParserErrors.body_methods()
 
   defp parse_body(%Plug.Conn{path_info: ["mcp" | _]} = conn, _opts), do: conn
   defp parse_body(conn, _opts), do: CyfrWeb.Plugs.ParserErrors.call(conn, @parsers)

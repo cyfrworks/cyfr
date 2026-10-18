@@ -340,6 +340,21 @@ defmodule CyfrWeb.Plugs.ParserErrorsTest do
     end
   end
 
+  test "the body methods are the ones Plug.Parsers reads a body of, among every method a destination names" do
+    parsers = Plug.Parsers.init(parsers: [:json], json_decoder: Jason, pass: ["*/*"])
+
+    read =
+      for method <- Prima.Destination.methods(),
+          conn =
+            conn(method, "/", ~s({"a":1}))
+            |> put_req_header("content-type", "application/json")
+            |> Plug.Parsers.call(parsers),
+          conn.body_params == %{"a" => 1},
+          do: method
+
+    assert Enum.sort(read) == Enum.sort(ParserErrors.body_methods())
+  end
+
   test "a malformed jsonrpc option is refused at init" do
     for bad <- [
           "/rpc",
