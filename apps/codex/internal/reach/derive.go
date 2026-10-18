@@ -64,13 +64,17 @@ const (
 
 // Derive is the head a target makes from the current settings and, for
 // tailnet, the join record, with the .env change that writes it. A domain
-// is read without case; every other input is taken as given.
+// is read without case; every other input is taken as given. An input that
+// is not UTF-8 is refused first, by the name it would be written under.
 func Derive(t Target, cur Current, join *Join) (Derivation, error) {
+	if key := unreadableInput(t, cur, join); key != "" {
+		return Derivation{}, refuse("reach_setting_invalid", map[string]string{"key": key})
+	}
 	domain := strings.ToLower(strings.TrimSpace(t.Domain))
 	email := strings.TrimSpace(t.ACMEEmail)
 	buildsURL := strings.TrimSpace(cur.BuildsURL)
 	if t.Mode != ModeLocal && t.Mode != ModeTailnet && t.Mode != ModePublic {
-		return Derivation{}, refuse("reach_unknown_mode", readable(map[string]string{"value": t.Mode}))
+		return Derivation{}, refuse("reach_unknown_mode", map[string]string{"value": t.Mode})
 	}
 	if cur.Port < 1 || cur.Port > 65535 {
 		return Derivation{}, refuse("reach_setting_invalid", map[string]string{"key": "CYFR_PORT", "value": strconv.Itoa(cur.Port)})
@@ -125,16 +129,29 @@ func Derive(t Target, cur Current, join *Join) (Derivation, error) {
 }
 
 func invalid(input, kind, rule string) *Refusal {
-	return refuse("reach_invalid", readable(map[string]string{"input": input, "kind": kind, "rule": rule}))
+	return refuse("reach_invalid", map[string]string{"input": input, "kind": kind, "rule": rule})
 }
 
-// readable keeps a payload's text UTF-8, so no sentence carries bytes that
-// are not: each run of invalid bytes reads as U+FFFD.
-func readable(payload map[string]string) map[string]string {
-	for k, v := range payload {
-		payload[k] = strings.ToValidUTF8(v, "\uFFFD")
+// unreadableInput is the first name, in byte order, whose input is not
+// UTF-8, or "". Every refusal after it carries only UTF-8 text.
+func unreadableInput(t Target, cur Current, join *Join) string {
+	var name, nodeID string
+	if join != nil {
+		name, nodeID = join.Name, join.NodeID
 	}
-	return payload
+	for _, input := range []struct{ key, value string }{
+		{"CADDY_ACME_EMAIL", t.ACMEEmail},
+		{"CYFR_HOST", t.Domain},
+		{"CYFR_HOST", name},
+		{"CYFR_LOCUS_BUILDS_URL", cur.BuildsURL},
+		{"CYFR_REACH", t.Mode},
+		{"CYFR_TAILNET_NODE_ID", nodeID},
+	} {
+		if !utf8.ValidString(input.value) {
+			return input.key
+		}
+	}
+	return ""
 }
 
 func validEmail(email string) bool {

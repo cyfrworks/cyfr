@@ -7,6 +7,7 @@ import (
 	"errors"
 	"reflect"
 	"testing"
+	"unicode/utf8"
 )
 
 func TestDeriveVectors(t *testing.T) {
@@ -189,10 +190,43 @@ func TestInvalidUTF8Refuses(t *testing.T) {
 			t.Errorf("ResolveBoot with non-UTF-8 %s: %v", key, err)
 		}
 	}
-	_, err := Derive(Target{Mode: ModeLocal}, Current{Port: 4000, BuildsURL: "http://locus-builds:4100/" + string([]byte{255})}, nil)
-	var r *Refusal
-	if !errors.As(err, &r) || r.Code != "reach_setting_invalid" {
-		t.Errorf("Derive with a non-UTF-8 builds URL: %v", err)
+}
+
+// Every input Derive reads that is not UTF-8 is refused by the name it
+// would be written under, before any other rule reads it: the payload is
+// that name alone, and the sentence is UTF-8.
+func TestDeriveRefusesInputThatIsNotUTF8(t *testing.T) {
+	bad := string([]byte{255})
+	tn := "cyfr.tail1a2b3c.ts.net"
+	for _, c := range []struct {
+		key     string
+		target  Target
+		current Current
+		join    *Join
+	}{
+		{"CYFR_LOCUS_BUILDS_URL", Target{Mode: ModeLocal}, Current{Port: 4000, BuildsURL: "http://locus-builds:4100/" + bad}, nil},
+		{"CYFR_TAILNET_NODE_ID", Target{Mode: ModeTailnet}, Current{Port: 4000}, &Join{Name: tn, NodeID: "n" + bad}},
+		{"CYFR_HOST", Target{Mode: ModeTailnet}, Current{Port: 4000}, &Join{Name: "cyfr" + bad + ".tail1a2b3c.ts.net", NodeID: "n1"}},
+		{"CYFR_HOST", Target{Mode: ModePublic, Domain: "cyfr.example.com" + bad}, Current{Port: 4000}, nil},
+		{"CADDY_ACME_EMAIL", Target{Mode: ModePublic, Domain: "cyfr.example.com", ACMEEmail: "ops" + bad + "@example.com"}, Current{Port: 4000}, nil},
+		{"CYFR_REACH", Target{Mode: "local" + bad}, Current{Port: 4000}, nil},
+		// Encoding comes first: the domain is outside its mode too, and
+		// the builds URL is malformed too, and neither is answered.
+		{"CADDY_ACME_EMAIL", Target{Mode: ModeLocal, Domain: "cyfr.example.com", ACMEEmail: bad}, Current{Port: 4000, BuildsURL: "bad"}, nil},
+	} {
+		_, err := Derive(c.target, c.current, c.join)
+		var r *Refusal
+		if !errors.As(err, &r) {
+			t.Errorf("%s: %v, want a refusal", c.key, err)
+			continue
+		}
+		if r.Code != "reach_setting_invalid" || r.Class != "invalid_argument" || !reflect.DeepEqual(r.Payload, map[string]string{"key": c.key}) {
+			t.Errorf("%s: refusal %s %s %#v", c.key, r.Code, r.Class, r.Payload)
+		}
+		want := "`" + c.key + "` is not valid UTF-8 text. Nothing started. Correct it, or remove it."
+		if s := r.Sentence(); s != want || !utf8.ValidString(s) {
+			t.Errorf("%s: sentence %q", c.key, s)
+		}
 	}
 }
 
