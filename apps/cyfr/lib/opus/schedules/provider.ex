@@ -44,7 +44,6 @@ defmodule Opus.Schedules.Provider do
   def resources, do: []
   @impl true
   def resource_templates, do: []
-  def read(_ctx, _uri), do: {:error, "No resources"}
 
   @impl true
   def tools do

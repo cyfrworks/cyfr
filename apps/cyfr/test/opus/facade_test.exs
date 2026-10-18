@@ -61,12 +61,10 @@ defmodule Opus.FacadeTest do
   end
 
   test "a lease keeper started through the root stops without touching its holder" do
-    until = DateTime.add(DateTime.utc_now(), 60, :second)
-
     # This process holds the keeper, so a kill the stop let through would
     # end the test with it.
     assert {:ok, keeper} =
-             Opus.start_lease_watch("exe_facade", "att_facade", until: until, tick_ms: 60_000)
+             Opus.start_lease_watch("exe_facade", "att_facade", tick_ms: 60_000)
 
     # The keeper watches its holder from its own process: the stop waits
     # for that watch, so it lands after it.

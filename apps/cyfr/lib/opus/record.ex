@@ -10,10 +10,10 @@ defmodule Opus.Record do
 
   ## Storage
 
-  Records are stored in SQLite via `Arca.Execution` to the `executions` table.
-  The crash-resilient
-  pattern writes a "started" record BEFORE execution begins, and updates it with
-  completion/failure data AFTER execution finishes.
+  Records are stored through `Arca.Execution` in the `executions` table, on
+  either database adapter. The crash-resilient pattern writes a "started"
+  record BEFORE execution begins, and updates it with completion/failure
+  data AFTER execution finishes.
 
   If an execution record exists with status "running" but no completion,
   the execution crashed or was interrupted.

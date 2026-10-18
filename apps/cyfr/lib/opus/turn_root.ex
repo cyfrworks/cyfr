@@ -168,11 +168,7 @@ defmodule Opus.TurnRoot do
            }) do
         {:ok, turn} ->
           {:ok, keeper} =
-            LeaseWatch.start(
-              execution_id,
-              turn.attempt,
-              [until: until] ++ Keyword.take(opts, [:tick_ms])
-            )
+            LeaseWatch.start(execution_id, turn.attempt, Keyword.take(opts, [:tick_ms]))
 
           {:ok,
            %{

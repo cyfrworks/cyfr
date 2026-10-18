@@ -80,18 +80,18 @@ defmodule Cyfr.Test.KeeperProbe do
     end
   end
 
-  # One snapshot of the keeper. Waiting in `loop/2` is a keeper no suspend
-  # reached; running there is one that may be on its way to `suspended/2`.
+  # One snapshot of the keeper. Waiting in `loop/1` is a keeper no suspend
+  # reached; running there is one that may be on its way to `suspended/1`.
   defp observe(keeper) do
     case Process.info(keeper, [:current_function, :status, :current_stacktrace]) do
-      [current_function: {Opus.LeaseWatch, :suspended, 2}, status: _, current_stacktrace: _] ->
+      [current_function: {Opus.LeaseWatch, :suspended, 1}, status: _, current_stacktrace: _] ->
         :suspended
 
-      [current_function: {Opus.LeaseWatch, :loop, 2}, status: :waiting, current_stacktrace: _] ->
+      [current_function: {Opus.LeaseWatch, :loop, 1}, status: :waiting, current_stacktrace: _] ->
         :renewing
 
       [current_function: _, status: _, current_stacktrace: frames] ->
-        if Enum.any?(frames, &match?({Opus.LeaseWatch, :renew, 2, _}, &1)),
+        if Enum.any?(frames, &match?({Opus.LeaseWatch, :renew, 1, _}, &1)),
           do: :renewing,
           else: :settling
 

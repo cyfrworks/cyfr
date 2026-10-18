@@ -88,7 +88,7 @@ defmodule Opus.LeaseWatchTest do
   # The keeper is no sandbox owner: once the shared connection is
   # withdrawn, every renewal it attempts raises.
   @tag :capture_log
-  test "a renewal that raises is tolerated inside the lease the attempt last held", %{
+  test "a renewal that raises decides nothing, and the holder runs on", %{
     id: id,
     attempt: attempt
   } do
@@ -100,14 +100,20 @@ defmodule Opus.LeaseWatchTest do
     send(pid, :release)
   end
 
+  # The lease is the cell's: a member that cannot read the store sets no
+  # clock of its own against it, however far past it that clock reads, as
+  # the sweeper takes no lease decision on a clock it could not read. The
+  # `:until` a caller hands in is a lease long past on this member's clock.
   @tag :capture_log
-  test "a renewal that raises past the lease the attempt last held exits the holder", %{
-    id: id,
-    attempt: attempt
-  } do
+  test "a store that cannot answer leaves the lease undecided, past this member's clock included",
+       %{id: id, attempt: attempt} do
     Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, :manual)
-    {_pid, ref, _watch} = holder!(id, attempt, until: DateTime.add(DateTime.utc_now(), -1))
-    assert_receive {:DOWN, ^ref, :process, _, {:lease_lost, ^id}}, 2_000
+    {pid, ref, _watch} = holder!(id, attempt, until: DateTime.add(DateTime.utc_now(), -60))
+    # Five renewal ticks, each refused by the store.
+    Process.sleep(100)
+    refute_received {:DOWN, ^ref, :process, _, _}
+    assert Process.alive?(pid)
+    send(pid, :release)
   end
 
   test "a suspended keeper renews nothing until it is resumed, and keeps its pid", %{

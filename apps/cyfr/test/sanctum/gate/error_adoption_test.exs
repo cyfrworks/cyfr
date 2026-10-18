@@ -62,7 +62,7 @@ defmodule Sanctum.Gate.ErrorAdoptionTest do
     # The concurrency argument's own refusal is a sentence about the value
     # offered; the two that were the tool's catch-alls are typed now, so
     # the action-coverage case reads one vocabulary.
-    "apps/cyfr/lib/opus/schedules/provider.ex" => 17,
+    "apps/cyfr/lib/opus/schedules/provider.ex" => 16,
     "apps/sanctum/lib/sanctum/providers/webhook.ex" => 18,
     "apps/cyfr/lib/opus/provider.ex" => 12,
     # An upstream registry's own diagnostics, which are its words and not

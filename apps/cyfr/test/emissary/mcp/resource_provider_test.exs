@@ -91,9 +91,11 @@ defmodule Emissary.MCP.ResourceProviderTest do
                Sanctum.Provider
              ])
 
-    for module <- advertisers do
+    # No configured provider, an advertiser or not, keeps a read/2 the
+    # gate never calls: a resource is read through its declared operation.
+    for module <- providers do
       refute function_exported?(module, :read, 2),
-             "#{inspect(module)} still exports a read/2 beside its declared reader"
+             "#{inspect(module)} exports a read/2 beside the declared readers"
     end
 
     assert :ok = Catalog.audit_resource_schemes()

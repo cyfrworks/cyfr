@@ -82,13 +82,17 @@ defmodule Opus.Close do
   node's `max_response_size` or cannot be encoded closes the run failed. Answers the result — `%{status: :completed, output: masked,
   metadata: map, sources: [Prima.Source.t()]}`, `sources` the run's
   ledger as the terminal transaction itself read it — or
-  `{:error, message}`. A cancel that closed the row
-  first leaves the cancelled row standing; the result is still answered.
+  `{:error, message}`. A cancel, lapse or takeover that closed the row
+  first leaves that row standing, and the answer is the row's, as
+  `lost/1` answers it: a cancelled row answers its error, so no caller
+  records a cancelled run as completed.
   A run whose athanor was archived while it ran is never answered as a
   success: its completion is refused (`Opus.Record.write_completed/1`),
   the row closes failed and the answer is `{:error, message}`.
   """
-  @spec complete(t(), [String.t()], term(), map()) :: {:ok, map()} | {:error, String.t()}
+  @spec complete(t(), [String.t()], term(), map()) ::
+          {:ok, map()}
+          | {:error, String.t() | {:uncertain, String.t()} | {:result_lost, String.t()}}
   def complete(%__MODULE__{} = close, secrets, output, exec_metadata) do
     masked_output = SecretMasker.mask(output, secrets)
 
@@ -96,38 +100,46 @@ defmodule Opus.Close do
          :ok <- check_response_size(close, secrets, masked_output),
          completed_record = Record.complete(close.record, masked_output),
          {:written, write_result, ledger} <- completed_write(close, completed_record) do
-      if write_result == :ok, do: StepSpans.completed(close.step_spans)
-
-      # The lifecycle telemetry follows the row: a completion is announced
-      # only when its write committed. A cancel that closed the row first
-      # announces nothing here; any other failed write is an audit error.
-      audit_error = audit_error(completed_record, write_result)
-      if write_result == :ok, do: Telemetry.execute_stop(completed_record, exec_metadata)
-
-      # The terminal event is the row's, published by the record's write.
-      if write_result == {:error, :not_running} do
-        Logger.info(
-          "[Opus.Close] execution #{completed_record.id} finished after cancel; " <>
-            "the cancelled row stands"
-        )
-      end
-
-      result = %{
-        status: :completed,
-        output: masked_output,
-        metadata: metadata(close, completed_record),
-        # The ledger the terminal transaction read; a row another writer
-        # ended first (a cancel) is read as it stands now.
-        sources: ledger || sources(close)
-      }
-
-      result =
-        if audit_error, do: put_in(result, [:metadata, :audit_error], audit_error), else: result
-
-      # A completed parent leaves its asynchronous children running; failure
-      # and cancellation cascade, and lease expiry reaps abandoned children.
-      {:ok, result}
+      if write_result == {:error, :not_running},
+        do: closed_after(close, completed_record),
+        else: completed(close, completed_record, write_result, ledger, exec_metadata)
     end
+  end
+
+  defp completed(close, completed_record, write_result, ledger, exec_metadata) do
+    if write_result == :ok, do: StepSpans.completed(close.step_spans)
+
+    # The lifecycle telemetry follows the row: a completion is announced
+    # only when its write committed; any other failed write is an audit
+    # error.
+    audit_error = audit_error(completed_record, write_result)
+    if write_result == :ok, do: Telemetry.execute_stop(completed_record, exec_metadata)
+
+    result = %{
+      status: :completed,
+      output: completed_record.output,
+      metadata: metadata(close, completed_record),
+      # The ledger the terminal transaction read, else read as it stands now.
+      sources: ledger || sources(close)
+    }
+
+    result =
+      if audit_error, do: put_in(result, [:metadata, :audit_error], audit_error), else: result
+
+    # A completed parent leaves its asynchronous children running; failure
+    # and cancellation cascade, and lease expiry reaps abandoned children.
+    {:ok, result}
+  end
+
+  # The terminal event is the row's, published by the write that closed it;
+  # the output this run produced is neither recorded nor answered.
+  defp closed_after(close, completed_record) do
+    Logger.info(
+      "[Opus.Close] execution #{completed_record.id} finished after its row closed; " <>
+        "the closed row stands"
+    )
+
+    closed_answer(close, "Execution closed before its result was written")
   end
 
   # A completion refused because the run's grant no longer stands was
@@ -380,9 +392,6 @@ defmodule Opus.Close do
   end
 
   defp audit_error(_record, :ok), do: nil
-
-  # A cancel won the race for the row: not an audit fault.
-  defp audit_error(_record, {:error, :not_running}), do: nil
 
   # The result was answered and not retained: the record's write closed
   # the row failed and said so in its own log line.

@@ -9,12 +9,16 @@ defmodule Opus.LeaseWatch do
   and exits the holder when the lease is lost.
 
   A caller blocked in a call cannot service a timer of its own, so the
-  keeper is a linked sibling with the rule the engine's watch applies
-  (`Opus.Record.renew_lease/2`): a renewal the store refuses,
+  keeper is a linked sibling that renews through
+  `Opus.Record.renew_lease/2`: a renewal the store refuses,
   a cancelled row's included, stops the holder at once
   (`{:lease_lost, execution_id}`); a store that cannot answer, a renewal
-  that raises included, is tolerated only inside the lease the attempt
-  last held.
+  that raises included, decides nothing, and the keeper renews again a
+  tick later. The lease is the cell's (`Opus.Record.lease_until/0`), and
+  this member's clock is never set against it: as the sweeper does, a
+  lease decision waits for a store that answers. A lease that lapsed in
+  the outage is lapsed by a sweeper that reads the store, and the next
+  renewal that reaches it answers `:lost`.
 
   The holder is the process that starts the keeper. The keeper is linked
   to it, so a crash of either takes the other down at once, and monitors
@@ -29,16 +33,13 @@ defmodule Opus.LeaseWatch do
   keeper keeps its pid throughout.
   """
 
-  require Logger
-
   alias Opus.Record
 
   @tick_ms 60_000
 
   @doc """
   Start a keeper for `attempt` of `execution_id`, held by the calling
-  process. `opts`: `:tick_ms` (the renewal period), `:until` (the lease
-  the attempt holds now).
+  process. `opts`: `:tick_ms` (the renewal period).
   """
   @spec start(String.t(), String.t(), keyword()) :: {:ok, pid()}
   def start(execution_id, attempt, opts \\ [])
@@ -52,9 +53,7 @@ defmodule Opus.LeaseWatch do
       tick: Keyword.get(opts, :tick_ms, @tick_ms)
     }
 
-    until = Keyword.get(opts, :until) || initial_until(execution_id)
-
-    pid = spawn_link(fn -> loop(Map.put(watch, :down, Process.monitor(holder)), until) end)
+    pid = spawn_link(fn -> loop(Map.put(watch, :down, Process.monitor(holder))) end)
 
     {:ok, pid}
   end
@@ -94,61 +93,32 @@ defmodule Opus.LeaseWatch do
     :ok
   end
 
-  # When the lease's end is not handed in, it is read from the store, which
-  # since the cell's clock landed is a database read like any other. A
-  # store that cannot answer is the same condition `renew/2` already
-  # tolerates below, and it must be tolerated here for the same reason: a
-  # keeper that refuses to start kills the run it was meant to watch over,
-  # which is a harsher answer than the outage deserves. The fallback is the
-  # local clock and the same lease length -- exactly what this read was
-  # before the clock moved -- and the first renewal that reaches the store
-  # replaces it with the authoritative expiry.
-  defp initial_until(execution_id) do
-    Record.lease_until()
-  rescue
-    e ->
-      Logger.warning(
-        "[Opus.LeaseWatch] lease start for #{execution_id} could not read the " <>
-          "store's clock (#{Prima.LogFilter.exception_message(e)}); watching on the local clock until a " <>
-          "renewal answers"
-      )
-
-      DateTime.add(DateTime.utc_now(), Arca.ExecutionAttempts.lease_seconds(), :second)
-  end
-
   # A holder that ends ends its keeper, suspended or not.
-  defp loop(%{down: down} = watch, until) do
+  defp loop(%{down: down} = watch) do
     receive do
       {:suspend, from, ref} ->
         send(from, {ref, :suspended})
-        suspended(watch, until)
+        suspended(watch)
 
       {:DOWN, ^down, :process, _, _} ->
         :ok
     after
-      watch.tick -> renew(watch, until)
+      watch.tick -> renew(watch)
     end
   end
 
-  defp suspended(%{down: down} = watch, until) do
+  defp suspended(%{down: down} = watch) do
     receive do
-      :resume -> loop(watch, until)
+      :resume -> loop(watch)
       {:DOWN, ^down, :process, _, _} -> :ok
     end
   end
 
-  defp renew(%{holder: holder, execution_id: execution_id} = watch, until) do
+  defp renew(%{holder: holder, execution_id: execution_id} = watch) do
     case Record.renew_lease(execution_id, watch.attempt) do
-      {:ok, renewed} ->
-        loop(watch, renewed)
-
-      :lost ->
-        Process.exit(holder, {:lease_lost, execution_id})
-
-      :unavailable ->
-        if DateTime.compare(DateTime.utc_now(), until) == :lt,
-          do: loop(watch, until),
-          else: Process.exit(holder, {:lease_lost, execution_id})
+      {:ok, _renewed} -> loop(watch)
+      :lost -> Process.exit(holder, {:lease_lost, execution_id})
+      :unavailable -> loop(watch)
     end
   end
 end
