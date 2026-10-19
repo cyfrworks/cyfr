@@ -35,7 +35,7 @@ var setupCmd = &cobra.Command{
 
 The pages ask how the home is reached (your phone and laptop via Tailscale, the recommended choice; only this device; or, under Advanced, a public domain with an optional certificate email) and the email of the home's administrator, then start: they run what 'cyfr init' runs, the same steps in the same order, then what 'cyfr up' runs. A tailnet home's join shows its approval link as a QR code and as text, under it the machine's name (cyfr unless changed there), and waits for the approval; a join that fails, expires or is cancelled leaves the home reached from this device only, and the pages offer to try the join again or to start the home on this device only. A start that fails shows why, and offers to try again or, for a home reached from other devices, to start it on this device only. Each refusal is the command line's own sentence.
 
-Once the home is up, the pages show its address and move the browser there, apart from a tailnet address, which a browser on this device reaches only through the home's SOCKS5 proxy on 127.0.0.1:1055; the program stops serving the pages once they have read that, or a minute after. Run in a project whose .env exists, it refuses as 'cyfr init' refuses to change how an existing home is reached, serving nothing; 'cyfr access <mode>' changes that.
+Once the home is up, the pages show its address and move the browser there, apart from a tailnet address, which a browser on this device reaches only through the home's SOCKS5 proxy on 127.0.0.1:1055; the program stops serving the pages once they have read that, or a minute after. Run in a project whose .env exists, it refuses as 'cyfr init' refuses to change how an existing home is reached, serving nothing; 'cyfr access <mode>' changes that. One cyfr setup serves a project's pages: a second, while the first runs, is refused.
 
 Exit status 3: the home started, but on this machine only, because the tailnet machine is not ready to serve it (not the one .env names, not joined, or HTTPS off); Serve stays closed, and the message says what to do. Exit status 1: the home was not set up and started, the message saying why.`,
 	Example: `  cyfr setup
@@ -62,8 +62,12 @@ type setupOptions struct {
 }
 
 // setupURLFile is where cyfr setup writes the address of its pages, for
-// the launcher that opens them, while it serves them.
-const setupURLFile = ".cyfr/setup.url"
+// the launcher that opens them, while it serves them; setupLockFile is the
+// lock the one setup of a project holds meanwhile.
+const (
+	setupURLFile  = ".cyfr/setup.url"
+	setupLockFile = ".cyfr/setup.lock"
+)
 
 // setupLinger is how long the pages are served past the run's end when
 // no page reads it.
@@ -78,6 +82,20 @@ func runSetup(ctx context.Context, o setupOptions, out io.Writer) error {
 	if err := refuseExistingHome(".env"); err != nil {
 		return err
 	}
+	// One setup serves a project's pages: a second would race the first
+	// for .env and for the address file. The lock is the setup's own, as
+	// the run takes the stack's lock for each step it runs.
+	if err := os.MkdirAll(".cyfr", 0o700); err != nil {
+		return fmt.Errorf("cyfr setup cannot make .cyfr (%v). Nothing was changed", err)
+	}
+	release, busy, err := access.LockFile(setupLockFile)
+	switch {
+	case err != nil:
+		return fmt.Errorf("cyfr setup cannot take %s (%v). Nothing was changed", setupLockFile, err)
+	case busy:
+		return errors.New("Another cyfr setup is serving this project's pages, at the address in .cyfr/setup.url. Nothing was changed. Use those pages, or stop that cyfr setup and run this again")
+	}
+	defer release()
 	token, err := setup.NewToken()
 	if err != nil {
 		return err
@@ -100,19 +118,10 @@ func runSetup(ctx context.Context, o setupOptions, out io.Writer) error {
 		}
 	}()
 
-	// .cyfr/ is the engine's: one setup made only for the address goes
-	// with it, and one the run's engine has written into stays.
+	// The address is this run's while it holds the setup's lock, so it
+	// goes with this run.
 	address := setup.Address(l, token)
-	made := !fileExists(".cyfr")
-	if err := os.MkdirAll(".cyfr", 0o700); err != nil {
-		return fmt.Errorf("cyfr setup cannot write %s (%v). Nothing was changed", setupURLFile, err)
-	}
-	defer func() {
-		os.Remove(setupURLFile)
-		if made {
-			os.Remove(".cyfr")
-		}
-	}()
+	defer os.Remove(setupURLFile)
 	if err := writeFileAtomic(setupURLFile, []byte(address+"\n"), 0o600); err != nil {
 		return fmt.Errorf("cyfr setup cannot write %s (%v). Nothing was changed", setupURLFile, err)
 	}
@@ -129,7 +138,7 @@ func runSetup(ctx context.Context, o setupOptions, out io.Writer) error {
 		return s.result()
 	case <-ctx.Done():
 		if !s.begun() {
-			return errors.New("cyfr setup was interrupted before it began; nothing was written")
+			return errors.New("cyfr setup was interrupted before the start; nothing of the home was written")
 		}
 		// The run sees ctx too: a waiting join is cancelled, a problem's
 		// wait ends, and a start runs to its end under its lock.
@@ -403,7 +412,7 @@ func (s *setupSession) apply(ctx context.Context, c accessChoice, key []byte) (a
 			s.st.Name = joinName(c.accessOptions)
 		}
 		s.mu.Unlock()
-		head, err := applyInitAccess(attempt, c, key, joinChoice{onAuthURL: s.waiting, onJoined: s.joined}, s.out)
+		head, err := applyMode(attempt, c, key, joinChoice{onAuthURL: s.waiting, onJoined: s.joined}, s.out)
 		s.mu.Lock()
 		cancelled, name := s.cancelled, s.rename
 		s.cancelJoin, s.cancelled, s.st.AuthURL = nil, "", ""
@@ -427,13 +436,53 @@ func (s *setupSession) apply(ctx context.Context, c accessChoice, key []byte) (a
 			c.newNode = errors.As(err, &r) && r.Code == "tailnet_join_cancelled"
 			continue
 		case cancelled == cancelledForLocal:
-			return head, stayLocal{err}
+			return s.thisDeviceOnly(ctx, err)
 		}
-		if s.decide(fmt.Sprintf("%s\n%s", err, leftLocal(c.mode)), setup.OfferRetry, setup.OfferLocal) != setup.OfferRetry {
-			return head, stayLocal{err}
+		// The page claims the home local only while .env holds it local: a
+		// switch can fail after it changed .env, which recovery decides.
+		sentence := err.Error()
+		if h, herr := currentHead(); herr == nil && h.Mode == access.ModeLocal {
+			sentence += "\n" + leftLocal(c.mode)
 		}
-		c.newNode = false
+		switch s.decide(sentence, setup.OfferRetry, setup.OfferLocal) {
+		case setup.OfferRetry:
+			c.newNode = false
+			continue
+		case setup.OfferLocal:
+			return s.thisDeviceOnly(ctx, err)
+		}
+		return head, stayLocal{err}
 	}
+}
+
+// thisDeviceOnly makes the home reached from this device only, as the
+// pages chose after the mode's apply failed (why): through the engine,
+// whose recovery first establishes what the failed attempt left, a switch
+// that changed .env among it, then a switch to local unless .env holds
+// local already. A switch that fails shows its sentence and offers the
+// choice again.
+func (s *setupSession) thisDeviceOnly(ctx context.Context, why error) (access.Head, error) {
+	for {
+		s.step(initStepAccess)
+		head, err := applyMode(ctx, accessChoice{mode: access.ModeLocal}, nil, joinChoice{}, s.out)
+		if err == nil {
+			return head, stayLocal{why}
+		}
+		if ctx.Err() != nil || s.decide(err.Error(), setup.OfferLocal) != setup.OfferLocal {
+			return head, stayLocal{why}
+		}
+	}
+}
+
+// applyMode is applyInitAccess, whose lock first runs the engine's
+// recovery of an attempt an earlier failure left unfinished: a home that
+// recovery leaves already as c asks is that head, the change made.
+func applyMode(ctx context.Context, c accessChoice, key []byte, choice joinChoice, out io.Writer) (access.Head, error) {
+	head, err := applyInitAccess(ctx, c, key, choice, out)
+	if r := (*access.Refusal)(nil); errors.As(err, &r) && r.Code == "access_unchanged" {
+		return currentHead()
+	}
+	return head, err
 }
 
 // waiting shows the join's approval link.
@@ -457,6 +506,11 @@ func (s *setupSession) joined(name string) {
 func (s *setupSession) start() {
 	for {
 		s.step(setupStepStart)
+		if h, herr := currentHead(); herr == nil {
+			s.mu.Lock()
+			s.st.Starting = h.Mode
+			s.mu.Unlock()
+		}
 		err := runUp(s.ctx, s.out)
 		if local := (startedLocally{}); err == nil || errors.As(err, &local) {
 			s.done(err)
@@ -475,7 +529,7 @@ func (s *setupSession) start() {
 			case setup.OfferRetry:
 			case setup.OfferLocal:
 				s.step(setupStepStart)
-				if _, err = applyInitAccess(s.ctx, accessChoice{mode: access.ModeLocal}, nil, joinChoice{}, s.out); err != nil {
+				if _, err = applyMode(s.ctx, accessChoice{mode: access.ModeLocal}, nil, joinChoice{}, s.out); err != nil {
 					continue
 				}
 			default:

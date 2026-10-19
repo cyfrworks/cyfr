@@ -1351,6 +1351,13 @@ jobs:
       # the browser harness, set up a local home and open its sign-in page,
       # refuse a project whose .env exists, and join a tailnet home under a
       # new name through the stand-in, which then serves it.
+      # The setup proof's teardown on a run that fails while its browser
+      # and its cyfr setup run: the browser's container stopped, both
+      # awaited, the scratch gone.
+      - name: The setup proof's teardown
+        env:
+          SETUP_PROOF_IMAGE: cyfr:compose-proof
+        run: tests/setup-proof/cleanup-test.sh
       - name: The setup proof
         env:
           SETUP_PROOF_SKIP_BUILD: '1'

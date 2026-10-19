@@ -62,6 +62,24 @@ func (e *Engine) lockProject(command string) (func(), error) {
 	return sync.OnceFunc(e.unlock), nil
 }
 
+// LockFile takes an exclusive lock of the file at path without waiting,
+// as the stack's lock is taken (lockExclusive), creating the file with
+// mode 0600 when it is absent: busy while another open file holds it. The
+// lock ends with release or with the process, and no child process
+// inherits it; the file stays, so two holders never lock two files of one
+// name.
+func LockFile(path string) (release func(), busy bool, err error) {
+	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE, 0o600)
+	if err != nil {
+		return nil, false, err
+	}
+	if busy, err = lockExclusive(f); err != nil || busy {
+		f.Close()
+		return nil, busy, err
+	}
+	return sync.OnceFunc(func() { f.Close() }), false, nil
+}
+
 // unlock ends the lock's operation: the materialized files it made that
 // no unfinished journal names are removed, the holder record goes, and
 // the lock's descriptor is closed. A docker child still holding the

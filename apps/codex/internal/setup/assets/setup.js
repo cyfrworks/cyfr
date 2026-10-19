@@ -14,7 +14,12 @@
     settings: () => "Writing its settings",
     access: (mode) => (mode === "public" ? "Setting up its public address" : "Joining your tailnet"),
     images: () => "Downloading the home",
-    start: () => "Starting the home",
+  };
+  // The start step names the mode it starts the home in.
+  const startNames = {
+    local: "Starting the home on this device only",
+    tailnet: "Starting the home on your tailnet",
+    public: "Starting the home at its public address",
   };
   let screen = "welcome";
   let phase = "answering";
@@ -114,7 +119,7 @@
     list.replaceChildren(
       ...steps.map((step, i) => {
         const li = document.createElement("li");
-        li.textContent = (stepNames[step] || (() => step))(state.mode);
+        li.textContent = step === "start" ? startNames[state.starting] || "Starting the home" : (stepNames[step] || (() => step))(state.mode);
         li.className = i < current ? "done" : i === current ? "current" : "";
         return li;
       }),

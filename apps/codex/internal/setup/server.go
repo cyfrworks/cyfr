@@ -70,9 +70,11 @@ type Answers struct {
 type State struct {
 	Phase string `json:"phase"`
 	Mode  string `json:"mode,omitempty"`
-	// Steps are the run's steps in order, and Step the one under way.
-	Steps []string `json:"steps,omitempty"`
-	Step  string   `json:"step,omitempty"`
+	// Steps are the run's steps in order, and Step the one under way;
+	// Starting is the mode the start step starts the home in.
+	Steps    []string `json:"steps,omitempty"`
+	Step     string   `json:"step,omitempty"`
+	Starting string   `json:"starting,omitempty"`
 	// AuthURL is the tailnet join's approval link while it waits, and QR
 	// that link drawn as an SVG image (the server draws it).
 	AuthURL string `json:"auth_url,omitempty"`

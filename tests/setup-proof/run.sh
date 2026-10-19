@@ -92,53 +92,8 @@ free_port() {
   python3 -I -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1]); s.close()'
 }
 
-# Each project goes whole, its volumes with it, however the run ends: its
-# join containers (labelled by the engine), the stack, the join network;
-# then the stand-in image and the scratch directory. A step is tried three
-# times; a step that still fails fails the run.
-cleanup() {
-  local code=$? failed="" project id attempt done_
-  [ -z "$PROOF_PID" ] || kill "$PROOF_PID" 2>/dev/null || true
-  [ -z "$SETUP_PID" ] || kill "$SETUP_PID" 2>/dev/null || true
-  retry() {
-    for attempt in 1 2 3; do
-      "$@" >/dev/null 2>&1 && return 0
-      sleep 3
-    done
-    echo "::error::setup proof cleanup: $* failed three times" >&2
-    return 1
-  }
-  for project in ${PROJECTS[@]+"${PROJECTS[@]}"}; do
-    if [ "$code" -ne 0 ]; then
-      echo "----- $project: the last lines of the stack's logs -----" >&2
-      compose_in "$project" logs --no-color --tail 60 cyfr tailscale >&2 2>/dev/null || true
-    fi
-    for id in $(docker ps -aq --filter "label=com.cyfr.access.project=$project" 2>/dev/null || true); do
-      retry docker rm --force "$id" || failed=1
-    done
-    retry compose_in "$project" down --volumes --remove-orphans --timeout 30 || failed=1
-    if docker network inspect "${project}_tailnet-join" >/dev/null 2>&1; then
-      retry docker network rm "${project}_tailnet-join" || failed=1
-    fi
-  done
-  if docker image inspect "$STANDIN_IMAGE" >/dev/null 2>&1; then
-    retry docker image rm --force "$STANDIN_IMAGE" || failed=1
-  fi
-  # The entrypoint gave data/ to the image's user; it is taken back first.
-  done_=1
-  if [ ${#PROJECTS[@]} -gt 0 ]; then
-    retry docker run --rm --volume "$WORK:/work" --entrypoint chown "$IMAGE" -R "$(id -u):$(id -g)" /work || { failed=1; done_=""; }
-  fi
-  if [ -n "$done_" ]; then
-    rm -rf "$WORK" || failed=1
-  else
-    echo "kept $WORK" >&2
-  fi
-  if [ -n "$failed" ] && [ "$code" -eq 0 ]; then
-    code=1
-  fi
-  exit "$code"
-}
+# shellcheck source=tests/setup-proof/cleanup.sh
+. "$HERE/cleanup.sh"
 trap cleanup EXIT
 
 # `cyfr setup --no-pull` `$2...` in the project `$1`, as a person runs it

@@ -13,8 +13,10 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -279,7 +281,7 @@ func TestSetupOffersTheStartAgainOrThisDeviceOnly(t *testing.T) {
 				t.Fatal(err)
 			}
 			st := awaitPhase(t, sess, setup.PhaseProblem)
-			if st.Sentence != "cyfr did not become healthy" || !slices.Equal(st.Offers, []string{setup.OfferRetry, setup.OfferLocal}) || st.Joined != "cyfr.tail1234.ts.net" {
+			if st.Sentence != "cyfr did not become healthy" || !slices.Equal(st.Offers, []string{setup.OfferRetry, setup.OfferLocal}) || st.Joined != "cyfr.tail1234.ts.net" || st.Starting != access.ModeTailnet {
 				t.Fatalf("the failed start shows %+v", st)
 			}
 			if offer == setup.OfferRetry {
@@ -297,7 +299,7 @@ func TestSetupOffersTheStartAgainOrThisDeviceOnly(t *testing.T) {
 			}
 			// Choose ended the problem shown: the one awaited is the
 			// local home's.
-			if st := awaitPhase(t, sess, setup.PhaseProblem); !slices.Equal(st.Offers, []string{setup.OfferRetry}) || accessOf(t) != access.ModeLocal {
+			if st := awaitPhase(t, sess, setup.PhaseProblem); !slices.Equal(st.Offers, []string{setup.OfferRetry}) || accessOf(t) != access.ModeLocal || st.Starting != access.ModeLocal {
 				t.Fatalf("the local home's failed start shows %+v, the home %s", st, accessOf(t))
 			}
 			s.startErr = nil
@@ -492,7 +494,7 @@ func awaitEnd(t *testing.T, done <-chan error) error {
 
 // cyfr setup serves its pages on loopback, writing their address to
 // .cyfr/setup.url and printing it, until the pages have read the home up;
-// then it stops serving, removes the address and the .cyfr/ it made for it,
+// then it stops serving, removes the address, keeping its lock's file,
 // and exits 0.
 func TestSetupServesThePagesUntilTheyReadTheHomeUp(t *testing.T) {
 	newInitProject(t)
@@ -518,7 +520,7 @@ func TestSetupServesThePagesUntilTheyReadTheHomeUp(t *testing.T) {
 	if _, err := http.Get(c.base + "/"); err == nil {
 		t.Errorf("the pages are still served")
 	}
-	if fileExists(setupURLFile) || fileExists(".cyfr") {
+	if fileExists(setupURLFile) {
 		t.Errorf("cyfr setup left its address behind")
 	}
 	if !strings.Contains(out.String(), "Setup is at "+c.base+"/#"+c.token+"\n") {
@@ -556,10 +558,13 @@ func TestSetupInterrupted(t *testing.T) {
 		done := runSetupInBackground(ctx, io.Discard)
 		openPages(t)
 		cancel()
-		if err := awaitEnd(t, done); err == nil || err.Error() != "cyfr setup was interrupted before it began; nothing was written" {
+		if err := awaitEnd(t, done); err == nil || err.Error() != "cyfr setup was interrupted before the start; nothing of the home was written" {
 			t.Errorf("cyfr setup answered %v", err)
 		}
-		nothingWritten(t, ".env.example")
+		nothingWritten(t, ".cyfr", ".env.example")
+		if entries, _ := os.ReadDir(".cyfr"); len(entries) != 1 || entries[0].Name() != "setup.lock" {
+			t.Errorf(".cyfr holds %v, want the setup's lock alone", entries)
+		}
 	})
 	t.Run("while the join waits", func(t *testing.T) {
 		newInitProject(t)
@@ -581,4 +586,181 @@ func TestSetupInterrupted(t *testing.T) {
 			t.Errorf("%d cancels, %d starts, the home %s", s.cancels, s.starts, accessOf(t))
 		}
 	})
+}
+
+// One setup serves a project's pages: a second, started while the first
+// serves, is refused before it binds or writes anything, and the first's
+// address stays published until the first stops.
+func TestSetupRefusesASecondSetupInTheProject(t *testing.T) {
+	newInitProject(t)
+	useFakeEngine(t)
+	ctx, stop := context.WithCancel(context.Background())
+	defer stop()
+	first := runSetupInBackground(ctx, io.Discard)
+	c := openPages(t)
+	published, err := os.ReadFile(setupURLFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A second setup that serves is ended, and fails the test.
+	secondCtx, stopSecond := context.WithCancel(context.Background())
+	defer stopSecond()
+	var out bytes.Buffer
+	second := make(chan error, 1)
+	go func() { second <- runSetup(secondCtx, setupOptions{noPull: true}, &syncWriter{w: &out}) }()
+	select {
+	case err = <-second:
+	case <-time.After(5 * time.Second):
+		stopSecond()
+		<-second
+		t.Fatalf("a second setup served beside the first:\n%s", out.String())
+	}
+	want := "Another cyfr setup is serving this project's pages, at the address in .cyfr/setup.url. Nothing was changed. Use those pages, or stop that cyfr setup and run this again"
+	if err == nil || err.Error() != want || out.Len() != 0 {
+		t.Fatalf("a second setup answered %v and printed %q, want %q and nothing printed", err, out.String(), want)
+	}
+	if now, err := os.ReadFile(setupURLFile); err != nil || string(now) != string(published) {
+		t.Errorf("the first setup's address is %q (%v), want %q", now, err, published)
+	}
+	if _, status := c.do(http.MethodGet, "/api/state", nil); status != http.StatusOK {
+		t.Errorf("the first setup's pages answered %d", status)
+	}
+	stop()
+	awaitEnd(t, first)
+	if fileExists(setupURLFile) {
+		t.Errorf("the first setup left its address behind")
+	}
+	// The lock goes with the setup that held it.
+	again, stopAgain := context.WithCancel(context.Background())
+	third := runSetupInBackground(again, io.Discard)
+	openPages(t)
+	stopAgain()
+	awaitEnd(t, third)
+}
+
+// receiptBlocker is the docker of a project whose stack never ran: every
+// `docker ps` answers no container, and every other call is refused. Armed
+// with a receipt's path, its first `ps` makes a directory there, after the
+// switch has looked its id up and before it commits, so the switch's
+// receipt cannot be written once .env is.
+type receiptBlocker struct {
+	mu      sync.Mutex
+	receipt string
+	blocked bool
+}
+
+func (d *receiptBlocker) Run(ctx context.Context, c access.Call) (access.Result, error) {
+	if len(c.Args) == 0 || c.Args[0] != "ps" {
+		return access.Result{}, fmt.Errorf("no docker call but ps is answered here: %v", c.Args)
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.receipt != "" && !d.blocked {
+		d.blocked = true
+		if err := os.Mkdir(d.receipt, 0o700); err != nil {
+			return access.Result{}, err
+		}
+	}
+	return access.Result{}, nil
+}
+
+// blockedReceiptEngine is the access engine itself over a receiptBlocker,
+// its first switch's receipt blocked and the block gone once that switch
+// answers, so recovery writes it; its stack checks and starts answer as a
+// started home.
+type blockedReceiptEngine struct {
+	*access.Engine
+	d   *receiptBlocker
+	dir string
+}
+
+func (e *blockedReceiptEngine) Switch(ctx context.Context, r access.SwitchRequest) (access.Receipt, error) {
+	e.d.mu.Lock()
+	first := !e.d.blocked && e.d.receipt == ""
+	if first {
+		e.d.receipt = filepath.Join(e.dir, ".cyfr", "receipts", r.ID+".json")
+	}
+	e.d.mu.Unlock()
+	if first {
+		defer os.Remove(e.d.receipt)
+	}
+	return e.Engine.Switch(ctx, r)
+}
+
+func (e *blockedReceiptEngine) CheckStack(context.Context) error { return nil }
+
+func (e *blockedReceiptEngine) Start(context.Context, string) (access.Receipt, error) {
+	h, err := e.Head()
+	if err != nil {
+		return access.Receipt{}, err
+	}
+	return access.Receipt{Op: "start", State: "completed", Outcome: "ok", FinalHead: &h}, nil
+}
+
+// switchFailsAfterCommit makes the session's engine the access engine
+// whose first switch commits .env and then fails writing its receipt, and
+// starts a public home's run on it: the run shows the failure, .env public
+// and the change's journal unfinished.
+func switchFailsAfterCommit(t *testing.T, sess *setupSession) setup.State {
+	t.Helper()
+	d := &receiptBlocker{}
+	openEngine = func(dir string) (stackEngine, error) {
+		abs, err := filepath.Abs(dir)
+		if err != nil {
+			return nil, err
+		}
+		e, err := access.Open(abs, d)
+		if err != nil {
+			return nil, err
+		}
+		return &blockedReceiptEngine{Engine: e, d: d, dir: abs}, nil
+	}
+	if err := sess.Start(setup.Answers{Mode: access.ModePublic, Domain: "home.example.com", Email: "me@example.com"}); err != nil {
+		t.Fatal(err)
+	}
+	st := awaitPhase(t, sess, setup.PhaseProblem)
+	if !d.blocked || accessOf(t) != access.ModePublic || !fileExists(filepath.Join(".cyfr", "journal.json")) {
+		t.Fatalf("the switch did not fail after its commit: blocked %v, the home %s, %+v", d.blocked, accessOf(t), st)
+	}
+	if strings.Contains(st.Sentence, leftLocal(access.ModePublic)) || !slices.Equal(st.Offers, []string{setup.OfferRetry, setup.OfferLocal}) {
+		t.Errorf("the failed switch shows %+v: a home .env holds public is not said to be local", st)
+	}
+	return st
+}
+
+// "Start on this device only" after a switch that committed .env and
+// then failed: the engine's recovery establishes what the switch left,
+// then the home is switched to local and started on this device, as the
+// start step says.
+func TestSetupThisDeviceOnlyAfterAFailedSwitchIsLocal(t *testing.T) {
+	_, sess, out := newSetupRun(t)
+	switchFailsAfterCommit(t, sess)
+	if err := sess.Choose(setup.OfferLocal); err != nil {
+		t.Fatal(err)
+	}
+	st := ended(t, sess)
+	if st.Phase != setup.PhaseDone || st.Mode != access.ModeLocal || st.Address != "http://localhost:4000" || accessOf(t) != access.ModeLocal {
+		t.Fatalf("this device only ended %+v, the home %s\n%s", st, accessOf(t), out)
+	}
+	if fileExists(filepath.Join(".cyfr", "journal.json")) {
+		t.Errorf("the switch's journal is left unfinished")
+	}
+}
+
+// "Try again" after a switch that committed .env and then failed: the
+// engine's recovery finishes the change, which is what was asked, and the
+// home starts as asked, not refused as unchanged.
+func TestSetupTryAgainAfterAFailedSwitchTakesItsRecovery(t *testing.T) {
+	_, sess, out := newSetupRun(t)
+	switchFailsAfterCommit(t, sess)
+	if err := sess.Choose(setup.OfferRetry); err != nil {
+		t.Fatal(err)
+	}
+	st := ended(t, sess)
+	if st.Phase != setup.PhaseDone || st.Mode != access.ModePublic || st.Address != "https://home.example.com" || accessOf(t) != access.ModePublic {
+		t.Fatalf("the change again ended %+v, the home %s\n%s", st, accessOf(t), out)
+	}
+	if fileExists(filepath.Join(".cyfr", "journal.json")) {
+		t.Errorf("the switch's journal is left unfinished")
+	}
 }
