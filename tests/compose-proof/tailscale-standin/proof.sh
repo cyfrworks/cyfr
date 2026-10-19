@@ -229,7 +229,7 @@ checks() {
   key="tskey-auth-proof$(od -An -N12 -tx1 /dev/urandom | tr -d ' \n')"
   (printf '%s\n' "$key" | docker run -i --rm --name "$p-join2" --network "$p-join" \
     -v "$p-b:/var/lib/tailscale" "${JOIN_ENV[@]}" -e TS_HOSTNAME=cyfr ${mount[@]+"${mount[@]}"} "$IMAGE" \
-    sh -c 'IFS= read -r TS_AUTHKEY && export TS_AUTHKEY && exec timeout -s TERM 30 containerboot' \
+    timeout -s TERM 30 sh -c 'IFS= read -r TS_AUTHKEY && export TS_AUTHKEY && exec containerboot' \
     >"$WORK/$1-join2.log" 2>&1) &
   status="$(await_status "$p-join2" Running)"
   [ "$(jget "$status" Self DNSName)" = "$NAME." ] || nope "the auth key logged the machine in as another name: $status"

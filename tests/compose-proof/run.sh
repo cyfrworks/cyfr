@@ -341,6 +341,23 @@ sentence() {
   python3 -I -c "$SENTENCE_PY" "$ROOT/tests/fixtures/reach_modes.json" "$@"
 }
 
+# The sentence of refusal `$1` rendered from its one variant whose slots
+# `$2...` (name=value) fill exactly, as the command line renders it.
+render() {
+  python3 -I -c '
+import json, re, sys
+vectors, code = json.load(open(sys.argv[1])), sys.argv[2]
+given = dict(a.split("=", 1) for a in sys.argv[3:])
+for r in vectors["refusals"]:
+    if r["code"] != code:
+        continue
+    for v in r["variants"]:
+        if sorted(v["slots"]) == sorted(given) and all(given.get(k) == x for k, x in v["fixed"].items()):
+            print(re.sub(r"\{([a-z_]+)\}", lambda m: given[m.group(1)], v["template"]))
+            sys.exit(0)
+sys.exit(1)' "$ROOT/tests/fixtures/reach_modes.json" "$@" || fail "no variant of $1 is filled by $*"
+}
+
 # The vectors' boot sentence of the vector named `$1`.
 boot_sentence() {
   python3 -I -c '
@@ -1482,8 +1499,10 @@ restore_identity_case() {
   step "restore-identity: cyfr restore of A"
   status=0
   cli_run restore restore "$snapshot" || status=$?
-  sentence tailnet_node_mismatch "$WORK/restore.log" node=cyfr-1.proof.ts.net env=cyfr.proof.ts.net >/dev/null ||
-    fail "the restore's start did not say tailnet_node_mismatch (exit $status): $(tail -n 20 "$WORK/restore.log")"
+  # Exit 3: the home started, on this machine only.
+  [ "$status" -eq 3 ] || fail "cyfr restore exited $status, not 3, the start that leaves the home on this machine only: $(tail -n 20 "$WORK/restore.log")"
+  grep -qF -- "$(render tailnet_node_mismatch node=cyfr-1.proof.ts.net env=cyfr.proof.ts.net)" "$WORK/restore.log" ||
+    fail "the restore's start did not say tailnet_node_mismatch's sentence for B and A: $(tail -n 20 "$WORK/restore.log")"
   [ "$(env_value CYFR_HOST)" = cyfr.proof.ts.net ] && [ "$(env_value CYFR_TAILNET_NODE_ID)" = "$a_id" ] ||
     fail "after the restore .env names $(env_value CYFR_HOST) ($(env_value CYFR_TAILNET_NODE_ID)), not A"
   await_healthy
@@ -1503,7 +1522,10 @@ restore_identity_case() {
 
   step "restore-identity: cyfr reach tailnet previews A's address to B's"
   cp "$WORK/.env" "$WORK/.env.restored"
-  (printf 'n\n' | cyfr_cli reach tailnet) >"$WORK/preview.log" 2>&1 || true
+  # With no terminal and no --yes, it shows the preview and changes nothing.
+  status=0
+  cli_run preview reach tailnet || status=$?
+  [ "$status" -ne 0 ] || fail "cyfr reach tailnet with no terminal and no --yes made the change: $(tail -n 20 "$WORK/preview.log")"
   python3 -I -c '
 import sys
 text = open(sys.argv[1]).read()
@@ -1511,7 +1533,7 @@ a, b = text.find("https://cyfr.proof.ts.net"), text.find("https://cyfr-1.proof.t
 sys.exit(0 if 0 <= a < b else 1)' "$WORK/preview.log" ||
     fail "cyfr reach tailnet does not preview https://cyfr.proof.ts.net to https://cyfr-1.proof.ts.net: $(tail -n 20 "$WORK/preview.log")"
   cmp -s "$WORK/.env" "$WORK/.env.restored" || fail "the declined preview changed .env"
-  ok "cyfr reach tailnet previews https://cyfr.proof.ts.net -> https://cyfr-1.proof.ts.net, and, declined, changes nothing"
+  ok "cyfr reach tailnet previews https://cyfr.proof.ts.net -> https://cyfr-1.proof.ts.net, and, unconfirmed, changes nothing"
 }
 
 # ---------------------------------------------------------------------------
