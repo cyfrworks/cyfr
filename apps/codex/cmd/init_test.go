@@ -353,6 +353,38 @@ func TestInitRefusesAnExistingEnvWithoutReachAndWritesNothing(t *testing.T) {
 	}
 }
 
+// The end of the input is no answer: init's reach question read at it
+// makes the home local, as --no-interactive would, saying so, and never
+// joins a tailnet; an empty line takes the recommended answer.
+func TestInitTakesTheEndOfInputAsNoAnswer(t *testing.T) {
+	newInitProject(t)
+	s := useFakeEngine(t)
+	askTerminal = func() bool { return true }
+	askInput = strings.NewReader("")
+	var out bytes.Buffer
+	if err := runInit(context.Background(), initOptions{noPull: true}, &out, &out); err != nil {
+		t.Fatalf("init: %v\n%s", err, out.String())
+	}
+	if len(s.joins) != 0 || len(s.switches) != 0 || reachOf(t) != reach.ModeLocal {
+		t.Fatalf("the end of the input joined %d times, switched %d times and left the home %s, want local and nothing joined\n%s", len(s.joins), len(s.switches), reachOf(t), out.String())
+	}
+	if want := "No answer was read, so this home is reached from this computer only; `cyfr reach tailnet` or `cyfr reach public --domain <your domain>` changes that."; !strings.Contains(out.String(), want) {
+		t.Errorf("init does not say why the home is local:\n%s", out.String())
+	}
+
+	newInitProject(t)
+	s = useFakeEngine(t)
+	askTerminal = func() bool { return true }
+	askInput = strings.NewReader("\n")
+	out.Reset()
+	if err := runInit(context.Background(), initOptions{noPull: true}, &out, &out); err != nil {
+		t.Fatalf("init: %v\n%s", err, out.String())
+	}
+	if len(s.joins) != 1 || reachOf(t) != reach.ModeTailnet {
+		t.Errorf("an empty line joined %d times and left the home %s, want the recommended tailnet\n%s", len(s.joins), reachOf(t), out.String())
+	}
+}
+
 // Given no operator email, init mints the setup token into .env and says
 // how the link is had, and `cyfr setup link` prints it at the home's
 // loopback port; given one, the operators' line holds it and there is no

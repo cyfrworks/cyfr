@@ -10,6 +10,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -391,6 +392,72 @@ func TestReachConfirmsTheJoinBeforeItStarts(t *testing.T) {
 			t.Errorf("the identity --new-node removes was not named before anything ran:\n%s", out.String())
 		}
 	})
+	// The join a new node makes removes the machine's identity before it
+	// joins, so a change declined after it says so, naming the identity
+	// the admin console still lists.
+	t.Run("a new node joined, then the change declined", func(t *testing.T) {
+		s := newReachProject(t)
+		s.joined[""] = reach.Join{Name: "old.tail1234.ts.net", NodeID: "nOLDNODECNTRL"}
+		askTerminal = func() bool { return true }
+		askInput = answers("yes", "no")
+		var out bytes.Buffer
+		err := runReach(context.Background(), reach.ModeTailnet, reachOptions{newNode: true}, false, "", &out)
+		want := "The change was not confirmed. This machine's tailnet identity `old.tail1234.ts.net` was removed, and the Tailscale admin console still lists it until you remove it there; the machine joined your tailnet as `cyfr.tail1234.ts.net`, and how this home is reached was not changed"
+		if err == nil || err.Error() != want || len(s.joins) != 1 || len(s.switches) != 0 {
+			t.Fatalf("a declined change after a new node answered %v (joins %d, switches %d), want %q\n%s", err, len(s.joins), len(s.switches), want, out.String())
+		}
+	})
+}
+
+// The preview shows every field of the head that changes, in words: beside
+// the four sentences, a line for each changed field they do not show, the
+// tailnet machine (its name and id), the port on this computer and the
+// builds service, so no change reads as none.
+func TestReachPreviewShowsEveryChangedField(t *testing.T) {
+	tailnet := reach.Head{Mode: reach.ModeTailnet, Host: "cyfr.tail1234.ts.net", NodeID: "nAAAAAAAAACNTRL", PublicURL: "https://cyfr.tail1234.ts.net", Port: 4000, BuildsURL: defaultBuildsURL, Profiles: []string{buildsProfile, reach.ModeTailnet}}
+	for name, c := range map[string]struct {
+		change func(h *reach.Head)
+		line   string
+	}{
+		"another node, the same name": {func(h *reach.Head) { h.NodeID = "nBBBBBBBBBCNTRL" }, "  Tailnet machine: cyfr.tail1234.ts.net (nAAAAAAAAACNTRL) → cyfr.tail1234.ts.net (nBBBBBBBBBCNTRL)\n"},
+		"the port on this computer":   {func(h *reach.Head) { h.Port = 4123 }, "  Port on this computer: 4000 → 4123\n"},
+		"builds turned off": {func(h *reach.Head) {
+			h.BuildsURL, h.Profiles = "", []string{reach.ModeTailnet}
+		}, "  Builds service: " + defaultBuildsURL + " → off\n"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			next := tailnet
+			next.Profiles = slices.Clone(tailnet.Profiles)
+			c.change(&next)
+			if next.Digest() == tailnet.Digest() {
+				t.Fatal("the change does not change the head")
+			}
+			var out bytes.Buffer
+			printPreview(&out, reach.Preview{Old: tailnet, New: next, OldDigest: tailnet.Digest(), NewDigest: next.Digest(), OldWords: reach.Describe(tailnet), NewWords: reach.Describe(next)})
+			if !strings.Contains(out.String(), c.line) {
+				t.Errorf("the preview lacks %q:\n%s", c.line, out.String())
+			}
+			changed := 0
+			for _, line := range strings.Split(out.String(), "\n") {
+				if _, change, ok := strings.Cut(line, ": "); ok {
+					if before, after, ok := strings.Cut(change, " → "); ok && before != after {
+						changed++
+					}
+				}
+			}
+			if changed != 1 {
+				t.Errorf("the preview shows %d changed lines, want the one:\n%s", changed, out.String())
+			}
+		})
+	}
+	// A machine joined for the first time is a tailnet machine where there
+	// was none.
+	local := reach.Head{Mode: reach.ModeLocal, Host: "localhost", PublicURL: "http://localhost:4000", Port: 4000, BuildsURL: defaultBuildsURL, Profiles: []string{buildsProfile}}
+	var out bytes.Buffer
+	printPreview(&out, reach.Preview{Old: local, New: tailnet, OldWords: reach.Describe(local), NewWords: reach.Describe(tailnet)})
+	if want := "  Tailnet machine: none → cyfr.tail1234.ts.net (nAAAAAAAAACNTRL)\n"; !strings.Contains(out.String(), want) {
+		t.Errorf("the preview lacks %q:\n%s", want, out.String())
+	}
 }
 
 // A machine already on the tailnet refuses --hostname and

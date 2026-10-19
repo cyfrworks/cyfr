@@ -345,45 +345,58 @@ type joinChoice struct {
 	optionsGiven bool
 }
 
+// joined is the join a preview made: its id, "" when the preview needed
+// none, and the tailnet identity --new-node removed before it, "" when
+// none is known.
+type joined struct {
+	id, removed string
+}
+
 // previewTarget is the engine's preview of target: for tailnet, from the
 // machine as it is joined, joining it first (joinTailnet, under the join's
 // request id) when it is not, or when --new-node replaces its identity,
-// and answering the join's id. The join is what changes the tailnet, so
-// it is confirmed before it starts; a machine already joined refuses the
+// and answering the join. The join is what changes the tailnet, so it is
+// confirmed before it starts; a machine already joined refuses the
 // options of a new join rather than ignore them.
-func previewTarget(ctx context.Context, e stackEngine, target reach.Target, id string, o reachOptions, key []byte, out io.Writer, choice joinChoice) (reach.Preview, string, error) {
+func previewTarget(ctx context.Context, e stackEngine, target reach.Target, id string, o reachOptions, key []byte, out io.Writer, choice joinChoice) (reach.Preview, joined, error) {
 	p, err := e.Preview(ctx, target, "")
 	if target.Mode != reach.ModeTailnet {
-		return p, "", engineFailure(err)
+		return p, joined{}, engineFailure(err)
 	}
 	var r *reach.Refusal
 	notJoined := errors.As(err, &r) && r.Code == "tailnet_not_joined"
 	switch {
 	case err == nil && !o.newNode:
 		if choice.optionsGiven {
-			return reach.Preview{}, "", alreadyJoined(p.New.Host, o)
+			return reach.Preview{}, joined{}, alreadyJoined(p.New.Host, o)
 		}
-		return p, "", nil
+		return p, joined{}, nil
 	case err != nil && !notJoined && (!o.newNode || r == nil || r.Code == "tailnet_active"):
-		return reach.Preview{}, "", engineFailure(err)
+		return reach.Preview{}, joined{}, engineFailure(err)
 	}
-	if choice.confirm != nil {
-		current := ""
-		if err == nil {
-			current = p.New.Host
-		} else if h, herr := e.Head(); herr == nil && h.Mode == reach.ModeTailnet {
+	// The identity a new node removes: the machine's as it is joined, else
+	// the one .env names.
+	current := ""
+	switch {
+	case !o.newNode:
+	case err == nil:
+		current = p.New.Host
+	default:
+		if h, herr := e.Head(); herr == nil && h.Mode == reach.ModeTailnet {
 			current = h.Host
 		}
+	}
+	if choice.confirm != nil {
 		if err := choice.confirm(current); err != nil {
-			return reach.Preview{}, "", err
+			return reach.Preview{}, joined{}, err
 		}
 	}
 	joinID, err := joinTailnet(ctx, e, joinRequestID(id), o, key, out)
 	if err != nil {
-		return reach.Preview{}, "", err
+		return reach.Preview{}, joined{}, err
 	}
 	p, err = e.Preview(ctx, target, joinID)
-	return p, joinID, engineFailure(err)
+	return p, joined{id: joinID, removed: current}, engineFailure(err)
 }
 
 // alreadyJoined refuses the options of a new join for a machine already on
@@ -476,7 +489,8 @@ func headOf(h reach.Head, t reach.Target) bool {
 }
 
 // printPreview prints a change before it is made: each of the words as
-// before → after, then what the person must do when the address changes.
+// before → after, then each change they do not show (unwordedChanges),
+// then what the person must do when the address changes.
 func printPreview(out io.Writer, p reach.Preview) {
 	fmt.Fprintln(out, "This changes how this home is reached:")
 	before, after := p.OldWords.Sentences(), p.NewWords.Sentences()
@@ -485,6 +499,9 @@ func printPreview(out io.Writer, p reach.Preview) {
 		_, now, _ := strings.Cut(after[i], ": ")
 		fmt.Fprintf(out, "  %s: %s → %s\n", label, old, now)
 	}
+	for _, line := range unwordedChanges(p.Old, p.New) {
+		fmt.Fprintln(out, "  "+line)
+	}
 	if len(p.AddressChanges) > 0 {
 		fmt.Fprintln(out, "The address changes, so:")
 		for i, change := range p.AddressChanges {
@@ -492,6 +509,35 @@ func printPreview(out io.Writer, p reach.Preview) {
 		}
 		fmt.Fprintln(out, "Your CYFR identity does not change.")
 	}
+}
+
+// unwordedChanges are the head's changes the four sentences do not show,
+// each as before → after: the tailnet machine (its name and node id), the
+// port of cyfr's listener on this computer and the builds service.
+func unwordedChanges(old, next reach.Head) []string {
+	machine := func(h reach.Head) string {
+		if h.NodeID == "" {
+			return "none"
+		}
+		return h.Host + " (" + h.NodeID + ")"
+	}
+	builds := func(h reach.Head) string {
+		if h.BuildsURL == "" {
+			return "off"
+		}
+		return h.BuildsURL
+	}
+	var lines []string
+	if old.NodeID != next.NodeID {
+		lines = append(lines, "Tailnet machine: "+machine(old)+" → "+machine(next))
+	}
+	if old.Port != next.Port {
+		lines = append(lines, fmt.Sprintf("Port on this computer: %d → %d", old.Port, next.Port))
+	}
+	if old.BuildsURL != next.BuildsURL {
+		lines = append(lines, "Builds service: "+builds(old)+" → "+builds(next))
+	}
+	return lines
 }
 
 // printWords prints the words a head reads as, indented.
@@ -522,7 +568,7 @@ var reachCmd = &cobra.Command{
   tailnet  your devices on Tailscale, at https://<machine>.<tailnet>.ts.net; the machine joins your tailnet first (the link it prints approves it, or --tailscale-auth-key-file joins it without one)
   public   anyone on the internet, who still has to sign in, at https://<--domain>, through Caddy on ports 80 and 443
 
-It shows the change first: who can reach the home, its address, the certificate email and the ports opened on this machine, each before → after, and what changes for passkeys, paired devices and clients when the address does. Confirm it (or pass --yes), and the stack is stopped and checked stopped, .env is rewritten, and what was running is started again in the new mode; a start that fails puts the home back as it was. With no terminal to confirm on and no --yes, it shows the change and makes none, and a tailnet change that needs this machine joined first is refused before the join.
+It shows the change first: who can reach the home, its address, the certificate email and the ports opened on this machine, each before → after, with the tailnet machine, the port on this computer and the builds service when they change, and what changes for passkeys, paired devices and clients when the address does. Confirm it (or pass --yes), and the stack is stopped and checked stopped, .env is rewritten, and what was running is started again in the new mode; a start that fails puts the home back as it was. With no terminal to confirm on and no --yes, it shows the change and makes none, and a tailnet change that needs this machine joined first is refused before the join.
 
 'cyfr reach status' shows how the home is reached and what runs, changing nothing. 'cyfr reach --resume' finishes a change an interrupted command left, under the lock, and reports what happened; it is what to run after an interruption.
 
@@ -607,14 +653,17 @@ func runReach(ctx context.Context, mode string, o reachOptions, yes bool, id str
 	if !yes {
 		choice.confirm = askJoin(in, out, o)
 	}
-	p, joinID, err := previewTarget(ctx, e, target, id, o, key, out, choice)
+	p, join, err := previewTarget(ctx, e, target, id, o, key, out, choice)
 	if err != nil {
 		return err
 	}
 	printPreview(out, p)
 	if !yes {
 		if a := strings.ToLower(ask(in, out, "Make this change? (yes/no)", "no")); a != "yes" && a != "y" {
-			if joinID != "" {
+			switch {
+			case join.removed != "":
+				return fmt.Errorf("The change was not confirmed. This machine's tailnet identity `%s` was removed, and the Tailscale admin console still lists it until you remove it there; the machine joined your tailnet as `%s`, and how this home is reached was not changed", join.removed, p.New.Host)
+			case join.id != "":
 				return fmt.Errorf("The change was not confirmed. This machine joined your tailnet as `%s`, and how this home is reached was not changed", p.New.Host)
 			}
 			return errors.New("the change was not confirmed. Nothing was changed")
@@ -625,7 +674,7 @@ func runReach(ctx context.Context, mode string, o reachOptions, yes bool, id str
 	// journal's to recover, never a half-made change this command walks
 	// away from.
 	if err := answerFailure(e.Switch(context.WithoutCancel(ctx), reach.SwitchRequest{
-		ID: id, Target: target, JoinID: joinID, OldDigest: p.OldDigest, NewDigest: p.NewDigest,
+		ID: id, Target: target, JoinID: join.id, OldDigest: p.OldDigest, NewDigest: p.NewDigest,
 	})); err != nil {
 		return err
 	}

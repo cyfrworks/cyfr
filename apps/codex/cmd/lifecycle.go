@@ -878,17 +878,20 @@ func chooseReach(o initOptions, interactive bool, r *bufio.Reader, out io.Writer
 		fmt.Fprintln(out, "  3. This computer only")
 		for c.mode == "" {
 			answer, more := askLine(r, out, "Choose 1, 2 or 3", "1")
-			switch answer {
-			case "1":
+			switch {
+			case answer == "1":
 				c.mode = reach.ModeTailnet
-			case "2":
+			case answer == "2":
 				c.mode = reach.ModePublic
-			case "3":
+			case answer == "3":
+				c.mode = reach.ModeLocal
+			case !more:
+				// The end of the input is no answer, least of all
+				// consent to join a tailnet: the home is local, as
+				// --no-interactive leaves it.
+				fmt.Fprintln(out, "No answer was read, so this home is reached from this computer only; `cyfr reach tailnet` or `cyfr reach public --domain <your domain>` changes that.")
 				c.mode = reach.ModeLocal
 			default:
-				if !more {
-					c.mode = reach.ModeLocal
-				}
 				fmt.Fprintln(out, "Answer 1, 2 or 3.")
 			}
 		}
@@ -942,12 +945,12 @@ func applyInitReach(ctx context.Context, c reachChoice, key []byte, optionsGiven
 	}
 	defer unlock()
 	target := reach.Target{Mode: c.mode, Domain: c.domain, ACMEEmail: c.acmeEmail}
-	p, joinID, err := previewTarget(ctx, e, target, id, c.reachOptions, key, out, joinChoice{optionsGiven: optionsGiven})
+	p, join, err := previewTarget(ctx, e, target, id, c.reachOptions, key, out, joinChoice{optionsGiven: optionsGiven})
 	if err != nil {
 		return reach.Head{}, err
 	}
 	rec, err := e.Switch(context.WithoutCancel(ctx), reach.SwitchRequest{
-		ID: id, Target: target, JoinID: joinID, OldDigest: p.OldDigest, NewDigest: p.NewDigest,
+		ID: id, Target: target, JoinID: join.id, OldDigest: p.OldDigest, NewDigest: p.NewDigest,
 	})
 	head := p.New
 	if rec.FinalHead != nil {
@@ -1097,14 +1100,15 @@ func startsWith(svc *yaml.Node, profiles []string) bool {
 const buildsProfile = "locus-builds"
 
 // ask prompts on out and reads a line from r, answering def for an empty
-// line or the end of the input.
+// line and "" for the end of the input (askLine).
 func ask(r *bufio.Reader, out io.Writer, question, def string) string {
 	answer, _ := askLine(r, out, question, def)
 	return answer
 }
 
 // askLine is ask, and whether the input may hold another line: false at
-// its end, where asking again reads nothing.
+// its end, where asking again reads nothing. The default answers an empty
+// line; the end of the input with nothing on its line is no answer, "".
 func askLine(r *bufio.Reader, out io.Writer, question, def string) (string, bool) {
 	if def != "" {
 		fmt.Fprintf(out, "%s [%s]: ", question, def)
@@ -1113,8 +1117,11 @@ func askLine(r *bufio.Reader, out io.Writer, question, def string) (string, bool
 	}
 	line, err := r.ReadString('\n')
 	line = strings.TrimSpace(line)
-	if line == "" {
-		return def, err == nil
+	switch {
+	case line == "" && err != nil:
+		return "", false
+	case line == "":
+		return def, true
 	}
 	return line, err == nil
 }
