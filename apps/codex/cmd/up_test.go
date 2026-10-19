@@ -590,7 +590,7 @@ func TestUpdateStopsNothingAfterAFailedStartWhileServeDoesNotClose(t *testing.T)
 		engine: closeServeFails{observedEngine{e, docker}, errors.New("no space left on device")},
 		head:   reach.Head{Mode: reach.ModeTailnet, Host: "cyfr.tail1234.ts.net", NodeID: "nAAAAAAAAACNTRL", PublicURL: "https://cyfr.tail1234.ts.net", Port: 4000, Profiles: []string{reach.ModeTailnet}}}
 	err = u.stopAfterSwitch(errors.New("cyfr did not become healthy"))
-	want := "Release 0.9.0 did not start (cyfr did not become healthy), and Tailscale Serve could not be closed (no space left on device), so the stack was not stopped; stop it with 'cyfr down'.\nThe snapshot of release 0.8.0 is backups/snapshot; restore it with:\n  cyfr restore backups/snapshot"
+	want := "Release 0.9.0 did not start (cyfr did not become healthy), and Tailscale Serve could not be closed (no space left on device), so nothing was stopped and the stack may still be running with Serve open; stop it with 'cyfr down'.\nThe snapshot of release 0.8.0 is backups/snapshot; restore it with:\n  cyfr restore backups/snapshot"
 	if err == nil || err.Error() != want {
 		t.Errorf("the failure cleanup answered %v, want %q", err, want)
 	}
