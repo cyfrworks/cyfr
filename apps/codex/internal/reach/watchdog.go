@@ -30,8 +30,15 @@ func watchdogArgs(deadline time.Duration, lock bool) []string {
 // lock's descriptor, and kills that group at the deadline (exit 124) or
 // when it is asked to stop. It exits with docker's status; 125 when it
 // could not run it. Its parent's death does not end it: the lock stays
-// held until docker ends, at the latest at the deadline.
+// held until docker ends, at the latest at the deadline. Docker's own
+// streams pass through to the engine, which says them only by
+// diagnosis; the watchdog's own lines are redacted with the .env of the
+// project directory it runs in (redactor).
 func watchdogMain(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
+	say := func(format string, a ...any) {
+		env, _ := os.ReadFile(".env")
+		fmt.Fprint(stderr, redactorFor(env, nil).text(fmt.Sprintf(format, a...)))
+	}
 	var deadline time.Duration
 	lockFD := -1
 	i := 0
@@ -48,12 +55,12 @@ func watchdogMain(args []string, stdin io.Reader, stdout, stderr io.Writer) int 
 			}
 			i++
 		default:
-			fmt.Fprintf(stderr, "cyfr internal docker-run: unknown option %q\n", args[i])
+			say("cyfr internal docker-run: unknown option %q\n", args[i])
 			return 125
 		}
 	}
 	if i >= len(args)-1 || deadline <= 0 {
-		fmt.Fprintln(stderr, "usage: cyfr internal docker-run --deadline DURATION [--lock-fd N] -- docker ARGS...")
+		say("usage: cyfr internal docker-run --deadline DURATION [--lock-fd N] -- docker ARGS...\n")
 		return 125
 	}
 	command := args[i+1:]
@@ -72,7 +79,7 @@ func watchdogMain(args []string, stdin io.Reader, stdout, stderr io.Writer) int 
 	}
 	ownGroup(cmd)
 	if err := cmd.Start(); err != nil {
-		fmt.Fprintf(stderr, "cyfr internal docker-run: %v\n", err)
+		say("cyfr internal docker-run: %v\n", err)
 		var exit *exec.Error
 		if errors.As(err, &exit) {
 			return 127
@@ -97,7 +104,7 @@ func watchdogMain(args []string, stdin io.Reader, stdout, stderr io.Writer) int 
 		return 143
 	}
 	if killed {
-		fmt.Fprintf(stderr, "cyfr internal docker-run: killed docker at its %s deadline\n", deadline)
+		say("cyfr internal docker-run: killed docker at its %s deadline\n", deadline)
 		return watchdogDeadline
 	}
 	var exit *exec.ExitError

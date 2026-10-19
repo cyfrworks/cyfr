@@ -683,7 +683,10 @@ func newTailnetHome(t *testing.T) string {
 	if err != nil {
 		t.Fatal(err)
 	}
-	env := reach.EditEnv([]byte(text), d.Assignments, d.Removals)
+	env, err := reach.EditEnv([]byte(text), d.Assignments, d.Removals)
+	if err != nil {
+		t.Fatal(err)
+	}
 	for name, content := range map[string][]byte{"docker-compose.yml": compose, ".env": env, "cyfr.yaml": []byte("name: test\n")} {
 		if err := os.WriteFile(name, content, 0600); err != nil {
 			t.Fatal(err)

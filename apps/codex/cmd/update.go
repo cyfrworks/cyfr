@@ -999,7 +999,11 @@ func (u *updater) readConfig() error {
 	if len(keyring) == 0 {
 		return errors.New("Neither CYFR_CRYPTO_KEYRING nor CYFR_SECRET_KEY_BASE is set for cyfr, so a snapshot would hold no key to its data; nothing was changed")
 	}
-	c.keyring = string(reach.EditEnv(nil, keyring, nil))
+	keyringText, err := reach.EditEnv(nil, keyring, nil)
+	if err != nil {
+		return engineFailure(err)
+	}
+	c.keyring = string(keyringText)
 	if f, err := os.Open(".env"); err != nil {
 		return fmt.Errorf("cyfr update cannot read .env (%v), which the snapshot copies; nothing was changed", err)
 	} else {

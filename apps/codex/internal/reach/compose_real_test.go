@@ -326,14 +326,15 @@ func TestRealComposeRunsTheMaterializedConfiguration(t *testing.T) {
 // Compose's own diagnostics quote .env's text: a malformed line holding a
 // database credential, or a secret interpolated into a value compose
 // cannot convert. CheckStack reports what failed, by file and line or by
-// configuration path, never that text.
+// configuration path, never that text: a .env line compose cannot read is
+// refused by its number before compose is asked.
 func TestRealComposeDiagnosticsCarryNoEnvValue(t *testing.T) {
 	requireCompose(t)
 	const secret = "sentinel-secret-from-env"
 	for name, c := range map[string]struct{ env, override, says string }{
-		"unterminated quote": {env: "DATABASE_URL=\"postgres://alice:" + secret + "@localhost/db\n", says: "it could not read .env at line "},
-		"no separator":       {env: "DATABASE_URL postgres://alice:" + secret + "@localhost/db\n", says: "it could not read .env at line "},
-		"bad name":           {env: "BROKEN! " + secret + " =value\n", says: "it could not read .env at line "},
+		"unterminated quote": {env: "DATABASE_URL=\"postgres://alice:" + secret + "@localhost/db\n", says: "Line 155 of `.env` does not read as Docker Compose reads it"},
+		"no separator":       {env: "DATABASE_URL postgres://alice:" + secret + "@localhost/db\n", says: "Line 155 of `.env` does not read as Docker Compose reads it"},
+		"bad name":           {env: "BROKEN! " + secret + " =value\n", says: "Line 155 of `.env` does not read as Docker Compose reads it"},
 		"conversion":         {env: "CYFR_LIMIT=" + secret + "\n", override: "services:\n  cyfr:\n    deploy:\n      resources:\n        limits:\n          cpus: ${CYFR_LIMIT}\n", says: "it refused the value of services[cyfr].deploy.resources.limits.cpus"},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -347,8 +348,12 @@ func TestRealComposeDiagnosticsCarryNoEnvValue(t *testing.T) {
 			if err == nil {
 				t.Fatal("the stack was accepted")
 			}
-			if strings.Contains(err.Error(), secret) || !strings.Contains(err.Error(), c.says) {
-				t.Errorf("CheckStack's error reads %v", err)
+			said := err.Error()
+			if r, ok := err.(*Refusal); ok {
+				said = r.Message()
+			}
+			if strings.Contains(err.Error(), secret) || !strings.Contains(said, c.says) {
+				t.Errorf("CheckStack's error reads %v (%s)", err, said)
 			}
 		})
 	}

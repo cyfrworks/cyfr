@@ -475,9 +475,11 @@ func (r *restorer) holdConfigFiles() error {
 // withBarrier answers the dotenv text env with restoreBarrier set to the
 // snapshot through the engine's editor (reach.EditEnv): its one
 // assignment, every other taken out, so no other line can set it empty,
-// and every other line, a quoted value's included, kept byte for byte.
-func withBarrier(env []byte, snapshot string) []byte {
-	return reach.EditEnv(env, map[string]string{restoreBarrier: snapshot}, nil)
+// and every other line, a quoted value's included, kept byte for byte. A
+// .env the editor cannot change so is refused, and nothing is written.
+func withBarrier(env []byte, snapshot string) ([]byte, error) {
+	out, err := reach.EditEnv(env, map[string]string{restoreBarrier: snapshot}, nil)
+	return out, engineFailure(err)
 }
 
 // writeDurable writes data over the file at name as writeFileAtomic does,
@@ -499,7 +501,11 @@ func writeDurable(name string, data []byte, mode os.FileMode) error {
 // only a new one, created from .env as it now stands, is barred.
 func (r *restorer) raiseBarrier() error {
 	r.offlineEnv = []string{restoreBarrier + "="}
-	if err := writeDurable(".env", withBarrier(r.held[".env"], r.snap.dir), 0600); err != nil {
+	barred, err := withBarrier(r.held[".env"], r.snap.dir)
+	if err == nil {
+		err = writeDurable(".env", barred, 0600)
+	}
+	if err != nil {
 		return fmt.Errorf("cyfr restore could not bar the cell from starting (%v)", err)
 	}
 	ctx, cancel := r.detached(composeRunTimeout)
@@ -536,7 +542,11 @@ func (r *restorer) putConfigFiles() error {
 	if err != nil {
 		return err
 	}
-	if err := writeDurable(".env", withBarrier(env, r.snap.dir), 0600); err != nil {
+	barred, err := withBarrier(env, r.snap.dir)
+	if err != nil {
+		return err
+	}
+	if err := writeDurable(".env", barred, 0600); err != nil {
 		return err
 	}
 	// From here every compose call runs under the snapshot's head.

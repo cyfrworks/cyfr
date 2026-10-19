@@ -262,7 +262,8 @@ func withStackKeys(text string) (string, []envChange, error) {
 	if err != nil {
 		return "", nil, err
 	}
-	return string(reach.EditEnv([]byte(text), add, nil)), changes, nil
+	out, err := reach.EditEnv([]byte(text), add, nil)
+	return string(out), changes, err
 }
 
 // .env is written through the engine's editor, with the grammar it is read
@@ -295,7 +296,7 @@ func TestEnvWritesKeepQuotedValuesWhole(t *testing.T) {
 			t.Errorf("init (%q form) did not write its own %s assignment (%q, %v)", form, corsOriginsVar, cors, ok)
 		}
 
-		barred := withBarrier([]byte(quoted), "/tmp/snapshot")
+		barred := barredEnv(t, []byte(quoted), "/tmp/snapshot")
 		if !strings.HasPrefix(string(barred), quoted) {
 			t.Errorf("the bar (%q form) changed the quoted value's bytes: %q", form, barred)
 		}

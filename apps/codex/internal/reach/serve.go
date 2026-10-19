@@ -93,7 +93,7 @@ func (s tsStatus) agrees(o tsStatus) bool {
 func (e *Engine) readStatus(ctx context.Context, args []string) (tsStatus, error) {
 	res, err := e.docker.Run(ctx, Call{Args: args, Deadline: probeDeadline})
 	if err != nil {
-		return tsStatus{}, errors.New(failed("tailscale status", err, res.Stderr))
+		return tsStatus{}, errors.New(e.callFailed("tailscale status", err, res.Stderr))
 	}
 	var s tsStatus
 	if err := json.Unmarshal(res.Stdout, &s); err != nil {

@@ -91,7 +91,7 @@ jobs:
       # tests that call requireCompose (TestComposeTestsAreTheOnesCIRequires).
       - name: go test (the Docker Compose tests ran and passed)
         env:
-          COMPOSE_TESTS: TestEnsureCyfrComposeFieldsAddsNothingWhenAMergeKeyBindsBothTargets TestEnsureComposeFieldsCopiesASharedAnchorBeforeAddingADefault TestInitSwitchesThroughTheRealEngineAndHostDocker TestRestoreKilledAtItsConfigurationReadLeavesComposeBarred TestRestoreStagedComposeResolvesAsTheDefaultOverrideSet TestRestoreStagedReadSelectsAsTheEngine TestUpRecoversAnInterruptedSwitchThroughTheRealEngine TestReachTailnetServesAClosedHomeAgainThroughTheRealEngine TestUpStartsOnThisMachineOnlyThroughTheRealEngine
+          COMPOSE_TESTS: TestEnsureCyfrComposeFieldsAddsNothingWhenAMergeKeyBindsBothTargets TestEnsureComposeFieldsCopiesASharedAnchorBeforeAddingADefault TestInitSwitchesThroughTheRealEngineAndHostDocker TestRestoreKilledAtItsConfigurationReadLeavesComposeBarred TestRestoreStagedComposeResolvesAsTheDefaultOverrideSet TestRestoreStagedReadSelectsAsTheEngine TestUpRecoversAnInterruptedSwitchThroughTheRealEngine TestReachTailnetServesAClosedHomeAgainThroughTheRealEngine TestUpStartsOnThisMachineOnlyThroughTheRealEngine TestRestoreBarKeepsAMultilineValueWithAnEscapedQuoteWhole
         run: |
           set -euo pipefail
           docker compose version
@@ -106,7 +106,7 @@ jobs:
       # (internal/reach's TestDockerTestsAreTheOnesCIRequires).
       - name: go test (the reach engine's Docker tests ran and passed)
         env:
-          REACH_DOCKER_TESTS: TestLockExcludesAHolderInAnotherPIDNamespace TestRealComposeCallHoldsTheLock TestRealComposeCheckStackAcceptsReachKeysThroughEnvFile TestRealComposeCheckStackRefusesAnOverrideSettingAHeadKey TestRealComposeDiagnosticsCarryNoEnvValue TestRealComposeProvenanceReadsNamesNotValues TestRealComposeRunsTheMaterializedConfiguration
+          REACH_DOCKER_TESTS: TestLockExcludesAHolderInAnotherPIDNamespace TestRealComposeCallHoldsTheLock TestRealComposeCheckStackAcceptsReachKeysThroughEnvFile TestRealComposeCheckStackRefusesAnOverrideSettingAHeadKey TestRealComposeDiagnosticsCarryNoEnvValue TestRealComposeProvenanceReadsNamesNotValues TestRealComposeRunsTheMaterializedConfiguration TestEditEnvWritesALiteralDollarAndQuoteComposeReadsBack TestEditEnvWritesEveryKeyComposeReadsBack TestReadEnvValuesReadsAsRealComposeDoes TestRealComposeConversionDiagnosticCarriesNoEnvValue TestRealComposeDiagnosticNamesNoFileAnEnvValueNames TestRealComposeDiagnosticReadsNoTextInsideAQuotedValue TestRealComposeNoEnvSecretLeavesTheEngine
         run: |
           set -euo pipefail
           docker compose version

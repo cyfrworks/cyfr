@@ -53,7 +53,7 @@ func (e *Engine) flatten(ctx context.Context, h Head) ([]byte, error) {
 	}
 	res, err := e.docker.Run(ctx, Call{Args: append(e.selection(files, h), "config"), Deadline: StopDeadline})
 	if err != nil {
-		return nil, fmt.Errorf("reach: %s", failed("docker compose config", err, res.Stderr))
+		return nil, fmt.Errorf("reach: %s", e.callFailed("docker compose config", err, res.Stderr))
 	}
 	return res.Stdout, nil
 }
