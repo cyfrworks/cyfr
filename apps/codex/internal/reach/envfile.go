@@ -113,7 +113,8 @@ func editHeadKeys(text []byte, want map[string]string) ([]byte, error) {
 // very end), is refused naming the line (compose_env_refused), and
 // nothing is written.
 func EditEnv(text []byte, set map[string]string, unset []string) ([]byte, error) {
-	return editEnv(text, set, unset)
+	out, err := editEnv(text, set, unset)
+	return out, redactorFor(text, nil).err(err)
 }
 
 func editEnv(text []byte, set map[string]string, unset []string) ([]byte, error) {
@@ -273,17 +274,17 @@ func EditEnvFile(path string, set map[string]string, unset []string) error {
 	}
 	data, err := os.ReadFile(path)
 	if err != nil && !errors.Is(err, fs.ErrNotExist) {
-		return err
+		return redactorFor(data, nil).err(err)
 	}
 	mode := os.FileMode(0o600)
 	if info, err := os.Stat(path); err == nil {
 		mode = info.Mode().Perm()
 	}
 	out, err := editEnv(data, set, unset)
-	if err != nil {
-		return err
+	if err == nil {
+		err = writeDurable(path, out, mode, nil)
 	}
-	return writeDurable(path, out, mode, nil)
+	return redactorFor(data, nil).err(err)
 }
 
 // readEnv reads the project's .env, nil when there is none, and refuses
@@ -332,11 +333,11 @@ func sha256Hex(data []byte) string {
 func ReadEnvValues(path string) (map[string]string, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return nil, err
+		return nil, redactorFor(nil, nil).err(err)
 	}
 	d, err := readDotenv(data, composeEnv)
 	if err != nil {
-		return nil, err
+		return nil, redactorFor(data, nil).err(err)
 	}
 	return d.values(), nil
 }
@@ -349,9 +350,9 @@ func ReadEnvValues(path string) (map[string]string, error) {
 func CheckEnvFile(path string) error {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return err
+		return redactorFor(nil, nil).err(err)
 	}
-	return checkEnv(data)
+	return redactorFor(data, nil).err(checkEnv(data))
 }
 
 func checkEnv(data []byte) error {

@@ -321,19 +321,19 @@ func (e *Engine) prepareJoin(ctx context.Context, a *joinAttempt) string {
 	if a.NewNode {
 		res, err := e.docker.Run(ctx, Call{Args: []string{"volume", "rm", "--force", e.stateVolume()}, Deadline: StopDeadline})
 		if err != nil {
-			return failed("docker volume rm", err, res.Stderr)
+			return e.callFailed("docker volume rm", err, res.Stderr)
 		}
 	}
 	if _, err := e.docker.Run(ctx, Call{Args: []string{"volume", "inspect", e.stateVolume()}, Deadline: probeDeadline}); err != nil {
 		res, err := e.docker.Run(ctx, Call{Args: []string{"volume", "create", "--label", labelProject + "=" + e.project, "--label", "com.docker.compose.volume=tailscale_state", e.stateVolume()}, Deadline: StopDeadline})
 		if err != nil {
-			return failed("docker volume create", err, res.Stderr)
+			return e.callFailed("docker volume create", err, res.Stderr)
 		}
 	}
 	if _, err := e.docker.Run(ctx, Call{Args: []string{"network", "inspect", e.joinNetwork()}, Deadline: probeDeadline}); err != nil {
 		res, err := e.docker.Run(ctx, Call{Args: []string{"network", "create", "--label", labelJoinProject + "=" + e.project, e.joinNetwork()}, Deadline: StopDeadline})
 		if err != nil {
-			return failed("docker network create", err, res.Stderr)
+			return e.callFailed("docker network create", err, res.Stderr)
 		}
 	}
 	return ""
@@ -372,7 +372,7 @@ func (e *Engine) startJoinContainer(ctx context.Context, a *joinAttempt) (string
 	}
 	res, err := e.docker.Run(ctx, Call{Args: args, Deadline: StartDeadline})
 	if err != nil {
-		return "", failed("docker run of the join container", err, res.Stderr)
+		return "", e.callFailed("docker run of the join container", err, res.Stderr)
 	}
 	return name, ""
 }
@@ -468,7 +468,7 @@ func (e *Engine) removeJoinContainers(ctx context.Context, joinID string) string
 	}
 	res, err := e.docker.Run(ctx, Call{Args: append([]string{"rm", "-f"}, names...), Deadline: StopDeadline})
 	if err != nil && !onlyGone(res.Stderr) {
-		return failed("docker rm", err, res.Stderr)
+		return e.callFailed("docker rm", err, res.Stderr)
 	}
 	return ""
 }
@@ -645,7 +645,7 @@ func (e *Engine) reapJoins(ctx context.Context, j *journal) error {
 	}
 	res, err := e.docker.Run(ctx, Call{Args: append([]string{"rm", "-f"}, names...), Deadline: StopDeadline})
 	if err != nil && !onlyGone(res.Stderr) {
-		return errors.New(failed("docker rm", err, res.Stderr))
+		return errors.New(e.callFailed("docker rm", err, res.Stderr))
 	}
 	return nil
 }

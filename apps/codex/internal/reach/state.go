@@ -242,9 +242,14 @@ func (e *Engine) setPhase(j *journal, phase string) error {
 	return nil
 }
 
+// saveJournal writes j durably, its free text redacted (redactor): a
+// resumed operation answers what it reads back.
 func (e *Engine) saveJournal(j *journal) error {
 	j.At = e.now()
-	return e.writeJSON(e.path(journalFile), j)
+	r := e.redactor()
+	saved := *j
+	saved.Reason, saved.Why, saved.Observed = r.text(j.Reason), r.text(j.Why), r.texts(j.Observed)
+	return e.writeJSON(e.path(journalFile), &saved)
 }
 
 // reached is the test seam at a named point of an operation.
@@ -309,8 +314,10 @@ func (e *Engine) finish(j *journal, r Receipt) (Receipt, error) {
 	return r, nil
 }
 
+// writeReceipt writes r durably, its free text redacted (redactor), so a
+// resend answers it redacted too.
 func (e *Engine) writeReceipt(r Receipt) error {
-	return e.writeJSON(e.receiptPath(r.RequestID), r)
+	return e.writeJSON(e.receiptPath(r.RequestID), e.redactor().receipt(r))
 }
 
 // prune removes every receipt both older than receiptAge and outside the

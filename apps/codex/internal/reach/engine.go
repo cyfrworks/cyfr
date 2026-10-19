@@ -55,7 +55,9 @@ type Docker interface {
 }
 
 // Engine owns how one project's home is reached: the reach keys of its
-// .env, the stack's reach services, and the state under .cyfr/.
+// .env, the stack's reach services, and the state under .cyfr/. What an
+// exported method answers, and every receipt and journal it writes,
+// passes the redactor (redact.go) last.
 type Engine struct {
 	dir    string
 	docker Docker
@@ -95,7 +97,7 @@ func Open(projectDir string, d Docker) (*Engine, error) {
 	}
 	e := &Engine{dir: dir, project: projectName(dir), files: map[string]materialized{}}
 	if e.project == "" {
-		return nil, fmt.Errorf("reach: %s has no name docker compose can take as its project's", dir)
+		return nil, e.redactor().err(fmt.Errorf("reach: %s has no name docker compose can take as its project's", dir))
 	}
 	e.docker = d
 	if d == nil {
@@ -125,7 +127,10 @@ func (e *ErrBusy) Refusal() *Refusal { return e.refusal() }
 // durably writes the holder record, naming holder (the command). It
 // answers the function that releases it, or *ErrBusy. Every method below
 // but Status, Preview and Receipt requires the lock held by this engine.
-func (e *Engine) Lock(holder string) (unlock func(), err error) { return e.lockProject(holder) }
+func (e *Engine) Lock(holder string) (unlock func(), err error) {
+	unlock, err = e.lockProject(holder)
+	return unlock, e.redactor().err(err)
+}
 
 // Docker is the engine's docker runner, for a command that holds the lock
 // and makes docker calls of its own (update's snapshot and pulls,
@@ -143,12 +148,16 @@ func (e *Engine) ComposeArgs(ctx context.Context, h Head, args ...string) ([]str
 	if err := e.requireLock(); err != nil {
 		return nil, err
 	}
-	return e.composeArgsFor(ctx, h, args...)
+	out, err := e.composeArgsFor(ctx, h, args...)
+	return out, e.redactor().err(err)
 }
 
 // Head is the head .env holds now, or the boot refusal that says why it
 // holds none (ResolveBoot with .env's own read, Release true).
-func (e *Engine) Head() (Head, error) { return e.envHead() }
+func (e *Engine) Head() (Head, error) {
+	h, err := e.envHead()
+	return h, e.redactor().err(err)
+}
 
 // CheckStack checks what `docker compose config` resolves for the stack
 // before anything starts: no reach key is assigned in the cyfr service's
@@ -156,7 +165,7 @@ func (e *Engine) Head() (Head, error) { return e.envHead() }
 // its override, every include: and extends:), .env reaches cyfr through
 // its env_file, and the effective values pass ResolveBoot with .env's own
 // read as File and the flattened environment as Process.
-func (e *Engine) CheckStack(ctx context.Context) error { return e.checkStack(ctx) }
+func (e *Engine) CheckStack(ctx context.Context) error { return e.redactor().err(e.checkStack(ctx)) }
 
 // Receipt is an operation's answer: rejected (Code says why, nothing
 // changed), accepted in Phase (in progress; "uncertain" is still unfinished
@@ -198,7 +207,12 @@ func (r Receipt) Refusal() *Refusal {
 // head with its two heads; a join container past its deadline is removed
 // and its attempt expired; an accepted cancel is completed. It answers the
 // receipts recovery wrote, none when nothing was unfinished.
-func (e *Engine) Resume(ctx context.Context) ([]Receipt, error) { return e.resume(ctx) }
+func (e *Engine) Resume(ctx context.Context) ([]Receipt, error) {
+	before := e.redactor()
+	out, err := e.resume(ctx)
+	r := before.with(e.redactor())
+	return r.receipts(out), r.err(err)
+}
 
 // Container is one container of the project, as docker reports it by the
 // project's compose label.
@@ -222,7 +236,11 @@ type Status struct {
 }
 
 // Status reads without the lock and changes nothing.
-func (e *Engine) Status(ctx context.Context) (Status, error) { return e.status(ctx) }
+func (e *Engine) Status(ctx context.Context) (Status, error) {
+	s, err := e.status(ctx)
+	r := e.redactor()
+	return r.status(s), r.err(err)
+}
 
 // Preview is a change shown before it is made: both complete heads, their
 // digests and words, and what stops working when the address changes.
@@ -245,7 +263,8 @@ type Preview struct {
 // when both heads are the same, and with tailnet_active when t asks for
 // tailnet while the head's node is serving.
 func (e *Engine) Preview(ctx context.Context, t Target, joinID string) (Preview, error) {
-	return e.preview(ctx, t, joinID)
+	p, err := e.preview(ctx, t, joinID)
+	return p, e.redactor().err(err)
 }
 
 // SwitchRequest is a switch: its request id, the target, the join whose
@@ -278,7 +297,9 @@ type RequestContent struct {
 // was first sent with; a rejected reach_request_reused receipt when it is
 // not, which changes and writes nothing; false for an id neither holds.
 func (e *Engine) Resent(id string, c RequestContent) (Receipt, bool, error) {
-	return e.resent(id, c)
+	rc, ok, err := e.resent(id, c)
+	r := e.redactor()
+	return r.receipt(rc), ok, r.err(err)
 }
 
 // AuthKeyFingerprint is an auth key's fingerprint as a request binds it:
@@ -297,7 +318,9 @@ func AuthKeyFingerprint(key []byte) string {
 // on a failed start. The receipt is its outcome; resending the same id
 // answers the same receipt.
 func (e *Engine) Switch(ctx context.Context, r SwitchRequest) (Receipt, error) {
-	return e.doSwitch(ctx, r)
+	before := e.redactor()
+	rc, err := e.doSwitch(ctx, r)
+	return e.leaving(before, rc, err)
 }
 
 // JoinRequest is a tailnet join: its request id, the machine name asked
@@ -318,7 +341,9 @@ type JoinRequest struct {
 // receipt's payload names the frozen name, node id and join id),
 // tailnet_https_off, tailnet_join_expired or tailnet_join_cancelled.
 func (e *Engine) Join(ctx context.Context, r JoinRequest) (Receipt, error) {
-	return e.doJoin(ctx, r)
+	before := e.redactor()
+	rc, err := e.doJoin(ctx, r)
+	return e.leaving(before, rc, err)
 }
 
 // CancelRequest cancels the waiting join JoinID.
@@ -330,16 +355,20 @@ type CancelRequest struct {
 // CancelJoin cancels the current waiting join; any other answers
 // tailnet_join_not_current.
 func (e *Engine) CancelJoin(ctx context.Context, r CancelRequest) (Receipt, error) {
-	return e.doCancelJoin(ctx, r)
+	before := e.redactor()
+	rc, err := e.doCancelJoin(ctx, r)
+	return e.leaving(before, rc, err)
 }
 
 // CancelWaitingJoin cancels whatever join waits, for update and restore
 // before they stop the stack.
-func (e *Engine) CancelWaitingJoin(ctx context.Context) error { return e.cancelWaitingJoin(ctx) }
+func (e *Engine) CancelWaitingJoin(ctx context.Context) error {
+	return e.redactor().err(e.cancelWaitingJoin(ctx))
+}
 
 // ForgetJoin removes join.json, for restore after its recovery: the
 // snapshot's head names its own node.
-func (e *Engine) ForgetJoin() error { return e.forgetJoin() }
+func (e *Engine) ForgetJoin() error { return e.redactor().err(e.forgetJoin()) }
 
 // Start is the one start path (up, update, restore; cause names it): it
 // checks the stack (CheckStack), writes Serve's empty configuration,
@@ -358,7 +387,9 @@ func (e *Engine) Start(ctx context.Context, cause string) (Receipt, error) {
 // StartWithin is Start with its own wait for cyfr's health, for a start
 // that may take longer, as an update's migrations do.
 func (e *Engine) StartWithin(ctx context.Context, cause string, health time.Duration) (Receipt, error) {
-	return e.doStart(ctx, cause, health)
+	before := e.redactor()
+	rc, err := e.doStart(ctx, cause, health)
+	return e.leaving(before, rc, err)
 }
 
 // Stop cancels a waiting join, then stops and verifies cyfr and every
@@ -368,7 +399,9 @@ func (e *Engine) StartWithin(ctx context.Context, cause string, health time.Dura
 // stop that cannot be verified answers reach_uncertain with what was
 // observed.
 func (e *Engine) Stop(ctx context.Context, cause string, all bool) (Receipt, error) {
-	return e.doStop(ctx, cause, all)
+	before := e.redactor()
+	rc, err := e.doStop(ctx, cause, all)
+	return e.leaving(before, rc, err)
 }
 
 // CloseServe writes Serve's empty configuration durably, as every stop
@@ -378,12 +411,25 @@ func (e *Engine) CloseServe(ctx context.Context) error {
 	if err := e.requireLock(); err != nil {
 		return err
 	}
-	return e.closeServe()
+	return e.redactor().err(e.closeServe())
 }
 
 // Receipt answers the receipt or the unfinished journal entry of request
 // id, reading without the lock.
-func (e *Engine) Receipt(id string) (Receipt, bool, error) { return e.receiptOf(id) }
+func (e *Engine) Receipt(id string) (Receipt, bool, error) {
+	rc, ok, err := e.receiptOf(id)
+	r := e.redactor()
+	return r.receipt(rc), ok, r.err(err)
+}
+
+// leaving is an operation's answer as it leaves the engine, redacted
+// (redactor) with what .env held before the operation and holds after
+// it, so a value an operation wrote, or one it replaced, is redacted
+// alike.
+func (e *Engine) leaving(before *redactor, rc Receipt, err error) (Receipt, error) {
+	r := before.with(e.redactor())
+	return r.receipt(rc), r.err(err)
+}
 
 // WatchdogMain is `cyfr internal docker-run`: it runs the docker command
 // its arguments name, holding the lock descriptor it inherited, and kills
