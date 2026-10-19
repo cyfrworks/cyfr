@@ -47,8 +47,10 @@ expect() {
 # ---- serve_closed ----------------------------------------------------------
 
 control='{"status":403,"headers":{},"body":"peerapi"}'
-refused='{"error":"refused","detail":"the proxy answered CONNECT cyfr-verify.example.ts.net:443 500: connect tcp 100.64.0.7:443: connection was refused"}'
+refused='{"error":"refused","detail":"the proxy answered CONNECT 100.64.0.7:443 500: connect tcp 100.64.0.7:443: connection was refused"}'
 expect pass "a refused Serve port beside an answering PeerAPI is closed" serve_closed "$control" "$refused"
+expect fail "a Serve port whose name the proxy's DNS server refused to resolve is not closed" serve_closed "$control" \
+  '{"error":"dns","detail":"the proxy answered CONNECT cyfr-verify.example.ts.net:443 500: lookup cyfr-verify.example.ts.net on 127.0.0.11:53: read udp 172.18.0.2:45376->127.0.0.11:53: read: connection refused"}'
 for class in tls dns proxy timeout failed; do
   expect fail "a Serve port that failed at $class is not closed" \
     serve_closed "$control" "{\"error\":\"$class\",\"detail\":\"x509: certificate is not trusted\"}"

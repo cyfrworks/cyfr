@@ -7,13 +7,16 @@
 # and fails when any field it holds is changed, dropped or added to.
 #
 #   head_holds          every head field (port, email, builds URL, profiles
-#                       and the services they start, the node id read from
-#                       the tailnet state) in .env and in the running cyfr
+#                       and the services they start, the node id and name
+#                       read from the tailnet state) in .env and in the
+#                       running cyfr
 #   serve_config_holds  the complete Serve configuration
-#   preview_holds       the complete preview: old and new words and the
-#                       address-change steps
+#   preview_holds       the complete preview: old and new words, the
+#                       address-change steps and the command's refusal
 #   cookie_holds        the exact signed-out and signed-in redirects
-#   same_refusal        a forged anonymous request refused as the plain one
+#   anonymous_refused   a forged anonymous request and the plain one each
+#                       refused as the home refuses an anonymous request
+#                       of its kind
 #   capabilities_hold   each proxy's capabilities and security options
 #
 # Usage: bash tests/compose-proof/predicates-test.sh
@@ -68,8 +71,20 @@ for line in open(sys.argv[1]).read().splitlines():
         env.append(line.replace("\x27", ""))
 print(json.dumps(env))' "$1"
 }
-holds() { head_holds "$1" "$2" "$(container_env "${3:-$2}")" "${4:-cyfr tailscale}" "${5:-$node}"; }
+# `$6` the machine's name as the tailnet state holds it (Self.DNSName).
+holds() { head_holds "$1" "$2" "$(container_env "${3:-$2}")" "${4:-cyfr tailscale}" "${5:-$node}" "${6-cyfr-1.proof.ts.net.}"; }
 expect pass "a tailnet head, held whole in .env and the running cyfr" holds "$tailnet_head" "$scratch/env"
+# .env and the running cyfr agreeing on a name the tailnet state does not
+# hold, the head expected from them: the state's name is the expectation.
+wrong_head="${tailnet_head//cyfr-1.proof.ts.net/wrong.proof.ts.net}"
+sed 's/cyfr-1\.proof\.ts\.net/wrong.proof.ts.net/g' "$scratch/env" >"$scratch/wrong"
+expect fail "a .env and running cyfr agreeing on a name other than the state's" holds "$wrong_head" "$scratch/wrong"
+expect pass "the same head where the state holds that name" holds "$wrong_head" "$scratch/wrong" "" "" "" wrong.proof.ts.net.
+expect fail "a state name read without its trailing dot" holds "$tailnet_head" "$scratch/env" "" "" "" cyfr-1.proof.ts.net
+expect fail "a tailnet head with no name read from the state" holds "$tailnet_head" "$scratch/env" "" "" "" ""
+url_head="${tailnet_head//https:\/\/cyfr-1.proof.ts.net/https://cyfr-1.proof.ts.net:8443}"
+sed 's|^CYFR_PUBLIC_URL=.*|CYFR_PUBLIC_URL=https://cyfr-1.proof.ts.net:8443|' "$scratch/env" >"$scratch/url"
+expect fail "a public URL other than the state's name's, held in .env and the running cyfr" holds "$url_head" "$scratch/url"
 edit() {
   sed "$1" "$scratch/env" >"$scratch/$2"
 }
@@ -155,6 +170,14 @@ mutate_preview '/^  2\. /d' step "an address-change step dropped"
 mutate_preview '/^Your CYFR identity/a\  5. An extra step.' extra "a line added to the preview"
 # shellcheck disable=SC2016
 mutate_preview '$d' refusal "the refusal after it missing"
+# shellcheck disable=SC2016
+mutate_preview '$c\panic: failed while parsing --yes' panic "a failure naming --yes in place of the refusal"
+# shellcheck disable=SC2016
+mutate_preview '$s/, or on a terminal to confirm it$//' cut "the refusal cut short"
+# shellcheck disable=SC2016
+mutate_preview '$s/^Error: //' bare "the refusal not printed as the command's error"
+# shellcheck disable=SC2016
+mutate_preview '$s/shown, not made/made/' made "a refusal saying the change was made"
 expect fail "the preview read against another new head" preview_holds "$scratch/preview" "$a" "${b//cyfr-1/cyfr-2}"
 expect fail "the preview read against another old head" preview_holds "$scratch/preview" "${a//cyfr.proof/cyfr-0.proof}" "$b"
 
@@ -170,22 +193,65 @@ expect fail "an unchanged principal (signed answered as unsigned)" cookie_holds 
 expect fail "a signed-out page served" cookie_holds '{"status":200,"headers":{},"body":"page"}' "$signed" "@compose-proof"
 expect fail "no answer with the cookie" cookie_holds "$unsigned" '{"error":"tls","detail":"x"}' "@compose-proof"
 
-# ---- same_refusal ------------------------------------------------------------
+# ---- anonymous_refused -------------------------------------------------------
 
-rpc_refusal='{"status":200,"headers":{},"body":"{\"jsonrpc\":\"2.0\",\"id\":1,\"error\":{\"code\":-32001,\"message\":\"Authentication required\"}}"}'
-expect pass "a forged anonymous MCP request refused as the plain one" same_refusal "$rpc_refusal" "$rpc_refusal"
-expect fail "the forged one answered with a result" same_refusal "$rpc_refusal" \
-  '{"status":200,"headers":{},"body":"{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"tools\":[]}}"}'
-expect fail "the forged one refused with another code" same_refusal "$rpc_refusal" \
-  '{"status":200,"headers":{},"body":"{\"jsonrpc\":\"2.0\",\"id\":1,\"error\":{\"code\":-32603,\"message\":\"x\"}}"}'
-expect fail "the forged one with another status" same_refusal "$rpc_refusal" \
-  '{"status":401,"headers":{},"body":"{\"jsonrpc\":\"2.0\",\"id\":1,\"error\":{\"code\":-32001,\"message\":\"x\"}}"}'
-expect fail "a plain anonymous request that was not refused" same_refusal '{"status":200,"headers":{},"body":"page"}' '{"status":200,"headers":{},"body":"page"}'
-page_plain=$'IP=172.16.234.9\nHTTP/1.1 302 Found\nLocation: /login\n\n\nSTATUS=302'
-expect pass "a forged anonymous page request redirected as the plain one" same_refusal "$page_plain" "$page_plain"
-expect fail "the forged one sent elsewhere" same_refusal "$page_plain" $'IP=172.16.234.9\nHTTP/1.1 302 Found\nLocation: /chat?a=%40x\n\n\nSTATUS=302'
-expect fail "the forged one served" same_refusal "$page_plain" $'IP=172.16.234.9\nHTTP/1.1 200 OK\n\npage\nSTATUS=200'
-expect fail "the forged one got no answer" same_refusal "$page_plain" $'IP=172.16.234.9\n\n\nSTATUS=refused'
+# The anonymous subscriptions/listen the proof sends (run.sh mcp_body), and
+# the two refusals the home gives an anonymous request: the MCP
+# controller's 401 and the protected mount's redirect to /login.
+listen_request='{"jsonrpc": "2.0", "id": 1, "method": "subscriptions/listen", "params": {"_meta": {}}}'
+rpc_envelope() { printf '{"jsonrpc":"2.0","id":%s,"error":{"code":%s,"message":"%s"}}' "${1:-1}" "${2:--33001}" "${3:-Unauthorized: subscriptions/listen requires authentication}"; }
+# A `standin fetch` answer: status `$1`, headers JSON `$2`, body `$3`.
+fetch_answer() { python3 -I -c 'import json, sys; print(json.dumps({"status": int(sys.argv[1]), "headers": json.loads(sys.argv[2]), "body": sys.argv[3]}))' "$@"; }
+# A from_network answer: curl's header dump `$1` (lines, CRLF-ended as
+# curl writes them), the body `$2` and curl's status `$3`.
+curl_answer() { printf 'IP=172.16.234.9\n%s\n\r\n\n%s\nSTATUS=%s\n' "$(printf '%s' "$1" | sed 's/$/\r/')" "$2" "$3"; }
+mcp_headers='{"Content-Type":["application/json; charset=utf-8"],"Mcp-Protocol-Version":["2026-03-26"],"Www-Authenticate":["Bearer"],"X-Request-Id":["r1"]}'
+mcp_refused="$(fetch_answer 401 "$mcp_headers" "$(rpc_envelope)")"
+mcp_refused_curl="$(curl_answer $'HTTP/1.1 401 Unauthorized\ncontent-type: application/json; charset=utf-8\nwww-authenticate: Bearer\nx-request-id: r2' "$(rpc_envelope)" 401)"
+page_refused="$(fetch_answer 302 '{"Location":["/login"],"Content-Type":["text/html; charset=utf-8"]}' '<html><body>You are being <a href="/login">redirected</a>.</body></html>')"
+page_refused_curl="$(curl_answer $'HTTP/1.1 302 Found\nlocation: /login\ncontent-type: text/html; charset=utf-8' '<html><body>You are being <a href="/login">redirected</a>.</body></html>' 302)"
+anon() { anonymous_refused "$1" "$2" "$3" "${4-$listen_request}"; }
+
+expect pass "a forged anonymous MCP request refused as the plain one, 401 with the auth error" anon mcp "$mcp_refused" "$mcp_refused"
+expect pass "the same through curl, its header names as the server sends them" anon mcp "$mcp_refused_curl" "$mcp_refused"
+expect pass "a forged anonymous page request redirected to /login as the plain one" anon page "$page_refused_curl" "$page_refused_curl"
+expect pass "the same through fetch" anon page "$page_refused" "$page_refused_curl"
+# Both probes answered alike, but not with the anonymous refusal.
+both() { expect fail "$1" anon "$2" "$3" "$3" "${4-$listen_request}"; }
+both "both page requests answered 500" page "$(fetch_answer 500 '{}' oops)"
+both "both MCP requests answered 500" mcp "$(fetch_answer 500 '{}' oops)"
+both "both page requests redirected to /chat" page "$(fetch_answer 302 '{"Location":["/chat?a=somebody"]}' '')"
+both "both page requests redirected to /chat, through curl" page "$(curl_answer $'HTTP/1.1 302 Found\nlocation: /chat?a=somebody' '' 302)"
+both "both MCP requests answered another RPC error" mcp "$(fetch_answer 401 "$mcp_headers" "$(rpc_envelope 1 -32601 'Method not found')")"
+both "both MCP requests answered the wrong RPC error at 200" mcp \
+  "$(fetch_answer 200 '{}' '{"jsonrpc":"2.0","id":1,"error":{"code":-32001,"message":"Authentication required"}}')"
+both "both page requests with duplicate Location values" page "$(fetch_answer 302 '{"Location":["/login","/chat?a=somebody"]}' '')"
+both "both page requests with two Location headers, through curl" page \
+  "$(curl_answer $'HTTP/1.1 302 Found\nlocation: /login\nlocation: /chat?a=somebody' '' 302)"
+both "both MCP requests' auth error at 200" mcp "$(fetch_answer 200 "$mcp_headers" "$(rpc_envelope)")"
+both "both MCP requests' auth error for another request id" mcp "$(fetch_answer 401 "$mcp_headers" "$(rpc_envelope 2)")"
+both "both MCP requests' auth error with a null id" mcp "$(fetch_answer 401 "$mcp_headers" "$(rpc_envelope null)")"
+both "both MCP requests' auth error with another message" mcp "$(fetch_answer 401 "$mcp_headers" "$(rpc_envelope 1 -33001 'Authentication required')")"
+both "both MCP requests' auth error with data added" mcp \
+  "$(fetch_answer 401 "$mcp_headers" '{"jsonrpc":"2.0","id":1,"error":{"code":-33001,"message":"Unauthorized: subscriptions/listen requires authentication","data":{}}}')"
+both "both MCP requests' auth error with a result beside it" mcp \
+  "$(fetch_answer 401 "$mcp_headers" '{"jsonrpc":"2.0","id":1,"result":{},"error":{"code":-33001,"message":"Unauthorized: subscriptions/listen requires authentication"}}')"
+both "both MCP requests' auth error with the id true" mcp "$(fetch_answer 401 "$mcp_headers" "$(rpc_envelope true)")"
+both "both MCP requests' auth error with its code a float" mcp "$(fetch_answer 401 "$mcp_headers" "$(rpc_envelope 1 -33001.0)")"
+both "both MCP requests answered with a result" mcp "$(fetch_answer 200 '{}' '{"jsonrpc":"2.0","id":1,"result":{"tools":[]}}')"
+both "both MCP requests' 401 without its Bearer challenge" mcp \
+  "$(fetch_answer 401 '{"Content-Type":["application/json"]}' "$(rpc_envelope)")"
+both "a page request answered as the MCP request is" page "$mcp_refused"
+both "an MCP request answered as the page request is" mcp "$page_refused"
+both "a curl dump whose status line is not curl's status" page "$(curl_answer $'HTTP/1.1 200 OK\nlocation: /login' '' 302)"
+both "no answer to either" page $'IP=172.16.234.9\n\n\nSTATUS=refused'
+both "an MCP refusal read against a request with no id" mcp "$mcp_refused" '{"jsonrpc": "2.0", "method": "subscriptions/listen"}'
+expect fail "a request of a kind the proof does not send" anon tools "$mcp_refused" "$mcp_refused"
+expect fail "the forged MCP request answered with a result" anon mcp "$mcp_refused" \
+  "$(fetch_answer 200 '{}' '{"jsonrpc":"2.0","id":1,"result":{"tools":[]}}')"
+expect fail "the forged page request served" anon page "$page_refused_curl" "$(curl_answer 'HTTP/1.1 200 OK' page 200)"
+expect fail "the forged page request sent to a chat" anon page "$page_refused_curl" "$(fetch_answer 302 '{"Location":["/chat?a=%40x"]}' '')"
+expect fail "the forged page request got no answer" anon page "$page_refused_curl" $'IP=172.16.234.9\n\n\nSTATUS=refused'
 
 # ---- capabilities_hold -------------------------------------------------------
 

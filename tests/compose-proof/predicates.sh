@@ -13,20 +13,24 @@
 # expected head (JSON: mode, host, port, public_url, acme_email,
 # builds_url, node_id, profiles), `$2` .env, `$3` the cyfr container's
 # environment (`docker inspect` .Config.Env as JSON), `$4` the project's
-# running services, one line, sorted, and `$5` the node id the tailnet
-# state holds, read apart from .env (empty where no node runs, `-` where
-# the state holds another node by design, as a mismatched start leaves
-# it, which the case holds apart). Every
-# reach setting .env and the running cyfr hold is the head's, a field the
-# head lacks unset; the services running are cyfr and the proxy each of
-# the head's profiles starts; a tailnet head's node id is the state's.
-# The reach settings are the ones the reach vectors' derivations assign
-# or remove, and the proof's mapping of them to head fields is held to
-# that set.
+# running services, one line, sorted, `$5` the node id the tailnet state
+# holds and `$6` the machine's name it holds (Self.DNSName, with the
+# trailing dot), both read apart from .env (empty where no node runs; `$5`
+# `-` where the state holds another node by design, as a mismatched start
+# leaves it, which the case holds apart). Every reach setting .env and the
+# running cyfr hold is the head's, a field the head lacks unset; the
+# services running are cyfr and the proxy each of the head's profiles
+# starts; a tailnet head's node id is the state's, and its host and public
+# URL are the state's name without the dot and https:// that name, so a
+# head expected from what .env holds is no head the machine has. The
+# reach settings are the ones the reach vectors' derivations assign or
+# remove, and the proof's mapping of them to head fields is held to that
+# set.
 head_holds() {
   python3 -I - "$ROOT/tests/fixtures/reach_modes.json" "$@" <<'PY'
 import json, sys
 vectors, want, env_path, container_env, running, state_id = sys.argv[1:7]
+state_name = sys.argv[7] if len(sys.argv) > 7 else ""
 FIELDS = {"mode": "CYFR_REACH", "host": "CYFR_HOST", "port": "CYFR_PORT", "public_url": "CYFR_PUBLIC_URL",
           "acme_email": "CADDY_ACME_EMAIL", "builds_url": "CYFR_LOCUS_BUILDS_URL", "node_id": "CYFR_TAILNET_NODE_ID"}
 PROXIES = {"public": "caddy", "tailnet": "tailscale"}
@@ -73,8 +77,15 @@ else:
     services = " ".join(sorted(["cyfr"] + [PROXIES[p] for p in profiles]))
     if running != services:
         problems.append(f"the project runs '{running}', not '{services}'")
-if head.get("mode") == "tailnet" and state_id != "-" and state_id != head.get("node_id"):
-    problems.append(f"the tailnet state holds the node {state_id or 'none'!r}, not the head's {head.get('node_id')!r}")
+if head.get("mode") == "tailnet" and state_id != "-":
+    if state_id != head.get("node_id"):
+        problems.append(f"the tailnet state holds the node {state_id or 'none'!r}, not the head's {head.get('node_id')!r}")
+    if len(state_name) < 2 or not state_name.endswith("."):
+        problems.append(f"the tailnet state's machine name {state_name!r} is no DNSName (a name with its trailing dot)")
+    else:
+        name = state_name[:-1]
+        if (head.get("host"), head.get("public_url")) != (name, f"https://{name}"):
+            problems.append(f"the head's host and public URL are {head.get('host')!r} and {head.get('public_url')!r}, not the tailnet state's {name!r} and 'https://{name}'")
 for p in problems:
     print(p)
 sys.exit(1 if problems else 0)
@@ -109,11 +120,14 @@ PY
 # and, as the address changes, the
 # engine's address-change steps (apps/codex/internal/reach/switch.go
 # addressChanges) and the line on the CYFR identity; then one line, the
-# command's refusal that it made no change.
+# command's refusal that it made no change: the complete sentence
+# apps/codex/cmd/reach.go showUnconfirmed returns, as the command line
+# prints an error ("Error: ", apps/codex/cmd/root.go).
 preview_holds() {
-  python3 -I - "$ROOT/tests/fixtures/reach_modes.json" "$ROOT/apps/codex/internal/reach/switch.go" "$@" <<'PY'
+  python3 -I - "$ROOT/tests/fixtures/reach_modes.json" "$ROOT/apps/codex/internal/reach/switch.go" \
+    "$ROOT/apps/codex/cmd/reach.go" "$@" <<'PY'
 import json, re, sys
-vectors, switch_go, log, old_text, new_text = sys.argv[1:6]
+vectors, switch_go, reach_go, log, old_text, new_text = sys.argv[1:7]
 words = json.load(open(vectors))["words"]
 def sentences(head):
     # The words of a head: the vectors' sentences for a head of the same
@@ -150,11 +164,16 @@ if sentences(old)[1] != sentences(new)[1]:
     block.append("The address changes, so:")
     block += [f"  {i}. {c}" for i, c in enumerate(changes, 1)]
     block.append("Your CYFR identity does not change.")
+GO_STRING = r'"(?:[^"\\]|\\.)*"'
+unconfirmed = re.search(r"^func showUnconfirmed\(.*?^\}$", open(reach_go).read(), re.S | re.M)
+again = unconfirmed and re.search(r"^\tconst again = (" + GO_STRING + r")$", unconfirmed.group(0), re.M)
+shown = unconfirmed and re.search(r"^\tprintPreview\(out, p\)\n\treturn errors\.New\((" + GO_STRING + r") \+ again\)$", unconfirmed.group(0), re.M)
+if not (again and shown):
+    sys.exit(print("reach.go's showUnconfirmed holds no refusal after the preview to expect") or 1)
+refusal = "Error: " + json.loads(shown.group(1)) + json.loads(again.group(1))
 lines = open(log).read().splitlines()[1:]
-if lines[:len(block)] != block or len(lines) != len(block) + 1:
-    sys.exit(print("the preview printed\n  " + "\n  ".join(lines) + "\nnot\n  " + "\n  ".join(block) + "\n  <the refusal>") or 1)
-if "--yes" not in lines[-1]:
-    sys.exit(print(f"after the preview the command printed {lines[-1]!r}, not its refusal to make the change") or 1)
+if lines != block + [refusal]:
+    sys.exit(print("the preview printed\n  " + "\n  ".join(lines) + "\nnot\n  " + "\n  ".join(block + [refusal])) or 1)
 PY
 }
 
@@ -190,53 +209,92 @@ sys.exit(1 if problems else 0)
 PY
 }
 
-# Whether an anonymous request with the forged identity headers was refused
-# exactly as the same request without them: `$1` and `$2` the two answers
-# (`standin fetch` JSON, or curl's dump and STATUS= line from
-# `from_network`). The class of a refusal is its status, the Location of a
-# redirect, and the JSON-RPC error code of an MCP answer, which must be an
-# error; an answer that is no refusal, or no answer at all, fails.
-same_refusal() {
-  python3 -I - "$@" <<'PY'
+# Whether an anonymous request with the forged identity headers and the
+# same request without them were each refused exactly as the home refuses
+# an anonymous request of their kind: `$1` the kind, page or mcp, `$2` and
+# `$3` the two answers (`standin fetch` JSON, or curl's dump and STATUS=
+# line from `from_network`), and `$4`, for mcp, the JSON-RPC request both
+# sent. A page request (GET /) is 302 with the one Location /login, where
+# the protected mount sends a caller with no session
+# (apps/cyfr/lib/cyfr_web/context_guard.ex, on_mount(:protected) and
+# mount_refusal/1). An MCP subscriptions/listen is 401 with the Bearer
+# challenge and the whole JSON-RPC error the MCP controller's listen/4
+# answers a caller with no credential, through Emissary.Web.MCPError.send/4
+# (apps/cyfr/lib/emissary/web/controllers/mcp_controller.ex,
+# apps/cyfr/lib/emissary/web/mcp_error.ex): version 2.0, the request's own
+# id, code -33001 (:auth_required, apps/prima/lib/prima/mcp/message.ex)
+# and the message listen/4 gives, read from it, and nothing else.
+anonymous_refused() {
+  python3 -I - "$ROOT/apps/cyfr/lib/emissary/web/controllers/mcp_controller.ex" "$@" <<'PY'
 import json, re, sys
-def refusal(text):
+controller, kind, plain, forged = sys.argv[1:5]
+request = sys.argv[5] if len(sys.argv) > 5 else ""
+def answer(text):
+    # (status, headers as [(lowercased name, value)], body), or None.
     text = text.replace("\r", "")
-    try:
-        value = json.loads([l for l in text.splitlines() if l.startswith("{")][-1])
-    except (IndexError, ValueError):
-        value = None
-    if isinstance(value, dict) and isinstance(value.get("status"), int):
-        status, headers, body = value["status"], value.get("headers") or {}, value.get("body") or ""
-        location = (headers.get("Location") or [None])[0]
-    else:
-        statuses = re.findall(r"^STATUS=(\d{3})$", text, re.M)
-        if not statuses:
-            return None
-        status = int(statuses[-1])
-        head, _, body = text.partition("\n\n")
-        location = next((l.split(":", 1)[1].strip() for l in head.splitlines() if l.lower().startswith("location:")), None)
-    code = None
-    for line in body.splitlines():
-        if line.startswith("data:"):
-            line = line[len("data:"):].strip()
+    statuses = re.findall(r"^STATUS=(.*)$", text, re.M)
+    if not statuses:
+        lines = [l for l in text.splitlines() if l.startswith("{")]
         try:
-            rpc = json.loads(line)
+            value = json.loads(lines[-1])
+        except (IndexError, ValueError):
+            return None
+        if not isinstance(value, dict) or not isinstance(value.get("status"), int):
+            return None
+        headers = [(name.lower(), v) for name, values in (value.get("headers") or {}).items() for v in values]
+        return value["status"], headers, value.get("body") or ""
+    first, _, dump = text.partition("\n")
+    if len(statuses) != 1 or not re.fullmatch(r"\d{3}", statuses[0]) or not first.startswith("IP="):
+        return None
+    head, _, rest = dump.partition("\n\n")
+    lines = head.splitlines()
+    # The one response curl read, its status line curl's own status.
+    if not lines or not re.fullmatch(r"HTTP/\S+ " + statuses[0] + r"( .*)?", lines[0]):
+        return None
+    headers = [(l.split(":", 1)[0].strip().lower(), l.split(":", 1)[1].strip()) for l in lines[1:] if ":" in l]
+    body = rest[1:] if rest.startswith("\n") else rest
+    body = body[: body.rindex("\nSTATUS=")] if "\nSTATUS=" in body else ""
+    return int(statuses[0]), headers, body
+def values(headers, name):
+    return [v for n, v in headers if n == name]
+if kind == "page":
+    def problem(got):
+        status, headers, _ = got
+        if (status, values(headers, "location")) != (302, ["/login"]):
+            return f"answered {status} with Location {values(headers, 'location')}, not 302 to ['/login']"
+elif kind == "mcp":
+    listen = re.search(r"^  defp listen\(conn, context, params, request_id\) do\n(.*?)^  end$", open(controller).read(), re.S | re.M)
+    message = listen and re.search(r'^    if not context\.authenticated do\n      listen_error\(\n        conn,\n        request_id,\n'
+                                   r'        :unauthenticated,\n        ("(?:[^"\\#]|\\.)*")\n      \)$', listen.group(1), re.M)
+    if not message:
+        sys.exit(print("mcp_controller.ex's listen/4 holds no refusal of a caller with no credential to expect") or 1)
+    try:
+        sent = json.loads(request)
+    except ValueError:
+        sent = None
+    if not isinstance(sent, dict) or not isinstance(sent.get("id"), (int, str)) or isinstance(sent.get("id"), bool):
+        sys.exit(print(f"the MCP request names no id to expect back: {request[:200]!r}") or 1)
+    want = {"jsonrpc": "2.0", "id": sent["id"], "error": {"code": -33001, "message": json.loads(message.group(1))}}
+    def problem(got):
+        status, headers, body = got
+        try:
+            envelope = json.loads(body)
         except ValueError:
-            continue
-        if isinstance(rpc, dict) and "jsonrpc" in rpc:
-            if "error" not in rpc:
-                return ("no refusal", status, "result")
-            code = rpc["error"].get("code")
-    if status < 300 and code is None:
-        return ("no refusal", status, None)
-    return (status, location, code)
-plain, forged = refusal(sys.argv[1]), refusal(sys.argv[2])
-if plain is None or forged is None:
-    sys.exit(print(f"a request got no answer: {sys.argv[1][:200]!r} / {sys.argv[2][:200]!r}") or 1)
-if plain[0] == "no refusal" or forged[0] == "no refusal":
-    sys.exit(print(f"an anonymous request was not refused: {plain} / {forged}") or 1)
-if plain != forged:
-    sys.exit(print(f"the forged identity headers changed the refusal from {plain} to {forged}") or 1)
+            envelope = body
+        if (status, values(headers, "www-authenticate"), json.dumps(envelope, sort_keys=True)) != (401, ["Bearer"], json.dumps(want, sort_keys=True)):
+            return (f"answered {status} with WWW-Authenticate {values(headers, 'www-authenticate')} and {envelope!r}, "
+                    f"not 401 with ['Bearer'] and {json.dumps(want)}")
+else:
+    sys.exit(print(f"no anonymous request of a kind {kind!r}: page or mcp") or 1)
+problems = []
+for what, text in (("the plain", plain), ("the forged", forged)):
+    got = answer(text)
+    why = f"got no answer: {text[:200]!r}" if got is None else problem(got)
+    if why:
+        problems.append(f"{what} anonymous {kind} request {why}")
+for p in problems:
+    print(p)
+sys.exit(1 if problems else 0)
 PY
 }
 

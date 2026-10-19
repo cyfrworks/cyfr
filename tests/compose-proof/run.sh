@@ -44,8 +44,9 @@
 #          node), which is the peer on the loopback listener and on the
 #          proxy listener from an untrusted peer, and the client the proxy
 #          names through it; and through the proxy an anonymous MCP
-#          request and page request are refused the same with every forged
-#          forwarding and identity header as without. In tailnet the
+#          request is refused 401 with the auth error and a page request
+#          sent to /login, with every forged forwarding and identity
+#          header as without. In tailnet the
 #          endpoint's HSTS is on the proxy listener's success, error and
 #          refusal answers for the node's name and on none for a loopback
 #          Host or on the loopback listener; in public the endpoint sends
@@ -748,22 +749,35 @@ tailnet_join() {
   return "$status"
 }
 
+# The tailnet machine's name, read from the tailnet state apart from
+# .env: its Self.DNSName without the trailing dot. A case that does not
+# fix the name a join gives expects the head at this one.
+node_name() {
+  local name
+  name="$(jget "$(docker exec "$(compose ps -q tailscale)" tailscale status --json)" Self DNSName)"
+  [[ "$name" == ?*. ]] || fail "the tailnet state names no machine: ${name:-nothing}"
+  printf '%s\n' "${name%.}"
+}
+
 # The project's whole head, checked (predicates.sh `head_holds`): mode
-# `$1` at host `$2`, every reach setting in .env and the running cyfr the
-# head's, a tailnet head's node id the one the tailnet state holds, the
-# head's proxy alone running beside cyfr with the shipped file's
-# capabilities and options (`capabilities_hold`), the other proxy without
-# a container, and cyfr healthy.
+# `$1` at host `$2` (a fixed fixture's name, or the state's, never .env's),
+# every reach setting in .env and the running cyfr the head's, a tailnet
+# head's node id and name the ones the tailnet state holds, the head's
+# proxy alone running beside cyfr with the shipped file's capabilities and
+# options (`capabilities_hold`), the other proxy without a container, and
+# cyfr healthy.
 expect_head() {
-  local mode="$1" host="$2" want profiles node="" public_url="" head why proxy id
+  local mode="$1" host="$2" want profiles node="" dns_name="" public_url="" head why proxy id state
   [ -n "$host" ] || fail "no host to expect the $mode home at"
   case "$mode" in
     local) want=cyfr profiles='[]' ;;
     public) want="caddy cyfr" profiles='["public"]' public_url="https://$host" ;;
     tailnet)
       want="cyfr tailscale" profiles='["tailnet"]' public_url="https://$host"
-      # The node id the tailnet state holds, read apart from .env.
-      node="$(jget "$(docker exec "$(compose ps -q tailscale)" tailscale status --json)" Self ID)"
+      # The node id and name the tailnet state holds, read apart from .env.
+      state="$(docker exec "$(compose ps -q tailscale)" tailscale status --json)"
+      node="$(jget "$state" Self ID)"
+      dns_name="$(jget "$state" Self DNSName)"
       [ -n "$node" ] && [ "$node" != null ] || fail "the tailnet state names no node"
       ;;
     *) fail "no head of a mode '$mode'" ;;
@@ -780,7 +794,7 @@ if url:
 if node:
     head["node_id"] = node
 print(json.dumps(head))' "$mode" "$host" "$public_url" "$node" "$profiles")"
-  why="$(head_holds "$head" "$WORK/.env" "$(docker inspect -f '{{json .Config.Env}}' "$cyfr_id")" "$(running)" "$node")" ||
+  why="$(head_holds "$head" "$WORK/.env" "$(docker inspect -f '{{json .Config.Env}}' "$cyfr_id")" "$(running)" "$node" "$dns_name")" ||
     fail "the project does not run the $mode head at $host: $why"
   for proxy in caddy tailscale; do
     case " $want " in
@@ -1062,7 +1076,7 @@ print(" ".join(name for name in cyfr["networks"] if name not in (sys.argv[1], "e
 }
 
 bind_case() {
-  local mode
+  local mode name
   for mode in local tailnet public; do
     step "bind: $mode, switched with the stack stopped, then cyfr up"
     case "$mode" in
@@ -1081,9 +1095,10 @@ bind_case() {
     case "$mode" in
       local) expect_head local localhost ;;
       tailnet)
-        expect_head tailnet "$(env_value CYFR_HOST)"
-        [[ "$(env_value CYFR_HOST)" == *.proof.ts.net ]] || fail "the joined node's name is $(env_value CYFR_HOST)"
-        expect_serve_open "$(env_value CYFR_HOST)"
+        name="$(node_name)"
+        [[ "$name" == *.proof.ts.net ]] || fail "the joined node's name is ${name:-none}"
+        expect_head tailnet "$name"
+        expect_serve_open "$name"
         ;;
       public) expect_head public proof-home.example ;;
     esac
@@ -1231,44 +1246,47 @@ FORGED_IDENTITY=(
 )
 
 # Anonymous requests through mode `$1`'s proxy, the probe `$2` (`$2 mcp|page
-# [header...]`): MCP's subscriptions/listen, which opens a stream to an
-# authenticated caller alone (tools/list is discovery, which an anonymous
-# caller is answered), and the home's root page, each with no credential,
-# and each again with every header FORGED_IDENTITY names, the person's own
-# login among them; each must be refused exactly as the plain anonymous
-# request is (predicates.sh `same_refusal`), so no forged identity header
-# authenticates anyone.
+# REQUEST [header...]`, REQUEST the JSON-RPC body of an mcp request):
+# MCP's subscriptions/listen, which opens a stream to an authenticated
+# caller alone (tools/list is discovery, which an anonymous caller is
+# answered), and the home's root page, each with no credential, and each
+# again with every header FORGED_IDENTITY names, the person's own login
+# among them; each, with the headers and without, must be refused exactly
+# as the home refuses an anonymous request of its kind (predicates.sh
+# `anonymous_refused`: the page to /login, MCP's 401 with the auth error
+# for that request), so no forged identity header authenticates anyone.
 anonymous_pairs() {
-  local what="$1" ask="$2" kind plain forged_answer why
+  local what="$1" ask="$2" kind request plain forged_answer why
   for kind in mcp page; do
-    plain="$("$ask" "$kind")"
-    forged_answer="$("$ask" "$kind" "${FORGED_IDENTITY[@]}")"
-    why="$(same_refusal "$plain" "$forged_answer")" || fail "$what, an anonymous $kind request: $why"
+    request=""
+    [ "$kind" != mcp ] || request="$(mcp_body subscriptions/listen '{}' "$MCP_VERSION")"
+    plain="$("$ask" "$kind" "$request")"
+    forged_answer="$("$ask" "$kind" "$request" "${FORGED_IDENTITY[@]}")"
+    why="$(anonymous_refused "$kind" "$plain" "$forged_answer" "$request")" || fail "$what, an anonymous $kind request: $why"
   done
-  ok "$what: an anonymous MCP request and page request are refused the same with forged identity headers as without"
+  ok "$what: an anonymous MCP request is refused 401 with the auth error and a page request sent to /login, with forged identity headers as without"
 }
 anonymous_caddy() {
-  local kind="$1" args=() h
-  shift
+  local kind="$1" request="$2" args=() h
+  shift 2
   for h in "$@"; do args+=(-H "$h"); done
   case "$kind" in
     mcp)
       from_network edge -H "host: $(env_value CYFR_HOST)" -H 'content-type: application/json' \
         -H 'accept: application/json, text/event-stream' -H "mcp-protocol-version: $MCP_VERSION" -H 'mcp-method: subscriptions/listen' \
-        ${args[@]+"${args[@]}"} --data-binary "$(mcp_body subscriptions/listen '{}' "$MCP_VERSION")" "http://caddy:80/mcp"
+        ${args[@]+"${args[@]}"} --data-binary "$request" "http://caddy:80/mcp"
       ;;
     page) from_network edge -H "host: $(env_value CYFR_HOST)" ${args[@]+"${args[@]}"} "http://caddy:80/" ;;
   esac
 }
 anonymous_serve() {
-  local kind="$1" args=() h
-  shift
+  local kind="$1" request="$2" args=() h
+  shift 2
   for h in "$@"; do args+=(--header "$h"); done
   case "$kind" in
     mcp)
       tailnet_fetch --method POST --header 'content-type: application/json' --header 'accept: application/json, text/event-stream' \
-        --header "mcp-protocol-version: $MCP_VERSION" --header 'mcp-method: subscriptions/listen' \
-        --body "$(mcp_body subscriptions/listen '{}' "$MCP_VERSION")" \
+        --header "mcp-protocol-version: $MCP_VERSION" --header 'mcp-method: subscriptions/listen' --body "$request" \
         ${args[@]+"${args[@]}"} "https://$(env_value CYFR_HOST)/mcp"
       ;;
     page) tailnet_fetch ${args[@]+"${args[@]}"} "https://$(env_value CYFR_HOST)/" ;;
@@ -1376,7 +1394,7 @@ refused_before_start() {
 }
 
 modes_case() {
-  local m sentence_text
+  local m sentence_text name
   step "modes: a local home, builds off, up"
   cli_ok up-local up
   expect_head local localhost
@@ -1441,8 +1459,9 @@ modes_case() {
         ok "in public the endpoint sends no HSTS of its own, and through Caddy the answer carries the shipped site's one value"
         ;;
       tailnet)
-        expect_head tailnet "$(env_value CYFR_HOST)"
-        expect_serve_open "$(env_value CYFR_HOST)"
+        name="$(node_name)"
+        expect_head tailnet "$name"
+        expect_serve_open "$name"
         standin_ca
         forged_checks tailnet
         hsts_checks
@@ -1551,7 +1570,7 @@ converged() {
   case "$mode" in
     local) expect_head local localhost ;;
     public) expect_head public proof-home.example ;;
-    tailnet) expect_head tailnet "$(env_value CYFR_HOST)" ;;
+    tailnet) expect_head tailnet "$(node_name)" ;;
   esac
   ok "converged on $mode: a receipt ($(jget "$(cat "$WORK/.cyfr/receipts/$id.json")" outcome)), no journal and no materialized configuration"
 }

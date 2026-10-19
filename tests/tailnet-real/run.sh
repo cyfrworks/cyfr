@@ -57,12 +57,13 @@
 #
 # A probe's answer is read as `standin fetch` names it, so a failed probe
 # is never a closed Serve: Serve is closed only where the machine itself
-# refused the device's tunnel to 443 and, in the same ask, answered the
-# device on its PeerAPI through the same proxy (`serve_closed`). What Serve
-# sends the upstream is held whole (`identity_projection`): the method,
-# path, query and Host, the forwarding headers, and every identity header
-# the pinned serve.go deletes or sets, each with the value the device's
-# identity gives it, none for a tagged device. The predicates are
+# refused the device's tunnel to 443 at its tailnet address and, in the
+# same ask, answered the device on its PeerAPI there through the same
+# proxy (`serve_closed`). What Serve sends the upstream is held whole
+# (`identity_projection`): the method, path, query and Host, the
+# forwarding headers, and every identity header the pinned serve.go
+# deletes or sets, each with the value the device's identity gives it,
+# none for a tagged device. The predicates are
 # tests/tailnet-real/predicates-test.sh's, on canned answers.
 #
 # Usage: TAILNET_REAL_AUTH_KEY_FILE=… TAILNET_REAL_SHARED_LOGIN=… tests/tailnet-real/run.sh
@@ -92,9 +93,10 @@ print(value if isinstance(value, str) else json.dumps(value))' "${@:2}"
 # Whether a Serve port is closed, from the device's two answers of one ask
 # (`standin fetch` JSON): `$1` its PeerAPI control, which must be an answer
 # of the machine's, any status, and `$2` the Serve port, which the machine
-# itself must have refused (error refused). A probe that failed at TLS, at
-# DNS, at the device's proxy or anywhere else is no closed Serve. On
-# failure, says why on stdout.
+# itself must have refused (error refused, which fetch gives only for a
+# refusal at the address and port it asked for). A probe that failed at
+# TLS, at DNS, at the device's proxy or anywhere else is no closed Serve.
+# On failure, says why on stdout.
 serve_closed() {
   python3 -I - "$1" "$2" <<'PY'
 import json, sys
@@ -296,10 +298,14 @@ sys.exit(print(urls[0]) if urls else 1)' "$1"
 }
 
 # Whether Serve is closed for https://`$1`/ now: the device's ask of the
-# machine's PeerAPI `$2` and of the Serve port, through the same proxy
-# (`serve_closed`); says why not on stdout.
+# machine's PeerAPI `$2` and of the Serve port at the PeerAPI's own
+# address, through the same proxy (`serve_closed`); says why not on
+# stdout. The tunnel names the address, so the refusal fetch reads is the
+# machine's at that address and port, never a name the proxy resolved.
 closed_now() {
-  serve_closed "$(device "$2/")" "$(device "https://$1/")"
+  local address="${2#http://}"
+  address="${address%:*}"
+  serve_closed "$(device "$2/")" "$(device --connect "$address:443" "https://$1/")"
 }
 
 # Serve closed for https://`$1`/ at each of five asks two seconds apart,
