@@ -490,7 +490,7 @@ func TestUpdateClosesServeBeforeItStops(t *testing.T) {
 	if err := os.MkdirAll(filepath.Dir(serve), 0755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(serve, []byte(`{"TCP":{"443":{"HTTPS":true}},"Web":{"${TS_CERT_DOMAIN}:443":{"Handlers":{"/":{"Proxy":"http://cyfr:4001"}}}}}`), 0644); err != nil {
+	if err := os.WriteFile(serve, []byte(`{"TCP":{"443":{"HTTPS":true}},"Web":{"${TS_CERT_DOMAIN}:443":{"Handlers":{"/":{"Proxy":"http://cyfr:4401"}}}}}`), 0644); err != nil {
 		t.Fatal(err)
 	}
 	e, err := openEngine(".")

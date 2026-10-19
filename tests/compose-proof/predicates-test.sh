@@ -104,17 +104,17 @@ expect fail "a local .env with a public URL added" holds "$local_head" "$scratch
 
 # ---- serve_config_holds ------------------------------------------------------
 
-serve='{"TCP":{"443":{"HTTPS":true}},"Web":{"cyfr.proof.ts.net:443":{"Handlers":{"/":{"Proxy":"http://cyfr:4001"}}}}}'
-expect pass "the engine's Serve configuration" serve_config_holds "$serve" cyfr.proof.ts.net 4001
+serve='{"TCP":{"443":{"HTTPS":true}},"Web":{"cyfr.proof.ts.net:443":{"Handlers":{"/":{"Proxy":"http://cyfr:4401"}}}}}'
+expect pass "the engine's Serve configuration" serve_config_holds "$serve" cyfr.proof.ts.net 4401
 for mutated in \
-  '{"TCP":{"443":{"HTTPS":true},"8443":{"HTTPS":true}},"Web":{"cyfr.proof.ts.net:443":{"Handlers":{"/":{"Proxy":"http://cyfr:4001"}}}}}' \
-  '{"TCP":{"443":{"HTTPS":true}},"Web":{"cyfr.proof.ts.net:443":{"Handlers":{"/":{"Proxy":"http://cyfr:4001"},"/x":{"Proxy":"http://cyfr:4000"}}}}}' \
-  '{"TCP":{"443":{"HTTPS":true}},"Web":{"cyfr.proof.ts.net:443":{"Handlers":{"/":{"Proxy":"http://cyfr:4001"}}}},"AllowFunnel":{"cyfr.proof.ts.net:443":true}}' \
+  '{"TCP":{"443":{"HTTPS":true},"8443":{"HTTPS":true}},"Web":{"cyfr.proof.ts.net:443":{"Handlers":{"/":{"Proxy":"http://cyfr:4401"}}}}}' \
+  '{"TCP":{"443":{"HTTPS":true}},"Web":{"cyfr.proof.ts.net:443":{"Handlers":{"/":{"Proxy":"http://cyfr:4401"},"/x":{"Proxy":"http://cyfr:4000"}}}}}' \
+  '{"TCP":{"443":{"HTTPS":true}},"Web":{"cyfr.proof.ts.net:443":{"Handlers":{"/":{"Proxy":"http://cyfr:4401"}}}},"AllowFunnel":{"cyfr.proof.ts.net:443":true}}' \
   '{"TCP":{"443":{"HTTPS":true}},"Web":{"cyfr.proof.ts.net:443":{"Handlers":{"/":{"Proxy":"http://cyfr:4000"}}}}}' \
-  '{"TCP":{"443":{"HTTPS":true}},"Web":{"other.proof.ts.net:443":{"Handlers":{"/":{"Proxy":"http://cyfr:4001"}}}}}' \
-  '{"TCP":{"443":{"HTTPS":false}},"Web":{"cyfr.proof.ts.net:443":{"Handlers":{"/":{"Proxy":"http://cyfr:4001"}}}}}' \
+  '{"TCP":{"443":{"HTTPS":true}},"Web":{"other.proof.ts.net:443":{"Handlers":{"/":{"Proxy":"http://cyfr:4401"}}}}}' \
+  '{"TCP":{"443":{"HTTPS":false}},"Web":{"cyfr.proof.ts.net:443":{"Handlers":{"/":{"Proxy":"http://cyfr:4401"}}}}}' \
   '{}' 'not json'; do
-  expect fail "a Serve configuration other than the engine's: ${mutated:0:90}" serve_config_holds "$mutated" cyfr.proof.ts.net 4001
+  expect fail "a Serve configuration other than the engine's: ${mutated:0:90}" serve_config_holds "$mutated" cyfr.proof.ts.net 4401
 done
 
 # ---- preview_holds -----------------------------------------------------------
