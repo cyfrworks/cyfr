@@ -4,6 +4,7 @@ go 1.27.2
 
 require (
 	charm.land/huh/v2 v2.0.3
+	github.com/boombuler/barcode v1.1.0
 	github.com/digitorus/timestamp v0.0.0-20231217203849-220c5c2851b7
 	github.com/google/certificate-transparency-go v1.3.3
 	github.com/sigstore/protobuf-specs v0.5.1

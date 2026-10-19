@@ -1346,6 +1346,16 @@ jobs:
         env:
           COMPOSE_PROOF_SKIP_BUILD: '1'
         run: tests/compose-proof/run.sh --case restore
+      # The setup proof (tests/setup-proof/run.sh) on the same image:
+      # `cyfr setup`'s pages at the 720×720 handheld in Chromium, through
+      # the browser harness, set up a local home and open its sign-in page,
+      # refuse a project whose .env exists, and join a tailnet home under a
+      # new name through the stand-in, which then serves it.
+      - name: The setup proof
+        env:
+          SETUP_PROOF_SKIP_BUILD: '1'
+          SETUP_PROOF_IMAGE: cyfr:compose-proof
+        run: tests/setup-proof/run.sh
 
       # The app image is built here, and this is the one push-time build of
       # it — so it is scanned here, where a finding stops the commit that

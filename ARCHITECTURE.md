@@ -114,7 +114,8 @@ The order describes dependencies, not a request's path. Only Host's composition 
 ### Codex: the command line
 
 - The `cyfr` binary, speaking MCP to Emissary with an API key or a session; its operation catalog is generated from the gate's table.
-- The access engine (`apps/codex/internal/access`), which `cyfr init`, `cyfr access`, `up`, `update` and `restore` run on the machine: the one owner of the deployment file's access settings and the stack's access services, which it changes under the stack's lock and journals, so the next command to take the lock recovers a change an interruption left.
+- The access engine (`apps/codex/internal/access`), which `cyfr init`, `setup`, `access`, `up`, `update` and `restore` run on the machine: the one owner of the deployment file's access settings and the stack's access services, which it changes under the stack's lock and journals, so the next command to take the lock recovers a change an interruption left.
+- Two faces of the one program on the machine: the terminal, and the setup pages `cyfr setup` serves on the machine's loopback before the stack runs, for a device's own screen. The pages drive `cyfr init`'s sequence and `cyfr up`'s start, no second setup, and only the machine reaches them; Prism is never a setup surface.
 
 ### Locus: where untrusted things run
 

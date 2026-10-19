@@ -711,7 +711,8 @@ func TestAccessTailnetServesAClosedHomeAgain(t *testing.T) {
 }
 
 // The command tree is the contract's: `cyfr access <mode>` with its flags,
-// the hidden --request-id and `cyfr access status`, and no `cyfr setup`.
+// the hidden --request-id and `cyfr access status`, and `cyfr setup` with
+// no subcommand.
 func TestAccessCommandsAreTheContractsSurface(t *testing.T) {
 	for _, name := range []string{"domain", "acme-email", "tailscale-auth-key-file", "hostname", "new-node", "yes", "resume", "request-id"} {
 		if accessCmd.Flags().Lookup(name) == nil {
@@ -729,8 +730,8 @@ func TestAccessCommandsAreTheContractsSurface(t *testing.T) {
 	if subcommand(accessCmd, "status") == nil {
 		t.Errorf("cyfr access status is missing")
 	}
-	if subcommand(rootCmd, "setup") != nil {
-		t.Errorf("cyfr setup is a command")
+	if setup := subcommand(rootCmd, "setup"); setup == nil || setup.HasSubCommands() || setup.Flags().Lookup("port") == nil || setup.Flags().Lookup("no-pull") == nil {
+		t.Errorf("cyfr setup is not the one command with --port and --no-pull")
 	}
 	internal := subcommand(rootCmd, "internal")
 	if internal == nil || !internal.Hidden || subcommand(internal, "docker-run") == nil || !subcommand(internal, "docker-run").DisableFlagParsing {
@@ -749,7 +750,7 @@ func TestHelpNamesTheExitStatuses(t *testing.T) {
 			t.Errorf("cyfr's help lacks %q", want)
 		}
 	}
-	for _, c := range []*cobra.Command{upCmd, updateCmd, restoreCmd, accessCmd} {
+	for _, c := range []*cobra.Command{upCmd, updateCmd, restoreCmd, accessCmd, setupCmd} {
 		if !strings.Contains(c.Long, "Exit status 3: ") || !strings.Contains(c.Long, "on this machine only, because the tailnet machine is not ready to serve it") {
 			t.Errorf("cyfr %s's help does not say what exit status 3 means for it", c.Name())
 		}

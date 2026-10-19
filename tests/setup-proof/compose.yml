@@ -1,0 +1,40 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 CYFR Works Inc.
+#
+# The setup proof's overlay (tests/setup-proof/run.sh), which the run copies
+# into each project directory as docker-compose.override.yml: the one
+# override of the default file set that `cyfr setup` and the proof's own
+# compose calls resolve beside docker-compose.yml. It is the Compose
+# proof's (tests/compose-proof/compose.yml) less its port changes: cyfr is
+# published at 127.0.0.1:CYFR_PORT as shipped, the port the run's template
+# names, so the address the pages move the browser to is the home's. It
+# adds only:
+#
+#   - the app image built from the tree, and the Tailscale stand-in
+#     (tests/compose-proof/tailscale-standin/) in place of the pinned
+#     tailscale image, each named by a variable of the run's template (no
+#     COMPOSE_* name: cyfr refuses one in .env);
+#   - the project's names in place of the shipped container name;
+#   - proof-tailnet, a network of the stand-in alone, where the run's
+#     client stands for a tailnet's device;
+#   - the Locus runtime and backends services under a profile no head
+#     selects: the proof is of the setup, and starts no Locus service, as
+#     builds are off in its template.
+services:
+  cyfr:
+    image: ${PROOF_APP_IMAGE:?set PROOF_APP_IMAGE}
+    pull_policy: never
+    container_name: !reset null
+  tailscale:
+    image: ${PROOF_TAILSCALE_IMAGE:?set PROOF_TAILSCALE_IMAGE}
+    pull_policy: never
+    networks:
+      proof-tailnet: {}
+  locus-runtime:
+    profiles: ["proof-never"]
+  locus-backends:
+    profiles: ["proof-never"]
+  locus-backends-guard:
+    profiles: ["proof-never"]
+networks:
+  proof-tailnet: {}

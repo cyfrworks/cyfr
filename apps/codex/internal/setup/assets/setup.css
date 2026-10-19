@@ -1,0 +1,196 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+/* Copyright 2026 CYFR Works Inc. */
+
+/* Touch first: one column at most 640px wide, every control at least 64px
+   tall, text large enough to read at arm's length on a 720x720 screen. */
+
+/* Prism's dark palette, so the screen the pages hand over to looks like
+   them. The QR code draws its own light square. */
+:root {
+  --ink: #f3f4f6;
+  --muted: #9ca3af;
+  --paper: #0b1020;
+  --card: #161d2e;
+  --accent: #4f46e5;
+  --accent-ink: #ffffff;
+  --badge: #a5b4fc;
+  --line: #2b3448;
+  --warn: #fca5a5;
+  color-scheme: dark;
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, "Noto Sans", sans-serif;
+  font-size: 20px;
+  line-height: 1.4;
+  color: var(--ink);
+  background: var(--paper);
+}
+
+* { box-sizing: border-box; }
+
+body { margin: 0; }
+
+main {
+  max-width: 640px;
+  margin: 0 auto;
+  padding: 24px 24px 32px;
+}
+
+section {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+section[hidden] { display: none; }
+
+section[data-screen="welcome"], section[data-screen="done"] { text-align: center; }
+
+h1 {
+  font-size: 1.6rem;
+  line-height: 1.2;
+  margin: 8px 0;
+}
+
+p { margin: 0; }
+
+.logo {
+  width: 280px;
+  height: 280px;
+  align-self: center;
+}
+
+.logo.small {
+  width: 160px;
+  height: 160px;
+}
+
+button {
+  min-height: 72px;
+  width: 100%;
+  padding: 12px 20px;
+  border: 2px solid var(--line);
+  border-radius: 16px;
+  background: var(--card);
+  color: var(--ink);
+  font: inherit;
+  font-weight: 600;
+  text-align: center;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+
+button:disabled { opacity: 0.5; }
+
+button.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-ink);
+}
+
+button.choice {
+  min-height: 96px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: center;
+  gap: 4px;
+  text-align: left;
+}
+
+.badge {
+  font-size: 0.8rem;
+  font-weight: 700;
+  color: var(--badge);
+}
+
+button.back {
+  min-height: 64px;
+  border-color: transparent;
+  background: transparent;
+  color: var(--muted);
+}
+
+label {
+  font-size: 0.9rem;
+  color: var(--muted);
+}
+
+input {
+  min-height: 64px;
+  width: 100%;
+  padding: 12px 16px;
+  border: 2px solid var(--line);
+  border-radius: 12px;
+  font: inherit;
+  background: var(--card);
+  color: var(--ink);
+}
+
+input:focus, button:focus-visible {
+  outline: 3px solid var(--badge);
+  outline-offset: 2px;
+}
+
+.row {
+  display: flex;
+  gap: 12px;
+}
+
+.row input { flex: 1; }
+
+.row button {
+  width: auto;
+  min-width: 180px;
+}
+
+.sentence {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.sentence[role="alert"] { color: var(--warn); }
+
+.sentence:empty { display: none; }
+
+.steps {
+  margin: 0;
+  padding-left: 1.6em;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.steps[hidden] { display: none; }
+
+.steps li { color: var(--muted); }
+.steps li.done { color: var(--ink); }
+.steps li.done::after { content: " \2713"; }
+.steps li.current { color: var(--ink); font-weight: 700; }
+
+.approval {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.approval[hidden] { display: none; }
+
+.qr {
+  align-self: center;
+  width: 264px;
+  height: 264px;
+}
+
+.qr svg {
+  width: 100%;
+  height: 100%;
+}
+
+.link, .address {
+  font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+  font-size: 0.8rem;
+  overflow-wrap: anywhere;
+}
+
+.address { font-size: 1rem; }
+
+.joined { font-weight: 600; }

@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<!-- SPDX-License-Identifier: Apache-2.0 -->
+<!-- Copyright 2026 CYFR Works Inc. -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Set up CYFR</title>
+<link rel="icon" href="/logo.png">
+<link rel="stylesheet" href="/setup.css">
+<script src="/setup.js" defer></script>
+</head>
+<body>
+<main>
+  <section data-screen="nokey" hidden>
+    <h1>Open the setup address</h1>
+    <p>This page needs the address <code>cyfr setup</code> printed, which carries this setup's key.</p>
+  </section>
+
+  <section data-screen="welcome" hidden>
+    <img class="logo" src="/logo.png" alt="The CYFR capybara">
+    <h1>Welcome to CYFR</h1>
+    <button type="button" class="primary" data-go="how">Set up your home</button>
+  </section>
+
+  <section data-screen="how" hidden>
+    <h1>How will you reach this home?</h1>
+    <button type="button" class="choice" data-mode="tailnet">
+      <span class="label">My phone and laptop, via Tailscale</span>
+      <span class="badge">Recommended</span>
+    </button>
+    <button type="button" class="choice" data-mode="local">
+      <span class="label">Only this device</span>
+    </button>
+    <button type="button" class="choice" data-mode="public">
+      <span class="label">Advanced: a public domain</span>
+    </button>
+    <button type="button" class="back" data-go="welcome">Back</button>
+  </section>
+
+  <section data-screen="public" hidden>
+    <h1>A public domain</h1>
+    <label for="domain">The domain this home is reached at; its DNS names this machine</label>
+    <input id="domain" type="text" inputmode="url" autocomplete="off" autocapitalize="none" spellcheck="false" placeholder="cyfr.example.com">
+    <label for="acme-email">Email for the certificate authority's notices (optional)</label>
+    <input id="acme-email" type="email" inputmode="email" autocomplete="email" autocapitalize="none" spellcheck="false">
+    <p class="sentence" role="alert" data-error="public"></p>
+    <button type="button" class="primary" data-action="public-next">Next</button>
+    <button type="button" class="back" data-go="how">Back</button>
+  </section>
+
+  <section data-screen="email" hidden>
+    <h1>Your email</h1>
+    <label for="email">The email you sign in with. It makes you this home's administrator.</label>
+    <input id="email" type="email" inputmode="email" autocomplete="email" autocapitalize="none" spellcheck="false" required placeholder="you@example.com">
+    <p class="sentence" role="alert" data-error="email"></p>
+    <button type="button" class="primary" data-action="start">Start</button>
+    <button type="button" class="back" data-action="email-back">Back</button>
+  </section>
+
+  <section data-screen="progress" hidden>
+    <h1>Setting up your home</h1>
+    <ol class="steps" data-steps></ol>
+    <p class="joined" data-joined hidden></p>
+    <div class="approval" data-approval hidden>
+      <p>Scan this with your phone, or open the link, and approve this machine on your tailnet.</p>
+      <div class="qr" data-qr></div>
+      <p class="link" data-link></p>
+      <label for="name">This machine's name on your tailnet, part of the home's address; certificate names are public</label>
+      <div class="row">
+        <input id="name" type="text" autocomplete="off" autocapitalize="none" spellcheck="false">
+        <button type="button" data-action="rename">Use this name</button>
+      </div>
+      <p class="sentence" role="alert" data-error="approval"></p>
+      <button type="button" class="back" data-action="cancel">Use only this device instead</button>
+    </div>
+  </section>
+
+  <section data-screen="problem" hidden>
+    <h1>That did not work</h1>
+    <p class="sentence" data-sentence></p>
+    <p class="sentence" role="alert" data-error="problem"></p>
+    <button type="button" class="primary" data-offer="retry" hidden>Try again</button>
+    <button type="button" data-offer="local" hidden>Start on this device only</button>
+  </section>
+
+  <section data-screen="done" hidden>
+    <img class="logo small" src="/logo.png" alt="">
+    <h1>Your home is ready</h1>
+    <p class="address" data-address></p>
+    <p class="sentence" data-sentence></p>
+    <p data-tailnet hidden>This address opens on your phone and laptop on your tailnet; this device opens it once it can reach its own tailnet address.</p>
+    <button type="button" class="primary" data-action="open">Open your home</button>
+  </section>
+
+  <section data-screen="failed" hidden>
+    <h1>Setup stopped</h1>
+    <p class="sentence" data-sentence></p>
+  </section>
+</main>
+</body>
+</html>
