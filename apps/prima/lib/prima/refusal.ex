@@ -360,6 +360,20 @@ defmodule Prima.Refusal do
     "email" => "email address"
   }
 
+  # Why a home put back after a failed change answers on this machine only,
+  # and the step that serves it on the tailnet again.
+  @rolled_back_local %{
+    "tailnet_node_mismatch" =>
+      {"this machine's tailnet identity is not the one .env names",
+       "run `cyfr reach tailnet`, which offers to move the home to the machine's tailnet name"},
+    "tailnet_not_joined" =>
+      {"this machine has not joined your tailnet",
+       "run `cyfr reach tailnet` and approve the machine with the link it prints"},
+    "tailnet_https_off" =>
+      {"your tailnet has HTTPS certificates turned off",
+       "turn on HTTPS on the DNS page of the Tailscale admin console, then run `cyfr reach tailnet`"}
+  }
+
   # Why a setup token cannot be used, and the fix for each.
   @setup_token_refusals %{
     malformed:
@@ -1254,13 +1268,27 @@ defmodule Prima.Refusal do
        "Docker did not answer (#{why}) before the change was accepted. Nothing was changed. " <>
          "Start Docker, then run the command again."}
 
-  defp row({:reach_rolled_back, %{new: new, old: old, reason: why}})
-       when is_binary(new) and is_binary(old) and is_binary(why),
+  defp row({:reach_rolled_back, %{new: new, old: old, reason: why} = payload})
+       when map_size(payload) == 3 and is_binary(new) and is_binary(old) and is_binary(why),
        do:
          {:conflict,
           "This home could not start as #{new} (#{why}). What it started was stopped and " <>
             "checked stopped, and the home was put back: it is reached as before, #{old}, and " <>
             "running. Fix what the reason names, then run the command again."}
+
+  # Put back as before, but the old head's tailnet machine is not ready to
+  # serve it, so it answers on this machine only, and why.
+  defp row({:reach_rolled_back, %{new: new, old: old, reason: why, local: local} = payload})
+       when map_size(payload) == 4 and is_binary(new) and is_binary(old) and is_binary(why) and
+              is_map_key(@rolled_back_local, local) do
+    {because, next} = Map.fetch!(@rolled_back_local, local)
+
+    {:conflict,
+     "This home could not start as #{new} (#{why}). What it started was stopped and checked " <>
+       "stopped, and the home was put back as before, #{old}, but it answers on this machine " <>
+       "only, because #{because}. Fix what the reason names, then run the command again; " <>
+       "#{next}."}
+  end
 
   defp row({:reach_failed, %{new: new, env: env}}) when is_binary(new) and is_binary(env),
     do:

@@ -154,6 +154,18 @@ defmodule Prima.RefusalTest do
         reason: "cyfr did not become healthy"
       }}, :conflict,
      "This home could not start as your devices on Tailscale (cyfr did not become healthy). What it started was stopped and checked stopped, and the home was put back: it is reached as before, only this computer, and running. Fix what the reason names, then run the command again."},
+    {{:reach_rolled_back,
+      %{
+        new: "anyone on the internet, who still has to sign in",
+        old: "your devices on Tailscale",
+        reason: "cyfr did not become healthy",
+        local: "tailnet_node_mismatch"
+      }}, :conflict,
+     "This home could not start as anyone on the internet, who still has to sign in (cyfr did not become healthy). What it started was stopped and checked stopped, and the home was put back as before, your devices on Tailscale, but it answers on this machine only, because this machine's tailnet identity is not the one .env names. Fix what the reason names, then run the command again; run `cyfr reach tailnet`, which offers to move the home to the machine's tailnet name."},
+    {{:reach_rolled_back,
+      %{new: "x", old: "your devices on Tailscale", reason: "y", local: "tailnet_https_off"}},
+     :conflict,
+     "This home could not start as x (y). What it started was stopped and checked stopped, and the home was put back as before, your devices on Tailscale, but it answers on this machine only, because your tailnet has HTTPS certificates turned off. Fix what the reason names, then run the command again; turn on HTTPS on the DNS page of the Tailscale admin console, then run `cyfr reach tailnet`."},
     {{:reach_failed, %{new: "your devices on Tailscale", env: "only this computer"}},
      :unavailable,
      "This home could not start as your devices on Tailscale, nor as before; everything was stopped and checked stopped. .env says: only this computer. Run `cyfr up` to start it as .env says, or `cyfr reach <mode>` to choose again."},
@@ -482,6 +494,8 @@ defmodule Prima.RefusalTest do
             {:reach_env_edited, %{then: "incoherent", env: "x"}},
             {:reach_env_edited, %{then: "other", env: "x"}},
             {:tailnet_join_ended, %{reason: "x"}},
+            {:reach_rolled_back, %{new: "x", old: "y", reason: "z", local: "other"}},
+            {:reach_rolled_back, %{new: "x", old: "y", reason: "z", extra: "w"}},
             {:reach_invalid, %{input: "x", kind: "port", rule: "y"}},
             {:reach_option_outside_mode, %{option: "--domain", mode: "public"}},
             {:reach_setting_invalid, %{key: "CYFR_HOST", value: "x", extra: "y"}},

@@ -123,6 +123,9 @@ var refusalRows = map[string]refusalRow{
 		Class: "conflict",
 		Variants: []refusalVariant{
 			{Fixed: map[string]string{}, Slots: []string{"new", "old", "reason"}, Template: "This home could not start as {new} ({reason}). What it started was stopped and checked stopped, and the home was put back: it is reached as before, {old}, and running. Fix what the reason names, then run the command again."},
+			{Fixed: map[string]string{"local": "tailnet_node_mismatch"}, Slots: []string{"new", "old", "reason"}, Template: "This home could not start as {new} ({reason}). What it started was stopped and checked stopped, and the home was put back as before, {old}, but it answers on this machine only, because this machine's tailnet identity is not the one .env names. Fix what the reason names, then run the command again; run `cyfr reach tailnet`, which offers to move the home to the machine's tailnet name."},
+			{Fixed: map[string]string{"local": "tailnet_not_joined"}, Slots: []string{"new", "old", "reason"}, Template: "This home could not start as {new} ({reason}). What it started was stopped and checked stopped, and the home was put back as before, {old}, but it answers on this machine only, because this machine has not joined your tailnet. Fix what the reason names, then run the command again; run `cyfr reach tailnet` and approve the machine with the link it prints."},
+			{Fixed: map[string]string{"local": "tailnet_https_off"}, Slots: []string{"new", "old", "reason"}, Template: "This home could not start as {new} ({reason}). What it started was stopped and checked stopped, and the home was put back as before, {old}, but it answers on this machine only, because your tailnet has HTTPS certificates turned off. Fix what the reason names, then run the command again; turn on HTTPS on the DNS page of the Tailscale admin console, then run `cyfr reach tailnet`."},
 		},
 	},
 	"reach_failed": {

@@ -61,7 +61,12 @@ defmodule Mix.Tasks.Cyfr.Gen.ReachRefusals do
     {:tailnet_join_ended, [{%{}, []}]},
     {:tailnet_join_not_current, [{%{}, []}]},
     {:docker_unavailable, [{%{}, ~w(reason)}]},
-    {:reach_rolled_back, [{%{}, ~w(new old reason)}]},
+    {:reach_rolled_back,
+     [{%{}, ~w(new old reason)}] ++
+       for(
+         local <- ~w(tailnet_node_mismatch tailnet_not_joined tailnet_https_off),
+         do: {%{local: local}, ~w(new old reason)}
+       )},
     {:reach_failed, [{%{}, ~w(new env)}]},
     {:reach_env_edited,
      for(then <- ~w(started not_running failed), do: {%{then: then}, ~w(env)}) ++
