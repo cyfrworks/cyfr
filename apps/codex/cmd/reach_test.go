@@ -411,9 +411,10 @@ func TestReachConfirmsTheJoinBeforeItStarts(t *testing.T) {
 
 // A change declined after a new node's join says a tailnet identity was
 // removed only when the join replaced a machine the engine knew this home
-// had, and names that machine; the question before the join names it too.
-// An identity .env names that no machine is known joined as is never said
-// to be removed, before the join or after it.
+// had and .env agrees with, and names that machine; the question before
+// the join names it too. An identity .env names that no machine is known
+// joined as, or that names another node than the machine known, is never
+// said to be removed, before the join or after it.
 func TestReachSaysAnIdentityWasRemovedOnlyForTheMachineTheJoinReplaced(t *testing.T) {
 	envHead := func(t *testing.T, name, node string) {
 		t.Helper()
@@ -438,6 +439,23 @@ func TestReachSaysAnIdentityWasRemovedOnlyForTheMachineTheJoinReplaced(t *testin
 			},
 			question: "This joins this machine to your tailnet as `cyfr`, after removing its current tailnet identity, `old.tail1234.ts.net`, which the Tailscale admin console still lists until you remove it there; certificate names are public.\n",
 			want:     "The change was not confirmed. This machine's tailnet identity `old.tail1234.ts.net` was removed, and the Tailscale admin console still lists it until you remove it there; the machine joined your tailnet as `cyfr.tail1234.ts.net`, and how this home is reached was not changed",
+		},
+		// A restore leaves the machine's state and its last join as they
+		// were, so .env can name machine A while the engine knows B: the
+		// preview moves A to B, and neither is said to be removed.
+		".env names another node than the machine joined": {
+			prepare: func(t *testing.T, s *fakeStack) {
+				envHead(t, "a.tail1234.ts.net", "nAAAAAAAAACNTRL")
+				s.joined[""] = reach.Join{Name: "b.tail1234.ts.net", NodeID: "nBBBBBBBBBCNTRL"}
+			},
+			question: unknown, want: joinedOnly,
+		},
+		".env's head does not read": {
+			prepare: func(t *testing.T, s *fakeStack) {
+				s.headErr = reach.Refuse("reach_setting_invalid", map[string]string{"key": "CYFR_TAILNET_NODE_ID"})
+				s.joined[""] = reach.Join{Name: "b.tail1234.ts.net", NodeID: "nBBBBBBBBBCNTRL"}
+			},
+			question: unknown, want: joinedOnly,
 		},
 		"a join that kept the machine's node": {
 			prepare: func(t *testing.T, s *fakeStack) {

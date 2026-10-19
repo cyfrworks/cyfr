@@ -338,8 +338,8 @@ func joinTailnet(ctx context.Context, e stackEngine, id string, o reachOptions, 
 
 // joinChoice is how a command meets the join its preview needs. confirm,
 // when set, is asked before the join starts, with the name of the machine
-// --new-node replaces ("" when the engine knows none this home has), and
-// its error refuses the join; optionsGiven says --hostname or
+// --new-node replaces ("" when previewTarget names none), and its error
+// refuses the join; optionsGiven says --hostname or
 // --tailscale-auth-key-file was given, which apply to a new join alone.
 type joinChoice struct {
 	confirm      func(current string) error
@@ -348,8 +348,8 @@ type joinChoice struct {
 
 // joined is the join a preview made: its id, "" when the preview needed
 // none, and the name of the machine its --new-node join replaced, "" unless
-// the engine knew this home had that machine and the join answered another
-// node.
+// the engine knew this home had that machine, .env agreeing, and the join
+// answered another node.
 type joined struct {
 	id, removed string
 }
@@ -376,15 +376,27 @@ func previewTarget(ctx context.Context, e stackEngine, target reach.Target, id s
 	case err != nil && !notJoined && (!o.newNode || r == nil || r.Code == "tailnet_active"):
 		return reach.Preview{}, joined{}, engineFailure(err)
 	}
-	// The machine a new node replaces is the one the preview derived from
-	// what the engine knows this home has; reach_unchanged derived .env's
-	// own head, so that machine is .env's. With no machine known, an
-	// identity .env names may be no machine's, and none is named.
+	// The machine a new node replaces is the engine's own read of this
+	// home's machine (the running tailscale service's, else the latest
+	// completed join's), named only where .env agrees with it: .env's head
+	// names no machine (local or public) or the same node. A tailnet .env
+	// naming another node (a restore leaves the machine's state and its
+	// last join as they were) or a .env whose head does not read names
+	// none, and nor does any refusal but reach_unchanged: that one derived
+	// .env's own head from the engine's machine, so the machine's name and
+	// node id are .env's by the engine's read.
 	var known reach.Head
 	switch {
 	case !o.newNode:
 	case err == nil:
-		known = p.New
+		switch p.Old.Mode {
+		case reach.ModeLocal, reach.ModePublic:
+			known = p.New
+		case reach.ModeTailnet:
+			if p.Old.NodeID == p.New.NodeID {
+				known = p.New
+			}
+		}
 	case r != nil && r.Code == "reach_unchanged":
 		if h, herr := e.Head(); herr == nil && h.Mode == reach.ModeTailnet {
 			known = h
