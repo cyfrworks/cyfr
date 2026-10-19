@@ -296,6 +296,11 @@ func AuthKeyFingerprint(key []byte) string {
 // on a failed start. The receipt is its outcome; resending the same id
 // with the same request, its content included, answers the same receipt,
 // and with any other a rejected reach_request_reused that changes nothing.
+// A reopen (Preview.Reopen) is ok only if, once Serve is open, cyfr runs
+// and Serve's configuration is the head's: a home that stopped before the
+// switch was accepted is reach_stale, and one that stopped, or whose
+// Serve changed, after Serve opened has Serve closed again and is
+// not_applied with reach_stale; neither starts anything more.
 func (e *Engine) Switch(ctx context.Context, r SwitchRequest) (Receipt, error) {
 	return e.doSwitch(ctx, r)
 }
