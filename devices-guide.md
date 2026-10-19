@@ -83,3 +83,16 @@ Before your first passkey or device, a fresh sign-in confirms the first one, onc
 ### Passkeys are per home
 
 A passkey is registered at one home, under that home's host as its relying party, and confirms changes only there. No home accepts another home's passkey, and changing this home's host needs a new registration. Your first passkey may be registered from a recent sign-in through one of this home's own doors (`reauth_seconds`, five minutes by default) only while you hold no other fresh method here; otherwise, and for every later passkey, registering or removing one is itself a sensitive change confirmed with a method you already hold, and once a passkey or a paired device exists here, registering another is confirmed with one of them (above). If you lose every way to confirm, this home's platform administrator can authorize a new passkey for you; you and your athanors' members are told.
+
+---
+
+## When the Home's Address Changes
+
+A home's address is its tailnet name, its domain, or `localhost` for a home reached from its own computer alone, and it changes when `cyfr reach` moves the home to another mode or name. Before it makes such a change, `cyfr reach` lists what stops working:
+
+1. **Passkeys.** A passkey made at the old address stops working, since its relying party is the old host (above). Each person registers one at the new address, which this home's platform administrator authorizes, as when every way to confirm is lost.
+2. **Paired devices.** Pair every device again, at the new address.
+3. **Clients and callbacks.** Update the redirect address in OAuth apps you registered (vault credentials, an OIDC issuer), the URL your webhook senders call, CLI contexts and MCP clients.
+4. **Other homes.** Other homes and devices that saved the old address need the new one.
+
+Your CYFR identity does not change. Choose a tailnet home's machine name once, for this reason: a new name is a new address.

@@ -32,7 +32,7 @@ Formulas support **execution event streaming** — long-running formulas (like a
 CYFR exposes two surfaces over the same runtime:
 
 - **Codex** — the `cyfr` command-line client. Scriptable; talks to a running CYFR instance over MCP. Run it locally (or on the box CYFR runs on) for project setup, builds, component management, and CI.
-- **Prism** — the web face, served by CYFR on its one endpoint (`:4000`, or `/` behind Caddy) and installable as a PWA: the chat with **AQUA** — your friendly assistant — one zone across every athanor you belong to (a shared thread every member of an athanor sees, with approvals any member can decide), your own AQUA in a panel on every page, each athanor's AQUA page, and the developer views — executions, components, builds, activities, enforcements, the vault, API keys, schedules, MCP servers, tinctures.
+- **Prism** — the web face, served by CYFR on its one endpoint (`:4000`, or `/` behind Tailscale Serve or Caddy) and installable as a PWA: the chat with **AQUA** — your friendly assistant — one zone across every athanor you belong to (a shared thread every member of an athanor sees, with approvals any member can decide), your own AQUA in a panel on every page, each athanor's AQUA page, and the developer views — executions, components, builds, activities, enforcements, the vault, API keys, schedules, MCP servers, tinctures.
 
 ## Quick Start
 
@@ -88,7 +88,7 @@ cyfr -h
 open http://localhost:4000
 ```
 
-`cyfr init` downloads your project files and pulls the server images: `docker-compose.yml`, `Caddyfile`, `keeper.seccomp.json` (the `locus-runtime` service's seccomp profile), `.env.example` and the services' own env examples, `cyfr.yaml`, WIT interface definitions, the `aqua/` soul, roles and scrolls, and the included guides ([configuration-guide.md](configuration-guide.md), [integration-guide.md](integration-guide.md), [component-guide.md](component-guide.md), [tincture-guide.md](tincture-guide.md), [identity-guide.md](identity-guide.md), [devices-guide.md](devices-guide.md)). It writes `.env` from `.env.example`, prompting for the hostname, the operator's sign-in email (the first platform admin), and — for a real hostname — a Let's Encrypt email, and mints the stack's keys into it: `CYFR_SECRET_KEY_BASE`, `CYFR_LOCUS_BACKENDS_KEY`, the runtime root `CYFR_LOCUS_RUNTIME_ROOT` with the `LOCUS_RUNTIME_KEY` derived from it, and `CYFR_LOCUS_BUILDS_KEY` beside `CYFR_LOCUS_BUILDS_URL`, so builds are on. Pass `--no-interactive` to take the defaults. It does not install Docker itself. The scaffolded `docker-compose.yml` is the full self-hosted stack — `cyfr` (the one endpoint on `:4000`: Prism, API, MCP, tinctures), `locus-runtime` (the runtime that runs components), `locus-builds` (the builds service behind `cyfr build compile`), `locus-backends` (the backends service that runs stdio MCP servers) and `caddy` (TLS + reverse proxy at `:80`/`:443`, for real-hostname deployments); `cyfr up` brings up the first four, and `caddy` too when you enabled TLS at init. See [Deploy to a Server](#deploy-to-a-server) for the same stack on a VPS.
+`cyfr init` downloads your project files and pulls the server images: `docker-compose.yml`, `Caddyfile`, `keeper.seccomp.json` (the `locus-runtime` service's seccomp profile), `.env.example` and the services' own env examples, `cyfr.yaml`, WIT interface definitions, the `aqua/` soul, roles and scrolls, and the included guides ([configuration-guide.md](configuration-guide.md), [integration-guide.md](integration-guide.md), [component-guide.md](component-guide.md), [tincture-guide.md](tincture-guide.md), [identity-guide.md](identity-guide.md), [devices-guide.md](devices-guide.md)). It writes `.env` from `.env.example`, asking first how the home is reached (your devices via Tailscale, a public domain via Caddy, or this computer only) and then the operator's sign-in email (the first platform admin), and mints the stack's keys into it: `CYFR_SECRET_KEY_BASE`, `CYFR_LOCUS_BACKENDS_KEY`, the runtime root `CYFR_LOCUS_RUNTIME_ROOT` with the `LOCUS_RUNTIME_KEY` derived from it, and `CYFR_LOCUS_BUILDS_KEY` beside `CYFR_LOCUS_BUILDS_URL`, so builds are on. Pass `--no-interactive` to take the defaults. It does not install Docker itself. The scaffolded `docker-compose.yml` is the full self-hosted stack — `cyfr` (the one endpoint on `:4000`: Prism, API, MCP, tinctures), `locus-runtime` (the runtime that runs components), `locus-builds` (the builds service behind `cyfr build compile`), `locus-backends` (the backends service that runs stdio MCP servers), and the proxy of a home reached from other devices: `tailscale` (Tailscale Serve, for a tailnet home) or `caddy` (TLS and the reverse proxy at `:80`/`:443`, for a public home); `cyfr up` brings up the first four, and the proxy the home's reach selects. See [Deploy to a Server](#deploy-to-a-server) for the same stack on a VPS.
 
 ## Prism — the web face
 
@@ -103,7 +103,7 @@ Around the chat:
 - **`lite` / `dev`** — a per-person preference in Settings, not an edition. `dev` adds the developer views — **Executions**, **Activities**, **Enforcements**, **Components**, **Builds**, **Registry**, **API Keys**, **Reports** — in a sidebar with live indicators; the ops surface stays reachable in `lite`, it just isn't the face. `lite` is the default when the server has a door (an auth provider); operators and private boxes start in `dev`.
 - **⌘⇧K** — the command palette, also from the drawer's Search… row.
 
-Tinctures can stay private inside Prism, or be made public and shared at `http(s)://<your CYFR_HOST>/t/<athanor>/<publisher>/<name>` — served through Caddy (with `CYFR_HOST=localhost`, HTTPS from Caddy's own local certificate authority, with HTTP on `:80` redirected to it; with a real domain, HTTPS under a certificate Caddy obtains over ACME). See [Deploy to a Server](#deploy-to-a-server). A canvas is never public: it is your own data page, so no public profile is staged for one and the public route serves none.
+Tinctures can stay private inside Prism, or be made public and shared at the home's address, `<address>/t/<athanor>/<publisher>/<name>`: `http://localhost:4000` for a local home, which only its own computer reaches; `https://<machine>.<tailnet>.ts.net` for a tailnet home, which your tailnet's devices reach through Tailscale Serve; and `https://<your domain>` for a public home, through Caddy under a certificate it obtains over ACME. See [Deploy to a Server](#deploy-to-a-server). A canvas is never public: it is your own data page, so no public profile is staged for one and the public route serves none.
 
 ## Project Layout
 
@@ -117,10 +117,11 @@ your-project/
 ├── tincture-guide.md       # Guide to building tinctures
 ├── identity-guide.md       # Your identifier, keys and printed kit, restore, and joining another home
 ├── devices-guide.md        # Pairing devices and confirming sensitive changes
-├── docker-compose.yml      # Self-hosted stack: cyfr, locus-runtime, locus-builds, locus-backends (+ caddy in TLS mode)
-├── Caddyfile               # Reverse proxy (TLS mode only): everything → cyfr:4000
+├── docker-compose.yml      # Self-hosted stack: cyfr, locus-runtime, locus-builds, locus-backends (+ tailscale for a tailnet home, caddy for a public one)
+├── Caddyfile               # A public home's reverse proxy: everything → cyfr's proxy listener
 ├── keeper.seccomp.json     # The seccomp profile the locus-runtime service runs under (see "Execution workers")
 ├── cyfr.yaml
+├── .cyfr/                  # How the home is reached, as `cyfr` keeps it: the stack's lock, the change in flight and recent outcomes (git-ignored; no snapshot holds it)
 ├── .env                    # The stack's keys and config, written by `cyfr init` (do not commit)
 ├── .env.example            # The starting .env: init's keys and the deployment choices
 ├── .env.locus.example      # The Locus services' own settings, one file for every role (copy to .env.locus)
@@ -368,9 +369,9 @@ Three ways a home is reached, `CYFR_REACH` in `.env`:
 - **tailnet**: your devices on Tailscale; also runs tailscale (`--profile tailnet`). Prism at `https://<machine>.<tailnet>.ts.net/`.
 - **public**: a domain, for anyone who signs in; also runs caddy (`--profile public`). Prism at `https://<your domain>/`.
 
-`cyfr init` asks which one you want and writes it into `.env` with every setting it implies, and `cyfr reach <mode>` changes it later. `cyfr up` selects the proxy's profile from `CYFR_REACH`, and the `locus-builds` profile when `CYFR_LOCUS_BUILDS_URL` names the builds service, which it does after `cyfr init`.
+`cyfr init` asks which one you want and writes it into `.env` with every setting it implies: the address, and the tailnet machine or the certificate email. [`cyfr reach <mode>`](#how-the-home-is-reached) changes it later, and `cyfr reach status` shows it. `cyfr up` selects the proxy's profile from `CYFR_REACH`, and the `locus-builds` profile when `CYFR_LOCUS_BUILDS_URL` names the builds service, which it does after `cyfr init`. Whatever the mode, cyfr serves on its loopback listener, `:4000` on this machine's loopback alone; a tailnet or public home adds the proxy listener its proxy forwards to, which no port publishes.
 
-There is **no censorship-circumvention layer** here — Caddy gives you TLS, not unblockability; if your network actively blocks endpoints, put this stack behind a separate obfuscated transport.
+There is **no censorship-circumvention layer** here — Tailscale and Caddy give you TLS, not unblockability; if your network actively blocks endpoints, put this stack behind a separate obfuscated transport.
 
 ### Prerequisites
 
@@ -393,7 +394,7 @@ cyfr init        # downloads compose + Caddyfile, asks how the home is reached, 
 cyfr up          # starts cyfr + locus-runtime + locus-builds + locus-backends (and the proxy of a tailnet or public home)
 ```
 
-`cyfr init` mints every key the stack needs into `.env`: `CYFR_SECRET_KEY_BASE`, `CYFR_LOCUS_BACKENDS_KEY`, the [execution worker](#execution-workers)'s root `CYFR_LOCUS_RUNTIME_ROOT` with the `LOCUS_RUNTIME_KEY` derived from it for the worker's service id (`wrk_locus` unless `.env` names another `LOCUS_RUNTIME_SERVICE_ID`), and the [builds](#builds) key beside `CYFR_LOCUS_BUILDS_URL=http://locus-builds:4100`. It also assigns [`CYFR_CORS_ALLOWED_ORIGINS`](#cors-allowlist-required-for-server-deployments) the empty allowlist, which a release with sign-in configured needs to boot and the shipped stack's same-origin clients never notice. Run in a project whose `.env` already exists, it adds only the keys `.env` lacks and never rewrites one: with no root and no service key it mints both, with a root alone it derives the service key from it, a builds URL gets a minted key and a builds key gets the URL. A service key with no root beside it, or one the root beside it does not derive, is refused with a sentence naming the fix, and nothing is written.
+`cyfr init` mints every key the stack needs into `.env`: `CYFR_SECRET_KEY_BASE`, `CYFR_LOCUS_BACKENDS_KEY`, the [execution worker](#execution-workers)'s root `CYFR_LOCUS_RUNTIME_ROOT` with the `LOCUS_RUNTIME_KEY` derived from it for the worker's service id (`wrk_locus` unless `.env` names another `LOCUS_RUNTIME_SERVICE_ID`), and the [builds](#builds) key beside `CYFR_LOCUS_BUILDS_URL=http://locus-builds:4100`. It also assigns [`CYFR_CORS_ALLOWED_ORIGINS`](#cors-allowlist) the empty allowlist, which admits no cross-origin caller and which the shipped stack's same-origin clients never notice. Run in a project whose `.env` already exists, it adds only the keys `.env` lacks and never rewrites one: with no root and no service key it mints both, with a root alone it derives the service key from it, a builds URL gets a minted key and a builds key gets the URL. A service key with no root beside it, or one the root beside it does not derive, is refused with a sentence naming the fix, and nothing is written.
 
 <details><summary>Prefer a source checkout?</summary>
 
@@ -412,10 +413,10 @@ cp .env.example .env
 #   CYFR_LOCUS_BUILDS_URL — http://locus-builds:4100 (see "Builds")
 #   CYFR_LOCUS_BUILDS_KEY — `openssl rand -hex 32`
 
-# local:
+# with the CLI, as for any home:
+cyfr up
+# …or, for a local home without it, outside the supported path (see "How the home is reached"):
 docker compose --profile locus-builds up -d
-# public (after `cyfr reach public --domain <your domain>`):
-docker compose --profile public --profile locus-builds up -d
 ```
 </details>
 
@@ -430,7 +431,32 @@ Then open the address `cyfr up` prints (`http://localhost:4000/` for a local hom
 5. copies the cell into `backups/<timestamp>/`: the database (the SQLite file, or a `pg_dump` in the PostgreSQL server's own major version), the storage root, every managed scaffold file the release replaces as it stood (part `scaffold`, the keeper's seccomp profile among them), the keyring, `.env` and `docker-compose.yml` as it stood (part `compose`), with `snapshot.json` written last, so a backup without it is incomplete. `backups/` ignores itself for git, since a snapshot holds the keyring; An object store (`CYFR_STORAGE=s3`) is outside the snapshot: it relies on the bucket's own versioning;
 6. writes the managed scaffold files, putting them back from the snapshot and starting the old stack again if that or the next step fails, rewrites the `image:` lines naming `ghcr.io/cyfrworks/cyfr`, `ghcr.io/cyfrworks/cyfr-locus`, the bundled caddy and the bundled tailscale to the release's version and digest (caddy and tailscale keep their tags), leaving and reporting any other image, then starts the stack and waits for readiness. A release that fails to migrate or start leaves the stack stopped, since old code never starts over migrated bytes, and the update prints the backup's path and `cyfr restore <backup>`.
 
-A member whose release differs from a live member's is refused at boot, naming both releases. `cyfr init` run again in the project adds a key a newer stack needs that `.env` lacks, and changes nothing else. From a source checkout: `docker compose --profile locus-builds pull && docker compose --profile locus-builds up -d` (add `--profile public` or `--profile tailnet` for a public or tailnet home, and drop the builds profile if builds are off). Check the [release notes](https://github.com/cyfrworks/cyfr/releases) first: there is no compatibility layer for behaviour, and a release says what it changes for a running server. A database built from an earlier version of the schema is not carried forward: the server refuses to boot on it and names the database to recreate.
+A member whose release differs from a live member's is refused at boot, naming both releases. `cyfr init` run again in the project adds a key a newer stack needs that `.env` lacks, and changes nothing else. From a source checkout without the CLI: `docker compose --profile locus-builds pull && docker compose --profile locus-builds up -d` (add `--profile public` or `--profile tailnet` for a public or tailnet home, and drop the builds profile if builds are off), which is outside the supported path (below). Check the [release notes](https://github.com/cyfrworks/cyfr/releases) first: there is no compatibility layer for behaviour, and a release says what it changes for a running server. A database built from an earlier version of the schema is not carried forward: the server refuses to boot on it and names the database to recreate.
+
+### How the home is reached
+
+`cyfr reach <mode>` changes how the home in the current directory is reached: `cyfr reach local`, `cyfr reach tailnet`, or `cyfr reach public --domain <your domain>` (and `--acme-email <email>` for the certificate authority's account, if you want one). It shows the change before making it: who can reach the home, its address, the certificate email and the ports opened on this machine, each before → after, and what stops working when the address changes. Once you confirm, or pass `--yes`, it stops the stack and checks it stopped, rewrites `.env`, and starts what was running in the new mode; a start that fails puts the home back as it was. `cyfr reach status` shows how the home is reached, what runs, the proxy's health and the last change's outcome, and changes nothing.
+
+A change holds the stack's lock and keeps its progress in `.cyfr/` in the project directory. When one is interrupted, by a closed terminal or a restart, run `cyfr reach --resume`: it finishes the interrupted change under the lock and reports what happened. The next `cyfr up`, `cyfr update`, `cyfr restore` or `cyfr reach` does the same before anything else.
+
+A start that leaves the home answering on this machine only, because its tailnet machine is not the one `.env` names, has not joined, or has HTTPS certificates off, exits with status 3 and says what to do; Tailscale Serve stays closed until `cyfr reach tailnet` serves the home on the tailnet again.
+
+**Choose the address once.** Passkeys and paired devices belong to the home's address, so a new address, from another tailnet name, another domain or another mode, means registering passkeys and pairing devices again: [devices-guide.md](devices-guide.md#when-the-homes-address-changes) lists what stops working, as `cyfr reach` prints it before it changes the address.
+
+**A tailnet home.** These steps are yours, once:
+
+1. Create a Tailscale account, and install the Tailscale app, signed in, on the phones and computers that will reach the home.
+2. In the Tailscale admin console's DNS page, turn on MagicDNS and HTTPS certificates. Without HTTPS certificates the machine joins, but the home is not served on the tailnet, and `cyfr reach tailnet` says what to turn on.
+
+`cyfr init`'s first answer, or `cyfr reach tailnet`, then joins this machine to your tailnet: open the link it prints and approve the machine, or join it with an auth key, read from the file `--tailscale-auth-key-file` names and never written to `.env` or a log. The home is then at `https://<machine>.<tailnet>.ts.net/`, through the `tailscale` service, with no port opened on this machine.
+
+- **Certificate names are public.** Every HTTPS certificate's name, the machine's full tailnet name included, is published in public certificate logs. Use a randomized tailnet name and a neutral machine name: `cyfr`, unless `--hostname` gives another.
+- **The name is the address.** Renaming the machine means registering passkeys and pairing devices again (above). `cyfr reach tailnet --new-node` replaces this machine's tailnet identity, so the home can take another name; remove the old machine on the admin console's Machines page.
+- **Tailscale's hosted service** hands out the tailnet's keys. Tailnet Lock limits that trust, and CYFR's own sign-in applies either way: CYFR reads no Tailscale identity header, so everyone who reaches the home still signs in.
+
+**A public home.** `cyfr reach public --domain <your domain>` serves the home at `https://<your domain>/` through the `caddy` service, which obtains its certificate over ACME. The domain must point at this machine, and ports 80 and 443 must be open (see [Prerequisites](#prerequisites)).
+
+**The supported path.** `cyfr up`, `cyfr reach`, `cyfr update` and `cyfr restore` run Docker Compose themselves: under the stack's lock, with every `COMPOSE_*` variable cleared from their environment, with the files and profiles the home's settings select, and with the checks a start makes, among them that `.env` agrees with its mode and that the tailnet machine is the one `.env` names before Serve opens. They refuse a `.env` that sets a `COMPOSE_*` variable, since Compose would read it to choose the stack's files, project or services behind cyfr's back, and a compose file that sets a reach setting in the `cyfr` service's `environment:` or drops its `env_file: .env`. Running `docker compose` directly is outside that path, and skips every one of those checks.
 
 ### Stdio / npx MCP servers (filesystem, github, …)
 
@@ -492,7 +518,7 @@ Builds are on after `cyfr init`: it writes both settings into `.env`, and `cyfr 
 
 ### Reaching Prism on the server
 
-Prism is served by the same endpoint as everything else: `https://<your-domain>/` in TLS mode. In direct mode the endpoint is loopback-only; forward it over SSH:
+Prism is served by the same endpoint as everything else, at the home's address: `https://<machine>.<tailnet>.ts.net/` from any device on your tailnet, or `https://<your domain>/` for a public home. A local home answers on the server's loopback alone; forward it over SSH:
 
 ```bash
 ssh -L 4000:localhost:4000 <user>@<server>
@@ -500,19 +526,17 @@ ssh -L 4000:localhost:4000 <user>@<server>
 
 Then open `http://localhost:4000` locally — with the port, which is what the
 browser origin check trusts (a bare `http://localhost` is port 80, and a page
-served there is not this server).
+served there is not this server). The same tunnel reaches a tailnet or public
+home's loopback listener, but that home's passkeys work only at its address.
 
 ## Production Configuration
 
 Everything below is optional — the defaults (GitHub/Google sign-in, SQLite,
-local `./data` storage) run a full instance with zero extra configuration —
-with one exception: a server (release) deployment must assign the CORS
-allowlist, because sign-in is enabled by default, and `.env.example` and
-`cyfr init` assign it empty for you. Each option below is a deployment
-variable, set in `.env` (`.env.example` carries the common choices
-commented out) and read at boot, and fails loud: if an option is enabled
-but incompletely configured, the server refuses to start rather than
-silently falling back.
+local `./data` storage) run a full instance with zero extra configuration.
+Each option below is a deployment variable, set in `.env` (`.env.example`
+carries the common choices commented out) and read at boot, and fails
+loud: if an option is enabled but incompletely configured, the server
+refuses to start rather than silently falling back.
 
 The server's limits, windows and log level are **platform settings**: stored
 in the database, the same on every member, and changed by a platform admin
@@ -521,30 +545,30 @@ new work within seconds. [configuration-guide.md](configuration-guide.md)
 lists every deployment variable and every platform setting with its
 default, and says how to change a setting on a node with no console.
 
-### CORS allowlist (required for server deployments)
+### CORS allowlist
 
-A release refuses to boot when authentication is configured (it is by
-default) while CORS still allows every origin — that combination would let
-any website make credentialed cross-origin requests. `.env.example` and
-`cyfr init` therefore assign the allowlist empty:
+`CYFR_CORS_ALLOWED_ORIGINS` is the browser CORS allowlist. `.env.example`
+and `cyfr init` assign it empty:
 
 ```bash
 CYFR_CORS_ALLOWED_ORIGINS=
 ```
 
-Empty allows no cross-origin caller at all, which is what the shipped
+Empty admits no cross-origin caller at all, which is what the shipped
 stack needs: cyfr serves Prism, the API, `/mcp` and the tinctures from its
-own origin, and behind Caddy they are still that one origin, so
-same-origin traffic never needs CORS. Set it to the origin(s) of a
+own origin, and behind Tailscale Serve or Caddy they are still that one
+origin, so same-origin traffic never needs CORS. Set it to the origin(s) of a
 frontend you serve elsewhere, comma-separated:
 
 ```bash
 CYFR_CORS_ALLOWED_ORIGINS=https://app.example.com
 ```
 
-Assigning it is what matters: with the line removed the wildcard default
-stands and the release refuses to boot. Local `mix phx.server` runs only
-warn, so development is unaffected.
+With the line removed, the origins the server's own configuration names
+stand: none, as shipped. A release with sign-in configured (it is by
+default) refuses to boot while the allowlist holds the wildcard `*`, which
+would let any website make credentialed cross-origin requests; a local
+`mix phx.server` run only warns.
 
 ### Prometheus metrics
 
@@ -911,6 +935,16 @@ and a group admits no new member until each of its members who held a passkey or
 sign-in providers' OAuth client credentials and the registry push tokens
 stay as the backup restored them. An object store (`CYFR_STORAGE=s3`) is
 outside the snapshot: objects written since it stay in the bucket.
+
+A snapshot holds neither this machine's tailnet identity (the
+`tailscale_state` volume) nor `.cyfr/`, so a restore leaves the machine on
+the tailnet as it is. When the restored `.env` is a tailnet home's and
+names another machine than this one, or this machine has joined no
+tailnet, as on a new server, the home starts answering on this machine
+only and `cyfr restore` exits with status 3, saying so. `cyfr reach tailnet` then joins the machine, or offers
+to move the home to the machine's current tailnet name. A new name is a new
+address: passkeys are registered and devices paired again there
+([devices-guide.md](devices-guide.md#when-the-homes-address-changes)).
 
 A restore that is not declared keeps the backup's authority, and the home
 cannot tell it was restored: sessions, keys and grants the backup holds
