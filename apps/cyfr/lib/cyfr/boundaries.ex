@@ -990,8 +990,7 @@ defmodule Cyfr.Boundaries do
           "request's refused decision under the identity its pipeline mints, as every " <>
           "admission entry does (`CyfrWeb.Plugs.CallIdentity`), and runs the " <>
           "configured providers' strategy (`CyfrWeb.Plugs.ConfiguredUeberauth`). " <>
-          "Building a copy-link's " <>
-          "public URL reads a global fact off the endpoint, `PrismWeb.verified_routes/0` " <>
+          "`PrismWeb.verified_routes/0` " <>
           "names the endpoint and the router beside `CyfrWeb.static_paths/0`, because " <>
           "that is the triple `use Phoenix.VerifiedRoutes` takes, and `Prism.Router` " <>
           "declares its pipelines from the shared browser definition and plugs, the " <>
@@ -1900,7 +1899,7 @@ defmodule Cyfr.Boundaries do
     ],
     "Sanctum.Cipher" => [keyring!: 0],
     "Sanctum.Cipher.Rotation" => [audit: 0, reencrypt_all: 1],
-    "Sanctum.ClientIp" => [from_connect_info: 1, resolve: 1],
+    "Sanctum.ClientIp" => [from_connect_info: 1, ingress: 1, put_ingress: 2, resolve: 1],
     # A tincture version's frame opens, and its data routes answer, under
     # the grant held to that version by the decision a run is held to.
     "Sanctum.Consent" => [
