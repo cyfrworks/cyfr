@@ -7,11 +7,12 @@
 # and fails when any field it holds is changed, dropped or added to.
 #
 #   head_holds          every head field (port, email, builds URL, profiles
-#                       and the services they start, the node id read from
-#                       the tailnet state) in .env and in the running cyfr
+#                       and the services they start, the node id and name
+#                       read from the tailnet state) in .env and in the
+#                       running cyfr
 #   serve_config_holds  the complete Serve configuration
-#   preview_holds       the complete preview: old and new words and the
-#                       address-change steps
+#   preview_holds       the complete preview: old and new words, the
+#                       address-change steps and the command's refusal
 #   cookie_holds        the exact signed-out and signed-in redirects
 #   same_refusal        a forged anonymous request refused as the plain one
 #   capabilities_hold   each proxy's capabilities and security options
@@ -68,8 +69,20 @@ for line in open(sys.argv[1]).read().splitlines():
         env.append(line.replace("\x27", ""))
 print(json.dumps(env))' "$1"
 }
-holds() { head_holds "$1" "$2" "$(container_env "${3:-$2}")" "${4:-cyfr tailscale}" "${5:-$node}"; }
+# `$6` the machine's name as the tailnet state holds it (Self.DNSName).
+holds() { head_holds "$1" "$2" "$(container_env "${3:-$2}")" "${4:-cyfr tailscale}" "${5:-$node}" "${6-cyfr-1.proof.ts.net.}"; }
 expect pass "a tailnet head, held whole in .env and the running cyfr" holds "$tailnet_head" "$scratch/env"
+# .env and the running cyfr agreeing on a name the tailnet state does not
+# hold, the head expected from them: the state's name is the expectation.
+wrong_head="${tailnet_head//cyfr-1.proof.ts.net/wrong.proof.ts.net}"
+sed 's/cyfr-1\.proof\.ts\.net/wrong.proof.ts.net/g' "$scratch/env" >"$scratch/wrong"
+expect fail "a .env and running cyfr agreeing on a name other than the state's" holds "$wrong_head" "$scratch/wrong"
+expect pass "the same head where the state holds that name" holds "$wrong_head" "$scratch/wrong" "" "" "" wrong.proof.ts.net.
+expect fail "a state name read without its trailing dot" holds "$tailnet_head" "$scratch/env" "" "" "" cyfr-1.proof.ts.net
+expect fail "a tailnet head with no name read from the state" holds "$tailnet_head" "$scratch/env" "" "" "" ""
+url_head="${tailnet_head//https:\/\/cyfr-1.proof.ts.net/https://cyfr-1.proof.ts.net:8443}"
+sed 's|^CYFR_PUBLIC_URL=.*|CYFR_PUBLIC_URL=https://cyfr-1.proof.ts.net:8443|' "$scratch/env" >"$scratch/url"
+expect fail "a public URL other than the state's name's, held in .env and the running cyfr" holds "$url_head" "$scratch/url"
 edit() {
   sed "$1" "$scratch/env" >"$scratch/$2"
 }
@@ -155,6 +168,14 @@ mutate_preview '/^  2\. /d' step "an address-change step dropped"
 mutate_preview '/^Your CYFR identity/a\  5. An extra step.' extra "a line added to the preview"
 # shellcheck disable=SC2016
 mutate_preview '$d' refusal "the refusal after it missing"
+# shellcheck disable=SC2016
+mutate_preview '$c\panic: failed while parsing --yes' panic "a failure naming --yes in place of the refusal"
+# shellcheck disable=SC2016
+mutate_preview '$s/, or on a terminal to confirm it$//' cut "the refusal cut short"
+# shellcheck disable=SC2016
+mutate_preview '$s/^Error: //' bare "the refusal not printed as the command's error"
+# shellcheck disable=SC2016
+mutate_preview '$s/shown, not made/made/' made "a refusal saying the change was made"
 expect fail "the preview read against another new head" preview_holds "$scratch/preview" "$a" "${b//cyfr-1/cyfr-2}"
 expect fail "the preview read against another old head" preview_holds "$scratch/preview" "${a//cyfr.proof/cyfr-0.proof}" "$b"
 

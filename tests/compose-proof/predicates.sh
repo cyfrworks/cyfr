@@ -13,20 +13,24 @@
 # expected head (JSON: mode, host, port, public_url, acme_email,
 # builds_url, node_id, profiles), `$2` .env, `$3` the cyfr container's
 # environment (`docker inspect` .Config.Env as JSON), `$4` the project's
-# running services, one line, sorted, and `$5` the node id the tailnet
-# state holds, read apart from .env (empty where no node runs, `-` where
-# the state holds another node by design, as a mismatched start leaves
-# it, which the case holds apart). Every
-# reach setting .env and the running cyfr hold is the head's, a field the
-# head lacks unset; the services running are cyfr and the proxy each of
-# the head's profiles starts; a tailnet head's node id is the state's.
-# The reach settings are the ones the reach vectors' derivations assign
-# or remove, and the proof's mapping of them to head fields is held to
-# that set.
+# running services, one line, sorted, `$5` the node id the tailnet state
+# holds and `$6` the machine's name it holds (Self.DNSName, with the
+# trailing dot), both read apart from .env (empty where no node runs; `$5`
+# `-` where the state holds another node by design, as a mismatched start
+# leaves it, which the case holds apart). Every reach setting .env and the
+# running cyfr hold is the head's, a field the head lacks unset; the
+# services running are cyfr and the proxy each of the head's profiles
+# starts; a tailnet head's node id is the state's, and its host and public
+# URL are the state's name without the dot and https:// that name, so a
+# head expected from what .env holds is no head the machine has. The
+# reach settings are the ones the reach vectors' derivations assign or
+# remove, and the proof's mapping of them to head fields is held to that
+# set.
 head_holds() {
   python3 -I - "$ROOT/tests/fixtures/reach_modes.json" "$@" <<'PY'
 import json, sys
 vectors, want, env_path, container_env, running, state_id = sys.argv[1:7]
+state_name = sys.argv[7] if len(sys.argv) > 7 else ""
 FIELDS = {"mode": "CYFR_REACH", "host": "CYFR_HOST", "port": "CYFR_PORT", "public_url": "CYFR_PUBLIC_URL",
           "acme_email": "CADDY_ACME_EMAIL", "builds_url": "CYFR_LOCUS_BUILDS_URL", "node_id": "CYFR_TAILNET_NODE_ID"}
 PROXIES = {"public": "caddy", "tailnet": "tailscale"}
@@ -73,8 +77,15 @@ else:
     services = " ".join(sorted(["cyfr"] + [PROXIES[p] for p in profiles]))
     if running != services:
         problems.append(f"the project runs '{running}', not '{services}'")
-if head.get("mode") == "tailnet" and state_id != "-" and state_id != head.get("node_id"):
-    problems.append(f"the tailnet state holds the node {state_id or 'none'!r}, not the head's {head.get('node_id')!r}")
+if head.get("mode") == "tailnet" and state_id != "-":
+    if state_id != head.get("node_id"):
+        problems.append(f"the tailnet state holds the node {state_id or 'none'!r}, not the head's {head.get('node_id')!r}")
+    if len(state_name) < 2 or not state_name.endswith("."):
+        problems.append(f"the tailnet state's machine name {state_name!r} is no DNSName (a name with its trailing dot)")
+    else:
+        name = state_name[:-1]
+        if (head.get("host"), head.get("public_url")) != (name, f"https://{name}"):
+            problems.append(f"the head's host and public URL are {head.get('host')!r} and {head.get('public_url')!r}, not the tailnet state's {name!r} and 'https://{name}'")
 for p in problems:
     print(p)
 sys.exit(1 if problems else 0)
@@ -109,11 +120,14 @@ PY
 # and, as the address changes, the
 # engine's address-change steps (apps/codex/internal/reach/switch.go
 # addressChanges) and the line on the CYFR identity; then one line, the
-# command's refusal that it made no change.
+# command's refusal that it made no change: the complete sentence
+# apps/codex/cmd/reach.go showUnconfirmed returns, as the command line
+# prints an error ("Error: ", apps/codex/cmd/root.go).
 preview_holds() {
-  python3 -I - "$ROOT/tests/fixtures/reach_modes.json" "$ROOT/apps/codex/internal/reach/switch.go" "$@" <<'PY'
+  python3 -I - "$ROOT/tests/fixtures/reach_modes.json" "$ROOT/apps/codex/internal/reach/switch.go" \
+    "$ROOT/apps/codex/cmd/reach.go" "$@" <<'PY'
 import json, re, sys
-vectors, switch_go, log, old_text, new_text = sys.argv[1:6]
+vectors, switch_go, reach_go, log, old_text, new_text = sys.argv[1:7]
 words = json.load(open(vectors))["words"]
 def sentences(head):
     # The words of a head: the vectors' sentences for a head of the same
@@ -150,11 +164,16 @@ if sentences(old)[1] != sentences(new)[1]:
     block.append("The address changes, so:")
     block += [f"  {i}. {c}" for i, c in enumerate(changes, 1)]
     block.append("Your CYFR identity does not change.")
+GO_STRING = r'"(?:[^"\\]|\\.)*"'
+unconfirmed = re.search(r"^func showUnconfirmed\(.*?^\}$", open(reach_go).read(), re.S | re.M)
+again = unconfirmed and re.search(r"^\tconst again = (" + GO_STRING + r")$", unconfirmed.group(0), re.M)
+shown = unconfirmed and re.search(r"^\tprintPreview\(out, p\)\n\treturn errors\.New\((" + GO_STRING + r") \+ again\)$", unconfirmed.group(0), re.M)
+if not (again and shown):
+    sys.exit(print("reach.go's showUnconfirmed holds no refusal after the preview to expect") or 1)
+refusal = "Error: " + json.loads(shown.group(1)) + json.loads(again.group(1))
 lines = open(log).read().splitlines()[1:]
-if lines[:len(block)] != block or len(lines) != len(block) + 1:
-    sys.exit(print("the preview printed\n  " + "\n  ".join(lines) + "\nnot\n  " + "\n  ".join(block) + "\n  <the refusal>") or 1)
-if "--yes" not in lines[-1]:
-    sys.exit(print(f"after the preview the command printed {lines[-1]!r}, not its refusal to make the change") or 1)
+if lines != block + [refusal]:
+    sys.exit(print("the preview printed\n  " + "\n  ".join(lines) + "\nnot\n  " + "\n  ".join(block + [refusal])) or 1)
 PY
 }
 

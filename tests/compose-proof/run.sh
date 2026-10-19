@@ -748,22 +748,35 @@ tailnet_join() {
   return "$status"
 }
 
+# The tailnet machine's name, read from the tailnet state apart from
+# .env: its Self.DNSName without the trailing dot. A case that does not
+# fix the name a join gives expects the head at this one.
+node_name() {
+  local name
+  name="$(jget "$(docker exec "$(compose ps -q tailscale)" tailscale status --json)" Self DNSName)"
+  [[ "$name" == ?*. ]] || fail "the tailnet state names no machine: ${name:-nothing}"
+  printf '%s\n' "${name%.}"
+}
+
 # The project's whole head, checked (predicates.sh `head_holds`): mode
-# `$1` at host `$2`, every reach setting in .env and the running cyfr the
-# head's, a tailnet head's node id the one the tailnet state holds, the
-# head's proxy alone running beside cyfr with the shipped file's
-# capabilities and options (`capabilities_hold`), the other proxy without
-# a container, and cyfr healthy.
+# `$1` at host `$2` (a fixed fixture's name, or the state's, never .env's),
+# every reach setting in .env and the running cyfr the head's, a tailnet
+# head's node id and name the ones the tailnet state holds, the head's
+# proxy alone running beside cyfr with the shipped file's capabilities and
+# options (`capabilities_hold`), the other proxy without a container, and
+# cyfr healthy.
 expect_head() {
-  local mode="$1" host="$2" want profiles node="" public_url="" head why proxy id
+  local mode="$1" host="$2" want profiles node="" dns_name="" public_url="" head why proxy id state
   [ -n "$host" ] || fail "no host to expect the $mode home at"
   case "$mode" in
     local) want=cyfr profiles='[]' ;;
     public) want="caddy cyfr" profiles='["public"]' public_url="https://$host" ;;
     tailnet)
       want="cyfr tailscale" profiles='["tailnet"]' public_url="https://$host"
-      # The node id the tailnet state holds, read apart from .env.
-      node="$(jget "$(docker exec "$(compose ps -q tailscale)" tailscale status --json)" Self ID)"
+      # The node id and name the tailnet state holds, read apart from .env.
+      state="$(docker exec "$(compose ps -q tailscale)" tailscale status --json)"
+      node="$(jget "$state" Self ID)"
+      dns_name="$(jget "$state" Self DNSName)"
       [ -n "$node" ] && [ "$node" != null ] || fail "the tailnet state names no node"
       ;;
     *) fail "no head of a mode '$mode'" ;;
@@ -780,7 +793,7 @@ if url:
 if node:
     head["node_id"] = node
 print(json.dumps(head))' "$mode" "$host" "$public_url" "$node" "$profiles")"
-  why="$(head_holds "$head" "$WORK/.env" "$(docker inspect -f '{{json .Config.Env}}' "$cyfr_id")" "$(running)" "$node")" ||
+  why="$(head_holds "$head" "$WORK/.env" "$(docker inspect -f '{{json .Config.Env}}' "$cyfr_id")" "$(running)" "$node" "$dns_name")" ||
     fail "the project does not run the $mode head at $host: $why"
   for proxy in caddy tailscale; do
     case " $want " in
@@ -1062,7 +1075,7 @@ print(" ".join(name for name in cyfr["networks"] if name not in (sys.argv[1], "e
 }
 
 bind_case() {
-  local mode
+  local mode name
   for mode in local tailnet public; do
     step "bind: $mode, switched with the stack stopped, then cyfr up"
     case "$mode" in
@@ -1081,9 +1094,10 @@ bind_case() {
     case "$mode" in
       local) expect_head local localhost ;;
       tailnet)
-        expect_head tailnet "$(env_value CYFR_HOST)"
-        [[ "$(env_value CYFR_HOST)" == *.proof.ts.net ]] || fail "the joined node's name is $(env_value CYFR_HOST)"
-        expect_serve_open "$(env_value CYFR_HOST)"
+        name="$(node_name)"
+        [[ "$name" == *.proof.ts.net ]] || fail "the joined node's name is ${name:-none}"
+        expect_head tailnet "$name"
+        expect_serve_open "$name"
         ;;
       public) expect_head public proof-home.example ;;
     esac
@@ -1376,7 +1390,7 @@ refused_before_start() {
 }
 
 modes_case() {
-  local m sentence_text
+  local m sentence_text name
   step "modes: a local home, builds off, up"
   cli_ok up-local up
   expect_head local localhost
@@ -1441,8 +1455,9 @@ modes_case() {
         ok "in public the endpoint sends no HSTS of its own, and through Caddy the answer carries the shipped site's one value"
         ;;
       tailnet)
-        expect_head tailnet "$(env_value CYFR_HOST)"
-        expect_serve_open "$(env_value CYFR_HOST)"
+        name="$(node_name)"
+        expect_head tailnet "$name"
+        expect_serve_open "$name"
         standin_ca
         forged_checks tailnet
         hsts_checks
@@ -1551,7 +1566,7 @@ converged() {
   case "$mode" in
     local) expect_head local localhost ;;
     public) expect_head public proof-home.example ;;
-    tailnet) expect_head tailnet "$(env_value CYFR_HOST)" ;;
+    tailnet) expect_head tailnet "$(node_name)" ;;
   esac
   ok "converged on $mode: a receipt ($(jget "$(cat "$WORK/.cyfr/receipts/$id.json")" outcome)), no journal and no materialized configuration"
 }
