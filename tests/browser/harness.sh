@@ -11,10 +11,11 @@
 # (tests/browser/lib.mjs), so the origin the policies are derived for is
 # the origin the browsers see.
 #
-# A home is a cell on a `.test` hostname of its own, several at once, each
-# reached by every browser at https://HOST through the same proxy, whose
-# TLS front presents a certificate the run's own authority issued for that
-# name. No name is resolved by DNS or /etc/hosts: the proxy routes each name
+# A home is a cell on a `.test` hostname of its own, a public home of that
+# name (CYFR_REACH=public), several at once, each reached by every browser
+# at https://HOST through the same proxy, whose TLS front presents a
+# certificate the run's own authority issued for that name and forwards to
+# the home's proxy listener. No name is resolved by DNS or /etc/hosts: the proxy routes each name
 # itself. The authority is made for the run under WORK, its private key
 # kept apart and never mounted, and every browser of the Playwright
 # container trusts it: Chromium's full build through a managed policy,
@@ -40,10 +41,13 @@ BROWSER_HOME="$ROOT/tests/browser"
 # directory of the keys it and the stranger sign with, which nothing mounts.
 BROWSER_AUTHORITY=""
 BROWSER_AUTHORITY_KEYS=""
-# The first home's listener port; each next home takes the next two.
+# The first home's listener port; each home takes three (its loopback
+# listener, its host API and its proxy listener), the next home the next
+# three.
 BROWSER_HOMES_PORT="${BROWSER_HOMES_PORT:-4410}"
 # The run's homes and unsigned names, as `name host port certificate`
-# rows, which /authority/homes.json lists.
+# rows, where port is that of the proxy listener the front forwards to,
+# which /authority/homes.json lists.
 BROWSER_HOMES=()
 BROWSER_UNSIGNED=()
 
@@ -155,9 +159,10 @@ browser_certificate() {
 }
 
 # A home: a new cell at `$1` (release.sh's `cell_new`, `$3` the PostgreSQL
-# URL of its database) answering as the hostname `$2` (`cell_hostname`) on
-# the next two listener ports, with a certificate for `$2` from the run's
-# authority. Its name is the cell's directory name.
+# URL of its database), the public home `cyfr init` makes for the hostname
+# `$2` (`cell_hostname`), on the next three listener ports, with a
+# certificate for `$2` from the run's authority. Its name is the cell's
+# directory name.
 browser_home() {
   local cell="$1" host="$2" url="${3:-}" name port
   name="$(basename "$cell")"
@@ -165,18 +170,19 @@ browser_home() {
   [[ "$name" =~ ^[a-z0-9][a-z0-9-]*$ ]] ||
     fail "a home's cell is named in lowercase letters, digits and dashes, not '$name'"
   [[ "$host" == *.test ]] || fail "a home's hostname is a .test name, not '$host'"
-  port=$((BROWSER_HOMES_PORT + 2 * ${#BROWSER_HOMES[@]}))
-  cell_new "$cell" "$url"
-  cell_hostname "$cell" "$host" "$port" "$((port + 1))"
+  port=$((BROWSER_HOMES_PORT + 3 * ${#BROWSER_HOMES[@]}))
+  cell_new "$cell" "$url" "$host"
+  cell_hostname "$cell" "$host" "$port"
   browser_certificate "$host"
-  BROWSER_HOMES+=("$name $host $port $host")
+  BROWSER_HOMES+=("$name $host $(cell_proxy_port "$cell") $host")
   browser_homes_file
 }
 
-# A name `$1` the run's authority did not sign, routed to the listener of
-# the home at `$2`: with `$3` `stranger` the front presents the stranger's
-# certificate for it; with `misnamed`, the home's own certificate, which
-# names the home and not `$1`. Every browser must refuse it.
+# A name `$1` the run's authority did not sign, routed to the proxy
+# listener of the home at `$2`: with `$3` `stranger` the front presents the
+# stranger's certificate for it; with `misnamed`, the home's own
+# certificate, which names the home and not `$1`. Every browser must refuse
+# it.
 browser_unsigned() {
   local host="$1" cell="$2" kind="$3" cert
   [[ "$host" == *.test ]] || fail "an unsigned name is a .test name, not '$host'"
@@ -189,12 +195,12 @@ browser_unsigned() {
     *) fail "an unsigned name is stranger or misnamed, not '$kind'" ;;
   esac
   [ -f "$BROWSER_AUTHORITY/$cert.pem" ] || fail "$cell is not a home of this run"
-  BROWSER_UNSIGNED+=("$host $host $(cell_port "$cell") $cert")
+  BROWSER_UNSIGNED+=("$host $host $(cell_proxy_port "$cell") $cert")
   browser_homes_file
 }
 
 # /authority/homes.json: the run's homes and unsigned names, each with the
-# listener its requests go to and the certificate and key the front
+# proxy listener its requests go to and the certificate and key the front
 # presents for it (lib.mjs `readHomes`).
 browser_homes_file() {
   printf '{"homes":[%s],"unsigned":[%s]}\n' \

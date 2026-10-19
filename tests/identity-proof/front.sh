@@ -11,7 +11,7 @@
 # <run>-<name>`, running front.mjs on the host network as root, so it may
 # listen on port 443 of that address. It presents the certificate the
 # run's authority issued for the directory's name and forwards to the
-# directory cell. Cells reach it by name through their ERL_INETRC
+# directory cell's proxy listener. Cells reach it by name through their ERL_INETRC
 # (cells.sh), so no DNS, /etc/hosts or other system configuration is read
 # or changed.
 #
@@ -54,7 +54,7 @@ identity_front_control() {
 identity_front_start() {
   local cell="$1" host port name control token health
   host="$(sed -n 's/^CYFR_HOST=//p' "$cell/.env" | tail -1)"
-  port="$(cell_port "$cell")"
+  port="$(cell_proxy_port "$cell")"
   [ -n "${IDENTITY_FRONTS[$host]:-}" ] || fail "no directory $host is declared: identity_directory comes first"
   [ -f "$BROWSER_AUTHORITY/$host.pem" ] || fail "no certificate for $host: make $cell a home first"
   name="cyfr-identity-front-$$-${host//./-}"

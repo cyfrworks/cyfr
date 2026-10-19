@@ -4,9 +4,10 @@
 # The `cyfr` release as the release proofs start it, sourced by
 # tests/release-boot/boot.sh and the browser harness's scripts: built as
 # `Dockerfile` builds it (MIX_ENV=prod, the adapter chosen at compile time
-# by CYFR_DATABASE, `mix release cyfr`), started with the environment
-# `cyfr init` writes and nothing else of the caller's, and stopped by its
-# own `stop`.
+# by CYFR_DATABASE, `mix release cyfr`), started with the deployment file
+# `cyfr init` writes, built from this checkout's apps/codex, and the
+# test's own settings beside it, and nothing else of the caller's, and
+# stopped by its own `stop`.
 #
 # The sourcing script sets ADAPTER (sqlite or postgres) and WORK (a scratch
 # directory it owns) first. A cell is where one server keeps its state: a
@@ -17,9 +18,11 @@
 # deployment file names.
 #
 # A cell answers on the default listeners under the node name NODE, one at
-# a time. A cell given a hostname of its own (`cell_hostname`) answers as
-# that name behind a TLS-terminating front, on listeners and under a node
-# name of its own, so several such cells run at once.
+# a time, reached at its localhost address (CYFR_REACH=local). A cell given
+# a hostname of its own (`cell_hostname`) is a public home of that name
+# (CYFR_REACH=public), behind a TLS-terminating front that forwards to its
+# proxy listener, on listeners and under a node name of its own, so
+# several such cells run at once.
 #
 # Environment: RELEASE_BOOT_PORT and RELEASE_BOOT_HOST_API_PORT choose the
 # default listeners (4399 and 4398), RELEASE_BOOT_READY_TIMEOUT the seconds
@@ -157,82 +160,201 @@ release_source_matches() {
 # Cells
 # ---------------------------------------------------------------------------
 
+# The `cyfr` command line every cell's deployment file comes from, built
+# from this checkout's apps/codex once per run (`cell_cli_build`).
+CELL_CLI=""
+
+cell_cli_build() {
+  [ -z "$CELL_CLI" ] || return 0
+  mkdir -p "$WORK/cli"
+  # -mod=readonly: the build reads go.mod and go.sum as they are and never
+  # rewrites them.
+  (cd "$ROOT/apps/codex" && go build -mod=readonly -o "$WORK/cli/cyfr" .) ||
+    fail "the cyfr command line did not build from apps/codex"
+  CELL_CLI="$WORK/cli/cyfr"
+}
+
+# Run the command line in a directory of its own for cell `$1`, holding the
+# cell's deployment file when it has one and the checkout's .env.example
+# (a development build downloads no scaffold), as a person runs `cyfr` in
+# their project: `$2...` are its arguments. HOME is the cell's own and the
+# environment is nothing of the caller's but PATH and how Docker is
+# reached, which the reach engine asks for the project's containers. The
+# directory's name is the run's own, so the compose project the engine
+# derives from it is one no other stack on this host has. The command
+# line's output is `$cell/cli.log` (appended); the deployment file it
+# leaves becomes the cell's.
+cell_cli() {
+  local cell="$1" dir log="$1/cli.log" status=0
+  shift
+  cell_cli_build
+  dir="$WORK/cyfr-cell-$(basename "$cell")-$$-$(od -An -N4 -tx1 /dev/urandom | tr -d ' \n')"
+  mkdir -p "$dir" "$cell/home"
+  cp "$ROOT/.env.example" "$dir/.env.example"
+  [ ! -f "$cell/.env" ] || cp "$cell/.env" "$dir/.env"
+  printf '\n$ cyfr %s\n' "$*" >>"$log"
+  (
+    cd "$dir" || exit 1
+    env -i HOME="$cell/home" PATH="$PATH" LANG="${LANG:-en_US.UTF-8}" TERM=dumb \
+      DOCKER_CONFIG="${DOCKER_CONFIG:-$HOME/.docker}" \
+      ${DOCKER_HOST:+DOCKER_HOST="$DOCKER_HOST"} ${DOCKER_CONTEXT:+DOCKER_CONTEXT="$DOCKER_CONTEXT"} \
+      "$CELL_CLI" "$@" </dev/null
+  ) >>"$log" 2>&1 || status=$?
+  if [ "$status" -ne 0 ]; then
+    echo "----- the command line's output for cell $cell -----" >&2
+    redact_log "$dir" <"$log" >&2 || echo "(the output could not be redacted, so it is not printed)" >&2
+    fail "cyfr $1 exited $status for cell $cell"
+  fi
+  [ -f "$dir/.env" ] || fail "cyfr $1 left no deployment file for cell $cell"
+  cp "$dir/.env" "$cell/.env"
+  rm -rf "$dir"
+}
+
+# Set NAME `$2` to `$3` in cell `$1`'s deployment file: its first
+# assignment rewritten in place and any later one removed, or the line
+# added at the end, every other line kept as it was. The file is written
+# over, not replaced, so it keeps its mode.
+cell_set() {
+  NAME="$2" VALUE="$3" awk '
+    BEGIN { name = ENVIRON["NAME"]; line = name "=" ENVIRON["VALUE"] }
+    index($0, name "=") == 1 { if (!done) print line; done = 1; next }
+    { print }
+    END { if (!done) print line }
+  ' "$1/.env" >"$1/.env.part" && cat "$1/.env.part" >"$1/.env" && rm -f "$1/.env.part" ||
+    fail "cell $1's deployment file could not be written"
+}
+
+# Remove NAME `$2`'s assignments from cell `$1`'s deployment file.
+cell_unset() {
+  NAME="$2" awk 'index($0, ENVIRON["NAME"] "=") != 1' "$1/.env" >"$1/.env.part" &&
+    cat "$1/.env.part" >"$1/.env" && rm -f "$1/.env.part" || fail "cell $1's deployment file could not be written"
+}
+
+# The value cell `$1`'s deployment file assigns NAME `$2`, its last
+# assignment.
+cell_value() {
+  NAME="$2" awk 'index($0, ENVIRON["NAME"] "=") == 1 { value = substr($0, length(ENVIRON["NAME"]) + 2) } END { print value }' "$1/.env"
+}
+
 # A new cell at `$1`: an empty storage root, a copy of the repository's
-# seed tree, and a deployment file holding the environment `cyfr init`
-# writes into `.env` — the stack's keys minted for this cell alone as `cyfr
-# init` mints them (32 random bytes as 64 hexadecimal digits, and a key
-# base), an explicit empty CORS allowlist, authentication configured (the
-# client id `.env.example` ships), builds on with their URL and key
-# together, and auto-migration on. CYFR_DATABASE is the adapter the release
-# was COMPILED for; runtime.exs refuses a disagreement. `$2` is the
-# PostgreSQL URL of the cell's database, ignored for SQLite.
+# seed tree, and the deployment file `cyfr init --no-interactive --no-pull`
+# writes: the stack's keys minted for this cell alone, the empty CORS
+# allowlist, the client ids .env.example ships, builds on with their URL
+# and key, and the reach mode with every setting it implies, `local`, or
+# `public` at the domain `$3` when it is given (`--reach public --domain`).
+# Beside it the cell's own settings, each init writes none of: the
+# database adapter the release was COMPILED for (runtime.exs refuses a
+# disagreement), auto-migration on, the listener ports, the host API on
+# loopback, the runtime's service id, the operators, and the pinned
+# validator. With operators named, the setup link's capability init mints
+# is deleted, as its refusal says to. `$2` is the PostgreSQL URL of the
+# cell's database, ignored for SQLite.
 cell_new() {
-  local cell="$1" url="${2:-}"
+  local cell="$1" url="${2:-}" host="${3:-}"
   "$ROOT/scripts/wasm-tools.sh" install "$ROOT/_tools" >/dev/null ||
     fail "the pinned wasm-tools could not be installed"
   mkdir -p "$cell/data" "$cell/home"
   cp -R "$ROOT/seed" "$cell/seed"
+  rm -f "$cell/.env"
 
-  {
-    echo "CYFR_DATABASE=$ADAPTER"
-    echo "CYFR_AUTO_MIGRATE=true"
-    echo "CYFR_PORT=$PORT"
-    echo "CYFR_BIND_ADDRESS=127.0.0.1"
-    echo "CYFR_HOST=localhost"
-    echo "CYFR_HOST_API_BIND=127.0.0.1"
-    echo "CYFR_HOST_API_PORT=$HOST_API_PORT"
-    echo "CYFR_CORS_ALLOWED_ORIGINS="
-    echo "CYFR_SECRET_KEY_BASE=$(openssl rand -base64 48 | tr -d '\n')"
-    echo "CYFR_LOCUS_BACKENDS_KEY=$(openssl rand -hex 32)"
-    echo "CYFR_LOCUS_RUNTIME_ROOT=$(openssl rand -hex 32)"
-    echo "LOCUS_RUNTIME_SERVICE_ID=wrk_locus"
-    echo "CYFR_LOCUS_BUILDS_URL=http://locus-builds:4100"
-    echo "CYFR_LOCUS_BUILDS_KEY=$(openssl rand -hex 32)"
-    echo "CYFR_GITHUB_CLIENT_ID=Ov23lib66tiIwXkgUpwm"
-    echo "CYFR_PLATFORM_ADMIN_EMAILS=operator@example.com"
-    echo "CYFR_BEHIND_PROXY=false"
-    echo "CYFR_PRIVATE_EGRESS_TARGETS=locus-backends"
-    # The pinned validator, which the release checks as it starts; outside
-    # its image it is the checkout's own (scripts/wasm-tools.sh).
-    echo "CYFR_WASM_TOOLS=$ROOT/_tools/wasm-tools"
-    if [ "$ADAPTER" = postgres ]; then echo "CYFR_DATABASE_URL=$url"; fi
-  } >"$cell/.env"
+  if [ -n "$host" ]; then
+    cell_cli "$cell" init --no-interactive --no-pull --reach public --domain "$host"
+  else
+    cell_cli "$cell" init --no-interactive --no-pull --reach local
+  fi
+  cell_unset "$cell" CYFR_SETUP_TOKEN
+  cell_set "$cell" CYFR_PORT "$PORT"
+  cell_set "$cell" CYFR_DATABASE "$ADAPTER"
+  cell_set "$cell" CYFR_AUTO_MIGRATE true
+  cell_set "$cell" CYFR_HOST_API_BIND 127.0.0.1
+  cell_set "$cell" CYFR_HOST_API_PORT "$HOST_API_PORT"
+  cell_set "$cell" LOCUS_RUNTIME_SERVICE_ID wrk_locus
+  cell_set "$cell" CYFR_PLATFORM_ADMIN_EMAILS operator@example.com
+  # The pinned validator, which the release checks as it starts; outside
+  # its image it is the checkout's own (scripts/wasm-tools.sh).
+  cell_set "$cell" CYFR_WASM_TOOLS "$ROOT/_tools/wasm-tools"
+  if [ "$ADAPTER" = postgres ]; then cell_set "$cell" CYFR_DATABASE_URL "$url"; fi
 }
 
-# Cell `$1` answers as the hostname `$2`, on the listener port `$3` and the
-# host API port `$4`, as a TLS deployment behind the stack's Caddy answers
-# (`cyfr init`'s TLS answer): CYFR_HOST names it, CYFR_BEHIND_PROXY=true,
-# since the front that terminates TLS for it (tests/browser/lib.mjs)
-# forwards as Caddy does, and the origin every policy of the server is
-# derived for (`Sanctum.origin/0`) is the one the deployment file itself
-# implies: nothing here writes CYFR_PUBLIC_URL for it. Its node name is
-# its own (`$cell/node`), so it runs beside the other cells of the run.
+# Cell `$1` is a public home at the hostname `$2`, as `cyfr init --reach
+# public --domain` or `cyfr reach public --domain` makes one: what the
+# command line writes for the name is its mode, its host and its public
+# URL, and nothing here writes those itself. A cell made by `cell_new` for
+# that name already is one; any other cell is switched with `cyfr reach`,
+# which keeps every other line of its deployment file, its keys among them.
+# The cell then answers on three listener ports of its own from `$3`: its
+# loopback listener on `$3`, its host API on the next and its proxy
+# listener, where the front that terminates TLS for it forwards
+# (tests/browser/lib.mjs), on the one after. Its node name is its own
+# (`$cell/node`), so it runs beside the other cells of the run.
 cell_hostname() {
-  local cell="$1" host="$2" port="$3" api="$4"
+  local cell="$1" host="$2" port="$3"
   [[ "$host" =~ ^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$ ]] ||
     fail "not a lowercase dotted hostname: '$host'"
-  [[ "$port" =~ ^[0-9]+$ && "$api" =~ ^[0-9]+$ && "$port" != "$api" ]] ||
-    fail "cell $cell needs two distinct listener ports, not '$port' and '$api'"
-  sed -i \
-    -e "s/^CYFR_HOST=.*/CYFR_HOST=$host/" \
-    -e "s/^CYFR_PORT=.*/CYFR_PORT=$port/" \
-    -e "s/^CYFR_HOST_API_PORT=.*/CYFR_HOST_API_PORT=$api/" \
-    -e "s/^CYFR_BEHIND_PROXY=.*/CYFR_BEHIND_PROXY=true/" \
-    -e "/^CYFR_PUBLIC_URL=/d" \
-    "$cell/.env"
-  grep -qx "CYFR_HOST=$host" "$cell/.env" || fail "cell $cell does not name $host"
+  [[ "$port" =~ ^[0-9]+$ ]] && [ "$port" -ge 1024 ] && [ "$port" -le 65533 ] ||
+    fail "cell $cell needs a listener port from 1024 to 65533, not '$port'"
+  if [ "$(cell_value "$cell" CYFR_REACH)" != public ] || [ "$(cell_value "$cell" CYFR_HOST)" != "$host" ]; then
+    cell_cli "$cell" reach public --domain "$host" --yes
+  fi
+  cell_set "$cell" CYFR_PORT "$port"
+  cell_set "$cell" CYFR_HOST_API_PORT "$((port + 1))"
+  cell_set "$cell" CYFR_PROXY_PORT "$((port + 2))"
+  [ "$(cell_value "$cell" CYFR_REACH)" = public ] && [ "$(cell_value "$cell" CYFR_HOST)" = "$host" ] ||
+    fail "cell $cell is not a public home at $host"
   printf 'cyfr-%s-%s-%s\n' "${host//./-}" "$ADAPTER" "$$" >"$cell/node"
 }
 
-# The port cell `$1` answers on: the one its deployment file names.
+# The port cell `$1`'s loopback listener answers on: the one its
+# deployment file names.
 cell_port() {
   sed -n 's/^CYFR_PORT=//p' "$1/.env" | tail -1
+}
+
+# The port cell `$1`'s proxy listener answers on, which a public cell has
+# (`cell_hostname`): the one its deployment file names.
+cell_proxy_port() {
+  local port
+  port="$(sed -n 's/^CYFR_PROXY_PORT=//p' "$1/.env" | tail -1)"
+  [ -n "$port" ] || fail "cell $1 names no proxy listener port: make it a public home first (cell_hostname)"
+  printf '%s\n' "$port"
 }
 
 # The node name cell `$1`'s server runs under: its own when it has a
 # hostname (`cell_hostname`), NODE otherwise.
 cell_node() {
   if [ -f "$1/node" ]; then cat "$1/node"; else printf '%s\n' "$NODE"; fi
+}
+
+# Each NAME=value cell `$1`'s deployment file assigns, one a line, as a
+# dotenv reader takes them: blank and comment lines skipped, a value in
+# single quotes taken literally, one in double quotes taken without them,
+# and any other value as written. A line it cannot take as the release's
+# reader would (a double-quoted value holding an escape or `$`, an
+# unquoted one holding ` #`, a quote left open, or no NAME=) fails, naming
+# it: the cell would otherwise boot on another value than its file says.
+cell_assignments() {
+  awk -v file="$1/.env" '
+    function refuse(why) { printf "%s:%d: %s\n", file, NR, why > "/dev/stderr"; exit 1 }
+    /^[[:space:]]*(#|$)/ { next }
+    {
+      line = $0
+      sub(/^export[[:space:]]+/, "", line)
+      if (line !~ /^[A-Za-z_][A-Za-z0-9_]*=/) refuse("not a NAME=value line")
+      at = index(line, "=")
+      name = substr(line, 1, at - 1)
+      value = substr(line, at + 1)
+      first = substr(value, 1, 1)
+      if (first == sprintf("%c", 39) || first == "\"") {
+        if (length(value) < 2 || substr(value, length(value), 1) != first) refuse("a quoted value is left open")
+        value = substr(value, 2, length(value) - 2)
+        if (index(value, first)) refuse("a quoted value holds its own quote")
+        if (first == "\"" && value ~ /[\\$]/) refuse("a double-quoted value holds an escape or $")
+      } else if (value ~ /[[:space:]]#/) {
+        refuse("an unquoted value holds an inline comment")
+      }
+      print name "=" value
+    }
+  ' "$1/.env" || fail "cell $1's deployment file holds a line the proofs cannot read as the release does"
 }
 
 # Run a command with the cell's environment and nothing else of the
@@ -249,9 +371,10 @@ cell_env() {
   shift
 
   local -a assignments=()
-  while IFS= read -r line; do
-    [ -n "$line" ] && assignments+=("$line")
-  done <"$cell/.env"
+  cell_assignments "$cell" >"$cell/.env.assignments.$BASHPID"
+  mapfile -t assignments <"$cell/.env.assignments.$BASHPID"
+  rm -f "$cell/.env.assignments.$BASHPID"
+  [ "${#assignments[@]}" -gt 0 ] || fail "cell $cell's deployment file assigns nothing"
 
   assignments+=(
     "CYFR_DATA_PATH=$cell/data"

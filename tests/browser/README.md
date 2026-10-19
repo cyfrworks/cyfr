@@ -62,13 +62,17 @@ to a secure origin, which this one is not.
 ## Homes: several cells on several hostnames, over HTTPS
 
 A home is a cell started on a hostname of its own (`browser_home`, and
-`release.sh`'s `cell_hostname`): its server names that host
-(`CYFR_HOST`), its public URL is `https://HOST` (`CYFR_PUBLIC_URL`, the
-origin every policy is derived for), and it runs behind a TLS-terminating
-front with `CYFR_BEHIND_PROXY=true`, as a TLS deployment runs behind the
-stack's Caddy. Each home has its own listeners, from port 4410
-(`BROWSER_HOMES_PORT`) two at a time, and its own node name, so any number
-run at once; `server_stop` stops one cell or all of them.
+`release.sh`'s `cell_hostname`): the public home `cyfr init --reach public
+--domain HOST` makes (`CYFR_REACH=public`), whose server names that host
+(`CYFR_HOST`) and whose public URL, the origin every policy is derived
+for, is `https://HOST` (`CYFR_PUBLIC_URL`), both as the command line wrote
+them. It runs behind a TLS-terminating front that forwards to its proxy
+listener (`CYFR_PROXY_PORT`), the one listener that trusts forwarded
+headers, as a public deployment runs behind the stack's Caddy. Each home
+has its own listeners, from port 4410 (`BROWSER_HOMES_PORT`) three at a
+time (its loopback listener, its host API and its proxy listener), and its
+own node name, so any number run at once; `server_stop` stops one cell or
+all of them.
 
 **Hostnames.** A home's name is a `.test` name, resolved by nothing: the
 browsers reach every name through the harness's proxy, which routes each
@@ -107,7 +111,7 @@ before.
 
 **The front.** `startProxy(null, readHomes())` routes each home's tunnel
 to its TLS front, which presents the name's certificate and forwards each
-request and WebSocket upgrade to the home's listener with
+request and WebSocket upgrade to the home's proxy listener with
 `X-Forwarded-For`, `-Proto` and `-Host`, as Caddy does. It answers a
 plain-HTTP request to a home 421, and a run of homes alone gets no tunnel
 to a name it does not route. Its account of each request (`proxy.seen`)

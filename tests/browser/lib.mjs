@@ -22,11 +22,12 @@
 // makes.
 //
 // The homes of a run (tests/browser/harness.sh `browser_home`) are cells on
-// `.test` hostnames of their own, several at once, reached at https://HOST:
-// a browser asks the proxy for a tunnel to HOST, and the proxy hands the
-// tunnel to its TLS front, which presents the certificate the run's
-// authority issued for HOST and forwards each request and WebSocket upgrade
-// to the home's listener as the stack's Caddy forwards to cyfr, with
+// `.test` hostnames of their own, public homes of those names, several at
+// once, reached at https://HOST: a browser asks the proxy for a tunnel to
+// HOST, and the proxy hands the tunnel to its TLS front, which presents the
+// certificate the run's authority issued for HOST and forwards each request
+// and WebSocket upgrade to the home's proxy listener, the one that trusts
+// forwarded headers, as the stack's Caddy forwards to cyfr's, with
 // X-Forwarded-For, -Proto and -Host. The front answers the harness's own
 // pages (HARNESS) on every home itself, and accounts for every request, the
 // cookies it carried and the cookies its answer set. A name the proxy does
@@ -65,8 +66,8 @@ const HOME_ANSWER_MS = 10_000;
 
 // The run's homes and the names its authority did not sign
 // (/authority/homes.json, harness.sh `browser_homes_file`): each with its
-// name, hostname, origin, the port of the listener its requests go to, and
-// the certificate and key the front presents for it.
+// name, hostname, origin, the port of the proxy listener its requests go
+// to, and the certificate and key the front presents for it.
 export function readHomes(file = `${AUTHORITY}/homes.json`) {
   const { homes, unsigned } = JSON.parse(readFileSync(file, "utf8"));
   const site = (row) => ({ ...row, origin: `https://${row.host}` });
@@ -262,7 +263,7 @@ export async function startProxy(server, {
 }
 
 // The front that terminates TLS for every routed name, with the
-// certificate the harness made for it, and forwards to the name's
+// certificate the harness made for it, and forwards to the name's proxy
 // listener. A request whose Host is not the name its handshake asked for
 // is misdirected (421).
 function startFront(proxy, routes, { answer, bodies, isCut, hold }) {
@@ -401,8 +402,9 @@ function startFront(proxy, routes, { answer, bodies, isCut, hold }) {
   return front;
 }
 
-// Whether `home`'s cell answers its readiness check as its hostname, as the
-// front would ask it: nothing when it does, and why not when it does not.
+// Whether `home`'s cell answers its readiness check as its hostname on its
+// proxy listener, as the front would ask it: nothing when it does, and why
+// not when it does not.
 function answers(home) {
   return new Promise((resolve) => {
     const req = forward({
