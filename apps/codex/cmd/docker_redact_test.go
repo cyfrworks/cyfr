@@ -4,11 +4,17 @@
 package cmd
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/cyfr/codex/internal/reach"
 )
 
 // What a docker call cyfr update runs through the engine's runner writes,
@@ -46,5 +52,51 @@ func TestUpdateSaysNoEnvSecretDockerPrints(t *testing.T) {
 		if !strings.Contains(said, shown) {
 			t.Errorf("the output lacks %q:\n%s", shown, said)
 		}
+	}
+}
+
+// liveDockerSays is what cyfr update's live docker streams show of a
+// docker call that writes line to its stdout, with .env holding
+// STREAM_SECRET=value.
+func liveDockerSays(t *testing.T, value, line string) string {
+	t.Helper()
+	s := newUpdateScenario(t, shippedCompose(t), nil)
+	if err := os.WriteFile(filepath.Join(s.project, ".env"), []byte(scenarioEnv+"STREAM_SECRET='"+value+"'\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	e, err := openEngine(".")
+	if err != nil {
+		t.Fatal(err)
+	}
+	unlock, err := e.Lock("update")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer unlock()
+	var out, errOut bytes.Buffer
+	docker := observedDocker(func(ctx context.Context, call reach.Call) (reach.Result, error) {
+		_, err := fmt.Fprint(call.Stdout, line)
+		return reach.Result{}, err
+	})
+	u := &updater{ctx: context.Background(), out: &out, errOut: &errOut, engine: observedEngine{e, docker}}
+	if err := u.docker(context.Background(), nil, nil, "version"); err != nil {
+		t.Fatal(err)
+	}
+	return out.String() + errOut.String()
+}
+
+// A .env value that runs across lines is redacted where docker prints it
+// whole on a live stream, its line break inside it.
+func TestUpdateRedactsAMultilineSecretOnTheLiveStream(t *testing.T) {
+	if got, want := liveDockerSays(t, "q2\nx4", "diagnostic q2\nx4 end\n"), "diagnostic <redacted> end\n"; got != want {
+		t.Fatalf("the live stream showed %q, want %q", got, want)
+	}
+}
+
+// A .env value is redacted as the reader gives it, its spaces included:
+// " abc " is five characters, past the threshold, though "abc" is not.
+func TestUpdateRedactsASecretWithItsSignificantSpaces(t *testing.T) {
+	if got, want := liveDockerSays(t, " abc ", "diagnostic  abc  end\n"), "diagnostic <redacted> end\n"; got != want {
+		t.Fatalf("the live stream showed %q, want %q", got, want)
 	}
 }

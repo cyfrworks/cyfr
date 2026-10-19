@@ -183,9 +183,9 @@ func TestWatchdogLinesAreRedacted(t *testing.T) {
 
 // A command's redactor is the engine's pass: .env's values, of every .env
 // the project has held while it was used, and the values the command
-// holds, whatever their length; its writer redacts a line at a time, a
-// secret split across writes included, flushing at each line break and
-// carriage return and at Flush.
+// holds, whatever their length; its writer redacts a secret split across
+// writes, passing on all but the tail a secret may still be arriving in,
+// so progress shows, and the rest at Flush.
 func TestCommandRedactorIsTheEnginesPass(t *testing.T) {
 	dir := t.TempDir()
 	writeFile(t, filepath.Join(dir, ".env"), []byte("CYFR_REACH=local\nFIRST=first-env-secret\n"))
@@ -205,13 +205,64 @@ func TestCommandRedactorIsTheEnginesPass(t *testing.T) {
 			t.Fatalf("Write answered %d, %v", n, err)
 		}
 	}
-	if got := out.String(); got != "Pulling <redacted>\rDownloading 50%\rdone\n" {
+	const whole = "Pulling <redacted>\rDownloading 50%\rdone\nlast <redacted>"
+	if got := out.String(); !strings.HasPrefix(whole, got) || !strings.Contains(got, "Downloading 50%\r") {
 		t.Errorf("before the flush the writer wrote %q", got)
 	}
-	if err := w.Flush(); err != nil || out.String() != "Pulling <redacted>\rDownloading 50%\rdone\nlast <redacted>" {
+	if err := w.Flush(); err != nil || out.String() != whole {
 		t.Errorf("after the flush the writer wrote %q (%v)", out.String(), err)
 	}
 	if err := r.Err(fmt.Errorf("docker: %w", fs.ErrNotExist)); !errors.Is(err, fs.ErrNotExist) {
 		t.Errorf("Err lost the error's identity: %v", err)
+	}
+}
+
+// A stream is redacted as one text: a value is matched across the writes
+// and the lines it spans, wherever the writes split it, spaces and all;
+// the writer holds back no more than the longest value less one byte, so
+// progress shows while the stream runs.
+func TestRedactedStreamMatchesAcrossWritesAndLines(t *testing.T) {
+	dir := t.TempDir()
+	const long = "long-secret-value-0123456789"
+	writeFile(t, filepath.Join(dir, ".env"), []byte("CYFR_REACH=local\nML='q2\nx4'\nSP=' abc '\nLONG="+long+"\n"))
+	r := NewRedactor(dir)
+	const text = "a q2\nx4 b  abc  c " + long + " d\rprogress 50%\r"
+	const want = "a <redacted> b <redacted> c <redacted> d\rprogress 50%\r"
+	if got := r.Text(text); got != want {
+		t.Fatalf("the text reads %q, want %q", got, want)
+	}
+	streamed := func(chunks ...string) string {
+		var out bytes.Buffer
+		w := r.Writer(&out)
+		for _, c := range chunks {
+			if _, err := w.Write([]byte(c)); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if err := w.Flush(); err != nil {
+			t.Fatal(err)
+		}
+		return out.String()
+	}
+	for i := 0; i <= len(text); i++ {
+		if got := streamed(text[:i], text[i:]); got != want {
+			t.Errorf("split at %d the stream showed %q", i, got)
+		}
+	}
+	bytewise := make([]string, len(text))
+	for i := range text {
+		bytewise[i] = text[i : i+1]
+	}
+	if got := streamed(bytewise...); got != want {
+		t.Errorf("a byte at a time the stream showed %q", got)
+	}
+	var out bytes.Buffer
+	w := r.Writer(&out)
+	progress := "Downloading 10%\r" + strings.Repeat(".", len(long)-1)
+	if _, err := w.Write([]byte(progress)); err != nil {
+		t.Fatal(err)
+	}
+	if got := out.String(); got != "Downloading 10%\r" {
+		t.Errorf("with the longest value's length less one held back, the stream showed %q", got)
 	}
 }

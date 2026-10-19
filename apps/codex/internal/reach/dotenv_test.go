@@ -7,10 +7,12 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strconv"
 	"strings"
 	"testing"
+	"unicode"
 )
 
 // The editor refuses a .env it cannot read exactly as compose does, or
@@ -164,6 +166,34 @@ func TestDotenvStatementsAsComposeFindsThem(t *testing.T) {
 				t.Errorf("%q reads %q, want %q", text, got, want)
 				break
 			}
+		}
+	}
+}
+
+// A name's letters are read as Go's regexp reads [a-z] without case, the
+// matching compose's interpolation uses: every rune whose simple case
+// folding reaches an ASCII letter, and no other, the long s (s) and the
+// Kelvin sign (k) among them.
+func TestNameLettersFoldAsCaseInsensitiveMatchingDoes(t *testing.T) {
+	letter := regexp.MustCompile(`^(?i:[_a-z])$`)
+	for r := rune(0); r <= unicode.MaxRune; r++ {
+		if r >= 0xD800 && r <= 0xDFFF {
+			continue
+		}
+		if got, want := nameStart(r), letter.MatchString(string(r)); got != want {
+			t.Errorf("nameStart(%U) = %v, case-insensitive [_a-z] says %v", r, got, want)
+		}
+	}
+	for c := 'a'; c <= 'z'; c++ {
+		for f := unicode.SimpleFold(c); f != c; f = unicode.SimpleFold(f) {
+			if !nameStart(f) {
+				t.Errorf("%U folds to %q but is no name letter", f, c)
+			}
+		}
+	}
+	for _, r := range []rune{'ſ', 'K'} {
+		if !nameStart(r) || nameLen(string(r)+"1") != len(string(r))+1 {
+			t.Errorf("%U starts no name", r)
 		}
 	}
 }

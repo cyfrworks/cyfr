@@ -273,14 +273,26 @@ func (templateError) Error() string { return "reach: an interpolation compose re
 
 // The interpolation grammar, read from left to right: `$$`; `$` and a
 // name (an ASCII letter or `_`, then letters, digits and `_`, the letters
-// read without case, so the long s and the Kelvin sign are letters too);
+// read without case under Unicode simple case folding, so a character
+// whose folding reaches an ASCII letter is one: the long s for s, the
+// Kelvin sign for k);
 // `${`, a name and `}`; `${`, a name, an operator (`:?` `?` `:-` `-` `:+`
 // `+`) and everything up to the last `}` before the line ends; and `${`
 // followed by anything else, which is invalid. A `$` that starts none of
 // them is a dollar.
 
 func nameStart(r rune) bool {
-	return r == '_' || r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r == 'ſ' || r == 'K'
+	if r == '_' {
+		return true
+	}
+	for f := r; ; {
+		if f >= 'a' && f <= 'z' || f >= 'A' && f <= 'Z' {
+			return true
+		}
+		if f = unicode.SimpleFold(f); f == r {
+			return false
+		}
+	}
 }
 
 // nameLen is the length in bytes of the name at the start of s, 0 for

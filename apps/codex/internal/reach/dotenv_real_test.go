@@ -94,7 +94,8 @@ func TestReadEnvValuesReadsAsRealComposeDoes(t *testing.T) {
 		"operators":                  "A=${REACH_DIFF_UNSET:-d1}\nB=${REACH_DIFF_UNSET-d2}\nC=${REACH_DIFF_EMPTY:-d3}\nD=${REACH_DIFF_EMPTY-d4}\nE=${REACH_DIFF_SET:+a5}\nF=${REACH_DIFF_SET+a6}\nG=${REACH_DIFF_EMPTY:+a7}\nH=${REACH_DIFF_UNSET+a8}\nI=${REACH_DIFF_SET?m}\nJ=${REACH_DIFF_SET:?m}\n",
 		"nested and greedy":          "A=${REACH_DIFF_UNSET:-${REACH_DIFF_SET}}\nB=${REACH_DIFF_UNSET:-x}y}\nC=${REACH_DIFF_UNSET:-{b}c}\nD=${REACH_DIFF_SET:+${REACH_DIFF_UNSET:-n}}\nE=${REACH_DIFF_UNSET-a}${REACH_DIFF_SET}\n",
 		"from the file itself":       "A=1\nB=${A}\nA=2\nC=$B-$A\nD=${LATER:-none}\nLATER=set\n",
-		"names read without case":    "A=${ſ:-x}\nB=${K:-y}\nC=$ſ.\nD=$é\n",
+		"names read without case":    "A=${\u017f:-x}\nB=${\u212a:-y}\nC=$\u017f.\nD=$é\nE=$\u212a\nF=${k\u212a1}\n",
+		"a fold outside ASCII":       "A=${\u212b:-z}\n",
 		"a name of another letter":   "A=${é:-z}\n",
 		"braces in the word":         "A=${REACH_DIFF_UNSET:-{}x}\nB=${REACH_DIFF_UNSET:-}}\nC=${REACH_DIFF_UNSET-1}${REACH_DIFF_UNSET+2}$REACH_DIFF_UNSET\nD=${REACH_DIFF_UNSET:-{b}c}d}\n",
 		"octal escapes":              "A=\"\\0377\\0400\\01\\0\\0089\\x\"\n",
@@ -219,6 +220,20 @@ func TestEditEnvWritesEveryKeyComposeReadsBack(t *testing.T) {
 		}
 		if data, _ := os.ReadFile(path); string(data) != before {
 			t.Errorf("a refused value changed the file:\n%s", data)
+		}
+	}
+}
+
+// An interpolated name is read without case as compose reads it, Unicode
+// simple case folding included: the Kelvin sign is the letter k, in a
+// default's name as in a name the file itself assigns.
+func TestInterpolationReadsTheKelvinSignAsComposeDoes(t *testing.T) {
+	requireCompose(t)
+	for _, src := range []string{"A=${\u212a:-fallback}\n", "\u212a=from-file\nA=$\u212a\nB=${\u212a}\n"} {
+		want, composeOK := composeReads(t, src)
+		got, readOK := readsAsCompose(t, src)
+		if composeOK != readOK || composeOK && !maps.Equal(got, want) {
+			t.Fatalf("for %q compose (%v) reads %q and the reader (%v) %q", src, composeOK, want, readOK, got)
 		}
 	}
 }

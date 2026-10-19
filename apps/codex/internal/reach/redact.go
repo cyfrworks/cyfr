@@ -36,7 +36,8 @@ const redactMin = 4
 // occurrence inside one of those is kept, and one that reaches past it is
 // redacted whole. Only free text is redacted: a refusal's code, its
 // payload keys and the values a variant fixes are kept, so the sentence
-// it renders is the same.
+// it renders is the same. A value is matched as it reads: one docker
+// prints reformatted, re-indented or re-wrapped, is not matched.
 type redactor struct {
 	secrets []string
 	keep    []string
@@ -86,11 +87,7 @@ func redactorFor(data []byte, names []string) *redactor {
 	}
 	add := func(to *[]string, texts ...string) {
 		for _, t := range texts {
-			for _, piece := range append([]string{t}, strings.Split(t, "\n")...) {
-				if piece = strings.TrimSpace(piece); runes(piece) >= redactMin {
-					*to = append(*to, piece)
-				}
-			}
+			*to = append(*to, redactable(t)...)
 		}
 	}
 	text := string(data)
@@ -133,6 +130,20 @@ func redactorFor(data []byte, names []string) *redactor {
 	return r
 }
 
+// redactable are the texts a value is redacted as: the value exactly as
+// it reads, spaces and all, and each line of a multi-line one, each
+// redactMin characters or longer and not white space alone, which holds
+// nothing to keep secret.
+func redactable(v string) []string {
+	var out []string
+	for _, piece := range append([]string{v}, strings.Split(v, "\n")...) {
+		if runes(piece) >= redactMin && strings.TrimSpace(piece) != "" {
+			out = append(out, piece)
+		}
+	}
+	return out
+}
+
 // evaluated is the value compose gives the statement's name in d when d
 // read it and it is the name's last statement, or its value interpolated
 // from the environment alone.
@@ -160,11 +171,7 @@ func (r *redactor) holding(values []string) *redactor {
 			continue
 		}
 		out.secrets = append(out.secrets, v)
-		for _, line := range strings.Split(v, "\n") {
-			if line = strings.TrimSpace(line); runes(line) >= redactMin {
-				out.secrets = append(out.secrets, line)
-			}
-		}
+		out.secrets = append(out.secrets, redactable(v)...)
 	}
 	slices.SortFunc(out.secrets, func(a, b string) int { return len(b) - len(a) })
 	out.secrets = slices.Compact(out.secrets)
@@ -455,9 +462,11 @@ func (r *Redactor) Text(s string) string { return r.current().text(s) }
 // reading it (redactor.err).
 func (r *Redactor) Err(err error) error { return r.current().err(err) }
 
-// Writer is w behind the pass: what is written reaches w a line at a
-// time, at each line break and carriage return, so progress still shows,
-// and the rest at Flush.
+// Writer is w behind the pass: what is written reaches w redacted as one
+// text, a value matched across the writes and lines it spans, held back
+// only by the longest value's length less one byte, the most of a value
+// that can still be arriving, so progress still shows, and the rest at
+// Flush.
 func (r *Redactor) Writer(w io.Writer) *RedactedWriter { return &RedactedWriter{r: r, w: w} }
 
 // RedactedWriter is a writer behind a Redactor (Redactor.Writer).
@@ -472,17 +481,47 @@ func (w *RedactedWriter) Write(p []byte) (int, error) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	w.buf = append(w.buf, p...)
-	for {
-		end := bytes.IndexAny(w.buf, "\n\r")
-		if end < 0 {
-			return len(p), nil
-		}
-		line := w.buf[:end+1]
-		w.buf = w.buf[end+1:]
-		if _, err := io.WriteString(w.w, w.r.Text(string(line))); err != nil {
-			return 0, err
+	r := w.r.current()
+	cut := r.settled(w.buf)
+	if cut == 0 {
+		return len(p), nil
+	}
+	done := r.text(string(w.buf[:cut]))
+	w.buf = append(w.buf[:0], w.buf[cut:]...)
+	if _, err := io.WriteString(w.w, done); err != nil {
+		return 0, err
+	}
+	return len(p), nil
+}
+
+// settled is how much of buf's start a stream can redact and pass on: all
+// but the longest secret's length less one byte, where any value still
+// arriving begins, and short of every whole occurrence of a secret or a
+// kept name the cut would split, which is redacted, or kept, whole with
+// what follows.
+func (r *redactor) settled(buf []byte) int {
+	longest := 0
+	for _, secret := range r.secrets {
+		longest = max(longest, len(secret))
+	}
+	cut := len(buf) - max(longest-1, 0)
+	for moved := true; moved && cut > 0; {
+		moved = false
+		for _, name := range slices.Concat(r.secrets, r.keep) {
+			for i := 0; name != "" && i < cut; {
+				j := bytes.Index(buf[i:], []byte(name))
+				if j < 0 || i+j >= cut {
+					break
+				}
+				if from, to := i+j, i+j+len(name); to > cut {
+					cut, moved = from, true
+					break
+				}
+				i += j + 1
+			}
 		}
 	}
+	return max(cut, 0)
 }
 
 // Flush writes what is held of an unfinished line.
