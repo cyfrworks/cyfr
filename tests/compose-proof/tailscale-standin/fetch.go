@@ -15,9 +15,11 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"os"
 	"regexp"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -39,16 +41,22 @@ func (h *headerFlags) Set(v string) error { *h = append(*h, v); return nil }
 // its headers, or prints {error, detail} and exits 1, the error saying what
 // failed (probeError):
 //
-//	refused  the target itself refused the connection: a direct dial's
-//	         ECONNREFUSED, or, through the proxy, its CONNECT answered 500
-//	         with a Tailscale-Connect-Error naming a refused connection,
-//	         as tailscaled's outbound HTTP proxy (cmd/tailscaled/proxy.go)
-//	         reports the dial it made for the tunnel
-//	dns      the target's name did not resolve, here or at the proxy
+//	refused  the target itself refused the connection, at the very
+//	         address fetch asked for (--connect's, else the URL's host and
+//	         port): a direct dial's connect answered ECONNREFUSED there, or,
+//	         through the proxy, its CONNECT answered 500 with a
+//	         Tailscale-Connect-Error that is, whole, a refused TCP dial of
+//	         that address, as tailscaled's outbound HTTP proxy
+//	         (cmd/tailscaled/proxy.go) reports the dial it made for the
+//	         tunnel; the proxy names the address it dialed, so a tunnel to
+//	         a name the proxy resolved is never read as refused
+//	dns      a name did not resolve, here or at the proxy: the proxy's
+//	         resolver error (a lookup) is dns whatever it ends in, a DNS
+//	         server's refusal included
 //	tls      the TLS handshake with the target failed or its certificate
 //	         was not trusted
 //	proxy    the proxy could not be reached, or refused or failed the
-//	         tunnel for any other reason
+//	         tunnel for any other reason, any answer of its not read above
 //	timeout  no answer within the deadline
 //	failed   anything else
 //
@@ -121,7 +129,11 @@ func fetchMain(args []string, stdout, stderr io.Writer) int {
 			if proxyAddr != "" {
 				return tunnel(ctx, dialer, proxyAddr, addr)
 			}
-			return dialer.DialContext(ctx, network, addr)
+			conn, err := dialer.DialContext(ctx, network, addr)
+			if err != nil && dialRefused(err, addr) {
+				return nil, &probeError{"refused", err.Error()}
+			}
+			return conn, err
 		},
 	}
 	client := &http.Client{
@@ -160,10 +172,44 @@ func writeProbeError(stdout io.Writer, e *probeError) {
 	fmt.Fprintln(stdout, string(out))
 }
 
-// connectRefusal is how a dial the proxy made for a tunnel reads when the
-// target refused it: the kernel's ECONNREFUSED, or gVisor's
-// ErrConnectionRefused, which tailscaled's userspace netstack reports.
-var connectRefusal = regexp.MustCompile(`connection (was )?refused`)
+// dialRefused is whether err is a direct dial's refusal by addr itself:
+// the dial's connect answered ECONNREFUSED at addr's port, and at addr's
+// own address where addr is one. A dial of a name connects only to the
+// addresses it resolved the name to, so its refusal is the name's.
+func dialRefused(err error, addr string) bool {
+	var op *net.OpError
+	var sys *os.SyscallError
+	if !errors.As(err, &op) || op.Op != "dial" || !errors.As(op.Err, &sys) ||
+		sys.Syscall != "connect" || !errors.Is(sys.Err, syscall.ECONNREFUSED) {
+		return false
+	}
+	dialed, ok := op.Addr.(*net.TCPAddr)
+	host, port, splitErr := net.SplitHostPort(addr)
+	if !ok || splitErr != nil || strconv.Itoa(dialed.Port) != port {
+		return false
+	}
+	if ip, err := netip.ParseAddr(host); err == nil {
+		return dialed.AddrPort().Addr().Unmap() == ip.Unmap()
+	}
+	return true
+}
+
+// tunnelRefused is whether the Tailscale-Connect-Error reason is, whole,
+// the proxy's TCP dial of addr refused by addr: gVisor's
+// ErrConnectionRefused as gonet reports a dial of tailscaled's userspace
+// netstack, or the kernel's ECONNREFUSED as net.Dialer reports it. Each
+// names the address the proxy dialed, which is addr only where addr is
+// an address and not a name.
+func tunnelRefused(reason, addr string) bool {
+	return reason == "connect tcp "+addr+": connection was refused" ||
+		reason == "dial tcp "+addr+": connect: connection refused"
+}
+
+// resolverError is a Tailscale-Connect-Error that is a resolver's
+// failure (net.DNSError, bare or as a dial reports it): the name did not
+// resolve at the proxy, whatever its own error says, a DNS server's
+// refusal included.
+var resolverError = regexp.MustCompile(`^(dial tcp: )?lookup [^ ]+( on [^ ]+)?: `)
 
 // tunnel is a CONNECT through the HTTP proxy at proxyAddr to addr, the
 // proxy's refusal read whole: a 200 gives the tunnel, and anything else a
@@ -191,13 +237,15 @@ func tunnel(ctx context.Context, dialer *net.Dialer, proxyAddr, addr string) (ne
 	if res.StatusCode != http.StatusOK {
 		answer, _ := io.ReadAll(io.LimitReader(res.Body, 4096))
 		conn.Close()
-		reason := res.Header.Get("Tailscale-Connect-Error")
+		reasons := res.Header.Values("Tailscale-Connect-Error")
 		detail := fmt.Sprintf("the proxy answered CONNECT %s %d: %s", addr, res.StatusCode, strings.TrimSpace(string(answer)))
 		switch {
-		case res.StatusCode == http.StatusInternalServerError && reason != "" && connectRefusal.MatchString(reason):
-			return nil, &probeError{"refused", detail}
-		case res.StatusCode == http.StatusInternalServerError && reason != "" && strings.Contains(reason, "no such host"):
+		case res.StatusCode != http.StatusInternalServerError || len(reasons) != 1:
+			return nil, &probeError{"proxy", detail}
+		case resolverError.MatchString(reasons[0]):
 			return nil, &probeError{"dns", detail}
+		case tunnelRefused(reasons[0], addr):
+			return nil, &probeError{"refused", detail}
 		default:
 			return nil, &probeError{"proxy", detail}
 		}
@@ -210,7 +258,9 @@ func tunnel(ctx context.Context, dialer *net.Dialer, proxyAddr, addr string) (ne
 	return conn, nil
 }
 
-// classify is the probeError a request's failure is.
+// classify is the probeError a request's failure is. A refusal is the
+// dial's own (dialRefused) or the proxy's (tunnel): one found anywhere
+// else is no refusal of the target's, and falls to failed.
 func classify(err error) *probeError {
 	var pe *probeError
 	if errors.As(err, &pe) {
@@ -236,8 +286,6 @@ func classify(err error) *probeError {
 		// net/http's own word for a target that answered no TLS.
 		strings.Contains(detail, "server gave HTTP response to HTTPS client"):
 		return &probeError{"tls", detail}
-	case errors.Is(err, syscall.ECONNREFUSED):
-		return &probeError{"refused", detail}
 	case errors.As(err, &netErr) && netErr.Timeout():
 		return &probeError{"timeout", detail}
 	default:
