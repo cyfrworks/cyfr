@@ -224,12 +224,6 @@ cell_set() {
     fail "cell $1's deployment file could not be written"
 }
 
-# Remove NAME `$2`'s assignments from cell `$1`'s deployment file.
-cell_unset() {
-  NAME="$2" awk 'index($0, ENVIRON["NAME"] "=") != 1' "$1/.env" >"$1/.env.part" &&
-    cat "$1/.env.part" >"$1/.env" && rm -f "$1/.env.part" || fail "cell $1's deployment file could not be written"
-}
-
 # The value cell `$1`'s deployment file assigns NAME `$2`, its last
 # assignment.
 cell_value() {
@@ -246,9 +240,8 @@ cell_value() {
 # database adapter the release was COMPILED for (runtime.exs refuses a
 # disagreement), auto-migration on, the listener ports, the host API on
 # loopback, the runtime's service id, the operators, and the pinned
-# validator. With operators named, the setup link's capability init mints
-# is deleted, as its refusal says to. `$2` is the PostgreSQL URL of the
-# cell's database, ignored for SQLite.
+# validator. `$2` is the PostgreSQL URL of the cell's database, ignored
+# for SQLite.
 cell_new() {
   local cell="$1" url="${2:-}" host="${3:-}"
   "$ROOT/scripts/wasm-tools.sh" install "$ROOT/_tools" >/dev/null ||
@@ -262,7 +255,6 @@ cell_new() {
   else
     cell_cli "$cell" init --no-interactive --no-pull --reach local
   fi
-  cell_unset "$cell" CYFR_SETUP_TOKEN
   cell_set "$cell" CYFR_PORT "$PORT"
   cell_set "$cell" CYFR_DATABASE "$ADAPTER"
   cell_set "$cell" CYFR_AUTO_MIGRATE true

@@ -13,6 +13,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -341,15 +342,17 @@ func TestRealComposeDiagnosticsCarryNoEnvValue(t *testing.T) {
 	requireCompose(t)
 	const secret = "sentinel-secret-from-env"
 	for name, c := range map[string]struct{ env, override, says string }{
-		"unterminated quote": {env: "DATABASE_URL=\"postgres://alice:" + secret + "@localhost/db\n", says: "Line 155 of `.env` does not read as Docker Compose reads it"},
-		"no separator":       {env: "DATABASE_URL postgres://alice:" + secret + "@localhost/db\n", says: "Line 155 of `.env` does not read as Docker Compose reads it"},
-		"bad name":           {env: "BROKEN! " + secret + " =value\n", says: "Line 155 of `.env` does not read as Docker Compose reads it"},
+		"unterminated quote": {env: "DATABASE_URL=\"postgres://alice:" + secret + "@localhost/db\n", says: "Line {line} of `.env` does not read as Docker Compose reads it"},
+		"no separator":       {env: "DATABASE_URL postgres://alice:" + secret + "@localhost/db\n", says: "Line {line} of `.env` does not read as Docker Compose reads it"},
+		"bad name":           {env: "BROKEN! " + secret + " =value\n", says: "Line {line} of `.env` does not read as Docker Compose reads it"},
 		"conversion":         {env: "CYFR_LIMIT=" + secret + "\n", override: "services:\n  cyfr:\n    deploy:\n      resources:\n        limits:\n          cpus: ${CYFR_LIMIT}\n", says: "it refused the value of services[cyfr].deploy.resources.limits.cpus"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			e, dir := realHome(t)
 			data, _ := os.ReadFile(filepath.Join(dir, ".env"))
 			writeFile(t, filepath.Join(dir, ".env"), append(data, []byte(c.env)...))
+			// The malformed line is the first after the template's own.
+			says := strings.Replace(c.says, "{line}", strconv.Itoa(strings.Count(string(data), "\n")+1), 1)
 			if c.override != "" {
 				writeFile(t, filepath.Join(dir, "docker-compose.override.yml"), []byte(c.override))
 			}
@@ -361,7 +364,7 @@ func TestRealComposeDiagnosticsCarryNoEnvValue(t *testing.T) {
 			if r, ok := err.(*Refusal); ok {
 				said = r.Message()
 			}
-			if strings.Contains(err.Error(), secret) || !strings.Contains(said, c.says) {
+			if strings.Contains(err.Error(), secret) || !strings.Contains(said, says) {
 				t.Errorf("CheckStack's error reads %v (%s)", err, said)
 			}
 		})

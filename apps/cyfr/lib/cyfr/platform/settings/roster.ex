@@ -253,8 +253,6 @@ defmodule Cyfr.Platform.Settings.Roster do
      "The seed tree read in place: the component bundle under `components/` and the AQUA template under `aqua/` (default `seed`; the image sets its own)."},
     {"CYFR_SESSION_SALT",
      "The session cookie's signing salt; unset, derived from `CYFR_SECRET_KEY_BASE`. Set it only to keep sessions across a key-base rotation."},
-    {"CYFR_SETUP_TOKEN",
-     "The first-run setup link's capability, exactly 64 lowercase hexadecimal characters, which `cyfr init` mints into `.env` when it is given no operator email and `cyfr setup link` prints as a link. The boot refuses it when it is malformed, beside `CYFR_PLATFORM_ADMIN_EMAILS` or `CYFR_RESTORE_TOKEN`, on a headless node, with an OIDC issuer, or with no GitHub or Google client ID, and never prints it."},
     {"CYFR_STORAGE",
      "`s3` for S3-compatible object storage, which needs the bucket, region and both keys; unset, the local filesystem under `CYFR_DATA_PATH`."},
     {"CYFR_STORAGE_RESERVE_BYTES",

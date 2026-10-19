@@ -149,7 +149,7 @@ func (d *stateDocker) Run(ctx context.Context, c reach.Call) (reach.Result, erro
 func interruptedSwitch(t *testing.T) (*stateDocker, string, string) {
 	t.Helper()
 	compose := shippedCompose(t)
-	text, _ := newEnvFromTemplate(t, "me@example.com", "")
+	text, _ := newEnvFromTemplate(t, "me@example.com")
 	docker := &stateDocker{dir: t.TempDir()}
 	t.Setenv(stateDockerDir, docker.dir)
 	dir := filepath.Join(t.TempDir(), "home")

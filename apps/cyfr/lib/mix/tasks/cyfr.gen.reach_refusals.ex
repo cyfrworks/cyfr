@@ -79,10 +79,7 @@ defmodule Mix.Tasks.Cyfr.Gen.ReachRefusals do
        {%{}, ~w(file service key)},
        {%{why: :interpolated}, ~w(file service key)},
        {%{}, ~w(file service)}
-     ]},
-    {:setup_token_with_admins, [{%{}, []}]},
-    {:setup_token_refused,
-     for(why <- ~w(malformed restore_token headless oidc no_provider)a, do: {%{why: why}, []})}
+     ]}
   ]
 
   # The values a filled key is rendered with: a marker no sentence holds,

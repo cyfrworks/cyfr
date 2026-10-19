@@ -385,30 +385,23 @@ func TestInitTakesTheEndOfInputAsNoAnswer(t *testing.T) {
 	}
 }
 
-// Given no operator email, init mints the setup token into .env and says
-// how the link is had, and `cyfr setup link` prints it at the home's
-// loopback port; given one, the operators' line holds it and there is no
-// token and no link.
-func TestInitMintsTheSetupTokenWithoutAnEmail(t *testing.T) {
+// Given no operator email, init names no administrator in .env and warns
+// that no one is authorized to use the home yet; given one, the operators'
+// line holds it and there is no warning.
+func TestInitWarnsThatNoOneIsAuthorizedWithoutAnEmail(t *testing.T) {
+	const warning = "⚠  CYFR_PLATFORM_ADMIN_EMAILS is unset in .env — no one is authorized to use this instance yet.\n" +
+		"   Set CYFR_PLATFORM_ADMIN_EMAILS=you@example.com in .env so you (the operator) can sign in.\n"
 	newInitProject(t)
 	useFakeEngine(t)
 	var out bytes.Buffer
 	if err := runInit(context.Background(), initOptions{noPull: true}, &out, &out); err != nil {
 		t.Fatalf("init: %v\n%s", err, out.String())
 	}
-	token, _ := projectEnv(t).value(setupTokenVar)
-	if !setupTokenPattern.MatchString(token) {
-		t.Fatalf("CYFR_SETUP_TOKEN is %q, want 64 lowercase hexadecimal characters", token)
-	}
 	if admins, assigned := projectEnv(t).value(adminEmailVar); assigned {
 		t.Errorf("a home given no email names the administrators %q", admins)
 	}
-	if !strings.Contains(out.String(), "run `cyfr setup link`") || strings.Contains(out.String(), token) {
-		t.Errorf("init does not say how the setup link is had, or prints the token:\n%s", out.String())
-	}
-	link, err := setupLink(".env")
-	if err != nil || link != "http://localhost:4000/setup#t="+token {
-		t.Errorf("cyfr setup link answered %q, %v", link, err)
+	if !strings.Contains(out.String(), "\n"+warning) {
+		t.Errorf("init does not warn that no one is authorized:\n%s", out.String())
 	}
 
 	newInitProject(t)
@@ -422,11 +415,13 @@ func TestInitMintsTheSetupTokenWithoutAnEmail(t *testing.T) {
 	if admins, _ := projectEnv(t).value(adminEmailVar); admins != "me@example.com" {
 		t.Errorf("the administrators are %q, want the email answered", admins)
 	}
-	if token, assigned := projectEnv(t).value(setupTokenVar); assigned {
-		t.Errorf("a home given its operator's email holds the setup token %q", token)
+	text := out.String()
+	if !strings.Contains(text, "CYFR authorizes by membership — list your email as the platform admin so you can use this instance.\n") ||
+		!strings.Contains(text, "Your platform-admin email (required to access this instance; blank = no one is authorized yet)") {
+		t.Errorf("init does not ask for the platform-admin email:\n%s", text)
 	}
-	if _, err := setupLink(".env"); err == nil || !strings.Contains(err.Error(), "names its administrators") {
-		t.Errorf("cyfr setup link on a home with administrators answered %v", err)
+	if strings.Contains(text, "no one is authorized to use this instance yet") {
+		t.Errorf("init warns though it was given an email:\n%s", text)
 	}
 }
 
@@ -443,7 +438,7 @@ func TestInitAsksTheReachQuestionFirst(t *testing.T) {
 		t.Fatalf("init: %v\n%s", err, out.String())
 	}
 	text := out.String()
-	question, again, email := strings.Index(text, "How will you reach this home?"), strings.Index(text, "Answer 1, 2 or 3."), strings.Index(text, "Your email")
+	question, again, email := strings.Index(text, "How will you reach this home?"), strings.Index(text, "Answer 1, 2 or 3."), strings.Index(text, "Your platform-admin email")
 	if question < 0 || again < question || email < again {
 		t.Errorf("the reach question does not come first, asked again on a wrong answer, before the email:\n%s", text)
 	}

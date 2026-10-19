@@ -18,11 +18,14 @@
 #                               on. The key reaches each node on its
 #                               standard input alone, as the reach engine
 #                               passes one, and is printed nowhere.
-#   TAILNET_REAL_SHARED_LOGIN   the login of another account the run's
-#                               machine is shared with during the run: the
-#                               run waits, telling the operator what to do,
-#                               for a request from that account through
-#                               Serve.
+#   TAILNET_REAL_SHARED_LOGIN   optional: the login of another account the
+#                               run's machine is shared with during the
+#                               run: the run waits, telling the operator
+#                               what to do, for a request from that account
+#                               through Serve. Unset, the sharing check is
+#                               skipped and the run says so at its end:
+#                               sharing is Tailscale's feature, not CYFR's,
+#                               and one account is what a person has.
 #
 # The run, against a stand-in upstream answering as cyfr (the stand-in's
 # echo) and a second node of the same key as the tailnet's device, through
@@ -49,8 +52,9 @@
 #   node id     the id is the same across a restart of the container on the
 #               same state, and another after the machine leaves and joins
 #               again
-#   sharing     a request from TAILNET_REAL_SHARED_LOGIN's account reaches the
-#               upstream through Serve, with that account's identity headers
+#   sharing     with TAILNET_REAL_SHARED_LOGIN set, a request from that
+#               account reaches the upstream through Serve, with that
+#               account's identity headers
 #   rejoin      `tailscale logout` leaves the tailnet (NeedsLogin), and the
 #               key joins it again as a new node, which Serve serves once its
 #               configuration names it
@@ -66,7 +70,7 @@
 # none for a tagged device. The predicates are
 # tests/tailnet-real/predicates-test.sh's, on canned answers.
 #
-# Usage: TAILNET_REAL_AUTH_KEY_FILE=… TAILNET_REAL_SHARED_LOGIN=… tests/tailnet-real/run.sh
+# Usage: TAILNET_REAL_AUTH_KEY_FILE=… [TAILNET_REAL_SHARED_LOGIN=…] tests/tailnet-real/run.sh
 # Needs docker with a daemon that reaches the internet, go and python3.
 # Everything it makes is named for the run and removed when it ends, its
 # nodes logged out first. Sourced, it defines its predicates and runs
@@ -221,7 +225,6 @@ key_file="${TAILNET_REAL_AUTH_KEY_FILE:-}"
 shared_login="${TAILNET_REAL_SHARED_LOGIN:-}"
 [ -n "$key_file" ] && [ -r "$key_file" ] && [ -s "$key_file" ] ||
   fail "TAILNET_REAL_AUTH_KEY_FILE names no readable auth key file: the run needs a reusable, ephemeral key of a real tailnet"
-[ -n "$shared_login" ] || fail "TAILNET_REAL_SHARED_LOGIN names no account to share the machine with: sharing is one of the run's checks"
 if ! command -v docker >/dev/null || ! docker info >/dev/null 2>&1; then fail "no Docker daemon this user can reach"; fi
 
 # The tailscale service's image, as docker-compose.yml names it.
@@ -422,10 +425,11 @@ docker run --rm --network "$RUN-net" --entrypoint sh "$STANDIN" -c '
 [ ! -s "$WORK/load.out" ] || fail "$(grep -c fail "$WORK/load.out") of $LOAD_REQUESTS requests through Serve did not answer 200"
 ok "$LOAD_REQUESTS of $LOAD_REQUESTS answered 200"
 
-step "sharing: a request from $shared_login through Serve"
-echo "Share $name with $shared_login on the Machines page of the admin console, then open https://$name/shared from a device of that account. Waiting up to $SHARING_WAIT s."
-closes=$((SECONDS + SHARING_WAIT))
-until docker logs "$RUN-upstream" 2>&1 | python3 -I -c '
+if [ -n "$shared_login" ]; then
+  step "sharing: a request from $shared_login through Serve"
+  echo "Share $name with $shared_login on the Machines page of the admin console, then open https://$name/shared from a device of that account. Waiting up to $SHARING_WAIT s."
+  closes=$((SECONDS + SHARING_WAIT))
+  until docker logs "$RUN-upstream" 2>&1 | python3 -I -c '
 import json, sys
 login = sys.argv[1]
 for line in sys.stdin:
@@ -436,10 +440,11 @@ for line in sys.stdin:
     if seen.get("path") == "/shared" and seen.get("headers", {}).get("Tailscale-User-Login") == [login]:
         sys.exit(0)
 sys.exit(1)' "$shared_login"; do
-  [ "$SECONDS" -lt "$closes" ] || fail "no request from $shared_login reached https://$name/shared within $SHARING_WAIT s"
-  sleep 5
-done
-ok "a request from $shared_login reached the upstream through Serve, as $shared_login"
+    [ "$SECONDS" -lt "$closes" ] || fail "no request from $shared_login reached https://$name/shared within $SHARING_WAIT s"
+    sleep 5
+  done
+  ok "a request from $shared_login reached the upstream through Serve, as $shared_login"
+fi
 
 step "rejoin: the machine leaves the tailnet and joins again as a new node"
 docker exec "$RUN-machine" tailscale logout >/dev/null || fail "tailscale logout failed"
@@ -462,3 +467,4 @@ ok "after leaving, the machine joined again as $name2 ($id2), and Serve serves i
 step "every check held: $IMAGE is verified"
 printf '%s\n' "$IMAGE" >"$ROOT/tests/tailnet-real/verified-image"
 echo "wrote tests/tailnet-real/verified-image: $IMAGE"
+[ -n "$shared_login" ] || echo "the sharing check was skipped: TAILNET_REAL_SHARED_LOGIN is unset"
