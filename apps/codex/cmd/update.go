@@ -196,9 +196,9 @@ func missingStackServices(path string) []string {
 var errUpdateInterrupted = errors.New("cyfr update was interrupted before anything stopped; it changed nothing and the running stack was not touched")
 
 // runUpdate is `cyfr update` in the working directory. ctx is cancelled by
-// SIGINT or SIGTERM (main's signal context): before the stop step the
-// cancellation aborts the update with nothing changed; from the stop step
-// on, every step runs under a context detached from it, and until the
+// SIGINT, SIGTERM or SIGHUP (Main's signal context): before the stop step
+// the cancellation aborts the update with nothing changed; from the stop
+// step on, every step runs under a context detached from it, and until the
 // switch the update ends after the running step as that step's failure
 // would. The switch and the start are one step that is never cut short:
 // an interrupt during it is reported once the start has answered.

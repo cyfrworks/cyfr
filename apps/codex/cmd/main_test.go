@@ -23,7 +23,9 @@ const watchdogChild = "CYFR_CMD_TEST_WATCHDOG_CHILD"
 // and switch: started-local, every one started on this machine only, the
 // machine's tailnet node not .env's; https-off, every start on this machine
 // only, the tailnet's HTTPS off; resumed-local, recovery finishing a switch
-// whose start was on this machine only; failed-start, every start failing;
+// whose start was on this machine only; waiting-join, a join that waits for
+// its approval until the command's context ends; failed-start, every start
+// failing;
 // real-mismatch, the real engine over a docker whose tailnet machine is
 // another node (tailnetDocker); real-state, the real engine over the
 // stateDocker in CYFR_CMD_TEST_DOCKER_STATE, and real-state-kill the same,
@@ -54,7 +56,7 @@ func TestMain(m *testing.M) {
 			}
 			return e, nil
 		}
-		os.Exit(Run(context.Background()))
+		os.Exit(Main())
 	}
 	if scenario := os.Getenv(asCyfr); scenario == "real-state" || scenario == "real-state-kill" {
 		docker := &stateDocker{dir: os.Getenv(stateDockerDir), killAtUp: scenario == "real-state-kill"}
@@ -65,7 +67,7 @@ func TestMain(m *testing.M) {
 			}
 			return e, nil
 		}
-		os.Exit(Run(context.Background()))
+		os.Exit(Main())
 	}
 	if scenario := os.Getenv(asCyfr); scenario != "" {
 		s := installFakeEngine(nil)
@@ -77,10 +79,16 @@ func TestMain(m *testing.M) {
 			s.startReceipt = startedLocalFor("start", "tailnet_https_off", httpsOff())
 		case "resumed-local":
 			s.resume = []reach.Receipt{startedLocalReceipt("switch")}
+		case "waiting-join":
+			s.join = func(ctx context.Context, r reach.JoinRequest) (reach.Receipt, error) {
+				r.OnAuthURL("https://login.tailscale.com/a/approve-test")
+				<-ctx.Done()
+				return reach.Receipt{}, ctx.Err()
+			}
 		case "failed-start":
 			s.startErr = errors.New("cyfr did not become healthy")
 		}
-		os.Exit(Run(context.Background()))
+		os.Exit(Main())
 	}
 	if os.Getenv(watchdogChild) != "" {
 		fmt.Fprintln(os.Stderr, "the test binary was run as the watchdog, and the dispatch did not take it")

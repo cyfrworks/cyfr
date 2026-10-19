@@ -309,6 +309,30 @@ func TestReachResumeReportsRecovery(t *testing.T) {
 		t.Errorf("a resume that started the home on this machine only answered %v (exit %d)", err, ExitStatus(err))
 	}
 
+	// Recovery's finished changes answer as each finished: a failure, a
+	// rollback and an edited .env exit 1 with their sentences, a change
+	// not applied or done exits 0.
+	for name, c := range map[string]struct {
+		r    reach.Receipt
+		exit int
+	}{
+		"failed":      {reach.Receipt{Op: "switch", State: "completed", Outcome: "failed", Code: "reach_failed", Payload: map[string]string{"new": "public", "env": "local"}}, exitFailure},
+		"rolled back": {reach.Receipt{Op: "switch", State: "completed", Outcome: "rolled_back", Code: "reach_rolled_back", Payload: map[string]string{"new": "public", "old": "local", "reason": "x"}}, exitFailure},
+		"env edited":  {reach.Receipt{Op: "switch", State: "completed", Outcome: "failed", Code: "reach_env_edited", Payload: map[string]string{"then": "started", "env": "local"}}, exitFailure},
+		"not applied": {reach.Receipt{Op: "switch", State: "completed", Outcome: "not_applied"}, 0},
+		"done":        {reach.Receipt{Op: "switch", State: "completed", Outcome: "ok"}, 0},
+	} {
+		s.resume = []reach.Receipt{c.r}
+		err := runReachResume(context.Background(), &bytes.Buffer{})
+		status := 0
+		if err != nil {
+			status = ExitStatus(err)
+		}
+		if status != c.exit || c.r.Code != "" && (err == nil || err.Error() != c.r.Refusal().Message()) {
+			t.Errorf("%s: a resume answered %v (exit %d), want exit %d with the receipt's sentence", name, err, status, c.exit)
+		}
+	}
+
 	// An unfinished change with no refusal of its own says what to run, as
 	// the refusals quote commands.
 	s.resume = []reach.Receipt{{RequestID: strings.Repeat("e", 32), Op: "join", State: "accepted", Phase: "waiting"}}
@@ -317,6 +341,137 @@ func TestReachResumeReportsRecovery(t *testing.T) {
 	}
 	if holder := s.held(); holder != "" {
 		t.Errorf("the lock is still held, by %s", holder)
+	}
+}
+
+// answers is a terminal's input of one answer per line.
+func answers(lines ...string) io.Reader { return strings.NewReader(strings.Join(lines, "\n") + "\n") }
+
+// A tailnet change that needs this machine joined asks about the join
+// before it starts, since the join changes the tailnet whether or not the
+// change follows: declined, nothing runs; confirmed, the machine joins,
+// and a switch then declined says the machine joined and the home's reach
+// is unchanged, never that nothing was changed. With --new-node it names
+// the identity the join removes before anything runs.
+func TestReachConfirmsTheJoinBeforeItStarts(t *testing.T) {
+	t.Run("declined", func(t *testing.T) {
+		s := newReachProject(t)
+		askTerminal = func() bool { return true }
+		askInput = answers("no")
+		var out bytes.Buffer
+		err := runReach(context.Background(), reach.ModeTailnet, reachOptions{hostname: "home"}, false, "", &out)
+		if err == nil || !strings.Contains(err.Error(), "did not join your tailnet. Nothing was changed") || len(s.joins) != 0 {
+			t.Fatalf("a declined join answered %v and joined %v", err, s.joins)
+		}
+		if !strings.Contains(out.String(), "This joins this machine to your tailnet as `home`") {
+			t.Errorf("the join was not described before it was asked:\n%s", out.String())
+		}
+	})
+	t.Run("joined, then the change declined", func(t *testing.T) {
+		s := newReachProject(t)
+		askTerminal = func() bool { return true }
+		askInput = answers("yes", "no")
+		err := runReach(context.Background(), reach.ModeTailnet, reachOptions{}, false, "", &bytes.Buffer{})
+		want := "The change was not confirmed. This machine joined your tailnet as `cyfr.tail1234.ts.net`, and how this home is reached was not changed"
+		if err == nil || err.Error() != want || len(s.joins) != 1 || len(s.switches) != 0 {
+			t.Fatalf("a declined change after a join answered %v (joins %d, switches %d), want %q", err, len(s.joins), len(s.switches), want)
+		}
+	})
+	t.Run("a new node", func(t *testing.T) {
+		s := newReachProject(t)
+		s.joined[""] = reach.Join{Name: "old.tail1234.ts.net", NodeID: "nOLDNODECNTRL"}
+		askTerminal = func() bool { return true }
+		askInput = answers("no")
+		var out bytes.Buffer
+		err := runReach(context.Background(), reach.ModeTailnet, reachOptions{newNode: true}, false, "", &out)
+		if err == nil || len(s.joins) != 0 || len(s.switches) != 0 {
+			t.Fatalf("a declined new node answered %v, joined %v", err, s.joins)
+		}
+		if !strings.Contains(out.String(), "This joins this machine to your tailnet as `cyfr`, after removing its current tailnet identity, `old.tail1234.ts.net`, which the Tailscale admin console still lists") {
+			t.Errorf("the identity --new-node removes was not named before anything ran:\n%s", out.String())
+		}
+	})
+}
+
+// A machine already on the tailnet refuses --hostname and
+// --tailscale-auth-key-file, which apply to a new join, before anything
+// changes, naming the machine and the --new-node that would use them.
+func TestReachRefusesJoinOptionsForAJoinedMachine(t *testing.T) {
+	keyFile := filepath.Join(t.TempDir(), "authkey")
+	if err := os.WriteFile(keyFile, []byte("tskey-auth-kTEST\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	for name, c := range map[string]struct {
+		o    reachOptions
+		want string
+	}{
+		"--hostname":                {reachOptions{hostname: "home"}, "`--hostname` is for a new join"},
+		"--tailscale-auth-key-file": {reachOptions{keyFile: keyFile}, "`--tailscale-auth-key-file` is for a new join"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			s := newReachProject(t)
+			s.joined[""] = reach.Join{Name: "cyfr.tail1234.ts.net", NodeID: "nTESTNODE1CNTRL"}
+			before := read(t, ".env")
+			err := runReach(context.Background(), reach.ModeTailnet, c.o, true, "", &bytes.Buffer{})
+			if err == nil || !strings.Contains(err.Error(), "This machine is already on your tailnet as `cyfr.tail1234.ts.net`") || !strings.Contains(err.Error(), c.want) || !strings.Contains(err.Error(), "Run `cyfr reach tailnet --new-node` with it") {
+				t.Fatalf("cyfr reach tailnet %s answered %v", name, err)
+			}
+			if len(s.joins) != 0 || len(s.switches) != 0 || read(t, ".env") != before {
+				t.Errorf("the refusal changed something: joins %v, switches %v", s.joins, s.switches)
+			}
+			// With no terminal and no --yes, the same refusal, not a
+			// preview that --yes would then refuse.
+			if err := runReach(context.Background(), reach.ModeTailnet, c.o, false, "", &bytes.Buffer{}); err == nil || !strings.Contains(err.Error(), "This machine is already on your tailnet as `cyfr.tail1234.ts.net`") {
+				t.Errorf("cyfr reach tailnet %s with no terminal answered %v", name, err)
+			}
+		})
+	}
+}
+
+// A request id resent after its switch finished answers its receipt as the
+// first send did, the same sentence and exit status, with no second
+// switch; a receipt of another change under the id is reach_request_reused.
+func TestReachAnswersAResentRequestFromItsReceipt(t *testing.T) {
+	const id = "0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f"
+	s := newReachProject(t)
+	var first, second bytes.Buffer
+	err1 := runReach(context.Background(), reach.ModePublic, reachOptions{domain: "cyfr.example.com"}, true, id, &first)
+	err2 := runReach(context.Background(), reach.ModePublic, reachOptions{domain: "cyfr.example.com"}, true, id, &second)
+	if err1 != nil || err2 != nil || first.String() == "" || !strings.HasSuffix(first.String(), second.String()) || len(s.switches) != 1 {
+		t.Fatalf("resending %s answered %v then %v, %q then %q, with %d switches", id, err1, err2, first.String(), second.String(), len(s.switches))
+	}
+	if err := runReach(context.Background(), reach.ModePublic, reachOptions{domain: "other.example.com"}, true, id, &bytes.Buffer{}); err == nil || err.Error() != reach.Refuse("reach_request_reused", nil).Message() {
+		t.Errorf("another change under the id answered %v", err)
+	}
+
+	const failed = "1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f"
+	rolled := reach.Receipt{Op: "switch", State: "completed", Outcome: "rolled_back", Code: "reach_rolled_back", Payload: map[string]string{"new": "public", "old": "local", "reason": "cyfr did not become healthy"}}
+	s.switchReceipt = &rolled
+	err1 = runReach(context.Background(), reach.ModeLocal, reachOptions{}, true, failed, &bytes.Buffer{})
+	s.switchReceipt = nil
+	err2 = runReach(context.Background(), reach.ModeLocal, reachOptions{}, true, failed, &bytes.Buffer{})
+	if err1 == nil || err2 == nil || err1.Error() != err2.Error() || ExitStatus(err1) != ExitStatus(err2) || len(s.switches) != 2 {
+		t.Errorf("resending a rolled-back request answered %v (exit %d) then %v (exit %d), %d switches", err1, ExitStatus(err1), err2, ExitStatus(err2), len(s.switches))
+	}
+}
+
+// Every rolled-back change is a failure, exit 1 with its sentence, the
+// local form of a rollback whose old head answers on this machine only
+// included, never the 3 of a start on this machine only.
+func TestReachRolledBackExitsOne(t *testing.T) {
+	for name, payload := range map[string]map[string]string{
+		"put back running":         {"new": "public", "old": "local", "reason": "cyfr did not become healthy"},
+		"put back on this machine": {"new": "public", "old": "tailnet", "reason": "cyfr did not become healthy", "local": "tailnet_node_mismatch"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			s := newReachProject(t)
+			rolled := reach.Receipt{Op: "switch", State: "completed", Outcome: "rolled_back", Code: "reach_rolled_back", Payload: payload}
+			s.switchReceipt = &rolled
+			err := runReach(context.Background(), reach.ModePublic, reachOptions{domain: "cyfr.example.com"}, true, "", &bytes.Buffer{})
+			if want := reach.Refuse("reach_rolled_back", payload).Message(); err == nil || err.Error() != want || ExitStatus(err) != exitFailure {
+				t.Errorf("a rollback answered %v (exit %d), want %q and exit 1", err, ExitStatus(err), want)
+			}
+		})
 	}
 }
 

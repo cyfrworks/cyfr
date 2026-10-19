@@ -54,6 +54,7 @@ type fakeStack struct {
 	addressChanges         []string
 	join                   func(ctx context.Context, r reach.JoinRequest) (reach.Receipt, error)
 	joined                 map[string]reach.Join
+	receipts               map[string]reach.Receipt
 	switches               []reach.SwitchRequest
 	joins                  []reach.JoinRequest
 	joinKeys               [][]byte
@@ -78,7 +79,7 @@ func useFakeEngine(t *testing.T) *fakeStack {
 // terminal init and reach ask on for none; t, when there is one, reports
 // what the fake cannot do.
 func installFakeEngine(t *testing.T) *fakeStack {
-	s := &fakeStack{t: t, joined: map[string]reach.Join{}, startReceipt: okReceipt("start"), stopReceipt: okReceipt("stop")}
+	s := &fakeStack{t: t, joined: map[string]reach.Join{}, receipts: map[string]reach.Receipt{}, startReceipt: okReceipt("start"), stopReceipt: okReceipt("stop")}
 	openEngine = func(dir string) (stackEngine, error) {
 		if err := s.openErr; err != nil {
 			return nil, err
@@ -306,9 +307,32 @@ func (e *fakeEngine) derive(t reach.Target, joinID string) (reach.Derivation, er
 	return reach.Derive(t, cur, join)
 }
 
-// Switch fences the request's digests and commits the head's keys to .env
-// as a switch of the stopped stack does.
+// Switch is the switch of a stopped stack, its receipt kept by its
+// request id, which it answers again for the same id.
 func (e *fakeEngine) Switch(ctx context.Context, r reach.SwitchRequest) (reach.Receipt, error) {
+	rec, err := e.doSwitch(ctx, r)
+	if rec.RequestID == "" {
+		rec.RequestID = r.ID
+	}
+	if rec.Op != "" {
+		e.s.mu.Lock()
+		e.s.receipts[r.ID] = rec
+		e.s.mu.Unlock()
+	}
+	return rec, err
+}
+
+// Receipt answers the receipt a switch kept for id.
+func (e *fakeEngine) Receipt(id string) (reach.Receipt, bool, error) {
+	e.s.mu.Lock()
+	defer e.s.mu.Unlock()
+	rec, ok := e.s.receipts[id]
+	return rec, ok, nil
+}
+
+// doSwitch fences the request's digests and commits the head's keys to
+// .env as a switch of the stopped stack does.
+func (e *fakeEngine) doSwitch(ctx context.Context, r reach.SwitchRequest) (reach.Receipt, error) {
 	s := e.s
 	s.logLine("switch %s %s", r.Target.Mode, r.ID)
 	s.mu.Lock()

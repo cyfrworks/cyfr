@@ -43,6 +43,7 @@ type stackEngine interface {
 	Start(ctx context.Context, cause string) (reach.Receipt, error)
 	StartWithin(ctx context.Context, cause string, health time.Duration) (reach.Receipt, error)
 	Stop(ctx context.Context, cause string, all bool) (reach.Receipt, error)
+	Receipt(id string) (reach.Receipt, bool, error)
 }
 
 // openEngine opens the engine of the project at dir, refusing a .env that
@@ -334,27 +335,144 @@ func joinTailnet(ctx context.Context, e stackEngine, id string, o reachOptions, 
 	return joinID, nil
 }
 
+// joinChoice is how a command meets the join its preview needs. confirm,
+// when set, is asked before the join starts, with the name of the tailnet
+// identity --new-node removes ("" when none is known), and its error
+// refuses the join; optionsGiven says --hostname or
+// --tailscale-auth-key-file was given, which apply to a new join alone.
+type joinChoice struct {
+	confirm      func(current string) error
+	optionsGiven bool
+}
+
 // previewTarget is the engine's preview of target: for tailnet, from the
 // machine as it is joined, joining it first (joinTailnet, under the join's
-// request id) when it is not, or when --new-node replaces its identity.
-func previewTarget(ctx context.Context, e stackEngine, target reach.Target, id string, o reachOptions, key []byte, out io.Writer) (reach.Preview, string, error) {
+// request id) when it is not, or when --new-node replaces its identity,
+// and answering the join's id. The join is what changes the tailnet, so
+// it is confirmed before it starts; a machine already joined refuses the
+// options of a new join rather than ignore them.
+func previewTarget(ctx context.Context, e stackEngine, target reach.Target, id string, o reachOptions, key []byte, out io.Writer, choice joinChoice) (reach.Preview, string, error) {
+	p, err := e.Preview(ctx, target, "")
 	if target.Mode != reach.ModeTailnet {
-		p, err := e.Preview(ctx, target, "")
 		return p, "", engineFailure(err)
 	}
-	if !o.newNode {
-		p, err := e.Preview(ctx, target, "")
-		var r *reach.Refusal
-		if !errors.As(err, &r) || r.Code != "tailnet_not_joined" {
-			return p, "", engineFailure(err)
+	var r *reach.Refusal
+	notJoined := errors.As(err, &r) && r.Code == "tailnet_not_joined"
+	switch {
+	case err == nil && !o.newNode:
+		if choice.optionsGiven {
+			return reach.Preview{}, "", alreadyJoined(p.New.Host, o)
+		}
+		return p, "", nil
+	case err != nil && !notJoined && (!o.newNode || r == nil || r.Code == "tailnet_active"):
+		return reach.Preview{}, "", engineFailure(err)
+	}
+	if choice.confirm != nil {
+		current := ""
+		if err == nil {
+			current = p.New.Host
+		} else if h, herr := e.Head(); herr == nil && h.Mode == reach.ModeTailnet {
+			current = h.Host
+		}
+		if err := choice.confirm(current); err != nil {
+			return reach.Preview{}, "", err
 		}
 	}
 	joinID, err := joinTailnet(ctx, e, joinRequestID(id), o, key, out)
 	if err != nil {
 		return reach.Preview{}, "", err
 	}
-	p, err := e.Preview(ctx, target, joinID)
+	p, err = e.Preview(ctx, target, joinID)
 	return p, joinID, engineFailure(err)
+}
+
+// alreadyJoined refuses the options of a new join for a machine already on
+// the tailnet as name.
+func alreadyJoined(name string, o reachOptions) error {
+	var given []string
+	if o.hostname != "" {
+		given = append(given, "`--hostname`")
+	}
+	if o.keyFile != "" {
+		given = append(given, "`--tailscale-auth-key-file`")
+	}
+	return fmt.Errorf("This machine is already on your tailnet as `%s`, and %s %s for a new join. Nothing was changed. Run `cyfr reach tailnet --new-node` with %s to replace its tailnet identity, or run it again without %s", name, joinNames(given), plural(given, "is", "are"), plural(given, "it", "them"), plural(given, "it", "them"))
+}
+
+// joinName is the name a join asks the tailnet for.
+func joinName(o reachOptions) string {
+	if o.hostname != "" {
+		return o.hostname
+	}
+	return "cyfr"
+}
+
+// askJoin asks on the terminal whether to make the join a change needs,
+// naming what it does: with --new-node, the tailnet identity it removes
+// first.
+func askJoin(in *bufio.Reader, out io.Writer, o reachOptions) func(current string) error {
+	return func(current string) error {
+		what := fmt.Sprintf("This joins this machine to your tailnet as `%s`; certificate names are public", joinName(o))
+		if o.newNode {
+			removed := "if it has one"
+			if current != "" {
+				removed = fmt.Sprintf("`%s`, which the Tailscale admin console still lists until you remove it there", current)
+			}
+			what = fmt.Sprintf("This joins this machine to your tailnet as `%s`, after removing its current tailnet identity, %s; certificate names are public", joinName(o), removed)
+		}
+		fmt.Fprintln(out, what+".")
+		if a := strings.ToLower(ask(in, out, "Join it? (yes/no)", "no")); a != "yes" && a != "y" {
+			return errors.New("The join was not confirmed, so this machine did not join your tailnet. Nothing was changed")
+		}
+		return nil
+	}
+}
+
+// answerResent answers a request id the engine already holds the receipt
+// of, or the unfinished operation of, as the request answered when it was
+// first sent, the same sentence and the same exit status, and does
+// nothing else; sent is false when it holds neither. A receipt whose head
+// is not the one target makes was another request's.
+func answerResent(target reach.Target, id string, out io.Writer) (sent bool, err error) {
+	e, err := openEngine(".")
+	if err != nil {
+		return true, engineFailure(err)
+	}
+	rec, ok, err := e.Receipt(id)
+	if err != nil {
+		return true, engineFailure(err)
+	}
+	if !ok {
+		return false, nil
+	}
+	reused := refusalError{reach.Refuse("reach_request_reused", nil)}
+	switch {
+	case rec.Op != "switch":
+		return true, reused
+	case rec.State == "accepted":
+		return true, refuseUnfinished([]reach.Receipt{rec})
+	case rec.FinalHead != nil && (rec.Outcome == "ok" || rec.Outcome == outcomeStartedLocal) && !headOf(*rec.FinalHead, target):
+		return true, reused
+	}
+	// A receipt read back carries its refusal in itself, with no error
+	// beside it.
+	if err := answerFailure(rec, nil); err != nil {
+		return true, err
+	}
+	if rec.FinalHead != nil {
+		fmt.Fprintln(out, "Done. This home is reached as:")
+		printWords(out, reach.Describe(*rec.FinalHead))
+	}
+	return true, nil
+}
+
+// headOf reports whether head h is one target makes: its mode, and for a
+// public home its domain and certificate email.
+func headOf(h reach.Head, t reach.Target) bool {
+	if h.Mode != t.Mode {
+		return false
+	}
+	return t.Mode != reach.ModePublic || h.Host == strings.ToLower(strings.TrimSpace(t.Domain)) && h.ACMEEmail == strings.TrimSpace(t.ACMEEmail)
 }
 
 // printPreview prints a change before it is made: each of the words as
@@ -459,6 +577,7 @@ func runReach(ctx context.Context, mode string, o reachOptions, yes bool, id str
 	if err := checkTailnetOptions(mode, o); err != nil {
 		return err
 	}
+	target := reach.Target{Mode: mode, Domain: o.domain, ACMEEmail: o.acmeEmail}
 	if id == "" {
 		var err error
 		if id, err = newRequestID(); err != nil {
@@ -466,12 +585,13 @@ func runReach(ctx context.Context, mode string, o reachOptions, yes bool, id str
 		}
 	} else if !requestIDPattern.MatchString(id) {
 		return fmt.Errorf("--request-id %q is not 32 lowercase hexadecimal characters", id)
+	} else if sent, err := answerResent(target, id, out); sent {
+		return err
 	}
 	key, err := readAuthKey(o.keyFile)
 	if err != nil {
 		return err
 	}
-	target := reach.Target{Mode: mode, Domain: o.domain, ACMEEmail: o.acmeEmail}
 	if !yes && !askTerminal() {
 		return showUnconfirmed(ctx, target, o, out)
 	}
@@ -482,14 +602,21 @@ func runReach(ctx context.Context, mode string, o reachOptions, yes bool, id str
 	}
 	defer unlock()
 
-	p, joinID, err := previewTarget(ctx, e, target, id, o, key, out)
+	in := bufio.NewReader(askInput)
+	choice := joinChoice{optionsGiven: o.hostname != "" || o.keyFile != ""}
+	if !yes {
+		choice.confirm = askJoin(in, out, o)
+	}
+	p, joinID, err := previewTarget(ctx, e, target, id, o, key, out, choice)
 	if err != nil {
 		return err
 	}
 	printPreview(out, p)
 	if !yes {
-		answer := ask(bufio.NewReader(askInput), out, "Make this change? (yes/no)", "no")
-		if a := strings.ToLower(answer); a != "yes" && a != "y" {
+		if a := strings.ToLower(ask(in, out, "Make this change? (yes/no)", "no")); a != "yes" && a != "y" {
+			if joinID != "" {
+				return fmt.Errorf("The change was not confirmed. This machine joined your tailnet as `%s`, and how this home is reached was not changed", p.New.Host)
+			}
 			return errors.New("the change was not confirmed. Nothing was changed")
 		}
 	}
@@ -529,6 +656,9 @@ func showUnconfirmed(ctx context.Context, target reach.Target, o reachOptions, o
 	if err != nil {
 		return engineFailure(err)
 	}
+	if target.Mode == reach.ModeTailnet && (o.hostname != "" || o.keyFile != "") {
+		return alreadyJoined(p.New.Host, o)
+	}
 	printPreview(out, p)
 	return errors.New("The change above was shown, not made: cyfr reach makes a change only once it is confirmed, and there is no terminal to confirm it on. " + again)
 }
@@ -549,9 +679,14 @@ func runReachResume(ctx context.Context, out io.Writer) error {
 	if err := refuseUnfinished(receipts); err != nil {
 		return err
 	}
+	// Each recovered receipt carries its refusal in itself, as Resume
+	// answers it.
 	for _, r := range receipts {
-		if r.Outcome == outcomeStartedLocal {
-			return receiptFailure(r)
+		if err := answerFailure(r, nil); err != nil {
+			return err
+		}
+		if r.Outcome == "failed" || r.Outcome == "rolled_back" {
+			return errors.New(describeReceipt(r))
 		}
 	}
 	return nil

@@ -4,6 +4,7 @@
 package cmd
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"errors"
@@ -11,13 +12,16 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -369,6 +373,76 @@ func TestStartedOnThisMachineOnlyExitsThree(t *testing.T) {
 			t.Errorf("cyfr reach --resume does not report the recovered change:\n%s", stdout)
 		}
 	})
+}
+
+// A hangup, the terminal cyfr runs in closing, ends cyfr as an interrupt
+// does: a join waiting for its approval is cancelled, through the engine,
+// and cyfr exits 1 with tailnet_join_cancelled's sentence.
+func TestAHangupCancelsAWaitingJoin(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows sends no SIGHUP")
+	}
+	newReachProject(t)
+	dir, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	logDir := t.TempDir()
+	process := exec.Command(os.Args[0], "reach", "tailnet", "--yes")
+	process.Dir = dir
+	process.Env = append(os.Environ(), asCyfr+"=waiting-join", "FAKE_DOCKER_DIR="+logDir)
+	stdout, err := process.StdoutPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var stderr bytes.Buffer
+	process.Stderr = &stderr
+	if err := process.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = process.Process.Kill() })
+	waiting := make(chan bool, 1)
+	var printed bytes.Buffer
+	go func() {
+		lines := bufio.NewScanner(stdout)
+		for lines.Scan() {
+			printed.WriteString(lines.Text() + "\n")
+			if strings.HasPrefix(lines.Text(), "Waiting for the approval") {
+				waiting <- true
+				break
+			}
+		}
+		_, _ = io.Copy(io.Discard, stdout)
+		close(waiting)
+	}()
+	select {
+	case ok := <-waiting:
+		if !ok {
+			t.Fatalf("cyfr ended before its join waited:\n%s%s", printed.String(), stderr.String())
+		}
+	case <-time.After(time.Minute):
+		t.Fatal("the join never waited for its approval")
+	}
+	if err := process.Process.Signal(syscall.SIGHUP); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() { done <- process.Wait() }()
+	var exit *exec.ExitError
+	select {
+	case err := <-done:
+		if !errors.As(err, &exit) || exit.ExitCode() != exitFailure {
+			t.Fatalf("a hangup during a waiting join ended cyfr with %v, want exit 1", err)
+		}
+	case <-time.After(time.Minute):
+		t.Fatal("a hangup did not end a waiting join")
+	}
+	if want := "Error: " + reach.Refuse("tailnet_join_cancelled", nil).Message() + "\n"; stderr.String() != want {
+		t.Errorf("a hangup during a waiting join printed %q, want %q", stderr.String(), want)
+	}
+	if log, _ := os.ReadFile(filepath.Join(logDir, "log")); !strings.Contains(string(log), "ENGINE cancel-waiting-join\n") {
+		t.Errorf("the waiting join was not cancelled through the engine:\n%s", log)
+	}
 }
 
 // tailnetDocker is a docker the real engine starts a tailnet home through:

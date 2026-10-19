@@ -659,7 +659,7 @@ database_path: ./data/cyfr.db
 	var reachErr error
 	switch {
 	case envCreated && choice.mode != reach.ModeLocal:
-		applied, err := applyInitReach(ctx, choice, key, out)
+		applied, err := applyInitReach(ctx, choice, key, o.hostname != "" || o.keyFile != "", out)
 		local := startedLocally{}
 		switch {
 		case errors.As(err, &local):
@@ -915,7 +915,7 @@ func chooseReach(o initOptions, interactive bool, r *bufio.Reader, out io.Writer
 // switch of its stopped stack, the tailnet joined first for tailnet, and
 // answers the head it switched to. Any failure leaves the home as .env
 // holds it, local.
-func applyInitReach(ctx context.Context, c reachChoice, key []byte, out io.Writer) (reach.Head, error) {
+func applyInitReach(ctx context.Context, c reachChoice, key []byte, optionsGiven bool, out io.Writer) (reach.Head, error) {
 	id, err := newRequestID()
 	if err != nil {
 		return reach.Head{}, err
@@ -926,7 +926,7 @@ func applyInitReach(ctx context.Context, c reachChoice, key []byte, out io.Write
 	}
 	defer unlock()
 	target := reach.Target{Mode: c.mode, Domain: c.domain, ACMEEmail: c.acmeEmail}
-	p, joinID, err := previewTarget(ctx, e, target, id, c.reachOptions, key, out)
+	p, joinID, err := previewTarget(ctx, e, target, id, c.reachOptions, key, out, joinChoice{optionsGiven: optionsGiven})
 	if err != nil {
 		return reach.Head{}, err
 	}
@@ -1020,6 +1020,9 @@ const projectGitignore = `# CYFR project — all runtime state (every athanor's 
 .env
 .env.local
 .env.*.local
+# .env's replacement while it is written, which only a write the process
+# died inside leaves: it holds .env's secrets.
+..env.tmp-*
 `
 
 // fileExists reports whether path exists (file or directory).
@@ -1159,7 +1162,7 @@ func runUp(ctx context.Context, out io.Writer) error {
 		return err
 	}
 	interrupts := make(chan os.Signal, 1)
-	signal.Notify(interrupts, os.Interrupt, syscall.SIGTERM)
+	signal.Notify(interrupts, os.Interrupt, syscall.SIGTERM, syscall.SIGHUP)
 	release := sync.OnceFunc(func() {
 		signal.Stop(interrupts)
 		unlock()
