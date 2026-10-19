@@ -8,6 +8,7 @@ package reach
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -126,12 +127,20 @@ func TestRealComposeProvenanceReadsNamesNotValues(t *testing.T) {
 		}
 		return cyfrEnv(c), nil
 	}
+	// The verdict is held whole as the check gives it, before the
+	// boundary's redaction pass, which blanks a .env value wherever it
+	// appears in the name (HOST, PART's value, in ${HOSTKEY}); past the
+	// boundary the code and the payload's keys are the same.
 	refused := func(t *testing.T, e *Engine, key string) {
 		t.Helper()
 		want := map[string]string{"file": "compose.override.yml", "service": "cyfr", "key": key, "why": "interpolated"}
 		var r *Refusal
-		if err := e.CheckStack(bg); !asRefusal(err, &r) || r.Code != "compose_override_refused" || !mapsEqual(r.Payload, want) || r.Message() != overrideNames("compose.override.yml", "cyfr", key) {
-			t.Fatalf("CheckStack answered %v, want compose_override_refused %v", err, want)
+		if err := e.checkStack(bg); !asRefusal(err, &r) || r.Code != "compose_override_refused" || !mapsEqual(r.Payload, want) || r.Message() != overrideNames("compose.override.yml", "cyfr", key) {
+			t.Fatalf("the stack's check answered %v, want compose_override_refused %v", err, want)
+		}
+		var past *Refusal
+		if err := e.CheckStack(bg); !asRefusal(err, &past) || past.Code != r.Code || !slices.Equal(slices.Sorted(maps.Keys(past.Payload)), slices.Sorted(maps.Keys(want))) {
+			t.Fatalf("CheckStack answered %v, want compose_override_refused with %v's keys", err, want)
 		}
 	}
 
