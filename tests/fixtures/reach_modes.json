@@ -3968,6 +3968,26 @@
           }
         },
         {
+          "fixed": {
+            "why": "interpolated"
+          },
+          "slots": [
+            "file",
+            "service",
+            "key"
+          ],
+          "template": "`{file}` names `{key}` in the `{service}` service's environment, a name with `$` in it, which cyfr cannot check before Docker Compose reads it. Nothing started. Write the name in `{file}` without `$`.",
+          "example": {
+            "payload": {
+              "file": "x-file",
+              "key": "COMPOSE_PROFILES",
+              "service": "x-service",
+              "why": "interpolated"
+            },
+            "sentence": "`x-file` names `COMPOSE_PROFILES` in the `x-service` service's environment, a name with `$` in it, which cyfr cannot check before Docker Compose reads it. Nothing started. Write the name in `x-file` without `$`."
+          }
+        },
+        {
           "fixed": {},
           "slots": [
             "file",

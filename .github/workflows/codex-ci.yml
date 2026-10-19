@@ -106,7 +106,7 @@ jobs:
       # (internal/reach's TestDockerTestsAreTheOnesCIRequires).
       - name: go test (the reach engine's Docker tests ran and passed)
         env:
-          REACH_DOCKER_TESTS: TestLockExcludesAHolderInAnotherPIDNamespace TestRealComposeCallHoldsTheLock TestRealComposeCheckStackAcceptsReachKeysThroughEnvFile TestRealComposeCheckStackRefusesAnOverrideSettingAHeadKey TestRealComposeDiagnosticsCarryNoEnvValue TestRealComposeRunsTheMaterializedConfiguration
+          REACH_DOCKER_TESTS: TestLockExcludesAHolderInAnotherPIDNamespace TestRealComposeCallHoldsTheLock TestRealComposeCheckStackAcceptsReachKeysThroughEnvFile TestRealComposeCheckStackRefusesAnOverrideSettingAHeadKey TestRealComposeDiagnosticsCarryNoEnvValue TestRealComposeProvenanceReadsNamesNotValues TestRealComposeRunsTheMaterializedConfiguration
         run: |
           set -euo pipefail
           docker compose version

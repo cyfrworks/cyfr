@@ -150,10 +150,12 @@ func (e *Engine) ComposeArgs(ctx context.Context, h Head, args ...string) ([]str
 func (e *Engine) Head() (Head, error) { return e.envHead() }
 
 // CheckStack checks what `docker compose config` resolves for the stack
-// before anything starts: no reach key is assigned in the cyfr service's
-// own environment: entries in any file of the source set (the main file,
-// its override, every include: and extends:), .env reaches cyfr through
-// its env_file, and the effective values pass ResolveBoot with .env's own
+// before anything starts: in any file of the source set (the main file,
+// its override, every include: and extends:) no service's environment:
+// names a variable with `$` (compose_override_refused, the name as
+// written) and no reach key is assigned in the cyfr service's own, .env
+// reaches cyfr through its env_file, and the effective values, which the
+// sources' check does not read, pass ResolveBoot with .env's own
 // read as File and the flattened environment as Process.
 func (e *Engine) CheckStack(ctx context.Context) error { return e.checkStack(ctx) }
 

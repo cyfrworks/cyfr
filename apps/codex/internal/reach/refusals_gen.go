@@ -165,6 +165,7 @@ var refusalRows = map[string]refusalRow{
 		Class: "invalid_argument",
 		Variants: []refusalVariant{
 			{Fixed: map[string]string{}, Slots: []string{"file", "service", "key"}, Template: "`{file}` sets `{key}` in the `{service}` service's environment, where it would override how .env says this home is reached. Nothing started. Remove `{key}` from `{file}`; .env alone holds it, and `cyfr reach` writes it."},
+			{Fixed: map[string]string{"why": "interpolated"}, Slots: []string{"file", "service", "key"}, Template: "`{file}` names `{key}` in the `{service}` service's environment, a name with `$` in it, which cyfr cannot check before Docker Compose reads it. Nothing started. Write the name in `{file}` without `$`."},
 			{Fixed: map[string]string{}, Slots: []string{"file", "service"}, Template: "`{file}` does not give the `{service}` service .env through its env_file, so it would not read how this home is reached. Nothing started. Add `env_file: .env` to the `{service}` service in `{file}`, as the shipped docker-compose.yml has it."},
 		},
 	},

@@ -5,7 +5,6 @@ package reach
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"maps"
 	"os"
@@ -327,12 +326,15 @@ func (e *Engine) checkStack(ctx context.Context) error {
 }
 
 // checkProvenance reads the source file set before compose flattens it:
-// the default files and every file they include, and each service the
-// cyfr service extends, wherever it is. No head key may be assigned in
-// the cyfr service's own environment: entries there would override what
-// .env says, and the flattened configuration cannot show where a value
-// came from. .env must reach cyfr through its env_file. It answers every
-// file it read.
+// the default files and every file they include, and each service any of
+// their services extends, wherever it is. No service's environment: may
+// write a name with `$`, as a list entry, which compose interpolates
+// into another name, a head key's among them, or as a mapping key: cyfr
+// resolves no name and takes only plain ones. No head key may be
+// assigned in the cyfr service's own environment: entries there would
+// override what .env says, and the flattened configuration cannot show
+// where a value came from. .env must reach cyfr through its env_file.
+// Values are not read. It answers every file it read.
 func (e *Engine) checkProvenance() ([]string, error) {
 	files, err := e.defaultFiles()
 	if err != nil {
@@ -361,8 +363,6 @@ type provenance struct {
 	seen    map[string]bool
 	read    map[string]bool
 	envFile bool
-	// values are .env's, for interpolation.
-	values map[string]string
 	// defines are the files that define the cyfr service, in the order
 	// compose reads them.
 	defines []string
@@ -430,9 +430,17 @@ func (p *provenance) file(path string) error {
 		}
 	}
 	services, _ := root["services"].(map[string]any)
-	if svc, ok := services[cyfrService].(map[string]any); ok {
-		p.defines = append(p.defines, p.rel(path))
-		return p.service(path, svc, cyfrService, map[string]bool{})
+	for _, name := range slices.Sorted(maps.Keys(services)) {
+		svc, ok := services[name].(map[string]any)
+		if !ok {
+			continue
+		}
+		if name == cyfrService {
+			p.defines = append(p.defines, p.rel(path))
+		}
+		if err := p.service(path, svc, name, name == cyfrService, map[string]bool{}); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -450,27 +458,28 @@ func (p *provenance) local(from, name, what string) (string, error) {
 	return filepath.Clean(filepath.Join(filepath.Dir(from), name)), nil
 }
 
-// service checks one definition of a service in cyfr's chain: the names
-// its environment: assigns as compose resolves them, its env_file, and
-// the service it extends.
-func (p *provenance) service(path string, svc map[string]any, name string, chain map[string]bool) error {
+// service checks one definition of a service and the service it extends:
+// the names its environment: assigns as written, and, in cyfr's chain,
+// its env_file.
+func (p *provenance) service(path string, svc map[string]any, name string, cyfr bool, chain map[string]bool) error {
 	key := path + "\x00" + name
 	if chain[key] {
 		return nil
 	}
 	chain[key] = true
-	keys, err := p.environmentKeys(svc["environment"])
-	if err != nil {
-		return Refuse("compose_override_refused", map[string]string{"file": p.rel(path), "service": name, "key": err.Error()})
-	}
-	for _, k := range keys {
-		if slices.Contains(headKeys(), k) {
+	for _, k := range environmentKeys(svc["environment"]) {
+		switch {
+		case strings.Contains(k, "$"):
+			return Refuse("compose_override_refused", map[string]string{"file": p.rel(path), "service": name, "key": k, "why": "interpolated"})
+		case cyfr && slices.Contains(headKeys(), k):
 			return Refuse("compose_override_refused", map[string]string{"file": p.rel(path), "service": name, "key": k})
 		}
 	}
-	for _, f := range envFiles(svc["env_file"]) {
-		if target, err := p.local(path, f, "env_file:"); err == nil && target == filepath.Join(p.e.dir, ".env") {
-			p.envFile = true
+	if cyfr {
+		for _, f := range envFiles(svc["env_file"]) {
+			if target, err := p.local(path, f, "env_file:"); err == nil && target == filepath.Join(p.e.dir, ".env") {
+				p.envFile = true
+			}
 		}
 	}
 	if svc["extends"] == nil {
@@ -486,6 +495,7 @@ func (p *provenance) service(path string, svc map[string]any, name string, chain
 	}
 	target := path
 	if file != "" {
+		var err error
 		if target, err = p.local(path, file, "extends:"); err != nil {
 			return err
 		}
@@ -499,15 +509,14 @@ func (p *provenance) service(path string, svc map[string]any, name string, chain
 	if !ok {
 		return fmt.Errorf("reach: the %s service of %s extends %s, which %s does not define", name, p.rel(path), base, p.rel(target))
 	}
-	return p.service(target, next, base, chain)
+	return p.service(target, next, base, cyfr, chain)
 }
 
-// environmentKeys are the names an environment: block assigns as compose
-// resolves them: a mapping's keys as written, which compose takes
-// literally; a list entry (`NAME=value`, or `NAME` taken from the
-// environment) interpolated whole first, as compose interpolates it. An
-// entry it cannot resolve is an error naming the entry's name as written.
-func (p *provenance) environmentKeys(env any) ([]string, error) {
+// environmentKeys are the names an environment: block assigns as
+// written, in byte order: a mapping's keys, and each list entry's name
+// before its first = (`NAME=value`, or `NAME` taken from the
+// environment).
+func environmentKeys(env any) []string {
 	var keys []string
 	switch v := env.(type) {
 	case map[string]any:
@@ -516,90 +525,14 @@ func (p *provenance) environmentKeys(env any) ([]string, error) {
 		}
 	case []any:
 		for _, item := range v {
-			s, ok := item.(string)
-			if !ok {
-				continue
-			}
-			resolved, ok := p.interpolate(s)
-			if !ok {
+			if s, ok := item.(string); ok {
 				k, _, _ := strings.Cut(s, "=")
-				return nil, errors.New(strings.TrimSpace(k))
+				keys = append(keys, strings.TrimSpace(k))
 			}
-			k, _, _ := strings.Cut(resolved, "=")
-			keys = append(keys, strings.TrimSpace(k))
 		}
 	}
-	return keys, nil
-}
-
-// composeVars is compose's variable syntax as cyfr resolves it: $$,
-// ${NAME}, ${NAME} with an operator and a plain word, and $NAME.
-var composeVars = regexp.MustCompile(`\$\$|\$\{([A-Za-z_][A-Za-z0-9_]*)(?:(:?[-?+])([^}$]*))?\}|\$([A-Za-z_][A-Za-z0-9_]*)`)
-
-// interpolate resolves s as compose would, from cyfr's environment, then
-// .env; false when it cannot be resolved here: a name compose would
-// refuse unset, or a $ outside the plain forms.
-func (p *provenance) interpolate(s string) (string, bool) {
-	if !strings.Contains(s, "$") {
-		return s, true
-	}
-	if p.values == nil {
-		p.values = map[string]string{}
-		if env, err := p.e.readEnv(); err == nil && env != nil {
-			p.values = env.values()
-		}
-	}
-	lookup := func(name string) (string, bool) {
-		if v, ok := os.LookupEnv(name); ok && !strings.HasPrefix(strings.ToUpper(name), "COMPOSE_") {
-			return v, true
-		}
-		v, ok := p.values[name]
-		return v, ok
-	}
-	if strings.Contains(composeVars.ReplaceAllString(s, ""), "$") {
-		return "", false
-	}
-	resolved := true
-	out := composeVars.ReplaceAllStringFunc(s, func(m string) string {
-		if m == "$$" {
-			return "$"
-		}
-		sub := composeVars.FindStringSubmatch(m)
-		name, op, word := sub[1], sub[2], sub[3]
-		if name == "" {
-			name = sub[4]
-		}
-		v, set := lookup(name)
-		switch op {
-		case "":
-			resolved = resolved && set
-			return v
-		case ":-":
-			if !set || v == "" {
-				return word
-			}
-		case "-":
-			if !set {
-				return word
-			}
-		case ":?":
-			resolved = resolved && set && v != ""
-		case "?":
-			resolved = resolved && set
-		case ":+":
-			if set && v != "" {
-				return word
-			}
-			return ""
-		case "+":
-			if set {
-				return word
-			}
-			return ""
-		}
-		return v
-	})
-	return out, resolved
+	slices.Sort(keys)
+	return keys
 }
 
 // envFiles are the paths an env_file: names, as one path, a list of

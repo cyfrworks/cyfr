@@ -136,12 +136,22 @@ func overrideSets(file, service, key string) string {
 	return "`" + file + "` sets `" + key + "` in the `" + service + "` service's environment, where it would override how .env says this home is reached. Nothing started. Remove `" + key + "` from `" + file + "`; .env alone holds it, and `cyfr reach` writes it."
 }
 
+// overrideNames is compose_override_refused's sentence for a name
+// written with `$` in a service's environment, word for word.
+func overrideNames(file, service, key string) string {
+	return "`" + file + "` names `" + key + "` in the `" + service + "` service's environment, a name with `$` in it, which cyfr cannot check before Docker Compose reads it. Nothing started. Write the name in `" + file + "` without `$`."
+}
+
 // Provenance, before anything is flattened: a head key in the cyfr
 // service's own environment: entries in any file of the source set is
 // refused with compose_override_refused naming the file, the service and
 // the key, even with the value .env holds; .env must reach cyfr through
-// its env_file; reach keys through env_file alone pass. A start refused
-// so changes nothing and answers the same refusal.
+// its env_file; reach keys through env_file alone pass. A name written
+// with `$` in any service's environment, a list entry's or a mapping
+// key, is refused as written, whatever compose would make of it; a value
+// is not read, so one that interpolates, even a variable set nowhere,
+// passes. A start refused so changes nothing and answers the same
+// refusal.
 func TestCheckStackReadsTheSourcesProvenance(t *testing.T) {
 	for _, c := range []struct {
 		name               string
@@ -162,11 +172,19 @@ func TestCheckStackReadsTheSourcesProvenance(t *testing.T) {
 			"base.yml":                    "services:\n  base:\n    environment:\n      - CYFR_TAILNET_NODE_ID=n1\n",
 		}, "base.yml", "base", "CYFR_TAILNET_NODE_ID", ""},
 		{name: "remote include", files: map[string]string{"docker-compose.override.yml": "include:\n  - oci://example.com/stack\n"}, plain: "cannot check"},
-		// What compose resolves, not what the file spells: a list key it
-		// interpolates, and every merge form.
-		{"interpolated key", map[string]string{"docker-compose.override.yml": "services:\n  cyfr:\n    environment:\n      - ${HOSTKEY}=localhost\n"}, "docker-compose.override.yml", "cyfr", "CYFR_HOST", ""},
-		{"interpolated bare name", map[string]string{"docker-compose.override.yml": "services:\n  cyfr:\n    environment:\n      - $HOSTKEY\n"}, "docker-compose.override.yml", "cyfr", "CYFR_HOST", ""},
+		// A name with `$`, wherever and however it is written.
+		{"interpolated key", map[string]string{"docker-compose.override.yml": "services:\n  cyfr:\n    environment:\n      - ${HOSTKEY}=localhost\n"}, "docker-compose.override.yml", "cyfr", "${HOSTKEY}", ""},
+		{"interpolated bare name", map[string]string{"docker-compose.override.yml": "services:\n  cyfr:\n    environment:\n      - $HOSTKEY\n"}, "docker-compose.override.yml", "cyfr", "$HOSTKEY", ""},
 		{"unresolvable key", map[string]string{"docker-compose.override.yml": "services:\n  cyfr:\n    environment:\n      - ${NOT_SET_ANYWHERE}=localhost\n"}, "docker-compose.override.yml", "cyfr", "${NOT_SET_ANYWHERE}", ""},
+		{"interpolated mapping key", map[string]string{"docker-compose.override.yml": "services:\n  cyfr:\n    environment:\n      ${HOSTKEY}: localhost\n"}, "docker-compose.override.yml", "cyfr", "${HOSTKEY}", ""},
+		{"interpolated key in another service", map[string]string{"docker-compose.override.yml": "services:\n  locus-runtime:\n    environment:\n      - ${PREFIX}_SETTING=1\n"}, "docker-compose.override.yml", "locus-runtime", "${PREFIX}_SETTING", ""},
+		{"interpolated key in an extended service", map[string]string{
+			"docker-compose.override.yml": "services:\n  helper:\n    image: busybox:latest\n    extends:\n      file: base.yml\n      service: base\n",
+			"base.yml":                    "services:\n  base:\n    environment:\n      - $${HOSTKEY}=1\n",
+		}, "base.yml", "base", "$${HOSTKEY}", ""},
+		{name: "interpolated value", files: map[string]string{"docker-compose.override.yml": "services:\n  cyfr:\n    environment:\n      SOME_SETTING: ${HOSTKEY}\n"}},
+		{name: "unset value", files: map[string]string{"docker-compose.override.yml": "services:\n  cyfr:\n    environment:\n      - SOME_SETTING=${NOT_SET_ANYWHERE}\n"}},
+		// Every merge form.
 		{"merged service sequence", map[string]string{"docker-compose.override.yml": "x-part: &part\n  cyfr:\n    environment:\n      CYFR_HOST: localhost\nservices:\n  <<: [*part]\n"}, "docker-compose.override.yml", "cyfr", "CYFR_HOST", ""},
 		{"merged environment alias", map[string]string{"docker-compose.override.yml": "x-env: &env\n  CYFR_PORT: \"4000\"\nservices:\n  cyfr:\n    environment:\n      <<: *env\n"}, "docker-compose.override.yml", "cyfr", "CYFR_PORT", ""},
 		{"nested merges", map[string]string{"docker-compose.override.yml": "x-inner: &inner\n  environment:\n    CYFR_REACH: local\nx-outer: &outer\n  <<: [*inner]\nx-svc: &svc\n  cyfr:\n    <<: *outer\nservices:\n  <<: *svc\n"}, "docker-compose.override.yml", "cyfr", "CYFR_REACH", ""},
@@ -180,9 +198,9 @@ func TestCheckStackReadsTheSourcesProvenance(t *testing.T) {
 			writeFile(t, h.e.envPath(), []byte(h.env()+"HOSTKEY=CYFR_HOST\n"))
 			err := h.e.CheckStack(bg)
 			switch {
-			case c.files == nil:
+			case c.file == "" && c.plain == "":
 				if err != nil {
-					t.Fatalf("the shipped stack is refused: %v", err)
+					t.Fatalf("CheckStack refused it: %v", err)
 				}
 				return
 			case c.plain != "":
@@ -192,11 +210,16 @@ func TestCheckStackReadsTheSourcesProvenance(t *testing.T) {
 				return
 			}
 			want := map[string]string{"file": c.file, "service": c.service, "key": c.key}
+			sentence := overrideSets(c.file, c.service, c.key)
+			if strings.Contains(c.key, "$") {
+				want["why"] = "interpolated"
+				sentence = overrideNames(c.file, c.service, c.key)
+			}
 			var r *Refusal
 			if !asRefusal(err, &r) || r.Code != "compose_override_refused" || !mapsEqual(r.Payload, want) || r.Class != "invalid_argument" {
 				t.Fatalf("CheckStack answered %v, want compose_override_refused %v", err, want)
 			}
-			if got := r.Message(); got != overrideSets(c.file, c.service, c.key) {
+			if got := r.Message(); got != sentence {
 				t.Errorf("the sentence reads %q", got)
 			}
 			before := h.snapshot()
@@ -213,14 +236,6 @@ func TestCheckStackReadsTheSourcesProvenance(t *testing.T) {
 				}
 			}
 		})
-	}
-
-	// A mapping key compose takes literally assigns no reach key.
-	literal := newHome(t)
-	writeFile(t, filepath.Join(literal.dir, "docker-compose.override.yml"), []byte("services:\n  cyfr:\n    environment:\n      ${HOSTKEY}: localhost\n"))
-	writeFile(t, literal.e.envPath(), []byte(literal.env()+"HOSTKEY=CYFR_HOST\n"))
-	if err := literal.e.CheckStack(bg); err != nil {
-		t.Errorf("a literal mapping key is refused: %v", err)
 	}
 
 	h := newHome(t)

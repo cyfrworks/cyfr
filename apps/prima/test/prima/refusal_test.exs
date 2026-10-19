@@ -96,6 +96,14 @@ defmodule Prima.RefusalTest do
       %{file: "docker-compose.override.yml", service: "cyfr", key: "CYFR_HOST"}},
      :invalid_argument,
      "`docker-compose.override.yml` sets `CYFR_HOST` in the `cyfr` service's environment, where it would override how .env says this home is reached. Nothing started. Remove `CYFR_HOST` from `docker-compose.override.yml`; .env alone holds it, and `cyfr reach` writes it."},
+    {{:compose_override_refused,
+      %{
+        file: "docker-compose.override.yml",
+        service: "cyfr",
+        key: "${HOSTKEY}",
+        why: :interpolated
+      }}, :invalid_argument,
+     "`docker-compose.override.yml` names `${HOSTKEY}` in the `cyfr` service's environment, a name with `$` in it, which cyfr cannot check before Docker Compose reads it. Nothing started. Write the name in `docker-compose.override.yml` without `$`."},
     {{:compose_override_refused, %{file: "docker-compose.yml", service: "cyfr"}},
      :invalid_argument,
      "`docker-compose.yml` does not give the `cyfr` service .env through its env_file, so it would not read how this home is reached. Nothing started. Add `env_file: .env` to the `cyfr` service in `docker-compose.yml`, as the shipped docker-compose.yml has it."},
@@ -499,6 +507,8 @@ defmodule Prima.RefusalTest do
             {:reach_busy, %{holder: "x", until: "y"}},
             {:compose_override_refused, %{file: "x"}},
             {:compose_override_refused, %{service: "cyfr", key: "CYFR_HOST"}},
+            {:compose_override_refused, %{file: "x", service: "cyfr", key: "$X", why: :other}},
+            {:compose_override_refused, %{file: "x", service: "cyfr", key: "X", extra: "y"}},
             {:reach_env_edited, %{then: "started"}},
             {:reach_env_edited, %{then: "incoherent", env: "x"}},
             {:reach_env_edited, %{then: "other", env: "x"}},
