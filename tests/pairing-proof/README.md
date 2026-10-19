@@ -17,6 +17,8 @@ context with a mobile viewport. `proof.mjs` drives both in one Chromium,
 and drives the glass's steps once more in a third context, the phone's
 session at the proposed handheld's 720×720 touch viewport
 (`tests/browser/handheld.mjs`).
+`run.sh` builds the `cyfr` command line into the output directory's
+`bin/` (removed when the run ends), where the `command_line` step runs it.
 It asks `run.sh` for the home's part of a step through its output directory
 (`ask-N.json`, answered `answer-N.json`): beginning and completing the
 phone's passkey registration through the console's adapter under the
@@ -44,6 +46,7 @@ at the first row a later one rests on.
 | `glass` | the phone, the browser that showed the code, opens the desktop's link (`invitation_url`, the same link `cyfr pair <code>` prints) and becomes the glass with the key it made: the code leaves the address, the device channel stands under the certificate the pairing answered, and that certificate's key digest is the code the phone showed |
 | `confirm` | the desktop asks for a credential entry on its vault page, for the first provider its form offers; the glass shows the home's preview (the change, the entry's name) and the asker before any proof, never the typed value, confirms with the passkey and draws its outcome, confirmed, and the desktop completes the entry |
 | `fresh` | a second entry: the first assertion replayed for its record is refused, and the desktop's session asking again alone leaves it waiting with nothing made; the glass's fresh assertion confirms it and the desktop completes it |
+| `command_line` | the real `cyfr` binary, which `run.sh` builds and the proof runs beside the browsers, reaching the home through the same proxy and trusting the run's authority, runs `cyfr login`: the desktop opens the link it printed, the link leaves the address and the page shows the code it printed; approved there, the glass shows the record (`session.cli_approve`, the code among its preview) and confirms with the passkey; the binary exits 0 saying who signed in, `cyfr whoami` names the person, the desktop's Devices lists the command line, and once revoked there its session opens nothing |
 | `intent` | the device-intent measurement: one discrete intent, `confirmation.pending`, admitted by the gate and dispatched over the device channel, 100 in a row, each timed in the glass's own page from the frame it sends to the answer naming its id |
 | `sleep` | the glass sleeps past its certificate's expiry (it sends nothing and hears nothing until it wakes) while the desktop asks for a third entry: the home revokes the glass's stream and closes the channel `4408` at the expiry; awake, the glass's first frame on its next connection is `renew`, it sends no intent before its standing, its stream is granted anew, and the third request is shown; its expired certificate, presented with a proof of its key on a connection of its own, is refused `4408` |
 | `revoke` | the desktop revokes the glass under Devices, confirmed on the glass with the passkey: the home revokes its stream and then the client and closes the channel `4403`, the desktop's list no longer names it, the glass forgets its key and certificate, and its last certificate, presented with a proof of its key, is refused `4403` |

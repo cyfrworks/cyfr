@@ -1,6 +1,6 @@
 # Devices and Fresh Confirmation
 
-How a person pairs a phone or another browser with a home, how that device stays connected, and how a sensitive change is confirmed from any device of theirs. A paired device is called a glass: it shows the home's pages and prompts and holds a key of its own; it holds no store, vault or person key.
+How a person pairs a phone or another browser with a home, how that device stays connected, how a command line is signed in by their approval, and how a sensitive change is confirmed from any device of theirs. A paired device is called a glass: it shows the home's pages and prompts and holds a key of its own; it holds no store, vault or person key.
 
 ---
 
@@ -54,9 +54,28 @@ Revocation erases nothing already shown on the device. Until revocation or expir
 
 ---
 
+## Signing In a Command Line
+
+`cyfr login` signs the command line in by your approval in Prism.
+
+1. The command line asks this home for a sign-in, prints a link, `https://<home>/cli#code=<secret>`, and a code of eight characters, and waits. The secret is in the link's fragment, which a browser never sends to a server; the `/cli` page reads it and removes it from the address at once.
+2. Open the link in a browser signed in to this home, on the same machine or another device. Prism asks you to approve the command line on the machine it names and shows the code. Approve only if it is the code your terminal shows: a link someone else sent you shows theirs.
+3. Approving issues a session that outlives the one you approve from, so it is a sensitive change (above), confirmed with your passkey, a fresh sign-in or on a device you paired, and its preview names the machine and the code again.
+4. The command line receives its own session, saves it under the context it used (`--context`, or the current one), and says who signed in. It acts as you, in the athanor you had open, until you revoke it or `session_ttl_hours` after it signed in (30 days by default).
+
+The link signs in once and lives five minutes. A link already used, expired, or one the command line stopped waiting for is refused with that reason: run `cyfr login` again. Not signed in to Prism, you are sent to sign in first; then open the link again, while the command line still waits. Ctrl-C, or the link's expiry, withdraws the sign-in, so an approval after that signs nothing in and one that landed first is ended. A command line killed outright leaves its sign-in to expire, and a session an approval gave it meanwhile is held by no one: revoke it under **Devices**.
+
+**Devices** lists every command line signed in as you, by the machine it named and when it signed in, `cyfr login --provider` sign-ins included. Revoking one needs only your session and ends it; `cyfr logout` ends the command line's own. A request a command line asks you to confirm names it as the command line on its machine.
+
+On a machine where no one can approve it in Prism, `cyfr login --provider github` (or `google`) signs in with the provider's device flow instead.
+
+`cyfr open` opens this home's address in your browser and nothing more. No session travels from the command line to a browser: a link that signed a browser in would be your session in the hands of whoever held it. Sign in there as you always do.
+
+---
+
 ## Fresh Confirmation
 
-Using what was granted, making a grant and answering an agent's approval need only your session. A short list of sensitive changes needs a fresh confirmation every time, for every person: entering or rotating a credential, widening where a credential may go or what a component may read of it (narrowing needs only your session), issuing or rotating a credential that outlives the session (an API key, a webhook secret or a registry push token), pairing a device, revoking one, recovery material, rotating your live key, a remote sign-in assertion, linking or unlinking a door, registering or removing a passkey, and changing your seal.
+Using what was granted, making a grant and answering an agent's approval need only your session. A short list of sensitive changes needs a fresh confirmation every time, for every person: entering or rotating a credential, widening where a credential may go or what a component may read of it (narrowing needs only your session), issuing or rotating a credential that outlives the session (an API key, a webhook secret, a registry push token or a command line's session), pairing a device, revoking one, recovery material, rotating your live key, a remote sign-in assertion, linking or unlinking a door, registering or removing a passkey, and changing your seal.
 
 Asking for one opens a pending confirmation of that exact change, shown with a preview the home stores: the change, what it concerns, the athanor and the home. It lives `confirmation_seconds` (five minutes by default). The client that asked holds a secret for it that no other client sees, and only that client completes the change; every other client names the request by its public ref.
 

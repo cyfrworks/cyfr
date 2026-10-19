@@ -158,7 +158,7 @@ Every prompt the system layer draws, the layer above every app's frame, begins w
 
 You choose it from the home's fixed list of words, as one word or a pair the home draws for you, and a glyph from its set if you want one; nothing you type becomes a seal. Until you choose one, every prompt says that no seal is chosen yet, never shows one in its place. Each home keeps its own seal for you, so a new home asks again.
 
-Your home keeps the seal apart from your account. Only the system layer of your own signed-in browser or paired device reads it: it is never in an app's frame or its data, an operation's answer, a model's context or a log, and the command line never prints it. When the command line needs you to confirm something, it tells you to confirm on your screen. Changing your seal is a sensitive change, confirmed with a fresh proof (`devices-guide.md`).
+Your home keeps the seal apart from your account. Only the system layer of your own signed-in browser or paired device reads it: it is never in an app's frame or its data, an operation's answer, a model's context or a log, and the command line never prints it. When the command line needs you to confirm something, it tells you to confirm on your screen, where the request names it as the command line on its machine. Changing your seal is a sensitive change, confirmed with a fresh proof (`devices-guide.md`).
 
 ---
 

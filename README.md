@@ -71,7 +71,11 @@ cyfr init
 # Start the server
 cyfr up
 
-# Authenticate
+# Open Prism, your athanor's chat, and sign in there
+cyfr open
+
+# Sign this command line in: approve it in Prism
+# (cyfr login --provider github signs in without Prism)
 cyfr login
 
 # Scan bundled components and auto-pull their dependencies
@@ -83,9 +87,6 @@ cyfr profile grant c:moonmoon69.claude
 
 # Learn more about other commands
 cyfr -h
-
-# Open Prism — your athanor's chat
-open http://localhost:4000
 ```
 
 `cyfr init` downloads your project files and pulls the server images: `docker-compose.yml`, `Caddyfile`, `keeper.seccomp.json` (the `locus-runtime` service's seccomp profile), `.env.example` and the services' own env examples, `cyfr.yaml`, WIT interface definitions, the `aqua/` soul, roles and scrolls, and the included guides ([configuration-guide.md](configuration-guide.md), [integration-guide.md](integration-guide.md), [component-guide.md](component-guide.md), [tincture-guide.md](tincture-guide.md), [identity-guide.md](identity-guide.md), [devices-guide.md](devices-guide.md)). It writes `.env` from `.env.example`, asking first how the home is reached (your devices via Tailscale, a public domain via Caddy, or this computer only) and then the operator's sign-in email (the first platform admin), and mints the stack's keys into it: `CYFR_SECRET_KEY_BASE`, `CYFR_LOCUS_BACKENDS_KEY`, the runtime root `CYFR_LOCUS_RUNTIME_ROOT` with the `LOCUS_RUNTIME_KEY` derived from it, and `CYFR_LOCUS_BUILDS_KEY` beside `CYFR_LOCUS_BUILDS_URL`, so builds are on. Pass `--no-interactive` to take the defaults. It does not install Docker itself. The scaffolded `docker-compose.yml` is the full self-hosted stack — `cyfr` (the one endpoint on `:4000`: Prism, API, MCP, tinctures), `locus-runtime` (the runtime that runs components), `locus-builds` (the builds service behind `cyfr build compile`), `locus-backends` (the backends service that runs stdio MCP servers), and the proxy of a home reached from other devices: `tailscale` (Tailscale Serve, for a tailnet home) or `caddy` (TLS and the reverse proxy at `:80`/`:443`, for a public home); `cyfr up` brings up the first four, and the proxy the home's access mode selects. See [Deploy to a Server](#deploy-to-a-server) for the same stack on a VPS.
@@ -983,8 +984,9 @@ Commands marked with `[i]` support interactive selection when run without argume
 
 | Command | Description |
 |---------|-------------|
-| `cyfr login` | Authenticate via Device Flow |
-| `cyfr logout` | End current session |
+| `cyfr login` | Sign this command line in by approving it in Prism: prints a link and a code to check against Prism's, and waits; the session is saved under the context used (`--context` or the current one, a `--url` that is not its address refused) and listed under Devices in Prism, where it is revoked; `--provider github\|google` signs in with the provider's device flow instead (see [devices-guide.md](devices-guide.md)) |
+| `cyfr logout` | End the context's session |
+| `cyfr open` | Open the home's address in your browser; no session travels with it |
 | `cyfr whoami` | Show current identity |
 | `cyfr status` | Check system health (includes CLI version) |
 | `cyfr athanor list/get/use/create/rename/settings/provision/archive/unarchive` | Your athanors, your own and your groups: list and show them, point this session at one, create, rename or archive a group, merge settings, retry a provisioning that failed |

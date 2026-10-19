@@ -268,6 +268,12 @@ const (
 	ScheduleReResolve               = "re_resolve"
 	ScheduleResume                  = "resume"
 	ScheduleUpdate                  = "update"
+	SessionCliApprove               = "cli_approve"
+	SessionCliBegin                 = "cli_begin"
+	SessionCliCancel                = "cli_cancel"
+	SessionCliList                  = "cli_list"
+	SessionCliPoll                  = "cli_poll"
+	SessionCliRevoke                = "cli_revoke"
 	SessionDeviceInit               = "device_init"
 	SessionDevicePoll               = "device_poll"
 	SessionLogin                    = "login"
@@ -354,7 +360,7 @@ var Actions = map[string][]string{
 	"resource":            {"read"},
 	"retention":           {"cleanup", "get", "set"},
 	"schedule":            {"create", "delete", "get", "list", "pause", "re_resolve", "resume", "update"},
-	"session":             {"device_init", "device_poll", "login", "logout", "read_resource", "use", "whoami"},
+	"session":             {"cli_approve", "cli_begin", "cli_cancel", "cli_list", "cli_poll", "cli_revoke", "device_init", "device_poll", "login", "logout", "read_resource", "use", "whoami"},
 	"settings":            {"list", "reset", "set"},
 	"system":              {"notify", "status"},
 	"thread":              {"aloud", "approve", "attach", "create", "decline", "delete", "discard", "events", "follow", "get", "list", "messages", "restart_for_consent", "revoke_grant", "send", "stop", "unfollow"},
@@ -4884,6 +4890,94 @@ func (args ScheduleUpdateArgs) MarshalJSON() ([]byte, error) {
 	}{Action: ScheduleUpdate, fields: fields(args)})
 }
 
+// SessionCliApproveArgs carries arguments for session.cli_approve.
+type SessionCliApproveArgs struct {
+	// cli_approve: the secret the command line's link carries in its fragment
+	ApprovalSecret string `json:"approval_secret"`
+}
+
+// MarshalJSON supplies the operation's fixed action discriminator.
+func (args SessionCliApproveArgs) MarshalJSON() ([]byte, error) {
+	type fields SessionCliApproveArgs
+	return json.Marshal(struct {
+		Action string `json:"action"`
+		fields
+	}{Action: SessionCliApprove, fields: fields(args)})
+}
+
+// SessionCliBeginArgs carries arguments for session.cli_begin.
+type SessionCliBeginArgs struct {
+	// cli_begin: the command line's host name, which Prism names when it asks to approve it
+	Machine string `json:"machine"`
+}
+
+// MarshalJSON supplies the operation's fixed action discriminator.
+func (args SessionCliBeginArgs) MarshalJSON() ([]byte, error) {
+	type fields SessionCliBeginArgs
+	return json.Marshal(struct {
+		Action string `json:"action"`
+		fields
+	}{Action: SessionCliBegin, fields: fields(args)})
+}
+
+// SessionCliCancelArgs carries arguments for session.cli_cancel.
+type SessionCliCancelArgs struct {
+	// cli_cancel: the session token cli_begin answered, which the command line holds
+	SessionToken string `json:"session_token"`
+}
+
+// MarshalJSON supplies the operation's fixed action discriminator.
+func (args SessionCliCancelArgs) MarshalJSON() ([]byte, error) {
+	type fields SessionCliCancelArgs
+	return json.Marshal(struct {
+		Action string `json:"action"`
+		fields
+	}{Action: SessionCliCancel, fields: fields(args)})
+}
+
+// SessionCliListArgs carries arguments for session.cli_list.
+type SessionCliListArgs struct {
+}
+
+// MarshalJSON supplies the operation's fixed action discriminator.
+func (args SessionCliListArgs) MarshalJSON() ([]byte, error) {
+	type fields SessionCliListArgs
+	return json.Marshal(struct {
+		Action string `json:"action"`
+		fields
+	}{Action: SessionCliList, fields: fields(args)})
+}
+
+// SessionCliPollArgs carries arguments for session.cli_poll.
+type SessionCliPollArgs struct {
+	// cli_poll: the session token cli_begin answered, which the command line holds
+	SessionToken string `json:"session_token"`
+}
+
+// MarshalJSON supplies the operation's fixed action discriminator.
+func (args SessionCliPollArgs) MarshalJSON() ([]byte, error) {
+	type fields SessionCliPollArgs
+	return json.Marshal(struct {
+		Action string `json:"action"`
+		fields
+	}{Action: SessionCliPoll, fields: fields(args)})
+}
+
+// SessionCliRevokeArgs carries arguments for session.cli_revoke.
+type SessionCliRevokeArgs struct {
+	// cli_revoke: the command-line session (ses_…), as cli_list names it
+	SessionId string `json:"session_id"`
+}
+
+// MarshalJSON supplies the operation's fixed action discriminator.
+func (args SessionCliRevokeArgs) MarshalJSON() ([]byte, error) {
+	type fields SessionCliRevokeArgs
+	return json.Marshal(struct {
+		Action string `json:"action"`
+		fields
+	}{Action: SessionCliRevoke, fields: fields(args)})
+}
+
 // SessionDeviceInitArgs carries arguments for session.device_init.
 type SessionDeviceInitArgs struct {
 	// OAuth provider for device flow
@@ -4903,6 +4997,8 @@ func (args SessionDeviceInitArgs) MarshalJSON() ([]byte, error) {
 type SessionDevicePollArgs struct {
 	// Device code from device_init (for device_poll action)
 	DeviceCode string `json:"device_code"`
+	// device_poll: the command line's host name, which its session is listed by in Prism
+	Machine Field[string] `json:"machine,omitzero"`
 	// OAuth provider for device flow
 	Provider Field[string] `json:"provider,omitzero"`
 }
