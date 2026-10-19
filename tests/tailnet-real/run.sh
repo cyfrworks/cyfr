@@ -1,0 +1,321 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 CYFR Works Inc.
+#
+# The real-tailnet run, by hand: the tailscale image docker-compose.yml
+# pins, enrolled in a real tailnet, holds what CYFR relies on it for and
+# what the Compose proof's stand-in (tests/compose-proof/tailscale-standin/)
+# only reproduces. A pass writes that image's exact reference, tag and
+# digest, into tests/tailnet-real/verified-image, which the CI guard
+# (guard.sh) holds docker-compose.yml to; this run is reported apart from
+# CI and never runs there.
+#
+# What it needs, none of it committed:
+#   TAILNET_REAL_AUTH_KEY_FILE  a file holding a reusable, ephemeral auth key
+#                               of the tailnet (so every node the run makes
+#                               leaves the tailnet when it goes), for a
+#                               tailnet with MagicDNS and HTTPS certificates
+#                               on. The key reaches each node on its
+#                               standard input alone, as the reach engine
+#                               passes one, and is printed nowhere.
+#   TAILNET_REAL_SHARED_LOGIN   the login of another account the run's
+#                               machine is shared with during the run: the
+#                               run waits, telling the operator what to do,
+#                               for a request from that account through
+#                               Serve.
+#
+# The run, against a stand-in upstream answering as cyfr (the stand-in's
+# echo) and a second node of the same key as the tailnet's device, through
+# that node's userspace HTTP proxy:
+#
+#   enrollment  the machine joins with the key: Running, its DNSName in the
+#               tailnet's MagicDNS suffix (with the trailing dot), its node
+#               id within CYFR's grammar (1 to 128 of [A-Za-z0-9._-]), its
+#               name its certificate domain; the device reaches
+#               https://<name>/ with the certificate a public authority
+#               issued for the name
+#   serve       under `{}` nothing answers on 443; under the engine's
+#               configuration the upstream gets the client's Host, the
+#               device's tailnet address as X-Forwarded-For, https as
+#               X-Forwarded-Proto, the name as X-Forwarded-Host, no
+#               Forwarded, and none of the device's forged forwarding or
+#               identity headers; back to `{}` Serve closes; and the
+#               container started again with no serve file serves nothing
+#               of what the state held
+#   load        userspace networking under load: every one of 200 requests
+#               through Serve, eight at a time, answers 200
+#   node id     the id is the same across a restart of the container on the
+#               same state, and another after the machine leaves and joins
+#               again
+#   sharing     a request from TAILNET_REAL_SHARED_LOGIN's account reaches the
+#               upstream through Serve, with that account's identity headers
+#   rejoin      `tailscale logout` leaves the tailnet (NeedsLogin), and the
+#               key joins it again as a new node, which Serve serves once its
+#               configuration names it
+#
+# Usage: TAILNET_REAL_AUTH_KEY_FILE=… TAILNET_REAL_SHARED_LOGIN=… tests/tailnet-real/run.sh
+# Needs docker with a daemon that reaches the internet, go and python3.
+# Everything it makes is named for the run and removed when it ends, its
+# nodes logged out first.
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
+RUN="cyfr-tailnet-real-$$-$(od -An -N4 -tx1 /dev/urandom | tr -d ' \n')"
+WORK="$(mktemp -d "${TMPDIR:-/tmp}/cyfr-tailnet-real-XXXXXX")"
+STANDIN="cyfr-tailscale-standin:$RUN"
+UPSTREAM_PORT=4123
+LOAD_REQUESTS=200
+LOAD_PARALLEL=8
+SHARING_WAIT=600
+JOIN_ENV=(-e TS_USERSPACE=true -e TS_STATE_DIR=/var/lib/tailscale -e TS_AUTH_ONCE=true
+  -e TS_ACCEPT_DNS=false -e TS_SOCKET=/var/run/tailscale/tailscaled.sock)
+
+step() { printf '\n=== %s\n' "$*"; }
+ok() { printf 'ok    %s\n' "$*"; }
+fail() {
+  echo "::error::$*" >&2
+  exit 1
+}
+
+key_file="${TAILNET_REAL_AUTH_KEY_FILE:-}"
+shared_login="${TAILNET_REAL_SHARED_LOGIN:-}"
+[ -n "$key_file" ] && [ -r "$key_file" ] && [ -s "$key_file" ] ||
+  fail "TAILNET_REAL_AUTH_KEY_FILE names no readable auth key file: the run needs a reusable, ephemeral key of a real tailnet"
+[ -n "$shared_login" ] || fail "TAILNET_REAL_SHARED_LOGIN names no account to share the machine with: sharing is one of the run's checks"
+if ! command -v docker >/dev/null || ! docker info >/dev/null 2>&1; then fail "no Docker daemon this user can reach"; fi
+
+# The tailscale service's image, as docker-compose.yml names it.
+IMAGE="$(awk '
+  /^  tailscale:[[:space:]]*$/ { in_service = 1; next }
+  in_service && /^  [^ #]/ { exit }
+  in_service && /^    image:/ { sub(/^    image:[[:space:]]*/, ""); print; exit }
+' "$ROOT/docker-compose.yml")"
+[[ "$IMAGE" =~ ^[a-z0-9./_-]+:[A-Za-z0-9._-]+@sha256:[0-9a-f]{64}$ ]] ||
+  fail "docker-compose.yml's tailscale image '$IMAGE' is not a reference by tag and digest"
+
+NODES=()
+cleanup() {
+  local code=$? node ids
+  for node in ${NODES[@]+"${NODES[@]}"}; do
+    docker exec "$node" tailscale logout >/dev/null 2>&1 || true
+  done
+  ids="$(docker ps -aq --filter "name=^$RUN-" 2>/dev/null || true)"
+  # shellcheck disable=SC2086
+  [ -z "$ids" ] || docker rm -f -v $ids >/dev/null 2>&1 || true
+  docker network rm "$RUN-net" >/dev/null 2>&1 || true
+  ids="$(docker volume ls -q --filter "name=^$RUN-" 2>/dev/null || true)"
+  # shellcheck disable=SC2086
+  [ -z "$ids" ] || docker volume rm -f $ids >/dev/null 2>&1 || true
+  docker image rm -f "$STANDIN" >/dev/null 2>&1 || true
+  rm -rf "$WORK"
+  exit "$code"
+}
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
+jget() {
+  printf '%s' "$1" | python3 -I -c '
+import json, sys
+value = json.load(sys.stdin)
+for step in sys.argv[1:]:
+    if isinstance(value, list):
+        value = value[int(step)] if -len(value) <= int(step) < len(value) else None
+    else:
+        value = value.get(step) if isinstance(value, dict) else None
+print(value if isinstance(value, str) else json.dumps(value))' "${@:2}"
+}
+
+# `tailscale status --json` of container `$1` once BackendState is `$2`,
+# within `$3` seconds.
+await_state() {
+  local closes=$((SECONDS + $3)) out=""
+  while [ "$SECONDS" -lt "$closes" ]; do
+    out="$(docker exec "$1" tailscale status --json 2>/dev/null || true)"
+    if [ -n "$out" ] && [ "$(jget "$out" BackendState)" = "$2" ]; then
+      printf '%s\n' "$out"
+      return 0
+    fi
+    sleep 1
+  done
+  fail "$1 is not $2 within $3 s: ${out:-no status}"
+}
+
+# A node: container `$RUN-$1` of the pinned image on the run's network,
+# its state on the volume `$RUN-$2`, joining with the key on its standard
+# input as the reach engine passes one, and `$3...` further `docker run`
+# arguments. Its client stays attached in the background, its output in
+# `$WORK/$1.log`, until the run removes the container.
+node() {
+  local name="$RUN-$1" volume="$RUN-$2" log="$WORK/$1.log" closes=$((SECONDS + 60))
+  shift 2
+  docker run -i --name "$name" --network "$RUN-net" -v "$volume:/var/lib/tailscale" "${JOIN_ENV[@]}" "$@" "$IMAGE" \
+    sh -c 'IFS= read -r TS_AUTHKEY && export TS_AUTHKEY && exec containerboot' <"$key_file" >"$log" 2>&1 &
+  NODES+=("$name")
+  until [ "$(docker inspect -f '{{.State.Running}}' "$name" 2>/dev/null)" = true ]; do
+    [ "$SECONDS" -lt "$closes" ] || fail "the node $name did not start: $(tail -n 5 "$log")"
+    sleep 1
+  done
+}
+
+# No answer from https://`$1`/ through the device, at each of five asks two
+# seconds apart: what a configuration Serve must not apply leaves.
+serves_nothing() {
+  local i answer
+  for i in 1 2 3 4 5; do
+    answer="$(device "https://$1/")"
+    [ -n "$(jget "$answer" error)" ] && [ "$(jget "$answer" error)" != null ] || return 1
+    [ "$i" -eq 5 ] || sleep 2
+  done
+}
+
+serve_file() {
+  printf '%s' "$2" >"$1.tmp"
+  mv "$1.tmp" "$1"
+}
+
+# A request from the tailnet's device: `standin fetch` through its
+# userspace HTTP proxy, trusting the system's public authorities, with
+# `$@`.
+device() {
+  docker run --rm --network "$RUN-net" "$STANDIN" standin fetch --proxy "http://$RUN-device:1055" "$@" || true
+}
+
+step "the pinned image, the stand-in's echo and the run's network"
+docker pull -q "$IMAGE" >/dev/null || fail "the pinned image $IMAGE could not be pulled"
+"$ROOT/tests/compose-proof/tailscale-standin/build.sh" image "$STANDIN"
+docker network create "$RUN-net" >/dev/null
+docker run -d --name "$RUN-upstream" --network "$RUN-net" --network-alias cyfr "$STANDIN" \
+  standin echo --listen ":$UPSTREAM_PORT" >/dev/null
+mkdir -p "$WORK/serve"
+serve_file "$WORK/serve/serve.json" '{}'
+# The engine's serve configuration, on the echo's port; ${TS_CERT_DOMAIN}
+# is containerboot's to replace.
+# shellcheck disable=SC2016
+CONFIG='{"TCP":{"443":{"HTTPS":true}},"Web":{"${TS_CERT_DOMAIN}:443":{"Handlers":{"/":{"Proxy":"http://cyfr:'"$UPSTREAM_PORT"'"}}}}}'
+ok "$IMAGE, the echo answering as cyfr:$UPSTREAM_PORT"
+
+step "enrollment: the machine joins with the key, and the device beside it"
+host="cyfr-verify-$(od -An -N3 -tx1 /dev/urandom | tr -d ' \n')"
+node machine machine-state -e "TS_HOSTNAME=$host" -e TS_SERVE_CONFIG=/serve/serve.json -v "$WORK/serve:/serve:ro"
+node device device-state -e "TS_HOSTNAME=$host-device" -e TS_OUTBOUND_HTTP_PROXY_LISTEN=0.0.0.0:1055
+status="$(await_state "$RUN-machine" Running 180)"
+device_status="$(await_state "$RUN-device" Running 180)"
+name="$(jget "$status" Self DNSName)"
+id="$(jget "$status" Self ID)"
+suffix="$(jget "$status" CurrentTailnet MagicDNSSuffix)"
+[[ "$name" == *".$suffix." ]] && [[ "$suffix" == *.ts.net ]] || fail "the machine's DNSName '$name' is not in the tailnet's MagicDNS suffix '$suffix' with the dot"
+name="${name%.}"
+[[ "$id" =~ ^[A-Za-z0-9._-]{1,128}$ ]] || fail "the machine's node id '$id' is outside CYFR's grammar"
+[ "$(jget "$status" CertDomains 0)" = "$name" ] || fail "the machine's certificate domains are $(jget "$status" CertDomains), not $name: HTTPS certificates must be on for the tailnet"
+device_ip="$(jget "$device_status" Self TailscaleIPs 0)"
+ok "the machine is $name ($id), its certificate domain its name; the device is $device_ip"
+
+step "serve: nothing under {}, the engine's configuration forwards as Serve does"
+serves_nothing "$name" || fail "under {}, Serve answers https://$name/"
+ok "under {}, nothing answers https://$name/"
+serve_file "$WORK/serve/serve.json" "$CONFIG"
+closes=$((SECONDS + 120))
+until [ "$(jget "$(device "https://$name/probe")" status)" = 200 ]; do
+  [ "$SECONDS" -lt "$closes" ] || fail "under the configuration, https://$name/ did not answer 200 within 120 s"
+  sleep 2
+done
+answer="$(device --header "X-Forwarded-For: 203.0.113.9" --header "X-Forwarded-Proto: http" \
+  --header "X-Forwarded-Host: evil.example" --header "Forwarded: for=198.51.100.1" \
+  --header "Tailscale-User-Login: admin@evil.example" --header "Tailscale-User-Name: Forged" \
+  "https://$name/probe?q=1")"
+seen="$(jget "$answer" body)"
+[ "$(jget "$seen" host)" = "$name" ] || fail "Host reached the upstream as $(jget "$seen" host), not $name"
+[ "$(jget "$seen" headers X-Forwarded-For)" = "[\"$device_ip\"]" ] || fail "X-Forwarded-For reached the upstream as $(jget "$seen" headers X-Forwarded-For), not the device's $device_ip alone"
+[ "$(jget "$seen" headers X-Forwarded-Proto)" = '["https"]' ] || fail "X-Forwarded-Proto reached the upstream as $(jget "$seen" headers X-Forwarded-Proto)"
+[ "$(jget "$seen" headers X-Forwarded-Host)" = "[\"$name\"]" ] || fail "X-Forwarded-Host reached the upstream as $(jget "$seen" headers X-Forwarded-Host)"
+[ "$(jget "$seen" headers Forwarded)" = null ] || fail "the device's Forwarded reached the upstream"
+login="$(jget "$seen" headers Tailscale-User-Login 0)"
+[ "$login" != admin@evil.example ] || fail "the device's forged Tailscale-User-Login reached the upstream"
+[ "$(jget "$seen" headers Tailscale-User-Name 0)" != Forged ] || fail "the device's forged Tailscale-User-Name reached the upstream"
+ok "Serve keeps Host, sets X-Forwarded-For to $device_ip, -Proto and -Host, drops Forwarded, and passes no forged identity (it set: ${login:-none, a tagged device})"
+serve_file "$WORK/serve/serve.json" '{}'
+closes=$((SECONDS + 60))
+until [ -n "$(jget "$(device "https://$name/")" error | grep -v '^null$' || true)" ]; do
+  [ "$SECONDS" -lt "$closes" ] || fail "after {}, https://$name/ still answers"
+  sleep 2
+done
+ok "{} closes Serve"
+
+step "node id: the same across a restart; no serve file serves nothing the state held"
+serve_file "$WORK/serve/serve.json" "$CONFIG"
+closes=$((SECONDS + 120))
+until [ "$(jget "$(device "https://$name/")" status)" = 200 ]; do
+  [ "$SECONDS" -lt "$closes" ] || fail "the configuration did not serve again within 120 s"
+  sleep 2
+done
+docker rm -f "$RUN-machine" >/dev/null
+rm -f "$WORK/serve/serve.json"
+docker run -d --name "$RUN-machine" --network "$RUN-net" -v "$RUN-machine-state:/var/lib/tailscale" \
+  -v "$WORK/serve:/serve:ro" "${JOIN_ENV[@]}" -e TS_SERVE_CONFIG=/serve/serve.json "$IMAGE" >/dev/null
+status="$(await_state "$RUN-machine" Running 180)"
+[ "$(jget "$status" Self ID)" = "$id" ] || fail "the restarted machine is $(jget "$status" Self ID), not $id"
+serves_nothing "$name" || fail "started again with no serve file, the configuration the state held answers"
+ok "the restarted machine keeps its id $id, and with no serve file serves nothing"
+
+step "load: $LOAD_REQUESTS requests through Serve, $LOAD_PARALLEL at a time"
+serve_file "$WORK/serve/serve.json" "$CONFIG"
+closes=$((SECONDS + 120))
+until [ "$(jget "$(device "https://$name/")" status)" = 200 ]; do
+  [ "$SECONDS" -lt "$closes" ] || fail "the configuration did not serve again within 120 s"
+  sleep 2
+done
+docker run --rm --network "$RUN-net" --entrypoint sh "$STANDIN" -c '
+  n=0 failed=0
+  while [ "$n" -lt "$1" ]; do
+    i=0
+    while [ "$i" -lt "$2" ]; do
+      standin fetch --proxy "$3" "$4" | grep -q "\"status\":200" || echo fail &
+      i=$((i + 1))
+    done
+    wait
+    n=$((n + $2))
+  done' sh "$LOAD_REQUESTS" "$LOAD_PARALLEL" "http://$RUN-device:1055" "https://$name/load" >"$WORK/load.out"
+[ ! -s "$WORK/load.out" ] || fail "$(grep -c fail "$WORK/load.out") of $LOAD_REQUESTS requests through Serve did not answer 200"
+ok "$LOAD_REQUESTS of $LOAD_REQUESTS answered 200"
+
+step "sharing: a request from $shared_login through Serve"
+echo "Share $name with $shared_login on the Machines page of the admin console, then open https://$name/shared from a device of that account. Waiting up to $SHARING_WAIT s."
+closes=$((SECONDS + SHARING_WAIT))
+until docker logs "$RUN-upstream" 2>&1 | python3 -I -c '
+import json, sys
+login = sys.argv[1]
+for line in sys.stdin:
+    try:
+        seen = json.loads(line)
+    except ValueError:
+        continue
+    if seen.get("path") == "/shared" and seen.get("headers", {}).get("Tailscale-User-Login") == [login]:
+        sys.exit(0)
+sys.exit(1)' "$shared_login"; do
+  [ "$SECONDS" -lt "$closes" ] || fail "no request from $shared_login reached https://$name/shared within $SHARING_WAIT s"
+  sleep 5
+done
+ok "a request from $shared_login reached the upstream through Serve, as $shared_login"
+
+step "rejoin: the machine leaves the tailnet and joins again as a new node"
+docker exec "$RUN-machine" tailscale logout >/dev/null || fail "tailscale logout failed"
+await_state "$RUN-machine" NeedsLogin 120 >/dev/null
+docker rm -f "$RUN-machine" >/dev/null
+node machine2 machine2-state -e "TS_HOSTNAME=$host" -e TS_SERVE_CONFIG=/serve/serve.json -v "$WORK/serve:/serve:ro"
+status="$(await_state "$RUN-machine2" Running 180)"
+id2="$(jget "$status" Self ID)"
+name2="$(jget "$status" Self DNSName)"
+name2="${name2%.}"
+[ "$id2" != "$id" ] || fail "the machine joined again as the same node, $id"
+[[ "$id2" =~ ^[A-Za-z0-9._-]{1,128}$ ]] || fail "the new node id '$id2' is outside CYFR's grammar"
+closes=$((SECONDS + 180))
+until [ "$(jget "$(device "https://$name2/")" status)" = 200 ]; do
+  [ "$SECONDS" -lt "$closes" ] || fail "the new node $name2 was not served within 180 s"
+  sleep 2
+done
+ok "after leaving, the machine joined again as $name2 ($id2), and Serve serves it"
+
+step "every check held: $IMAGE is verified"
+printf '%s\n' "$IMAGE" >"$ROOT/tests/tailnet-real/verified-image"
+echo "wrote tests/tailnet-real/verified-image: $IMAGE"
