@@ -133,6 +133,7 @@ This changes how this home is reached:
   Address: https://cyfr.proof.ts.net → https://cyfr-1.proof.ts.net
   Certificate email: none → none
   Ports opened on this machine: none → none
+  Tailnet machine: cyfr.proof.ts.net (nA) → cyfr-1.proof.ts.net (nB)
 The address changes, so:
 $changes
 Your CYFR identity does not change.
@@ -146,6 +147,9 @@ mutate_preview() {
 mutate_preview 's|https://cyfr.proof.ts.net → https://cyfr-1.proof.ts.net|https://cyfr-1.proof.ts.net → https://cyfr.proof.ts.net|' swapped "the transition shown the wrong way"
 mutate_preview 's|  Certificate email: none → none|  Certificate email: none → ops@example.com|' email "another new email shown"
 mutate_preview 's|  Ports opened on this machine: none → none|  Ports opened on this machine: none → 80 and 443|' ports "other new ports shown"
+mutate_preview '/  Tailnet machine:/d' no-machine "the tailnet machine's change not shown"
+mutate_preview 's|(nB)|(nC)|' other-node "another new node id shown"
+mutate_preview 's|cyfr.proof.ts.net (nA)|cyfr.proof.ts.net (nB)|' same-node "the old node shown as the new one"
 mutate_preview 's|Who can reach this home: your devices|Who can reach this home: anyone|' who "another old audience shown"
 mutate_preview '/^  2\. /d' step "an address-change step dropped"
 mutate_preview '/^Your CYFR identity/a\  5. An extra step.' extra "a line added to the preview"

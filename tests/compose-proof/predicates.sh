@@ -103,7 +103,10 @@ PY
 # The preview the command line printed in `$1` (a log, its first line the
 # command) for the switch from head `$2` to head `$3` (JSON): exactly the
 # preview block, each of the four sentences of the words the reach vectors
-# hold for those heads as old → new, and, as the address changes, the
+# hold for those heads as old → new, a line for each change of a head
+# field the four do not show (the tailnet machine, the port on this
+# computer, the builds service; apps/codex/cmd/reach.go unwordedChanges),
+# and, as the address changes, the
 # engine's address-change steps (apps/codex/internal/reach/switch.go
 # addressChanges) and the line on the CYFR identity; then one line, the
 # command's refusal that it made no change.
@@ -128,6 +131,16 @@ for before, after in zip(sentences(old), sentences(new)):
     label, _, was = before.partition(": ")
     _, _, now = after.partition(": ")
     block.append(f"  {label}: {was} → {now}")
+def machine(head):
+    return f"{head['host']} ({head['node_id']})" if head.get("node_id") else "none"
+def builds(head):
+    return head.get("builds_url") or "off"
+if old.get("node_id") != new.get("node_id"):
+    block.append(f"  Tailnet machine: {machine(old)} → {machine(new)}")
+if old["port"] != new["port"]:
+    block.append(f"  Port on this computer: {old['port']} → {new['port']}")
+if old.get("builds_url") != new.get("builds_url"):
+    block.append(f"  Builds service: {builds(old)} → {builds(new)}")
 source = open(switch_go).read()
 listed = re.search(r"var addressChanges = \[\]string\{(.*?)\n\}", source, re.S)
 if not listed:
