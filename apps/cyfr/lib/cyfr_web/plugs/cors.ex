@@ -6,8 +6,8 @@ defmodule CyfrWeb.Plugs.CORS do
   Minimal CORS plug for the Emissary MCP endpoint.
 
   Handles OPTIONS preflight requests and sets CORS headers on all responses.
-  Allowed origins are configurable — wildcard by default, or a restricted
-  list when an explicit allowlist is configured.
+  Allowed origins are configurable — none by default, a list of origins, or
+  the wildcard, which the boot refuses once authentication is configured.
 
   ## Why the header list is derived
 

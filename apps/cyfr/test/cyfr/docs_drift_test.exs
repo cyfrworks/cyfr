@@ -1290,9 +1290,10 @@ defmodule Cyfr.DocsDriftTest do
   # ==========================================================================
 
   # The names `.env.example` assigns: the keys and addresses `cyfr init`
-  # mints, writes or completes, and the reach every deployment decides.
+  # mints, writes or completes, and the reach every deployment decides,
+  # `local` until `cyfr init` or `cyfr reach` writes another.
   @deployment_file_assignments ~w(
-    CYFR_SECRET_KEY_BASE CYFR_PORT CYFR_HOST CYFR_BEHIND_PROXY CADDY_ACME_EMAIL
+    CYFR_SECRET_KEY_BASE CYFR_REACH CYFR_HOST CYFR_PORT
     CYFR_CORS_ALLOWED_ORIGINS CYFR_PRIVATE_EGRESS_TARGETS CYFR_GITHUB_CLIENT_ID
     CYFR_GOOGLE_CLIENT_ID CYFR_LOCUS_RUNTIME_ROOT LOCUS_RUNTIME_KEY CYFR_LOCUS_BACKENDS_KEY
     CYFR_LOCUS_BUILDS_URL CYFR_LOCUS_BUILDS_KEY

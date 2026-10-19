@@ -3,8 +3,8 @@
 
 defmodule Cyfr.RetiredSettingsTest do
   @moduledoc """
-  Settings this server no longer has, and the two it reaches the builds
-  service by.
+  Settings this server no longer has, the spellings the reach mode
+  retired, and the two settings it reaches the builds service by.
 
   What every application key means is the configuration schema's, and the
   schema is a row of `Cyfr.Boundaries` — read by `Cyfr.BoundariesTest`,
@@ -102,6 +102,97 @@ defmodule Cyfr.RetiredSettingsTest do
            (Locus.Config), and this server by CYFR_LOCUS_BUILDS_URL and
            CYFR_LOCUS_BUILDS_KEY alone.
            """
+  end
+
+  # ==========================================================================
+  # The reach's retirements
+  # ==========================================================================
+
+  # How the home is reached replaced three spellings with no compatibility:
+  # the proxy switch, whose trust is now the proxy listener's; the compose
+  # profile `tls`, now `public`; and the update's lock file, now the reach
+  # engine's kernel lock on `.cyfr/lock`. A tracked file that still names
+  # one documents, tests or reads a setting no part of the product has. The
+  # names are spelled split here so this file is not itself a hit.
+  @retired_reach [
+    {"the proxy switch", ~r/CYFR_BEHIND#{"_"}PROXY/},
+    {"the tls profile", ~r/--profile #{"tls"}\b/},
+    {"the update's lock file", ~r/\.cyfr-update#{"\\."}lock/}
+  ]
+
+  # Every tracked file of the repository, each line that matches `pattern`,
+  # as `path:line`. A file that holds a NUL byte is binary and not read.
+  defp tracked_hits(pattern, files \\ tracked_files()) do
+    for rel <- files,
+        path = Path.expand(rel, root()),
+        File.regular?(path),
+        text = File.read!(path),
+        not String.contains?(text, <<0>>),
+        {line, n} <- text |> String.split("\n") |> Enum.with_index(1),
+        line =~ pattern,
+        do: "#{rel}:#{n}"
+  end
+
+  # This checkout's index, whichever repository the caller's environment
+  # names.
+  defp tracked_files do
+    {listing, 0} =
+      System.cmd("git", ["ls-files", "-z"],
+        cd: root(),
+        env: [{"GIT_DIR", nil}, {"GIT_WORK_TREE", nil}, {"GIT_INDEX_FILE", nil}]
+      )
+
+    files = String.split(listing, <<0>>, trim: true)
+    assert length(files) > 1_000, "git ls-files listed only #{length(files)} files"
+    files
+  end
+
+  for {label, pattern} <- @retired_reach do
+    @tag pattern: pattern
+    test "no tracked file names #{label}", %{pattern: pattern} do
+      hits = tracked_hits(pattern)
+
+      assert hits == [],
+             "#{unquote(label)} is retired, and these tracked files still name it:\n" <>
+               Enum.join(hits, "\n")
+    end
+  end
+
+  # The scan of the tree finds what it looks for: a planted file that names
+  # each retired spelling is found, line by line, and the same text with
+  # the spelling's successor is not.
+  @tag :tmp_dir
+  test "each retirement scan finds a planted file that names its spelling", %{tmp_dir: dir} do
+    planted = Path.join(dir, "planted.md")
+
+    for {{label, pattern}, spelling, successor} <-
+          Enum.zip([
+            @retired_reach,
+            [
+              "CYFR_BEHIND" <> "_PROXY=true",
+              "docker compose --profile " <> "tls up -d",
+              "holds .cyfr-update" <> ".lock"
+            ],
+            ["CYFR_REACH=public", "docker compose --profile public up -d", "holds .cyfr/lock"]
+          ]) do
+      File.write!(planted, "a line\n#{spelling}\n")
+      assert tracked_hits(pattern, [planted]) == ["#{planted}:2"], label
+
+      File.write!(planted, "a line\n#{successor}\n")
+      assert tracked_hits(pattern, [planted]) == [], label
+    end
+  end
+
+  test "the compose file's profiles are public, tailnet and locus-builds, and tls is none" do
+    services = YamlElixir.read_from_string!(File.read!(Path.join(root(), "docker-compose.yml")))
+
+    profiles =
+      for {_service, definition} <- services["services"],
+          profile <- List.wrap(definition["profiles"]),
+          uniq: true,
+          do: profile
+
+    assert Enum.sort(profiles) == ["locus-builds", "public", "tailnet"]
   end
 
   test "the builds service's two keys are wired, and read through their accessors alone" do

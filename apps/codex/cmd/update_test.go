@@ -29,6 +29,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/cyfr/codex/internal/reach"
 	"github.com/cyfr/codex/internal/release"
 	"github.com/cyfr/codex/internal/version"
 	"gopkg.in/yaml.v3"
@@ -50,7 +51,7 @@ func TestMissingStackServices(t *testing.T) {
     image: ghcr.io/cyfrworks/cyfr-locus:latest
   caddy:
     image: caddy:2.11-alpine
-    profiles: ["tls"]
+    profiles: ["public"]
 `
 	if err := os.WriteFile(path, []byte(old), 0644); err != nil {
 		t.Fatal(err)
@@ -299,7 +300,8 @@ func TestEnsureCyfrComposeFieldsKeepsTheLocusRoleBlock(t *testing.T) {
 // fakeDocker stands in for docker on PATH. It appends each invocation's
 // argv to $FAKE_DOCKER_DIR/log, noting for every `-e NAME` whether NAME was
 // in its environment (never the value) and whether it runs in a process
-// group of its own; it appends the compose file's hash and the count of
+// group of its own; a postgres client's stdin is kept in probe.stdin or
+// dump.stdin; it appends the compose file's hash and the count of
 // complete snapshots at the call to state. It answers each call from the
 // scenario's files: <key>.out on stdout and <key>.exit as its status;
 // <key>.edit is appended to docker-compose.yml, as an edit made while the
@@ -336,7 +338,7 @@ answer() {
 }
 if [ "$1" = compose ]; then
   shift
-  while [ "$1" = --profile ]; do shift 2; done
+  while [ "$1" = -p ] || [ "$1" = -f ] || [ "$1" = --project-directory ] || [ "$1" = --profile ]; do shift 2; done
   sub="$1"
   shift
   case "$sub" in
@@ -359,8 +361,8 @@ case "$1" in
     answer pull ;;
   run)
     case "$*" in
-      *psql*) answer probe ;;
-      *pg_dump*) answer dump ;;
+      *psql*) cat > "$d/probe.stdin"; answer probe ;;
+      *pg_dump*) cat > "$d/dump.stdin"; answer dump ;;
     esac ;;
 esac
 exit 0
@@ -377,18 +379,26 @@ const (
 )
 
 var (
-	digestCyfr  = "sha256:" + strings.Repeat("a", 64)
-	digestLocus = "sha256:" + strings.Repeat("b", 64)
-	digestCaddy = "sha256:" + strings.Repeat("c", 64)
-	takenAt     = time.Date(2026, 10, 16, 12, 0, 0, 0, time.UTC)
+	digestCyfr      = "sha256:" + strings.Repeat("a", 64)
+	digestLocus     = "sha256:" + strings.Repeat("b", 64)
+	digestCaddy     = "sha256:" + strings.Repeat("c", 64)
+	digestTailscale = "sha256:" + strings.Repeat("d", 64)
+	takenAt         = time.Date(2026, 10, 16, 12, 0, 0, 0, time.UTC)
+	testImages      = release.Images{Cyfr: digestCyfr, CyfrLocus: digestLocus, Caddy: digestCaddy, Tailscale: digestTailscale}
 )
 
-// updateScenario is one update's project directory and fake docker.
+// scenarioEnv is the .env of the scenarios' home: public at
+// cyfr.example.com, builds on.
+const scenarioEnv = "CYFR_REACH=public\nCYFR_HOST=cyfr.example.com\nCYFR_PUBLIC_URL=https://cyfr.example.com\nCYFR_LOCUS_BUILDS_URL=http://locus-builds:4100\nCYFR_PORT=4000\n"
+
+// updateScenario is one update's project directory, fake docker and fake
+// engine.
 type updateScenario struct {
 	t        *testing.T
 	project  string
 	fake     string
 	compose  []byte
+	engine   *fakeStack
 	scaffold int
 	// scaffoldFail names the scaffold file whose write fails, the files
 	// before it written.
@@ -451,7 +461,7 @@ func (s *updateScenario) logLine(line string) {
 
 // shippedCompose is the repository's docker-compose.yml.
 func shippedCompose(t *testing.T) []byte {
-	data, err := os.ReadFile(filepath.Join("..", "..", "..", "docker-compose.yml"))
+	data, err := os.ReadFile(filepath.Join(packageDir, "..", "..", "..", "docker-compose.yml"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -474,7 +484,7 @@ func newUpdateScenario(t *testing.T, compose []byte, env map[string]string) *upd
 		}
 	}
 	write("cyfr.yaml", "name: test\n", 0644)
-	write(".env", "CYFR_BEHIND_PROXY=true\nCYFR_LOCUS_BUILDS_URL=http://locus-builds:4100\nCYFR_PORT=4000\n", 0600)
+	write(".env", scenarioEnv, 0600)
 	write("docker-compose.yml", string(compose), 0640)
 	// Set apart from the umask, so the switch is seen to keep the mode.
 	if err := os.Chmod("docker-compose.yml", 0640); err != nil {
@@ -495,6 +505,10 @@ func newUpdateScenario(t *testing.T, compose []byte, env map[string]string) *upd
 	write(filepath.Join(s.fake, "docker"), fakeDocker, 0755)
 	t.Setenv("PATH", s.fake+string(os.PathListSeparator)+os.Getenv("PATH"))
 	t.Setenv("FAKE_DOCKER_DIR", s.fake)
+	s.engine = useFakeEngine(t)
+	saved := profiles
+	t.Cleanup(func() { profiles = saved })
+	profiles = strings.Join(composePrefixArgs(s.project, scenarioHead), " ") + " "
 
 	environment := map[string]any{"CYFR_SECRET_KEY_BASE": keyBase, "CYFR_CRYPTO_KEYRING": keyring, "CYFR_HOST": "localhost"}
 	for k, v := range env {
@@ -508,7 +522,7 @@ func newUpdateScenario(t *testing.T, compose []byte, env map[string]string) *upd
 		},
 	}}})
 	s.answer("config.out", string(config))
-	s.answer("ps.out", "locus-backends-guard\ncyfr\ncaddy\nlocus-runtime\nlocus-builds\nlocus-builds-guard\nlocus-backends\nsidecar\n")
+	s.answer("ps.out", "locus-backends-guard\ncyfr\ncaddy\ntailscale\nlocus-runtime\nlocus-builds\nlocus-builds-guard\nlocus-backends\nsidecar\n")
 	s.answer("rpc.out", "warming up\nCYFR_ROSTER="+`{"self":"cyfr@abc","release":"0.8.0","slots":[{"node":"cyfr@abc","owner":"o1","release":"0.8.0","lease_until":"2026-10-16T12:00:10Z"}]}`+"\n")
 	s.answer("eval.out", "booting\nCYFR_LIVE_SLOTS="+`{"release":"0.8.0","slots":[]}`+"\n")
 	s.answer("eval-live.out", "CYFR_LIVE_SLOTS="+`{"release":"0.8.0","slots":[{"node":"cyfr@abc","owner":"o1","release":"0.8.0","lease_until":"2026-10-16T12:00:10Z"}]}`+"\n")
@@ -523,7 +537,7 @@ func newUpdateScenario(t *testing.T, compose []byte, env map[string]string) *upd
 	})
 	version.Version = testVersion
 	fetchManifest = func(ctx context.Context, v string) (*release.Manifest, error) {
-		return &release.Manifest{Version: v, Images: release.Images{Cyfr: digestCyfr, CyfrLocus: digestLocus, Caddy: digestCaddy}}, nil
+		return &release.Manifest{Version: v, Images: testImages}, nil
 	}
 	fetchScaffold = func(v string) (scaffoldRelease, error) {
 		s.scaffold++
@@ -533,6 +547,18 @@ func newUpdateScenario(t *testing.T, compose []byte, env map[string]string) *upd
 	updateNow = func() time.Time { return takenAt }
 	liveSlotsWindow, liveSlotsPoll = 400*time.Millisecond, 20*time.Millisecond
 	return s
+}
+
+// edit writes content at the project path rel.
+func (s *updateScenario) edit(rel, content string) {
+	s.t.Helper()
+	p := filepath.Join(s.project, rel)
+	if err := os.MkdirAll(filepath.Dir(p), 0755); err != nil {
+		s.t.Fatal(err)
+	}
+	if err := os.WriteFile(p, []byte(content), 0644); err != nil {
+		s.t.Fatal(err)
+	}
 }
 
 // answer writes a scenario file of the fake docker.
@@ -564,13 +590,13 @@ func (s *updateScenario) answer(name, content string) {
 }
 
 // run runs `cyfr update` and answers its error and its output; the lock is
-// gone after it and no docker child shared cyfr's process group.
+// released after it and no docker child shared cyfr's process group.
 func (s *updateScenario) run(ctx context.Context) (string, error) {
 	s.t.Helper()
 	var out bytes.Buffer
 	err := runUpdate(ctx, &out, &out)
-	if _, statErr := os.Lstat(filepath.Join(s.project, updateLockName)); !errors.Is(statErr, fs.ErrNotExist) {
-		s.t.Errorf("the update lock is left behind (%v)", statErr)
+	if holder := s.engine.held(); holder != "" {
+		s.t.Errorf("the lock is still held, by %s", holder)
 	}
 	for _, line := range s.log() {
 		if strings.Contains(line, "{shared process group}") {
@@ -590,6 +616,36 @@ func (s *updateScenario) log() []string {
 		s.t.Fatal(err)
 	}
 	return strings.Split(strings.TrimSuffix(string(data), "\n"), "\n")
+}
+
+// startedComposes answers, for each start the fake engine ran through the
+// fake docker, the md5 of the compose file that start saw: the old stack's
+// start again sees the file the update read, the new release's the
+// switched one.
+func (s *updateScenario) startedComposes() []string {
+	state, _ := os.ReadFile(filepath.Join(s.fake, "state"))
+	var sums []string
+	for _, line := range strings.Split(strings.TrimSpace(string(state)), "\n") {
+		if fields := strings.Fields(line); len(fields) >= 2 && fields[0] == "up" {
+			sums = append(sums, fields[1])
+		}
+	}
+	return sums
+}
+
+// md5Hex is data's md5, as the fake docker records a compose file's.
+func md5Hex(data []byte) string { return fmt.Sprintf("%x", md5.Sum(data)) }
+
+// dockerLog is the log's docker calls alone, the engine's left out; nil
+// when docker never ran.
+func (s *updateScenario) dockerLog() []string {
+	var calls []string
+	for _, line := range s.log() {
+		if !strings.HasPrefix(line, "ENGINE ") {
+			calls = append(calls, line)
+		}
+	}
+	return calls
 }
 
 // hasCall reports whether the log holds a call starting with prefix.
@@ -620,7 +676,7 @@ func (s *updateScenario) snapshotDir() string {
 // nothingStopped fails if any service was stopped, started or brought up.
 func (s *updateScenario) nothingStopped() {
 	s.t.Helper()
-	for _, sub := range []string{"compose --profile tls --profile locus-builds stop", "compose --profile tls --profile locus-builds start", "compose --profile tls --profile locus-builds up"} {
+	for _, sub := range []string{profiles + "stop", profiles + "start", profiles + "up", "ENGINE start", "ENGINE stop"} {
 		if s.hasCall(sub) {
 			s.t.Errorf("the update ran %q:\n%s", sub, strings.Join(s.log(), "\n"))
 		}
@@ -629,7 +685,8 @@ func (s *updateScenario) nothingStopped() {
 
 // switched spells compose with every managed image line as the switch
 // writes it: cyfr and cyfr-locus at the version and digest, the bundled
-// Caddy at its own tag and the digest; every other line as it is.
+// Caddy and Tailscale at their own tags and the digest; every other line as
+// it is.
 func switched(compose []byte) []byte {
 	lines := strings.SplitAfter(string(compose), "\n")
 	for i, line := range lines {
@@ -646,13 +703,27 @@ func switched(compose []byte) []byte {
 		case strings.HasPrefix(value, "caddy:"):
 			tag, _, _ := strings.Cut(strings.TrimPrefix(value, "caddy:"), "@")
 			value = "caddy:" + tag + "@" + digestCaddy
+		case strings.HasPrefix(value, "tailscale/tailscale:"):
+			tag, _, _ := strings.Cut(strings.TrimPrefix(value, "tailscale/tailscale:"), "@")
+			value = "tailscale/tailscale:" + tag + "@" + digestTailscale
 		}
 		lines[i] = indent + "image: " + value + "\n"
 	}
 	return []byte(strings.Join(lines, ""))
 }
 
-const profiles = "compose --profile tls --profile locus-builds "
+// scenarioHead is the reach head scenarioEnv holds.
+var scenarioHead = reach.Head{Mode: reach.ModePublic, Host: "cyfr.example.com", PublicURL: "https://cyfr.example.com", Port: 4000, BuildsURL: "http://locus-builds:4100", Profiles: []string{"locus-builds", "public"}}
+
+// profiles is the engine's compose selection for the scenario's head and
+// project, as the fake docker logs it (newUpdateScenario sets it).
+var profiles string
+
+// started is the engine's start, as the fake engine logs it and the fake
+// docker logs the compose call it runs.
+func started(cause string) []string {
+	return []string{"ENGINE start " + cause, profiles + "up -d"}
+}
 
 // The happy path runs the six steps in their order: the configuration and
 // the pulls by digest, the roster through the running cyfr, the scaffold
@@ -668,14 +739,19 @@ func TestUpdateRunsTheCeremonyInOrder(t *testing.T) {
 		t.Fatalf("update: %v\n%s", err, out)
 	}
 	want := []string{
+		"ENGINE lock update",
+		"ENGINE resume",
 		profiles + "config --format json",
 		"pull ghcr.io/cyfrworks/cyfr@" + digestCyfr,
 		"pull ghcr.io/cyfrworks/cyfr-locus@" + digestLocus,
 		"pull caddy@" + digestCaddy,
+		"pull tailscale/tailscale@" + digestTailscale,
 		profiles + "ps --services --status running",
 		profiles + "exec -T cyfr bin/cyfr rpc " + testRoster,
 		"SCAFFOLD FETCH " + testVersion,
+		"ENGINE cancel-waiting-join",
 		profiles + "stop caddy",
+		profiles + "stop tailscale",
 		profiles + "stop cyfr",
 		profiles + "stop locus-runtime",
 		profiles + "stop locus-builds",
@@ -686,7 +762,8 @@ func TestUpdateRunsTheCeremonyInOrder(t *testing.T) {
 		profiles + "run --rm --no-deps -T cyfr bin/cyfr eval " + testLive,
 		profiles + "run --rm --no-deps -T cyfr bin/cyfr eval " + testLive,
 		"SCAFFOLD WRITE",
-		profiles + "up -d --wait --wait-timeout 900",
+		"ENGINE start update",
+		profiles + "up -d",
 	}
 	if got := s.log(); !slices.Equal(got, want) {
 		t.Fatalf("docker ran\n%s\nwant\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
@@ -714,8 +791,8 @@ func TestUpdateRunsTheCeremonyInOrder(t *testing.T) {
 	if !bytes.Equal(got, switched(s.compose)) {
 		t.Errorf("the switched docker-compose.yml is\n%s", got)
 	}
-	if n := strings.Count(string(got), "@sha256:"); n != 7 {
-		t.Errorf("the switched docker-compose.yml pins %d images, want 7 (cyfr, five cyfr-locus, caddy)", n)
+	if n := strings.Count(string(got), "@sha256:"); n != 8 {
+		t.Errorf("the switched docker-compose.yml pins %d images, want 8 (cyfr, five cyfr-locus, caddy, tailscale)", n)
 	}
 	if info, err := os.Stat("docker-compose.yml"); err != nil || info.Mode().Perm() != 0640 {
 		t.Errorf("the switched docker-compose.yml's mode is %v (error %v), want 0640 kept", info.Mode().Perm(), err)
@@ -734,7 +811,7 @@ func TestUpdateRunsTheCeremonyInOrder(t *testing.T) {
 	files := map[string]string{
 		"database":                        "sqlite-main",
 		"database-wal":                    "sqlite-wal",
-		".env":                            "CYFR_BEHIND_PROXY=true\nCYFR_LOCUS_BUILDS_URL=http://locus-builds:4100\nCYFR_PORT=4000\n",
+		".env":                            scenarioEnv,
 		"storage/components/acme/c.wasm":  "component-bytes",
 		"storage/blobs/x":                 "blob",
 		"compose":                         string(s.compose),
@@ -813,7 +890,7 @@ func TestUpdateRunsTheCeremonyInOrder(t *testing.T) {
 		t.Errorf("snapshotParts %v is not the roster this snapshot was taken with", snapshotParts)
 	}
 	storageRoot := "Storage root /app/data is " + filepath.Join(s.project, "data") + " on the host."
-	for _, line := range []string{storageRoot, "stopped caddy in ", "stopped cyfr in ", "stopped locus-backends-guard in ", "stopped sidecar in ", "Updated to release 0.9.0.", "Snapshot of release 0.8.0: " + dir} {
+	for _, line := range []string{storageRoot, "stopped caddy in ", "stopped tailscale in ", "stopped cyfr in ", "stopped locus-backends-guard in ", "stopped sidecar in ", "Updated to release 0.9.0.", "Snapshot of release 0.8.0: " + dir} {
 		if !strings.Contains(out, line) {
 			t.Errorf("the output lacks %q:\n%s", line, out)
 		}
@@ -827,7 +904,8 @@ func TestUpdateRunsTheCeremonyInOrder(t *testing.T) {
 
 // On PostgreSQL the update reads the server's major through a postgres
 // client container and dumps the database in that major's image, the URL
-// reaching each container through its environment and never an argv.
+// reaching each container on its standard input, never an argv or the
+// environment of a process outside the container.
 func TestUpdateDumpsPostgresWithoutTheURLOnArgv(t *testing.T) {
 	s := newUpdateScenario(t, shippedCompose(t), map[string]string{"CYFR_DATABASE": "postgres", "CYFR_DATABASE_URL": pgURL})
 	if err := os.Remove(filepath.Join(s.project, "data", "cyfr.db-wal")); err != nil {
@@ -838,16 +916,22 @@ func TestUpdateDumpsPostgresWithoutTheURLOnArgv(t *testing.T) {
 		t.Fatalf("update: %v\n%s", err, out)
 	}
 	pg18 := pgClientImages[18]
-	probe := `run --rm --network host -e CYFR_UPDATE_PG_URL ` + pg18 + ` sh -c exec psql "$CYFR_UPDATE_PG_URL" -tAc "SHOW server_version_num" {env CYFR_UPDATE_PG_URL set}`
-	dump := `run --rm --network host -e CYFR_UPDATE_PG_URL ` + pg18 + ` sh -c exec pg_dump --format=custom --no-owner "$CYFR_UPDATE_PG_URL" {env CYFR_UPDATE_PG_URL set}`
+	probe := `run --rm -i --network host ` + pg18 + ` sh -c IFS= read -r CYFR_UPDATE_PG_URL && exec psql "$CYFR_UPDATE_PG_URL" -tAc "SHOW server_version_num"`
+	dump := `run --rm -i --network host ` + pg18 + ` sh -c IFS= read -r CYFR_UPDATE_PG_URL && exec pg_dump --format=custom --no-owner "$CYFR_UPDATE_PG_URL"`
 	log := s.log()
 	at := func(line string) int { return slices.Index(log, line) }
-	if at(profiles+"config --format json") != 0 || at(probe) != 1 || at("pull "+pg18) < 2 || at("pull "+pg18) > at("SCAFFOLD FETCH 0.9.0") {
+	config := at(profiles + "config --format json")
+	if config < 0 || at(probe) != config+1 || at("pull "+pg18) < config+2 || at("pull "+pg18) > at("SCAFFOLD FETCH 0.9.0") {
 		t.Errorf("the probe does not run before the pulls, the dump image among them:\n%s", strings.Join(log, "\n"))
 	}
 	eval := at(profiles + "run --rm --no-deps -T cyfr bin/cyfr eval " + testLive)
-	if at(dump) < eval || at(dump) > at(profiles+"up -d --wait --wait-timeout 900") {
+	if at(dump) < eval || at(dump) > at(profiles+"up -d") {
 		t.Errorf("the dump does not run between the offline read and the start:\n%s", strings.Join(log, "\n"))
+	}
+	for _, name := range []string{"probe.stdin", "dump.stdin"} {
+		if got := read(t, filepath.Join(s.fake, name)); got != pgURL+"\n" {
+			t.Errorf("%s holds %q, want the database URL on one line", name, got)
+		}
 	}
 	whole := strings.Join(log, "\n") + out
 	if strings.Contains(whole, pgPassword) || strings.Contains(whole, "127.0.0.1:5432") {
@@ -923,7 +1007,7 @@ func TestUpdateAdmitsAMemberAlreadyOnTheTargetRelease(t *testing.T) {
 	if err != nil {
 		t.Fatalf("update: %v\n%s", err, out)
 	}
-	if !s.hasCall(profiles + "up -d --wait --wait-timeout 900") {
+	if !s.hasCall("ENGINE start update") {
 		t.Errorf("the update did not start the switched stack:\n%s", strings.Join(s.log(), "\n"))
 	}
 
@@ -950,7 +1034,7 @@ func TestUpdateAdmitsAMemberAlreadyOnTheTargetRelease(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "cyfr@old-host (release 0.8.0)") || strings.Contains(err.Error(), "first-host") {
 		t.Fatalf("update answered %v\n%s", err, out)
 	}
-	if !s.hasCall(profiles + "start") {
+	if !s.hasCall("ENGINE start update") {
 		t.Errorf("the old stack was not started again:\n%s", strings.Join(s.log(), "\n"))
 	}
 	s.composeUnchanged()
@@ -981,7 +1065,7 @@ func TestUpdateRefusesAComposeMissingABundledService(t *testing.T) {
 			if err == nil || !strings.Contains(err.Error(), missing) || !strings.Contains(err.Error(), "Run 'cyfr init --force' to regenerate docker-compose.yml (.env is kept), then 'cyfr update' again.") {
 				t.Fatalf("update answered %v\n%s", err, out)
 			}
-			if log := s.log(); log != nil {
+			if log := s.dockerLog(); log != nil {
 				t.Errorf("docker ran before the refusal:\n%s", strings.Join(log, "\n"))
 			}
 			s.composeUnchanged()
@@ -995,8 +1079,8 @@ func TestUpdateRefusesAComposeMissingABundledService(t *testing.T) {
 func TestUpdateRefusesAnUnreadableCompose(t *testing.T) {
 	s := newUpdateScenario(t, []byte("services: [unclosed\n"), nil)
 	_, err := s.run(context.Background())
-	if err == nil || !strings.Contains(err.Error(), "not valid YAML") || s.log() != nil {
-		t.Fatalf("update answered %v with docker calls %v", err, s.log())
+	if err == nil || !strings.Contains(err.Error(), "not valid YAML") || s.dockerLog() != nil {
+		t.Fatalf("update answered %v with docker calls %v", err, s.dockerLog())
 	}
 }
 
@@ -1010,8 +1094,8 @@ func TestUpdateRestartsTheOldStackWhileASlotStaysLive(t *testing.T) {
 		t.Fatalf("update answered %v\n%s", err, out)
 	}
 	log := s.log()
-	if last := log[len(log)-1]; last != profiles+"start" {
-		t.Errorf("the update ended with %q, want the old stack's start", last)
+	if !slices.Equal(log[len(log)-2:], started("update")) {
+		t.Errorf("the update ended with %q, want the old stack's start", log[len(log)-2:])
 	}
 	if reads := strings.Count(strings.Join(log, "\n"), " eval "); reads < 2 {
 		t.Errorf("the offline read ran %d times, want it repeated within the window", reads)
@@ -1040,7 +1124,7 @@ func TestUpdateReadsNoAnswerAsNoRoster(t *testing.T) {
 			if err == nil || !strings.Contains(err.Error(), "offline roster read") {
 				t.Fatalf("update answered %v\n%s", err, out)
 			}
-			if log := s.log(); log[len(log)-1] != profiles+"start" {
+			if log := s.log(); !slices.Equal(log[len(log)-2:], started("update")) {
 				t.Errorf("the update did not restart the old stack:\n%s", strings.Join(log, "\n"))
 			}
 			s.composeUnchanged()
@@ -1069,7 +1153,7 @@ func TestUpdateRestartsTheOldStackAfterAFailedStop(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "stop locus-runtime failed") {
 		t.Fatalf("update answered %v\n%s", err, out)
 	}
-	if log := s.log(); log[len(log)-1] != profiles+"start" || s.hasCall(profiles+"run") {
+	if log := s.log(); !slices.Equal(log[len(log)-2:], started("update")) || s.hasCall(profiles+"run") {
 		t.Errorf("the update did not restart the old stack at once:\n%s", strings.Join(log, "\n"))
 	}
 	s.composeUnchanged()
@@ -1086,7 +1170,7 @@ func TestUpdateLeavesTheStackStoppedAfterAFailedSnapshot(t *testing.T) {
 		if err == nil || !strings.Contains(err.Error(), "The snapshot failed: pg_dump in "+pgClientImages[18]+" failed") || !strings.Contains(err.Error(), "left stopped") || !strings.Contains(err.Error(), s.snapshotDir()) {
 			t.Fatalf("update answered %v\n%s", err, out)
 		}
-		if s.hasCall(profiles+"start") || s.hasCall(profiles+"up") {
+		if s.hasCall("ENGINE start") || s.hasCall(profiles+"up") {
 			t.Errorf("the update started a stack after a failed snapshot:\n%s", strings.Join(s.log(), "\n"))
 		}
 		if _, err := os.Lstat(filepath.Join(s.snapshotDir(), "snapshot.json")); !errors.Is(err, fs.ErrNotExist) {
@@ -1106,7 +1190,7 @@ func TestUpdateLeavesTheStackStoppedAfterAFailedSnapshot(t *testing.T) {
 		if err == nil || !strings.Contains(err.Error(), "The snapshot failed") || !strings.Contains(err.Error(), "file exists") {
 			t.Fatalf("update answered %v\n%s", err, out)
 		}
-		if s.hasCall(profiles+"start") || s.hasCall(profiles+"up") {
+		if s.hasCall("ENGINE start") || s.hasCall(profiles+"up") {
 			t.Errorf("the update started a stack after a failed snapshot")
 		}
 		if entries, _ := os.ReadDir(s.snapshotDir()); len(entries) != 0 {
@@ -1130,17 +1214,45 @@ func TestUpdateLeavesTheStackStoppedWhenTheNewReleaseFails(t *testing.T) {
 		t.Errorf("the refusal is %v", err)
 	}
 	log := s.log()
-	if n := len(log); n < 2 || log[n-2] != profiles+"up -d --wait --wait-timeout 900" || log[n-1] != profiles+"stop" {
+	if n := len(log); n < 2 || log[n-2] != profiles+"up -d" || log[n-1] != profiles+"stop" {
 		t.Errorf("the update did not stop the stack after the failed start:\n%s", strings.Join(log, "\n"))
 	}
-	if s.hasCall(profiles + "start") {
-		t.Errorf("the update started the old stack over the switch")
+	if n := strings.Count(strings.Join(log, "\n"), "ENGINE start update"); n != 1 {
+		t.Errorf("the update started %d times, want only the new release's start, never the old stack over the switch", n)
 	}
 	if _, err := os.Stat(filepath.Join(s.snapshotDir(), "snapshot.json")); err != nil {
 		t.Errorf("the snapshot is not complete: %v", err)
 	}
 	if got, _ := os.ReadFile("docker-compose.yml"); !bytes.Equal(got, switched(s.compose)) {
 		t.Errorf("docker-compose.yml is not the switched file")
+	}
+}
+
+// A new release that starts with the machine's tailnet node other than the
+// one .env names runs on this machine alone, Serve closed: the update is
+// done and never stops it, and it answers the refusal's sentence, which
+// says how to serve the home on the tailnet again. So does a restore.
+func TestUpdateKeepsAHomeServedLocallyRunning(t *testing.T) {
+	want := reach.Refuse("tailnet_node_mismatch", mismatch()).Message()
+
+	s := newUpdateScenario(t, shippedCompose(t), nil)
+	s.engine.startReceipt = startedLocalReceipt("start")
+	out, err := s.run(context.Background())
+	if err == nil || err.Error() != want || ExitStatus(err) != exitStartedLocally || !strings.Contains(out, "Updated to release 0.9.0.") {
+		t.Fatalf("update answered %v (exit %d), want %q and exit %d after the report\n%s", err, ExitStatus(err), want, exitStartedLocally, out)
+	}
+	if log := s.log(); !slices.Equal(log[len(log)-2:], started("update")) {
+		t.Errorf("the update did more than start the new release:\n%s", strings.Join(log, "\n"))
+	}
+
+	r := newRestoreScenario(t, shippedCompose(t), nil, nil)
+	r.engine.startReceipt = startedLocalReceipt("start")
+	out, err = r.restore(true)
+	if err == nil || err.Error() != want || ExitStatus(err) != exitStartedLocally || !strings.Contains(out, "It runs on this machine alone.") {
+		t.Fatalf("restore answered %v, want %q\n%s", err, want, out)
+	}
+	if log := r.log(); !slices.Equal(log[len(log)-2:], started("restore")) {
+		t.Errorf("the restore stopped the home it started:\n%s", strings.Join(log, "\n"))
 	}
 }
 
@@ -1153,7 +1265,7 @@ func TestUpdateRefusesAFailedPull(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "docker pull ghcr.io/cyfrworks/cyfr-locus@"+digestLocus+" failed") {
 		t.Fatalf("update answered %v\n%s", err, out)
 	}
-	want := []string{profiles + "config --format json", "pull ghcr.io/cyfrworks/cyfr@" + digestCyfr, "pull ghcr.io/cyfrworks/cyfr-locus@" + digestLocus}
+	want := []string{"ENGINE lock update", "ENGINE resume", profiles + "config --format json", "pull ghcr.io/cyfrworks/cyfr@" + digestCyfr, "pull ghcr.io/cyfrworks/cyfr-locus@" + digestLocus}
 	if got := s.log(); !slices.Equal(got, want) {
 		t.Errorf("docker ran\n%s", strings.Join(got, "\n"))
 	}
@@ -1192,6 +1304,8 @@ func TestUpdateRewritesOnlyManagedImageLines(t *testing.T) {
 	want = replaceImage(want, "locus-backends-guard", "ghcr.io/cyfrworks/cyfr-locus:"+testVersion+"@"+digestLocus)
 	_, caddyTag, _ := strings.Cut(string(regexp.MustCompile(`image: caddy:[^@\n]+`).Find([]byte(shipped))), "caddy:")
 	want = replaceImage(want, "caddy", "caddy:"+caddyTag+"@"+digestCaddy)
+	_, tailscaleTag, _ := strings.Cut(string(regexp.MustCompile(`image: tailscale/tailscale:[^@\n]+`).Find([]byte(shipped))), "tailscale/tailscale:")
+	want = replaceImage(want, "tailscale", "tailscale/tailscale:"+tailscaleTag+"@"+digestTailscale)
 	if got, _ := os.ReadFile("docker-compose.yml"); string(got) != want {
 		t.Errorf("the switched docker-compose.yml is\n%s\nwant\n%s", got, want)
 	}
@@ -1204,7 +1318,7 @@ func TestUpdateRewritesOnlyManagedImageLines(t *testing.T) {
 			t.Errorf("the output does not report %q:\n%s", line, out)
 		}
 	}
-	if s.hasCall("pull ghcr.io/cyfrworks/cyfr@") || !s.hasCall("pull ghcr.io/cyfrworks/cyfr-locus@"+digestLocus) || !s.hasCall("pull caddy@"+digestCaddy) {
+	if s.hasCall("pull ghcr.io/cyfrworks/cyfr@") || !s.hasCall("pull ghcr.io/cyfrworks/cyfr-locus@"+digestLocus) || !s.hasCall("pull caddy@"+digestCaddy) || !s.hasCall("pull tailscale/tailscale@"+digestTailscale) {
 		t.Errorf("the pulls are\n%s", strings.Join(s.log(), "\n"))
 	}
 }
@@ -1232,6 +1346,11 @@ func TestManagedRepositories(t *testing.T) {
 		"localhost/caddy":                          false,
 		"localhost:5000/caddy":                     false,
 		"myregistry.example/cyfr:custom":           false,
+		"tailscale/tailscale:v1.104.1@sha256:00":   true,
+		"docker.io/tailscale/tailscale":            true,
+		"tailscale":                                false,
+		"tailscale/tailscale-extra:1":              false,
+		"ghcr.io/tailscale/tailscale:1":            false,
 	}
 	for ref, want := range cases {
 		repo, _, _ := splitImageReference(ref)
@@ -1265,7 +1384,7 @@ func TestUpdateRefusesAnUnverifiedManifest(t *testing.T) {
 			if err == nil || !strings.Contains(err.Error(), c.want) {
 				t.Fatalf("update answered %v\n%s", err, out)
 			}
-			if log := s.log(); log != nil {
+			if log := s.dockerLog(); log != nil {
 				t.Errorf("docker ran:\n%s", strings.Join(log, "\n"))
 			}
 			s.composeUnchanged()
@@ -1273,8 +1392,9 @@ func TestUpdateRefusesAnUnverifiedManifest(t *testing.T) {
 	}
 }
 
-// A second update refuses while the first holds the lock, naming the file
-// and the holder's pid; each run removes only its own lock.
+// A second update refuses while the first holds the lock, naming its
+// holder, before any docker call; the first still holds the lock, and
+// releases it at its end. A lock another command holds refuses the same.
 func TestUpdateHoldsOneLock(t *testing.T) {
 	s := newUpdateScenario(t, shippedCompose(t), nil)
 	s.answer("pull.block", "")
@@ -1290,38 +1410,39 @@ func TestUpdateHoldsOneLock(t *testing.T) {
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
+	calls := len(s.log())
 	var out bytes.Buffer
 	err := runUpdate(context.Background(), &out, &out)
-	lock := filepath.Join(s.project, updateLockName)
-	if err == nil || !strings.Contains(err.Error(), lock) || !strings.Contains(err.Error(), fmt.Sprintf("pid %d", os.Getpid())) {
+	if err == nil || !strings.Contains(err.Error(), "Another cyfr command holds this home (`update`)") || !strings.Contains(err.Error(), "Nothing was changed") {
 		t.Errorf("the second update answered %v", err)
 	}
-	if _, statErr := os.Stat(lock); statErr != nil {
-		t.Errorf("the refused update removed the holder's lock: %v", statErr)
+	if got := s.log(); len(got) != calls {
+		t.Errorf("the refused update ran %s", strings.Join(got[calls:], "\n"))
+	}
+	if holder := s.engine.held(); holder != "update" {
+		t.Errorf("the refused update took the first one's lock from it (held by %q)", holder)
 	}
 	s.answer("pull.release", "")
 	if err := <-first; err != nil {
 		t.Fatalf("the first update: %v", err)
 	}
-	if _, err := os.Stat(lock); !errors.Is(err, fs.ErrNotExist) {
-		t.Errorf("the lock is left behind: %v", err)
+	if holder := s.engine.held(); holder != "" {
+		t.Errorf("the lock is still held, by %s", holder)
 	}
-	if n := strings.Count(strings.Join(s.log(), "\n"), " up -d "); n != 1 {
+	if n := strings.Count(strings.Join(s.log(), "\n"), " up -d"); n != 1 {
 		t.Errorf("the stack was switched %d times", n)
 	}
 
-	// A lock left by a process that died is named for its owner to clear.
-	if err := os.WriteFile(lock, []byte("4242\n"), 0600); err != nil {
-		t.Fatal(err)
-	}
+	s.engine.holder = "reach tailnet"
+	calls = len(s.log())
 	err = runUpdate(context.Background(), io.Discard, io.Discard)
-	if err == nil || !strings.Contains(err.Error(), "pid 4242") || !strings.Contains(err.Error(), "remove the file") {
-		t.Errorf("an update beside a stale lock answered %v", err)
+	if err == nil || !strings.Contains(err.Error(), "(`reach tailnet`)") {
+		t.Errorf("an update beside a held lock answered %v", err)
 	}
-	if _, err := os.Stat(lock); err != nil {
-		t.Errorf("the refused update removed the stale lock: %v", err)
+	if got := s.log(); len(got) != calls {
+		t.Errorf("the refused update ran %s", strings.Join(got[calls:], "\n"))
 	}
-	os.Remove(lock)
+	s.engine.holder = ""
 }
 
 // A signal before the stop ends the update with nothing changed; from the
@@ -1358,7 +1479,7 @@ func TestUpdateOnASignal(t *testing.T) {
 						t.Errorf("the stop step did not finish: no stop of %s", svc)
 					}
 				}
-				if log[len(log)-1] != profiles+"start" {
+				if !slices.Equal(log[len(log)-2:], started("update")) {
 					t.Errorf("the old stack was not started again:\n%s", strings.Join(log, "\n"))
 				}
 			} else {
@@ -1389,7 +1510,7 @@ func TestUpdateFinishesTheSwitchOnASignal(t *testing.T) {
 		t.Fatalf("update: %v\n%s", err, out)
 	}
 	log := s.log()
-	if log[len(log)-1] != profiles+"up -d --wait --wait-timeout 900" {
+	if !slices.Equal(log[len(log)-2:], started("update")) {
 		t.Errorf("the start was not the last step:\n%s", strings.Join(log, "\n"))
 	}
 	if !strings.Contains(out, "An interrupt arrived during the switch") {
@@ -1412,7 +1533,7 @@ func TestSwitchKeepsTheBundledServicesBlocks(t *testing.T) {
 	if err := os.WriteFile(path, input, 0644); err != nil {
 		t.Fatal(err)
 	}
-	m := &release.Manifest{Version: testVersion, Images: release.Images{Cyfr: digestCyfr, CyfrLocus: digestLocus, Caddy: digestCaddy}}
+	m := &release.Manifest{Version: testVersion, Images: testImages}
 	plan, err := planCompose(path, m, testVersion)
 	if err != nil {
 		t.Fatal(err)
@@ -1528,6 +1649,73 @@ func TestUpdateRefusesANonBindMountUnderTheStorageRoot(t *testing.T) {
 			s.noBackups()
 		})
 	}
+}
+
+// A snapshot holds neither the tailnet's state volume nor the reach
+// engine's .cyfr/, so a node's keys and the machine's lock, journal and
+// receipts never enter a backup: snapshotParts names neither; .cyfr/ beside
+// the storage root, or bound under it, is copied nowhere; and the state
+// volume mounted under the storage root is refused as every non-bind mount
+// there is, before anything stops.
+func TestSnapshotsHoldNeitherTheTailnetStateNorTheReachState(t *testing.T) {
+	for _, part := range snapshotParts {
+		if strings.Contains(part, "tailscale") || strings.Contains(part, ".cyfr") {
+			t.Errorf("snapshotParts names %s", part)
+		}
+	}
+	state := map[string]string{"lock": "", "holder": "update pid 1", "journal.json": `{"op":"switch"}`, "receipts/" + strings.Repeat("a", 32) + ".json": `{"state":"completed"}`, "tailscale-serve/serve.json": "{}", "join.json": `{"join_id":"j1"}`}
+	writeState := func(root string) {
+		for name, content := range state {
+			if err := os.MkdirAll(filepath.Dir(filepath.Join(root, name)), 0700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(root, name), []byte(content+"reach-state-marker"), 0600); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	noState := func(s *updateScenario) {
+		t.Helper()
+		err := filepath.WalkDir(s.snapshotDir(), func(p string, entry fs.DirEntry, err error) error {
+			if err != nil {
+				return err
+			}
+			if entry.Name() == ".cyfr" || entry.Name() == "tailscale-serve" || entry.Name() == "receipts" {
+				t.Errorf("the snapshot holds %s", p)
+			}
+			if entry.Type().IsRegular() && strings.Contains(read(t, p), "reach-state-marker") {
+				t.Errorf("the snapshot holds the reach state's %s", p)
+			}
+			return nil
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	s := newUpdateScenario(t, shippedCompose(t), nil)
+	writeState(filepath.Join(s.project, ".cyfr"))
+	if out, err := s.run(context.Background()); err != nil {
+		t.Fatalf("update: %v\n%s", err, out)
+	}
+	noState(s)
+
+	s = newUpdateScenario(t, shippedCompose(t), nil)
+	writeState(filepath.Join(s.project, ".cyfr"))
+	s.addVolume(map[string]any{"type": "bind", "source": filepath.Join(s.project, ".cyfr"), "target": "/app/data/reach"})
+	if out, err := s.run(context.Background()); err != nil {
+		t.Fatalf("update with .cyfr/ bound under the storage root: %v\n%s", err, out)
+	}
+	noState(s)
+
+	s = newUpdateScenario(t, shippedCompose(t), nil)
+	s.addVolume(map[string]any{"type": "volume", "source": composeProject(s.project) + "_tailscale_state", "target": "/app/data/tailscale"})
+	out, err := s.run(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "volume mount at /app/data/tailscale") {
+		t.Fatalf("update with the tailnet's state volume under the storage root answered %v\n%s", err, out)
+	}
+	s.nothingStopped()
+	s.noBackups()
 }
 
 // setService sets key on the cyfr service in the scenario's `compose
@@ -1665,8 +1853,12 @@ func TestUpdatePutsTheScaffoldBackWhenTheSwitchFails(t *testing.T) {
 			if err == nil || !strings.Contains(err.Error(), "the scaffold files were put back from the snapshot "+s.snapshotDir()) || !strings.Contains(err.Error(), c.want) {
 				t.Fatalf("update answered %v\n%s", err, out)
 			}
-			if s.hasCall(profiles+"start") != c.restart || s.hasCall(profiles+"up") {
-				t.Errorf("the old stack started again: %v, want %v; or the new one was started:\n%s", s.hasCall(profiles+"start"), c.restart, strings.Join(s.log(), "\n"))
+			want := []string{}
+			if c.restart {
+				want = []string{md5Hex(s.compose)}
+			}
+			if got := s.startedComposes(); !slices.Equal(got, want) {
+				t.Errorf("the stack started under %v, want %v (the old stack again: %v, the new one never):\n%s", got, want, c.restart, strings.Join(s.log(), "\n"))
 			}
 			for name, content := range oldScaffold {
 				if got := read(t, filepath.Join(s.project, name)); got != content {
@@ -1692,7 +1884,7 @@ func TestUpdatePutsTheScaffoldBackWhenTheSwitchFails(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "could not be put back from the snapshot") || !strings.Contains(err.Error(), "left stopped") || !strings.Contains(err.Error(), "cyfr restore "+s.snapshotDir()) {
 		t.Fatalf("update answered %v\n%s", err, out)
 	}
-	if s.hasCall(profiles+"start") || s.hasCall(profiles+"up") {
+	if s.hasCall("ENGINE start") || s.hasCall(profiles+"up") {
 		t.Errorf("a stack was started under scaffold files not put back:\n%s", strings.Join(s.log(), "\n"))
 	}
 }
@@ -2241,11 +2433,12 @@ func TestSwitchFailsWhenTheComposeFieldsCannotBeWritten(t *testing.T) {
 			if strings.Contains(out, "Note:") {
 				t.Errorf("the failure was reported as a note:\n%s", out)
 			}
-			if s.hasCall(profiles + "up ") {
-				t.Errorf("the new release was started:\n%s", strings.Join(s.log(), "\n"))
+			want := []string{}
+			if c.restart {
+				want = []string{md5Hex(s.compose)}
 			}
-			if got := s.hasCall(profiles + "start"); got != c.restart {
-				t.Errorf("the old stack started again: %v, want %v\n%s", got, c.restart, strings.Join(s.log(), "\n"))
+			if got := s.startedComposes(); !slices.Equal(got, want) {
+				t.Errorf("the stack started under %v, want %v (the old stack again: %v, the new release never):\n%s", got, want, c.restart, strings.Join(s.log(), "\n"))
 			}
 			if c.restart {
 				s.composeUnchanged()
@@ -2295,9 +2488,8 @@ func TestUpRefusesWhileAnUpdateHoldsTheLock(t *testing.T) {
 	calls := len(s.log())
 	err := upCmd.RunE(upCmd, nil)
 	s.answer("eval.release", "")
-	lock := filepath.Join(s.project, updateLockName)
-	if err == nil || !strings.Contains(err.Error(), lock) || !strings.Contains(err.Error(), fmt.Sprintf("pid %d", os.Getpid())) || !strings.Contains(err.Error(), "must not start") {
-		t.Errorf("cyfr up answered %v, want the refusal naming the lock and its holder", err)
+	if err == nil || !strings.Contains(err.Error(), "Another cyfr command holds this home (`update`)") || !strings.Contains(err.Error(), "Nothing was changed") {
+		t.Errorf("cyfr up answered %v, want the refusal naming the lock's holder", err)
 	}
 	if got := s.log(); len(got) != calls {
 		t.Errorf("cyfr up ran docker while the update held the lock: %s", strings.Join(got[calls:], "\n"))
@@ -2305,7 +2497,7 @@ func TestUpRefusesWhileAnUpdateHoldsTheLock(t *testing.T) {
 	if err := <-done; err != nil {
 		t.Fatalf("the update: %v", err)
 	}
-	if _, err := os.Lstat(lock); !errors.Is(err, fs.ErrNotExist) {
-		t.Errorf("the lock stands after the update (%v), so cyfr up would still refuse", err)
+	if holder := s.engine.held(); holder != "" {
+		t.Errorf("the lock stands after the update (held by %s), so cyfr up would still refuse", holder)
 	}
 }

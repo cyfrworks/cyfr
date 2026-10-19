@@ -26,9 +26,9 @@
 #
 # The release job's own mode checks the manifest it wrote, without PyYAML:
 # its shape by the vector file's rules, its version against the tag, its
-# scaffold digest against the tarball's, its Caddy digest against the one
-# docker-compose.yml pins, and the tarball's compose against its image
-# digests.
+# scaffold digest against the tarball's, its Caddy and Tailscale digests
+# against the ones docker-compose.yml pins (third-party images the release
+# does not build), and the tarball's compose against its image digests.
 #
 # Usage: python3 -I tests/ci-release-graph.py
 #        python3 -I tests/ci-release-graph.py --manifest FILE --version VERSION --scaffold TARBALL
@@ -196,6 +196,10 @@ SEMVER = re.compile(r"[0-9]+\.[0-9]+\.[0-9]+")
 IMAGE_LINE = re.compile(r"^(\s*image:\s*)(\S+)\s*$")
 CYFR_REPO = "ghcr.io/cyfrworks/cyfr"
 LOCUS_REPO = "ghcr.io/cyfrworks/cyfr-locus"
+# The third-party images the compose pins and the manifest names by the
+# compose's digest: each manifest key and the repository its image line
+# names.
+PINNED_REPOS = {"caddy": "caddy", "tailscale": "tailscale/tailscale"}
 
 
 def steps_using(job, action):
@@ -691,9 +695,9 @@ def strict_json(data):
 
 def validate_manifest(obj):
     """None when obj is a release manifest, else the reason it is not:
-    exactly version, images and scaffold; images exactly cyfr, cyfr_locus
-    and caddy; every digest sha256:<64 lowercase hex>; the version a bare
-    MAJOR.MINOR.PATCH."""
+    exactly version, images and scaffold; images exactly cyfr, cyfr_locus,
+    caddy and tailscale; every digest sha256:<64 lowercase hex>; the version
+    a bare MAJOR.MINOR.PATCH."""
     if not isinstance(obj, dict):
         return f"the manifest is {type(obj).__name__}, not an object"
     if set(obj) != {"version", "images", "scaffold"}:
@@ -702,8 +706,8 @@ def validate_manifest(obj):
     if not isinstance(version, str) or not SEMVER.fullmatch(version):
         return f"the version {version!r} is not a bare MAJOR.MINOR.PATCH"
     images = obj["images"]
-    if not isinstance(images, dict) or set(images) != {"cyfr", "cyfr_locus", "caddy"}:
-        return f"the images are {images!r}, not exactly caddy, cyfr and cyfr_locus"
+    if not isinstance(images, dict) or set(images) != {"cyfr", "cyfr_locus", *PINNED_REPOS}:
+        return f"the images are {images!r}, not exactly caddy, cyfr, cyfr_locus and tailscale"
     for name, digest in [*sorted(images.items()), ("scaffold", obj["scaffold"])]:
         if not isinstance(digest, str) or not DIGEST.fullmatch(digest):
             return f"{name}'s digest {digest!r} is not sha256:<64 lowercase hex>"
@@ -740,27 +744,29 @@ def repository(ref):
     return head if sep and "/" not in tail else name
 
 
-def compose_caddy(text):
+def compose_pinned(text, key):
+    """The one digest docker-compose.yml's image lines pin PINNED_REPOS[key] at."""
     digests = []
     for line in text.splitlines():
         _, ref = image_ref(line)
-        if ref is not None and repository(ref) == "caddy":
+        if ref is not None and repository(ref) == PINNED_REPOS[key]:
             digests.append(ref.split("@", 1)[1] if "@" in ref else None)
     if len(digests) < 1 or len(set(digests)) != 1 or not DIGEST.fullmatch(digests[0] or ""):
-        return None, f"docker-compose.yml's caddy images name {digests}, not one digest"
+        return None, f"docker-compose.yml's {key} images name {digests}, not one digest"
     return digests[0], None
 
 
 def check_scaffold_compose(text, manifest):
     """The scaffold's compose names exactly the manifest's images: every
     cyfr and cyfr-locus image at the release's version and digest, Caddy
-    at its digest, and no other image."""
+    and Tailscale each at its digest, and no other image."""
     version, images = manifest["version"], manifest["images"]
     want = {
         CYFR_REPO: f"{CYFR_REPO}:{version}@{images['cyfr']}",
         LOCUS_REPO: f"{LOCUS_REPO}:{version}@{images['cyfr_locus']}",
     }
-    seen = {CYFR_REPO: 0, LOCUS_REPO: 0, "caddy": 0}
+    pinned = {repo: key for key, repo in PINNED_REPOS.items()}
+    seen = {CYFR_REPO: 0, LOCUS_REPO: 0, **{repo: 0 for repo in pinned}}
     for line in text.splitlines():
         if not re.match(r"^\s*image:", line):
             continue
@@ -768,13 +774,13 @@ def check_scaffold_compose(text, manifest):
         repo = repository(ref) if ref else None
         if repo in want and ref != want[repo]:
             return f"the scaffold's compose names {ref}, not {want[repo]}"
-        if repo == "caddy" and not ref.endswith("@" + images["caddy"]):
-            return f"the scaffold's compose names {ref}, not caddy at {images['caddy']}"
+        if repo in pinned and not ref.endswith("@" + images[pinned[repo]]):
+            return f"the scaffold's compose names {ref}, not {repo} at {images[pinned[repo]]}"
         if repo not in seen:
             return f"the scaffold's compose names {line.strip()!r}, which the manifest does not cover"
         seen[repo] += 1
     if 0 in seen.values():
-        return f"the scaffold's compose names images {seen}, not each of cyfr, cyfr-locus and caddy"
+        return f"the scaffold's compose names images {seen}, not each of cyfr, cyfr-locus, caddy and tailscale"
     return None
 
 
@@ -802,11 +808,12 @@ def check_manifest(data, version, scaffold, compose_text):
         digest = "sha256:" + hashlib.sha256(f.read()).hexdigest()
     if manifest["scaffold"] != digest:
         return f"release.json's scaffold is {manifest['scaffold']}, the tarball's digest {digest}"
-    caddy, reason = compose_caddy(compose_text)
-    if reason:
-        return reason
-    if manifest["images"]["caddy"] != caddy:
-        return f"release.json's caddy is {manifest['images']['caddy']}, docker-compose.yml's {caddy}"
+    for key in PINNED_REPOS:
+        digest, reason = compose_pinned(compose_text, key)
+        if reason:
+            return reason
+        if manifest["images"][key] != digest:
+            return f"release.json's {key} is {manifest['images'][key]}, docker-compose.yml's {digest}"
     try:
         staged = tar_member(scaffold, "docker-compose.yml")
     except (tarfile.TarError, OSError) as e:
@@ -952,9 +959,11 @@ def planted_tree(name, compose_text, script_text=None):
 def planted_composes(text):
     """Composes the pinned scaffold must refuse."""
     caddy = re.search(r"^(\s*image:\s*caddy:[^@\s]*)@sha256:[0-9a-f]{64}\s*$", text, re.MULTILINE)
+    tailscale = re.search(r"^(\s*image:\s*tailscale/tailscale:[^@\s]*)@sha256:[0-9a-f]{64}\s*$", text, re.MULTILINE)
     extra = "\n  extra:\n    image: %s\n"
     return [
         ("an unpinned caddy", text.replace(caddy.group(0), caddy.group(1)) if caddy else text),
+        ("an unpinned tailscale", text.replace(tailscale.group(0), tailscale.group(1)) if tailscale else text),
         ("another unpinned image", text + extra % "postgres:18"),
         ("a repository cyfr-locus is a prefix of", text + extra % (LOCUS_REPO + "-extra:latest")),
         ("no cyfr image", re.sub(r"ghcr\.io/cyfrworks/cyfr:\S+", LOCUS_REPO + ":latest", text)),
@@ -995,14 +1004,16 @@ def manifest_mode_failures(pinned, version):
     """The workflow's --manifest mode, run as the workflow runs it, on
     manifests written for the pinned scaffold."""
     with open(COMPOSE) as f:
-        caddy, reason = compose_caddy(f.read())
-    if reason:
-        return [reason], 0
+        compose = f.read()
+    caddy, reason = compose_pinned(compose, "caddy")
+    tailscale, other = compose_pinned(compose, "tailscale")
+    if reason or other:
+        return [reason or other], 0
     with open(pinned, "rb") as f:
         scaffold = "sha256:" + hashlib.sha256(f.read()).hexdigest()
     good = {
         "version": version,
-        "images": {"cyfr": FAKE_CYFR, "cyfr_locus": FAKE_LOCUS, "caddy": caddy},
+        "images": {"cyfr": FAKE_CYFR, "cyfr_locus": FAKE_LOCUS, "caddy": caddy, "tailscale": tailscale},
         "scaffold": scaffold,
     }
     other = other_version(version)
@@ -1025,6 +1036,8 @@ def manifest_mode_failures(pinned, version):
         ("another release's manifest", with_(version=other), other, 1),
         ("another scaffold digest", with_(scaffold=wrong), version, 1),
         ("another caddy digest", with_(caddy=wrong), version, 1),
+        ("another tailscale digest", with_(tailscale=wrong), version, 1),
+        ("the tailscale digest dropped", json.dumps({**good, "images": {k: v for k, v in good["images"].items() if k != "tailscale"}}).encode(), version, 1),
         ("another cyfr digest", with_(cyfr=wrong), version, 1),
         ("the image digests swapped", with_(cyfr=FAKE_LOCUS, cyfr_locus=FAKE_CYFR), version, 1),
         ("an extra key", json.dumps({**good, "latest": True}).encode(), version, 1),

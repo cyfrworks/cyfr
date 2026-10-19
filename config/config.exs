@@ -92,28 +92,43 @@ config :sanctum, :caller_memo_ttl_ms, 2_000
 # grant whether or not it runs. The suite turns it off.
 config :sanctum, :stored_grants_check_enabled, true
 
-# Where this deployment is reachable when the operator declared nothing:
-# the endpoint's own scheme, host and port. `CYFR_PUBLIC_URL` overrides it
-# (`:sanctum, :public_url`); an OAuth `redirect_uri` needs an absolute
-# origin either way. Kept in step with the endpoint below — and with the
-# per-environment ports, which override this value.
+# Where this deployment is reachable when it has no public URL: a local
+# home's address, `http://localhost:<port>`, kept in step with the
+# endpoint below and with the per-environment ports, which override this
+# value. `config/runtime.exs` writes it, and `:sanctum, :public_url`, from
+# the home's reach (`Cyfr.RuntimeConfig.resolve_reach/1`); an OAuth
+# `redirect_uri` needs an absolute origin either way.
 config :sanctum, :fallback_origin, "http://localhost:4000"
+
+# The proxies whose forwarded headers the proxy listener trusts
+# (`Sanctum.ClientIp`): none, as a local home has no proxy listener.
+# `config/runtime.exs` writes the reach's.
+config :sanctum, :proxy_trust, :none
+
+# Whose HSTS a response carries (`CyfrWeb.Plugs.ApiSecurityHeaders.maybe_hsts/1`):
+# none, a local home's. `config/runtime.exs` writes the reach's: the
+# endpoint's on the proxy listener in a tailnet home, Caddy's in a public
+# one.
+config :cyfr, :hsts, :none
 
 # Configures the endpoint
 # The one endpoint: the API, the MCP transport, tinctures, and the Prism
-# LiveViews all answer on it — one origin, one cookie, one login.
+# LiveViews all answer on it — one origin, one cookie, one login — on its
+# loopback listener (`http:`) and, in a tailnet or public home, the proxy
+# listener (`proxy:`), each started and tagged by `CyfrWeb.Ingress`.
 config :cyfr, CyfrWeb.Endpoint,
   url: [host: "localhost"],
-  adapter: Bandit.PhoenixAdapter,
+  adapter: CyfrWeb.Ingress,
   render_errors: [
     formats: [html: PrismWeb.ErrorHTML, json: CyfrWeb.ErrorJSON],
     layout: false
   ],
   pubsub_server: Cyfr.PubSub,
   live_view: [signing_salt: "cyfrLVdev"],
-  # The drain, in every environment: on shutdown the listener stops
+  # The drain, in every environment: on shutdown each listener stops
   # accepting and lets the connections already open finish for this long
-  # before it closes them. Each environment's `http:` merges over it.
+  # before it closes them. Each environment's `http:` merges over it, and
+  # the proxy listener takes every option here but the address and port.
   http: [
     thousand_island_options: [shutdown_timeout: 30_000],
     # HTTP/1.1 alone, in every environment, as the release's `http:` in
@@ -322,9 +337,11 @@ config :arca, Arca.Retention,
 # (`Sanctum.Policy.Ceiling`), not a scalar knob.
 
 # CORS allowlist — empty by default: no cross-origin browser caller, which
-# a same-origin deployment needs. Set CYFR_CORS_ALLOWED_ORIGINS to name the
-# origins of a frontend served elsewhere; the boot guard in Cyfr.Application
-# refuses a wildcard once authentication is configured.
+# a same-origin deployment needs. A deployment's own configuration may name
+# a list here, which an unassigned CYFR_CORS_ALLOWED_ORIGINS leaves
+# standing; assigned, the variable's list replaces it, and assigned empty
+# it is the empty allowlist (`config/runtime.exs`). The boot guard in
+# Cyfr.Application refuses a wildcard once authentication is configured.
 config :cyfr, :cors_allowed_origins, []
 
 # Prometheus metrics — off by default because the /metrics endpoint is

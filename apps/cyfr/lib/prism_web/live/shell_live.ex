@@ -342,9 +342,10 @@ defmodule PrismWeb.ShellLive do
     tincture = Enum.find(socket.assigns.tinctures, &(&1.id == tincture_id))
 
     if tincture do
-      # The public address: the one origin plus the tincture's path.
+      # The public address: the home's own origin (`Sanctum.origin/0`) plus
+      # the tincture's path.
       url =
-        CyfrWeb.Endpoint.url() <>
+        Cyfr.RuntimeConfig.origin() <>
           Prima.TinctureUrl.path(tincture.athanor_segment, tincture.publisher, tincture.name)
 
       {:noreply,

@@ -13,13 +13,19 @@ defmodule Prima.LocusRoles do
   and the socket spawns' relays attach to. The image's own entrypoint and
   health probe serve `image_role`.
 
-  The release's endpoint, which cyfr serves, binds one fixed address
-  under compose: `endpoint_address`, on the network `endpoint_network`
-  (compose's `default`), whose subnet is `endpoint_subnet` and whose other
-  containers take addresses from `endpoint_ip_range` alone, so nothing
-  started first can hold cyfr's. Docker publishes the host's loopback port
-  to that address, and the networks the Locus roles join never reach the
-  endpoint.
+  The release's endpoint, which cyfr serves, binds its loopback listener
+  to one fixed address under compose: `endpoint_address`, on the network
+  `endpoint_network` (compose's `default`), whose subnet is
+  `endpoint_subnet` and whose other containers take addresses from
+  `endpoint_ip_range` alone, so nothing started first can hold cyfr's.
+  Docker publishes the host's loopback port to that address, and the
+  networks the Locus roles join never reach the endpoint. Its proxy
+  listener, in a tailnet or public home, binds `edge_address` on the
+  network `edge_network`, whose subnet is `edge_subnet` and whose dynamic
+  range is `edge_ip_range`; the two proxies that forward to it sit there
+  at fixed addresses of their own, Caddy at `edge_caddy_address` and
+  Tailscale at `edge_tailscale_address`, the addresses whose forwarded
+  headers the proxy listener trusts.
 
   A role (`roles/0`, in the order runtime, builds, backends) is served
   under cyfr-locus from the uid pool `pool`, whose uids `uids` are named
@@ -73,7 +79,13 @@ defmodule Prima.LocusRoles do
           endpoint_network: String.t(),
           endpoint_subnet: String.t(),
           endpoint_ip_range: String.t(),
-          endpoint_address: String.t()
+          endpoint_address: String.t(),
+          edge_network: String.t(),
+          edge_subnet: String.t(),
+          edge_ip_range: String.t(),
+          edge_address: String.t(),
+          edge_caddy_address: String.t(),
+          edge_tailscale_address: String.t()
         }
 
   @typedoc "One role's facts."
@@ -103,7 +115,13 @@ defmodule Prima.LocusRoles do
     endpoint_network: "default",
     endpoint_subnet: "172.16.230.0/24",
     endpoint_ip_range: "172.16.230.128/25",
-    endpoint_address: "172.16.230.2"
+    endpoint_address: "172.16.230.2",
+    edge_network: "edge",
+    edge_subnet: "172.16.234.0/24",
+    edge_ip_range: "172.16.234.128/25",
+    edge_address: "172.16.234.2",
+    edge_caddy_address: "172.16.234.3",
+    edge_tailscale_address: "172.16.234.4"
   }
 
   @roles [

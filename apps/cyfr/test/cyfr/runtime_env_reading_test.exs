@@ -66,7 +66,6 @@ defmodule Cyfr.RuntimeEnvReadingTest do
     src = source()
 
     assert src =~ "env_str = fn key, default -> env!(key, :string?, nil) || default end"
-    assert src =~ "env_int = fn key, default -> env!(key, :integer?, nil) || default end"
     assert src =~ "case Prima.EnvValue.switch(getenv, key, default) do"
   end
 
@@ -84,12 +83,13 @@ defmodule Cyfr.RuntimeEnvReadingTest do
 
   # The allowlist's empty value is its meaning: no cross-origin caller at
   # all, which is what `.env.example` promises and what the shipped stack
-  # assigns, while its configured default is the wildcard
-  # (`config/config.exs`) that `Cyfr.Application.cors_enforcement/3`
-  # refuses for an authenticated release. Read as blank-is-unset, an
-  # operator who assigned the empty allowlist got the wildcard and a
-  # release that would not boot. It is the only read that may take the
-  # assignment for the value, so the exception cannot spread unnoticed.
+  # assigns, while an unassigned variable leaves the application's
+  # configured list standing, which a deployment's own configuration may
+  # set (`CyfrWeb.Plugs.CORS`). Read as blank-is-unset, an operator who
+  # assigned the empty allowlist got that configured list instead. It is
+  # the only read that may take the assignment for the value, so the
+  # exception cannot spread unnoticed. `Cyfr.RuntimeConfigWiringTest`
+  # loads the file for each of the three.
   test "CYFR_CORS_ALLOWED_ORIGINS is the one read whose assigned empty value is a value" do
     src = source()
 
@@ -99,7 +99,7 @@ defmodule Cyfr.RuntimeEnvReadingTest do
 
     refute src =~ ~S|env_str.("CYFR_CORS_ALLOWED_ORIGINS"|,
            "CYFR_CORS_ALLOWED_ORIGINS must not be read as blank-is-unset: an assigned " <>
-             "empty allowlist would read as no answer and leave the wildcard standing"
+             "empty allowlist would read as no answer and leave the configured list standing"
 
     read_by_assignment =
       ~r/env_assigned\.\("([A-Z0-9_]+)"\)/
@@ -112,15 +112,37 @@ defmodule Cyfr.RuntimeEnvReadingTest do
              inspect(read_by_assignment)
   end
 
-  test "CYFR_BEHIND_PROXY is read as a boolean, once" do
+  # How the home is reached is one resolution of every reach setting
+  # (`Cyfr.RuntimeConfig.resolve_reach/1`), from the names the .env files
+  # assign and the merged environment, and everything this file writes of
+  # it comes from the answer: a second read of one of its settings here
+  # could disagree with the one the boot checked.
+  @reach_keys ~w(CYFR_REACH CYFR_HOST CYFR_TAILNET_NODE_ID CYFR_PUBLIC_URL CADDY_ACME_EMAIL
+                 CYFR_PORT CYFR_BIND_ADDRESS CYFR_LOCAL_INGRESS_ASSERTED CYFR_PROXY_BIND_ADDRESS
+                 CYFR_PROXY_PORT CYFR_TRUSTED_PROXY_HOPS CYFR_TRUSTED_PROXY_CIDRS)
+
+  test "the reach is read by its resolver alone, from the file's own read and the merged one" do
     src = source()
 
-    assert src =~ ~S|behind_proxy? = env_bool.("CYFR_BEHIND_PROXY", false)|,
-           "CYFR_BEHIND_PROXY must be read with env_bool — read as a string and " <>
-             "tested for truthiness, the value \"false\" enables XFF trust"
+    assert src =~
+             ~S|file_env =
+    if Enum.any?(env_files, &File.regular?/1),
+      do: Cyfr.EnvFiles.source!(env_files, side_effect: false)|
 
-    refute src =~ ~S|env_str.("CYFR_BEHIND_PROXY"|,
-           "CYFR_BEHIND_PROXY must not be read as a string"
+    assert src =~ ~S|sourced = Cyfr.EnvFiles.source!(env_files ++ [System.get_env()])|
+
+    assert src =~
+             ~S|Cyfr.RuntimeConfig.resolve_reach(%{
+           file: file_env,
+           process: sourced,
+           release?: Cyfr.RuntimeConfig.release?()
+         })|
+
+    assert src =~ ~S|raise "[Cyfr] FATAL: " <> Prima.Refusal.message({code, payload})|
+
+    for key <- @reach_keys do
+      refute src =~ ~s|"#{key}"|, "config/runtime.exs reads #{key} itself"
+    end
   end
 
   # A `mix` boot runs the runtime beside CYFR, and configures it here
@@ -196,20 +218,16 @@ defmodule Cyfr.RuntimeEnvReadingTest do
   # (`Cyfr.Platform.Settings.Roster.read/2`), whose validator is the one
   # definition of its floor and range: the file spells none of their
   # variables itself, so no second, hand-written bound can disagree with
-  # the roster's. The trusted proxy count, a deployment variable, is read
-  # by the strict bound reader from its floor.
-  test "the platform settings are read through the roster, and the proxy count strictly" do
+  # the roster's.
+  test "the platform settings are read through the roster" do
     src = source()
 
     assert src =~ ~S|roster.read(entry, getenv)|
-    assert src =~ ~S|roster.unknown(file_names, Map.keys(System.get_env()))|
+    assert src =~ ~S[roster.unknown(Map.keys(file_env || %{}), Map.keys(System.get_env()))]
 
     for name <- Cyfr.Platform.Settings.Roster.variables() do
       refute src =~ ~s|"#{name}"|, "config/runtime.exs spells the rostered #{name} itself"
     end
-
-    assert src =~ ~S|env_bound.("CYFR_TRUSTED_PROXY_HOPS", 0..16, "proxy hops")|
-    refute src =~ ~S|env_int.("CYFR_TRUSTED_PROXY_HOPS"|
   end
 
   # Dotenvy is a dependency; these are the behaviours the helpers above

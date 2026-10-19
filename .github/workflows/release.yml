@@ -269,8 +269,9 @@ jobs:
           retention-days: 1
 
   # The CLI's release and its provenance, and the release's signed manifest:
-  # release.json names the two merged images, the Caddy image the compose
-  # pins and the scaffold, each by digest, and is signed keyless under this
+  # release.json names the two merged images, the Caddy and Tailscale images
+  # the compose pins (third-party images this workflow does not build) and
+  # the scaffold, each by digest, and is signed keyless under this
   # workflow's identity at the tag. The order avoids a digest cycle: the
   # images' digests go into the scaffold's compose, the scaffold is built
   # and hashed, and only then is the manifest written, checked and signed.
@@ -329,20 +330,22 @@ jobs:
           cyfr=$(cat "$RUNNER_TEMP/merged/cyfr/digest")
           locus=$(cat "$RUNNER_TEMP/merged/cyfr-locus/digest")
           caddy=$(sed -nE 's/^[[:space:]]*image:[[:space:]]*caddy:[^@[:space:]]*@(sha256:[0-9a-f]{64})[[:space:]]*$/\1/p' docker-compose.yml)
+          tailscale=$(sed -nE 's/^[[:space:]]*image:[[:space:]]*tailscale\/tailscale:[^@[:space:]]*@(sha256:[0-9a-f]{64})[[:space:]]*$/\1/p' docker-compose.yml)
           scaffold=$(sha256sum apps/codex/cyfr-scaffold.tar.gz | cut -d' ' -f1)
           jq -n \
             --arg version "$GITHUB_REF_NAME" \
             --arg cyfr "$cyfr" \
             --arg locus "$locus" \
             --arg caddy "$caddy" \
+            --arg tailscale "$tailscale" \
             --arg scaffold "sha256:$scaffold" \
-            '{version: $version, images: {cyfr: $cyfr, cyfr_locus: $locus, caddy: $caddy}, scaffold: $scaffold}' \
+            '{version: $version, images: {cyfr: $cyfr, cyfr_locus: $locus, caddy: $caddy, tailscale: $tailscale}, scaffold: $scaffold}' \
             > "$RUNNER_TEMP/release/release.json"
 
       # The manifest's shape (tests/fixtures/release_manifest.json's rules),
       # its version against the tag, its scaffold digest against the file,
-      # its Caddy digest against the compose, and the scaffold's compose
-      # against its image digests.
+      # its Caddy and Tailscale digests against the compose, and the
+      # scaffold's compose against its image digests.
       - name: Validate the release manifest
         run: python3 -I tests/ci-release-graph.py --manifest "$RUNNER_TEMP/release/release.json" --version "$GITHUB_REF_NAME" --scaffold apps/codex/cyfr-scaffold.tar.gz
 

@@ -14,13 +14,25 @@ defmodule Cyfr.RuntimeConfigWiringTest do
 
   @root Path.expand("../../../..", __DIR__)
 
+  # Every setting the reach reads, so a case clears the ones it does not
+  # set.
+  @reach_keys ~w(CYFR_REACH CYFR_HOST CYFR_TAILNET_NODE_ID CYFR_PUBLIC_URL CADDY_ACME_EMAIL
+                 CYFR_PORT CYFR_BIND_ADDRESS CYFR_LOCAL_INGRESS_ASSERTED CYFR_PROXY_BIND_ADDRESS
+                 CYFR_PROXY_PORT CYFR_TRUSTED_PROXY_HOPS CYFR_TRUSTED_PROXY_CIDRS
+                 CYFR_LOCUS_BUILDS_URL)
+
   # Enough for the prod branch to reach the database section; everything else
-  # has a default or is gated behind a knob this test does not set.
+  # has a default or is gated behind a knob this test does not set. A local
+  # home, which a release must name: a case that points RELEASE_ROOT at a
+  # directory of its own is a release.
   defp base_env do
-    %{
+    @reach_keys
+    |> Map.new(&{&1, nil})
+    |> Map.merge(%{
       "CYFR_SECRET_KEY_BASE" => Base.encode64(:crypto.strong_rand_bytes(48)),
-      "RELEASE_NAME" => "cyfr"
-    }
+      "RELEASE_NAME" => "cyfr",
+      "CYFR_REACH" => "local"
+    })
   end
 
   defp with_env(overrides, fun) do
@@ -299,77 +311,351 @@ defmodule Cyfr.RuntimeConfigWiringTest do
     end
   end
 
-  describe "the trusted proxies" do
-    @proxy_unset %{
-      "CYFR_BEHIND_PROXY" => nil,
-      "CYFR_TRUSTED_PROXY_HOPS" => nil,
-      "CYFR_TRUSTED_PROXY_CIDRS" => nil
-    }
+  # ==========================================================================
+  # The reach
+  # ==========================================================================
 
-    test "behind a proxy, one hop unless set, any count from 0 to 16, and the CIDRs as listed" do
-      with_env(Map.put(@proxy_unset, "CYFR_BEHIND_PROXY", "on"), fn ->
-        sanctum = read_prod_config!()[:sanctum]
-        assert sanctum[:trust_x_forwarded_for] == true
-        assert sanctum[:trusted_proxy_hops] == 1
-        refute Keyword.has_key?(sanctum, :trusted_proxy_cidrs)
+  @reach_vectors Path.expand("../../../../tests/fixtures/reach_modes.json", __DIR__)
+                 |> File.read!()
+                 |> Jason.decode!()
+
+  # The .env a vector's file map is, each value single-quoted, so it is
+  # read as written.
+  defp dotenv(file) do
+    Enum.map_join(file, fn {key, value} ->
+      refute String.contains?(value, "'"), "#{key}'s value cannot be single-quoted"
+      "#{key}='#{value}'\n"
+    end)
+  end
+
+  # The boot a vector describes: its file map as RELEASE_ROOT's .env (none
+  # when it read no file), and in the process environment each value the
+  # merged read holds otherwise, so the file and the environment over it
+  # read as the vector's two maps.
+  defp boot_vector(%{"input" => %{"file" => file, "process" => process}} = vector, dir, fun) do
+    assert vector["input"]["release?"] == true, vector["name"]
+    env_file = Path.join(dir, ".env")
+    if file, do: File.write!(env_file, dotenv(file)), else: File.rm(env_file)
+
+    # The merged read holds every name .env assigns; a blank one, which
+    # reads as unset, the vector may leave out.
+    for {key, value} <- file || %{}, String.trim(value) != "" do
+      assert Map.has_key?(process, key), "#{vector["name"]}: #{key} is in .env alone"
+    end
+
+    env =
+      for key <- @reach_keys, into: %{"RELEASE_ROOT" => dir} do
+        overrides? = Map.has_key?(process, key) and process[key] != (file || %{})[key]
+        {key, if(overrides?, do: process[key])}
+      end
+
+    # A builds URL boots beside its key.
+    builds_key =
+      if process["CYFR_LOCUS_BUILDS_URL"], do: Base.encode16(:crypto.strong_rand_bytes(32))
+
+    with_env(Map.put(env, "CYFR_LOCUS_BUILDS_KEY", builds_key), fun)
+  end
+
+  defp address(text) do
+    {:ok, ip} = :inet.parse_strict_address(String.to_charlist(text))
+    ip
+  end
+
+  defp trust("none"), do: :none
+  defp trust(%{"cidrs" => cidrs}), do: {:cidrs, cidrs}
+  defp trust(%{"hops" => hops}), do: {:hops, hops}
+
+  describe "the reach" do
+    @describetag :tmp_dir
+
+    test "every refused boot vector refuses the boot with its sentence", %{tmp_dir: dir} do
+      refused =
+        for %{"refusal" => refusal} = vector <- @reach_vectors["boot"], do: {vector, refusal}
+
+      assert length(refused) > 40
+
+      for {vector, %{"sentence" => sentence}} <- refused do
+        boot_vector(vector, dir, fn ->
+          message = Exception.message(assert_raise(RuntimeError, &read_prod_config!/0))
+          assert message == "[Cyfr] FATAL: " <> sentence, vector["name"]
+        end)
+      end
+    end
+
+    test "every resolved boot vector configures its listeners, address, origins, trust and HSTS",
+         %{tmp_dir: dir} do
+      resolved = for %{"reach" => reach} = vector <- @reach_vectors["boot"], do: {vector, reach}
+      assert length(resolved) > 10
+
+      for {vector, reach} <- resolved, vector["input"]["release?"] do
+        boot_vector(vector, dir, fn ->
+          config = read_prod_config!()
+          endpoint = config[:cyfr][CyfrWeb.Endpoint]
+          name = vector["name"]
+          [loopback, port] = reach["listeners"]["loopback"]
+
+          assert {endpoint[:http][:ip], endpoint[:http][:port]} == {address(loopback), port}, name
+
+          case reach["listeners"]["proxy"] do
+            "none" ->
+              refute Keyword.has_key?(endpoint, :proxy), name
+
+            [proxy, proxy_port] ->
+              assert endpoint[:proxy] == [ip: address(proxy), port: proxy_port], name
+          end
+
+          expected_url =
+            case reach["mode"] do
+              "local" -> [scheme: "http", host: "localhost", port: reach["head"]["port"]]
+              _exposed -> [scheme: "https", host: reach["head"]["host"], port: 443]
+            end
+
+          assert endpoint[:url] == expected_url, name
+          assert endpoint[:check_origin] == reach["check_origins"], name
+          assert config[:cyfr][:mcp_allowed_origins] == reach["check_origins"], name
+          assert config[:sanctum][:proxy_trust] == trust(reach["trust"]), name
+          assert config[:cyfr][:hsts] == String.to_existing_atom(reach["hsts"]), name
+
+          # `Sanctum.origin/0`: the public URL, or the fallback where there
+          # is none, as a local home has none.
+          assert config[:sanctum][:public_url] == reach["head"]["public_url"], name
+          assert config[:sanctum][:fallback_origin] == reach["origin"], name
+
+          # The session cookie is a secure one in a release, whatever the
+          # mode: a browser keeps it for https and for localhost alike.
+          assert config[:cyfr][:cookie_secure] == true, name
+        end)
+      end
+    end
+
+    test "a development or test boot with no mode is a local home on the loopback" do
+      for read <- [&read_dev_config!/0, &read_prod_config!/0] do
+        with_env(%{"CYFR_REACH" => nil, "RELEASE_ROOT" => nil}, fn ->
+          config = read.()
+          endpoint = config[:cyfr][CyfrWeb.Endpoint]
+
+          assert endpoint[:http][:ip] == {127, 0, 0, 1}
+          assert endpoint[:http][:port] == 4000
+          refute Keyword.has_key?(endpoint, :proxy)
+          assert endpoint[:url] == [scheme: "http", host: "localhost", port: 4000]
+          assert config[:sanctum][:fallback_origin] == "http://localhost:4000"
+          assert config[:sanctum][:proxy_trust] == :none
+        end)
+      end
+    end
+
+    test "a release names its mode, whatever else it sets", %{tmp_dir: dir} do
+      for reach <- [nil, ""] do
+        with_env(%{"CYFR_REACH" => reach, "RELEASE_ROOT" => dir}, fn ->
+          message = Exception.message(assert_raise(RuntimeError, &read_prod_config!/0))
+
+          assert message ==
+                   "[Cyfr] FATAL: " <> Prima.Refusal.message({:reach_missing, %{}})
+        end)
+      end
+    end
+
+    # The compose stack's own address is refused like any other: a bare
+    # release cannot tell itself from the container, so only the compose
+    # file's assertion, from the process environment and exactly `true`,
+    # lets the loopback listener bind it.
+    test "a bind off the loopback stands on the process's assertion alone, exactly true",
+         %{tmp_dir: dir} do
+      bind = %{"CYFR_BIND_ADDRESS" => "172.16.230.2", "RELEASE_ROOT" => dir}
+      not_loopback = {:reach_bind_not_loopback, %{address: "172.16.230.2"}}
+
+      with_env(bind, fn ->
+        message = Exception.message(assert_raise(RuntimeError, &read_prod_config!/0))
+        assert message == "[Cyfr] FATAL: " <> Prima.Refusal.message(not_loopback)
       end)
 
-      for hops <- [0, 1, 16] do
-        env = %{"CYFR_BEHIND_PROXY" => "on", "CYFR_TRUSTED_PROXY_HOPS" => "#{hops}"}
+      with_env(Map.put(bind, "CYFR_LOCAL_INGRESS_ASSERTED", "true"), fn ->
+        assert read_prod_config!()[:cyfr][CyfrWeb.Endpoint][:http][:ip] == {172, 16, 230, 2}
+      end)
 
-        with_env(Map.merge(@proxy_unset, env), fn ->
-          assert read_prod_config!()[:sanctum][:trusted_proxy_hops] == hops
+      for spelled <- ["TRUE", "True", "1", "yes", "on", "false"] do
+        with_env(Map.put(bind, "CYFR_LOCAL_INGRESS_ASSERTED", spelled), fn ->
+          message = Exception.message(assert_raise(RuntimeError, &read_prod_config!/0))
+
+          assert message ==
+                   "[Cyfr] FATAL: " <>
+                     Prima.Refusal.message(
+                       {:reach_setting_invalid,
+                        %{key: "CYFR_LOCAL_INGRESS_ASSERTED", value: spelled}}
+                     )
         end)
       end
 
-      env = %{
-        "CYFR_BEHIND_PROXY" => "on",
-        "CYFR_TRUSTED_PROXY_CIDRS" => "10.0.0.0/8, 192.0.2.7, fd00::/8"
+      # In .env it is refused, even beside the process's own.
+      File.write!(Path.join(dir, ".env"), "CYFR_LOCAL_INGRESS_ASSERTED=true\n")
+
+      for process <- [nil, "true"] do
+        with_env(Map.put(bind, "CYFR_LOCAL_INGRESS_ASSERTED", process), fn ->
+          message = Exception.message(assert_raise(RuntimeError, &read_prod_config!/0))
+
+          assert message ==
+                   "[Cyfr] FATAL: " <> Prima.Refusal.message({:reach_assertion_from_file, %{}})
+        end)
+      end
+    end
+
+    # Retired with no compatibility: no roster declares it, so a .env or a
+    # process that still sets it is refused by name, like any name the
+    # server does not read.
+    # Spelled split so this file is not itself a hit of the retired name.
+    @retired "CYFR_BEHIND" <> "_PROXY"
+
+    test "the retired proxy switch, #{@retired}, is refused by name, from .env and from the process",
+         %{tmp_dir: dir} do
+      retired = @retired
+
+      with_env(%{retired => "true"}, fn ->
+        message = Exception.message(assert_raise(RuntimeError, &read_prod_config!/0))
+        assert message =~ "[Cyfr] FATAL: #{retired} is not a variable this server reads"
+      end)
+
+      File.write!(Path.join(dir, ".env"), "#{retired}=false\n")
+
+      with_env(%{"RELEASE_ROOT" => dir}, fn ->
+        message = Exception.message(assert_raise(RuntimeError, &read_prod_config!/0))
+        assert message =~ "[Cyfr] FATAL: #{retired} is not a variable this server reads"
+      end)
+    end
+
+    # The callback is the home's own address in every mode, so no request
+    # header chooses it (`Sanctum.Vault.OAuthRedirectUriTest` holds what
+    # Ueberauth then builds from it).
+    test "the OpenID Connect callback is the home's own address", %{tmp_dir: dir} do
+      oidc = %{
+        "CYFR_AUTH_PROVIDER" => "oidc",
+        "CYFR_OIDC_ISSUER" => "https://auth.example.com",
+        "CYFR_OIDC_CLIENT_ID" => "cyfr",
+        "CYFR_OIDC_CLIENT_SECRET" => "secret"
       }
 
-      with_env(Map.merge(@proxy_unset, env), fn ->
-        assert read_prod_config!()[:sanctum][:trusted_proxy_cidrs] ==
-                 ["10.0.0.0/8", "192.0.2.7", "fd00::/8"]
-      end)
+      tailnet = %{
+        "CYFR_REACH" => "tailnet",
+        "CYFR_HOST" => "cyfr.tail1a2b3c.ts.net",
+        "CYFR_TAILNET_NODE_ID" => "nAbc123XYZ1CNTRL",
+        "CYFR_PUBLIC_URL" => "https://cyfr.tail1a2b3c.ts.net",
+        "RELEASE_ROOT" => dir
+      }
+
+      for {reach, origin} <- [
+            {%{"CYFR_PORT" => "4005"}, "http://localhost:4005"},
+            {tailnet, "https://cyfr.tail1a2b3c.ts.net"}
+          ] do
+        with_env(Map.merge(oidc, reach), fn ->
+          {Ueberauth.Strategy.Oidcc, options} =
+            read_prod_config!()[:ueberauth][Ueberauth][:providers][:oidcc]
+
+          assert options[:callback_url] == origin <> "/auth/oidcc/callback"
+        end)
+      end
     end
+  end
 
-    test "not behind a proxy, nothing is trusted" do
-      with_env(@proxy_unset, fn ->
-        sanctum = read_prod_config!()[:sanctum]
-        refute Keyword.has_key?(sanctum, :trust_x_forwarded_for)
-        refute Keyword.has_key?(sanctum, :trusted_proxy_hops)
-      end)
-    end
+  # ==========================================================================
+  # The setup token
+  # ==========================================================================
 
-    test "a hop count outside 0 to 16 refuses the boot naming it, behind a proxy or not" do
-      for behind <- ["on", nil], bad <- ["17", "-1", "one", "1.0"] do
-        env = %{"CYFR_BEHIND_PROXY" => behind, "CYFR_TRUSTED_PROXY_HOPS" => bad}
+  describe "CYFR_SETUP_TOKEN" do
+    @token String.duplicate("5e7", 21) <> "a"
+    @setup_unset %{
+      "CYFR_SETUP_TOKEN" => nil,
+      "CYFR_PLATFORM_ADMIN_EMAILS" => nil,
+      "CYFR_RESTORE_TOKEN" => nil,
+      "CYFR_HEADLESS" => nil,
+      "CYFR_AUTH_PROVIDER" => nil,
+      "CYFR_GITHUB_CLIENT_ID" => nil,
+      "CYFR_GOOGLE_CLIENT_ID" => nil,
+      "CYFR_GOOGLE_CLIENT_SECRET" => nil
+    }
+    @github %{"CYFR_GITHUB_CLIENT_ID" => "Ov23lib66tiIwXkgUpwm"}
+    @oidc %{
+      "CYFR_AUTH_PROVIDER" => "oidc",
+      "CYFR_OIDC_ISSUER" => "https://auth.example.com",
+      "CYFR_OIDC_CLIENT_ID" => "cyfr",
+      "CYFR_OIDC_CLIENT_SECRET" => "secret"
+    }
 
-        with_env(Map.merge(@proxy_unset, env), fn ->
-          message = Exception.message(assert_raise(RuntimeError, &read_prod_config!/0))
+    defp setup_env(env), do: Map.merge(@setup_unset, env)
 
-          assert message =~
-                   "[Cyfr] FATAL: CYFR_TRUSTED_PROXY_HOPS=#{inspect(bad)} must be a whole " <>
-                     "number of proxy hops from 0 to 16"
+    test "stands where a setup can use it: a GitHub or Google client and nothing else" do
+      assert byte_size(@token) == 64
+
+      for client <- [@github, %{"CYFR_GOOGLE_CLIENT_ID" => "426327824138.apps.example"}] do
+        with_env(setup_env(Map.put(client, "CYFR_SETUP_TOKEN", @token)), fn ->
+          assert is_list(read_prod_config!())
         end)
       end
     end
 
-    test "an entry that is neither an address nor a CIDR refuses the boot naming the entry" do
-      for behind <- ["on", nil],
-          bad <- ["10.0.0.0/33", "10.0.0.0/8/1", "proxy.internal", "10.0.0.0/x", "::1/129"] do
-        env = %{
-          "CYFR_BEHIND_PROXY" => behind,
-          "CYFR_TRUSTED_PROXY_CIDRS" => "10.0.0.0/8, #{bad}"
-        }
+    test "each condition no setup could use refuses the boot with its sentence, never the token" do
+      for {env, refusal} <- [
+            {%{"CYFR_SETUP_TOKEN" => "abc"}, {:setup_token_refused, %{why: :malformed}}},
+            {%{"CYFR_SETUP_TOKEN" => String.upcase(@token)},
+             {:setup_token_refused, %{why: :malformed}}},
+            {%{"CYFR_SETUP_TOKEN" => @token <> "0"}, {:setup_token_refused, %{why: :malformed}}},
+            {%{"CYFR_PLATFORM_ADMIN_EMAILS" => "operator@example.com"},
+             {:setup_token_with_admins, %{}}},
+            {%{"CYFR_RESTORE_TOKEN" => String.duplicate("ab", 32)},
+             {:setup_token_refused, %{why: :restore_token}}},
+            {%{"CYFR_HEADLESS" => "true"}, {:setup_token_refused, %{why: :headless}}},
+            {@oidc, {:setup_token_refused, %{why: :oidc}}},
+            {%{"CYFR_GITHUB_CLIENT_ID" => nil}, {:setup_token_refused, %{why: :no_provider}}}
+          ] do
+        env = setup_env(Map.merge(Map.put(@github, "CYFR_SETUP_TOKEN", @token), env))
 
-        with_env(Map.merge(@proxy_unset, env), fn ->
+        with_env(env, fn ->
           message = Exception.message(assert_raise(RuntimeError, &read_prod_config!/0))
-
-          assert message =~
-                   "[Cyfr] FATAL: CYFR_TRUSTED_PROXY_CIDRS entry #{inspect(bad)} is neither"
+          assert message == "[Cyfr] FATAL: " <> Prima.Refusal.message(refusal), inspect(env)
+          refute message =~ String.slice(@token, 0..15)
         end)
       end
+    end
+
+    test "is checked only once the reach stands" do
+      env = %{"CYFR_SETUP_TOKEN" => "abc", "CYFR_REACH" => "lan"}
+
+      with_env(setup_env(env), fn ->
+        message = Exception.message(assert_raise(RuntimeError, &read_prod_config!/0))
+
+        assert message ==
+                 "[Cyfr] FATAL: " <> Prima.Refusal.message({:reach_unknown_mode, %{value: "lan"}})
+      end)
+    end
+  end
+
+  # ==========================================================================
+  # The CORS allowlist
+  # ==========================================================================
+
+  # Unassigned, the variable leaves the application's configured list
+  # standing, which a deployment's own configuration may set; assigned
+  # blank it is the empty allowlist; listed, the list.
+  describe "CYFR_CORS_ALLOWED_ORIGINS" do
+    @configured ["https://app.example.com"]
+
+    defp cors(runtime) do
+      [cyfr: [cors_allowed_origins: @configured]]
+      |> Config.Reader.merge(runtime)
+      |> get_in([:cyfr, :cors_allowed_origins])
+    end
+
+    test "absent, a configured list stands; blank, it is empty; listed, it is the list" do
+      with_env(%{"CYFR_CORS_ALLOWED_ORIGINS" => nil}, fn ->
+        refute Keyword.has_key?(read_prod_config!()[:cyfr], :cors_allowed_origins)
+        assert cors(read_prod_config!()) == @configured
+      end)
+
+      with_env(%{"CYFR_CORS_ALLOWED_ORIGINS" => ""}, fn ->
+        assert cors(read_prod_config!()) == []
+      end)
+
+      with_env(%{"CYFR_CORS_ALLOWED_ORIGINS" => "https://a.example, https://b.example"}, fn ->
+        assert cors(read_prod_config!()) == ["https://a.example", "https://b.example"]
+      end)
     end
   end
 

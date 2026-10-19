@@ -17,6 +17,10 @@ erl_crash.dump
 *.db-wal
 /data/
 
+# The reach engine's state in a project directory: the stack's lock, the
+# change in flight, its receipts and the tailnet's serve configuration.
+/.cyfr/
+
 # Environment files
 .env
 .env.local

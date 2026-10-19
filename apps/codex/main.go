@@ -5,13 +5,11 @@ package main
 
 import (
 	"context"
-	"errors"
 	"os"
 	"os/signal"
 	"syscall"
 
 	"github.com/cyfr/codex/cmd"
-	"github.com/cyfr/codex/internal/prompt"
 )
 
 func main() {
@@ -19,15 +17,11 @@ func main() {
 	// so commands unwind through their defers and cleanup hooks instead of
 	// the process dying mid-write.
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
 
-	if err := cmd.Execute(ctx); err != nil {
-		// A prompt abort is the user's own Ctrl-C: report it in the exit
-		// code the shell convention reserves for it (128+SIGINT), with no
-		// error output — Execute already skipped printing it.
-		if errors.Is(err, prompt.ErrAborted) {
-			os.Exit(130)
-		}
-		os.Exit(1)
-	}
+	// The one place a command's failure ends the process: cmd.Run answers
+	// its status (cmd.ExitStatus), and the context's signal handling is
+	// released before the exit.
+	status := cmd.Run(ctx)
+	stop()
+	os.Exit(status)
 }

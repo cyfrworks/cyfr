@@ -223,13 +223,15 @@ defmodule Cyfr.EnvFilesTest do
   # The boot, evaluated
   # ---------------------------------------------------------------------------
 
-  # The release's environment, with `.env` at its RELEASE_ROOT: the
-  # variables a case sets are restored after it.
+  # The release's environment, with `.env` at its RELEASE_ROOT, of a
+  # local home, which a release must name: the variables a case sets are
+  # restored after it.
   defp with_release_env(dir, fun) do
     env = %{
       "CYFR_SECRET_KEY_BASE" => Base.encode64(:crypto.strong_rand_bytes(48)),
       "RELEASE_NAME" => "cyfr",
       "RELEASE_ROOT" => dir,
+      "CYFR_REACH" => "local",
       "CYFR_DATABASE" => nil,
       "CYFR_COSIGN_KEY" => nil,
       "CYFR_COSIGN_PASSWORD" => nil

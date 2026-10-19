@@ -3,11 +3,15 @@
 
 defmodule Cyfr.StackShapeTest do
   @moduledoc """
-  The shipped stack is one origin: every request Caddy takes reaches cyfr's
-  one endpoint, and compose runs cyfr, the Locus runtime, the Locus
-  backends service behind its egress guard, and (optionally) caddy and the
-  Locus builds service behind its guard — nothing else. Read the files,
-  assert the shape; the same style as the ingress inventory.
+  The shipped stack is one origin: every request Caddy or Tailscale Serve
+  takes reaches cyfr's one endpoint, on its proxy listener, and compose
+  runs cyfr, the Locus runtime, the Locus backends service behind its
+  egress guard, and (optionally) caddy, tailscale and the Locus builds
+  service behind its guard — nothing else. cyfr's loopback listener sits
+  on the `default` network, which carries cyfr alone and which Docker
+  publishes on the host's loopback alone; its proxy listener sits on
+  `edge` with the two proxies, at the role table's addresses. Read the
+  files, assert the shape; the same style as the ingress inventory.
 
   Two readings of docker-compose.yml serve the tests. The tests of the
   Locus services' hardening and `role_drift/3` parse the file whole: the
@@ -933,22 +937,23 @@ defmodule Cyfr.StackShapeTest do
     wrong ++ unspelled ++ documented
   end
 
-  test "the Caddyfile proxies everything to cyfr's one (parameterized) port" do
+  test "the Caddyfile proxies everything to cyfr's proxy listener, on its (parameterized) port" do
     caddy = read!("Caddyfile")
 
     proxies = Regex.scan(~r/^\s*reverse_proxy\s+(\S+)/m, caddy, capture: :all_but_first)
 
-    assert proxies == [["cyfr:{$CYFR_PORT:4000}"]],
-           "expected exactly one reverse_proxy to cyfr:{$CYFR_PORT:4000}"
+    assert proxies == [["cyfr:{$CYFR_PROXY_PORT:4001}"]],
+           "expected exactly one reverse_proxy to cyfr:{$CYFR_PROXY_PORT:4001}"
 
     opens = caddy |> String.graphemes() |> Enum.count(&(&1 == "{"))
     closes = caddy |> String.graphemes() |> Enum.count(&(&1 == "}"))
     assert opens == closes, "unbalanced braces in Caddyfile (#{opens} vs #{closes})"
 
-    refute caddy =~ ~r/porta|4001/
+    # Never the loopback listener: Caddy is not on its network.
+    refute caddy =~ ~r/porta|CYFR_PORT\b|4000/
   end
 
-  test "compose runs cyfr, locus-runtime, locus-backends, locus-builds and caddy — one web origin" do
+  test "compose runs cyfr, locus-runtime, locus-backends, locus-builds, caddy and tailscale — one web origin" do
     compose = read!("docker-compose.yml")
     runtime = LocusRoles.role!(:runtime)
     backends = LocusRoles.role!(:backends)
@@ -964,8 +969,8 @@ defmodule Cyfr.StackShapeTest do
       |> Enum.sort()
 
     guards = for %{guard: guard} <- LocusRoles.roles(), guard != nil, do: guard
-    assert services == Enum.sort(["caddy", "cyfr" | @locus_services] ++ guards)
-    refute compose =~ ~r/porta|4001|8080/
+    assert services == Enum.sort(["caddy", "cyfr", "tailscale" | @locus_services] ++ guards)
+    refute compose =~ ~r/porta|8080/
 
     # The runtime is attached to its network and no other, which cyfr
     # joins: cyfr reaches it there, it reaches cyfr's host API there, and
@@ -1073,17 +1078,19 @@ defmodule Cyfr.StackShapeTest do
     refute networks =~ ~r/internal:\s*true/
   end
 
-  # cyfr holds two fixed addresses, each bound by one listener and never
-  # an interface wildcard, so no other network cyfr joins reaches either:
-  # the host API binds cyfr's address on the runtime's network, reachable
-  # from that network alone, and the endpoint binds cyfr's address on the
-  # default network (the table's), where Docker publishes the host's
-  # loopback port and Caddy reaches it. Each address lies in its network's
-  # subnet, outside the range Docker hands the network's other containers,
-  # and is neither the subnet's network, gateway nor broadcast address; each
-  # subnet is private, outside the pools Docker draws the other networks'
-  # subnets from by default, and apart from the other.
-  test "the host API and the endpoint each bind cyfr's own fixed address on their network" do
+  # cyfr holds three fixed addresses, each bound by one listener and never
+  # an interface wildcard, so no other network cyfr joins reaches any: the
+  # host API binds cyfr's address on the runtime's network, reachable from
+  # that network alone; the endpoint's loopback listener binds cyfr's
+  # address on the default network (the table's), where Docker publishes
+  # the host's loopback port; and its proxy listener binds cyfr's address on
+  # the edge network (the table's), where Caddy and Tailscale reach it.
+  # Each address lies in its network's subnet, outside the range Docker
+  # hands the network's other containers, and is neither the subnet's
+  # network, gateway nor broadcast address; each subnet is private, outside
+  # the pools Docker draws the other networks' subnets from by default, and
+  # apart from the others.
+  test "the host API and the endpoint's two listeners each bind cyfr's own fixed address on their network" do
     parsed = YamlElixir.read_from_string!(read!("docker-compose.yml"))
     runtime = LocusRoles.role!(:runtime)
     release = LocusRoles.release()
@@ -1099,7 +1106,11 @@ defmodule Cyfr.StackShapeTest do
       {release.endpoint_network, release.endpoint_subnet, release.endpoint_ip_range,
        release.endpoint_address, "CYFR_BIND_ADDRESS=",
        %{"ipv4_address" => release.endpoint_address, "gw_priority" => 1},
-       %{"enable_ipv6" => true}}
+       %{"enable_ipv6" => true}},
+      # IPv4 alone and no gateway priority: the default network keeps the
+      # published port.
+      {release.edge_network, release.edge_subnet, release.edge_ip_range, release.edge_address,
+       "CYFR_PROXY_BIND_ADDRESS=", %{"ipv4_address" => release.edge_address}, %{}}
     ]
 
     for {network, subnet, range, address, variable, attachment, declared} <- fixed do
@@ -1126,8 +1137,11 @@ defmodule Cyfr.StackShapeTest do
       assert attachment == %{}, "cyfr's attachment to #{network} is #{inspect(attachment)}"
     end
 
-    [runtime_subnet, endpoint_subnet] = Enum.map(fixed, &cidr(elem(&1, 1)))
-    refute overlaps?(runtime_subnet, endpoint_subnet), "the two fixed subnets overlap"
+    subnets = Enum.map(fixed, &cidr(elem(&1, 1)))
+
+    for {a, i} <- Enum.with_index(subnets), b <- Enum.drop(subnets, i + 1) do
+      refute overlaps?(a, b), "two fixed subnets overlap"
+    end
   end
 
   # `address` lies in `subnet`, outside `range`, which lies in `subnet`,
@@ -1714,10 +1728,11 @@ defmodule Cyfr.StackShapeTest do
     refute File.exists?(Path.join(@root, ".env.builder.example"))
   end
 
-  test "the port is a parameter everywhere, 4000 only as its default" do
-    # CYFR_PORT=8000 must work by setting one variable. A bare 4000
-    # outside a default-expansion is a site the variable does not reach —
-    # exactly the drift this test exists to refuse.
+  test "the ports are parameters everywhere, 4000 and 4001 only as their defaults" do
+    # CYFR_PORT=8000 must work by setting one variable, and CYFR_PROXY_PORT
+    # likewise. A bare 4000 or 4001 outside a default-expansion is a site
+    # the variable does not reach — exactly the drift this test exists to
+    # refuse.
     for file <- ["docker-compose.yml", "Caddyfile", "Dockerfile"] do
       stripped =
         file
@@ -1727,12 +1742,196 @@ defmodule Cyfr.StackShapeTest do
         |> Enum.join("\n")
 
       bare =
-        ~r/(?<!:-)(?<!=)(?<!:)4000/
+        ~r/(?<!:-)(?<!=)(?<!:)400[01]/
         |> Regex.scan(stripped)
         |> List.flatten()
 
-      assert bare == [], "bare 4000 outside a default-expansion in #{file}"
+      assert bare == [], "a bare port outside a default-expansion in #{file}"
     end
+  end
+
+  # ==========================================================================
+  # The reach's networks, proxies and ports
+  # ==========================================================================
+
+  defp compose!, do: YamlElixir.read_from_string!(read!("docker-compose.yml"))
+
+  # The services on the default network: those that name it, and those
+  # that name no network at all, which compose puts on it.
+  defp default_members(parsed) do
+    for {service, definition} <- parsed["services"],
+        (is_nil(definition["networks"]) and is_nil(definition["network_mode"])) or
+          "default" in network_names(definition["networks"]),
+        do: service
+  end
+
+  # The loopback listener's network is cyfr's alone: no proxy, no island
+  # and no guard reaches it, so what reaches it is the host's published
+  # loopback port. A service that names no network joins it as surely as
+  # one that names it.
+  test "the default network carries cyfr alone, by name, and no service joins it by naming none" do
+    parsed = compose!()
+
+    assert LocusRoles.release().endpoint_network == "default"
+    assert default_members(parsed) == ["cyfr"]
+    assert "default" in network_names(parsed["services"]["cyfr"]["networks"])
+
+    # A service that names no network is found on it.
+    planted = put_in(parsed, ["services", "planted"], %{"image" => "planted:latest"})
+    assert Enum.sort(default_members(planted)) == ["cyfr", "planted"]
+
+    attached = put_in(planted, ["services", "planted", "networks"], ["default"])
+    assert Enum.sort(default_members(attached)) == ["cyfr", "planted"]
+
+    elsewhere = put_in(planted, ["services", "planted", "networks"], ["edge"])
+    assert default_members(elsewhere) == ["cyfr"]
+  end
+
+  test "edge carries cyfr's proxy listener, Caddy and Tailscale at the role table's addresses" do
+    parsed = compose!()
+    release = LocusRoles.release()
+    services = parsed["services"]
+
+    on_edge =
+      for {service, definition} <- services,
+          release.edge_network in network_names(definition["networks"]),
+          into: %{},
+          do: {service, definition["networks"][release.edge_network]}
+
+    assert on_edge == %{
+             "cyfr" => %{"ipv4_address" => release.edge_address},
+             "caddy" => %{"ipv4_address" => release.edge_caddy_address},
+             "tailscale" => %{"ipv4_address" => release.edge_tailscale_address}
+           }
+
+    for address <- [release.edge_caddy_address, release.edge_tailscale_address] do
+      assert_fixed_address(release.edge_subnet, release.edge_ip_range, address)
+    end
+
+    # Each proxy is on edge alone, so it reaches cyfr's proxy listener and
+    # nothing else of the stack.
+    for proxy <- ["caddy", "tailscale"] do
+      assert network_names(services[proxy]["networks"]) == [release.edge_network], proxy
+    end
+
+    # cyfr trusts the forwarded headers of those two addresses alone, and
+    # its proxy listener is exposed on edge and never published.
+    environment = services["cyfr"]["environment"]
+
+    assert ("CYFR_TRUSTED_PROXY_CIDRS=${CYFR_TRUSTED_PROXY_CIDRS:-" <>
+              "#{release.edge_caddy_address},#{release.edge_tailscale_address}}") in environment
+
+    assert "${CYFR_PROXY_PORT:-4001}" in services["cyfr"]["expose"]
+  end
+
+  # The loopback listener's address is the compose file's to assert, and
+  # every setting of the reach reaches cyfr from .env through env_file
+  # alone: an `environment:` entry here would be a second, unchecked
+  # source of the home's reach.
+  @head_keys ~w(CYFR_REACH CYFR_HOST CYFR_PORT CYFR_PUBLIC_URL CYFR_TAILNET_NODE_ID
+                CADDY_ACME_EMAIL CYFR_LOCUS_BUILDS_URL)
+
+  test "cyfr asserts its loopback listener's address, and takes the reach from .env alone" do
+    cyfr = compose!()["services"]["cyfr"]
+    release = LocusRoles.release()
+
+    assert "CYFR_BIND_ADDRESS=#{release.endpoint_address}" in cyfr["environment"]
+    assert "CYFR_LOCAL_INGRESS_ASSERTED=true" in cyfr["environment"]
+    assert cyfr["env_file"] == [".env"]
+
+    assigned = for entry <- cyfr["environment"], do: entry |> String.split("=", parts: 2) |> hd()
+    assert Enum.filter(assigned, &(&1 in @head_keys)) == []
+  end
+
+  test "the tailscale service is Serve in userspace, its identity and its configuration its own" do
+    parsed = compose!()
+    tailscale = parsed["services"]["tailscale"]
+
+    assert tailscale["profiles"] == ["tailnet"]
+    assert tailscale["image"] =~ ~r/\Atailscale\/tailscale:v[0-9.]+@sha256:[0-9a-f]{64}\z/
+
+    assert Enum.sort(tailscale["environment"]) ==
+             Enum.sort([
+               "TS_USERSPACE=true",
+               "TS_STATE_DIR=/var/lib/tailscale",
+               "TS_AUTH_ONCE=true",
+               "TS_ACCEPT_DNS=false",
+               "TS_SOCKET=/var/run/tailscale/tailscaled.sock",
+               "TS_SERVE_CONFIG=/serve/serve.json"
+             ])
+
+    # The machine's identity in a volume of its own, and Serve's
+    # configuration a read-only directory, so containerboot sees the file
+    # change.
+    assert tailscale["volumes"] == [
+             "tailscale_state:/var/lib/tailscale",
+             "./.cyfr/tailscale-serve:/serve:ro"
+           ]
+
+    assert Map.has_key?(parsed["volumes"], "tailscale_state")
+    assert tailscale["healthcheck"]["test"] == ["CMD", "tailscale", "status"]
+
+    # No port, no capability, no device: userspace networking needs none.
+    for key <- ~w(ports cap_add devices privileged network_mode) do
+      refute Map.has_key?(tailscale, key), "tailscale sets #{key}"
+    end
+
+    # No other service mounts the identity or the project's state, so
+    # nothing cyfr can write reaches Serve's configuration.
+    for {service, definition} <- parsed["services"],
+        service != "tailscale",
+        volume <- List.wrap(definition["volumes"]) do
+      refute volume =~ ~r/tailscale|\.cyfr/, "#{service} mounts #{volume}"
+    end
+  end
+
+  # What a selection of profiles starts publishes on the host: the
+  # loopback listener on the host's loopback alone in every mode, and in a
+  # public home Caddy's 80 and 443 besides.
+  defp published(parsed, profiles) do
+    for {service, definition} <- parsed["services"],
+        definition["profiles"] in [nil, []] or
+          Enum.any?(definition["profiles"], &(&1 in profiles)),
+        port <- List.wrap(definition["ports"]),
+        do: {service, port}
+  end
+
+  test "each mode publishes the loopback listener on the host's loopback, and public 80 and 443" do
+    parsed = compose!()
+    loopback = [{"cyfr", "127.0.0.1:${CYFR_PORT:-4000}:${CYFR_PORT:-4000}"}]
+    caddy = [{"caddy", "80:80"}, {"caddy", "443:443"}, {"caddy", "443:443/udp"}]
+
+    for {profiles, expected} <- [
+          {[], loopback},
+          {["locus-builds"], loopback},
+          {["tailnet"], loopback},
+          {["tailnet", "locus-builds"], loopback},
+          {["public"], loopback ++ caddy},
+          {["public", "locus-builds"], loopback ++ caddy}
+        ] do
+      assert Enum.sort(published(parsed, profiles)) == Enum.sort(expected), inspect(profiles)
+    end
+
+    assert parsed["services"]["caddy"]["profiles"] == ["public"]
+  end
+
+  # The image's health check asks the loopback listener where a bare
+  # release binds it by default, the reach's own default listener, and
+  # where compose binds it, by the variable compose sets.
+  test "the image's health check asks the loopback listener at the reach's default address" do
+    dockerfile = read!("Dockerfile")
+
+    defaults =
+      Path.join(@root, "tests/fixtures/reach_modes.json")
+      |> File.read!()
+      |> Jason.decode!()
+      |> Map.fetch!("boot")
+      |> Enum.find(&(&1["name"] == "local, defaults"))
+
+    ["127.0.0.1" = address, 4000 = port] = defaults["reach"]["listeners"]["loopback"]
+
+    assert dockerfile =~ ~s|addr="${CYFR_BIND_ADDRESS:-#{address}}"|
+    assert dockerfile =~ ~s|curl -f "http://$addr:${CYFR_PORT:-#{port}}/api/health/ready"|
   end
 
   test "the image carries the seed tree and the release reads it there" do
@@ -1794,7 +1993,7 @@ defmodule Cyfr.StackShapeTest do
     # Spelled with the underscore split so the vocabulary gate itself does
     # not trip on this file.
     refute env =~
-             ~r/CYFR_PORT[A]_BIND|CYFR_PRIS[M]_|CYFR_COMPONENT[S]_PATH|4001|CYFR_WORKE[R]_|CYFR_WORKER[S]\b|CYFR_EXECUTIO[N]_EVENTS_|CYFR_MAX_CONCURRENT_EXECUTION[S]|CYFR_SPAWN_CHANNE[L]/
+             ~r/CYFR_PORT[A]_BIND|CYFR_PRIS[M]_|CYFR_COMPONENT[S]_PATH|CYFR_WORKE[R]_|CYFR_WORKER[S]\b|CYFR_EXECUTIO[N]_EVENTS_|CYFR_MAX_CONCURRENT_EXECUTION[S]|CYFR_SPAWN_CHANNE[L]|CYFR_BEHIN[D]_PROXY/
 
     for knob <-
           ~w(CYFR_LOCUS_RUNTIME_ROOT LOCUS_RUNTIME_SERVICE_ID LOCUS_RUNTIME_KEY LOCUS_RUNTIME_HOST_API_URL CYFR_LOCUS_RUNTIME_WORKERS CYFR_HOST_API_BIND CYFR_HOST_API_PORT) do

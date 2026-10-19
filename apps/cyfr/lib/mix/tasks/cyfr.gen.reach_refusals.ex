@@ -154,7 +154,8 @@ defmodule Mix.Tasks.Cyfr.Gen.ReachRefusals do
        {"fixed", ordered(fixed)},
        {"slots", slots},
        {"template", template},
-       {"example", Jason.OrderedObject.new([{"payload", ordered(payload)}, {"sentence", sentence}])}
+       {"example",
+        Jason.OrderedObject.new([{"payload", ordered(payload)}, {"sentence", sentence}])}
      ])}
   end
 
@@ -215,11 +216,18 @@ defmodule Mix.Tasks.Cyfr.Gen.ReachRefusals do
   end
 
   # The Go toolchain formats what it will compile; without one the file is
-  # written as rendered and `gofmt` runs where the CLI is built.
+  # written as rendered and `gofmt` runs where the CLI is built. It reads
+  # none of the server's settings, so it is given none of them.
   defp gofmt(path) do
     case System.find_executable("gofmt") do
-      nil -> :ok
-      gofmt -> {_, 0} = System.cmd(gofmt, ["-w", path])
+      nil ->
+        :ok
+
+      gofmt ->
+        unset =
+          for {name, _} <- System.get_env(), String.starts_with?(name, "CYFR_"), do: {name, nil}
+
+        {_, 0} = System.cmd(gofmt, ["-w", path], env: unset)
     end
   end
 

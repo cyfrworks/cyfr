@@ -5,7 +5,8 @@ defmodule Cyfr.GracefulStopTest do
   @moduledoc """
   A graceful stop refuses before it drains: `Cyfr.Application.prep_stop/1`
   marks the LiveView socket draining and closes the endpoint's listening
-  ports before the supervision tree stops. A new connection, a tab the
+  ports, its loopback listener's and, in a tailnet or public home, its
+  proxy listener's, before the supervision tree stops. A new connection, a tab the
   LiveView drainer tells to reconnect included, is refused by the member
   that is stopping, and so is a LiveView connect over either transport on
   a connection already open, while a request already open finishes within
@@ -270,6 +271,69 @@ defmodule Cyfr.GracefulStopTest do
     end
   end
 
+  # A tailnet or public home's endpoint serves two listeners
+  # (`CyfrWeb.Ingress`): the stop closes both, and a LiveView connect is
+  # refused over a connection already open to either.
+  describe "an endpoint's two listeners" do
+    setup do
+      Application.put_env(:cyfr, Endpoint,
+        adapter: CyfrWeb.Ingress,
+        http: [ip: @loopback, port: 0, startup_log: false],
+        proxy: [ip: @loopback, port: 0],
+        secret_key_base: String.duplicate("graceful-stop-", 5),
+        pubsub_server: Cyfr.PubSub,
+        server: true
+      )
+
+      on_exit(fn -> Application.delete_env(:cyfr, Endpoint) end)
+    end
+
+    test "are both found, and suspending the endpoint refuses a new connection on each" do
+      start_supervised!(Endpoint)
+
+      assert [_, _] = servers = App.endpoint_servers(Endpoint)
+      ports = Enum.map(servers, &port/1)
+      assert Enum.uniq(ports) == ports
+
+      for port <- ports do
+        {:ok, probe} = connect(port)
+        :ok = :gen_tcp.close(probe)
+      end
+
+      assert App.suspend_endpoint(Endpoint) == :ok
+
+      for port <- ports, do: assert({:error, :econnrefused} = connect(port))
+    end
+
+    test "refuse a LiveView connect over a connection already open to either once the node drains" do
+      start_supervised!(Endpoint)
+      ports = Enum.map(App.endpoint_servers(Endpoint), &port/1)
+      sessions = longpoll_sessions()
+      on_exit(fn -> stop_sessions_since(sessions) end)
+
+      open =
+        for port <- ports do
+          {:ok, socket} = connect(port)
+          :ok = :gen_tcp.send(socket, @longpoll)
+          assert {"HTTP/1.1 200 OK", body} = recv_response(socket)
+          assert %{"status" => 410, "token" => _} = Jason.decode!(body)
+          socket
+        end
+
+      :ok = LiveSocket.drain()
+      assert App.suspend_endpoint(Endpoint) == :ok
+
+      for socket <- open do
+        :ok = :gen_tcp.send(socket, @longpoll)
+        assert {"HTTP/1.1 200 OK", body} = recv_response(socket)
+        assert Jason.decode!(body) == %{"status" => 403}
+
+        :ok = :gen_tcp.send(socket, @websocket)
+        assert {"HTTP/1.1 403 Forbidden", ""} = recv_response(socket)
+      end
+    end
+  end
+
   describe "the LiveView socket" do
     setup do
       sessions = longpoll_sessions()
@@ -396,12 +460,14 @@ defmodule Cyfr.GracefulStopTest do
     test "a server the endpoint serves that cannot be suspended is logged and answered :error" do
       name = Module.concat(__MODULE__, Unsuspendable)
 
-      # The shape the Phoenix adapter builds, `{endpoint, scheme}`, over a
-      # supervisor that runs no acceptors.
+      # The shape the Phoenix adapter builds, `{endpoint, scheme}`, a
+      # socket server by its module, over a supervisor that runs no
+      # acceptors.
       server = %{
         id: {name, :http},
         start: {Supervisor, :start_link, [[], [strategy: :one_for_one]]},
-        type: :supervisor
+        type: :supervisor,
+        modules: [ThousandIsland]
       }
 
       start_supervised!(%{

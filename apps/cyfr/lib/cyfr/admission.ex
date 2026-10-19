@@ -6,16 +6,20 @@ defmodule Cyfr.Admission do
   The admission roster: every path an intent enters CYFR by, as compiled
   data. A path not on the roster admits nothing.
 
-  Four paths are built:
+  Five paths are built:
 
-    * `:http` — the endpoint: the MCP transport, the HTTP API and its
-      event streams, webhooks, tinctures and their data routes, and the
-      console's LiveView socket, each through the gate but at the entries
-      that admit for themselves: a webhook's delivery, an execution's
-      event stream, and what no person of this home admits, the identity
-      directory, restore, the recovery kit, the OAuth callback that
-      completes a `vault.authorize`, and the browser's sign-in,
-      re-authentication and policy acceptance.
+    * `:loopback` — the endpoint's loopback listener, in every mode, the
+      one this machine's loopback reaches: the MCP transport, the HTTP
+      API and its event streams, webhooks, tinctures and their data
+      routes, and the console's LiveView socket, each through the gate but
+      at the entries that admit for themselves: a webhook's delivery, an
+      execution's event stream, and what no person of this home admits,
+      the identity directory, restore, the recovery kit, the OAuth
+      callback that completes a `vault.authorize`, and the browser's
+      sign-in, re-authentication and policy acceptance.
+    * `:http` — the endpoint's proxy listener, in a tailnet or public
+      home, the one its proxy forwards to: the same entries, reached from
+      other devices.
     * `:host_api` — the HostAPI listener: a running chain's host calls,
       each admitted as a child through Opus.
     * `:scheduler` — the scheduler's fire, which listens on nothing: its
@@ -44,7 +48,14 @@ defmodule Cyfr.Admission do
   """
 
   @typedoc "A path on the roster, built or declared."
-  @type path :: :http | :host_api | :scheduler | :device_channel | :unix_socket | :compositor
+  @type path ::
+          :loopback
+          | :http
+          | :host_api
+          | :scheduler
+          | :device_channel
+          | :unix_socket
+          | :compositor
 
   @typedoc """
   One row: the path; whether it is built; the listener it enters by (the
@@ -62,59 +73,81 @@ defmodule Cyfr.Admission do
           reason: String.t()
         }
 
+  # The endpoint's sockets and entries, which each of its listeners
+  # carries: whichever accepted a request, it meets every one of them.
+  @endpoint_sockets [
+    {"/live", "CyfrWeb.LiveSocket"},
+    # Compiled into the endpoint only when code reloading is on, in
+    # development: it pushes reload notices to the page and reads nothing a
+    # client sends.
+    {"/phoenix/live_reload/socket", "Phoenix.LiveReloader.Socket"}
+  ]
+
+  @endpoint_entries [
+    "Sanctum.Gate",
+    "Emissary.MCP.Router",
+    "Emissary.Web.MCPController",
+    "Emissary.Web.Plugs.MCPRequestMetadata",
+    "Emissary.Web.TinctureController",
+    "Emissary.Web.TinctureDataController",
+    "Emissary.Web.WebhookController",
+    "Emissary.Web.ExecutionEventsController",
+    "Emissary.Web.DirectoryController",
+    "Emissary.Web.RestoreController",
+    "Emissary.Web.OAuthCallbackController",
+    "PrismWeb.AuthController",
+    "PrismWeb.PasskeyController",
+    "PrismWeb.ReauthController",
+    "PrismWeb.LegalAcceptController",
+    "CyfrWeb.Plugs.AuthRateLimit",
+    "CyfrWeb.Plugs.Authenticate",
+    "CyfrWeb.Plugs.ControlPlaneOwnership",
+    "CyfrWeb.Plugs.FrameRequest",
+    "CyfrWeb.Plugs.MCPOrigin",
+    "CyfrWeb.Plugs.MCPRateLimit",
+    "CyfrWeb.Plugs.TinctureRateLimit",
+    "CyfrWeb.Plugs.VerifyWebhookSignature",
+    "CyfrWeb.Plugs.WebhookIdempotency",
+    "CyfrWeb.Plugs.WebhookRateLimit"
+  ]
+
+  @endpoint_reason "its pipelines' plugs, controllers and the MCP router refuse before " <>
+                     "the gate, and every operation and stream they admit, and every one " <>
+                     "the console's LiveView socket dispatches, enters through the " <>
+                     "gate's external heads, but at the entries that admit for " <>
+                     "themselves and record their own decisions: a webhook's delivery, " <>
+                     "admitted under its row and run as its bound profile's root; an " <>
+                     "execution's event stream, read under the caller's own standing; " <>
+                     "and what no person of this home admits: the identity directory, " <>
+                     "whose writes the identifier's own chain authorizes, restore, an " <>
+                     "entry path that runs before its person exists, and the recovery " <>
+                     "kit, its own ingress (§9.1, §6.9), the OAuth callback, which " <>
+                     "completes the vault.authorize the gate admitted under the state it " <>
+                     "left, and the browser's sign-in, re-authentication and policy " <>
+                     "acceptance, which establish a person's sign-in, prove it fresh or " <>
+                     "complete it rather than act under a context the gate admitted"
+
   @roster [
+    %{
+      path: :loopback,
+      built: true,
+      listener: "CyfrWeb.Endpoint",
+      sockets: @endpoint_sockets,
+      entries: @endpoint_entries,
+      reason:
+        "the endpoint's loopback listener, which only this machine's loopback reaches, in " <>
+          "every mode, and whose forwarded headers are never read: " <> @endpoint_reason
+    },
     %{
       path: :http,
       built: true,
-      listener: "CyfrWeb.Endpoint",
-      sockets: [
-        {"/live", "CyfrWeb.LiveSocket"},
-        # Compiled into the endpoint only when code reloading is on, in
-        # development: it pushes reload notices to the page and reads
-        # nothing a client sends.
-        {"/phoenix/live_reload/socket", "Phoenix.LiveReloader.Socket"}
-      ],
-      entries: [
-        "Sanctum.Gate",
-        "Emissary.MCP.Router",
-        "Emissary.Web.MCPController",
-        "Emissary.Web.Plugs.MCPRequestMetadata",
-        "Emissary.Web.TinctureController",
-        "Emissary.Web.TinctureDataController",
-        "Emissary.Web.WebhookController",
-        "Emissary.Web.ExecutionEventsController",
-        "Emissary.Web.DirectoryController",
-        "Emissary.Web.RestoreController",
-        "Emissary.Web.OAuthCallbackController",
-        "PrismWeb.AuthController",
-        "PrismWeb.PasskeyController",
-        "PrismWeb.ReauthController",
-        "PrismWeb.LegalAcceptController",
-        "CyfrWeb.Plugs.AuthRateLimit",
-        "CyfrWeb.Plugs.Authenticate",
-        "CyfrWeb.Plugs.ControlPlaneOwnership",
-        "CyfrWeb.Plugs.FrameRequest",
-        "CyfrWeb.Plugs.MCPOrigin",
-        "CyfrWeb.Plugs.MCPRateLimit",
-        "CyfrWeb.Plugs.TinctureRateLimit",
-        "CyfrWeb.Plugs.VerifyWebhookSignature",
-        "CyfrWeb.Plugs.WebhookIdempotency",
-        "CyfrWeb.Plugs.WebhookRateLimit"
-      ],
+      listener: "CyfrWeb.Ingress.Proxy",
+      sockets: @endpoint_sockets,
+      entries: @endpoint_entries,
       reason:
-        "the one endpoint: its pipelines' plugs, controllers and the MCP router refuse " <>
-          "before the gate, and every operation and stream they admit, and every one the " <>
-          "console's LiveView socket dispatches, enters through the gate's external heads, " <>
-          "but at the entries that admit for themselves and record their own decisions: a " <>
-          "webhook's delivery, admitted under its row and run as its bound profile's root; " <>
-          "an execution's event stream, read under the caller's own standing; and what no " <>
-          "person of this home admits: the identity directory, whose writes the " <>
-          "identifier's own chain authorizes, restore, an entry path that runs before its " <>
-          "person exists, and the recovery kit, its own ingress (§9.1, §6.9), the OAuth " <>
-          "callback, which completes the vault.authorize the gate admitted under the state " <>
-          "it left, and the browser's sign-in, re-authentication and policy acceptance, " <>
-          "which establish a person's sign-in, prove it fresh or complete it rather than " <>
-          "act under a context the gate admitted"
+        "the endpoint's proxy listener, which a tailnet or public home's proxy forwards to " <>
+          "from other devices, the one listener whose forwarded headers are trusted from " <>
+          "that proxy alone: " <> @endpoint_reason
     },
     %{
       path: :host_api,
@@ -144,8 +177,9 @@ defmodule Cyfr.Admission do
       sockets: [{"/device", "Emissary.Web.DeviceChannel"}],
       entries: ["Emissary.Web.DeviceChannel", "Sanctum.Gate"],
       reason:
-        "a paired glass's socket: it admits nothing until the glass proves its device " <>
-          "key, then dispatches each discrete intent through the gate's external head"
+        "a paired glass's socket, on either of the endpoint's listeners: it admits nothing " <>
+          "until the glass proves its device key, then dispatches each discrete intent " <>
+          "through the gate's external head"
     },
     %{
       path: :unix_socket,

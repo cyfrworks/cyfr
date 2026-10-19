@@ -23,8 +23,9 @@ defmodule Cyfr.AdmissionTest do
   # ==========================================================================
 
   describe "the roster" do
-    test "names four built paths and two declared ones, each once" do
+    test "names five built paths and two declared ones, each once" do
       assert Admission.paths() == [
+               :loopback,
                :http,
                :host_api,
                :scheduler,
@@ -33,7 +34,21 @@ defmodule Cyfr.AdmissionTest do
                :compositor
              ]
 
-      assert Admission.built() == [:http, :host_api, :scheduler, :device_channel]
+      assert Admission.built() == [:loopback, :http, :host_api, :scheduler, :device_channel]
+    end
+
+    # Whichever of the endpoint's listeners accepted a request, it meets
+    # every one of the endpoint's entries and sockets; each listener is
+    # named by the child the listener census finds it as.
+    test "the endpoint's two listeners are two paths, carrying the endpoint's entries and sockets" do
+      assert {:ok, loopback} = Admission.fetch(:loopback)
+      assert {:ok, proxy} = Admission.fetch(:http)
+
+      assert loopback.listener == inspect(CyfrWeb.Endpoint)
+      assert proxy.listener == inspect(CyfrWeb.Ingress.proxy_listener())
+      assert loopback.entries == proxy.entries
+      assert loopback.sockets == proxy.sockets
+      assert {"/live", "CyfrWeb.LiveSocket"} in loopback.sockets
     end
 
     test "every admission entry belongs to a built path, and every module a path names is an entry's" do

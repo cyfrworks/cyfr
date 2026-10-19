@@ -3,8 +3,9 @@
 
 defmodule Sanctum.ClientIpProxyTrustTest do
   @moduledoc """
-  Checks trusted proxy handling and non-nil client-IP resolution.
-  A missing address resolves to `0.0.0.0` for allowlist checks.
+  Checks trusted proxy handling on the proxy listener and non-nil
+  client-IP resolution. A missing address resolves to `0.0.0.0` for
+  allowlist checks.
   """
   use ExUnit.Case, async: false
 
@@ -13,21 +14,20 @@ defmodule Sanctum.ClientIpProxyTrustTest do
   setup tags do
     Arca.Test.Sandbox.setup!(tags)
 
-    originals =
-      for key <- [:trust_x_forwarded_for, :trusted_proxy_hops, :trusted_proxy_cidrs] do
-        {key, Application.get_env(:sanctum, key)}
-      end
+    original = Application.fetch_env(:sanctum, :proxy_trust)
 
     on_exit(fn ->
-      Enum.each(originals, fn
-        {key, nil} -> Application.delete_env(:sanctum, key)
-        {key, value} -> Application.put_env(:sanctum, key, value)
-      end)
+      case original do
+        {:ok, value} -> Application.put_env(:sanctum, :proxy_trust, value)
+        :error -> Application.delete_env(:sanctum, :proxy_trust)
+      end
     end)
 
     :ok
   end
 
+  # A request the proxy listener accepted, the one listener whose
+  # forwarded headers are read.
   defp conn(remote_ip, xff \\ nil) do
     headers =
       case xff do
@@ -36,46 +36,43 @@ defmodule Sanctum.ClientIpProxyTrustTest do
         value -> [{"x-forwarded-for", value}]
       end
 
-    %Plug.Conn{remote_ip: remote_ip, req_headers: headers}
+    Sanctum.ClientIp.put_ingress(%Plug.Conn{remote_ip: remote_ip, req_headers: headers}, :proxy)
   end
+
+  defp trust(trust), do: Application.put_env(:sanctum, :proxy_trust, trust)
 
   describe "X-Forwarded-For trust boundary" do
     test "XFF is IGNORED by default (spoofing cannot defeat an allowlist)" do
-      Application.delete_env(:sanctum, :trust_x_forwarded_for)
+      Application.delete_env(:sanctum, :proxy_trust)
       assert ClientIp.resolve(conn({10, 0, 0, 5}, "1.2.3.4")) == "10.0.0.5"
     end
 
     test "trusted XFF resolves the RIGHTMOST untrusted hop, not the client-claimed left" do
-      Application.put_env(:sanctum, :trust_x_forwarded_for, true)
-      Application.put_env(:sanctum, :trusted_proxy_hops, 1)
+      trust({:hops, 1})
       # Chain is [claimed..., appended-by-proxy, socket]; with 1 trusted hop
       # (the socket peer), the proxy-appended entry wins.
       assert ClientIp.resolve(conn({10, 0, 0, 5}, "1.2.3.4, 9.9.9.9")) == "9.9.9.9"
     end
 
     test "a client-prepended XFF entry cannot spoof the resolved IP" do
-      Application.put_env(:sanctum, :trust_x_forwarded_for, true)
-      Application.put_env(:sanctum, :trusted_proxy_hops, 1)
+      trust({:hops, 1})
       # Attacker at 8.8.8.8 sends "X-Forwarded-For: 203.0.113.9"; Caddy appends
       # the peer it saw. The spoofed leftmost entry must never be selected.
       assert ClientIp.resolve(conn({172, 18, 0, 2}, "203.0.113.9, 8.8.8.8")) == "8.8.8.8"
     end
 
-    test "trusted_proxy_hops=2 strips two proxy layers" do
-      Application.put_env(:sanctum, :trust_x_forwarded_for, true)
-      Application.put_env(:sanctum, :trusted_proxy_hops, 2)
+    test "two trusted hops strip two proxy layers" do
+      trust({:hops, 2})
       assert ClientIp.resolve(conn({10, 0, 0, 5}, "1.2.3.4, 9.9.9.9, 10.0.0.9")) == "9.9.9.9"
     end
 
-    test "trusted_proxy_hops=0 (trust on, no proxy) resolves the socket peer" do
-      Application.put_env(:sanctum, :trust_x_forwarded_for, true)
-      Application.put_env(:sanctum, :trusted_proxy_hops, 0)
+    test "zero trusted hops resolve the socket peer" do
+      trust({:hops, 0})
       assert ClientIp.resolve(conn({203, 0, 113, 7}, "1.2.3.4")) == "203.0.113.7"
     end
 
-    test "trusted_proxy_cidrs strips any number of matching trailing hops" do
-      Application.put_env(:sanctum, :trust_x_forwarded_for, true)
-      Application.put_env(:sanctum, :trusted_proxy_cidrs, ["10.0.0.0/8", "172.16.0.0/12"])
+    test "trusted CIDRs strip any number of matching trailing hops" do
+      trust({:cidrs, ["10.0.0.0/8", "172.16.0.0/12"]})
 
       assert ClientIp.resolve(conn({172, 18, 0, 2}, "203.0.113.9, 10.0.0.9")) == "203.0.113.9"
     end
@@ -86,27 +83,24 @@ defmodule Sanctum.ClientIpProxyTrustTest do
       # address in the chain nobody could forge — the leftmost is whatever the
       # caller typed, and returning that let anyone inside the trusted range
       # pick their own address for an API key's IP allowlist.
-      Application.put_env(:sanctum, :trust_x_forwarded_for, true)
-      Application.put_env(:sanctum, :trusted_proxy_cidrs, ["10.0.0.0/8"])
+      trust({:cidrs, ["10.0.0.0/8"]})
 
       assert ClientIp.resolve(conn({10, 0, 0, 5}, "10.1.2.3")) == "10.0.0.5"
       assert ClientIp.resolve(conn({10, 0, 0, 5}, "10.1.2.3, 10.9.9.9")) == "10.0.0.5"
     end
 
     test "XFF chains split across multiple header instances are joined" do
-      Application.put_env(:sanctum, :trust_x_forwarded_for, true)
-      Application.put_env(:sanctum, :trusted_proxy_hops, 1)
+      trust({:hops, 1})
       assert ClientIp.resolve(conn({10, 0, 0, 5}, ["1.2.3.4", "203.0.113.9"])) == "203.0.113.9"
     end
 
     test "hop count exceeding the chain falls back to remote_ip" do
-      Application.put_env(:sanctum, :trust_x_forwarded_for, true)
-      Application.put_env(:sanctum, :trusted_proxy_hops, 7)
+      trust({:hops, 7})
       assert ClientIp.resolve(conn({10, 0, 0, 5}, "1.2.3.4")) == "10.0.0.5"
     end
 
     test "trusted but absent/invalid XFF falls back to remote_ip" do
-      Application.put_env(:sanctum, :trust_x_forwarded_for, true)
+      trust({:hops, 1})
       assert ClientIp.resolve(conn({10, 0, 0, 5})) == "10.0.0.5"
       assert ClientIp.resolve(conn({10, 0, 0, 5}, "not-an-ip")) == "10.0.0.5"
     end
@@ -143,8 +137,7 @@ defmodule Sanctum.ClientIpProxyTrustTest do
     end
 
     test "a spoofed leftmost XFF entry cannot satisfy the allowlist behind a proxy" do
-      Application.put_env(:sanctum, :trust_x_forwarded_for, true)
-      Application.put_env(:sanctum, :trusted_proxy_hops, 1)
+      trust({:hops, 1})
       ctx = Sanctum.TestContext.issuer!(Sanctum.TestContext.local())
 
       {:ok, %{api_key: key}} =

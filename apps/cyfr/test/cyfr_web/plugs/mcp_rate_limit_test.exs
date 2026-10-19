@@ -16,16 +16,16 @@ defmodule CyfrWeb.Plugs.MCPRateLimitTest do
     Cyfr.Test.Sandbox.setup!(tags)
     Prima.Test.RateLimiter.reset!()
 
-    original_trust = Application.get_env(:sanctum, :trust_x_forwarded_for)
+    original_trust = Application.fetch_env(:sanctum, :proxy_trust)
 
     Settings.put("mcp_rate_limit_max", 3)
     Settings.put("mcp_rate_limit_window_ms", 60_000)
 
     on_exit(fn ->
-      Application.delete_env(:sanctum, :trust_x_forwarded_for)
-
-      if original_trust != nil,
-        do: Application.put_env(:sanctum, :trust_x_forwarded_for, original_trust)
+      case original_trust do
+        {:ok, value} -> Application.put_env(:sanctum, :proxy_trust, value)
+        :error -> Application.delete_env(:sanctum, :proxy_trust)
+      end
 
       Prima.Test.RateLimiter.reset!()
     end)
@@ -154,7 +154,7 @@ defmodule CyfrWeb.Plugs.MCPRateLimitTest do
   test "keying honors the XFF trust boundary (spoofed leftmost shares the socket bucket)" do
     # Trust OFF: XFF is ignored, so varying spoofed XFF values all land in
     # the socket-IP bucket and the limit still binds.
-    Application.delete_env(:sanctum, :trust_x_forwarded_for)
+    Application.delete_env(:sanctum, :proxy_trust)
     ip = {127, 0, 0, 15}
 
     for i <- 1..3 do

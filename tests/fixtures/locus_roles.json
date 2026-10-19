@@ -1,5 +1,5 @@
 {
-  "comment": "The table of the locus release's roles, Prima.LocusRoles, for the readers that cannot call it: apps/prima/test/prima/locus_roles_test.exs holds this file to the module value by value, and the image suites' harnesses (tests/builder-image/stack.py, tests/locus-backends-image/harness.py, tests/locus-runtime-image/stack.py) read their role and the release here, so no suite spells a fact of either. release is what every role's service shares: the user and uid it runs as, the binary cyfr-locus starts, the root of every spawn's home, the run directory and the size of its tmpfs, the role the image's own entrypoint serves, and the network, subnet, dynamic range and fixed address cyfr's endpoint binds under compose. Each role, in the module's order, names its uid pool, the prefix of its pooled users' names, its first and last pooled uid, the isolation of its spawns (null for none), its listener's port, the size of its homes' tmpfs, the compose service, container, network and profile (null for none) that run it, and the egress guard service its service shares a network namespace with (null for none).",
+  "comment": "The table of the locus release's roles, Prima.LocusRoles, for the readers that cannot call it: apps/prima/test/prima/locus_roles_test.exs holds this file to the module value by value, and the image suites' harnesses (tests/builder-image/stack.py, tests/locus-backends-image/harness.py, tests/locus-runtime-image/stack.py) read their role and the release here, so no suite spells a fact of either. release is what every role's service shares: the user and uid it runs as, the binary cyfr-locus starts, the root of every spawn's home, the run directory and the size of its tmpfs, the role the image's own entrypoint serves, the network, subnet, dynamic range and fixed address cyfr's endpoint binds its loopback listener to under compose, and the edge network's name, subnet and dynamic range with the fixed addresses of cyfr's proxy listener, Caddy and Tailscale on it. Each role, in the module's order, names its uid pool, the prefix of its pooled users' names, its first and last pooled uid, the isolation of its spawns (null for none), its listener's port, the size of its homes' tmpfs, the compose service, container, network and profile (null for none) that run it, and the egress guard service its service shares a network namespace with (null for none).",
   "release": {
     "user": "locus",
     "uid": 10001,
@@ -11,7 +11,13 @@
     "endpoint_network": "default",
     "endpoint_subnet": "172.16.230.0/24",
     "endpoint_ip_range": "172.16.230.128/25",
-    "endpoint_address": "172.16.230.2"
+    "endpoint_address": "172.16.230.2",
+    "edge_network": "edge",
+    "edge_subnet": "172.16.234.0/24",
+    "edge_ip_range": "172.16.234.128/25",
+    "edge_address": "172.16.234.2",
+    "edge_caddy_address": "172.16.234.3",
+    "edge_tailscale_address": "172.16.234.4"
   },
   "roles": [
     {

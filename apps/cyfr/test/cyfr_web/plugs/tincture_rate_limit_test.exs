@@ -12,8 +12,7 @@ defmodule CyfrWeb.Plugs.TinctureRateLimitTest do
     # config/test.exs disables the limit globally (1_000_000); exercise the
     # real per-pipeline limits here by removing the override.
     original_max = Application.get_env(:cyfr, :tincture_rate_limit_max)
-    original_trust = Application.get_env(:sanctum, :trust_x_forwarded_for)
-    original_hops = Application.get_env(:sanctum, :trusted_proxy_hops)
+    original_trust = Application.get_env(:sanctum, :proxy_trust)
     Application.delete_env(:cyfr, :tincture_rate_limit_max)
 
     on_exit(fn ->
@@ -24,11 +23,9 @@ defmodule CyfrWeb.Plugs.TinctureRateLimitTest do
         app, key, value -> Application.put_env(app, key, value)
       end
 
-      Application.delete_env(:sanctum, :trust_x_forwarded_for)
-      Application.delete_env(:sanctum, :trusted_proxy_hops)
+      Application.delete_env(:sanctum, :proxy_trust)
       restore.(:cyfr, :tincture_rate_limit_max, original_max)
-      restore.(:sanctum, :trust_x_forwarded_for, original_trust)
-      restore.(:sanctum, :trusted_proxy_hops, original_hops)
+      restore.(:sanctum, :proxy_trust, original_trust)
     end)
 
     :ok
@@ -58,6 +55,10 @@ defmodule CyfrWeb.Plugs.TinctureRateLimitTest do
     |> Map.put(:remote_ip, ip)
     |> Map.put(:path_params, %{"publisher" => publisher, "tincture_name" => tincture})
   end
+
+  # A request the proxy listener accepted, the one listener whose
+  # forwarded headers are read.
+  defp proxied(ip), do: ip |> build_conn() |> Sanctum.ClientIp.put_ingress(:proxy)
 
   describe "rate limiting" do
     test "allows requests under the limit" do
@@ -189,28 +190,28 @@ defmodule CyfrWeb.Plugs.TinctureRateLimitTest do
     end
 
     test "trust on: forwarded clients get independent buckets behind the proxy" do
-      # One proxy in front, as `config/runtime.exs` configures the trust.
-      Application.put_env(:sanctum, :trust_x_forwarded_for, true)
-      Application.put_env(:sanctum, :trusted_proxy_hops, 1)
+      # One proxy in front of the proxy listener, as `config/runtime.exs`
+      # configures the trust.
+      Application.put_env(:sanctum, :proxy_trust, {:hops, 1})
       proxy_ip = {127, 0, 0, 7}
 
       for _ <- 1..3 do
         conn =
-          build_conn(proxy_ip)
+          proxied(proxy_ip)
           |> Plug.Conn.put_req_header("x-forwarded-for", "203.0.113.20")
 
         refute TinctureRateLimit.call(conn, opts()).halted
       end
 
       blocked =
-        build_conn(proxy_ip)
+        proxied(proxy_ip)
         |> Plug.Conn.put_req_header("x-forwarded-for", "203.0.113.20")
         |> TinctureRateLimit.call(opts())
 
       assert blocked.halted
 
       fresh =
-        build_conn(proxy_ip)
+        proxied(proxy_ip)
         |> Plug.Conn.put_req_header("x-forwarded-for", "203.0.113.21")
         |> TinctureRateLimit.call(opts())
 

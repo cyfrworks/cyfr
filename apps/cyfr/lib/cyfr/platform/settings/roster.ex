@@ -127,14 +127,14 @@ defmodule Cyfr.Platform.Settings.Roster do
   # Each deployment variable with the sentence `configuration-guide.md`
   # gives it, in name order.
   @deployment [
+    {"CADDY_ACME_EMAIL",
+     "The address Let's Encrypt registers a public home's Caddy certificate under, optional, which `cyfr reach public --acme-email` writes and compose hands Caddy; any other mode refuses it."},
     {"CYFR_AUTH_PROVIDER",
      "The sign-in provider: unset for the built-in GitHub and Google device flows, `oidc` for the external issuer the three `CYFR_OIDC_*` variables name; `oidc` with any of them missing refuses the boot."},
     {"CYFR_AUTO_MIGRATE",
      "Whether the server migrates the schema on boot (default `true`); `false` when several members share one PostgreSQL database or an operator runs `bin/cyfr eval \"Cyfr.Release.migrate()\"` by hand."},
-    {"CYFR_BEHIND_PROXY",
-     "`true` when a reverse proxy fronts the server: forwarded headers are trusted, the plain-HTTP warning is silent, and `cyfr up` starts the stack's Caddy (`--profile tls`). `cyfr init`'s TLS answer writes it."},
     {"CYFR_BIND_ADDRESS",
-     "The address the one endpoint binds (default `0.0.0.0`); `127.0.0.1` binds localhost only. The stack binds cyfr's fixed address on its `default` network, where Docker publishes the host's loopback port and Caddy reaches it, so none of the Locus networks reaches the endpoint."},
+     "The address the endpoint's loopback listener binds, in every mode (default `127.0.0.1`): `127.0.0.1` or `::1`, since the boot refuses any other address without the compose file's `CYFR_LOCAL_INGRESS_ASSERTED`. The stack binds cyfr's fixed address on its `default` network, which no other container joins and Docker publishes on the host's loopback port alone."},
     {"CYFR_CELL_COOKIE",
      "A cell's cookie: at least 32 characters (`openssl rand -hex 32`), the same on every member and the cookie each member's BEAM runs under (`RELEASE_COOKIE` or `-setcookie`)."},
     {"CYFR_CLUSTER",
@@ -146,7 +146,7 @@ defmodule Cyfr.Platform.Settings.Roster do
     {"CYFR_CLUSTER_NODES",
      "A cell's members by name, comma-separated (`cyfr@10.0.0.1,cyfr@10.0.0.2`)."},
     {"CYFR_CORS_ALLOWED_ORIGINS",
-     "The browser CORS allowlist, comma-separated origins. A release with sign-in configured refuses to boot on the unassigned wildcard default; assigned empty, as `cyfr init` writes it, it admits no cross-origin caller, which the shipped stack never needs."},
+     "The browser CORS allowlist, comma-separated origins. Assigned empty, as `cyfr init` writes it, it admits no cross-origin caller, which the shipped stack never needs; unassigned, the application's configured list stands, empty unless the deployment's own configuration names one. A release with sign-in configured refuses to boot on a wildcard."},
     {"CYFR_COSIGN_IDENTITY",
      "Keyless OCI signature verification: the regular expression the signing certificate's identity must match, with `CYFR_COSIGN_ISSUER`; a missing keyless constraint refuses verification."},
     {"CYFR_COSIGN_ISSUER",
@@ -178,7 +178,7 @@ defmodule Cyfr.Platform.Settings.Roster do
     {"CYFR_HEADLESS",
      "A Codex-only node (default off): `/mcp`, `/api` and public tinctures are served and every browser page answers 404. It does not combine with `CYFR_AUTH_PROVIDER=oidc`."},
     {"CYFR_HOST",
-     "The hostname clients reach the server at (default `localhost`); in TLS mode Caddy's certificate names it."},
+     "The home's hostname, which `cyfr reach` writes with the mode: `localhost` in a local home, the tailnet machine's name (`<machine>.<tailnet>.ts.net`) in a tailnet home, and the domain Caddy's certificate names in a public one. The boot refuses a host the mode does not allow."},
     {"CYFR_HOST_API_BIND",
      "The address the host API binds for the workers' host calls and exit reports (default `127.0.0.1` for a bare member; compose binds the member's own address on the locus-runtime network, so the host API is reachable from that network alone)."},
     {"CYFR_HOST_API_PORT", "The host API's port (default 4300)."},
@@ -186,6 +186,8 @@ defmodule Cyfr.Platform.Settings.Roster do
      "The address a worker service reaches this member's host API at, carried by every assignment the member issues; unset, a worker uses its own `LOCUS_RUNTIME_HOST_API_URL`, and a cell refuses to boot without it."},
     {"CYFR_LIVE_SALT",
      "The LiveView socket's signing salt; unset, derived from `CYFR_SECRET_KEY_BASE`. Set it only to keep sessions across a key-base rotation."},
+    {"CYFR_LOCAL_INGRESS_ASSERTED",
+     "The compose file's assertion that the loopback listener's own address on the stack's `default` network is reached from this machine's loopback alone, which lets `CYFR_BIND_ADDRESS` name it: `true`, its one value, set by `docker-compose.yml` in the cyfr service's environment. It counts only from the process environment, `.env` may not set it, and a bare release must not set it."},
     {"CYFR_LOCUS_BACKENDS_KEY",
      "The backends service's key, 32 random bytes as 64 hexadecimal digits (`openssl rand -hex 32`), which `cyfr init` mints and compose hands the service as `LOCUS_BACKENDS_KEY`; without it, or without `CYFR_LOCUS_BACKENDS_URL`, stdio MCP servers are refused."},
     {"CYFR_LOCUS_BACKENDS_URL",
@@ -196,7 +198,7 @@ defmodule Cyfr.Platform.Settings.Roster do
      "The builds service's base URL. `http://locus-builds:4100`, which `cyfr init` writes, names the compose service, which `cyfr up` then starts; a URL naming another host starts no local builder. With it and `CYFR_LOCUS_BUILDS_KEY` both empty builds are off and every build is refused; one without the other refuses the boot."},
     {"CYFR_LOG_FORMAT", "`json` for structured logs; unset, plain text."},
     {"CYFR_MCP_ALLOWED_ORIGINS",
-     "Extra origins, comma-separated, the MCP endpoint's Origin check accepts beside `https://CYFR_HOST` and the localhost defaults."},
+     "Extra origins, comma-separated, the MCP endpoint's Origin check accepts beside the home's own: `https://<CYFR_HOST>` in a tailnet or public home, and the localhost origins on `CYFR_PORT`."},
     {"CYFR_METRICS_TOKEN",
      "The bearer token a `/metrics` scrape must present; unset, an enabled endpoint is unauthenticated, so bind it privately or allowlist it at the proxy."},
     {"CYFR_OCI_REGISTRY_URL",
@@ -215,13 +217,19 @@ defmodule Cyfr.Platform.Settings.Roster do
      "OpenTelemetry traces over OTLP to `OTEL_EXPORTER_OTLP_ENDPOINT` (default off). Each span is scrubbed of tincture credentials before export, and the boot refuses an `OTEL_TRACES_EXPORTER` that would replace the scrubbing exporter."},
     {"CYFR_PLATFORM_ADMIN_EMAILS",
      "The server's operators, comma-separated emails: each is always let in and holds the platform-admin capability, reconciled at every boot. Unset, no one can sign in."},
-    {"CYFR_PORT", "The one endpoint's port (default 4000)."},
+    {"CYFR_PORT",
+     "The loopback listener's port (default 4000), which the stack publishes on this machine's loopback alone; a local home's address is `http://localhost:<CYFR_PORT>`."},
     {"CYFR_PRIVATE_EGRESS_TARGETS",
      "The private hosts, addresses or CIDRs the server's own outbound calls may reach (MCP servers, OAuth token endpoints, registry pulls), comma-separated; the stack names `locus-backends`. Link-local addresses are always refused, and a run's egress never uses this list. The stack's builds and backends reach public hosts and the hosts named here, and nothing else: each island's egress guard (the `locus-builds-guard` and `locus-backends-guard` services) refuses every link-local and metadata address, the control plane, every other private address, and one spawn's reach into another's listener on the island's shared loopback."},
     {"CYFR_PROMETHEUS_METRICS",
      "Prometheus metrics at `/metrics` on the API port (default off)."},
+    {"CYFR_PROXY_BIND_ADDRESS",
+     "The address the endpoint's proxy listener binds in a tailnet or public home (default `127.0.0.1`): the listener Tailscale Serve or Caddy forwards to, and the only one whose forwarded headers are trusted. The stack binds cyfr's fixed address on its `edge` network; a local home has no proxy listener."},
+    {"CYFR_PROXY_PORT", "The proxy listener's port (default 4001), which nothing publishes."},
     {"CYFR_PUBLIC_URL",
-     "The address the server is reachable at from outside, which behind a proxy or tunnel only the operator knows; webhook URLs are absolute when it is set and bare paths when it is not."},
+     "The home's address in a tailnet or public home, exactly `https://<CYFR_HOST>`, which `cyfr reach` writes with the mode; a local home has none, and its address is `http://localhost:<CYFR_PORT>`. Webhook URLs are absolute when it is set and bare paths when it is not."},
+    {"CYFR_REACH",
+     "How the home is reached: `local` (this computer alone, at `http://localhost:<CYFR_PORT>`), `tailnet` (your devices on Tailscale, through Tailscale Serve) or `public` (anyone on the internet, through Caddy). `cyfr init` and `cyfr reach <mode>` write it with every setting it implies, the boot refuses a setting that contradicts it and names the command that fixes it, and a release refuses to start without it; a development or test boot without it is `local`."},
     {"CYFR_REGISTRY_URL",
      "The component registry host (default `cyfr.run`); `none` is an appliance without a registry, whose pulls and publishes refuse."},
     {"CYFR_REQUIRE_SIGNED_PULLS",
@@ -245,16 +253,20 @@ defmodule Cyfr.Platform.Settings.Roster do
      "The seed tree read in place: the component bundle under `components/` and the AQUA template under `aqua/` (default `seed`; the image sets its own)."},
     {"CYFR_SESSION_SALT",
      "The session cookie's signing salt; unset, derived from `CYFR_SECRET_KEY_BASE`. Set it only to keep sessions across a key-base rotation."},
+    {"CYFR_SETUP_TOKEN",
+     "The first-run setup link's capability, exactly 64 lowercase hexadecimal characters, which `cyfr init` mints into `.env` when it is given no operator email and `cyfr setup link` prints as a link. The boot refuses it when it is malformed, beside `CYFR_PLATFORM_ADMIN_EMAILS` or `CYFR_RESTORE_TOKEN`, on a headless node, with an OIDC issuer, or with no GitHub or Google client ID, and never prints it."},
     {"CYFR_STORAGE",
      "`s3` for S3-compatible object storage, which needs the bucket, region and both keys; unset, the local filesystem under `CYFR_DATA_PATH`."},
     {"CYFR_STORAGE_RESERVE_BYTES",
      "The storage reserve, in bytes (default 67108864, 64 MiB; 1 to 1 TiB, and 0 refuses the boot): the file the home preallocates in `CYFR_STORAGE_RESERVE_PATH`, and the free space below which, on that filesystem or a local storage root, it latches `depleted` and frees the file, admitting only reads and changes that take authority away until the file is allocated again with that much free beside it."},
     {"CYFR_STORAGE_RESERVE_PATH",
      "The directory holding the storage reserve's file, whose filesystem the reserve guards; it must exist, be writable and report its free space, or the boot refuses. Under SQLite it defaults to the database's directory. Under PostgreSQL it has no default: unset, no file is kept, and a database volume the reserve does not share is outside it, as an S3 store is."},
+    {"CYFR_TAILNET_NODE_ID",
+     "The tailnet machine's stable node ID, 1 to 128 letters, digits, `.`, `_` and `-`, which `cyfr reach tailnet` reads from Tailscale and writes, and against which every start checks the running machine before Tailscale Serve opens. A tailnet home requires it, and any other mode refuses it."},
     {"CYFR_TRUSTED_PROXY_CIDRS",
-     "The reverse proxies in front of the server, comma-separated addresses or CIDRs, which take precedence over `CYFR_TRUSTED_PROXY_HOPS`; an entry that is neither refuses the boot."},
+     "The proxies whose forwarded headers the proxy listener trusts, comma-separated addresses or CIDRs, which take precedence over `CYFR_TRUSTED_PROXY_HOPS`; the stack names Caddy's and Tailscale's addresses on its `edge` network. The loopback listener trusts none, and an entry that is neither refuses the boot."},
     {"CYFR_TRUSTED_PROXY_HOPS",
-     "The reverse-proxy hops in front of the server when `CYFR_BEHIND_PROXY` is true (default 1, the stack's Caddy; 0 to 16). Too few resolves client addresses to a proxy, so API-key address allowlists fail closed."},
+     "The proxy hops in front of the proxy listener when `CYFR_TRUSTED_PROXY_CIDRS` is unset (default 1; 0 to 16). Too few resolves client addresses to a proxy, so API-key address allowlists fail closed."},
     {"CYFR_WASM_TOOLS",
      "The absolute path of the pinned `wasm-tools` every component is validated with before it is stored or compiled (default `/usr/local/bin/wasm-tools`, where the image installs it; `scripts/wasm-tools.sh` installs the pinned release). A path that names no executable refuses the boot."},
     {"OTEL_EXPORTER_OTLP_ENDPOINT",
@@ -262,11 +274,9 @@ defmodule Cyfr.Platform.Settings.Roster do
   ]
 
   # The `${…}` names docker-compose.yml interpolates that no release reads:
-  # each container's CPU and memory limit, and Caddy's ACME address, each
-  # with the sentence `configuration-guide.md` gives it.
+  # each container's CPU and memory limit, each with the sentence
+  # `configuration-guide.md` gives it.
   @compose_only [
-    {"CADDY_ACME_EMAIL",
-     "The address Let's Encrypt registers Caddy's certificate under, in TLS mode with a real `CYFR_HOST`; `cyfr init` asks for it."},
     {"CYFR_CPU_LIMIT",
      "The cyfr container's CPU limit (default 4): the control plane's own share of the host, since components run in locus-runtime under `LOCUS_RUNTIME_CPU_LIMIT`."},
     {"LOCUS_BUILDS_CPU_LIMIT", "The locus-builds container's CPU limit (default 2)."},
@@ -918,7 +928,7 @@ defmodule Cyfr.Platform.Settings.Roster do
 
   @doc """
   The names `docker-compose.yml` interpolates that no release reads: the
-  containers' CPU and memory limits and Caddy's ACME address.
+  containers' CPU and memory limits.
   """
   @spec compose_only() :: [String.t()]
   def compose_only, do: Enum.map(@compose_only, &elem(&1, 0))

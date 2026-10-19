@@ -838,8 +838,13 @@ defmodule Cyfr.PlatformSettingsRosterTest do
   describe "the inventory" do
     test "the compose-only class is docker-compose.yml's names that no release reads" do
       assert Roster.compose_only() |> Enum.sort() == derived_compose_only()
-      assert "CADDY_ACME_EMAIL" in Roster.compose_only()
       assert "CYFR_CPU_LIMIT" in Roster.compose_only()
+
+      # Caddy's certificate email is interpolated for Caddy and read by the
+      # release, which refuses it outside a public home: a deployment
+      # variable.
+      refute "CADDY_ACME_EMAIL" in Roster.compose_only()
+      assert "CADDY_ACME_EMAIL" in Roster.deployment()
     end
 
     test "every name .env.example documents is declared, under the prefix or not" do
@@ -935,11 +940,13 @@ defmodule Cyfr.PlatformSettingsRosterTest do
   # The boot, evaluated
   # ---------------------------------------------------------------------------
 
+  # A local home, which a release must name.
   defp base_env do
     %{
       "CYFR_SECRET_KEY_BASE" => Base.encode64(:crypto.strong_rand_bytes(48)),
       "RELEASE_NAME" => "cyfr",
-      "CYFR_DATABASE" => nil
+      "CYFR_DATABASE" => nil,
+      "CYFR_REACH" => "local"
     }
   end
 
@@ -1079,7 +1086,7 @@ defmodule Cyfr.PlatformSettingsRosterTest do
     end
 
     test "a .env file may carry the server's names alone" do
-      with_env_file(["CYFR_MCP_RATE_LIMIT_MAX=240", "CADDY_ACME_EMAIL=a@example.com"], fn ->
+      with_env_file(["CYFR_MCP_RATE_LIMIT_MAX=240", "CYFR_CPU_LIMIT=2"], fn ->
         assert {"mcp_rate_limit_max", 240} in read_prod_config!()[:cyfr][:deployment_pinned]
       end)
 

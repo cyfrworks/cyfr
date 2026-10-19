@@ -18,15 +18,14 @@ import (
 	"os/exec"
 	"path"
 	"path/filepath"
-	"reflect"
 	"regexp"
 	"slices"
 	"strconv"
 	"strings"
-	"syscall"
 	"time"
 	"unicode/utf8"
 
+	"github.com/cyfr/codex/internal/reach"
 	"github.com/cyfr/codex/internal/release"
 	"github.com/cyfr/codex/internal/scaffold"
 	"github.com/cyfr/codex/internal/version"
@@ -44,13 +43,13 @@ var updateCmd = &cobra.Command{
 	Long: `Update the project in the current directory to the release this cyfr was built as, in one ceremony that changes nothing until the old stack is stopped and a snapshot of it is taken.
 
 1. Fetch the release's signed manifest (release.json) and verify it; a manifest that does not verify, or no network access to it, refuses.
-2. Read docker-compose.yml. Every bundled service (locus-runtime, locus-builds, locus-backends and both egress guards) must be present; one missing refuses, naming 'cyfr init --force'. An image line naming ghcr.io/cyfrworks/cyfr, ghcr.io/cyfrworks/cyfr-locus or the bundled Caddy is managed; any other image is an override, left as written and reported.
+2. Read docker-compose.yml. Every bundled service (locus-runtime, locus-builds, locus-backends and both egress guards) must be present; one missing refuses, naming 'cyfr init --force'. An image line naming ghcr.io/cyfrworks/cyfr, ghcr.io/cyfrworks/cyfr-locus, the bundled Caddy or the bundled Tailscale is managed; any other image is an override, left as written and reported.
 3. While the stack still runs: read its configuration, naming the storage root it snapshots, pull every managed image by the manifest's digest, read the cell's roster, refusing while a member outside this stack holds a live slot on another release than this one (a host of the cell already updated stays), then fetch and verify the release's scaffold files (guides, WIT definitions, the keeper's seccomp profile, the shipped AQUA prompts) without writing them. A restore that has not finished (CYFR_RESTORE_INCOMPLETE in .env) refuses.
-4. Stop every service, timing each, and re-read the roster offline until no slot of another release than this one is live (at most one lease); one still live restarts the old stack and refuses.
+4. Cancel a tailnet join that waits for approval, then stop every service, timing each, and re-read the roster offline until no slot of another release than this one is live (at most one lease); one still live restarts the old stack and refuses.
 5. Snapshot the database, the local storage root, every scaffold file the release manages as it stands, the keyring, .env and docker-compose.yml as it stands into backups/<UTC timestamp>/, snapshot.json last.
-6. Write the release's scaffold files and rewrite the managed image lines to <image>:<version>@<digest> (Caddy keeps its tag); a failure of either puts the scaffold files back from the snapshot and starts the old stack again. Then start the stack, waiting for every service to be healthy. A failure from here leaves the stack stopped and prints the snapshot and the restore command; old code never starts over migrated data.
+6. Write the release's scaffold files and rewrite the managed image lines to <image>:<version>@<digest> (Caddy and Tailscale keep their tags); a failure of either puts the scaffold files back from the snapshot and starts the old stack again. Then start the stack as every cyfr start runs, waiting for cyfr's health. A failure from here leaves the stack stopped and prints the snapshot and the restore command; old code never starts over migrated data.
 
-An interrupt before the stop changes nothing. From the stop until the switch, the running step finishes and the update ends as that step's failure would. Once the switch begins, the switch and the start run to their end, so the stack is never left half-switched; an interrupt then is reported, not acted on.`,
+The update holds the stack's lock from before its first docker call to its end, after finishing a change an interrupted command left; every docker call it makes runs under that lock. Exit status 3: the update is done and the new release started, but on this machine only, because the machine's tailnet identity is not the one .env names; the message says to run 'cyfr reach tailnet'. An interrupt before the stop changes nothing. From the stop until the switch, the running step finishes and the update ends as that step's failure would. Once the switch begins, the switch and the start run to their end, so the stack is never left half-switched; an interrupt then is reported, not acted on.`,
 	GroupID: "server",
 	Example: "  cyfr update",
 	RunE: func(cmd *cobra.Command, args []string) error {
@@ -81,10 +80,6 @@ var (
 )
 
 const (
-	// updateLockName is the file in the project directory that admits one
-	// update or restore at a time; it holds the running process's pid.
-	updateLockName = ".cyfr-update.lock"
-
 	// rosterExpr reads the running cell's live slots through its own node,
 	// beside that node's name, so a slot of another node is a member outside
 	// this stack.
@@ -98,15 +93,15 @@ const (
 	// read with (pgClientImages); the dump and the restore then run in the
 	// server's own major.
 	pgProbeMajor = 18
-	// pgURLVariable carries the database URL into a postgres container
-	// through the child's environment, never its argv.
+	// pgURLVariable is the shell variable a postgres container reads the
+	// database URL into from its standard input, so the URL is on no argv
+	// and in no environment outside the container's shell.
 	pgURLVariable = "CYFR_UPDATE_PG_URL"
 
 	pullTimeout       = 30 * time.Minute
 	composeRunTimeout = 2 * time.Minute
 	stopTimeout       = 10 * time.Minute
 	dumpTimeout       = 60 * time.Minute
-	upWaitSeconds     = "900"
 
 	// appWorkdir is the cyfr image's WORKDIR, against which the server
 	// expands a relative path setting.
@@ -114,18 +109,18 @@ const (
 )
 
 // bundledServices are the services of the bundled stack besides cyfr, whose
-// fields ensureCyfrComposeFields keeps; caddy is the TLS profile's and
-// optional to a project that never runs one.
+// fields ensureCyfrComposeFields keeps; caddy and tailscale are the public
+// and tailnet profiles' proxies, optional to a project that never runs one.
 var bundledServices = []string{"locus-runtime", "locus-builds", "locus-backends", "locus-builds-guard", "locus-backends-guard"}
 
-// stopOrder is the order the stop step stops services in: the proxy first,
-// then cyfr, then each Locus service before the guard whose network
+// stopOrder is the order the stop step stops services in: the proxies
+// first, then cyfr, then each Locus service before the guard whose network
 // namespace it shares.
-var stopOrder = []string{"caddy", "cyfr", "locus-runtime", "locus-builds", "locus-backends", "locus-builds-guard", "locus-backends-guard"}
+var stopOrder = []string{"caddy", "tailscale", "cyfr", "locus-runtime", "locus-builds", "locus-backends", "locus-builds-guard", "locus-backends-guard"}
 
 // managedRepositories are the repositories the release's manifest carries a
 // digest for, normalized as Docker normalizes a reference.
-var managedRepositories = []string{release.RepoCyfr, release.RepoCyfrLocus, release.RepoCaddy}
+var managedRepositories = []string{release.RepoCyfr, release.RepoCyfrLocus, release.RepoCaddy, release.RepoTailscale}
 
 var manifestDigest = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
 
@@ -211,63 +206,29 @@ func runUpdate(ctx context.Context, out, errOut io.Writer) error {
 	if _, err := os.Stat("cyfr.yaml"); err != nil {
 		return errors.New("Not in a cyfr project directory (no cyfr.yaml found).\nRun 'cyfr init' to create a new project.")
 	}
-	unlock, err := takeUpdateLock("update")
-	if err != nil {
-		return err
-	}
-	defer unlock()
-
 	v := version.Version
 	if v == "" || v == "dev" {
 		return errors.New("This cyfr is a development build, which has no signed release to install; run 'cyfr update' with a released cyfr")
 	}
-	u := &updater{ctx: ctx, version: v, out: out, errOut: errOut}
-	return u.run()
-}
-
-// takeUpdateLock creates the lock `cyfr update`, `cyfr restore` and
-// `cyfr up` share, refusing at once while any of them holds it, and
-// answers the function that removes it; command names the one taking it.
-// An update or a restore holds it from before the stop to its end, an up
-// across its start, so a start never runs while the stack is stopped for a
-// snapshot or a restore, and neither begins while a start runs. A lock
-// file its holder left behind (a process killed outright) is refused the
-// same way, naming the pid it records, never waited on: the person removes
-// it once no cyfr up, update or restore runs.
-func takeUpdateLock(command string) (func(), error) {
-	f, err := os.OpenFile(updateLockName, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
-	if errors.Is(err, fs.ErrExist) {
-		abs, holder := updateLockHolder()
-		return nil, lockHeldError{path: abs, holder: holder, command: command}
-	}
+	// The lock an up, a restore and a reach change hold too, taken before
+	// any docker call and held to the update's end, so no start runs while
+	// the stack is stopped for its snapshot. A change an interrupted
+	// command left is finished first; one recovery could not finish leaves
+	// the stack in no known state, and the update does nothing.
+	e, unlock, receipts, err := openLocked(ctx, "update", out)
 	if err != nil {
-		return nil, fmt.Errorf("could not take the update lock %s: %w", updateLockName, err)
+		return err
 	}
-	_, werr := fmt.Fprintf(f, "%d\n", os.Getpid())
-	if err := errors.Join(werr, f.Close()); err != nil {
-		os.Remove(updateLockName)
-		return nil, fmt.Errorf("could not take the update lock %s: %w", updateLockName, err)
+	defer unlock()
+	if err := refuseUnfinished(receipts); err != nil {
+		return err
 	}
-	return func() { os.Remove(updateLockName) }, nil
-}
-
-// lockHeldError is takeUpdateLock's refusal: the lock's file, the holder it
-// records and the command that was refused.
-type lockHeldError struct{ path, holder, command string }
-
-func (e lockHeldError) Error() string {
-	return fmt.Sprintf("Another cyfr up, update or restore holds %s (%s). If none is running, remove the file and run 'cyfr %s' again", e.path, e.holder, e.command)
-}
-
-// updateLockHolder names the update lock's file and the holder it records,
-// for a refusal while the lock stands.
-func updateLockHolder() (path, holder string) {
-	holder = "an unknown process"
-	if data, err := os.ReadFile(updateLockName); err == nil && strings.TrimSpace(string(data)) != "" {
-		holder = "pid " + strings.TrimSpace(string(data))
+	head, err := e.Head()
+	if err != nil {
+		return engineFailure(err)
 	}
-	path, _ = filepath.Abs(updateLockName)
-	return path, holder
+	u := &updater{ctx: ctx, version: v, out: out, errOut: errOut, engine: e, head: head}
+	return u.run()
 }
 
 // scaffoldRelease is a release's scaffold fetched and verified, nothing of
@@ -282,7 +243,11 @@ type updater struct {
 	ctx         context.Context
 	version     string
 	out, errOut io.Writer
-	profiles    []string
+	// engine holds the stack's lock and runs every docker call of the
+	// update; head is .env's reach head, whose selection every compose
+	// call of the update runs with.
+	engine stackEngine
+	head   reach.Head
 	// secrets are the values held from the effective environment: written
 	// only into the snapshot, and taken out of any child output cyfr echoes.
 	secrets []string
@@ -306,6 +271,9 @@ type updater struct {
 	// cyfr service at, through every form compose reads (merge keys,
 	// extends, override files), so the switch adds no default mount at one.
 	boundTargets map[string]bool
+	// servedLocally is the new release's start that left the home on this
+	// machine alone (startedLocally), reported once the update is.
+	servedLocally error
 }
 
 type serviceStop struct {
@@ -325,7 +293,6 @@ func (u *updater) run() error {
 	if _, err := exec.LookPath("docker"); err != nil {
 		return errors.New("cyfr update needs docker on PATH to update the stack; nothing was changed")
 	}
-	u.profiles = composeProfiles(".env")
 
 	// Every step before the stop runs under ctx and changes no deployment
 	// state, so an interrupt or a failure here leaves the stack running on
@@ -341,6 +308,12 @@ func (u *updater) run() error {
 		if u.ctx.Err() != nil {
 			return fmt.Errorf("%w; %s", errUpdateInterrupted, u.composeAsRead())
 		}
+	}
+
+	// A join waiting for approval would enrol the machine while the stack
+	// is down for the update, so it is cancelled first.
+	if err := u.engine.CancelWaitingJoin(u.ctx); err != nil {
+		return fmt.Errorf("cyfr update could not cancel the tailnet join waiting for approval (%v); the running stack was not touched, and %s", engineFailure(err), u.composeAsRead())
 	}
 
 	// From here on every child runs detached from ctx: the running step
@@ -386,7 +359,7 @@ func (u *updater) run() error {
 	if u.ctx.Err() != nil {
 		fmt.Fprintln(u.out, "An interrupt arrived during the switch; the switch and the start ran to their end, so the stack is not left half-switched.")
 	}
-	return nil
+	return u.servedLocally
 }
 
 // fetchManifest fetches and verifies the release's manifest; any failure
@@ -489,7 +462,7 @@ func planCompose(path string, m *release.Manifest, ver string) (*composePlan, er
 		}
 		want, _ := m.Digest(repo)
 		switch repo {
-		case release.RepoCaddy:
+		case release.RepoCaddy, release.RepoTailscale:
 			line.replacement = line.repository
 			if line.tag != "" {
 				line.replacement += ":" + line.tag
@@ -675,75 +648,97 @@ func checkRewrite(data []byte, managed []imageLine) error {
 
 // ---- docker ------------------------------------------------------------------
 
-// ownProcessGroup answers attributes that start a child in a process group
-// of its own, so a terminal's ^C reaches cyfr alone and never a docker
-// child in the middle of a stop, a dump or a start: cyfr decides when each
-// step ends. Set by field name, since the field is Setpgid on a Unix and
-// CREATE_NEW_PROCESS_GROUP in CreationFlags on Windows.
-func ownProcessGroup() *syscall.SysProcAttr {
-	attr := &syscall.SysProcAttr{}
-	fields := reflect.ValueOf(attr).Elem()
-	if field := fields.FieldByName("Setpgid"); field.IsValid() && field.Kind() == reflect.Bool {
-		field.SetBool(true)
-	}
-	if field := fields.FieldByName("CreationFlags"); field.IsValid() && field.Kind() == reflect.Uint32 {
-		const createNewProcessGroup = 0x00000200
-		field.SetUint(field.Uint() | createNewProcessGroup)
-	}
-	return attr
-}
-
 // offlineEval answers the compose arguments that run expr through
 // `bin/cyfr eval` in a one-off cyfr container with nothing of the stack
 // running, each of offlineEnv set in it.
-func (u *updater) offlineEval(expr string) []string {
+func (u *updater) offlineEval(ctx context.Context, expr string) ([]string, error) {
 	args := []string{"run", "--rm", "--no-deps", "-T"}
 	for _, setting := range u.offlineEnv {
 		args = append(args, "-e", setting)
 	}
-	return u.composeArgs(append(args, "cyfr", "bin/cyfr", "eval", expr)...)
+	return u.composeArgs(ctx, append(args, "cyfr", "bin/cyfr", "eval", expr)...)
 }
 
-// composeArgs prefixes args with `compose` and the project's profiles.
-func (u *updater) composeArgs(args ...string) []string {
-	return slices.Concat([]string{"compose"}, profileArgs(u.profiles), args)
+// composeArgs answers the arguments of the compose command args under the
+// update's head: the engine's complete selection of project, files,
+// directory and profiles (reach.Engine.ComposeArgs).
+func (u *updater) composeArgs(ctx context.Context, args ...string) ([]string, error) {
+	return u.engine.ComposeArgs(ctx, u.head, args...)
 }
 
-// docker runs docker with args under ctx, its stdout into stdout (cyfr's
-// own when nil) and its stderr into cyfr's, env added to cyfr's
-// environment. A child that outlives ctx is killed.
-func (u *updater) docker(ctx context.Context, stdout io.Writer, env []string, args ...string) error {
-	c := exec.CommandContext(ctx, "docker", args...)
-	c.SysProcAttr = ownProcessGroup()
-	c.WaitDelay = 10 * time.Second
-	if env != nil {
-		c.Env = append(os.Environ(), env...)
+// docker runs one docker call through the engine's runner under ctx, held
+// to ctx's deadline, stdin on its standard input, its stdout into stdout
+// (cyfr's own when nil) and its stderr into cyfr's.
+func (u *updater) docker(ctx context.Context, stdin io.Reader, stdout io.Writer, args ...string) error {
+	if stdout == nil {
+		stdout = u.out
 	}
-	c.Stdout = u.out
-	if stdout != nil {
-		c.Stdout = stdout
+	res, err := u.engine.Docker().Run(ctx, reach.Call{Args: args, Deadline: callDeadline(ctx), Stdin: stdin, Stdout: stdout, Stderr: u.errOut})
+	return callFailure(res, err)
+}
+
+// composeDocker runs the compose command args under the update's head as
+// docker does.
+func (u *updater) composeDocker(ctx context.Context, args ...string) error {
+	full, err := u.composeArgs(ctx, args...)
+	if err != nil {
+		return err
 	}
-	c.Stderr = u.errOut
-	return c.Run()
+	return u.docker(ctx, nil, nil, full...)
 }
 
 // dockerOutput runs docker as docker does and answers its stdout; its
 // stderr is echoed after the run with every held secret taken out.
-func (u *updater) dockerOutput(ctx context.Context, env []string, args ...string) (string, error) {
-	var stdout, stderr bytes.Buffer
-	c := exec.CommandContext(ctx, "docker", args...)
-	c.SysProcAttr = ownProcessGroup()
-	c.WaitDelay = 10 * time.Second
-	if env != nil {
-		c.Env = append(os.Environ(), env...)
+func (u *updater) dockerOutput(ctx context.Context, stdin io.Reader, args ...string) (string, error) {
+	res, err := u.engine.Docker().Run(ctx, reach.Call{Args: args, Deadline: callDeadline(ctx), Stdin: stdin})
+	if len(res.Stderr) > 0 {
+		io.WriteString(u.errOut, u.redact(string(res.Stderr)))
 	}
-	c.Stdout, c.Stderr = &stdout, &stderr
-	err := c.Run()
-	if stderr.Len() > 0 {
-		io.WriteString(u.errOut, u.redact(stderr.String()))
-	}
-	return stdout.String(), err
+	return string(res.Stdout), callFailure(res, err)
 }
+
+// composeOutput runs the compose command args under the update's head as
+// dockerOutput does.
+func (u *updater) composeOutput(ctx context.Context, args ...string) (string, error) {
+	full, err := u.composeArgs(ctx, args...)
+	if err != nil {
+		return "", err
+	}
+	return u.dockerOutput(ctx, nil, full...)
+}
+
+// callDeadline is the deadline a docker call is held to, the one its step's
+// context carries: the engine's watchdog ends the call there even when
+// cyfr itself is gone.
+func callDeadline(ctx context.Context) time.Duration {
+	if deadline, ok := ctx.Deadline(); ok {
+		return time.Until(deadline)
+	}
+	return composeRunTimeout
+}
+
+// callFailure is a docker call's failure: the runner's error, or the exit
+// status the call ended with.
+func callFailure(res reach.Result, err error) error {
+	if err != nil {
+		return err
+	}
+	if res.ExitCode != 0 {
+		return fmt.Errorf("exit status %d", res.ExitCode)
+	}
+	return nil
+}
+
+// pgURLInput is the standard input a postgres container's shell reads the
+// database URL from (pgURLVariable), one line before anything the call
+// itself reads.
+func pgURLInput(url string) io.Reader {
+	return strings.NewReader(url + "\n")
+}
+
+// pgReadURL begins a postgres container's shell script: the URL read from
+// standard input into pgURLVariable.
+const pgReadURL = `IFS= read -r ` + pgURLVariable + ` && `
 
 // redact takes every held secret out of text.
 func (u *updater) redact(text string) string {
@@ -865,7 +860,7 @@ func (svc composeService) mounts() ([]composeMount, error) {
 func (u *updater) readConfig() error {
 	ctx, cancel := context.WithTimeout(u.ctx, composeRunTimeout)
 	defer cancel()
-	raw, err := u.dockerOutput(ctx, nil, u.composeArgs("config", "--format", "json")...)
+	raw, err := u.composeOutput(ctx, "config", "--format", "json")
 	if err != nil {
 		return fmt.Errorf("docker compose could not read the stack's configuration (%v); nothing was changed", err)
 	}
@@ -943,6 +938,9 @@ func (u *updater) readConfig() error {
 		c.adapter = "postgres"
 		if c.pgURL = env("CYFR_DATABASE_URL"); c.pgURL == "" {
 			return errors.New("CYFR_DATABASE=postgres without CYFR_DATABASE_URL: cyfr update has no database to snapshot; nothing was changed")
+		}
+		if strings.ContainsAny(c.pgURL, "\r\n") {
+			return errors.New("CYFR_DATABASE_URL holds a line break, which no database URL holds; nothing was changed")
 		}
 		u.secrets = append(u.secrets, c.pgURL)
 		if parsed, err := url.Parse(c.pgURL); err == nil && parsed.User != nil {
@@ -1138,11 +1136,11 @@ var errServerVersion = errors.New("the server's version does not read")
 
 // serverMajor reads the major version of the PostgreSQL server at the
 // configured URL through a postgres client container, the URL reaching it
-// through its environment.
+// on its standard input.
 func (u *updater) serverMajor(ctx context.Context) (int, error) {
-	answer, err := u.dockerOutput(ctx, []string{pgURLVariable + "=" + u.config.pgURL},
-		"run", "--rm", "--network", "host", "-e", pgURLVariable, pgClientImages[pgProbeMajor],
-		"sh", "-c", `exec psql "$`+pgURLVariable+`" -tAc "SHOW server_version_num"`)
+	answer, err := u.dockerOutput(ctx, pgURLInput(u.config.pgURL),
+		"run", "--rm", "-i", "--network", "host", pgClientImages[pgProbeMajor],
+		"sh", "-c", pgReadURL+`exec psql "$`+pgURLVariable+`" -tAc "SHOW server_version_num"`)
 	if err != nil {
 		return 0, err
 	}
@@ -1260,7 +1258,7 @@ func (u *updater) readRoster() error {
 	if !slices.Contains(u.running, "cyfr") {
 		return nil
 	}
-	output, err := u.dockerOutput(ctx, nil, u.composeArgs("exec", "-T", "cyfr", "bin/cyfr", "rpc", rosterExpr)...)
+	output, err := u.composeOutput(ctx, "exec", "-T", "cyfr", "bin/cyfr", "rpc", rosterExpr)
 	if err != nil {
 		return fmt.Errorf("cyfr update could not read the cell's roster through the running cyfr (%v); nothing was changed", err)
 	}
@@ -1292,7 +1290,7 @@ func (u *updater) readRoster() error {
 
 // listRunning reads the stack's running services into u.running.
 func (u *updater) listRunning(ctx context.Context) error {
-	ps, err := u.dockerOutput(ctx, nil, u.composeArgs("ps", "--services", "--status", "running")...)
+	ps, err := u.composeOutput(ctx, "ps", "--services", "--status", "running")
 	if err != nil {
 		return fmt.Errorf("docker compose could not list the running services (%v); nothing was changed", err)
 	}
@@ -1349,7 +1347,7 @@ func (u *updater) stopServices(services ...string) (time.Duration, error) {
 	ctx, cancel := u.detached(stopTimeout)
 	defer cancel()
 	began := time.Now()
-	err := u.docker(ctx, nil, nil, u.composeArgs(append([]string{"stop"}, services...)...)...)
+	err := u.composeDocker(ctx, append([]string{"stop"}, services...)...)
 	return time.Since(began), err
 }
 
@@ -1380,7 +1378,11 @@ func (u *updater) waitLiveSlots(admit func(rosterSlot) bool) (string, []rosterSl
 	deadline := time.Now().Add(liveSlotsWindow)
 	for {
 		ctx, cancel := u.detached(composeRunTimeout)
-		output, err := u.dockerOutput(ctx, nil, u.offlineEval(liveSlotsExpr)...)
+		args, err := u.offlineEval(ctx, liveSlotsExpr)
+		output := ""
+		if err == nil {
+			output, err = u.dockerOutput(ctx, nil, args...)
+		}
 		cancel()
 		if err != nil {
 			return "", nil, fmt.Errorf("The offline roster read failed (%v)", err)
@@ -1487,6 +1489,15 @@ func (u *updater) takeSnapshot() error {
 				exclude[filepath.Clean(c.sqliteFile+suffix)] = true
 			}
 		}
+		// The reach engine's state is no part of any snapshot, whatever
+		// mount reaches it: a restored home's lock, journal and receipts
+		// are the machine's own, never the backup's.
+		if state, err := filepath.Abs(".cyfr"); err == nil {
+			if resolved, err := filepath.EvalSymlinks(state); err == nil {
+				state = resolved
+			}
+			exclude[state] = true
+		}
 		if err := copyStorage(c.storageMounts, filepath.Join(dir, "storage"), exclude, u.out); err != nil {
 			return err
 		}
@@ -1576,7 +1587,7 @@ func copyScaffold(names []string, dst string) error {
 
 // dumpPostgres streams pg_dump's custom-format dump of the configured
 // database into file, from the server-major image; the URL reaches the
-// container through its environment.
+// container on its standard input.
 func (u *updater) dumpPostgres(file string) error {
 	f, err := os.OpenFile(file, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
 	if err != nil {
@@ -1585,17 +1596,18 @@ func (u *updater) dumpPostgres(file string) error {
 	ctx, cancel := u.detached(dumpTimeout)
 	defer cancel()
 	var stderr bytes.Buffer
-	c := exec.CommandContext(ctx, "docker", "run", "--rm", "--network", "host", "-e", pgURLVariable, u.pgImage(),
-		"sh", "-c", `exec pg_dump --format=custom --no-owner "$`+pgURLVariable+`"`)
-	c.SysProcAttr = ownProcessGroup()
-	c.WaitDelay = 10 * time.Second
-	c.Env = append(os.Environ(), pgURLVariable+"="+u.config.pgURL)
-	c.Stdout, c.Stderr = f, &stderr
-	err = c.Run()
+	res, err := u.engine.Docker().Run(ctx, reach.Call{
+		Args: []string{"run", "--rm", "-i", "--network", "host", u.pgImage(),
+			"sh", "-c", pgReadURL + `exec pg_dump --format=custom --no-owner "$` + pgURLVariable + `"`},
+		Deadline: callDeadline(ctx),
+		Stdin:    pgURLInput(u.config.pgURL),
+		Stdout:   f,
+		Stderr:   &stderr,
+	})
 	if stderr.Len() > 0 {
 		io.WriteString(u.errOut, u.redact(stderr.String()))
 	}
-	if err := errors.Join(err, f.Sync(), f.Close()); err != nil {
+	if err := errors.Join(callFailure(res, err), f.Sync(), f.Close()); err != nil {
 		return fmt.Errorf("pg_dump in %s failed: %w", u.pgImage(), err)
 	}
 	return nil
@@ -1733,11 +1745,29 @@ func (u *updater) switchImages() error {
 // file still in place, so the old stack must not start under it.
 var errComposeLeftSwitched = errors.New("the compose file is left switched")
 
-// up starts the switched stack and waits for every service to be healthy;
-// the cyfr image's health check is its readiness.
+// up starts the switched stack through the one start path every cyfr
+// start takes (reach.Engine.Start): the stack checked, a tailnet node
+// validated before Serve opens, and cyfr's health awaited, the image's
+// health check being its readiness.
 func (u *updater) up() error {
 	fmt.Fprintf(u.out, "Starting release %s...\n", u.version)
-	return u.docker(context.WithoutCancel(u.ctx), nil, nil, u.composeArgs("up", "-d", "--wait", "--wait-timeout", upWaitSeconds)...)
+	err := u.start("update")
+	if local := (startedLocally{}); errors.As(err, &local) {
+		u.servedLocally = err
+		return nil
+	}
+	return err
+}
+
+// start starts the stack as .env and the compose file hold it, through the
+// one start path (reach.Engine.Start), cause naming the command. A start
+// that leaves the home on this machine alone answers startedLocally.
+func (u *updater) start(cause string) error {
+	rec, err := u.engine.Start(context.WithoutCancel(u.ctx), cause)
+	if err != nil {
+		return engineFailure(err)
+	}
+	return receiptFailure(rec)
 }
 
 // restartOld starts the old stack again after a failure before the switch,
@@ -1753,9 +1783,11 @@ func (u *updater) restartOld(reason error) error {
 		return fmt.Errorf("%v.\nThe old stack is left stopped: %s, so it is not started under it. Start the stack with 'cyfr up' once docker-compose.yml is the configuration you mean to run", u.redact(reason.Error()), u.composeAsRead())
 	}
 	fmt.Fprintln(u.out, "Starting the old stack again...")
-	ctx, cancel := u.detached(stopTimeout)
-	defer cancel()
-	if err := u.docker(ctx, nil, nil, u.composeArgs("start")...); err != nil {
+	err := u.start("update")
+	if local := (startedLocally{}); errors.As(err, &local) {
+		return fmt.Errorf("%v.\nThe old stack was started again, on this machine alone; docker-compose.yml is unchanged. %v", u.redact(reason.Error()), err)
+	}
+	if err != nil {
 		return fmt.Errorf("%v.\nThe old stack did not start again (%v); docker-compose.yml is unchanged, so 'cyfr up' starts it", u.redact(reason.Error()), err)
 	}
 	return fmt.Errorf("%v.\nThe old stack was started again; docker-compose.yml is unchanged", u.redact(reason.Error()))
@@ -1782,7 +1814,7 @@ func (u *updater) composeAsRead() string {
 func (u *updater) stopAfterSwitch(reason error) error {
 	ctx, cancel := u.detached(stopTimeout)
 	defer cancel()
-	stopErr := u.docker(ctx, nil, nil, u.composeArgs("stop")...)
+	stopErr := u.composeDocker(ctx, "stop")
 	message := fmt.Sprintf("Release %s did not start (%v); the stack is left stopped", u.version, reason)
 	if stopErr != nil {
 		message += fmt.Sprintf(" (docker compose stop failed: %v; stop it with 'cyfr down')", stopErr)
