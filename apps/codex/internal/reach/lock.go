@@ -79,19 +79,37 @@ func (e *Engine) unlock() {
 	e.lock = nil
 }
 
-// busy is the lock's refusal, from the holder record the holder wrote.
-// A holder that wrote none (a process taking the lock some other way) is
-// named by the kernel's lock table where it has one.
+// recordWait bounds how long a refused taker waits for the holder's
+// record: a holder writes it right after it takes the lock, so a taker
+// refused in between, or finding the record a dead holder left, reads it
+// again before naming the holder.
+const recordWait = 250 * time.Millisecond
+
+// busy is the lock's refusal, from the holder record the holder wrote. A
+// record on this host whose holder and watchdog have both died is an
+// earlier holder's, not this one's. A holder that wrote none (a process
+// taking the lock some other way) is named by the kernel's lock table
+// where it has one.
 func (e *Engine) busy() *ErrBusy {
-	var h holderRecord
-	if ok, err := readJSON(e.path(holderFile), &h); err != nil || !ok || h.Command == "" {
-		return &ErrBusy{Holder: "a process that wrote no holder record", PID: lockOwner(e.path(lockFile))}
+	host, _ := os.Hostname()
+	end := time.Now().Add(recordWait)
+	for {
+		var h holderRecord
+		ok, err := readJSON(e.path(holderFile), &h)
+		live := err == nil && ok && h.Command != "" &&
+			(h.Host != host || processAlive(h.PID) || h.WatchdogPID > 0 && processAlive(h.WatchdogPID))
+		if live {
+			b := &ErrBusy{Holder: h.String(), PID: h.PID, WatchdogPID: h.WatchdogPID}
+			if h.Until != nil {
+				b.Until = *h.Until
+			}
+			return b
+		}
+		if !time.Now().Before(end) {
+			return &ErrBusy{Holder: "a process that wrote no holder record", PID: lockOwner(e.path(lockFile))}
+		}
+		time.Sleep(5 * time.Millisecond)
 	}
-	b := &ErrBusy{Holder: h.String(), PID: h.PID, WatchdogPID: h.WatchdogPID}
-	if h.Until != nil {
-		b.Until = *h.Until
-	}
-	return b
 }
 
 // noteWatchdog records, durably, the watchdog now holding the lock's

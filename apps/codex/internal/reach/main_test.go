@@ -19,7 +19,8 @@ import (
 // The test binary's other roles, chosen before the tests run: the
 // watchdog the engine re-execs (`-reach.watchdog`, as cyfr's hidden
 // `internal docker-run`), a lock holder in a process of its own
-// (`-reach.holder`), and a docker binary answering from a state file
+// (`-reach.holder`), one of many contending for it (`-reach.taker`), and
+// a docker binary answering from a state file
 // (REACH_FAKE_DOCKER).
 func TestMain(m *testing.M) {
 	if len(os.Args) > 1 {
@@ -28,6 +29,8 @@ func TestMain(m *testing.M) {
 			os.Exit(WatchdogMain(os.Args[2:], os.Stdin, os.Stdout, os.Stderr))
 		case "-reach.holder":
 			os.Exit(holderMain(os.Args[2:]))
+		case "-reach.taker":
+			os.Exit(takerMain(os.Args[2:]))
 		}
 	}
 	if state := os.Getenv("REACH_FAKE_DOCKER"); state != "" {

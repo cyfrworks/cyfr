@@ -6,6 +6,7 @@
 package reach
 
 import (
+	"errors"
 	"os/exec"
 	"syscall"
 )
@@ -20,4 +21,14 @@ func ownGroup(cmd *exec.Cmd) {
 // takes its container down with it.
 func killGroup(cmd *exec.Cmd) {
 	syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+}
+
+// processAlive reports whether process pid exists, as this namespace
+// sees it.
+func processAlive(pid int) bool {
+	if pid <= 0 {
+		return false
+	}
+	err := syscall.Kill(pid, 0)
+	return err == nil || errors.Is(err, syscall.EPERM)
 }
