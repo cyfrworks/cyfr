@@ -79,6 +79,22 @@ func engineFailure(err error) error {
 	return err
 }
 
+// answerFailure is the failure an engine method's answer means, its
+// receipt and its error together: the engine answers a receipt that
+// carries a code with that code's refusal as the error. A start that left
+// the home on this machine alone (outcome started_local) is startedLocally
+// whatever the error says; any other error is that failure, a refusal by
+// its sentence; otherwise the receipt's own refusal, nil for a success.
+func answerFailure(rec reach.Receipt, err error) error {
+	if rec.Outcome == outcomeStartedLocal {
+		return receiptFailure(rec)
+	}
+	if err != nil {
+		return engineFailure(err)
+	}
+	return receiptFailure(rec)
+}
+
 // outcomeStartedLocal is the outcome of a start that started the home on
 // this machine alone: the tailnet machine is not ready to serve it (not
 // the one .env names, not joined, or HTTPS off), so Serve stays closed, and
@@ -305,10 +321,7 @@ func joinTailnet(ctx context.Context, e stackEngine, id string, o reachOptions, 
 		}
 		return "", refusalError{reach.Refuse("tailnet_join_cancelled", nil)}
 	}
-	if err != nil {
-		return "", engineFailure(err)
-	}
-	if err := receiptFailure(rec); err != nil {
+	if err := answerFailure(rec, err); err != nil {
 		return "", err
 	}
 	joinID := rec.Payload["join_id"]
@@ -484,13 +497,9 @@ func runReach(ctx context.Context, mode string, o reachOptions, yes bool, id str
 	// The switch runs to its end once it begins: an interrupt then is the
 	// journal's to recover, never a half-made change this command walks
 	// away from.
-	rec, err := e.Switch(context.WithoutCancel(ctx), reach.SwitchRequest{
+	if err := answerFailure(e.Switch(context.WithoutCancel(ctx), reach.SwitchRequest{
 		ID: id, Target: target, JoinID: joinID, OldDigest: p.OldDigest, NewDigest: p.NewDigest,
-	})
-	if err != nil {
-		return engineFailure(err)
-	}
-	if err := receiptFailure(rec); err != nil {
+	})); err != nil {
 		return err
 	}
 	fmt.Fprintln(out, "Done. This home is reached as:")
@@ -526,7 +535,8 @@ func showUnconfirmed(ctx context.Context, target reach.Target, o reachOptions, o
 
 // runReachResume is `cyfr reach --resume`: the lock and recovery, then the
 // report. A change recovery could not finish is a failure, its sentence
-// saying what to do next.
+// saying what to do next; one whose recovery started the home on this
+// machine alone is startedLocally, as every start path's is.
 func runReachResume(ctx context.Context, out io.Writer) error {
 	_, unlock, receipts, err := openLocked(ctx, "reach --resume", out)
 	if err != nil {
@@ -536,7 +546,15 @@ func runReachResume(ctx context.Context, out io.Writer) error {
 	if len(receipts) == 0 {
 		fmt.Fprintln(out, "Nothing was unfinished: this home is as .env says.")
 	}
-	return refuseUnfinished(receipts)
+	if err := refuseUnfinished(receipts); err != nil {
+		return err
+	}
+	for _, r := range receipts {
+		if r.Outcome == outcomeStartedLocal {
+			return receiptFailure(r)
+		}
+	}
+	return nil
 }
 
 // runReachStatus is `cyfr reach status`: the engine's status, read without

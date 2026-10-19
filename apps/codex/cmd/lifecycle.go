@@ -933,16 +933,13 @@ func applyInitReach(ctx context.Context, c reachChoice, key []byte, out io.Write
 	rec, err := e.Switch(context.WithoutCancel(ctx), reach.SwitchRequest{
 		ID: id, Target: target, JoinID: joinID, OldDigest: p.OldDigest, NewDigest: p.NewDigest,
 	})
-	if err != nil {
-		return reach.Head{}, engineFailure(err)
-	}
 	head := p.New
 	if rec.FinalHead != nil {
 		head = *rec.FinalHead
 	}
 	// A switch that started the home on this machine alone made the
 	// change; its head is .env's, and its failure says what is left.
-	if err := receiptFailure(rec); err != nil {
+	if err := answerFailure(rec, err); err != nil {
 		if local := (startedLocally{}); errors.As(err, &local) {
 			return head, err
 		}
@@ -1183,15 +1180,11 @@ func runUp(ctx context.Context, out io.Writer) error {
 	if err := e.CheckStack(ctx); err != nil {
 		return engineFailure(err)
 	}
-	rec, startErr := e.Start(context.WithoutCancel(ctx), "up")
-	if startErr != nil {
-		startErr = withBootFatal(ctx, e, head, engineFailure(startErr))
-	} else if startErr = receiptFailure(rec); startErr != nil {
-		// A home started on this machine alone runs, and its sentence is
-		// the whole answer; any other refused start may be the boot's.
-		if local := (startedLocally{}); !errors.As(startErr, &local) {
-			startErr = withBootFatal(ctx, e, head, startErr)
-		}
+	// A home started on this machine alone runs, and its sentence is the
+	// whole answer; any other failed start may be the boot's refusal.
+	startErr := answerFailure(e.Start(context.WithoutCancel(ctx), "up"))
+	if local := (startedLocally{}); startErr != nil && !errors.As(startErr, &local) {
+		startErr = withBootFatal(ctx, e, head, startErr)
 	}
 	release()
 	select {
@@ -1266,11 +1259,7 @@ func runDown(ctx context.Context, out io.Writer) error {
 		return err
 	}
 	defer unlock()
-	rec, err := e.Stop(context.WithoutCancel(ctx), "down", true)
-	if err != nil {
-		return engineFailure(err)
-	}
-	if err := receiptFailure(rec); err != nil {
+	if err := answerFailure(e.Stop(context.WithoutCancel(ctx), "down", true)); err != nil {
 		return err
 	}
 	fmt.Fprintln(out, "CYFR server stopped.")

@@ -1767,11 +1767,7 @@ func (u *updater) up() error {
 // waiting startHealth for cyfr's health. A start that leaves the home on
 // this machine alone answers startedLocally.
 func (u *updater) start(cause string) error {
-	rec, err := u.engine.StartWithin(context.WithoutCancel(u.ctx), cause, startHealth)
-	if err != nil {
-		return engineFailure(err)
-	}
-	return receiptFailure(rec)
+	return answerFailure(u.engine.StartWithin(context.WithoutCancel(u.ctx), cause, startHealth))
 }
 
 // restartOld starts the old stack again after a failure before the switch,
