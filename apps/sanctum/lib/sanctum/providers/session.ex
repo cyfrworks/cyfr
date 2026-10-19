@@ -557,6 +557,25 @@ defmodule Sanctum.Providers.Session do
         "Approve a command line from a browser signed in to this home"
       )
 
+  # A session minted as a sign-in's is: a session a restore minted, which
+  # initializes no credential of its own, and a remote person's identity
+  # that moved between its reads.
+  defp cli_refusal(:reserved_provider),
+    do:
+      cli_refused(
+        :forbidden,
+        :reserved_provider,
+        "A session from a restore approves no command line: sign in with a door of yours, then approve"
+      )
+
+  defp cli_refusal(reason) when reason in [:stale_key_epoch, :identity_key_epoch_required],
+    do:
+      cli_refused(
+        :conflict,
+        reason,
+        "Your identity changed while this was approved: approve the command line again"
+      )
+
   defp cli_refusal(reason) when Sanctum.Issuance.standing_refusal?(reason),
     do: Sanctum.Issuance.standing_refusal(reason)
 
