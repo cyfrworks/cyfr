@@ -242,6 +242,19 @@ func TestRenderEnvFileShippedTemplate(t *testing.T) {
 	}
 }
 
+// A home init gives an address is answered at that address: the .env it
+// writes for a public name names the https origin the name implies, the
+// one Sanctum.origin/0 and every policy derived from it read.
+func TestInitWritesThePublicURLItsAddressImplies(t *testing.T) {
+	got, _, err := ensureStackKeys(renderEnvFile(readShippedTemplate(t), "cyfr.example.com", "", "", true))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if url, assigned := parseEnvFile(got).value("CYFR_PUBLIC_URL"); !assigned || url != "https://cyfr.example.com" {
+		t.Errorf("init for cyfr.example.com writes CYFR_PUBLIC_URL %q (assigned: %v), want https://cyfr.example.com", url, assigned)
+	}
+}
+
 // `cyfr init --no-interactive` takes every default: the template's host and
 // direct mode, the operators' line left commented and the ACME address
 // empty, and the same keys minted, builds on, so `cyfr up` starts

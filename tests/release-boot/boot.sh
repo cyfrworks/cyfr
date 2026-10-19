@@ -164,7 +164,7 @@ cleanup() {
   # The cell started last is the one a failed step was asking.
   if [ "$code" -ne 0 ]; then
     local cell
-    for cell in "$RESERVE" "$COPY" "$ORIGIN" "$CELL"; do
+    for cell in "$RESERVE" "$COPY" "$ORIGIN" "$ADDRESS" "$CELL"; do
       if [ -n "$cell" ] && [ -f "$cell/boot.log" ]; then
         log_tail "$cell"
         break
@@ -184,7 +184,7 @@ cleanup() {
 }
 # The cells whose log a failed run prints, named before the trap reads
 # them.
-CELL="" ORIGIN="" COPY="" RESERVE="" RESERVE_HOLDER=""
+CELL="" ADDRESS="" ORIGIN="" COPY="" RESERVE="" RESERVE_HOLDER=""
 trap cleanup EXIT
 
 # How many of a server's last log lines a failed run prints.
@@ -276,6 +276,23 @@ if [ "${after:-1}" -ne 0 ]; then
   exit 1
 fi
 echo "pending migrations after the boot: $after"
+
+step "a home given a public name answers at the https origin that name implies"
+ADDRESS="$WORK/address"
+ADDRESS_URL=""
+if [ "$ADAPTER" = postgres ]; then
+  ADDRESS_DB="$(pg_run_database address)"
+  pg_fresh_database "$ADDRESS_DB"
+  ADDRESS_URL="$(pg_url "$ADDRESS_DB")"
+fi
+cell_new "$ADDRESS" "$ADDRESS_URL"
+cell_hostname "$ADDRESS" cyfr.example.com "$((PORT + 10))" "$((PORT + 11))"
+server_start "$ADDRESS"
+home="$(cell_cyfr "$ADDRESS" rpc 'IO.puts("CYFR_HOME=" <> Sanctum.Person.home())' | sed -n 's/^CYFR_HOME=//p' | tail -1)"
+[ "$home" = "https://cyfr.example.com" ] ||
+  fail "the home given cyfr.example.com answers as '$home', not https://cyfr.example.com"
+echo "Sanctum.Person.home() -> $home"
+server_stop "$ADDRESS"
 
 # ---------------------------------------------------------------------------
 # Case 2: a boot that raises is loud

@@ -201,12 +201,12 @@ cell_new() {
 
 # Cell `$1` answers as the hostname `$2`, on the listener port `$3` and the
 # host API port `$4`, as a TLS deployment behind the stack's Caddy answers
-# (`cyfr init`'s TLS answer): CYFR_HOST names it, CYFR_PUBLIC_URL is
-# https://`$2`, the origin every policy of the server is derived for
-# (`Sanctum.origin/0`), and CYFR_BEHIND_PROXY=true, since the front that
-# terminates TLS for it (tests/browser/lib.mjs) forwards as Caddy does. Its
-# node name is its own (`$cell/node`), so it runs beside the other cells
-# of the run.
+# (`cyfr init`'s TLS answer): CYFR_HOST names it, CYFR_BEHIND_PROXY=true,
+# since the front that terminates TLS for it (tests/browser/lib.mjs)
+# forwards as Caddy does, and the origin every policy of the server is
+# derived for (`Sanctum.origin/0`) is the one the deployment file itself
+# implies: nothing here writes CYFR_PUBLIC_URL for it. Its node name is
+# its own (`$cell/node`), so it runs beside the other cells of the run.
 cell_hostname() {
   local cell="$1" host="$2" port="$3" api="$4"
   [[ "$host" =~ ^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$ ]] ||
@@ -220,7 +220,6 @@ cell_hostname() {
     -e "s/^CYFR_BEHIND_PROXY=.*/CYFR_BEHIND_PROXY=true/" \
     -e "/^CYFR_PUBLIC_URL=/d" \
     "$cell/.env"
-  echo "CYFR_PUBLIC_URL=https://$host" >>"$cell/.env"
   grep -qx "CYFR_HOST=$host" "$cell/.env" || fail "cell $cell does not name $host"
   printf 'cyfr-%s-%s-%s\n' "${host//./-}" "$ADAPTER" "$$" >"$cell/node"
 }
