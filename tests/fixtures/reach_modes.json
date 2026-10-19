@@ -3059,6 +3059,36 @@
             },
             "sentence": "Another cyfr command holds this home (`x-holder`), or a docker command it started is still running (watchdog pid `x-pid`, which ends by `x-until` at the latest). Nothing was changed. Wait until it has finished, then run this command again; if the holder was interrupted, run `cyfr reach --resume` after that time."
           }
+        },
+        {
+          "fixed": {},
+          "slots": [
+            "holder",
+            "pid"
+          ],
+          "template": "Another cyfr command holds this home (`{holder}`, pid `{pid}`). Nothing was changed. Wait until it has finished, then run this command again.",
+          "example": {
+            "payload": {
+              "holder": "x-holder",
+              "pid": "x-pid"
+            },
+            "sentence": "Another cyfr command holds this home (`x-holder`, pid `x-pid`). Nothing was changed. Wait until it has finished, then run this command again."
+          }
+        },
+        {
+          "fixed": {},
+          "slots": [
+            "join_id",
+            "until"
+          ],
+          "template": "A tailnet join (`{join_id}`) is still waiting for this machine's approval, until `{until}` at the latest. Nothing was changed. Approve the machine with the link that join printed, or wait until then, and run this command again.",
+          "example": {
+            "payload": {
+              "join_id": "x-join_id",
+              "until": "x-until"
+            },
+            "sentence": "A tailnet join (`x-join_id`) is still waiting for this machine's approval, until `x-until` at the latest. Nothing was changed. Approve the machine with the link that join printed, or wait until then, and run this command again."
+          }
         }
       ]
     },
@@ -3386,6 +3416,21 @@
       ]
     },
     {
+      "code": "tailnet_join_ended",
+      "class": "unauthenticated",
+      "variants": [
+        {
+          "fixed": {},
+          "slots": [],
+          "template": "Tailscale did not accept this machine's join: the auth key may be wrong, already used or expired, or the join ended before the machine was approved. How this home is reached was not changed. Check the key if you gave one, then run `cyfr reach tailnet` again.",
+          "example": {
+            "payload": {},
+            "sentence": "Tailscale did not accept this machine's join: the auth key may be wrong, already used or expired, or the join ended before the machine was approved. How this home is reached was not changed. Check the key if you gave one, then run `cyfr reach tailnet` again."
+          }
+        }
+      ]
+    },
+    {
       "code": "tailnet_join_not_current",
       "class": "conflict",
       "variants": [
@@ -3464,6 +3509,73 @@
       ]
     },
     {
+      "code": "reach_env_edited",
+      "class": "conflict",
+      "variants": [
+        {
+          "fixed": {
+            "then": "started"
+          },
+          "slots": [
+            "env"
+          ],
+          "template": "A change of how this home is reached was interrupted, and .env was edited before the change finished. CYFR stopped the stack, checked it stopped, left .env as edited, and started the home as it says: {env}. If that is not how this home should be reached, run `cyfr reach <mode>`.",
+          "example": {
+            "payload": {
+              "env": "x-env",
+              "then": "started"
+            },
+            "sentence": "A change of how this home is reached was interrupted, and .env was edited before the change finished. CYFR stopped the stack, checked it stopped, left .env as edited, and started the home as it says: x-env. If that is not how this home should be reached, run `cyfr reach <mode>`."
+          }
+        },
+        {
+          "fixed": {
+            "then": "not_running"
+          },
+          "slots": [
+            "env"
+          ],
+          "template": "A change of how this home is reached was interrupted, and .env was edited before the change finished. CYFR stopped the stack, checked it stopped, and left .env as edited, which says: {env}. The stack was not running, so nothing was started. Run `cyfr up` to start it as .env says, or `cyfr reach <mode>` to choose again.",
+          "example": {
+            "payload": {
+              "env": "x-env",
+              "then": "not_running"
+            },
+            "sentence": "A change of how this home is reached was interrupted, and .env was edited before the change finished. CYFR stopped the stack, checked it stopped, and left .env as edited, which says: x-env. The stack was not running, so nothing was started. Run `cyfr up` to start it as .env says, or `cyfr reach <mode>` to choose again."
+          }
+        },
+        {
+          "fixed": {
+            "then": "failed"
+          },
+          "slots": [
+            "env"
+          ],
+          "template": "A change of how this home is reached was interrupted, and .env was edited before the change finished. CYFR stopped the stack, checked it stopped, and left .env as edited, but the home did not start as it says ({env}), and everything is stopped. Fix .env, then run `cyfr up`, or run `cyfr reach <mode>` to choose again.",
+          "example": {
+            "payload": {
+              "env": "x-env",
+              "then": "failed"
+            },
+            "sentence": "A change of how this home is reached was interrupted, and .env was edited before the change finished. CYFR stopped the stack, checked it stopped, and left .env as edited, but the home did not start as it says (x-env), and everything is stopped. Fix .env, then run `cyfr up`, or run `cyfr reach <mode>` to choose again."
+          }
+        },
+        {
+          "fixed": {
+            "then": "incoherent"
+          },
+          "slots": [],
+          "template": "A change of how this home is reached was interrupted, and .env was edited before the change finished. CYFR stopped the stack, checked it stopped, and left .env as edited; nothing was started, because .env no longer says one coherent way this home is reached. Run `cyfr up` to see what is wrong with it, or `cyfr reach <mode>` to choose again.",
+          "example": {
+            "payload": {
+              "then": "incoherent"
+            },
+            "sentence": "A change of how this home is reached was interrupted, and .env was edited before the change finished. CYFR stopped the stack, checked it stopped, and left .env as edited; nothing was started, because .env no longer says one coherent way this home is reached. Run `cyfr up` to see what is wrong with it, or `cyfr reach <mode>` to choose again."
+          }
+        }
+      ]
+    },
+    {
       "code": "reach_uncertain",
       "class": "uncertain",
       "variants": [
@@ -3516,6 +3628,44 @@
               "key": "COMPOSE_PROFILES"
             },
             "sentence": "`.env` sets `COMPOSE_PROFILES`, which Docker Compose would read to choose this stack's files, project or services behind cyfr's back. Nothing started. Remove it; cyfr chooses them from CYFR_REACH and CYFR_LOCUS_BUILDS_URL."
+          }
+        }
+      ]
+    },
+    {
+      "code": "compose_override_refused",
+      "class": "invalid_argument",
+      "variants": [
+        {
+          "fixed": {},
+          "slots": [
+            "file",
+            "service",
+            "key"
+          ],
+          "template": "`{file}` sets `{key}` in the `{service}` service's environment, where it would override how .env says this home is reached. Nothing started. Remove `{key}` from `{file}`; .env alone holds it, and `cyfr reach` writes it.",
+          "example": {
+            "payload": {
+              "file": "x-file",
+              "key": "COMPOSE_PROFILES",
+              "service": "x-service"
+            },
+            "sentence": "`x-file` sets `COMPOSE_PROFILES` in the `x-service` service's environment, where it would override how .env says this home is reached. Nothing started. Remove `COMPOSE_PROFILES` from `x-file`; .env alone holds it, and `cyfr reach` writes it."
+          }
+        },
+        {
+          "fixed": {},
+          "slots": [
+            "file",
+            "service"
+          ],
+          "template": "`{file}` does not give the `{service}` service .env through its env_file, so it would not read how this home is reached. Nothing started. Add `env_file: .env` to the `{service}` service in `{file}`, as the shipped docker-compose.yml has it.",
+          "example": {
+            "payload": {
+              "file": "x-file",
+              "service": "x-service"
+            },
+            "sentence": "`x-file` does not give the `x-service` service .env through its env_file, so it would not read how this home is reached. Nothing started. Add `env_file: .env` to the `x-service` service in `x-file`, as the shipped docker-compose.yml has it."
           }
         }
       ]

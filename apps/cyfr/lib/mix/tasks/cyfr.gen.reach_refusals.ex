@@ -32,7 +32,7 @@ defmodule Mix.Tasks.Cyfr.Gen.ReachRefusals do
   # value the template is rendered with before the sample is replaced by
   # `{key}`; it satisfies the row's guard.
   @rows [
-    {:reach_busy, [{%{}, ~w(holder pid until)}]},
+    {:reach_busy, [{%{}, ~w(holder pid until)}, {%{}, ~w(holder pid)}, {%{}, ~w(join_id until)}]},
     {:reach_stale, [{%{}, ~w(words)}]},
     {:reach_unchanged, [{%{}, ~w(address)}]},
     {:reach_invalid,
@@ -52,13 +52,18 @@ defmodule Mix.Tasks.Cyfr.Gen.ReachRefusals do
     {:tailnet_node_id_unsupported, [{%{}, ~w(value)}]},
     {:tailnet_join_expired, [{%{}, []}]},
     {:tailnet_join_cancelled, [{%{}, []}]},
+    {:tailnet_join_ended, [{%{}, []}]},
     {:tailnet_join_not_current, [{%{}, []}]},
     {:docker_unavailable, [{%{}, ~w(reason)}]},
     {:reach_rolled_back, [{%{}, ~w(new old reason)}]},
     {:reach_failed, [{%{}, ~w(new env)}]},
+    {:reach_env_edited,
+     for(then <- ~w(started not_running failed), do: {%{then: then}, ~w(env)}) ++
+       [{%{then: "incoherent"}, []}]},
     {:reach_uncertain, [{%{}, ~w(observed)}]},
     {:reach_outcome_unknown, [{%{}, ~w(reason)}]},
     {:compose_env_refused, [{%{}, ~w(key)}]},
+    {:compose_override_refused, [{%{}, ~w(file service key)}, {%{}, ~w(file service)}]},
     {:setup_token_with_admins, [{%{}, []}]},
     {:setup_token_refused,
      for(why <- ~w(malformed restore_token headless oidc no_provider)a, do: {%{why: why}, []})}

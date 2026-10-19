@@ -13,6 +13,8 @@ var refusalRows = map[string]refusalRow{
 		Class: "conflict",
 		Variants: []refusalVariant{
 			{Fixed: map[string]string{}, Slots: []string{"holder", "pid", "until"}, Template: "Another cyfr command holds this home (`{holder}`), or a docker command it started is still running (watchdog pid `{pid}`, which ends by `{until}` at the latest). Nothing was changed. Wait until it has finished, then run this command again; if the holder was interrupted, run `cyfr reach --resume` after that time."},
+			{Fixed: map[string]string{}, Slots: []string{"holder", "pid"}, Template: "Another cyfr command holds this home (`{holder}`, pid `{pid}`). Nothing was changed. Wait until it has finished, then run this command again."},
+			{Fixed: map[string]string{}, Slots: []string{"join_id", "until"}, Template: "A tailnet join (`{join_id}`) is still waiting for this machine's approval, until `{until}` at the latest. Nothing was changed. Approve the machine with the link that join printed, or wait until then, and run this command again."},
 		},
 	},
 	"reach_stale": {
@@ -98,6 +100,12 @@ var refusalRows = map[string]refusalRow{
 			{Fixed: map[string]string{}, Slots: []string{}, Template: "Joining your tailnet was cancelled. How this home is reached was not changed."},
 		},
 	},
+	"tailnet_join_ended": {
+		Class: "unauthenticated",
+		Variants: []refusalVariant{
+			{Fixed: map[string]string{}, Slots: []string{}, Template: "Tailscale did not accept this machine's join: the auth key may be wrong, already used or expired, or the join ended before the machine was approved. How this home is reached was not changed. Check the key if you gave one, then run `cyfr reach tailnet` again."},
+		},
+	},
 	"tailnet_join_not_current": {
 		Class: "conflict",
 		Variants: []refusalVariant{
@@ -122,6 +130,15 @@ var refusalRows = map[string]refusalRow{
 			{Fixed: map[string]string{}, Slots: []string{"new", "env"}, Template: "This home could not start as {new}, nor as before; everything was stopped and checked stopped. .env says: {env}. Run `cyfr up` to start it as .env says, or `cyfr reach <mode>` to choose again."},
 		},
 	},
+	"reach_env_edited": {
+		Class: "conflict",
+		Variants: []refusalVariant{
+			{Fixed: map[string]string{"then": "started"}, Slots: []string{"env"}, Template: "A change of how this home is reached was interrupted, and .env was edited before the change finished. CYFR stopped the stack, checked it stopped, left .env as edited, and started the home as it says: {env}. If that is not how this home should be reached, run `cyfr reach <mode>`."},
+			{Fixed: map[string]string{"then": "not_running"}, Slots: []string{"env"}, Template: "A change of how this home is reached was interrupted, and .env was edited before the change finished. CYFR stopped the stack, checked it stopped, and left .env as edited, which says: {env}. The stack was not running, so nothing was started. Run `cyfr up` to start it as .env says, or `cyfr reach <mode>` to choose again."},
+			{Fixed: map[string]string{"then": "failed"}, Slots: []string{"env"}, Template: "A change of how this home is reached was interrupted, and .env was edited before the change finished. CYFR stopped the stack, checked it stopped, and left .env as edited, but the home did not start as it says ({env}), and everything is stopped. Fix .env, then run `cyfr up`, or run `cyfr reach <mode>` to choose again."},
+			{Fixed: map[string]string{"then": "incoherent"}, Slots: []string{}, Template: "A change of how this home is reached was interrupted, and .env was edited before the change finished. CYFR stopped the stack, checked it stopped, and left .env as edited; nothing was started, because .env no longer says one coherent way this home is reached. Run `cyfr up` to see what is wrong with it, or `cyfr reach <mode>` to choose again."},
+		},
+	},
 	"reach_uncertain": {
 		Class: "uncertain",
 		Variants: []refusalVariant{
@@ -138,6 +155,13 @@ var refusalRows = map[string]refusalRow{
 		Class: "invalid_argument",
 		Variants: []refusalVariant{
 			{Fixed: map[string]string{}, Slots: []string{"key"}, Template: "`.env` sets `{key}`, which Docker Compose would read to choose this stack's files, project or services behind cyfr's back. Nothing started. Remove it; cyfr chooses them from CYFR_REACH and CYFR_LOCUS_BUILDS_URL."},
+		},
+	},
+	"compose_override_refused": {
+		Class: "invalid_argument",
+		Variants: []refusalVariant{
+			{Fixed: map[string]string{}, Slots: []string{"file", "service", "key"}, Template: "`{file}` sets `{key}` in the `{service}` service's environment, where it would override how .env says this home is reached. Nothing started. Remove `{key}` from `{file}`; .env alone holds it, and `cyfr reach` writes it."},
+			{Fixed: map[string]string{}, Slots: []string{"file", "service"}, Template: "`{file}` does not give the `{service}` service .env through its env_file, so it would not read how this home is reached. Nothing started. Add `env_file: .env` to the `{service}` service in `{file}`, as the shipped docker-compose.yml has it."},
 		},
 	},
 	"setup_token_with_admins": {

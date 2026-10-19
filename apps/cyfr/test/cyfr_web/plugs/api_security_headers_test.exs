@@ -103,7 +103,7 @@ defmodule CyfrWeb.Plugs.ApiSecurityHeadersTest do
     "a.b.Localhost",
     "127.0.0.1",
     "[::1]",
-    "localhost:4001"
+    "localhost:4100"
   ]
 
   test "a tailnet home's proxy listener sends the endpoint's HSTS on success, error and refusal",
