@@ -559,7 +559,7 @@ async function door(page, settings, value, action) {
 }
 
 async function main() {
-  const proxy = await startProxy(null, readHomes(homesFile));
+  const proxy = await startProxy(readHomes(homesFile));
   const browser = await launchBrowser("chromium", proxy);
   record.browser = browser.version();
   const admin = await (await signedIn(browser, adminCookie)).newPage();

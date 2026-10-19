@@ -38,7 +38,12 @@
 // record: each observation is redacted as it is noted, and the record's own
 // checks (`recordChecks`) refuse a record that carries one.
 //
-// Usage: node proof.mjs SERVER_URL SEGMENT COOKIE OUT_DIR VIEWPORT NARROWING HOST_CLASS
+// Every browser reaches the release at https://cyfr.test through the
+// harness's proxy (tests/browser/lib.mjs), Chromium as its full build,
+// which trusts the run's authority, and the attacker's recording endpoint
+// at https://attacker.test.
+//
+// Usage: node proof.mjs SEGMENT COOKIE OUT_DIR VIEWPORT NARROWING HOST_CLASS
 //        (NARROWING may be empty; HOST_CLASS is a class of BUDGET_MS)
 //    or: node proof.mjs --check-record RECORD_JSON [SECRETS_JSON]
 
@@ -357,7 +362,8 @@ async function context(browser, name, base, cookie, viewport) {
   if (touch && name !== "firefox") options.isMobile = true;
   const ctx = await browser.newContext(options);
   await ctx.addInitScript(INSTRUMENT);
-  await ctx.addCookies([{ name: "_cyfr_key", value: cookie, url: base, httpOnly: true, secure: false, sameSite: "Lax" }]);
+  // As a sign-in on the home's https origin leaves it.
+  await ctx.addCookies([{ name: "_cyfr_key", value: cookie, url: base, httpOnly: true, secure: true, sameSite: "Lax" }]);
   return ctx;
 }
 
@@ -895,7 +901,7 @@ async function stepExits(page, name, proxy, receiver, udp) {
     own_data_path: ownPath,
     navigate_to: "/a/x/tinctures",
     neighbour_script: neighbour.dir + "neighbour.js",
-    neighbour_connect: `http://${lib.ATTACKER}/collect`,
+    neighbour_connect: `https://${lib.ATTACKER}/collect`,
     forbidden: neighbour.dir + "neighbour.js",
     public_invoke: "/_f/v1/invoke",
     shared_action: "/_f/v1/action",
@@ -1776,10 +1782,10 @@ async function main() {
     return;
   }
 
-  const [server, segment, cookie, outDir, viewportName, narrowing, hostClass] = argv;
+  const [segment, cookie, outDir, viewportName, narrowing, hostClass] = argv;
   const viewport = VIEWPORTS[viewportName];
-  if (!server || !segment || !cookie || !outDir || !viewport || !budgetOf(hostClass)) {
-    console.error(`usage: node proof.mjs SERVER_URL SEGMENT COOKIE OUT_DIR desktop|720x720 NARROWING ${Object.keys(BUDGET_MS).join("|")}`);
+  if (!segment || !cookie || !outDir || !viewport || !budgetOf(hostClass)) {
+    console.error(`usage: node proof.mjs SEGMENT COOKIE OUT_DIR desktop|720x720 NARROWING ${Object.keys(BUDGET_MS).join("|")}`);
     process.exit(64);
   }
   lib = await import("../browser/lib.mjs");
@@ -1811,9 +1817,10 @@ async function main() {
 
   const receiver = await lib.startReceiver();
   const udp = await startUdp();
-  BASE = `http://${lib.SITE}:${new URL(server).port || 80}`;
+  const homes = lib.readHomes();
+  BASE = lib.homeOf(homes.homes).origin;
   SHELL_URL = `${BASE}/a/${encodeURIComponent(segment)}/tinctures`;
-  const proxy = await lib.startProxy(server, { receiver, bodies: false });
+  const proxy = await lib.startProxy({ ...homes, receiver, bodies: false });
 
   let failure = null;
   try {

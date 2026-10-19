@@ -4,10 +4,11 @@
 // The directory's front for the cells (front.sh): a TLS listener on the
 // proof's own loopback address, port 443, presenting the certificate the
 // run's authority issued for the directory's name, and forwarding each
-// request to the directory cell's listener as the stack's Caddy forwards
-// to cyfr (X-Forwarded-For, -Proto and -Host). The homes' directory
-// client reaches it at https://dir.test, the name each cell's ERL_INETRC
-// maps to this address, and trusts it through the run's authority.
+// request to the directory cell's proxy listener as the stack's Caddy
+// forwards to cyfr's (X-Forwarded-For, -Proto and -Host). The homes'
+// directory client reaches it at https://dir.test, the name each cell's
+// ERL_INETRC maps to this address, and trusts it through the run's
+// authority.
 //
 // A control listener beside it (plain HTTP, the same address) lets the
 // proof break the directory on purpose, and reports what reached it:

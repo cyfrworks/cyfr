@@ -33,18 +33,20 @@
 // is asserted — the experiment establishes facts — and the run fails only
 // when an attempt could not be observed.
 //
-// Every browser reaches the server through the harness's proxy under the
-// name `cyfr.test` (tests/browser/lib.mjs), the name the server is started
-// with. The proxy answers one kind of request itself — a 302 from
+// Every browser reaches the server through the harness's proxy at
+// https://cyfr.test (tests/browser/lib.mjs), the home the server is
+// started as, Chromium as its full build, which trusts the run's
+// authority. The proxy answers one kind of request itself — a 302 from
 // frame-probe's moved.json (and its bare twin) to its asset.json, since no
-// tincture route redirects — and forwards every other request, unchanged.
+// tincture route redirects — and forwards every other request, as the
+// stack's proxy forwards it.
 //
-// Usage: node frame-facts.mjs SERVER_URL PROBE_PATH SEGMENT COOKIE OUT_DIR
+// Usage: node frame-facts.mjs PROBE_PATH SEGMENT COOKIE OUT_DIR
 
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
-  SITE, chromium, firefox, webkit, launch, openShell, signedIn, sleep, startProxy,
+  BROWSERS, SITE, launch, launchBrowser, openShell, readHomes, signedIn, sleep, startProxy,
 } from "./lib.mjs";
 
 const PROBES = [
@@ -108,10 +110,10 @@ async function waitFrame(page, accept, timeoutMs = 30_000) {
 
 // One browser's run: the frame's results, the requests that left and the
 // messages that arrived.
-async function observe(browserType, base, proxy, probePath, segment, cookie) {
+async function observe(name, base, proxy, probePath, segment, cookie) {
   proxy.seen = [];
   const consoleLines = [];
-  const browser = await browserType.launch({ proxy: { server: `http://127.0.0.1:${proxy.address().port}` } });
+  const browser = await launchBrowser(name, proxy);
   try {
     const context = await signedIn(browser, base, cookie);
     await context.addInitScript(RECORD_MESSAGES);
@@ -291,17 +293,17 @@ function summary(facts, observed) {
 }
 
 async function main() {
-  const [server, probePath, segment, cookie, outDir] = process.argv.slice(2);
-  if (!server || !probePath || !segment || !cookie || !outDir) {
-    console.error("usage: node frame-facts.mjs SERVER_URL PROBE_PATH SEGMENT COOKIE OUT_DIR");
+  const [probePath, segment, cookie, outDir] = process.argv.slice(2);
+  if (!probePath || !segment || !cookie || !outDir) {
+    console.error("usage: node frame-facts.mjs PROBE_PATH SEGMENT COOKIE OUT_DIR");
     process.exit(64);
   }
   mkdirSync(outDir, { recursive: true });
-  const proxy = await startProxy(server, { answer: redirects(probePath) });
-  const base = `http://${SITE}:${new URL(server).port || 80}`;
+  const proxy = await startProxy({ ...readHomes(), answer: redirects(probePath) });
+  const base = `https://${SITE}`;
   const record = {};
-  for (const [name, browserType] of [["chromium", chromium], ["firefox", firefox], ["webkit", webkit]]) {
-    const observed = await observe(browserType, base, proxy, probePath, segment, cookie);
+  for (const name of BROWSERS) {
+    const observed = await observe(name, base, proxy, probePath, segment, cookie);
     const facts = decide(observed);
     record[name] = { version: observed.version, host: observed.host, facts, summary: summary(facts, observed), observed };
     console.log(`== ${name} ${observed.version}: the shell at ${observed.host.page} framed ${observed.host.frame.src} ` +

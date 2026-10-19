@@ -12,7 +12,7 @@ only under its owner's grant. `proof.mjs` drives one attempt at a time and
 reads each where it can be seen: in the frame, at the harness's proxy, at a
 recording endpoint on a foreign origin, in a sibling frame, in the shell.
 
-Beside them, two flow probes (`tinctures/flow-probe/`, `tinctures/flow-probe-flowed/`) declare the recording endpoint's name as their one connect origin and a listing of the person's files (`file.list`), one with no flow of what the read may carry to that origin and one with the flows, and each sends what it read there. The harness serves that name over plain HTTP, so a send under the frame's `https://` connect policy is seen as the tunnel the browser asks the proxy for, not as a request the endpoint records.
+Beside them, two flow probes (`tinctures/flow-probe/`, `tinctures/flow-probe-flowed/`) declare the recording endpoint's name as their one connect origin and a listing of the person's files (`file.list`), one with no flow of what the read may carry to that origin and one with the flows, and each sends what it read there. The harness serves that name at `https://attacker.test` through its front, which hands the recording endpoint each request as the browser sent it, so a send is seen both at the proxy and as a request the endpoint records.
 
 A second probe (`tinctures/fullscreen-probe/`) is the malicious fullscreen
 frame: it declares fullscreen and pointer lock, and the `vault.create`
@@ -56,10 +56,10 @@ such a frame can do this. Escape is sent through Chromium's DevTools
 protocol, since Playwright's own key press does not reach the browser's
 end of a pointer lock; the attempt runs in Chromium alone.
 
-Chromium's attempts run in its full build, as the harness launches it
-elsewhere (`launchBrowser`), not in the headless shell the rest of the
-proof runs in: the headless shell keeps a hidden frame's pointer lock,
-where Chrome and the full build release it as the frame is hidden.
+Chromium runs as its full build (`launchBrowser`), which trusts the run's
+authority, as every proof of the harness launches it; its headless shell
+trusts none, and keeps a hidden frame's pointer lock, where Chrome and the
+full build release it as the frame is hidden.
 
 The prompts over the fullscreen frame are held in Chromium alone. The
 harness's headless Firefox and WebKit grant a frame no fullscreen and
@@ -102,12 +102,12 @@ Every attempt has one column, and the proof fails when an attempt leaves it:
 | `cookie_and_storage` | refused | the frame reads no cookie and holds no storage |
 | `suspended_invoke` | refused | a call made after the shell suspended the frame is refused |
 | `self_navigation_foreign` | refused | the frame's navigation of itself to a foreign origin reaches nothing: the shell's `frame-src 'self'` governs where its frames navigate |
-| `self_navigation_session_page` | refused | the frame's navigation of itself to a page that reads the session draws none of it: a Prism page is framed by nothing |
+| `self_navigation_session_page` | refused | the frame's navigation of itself to a page that reads the session draws none of it: a Prism page is framed by nothing, and a navigation the browser names a frame's is answered 403 |
 | `grant_prompt_fullscreen` | refused | a grant prompt opened over a frame that holds fullscreen and pointer lock is shown, modal in the top layer, only once every frame is hidden and inert and the page left fullscreen; while it shows the frame holds no pointer lock and the page is not fullscreen, and once it closes the frame, shown again, takes back neither without a new gesture |
 | `confirmation_prompt_fullscreen` | refused | the same for the confirmation prompt of a change another session of the person asked for |
 | `pointer_lock_retaken` | disclosure | a frame that opens a credential prompt inside its person's gesture takes the pointer back while hidden behind it (recorded, a limitation); it is hidden and inert, focus is in the prompt, which Tab and Escape operate, Escape ends the lock for good, and nothing the frame does confirms or dismisses the prompt |
-| `flow_declared_origin` | allowed | a frame (`tinctures/flow-probe-flowed/`) that connects to `attacker.test` and declares that what its `file.list` read may carry may reach it lists the files, and its send to that origin leaves the frame: the harness's proxy sees the browser ask for a tunnel to it |
-| `flow_read_unflowed` | refused | the same frame declaring no flow (`tinctures/flow-probe/`) is refused the read at the data route (`forbidden`, the run's classes and the origin named), and the proxy sees nothing leave for the origin |
+| `flow_declared_origin` | allowed | a frame (`tinctures/flow-probe-flowed/`) that connects to `attacker.test` and declares that what its `file.list` read may carry may reach it lists the files, and its send to that origin arrives: the harness's proxy sees it leave for the origin, and the recording endpoint records it |
+| `flow_read_unflowed` | refused | the same frame declaring no flow (`tinctures/flow-probe/`) is refused the read at the data route (`forbidden`, the run's classes and the origin named), the proxy sees nothing leave for the origin, and the recording endpoint records nothing |
 | `frame_request_refused` | refused | a page that reads the session answers 403 to a request whose destination is a frame, before the session is read, and sets no cookie |
 | `sibling_message` | disclosure | a post to a sibling's window arrives as a message from an opaque origin, and changes neither the sibling's frame identity nor the shell |
 | `shared_credential_url` | disclosure | a credential address serves that version's bytes to whoever holds it, for the credential's window (private only) |
@@ -129,9 +129,11 @@ run a tincture's code are served by routes that read no session
 (`session_blind_page`). A route that does read the session refuses a request
 whose destination is a frame (`CyfrWeb.Plugs.FrameRequest`), and its pages are
 framed by nothing, so a browser that does not name the destination still draws
-none of them (`self_navigation_session_page`). Browsers name a request's
-destination only to a secure origin, which the harness's is not, so
-`frame_request_refused` asks the server directly.
+none of them (`self_navigation_session_page`). A browser names a request's
+destination to a secure origin, as the harness's is, and a navigation it
+names a frame's is held to the 403 there; `frame_request_refused` asks the
+server itself, as the front forwards a request, the same request named a
+frame's and not, whatever a browser names.
 
 ## Not driven
 

@@ -147,7 +147,7 @@ async function confirm(page) {
 }
 
 async function main() {
-  const proxy = await startProxy(null, readHomes(homesFile));
+  const proxy = await startProxy(readHomes(homesFile));
   const browser = await launchBrowser("chromium", proxy);
   const context = await signedIn(browser, base, cookie);
   const page = await context.newPage();

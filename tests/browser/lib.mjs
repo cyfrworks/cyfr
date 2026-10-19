@@ -9,28 +9,31 @@
 // measurement, and a proof's asks of its run.sh and the redaction of what
 // it writes.
 //
-// A single cell is reached under the name `cyfr.test` over plain HTTP (a
-// name no browser exempts from its proxy, as each exempts loopback
-// addresses differently), and the server is started with
-// CYFR_HOST=cyfr.test, so the origin the browsers see is the origin the
-// server derives its policies for: a tincture document's `frame-ancestors`
-// and `connect-src` name it. The proxy forwards every request and WebSocket
-// upgrade for `cyfr.test` to the server unchanged, hands every request for
-// `attacker.test` to the receiver, and keeps an account of each request
-// that reached the network. An experiment may answer a path itself
-// (`answer`), as the frame-facts experiment answers a redirect no route
-// makes.
+// Every cell of a run is a home (tests/browser/harness.sh `browser_home`):
+// a public home of a `.test` hostname of its own, reached at https://HOST,
+// one or several at once. A proof of one cell runs it as the home
+// `cyfr.test` (`browser_cell`), so the origin the browsers see is the
+// origin the server derives its policies for: a tincture document's
+// `frame-ancestors` and `connect-src` name it. A browser asks the proxy
+// for a tunnel to HOST (a name no browser exempts from its proxy, as each
+// exempts loopback addresses differently), and the proxy hands the tunnel
+// to its TLS front, which presents the certificate the run's authority
+// issued for HOST and forwards each request and WebSocket upgrade to the
+// home's proxy listener, the one that trusts forwarded headers, as the
+// stack's Caddy forwards to cyfr's, with X-Forwarded-For, -Proto and
+// -Host. The front answers the harness's own pages (HARNESS) on every home
+// itself, and accounts for every request, the cookies it carried and the
+// cookies its answer set. A name the proxy does not route gets no tunnel,
+// and a home answers HTTPS alone. An experiment may answer a path of a
+// home itself (`answer`), as the frame-facts experiment answers a redirect
+// no route makes.
 //
-// The homes of a run (tests/browser/harness.sh `browser_home`) are cells on
-// `.test` hostnames of their own, several at once, reached at https://HOST:
-// a browser asks the proxy for a tunnel to HOST, and the proxy hands the
-// tunnel to its TLS front, which presents the certificate the run's
-// authority issued for HOST and forwards each request and WebSocket upgrade
-// to the home's listener as the stack's Caddy forwards to cyfr, with
-// X-Forwarded-For, -Proto and -Host. The front answers the harness's own
-// pages (HARNESS) on every home itself, and accounts for every request, the
-// cookies it carried and the cookies its answer set. A name the proxy does
-// not route gets no tunnel, and a home answers HTTPS alone.
+// The attacker's receiver is reached under the name `attacker.test`, over
+// HTTPS through the front with the certificate the run's authority issued
+// for it (`browser_attacker`), and over plain HTTP, as an origin a page
+// may name either way; it is handed every request exactly as the browser
+// sent it. The proxy keeps an account of each request that reached the
+// network, a tunnel asked for among them.
 
 import { createServer, request as forward } from "node:http";
 import { createServer as createFront } from "node:https";
@@ -63,34 +66,43 @@ const MAX_BODY = 256 * 1024;
 // How long a home has to answer the check that it answers at all.
 const HOME_ANSWER_MS = 10_000;
 
-// The run's homes and the names its authority did not sign
-// (/authority/homes.json, harness.sh `browser_homes_file`): each with its
-// name, hostname, origin, the port of the listener its requests go to, and
-// the certificate and key the front presents for it.
+// The run's homes, the names its authority did not sign and the attacker's
+// name when the run has one (/authority/homes.json, harness.sh
+// `browser_homes_file`): each with its name, hostname, origin and the
+// certificate and key the front presents for it, and a home's and an
+// unsigned name's the port of the proxy listener its requests go to.
 export function readHomes(file = `${AUTHORITY}/homes.json`) {
-  const { homes, unsigned } = JSON.parse(readFileSync(file, "utf8"));
+  const { homes, unsigned, attacker = null } = JSON.parse(readFileSync(file, "utf8"));
   const site = (row) => ({ ...row, origin: `https://${row.host}` });
-  return { homes: homes.map(site), unsigned: unsigned.map(site) };
+  return { homes: homes.map(site), unsigned: unsigned.map(site), attacker: attacker && site(attacker) };
 }
 
-// The harness's proxy. `answer(req, url)` may answer a request itself by
-// returning [status, headers, body]; anything else goes to its host. With
-// `bodies`, each request's body (its first 256 KiB, as text) is kept in its
-// account as `body`. `proxy.cut(host)` refuses the LiveView socket of
-// `host`, or of every host without one — every WebSocket tunnel open or
-// asked for, and its long-poll fallback — until `proxy.restore(host)`;
-// every other request still goes through.
+// The home of `host` among `homes` (`readHomes`), or a throw naming it.
+export function homeOf(homes, host = SITE) {
+  const home = homes.find((h) => h.host === host);
+  if (!home) throw new Error(`the run has no home named ${host}`);
+  return home;
+}
+
+// The harness's proxy. `answer(req, url)` may answer a request for a home
+// itself by returning [status, headers, body]; anything else goes to its
+// home. With `bodies`, each request's body (its first 256 KiB, as text) is
+// kept in its account as `body`. `proxy.cut(host)` refuses the LiveView
+// socket of `host`, or of every host without one — every WebSocket tunnel
+// open or asked for, and its long-poll fallback — until
+// `proxy.restore(host)`; every other request still goes through.
 //
-// `server` is the single cell's URL, or null when the run has homes alone.
-// With `homes` (and `unsigned`, from `readHomes`), the proxy is returned
-// once every home answers on its hostname, and otherwise throws naming each
-// cell that does not. `proxy.refusals` lists each TLS handshake a browser
-// broke off, with the name it asked for.
-export async function startProxy(server, {
-  receiver = null, answer = () => null, bodies = false, homes = [], unsigned = [],
+// `homes` and `unsigned` are `readHomes`'s; the proxy is returned once
+// every home answers on its hostname, and otherwise throws naming each cell
+// that does not. With `receiver` (`startReceiver`), every request for
+// `attacker.test` over plain HTTP goes to it, and with `attacker` too
+// (`readHomes`), every one over HTTPS. `proxy.refusals` lists each TLS
+// handshake a browser broke off, with the name it asked for.
+export async function startProxy({
+  receiver = null, answer = () => null, bodies = false, homes = [], unsigned = [], attacker = null,
 } = {}) {
-  const target = server ? new URL(server) : null;
   const routes = new Map([...homes, ...unsigned].map((route) => [route.host, route]));
+  if (attacker && receiver) routes.set(attacker.host, { ...attacker, receiver });
   const tunnels = new Set();
   const cuts = new Set();
   const isCut = (host) => cuts.has("*") || cuts.has(host);
@@ -106,6 +118,8 @@ export async function startProxy(server, {
     });
     upstream.on("close", () => socket.destroy());
   };
+  // Plain HTTP reaches the receiver alone: a home answers HTTPS alone, and
+  // the run has no server for any other name.
   const proxy = createServer((req, res) => {
     const url = new URL(req.url, `http://${req.headers.host}`);
     const account = {
@@ -130,109 +144,30 @@ export async function startProxy(server, {
         if (account.body.length < MAX_BODY) account.body += chunk.toString("utf8");
       });
     }
-    if (isCut(SITE) && url.hostname === SITE && LONGPOLL.test(url.pathname)) {
-      account.status = 503;
-      res.writeHead(503, { "content-type": "text/plain" });
-      res.end("proxy: the socket is cut");
-      req.resume();
-      return;
-    }
-    const own = answer(req, url);
-    if (own) {
-      const [status, headers, body] = own;
-      res.writeHead(status, headers);
-      res.end(body ?? "");
-      return;
-    }
-    const upstream = url.hostname === ATTACKER && receiver ? receiver.address() : null;
-    // A home answers HTTPS alone, and a run of homes alone has no server
-    // for any other name.
-    if (!upstream && (!target || routes.has(url.hostname))) {
+    if (url.hostname !== ATTACKER || !receiver) {
       account.status = 421;
       res.writeHead(421, { "content-type": "text/plain" });
       res.end(`proxy: ${url.hostname} is not answered over plain HTTP`);
       req.resume();
       return;
     }
-    const options = upstream
-      ? { host: "127.0.0.1", port: upstream.port }
-      : { host: target.hostname, port: target.port };
-    const outbound = forward(
-      { ...options, method: req.method, path: url.pathname + url.search, headers: req.headers },
-      (reply) => {
-        const seen = proxy.seen.findLast((r) => r.url === url.href);
-        if (seen) seen.status = reply.statusCode;
-        res.writeHead(reply.statusCode, reply.rawHeaders);
-        // An answer the server cut off mid-way is cut off for the browser
-        // too, as the server's own connection would be.
-        reply.on("close", () => {
-          if (!reply.complete) res.destroy();
-        });
-        reply.pipe(res);
-      });
-    outbound.on("error", (error) => {
-      if (res.headersSent) {
-        res.destroy();
-        return;
-      }
-      res.writeHead(502, { "content-type": "text/plain" });
-      res.end(`proxy: ${error.message}`);
-    });
-    req.pipe(outbound);
-  });
-  // The shell's LiveView socket: the upgrade request goes to the server
-  // as it came, and the two sockets are joined.
-  proxy.on("upgrade", (req, socket, head) => {
-    if (!target || isCut(SITE)) {
-      socket.destroy();
-      return;
-    }
-    const upstream = connect(Number(target.port), target.hostname, () => {
-      const lines = [`${req.method} ${new URL(req.url, `http://${req.headers.host}`).pathname +
-        (new URL(req.url, `http://${req.headers.host}`).search)} HTTP/1.1`];
-      for (let i = 0; i < req.rawHeaders.length; i += 2) lines.push(`${req.rawHeaders[i]}: ${req.rawHeaders[i + 1]}`);
-      upstream.write(lines.join("\r\n") + "\r\n\r\n");
-      if (head && head.length) upstream.write(head);
-      socket.pipe(upstream).pipe(socket);
-    });
-    hold(socket, upstream, SITE);
-    upstream.on("error", () => socket.destroy());
-    socket.on("error", () => upstream.destroy());
+    toReceiver(receiver, req, res, url, account);
   });
   // A browser tunnels HTTPS and a WebSocket through an HTTP proxy with
-  // CONNECT: a home's tunnel goes to the TLS front, and any other to the
-  // named host's listener.
+  // CONNECT: a routed name's tunnel goes to the TLS front, and no other is
+  // opened.
   const front = startFront(proxy, routes, { answer, bodies, isCut, hold });
   proxy.on("connect", (req, socket, head) => {
     const [host] = req.url.split(":");
-    const toAttacker = host === ATTACKER && receiver;
-    if (routes.has(host)) {
-      proxy.seen.push({ at: Date.now(), method: "CONNECT", url: req.url, host, origin: null, referer: null, conditional: false });
-      socket.on("error", () => socket.destroy());
-      socket.write("HTTP/1.1 200 Connection Established\r\n\r\n");
-      if (head && head.length) socket.unshift(head);
-      front.emit("connection", socket);
-      return;
-    }
-    if (!target && !toAttacker) {
+    if (!routes.has(host)) {
       socket.end("HTTP/1.1 403 Forbidden\r\n\r\n");
       return;
     }
-    const port = toAttacker ? receiver.address().port : Number(target.port);
-    const address = toAttacker ? "127.0.0.1" : target.hostname;
     proxy.seen.push({ at: Date.now(), method: "CONNECT", url: req.url, host, origin: null, referer: null, conditional: false });
-    if (isCut(SITE) && host === SITE) {
-      socket.destroy();
-      return;
-    }
-    const upstream = connect(port, address, () => {
-      socket.write("HTTP/1.1 200 Connection Established\r\n\r\n");
-      if (head && head.length) upstream.write(head);
-      socket.pipe(upstream).pipe(socket);
-    });
-    if (host === SITE) hold(socket, upstream, SITE);
-    upstream.on("error", () => socket.destroy());
-    socket.on("error", () => upstream.destroy());
+    socket.on("error", () => socket.destroy());
+    socket.write("HTTP/1.1 200 Connection Established\r\n\r\n");
+    if (head && head.length) socket.unshift(head);
+    front.emit("connection", socket);
   });
   proxy.seen = [];
   proxy.refusals = [];
@@ -262,9 +197,10 @@ export async function startProxy(server, {
 }
 
 // The front that terminates TLS for every routed name, with the
-// certificate the harness made for it, and forwards to the name's
-// listener. A request whose Host is not the name its handshake asked for
-// is misdirected (421).
+// certificate the harness made for it, and forwards a home's requests to
+// its proxy listener and the attacker's to the receiver, as they came. A
+// request whose Host is not the name its handshake asked for is
+// misdirected (421).
 function startFront(proxy, routes, { answer, bodies, isCut, hold }) {
   const contexts = new Map([...routes.values()].map((route) =>
     [route.host, createSecureContext({ cert: readFileSync(route.cert), key: readFileSync(route.key) })]));
@@ -323,6 +259,10 @@ function startFront(proxy, routes, { answer, bodies, isCut, hold }) {
       reply(421, { "content-type": "text/plain" }, `proxy: ${host} is not the name this connection asked for`);
       return;
     }
+    if (route.receiver) {
+      toReceiver(route.receiver, req, res, url, account);
+      return;
+    }
     if (url.pathname.startsWith(`${HARNESS}/`)) {
       account.harness = url.pathname.slice(HARNESS.length + 1);
       reply(...harnessPage(url));
@@ -376,7 +316,7 @@ function startFront(proxy, routes, { answer, bodies, isCut, hold }) {
       origin: req.headers.origin ?? null, referer: null, cookie: !!req.headers.cookie,
       cookies: cookiePairs(req.headers.cookie), conditional: false, setCookies: [],
     });
-    if (!route || isCut(host)) {
+    if (!route || route.receiver || isCut(host)) {
       socket.destroy();
       return;
     }
@@ -401,20 +341,61 @@ function startFront(proxy, routes, { answer, bodies, isCut, hold }) {
   return front;
 }
 
-// Whether `home`'s cell answers its readiness check as its hostname, as the
-// front would ask it: nothing when it does, and why not when it does not.
-function answers(home) {
-  return new Promise((resolve) => {
-    const req = forward({
-      host: "127.0.0.1", port: home.port, method: "GET", path: "/api/health/ready",
-      headers: { host: home.host, "x-forwarded-for": "127.0.0.1", "x-forwarded-proto": "https", "x-forwarded-host": home.host },
-      timeout: HOME_ANSWER_MS,
-    }, (res) => {
-      res.resume();
-      resolve(res.statusCode === 200 ? null : `its readiness check answered ${res.statusCode}`);
+// A request for the attacker's name handed to `receiver` exactly as the
+// browser sent it, its answer back the same.
+function toReceiver(receiver, req, res, url, account) {
+  const outbound = forward(
+    { host: "127.0.0.1", port: receiver.address().port, method: req.method, path: url.pathname + url.search, headers: req.headers },
+    (reply) => {
+      account.status = reply.statusCode;
+      res.writeHead(reply.statusCode, reply.rawHeaders);
+      reply.pipe(res);
     });
-    req.on("timeout", () => req.destroy(new Error(`no answer within ${HOME_ANSWER_MS} ms`)));
-    req.on("error", (error) => resolve(error.message));
+  outbound.on("error", (error) => {
+    if (res.headersSent) {
+      res.destroy();
+      return;
+    }
+    account.status = 502;
+    res.writeHead(502, { "content-type": "text/plain" });
+    res.end(`proxy: ${error.message}`);
+  });
+  req.pipe(outbound);
+}
+
+// Whether `home`'s cell answers its readiness check as its hostname on its
+// proxy listener, as the front would ask it: nothing when it does, and why
+// not when it does not.
+async function answers(home) {
+  try {
+    const { status } = await askHome(home, "/api/health/ready", {}, { timeoutMs: HOME_ANSWER_MS });
+    return status === 200 ? null : `its readiness check answered ${status}`;
+  } catch (error) {
+    return error.message;
+  }
+}
+
+// A GET of `path` from `home`'s cell as the front forwards a browser's
+// request for it, with `headers` beside the front's own: its status, its
+// headers and its body as text. A check of the server itself, which no
+// browser makes.
+export function askHome(home, path, headers = {}, { timeoutMs = 30_000 } = {}) {
+  return new Promise((resolve, reject) => {
+    const req = forward({
+      host: "127.0.0.1", port: home.port, method: "GET", path,
+      headers: {
+        ...headers, host: home.host,
+        "x-forwarded-for": "127.0.0.1", "x-forwarded-proto": "https", "x-forwarded-host": home.host,
+      },
+      timeout: timeoutMs,
+    }, (res) => {
+      let body = "";
+      res.setEncoding("utf8");
+      res.on("data", (chunk) => { body += chunk; });
+      res.on("end", () => resolve({ status: res.statusCode, headers: res.headers, body }));
+    });
+    req.on("timeout", () => req.destroy(new Error(`no answer within ${timeoutMs} ms`)));
+    req.on("error", reject);
     req.end();
   });
 }

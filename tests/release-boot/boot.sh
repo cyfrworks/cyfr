@@ -5,20 +5,40 @@
 # The `cyfr` release, built as `Dockerfile` builds it (MIX_ENV=prod, the
 # adapter chosen at compile time by CYFR_DATABASE, `mix release cyfr`),
 # booted against a FRESH database of that adapter with auto-migration on
-# (tests/release-boot/release.sh). Six cases, in order:
+# (tests/release-boot/release.sh). Seven cases, in order:
 #
-#   boots    the environment `cyfr init` writes — the stack's keys, the
-#            empty CORS allowlist, authentication configured,
-#            CYFR_AUTO_MIGRATE=true. The release migrates the schema itself
-#            (nothing else can: the database carries no schema before it
-#            starts) and answers /api/health/ready, the readiness check the
-#            image's HEALTHCHECK runs. A boot that raises, exits or never
-#            answers fails here, with its whole log.
+#   boots    the deployment file `cyfr init` writes, a local home — the
+#            stack's keys, the empty CORS allowlist, authentication
+#            configured — with CYFR_AUTO_MIGRATE=true. The release migrates
+#            the schema itself (nothing else can: the database carries no
+#            schema before it starts) and answers /api/health/ready, the
+#            readiness check the image's HEALTHCHECK runs. A boot that
+#            raises, exits or never answers fails here, with its whole log.
+#            Then a public home `cyfr init --reach public --domain
+#            cyfr.example.com` writes answers as https://cyfr.example.com
+#            (`Sanctum.Person.home()`), with nothing written for it but the
+#            test's ports, and its proxy listener answers readiness.
 #
 #   refuses  the same environment with the wildcard CORS allowlist, which a
 #            release with authentication configured must refuse at boot.
 #            The release must exit non-zero naming CORS: a boot that raises
 #            is loud, never a container that looks started.
+#
+#   reach    every boot refusal of tests/fixtures/reach_modes.json's `boot`
+#            vectors that a release can be given: the release exits
+#            non-zero printing `[Cyfr] FATAL: <the vector's sentence>`. A
+#            copy of the release, the run's own, reads the vector's `file`
+#            as the .env at its root, where a release reads one, and the
+#            vector's `process` reaches it as its environment, so the
+#            source rules (a reach key .env and the environment assign
+#            differently, the compose file's assertion from .env) are the
+#            release's own read. Then the bare release in a network
+#            namespace of its own (a container's, with no network, holding
+#            172.16.230.2/24 on a dummy interface, the compose stack's
+#            loopback-listener address) is refused that bind in `local`
+#            without the compose file's assertion, while the same address
+#            binds there and the same boot with the assertion in its
+#            environment configures.
 #
 #   live slots  `Cyfr.Release.live_slots/0`, the offline read `cyfr update`
 #            makes before it snapshots a cell, run as the update runs it
@@ -78,10 +98,14 @@
 # them when it ends; it drops no database it did not create, so runs that
 # share one server and one URL leave each other's alone. A run killed before
 # its cleanup leaves its two behind, under its own names. The dump and the
-# restore run in the postgres:18.6 image, with this host's network. Set
-# RELEASE_BOOT_SKIP_BUILD=1 to reuse the release a previous run built, and
-# RELEASE_BOOT_KEEP=1 to keep the scratch directory, its logs and the
-# databases.
+# restore run in the postgres:18.6 image, with this host's network. The
+# cells' deployment files come from the `cyfr` command line, built from
+# apps/codex with this host's go, whose reach switch asks Docker for the
+# project's containers. The reach case's namespace is a debian:trixie-slim
+# container with CAP_NET_ADMIN, on a kernel with the dummy network
+# interface. Set RELEASE_BOOT_SKIP_BUILD=1 to reuse the release a previous
+# run built, and RELEASE_BOOT_KEEP=1 to keep the scratch directory, its
+# logs and the databases.
 
 # The PostgreSQL client the restore case runs, the server's own major.
 PG_IMAGE="postgres:18.6"
@@ -132,8 +156,76 @@ pg_drop_created() {
   done
 }
 
-# Sourced (tests/release-boot/names-test.sh), the script defines the
-# functions above and runs nothing.
+# The reach case's vectors: every refused vector of the boot vectors `$1`
+# a release can be given, one directory each under `$2`, and the count on
+# stdout. Each holds `name`, `sentence`, `file.env` (the vector's file,
+# each value single-quoted, so the release's reader takes it literally;
+# absent when the vector reads no .env) and `process` (NUL-terminated
+# NAME=value words that make the environment merged over that file the
+# vector's process: each it assigns that the file does not, or assigns
+# otherwise), and, where the vector names no builds URL, an empty builds
+# key, which the release would refuse without one. `$2/strip` lists every
+# name a vector assigns and the compose file's assertion: the settings a
+# vector's boot starts from hold none of them (`reach_settings`).
+reach_vectors() {
+  python3 -I - "$1" "$2" <<'PY'
+import json, os, sys
+vectors, out = json.load(open(sys.argv[1]))["boot"], sys.argv[2]
+names = {"CYFR_LOCAL_INGRESS_ASSERTED"}
+for v in vectors:
+    for side in ("file", "process"):
+        names |= set((v["input"].get(side) or {}).keys())
+open(os.path.join(out, "strip"), "w").write("\n".join(sorted(names)) + "\n")
+n = 0
+for v in vectors:
+    if not v["input"]["release?"] or "refusal" not in v:
+        continue
+    file, process = v["input"]["file"], v["input"]["process"]
+    # A merged environment holds every name .env assigns; a blank one the
+    # vector's process may leave out, since blank counts as unset.
+    for key, val in (file or {}).items():
+        if key not in process and val.strip() != "":
+            sys.exit(f"the vector {v['name']!r} assigns {key} in .env alone, which no merged environment does")
+    words = [f"{k}={val}" for k, val in sorted(process.items()) if file is None or file.get(k) != val]
+    if (process.get("CYFR_LOCUS_BUILDS_URL") or "") == "":
+        words.append("CYFR_LOCUS_BUILDS_KEY=")
+    n += 1
+    d = os.path.join(out, f"{n:03d}")
+    os.mkdir(d)
+    open(os.path.join(d, "name"), "w").write(v["name"])
+    open(os.path.join(d, "sentence"), "w").write(v["refusal"]["sentence"])
+    open(os.path.join(d, "process"), "wb").write(b"".join(w.encode() + b"\0" for w in words))
+    if file is not None:
+        lines = []
+        for k, val in sorted(file.items()):
+            if "'" in val or "\n" in val:
+                sys.exit(f"the vector {v['name']!r}'s .env value of {k} cannot be written single-quoted")
+            lines.append(f"{k}='{val}'\n")
+        open(os.path.join(d, "file.env"), "w").write("".join(lines))
+print(n)
+PY
+}
+
+# The deployment file `$1` without any name `$2` (a `strip` list) lists.
+reach_settings() {
+  grep -v -E "^($(paste -sd '|' "$2"))=" "$1" || true
+}
+
+# The boot of vector `$1` by the release copy `$2` on cell `$3`: the
+# vector's file as the .env at the copy's root, or none, and the cell's
+# settings with the vector's process words over them; the boot's output
+# on stdout and its exit status the boot's, ended at 120 s.
+reach_vector_boot() {
+  local vector="$1" release="$2" cell="$3"
+  local -a words=()
+  rm -f "$release/.env"
+  [ ! -f "$vector/file.env" ] || cp "$vector/file.env" "$release/.env"
+  mapfile -d '' -t words <"$vector/process"
+  cell_env "$cell" ${words[@]+"${words[@]}"} timeout -k 10 120 "$release/bin/cyfr" start
+}
+
+# Sourced (tests/release-boot/names-test.sh, reach-test.sh), the script
+# defines the functions above and runs nothing.
 if [ "${BASH_SOURCE[0]}" != "$0" ]; then return 0; fi
 
 set -euo pipefail
@@ -172,8 +264,10 @@ cleanup() {
     done
   fi
   ( server_stop ) || [ "$code" -ne 0 ] || code=1
-  # The reserve case's filesystem goes with the container that holds it.
+  # The reserve case's filesystem goes with the container that holds it,
+  # and the reach case's namespace with its own.
   [ -z "$RESERVE_HOLDER" ] || docker rm -f "$RESERVE_HOLDER" >/dev/null 2>&1 || true
+  [ -z "$NS_HOLDER" ] || docker rm -f "$NS_HOLDER" >/dev/null 2>&1 || true
   [ "${RELEASE_BOOT_KEEP:-}" = 1 ] || pg_drop_created
   if [ "${RELEASE_BOOT_KEEP:-}" = 1 ]; then
     echo "kept $WORK"
@@ -184,7 +278,7 @@ cleanup() {
 }
 # The cells whose log a failed run prints, named before the trap reads
 # them.
-CELL="" ADDRESS="" ORIGIN="" COPY="" RESERVE="" RESERVE_HOLDER=""
+CELL="" ADDRESS="" ORIGIN="" COPY="" RESERVE="" RESERVE_HOLDER="" NS_HOLDER=""
 trap cleanup EXIT
 
 # How many of a server's last log lines a failed run prints.
@@ -285,13 +379,19 @@ if [ "$ADAPTER" = postgres ]; then
   pg_fresh_database "$ADDRESS_DB"
   ADDRESS_URL="$(pg_url "$ADDRESS_DB")"
 fi
-cell_new "$ADDRESS" "$ADDRESS_URL"
-cell_hostname "$ADDRESS" cyfr.example.com "$((PORT + 10))" "$((PORT + 11))"
+cell_new "$ADDRESS" "$ADDRESS_URL" cyfr.example.com
+cell_hostname "$ADDRESS" cyfr.example.com "$((PORT + 10))"
 server_start "$ADDRESS"
 home="$(cell_cyfr "$ADDRESS" rpc 'IO.puts("CYFR_HOME=" <> Sanctum.Person.home())' | sed -n 's/^CYFR_HOME=//p' | tail -1)"
 [ "$home" = "https://cyfr.example.com" ] ||
   fail "the home given cyfr.example.com answers as '$home', not https://cyfr.example.com"
 echo "Sanctum.Person.home() -> $home"
+# The listener its TLS front forwards to, as a front forwards.
+proxied="$(curl -sS -m 10 -o "$ADDRESS/proxied.json" -w '%{http_code}' \
+  -H 'host: cyfr.example.com' -H 'x-forwarded-proto: https' -H 'x-forwarded-for: 127.0.0.1' \
+  "http://127.0.0.1:$(cell_proxy_port "$ADDRESS")/api/health/ready")" || proxied="none"
+[ "$proxied" = 200 ] || fail "the public home's proxy listener answered readiness with $proxied, not 200"
+echo "its proxy listener on 127.0.0.1:$(cell_proxy_port "$ADDRESS"): GET /api/health/ready -> 200 $(cat "$ADDRESS/proxied.json")"
 server_stop "$ADDRESS"
 
 # ---------------------------------------------------------------------------
@@ -319,6 +419,126 @@ fi
 
 echo "the boot exited $status, naming the wildcard:"
 grep -o "FATAL: CORS wildcard.*" "$REFUSAL_LOG" | head -1
+
+# ---------------------------------------------------------------------------
+# Case: every boot refusal of the reach vectors, and the bind a namespace
+# shows the release refusing
+# ---------------------------------------------------------------------------
+
+REACH="$WORK/reach"
+REACH_REL="$WORK/reach-release"
+REACH_VECTORS="$REACH/vectors"
+
+step "reach: the release's own copy, which reads a vector's .env at its root"
+# A release reads .env only at its own root (RELEASE_ROOT, which the
+# release's script computes and no caller sets), so each vector's file is
+# written into a copy of this run's own, never into the release the other
+# cases and proofs share.
+cp -a "$REL" "$REACH_REL"
+mkdir -p "$REACH/home" "$REACH_VECTORS"
+cp -R "$CELL/data" "$REACH/data"
+cp -R "$ROOT/seed" "$REACH/seed"
+echo "copied $REL to $REACH_REL"
+
+REACH_COUNT="$(reach_vectors "$ROOT/tests/fixtures/reach_modes.json" "$REACH_VECTORS")"
+[ "$REACH_COUNT" -gt 0 ] || fail "the reach vectors hold no boot refusal a release can be given"
+reach_settings "$CELL/.env" "$REACH_VECTORS/strip" >"$REACH/.env"
+grep -q '^CYFR_SECRET_KEY_BASE=.' "$REACH/.env" || fail "the reach cell's settings lost the cell's key base"
+
+step "reach: $REACH_COUNT boot refusals, each the vector's FATAL sentence and a non-zero exit"
+for vector in "$REACH_VECTORS"/*/; do
+  vector="${vector%/}"
+  name="$(cat "$vector/name")"
+  sentence="$(cat "$vector/sentence")"
+  set +e
+  reach_vector_boot "$vector" "$REACH_REL" "$REACH" >"$vector/boot.log" 2>&1
+  status=$?
+  set -e
+  if [ "$status" -eq 0 ] || [ "$status" -eq 124 ] || ! grep -qF -- "[Cyfr] FATAL: $sentence" "$vector/boot.log"; then
+    echo "----- the boot log of the vector '$name' -----" >&2
+    redact_log "$REACH" <"$vector/boot.log" >&2 || echo "(the log could not be redacted, so it is not printed)" >&2
+    fail "the vector '$name' did not refuse the boot with exit non-zero and '[Cyfr] FATAL: $sentence' (exit $status)"
+  fi
+  echo "refused, exit $status: $name"
+done
+rm -f "$REACH_REL/.env"
+
+step "reach: in a network namespace holding 172.16.230.2, a local release without the assertion is refused that bind"
+# The namespace is a container's of this run's own, with no network and
+# CAP_NET_ADMIN, which adds a dummy interface holding the compose stack's
+# loopback-listener address: unshare -r's uid map is what the host's
+# AppArmor restriction on unprivileged user namespaces refuses, here and
+# on the runner, and it stays as the host sets it. The release, this
+# checkout's, runs in it as this user on the host's own /usr.
+NS_ADDRESS=172.16.230.2
+NS="$WORK/ns"
+mkdir -p "$NS/home" "$NS/tmp"
+cp "$REACH/.env" "$NS/.env"
+cp -R "$CELL/data" "$NS/data"
+cp -R "$ROOT/seed" "$NS/seed"
+NS_HOLDER="$(docker run -d --network none --cap-add NET_ADMIN --user 0 --hostname "$(hostname)" \
+  -v /usr:/usr:ro -v /etc/ld.so.cache:/etc/ld.so.cache:ro -v "$ROOT:$ROOT:ro" -v "$WORK:$WORK" \
+  debian:trixie-slim sleep infinity)" || fail "no container could hold the namespace"
+docker exec "$NS_HOLDER" sh -c "ip link add cyfrdummy0 type dummy && ip addr add $NS_ADDRESS/24 dev cyfrdummy0 &&
+  ip link set cyfrdummy0 up && ip link set lo up" ||
+  fail "no dummy interface could hold $NS_ADDRESS in the namespace (the kernel's dummy network interface is needed)"
+docker exec "$NS_HOLDER" ip -4 -o addr show dev cyfrdummy0 | grep -q " $NS_ADDRESS/24 " ||
+  fail "the namespace's dummy interface does not hold $NS_ADDRESS"
+docker exec -u "$(id -u):$(id -g)" "$NS_HOLDER" python3 -I -c '
+import socket, sys
+s = socket.socket()
+s.bind((sys.argv[1], int(sys.argv[2])))
+s.listen()
+print("bound", s.getsockname())' "$NS_ADDRESS" "$PORT" ||
+  fail "this user cannot bind $NS_ADDRESS:$PORT in the namespace, so a refusal there would prove nothing"
+echo "the namespace holds $NS_ADDRESS on a dummy interface, which this user binds"
+
+# The bind's sentence, the vectors' own.
+NS_SENTENCE="$(python3 -I -c '
+import json, sys
+for v in json.load(open(sys.argv[1]))["boot"]:
+    r = v.get("refusal")
+    if r and r["code"] == "reach_bind_not_loopback" and r["payload"].get("address") == sys.argv[2]:
+        print(r["sentence"]); break' "$ROOT/tests/fixtures/reach_modes.json" "$NS_ADDRESS")"
+[ -n "$NS_SENTENCE" ] || fail "the reach vectors hold no refusal of a bind to $NS_ADDRESS"
+
+# The release in the namespace: cell `$NS`'s environment, a local home
+# with builds off binding the namespace's address, and `$@`'s NAME=value
+# words, then the release's command; its output on stdout.
+ns_cyfr() {
+  local words=()
+  while [ $# -gt 0 ] && [[ "$1" == [A-Z]*=* ]]; do
+    words+=("$1")
+    shift
+  done
+  cell_env "$NS" CYFR_REACH=local CYFR_BIND_ADDRESS="$NS_ADDRESS" CYFR_LOCUS_BUILDS_KEY= \
+    RELEASE_TMP="$NS/tmp" RELEASE_DISTRIBUTION=none \
+    ${words[@]+"${words[@]}"} env >"$NS/container.env"
+  docker exec -u "$(id -u):$(id -g)" -w "$NS" --env-file "$NS/container.env" "$NS_HOLDER" \
+    timeout -k 10 120 "$REL/bin/cyfr" "$@"
+}
+
+set +e
+ns_cyfr start >"$NS/refused.log" 2>&1
+status=$?
+set -e
+if [ "$status" -eq 0 ] || [ "$status" -eq 124 ] || ! grep -qF -- "[Cyfr] FATAL: $NS_SENTENCE" "$NS/refused.log"; then
+  redact_log "$NS" <"$NS/refused.log" >&2 || echo "(the log could not be redacted, so it is not printed)" >&2
+  fail "the release bound $NS_ADDRESS in local without the assertion, or refused it otherwise (exit $status)"
+fi
+echo "refused, exit $status: $(grep -oF -- "[Cyfr] FATAL: $NS_SENTENCE" "$NS/refused.log" | head -1)"
+
+set +e
+ns_cyfr CYFR_LOCAL_INGRESS_ASSERTED=true eval 'IO.puts("CYFR_REACH_CONFIGURED")' >"$NS/asserted.log" 2>&1
+status=$?
+set -e
+if [ "$status" -ne 0 ] || ! grep -qx 'CYFR_REACH_CONFIGURED' "$NS/asserted.log"; then
+  redact_log "$NS" <"$NS/asserted.log" >&2 || echo "(the log could not be redacted, so it is not printed)" >&2
+  fail "with the compose file's assertion in its environment, the release in the namespace did not configure (exit $status)"
+fi
+echo "with CYFR_LOCAL_INGRESS_ASSERTED=true in its environment, the same release configures for $NS_ADDRESS"
+docker rm -f "$NS_HOLDER" >/dev/null
+NS_HOLDER=""
 
 # ---------------------------------------------------------------------------
 # Case 3: a backup of the four parts, restored and booted elsewhere
@@ -767,4 +987,4 @@ reserve_stop
 docker rm -f "$RESERVE_HOLDER" >/dev/null
 RESERVE_HOLDER=""
 
-step "the cyfr release boots on $ADAPTER, migrates itself, refuses loudly, restores from its backup, consumes a declared restore and keeps its storage reserve"
+step "the cyfr release boots on $ADAPTER, migrates itself, answers at the address its reach implies, refuses loudly, refuses every reach the vectors refuse and a bind no assertion covers, restores from its backup, consumes a declared restore and keeps its storage reserve"

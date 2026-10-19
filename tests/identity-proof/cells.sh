@@ -75,15 +75,16 @@ identity_start() {
 }
 
 # A copy of the stopped cell `$1` at `$2`, answering as the hostname `$3`
-# on listener ports of its own: everything the original held, its
-# database, its storage and its deployment's keys, as a thief who took
-# the machine holds them. It is no home of the browsers' proxy.
+# on listener ports of its own from `$4`: everything the original held,
+# its database, its storage and its deployment's keys, as a thief who took
+# the machine holds them, moved to the new name as `cyfr reach` moves a
+# home (`cell_hostname`). It is no home of the browsers' proxy.
 identity_preserved() {
   local source="$1" cell="$2" host="$3" port="$4"
   rm -rf "$cell"
   cp -a "$source" "$cell"
-  rm -f "$cell/boot.log" "$cell/ready.json"
-  cell_hostname "$cell" "$host" "$port" "$((port + 1))"
+  rm -f "$cell/boot.log" "$cell/ready.json" "$cell/cli.log"
+  cell_hostname "$cell" "$host" "$port"
 }
 
 # Kill cell `$1`'s server where it stands, as a machine dies: its node
@@ -103,16 +104,16 @@ identity_fixture() {
   cell_fixture "$cell" "$ROOT/tests/identity-proof/fixture.exs" FIXTURE "$@"
 }
 
-# POST a restore request to cell `$1` as the browser does, on its own
-# listener behind the front's headers: path `$2`, the file `$3` holding
-# the installation token, sent in the authorization header, and the JSON
-# body file `$4`. Writes the answer's body to `$5` and prints its status.
-# The token and the kit are read from their files, never put on a command
-# line.
+# POST a restore request to cell `$1` as the browser does through the
+# front, on its proxy listener with the front's headers: path `$2`, the
+# file `$3` holding the installation token, sent in the authorization
+# header, and the JSON body file `$4`. Writes the answer's body to `$5`
+# and prints its status. The token and the kit are read from their files,
+# never put on a command line.
 identity_restore_post() {
   local cell="$1" path="$2" token_file="$3" body="$4" out="$5" host port headers
   host="$(sed -n 's/^CYFR_HOST=//p' "$cell/.env" | tail -1)"
-  port="$(cell_port "$cell")"
+  port="$(cell_proxy_port "$cell")"
   headers="$(mktemp "$WORK/headers.XXXXXX")"
   printf 'authorization: Bearer %s\n' "$(cat "$token_file")" >"$headers"
   curl -sS -m 60 -o "$out" -w '%{http_code}' -X POST "http://127.0.0.1:$port$path" \

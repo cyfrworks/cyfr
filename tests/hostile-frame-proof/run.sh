@@ -57,7 +57,7 @@ release_build
 CELL="$WORK/cell"
 browser_cell "$CELL"
 
-step "starting the release on a fresh SQLite cell, as cyfr.test"
+step "starting the release on a fresh SQLite cell, as https://cyfr.test"
 server_start "$CELL"
 
 step "publishing the probe (private, and a public copy), its private neighbour and the public neighbour"
@@ -86,9 +86,9 @@ server_fixture "$CELL" grant "$token" containment-probe-public >/dev/null
 neighbour="$(server_fixture "$CELL" tincture "$user_id" "$ROOT/tests/browser/tinctures/frame-neighbour" frame-neighbour public)"
 neighbour_path="$(field "$neighbour" path)"
 
-status="$(curl -s -m 10 -o /dev/null -w '%{http_code}' "http://127.0.0.1:$PORT/t/$segment/local/containment-probe")"
+status="$(curl -s -m 10 -o /dev/null -w '%{http_code}' "http://127.0.0.1:$(cell_port "$CELL")/t/$segment/local/containment-probe")"
 [ "$status" = 404 ] || fail "the private probe's public address answered $status"
-status="$(curl -s -m 10 -o /dev/null -w '%{http_code}' "http://127.0.0.1:$PORT$neighbour_path/neighbour.js")"
+status="$(curl -s -m 10 -o /dev/null -w '%{http_code}' "http://127.0.0.1:$(cell_port "$CELL")$neighbour_path/neighbour.js")"
 [ "$status" = 200 ] || fail "the public neighbour's script answered $status"
 
 step "a frame that connects to one origin and lists files, with and without a flow to it"
@@ -150,7 +150,7 @@ answer_ask() {
 step "the containment proof in $PLAYWRIGHT_IMAGE"
 mkdir -p "$OUT"
 rm -f "$OUT"/ask-* "$OUT"/answer-*
-playwright_run hostile-frame-proof proof.mjs "http://127.0.0.1:$PORT" "$segment" "$cookie" /out "$neighbour_path" &
+playwright_run hostile-frame-proof proof.mjs "$segment" "$cookie" /out "$neighbour_path" &
 PROOF_PID=$!
 proof_await answer_ask
 

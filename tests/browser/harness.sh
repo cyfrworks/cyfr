@@ -6,20 +6,19 @@
 # tests/hostile-frame-proof/, tests/canvas-proof/) and the multi-home smoke
 # (tests/multi-home-smoke/run.sh).
 #
-# A browser cell's server names itself `cyfr.test` (CYFR_HOST), the name
-# every browser reaches it under through the harness's proxy
-# (tests/browser/lib.mjs), so the origin the policies are derived for is
-# the origin the browsers see.
-#
-# A home is a cell on a `.test` hostname of its own, several at once, each
-# reached by every browser at https://HOST through the same proxy, whose
-# TLS front presents a certificate the run's own authority issued for that
-# name. No name is resolved by DNS or /etc/hosts: the proxy routes each name
-# itself. The authority is made for the run under WORK, its private key
-# kept apart and never mounted, and every browser of the Playwright
-# container trusts it: Chromium's full build through a managed policy,
-# Firefox through the policies file Playwright's build reads, and WebKit
-# through the system bundle it verifies against.
+# A home is a cell on a `.test` hostname of its own, a public home of that
+# name (CYFR_REACH=public), one or several at once, each reached by every
+# browser at https://HOST through the harness's proxy (tests/browser/
+# lib.mjs), whose TLS front presents a certificate the run's own authority
+# issued for that name and forwards to the home's proxy listener. A proof
+# of one cell runs it as the home `cyfr.test` (`browser_cell`), so the
+# origin the policies are derived for is the origin the browsers see, with
+# the attacker's name, `attacker.test`, beside it. No name is resolved by
+# DNS or /etc/hosts: the proxy routes each name itself. The authority is made for the run under
+# WORK, its private key kept apart and never mounted, and every browser of
+# the Playwright container trusts it: Chromium's full build through a
+# managed policy, Firefox through the policies file Playwright's build
+# reads, and WebKit through the system bundle it verifies against.
 #
 # The experiments run in the official Playwright image, pinned by digest,
 # with Playwright's library installed from tests/browser/package-lock.json
@@ -40,22 +39,36 @@ BROWSER_HOME="$ROOT/tests/browser"
 # directory of the keys it and the stranger sign with, which nothing mounts.
 BROWSER_AUTHORITY=""
 BROWSER_AUTHORITY_KEYS=""
-# The first home's listener port; each next home takes the next two.
+# The first home's listener port; each home takes three (its loopback
+# listener, its host API and its proxy listener), the next home the next
+# three.
 BROWSER_HOMES_PORT="${BROWSER_HOMES_PORT:-4410}"
 # The run's homes and unsigned names, as `name host port certificate`
-# rows, which /authority/homes.json lists.
+# rows, where port is that of the proxy listener the front forwards to,
+# which /authority/homes.json lists, and whether the attacker's name has
+# its certificate (`browser_attacker`).
 BROWSER_HOMES=()
 BROWSER_UNSIGNED=()
+BROWSER_ATTACKER=""
 
-# A new cell (release.sh's `cell_new`) whose server names itself cyfr.test:
-# its host, and the public URL the policies derive the endpoint's origin
-# from (`Sanctum.origin/0`), which a deployment that is not
-# http://localhost:4000 declares.
+# The cell of a proof of one cell: the home `cyfr.test` at `$1` (`$2` the
+# PostgreSQL URL of its database), as `browser_home` makes every home, with
+# the run's authority made first when the run has none, and the attacker's
+# name beside it.
 browser_cell() {
-  cell_new "$@"
-  sed -i 's/^CYFR_HOST=.*/CYFR_HOST=cyfr.test/' "$1/.env"
-  echo "CYFR_PUBLIC_URL=http://cyfr.test:$PORT" >>"$1/.env"
-  grep -qx 'CYFR_HOST=cyfr.test' "$1/.env" || fail "the cell does not name cyfr.test"
+  [ -n "$BROWSER_AUTHORITY" ] || browser_authority
+  browser_home "$1" cyfr.test "${2:-}"
+  browser_attacker
+}
+
+# The attacker's name, `attacker.test`, served over HTTPS too: a
+# certificate for it from the run's authority, which the front presents
+# for it and forwards its requests to the receiver of the experiment that
+# starts one (lib.mjs `startProxy`).
+browser_attacker() {
+  browser_certificate attacker.test
+  BROWSER_ATTACKER=attacker.test
+  browser_homes_file
 }
 
 # The browser session cookie of the session token `$2`, minted by the
@@ -155,9 +168,10 @@ browser_certificate() {
 }
 
 # A home: a new cell at `$1` (release.sh's `cell_new`, `$3` the PostgreSQL
-# URL of its database) answering as the hostname `$2` (`cell_hostname`) on
-# the next two listener ports, with a certificate for `$2` from the run's
-# authority. Its name is the cell's directory name.
+# URL of its database), the public home `cyfr init` makes for the hostname
+# `$2` (`cell_hostname`), on the next three listener ports, with a
+# certificate for `$2` from the run's authority. Its name is the cell's
+# directory name.
 browser_home() {
   local cell="$1" host="$2" url="${3:-}" name port
   name="$(basename "$cell")"
@@ -165,18 +179,19 @@ browser_home() {
   [[ "$name" =~ ^[a-z0-9][a-z0-9-]*$ ]] ||
     fail "a home's cell is named in lowercase letters, digits and dashes, not '$name'"
   [[ "$host" == *.test ]] || fail "a home's hostname is a .test name, not '$host'"
-  port=$((BROWSER_HOMES_PORT + 2 * ${#BROWSER_HOMES[@]}))
-  cell_new "$cell" "$url"
-  cell_hostname "$cell" "$host" "$port" "$((port + 1))"
+  port=$((BROWSER_HOMES_PORT + 3 * ${#BROWSER_HOMES[@]}))
+  cell_new "$cell" "$url" "$host"
+  cell_hostname "$cell" "$host" "$port"
   browser_certificate "$host"
-  BROWSER_HOMES+=("$name $host $port $host")
+  BROWSER_HOMES+=("$name $host $(cell_proxy_port "$cell") $host")
   browser_homes_file
 }
 
-# A name `$1` the run's authority did not sign, routed to the listener of
-# the home at `$2`: with `$3` `stranger` the front presents the stranger's
-# certificate for it; with `misnamed`, the home's own certificate, which
-# names the home and not `$1`. Every browser must refuse it.
+# A name `$1` the run's authority did not sign, routed to the proxy
+# listener of the home at `$2`: with `$3` `stranger` the front presents the
+# stranger's certificate for it; with `misnamed`, the home's own
+# certificate, which names the home and not `$1`. Every browser must refuse
+# it.
 browser_unsigned() {
   local host="$1" cell="$2" kind="$3" cert
   [[ "$host" == *.test ]] || fail "an unsigned name is a .test name, not '$host'"
@@ -189,18 +204,23 @@ browser_unsigned() {
     *) fail "an unsigned name is stranger or misnamed, not '$kind'" ;;
   esac
   [ -f "$BROWSER_AUTHORITY/$cert.pem" ] || fail "$cell is not a home of this run"
-  BROWSER_UNSIGNED+=("$host $host $(cell_port "$cell") $cert")
+  BROWSER_UNSIGNED+=("$host $host $(cell_proxy_port "$cell") $cert")
   browser_homes_file
 }
 
 # /authority/homes.json: the run's homes and unsigned names, each with the
-# listener its requests go to and the certificate and key the front
-# presents for it (lib.mjs `readHomes`).
+# proxy listener its requests go to and the certificate and key the front
+# presents for it, and the attacker's name with its certificate and key, or
+# null (lib.mjs `readHomes`).
 browser_homes_file() {
-  printf '{"homes":[%s],"unsigned":[%s]}\n' \
+  local attacker=null
+  [ -z "$BROWSER_ATTACKER" ] ||
+    attacker="$(printf '{"name":"attacker","host":"%s","cert":"/authority/%s.pem","key":"/authority/%s.key"}' \
+      "$BROWSER_ATTACKER" "$BROWSER_ATTACKER" "$BROWSER_ATTACKER")"
+  printf '{"homes":[%s],"unsigned":[%s],"attacker":%s}\n' \
     "$(browser_rows ${BROWSER_HOMES[@]+"${BROWSER_HOMES[@]}"})" \
     "$(browser_rows ${BROWSER_UNSIGNED[@]+"${BROWSER_UNSIGNED[@]}"})" \
-    >"$BROWSER_AUTHORITY/homes.json"
+    "$attacker" >"$BROWSER_AUTHORITY/homes.json"
 }
 
 # The rows `$@` (`name host port certificate`) as JSON objects,

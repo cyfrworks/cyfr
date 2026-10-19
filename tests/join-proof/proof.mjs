@@ -107,7 +107,7 @@ async function resolution(identifier) {
 
 let proxy;
 try {
-  proxy = await startProxy(null, { homes });
+  proxy = await startProxy({ homes });
 } catch (error) {
   console.error(`FAIL: ${error.message.split("\n")[0]}`);
   process.exit(1);

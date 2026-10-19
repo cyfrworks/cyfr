@@ -25,17 +25,27 @@
 // decoded. Asset-fetch is each /_s/ resource's duration as the frame's
 // Resource Timing reports it.
 //
-// Usage: node proof.mjs SERVER_URL SEGMENT COOKIE OUT_DIR [OPENS]
+// Every browser reaches the release at https://cyfr.test through the
+// harness's proxy (tests/browser/lib.mjs), Chromium as its full build,
+// which trusts the run's authority.
+//
+// Usage: node proof.mjs SEGMENT COOKIE OUT_DIR [OPENS]
 
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
-  BROWSERS, SITE, chromium, closeFrame, firefox, launch, openShell, percentiles, redact, signedIn, sleep,
-  startProxy, waitFor, webkit,
+  BROWSERS, SITE, closeFrame, launch, launchBrowser, openShell, percentiles, readHomes, redact, signedIn, sleep,
+  startProxy, waitFor,
 } from "../browser/lib.mjs";
 
-const TYPES = { chromium, firefox, webkit };
 const NAME = "proof-game";
+// Whether a browser serves a sandboxed frame's own assets from its HTTP
+// cache on the next open. Chromium keys its cache by the requesting
+// frame's site, which a frame without allow-same-origin has none of (its
+// origin is opaque), so it stores none of them and fetches each again. A
+// browser that changes its answer fails the proof, so the change is read
+// before it is accepted.
+const ASSETS_CACHED = { chromium: false, firefox: true, webkit: true };
 const failures = [];
 const check = (condition, what, detail) => {
   if (!condition) failures.push({ what, detail });
@@ -71,7 +81,7 @@ async function open(page, proxy) {
 }
 
 async function run(name, base, proxy, segment, cookie, opens) {
-  const browser = await TYPES[name].launch({ proxy: { server: `http://127.0.0.1:${proxy.address().port}` } });
+  const browser = await launchBrowser(name, proxy);
   const record = { version: browser.version() };
   try {
     // ---- warm: one signed-in browser, the game opened again and again ----
@@ -126,11 +136,14 @@ async function run(name, base, proxy, segment, cookie, opens) {
     const assets = second.requests.filter((r) => !r.url.endsWith("/dist/index.html"));
     // WebKit's network cache stores no media response (audio, video), so
     // it fetches the sound again whatever the headers say; every other
-    // asset must come from the cache or be revalidated.
+    // asset must come from the cache or be revalidated, where the browser
+    // caches the frame's assets at all (ASSETS_CACHED).
     const media = (r) => /\.(wav|mp3|ogg|oga|opus|flac|m4a)$/.test(new URL(r.url).pathname);
     const fetched = assets.filter((r) => !media(r) && !(r.conditional || r.status === 304));
-    check(second.game.readyAt && fetched.length === 0,
-      `${name}: the second open's assets (media aside) came from the browser's cache`,
+    check(second.game.readyAt && (ASSETS_CACHED[name] ? fetched.length === 0 : fetched.length > 0),
+      ASSETS_CACHED[name]
+        ? `${name}: the second open's assets (media aside) came from the browser's cache`
+        : `${name}: the second open fetched the frame's assets again, as this browser caches none of a sandboxed frame's`,
       assets.map((r) => ({ path: redact(new URL(r.url).pathname), status: r.status, conditional: r.conditional })));
     record.second = {
       document: second.requests.filter((r) => r.url.endsWith("/dist/index.html")).map((r) => ({ status: r.status, conditional: r.conditional })),
@@ -163,15 +176,15 @@ async function run(name, base, proxy, segment, cookie, opens) {
 const round = (v) => (v === null ? "—" : Math.round(v));
 
 async function main() {
-  const [server, segment, cookie, outDir, opensArg] = process.argv.slice(2);
-  if (!server || !segment || !cookie || !outDir) {
-    console.error("usage: node proof.mjs SERVER_URL SEGMENT COOKIE OUT_DIR [OPENS]");
+  const [segment, cookie, outDir, opensArg] = process.argv.slice(2);
+  if (!segment || !cookie || !outDir) {
+    console.error("usage: node proof.mjs SEGMENT COOKIE OUT_DIR [OPENS]");
     process.exit(64);
   }
   const opens = Number(opensArg || 50);
   mkdirSync(outDir, { recursive: true });
-  const proxy = await startProxy(server);
-  const base = `http://${SITE}:${new URL(server).port || 80}`;
+  const proxy = await startProxy(readHomes());
+  const base = `https://${SITE}`;
   const record = {};
   for (const name of BROWSERS) {
     console.log(`== ${name}`);

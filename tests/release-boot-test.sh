@@ -7,7 +7,10 @@
 # (tests/release-boot/release.sh `release_build`, RELEASE_BOOT_SKIP_BUILD=1)
 # against a git tree of the test's own; the readiness window of
 # `server_start` against a listener that accepts and never answers, and
-# the redaction of the boot log it prints; the identity front's readiness
+# the redaction of the boot log it prints; a cell's deployment file from
+# the command line (`cell_new`, `cell_hostname`, `cell_cli`), with a
+# stand-in `cyfr` that records how it was run, and the dotenv reading of
+# it (`cell_assignments`); the identity front's readiness
 # (tests/identity-proof/front.sh) against a stranger answering on its
 # address, with `docker` a stand-in; and the one redaction
 # (tests/browser/lib.mjs `redact`) against a vector of every pattern the
@@ -90,6 +93,14 @@ case "$1" in
     BROWSER_AUTHORITY="$DRIVE_SCRATCH/authority"
     identity_directory dir.test "$2" "$3"
     identity_front_start "$DRIVE_SCRATCH/dir"
+    ;;
+  cell)
+    # A cell function, `$2...`, on a checkout of the test's own and the
+    # stand-in command line.
+    ROOT="$DRIVE_SCRATCH/checkout"
+    CELL_CLI="$DRIVE_SCRATCH/bin/cyfr"
+    shift
+    "$@"
     ;;
 esac
 SH
@@ -292,6 +303,141 @@ if accepts 127.0.0.1 "$port" 2>/dev/null; then fail "a listener outlived the fai
 if kill -0 "$(cat "$scratch/cell/stub.pid")" 2>/dev/null; then fail "the started server outlived the failed start"; fi
 pass "a listener that never answers fails server_start in ${took}s, naming the cell and port, printing its log with no secret of the cell's, and leaves no server"
 
+# --- a cell's deployment file, from the command line --------------------------
+
+# A checkout holding what cell_new reads of one: .env.example, a seed tree
+# and a wasm-tools installer that installs nothing.
+mkdir -p "$scratch/checkout/scripts" "$scratch/checkout/seed/aqua" "$scratch/bin"
+cp "$root/.env.example" "$scratch/checkout/.env.example"
+printf '#!/bin/sh\nexit 0\n' >"$scratch/checkout/scripts/wasm-tools.sh"
+chmod +x "$scratch/checkout/scripts/wasm-tools.sh"
+setup_token=0f1e2d3c4b5a69788796a5b4c3d2e1f00f1e2d3c4b5a69788796a5b4c3d2e1f0
+# The stand-in `cyfr`: it records how each run was made (its arguments,
+# HOME, its directory's name, the names in its environment and whether
+# .env.example is the checkout's) in calls.log, then does what init and
+# reach do to .env, or exits as $scratch/cli-fails says. It reads nothing
+# of the caller's environment, which cell_cli clears.
+cat >"$scratch/bin/cyfr" <<SH
+#!/usr/bin/env bash
+{
+  printf 'args=%s\\n' "\$*"
+  printf 'home=%s\\n' "\$HOME"
+  printf 'dir=%s\\n' "\$(basename "\$PWD")"
+  printf 'env=%s\\n' "\$(env | cut -d= -f1 | sort | tr '\\n' ' ')"
+  if cmp -s .env.example "$scratch/checkout/.env.example"; then echo example=same; else echo example=other; fi
+} >>"$scratch/calls.log"
+if [ -s "$scratch/cli-fails" ]; then
+  # Failing after it wrote .env and printed the setup link, as an init
+  # whose switch fails does.
+  sed -e 's/^CYFR_SECRET_KEY_BASE=\$/CYFR_SECRET_KEY_BASE=stub-key-base-0123456789abcdef/' .env.example >.env
+  echo "CYFR_SETUP_TOKEN=$setup_token" >>.env
+  echo "the setup link: http://localhost:4000/setup#t=$setup_token"
+  exit "\$(cat "$scratch/cli-fails")"
+fi
+command="\$1" domain=""
+while [ \$# -gt 0 ]; do [ "\$1" = --domain ] && domain="\$2"; shift; done
+case "\$command" in
+  init)
+    [ ! -e .env ] || exit 9
+    sed -e 's/^CYFR_SECRET_KEY_BASE=\$/CYFR_SECRET_KEY_BASE=stub-key-base-0123456789abcdef/' .env.example >.env
+    echo "CYFR_SETUP_TOKEN=$setup_token" >>.env
+    ;;
+  reach) [ -e .env ] || exit 9 ;;
+esac
+if [ -n "\$domain" ]; then
+  sed -i -e 's/^CYFR_REACH=.*/CYFR_REACH=public/' -e "s/^CYFR_HOST=.*/CYFR_HOST=\$domain/" .env
+  [ -e "$scratch/cli-writes-no-url" ] || echo "CYFR_PUBLIC_URL=https://\$domain" >>.env
+fi
+exit 0
+SH
+chmod +x "$scratch/bin/cyfr"
+cell() { DRIVE_SCRATCH="$scratch" DRIVE_CHECKOUT="$root" COMPOSE_PROFILES=public CYFR_LEFTOVER=1 bash "$scratch/drive.sh" cell "$@"; }
+calls() { sed -n "s/^$1=//p" "$scratch/calls.log"; }
+assigned() { grep -c "^$2=" "$scratch/cells/$1/.env"; }
+value() { sed -n "s/^$2=//p" "$scratch/cells/$1/.env"; }
+mkdir -p "$scratch/cells"
+
+: >"$scratch/calls.log"
+[ "$(status_of cell cell_new "$scratch/cells/local")" = 0 ] || { cat "$scratch/out" >&2; fail "cell_new failed on the stand-in command line"; }
+[ "$(calls args)" = "init --no-interactive --no-pull --reach local" ] || fail "cell_new ran cyfr $(calls args), not init --no-interactive --no-pull --reach local"
+[ "$(calls home)" = "$scratch/cells/local/home" ] || fail "the command line ran with HOME $(calls home), not the cell's"
+[[ "$(calls dir)" == cyfr-cell-local-* ]] || fail "the command line ran in $(calls dir), not a directory of the run's own"
+[ "$(calls example)" = same ] || fail "the command line's .env.example is not the checkout's"
+case " $(calls env) " in
+  *" COMPOSE_PROFILES "* | *" CYFR_LEFTOVER "*) fail "the caller's environment reached the command line: $(calls env)" ;;
+esac
+for key in CYFR_SETUP_TOKEN CYFR_PUBLIC_URL CYFR_BIND_ADDRESS; do
+  [ "$(assigned local "$key")" = 0 ] || fail "the local cell's deployment file assigns $key"
+done
+for pair in CYFR_REACH=local CYFR_HOST=localhost CYFR_PORT=4399 CYFR_DATABASE=sqlite CYFR_AUTO_MIGRATE=true \
+  CYFR_HOST_API_BIND=127.0.0.1 CYFR_HOST_API_PORT=4398 LOCUS_RUNTIME_SERVICE_ID=wrk_locus \
+  CYFR_PLATFORM_ADMIN_EMAILS=operator@example.com CYFR_SECRET_KEY_BASE=stub-key-base-0123456789abcdef; do
+  [ "$(assigned local "${pair%%=*}")" = 1 ] && [ "$(value local "${pair%%=*}")" = "${pair#*=}" ] ||
+    fail "the local cell's deployment file does not assign $pair once: $(grep "^${pair%%=*}=" "$scratch/cells/local/.env" | tr '\n' ' ')"
+done
+# init's own lines stay where init wrote them; the test's settings
+# rewrite in place.
+[ "$(grep -n '^CYFR_PORT=' "$scratch/cells/local/.env" | cut -d: -f1)" = "$(grep -n '^CYFR_PORT=' "$root/.env.example" | cut -d: -f1)" ] ||
+  fail "CYFR_PORT moved from the line init wrote it on"
+pass "a local cell is init's deployment file, the setup capability deleted, and the test's settings beside it, none of the caller's environment reaching the command line"
+
+: >"$scratch/calls.log"
+[ "$(status_of cell cell_new "$scratch/cells/named" "" cyfr.example.com)" = 0 ] || { cat "$scratch/out" >&2; fail "cell_new failed for a named cell"; }
+[ "$(calls args)" = "init --no-interactive --no-pull --reach public --domain cyfr.example.com" ] ||
+  fail "cell_new ran cyfr $(calls args) for a named cell"
+[ "$(status_of cell cell_hostname "$scratch/cells/named" cyfr.example.com 4500)" = 0 ] || { cat "$scratch/out" >&2; fail "cell_hostname failed"; }
+[ "$(grep -c '^args=' "$scratch/calls.log")" = 1 ] || fail "cell_hostname ran the command line again on a cell init made public at its name: $(calls args)"
+for pair in CYFR_REACH=public CYFR_HOST=cyfr.example.com CYFR_PUBLIC_URL=https://cyfr.example.com CYFR_PORT=4500 CYFR_HOST_API_PORT=4501 CYFR_PROXY_PORT=4502; do
+  [ "$(assigned named "${pair%%=*}")" = 1 ] && [ "$(value named "${pair%%=*}")" = "${pair#*=}" ] ||
+    fail "the named cell's deployment file does not assign $pair once"
+done
+[ "$(cat "$scratch/cells/named/node")" = "cyfr-cyfr-example-com-sqlite-$(cat "$scratch/cells/named/node" | sed 's/.*-//')" ] ||
+  fail "the named cell's node name is not its own: $(cat "$scratch/cells/named/node")"
+[ "$(DRIVE_SCRATCH="$scratch" DRIVE_CHECKOUT="$root" bash "$scratch/drive.sh" cell cell_proxy_port "$scratch/cells/named")" = 4502 ] ||
+  fail "cell_proxy_port does not answer the named cell's proxy listener port"
+pass "a named cell is init's public home at its name, on three ports of its own, its proxy listener's the third"
+
+: >"$scratch/calls.log"
+: >"$scratch/cli-writes-no-url"
+cp -a "$scratch/cells/local" "$scratch/cells/moved"
+key_before="$(value moved CYFR_SECRET_KEY_BASE)"
+[ "$(status_of cell cell_hostname "$scratch/cells/moved" other.example.com 4600)" = 0 ] || { cat "$scratch/out" >&2; fail "cell_hostname failed on a local cell"; }
+[ "$(calls args)" = "reach public --domain other.example.com --yes" ] || fail "cell_hostname ran cyfr $(calls args) on a local cell"
+[ "$(value moved CYFR_SECRET_KEY_BASE)" = "$key_before" ] || fail "the switch lost the cell's key base"
+[ "$(value moved CYFR_REACH)" = public ] && [ "$(value moved CYFR_HOST)" = other.example.com ] || fail "the switched cell is not public at other.example.com"
+[ "$(assigned moved CYFR_PUBLIC_URL)" = 0 ] || fail "the fixture wrote a CYFR_PUBLIC_URL the command line did not"
+rm -f "$scratch/cli-writes-no-url"
+pass "a local cell becomes a public home through cyfr reach, its keys kept, and the fixture writes no address of its own"
+
+printf '3\n' >"$scratch/cli-fails"
+[ "$(status_of cell cell_new "$scratch/cells/failed")" = 1 ] || fail "a command line that failed did not fail cell_new"
+has "cyfr init exited 3 for cell $scratch/cells/failed" "the failure names the command and the cell"
+has "the command line's output for cell" "the failure prints the command line's output"
+if grep -qF "$setup_token" "$scratch/out"; then fail "the failure printed the setup capability the command line wrote"; fi
+rm -f "$scratch/cli-fails"
+pass "a failed command line fails the cell, printing its output redacted"
+
+mkdir -p "$scratch/cells/dotenv"
+cat >"$scratch/cells/dotenv/.env" <<'ENV'
+# a comment
+export EXPORTED=1
+
+SINGLE='a b # c $HOME'
+DOUBLE="plain"
+EMPTY=
+PLAIN=x=y
+ENV
+DRIVE_SCRATCH="$scratch" DRIVE_CHECKOUT="$root" bash "$scratch/drive.sh" cell cell_assignments "$scratch/cells/dotenv" >"$scratch/assignments"
+[ "$(cat "$scratch/assignments")" = "$(printf '%s\n' 'EXPORTED=1' 'SINGLE=a b # c $HOME' 'DOUBLE=plain' 'EMPTY=' 'PLAIN=x=y')" ] ||
+  fail "cell_assignments read $(tr '\n' '|' <"$scratch/assignments")"
+for line in 'INLINE=x # comment' 'OPEN="x' 'ESCAPED="a\nb"' 'not an assignment'; do
+  printf '%s\n' "$line" >"$scratch/cells/dotenv/.env"
+  [ "$(status_of bash -c 'DRIVE_SCRATCH="$1" DRIVE_CHECKOUT="$2" bash "$1/drive.sh" cell cell_assignments "$1/cells/dotenv"' _ "$scratch" "$root")" = 1 ] ||
+    fail "cell_assignments read '$line' instead of refusing it"
+  has "cannot read as the release does" "the refusal of '$line' says why"
+done
+pass "a deployment file's lines are read as a dotenv reader reads them, and a line that cannot be is refused"
+
 # --- the identity front's readiness -----------------------------------------
 
 # `docker` as the front sees it: `run` starts the front's control listener
@@ -299,7 +445,7 @@ pass "a listener that never answers fails server_start in ${took}s, naming the c
 # front that could not listen (STUB_FRONT=dead); `inspect` says which.
 mkdir -p "$scratch/bin" "$scratch/authority" "$scratch/dir"
 : >"$scratch/authority/dir.test.pem"
-printf 'CYFR_HOST=dir.test\nCYFR_PORT=%s\n' "$(free_port)" >"$scratch/dir/.env"
+printf 'CYFR_HOST=dir.test\nCYFR_PORT=%s\nCYFR_PROXY_PORT=%s\n' "$(free_port)" "$(free_port)" >"$scratch/dir/.env"
 cat >"$scratch/bin/docker" <<SH
 #!/usr/bin/env bash
 case "\$1" in

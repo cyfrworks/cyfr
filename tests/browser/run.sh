@@ -3,8 +3,8 @@
 # Copyright 2026 CYFR Works Inc.
 #
 # The browser harness: the `cyfr` release started as tests/release-boot/
-# starts one (tests/release-boot/release.sh), on SQLite, under the name
-# cyfr.test (tests/browser/harness.sh), with the two tinctures of
+# starts one (tests/release-boot/release.sh), on SQLite, as the public home
+# https://cyfr.test (tests/browser/harness.sh), with the two tinctures of
 # tests/browser/tinctures/ published publicly in a signed-in person's
 # athanor and frame-probe granted by that person, and the frame-facts
 # experiment (frame-facts.mjs) run against it in every browser the official
@@ -47,7 +47,7 @@ release_build
 CELL="$WORK/cell"
 browser_cell "$CELL"
 
-step "starting the release on a fresh SQLite cell, as cyfr.test"
+step "starting the release on a fresh SQLite cell, as https://cyfr.test"
 server_start "$CELL"
 
 step "publishing frame-probe and frame-neighbour, public, in a signed-in person's athanor, and granting frame-probe"
@@ -63,11 +63,11 @@ probe="$(server_fixture "$CELL" tincture "$user_id" "$HERE/tinctures/frame-probe
 probe_path="$(field "$probe" path)"
 # The shell opens a tincture's frame only under the person's grant.
 server_fixture "$CELL" grant "$token" frame-probe >/dev/null
-status="$(curl -s -m 10 -o /dev/null -w '%{http_code}' "http://127.0.0.1:$PORT$probe_path")"
+status="$(curl -s -m 10 -o /dev/null -w '%{http_code}' "http://127.0.0.1:$(cell_port "$CELL")$probe_path")"
 [ "$status" = 200 ] || fail "the public page $probe_path answered $status"
 echo "serving $probe_path"
 
 step "the frame-facts experiment in $PLAYWRIGHT_IMAGE"
-playwright_run browser frame-facts.mjs "http://127.0.0.1:$PORT" "$probe_path" "$segment" "$cookie" /out
+playwright_run browser frame-facts.mjs "$probe_path" "$segment" "$cookie" /out
 
 echo "the record: $OUT/frame-facts.json and $OUT/frame-facts.md"
