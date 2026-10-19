@@ -52,12 +52,14 @@ a code, and receives its session once you enter the code there.
 
 The session is saved under the context the command used: --context, or the
 current one. A --url that is not that context's address saves nothing; add a
-context for it first (cyfr context add <name> <url>).`,
+context for it first (cyfr context add <name> <url>). A context changed to
+another address while the command waits keeps nothing: the sign-in is
+withdrawn.`,
 	Example: `  cyfr login
   cyfr login --context home
   cyfr login --provider google`,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		target, err := loginContext()
+		target, err := sessionContext("save the session under")
 		if err != nil {
 			return err
 		}
@@ -122,7 +124,14 @@ context for it first (cyfr context add <name> <url>).`,
 		// signed in through.
 		sessionID, _ := pollResult["session_token"].(string)
 		if sessionID != "" {
-			if err := saveSession(target, sessionID); err != nil {
+			if err := saveSession(target, sessionID); errors.Is(err, errContextMoved) {
+				// The context names another home now: the session is ended
+				// at the home that issued it rather than kept under the
+				// other's address.
+				client.SessionID = sessionID
+				_, _ = client.CallTool(cmd.Context(), ops.Session, ops.SessionLogoutArgs{})
+				return fmt.Errorf("Signed in, but the session was ended and nothing saved: %w", err)
+			} else if err != nil {
 				// Login already succeeded server-side; a failed local save
 				// must say so or the next command's "not authenticated"
 				// has no visible cause.
@@ -569,15 +578,19 @@ var logoutCmd = &cobra.Command{
 	Long:    "Invalidate the current session on the server and remove the cached session token from local config.",
 	Example: "  cyfr logout",
 	RunE: func(cmd *cobra.Command, args []string) error {
+		// The session ended and the one cleared are the context's own, at
+		// its own address: a --url that is not that address is refused
+		// before anything is sent or cleared.
+		target, err := sessionContext("log out of")
+		if err != nil {
+			return err
+		}
 		client := newClient()
 
 		// Clear saved session locally first — even if the server call fails
 		// (e.g. session already expired), the user still wants local cleanup.
-		// The context cleared is the one whose session the call ends:
-		// --context, or the current one.
-		if cfg, err := config.Load(); err == nil && cfg.Contexts[contextName(cfg)] != nil {
-			stored := cfg.Contexts[contextName(cfg)]
-			stored.Token = ""
+		if cfg, err := config.Load(); err == nil && cfg.Contexts[target.name] != nil {
+			cfg.Contexts[target.name].Token = ""
 			if err := cfg.Save(); err != nil {
 				fmt.Fprintf(os.Stderr, "warning: could not clear the saved session: %v\n", err)
 			}

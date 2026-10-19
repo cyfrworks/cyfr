@@ -125,6 +125,32 @@ defmodule PrismWeb.CliLiveTest do
     refute has_element?(view, ~s([data-test="cli-approve"]))
   end
 
+  test "cancelling the confirmation leaves the still-pending sign-in to approve again", %{
+    conn: conn
+  } do
+    begun = begin!()
+    {:ok, view, _html} = live(conn, ~p"/cli")
+    render_hook(view, "cli_code", %{"code" => begun.secret})
+
+    view |> element(~s([data-test="cli-approve"])) |> render_click()
+    assert has_element?(view, ~s([data-test="cli-approve"][disabled]))
+
+    view |> element(~s([data-test="confirm-cancel"])) |> render_click()
+
+    wait_until(
+      fn -> has_element?(view, ~s([data-test="cli-notice"]), "confirmation was cancelled") end,
+      2_000,
+      "the cancelled confirmation said on the page"
+    )
+
+    assert status(begun.session_token) == "pending"
+    assert has_element?(view, ~s([data-test="cli-sign-in"][data-status="pending"]))
+    assert has_element?(view, ~s([data-test="cli-approve"]))
+    refute has_element?(view, ~s([data-test="cli-approve"][disabled]))
+
+    Cyfr.Test.Sandbox.end_views()
+  end
+
   test "a link withdrawn while the page shows it is refused and offers no approval", %{
     conn: conn
   } do

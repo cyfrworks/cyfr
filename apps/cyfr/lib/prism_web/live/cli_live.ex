@@ -82,6 +82,34 @@ defmodule PrismWeb.CliLive do
   def system_layer_repeat(:cli_approve, _tool, args, socket),
     do: {:noreply, approve(socket, args)}
 
+  # The approval's confirmation ended unconfirmed (cancelled, put away,
+  # voided or expired) while this page waited on it: the layer lets its
+  # secret go as it always does, and the sign-in, still pending, can be
+  # approved again.
+  @impl PrismWeb.SystemLayer.Hook
+  def system_layer_report(id, outcome, %{assigns: %{waiting: true}} = socket)
+      when outcome != :confirmed do
+    {:ok, socket} = SystemLayer.reported(socket, {:system_layer, id, outcome})
+
+    {:noreply,
+     socket
+     |> assign(:waiting, false)
+     |> reread(socket.assigns.secret)
+     |> notice(:error, unconfirmed(outcome))}
+  end
+
+  def system_layer_report(_id, _outcome, _socket), do: :pass
+
+  defp unconfirmed({:refused, :expired}),
+    do: "The confirmation expired before it was given. Approve again to ask for a new one."
+
+  defp unconfirmed({:refused, :voided}),
+    do: "The confirmation no longer stands. Approve again to ask for a new one."
+
+  defp unconfirmed(_cancelled),
+    do:
+      "The confirmation was cancelled, so nothing was approved. Approve again to ask for a new one."
+
   @impl true
   def handle_info(msg, socket) do
     Prima.LoggerContext.unexpected(__MODULE__, msg, :debug)
@@ -109,6 +137,8 @@ defmodule PrismWeb.CliLive do
 
   # What the link names now, after an approval was refused: expired, used
   # or withdrawn meanwhile, it offers no approval any more.
+  defp reread(socket, nil), do: socket
+
   defp reread(socket, secret) do
     case Sanctum.CliSignIn.describe(secret) do
       {:ok, sign_in} -> assign(socket, :sign_in, sign_in)

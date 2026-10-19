@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/url"
 	"os"
 	"strings"
 	"time"
@@ -35,7 +36,7 @@ var (
 // Stopped any other way, it withdraws the sign-in, so an approval that
 // lands later signs nothing in, or ends the session one that landed first
 // minted.
-func loginInPrism(ctx context.Context, client *mcp.Client, target, machine string) error {
+func loginInPrism(ctx context.Context, client *mcp.Client, target storedContext, machine string) error {
 	begun, err := client.CallTool(ctx, ops.Session, ops.SessionCliBeginArgs{Machine: machine})
 	if err != nil {
 		if errors.Is(err, context.Canceled) {
@@ -91,7 +92,8 @@ func loginInPrism(ctx context.Context, client *mcp.Client, target, machine strin
 
 	if err := saveSession(target, token); err != nil {
 		// The home signed the command line in; a session this machine
-		// cannot keep is withdrawn rather than left signed in, unheld.
+		// cannot keep, or would keep under another home's address, is
+		// withdrawn rather than left signed in, unheld.
 		withdraw(client, token)
 		return fmt.Errorf("Approved, but the session could not be saved here, so it was withdrawn: %w", err)
 	}
@@ -100,7 +102,7 @@ func loginInPrism(ctx context.Context, client *mcp.Client, target, machine strin
 	who, err := client.CallTool(ctx, ops.Session, ops.SessionWhoamiArgs{})
 	email, _ := who["email"].(string)
 	if flagJSON {
-		output.JSON(map[string]any{"status": "approved", "machine": machine, "context": target,
+		output.JSON(map[string]any{"status": "approved", "machine": machine, "context": target.name,
 			"email": email})
 		return nil
 	}
@@ -203,46 +205,75 @@ func machineName() string {
 	return "unknown"
 }
 
-// loginContext names the stored context a login saves its session under:
-// --context, or the current one. A context that does not exist, or a --url
-// that is not its address, is refused before anything is asked of a home,
-// since a session saved under another home's context would be sent there
-// with every later command.
-func loginContext() (string, error) {
+// storedContext is the stored context a command signs in to or out of,
+// by its name and the address it named when the command began.
+type storedContext struct {
+	name    string
+	address string
+}
+
+// sessionContext is the stored context cyfr login saves its session under
+// and cyfr logout ends the session of: --context, or the current one. A
+// context that does not exist, or a --url that is not its address, is
+// refused before anything is asked of a home or changed here: a session
+// saved under another home's context would be sent there with every later
+// command, and a logout sent to another home hands it this one's session.
+func sessionContext(verb string) (storedContext, error) {
 	cfg, err := config.Load()
 	if err != nil {
-		return "", fmt.Errorf("Could not read the command line's config: %w", err)
+		return storedContext{}, fmt.Errorf("Could not read the command line's config: %w", err)
 	}
 	name := contextName(cfg)
 	stored := cfg.Contexts[name]
 	if stored == nil {
-		return "", fmt.Errorf("No context named %q to save the session under: add it with "+
-			"cyfr context add %s <url>.", name, name)
+		return storedContext{}, fmt.Errorf("No context named %q to %s: add it with "+
+			"cyfr context add %s <url>.", name, verb, name)
 	}
 	if flagURL != "" && !sameAddress(flagURL, stored.URL) {
-		return "", fmt.Errorf("--url %s is not the address of the context %q (%s), so login "+
-			"would save that home's session under this one. Add a context for it "+
-			"(cyfr context add <name> %s), then run cyfr login --context <name>.",
+		return storedContext{}, fmt.Errorf("--url %s is not the address of the context %q (%s), "+
+			"and that context's session belongs to its own home. Add a context for it "+
+			"(cyfr context add <name> %s), then use --context <name>.",
 			flagURL, name, stored.URL, flagURL)
 	}
-	return name, nil
+	return storedContext{name: name, address: stored.URL}, nil
 }
 
-// sameAddress is whether two addresses name one home, a trailing slash and
-// the case of the scheme and host aside.
+// sameAddress is whether two addresses name one home, a trailing slash
+// aside. A scheme and a host name are case-insensitive (RFC 3986 §3.1 and
+// §3.2.2), so their case is folded; a path and a query are compared byte
+// for byte, since their case is the server's to give a meaning to, and a
+// path can tell two homes behind one host apart.
 func sameAddress(a, b string) bool {
-	return strings.EqualFold(strings.TrimRight(a, "/"), strings.TrimRight(b, "/"))
+	ua, errA := url.Parse(strings.TrimRight(a, "/"))
+	ub, errB := url.Parse(strings.TrimRight(b, "/"))
+	if errA != nil || errB != nil {
+		return a == b
+	}
+	return strings.EqualFold(ua.Scheme, ub.Scheme) && strings.EqualFold(ua.Host, ub.Host) &&
+		ua.User.String() == ub.User.String() && ua.EscapedPath() == ub.EscapedPath() &&
+		ua.RawQuery == ub.RawQuery && ua.Fragment == ub.Fragment
 }
 
-// saveSession stores token as the credential of the context name.
-func saveSession(name, token string) error {
+// errContextMoved is the context a sign-in began under naming another
+// address by the time its session would be saved.
+var errContextMoved = errors.New("the context was changed to another address while this command line signed in")
+
+// saveSession stores token as the credential of the context target names,
+// only while that context still names the address the sign-in began at:
+// one changed meanwhile (cyfr context add with the same name) is
+// errContextMoved and saves nothing, since the session would then be sent
+// to the other home with every later command.
+func saveSession(target storedContext, token string) error {
 	cfg, err := config.Load()
 	if err != nil {
 		return err
 	}
-	stored := cfg.Contexts[name]
+	stored := cfg.Contexts[target.name]
 	if stored == nil {
-		return fmt.Errorf("the context %q is gone", name)
+		return fmt.Errorf("the context %q is gone", target.name)
+	}
+	if !sameAddress(stored.URL, target.address) {
+		return fmt.Errorf("%w (%q now names %s, not %s)", errContextMoved, target.name, stored.URL, target.address)
 	}
 	stored.Token = token
 	return cfg.Save()

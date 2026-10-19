@@ -38,6 +38,8 @@ type stubHome struct {
 	polls     []string
 	expiresIn float64
 	failPolls bool
+	// onAction, when set, runs as each action arrives, before its answer.
+	onAction func(action string)
 }
 
 type stubCall struct {
@@ -68,6 +70,9 @@ func newStubHome(t *testing.T, polls ...string) *stubHome {
 
 		args, _ := req.Params["arguments"].(map[string]any)
 		action, _ := args["action"].(string)
+		if h.onAction != nil {
+			h.onAction(action)
+		}
 		h.mu.Lock()
 		h.calls = append(h.calls, stubCall{action: action, arguments: args,
 			authorization: r.Header.Get("Authorization")})
@@ -446,6 +451,125 @@ func TestMachineName_IsWhatTheHomeTakes(t *testing.T) {
 	for _, r := range name {
 		if r < 0x20 || r > 0x7e {
 			t.Fatalf("machine name %q holds %q", name, r)
+		}
+	}
+}
+
+// moveContext points the stored context name at address, as
+// `cyfr context add <name> <address>` does while a command runs.
+func moveContext(t *testing.T, path, name, address string) {
+	t.Helper()
+	cfg := loadContexts(t, path)
+	cfg.Contexts[name] = &config.Context{URL: address}
+	if err := cfg.SaveTo(path); err != nil {
+		t.Errorf("moving the context: %v", err)
+	}
+}
+
+// A context moved to another home while the approval waits keeps no
+// session: the sign-in is withdrawn at the home that approved it, nothing
+// is saved under the other address, and the next command sends that home
+// no credential.
+func TestLogin_WithdrawsWhenTheContextMovesWhileWaiting(t *testing.T) {
+	home := newStubHome(t, "pending", "approved")
+	other := newStubHome(t)
+	path := withContexts(t, "home", map[string]*config.Context{"home": {URL: home.URL}})
+	var once sync.Once
+	home.onAction = func(action string) {
+		if action == "cli_poll" {
+			once.Do(func() { moveContext(t, path, "home", other.URL) })
+		}
+	}
+
+	out, err := runLogin(t, t.Context(), "login")
+	if !exitsOne(err) || !strings.Contains(err.Error(), "changed to another address") {
+		t.Fatalf("want the moved context said, got %v\n%s", err, out)
+	}
+	stored := loadContexts(t, path).Contexts["home"]
+	if stored.URL != other.URL || stored.Token != "" {
+		t.Errorf("the moved context holds %q at %s", stored.Token, stored.URL)
+	}
+	if cancelled, ok := home.call("cli_cancel"); !ok || cancelled.arguments["session_token"] != stubToken {
+		t.Errorf("the approving home's sign-in was not withdrawn: %v", home.actions())
+	}
+
+	if out, err := runLogin(t, t.Context(), "whoami"); err != nil {
+		t.Logf("whoami: %v\n%s", err, out)
+	}
+	if c, ok := other.call("whoami"); !ok || c.authorization != "" {
+		t.Errorf("the other home was sent %q (asked: %v)", c.authorization, ok)
+	}
+}
+
+// --provider's session is ended at the home that issued it when the
+// context moved meanwhile, and nothing is saved.
+func TestLogin_ProviderEndsTheSessionWhenTheContextMoves(t *testing.T) {
+	home := newStubHome(t)
+	other := newStubHome(t)
+	path := withContexts(t, "home", map[string]*config.Context{"home": {URL: home.URL}})
+	home.onAction = func(action string) {
+		if action == "device_poll" {
+			moveContext(t, path, "home", other.URL)
+		}
+	}
+
+	out, err := runLogin(t, t.Context(), "login", "--provider", "github")
+	if !exitsOne(err) || !strings.Contains(err.Error(), "changed to another address") {
+		t.Fatalf("want the moved context said, got %v\n%s", err, out)
+	}
+	if got := loadContexts(t, path).Contexts["home"].Token; got != "" {
+		t.Errorf("the moved context holds %q", got)
+	}
+	if c, ok := home.call("logout"); !ok || c.authorization != "Bearer provider-session" {
+		t.Errorf("the issuing home did not end the session: %q (%v)", c.authorization, ok)
+	}
+	if n := len(other.actions()); n != 0 {
+		t.Errorf("the other home was asked %d things", n)
+	}
+}
+
+// logout with a --url that is not the context's address is refused before
+// anything is sent or cleared: that home would be handed this context's
+// session.
+func TestLogout_RefusesAnotherHomesAddress(t *testing.T) {
+	home := newStubHome(t)
+	other := newStubHome(t)
+	path := withContexts(t, "home", map[string]*config.Context{
+		"home": {URL: home.URL, Token: "home-session"},
+	})
+
+	out, err := runLogin(t, t.Context(), "logout", "--url", other.URL)
+	if !exitsOne(err) || !strings.Contains(err.Error(), "is not the address of the context") {
+		t.Fatalf("want the address refused, got %v\n%s", err, out)
+	}
+	if n := len(other.actions()) + len(home.actions()); n != 0 {
+		t.Errorf("a refused logout asked a home %d things", n)
+	}
+	if got := loadContexts(t, path).Contexts["home"].Token; got != "home-session" {
+		t.Errorf("a refused logout cleared the context's session: %q", got)
+	}
+}
+
+// Two addresses are one home when they differ only in a trailing slash or
+// in the case of their scheme and host; a path or a query in another case
+// is another address.
+func TestSameAddress_FoldsSchemeAndHostOnly(t *testing.T) {
+	for _, pair := range [][2]string{
+		{"https://home.example", "HTTPS://Home.Example/"},
+		{"https://home.example/cyfr/", "https://home.example/cyfr"},
+	} {
+		if !sameAddress(pair[0], pair[1]) {
+			t.Errorf("%s and %s are one home", pair[0], pair[1])
+		}
+	}
+	for _, pair := range [][2]string{
+		{"https://home.example/Home", "https://home.example/home"},
+		{"https://home.example/?home=A", "https://home.example/?home=a"},
+		{"https://home.example", "https://home.example:8443"},
+		{"https://home.example", "http://home.example"},
+	} {
+		if sameAddress(pair[0], pair[1]) {
+			t.Errorf("%s and %s are two homes", pair[0], pair[1])
 		}
 	}
 }
