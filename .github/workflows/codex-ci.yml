@@ -150,6 +150,19 @@ jobs:
       - name: go test (the reach engine)
         run: go test -race -count=1 ./internal/reach/...
 
+      # The tests that run on Windows alone, against the real LockFileEx
+      # and Job Object: each must run and pass here, never skip. The list
+      # is exactly the Test functions of internal/reach's *_windows_test.go
+      # (TestWindowsTestsAreTheOnesCIRequires).
+      - name: go test (the Windows lock and job tests ran and passed)
+        shell: bash
+        env:
+          WINDOWS_TESTS: TestWindowsDeadlineTerminatesTheJob TestWindowsJobKillsDockerChildrenWithTheirHolder TestWindowsLockFileExFailsImmediately
+        run: |
+          set -euo pipefail
+          go test ./internal/reach/ -race -count=1 -v -run "^(${WINDOWS_TESTS// /|})\$" 2>&1 | tee "$RUNNER_TEMP/windows-tests.log"
+          for t in $WINDOWS_TESTS; do grep -q -- "--- PASS: $t " "$RUNNER_TEMP/windows-tests.log" || { echo "::error::the Windows test $t did not run and pass"; exit 1; }; done
+
   test-macos:
     # The CLI ships for macOS; this runs its checks on the platform's own
     # filesystem, process and trust-store behavior.
