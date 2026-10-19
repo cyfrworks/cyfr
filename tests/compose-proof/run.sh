@@ -42,8 +42,9 @@
 #          the client the proxy names through it. In tailnet the endpoint's
 #          HSTS is on the proxy listener's success, error and refusal
 #          answers for the node's name and on none for a loopback Host or
-#          on the loopback listener; in public the endpoint sends none
-#          (Caddy's is tests/proxy-hsts/run.sh's). At the ts.net name the
+#          on the loopback listener; in public the endpoint sends none on
+#          its proxy listener, and an answer through Caddy carries the
+#          shipped site's one value. At the ts.net name the
 #          origin is the home's, MCP admits that origin and refuses
 #          another, the LiveView socket upgrades for it and not another,
 #          and the session cookie is honoured. Before the switches:
@@ -61,7 +62,9 @@
 #          its stop ran; killed alone while a docker child of its start is
 #          paused, the next command refused while the orphan holds the
 #          lock; a stop that fails, leaving the operation uncertain and
-#          resumable. Then the tailnet join's two instructions followed as
+#          resumable; a start that fails, then a stop that fails, leaving it
+#          uncertain with the target's materialized configuration kept.
+#          Then the tailnet join's two instructions followed as
 #          printed: HTTPS off for the tailnet, then `cyfr reach tailnet`
 #          once it is on; tailnet_active, then `cyfr reach local` and `cyfr
 #          reach tailnet --new-node`. A docker on PATH before the real one
@@ -118,7 +121,19 @@
 # makes the compose project the command line derives from it one no other
 # stack on this host has; it holds a copy of docker-compose.yml, the
 # overlay as its docker-compose.override.yml, and the .env `cyfr init`
-# writes, with the run's own settings beside it. The containers are named
+# writes, with the run's own settings beside it, and the shipped Caddyfile
+# as proof.Caddyfile with its site address made plain HTTP, so Caddy serves
+# the proof's port 80 with no certificate to trust while its reverse_proxy
+# block and the header handling under test are byte for byte the shipped
+# ones (`proof_caddyfile`). With an http:// address Caddy obtains no
+# certificate, so the global options' email stays as shipped. The run fails
+# before any case when the copy differs from the shipped file other than
+# by exactly this diff:
+#
+#   -{$CYFR_HOST:localhost} {
+#   +http://{$CYFR_HOST:localhost} {
+#
+# The containers are named
 # from the project, host ports are ones Docker picks on the loopback, and
 # the project goes whole, its volumes, the engine's join network and join
 # containers and the run's stand-in image with it, when the run ends,
@@ -536,6 +551,39 @@ fetched() { printf '%s\n' "$1" | sed -n '/^{/p' | tail -1; }
 # The address cyfr's loopback listener is published on.
 published() { compose port cyfr "$(env_value CYFR_PORT)"; }
 
+# proof.Caddyfile: the shipped Caddyfile with its one site address given
+# the http:// scheme, then held to differ from the shipped file by exactly
+# the diff this file's header shows, line for line, before any case runs.
+proof_caddyfile() {
+  local diff
+  python3 -I - "$ROOT/Caddyfile" "$WORK/proof.Caddyfile" <<'PY' || fail "the shipped Caddyfile has no one site address to serve over plain HTTP"
+import re, sys
+lines = open(sys.argv[1]).read().splitlines(keepends=True)
+sites = [i for i, line in enumerate(lines) if re.fullmatch(r"(?!#)\S.* \{\n", line)]
+if len(sites) != 1 or lines[sites[0]].startswith("http://"):
+    sys.exit(1)
+lines[sites[0]] = "http://" + lines[sites[0]]
+open(sys.argv[2], "w").write("".join(lines))
+PY
+  diff="$(python3 -I - "$HERE/run.sh" "$ROOT/Caddyfile" "$WORK/proof.Caddyfile" <<'PY'
+import difflib, re, sys
+header = []
+for line in open(sys.argv[1]).read().splitlines()[1:]:
+    if not line.startswith("#"):
+        break
+    header.append(line)
+shown = [l[4:] for l in header if re.match(r"#   [-+](?![-+]{2} )", l)]
+shipped = open(sys.argv[2]).read().splitlines()
+made = open(sys.argv[3]).read().splitlines()
+actual = [l for l in difflib.unified_diff(shipped, made, lineterm="", n=0)
+          if l[:1] in "-+" and not l.startswith(("---", "+++"))]
+print("\n".join(actual))
+sys.exit(0 if shown and actual == shown else 1)
+PY
+)" || fail "proof.Caddyfile differs from the shipped Caddyfile other than by the diff this file's header shows: $(printf '%s' "$diff" | tr '\n' ';')"
+  ok "proof.Caddyfile is the shipped Caddyfile but for: $(printf '%s' "$diff" | tr '\n' ';')"
+}
+
 # The proxy listener's port: what compose passes caddy as CYFR_PROXY_PORT,
 # .env's or the default, which cyfr reads the same way.
 proxy_port() {
@@ -732,7 +780,6 @@ project_new() {
   step "the project's directory: the shipped file, the overlay, and the .env cyfr init writes"
   cp "$ROOT/docker-compose.yml" "$WORK/docker-compose.yml"
   cp "$HERE/compose.yml" "$WORK/docker-compose.override.yml"
-  cp "$HERE/Caddyfile" "$WORK/proof.Caddyfile"
   cp "$ROOT/apps/locus/keeper/seccomp/keeper.json" "$WORK/keeper.seccomp.json"
   cp "$ROOT/.env.example" "$WORK/.env.example"
   cli_ok init init --no-interactive --no-pull --reach local
@@ -753,6 +800,9 @@ project_new() {
   env_set PROOF_TAILSCALE_IMAGE "$STANDIN_IMAGE"
   (umask 077 && printf 'tskey-auth-proof%s\n' "$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')" >"$AUTH_KEY_FILE")
   ok "wrote $WORK/.env: CYFR_REACH=$(env_value CYFR_REACH), builds off"
+  # Once the project resolves, so a refused copy leaves a project its
+  # teardown can take down.
+  proof_caddyfile
 }
 
 # The island networks exist before cyfr joins them, with IPv6: the plain
@@ -916,9 +966,11 @@ assert any(b["HostPort"] == host_port for b in bound[f"{port}/tcp"]), (bound, pu
   fi
   case "$mode" in
     public)
+      # The shipped site answers its host's name alone.
       front="$(compose port caddy 80)"
-      curl -fsS -m 10 "http://$front/api/health/ready" >"$WORK/caddy-ready.json" || fail "GET http://$front/api/health/ready through Caddy did not answer 200"
-      ok "GET http://$front/api/health/ready through Caddy -> 200 $(cat "$WORK/caddy-ready.json")"
+      curl -fsS -m 10 -H "host: $(env_value CYFR_HOST)" "http://$front/api/health/ready" >"$WORK/caddy-ready.json" ||
+        fail "GET http://$front/api/health/ready as $(env_value CYFR_HOST) through Caddy did not answer 200"
+      ok "GET http://$front/api/health/ready as $(env_value CYFR_HOST) through Caddy -> 200 $(cat "$WORK/caddy-ready.json")"
       ;;
     tailnet)
       standin_ca
@@ -1237,9 +1289,12 @@ modes_case() {
       public)
         expect_head public proof-home.example
         forged_checks public
+        answer="$(from_network edge -H "host: proof-home.example" "http://cyfr:$(proxy_port)/api/health")"
+        [ "$(status_of "$answer")" = 200 ] && [ -z "$(hsts_in "$answer")" ] ||
+          fail "in public the proxy listener as proof-home.example answered '$(status_of "$answer")' with Strict-Transport-Security '$(hsts_in "$answer")'"
         answer="$(from_network edge -H "host: proof-home.example" "http://caddy:80/api/health")"
-        [ -z "$(hsts_in "$answer")" ] || fail "in public the endpoint sends HSTS through the proof's front, where Caddy's own is the shipped file's"
-        ok "in public the endpoint sends no HSTS of its own"
+        [ "$(hsts_in "$answer")" = "$HSTS" ] || fail "through Caddy the answer carries Strict-Transport-Security '$(hsts_in "$answer" | tr '\n' ';')', not the shipped site's '$HSTS' once"
+        ok "in public the endpoint sends no HSTS of its own, and through Caddy the answer carries the shipped site's one value"
         ;;
       tailnet)
         expect_head tailnet "$(env_value CYFR_HOST)"

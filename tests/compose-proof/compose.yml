@@ -16,8 +16,8 @@
 #   - loopback ports Docker picks for the run in place of the shipped
 #     ones, so a run meets no deployed stack and no other run, and the
 #     project's names in place of the shipped container name;
-#   - the proof's Caddyfile, which fronts cyfr's proxy listener over plain
-#     HTTP in place of the shipped TLS site;
+#   - proof.Caddyfile, the shipped Caddyfile with its site address made
+#     plain HTTP (run.sh `proof_caddyfile`), in place of the shipped file;
 #   - proof-tailnet, a network of the stand-in alone, where the proof's
 #     clients stand for a tailnet's devices;
 #   - the Locus runtime and backends services under a profile no head
