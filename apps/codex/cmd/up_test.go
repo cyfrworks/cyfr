@@ -6,15 +6,18 @@ package cmd
 import (
 	"bytes"
 	"context"
+	"errors"
 	"go/ast"
 	"go/parser"
 	"go/token"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/cyfr/codex/internal/reach"
 )
@@ -113,16 +116,21 @@ func TestUpStartsThroughTheEngine(t *testing.T) {
 		t.Errorf("the lock is still held, by %s", holder)
 	}
 
-	payload := map[string]string{"node": "cyfr-1.tail1234.ts.net", "env": "cyfr.tail1234.ts.net"}
-	s.engine.startReceipt = reach.Receipt{Op: "start", State: "completed", Outcome: "ok", Code: "tailnet_node_mismatch", Payload: payload}
-	if err := runUp(context.Background(), &bytes.Buffer{}); err == nil || err.Error() != reach.Refuse("tailnet_node_mismatch", payload).Message() {
-		t.Errorf("a start answering tailnet_node_mismatch made cyfr up answer %v", err)
+	s.engine.startReceipt = startedLocalReceipt("start")
+	out.Reset()
+	before := len(s.log())
+	err := runUp(context.Background(), &out)
+	if err == nil || err.Error() != reach.Refuse("tailnet_node_mismatch", mismatch()).Message() || ExitStatus(err) != exitStartedLocally {
+		t.Errorf("a start on this machine only made cyfr up answer %v (exit %d)", err, ExitStatus(err))
+	}
+	if strings.Contains(out.String(), "started") || slices.ContainsFunc(s.log()[before:], func(line string) bool { return strings.Contains(line, " logs ") }) {
+		t.Errorf("cyfr up reported a start on this machine only as a start, or read the boot's log for it:\n%s", out.String())
 	}
 
 	s.engine.startReceipt = okReceipt("start")
 	refused := reach.Refuse("compose_env_refused", map[string]string{"key": "COMPOSE_FILE"})
 	s.engine.checkErr = refused
-	before := len(s.log())
+	before = len(s.log())
 	if err := runUp(context.Background(), &bytes.Buffer{}); err == nil || err.Error() != refused.Message() {
 		t.Errorf("a stack the check refuses made cyfr up answer %v", err)
 	}
@@ -274,4 +282,75 @@ func TestEveryDockerCallRunsThroughTheEngine(t *testing.T) {
 			t.Errorf("%s starts docker %d times, and the exception (%s) is for one", fn, found[fn], reason)
 		}
 	}
+}
+
+// runAsCyfr runs this test binary as the cyfr process (TestMain) in dir,
+// args its command line and scenario how the fake engine answers each
+// start and switch, and answers the process's stdout, its stderr and the
+// status it exited with: Run's, the status main exits with.
+func runAsCyfr(t *testing.T, scenario, dir string, args ...string) (string, string, int) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	process := exec.CommandContext(ctx, os.Args[0], args...)
+	process.Dir = dir
+	process.Env = append(os.Environ(), asCyfr+"="+scenario)
+	var stdout, stderr bytes.Buffer
+	process.Stdout, process.Stderr = &stdout, &stderr
+	err := process.Run()
+	status := 0
+	var exit *exec.ExitError
+	if errors.As(err, &exit) {
+		status = exit.ExitCode()
+	} else if err != nil {
+		t.Fatal(err)
+	}
+	return stdout.String(), stderr.String(), status
+}
+
+// A start that leaves the home running on this machine only, its tailnet
+// machine not the one .env names, is no success and no failed start: the
+// cyfr process prints tailnet_node_mismatch's sentence, Prima.Refusal's
+// word for word, and exits 3, from cyfr up, cyfr restore and the switch of
+// cyfr reach alike; a failed start exits 1.
+func TestStartedOnThisMachineOnlyExitsThree(t *testing.T) {
+	want := "Error: " + reach.Refuse("tailnet_node_mismatch", mismatch()).Message() + "\n"
+	check := func(t *testing.T, name, stdout, stderr string, status int) {
+		t.Helper()
+		if status != exitStartedLocally || stderr != want {
+			t.Errorf("cyfr %s exited %d, printing %q; want exit 3 and %q", name, status, stderr, want)
+		}
+		if strings.Contains(stdout, "CYFR server started") || strings.Contains(stdout, "Done.") {
+			t.Errorf("cyfr %s reported a start on this machine only as a success:\n%s", name, stdout)
+		}
+	}
+
+	t.Run("up", func(t *testing.T) {
+		s := newUpdateScenario(t, shippedCompose(t), nil)
+		stdout, stderr, status := runAsCyfr(t, "started-local", s.project, "up")
+		check(t, "up", stdout, stderr, status)
+		if _, stderr, status := runAsCyfr(t, "failed-start", s.project, "up"); status != exitFailure || !strings.Contains(stderr, "cyfr did not become healthy") {
+			t.Errorf("a failed start made cyfr up exit %d, printing %q; want exit 1", status, stderr)
+		}
+	})
+	t.Run("restore", func(t *testing.T) {
+		r := newRestoreScenario(t, shippedCompose(t), nil, nil)
+		stdout, stderr, status := runAsCyfr(t, "started-local", r.project, "restore", r.dir)
+		check(t, "restore", stdout, stderr, status)
+		if !strings.Contains(stdout, "Declared restore "+testRestored) {
+			t.Errorf("cyfr restore does not say the restore is declared:\n%s", stdout)
+		}
+	})
+	t.Run("reach", func(t *testing.T) {
+		newReachProject(t)
+		dir, err := os.Getwd()
+		if err != nil {
+			t.Fatal(err)
+		}
+		stdout, stderr, status := runAsCyfr(t, "started-local", dir, "reach", "tailnet", "--yes")
+		check(t, "reach tailnet", stdout, stderr, status)
+		if !strings.Contains(stdout, "This changes how this home is reached:") {
+			t.Errorf("cyfr reach tailnet showed no change before making it:\n%s", stdout)
+		}
+	})
 }

@@ -86,10 +86,30 @@ func engineFailure(err error) error {
 	return err
 }
 
+// outcomeStartedLocal is the outcome of a start that started the home on
+// this machine alone: the machine's tailnet node is not the one .env
+// names, so Serve stays closed, and the receipt answers
+// tailnet_node_mismatch.
+const outcomeStartedLocal = "started_local"
+
+// startedLocally is a start that left the home running on this machine
+// alone (outcomeStartedLocal). It is no success: its sentence says the home
+// answers on this machine only and to run `cyfr reach tailnet`, and the
+// process exits 3 (ExitStatus), apart from a start that failed.
+type startedLocally struct{ refusalError }
+
 // receiptFailure is the failure a receipt answers, nil for a plain
-// success.
+// success; a start that left the home on this machine alone answers
+// startedLocally.
 func receiptFailure(rec reach.Receipt) error {
-	if r := receiptRefusal(rec); r != nil {
+	r := receiptRefusal(rec)
+	if rec.Outcome == outcomeStartedLocal {
+		if r == nil {
+			r = reach.Refuse("tailnet_node_mismatch", rec.Payload)
+		}
+		return startedLocally{refusalError{r}}
+	}
+	if r != nil {
 		return refusalError{r}
 	}
 	return nil
@@ -145,10 +165,11 @@ var operationNames = map[string]string{
 
 // outcomeWords are how a completed operation ended.
 var outcomeWords = map[string]string{
-	"ok":          "done",
-	"rolled_back": "rolled back",
-	"not_applied": "not applied",
-	"failed":      "failed",
+	"ok":                "done",
+	outcomeStartedLocal: "started on this machine only",
+	"rolled_back":       "rolled back",
+	"not_applied":       "not applied",
+	"failed":            "failed",
 }
 
 // describeReceipt is a receipt as a person reads it: the operation and its
@@ -379,7 +400,9 @@ var reachCmd = &cobra.Command{
 
 It shows the change first: who can reach the home, its address, the certificate email and the ports opened on this machine, each before → after, and what changes for passkeys, paired devices and clients when the address does. Confirm it (or pass --yes), and the stack is stopped and checked stopped, .env is rewritten, and what was running is started again in the new mode; a start that fails puts the home back as it was.
 
-'cyfr reach status' shows how the home is reached and what runs, changing nothing. 'cyfr reach --resume' finishes a change an interrupted command left, under the lock, and reports what happened; it is what to run after an interruption.`,
+'cyfr reach status' shows how the home is reached and what runs, changing nothing. 'cyfr reach --resume' finishes a change an interrupted command left, under the lock, and reports what happened; it is what to run after an interruption.
+
+Exit status 3: the change was made and the home started, but on this machine only, because the machine's tailnet identity is not the one .env now names; Serve stays closed, and the message says to run 'cyfr reach tailnet'. A refused or failed change exits 1.`,
 	Example: `  cyfr reach tailnet
   cyfr reach public --domain cyfr.example.com --acme-email ops@example.com
   cyfr reach local --yes

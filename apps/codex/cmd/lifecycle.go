@@ -660,9 +660,14 @@ database_path: ./data/cyfr.db
 	switch {
 	case envCreated && choice.mode != reach.ModeLocal:
 		applied, err := applyInitReach(ctx, choice, key, out)
-		if err != nil {
+		local := startedLocally{}
+		switch {
+		case errors.As(err, &local):
+			head, reachErr = applied, err
+			sel = selection{profiles: head.Profiles, port: head.Port}
+		case err != nil:
 			reachErr = fmt.Errorf("%w\nThis home is set up to be reached from this computer only; 'cyfr reach %s' changes that", err, choice.mode)
-		} else {
+		default:
 			head = applied
 			sel = selection{profiles: head.Profiles, port: head.Port}
 		}
@@ -931,13 +936,19 @@ func applyInitReach(ctx context.Context, c reachChoice, key []byte, out io.Write
 	if err != nil {
 		return reach.Head{}, engineFailure(err)
 	}
+	head := p.New
+	if rec.FinalHead != nil {
+		head = *rec.FinalHead
+	}
+	// A switch that started the home on this machine alone made the
+	// change; its head is .env's, and its failure says what is left.
 	if err := receiptFailure(rec); err != nil {
+		if local := (startedLocally{}); errors.As(err, &local) {
+			return head, err
+		}
 		return reach.Head{}, err
 	}
-	if rec.FinalHead != nil {
-		return *rec.FinalHead, nil
-	}
-	return p.New, nil
+	return head, nil
 }
 
 // localHead is the head a new home's .env starts from, reached from this
@@ -1121,7 +1132,9 @@ var upCmd = &cobra.Command{
 
 The stack is cyfr (the one endpoint: Prism, API, MCP, tinctures), locus-runtime (the runtime that runs components), locus-builds (the builds service that compiles components and tinctures), locus-backends (the backends service that runs the stdio/npx MCP servers an athanor adds on Prism's "MCP Servers" page, each backend under a uid and a memory bound of its own; cyfr tells it what to run), and the proxy of the way the home is reached: tailscale for a tailnet home (Tailscale Serve, HTTPS at the machine's tailnet name) and caddy for a public one (TLS on :80/:443).
 
-cyfr, locus-runtime and locus-backends always start. locus-builds starts when CYFR_LOCUS_BUILDS_URL in .env names it (http://locus-builds:4100, which 'cyfr init' writes). CYFR_REACH in .env chooses the proxy: none for local, where Prism is at http://localhost:<CYFR_PORT>, tailscale for tailnet and caddy for public. cyfr up first takes the stack's lock and finishes a change an interrupted command left, then refuses a .env whose settings contradict how the home is reached, with the sentence the server would refuse it with, before anything starts. A tailnet home is served on the tailnet only once the machine's tailnet identity is the one .env names. A start that fails says why, with the server's own refusal from its log when it gave one.`,
+cyfr, locus-runtime and locus-backends always start. locus-builds starts when CYFR_LOCUS_BUILDS_URL in .env names it (http://locus-builds:4100, which 'cyfr init' writes). CYFR_REACH in .env chooses the proxy: none for local, where Prism is at http://localhost:<CYFR_PORT>, tailscale for tailnet and caddy for public. cyfr up first takes the stack's lock and finishes a change an interrupted command left, then refuses a .env whose settings contradict how the home is reached, with the sentence the server would refuse it with, before anything starts. A tailnet home is served on the tailnet only once the machine's tailnet identity is the one .env names. A start that fails says why, with the server's own refusal from its log when it gave one, and exits 1.
+
+Exit status 3: cyfr started, but on this machine only, because the machine's tailnet identity is not the one .env names; Serve stays closed, and the message says to run 'cyfr reach tailnet', which offers to move the home to the machine's own name.`,
 	Example: `  cyfr up`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		ctx := cmd.Context()
@@ -1171,11 +1184,14 @@ func runUp(ctx context.Context, out io.Writer) error {
 		return engineFailure(err)
 	}
 	rec, startErr := e.Start(context.WithoutCancel(ctx), "up")
-	if startErr == nil {
-		startErr = receiptFailure(rec)
-	}
 	if startErr != nil {
-		startErr = withBootFatal(ctx, e, head, startErr)
+		startErr = withBootFatal(ctx, e, head, engineFailure(startErr))
+	} else if startErr = receiptFailure(rec); startErr != nil {
+		// A home started on this machine alone runs, and its sentence is
+		// the whole answer; any other refused start may be the boot's.
+		if local := (startedLocally{}); !errors.As(startErr, &local) {
+			startErr = withBootFatal(ctx, e, head, startErr)
+		}
 	}
 	release()
 	select {

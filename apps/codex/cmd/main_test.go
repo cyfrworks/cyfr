@@ -4,6 +4,8 @@
 package cmd
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"os"
 	"testing"
@@ -13,6 +15,12 @@ import (
 // engine's watchdog: one the dispatch below does not take exits at once
 // rather than run the suite.
 const watchdogChild = "CYFR_CMD_TEST_WATCHDOG_CHILD"
+
+// asCyfr marks a run of this test binary that a test started as the cyfr
+// process (runAsCyfr), its value how the fake engine answers each start
+// and switch: started-local, every one started on this machine only;
+// failed-start, every start failing.
+const asCyfr = "CYFR_CMD_TEST_AS_CYFR"
 
 // TestMain runs the package's tests under a home of their own: init and
 // the commands that sign in save the CLI's config under ~/.cyfr, and no
@@ -27,6 +35,19 @@ func TestMain(m *testing.M) {
 		rootCmd.SetArgs(os.Args[1:])
 		_ = rootCmd.Execute()
 		os.Exit(2)
+	}
+	// Run as the cyfr process, it is the process main runs (Run), its exit
+	// status the one cyfr exits with, over a fake engine.
+	if scenario := os.Getenv(asCyfr); scenario != "" {
+		s := installFakeEngine(nil)
+		switch scenario {
+		case "started-local":
+			local := startedLocalReceipt("switch")
+			s.startReceipt, s.switchReceipt = startedLocalReceipt("start"), &local
+		case "failed-start":
+			s.startErr = errors.New("cyfr did not become healthy")
+		}
+		os.Exit(Run(context.Background()))
 	}
 	if os.Getenv(watchdogChild) != "" {
 		fmt.Fprintln(os.Stderr, "the test binary was run as the watchdog, and the dispatch did not take it")

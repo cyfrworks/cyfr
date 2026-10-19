@@ -248,6 +248,21 @@ func TestInitLeavesTheHomeLocalWhenTheJoinFailsOrIsCancelled(t *testing.T) {
 	})
 }
 
+// A switch whose start left the home on this machine only is no success:
+// init answers tailnet_node_mismatch's sentence alone, which exits 3, and
+// never says the home stayed local, since the switch was made.
+func TestInitReportsAStartOnThisMachineOnly(t *testing.T) {
+	newInitProject(t)
+	s := useFakeEngine(t)
+	local := startedLocalReceipt("switch")
+	s.switchReceipt = &local
+	var out bytes.Buffer
+	err := runInit(context.Background(), initOptions{mode: reach.ModePublic, reachOptions: reachOptions{domain: "cyfr.example.com"}, noPull: true}, &out, &out)
+	if want := reach.Refuse("tailnet_node_mismatch", mismatch()).Message(); err == nil || err.Error() != want || ExitStatus(err) != exitStartedLocally {
+		t.Fatalf("init answered %v (exit %d), want %q and exit 3", err, ExitStatus(err), want)
+	}
+}
+
 // localAndMade fails unless init left a local home with the project made
 // around it and nothing switched.
 func localAndMade(t *testing.T, s *fakeStack) {

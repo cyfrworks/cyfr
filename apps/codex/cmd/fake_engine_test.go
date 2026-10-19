@@ -64,13 +64,20 @@ type fakeStack struct {
 // terminal init and reach ask on for none.
 func useFakeEngine(t *testing.T) *fakeStack {
 	t.Helper()
-	s := &fakeStack{t: t, joined: map[string]reach.Join{}, startReceipt: okReceipt("start"), stopReceipt: okReceipt("stop")}
 	savedOpen, savedReceipt, savedBusy := openEngine, receiptRefusal, busyRefusal
 	savedTerminal, savedInput := askTerminal, askInput
 	t.Cleanup(func() {
 		openEngine, receiptRefusal, busyRefusal = savedOpen, savedReceipt, savedBusy
 		askTerminal, askInput = savedTerminal, savedInput
 	})
+	return installFakeEngine(t)
+}
+
+// installFakeEngine stands a new fakeStack in for the engine, and the
+// terminal init and reach ask on for none; t, when there is one, reports
+// what the fake cannot do.
+func installFakeEngine(t *testing.T) *fakeStack {
+	s := &fakeStack{t: t, joined: map[string]reach.Join{}, startReceipt: okReceipt("start"), stopReceipt: okReceipt("stop")}
 	openEngine = func(dir string) (stackEngine, error) {
 		if err := s.openErr; err != nil {
 			return nil, err
@@ -96,6 +103,18 @@ func useFakeEngine(t *testing.T) *fakeStack {
 	askTerminal = func() bool { return false }
 	askInput = strings.NewReader("")
 	return s
+}
+
+// mismatch is the tailnet_node_mismatch payload of a start that found the
+// machine's tailnet node other than the one .env names.
+func mismatch() map[string]string {
+	return map[string]string{"node": "cyfr-1.tail1234.ts.net", "env": "cyfr.tail1234.ts.net"}
+}
+
+// startedLocalReceipt is a start's receipt when it started the home on
+// this machine alone, the machine's tailnet node not .env's.
+func startedLocalReceipt(op string) reach.Receipt {
+	return reach.Receipt{RequestID: strings.Repeat("0", 32), Op: op, State: "completed", Outcome: outcomeStartedLocal, Code: "tailnet_node_mismatch", Payload: mismatch()}
 }
 
 // okReceipt is a completed operation's plain success.
@@ -127,7 +146,9 @@ func (s *fakeStack) logLine(format string, args ...any) {
 	}
 	f, err := os.OpenFile(filepath.Join(dir, "log"), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 	if err != nil {
-		s.t.Error(err)
+		if s.t != nil {
+			s.t.Error(err)
+		}
 		return
 	}
 	fmt.Fprintf(f, "ENGINE "+format+"\n", args...)

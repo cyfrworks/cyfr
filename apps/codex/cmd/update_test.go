@@ -1233,24 +1233,22 @@ func TestUpdateLeavesTheStackStoppedWhenTheNewReleaseFails(t *testing.T) {
 // done and never stops it, and it answers the refusal's sentence, which
 // says how to serve the home on the tailnet again. So does a restore.
 func TestUpdateKeepsAHomeServedLocallyRunning(t *testing.T) {
-	payload := map[string]string{"node": "cyfr-1.tail1234.ts.net", "env": "cyfr.tail1234.ts.net"}
-	mismatch := reach.Receipt{Op: "start", State: "completed", Outcome: "ok", Code: "tailnet_node_mismatch", Payload: payload}
-	want := reach.Refuse("tailnet_node_mismatch", payload).Message()
+	want := reach.Refuse("tailnet_node_mismatch", mismatch()).Message()
 
 	s := newUpdateScenario(t, shippedCompose(t), nil)
-	s.engine.startReceipt = mismatch
+	s.engine.startReceipt = startedLocalReceipt("start")
 	out, err := s.run(context.Background())
-	if err == nil || err.Error() != want || !strings.Contains(out, "Updated to release 0.9.0.") {
-		t.Fatalf("update answered %v, want %q after the report\n%s", err, want, out)
+	if err == nil || err.Error() != want || ExitStatus(err) != exitStartedLocally || !strings.Contains(out, "Updated to release 0.9.0.") {
+		t.Fatalf("update answered %v (exit %d), want %q and exit %d after the report\n%s", err, ExitStatus(err), want, exitStartedLocally, out)
 	}
 	if log := s.log(); !slices.Equal(log[len(log)-2:], started("update")) {
 		t.Errorf("the update did more than start the new release:\n%s", strings.Join(log, "\n"))
 	}
 
 	r := newRestoreScenario(t, shippedCompose(t), nil, nil)
-	r.engine.startReceipt = mismatch
+	r.engine.startReceipt = startedLocalReceipt("start")
 	out, err = r.restore(true)
-	if err == nil || err.Error() != want || !strings.Contains(out, "It runs on this machine alone.") {
+	if err == nil || err.Error() != want || ExitStatus(err) != exitStartedLocally || !strings.Contains(out, "It runs on this machine alone.") {
 		t.Fatalf("restore answered %v, want %q\n%s", err, want, out)
 	}
 	if log := r.log(); !slices.Equal(log[len(log)-2:], started("restore")) {

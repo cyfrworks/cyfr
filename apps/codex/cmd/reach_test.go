@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/cyfr/codex/internal/reach"
+	"github.com/spf13/cobra"
 )
 
 // newReachProject makes the working directory a project whose .env is the
@@ -289,6 +290,21 @@ func TestReachCommandsAreTheContractsSurface(t *testing.T) {
 	}
 	if err := reachCmd.RunE(reachCmd, nil); err == nil || !strings.Contains(err.Error(), "name the mode") {
 		t.Errorf("cyfr reach with no mode answered %v", err)
+	}
+}
+
+// The help says what each exit status means, and what 3 means for each
+// command that starts the home.
+func TestHelpNamesTheExitStatuses(t *testing.T) {
+	for _, want := range []string{"Exit status: 0 on success; 1 on a failure; 3 when", "130 when interrupted at a prompt"} {
+		if !strings.Contains(rootCmd.Long, want) {
+			t.Errorf("cyfr's help lacks %q", want)
+		}
+	}
+	for _, c := range []*cobra.Command{upCmd, updateCmd, restoreCmd, reachCmd} {
+		if !strings.Contains(c.Long, "Exit status 3: ") || !strings.Contains(c.Long, "on this machine only") {
+			t.Errorf("cyfr %s's help does not say what exit status 3 means for it", c.Name())
+		}
 	}
 }
 
