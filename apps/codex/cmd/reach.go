@@ -56,14 +56,6 @@ var openEngine = func(dir string) (stackEngine, error) {
 	return e, nil
 }
 
-// The refusal a receipt answers with and the lock's refusal while another
-// holder has it, as the engine renders them; variables so a test's fake
-// engine answers its own.
-var (
-	receiptRefusal = reach.Receipt.Refusal
-	busyRefusal    = (*reach.ErrBusy).Refusal
-)
-
 // refusalError is a refusal as a command's failure: Execute prints its
 // sentence, and the command exits non-zero.
 type refusalError struct{ r *reach.Refusal }
@@ -76,7 +68,7 @@ func (e refusalError) Unwrap() error { return e.r }
 func engineFailure(err error) error {
 	var busy *reach.ErrBusy
 	if errors.As(err, &busy) {
-		if r := busyRefusal(busy); r != nil {
+		if r := busy.Refusal(); r != nil {
 			return refusalError{r}
 		}
 	}
@@ -88,25 +80,25 @@ func engineFailure(err error) error {
 }
 
 // outcomeStartedLocal is the outcome of a start that started the home on
-// this machine alone: the machine's tailnet node is not the one .env
-// names, so Serve stays closed, and the receipt answers
-// tailnet_node_mismatch.
+// this machine alone: the tailnet machine is not ready to serve it (not
+// the one .env names, not joined, or HTTPS off), so Serve stays closed, and
+// the receipt answers the refusal that says which.
 const outcomeStartedLocal = "started_local"
 
 // startedLocally is a start that left the home running on this machine
-// alone (outcomeStartedLocal). It is no success: its sentence says the home
-// answers on this machine only and to run `cyfr reach tailnet`, and the
-// process exits 3 (ExitStatus), apart from a start that failed.
+// alone (outcomeStartedLocal), whatever refusal says why. It is no
+// success: its sentence says what to do, and the process exits 3
+// (ExitStatus), apart from a start that failed.
 type startedLocally struct{ refusalError }
 
 // receiptFailure is the failure a receipt answers, nil for a plain
 // success; a start that left the home on this machine alone answers
-// startedLocally.
+// startedLocally, by its outcome alone.
 func receiptFailure(rec reach.Receipt) error {
-	r := receiptRefusal(rec)
+	r := rec.Refusal()
 	if rec.Outcome == outcomeStartedLocal {
 		if r == nil {
-			r = reach.Refuse("tailnet_node_mismatch", rec.Payload)
+			r = reach.Refuse(rec.Code, rec.Payload)
 		}
 		return startedLocally{refusalError{r}}
 	}
@@ -196,7 +188,7 @@ func describeReceipt(r reach.Receipt) string {
 		how = "is " + r.State
 	}
 	line := fmt.Sprintf("%s (request %s) %s.", name, r.RequestID, how)
-	if ref := receiptRefusal(r); ref != nil {
+	if ref := r.Refusal(); ref != nil {
 		line += " " + ref.Message()
 	}
 	return line
@@ -403,7 +395,7 @@ It shows the change first: who can reach the home, its address, the certificate 
 
 'cyfr reach status' shows how the home is reached and what runs, changing nothing. 'cyfr reach --resume' finishes a change an interrupted command left, under the lock, and reports what happened; it is what to run after an interruption.
 
-Exit status 3: the change was made and the home started, but on this machine only, because the machine's tailnet identity is not the one .env now names; Serve stays closed, and the message says to run 'cyfr reach tailnet'. A refused or failed change exits 1.`,
+Exit status 3: the change was made and the home started, but on this machine only, because the tailnet machine is not ready to serve it (not the one .env now names, not joined, or HTTPS off); Serve stays closed, and the message says what to do. A refused or failed change exits 1.`,
 	Example: `  cyfr reach tailnet
   cyfr reach public --domain cyfr.example.com --acme-email ops@example.com
   cyfr reach local --yes

@@ -344,13 +344,13 @@ func TestReachCommandsAreTheContractsSurface(t *testing.T) {
 // The help says what each exit status means, and what 3 means for each
 // command that starts the home.
 func TestHelpNamesTheExitStatuses(t *testing.T) {
-	for _, want := range []string{"Exit status: 0 on success; 1 on a failure; 3 when", "130 when interrupted at a prompt"} {
+	for _, want := range []string{"Exit status: 0 on success; 1 on a failure; 3 when", "not ready to serve it (not the one .env names, not\njoined, or HTTPS off", "130 when interrupted at a prompt"} {
 		if !strings.Contains(rootCmd.Long, want) {
 			t.Errorf("cyfr's help lacks %q", want)
 		}
 	}
 	for _, c := range []*cobra.Command{upCmd, updateCmd, restoreCmd, reachCmd} {
-		if !strings.Contains(c.Long, "Exit status 3: ") || !strings.Contains(c.Long, "on this machine only") {
+		if !strings.Contains(c.Long, "Exit status 3: ") || !strings.Contains(c.Long, "on this machine only, because the tailnet machine is not ready to serve it") {
 			t.Errorf("cyfr %s's help does not say what exit status 3 means for it", c.Name())
 		}
 	}

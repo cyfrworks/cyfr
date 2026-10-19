@@ -1222,6 +1222,20 @@ func TestRestoreRefusesAComposeFileSetItCannotStage(t *testing.T) {
 			}
 		})
 	}
+
+	// A project whose one compose file has another name would not load
+	// the docker-compose.yml the restore puts back beside it.
+	r := newRestoreScenario(t, compose, nil, nil)
+	if err := os.Rename(filepath.Join(r.project, "docker-compose.yml"), filepath.Join(r.project, "compose.yaml")); err != nil {
+		t.Fatal(err)
+	}
+	out, err := r.restore(true)
+	if err == nil || !strings.Contains(err.Error(), "the project's compose file is compose.yaml") || !strings.Contains(err.Error(), "nothing of the snapshot was put back") {
+		t.Fatalf("restore answered %v\n%s", err, out)
+	}
+	if slices.ContainsFunc(r.log(), func(line string) bool { return strings.Contains(line, " config ") }) {
+		t.Errorf("the restore read a configuration it cannot stage:\n%s", strings.Join(r.log(), "\n"))
+	}
 }
 
 // A restore onto a PostgreSQL server of a major no pinned client serves

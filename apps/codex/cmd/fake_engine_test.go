@@ -69,12 +69,8 @@ type fakeStack struct {
 // terminal init and reach ask on for none.
 func useFakeEngine(t *testing.T) *fakeStack {
 	t.Helper()
-	savedOpen, savedReceipt, savedBusy := openEngine, receiptRefusal, busyRefusal
-	savedTerminal, savedInput := askTerminal, askInput
-	t.Cleanup(func() {
-		openEngine, receiptRefusal, busyRefusal = savedOpen, savedReceipt, savedBusy
-		askTerminal, askInput = savedTerminal, savedInput
-	})
+	savedOpen, savedTerminal, savedInput := openEngine, askTerminal, askInput
+	t.Cleanup(func() { openEngine, askTerminal, askInput = savedOpen, savedTerminal, savedInput })
 	return installFakeEngine(t)
 }
 
@@ -96,15 +92,6 @@ func installFakeEngine(t *testing.T) *fakeStack {
 		}
 		return &fakeEngine{s: s, dir: abs}, nil
 	}
-	receiptRefusal = func(r reach.Receipt) *reach.Refusal {
-		if r.Code == "" {
-			return nil
-		}
-		return reach.Refuse(r.Code, r.Payload)
-	}
-	busyRefusal = func(b *reach.ErrBusy) *reach.Refusal {
-		return reach.Refuse("reach_busy", map[string]string{"holder": b.Holder, "pid": strconv.Itoa(b.WatchdogPID), "until": b.Until.UTC().Format(time.RFC3339)})
-	}
 	askTerminal = func() bool { return false }
 	askInput = strings.NewReader("")
 	return s
@@ -119,8 +106,18 @@ func mismatch() map[string]string {
 // startedLocalReceipt is a start's receipt when it started the home on
 // this machine alone, the machine's tailnet node not .env's.
 func startedLocalReceipt(op string) reach.Receipt {
-	return reach.Receipt{RequestID: strings.Repeat("0", 32), Op: op, State: "completed", Outcome: outcomeStartedLocal, Code: "tailnet_node_mismatch", Payload: mismatch()}
+	return startedLocalFor(op, "tailnet_node_mismatch", mismatch())
 }
+
+// startedLocalFor is a start's receipt when it started the home on this
+// machine alone for the refusal code with payload.
+func startedLocalFor(op, code string, payload map[string]string) reach.Receipt {
+	return reach.Receipt{RequestID: strings.Repeat("0", 32), Op: op, State: "completed", Outcome: outcomeStartedLocal, Code: code, Payload: payload}
+}
+
+// httpsOff is the tailnet_https_off payload of a machine joined with its
+// tailnet's HTTPS certificates off.
+func httpsOff() map[string]string { return map[string]string{"name": "cyfr.tail1234.ts.net"} }
 
 // okReceipt is a completed operation's plain success.
 func okReceipt(op string) reach.Receipt {

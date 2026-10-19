@@ -48,7 +48,7 @@ var restoreCmd = &cobra.Command{
 7. Declare the restore: bin/cyfr eval 'IO.puts("CYFR_RESTORE_ID=" <> Cyfr.Release.mark_restore())' in the snapshot's image, then take CYFR_RESTORE_INCOMPLETE out of .env. A restore that is not declared never starts.
 8. Forget the record of the machine's last tailnet join, since the snapshot's .env names its own node, then start the stack as every cyfr start runs, waiting for cyfr's health, unless --no-start.
 
-Exit status 3: the restore is declared and the home started, but on this machine only, because the machine's tailnet identity is not the one the snapshot's .env names; the message says to run 'cyfr reach tailnet'. A failure leaves the stack stopped and says what to do; from step 3 until the declaration, a crash leaves it barred, and 'cyfr restore <snapshot>' run again puts every part back from the start. An object store (S3) is outside the snapshot: objects written since it was taken stay, and objects deleted since come back only from the bucket's own versioning.`,
+Exit status 3: the restore is declared and the home started, but on this machine only, because the tailnet machine is not ready to serve it (not the one the snapshot's .env names, not joined, or HTTPS off); the message says what to do. A failure leaves the stack stopped and says what to do; from step 3 until the declaration, a crash leaves it barred, and 'cyfr restore <snapshot>' run again puts every part back from the start. An object store (S3) is outside the snapshot: objects written since it was taken stay, and objects deleted since come back only from the bucket's own versioning.`,
 	GroupID: "server",
 	Example: "  cyfr restore backups/20261016T120000Z",
 	Args:    cobra.ExactArgs(1),
