@@ -100,12 +100,12 @@ defmodule Cyfr.BoundaryDeclarationsTest do
           WebhookStorage),
        "the security rows, which Sanctum reads; that no other layer reads them is " <>
          "`Cyfr.Boundaries`' security row"},
-      {~w(CarryActions DeviceCertificates DeviceCertifications DirectoryHeads IdentityAttempts
-          IdentityLog PairingInvitations Passkeys PendingConfirmations PersonIdentities
-          PersonSeals RequestRateWindows),
-       "the identity, device, passkey, confirmation, carry and pre-authentication rate " <>
-         "rows Sanctum reads; that no other layer reads them is `Cyfr.Boundaries`' " <>
-         "security row"},
+      {~w(CarryActions CliSignIns DeviceCertificates DeviceCertifications DirectoryHeads
+          IdentityAttempts IdentityLog PairingInvitations Passkeys PendingConfirmations
+          PersonIdentities PersonSeals RequestRateWindows),
+       "the identity, device, passkey, confirmation, carry, command-line sign-in and " <>
+         "pre-authentication rate rows Sanctum reads; that no other layer reads them is " <>
+         "`Cyfr.Boundaries`' security row"},
       {~w(AgentRevisions AgentStorage BudgetReservations BuildRecords Cache Cache.Keys
           CipherRotation ComponentStorage ConsumerReceipts ControlPlane CredentialBindings
           CronSchedule Execution ExecutionAttempts ExecutionEvents ExecutionPayloads
@@ -136,7 +136,7 @@ defmodule Cyfr.BoundaryDeclarationsTest do
     Sanctum => [
       {~w(ApiKey Auth Auth.DeviceFlow Auth.EmailVerification Auth.Identity
           Auth.OAuth Auth.OIDC Authority Authority.BudgetCounter BearerToken Caller Cipher
-          Cipher.Rotation ClientIp Consent.Loader Consent.Proof
+          Cipher.Rotation CliSignIn ClientIp Consent.Loader Consent.Proof
           Consent.RegistrationBinding Consent.ShapeDerivation Consent.ShapeDiff Context
           Door Door.Store Egress ExecutionStanding Namespace Network Notify
           Policy.Enforcement PolicyLog Provisioning Seal Session SignIn Tenancy Tenancy.Athanors

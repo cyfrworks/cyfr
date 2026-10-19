@@ -83,8 +83,6 @@ defmodule Arca.CliSignIns do
   approval mints under; deciding it is `approve!/2`'s.
   """
   @spec by_approval(binary()) :: {:ok, map()} | {:error, :not_found | :database_error}
-  # arca:unscoped-ok the lookup of a pending sign-in by the hash of the bearer
-  # secret its link carries: the row has no owner until it is approved.
   def by_approval(approval_hash) when is_binary(approval_hash) do
     read(
       "Arca.CliSignIns.by_approval",
@@ -97,12 +95,13 @@ defmodule Arca.CliSignIns do
   `by_approval/1` answers it, or `{:error, :not_found}`.
   """
   @spec by_token(binary()) :: {:ok, map()} | {:error, :not_found | :database_error}
-  # arca:unscoped-ok the command line's lookup of its own pending sign-in by
-  # the hash of the token it holds: the row has no owner until it is approved.
   def by_token(token_hash) when is_binary(token_hash) do
     read("Arca.CliSignIns.by_token", from(c in CliSignIn, where: c.token_hash == ^token_hash))
   end
 
+  # arca:unscoped-ok a pending sign-in is read by the hash of a secret its
+  # reader holds, the link's or the command line's token; the row has no
+  # owner until it is approved.
   defp read(tag, query) do
     Arca.Repo.Errors.with_db_rescue(tag, fn ->
       query

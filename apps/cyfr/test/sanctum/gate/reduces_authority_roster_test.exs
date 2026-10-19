@@ -14,9 +14,10 @@ defmodule Sanctum.Gate.ReducesAuthorityRosterTest do
   alias Prima.Operation
   alias Sanctum.Catalog
 
-  # Each takes authority away and gives none: signing out, revoking,
-  # withdrawing consent, leaving, removing a member, denying someone at a
-  # door, unlinking a door and archiving.
+  # Each takes authority away and gives none: signing out, a command line
+  # withdrawing its sign-in, revoking (a command line's session among
+  # them), withdrawing consent, leaving, removing a member, denying someone
+  # at a door, unlinking a door and archiving.
   @roster ~w(
     athanor.archive
     door.deny
@@ -28,6 +29,8 @@ defmodule Sanctum.Gate.ReducesAuthorityRosterTest do
     passkey.revoke
     person.unlink_door
     profile.revoke
+    session.cli_cancel
+    session.cli_revoke
     session.logout
     vault.revoke
     webhook.revoke
