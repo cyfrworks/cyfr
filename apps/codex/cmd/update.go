@@ -1802,12 +1802,26 @@ func (u *updater) composeAsRead() string {
 func (u *updater) stopAfterSwitch(reason error) error {
 	ctx, cancel := u.detached(stopTimeout)
 	defer cancel()
-	stopErr := u.composeDocker(ctx, "stop")
 	message := fmt.Sprintf("Release %s did not start (%v); the stack is left stopped", u.version, reason)
-	if stopErr != nil {
-		message += fmt.Sprintf(" (docker compose stop failed: %v; stop it with 'cyfr down')", stopErr)
+	if err := u.stopFailedStart(ctx); err != nil {
+		message = fmt.Sprintf("Release %s did not start (%v), and %v; stop it with 'cyfr down'", u.version, reason, err)
 	}
 	return fmt.Errorf("%s.\nThe snapshot of release %s is %s; restore it with:\n  cyfr restore %s", message, u.oldRelease, u.snapshot, u.snapshot)
+}
+
+// stopFailedStart stops every service of the stack after a start that
+// failed, closing Serve first (the engine's CloseServe) as every stop
+// does: a failed start can leave Serve's open configuration published, as
+// one whose directory sync failed after the file was written does, and no
+// stop leaves it open. Serve that does not close stops nothing.
+func (u *updater) stopFailedStart(ctx context.Context) error {
+	if err := u.engine.CloseServe(ctx); err != nil {
+		return fmt.Errorf("Tailscale Serve could not be closed (%v), so the stack was not stopped", engineFailure(err))
+	}
+	if err := u.composeDocker(ctx, "stop"); err != nil {
+		return fmt.Errorf("docker compose stop failed (%v)", err)
+	}
+	return nil
 }
 
 // report prints the update's outcome.

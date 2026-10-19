@@ -337,9 +337,9 @@ func joinTailnet(ctx context.Context, e stackEngine, id string, o reachOptions, 
 }
 
 // joinChoice is how a command meets the join its preview needs. confirm,
-// when set, is asked before the join starts, with the name of the tailnet
-// identity --new-node removes ("" when none is known), and its error
-// refuses the join; optionsGiven says --hostname or
+// when set, is asked before the join starts, with the name of the machine
+// --new-node replaces ("" when the engine knows none this home has), and
+// its error refuses the join; optionsGiven says --hostname or
 // --tailscale-auth-key-file was given, which apply to a new join alone.
 type joinChoice struct {
 	confirm      func(current string) error
@@ -347,8 +347,9 @@ type joinChoice struct {
 }
 
 // joined is the join a preview made: its id, "" when the preview needed
-// none, and the tailnet identity --new-node removed before it, "" when
-// none is known.
+// none, and the name of the machine its --new-node join replaced, "" unless
+// the engine knew this home had that machine and the join answered another
+// node.
 type joined struct {
 	id, removed string
 }
@@ -375,20 +376,22 @@ func previewTarget(ctx context.Context, e stackEngine, target reach.Target, id s
 	case err != nil && !notJoined && (!o.newNode || r == nil || r.Code == "tailnet_active"):
 		return reach.Preview{}, joined{}, engineFailure(err)
 	}
-	// The identity a new node removes: the machine's as it is joined, else
-	// the one .env names.
-	current := ""
+	// The machine a new node replaces is the one the preview derived from
+	// what the engine knows this home has; reach_unchanged derived .env's
+	// own head, so that machine is .env's. With no machine known, an
+	// identity .env names may be no machine's, and none is named.
+	var known reach.Head
 	switch {
 	case !o.newNode:
 	case err == nil:
-		current = p.New.Host
-	default:
+		known = p.New
+	case r != nil && r.Code == "reach_unchanged":
 		if h, herr := e.Head(); herr == nil && h.Mode == reach.ModeTailnet {
-			current = h.Host
+			known = h
 		}
 	}
 	if choice.confirm != nil {
-		if err := choice.confirm(current); err != nil {
+		if err := choice.confirm(known.Host); err != nil {
 			return reach.Preview{}, joined{}, err
 		}
 	}
@@ -397,7 +400,14 @@ func previewTarget(ctx context.Context, e stackEngine, target reach.Target, id s
 		return reach.Preview{}, joined{}, err
 	}
 	p, err = e.Preview(ctx, target, joinID)
-	return p, joined{id: joinID, removed: current}, engineFailure(err)
+	if err != nil {
+		return p, joined{id: joinID}, engineFailure(err)
+	}
+	removed := ""
+	if known.Host != "" && known.NodeID != p.New.NodeID {
+		removed = known.Host
+	}
+	return p, joined{id: joinID, removed: removed}, nil
 }
 
 // alreadyJoined refuses the options of a new join for a machine already on

@@ -19,6 +19,7 @@ import (
 	"strings"
 	"syscall"
 	"testing"
+	"time"
 
 	"github.com/cyfr/codex/internal/reach"
 )
@@ -503,6 +504,65 @@ func TestRestoreStopsAStackThatDoesNotStart(t *testing.T) {
 		t.Errorf("the restore did not stop the stack after the failed start:\n%s", strings.Join(log, "\n"))
 	}
 }
+
+// A failed start can leave Serve's open configuration published (written,
+// then its directory sync failed), so the stop after a restored stack does
+// not start closes Serve first, as every other stop does: at each docker
+// compose stop of the restore Serve's configuration is the empty one.
+func TestRestoreClosesServeBeforeTheStopAfterAFailedStart(t *testing.T) {
+	r := newRestoreScenario(t, shippedCompose(t), nil, nil)
+	r.answer("up.exit", "1")
+	serve := filepath.Join(r.project, ".cyfr", "tailscale-serve", "serve.json")
+	stops := 0
+	opened := openEngine
+	t.Cleanup(func() { openEngine = opened })
+	openEngine = func(dir string) (stackEngine, error) {
+		e, err := opened(dir)
+		if err != nil {
+			return nil, err
+		}
+		docker := observedDocker(func(ctx context.Context, c reach.Call) (reach.Result, error) {
+			if slices.Contains(c.Args, "stop") {
+				stops++
+				if got, err := os.ReadFile(serve); err != nil || strings.TrimSpace(string(got)) != "{}" {
+					t.Errorf("at the restore's docker compose stop #%d Serve was %q (%v), want {}", stops, got, err)
+				}
+			}
+			return e.Docker().Run(ctx, c)
+		})
+		return failedStartOpensServe{e, serve, docker}, nil
+	}
+	out, err := r.restore(true)
+	if err == nil || !strings.Contains(err.Error(), "; it is left stopped.\nThe restore "+testRestored+" is declared") {
+		t.Fatalf("restore answered %v\n%s", err, out)
+	}
+	if log := r.log(); !slices.Equal(log[len(log)-2:], []string{"ENGINE close-serve", profiles + "stop"}) {
+		t.Errorf("the restore did not close Serve, then stop the stack, after the failed start:\n%s", strings.Join(log, "\n"))
+	}
+}
+
+// failedStartOpensServe is an engine whose failed start leaves Serve's open
+// configuration at serve, as the engine's start does when Serve's
+// directory sync fails after the configuration was written; its docker
+// calls run through docker.
+type failedStartOpensServe struct {
+	stackEngine
+	serve  string
+	docker reach.Docker
+}
+
+func (e failedStartOpensServe) StartWithin(ctx context.Context, cause string, health time.Duration) (reach.Receipt, error) {
+	rec, err := e.stackEngine.StartWithin(ctx, cause, health)
+	if err == nil {
+		return rec, errors.New("the start this engine fails succeeded")
+	}
+	if werr := os.WriteFile(e.serve, []byte(`{"TCP":{"443":{"HTTPS":true}},"Web":{"${TS_CERT_DOMAIN}:443":{"Handlers":{"/":{"Proxy":"http://cyfr:4401"}}}}}`), 0644); werr != nil {
+		return rec, werr
+	}
+	return rec, err
+}
+
+func (e failedStartOpensServe) Docker() reach.Docker { return e.docker }
 
 // On PostgreSQL the dump goes through pg_restore in the server's own major,
 // on its stdin, the URL in the container's environment and never on an

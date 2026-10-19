@@ -1202,8 +1202,8 @@ func TestUpdateLeavesTheStackStoppedAfterAFailedSnapshot(t *testing.T) {
 }
 
 // A failed migration or health check after the switch leaves the stack
-// stopped, never the old images started, and prints the snapshot and the
-// restore command.
+// stopped, Serve closed before the stop, never the old images started, and
+// prints the snapshot and the restore command.
 func TestUpdateLeavesTheStackStoppedWhenTheNewReleaseFails(t *testing.T) {
 	s := newUpdateScenario(t, shippedCompose(t), nil)
 	s.answer("up.exit", "1")
@@ -1215,7 +1215,7 @@ func TestUpdateLeavesTheStackStoppedWhenTheNewReleaseFails(t *testing.T) {
 		t.Errorf("the refusal is %v", err)
 	}
 	log := s.log()
-	if n := len(log); n < 2 || log[n-2] != profiles+"up -d" || log[n-1] != profiles+"stop" {
+	if n := len(log); n < 3 || !slices.Equal(log[n-3:], []string{profiles + "up -d", "ENGINE close-serve", profiles + "stop"}) {
 		t.Errorf("the update did not stop the stack after the failed start:\n%s", strings.Join(log, "\n"))
 	}
 	if n := strings.Count(strings.Join(log, "\n"), "ENGINE start update"); n != 1 {

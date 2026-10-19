@@ -522,6 +522,91 @@ func TestUpdateClosesServeBeforeItStops(t *testing.T) {
 	}
 }
 
+// A failed start can leave Serve's open configuration published (written,
+// then its directory sync failed), so the stop after a failed switch
+// closes Serve first as every other stop does: at its `docker compose
+// stop` Serve's configuration is the empty one, and the failure is
+// reported whole.
+func TestUpdateClosesServeBeforeTheStopAfterAFailedStart(t *testing.T) {
+	s := newUpdateScenario(t, shippedCompose(t), nil)
+	serve := filepath.Join(s.project, ".cyfr", "tailscale-serve", "serve.json")
+	if err := os.MkdirAll(filepath.Dir(serve), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(serve, []byte(`{"TCP":{"443":{"HTTPS":true}},"Web":{"${TS_CERT_DOMAIN}:443":{"Handlers":{"/":{"Proxy":"http://cyfr:4401"}}}}}`), 0644); err != nil {
+		t.Fatal(err)
+	}
+	e, err := openEngine(".")
+	if err != nil {
+		t.Fatal(err)
+	}
+	unlock, err := e.Lock("update")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer unlock()
+	stops := 0
+	docker := observedDocker(func(ctx context.Context, c reach.Call) (reach.Result, error) {
+		if slices.Contains(c.Args, "stop") {
+			stops++
+			if got, err := os.ReadFile(serve); err != nil || strings.TrimSpace(string(got)) != "{}" {
+				t.Errorf("at the failure cleanup's docker compose stop Serve was %q (%v), want {}", got, err)
+			}
+		}
+		return reach.Result{}, nil
+	})
+	u := &updater{ctx: context.Background(), version: "0.9.0", oldRelease: "0.8.0", snapshot: "backups/snapshot", out: io.Discard, errOut: io.Discard, engine: observedEngine{e, docker},
+		head: reach.Head{Mode: reach.ModeTailnet, Host: "cyfr.tail1234.ts.net", NodeID: "nAAAAAAAAACNTRL", PublicURL: "https://cyfr.tail1234.ts.net", Port: 4000, Profiles: []string{reach.ModeTailnet}}}
+	err = u.stopAfterSwitch(errors.New("Serve configuration directory sync failed"))
+	want := "Release 0.9.0 did not start (Serve configuration directory sync failed); the stack is left stopped.\nThe snapshot of release 0.8.0 is backups/snapshot; restore it with:\n  cyfr restore backups/snapshot"
+	if err == nil || err.Error() != want {
+		t.Errorf("the failure cleanup answered %v, want %q", err, want)
+	}
+	if stops != 1 {
+		t.Fatalf("the failure cleanup ran %d docker compose stops, want 1", stops)
+	}
+}
+
+// Serve that does not close stops nothing after a failed start, since no
+// stop leaves Serve's open configuration behind: no docker call runs, and
+// the failure says the stack was not stopped and how to stop it.
+func TestUpdateStopsNothingAfterAFailedStartWhileServeDoesNotClose(t *testing.T) {
+	newUpdateScenario(t, shippedCompose(t), nil)
+	e, err := openEngine(".")
+	if err != nil {
+		t.Fatal(err)
+	}
+	unlock, err := e.Lock("update")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer unlock()
+	var calls [][]string
+	docker := observedDocker(func(ctx context.Context, c reach.Call) (reach.Result, error) {
+		calls = append(calls, c.Args)
+		return reach.Result{}, nil
+	})
+	u := &updater{ctx: context.Background(), version: "0.9.0", oldRelease: "0.8.0", snapshot: "backups/snapshot", out: io.Discard, errOut: io.Discard,
+		engine: closeServeFails{observedEngine{e, docker}, errors.New("no space left on device")},
+		head:   reach.Head{Mode: reach.ModeTailnet, Host: "cyfr.tail1234.ts.net", NodeID: "nAAAAAAAAACNTRL", PublicURL: "https://cyfr.tail1234.ts.net", Port: 4000, Profiles: []string{reach.ModeTailnet}}}
+	err = u.stopAfterSwitch(errors.New("cyfr did not become healthy"))
+	want := "Release 0.9.0 did not start (cyfr did not become healthy), and Tailscale Serve could not be closed (no space left on device), so the stack was not stopped; stop it with 'cyfr down'.\nThe snapshot of release 0.8.0 is backups/snapshot; restore it with:\n  cyfr restore backups/snapshot"
+	if err == nil || err.Error() != want {
+		t.Errorf("the failure cleanup answered %v, want %q", err, want)
+	}
+	if len(calls) != 0 {
+		t.Errorf("the failure cleanup ran docker with Serve not closed: %q", calls)
+	}
+}
+
+// closeServeFails is an engine whose CloseServe fails with err.
+type closeServeFails struct {
+	observedEngine
+	err error
+}
+
+func (e closeServeFails) CloseServe(ctx context.Context) error { return e.err }
+
 // observedEngine is an engine whose docker calls run through docker.
 type observedEngine struct {
 	stackEngine

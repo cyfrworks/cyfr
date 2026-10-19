@@ -435,8 +435,8 @@ func (r *restorer) run() error {
 		ctx, cancel := r.detached(stopTimeout)
 		defer cancel()
 		message := fmt.Sprintf("The restored stack did not start (%v); it is left stopped", err)
-		if stopErr := r.composeDocker(ctx, "stop"); stopErr != nil {
-			message += fmt.Sprintf(" (docker compose stop failed: %v; stop it with 'cyfr down')", stopErr)
+		if stopErr := r.stopFailedStart(ctx); stopErr != nil {
+			message = fmt.Sprintf("The restored stack did not start (%v), and %v; stop it with 'cyfr down'", err, stopErr)
 		}
 		return fmt.Errorf("%s.\nThe restore %s is declared and the next start takes it; read 'cyfr logs', fix the cause and run 'cyfr up'", message, r.restoreID)
 	}
