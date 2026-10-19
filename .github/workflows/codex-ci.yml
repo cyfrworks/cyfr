@@ -101,6 +101,40 @@ jobs:
       - name: go build
         run: go build ./...
 
+  test-windows:
+    # The CLI ships for Windows, where the reach engine's lock is LockFileEx
+    # and its docker children run in a kill-on-close Job Object, the
+    # platform's own: the whole module vets and builds here, and the reach
+    # package's tests run on the real calls.
+    name: vet + build + reach tests (Windows)
+    runs-on: windows-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: apps/codex
+    steps:
+      # The fixtures the tests read byte for byte stay as committed, with
+      # no line ends rewritten on checkout.
+      - name: Keep line ends as committed
+        working-directory: .
+        run: git config --global core.autocrlf false
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: apps/codex/go.mod
+          cache-dependency-path: apps/codex/go.sum
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: go build
+        run: go build ./...
+
+      - name: go test (the reach engine)
+        run: go test -race -count=1 ./internal/reach/...
+
   test-macos:
     # The CLI ships for macOS; this runs its checks on the platform's own
     # filesystem, process and trust-store behavior.
