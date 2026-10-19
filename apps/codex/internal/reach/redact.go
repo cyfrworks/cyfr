@@ -507,11 +507,17 @@ func (r *Redactor) Err(err error) error { return r.current().err(err) }
 
 // Writer is w behind the pass: what is written reaches w redacted as the
 // whole stream would read (redactor.text), a value matched across the
-// writes and lines it spans, overlapping occurrences included. Every
-// whole occurrence is redacted as it arrives; only the longest end that
-// is the start of a value is held back, at most the longest value's
-// length less one byte however occurrences overlap, so progress still
-// shows; the rest goes at Flush.
+// writes and lines it spans, overlapping occurrences included. The rule,
+// at each write: every whole occurrence in what is held is redacted; then
+// the longest end of the held bytes that is the start of a value is held
+// back, bytes already covered counted, and the rest is passed on. The
+// bytes held back keep the cover an occurrence passed on gives them, and
+// a run of redacted bytes across the cut is said once. A value that
+// overlaps itself can begin inside a redacted run (abab in xabababy), so
+// holding back only the bytes after the last occurrence would pass on its
+// tail. What is held is at most the longest value's length less one byte,
+// however occurrences overlap, so progress still shows; the rest goes at
+// Flush.
 func (r *Redactor) Writer(w io.Writer) *RedactedWriter { return &RedactedWriter{r: r, w: w} }
 
 // RedactedWriter is a writer behind a Redactor (Redactor.Writer).
