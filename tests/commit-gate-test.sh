@@ -222,7 +222,7 @@ CI_RUNS = {
     ("test.yml", "vocabulary-gate", "Tier A/B fossil patterns must be absent"): ["fossils"],
 }
 SETUP_ACTIONS = {
-    "actions/checkout", "actions/setup-node", "./.github/actions/setup-elixir", "actions/cache",
+    "actions/checkout", "actions/setup-node", "actions/setup-go", "./.github/actions/setup-elixir", "actions/cache",
     "actions/upload-artifact", "actions/download-artifact",
 }
 # Each a whole command, as the script spells it with its continuations

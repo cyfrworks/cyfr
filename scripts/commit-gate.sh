@@ -69,6 +69,7 @@
 # (every step of it) or one step of a job, by the names the workflows give
 # them (tests/commit-gate-test.sh holds the list to the workflows exactly):
 #   codex-ci.yml test
+#   codex-ci.yml test-windows
 #   codex-ci.yml test-macos
 #   keeper-ci.yml keeper
 #   license-lint.yml spdx-headers
@@ -99,6 +100,7 @@
 #   test.yml locus-runtime-image: Scan the image
 #   test.yml locus-backends-image
 #   test.yml release-boot: Boot the release against a fresh ${{ matrix.db }} database
+#   test.yml tailscale-image-guard
 #   test.yml browser
 #   test.yml seed-guards
 #   test.yml config-seam
