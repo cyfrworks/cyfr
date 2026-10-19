@@ -14,6 +14,7 @@ var refusalRows = map[string]refusalRow{
 		Variants: []refusalVariant{
 			{Fixed: map[string]string{}, Slots: []string{"holder", "pid", "until"}, Template: "Another cyfr command holds this home (`{holder}`), or a docker command it started is still running (watchdog pid `{pid}`, which ends by `{until}` at the latest). Nothing was changed. Wait until it has finished, then run this command again; if the holder was interrupted, run `cyfr reach --resume` after that time."},
 			{Fixed: map[string]string{}, Slots: []string{"holder", "pid"}, Template: "Another cyfr command holds this home (`{holder}`, pid `{pid}`). Nothing was changed. Wait until it has finished, then run this command again."},
+			{Fixed: map[string]string{}, Slots: []string{"holder"}, Template: "Another cyfr command holds this home (`{holder}`). Nothing was changed. Wait until it has finished, then run this command again."},
 			{Fixed: map[string]string{}, Slots: []string{"join_id", "until"}, Template: "A tailnet join (`{join_id}`) is still waiting for this machine's approval, until `{until}` at the latest. Nothing was changed. Approve the machine with the link that join printed, or wait until then, and run this command again."},
 		},
 	},

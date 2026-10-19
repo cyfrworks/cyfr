@@ -1172,7 +1172,15 @@ defmodule Prima.Refusal do
             "latest). Nothing was changed. Wait until it has finished, then run this command " <>
             "again; if the holder was interrupted, run `cyfr reach --resume` after that time."}
 
-  # The holder itself, before any docker command of its has started.
+  # The holder itself, between its docker commands, named with its pid
+  # where its record or the kernel's lock table gives one.
+  defp row({:reach_busy, %{holder: holder} = payload})
+       when map_size(payload) == 1 and is_binary(holder),
+       do:
+         {:conflict,
+          "Another cyfr command holds this home (`#{holder}`). Nothing was changed. Wait " <>
+            "until it has finished, then run this command again."}
+
   defp row({:reach_busy, %{holder: holder, pid: pid} = payload})
        when map_size(payload) == 2 and is_binary(holder) and is_binary(pid),
        do:
