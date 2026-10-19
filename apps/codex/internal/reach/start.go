@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -52,6 +53,9 @@ func (e *Engine) startHead(ctx context.Context, h Head, j *journal, full bool, h
 	if err != nil {
 		return started{why: err.Error(), content: content}
 	}
+	if why := e.removeUnselected(ctx, c, h); why != "" {
+		return started{why: why, content: content}
+	}
 	first := []string{"up", "-d", "--no-deps", cyfrService}
 	if full {
 		first = append([]string{"up", "-d"}, otherServices(c, h)...)
@@ -73,9 +77,10 @@ func (e *Engine) startHead(ctx context.Context, h Head, j *journal, full bool, h
 			return started{why: err.Error(), content: content}
 		}
 		if ref != nil {
-			if ref.Code == "tailnet_not_joined" {
+			if rec, _ := e.readJoin(); ref.Code == "tailnet_not_joined" && rec != nil && (rec.State == "joined" || rec.State == "https_off") {
 				// The state holds no machine: the join record names
-				// one that is gone, and must not be offered again.
+				// one that is gone, and must not be offered again. An
+				// attempt in progress is never this record.
 				e.removeDurable(e.path(joinFile))
 			}
 			return started{local: ref, content: content}
@@ -85,6 +90,29 @@ func (e *Engine) startHead(ctx context.Context, h Head, j *journal, full bool, h
 		}
 	}
 	return started{ok: true, content: content}
+}
+
+// removeUnselected stops and removes, verified, every running reach
+// service h does not select, a proxy another head left: h's home is
+// reached only as h says.
+func (e *Engine) removeUnselected(ctx context.Context, c config, h Head) string {
+	every, err := e.everyReachService(ctx)
+	if err != nil {
+		return err.Error()
+	}
+	selected := reachServices(c, h)
+	unselected := slices.DeleteFunc(every, func(s string) bool { return slices.Contains(selected, s) })
+	cs, err := e.observe(ctx)
+	if err != nil {
+		return err.Error()
+	}
+	if !slices.ContainsFunc(cs, func(c Container) bool { return slices.Contains(unselected, c.Service) && running(c.State) }) {
+		return ""
+	}
+	if s := e.stopAndVerify(ctx, unselected); !s.ok {
+		return "a reach service this home does not select is still running (" + observedText(s.observed) + "): " + s.why
+	}
+	return ""
 }
 
 // compose runs a compose command of h on its materialized file,

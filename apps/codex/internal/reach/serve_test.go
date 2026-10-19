@@ -219,17 +219,7 @@ func TestEveryStartPathStartsLocalOnAMismatch(t *testing.T) {
 			t.Error("the old head was started again")
 		}
 	})
-	t.Run("rollback", func(t *testing.T) {
-		h := newHome(t)
-		h.fake.startStack(t, h.head())
-		h.toTailnet(1, testKey, false)
-		old := h.head()
-		r := h.request(id(3), publicTarget, "")
-		h.fake.st.Volumes[stateVolume].Name = "renamed.tail1234.ts.net"
-		unhealthyWhen(h, "CYFR_REACH=public")
-		rc, err := h.e.Switch(bg, r)
-		assertLocal(t, h, rc, err, old)
-	})
+
 	t.Run("recovery", func(t *testing.T) {
 		h := newHome(t)
 		h.fake.startStack(t, h.head())
@@ -299,5 +289,56 @@ func TestTailnetPreviewTakesTheMachineTheHomeHas(t *testing.T) {
 	p := h.preview(Target{Mode: ModeTailnet}, "")
 	if p.Old.Host != "cyfr.tail1234.ts.net" || p.New.Host != "renamed.tail1234.ts.net" {
 		t.Errorf("the renamed machine previews %s → %s", p.Old.Host, p.New.Host)
+	}
+}
+
+// rolledBackLocal is the sentence of a rollback whose old tailnet head
+// answers on this machine only, its machine another than .env's.
+const rolledBackLocalSentence = "This home could not start as anyone on the internet, who still has to sign in, at https://home.example.com (cyfr's health check failed). What it started was stopped and checked stopped, and the home was put back as before, your devices on Tailscale, and people you share this machine with, at https://cyfr.tail1234.ts.net, but it answers on this machine only, because this machine's tailnet identity is not the one .env names. Fix what the reason names, then run the command again; run `cyfr reach tailnet`, which offers to move the home to the machine's tailnet name."
+
+// A switch that fails and rolls back to a head that answers on this
+// machine only is still a rollback: Outcome rolled_back, the change, its
+// reason and why the old head serves locally in one sentence, the old
+// head final, Serve closed and cyfr running. The same when recovery
+// finishes a rollback a kill interrupted.
+func TestRollbackToAHeadServedLocallyIsARollback(t *testing.T) {
+	for path, kill := range map[string]string{"switch": "", "recovery": "env:rollback"} {
+		t.Run(path, func(t *testing.T) {
+			h := newHome(t)
+			h.fake.startStack(t, h.head())
+			h.toTailnet(1, testKey, false)
+			old := h.head()
+			r := h.request(id(3), publicTarget, "")
+			h.fake.st.Volumes[stateVolume].Name = "renamed.tail1234.ts.net"
+			unhealthyWhen(h, "CYFR_REACH=public")
+			var rc Receipt
+			var err error
+			if kill == "" {
+				rc, err = h.e.Switch(bg, r)
+			} else {
+				h.killAt(kill, func(e *Engine) { e.Switch(bg, r) })
+				unhealthyWhen(h, "CYFR_REACH=public")
+				receipts, rerr := h.e.Resume(bg)
+				if rerr != nil || len(receipts) != 1 {
+					t.Fatalf("resume answered %+v, %v", receipts, rerr)
+				}
+				rc, err = receipts[0], receipts[0].Refusal()
+			}
+			if refusalCode(err) != "reach_rolled_back" || rc.State != "completed" || rc.Outcome != "rolled_back" || rc.Payload["local"] != "tailnet_node_mismatch" || rc.Payload["reason"] != "cyfr's health check failed" {
+				t.Fatalf("answered %+v, %v", rc, err)
+			}
+			if got := rc.Refusal().Message(); got != rolledBackLocalSentence {
+				t.Errorf("the sentence reads %q", got)
+			}
+			if rc.FinalHead == nil || rc.FinalHead.Digest() != old.Digest() || h.head().Digest() != old.Digest() {
+				t.Errorf("the final head is %+v", rc.FinalHead)
+			}
+			if got, _ := os.ReadFile(h.e.servePath()); string(got) != serveClosed {
+				t.Errorf("Serve's configuration is %s", got)
+			}
+			if !slices.Contains(h.fake.runningServices(), "cyfr") {
+				t.Error("cyfr does not run")
+			}
+		})
 	}
 }

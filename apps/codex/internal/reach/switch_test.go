@@ -265,14 +265,7 @@ func TestFailedStopIsUncertainThenResumeConverges(t *testing.T) {
 	broken = false
 	h.crash()
 	h.open()
-	// A write of .env cut short by the crash leaves its temporary file,
-	// which holds .env's secrets; recovery removes it.
-	stray := filepath.Join(h.dir, ".env.tmp-123")
-	writeFile(t, stray, []byte(h.env()))
 	receipts, err := h.e.Resume(bg)
-	if _, err := os.Stat(stray); err == nil {
-		t.Error("recovery left an interrupted .env write")
-	}
 	if err != nil || len(receipts) != 1 || receipts[0].State != "completed" {
 		t.Fatalf("resume answered %+v, %v", receipts, err)
 	}

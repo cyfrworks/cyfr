@@ -132,3 +132,46 @@ func asRefusal(err error, r **Refusal) bool {
 	}
 	return ok
 }
+
+// ReadEnvValues reads a .env as compose does: the export and colon forms,
+// quoting, and a later assignment overriding an earlier one.
+func TestReadEnvValues(t *testing.T) {
+	path := filepath.Join(t.TempDir(), ".env")
+	writeFile(t, path, []byte("CYFR_PORT=4000\nexport CYFR_HOST = home.example.com\nCYFR_REACH: public\nCYFR_PUBLIC_URL=\"https://home.example.com\"\nCYFR_PORT=4100 # later\n"))
+	got, err := ReadEnvValues(path)
+	want := map[string]string{"CYFR_PORT": "4100", "CYFR_HOST": "home.example.com", "CYFR_REACH": "public", "CYFR_PUBLIC_URL": "https://home.example.com"}
+	if err != nil || !maps.Equal(got, want) {
+		t.Errorf("ReadEnvValues = %v, %v\nwant %v", got, err, want)
+	}
+	if _, err := ReadEnvValues(filepath.Join(t.TempDir(), "none")); err == nil {
+		t.Error("a missing file reads")
+	}
+}
+
+// CheckEnvFile refuses what the engine would before anything starts: a
+// COMPOSE_* setting in any form first, then the head's boot refusal, a
+// later assignment deciding it; a coherent home's .env passes.
+func TestCheckEnvFile(t *testing.T) {
+	base := string(repoFile(t, ".env.example"))
+	for _, c := range []struct {
+		name, extra, code, sentence string
+	}{
+		{"coherent", "", "", ""},
+		{"colon form", "COMPOSE_PROFILES: public\n", "compose_env_refused", "`.env` sets `COMPOSE_PROFILES`, which Docker Compose would read to choose this stack's files, project or services behind cyfr's back. Nothing started. Remove it; cyfr chooses them from CYFR_REACH and CYFR_LOCUS_BUILDS_URL."},
+		{"export form", "export COMPOSE_FILE=x.yml\nCYFR_REACH=sideways\n", "compose_env_refused", ""},
+		{"later assignment", "CYFR_REACH=sideways\n", "reach_unknown_mode", "CYFR_REACH is `sideways`; it must be `local`, `tailnet` or `public`. Run `cyfr reach <mode>` to set it with the address it implies."},
+		{"later assignment restores", "CYFR_REACH=sideways\nCYFR_REACH=local\n", "", ""},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), ".env")
+			writeFile(t, path, []byte(base+c.extra))
+			err := CheckEnvFile(path)
+			if refusalCode(err) != c.code || (c.code == "") != (err == nil) {
+				t.Fatalf("CheckEnvFile answered %v, want %s", err, c.code)
+			}
+			if c.sentence != "" && err.(*Refusal).Message() != c.sentence {
+				t.Errorf("the sentence reads %q", err.(*Refusal).Message())
+			}
+		})
+	}
+}

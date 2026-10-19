@@ -86,6 +86,9 @@ func (e *Engine) recoverSwitch(ctx context.Context, j *journal) (Receipt, error)
 			}
 		}
 	}
+	if names, err := e.everyReachService(ctx); err == nil {
+		services = union(services, names)
+	}
 	j.Services = union(services, []string{cyfrService})
 	if s := e.stopAndVerify(ctx, j.Services); !s.ok {
 		return e.uncertain(j, s)
@@ -149,6 +152,8 @@ func (e *Engine) recoverOld(ctx context.Context, j *journal) (Receipt, error) {
 	switch {
 	case s.ok:
 		return e.finishAnswer(j, notApplied)
+	case s.local != nil && j.Reason != "":
+		return e.finishAnswer(j, e.completed(j, "rolled_back", rolledBackLocal(j, j.Reason, s.local), j.OldHead))
 	case s.local != nil:
 		return e.finishAnswer(j, e.completed(j, "started_local", s.local, j.OldHead))
 	}
