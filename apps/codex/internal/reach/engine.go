@@ -5,14 +5,13 @@ package reach
 
 import (
 	"context"
-	"errors"
+	"fmt"
 	"io"
 	"os"
+	"path/filepath"
+	"sync"
 	"time"
 )
-
-// errNotBuilt marks the engine API before its implementation lands.
-var errNotBuilt = errors.New("reach: the engine is not built yet")
 
 // The deadlines of the engine's own docker calls. The watchdog kills a call
 // at its deadline, so an orphaned call holds the lock no longer than this.
@@ -59,13 +58,46 @@ type Engine struct {
 	dir    string
 	docker Docker
 	lock   *os.File
+
+	project string
+	// mu guards lock, holder and files, which a docker call reads while
+	// another goroutine of the same command may run one.
+	mu     sync.Mutex
+	holder holderRecord
+	// files are the materialized configurations this engine wrote and
+	// has not removed, relative to the project directory, each with the
+	// stamp of the sources it was read from.
+	files map[string]string
+
+	// Test seams: the clock, a write's failure at one of its steps, and a
+	// named point of an operation.
+	clock     clock
+	failWrite func(name, step string) error
+	hook      func(point string)
 }
 
 // Open opens the engine of the project at projectDir, running docker
 // through d, or through the system implementation when d is nil. It
 // refuses a .env that sets any COMPOSE_* key (compose_env_refused) before
 // anything else reads it.
-func Open(projectDir string, d Docker) (*Engine, error) { return nil, errNotBuilt }
+func Open(projectDir string, d Docker) (*Engine, error) {
+	dir, err := filepath.Abs(projectDir)
+	if err != nil {
+		return nil, fmt.Errorf("reach: %w", err)
+	}
+	e := &Engine{dir: dir, project: projectName(dir), files: map[string]string{}}
+	if e.project == "" {
+		return nil, fmt.Errorf("reach: %s has no name docker compose can take as its project's", dir)
+	}
+	e.docker = d
+	if d == nil {
+		e.docker = newSystemDocker(e)
+	}
+	if _, err := e.readEnv(); err != nil {
+		return nil, err
+	}
+	return e, nil
+}
 
 // ErrBusy is the lock's refusal while another holder has it: the holder
 // record it wrote (command, host or container, pid in its namespace, start
@@ -81,13 +113,13 @@ type ErrBusy struct {
 func (e *ErrBusy) Error() string { return "reach: " + e.Refusal().Error() }
 
 // Refusal is the lock's refusal as the CLI prints it.
-func (e *ErrBusy) Refusal() *Refusal { return nil }
+func (e *ErrBusy) Refusal() *Refusal { return e.refusal() }
 
 // Lock takes the project's kernel lock on .cyfr/lock without waiting and
 // durably writes the holder record, naming holder (the command). It
 // answers the function that releases it, or *ErrBusy. Every method below
 // but Status, Preview and Receipt requires the lock held by this engine.
-func (e *Engine) Lock(holder string) (unlock func(), err error) { return nil, errNotBuilt }
+func (e *Engine) Lock(holder string) (unlock func(), err error) { return e.lockProject(holder) }
 
 // Docker is the engine's docker runner, for a command that holds the lock
 // and makes docker calls of its own (update's snapshot and pulls,
@@ -102,12 +134,15 @@ func (e *Engine) Docker() Docker { return e.docker }
 // the sanitized environment and h's selection), and every later call runs
 // on that file.
 func (e *Engine) ComposeArgs(ctx context.Context, h Head, args ...string) ([]string, error) {
-	return nil, errNotBuilt
+	if err := e.requireLock(); err != nil {
+		return nil, err
+	}
+	return e.composeArgsFor(ctx, h, args...)
 }
 
 // Head is the head .env holds now, or the boot refusal that says why it
 // holds none (ResolveBoot with .env's own read, Release true).
-func (e *Engine) Head() (Head, error) { return Head{}, errNotBuilt }
+func (e *Engine) Head() (Head, error) { return e.envHead() }
 
 // CheckStack checks what `docker compose config` resolves for the stack
 // before anything starts: no reach key is assigned in the cyfr service's
@@ -115,7 +150,7 @@ func (e *Engine) Head() (Head, error) { return Head{}, errNotBuilt }
 // its override, every include: and extends:), .env reaches cyfr through
 // its env_file, and the effective values pass ResolveBoot with .env's own
 // read as File and the flattened environment as Process.
-func (e *Engine) CheckStack(ctx context.Context) error { return errNotBuilt }
+func (e *Engine) CheckStack(ctx context.Context) error { return e.checkStack(ctx) }
 
 // Receipt is an operation's answer: rejected (Code says why, nothing
 // changed), accepted in Phase (in progress; "uncertain" is still unfinished
@@ -137,14 +172,19 @@ type Receipt struct {
 }
 
 // Refusal is the code a receipt answers with, nil for a plain success.
-func (r Receipt) Refusal() *Refusal { return nil }
+func (r Receipt) Refusal() *Refusal {
+	if r.Code == "" {
+		return nil
+	}
+	return Refuse(r.Code, r.Payload)
+}
 
 // Resume runs recovery under the lock: an unfinished operation in
 // journal.json is stopped and verified, then finished by comparing .env's
 // head with its two heads; a join container past its deadline is removed
 // and its attempt expired; an accepted cancel is completed. It answers the
 // receipts recovery wrote, none when nothing was unfinished.
-func (e *Engine) Resume(ctx context.Context) ([]Receipt, error) { return nil, errNotBuilt }
+func (e *Engine) Resume(ctx context.Context) ([]Receipt, error) { return e.resume(ctx) }
 
 // Container is one container of the project, as docker reports it by the
 // project's compose label.
@@ -168,7 +208,7 @@ type Status struct {
 }
 
 // Status reads without the lock and changes nothing.
-func (e *Engine) Status(ctx context.Context) (Status, error) { return Status{}, errNotBuilt }
+func (e *Engine) Status(ctx context.Context) (Status, error) { return e.status(ctx) }
 
 // Preview is a change shown before it is made: both complete heads, their
 // digests and words, and what stops working when the address changes.
@@ -185,7 +225,7 @@ type Preview struct {
 // same, and with tailnet_active when t asks to join while the head's node
 // is serving.
 func (e *Engine) Preview(ctx context.Context, t Target, joinID string) (Preview, error) {
-	return Preview{}, errNotBuilt
+	return e.preview(ctx, t, joinID)
 }
 
 // SwitchRequest is a switch: its request id, the target, the join whose
@@ -204,7 +244,7 @@ type SwitchRequest struct {
 // on a failed start. The receipt is its outcome; resending the same id
 // answers the same receipt.
 func (e *Engine) Switch(ctx context.Context, r SwitchRequest) (Receipt, error) {
-	return Receipt{}, errNotBuilt
+	return e.doSwitch(ctx, r)
 }
 
 // JoinRequest is a tailnet join: its request id, the machine name asked
@@ -225,7 +265,7 @@ type JoinRequest struct {
 // receipt's payload names the frozen name, node id and join id),
 // tailnet_https_off, tailnet_join_expired or tailnet_join_cancelled.
 func (e *Engine) Join(ctx context.Context, r JoinRequest) (Receipt, error) {
-	return Receipt{}, errNotBuilt
+	return e.doJoin(ctx, r)
 }
 
 // CancelRequest cancels the waiting join JoinID.
@@ -237,16 +277,16 @@ type CancelRequest struct {
 // CancelJoin cancels the current waiting join; any other answers
 // tailnet_join_not_current.
 func (e *Engine) CancelJoin(ctx context.Context, r CancelRequest) (Receipt, error) {
-	return Receipt{}, errNotBuilt
+	return e.doCancelJoin(ctx, r)
 }
 
 // CancelWaitingJoin cancels whatever join waits, for update and restore
 // before they stop the stack.
-func (e *Engine) CancelWaitingJoin(ctx context.Context) error { return errNotBuilt }
+func (e *Engine) CancelWaitingJoin(ctx context.Context) error { return e.cancelWaitingJoin(ctx) }
 
 // ForgetJoin removes join.json, for restore after its recovery: the
 // snapshot's head names its own node.
-func (e *Engine) ForgetJoin() error { return errNotBuilt }
+func (e *Engine) ForgetJoin() error { return e.forgetJoin() }
 
 // Start is the one start path (up, update, restore; cause names it): it
 // checks the stack (CheckStack), writes Serve's empty configuration,
@@ -254,7 +294,7 @@ func (e *Engine) ForgetJoin() error { return errNotBuilt }
 // against the head before Serve opens (tailnet_node_mismatch leaves Serve
 // closed and cyfr running), and waits for cyfr's health.
 func (e *Engine) Start(ctx context.Context, cause string) (Receipt, error) {
-	return Receipt{}, errNotBuilt
+	return e.doStart(ctx, cause)
 }
 
 // Stop stops and verifies cyfr and every reach service of .env's head and
@@ -263,15 +303,24 @@ func (e *Engine) Start(ctx context.Context, cause string) (Receipt, error) {
 // down`). A stop that cannot be verified answers reach_uncertain with what
 // was observed.
 func (e *Engine) Stop(ctx context.Context, cause string, all bool) (Receipt, error) {
-	return Receipt{}, errNotBuilt
+	return e.doStop(ctx, cause, all)
 }
 
 // Receipt answers the receipt or the unfinished journal entry of request
 // id, reading without the lock.
-func (e *Engine) Receipt(id string) (Receipt, bool, error) { return Receipt{}, false, errNotBuilt }
+func (e *Engine) Receipt(id string) (Receipt, bool, error) { return e.receiptOf(id) }
 
 // WatchdogMain is `cyfr internal docker-run`: it runs the docker command
 // its arguments name, holding the lock descriptor it inherited, and kills
 // it at the deadline its arguments name. It answers the process's exit
 // status.
-func WatchdogMain(args []string, stdin io.Reader, stdout, stderr io.Writer) int { return 2 }
+func WatchdogMain(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
+	return watchdogMain(args, stdin, stdout, stderr)
+}
+
+// lockFile is the lock's descriptor while this engine holds it.
+func (e *Engine) lockFile() *os.File {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.lock
+}

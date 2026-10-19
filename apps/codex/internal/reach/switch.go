@@ -1,0 +1,468 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 CYFR Works Inc.
+
+package reach
+
+import (
+	"context"
+	"errors"
+	"os"
+	"path/filepath"
+	"slices"
+	"strconv"
+	"strings"
+)
+
+// IdentityUnchanged closes the list of what changes with the address.
+const IdentityUnchanged = "Your CYFR identity does not change."
+
+// addressChanges is what stops working when the home's address changes,
+// shown before the change is made.
+var addressChanges = []string{
+	"Passkeys made at the old address stop working. Each person registers one at the new address, which an administrator authorizes as today.",
+	"Pair every device again.",
+	"Update the redirect address in OAuth apps you registered (vault credentials, an OIDC issuer), the URL your webhook senders call, CLI contexts and MCP clients.",
+	"Other homes and devices that saved the old address need the new one.",
+}
+
+// envState is .env as an operation reads it: the head it holds, or the
+// boot refusal that says why it holds none, and what a new head keeps of
+// it.
+type envState struct {
+	env     *dotenv
+	head    Head
+	headErr error
+	cur     Current
+	curErr  *Refusal
+}
+
+func (e *Engine) readState() (envState, error) {
+	env, err := e.readEnv()
+	if err != nil {
+		return envState{}, err
+	}
+	st := envState{env: env}
+	values := map[string]string{}
+	if env != nil {
+		values = env.values()
+	}
+	st.head, st.headErr = headOf(values)
+	st.cur.BuildsURL = strings.TrimSpace(values["CYFR_LOCUS_BUILDS_URL"])
+	switch port := strings.TrimSpace(values["CYFR_PORT"]); {
+	case st.headErr == nil:
+		st.cur.Port = st.head.Port
+	case port == "":
+		st.cur.Port = 4000
+	default:
+		if n, err := strconv.Atoi(port); err == nil && digits.MatchString(port) && n >= 1 && n <= 65535 {
+			st.cur.Port = n
+		} else {
+			st.curErr = settingInvalid("CYFR_PORT", port)
+		}
+	}
+	return st, nil
+}
+
+// headOf is the head a .env's own read holds, as a release would boot it.
+func headOf(values map[string]string) (Head, error) {
+	b, err := ResolveBoot(BootInput{File: values, Process: values, Release: true})
+	if err != nil {
+		return Head{}, err
+	}
+	return b.Head, nil
+}
+
+func (e *Engine) envHead() (Head, error) {
+	st, err := e.readState()
+	if err != nil {
+		return Head{}, err
+	}
+	return st.head, st.headErr
+}
+
+// digest is .env's head's digest, "" when it holds none.
+func (st envState) digest() string {
+	if st.headErr != nil {
+		return ""
+	}
+	return st.head.Digest()
+}
+
+// words is how .env's head reads, or the refusal that says it holds
+// none.
+func (st envState) words() string {
+	if st.headErr != nil {
+		var r *Refusal
+		if errors.As(st.headErr, &r) {
+			return r.Message()
+		}
+		return st.headErr.Error()
+	}
+	return wordsText(Describe(st.head))
+}
+
+// heldKeys are .env's head keys now, "" for each it does not assign.
+func (st envState) heldKeys() map[string]string {
+	if st.env == nil {
+		return keysOf(Head{})
+	}
+	return st.env.heldKeys()
+}
+
+// wordsText is a head's words in one line, as a refusal names it.
+func wordsText(w Words) string {
+	text := w.Who + ", at " + w.Address
+	if w.CertificateEmail != "none" {
+		text += ", certificate email " + w.CertificateEmail
+	}
+	return text
+}
+
+// tailnetActive reports whether .env's head is tailnet and its machine is
+// served: Serve open, which only a validated start writes, and the
+// tailscale service running.
+func (e *Engine) tailnetActive(ctx context.Context, st envState) bool {
+	if st.headErr != nil || st.head.Mode != ModeTailnet || !e.serveIsOpen() {
+		return false
+	}
+	cs, err := e.observe(ctx)
+	return err == nil && slices.ContainsFunc(cs, func(c Container) bool { return c.Service == serveService && running(c.State) })
+}
+
+func (e *Engine) preview(ctx context.Context, t Target, joinID string) (Preview, error) {
+	st, err := e.readState()
+	if err != nil {
+		return Preview{}, err
+	}
+	if t.Mode == ModeTailnet && joinID == "" && e.tailnetActive(ctx, st) {
+		return Preview{}, Refuse("tailnet_active", map[string]string{"name": st.head.Host})
+	}
+	d, err := e.derive(st, t, joinID)
+	if err != nil {
+		return Preview{}, err
+	}
+	p := Preview{New: d.Head, NewDigest: d.Head.Digest(), NewWords: Describe(d.Head), OldDigest: st.digest()}
+	if st.headErr == nil {
+		p.Old, p.OldWords = st.head, Describe(st.head)
+		if p.OldDigest == p.NewDigest {
+			return Preview{}, Refuse("reach_unchanged", map[string]string{"address": st.head.origin()})
+		}
+	}
+	if st.headErr != nil || st.head.origin() != d.Head.origin() {
+		p.AddressChanges = slices.Clone(addressChanges)
+	}
+	return p, nil
+}
+
+// derive is the head t makes from .env's settings and, for tailnet, the
+// join joinID completed.
+func (e *Engine) derive(st envState, t Target, joinID string) (Derivation, error) {
+	if st.curErr != nil {
+		return Derivation{}, st.curErr
+	}
+	var join *Join
+	if t.Mode == ModeTailnet && joinID != "" {
+		rec, err := e.readJoin()
+		if err != nil {
+			return Derivation{}, err
+		}
+		if rec == nil || rec.JoinID != joinID {
+			return Derivation{}, Refuse("tailnet_join_not_current", nil)
+		}
+		if ref := rec.refusal(); ref != nil {
+			return Derivation{}, ref
+		}
+		join = &Join{Name: rec.Name, NodeID: rec.NodeID}
+	}
+	return Derive(t, st.cur, join)
+}
+
+func switchDigest(r SwitchRequest) string {
+	return requestDigest(map[string]any{
+		"op": "switch", "mode": r.Target.Mode, "domain": r.Target.Domain, "acme_email": r.Target.ACMEEmail,
+		"join_id": r.JoinID, "old_digest": r.OldDigest, "new_digest": r.NewDigest,
+	})
+}
+
+func (e *Engine) doSwitch(ctx context.Context, r SwitchRequest) (Receipt, error) {
+	if err := e.requireLock(); err != nil {
+		return Receipt{}, err
+	}
+	digest := switchDigest(r)
+	if rc, ok, err := e.lookup(r.ID, digest); err != nil || ok {
+		if err != nil {
+			return Receipt{}, err
+		}
+		return answer(rc)
+	}
+	if rc, blocked, err := e.blocked(r.ID, digest, "switch"); blocked || err != nil {
+		return rc, err
+	}
+	refuse := func(err error) (Receipt, error) {
+		var ref *Refusal
+		if errors.As(err, &ref) {
+			return e.reject(r.ID, digest, "switch", ref)
+		}
+		return Receipt{}, err
+	}
+	st, err := e.readState()
+	if err != nil {
+		return refuse(err)
+	}
+	if r.Target.Mode == ModeTailnet {
+		if ref, err := e.nameChanged(ctx, r.JoinID); err != nil || ref != nil {
+			if err != nil {
+				return Receipt{}, err
+			}
+			return refuse(ref)
+		}
+	}
+	d, err := e.derive(st, r.Target, r.JoinID)
+	if err != nil {
+		return refuse(err)
+	}
+	if st.digest() != r.OldDigest || d.Head.Digest() != r.NewDigest {
+		return refuse(Refuse("reach_stale", map[string]string{"words": st.words()}))
+	}
+	if st.headErr == nil && st.head.Digest() == d.Head.Digest() {
+		return refuse(Refuse("reach_unchanged", map[string]string{"address": st.head.origin()}))
+	}
+	cs, err := e.observe(ctx)
+	var js []joinContainer
+	if err == nil {
+		js, err = e.observeJoins(ctx)
+	}
+	if err != nil {
+		return refuse(Refuse("docker_unavailable", map[string]string{"reason": err.Error()}))
+	}
+
+	j := &journal{
+		Op: "switch", RequestID: r.ID, RequestDigest: digest,
+		NewHead: &d.Head, OldKeys: st.heldKeys(), NewKeys: keysOf(d.Head),
+		Running: cyfrRunning(cs), Services: []string{cyfrService},
+	}
+	if st.headErr == nil {
+		j.OldHead = &st.head
+	}
+	if anyRunning(cs, js) {
+		// Both heads' reach services, named from their profiles: a
+		// stopped stack needs none, and makes no compose call.
+		if err := e.checkProvenance(); err != nil {
+			return Receipt{}, err
+		}
+		for _, h := range []*Head{j.OldHead, j.NewHead} {
+			if h == nil {
+				continue
+			}
+			names, err := e.servicesOf(ctx, *h, nil)
+			if err != nil {
+				return refuse(Refuse("docker_unavailable", map[string]string{"reason": err.Error()}))
+			}
+			j.Services = union(j.Services, names)
+		}
+	}
+	if err := e.setPhase(j, "accepted"); err != nil {
+		return e.outcomeUnknown(j, err)
+	}
+	return e.runSwitch(context.WithoutCancel(ctx), j)
+}
+
+// runSwitch carries an accepted switch through: stop and verify, commit
+// .env, start what was running.
+func (e *Engine) runSwitch(ctx context.Context, j *journal) (Receipt, error) {
+	if s := e.stopAndVerify(ctx, j.Services); !s.ok {
+		return e.uncertain(j, s)
+	}
+	if err := e.setPhase(j, "stopped"); err != nil {
+		return e.outcomeUnknown(j, err)
+	}
+	if err := e.writeEnvKeys(j.NewKeys); err != nil {
+		return e.outcomeUnknown(j, err)
+	}
+	e.reached("env:commit")
+	if err := e.setPhase(j, "committed"); err != nil {
+		return e.outcomeUnknown(j, err)
+	}
+	return e.startTarget(ctx, j)
+}
+
+// startTarget starts the committed head if the stack was running, and
+// rolls back when it cannot.
+func (e *Engine) startTarget(ctx context.Context, j *journal) (Receipt, error) {
+	done := Receipt{RequestID: j.RequestID, RequestDigest: j.RequestDigest, Op: j.Op, State: "completed", Outcome: "ok", FinalHead: j.NewHead}
+	if !j.Running {
+		return e.finishAnswer(j, done)
+	}
+	s := e.startHead(ctx, *j.NewHead, j, false)
+	if s.ok {
+		return e.finishAnswer(j, done)
+	}
+	why := s.why
+	if s.mismatch != nil {
+		why = s.mismatch.Message()
+	}
+	return e.rollback(ctx, j, why, s.content)
+}
+
+// rollback stops and verifies everything the target started, its proxy
+// and cyfr included; only then does .env get the old head back, and the
+// old head start. A stop that cannot be verified starts nothing and
+// leaves the journal unfinished.
+func (e *Engine) rollback(ctx context.Context, j *journal, why string, content []byte) (Receipt, error) {
+	j.Reason = why
+	if content != nil {
+		if c, err := parseConfig(content); err == nil {
+			j.Services = union(j.Services, reachServices(c, *j.NewHead))
+		}
+	}
+	if err := e.setPhase(j, "rolling_back"); err != nil {
+		return e.outcomeUnknown(j, err)
+	}
+	if s := e.stopAndVerify(ctx, j.Services); !s.ok {
+		return e.uncertain(j, s)
+	}
+	if err := e.writeEnvKeys(j.OldKeys); err != nil {
+		return e.outcomeUnknown(j, err)
+	}
+	e.reached("env:rollback")
+	if err := e.setPhase(j, "restored"); err != nil {
+		return e.outcomeUnknown(j, err)
+	}
+	newWords := wordsText(Describe(*j.NewHead))
+	if j.OldHead == nil {
+		st, _ := e.readState()
+		return e.finishAnswer(j, e.failed(j, map[string]string{"new": newWords, "env": st.words()}))
+	}
+	oldWords := wordsText(Describe(*j.OldHead))
+	s := e.startHead(ctx, *j.OldHead, j, false)
+	switch {
+	case s.ok:
+		return e.finishAnswer(j, e.completed(j, "rolled_back", Refuse("reach_rolled_back", map[string]string{"new": newWords, "old": oldWords, "reason": why}), j.OldHead))
+	case s.mismatch != nil:
+		return e.finishAnswer(j, e.completed(j, "rolled_back", s.mismatch, j.OldHead))
+	}
+	if s := e.stopAndVerify(ctx, j.Services); !s.ok {
+		return e.uncertain(j, s)
+	}
+	return e.finishAnswer(j, e.failed(j, map[string]string{"new": newWords, "env": oldWords}))
+}
+
+func (e *Engine) completed(j *journal, outcome string, ref *Refusal, final *Head) Receipt {
+	r := Receipt{RequestID: j.RequestID, RequestDigest: j.RequestDigest, Op: j.Op, State: "completed", Outcome: outcome, FinalHead: final}
+	if ref != nil {
+		r.Code, r.Payload = ref.Code, ref.Payload
+	}
+	return r
+}
+
+// failed is a switch that ended with nothing running: reach_failed.
+func (e *Engine) failed(j *journal, payload map[string]string) Receipt {
+	return e.completed(j, "failed", Refuse("reach_failed", payload), nil)
+}
+
+func (e *Engine) finishAnswer(j *journal, r Receipt) (Receipt, error) {
+	r, err := e.finish(j, r)
+	if err != nil {
+		return e.outcomeUnknown(j, err)
+	}
+	return answer(r)
+}
+
+// uncertain leaves the operation unfinished in phase uncertain, with what
+// its stop and verify saw: nothing more is started, and Resume retries.
+func (e *Engine) uncertain(j *journal, s stopped) (Receipt, error) {
+	j.Observed, j.Why = s.observed, s.why
+	if err := e.setPhase(j, "uncertain"); err != nil {
+		return e.outcomeUnknown(j, err)
+	}
+	return answer(j.receipt())
+}
+
+// outcomeUnknown answers an operation that lost track of itself after
+// its acceptance: its journal stands as far as it was written, and
+// Resume finishes it.
+func (e *Engine) outcomeUnknown(j *journal, err error) (Receipt, error) {
+	r := j.receipt()
+	if r.Code == "" {
+		r.Code, r.Payload = "reach_outcome_unknown", map[string]string{"reason": err.Error()}
+	}
+	return answer(r)
+}
+
+// blocked answers a mutating method while the journal holds another
+// operation: an uncertain one with its receipt, a waiting join with
+// reach_busy naming it, anything else as unfinished.
+func (e *Engine) blocked(id, digest, op string) (Receipt, bool, error) {
+	j, err := e.readJournal()
+	if err != nil || j == nil {
+		return Receipt{}, false, err
+	}
+	switch {
+	case j.Phase == "uncertain":
+		rc, err := answer(j.receipt())
+		return rc, true, err
+	case j.Op == "join" && j.Join != nil && j.Join.State == "waiting":
+		rc, err := e.reject(id, digest, op, Refuse("reach_busy", map[string]string{
+			"holder": "the tailnet join " + j.Join.JoinID + ", waiting for its approval",
+			"pid":    "none",
+			"until":  j.Join.Deadline.UTC().Format("2006-01-02T15:04:05Z07:00"),
+		}))
+		return rc, true, err
+	}
+	rc, err := answer(Receipt{RequestID: id, RequestDigest: digest, Op: op, State: "rejected", Code: "reach_outcome_unknown",
+		Payload: map[string]string{"reason": "the " + j.Op + " " + j.RequestID + " is unfinished"}})
+	return rc, true, err
+}
+
+// writeEnvKeys writes .env with the head keys want names, every other
+// line as it was.
+func (e *Engine) writeEnvKeys(want map[string]string) error {
+	path := e.envPath()
+	if target, err := filepath.EvalSymlinks(path); err == nil {
+		path = target
+	}
+	data, err := os.ReadFile(path)
+	if err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	return e.writeDurable(path, parseDotenv(data).withKeys(want), e.envMode())
+}
+
+// nameChanged refuses a tailnet switch whose machine is no longer the
+// one its join froze: a newer join, or the running tailscale service,
+// now names another.
+func (e *Engine) nameChanged(ctx context.Context, joinID string) (*Refusal, error) {
+	if joinID == "" {
+		return nil, nil
+	}
+	cur, err := e.readJoin()
+	if err != nil {
+		return nil, err
+	}
+	frozen := e.frozenJoin(joinID, cur)
+	if frozen == nil {
+		return nil, nil
+	}
+	now := frozen
+	if cur != nil && cur.JoinID != joinID && cur.Name != "" {
+		now = &Join{Name: cur.Name, NodeID: cur.NodeID}
+	}
+	if cs, err := e.observe(ctx); err == nil {
+		if name, ok := containerOf(cs, serveService); ok && slices.ContainsFunc(cs, func(c Container) bool { return c.Name == name && running(c.State) }) {
+			if s, ok := e.statusOnce(ctx, []string{"exec", name, "tailscale", "status", "--json"}); ok && s.BackendState == "Running" {
+				now = &Join{Name: s.name(), NodeID: s.id()}
+			}
+		}
+	}
+	if *now == *frozen {
+		return nil, nil
+	}
+	withID := now.Name == frozen.Name
+	return Refuse("tailnet_name_changed", map[string]string{"frozen": identity(frozen.Name, frozen.NodeID, withID), "now": identity(now.Name, now.NodeID, withID)}), nil
+}
+
+func union(a, b []string) []string {
+	out := slices.Concat(a, b)
+	slices.Sort(out)
+	return slices.Compact(out)
+}

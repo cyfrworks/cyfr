@@ -1,0 +1,206 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 CYFR Works Inc.
+
+package reach
+
+import (
+	"context"
+	"os"
+	"path/filepath"
+	"runtime"
+	"slices"
+	"strings"
+	"testing"
+)
+
+func TestProjectNameIsComposesDefault(t *testing.T) {
+	for dir, want := range map[string]string{
+		"/srv/home": "home", "/srv/My Home.v2": "myhomev2", "/srv/_cyfr-1": "cyfr-1", "/srv/--x_y": "x_y", "/srv/ÉtÉ": "t",
+	} {
+		if got := projectName(dir); got != want {
+			t.Errorf("projectName(%q) = %q, want %q", dir, got, want)
+		}
+	}
+}
+
+// The default file set is one main file and at most one override, and is
+// refused when compose's own choice would not be determined.
+func TestDefaultFileSetIsRefusedWhenNotDetermined(t *testing.T) {
+	h := newHome(t)
+	writeFile(t, filepath.Join(h.dir, "docker-compose.override.yml"), []byte("services: {}\n"))
+	if files, err := h.e.defaultFiles(); err != nil || !slices.Equal(files, []string{"docker-compose.yml", "docker-compose.override.yml"}) {
+		t.Errorf("the file set is %v, %v", files, err)
+	}
+	writeFile(t, filepath.Join(h.dir, "compose.override.yaml"), []byte("services: {}\n"))
+	if _, err := h.e.defaultFiles(); err == nil || !strings.Contains(err.Error(), "override files") {
+		t.Errorf("two override files answered %v", err)
+	}
+	os.Remove(filepath.Join(h.dir, "compose.override.yaml"))
+	writeFile(t, filepath.Join(h.dir, "compose.yaml"), []byte("services: {}\n"))
+	if _, err := h.e.defaultFiles(); err == nil || !strings.Contains(err.Error(), "compose.yaml and docker-compose.yml") {
+		t.Errorf("two main files answered %v", err)
+	}
+}
+
+// Materialized configurations: one per head, named by its digest, mode
+// 0600, every later compose call of the operation on exactly that file;
+// a source changed mid-operation is not read again; the journal names
+// each file before it exists; completion removes them all.
+func TestMaterializedFilesAreTheOperationsInputs(t *testing.T) {
+	h := newHome(t)
+	h.fake.startStack(t, h.head())
+	r := h.request(id(1), publicTarget, "")
+	name := resolvedName(r.NewDigest)
+	var checked bool
+	h.fake.hook = func(_ context.Context, c *fakeCall) *fakeAnswer {
+		if c.Args[0] != "compose" || !slices.Contains(c.Args, "--no-deps") || checked {
+			return nil
+		}
+		checked = true
+		info, err := os.Stat(filepath.Join(h.dir, name))
+		if err != nil || runtime.GOOS != "windows" && info.Mode().Perm() != 0o600 {
+			t.Errorf("the materialized file is %v, %v", info, err)
+		}
+		if j, _ := h.e.readJournal(); j == nil || !slices.Contains(j.Files, name) {
+			t.Errorf("the journal does not name %s: %+v", name, j)
+		}
+		// The compose file changes under the operation: the proxy's
+		// image is no longer the one checked.
+		compose := filepath.Join(h.dir, "docker-compose.yml")
+		data, _ := os.ReadFile(compose)
+		writeFile(t, compose, []byte(strings.Replace(string(data), "image: caddy:2.11-alpine", "image: evil/caddy", 1)))
+		return nil
+	}
+	if rc, err := h.e.Switch(bg, r); err != nil || rc.Outcome != "ok" {
+		t.Fatalf("switch answered %+v, %v", rc, err)
+	}
+	if !checked {
+		t.Fatal("no start ran")
+	}
+	for _, c := range h.fake.calls() {
+		if c.Args[0] == "compose" && !slices.Contains(c.Args, "config") && !slices.Contains(c.Args, name) {
+			t.Errorf("a compose call of the operation is not on %s: %s", name, c)
+		}
+	}
+	h.fake.mu.Lock()
+	image := h.fake.st.Containers["home-caddy-1"].Image
+	h.fake.mu.Unlock()
+	if !strings.HasPrefix(image, "caddy:2.11-alpine") {
+		t.Errorf("the proxy started from %q, a source changed mid-operation", image)
+	}
+	h.assertConverged(publicStack...)
+}
+
+// An interrupted operation keeps exactly the files its journal names;
+// recovery never starts from a kept file: it materializes afresh, and
+// removes them once it is done.
+func TestKeptFilesAreNeverUsedToStart(t *testing.T) {
+	h := newHome(t)
+	h.fake.startStack(t, h.head())
+	r := h.request(id(1), publicTarget, "")
+	h.killAt("journal:switch:rolling_back", func(e *Engine) {
+		unhealthyWhen(h, "CYFR_REACH=public")
+		e.Switch(bg, r)
+	})
+	h.fake.hook, h.fake.st.Health = nil, "healthy"
+	j, _ := h.e.readJournal()
+	kept := h.files(resolvedGlob)
+	var named []string
+	for _, f := range j.Files {
+		named = append(named, filepath.Base(f))
+	}
+	slices.Sort(named)
+	if !slices.Equal(kept, named) || len(kept) == 0 {
+		t.Fatalf("kept %v, the journal names %v", kept, named)
+	}
+	// A kept file tampered with: a start from it would run its image.
+	path := filepath.Join(h.dir, resolvedName(r.NewDigest))
+	data, _ := os.ReadFile(path)
+	writeFile(t, path, []byte(strings.ReplaceAll(string(data), "ghcr.io/cyfrworks/cyfr:latest", "evil/cyfr")))
+	if _, err := h.e.Resume(bg); err != nil {
+		t.Fatal(err)
+	}
+	h.fake.mu.Lock()
+	image := h.fake.st.Containers["cyfr"].Image
+	h.fake.mu.Unlock()
+	if image != "ghcr.io/cyfrworks/cyfr:latest" {
+		t.Errorf("recovery started cyfr from %q, a kept file", image)
+	}
+	h.assertConverged(publicStack...)
+}
+
+// Provenance, before anything is flattened: a head key in the cyfr
+// service's own environment: entries in any file of the source set is
+// refused naming the file, even with the value .env holds; .env must
+// reach cyfr through its env_file; reach keys through env_file alone
+// pass.
+func TestCheckStackReadsTheSourcesProvenance(t *testing.T) {
+	for _, c := range []struct {
+		name  string
+		files map[string]string
+		want  string
+	}{
+		{"shipped", nil, ""},
+		{"override", map[string]string{"docker-compose.override.yml": "services:\n  cyfr:\n    environment:\n      - CYFR_HOST=localhost\n"}, "docker-compose.override.yml sets CYFR_HOST"},
+		{"mapping form", map[string]string{"docker-compose.override.yml": "services:\n  cyfr:\n    environment:\n      CYFR_REACH: local\n"}, "docker-compose.override.yml sets CYFR_REACH"},
+		{"inherited", map[string]string{"docker-compose.override.yml": "services:\n  cyfr:\n    environment:\n      - CYFR_PORT\n"}, "sets CYFR_PORT"},
+		{"include", map[string]string{
+			"docker-compose.override.yml": "include:\n  - extra/more.yml\n",
+			"extra/more.yml":              "services:\n  cyfr:\n    environment:\n      CYFR_PUBLIC_URL: https://x.example.com\n",
+		}, "extra/more.yml sets CYFR_PUBLIC_URL"},
+		{"extends", map[string]string{
+			"docker-compose.override.yml": "services:\n  cyfr:\n    extends:\n      file: base.yml\n      service: base\n",
+			"base.yml":                    "services:\n  base:\n    environment:\n      - CYFR_TAILNET_NODE_ID=n1\n",
+		}, "base.yml sets CYFR_TAILNET_NODE_ID in the base service's environment"},
+		{"remote include", map[string]string{"docker-compose.override.yml": "include:\n  - oci://example.com/stack\n"}, "cannot check"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			h := newHome(t)
+			for name, text := range c.files {
+				os.MkdirAll(filepath.Dir(filepath.Join(h.dir, name)), 0o755)
+				writeFile(t, filepath.Join(h.dir, name), []byte(text))
+			}
+			err := h.e.CheckStack(bg)
+			if c.want == "" {
+				if err != nil {
+					t.Fatalf("the shipped stack is refused: %v", err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), c.want) {
+				t.Fatalf("CheckStack answered %v, want %q", err, c.want)
+			}
+			// Refused before any start: Start makes no compose up.
+			if _, err := h.e.Start(bg, "up"); err == nil || !strings.Contains(err.Error(), c.want) {
+				t.Errorf("start answered %v", err)
+			}
+			for _, call := range h.fake.calls() {
+				if slices.Contains(call.Args, "up") {
+					t.Errorf("a refused stack ran %s", call)
+				}
+			}
+		})
+	}
+
+	h := newHome(t)
+	compose := filepath.Join(h.dir, "docker-compose.yml")
+	data, _ := os.ReadFile(compose)
+	writeFile(t, compose, []byte(strings.Replace(string(data), "    env_file:\n      - .env\n    # Every reach", "    # Every reach", 1)))
+	if err := h.e.CheckStack(bg); err == nil || !strings.Contains(err.Error(), "env_file") {
+		t.Errorf("a cyfr service without .env in its env_file answered %v", err)
+	}
+}
+
+// The effective values are checked as the release would boot them: .env
+// against what compose gives cyfr.
+func TestCheckStackValidatesTheEffectiveValues(t *testing.T) {
+	h := newHome(t)
+	writeFile(t, filepath.Join(h.dir, ".env"), append(repoFile(t, ".env.example"), []byte("CYFR_BIND_ADDRESS=127.0.0.1\n")...))
+	if err := h.e.CheckStack(bg); refusalCode(err) != "reach_source_conflict" {
+		t.Errorf("a .env bind the compose file overrides answered %v", err)
+	}
+	writeFile(t, filepath.Join(h.dir, ".env"), append(repoFile(t, ".env.example"), []byte("CYFR_LOCAL_INGRESS_ASSERTED=true\n")...))
+	if err := h.e.CheckStack(bg); refusalCode(err) != "reach_source_conflict" && refusalCode(err) != "reach_assertion_from_file" {
+		t.Errorf("the assertion from .env answered %v", err)
+	}
+}
