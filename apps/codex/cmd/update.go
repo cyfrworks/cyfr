@@ -1816,7 +1816,7 @@ func (u *updater) stopAfterSwitch(reason error) error {
 // stop leaves it open. Serve that does not close stops nothing.
 func (u *updater) stopFailedStart(ctx context.Context) error {
 	if err := u.engine.CloseServe(ctx); err != nil {
-		return fmt.Errorf("Tailscale Serve could not be closed (%v), so the stack was not stopped", engineFailure(err))
+		return fmt.Errorf("Tailscale Serve could not be closed (%v), so nothing was stopped and the stack may still be running with Serve open", engineFailure(err))
 	}
 	if err := u.composeDocker(ctx, "stop"); err != nil {
 		return fmt.Errorf("docker compose stop failed (%v)", err)

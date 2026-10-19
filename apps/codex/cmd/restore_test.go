@@ -541,6 +541,52 @@ func TestRestoreClosesServeBeforeTheStopAfterAFailedStart(t *testing.T) {
 	}
 }
 
+// A restored stack that does not start, whose Serve then does not close,
+// is left as it is: nothing is stopped, and the restore says the stack may
+// still be running with Serve open.
+func TestRestoreStopsNothingAfterAFailedStartWhileServeDoesNotClose(t *testing.T) {
+	r := newRestoreScenario(t, shippedCompose(t), nil, nil)
+	r.answer("up.exit", "1")
+	opened := openEngine
+	t.Cleanup(func() { openEngine = opened })
+	openEngine = func(dir string) (stackEngine, error) {
+		e, err := opened(dir)
+		if err != nil {
+			return nil, err
+		}
+		return &closeServeFailsAfterStart{stackEngine: e, err: errors.New("no space left on device")}, nil
+	}
+	out, err := r.restore(true)
+	log := r.log()
+	want := "The restored stack did not start (cyfr did not become healthy (docker compose up: exit status 1)), and Tailscale Serve could not be closed (no space left on device), so nothing was stopped and the stack may still be running with Serve open; stop it with 'cyfr down'.\nThe restore " + testRestored + " is declared and the next start takes it; read 'cyfr logs', fix the cause and run 'cyfr up'"
+	if err == nil || err.Error() != want {
+		t.Fatalf("restore answered %v, want %q\n%s\n%s", err, want, out, strings.Join(log, "\n"))
+	}
+	if last := log[len(log)-1]; strings.Contains(last, "stop") {
+		t.Errorf("the restore stopped the stack with Serve not closed:\n%s", strings.Join(log, "\n"))
+	}
+}
+
+// closeServeFailsAfterStart is an engine whose CloseServe fails with err
+// once a start has been asked of it.
+type closeServeFailsAfterStart struct {
+	stackEngine
+	started bool
+	err     error
+}
+
+func (e *closeServeFailsAfterStart) StartWithin(ctx context.Context, cause string, health time.Duration) (reach.Receipt, error) {
+	e.started = true
+	return e.stackEngine.StartWithin(ctx, cause, health)
+}
+
+func (e *closeServeFailsAfterStart) CloseServe(ctx context.Context) error {
+	if e.started {
+		return e.err
+	}
+	return e.stackEngine.CloseServe(ctx)
+}
+
 // failedStartOpensServe is an engine whose failed start leaves Serve's open
 // configuration at serve, as the engine's start does when Serve's
 // directory sync fails after the configuration was written; its docker
