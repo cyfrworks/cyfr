@@ -77,7 +77,12 @@
 #          off, the start answers tailnet_node_mismatch, the home answers on
 #          this machine alone, and `cyfr reach tailnet` previews A's
 #          address to B's. The restore keeps the state volume (B) and the
-#          project's .cyfr/, and removes join.json.
+#          project's .cyfr/, and removes join.json. The restore alone runs
+#          as root, in a container of a pinned docker CLI image with the
+#          host's docker and the project directory at its own path, since a
+#          non-root person's restore cannot put back a storage root the
+#          container's entrypoint has handed to the image's user (a defect
+#          outside this proof); every other step runs as the person.
 #
 #   shutdown
 #          `docker compose stop cyfr` ends within the stop_grace_period
@@ -274,6 +279,34 @@ cyfr_cli() {
       ${DOCKER_HOST:+DOCKER_HOST="$DOCKER_HOST"} ${DOCKER_CONTEXT:+DOCKER_CONTEXT="$DOCKER_CONTEXT"} \
       ${words[@]+"${words[@]}"} "$CYFR" "$@"
   )
+}
+
+# The docker CLI image the restore-identity case runs `cyfr restore` in, as
+# root (docker:29.8.1-cli).
+ROOT_CLI_IMAGE="docker:29.8.1-cli@sha256:018edbc908e08fcc9dbf029c812c34251e9b4719e6f71ca0e5eae2a987d014ca"
+
+# The command line's run `$2...` as root, in a container of ROOT_CLI_IMAGE
+# with the host's docker at the image's default socket and the project
+# directory at its own path, its output in `$WORK/$1.log`; its status is
+# the run's. Everything it leaves in the project but data/, which is the
+# image's user's, goes back to the person, so the steps after it run as the
+# person again.
+cli_run_root() {
+  local log="$WORK/$1.log" endpoint status=0
+  shift
+  endpoint="$(docker context inspect --format '{{.Endpoints.docker.Host}}')"
+  case "$endpoint" in
+    unix://*) ;;
+    *) fail "the host's docker is at $endpoint, not a socket a container can mount" ;;
+  esac
+  printf '$ cyfr %s (as root)\n' "$*" >"$log"
+  docker run --rm -v "${endpoint#unix://}:/var/run/docker.sock" -v "$WORK:$WORK" -w "$WORK" \
+    -e HOME="$WORK/home" -e LANG=C.UTF-8 -e TERM=dumb --entrypoint "$CYFR" "$ROOT_CLI_IMAGE" "$@" \
+    </dev/null >>"$log" 2>&1 || status=$?
+  docker run --rm --user 0 -v "$WORK:$WORK" --entrypoint sh "$IMAGE" -c \
+    'find "$1" -mindepth 1 -maxdepth 1 ! -name data -exec chown -R "$2" {} +' sh "$WORK" "$(id -u):$(id -g)" ||
+    fail "what the restore left in the project could not be given back to the person"
+  return "$status"
 }
 
 # The command line's run `$2...` with its output in `$WORK/$1.log` and its
@@ -692,7 +725,7 @@ project_new() {
   step "the command line and the Tailscale stand-in, built from this tree"
   mkdir -p "$WORK/bin" "$WORK/home"
   # -mod=readonly: the build reads go.mod and go.sum as they are.
-  (cd "$ROOT/apps/codex" && go build -mod=readonly -o "$CYFR" .) || fail "the command line did not build"
+  (cd "$ROOT/apps/codex" && CGO_ENABLED=0 go build -mod=readonly -o "$CYFR" .) || fail "the command line did not build"
   "$HERE/tailscale-standin/build.sh" image "$STANDIN_IMAGE"
   ok "built $CYFR and $STANDIN_IMAGE"
 
@@ -1547,7 +1580,7 @@ restore_identity_case() {
 
   step "restore-identity: cyfr restore of A"
   status=0
-  cli_run restore restore "$snapshot" || status=$?
+  cli_run_root restore restore "$snapshot" || status=$?
   # Exit 3: the home started, on this machine only.
   [ "$status" -eq 3 ] || fail "cyfr restore exited $status, not 3, the start that leaves the home on this machine only: $(tail -n 20 "$WORK/restore.log")"
   grep -qF -- "$(render tailnet_node_mismatch node=cyfr-1.proof.ts.net env=cyfr.proof.ts.net)" "$WORK/restore.log" ||
