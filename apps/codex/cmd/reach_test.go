@@ -409,6 +409,61 @@ func TestReachConfirmsTheJoinBeforeItStarts(t *testing.T) {
 	})
 }
 
+// A change declined after a new node's join says a tailnet identity was
+// removed only when the join replaced a machine the engine knew this home
+// had, and names that machine; the question before the join names it too.
+// An identity .env names that no machine is known joined as is never said
+// to be removed, before the join or after it.
+func TestReachSaysAnIdentityWasRemovedOnlyForTheMachineTheJoinReplaced(t *testing.T) {
+	envHead := func(t *testing.T, name, node string) {
+		t.Helper()
+		if err := reach.EditEnvFile(".env", map[string]string{"CYFR_REACH": reach.ModeTailnet, "CYFR_HOST": name, "CYFR_TAILNET_NODE_ID": node, "CYFR_PUBLIC_URL": "https://" + name}, nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	unknown := "This joins this machine to your tailnet as `cyfr`, after removing its current tailnet identity, if it has one; certificate names are public.\n"
+	joinedOnly := "The change was not confirmed. This machine joined your tailnet as `cyfr.tail1234.ts.net`, and how this home is reached was not changed"
+	for name, c := range map[string]struct {
+		prepare        func(t *testing.T, s *fakeStack)
+		question, want string
+	}{
+		".env names a machine none is joined as": {
+			prepare:  func(t *testing.T, s *fakeStack) { envHead(t, "snapshot-a.tail1234.ts.net", "nAAAAAAAAACNTRL") },
+			question: unknown, want: joinedOnly,
+		},
+		"the machine joined as .env names it": {
+			prepare: func(t *testing.T, s *fakeStack) {
+				envHead(t, "old.tail1234.ts.net", "nOLDNODECNTRL")
+				s.joined[""] = reach.Join{Name: "old.tail1234.ts.net", NodeID: "nOLDNODECNTRL"}
+			},
+			question: "This joins this machine to your tailnet as `cyfr`, after removing its current tailnet identity, `old.tail1234.ts.net`, which the Tailscale admin console still lists until you remove it there; certificate names are public.\n",
+			want:     "The change was not confirmed. This machine's tailnet identity `old.tail1234.ts.net` was removed, and the Tailscale admin console still lists it until you remove it there; the machine joined your tailnet as `cyfr.tail1234.ts.net`, and how this home is reached was not changed",
+		},
+		"a join that kept the machine's node": {
+			prepare: func(t *testing.T, s *fakeStack) {
+				s.joined[""] = reach.Join{Name: "cyfr.tail1234.ts.net", NodeID: "nTESTNODE1CNTRL"}
+			},
+			question: "This joins this machine to your tailnet as `cyfr`, after removing its current tailnet identity, `cyfr.tail1234.ts.net`, which the Tailscale admin console still lists until you remove it there; certificate names are public.\n",
+			want:     joinedOnly,
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			s := newReachProject(t)
+			c.prepare(t, s)
+			askTerminal = func() bool { return true }
+			askInput = answers("yes", "no")
+			var out bytes.Buffer
+			err := runReach(context.Background(), reach.ModeTailnet, reachOptions{newNode: true}, false, "", &out)
+			if err == nil || err.Error() != c.want || len(s.joins) != 1 || len(s.switches) != 0 {
+				t.Fatalf("a change declined after a new node's join answered %v (joins %d, switches %d), want %q\n%s", err, len(s.joins), len(s.switches), c.want, out.String())
+			}
+			if !strings.Contains(out.String(), c.question) {
+				t.Errorf("the join was not asked as %q:\n%s", c.question, out.String())
+			}
+		})
+	}
+}
+
 // The preview shows every field of the head that changes, in words: beside
 // the four sentences, a line for each changed field they do not show, the
 // tailnet machine (its name and id), the port on this computer and the
