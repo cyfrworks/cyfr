@@ -66,7 +66,13 @@ func (e *Engine) ensureState() error {
 			return fmt.Errorf("reach: create %s: %w", dir, err)
 		}
 	}
+	// Its mode is set, not left to the umask: the tailscale container's
+	// root holds no capability, so it enters only a directory its mode
+	// opens to it.
 	if err := os.MkdirAll(e.path(serveDir), serveDirMode); err != nil {
+		return fmt.Errorf("reach: create %s: %w", e.path(serveDir), err)
+	}
+	if err := os.Chmod(e.path(serveDir), serveDirMode); err != nil {
 		return fmt.Errorf("reach: create %s: %w", e.path(serveDir), err)
 	}
 	return nil

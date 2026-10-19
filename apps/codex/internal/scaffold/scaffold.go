@@ -112,7 +112,13 @@ func (r *Release) Write(overwriteManaged bool) error {
 			}
 			return fmt.Errorf("create %s: %w", e.name, err)
 		}
-		_, err = f.Write(e.data)
+		// The tarball's mode, not the umask's narrowing of it: the
+		// stack's containers read these files (caddy its Caddyfile) as a
+		// root that holds no capability to read past their modes.
+		err = f.Chmod(e.mode)
+		if err == nil {
+			_, err = f.Write(e.data)
+		}
 		if err = errors.Join(err, f.Close()); err != nil {
 			return fmt.Errorf("write %s: %w", e.name, err)
 		}

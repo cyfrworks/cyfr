@@ -627,10 +627,11 @@ services:
 
   tailscale:
     profiles: ["tailnet"]
-    # Pinned by digest, the tag kept for the reader. tests/tailnet-real/
-    # verified-image names the reference a real tailnet last verified, and
-    # CI fails while this line names another, a new digest under the same
-    # tag included.
+    # Pinned by digest, the tag kept for the reader. A passing real-tailnet
+    # run (tests/tailnet-real/run.sh) records the reference it verified in
+    # tests/tailnet-real/verified-image, and CI fails while no run has
+    # verified this line's reference or the record names another, a new
+    # digest under the same tag included.
     image: tailscale/tailscale:v1.104.1@sha256:87c55d6be56ad85b3d8bceca5f87f73de288c609131460dd1be1874c250cc41d
     environment:
       # No TUN device and no capability: tailscaled's own netstack.
