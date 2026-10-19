@@ -77,7 +77,19 @@ func (e *Engine) ensureState() error {
 // rename survives a crash. A failure before the rename leaves the old
 // file; one after it leaves the new file, perhaps not yet durable.
 func (e *Engine) writeDurable(name string, data []byte, mode os.FileMode) error {
-	if err := e.inject(name, "write"); err != nil {
+	return writeDurable(name, data, mode, e.failWrite)
+}
+
+// writeDurable is the durable write, fail the test seam for a failure at
+// one of its steps (nil for none).
+func writeDurable(name string, data []byte, mode os.FileMode, fail func(name, step string) error) error {
+	inject := func(step string) error {
+		if fail == nil {
+			return nil
+		}
+		return fail(name, step)
+	}
+	if err := inject("write"); err != nil {
 		return err
 	}
 	dir := filepath.Dir(name)
@@ -88,7 +100,7 @@ func (e *Engine) writeDurable(name string, data []byte, mode os.FileMode) error 
 	_, werr := tmp.Write(data)
 	err = errors.Join(werr, tmp.Chmod(mode), tmp.Sync(), tmp.Close())
 	if err == nil {
-		err = e.inject(name, "rename")
+		err = inject("rename")
 	}
 	if err == nil {
 		err = replaceFile(tmp.Name(), name)
@@ -97,7 +109,7 @@ func (e *Engine) writeDurable(name string, data []byte, mode os.FileMode) error 
 		os.Remove(tmp.Name())
 		return fmt.Errorf("reach: write %s: %w", name, err)
 	}
-	if err := e.inject(name, "sync"); err != nil {
+	if err := inject("sync"); err != nil {
 		return err
 	}
 	if err := syncDir(dir); err != nil {
@@ -172,6 +184,7 @@ type journal struct {
 	Op            string    `json:"op"`
 	RequestID     string    `json:"request_id"`
 	RequestDigest string    `json:"request_digest"`
+	ContentDigest string    `json:"content_digest,omitempty"`
 	Phase         string    `json:"phase"`
 	At            time.Time `json:"at"`
 
@@ -187,6 +200,9 @@ type journal struct {
 	Running  bool              `json:"running,omitempty"`
 	Services []string          `json:"services,omitempty"`
 	Reason   string            `json:"reason,omitempty"`
+	// Reopen is a switch to the head .env already holds, a tailnet home
+	// whose Serve is closed: it runs the start path alone.
+	Reopen bool `json:"reopen,omitempty"`
 	// Why a stop and verify was uncertain.
 	Why string `json:"why,omitempty"`
 
@@ -234,7 +250,7 @@ func (e *Engine) reached(point string) {
 
 // receiptOf is the answer journal j gives while it is unfinished.
 func (j *journal) receipt() Receipt {
-	r := Receipt{RequestID: j.RequestID, RequestDigest: j.RequestDigest, Op: j.Op, State: "accepted", Phase: j.Phase, At: j.At}
+	r := Receipt{RequestID: j.RequestID, RequestDigest: j.RequestDigest, ContentDigest: j.ContentDigest, Op: j.Op, State: "accepted", Phase: j.Phase, At: j.At}
 	if j.Phase == "uncertain" {
 		r.Code = "reach_uncertain"
 		r.Payload = map[string]string{"observed": observedText(j.Observed)}
@@ -476,7 +492,12 @@ func reused(id, digest, op string) Receipt {
 // receipt, written so a resend of the same id answers the same: nothing
 // changed.
 func (e *Engine) reject(id, digest, op string, ref *Refusal) (Receipt, error) {
-	r := Receipt{RequestID: id, RequestDigest: digest, Op: op, State: "rejected", Code: ref.Code, Payload: ref.Payload, At: e.now()}
+	return e.rejectContent(id, digest, "", op, ref)
+}
+
+// rejectContent is reject for a request bound to its content.
+func (e *Engine) rejectContent(id, digest, content, op string, ref *Refusal) (Receipt, error) {
+	r := Receipt{RequestID: id, RequestDigest: digest, ContentDigest: content, Op: op, State: "rejected", Code: ref.Code, Payload: ref.Payload, At: e.now()}
 	if err := e.writeReceipt(r); err != nil {
 		return r, err
 	}

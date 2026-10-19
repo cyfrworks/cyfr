@@ -120,7 +120,7 @@ func (e *Engine) removeUnselected(ctx context.Context, c config, h Head) string 
 func (e *Engine) compose(ctx context.Context, h Head, deadline time.Duration, args ...string) string {
 	res, err := e.docker.Run(ctx, Call{Args: e.composeArgs(h, args...), Deadline: deadline})
 	if err != nil {
-		return fmt.Sprintf("docker compose %s failed (%v): %s", strings.Join(args[:min(len(args), 2)], " "), err, lastLine(res.Stderr))
+		return failed("docker compose "+strings.Join(args[:min(len(args), 2)], " "), err, res.Stderr)
 	}
 	return ""
 }

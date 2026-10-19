@@ -222,3 +222,34 @@ func TestRealComposeRunsTheMaterializedConfiguration(t *testing.T) {
 		t.Errorf("materialized files are left: %v", left)
 	}
 }
+
+// Compose's own diagnostics quote .env's text: a malformed line holding a
+// database credential, or a secret interpolated into a value compose
+// cannot convert. CheckStack reports what failed, by file and line or by
+// configuration path, never that text.
+func TestRealComposeDiagnosticsCarryNoEnvValue(t *testing.T) {
+	requireCompose(t)
+	const secret = "sentinel-secret-from-env"
+	for name, c := range map[string]struct{ env, override, says string }{
+		"unterminated quote": {env: "DATABASE_URL=\"postgres://alice:" + secret + "@localhost/db\n", says: "it could not read .env at line "},
+		"no separator":       {env: "DATABASE_URL postgres://alice:" + secret + "@localhost/db\n", says: "it could not read .env at line "},
+		"bad name":           {env: "BROKEN! " + secret + " =value\n", says: "it could not read .env at line "},
+		"conversion":         {env: "CYFR_LIMIT=" + secret + "\n", override: "services:\n  cyfr:\n    deploy:\n      resources:\n        limits:\n          cpus: ${CYFR_LIMIT}\n", says: "it refused the value of services[cyfr].deploy.resources.limits.cpus"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			e, dir := realHome(t)
+			data, _ := os.ReadFile(filepath.Join(dir, ".env"))
+			writeFile(t, filepath.Join(dir, ".env"), append(data, []byte(c.env)...))
+			if c.override != "" {
+				writeFile(t, filepath.Join(dir, "docker-compose.override.yml"), []byte(c.override))
+			}
+			err := e.CheckStack(bg)
+			if err == nil {
+				t.Fatal("the stack was accepted")
+			}
+			if strings.Contains(err.Error(), secret) || !strings.Contains(err.Error(), c.says) {
+				t.Errorf("CheckStack's error reads %v", err)
+			}
+		})
+	}
+}

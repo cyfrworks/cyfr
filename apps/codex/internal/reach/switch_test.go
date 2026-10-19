@@ -329,3 +329,84 @@ func TestUncertainRollbackKeepsItsFiles(t *testing.T) {
 	}
 	h.assertConverged(baseStack...)
 }
+
+// A request id sent again is bound to all it was first sent with,
+// whatever its outcome: the same content answers its receipt (or its
+// unfinished journal's answer); another mode, domain, email, machine
+// name, --new-node or auth key answers reach_request_reused, changing and
+// writing nothing; an id never sent answers false. The raw key is never
+// stored.
+func TestResentBindsTheWholeRequest(t *testing.T) {
+	content := RequestContent{Mode: ModePublic, Domain: "home.example.com", ACMEEmail: "ops@example.com", Hostname: "home", NewNode: true, AuthKeyFingerprint: AuthKeyFingerprint([]byte(testKey + "\n"))}
+	target := Target{Mode: ModePublic, Domain: "home.example.com", ACMEEmail: "ops@example.com"}
+	others := map[string]RequestContent{}
+	for name, change := range map[string]func(*RequestContent){
+		"mode":     func(c *RequestContent) { c.Mode = ModeLocal },
+		"domain":   func(c *RequestContent) { c.Domain = "other.example.com" },
+		"email":    func(c *RequestContent) { c.ACMEEmail = "" },
+		"hostname": func(c *RequestContent) { c.Hostname = "cyfr" },
+		"new node": func(c *RequestContent) { c.NewNode = false },
+		"key":      func(c *RequestContent) { c.AuthKeyFingerprint = AuthKeyFingerprint([]byte("tskey-auth-another")) },
+	} {
+		c := content
+		change(&c)
+		others[name] = c
+	}
+	for _, outcome := range []string{"ok", "rolled_back", "rejected", "unfinished"} {
+		t.Run(outcome, func(t *testing.T) {
+			h := newHome(t)
+			h.fake.startStack(t, h.head())
+			r := h.request(id(1), target, "")
+			r.Content = content
+			switch outcome {
+			case "rolled_back":
+				unhealthyWhen(h, "CYFR_REACH=public")
+			case "rejected":
+				r.OldDigest = "sha256:stale"
+			}
+			if outcome == "unfinished" {
+				h.killAt("journal:switch:stopped", func(e *Engine) { e.Switch(bg, r) })
+			} else {
+				h.e.Switch(bg, r)
+			}
+			want, ok, err := h.e.Receipt(id(1))
+			if err != nil || !ok || want.ContentDigest == "" {
+				t.Fatalf("the receipt is %+v, %v, %v", want, ok, err)
+			}
+			got, ok, err := h.e.Resent(id(1), content)
+			if err != nil || !ok || got.State != want.State || got.Outcome != want.Outcome || got.Code != want.Code || got.Phase != want.Phase || got.At != want.At {
+				t.Errorf("the same content answers %+v, %v, %v, not %+v", got, ok, err, want)
+			}
+			before := h.snapshot()
+			for name, c := range others {
+				rc, ok, err := h.e.Resent(id(1), c)
+				if err != nil || !ok || rc.State != "rejected" || rc.Code != "reach_request_reused" || rc.Refusal().Message() != "This request names a different change than the one first sent under its id. Nothing was changed. Send it again under a new id." {
+					t.Errorf("another %s answers %+v, %v, %v", name, rc, ok, err)
+				}
+			}
+			if !mapsEqual(before, h.snapshot()) {
+				t.Error("Resent changed a file")
+			}
+			if _, ok, err := h.e.Resent(id(9), content); ok || err != nil {
+				t.Errorf("an id never sent answers %v, %v", ok, err)
+			}
+			assertNoKey(t, h, testKey)
+		})
+	}
+
+	// The fingerprint is the key's, surrounding space aside; no key has
+	// none.
+	if fp := AuthKeyFingerprint([]byte(" " + testKey + "\n")); fp != "sha256:"+sha256Hex([]byte(testKey)) || AuthKeyFingerprint([]byte(" \n")) != "" {
+		t.Errorf("AuthKeyFingerprint gave %q", fp)
+	}
+
+	// A join's id is bound the same way, by its own request.
+	h := newHome(t)
+	h.join(1, testKey, false)
+	if rc, ok, _ := h.e.Resent(id(1), RequestContent{Mode: ModeTailnet, AuthKeyFingerprint: AuthKeyFingerprint([]byte(testKey))}); !ok || rc.Op != "join" || rc.State != "completed" {
+		t.Errorf("the join's content answers %+v", rc)
+	}
+	if rc, _, _ := h.e.Resent(id(1), RequestContent{Mode: ModeTailnet, AuthKeyFingerprint: AuthKeyFingerprint([]byte("tskey-auth-another"))}); rc.Code != "reach_request_reused" {
+		t.Errorf("another key answers %+v", rc)
+	}
+}

@@ -7,6 +7,7 @@ import (
 	"maps"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -47,10 +48,10 @@ func TestDotenvReadsAsComposeDoes(t *testing.T) {
 	}
 }
 
-// A switch's .env changes only the head's keys: a changed key on its
-// first assignment's line, every other assignment of it gone; a removed
-// key loses every line, an inheriting one too; a key .env lacks goes
-// right after the CYFR_REACH line; an unchanged key keeps its own
+// A switch's .env changes only the head's keys, through EditEnv: a
+// changed key on its last assignment's lines, every other assignment of
+// it gone; a removed key loses every line, an inheriting one too; a key
+// .env lacks is appended at the end; an unchanged key keeps its own
 // spelling; every other line is kept byte for byte.
 func TestEnvWriterChangesOnlyTheHeadsKeys(t *testing.T) {
 	before := strings.Join([]string{
@@ -85,15 +86,19 @@ func TestEnvWriterChangesOnlyTheHeadsKeys(t *testing.T) {
 	}
 	// The node id's inheriting line is its assignment, rewritten in
 	// place; the email's two lines both go.
-	if got := string(parseDotenv([]byte(before)).withKeys(keysOf(d.Head))); got != want {
+	edit := func(text string, h Head) string {
+		set, unset := parseDotenv([]byte(text)).headEdit(keysOf(h))
+		return string(EditEnv([]byte(text), set, unset))
+	}
+	if got := edit(before, d.Head); got != want {
 		t.Errorf(".env became\n%s\nwant\n%s", got, want)
 	}
 
 	// A key .env lacks entirely goes right after CYFR_REACH.
 	minimal := "A=1\nCYFR_REACH=local\nCYFR_HOST=localhost\nB=2\n"
 	pub, _ := Derive(Target{Mode: ModePublic, Domain: "home.example.com"}, Current{Port: 4000}, nil)
-	got := string(parseDotenv([]byte(minimal)).withKeys(keysOf(pub.Head)))
-	if want := "A=1\nCYFR_REACH=public\nCYFR_PUBLIC_URL=https://home.example.com\nCYFR_PORT=4000\nCYFR_HOST=home.example.com\nB=2\n"; got != want {
+	got := edit(minimal, pub.Head)
+	if want := "A=1\nCYFR_REACH=public\nCYFR_HOST=home.example.com\nB=2\nCYFR_PORT=4000\nCYFR_PUBLIC_URL=https://home.example.com\n"; got != want {
 		t.Errorf("a minimal .env became\n%s\nwant\n%s", got, want)
 	}
 	if h, err := headOf(parseDotenv([]byte(got)).values()); err != nil || h.Digest() != pub.Head.Digest() {
@@ -101,20 +106,38 @@ func TestEnvWriterChangesOnlyTheHeadsKeys(t *testing.T) {
 	}
 }
 
-// Open refuses a .env that names any COMPOSE_* setting, compose's way of
-// writing it included, the first in byte order, before any docker call.
-func TestOpenRefusesComposeSettingsInEnv(t *testing.T) {
+// A .env that names any COMPOSE_* setting, compose's way of writing it
+// included, is refused by the first in byte order, before any docker
+// call: by Start, the head's read and the stack check alike. The project
+// still opens, so recovery can stop the stack.
+func TestComposeSettingsInEnvAreRefused(t *testing.T) {
 	for _, line := range []string{"COMPOSE_PROFILES=public,tailnet", "COMPOSE_PROFILES: public", "  export COMPOSE_FILE = x.yml\nCOMPOSE_PROFILES=public", "COMPOSE_PROJECT_NAME"} {
 		dir := filepath.Join(t.TempDir(), "home")
 		os.Mkdir(dir, 0o755)
 		writeFile(t, filepath.Join(dir, ".env"), append(repoFile(t, ".env.example"), []byte(line+"\n")...))
+		writeFile(t, filepath.Join(dir, "docker-compose.yml"), repoFile(t, "docker-compose.yml"))
 		fake := newFakeDocker(dir, nil)
-		_, err := Open(dir, fake)
+		e, err := Open(dir, fake)
+		if err != nil {
+			t.Fatalf("%q: the project does not open: %v", line, err)
+		}
+		unlock, err := e.Lock("up")
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, err = e.Start(bg, "up")
+		unlock()
 		want := strings.Fields(strings.NewReplacer("=", " ", ":", " ", "export", "").Replace(line))[0]
 		var r *Refusal
 		if !asRefusal(err, &r) || r.Code != "compose_env_refused" || r.Payload["key"] != want {
-			t.Errorf("%q: Open answered %v, want compose_env_refused naming %s", line, err, want)
+			t.Errorf("%q: Start answered %v, want compose_env_refused naming %s", line, err, want)
 			continue
+		}
+		if _, err := e.Head(); refusalCode(err) != "compose_env_refused" {
+			t.Errorf("%q: Head answered %v", line, err)
+		}
+		if err := e.CheckStack(bg); refusalCode(err) != "compose_env_refused" {
+			t.Errorf("%q: CheckStack answered %v", line, err)
 		}
 		if !strings.Contains(r.Message(), "`.env` sets `"+want+"`") {
 			t.Errorf("the sentence reads %q", r.Message())
@@ -173,5 +196,90 @@ func TestCheckEnvFile(t *testing.T) {
 				t.Errorf("the sentence reads %q", err.(*Refusal).Message())
 			}
 		})
+	}
+}
+
+// EditEnv reads .env as the engine and compose read it: a quoted value's
+// lines, even ones that look like `KEY=…` or `KEY: …`, are its value and
+// stay untouched; a set key's last assignment is rewritten and its
+// earlier ones removed, whatever their form; an unset key loses every
+// assignment; a new key is appended; a value that needs quotes reads back
+// as itself.
+func TestEditEnv(t *testing.T) {
+	text := strings.Join([]string{
+		"# a comment",
+		"A=1",
+		`PEM="-----BEGIN-----`,
+		`A=inside the value`,
+		`B: inside too`,
+		`-----END-----"`,
+		"export A = 2",
+		"B: 3",
+		"C='x",
+		"A=still inside",
+		"'",
+		"D",
+		"",
+	}, "\n")
+	values := []string{"plain", "has space", "has # hash", `has "double" quotes`, "it's single", "two\nlines", ""}
+	for _, v := range values {
+		got := EditEnv([]byte(text), map[string]string{"A": v, "NEW": v}, []string{"B", "D"})
+		want := strings.Join([]string{
+			"# a comment",
+			`PEM="-----BEGIN-----`,
+			`A=inside the value`,
+			`B: inside too`,
+			`-----END-----"`,
+			envLine("A", v),
+			"C='x",
+			"A=still inside",
+			"'",
+			envLine("NEW", v),
+			"",
+		}, "\n")
+		if string(got) != want {
+			t.Errorf("value %q: EditEnv gave\n%s\nwant\n%s", v, got, want)
+			continue
+		}
+		read := parseDotenv(got).values()
+		if read["A"] != v || read["NEW"] != v || read["PEM"] != "-----BEGIN-----\nA=inside the value\nB: inside too\n-----END-----" || read["C"] != "x\nA=still inside\n" {
+			t.Errorf("value %q reads back as %q", v, read)
+		}
+		if _, ok := read["B"]; ok {
+			t.Errorf("value %q: B is still assigned", v)
+		}
+	}
+	if got := string(EditEnv(nil, map[string]string{"K": "v"}, nil)); got != "K=v\n" {
+		t.Errorf("an empty file became %q", got)
+	}
+	if got := string(EditEnv([]byte("A=1"), map[string]string{"K": "v"}, nil)); got != "A=1\nK=v\n" {
+		t.Errorf("a file without a final newline became %q", got)
+	}
+}
+
+// EditEnvFile edits the file durably and keeps its mode; a new file is
+// private to its owner.
+func TestEditEnvFile(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, ".env")
+	writeFile(t, path, []byte("A=1\nB=2\n"))
+	os.Chmod(path, 0o640)
+	if err := EditEnvFile(path, map[string]string{"A": "one"}, []string{"B"}); err != nil {
+		t.Fatal(err)
+	}
+	got, _ := os.ReadFile(path)
+	info, _ := os.Stat(path)
+	if string(got) != "A=one\n" || runtime.GOOS != "windows" && info.Mode().Perm() != 0o640 {
+		t.Errorf("the file is %q, mode %v", got, info.Mode())
+	}
+	fresh := filepath.Join(dir, "new.env")
+	if err := EditEnvFile(fresh, map[string]string{"K": "v"}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if info, _ := os.Stat(fresh); runtime.GOOS != "windows" && info.Mode().Perm() != 0o600 {
+		t.Errorf("a new file has mode %v", info.Mode())
+	}
+	if left, _ := filepath.Glob(filepath.Join(dir, ".*.tmp-*")); len(left) != 0 {
+		t.Errorf("temporary files are left: %v", left)
 	}
 }

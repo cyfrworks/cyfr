@@ -4,6 +4,7 @@
 package reach
 
 import (
+	"context"
 	"os"
 	"slices"
 	"strings"
@@ -137,5 +138,69 @@ func TestRecoveryStopsEveryReachService(t *testing.T) {
 	}
 	if slices.Contains(h.fake.runningServices(), "caddy") {
 		t.Error("recovery left caddy running")
+	}
+}
+
+// Every stop closes Serve first: `cyfr down`'s compose down never runs
+// while Serve still forwards to the home.
+func TestStopClosesServeBeforeComposeDown(t *testing.T) {
+	h := newHome(t)
+	h.fake.startStack(t, h.head())
+	h.toTailnet(1, testKey, false)
+	downs := 0
+	h.fake.hook = func(_ context.Context, c *fakeCall) *fakeAnswer {
+		if c.Args[0] == "compose" && slices.Contains(c.Args, "down") {
+			downs++
+			if data, _ := os.ReadFile(h.e.servePath()); string(data) != serveClosed {
+				t.Errorf("compose down ran while Serve held %s", data)
+			}
+		}
+		return nil
+	}
+	if _, err := h.e.Stop(bg, "down", true); err != nil {
+		t.Fatal(err)
+	}
+	if downs != 1 {
+		t.Errorf("compose down ran %d times", downs)
+	}
+}
+
+// CloseServe empties Serve's configuration durably, as every stop path
+// does first, and requires the lock.
+func TestCloseServe(t *testing.T) {
+	h := newHome(t)
+	h.fake.startStack(t, h.head())
+	h.toTailnet(1, testKey, false)
+	other, _ := Open(h.dir, h.fake)
+	if err := other.CloseServe(bg); err == nil || !strings.Contains(err.Error(), "lock is not held") {
+		t.Errorf("CloseServe without the lock answered %v", err)
+	}
+	if err := h.e.CloseServe(bg); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := os.ReadFile(h.e.servePath()); string(got) != serveClosed {
+		t.Errorf("Serve's configuration is %s", got)
+	}
+}
+
+// A stop under a .env that sets a COMPOSE_* key makes no compose call,
+// which would read it, and stops every container of the project, since
+// without compose it cannot name the reach services.
+func TestStopUnderAComposeSettingStopsEverything(t *testing.T) {
+	h := newHome(t)
+	h.fake.startStack(t, h.head())
+	h.e.Switch(bg, h.request(id(1), publicTarget, ""))
+	writeFile(t, h.e.envPath(), []byte(h.env()+"COMPOSE_PROFILES=tailnet\n"))
+	mark := len(h.fake.calls())
+	if rc, err := h.e.Stop(bg, "down", false); err != nil || rc.Outcome != "ok" {
+		t.Fatalf("stop answered %+v, %v", rc, err)
+	}
+	for _, c := range h.fake.calls()[mark:] {
+		if c.Args[0] == "compose" {
+			t.Errorf("stop ran compose: %s", c)
+		}
+	}
+	if running := h.fake.runningServices(); len(running) != 0 {
+		t.Errorf("running %v", running)
 	}
 }

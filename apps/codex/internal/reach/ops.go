@@ -14,6 +14,9 @@ func (e *Engine) doStart(ctx context.Context, cause string, health time.Duration
 		return Receipt{}, err
 	}
 	r := Receipt{Op: "start", State: "completed"}
+	if _, err := e.readEnv(); err != nil {
+		return Receipt{}, err
+	}
 	if rc, blocked, err := e.unfinished(); blocked {
 		return rc, err
 	}
@@ -77,6 +80,9 @@ func (e *Engine) doStop(ctx context.Context, cause string, all bool) (Receipt, e
 	}
 	ctx = context.WithoutCancel(ctx)
 	r := Receipt{Op: "stop", State: "completed", Outcome: "ok"}
+	if err := e.closeServe(); err != nil {
+		return Receipt{}, err
+	}
 	if err := e.cancelWaitingJoin(ctx); err != nil {
 		return Receipt{}, err
 	}
@@ -90,9 +96,11 @@ func (e *Engine) doStop(ctx context.Context, cause string, all bool) (Receipt, e
 	if names, err := e.everyReachService(ctx); err == nil {
 		services = union(services, names)
 	}
-	if all {
+	// compose reads COMPOSE_* from .env and cannot name the reach
+	// services under one that sets any: every container goes.
+	if _, err := e.readEnv(); all || err != nil {
 		services = nil
-		if headErr == nil {
+		if headErr == nil && all {
 			// compose down removes the project's networks as well;
 			// whatever it leaves running the sweep below stops.
 			if args, err := e.composeArgsFor(ctx, h, "down", "--remove-orphans"); err == nil {

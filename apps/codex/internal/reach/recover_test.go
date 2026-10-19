@@ -339,3 +339,111 @@ func TestRecoverySweepsInterruptedWrites(t *testing.T) {
 		})
 	}
 }
+
+// An edit that leaves .env incoherent is the person's, and recovery keeps
+// it as it is: an invalid setting added after the switch was accepted,
+// or after it committed the new head. The switch failed, everything is
+// stopped and verified, and reach_env_edited says .env is incoherent.
+func TestRecoveryKeepsAnIncoherentEdit(t *testing.T) {
+	for _, point := range []string{"journal:switch:accepted", "env:commit"} {
+		t.Run(point, func(t *testing.T) {
+			h := newHome(t)
+			h.fake.startStack(t, h.head())
+			r := h.request(id(1), publicTarget, "")
+			h.killAt(point, func(e *Engine) { e.Switch(bg, r) })
+			edit := h.env() + "CYFR_BIND_ADDRESS=not-an-address\n"
+			writeFile(t, h.e.envPath(), []byte(edit))
+			receipts, err := h.e.Resume(bg)
+			if err != nil || len(receipts) != 1 {
+				t.Fatalf("resume answered %+v, %v", receipts, err)
+			}
+			if rc := receipts[0]; rc.Outcome != "failed" || rc.Code != "reach_env_edited" || !mapsEqual(rc.Payload, map[string]string{"then": "incoherent"}) {
+				t.Errorf("the receipt is %+v", rc)
+			}
+			if h.env() != edit {
+				t.Errorf("recovery rewrote the edited .env:\n%s", h.env())
+			}
+			if slices.Contains(h.fake.runningServices(), "cyfr") {
+				t.Error("cyfr runs on an incoherent .env")
+			}
+		})
+	}
+}
+
+// A COMPOSE_* setting planted in .env while a switch was unfinished does
+// not keep recovery from converging: the project opens, recovery stops
+// and verifies the stack with no compose call (compose would read the
+// setting), then refuses with compose_env_refused, starting nothing; the
+// switch stays unfinished until .env is fixed.
+func TestRecoveryConvergesUnderAComposeSettingInEnv(t *testing.T) {
+	h := newHome(t)
+	h.fake.startStack(t, h.head())
+	r := h.request(id(1), publicTarget, "")
+	h.killAt("journal:switch:stopped", func(e *Engine) { e.Switch(bg, r) })
+	h.crash()
+	writeFile(t, h.e.envPath(), []byte(h.env()+"COMPOSE_PROFILES=public\n"))
+	e, err := Open(h.dir, h.fake)
+	if err != nil {
+		t.Fatalf("the project does not open: %v", err)
+	}
+	e.clock = h.clock
+	unlock, err := e.Lock("reach --resume")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer unlock()
+	h.fake.mu.Lock()
+	h.fake.st.Containers["home-caddy-1"] = &fakeContainer{Name: "home-caddy-1", Service: "caddy", State: "running"}
+	h.fake.mu.Unlock()
+	mark := len(h.fake.calls())
+	receipts, err := e.Resume(bg)
+	if refusalCode(err) != "compose_env_refused" || len(receipts) != 0 {
+		t.Fatalf("resume answered %+v, %v", receipts, err)
+	}
+	calls := h.fake.calls()[mark:]
+	reads := 0
+	for _, c := range calls {
+		if c.Args[0] == "compose" {
+			t.Errorf("recovery ran compose, which reads .env: %s", c)
+		}
+		if c.Args[0] == "ps" {
+			reads++
+		}
+	}
+	if reads < 4 {
+		t.Errorf("the stop was not verified by two reads: %d", reads)
+	}
+	if running := h.fake.runningServices(); slices.Contains(running, "cyfr") || slices.Contains(running, "caddy") {
+		t.Errorf("running %v", running)
+	}
+	if j, _ := e.readJournal(); j == nil {
+		t.Error("the switch was made terminal before .env could be read")
+	}
+	for _, op := range []func() error{
+		func() error { _, err := e.Start(bg, "up"); return err },
+		func() error { _, err := e.Switch(bg, SwitchRequest{ID: id(5)}); return err },
+		func() error { _, err := e.Join(bg, JoinRequest{ID: id(6)}); return err },
+		func() error { _, err := e.CancelJoin(bg, CancelRequest{ID: id(7), JoinID: id(8)}); return err },
+	} {
+		before := len(h.fake.calls())
+		if err := op(); refusalCode(err) != "compose_env_refused" {
+			t.Errorf("a mutating method answered %v", err)
+		}
+		if after := h.fake.calls()[before:]; len(after) != 0 {
+			t.Errorf("a refused method ran docker: %v", after)
+		}
+	}
+}
+
+// With nothing unfinished, a COMPOSE_* setting in .env is refused by
+// Resume before any docker call.
+func TestResumeRefusesAComposeSettingBeforeDocker(t *testing.T) {
+	h := newHome(t)
+	writeFile(t, h.e.envPath(), []byte(h.env()+"COMPOSE_PROFILES=public\n"))
+	if _, err := h.e.Resume(bg); refusalCode(err) != "compose_env_refused" {
+		t.Errorf("resume answered %v", err)
+	}
+	if calls := h.fake.calls(); len(calls) != 0 {
+		t.Errorf("docker ran before the refusal: %v", calls)
+	}
+}

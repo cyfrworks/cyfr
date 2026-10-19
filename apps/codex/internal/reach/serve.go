@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"slices"
@@ -92,7 +93,7 @@ func (s tsStatus) agrees(o tsStatus) bool {
 func (e *Engine) readStatus(ctx context.Context, args []string) (tsStatus, error) {
 	res, err := e.docker.Run(ctx, Call{Args: args, Deadline: probeDeadline})
 	if err != nil {
-		return tsStatus{}, fmt.Errorf("tailscale status failed (%v): %s", err, lastLine(res.Stderr))
+		return tsStatus{}, errors.New(failed("tailscale status", err, res.Stderr))
 	}
 	var s tsStatus
 	if err := json.Unmarshal(res.Stdout, &s); err != nil {

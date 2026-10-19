@@ -170,3 +170,24 @@ func readDirNames(dir string) ([]string, error) {
 	}
 	return names, nil
 }
+
+// resent is Resent: request id's record, and whether c is the content it
+// was first sent with, a switch's by its content digest, a join's by its
+// request digest.
+func (e *Engine) resent(id string, c RequestContent) (Receipt, bool, error) {
+	r, ok, err := e.receiptOf(id)
+	if err != nil || !ok {
+		return Receipt{}, false, err
+	}
+	same := false
+	switch r.Op {
+	case "switch":
+		same = r.ContentDigest != "" && r.ContentDigest == contentDigest(c)
+	case "join":
+		same = r.RequestDigest == joinDigest(joinHostname(c.Hostname), c.NewNode, c.AuthKeyFingerprint)
+	}
+	if same {
+		return r, true, nil
+	}
+	return Receipt{RequestID: id, Op: r.Op, State: "rejected", Code: "reach_request_reused", At: e.now()}, true, nil
+}

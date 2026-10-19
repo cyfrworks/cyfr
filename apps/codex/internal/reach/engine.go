@@ -4,6 +4,7 @@
 package reach
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"io"
@@ -81,9 +82,11 @@ type Engine struct {
 }
 
 // Open opens the engine of the project at projectDir, running docker
-// through d, or through the system implementation when d is nil. It
-// refuses a .env that sets any COMPOSE_* key (compose_env_refused) before
-// anything else reads it.
+// through d, or through the system implementation when d is nil. A .env
+// that sets any COMPOSE_* key does not keep it from opening, so recovery
+// can still stop the stack; Start, Switch, Join and CancelJoin refuse it
+// (compose_env_refused) before any docker call, and Resume stops and
+// verifies without compose, then refuses it.
 func Open(projectDir string, d Docker) (*Engine, error) {
 	dir, err := filepath.Abs(projectDir)
 	if err != nil {
@@ -96,9 +99,6 @@ func Open(projectDir string, d Docker) (*Engine, error) {
 	e.docker = d
 	if d == nil {
 		e.docker = newSystemDocker(e)
-	}
-	if _, err := e.readEnv(); err != nil {
-		return nil, err
 	}
 	return e, nil
 }
@@ -174,8 +174,11 @@ type Receipt struct {
 	Code          string            `json:"code,omitempty"`
 	Payload       map[string]string `json:"payload,omitempty"`
 	FinalHead     *Head             `json:"final_head,omitempty"`
-	Observed      []string          `json:"observed,omitempty"`
-	At            time.Time         `json:"at"`
+	// ContentDigest binds a switch's receipt to the whole of what its
+	// command was asked (RequestContent), for Resent.
+	ContentDigest string    `json:"content_digest,omitempty"`
+	Observed      []string  `json:"observed,omitempty"`
+	At            time.Time `json:"at"`
 }
 
 // Refusal is the code a receipt answers with, nil for a plain success. A
@@ -227,6 +230,10 @@ type Preview struct {
 	OldDigest, NewDigest string
 	OldWords, NewWords   Words
 	AddressChanges       []string
+	// Reopen is a tailnet head that is .env's already, its Serve closed
+	// (the machine was not ready when it started): Old and New are one
+	// head, and the switch validates the machine again and opens Serve.
+	Reopen bool
 }
 
 // Preview derives the head target t makes, for tailnet from the machine
@@ -250,6 +257,38 @@ type SwitchRequest struct {
 	JoinID    string
 	OldDigest string
 	NewDigest string
+	// Content is everything the command was asked, which a resend of its
+	// id must ask again (Resent).
+	Content RequestContent
+}
+
+// RequestContent is the whole of what a `cyfr reach` command was asked:
+// the mode, the domain and email, and for tailnet the machine name,
+// --new-node and the auth key's fingerprint (AuthKeyFingerprint, "" with
+// no key). A request id is bound to it whatever the outcome.
+type RequestContent struct {
+	Mode, Domain, ACMEEmail, Hostname string
+	NewNode                           bool
+	AuthKeyFingerprint                string
+}
+
+// Resent answers a request id sent again, reading without the lock: its
+// receipt, or its unfinished journal's answer, when c is the content it
+// was first sent with; a rejected reach_request_reused receipt when it is
+// not, which changes and writes nothing; false for an id neither holds.
+func (e *Engine) Resent(id string, c RequestContent) (Receipt, bool, error) {
+	return e.resent(id, c)
+}
+
+// AuthKeyFingerprint is an auth key's fingerprint as a request binds it:
+// sha256: and the hex of the key's bytes, surrounding space removed; ""
+// for no key. The key itself is never stored.
+func AuthKeyFingerprint(key []byte) string {
+	key = bytes.TrimSpace(key)
+	if len(key) == 0 {
+		return ""
+	}
+	return "sha256:" + sha256Hex(key)
 }
 
 // Switch moves the home to the request's head: stop and verify, commit
@@ -329,6 +368,16 @@ func (e *Engine) StartWithin(ctx context.Context, cause string, health time.Dura
 // observed.
 func (e *Engine) Stop(ctx context.Context, cause string, all bool) (Receipt, error) {
 	return e.doStop(ctx, cause, all)
+}
+
+// CloseServe writes Serve's empty configuration durably, as every stop
+// path does first, for a command that stops the stack itself (update's
+// and restore's own stops). It requires the lock.
+func (e *Engine) CloseServe(ctx context.Context) error {
+	if err := e.requireLock(); err != nil {
+		return err
+	}
+	return e.closeServe()
 }
 
 // Receipt answers the receipt or the unfinished journal entry of request

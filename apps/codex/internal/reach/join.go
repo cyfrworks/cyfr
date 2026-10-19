@@ -121,16 +121,23 @@ func (e *Engine) joinReceiptFor(joinID string) *Join {
 // joinRequest is a join's canonical request: the machine name, whether
 // the identity is replaced first, and the auth key's fingerprint, never
 // the key.
-func joinDigest(hostname string, newNode bool, key []byte) string {
-	fields := map[string]any{"op": "join", "hostname": hostname, "new_node": newNode}
-	if len(key) > 0 {
-		fields["auth_key_fingerprint"] = "sha256:" + sha256Hex(key)
+func joinDigest(hostname string, newNode bool, fingerprint string) string {
+	return requestDigest(map[string]any{"op": "join", "hostname": hostname, "new_node": newNode, "auth_key_fingerprint": fingerprint})
+}
+
+// joinHostname is the machine name a join asks for: cyfr when none.
+func joinHostname(name string) string {
+	if name = strings.ToLower(strings.TrimSpace(name)); name != "" {
+		return name
 	}
-	return requestDigest(fields)
+	return defaultHostname
 }
 
 func (e *Engine) doJoin(ctx context.Context, r JoinRequest) (Receipt, error) {
 	if err := e.requireLock(); err != nil {
+		return Receipt{}, err
+	}
+	if _, err := e.readEnv(); err != nil {
 		return Receipt{}, err
 	}
 	var key []byte
@@ -141,18 +148,15 @@ func (e *Engine) doJoin(ctx context.Context, r JoinRequest) (Receipt, error) {
 		}
 		key = bytes.TrimSpace(raw)
 	}
-	hostname := strings.ToLower(strings.TrimSpace(r.Hostname))
-	if hostname == "" {
-		hostname = defaultHostname
-	}
-	digest := joinDigest(hostname, r.NewNode, key)
+	hostname := joinHostname(r.Hostname)
+	digest := joinDigest(hostname, r.NewNode, AuthKeyFingerprint(key))
 	if rc, ok, err := e.lookup(r.ID, digest); err != nil || ok {
 		if err != nil {
 			return Receipt{}, err
 		}
 		return answer(rc)
 	}
-	if rc, blocked, err := e.blocked(r.ID, digest, "join"); blocked || err != nil {
+	if rc, blocked, err := e.blocked(r.ID, digest, "join", ""); blocked || err != nil {
 		return rc, err
 	}
 	refuse := func(err error) (Receipt, error) {
@@ -307,6 +311,9 @@ func (e *Engine) prepareJoin(ctx context.Context, a *joinAttempt) string {
 		}
 	}
 	if len(serve) > 0 {
+		if err := e.closeServe(); err != nil {
+			return err.Error()
+		}
 		if why := e.stopRemove(ctx, serve); why != "" {
 			return why
 		}
@@ -314,19 +321,19 @@ func (e *Engine) prepareJoin(ctx context.Context, a *joinAttempt) string {
 	if a.NewNode {
 		res, err := e.docker.Run(ctx, Call{Args: []string{"volume", "rm", "--force", e.stateVolume()}, Deadline: StopDeadline})
 		if err != nil {
-			return fmt.Sprintf("docker volume rm failed (%v): %s", err, lastLine(res.Stderr))
+			return failed("docker volume rm", err, res.Stderr)
 		}
 	}
 	if _, err := e.docker.Run(ctx, Call{Args: []string{"volume", "inspect", e.stateVolume()}, Deadline: probeDeadline}); err != nil {
 		res, err := e.docker.Run(ctx, Call{Args: []string{"volume", "create", "--label", labelProject + "=" + e.project, "--label", "com.docker.compose.volume=tailscale_state", e.stateVolume()}, Deadline: StopDeadline})
 		if err != nil {
-			return fmt.Sprintf("docker volume create failed (%v): %s", err, lastLine(res.Stderr))
+			return failed("docker volume create", err, res.Stderr)
 		}
 	}
 	if _, err := e.docker.Run(ctx, Call{Args: []string{"network", "inspect", e.joinNetwork()}, Deadline: probeDeadline}); err != nil {
 		res, err := e.docker.Run(ctx, Call{Args: []string{"network", "create", "--label", labelJoinProject + "=" + e.project, e.joinNetwork()}, Deadline: StopDeadline})
 		if err != nil {
-			return fmt.Sprintf("docker network create failed (%v): %s", err, lastLine(res.Stderr))
+			return failed("docker network create", err, res.Stderr)
 		}
 	}
 	return ""
@@ -365,7 +372,7 @@ func (e *Engine) startJoinContainer(ctx context.Context, a *joinAttempt) (string
 	}
 	res, err := e.docker.Run(ctx, Call{Args: args, Deadline: StartDeadline})
 	if err != nil {
-		return "", fmt.Sprintf("docker run of the join container failed (%v): %s", err, lastLine(res.Stderr))
+		return "", failed("docker run of the join container", err, res.Stderr)
 	}
 	return name, ""
 }
@@ -461,7 +468,7 @@ func (e *Engine) removeJoinContainers(ctx context.Context, joinID string) string
 	}
 	res, err := e.docker.Run(ctx, Call{Args: append([]string{"rm", "-f"}, names...), Deadline: StopDeadline})
 	if err != nil && !onlyGone(res.Stderr) {
-		return fmt.Sprintf("docker rm failed (%v): %s", err, lastLine(res.Stderr))
+		return failed("docker rm", err, res.Stderr)
 	}
 	return ""
 }
@@ -507,6 +514,9 @@ func cancelDigest(joinID string) string {
 
 func (e *Engine) doCancelJoin(ctx context.Context, r CancelRequest) (Receipt, error) {
 	if err := e.requireLock(); err != nil {
+		return Receipt{}, err
+	}
+	if _, err := e.readEnv(); err != nil {
 		return Receipt{}, err
 	}
 	digest := cancelDigest(r.JoinID)
@@ -635,7 +645,7 @@ func (e *Engine) reapJoins(ctx context.Context, j *journal) error {
 	}
 	res, err := e.docker.Run(ctx, Call{Args: append([]string{"rm", "-f"}, names...), Deadline: StopDeadline})
 	if err != nil && !onlyGone(res.Stderr) {
-		return fmt.Errorf("docker rm failed (%v): %s", err, lastLine(res.Stderr))
+		return errors.New(failed("docker rm", err, res.Stderr))
 	}
 	return nil
 }
