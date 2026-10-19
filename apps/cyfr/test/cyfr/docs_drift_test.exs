@@ -237,6 +237,29 @@ defmodule Cyfr.DocsDriftTest do
            "Cyfr.Boundaries' product roots are not the glossary's parts and their web tiers"
   end
 
+  test "the env template states the CORS allowlist's contract as the boot holds it" do
+    # Absent, the configured origins stand; blank is the empty allowlist;
+    # the boot refuses the wildcard once sign-in is configured, never the
+    # absence (runtime_config_wiring_test.exs holds the three readings).
+    lines = Path.join(@repo_root, ".env.example") |> File.read!() |> String.split("\n")
+    at = Enum.find_index(lines, &(&1 == "CYFR_CORS_ALLOWED_ORIGINS="))
+    assert at, ".env.example assigns no empty CYFR_CORS_ALLOWED_ORIGINS"
+
+    comment =
+      lines
+      |> Enum.take(at)
+      |> Enum.reverse()
+      |> Enum.take_while(&String.starts_with?(&1, "#"))
+      |> Enum.reverse()
+      |> Enum.map_join(" ", &String.trim_leading(&1, "# "))
+
+    assert comment =~
+             "With the line removed, the origins the server's own configuration names stand"
+
+    assert comment =~ "refuses to boot on the wildcard `*` alone"
+    refute comment =~ ~r/removed[^.]*refuses to boot/
+  end
+
   test "the glossary's directories, compose services and images are the tree's" do
     for dir <- glossary_column("Directory") do
       assert File.dir?(Path.join(@repo_root, dir)),

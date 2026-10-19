@@ -593,6 +593,16 @@ services:
     networks:
       edge:
         ipv4_address: 172.16.234.3
+    # No capability but binding ports 80 and 443, which the caddy binary
+    # carries as a file capability and cannot exec without; no process
+    # gains a privilege by executing a setuid or file-capability binary
+    # beyond it.
+    cap_drop:
+      - ALL
+    cap_add:
+      - NET_BIND_SERVICE
+    security_opt:
+      - no-new-privileges:true
     depends_on:
       cyfr:
         condition: service_healthy
@@ -645,6 +655,12 @@ services:
     networks:
       edge:
         ipv4_address: 172.16.234.4
+    # No capability: userspace networking needs no TUN device, and Serve
+    # listens inside tailscaled's own network stack.
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "tailscale", "status"]
