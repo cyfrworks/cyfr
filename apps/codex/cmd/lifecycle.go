@@ -119,8 +119,11 @@ func workerKey(root []byte, serviceID string) []byte {
 	return mac.Sum(nil)
 }
 
-// envFile is a dotenv file held as its lines, so a key init adds lands on
-// the line that documents it and every other line is kept byte for byte.
+// envFile is a dotenv file held as its lines for writing, so a key init
+// adds lands on the line that documents it and every other line is kept
+// byte for byte. Every value the CLI reads from a dotenv file it reads
+// through reach.ReadEnvValues, as compose and the engine read it; envFile
+// only finds the lines to write.
 type envFile struct {
 	lines []string
 }
@@ -133,43 +136,45 @@ func (f *envFile) String() string {
 	return strings.Join(f.lines, "\n")
 }
 
-// assignments returns the indexes of the uncommented `key=` lines.
+// assignments returns the indexes of the lines that assign key, in each
+// form reach.ReadEnvValues reads: `key=…`, `export key=…`, `key: …` and a
+// bare `key`, which takes the environment's value. It reads lines alone,
+// so a line inside a quoted value running across lines is read as a line.
 func (f *envFile) assignments(key string) []int {
 	var found []int
 	for i, line := range f.lines {
-		if strings.HasPrefix(strings.TrimLeft(line, " \t"), key+"=") {
+		if assignsKey(line, key) {
 			found = append(found, i)
 		}
 	}
 	return found
 }
 
-// value returns key's value as compose's dotenv reader takes it: trimmed,
-// unquoted, an unquoted value ending at an inline ` #` comment. assigned
-// reports whether an uncommented assignment exists, even an empty one.
-func (f *envFile) value(key string) (value string, assigned bool) {
-	lines := f.assignments(key)
-	if len(lines) == 0 {
-		return "", false
+// assignsKey reports whether the dotenv line assigns key.
+func assignsKey(line, key string) bool {
+	line = strings.TrimLeft(line, " \t")
+	if rest, ok := strings.CutPrefix(line, "export"); ok && rest != "" && (rest[0] == ' ' || rest[0] == '\t') {
+		line = strings.TrimLeft(rest, " \t")
 	}
-	raw := strings.TrimSpace(strings.SplitN(strings.TrimLeft(f.lines[lines[0]], " \t"), "=", 2)[1])
-	if len(raw) >= 2 && (raw[0] == '"' || raw[0] == '\'') {
-		if end := strings.IndexByte(raw[1:], raw[0]); end >= 0 {
-			return raw[1 : end+1], true
-		}
+	rest, ok := strings.CutPrefix(line, key)
+	if !ok {
+		return false
 	}
-	if i := strings.Index(raw, " #"); i >= 0 {
-		raw = raw[:i]
-	}
-	return strings.TrimSpace(raw), true
+	rest = strings.TrimLeft(strings.TrimRight(rest, "\r"), " \t")
+	return rest == "" || rest[0] == '=' || rest[0] == ':'
 }
 
-// set writes `key=value` on key's assignment line, else on its first
-// commented example line (`# key=…`), else on a line appended at the end.
+// set writes `key=value` on key's first assignment line, taking out every
+// later one, since the last assignment of a name is the one compose
+// reads; else on its first commented example line (`# key=…`), else on a
+// line appended at the end.
 func (f *envFile) set(key, value string) {
 	line := key + "=" + value
 	if found := f.assignments(key); len(found) > 0 {
 		f.lines[found[0]] = line
+		for _, i := range slices.Backward(found[1:]) {
+			f.lines = slices.Delete(f.lines, i, i+1)
+		}
 		return
 	}
 	for i, l := range f.lines {
@@ -206,11 +211,13 @@ func refuseEnv(format string, args ...any) error {
 }
 
 // ensureStackKeys adds to a dotenv text the keys the stack needs and it
-// lacks, and nothing else. A key that is present is never rewritten; a
-// setting assigned twice, a malformed root or service id, and a service key
-// that does not derive from the root beside it are refused, since writing
-// around them would leave cyfr and the locus-runtime service unable to
-// authenticate each other.
+// lacks, and nothing else. values are the text's values as
+// reach.ReadEnvValues reads them, and it sets in values each key it adds.
+// A key that is present is never rewritten; a setting assigned twice, a
+// malformed root or service id, and a service key that does not derive
+// from the root beside it are refused, since writing around them would
+// leave cyfr and the locus-runtime service unable to authenticate each
+// other.
 //
 // The runtime root and the locus-runtime service key are one pair: with neither, both
 // are minted; with the root alone, the key is derived from it for
@@ -221,7 +228,7 @@ func refuseEnv(format string, args ...any) error {
 // is builds turned off, whether the URL is assigned empty or absent (the
 // reach head omits it when builds are off, and a switch removes its line),
 // and is left so.
-func ensureStackKeys(text string) (string, []envChange, error) {
+func ensureStackKeys(text string, values map[string]string) (string, []envChange, error) {
 	f := parseEnvFile(text)
 	for _, key := range stackVars {
 		if found := f.assignments(key); len(found) > 1 {
@@ -230,35 +237,38 @@ func ensureStackKeys(text string) (string, []envChange, error) {
 	}
 
 	var changes []envChange
+	set := func(key, value, how string) {
+		f.set(key, value)
+		values[key] = value
+		changes = append(changes, envChange{key, how})
+	}
 	mint := func(key, how string, generate func() (string, error)) error {
 		v, err := generate()
 		if err != nil {
 			return fmt.Errorf("generate %s: %w", key, err)
 		}
-		f.set(key, v)
-		changes = append(changes, envChange{key, how})
+		set(key, v, how)
 		return nil
 	}
 
-	if v, _ := f.value(secretKeyBaseVar); v == "" {
+	if values[secretKeyBaseVar] == "" {
 		if err := mint(secretKeyBaseVar, "generated", generateSecretKey); err != nil {
 			return "", nil, err
 		}
 	}
-	if v, _ := f.value(backendsKeyVar); v == "" {
+	if values[backendsKeyVar] == "" {
 		if err := mint(backendsKeyVar, "generated", generateHexKey); err != nil {
 			return "", nil, err
 		}
 	}
 
-	serviceID, _ := f.value(serviceIDVar)
+	serviceID := values[serviceIDVar]
 	if serviceID == "" {
 		serviceID = defaultServiceID
 	} else if !serviceIDPattern.MatchString(serviceID) {
 		return "", nil, refuseEnv("%s in .env is %q, which is not `wrk_` followed by 1 to 64 letters, digits, `_` or `-`, so no key can be derived for it: fix the id (and the matching entry of CYFR_LOCUS_RUNTIME_WORKERS) and run cyfr init again.", serviceIDVar, serviceID)
 	}
-	rootText, _ := f.value(workerRootVar)
-	serviceKeyText, _ := f.value(serviceKeyVar)
+	rootText, serviceKeyText := values[workerRootVar], values[serviceKeyVar]
 	root, rootOK := decodeHexKey(rootText)
 	switch {
 	case rootText != "" && !rootOK:
@@ -270,13 +280,11 @@ func ensureStackKeys(text string) (string, []envChange, error) {
 		if err != nil {
 			return "", nil, fmt.Errorf("generate %s: %w", workerRootVar, err)
 		}
-		f.set(workerRootVar, minted)
-		changes = append(changes, envChange{workerRootVar, "generated"})
+		set(workerRootVar, minted, "generated")
 		root, _ = decodeHexKey(minted)
 		fallthrough
 	case serviceKeyText == "":
-		f.set(serviceKeyVar, hex.EncodeToString(workerKey(root, serviceID)))
-		changes = append(changes, envChange{serviceKeyVar, "derived for " + serviceID})
+		set(serviceKeyVar, hex.EncodeToString(workerKey(root, serviceID)), "derived for "+serviceID)
 	default:
 		key, keyOK := decodeHexKey(serviceKeyText)
 		if !keyOK || !hmac.Equal(key, workerKey(root, serviceID)) {
@@ -291,13 +299,11 @@ func ensureStackKeys(text string) (string, []envChange, error) {
 	// tinctures from its own origin, and behind the proxy of a tailnet or
 	// public home they are still that one origin, so no browser client of
 	// this stack is cross-origin. Never a wildcard.
-	if _, assigned := f.value(corsOriginsVar); !assigned {
-		f.set(corsOriginsVar, "")
-		changes = append(changes, envChange{corsOriginsVar, "empty: no cross-origin browser client"})
+	if _, assigned := values[corsOriginsVar]; !assigned {
+		set(corsOriginsVar, "", "empty: no cross-origin browser client")
 	}
 
-	buildsURL, _ := f.value(buildsURLVar)
-	buildsKey, _ := f.value(buildsKeyVar)
+	buildsURL, buildsKey := values[buildsURLVar], values[buildsKeyVar]
 	switch {
 	case buildsURL != "" && buildsKey != "":
 	case buildsURL != "":
@@ -305,8 +311,7 @@ func ensureStackKeys(text string) (string, []envChange, error) {
 			return "", nil, err
 		}
 	case buildsKey != "":
-		f.set(buildsURLVar, defaultBuildsURL)
-		changes = append(changes, envChange{buildsURLVar, defaultBuildsURL})
+		set(buildsURLVar, defaultBuildsURL, defaultBuildsURL)
 	}
 
 	return f.String(), changes, nil
@@ -320,7 +325,11 @@ func ensureEnvFileKeys(path string) ([]envChange, error) {
 	if err != nil {
 		return nil, fmt.Errorf("read %s: %w", path, err)
 	}
-	text, changes, err := ensureStackKeys(string(data))
+	values, err := reach.ReadEnvValues(path)
+	if err != nil {
+		return nil, fmt.Errorf("read %s: %w", path, err)
+	}
+	text, changes, err := ensureStackKeys(string(data), values)
 	if err != nil || len(changes) == 0 {
 		return nil, err
 	}
@@ -617,12 +626,19 @@ database_path: ./data/cyfr.db
 			}
 			tokenMinted = true
 		}
-		text, changes, err := ensureStackKeys(renderEnvFile(string(tmpl), adminEmail, token))
+		// The template's values are the rendered text's for every key
+		// ensureStackKeys and localHead read: renderEnvFile sets only the
+		// operators' or the setup token's line.
+		values, err := reach.ReadEnvValues(".env.example")
+		if err != nil {
+			return fmt.Errorf("Failed to read .env.example: %w", err)
+		}
+		text, changes, err := ensureStackKeys(renderEnvFile(string(tmpl), adminEmail, token), values)
 		if err != nil {
 			return err
 		}
 		f := parseEnvFile(text)
-		d, err := localHead(f)
+		d, err := localHead(values)
 		if err != nil {
 			return err
 		}
@@ -787,11 +803,11 @@ database_path: ./data/cyfr.db
 // changes an existing one's. A --reach naming the mode .env holds is no
 // change and passes.
 func refuseExistingReach(path string, o initOptions) error {
-	data, err := os.ReadFile(path)
+	values, err := reach.ReadEnvValues(path)
 	if err != nil {
 		return fmt.Errorf("read %s: %w", path, err)
 	}
-	current, _ := parseEnvFile(string(data)).value("CYFR_REACH")
+	current := values["CYFR_REACH"]
 	if current == "" {
 		return refusalError{reach.Refuse("reach_missing", nil)}
 	}
@@ -949,17 +965,17 @@ func applyInitReach(ctx context.Context, c reachChoice, key []byte, optionsGiven
 }
 
 // localHead is the head a new home's .env starts from, reached from this
-// computer only, its port and builds URL the ones f holds.
-func localHead(f *envFile) (reach.Derivation, error) {
+// computer only, its port and builds URL the ones values hold.
+func localHead(values map[string]string) (reach.Derivation, error) {
 	cur := reach.Current{Port: 4000}
-	if text, _ := f.value("CYFR_PORT"); text != "" {
+	if text := values["CYFR_PORT"]; text != "" {
 		port, err := strconv.Atoi(text)
 		if err != nil {
 			return reach.Derivation{}, refusalError{reach.Refuse("reach_setting_invalid", map[string]string{"key": "CYFR_PORT", "value": text})}
 		}
 		cur.Port = port
 	}
-	cur.BuildsURL, _ = f.value(buildsURLVar)
+	cur.BuildsURL = values[buildsURLVar]
 	d, err := reach.Derive(reach.Target{Mode: reach.ModeLocal}, cur, nil)
 	return d, engineFailure(err)
 }
@@ -987,17 +1003,14 @@ type selection struct {
 // port 4000 where it names none that reads.
 func existingSelection(path string) selection {
 	sel := selection{port: 4000}
-	data, err := os.ReadFile(path)
+	values, err := reach.ReadEnvValues(path)
 	if err != nil {
 		return sel
 	}
-	f := parseEnvFile(string(data))
-	mode, _ := f.value("CYFR_REACH")
-	buildsURL, _ := f.value(buildsURLVar)
-	if mode != "" {
-		sel.profiles = reach.Profiles(mode, buildsURL)
+	if mode := values["CYFR_REACH"]; mode != "" {
+		sel.profiles = reach.Profiles(mode, values[buildsURLVar])
 	}
-	if text, _ := f.value("CYFR_PORT"); text != "" {
+	if text := values["CYFR_PORT"]; text != "" {
 		if port, err := strconv.Atoi(text); err == nil && port >= 1 && port <= 65535 {
 			sel.port = port
 		}
@@ -1270,18 +1283,13 @@ func runDown(ctx context.Context, out io.Writer) error {
 }
 
 // restoreBarred reports whether the dotenv file at path sets
-// restoreBarrier non-empty on any of its assignments, and the snapshot the
-// first such one names.
+// restoreBarrier non-empty, as compose gives it to the cyfr service's
+// entrypoint (its last assignment), and the snapshot it names.
 func restoreBarred(path string) (string, bool) {
-	data, err := os.ReadFile(path)
+	values, err := reach.ReadEnvValues(path)
 	if err != nil {
 		return "", false
 	}
-	f := parseEnvFile(string(data))
-	for _, i := range f.assignments(restoreBarrier) {
-		if value, _ := (&envFile{lines: f.lines[i : i+1]}).value(restoreBarrier); value != "" {
-			return value, true
-		}
-	}
-	return "", false
+	snapshot := values[restoreBarrier]
+	return snapshot, snapshot != ""
 }

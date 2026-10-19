@@ -39,7 +39,7 @@ var restoreCmd = &cobra.Command{
 	Short: "Put a snapshot from backups/ back with the whole cell stopped, and declare the restore",
 	Long: `Put back a snapshot 'cyfr update' took (backups/<timestamp>/) and declare the restore, so the next start suspends every credential and method the backup carried until its owner re-enables it.
 
-1. Read the snapshot: snapshot.json must be there and say complete, and its parts must be exactly what the directory holds; an incomplete snapshot or a layout cyfr restore cannot invert refuses before anything stops.
+1. Read the snapshot: snapshot.json must be there and say complete, its parts must be exactly what the directory holds, and its .env must be one cyfr starts a home from (no COMPOSE_* setting, and a reach whose settings agree); an incomplete snapshot, a layout cyfr restore cannot invert or a .env cyfr refuses refuses before anything stops.
 2. Take the stack's lock, finishing a change an interrupted command left; cancel a tailnet join that waits for approval; then stop this host's stack, timing each service.
 3. Bar the cell from starting: set CYFR_RESTORE_INCOMPLETE=<snapshot> in .env, synced, and remove the stopped cyfr container, so every start of the cyfr service until the restore is declared is a new container that reads the setting and refuses (the image's entrypoint), and 'cyfr up' and 'cyfr update' refuse it too.
 4. Put the snapshot's .env (with the setting) back and its docker-compose.yml beside the project's, and read the configuration they give cyfr: the setting must reach the cyfr service, the database, the storage root and every bind mounted under it must be where the snapshot can be put back, and the keyring must be the snapshot's. Only then does the snapshot's docker-compose.yml replace the project's, so the compose file in place delivers the setting at every step. A refusal here puts the two files back as they were, which lifts the bar.
@@ -108,7 +108,8 @@ type snapshotFiles struct {
 	parts    map[string]bool
 	// database is the dump's kind: sqlite or postgres.
 	database string
-	keyring  *envFile
+	// keyring are the keyring file's settings, read as .env is read.
+	keyring map[string]string
 }
 
 func (s *snapshotFiles) path(part string) string { return filepath.Join(s.dir, part) }
@@ -117,9 +118,10 @@ func (s *snapshotFiles) path(part string) string { return filepath.Join(s.dir, p
 // back: no snapshot.json or one not complete, a part listed twice, unknown
 // or missing, an entry no part names, a database of neither kind, a WAL
 // beside a dump, storage/ against the storage adapter, scaffold files
-// snapshot.json does not list as managed ones, or a keyring file with no
-// key. A snapshot without the scaffold part, which no released cyfr took,
-// is refused as one it cannot put back whole.
+// snapshot.json does not list as managed ones, a keyring file with no
+// key, or a .env the engine refuses (reach.CheckEnvFile). A snapshot
+// without the scaffold part, which no released cyfr took, is refused as
+// one it cannot put back whole.
 func readSnapshot(dir string) (*snapshotFiles, error) {
 	refuse := func(format string, args ...any) error {
 		return fmt.Errorf("%s cannot be restored: %s; nothing was changed", dir, fmt.Sprintf(format, args...))
@@ -207,29 +209,22 @@ func readSnapshot(dir string) (*snapshotFiles, error) {
 	if s.parts["database-wal"] && s.database != "sqlite" {
 		return nil, refuse("it holds a WAL beside a PostgreSQL dump")
 	}
-	keyring, err := os.ReadFile(s.path("keyring"))
-	if err != nil {
+	if s.keyring, err = reach.ReadEnvValues(s.path("keyring")); err != nil {
 		return nil, refuse("the keyring does not read (%v)", err)
 	}
-	s.keyring = parseEnvFile(string(keyring))
-	if !slices.ContainsFunc(keyringSettings, func(name string) bool { _, ok := s.keyring.value(name); return ok }) {
+	if !slices.ContainsFunc(keyringSettings, func(name string) bool { _, ok := s.keyring[name]; return ok }) {
 		return nil, refuse("its keyring file holds neither %s", strings.Join(keyringSettings, " nor "))
 	}
-	env, err := os.ReadFile(s.path(".env"))
-	if err != nil {
-		return nil, refuse("its .env does not read (%v)", err)
-	}
-	// The snapshot's .env becomes the project's: like any .env a cyfr
-	// command runs compose under, it says how its home is reached and
-	// chooses none of compose's files, project or services.
-	snapshotEnv := parseEnvFile(string(env))
-	if mode, _ := snapshotEnv.value("CYFR_REACH"); mode == "" {
-		return nil, refuse("its .env does not set CYFR_REACH, so the home it puts back would not know how it is reached")
-	}
-	for _, line := range snapshotEnv.lines {
-		if name, _, ok := strings.Cut(strings.TrimLeft(line, " \t"), "="); ok && strings.HasPrefix(name, "COMPOSE_") {
-			return nil, refuse("its .env sets %s, which Docker Compose would read to choose the stack's files, project or services behind cyfr's back", name)
+	// The snapshot's .env becomes the project's, so it is refused before
+	// anything stops as the engine refuses a home's .env before anything
+	// starts: a COMPOSE_* setting in any form, then a head that does not
+	// boot.
+	if err := reach.CheckEnvFile(s.path(".env")); err != nil {
+		var r *reach.Refusal
+		if !errors.As(err, &r) {
+			return nil, refuse("its .env does not read (%v)", err)
 		}
+		return nil, fmt.Errorf("%s cannot be restored, and nothing was changed: its .env would become this home's, and %w", dir, refusalError{r})
 	}
 	return s, nil
 }
@@ -794,7 +789,7 @@ func (r *restorer) readRestoredConfig() error {
 	}
 
 	for _, name := range keyringSettings {
-		want, inSnapshot := r.snap.keyring.value(name)
+		want, inSnapshot := r.snap.keyring[name]
 		raw := cyfr.Environment[name]
 		has := raw != nil && strings.TrimSpace(*raw) != ""
 		if has {

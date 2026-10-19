@@ -944,15 +944,19 @@ func TestRestoreKilledAtItsConfigurationReadLeavesComposeBarred(t *testing.T) {
 	}
 }
 
-// restoreBarred reads the bar from any assignment, quoted or not, since
-// compose takes a later assignment over an earlier one; withBarrier takes
-// every earlier assignment out, so the one it writes is the only one.
+// restoreBarred reads the bar as compose gives it to the cyfr service's
+// entrypoint: the last assignment, in any form, quoted or not; withBarrier
+// takes every earlier assignment out, in any form, so the one it writes is
+// the only one.
 func TestRestoreBarReadsEveryAssignment(t *testing.T) {
 	for text, want := range map[string]string{
 		"A=1\n":                      "",
 		"CYFR_RESTORE_INCOMPLETE=\n": "",
 		"CYFR_RESTORE_INCOMPLETE='/p/backups/x'\n":                 "/p/backups/x",
 		"CYFR_RESTORE_INCOMPLETE=\nCYFR_RESTORE_INCOMPLETE=/p/b\n": "/p/b",
+		"CYFR_RESTORE_INCOMPLETE=/p/b\nCYFR_RESTORE_INCOMPLETE=\n": "",
+		"export CYFR_RESTORE_INCOMPLETE=/p/b\n":                    "/p/b",
+		"CYFR_RESTORE_INCOMPLETE: /p/b\n":                          "/p/b",
 		"# CYFR_RESTORE_INCOMPLETE=/p/b\n":                         "",
 	} {
 		path := filepath.Join(t.TempDir(), ".env")
@@ -963,7 +967,7 @@ func TestRestoreBarReadsEveryAssignment(t *testing.T) {
 			t.Errorf("restoreBarred(%q) = %q, %v; want %q", text, got, barred, want)
 		}
 	}
-	got := string(withBarrier([]byte("A=1\nCYFR_RESTORE_INCOMPLETE='old'\nB=2\nCYFR_RESTORE_INCOMPLETE=\n"), "/p/backups/x"))
+	got := string(withBarrier([]byte("A=1\nexport CYFR_RESTORE_INCOMPLETE='old'\nB=2\nCYFR_RESTORE_INCOMPLETE: \n"), "/p/backups/x"))
 	if want := "A=1\nB=2\nCYFR_RESTORE_INCOMPLETE='/p/backups/x'\n"; got != want {
 		t.Errorf("withBarrier answered %q, want %q", got, want)
 	}
@@ -1072,8 +1076,7 @@ func TestEntrypointRefusesWhileTheRestoreIsBarred(t *testing.T) {
 // The staged configuration is read as compose will read it in place: with
 // the project's override file after it. COMPOSE_FILE in cyfr's environment
 // names nothing, since the engine's runner takes every COMPOSE_* out of a
-// docker call's; a snapshot whose .env sets a COMPOSE_* name, which would
-// become the project's, refuses before anything stops.
+// docker call's.
 func TestRestoreReadsTheStagedConfigurationAsComposeWill(t *testing.T) {
 	compose := shippedCompose(t)
 	r := newRestoreScenario(t, compose, nil, nil)
@@ -1085,21 +1088,50 @@ func TestRestoreReadsTheStagedConfigurationAsComposeWill(t *testing.T) {
 	if !slices.Contains(r.log(), r.stagedConfig("docker-compose.override.yml")) {
 		t.Errorf("the staged configuration was read without the override file:\n%s", strings.Join(r.log(), "\n"))
 	}
+}
 
-	r = newRestoreScenario(t, compose, nil, nil)
-	if err := os.WriteFile(filepath.Join(r.dir, ".env"), append(slices.Clone(r.env), "COMPOSE_FILE=other.yml\n"...), 0600); err != nil {
-		t.Fatal(err)
+// A snapshot's .env becomes the project's, so the restore refuses it as
+// the engine refuses a home's .env (reach.CheckEnvFile), with its
+// sentence, before anything stops: a COMPOSE_* setting in any form, and a
+// head that does not boot, its CYFR_PUBLIC_URL not its host's, or no
+// CYFR_REACH at all.
+func TestRestoreRefusesASnapshotEnvTheEngineRefusesBeforeAnythingStops(t *testing.T) {
+	compose := shippedCompose(t)
+	for name, edit := range map[string]func(env string) string{
+		"COMPOSE_FILE":                func(env string) string { return env + "COMPOSE_FILE=other.yml\n" },
+		"export COMPOSE_PROFILES":     func(env string) string { return env + "export COMPOSE_PROFILES=public\n" },
+		"COMPOSE_PROJECT_NAME: other": func(env string) string { return env + "COMPOSE_PROJECT_NAME: other\n" },
+		"a public URL not the host's": func(env string) string {
+			return strings.Replace(env, "CYFR_PUBLIC_URL=https://cyfr.example.com\n", "CYFR_PUBLIC_URL=https://elsewhere.example.com\n", 1)
+		},
+		"no CYFR_REACH": func(env string) string { return strings.Replace(env, "CYFR_REACH=public\n", "", 1) },
+	} {
+		t.Run(name, func(t *testing.T) {
+			r := newRestoreScenario(t, compose, nil, nil)
+			snapshotEnv := filepath.Join(r.dir, ".env")
+			edited := edit(string(r.env))
+			if edited == string(r.env) {
+				t.Fatalf("the edit changed nothing in %q", r.env)
+			}
+			if err := os.WriteFile(snapshotEnv, []byte(edited), 0600); err != nil {
+				t.Fatal(err)
+			}
+			var refusal *reach.Refusal
+			if !errors.As(reach.CheckEnvFile(snapshotEnv), &refusal) {
+				t.Fatalf("the engine does not refuse the snapshot's .env:\n%s", edited)
+			}
+			r.edit("data/blobs/x", "rewritten")
+			before := read(t, filepath.Join(r.project, "docker-compose.yml"))
+			out, err := r.restore(true)
+			if err == nil || !strings.Contains(err.Error(), refusal.Message()) || !strings.Contains(err.Error(), "nothing was changed") {
+				t.Fatalf("restore answered %v, want the refusal %q\n%s", err, refusal.Message(), out)
+			}
+			if log := r.log(); log != nil {
+				t.Errorf("docker or the engine ran before the refusal:\n%s", strings.Join(log, "\n"))
+			}
+			r.configAsBefore(before, string(r.env))
+		})
 	}
-	r.edit("data/blobs/x", "rewritten")
-	before := read(t, filepath.Join(r.project, "docker-compose.yml"))
-	out, err := r.restore(true)
-	if err == nil || !strings.Contains(err.Error(), "its .env sets COMPOSE_FILE") || !strings.Contains(err.Error(), "nothing was changed") {
-		t.Fatalf("restore answered %v\n%s", err, out)
-	}
-	if log := r.log(); log != nil {
-		t.Errorf("docker or the engine ran before the refusal:\n%s", strings.Join(log, "\n"))
-	}
-	r.configAsBefore(before, string(r.env))
 }
 
 // All four default override filenames are tested with docker-compose.yml

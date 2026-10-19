@@ -130,6 +130,38 @@ func TestInitNoInteractiveRules(t *testing.T) {
 	}
 }
 
+// An existing .env is read as compose and the engine read it
+// (reach.ReadEnvValues): `export CYFR_REACH=local` says how the home is
+// reached, a stack key spelled `export NAME=` is kept and never minted
+// again beside it, and the port is the last assignment's.
+func TestInitReadsAnExistingEnvAsComposeDoes(t *testing.T) {
+	newInitProject(t)
+	useFakeEngine(t)
+	const kept = "kept-secret-key-base-kept-secret-key-base-kept-secret-key-base-kept"
+	env := "export CYFR_REACH=local\nexport " + secretKeyBaseVar + "=" + kept + "\nCYFR_PORT=4000\nCYFR_PORT: 4123\n"
+	if err := os.WriteFile(".env", []byte(env), 0600); err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	if err := runInit(context.Background(), initOptions{noPull: true}, &out, &out); err != nil {
+		t.Fatalf("init on %q: %v\n%s", env, err, out.String())
+	}
+	f := projectEnv(t)
+	if v, _ := f.value(secretKeyBaseVar); v != kept || len(f.assignments(secretKeyBaseVar)) != 1 {
+		t.Errorf("init rewrote the kept %s (now %q, on %d lines):\n%s", secretKeyBaseVar, v, len(f.assignments(secretKeyBaseVar)), f.String())
+	}
+	if !strings.HasPrefix(f.String(), env) {
+		t.Errorf("init moved .env's own lines:\n%s", f.String())
+	}
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := cfg.Contexts["local"].URL; got != "http://127.0.0.1:4123" {
+		t.Errorf("the local context is %s, want the port of .env's last assignment", got)
+	}
+}
+
 // The CLI's local context and Prism's address are the loopback port the
 // home's .env names.
 func TestInitFollowsTheTemplatesPort(t *testing.T) {
@@ -296,6 +328,8 @@ func TestInitRefusesAnExistingEnvWithoutReachAndWritesNothing(t *testing.T) {
 		{"no CYFR_REACH", "CYFR_SECRET_KEY_BASE=kept\nCYFR_HOST=localhost\n", initOptions{}, reach.Refuse("reach_missing", nil).Message()},
 		{"CYFR_REACH blank", "CYFR_REACH=\nCYFR_LOCUS_RUNTIME_ROOT=\n", initOptions{mode: reach.ModeLocal}, reach.Refuse("reach_missing", nil).Message()},
 		{"another mode", "CYFR_REACH=local\n", initOptions{mode: reach.ModePublic, reachOptions: reachOptions{domain: "cyfr.example.com"}}, ".env says this home is reached as local"},
+		// The last assignment is the one compose reads.
+		{"CYFR_REACH blanked by a later line", "CYFR_REACH=local\nCYFR_REACH=\n", initOptions{}, reach.Refuse("reach_missing", nil).Message()},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			newInitProject(t)
