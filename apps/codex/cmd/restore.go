@@ -210,6 +210,10 @@ func readSnapshot(dir string) (*snapshotFiles, error) {
 		return nil, refuse("it holds a WAL beside a PostgreSQL dump")
 	}
 	if s.keyring, err = reach.ReadEnvValues(s.path("keyring")); err != nil {
+		// The engine's sentence names .env; the keyring's line is said here.
+		if r := (*reach.Refusal)(nil); errors.As(err, &r) && r.Code == "compose_env_refused" && r.Payload["line"] != "" {
+			return nil, refuse("line %s of its keyring does not read as Docker Compose reads it", r.Payload["line"])
+		}
 		return nil, refuse("the keyring does not read (%v)", err)
 	}
 	if !slices.ContainsFunc(keyringSettings, func(name string) bool { _, ok := s.keyring[name]; return ok }) {

@@ -77,3 +77,27 @@ func TestRestoreBarKeepsAMultilineValueWithAnEscapedQuoteWhole(t *testing.T) {
 		t.Fatalf("the editor changed the unrelated multiline value after an escaped apostrophe:\noriginal: %q\nedited: %q", original, got)
 	}
 }
+
+// A .env line compose does not read is said by the engine's sentence,
+// naming the line and never its text, wherever a command reads .env.
+func TestAnEnvLineComposeDoesNotReadIsSaidByItsLine(t *testing.T) {
+	const secret = "s3cr3t-in-a-broken-line"
+	path := filepath.Join(t.TempDir(), ".env")
+	if err := os.WriteFile(path, []byte("CYFR_REACH=local\nBROKEN! "+secret+" =value\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	sentence := "Line 2 of `.env` does not read as Docker Compose reads it, so cyfr cannot read or change .env as compose would. Nothing was changed. Correct that line, then run the command again."
+	_, keysErr := ensureEnvFileKeys(path)
+	if want := "read " + path + ": " + sentence; keysErr == nil || keysErr.Error() != want {
+		t.Errorf("ensureEnvFileKeys answered %v, want %q", keysErr, want)
+	}
+	_, linkErr := setupLink(path)
+	if want := path + " does not read (" + sentence + ")"; linkErr == nil || linkErr.Error() != want {
+		t.Errorf("setupLink answered %v, want %q", linkErr, want)
+	}
+	for _, err := range []error{keysErr, linkErr} {
+		if err != nil && strings.Contains(err.Error(), secret) {
+			t.Errorf("the refusal carries the line's text: %v", err)
+		}
+	}
+}

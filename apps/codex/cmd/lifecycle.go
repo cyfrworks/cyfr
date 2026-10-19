@@ -231,7 +231,7 @@ func stackKeys(values map[string]string) (map[string]string, []envChange, error)
 func ensureEnvFileKeys(path string) ([]envChange, error) {
 	values, err := reach.ReadEnvValues(path)
 	if err != nil {
-		return nil, fmt.Errorf("read %s: %w", path, err)
+		return nil, fmt.Errorf("read %s: %w", path, engineFailure(err))
 	}
 	add, changes, err := stackKeys(values)
 	if err != nil || len(changes) == 0 {
@@ -257,7 +257,7 @@ func newEnv(path, adminEmail, setupToken string) ([]byte, []envChange, reach.Der
 	}
 	values, err := reach.ReadEnvValues(path)
 	if err != nil {
-		return nil, nil, reach.Derivation{}, fmt.Errorf("Failed to read %s: %w", path, err)
+		return nil, nil, reach.Derivation{}, fmt.Errorf("Failed to read %s: %w", path, engineFailure(err))
 	}
 	set := map[string]string{}
 	if adminEmail != "" {
@@ -734,7 +734,7 @@ func refuseExistingReach(path string, o initOptions) error {
 	}
 	values, err := reach.ReadEnvValues(path)
 	if err != nil {
-		return fmt.Errorf("read %s: %w", path, err)
+		return fmt.Errorf("read %s: %w", path, engineFailure(err))
 	}
 	current := values["CYFR_REACH"]
 	if current == "" {

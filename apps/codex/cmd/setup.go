@@ -58,7 +58,7 @@ func setupLink(path string) (string, error) {
 		return "", errors.New("There is no .env here, so no setup link: run this command in the home's directory, or `cyfr init` to make a new home")
 	}
 	if err != nil {
-		return "", fmt.Errorf("%s does not read (%v)", path, err)
+		return "", fmt.Errorf("%s does not read (%v)", path, engineFailure(err))
 	}
 	token, admins := values[setupTokenVar], values[adminEmailVar]
 	switch {
