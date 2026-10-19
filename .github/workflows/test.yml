@@ -1308,6 +1308,12 @@ jobs:
       # cases hold.
       - name: The Compose proof's teardown against stand-ins
         run: bash tests/compose-proof/cleanup-test.sh
+      # The Compose proof's whole-object predicates on canned objects: each
+      # changed, dropped or added field of a head, the Serve configuration,
+      # the preview, the cookie's redirects, a forged anonymous refusal and
+      # a proxy's capabilities fails.
+      - name: The Compose proof's predicates
+        run: bash tests/compose-proof/predicates-test.sh
       # The stand-in against a stub upstream: what the pinned image's Serve
       # does with Host, the forwarding and identity headers and an empty
       # configuration, its status and its join, and every one of those
@@ -1587,12 +1593,13 @@ jobs:
       - name: HSTS behind the shipped proxy
         run: tests/proxy-hsts/run.sh
 
-  # The tailscale image docker-compose.yml pins is the one a real tailnet
-  # last verified (tests/tailnet-real/verified-image, which a pass of
-  # tests/tailnet-real/run.sh writes): another tag, or another digest under
-  # the same tag as `cyfr update` or Dependabot writes, fails here until a
-  # real-tailnet run verifies it, since the Compose proof's stand-in
-  # certifies no Tailscale binary.
+  # The tailscale image docker-compose.yml pins is the one a passing
+  # real-tailnet run recorded (tests/tailnet-real/verified-image, which only
+  # a pass of tests/tailnet-real/run.sh writes): with no record, or one for
+  # another tag or another digest under the same tag as `cyfr update` or
+  # Dependabot writes, this fails until a real-tailnet run verifies the
+  # pinned reference, since the Compose proof's stand-in certifies no
+  # Tailscale binary.
   tailscale-image-guard:
     name: The pinned tailscale image is the one a real tailnet verified
     runs-on: ubuntu-latest
@@ -1601,6 +1608,10 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: The guard's own cases
         run: bash tests/tailnet-real/guard-test.sh
+      # The real-tailnet run's predicates on canned answers: a closed Serve
+      # and the identity projection, the run itself being by hand.
+      - name: The real-tailnet run's predicates
+        run: bash tests/tailnet-real/predicates-test.sh
       - name: The pinned tailscale image is the verified one
         run: bash tests/tailnet-real/guard.sh
 
