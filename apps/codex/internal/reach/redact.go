@@ -97,7 +97,7 @@ func redactorFor(data []byte, names []string) *redactor {
 		if k, r, ok := strings.Cut(line, ":"); ok && (!found || len(k) < len(key)) {
 			key, rhs, found = k, r, true
 		}
-		key = strings.TrimSpace(dotenvExport.ReplaceAllString(strings.TrimSpace(key), ""))
+		key = strings.TrimSpace(cutExport(strings.TrimSpace(key)))
 		to := &r.secrets
 		if head[key] {
 			to = &r.keep
