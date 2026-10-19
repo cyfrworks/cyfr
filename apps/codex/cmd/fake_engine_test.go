@@ -267,6 +267,9 @@ func (e *fakeEngine) Resent(id string, c reach.RequestContent) (reach.Receipt, b
 
 func (e *fakeEngine) Docker() reach.Docker { return fakeRunner{e.s} }
 
+// Redactor is the engine's own redaction pass for the project.
+func (e *fakeEngine) Redactor() *reach.Redactor { return reach.NewRedactor(e.dir) }
+
 // ComposeArgs answers the selection the engine documents for h: its
 // project, its materialized file, the project directory and its profiles.
 // As the engine's, it needs the lock held.
@@ -512,7 +515,7 @@ func (e *fakeEngine) StartWithin(ctx context.Context, cause string, health time.
 	}
 	if h, err := e.Head(); err == nil && os.Getenv("FAKE_DOCKER_DIR") != "" {
 		res, err := fakeRunner{}.Run(ctx, reach.Call{Args: append(composePrefixArgs(e.dir, h), "up", "-d"), Stdout: io.Discard, Stderr: io.Discard})
-		if err := callFailure(res, err); err != nil {
+		if err := callFailure(e.Redactor(), res, err); err != nil {
 			return reach.Receipt{Op: "start", State: "completed", Outcome: "failed"}, fmt.Errorf("cyfr did not become healthy (docker compose up: %v)", err)
 		}
 	}

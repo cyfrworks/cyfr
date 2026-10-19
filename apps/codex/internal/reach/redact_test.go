@@ -180,3 +180,38 @@ func TestWatchdogLinesAreRedacted(t *testing.T) {
 		t.Errorf("the watchdog exited %d, saying %q", code, stderr.String())
 	}
 }
+
+// A command's redactor is the engine's pass: .env's values, of every .env
+// the project has held while it was used, and the values the command
+// holds, whatever their length; its writer redacts a line at a time, a
+// secret split across writes included, flushing at each line break and
+// carriage return and at Flush.
+func TestCommandRedactorIsTheEnginesPass(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, ".env"), []byte("CYFR_REACH=local\nFIRST=first-env-secret\n"))
+	r := NewRedactor(dir)
+	if got := r.Text("a first-env-secret at localhost"); got != "a <redacted> at localhost" {
+		t.Errorf("the first .env's value reads %q", got)
+	}
+	writeFile(t, filepath.Join(dir, ".env"), []byte("CYFR_REACH=local\nSECOND=second-env-secret\n"))
+	r.Hold("pw", "postgres://u:pw@db/x")
+	if got := r.Text("first-env-secret second-env-secret postgres://u:pw@db/x pw local"); got != "<redacted> <redacted> <redacted> <redacted> local" {
+		t.Errorf("the redactor reads %q", got)
+	}
+	var out bytes.Buffer
+	w := r.Writer(&out)
+	for _, chunk := range []string{"Pulling sec", "ond-env-secret\rDown", "loading 50%\r", "done\nlast first-env-", "secret"} {
+		if n, err := w.Write([]byte(chunk)); n != len(chunk) || err != nil {
+			t.Fatalf("Write answered %d, %v", n, err)
+		}
+	}
+	if got := out.String(); got != "Pulling <redacted>\rDownloading 50%\rdone\n" {
+		t.Errorf("before the flush the writer wrote %q", got)
+	}
+	if err := w.Flush(); err != nil || out.String() != "Pulling <redacted>\rDownloading 50%\rdone\nlast <redacted>" {
+		t.Errorf("after the flush the writer wrote %q (%v)", out.String(), err)
+	}
+	if err := r.Err(fmt.Errorf("docker: %w", fs.ErrNotExist)); !errors.Is(err, fs.ErrNotExist) {
+		t.Errorf("Err lost the error's identity: %v", err)
+	}
+}

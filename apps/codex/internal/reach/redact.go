@@ -4,11 +4,14 @@
 package reach
 
 import (
+	"bytes"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 
 	"gopkg.in/yaml.v3"
 )
@@ -47,13 +50,14 @@ func (e *Engine) redactor() *redactor {
 }
 
 // publishedNames are the names the engine says that no .env value hides:
-// the project's, its compose files' services, the engine's own services
-// and words.
-func (e *Engine) publishedNames() []string {
-	names := []string{e.project}
-	files, _ := e.defaultFiles()
+// the project's, then its compose files' services.
+func (e *Engine) publishedNames() []string { return publishedNames(e.dir) }
+
+func publishedNames(dir string) []string {
+	names := []string{projectName(dir)}
+	files, _ := defaultFileSet(dir)
 	for _, f := range files {
-		data, err := os.ReadFile(filepath.Join(e.dir, f))
+		data, err := os.ReadFile(filepath.Join(dir, f))
 		if err != nil {
 			continue
 		}
@@ -97,7 +101,7 @@ func redactorFor(data []byte, names []string) *redactor {
 		if k, r, ok := strings.Cut(line, ":"); ok && (!found || len(k) < len(key)) {
 			key, rhs, found = k, r, true
 		}
-		key = strings.TrimSpace(dotenvExport.ReplaceAllString(strings.TrimSpace(key), ""))
+		key = strings.TrimSpace(cutExport(strings.TrimSpace(key)))
 		to := &r.secrets
 		if head[key] {
 			to = &r.keep
@@ -145,6 +149,26 @@ func (st statement) evaluated(d *dotenv) (string, bool) {
 		return v, ok
 	})
 	return v, err == nil
+}
+
+// holding is r with values a command holds redacted too, whatever their
+// length and whatever name they equal.
+func (r *redactor) holding(values []string) *redactor {
+	out := &redactor{secrets: slices.Clone(r.secrets), keep: slices.DeleteFunc(slices.Clone(r.keep), func(k string) bool { return slices.Contains(values, k) })}
+	for _, v := range values {
+		if v == "" {
+			continue
+		}
+		out.secrets = append(out.secrets, v)
+		for _, line := range strings.Split(v, "\n") {
+			if line = strings.TrimSpace(line); runes(line) >= redactMin {
+				out.secrets = append(out.secrets, line)
+			}
+		}
+	}
+	slices.SortFunc(out.secrets, func(a, b string) int { return len(b) - len(a) })
+	out.secrets = slices.Compact(out.secrets)
+	return out
 }
 
 // with is r and o together: what either redacts is redacted.
@@ -371,4 +395,105 @@ func (e *redactedError) As(target any) bool {
 		return true
 	}
 	return errors.As(e.err, target)
+}
+
+// Redactor is the engine's redaction pass (redactor) for a command's own
+// text: what a docker call it ran through the engine's runner (Docker)
+// wrote, which the engine never reads, and what it says of it. It redacts
+// the values of every .env it has seen the project hold, read afresh at
+// each use, so a .env a command puts in place is redacted as well as the
+// one it replaced, and the values the command holds itself (Hold).
+type Redactor struct {
+	dir  string
+	mu   sync.Mutex
+	seen map[string]bool
+	base *redactor
+	held []string
+	r    *redactor
+}
+
+// NewRedactor is the redactor of the project at projectDir.
+func NewRedactor(projectDir string) *Redactor {
+	if abs, err := filepath.Abs(projectDir); err == nil {
+		projectDir = abs
+	}
+	return &Redactor{dir: projectDir, seen: map[string]bool{}, base: &redactor{keep: slices.Clone(engineWords)}}
+}
+
+// Redactor is the redactor of the engine's project.
+func (e *Engine) Redactor() *Redactor { return NewRedactor(e.dir) }
+
+// Hold adds values the command holds, a database URL or a keyring's keys,
+// redacted as .env's are, whatever their length.
+func (r *Redactor) Hold(values ...string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.held = append(r.held, values...)
+	r.r = nil
+}
+
+// current is the pass with .env as it reads now folded in.
+func (r *Redactor) current() *redactor {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	data, _ := os.ReadFile(filepath.Join(r.dir, ".env"))
+	if sum := sha256Hex(data); !r.seen[sum] {
+		r.seen[sum] = true
+		r.base = r.base.with(redactorFor(data, publishedNames(r.dir)))
+		r.r = nil
+	}
+	if r.r == nil {
+		r.r = r.base.holding(r.held)
+	}
+	return r.r
+}
+
+// Text is s with every secret replaced by <redacted>.
+func (r *Redactor) Text(s string) string { return r.current().text(s) }
+
+// Err is err with its text redacted, errors.Is and errors.As still
+// reading it (redactor.err).
+func (r *Redactor) Err(err error) error { return r.current().err(err) }
+
+// Writer is w behind the pass: what is written reaches w a line at a
+// time, at each line break and carriage return, so progress still shows,
+// and the rest at Flush.
+func (r *Redactor) Writer(w io.Writer) *RedactedWriter { return &RedactedWriter{r: r, w: w} }
+
+// RedactedWriter is a writer behind a Redactor (Redactor.Writer).
+type RedactedWriter struct {
+	r   *Redactor
+	w   io.Writer
+	mu  sync.Mutex
+	buf []byte
+}
+
+func (w *RedactedWriter) Write(p []byte) (int, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.buf = append(w.buf, p...)
+	for {
+		end := bytes.IndexAny(w.buf, "\n\r")
+		if end < 0 {
+			return len(p), nil
+		}
+		line := w.buf[:end+1]
+		w.buf = w.buf[end+1:]
+		if _, err := io.WriteString(w.w, w.r.Text(string(line))); err != nil {
+			return 0, err
+		}
+	}
+}
+
+// Flush writes what is held of an unfinished line.
+func (w *RedactedWriter) Flush() error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if len(w.buf) == 0 {
+		return nil
+	}
+	rest := w.buf
+	w.buf = nil
+	_, err := io.WriteString(w.w, w.r.Text(string(rest)))
+	return err
 }

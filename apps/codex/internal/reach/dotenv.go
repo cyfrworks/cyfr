@@ -14,39 +14,41 @@ import (
 	"unicode/utf8"
 )
 
-// The dotenv grammar Docker Compose reads .env with: compose-go's dotenv
-// and template packages (v2.9.1, the release Docker Compose 2.40 builds
-// on), reproduced rule for rule, quirks included, because the engine
-// edits the file compose reads and must read every line as compose does.
+// The dotenv grammar Docker Compose reads .env with, as compose-go v2.9.1
+// (the release Docker Compose 2.40 builds on) defines it in its dotenv
+// and template packages, quirks included: the engine edits the file
+// compose reads and must read every line as compose does. It is written
+// here from that grammar as stated below, and
+// TestReadEnvValuesReadsAsRealComposeDoes holds it to the installed
+// compose.
+//
 // A statement starts at the first byte that is not space, line break or
 // a comment line; `export` and space may lead it; its name runs to `=`,
 // `:` or a line break (a bare name, which takes its value from the
 // environment) over letters, digits, `_.-[]` and skipped space; a value
 // in quotes runs to its closing quote, across lines, a backslash keeping
 // itself and the byte after it but taking the quote it escapes as that
-// quote alone; a double-quoted value then expands \a \b \c \f \n \r \t \v
-// \$ \" \\ and \0 octal escapes and is interpolated; any other value runs
+// quote alone; a double-quoted value then expands its escapes
+// (expandEscapes) and is interpolated (substitute); any other value runs
 // to the line's end, is cut at ` #` and trimmed, and is interpolated.
 // What follows a closing quote on its line starts the next statement.
 
-// dotenvSpace is space within a line, as the grammar skips it: every
-// space but the line break.
+// dotenvSpace is space within a line, as the grammar skips it: the
+// Latin-1 white space but the line break.
 func dotenvSpace(r rune) bool {
-	switch r {
-	case '\t', '\v', '\f', '\r', ' ', 0x85, 0xA0:
-		return true
-	}
-	return false
+	return r < 0x100 && r != '\n' && unicode.IsSpace(r)
 }
 
-var (
-	dotenvExport = regexp.MustCompile(`^export\s+`)
-	dotenvEscape = regexp.MustCompile(`(\\(?:[abcfnrtv$"\\]|0\d{0,3}))`)
-	// dotenvTemplate is compose's interpolation pattern: $$, $NAME,
-	// ${NAME} with an optional operator and the rest, and ${ followed by
-	// anything else, which is invalid.
-	dotenvTemplate = regexp.MustCompile(`\$(?i:(?P<escaped>\$)|(?P<named>[_a-z][_a-z0-9]*)|{(?:(?P<braced>[_a-z][_a-z0-9]*(?::?[-+?](.*))?)}|(?P<invalid>)))`)
-)
+// cutExport is src without a leading `export` that a tab, line break, form
+// feed, carriage return or space follows, nor the space after it on its
+// line; src itself when it has none.
+func cutExport(src string) string {
+	rest, ok := strings.CutPrefix(src, "export")
+	if !ok || rest == "" || !strings.ContainsRune("\t\n\f\r ", rune(rest[0])) {
+		return src
+	}
+	return strings.TrimLeftFunc(rest, dotenvSpace)
+}
 
 const utf8BOM = "\uFEFF"
 
@@ -97,7 +99,7 @@ func scanDotenv(src string, lenient bool, broken func(at int, line string)) ([]s
 		return true
 	}
 	for {
-		cut = statementStart(cut)
+		cut = nextStatement(cut)
 		if cut == "" {
 			return out, first
 		}
@@ -136,52 +138,48 @@ func scanDotenv(src string, lenient bool, broken func(at int, line string)) ([]s
 	}
 }
 
-// statementStart skips space, line breaks and comment lines.
-func statementStart(src string) string {
+// nextStatement is src from its next statement on, past space, line
+// breaks and comment lines; "" when none is left.
+func nextStatement(src string) string {
 	for {
-		pos := strings.IndexFunc(src, func(r rune) bool { return !unicode.IsSpace(r) })
-		if pos < 0 {
-			return ""
-		}
-		src = src[pos:]
-		if src[0] != '#' {
+		src = strings.TrimLeftFunc(src, unicode.IsSpace)
+		if !strings.HasPrefix(src, "#") {
 			return src
 		}
-		pos = strings.IndexByte(src, '\n')
-		if pos < 0 {
+		_, after, found := strings.Cut(src, "\n")
+		if !found {
 			return ""
 		}
-		src = src[pos:]
+		src = after
 	}
 }
 
-// keyName reads a statement's name: its rest, from the value's first
-// byte that is not space, and whether a line break ended it (a bare
-// name). A name that runs to the end of the text is no name: the text is
-// the value of the name "".
+// keyName reads a statement's name, after any leading `export`: the
+// characters a name may hold and space, which the name drops at its end,
+// up to `=`, `:` or a line break, which makes it a bare name. It answers
+// the rest from the value's first byte that is not space; ok is false for
+// a character no name holds. A name with no separator after it is no
+// name: the text is the value of the name "".
 func keyName(src string) (key, rest string, inherit, ok bool) {
-	if dotenvExport.MatchString(src) {
-		src = strings.TrimLeftFunc(strings.TrimPrefix(src, "export"), dotenvSpace)
+	src = cutExport(src)
+	end := strings.IndexFunc(src, func(r rune) bool { return r == '=' || r == ':' || r == '\n' })
+	head := src
+	if end >= 0 {
+		head = src[:end]
 	}
-	offset := 0
-loop:
-	for i, r := range src {
-		if dotenvSpace(r) {
-			continue
-		}
-		switch r {
-		case '=', ':', '\n':
-			key, offset, inherit = src[:i], i+1, r == '\n'
-			break loop
-		case '_', '.', '-', '[', ']':
-		default:
-			if unicode.IsLetter(r) || unicode.IsNumber(r) {
-				continue
-			}
-			return "", "", false, false
-		}
+	if strings.ContainsFunc(head, func(r rune) bool { return !dotenvSpace(r) && !keyRune(r) }) {
+		return "", "", false, false
 	}
-	return strings.TrimRightFunc(key, unicode.IsSpace), strings.TrimLeftFunc(src[offset:], dotenvSpace), inherit, true
+	if end < 0 {
+		return "", strings.TrimLeftFunc(src, dotenvSpace), false, true
+	}
+	return strings.TrimRightFunc(head, unicode.IsSpace), strings.TrimLeftFunc(src[end+1:], dotenvSpace), src[end] == '\n', true
+}
+
+// keyRune is a character a name may hold: a letter, a digit, `_`, `.`,
+// `-`, `[` or `]`.
+func keyRune(r rune) bool {
+	return unicode.IsLetter(r) || unicode.IsNumber(r) || strings.ContainsRune("_.-[]", r)
 }
 
 // valueText reads a value at the start of src: its quote, its text after
@@ -189,36 +187,33 @@ loop:
 // bytes it takes, up to its closing quote or its line's break. ok is
 // false for a quote that never closes.
 func valueText(src string) (quote byte, text string, n int, ok bool) {
-	if src != "" && (src[0] == '"' || src[0] == '\'') {
-		quote = src[0]
-		escaped := false
-		var chars []byte
-		for i := 1; i < len(src); i++ {
-			c := src[i]
-			switch {
-			case c != quote && !escaped && c == '\\':
-				escaped = true
-			case c != quote:
-				if escaped {
-					escaped = false
-					chars = append(chars, '\\')
-				}
-				chars = append(chars, c)
-			case escaped:
-				escaped = false
-				chars = append(chars, c)
-			default:
-				return quote, string(chars), i + 1, true
-			}
+	if src == "" || src[0] != '"' && src[0] != '\'' {
+		n = strings.IndexByte(src, '\n')
+		if n < 0 {
+			n = len(src)
 		}
-		return 0, "", 0, false
+		text, _, _ = strings.Cut(src[:n], " #")
+		return 0, strings.TrimRightFunc(text, unicode.IsSpace), n, true
 	}
-	n = strings.IndexByte(src, '\n')
-	if n < 0 {
-		n = len(src)
+	quote = src[0]
+	var b strings.Builder
+	for i := 1; i < len(src); i++ {
+		switch {
+		case src[i] == quote:
+			return quote, b.String(), i + 1, true
+		case src[i] == '\\' && i+1 < len(src) && src[i+1] == quote:
+			// A backslash takes the quote after it as that quote alone,
+			b.WriteByte(quote)
+			i++
+		case src[i] == '\\' && i+1 < len(src):
+			// and keeps itself and any other byte after it.
+			b.WriteString(src[i : i+2])
+			i++
+		default:
+			b.WriteByte(src[i])
+		}
 	}
-	text, _, _ = strings.Cut(src[:n], " #")
-	return 0, strings.TrimRightFunc(text, unicode.IsSpace), n, true
+	return 0, "", 0, false
 }
 
 // value is the statement's value as compose reads it, interpolated
@@ -233,20 +228,41 @@ func (st statement) value(lookup func(string) (string, bool)) (string, error) {
 	return substitute(st.text, lookup)
 }
 
+// expandEscapes expands a double-quoted value's escapes: \a \b \f \n \r
+// \t \v \" and \\ are the characters they name; \$ becomes $$, a dollar
+// the interpolation keeps; \0 with up to three digits after it is the
+// character those digits name in octal when they are three octal digits
+// worth at most 255, and otherwise a backslash and those digits, the 0
+// dropped; \c and a backslash before anything else stay as written.
 func expandEscapes(s string) string {
-	return dotenvEscape.ReplaceAllStringFunc(s, func(m string) string {
-		if m == `\$` {
-			return "$$"
+	named := map[byte]string{'a': "\a", 'b': "\b", 'f': "\f", 'n': "\n", 'r': "\r", 't': "\t", 'v': "\v", '"': `"`, '\\': `\`, '$': "$$", 'c': `\c`}
+	var b strings.Builder
+	for i := 0; i < len(s); i++ {
+		if s[i] != '\\' || i+1 == len(s) {
+			b.WriteByte(s[i])
+			continue
 		}
-		if strings.HasPrefix(m, `\0`) {
-			m = strings.Replace(m, `\0`, `\`, 1)
+		if text, ok := named[s[i+1]]; ok {
+			b.WriteString(text)
+			i++
+			continue
 		}
-		v, _, _, err := strconv.UnquoteChar(m, '"')
-		if err != nil {
-			return m
+		if s[i+1] != '0' {
+			b.WriteByte('\\')
+			continue
 		}
-		return string(v)
-	})
+		digits := s[i+2 : i+2]
+		for j := i + 2; j < len(s) && j < i+5 && s[j] >= '0' && s[j] <= '9'; j++ {
+			digits = s[i+2 : j+1]
+		}
+		if n, err := strconv.ParseUint(digits, 8, 16); err == nil && len(digits) == 3 && n <= 255 {
+			b.WriteRune(rune(n))
+		} else {
+			b.WriteString(`\` + digits)
+		}
+		i += 1 + len(digits)
+	}
+	return b.String()
 }
 
 // templateError is an interpolation compose refuses: an invalid ${, or a
@@ -255,90 +271,169 @@ type templateError struct{}
 
 func (templateError) Error() string { return "reach: an interpolation compose refuses" }
 
-// substitute interpolates s as compose's template.Substitute does, the
-// first error answered after every match is replaced.
+// The interpolation grammar, read from left to right: `$$`; `$` and a
+// name (an ASCII letter or `_`, then letters, digits and `_`, the letters
+// read without case, so the long s and the Kelvin sign are letters too);
+// `${`, a name and `}`; `${`, a name, an operator (`:?` `?` `:-` `-` `:+`
+// `+`) and everything up to the last `}` before the line ends; and `${`
+// followed by anything else, which is invalid. A `$` that starts none of
+// them is a dollar.
+
+func nameStart(r rune) bool {
+	return r == '_' || r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r == 'ſ' || r == 'K'
+}
+
+// nameLen is the length in bytes of the name at the start of s, 0 for
+// none.
+func nameLen(s string) int {
+	n := 0
+	for i, r := range s {
+		if !nameStart(r) && (i == 0 || r < '0' || r > '9') {
+			break
+		}
+		n = i + utf8.RuneLen(r)
+	}
+	return n
+}
+
+// operatorLen is the length of the operator at the start of s, 0 for
+// none.
+func operatorLen(s string) int {
+	switch {
+	case len(s) > 1 && s[0] == ':' && strings.IndexByte("-+?", s[1]) >= 0:
+		return 2
+	case s != "" && strings.IndexByte("-+?", s[0]) >= 0:
+		return 1
+	}
+	return 0
+}
+
+// bracedLen is the length of the braced interpolation at the start of
+// s, which begins `${`, or 0 when it is not one.
+func bracedLen(s string) int {
+	name := nameLen(s[2:])
+	if name == 0 {
+		return 0
+	}
+	at := 2 + name
+	if op := operatorLen(s[at:]); op > 0 {
+		line := s[at+op:]
+		if end := strings.IndexByte(line, '\n'); end >= 0 {
+			line = line[:end]
+		}
+		if last := strings.LastIndexByte(line, '}'); last >= 0 {
+			return at + op + last + 1
+		}
+	}
+	if at < len(s) && s[at] == '}' {
+		return at + 1
+	}
+	return 0
+}
+
+// interpolationLen is the length of the interpolation at the start of s,
+// 0 when a dollar there starts none.
+func interpolationLen(s string) int {
+	if len(s) < 2 || s[0] != '$' {
+		return 0
+	}
+	switch {
+	case s[1] == '$':
+		return 2
+	case s[1] == '{':
+		if n := bracedLen(s); n > 0 {
+			return n
+		}
+		return 2
+	}
+	if n := nameLen(s[1:]); n > 0 {
+		return 1 + n
+	}
+	return 0
+}
+
+// substitute interpolates s, every interpolation replaced, the first
+// error answered once all are.
 func substitute(s string, lookup func(string) (string, bool)) (string, error) {
+	var b strings.Builder
 	var first error
-	out := dotenvTemplate.ReplaceAllStringFunc(s, func(m string) string {
-		v, _, err := replaceTemplate(m, lookup)
+	for i := 0; i < len(s); {
+		n := interpolationLen(s[i:])
+		if n == 0 {
+			b.WriteByte(s[i])
+			i++
+			continue
+		}
+		v, err := interpolated(s[i:i+n], lookup)
 		if err != nil && first == nil {
 			first = err
 		}
-		return v
-	})
-	return out, first
+		b.WriteString(v)
+		i += n
+	}
+	return b.String(), first
 }
 
-// replaceTemplate is one match's replacement: its operator is chosen from
-// the whole match, which the pattern's greedy tail may have carried past
-// the brace that closes it; what follows that brace is interpolated on
-// its own.
-func replaceTemplate(m string, lookup func(string) (string, bool)) (string, bool, error) {
-	op := templateOperator(m)
+// interpolated is one interpolation's value. Its operator is the first in
+// the whole of it, which may run past the brace that closes it; that
+// brace is the one closing the first `{` (closingBrace), and what follows
+// it is interpolated on its own after the operator is applied.
+func interpolated(m string, lookup func(string) (string, bool)) (string, error) {
+	if m == "$$" {
+		return "$", nil
+	}
+	op := firstOperator(m)
 	rest := ""
 	if i := closingBrace(m); i > -1 {
-		rest, m = m[i+1:], m[:i+1]
+		m, rest = m[:i+1], m[i+1:]
 	}
-	sub := dotenvTemplate.FindStringSubmatch(m)
-	group := func(name string) string {
-		if sub == nil {
-			return ""
-		}
-		return sub[dotenvTemplate.SubexpIndex(name)]
+	if m[1] != '{' {
+		v, _ := lookup(m[1:])
+		return v, nil
 	}
-	if escaped := group("escaped"); escaped != "" {
-		return escaped, true, nil
+	n := bracedLen(m)
+	if n == 0 {
+		return "", templateError{}
 	}
-	name, braced := group("named"), false
-	if name == "" {
-		name, braced = group("braced"), true
-	}
-	if name == "" {
-		return "", false, templateError{}
-	}
-	if braced {
-		value, applied, err := applyOperator(op, name, lookup)
+	inside := m[2 : n-1]
+	value, applied, err := applyOperator(op, inside, lookup)
+	switch {
+	case err != nil:
+		return "", err
+	case applied:
+		nested, err := substitute(rest, lookup)
 		if err != nil {
-			return "", false, err
+			return "", err
 		}
-		if applied {
-			nested, err := substitute(rest, lookup)
-			if err != nil {
-				return "", false, err
-			}
-			return value + nested, true, nil
-		}
+		return value + nested, nil
 	}
-	value, ok := lookup(name)
-	return value, ok, nil
+	v, _ := lookup(inside)
+	return v, nil
 }
 
-// templateOperators are compose's operators, in the order it lists them.
-var templateOperators = []string{":?", "?", ":-", "-", ":+", "+"}
-
-// templateOperator is the operator that appears first in m, the earlier
-// of the list on a tie, "" for none.
-func templateOperator(m string) string {
-	best, at := "", -1
-	for _, op := range templateOperators {
-		if i := strings.Index(m, op); i >= 0 && (at < 0 || i < at) {
-			best, at = op, i
+// firstOperator is the operator that starts earliest in m, "" for none.
+func firstOperator(m string) string {
+	for i := range len(m) {
+		if n := operatorLen(m[i:]); n > 0 {
+			return m[i : i+n]
 		}
 	}
-	return best
+	return ""
 }
 
+// closingBrace is the index of the `}` that closes s's first `{`,
+// counting each `{` up, which also passes over the byte after it, and
+// each `}` down; -1 when none does.
 func closingBrace(s string) int {
-	open := 0
+	depth := 0
 	for i := 0; i < len(s); i++ {
-		if s[i] == '}' {
-			open--
-			if open == 0 {
+		switch s[i] {
+		case '}':
+			if depth--; depth == 0 {
 				return i
 			}
-		}
-		if s[i] == '{' {
-			open++
+		case '{':
+			depth++
 			i++
 		}
 	}

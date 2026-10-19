@@ -334,6 +334,7 @@ answer() {
   [ -f "$d/$1.signal" ] && kill -TERM "$PPID"
   if [ -f "$d/$1.block" ]; then while [ ! -f "$d/$1.release" ]; do sleep 0.02; done; fi
   [ -f "$d/$1.out" ] && cat "$d/$1.out"
+  [ -f "$d/$1.err" ] && cat "$d/$1.err" >&2
   exit "$(cat "$d/$1.exit" 2>/dev/null || echo 0)"
 }
 if [ "$1" = compose ]; then

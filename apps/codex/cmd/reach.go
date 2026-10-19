@@ -31,6 +31,7 @@ type stackEngine interface {
 	Lock(holder string) (func(), error)
 	Resume(ctx context.Context) ([]reach.Receipt, error)
 	Docker() reach.Docker
+	Redactor() *reach.Redactor
 	ComposeArgs(ctx context.Context, h reach.Head, args ...string) ([]string, error)
 	Head() (reach.Head, error)
 	CheckStack(ctx context.Context) error
