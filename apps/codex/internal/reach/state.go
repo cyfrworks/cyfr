@@ -81,7 +81,7 @@ func (e *Engine) writeDurable(name string, data []byte, mode os.FileMode) error 
 		return err
 	}
 	dir := filepath.Dir(name)
-	tmp, err := os.CreateTemp(dir, "."+filepath.Base(name)+".tmp-*")
+	tmp, err := os.CreateTemp(dir, tempPattern(name))
 	if err != nil {
 		return fmt.Errorf("reach: write %s: %w", name, err)
 	}
@@ -104,6 +104,18 @@ func (e *Engine) writeDurable(name string, data []byte, mode os.FileMode) error 
 		return fmt.Errorf("reach: write %s: %w", name, err)
 	}
 	return nil
+}
+
+// tempPattern is the name writeDurable gives the temporary file it
+// writes name through, as os.CreateTemp and filepath.Match read it: what
+// a write cut short leaves, and the sweep removes.
+func tempPattern(name string) string { return "." + filepath.Base(name) + ".tmp-*" }
+
+// isTemp reports whether entry is a temporary file writeDurable made for
+// a file named like base ("*" for any).
+func isTemp(base, entry string) bool {
+	ok, _ := filepath.Match(tempPattern(base), entry)
+	return ok
 }
 
 // removeDurable removes the file at name, if it exists, and syncs its
@@ -347,17 +359,20 @@ func (e *Engine) sweepStrays(j *journal) {
 			keep[filepath.Base(f)] = true
 		}
 	}
-	for _, dir := range []string{e.dir, e.path(), e.path(receiptsDir), e.path(serveDir)} {
+	// In .cyfr/ every file is the engine's; beside .env (the project
+	// directory, or where a link to it leads) only .env's own.
+	dirs := map[string]string{e.path(): "*", e.path(receiptsDir): "*", e.path(serveDir): "*", e.dir: ".env"}
+	if target, err := filepath.EvalSymlinks(e.envPath()); err == nil {
+		dirs[filepath.Dir(target)] = filepath.Base(target)
+	}
+	for dir, base := range dirs {
 		entries, err := os.ReadDir(dir)
 		if err != nil {
 			continue
 		}
 		for _, entry := range entries {
 			name := entry.Name()
-			stray := strings.HasPrefix(name, ".") && strings.Contains(name, ".tmp-")
-			if dir == e.dir {
-				stray = strings.HasPrefix(name, ".env.tmp-")
-			}
+			stray := isTemp(base, name)
 			if dir == e.path() && strings.HasPrefix(name, resolvedFront) && strings.HasSuffix(name, ".yml") && !keep[name] {
 				stray = true
 			}
@@ -365,8 +380,8 @@ func (e *Engine) sweepStrays(j *journal) {
 				os.Remove(filepath.Join(dir, name))
 			}
 		}
+		syncDir(dir)
 	}
-	syncDir(e.path())
 }
 
 // newRequestID mints a request id for an engine-made operation.

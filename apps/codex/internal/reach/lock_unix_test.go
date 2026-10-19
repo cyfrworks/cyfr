@@ -220,8 +220,18 @@ func TestComposeProfilesInTheEnvironmentStartNeitherProxy(t *testing.T) {
 		if c.Args[0] != "compose" {
 			continue
 		}
-		if c.Args[1] != "-p" || c.Args[2] != "home" || c.Args[3] != "-f" || slices.Contains(c.Args, "--profile") || !slices.Contains(c.Args, "--project-directory") {
+		if c.Args[1] != "-p" || c.Args[2] != "home" || c.Args[3] != "-f" || !slices.Contains(c.Args, "--project-directory") {
 			t.Errorf("a compose call lacks the explicit selection: %s", c)
+		}
+		for i, a := range c.Args {
+			if a != "--profile" {
+				continue
+			}
+			// The one read of every reach mode's services names their
+			// profiles; nothing the home starts names any.
+			if !slices.Contains(c.Args, "config") || !slices.Contains(reachModeProfiles(), c.Args[i+1]) {
+				t.Errorf("a compose call selects profile %s: %s", c.Args[i+1], c)
+			}
 		}
 	}
 }

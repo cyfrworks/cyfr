@@ -282,21 +282,18 @@ func (e *Engine) doSwitch(ctx context.Context, r SwitchRequest) (Receipt, error)
 		j.OldHead = &st.head
 	}
 	if anyRunning(cs, js) {
-		// Both heads' reach services, named from their profiles: a
+		// The reach services, named from the reach modes' profiles: a
 		// stopped stack needs none, and makes no compose call.
 		if _, err := e.checkProvenance(); err != nil {
 			return Receipt{}, err
 		}
-		for _, h := range []*Head{j.OldHead, j.NewHead} {
-			if h == nil {
-				continue
-			}
-			names, err := e.servicesOf(ctx, *h, nil)
-			if err != nil {
-				return refuse(Refuse("docker_unavailable", map[string]string{"reason": err.Error()}))
-			}
-			j.Services = union(j.Services, names)
+		// Every reach mode's services, so one an incoherent old head
+		// cannot name, or a leftover no head selects, is stopped too.
+		names, err := e.everyReachService(ctx)
+		if err != nil {
+			return refuse(Refuse("docker_unavailable", map[string]string{"reason": err.Error()}))
 		}
+		j.Services = union(j.Services, names)
 	}
 	if err := e.setPhase(j, "accepted"); err != nil {
 		return e.outcomeUnknown(j, err)
@@ -382,12 +379,21 @@ func (e *Engine) rollback(ctx context.Context, j *journal, why string, content [
 	case s.ok:
 		return e.finishAnswer(j, e.completed(j, "rolled_back", Refuse("reach_rolled_back", map[string]string{"new": newWords, "old": oldWords, "reason": why}), j.OldHead))
 	case s.local != nil:
-		return e.finishAnswer(j, e.completed(j, "started_local", s.local, j.OldHead))
+		return e.finishAnswer(j, e.completed(j, "rolled_back", rolledBackLocal(j, why, s.local), j.OldHead))
 	}
 	if s := e.stopAndVerify(ctx, j.Services); !s.ok {
 		return e.uncertain(j, s)
 	}
 	return e.finishAnswer(j, e.failed(j, map[string]string{"new": newWords, "env": oldWords}))
+}
+
+// rolledBackLocal is reach_rolled_back for a rollback whose old head
+// answers on this machine only: the change that failed, its reason, and
+// why the old head serves no further.
+func rolledBackLocal(j *journal, why string, local *Refusal) *Refusal {
+	return Refuse("reach_rolled_back", map[string]string{
+		"new": wordsText(Describe(*j.NewHead)), "old": wordsText(Describe(*j.OldHead)), "reason": why, "local": local.Code,
+	})
 }
 
 func (e *Engine) completed(j *journal, outcome string, ref *Refusal, final *Head) Receipt {

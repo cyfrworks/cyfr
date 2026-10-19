@@ -47,14 +47,21 @@ func (e *Engine) doStart(ctx context.Context, cause string, health time.Duration
 }
 
 // unfinished blocks Start while the journal holds an operation Resume
-// could not finish: only a reconciliation makes it terminal.
+// could not finish, since only a reconciliation makes it terminal, and
+// while a join waits for its approval: its container runs on the state
+// volume the tailscale service would start on. update and restore cancel
+// the waiting join first.
 func (e *Engine) unfinished() (Receipt, bool, error) {
 	j, err := e.readJournal()
 	if err != nil {
 		return Receipt{}, true, err
 	}
-	if j == nil || j.Op == "join" && j.Join != nil && j.Join.State == "waiting" {
+	if j == nil {
 		return Receipt{}, false, nil
+	}
+	if j.Op == "join" && j.Join != nil && j.Join.State == "waiting" {
+		ref := joinBusy(j.Join.JoinID, j.Join.Deadline)
+		return Receipt{Op: "start", State: "rejected", Code: ref.Code, Payload: ref.Payload, At: e.now()}, true, ref
 	}
 	rc := j.receipt()
 	if rc.Code == "" {
@@ -80,10 +87,8 @@ func (e *Engine) doStop(ctx context.Context, cause string, all bool) (Receipt, e
 		services = union(services, j.Services)
 	}
 	h, headErr := e.envHead()
-	if headErr == nil {
-		if names, err := e.servicesOf(ctx, h, nil); err == nil {
-			services = union(services, names)
-		}
+	if names, err := e.everyReachService(ctx); err == nil {
+		services = union(services, names)
 	}
 	if all {
 		services = nil

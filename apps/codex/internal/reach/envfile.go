@@ -292,3 +292,34 @@ func sha256Hex(data []byte) string {
 	sum := sha256.Sum256(data)
 	return hex.EncodeToString(sum[:])
 }
+
+// ReadEnvValues reads the .env file at path as Docker Compose and the
+// engine read it: `NAME=value`, `export NAME=value` and `NAME: value`,
+// quoted values as compose unquotes them, the last assignment of a name
+// winning. A bare NAME, which compose fills from its environment, reads
+// as "".
+func ReadEnvValues(path string) (map[string]string, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	return parseDotenv(data).values(), nil
+}
+
+// CheckEnvFile answers the refusal the engine makes of the .env file at
+// path before anything starts, nil for a coherent home's: a COMPOSE_*
+// setting in any form (compose_env_refused, the first in byte order),
+// then the boot's refusal of the head it holds, as a release reads its
+// own .env.
+func CheckEnvFile(path string) error {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return err
+	}
+	d := parseDotenv(data)
+	if key := d.composeKey(); key != "" {
+		return Refuse("compose_env_refused", map[string]string{"key": key})
+	}
+	_, err = headOf(d.values())
+	return err
+}

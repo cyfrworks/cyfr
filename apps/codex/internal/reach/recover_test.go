@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -293,4 +294,48 @@ func TestStartWaitsForRecovery(t *testing.T) {
 		t.Errorf("start after recovery answered %+v, %v", rc, err)
 	}
 	h.assertConverged(baseStack...)
+}
+
+// A write killed between its temporary file and its rename leaves the
+// temporary file, whose name writeDurable chose: of .env, holding its
+// secrets, beside it; of the journal and the receipts, under .cyfr/. The
+// next command's recovery removes every one.
+func TestRecoverySweepsInterruptedWrites(t *testing.T) {
+	for _, file := range []string{".env", journalFile, "receipt"} {
+		t.Run(file, func(t *testing.T) {
+			h := newHome(t)
+			h.fake.startStack(t, h.head())
+			r := h.request(id(1), publicTarget, "")
+			var left string
+			h.e.failWrite = func(name, step string) error {
+				match := filepath.Base(name) == file || file == "receipt" && strings.Contains(name, receiptsDir)
+				if match && step == "rename" && left == "" {
+					matches, _ := filepath.Glob(filepath.Join(filepath.Dir(name), tempPattern(name)))
+					if len(matches) == 1 {
+						left = matches[0]
+					}
+					runtime.Goexit()
+				}
+				return nil
+			}
+			done := make(chan struct{})
+			go func() { defer close(done); h.e.Switch(bg, r) }()
+			<-done
+			h.e.failWrite = nil
+			if left == "" {
+				t.Fatal("no temporary file was written")
+			}
+			if _, err := os.Stat(left); err != nil {
+				t.Fatalf("the interrupted write left nothing: %v", err)
+			}
+			h.crash()
+			h.open()
+			if _, err := h.e.Resume(bg); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := os.Stat(left); err == nil {
+				t.Errorf("recovery left %s", left)
+			}
+		})
+	}
 }

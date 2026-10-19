@@ -303,11 +303,14 @@ func (e *Engine) ForgetJoin() error { return e.forgetJoin() }
 
 // Start is the one start path (up, update, restore; cause names it): it
 // checks the stack (CheckStack), writes Serve's empty configuration,
+// removes, verified, any running reach service the head does not select,
 // starts cyfr and the head's reach services, waits HealthDeadline for
 // cyfr's health, and validates a tailnet node against the head before
 // Serve opens: a node that cannot serve the head (tailnet_node_mismatch,
 // tailnet_not_joined, tailnet_https_off) leaves Serve closed and cyfr
-// running, Outcome started_local.
+// running, Outcome started_local. While a join waits for its approval it
+// refuses with reach_busy; update and restore cancel the join first
+// (CancelWaitingJoin).
 func (e *Engine) Start(ctx context.Context, cause string) (Receipt, error) {
 	return e.StartWithin(ctx, cause, HealthDeadline)
 }
@@ -318,11 +321,12 @@ func (e *Engine) StartWithin(ctx context.Context, cause string, health time.Dura
 	return e.doStart(ctx, cause, health)
 }
 
-// Stop stops and verifies cyfr and every reach service of .env's head and
-// of any unfinished operation's heads, writing Serve's empty configuration
-// first; with all, it takes every service of the project down (`cyfr
-// down`). A stop that cannot be verified answers reach_uncertain with what
-// was observed.
+// Stop cancels a waiting join, then stops and verifies cyfr and every
+// service of every reach mode's profile, whatever .env's head or an
+// unfinished operation says, writing Serve's empty configuration first;
+// with all, it takes every service of the project down (`cyfr down`). A
+// stop that cannot be verified answers reach_uncertain with what was
+// observed.
 func (e *Engine) Stop(ctx context.Context, cause string, all bool) (Receipt, error) {
 	return e.doStop(ctx, cause, all)
 }

@@ -222,6 +222,25 @@ func (e *Engine) servicesOf(ctx context.Context, h Head, content []byte) ([]stri
 	return reachServices(c, h), nil
 }
 
+// reachModeProfiles are the profiles every mode's head selects to reach
+// the home, as Profiles derives them: locus-builds aside, which no mode
+// owns.
+func reachModeProfiles() []string {
+	var out []string
+	for _, mode := range []string{ModeLocal, ModeTailnet, ModePublic} {
+		out = union(out, slices.DeleteFunc(Profiles(mode, ""), func(p string) bool { return p == buildsService }))
+	}
+	return out
+}
+
+// everyReachService is every service the stack's configuration puts in a
+// reach mode's profile, whichever head selects it: what a stop of the
+// reach must cover when a head cannot say, and what a start removes when
+// its head does not select it.
+func (e *Engine) everyReachService(ctx context.Context) ([]string, error) {
+	return e.servicesOf(ctx, Head{Profiles: reachModeProfiles()}, nil)
+}
+
 // otherServices are c's services that are not reach services of h.
 func otherServices(c config, h Head) []string {
 	reach := reachServices(c, h)
