@@ -34,13 +34,15 @@ const (
 	identityTemplate = "https://github.com/cyfrworks/cyfr/.github/workflows/release.yml@refs/tags/%s"
 )
 
-// The repositories the manifest's three digests are for, as a compose
+// The repositories the manifest's four digests are for, as a compose
 // image line names them once normalized (docker.io/library/ for an
-// official image).
+// official image). Caddy and Tailscale are third-party images the release
+// does not build: their digests are the ones docker-compose.yml pins.
 const (
 	RepoCyfr      = "ghcr.io/cyfrworks/cyfr"
 	RepoCyfrLocus = "ghcr.io/cyfrworks/cyfr-locus"
 	RepoCaddy     = "docker.io/library/caddy"
+	RepoTailscale = "docker.io/tailscale/tailscale"
 )
 
 // ErrUnverified marks every refusal of a release file's authenticity: an
@@ -54,6 +56,7 @@ type Images struct {
 	Cyfr      string `json:"cyfr"`
 	CyfrLocus string `json:"cyfr_locus"`
 	Caddy     string `json:"caddy"`
+	Tailscale string `json:"tailscale"`
 }
 
 // Manifest is a release's `release.json`. `cyfr update` reads its images;
@@ -81,6 +84,8 @@ func (m *Manifest) Digest(repo string) (string, bool) {
 		return m.Images.CyfrLocus, true
 	case RepoCaddy:
 		return m.Images.Caddy, true
+	case RepoTailscale:
+		return m.Images.Tailscale, true
 	}
 	return "", false
 }
@@ -91,8 +96,8 @@ func (m *Manifest) Digest(repo string) (string, bool) {
 var digestPattern = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
 
 // ParseManifest reads data as a release manifest of exactly its shape: the
-// keys version, images and scaffold, images holding exactly cyfr, cyfr_locus
-// and caddy, every value a string, the version a bare MAJOR.MINOR.PATCH and
+// keys version, images and scaffold, images holding exactly cyfr,
+// cyfr_locus, caddy and tailscale, every value a string, the version a bare MAJOR.MINOR.PATCH and
 // every digest `sha256:` and 64 lower-case hex digits. Keys match exactly
 // (encoding/json's case-folding does not apply), and a missing, unknown or
 // repeated key, a null, another type or anything after the object refuses.
@@ -101,7 +106,7 @@ func ParseManifest(data []byte) (*Manifest, error) {
 	if err != nil {
 		return nil, fmt.Errorf("%w: release.json: %v", ErrUnverified, err)
 	}
-	images, err := strictObject(top["images"], "cyfr", "cyfr_locus", "caddy")
+	images, err := strictObject(top["images"], "cyfr", "cyfr_locus", "caddy", "tailscale")
 	if err != nil {
 		return nil, fmt.Errorf("%w: release.json images: %v", ErrUnverified, err)
 	}
@@ -117,6 +122,7 @@ func ParseManifest(data []byte) (*Manifest, error) {
 		{"images.cyfr", images["cyfr"], &m.Images.Cyfr},
 		{"images.cyfr_locus", images["cyfr_locus"], &m.Images.CyfrLocus},
 		{"images.caddy", images["caddy"], &m.Images.Caddy},
+		{"images.tailscale", images["tailscale"], &m.Images.Tailscale},
 	}
 	for _, f := range fields {
 		if !bytes.HasPrefix(f.raw, []byte(`"`)) {

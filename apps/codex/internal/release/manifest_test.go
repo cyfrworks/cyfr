@@ -129,7 +129,7 @@ func TestValidManifestParses(t *testing.T) {
 	if m.Version != "1.2.3" {
 		t.Errorf("version = %q", m.Version)
 	}
-	for _, repo := range []string{RepoCyfr, RepoCyfrLocus, RepoCaddy} {
+	for _, repo := range []string{RepoCyfr, RepoCyfrLocus, RepoCaddy, RepoTailscale} {
 		if d, ok := m.Digest(repo); !ok || !digestPattern.MatchString(d) {
 			t.Errorf("Digest(%s) = %q, %v", repo, d, ok)
 		}
@@ -605,6 +605,15 @@ func generateSignatureVectors(valid json.RawMessage, at time.Time) (*signatureVe
 	add("the caddy digest dropped after signing", "signature", noCaddy, validBundle)
 	add("a signed manifest without the caddy digest", "manifest", noCaddy,
 		signed(s, Identity(version), Issuer, noCaddy))
+
+	// The manifest of a release before the tailscale image, signed as its
+	// workflow signed it, is refused by the strict key set.
+	noTailscale, err2 := with(func(m map[string]any) { delete(m["images"].(map[string]any), "tailscale") })
+	if err2 != nil {
+		return nil, err2
+	}
+	add("a signed manifest without the tailscale digest", "manifest", noTailscale,
+		signed(s, Identity(version), Issuer, noTailscale))
 
 	add("the bundle of another file", "signature", validBytes,
 		signed(s, Identity(version), Issuer, []byte("cyfr_1.2.3_linux_amd64.tar.gz\n")))
