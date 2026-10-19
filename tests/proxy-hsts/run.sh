@@ -5,7 +5,8 @@
 # HSTS behind the shipped proxy. The repository's Caddyfile, unmodified and
 # mounted where docker-compose.yml mounts it, runs in the Caddy image the
 # compose file's caddy service names, in front of a stub upstream that
-# answers as cyfr:$CYFR_PORT on a private Docker network of this run's own.
+# answers as cyfr:$CYFR_PROXY_PORT, the endpoint's proxy listener, on a
+# private Docker network of this run's own.
 # The stub sends a Strict-Transport-Security value of its own, as an
 # upstream that set one would. The proof asserts:
 #
@@ -15,12 +16,14 @@
 #   proxied   behind a TLS host, a response over HTTPS carries
 #             Strict-Transport-Security once, with the endpoint's own value,
 #             read from CyfrWeb.Plugs.ApiSecurityHeaders, the one spelling of
-#             it; the upstream answers on a port other than the default
+#             it; the upstream answers on a port other than the proxy
+#             listener's default
 #   upstream  the upstream's own header (X-Upstream) passes through
 #   redirect  plain HTTP on the host answers a redirect to https
 #   error     with the upstream gone, Caddy's own 502 over HTTPS carries the
 #             same header once
-#   loopback  CYFR_HOST=localhost with an empty email, compose's defaults:
+#   loopback  CYFR_HOST=localhost with an empty email and the proxy
+#             listener's default port, compose's defaults:
 #             the file loads, serves TLS from Caddy's local CA and redirects
 #             plain HTTP, and no response over TLS carries the header, the
 #             upstream's own included
@@ -46,10 +49,10 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 TLS_HOST=cyfr.test
-# Not the endpoint's default, so the proxy must read CYFR_PORT to reach it.
+# Not the proxy listener's default, so the proxy must read CYFR_PROXY_PORT
+# to reach it.
 TLS_PORT=4123
 LOOPBACK_HOST=localhost
-LOOPBACK_PORT=4000
 DEEP_HOST=a.b.localhost
 # The same name as a client may spell it; Caddy matches hosts in any case.
 DEEP_HOST_MIXED=A.b.LocalHost
@@ -91,6 +94,12 @@ IMAGE="$(awk '
   in_caddy && /^    image:/ { print $2; exit }
 ' "$ROOT/docker-compose.yml")"
 [ -n "$IMAGE" ] || fail "docker-compose.yml's caddy service names no image"
+
+# The proxy listener's port as compose passes it to caddy unset: the
+# default its CYFR_PROXY_PORT line names.
+# shellcheck disable=SC2016
+LOOPBACK_PORT="$(sed -n 's/^ *- CYFR_PROXY_PORT=\${CYFR_PROXY_PORT:-\([0-9][0-9]*\)}$/\1/p' "$ROOT/docker-compose.yml" | head -1)"
+[ -n "$LOOPBACK_PORT" ] || fail "docker-compose.yml passes caddy no CYFR_PROXY_PORT with a default"
 
 # The endpoint's value, from its one spelling.
 PLUG="$ROOT/apps/cyfr/lib/cyfr_web/plugs/api_security_headers.ex"
@@ -181,7 +190,7 @@ start_proxy() {
     -p 127.0.0.1::80 -p 127.0.0.1::443 \
     -v "$ROOT/Caddyfile:/etc/caddy/Caddyfile:ro" \
     -e "CYFR_HOST=$HOST" \
-    -e "CYFR_PORT=$3" \
+    -e "CYFR_PROXY_PORT=$3" \
     -e "CADDY_ACME_EMAIL=$4" \
     "$IMAGE" >/dev/null
 
@@ -313,7 +322,7 @@ pass "TLS for $TLS_HOST verified against Caddy's local CA root, no ACME"
 step "proxied: a response from the upstream over HTTPS"
 status="$(https_get proxied '/probe?q=1')" || true
 [ "$status" = 200 ] || fail_with_logs "the proxied request answered ${status:-nothing}, not 200"
-pass "the proxied request reached the upstream on cyfr:$TLS_PORT, not the default port"
+pass "the proxied request reached the upstream on cyfr:$TLS_PORT, not the proxy listener's default port"
 assert_hsts proxied "the proxied 200"
 
 step "upstream: the upstream's own headers"
@@ -357,7 +366,7 @@ IP_PROXY="$RUN-caddy-ip"
 CONTAINERS+=("$IP_PROXY")
 docker run -d --name "$IP_PROXY" --network "$NET" \
   -v "$ROOT/Caddyfile:/etc/caddy/Caddyfile:ro" \
-  -e CYFR_HOST=127.0.0.1 -e "CYFR_PORT=$LOOPBACK_PORT" -e CADDY_ACME_EMAIL= \
+  -e CYFR_HOST=127.0.0.1 -e "CYFR_PROXY_PORT=$LOOPBACK_PORT" -e CADDY_ACME_EMAIL= \
   "$IMAGE" >/dev/null
 deadline=$((SECONDS + READY_TIMEOUT))
 until docker exec "$IP_PROXY" wget -S -q --no-check-certificate -O /dev/null \
