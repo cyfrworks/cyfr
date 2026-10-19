@@ -72,10 +72,15 @@ func loginInPrism(ctx context.Context, client *mcp.Client, target storedContext,
 	status, err := pollCliSignIn(ctx, client, token, interval, deadline)
 	switch {
 	case errors.Is(err, context.Canceled):
-		withdraw(client, token)
+		if werr := withdraw(client, token); werr != nil {
+			unwithdrawn(werr)
+			return interrupted("Stopped waiting.")
+		}
 		return interrupted("Stopped waiting; the sign-in was withdrawn.")
 	case err != nil:
-		withdraw(client, token)
+		if werr := withdraw(client, token); werr != nil {
+			unwithdrawn(werr)
+		}
 		return err
 	}
 
@@ -94,7 +99,11 @@ func loginInPrism(ctx context.Context, client *mcp.Client, target storedContext,
 		// The home signed the command line in; a session this machine
 		// cannot keep, or would keep under another home's address, is
 		// withdrawn rather than left signed in, unheld.
-		withdraw(client, token)
+		if werr := withdraw(client, token); werr != nil {
+			return fmt.Errorf("Approved, but the session could not be saved here (%w), and the home "+
+				"could not be told to end it (%v): it may still be active, so revoke the command line "+
+				"under Devices in Prism", err, werr)
+		}
 		return fmt.Errorf("Approved, but the session could not be saved here, so it was withdrawn: %w", err)
 	}
 
@@ -161,16 +170,21 @@ func pollCliSignIn(ctx context.Context, client *mcp.Client, token string, interv
 }
 
 // withdraw tells the home this command line stopped waiting, within a
-// bound of its own since the command's context may already have ended.
-// A home it cannot tell is said so: the person then revokes under
-// Devices whatever an approval signed in.
-func withdraw(client *mcp.Client, token string) {
+// bound of its own since the command's context may already have ended,
+// and answers the home's failure to hear it, which callers say: whatever
+// an approval signed in may then still be active, for the person to
+// revoke under Devices.
+func withdraw(client *mcp.Client, token string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), cliWithdrawTimeout)
 	defer cancel()
-	if _, err := client.CallTool(ctx, ops.Session, ops.SessionCliCancelArgs{SessionToken: token}); err != nil {
-		fmt.Fprintf(os.Stderr, "The home could not be told the command line stopped waiting (%v). "+
-			"If the link is approved before it expires, revoke the command line under Devices in Prism.\n", err)
-	}
+	_, err := client.CallTool(ctx, ops.Session, ops.SessionCliCancelArgs{SessionToken: token})
+	return err
+}
+
+// unwithdrawn says, on stderr, that the home did not hear a withdrawal.
+func unwithdrawn(err error) {
+	fmt.Fprintf(os.Stderr, "The home could not be told the command line stopped waiting (%v). "+
+		"If the link is approved before it expires, revoke the command line under Devices in Prism.\n", err)
 }
 
 // interrupted is the person's own Ctrl-C (or the terminal closing): said
@@ -206,10 +220,14 @@ func machineName() string {
 }
 
 // storedContext is the stored context a command signs in to or out of,
-// by its name and the address it named when the command began.
+// as the one read of the configuration that validated it found it: its
+// name, its address and the credential it held. The command's client is
+// built from this read (clientAt), never from another, so a context set
+// or changed meanwhile sends no credential to another home.
 type storedContext struct {
 	name    string
 	address string
+	token   string
 }
 
 // sessionContext is the stored context cyfr login saves its session under
@@ -235,7 +253,7 @@ func sessionContext(verb string) (storedContext, error) {
 			"(cyfr context add <name> %s), then use --context <name>.",
 			flagURL, name, stored.URL, flagURL)
 	}
-	return storedContext{name: name, address: stored.URL}, nil
+	return storedContext{name: name, address: stored.URL, token: stored.Token}, nil
 }
 
 // sameAddress is whether two addresses name one home, a trailing slash

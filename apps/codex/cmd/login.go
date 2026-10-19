@@ -69,9 +69,10 @@ withdrawn.`,
 				strings.Join(ops.DeviceFlowProviders, "' or '"))
 		}
 
-		client := newClient()
-		// Signing in is anonymous: a credential the context still holds,
-		// revoked or expired, must not ride along and refuse it.
+		// The client is the validated context's own: its address, from the
+		// same read. Signing in is anonymous: a credential the context still
+		// holds, revoked or expired, must not ride along and refuse it.
+		client := clientAt(target.address, "")
 		client.SessionID = ""
 
 		// Confirm the server speaks a revision we understand before starting a
@@ -129,7 +130,11 @@ withdrawn.`,
 				// at the home that issued it rather than kept under the
 				// other's address.
 				client.SessionID = sessionID
-				_, _ = client.CallTool(cmd.Context(), ops.Session, ops.SessionLogoutArgs{})
+				if _, lerr := client.CallTool(cmd.Context(), ops.Session, ops.SessionLogoutArgs{}); lerr != nil {
+					return fmt.Errorf("Signed in, but nothing was saved (%w), and the home could not end "+
+						"the session (%v): it may still be active, so revoke the command line under "+
+						"Devices in Prism", err, lerr)
+				}
 				return fmt.Errorf("Signed in, but the session was ended and nothing saved: %w", err)
 			} else if err != nil {
 				// Login already succeeded server-side; a failed local save
@@ -585,14 +590,22 @@ var logoutCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		client := newClient()
+		// The client is the validated context's own: its address and its
+		// credential, from the same read.
+		client := clientAt(target.address, target.token)
 
 		// Clear saved session locally first — even if the server call fails
 		// (e.g. session already expired), the user still wants local cleanup.
-		if cfg, err := config.Load(); err == nil && cfg.Contexts[target.name] != nil {
-			cfg.Contexts[target.name].Token = ""
-			if err := cfg.Save(); err != nil {
-				fmt.Fprintf(os.Stderr, "warning: could not clear the saved session: %v\n", err)
+		// Only what the validating read found is cleared: a context set to
+		// another address, or holding another session, since then is not
+		// this logout's.
+		if cfg, err := config.Load(); err == nil {
+			if stored := cfg.Contexts[target.name]; stored != nil &&
+				sameAddress(stored.URL, target.address) && stored.Token == target.token {
+				stored.Token = ""
+				if err := cfg.Save(); err != nil {
+					fmt.Fprintf(os.Stderr, "warning: could not clear the saved session: %v\n", err)
+				}
 			}
 		}
 

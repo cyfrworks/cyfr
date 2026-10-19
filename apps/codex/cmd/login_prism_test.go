@@ -37,7 +37,8 @@ type stubHome struct {
 	calls     []stubCall
 	polls     []string
 	expiresIn float64
-	failPolls bool
+	// failing names the actions the home answers 502 to.
+	failing map[string]bool
 	// onAction, when set, runs as each action arrives, before its answer.
 	onAction func(action string)
 }
@@ -50,7 +51,7 @@ type stubCall struct {
 
 func newStubHome(t *testing.T, polls ...string) *stubHome {
 	t.Helper()
-	h := &stubHome{polls: polls, expiresIn: 30}
+	h := &stubHome{polls: polls, expiresIn: 30, failing: map[string]bool{}}
 	version := protocolVersionFromVectors(t)
 	h.Server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var req struct {
@@ -77,7 +78,7 @@ func newStubHome(t *testing.T, polls ...string) *stubHome {
 		h.calls = append(h.calls, stubCall{action: action, arguments: args,
 			authorization: r.Header.Get("Authorization")})
 		answer := h.answer(action)
-		fail := h.failPolls && action == "cli_poll"
+		fail := h.failing[action]
 		h.mu.Unlock()
 
 		if fail {
@@ -330,7 +331,7 @@ func TestLogin_TheDeadlineWithdrawsTheSignIn(t *testing.T) {
 func TestLogin_AnUnreachableHomeIsSaid(t *testing.T) {
 	home := newStubHome(t)
 	home.expiresIn = 0.2
-	home.failPolls = true
+	home.failing["cli_poll"] = true
 	withContexts(t, "home", map[string]*config.Context{"home": {URL: home.URL}})
 
 	out, err := runLogin(t, t.Context(), "login")
@@ -571,5 +572,49 @@ func TestSameAddress_FoldsSchemeAndHostOnly(t *testing.T) {
 		if sameAddress(pair[0], pair[1]) {
 			t.Errorf("%s and %s are two homes", pair[0], pair[1])
 		}
+	}
+}
+
+// --provider's cleanup that the home does not hear is said: the session
+// may still be active, and Prism's Devices is where it is revoked.
+func TestLogin_ProviderCleanupFailureIsSaid(t *testing.T) {
+	home := newStubHome(t)
+	other := newStubHome(t)
+	home.failing["logout"] = true
+	path := withContexts(t, "home", map[string]*config.Context{"home": {URL: home.URL}})
+	home.onAction = func(action string) {
+		if action == "device_poll" {
+			moveContext(t, path, "home", other.URL)
+		}
+	}
+
+	out, err := runLogin(t, t.Context(), "login", "--provider", "github")
+	if !exitsOne(err) || strings.Contains(err.Error(), "the session was ended") ||
+		!strings.Contains(err.Error(), "may still be active") || !strings.Contains(err.Error(), "Devices") {
+		t.Fatalf("want the failed cleanup said, got %v\n%s", err, out)
+	}
+	if _, asked := home.call("logout"); !asked {
+		t.Error("no cleanup was asked of the home")
+	}
+}
+
+// A withdrawal the home does not hear, after the context moved, is said
+// the same way rather than claimed.
+func TestLogin_WithdrawalFailureIsSaid(t *testing.T) {
+	home := newStubHome(t, "pending", "approved")
+	other := newStubHome(t)
+	home.failing["cli_cancel"] = true
+	path := withContexts(t, "home", map[string]*config.Context{"home": {URL: home.URL}})
+	var once sync.Once
+	home.onAction = func(action string) {
+		if action == "cli_poll" {
+			once.Do(func() { moveContext(t, path, "home", other.URL) })
+		}
+	}
+
+	out, err := runLogin(t, t.Context(), "login")
+	if !exitsOne(err) || strings.Contains(err.Error(), "so it was withdrawn") ||
+		!strings.Contains(err.Error(), "may still be active") {
+		t.Fatalf("want the failed withdrawal said, got %v\n%s", err, out)
 	}
 }

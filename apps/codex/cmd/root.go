@@ -169,7 +169,19 @@ func newClient() *mcp.Client {
 		cfg.CurrentContext = flagContext
 	}
 
-	client := mcp.NewClient(serverURL(cfg))
+	stored := ""
+	if ctx := cfg.Current(); ctx != nil {
+		stored = ctx.Credential()
+	}
+	return clientAt(serverURL(cfg), stored)
+}
+
+// clientAt is the client for the home at address, holding the credential
+// --token names, else CYFR_TOKEN, else stored: a command that read its
+// context once builds its client from that one read, so the address and
+// the credential it sends there are the same context's.
+func clientAt(address, stored string) *mcp.Client {
+	client := mcp.NewClient(address)
 	activeClient = client
 
 	// A change answered confirmation_required waits here and repeats, for
@@ -191,9 +203,7 @@ func newClient() *mcp.Client {
 	case os.Getenv("CYFR_TOKEN") != "":
 		client.SessionID = os.Getenv("CYFR_TOKEN")
 	default:
-		if ctx := cfg.Current(); ctx != nil {
-			client.SessionID = ctx.Credential()
-		}
+		client.SessionID = stored
 	}
 
 	return client
