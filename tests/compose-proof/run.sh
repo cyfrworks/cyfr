@@ -80,12 +80,16 @@
 #          off, the start answers tailnet_node_mismatch, the home answers on
 #          this machine alone, and `cyfr reach tailnet` previews A's
 #          address to B's. The restore keeps the state volume (B) and the
-#          project's .cyfr/, and removes join.json. The restore alone runs
-#          as root, in a container of a pinned docker CLI image with the
-#          host's docker and the project directory at its own path, since a
-#          non-root person's restore cannot put back a storage root the
-#          container's entrypoint has handed to the image's user (a defect
-#          outside this proof); every other step runs as the person.
+#          project's .cyfr/, and removes join.json. The snapshot is the
+#          proof's own, so that a snapshot holds neither the tailnet state
+#          nor the reach state is apps/codex/cmd/update_test.go's
+#          TestSnapshotsHoldNeitherTheTailnetStateNorTheReachState. The
+#          restore alone runs as root, in a container of a pinned docker
+#          CLI image with the host's docker and the project directory at
+#          its own path, since a non-root person's restore cannot put back
+#          a storage root the container's entrypoint has handed to the
+#          image's user (a defect outside this proof); every other step
+#          runs as the person.
 #
 #   shutdown
 #          `docker compose stop cyfr` ends within the stop_grace_period
@@ -412,6 +416,17 @@ for r in vectors["refusals"]:
 sys.exit(1)' "$ROOT/tests/fixtures/reach_modes.json" "$@" || fail "no variant of $1 is filled by $*"
 }
 
+# The value `$2...` answers, as an expected value: the run fails, naming
+# `$1`, when the command fails or answers nothing, since an empty pattern
+# or operand matches anything.
+expected() {
+  local what="$1" value
+  shift
+  value="$("$@")" || fail "no $what: $* failed"
+  [ -n "$value" ] || fail "no $what: $* answered nothing"
+  printf '%s\n' "$value"
+}
+
 # The vectors' boot sentence of the vector named `$1`.
 boot_sentence() {
   python3 -I -c '
@@ -424,14 +439,20 @@ else:
 }
 
 # The project's services with a running container, sorted, one line.
+# A docker ps that fails answers that, never the empty list.
 running() {
-  docker ps --filter "label=com.docker.compose.project=$RUN" --format '{{.Label "com.docker.compose.service"}}' |
-    sort | tr '\n' ' ' | sed 's/ $//'
+  local out
+  out="$(docker ps --filter "label=com.docker.compose.project=$RUN" --format '{{.Label "com.docker.compose.service"}}')" ||
+    { echo "(docker ps failed)"; return 1; }
+  printf '%s\n' "$out" | sort | tr '\n' ' ' | sed 's/ $//'
 }
 
 # Whether the project has a container of service `$1`, running or not.
 has_container() {
-  [ -n "$(docker ps -aq --filter "label=com.docker.compose.project=$RUN" --filter "label=com.docker.compose.service=$1")" ]
+  local ids
+  ids="$(docker ps -aq --filter "label=com.docker.compose.project=$RUN" --filter "label=com.docker.compose.service=$1")" ||
+    fail "docker ps failed, so whether the project has a $1 container is unknown"
+  [ -n "$ids" ]
 }
 
 # cyfr's container once Docker reports it healthy, within 180 s, in
@@ -716,6 +737,7 @@ tailnet_join() {
 # proxy without a container, and cyfr healthy.
 expect_head() {
   local mode="$1" host="$2" want
+  [ -n "$host" ] || fail "no host to expect the $mode home at"
   [ "$(env_value CYFR_REACH)" = "$mode" ] || fail ".env's mode is $(env_value CYFR_REACH), not $mode"
   [ "$(env_value CYFR_HOST)" = "$host" ] || fail ".env's host is $(env_value CYFR_HOST), not $host"
   case "$mode" in
@@ -859,8 +881,8 @@ bind_checks() {
   local mode="$1" config endpoint_address endpoint_network proxy_address host_api_address host_api_port runtime_network
   local port pport bound answer network gateway address front hostip
   config="$(compose config --format json)"
-  endpoint_address="$(table endpoint_address)"
-  endpoint_network="$(table endpoint_network)"
+  endpoint_address="$(expected "endpoint address in the role table" table endpoint_address)" || exit 1
+  endpoint_network="$(expected "endpoint network in the role table" table endpoint_network)" || exit 1
   read -r proxy_address host_api_address host_api_port runtime_network <<<"$(printf '%s' "$config" | python3 -I -c '
 import json, sys
 cyfr = json.load(sys.stdin)["services"]["cyfr"]
@@ -1056,13 +1078,22 @@ forged() {
   m1="$(mark)" m2="$(mark)"
   plain="$("$ask" "$m1")"
   forged_answer="$("$ask" "$m2" "X-Forwarded-For: $FORGED_FOR" "Tailscale-User-Login: admin@evil.example" "Tailscale-User-Name: Forged")"
-  [ "$(answer_of "$plain")" = "$(answer_of "$forged_answer")" ] ||
-    fail "$what: forged headers changed the answer from $(answer_of "$plain") to $(answer_of "$forged_answer")"
+  same_answer "$what" "$plain" "$forged_answer"
   got="$(resolved "$m2")"
   [ -n "$got" ] || fail "$what: cyfr recorded no client address for the request"
   [ "$got" != "$FORGED_FOR" ] || fail "$what: cyfr resolved the forged X-Forwarded-For $FORGED_FOR"
   [ "$(resolved "$m1")" = "$got" ] || fail "$what: the address cyfr resolved changed with forged headers: $(resolved "$m1") and $got"
   ok "$what: forged X-Forwarded-For and Tailscale-User-* change nothing; cyfr resolves the peer, $got"
+}
+
+# The probe answers `$2` and `$3` of `$1` are both the person's tools/list
+# answered (200), and the same: a probe that failed is no answer.
+same_answer() {
+  local what="$1" a b
+  a="$(answer_of "$2")" || fail "$what: the plain probe got no answer: $(printf '%s' "$2" | tail -n 5)"
+  b="$(answer_of "$3")" || fail "$what: the forged probe got no answer: $(printf '%s' "$3" | tail -n 5)"
+  [ "${a%% *}" = 200 ] || fail "$what: the plain request answered ${a%% *}, not 200"
+  [ "$a" = "$b" ] || fail "$what: forged headers changed the answer from $a to $b"
 }
 
 # A request's answer as the authority it got: the status and a digest of
@@ -1140,16 +1171,16 @@ forged_checks() {
 # As forged, the address cyfr must resolve the client's own, which the
 # probe's answer names (IP=).
 forged_peer() {
-  local what="$1" ask="$2" m1 m2 plain forged_answer got client
+  local what="$1" ask="$2" m1 m2 plain forged_answer got client plain_client
   m1="$(mark)" m2="$(mark)"
   plain="$("$ask" "$m1")"
   forged_answer="$("$ask" "$m2" "X-Forwarded-For: $FORGED_FOR" "Tailscale-User-Login: admin@evil.example" "Tailscale-User-Name: Forged")"
-  client="$(ip_of "$forged_answer")"
-  [ "$(answer_of "$plain")" = "$(answer_of "$forged_answer")" ] ||
-    fail "$what: forged headers changed the answer from $(answer_of "$plain") to $(answer_of "$forged_answer")"
+  client="$(expected "client address of the forged probe" ip_of "$forged_answer")" || exit 1
+  plain_client="$(expected "client address of the plain probe" ip_of "$plain")" || exit 1
+  same_answer "$what" "$plain" "$forged_answer"
   got="$(resolved "$m2")"
   [ "$got" = "$client" ] || fail "$what: cyfr resolved '${got:-nothing}', not the client's $client"
-  [ "$(resolved "$m1")" = "$(ip_of "$plain")" ] || fail "$what: cyfr resolved $(resolved "$m1") for the plain request, not its client $(ip_of "$plain")"
+  [ "$(resolved "$m1")" = "$plain_client" ] || fail "$what: cyfr resolved '$(resolved "$m1")' for the plain request, not its client $plain_client"
   ok "$what: forged X-Forwarded-For and Tailscale-User-* change nothing; cyfr resolves the client, $got"
 }
 
@@ -1176,19 +1207,25 @@ hsts_checks() {
   ok "through Serve, a refused POST /mcp answers 401 with the endpoint's HSTS"
   for host in localhost 127.0.0.1 LocalHost; do
     answer="$(fetched "$(tailnet_fetch --host "$host" "https://$name/api/health")")"
+    [ "$(jget "$answer" status)" = 200 ] || fail "through Serve with Host $host, /api/health answered '${answer:-nothing}', not 200"
     [ -z "$(hsts_of "$answer")" ] || fail "through Serve with Host $host, the answer carries Strict-Transport-Security"
   done
-  ok "through Serve with a loopback Host (localhost, 127.0.0.1, LocalHost), no HSTS"
+  ok "through Serve with a loopback Host (localhost, 127.0.0.1, LocalHost), 200 and no HSTS"
   answer="$(from_network edge -H "host: $name" "http://cyfr:$(proxy_port)/api/health")"
   [ "$(hsts_in "$answer")" = "$HSTS" ] || fail "the proxy listener from edge, as $name, carries Strict-Transport-Security '$(hsts_in "$answer")'"
   answer="$(from_network edge -H "host: localhost" "http://cyfr:$(proxy_port)/api/health")"
+  [ "$(status_of "$answer")" = 200 ] || fail "the proxy listener from edge, as localhost, answered '$(status_of "$answer")', not 200"
   [ -z "$(hsts_in "$answer")" ] || fail "the proxy listener from edge, as localhost, carries Strict-Transport-Security"
-  ok "the proxy listener itself: HSTS for $name, none for localhost"
+  ok "the proxy listener itself: HSTS for $name, 200 and none for localhost"
+  local code
   for host in "$name" localhost; do
-    curl -sS -o /dev/null -D "$WORK/lo.head" -m 10 -H "host: $host" "http://$(published)/api/health" || true
+    rm -f "$WORK/lo.head"
+    code="$(curl -sS -o /dev/null -D "$WORK/lo.head" -w '%{http_code}' -m 10 -H "host: $host" "http://$(published)/api/health")" ||
+      fail "the loopback listener, as $host, gave no answer"
+    [ "$code" = 200 ] || fail "the loopback listener, as $host, answered $code, not 200"
     [ -z "$(hsts_in "$(cat "$WORK/lo.head")")" ] || fail "the loopback listener, as $host, carries Strict-Transport-Security"
   done
-  ok "the loopback listener sends no HSTS, as $name or localhost"
+  ok "the loopback listener answers 200 with no HSTS, as $name or localhost"
 }
 
 # The home at its ts.net name: the origin, MCP, the LiveView socket and
@@ -1213,6 +1250,8 @@ tsnet_checks() {
   ok "the LiveView socket at https://$name upgrades for its own origin (101) and refuses another (403)"
   unsigned="$(fetched "$(tailnet_fetch "https://$name/")")"
   signed="$(fetched "$(tailnet_fetch --header "cookie: _cyfr_key=$COOKIE" "https://$name/")")"
+  [[ "$(jget "$unsigned" status)" =~ ^[0-9]{3}$ && "$(jget "$signed" status)" =~ ^[0-9]{3}$ ]] ||
+    fail "a page request at https://$name got no answer: '${unsigned:-nothing}', '${signed:-nothing}'"
   [ "$(jget "$signed" status) $(jget "$signed" headers Location)" != "$(jget "$unsigned" status) $(jget "$unsigned" headers Location)" ] ||
     fail "the session cookie made no difference at https://$name: both answer $(jget "$signed" status) $(jget "$signed" headers Location)"
   [ "$(jget "$signed" status)" != 401 ] && [ "$(jget "$signed" status)" != 403 ] || fail "at https://$name the signed-in page answered $(jget "$signed" status)"
@@ -1234,7 +1273,7 @@ refused_before_start() {
 }
 
 modes_case() {
-  local m
+  local m sentence_text
   step "modes: a local home, builds off, up"
   cli_ok up-local up
   expect_head local localhost
@@ -1254,12 +1293,14 @@ modes_case() {
   env_set COMPOSE_PROFILES
   env_set CYFR_HOST cyfr.example.com
   refused_before_start "a local .env naming another host" reach_local_mismatch key=CYFR_HOST value=cyfr.example.com
-  grep -qF -- "$(boot_sentence 'local with a host')" "$WORK/refused-up.log" || fail "cyfr up's sentence is not the boot's own"
+  sentence_text="$(expected "boot sentence 'local with a host'" boot_sentence 'local with a host')" || exit 1
+  grep -qF -- "$sentence_text" "$WORK/refused-up.log" || fail "cyfr up's sentence is not the boot's own"
   env_set CYFR_HOST localhost
   cp "$WORK/.env" "$WORK/.env.with-mode"
   env_set CYFR_REACH
   refused_before_start "a .env with no mode" reach_missing
-  grep -qF -- "$(boot_sentence 'a release with the mode unset')" "$WORK/refused-up.log" || fail "cyfr up's sentence is not the boot's own"
+  sentence_text="$(expected "boot sentence 'a release with the mode unset'" boot_sentence 'a release with the mode unset')" || exit 1
+  grep -qF -- "$sentence_text" "$WORK/refused-up.log" || fail "cyfr up's sentence is not the boot's own"
   cp "$WORK/.env.with-mode" "$WORK/.env"
 
   step "modes: up again, then every ordered pair of the three modes, running"
@@ -1540,6 +1581,7 @@ interrupt_case() {
   # machine's volume.
   local enrolled first_id
   enrolled="$(jget "$(docker run --rm -v "${RUN}_tailscale_state:/var/lib/tailscale" "$STANDIN_IMAGE" standin state)" id)"
+  [ -n "$enrolled" ] && [ "$enrolled" != null ] || fail "the stand-in's state names no machine"
   docker run --rm -v "${RUN}_tailscale_state:/var/lib/tailscale" "$STANDIN_IMAGE" standin tailnet --https on
   as_printed tailnet_https_off "$WORK/https-off.log" 1
   expect_head tailnet cyfr.proof.ts.net
@@ -1605,7 +1647,7 @@ PY
 }
 
 restore_identity_case() {
-  local snapshot a_id b_id status answer
+  local snapshot a_id b_id status answer mismatch
   step "restore-identity: a home serving node A"
   cli_ok down-first down
   cli_ok join-a reach tailnet --tailscale-auth-key-file "$AUTH_KEY_FILE" --yes
@@ -1617,9 +1659,6 @@ restore_identity_case() {
   step "restore-identity: the snapshot of A, taken with the stack stopped"
   cli_ok down-a down
   snapshot="$(snapshot_take)"
-  for part in tailscale_state .cyfr; do
-    [ ! -e "$snapshot/$part" ] || fail "the snapshot holds $part"
-  done
   ok "snapshot $snapshot: $(python3 -I -c 'import json, sys; print(",".join(json.load(open(sys.argv[1]))["parts"]))' "$snapshot/snapshot.json")"
 
   step "restore-identity: switched to local, then joined as node B"
@@ -1638,7 +1677,8 @@ restore_identity_case() {
   cli_run_root restore restore "$snapshot" || status=$?
   # Exit 3: the home started, on this machine only.
   [ "$status" -eq 3 ] || fail "cyfr restore exited $status, not 3, the start that leaves the home on this machine only: $(tail -n 20 "$WORK/restore.log")"
-  grep -qF -- "$(render tailnet_node_mismatch node=cyfr-1.proof.ts.net env=cyfr.proof.ts.net)" "$WORK/restore.log" ||
+  mismatch="$(expected "tailnet_node_mismatch sentence" render tailnet_node_mismatch node=cyfr-1.proof.ts.net env=cyfr.proof.ts.net)" || exit 1
+  grep -qF -- "$mismatch" "$WORK/restore.log" ||
     fail "the restore's start did not say tailnet_node_mismatch's sentence for B and A: $(tail -n 20 "$WORK/restore.log")"
   [ "$(env_value CYFR_HOST)" = cyfr.proof.ts.net ] && [ "$(env_value CYFR_TAILNET_NODE_ID)" = "$a_id" ] ||
     fail "after the restore .env names $(env_value CYFR_HOST) ($(env_value CYFR_TAILNET_NODE_ID)), not A"
