@@ -19,13 +19,16 @@ import (
 	"strings"
 	"syscall"
 	"testing"
+
+	"github.com/cyfr/codex/internal/reach"
 )
 
 // restoreFakeDocker is fakeDocker with the two offline evals told apart:
 // the declaration answers from mark.*, the live read as fakeDocker's eval;
 // pg_restore keeps its stdin in pgrestore.stdin and answers from
 // pgrestore.*; <key>.kill kills the calling process with SIGKILL, as a
-// crash would.
+// crash would. A call naming the staged compose file sees that file, every
+// other docker-compose.yml.
 const restoreFakeDocker = `#!/bin/bash
 d="$FAKE_DOCKER_DIR"
 file=docker-compose.yml
@@ -57,8 +60,8 @@ answer() {
 }
 if [ "$1" = compose ]; then
   shift
-  while [ "$1" = -f ] || [ "$1" = --project-directory ] || [ "$1" = --profile ]; do
-    if [ "$1" = -f ] && [ "$file" = docker-compose.yml ]; then file="$2"; fi
+  while [ "$1" = -p ] || [ "$1" = -f ] || [ "$1" = --project-directory ] || [ "$1" = --profile ]; do
+    if [ "$1" = -f ] && [ "$2" = .docker-compose.yml.restore ]; then file="$2"; fi
     shift 2
   done
   sub="$1"
@@ -104,15 +107,25 @@ exit 0
 const (
 	// testOffline is an offline eval the restore runs, its own bar lifted
 	// in the one-off container.
-	testOffline = "run --rm --no-deps -T -e CYFR_RESTORE_INCOMPLETE= cyfr bin/cyfr eval "
-	// testStagedConfig is the restore's read of the configuration the
-	// snapshot's compose file gives, staged beside docker-compose.yml.
-	testStagedConfig = "compose -f " + stagedCompose + " --project-directory . --profile tls --profile locus-builds config --format json"
-	testMark         = `IO.puts("CYFR_RESTORE_ID=" <> Cyfr.Release.mark_restore())`
-	testRestored     = "rst_0192f0a1-7c4e-7d2a-9b1e-3f5a6b7c8d9e"
-	sqliteBytes      = "SQLite format 3\x00main"
-	editedEnv        = "CYFR_BEHIND_PROXY=true\nCYFR_LOCUS_BUILDS_URL=http://locus-builds:4100\nCYFR_PORT=4999\n"
+	testOffline  = "run --rm --no-deps -T -e CYFR_RESTORE_INCOMPLETE= cyfr bin/cyfr eval "
+	testMark     = `IO.puts("CYFR_RESTORE_ID=" <> Cyfr.Release.mark_restore())`
+	testRestored = "rst_0192f0a1-7c4e-7d2a-9b1e-3f5a6b7c8d9e"
+	sqliteBytes  = "SQLite format 3\x00main"
+	// editedEnv is .env as the home holds it after the snapshot: another
+	// line beside the same reach.
+	editedEnv = scenarioEnv + "CYFR_CPU_LIMIT=2\n"
 )
+
+// stagedConfig is the restore's read of the configuration the snapshot's
+// compose file gives, staged beside docker-compose.yml, override files
+// after it: under the snapshot's head's profiles, the project named.
+func (r *restoreScenario) stagedConfig(overrides ...string) string {
+	files := "-f " + stagedCompose
+	for _, o := range overrides {
+		files += " -f " + o
+	}
+	return "compose -p " + composeProject(r.project) + " " + files + " --project-directory . --profile locus-builds --profile public config --format json"
+}
 
 // restoreScenario is an update scenario whose update has taken a snapshot,
 // with the fake docker swapped for restoreFakeDocker and its log cleared.
@@ -156,14 +169,14 @@ func newRestoreScenario(t *testing.T, compose []byte, env map[string]string, pre
 	return r
 }
 
-// restore runs `cyfr restore` of the scenario's snapshot; the lock is gone
-// after it and no docker child shared cyfr's process group.
+// restore runs `cyfr restore` of the scenario's snapshot; the lock is
+// released after it and no docker child shared cyfr's process group.
 func (r *restoreScenario) restore(start bool) (string, error) {
 	r.t.Helper()
 	var out bytes.Buffer
 	err := runRestore(context.Background(), r.dir, start, &out, &out)
-	if _, statErr := os.Lstat(filepath.Join(r.project, updateLockName)); !errors.Is(statErr, fs.ErrNotExist) {
-		r.t.Errorf("the lock is left behind (%v)", statErr)
+	if holder := r.engine.held(); holder != "" {
+		r.t.Errorf("the lock is still held, by %s", holder)
 	}
 	for _, line := range r.log() {
 		if strings.Contains(line, "{shared process group}") {
@@ -171,18 +184,6 @@ func (r *restoreScenario) restore(start bool) (string, error) {
 		}
 	}
 	return out.String(), err
-}
-
-// edit writes content at the project path rel.
-func (r *restoreScenario) edit(rel, content string) {
-	r.t.Helper()
-	p := filepath.Join(r.project, rel)
-	if err := os.MkdirAll(filepath.Dir(p), 0755); err != nil {
-		r.t.Fatal(err)
-	}
-	if err := os.WriteFile(p, []byte(content), 0644); err != nil {
-		r.t.Fatal(err)
-	}
 }
 
 // read answers the bytes at path, "<absent>" when there are none.
@@ -209,7 +210,7 @@ func (r *restoreScenario) stoppedUndeclared() {
 		}
 	}
 	for _, line := range log {
-		if strings.Contains(line, "mark_restore") || strings.Contains(line, " up ") || strings.HasSuffix(line, " start") {
+		if strings.Contains(line, "mark_restore") || strings.Contains(line, " up ") || strings.HasPrefix(line, "ENGINE start") || strings.HasPrefix(line, "ENGINE forget-join") {
 			r.t.Errorf("the restore ran %q", line)
 		}
 	}
@@ -272,8 +273,12 @@ func TestRestorePutsEveryPartBackAndDeclaresBeforeTheStart(t *testing.T) {
 		t.Fatalf("restore: %v\n%s", err, out)
 	}
 	want := []string{
+		"ENGINE lock restore",
+		"ENGINE resume",
 		profiles + "ps --services --status running",
+		"ENGINE cancel-waiting-join",
 		profiles + "stop caddy",
+		profiles + "stop tailscale",
 		profiles + "stop cyfr",
 		profiles + "stop locus-runtime",
 		profiles + "stop locus-builds",
@@ -282,10 +287,12 @@ func TestRestorePutsEveryPartBackAndDeclaresBeforeTheStart(t *testing.T) {
 		profiles + "stop locus-backends-guard",
 		profiles + "stop",
 		profiles + "rm --force cyfr",
-		testStagedConfig,
+		r.stagedConfig(),
 		profiles + testOffline + testLive,
 		profiles + testOffline + testMark,
-		profiles + "up -d --wait --wait-timeout 900",
+		"ENGINE forget-join",
+		"ENGINE start restore",
+		profiles + "up -d",
 	}
 	if got := r.log(); !slices.Equal(got, want) {
 		t.Fatalf("docker ran\n%s\nwant\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
@@ -472,8 +479,8 @@ func TestRestoreNoStartDeclaresAndLeavesTheStackStopped(t *testing.T) {
 		t.Fatalf("restore: %v\n%s", err, out)
 	}
 	log := r.log()
-	if last := log[len(log)-1]; last != profiles+testOffline+testMark {
-		t.Errorf("the restore ended with %q, want the declaration", last)
+	if last := log[len(log)-2:]; !slices.Equal(last, []string{profiles + testOffline + testMark, "ENGINE forget-join"}) {
+		t.Errorf("the restore ended with %q, want the declaration, then the join's record forgotten", last)
 	}
 	if !strings.Contains(out, "Declared restore "+testRestored) || !strings.Contains(out, "left stopped (--no-start)") {
 		t.Errorf("the output is\n%s", out)
@@ -510,16 +517,19 @@ func TestRestoreLoadsTheDumpWithoutTheURLOnArgv(t *testing.T) {
 	if err != nil {
 		t.Fatalf("restore: %v\n%s", err, out)
 	}
-	probe := `run --rm --network host -e CYFR_UPDATE_PG_URL ` + pgClientImages[18] + ` sh -c exec psql "$CYFR_UPDATE_PG_URL" -tAc "SHOW server_version_num" {env CYFR_UPDATE_PG_URL set}`
-	load := "run --rm -i --network host -e CYFR_UPDATE_PG_URL " + pgClientImages[17] + " sh -c " + restoreScript + " {env CYFR_UPDATE_PG_URL set}"
+	probe := `run --rm -i --network host ` + pgClientImages[18] + ` sh -c IFS= read -r CYFR_UPDATE_PG_URL && exec psql "$CYFR_UPDATE_PG_URL" -tAc "SHOW server_version_num"`
+	load := "run --rm -i --network host " + pgClientImages[17] + " sh -c " + restoreScript
 	log := r.log()
 	at := func(line string) int { return slices.Index(log, line) }
-	config, live, mark := at(testStagedConfig), at(profiles+testOffline+testLive), at(profiles+testOffline+testMark)
-	if !(config >= 0 && config < at(probe) && at(probe) < live && live < at(load) && at(load) < mark && mark < at(profiles+"up -d --wait --wait-timeout 900")) {
+	config, live, mark := at(r.stagedConfig()), at(profiles+testOffline+testLive), at(profiles+testOffline+testMark)
+	if !(config >= 0 && config < at(probe) && at(probe) < live && live < at(load) && at(load) < mark && mark < at(profiles+"up -d")) {
 		t.Errorf("the probe, the live read, the load and the declaration are out of order:\n%s", strings.Join(log, "\n"))
 	}
-	if got := read(t, filepath.Join(r.fake, "pgrestore.stdin")); got != "PGDMP custom-format dump" {
-		t.Errorf("pg_restore read %q, want the dump", got)
+	if got := read(t, filepath.Join(r.fake, "pgrestore.stdin")); got != pgURL+"\nPGDMP custom-format dump" {
+		t.Errorf("pg_restore's container read %q, want the URL on its first line, then the dump", got)
+	}
+	if !strings.HasPrefix(restoreScript, "IFS= read -r CYFR_UPDATE_PG_URL && ") {
+		t.Errorf("the restore script does not read the URL from its first line: %s", restoreScript)
 	}
 	if whole := strings.Join(log, "\n") + out; strings.Contains(whole, pgPassword) || strings.Contains(whole, "127.0.0.1:5432") {
 		t.Errorf("the database URL reached a docker argv or the output:\n%s", whole)
@@ -621,7 +631,7 @@ func TestRestoreRefusesASnapshotItCannotInvert(t *testing.T) {
 				t.Fatalf("restore answered %v, want a refusal naming %q\n%s", err, c.want, out)
 			}
 			if log := r.log(); log != nil {
-				t.Errorf("docker ran before the refusal:\n%s", strings.Join(log, "\n"))
+				t.Errorf("docker or the engine ran before the refusal:\n%s", strings.Join(log, "\n"))
 			}
 			r.configAsBefore(before, string(r.env))
 		})
@@ -716,21 +726,28 @@ func TestRestoreUsage(t *testing.T) {
 	}
 }
 
-// A restore refuses while an update or another restore holds the lock the
-// two share.
-func TestRestoreSharesTheUpdateLock(t *testing.T) {
+// A restore refuses while another command holds the stack's lock, naming
+// it, before any docker call; and does nothing while recovery leaves a
+// change unfinished.
+func TestRestoreSharesTheStacksLock(t *testing.T) {
 	r := newRestoreScenario(t, shippedCompose(t), nil, nil)
-	lock := filepath.Join(r.project, updateLockName)
-	if err := os.WriteFile(lock, []byte("4242\n"), 0600); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { os.Remove(lock) })
+	r.engine.holder = "update"
 	err := runRestore(context.Background(), r.dir, true, &bytes.Buffer{}, &bytes.Buffer{})
-	if err == nil || !strings.Contains(err.Error(), "update or restore holds") || !strings.Contains(err.Error(), "pid 4242") || !strings.Contains(err.Error(), "'cyfr restore' again") {
+	if err == nil || !strings.Contains(err.Error(), "Another cyfr command holds this home (`update`)") {
 		t.Errorf("a restore beside a held lock answered %v", err)
 	}
 	if log := r.log(); log != nil {
 		t.Errorf("docker ran:\n%s", strings.Join(log, "\n"))
+	}
+	r.engine.holder = ""
+
+	r.engine.resume = []reach.Receipt{{RequestID: strings.Repeat("e", 32), Op: "switch", State: "accepted", Phase: "uncertain", Code: "reach_uncertain", Payload: map[string]string{"observed": "caddy"}}}
+	err = runRestore(context.Background(), r.dir, true, &bytes.Buffer{}, &bytes.Buffer{})
+	if want := reach.Refuse("reach_uncertain", map[string]string{"observed": "caddy"}).Message(); err == nil || err.Error() != want {
+		t.Errorf("a restore after an unfinished recovery answered %v, want %q", err, want)
+	}
+	if calls := r.dockerLog(); calls != nil {
+		t.Errorf("docker ran:\n%s", strings.Join(calls, "\n"))
 	}
 }
 
@@ -742,6 +759,7 @@ func TestRestoreProcessHelper(t *testing.T) {
 	if snapshot == "" {
 		t.Skip("run by TestRestoreCrashLeavesTheCellBarredOrUntouched")
 	}
+	useFakeEngine(t)
 	if err := runRestore(context.Background(), snapshot, true, os.Stdout, os.Stderr); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
@@ -785,7 +803,7 @@ func TestRestoreCrashLeavesTheCellBarredOrUntouched(t *testing.T) {
 
 			log := r.log()
 			rm := slices.Index(log, profiles+"rm --force cyfr")
-			if c.kill != "stop-cyfr" && (rm < 0 || slices.Index(log, testStagedConfig) >= 0 && slices.Index(log, testStagedConfig) < rm) {
+			if c.kill != "stop-cyfr" && (rm < 0 || slices.Index(log, r.stagedConfig()) >= 0 && slices.Index(log, r.stagedConfig()) < rm) {
 				t.Errorf("the stopped cyfr container was not removed before the configuration read:\n%s", strings.Join(log, "\n"))
 			}
 			snapshot, barred := restoreBarred(filepath.Join(r.project, ".env"))
@@ -808,11 +826,8 @@ func TestRestoreCrashLeavesTheCellBarredOrUntouched(t *testing.T) {
 				}
 			}
 
-			// The lock a killed restore leaves names it; once removed, the
-			// restore runs again from the start and lowers the bar.
-			if err := os.Remove(filepath.Join(r.project, updateLockName)); err != nil {
-				t.Fatalf("the killed restore left no lock: %v", err)
-			}
+			// The lock dies with the restore that held it; the restore runs
+			// again from the start and lowers the bar.
 			if err := os.Remove(filepath.Join(r.fake, c.kill+".kill")); err != nil {
 				t.Fatal(err)
 			}
@@ -914,9 +929,6 @@ func TestRestoreKilledAtItsConfigurationReadLeavesComposeBarred(t *testing.T) {
 
 	// Run to its end, the restore refuses the snapshot whose compose file
 	// gives cyfr no bar, and puts the configuration back as it was.
-	if err := os.Remove(filepath.Join(r.project, updateLockName)); err != nil {
-		t.Fatal(err)
-	}
 	if err := os.Remove(filepath.Join(r.fake, "config.kill")); err != nil {
 		t.Fatal(err)
 	}
@@ -1058,43 +1070,36 @@ func TestEntrypointRefusesWhileTheRestoreIsBarred(t *testing.T) {
 }
 
 // The staged configuration is read as compose will read it in place: with
-// the project's override file after it. COMPOSE_FILE, naming other files
-// than the one the restore puts back, refuses before anything lands.
+// the project's override file after it. COMPOSE_FILE in cyfr's environment
+// names nothing, since the engine's runner takes every COMPOSE_* out of a
+// docker call's; a snapshot whose .env sets a COMPOSE_* name, which would
+// become the project's, refuses before anything stops.
 func TestRestoreReadsTheStagedConfigurationAsComposeWill(t *testing.T) {
 	compose := shippedCompose(t)
 	r := newRestoreScenario(t, compose, nil, nil)
 	r.edit("docker-compose.override.yml", "services: {}\n")
+	t.Setenv("COMPOSE_FILE", "other.yml")
 	if out, err := r.restore(false); err != nil {
 		t.Fatalf("restore: %v\n%s", err, out)
 	}
-	if !slices.Contains(r.log(), "compose -f "+stagedCompose+" -f docker-compose.override.yml --project-directory . --profile tls --profile locus-builds config --format json") {
+	if !slices.Contains(r.log(), r.stagedConfig("docker-compose.override.yml")) {
 		t.Errorf("the staged configuration was read without the override file:\n%s", strings.Join(r.log(), "\n"))
 	}
 
-	for name, set := range map[string]func(t *testing.T, r *restoreScenario){
-		"the environment": func(t *testing.T, _ *restoreScenario) { t.Setenv("COMPOSE_FILE", "other.yml") },
-		"the snapshot's .env": func(t *testing.T, r *restoreScenario) {
-			if err := os.WriteFile(filepath.Join(r.dir, ".env"), append(slices.Clone(r.env), "COMPOSE_FILE=other.yml\n"...), 0600); err != nil {
-				t.Fatal(err)
-			}
-		},
-	} {
-		t.Run(name, func(t *testing.T) {
-			r := newRestoreScenario(t, compose, nil, nil)
-			set(t, r)
-			r.edit("data/blobs/x", "rewritten")
-			before := read(t, filepath.Join(r.project, "docker-compose.yml"))
-			out, err := r.restore(true)
-			if err == nil || !strings.Contains(err.Error(), "COMPOSE_FILE=other.yml") || !strings.Contains(err.Error(), "nothing of the snapshot was put back") {
-				t.Fatalf("restore answered %v\n%s", err, out)
-			}
-			r.stoppedUndeclared()
-			r.configAsBefore(before, string(r.env))
-			if got := read(t, filepath.Join(r.project, "data", "blobs", "x")); got != "rewritten" {
-				t.Errorf("a part was put back: blobs/x holds %q", got)
-			}
-		})
+	r = newRestoreScenario(t, compose, nil, nil)
+	if err := os.WriteFile(filepath.Join(r.dir, ".env"), append(slices.Clone(r.env), "COMPOSE_FILE=other.yml\n"...), 0600); err != nil {
+		t.Fatal(err)
 	}
+	r.edit("data/blobs/x", "rewritten")
+	before := read(t, filepath.Join(r.project, "docker-compose.yml"))
+	out, err := r.restore(true)
+	if err == nil || !strings.Contains(err.Error(), "its .env sets COMPOSE_FILE") || !strings.Contains(err.Error(), "nothing was changed") {
+		t.Fatalf("restore answered %v\n%s", err, out)
+	}
+	if log := r.log(); log != nil {
+		t.Errorf("docker or the engine ran before the refusal:\n%s", strings.Join(log, "\n"))
+	}
+	r.configAsBefore(before, string(r.env))
 }
 
 // All four default override filenames are tested with docker-compose.yml
@@ -1132,6 +1137,50 @@ func TestRestoreStagedComposeResolvesAsTheDefaultOverrideSet(t *testing.T) {
 					serviceSetting(staged.Environment, "CYFR_DATA_PATH"), serviceSetting(active.Environment, "CYFR_DATA_PATH"))
 			}
 		})
+	}
+}
+
+// The project the restore's staged read names is the one the engine passes
+// every compose call: compose's default for the directory, its name
+// lowercased, its other characters dropped.
+func TestComposeProjectIsTheEnginesProject(t *testing.T) {
+	requireCompose(t)
+	dir := filepath.Join(t.TempDir(), "_My.Home-1")
+	if err := os.Mkdir(dir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(dir)
+	for name, content := range map[string]string{
+		"docker-compose.yml": "services:\n  cyfr:\n    image: alpine:3.22\n    env_file: [.env]\n",
+		".env":               "CYFR_REACH=local\n",
+	} {
+		if err := os.WriteFile(name, []byte(content), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := composeProject("."); got != "myhome-1" {
+		t.Fatalf("composeProject answers %q, want compose's myhome-1", got)
+	}
+	useRealEngine(t, nil)
+	e, err := openEngine(".")
+	if err != nil {
+		t.Fatal(err)
+	}
+	unlock, err := e.Lock("test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer unlock()
+	head, err := e.Head()
+	if err != nil {
+		t.Fatal(err)
+	}
+	args, err := e.ComposeArgs(context.Background(), head, "ps")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if at := slices.Index(args, "-p"); at < 0 || at+1 >= len(args) || args[at+1] != composeProject(".") {
+		t.Errorf("the engine's compose call %v names another project than %s", args, composeProject("."))
 	}
 }
 

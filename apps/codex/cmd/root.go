@@ -41,7 +41,12 @@ var rootCmd = &cobra.Command{
 	Long: `cyfr is the command-line interface for CYFR — a sandboxed runtime
 where AI agents execute WASM tools and serve tincture frontends via MCP.
 Use cyfr to manage components, vault entries, consents, and executions
-from the terminal or scripts.`,
+from the terminal or scripts.
+
+Exit status: 0 on success; 1 on a failure; 3 when cyfr up, update,
+restore, reach or init started the home on this machine only, because
+the machine's tailnet identity is not the one .env names (the message
+says to run 'cyfr reach tailnet'); 130 when interrupted at a prompt.`,
 	PersistentPostRun: func(cmd *cobra.Command, args []string) {
 		// This transport has no server-side session to terminate — the
 		// credential authenticates each request on its own (client.Close
@@ -78,6 +83,40 @@ func init() {
 
 	rootCmd.Version = version.Version
 	rootCmd.SetUsageFunc(customUsage)
+}
+
+// The exit statuses of a cyfr process, apart from the watchdog's
+// (`cyfr internal docker-run`), whose status is its docker call's.
+const (
+	exitFailure        = 1
+	exitStartedLocally = 3
+	exitInterrupted    = 130
+)
+
+// ExitStatus is the exit status a command's failure ends the process with:
+// 130 for the person's own Ctrl-C at a prompt, the status the shell
+// reserves for it (128+SIGINT), which Execute prints nothing for; 3 for a
+// start that left the home running on this machine only (its tailnet
+// machine is not the one .env names), which must read neither as a
+// success nor as a start that failed; and 1 for every other failure.
+func ExitStatus(err error) int {
+	if errors.Is(err, prompt.ErrAborted) {
+		return exitInterrupted
+	}
+	if local := (startedLocally{}); errors.As(err, &local) {
+		return exitStartedLocally
+	}
+	return exitFailure
+}
+
+// Run is the cyfr process: the command line executed under ctx, answered
+// as the status the process exits with, 0 or ExitStatus of the failure
+// Execute printed.
+func Run(ctx context.Context) int {
+	if err := Execute(ctx); err != nil {
+		return ExitStatus(err)
+	}
+	return 0
 }
 
 // Execute runs the root command under the process context, so every request

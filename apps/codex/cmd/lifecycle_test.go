@@ -19,47 +19,26 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/cyfr/codex/internal/reach"
 	"github.com/cyfr/codex/internal/release"
 	"github.com/cyfr/codex/internal/scaffold"
 	"github.com/sigstore/sigstore-go/pkg/root"
 )
 
+// renderEnvFile answers init's email question in the template: an email
+// uncomments the operators' line with it and leaves the setup token's
+// commented; no email sets the setup token's line. Nothing else changes.
 func TestRenderEnvFile(t *testing.T) {
-	tmpl := "CYFR_SECRET_KEY_BASE=\nCYFR_LOCUS_BACKENDS_KEY=\nCYFR_HOST=localhost\nCYFR_BEHIND_PROXY=false\nCADDY_ACME_EMAIL=\n# CYFR_PLATFORM_ADMIN_EMAILS=alice@example.com\nCYFR_PORT=4000\n"
+	tmpl := "CYFR_SECRET_KEY_BASE=\nCYFR_REACH=local\nCYFR_HOST=localhost\n# CYFR_PLATFORM_ADMIN_EMAILS=alice@example.com\n# CYFR_SETUP_TOKEN=\nCYFR_PORT=4000\n"
+	token := strings.Repeat("ab", 32)
 
-	// TLS mode: real hostname + allowed user + ACME email. tls=true flips
-	// CYFR_BEHIND_PROXY.
-	got := renderEnvFile(tmpl, "example.com", "me@example.com", "ops@example.com", true)
-	for _, want := range []string{
-		"CYFR_HOST=example.com",
-		"CYFR_BEHIND_PROXY=true",
-		"CADDY_ACME_EMAIL=ops@example.com",
-		"CYFR_PLATFORM_ADMIN_EMAILS=me@example.com",
-		"CYFR_PORT=4000",
-	} {
-		if !strings.Contains(got, want) {
-			t.Errorf("missing %q in:\n%s", want, got)
-		}
+	got := renderEnvFile(tmpl, "me@example.com", "")
+	if want := "CYFR_SECRET_KEY_BASE=\nCYFR_REACH=local\nCYFR_HOST=localhost\nCYFR_PLATFORM_ADMIN_EMAILS=me@example.com\n# CYFR_SETUP_TOKEN=\nCYFR_PORT=4000\n"; got != want {
+		t.Errorf("with an email:\n%s\nwant\n%s", got, want)
 	}
-	if strings.Contains(got, "# CYFR_PLATFORM_ADMIN_EMAILS=") {
-		t.Errorf("CYFR_PLATFORM_ADMIN_EMAILS should be uncommented:\n%s", got)
-	}
-	// The keys are ensureStackKeys', not the prompts'.
-	if !strings.Contains(got, "CYFR_SECRET_KEY_BASE=\nCYFR_LOCUS_BACKENDS_KEY=\n") {
-		t.Errorf("renderEnvFile touched a key:\n%s", got)
-	}
-
-	// Direct mode: localhost, no allowed user, no ACME, tls=false. Comment
-	// line untouched, ACME left blank, BEHIND_PROXY=false.
-	got = renderEnvFile(tmpl, "localhost", "", "", false)
-	if !strings.Contains(got, "# CYFR_PLATFORM_ADMIN_EMAILS=alice@example.com") {
-		t.Errorf("CYFR_PLATFORM_ADMIN_EMAILS line should be untouched:\n%s", got)
-	}
-	if !strings.Contains(got, "CADDY_ACME_EMAIL=\n") {
-		t.Errorf("CADDY_ACME_EMAIL should be left blank:\n%s", got)
-	}
-	if !strings.Contains(got, "CYFR_BEHIND_PROXY=false") {
-		t.Errorf("CYFR_BEHIND_PROXY should be false in direct mode:\n%s", got)
+	got = renderEnvFile(tmpl, "", token)
+	if want := "CYFR_SECRET_KEY_BASE=\nCYFR_REACH=local\nCYFR_HOST=localhost\n# CYFR_PLATFORM_ADMIN_EMAILS=alice@example.com\nCYFR_SETUP_TOKEN=" + token + "\nCYFR_PORT=4000\n"; got != want {
+		t.Errorf("with no email:\n%s\nwant\n%s", got, want)
 	}
 	if strings.Contains(got, "PORTA") {
 		t.Errorf("no porta variable belongs in .env:\n%s", got)
@@ -136,23 +115,30 @@ func TestWorkerKeyReproducesTheVectorFile(t *testing.T) {
 	}
 }
 
+// packageDir is the package's own directory, the working directory tests
+// start in, from which the repository's files are found whatever
+// directory a test has moved into.
+var packageDir, _ = os.Getwd()
+
 // readShippedTemplate reads the .env.example `cyfr init` downloads.
 func readShippedTemplate(t *testing.T) string {
 	t.Helper()
-	raw, err := os.ReadFile(filepath.Join("..", "..", "..", ".env.example"))
+	raw, err := os.ReadFile(filepath.Join(packageDir, "..", "..", "..", ".env.example"))
 	if err != nil {
 		t.Fatalf("read shipped .env.example: %v", err)
 	}
 	return string(raw)
 }
 
-// Each line renderEnvFile rewrites is in the shipped template exactly once,
-// in the comment state it matches: the three assignments uncommented, the
-// operators' line commented and nowhere assigned. And each key
+// The shipped template documents every line init writes, so each lands on
+// it: the operators' line and the setup token's commented once each and
+// nowhere assigned, the local head's keys assigned once each, no key of
+// another mode's head assigned and no retired name anywhere. And each key
 // ensureStackKeys writes is assigned there once, empty, or with the value
 // init completes (the builds URL), so init writes every one on its own line.
 func TestShippedTemplateCarriesInitsAnchors(t *testing.T) {
-	lines := strings.Split(readShippedTemplate(t), "\n")
+	text := readShippedTemplate(t)
+	lines := strings.Split(text, "\n")
 	count := func(prefix string) int {
 		n := 0
 		for _, line := range lines {
@@ -162,16 +148,29 @@ func TestShippedTemplateCarriesInitsAnchors(t *testing.T) {
 		}
 		return n
 	}
-	for _, anchor := range []string{hostAnchor, behindProxyAnchor, acmeEmailAnchor, adminEmailsAnchor} {
-		if n := count(anchor); n != 1 {
-			t.Errorf("the shipped template has %d lines beginning %q, want 1", n, anchor)
+	for _, key := range []string{adminEmailVar, setupTokenVar} {
+		if n := count("# " + key + "="); n != 1 {
+			t.Errorf("the shipped template has %d lines beginning %q, want 1", n, "# "+key+"=")
+		}
+		if n := count(key + "="); n != 0 {
+			t.Errorf("the shipped template assigns %s on %d lines; init writes it on its commented line", key, n)
 		}
 	}
-	if n := count(strings.TrimPrefix(adminEmailsAnchor, "# ")); n != 0 {
-		t.Errorf("the shipped template assigns CYFR_PLATFORM_ADMIN_EMAILS on %d lines; init uncomments its anchor", n)
-	}
 
-	f := parseEnvFile(readShippedTemplate(t))
+	f := parseEnvFile(text)
+	for key, want := range map[string]string{"CYFR_REACH": "local", "CYFR_HOST": "localhost", "CYFR_PORT": "4000"} {
+		if v, assigned := f.value(key); !assigned || v != want || len(f.assignments(key)) != 1 {
+			t.Errorf("the shipped template's %s is %q (assigned: %v, on %d lines), want %s on one line", key, v, assigned, len(f.assignments(key)), want)
+		}
+	}
+	for _, key := range []string{"CYFR_PUBLIC_URL", "CYFR_TAILNET_NODE_ID", "CADDY_ACME_EMAIL"} {
+		if _, assigned := f.value(key); assigned {
+			t.Errorf("the shipped template assigns %s, which a local home's head omits", key)
+		}
+	}
+	if strings.Contains(text, retiredProxySetting) {
+		t.Errorf("the shipped template names the retired %s", retiredProxySetting)
+	}
 	for _, key := range []string{secretKeyBaseVar, backendsKeyVar, workerRootVar, serviceKeyVar, buildsKeyVar, corsOriginsVar} {
 		if v, assigned := f.value(key); !assigned || v != "" || len(f.assignments(key)) != 1 {
 			t.Errorf("the shipped template does not assign %s empty on one line (%q, assigned: %v)", key, v, assigned)
@@ -185,33 +184,36 @@ func TestShippedTemplateCarriesInitsAnchors(t *testing.T) {
 	}
 }
 
-// Every key ensureStackKeys adds to the shipped .env.example lands on the
-// line the template documents it on, so nothing is appended below the
-// template's last section, and the result is the pair-consistent .env the
-// stack boots from.
-func TestRenderEnvFileShippedTemplate(t *testing.T) {
-	raw := readShippedTemplate(t)
-
-	rendered := renderEnvFile(raw, "example.com", "me@example.com", "ops@example.com", true)
-	for _, want := range []string{
-		"\nCYFR_HOST=example.com\n",
-		"\nCYFR_BEHIND_PROXY=true\n",
-		"\nCADDY_ACME_EMAIL=ops@example.com\n",
-		"\nCYFR_PLATFORM_ADMIN_EMAILS=me@example.com\n",
-	} {
-		if !strings.Contains(rendered, want) {
-			t.Errorf("shipped template: renderEnvFile did not produce %q", strings.TrimSpace(want))
-		}
-	}
-	if strings.Contains(rendered, adminEmailsAnchor) {
-		t.Errorf("shipped template: the operators' anchor is still commented after init set it")
-	}
-
-	got, changes, err := ensureStackKeys(rendered)
+// newEnvFromTemplate is the .env init writes from the shipped template for
+// adminEmail, or with the setup token token when there is none: the keys
+// minted, then the local head written.
+func newEnvFromTemplate(t *testing.T, adminEmail, token string) (string, []envChange) {
+	t.Helper()
+	rendered := renderEnvFile(readShippedTemplate(t), adminEmail, token)
+	text, changes, err := ensureStackKeys(rendered)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Count(got, "\n") != strings.Count(rendered, "\n") {
+	f := parseEnvFile(text)
+	d, err := localHead(f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeHead(f, d)
+	return f.String(), changes
+}
+
+// Every key init writes into the shipped .env.example lands on the line the
+// template documents it on, so nothing is appended below the template's
+// last section, and the result is the pair-consistent .env, reached from
+// this computer only, that the stack boots from.
+func TestRenderEnvFileShippedTemplate(t *testing.T) {
+	raw := readShippedTemplate(t)
+	got, changes := newEnvFromTemplate(t, "me@example.com", "")
+	if !strings.Contains(got, "\nCYFR_PLATFORM_ADMIN_EMAILS=me@example.com\n") || strings.Contains(got, "# CYFR_PLATFORM_ADMIN_EMAILS=") {
+		t.Errorf("shipped template: the operators' line is not set:\n%s", got)
+	}
+	if strings.Count(got, "\n") != strings.Count(raw, "\n") {
 		t.Errorf("keys were appended to the shipped template instead of set on its lines")
 	}
 	var added []string
@@ -226,66 +228,80 @@ func TestRenderEnvFileShippedTemplate(t *testing.T) {
 
 	// The template assigns the empty allowlist itself, so `cp .env.example
 	// .env` boots a release too; init has nothing to add and leaves it.
-	if cors, assigned := parseEnvFile(got).value(corsOriginsVar); !assigned || cors != "" {
+	f := parseEnvFile(got)
+	if cors, assigned := f.value(corsOriginsVar); !assigned || cors != "" {
 		t.Errorf("the shipped template's %s is %q (assigned: %v)", corsOriginsVar, cors, assigned)
 	}
-
-	env := filepath.Join(t.TempDir(), ".env")
-	if err := os.WriteFile(env, []byte(got), 0600); err != nil {
-		t.Fatal(err)
+	if token, assigned := f.value(setupTokenVar); assigned {
+		t.Errorf("a home given its operator's email holds the setup token %q", token)
 	}
-	if profiles := composeProfiles(env); !slices.Equal(profiles, []string{"tls", buildsProfile}) {
-		t.Errorf("a TLS project fresh from init runs profiles %v, want every profile", profiles)
+
+	env := envAssignments(writeTemp(t, ".env", got))
+	boot, err := reach.ResolveBoot(reach.BootInput{File: env, Process: env, Release: true})
+	if err != nil {
+		t.Fatalf("the .env init writes does not boot: %v", engineFailure(err))
+	}
+	if boot.Head.Mode != reach.ModeLocal || boot.Origin != "http://localhost:4000" || !slices.Equal(boot.Head.Profiles, []string{buildsProfile}) {
+		t.Errorf("a project fresh from init is reached as %+v at %s, want local at http://localhost:4000 with builds on", boot.Head, boot.Origin)
 	}
 	if _, again, err := ensureStackKeys(got); err != nil || len(again) != 0 {
 		t.Errorf("a second init changes %v (%v)", again, err)
 	}
 }
 
+// writeTemp writes text to a file named name in a directory of the test's
+// own and answers its path.
+func writeTemp(t *testing.T, name, text string) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), name)
+	if err := os.WriteFile(path, []byte(text), 0600); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
 // A home init gives an address is answered at that address: the .env it
 // writes for a public name names the https origin the name implies, the
-// one Sanctum.origin/0 and every policy derived from it read.
+// one Sanctum.origin/0 and every policy derived from it read. Through init
+// itself and the reach engine's switch of the stopped stack.
 func TestInitWritesThePublicURLItsAddressImplies(t *testing.T) {
-	got, _, err := ensureStackKeys(renderEnvFile(readShippedTemplate(t), "cyfr.example.com", "", "", true))
+	newInitProject(t)
+	useRealEngine(t, &stoppedDocker{})
+	var out bytes.Buffer
+	err := runInit(context.Background(), initOptions{mode: reach.ModePublic, reachOptions: reachOptions{domain: "cyfr.example.com"}, noPull: true}, &out, &out)
+	if err != nil {
+		t.Fatalf("cyfr init: %v\n%s", err, out.String())
+	}
+	got, err := os.ReadFile(".env")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if url, assigned := parseEnvFile(got).value("CYFR_PUBLIC_URL"); !assigned || url != "https://cyfr.example.com" {
+	if url, assigned := parseEnvFile(string(got)).value("CYFR_PUBLIC_URL"); !assigned || url != "https://cyfr.example.com" {
 		t.Errorf("init for cyfr.example.com writes CYFR_PUBLIC_URL %q (assigned: %v), want https://cyfr.example.com", url, assigned)
 	}
 }
 
-// `cyfr init --no-interactive` takes every default: the template's host and
-// direct mode, the operators' line left commented and the ACME address
-// empty, and the same keys minted, builds on, so `cyfr up` starts
-// locus-builds and no Caddy.
-func TestRenderEnvFileShippedTemplateNoInteractive(t *testing.T) {
+// Given no email, init mints the setup token onto the template's line:
+// 64 lowercase hexadecimal characters, the operators' line left commented,
+// nothing appended, and the .env boots.
+func TestRenderEnvFileShippedTemplateWithoutAnEmail(t *testing.T) {
 	raw := readShippedTemplate(t)
-	rendered := renderEnvFile(raw, "localhost", "", "", false)
-	for _, want := range []string{
-		"\nCYFR_HOST=localhost\n",
-		"\nCYFR_BEHIND_PROXY=false\n",
-		"\nCADDY_ACME_EMAIL=\n",
-		"\n" + adminEmailsAnchor + "\n",
-	} {
-		if !strings.Contains(rendered, want) {
-			t.Errorf("shipped template, no answers: renderEnvFile did not produce %q", strings.TrimSpace(want))
-		}
-	}
-
-	got, _, err := ensureStackKeys(rendered)
+	token, err := generateHexKey()
 	if err != nil {
 		t.Fatal(err)
 	}
+	got, _ := newEnvFromTemplate(t, "", token)
+	f := parseEnvFile(got)
+	if v, _ := f.value(setupTokenVar); v != token || !setupTokenPattern.MatchString(v) {
+		t.Errorf("the setup token is %q, want %q", v, token)
+	}
+	if !strings.Contains(got, "\n"+"# "+adminEmailVar+"=\n") {
+		t.Errorf("the operators' line is not left commented:\n%s", got)
+	}
+	if strings.Count(got, "\n") != strings.Count(raw, "\n") {
+		t.Errorf("the token was appended instead of set on its line")
+	}
 	assertStackPairs(t, got, defaultServiceID)
-
-	env := filepath.Join(t.TempDir(), ".env")
-	if err := os.WriteFile(env, []byte(got), 0600); err != nil {
-		t.Fatal(err)
-	}
-	if profiles := composeProfiles(env); !slices.Equal(profiles, []string{buildsProfile}) {
-		t.Errorf("a direct project fresh from init runs profiles %v, want only %s", profiles, buildsProfile)
-	}
 }
 
 // assertStackPairs checks what init promises of a .env: every key well
@@ -311,9 +327,9 @@ func assertStackPairs(t *testing.T, text, serviceID string) {
 	if url, _ := f.value(buildsURLVar); url != defaultBuildsURL {
 		t.Errorf("%s is %q", buildsURLVar, url)
 	}
-	// Unassigned, config.exs's wildcard stands and a release with sign-in
-	// configured refuses to boot; a wildcard here would be that refusal
-	// turned into an open door instead.
+	// Unassigned, the application's configured list stands, which a
+	// deployment's own configuration may set; a wildcard here would open the
+	// door a release with sign-in configured refuses to boot behind.
 	cors, assigned := f.value(corsOriginsVar)
 	if !assigned {
 		t.Errorf("%s is not assigned, so the wildcard default stands", corsOriginsVar)
@@ -334,6 +350,8 @@ func TestEnsureStackKeysOverAnExistingEnv(t *testing.T) {
 	otherKey := hex.EncodeToString(workerKey(rootBytes, "wrk_other"))
 	const buildsKey = "b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1"
 	const base = "CYFR_SECRET_KEY_BASE=kept-secret-key-base-kept-secret-key-base-kept-secret-key-base-kept\nCYFR_LOCUS_BACKENDS_KEY=" + buildsKey + "\n"
+	// builds is .env.example's builds URL, which builds are on with.
+	const builds = "CYFR_LOCUS_BUILDS_URL=http://locus-builds:4100\n"
 
 	cases := []struct {
 		name    string
@@ -344,36 +362,36 @@ func TestEnsureStackKeysOverAnExistingEnv(t *testing.T) {
 		refusal string // a fragment of the refusal, when init refuses
 	}{
 		{
-			name:    "no root and no service key: both are minted, builds turned on",
-			body:    base + "CYFR_LOCUS_RUNTIME_ROOT=\nLOCUS_RUNTIME_KEY=\n",
-			added:   []string{workerRootVar, serviceKeyVar, corsOriginsVar, buildsURLVar, buildsKeyVar},
+			name:    "no root and no service key: both are minted, and the builds key beside the URL",
+			body:    base + builds + "CYFR_LOCUS_RUNTIME_ROOT=\nLOCUS_RUNTIME_KEY=\n",
+			added:   []string{workerRootVar, serviceKeyVar, corsOriginsVar, buildsKeyVar},
 			service: "wrk_locus",
 		},
 		{
 			name:    "a root and no service key: the key is derived from that root",
-			body:    base + "CYFR_LOCUS_RUNTIME_ROOT=" + root + "\n# LOCUS_RUNTIME_KEY=\n",
-			added:   []string{serviceKeyVar, corsOriginsVar, buildsURLVar, buildsKeyVar},
+			body:    base + builds + "CYFR_LOCUS_RUNTIME_ROOT=" + root + "\n# LOCUS_RUNTIME_KEY=\n",
+			added:   []string{serviceKeyVar, corsOriginsVar, buildsKeyVar},
 			kept:    map[string]string{workerRootVar: root},
 			service: "wrk_locus",
 		},
 		{
 			name:    "a root spelled in capitals derives the same key",
-			body:    base + "CYFR_LOCUS_RUNTIME_ROOT=\"" + strings.ToUpper(root) + "\"\n",
-			added:   []string{serviceKeyVar, corsOriginsVar, buildsURLVar, buildsKeyVar},
+			body:    base + builds + "CYFR_LOCUS_RUNTIME_ROOT=\"" + strings.ToUpper(root) + "\"\n",
+			added:   []string{serviceKeyVar, corsOriginsVar, buildsKeyVar},
 			kept:    map[string]string{workerRootVar: strings.ToUpper(root)},
 			service: "wrk_locus",
 		},
 		{
 			name:    "a service id .env names is the one the key derives for",
-			body:    base + "CYFR_LOCUS_RUNTIME_ROOT=" + root + "\nLOCUS_RUNTIME_SERVICE_ID=wrk_other\n",
-			added:   []string{serviceKeyVar, corsOriginsVar, buildsURLVar, buildsKeyVar},
+			body:    base + builds + "CYFR_LOCUS_RUNTIME_ROOT=" + root + "\nLOCUS_RUNTIME_SERVICE_ID=wrk_other\n",
+			added:   []string{serviceKeyVar, corsOriginsVar, buildsKeyVar},
 			kept:    map[string]string{serviceKeyVar: otherKey},
 			service: "wrk_other",
 		},
 		{
 			name:    "a consistent pair is kept as it is",
-			body:    base + "CYFR_LOCUS_RUNTIME_ROOT=" + root + "\nLOCUS_RUNTIME_KEY=" + runtimeKey + "\n",
-			added:   []string{corsOriginsVar, buildsURLVar, buildsKeyVar},
+			body:    base + builds + "CYFR_LOCUS_RUNTIME_ROOT=" + root + "\nLOCUS_RUNTIME_KEY=" + runtimeKey + "\n",
+			added:   []string{corsOriginsVar, buildsKeyVar},
 			kept:    map[string]string{workerRootVar: root, serviceKeyVar: runtimeKey},
 			service: "wrk_locus",
 		},
@@ -438,11 +456,18 @@ func TestEnsureStackKeysOverAnExistingEnv(t *testing.T) {
 			kept:  map[string]string{corsOriginsVar: "https://app.example.com"},
 		},
 		{
-			name:    "no line for any key: each is appended",
-			body:    "CYFR_HOST=localhost",
-			added:   []string{secretKeyBaseVar, backendsKeyVar, workerRootVar, serviceKeyVar, corsOriginsVar, buildsURLVar, buildsKeyVar},
-			kept:    map[string]string{"CYFR_HOST": "localhost"},
-			service: "wrk_locus",
+			name:  "no line for any key: each is appended, and no builds URL is builds off",
+			body:  "CYFR_HOST=localhost",
+			added: []string{secretKeyBaseVar, backendsKeyVar, workerRootVar, serviceKeyVar, corsOriginsVar},
+			kept:  map[string]string{"CYFR_HOST": "localhost"},
+		},
+		{
+			// A switch removes the reach key a head omits, the empty builds
+			// URL among them; builds stay off.
+			name:  "a builds URL a switch removed, with no key, is builds off and left so",
+			body:  base + "CYFR_LOCUS_RUNTIME_ROOT=" + root + "\nLOCUS_RUNTIME_KEY=" + runtimeKey + "\nCYFR_LOCUS_BUILDS_KEY=\nCYFR_CORS_ALLOWED_ORIGINS=\n",
+			added: nil,
+			kept:  map[string]string{buildsKeyVar: ""},
 		},
 	}
 
@@ -482,6 +507,9 @@ func TestEnsureStackKeysOverAnExistingEnv(t *testing.T) {
 			if tc.service != "" {
 				assertStackPairs(t, got, tc.service)
 			}
+			if url, _ := f.value(buildsURLVar); tc.service == "" && url != "" {
+				t.Errorf("builds turned on (%s=%s)", buildsURLVar, url)
+			}
 			// Every line of the input that init had no key to write on is
 			// still there, unchanged.
 			for _, line := range strings.Split(tc.body, "\n") {
@@ -510,7 +538,7 @@ func TestEnsureEnvFileKeys(t *testing.T) {
 		t.Errorf("a refused .env was written:\n%s", got)
 	}
 
-	partial := "# mine\nCYFR_HOST=cyfr.example.com\nCYFR_LOCUS_RUNTIME_ROOT=\n"
+	partial := "# mine\nCYFR_HOST=cyfr.example.com\nCYFR_LOCUS_RUNTIME_ROOT=\nCYFR_LOCUS_BUILDS_URL=http://locus-builds:4100\n"
 	if err := os.WriteFile(path, []byte(partial), 0640); err != nil {
 		t.Fatal(err)
 	}
@@ -553,7 +581,7 @@ func TestImagesFromCompose(t *testing.T) {
     image: ghcr.io/cyfrworks/cyfr:latest
   caddy:
     image: caddy:2-alpine
-    profiles: ["tls"]
+    profiles: ["public"]
   locus-builds:
     image: ghcr.io/cyfrworks/cyfr-locus:latest
     profiles: ["locus-builds"]
@@ -572,7 +600,7 @@ func TestImagesFromCompose(t *testing.T) {
 	}{
 		{nil, []string{"ghcr.io/cyfrworks/cyfr:latest", "ghcr.io/cyfrworks/cyfr-locus:latest"}},
 		{[]string{"locus-builds"}, []string{"ghcr.io/cyfrworks/cyfr:latest", "ghcr.io/cyfrworks/cyfr-locus:latest"}},
-		{[]string{"tls", "locus-builds"}, []string{"ghcr.io/cyfrworks/cyfr:latest", "caddy:2-alpine", "ghcr.io/cyfrworks/cyfr-locus:latest"}},
+		{[]string{"locus-builds", "public"}, []string{"ghcr.io/cyfrworks/cyfr:latest", "caddy:2-alpine", "ghcr.io/cyfrworks/cyfr-locus:latest"}},
 		{[]string{"other"}, []string{"ghcr.io/cyfrworks/cyfr:latest", "ghcr.io/cyfrworks/cyfr-locus:latest"}},
 	} {
 		got := imagesFromCompose(path, tc.profiles)
@@ -583,47 +611,6 @@ func TestImagesFromCompose(t *testing.T) {
 
 	if imagesFromCompose(filepath.Join(dir, "missing.yml"), nil) != nil {
 		t.Error("expected nil for a missing file")
-	}
-}
-
-func TestComposeProfilesFollowTheProjectEnv(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, ".env")
-	cases := []struct {
-		body string
-		want []string
-	}{
-		{"", nil},
-		{"CYFR_BEHIND_PROXY=true\n", []string{"tls"}},
-		{"CYFR_LOCUS_BUILDS_URL=http://locus-builds:4100\n", []string{"locus-builds"}},
-		{"CYFR_BEHIND_PROXY=yes\nCYFR_LOCUS_BUILDS_URL=\"http://locus-builds:4100\"\n", []string{"tls", "locus-builds"}},
-		{"# CYFR_LOCUS_BUILDS_URL=http://locus-builds:4100\n", nil},
-		{"CYFR_LOCUS_BUILDS_URL=\n", nil},
-		{"CYFR_LOCUS_BUILDS_URL=https://builds.example.com\n", nil},
-		// A remote builder starts no local container, whatever its name
-		// begins or ends with: the profile keys on the compose service's
-		// own host.
-		{"CYFR_LOCUS_BUILDS_URL=https://locus-builds.example.com:4100\n", nil},
-		{"CYFR_LOCUS_BUILDS_URL=http://builds.example.com/locus-builds\n", nil},
-		// The retired variable and host start nothing: a project still
-		// carrying them builds nothing until it names the builds service.
-		{"CYFR_" + "BUILDER_URL=http://builder:4100\n", nil},
-		{"CYFR_LOCUS_BUILDS_URL=http://builder:4100\n", nil},
-	}
-	for _, tc := range cases {
-		if err := os.WriteFile(path, []byte(tc.body), 0644); err != nil {
-			t.Fatal(err)
-		}
-		if got := composeProfiles(path); strings.Join(got, ",") != strings.Join(tc.want, ",") {
-			t.Errorf("composeProfiles(%q) = %v, want %v", tc.body, got, tc.want)
-		}
-	}
-	if got := composeProfiles(filepath.Join(dir, "missing")); got != nil {
-		t.Errorf("a missing .env selects %v", got)
-	}
-
-	if got := profileArgs([]string{"tls", "locus-builds"}); strings.Join(got, " ") != "--profile tls --profile locus-builds" {
-		t.Errorf("profileArgs = %v", got)
 	}
 }
 
@@ -657,47 +644,13 @@ func TestShippedComposePullsTheLocusImageOnce(t *testing.T) {
 		t.Fatal(".env.example offers no CYFR_LOCUS_BUILDS_URL")
 	}
 
-	env := filepath.Join(t.TempDir(), ".env")
-	if err := os.WriteFile(env, []byte(offered+"\n"), 0644); err != nil {
-		t.Fatal(err)
-	}
-	profiles := composeProfiles(env)
+	builds, _ := parseEnvFile(offered).value(buildsURLVar)
+	profiles := reach.Profiles(reach.ModeLocal, builds)
 	if !slices.Contains(profiles, buildsProfile) {
 		t.Errorf("a project using the builds service (%s) does not select its profile: %v", offered, profiles)
 	}
 	if got := imagesFromCompose(compose, profiles); count(got) != 1 {
 		t.Errorf("a project using the builds service (%s) does not pull the Locus image once: %v", offered, got)
-	}
-}
-
-func TestEnvFlagTrue(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, ".env")
-	cases := []struct {
-		body string
-		key  string
-		want bool
-	}{
-		{"CYFR_BEHIND_PROXY=true\n", "CYFR_BEHIND_PROXY", true},
-		{"CYFR_BEHIND_PROXY=TRUE\n", "CYFR_BEHIND_PROXY", true},
-		{"CYFR_BEHIND_PROXY=1\nCYFR_HOST=x\n", "CYFR_BEHIND_PROXY", true},
-		{"CYFR_BEHIND_PROXY=false\n", "CYFR_BEHIND_PROXY", false},
-		{"CYFR_BEHIND_PROXY=\n", "CYFR_BEHIND_PROXY", false},
-		{"# CYFR_BEHIND_PROXY=true\n", "CYFR_BEHIND_PROXY", false},
-		{"OTHER=true\n", "CYFR_BEHIND_PROXY", false},
-		{`CYFR_BEHIND_PROXY="true"` + "\n", "CYFR_BEHIND_PROXY", true},
-	}
-	for _, tc := range cases {
-		if err := os.WriteFile(path, []byte(tc.body), 0644); err != nil {
-			t.Fatal(err)
-		}
-		if got := envFlagTrue(path, tc.key); got != tc.want {
-			t.Errorf("envFlagTrue(%q)=%v, want %v\n  body: %q", tc.key, got, tc.want, tc.body)
-		}
-	}
-
-	if envFlagTrue(filepath.Join(dir, "no-such-file"), "ANYTHING") {
-		t.Error("envFlagTrue should be false for a missing file")
 	}
 }
 
@@ -823,8 +776,8 @@ func TestInitRefusesAlteredScaffold(t *testing.T) {
 }
 
 // `cyfr init` ignores the snapshots `cyfr update` takes under backups/,
-// each of which holds the keyring and the database, beside the runtime
-// state and the environment files.
+// each of which holds the keyring and the database, and the reach engine's
+// state under .cyfr/, beside the runtime state and the environment files.
 func TestInitIgnoresTheSnapshots(t *testing.T) {
 	t.Chdir(t.TempDir())
 	fake := t.TempDir()
@@ -840,7 +793,7 @@ func TestInitIgnoresTheSnapshots(t *testing.T) {
 		t.Fatal(err)
 	}
 	lines := strings.Split(string(got), "\n")
-	for _, want := range []string{"/backups/", "/data/", ".env", ".env.local", ".env.*.local"} {
+	for _, want := range []string{"/backups/", "/data/", "/.cyfr/", ".env", ".env.local", ".env.*.local"} {
 		if !slices.Contains(lines, want) {
 			t.Errorf(".gitignore lacks %s:\n%s", want, got)
 		}

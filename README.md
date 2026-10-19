@@ -360,13 +360,15 @@ CYFR is self-hosted as a small `docker compose` stack:
 | `locus-builds-guard` *(profile: `locus-builds`)* | the builds island's egress guard: the same `cyfr-locus` image running `cyfr-guard`, holding `NET_ADMIN` alone, in a network namespace of its own that `locus-builds` runs in, so a build reaches public hosts and the private hosts `CYFR_PRIVATE_EGRESS_TARGETS` names and nothing else; the builder starts only once the guard is healthy, with every rule installed |
 | `locus-backends` | the backends service: runs the stdio/`npx` MCP servers (filesystem, github, …) an athanor adds, each backend under a uid and a memory bound of its own, and serves their tools to cyfr, on its own `locus-backends` network that only cyfr joins, holding one backends key and no state. The same `cyfr-locus` image with the backend pool; see [Stdio / npx MCP servers](#stdio--npx-mcp-servers-filesystem-github-) |
 | `locus-backends-guard` | the backends island's egress guard: the same `cyfr-locus` image running `cyfr-guard`, holding `NET_ADMIN` alone, in a network namespace of its own that `locus-backends` runs in, so a backend reaches public hosts and the private hosts `CYFR_PRIVATE_EGRESS_TARGETS` names and nothing else; the service starts only once the guard is healthy, with every rule installed |
-| `caddy` *(profile: `tls`)* | TLS terminator + reverse proxy in front of `cyfr:4000`. Started only when `CYFR_BEHIND_PROXY=true` in `.env` |
+| `caddy` *(profile: `public`)* | TLS terminator and reverse proxy of a public home, forwarding to cyfr's proxy listener. Started only when `CYFR_REACH=public` in `.env` |
+| `tailscale` *(profile: `tailnet`)* | Tailscale Serve of a tailnet home: HTTPS at the machine's tailnet name, forwarding to cyfr's proxy listener. Started only when `CYFR_REACH=tailnet` in `.env` |
 
-Two modes:
-- **Direct** (local): cyfr + locus-runtime + locus-builds + locus-backends. Prism at `http://localhost:4000/`.
-- **TLS** (VPS with a hostname): also runs caddy (`--profile tls`). Prism at `https://<CYFR_HOST>/`.
+Three ways a home is reached, `CYFR_REACH` in `.env`:
+- **local**: this computer only. Prism at `http://localhost:4000/`.
+- **tailnet**: your devices on Tailscale; also runs tailscale (`--profile tailnet`). Prism at `https://<machine>.<tailnet>.ts.net/`.
+- **public**: a domain, for anyone who signs in; also runs caddy (`--profile public`). Prism at `https://<your domain>/`.
 
-`cyfr init` prompts which mode you want and writes the right value into `.env` (`CYFR_BEHIND_PROXY`). `cyfr up` reads `.env` and toggles the `tls` profile automatically, and the `locus-builds` profile when `CYFR_LOCUS_BUILDS_URL` names the builds service, which it does after `cyfr init`.
+`cyfr init` asks which one you want and writes it into `.env` with every setting it implies, and `cyfr reach <mode>` changes it later. `cyfr up` selects the proxy's profile from `CYFR_REACH`, and the `locus-builds` profile when `CYFR_LOCUS_BUILDS_URL` names the builds service, which it does after `cyfr init`.
 
 There is **no censorship-circumvention layer** here — Caddy gives you TLS, not unblockability; if your network actively blocks endpoints, put this stack behind a separate obfuscated transport.
 
@@ -374,12 +376,12 @@ There is **no censorship-circumvention layer** here — Caddy gives you TLS, not
 
 - A Linux VPS (or any Docker host) with Docker + the Compose plugin: **Docker Engine 28 or later on a cgroup v2 host** (cgroup v2 is the default of current distributions and of Docker Desktop). `locus-runtime`, `locus-builds` and `locus-backends` hold every runner, build and backend to a memory bound of its own, a cgroup `cyfr-locus` makes for it, which needs the containers' `security_opt: writable-cgroups=true` (in the shipped `docker-compose.yml`; it adds no capability). Without it — an older engine, a cgroup v1 host, or the option removed — nothing runs unbounded and nothing runs: `locus-runtime` starts no runner and logs, naming `writable-cgroups=true`, that it cannot bound one, so no component runs; every build is refused as `unavailable`, naming the option; and every backend's spawn is refused as `memory_unavailable`, which its status reports.
 - A host that allows unprivileged user namespaces, and `locus-runtime` under the shipped seccomp profile: every runner gets a user and network namespace of its own (see [Execution workers](#execution-workers)).
-- For TLS mode: a domain pointing at the VPS. For direct mode: nothing extra.
-- Firewall: TLS mode → open `80/tcp`, `443/tcp` (+ `443/udp` for HTTP/3). Direct mode publishes `:4000` on `127.0.0.1` only — it is for the box you run it on.
+- For a public home: a domain pointing at the VPS. For a tailnet home: a Tailscale account. For a local one: nothing extra.
+- Firewall: a public home → open `80/tcp`, `443/tcp` (+ `443/udp` for HTTP/3). Every home publishes `:4000` on `127.0.0.1` only — it is for the box you run it on — and a tailnet home opens no port.
 
 ### Setup
 
-Use the `cyfr` CLI — it downloads `docker-compose.yml` + `Caddyfile`, writes `.env` (prompts for `CYFR_HOST` / `CYFR_PLATFORM_ADMIN_EMAILS` / TLS y/n / `CADDY_ACME_EMAIL` and mints the stack's keys), and brings the stack up:
+Use the `cyfr` CLI — it downloads `docker-compose.yml` + `Caddyfile`, writes `.env` (asks how the home is reached, then your email, and mints the stack's keys), and brings the stack up:
 
 ```bash
 # Install the CLI (the installer/cask install the CLI only, not Docker):
@@ -387,8 +389,8 @@ curl -fsSL https://raw.githubusercontent.com/cyfrworks/cyfr/main/scripts/install
 #   …or:  brew tap cyfrworks/cyfr && brew install --cask cyfr
 
 mkdir my-cyfr && cd my-cyfr
-cyfr init        # downloads compose + Caddyfile, writes .env and its keys, asks the TLS y/n question
-cyfr up          # starts cyfr + locus-runtime + locus-builds + locus-backends (and caddy if TLS mode)
+cyfr init        # downloads compose + Caddyfile, asks how the home is reached, writes .env and its keys
+cyfr up          # starts cyfr + locus-runtime + locus-builds + locus-backends (and the proxy of a tailnet or public home)
 ```
 
 `cyfr init` mints every key the stack needs into `.env`: `CYFR_SECRET_KEY_BASE`, `CYFR_LOCUS_BACKENDS_KEY`, the [execution worker](#execution-workers)'s root `CYFR_LOCUS_RUNTIME_ROOT` with the `LOCUS_RUNTIME_KEY` derived from it for the worker's service id (`wrk_locus` unless `.env` names another `LOCUS_RUNTIME_SERVICE_ID`), and the [builds](#builds) key beside `CYFR_LOCUS_BUILDS_URL=http://locus-builds:4100`. It also assigns [`CYFR_CORS_ALLOWED_ORIGINS`](#cors-allowlist-required-for-server-deployments) the empty allowlist, which a release with sign-in configured needs to boot and the shipped stack's same-origin clients never notice. Run in a project whose `.env` already exists, it adds only the keys `.env` lacks and never rewrites one: with no root and no service key it mints both, with a root alone it derives the service key from it, a builds URL gets a minted key and a builds key gets the URL. A service key with no root beside it, or one the root beside it does not derive, is refused with a sentence naming the fix, and nothing is written.
@@ -400,10 +402,9 @@ git clone https://github.com/cyfrworks/cyfr && cd cyfr
 cp .env.example .env
 # edit .env:
 #   CYFR_SECRET_KEY_BASE — `openssl rand -base64 48` (at least 64 bytes; a blank or shorter value refuses the boot)
-#   CYFR_HOST            — your domain (or "localhost")
+#   CYFR_REACH, CYFR_HOST — local and localhost, as .env.example has them;
+#                          `cyfr reach tailnet|public` writes another home's settings
 #   CYFR_PLATFORM_ADMIN_EMAILS — your email (platform admin; required to access the instance)
-#   CYFR_BEHIND_PROXY    — true for TLS (caddy) mode, false for direct
-#   CADDY_ACME_EMAIL     — your email (only needed for TLS mode)
 #   CYFR_LOCUS_BACKENDS_KEY — `openssl rand -hex 32`
 #   CYFR_LOCUS_RUNTIME_ROOT      — `openssl rand -hex 32`
 #   LOCUS_RUNTIME_KEY     — `env CYFR_LOCUS_RUNTIME_ROOT=… mix cyfr.locus.runtime_key wrk_locus`
@@ -411,25 +412,25 @@ cp .env.example .env
 #   CYFR_LOCUS_BUILDS_URL — http://locus-builds:4100 (see "Builds")
 #   CYFR_LOCUS_BUILDS_KEY — `openssl rand -hex 32`
 
-# Direct:
+# local:
 docker compose --profile locus-builds up -d
-# TLS:
-docker compose --profile tls --profile locus-builds up -d
+# public (after `cyfr reach public --domain <your domain>`):
+docker compose --profile public --profile locus-builds up -d
 ```
 </details>
 
-Then open `https://<your-domain>/` (TLS) or `http://localhost:4000/` (direct), sign in, and you're in your athanor's chat. "Add to Home Screen" installs it as a PWA (works on phones too). In TLS mode caddy proxies everything to `cyfr:4000` — Prism, `/api`, `/mcp`, `/auth` and `/t` on the same origin. The `cyfr` endpoint (`:4000`) is always published on `127.0.0.1` so the `cyfr` CLI and a local browser work from the host.
+Then open the address `cyfr up` prints (`http://localhost:4000/` for a local home), sign in, and you're in your athanor's chat. "Add to Home Screen" installs it as a PWA (works on phones too). In a tailnet or public home the proxy forwards everything to cyfr's proxy listener — Prism, `/api`, `/mcp`, `/auth` and `/t` on the same origin. The `cyfr` endpoint (`:4000`) is always published on `127.0.0.1` so the `cyfr` CLI and a local browser work from the host.
 
 **Upgrading.** `cyfr update` installs the release the `cyfr` CLI itself is (`cyfr upgrade` moves the CLI first), and two releases never run side by side on one database. In order, it:
 
 1. fetches the release's `release.json` and its signature and verifies them: signed keyless by the release workflow of that version's tag, naming that version. Without network access to the release, or with a manifest that does not verify, it refuses and changes nothing;
 2. pulls every image the manifest names by its digest, and fetches and verifies the release's managed scaffold files without writing them, while the stack still runs; a failed pull changes nothing. It names the storage root it will snapshot as compose resolves it. On PostgreSQL it first reads the server's major through a client image the CLI pins by digest, one for each of PostgreSQL 14 to 18, and pulls the pin of that major for the dump; a server of another major refuses the update before anything changes;
 3. refuses while a member of the [cell](#several-members-on-one-database-a-cell) on another release than this one runs outside this stack, and while `docker-compose.yml` lacks a service of the bundled stack (`cyfr init --force` regenerates the file and keeps `.env`);
-4. stops every service, printing how long each took (the update holds `.cyfr-update.lock` in the project directory from before the stop to its end, as `cyfr restore` does, and `cyfr up` holds it across its own start: `cyfr up` refuses while an update runs, and an update refuses while a start runs), and reads the cell's slots with the server stopped: any member of another release still holding one after a lease (15 s) starts the old stack again and ends the update;
+4. cancels a tailnet join waiting for approval, stops every service, printing how long each took (the update holds the stack's lock, `.cyfr/lock` in the project directory, from before its first docker call to its end, as `cyfr restore` and `cyfr reach` do, and `cyfr up` holds it across its own start: `cyfr up` refuses while an update runs, and an update refuses while a start runs), and reads the cell's slots with the server stopped: any member of another release still holding one after a lease (15 s) starts the old stack again and ends the update;
 5. copies the cell into `backups/<timestamp>/`: the database (the SQLite file, or a `pg_dump` in the PostgreSQL server's own major version), the storage root, every managed scaffold file the release replaces as it stood (part `scaffold`, the keeper's seccomp profile among them), the keyring, `.env` and `docker-compose.yml` as it stood (part `compose`), with `snapshot.json` written last, so a backup without it is incomplete. `backups/` ignores itself for git, since a snapshot holds the keyring; An object store (`CYFR_STORAGE=s3`) is outside the snapshot: it relies on the bucket's own versioning;
-6. writes the managed scaffold files, putting them back from the snapshot and starting the old stack again if that or the next step fails, rewrites the `image:` lines naming `ghcr.io/cyfrworks/cyfr`, `ghcr.io/cyfrworks/cyfr-locus` and the bundled caddy to the release's version and digest, leaving and reporting any other image, then starts the stack and waits for readiness. A release that fails to migrate or start leaves the stack stopped, since old code never starts over migrated bytes, and the update prints the backup's path and `cyfr restore <backup>`.
+6. writes the managed scaffold files, putting them back from the snapshot and starting the old stack again if that or the next step fails, rewrites the `image:` lines naming `ghcr.io/cyfrworks/cyfr`, `ghcr.io/cyfrworks/cyfr-locus`, the bundled caddy and the bundled tailscale to the release's version and digest (caddy and tailscale keep their tags), leaving and reporting any other image, then starts the stack and waits for readiness. A release that fails to migrate or start leaves the stack stopped, since old code never starts over migrated bytes, and the update prints the backup's path and `cyfr restore <backup>`.
 
-A member whose release differs from a live member's is refused at boot, naming both releases. `cyfr init` run again in the project adds a key a newer stack needs that `.env` lacks, and changes nothing else. From a source checkout: `docker compose --profile locus-builds pull && docker compose --profile locus-builds up -d` (add `--profile tls` if you're running with caddy, and drop the builds profile if builds are off). Check the [release notes](https://github.com/cyfrworks/cyfr/releases) first: there is no compatibility layer for behaviour, and a release says what it changes for a running server. A database built from an earlier version of the schema is not carried forward: the server refuses to boot on it and names the database to recreate.
+A member whose release differs from a live member's is refused at boot, naming both releases. `cyfr init` run again in the project adds a key a newer stack needs that `.env` lacks, and changes nothing else. From a source checkout: `docker compose --profile locus-builds pull && docker compose --profile locus-builds up -d` (add `--profile public` or `--profile tailnet` for a public or tailnet home, and drop the builds profile if builds are off). Check the [release notes](https://github.com/cyfrworks/cyfr/releases) first: there is no compatibility layer for behaviour, and a release says what it changes for a running server. A database built from an earlier version of the schema is not carried forward: the server refuses to boot on it and names the database to recreate.
 
 ### Stdio / npx MCP servers (filesystem, github, …)
 
@@ -842,8 +843,10 @@ All four required vars must be set or the server refuses to start.
 ### Proxy trust and rate limits
 
 - `CYFR_TRUSTED_PROXY_HOPS` (default `1`, 0 to 16) — how many reverse-proxy
-  hops sit in front of cyfr when `CYFR_BEHIND_PROXY=true`. The shipped stack has
-  exactly one (Caddy). Stack a CDN or another proxy in front and you must
+  hops sit in front of cyfr's proxy listener, in a tailnet or public home,
+  when `CYFR_TRUSTED_PROXY_CIDRS` is unset. The shipped stack sets the CIDRs
+  to its two proxies' addresses on the edge network (Caddy and Tailscale)
+  instead. Stack a CDN or another proxy in front and you must
   raise it (or list the proxies in `CYFR_TRUSTED_PROXY_CIDRS`), otherwise
   client IPs resolve to the proxy address and API-key IP allowlists fail
   closed. A count outside 0 to 16, or a `CYFR_TRUSTED_PROXY_CIDRS` entry
@@ -932,8 +935,11 @@ Commands marked with `[i]` support interactive selection when run without argume
 
 | Command | Description |
 |---------|-------------|
-| `cyfr init` | Scaffold a CYFR project — downloads `docker-compose.yml` + `Caddyfile`, writes `.env` (asks the TLS y/n question) with the stack's keys minted into it, creates dirs; in an existing project it adds only the keys `.env` lacks (`--force` re-fetches the deploy files; never replaces `.env`) |
-| `cyfr up` / `cyfr down` | Start / stop the stack: cyfr, locus-runtime and locus-backends, plus locus-builds when `CYFR_LOCUS_BUILDS_URL` in `.env` names it (as `cyfr init` writes it) and caddy when `CYFR_BEHIND_PROXY=true` |
+| `cyfr init` | Scaffold a CYFR project — downloads `docker-compose.yml` + `Caddyfile`, asks how the home is reached (tailnet, public or local; `--reach`, `--domain`, `--acme-email`, `--tailscale-auth-key-file`, `--hostname`), writes `.env` with the stack's keys minted into it and the setup token when no email is given, joins the tailnet for a tailnet home, creates dirs and pulls the images (`--no-pull`); in an existing project it adds only the keys `.env` lacks (`--force` re-fetches the deploy files; never replaces `.env`) |
+| `cyfr reach <mode>` | Change how the home is reached, `local`, `tailnet` or `public`: shows who can reach it, its address, the certificate email and the ports opened, before → after, then stops the stack, rewrites `.env` and starts what ran (`--domain`, `--acme-email`, `--tailscale-auth-key-file`, `--hostname`, `--new-node`, `--yes`); `cyfr reach --resume` finishes a change an interruption left |
+| `cyfr reach status` | Show how the home is reached, what runs and the last change, without the lock and changing nothing |
+| `cyfr setup link` | Print the link that sets up the home's administrator on this machine, `http://localhost:<CYFR_PORT>/setup#t=<token>` |
+| `cyfr up` / `cyfr down` | Start / stop the stack under its lock: cyfr, locus-runtime and locus-backends, plus locus-builds when `CYFR_LOCUS_BUILDS_URL` in `.env` names it (as `cyfr init` writes it) and the proxy `CYFR_REACH` selects (tailscale for tailnet, caddy for public); `up` refuses a `.env` that contradicts its reach with the server's own sentence |
 | `cyfr upgrade` | Upgrade the CYFR Codex binary (system-wide) |
 | `cyfr update` | Install the release this CLI is: verify its signed manifest, pull every image by digest, stop the stack, snapshot it into `backups/`, rewrite `docker-compose.yml`'s managed image lines (cyfr, cyfr-locus, the bundled caddy) to the release's digests and start it (see **Upgrading**); leaves `.env`, `Caddyfile` and every other image line alone, and refuses a `docker-compose.yml` that lacks a service of the bundled stack |
 | `cyfr restore <snapshot>` | Put a snapshot from `backups/` back with the whole cell stopped (refused while any member of the cell runs), declare the restore and start the stack (`--no-start` leaves it stopped); see **Backup and restore** |
