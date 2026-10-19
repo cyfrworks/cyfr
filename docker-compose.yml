@@ -35,8 +35,8 @@
 #                 :80 and :443, forwarding to cyfr's proxy listener on the
 #                 edge network.                           [profile: public]
 #   tailscale  — Tailscale Serve in front of a tailnet home, forwarding to
-#                 cyfr's proxy listener on the edge network; no port is
-#                 published.                              [profile: tailnet]
+#                 cyfr's proxy listener on the edge network; SOCKS5 on
+#                 host loopback for this device's browser. [profile: tailnet]
 #
 # How the home is reached is CYFR_ACCESS in .env (local, tailnet or public),
 # which `cyfr init` and `cyfr access` write with every setting it implies.
@@ -641,6 +641,7 @@ services:
       - TS_STATE_DIR=/var/lib/tailscale
       - TS_AUTH_ONCE=true
       - TS_ACCEPT_DNS=false
+      - TS_SOCKS5_SERVER=:1055
       - TS_SOCKET=/var/run/tailscale/tailscaled.sock
       # Serve's configuration, which `cyfr` alone writes: `{}`, serving
       # nothing, until it has checked that this machine is the one .env
@@ -651,6 +652,11 @@ services:
       # A directory, so containerboot sees the file change; cyfr's own
       # mounts never reach it.
       - ./.cyfr/tailscale-serve:/serve:ro
+    # The device's own browser reaches the home's address through this
+    # sidecar, on the host's loopback only. The connection arrives through
+    # Serve's proxy ingress and carries no loopback-ingress authority.
+    ports:
+      - "127.0.0.1:1055:1055"
     # The edge network alone, at the address cyfr trusts forwarded headers
     # from.
     networks:

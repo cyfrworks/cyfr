@@ -38,6 +38,8 @@ services:
   tailscale:
     image: ${PROOF_TAILSCALE_IMAGE:?set PROOF_TAILSCALE_IMAGE}
     pull_policy: never
+    ports: !override
+      - "127.0.0.1::1055"
     networks:
       proof-tailnet: {}
   locus-runtime:

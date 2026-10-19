@@ -1856,6 +1856,7 @@ defmodule Cyfr.StackShapeTest do
                "TS_STATE_DIR=/var/lib/tailscale",
                "TS_AUTH_ONCE=true",
                "TS_ACCEPT_DNS=false",
+               "TS_SOCKS5_SERVER=:1055",
                "TS_SOCKET=/var/run/tailscale/tailscaled.sock",
                "TS_SERVE_CONFIG=/serve/serve.json"
              ])
@@ -1871,8 +1872,10 @@ defmodule Cyfr.StackShapeTest do
     assert Map.has_key?(parsed["volumes"], "tailscale_state")
     assert tailscale["healthcheck"]["test"] == ["CMD", "tailscale", "status"]
 
-    # No port, no capability, no device: userspace networking needs none.
-    for key <- ~w(ports cap_add devices privileged network_mode) do
+    assert tailscale["ports"] == ["127.0.0.1:1055:1055"]
+
+    # The proxy needs no added capability, device or host network.
+    for key <- ~w(cap_add devices privileged network_mode) do
       refute Map.has_key?(tailscale, key), "tailscale sets #{key}"
     end
 
@@ -1886,8 +1889,8 @@ defmodule Cyfr.StackShapeTest do
   end
 
   # What a selection of profiles starts publishes on the host: the
-  # loopback listener on the host's loopback alone in every mode, and in a
-  # public home Caddy's 80 and 443 besides.
+  # loopback listener on the host's loopback alone in every mode, the
+  # sidecar's SOCKS5 on loopback in tailnet, and Caddy's public 80 and 443.
   defp published(parsed, profiles) do
     for {service, definition} <- parsed["services"],
         definition["profiles"] in [nil, []] or
@@ -1896,16 +1899,17 @@ defmodule Cyfr.StackShapeTest do
         do: {service, port}
   end
 
-  test "each mode publishes the loopback listener on the host's loopback, and public 80 and 443" do
+  test "each mode publishes its loopback listeners, and public 80 and 443" do
     parsed = compose!()
     loopback = [{"cyfr", "127.0.0.1:${CYFR_PORT:-4000}:${CYFR_PORT:-4000}"}]
     caddy = [{"caddy", "80:80"}, {"caddy", "443:443"}, {"caddy", "443:443/udp"}]
+    kiosk = [{"tailscale", "127.0.0.1:1055:1055"}]
 
     for {profiles, expected} <- [
           {[], loopback},
           {["locus-builds"], loopback},
-          {["tailnet"], loopback},
-          {["tailnet", "locus-builds"], loopback},
+          {["tailnet"], loopback ++ kiosk},
+          {["tailnet", "locus-builds"], loopback ++ kiosk},
           {["public"], loopback ++ caddy},
           {["public", "locus-builds"], loopback ++ caddy}
         ] do
@@ -1913,6 +1917,79 @@ defmodule Cyfr.StackShapeTest do
     end
 
     assert parsed["services"]["caddy"]["profiles"] == ["public"]
+  end
+
+  # The firewall paragraph names defaults for each mode. Read its port
+  # claims and compare them with Compose's own profile selection, so a
+  # published binding cannot silently drift away from the operator's guide.
+  defp readme_ports(readme) do
+    pattern =
+      ~r/^- Firewall: \*\*public\*\* opens (.*?)\. Every home publishes `(\d+)\/tcp` on `([^`]+)` only .*?A \*\*tailnet\*\* home also publishes SOCKS5 `(\d+)\/tcp` on `([^`]+)` only/m
+
+    case Regex.run(pattern, readme) do
+      [_, public, port, address, kiosk_port, kiosk_address] ->
+        loopback = [{"cyfr", "#{address}:#{port}:#{port}"}]
+        kiosk = [{"tailscale", "#{kiosk_address}:#{kiosk_port}:1055"}]
+
+        caddy =
+          for [port, protocol] <-
+                Regex.scan(~r/`(\d+)\/(tcp|udp)`/, public, capture: :all_but_first) do
+            suffix = if protocol == "tcp", do: "", else: "/#{protocol}"
+            {"caddy", "#{port}:#{port}#{suffix}"}
+          end
+
+        %{[] => loopback, ["tailnet"] => loopback ++ kiosk, ["public"] => loopback ++ caddy}
+
+      _ ->
+        nil
+    end
+  end
+
+  defp readme_ports_hold?(readme, parsed) do
+    case readme_ports(readme) do
+      nil ->
+        false
+
+      modes ->
+        Enum.all?(modes, fn {profiles, expected} ->
+          actual =
+            for {service, port} <- published(parsed, profiles) do
+              {service, Regex.replace(~r/\$\{[A-Z_]+:-([^}]+)\}/, port, "\\1")}
+            end
+
+          Enum.sort(actual) == Enum.sort(expected)
+        end)
+    end
+  end
+
+  test "README's firewall paragraph agrees with every mode's published ports and finds drift" do
+    readme = read!("README.md")
+    parsed = compose!()
+    assert map_size(readme_ports(readme)) == 3
+    assert readme_ports_hold?(readme, parsed)
+
+    for {before, after_text} <- [
+          {"SOCKS5 `1055/tcp`", "SOCKS5 `1056/tcp`"},
+          {"on `127.0.0.1` only", "on `0.0.0.0` only"},
+          {" (+ `443/udp` for HTTP/3)", ""},
+          {"Every home publishes `4000/tcp`", "Every home publishes `4002/tcp`"}
+        ] do
+      planted = String.replace(readme, before, after_text)
+      refute planted == readme
+      refute readme_ports_hold?(planted, parsed), before
+    end
+
+    for binding <- [
+          "0.0.0.0:1055:1055",
+          "127.0.0.1:1056:1055",
+          "127.0.0.1:1055:1056",
+          "127.0.0.1:1055:1055/udp"
+        ] do
+      planted = put_in(parsed, ["services", "tailscale", "ports"], [binding])
+      refute readme_ports_hold?(readme, planted), binding
+    end
+
+    refute readme_ports_hold?(readme, put_in(parsed, ["services", "tailscale", "ports"], []))
   end
 
   # The image's health check asks the loopback listener where a bare
