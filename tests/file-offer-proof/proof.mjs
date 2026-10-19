@@ -326,7 +326,7 @@ function counted(step, fact, expected, previous) {
 }
 
 async function main() {
-  const proxy = await startProxy(null, readHomes(homesFile));
+  const proxy = await startProxy(readHomes(homesFile));
   const browser = await launchBrowser("chromium", proxy);
   record.browser = `Chromium ${browser.version()}`;
   record.at = new Date().toISOString();

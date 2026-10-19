@@ -766,7 +766,7 @@ async function diagnose(page, name) {
 }
 
 async function main() {
-  const proxy = await startProxy(null, readHomes(homesFile));
+  const proxy = await startProxy(readHomes(homesFile));
   const browser = await launchBrowser("chromium", proxy);
   record.browser = browser.version();
   const page = await (await signedIn(browser)).newPage();

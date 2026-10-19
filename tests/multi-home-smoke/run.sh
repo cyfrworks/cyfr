@@ -261,7 +261,7 @@ async function passkey(page, site, other) {
 
 let proxy;
 try {
-  proxy = await startProxy(null, { homes, unsigned });
+  proxy = await startProxy({ homes, unsigned });
 } catch (error) {
   console.error(`FAIL: ${firstLine(error)}`);
   process.exit(1);

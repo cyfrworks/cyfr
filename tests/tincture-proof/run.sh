@@ -53,7 +53,7 @@ release_build
 CELL="$WORK/cell"
 browser_cell "$CELL"
 
-step "starting the release on a fresh SQLite cell, as cyfr.test"
+step "starting the release on a fresh SQLite cell, as https://cyfr.test"
 server_start "$CELL"
 
 step "publishing proof-game, private, through the publish check, and granting it"
@@ -67,10 +67,10 @@ published="$(server_fixture "$CELL" tincture "$(field "$person" user_id)" "$WORK
 [ -n "$published" ] || fail "proof-game was not published"
 # The shell opens a tincture's frame only under the person's grant.
 server_fixture "$CELL" grant "$token" proof-game >/dev/null
-status="$(curl -s -m 10 -o /dev/null -w '%{http_code}' "http://127.0.0.1:$PORT/t/$segment/local/proof-game")"
+status="$(curl -s -m 10 -o /dev/null -w '%{http_code}' "http://127.0.0.1:$(cell_port "$CELL")/t/$segment/local/proof-game")"
 [ "$status" = 404 ] || fail "the private tincture's public address answered $status"
 
 step "the tincture proof in $PLAYWRIGHT_IMAGE, $OPENS opens each way"
-playwright_run tincture-proof proof.mjs "http://127.0.0.1:$PORT" "$segment" "$cookie" /out "$OPENS"
+playwright_run tincture-proof proof.mjs "$segment" "$cookie" /out "$OPENS"
 
 echo "the record: $OUT/tincture-proof.json and $OUT/tincture-proof.md"

@@ -25,16 +25,19 @@
 // decoded. Asset-fetch is each /_s/ resource's duration as the frame's
 // Resource Timing reports it.
 //
-// Usage: node proof.mjs SERVER_URL SEGMENT COOKIE OUT_DIR [OPENS]
+// Every browser reaches the release at https://cyfr.test through the
+// harness's proxy (tests/browser/lib.mjs), Chromium as its full build,
+// which trusts the run's authority.
+//
+// Usage: node proof.mjs SEGMENT COOKIE OUT_DIR [OPENS]
 
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
-  BROWSERS, SITE, chromium, closeFrame, firefox, launch, openShell, percentiles, redact, signedIn, sleep,
-  startProxy, waitFor, webkit,
+  BROWSERS, SITE, closeFrame, launch, launchBrowser, openShell, percentiles, readHomes, redact, signedIn, sleep,
+  startProxy, waitFor,
 } from "../browser/lib.mjs";
 
-const TYPES = { chromium, firefox, webkit };
 const NAME = "proof-game";
 const failures = [];
 const check = (condition, what, detail) => {
@@ -71,7 +74,7 @@ async function open(page, proxy) {
 }
 
 async function run(name, base, proxy, segment, cookie, opens) {
-  const browser = await TYPES[name].launch({ proxy: { server: `http://127.0.0.1:${proxy.address().port}` } });
+  const browser = await launchBrowser(name, proxy);
   const record = { version: browser.version() };
   try {
     // ---- warm: one signed-in browser, the game opened again and again ----
@@ -163,15 +166,15 @@ async function run(name, base, proxy, segment, cookie, opens) {
 const round = (v) => (v === null ? "—" : Math.round(v));
 
 async function main() {
-  const [server, segment, cookie, outDir, opensArg] = process.argv.slice(2);
-  if (!server || !segment || !cookie || !outDir) {
-    console.error("usage: node proof.mjs SERVER_URL SEGMENT COOKIE OUT_DIR [OPENS]");
+  const [segment, cookie, outDir, opensArg] = process.argv.slice(2);
+  if (!segment || !cookie || !outDir) {
+    console.error("usage: node proof.mjs SEGMENT COOKIE OUT_DIR [OPENS]");
     process.exit(64);
   }
   const opens = Number(opensArg || 50);
   mkdirSync(outDir, { recursive: true });
-  const proxy = await startProxy(server);
-  const base = `http://${SITE}:${new URL(server).port || 80}`;
+  const proxy = await startProxy(readHomes());
+  const base = `https://${SITE}`;
   const record = {};
   for (const name of BROWSERS) {
     console.log(`== ${name}`);

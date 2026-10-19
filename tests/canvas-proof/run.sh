@@ -151,7 +151,7 @@ release_build
 CELL="$WORK/cell"
 browser_cell "$CELL"
 
-step "starting the release on a fresh SQLite cell, as cyfr.test"
+step "starting the release on a fresh SQLite cell, as https://cyfr.test"
 server_start "$CELL"
 
 step "the person, the proof's tinctures and the feed's source"
@@ -338,7 +338,7 @@ answer_ask() {
 step "the canvas proof at $VIEWPORT on the $HOST_CLASS host class in $PLAYWRIGHT_IMAGE"
 # CANVAS_PROOF_DEV narrows a local run (browsers=…;steps=…;measure=0); its
 # record says it is narrowed and never passes. A full run leaves it unset.
-playwright_run canvas-proof proof.mjs "http://127.0.0.1:$PORT" "$segment" "$cookie" /out "$VIEWPORT" "${CANVAS_PROOF_DEV:-}" "$HOST_CLASS" &
+playwright_run canvas-proof proof.mjs "$segment" "$cookie" /out "$VIEWPORT" "${CANVAS_PROOF_DEV:-}" "$HOST_CLASS" &
 PROOF_PID=$!
 proof_await answer_ask null
 status="$PROOF_STATUS"

@@ -5,9 +5,9 @@ The harness starts `cyfr` releases as `tests/release-boot/` starts one
 PostgreSQL, and drives them from every browser the official Playwright
 image ships. Its shell side is `harness.sh`, sourced after `release.sh`;
 its browser side is `lib.mjs`, which each experiment imports as
-`../browser/lib.mjs`. It serves a proof in one of two shapes: one cell
-under the name `cyfr.test` over plain HTTP, or several homes, each a cell
-on a hostname of its own, over HTTPS. The proofs start no object store; a
+`../browser/lib.mjs`. Every cell is a home, reached over HTTPS, and it
+serves a proof in one of two shapes: one cell, the home `cyfr.test`, or
+several homes, each a cell on a hostname of its own. The proofs start no object store; a
 cell keeps its storage on its own disk. The S3 checks run against the
 MinIO image `.github/workflows/test.yml` pins by digest, in its `s3-minio`
 job's "Start MinIO" step.
@@ -39,9 +39,9 @@ bearer become `[secret]`; an asset credential becomes `/_s/[credential]`
 or `/_c/v1/[credential]`; an `SFMyNTY.` signed token becomes
 `[signed token]`.
 
-## One cell: `cyfr.test`
+## One cell: `https://cyfr.test`
 
-`run.sh` starts the release under the name `cyfr.test` (`browser_cell`),
+`run.sh` starts the release as the home `cyfr.test` (`browser_cell`),
 signs a person in (`tests/release-boot/fixture.exs`), publishes the two
 tinctures under `tinctures/` publicly in that person's athanor, grants
 `frame-probe` as that person (the fixture's `grant`: a tincture's frame
@@ -54,10 +54,16 @@ canvas proofs (`tests/tincture-proof/`, `tests/hostile-frame-proof/`,
 `tests/canvas-proof/`) use the same shape; [The proofs](#the-proofs) lists
 every proof and its shape.
 
-Every browser reaches the cell through the harness's proxy (`startProxy`),
-which forwards `cyfr.test` to it and `attacker.test` to the attacker's
-receiver. A browser names a request's destination (`sec-fetch-dest`) only
-to a secure origin, which this one is not.
+`browser_cell` makes the run's authority when the run has none and the
+home as `browser_home` makes every home (below), and issues a certificate
+for the attacker's name, `attacker.test`, beside it (`browser_attacker`).
+Every browser reaches the cell at `https://cyfr.test` through the
+harness's proxy and its front (`startProxy`), and the attacker's receiver
+at `https://attacker.test` through the same front, which hands the
+receiver each request as the browser sent it, or at `http://attacker.test`.
+The site's origin is secure, so every browser names each request's
+destination (`sec-fetch-dest`) to it, and an attempt at the attacker's
+origin is refused by the frame's policy, never as mixed content.
 
 ## Homes: several cells on several hostnames, over HTTPS
 
@@ -105,16 +111,17 @@ before.
 
 | Browser | How it trusts the run's authority |
 |---|---|
-| Chromium | its full build (`launchBrowser` launches `channel: "chromium"`) reads the managed policy `CACertificates` from `/etc/opt/chrome_for_testing/policies/managed/`; its headless shell, which the frame-facts, tincture and containment proofs launch, reads no policy; the canvas proof launches the full build |
+| Chromium | its full build (`launchBrowser` launches `channel: "chromium"`), which every proof launches, reads the managed policy `CACertificates` from `/etc/opt/chrome_for_testing/policies/managed/`; its headless shell reads no policy, so no proof launches it |
 | Firefox | Playwright's build reads the policies file `PLAYWRIGHT_FIREFOX_POLICIES_JSON` names, whose `Certificates.Install` holds the authority |
 | WebKit | it verifies against `/etc/ssl/certs/ca-certificates.crt`, which the container mounts as the authority alone, so WebKit trusts nothing else |
 
-**The front.** `startProxy(null, readHomes())` routes each home's tunnel
+**The front.** `startProxy(readHomes())` routes each home's tunnel
 to its TLS front, which presents the name's certificate and forwards each
 request and WebSocket upgrade to the home's proxy listener with
-`X-Forwarded-For`, `-Proto` and `-Host`, as Caddy does. It answers a
-plain-HTTP request to a home 421, and a run of homes alone gets no tunnel
-to a name it does not route. Its account of each request (`proxy.seen`)
+`X-Forwarded-For`, `-Proto` and `-Host`, as Caddy does. Given a receiver
+(`startReceiver`) too, it routes `attacker.test` to the receiver, over
+HTTPS and plain HTTP. It answers any other plain-HTTP request 421, and
+gets no tunnel to a name it does not route. Its account of each request (`proxy.seen`)
 holds the cookies the request carried and the cookies its answer set;
 `proxy.refusals` holds each handshake a browser broke off. The proxy
 starts only once every home answers its readiness check as its hostname,
@@ -126,7 +133,9 @@ helpers:
 
 | Export | What it is |
 |---|---|
-| `readHomes()` | the run's homes and unsigned names from `/authority/homes.json` |
+| `readHomes()` | the run's homes, unsigned names and attacker's name from `/authority/homes.json` |
+| `homeOf(homes, host)` | the home of a hostname, `cyfr.test` unless named |
+| `askHome(home, path, headers)` | a GET of a home's cell as the front forwards a browser's request: a check of the server itself |
 | `launchBrowser(name, proxy)` | a browser of the matrix through the proxy, trusting the authority |
 | `secureContext(page)` | the page's protocol, `isSecureContext`, `crypto.subtle` and a digest made with it |
 | `roundTripFragment(page, proxy, from, to)` | the fragment fixture: 16 KiB carried from one home to another and back by top-level navigations the pages make themselves, as a carry travels; intact or not, and whether any request carried it |
@@ -181,10 +190,10 @@ to run it and its steps.
 
 | Proof | Directory | Shape | Browsers |
 |---|---|---|---|
-| frame facts | `tests/browser/` (`run.sh`) | one cell, `cyfr.test` | Chromium, Firefox and WebKit |
+| frame facts | `tests/browser/` (`run.sh`) | one home, `cyfr.test` | Chromium, Firefox and WebKit |
 | markdown | `tests/markdown-proof/` | no release: a page of its own, `markdown.test`, serving the console's markdown hook from `/assets` | Chromium |
-| tincture | `tests/tincture-proof/` | one cell, `cyfr.test` | Chromium, Firefox and WebKit |
-| containment (the hostile frame) | `tests/hostile-frame-proof/` | one cell, `cyfr.test` | Chromium, Firefox and WebKit; the prompt and pointer-lock attempts in Chromium's full build alone |
+| tincture | `tests/tincture-proof/` | one home, `cyfr.test` | Chromium, Firefox and WebKit |
+| containment (the hostile frame) | `tests/hostile-frame-proof/` | one home, `cyfr.test`, and the attacker's `attacker.test` | Chromium, Firefox and WebKit; the pointer-lock attempt in Chromium alone |
 | pairing | `tests/pairing-proof/` | one home, `home.test` | Chromium |
 | multi-home smoke | `tests/multi-home-smoke/` | two homes, `alpha.test` and `beta.test` | Chromium, Firefox and WebKit; the passkey in Chromium |
 | identity | `tests/identity-proof/` | the homes `a.test`, `b.test`, `c.test`, `c2.test` and `c3.test`, and the directory `dir.test` | Chromium |
@@ -193,7 +202,7 @@ to run it and its steps.
 | instance entries | `tests/instance-entry-proof/` | one home, `home.test`; SQLite release decisions, claims and administrator boundary | Chromium, desktop (1280×900) and 720×720 |
 | approvals | `tests/approval-proof/` | one home, `home.test`; SQLite grant rows, binding lifetimes and named-account prompt | Chromium, desktop (1280×900) and 720×720 |
 | file offers | `tests/file-offer-proof/` | one home, `home.test`; offers, recipient acceptance and actual snapshot readback | Chromium, desktop (1280×900) and 720×720 |
-| canvas | `tests/canvas-proof/` | one cell, `cyfr.test`; SQLite only, no passkey step | Chromium, Firefox and WebKit, desktop (1280×900) and 720×720 |
+| canvas | `tests/canvas-proof/` | one home, `cyfr.test`, and the attacker's `attacker.test`; SQLite only, no passkey step | Chromium, Firefox and WebKit, desktop (1280×900) and 720×720 |
 
 In CI every proof writes its records under
 `$RUNNER_TEMP/proofs/<proof>`, or
@@ -268,10 +277,11 @@ carries the policy the frame's rules derive
 `connect-src` naming the site origin and a `sandbox allow-scripts`
 directive). The probe (`tinctures/frame-probe/probe.js`) makes nine attempts
 from inside it. Every browser reaches the server through the harness's proxy
-(`lib.mjs`) under the name `cyfr.test`, which the server is started with
-(`CYFR_HOST` and `CYFR_PUBLIC_URL`, `harness.sh`); the proxy answers only the
-302s of the redirect attempt (no tincture route redirects) and forwards the
-rest unchanged. The document's origin is `null` in all three browsers.
+(`lib.mjs`) at `https://cyfr.test`, the home the server is started as
+(`CYFR_HOST` and `CYFR_PUBLIC_URL` as `cyfr init` writes them,
+`harness.sh`); the proxy answers only the 302s of the redirect attempt (no
+tincture route redirects) and forwards the rest as the stack's proxy
+forwards it. The document's origin is `null` in all three browsers.
 
 Each browser sees the shell at `/a/@release-proof/tinctures` frame
 `/t/@release-proof/local/frame-probe`. The experiment asserts no outcome:

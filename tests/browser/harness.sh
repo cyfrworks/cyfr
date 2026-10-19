@@ -6,17 +6,15 @@
 # tests/hostile-frame-proof/, tests/canvas-proof/) and the multi-home smoke
 # (tests/multi-home-smoke/run.sh).
 #
-# A browser cell's server names itself `cyfr.test` (CYFR_HOST), the name
-# every browser reaches it under through the harness's proxy
-# (tests/browser/lib.mjs), so the origin the policies are derived for is
-# the origin the browsers see.
-#
 # A home is a cell on a `.test` hostname of its own, a public home of that
-# name (CYFR_REACH=public), several at once, each reached by every browser
-# at https://HOST through the same proxy, whose TLS front presents a
-# certificate the run's own authority issued for that name and forwards to
-# the home's proxy listener. No name is resolved by DNS or /etc/hosts: the
-# proxy routes each name itself. The authority is made for the run under
+# name (CYFR_REACH=public), one or several at once, each reached by every
+# browser at https://HOST through the harness's proxy (tests/browser/
+# lib.mjs), whose TLS front presents a certificate the run's own authority
+# issued for that name and forwards to the home's proxy listener. A proof
+# of one cell runs it as the home `cyfr.test` (`browser_cell`), so the
+# origin the policies are derived for is the origin the browsers see, with
+# the attacker's name, `attacker.test`, beside it. No name is resolved by
+# DNS or /etc/hosts: the proxy routes each name itself. The authority is made for the run under
 # WORK, its private key kept apart and never mounted, and every browser of
 # the Playwright container trusts it: Chromium's full build through a
 # managed policy, Firefox through the policies file Playwright's build
@@ -47,19 +45,30 @@ BROWSER_AUTHORITY_KEYS=""
 BROWSER_HOMES_PORT="${BROWSER_HOMES_PORT:-4410}"
 # The run's homes and unsigned names, as `name host port certificate`
 # rows, where port is that of the proxy listener the front forwards to,
-# which /authority/homes.json lists.
+# which /authority/homes.json lists, and whether the attacker's name has
+# its certificate (`browser_attacker`).
 BROWSER_HOMES=()
 BROWSER_UNSIGNED=()
+BROWSER_ATTACKER=""
 
-# A new cell (release.sh's `cell_new`) whose server names itself cyfr.test:
-# its host, and the public URL the policies derive the endpoint's origin
-# from (`Sanctum.origin/0`), which a deployment that is not
-# http://localhost:4000 declares.
+# The cell of a proof of one cell: the home `cyfr.test` at `$1` (`$2` the
+# PostgreSQL URL of its database), as `browser_home` makes every home, with
+# the run's authority made first when the run has none, and the attacker's
+# name beside it.
 browser_cell() {
-  cell_new "$@"
-  sed -i 's/^CYFR_HOST=.*/CYFR_HOST=cyfr.test/' "$1/.env"
-  echo "CYFR_PUBLIC_URL=http://cyfr.test:$PORT" >>"$1/.env"
-  grep -qx 'CYFR_HOST=cyfr.test' "$1/.env" || fail "the cell does not name cyfr.test"
+  [ -n "$BROWSER_AUTHORITY" ] || browser_authority
+  browser_home "$1" cyfr.test "${2:-}"
+  browser_attacker
+}
+
+# The attacker's name, `attacker.test`, served over HTTPS too: a
+# certificate for it from the run's authority, which the front presents
+# for it and forwards its requests to the receiver of the experiment that
+# starts one (lib.mjs `startProxy`).
+browser_attacker() {
+  browser_certificate attacker.test
+  BROWSER_ATTACKER=attacker.test
+  browser_homes_file
 }
 
 # The browser session cookie of the session token `$2`, minted by the
@@ -201,12 +210,17 @@ browser_unsigned() {
 
 # /authority/homes.json: the run's homes and unsigned names, each with the
 # proxy listener its requests go to and the certificate and key the front
-# presents for it (lib.mjs `readHomes`).
+# presents for it, and the attacker's name with its certificate and key, or
+# null (lib.mjs `readHomes`).
 browser_homes_file() {
-  printf '{"homes":[%s],"unsigned":[%s]}\n' \
+  local attacker=null
+  [ -z "$BROWSER_ATTACKER" ] ||
+    attacker="$(printf '{"name":"attacker","host":"%s","cert":"/authority/%s.pem","key":"/authority/%s.key"}' \
+      "$BROWSER_ATTACKER" "$BROWSER_ATTACKER" "$BROWSER_ATTACKER")"
+  printf '{"homes":[%s],"unsigned":[%s],"attacker":%s}\n' \
     "$(browser_rows ${BROWSER_HOMES[@]+"${BROWSER_HOMES[@]}"})" \
     "$(browser_rows ${BROWSER_UNSIGNED[@]+"${BROWSER_UNSIGNED[@]}"})" \
-    >"$BROWSER_AUTHORITY/homes.json"
+    "$attacker" >"$BROWSER_AUTHORITY/homes.json"
 }
 
 # The rows `$@` (`name host port certificate`) as JSON objects,

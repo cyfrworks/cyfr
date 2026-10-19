@@ -19,10 +19,13 @@
 //   disclosure  a route that stays open, asserted to carry nothing the
 //               tincture was not given.
 //
-// Everything stays inside the harness. The recording endpoint listens on
-// loopback and is reached, through the harness's proxy, under the name
-// `attacker.test`; the tinctures are published into the harness's own
-// athanor of the release under test.
+// Everything stays inside the harness. The release is the home
+// https://cyfr.test, which every browser reaches through the harness's
+// proxy, Chromium as its full build, which trusts the run's authority. The
+// recording endpoint listens on loopback and is reached, through the same
+// proxy, at https://attacker.test, so an attempt at it is refused by the
+// frame's policy and never as mixed content; the tinctures are published
+// into the harness's own athanor of the release under test.
 //
 // The system layer over a malicious fullscreen frame: the fullscreen probe
 // (tinctures/fullscreen-probe), which declares fullscreen and pointer lock,
@@ -33,18 +36,16 @@
 // person asking for a sensitive change — is run.sh's, asked for through
 // OUT_DIR (`ask-N.json`, answered `answer-N.json`).
 //
-// Usage: node proof.mjs SERVER_URL SEGMENT COOKIE OUT_DIR PUBLIC_NEIGHBOUR_PATH
+// Usage: node proof.mjs SEGMENT COOKIE OUT_DIR PUBLIC_NEIGHBOUR_PATH
 
-import { request } from "node:http";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
-  ATTACKER, BROWSERS, SITE, ask as askRunSh, awaitFrame, chromium, firefox, launch, launchBrowser, openShell, redact,
-  signedIn, sleep, startProxy, startReceiver, waitFor, webkit,
+  ATTACKER, BROWSERS, SITE, ask as askRunSh, askHome, awaitFrame, homeOf, launch, launchBrowser, openShell, readHomes,
+  redact, signedIn, sleep, startProxy, startReceiver, waitFor,
 } from "../browser/lib.mjs";
 
-const TYPES = { chromium, firefox, webkit };
-const RECEIVER = `http://${ATTACKER}`;
+const RECEIVER = `https://${ATTACKER}`;
 const NEIGHBOUR = "containment-neighbour";
 const SETTLE_MS = 400;
 
@@ -300,8 +301,9 @@ async function phase(browser, browserName, phaseName, tincture, base, proxy, rec
     // to the shell's own address. The request may leave with the cookie
     // (the browser's decision, as above); no page of the person's is drawn
     // in the frame, because a Prism page is framed by nothing, and a
-    // browser that names the request's destination is answered a refusal
-    // before the session is read (frame_request_refused).
+    // browser that names the request's destination, as each names it to a
+    // secure origin, is answered a refusal before the session is read
+    // (frame_request_refused).
     const third = await context.newPage();
     await openShell(third, base, segment, tincture);
     const last = await launch(third, tincture);
@@ -323,13 +325,15 @@ async function phase(browser, browserName, phaseName, tincture, base, proxy, rec
       ]);
       drawn = drawn || seen;
     }
-    const refused = !!reached && !drawn && third.url() === shellUrl;
+    const named = !!reached && reached.fetch.dest === "iframe";
+    const refused = !!reached && !drawn && third.url() === shellUrl && (!named || reached.status === 403);
     check(refused, browserName, phaseName, "self_navigation_session_page",
-      "a frame that navigates itself to a page of the person's draws none of it",
-      reached ? { drawn, cookie: reached.cookie } : "nothing arrived");
+      "a frame that navigates itself to a page of the person's draws none of it, and a request named a frame's is answered 403",
+      reached ? { drawn, cookie: reached.cookie, fetch: reached.fetch, status: reached.status } : "nothing arrived");
     record.shell_path = shellPath;
     record.attempts.self_navigation_session_page = {
       column: "refused", outcome: refused ? "held" : "FAILED", drawn, cookie: reached ? reached.cookie : null,
+      fetch: reached ? reached.fetch : null, status: reached ? reached.status : null,
     };
 
     // Nothing of this phase reached the recording endpoint.
@@ -350,18 +354,21 @@ const COOKIE_ON_SITE_NAVIGATION = { chromium: false, firefox: false, webkit: tru
 
 // The page a frame can land on within the site is a tincture's, and its
 // route reads no session: it answers the same with the cookie and without.
-async function sessionBlind(server, path, cookie) {
+// Asked of the server as the front forwards a browser's request
+// (lib.mjs `askHome`), with and without the cookie, which no one browser
+// sends both ways.
+async function sessionBlind(home, path, cookie) {
   const ask = async (headers) => {
-    const response = await fetch(`${server}${path}`, { headers, redirect: "manual" });
+    const response = await askHome(home, path, headers);
     // Every page carries a nonce of its own, in its policy and on its
     // injected script; the comparison is of everything else.
-    const policy = response.headers.get("content-security-policy") || "";
+    const policy = String(response.headers["content-security-policy"] || "");
     const nonce = (policy.match(/'nonce-([^']+)'/) || [])[1];
     const plain = (text) => (nonce ? text.split(nonce).join("NONCE") : text);
     return {
       status: response.status,
-      body: plain(await response.text()),
-      sets: response.headers.get("set-cookie"),
+      body: plain(response.body),
+      sets: response.headers["set-cookie"] || null,
       policy: plain(policy),
     };
   };
@@ -378,22 +385,14 @@ async function sessionBlind(server, path, cookie) {
 
 // A page that reads the session refuses a request whose destination is a
 // frame, before it reads the session, and tells every browser it is framed
-// by nothing. Asked of the server, because a browser names a request's
-// destination only to a secure origin, which the harness's is not.
-function get(server, path, headers) {
-  return new Promise((resolve, reject) => {
-    const target = new URL(path, server);
-    const req = request({ host: target.hostname, port: target.port, path: target.pathname, method: "GET", headers },
-      (res) => { res.resume(); res.on("end", () => resolve({ status: res.statusCode, headers: res.headers })); });
-    req.on("error", reject);
-    req.end();
-  });
-}
-
-async function frameRequestRefused(server, path, cookie) {
+// by nothing. Asked of the server as the front forwards a browser's
+// request (lib.mjs `askHome`), the same request named a frame's and not,
+// whatever a browser names: each browser's own navigation is held to it in
+// self_navigation_session_page.
+async function frameRequestRefused(home, path, cookie) {
   const signed = { cookie: `_cyfr_key=${cookie}`, accept: "text/html" };
-  const framed = await get(server, path, { ...signed, "sec-fetch-dest": "iframe" });
-  const plain = await get(server, path, signed);
+  const framed = await askHome(home, path, { ...signed, "sec-fetch-dest": "iframe" });
+  const plain = await askHome(home, path, signed);
   const policy = String(plain.headers["content-security-policy"] || "");
   const held = framed.status === 403 && !framed.headers["set-cookie"] && !framed.headers.location &&
     plain.status === 200 && policy.includes("frame-ancestors 'none'") && plain.headers["x-frame-options"] === "DENY";
@@ -673,33 +672,18 @@ async function prompts(browser, browserName, base, segment, cookie, outDir) {
   return record;
 }
 
-// The prompts over the fullscreen frame run in Chromium's full build, as
-// the harness launches it elsewhere (`launchBrowser`), not the headless
-// shell the rest of the proof runs in: the shell keeps a hidden frame's
-// pointer lock, where Chrome, and the full build, release it as the frame
-// is hidden. Firefox and WebKit run as the rest of the proof does.
-async function promptsIn(browser, name, proxy, base, segment, cookie, outDir) {
-  if (name !== "chromium") return prompts(browser, name, base, segment, cookie, outDir);
-  const full = await launchBrowser("chromium", proxy);
-  try {
-    const record = await prompts(full, name, base, segment, cookie, outDir);
-    return { ...record, build: `chromium ${full.version()} (full build)` };
-  } finally {
-    await full.close();
-  }
-}
-
 // A frame that connects to one origin and lists the person's files: the
 // read is admitted only when every class it may carry has a declared flow
 // to that origin. The probe sends what it read to the origin; the
-// harness's proxy sees every tunnel a browser asks for to it.
+// harness's proxy sees every tunnel a browser asks for to it and every
+// request in it, and the recording endpoint every send that arrived.
 const FLOWS = [
   { name: "flow_declared_origin", column: "allowed", tincture: "flow-probe-flowed",
-    holds: (r, sent) => r.read && r.read.ok === true && r.sent === true && sent > 0,
-    what: "a frame whose declared reads may flow to its declared origin reads, and its send leaves for that origin" },
+    holds: (r, sent, arrived) => r.read && r.read.ok === true && r.sent === true && sent > 0 && arrived > 0,
+    what: "a frame whose declared reads may flow to its declared origin reads, and its send arrives there" },
   { name: "flow_read_unflowed", column: "refused", tincture: "flow-probe",
-    holds: (r, sent) =>
-      r.read && r.read.ok === false && /declares no flow/.test(r.read.message || "") && r.sent === false && sent === 0,
+    holds: (r, sent, arrived) =>
+      r.read && r.read.ok === false && /declares no flow/.test(r.read.message || "") && r.sent === false && sent === 0 && arrived === 0,
     what: "a frame whose declared read may carry a class with no flow to its declared origin is refused the read, and nothing leaves for the origin" },
 ];
 
@@ -708,12 +692,13 @@ const flowReady = () => {
   return !!r && r.dataset.ready === "yes" && !!window.__flow;
 };
 
-async function flows(browser, browserName, base, proxy, segment, cookie) {
+async function flows(browser, browserName, base, proxy, receiver, segment, cookie) {
   const record = { attempts: {} };
   for (const expected of FLOWS) {
     const context = await signedIn(browser, base, cookie);
     try {
       proxy.seen = [];
+      receiver.log = [];
       const page = await context.newPage();
       await openShell(page, base, segment, expected.tincture);
       const { frame } = await launch(page, expected.tincture);
@@ -721,9 +706,10 @@ async function flows(browser, browserName, base, proxy, segment, cookie) {
       const result = await frame.evaluate(() => window.__flow.run());
       await sleep(SETTLE_MS);
       const sent = proxy.seen.filter((entry) => entry.host === ATTACKER).length;
-      const held = result.settled !== false && expected.holds(result, sent);
-      check(held, browserName, "flows", expected.name, expected.what, { frame: result, tunnels_to_origin: sent });
-      record.attempts[expected.name] = { column: expected.column, outcome: held ? "held" : "FAILED", frame: result, sent };
+      const arrived = recorded(receiver, "/flow-sent").length;
+      const held = result.settled !== false && expected.holds(result, sent, arrived);
+      check(held, browserName, "flows", expected.name, expected.what, { frame: result, to_origin: sent, arrived });
+      record.attempts[expected.name] = { column: expected.column, outcome: held ? "held" : "FAILED", frame: result, sent, arrived };
     } finally {
       await context.close();
     }
@@ -737,33 +723,35 @@ const NOT_DRIVEN = [
 ];
 
 async function main() {
-  const [server, segment, cookie, outDir, publicNeighbour] = process.argv.slice(2);
-  if (!server || !segment || !cookie || !outDir || !publicNeighbour) {
-    console.error("usage: node proof.mjs SERVER_URL SEGMENT COOKIE OUT_DIR PUBLIC_NEIGHBOUR_PATH");
+  const [segment, cookie, outDir, publicNeighbour] = process.argv.slice(2);
+  if (!segment || !cookie || !outDir || !publicNeighbour) {
+    console.error("usage: node proof.mjs SEGMENT COOKIE OUT_DIR PUBLIC_NEIGHBOUR_PATH");
     process.exit(64);
   }
   mkdirSync(outDir, { recursive: true });
   const receiver = await startReceiver();
-  const proxy = await startProxy(server, { receiver, answer: redirect });
-  const base = `http://${SITE}:${new URL(server).port || 80}`;
+  const homes = readHomes();
+  const home = homeOf(homes.homes);
+  const proxy = await startProxy({ ...homes, receiver, answer: redirect });
+  const base = home.origin;
   const record = {};
   for (const name of BROWSERS) {
-    const browser = await TYPES[name].launch({ proxy: { server: `http://127.0.0.1:${proxy.address().port}` } });
+    const browser = await launchBrowser(name, proxy);
     try {
       console.log(`== ${name} ${browser.version()}`);
       record[name] = { version: browser.version() };
       record[name].private = await phase(browser, name, "private", "containment-probe", base, proxy, receiver, segment, cookie, publicNeighbour);
       record[name].public = await phase(browser, name, "public", "containment-probe-public", base, proxy, receiver, segment, cookie, publicNeighbour);
-      record[name].prompts = await promptsIn(browser, name, proxy, base, segment, cookie, outDir);
-      record[name].flows = await flows(browser, name, base, proxy, segment, cookie);
+      record[name].prompts = await prompts(browser, name, base, segment, cookie, outDir);
+      record[name].flows = await flows(browser, name, base, proxy, receiver, segment, cookie);
     } finally {
       await browser.close();
     }
   }
   proxy.close();
   receiver.close();
-  const blind = await sessionBlind(server, `${publicNeighbour}/index.html`, cookie);
-  const framed = await frameRequestRefused(server, record[BROWSERS[0]].private.shell_path, cookie);
+  const blind = await sessionBlind(home, `${publicNeighbour}/index.html`, cookie);
+  const framed = await frameRequestRefused(home, record[BROWSERS[0]].private.shell_path, cookie);
   writeFileSync(join(outDir, "containment-proof.json"),
     JSON.stringify({ record, session_blind_page: blind ? "held" : "FAILED",
       frame_request_refused: framed ? "held" : "FAILED", not_driven: NOT_DRIVEN }, null, 2));
