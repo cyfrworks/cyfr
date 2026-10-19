@@ -2523,13 +2523,15 @@
       "input": {
         "file": {
           "CYFR_HOST": "cyfr.example.com",
-          "CYFR_PORT": "4001",
+          "CYFR_PORT": "4100",
+          "CYFR_PROXY_PORT": "4100",
           "CYFR_PUBLIC_URL": "https://cyfr.example.com",
           "CYFR_REACH": "public"
         },
         "process": {
           "CYFR_HOST": "cyfr.example.com",
-          "CYFR_PORT": "4001",
+          "CYFR_PORT": "4100",
+          "CYFR_PROXY_PORT": "4100",
           "CYFR_PUBLIC_URL": "https://cyfr.example.com",
           "CYFR_REACH": "public"
         },
@@ -2542,10 +2544,10 @@
           "address": "127.0.0.1",
           "bind": "127.0.0.1",
           "key": "CYFR_PROXY_PORT",
-          "port": "4001",
-          "value": "4001"
+          "port": "4100",
+          "value": "4100"
         },
-        "sentence": "`CYFR_PROXY_PORT` is `4001` on `127.0.0.1`, and the loopback listener takes CYFR_PORT `4001` on `127.0.0.1`: the proxy listener's port must differ from the loopback listener's on the same address. Nothing started. Set CYFR_PROXY_PORT to another port."
+        "sentence": "`CYFR_PROXY_PORT` is `4100` on `127.0.0.1`, and the loopback listener takes CYFR_PORT `4100` on `127.0.0.1`: the proxy listener's port must differ from the loopback listener's on the same address. Nothing started. Set CYFR_PROXY_PORT to another port."
       }
     },
     {
@@ -2553,15 +2555,17 @@
       "input": {
         "file": {
           "CYFR_HOST": "cyfr.example.com",
-          "CYFR_PORT": "4001",
+          "CYFR_PORT": "4100",
           "CYFR_PROXY_BIND_ADDRESS": "127.0.0.2",
+          "CYFR_PROXY_PORT": "4100",
           "CYFR_PUBLIC_URL": "https://cyfr.example.com",
           "CYFR_REACH": "public"
         },
         "process": {
           "CYFR_HOST": "cyfr.example.com",
-          "CYFR_PORT": "4001",
+          "CYFR_PORT": "4100",
           "CYFR_PROXY_BIND_ADDRESS": "127.0.0.2",
+          "CYFR_PROXY_PORT": "4100",
           "CYFR_PUBLIC_URL": "https://cyfr.example.com",
           "CYFR_REACH": "public"
         },
@@ -2569,21 +2573,21 @@
       },
       "reach": {
         "assertion": "absent",
-        "canonical": "{\"host\":\"cyfr.example.com\",\"mode\":\"public\",\"port\":4001,\"profiles\":[\"public\"],\"public_url\":\"https://cyfr.example.com\"}",
+        "canonical": "{\"host\":\"cyfr.example.com\",\"mode\":\"public\",\"port\":4100,\"profiles\":[\"public\"],\"public_url\":\"https://cyfr.example.com\"}",
         "check_origins": [
           "https://cyfr.example.com",
-          "http://localhost:4001",
-          "https://localhost:4001",
-          "http://127.0.0.1:4001",
-          "https://127.0.0.1:4001",
-          "http://[::1]:4001",
-          "https://[::1]:4001"
+          "http://localhost:4100",
+          "https://localhost:4100",
+          "http://127.0.0.1:4100",
+          "https://127.0.0.1:4100",
+          "http://[::1]:4100",
+          "https://[::1]:4100"
         ],
-        "digest": "sha256:a627f768af8faa66c67781c208299222bd14bdef4853ae13a7ab61bfff44d61c",
+        "digest": "sha256:4d698afcf1fe67a1b17e3eddd082640b7e4b988b9a6cb7a1df25aa7e06e756e5",
         "head": {
           "host": "cyfr.example.com",
           "mode": "public",
-          "port": 4001,
+          "port": 4100,
           "profiles": [
             "public"
           ],
@@ -2593,11 +2597,11 @@
         "listeners": {
           "loopback": [
             "127.0.0.1",
-            4001
+            4100
           ],
           "proxy": [
             "127.0.0.2",
-            4001
+            4100
           ]
         },
         "mode": "public",
@@ -2611,43 +2615,45 @@
       "name": "a local home on the port a proxy listener would take",
       "input": {
         "file": {
-          "CYFR_PORT": "4001",
+          "CYFR_PORT": "4100",
+          "CYFR_PROXY_PORT": "4100",
           "CYFR_REACH": "local"
         },
         "process": {
-          "CYFR_PORT": "4001",
+          "CYFR_PORT": "4100",
+          "CYFR_PROXY_PORT": "4100",
           "CYFR_REACH": "local"
         },
         "release?": true
       },
       "reach": {
         "assertion": "absent",
-        "canonical": "{\"host\":\"localhost\",\"mode\":\"local\",\"port\":4001,\"profiles\":[]}",
+        "canonical": "{\"host\":\"localhost\",\"mode\":\"local\",\"port\":4100,\"profiles\":[]}",
         "check_origins": [
-          "http://localhost:4001",
-          "https://localhost:4001",
-          "http://127.0.0.1:4001",
-          "https://127.0.0.1:4001",
-          "http://[::1]:4001",
-          "https://[::1]:4001"
+          "http://localhost:4100",
+          "https://localhost:4100",
+          "http://127.0.0.1:4100",
+          "https://127.0.0.1:4100",
+          "http://[::1]:4100",
+          "https://[::1]:4100"
         ],
-        "digest": "sha256:7396f6e77af5a58166fe222bc0168ead5a3275c81d5af1e50aa880151e8bddcd",
+        "digest": "sha256:6cfca5de9414e7c1b5839c4269aeef614774141b31204793ab6d41af0a481d8c",
         "head": {
           "host": "localhost",
           "mode": "local",
-          "port": 4001,
+          "port": 4100,
           "profiles": []
         },
         "hsts": "none",
         "listeners": {
           "loopback": [
             "127.0.0.1",
-            4001
+            4100
           ],
           "proxy": "none"
         },
         "mode": "local",
-        "origin": "http://localhost:4001",
+        "origin": "http://localhost:4100",
         "trust": "none"
       }
     },
@@ -2656,15 +2662,17 @@
       "input": {
         "file": {
           "CYFR_HOST": "cyfr.example.com",
-          "CYFR_PORT": "4001",
+          "CYFR_PORT": "4100",
           "CYFR_PROXY_BIND_ADDRESS": "0.0.0.0",
+          "CYFR_PROXY_PORT": "4100",
           "CYFR_PUBLIC_URL": "https://cyfr.example.com",
           "CYFR_REACH": "public"
         },
         "process": {
           "CYFR_HOST": "cyfr.example.com",
-          "CYFR_PORT": "4001",
+          "CYFR_PORT": "4100",
           "CYFR_PROXY_BIND_ADDRESS": "0.0.0.0",
+          "CYFR_PROXY_PORT": "4100",
           "CYFR_PUBLIC_URL": "https://cyfr.example.com",
           "CYFR_REACH": "public"
         },
@@ -2677,10 +2685,10 @@
           "address": "0.0.0.0",
           "bind": "127.0.0.1",
           "key": "CYFR_PROXY_PORT",
-          "port": "4001",
-          "value": "4001"
+          "port": "4100",
+          "value": "4100"
         },
-        "sentence": "`CYFR_PROXY_PORT` is `4001` on `0.0.0.0`, and the loopback listener takes CYFR_PORT `4001` on `127.0.0.1`: the proxy listener's port must differ from the loopback listener's on the same address. Nothing started. Set CYFR_PROXY_PORT to another port."
+        "sentence": "`CYFR_PROXY_PORT` is `4100` on `0.0.0.0`, and the loopback listener takes CYFR_PORT `4100` on `127.0.0.1`: the proxy listener's port must differ from the loopback listener's on the same address. Nothing started. Set CYFR_PROXY_PORT to another port."
       }
     },
     {
@@ -2688,15 +2696,17 @@
       "input": {
         "file": {
           "CYFR_HOST": "cyfr.example.com",
-          "CYFR_PORT": "4001",
+          "CYFR_PORT": "4100",
           "CYFR_PROXY_BIND_ADDRESS": "::",
+          "CYFR_PROXY_PORT": "4100",
           "CYFR_PUBLIC_URL": "https://cyfr.example.com",
           "CYFR_REACH": "public"
         },
         "process": {
           "CYFR_HOST": "cyfr.example.com",
-          "CYFR_PORT": "4001",
+          "CYFR_PORT": "4100",
           "CYFR_PROXY_BIND_ADDRESS": "::",
+          "CYFR_PROXY_PORT": "4100",
           "CYFR_PUBLIC_URL": "https://cyfr.example.com",
           "CYFR_REACH": "public"
         },
@@ -2709,10 +2719,10 @@
           "address": "::",
           "bind": "127.0.0.1",
           "key": "CYFR_PROXY_PORT",
-          "port": "4001",
-          "value": "4001"
+          "port": "4100",
+          "value": "4100"
         },
-        "sentence": "`CYFR_PROXY_PORT` is `4001` on `::`, and the loopback listener takes CYFR_PORT `4001` on `127.0.0.1`: the proxy listener's port must differ from the loopback listener's on the same address. Nothing started. Set CYFR_PROXY_PORT to another port."
+        "sentence": "`CYFR_PROXY_PORT` is `4100` on `::`, and the loopback listener takes CYFR_PORT `4100` on `127.0.0.1`: the proxy listener's port must differ from the loopback listener's on the same address. Nothing started. Set CYFR_PROXY_PORT to another port."
       }
     },
     {
@@ -2720,15 +2730,17 @@
       "input": {
         "file": {
           "CYFR_HOST": "cyfr.example.com",
-          "CYFR_PORT": "4001",
+          "CYFR_PORT": "4100",
           "CYFR_PROXY_BIND_ADDRESS": "::ffff:127.0.0.1",
+          "CYFR_PROXY_PORT": "4100",
           "CYFR_PUBLIC_URL": "https://cyfr.example.com",
           "CYFR_REACH": "public"
         },
         "process": {
           "CYFR_HOST": "cyfr.example.com",
-          "CYFR_PORT": "4001",
+          "CYFR_PORT": "4100",
           "CYFR_PROXY_BIND_ADDRESS": "::ffff:127.0.0.1",
+          "CYFR_PROXY_PORT": "4100",
           "CYFR_PUBLIC_URL": "https://cyfr.example.com",
           "CYFR_REACH": "public"
         },
@@ -2741,10 +2753,10 @@
           "address": "::ffff:127.0.0.1",
           "bind": "127.0.0.1",
           "key": "CYFR_PROXY_PORT",
-          "port": "4001",
-          "value": "4001"
+          "port": "4100",
+          "value": "4100"
         },
-        "sentence": "`CYFR_PROXY_PORT` is `4001` on `::ffff:127.0.0.1`, and the loopback listener takes CYFR_PORT `4001` on `127.0.0.1`: the proxy listener's port must differ from the loopback listener's on the same address. Nothing started. Set CYFR_PROXY_PORT to another port."
+        "sentence": "`CYFR_PROXY_PORT` is `4100` on `::ffff:127.0.0.1`, and the loopback listener takes CYFR_PORT `4100` on `127.0.0.1`: the proxy listener's port must differ from the loopback listener's on the same address. Nothing started. Set CYFR_PROXY_PORT to another port."
       }
     }
   ],
