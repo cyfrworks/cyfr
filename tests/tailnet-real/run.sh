@@ -55,9 +55,12 @@
 #   sharing     with TAILNET_REAL_SHARED_LOGIN set, a request from that
 #               account reaches the upstream through Serve, with that
 #               account's identity headers
-#   rejoin      `tailscale logout` leaves the tailnet (NeedsLogin), and the
-#               key joins it again as a new node, which Serve serves once its
-#               configuration names it
+#   rejoin      with the machine's container and state volume removed, as
+#               `cyfr reach tailnet --new-node` removes them, the key joins
+#               again as a new node, another id, which Serve serves once
+#               its configuration names it; the old node, ephemeral, is
+#               Tailscale's to remove once it is offline, as the engine
+#               leaves a replaced machine to the admin console
 #
 # A probe's answer is read as `standin fetch` names it, so a failed probe
 # is never a closed Serve: Serve is closed only where the machine itself
@@ -446,10 +449,17 @@ sys.exit(1)' "$shared_login"; do
   ok "a request from $shared_login reached the upstream through Serve, as $shared_login"
 fi
 
-step "rejoin: the machine leaves the tailnet and joins again as a new node"
-docker exec "$RUN-machine" tailscale logout >/dev/null || fail "tailscale logout failed"
-await_state "$RUN-machine" NeedsLogin 120 >/dev/null
+step "rejoin: the machine's container and state are removed, and the key joins again as a new node"
+# The engine never logs a machine out: `cyfr reach tailnet --new-node`
+# removes the state volume, and the person removes the replaced machine in
+# the admin console. Under containerboot (TS_AUTH_ONCE) `tailscale logout`
+# ends the container as tailscaled leaves Running, cancelling the
+# deregistration as often as not, and an ephemeral node leaves the tailnet
+# only once Tailscale removes it. So the run does as the engine does: a
+# fresh volume and the key make a new node, and the old one is Tailscale's
+# to remove.
 docker rm -f "$RUN-machine" >/dev/null
+docker volume rm -f "$RUN-machine-state" >/dev/null
 node machine2 machine2-state -e "TS_HOSTNAME=$host" -e TS_SERVE_CONFIG=/serve/serve.json -v "$WORK/serve:/serve:ro"
 status="$(await_state "$RUN-machine2" Running 180)"
 id2="$(jget "$status" Self ID)"
@@ -462,7 +472,7 @@ until [ "$(jget "$(device "https://$name2/")" status)" = 200 ]; do
   [ "$SECONDS" -lt "$closes" ] || fail "the new node $name2 was not served within 180 s"
   sleep 2
 done
-ok "after leaving, the machine joined again as $name2 ($id2), and Serve serves it"
+ok "with its container and state removed, the key joined the machine again as $name2 ($id2), another node, and Serve serves it"
 
 step "every check held: $IMAGE is verified"
 printf '%s\n' "$IMAGE" >"$ROOT/tests/tailnet-real/verified-image"
