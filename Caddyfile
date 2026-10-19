@@ -1,6 +1,6 @@
-# Reverse proxy for the CYFR self-hosted stack. See docker-compose.yml.
+# Reverse proxy for a public CYFR home. See docker-compose.yml.
 #
-#   everything → cyfr:{$CYFR_PORT:4000} (the one endpoint: Prism, /mcp, /api, /auth, /t)
+#   everything → cyfr:{$CYFR_PROXY_PORT:4001} (the endpoint's proxy listener: Prism, /mcp, /api, /auth, /t)
 #
 # Set CYFR_HOST and CADDY_ACME_EMAIL in .env. Caddy serves TLS and redirects
 # plain HTTP to it. With CYFR_HOST=localhost, the default, the certificate
@@ -8,17 +8,18 @@
 # obtains one over ACME, registered under CADDY_ACME_EMAIL when it is set
 # and under no email when it is empty.
 #
-# This service only runs when the `tls` compose profile is active — `cyfr
-# init` sets CYFR_BEHIND_PROXY=true when you answer "yes" to the TLS prompt
-# and `cyfr up` adds `--profile tls` accordingly. In direct mode cyfr answers
-# on http://localhost:${CYFR_PORT} itself, no Caddy needed.
+# This service runs in the `public` compose profile alone, which `cyfr up`
+# and `cyfr reach` select when CYFR_REACH=public (`cyfr reach public
+# --domain <your domain>` writes it). A local or tailnet home has no Caddy.
 #
 # Client-IP trust: Caddy's default reverse_proxy behavior APPENDS the peer IP
-# to X-Forwarded-For (no explicit directive needed), and cyfr resolves the
-# client right-to-left stripping CYFR_TRUSTED_PROXY_HOPS trusted hops
-# (default 1 = this Caddy). If you stack another proxy/CDN in front of Caddy,
-# raise CYFR_TRUSTED_PROXY_HOPS (or set CYFR_TRUSTED_PROXY_CIDRS) to match,
-# or client IPs will resolve to that proxy and IP allowlists will fail closed.
+# to X-Forwarded-For (no explicit directive needed), and cyfr's proxy
+# listener resolves the client right-to-left, stripping the hops inside
+# CYFR_TRUSTED_PROXY_CIDRS, which compose sets to this Caddy's and
+# Tailscale's addresses on the edge network. If you stack another proxy or
+# CDN in front of Caddy, add its addresses to CYFR_TRUSTED_PROXY_CIDRS in
+# .env, or client IPs will resolve to that proxy and IP allowlists will fail
+# closed.
 #
 # Every route is proxied to cyfr's one endpoint, which sets its own security
 # headers (CSP/XFO) per pipeline. HSTS is this proxy's: the endpoint sees plain
@@ -50,7 +51,7 @@
 	# Everything: cyfr's one endpoint (Prism, /mcp, /api, /auth, /t). cyfr sets
 	# its own CSP/XFO on every response it serves.
 	handle {
-		reverse_proxy cyfr:{$CYFR_PORT:4000} {
+		reverse_proxy cyfr:{$CYFR_PROXY_PORT:4001} {
 			# The header above is set before the upstream's headers are added
 			# to the response, so an upstream's own HSTS is dropped here, for
 			# every host, and no response carries two.

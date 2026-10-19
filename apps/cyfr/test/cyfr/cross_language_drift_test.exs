@@ -64,6 +64,35 @@ defmodule Cyfr.CrossLanguageDriftTest do
     assert String.replace(elixir, "\\/", "/") == go
   end
 
+  test "the reach engine's refusal sentences are Prima.Refusal's, as rendered" do
+    # The section and refusals_gen.go are rendered from Prima.Refusal
+    # (`mix cyfr.gen.reach_refusals`), so a row that changes without the
+    # render fails here; Go renders every example back to its sentence.
+    alias Mix.Tasks.Cyfr.Gen.ReachRefusals
+    {vectors, go} = ReachRefusals.targets()
+    json = read!(vectors)
+
+    assert json == ReachRefusals.render_fixture(json),
+           "#{vectors}'s refusals section is stale: run `mix cyfr.gen.reach_refusals`"
+
+    assert Mix.Tasks.Ops.Gen.Cli.current?({:ok, read!(go)}, ReachRefusals.render_go()),
+           "#{go} is stale: run `mix cyfr.gen.reach_refusals`"
+
+    for %{"code" => code, "class" => class, "variants" => variants} <-
+          fixture!("reach_modes.json")["refusals"],
+        %{"example" => %{"payload" => payload, "sentence" => sentence}} <- variants do
+      reason =
+        {String.to_existing_atom(code),
+         Map.new(payload, fn
+           {"why", why} -> {:why, String.to_existing_atom(why)}
+           {key, value} -> {String.to_existing_atom(key), value}
+         end)}
+
+      assert %Prima.Refusal{class: refused, message: ^sentence} = Prima.Refusal.classify(reason)
+      assert Atom.to_string(refused) == class, code
+    end
+  end
+
   # ==========================================================================
   # ComponentRef: verdict-level binding + the constants the regex test skips
   # ==========================================================================
@@ -486,6 +515,8 @@ defmodule Cyfr.CrossLanguageDriftTest do
     ],
     "reach_modes.json" => [
       {"apps/codex/internal/reach/head_test.go", ~w(derive boot profiles names words)},
+      {"apps/codex/internal/reach/refusals_test.go", ~w(refusals)},
+      {"apps/cyfr/test/cyfr/cross_language_drift_test.exs", ~w(refusals)},
       {"apps/cyfr/test/cyfr/runtime_config_test.exs", ~w(derive boot profiles names words)}
     ],
     "release_manifest.json" => [

@@ -31,20 +31,24 @@
 #                 The island starts only once its guard is healthy, which
 #                 it is only with every rule installed.
 #                                  [locus-builds-guard: profile locus-builds]
-#   caddy      — TLS + reverse proxy in front of cyfr. Opt-in via the `tls`
-#                 profile.                                   [profile: tls]
+#   caddy      — TLS and the reverse proxy in front of a public home, on
+#                 :80 and :443, forwarding to cyfr's proxy listener on the
+#                 edge network.                           [profile: public]
+#   tailscale  — Tailscale Serve in front of a tailnet home, forwarding to
+#                 cyfr's proxy listener on the edge network; no port is
+#                 published.                              [profile: tailnet]
 #
-# `cyfr init` writes this file (and Caddyfile, keeper.seccomp.json + .env)
-# into a fresh project dir; from a source checkout, `cp .env.example .env`
-# and `cp apps/locus/keeper/seccomp/keeper.json keeper.seccomp.json` instead. Then:
-#   docker compose --profile locus-builds up -d   # cyfr + locus-backends + locus-runtime + locus-builds
-#   docker compose --profile locus-builds --profile tls up -d   # also Caddy for TLS
-# `cyfr up` selects each profile from .env: `locus-builds` when
-# CYFR_LOCUS_BUILDS_URL names that service, and `tls` when
-# CYFR_BEHIND_PROXY=true, which `cyfr init` writes when you answer "yes" to
-# the TLS prompt. To build nothing, set CYFR_LOCUS_BUILDS_URL and
-# CYFR_LOCUS_BUILDS_KEY empty and leave the profile off. See the "Deploy to
-# a Server" section of README.md.
+# How the home is reached is CYFR_REACH in .env (local, tailnet or public),
+# which `cyfr init` and `cyfr reach` write with every setting it implies.
+# `cyfr up`, `cyfr reach`, `cyfr update` and `cyfr restore` start the stack
+# with the profiles that follow from it: the reach's proxy (`public` or
+# `tailnet`; none for `local`), and `locus-builds` when
+# CYFR_LOCUS_BUILDS_URL names that service. They run Docker Compose with
+# every COMPOSE_* variable cleared, refuse a .env that sets one, and check
+# the home's settings and its tailnet machine before anything is served.
+# Running `docker compose` directly skips those checks. To build nothing,
+# set CYFR_LOCUS_BUILDS_URL and CYFR_LOCUS_BUILDS_KEY empty. See the
+# "Deploy to a Server" section of README.md.
 
 # The hardening every Locus service runs under, written once. Each Locus
 # service merges this block (`<<: *locus-role`) beside the keys that are its
@@ -102,13 +106,17 @@ services:
     image: ghcr.io/cyfrworks/cyfr:latest
     expose:
       - "${CYFR_PORT:-4000}"
+      # The proxy listener, reached by caddy and tailscale over the edge
+      # network; never published.
+      - "${CYFR_PROXY_PORT:-4001}"
       # The host API, reached by locus-runtime over the locus-runtime
       # network; never published.
       - "${CYFR_HOST_API_PORT:-4300}"
     ports:
-      # Loopback-only: the Codex CLI and the browser talk to
-      # http://127.0.0.1:${CYFR_PORT:-4000}; a hostname deploy fronts it
-      # with Caddy.
+      # The loopback listener, published on the host's loopback alone: the
+      # Codex CLI, the setup link and an SSH tunnel reach
+      # http://127.0.0.1:${CYFR_PORT:-4000}, and nothing off this machine
+      # does.
       - "127.0.0.1:${CYFR_PORT:-4000}:${CYFR_PORT:-4000}"
     volumes:
       - ./data:/app/data
@@ -118,14 +126,11 @@ services:
       #   - ./my-bundle:/app/seed/components:ro
     env_file:
       - .env
+    # Every reach setting (CYFR_REACH, CYFR_HOST, CYFR_PUBLIC_URL,
+    # CYFR_TAILNET_NODE_ID, CYFR_PORT, CYFR_LOCUS_BUILDS_URL) reaches cyfr
+    # from .env through env_file alone: `cyfr` refuses to start a stack
+    # whose configuration assigns one here.
     environment:
-      - CYFR_HOST=${CYFR_HOST:-localhost}
-      # In tls mode (Caddy in front, ACME TLS, X-Forwarded-* on) set this to
-      # `true` in .env. `cyfr init`'s TLS prompt writes the right value.
-      - CYFR_BEHIND_PROXY=${CYFR_BEHIND_PROXY:-false}
-      # Extra reverse-proxy layers in front of Caddy need this raised to match
-      # (see README "Production configuration").
-      - CYFR_TRUSTED_PROXY_HOPS=${CYFR_TRUSTED_PROXY_HOPS:-1}
       # The private hosts outbound calls may reach; the backends service is
       # one.
       - CYFR_PRIVATE_EGRESS_TARGETS=${CYFR_PRIVATE_EGRESS_TARGETS:-locus-backends}
@@ -142,11 +147,19 @@ services:
       - CYFR_LOCUS_RUNTIME_WORKERS=${CYFR_LOCUS_RUNTIME_WORKERS:-wrk_locus=http://locus-runtime:4200}
       - CYFR_HOST_API_BIND=172.16.231.2
       - CYFR_HOST_API_PORT=${CYFR_HOST_API_PORT:-4300}
-      # The endpoint binds cyfr's own fixed address on the default network
-      # (below), where Docker publishes the host's loopback port and Caddy
-      # reaches it, and no other: the networks the Locus services join
-      # never reach the endpoint.
+      # The loopback listener binds cyfr's own fixed address on the default
+      # network (below), which Docker publishes on the host's loopback port
+      # and no other container joins, so only this machine reaches it. A
+      # release refuses a bind that is not a loopback address unless the
+      # process environment asserts this; the assertion comes from this
+      # file alone, and a .env that sets it is refused.
       - CYFR_BIND_ADDRESS=172.16.230.2
+      - CYFR_LOCAL_INGRESS_ASSERTED=true
+      # The proxy listener, served in tailnet and public alone, binds cyfr's
+      # fixed address on the edge network, where caddy and tailscale reach
+      # it; it trusts forwarded headers from those two addresses alone.
+      - CYFR_PROXY_BIND_ADDRESS=172.16.234.2
+      - CYFR_TRUSTED_PROXY_CIDRS=${CYFR_TRUSTED_PROXY_CIDRS:-172.16.234.3,172.16.234.4}
     networks:
       # A fixed address, the one CYFR_BIND_ADDRESS names: outside the
       # network's ip_range, so no container started first can take it. The
@@ -159,6 +172,11 @@ services:
       default:
         ipv4_address: 172.16.230.2
         gw_priority: 1
+      # A fixed address, the one CYFR_PROXY_BIND_ADDRESS names, outside the
+      # network's ip_range. No gw_priority: the default network keeps the
+      # published port.
+      edge:
+        ipv4_address: 172.16.234.2
       locus-backends: {}
       locus-builds: {}
       # A fixed address, the one CYFR_HOST_API_BIND names: outside the
@@ -551,7 +569,7 @@ services:
           memory: 32M
 
   caddy:
-    profiles: ["tls"]
+    profiles: ["public"]
     # Pinned by digest, the tag kept for the reader: the release's manifest
     # carries this digest, and `cyfr update` rewrites the line to it.
     image: caddy:2.11-alpine@sha256:d8542f48d34a9cf4e4c11a478865229840e87e4c96ea3f439101f31a5d35f75f
@@ -565,10 +583,16 @@ services:
       - caddy_config:/config
     environment:
       - CYFR_HOST=${CYFR_HOST:-localhost}
-      # The port the Caddyfile proxies to: cyfr's own listener, with its
+      # The port the Caddyfile proxies to: cyfr's proxy listener, with its
       # default.
-      - CYFR_PORT=${CYFR_PORT:-4000}
+      - CYFR_PROXY_PORT=${CYFR_PROXY_PORT:-4001}
       - CADDY_ACME_EMAIL=${CADDY_ACME_EMAIL:-}
+    # The edge network alone, at the address cyfr trusts forwarded headers
+    # from; caddy never joins the default network, so it never reaches the
+    # loopback listener.
+    networks:
+      edge:
+        ipv4_address: 172.16.234.3
     depends_on:
       cyfr:
         condition: service_healthy
@@ -591,13 +615,61 @@ services:
         limits:
           memory: 256M
 
+  tailscale:
+    profiles: ["tailnet"]
+    # Pinned by digest, the tag kept for the reader. tests/tailnet-real/
+    # verified-image names the reference a real tailnet last verified, and
+    # CI fails while this line names another, a new digest under the same
+    # tag included.
+    image: tailscale/tailscale:v1.104.1@sha256:87c55d6be56ad85b3d8bceca5f87f73de288c609131460dd1be1874c250cc41d
+    environment:
+      # No TUN device and no capability: tailscaled's own netstack.
+      - TS_USERSPACE=true
+      # The machine's tailnet identity, kept in a volume of its own, which no
+      # snapshot holds. `cyfr reach tailnet` joins it once.
+      - TS_STATE_DIR=/var/lib/tailscale
+      - TS_AUTH_ONCE=true
+      - TS_ACCEPT_DNS=false
+      - TS_SOCKET=/var/run/tailscale/tailscaled.sock
+      # Serve's configuration, which `cyfr` alone writes: `{}`, serving
+      # nothing, until it has checked that this machine is the one .env
+      # names, and then the forward to cyfr's proxy listener.
+      - TS_SERVE_CONFIG=/serve/serve.json
+    volumes:
+      - tailscale_state:/var/lib/tailscale
+      # A directory, so containerboot sees the file change; cyfr's own
+      # mounts never reach it.
+      - ./.cyfr/tailscale-serve:/serve:ro
+    # The edge network alone, at the address cyfr trusts forwarded headers
+    # from.
+    networks:
+      edge:
+        ipv4_address: 172.16.234.4
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "tailscale", "status"]
+      interval: 30s
+      timeout: 5s
+      start_period: 20s
+      retries: 3
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+
 networks:
-  # cyfr's endpoint, Caddy and the host's published loopback port. Its
-  # subnet is fixed so cyfr can hold the fixed address its endpoint binds
-  # (CYFR_BIND_ADDRESS), outside the pools Docker draws the other
-  # networks' subnets from by default, as the locus-runtime network's is
-  # (below); the other containers on it take addresses from its ip_range
-  # alone. Docker publishes 127.0.0.1:${CYFR_PORT:-4000} to that address
+  # cyfr's loopback listener and the host's published loopback port, and
+  # nothing else: no other service joins it, by name or by naming no
+  # network. Its subnet is fixed so cyfr can hold the fixed address its
+  # loopback listener binds (CYFR_BIND_ADDRESS), outside the pools Docker
+  # draws the other networks' subnets from by default, as the
+  # locus-runtime network's is (below); a container on it would take an
+  # address from its ip_range alone. Docker publishes 127.0.0.1:${CYFR_PORT:-4000} to that address
   # (tests/compose-proof/run.sh --case bind holds it to that). The network
   # is dual-stack, with the unique-local IPv6 subnet Docker assigns: Docker
   # maps a published port to the container's address on an IPv6-enabled
@@ -611,6 +683,15 @@ networks:
       config:
         - subnet: 172.16.230.0/24
           ip_range: 172.16.230.128/25
+  # cyfr's proxy listener and the two proxies that forward to it, caddy and
+  # tailscale, each at a fixed address outside the ip_range, the addresses
+  # cyfr trusts forwarded headers from. IPv4 alone, and no gw_priority, so
+  # the default network keeps the published loopback port.
+  edge:
+    ipam:
+      config:
+        - subnet: 172.16.234.0/24
+          ip_range: 172.16.234.128/25
   # cyfr <-> locus-backends-guard, whose namespace locus-backends shares
   # (see the locus-backends service).
   locus-backends: {}
@@ -635,3 +716,4 @@ networks:
 volumes:
   caddy_data:
   caddy_config:
+  tailscale_state:
