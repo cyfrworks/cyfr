@@ -125,9 +125,12 @@ func TestRealComposeConversionDiagnosticCarriesNoEnvValue(t *testing.T) {
 type leakCheck struct {
 	t      *testing.T
 	tokens []string
-	// boot are the tokens of the boot's own settings, which the release's
-	// refusals name in their payloads (Prima.Refusal); only their text
-	// is checked.
+	// boot are the tokens of the boot's own settings that are not head
+	// keys (CYFR_BIND_ADDRESS, CYFR_PROXY_*, CYFR_TRUSTED_PROXY_*): an
+	// invalid one fills reach_setting_invalid's value slot under the
+	// cross-language boot-refusal contract (Prima.Refusal, the ResolveBoot
+	// vectors of reach_modes.json), so raw does not check them; they are
+	// redacted at the engine's boundary, which out checks.
 	boot []string
 }
 
@@ -259,6 +262,9 @@ func TestRealComposeNoEnvSecretLeavesTheEngine(t *testing.T) {
 		rand.Read(b)
 		return "tok" + hex.EncodeToString(b)
 	}
+	// Every setting the boot reads is left out of the plants: the head's
+	// keys are said by design, and an invalid other one is refused before
+	// anything runs; "a setting of the boot's own" below plants one.
 	head := map[string]bool{}
 	for _, k := range readKeys {
 		head[k] = true
@@ -512,6 +518,9 @@ func TestRealComposeNoEnvSecretLeavesTheEngine(t *testing.T) {
 	t.Run("a setting of the boot's own", func(t *testing.T) {
 		tok := token()
 		e, l := home(t, map[string]string{".env": string(env) + "CYFR_PROXY_BIND_ADDRESS=sec-" + tok + "\n"})
+		// Before the last pass the boot refusal holds the value, as the
+		// cross-language contract has it; past the boundary it is
+		// redacted (leakCheck.boot).
 		l.boot = []string{tok}
 		reads(e, l)
 		_, err := e.envHead()
