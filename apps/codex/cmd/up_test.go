@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -16,6 +17,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -359,5 +361,108 @@ func TestStartedOnThisMachineOnlyExitsThree(t *testing.T) {
 		if !strings.Contains(stdout, "This changes how this home is reached:") {
 			t.Errorf("cyfr reach tailnet showed no change before making it:\n%s", stdout)
 		}
+		// Recovery's start is a start path too: a switch it finished on
+		// this machine only exits 3.
+		stdout, stderr, status = runAsCyfr(t, "resumed-local", dir, "reach", "--resume")
+		check(t, "reach --resume", stdout, stderr, status)
+		if !strings.Contains(stdout, "Recovered: ") {
+			t.Errorf("cyfr reach --resume does not report the recovered change:\n%s", stdout)
+		}
 	})
+}
+
+// tailnetDocker is a docker the real engine starts a tailnet home through:
+// the configuration compose gives it is the real Docker Compose's, the
+// stack starts and cyfr is healthy, and the tailscale service reports the
+// machine node, id; it records each call.
+type tailnetDocker struct {
+	mu       sync.Mutex
+	node, id string
+	calls    [][]string
+}
+
+func (d *tailnetDocker) Run(ctx context.Context, c reach.Call) (reach.Result, error) {
+	d.mu.Lock()
+	d.calls = append(d.calls, c.Args)
+	d.mu.Unlock()
+	line := strings.Join(c.Args, " ")
+	switch {
+	case c.Args[0] == "compose" && slices.Contains(c.Args, "config"):
+		process := exec.CommandContext(ctx, "docker", c.Args...)
+		for _, entry := range os.Environ() {
+			if !strings.HasPrefix(entry, "COMPOSE_") {
+				process.Env = append(process.Env, entry)
+			}
+		}
+		var stdout, stderr bytes.Buffer
+		process.Stdout, process.Stderr = &stdout, &stderr
+		err := process.Run()
+		res := reach.Result{Stdout: stdout.Bytes(), Stderr: stderr.Bytes()}
+		var exit *exec.ExitError
+		if errors.As(err, &exit) {
+			res.ExitCode = exit.ExitCode()
+			return res, fmt.Errorf("exit status %d", res.ExitCode)
+		}
+		return res, err
+	case c.Args[0] == "compose" && slices.Contains(c.Args, "exec") && strings.Contains(line, "tailscale status --json"):
+		status := fmt.Sprintf(`{"BackendState":"Running","Self":{"DNSName":%q,"ID":%q},"CertDomains":[%q]}`, d.node+".", d.id, d.node)
+		return reach.Result{Stdout: []byte(status)}, nil
+	case c.Args[0] == "ps" && strings.Contains(line, "label=com.docker.compose.project="):
+		project := reach.ProjectName(".")
+		return reach.Result{Stdout: []byte(`{"name":"` + project + `-cyfr-1","service":"cyfr","state":"running"}` + "\n" + `{"name":"` + project + `-tailscale-1","service":"tailscale","state":"running"}` + "\n")}, nil
+	case c.Args[0] == "inspect":
+		return reach.Result{Stdout: []byte(`{"Status":"running","ExitCode":0,"Health":{"Status":"healthy"}}`)}, nil
+	}
+	return reach.Result{}, nil
+}
+
+// Through the real engine and Docker Compose's own configuration: `cyfr up`
+// of a tailnet home whose machine is another node starts the home on this
+// machine only, Serve closed, and answers that refusal's sentence with
+// exit status 3, never a failed start (the engine answers the receipt with
+// its refusal as the error).
+func TestUpStartsOnThisMachineOnlyThroughTheRealEngine(t *testing.T) {
+	requireCompose(t)
+	compose := shippedCompose(t)
+	dir := filepath.Join(t.TempDir(), "home")
+	if err := os.Mkdir(dir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	text, _ := newEnvFromTemplate(t, "me@example.com", "")
+	t.Chdir(dir)
+	f := parseEnvFile(text)
+	d, err := reach.Derive(reach.Target{Mode: reach.ModeTailnet}, reach.Current{Port: 4000, BuildsURL: defaultBuildsURL}, &reach.Join{Name: "cyfr.tail1234.ts.net", NodeID: "nAAAAAAAAACNTRL"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeHead(f, d)
+	for name, content := range map[string]string{"docker-compose.yml": string(compose), ".env": f.String(), "cyfr.yaml": "name: test\n"} {
+		if err := os.WriteFile(name, []byte(content), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	docker := &tailnetDocker{node: "cyfr-1.tail1234.ts.net", id: "nBBBBBBBBBCNTRL"}
+	useRealEngine(t, docker)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+	var out bytes.Buffer
+	err = runUp(ctx, &out)
+	var refusal *reach.Refusal
+	if !errors.As(err, &refusal) || refusal.Code != "tailnet_node_mismatch" || err.Error() != refusal.Message() || ExitStatus(err) != exitStartedLocally {
+		t.Fatalf("cyfr up answered %v (exit %d), want tailnet_node_mismatch's sentence and exit 3\n%s", err, ExitStatus(err), out.String())
+	}
+	if serve, err := os.ReadFile(filepath.Join(".cyfr", "tailscale-serve", "serve.json")); err != nil || strings.TrimSpace(string(serve)) != "{}" {
+		t.Errorf("Serve's configuration is %q (%v), want it closed", serve, err)
+	}
+	for _, call := range docker.calls {
+		if slices.Contains(call, "logs") {
+			t.Errorf("cyfr up read the boot's log for a home that started: %v", call)
+		}
+	}
+
+	// The cyfr process itself, over the same engine and docker, exits 3.
+	_, stderr, status := runAsCyfr(t, "real-mismatch", dir, "up")
+	if want := "Error: " + refusal.Message() + "\n"; status != exitStartedLocally || stderr != want {
+		t.Errorf("cyfr up exited %d, printing %q; want exit 3 and %q", status, stderr, want)
+	}
 }

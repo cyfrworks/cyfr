@@ -9,6 +9,8 @@ import (
 	"fmt"
 	"os"
 	"testing"
+
+	"github.com/cyfr/codex/internal/reach"
 )
 
 // watchdogChild marks a run of this test binary that a test started as the
@@ -20,7 +22,10 @@ const watchdogChild = "CYFR_CMD_TEST_WATCHDOG_CHILD"
 // process (runAsCyfr), its value how the fake engine answers each start
 // and switch: started-local, every one started on this machine only, the
 // machine's tailnet node not .env's; https-off, every start on this machine
-// only, the tailnet's HTTPS off; failed-start, every start failing.
+// only, the tailnet's HTTPS off; resumed-local, recovery finishing a switch
+// whose start was on this machine only; failed-start, every start failing;
+// real-mismatch, the real engine over a docker whose tailnet machine is
+// another node (tailnetDocker).
 const asCyfr = "CYFR_CMD_TEST_AS_CYFR"
 
 // TestMain runs the package's tests under a home of their own: init and
@@ -39,6 +44,16 @@ func TestMain(m *testing.M) {
 	}
 	// Run as the cyfr process, it is the process main runs (Run), its exit
 	// status the one cyfr exits with, over a fake engine.
+	if scenario := os.Getenv(asCyfr); scenario == "real-mismatch" {
+		openEngine = func(dir string) (stackEngine, error) {
+			e, err := reach.Open(dir, &tailnetDocker{node: "cyfr-1.tail1234.ts.net", id: "nBBBBBBBBBCNTRL"})
+			if err != nil {
+				return nil, err
+			}
+			return e, nil
+		}
+		os.Exit(Run(context.Background()))
+	}
 	if scenario := os.Getenv(asCyfr); scenario != "" {
 		s := installFakeEngine(nil)
 		switch scenario {
@@ -47,6 +62,8 @@ func TestMain(m *testing.M) {
 			s.startReceipt, s.switchReceipt = startedLocalReceipt("start"), &local
 		case "https-off":
 			s.startReceipt = startedLocalFor("start", "tailnet_https_off", httpsOff())
+		case "resumed-local":
+			s.resume = []reach.Receipt{startedLocalReceipt("switch")}
 		case "failed-start":
 			s.startErr = errors.New("cyfr did not become healthy")
 		}

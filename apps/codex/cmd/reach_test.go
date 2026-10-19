@@ -302,6 +302,13 @@ func TestReachResumeReportsRecovery(t *testing.T) {
 		t.Errorf("the resume does not report what recovery finished:\n%s", out.String())
 	}
 
+	// A recovered switch whose start was on this machine only is that
+	// start's refusal, and exits 3.
+	s.resume = []reach.Receipt{startedLocalReceipt("switch")}
+	if err := runReachResume(context.Background(), &bytes.Buffer{}); err == nil || err.Error() != reach.Refuse("tailnet_node_mismatch", mismatch()).Message() || ExitStatus(err) != exitStartedLocally {
+		t.Errorf("a resume that started the home on this machine only answered %v (exit %d)", err, ExitStatus(err))
+	}
+
 	// An unfinished change with no refusal of its own says what to run, as
 	// the refusals quote commands.
 	s.resume = []reach.Receipt{{RequestID: strings.Repeat("e", 32), Op: "join", State: "accepted", Phase: "waiting"}}

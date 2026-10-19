@@ -119,6 +119,15 @@ func startedLocalFor(op, code string, payload map[string]string) reach.Receipt {
 // tailnet's HTTPS certificates off.
 func httpsOff() map[string]string { return map[string]string{"name": "cyfr.tail1234.ts.net"} }
 
+// answered is a receipt as the engine's methods return it: with its
+// refusal as the error when it carries a code.
+func answered(r reach.Receipt) (reach.Receipt, error) {
+	if ref := r.Refusal(); ref != nil {
+		return r, ref
+	}
+	return r, nil
+}
+
 // okReceipt is a completed operation's plain success.
 func okReceipt(op string) reach.Receipt {
 	return reach.Receipt{RequestID: strings.Repeat("0", 32), Op: op, State: "completed", Outcome: "ok"}
@@ -309,14 +318,14 @@ func (e *fakeEngine) Switch(ctx context.Context, r reach.SwitchRequest) (reach.R
 		return reach.Receipt{}, s.switchErr
 	}
 	if s.switchReceipt != nil {
-		return *s.switchReceipt, nil
+		return answered(*s.switchReceipt)
 	}
 	p, err := e.Preview(ctx, r.Target, r.JoinID)
 	if err != nil {
 		return reach.Receipt{}, err
 	}
 	if p.OldDigest != r.OldDigest || p.NewDigest != r.NewDigest {
-		return reach.Receipt{RequestID: r.ID, Op: "switch", State: "rejected", Code: "reach_stale", Payload: map[string]string{"words": strings.Join(p.OldWords.Sentences(), "; ")}}, nil
+		return answered(reach.Receipt{RequestID: r.ID, Op: "switch", State: "rejected", Code: "reach_stale", Payload: map[string]string{"words": strings.Join(p.OldWords.Sentences(), "; ")}})
 	}
 	d, _ := e.derive(r.Target, r.JoinID)
 	path := filepath.Join(e.dir, ".env")
@@ -331,7 +340,7 @@ func (e *fakeEngine) Switch(ctx context.Context, r reach.SwitchRequest) (reach.R
 	}
 	rec := okReceipt("switch")
 	rec.RequestID, rec.FinalHead = r.ID, &d.Head
-	return rec, nil
+	return answered(rec)
 }
 
 // Join answers what the test's join answers, a machine joined as
@@ -348,7 +357,11 @@ func (e *fakeEngine) Join(ctx context.Context, r reach.JoinRequest) (reach.Recei
 	s.joinKeys = append(s.joinKeys, key)
 	s.mu.Unlock()
 	if s.join != nil {
-		return s.join(ctx, r)
+		rec, err := s.join(ctx, r)
+		if err != nil {
+			return rec, err
+		}
+		return answered(rec)
 	}
 	if key == nil {
 		r.OnAuthURL("https://login.tailscale.com/a/approve-test")
@@ -393,15 +406,18 @@ func (e *fakeEngine) StartWithin(ctx context.Context, cause string, health time.
 	if h, err := e.Head(); err == nil && os.Getenv("FAKE_DOCKER_DIR") != "" {
 		res, err := fakeRunner{}.Run(ctx, reach.Call{Args: append(composePrefixArgs(e.dir, h), "up", "-d"), Stdout: io.Discard, Stderr: io.Discard})
 		if err := callFailure(res, err); err != nil {
-			return reach.Receipt{}, fmt.Errorf("cyfr did not become healthy (docker compose up: %v)", err)
+			return reach.Receipt{Op: "start", State: "completed", Outcome: "failed"}, fmt.Errorf("cyfr did not become healthy (docker compose up: %v)", err)
 		}
 	}
-	return s.startReceipt, nil
+	return answered(s.startReceipt)
 }
 
 func (e *fakeEngine) Stop(ctx context.Context, cause string, all bool) (reach.Receipt, error) {
 	e.s.logLine("stop %s all=%v", cause, all)
-	return e.s.stopReceipt, e.s.stopErr
+	if e.s.stopErr != nil {
+		return reach.Receipt{}, e.s.stopErr
+	}
+	return answered(e.s.stopReceipt)
 }
 
 // fakeRunner runs the `docker` on PATH as the engine's system runner runs
