@@ -435,7 +435,7 @@ A member whose release differs from a live member's is refused at boot, naming b
 
 ### How the home is reached
 
-`cyfr reach <mode>` changes how the home in the current directory is reached: `cyfr reach local`, `cyfr reach tailnet`, or `cyfr reach public --domain <your domain>` (and `--acme-email <email>` for the certificate authority's account, if you want one). It shows the change before making it: who can reach the home, its address, the certificate email and the ports opened on this machine, each before → after, and what stops working when the address changes. Once you confirm, or pass `--yes`, it stops the stack and checks it stopped, rewrites `.env`, and starts what was running in the new mode; a start that fails puts the home back as it was. `cyfr reach status` shows how the home is reached, what runs, the proxy's health and the last change's outcome, and changes nothing.
+`cyfr reach <mode>` changes how the home in the current directory is reached: `cyfr reach local`, `cyfr reach tailnet`, or `cyfr reach public --domain <your domain>` (and `--acme-email <email>` for the certificate authority's account, if you want one). It shows the change before making it: who can reach the home, its address, the certificate email and the ports opened on this machine, each before → after, and what stops working when the address changes. Once you confirm, or pass `--yes`, it stops the stack and checks it stopped, rewrites `.env`, and starts what was running in the new mode. When that start fails, it stops what the new mode started, writes the previous mode back and starts it, and reports what it reached: the home running as before (on this machine only, when its tailnet machine is not ready to serve it), the home left stopped when the previous mode does not start either, or, when a stop cannot be checked or a write fails, a change to finish with `cyfr reach --resume`. `cyfr reach status` shows how the home is reached, what runs, the proxy's health and the last change's outcome, and changes nothing.
 
 A change holds the stack's lock and keeps its progress in `.cyfr/` in the project directory. When one is interrupted, by a closed terminal or a restart, run `cyfr reach --resume`: it finishes the interrupted change under the lock and reports what happened. The next `cyfr up`, `cyfr update`, `cyfr restore` or `cyfr reach` does the same before anything else.
 
@@ -456,7 +456,7 @@ A start that leaves the home answering on this machine only, because its tailnet
 
 **A public home.** `cyfr reach public --domain <your domain>` serves the home at `https://<your domain>/` through the `caddy` service, which obtains its certificate over ACME. The domain must point at this machine, and ports 80 and 443 must be open (see [Prerequisites](#prerequisites)).
 
-**The supported path.** `cyfr up`, `cyfr reach`, `cyfr update` and `cyfr restore` run Docker Compose themselves: under the stack's lock, with every `COMPOSE_*` variable cleared from their environment, with the files and profiles the home's settings select, and with the checks a start makes, among them that `.env` agrees with its mode and that the tailnet machine is the one `.env` names before Serve opens. They refuse a `.env` that sets a `COMPOSE_*` variable, since Compose would read it to choose the stack's files, project or services behind cyfr's back, and a compose file that sets a reach setting in the `cyfr` service's `environment:` or drops its `env_file: .env`. Running `docker compose` directly is outside that path, and skips every one of those checks.
+**The supported path.** `cyfr up`, `cyfr reach`, `cyfr update` and `cyfr restore` run Docker Compose themselves, with checks of their own. They hold the stack's lock. They clear every `COMPOSE_*` variable from their environment, select the files and profiles from the home's settings, and refuse a `.env` that sets a `COMPOSE_*` variable, since Compose would read it to choose the stack's files, project or services behind cyfr's back. They refuse a compose file that sets a reach setting in the `cyfr` service's `environment:` or drops its `env_file: .env`. They open Tailscale Serve only once the tailnet machine is the one `.env` names. And they make a change of mode one journaled change, which the next of them recovers if it is interrupted. Running `docker compose` directly is outside that path and skips all of these. The server's own boot check stays either way: a release refuses to start on reach settings in `.env` that contradict each other, with the sentence that names the fix.
 
 ### Stdio / npx MCP servers (filesystem, github, …)
 
@@ -566,9 +566,9 @@ CYFR_CORS_ALLOWED_ORIGINS=https://app.example.com
 
 With the line removed, the origins the server's own configuration names
 stand: none, as shipped. A release with sign-in configured (it is by
-default) refuses to boot while the allowlist holds the wildcard `*`, which
-would let any website make credentialed cross-origin requests; a local
-`mix phx.server` run only warns.
+default) refuses to boot while the allowlist holds the wildcard `*`, and
+says to list the origins instead; a local `mix phx.server` run only
+warns.
 
 ### Prometheus metrics
 

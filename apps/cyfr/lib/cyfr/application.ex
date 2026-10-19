@@ -121,8 +121,8 @@ defmodule Cyfr.Application do
       OpentelemetryPhoenix.setup(adapter: :bandit)
     end
 
-    # CORS hardening once authentication is configured (and thus users other
-    # than the operator can make credentialed cross-origin requests).
+    # A deployment with authentication configured names the cross-origin
+    # callers it admits: no wildcard CORS allowlist.
     enforce_cors_not_wildcard_with_auth()
 
     # OIDC issuer reserved-host check — only when OIDC is the configured
@@ -878,11 +878,10 @@ defmodule Cyfr.Application do
     )
   end
 
-  # A wildcard CORS origin is a CSRF/credential-leak risk once authentication
-  # is configured (users beyond the operator can make credentialed cross-origin
-  # requests) — it must then be an explicit allowlist. Fail closed at boot in a
-  # real release (gated on RELEASE_ROOT, so dev/test are never blocked); warn
-  # loudly otherwise. A no-auth deployment may configure the wildcard.
+  # Once authentication is configured the CORS allowlist must be an explicit
+  # one, never the wildcard. Fail closed at boot in a real release (gated on
+  # RELEASE_ROOT, so dev/test are never blocked); warn loudly otherwise. A
+  # no-auth deployment may configure the wildcard.
   defp enforce_cors_not_wildcard_with_auth do
     decision =
       cors_enforcement(
@@ -954,21 +953,19 @@ defmodule Cyfr.Application do
   end
 
   @doc false
-  # Pure decision seam (testable without booting). A wildcard CORS origin in a
-  # deployment that has authentication configured lets ANY origin make
-  # credentialed cross-origin requests — it must be an explicit allowlist. Fail
-  # closed at boot in a real release (gated on RELEASE_ROOT, so dev/test are
-  # never blocked); warn loudly otherwise.
+  # Pure decision seam (testable without booting). A deployment that has
+  # authentication configured must name its CORS origins in an explicit
+  # allowlist, never the wildcard. Fail closed at boot in a real release (gated
+  # on RELEASE_ROOT, so dev/test are never blocked); warn loudly otherwise.
   @spec cors_enforcement(boolean(), term(), boolean()) ::
           :ok | {:raise, String.t()} | {:warn, String.t()}
   def cors_enforcement(auth_configured?, origins, real_release?) do
     if auth_configured? and "*" in List.wrap(origins) do
       message =
         "[Cyfr] FATAL: CORS wildcard \"*\" is configured in a deployment with " <>
-          "authentication enabled. This allows ANY origin to make credentialed " <>
-          "cross-origin requests. Set CYFR_CORS_ALLOWED_ORIGINS (comma-separated " <>
-          "origins) — or :cyfr, :cors_allowed_origins in config — to an " <>
-          "explicit origin allowlist."
+          "authentication enabled, which admits only the origins it names. Set " <>
+          "CYFR_CORS_ALLOWED_ORIGINS (comma-separated origins) — or :cyfr, " <>
+          ":cors_allowed_origins in config — to an explicit origin allowlist."
 
       if real_release? do
         {:raise, message}
