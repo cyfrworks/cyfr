@@ -7,7 +7,7 @@ defmodule PrismWeb.ShellLiveVisibilityTest do
   and a read that cannot answer renders a third state — "unavailable",
   with no toggle — never "private". A store that is down, or a profile row
   that cannot be decoded, says nothing about whether the tincture is
-  published.
+  published. A tincture's copied URL is at the home's own address.
   """
 
   use PrismWeb.ConnCase, async: false
@@ -142,5 +142,29 @@ defmodule PrismWeb.ShellLiveVisibilityTest do
 
     assert visibility(html) == "unavailable"
     assert toggle_disabled?(html)
+  end
+
+  # The address a person copies to share a public tincture is the home's
+  # own (`Sanctum.origin/0`), its public URL in a tailnet or public home,
+  # never the endpoint's own listener address.
+  test "a tincture's copied URL is at the home's own address", %{conn: conn} do
+    original = Application.fetch_env(:sanctum, :public_url)
+
+    on_exit(fn ->
+      case original do
+        {:ok, value} -> Application.put_env(:sanctum, :public_url, value)
+        :error -> Application.delete_env(:sanctum, :public_url)
+      end
+    end)
+
+    home = "https://cyfr.tail1a2b3c.ts.net"
+    Application.put_env(:sanctum, :public_url, home)
+
+    {view, _html} = mount_athanor(conn, "/tinctures")
+    render_click(view, "copy_url", %{"tincture" => "iframe_#{@tincture}"})
+
+    assert_push_event(view, "clipboard", %{text: url})
+    assert String.starts_with?(url, home <> "/")
+    assert String.ends_with?(url, "/local/#{@tincture}")
   end
 end

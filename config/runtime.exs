@@ -15,28 +15,33 @@ if config_env() != :test do
     Path.join(env_dir, ".env.local")
   ]
 
-  # The names the .env files alone assign, read without the side effect
-  # the merged read below keeps: the unknown-name refusal holds a file to
-  # a stricter roster than the process environment a shell exports.
-  # Both reads keep every value literal and run no `$(…)` (`Cyfr.EnvFiles`).
-  file_names = env_files |> Cyfr.EnvFiles.source!(side_effect: false) |> Map.keys()
+  # The names and values the .env files alone assign, read without the
+  # side effect the merged read below keeps, or nil when there is no .env
+  # file to read, as in the compose container, whose .env arrives through
+  # `env_file` as its process environment. The unknown-name refusal holds
+  # a file to a stricter roster than the process environment a shell
+  # exports, and the reach's source rules hold the file to the environment
+  # that overrides it (below). Both reads keep every value literal and run
+  # no `$(…)` (`Cyfr.EnvFiles`).
+  file_env =
+    if Enum.any?(env_files, &File.regular?/1),
+      do: Cyfr.EnvFiles.source!(env_files, side_effect: false)
 
   sourced = Cyfr.EnvFiles.source!(env_files ++ [System.get_env()])
 
   # Runtime configuration for CYFR
   # This file is executed at runtime, not compile time
 
-  # Treat empty values as unset and apply defaults. Preserve explicit false
-  # for booleans and zero for integers.
+  # Treat empty values as unset and apply defaults.
   env_str = fn key, default -> env!(key, :string?, nil) || default end
-  env_int = fn key, default -> env!(key, :integer?, nil) || default end
 
   # Whether the variable is assigned at all, blank or not: `nil` only when
   # nothing assigns it. Blank-is-unset above is the rule, because for every
   # other setting a blank line is an operator who left it alone; this reader
   # is for the one setting whose blank value is a value, an allowlist whose
   # emptiness is the decision to allow nothing (CYFR_CORS_ALLOWED_ORIGINS
-  # below), and whose configured default is not the empty list.
+  # below), and whose absence must leave the application's configured list
+  # standing, which a deployment's own configuration may set.
   env_assigned = fn key -> env!(key, :string, nil) end
 
   # Comma-separated lists: origins, CIDRs, egress targets, operator emails.
@@ -53,16 +58,6 @@ if config_env() != :test do
   # Reader handed to `Cyfr.RuntimeConfig` so the pure resolvers (auth provider,
   # storage, repo) read the same Dotenvy-merged environment this file does.
   getenv = fn key -> env_str.(key, nil) end
-
-  # A bound is read strictly (`Prima.EnvValue`): a set value that is not a
-  # whole number of `unit` in `range` refuses the boot naming it; unset or
-  # blank is nil, so the code's default stands.
-  env_bound = fn key, range, unit ->
-    case Prima.EnvValue.whole_number(getenv, key, range, unit) do
-      {:ok, value} -> value
-      {:error, message} -> raise "[Cyfr] FATAL: #{message}"
-    end
-  end
 
   # A switch is `on`/`off` (or true/false, yes/no, 1/0); an unrecognised
   # spelling refuses the boot rather than reading as the default.
@@ -189,10 +184,31 @@ if config_env() != :test do
   # installer, the test harness). A retired name is refused this way.
   roster = Cyfr.Platform.Settings.Roster
 
-  case roster.unknown(file_names, Map.keys(System.get_env())) do
+  case roster.unknown(Map.keys(file_env || %{}), Map.keys(System.get_env())) do
     [] -> :ok
     names -> raise "[Cyfr] FATAL: " <> roster.refusal(names)
   end
+
+  # How this home is reached (`Cyfr.RuntimeConfig.resolve_reach/1`):
+  # CYFR_REACH in .env, and every setting it implies, read from the names
+  # the .env files assign and the merged environment. A release without a
+  # mode, a setting the mode contradicts, the compose file's assertion
+  # assigned in .env, or a loopback listener bound off the loopback
+  # without it refuses the boot with the sentence that names its fix
+  # (`Prima.Refusal`). A development or test boot without a mode is
+  # `local`: the dev default, which a release never takes.
+  reach =
+    case Cyfr.RuntimeConfig.resolve_reach(%{
+           file: file_env,
+           process: sourced,
+           release?: Cyfr.RuntimeConfig.release?()
+         }) do
+      {:ok, reach} ->
+        reach
+
+      {:error, %{code: code, payload: payload}} ->
+        raise "[Cyfr] FATAL: " <> Prima.Refusal.message({code, payload})
+    end
 
   # Every platform setting whose variable is set: read by the strict
   # reader, validated by the roster's validator (a set value that does
@@ -365,38 +381,69 @@ if config_env() != :test do
     end
   end
 
-  # Apply origin and proxy settings in every environment. Extra MCP origins
-  # extend the configured allowlist, including development localhost defaults.
+  # The reach's listeners, address, origins, proxy trust and HSTS, in every
+  # environment this file configures.
+  #
+  # The endpoint serves on its loopback listener in every mode, and in a
+  # tailnet or public home on the proxy listener too, the one its proxy
+  # forwards to (`CyfrWeb.Ingress`): each at the address and port the
+  # reach names. Its URL is the home's: `http://localhost:<CYFR_PORT>` in
+  # a local home, `https://<CYFR_HOST>` on 443 otherwise.
+  listener = fn {address, port} ->
+    {:ok, ip} = :inet.parse_strict_address(String.to_charlist(address))
+    [ip: ip, port: port]
+  end
+
+  {_address, loopback_port} = reach.listeners.loopback
+
+  config :cyfr, CyfrWeb.Endpoint,
+    url:
+      if(reach.mode == :local,
+        do: [scheme: "http", host: "localhost", port: loopback_port],
+        else: [scheme: "https", host: reach.head["host"], port: 443]
+      ),
+    http:
+      listener.(reach.listeners.loopback) ++
+        [
+          thousand_island_options: [read_timeout: 60_000],
+          # HTTP/1.1 alone, as every Bandit listener of the product serves
+          # (config/config.exs's base says the same, so dev and test agree):
+          # a WebSocket upgrades from HTTP/1.1 and SSE streams as an HTTP/1.1
+          # response, so neither needs HTTP/2, and endpoint_http2_test.exs
+          # holds the release to it.
+          http_2_options: [enabled: false]
+        ],
+    check_origin: reach.check_origins
+
+  case reach.listeners.proxy do
+    :none -> :ok
+    proxy -> config :cyfr, CyfrWeb.Endpoint, proxy: listener.(proxy)
+  end
+
+  # The MCP Origin allowlist (CyfrWeb.Plugs.MCPOrigin) is the endpoint's
+  # `check_origin`, and the CYFR_MCP_ALLOWED_ORIGINS extras extend it
+  # (`Cyfr.RuntimeConfig.mcp_allowed_origins/0`).
+  config :cyfr, :mcp_allowed_origins, reach.check_origins
   config :cyfr, :mcp_extra_origins, env_list.("CYFR_MCP_ALLOWED_ORIGINS")
 
-  behind_proxy? = env_bool.("CYFR_BEHIND_PROXY", false)
+  # The proxies whose forwarded headers the proxy listener trusts, and only
+  # it (`Sanctum.ClientIp`): CYFR_TRUSTED_PROXY_CIDRS when set, else
+  # CYFR_TRUSTED_PROXY_HOPS hops (default 1); nothing in a local home.
+  config :sanctum, :proxy_trust, reach.trust
 
-  # The client IP is taken right-to-left from the XFF chain, stripping the
-  # trusted proxies (Sanctum.ClientIp). With one proxy layer (the shipped
-  # Caddy) the default of 1 hop is correct; stacking more layers requires
-  # raising CYFR_TRUSTED_PROXY_HOPS to match (0 to 16), or listing the
-  # proxies in CYFR_TRUSTED_PROXY_CIDRS (comma-separated IPs/CIDRs, takes
-  # precedence). Both are checked whether or not the trust is on, so a
-  # value that would misplace the client refuses the boot where it is
-  # written: a count outside 0..16, or an entry that is neither an address
-  # nor a CIDR, named.
-  trusted_proxy_hops = env_bound.("CYFR_TRUSTED_PROXY_HOPS", 0..16, "proxy hops") || 1
-  trusted_proxy_cidrs = env_list.("CYFR_TRUSTED_PROXY_CIDRS")
+  # The endpoint's HSTS on the proxy listener in a tailnet home; Caddy's in
+  # a public one, and none in a local one
+  # (`CyfrWeb.Plugs.ApiSecurityHeaders.maybe_hsts/1`).
+  config :cyfr, :hsts, reach.hsts
 
-  for entry <- trusted_proxy_cidrs,
-      Prima.Cidr.parse_cidr(entry) == :error and Prima.Cidr.parse_ip(entry) == :error do
-    raise "[Cyfr] FATAL: CYFR_TRUSTED_PROXY_CIDRS entry #{inspect(entry)} is neither " <>
-            "an IP address nor a CIDR"
-  end
-
-  if behind_proxy? do
-    config :sanctum, :trust_x_forwarded_for, true
-    config :sanctum, :trusted_proxy_hops, trusted_proxy_hops
-
-    if trusted_proxy_cidrs != [] do
-      config :sanctum, :trusted_proxy_cidrs, trusted_proxy_cidrs
-    end
-  end
+  # The home's address (`Sanctum.origin/0`): its public URL in a tailnet or
+  # public home, `https://<CYFR_HOST>`, and in a local home, which has
+  # none, `http://localhost:<CYFR_PORT>`. Every self-reference reads it: a
+  # tincture's frame-ancestors and connect-src, an OAuth `redirect_uri`,
+  # a copied URL. A webhook URL is absolute only where the public URL is
+  # set (`Sanctum.public_url/0`), a path in a local home.
+  config :sanctum, :public_url, reach.head["public_url"]
+  config :sanctum, :fallback_origin, reach.origin
 
   if config_env() == :prod do
     secret_key_base =
@@ -406,71 +453,7 @@ if config_env() != :test do
         You can generate one by calling: mix phx.gen.secret
         """
 
-    # Reject invalid bind addresses at boot.
-    parse_ip = fn var, ip_string ->
-      case :inet.parse_address(String.to_charlist(ip_string)) do
-        {:ok, ip_tuple} ->
-          ip_tuple
-
-        {:error, _} ->
-          raise "environment variable #{var} is not a valid IP address: #{inspect(ip_string)}"
-      end
-    end
-
-    emissary_bind = parse_ip.("CYFR_BIND_ADDRESS", env_str.("CYFR_BIND_ADDRESS", "0.0.0.0"))
-
-    host = env_str.("CYFR_HOST", "localhost")
-    port = env_int.("CYFR_PORT", 4000)
-
-    # Origins the browser will send for this deployment. We include both schemes
-    # so the same compose stack works whether Caddy serves plain HTTP on :80 (a
-    # localhost / bare-IP deploy) or terminates TLS for a real domain. Localhost
-    # variants stay in the list so the host-bound CLI / dev curls still work.
-    host_origins = [
-      "https://#{host}",
-      "http://#{host}",
-      "https://#{host}:#{port}",
-      "http://#{host}:#{port}"
-    ]
-
-    # Allow loopback origins only on this server's configured port.
-    localhost_origins = [
-      "http://localhost:#{port}",
-      "https://localhost:#{port}",
-      "http://127.0.0.1:#{port}",
-      "https://127.0.0.1:#{port}",
-      "http://[::1]:#{port}",
-      "https://[::1]:#{port}"
-    ]
-
-    # The deployment's own origin, which Sanctum answers when no
-    # CYFR_PUBLIC_URL is set: the same host and port the endpoint's url
-    # names, so a tincture's frame-ancestors and connect-src, the OAuth
-    # callback and every other self-reference agree with the endpoint.
-    # A TLS deployment sets CYFR_PUBLIC_URL, as the guide says.
-    config :sanctum, :fallback_origin, "http://#{host}:#{port}"
-
-    config :cyfr, CyfrWeb.Endpoint,
-      url: [host: host, port: port],
-      http: [
-        ip: emissary_bind,
-        port: port,
-        thousand_island_options: [read_timeout: 60_000],
-        # HTTP/1.1 alone, as every Bandit listener of the product serves
-        # (config/config.exs's base says the same, so dev and test agree):
-        # a WebSocket upgrades from HTTP/1.1 and SSE streams as an HTTP/1.1
-        # response, so neither needs HTTP/2, and endpoint_http2_test.exs
-        # holds the release to it.
-        http_2_options: [enabled: false]
-      ],
-      check_origin: host_origins ++ localhost_origins,
-      secret_key_base: secret_key_base,
-      server: true
-
-    # MCP origin allowlist (CyfrWeb.Plugs.MCPOrigin). Same set as
-    # check_origin above; the CYFR_MCP_ALLOWED_ORIGINS extras are appended
-    # by Cyfr.RuntimeConfig in every env (hoisted above the prod block).
-    config :cyfr, :mcp_allowed_origins, host_origins ++ localhost_origins
+    config :cyfr, CyfrWeb.Endpoint, secret_key_base: secret_key_base, server: true
 
     # The session cookie's and the LiveView socket's signing salts,
     # CYFR_SESSION_SALT and CYFR_LIVE_SALT, each derived from
@@ -494,17 +477,6 @@ if config_env() != :test do
     # Session cookies must be secure in production (HTTPS-only).
     # Dev/test leave this false so http://localhost works.
     config :cyfr, :cookie_secure, true
-
-    # Proxy trust is parsed above for every environment. Emit this
-    # configuration warning only in production.
-    unless behind_proxy? do
-      IO.puts(
-        :stderr,
-        "[warning] CYFR is running plain HTTP in production. " <>
-          "Set CYFR_BEHIND_PROXY=true if behind a TLS-terminating reverse proxy, " <>
-          "and set CYFR_BIND_ADDRESS=127.0.0.1 to bind only to localhost."
-      )
-    end
   end
 
   # Resolve runtime and seed paths in dev and prod. Defaults are relative
@@ -604,8 +576,10 @@ if config_env() != :test do
   # Browser CORS allowlist: assigned, it is the allowlist it spells, and
   # assigned empty it is the empty allowlist — no cross-origin caller at
   # all, which is what a same-origin deployment sets and what
-  # `.env.example` promises. Unassigned, `config/config.exs`'s empty
-  # allowlist stands. The read is the assignment, not the value: an
+  # `.env.example` promises. Unassigned, the application's configured list
+  # stands: `config/config.exs`'s empty one, or the list a deployment's
+  # own configuration names (`CyfrWeb.Plugs.CORS`), which an absent
+  # variable must not erase. The read is the assignment, not the value: an
   # assigned empty value is a decision, and `env_str` would read it as no
   # answer. A wildcard is refused for a release that has authentication
   # configured (`Cyfr.Application.cors_enforcement/3`).
@@ -658,12 +632,6 @@ if config_env() != :test do
   # with a typed error (`Compendium.RegistryHost`).
   registry_url_config = env_str.("CYFR_REGISTRY_URL", "cyfr.run")
   config :cyfr, :registry_url, registry_url_config
-
-  # The address this instance is reachable at from outside — needed to hand a
-  # webhook sender an absolute URL, which behind a proxy or a tunnel is
-  # neither the bind address nor any request's Host. Unset means the console
-  # and the CLI show the path and say to set this.
-  config :sanctum, :public_url, env_str.("CYFR_PUBLIC_URL", nil)
 
   # The directory this deployment enrolls its local people at: an https
   # directory URL, with no default, so an unset one leaves local operation
@@ -746,13 +714,61 @@ if config_env() != :test do
 
     # Provider key `:oidcc` (not `:oidc`) so `auth.provider` matches the
     # generic-OIDC email-verification lane (`Sanctum.Auth.EmailVerification`)
-    # and the canonical `oidcc|<iss>|<sub>` id form.
+    # and the canonical `oidcc|<iss>|<sub>` id form. The callback is the
+    # home's own address (`Sanctum.origin/0`), named here so no request
+    # header chooses it: unnamed, Ueberauth builds it from the request's
+    # X-Forwarded-Proto and X-Forwarded-Host, which any client can send.
     config :ueberauth, Ueberauth,
       providers: [
         oidcc:
           {Ueberauth.Strategy.Oidcc,
-           issuer: :cyfr_oidc, client_id: oidc.client_id, client_secret: oidc.client_secret}
+           issuer: :cyfr_oidc,
+           client_id: oidc.client_id,
+           client_secret: oidc.client_secret,
+           callback_url: reach.origin <> "/auth/oidcc/callback"}
       ]
+  end
+
+  # The first-run setup link's capability (CYFR_SETUP_TOKEN): exactly 64
+  # lowercase hexadecimal characters, which `cyfr init` mints when it is
+  # given no operator email. It is refused, after the reach, where no
+  # setup could use it: beside the operator list, which already names the
+  # administrators; beside CYFR_RESTORE_TOKEN, which reserves the first
+  # person for a restore; on a headless node, which has no setup page;
+  # and where sign-in is not GitHub's or Google's, by an OIDC issuer or by
+  # neither. Each refusal names the variable and never its value, which is
+  # a secret (`Prima.Refusal`).
+  {:ok, setup_token} = Prima.EnvValue.text(getenv, "CYFR_SETUP_TOKEN")
+
+  setup_token_refusal =
+    cond do
+      is_nil(setup_token) ->
+        nil
+
+      not Regex.match?(~r/\A[0-9a-f]{64}\z/, setup_token) ->
+        {:setup_token_refused, %{why: :malformed}}
+
+      platform_admins != [] ->
+        {:setup_token_with_admins, %{}}
+
+      restore_token != nil ->
+        {:setup_token_refused, %{why: :restore_token}}
+
+      headless? ->
+        {:setup_token_refused, %{why: :headless}}
+
+      auth_provider == Sanctum.Auth.OIDC ->
+        {:setup_token_refused, %{why: :oidc}}
+
+      is_nil(github_id) and is_nil(google_id) ->
+        {:setup_token_refused, %{why: :no_provider}}
+
+      true ->
+        nil
+    end
+
+  if setup_token_refusal do
+    raise "[Cyfr] FATAL: " <> Prima.Refusal.message(setup_token_refusal)
   end
 
   # Storage backend. Unset/`local` keeps the filesystem default from config.exs;

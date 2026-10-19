@@ -6,10 +6,11 @@ import Config
 config :cyfr, :prometheus_metrics_enabled, true
 
 # For development, we disable any cache and enable
-# debugging and code reloading.
+# debugging and code reloading. The listeners, the URL and the origins are
+# the reach's, which `config/runtime.exs` writes in development as in a
+# release: a checkout whose .env sets no CYFR_REACH is `local`, on
+# 127.0.0.1:4000 unless CYFR_BIND_ADDRESS or CYFR_PORT says otherwise.
 config :cyfr, CyfrWeb.Endpoint,
-  http: [ip: {127, 0, 0, 1}, port: 4000],
-  check_origin: false,
   code_reloader: true,
   debug_errors: true,
   # Use the same development key base for endpoint signing and at-rest encryption.

@@ -102,7 +102,7 @@ defmodule Cyfr.ApplicationTest do
       assert :ok = Cyfr.Application.origin_allowlist_divergence([], nil, [])
     end
 
-    test "the wildcard default is cors_enforcement/3's, not this one's" do
+    test "the wildcard is cors_enforcement/3's, not this one's" do
       assert :ok = Cyfr.Application.origin_allowlist_divergence(["*"], nil, [])
     end
 
@@ -111,6 +111,92 @@ defmodule Cyfr.ApplicationTest do
       assert :ok = Cyfr.Application.origin_allowlist_divergence(origins, origins, [])
       assert :ok = Cyfr.Application.origin_allowlist_divergence(origins, nil, origins)
       assert :ok = Cyfr.Application.origin_allowlist_divergence(origins, [], [])
+    end
+  end
+
+  # The endpoint's listeners as its adapter starts them (`CyfrWeb.Ingress`),
+  # under a supervisor with the endpoint's child id, as the tree holds it:
+  # the proxy listener exists when `config/runtime.exs` writes the reach's
+  # `proxy:` (a tailnet or public home), and `extra` beside them.
+  defp endpoint_tree(proxy?, extra \\ []) do
+    address = [ip: {127, 0, 0, 1}, port: 0]
+    proxy = if proxy?, do: [proxy: address], else: []
+
+    servers =
+      CyfrWeb.Ingress.child_specs(
+        CyfrWeb.Endpoint,
+        [otp_app: :cyfr, http: address ++ [startup_log: false]] ++ proxy
+      )
+
+    endpoint = %{
+      id: CyfrWeb.Endpoint,
+      start: {Supervisor, :start_link, [servers ++ extra, [strategy: :one_for_one]]},
+      type: :supervisor
+    }
+
+    root =
+      start_supervised!(%{
+        id: {__MODULE__, proxy?},
+        start: {Supervisor, :start_link, [[endpoint], [strategy: :one_for_one]]},
+        type: :supervisor
+      })
+
+    [{CyfrWeb.Endpoint, endpoint, :supervisor, _}] = Supervisor.which_children(root)
+    {root, endpoint}
+  end
+
+  describe "the endpoint's listeners" do
+    test "the census holds the proxy listener in a tailnet or public home, and none in a local one" do
+      {local, _endpoint} = endpoint_tree(false)
+      assert Cyfr.Application.listeners(local) == [CyfrWeb.Endpoint]
+      assert Cyfr.Application.check_listeners!(Cyfr.Application.listeners(local)) == :ok
+
+      {exposed, _endpoint} = endpoint_tree(true)
+      listeners = Cyfr.Application.listeners(exposed)
+
+      assert Enum.sort(listeners) == Enum.sort([CyfrWeb.Endpoint, CyfrWeb.Ingress.Proxy])
+      assert Cyfr.Application.check_listeners!(listeners) == :ok
+    end
+
+    test "a listener beside them the roster does not name refuses the boot, naming it alone" do
+      rogue = %{
+        id: Planted.RogueListener,
+        start:
+          {Supervisor, :start_link,
+           [
+             [{Bandit, plug: Plug.Head, ip: {127, 0, 0, 1}, port: 0, startup_log: false}],
+             [strategy: :one_for_one]
+           ]},
+        type: :supervisor
+      }
+
+      {root, _endpoint} = endpoint_tree(true, [rogue])
+
+      error =
+        assert_raise RuntimeError, fn ->
+          root |> Cyfr.Application.listeners() |> Cyfr.Application.check_listeners!()
+        end
+
+      assert error.message =~ "Planted.RogueListener"
+      refute error.message =~ "CyfrWeb.Ingress.Proxy"
+      refute error.message =~ "  - CyfrWeb.Endpoint"
+    end
+
+    test "the graceful stop finds both listeners' servers, and the loopback listener's alone in a local home" do
+      {_root, local} = endpoint_tree(false)
+      assert [_loopback] = Cyfr.Application.endpoint_servers(local)
+
+      {_root, exposed} = endpoint_tree(true)
+      servers = Cyfr.Application.endpoint_servers(exposed)
+      assert length(servers) == 2
+
+      ports =
+        for server <- servers do
+          {:ok, {_ip, port}} = ThousandIsland.listener_info(server)
+          port
+        end
+
+      assert Enum.uniq(ports) == ports
     end
   end
 

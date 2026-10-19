@@ -8,6 +8,12 @@ defmodule CyfrWeb.Endpoint do
   `check_origin` — so a CM5 kiosk, a phone and a laptop each need exactly
   one URL. Headless is a deployment that omits the HTML routes, not a
   second endpoint.
+
+  It serves on two listeners, the loopback listener in every mode and the
+  proxy listener in a tailnet or public home, and each hands it a request
+  tagged with the listener that accepted it before `call/2` below runs
+  (`CyfrWeb.Ingress`): the tag, never a header, `Host` or `Origin`, is the
+  boundary.
   """
 
   use Boundary,
@@ -64,9 +70,11 @@ defmodule CyfrWeb.Endpoint do
   end
 
   # `:peer_data` and `:x_headers` are what `Sanctum.ClientIp.from_connect_info/1`
-  # needs: this socket is handled here, before the router, so it passes no
-  # rate-limit plug and a LiveView that starts an anonymous flow (sign-in,
-  # registry appeal) has to budget by IP itself.
+  # needs: the peer, the forwarded header and the listener's ingress tag,
+  # which `CyfrWeb.Ingress` sets as a header for this reason. This socket
+  # is handled here, before the router, so it passes no rate-limit plug and
+  # a LiveView that starts an anonymous flow (sign-in, registry appeal) has
+  # to budget by IP itself.
   @live_connect_info [:peer_data, :x_headers, session: {__MODULE__, :session_options, []}]
 
   # `/live`'s messages are bounded by the largest a LiveView sends
@@ -92,7 +100,8 @@ defmodule CyfrWeb.Endpoint do
 
   # A paired glass's device channel: the device protocol over a raw
   # WebSocket at `/device/websocket`. It carries the caller's address and
-  # no session, so a cookie the browser holds never chooses the person.
+  # its listener's tag (`Sanctum.ClientIp.from_connect_info/1`) and no
+  # session, so a cookie the browser holds never chooses the person.
   # A frame is capped at twice the largest valid glass message (a maximal
   # intent, 65,840 bytes), and the idle timeout sits above the channel's
   # 60-second proof deadline, so before a proof the deadline decides first.
@@ -105,10 +114,12 @@ defmodule CyfrWeb.Endpoint do
     longpoll: false
 
   # A socket transport takes its request from `socket_dispatch`, the
-  # plug `use Phoenix.Endpoint` declares ahead of every plug here, and the
-  # long-poll transport reads a POST's body itself, up to 8 MB and under
-  # no cap of these parsers, from whoever holds a transport token, which
-  # it hands to anyone who asks. So a request to a socket transport's path
+  # plug `use Phoenix.Endpoint` declares ahead of every plug here; the
+  # request carries its listener's tag already, set by the listener's plug
+  # before this function runs (`CyfrWeb.Ingress`). The long-poll transport
+  # reads a POST's body itself, up to 8 MB and under no cap of these
+  # parsers, from whoever holds a transport token, which it hands to
+  # anyone who asks. So a request to a socket transport's path
   # is bounded before that dispatch: a POST declares its length, within
   # the transport's bound (`socket_transports/0`), and any other request
   # carries no body. Every other one is refused before any byte of its

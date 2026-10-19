@@ -11,9 +11,11 @@ defmodule Prima.LocusRolesTest do
   service; their uid ranges are disjoint and none holds the release's uid;
   every isolation is one the keeper knows; a role whose spawns share the
   island's network has a guard and the runtime, whose runners have none,
-  has none; the image serves one of the roles; and the endpoint's fixed
-  address lies in its subnet, outside the range the subnet's other
-  containers draw from.
+  has none; the image serves one of the roles; and each fixed address,
+  the endpoint's loopback listener's on its network and its proxy
+  listener's, Caddy's and Tailscale's on edge, lies in its subnet, outside
+  the range the subnet's other containers draw from, and apart from the
+  others.
   """
   use ExUnit.Case, async: true
 
@@ -23,8 +25,9 @@ defmodule Prima.LocusRolesTest do
            |> File.read!()
            |> Jason.decode!()
 
-  @release_keys ~w(bin endpoint_address endpoint_ip_range endpoint_network endpoint_subnet
-                   home_root image_role run_dir run_size uid user)
+  @release_keys ~w(bin edge_address edge_caddy_address edge_ip_range edge_network edge_subnet
+                   edge_tailscale_address endpoint_address endpoint_ip_range endpoint_network
+                   endpoint_subnet home_root image_role run_dir run_size uid user)
   @role_keys ~w(container first_uid guard home_size isolation last_uid name network pool port
                 profile service user_prefix)
 
@@ -100,6 +103,32 @@ defmodule Prima.LocusRolesTest do
     %{endpoint_subnet: subnet, endpoint_ip_range: range, endpoint_address: address} =
       LocusRoles.release()
 
+    assert_fixed(subnet, range, address)
+  end
+
+  test "edge's three fixed addresses lie in its subnet, outside its range, and apart" do
+    release = LocusRoles.release()
+
+    addresses = [
+      release.edge_address,
+      release.edge_caddy_address,
+      release.edge_tailscale_address
+    ]
+
+    for address <- addresses,
+        do: assert_fixed(release.edge_subnet, release.edge_ip_range, address)
+
+    assert Enum.uniq(addresses) == addresses
+
+    {endpoint, endpoint_bits} = cidr(release.endpoint_subnet)
+    {edge, edge_bits} = cidr(release.edge_subnet)
+    bits = min(endpoint_bits, edge_bits)
+
+    refute Bitwise.bsr(endpoint, 32 - bits) == Bitwise.bsr(edge, 32 - bits),
+           "the endpoint's and edge's subnets overlap"
+  end
+
+  defp assert_fixed(subnet, range, address) do
     {base, bits} = cidr(subnet)
     {range_base, range_bits} = cidr(range)
     {value, 32} = cidr(address <> "/32")

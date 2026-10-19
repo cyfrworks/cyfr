@@ -10,17 +10,15 @@ defmodule CyfrWeb.Plugs.AuthRateLimitTest do
     # Counters live in Prima.RateLimiter's own table; start each test clean.
     Prima.Test.RateLimiter.reset!()
 
-    originals =
-      for key <- [:trust_x_forwarded_for, :trusted_proxy_hops],
-          do: {key, Application.get_env(:sanctum, key)}
+    original = Application.fetch_env(:sanctum, :proxy_trust)
 
     on_exit(fn ->
       Prima.Test.RateLimiter.reset!()
 
-      Enum.each(originals, fn
-        {key, nil} -> Application.delete_env(:sanctum, key)
-        {key, value} -> Application.put_env(:sanctum, key, value)
-      end)
+      case original do
+        {:ok, value} -> Application.put_env(:sanctum, :proxy_trust, value)
+        :error -> Application.delete_env(:sanctum, :proxy_trust)
+      end
     end)
 
     :ok
@@ -34,6 +32,10 @@ defmodule CyfrWeb.Plugs.AuthRateLimitTest do
     Plug.Test.conn(:get, "/")
     |> Map.put(:remote_ip, ip)
   end
+
+  # A request the proxy listener accepted, the one listener whose
+  # forwarded headers are read.
+  defp proxied(ip), do: ip |> conn_from() |> Sanctum.ClientIp.put_ingress(:proxy)
 
   describe "rate limiting" do
     test "allows requests under the limit" do
@@ -109,7 +111,7 @@ defmodule CyfrWeb.Plugs.AuthRateLimitTest do
 
   describe "XFF trust boundary" do
     test "trust off (default): spoofed XFF is ignored, socket bucket binds" do
-      Application.delete_env(:sanctum, :trust_x_forwarded_for)
+      Application.delete_env(:sanctum, :proxy_trust)
       opts = opts()
       ip = {127, 0, 0, 21}
 
@@ -131,23 +133,23 @@ defmodule CyfrWeb.Plugs.AuthRateLimitTest do
     end
 
     test "trust on: forwarded clients get independent buckets behind the proxy" do
-      # One proxy in front, as `config/runtime.exs` configures the trust.
-      Application.put_env(:sanctum, :trust_x_forwarded_for, true)
-      Application.put_env(:sanctum, :trusted_proxy_hops, 1)
+      # One proxy in front of the proxy listener, as `config/runtime.exs`
+      # configures the trust.
+      Application.put_env(:sanctum, :proxy_trust, {:hops, 1})
       opts = opts()
       proxy_ip = {127, 0, 0, 22}
 
       # Exhaust client A's bucket through the proxy.
       for _ <- 1..3 do
         conn =
-          conn_from(proxy_ip)
+          proxied(proxy_ip)
           |> Plug.Conn.put_req_header("x-forwarded-for", "203.0.113.10")
 
         refute AuthRateLimit.call(conn, opts).halted
       end
 
       blocked =
-        conn_from(proxy_ip)
+        proxied(proxy_ip)
         |> Plug.Conn.put_req_header("x-forwarded-for", "203.0.113.10")
         |> AuthRateLimit.call(opts)
 
@@ -155,7 +157,7 @@ defmodule CyfrWeb.Plugs.AuthRateLimitTest do
 
       # Client B behind the same proxy still has a fresh bucket.
       other =
-        conn_from(proxy_ip)
+        proxied(proxy_ip)
         |> Plug.Conn.put_req_header("x-forwarded-for", "203.0.113.11")
         |> AuthRateLimit.call(opts)
 

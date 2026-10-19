@@ -202,8 +202,9 @@ defmodule Cyfr.Application do
   end
 
   @doc """
-  Stop `endpoint` accepting: each socket server it serves on
-  (`endpoint_servers/1`) is suspended (`suspend_server/1`). With none,
+  Stop `endpoint` accepting: each socket server it serves on, its loopback
+  listener and, in a tailnet or public home, its proxy listener
+  (`endpoint_servers/1`), is suspended (`suspend_server/1`). With none,
   there is nothing to do and the answer is `:ok`.
 
   It never raises and never outlasts `deadline_ms`: the lookup and the
@@ -253,17 +254,24 @@ defmodule Cyfr.Application do
   end
 
   @doc """
-  The socket servers `endpoint` serves on, one for each scheme it listens
-  on (`Bandit.PhoenixAdapter.bandit_pid/2`). Empty when it serves no
-  listener, as under `server: false`, or is not running.
+  The socket servers `endpoint` serves on: every socket server in its
+  supervision tree, found as the listener census finds one
+  (`listeners/1`), so the loopback listener Phoenix runs as the endpoint's
+  own child and the proxy listener under its supervisor
+  (`CyfrWeb.Ingress`) are both found. Empty when it serves no listener, as
+  under `server: false`, or is not running.
   """
-  @spec endpoint_servers(module()) :: [pid()]
-  def endpoint_servers(endpoint \\ CyfrWeb.Endpoint) do
-    for scheme <- [:http, :https],
-        {:ok, pid} when is_pid(pid) <- [Bandit.PhoenixAdapter.bandit_pid(endpoint, scheme)],
-        do: pid
-  catch
-    :exit, _not_running -> []
+  @spec endpoint_servers(Supervisor.supervisor()) :: [pid()]
+  def endpoint_servers(endpoint \\ CyfrWeb.Endpoint), do: socket_servers(endpoint)
+
+  defp socket_servers(supervisor) do
+    {servers, others} = supervisor |> children() |> Enum.split_with(&socket_server?/1)
+
+    for({_id, pid, _type, _modules} <- servers, is_pid(pid), do: pid) ++
+      for {_id, pid, :supervisor, _modules} <- others,
+          is_pid(pid),
+          server <- socket_servers(pid),
+          do: server
   end
 
   @doc """
@@ -375,10 +383,11 @@ defmodule Cyfr.Application do
   @doc """
   The listeners running under `supervisor`: each supervisor in its tree
   that runs a socket server as a direct child, named by its own child id
-  (`Opus.HostListener`, `CyfrWeb.Endpoint`), or by `supervisor` itself
-  for a socket server started directly under it. A server's own subtree is
-  not read, and a child that is gone by the time it is asked is skipped:
-  it listens on nothing.
+  (`Opus.HostListener`; `CyfrWeb.Endpoint`, whose own child is the
+  loopback listener; `CyfrWeb.Ingress.Proxy`, the proxy listener's), or by
+  `supervisor` itself for a socket server started directly under it. A
+  server's own subtree is not read, and a child that is gone by the time
+  it is asked is skipped: it listens on nothing.
   """
   @spec listeners(Supervisor.supervisor()) :: [term()]
   def listeners(supervisor), do: listeners(supervisor, supervisor)
@@ -459,11 +468,12 @@ defmodule Cyfr.Application do
   end
 
   # Emissary's webhook task supervisor (an inbound webhook's delivery)
-  # starts before the endpoint and so stops after it: the listener has
+  # starts before the endpoint and so stops after it: the listeners have
   # closed before the tree stops (`prep_stop/1`), and a delivery already in
-  # flight is ended after the endpoint. The endpoint drains its open
-  # connections for the `thousand_island_options` `shutdown_timeout` in
-  # `config/config.exs`.
+  # flight is ended after the endpoint. The endpoint's listeners, the
+  # loopback listener and in a tailnet or public home the proxy listener
+  # (`CyfrWeb.Ingress`), drain their open connections for the
+  # `thousand_island_options` `shutdown_timeout` in `config/config.exs`.
   defp web do
     [
       # 30 s: the longest webhook delivery it lets finish.
@@ -872,7 +882,7 @@ defmodule Cyfr.Application do
   # is configured (users beyond the operator can make credentialed cross-origin
   # requests) — it must then be an explicit allowlist. Fail closed at boot in a
   # real release (gated on RELEASE_ROOT, so dev/test are never blocked); warn
-  # loudly otherwise. A no-auth deployment keeps the wildcard default.
+  # loudly otherwise. A no-auth deployment may configure the wildcard.
   defp enforce_cors_not_wildcard_with_auth do
     decision =
       cors_enforcement(
@@ -888,28 +898,6 @@ defmodule Cyfr.Application do
     end
 
     warn_if_origin_allowlists_diverge()
-    warn_if_public_origin_missing()
-  end
-
-  # `CYFR_PUBLIC_URL` is the address this instance is reachable at from
-  # outside, and it is the only place a SCHEME is configured — the endpoint's
-  # `:url` carries a host and a port and nothing sets `scheme`. Unset, an
-  # OAuth `redirect_uri` and a webhook URL are built as `http://<host>:<port>`,
-  # which behind the shipped TLS profile is neither what the provider has
-  # registered nor where a sender can reach us. It fails at the exchange, far
-  # from the cause, so say it at boot.
-  defp warn_if_public_origin_missing do
-    if is_nil(Cyfr.RuntimeConfig.public_url()) and
-         not is_nil(Cyfr.RuntimeConfig.auth_provider()) do
-      Logger.warning(
-        "[Cyfr] CYFR_PUBLIC_URL is not set. OAuth redirect URIs and webhook URLs " <>
-          "will be built from CYFR_HOST/CYFR_PORT as http://…, which a TLS " <>
-          "deployment's provider will reject. Set it to this server's external " <>
-          "origin, scheme included (e.g. https://cyfr.example.com)."
-      )
-    end
-
-    :ok
   end
 
   defp warn_if_origin_allowlists_diverge do
@@ -930,11 +918,11 @@ defmodule Cyfr.Application do
 
   @doc false
   # Pure decision seam (testable without booting). Two knobs answer "which
-  # origins may talk to this server": CORS (browser cross-origin, default
-  # "*", guarded above) and MCP Origin (DNS-rebinding guard, default
-  # localhost-only). An operator who opens one but not the other gets a
-  # half-closed deployment that fails confusingly at request time — say so
-  # at boot instead.
+  # origins may talk to this server": CORS (browser cross-origin, an empty
+  # allowlist by default, its wildcard guarded above) and MCP Origin
+  # (DNS-rebinding guard, the home's own origins). An operator who opens
+  # one but not the other gets a half-closed deployment that fails
+  # confusingly at request time — say so at boot instead.
   #
   # The warning names cross-origin callers CORS admits and the MCP Origin
   # check then refuses, so it reads what the CORS allowlist admits, not
@@ -942,8 +930,8 @@ defmodule Cyfr.Application do
   # caller at all, and it is what the shipped stack assigns (`cyfr init`,
   # whose cyfr serves Prism, the API, /mcp and the tinctures from one
   # origin), so a boot of that stack has no divergence and nothing to act
-  # on. The wildcard is the other non-case: it is the default, and
-  # `cors_enforcement/3` above owns it.
+  # on. The wildcard is the other non-case: `cors_enforcement/3` above owns
+  # it.
   #
   # The MCP side stays a presence check rather than a second default, which
   # keeps `Cyfr.RuntimeConfig.mcp_allowed_origins/0` the only place the
