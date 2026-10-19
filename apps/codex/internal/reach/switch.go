@@ -145,13 +145,24 @@ func (e *Engine) preview(ctx context.Context, t Target, joinID string) (Preview,
 	if st.headErr == nil {
 		p.Old, p.OldWords = st.head, Describe(st.head)
 		if p.OldDigest == p.NewDigest {
-			return Preview{}, Refuse("reach_unchanged", map[string]string{"address": st.head.origin()})
+			if !e.reopens(st) {
+				return Preview{}, Refuse("reach_unchanged", map[string]string{"address": st.head.origin()})
+			}
+			p.Reopen = true
+			return p, nil
 		}
 	}
 	if st.headErr != nil || st.head.origin() != d.Head.origin() {
 		p.AddressChanges = slices.Clone(addressChanges)
 	}
 	return p, nil
+}
+
+// reopens reports whether a switch to .env's own head is a reopen: a
+// tailnet home whose Serve is closed, which a start found its machine not
+// ready to serve.
+func (e *Engine) reopens(st envState) bool {
+	return st.headErr == nil && st.head.Mode == ModeTailnet && !e.serveIsOpen()
 }
 
 // derive is the head t makes from .env's settings and, for tailnet, the
@@ -214,6 +225,14 @@ func (e *Engine) machine(ctx context.Context) (*Join, error) {
 	return &Join{Name: rec.Name, NodeID: rec.NodeID}, nil
 }
 
+// contentDigest is a switch's content in the request digest's form.
+func contentDigest(c RequestContent) string {
+	return requestDigest(map[string]any{
+		"op": "switch", "mode": c.Mode, "domain": c.Domain, "acme_email": c.ACMEEmail,
+		"hostname": c.Hostname, "new_node": c.NewNode, "auth_key_fingerprint": c.AuthKeyFingerprint,
+	})
+}
+
 func switchDigest(r SwitchRequest) string {
 	return requestDigest(map[string]any{
 		"op": "switch", "mode": r.Target.Mode, "domain": r.Target.Domain, "acme_email": r.Target.ACMEEmail,
@@ -225,6 +244,9 @@ func (e *Engine) doSwitch(ctx context.Context, r SwitchRequest) (Receipt, error)
 	if err := e.requireLock(); err != nil {
 		return Receipt{}, err
 	}
+	if _, err := e.readEnv(); err != nil {
+		return Receipt{}, err
+	}
 	digest := switchDigest(r)
 	if rc, ok, err := e.lookup(r.ID, digest); err != nil || ok {
 		if err != nil {
@@ -232,13 +254,14 @@ func (e *Engine) doSwitch(ctx context.Context, r SwitchRequest) (Receipt, error)
 		}
 		return answer(rc)
 	}
-	if rc, blocked, err := e.blocked(r.ID, digest, "switch"); blocked || err != nil {
+	content := contentDigest(r.Content)
+	if rc, blocked, err := e.blocked(r.ID, digest, "switch", content); blocked || err != nil {
 		return rc, err
 	}
 	refuse := func(err error) (Receipt, error) {
 		var ref *Refusal
 		if errors.As(err, &ref) {
-			return e.reject(r.ID, digest, "switch", ref)
+			return e.rejectContent(r.ID, digest, content, "switch", ref)
 		}
 		return Receipt{}, err
 	}
@@ -261,7 +284,8 @@ func (e *Engine) doSwitch(ctx context.Context, r SwitchRequest) (Receipt, error)
 	if st.digest() != r.OldDigest || d.Head.Digest() != r.NewDigest {
 		return refuse(Refuse("reach_stale", map[string]string{"words": st.words()}))
 	}
-	if st.headErr == nil && st.head.Digest() == d.Head.Digest() {
+	reopen := st.headErr == nil && st.head.Digest() == d.Head.Digest()
+	if reopen && !e.reopens(st) {
 		return refuse(Refuse("reach_unchanged", map[string]string{"address": st.head.origin()}))
 	}
 	cs, err := e.observe(ctx)
@@ -274,9 +298,9 @@ func (e *Engine) doSwitch(ctx context.Context, r SwitchRequest) (Receipt, error)
 	}
 
 	j := &journal{
-		Op: "switch", RequestID: r.ID, RequestDigest: digest,
+		Op: "switch", RequestID: r.ID, RequestDigest: digest, ContentDigest: content,
 		NewHead: &d.Head, OldKeys: st.heldKeys(), NewKeys: keysOf(d.Head),
-		Running: cyfrRunning(cs), Services: []string{cyfrService},
+		Running: cyfrRunning(cs), Services: []string{cyfrService}, Reopen: reopen,
 	}
 	if st.headErr == nil {
 		j.OldHead = &st.head
@@ -304,6 +328,13 @@ func (e *Engine) doSwitch(ctx context.Context, r SwitchRequest) (Receipt, error)
 // runSwitch carries an accepted switch through: stop and verify, commit
 // .env, start what was running.
 func (e *Engine) runSwitch(ctx context.Context, j *journal) (Receipt, error) {
+	if j.Reopen {
+		// .env holds the head already: only the start path runs.
+		if err := e.setPhase(j, "committed"); err != nil {
+			return e.outcomeUnknown(j, err)
+		}
+		return e.startTarget(ctx, j)
+	}
 	if s := e.stopAndVerify(ctx, j.Services); !s.ok {
 		return e.uncertain(j, s)
 	}
@@ -324,9 +355,9 @@ func (e *Engine) runSwitch(ctx context.Context, j *journal) (Receipt, error) {
 // rolls back when it cannot. A machine that is another than the head's
 // leaves the head committed and cyfr running with Serve closed
 // (started_local); one that has not joined, or has HTTPS off, is a start
-// that failed.
+// that failed, but for a reopen, which only ever reopened Serve.
 func (e *Engine) startTarget(ctx context.Context, j *journal) (Receipt, error) {
-	done := Receipt{RequestID: j.RequestID, RequestDigest: j.RequestDigest, Op: j.Op, State: "completed", Outcome: "ok", FinalHead: j.NewHead}
+	done := Receipt{RequestID: j.RequestID, RequestDigest: j.RequestDigest, ContentDigest: j.ContentDigest, Op: j.Op, State: "completed", Outcome: "ok", FinalHead: j.NewHead}
 	if !j.Running {
 		return e.finishAnswer(j, done)
 	}
@@ -334,7 +365,7 @@ func (e *Engine) startTarget(ctx context.Context, j *journal) (Receipt, error) {
 	switch {
 	case s.ok:
 		return e.finishAnswer(j, done)
-	case s.identityMismatch():
+	case s.identityMismatch() || j.Reopen && s.local != nil:
 		return e.finishAnswer(j, e.completed(j, "started_local", s.local, j.NewHead))
 	}
 	why := s.why
@@ -397,7 +428,7 @@ func rolledBackLocal(j *journal, why string, local *Refusal) *Refusal {
 }
 
 func (e *Engine) completed(j *journal, outcome string, ref *Refusal, final *Head) Receipt {
-	r := Receipt{RequestID: j.RequestID, RequestDigest: j.RequestDigest, Op: j.Op, State: "completed", Outcome: outcome, FinalHead: final}
+	r := Receipt{RequestID: j.RequestID, RequestDigest: j.RequestDigest, ContentDigest: j.ContentDigest, Op: j.Op, State: "completed", Outcome: outcome, FinalHead: final}
 	if ref != nil {
 		r.Code, r.Payload = ref.Code, ref.Payload
 	}
@@ -441,7 +472,7 @@ func (e *Engine) outcomeUnknown(j *journal, err error) (Receipt, error) {
 // blocked answers a mutating method while the journal holds another
 // operation: an uncertain one with its receipt, a waiting join with
 // reach_busy naming it, anything else as unfinished.
-func (e *Engine) blocked(id, digest, op string) (Receipt, bool, error) {
+func (e *Engine) blocked(id, digest, op, content string) (Receipt, bool, error) {
 	j, err := e.readJournal()
 	if err != nil || j == nil {
 		return Receipt{}, false, err
@@ -451,10 +482,10 @@ func (e *Engine) blocked(id, digest, op string) (Receipt, bool, error) {
 		rc, err := answer(j.receipt())
 		return rc, true, err
 	case j.Op == "join" && j.Join != nil && j.Join.State == "waiting":
-		rc, err := e.reject(id, digest, op, joinBusy(j.Join.JoinID, j.Join.Deadline))
+		rc, err := e.rejectContent(id, digest, content, op, joinBusy(j.Join.JoinID, j.Join.Deadline))
 		return rc, true, err
 	}
-	rc, err := answer(Receipt{RequestID: id, RequestDigest: digest, Op: op, State: "rejected", Code: "reach_outcome_unknown",
+	rc, err := answer(Receipt{RequestID: id, RequestDigest: digest, ContentDigest: content, Op: op, State: "rejected", Code: "reach_outcome_unknown",
 		Payload: map[string]string{"reason": "the " + j.Op + " " + j.RequestID + " is unfinished"}})
 	return rc, true, err
 }
@@ -470,7 +501,8 @@ func (e *Engine) writeEnvKeys(want map[string]string) error {
 	if err != nil && !os.IsNotExist(err) {
 		return err
 	}
-	return e.writeDurable(path, parseDotenv(data).withKeys(want), e.envMode())
+	set, unset := parseDotenv(data).headEdit(want)
+	return e.writeDurable(path, EditEnv(data, set, unset), e.envMode())
 }
 
 // nameChanged refuses a tailnet switch whose machine is no longer the

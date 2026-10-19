@@ -6,6 +6,7 @@ package reach
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -55,7 +56,7 @@ func (c joinContainer) expiry() time.Time {
 func (e *Engine) observe(ctx context.Context) ([]Container, error) {
 	res, err := e.docker.Run(ctx, Call{Args: []string{"ps", "-a", "--no-trunc", "--filter", "label=" + labelProject + "=" + e.project, "--format", psFormat}, Deadline: probeDeadline})
 	if err != nil {
-		return nil, fmt.Errorf("docker ps failed (%v): %s", err, lastLine(res.Stderr))
+		return nil, errors.New(failed("docker ps", err, res.Stderr))
 	}
 	var out []Container
 	for _, line := range strings.Split(string(res.Stdout), "\n") {
@@ -77,7 +78,7 @@ func (e *Engine) observe(ctx context.Context) ([]Container, error) {
 func (e *Engine) observeJoins(ctx context.Context) ([]joinContainer, error) {
 	res, err := e.docker.Run(ctx, Call{Args: []string{"ps", "-a", "--no-trunc", "--filter", "label=" + labelJoinProject + "=" + e.project, "--format", psJoinFormat}, Deadline: probeDeadline})
 	if err != nil {
-		return nil, fmt.Errorf("docker ps failed (%v): %s", err, lastLine(res.Stderr))
+		return nil, errors.New(failed("docker ps", err, res.Stderr))
 	}
 	var out []joinContainer
 	for _, line := range strings.Split(string(res.Stdout), "\n") {
@@ -193,7 +194,7 @@ func (e *Engine) stopRemove(ctx context.Context, names []string) string {
 	for _, cmd := range [][]string{{"stop"}, {"rm", "-f"}} {
 		res, err := e.docker.Run(ctx, Call{Args: append(cmd, names...), Deadline: StopDeadline})
 		if err != nil && !onlyGone(res.Stderr) {
-			return fmt.Sprintf("docker %s failed (%v): %s", cmd[0], err, lastLine(res.Stderr))
+			return failed("docker "+cmd[0], err, res.Stderr)
 		}
 	}
 	return ""

@@ -342,3 +342,54 @@ func TestRollbackToAHeadServedLocallyIsARollback(t *testing.T) {
 		})
 	}
 }
+
+// HTTPS off at a start leaves Serve closed and says to turn HTTPS on and
+// run `cyfr reach tailnet` again; following that instruction must work:
+// the preview of tailnet is a reopen of the head .env holds, and its
+// switch validates the machine and opens Serve. Still off, the switch
+// answers started_local with the same refusal.
+func TestHTTPSOffInstructionCanBeFollowed(t *testing.T) {
+	h := newHome(t)
+	h.fake.startStack(t, h.head())
+	h.toTailnet(1, testKey, false)
+	if _, err := h.e.Stop(bg, "down", false); err != nil {
+		t.Fatal(err)
+	}
+	h.fake.st.Volumes[stateVolume].HTTPS = false
+	rc, err := h.e.Start(bg, "up")
+	if rc.Outcome != "started_local" || refusalCode(err) != "tailnet_https_off" || !strings.Contains(rc.Refusal().Message(), "run `cyfr reach tailnet` again") {
+		t.Fatalf("start answered %+v, %v", rc, err)
+	}
+	head := h.head()
+	p := h.preview(Target{Mode: ModeTailnet}, "")
+	if !p.Reopen || p.OldDigest != p.NewDigest || p.NewDigest != head.Digest() || p.Old.Digest() != p.New.Digest() {
+		t.Fatalf("the preview is %+v", p)
+	}
+	still, err := h.e.Switch(bg, SwitchRequest{ID: id(5), Target: Target{Mode: ModeTailnet}, OldDigest: p.OldDigest, NewDigest: p.NewDigest})
+	if refusalCode(err) != "tailnet_https_off" || still.Outcome != "started_local" || still.State != "completed" {
+		t.Fatalf("a reopen with HTTPS still off answered %+v, %v", still, err)
+	}
+
+	h.fake.st.Volumes[stateVolume].HTTPS = true
+	r := SwitchRequest{ID: id(6), Target: Target{Mode: ModeTailnet}, OldDigest: p.OldDigest, NewDigest: p.NewDigest}
+	mark := len(h.fake.calls())
+	rc, err = h.e.Switch(bg, r)
+	if err != nil || rc.State != "completed" || rc.Outcome != "ok" || rc.RequestDigest != switchDigest(r) || rc.FinalHead.Digest() != head.Digest() {
+		t.Fatalf("the reopen answered %+v, %v", rc, err)
+	}
+	if got, _ := os.ReadFile(h.e.servePath()); string(got) != serveOpen(4001) {
+		t.Errorf("Serve's configuration is %s", got)
+	}
+	for _, c := range h.fake.calls()[mark:] {
+		if c.Args[0] == "stop" || c.Args[0] == "rm" {
+			t.Errorf("the reopen stopped the stack: %s", c)
+		}
+	}
+	if h.head().Digest() != head.Digest() {
+		t.Error("the reopen changed .env")
+	}
+	h.assertConverged(tailnetStack...)
+	if _, err := h.e.Preview(bg, Target{Mode: ModeTailnet}, ""); refusalCode(err) != "tailnet_active" {
+		t.Errorf("once Serve is open the preview answers %v", err)
+	}
+}

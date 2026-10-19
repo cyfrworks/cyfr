@@ -8,7 +8,10 @@ import (
 	"encoding/hex"
 	"errors"
 	"io/fs"
+	"maps"
 	"os"
+	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 )
@@ -179,86 +182,120 @@ func (d *dotenv) heldKeys() map[string]string {
 	return m
 }
 
-// insertOrder is where a head key .env lacks is written: right after the
-// CYFR_REACH line, in this order.
-var insertOrder = []string{"CYFR_REACH", "CYFR_HOST", "CYFR_PUBLIC_URL", "CYFR_TAILNET_NODE_ID", "CADDY_ACME_EMAIL", "CYFR_PORT", "CYFR_LOCUS_BUILDS_URL"}
-
-// withKeys is .env with every head key set to want's value: a key whose
-// value is already that is left as it is written; a changed key is
-// written on its first assignment's lines and loses every other
-// assignment; a removed key loses every assignment; a key .env lacks goes
-// after the CYFR_REACH line. Every other line is kept byte for byte.
-func (d *dotenv) withKeys(want map[string]string) []byte {
+// headEdit is the edit that gives .env the head keys want names: a key
+// whose value is already that is left as it is written, so its spelling
+// stays; a changed key is set; a key the head omits is unset.
+func (d *dotenv) headEdit(want map[string]string) (set map[string]string, unset []string) {
 	held := d.heldKeys()
-	type edit struct {
-		first, last int
-		text        []string
-	}
-	var edits []edit
-	var missing []string
-	for _, key := range insertOrder {
+	set = map[string]string{}
+	for _, key := range headKeys() {
 		value := want[key]
 		mine := slices.DeleteFunc(slices.Clone(d.entries), func(e envEntry) bool { return e.key != key })
 		inherits := slices.ContainsFunc(mine, func(e envEntry) bool { return e.inherit })
-		if held[key] == value && !inherits && (value == "" || len(mine) > 0) {
-			continue
+		switch {
+		case held[key] == value && !inherits && (value == "" || len(mine) > 0):
+		case value == "":
+			unset = append(unset, key)
+		default:
+			set[key] = value
 		}
+	}
+	return set, unset
+}
+
+// EditEnv is text, a .env file, with every key of set assigned its value
+// and every key of unset assigned none, read with the grammar the engine
+// and compose read .env with: a set key's last assignment is rewritten
+// and its earlier ones removed, a key it lacks is appended at the end; an
+// unset key loses every assignment, an inheriting bare name included.
+// Every other line, a quoted value's lines across several included, is
+// kept byte for byte. A value that does not read back bare is quoted.
+func EditEnv(text []byte, set map[string]string, unset []string) []byte {
+	d := parseDotenv(text)
+	drop := map[int]bool{}
+	rewrite := map[int]string{}
+	var appended []string
+	for _, key := range slices.Sorted(maps.Keys(set)) {
+		mine := slices.DeleteFunc(slices.Clone(d.entries), func(e envEntry) bool { return e.key != key })
 		if len(mine) == 0 {
-			if value != "" {
-				missing = append(missing, key+"="+value)
-			}
+			appended = append(appended, envLine(key, set[key]))
 			continue
 		}
 		for i, entry := range mine {
-			e := edit{first: entry.first, last: entry.last}
-			if i == 0 && value != "" {
-				e.text = []string{key + "=" + value}
+			for line := entry.first; line <= entry.last; line++ {
+				drop[line] = true
 			}
-			edits = append(edits, e)
+			if i == len(mine)-1 {
+				delete(drop, entry.first)
+				rewrite[entry.first] = envLine(key, set[key])
+			}
 		}
 	}
-	slices.SortFunc(edits, func(a, b edit) int { return a.first - b.first })
-
-	reach := -1
-	for _, entry := range d.entries {
-		if entry.key == "CYFR_REACH" {
-			reach = entry.last
-			break
+	for _, key := range unset {
+		if _, ok := set[key]; ok {
+			continue
+		}
+		for _, entry := range d.entries {
+			if entry.key == key {
+				for line := entry.first; line <= entry.last; line++ {
+					drop[line] = true
+				}
+			}
 		}
 	}
 	var out []string
-	next := 0
-	insert := func() {
-		out = append(out, missing...)
-		missing = nil
-	}
-	for i := 0; i < len(d.lines); i++ {
-		if next < len(edits) && edits[next].first == i {
-			e := edits[next]
-			out = append(out, e.text...)
-			if e.last >= reach && e.first <= reach && len(e.text) > 0 {
-				insert()
-			}
-			i = e.last
-			next++
-			continue
-		}
-		out = append(out, d.lines[i])
-		if i == reach {
-			insert()
+	for i, line := range d.lines {
+		switch {
+		case rewrite[i] != "":
+			out = append(out, rewrite[i])
+		case !drop[i]:
+			out = append(out, line)
 		}
 	}
-	if len(missing) > 0 {
-		// No CYFR_REACH line: the keys go at the end, before the final
-		// newline when the file ends in one.
+	if len(appended) > 0 {
 		if n := len(out); n > 0 && out[n-1] == "" {
-			out = append(slices.Concat(out[:n-1], missing), "")
+			out = append(slices.Concat(out[:n-1], appended), "")
+		} else if n == 0 || n == 1 && out[0] == "" {
+			out = append(appended, "")
 		} else {
-			out = append(out, missing...)
-			out = append(out, "")
+			out = append(slices.Concat(out, appended), "")
 		}
 	}
 	return []byte(strings.Join(out, "\n"))
+}
+
+// EditEnvFile applies EditEnv to the .env file at path (the file a link
+// there names), none read as empty, and writes the result durably,
+// keeping the file's mode: 0600 for a new one.
+func EditEnvFile(path string, set map[string]string, unset []string) error {
+	if target, err := filepath.EvalSymlinks(path); err == nil {
+		path = target
+	}
+	data, err := os.ReadFile(path)
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return err
+	}
+	mode := os.FileMode(0o600)
+	if info, err := os.Stat(path); err == nil {
+		mode = info.Mode().Perm()
+	}
+	return writeDurable(path, EditEnv(data, set, unset), mode, nil)
+}
+
+// bareValue is a value that reads back as written with no quotes.
+var bareValue = regexp.MustCompile(`^[A-Za-z0-9_./:@%+=,~^-]*$`)
+
+// envLine is key's assignment of value, quoted where a bare value would
+// not read back the same: in single quotes, read literally, unless the
+// value holds one or a line break; then in double quotes, escaped.
+func envLine(key, value string) string {
+	switch {
+	case bareValue.MatchString(value):
+		return key + "=" + value
+	case !strings.ContainsAny(value, "'\n\r"):
+		return key + "='" + value + "'"
+	}
+	return key + `="` + strings.NewReplacer(`\`, `\\`, `"`, `\"`, "\n", `\n`, "\r", `\r`).Replace(value) + `"`
 }
 
 // readEnv reads the project's .env, nil when there is none, and refuses

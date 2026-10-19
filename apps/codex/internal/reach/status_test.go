@@ -4,6 +4,8 @@
 package reach
 
 import (
+	"context"
+	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -146,5 +148,63 @@ func TestReceiptRetentionKeepsBothMinimums(t *testing.T) {
 	names, _ := readDirNames(filepath.Join(h2.dir, stateDir, receiptsDir))
 	if len(names) != 300 {
 		t.Errorf("%d of 300 receipts within the day are kept", len(names))
+	}
+}
+
+// No error, receipt or state file carries a .env value from what docker
+// wrote: every diagnosis names what failed, never the text docker quoted.
+func TestDockerDiagnosticsCarryNoEnvValue(t *testing.T) {
+	const secret = "sentinel-secret-from-env"
+	h := newHome(t)
+	h.fake.startStack(t, h.head())
+	writeFile(t, h.e.envPath(), []byte(h.env()+"DATABASE_URL=postgres://alice:"+secret+"@db/cyfr\n"))
+	// Docker's diagnostic as compose writes it, then one no form names.
+	stderr := "failed to read .env: line 7: unterminated quoted value \"postgres://alice:" + secret + "@db/cyfr\n'services[cyfr].x' parsing \"" + secret + "\": invalid syntax\n"
+	h.fake.hook = func(_ context.Context, c *fakeCall) *fakeAnswer {
+		return &fakeAnswer{Stderr: stderr, Code: 1}
+	}
+	var texts []string
+	note := func(rc Receipt, err error) {
+		if err != nil {
+			texts = append(texts, err.Error())
+			if r, ok := err.(*Refusal); ok {
+				texts = append(texts, r.Message())
+			}
+		}
+		texts = append(texts, fmt.Sprintf("%+v", rc))
+	}
+	texts = append(texts, fmt.Sprint(h.e.CheckStack(bg)))
+	note(h.e.Start(bg, "up"))
+	note(h.e.Switch(bg, h.request(id(1), publicTarget, "")))
+	note(h.e.Join(bg, JoinRequest{ID: id(2)}))
+	note(h.e.Stop(bg, "down", true))
+	s, err := h.e.Status(bg)
+	texts = append(texts, fmt.Sprintf("%+v %v", s, err))
+	_, err = h.e.ComposeArgs(bg, h.head(), "ps")
+	texts = append(texts, fmt.Sprint(err))
+	stderr = "error: the daemon could not use " + secret + "\n"
+	texts = append(texts, fmt.Sprint(h.e.CheckStack(bg)))
+	note(h.e.Start(bg, "up"))
+	note(h.e.Switch(bg, h.request(id(3), publicTarget, "")))
+	for path, data := range h.snapshot() {
+		if path != ".env" {
+			texts = append(texts, data)
+		}
+	}
+	// A flattened configuration holds .env's values; one compose wrote
+	// that does not read is said by its line. YAML quotes a short value
+	// whole.
+	const short = "s3cr3tVal"
+	h.fake.hook = func(_ context.Context, c *fakeCall) *fakeAnswer {
+		if c.Args[0] == "compose" && slices.Contains(c.Args, "config") {
+			return &fakeAnswer{Stdout: "services:\n  cyfr:\n    environment: " + short + "\n"}
+		}
+		return nil
+	}
+	texts = append(texts, fmt.Sprint(h.e.CheckStack(bg)))
+	for _, text := range texts {
+		if strings.Contains(text, secret) || strings.Contains(text, short) {
+			t.Errorf("a diagnosis carries the .env value: %s", text)
+		}
 	}
 }

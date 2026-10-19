@@ -5,10 +5,12 @@ package reach
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"maps"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 
@@ -41,13 +43,18 @@ func (e *Engine) selection(files []string, h Head) []string {
 // configuration compose would run for h's selection, .env's values
 // inlined.
 func (e *Engine) flatten(ctx context.Context, h Head) ([]byte, error) {
+	// compose reads COMPOSE_* from .env: no compose call runs over one
+	// that sets any.
+	if _, err := e.readEnv(); err != nil {
+		return nil, err
+	}
 	files, err := e.defaultFiles()
 	if err != nil {
 		return nil, err
 	}
 	res, err := e.docker.Run(ctx, Call{Args: append(e.selection(files, h), "config"), Deadline: StopDeadline})
 	if err != nil {
-		return nil, fmt.Errorf("reach: docker compose config failed (%v): %s", err, lastLine(res.Stderr))
+		return nil, fmt.Errorf("reach: %s", failed("docker compose config", err, res.Stderr))
 	}
 	return res.Stdout, nil
 }
@@ -181,10 +188,18 @@ type config struct {
 	} `yaml:"services"`
 }
 
+var yamlLine = regexp.MustCompile(`line ([0-9]+)`)
+
 func parseConfig(content []byte) (config, error) {
 	var c config
 	if err := yaml.Unmarshal(content, &c); err != nil {
-		return c, fmt.Errorf("reach: read the flattened configuration: %w", err)
+		// The configuration holds .env's values, which a YAML error may
+		// quote: it is said by its line alone.
+		where := ""
+		if m := yamlLine.FindStringSubmatch(err.Error()); m != nil {
+			where = " at line " + m[1]
+		}
+		return c, fmt.Errorf("reach: the flattened configuration does not read as compose writes it%s", where)
 	}
 	return c, nil
 }
@@ -346,6 +361,8 @@ type provenance struct {
 	seen    map[string]bool
 	read    map[string]bool
 	envFile bool
+	// values are .env's, for interpolation.
+	values map[string]string
 	// defines are the files that define the cyfr service, in the order
 	// compose reads them.
 	defines []string
@@ -358,21 +375,19 @@ func (p *provenance) rel(path string) string {
 	return path
 }
 
-// load reads a compose file into its top-level mapping node.
-func (p *provenance) load(path string) (*yaml.Node, error) {
+// load reads a compose file as compose's YAML reader resolves it:
+// anchors, aliases and every form of merge key applied.
+func (p *provenance) load(path string) (map[string]any, error) {
 	p.read[filepath.Clean(path)] = true
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("reach: read %s: %w", p.rel(path), err)
 	}
-	var doc yaml.Node
+	var doc map[string]any
 	if err := yaml.Unmarshal(data, &doc); err != nil {
-		return nil, fmt.Errorf("reach: read %s: %w", p.rel(path), err)
+		return nil, fmt.Errorf("%s does not read as YAML, so cyfr cannot check it before compose reads it. Nothing started. Correct it", p.rel(path))
 	}
-	if len(doc.Content) == 0 {
-		return &yaml.Node{Kind: yaml.MappingNode}, nil
-	}
-	return doc.Content[0], nil
+	return doc, nil
 }
 
 // file checks one file of the set and every file it includes.
@@ -386,40 +401,36 @@ func (p *provenance) file(path string) error {
 	if err != nil {
 		return err
 	}
-	if inc := mapping(root, "include"); inc != nil {
-		var entries []any
-		if err := inc.Decode(&entries); err != nil {
-			return fmt.Errorf("reach: read the include: list of %s: %w", p.rel(path), err)
-		}
-		for _, entry := range entries {
-			var paths []string
-			switch v := entry.(type) {
+	entries, _ := root["include"].([]any)
+	for _, entry := range entries {
+		var paths []string
+		switch v := entry.(type) {
+		case string:
+			paths = []string{v}
+		case map[string]any:
+			switch q := v["path"].(type) {
 			case string:
-				paths = []string{v}
-			case map[string]any:
-				switch q := v["path"].(type) {
-				case string:
-					paths = []string{q}
-				case []any:
-					for _, x := range q {
-						if s, ok := x.(string); ok {
-							paths = append(paths, s)
-						}
+				paths = []string{q}
+			case []any:
+				for _, x := range q {
+					if s, ok := x.(string); ok {
+						paths = append(paths, s)
 					}
 				}
 			}
-			for _, inc := range paths {
-				target, err := p.local(path, inc, "include:")
-				if err != nil {
-					return err
-				}
-				if err := p.file(target); err != nil {
-					return err
-				}
+		}
+		for _, inc := range paths {
+			target, err := p.local(path, inc, "include:")
+			if err != nil {
+				return err
+			}
+			if err := p.file(target); err != nil {
+				return err
 			}
 		}
 	}
-	if svc := mapping(mapping(root, "services"), cyfrService); svc != nil {
+	services, _ := root["services"].(map[string]any)
+	if svc, ok := services[cyfrService].(map[string]any); ok {
 		p.defines = append(p.defines, p.rel(path))
 		return p.service(path, svc, cyfrService, map[string]bool{})
 	}
@@ -439,37 +450,34 @@ func (p *provenance) local(from, name, what string) (string, error) {
 	return filepath.Clean(filepath.Join(filepath.Dir(from), name)), nil
 }
 
-// service checks one definition of a service in cyfr's chain: its own
-// environment: entries, its env_file, and the service it extends.
-func (p *provenance) service(path string, svc *yaml.Node, name string, chain map[string]bool) error {
+// service checks one definition of a service in cyfr's chain: the names
+// its environment: assigns as compose resolves them, its env_file, and
+// the service it extends.
+func (p *provenance) service(path string, svc map[string]any, name string, chain map[string]bool) error {
 	key := path + "\x00" + name
 	if chain[key] {
 		return nil
 	}
 	chain[key] = true
-	var def struct {
-		Environment any `yaml:"environment"`
-		EnvFile     any `yaml:"env_file"`
-		Extends     any `yaml:"extends"`
+	keys, err := p.environmentKeys(svc["environment"])
+	if err != nil {
+		return Refuse("compose_override_refused", map[string]string{"file": p.rel(path), "service": name, "key": err.Error()})
 	}
-	if err := svc.Decode(&def); err != nil {
-		return fmt.Errorf("reach: read the %s service of %s: %w", name, p.rel(path), err)
-	}
-	for _, k := range environmentKeys(def.Environment) {
+	for _, k := range keys {
 		if slices.Contains(headKeys(), k) {
 			return Refuse("compose_override_refused", map[string]string{"file": p.rel(path), "service": name, "key": k})
 		}
 	}
-	for _, f := range envFiles(def.EnvFile) {
+	for _, f := range envFiles(svc["env_file"]) {
 		if target, err := p.local(path, f, "env_file:"); err == nil && target == filepath.Join(p.e.dir, ".env") {
 			p.envFile = true
 		}
 	}
-	if def.Extends == nil {
+	if svc["extends"] == nil {
 		return nil
 	}
 	base, file := "", ""
-	switch v := def.Extends.(type) {
+	switch v := svc["extends"].(type) {
 	case string:
 		base = v
 	case map[string]any:
@@ -478,7 +486,6 @@ func (p *provenance) service(path string, svc *yaml.Node, name string, chain map
 	}
 	target := path
 	if file != "" {
-		var err error
 		if target, err = p.local(path, file, "extends:"); err != nil {
 			return err
 		}
@@ -487,17 +494,20 @@ func (p *provenance) service(path string, svc *yaml.Node, name string, chain map
 	if err != nil {
 		return err
 	}
-	next := mapping(mapping(root, "services"), base)
-	if next == nil {
+	services, _ := root["services"].(map[string]any)
+	next, ok := services[base].(map[string]any)
+	if !ok {
 		return fmt.Errorf("reach: the %s service of %s extends %s, which %s does not define", name, p.rel(path), base, p.rel(target))
 	}
 	return p.service(target, next, base, chain)
 }
 
-// environmentKeys are the names an environment: block assigns, in its
-// mapping form or its list form (`NAME=value`, or `NAME` taken from the
-// environment).
-func environmentKeys(env any) []string {
+// environmentKeys are the names an environment: block assigns as compose
+// resolves them: a mapping's keys as written, which compose takes
+// literally; a list entry (`NAME=value`, or `NAME` taken from the
+// environment) interpolated whole first, as compose interpolates it. An
+// entry it cannot resolve is an error naming the entry's name as written.
+func (p *provenance) environmentKeys(env any) ([]string, error) {
 	var keys []string
 	switch v := env.(type) {
 	case map[string]any:
@@ -506,13 +516,90 @@ func environmentKeys(env any) []string {
 		}
 	case []any:
 		for _, item := range v {
-			if s, ok := item.(string); ok {
-				k, _, _ := strings.Cut(s, "=")
-				keys = append(keys, strings.TrimSpace(k))
+			s, ok := item.(string)
+			if !ok {
+				continue
 			}
+			resolved, ok := p.interpolate(s)
+			if !ok {
+				k, _, _ := strings.Cut(s, "=")
+				return nil, errors.New(strings.TrimSpace(k))
+			}
+			k, _, _ := strings.Cut(resolved, "=")
+			keys = append(keys, strings.TrimSpace(k))
 		}
 	}
-	return keys
+	return keys, nil
+}
+
+// composeVars is compose's variable syntax as cyfr resolves it: $$,
+// ${NAME}, ${NAME} with an operator and a plain word, and $NAME.
+var composeVars = regexp.MustCompile(`\$\$|\$\{([A-Za-z_][A-Za-z0-9_]*)(?:(:?[-?+])([^}$]*))?\}|\$([A-Za-z_][A-Za-z0-9_]*)`)
+
+// interpolate resolves s as compose would, from cyfr's environment, then
+// .env; false when it cannot be resolved here: a name compose would
+// refuse unset, or a $ outside the plain forms.
+func (p *provenance) interpolate(s string) (string, bool) {
+	if !strings.Contains(s, "$") {
+		return s, true
+	}
+	if p.values == nil {
+		p.values = map[string]string{}
+		if env, err := p.e.readEnv(); err == nil && env != nil {
+			p.values = env.values()
+		}
+	}
+	lookup := func(name string) (string, bool) {
+		if v, ok := os.LookupEnv(name); ok && !strings.HasPrefix(strings.ToUpper(name), "COMPOSE_") {
+			return v, true
+		}
+		v, ok := p.values[name]
+		return v, ok
+	}
+	if strings.Contains(composeVars.ReplaceAllString(s, ""), "$") {
+		return "", false
+	}
+	resolved := true
+	out := composeVars.ReplaceAllStringFunc(s, func(m string) string {
+		if m == "$$" {
+			return "$"
+		}
+		sub := composeVars.FindStringSubmatch(m)
+		name, op, word := sub[1], sub[2], sub[3]
+		if name == "" {
+			name = sub[4]
+		}
+		v, set := lookup(name)
+		switch op {
+		case "":
+			resolved = resolved && set
+			return v
+		case ":-":
+			if !set || v == "" {
+				return word
+			}
+		case "-":
+			if !set {
+				return word
+			}
+		case ":?":
+			resolved = resolved && set && v != ""
+		case "?":
+			resolved = resolved && set
+		case ":+":
+			if set && v != "" {
+				return word
+			}
+			return ""
+		case "+":
+			if set {
+				return word
+			}
+			return ""
+		}
+		return v
+	})
+	return out, resolved
 }
 
 // envFiles are the paths an env_file: names, as one path, a list of
@@ -536,34 +623,4 @@ func envFiles(v any) []string {
 		return out
 	}
 	return nil
-}
-
-// mapping is the value of key in the mapping node m, or nil.
-func mapping(m *yaml.Node, key string) *yaml.Node {
-	if m == nil || m.Kind != yaml.MappingNode {
-		return nil
-	}
-	for i := 0; i+1 < len(m.Content); i += 2 {
-		if m.Content[i].Value == key {
-			return m.Content[i+1]
-		}
-	}
-	// A merge key's mapping, as compose reads `<<: *anchor`.
-	for i := 0; i+1 < len(m.Content); i += 2 {
-		if m.Content[i].Tag == "!!merge" || m.Content[i].Value == "<<" {
-			v := m.Content[i+1]
-			if v.Kind == yaml.AliasNode {
-				v = v.Alias
-			}
-			if found := mapping(v, key); found != nil {
-				return found
-			}
-		}
-	}
-	return nil
-}
-
-func lastLine(b []byte) string {
-	lines := strings.Split(strings.TrimSpace(string(b)), "\n")
-	return strings.TrimSpace(lines[len(lines)-1])
 }

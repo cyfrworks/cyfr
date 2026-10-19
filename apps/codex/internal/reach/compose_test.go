@@ -162,6 +162,14 @@ func TestCheckStackReadsTheSourcesProvenance(t *testing.T) {
 			"base.yml":                    "services:\n  base:\n    environment:\n      - CYFR_TAILNET_NODE_ID=n1\n",
 		}, "base.yml", "base", "CYFR_TAILNET_NODE_ID", ""},
 		{name: "remote include", files: map[string]string{"docker-compose.override.yml": "include:\n  - oci://example.com/stack\n"}, plain: "cannot check"},
+		// What compose resolves, not what the file spells: a list key it
+		// interpolates, and every merge form.
+		{"interpolated key", map[string]string{"docker-compose.override.yml": "services:\n  cyfr:\n    environment:\n      - ${HOSTKEY}=localhost\n"}, "docker-compose.override.yml", "cyfr", "CYFR_HOST", ""},
+		{"interpolated bare name", map[string]string{"docker-compose.override.yml": "services:\n  cyfr:\n    environment:\n      - $HOSTKEY\n"}, "docker-compose.override.yml", "cyfr", "CYFR_HOST", ""},
+		{"unresolvable key", map[string]string{"docker-compose.override.yml": "services:\n  cyfr:\n    environment:\n      - ${NOT_SET_ANYWHERE}=localhost\n"}, "docker-compose.override.yml", "cyfr", "${NOT_SET_ANYWHERE}", ""},
+		{"merged service sequence", map[string]string{"docker-compose.override.yml": "x-part: &part\n  cyfr:\n    environment:\n      CYFR_HOST: localhost\nservices:\n  <<: [*part]\n"}, "docker-compose.override.yml", "cyfr", "CYFR_HOST", ""},
+		{"merged environment alias", map[string]string{"docker-compose.override.yml": "x-env: &env\n  CYFR_PORT: \"4000\"\nservices:\n  cyfr:\n    environment:\n      <<: *env\n"}, "docker-compose.override.yml", "cyfr", "CYFR_PORT", ""},
+		{"nested merges", map[string]string{"docker-compose.override.yml": "x-inner: &inner\n  environment:\n    CYFR_REACH: local\nx-outer: &outer\n  <<: [*inner]\nx-svc: &svc\n  cyfr:\n    <<: *outer\nservices:\n  <<: *svc\n"}, "docker-compose.override.yml", "cyfr", "CYFR_REACH", ""},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			h := newHome(t)
@@ -169,6 +177,7 @@ func TestCheckStackReadsTheSourcesProvenance(t *testing.T) {
 				os.MkdirAll(filepath.Dir(filepath.Join(h.dir, name)), 0o755)
 				writeFile(t, filepath.Join(h.dir, name), []byte(text))
 			}
+			writeFile(t, h.e.envPath(), []byte(h.env()+"HOSTKEY=CYFR_HOST\n"))
 			err := h.e.CheckStack(bg)
 			switch {
 			case c.files == nil:
@@ -204,6 +213,14 @@ func TestCheckStackReadsTheSourcesProvenance(t *testing.T) {
 				}
 			}
 		})
+	}
+
+	// A mapping key compose takes literally assigns no reach key.
+	literal := newHome(t)
+	writeFile(t, filepath.Join(literal.dir, "docker-compose.override.yml"), []byte("services:\n  cyfr:\n    environment:\n      ${HOSTKEY}: localhost\n"))
+	writeFile(t, literal.e.envPath(), []byte(literal.env()+"HOSTKEY=CYFR_HOST\n"))
+	if err := literal.e.CheckStack(bg); err != nil {
+		t.Errorf("a literal mapping key is refused: %v", err)
 	}
 
 	h := newHome(t)

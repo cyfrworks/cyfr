@@ -5,6 +5,7 @@ package reach
 
 import (
 	"context"
+	"errors"
 	"maps"
 	"os"
 	"path/filepath"
@@ -22,6 +23,11 @@ func (e *Engine) resume(ctx context.Context) ([]Receipt, error) {
 		return nil, err
 	}
 	e.sweepStrays(j)
+	if _, err := e.readEnv(); err != nil && j == nil {
+		// Nothing to stop: a .env compose would misread is refused
+		// before any docker call.
+		return nil, err
+	}
 	var out []Receipt
 	if j != nil {
 		rc, done, err := e.recoverOp(ctx, j)
@@ -86,6 +92,8 @@ func (e *Engine) recoverSwitch(ctx context.Context, j *journal) (Receipt, error)
 			}
 		}
 	}
+	// With a COMPOSE_* setting in .env no compose call is made: the
+	// journal's services and its kept files name what to stop.
 	if names, err := e.everyReachService(ctx); err == nil {
 		services = union(services, names)
 	}
@@ -94,18 +102,30 @@ func (e *Engine) recoverSwitch(ctx context.Context, j *journal) (Receipt, error)
 		return e.uncertain(j, s)
 	}
 	st, err := e.readState()
+	var ref *Refusal
+	if errors.As(err, &ref) && ref.Code == "compose_env_refused" {
+		// Stopped and verified without compose, which would read the
+		// setting; the switch stays unfinished until .env reads.
+		return Receipt{}, ref
+	}
 	held := keysOf(Head{})
 	if err == nil {
 		held = st.heldKeys()
 	}
+	// A .env that holds no coherent head is the person's edit, kept as
+	// it is: only an old head already incoherent when the switch began
+	// is .env unchanged.
 	switch {
-	case err == nil && maps.Equal(held, j.OldKeys):
+	case err == nil && j.OldHead == nil && maps.Equal(held, j.OldKeys):
 		return e.recoverOld(ctx, j)
-	case err == nil && maps.Equal(held, j.NewKeys):
+	case err != nil || st.headErr != nil:
+	case maps.Equal(held, j.NewKeys) && (j.Reopen || !maps.Equal(held, j.OldKeys)):
 		if err := e.setPhase(j, "committed"); err != nil {
 			return e.outcomeUnknown(j, err)
 		}
 		return e.startTarget(ctx, j)
+	case maps.Equal(held, j.OldKeys):
+		return e.recoverOld(ctx, j)
 	}
 	// .env was edited meanwhile: the switch failed, and the home is
 	// started as .env now says, when it can be.
