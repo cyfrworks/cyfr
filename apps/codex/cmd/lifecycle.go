@@ -247,7 +247,7 @@ func ensureEnvFileKeys(path string) ([]envChange, error) {
 // newEnv is the .env init writes for a new home from the template at
 // path, through the engine's editor (access.EditEnv): the answer to init's
 // email question (the operators' setting), the stack's keys (stackKeys)
-// and the local head's access keys, every other line of the template kept.
+// and the local head's access settings, every other line of the template kept.
 // The template documents the email on a commented line, which stays; its
 // assignment is added at the end.
 func newEnv(path, adminEmail string) ([]byte, []envChange, access.Derivation, error) {

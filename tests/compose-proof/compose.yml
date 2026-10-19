@@ -7,7 +7,7 @@
 # proof's own compose calls, resolve beside docker-compose.yml. cyfr, caddy
 # and tailscale keep every setting the shipped file gives them, cyfr's
 # networks, fixed addresses, environment, mounts and health probe among
-# them, and the access keys reach cyfr from .env alone. This adds only:
+# them, and the access settings reach cyfr from .env alone. This adds only:
 #
 #   - the app image built from the tree, and the Tailscale stand-in
 #     (tests/compose-proof/tailscale-standin/) in place of the pinned

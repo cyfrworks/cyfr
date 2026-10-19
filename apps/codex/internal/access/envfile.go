@@ -33,7 +33,7 @@ func (d *dotenv) composeKey() string {
 	return keys[0]
 }
 
-// headKeys are the access keys .env holds for a head, the ones a switch
+// headKeys are the access settings .env holds for a head, the ones a switch
 // writes; envKeys (derive.go) derives their values.
 func headKeys() []string {
 	keys := make([]string, len(envKeys))

@@ -194,7 +194,7 @@ type journal struct {
 	Phase         string    `json:"phase"`
 	At            time.Time `json:"at"`
 
-	// A switch: both heads, the access keys .env held before (OldKeys) and
+	// A switch: both heads, the access settings .env held before (OldKeys) and
 	// is written with (NewKeys), "" for a key it does not hold; whether
 	// cyfr was running when it was accepted; every service its stop and
 	// verify stops; why the new head's start failed, once a rollback

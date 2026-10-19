@@ -146,7 +146,7 @@ func overrideNames(file, service, key string) string {
 // service's own environment: entries in any file of the source set is
 // refused with compose_override_refused naming the file, the service and
 // the key, even with the value .env holds; .env must reach cyfr through
-// its env_file; access keys through env_file alone pass. A name written
+// its env_file; access settings through env_file alone pass. A name written
 // with `$` in any service's environment, a list entry's or a mapping
 // key, is refused as written, whatever compose would make of it; a value
 // is not read, so one that interpolates, even a variable set nowhere,

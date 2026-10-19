@@ -575,7 +575,7 @@ func TestEnsureStackKeysOverAnExistingEnv(t *testing.T) {
 			kept:  map[string]string{"CYFR_HOST": "localhost"},
 		},
 		{
-			// A switch removes the access key a head omits, the empty builds
+			// A switch removes the access setting a head omits, the empty builds
 			// URL among them; builds stay off.
 			name:  "a builds URL a switch removed, with no key, is builds off and left so",
 			body:  base + "CYFR_LOCUS_RUNTIME_ROOT=" + root + "\nLOCUS_RUNTIME_KEY=" + runtimeKey + "\nCYFR_LOCUS_BUILDS_KEY=\nCYFR_CORS_ALLOWED_ORIGINS=\n",

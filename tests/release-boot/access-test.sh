@@ -39,7 +39,7 @@ print("GIVEN=" + json.dumps({"file": file, "env": dict(os.environ), "args": sys.
 exit 1
 SH
 chmod +x "$scratch/release/bin/cyfr"
-# A cell's settings as cyfr init writes them, access keys among them.
+# A cell's settings as cyfr init writes them, access settings among them.
 cat >"$scratch/cell/.env" <<'ENV'
 CYFR_SECRET_KEY_BASE=key-base
 CYFR_ACCESS=local

@@ -73,7 +73,7 @@ func TestUpRefusesAnIncoherentEnvBeforeAnythingStarts(t *testing.T) {
 const retiredProxySetting = "CYFR_" + "BEHIND_PROXY"
 
 // A retired name, the old proxy setting's, passes the access coherence
-// check, which reads only the access keys, and the release refuses it at
+// check, which reads only the access settings, and the release refuses it at
 // boot as a name it does not read: the start fails, and `cyfr up` reads
 // the boot's refusal from cyfr's log through the engine and prints it,
 // rather than a bare failed start.

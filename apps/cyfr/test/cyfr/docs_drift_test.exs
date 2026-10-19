@@ -1313,7 +1313,7 @@ defmodule Cyfr.DocsDriftTest do
   # ==========================================================================
 
   # The names `.env.example` assigns: the keys and addresses `cyfr init`
-  # mints, writes or completes, and the access every deployment decides,
+  # mints, writes or completes, and the access mode every deployment decides,
   # `local` until `cyfr init` or `cyfr access` writes another.
   @deployment_file_assignments ~w(
     CYFR_SECRET_KEY_BASE CYFR_ACCESS CYFR_HOST CYFR_PORT

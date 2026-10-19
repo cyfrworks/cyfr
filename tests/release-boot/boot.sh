@@ -30,7 +30,7 @@
 #            copy of the release, the run's own, reads the vector's `file`
 #            as the .env at its root, where a release reads one, and the
 #            vector's `process` reaches it as its environment, so the
-#            source rules (an access key .env and the environment assign
+#            source rules (an access setting .env and the environment assign
 #            differently, the compose file's assertion from .env) are the
 #            release's own read. Then the bare release in a network
 #            namespace of its own (a container's, with no network, holding

@@ -26,7 +26,7 @@ import (
 // stackEngine is the access engine (access.Engine) as the commands that
 // start, stop, change or read the stack use it. It owns the project's
 // lock, its recovery, every docker call made under the lock and the access
-// keys of .env.
+// settings of .env.
 type stackEngine interface {
 	Lock(holder string) (func(), error)
 	Resume(ctx context.Context) ([]access.Receipt, error)

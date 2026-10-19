@@ -45,7 +45,7 @@ func realHome(t *testing.T) (*Engine, string) {
 	return e, dir
 }
 
-// The positive case against real compose: access keys reaching cyfr only
+// The positive case against real compose: access settings reaching cyfr only
 // through env_file: .env pass, sources and effective values alike.
 func TestRealComposeCheckStackAcceptsAccessKeysThroughEnvFile(t *testing.T) {
 	requireCompose(t)
@@ -95,9 +95,9 @@ func TestRealComposeCheckStackRefusesAnOverrideSettingAHeadKey(t *testing.T) {
 // as written, compose_override_refused naming the file, the service and
 // the name, whatever compose resolves it to (CYFR_HOST through .env's own
 // nested interpolation, or a literal name compose leaves alone); a value
-// is not read, and a non-access key whose value interpolates a variable
-// set nowhere passes, as compose takes it. A mapping compose refuses is
-// never started.
+// is not read, and a key outside the access settings whose value
+// interpolates a variable set nowhere passes, as compose takes it. A
+// mapping compose refuses is never started.
 func TestRealComposeProvenanceReadsNamesNotValues(t *testing.T) {
 	requireCompose(t)
 	home := func(t *testing.T, env, override string) *Engine {
@@ -177,7 +177,7 @@ func TestRealComposeProvenanceReadsNamesNotValues(t *testing.T) {
 			t.Fatalf("compose flattens SOME_SETTING=%q: %v", env["SOME_SETTING"], err)
 		}
 		if err := e.CheckStack(bg); err != nil {
-			t.Fatalf("a non-access key with a value compose leaves empty is refused: %v", err)
+			t.Fatalf("a key outside the access settings with a value compose leaves empty is refused: %v", err)
 		}
 	})
 	for name, override := range map[string]string{

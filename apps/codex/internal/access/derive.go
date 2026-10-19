@@ -12,7 +12,7 @@ import (
 	"unicode/utf8"
 )
 
-// Target is the access a person asks for.
+// Target is the access mode a person asks for.
 type Target struct {
 	Mode, Domain, ACMEEmail string
 }
@@ -31,15 +31,15 @@ type Join struct {
 }
 
 // Derivation is a target's head and the .env change that writes it: the
-// access keys assigned, and the access keys removed because the head holds
-// no value for them.
+// access settings assigned, and the access settings removed because the
+// head holds no value for them.
 type Derivation struct {
 	Head        Head
 	Assignments map[string]string
 	Removals    []string
 }
 
-// envKeys are the .env names of the head's keys, the access keys a switch
+// envKeys are the .env names of the head's keys, the access settings a switch
 // writes. Every other line of .env is kept byte for byte.
 var envKeys = []struct {
 	name  string
@@ -183,7 +183,7 @@ type Trust struct {
 	Hops  int
 }
 
-// Boot is a coherent deployment's access, as the release resolves it.
+// Boot is a coherent deployment's access mode, as the release resolves it.
 type Boot struct {
 	Head         Head
 	Origin       string

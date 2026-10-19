@@ -54,7 +54,7 @@ type Docker interface {
 	Run(ctx context.Context, c Call) (Result, error)
 }
 
-// Engine owns how one project's home is reached: the access keys of its
+// Engine owns how one project's home is reached: the access settings of its
 // .env, the stack's access services, and the state under .cyfr/. What an
 // exported method answers, and every receipt and journal it writes,
 // passes the redactor (redact.go) last.
@@ -165,7 +165,7 @@ func (e *Engine) Head() (Head, error) {
 // before anything starts: in any file of the source set (the main file,
 // its override, every include: and extends:) no service's environment:
 // names a variable with `$` (compose_override_refused, the name as
-// written) and no access key is assigned in the cyfr service's own, .env
+// written) and no access setting is assigned in the cyfr service's own, .env
 // reaches cyfr through its env_file, and the effective values, which the
 // sources' check does not read, pass ResolveBoot with .env's own
 // read as File and the flattened environment as Process.

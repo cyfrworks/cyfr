@@ -1096,7 +1096,7 @@ defmodule Prima.Refusal do
             "then run the command again."}
 
   # A compose file that would change, behind .env, how the home is
-  # reached: an access key assigned in the service's own environment, a name
+  # reached: an access setting assigned in the service's own environment, a name
   # written with `$` in any service's environment, which cyfr does not
   # resolve, or a service that does not read .env at all.
   defp row({:compose_override_refused, %{file: file, service: service, key: key} = payload})
