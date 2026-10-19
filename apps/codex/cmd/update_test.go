@@ -891,7 +891,13 @@ func TestUpdateRunsTheCeremonyInOrder(t *testing.T) {
 	if !slices.Equal(snapshotParts, []string{"database", "database-wal", "storage", "scaffold", "keyring", ".env", "compose"}) {
 		t.Errorf("snapshotParts %v is not the roster this snapshot was taken with", snapshotParts)
 	}
-	storageRoot := "Storage root /app/data is " + filepath.Join(s.project, "data") + " on the host."
+	// The update names the root with its links resolved: macOS's temporary
+	// directory lies under /var, a link to /private/var.
+	hostRoot, err := filepath.EvalSymlinks(filepath.Join(s.project, "data"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	storageRoot := "Storage root /app/data is " + hostRoot + " on the host."
 	for _, line := range []string{storageRoot, "stopped caddy in ", "stopped tailscale in ", "stopped cyfr in ", "stopped locus-backends-guard in ", "stopped sidecar in ", "Updated to release 0.9.0.", "Snapshot of release 0.8.0: " + dir} {
 		if !strings.Contains(out, line) {
 			t.Errorf("the output lacks %q:\n%s", line, out)
