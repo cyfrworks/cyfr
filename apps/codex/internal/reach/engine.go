@@ -65,6 +65,9 @@ type Engine struct {
 	// another goroutine of the same command may run one.
 	mu     sync.Mutex
 	holder holderRecord
+	// watchdogs are the running docker children's watchdogs and their
+	// deadlines, which the holder record names.
+	watchdogs map[int]time.Time
 	// files are the materialized configurations this engine wrote and
 	// has not removed, relative to the project directory, each with what
 	// it was made from.
@@ -101,12 +104,13 @@ func Open(projectDir string, d Docker) (*Engine, error) {
 }
 
 // ErrBusy is the lock's refusal while another holder has it: the holder
-// record it wrote (command, host or container, pid in its namespace, start
-// time), the watchdog's pid when a docker child of a dead holder still
-// holds it, and the time that child's deadline ends. Its Refusal is
-// reach_busy.
+// record it wrote (command, host or container, start time) and the
+// holder's pid in its namespace, PID; while a docker child runs, the
+// watchdog's pid that holds the lock for it, even past a dead holder,
+// and the time that child's deadline ends. Its Refusal is reach_busy.
 type ErrBusy struct {
 	Holder      string
+	PID         int
 	WatchdogPID int
 	Until       time.Time
 }

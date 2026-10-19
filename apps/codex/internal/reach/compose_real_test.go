@@ -82,7 +82,8 @@ func TestRealComposeCheckStackRefusesAnOverrideSettingAHeadKey(t *testing.T) {
 		t.Fatalf("the flattened values alone are refused: %v", err)
 	}
 	err = e.CheckStack(bg)
-	if err == nil || !strings.Contains(err.Error(), "docker-compose.override.yml sets CYFR_HOST") {
+	var r *Refusal
+	if !asRefusal(err, &r) || r.Code != "compose_override_refused" || r.Message() != overrideSets("docker-compose.override.yml", "cyfr", "CYFR_HOST") {
 		t.Fatalf("CheckStack answered %v", err)
 	}
 }

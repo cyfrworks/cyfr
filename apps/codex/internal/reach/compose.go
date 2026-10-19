@@ -311,7 +311,13 @@ func (e *Engine) checkProvenance() ([]string, error) {
 		}
 	}
 	if !p.envFile {
-		return nil, fmt.Errorf(".env does not reach the cyfr service through its env_file in %s, so cyfr would not read how this home is reached. Nothing started. Give the cyfr service `env_file: [.env]`", strings.Join(files, " or "))
+		// The file to fix is the first that defines cyfr, where the
+		// shipped stack gives it .env.
+		file := files[0]
+		if len(p.defines) > 0 {
+			file = p.defines[0]
+		}
+		return nil, Refuse("compose_override_refused", map[string]string{"file": file, "service": cyfrService})
 	}
 	return slices.Sorted(maps.Keys(p.read)), nil
 }
@@ -321,6 +327,9 @@ type provenance struct {
 	seen    map[string]bool
 	read    map[string]bool
 	envFile bool
+	// defines are the files that define the cyfr service, in the order
+	// compose reads them.
+	defines []string
 }
 
 func (p *provenance) rel(path string) string {
@@ -392,6 +401,7 @@ func (p *provenance) file(path string) error {
 		}
 	}
 	if svc := mapping(mapping(root, "services"), cyfrService); svc != nil {
+		p.defines = append(p.defines, p.rel(path))
 		return p.service(path, svc, cyfrService, map[string]bool{})
 	}
 	return nil
@@ -428,7 +438,7 @@ func (p *provenance) service(path string, svc *yaml.Node, name string, chain map
 	}
 	for _, k := range environmentKeys(def.Environment) {
 		if slices.Contains(headKeys(), k) {
-			return fmt.Errorf("%s sets %s in the %s service's environment:, where it would override .env; how this home is reached comes from .env alone, which `cyfr reach` writes. Nothing started. Remove %s from %s", p.rel(path), k, name, k, p.rel(path))
+			return Refuse("compose_override_refused", map[string]string{"file": p.rel(path), "service": name, "key": k})
 		}
 	}
 	for _, f := range envFiles(def.EnvFile) {

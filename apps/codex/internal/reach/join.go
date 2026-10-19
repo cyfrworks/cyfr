@@ -81,6 +81,8 @@ func (r *joinRecord) refusal() *Refusal {
 		return Refuse("tailnet_https_off", map[string]string{"name": r.Name})
 	case "expired":
 		return Refuse("tailnet_join_expired", nil)
+	case "ended":
+		return Refuse("tailnet_join_ended", nil)
 	case "cancelled":
 		return Refuse("tailnet_join_cancelled", nil)
 	case "unsupported":
@@ -180,7 +182,7 @@ func (e *Engine) doJoin(ctx context.Context, r JoinRequest) (Receipt, error) {
 	}
 	for _, c := range js {
 		if running(c.State) && e.now().Before(c.expiry()) {
-			return refuse(Refuse("reach_busy", map[string]string{"holder": "the tailnet join " + c.JoinID + ", waiting for its approval", "pid": "none", "until": c.Deadline}))
+			return refuse(joinBusy(c.JoinID, c.expiry()))
 		}
 	}
 
@@ -275,7 +277,10 @@ func (e *Engine) runJoin(ctx context.Context, j *journal, key []byte, onAuthURL 
 				onAuthURL(s.AuthURL)
 			}
 		} else if gone, err := e.joinGone(bg, a); err == nil && gone {
-			return e.expireJoin(bg, j)
+			if !e.now().Before(a.Deadline) {
+				return e.expireJoin(bg, j)
+			}
+			return e.endedJoin(bg, j)
 		}
 		if !e.now().Before(a.Deadline.Add(joinGrace)) {
 			return e.expireJoin(bg, j)
@@ -458,6 +463,17 @@ func (e *Engine) removeJoinContainers(ctx context.Context, joinID string) string
 	return ""
 }
 
+// endedJoin ends an attempt whose container ended, or is gone, before
+// its deadline without joining: a key Tailscale refused, or the container
+// removed.
+func (e *Engine) endedJoin(ctx context.Context, j *journal) (Receipt, error) {
+	j.Join.State = "ended"
+	if err := e.writeJoin(j.Join.joinRecord); err != nil {
+		return e.outcomeUnknown(j, err)
+	}
+	return e.endJoin(ctx, j, Refuse("tailnet_join_ended", nil))
+}
+
 func (e *Engine) expireJoin(ctx context.Context, j *journal) (Receipt, error) {
 	j.Join.State = "expired"
 	if err := e.writeJoin(j.Join.joinRecord); err != nil {
@@ -534,7 +550,7 @@ func (e *Engine) forgetJoin() error {
 }
 
 // recoverJoin finishes a join whose owner died: one past its deadline is
-// removed and expired; one whose container is gone was cancelled; one
+// removed and expired; one whose container is gone ended; one
 // whose machine has joined is frozen and receipted; one still waiting
 // stays, its container ending at its own deadline. done is false for
 // that last.
@@ -556,6 +572,9 @@ func (e *Engine) recoverJoin(ctx context.Context, j *journal) (Receipt, bool, er
 	case "expired":
 		rc, err := e.expireJoin(ctx, j)
 		return rc, true, err
+	case "ended":
+		rc, err := e.endedJoin(ctx, j)
+		return rc, true, err
 	case "cancelled":
 		rc, err := e.cancelJoin(ctx, j, nil)
 		return rc, true, err
@@ -575,7 +594,7 @@ func (e *Engine) recoverJoin(ctx context.Context, j *journal) (Receipt, bool, er
 		rc, err := e.expireJoin(ctx, j)
 		return rc, true, err
 	case live == "":
-		rc, err := e.cancelJoin(ctx, j, nil)
+		rc, err := e.endedJoin(ctx, j)
 		return rc, true, err
 	}
 	if s, ok := e.statusOnce(ctx, []string{"exec", live, "tailscale", "status", "--json"}); ok && s.BackendState == "Running" {
