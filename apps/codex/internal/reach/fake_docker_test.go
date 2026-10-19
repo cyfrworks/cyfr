@@ -584,7 +584,9 @@ func (f *fakeDocker) load(files, profiles []string, env []string) (*fakeConfig, 
 	}
 	dotenv := map[string]string{}
 	if data, err := os.ReadFile(filepath.Join(f.dir, ".env")); err == nil {
-		dotenv = parseDotenv(data).values()
+		if d, err := readDotenv(data, composeEnv); err == nil {
+			dotenv = d.values()
+		}
 	}
 	lookup := func(k string) (string, bool) {
 		for _, kv := range env {

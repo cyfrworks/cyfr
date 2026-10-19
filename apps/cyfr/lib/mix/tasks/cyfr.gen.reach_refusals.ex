@@ -73,7 +73,7 @@ defmodule Mix.Tasks.Cyfr.Gen.ReachRefusals do
        [{%{then: "incoherent"}, []}]},
     {:reach_uncertain, [{%{}, ~w(observed)}]},
     {:reach_outcome_unknown, [{%{}, ~w(reason)}]},
-    {:compose_env_refused, [{%{}, ~w(key)}]},
+    {:compose_env_refused, [{%{}, ~w(key)}, {%{}, ~w(line)}]},
     {:compose_override_refused, [{%{}, ~w(file service key)}, {%{}, ~w(file service)}]},
     {:setup_token_with_admins, [{%{}, []}]},
     {:setup_token_refused,
@@ -83,7 +83,7 @@ defmodule Mix.Tasks.Cyfr.Gen.ReachRefusals do
   # The values a filled key is rendered with: a marker no sentence holds,
   # inside whatever the row's guard asks of the value.
   @samples %{key: "COMPOSE_@@key@@"}
-  @examples %{key: "COMPOSE_PROFILES"}
+  @examples %{key: "COMPOSE_PROFILES", line: "7"}
 
   @impl Mix.Task
   def run(args) do

@@ -14,8 +14,8 @@ import (
 
 // .env reads as compose's dotenv reads it: `export`, `:` as well as `=`,
 // space around either, quoted values across lines, an inline comment
-// after a bare value, a bare name inheriting, and the last assignment
-// winning.
+// after a bare value, a bare name taking the environment's value or none,
+// and the last assignment winning.
 func TestDotenvReadsAsComposeDoes(t *testing.T) {
 	text := strings.Join([]string{
 		"# a comment",
@@ -32,10 +32,13 @@ func TestDotenvReadsAsComposeDoes(t *testing.T) {
 		"A=last",
 		"",
 	}, "\n")
-	d := parseDotenv([]byte(text))
+	d, err := readDotenv([]byte(text), noEnv)
+	if err != nil {
+		t.Fatal(err)
+	}
 	want := map[string]string{
 		"A": "last", "B": "two", "C": "three", "D": "four # not a comment", "E": "five",
-		"F": "multi\nCOMPOSE_PROFILES=inside a quoted value\nline", "G": "single", "H": "",
+		"F": "multi\nCOMPOSE_PROFILES=inside a quoted value\nline", "G": "single",
 	}
 	if got := d.values(); !maps.Equal(got, want) {
 		t.Errorf("values %v\nwant   %v", got, want)
@@ -43,10 +46,17 @@ func TestDotenvReadsAsComposeDoes(t *testing.T) {
 	if key := d.composeKey(); key != "" {
 		t.Errorf("a COMPOSE_ line inside a quoted value reads as the setting %s", key)
 	}
-	if string(d.bytes()) != text {
-		t.Error("the file does not write back byte for byte")
+	inherited, err := readDotenv([]byte(text), func(k string) (string, bool) { return "from the environment", k == "H" })
+	if err != nil || inherited.values()["H"] != "from the environment" {
+		t.Errorf("the bare name H reads %q (%v)", inherited.values()["H"], err)
+	}
+	if out, err := EditEnv([]byte(text), nil, nil); err != nil || string(out) != text {
+		t.Errorf("the file does not write back byte for byte: %q, %v", out, err)
 	}
 }
+
+// noEnv is an environment that sets nothing.
+func noEnv(string) (string, bool) { return "", false }
 
 // A switch's .env changes only the head's keys, through EditEnv: a
 // changed key on its last assignment's lines, every other assignment of
@@ -87,8 +97,11 @@ func TestEnvWriterChangesOnlyTheHeadsKeys(t *testing.T) {
 	// The node id's inheriting line is its assignment, rewritten in
 	// place; the email's two lines both go.
 	edit := func(text string, h Head) string {
-		set, unset := parseDotenv([]byte(text)).headEdit(keysOf(h))
-		return string(EditEnv([]byte(text), set, unset))
+		out, err := editHeadKeys([]byte(text), keysOf(h))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(out)
 	}
 	if got := edit(before, d.Head); got != want {
 		t.Errorf(".env became\n%s\nwant\n%s", got, want)
@@ -101,7 +114,11 @@ func TestEnvWriterChangesOnlyTheHeadsKeys(t *testing.T) {
 	if want := "A=1\nCYFR_REACH=public\nCYFR_HOST=home.example.com\nB=2\nCYFR_PORT=4000\nCYFR_PUBLIC_URL=https://home.example.com\n"; got != want {
 		t.Errorf("a minimal .env became\n%s\nwant\n%s", got, want)
 	}
-	if h, err := headOf(parseDotenv([]byte(got)).values()); err != nil || h.Digest() != pub.Head.Digest() {
+	read, err := readDotenv([]byte(got), noEnv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if h, err := headOf(read.values()); err != nil || h.Digest() != pub.Head.Digest() {
 		t.Errorf("the written .env holds %+v (%v), not the head", h, err)
 	}
 }
@@ -222,26 +239,41 @@ func TestEditEnv(t *testing.T) {
 		"",
 	}, "\n")
 	values := []string{"plain", "has space", "has # hash", `has "double" quotes`, "it's single", "two\nlines", ""}
+	line := func(key, value string) string {
+		l, err := envLine(key, value)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return l
+	}
 	for _, v := range values {
-		got := EditEnv([]byte(text), map[string]string{"A": v, "NEW": v}, []string{"B", "D"})
+		got, err := EditEnv([]byte(text), map[string]string{"A": v, "NEW": v}, []string{"B", "D"})
+		if err != nil {
+			t.Errorf("value %q: EditEnv refused: %v", v, err)
+			continue
+		}
 		want := strings.Join([]string{
 			"# a comment",
 			`PEM="-----BEGIN-----`,
 			`A=inside the value`,
 			`B: inside too`,
 			`-----END-----"`,
-			envLine("A", v),
+			line("A", v),
 			"C='x",
 			"A=still inside",
 			"'",
-			envLine("NEW", v),
+			line("NEW", v),
 			"",
 		}, "\n")
 		if string(got) != want {
 			t.Errorf("value %q: EditEnv gave\n%s\nwant\n%s", v, got, want)
 			continue
 		}
-		read := parseDotenv(got).values()
+		d, err := readDotenv(got, noEnv)
+		if err != nil {
+			t.Fatal(err)
+		}
+		read := d.values()
 		if read["A"] != v || read["NEW"] != v || read["PEM"] != "-----BEGIN-----\nA=inside the value\nB: inside too\n-----END-----" || read["C"] != "x\nA=still inside\n" {
 			t.Errorf("value %q reads back as %q", v, read)
 		}
@@ -249,11 +281,11 @@ func TestEditEnv(t *testing.T) {
 			t.Errorf("value %q: B is still assigned", v)
 		}
 	}
-	if got := string(EditEnv(nil, map[string]string{"K": "v"}, nil)); got != "K=v\n" {
-		t.Errorf("an empty file became %q", got)
+	if got, err := EditEnv(nil, map[string]string{"K": "v"}, nil); err != nil || string(got) != "K=v\n" {
+		t.Errorf("an empty file became %q (%v)", got, err)
 	}
-	if got := string(EditEnv([]byte("A=1"), map[string]string{"K": "v"}, nil)); got != "A=1\nK=v\n" {
-		t.Errorf("a file without a final newline became %q", got)
+	if got, err := EditEnv([]byte("A=1"), map[string]string{"K": "v"}, nil); err != nil || string(got) != "A=1\nK=v\n" {
+		t.Errorf("a file without a final newline became %q (%v)", got, err)
 	}
 }
 

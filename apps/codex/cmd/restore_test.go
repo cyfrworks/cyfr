@@ -450,7 +450,7 @@ func TestRestoreNeverStartsAnUndeclaredRestore(t *testing.T) {
 				t.Errorf("blobs/x holds %q, want the snapshot's", got)
 			}
 			r.barred()
-			if got, want := read(t, filepath.Join(r.project, ".env")), string(withBarrier(r.env, r.dir)); got != want {
+			if got, want := read(t, filepath.Join(r.project, ".env")), string(barredEnv(t, r.env, r.dir)); got != want {
 				t.Errorf(".env holds %q, want the snapshot's with the bar, %q", got, want)
 			}
 		})
@@ -970,11 +970,11 @@ func TestRestoreBarReadsEveryAssignment(t *testing.T) {
 			t.Errorf("restoreBarred(%q) = %q, %v; want %q", text, got, barred, want)
 		}
 	}
-	got := string(withBarrier([]byte("A=1\nexport CYFR_RESTORE_INCOMPLETE='old'\nB=2\nCYFR_RESTORE_INCOMPLETE: \n"), "/p/backups/x"))
+	got := string(barredEnv(t, []byte("A=1\nexport CYFR_RESTORE_INCOMPLETE='old'\nB=2\nCYFR_RESTORE_INCOMPLETE: \n"), "/p/backups/x"))
 	if want := "A=1\nB=2\nCYFR_RESTORE_INCOMPLETE=/p/backups/x\n"; got != want {
 		t.Errorf("withBarrier answered %q, want %q", got, want)
 	}
-	if got := string(withBarrier(nil, "/p/b")); got != "CYFR_RESTORE_INCOMPLETE=/p/b\n" {
+	if got := string(barredEnv(t, nil, "/p/b")); got != "CYFR_RESTORE_INCOMPLETE=/p/b\n" {
 		t.Errorf("withBarrier of no .env answered %q", got)
 	}
 }

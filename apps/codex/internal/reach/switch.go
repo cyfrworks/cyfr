@@ -516,8 +516,11 @@ func (e *Engine) writeEnvKeys(want map[string]string) error {
 	if err != nil && !os.IsNotExist(err) {
 		return err
 	}
-	set, unset := parseDotenv(data).headEdit(want)
-	return e.writeDurable(path, EditEnv(data, set, unset), e.envMode())
+	edited, err := editHeadKeys(data, want)
+	if err != nil {
+		return err
+	}
+	return e.writeDurable(path, edited, e.envMode())
 }
 
 // nameChanged refuses a tailnet switch whose machine is no longer the

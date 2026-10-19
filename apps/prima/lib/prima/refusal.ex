@@ -1172,6 +1172,17 @@ defmodule Prima.Refusal do
          "project or services behind cyfr's back. Nothing started. Remove it; cyfr chooses " <>
          "them from CYFR_REACH and CYFR_LOCUS_BUILDS_URL."}
 
+  # A .env line Docker Compose does not read: cyfr neither reads nor
+  # writes a file it cannot read as compose does, and names the line,
+  # never its text, which may hold a secret.
+  defp row({:compose_env_refused, %{line: line} = payload})
+       when is_binary(line) and map_size(payload) == 1,
+       do:
+         {:invalid_argument,
+          "Line #{line} of `.env` does not read as Docker Compose reads it, so cyfr cannot " <>
+            "read or change .env as compose would. Nothing was changed. Correct that line, " <>
+            "then run the command again."}
+
   # A compose file that would change, behind .env, how the home is
   # reached: a reach key assigned in the service's own environment, or a
   # service that does not read .env at all.

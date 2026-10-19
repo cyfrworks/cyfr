@@ -277,7 +277,11 @@ func newEnv(path, adminEmail, setupToken string) ([]byte, []envChange, reach.Der
 		return nil, nil, reach.Derivation{}, err
 	}
 	maps.Copy(set, d.Assignments)
-	return reach.EditEnv(tmpl, set, d.Removals), changes, d, nil
+	text, err := reach.EditEnv(tmpl, set, d.Removals)
+	if err != nil {
+		return nil, nil, reach.Derivation{}, engineFailure(err)
+	}
+	return text, changes, d, nil
 }
 
 // writeFileAtomic replaces the file at path (through a symlink, the file it

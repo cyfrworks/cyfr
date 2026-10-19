@@ -3943,6 +3943,19 @@
             },
             "sentence": "`.env` sets `COMPOSE_PROFILES`, which Docker Compose would read to choose this stack's files, project or services behind cyfr's back. Nothing started. Remove it; cyfr chooses them from CYFR_REACH and CYFR_LOCUS_BUILDS_URL."
           }
+        },
+        {
+          "fixed": {},
+          "slots": [
+            "line"
+          ],
+          "template": "Line {line} of `.env` does not read as Docker Compose reads it, so cyfr cannot read or change .env as compose would. Nothing was changed. Correct that line, then run the command again.",
+          "example": {
+            "payload": {
+              "line": "7"
+            },
+            "sentence": "Line 7 of `.env` does not read as Docker Compose reads it, so cyfr cannot read or change .env as compose would. Nothing was changed. Correct that line, then run the command again."
+          }
         }
       ]
     },

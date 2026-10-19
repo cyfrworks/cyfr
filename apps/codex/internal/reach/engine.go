@@ -83,10 +83,11 @@ type Engine struct {
 
 // Open opens the engine of the project at projectDir, running docker
 // through d, or through the system implementation when d is nil. A .env
-// that sets any COMPOSE_* key does not keep it from opening, so recovery
-// can still stop the stack; Start, Switch, Join and CancelJoin refuse it
-// (compose_env_refused) before any docker call, and Resume stops and
-// verifies without compose, then refuses it.
+// compose cannot read, or one that sets any COMPOSE_* key, does not keep
+// it from opening, so recovery can still stop the stack; Start, Switch,
+// Join and CancelJoin refuse it (compose_env_refused, naming the line or
+// the key) before any docker call, and Resume stops and verifies without
+// compose, then refuses it.
 func Open(projectDir string, d Docker) (*Engine, error) {
 	dir, err := filepath.Abs(projectDir)
 	if err != nil {
