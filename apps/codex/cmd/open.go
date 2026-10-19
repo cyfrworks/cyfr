@@ -6,6 +6,7 @@ package cmd
 import (
 	"errors"
 	"fmt"
+	"net"
 	"net/url"
 	"os"
 	"os/exec"
@@ -24,7 +25,10 @@ var openCmd = &cobra.Command{
 	Short:   "Open the home in your browser",
 	GroupID: "identity",
 	Long: `Open the home's address in your default browser: the --url, the
---context's address, or the current context's.
+--context's address, or the current context's. The loopback address cyfr
+init saves for this machine (http://127.0.0.1:<port>) opens as
+http://localhost:<port>, the address a home on this computer serves itself
+under, where a passkey works.
 
 It opens the address and nothing more. No session travels from the command
 line to the browser: sign in there as you always do.`,
@@ -42,6 +46,7 @@ line to the browser: sign in there as you always do.`,
 		if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" {
 			return fmt.Errorf("%q is not a web address to open: give the home's https:// or http:// address", address)
 		}
+		address = browserAddress(parsed)
 
 		if err := openBrowser(address); err != nil {
 			fmt.Printf("Open %s in your browser.\n", address)
@@ -63,6 +68,22 @@ var openBrowser = func(address string) error {
 	// An opener that falls back to a browser in the terminal needs it.
 	opener.Stdin, opener.Stdout, opener.Stderr = os.Stdin, os.Stdout, os.Stderr
 	return opener.Run()
+}
+
+// browserAddress is the address as a browser should open it: a loopback
+// IP spelled localhost, the host a home on this computer serves itself
+// under and the one a passkey can be registered for, which an IP address
+// never is.
+func browserAddress(u *url.URL) string {
+	if ip := net.ParseIP(u.Hostname()); ip != nil && ip.IsLoopback() {
+		opened := *u
+		opened.Host = "localhost"
+		if port := u.Port(); port != "" {
+			opened.Host = "localhost:" + port
+		}
+		return opened.String()
+	}
+	return u.String()
 }
 
 // browserCommand is the command that opens address on the system goos:

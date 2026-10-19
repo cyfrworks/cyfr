@@ -54,20 +54,21 @@ API keys are generated as cryptographically random tokens. CYFR only stores a SH
 
 ### Session Tokens
 
-Session tokens are for human developers using the CLI. The `cyfr login` command runs an OAuth device flow:
+Session tokens are for human developers using the CLI. `cyfr login` signs the command line in by its person's approval in Prism:
 
-1. CLI calls CYFR with `action: "device_init"` and the GitHub provider
-2. CYFR returns a user code and verification URL
-3. You open the URL in a browser, enter the code, and authorize
-4. CLI polls until authorization completes, then stores the session ID in `~/.cyfr/config.json`
-5. Registry credentials are stored server-side during the device flow
+1. CLI calls `session.cli_begin` with its machine's name; CYFR answers a session token the CLI keeps, a code, and a link to the home's `/cli` page with the approval secret in its fragment
+2. You open the link in a browser signed in to the home, check that Prism shows the code the CLI printed, approve, and confirm with a fresh proof
+3. CLI polls `session.cli_poll` until it is approved, then stores the token in `~/.cyfr/config.json` under the context it used; Ctrl-C withdraws the sign-in (`session.cli_cancel`)
 
-Sessions expire after 30 days (720 hours) of inactivity (configurable via `CYFR_SESSION_TTL_HOURS`; set it to `0` to never expire). `session.whoami` answers when the caller's session ends, `session_expires_at` (RFC 3339), or `null` for a caller authenticated by an API key.
+`cyfr login --provider github` (or `google`) runs the OAuth device flow instead (`session.device_init`, `session.device_poll`), for a machine no one can approve in Prism. Prism lists the command lines signed in either way under Devices, where they are revoked ([devices-guide.md](devices-guide.md)).
+
+Sessions expire after 30 days (720 hours) of inactivity (configurable via `CYFR_SESSION_TTL_HOURS`; set it to `0` to never expire); a request carrying a session as a bearer token does not extend it, so a command line's session ends that long after it signed in. `session.whoami` answers when the caller's session ends, `session_expires_at` (RFC 3339), or `null` for a caller authenticated by an API key.
 
 ```bash
-cyfr login              # Interactive OAuth device flow (GitHub)
-cyfr whoami             # Check current session
-cyfr logout             # Destroy session
+cyfr login                    # Approve this command line in Prism
+cyfr login --provider github  # Or the GitHub device flow
+cyfr whoami                   # Check current session
+cyfr logout                   # Destroy session
 ```
 
 ### Service-to-service
@@ -420,7 +421,7 @@ one annotation. It is short:
 |------|---------|------------|
 | `pairing` | `complete` | A new device holds neither a session nor a certificate: the short-lived, single-use pairing code a signed-in person's `pairing.begin` issued names the person and athanor, the device proves its key, and a session cookie the browser holds never chooses the person |
 | `person` | `renew_certificate` | A device paired at another home renews the certificate this home issued it, holding no session here: it proves the device key the certification names over a single-use challenge this home issued, and only a certification still standing under the person's current keys is extended |
-| `session` | `login`, `logout`, `whoami`, `device_init`, `device_poll`, `read_resource` | Needed to authenticate in the first place; `read_resource` tells a caller only its own identity and permissions |
+| `session` | `login`, `logout`, `whoami`, `device_init`, `device_poll`, `cli_begin`, `cli_poll`, `cli_cancel`, `read_resource` | Needed to authenticate in the first place; `read_resource` tells a caller only its own identity and permissions. `cli_begin` is `cyfr login` asking for a sign-in its person approves in Prism; `cli_poll` and `cli_cancel` name only the session token `cli_begin` answered, which no session holds until the person approves under a fresh confirmation ([devices-guide.md](devices-guide.md)) |
 | `system` | `status` | Health checks |
 | `tincture` | `invoke_public` | A published tincture is public by definition: named by its public address (`athanor`, the URL's `@namespace` or group slug, with `publisher` and `tincture_name`), the call runs one of its declared dependencies under its active public profile, as its public page does; the address confers no authority, and one with no active public profile answers `not_found` |
 

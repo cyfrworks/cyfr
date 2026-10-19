@@ -125,6 +125,22 @@ defmodule PrismWeb.CliLiveTest do
     refute has_element?(view, ~s([data-test="cli-approve"]))
   end
 
+  test "a link withdrawn while the page shows it is refused and offers no approval", %{
+    conn: conn
+  } do
+    begun = begin!()
+    {:ok, view, _html} = live(conn, ~p"/cli")
+    render_hook(view, "cli_code", %{"code" => begun.secret})
+    assert has_element?(view, ~s([data-test="cli-approve"]))
+
+    {:ok, %{status: "cancelled"}} = Sanctum.CliSignIn.cancel(begun.session_token, "198.51.100.90")
+    view |> element(~s([data-test="cli-approve"])) |> render_click()
+
+    assert has_element?(view, ~s([data-test="cli-notice"]), "stopped waiting")
+    assert has_element?(view, ~s([data-test="cli-sign-in"][data-status="cancelled"]))
+    refute has_element?(view, ~s([data-test="cli-approve"]))
+  end
+
   test "an expired link and a used one offer no approval", %{conn: conn, ctx: ctx} do
     expired = begin!()
     hash = Sanctum.Session.token_hash(expired.session_token)

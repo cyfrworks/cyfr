@@ -102,7 +102,17 @@ defmodule PrismWeb.CliLive do
       {:error, reason, socket} ->
         socket
         |> assign(:waiting, false)
+        |> reread(args["approval_secret"])
         |> notice(:error, PrismWeb.Ops.error_message(reason))
+    end
+  end
+
+  # What the link names now, after an approval was refused: expired, used
+  # or withdrawn meanwhile, it offers no approval any more.
+  defp reread(socket, secret) do
+    case Sanctum.CliSignIn.describe(secret) do
+      {:ok, sign_in} -> assign(socket, :sign_in, sign_in)
+      {:error, _unread} -> socket
     end
   end
 

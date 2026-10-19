@@ -258,7 +258,7 @@ defmodule Sanctum.CliSignIn do
   """
   @spec approve(Context.t(), term()) :: {:ok, map()} | {:error, term()}
   def approve(%Context{auth_method: :oidc, session_token_hash: hash} = ctx, secret)
-      when is_binary(hash) do
+      when is_binary(hash) and is_binary(secret) do
     with {:ok, bytes} <- approval_secret(secret),
          {:ok, row} <- by_approval(bytes),
          :ok <- still_pending(row),
@@ -295,6 +295,10 @@ defmodule Sanctum.CliSignIn do
     end
   end
 
+  def approve(%Context{auth_method: :oidc, session_token_hash: hash}, _secret)
+      when is_binary(hash),
+      do: {:error, :not_found}
+
   def approve(%Context{}, _secret), do: {:error, :session_required}
 
   defp still_pending(%{state: "pending", expires_at: expires_at}) do
@@ -310,8 +314,7 @@ defmodule Sanctum.CliSignIn do
   the command line the link's `secret` names, which the preview names by
   its machine and the code it shows.
   """
-  @spec approval_change(String.t(), %{machine: String.t(), user_code: String.t()}) ::
-          Authz.change()
+  @spec approval_change(String.t(), map()) :: Authz.change()
   def approval_change(secret, %{machine: machine, user_code: code}) when is_binary(secret) do
     %{
       operation: "session.cli_approve",

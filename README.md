@@ -986,7 +986,7 @@ Commands marked with `[i]` support interactive selection when run without argume
 |---------|-------------|
 | `cyfr login` | Sign this command line in by approving it in Prism: prints a link and a code to check against Prism's, and waits; the session is saved under the context used (`--context` or the current one, a `--url` that is not its address refused) and listed under Devices in Prism, where it is revoked; `--provider github\|google` signs in with the provider's device flow instead (see [devices-guide.md](devices-guide.md)) |
 | `cyfr logout` | End the context's session |
-| `cyfr open` | Open the home's address in your browser; no session travels with it |
+| `cyfr open` | Open the context's address in your browser, this machine's loopback context as `http://localhost:<port>`; no session travels with it |
 | `cyfr whoami` | Show current identity |
 | `cyfr status` | Check system health (includes CLI version) |
 | `cyfr athanor list/get/use/create/rename/settings/provision/archive/unarchive` | Your athanors, your own and your groups: list and show them, point this session at one, create, rename or archive a group, merge settings, retry a provisioning that failed |

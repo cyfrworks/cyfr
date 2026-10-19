@@ -5,6 +5,7 @@ package cmd
 
 import (
 	"errors"
+	"net/url"
 	"reflect"
 	"strings"
 	"testing"
@@ -40,8 +41,9 @@ func TestOpen_OpensTheContextsAddress(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open: %v\n%s", err, out)
 	}
-	if !reflect.DeepEqual(*opened, []string{home.URL}) {
-		t.Errorf("opened %v, want the context's address alone", *opened)
+	// The stub home listens on a loopback IP, which opens as localhost.
+	if want := strings.Replace(home.URL, "127.0.0.1", "localhost", 1); !reflect.DeepEqual(*opened, []string{want}) {
+		t.Errorf("opened %v, want the context's address alone, %s", *opened, want)
 	}
 	if n := len(home.actions()); n != 0 {
 		t.Errorf("open asked the home %d things", n)
@@ -50,9 +52,32 @@ func TestOpen_OpensTheContextsAddress(t *testing.T) {
 		t.Errorf("open printed the session:\n%s", out)
 	}
 
+	// This machine's loopback context opens as the address a home on this
+	// computer serves itself under.
 	*opened = nil
-	if out, err := runLogin(t, t.Context(), "open"); err != nil || !reflect.DeepEqual(*opened, []string{"http://127.0.0.1:4000"}) {
+	if out, err := runLogin(t, t.Context(), "open"); err != nil || !reflect.DeepEqual(*opened, []string{"http://localhost:4000"}) {
 		t.Fatalf("open of the current context: %v, opened %v\n%s", err, *opened, out)
+	}
+}
+
+// A loopback IP opens as localhost, its port and path kept; any other
+// address opens as given.
+func TestBrowserAddress_LoopbackIsLocalhost(t *testing.T) {
+	for given, want := range map[string]string{
+		"http://127.0.0.1:4000":          "http://localhost:4000",
+		"http://[::1]:4000/a/b":          "http://localhost:4000/a/b",
+		"http://127.0.0.1":               "http://localhost",
+		"https://home.tail9f3a3c.ts.net": "https://home.tail9f3a3c.ts.net",
+		"http://localhost:4000":          "http://localhost:4000",
+		"https://192.0.2.7:8443":         "https://192.0.2.7:8443",
+	} {
+		u, err := url.Parse(given)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := browserAddress(u); got != want {
+			t.Errorf("%s opens as %s, want %s", given, got, want)
+		}
 	}
 }
 
