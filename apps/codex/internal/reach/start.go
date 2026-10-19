@@ -20,6 +20,9 @@ type started struct {
 	why     string
 	local   *Refusal
 	content []byte
+	// refused is the stack check's refusal, made before anything was
+	// written or started.
+	refused *Refusal
 }
 
 // identityMismatch reports whether a local start found another machine
@@ -28,22 +31,22 @@ func (s started) identityMismatch() bool {
 	return s.local != nil && s.local.Code == "tailnet_node_mismatch"
 }
 
-// startHead is the start path, every start's: Serve closed; h
-// materialized afresh and its stack checked; cyfr started (with every
+// startHead is the start path, every start's: h materialized afresh and
+// its stack checked; Serve closed; cyfr started (with every
 // other service of h's selection when full, alone otherwise), then h's
 // reach services; cyfr's health awaited within health; then, in tailnet,
 // the running machine validated against h before Serve opens.
 func (e *Engine) startHead(ctx context.Context, h Head, j *journal, full bool, health time.Duration) started {
-	if err := e.closeServe(); err != nil {
-		return started{why: err.Error()}
-	}
 	e.reached("start:" + h.Mode)
 	content, err := e.materialize(ctx, h, j)
 	if err != nil {
 		if r, ok := err.(*Refusal); ok {
-			return started{why: r.Message()}
+			return started{why: r.Message(), refused: r}
 		}
 		return started{why: err.Error()}
+	}
+	if err := e.closeServe(); err != nil {
+		return started{why: err.Error(), content: content}
 	}
 	c, err := parseConfig(content)
 	if err != nil {

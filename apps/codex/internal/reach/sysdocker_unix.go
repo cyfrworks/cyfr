@@ -47,6 +47,7 @@ func (s *systemDocker) run(ctx context.Context, bin string, args []string, deadl
 		return -1, err
 	}
 	s.e.noteWatchdog(cmd.Process.Pid, time.Now().Add(deadline))
+	defer s.e.doneWatchdog(cmd.Process.Pid)
 	done := make(chan error, 1)
 	go func() { done <- cmd.Wait() }()
 	backstop := time.NewTimer(deadline + waitGrace)

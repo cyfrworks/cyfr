@@ -269,11 +269,13 @@ func TestAbandonedJoinExpiresAtItsOwnDeadline(t *testing.T) {
 	if !slices.Contains(h.fake.runningServices(), "join") {
 		t.Fatal("recovery removed a join still within its deadline")
 	}
+	until := rec.Deadline.UTC().Format(time.RFC3339)
+	busy := "A tailnet join (`" + rec.JoinID + "`) is still waiting for this machine's approval, until `" + until + "` at the latest. Nothing was changed. Approve the machine with the link that join printed, or wait until then, and run this command again."
 	rc, err := h.e.Join(bg, JoinRequest{ID: id(2), AuthKey: strings.NewReader(testKey)})
-	if refusalCode(err) != "reach_busy" || !strings.Contains(rc.Payload["holder"], rec.JoinID) {
+	if refusalCode(err) != "reach_busy" || rc.State != "rejected" || !mapsEqual(rc.Payload, map[string]string{"join_id": rec.JoinID, "until": until}) || err.(*Refusal).Message() != busy {
 		t.Errorf("a second join answered %+v, %v", rc, err)
 	}
-	if rc, err := h.e.Switch(bg, h.request(id(3), publicTarget, "")); refusalCode(err) != "reach_busy" {
+	if rc, err := h.e.Switch(bg, h.request(id(3), publicTarget, "")); refusalCode(err) != "reach_busy" || rc.State != "rejected" || err.(*Refusal).Message() != busy {
 		t.Errorf("a switch answered %+v, %v", rc, err)
 	}
 
@@ -426,12 +428,12 @@ func TestConcurrentJoins(t *testing.T) {
 }
 
 // A join killed at any phase is finished by the next command's
-// recovery: before its container ran, as cancelled; once its machine is
-// frozen, as joined.
+// recovery: one whose container never ran, or is gone, before its
+// deadline, as ended; once its machine is frozen, as joined.
 func TestJoinKilledAtEveryPhaseRecovers(t *testing.T) {
 	for _, c := range []struct{ point, code string }{
-		{"journal:join:accepted", "tailnet_join_cancelled"},
-		{"journal:join:new_node", "tailnet_join_cancelled"},
+		{"journal:join:accepted", "tailnet_join_ended"},
+		{"journal:join:new_node", "tailnet_join_ended"},
 		{"journal:join:frozen", ""},
 	} {
 		t.Run(c.point, func(t *testing.T) {
@@ -447,6 +449,9 @@ func TestJoinKilledAtEveryPhaseRecovers(t *testing.T) {
 			}
 			if c.code == "" && receipts[0].Payload["name"] != "cyfr.tail1234.ts.net" {
 				t.Errorf("the join's receipt is %+v", receipts[0])
+			}
+			if c.code != "" && receipts[0].Refusal().Message() != joinEnded {
+				t.Errorf("the sentence reads %q", receipts[0].Refusal().Message())
 			}
 			if slices.Contains(h.fake.runningServices(), "join") {
 				t.Error("a join container is left")
@@ -477,5 +482,65 @@ func TestJoinStopsTheTailscaleServiceFirst(t *testing.T) {
 	}
 	if slices.Contains(h.fake.runningServices(), "tailscale") {
 		t.Error("the tailscale service runs beside the join")
+	}
+}
+
+const joinEnded = "Tailscale did not accept this machine's join: the auth key may be wrong, already used or expired, or the join ended before the machine was approved. How this home is reached was not changed. Check the key if you gave one, then run `cyfr reach tailnet` again."
+
+// A join container that ends before its deadline without joining, as one
+// does when Tailscale refuses its key, answers tailnet_join_ended; one
+// still waiting when its deadline passes answers tailnet_join_expired.
+func TestJoinEndsOrExpires(t *testing.T) {
+	for _, c := range []struct {
+		name, code, sentence string
+		at                   func(h *testHome, n int)
+	}{
+		{"refused key", "tailnet_join_ended", joinEnded, func(h *testHome, n int) {
+			if n == 3 {
+				h.fake.mu.Lock()
+				for name, ct := range h.fake.st.Containers {
+					if ct.Join {
+						delete(h.fake.st.Containers, name)
+					}
+				}
+				h.fake.mu.Unlock()
+			}
+		}},
+		{"deadline", "tailnet_join_expired", "The approval link expired before the machine was approved. How this home is reached was not changed. Run `cyfr reach tailnet` for a new link.", func(h *testHome, n int) {
+			if n == 3 {
+				h.clock.advance(JoinDeadline)
+			}
+		}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			h := newHome(t)
+			sleeps := 0
+			h.clock.onSleep = func(time.Time) { sleeps++; c.at(h, sleeps) }
+			rc, err := h.e.Join(bg, JoinRequest{ID: id(1)})
+			rec, _ := h.e.readJoin()
+			if refusalCode(err) != c.code || rc.State != "completed" || rc.Outcome != "failed" || !mapsEqual(rc.Payload, map[string]string{"join_id": rec.JoinID}) {
+				t.Fatalf("join answered %+v, %v", rc, err)
+			}
+			if got := err.(*Refusal).Message(); got != c.sentence || rc.Refusal().Message() != c.sentence {
+				t.Errorf("the sentence reads %q", got)
+			}
+			if _, err := h.e.Preview(bg, Target{Mode: ModeTailnet}, rec.JoinID); refusalCode(err) != c.code {
+				t.Errorf("a switch to it previews as %v", err)
+			}
+			h.assertConverged()
+		})
+	}
+}
+
+// A join container still within its deadline refuses another join with
+// reach_busy naming it, even with no journal naming it.
+func TestJoinRefusedBesideARunningJoinContainer(t *testing.T) {
+	h := newHome(t)
+	until := h.clock.Now().Add(5 * time.Minute).UTC().Format(time.RFC3339)
+	h.fake.st.Containers["home-tailnet-join-x"] = &fakeContainer{Name: "home-tailnet-join-x", State: "running", Join: true, JoinID: id(9), Deadline: until, Volume: stateVolume}
+	rc, err := h.e.Join(bg, JoinRequest{ID: id(1)})
+	want := "A tailnet join (`" + id(9) + "`) is still waiting for this machine's approval, until `" + until + "` at the latest. Nothing was changed. Approve the machine with the link that join printed, or wait until then, and run this command again."
+	if refusalCode(err) != "reach_busy" || rc.State != "rejected" || err.(*Refusal).Message() != want {
+		t.Errorf("join answered %+v, %v", rc, err)
 	}
 }

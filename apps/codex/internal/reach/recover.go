@@ -67,7 +67,8 @@ func (e *Engine) recoverOp(ctx context.Context, j *journal) (Receipt, bool, erro
 // commit did not happen, so the old head starts again if it was running
 // (not_applied). The new head: the switch rolls forward from its start.
 // Neither, .env having been edited meanwhile: what .env holds starts if
-// it validates, and the switch failed either way.
+// it validates and the stack was running, and the switch failed
+// (reach_env_edited, saying which).
 func (e *Engine) recoverSwitch(ctx context.Context, j *journal) (Receipt, error) {
 	services := slices.Clone(j.Services)
 	for _, name := range j.Files {
@@ -103,34 +104,32 @@ func (e *Engine) recoverSwitch(ctx context.Context, j *journal) (Receipt, error)
 		}
 		return e.startTarget(ctx, j)
 	}
-	newWords := wordsText(Describe(*j.NewHead))
-	if err != nil || st.headErr != nil {
-		words := ""
-		if err != nil {
-			words = err.Error()
-			if r, ok := err.(*Refusal); ok {
-				words = r.Message()
-			}
-		} else {
-			words = st.words()
+	// .env was edited meanwhile: the switch failed, and the home is
+	// started as .env now says, when it can be.
+	edited := func(then string, final *Head) Receipt {
+		payload := map[string]string{"then": then}
+		if then != "incoherent" {
+			payload["env"] = st.words()
 		}
-		return e.finishAnswer(j, e.failed(j, map[string]string{"new": newWords, "env": words}))
+		return e.completed(j, "failed", Refuse("reach_env_edited", payload), final)
 	}
-	stale := Refuse("reach_stale", map[string]string{"words": st.words()})
-	if !j.Running {
-		return e.finishAnswer(j, e.completed(j, "failed", stale, &st.head))
+	switch {
+	case err != nil || st.headErr != nil:
+		return e.finishAnswer(j, edited("incoherent", nil))
+	case !j.Running:
+		return e.finishAnswer(j, edited("not_running", &st.head))
 	}
 	s := e.startHead(ctx, st.head, j, false, HealthDeadline)
 	switch {
 	case s.ok:
-		return e.finishAnswer(j, e.completed(j, "failed", stale, &st.head))
+		return e.finishAnswer(j, edited("started", &st.head))
 	case s.local != nil:
 		return e.finishAnswer(j, e.completed(j, "started_local", s.local, &st.head))
 	}
 	if s := e.stopAndVerify(ctx, j.Services); !s.ok {
 		return e.uncertain(j, s)
 	}
-	return e.finishAnswer(j, e.failed(j, map[string]string{"new": newWords, "env": st.words()}))
+	return e.finishAnswer(j, edited("failed", nil))
 }
 
 // recoverOld finishes a switch whose commit did not happen, or whose

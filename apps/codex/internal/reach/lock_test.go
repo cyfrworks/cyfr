@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -28,10 +29,17 @@ func TestLockExcludesAnotherTaker(t *testing.T) {
 	if !errors.As(err, &busy) {
 		t.Fatalf("a second taker answered %v", err)
 	}
+	var rec holderRecord
+	if ok, err := readJSON(filepath.Join(h.dir, stateDir, holderFile), &rec); !ok || err != nil {
+		t.Fatalf("the holder record reads %v, %v", ok, err)
+	}
 	host, _ := os.Hostname()
-	msg := busy.Refusal().Message()
-	if busy.Refusal().Code != "reach_busy" || !strings.Contains(msg, "Another cyfr command holds this home (`cyfr test, pid ") || !strings.Contains(msg, " on "+host+", since ") {
-		t.Errorf("the refusal reads %q", msg)
+	if busy.PID != os.Getpid() || busy.WatchdogPID != 0 || rec.Host != host {
+		t.Errorf("the refusal names %+v from %+v", busy, rec)
+	}
+	want := "Another cyfr command holds this home (`cyfr test on " + host + ", since " + rec.Started.UTC().Format(time.RFC3339) + "`, pid `" + strconv.Itoa(os.Getpid()) + "`). Nothing was changed. Wait until it has finished, then run this command again."
+	if r := busy.Refusal(); r.Code != "reach_busy" || r.Message() != want {
+		t.Errorf("the refusal reads %q", r.Message())
 	}
 	h.unlock()
 	unlock, err := other.Lock("update")

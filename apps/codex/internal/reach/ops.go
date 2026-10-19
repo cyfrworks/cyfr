@@ -38,6 +38,9 @@ func (e *Engine) doStart(ctx context.Context, cause string, health time.Duration
 		r.Outcome = "started_local"
 		r.Code, r.Payload = s.local.Code, s.local.Payload
 		return r, s.local
+	case s.refused != nil:
+		r.State, r.Code, r.Payload, r.FinalHead = "rejected", s.refused.Code, s.refused.Payload, nil
+		return r, s.refused
 	}
 	r.Outcome = "failed"
 	return r, errors.New("cyfr " + cause + ": the stack did not start: " + s.why)

@@ -27,7 +27,7 @@ type holderRecord struct {
 }
 
 func (h holderRecord) String() string {
-	return fmt.Sprintf("cyfr %s, pid %d on %s, since %s", h.Command, h.PID, h.Host, h.Started.UTC().Format(time.RFC3339))
+	return fmt.Sprintf("cyfr %s on %s, since %s", h.Command, h.Host, h.Started.UTC().Format(time.RFC3339))
 }
 
 func (e *Engine) lockProject(command string) (func(), error) {
@@ -80,29 +80,57 @@ func (e *Engine) unlock() {
 }
 
 // busy is the lock's refusal, from the holder record the holder wrote.
+// A holder that wrote none (a process taking the lock some other way) is
+// named by the kernel's lock table where it has one.
 func (e *Engine) busy() *ErrBusy {
 	var h holderRecord
-	b := &ErrBusy{Holder: "an unknown process"}
-	if ok, err := readJSON(e.path(holderFile), &h); err == nil && ok && h.Command != "" {
-		b.Holder = h.String()
-		b.WatchdogPID = h.WatchdogPID
-		if h.Until != nil {
-			b.Until = *h.Until
-		}
+	if ok, err := readJSON(e.path(holderFile), &h); err != nil || !ok || h.Command == "" {
+		return &ErrBusy{Holder: "a process that wrote no holder record", PID: lockOwner(e.path(lockFile))}
+	}
+	b := &ErrBusy{Holder: h.String(), PID: h.PID, WatchdogPID: h.WatchdogPID}
+	if h.Until != nil {
+		b.Until = *h.Until
 	}
 	return b
 }
 
 // noteWatchdog records, durably, the watchdog now holding the lock's
-// descriptor for a docker child and when its deadline ends.
+// descriptor for a docker child and when its deadline ends; doneWatchdog
+// records that it ended. The record names the running child whose
+// deadline ends last, and none between calls.
 func (e *Engine) noteWatchdog(pid int, until time.Time) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	if e.lock == nil {
 		return
 	}
-	until = until.UTC().Truncate(time.Second).Add(time.Second)
-	e.holder.WatchdogPID, e.holder.Until = pid, &until
+	if e.watchdogs == nil {
+		e.watchdogs = map[int]time.Time{}
+	}
+	e.watchdogs[pid] = until.UTC().Truncate(time.Second).Add(time.Second)
+	e.writeHolder()
+}
+
+func (e *Engine) doneWatchdog(pid int) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.lock == nil {
+		return
+	}
+	delete(e.watchdogs, pid)
+	e.writeHolder()
+}
+
+// writeHolder writes the holder record with its latest running child;
+// e.mu is held.
+func (e *Engine) writeHolder() {
+	e.holder.WatchdogPID, e.holder.Until = 0, nil
+	for pid, until := range e.watchdogs {
+		if e.holder.Until == nil || until.After(*e.holder.Until) {
+			u := until
+			e.holder.WatchdogPID, e.holder.Until = pid, &u
+		}
+	}
 	e.writeJSON(e.path(holderFile), e.holder)
 }
 
@@ -116,13 +144,21 @@ func (e *Engine) requireLock() error {
 	return nil
 }
 
+// refusal is reach_busy: the watchdog and its deadline while a docker
+// child holds the lock, else the holder's own pid, or "unknown" for a
+// holder neither its record nor the kernel names.
 func (b *ErrBusy) refusal() *Refusal {
-	pid, until := "none", "none"
-	if b.WatchdogPID > 0 {
-		pid = strconv.Itoa(b.WatchdogPID)
+	if b.WatchdogPID > 0 && !b.Until.IsZero() {
+		return Refuse("reach_busy", map[string]string{"holder": b.Holder, "pid": strconv.Itoa(b.WatchdogPID), "until": b.Until.UTC().Format(time.RFC3339)})
 	}
-	if !b.Until.IsZero() {
-		until = b.Until.UTC().Format(time.RFC3339)
+	pid := "unknown"
+	if b.PID > 0 {
+		pid = strconv.Itoa(b.PID)
 	}
-	return Refuse("reach_busy", map[string]string{"holder": b.Holder, "pid": pid, "until": until})
+	return Refuse("reach_busy", map[string]string{"holder": b.Holder, "pid": pid})
+}
+
+// joinBusy is reach_busy for a join still waiting for its approval.
+func joinBusy(joinID string, until time.Time) *Refusal {
+	return Refuse("reach_busy", map[string]string{"join_id": joinID, "until": until.UTC().Format(time.RFC3339)})
 }

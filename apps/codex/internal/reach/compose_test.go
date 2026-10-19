@@ -130,30 +130,38 @@ func TestKeptFilesAreNeverUsedToStart(t *testing.T) {
 	h.assertConverged(publicStack...)
 }
 
+// overrideSets is compose_override_refused's sentence for a head key a
+// compose file assigns, word for word.
+func overrideSets(file, service, key string) string {
+	return "`" + file + "` sets `" + key + "` in the `" + service + "` service's environment, where it would override how .env says this home is reached. Nothing started. Remove `" + key + "` from `" + file + "`; .env alone holds it, and `cyfr reach` writes it."
+}
+
 // Provenance, before anything is flattened: a head key in the cyfr
 // service's own environment: entries in any file of the source set is
-// refused naming the file, even with the value .env holds; .env must
-// reach cyfr through its env_file; reach keys through env_file alone
-// pass.
+// refused with compose_override_refused naming the file, the service and
+// the key, even with the value .env holds; .env must reach cyfr through
+// its env_file; reach keys through env_file alone pass. A start refused
+// so changes nothing and answers the same refusal.
 func TestCheckStackReadsTheSourcesProvenance(t *testing.T) {
 	for _, c := range []struct {
-		name  string
-		files map[string]string
-		want  string
+		name               string
+		files              map[string]string
+		file, service, key string
+		plain              string
 	}{
-		{"shipped", nil, ""},
-		{"override", map[string]string{"docker-compose.override.yml": "services:\n  cyfr:\n    environment:\n      - CYFR_HOST=localhost\n"}, "docker-compose.override.yml sets CYFR_HOST"},
-		{"mapping form", map[string]string{"docker-compose.override.yml": "services:\n  cyfr:\n    environment:\n      CYFR_REACH: local\n"}, "docker-compose.override.yml sets CYFR_REACH"},
-		{"inherited", map[string]string{"docker-compose.override.yml": "services:\n  cyfr:\n    environment:\n      - CYFR_PORT\n"}, "sets CYFR_PORT"},
+		{name: "shipped"},
+		{"override", map[string]string{"docker-compose.override.yml": "services:\n  cyfr:\n    environment:\n      - CYFR_HOST=localhost\n"}, "docker-compose.override.yml", "cyfr", "CYFR_HOST", ""},
+		{"mapping form", map[string]string{"docker-compose.override.yml": "services:\n  cyfr:\n    environment:\n      CYFR_REACH: local\n"}, "docker-compose.override.yml", "cyfr", "CYFR_REACH", ""},
+		{"inherited", map[string]string{"docker-compose.override.yml": "services:\n  cyfr:\n    environment:\n      - CYFR_PORT\n"}, "docker-compose.override.yml", "cyfr", "CYFR_PORT", ""},
 		{"include", map[string]string{
 			"docker-compose.override.yml": "include:\n  - extra/more.yml\n",
 			"extra/more.yml":              "services:\n  cyfr:\n    environment:\n      CYFR_PUBLIC_URL: https://x.example.com\n",
-		}, "extra/more.yml sets CYFR_PUBLIC_URL"},
+		}, "extra/more.yml", "cyfr", "CYFR_PUBLIC_URL", ""},
 		{"extends", map[string]string{
 			"docker-compose.override.yml": "services:\n  cyfr:\n    extends:\n      file: base.yml\n      service: base\n",
 			"base.yml":                    "services:\n  base:\n    environment:\n      - CYFR_TAILNET_NODE_ID=n1\n",
-		}, "base.yml sets CYFR_TAILNET_NODE_ID in the base service's environment"},
-		{"remote include", map[string]string{"docker-compose.override.yml": "include:\n  - oci://example.com/stack\n"}, "cannot check"},
+		}, "base.yml", "base", "CYFR_TAILNET_NODE_ID", ""},
+		{name: "remote include", files: map[string]string{"docker-compose.override.yml": "include:\n  - oci://example.com/stack\n"}, plain: "cannot check"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			h := newHome(t)
@@ -162,18 +170,33 @@ func TestCheckStackReadsTheSourcesProvenance(t *testing.T) {
 				writeFile(t, filepath.Join(h.dir, name), []byte(text))
 			}
 			err := h.e.CheckStack(bg)
-			if c.want == "" {
+			switch {
+			case c.files == nil:
 				if err != nil {
 					t.Fatalf("the shipped stack is refused: %v", err)
 				}
 				return
+			case c.plain != "":
+				if err == nil || refusalCode(err) != "" || !strings.Contains(err.Error(), c.plain) {
+					t.Fatalf("CheckStack answered %v, want %q", err, c.plain)
+				}
+				return
 			}
-			if err == nil || !strings.Contains(err.Error(), c.want) {
-				t.Fatalf("CheckStack answered %v, want %q", err, c.want)
+			want := map[string]string{"file": c.file, "service": c.service, "key": c.key}
+			var r *Refusal
+			if !asRefusal(err, &r) || r.Code != "compose_override_refused" || !mapsEqual(r.Payload, want) || r.Class != "invalid_argument" {
+				t.Fatalf("CheckStack answered %v, want compose_override_refused %v", err, want)
 			}
-			// Refused before any start: Start makes no compose up.
-			if _, err := h.e.Start(bg, "up"); err == nil || !strings.Contains(err.Error(), c.want) {
-				t.Errorf("start answered %v", err)
+			if got := r.Message(); got != overrideSets(c.file, c.service, c.key) {
+				t.Errorf("the sentence reads %q", got)
+			}
+			before := h.snapshot()
+			rc, err := h.e.Start(bg, "up")
+			if !asRefusal(err, &r) || r.Code != "compose_override_refused" || rc.State != "rejected" || rc.Code != "compose_override_refused" || !mapsEqual(rc.Payload, want) {
+				t.Errorf("start answered %+v, %v", rc, err)
+			}
+			if !mapsEqual(before, h.snapshot()) {
+				t.Error("a refused start changed a file")
 			}
 			for _, call := range h.fake.calls() {
 				if slices.Contains(call.Args, "up") {
@@ -187,8 +210,14 @@ func TestCheckStackReadsTheSourcesProvenance(t *testing.T) {
 	compose := filepath.Join(h.dir, "docker-compose.yml")
 	data, _ := os.ReadFile(compose)
 	writeFile(t, compose, []byte(strings.Replace(string(data), "    env_file:\n      - .env\n    # Every reach", "    # Every reach", 1)))
-	if err := h.e.CheckStack(bg); err == nil || !strings.Contains(err.Error(), "env_file") {
-		t.Errorf("a cyfr service without .env in its env_file answered %v", err)
+	writeFile(t, filepath.Join(h.dir, "docker-compose.override.yml"), []byte("services:\n  cyfr:\n    image: ghcr.io/cyfrworks/cyfr:latest\n"))
+	var r *Refusal
+	err := h.e.CheckStack(bg)
+	if !asRefusal(err, &r) || r.Code != "compose_override_refused" || !mapsEqual(r.Payload, map[string]string{"file": "docker-compose.yml", "service": "cyfr"}) {
+		t.Fatalf("a cyfr service without .env in its env_file answered %v", err)
+	}
+	if want := "`docker-compose.yml` does not give the `cyfr` service .env through its env_file, so it would not read how this home is reached. Nothing started. Add `env_file: .env` to the `cyfr` service in `docker-compose.yml`, as the shipped docker-compose.yml has it."; r.Message() != want {
+		t.Errorf("the sentence reads %q", r.Message())
 	}
 }
 
