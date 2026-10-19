@@ -10,7 +10,7 @@
 # and under no email when it is empty.
 #
 # This service runs in the `public` compose profile alone, which `cyfr up`
-# and `cyfr reach` select when CYFR_REACH=public (`cyfr reach public
+# and `cyfr access` select when CYFR_ACCESS=public (`cyfr access public
 # --domain <your domain>` writes it). A local or tailnet home has no Caddy.
 #
 # Client-IP trust: Caddy's default reverse_proxy behavior APPENDS the peer IP

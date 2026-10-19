@@ -49,7 +49,7 @@ defmodule Cyfr.CrossLanguageDriftTest do
              "matches before a trailing newline — use \\A..\\z"
   end
 
-  test "the reach engine's builds URL grammar is Cyfr.RuntimeConfig's" do
+  test "the access engine's builds URL grammar is Cyfr.RuntimeConfig's" do
     # Spelled the same on both sides, each anchored its own way; the
     # vectors' builds_urls hold the two to the same verdicts.
     [_, elixir] =
@@ -58,28 +58,28 @@ defmodule Cyfr.CrossLanguageDriftTest do
     [_, go] =
       Regex.run(
         ~r/buildsURLGrammar = regexp\.MustCompile\(`\^(.+)\$`\)/,
-        read!("apps/codex/internal/reach/head.go")
+        read!("apps/codex/internal/access/head.go")
       )
 
     assert String.replace(elixir, "\\/", "/") == go
   end
 
-  test "the reach engine's refusal sentences are Prima.Refusal's, as rendered" do
+  test "the access engine's refusal sentences are Prima.Refusal's, as rendered" do
     # The section and refusals_gen.go are rendered from Prima.Refusal
-    # (`mix cyfr.gen.reach_refusals`), so a row that changes without the
+    # (`mix cyfr.gen.access_refusals`), so a row that changes without the
     # render fails here; Go renders every example back to its sentence.
-    alias Mix.Tasks.Cyfr.Gen.ReachRefusals
-    {vectors, go} = ReachRefusals.targets()
+    alias Mix.Tasks.Cyfr.Gen.AccessRefusals
+    {vectors, go} = AccessRefusals.targets()
     json = read!(vectors)
 
-    assert json == ReachRefusals.render_fixture(json),
-           "#{vectors}'s refusals section is stale: run `mix cyfr.gen.reach_refusals`"
+    assert json == AccessRefusals.render_fixture(json),
+           "#{vectors}'s refusals section is stale: run `mix cyfr.gen.access_refusals`"
 
-    assert Mix.Tasks.Ops.Gen.Cli.current?({:ok, read!(go)}, ReachRefusals.render_go()),
-           "#{go} is stale: run `mix cyfr.gen.reach_refusals`"
+    assert Mix.Tasks.Ops.Gen.Cli.current?({:ok, read!(go)}, AccessRefusals.render_go()),
+           "#{go} is stale: run `mix cyfr.gen.access_refusals`"
 
     for %{"code" => code, "class" => class, "variants" => variants} <-
-          fixture!("reach_modes.json")["refusals"],
+          fixture!("access_modes.json")["refusals"],
         %{"example" => %{"payload" => payload, "sentence" => sentence}} <- variants do
       reason =
         {String.to_existing_atom(code),
@@ -513,9 +513,9 @@ defmodule Cyfr.CrossLanguageDriftTest do
       {"apps/prima/test/prima/person_assertion_test.exs",
        ~w(assertions identity keys protocol refusals transport verify)}
     ],
-    "reach_modes.json" => [
-      {"apps/codex/internal/reach/head_test.go", ~w(derive boot profiles names words)},
-      {"apps/codex/internal/reach/refusals_test.go", ~w(refusals)},
+    "access_modes.json" => [
+      {"apps/codex/internal/access/head_test.go", ~w(derive boot profiles names words)},
+      {"apps/codex/internal/access/refusals_test.go", ~w(refusals)},
       {"apps/cyfr/test/cyfr/cross_language_drift_test.exs", ~w(refusals)},
       {"apps/cyfr/test/cyfr/runtime_config_test.exs", ~w(derive boot profiles names words)},
       {"tests/compose-proof/run.sh", ~w(refusals boot)},

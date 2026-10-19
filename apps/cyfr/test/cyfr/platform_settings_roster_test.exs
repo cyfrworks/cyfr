@@ -946,7 +946,7 @@ defmodule Cyfr.PlatformSettingsRosterTest do
       "CYFR_SECRET_KEY_BASE" => Base.encode64(:crypto.strong_rand_bytes(48)),
       "RELEASE_NAME" => "cyfr",
       "CYFR_DATABASE" => nil,
-      "CYFR_REACH" => "local"
+      "CYFR_ACCESS" => "local"
     }
   end
 

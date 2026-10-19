@@ -7,7 +7,7 @@
 # proof's own compose calls, resolve beside docker-compose.yml. cyfr, caddy
 # and tailscale keep every setting the shipped file gives them, cyfr's
 # networks, fixed addresses, environment, mounts and health probe among
-# them, and the reach keys reach cyfr from .env alone. This adds only:
+# them, and the access keys reach cyfr from .env alone. This adds only:
 #
 #   - the app image built from the tree, and the Tailscale stand-in
 #     (tests/compose-proof/tailscale-standin/) in place of the pinned
@@ -21,7 +21,7 @@
 #   - proof-tailnet, a network of the stand-in alone, where the proof's
 #     clients stand for a tailnet's devices;
 #   - the Locus runtime and backends services under a profile no head
-#     selects: the proof is of cyfr and its reach, and starts no Locus
+#     selects: the proof is of cyfr and its access, and starts no Locus
 #     service, as builds are off in its .env.
 services:
   cyfr:

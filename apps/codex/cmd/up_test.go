@@ -25,7 +25,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/cyfr/codex/internal/reach"
+	"github.com/cyfr/codex/internal/access"
 )
 
 // bootSentence is the sentence the boot refuses the .env text env with, as
@@ -33,25 +33,25 @@ import (
 func bootSentence(t *testing.T, env string) string {
 	t.Helper()
 	values := envAssignments(writeTemp(t, ".env", env))
-	_, err := reach.ResolveBoot(reach.BootInput{File: values, Process: values, Release: true})
+	_, err := access.ResolveBoot(access.BootInput{File: values, Process: values, Release: true})
 	if err == nil {
 		t.Fatalf("the boot accepts %q", env)
 	}
 	return engineFailure(err).Error()
 }
 
-// `cyfr up` refuses a .env whose reach settings contradict each other with
+// `cyfr up` refuses a .env whose access settings contradict each other with
 // the boot's own sentence, under the lock, before the stack is checked or
 // anything starts: a missing mode, a local home at another host, a public
 // URL that is not the host's, and the compose file's assertion from .env.
 func TestUpRefusesAnIncoherentEnvBeforeAnythingStarts(t *testing.T) {
 	for name, env := range map[string]string{
 		"a missing mode":           "CYFR_HOST=localhost\nCYFR_PORT=4000\n",
-		"a local home elsewhere":   "CYFR_REACH=local\nCYFR_HOST=cyfr.example.com\n",
-		"a public URL of another":  "CYFR_REACH=public\nCYFR_HOST=cyfr.example.com\nCYFR_PUBLIC_URL=https://other.example.com\n",
+		"a local home elsewhere":   "CYFR_ACCESS=local\nCYFR_HOST=cyfr.example.com\n",
+		"a public URL of another":  "CYFR_ACCESS=public\nCYFR_HOST=cyfr.example.com\nCYFR_PUBLIC_URL=https://other.example.com\n",
 		"the assertion from .env":  scenarioEnv + "CYFR_LOCAL_INGRESS_ASSERTED=true\n",
-		"a mode that is none":      "CYFR_REACH=tls\n",
-		"an email for a local one": "CYFR_REACH=local\nCADDY_ACME_EMAIL=ops@example.com\n",
+		"a mode that is none":      "CYFR_ACCESS=tls\n",
+		"an email for a local one": "CYFR_ACCESS=local\nCADDY_ACME_EMAIL=ops@example.com\n",
 	} {
 		t.Run(name, func(t *testing.T) {
 			s := newUpdateScenario(t, shippedCompose(t), nil)
@@ -68,12 +68,12 @@ func TestUpRefusesAnIncoherentEnvBeforeAnythingStarts(t *testing.T) {
 	}
 }
 
-// retiredProxySetting is the setting the proxy mode had before the reach
+// retiredProxySetting is the setting the proxy mode had before the access
 // mode, spelled in two so no tracked file names it whole.
 const retiredProxySetting = "CYFR_" + "BEHIND_PROXY"
 
-// A retired name, the old proxy setting's, passes the reach coherence
-// check, which reads only the reach keys, and the release refuses it at
+// A retired name, the old proxy setting's, passes the access coherence
+// check, which reads only the access keys, and the release refuses it at
 // boot as a name it does not read: the start fails, and `cyfr up` reads
 // the boot's refusal from cyfr's log through the engine and prints it,
 // rather than a bare failed start.
@@ -126,7 +126,7 @@ func TestUpStartsThroughTheEngine(t *testing.T) {
 	out.Reset()
 	before := len(s.log())
 	err := runUp(context.Background(), &out)
-	if err == nil || err.Error() != reach.Refuse("tailnet_node_mismatch", mismatch()).Message() || ExitStatus(err) != exitStartedLocally {
+	if err == nil || err.Error() != access.Refuse("tailnet_node_mismatch", mismatch()).Message() || ExitStatus(err) != exitStartedLocally {
 		t.Errorf("a start on this machine only made cyfr up answer %v (exit %d)", err, ExitStatus(err))
 	}
 	if strings.Contains(out.String(), "started") || slices.ContainsFunc(s.log()[before:], func(line string) bool { return strings.Contains(line, " logs ") }) {
@@ -134,7 +134,7 @@ func TestUpStartsThroughTheEngine(t *testing.T) {
 	}
 
 	s.engine.startReceipt = okReceipt("start")
-	refused := reach.Refuse("compose_env_refused", map[string]string{"key": "COMPOSE_FILE"})
+	refused := access.Refuse("compose_env_refused", map[string]string{"key": "COMPOSE_FILE"})
 	s.engine.checkErr = refused
 	before = len(s.log())
 	if err := runUp(context.Background(), &bytes.Buffer{}); err == nil || err.Error() != refused.Message() {
@@ -146,7 +146,7 @@ func TestUpStartsThroughTheEngine(t *testing.T) {
 }
 
 // `cyfr down` stops every service of the project through the engine, under
-// the lock; a stop it cannot verify is reach_uncertain's sentence and a
+// the lock; a stop it cannot verify is access_uncertain's sentence and a
 // failure, never "stopped".
 func TestDownStopsEverythingUnderTheLock(t *testing.T) {
 	s := newUpdateScenario(t, shippedCompose(t), nil)
@@ -158,9 +158,9 @@ func TestDownStopsEverythingUnderTheLock(t *testing.T) {
 		t.Errorf("cyfr down ran\n%s", strings.Join(log, "\n"))
 	}
 	payload := map[string]string{"observed": "caddy"}
-	s.engine.stopReceipt = reach.Receipt{Op: "stop", State: "accepted", Phase: "uncertain", Code: "reach_uncertain", Payload: payload}
+	s.engine.stopReceipt = access.Receipt{Op: "stop", State: "accepted", Phase: "uncertain", Code: "access_uncertain", Payload: payload}
 	out.Reset()
-	if err := runDown(context.Background(), &out); err == nil || err.Error() != reach.Refuse("reach_uncertain", payload).Message() || strings.Contains(out.String(), "stopped") {
+	if err := runDown(context.Background(), &out); err == nil || err.Error() != access.Refuse("access_uncertain", payload).Message() || strings.Contains(out.String(), "stopped") {
 		t.Errorf("an unverified stop made cyfr down answer %v:\n%s", err, out.String())
 	}
 	if holder := s.engine.held(); holder != "" {
@@ -173,9 +173,9 @@ func TestDownStopsEverythingUnderTheLock(t *testing.T) {
 // choose the stack's files, project or services behind cyfr's back. The
 // engine refuses it at recovery, under the lock, so the lock and the
 // recovery are the only engine calls; init, which runs no compose, refuses
-// an existing .env naming one, and `cyfr reach status` shows the refusal.
+// an existing .env naming one, and `cyfr access status` shows the refusal.
 func TestComposeKeysInEnvAreRefusedBeforeAnyDockerCall(t *testing.T) {
-	want := reach.Refuse("compose_env_refused", map[string]string{"key": "COMPOSE_PROFILES"}).Message()
+	want := access.Refuse("compose_env_refused", map[string]string{"key": "COMPOSE_PROFILES"}).Message()
 	engineOnly := func(t *testing.T, name string, log []string) {
 		t.Helper()
 		for _, line := range log {
@@ -191,10 +191,10 @@ func TestComposeKeysInEnvAreRefusedBeforeAnyDockerCall(t *testing.T) {
 		"restore": func(r *restoreScenario) error {
 			return runRestore(context.Background(), r.dir, true, &bytes.Buffer{}, &bytes.Buffer{})
 		},
-		"reach": func(*restoreScenario) error {
-			return runReach(context.Background(), reach.ModeLocal, reachOptions{}, true, "", &bytes.Buffer{})
+		"access": func(*restoreScenario) error {
+			return runAccess(context.Background(), access.ModeLocal, accessOptions{}, true, "", &bytes.Buffer{})
 		},
-		"reach resume": func(*restoreScenario) error { return runReachResume(context.Background(), &bytes.Buffer{}) },
+		"access resume": func(*restoreScenario) error { return runAccessResume(context.Background(), &bytes.Buffer{}) },
 		"init": func(*restoreScenario) error {
 			return runInit(context.Background(), initOptions{noPull: true}, &bytes.Buffer{}, &bytes.Buffer{})
 		},
@@ -217,31 +217,31 @@ func TestComposeKeysInEnvAreRefusedBeforeAnyDockerCall(t *testing.T) {
 	t.Run("the cyfr process", func(t *testing.T) {
 		r := newRestoreScenario(t, shippedCompose(t), nil, nil)
 		r.edit(".env", scenarioEnv+"COMPOSE_PROFILES=public\n")
-		for _, args := range [][]string{{"up"}, {"reach", "--resume"}} {
+		for _, args := range [][]string{{"up"}, {"access", "--resume"}} {
 			_, stderr, status := runAsCyfr(t, "plain", r.project, args...)
-			if wantErr := "Error: " + reach.Refuse("compose_env_refused", map[string]string{"key": "COMPOSE_PROFILES"}).Message() + "\n"; status != exitFailure || stderr != wantErr {
+			if wantErr := "Error: " + access.Refuse("compose_env_refused", map[string]string{"key": "COMPOSE_PROFILES"}).Message() + "\n"; status != exitFailure || stderr != wantErr {
 				t.Errorf("cyfr %v exited %d, printing %q; want exit 1 and %q", args, status, stderr, wantErr)
 			}
 		}
 	})
-	t.Run("reach status", func(t *testing.T) {
+	t.Run("access status", func(t *testing.T) {
 		r := newRestoreScenario(t, shippedCompose(t), nil, nil)
 		r.edit(".env", scenarioEnv+"COMPOSE_PROFILES: public\n")
 		var out bytes.Buffer
-		if err := runReachStatus(context.Background(), &out); err != nil || !strings.Contains(out.String(), want) {
-			t.Errorf("cyfr reach status answered %v, printing:\n%s", err, out.String())
+		if err := runAccessStatus(context.Background(), &out); err != nil || !strings.Contains(out.String(), want) {
+			t.Errorf("cyfr access status answered %v, printing:\n%s", err, out.String())
 		}
 	})
 }
 
-// Through the reach engine itself: `cyfr up` on an incoherent .env answers
+// Through the access engine itself: `cyfr up` on an incoherent .env answers
 // the boot's sentence, and on a COMPOSE_* name in .env refuses before any
 // docker call.
 func TestUpRefusesThroughTheRealEngine(t *testing.T) {
 	for _, c := range []struct{ name, env, want string }{
-		{"a local home elsewhere", "CYFR_REACH=local\nCYFR_HOST=cyfr.example.com\n", ""},
+		{"a local home elsewhere", "CYFR_ACCESS=local\nCYFR_HOST=cyfr.example.com\n", ""},
 		{"a missing mode", "CYFR_PORT=4000\n", ""},
-		{"COMPOSE_PROFILES", "CYFR_REACH=local\nCOMPOSE_PROFILES=public,tailnet\n", reach.Refuse("compose_env_refused", map[string]string{"key": "COMPOSE_PROFILES"}).Message()},
+		{"COMPOSE_PROFILES", "CYFR_ACCESS=local\nCOMPOSE_PROFILES=public,tailnet\n", access.Refuse("compose_env_refused", map[string]string{"key": "COMPOSE_PROFILES"}).Message()},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			dir := t.TempDir()
@@ -267,7 +267,7 @@ func TestUpRefusesThroughTheRealEngine(t *testing.T) {
 }
 
 // Every docker child a command starts runs through the engine's runner
-// (reach.Engine.Docker), under the lock with the watchdog and the
+// (access.Engine.Docker), under the lock with the watchdog and the
 // sanitized environment, but for the one launcher listed here with its
 // reason. A new exec of docker anywhere else in the commands fails here.
 func TestEveryDockerCallRunsThroughTheEngine(t *testing.T) {
@@ -353,10 +353,10 @@ func runAsCyfr(t *testing.T, scenario, dir string, args ...string) (string, stri
 // machine not ready to serve it, is no success and no failed start: the
 // cyfr process prints its refusal's sentence, Prima.Refusal's word for
 // word, and exits 3, from cyfr up, cyfr restore and the switch of cyfr
-// reach alike, a machine not .env's and HTTPS off alike; a failed start
+// access alike, a machine not .env's and HTTPS off alike; a failed start
 // exits 1.
 func TestStartedOnThisMachineOnlyExitsThree(t *testing.T) {
-	want := "Error: " + reach.Refuse("tailnet_node_mismatch", mismatch()).Message() + "\n"
+	want := "Error: " + access.Refuse("tailnet_node_mismatch", mismatch()).Message() + "\n"
 	check := func(t *testing.T, name, stdout, stderr string, status int) {
 		t.Helper()
 		if status != exitStartedLocally || stderr != want {
@@ -376,7 +376,7 @@ func TestStartedOnThisMachineOnlyExitsThree(t *testing.T) {
 		}
 		// Every start on this machine only exits 3 by its outcome, its own
 		// refusal's sentence printed: here the tailnet's HTTPS is off.
-		https := "Error: " + reach.Refuse("tailnet_https_off", httpsOff()).Message() + "\n"
+		https := "Error: " + access.Refuse("tailnet_https_off", httpsOff()).Message() + "\n"
 		if _, stderr, status := runAsCyfr(t, "https-off", s.project, "up"); status != exitStartedLocally || stderr != https {
 			t.Errorf("a start with the tailnet's HTTPS off made cyfr up exit %d, printing %q; want exit 3 and %q", status, stderr, https)
 		}
@@ -389,23 +389,23 @@ func TestStartedOnThisMachineOnlyExitsThree(t *testing.T) {
 			t.Errorf("cyfr restore does not say the restore is declared:\n%s", stdout)
 		}
 	})
-	t.Run("reach", func(t *testing.T) {
-		newReachProject(t)
+	t.Run("access", func(t *testing.T) {
+		newAccessProject(t)
 		dir, err := os.Getwd()
 		if err != nil {
 			t.Fatal(err)
 		}
-		stdout, stderr, status := runAsCyfr(t, "started-local", dir, "reach", "tailnet", "--yes")
-		check(t, "reach tailnet", stdout, stderr, status)
+		stdout, stderr, status := runAsCyfr(t, "started-local", dir, "access", "tailnet", "--yes")
+		check(t, "access tailnet", stdout, stderr, status)
 		if !strings.Contains(stdout, "This changes how this home is reached:") {
-			t.Errorf("cyfr reach tailnet showed no change before making it:\n%s", stdout)
+			t.Errorf("cyfr access tailnet showed no change before making it:\n%s", stdout)
 		}
 		// Recovery's start is a start path too: a switch it finished on
 		// this machine only exits 3.
-		stdout, stderr, status = runAsCyfr(t, "resumed-local", dir, "reach", "--resume")
-		check(t, "reach --resume", stdout, stderr, status)
+		stdout, stderr, status = runAsCyfr(t, "resumed-local", dir, "access", "--resume")
+		check(t, "access --resume", stdout, stderr, status)
 		if !strings.Contains(stdout, "Recovered: ") {
-			t.Errorf("cyfr reach --resume does not report the recovered change:\n%s", stdout)
+			t.Errorf("cyfr access --resume does not report the recovered change:\n%s", stdout)
 		}
 	})
 }
@@ -417,13 +417,13 @@ func TestAHangupCancelsAWaitingJoin(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("Windows sends no SIGHUP")
 	}
-	newReachProject(t)
+	newAccessProject(t)
 	dir, err := os.Getwd()
 	if err != nil {
 		t.Fatal(err)
 	}
 	logDir := t.TempDir()
-	process := exec.Command(os.Args[0], "reach", "tailnet", "--yes")
+	process := exec.Command(os.Args[0], "access", "tailnet", "--yes")
 	process.Dir = dir
 	process.Env = append(os.Environ(), asCyfr+"=waiting-join", "FAKE_DOCKER_DIR="+logDir)
 	stdout, err := process.StdoutPipe()
@@ -472,7 +472,7 @@ func TestAHangupCancelsAWaitingJoin(t *testing.T) {
 	case <-time.After(time.Minute):
 		t.Fatal("a hangup did not end a waiting join")
 	}
-	if want := "Error: " + reach.Refuse("tailnet_join_cancelled", nil).Message() + "\n"; stderr.String() != want {
+	if want := "Error: " + access.Refuse("tailnet_join_cancelled", nil).Message() + "\n"; stderr.String() != want {
 		t.Errorf("a hangup during a waiting join printed %q, want %q", stderr.String(), want)
 	}
 	if log, _ := os.ReadFile(filepath.Join(logDir, "log")); !strings.Contains(string(log), "ENGINE cancel-waiting-join\n") {
@@ -503,17 +503,17 @@ func TestUpdateClosesServeBeforeItStops(t *testing.T) {
 	}
 	defer unlock()
 	stops := 0
-	docker := observedDocker(func(ctx context.Context, c reach.Call) (reach.Result, error) {
+	docker := observedDocker(func(ctx context.Context, c access.Call) (access.Result, error) {
 		if slices.Contains(c.Args, "stop") {
 			stops++
 			if got, err := os.ReadFile(serve); err != nil || strings.TrimSpace(string(got)) != "{}" {
 				t.Errorf("at docker compose stop #%d Serve was %q (%v), want {}", stops, got, err)
 			}
 		}
-		return reach.Result{}, nil
+		return access.Result{}, nil
 	})
 	u := &updater{ctx: context.Background(), out: io.Discard, errOut: io.Discard, engine: observedEngine{e, docker},
-		head: reach.Head{Mode: reach.ModeTailnet, Host: "cyfr.tail1234.ts.net", NodeID: "nAAAAAAAAACNTRL", PublicURL: "https://cyfr.tail1234.ts.net", Port: 4000, Profiles: []string{reach.ModeTailnet}}, running: []string{"tailscale", "cyfr"}}
+		head: access.Head{Mode: access.ModeTailnet, Host: "cyfr.tail1234.ts.net", NodeID: "nAAAAAAAAACNTRL", PublicURL: "https://cyfr.tail1234.ts.net", Port: 4000, Profiles: []string{access.ModeTailnet}}, running: []string{"tailscale", "cyfr"}}
 	if err := u.stop(); err != nil {
 		t.Fatal(err)
 	}
@@ -546,17 +546,17 @@ func TestUpdateClosesServeBeforeTheStopAfterAFailedStart(t *testing.T) {
 	}
 	defer unlock()
 	stops := 0
-	docker := observedDocker(func(ctx context.Context, c reach.Call) (reach.Result, error) {
+	docker := observedDocker(func(ctx context.Context, c access.Call) (access.Result, error) {
 		if slices.Contains(c.Args, "stop") {
 			stops++
 			if got, err := os.ReadFile(serve); err != nil || strings.TrimSpace(string(got)) != "{}" {
 				t.Errorf("at the failure cleanup's docker compose stop Serve was %q (%v), want {}", got, err)
 			}
 		}
-		return reach.Result{}, nil
+		return access.Result{}, nil
 	})
 	u := &updater{ctx: context.Background(), version: "0.9.0", oldRelease: "0.8.0", snapshot: "backups/snapshot", out: io.Discard, errOut: io.Discard, engine: observedEngine{e, docker},
-		head: reach.Head{Mode: reach.ModeTailnet, Host: "cyfr.tail1234.ts.net", NodeID: "nAAAAAAAAACNTRL", PublicURL: "https://cyfr.tail1234.ts.net", Port: 4000, Profiles: []string{reach.ModeTailnet}}}
+		head: access.Head{Mode: access.ModeTailnet, Host: "cyfr.tail1234.ts.net", NodeID: "nAAAAAAAAACNTRL", PublicURL: "https://cyfr.tail1234.ts.net", Port: 4000, Profiles: []string{access.ModeTailnet}}}
 	err = u.stopAfterSwitch(errors.New("Serve configuration directory sync failed"))
 	want := "Release 0.9.0 did not start (Serve configuration directory sync failed); the stack is left stopped.\nThe snapshot of release 0.8.0 is backups/snapshot; restore it with:\n  cyfr restore backups/snapshot"
 	if err == nil || err.Error() != want {
@@ -582,13 +582,13 @@ func TestUpdateStopsNothingAfterAFailedStartWhileServeDoesNotClose(t *testing.T)
 	}
 	defer unlock()
 	var calls [][]string
-	docker := observedDocker(func(ctx context.Context, c reach.Call) (reach.Result, error) {
+	docker := observedDocker(func(ctx context.Context, c access.Call) (access.Result, error) {
 		calls = append(calls, c.Args)
-		return reach.Result{}, nil
+		return access.Result{}, nil
 	})
 	u := &updater{ctx: context.Background(), version: "0.9.0", oldRelease: "0.8.0", snapshot: "backups/snapshot", out: io.Discard, errOut: io.Discard,
 		engine: closeServeFails{observedEngine{e, docker}, errors.New("no space left on device")},
-		head:   reach.Head{Mode: reach.ModeTailnet, Host: "cyfr.tail1234.ts.net", NodeID: "nAAAAAAAAACNTRL", PublicURL: "https://cyfr.tail1234.ts.net", Port: 4000, Profiles: []string{reach.ModeTailnet}}}
+		head:   access.Head{Mode: access.ModeTailnet, Host: "cyfr.tail1234.ts.net", NodeID: "nAAAAAAAAACNTRL", PublicURL: "https://cyfr.tail1234.ts.net", Port: 4000, Profiles: []string{access.ModeTailnet}}}
 	err = u.stopAfterSwitch(errors.New("cyfr did not become healthy"))
 	want := "Release 0.9.0 did not start (cyfr did not become healthy), and Tailscale Serve could not be closed (no space left on device), so nothing was stopped and the stack may still be running with Serve open; stop it with 'cyfr down'.\nThe snapshot of release 0.8.0 is backups/snapshot; restore it with:\n  cyfr restore backups/snapshot"
 	if err == nil || err.Error() != want {
@@ -610,15 +610,15 @@ func (e closeServeFails) CloseServe(ctx context.Context) error { return e.err }
 // observedEngine is an engine whose docker calls run through docker.
 type observedEngine struct {
 	stackEngine
-	docker reach.Docker
+	docker access.Docker
 }
 
-func (e observedEngine) Docker() reach.Docker { return e.docker }
+func (e observedEngine) Docker() access.Docker { return e.docker }
 
 // observedDocker is a docker answering each call with its function.
-type observedDocker func(context.Context, reach.Call) (reach.Result, error)
+type observedDocker func(context.Context, access.Call) (access.Result, error)
 
-func (f observedDocker) Run(ctx context.Context, c reach.Call) (reach.Result, error) {
+func (f observedDocker) Run(ctx context.Context, c access.Call) (access.Result, error) {
 	return f(ctx, c)
 }
 
@@ -632,7 +632,7 @@ type tailnetDocker struct {
 	calls    [][]string
 }
 
-func (d *tailnetDocker) Run(ctx context.Context, c reach.Call) (reach.Result, error) {
+func (d *tailnetDocker) Run(ctx context.Context, c access.Call) (access.Result, error) {
 	d.mu.Lock()
 	d.calls = append(d.calls, c.Args)
 	d.mu.Unlock()
@@ -648,7 +648,7 @@ func (d *tailnetDocker) Run(ctx context.Context, c reach.Call) (reach.Result, er
 		var stdout, stderr bytes.Buffer
 		process.Stdout, process.Stderr = &stdout, &stderr
 		err := process.Run()
-		res := reach.Result{Stdout: stdout.Bytes(), Stderr: stderr.Bytes()}
+		res := access.Result{Stdout: stdout.Bytes(), Stderr: stderr.Bytes()}
 		var exit *exec.ExitError
 		if errors.As(err, &exit) {
 			res.ExitCode = exit.ExitCode()
@@ -657,14 +657,14 @@ func (d *tailnetDocker) Run(ctx context.Context, c reach.Call) (reach.Result, er
 		return res, err
 	case (c.Args[0] == "exec" || c.Args[0] == "compose" && slices.Contains(c.Args, "exec")) && strings.Contains(line, "tailscale status --json"):
 		status := fmt.Sprintf(`{"BackendState":"Running","Self":{"DNSName":%q,"ID":%q},"CertDomains":[%q]}`, d.node+".", d.id, d.node)
-		return reach.Result{Stdout: []byte(status)}, nil
+		return access.Result{Stdout: []byte(status)}, nil
 	case c.Args[0] == "ps" && strings.Contains(line, "label=com.docker.compose.project="):
-		project := reach.ProjectName(".")
-		return reach.Result{Stdout: []byte(`{"name":"` + project + `-cyfr-1","service":"cyfr","state":"running"}` + "\n" + `{"name":"` + project + `-tailscale-1","service":"tailscale","state":"running"}` + "\n")}, nil
+		project := access.ProjectName(".")
+		return access.Result{Stdout: []byte(`{"name":"` + project + `-cyfr-1","service":"cyfr","state":"running"}` + "\n" + `{"name":"` + project + `-tailscale-1","service":"tailscale","state":"running"}` + "\n")}, nil
 	case c.Args[0] == "inspect":
-		return reach.Result{Stdout: []byte(`{"Status":"running","ExitCode":0,"Health":{"Status":"healthy"}}`)}, nil
+		return access.Result{Stdout: []byte(`{"Status":"running","ExitCode":0,"Health":{"Status":"healthy"}}`)}, nil
 	}
-	return reach.Result{}, nil
+	return access.Result{}, nil
 }
 
 // newTailnetHome makes the working directory a project of the shipped
@@ -679,11 +679,11 @@ func newTailnetHome(t *testing.T) string {
 	}
 	text, _ := newEnvFromTemplate(t, "me@example.com")
 	t.Chdir(dir)
-	d, err := reach.Derive(reach.Target{Mode: reach.ModeTailnet}, reach.Current{Port: 4000, BuildsURL: defaultBuildsURL}, &reach.Join{Name: "cyfr.tail1234.ts.net", NodeID: "nAAAAAAAAACNTRL"})
+	d, err := access.Derive(access.Target{Mode: access.ModeTailnet}, access.Current{Port: 4000, BuildsURL: defaultBuildsURL}, &access.Join{Name: "cyfr.tail1234.ts.net", NodeID: "nAAAAAAAAACNTRL"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	env, err := reach.EditEnv([]byte(text), d.Assignments, d.Removals)
+	env, err := access.EditEnv([]byte(text), d.Assignments, d.Removals)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -697,9 +697,9 @@ func newTailnetHome(t *testing.T) string {
 
 // Through the real engine and Docker Compose's own configuration: a
 // tailnet home whose Serve is closed, its machine now the one .env names,
-// is served on the tailnet again by `cyfr reach tailnet --yes`: the switch
+// is served on the tailnet again by `cyfr access tailnet --yes`: the switch
 // of the head .env holds, its start only, opens Serve.
-func TestReachTailnetServesAClosedHomeAgainThroughTheRealEngine(t *testing.T) {
+func TestAccessTailnetServesAClosedHomeAgainThroughTheRealEngine(t *testing.T) {
 	requireCompose(t)
 	newTailnetHome(t)
 	before := read(t, ".env")
@@ -715,8 +715,8 @@ func TestReachTailnetServesAClosedHomeAgainThroughTheRealEngine(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
 	var out bytes.Buffer
-	if err := runReach(ctx, reach.ModeTailnet, reachOptions{}, true, "", &out); err != nil {
-		t.Fatalf("cyfr reach tailnet answered %v\n%s", err, out.String())
+	if err := runAccess(ctx, access.ModeTailnet, accessOptions{}, true, "", &out); err != nil {
+		t.Fatalf("cyfr access tailnet answered %v\n%s", err, out.String())
 	}
 	for _, want := range []string{"Tailscale Serve is closed, so this home answers on this machine only.", "Done. This home is reached as:\n", "  Serve: open\n"} {
 		if !strings.Contains(out.String(), want) {
@@ -750,7 +750,7 @@ func TestUpStartsOnThisMachineOnlyThroughTheRealEngine(t *testing.T) {
 	defer cancel()
 	var out bytes.Buffer
 	err := runUp(ctx, &out)
-	var refusal *reach.Refusal
+	var refusal *access.Refusal
 	if !errors.As(err, &refusal) || refusal.Code != "tailnet_node_mismatch" || err.Error() != refusal.Message() || ExitStatus(err) != exitStartedLocally {
 		t.Fatalf("cyfr up answered %v (exit %d), want tailnet_node_mismatch's sentence and exit 3\n%s", err, ExitStatus(err), out.String())
 	}

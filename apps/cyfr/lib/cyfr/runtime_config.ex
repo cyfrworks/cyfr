@@ -799,27 +799,27 @@ defmodule Cyfr.RuntimeConfig do
   @spec host_api_url() :: String.t() | nil
   def host_api_url, do: Application.get_env(:cyfr, :host_api_url)
 
-  # ── reach ──────────────────────────────────────────────────────────────────
+  # ── access ─────────────────────────────────────────────────────────────────
 
   @typedoc """
-  What the boot read, for `resolve_reach/1`: the names and values the
+  What the boot read, for `resolve_access/1`: the names and values the
   release read from `.env` itself (`Cyfr.EnvFiles.source!/2` with
   `side_effect: false`), or `nil` when it read none, as in the compose
   container, where `.env` arrives through `env_file`; the environment as
   `config/runtime.exs` merges it; and whether this is a release, or a dev
   or test run, where an unset mode is `local`.
   """
-  @type reach_input :: %{
+  @type access_input :: %{
           file: %{optional(String.t()) => String.t()} | nil,
           process: %{optional(String.t()) => String.t()},
           release?: boolean()
         }
 
-  @type reach_head :: %{optional(String.t()) => String.t() | pos_integer() | [String.t()]}
+  @type access_head :: %{optional(String.t()) => String.t() | pos_integer() | [String.t()]}
 
-  @type reach :: %{
+  @type access :: %{
           mode: :local | :tailnet | :public,
-          head: reach_head(),
+          head: access_head(),
           canonical: String.t(),
           digest: String.t(),
           origin: String.t(),
@@ -833,13 +833,13 @@ defmodule Cyfr.RuntimeConfig do
           assertion: :absent | :process
         }
 
-  @type reach_refusal :: %{code: atom(), class: Prima.Refusal.class(), payload: map()}
+  @type access_refusal :: %{code: atom(), class: Prima.Refusal.class(), payload: map()}
 
   # Every name the resolver reads. A name `.env` and the merged environment
   # assign differently is a source conflict; the compose file's assertion
   # has its own rule.
-  @reach_keys ~w(CADDY_ACME_EMAIL CYFR_BIND_ADDRESS CYFR_HOST CYFR_LOCUS_BUILDS_URL
-                 CYFR_PORT CYFR_PROXY_BIND_ADDRESS CYFR_PROXY_PORT CYFR_PUBLIC_URL CYFR_REACH
+  @access_keys ~w(CADDY_ACME_EMAIL CYFR_BIND_ADDRESS CYFR_HOST CYFR_LOCUS_BUILDS_URL
+                 CYFR_PORT CYFR_PROXY_BIND_ADDRESS CYFR_PROXY_PORT CYFR_PUBLIC_URL CYFR_ACCESS
                  CYFR_TAILNET_NODE_ID CYFR_TRUSTED_PROXY_CIDRS CYFR_TRUSTED_PROXY_HOPS)
   @assertion "CYFR_LOCAL_INGRESS_ASSERTED"
 
@@ -855,13 +855,13 @@ defmodule Cyfr.RuntimeConfig do
 
   # A builds service's URL: http or https, a host (a DNS name, an IPv4
   # address or a bracketed IPv6 address), an optional port and nothing
-  # after but one slash. `tests/fixtures/reach_modes.json` holds the
-  # grammar's answers, which the reach engine's twin of it gives too.
+  # after but one slash. `tests/fixtures/access_modes.json` holds the
+  # grammar's answers, which the access engine's twin of it gives too.
   @builds_url ~r/\A(?:http|https):\/\/(\[[0-9A-Fa-f:.]+\]|[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*)(?::([0-9]{1,5}))?\/?\z/
 
   @doc """
   Resolve how this home is reached from what the boot read
-  (`t:reach_input/0`): `{:ok, reach}`, or `{:error, %{code, class,
+  (`t:access_input/0`): `{:ok, access}`, or `{:error, %{code, class,
   payload}}`, a `Prima.Refusal` row whose sentence
   (`Prima.Refusal.message({code, payload})`) the boot prints after
   `[Cyfr] FATAL:`. Blank values count as unset.
@@ -875,22 +875,22 @@ defmodule Cyfr.RuntimeConfig do
   public URL, a key outside its mode (the email before the node id), a
   malformed port, builds URL, address, assertion or proxy trust, a proxy
   listener on the loopback listener's port at an address it overlaps, and
-  the loopback listener's bind. `tests/fixtures/reach_modes.json`
-  holds the answers; the reach engine reads the same file.
+  the loopback listener's bind. `tests/fixtures/access_modes.json`
+  holds the answers; the access engine reads the same file.
   """
-  @spec resolve_reach(reach_input()) :: {:ok, reach()} | {:error, reach_refusal()}
-  def resolve_reach(%{file: file, process: process, release?: release?})
+  @spec resolve_access(access_input()) :: {:ok, access()} | {:error, access_refusal()}
+  def resolve_access(%{file: file, process: process, release?: release?})
       when (is_map(file) or is_nil(file)) and is_map(process) and is_boolean(release?) do
     get = fn key -> blank_to_nil(Map.get(process, key)) end
 
     result =
-      with :ok <- reach_encoding(file || %{}, process),
-           :ok <- reach_sources(file || %{}, process),
-           {:ok, mode} <- reach_mode(get.("CYFR_REACH"), release?),
-           {:ok, head} <- reach_head(mode, get),
-           {:ok, settings} <- reach_settings(mode, head["port"], get),
-           :ok <- reach_bind(settings) do
-        %{canonical: canonical, digest: digest} = reach_digest(head)
+      with :ok <- access_encoding(file || %{}, process),
+           :ok <- access_sources(file || %{}, process),
+           {:ok, mode} <- access_mode(get.("CYFR_ACCESS"), release?),
+           {:ok, head} <- access_head(mode, get),
+           {:ok, settings} <- access_settings(mode, head["port"], get),
+           :ok <- access_bind(settings) do
+        %{canonical: canonical, digest: digest} = access_digest(head)
 
         {:ok,
          %{
@@ -899,7 +899,7 @@ defmodule Cyfr.RuntimeConfig do
            head: head,
            canonical: canonical,
            digest: digest,
-           origin: reach_origin(head),
+           origin: access_origin(head),
            listeners: %{loopback: settings.bind, proxy: settings.proxy},
            trust: settings.trust,
            hsts:
@@ -907,7 +907,7 @@ defmodule Cyfr.RuntimeConfig do
                %{"local" => :none, "tailnet" => :endpoint_on_proxy, "public" => :caddy},
                mode
              ),
-           check_origins: reach_check_origins(head),
+           check_origins: access_check_origins(head),
            assertion: settings.assertion
          }}
       end
@@ -927,8 +927,8 @@ defmodule Cyfr.RuntimeConfig do
   and `locus-builds` exactly when `builds_url`'s host is that compose
   service.
   """
-  @spec reach_profiles(String.t(), String.t() | nil) :: [String.t()]
-  def reach_profiles(mode, builds_url) when mode in ["local", "tailnet", "public"] do
+  @spec access_profiles(String.t(), String.t() | nil) :: [String.t()]
+  def access_profiles(mode, builds_url) when mode in ["local", "tailnet", "public"] do
     proxy = if mode == "local", do: [], else: [mode]
 
     builds =
@@ -970,11 +970,11 @@ defmodule Cyfr.RuntimeConfig do
   end
 
   @doc """
-  A reach head's canonical JSON (`Prima.JCS`) and its digest,
+  An access head's canonical JSON (`Prima.JCS`) and its digest,
   `Prima.JCS.hash/1`'s form. A head carries only the keys that hold a value.
   """
-  @spec reach_digest(reach_head()) :: %{canonical: String.t(), digest: String.t()}
-  def reach_digest(head) when is_map(head) do
+  @spec access_digest(access_head()) :: %{canonical: String.t(), digest: String.t()}
+  def access_digest(head) when is_map(head) do
     {:ok, canonical} = Prima.JCS.encode(head)
     %{canonical: canonical, digest: Prima.JCS.hash_binary(canonical)}
   end
@@ -984,8 +984,8 @@ defmodule Cyfr.RuntimeConfig do
   can reach the home, its address, the certificate email, and the ports
   opened on this machine. None names a compose term.
   """
-  @spec reach_words(reach_head()) :: [String.t()]
-  def reach_words(%{"mode" => mode} = head) do
+  @spec access_words(access_head()) :: [String.t()]
+  def access_words(%{"mode" => mode} = head) do
     who =
       case mode do
         "local" -> "only this computer"
@@ -995,7 +995,7 @@ defmodule Cyfr.RuntimeConfig do
 
     [
       "Who can reach this home: #{who}",
-      "Address: #{reach_origin(head)}",
+      "Address: #{access_origin(head)}",
       "Certificate email: #{Map.get(head, "acme_email", "none")}",
       "Ports opened on this machine: #{if mode == "public", do: "80 and 443", else: "none"}"
     ]
@@ -1037,23 +1037,23 @@ defmodule Cyfr.RuntimeConfig do
 
   # Every value either map holds for a name the resolver reads is UTF-8,
   # or the first name in byte order that holds one that is not is refused.
-  defp reach_encoding(file, process) do
+  defp access_encoding(file, process) do
     unreadable =
-      Enum.find(Enum.sort([@assertion | @reach_keys]), fn key ->
+      Enum.find(Enum.sort([@assertion | @access_keys]), fn key ->
         Enum.any?([file[key], process[key]], &(is_binary(&1) and not String.valid?(&1)))
       end)
 
     if unreadable,
-      do: {:error, {:reach_setting_invalid, %{key: unreadable}}},
+      do: {:error, {:access_setting_invalid, %{key: unreadable}}},
       else: :ok
   end
 
   # `.env` against the merged environment: a name `.env` assigns that the
   # merged read holds otherwise was overridden by the process, and the
   # compose file's assertion never comes from `.env`.
-  defp reach_sources(file, process) do
+  defp access_sources(file, process) do
     conflict =
-      Enum.find(@reach_keys, fn key ->
+      Enum.find(@access_keys, fn key ->
         assigned = blank_to_nil(file[key])
         assigned != nil and assigned != blank_to_nil(process[key])
       end)
@@ -1061,7 +1061,7 @@ defmodule Cyfr.RuntimeConfig do
     cond do
       conflict ->
         {:error,
-         {:reach_source_conflict,
+         {:access_source_conflict,
           %{
             key: conflict,
             file_value: blank_to_nil(file[conflict]),
@@ -1069,33 +1069,33 @@ defmodule Cyfr.RuntimeConfig do
           }}}
 
       Map.has_key?(file, @assertion) ->
-        {:error, {:reach_assertion_from_file, %{}}}
+        {:error, {:access_assertion_from_file, %{}}}
 
       true ->
         :ok
     end
   end
 
-  defp reach_mode(nil, true), do: {:error, {:reach_missing, %{}}}
-  defp reach_mode(nil, false), do: {:ok, "local"}
-  defp reach_mode(mode, _) when mode in ["local", "tailnet", "public"], do: {:ok, mode}
-  defp reach_mode(other, _), do: {:error, {:reach_unknown_mode, %{value: other}}}
+  defp access_mode(nil, true), do: {:error, {:access_missing, %{}}}
+  defp access_mode(nil, false), do: {:ok, "local"}
+  defp access_mode(mode, _) when mode in ["local", "tailnet", "public"], do: {:ok, mode}
+  defp access_mode(other, _), do: {:error, {:access_unknown_mode, %{value: other}}}
 
   # The head the mode's settings make, once each is the one the mode allows.
-  defp reach_head(mode, get) do
+  defp access_head(mode, get) do
     host = get.("CYFR_HOST")
     node_id = get.("CYFR_TAILNET_NODE_ID")
     url = get.("CYFR_PUBLIC_URL")
     email = get.("CADDY_ACME_EMAIL")
     builds_url = get.("CYFR_LOCUS_BUILDS_URL")
 
-    with :ok <- reach_host(mode, host),
-         :ok <- reach_node_id(mode, node_id),
-         :ok <- reach_url(mode, host, url),
-         :ok <- reach_outside(mode, "CADDY_ACME_EMAIL", email, "public"),
-         :ok <- reach_outside(mode, "CYFR_TAILNET_NODE_ID", node_id, "tailnet"),
-         {:ok, port} <- reach_port(get, "CYFR_PORT", @default_port),
-         :ok <- reach_builds_url(builds_url) do
+    with :ok <- access_host(mode, host),
+         :ok <- access_node_id(mode, node_id),
+         :ok <- access_url(mode, host, url),
+         :ok <- access_outside(mode, "CADDY_ACME_EMAIL", email, "public"),
+         :ok <- access_outside(mode, "CYFR_TAILNET_NODE_ID", node_id, "tailnet"),
+         {:ok, port} <- access_port(get, "CYFR_PORT", @default_port),
+         :ok <- access_builds_url(builds_url) do
       head =
         %{
           "mode" => mode,
@@ -1105,7 +1105,7 @@ defmodule Cyfr.RuntimeConfig do
           "public_url" => url,
           "acme_email" => email,
           "builds_url" => builds_url,
-          "profiles" => reach_profiles(mode, builds_url)
+          "profiles" => access_profiles(mode, builds_url)
         }
         |> reject_nil()
 
@@ -1113,70 +1113,70 @@ defmodule Cyfr.RuntimeConfig do
     end
   end
 
-  defp reach_builds_url(nil), do: :ok
+  defp access_builds_url(nil), do: :ok
 
-  defp reach_builds_url(url) do
+  defp access_builds_url(url) do
     if builds_url?(url),
       do: :ok,
-      else: {:error, {:reach_setting_invalid, %{key: "CYFR_LOCUS_BUILDS_URL", value: url}}}
+      else: {:error, {:access_setting_invalid, %{key: "CYFR_LOCUS_BUILDS_URL", value: url}}}
   end
 
-  defp reach_host("local", host) when host in [nil, "localhost"], do: :ok
+  defp access_host("local", host) when host in [nil, "localhost"], do: :ok
 
-  defp reach_host("local", host),
-    do: {:error, {:reach_local_mismatch, %{key: "CYFR_HOST", value: host}}}
+  defp access_host("local", host),
+    do: {:error, {:access_local_mismatch, %{key: "CYFR_HOST", value: host}}}
 
-  defp reach_host("tailnet", host) do
+  defp access_host("tailnet", host) do
     if is_binary(host) and tailnet_name?(host),
       do: :ok,
-      else: {:error, {:reach_tailnet_host_invalid, reject_nil(%{host: host})}}
+      else: {:error, {:access_tailnet_host_invalid, reject_nil(%{host: host})}}
   end
 
-  defp reach_host("public", host) do
+  defp access_host("public", host) do
     if is_binary(host) and public_domain?(host),
       do: :ok,
-      else: {:error, {:reach_public_host_invalid, reject_nil(%{host: host})}}
+      else: {:error, {:access_public_host_invalid, reject_nil(%{host: host})}}
   end
 
-  defp reach_node_id("tailnet", id) do
+  defp access_node_id("tailnet", id) do
     if is_binary(id) and tailnet_node_id?(id),
       do: :ok,
-      else: {:error, {:reach_tailnet_node_invalid, reject_nil(%{value: id})}}
+      else: {:error, {:access_tailnet_node_invalid, reject_nil(%{value: id})}}
   end
 
-  defp reach_node_id(_mode, _id), do: :ok
+  defp access_node_id(_mode, _id), do: :ok
 
-  defp reach_url("local", _host, nil), do: :ok
+  defp access_url("local", _host, nil), do: :ok
 
-  defp reach_url("local", _host, url),
-    do: {:error, {:reach_local_mismatch, %{key: "CYFR_PUBLIC_URL", value: url}}}
+  defp access_url("local", _host, url),
+    do: {:error, {:access_local_mismatch, %{key: "CYFR_PUBLIC_URL", value: url}}}
 
-  defp reach_url(mode, host, url) do
+  defp access_url(mode, host, url) do
     expected = "https://" <> host
 
     if url == expected,
       do: :ok,
       else:
         {:error,
-         {:reach_public_url_mismatch, reject_nil(%{mode: mode, expected: expected, value: url})}}
+         {:access_public_url_mismatch, reject_nil(%{mode: mode, expected: expected, value: url})}}
   end
 
-  defp reach_outside(mode, _key, _value, mode), do: :ok
-  defp reach_outside(_mode, _key, nil, _needs), do: :ok
+  defp access_outside(mode, _key, _value, mode), do: :ok
+  defp access_outside(_mode, _key, nil, _needs), do: :ok
 
-  defp reach_outside(mode, key, _value, needs),
-    do: {:error, {:reach_key_outside_mode, %{key: key, mode: mode, needs: needs}}}
+  defp access_outside(mode, key, _value, needs),
+    do: {:error, {:access_key_outside_mode, %{key: key, mode: mode, needs: needs}}}
 
   # The listeners, the assertion and the proxy trust, each strictly read.
-  defp reach_settings(mode, port, get) do
+  defp access_settings(mode, port, get) do
     proxied? = mode != "local"
 
-    with {:ok, bind} <- reach_address(get, "CYFR_BIND_ADDRESS", @default_bind),
-         {:ok, assertion} <- reach_assertion(get.(@assertion)),
-         {:ok, proxy_bind} <- reach_address(get, "CYFR_PROXY_BIND_ADDRESS", @default_bind),
-         {:ok, proxy_port} <- reach_port(get, "CYFR_PROXY_PORT", @default_proxy_port),
-         {:ok, trust} <- reach_trust(get),
-         :ok <- reach_listeners_apart(proxied?, {bind, port}, {proxy_bind, proxy_port}) do
+    with {:ok, bind} <- access_address(get, "CYFR_BIND_ADDRESS", @default_bind),
+         {:ok, assertion} <- access_assertion(get.(@assertion)),
+         {:ok, proxy_bind} <- access_address(get, "CYFR_PROXY_BIND_ADDRESS", @default_bind),
+         {:ok, proxy_port} <- access_port(get, "CYFR_PROXY_PORT", @default_proxy_port),
+         {:ok, trust} <- access_trust(get),
+         :ok <- access_listeners_apart(proxied?, {bind, port}, {proxy_bind, proxy_port}) do
       {:ok,
        %{
          bind: {bind, port},
@@ -1192,14 +1192,14 @@ defmodule Cyfr.RuntimeConfig do
   # IPv4-mapped IPv6 address is the IPv4 address it maps), or an
   # unspecified one that takes it too (0.0.0.0 every IPv4 address, :: every
   # address), where the second listener would fail to bind.
-  defp reach_listeners_apart(false, _loopback, _proxy), do: :ok
+  defp access_listeners_apart(false, _loopback, _proxy), do: :ok
 
-  defp reach_listeners_apart(true, {bind, port}, {proxy_bind, proxy_port}) do
+  defp access_listeners_apart(true, {bind, port}, {proxy_bind, proxy_port}) do
     if port == proxy_port and
          overlapping?(unmapped(ip_literal(bind)), unmapped(ip_literal(proxy_bind))),
        do:
          {:error,
-          {:reach_setting_invalid,
+          {:access_setting_invalid,
            %{
              key: "CYFR_PROXY_PORT",
              value: Integer.to_string(proxy_port),
@@ -1222,20 +1222,20 @@ defmodule Cyfr.RuntimeConfig do
   defp overlapping?({_, _, _, _}, {0, 0, 0, 0}), do: true
   defp overlapping?(_a, _b), do: false
 
-  defp reach_bind(%{bind: {address, _port}, assertion: assertion}) do
+  defp access_bind(%{bind: {address, _port}, assertion: assertion}) do
     if assertion == :process or loopback?(address),
       do: :ok,
-      else: {:error, {:reach_bind_not_loopback, %{address: address}}}
+      else: {:error, {:access_bind_not_loopback, %{address: address}}}
   end
 
   # Only the compose file asserts its address local, and it asserts true.
-  defp reach_assertion(nil), do: {:ok, :absent}
-  defp reach_assertion("true"), do: {:ok, :process}
+  defp access_assertion(nil), do: {:ok, :absent}
+  defp access_assertion("true"), do: {:ok, :process}
 
-  defp reach_assertion(other),
-    do: {:error, {:reach_setting_invalid, %{key: @assertion, value: other}}}
+  defp access_assertion(other),
+    do: {:error, {:access_setting_invalid, %{key: @assertion, value: other}}}
 
-  defp reach_port(get, key, default) do
+  defp access_port(get, key, default) do
     case get.(key) do
       nil ->
         {:ok, default}
@@ -1243,21 +1243,21 @@ defmodule Cyfr.RuntimeConfig do
       text ->
         if Regex.match?(@digits, text) and String.to_integer(text) in 1..65_535,
           do: {:ok, String.to_integer(text)},
-          else: {:error, {:reach_setting_invalid, %{key: key, value: text}}}
+          else: {:error, {:access_setting_invalid, %{key: key, value: text}}}
     end
   end
 
-  defp reach_address(get, key, default) do
+  defp access_address(get, key, default) do
     text = get.(key) || default
 
     if ip_literal(text),
       do: {:ok, text},
-      else: {:error, {:reach_setting_invalid, %{key: key, value: text}}}
+      else: {:error, {:access_setting_invalid, %{key: key, value: text}}}
   end
 
   # The proxies whose forwarded headers are trusted: the listed addresses
   # and CIDRs when there are any, otherwise a count of hops (default 1).
-  defp reach_trust(get) do
+  defp access_trust(get) do
     case get.("CYFR_TRUSTED_PROXY_CIDRS") do
       nil ->
         case get.("CYFR_TRUSTED_PROXY_HOPS") do
@@ -1268,7 +1268,8 @@ defmodule Cyfr.RuntimeConfig do
             if Regex.match?(@digits, text) and String.to_integer(text) in 0..16,
               do: {:ok, {:hops, String.to_integer(text)}},
               else:
-                {:error, {:reach_setting_invalid, %{key: "CYFR_TRUSTED_PROXY_HOPS", value: text}}}
+                {:error,
+                 {:access_setting_invalid, %{key: "CYFR_TRUSTED_PROXY_HOPS", value: text}}}
         end
 
       text ->
@@ -1278,7 +1279,7 @@ defmodule Cyfr.RuntimeConfig do
         if entries != [] and Enum.all?(entries, &cidr?/1),
           do: {:ok, {:cidrs, entries}},
           else:
-            {:error, {:reach_setting_invalid, %{key: "CYFR_TRUSTED_PROXY_CIDRS", value: text}}}
+            {:error, {:access_setting_invalid, %{key: "CYFR_TRUSTED_PROXY_CIDRS", value: text}}}
     end
   end
 
@@ -1320,12 +1321,12 @@ defmodule Cyfr.RuntimeConfig do
     end
   end
 
-  defp reach_origin(%{"mode" => "local", "port" => port}), do: "http://localhost:#{port}"
-  defp reach_origin(%{"public_url" => url}), do: url
+  defp access_origin(%{"mode" => "local", "port" => port}), do: "http://localhost:#{port}"
+  defp access_origin(%{"public_url" => url}), do: url
 
   # The loopback origins on the home's port, and its own address when it
   # has a public one.
-  defp reach_check_origins(%{"port" => port} = head) do
+  defp access_check_origins(%{"port" => port} = head) do
     own = if head["mode"] == "local", do: [], else: ["https://#{head["host"]}"]
 
     own ++

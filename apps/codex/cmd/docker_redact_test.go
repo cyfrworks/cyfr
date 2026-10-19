@@ -14,7 +14,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/cyfr/codex/internal/reach"
+	"github.com/cyfr/codex/internal/access"
 )
 
 // What a docker call cyfr update runs through the engine's runner writes,
@@ -74,9 +74,9 @@ func liveDockerSays(t *testing.T, value, line string) string {
 	}
 	defer unlock()
 	var out, errOut bytes.Buffer
-	docker := observedDocker(func(ctx context.Context, call reach.Call) (reach.Result, error) {
+	docker := observedDocker(func(ctx context.Context, call access.Call) (access.Result, error) {
 		_, err := fmt.Fprint(call.Stdout, line)
-		return reach.Result{}, err
+		return access.Result{}, err
 	})
 	u := &updater{ctx: context.Background(), out: &out, errOut: &errOut, engine: observedEngine{e, docker}}
 	if err := u.docker(context.Background(), nil, nil, "version"); err != nil {

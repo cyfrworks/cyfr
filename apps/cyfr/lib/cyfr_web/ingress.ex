@@ -25,8 +25,8 @@ defmodule CyfrWeb.Ingress do
       option of the loopback listener but its address and port, so the
       drain, the read timeout and HTTP/1.1 alone hold on both.
 
-  `config/runtime.exs` writes both from the home's reach
-  (`Cyfr.RuntimeConfig.resolve_reach/1`). The endpoint serves no TLS
+  `config/runtime.exs` writes both from the home's access settings
+  (`Cyfr.RuntimeConfig.resolve_access/1`). The endpoint serves no TLS
   listener of its own: TLS is the proxy's.
 
   Each listener's plug is this module around the endpoint, and its first

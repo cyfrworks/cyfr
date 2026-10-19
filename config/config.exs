@@ -96,17 +96,17 @@ config :sanctum, :stored_grants_check_enabled, true
 # home's address, `http://localhost:<port>`, kept in step with the
 # endpoint below and with the per-environment ports, which override this
 # value. `config/runtime.exs` writes it, and `:sanctum, :public_url`, from
-# the home's reach (`Cyfr.RuntimeConfig.resolve_reach/1`); an OAuth
+# the home's access settings (`Cyfr.RuntimeConfig.resolve_access/1`); an OAuth
 # `redirect_uri` needs an absolute origin either way.
 config :sanctum, :fallback_origin, "http://localhost:4000"
 
 # The proxies whose forwarded headers the proxy listener trusts
 # (`Sanctum.ClientIp`): none, as a local home has no proxy listener.
-# `config/runtime.exs` writes the reach's.
+# `config/runtime.exs` writes the access settings'.
 config :sanctum, :proxy_trust, :none
 
 # Whose HSTS a response carries (`CyfrWeb.Plugs.ApiSecurityHeaders.maybe_hsts/1`):
-# none, a local home's. `config/runtime.exs` writes the reach's: the
+# none, a local home's. `config/runtime.exs` writes the access settings': the
 # endpoint's on the proxy listener in a tailnet home, Caddy's in a public
 # one.
 config :cyfr, :hsts, :none

@@ -231,7 +231,7 @@ defmodule Cyfr.EnvFilesTest do
       "CYFR_SECRET_KEY_BASE" => Base.encode64(:crypto.strong_rand_bytes(48)),
       "RELEASE_NAME" => "cyfr",
       "RELEASE_ROOT" => dir,
-      "CYFR_REACH" => "local",
+      "CYFR_ACCESS" => "local",
       "CYFR_DATABASE" => nil,
       "CYFR_COSIGN_KEY" => nil,
       "CYFR_COSIGN_PASSWORD" => nil

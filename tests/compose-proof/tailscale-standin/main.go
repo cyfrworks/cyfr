@@ -5,7 +5,7 @@
 // (tests/compose-proof/run.sh): one program, installed as `tailscale`,
 // `containerboot` and `standin` on the compose file's pinned Caddy image,
 // which the proof's overlay names in place of the tailscale/tailscale
-// image. It answers what CYFR's reach engine asks of the pinned image —
+// image. It answers what CYFR's access engine asks of the pinned image —
 // `tailscale status --json`, `containerboot` with TS_SERVE_CONFIG, and the
 // join container's `timeout -s TERM <seconds> containerboot` with or
 // without an auth key on standard input — from a state file in the state

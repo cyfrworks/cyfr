@@ -357,14 +357,14 @@ jobs:
         run: scripts/check-test-wasm.sh
       # The release proofs' shared plumbing against stand-ins: the reuse of
       # a built release, the readiness bounds, a cell's deployment file from
-      # the command line, the one redaction, and the release-boot reach
+      # the command line, the one redaction, and the release-boot access
       # case staging each boot vector as the vector says. The proofs
       # themselves run in the browser and release-boot jobs.
       - name: The release proofs' shared plumbing
         run: |
           set -euo pipefail
           bash tests/release-boot-test.sh
-          bash tests/release-boot/reach-test.sh
+          bash tests/release-boot/access-test.sh
       # The image suites' shared plumbing without Docker: teardown on a
       # signal, the namespace prerequisite and no bytecode under tests/.
       - name: The image suites' shared plumbing
@@ -1166,7 +1166,7 @@ jobs:
   locus-backends-image:
     name: Backends image (end to end, isolation, refusals, residue, memory bound) and the Compose proof
     runs-on: ubuntu-latest
-    # The Compose proof's six cases bring the stack up and switch its reach
+    # The Compose proof's six cases bring the stack up and switch its access mode
     # some twenty times between them.
     timeout-minutes: 100
     needs: locus-image
@@ -1282,7 +1282,7 @@ jobs:
       # command line built from this tree, its tailscale service the
       # Tailscale stand-in, which certifies no Tailscale binary
       # (tests/tailnet-real/run.sh is the real tailnet's, run by hand).
-      # bind: in each reach mode, the loopback listener bound to its fixed
+      # bind: in each access mode, the loopback listener bound to its fixed
       # address alone and answering the host's loopback alone, not the edge
       # network, Docker's default bridge or the host's address; the proxy
       # listener answering the edge network in tailnet and public and absent
@@ -1294,7 +1294,7 @@ jobs:
       # in the environment and refused in .env, an incoherent .env and a
       # missing mode refused before anything starts. interrupt: the
       # command line killed after acceptance and while its start is paused,
-      # and a stop that fails, each recovered with `cyfr reach --resume` as
+      # and a stop that fails, each recovered with `cyfr access --resume` as
       # its sentence says, and the tailnet join's HTTPS-off and
       # tailnet_active instructions followed as printed. restore-identity:
       # a restore pairing node A's .env with node B's state keeps Serve
@@ -1369,7 +1369,7 @@ jobs:
   # migrates the schema itself and answers the readiness check the image's
   # HEALTHCHECK runs, a public home answers at the address its name implies,
   # and a boot that raises exits non-zero naming why: every boot refusal of
-  # the reach vectors, and, in a network namespace of its own (a
+  # the access vectors, and, in a network namespace of its own (a
   # container's, holding the compose stack's address on a dummy interface),
   # a local release's bind to that address without the compose file's
   # assertion. Nothing else boots a release: the suite starts the

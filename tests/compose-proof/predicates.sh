@@ -9,7 +9,7 @@
 # exact or bound to an independent read, and on failure says on stdout
 # what differs. ROOT is the checkout.
 
-# The head, as the reach vectors spell one, that the project runs: `$1` the
+# The head, as the access vectors spell one, that the project runs: `$1` the
 # expected head (JSON: mode, host, port, public_url, acme_email,
 # builds_url, node_id, profiles), `$2` .env, `$3` the cyfr container's
 # environment (`docker inspect` .Config.Env as JSON), `$4` the project's
@@ -17,21 +17,21 @@
 # holds and `$6` the machine's name it holds (Self.DNSName, with the
 # trailing dot), both read apart from .env (empty where no node runs; `$5`
 # `-` where the state holds another node by design, as a mismatched start
-# leaves it, which the case holds apart). Every reach setting .env and the
+# leaves it, which the case holds apart). Every access setting .env and the
 # running cyfr hold is the head's, a field the head lacks unset; the
 # services running are cyfr and the proxy each of the head's profiles
 # starts; a tailnet head's node id is the state's, and its host and public
 # URL are the state's name without the dot and https:// that name, so a
 # head expected from what .env holds is no head the machine has. The
-# reach settings are the ones the reach vectors' derivations assign or
+# access settings are the ones the access vectors' derivations assign or
 # remove, and the proof's mapping of them to head fields is held to that
 # set.
 head_holds() {
-  python3 -I - "$ROOT/tests/fixtures/reach_modes.json" "$@" <<'PY'
+  python3 -I - "$ROOT/tests/fixtures/access_modes.json" "$@" <<'PY'
 import json, sys
 vectors, want, env_path, container_env, running, state_id = sys.argv[1:7]
 state_name = sys.argv[7] if len(sys.argv) > 7 else ""
-FIELDS = {"mode": "CYFR_REACH", "host": "CYFR_HOST", "port": "CYFR_PORT", "public_url": "CYFR_PUBLIC_URL",
+FIELDS = {"mode": "CYFR_ACCESS", "host": "CYFR_HOST", "port": "CYFR_PORT", "public_url": "CYFR_PUBLIC_URL",
           "acme_email": "CADDY_ACME_EMAIL", "builds_url": "CYFR_LOCUS_BUILDS_URL", "node_id": "CYFR_TAILNET_NODE_ID"}
 PROXIES = {"public": "caddy", "tailnet": "tailscale"}
 problems = []
@@ -39,11 +39,11 @@ derived = set()
 for v in json.load(open(vectors))["derive"]:
     derived |= set(v.get("assignments", {})) | set(v.get("removals", []))
 if derived != set(FIELDS.values()):
-    sys.exit(print(f"the reach vectors derive {sorted(derived)}, which the proof's head fields do not map: {sorted(FIELDS.values())}") or 1)
+    sys.exit(print(f"the access vectors derive {sorted(derived)}, which the proof's head fields do not map: {sorted(FIELDS.values())}") or 1)
 head = json.loads(want)
 unknown = set(head) - set(FIELDS) - {"profiles"}
 if unknown:
-    sys.exit(print(f"the expected head has fields no reach setting holds: {sorted(unknown)}") or 1)
+    sys.exit(print(f"the expected head has fields no access setting holds: {sorted(unknown)}") or 1)
 expected = {key: str(head[field]) for field, key in FIELDS.items() if head.get(field) not in (None, "")}
 def dotenv(path):
     values = {}
@@ -59,7 +59,7 @@ def dotenv(path):
     return values
 held = {k: v for k, v in dotenv(env_path).items() if k in FIELDS.values() and v != ""}
 if held != expected:
-    problems.append(f".env holds the reach settings {json.dumps(held, sort_keys=True)}, not the head's {json.dumps(expected, sort_keys=True)}")
+    problems.append(f".env holds the access settings {json.dumps(held, sort_keys=True)}, not the head's {json.dumps(expected, sort_keys=True)}")
 try:
     runs = dict(e.split("=", 1) for e in json.loads(container_env) or [])
 except ValueError:
@@ -69,7 +69,7 @@ if runs is None:
 else:
     running_env = {k: v for k, v in runs.items() if k in FIELDS.values() and v != ""}
     if running_env != expected:
-        problems.append(f"the running cyfr holds the reach settings {json.dumps(running_env, sort_keys=True)}, not the head's {json.dumps(expected, sort_keys=True)}")
+        problems.append(f"the running cyfr holds the access settings {json.dumps(running_env, sort_keys=True)}, not the head's {json.dumps(expected, sort_keys=True)}")
 profiles = head.get("profiles")
 if not isinstance(profiles, list) or any(p not in PROXIES for p in profiles):
     problems.append(f"the head's profiles {profiles!r} are not the proxies' the proof knows ({sorted(PROXIES)})")
@@ -113,28 +113,28 @@ PY
 
 # The preview the command line printed in `$1` (a log, its first line the
 # command) for the switch from head `$2` to head `$3` (JSON): exactly the
-# preview block, each of the four sentences of the words the reach vectors
+# preview block, each of the four sentences of the words the access vectors
 # hold for those heads as old → new, a line for each change of a head
 # field the four do not show (the tailnet machine, the port on this
-# computer, the builds service; apps/codex/cmd/reach.go unwordedChanges),
+# computer, the builds service; apps/codex/cmd/access.go unwordedChanges),
 # and, as the address changes, the
-# engine's address-change steps (apps/codex/internal/reach/switch.go
+# engine's address-change steps (apps/codex/internal/access/switch.go
 # addressChanges) and the line on the CYFR identity; then one line, the
 # command's refusal that it made no change: the complete sentence
-# apps/codex/cmd/reach.go showUnconfirmed returns, as the command line
+# apps/codex/cmd/access.go showUnconfirmed returns, as the command line
 # prints an error ("Error: ", apps/codex/cmd/root.go).
 preview_holds() {
-  python3 -I - "$ROOT/tests/fixtures/reach_modes.json" "$ROOT/apps/codex/internal/reach/switch.go" \
-    "$ROOT/apps/codex/cmd/reach.go" "$@" <<'PY'
+  python3 -I - "$ROOT/tests/fixtures/access_modes.json" "$ROOT/apps/codex/internal/access/switch.go" \
+    "$ROOT/apps/codex/cmd/access.go" "$@" <<'PY'
 import json, re, sys
-vectors, switch_go, reach_go, log, old_text, new_text = sys.argv[1:7]
+vectors, switch_go, access_go, log, old_text, new_text = sys.argv[1:7]
 words = json.load(open(vectors))["words"]
 def sentences(head):
     # The words of a head: the vectors' sentences for a head of the same
     # mode and email presence, with its own address.
     shaped = [w for w in words if w["head"]["mode"] == head["mode"] and bool(w["head"].get("acme_email")) == bool(head.get("acme_email"))]
     if not shaped:
-        sys.exit(print(f"the reach vectors hold no words for a {head['mode']} head like {head}") or 1)
+        sys.exit(print(f"the access vectors hold no words for a {head['mode']} head like {head}") or 1)
     who, _, email, ports = shaped[0]["sentences"]
     address = head["public_url"] if head["mode"] != "local" else f"http://localhost:{head['port']}"
     email = f"Certificate email: {head['acme_email']}" if head.get("acme_email") else email
@@ -165,11 +165,11 @@ if sentences(old)[1] != sentences(new)[1]:
     block += [f"  {i}. {c}" for i, c in enumerate(changes, 1)]
     block.append("Your CYFR identity does not change.")
 GO_STRING = r'"(?:[^"\\]|\\.)*"'
-unconfirmed = re.search(r"^func showUnconfirmed\(.*?^\}$", open(reach_go).read(), re.S | re.M)
+unconfirmed = re.search(r"^func showUnconfirmed\(.*?^\}$", open(access_go).read(), re.S | re.M)
 again = unconfirmed and re.search(r"^\tconst again = (" + GO_STRING + r")$", unconfirmed.group(0), re.M)
 shown = unconfirmed and re.search(r"^\tprintPreview\(out, p\)\n\treturn errors\.New\((" + GO_STRING + r") \+ again\)$", unconfirmed.group(0), re.M)
 if not (again and shown):
-    sys.exit(print("reach.go's showUnconfirmed holds no refusal after the preview to expect") or 1)
+    sys.exit(print("access.go's showUnconfirmed holds no refusal after the preview to expect") or 1)
 refusal = "Error: " + json.loads(shown.group(1)) + json.loads(again.group(1))
 lines = open(log).read().splitlines()[1:]
 if lines != block + [refusal]:

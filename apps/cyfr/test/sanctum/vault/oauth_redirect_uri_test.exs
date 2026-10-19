@@ -84,7 +84,7 @@ defmodule Sanctum.Vault.OAuthRedirectUriTest do
         "RELEASE_NAME" => "cyfr",
         "RELEASE_ROOT" => nil,
         "CYFR_DATABASE" => nil,
-        "CYFR_REACH" => "tailnet",
+        "CYFR_ACCESS" => "tailnet",
         "CYFR_HOST" => "cyfr.tail1a2b3c.ts.net",
         "CYFR_TAILNET_NODE_ID" => "nAbc123XYZ1CNTRL",
         "CYFR_PUBLIC_URL" => @home,

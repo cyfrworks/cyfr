@@ -12,7 +12,7 @@ import (
 // groupCommandOrder defines the display order within each help group.
 // Every registered command must appear in its group.
 var groupCommandOrder = map[string][]string{
-	"server":   {"init", "reach", "up", "down", "upgrade", "update", "restore"},
+	"server":   {"init", "access", "up", "down", "upgrade", "update", "restore"},
 	"identity": {"login", "logout", "whoami", "status", "athanor", "member"},
 	"component": {
 		"new", "build", "search", "list", "inspect", "pull", "register",

@@ -27,8 +27,8 @@ import (
 	"sync"
 	"syscall"
 
+	"github.com/cyfr/codex/internal/access"
 	"github.com/cyfr/codex/internal/config"
-	"github.com/cyfr/codex/internal/reach"
 	"github.com/cyfr/codex/internal/release"
 	"github.com/cyfr/codex/internal/scaffold"
 	"github.com/cyfr/codex/internal/version"
@@ -126,7 +126,7 @@ func refuseEnv(format string, args ...any) error {
 
 // stackKeys answers the assignments that give a .env whose values are
 // values the keys the stack needs and it lacks, and nothing else; the
-// caller writes them through the engine's editor (reach.EditEnv). A key that is
+// caller writes them through the engine's editor (access.EditEnv). A key that is
 // present is never rewritten; a malformed root or service id, and a
 // service key that does not derive from the root beside it, are refused,
 // since writing around them would leave cyfr and the locus-runtime
@@ -141,7 +141,7 @@ func refuseEnv(format string, args ...any) error {
 // the other: a URL gets a minted key and a key gets the compose service's
 // URL. Builds are on when .env.example's URL is there; no URL and no key
 // is builds turned off, whether the URL is assigned empty or absent (the
-// reach head omits it when builds are off, and a switch removes its line),
+// access head omits it when builds are off, and a switch removes its line),
 // and is left so.
 func stackKeys(values map[string]string) (map[string]string, []envChange, error) {
 	add := map[string]string{}
@@ -226,11 +226,11 @@ func stackKeys(values map[string]string) (map[string]string, []envChange, error)
 }
 
 // ensureEnvFileKeys adds the stack keys the dotenv file at path lacks
-// (stackKeys) through the engine's editor (reach.EditEnvFile), which keeps
+// (stackKeys) through the engine's editor (access.EditEnvFile), which keeps
 // the file's mode and every other line, only when something was added. A
 // refusal leaves the file as it was.
 func ensureEnvFileKeys(path string) ([]envChange, error) {
-	values, err := reach.ReadEnvValues(path)
+	values, err := access.ReadEnvValues(path)
 	if err != nil {
 		return nil, fmt.Errorf("read %s: %w", path, engineFailure(err))
 	}
@@ -238,26 +238,26 @@ func ensureEnvFileKeys(path string) ([]envChange, error) {
 	if err != nil || len(changes) == 0 {
 		return nil, err
 	}
-	if err := reach.EditEnvFile(path, add, nil); err != nil {
+	if err := access.EditEnvFile(path, add, nil); err != nil {
 		return nil, fmt.Errorf("write %s: %w", path, err)
 	}
 	return changes, nil
 }
 
 // newEnv is the .env init writes for a new home from the template at
-// path, through the engine's editor (reach.EditEnv): the answer to init's
+// path, through the engine's editor (access.EditEnv): the answer to init's
 // email question (the operators' setting), the stack's keys (stackKeys)
-// and the local head's reach keys, every other line of the template kept.
+// and the local head's access keys, every other line of the template kept.
 // The template documents the email on a commented line, which stays; its
 // assignment is added at the end.
-func newEnv(path, adminEmail string) ([]byte, []envChange, reach.Derivation, error) {
+func newEnv(path, adminEmail string) ([]byte, []envChange, access.Derivation, error) {
 	tmpl, err := os.ReadFile(path)
 	if err != nil {
-		return nil, nil, reach.Derivation{}, fmt.Errorf("Failed to read %s: %w", path, err)
+		return nil, nil, access.Derivation{}, fmt.Errorf("Failed to read %s: %w", path, err)
 	}
-	values, err := reach.ReadEnvValues(path)
+	values, err := access.ReadEnvValues(path)
 	if err != nil {
-		return nil, nil, reach.Derivation{}, fmt.Errorf("Failed to read %s: %w", path, engineFailure(err))
+		return nil, nil, access.Derivation{}, fmt.Errorf("Failed to read %s: %w", path, engineFailure(err))
 	}
 	set := map[string]string{}
 	if adminEmail != "" {
@@ -265,18 +265,18 @@ func newEnv(path, adminEmail string) ([]byte, []envChange, reach.Derivation, err
 	}
 	add, changes, err := stackKeys(values)
 	if err != nil {
-		return nil, nil, reach.Derivation{}, err
+		return nil, nil, access.Derivation{}, err
 	}
 	maps.Copy(set, add)
 	maps.Copy(values, add)
 	d, err := localHead(values)
 	if err != nil {
-		return nil, nil, reach.Derivation{}, err
+		return nil, nil, access.Derivation{}, err
 	}
 	maps.Copy(set, d.Assignments)
-	text, err := reach.EditEnv(tmpl, set, d.Removals)
+	text, err := access.EditEnv(tmpl, set, d.Removals)
 	if err != nil {
-		return nil, nil, reach.Derivation{}, engineFailure(err)
+		return nil, nil, access.Derivation{}, engineFailure(err)
 	}
 	return text, changes, d, nil
 }
@@ -394,8 +394,8 @@ func refuseUndeclaredRestore() error {
 
 func init() {
 	initCmd.Flags().Bool("force", false, "Re-fetch docker-compose.yml, Caddyfile and keeper.seccomp.json and regenerate cyfr.yaml even if they already exist (never replaces .env or .env.example)")
-	initCmd.Flags().String("reach", "", "How a new home is reached: local, tailnet or public (asked on a terminal; local otherwise)")
-	addReachFlags(initCmd)
+	initCmd.Flags().String("access", "", "How a new home is reached: local, tailnet or public (asked on a terminal; local otherwise)")
+	addAccessFlags(initCmd)
 	initCmd.Flags().Bool("no-pull", false, "Do not pull the stack's images")
 	rootCmd.AddCommand(initCmd)
 	rootCmd.AddCommand(upCmd)
@@ -410,13 +410,13 @@ var initCmd = &cobra.Command{
 
 Downloads docker-compose.yml, Caddyfile, keeper.seccomp.json (the locus-runtime service's seccomp profile), .env.example, the services' own env examples and the bundled scaffold (configuration/component/tincture/integration guides, wit/ definitions, the aqua/ soul, roles and scrolls) for this CLI's version; generates cyfr.yaml, .gitignore, and the data/aqua directories; writes .env from .env.example; and pulls the images the stack starts (--no-pull skips the pulls).
 
-How the home is reached is asked first: 1, your devices via Tailscale (the default); 2, a public domain via Caddy; 3, this computer only. Then your email, as the home's administrator. .env is written for this computer only, with every key; then a tailnet home joins your tailnet (the link it prints approves the machine, or --tailscale-auth-key-file joins it without one) and the stopped stack is switched to the chosen mode, as 'cyfr reach' switches it. A join that fails or is cancelled leaves the home reached from this computer only, and 'cyfr reach <mode>' changes it later. With --no-interactive nothing is asked: the home is local, unless --reach tailnet comes with --tailscale-auth-key-file, or --reach public with --domain (--acme-email optional). Given no email, no one is authorized to use the home yet, and init says so: CYFR_PLATFORM_ADMIN_EMAILS in .env names its administrators.
+How the home is reached is asked first: 1, your devices via Tailscale (the default); 2, a public domain via Caddy; 3, this computer only. Then your email, as the home's administrator. .env is written for this computer only, with every key; then a tailnet home joins your tailnet (the link it prints approves the machine, or --tailscale-auth-key-file joins it without one) and the stopped stack is switched to the chosen mode, as 'cyfr access' switches it. A join that fails or is cancelled leaves the home reached from this computer only, and 'cyfr access <mode>' changes it later. With --no-interactive nothing is asked: the home is local, unless --access tailnet comes with --tailscale-auth-key-file, or --access public with --domain (--acme-email optional). Given no email, no one is authorized to use the home yet, and init says so: CYFR_PLATFORM_ADMIN_EMAILS in .env names its administrators.
 
 .env gets the stack's keys: CYFR_SECRET_KEY_BASE, CYFR_LOCUS_BACKENDS_KEY, the runtime root CYFR_LOCUS_RUNTIME_ROOT with the LOCUS_RUNTIME_KEY derived from it for LOCUS_RUNTIME_SERVICE_ID (wrk_locus unless .env names another), and CYFR_LOCUS_BUILDS_URL=http://locus-builds:4100 with a minted CYFR_LOCUS_BUILDS_KEY, so builds are on. It also assigns CYFR_CORS_ALLOWED_ORIGINS the empty allowlist, since cyfr serves Prism, the API, /mcp and the tinctures from its own origin and no browser client of this stack is cross-origin; an allowlist .env assigns is the one that stands.
 
-Re-running in an existing project is safe: docker-compose.yml, Caddyfile, cyfr.yaml and .env.example are kept if they already exist, and .env gains only the keys it lacks. A key already in .env is never rewritten, and neither is how the home is reached, which 'cyfr reach' changes; a .env that does not say how its home is reached (no CYFR_REACH) is refused, and nothing is written. A service key without the root it derives from, or one that does not derive from the root beside it, is refused with a sentence naming the fix, and nothing is written. No builds URL and no builds key is builds turned off, and stays off. Use --force to re-fetch docker-compose.yml, Caddyfile and keeper.seccomp.json and regenerate cyfr.yaml.`,
+Re-running in an existing project is safe: docker-compose.yml, Caddyfile, cyfr.yaml and .env.example are kept if they already exist, and .env gains only the keys it lacks. A key already in .env is never rewritten, and neither is how the home is reached, which 'cyfr access' changes; a .env that does not say how its home is reached (no CYFR_ACCESS) is refused, and nothing is written. A service key without the root it derives from, or one that does not derive from the root beside it, is refused with a sentence naming the fix, and nothing is written. No builds URL and no builds key is builds turned off, and stays off. Use --force to re-fetch docker-compose.yml, Caddyfile and keeper.seccomp.json and regenerate cyfr.yaml.`,
 	Example: `  cyfr init
-  cyfr init --no-interactive --reach public --domain cyfr.example.com
+  cyfr init --no-interactive --access public --domain cyfr.example.com
   cyfr init --force
   cyfr up`,
 	RunE: func(cmd *cobra.Command, args []string) error {
@@ -424,25 +424,25 @@ Re-running in an existing project is safe: docker-compose.yml, Caddyfile, cyfr.y
 		if ctx == nil {
 			ctx = context.Background()
 		}
-		o := initOptions{reachOptions: reachFlags(cmd)}
+		o := initOptions{accessOptions: accessFlags(cmd)}
 		o.force, _ = cmd.Flags().GetBool("force")
 		o.noPull, _ = cmd.Flags().GetBool("no-pull")
-		o.mode, _ = cmd.Flags().GetString("reach")
+		o.mode, _ = cmd.Flags().GetString("access")
 		return runInit(ctx, o, cmd.OutOrStdout(), cmd.ErrOrStderr())
 	},
 }
 
-// initOptions are cyfr init's flags; mode is --reach, empty when it is not
+// initOptions are cyfr init's flags; mode is --access, empty when it is not
 // given.
 type initOptions struct {
-	reachOptions
+	accessOptions
 	force, noPull bool
 	mode          string
 }
 
-// reachChoice is the mode init applies to a new home, with its inputs.
-type reachChoice struct {
-	reachOptions
+// accessChoice is the mode init applies to a new home, with its inputs.
+type accessChoice struct {
+	accessOptions
 	mode string
 }
 
@@ -452,14 +452,14 @@ func runInit(ctx context.Context, o initOptions, out, errOut io.Writer) error {
 
 	// What init cannot complete is refused before anything is written: a
 	// .env that does not say how its home is reached, whose cure is
-	// `cyfr reach <mode>`, and reach flags that make no home.
+	// `cyfr access <mode>`, and access flags that make no home.
 	envExisted := fileExists(".env")
 	if envExisted {
-		if err := refuseExistingReach(".env", o); err != nil {
+		if err := refuseExistingAccess(".env", o); err != nil {
 			return err
 		}
 	}
-	if err := checkInitReach(o); err != nil {
+	if err := checkInitAccess(o); err != nil {
 		return err
 	}
 	key, err := readAuthKey(o.keyFile)
@@ -540,12 +540,12 @@ database_path: ./data/cyfr.db
 	envCreated := false
 	adminEmailConfigured := false
 	sel := existingSelection(".env")
-	choice := reachChoice{mode: reach.ModeLocal}
-	var head reach.Head
+	choice := accessChoice{mode: access.ModeLocal}
+	var head access.Head
 	if fileExists(".env.example") && !envExisted {
 		r := bufio.NewReader(askInput)
 		interactive := askTerminal()
-		choice = chooseReach(o, interactive, r, out)
+		choice = chooseAccess(o, interactive, r, out)
 		adminEmail := ""
 		if interactive {
 			fmt.Fprintln(out, "CYFR authorizes by membership — list your email as the platform admin so you can use this instance.")
@@ -585,23 +585,23 @@ database_path: ./data/cyfr.db
 	// The mode the home was asked for, applied as a switch of its stopped
 	// stack; a refusal or a join that ends without the machine leaves it
 	// local, and init reports that last.
-	var reachErr error
+	var accessErr error
 	switch {
-	case envCreated && choice.mode != reach.ModeLocal:
-		applied, err := applyInitReach(ctx, choice, key, o.hostname != "" || o.keyFile != "", out)
+	case envCreated && choice.mode != access.ModeLocal:
+		applied, err := applyInitAccess(ctx, choice, key, o.hostname != "" || o.keyFile != "", out)
 		local := startedLocally{}
 		switch {
 		case errors.As(err, &local):
-			head, reachErr = applied, err
+			head, accessErr = applied, err
 			sel = selection{profiles: head.Profiles, port: head.Port}
 		case err != nil:
-			reachErr = fmt.Errorf("%w\nThis home is set up to be reached from this computer only; `cyfr reach %s` changes that", err, choice.mode)
+			accessErr = fmt.Errorf("%w\nThis home is set up to be reached from this computer only; `cyfr access %s` changes that", err, choice.mode)
 		default:
 			head = applied
 			sel = selection{profiles: head.Profiles, port: head.Port}
 		}
 	case !envCreated && !envExisted && o.mode != "":
-		reachErr = fmt.Errorf("--reach %s was not applied: there is no .env.example to write .env from", o.mode)
+		accessErr = fmt.Errorf("--access %s was not applied: there is no .env.example to write .env from", o.mode)
 	}
 
 	// Warm-pull the images docker-compose.yml starts with the head's
@@ -679,7 +679,7 @@ database_path: ./data/cyfr.db
 	fmt.Fprintln(out, "  data/, aqua/ created")
 	if envCreated {
 		fmt.Fprintln(out, "  This home is reached as:")
-		for _, line := range reach.Describe(head).Sentences() {
+		for _, line := range access.Describe(head).Sentences() {
 			fmt.Fprintln(out, "    "+line)
 		}
 	}
@@ -703,89 +703,89 @@ database_path: ./data/cyfr.db
 		fmt.Fprintln(out, "Next: get docker-compose.yml + Caddyfile (a released CLI or a repo checkout), then 'cyfr up'.")
 	}
 	if envCreated {
-		fmt.Fprintln(out, "  Prism:           "+reach.Describe(head).Address+"/")
+		fmt.Fprintln(out, "  Prism:           "+access.Describe(head).Address+"/")
 	} else {
-		fmt.Fprintln(out, "  `cyfr reach status` shows how this home is reached.")
+		fmt.Fprintln(out, "  `cyfr access status` shows how this home is reached.")
 	}
-	return reachErr
+	return accessErr
 }
 
-// refuseExistingReach refuses an existing .env init does not complete: one
+// refuseExistingAccess refuses an existing .env init does not complete: one
 // naming a COMPOSE_* setting, which every command that runs compose
-// refuses (compose_env_refused), one without CYFR_REACH, with
-// reach_missing's sentence, and reach flags, since init chooses how a new
-// home is reached and `cyfr reach` changes an existing one's. A --reach
+// refuses (compose_env_refused), one without CYFR_ACCESS, with
+// access_missing's sentence, and access flags, since init chooses how a new
+// home is reached and `cyfr access` changes an existing one's. A --access
 // naming the mode .env holds is no change and passes.
-func refuseExistingReach(path string, o initOptions) error {
-	var r *reach.Refusal
-	if err := reach.CheckEnvFile(path); errors.As(err, &r) && r.Code == "compose_env_refused" {
+func refuseExistingAccess(path string, o initOptions) error {
+	var r *access.Refusal
+	if err := access.CheckEnvFile(path); errors.As(err, &r) && r.Code == "compose_env_refused" {
 		return refusalError{r}
 	}
-	values, err := reach.ReadEnvValues(path)
+	values, err := access.ReadEnvValues(path)
 	if err != nil {
 		return fmt.Errorf("read %s: %w", path, engineFailure(err))
 	}
-	current := values["CYFR_REACH"]
+	current := values["CYFR_ACCESS"]
 	if current == "" {
-		return refusalError{reach.Refuse("reach_missing", nil)}
+		return refusalError{access.Refuse("access_missing", nil)}
 	}
 	if (o.mode != "" && o.mode != current) || o.domain != "" || o.acmeEmail != "" || o.keyFile != "" || o.hostname != "" {
-		return fmt.Errorf(".env says this home is reached as %s, and cyfr init leaves how an existing home is reached alone. Nothing was changed. Run `cyfr reach <mode>` to change it", current)
+		return fmt.Errorf(".env says this home is reached as %s, and cyfr init leaves how an existing home is reached alone. Nothing was changed. Run `cyfr access <mode>` to change it", current)
 	}
 	return nil
 }
 
-// checkInitReach refuses reach flags that make no home before anything is
-// written: a mode outside the three, an option without --reach or for
+// checkInitAccess refuses access flags that make no home before anything is
+// written: a mode outside the three, an option without --access or for
 // another mode, and a domain or email Derive refuses.
-func checkInitReach(o initOptions) error {
+func checkInitAccess(o initOptions) error {
 	switch o.mode {
 	case "":
 		if o.domain != "" || o.acmeEmail != "" || o.keyFile != "" || o.hostname != "" {
-			return errors.New("--domain, --acme-email, --tailscale-auth-key-file and --hostname say how a new home is reached only beside --reach: --reach public with a domain and an email, --reach tailnet with a key file and a name. Nothing was changed")
+			return errors.New("--domain, --acme-email, --tailscale-auth-key-file and --hostname say how a new home is reached only beside --access: --access public with a domain and an email, --access tailnet with a key file and a name. Nothing was changed")
 		}
 		return nil
-	case reach.ModeLocal, reach.ModeTailnet, reach.ModePublic:
+	case access.ModeLocal, access.ModeTailnet, access.ModePublic:
 	default:
-		return fmt.Errorf("--reach takes local, tailnet or public; %q is none of them. Nothing was changed", o.mode)
+		return fmt.Errorf("--access takes local, tailnet or public; %q is none of them. Nothing was changed", o.mode)
 	}
-	if err := checkTailnetOptions(o.mode, o.reachOptions); err != nil {
+	if err := checkTailnetOptions(o.mode, o.accessOptions); err != nil {
 		return err
 	}
-	if o.mode == reach.ModePublic && o.domain == "" {
-		// Asked on a terminal; local otherwise (chooseReach).
+	if o.mode == access.ModePublic && o.domain == "" {
+		// Asked on a terminal; local otherwise (chooseAccess).
 		return nil
 	}
-	return checkTarget(reach.Target{Mode: o.mode, Domain: o.domain, ACMEEmail: o.acmeEmail})
+	return checkTarget(access.Target{Mode: o.mode, Domain: o.domain, ACMEEmail: o.acmeEmail})
 }
 
 // checkTarget refuses a target Derive refuses for its own inputs: an
 // option outside its mode, a domain or an email that is not one. The port
 // and the builds URL are the template's here, and the tailnet machine a
 // stand-in, since only the target's own inputs are checked.
-func checkTarget(t reach.Target) error {
-	_, err := reach.Derive(t, reach.Current{Port: 4000}, &reach.Join{Name: "cyfr.tailnet.ts.net", NodeID: "nCheck"})
+func checkTarget(t access.Target) error {
+	_, err := access.Derive(t, access.Current{Port: 4000}, &access.Join{Name: "cyfr.tailnet.ts.net", NodeID: "nCheck"})
 	return engineFailure(err)
 }
 
-// chooseReach decides the mode of a new home. On a terminal the reach
-// question comes first, unless --reach answers it, then what the mode
+// chooseAccess decides the mode of a new home. On a terminal the access
+// question comes first, unless --access answers it, then what the mode
 // needs that its flags do not give: a tailnet machine's name, a public
 // domain and its certificate email. Without one the home is local unless
-// --reach tailnet comes with --tailscale-auth-key-file or --reach public
+// --access tailnet comes with --tailscale-auth-key-file or --access public
 // with --domain.
-func chooseReach(o initOptions, interactive bool, r *bufio.Reader, out io.Writer) reachChoice {
-	c := reachChoice{reachOptions: o.reachOptions, mode: o.mode}
+func chooseAccess(o initOptions, interactive bool, r *bufio.Reader, out io.Writer) accessChoice {
+	c := accessChoice{accessOptions: o.accessOptions, mode: o.mode}
 	if !interactive {
 		switch {
-		case c.mode == reach.ModeTailnet && c.keyFile == "":
-			fmt.Fprintln(out, "--reach tailnet joins a tailnet with no one to approve the machine only with --tailscale-auth-key-file, so this home is reached from this computer only; `cyfr reach tailnet` joins it later.")
-			c.mode = reach.ModeLocal
-		case c.mode == reach.ModePublic && c.domain == "":
-			fmt.Fprintln(out, "--reach public needs --domain, so this home is reached from this computer only; `cyfr reach public --domain <your domain>` changes that.")
-			c.mode = reach.ModeLocal
+		case c.mode == access.ModeTailnet && c.keyFile == "":
+			fmt.Fprintln(out, "--access tailnet joins a tailnet with no one to approve the machine only with --tailscale-auth-key-file, so this home is reached from this computer only; `cyfr access tailnet` joins it later.")
+			c.mode = access.ModeLocal
+		case c.mode == access.ModePublic && c.domain == "":
+			fmt.Fprintln(out, "--access public needs --domain, so this home is reached from this computer only; `cyfr access public --domain <your domain>` changes that.")
+			c.mode = access.ModeLocal
 		case c.mode == "":
-			c.mode = reach.ModeLocal
+			c.mode = access.ModeLocal
 		}
 		return c
 	}
@@ -798,45 +798,45 @@ func chooseReach(o initOptions, interactive bool, r *bufio.Reader, out io.Writer
 			answer, more := askLine(r, out, "Choose 1, 2 or 3", "1")
 			switch {
 			case answer == "1":
-				c.mode = reach.ModeTailnet
+				c.mode = access.ModeTailnet
 			case answer == "2":
-				c.mode = reach.ModePublic
+				c.mode = access.ModePublic
 			case answer == "3":
-				c.mode = reach.ModeLocal
+				c.mode = access.ModeLocal
 			case !more:
 				// The end of the input is no answer, least of all
 				// consent to join a tailnet: the home is local, as
 				// --no-interactive leaves it.
-				fmt.Fprintln(out, "No answer was read, so this home is reached from this computer only; `cyfr reach tailnet` or `cyfr reach public --domain <your domain>` changes that.")
-				c.mode = reach.ModeLocal
+				fmt.Fprintln(out, "No answer was read, so this home is reached from this computer only; `cyfr access tailnet` or `cyfr access public --domain <your domain>` changes that.")
+				c.mode = access.ModeLocal
 			default:
 				fmt.Fprintln(out, "Answer 1, 2 or 3.")
 			}
 		}
 	}
 	switch c.mode {
-	case reach.ModeTailnet:
+	case access.ModeTailnet:
 		if c.hostname == "" {
 			fmt.Fprintln(out, "This machine's name on your tailnet is part of the home's address, and certificate names are public: anyone can read it in the certificate logs.")
 			c.hostname = ask(r, out, "Machine name", "cyfr")
 		}
-	case reach.ModePublic:
+	case access.ModePublic:
 		for c.domain == "" {
 			answer, more := askLine(r, out, "The domain this home is reached at (its DNS names this machine)", "")
-			if err := checkTarget(reach.Target{Mode: c.mode, Domain: answer}); answer != "" && err != nil {
+			if err := checkTarget(access.Target{Mode: c.mode, Domain: answer}); answer != "" && err != nil {
 				fmt.Fprintln(out, err)
 			} else {
 				c.domain = answer
 			}
 			if c.domain == "" && !more {
-				fmt.Fprintln(out, "No domain was given, so this home is reached from this computer only; `cyfr reach public --domain <your domain>` changes that.")
-				c.mode = reach.ModeLocal
+				fmt.Fprintln(out, "No domain was given, so this home is reached from this computer only; `cyfr access public --domain <your domain>` changes that.")
+				c.mode = access.ModeLocal
 				return c
 			}
 		}
 		for asking := c.acmeEmail == ""; asking; {
 			answer, more := askLine(r, out, "Email for the certificate authority's notices (blank for none)", "")
-			err := checkTarget(reach.Target{Mode: c.mode, Domain: c.domain, ACMEEmail: answer})
+			err := checkTarget(access.Target{Mode: c.mode, Domain: c.domain, ACMEEmail: answer})
 			if answer == "" || err == nil {
 				c.acmeEmail = answer
 				break
@@ -848,28 +848,28 @@ func chooseReach(o initOptions, interactive bool, r *bufio.Reader, out io.Writer
 	return c
 }
 
-// applyInitReach applies the mode chosen for a new home as an engine
+// applyInitAccess applies the mode chosen for a new home as an engine
 // switch of its stopped stack, the tailnet joined first for tailnet, and
 // answers the head it switched to. Any failure leaves the home as .env
 // holds it, local.
-func applyInitReach(ctx context.Context, c reachChoice, key []byte, optionsGiven bool, out io.Writer) (reach.Head, error) {
+func applyInitAccess(ctx context.Context, c accessChoice, key []byte, optionsGiven bool, out io.Writer) (access.Head, error) {
 	id, err := newRequestID()
 	if err != nil {
-		return reach.Head{}, err
+		return access.Head{}, err
 	}
 	e, unlock, _, err := openLocked(ctx, "init", out)
 	if err != nil {
-		return reach.Head{}, err
+		return access.Head{}, err
 	}
 	defer unlock()
-	target := reach.Target{Mode: c.mode, Domain: c.domain, ACMEEmail: c.acmeEmail}
-	p, join, err := previewTarget(ctx, e, target, id, c.reachOptions, key, out, joinChoice{optionsGiven: optionsGiven})
+	target := access.Target{Mode: c.mode, Domain: c.domain, ACMEEmail: c.acmeEmail}
+	p, join, err := previewTarget(ctx, e, target, id, c.accessOptions, key, out, joinChoice{optionsGiven: optionsGiven})
 	if err != nil {
-		return reach.Head{}, err
+		return access.Head{}, err
 	}
-	rec, err := e.Switch(context.WithoutCancel(ctx), reach.SwitchRequest{
+	rec, err := e.Switch(context.WithoutCancel(ctx), access.SwitchRequest{
 		ID: id, Target: target, JoinID: join.id, OldDigest: p.OldDigest, NewDigest: p.NewDigest,
-		Content: requestContent(target, c.reachOptions, key),
+		Content: requestContent(target, c.accessOptions, key),
 	})
 	head := p.New
 	if rec.FinalHead != nil {
@@ -881,29 +881,29 @@ func applyInitReach(ctx context.Context, c reachChoice, key []byte, optionsGiven
 		if local := (startedLocally{}); errors.As(err, &local) {
 			return head, err
 		}
-		return reach.Head{}, err
+		return access.Head{}, err
 	}
 	return head, nil
 }
 
 // localHead is the head a new home's .env starts from, reached from this
 // computer only, its port and builds URL the ones values hold.
-func localHead(values map[string]string) (reach.Derivation, error) {
-	cur := reach.Current{Port: 4000}
+func localHead(values map[string]string) (access.Derivation, error) {
+	cur := access.Current{Port: 4000}
 	if text := values["CYFR_PORT"]; text != "" {
 		port, err := strconv.Atoi(text)
 		if err != nil {
-			return reach.Derivation{}, refusalError{reach.Refuse("reach_setting_invalid", map[string]string{"key": "CYFR_PORT", "value": text})}
+			return access.Derivation{}, refusalError{access.Refuse("access_setting_invalid", map[string]string{"key": "CYFR_PORT", "value": text})}
 		}
 		cur.Port = port
 	}
 	cur.BuildsURL = values[buildsURLVar]
-	d, err := reach.Derive(reach.Target{Mode: reach.ModeLocal}, cur, nil)
+	d, err := access.Derive(access.Target{Mode: access.ModeLocal}, cur, nil)
 	return d, engineFailure(err)
 }
 
 // selection is what init pulls and points the CLI at: the compose profiles
-// a home's reach selects and its loopback listener's port.
+// a home's access mode selects and its loopback listener's port.
 type selection struct {
 	profiles []string
 	port     int
@@ -913,12 +913,12 @@ type selection struct {
 // port 4000 where it names none that reads.
 func existingSelection(path string) selection {
 	sel := selection{port: 4000}
-	values, err := reach.ReadEnvValues(path)
+	values, err := access.ReadEnvValues(path)
 	if err != nil {
 		return sel
 	}
-	if mode := values["CYFR_REACH"]; mode != "" {
-		sel.profiles = reach.Profiles(mode, values[buildsURLVar])
+	if mode := values["CYFR_ACCESS"]; mode != "" {
+		sel.profiles = access.Profiles(mode, values[buildsURLVar])
 	}
 	if text := values["CYFR_PORT"]; text != "" {
 		if port, err := strconv.Atoi(text); err == nil && port >= 1 && port <= 65535 {
@@ -931,7 +931,7 @@ func existingSelection(path string) selection {
 // projectGitignore is the .gitignore `cyfr init` writes into a project that
 // has none: the runtime state under data/, the snapshots `cyfr update`
 // takes under backups/ (each holds the keyring and the database), the
-// reach engine's state under .cyfr/ and the environment files.
+// access engine's state under .cyfr/ and the environment files.
 const projectGitignore = `# CYFR project — all runtime state (every athanor's data and
 # components, the database, caches) lives under data/.
 /data/
@@ -1041,7 +1041,7 @@ var upCmd = &cobra.Command{
 
 The stack is cyfr (the one endpoint: Prism, API, MCP, tinctures), locus-runtime (the runtime that runs components), locus-builds (the builds service that compiles components and tinctures), locus-backends (the backends service that runs the stdio/npx MCP servers an athanor adds on Prism's "MCP Servers" page, each backend under a uid and a memory bound of its own; cyfr tells it what to run), and the proxy of the way the home is reached: tailscale for a tailnet home (Tailscale Serve, HTTPS at the machine's tailnet name) and caddy for a public one (TLS on :80/:443).
 
-cyfr, locus-runtime and locus-backends always start. locus-builds starts when CYFR_LOCUS_BUILDS_URL in .env names it (http://locus-builds:4100, which 'cyfr init' writes). CYFR_REACH in .env chooses the proxy: none for local, where Prism is at http://localhost:<CYFR_PORT>, tailscale for tailnet and caddy for public. cyfr up first takes the stack's lock and finishes a change an interrupted command left, then refuses a .env whose settings contradict how the home is reached, with the sentence the server would refuse it with, before anything starts. A tailnet home is served on the tailnet only once the machine's tailnet identity is the one .env names. A start that fails says why, with the server's own refusal from its log when it gave one, and exits 1.
+cyfr, locus-runtime and locus-backends always start. locus-builds starts when CYFR_LOCUS_BUILDS_URL in .env names it (http://locus-builds:4100, which 'cyfr init' writes). CYFR_ACCESS in .env chooses the proxy: none for local, where Prism is at http://localhost:<CYFR_PORT>, tailscale for tailnet and caddy for public. cyfr up first takes the stack's lock and finishes a change an interrupted command left, then refuses a .env whose settings contradict how the home is reached, with the sentence the server would refuse it with, before anything starts. A tailnet home is served on the tailnet only once the machine's tailnet identity is the one .env names. A start that fails says why, with the server's own refusal from its log when it gave one, and exits 1.
 
 Exit status 3: cyfr started, but on this machine only, because the tailnet machine is not ready to serve it (not the one .env names, not joined, or HTTPS off); Serve stays closed, and the message says what to do.`,
 	Example: `  cyfr up`,
@@ -1062,7 +1062,7 @@ func runUp(ctx context.Context, out io.Writer) error {
 	if err := refuseUndeclaredRestore(); err != nil {
 		return err
 	}
-	// The start holds the lock an update, a restore and a reach change
+	// The start holds the lock an update, a restore and an access change
 	// hold while they stop the stack, so none of them runs inside a start,
 	// nor a start inside them. An interrupt is noted, not acted on: the
 	// start runs to its end under the lock, and the lock goes with it.
@@ -1101,14 +1101,14 @@ func runUp(ctx context.Context, out io.Writer) error {
 	release()
 	select {
 	case <-interrupts:
-		return errors.New("cyfr up was interrupted; the start ran to its end and the lock is released. Run `cyfr reach status` to see what runs")
+		return errors.New("cyfr up was interrupted; the start ran to its end and the lock is released. Run `cyfr access status` to see what runs")
 	default:
 	}
 	if startErr != nil {
 		return startErr
 	}
 	fmt.Fprintln(out, "CYFR server started.")
-	fmt.Fprintln(out, "  Prism:           "+reach.Describe(head).Address+"/")
+	fmt.Fprintln(out, "  Prism:           "+access.Describe(head).Address+"/")
 	fmt.Fprintln(out, "")
 	fmt.Fprintln(out, "Optional next steps:")
 	fmt.Fprintln(out, "  cyfr login      authenticate this CLI")
@@ -1125,14 +1125,14 @@ const bootFatalMarker = "[Cyfr] FATAL:"
 // read from the cyfr service's log under the lock: a setting only the
 // release reads, such as a retired name, is refused there, and the start
 // alone sees no more than an unhealthy container.
-func withBootFatal(ctx context.Context, e stackEngine, head reach.Head, startErr error) error {
+func withBootFatal(ctx context.Context, e stackEngine, head access.Head, startErr error) error {
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), composeRunTimeout)
 	defer cancel()
 	args, err := e.ComposeArgs(ctx, head, "logs", "--no-color", "--no-log-prefix", "--tail", "200", "cyfr")
 	if err != nil {
 		return startErr
 	}
-	res, err := e.Docker().Run(ctx, reach.Call{Args: args, Deadline: composeRunTimeout})
+	res, err := e.Docker().Run(ctx, access.Call{Args: args, Deadline: composeRunTimeout})
 	if err != nil {
 		return startErr
 	}
@@ -1182,7 +1182,7 @@ func runDown(ctx context.Context, out io.Writer) error {
 // restoreBarrier non-empty, as compose gives it to the cyfr service's
 // entrypoint (its last assignment), and the snapshot it names.
 func restoreBarred(path string) (string, bool) {
-	values, err := reach.ReadEnvValues(path)
+	values, err := access.ReadEnvValues(path)
 	if err != nil {
 		return "", false
 	}

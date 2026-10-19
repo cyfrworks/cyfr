@@ -68,8 +68,8 @@ origin is refused by the frame's policy, never as mixed content.
 ## Homes: several cells on several hostnames, over HTTPS
 
 A home is a cell started on a hostname of its own (`browser_home`, and
-`release.sh`'s `cell_hostname`): the public home `cyfr init --reach public
---domain HOST` makes (`CYFR_REACH=public`), whose server names that host
+`release.sh`'s `cell_hostname`): the public home `cyfr init --access public
+--domain HOST` makes (`CYFR_ACCESS=public`), whose server names that host
 (`CYFR_HOST`) and whose public URL, the origin every policy is derived
 for, is `https://HOST` (`CYFR_PUBLIC_URL`), both as the command line wrote
 them. It runs behind a TLS-terminating front that forwards to its proxy

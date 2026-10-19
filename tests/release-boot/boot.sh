@@ -14,7 +14,7 @@
 #            schema before it starts) and answers /api/health/ready, the
 #            readiness check the image's HEALTHCHECK runs. A boot that
 #            raises, exits or never answers fails here, with its whole log.
-#            Then a public home `cyfr init --reach public --domain
+#            Then a public home `cyfr init --access public --domain
 #            cyfr.example.com` writes answers as https://cyfr.example.com
 #            (`Sanctum.Person.home()`), with nothing written for it but the
 #            test's ports, and its proxy listener answers readiness.
@@ -24,13 +24,13 @@
 #            The release must exit non-zero naming CORS: a boot that raises
 #            is loud, never a container that looks started.
 #
-#   reach    every boot refusal of tests/fixtures/reach_modes.json's `boot`
+#   access   every boot refusal of tests/fixtures/access_modes.json's `boot`
 #            vectors that a release can be given: the release exits
 #            non-zero printing `[Cyfr] FATAL: <the vector's sentence>`. A
 #            copy of the release, the run's own, reads the vector's `file`
 #            as the .env at its root, where a release reads one, and the
 #            vector's `process` reaches it as its environment, so the
-#            source rules (a reach key .env and the environment assign
+#            source rules (an access key .env and the environment assign
 #            differently, the compose file's assertion from .env) are the
 #            release's own read. Then the bare release in a network
 #            namespace of its own (a container's, with no network, holding
@@ -100,8 +100,8 @@
 # its cleanup leaves its two behind, under its own names. The dump and the
 # restore run in the postgres:18.6 image, with this host's network. The
 # cells' deployment files come from the `cyfr` command line, built from
-# apps/codex with this host's go, whose reach switch asks Docker for the
-# project's containers. The reach case's namespace is a debian:trixie-slim
+# apps/codex with this host's go, whose access switch asks Docker for the
+# project's containers. The access case's namespace is a debian:trixie-slim
 # container with CAP_NET_ADMIN, on a kernel with the dummy network
 # interface. Set RELEASE_BOOT_SKIP_BUILD=1 to reuse the release a previous
 # run built, and RELEASE_BOOT_KEEP=1 to keep the scratch directory, its
@@ -156,7 +156,7 @@ pg_drop_created() {
   done
 }
 
-# The reach case's vectors: every refused vector of the boot vectors `$1`
+# The access case's vectors: every refused vector of the boot vectors `$1`
 # a release can be given, one directory each under `$2`, and the count on
 # stdout. Each holds `name`, `sentence`, `file.env` (the vector's file,
 # each value single-quoted, so the release's reader takes it literally;
@@ -166,8 +166,8 @@ pg_drop_created() {
 # otherwise), and, where the vector names no builds URL, an empty builds
 # key, which the release would refuse without one. `$2/strip` lists every
 # name a vector assigns and the compose file's assertion: the settings a
-# vector's boot starts from hold none of them (`reach_settings`).
-reach_vectors() {
+# vector's boot starts from hold none of them (`access_settings`).
+access_vectors() {
   python3 -I - "$1" "$2" <<'PY'
 import json, os, sys
 vectors, out = json.load(open(sys.argv[1]))["boot"], sys.argv[2]
@@ -207,7 +207,7 @@ PY
 }
 
 # The deployment file `$1` without any name `$2` (a `strip` list) lists.
-reach_settings() {
+access_settings() {
   grep -v -E "^($(paste -sd '|' "$2"))=" "$1" || true
 }
 
@@ -231,7 +231,7 @@ boot_refused() {
 # vector's file as the .env at the copy's root, or none, and the cell's
 # settings with the vector's process words over them; the boot's output
 # on stdout and its exit status the boot's, ended at the deadline.
-reach_vector_boot() {
+access_vector_boot() {
   local vector="$1" release="$2" cell="$3"
   local -a words=()
   rm -f "$release/.env"
@@ -240,7 +240,7 @@ reach_vector_boot() {
   cell_env "$cell" ${words[@]+"${words[@]}"} timeout -k "$BOOT_KILL_AFTER" "$BOOT_DEADLINE" "$release/bin/cyfr" start
 }
 
-# Sourced (tests/release-boot/names-test.sh, reach-test.sh), the script
+# Sourced (tests/release-boot/names-test.sh, access-test.sh), the script
 # defines the functions above and runs nothing.
 if [ "${BASH_SOURCE[0]}" != "$0" ]; then return 0; fi
 
@@ -281,7 +281,7 @@ cleanup() {
   fi
   ( server_stop ) || [ "$code" -ne 0 ] || code=1
   # The reserve case's filesystem goes with the container that holds it,
-  # and the reach case's namespace with its own.
+  # and the access case's namespace with its own.
   [ -z "$RESERVE_HOLDER" ] || docker rm -f "$RESERVE_HOLDER" >/dev/null 2>&1 || true
   [ -z "$NS_HOLDER" ] || docker rm -f "$NS_HOLDER" >/dev/null 2>&1 || true
   [ "${RELEASE_BOOT_KEEP:-}" = 1 ] || pg_drop_created
@@ -437,49 +437,49 @@ echo "the boot exited $status, naming the wildcard:"
 grep -o "FATAL: CORS wildcard.*" "$REFUSAL_LOG" | head -1
 
 # ---------------------------------------------------------------------------
-# Case: every boot refusal of the reach vectors, and the bind a namespace
+# Case: every boot refusal of the access vectors, and the bind a namespace
 # shows the release refusing
 # ---------------------------------------------------------------------------
 
-REACH="$WORK/reach"
-REACH_REL="$WORK/reach-release"
-REACH_VECTORS="$REACH/vectors"
+ACCESS="$WORK/access"
+ACCESS_REL="$WORK/access-release"
+ACCESS_VECTORS="$ACCESS/vectors"
 
-step "reach: the release's own copy, which reads a vector's .env at its root"
+step "access: the release's own copy, which reads a vector's .env at its root"
 # A release reads .env only at its own root (RELEASE_ROOT, which the
 # release's script computes and no caller sets), so each vector's file is
 # written into a copy of this run's own, never into the release the other
 # cases and proofs share.
-cp -a "$REL" "$REACH_REL"
-mkdir -p "$REACH/home" "$REACH_VECTORS"
-cp -R "$CELL/data" "$REACH/data"
-cp -R "$ROOT/seed" "$REACH/seed"
-echo "copied $REL to $REACH_REL"
+cp -a "$REL" "$ACCESS_REL"
+mkdir -p "$ACCESS/home" "$ACCESS_VECTORS"
+cp -R "$CELL/data" "$ACCESS/data"
+cp -R "$ROOT/seed" "$ACCESS/seed"
+echo "copied $REL to $ACCESS_REL"
 
-REACH_COUNT="$(reach_vectors "$ROOT/tests/fixtures/reach_modes.json" "$REACH_VECTORS")"
-[ "$REACH_COUNT" -gt 0 ] || fail "the reach vectors hold no boot refusal a release can be given"
-reach_settings "$CELL/.env" "$REACH_VECTORS/strip" >"$REACH/.env"
-grep -q '^CYFR_SECRET_KEY_BASE=.' "$REACH/.env" || fail "the reach cell's settings lost the cell's key base"
+ACCESS_COUNT="$(access_vectors "$ROOT/tests/fixtures/access_modes.json" "$ACCESS_VECTORS")"
+[ "$ACCESS_COUNT" -gt 0 ] || fail "the access vectors hold no boot refusal a release can be given"
+access_settings "$CELL/.env" "$ACCESS_VECTORS/strip" >"$ACCESS/.env"
+grep -q '^CYFR_SECRET_KEY_BASE=.' "$ACCESS/.env" || fail "the access cell's settings lost the cell's key base"
 
-step "reach: $REACH_COUNT boot refusals, each the vector's FATAL sentence and a non-zero exit"
-for vector in "$REACH_VECTORS"/*/; do
+step "access: $ACCESS_COUNT boot refusals, each the vector's FATAL sentence and a non-zero exit"
+for vector in "$ACCESS_VECTORS"/*/; do
   vector="${vector%/}"
   name="$(cat "$vector/name")"
   sentence="$(cat "$vector/sentence")"
   set +e
-  reach_vector_boot "$vector" "$REACH_REL" "$REACH" >"$vector/boot.log" 2>&1
+  access_vector_boot "$vector" "$ACCESS_REL" "$ACCESS" >"$vector/boot.log" 2>&1
   status=$?
   set -e
   if ! boot_refused "$status" "$vector/boot.log" "$sentence"; then
     echo "----- the boot log of the vector '$name' -----" >&2
-    redact_log "$REACH" <"$vector/boot.log" >&2 || echo "(the log could not be redacted, so it is not printed)" >&2
+    redact_log "$ACCESS" <"$vector/boot.log" >&2 || echo "(the log could not be redacted, so it is not printed)" >&2
     fail "the vector '$name' did not refuse the boot with exit non-zero and '[Cyfr] FATAL: $sentence' (exit $status)"
   fi
   echo "refused, exit $status: $name"
 done
-rm -f "$REACH_REL/.env"
+rm -f "$ACCESS_REL/.env"
 
-step "reach: in a network namespace holding 172.16.230.2, a local release without the assertion is refused that bind"
+step "access: in a network namespace holding 172.16.230.2, a local release without the assertion is refused that bind"
 # The namespace is a container's of this run's own, with no network and
 # CAP_NET_ADMIN, which adds a dummy interface holding the compose stack's
 # loopback-listener address: unshare -r's uid map is what the host's
@@ -489,7 +489,7 @@ step "reach: in a network namespace holding 172.16.230.2, a local release withou
 NS_ADDRESS=172.16.230.2
 NS="$WORK/ns"
 mkdir -p "$NS/home" "$NS/tmp"
-cp "$REACH/.env" "$NS/.env"
+cp "$ACCESS/.env" "$NS/.env"
 cp -R "$CELL/data" "$NS/data"
 cp -R "$ROOT/seed" "$NS/seed"
 NS_HOLDER="$(docker run -d --network none --cap-add NET_ADMIN --user 0 --hostname "$(hostname)" \
@@ -514,9 +514,9 @@ NS_SENTENCE="$(python3 -I -c '
 import json, sys
 for v in json.load(open(sys.argv[1]))["boot"]:
     r = v.get("refusal")
-    if r and r["code"] == "reach_bind_not_loopback" and r["payload"].get("address") == sys.argv[2]:
-        print(r["sentence"]); break' "$ROOT/tests/fixtures/reach_modes.json" "$NS_ADDRESS")"
-[ -n "$NS_SENTENCE" ] || fail "the reach vectors hold no refusal of a bind to $NS_ADDRESS"
+    if r and r["code"] == "access_bind_not_loopback" and r["payload"].get("address") == sys.argv[2]:
+        print(r["sentence"]); break' "$ROOT/tests/fixtures/access_modes.json" "$NS_ADDRESS")"
+[ -n "$NS_SENTENCE" ] || fail "the access vectors hold no refusal of a bind to $NS_ADDRESS"
 
 # The release in the namespace: cell `$NS`'s environment, a local home
 # with builds off binding the namespace's address, and `$@`'s NAME=value
@@ -527,7 +527,7 @@ ns_cyfr() {
     words+=("$1")
     shift
   done
-  cell_env "$NS" CYFR_REACH=local CYFR_BIND_ADDRESS="$NS_ADDRESS" CYFR_LOCUS_BUILDS_KEY= \
+  cell_env "$NS" CYFR_ACCESS=local CYFR_BIND_ADDRESS="$NS_ADDRESS" CYFR_LOCUS_BUILDS_KEY= \
     RELEASE_TMP="$NS/tmp" RELEASE_DISTRIBUTION=none \
     ${words[@]+"${words[@]}"} env >"$NS/container.env"
   docker exec -u "$(id -u):$(id -g)" -w "$NS" --env-file "$NS/container.env" "$NS_HOLDER" \
@@ -545,10 +545,10 @@ fi
 echo "refused, exit $status: $(grep -oF -- "[Cyfr] FATAL: $NS_SENTENCE" "$NS/refused.log" | head -1)"
 
 set +e
-ns_cyfr CYFR_LOCAL_INGRESS_ASSERTED=true eval 'IO.puts("CYFR_REACH_CONFIGURED")' >"$NS/asserted.log" 2>&1
+ns_cyfr CYFR_LOCAL_INGRESS_ASSERTED=true eval 'IO.puts("CYFR_ACCESS_CONFIGURED")' >"$NS/asserted.log" 2>&1
 status=$?
 set -e
-if [ "$status" -ne 0 ] || ! grep -qx 'CYFR_REACH_CONFIGURED' "$NS/asserted.log"; then
+if [ "$status" -ne 0 ] || ! grep -qx 'CYFR_ACCESS_CONFIGURED' "$NS/asserted.log"; then
   redact_log "$NS" <"$NS/asserted.log" >&2 || echo "(the log could not be redacted, so it is not printed)" >&2
   fail "with the compose file's assertion in its environment, the release in the namespace did not configure (exit $status)"
 fi
@@ -1003,4 +1003,4 @@ reserve_stop
 docker rm -f "$RESERVE_HOLDER" >/dev/null
 RESERVE_HOLDER=""
 
-step "the cyfr release boots on $ADAPTER, migrates itself, answers at the address its reach implies, refuses loudly, refuses every reach the vectors refuse and a bind no assertion covers, restores from its backup, consumes a declared restore and keeps its storage reserve"
+step "the cyfr release boots on $ADAPTER, migrates itself, answers at the address its access mode implies, refuses loudly, refuses every access setting the vectors refuse and a bind no assertion covers, restores from its backup, consumes a declared restore and keeps its storage reserve"

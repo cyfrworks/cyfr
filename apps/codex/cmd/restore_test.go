@@ -21,7 +21,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/cyfr/codex/internal/reach"
+	"github.com/cyfr/codex/internal/access"
 )
 
 // restoreFakeDocker is fakeDocker with the two offline evals told apart:
@@ -115,7 +115,7 @@ const (
 	testRestored = "rst_0192f0a1-7c4e-7d2a-9b1e-3f5a6b7c8d9e"
 	sqliteBytes  = "SQLite format 3\x00main"
 	// editedEnv is .env as the home holds it after the snapshot: another
-	// line beside the same reach.
+	// line beside the same access settings.
 	editedEnv = scenarioEnv + "CYFR_CPU_LIMIT=2\n"
 )
 
@@ -127,7 +127,7 @@ func (r *restoreScenario) stagedConfig(overrides ...string) string {
 	for _, o := range overrides {
 		files += " -f " + o
 	}
-	return "compose -p " + reach.ProjectName(r.project) + " " + files + " --project-directory . --profile locus-builds --profile public config --format json"
+	return "compose -p " + access.ProjectName(r.project) + " " + files + " --project-directory . --profile locus-builds --profile public config --format json"
 }
 
 // restoreScenario is an update scenario whose update has taken a snapshot,
@@ -521,7 +521,7 @@ func TestRestoreClosesServeBeforeTheStopAfterAFailedStart(t *testing.T) {
 		if err != nil {
 			return nil, err
 		}
-		docker := observedDocker(func(ctx context.Context, c reach.Call) (reach.Result, error) {
+		docker := observedDocker(func(ctx context.Context, c access.Call) (access.Result, error) {
 			if slices.Contains(c.Args, "stop") {
 				stops++
 				if got, err := os.ReadFile(serve); err != nil || strings.TrimSpace(string(got)) != "{}" {
@@ -575,7 +575,7 @@ type closeServeFailsAfterStart struct {
 	err     error
 }
 
-func (e *closeServeFailsAfterStart) StartWithin(ctx context.Context, cause string, health time.Duration) (reach.Receipt, error) {
+func (e *closeServeFailsAfterStart) StartWithin(ctx context.Context, cause string, health time.Duration) (access.Receipt, error) {
 	e.started = true
 	return e.stackEngine.StartWithin(ctx, cause, health)
 }
@@ -594,10 +594,10 @@ func (e *closeServeFailsAfterStart) CloseServe(ctx context.Context) error {
 type failedStartOpensServe struct {
 	stackEngine
 	serve  string
-	docker reach.Docker
+	docker access.Docker
 }
 
-func (e failedStartOpensServe) StartWithin(ctx context.Context, cause string, health time.Duration) (reach.Receipt, error) {
+func (e failedStartOpensServe) StartWithin(ctx context.Context, cause string, health time.Duration) (access.Receipt, error) {
 	rec, err := e.stackEngine.StartWithin(ctx, cause, health)
 	if err == nil {
 		return rec, errors.New("the start this engine fails succeeded")
@@ -608,7 +608,7 @@ func (e failedStartOpensServe) StartWithin(ctx context.Context, cause string, he
 	return rec, err
 }
 
-func (e failedStartOpensServe) Docker() reach.Docker { return e.docker }
+func (e failedStartOpensServe) Docker() access.Docker { return e.docker }
 
 // On PostgreSQL the dump goes through pg_restore in the server's own major,
 // on its stdin, the URL in the container's environment and never on an
@@ -850,9 +850,9 @@ func TestRestoreSharesTheStacksLock(t *testing.T) {
 	}
 	r.engine.holder = ""
 
-	r.engine.resume = []reach.Receipt{{RequestID: strings.Repeat("e", 32), Op: "switch", State: "accepted", Phase: "uncertain", Code: "reach_uncertain", Payload: map[string]string{"observed": "caddy"}}}
+	r.engine.resume = []access.Receipt{{RequestID: strings.Repeat("e", 32), Op: "switch", State: "accepted", Phase: "uncertain", Code: "access_uncertain", Payload: map[string]string{"observed": "caddy"}}}
 	err = runRestore(context.Background(), r.dir, true, &bytes.Buffer{}, &bytes.Buffer{})
-	if want := reach.Refuse("reach_uncertain", map[string]string{"observed": "caddy"}).Message(); err == nil || err.Error() != want {
+	if want := access.Refuse("access_uncertain", map[string]string{"observed": "caddy"}).Message(); err == nil || err.Error() != want {
 		t.Errorf("a restore after an unfinished recovery answered %v, want %q", err, want)
 	}
 	if calls := r.dockerLog(); calls != nil {
@@ -1200,10 +1200,10 @@ func TestRestoreReadsTheStagedConfigurationAsComposeWill(t *testing.T) {
 }
 
 // A snapshot's .env becomes the project's, so the restore refuses it as
-// the engine refuses a home's .env (reach.CheckEnvFile), with its
+// the engine refuses a home's .env (access.CheckEnvFile), with its
 // sentence, before anything stops: a COMPOSE_* setting in any form, and a
 // head that does not boot, its CYFR_PUBLIC_URL not its host's, or no
-// CYFR_REACH at all.
+// CYFR_ACCESS at all.
 func TestRestoreRefusesASnapshotEnvTheEngineRefusesBeforeAnythingStops(t *testing.T) {
 	compose := shippedCompose(t)
 	for name, edit := range map[string]func(env string) string{
@@ -1213,7 +1213,7 @@ func TestRestoreRefusesASnapshotEnvTheEngineRefusesBeforeAnythingStops(t *testin
 		"a public URL not the host's": func(env string) string {
 			return strings.Replace(env, "CYFR_PUBLIC_URL=https://cyfr.example.com\n", "CYFR_PUBLIC_URL=https://elsewhere.example.com\n", 1)
 		},
-		"no CYFR_REACH": func(env string) string { return strings.Replace(env, "CYFR_REACH=public\n", "", 1) },
+		"no CYFR_ACCESS": func(env string) string { return strings.Replace(env, "CYFR_ACCESS=public\n", "", 1) },
 	} {
 		t.Run(name, func(t *testing.T) {
 			r := newRestoreScenario(t, compose, nil, nil)
@@ -1225,8 +1225,8 @@ func TestRestoreRefusesASnapshotEnvTheEngineRefusesBeforeAnythingStops(t *testin
 			if err := os.WriteFile(snapshotEnv, []byte(edited), 0600); err != nil {
 				t.Fatal(err)
 			}
-			var refusal *reach.Refusal
-			if !errors.As(reach.CheckEnvFile(snapshotEnv), &refusal) {
+			var refusal *access.Refusal
+			if !errors.As(access.CheckEnvFile(snapshotEnv), &refusal) {
 				t.Fatalf("the engine does not refuse the snapshot's .env:\n%s", edited)
 			}
 			r.edit("data/blobs/x", "rewritten")
@@ -1293,7 +1293,7 @@ func TestRestoreStagedReadSelectsAsTheEngine(t *testing.T) {
 	t.Chdir(dir)
 	for name, content := range map[string]string{
 		"docker-compose.yml": "services:\n  cyfr:\n    image: alpine:3.22\n    env_file: [.env]\n  locus-builds:\n    image: alpine:3.22\n    profiles: [locus-builds]\n",
-		".env":               "CYFR_REACH=local\nCYFR_LOCUS_BUILDS_URL=http://locus-builds:4100\n",
+		".env":               "CYFR_ACCESS=local\nCYFR_LOCUS_BUILDS_URL=http://locus-builds:4100\n",
 	} {
 		if err := os.WriteFile(name, []byte(content), 0600); err != nil {
 			t.Fatal(err)

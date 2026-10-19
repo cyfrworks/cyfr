@@ -11,16 +11,16 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/cyfr/codex/internal/reach"
+	"github.com/cyfr/codex/internal/access"
 )
 
 // The watchdog the engine re-execs is the binary's own hidden command: run
 // as `internal docker-run`, the binary (this test binary, through
-// TestMain) exits with the status reach.WatchdogMain answers for the same
+// TestMain) exits with the status access.WatchdogMain answers for the same
 // arguments, its arguments passed through unparsed.
 func TestInternalDockerRunIsTheWatchdog(t *testing.T) {
 	for _, args := range [][]string{nil} {
-		want := reach.WatchdogMain(args, strings.NewReader(""), io.Discard, io.Discard)
+		want := access.WatchdogMain(args, strings.NewReader(""), io.Discard, io.Discard)
 		cmd := exec.Command(os.Args[0], append([]string{"internal", "docker-run"}, args...)...)
 		cmd.Env = append(os.Environ(), watchdogChild+"=1")
 		err := cmd.Run()

@@ -19,14 +19,14 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/cyfr/codex/internal/reach"
+	"github.com/cyfr/codex/internal/access"
 	"github.com/cyfr/codex/internal/release"
 	"github.com/cyfr/codex/internal/scaffold"
 	"github.com/sigstore/sigstore-go/pkg/root"
 )
 
 // envFile is a dotenv file's lines as a test reads them: its values as
-// reach.ReadEnvValues reads them (value), and the lines that name a key
+// access.ReadEnvValues reads them (value), and the lines that name a key
 // (assignments), which a test counts on files with no value running
 // across lines.
 type envFile struct {
@@ -38,7 +38,7 @@ func parseEnvFile(text string) *envFile { return &envFile{lines: strings.Split(t
 func (f *envFile) String() string { return strings.Join(f.lines, "\n") }
 
 // assignments are the indexes of the lines that assign key, in the forms
-// reach.ReadEnvValues reads: `key=…`, `export key=…`, `key: …` and a bare
+// access.ReadEnvValues reads: `key=…`, `export key=…`, `key: …` and a bare
 // `key`.
 func (f *envFile) assignments(key string) []int {
 	var found []int
@@ -61,7 +61,7 @@ func (f *envFile) assignments(key string) []int {
 // commented line that documents it stays as it is, and every other line of
 // the template is kept.
 func TestNewEnvAnswersTheEmailQuestion(t *testing.T) {
-	const tmpl = "CYFR_SECRET_KEY_BASE=\nCYFR_REACH=local\nCYFR_HOST=localhost\n# CYFR_PLATFORM_ADMIN_EMAILS=alice@example.com\nCYFR_PORT=4000\n"
+	const tmpl = "CYFR_SECRET_KEY_BASE=\nCYFR_ACCESS=local\nCYFR_HOST=localhost\n# CYFR_PLATFORM_ADMIN_EMAILS=alice@example.com\nCYFR_PORT=4000\n"
 	path := writeTemp(t, ".env.example", tmpl)
 	for _, email := range []string{"me@example.com", ""} {
 		text, _, _, err := newEnv(path, email)
@@ -73,7 +73,7 @@ func TestNewEnvAnswersTheEmailQuestion(t *testing.T) {
 		if admins != email || adminsSet != (email != "") {
 			t.Errorf("for email %q the .env holds operators %q (%v):\n%s", email, admins, adminsSet, got)
 		}
-		for _, line := range []string{"CYFR_REACH=local\n", "# CYFR_PLATFORM_ADMIN_EMAILS=alice@example.com\nCYFR_PORT=4000\n"} {
+		for _, line := range []string{"CYFR_ACCESS=local\n", "# CYFR_PLATFORM_ADMIN_EMAILS=alice@example.com\nCYFR_PORT=4000\n"} {
 			if !strings.Contains(got, line) {
 				t.Errorf("for email %q the template's %q moved:\n%s", email, line, got)
 			}
@@ -198,7 +198,7 @@ func TestShippedTemplateCarriesInitsAnchors(t *testing.T) {
 	}
 
 	f := parseEnvFile(text)
-	for key, want := range map[string]string{"CYFR_REACH": "local", "CYFR_HOST": "localhost", "CYFR_PORT": "4000"} {
+	for key, want := range map[string]string{"CYFR_ACCESS": "local", "CYFR_HOST": "localhost", "CYFR_PORT": "4000"} {
 		if v, assigned := f.value(key); !assigned || v != want || len(f.assignments(key)) != 1 {
 			t.Errorf("the shipped template's %s is %q (assigned: %v, on %d lines), want %s on one line", key, v, assigned, len(f.assignments(key)), want)
 		}
@@ -224,7 +224,7 @@ func TestShippedTemplateCarriesInitsAnchors(t *testing.T) {
 	}
 }
 
-// envValuesOf is the dotenv text's values as reach.ReadEnvValues reads
+// envValuesOf is the dotenv text's values as access.ReadEnvValues reads
 // them, the one reader of .env values the CLI has.
 func envValuesOf(text string) map[string]string {
 	f, err := os.CreateTemp("", "cyfr-env-*")
@@ -238,14 +238,14 @@ func envValuesOf(text string) map[string]string {
 	if err := f.Close(); err != nil {
 		panic(err)
 	}
-	values, err := reach.ReadEnvValues(f.Name())
+	values, err := access.ReadEnvValues(f.Name())
 	if err != nil {
 		panic(err)
 	}
 	return values
 }
 
-// value reads key from the file's text as reach.ReadEnvValues reads it,
+// value reads key from the file's text as access.ReadEnvValues reads it,
 // assigned whether any line assigns it.
 func (f *envFile) value(key string) (value string, assigned bool) {
 	value, assigned = envValuesOf(f.String())[key]
@@ -259,7 +259,7 @@ func withStackKeys(text string) (string, []envChange, error) {
 	if err != nil {
 		return "", nil, err
 	}
-	out, err := reach.EditEnv([]byte(text), add, nil)
+	out, err := access.EditEnv([]byte(text), add, nil)
 	return string(out), changes, err
 }
 
@@ -275,14 +275,14 @@ func TestEnvWritesKeepQuotedValuesWhole(t *testing.T) {
 		if err := os.WriteFile(path, []byte(quoted), 0600); err != nil {
 			t.Fatal(err)
 		}
-		before, err := reach.ReadEnvValues(path)
+		before, err := access.ReadEnvValues(path)
 		if err != nil {
 			t.Fatal(err)
 		}
 		if _, err := ensureEnvFileKeys(path); err != nil {
 			t.Fatal(err)
 		}
-		after, err := reach.ReadEnvValues(path)
+		after, err := access.ReadEnvValues(path)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -346,11 +346,11 @@ func TestRenderEnvFileShippedTemplate(t *testing.T) {
 	}
 
 	env := envAssignments(writeTemp(t, ".env", got))
-	boot, err := reach.ResolveBoot(reach.BootInput{File: env, Process: env, Release: true})
+	boot, err := access.ResolveBoot(access.BootInput{File: env, Process: env, Release: true})
 	if err != nil {
 		t.Fatalf("the .env init writes does not boot: %v", engineFailure(err))
 	}
-	if boot.Head.Mode != reach.ModeLocal || boot.Origin != "http://localhost:4000" || !slices.Equal(boot.Head.Profiles, []string{buildsProfile}) {
+	if boot.Head.Mode != access.ModeLocal || boot.Origin != "http://localhost:4000" || !slices.Equal(boot.Head.Profiles, []string{buildsProfile}) {
 		t.Errorf("a project fresh from init is reached as %+v at %s, want local at http://localhost:4000 with builds on", boot.Head, boot.Origin)
 	}
 	if _, again, err := stackKeys(envValuesOf(got)); err != nil || len(again) != 0 {
@@ -372,12 +372,12 @@ func writeTemp(t *testing.T, name, text string) string {
 // A home init gives an address is answered at that address: the .env it
 // writes for a public name names the https origin the name implies, the
 // one Sanctum.origin/0 and every policy derived from it read. Through init
-// itself and the reach engine's switch of the stopped stack.
+// itself and the access engine's switch of the stopped stack.
 func TestInitWritesThePublicURLItsAddressImplies(t *testing.T) {
 	newInitProject(t)
 	useRealEngine(t, &stoppedDocker{})
 	var out bytes.Buffer
-	err := runInit(context.Background(), initOptions{mode: reach.ModePublic, reachOptions: reachOptions{domain: "cyfr.example.com"}, noPull: true}, &out, &out)
+	err := runInit(context.Background(), initOptions{mode: access.ModePublic, accessOptions: accessOptions{domain: "cyfr.example.com"}, noPull: true}, &out, &out)
 	if err != nil {
 		t.Fatalf("cyfr init: %v\n%s", err, out.String())
 	}
@@ -575,7 +575,7 @@ func TestEnsureStackKeysOverAnExistingEnv(t *testing.T) {
 			kept:  map[string]string{"CYFR_HOST": "localhost"},
 		},
 		{
-			// A switch removes the reach key a head omits, the empty builds
+			// A switch removes the access key a head omits, the empty builds
 			// URL among them; builds stay off.
 			name:  "a builds URL a switch removed, with no key, is builds off and left so",
 			body:  base + "CYFR_LOCUS_RUNTIME_ROOT=" + root + "\nLOCUS_RUNTIME_KEY=" + runtimeKey + "\nCYFR_LOCUS_BUILDS_KEY=\nCYFR_CORS_ALLOWED_ORIGINS=\n",
@@ -785,7 +785,7 @@ func TestShippedComposePullsTheLocusImageOnce(t *testing.T) {
 	}
 
 	builds, _ := parseEnvFile(offered).value(buildsURLVar)
-	profiles := reach.Profiles(reach.ModeLocal, builds)
+	profiles := access.Profiles(access.ModeLocal, builds)
 	if !slices.Contains(profiles, buildsProfile) {
 		t.Errorf("a project using the builds service (%s) does not select its profile: %v", offered, profiles)
 	}
@@ -916,7 +916,7 @@ func TestInitRefusesAlteredScaffold(t *testing.T) {
 }
 
 // `cyfr init` ignores the snapshots `cyfr update` takes under backups/,
-// each of which holds the keyring and the database, and the reach engine's
+// each of which holds the keyring and the database, and the access engine's
 // state under .cyfr/, beside the runtime state and the environment files.
 func TestInitIgnoresTheSnapshots(t *testing.T) {
 	t.Chdir(t.TempDir())

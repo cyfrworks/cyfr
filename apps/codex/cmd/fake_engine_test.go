@@ -21,10 +21,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/cyfr/codex/internal/reach"
+	"github.com/cyfr/codex/internal/access"
 )
 
-// fakeStack is what the package's tests stand in for the reach engine
+// fakeStack is what the package's tests stand in for the access engine
 // with: one project's lock, its scripted answers and what the commands
 // asked of it. Every engine openEngine opens during a test shares it, so a
 // second command meets the first's lock. Its docker runner runs the
@@ -39,40 +39,40 @@ type fakeStack struct {
 	holder string
 
 	openErr              error
-	resume               []reach.Receipt
+	resume               []access.Receipt
 	resumeErr            error
 	headErr              error
 	composeErr           error
 	checkErr             error
-	status               reach.Status
+	status               access.Status
 	cancelErr, forgetErr error
-	startReceipt         reach.Receipt
+	startReceipt         access.Receipt
 	startErr             error
-	stopReceipt          reach.Receipt
+	stopReceipt          access.Receipt
 	stopErr              error
 	switchErr            error
-	switchReceipt        *reach.Receipt
+	switchReceipt        *access.Receipt
 	addressChanges       []string
-	join                 func(ctx context.Context, r reach.JoinRequest) (reach.Receipt, error)
-	joined               map[string]reach.Join
-	receipts             map[string]reach.Receipt
+	join                 func(ctx context.Context, r access.JoinRequest) (access.Receipt, error)
+	joined               map[string]access.Join
+	receipts             map[string]access.Receipt
 	// contents are what each switch's request id was asked, which Resent
 	// binds the id to.
-	contents map[string]reach.RequestContent
+	contents map[string]access.RequestContent
 	// serveClosed is a tailnet home's Serve closed, which a preview of the
 	// head .env holds answers as a reopen; reopenReceipt, when set, is the
 	// reopen's answer.
 	serveClosed            bool
-	reopenReceipt          *reach.Receipt
-	switches               []reach.SwitchRequest
-	joins                  []reach.JoinRequest
+	reopenReceipt          *access.Receipt
+	switches               []access.SwitchRequest
+	joins                  []access.JoinRequest
 	joinKeys               [][]byte
 	locks, starts, cancels int
 	// healths are the waits for cyfr's health each start asked for.
 	healths []time.Duration
 	// calls are the docker calls the runner ran, as the engine's runner
 	// takes them.
-	calls []reach.Call
+	calls []access.Call
 }
 
 // useFakeEngine stands a fakeStack in for the engine until t ends, and the
@@ -88,7 +88,7 @@ func useFakeEngine(t *testing.T) *fakeStack {
 // terminal init and reach ask on for none; t, when there is one, reports
 // what the fake cannot do.
 func installFakeEngine(t *testing.T) *fakeStack {
-	s := &fakeStack{t: t, joined: map[string]reach.Join{}, receipts: map[string]reach.Receipt{}, contents: map[string]reach.RequestContent{}, startReceipt: okReceipt("start"), stopReceipt: okReceipt("stop")}
+	s := &fakeStack{t: t, joined: map[string]access.Join{}, receipts: map[string]access.Receipt{}, contents: map[string]access.RequestContent{}, startReceipt: okReceipt("start"), stopReceipt: okReceipt("stop")}
 	openEngine = func(dir string) (stackEngine, error) {
 		if err := s.openErr; err != nil {
 			return nil, err
@@ -112,14 +112,14 @@ func mismatch() map[string]string {
 
 // startedLocalReceipt is a start's receipt when it started the home on
 // this machine alone, the machine's tailnet node not .env's.
-func startedLocalReceipt(op string) reach.Receipt {
+func startedLocalReceipt(op string) access.Receipt {
 	return startedLocalFor(op, "tailnet_node_mismatch", mismatch())
 }
 
 // startedLocalFor is a start's receipt when it started the home on this
 // machine alone for the refusal code with payload.
-func startedLocalFor(op, code string, payload map[string]string) reach.Receipt {
-	return reach.Receipt{RequestID: strings.Repeat("0", 32), Op: op, State: "completed", Outcome: outcomeStartedLocal, Code: code, Payload: payload}
+func startedLocalFor(op, code string, payload map[string]string) access.Receipt {
+	return access.Receipt{RequestID: strings.Repeat("0", 32), Op: op, State: "completed", Outcome: outcomeStartedLocal, Code: code, Payload: payload}
 }
 
 // httpsOff is the tailnet_https_off payload of a machine joined with its
@@ -128,7 +128,7 @@ func httpsOff() map[string]string { return map[string]string{"name": "cyfr.tail1
 
 // answered is a receipt as the engine's methods return it: with its
 // refusal as the error when it carries a code.
-func answered(r reach.Receipt) (reach.Receipt, error) {
+func answered(r access.Receipt) (access.Receipt, error) {
 	if ref := r.Refusal(); ref != nil {
 		return r, ref
 	}
@@ -136,8 +136,8 @@ func answered(r reach.Receipt) (reach.Receipt, error) {
 }
 
 // okReceipt is a completed operation's plain success.
-func okReceipt(op string) reach.Receipt {
-	return reach.Receipt{RequestID: strings.Repeat("0", 32), Op: op, State: "completed", Outcome: "ok"}
+func okReceipt(op string) access.Receipt {
+	return access.Receipt{RequestID: strings.Repeat("0", 32), Op: op, State: "completed", Outcome: "ok"}
 }
 
 // composeKeyInEnv is the first COMPOSE_* name, in byte order, the dotenv
@@ -195,7 +195,7 @@ func (e *fakeEngine) Lock(holder string) (func(), error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.holder != "" {
-		return nil, &reach.ErrBusy{Holder: s.holder}
+		return nil, &access.ErrBusy{Holder: s.holder}
 	}
 	s.holder = holder
 	e.locked = true
@@ -212,7 +212,7 @@ func (e *fakeEngine) Lock(holder string) (func(), error) {
 	}, nil
 }
 
-func (e *fakeEngine) Resume(ctx context.Context) ([]reach.Receipt, error) {
+func (e *fakeEngine) Resume(ctx context.Context) ([]access.Receipt, error) {
 	e.s.logLine("resume")
 	if err := e.composeRefusal(); err != nil {
 		return nil, err
@@ -225,7 +225,7 @@ func (e *fakeEngine) Resume(ctx context.Context) ([]reach.Receipt, error) {
 // call of a resume, a start, a switch or a join.
 func (e *fakeEngine) composeRefusal() error {
 	if key := composeKeyInEnv(filepath.Join(e.dir, ".env")); key != "" {
-		return reach.Refuse("compose_env_refused", map[string]string{"key": key})
+		return access.Refuse("compose_env_refused", map[string]string{"key": key})
 	}
 	return nil
 }
@@ -237,7 +237,7 @@ func (e *fakeEngine) CloseServe(ctx context.Context) error {
 	locked := e.locked
 	e.s.mu.Unlock()
 	if !locked {
-		return errors.New("reach: CloseServe without the lock")
+		return errors.New("access: CloseServe without the lock")
 	}
 	e.s.logLine("close-serve")
 	e.s.mu.Lock()
@@ -251,29 +251,29 @@ func (e *fakeEngine) CloseServe(ctx context.Context) error {
 }
 
 // Resent answers a resent switch's receipt when c is what its id was
-// first asked, and reach_request_reused when it is not, as the engine's.
-func (e *fakeEngine) Resent(id string, c reach.RequestContent) (reach.Receipt, bool, error) {
+// first asked, and access_request_reused when it is not, as the engine's.
+func (e *fakeEngine) Resent(id string, c access.RequestContent) (access.Receipt, bool, error) {
 	e.s.mu.Lock()
 	defer e.s.mu.Unlock()
 	rec, ok := e.s.receipts[id]
 	if !ok {
-		return reach.Receipt{}, false, nil
+		return access.Receipt{}, false, nil
 	}
 	if e.s.contents[id] != c {
-		return reach.Receipt{RequestID: id, Op: rec.Op, State: "rejected", Code: "reach_request_reused"}, true, nil
+		return access.Receipt{RequestID: id, Op: rec.Op, State: "rejected", Code: "access_request_reused"}, true, nil
 	}
 	return rec, true, nil
 }
 
-func (e *fakeEngine) Docker() reach.Docker { return fakeRunner{e.s} }
+func (e *fakeEngine) Docker() access.Docker { return fakeRunner{e.s} }
 
 // Redactor is the engine's own redaction pass for the project.
-func (e *fakeEngine) Redactor() *reach.Redactor { return reach.NewRedactor(e.dir) }
+func (e *fakeEngine) Redactor() *access.Redactor { return access.NewRedactor(e.dir) }
 
 // ComposeArgs answers the selection the engine documents for h: its
 // project, its materialized file, the project directory and its profiles.
 // As the engine's, it needs the lock held.
-func (e *fakeEngine) ComposeArgs(ctx context.Context, h reach.Head, args ...string) ([]string, error) {
+func (e *fakeEngine) ComposeArgs(ctx context.Context, h access.Head, args ...string) ([]string, error) {
 	if e.s.composeErr != nil {
 		return nil, e.s.composeErr
 	}
@@ -281,16 +281,16 @@ func (e *fakeEngine) ComposeArgs(ctx context.Context, h reach.Head, args ...stri
 	locked := e.locked
 	e.s.mu.Unlock()
 	if !locked {
-		return nil, errors.New("reach: ComposeArgs without the lock")
+		return nil, errors.New("access: ComposeArgs without the lock")
 	}
 	return append(composePrefixArgs(e.dir, h), args...), nil
 }
 
 // composePrefixArgs is the engine's compose selection for head h in the
 // project dir.
-func composePrefixArgs(dir string, h reach.Head) []string {
+func composePrefixArgs(dir string, h access.Head) []string {
 	digest := strings.TrimPrefix(h.Digest(), "sha256:")
-	full := []string{"compose", "-p", reach.ProjectName(dir), "-f", ".cyfr/compose.resolved." + digest + ".yml", "--project-directory", "."}
+	full := []string{"compose", "-p", access.ProjectName(dir), "-f", ".cyfr/compose.resolved." + digest + ".yml", "--project-directory", "."}
 	for _, p := range h.Profiles {
 		full = append(full, "--profile", p)
 	}
@@ -298,20 +298,20 @@ func composePrefixArgs(dir string, h reach.Head) []string {
 }
 
 // Head is ResolveBoot over .env's own read, as the engine's Head is.
-func (e *fakeEngine) Head() (reach.Head, error) {
+func (e *fakeEngine) Head() (access.Head, error) {
 	if e.s.headErr != nil {
-		return reach.Head{}, e.s.headErr
+		return access.Head{}, e.s.headErr
 	}
 	env := envAssignments(filepath.Join(e.dir, ".env"))
-	b, err := reach.ResolveBoot(reach.BootInput{File: env, Process: env, Release: true})
+	b, err := access.ResolveBoot(access.BootInput{File: env, Process: env, Release: true})
 	return b.Head, err
 }
 
 // envAssignments are the names and values the dotenv file at path assigns,
-// as the engine reads them (reach.ReadEnvValues); none when it does not
+// as the engine reads them (access.ReadEnvValues); none when it does not
 // read.
 func envAssignments(path string) map[string]string {
-	env, err := reach.ReadEnvValues(path)
+	env, err := access.ReadEnvValues(path)
 	if err != nil {
 		return map[string]string{}
 	}
@@ -325,7 +325,7 @@ func (e *fakeEngine) CheckStack(ctx context.Context) error {
 
 // Status answers the test's status, its head refused as the engine
 // refuses a .env naming a COMPOSE_* setting.
-func (e *fakeEngine) Status(ctx context.Context) (reach.Status, error) {
+func (e *fakeEngine) Status(ctx context.Context) (access.Status, error) {
 	e.s.logLine("status")
 	st := e.s.status
 	if err := e.composeRefusal(); err != nil {
@@ -334,24 +334,24 @@ func (e *fakeEngine) Status(ctx context.Context) (reach.Status, error) {
 	return st, nil
 }
 
-// Preview derives the target's head with reach.Derive from .env's port and
+// Preview derives the target's head with access.Derive from .env's port and
 // builds URL, and for tailnet from the join joinID completed.
-func (e *fakeEngine) Preview(ctx context.Context, t reach.Target, joinID string) (reach.Preview, error) {
+func (e *fakeEngine) Preview(ctx context.Context, t access.Target, joinID string) (access.Preview, error) {
 	old, _ := e.Head()
 	d, err := e.derive(t, joinID)
 	if err != nil {
-		return reach.Preview{}, err
+		return access.Preview{}, err
 	}
-	p := reach.Preview{
+	p := access.Preview{
 		Old: old, New: d.Head, OldDigest: old.Digest(), NewDigest: d.Head.Digest(),
-		OldWords: reach.Describe(old), NewWords: reach.Describe(d.Head),
+		OldWords: access.Describe(old), NewWords: access.Describe(d.Head),
 	}
 	if p.OldDigest == p.NewDigest {
 		e.s.mu.Lock()
-		reopen := e.s.serveClosed && t.Mode == reach.ModeTailnet
+		reopen := e.s.serveClosed && t.Mode == access.ModeTailnet
 		e.s.mu.Unlock()
 		if !reopen {
-			return reach.Preview{}, reach.Refuse("reach_unchanged", map[string]string{"address": p.NewWords.Address})
+			return access.Preview{}, access.Refuse("access_unchanged", map[string]string{"address": p.NewWords.Address})
 		}
 		p.Reopen = true
 		return p, nil
@@ -362,22 +362,22 @@ func (e *fakeEngine) Preview(ctx context.Context, t reach.Target, joinID string)
 	return p, nil
 }
 
-func (e *fakeEngine) derive(t reach.Target, joinID string) (reach.Derivation, error) {
+func (e *fakeEngine) derive(t access.Target, joinID string) (access.Derivation, error) {
 	env := envAssignments(filepath.Join(e.dir, ".env"))
-	cur := reach.Current{Port: 4000, BuildsURL: env[buildsURLVar]}
+	cur := access.Current{Port: 4000, BuildsURL: env[buildsURLVar]}
 	if text := env["CYFR_PORT"]; text != "" {
 		cur.Port, _ = strconv.Atoi(text)
 	}
-	var join *reach.Join
-	if j, ok := e.s.joined[joinID]; ok && t.Mode == reach.ModeTailnet {
+	var join *access.Join
+	if j, ok := e.s.joined[joinID]; ok && t.Mode == access.ModeTailnet {
 		join = &j
 	}
-	return reach.Derive(t, cur, join)
+	return access.Derive(t, cur, join)
 }
 
 // Switch is the switch of a stopped stack, its receipt kept by its
 // request id, which it answers again for the same id.
-func (e *fakeEngine) Switch(ctx context.Context, r reach.SwitchRequest) (reach.Receipt, error) {
+func (e *fakeEngine) Switch(ctx context.Context, r access.SwitchRequest) (access.Receipt, error) {
 	rec, err := e.doSwitch(ctx, r)
 	if rec.RequestID == "" {
 		rec.RequestID = r.ID
@@ -392,7 +392,7 @@ func (e *fakeEngine) Switch(ctx context.Context, r reach.SwitchRequest) (reach.R
 }
 
 // Receipt answers the receipt a switch kept for id.
-func (e *fakeEngine) Receipt(id string) (reach.Receipt, bool, error) {
+func (e *fakeEngine) Receipt(id string) (access.Receipt, bool, error) {
 	e.s.mu.Lock()
 	defer e.s.mu.Unlock()
 	rec, ok := e.s.receipts[id]
@@ -401,24 +401,24 @@ func (e *fakeEngine) Receipt(id string) (reach.Receipt, bool, error) {
 
 // doSwitch fences the request's digests and commits the head's keys to
 // .env as a switch of the stopped stack does.
-func (e *fakeEngine) doSwitch(ctx context.Context, r reach.SwitchRequest) (reach.Receipt, error) {
+func (e *fakeEngine) doSwitch(ctx context.Context, r access.SwitchRequest) (access.Receipt, error) {
 	s := e.s
 	s.logLine("switch %s %s", r.Target.Mode, r.ID)
 	s.mu.Lock()
 	s.switches = append(s.switches, r)
 	s.mu.Unlock()
 	if err := e.composeRefusal(); err != nil {
-		return reach.Receipt{}, err
+		return access.Receipt{}, err
 	}
 	if s.switchErr != nil {
-		return reach.Receipt{}, s.switchErr
+		return access.Receipt{}, s.switchErr
 	}
 	if s.switchReceipt != nil {
 		return answered(*s.switchReceipt)
 	}
 	p, err := e.Preview(ctx, r.Target, r.JoinID)
 	if err != nil {
-		return reach.Receipt{}, err
+		return access.Receipt{}, err
 	}
 	if p.Reopen && r.OldDigest == p.OldDigest && r.NewDigest == p.NewDigest {
 		// .env holds the head already: only the start path runs, which
@@ -436,11 +436,11 @@ func (e *fakeEngine) doSwitch(ctx context.Context, r reach.SwitchRequest) (reach
 		return answered(rec)
 	}
 	if p.OldDigest != r.OldDigest || p.NewDigest != r.NewDigest {
-		return answered(reach.Receipt{RequestID: r.ID, Op: "switch", State: "rejected", Code: "reach_stale", Payload: map[string]string{"words": strings.Join(p.OldWords.Sentences(), "; ")}})
+		return answered(access.Receipt{RequestID: r.ID, Op: "switch", State: "rejected", Code: "access_stale", Payload: map[string]string{"words": strings.Join(p.OldWords.Sentences(), "; ")}})
 	}
 	d, _ := e.derive(r.Target, r.JoinID)
-	if err := reach.EditEnvFile(filepath.Join(e.dir, ".env"), d.Assignments, d.Removals); err != nil {
-		return reach.Receipt{}, err
+	if err := access.EditEnvFile(filepath.Join(e.dir, ".env"), d.Assignments, d.Removals); err != nil {
+		return access.Receipt{}, err
 	}
 	rec := okReceipt("switch")
 	rec.RequestID, rec.FinalHead = r.ID, &d.Head
@@ -449,7 +449,7 @@ func (e *fakeEngine) doSwitch(ctx context.Context, r reach.SwitchRequest) (reach
 
 // Join answers what the test's join answers, a machine joined as
 // cyfr.tail1234.ts.net otherwise, its auth key read whole.
-func (e *fakeEngine) Join(ctx context.Context, r reach.JoinRequest) (reach.Receipt, error) {
+func (e *fakeEngine) Join(ctx context.Context, r access.JoinRequest) (access.Receipt, error) {
 	s := e.s
 	var key []byte
 	if r.AuthKey != nil {
@@ -457,7 +457,7 @@ func (e *fakeEngine) Join(ctx context.Context, r reach.JoinRequest) (reach.Recei
 	}
 	s.logLine("join %s new_node=%v key=%v", r.Hostname, r.NewNode, key != nil)
 	if err := e.composeRefusal(); err != nil {
-		return reach.Receipt{}, err
+		return access.Receipt{}, err
 	}
 	s.mu.Lock()
 	s.joins = append(s.joins, r)
@@ -473,7 +473,7 @@ func (e *fakeEngine) Join(ctx context.Context, r reach.JoinRequest) (reach.Recei
 	if key == nil {
 		r.OnAuthURL("https://login.tailscale.com/a/approve-test")
 	}
-	s.joined["join-"+r.ID] = reach.Join{Name: "cyfr.tail1234.ts.net", NodeID: "nTESTNODE1CNTRL"}
+	s.joined["join-"+r.ID] = access.Join{Name: "cyfr.tail1234.ts.net", NodeID: "nTESTNODE1CNTRL"}
 	rec := okReceipt("join")
 	rec.RequestID = r.ID
 	rec.Payload = map[string]string{"join_id": "join-" + r.ID, "name": "cyfr.tail1234.ts.net", "node_id": "nTESTNODE1CNTRL"}
@@ -494,38 +494,38 @@ func (e *fakeEngine) ForgetJoin() error {
 }
 
 // Start is StartWithin the engine's own wait for cyfr's health.
-func (e *fakeEngine) Start(ctx context.Context, cause string) (reach.Receipt, error) {
-	return e.StartWithin(ctx, cause, reach.HealthDeadline)
+func (e *fakeEngine) Start(ctx context.Context, cause string) (access.Receipt, error) {
+	return e.StartWithin(ctx, cause, access.HealthDeadline)
 }
 
 // StartWithin brings the head up through the fake docker, so its scripted
 // answers hold the start, then answers the test's receipt.
-func (e *fakeEngine) StartWithin(ctx context.Context, cause string, health time.Duration) (reach.Receipt, error) {
+func (e *fakeEngine) StartWithin(ctx context.Context, cause string, health time.Duration) (access.Receipt, error) {
 	s := e.s
 	s.logLine("start %s", cause)
 	if err := e.composeRefusal(); err != nil {
-		return reach.Receipt{}, err
+		return access.Receipt{}, err
 	}
 	s.mu.Lock()
 	s.starts++
 	s.healths = append(s.healths, health)
 	s.mu.Unlock()
 	if s.startErr != nil {
-		return reach.Receipt{}, s.startErr
+		return access.Receipt{}, s.startErr
 	}
 	if h, err := e.Head(); err == nil && os.Getenv("FAKE_DOCKER_DIR") != "" {
-		res, err := fakeRunner{}.Run(ctx, reach.Call{Args: append(composePrefixArgs(e.dir, h), "up", "-d"), Stdout: io.Discard, Stderr: io.Discard})
+		res, err := fakeRunner{}.Run(ctx, access.Call{Args: append(composePrefixArgs(e.dir, h), "up", "-d"), Stdout: io.Discard, Stderr: io.Discard})
 		if err := callFailure(e.Redactor(), res, err); err != nil {
-			return reach.Receipt{Op: "start", State: "completed", Outcome: "failed"}, fmt.Errorf("cyfr did not become healthy (docker compose up: %v)", err)
+			return access.Receipt{Op: "start", State: "completed", Outcome: "failed"}, fmt.Errorf("cyfr did not become healthy (docker compose up: %v)", err)
 		}
 	}
 	return answered(s.startReceipt)
 }
 
-func (e *fakeEngine) Stop(ctx context.Context, cause string, all bool) (reach.Receipt, error) {
+func (e *fakeEngine) Stop(ctx context.Context, cause string, all bool) (access.Receipt, error) {
 	e.s.logLine("stop %s all=%v", cause, all)
 	if e.s.stopErr != nil {
-		return reach.Receipt{}, e.s.stopErr
+		return access.Receipt{}, e.s.stopErr
 	}
 	return answered(e.s.stopReceipt)
 }
@@ -536,7 +536,7 @@ func (e *fakeEngine) Stop(ctx context.Context, cause string, all bool) (reach.Re
 // runs for a stack.
 type fakeRunner struct{ s *fakeStack }
 
-func (r fakeRunner) Run(ctx context.Context, c reach.Call) (reach.Result, error) {
+func (r fakeRunner) Run(ctx context.Context, c access.Call) (access.Result, error) {
 	if r.s != nil {
 		r.s.mu.Lock()
 		r.s.calls = append(r.s.calls, c)
@@ -564,7 +564,7 @@ func (r fakeRunner) Run(ctx context.Context, c reach.Call) (reach.Result, error)
 		cmd.Stderr = &stderr
 	}
 	err := cmd.Run()
-	res := reach.Result{Stdout: stdout.Bytes(), Stderr: stderr.Bytes()}
+	res := access.Result{Stdout: stdout.Bytes(), Stderr: stderr.Bytes()}
 	var exit *exec.ExitError
 	if errors.As(err, &exit) && exit.ExitCode() >= 0 {
 		res.ExitCode = exit.ExitCode()
@@ -598,22 +598,22 @@ type stoppedDocker struct {
 	calls [][]string
 }
 
-func (d *stoppedDocker) Run(ctx context.Context, c reach.Call) (reach.Result, error) {
+func (d *stoppedDocker) Run(ctx context.Context, c access.Call) (access.Result, error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	d.calls = append(d.calls, c.Args)
-	return reach.Result{}, nil
+	return access.Result{}, nil
 }
 
-// useRealEngine opens the reach engine itself, over docker d (the system
+// useRealEngine opens the access engine itself, over docker d (the system
 // runner when nil), until t ends.
-func useRealEngine(t *testing.T, d reach.Docker) {
+func useRealEngine(t *testing.T, d access.Docker) {
 	t.Helper()
 	saved, savedTerminal := openEngine, askTerminal
 	t.Cleanup(func() { openEngine, askTerminal = saved, savedTerminal })
 	askTerminal = func() bool { return false }
 	openEngine = func(dir string) (stackEngine, error) {
-		e, err := reach.Open(dir, d)
+		e, err := access.Open(dir, d)
 		if err != nil {
 			return nil, err
 		}

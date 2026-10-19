@@ -29,7 +29,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/cyfr/codex/internal/reach"
+	"github.com/cyfr/codex/internal/access"
 	"github.com/cyfr/codex/internal/release"
 	"github.com/cyfr/codex/internal/version"
 	"gopkg.in/yaml.v3"
@@ -390,7 +390,7 @@ var (
 
 // scenarioEnv is the .env of the scenarios' home: public at
 // cyfr.example.com, builds on.
-const scenarioEnv = "CYFR_REACH=public\nCYFR_HOST=cyfr.example.com\nCYFR_PUBLIC_URL=https://cyfr.example.com\nCYFR_LOCUS_BUILDS_URL=http://locus-builds:4100\nCYFR_PORT=4000\n"
+const scenarioEnv = "CYFR_ACCESS=public\nCYFR_HOST=cyfr.example.com\nCYFR_PUBLIC_URL=https://cyfr.example.com\nCYFR_LOCUS_BUILDS_URL=http://locus-builds:4100\nCYFR_PORT=4000\n"
 
 // updateScenario is one update's project directory, fake docker and fake
 // engine.
@@ -713,8 +713,8 @@ func switched(compose []byte) []byte {
 	return []byte(strings.Join(lines, ""))
 }
 
-// scenarioHead is the reach head scenarioEnv holds.
-var scenarioHead = reach.Head{Mode: reach.ModePublic, Host: "cyfr.example.com", PublicURL: "https://cyfr.example.com", Port: 4000, BuildsURL: "http://locus-builds:4100", Profiles: []string{"locus-builds", "public"}}
+// scenarioHead is the access head scenarioEnv holds.
+var scenarioHead = access.Head{Mode: access.ModePublic, Host: "cyfr.example.com", PublicURL: "https://cyfr.example.com", Port: 4000, BuildsURL: "http://locus-builds:4100", Profiles: []string{"locus-builds", "public"}}
 
 // profiles is the engine's compose selection for the scenario's head and
 // project, as the fake docker logs it (newUpdateScenario sets it).
@@ -1241,7 +1241,7 @@ func TestUpdateLeavesTheStackStoppedWhenTheNewReleaseFails(t *testing.T) {
 // done and never stops it, and it answers the refusal's sentence, which
 // says how to serve the home on the tailnet again. So does a restore.
 func TestUpdateKeepsAHomeServedLocallyRunning(t *testing.T) {
-	want := reach.Refuse("tailnet_node_mismatch", mismatch()).Message()
+	want := access.Refuse("tailnet_node_mismatch", mismatch()).Message()
 
 	s := newUpdateScenario(t, shippedCompose(t), nil)
 	s.engine.startReceipt = startedLocalReceipt("start")
@@ -1277,7 +1277,7 @@ func TestEveryDockerCallCarriesItsDeadline(t *testing.T) {
 	if out, err := r.restore(true); err != nil {
 		t.Fatalf("restore: %v\n%s", err, out)
 	}
-	allowed := func(c reach.Call) time.Duration {
+	allowed := func(c access.Call) time.Duration {
 		line := strings.Join(c.Args, " ")
 		switch {
 		case c.Args[0] == "pull":
@@ -1489,10 +1489,10 @@ func TestUpdateHoldsOneLock(t *testing.T) {
 		t.Errorf("the stack was switched %d times", n)
 	}
 
-	s.engine.holder = "reach tailnet"
+	s.engine.holder = "access tailnet"
 	calls = len(s.log())
 	err = runUpdate(context.Background(), io.Discard, io.Discard)
-	if err == nil || !strings.Contains(err.Error(), "(`reach tailnet`)") {
+	if err == nil || !strings.Contains(err.Error(), "(`access tailnet`)") {
 		t.Errorf("an update beside a held lock answered %v", err)
 	}
 	if got := s.log(); len(got) != calls {
@@ -1707,13 +1707,13 @@ func TestUpdateRefusesANonBindMountUnderTheStorageRoot(t *testing.T) {
 	}
 }
 
-// A snapshot holds neither the tailnet's state volume nor the reach
+// A snapshot holds neither the tailnet's state volume nor the access
 // engine's .cyfr/, so a node's keys and the machine's lock, journal and
 // receipts never enter a backup: snapshotParts names neither; .cyfr/ beside
 // the storage root, or bound under it, is copied nowhere; and the state
 // volume mounted under the storage root is refused as every non-bind mount
 // there is, before anything stops.
-func TestSnapshotsHoldNeitherTheTailnetStateNorTheReachState(t *testing.T) {
+func TestSnapshotsHoldNeitherTheTailnetStateNorTheAccessState(t *testing.T) {
 	for _, part := range snapshotParts {
 		if strings.Contains(part, "tailscale") || strings.Contains(part, ".cyfr") {
 			t.Errorf("snapshotParts names %s", part)
@@ -1725,7 +1725,7 @@ func TestSnapshotsHoldNeitherTheTailnetStateNorTheReachState(t *testing.T) {
 			if err := os.MkdirAll(filepath.Dir(filepath.Join(root, name)), 0700); err != nil {
 				t.Fatal(err)
 			}
-			if err := os.WriteFile(filepath.Join(root, name), []byte(content+"reach-state-marker"), 0600); err != nil {
+			if err := os.WriteFile(filepath.Join(root, name), []byte(content+"access-state-marker"), 0600); err != nil {
 				t.Fatal(err)
 			}
 		}
@@ -1739,8 +1739,8 @@ func TestSnapshotsHoldNeitherTheTailnetStateNorTheReachState(t *testing.T) {
 			if entry.Name() == ".cyfr" || entry.Name() == "tailscale-serve" || entry.Name() == "receipts" {
 				t.Errorf("the snapshot holds %s", p)
 			}
-			if entry.Type().IsRegular() && strings.Contains(read(t, p), "reach-state-marker") {
-				t.Errorf("the snapshot holds the reach state's %s", p)
+			if entry.Type().IsRegular() && strings.Contains(read(t, p), "access-state-marker") {
+				t.Errorf("the snapshot holds the access state's %s", p)
 			}
 			return nil
 		})
@@ -1765,7 +1765,7 @@ func TestSnapshotsHoldNeitherTheTailnetStateNorTheReachState(t *testing.T) {
 	noState(s)
 
 	s = newUpdateScenario(t, shippedCompose(t), nil)
-	s.addVolume(map[string]any{"type": "volume", "source": reach.ProjectName(s.project) + "_tailscale_state", "target": "/app/data/tailscale"})
+	s.addVolume(map[string]any{"type": "volume", "source": access.ProjectName(s.project) + "_tailscale_state", "target": "/app/data/tailscale"})
 	out, err := s.run(context.Background())
 	if err == nil || !strings.Contains(err.Error(), "volume mount at /app/data/tailscale") {
 		t.Fatalf("update with the tailnet's state volume under the storage root answered %v\n%s", err, out)

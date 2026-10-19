@@ -6,7 +6,7 @@
 # stand-ins for docker and compose, with no Docker: a removal that keeps
 # failing fails a run whose cases passed, naming the project it leaves,
 # the run's Tailscale stand-in image among them; one that fails and then
-# succeeds within its three attempts does not; the reach engine's join
+# succeeds within its three attempts does not; the access engine's join
 # containers and its join network go too; a failed run keeps its own
 # status; a clean run removes its scratch directory and exits 0.
 #
@@ -130,9 +130,9 @@ fi
 teardown 0 0 0 0 joins
 if [ "$code" -eq 0 ] && [ "$(calls 'docker rm join-one')" = 1 ] && [ "$(calls 'docker rm join-two')" = 1 ] &&
   [ "$(calls 'docker network')" -ge 1 ]; then
-  check "the reach engine's join containers and its join network go with the project" ok
+  check "the access engine's join containers and its join network go with the project" ok
 else
-  check "the reach engine's join containers and its join network go with the project" no
+  check "the access engine's join containers and its join network go with the project" no
 fi
 
 echo "$cases cases, $failures failed"

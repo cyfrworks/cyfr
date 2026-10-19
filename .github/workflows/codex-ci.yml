@@ -91,37 +91,37 @@ jobs:
       # tests that call requireCompose (TestComposeTestsAreTheOnesCIRequires).
       - name: go test (the Docker Compose tests ran and passed)
         env:
-          COMPOSE_TESTS: TestEnsureCyfrComposeFieldsAddsNothingWhenAMergeKeyBindsBothTargets TestEnsureComposeFieldsCopiesASharedAnchorBeforeAddingADefault TestInitSwitchesThroughTheRealEngineAndHostDocker TestRestoreKilledAtItsConfigurationReadLeavesComposeBarred TestRestoreStagedComposeResolvesAsTheDefaultOverrideSet TestRestoreStagedReadSelectsAsTheEngine TestUpRecoversAnInterruptedSwitchThroughTheRealEngine TestReachTailnetServesAClosedHomeAgainThroughTheRealEngine TestUpStartsOnThisMachineOnlyThroughTheRealEngine TestRestoreBarKeepsAMultilineValueWithAnEscapedQuoteWhole
+          COMPOSE_TESTS: TestEnsureCyfrComposeFieldsAddsNothingWhenAMergeKeyBindsBothTargets TestEnsureComposeFieldsCopiesASharedAnchorBeforeAddingADefault TestInitSwitchesThroughTheRealEngineAndHostDocker TestRestoreKilledAtItsConfigurationReadLeavesComposeBarred TestRestoreStagedComposeResolvesAsTheDefaultOverrideSet TestRestoreStagedReadSelectsAsTheEngine TestUpRecoversAnInterruptedSwitchThroughTheRealEngine TestAccessTailnetServesAClosedHomeAgainThroughTheRealEngine TestUpStartsOnThisMachineOnlyThroughTheRealEngine TestRestoreBarKeepsAMultilineValueWithAnEscapedQuoteWhole
         run: |
           set -euo pipefail
           docker compose version
           go test ./cmd/ -race -count=1 -v -run "^(${COMPOSE_TESTS// /|})\$" 2>&1 | tee "$RUNNER_TEMP/compose-tests.log"
           for t in $COMPOSE_TESTS; do grep -q -- "--- PASS: $t " "$RUNNER_TEMP/compose-tests.log" || { echo "::error::the Docker Compose test $t did not run and pass"; exit 1; }; done
 
-      # The reach engine's tests that need Docker (a container holding the
+      # The access engine's tests that need Docker (a container holding the
       # project's lock from another PID namespace) or Docker Compose (the
       # stack's provenance and the materialized configuration, checked by
       # the real compose), which skip without them. The list is exactly the
       # engine's tests that call requireDocker or requireCompose
-      # (internal/reach's TestDockerTestsAreTheOnesCIRequires).
-      - name: go test (the reach engine's Docker tests ran and passed)
+      # (internal/access's TestDockerTestsAreTheOnesCIRequires).
+      - name: go test (the access engine's Docker tests ran and passed)
         env:
-          REACH_DOCKER_TESTS: TestLockExcludesAHolderInAnotherPIDNamespace TestRealComposeCallHoldsTheLock TestRealComposeCheckStackAcceptsReachKeysThroughEnvFile TestRealComposeCheckStackRefusesAnOverrideSettingAHeadKey TestRealComposeDiagnosticsCarryNoEnvValue TestRealComposeProvenanceReadsNamesNotValues TestRealComposeRunsTheMaterializedConfiguration TestEditEnvWritesALiteralDollarAndQuoteComposeReadsBack TestEditEnvWritesEveryKeyComposeReadsBack TestInterpolationReadsTheKelvinSignAsComposeDoes TestReadEnvValuesReadsAsRealComposeDoes TestRealComposeConversionDiagnosticCarriesNoEnvValue TestRealComposeDiagnosticNamesNoFileAnEnvValueNames TestRealComposeDiagnosticReadsNoTextInsideAQuotedValue TestRealComposeNoEnvSecretLeavesTheEngine
+          ACCESS_DOCKER_TESTS: TestLockExcludesAHolderInAnotherPIDNamespace TestRealComposeCallHoldsTheLock TestRealComposeCheckStackAcceptsAccessKeysThroughEnvFile TestRealComposeCheckStackRefusesAnOverrideSettingAHeadKey TestRealComposeDiagnosticsCarryNoEnvValue TestRealComposeProvenanceReadsNamesNotValues TestRealComposeRunsTheMaterializedConfiguration TestEditEnvWritesALiteralDollarAndQuoteComposeReadsBack TestEditEnvWritesEveryKeyComposeReadsBack TestInterpolationReadsTheKelvinSignAsComposeDoes TestReadEnvValuesReadsAsRealComposeDoes TestRealComposeConversionDiagnosticCarriesNoEnvValue TestRealComposeDiagnosticNamesNoFileAnEnvValueNames TestRealComposeDiagnosticReadsNoTextInsideAQuotedValue TestRealComposeNoEnvSecretLeavesTheEngine
         run: |
           set -euo pipefail
           docker compose version
-          go test ./internal/reach/ -race -count=1 -v -run "^(${REACH_DOCKER_TESTS// /|})\$" 2>&1 | tee "$RUNNER_TEMP/reach-docker-tests.log"
-          for t in $REACH_DOCKER_TESTS; do grep -q -- "--- PASS: $t " "$RUNNER_TEMP/reach-docker-tests.log" || { echo "::error::the reach engine's Docker test $t did not run and pass"; exit 1; }; done
+          go test ./internal/access/ -race -count=1 -v -run "^(${ACCESS_DOCKER_TESTS// /|})\$" 2>&1 | tee "$RUNNER_TEMP/access-docker-tests.log"
+          for t in $ACCESS_DOCKER_TESTS; do grep -q -- "--- PASS: $t " "$RUNNER_TEMP/access-docker-tests.log" || { echo "::error::the access engine's Docker test $t did not run and pass"; exit 1; }; done
 
       - name: go build
         run: go build ./...
 
   test-windows:
-    # The CLI ships for Windows, where the reach engine's lock is LockFileEx
+    # The CLI ships for Windows, where the access engine's lock is LockFileEx
     # and its docker children run in a kill-on-close Job Object, the
-    # platform's own: the whole module vets and builds here, and the reach
+    # platform's own: the whole module vets and builds here, and the access
     # package's tests run on the real calls.
-    name: vet + build + reach tests (Windows)
+    name: vet + build + access tests (Windows)
     runs-on: windows-latest
     timeout-minutes: 15
     defaults:
@@ -147,12 +147,12 @@ jobs:
       - name: go build
         run: go build ./...
 
-      - name: go test (the reach engine)
-        run: go test -race -count=1 ./internal/reach/...
+      - name: go test (the access engine)
+        run: go test -race -count=1 ./internal/access/...
 
       # The tests that run on Windows alone, against the real LockFileEx
       # and Job Object: each must run and pass here, never skip. The list
-      # is exactly the Test functions of internal/reach's *_windows_test.go
+      # is exactly the Test functions of internal/access's *_windows_test.go
       # (TestWindowsTestsAreTheOnesCIRequires).
       - name: go test (the Windows lock and job tests ran and passed)
         shell: bash
@@ -160,7 +160,7 @@ jobs:
           WINDOWS_TESTS: TestWindowsDeadlineTerminatesTheJob TestWindowsJobKillsDockerChildrenWithTheirHolder TestWindowsLockFileExFailsImmediately
         run: |
           set -euo pipefail
-          go test ./internal/reach/ -race -count=1 -v -run "^(${WINDOWS_TESTS// /|})\$" 2>&1 | tee "$RUNNER_TEMP/windows-tests.log"
+          go test ./internal/access/ -race -count=1 -v -run "^(${WINDOWS_TESTS// /|})\$" 2>&1 | tee "$RUNNER_TEMP/windows-tests.log"
           for t in $WINDOWS_TESTS; do grep -q -- "--- PASS: $t " "$RUNNER_TEMP/windows-tests.log" || { echo "::error::the Windows test $t did not run and pass"; exit 1; }; done
 
   test-macos:

@@ -33,9 +33,9 @@ defmodule CyfrWeb.Plugs.ApiSecurityHeaders do
 
   @doc """
   The endpoint's HSTS, the one spelling of the policy, on the response
-  `conn` sends when all three hold: the home's reach gives the endpoint
+  `conn` sends when all three hold: the home's access settings give the endpoint
   HSTS (`:cyfr, :hsts` is `:endpoint_on_proxy`, a tailnet home's, which
-  `config/runtime.exs` writes from `Cyfr.RuntimeConfig.resolve_reach/1`),
+  `config/runtime.exs` writes from `Cyfr.RuntimeConfig.resolve_access/1`),
   the proxy listener accepted the request (`Sanctum.ClientIp.ingress/1`),
   and its `Host` is not a loopback name: `localhost`, a name ending in
   `.localhost`, `127.0.0.1` or `::1`, in any case. Otherwise `conn` is

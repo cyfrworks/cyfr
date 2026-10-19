@@ -83,7 +83,7 @@ func TestRestoreBarKeepsAMultilineValueWithAnEscapedQuoteWhole(t *testing.T) {
 func TestAnEnvLineComposeDoesNotReadIsSaidByItsLine(t *testing.T) {
 	const secret = "s3cr3t-in-a-broken-line"
 	path := filepath.Join(t.TempDir(), ".env")
-	if err := os.WriteFile(path, []byte("CYFR_REACH=local\nBROKEN! "+secret+" =value\n"), 0600); err != nil {
+	if err := os.WriteFile(path, []byte("CYFR_ACCESS=local\nBROKEN! "+secret+" =value\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
 	sentence := "Line 2 of `.env` does not read as Docker Compose reads it, so cyfr cannot read or change .env as compose would. Nothing was changed. Correct that line, then run the command again."
@@ -91,9 +91,9 @@ func TestAnEnvLineComposeDoesNotReadIsSaidByItsLine(t *testing.T) {
 	if want := "read " + path + ": " + sentence; keysErr == nil || keysErr.Error() != want {
 		t.Errorf("ensureEnvFileKeys answered %v, want %q", keysErr, want)
 	}
-	existingErr := refuseExistingReach(path, initOptions{})
+	existingErr := refuseExistingAccess(path, initOptions{})
 	if existingErr == nil || existingErr.Error() != sentence {
-		t.Errorf("refuseExistingReach answered %v, want %q", existingErr, sentence)
+		t.Errorf("refuseExistingAccess answered %v, want %q", existingErr, sentence)
 	}
 	for _, err := range []error{keysErr, existingErr} {
 		if err != nil && strings.Contains(err.Error(), secret) {

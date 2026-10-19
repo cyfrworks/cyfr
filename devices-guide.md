@@ -88,7 +88,7 @@ A passkey is registered at one home, under that home's host as its relying party
 
 ## When the Home's Address Changes
 
-A home's address is its tailnet name, its domain, or `localhost` for a home reached from its own computer alone, and it changes when `cyfr reach` moves the home to another mode or name. Before it makes such a change, `cyfr reach` lists what stops working:
+A home's address is its tailnet name, its domain, or `localhost` for a home reached from its own computer alone, and it changes when `cyfr access` moves the home to another mode or name. Before it makes such a change, `cyfr access` lists what stops working:
 
 1. **Passkeys.** A passkey made at the old address stops working, since its relying party is the old host (above). Each person registers one at the new address, which this home's platform administrator authorizes, as when every way to confirm is lost.
 2. **Paired devices.** Pair every device again, at the new address.
