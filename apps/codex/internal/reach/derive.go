@@ -273,6 +273,12 @@ func ResolveBoot(in BootInput) (Boot, error) {
 	if err != nil {
 		return Boot{}, err
 	}
+	if mode != ModeLocal && proxyPort == h.Port && overlapping(bind, proxyBind) {
+		return Boot{}, refuse("reach_setting_invalid", map[string]string{
+			"key": "CYFR_PROXY_PORT", "value": strconv.Itoa(proxyPort), "address": proxyBind,
+			"bind": bind, "port": strconv.Itoa(h.Port),
+		})
+	}
 	if assertion == "absent" && !loopback(bind) {
 		return Boot{}, refuse("reach_bind_not_loopback", map[string]string{"address": bind})
 	}
@@ -430,6 +436,24 @@ func ipLiteral(text string) net.IP {
 		return nil
 	}
 	return net.ParseIP(text)
+}
+
+// overlapping reports whether two listeners' addresses take a port the
+// other takes too: the same address (an IPv4-mapped IPv6 address is the
+// IPv4 address it maps), or an unspecified one that takes it as well
+// (0.0.0.0 every IPv4 address, :: every address).
+func overlapping(a, b string) bool {
+	ia, ib := ipLiteral(a), ipLiteral(b)
+	v4 := func(ip net.IP) bool { return ip.To4() != nil }
+	switch {
+	case ia.Equal(ib):
+		return true
+	case !v4(ia) && ia.IsUnspecified(), !v4(ib) && ib.IsUnspecified():
+		return true
+	case v4(ia) && v4(ib):
+		return ia.IsUnspecified() || ib.IsUnspecified()
+	}
+	return false
 }
 
 // loopback reports whether text is an IPv4 loopback address or ::1, the

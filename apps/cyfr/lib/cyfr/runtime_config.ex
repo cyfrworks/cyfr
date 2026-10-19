@@ -873,8 +873,9 @@ defmodule Cyfr.RuntimeConfig do
   first such name in byte order), the assertion assigned in `.env`, the
   mode (unset in a release, then unknown), the host, the node id, the
   public URL, a key outside its mode (the email before the node id), a
-  malformed port, builds URL, address, assertion or proxy trust, and the
-  loopback listener's bind. `tests/fixtures/reach_modes.json`
+  malformed port, builds URL, address, assertion or proxy trust, a proxy
+  listener on the loopback listener's port at an address it overlaps, and
+  the loopback listener's bind. `tests/fixtures/reach_modes.json`
   holds the answers; the reach engine reads the same file.
   """
   @spec resolve_reach(reach_input()) :: {:ok, reach()} | {:error, reach_refusal()}
@@ -1174,7 +1175,8 @@ defmodule Cyfr.RuntimeConfig do
          {:ok, assertion} <- reach_assertion(get.(@assertion)),
          {:ok, proxy_bind} <- reach_address(get, "CYFR_PROXY_BIND_ADDRESS", @default_bind),
          {:ok, proxy_port} <- reach_port(get, "CYFR_PROXY_PORT", @default_proxy_port),
-         {:ok, trust} <- reach_trust(get) do
+         {:ok, trust} <- reach_trust(get),
+         :ok <- reach_listeners_apart(proxied?, {bind, port}, {proxy_bind, proxy_port}) do
       {:ok,
        %{
          bind: {bind, port},
@@ -1184,6 +1186,41 @@ defmodule Cyfr.RuntimeConfig do
        }}
     end
   end
+
+  # The proxy listener cannot take the loopback listener's port on an
+  # address the loopback listener's overlaps: the same address (an
+  # IPv4-mapped IPv6 address is the IPv4 address it maps), or an
+  # unspecified one that takes it too (0.0.0.0 every IPv4 address, :: every
+  # address), where the second listener would fail to bind.
+  defp reach_listeners_apart(false, _loopback, _proxy), do: :ok
+
+  defp reach_listeners_apart(true, {bind, port}, {proxy_bind, proxy_port}) do
+    if port == proxy_port and
+         overlapping?(unmapped(ip_literal(bind)), unmapped(ip_literal(proxy_bind))),
+       do:
+         {:error,
+          {:reach_setting_invalid,
+           %{
+             key: "CYFR_PROXY_PORT",
+             value: Integer.to_string(proxy_port),
+             address: proxy_bind,
+             bind: bind,
+             port: Integer.to_string(port)
+           }}},
+       else: :ok
+  end
+
+  defp unmapped({0, 0, 0, 0, 0, 0xFFFF, high, low}),
+    do: {div(high, 256), rem(high, 256), div(low, 256), rem(low, 256)}
+
+  defp unmapped(ip), do: ip
+
+  defp overlapping?(same, same), do: true
+  defp overlapping?({0, 0, 0, 0, 0, 0, 0, 0}, _other), do: true
+  defp overlapping?(_other, {0, 0, 0, 0, 0, 0, 0, 0}), do: true
+  defp overlapping?({0, 0, 0, 0}, {_, _, _, _}), do: true
+  defp overlapping?({_, _, _, _}, {0, 0, 0, 0}), do: true
+  defp overlapping?(_a, _b), do: false
 
   defp reach_bind(%{bind: {address, _port}, assertion: assertion}) do
     if assertion == :process or loopback?(address),

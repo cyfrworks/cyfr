@@ -1113,12 +1113,29 @@ defmodule Prima.Refusal do
          "reach this home's loopback listener. Bind 127.0.0.1 or ::1; a home reached from " <>
          "other devices uses CYFR_REACH=tailnet or public."}
 
-  defp row({:reach_setting_invalid, %{key: key, value: value}})
-       when is_map_key(@reach_setting_forms, key) and is_binary(value),
+  defp row({:reach_setting_invalid, %{key: key, value: value} = payload})
+       when map_size(payload) == 2 and is_map_key(@reach_setting_forms, key) and
+              is_binary(value),
        do:
          {:invalid_argument,
           "`#{key}` is `#{value}`, which is not #{Map.fetch!(@reach_setting_forms, key)}. " <>
             "Nothing started. Correct it, or remove it to take the default."}
+
+  # The proxy listener on the loopback listener's port, at an address the
+  # loopback listener's overlaps, where it could not bind.
+  defp row(
+         {:reach_setting_invalid,
+          %{key: "CYFR_PROXY_PORT", value: value, address: address, bind: bind, port: port} =
+            payload}
+       )
+       when map_size(payload) == 5 and is_binary(value) and is_binary(address) and
+              is_binary(bind) and is_binary(port),
+       do:
+         {:invalid_argument,
+          "`CYFR_PROXY_PORT` is `#{value}` on `#{address}`, and the loopback listener takes " <>
+            "CYFR_PORT `#{port}` on `#{bind}`: the proxy listener's port must differ from the " <>
+            "loopback listener's on the same address. Nothing started. Set CYFR_PROXY_PORT to " <>
+            "another port."}
 
   # A value no rule can read: its name alone, never its bytes.
   defp row({:reach_setting_invalid, %{key: key} = payload})

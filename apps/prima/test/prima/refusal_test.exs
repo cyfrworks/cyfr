@@ -60,6 +60,15 @@ defmodule Prima.RefusalTest do
      "`CADDY_ACME_EMAIL` is set, but only a `public` home uses it (CYFR_REACH is `tailnet`). Remove it, or run `cyfr reach public`."},
     {{:reach_setting_invalid, %{key: "CYFR_PORT", value: "+4000"}}, :invalid_argument,
      "`CYFR_PORT` is `+4000`, which is not a port from 1 to 65535. Nothing started. Correct it, or remove it to take the default."},
+    {{:reach_setting_invalid,
+      %{
+        key: "CYFR_PROXY_PORT",
+        value: "4001",
+        address: "0.0.0.0",
+        bind: "127.0.0.1",
+        port: "4001"
+      }}, :invalid_argument,
+     "`CYFR_PROXY_PORT` is `4001` on `0.0.0.0`, and the loopback listener takes CYFR_PORT `4001` on `127.0.0.1`: the proxy listener's port must differ from the loopback listener's on the same address. Nothing started. Set CYFR_PROXY_PORT to another port."},
     {{:reach_setting_invalid, %{key: "CADDY_ACME_EMAIL"}}, :invalid_argument,
      "`CADDY_ACME_EMAIL` is not valid UTF-8 text. Nothing started. Correct it, or remove it."},
     {{:reach_setting_invalid, %{key: "CYFR_LOCUS_BUILDS_URL", value: "http://locus-builds:bad"}},
@@ -499,6 +508,9 @@ defmodule Prima.RefusalTest do
             {:reach_invalid, %{input: "x", kind: "port", rule: "y"}},
             {:reach_option_outside_mode, %{option: "--domain", mode: "public"}},
             {:reach_setting_invalid, %{key: "CYFR_HOST", value: "x", extra: "y"}},
+            {:reach_setting_invalid, %{key: "CYFR_PROXY_PORT", value: "4001", extra: "y"}},
+            {:reach_setting_invalid,
+             %{key: "CYFR_PORT", value: "4001", address: "a", bind: "b", port: "4001"}},
             {:setup_not_local, %{}},
             {:tailnet_join_expired, %{reason: "x"}}
           ] do

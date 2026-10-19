@@ -99,6 +99,9 @@ func (r *Refusal) Sentence() string {
 	case "reach_bind_not_loopback":
 		return "CYFR_BIND_ADDRESS `" + p["address"] + "` is not a loopback address, so other machines could reach this home's loopback listener. Bind 127.0.0.1 or ::1; a home reached from other devices uses CYFR_REACH=tailnet or public."
 	case "reach_setting_invalid":
+		if _, ok := p["bind"]; ok {
+			return "`CYFR_PROXY_PORT` is `" + p["value"] + "` on `" + p["address"] + "`, and the loopback listener takes CYFR_PORT `" + p["port"] + "` on `" + p["bind"] + "`: the proxy listener's port must differ from the loopback listener's on the same address. Nothing started. Set CYFR_PROXY_PORT to another port."
+		}
 		if _, ok := p["value"]; !ok {
 			return "`" + p["key"] + "` is not valid UTF-8 text. Nothing started. Correct it, or remove it."
 		}
