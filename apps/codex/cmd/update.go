@@ -985,23 +985,21 @@ func (u *updater) readConfig() error {
 		return fmt.Errorf("CYFR_STORAGE=%s is neither local nor s3; nothing was changed", storage)
 	}
 
-	var keyring []string
+	// The keyring file is a dotenv file written by the engine's editor, so
+	// reach.ReadEnvValues reads each value back exactly.
+	keyring := map[string]string{}
 	for _, name := range keyringSettings {
 		raw := cyfr.Environment[name]
 		if raw == nil || strings.TrimSpace(*raw) == "" {
 			continue
 		}
 		u.secrets = append(u.secrets, *raw)
-		line, ok := dotenvLine(name, *raw)
-		if !ok {
-			return fmt.Errorf("%s holds both quote characters or a line break, so the snapshot's keyring file cannot hold it; nothing was changed", name)
-		}
-		keyring = append(keyring, line)
+		keyring[name] = *raw
 	}
 	if len(keyring) == 0 {
 		return errors.New("Neither CYFR_CRYPTO_KEYRING nor CYFR_SECRET_KEY_BASE is set for cyfr, so a snapshot would hold no key to its data; nothing was changed")
 	}
-	c.keyring = strings.Join(keyring, "\n") + "\n"
+	c.keyring = string(reach.EditEnv(nil, keyring, nil))
 	if f, err := os.Open(".env"); err != nil {
 		return fmt.Errorf("cyfr update cannot read .env (%v), which the snapshot copies; nothing was changed", err)
 	} else {
@@ -1094,22 +1092,6 @@ func sortByDepth(mounts []storageMount) {
 	slices.SortStableFunc(mounts, func(a, b storageMount) int {
 		return strings.Count(a.rel, "/") - strings.Count(b.rel, "/")
 	})
-}
-
-// dotenvLine spells name=value so reach.ReadEnvValues, and compose, read
-// value back exactly: single-quoted, which reads literally, or, when value
-// holds a single quote, double-quoted with each backslash escaped. ok is
-// false for a value holding both quotes or a line break.
-func dotenvLine(name, value string) (string, bool) {
-	switch {
-	case strings.ContainsAny(value, "\r\n"):
-		return "", false
-	case !strings.Contains(value, "'"):
-		return name + "='" + value + "'", true
-	case !strings.Contains(value, `"`):
-		return name + `="` + strings.ReplaceAll(value, `\`, `\\`) + `"`, true
-	}
-	return "", false
 }
 
 // probePostgres reads the PostgreSQL server's major version, which names
@@ -1315,9 +1297,14 @@ func (u *updater) onTarget(slot rosterSlot) bool {
 
 // ---- stop, re-read, snapshot -----------------------------------------------------
 
-// stop stops every running service one at a time in stopOrder, timing each,
-// then the rest at once.
+// stop closes Serve (the engine's CloseServe, as every stop of the
+// engine's own does first), so no tailnet request reaches a stack going
+// away, then stops every running service one at a time in stopOrder,
+// timing each, then the rest at once.
 func (u *updater) stop() error {
+	if err := u.engine.CloseServe(context.WithoutCancel(u.ctx)); err != nil {
+		return fmt.Errorf("Tailscale Serve could not be closed before the stop (%v); nothing was stopped", engineFailure(err))
+	}
 	for _, svc := range stopOrder {
 		if !slices.Contains(u.running, svc) {
 			continue

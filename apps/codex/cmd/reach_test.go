@@ -542,6 +542,101 @@ func TestReachRolledBackExitsOne(t *testing.T) {
 	}
 }
 
+// A resent request id answers its receipt only for the same request: a
+// different target or different join inputs under the id is
+// reach_request_reused, whatever the first request's outcome.
+func TestReachBindsAResentIDToItsRequest(t *testing.T) {
+	reused := reach.Refuse("reach_request_reused", nil).Message()
+	for name, first := range map[string]reach.Receipt{
+		"rejected":    {Op: "switch", State: "rejected", Code: "reach_stale", Payload: map[string]string{"words": "local"}},
+		"rolled back": {Op: "switch", State: "completed", Outcome: "rolled_back", Code: "reach_rolled_back", Payload: map[string]string{"new": "public", "old": "local", "reason": "cyfr did not become healthy"}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			s := newReachProject(t)
+			const id = "f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0"
+			s.switchReceipt = &first
+			if err := runReach(context.Background(), reach.ModePublic, reachOptions{domain: "first.example.com"}, true, id, &bytes.Buffer{}); err == nil {
+				t.Fatal("the first request succeeded")
+			}
+			s.switchReceipt = nil
+			for target, o := range map[string]reachOptions{"local": {}, "public": {domain: "second.example.com"}} {
+				if err := runReach(context.Background(), target, o, true, id, &bytes.Buffer{}); err == nil || err.Error() != reused {
+					t.Errorf("%s %+v under the %s id answered %v, want reach_request_reused", target, o, name, err)
+				}
+			}
+			// The same request answers as it first did.
+			again := runReach(context.Background(), reach.ModePublic, reachOptions{domain: "first.example.com"}, true, id, &bytes.Buffer{})
+			if want := first.Refusal().Message(); again == nil || again.Error() != want || len(s.switches) != 1 {
+				t.Errorf("the same request under the %s id answered %v after %d switches, want %q from the first", name, again, len(s.switches), want)
+			}
+		})
+	}
+	t.Run("ok, other join inputs", func(t *testing.T) {
+		s := newReachProject(t)
+		const id = "f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1"
+		if err := runReach(context.Background(), reach.ModeTailnet, reachOptions{}, true, id, &bytes.Buffer{}); err != nil {
+			t.Fatal(err)
+		}
+		keyFile := filepath.Join(t.TempDir(), "authkey")
+		if err := os.WriteFile(keyFile, []byte("tskey-auth-kTEST\n"), 0600); err != nil {
+			t.Fatal(err)
+		}
+		for _, o := range []reachOptions{{newNode: true, hostname: "replacement"}, {newNode: true}, {keyFile: keyFile, newNode: true}} {
+			err := runReach(context.Background(), reach.ModeTailnet, o, true, id, &bytes.Buffer{})
+			if err == nil || err.Error() != reused || len(s.joins) != 1 {
+				t.Errorf("the id resent with %+v answered %v after %d joins, want reach_request_reused", o, err, len(s.joins))
+			}
+		}
+	})
+}
+
+// A tailnet home whose Serve is closed, its machine not ready when it
+// started (HTTPS off, say), is served on the tailnet again by `cyfr reach
+// tailnet`, as tailnet_https_off's sentence says: the preview says so, the
+// change is confirmed (or --yes), and the switch of the head .env holds
+// runs only the start; the result says Serve is open, or answers
+// started_local's sentence with exit 3.
+func TestReachTailnetServesAClosedHomeAgain(t *testing.T) {
+	if !strings.Contains(reach.Refuse("tailnet_https_off", httpsOff()).Message(), "then run `cyfr reach tailnet` again, which uses this machine as it is") {
+		t.Fatal("tailnet_https_off no longer says to run `cyfr reach tailnet` again")
+	}
+	s := newReachProject(t)
+	s.joined[""] = reach.Join{Name: "cyfr.tail1234.ts.net", NodeID: "nTESTNODE1CNTRL"}
+	if err := runReach(context.Background(), reach.ModeTailnet, reachOptions{}, true, "", &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	s.switches, s.serveClosed = nil, true
+	askTerminal = func() bool { return true }
+	askInput = answers("yes")
+	var out bytes.Buffer
+	if err := runReach(context.Background(), reach.ModeTailnet, reachOptions{}, false, "", &out); err != nil {
+		t.Fatalf("cyfr reach tailnet answered %v\n%s", err, out.String())
+	}
+	for _, want := range []string{
+		"Tailscale Serve is closed, so this home answers on this machine only. This checks the machine again and serves the home on your tailnet at https://cyfr.tail1234.ts.net:\n",
+		"  Address: https://cyfr.tail1234.ts.net\n",
+		"Make this change? (yes/no)",
+		"Done. This home is reached as:\n",
+		"Tailscale now:\n  Serve: open\n",
+	} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("the reopen lacks %q:\n%s", want, out.String())
+		}
+	}
+	if len(s.switches) != 1 || s.switches[0].OldDigest != s.switches[0].NewDigest {
+		t.Errorf("the reopen switched %+v, want one switch to the head .env holds", s.switches)
+	}
+
+	// The machine still not ready: started_local's sentence, exit 3.
+	s.serveClosed = true
+	local := startedLocalFor("switch", "tailnet_https_off", httpsOff())
+	s.reopenReceipt = &local
+	err := runReach(context.Background(), reach.ModeTailnet, reachOptions{}, true, "", &bytes.Buffer{})
+	if want := reach.Refuse("tailnet_https_off", httpsOff()).Message(); err == nil || err.Error() != want || ExitStatus(err) != exitStartedLocally {
+		t.Errorf("a reopen on a machine still not ready answered %v (exit %d), want %q and exit 3", err, ExitStatus(err), want)
+	}
+}
+
 // The command tree is the contract's: `cyfr reach <mode>` with its flags,
 // the hidden --request-id, `cyfr reach status` and `cyfr setup link`.
 func TestReachCommandsAreTheContractsSurface(t *testing.T) {

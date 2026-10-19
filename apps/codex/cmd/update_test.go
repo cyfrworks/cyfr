@@ -750,6 +750,7 @@ func TestUpdateRunsTheCeremonyInOrder(t *testing.T) {
 		profiles + "exec -T cyfr bin/cyfr rpc " + testRoster,
 		"SCAFFOLD FETCH " + testVersion,
 		"ENGINE cancel-waiting-join",
+		"ENGINE close-serve",
 		profiles + "stop caddy",
 		profiles + "stop tailscale",
 		profiles + "stop cyfr",
@@ -2547,27 +2548,5 @@ func TestUpRefusesWhileAnUpdateHoldsTheLock(t *testing.T) {
 	}
 	if holder := s.engine.held(); holder != "" {
 		t.Errorf("the lock stands after the update (held by %s), so cyfr up would still refuse", holder)
-	}
-}
-
-// dotenvLine's line reads back as its value exactly through the one reader
-// of dotenv values, reach.ReadEnvValues: a value holding a single quote is
-// double-quoted, each backslash escaped; one holding both quotes or a line
-// break has no line.
-func TestDotenvLineReadsBackExactly(t *testing.T) {
-	for _, value := range []string{"plain", "", "a b # c", `C:\temp\new`, "it's", `it's C:\temp\new \\ \n`} {
-		line, ok := dotenvLine("K", value)
-		if !ok {
-			t.Errorf("%q has no line", value)
-			continue
-		}
-		if got, assigned := envValuesOf(line + "\n")["K"]; !assigned || got != value {
-			t.Errorf("%s reads back as %q, want %q", line, got, value)
-		}
-	}
-	for _, value := range []string{`it's "quoted"`, "two\nlines", "cr\r"} {
-		if line, ok := dotenvLine("K", value); ok {
-			t.Errorf("%q has the line %s", value, line)
-		}
 	}
 }

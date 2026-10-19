@@ -38,24 +38,32 @@ type fakeStack struct {
 
 	holder string
 
-	openErr                error
-	resume                 []reach.Receipt
-	resumeErr              error
-	headErr                error
-	composeErr             error
-	checkErr               error
-	status                 reach.Status
-	cancelErr, forgetErr   error
-	startReceipt           reach.Receipt
-	startErr               error
-	stopReceipt            reach.Receipt
-	stopErr                error
-	switchErr              error
-	switchReceipt          *reach.Receipt
-	addressChanges         []string
-	join                   func(ctx context.Context, r reach.JoinRequest) (reach.Receipt, error)
-	joined                 map[string]reach.Join
-	receipts               map[string]reach.Receipt
+	openErr              error
+	resume               []reach.Receipt
+	resumeErr            error
+	headErr              error
+	composeErr           error
+	checkErr             error
+	status               reach.Status
+	cancelErr, forgetErr error
+	startReceipt         reach.Receipt
+	startErr             error
+	stopReceipt          reach.Receipt
+	stopErr              error
+	switchErr            error
+	switchReceipt        *reach.Receipt
+	addressChanges       []string
+	join                 func(ctx context.Context, r reach.JoinRequest) (reach.Receipt, error)
+	joined               map[string]reach.Join
+	receipts             map[string]reach.Receipt
+	// contents are what each switch's request id was asked, which Resent
+	// binds the id to.
+	contents map[string]reach.RequestContent
+	// serveClosed is a tailnet home's Serve closed, which a preview of the
+	// head .env holds answers as a reopen; reopenReceipt, when set, is the
+	// reopen's answer.
+	serveClosed            bool
+	reopenReceipt          *reach.Receipt
 	switches               []reach.SwitchRequest
 	joins                  []reach.JoinRequest
 	joinKeys               [][]byte
@@ -80,13 +88,10 @@ func useFakeEngine(t *testing.T) *fakeStack {
 // terminal init and reach ask on for none; t, when there is one, reports
 // what the fake cannot do.
 func installFakeEngine(t *testing.T) *fakeStack {
-	s := &fakeStack{t: t, joined: map[string]reach.Join{}, receipts: map[string]reach.Receipt{}, startReceipt: okReceipt("start"), stopReceipt: okReceipt("stop")}
+	s := &fakeStack{t: t, joined: map[string]reach.Join{}, receipts: map[string]reach.Receipt{}, contents: map[string]reach.RequestContent{}, startReceipt: okReceipt("start"), stopReceipt: okReceipt("stop")}
 	openEngine = func(dir string) (stackEngine, error) {
 		if err := s.openErr; err != nil {
 			return nil, err
-		}
-		if key := composeKeyInEnv(filepath.Join(dir, ".env")); key != "" {
-			return nil, reach.Refuse("compose_env_refused", map[string]string{"key": key})
 		}
 		abs, err := filepath.Abs(dir)
 		if err != nil {
@@ -136,8 +141,8 @@ func okReceipt(op string) reach.Receipt {
 }
 
 // composeKeyInEnv is the first COMPOSE_* name, in byte order, the dotenv
-// file at path assigns as the engine reads it, the one the engine's Open
-// refuses.
+// file at path assigns as the engine reads it, the one the engine's
+// Resume, starts, switches and joins refuse.
 func composeKeyInEnv(path string) string {
 	var keys []string
 	for name := range envAssignments(path) {
@@ -209,7 +214,55 @@ func (e *fakeEngine) Lock(holder string) (func(), error) {
 
 func (e *fakeEngine) Resume(ctx context.Context) ([]reach.Receipt, error) {
 	e.s.logLine("resume")
+	if err := e.composeRefusal(); err != nil {
+		return nil, err
+	}
 	return e.s.resume, e.s.resumeErr
+}
+
+// composeRefusal is compose_env_refused for the project's .env when it
+// names a COMPOSE_* setting, as the engine refuses it before any docker
+// call of a resume, a start, a switch or a join.
+func (e *fakeEngine) composeRefusal() error {
+	if key := composeKeyInEnv(filepath.Join(e.dir, ".env")); key != "" {
+		return reach.Refuse("compose_env_refused", map[string]string{"key": key})
+	}
+	return nil
+}
+
+// CloseServe writes Serve's empty configuration where the engine keeps
+// it, under the lock, as the engine's does.
+func (e *fakeEngine) CloseServe(ctx context.Context) error {
+	e.s.mu.Lock()
+	locked := e.locked
+	e.s.mu.Unlock()
+	if !locked {
+		return errors.New("reach: CloseServe without the lock")
+	}
+	e.s.logLine("close-serve")
+	e.s.mu.Lock()
+	e.s.serveClosed = true
+	e.s.mu.Unlock()
+	serve := filepath.Join(e.dir, ".cyfr", "tailscale-serve", "serve.json")
+	if err := os.MkdirAll(filepath.Dir(serve), 0755); err != nil {
+		return err
+	}
+	return os.WriteFile(serve, []byte("{}"), 0644)
+}
+
+// Resent answers a resent switch's receipt when c is what its id was
+// first asked, and reach_request_reused when it is not, as the engine's.
+func (e *fakeEngine) Resent(id string, c reach.RequestContent) (reach.Receipt, bool, error) {
+	e.s.mu.Lock()
+	defer e.s.mu.Unlock()
+	rec, ok := e.s.receipts[id]
+	if !ok {
+		return reach.Receipt{}, false, nil
+	}
+	if e.s.contents[id] != c {
+		return reach.Receipt{RequestID: id, Op: rec.Op, State: "rejected", Code: "reach_request_reused"}, true, nil
+	}
+	return rec, true, nil
 }
 
 func (e *fakeEngine) Docker() reach.Docker { return fakeRunner{e.s} }
@@ -267,9 +320,15 @@ func (e *fakeEngine) CheckStack(ctx context.Context) error {
 	return e.s.checkErr
 }
 
+// Status answers the test's status, its head refused as the engine
+// refuses a .env naming a COMPOSE_* setting.
 func (e *fakeEngine) Status(ctx context.Context) (reach.Status, error) {
 	e.s.logLine("status")
-	return e.s.status, nil
+	st := e.s.status
+	if err := e.composeRefusal(); err != nil {
+		st.HeadErr = err
+	}
+	return st, nil
 }
 
 // Preview derives the target's head with reach.Derive from .env's port and
@@ -285,7 +344,14 @@ func (e *fakeEngine) Preview(ctx context.Context, t reach.Target, joinID string)
 		OldWords: reach.Describe(old), NewWords: reach.Describe(d.Head),
 	}
 	if p.OldDigest == p.NewDigest {
-		return reach.Preview{}, reach.Refuse("reach_unchanged", map[string]string{"address": p.NewWords.Address})
+		e.s.mu.Lock()
+		reopen := e.s.serveClosed && t.Mode == reach.ModeTailnet
+		e.s.mu.Unlock()
+		if !reopen {
+			return reach.Preview{}, reach.Refuse("reach_unchanged", map[string]string{"address": p.NewWords.Address})
+		}
+		p.Reopen = true
+		return p, nil
 	}
 	if p.OldWords.Address != p.NewWords.Address {
 		p.AddressChanges = e.s.addressChanges
@@ -316,6 +382,7 @@ func (e *fakeEngine) Switch(ctx context.Context, r reach.SwitchRequest) (reach.R
 	if rec.Op != "" {
 		e.s.mu.Lock()
 		e.s.receipts[r.ID] = rec
+		e.s.contents[r.ID] = r.Content
 		e.s.mu.Unlock()
 	}
 	return rec, err
@@ -337,6 +404,9 @@ func (e *fakeEngine) doSwitch(ctx context.Context, r reach.SwitchRequest) (reach
 	s.mu.Lock()
 	s.switches = append(s.switches, r)
 	s.mu.Unlock()
+	if err := e.composeRefusal(); err != nil {
+		return reach.Receipt{}, err
+	}
 	if s.switchErr != nil {
 		return reach.Receipt{}, s.switchErr
 	}
@@ -347,18 +417,26 @@ func (e *fakeEngine) doSwitch(ctx context.Context, r reach.SwitchRequest) (reach
 	if err != nil {
 		return reach.Receipt{}, err
 	}
+	if p.Reopen && r.OldDigest == p.OldDigest && r.NewDigest == p.NewDigest {
+		// .env holds the head already: only the start path runs, which
+		// validates the machine again and opens Serve.
+		s.logLine("reopen %s", r.ID)
+		if s.reopenReceipt != nil {
+			return answered(*s.reopenReceipt)
+		}
+		s.mu.Lock()
+		s.serveClosed = false
+		s.status.Health = []string{"Serve: open"}
+		s.mu.Unlock()
+		rec := okReceipt("switch")
+		rec.RequestID, rec.FinalHead = r.ID, &p.New
+		return answered(rec)
+	}
 	if p.OldDigest != r.OldDigest || p.NewDigest != r.NewDigest {
 		return answered(reach.Receipt{RequestID: r.ID, Op: "switch", State: "rejected", Code: "reach_stale", Payload: map[string]string{"words": strings.Join(p.OldWords.Sentences(), "; ")}})
 	}
 	d, _ := e.derive(r.Target, r.JoinID)
-	path := filepath.Join(e.dir, ".env")
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return reach.Receipt{}, err
-	}
-	f := parseEnvFile(string(data))
-	writeHead(f, d)
-	if err := writeFileAtomic(path, []byte(f.String()), 0600); err != nil {
+	if err := reach.EditEnvFile(filepath.Join(e.dir, ".env"), d.Assignments, d.Removals); err != nil {
 		return reach.Receipt{}, err
 	}
 	rec := okReceipt("switch")
@@ -375,6 +453,9 @@ func (e *fakeEngine) Join(ctx context.Context, r reach.JoinRequest) (reach.Recei
 		key, _ = io.ReadAll(r.AuthKey)
 	}
 	s.logLine("join %s new_node=%v key=%v", r.Hostname, r.NewNode, key != nil)
+	if err := e.composeRefusal(); err != nil {
+		return reach.Receipt{}, err
+	}
 	s.mu.Lock()
 	s.joins = append(s.joins, r)
 	s.joinKeys = append(s.joinKeys, key)
@@ -419,6 +500,9 @@ func (e *fakeEngine) Start(ctx context.Context, cause string) (reach.Receipt, er
 func (e *fakeEngine) StartWithin(ctx context.Context, cause string, health time.Duration) (reach.Receipt, error) {
 	s := e.s
 	s.logLine("start %s", cause)
+	if err := e.composeRefusal(); err != nil {
+		return reach.Receipt{}, err
+	}
 	s.mu.Lock()
 	s.starts++
 	s.healths = append(s.healths, health)

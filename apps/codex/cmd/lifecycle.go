@@ -89,14 +89,6 @@ const (
 	defaultBuildsURL = "http://" + buildsProfile + ":4100"
 )
 
-// stackVars are the .env settings cyfr init mints or reads to mint. Each is
-// read from exactly one assignment, so what init reads is what compose and
-// cyfr read.
-var stackVars = []string{
-	secretKeyBaseVar, backendsKeyVar, workerRootVar, serviceIDVar, serviceKeyVar, buildsURLVar,
-	buildsKeyVar, corsOriginsVar,
-}
-
 // serviceIDPattern is the service id grammar Locus.Runtime.Credentials accepts.
 var serviceIDPattern = regexp.MustCompile(`^wrk_[A-Za-z0-9_-]{1,64}$`)
 
@@ -119,85 +111,6 @@ func workerKey(root []byte, serviceID string) []byte {
 	return mac.Sum(nil)
 }
 
-// envFile is a dotenv file held as its lines for writing, so a key init
-// adds lands on the line that documents it and every other line is kept
-// byte for byte. Every value the CLI reads from a dotenv file it reads
-// through reach.ReadEnvValues, as compose and the engine read it; envFile
-// only finds the lines to write.
-type envFile struct {
-	lines []string
-}
-
-func parseEnvFile(text string) *envFile {
-	return &envFile{lines: strings.Split(text, "\n")}
-}
-
-func (f *envFile) String() string {
-	return strings.Join(f.lines, "\n")
-}
-
-// assignments returns the indexes of the lines that assign key, in each
-// form reach.ReadEnvValues reads: `key=…`, `export key=…`, `key: …` and a
-// bare `key`, which takes the environment's value. It reads lines alone,
-// so a line inside a quoted value running across lines is read as a line.
-func (f *envFile) assignments(key string) []int {
-	var found []int
-	for i, line := range f.lines {
-		if assignsKey(line, key) {
-			found = append(found, i)
-		}
-	}
-	return found
-}
-
-// assignsKey reports whether the dotenv line assigns key.
-func assignsKey(line, key string) bool {
-	line = strings.TrimLeft(line, " \t")
-	if rest, ok := strings.CutPrefix(line, "export"); ok && rest != "" && (rest[0] == ' ' || rest[0] == '\t') {
-		line = strings.TrimLeft(rest, " \t")
-	}
-	rest, ok := strings.CutPrefix(line, key)
-	if !ok {
-		return false
-	}
-	rest = strings.TrimLeft(strings.TrimRight(rest, "\r"), " \t")
-	return rest == "" || rest[0] == '=' || rest[0] == ':'
-}
-
-// set writes `key=value` on key's first assignment line, taking out every
-// later one, since the last assignment of a name is the one compose
-// reads; else on its first commented example line (`# key=…`), else on a
-// line appended at the end.
-func (f *envFile) set(key, value string) {
-	line := key + "=" + value
-	if found := f.assignments(key); len(found) > 0 {
-		f.lines[found[0]] = line
-		for _, i := range slices.Backward(found[1:]) {
-			f.lines = slices.Delete(f.lines, i, i+1)
-		}
-		return
-	}
-	for i, l := range f.lines {
-		if rest, ok := strings.CutPrefix(strings.TrimLeft(l, " \t"), "#"); ok &&
-			strings.HasPrefix(strings.TrimLeft(rest, " \t"), key+"=") {
-			f.lines[i] = line
-			return
-		}
-	}
-	if n := len(f.lines); n > 0 && f.lines[n-1] == "" {
-		f.lines = append(f.lines[:n-1], line, "")
-	} else {
-		f.lines = append(f.lines, line, "")
-	}
-}
-
-// unset takes every uncommented assignment of key out.
-func (f *envFile) unset(key string) {
-	for _, i := range slices.Backward(f.assignments(key)) {
-		f.lines = slices.Delete(f.lines, i, i+1)
-	}
-}
-
 // envChange names a setting cyfr init wrote into .env, and how it came by
 // its value. It never carries the value.
 type envChange struct {
@@ -210,14 +123,15 @@ func refuseEnv(format string, args ...any) error {
 	return fmt.Errorf(format+" .env is unchanged.", args...)
 }
 
-// ensureStackKeys adds to a dotenv text the keys the stack needs and it
-// lacks, and nothing else. values are the text's values as
-// reach.ReadEnvValues reads them, and it sets in values each key it adds.
-// A key that is present is never rewritten; a setting assigned twice, a
-// malformed root or service id, and a service key that does not derive
-// from the root beside it are refused, since writing around them would
-// leave cyfr and the locus-runtime service unable to authenticate each
-// other.
+// stackKeys answers the assignments that give a .env whose values are
+// values the keys the stack needs and it lacks, and nothing else; the
+// caller writes them through the engine's editor (reach.EditEnv). A key that is
+// present is never rewritten; a malformed root or service id, and a
+// service key that does not derive from the root beside it, are refused,
+// since writing around them would leave cyfr and the locus-runtime
+// service unable to authenticate each other. Each key reads as its last
+// assignment, as compose, the engine and every read of the CLI read it,
+// and the editor writes over that one.
 //
 // The runtime root and the locus-runtime service key are one pair: with neither, both
 // are minted; with the root alone, the key is derived from it for
@@ -228,18 +142,11 @@ func refuseEnv(format string, args ...any) error {
 // is builds turned off, whether the URL is assigned empty or absent (the
 // reach head omits it when builds are off, and a switch removes its line),
 // and is left so.
-func ensureStackKeys(text string, values map[string]string) (string, []envChange, error) {
-	f := parseEnvFile(text)
-	for _, key := range stackVars {
-		if found := f.assignments(key); len(found) > 1 {
-			return "", nil, refuseEnv("%s is assigned on %d lines of .env, and compose and cyfr read only one of them: keep one line and run cyfr init again.", key, len(found))
-		}
-	}
-
+func stackKeys(values map[string]string) (map[string]string, []envChange, error) {
+	add := map[string]string{}
 	var changes []envChange
 	set := func(key, value, how string) {
-		f.set(key, value)
-		values[key] = value
+		add[key] = value
 		changes = append(changes, envChange{key, how})
 	}
 	mint := func(key, how string, generate func() (string, error)) error {
@@ -253,12 +160,12 @@ func ensureStackKeys(text string, values map[string]string) (string, []envChange
 
 	if values[secretKeyBaseVar] == "" {
 		if err := mint(secretKeyBaseVar, "generated", generateSecretKey); err != nil {
-			return "", nil, err
+			return nil, nil, err
 		}
 	}
 	if values[backendsKeyVar] == "" {
 		if err := mint(backendsKeyVar, "generated", generateHexKey); err != nil {
-			return "", nil, err
+			return nil, nil, err
 		}
 	}
 
@@ -266,19 +173,19 @@ func ensureStackKeys(text string, values map[string]string) (string, []envChange
 	if serviceID == "" {
 		serviceID = defaultServiceID
 	} else if !serviceIDPattern.MatchString(serviceID) {
-		return "", nil, refuseEnv("%s in .env is %q, which is not `wrk_` followed by 1 to 64 letters, digits, `_` or `-`, so no key can be derived for it: fix the id (and the matching entry of CYFR_LOCUS_RUNTIME_WORKERS) and run cyfr init again.", serviceIDVar, serviceID)
+		return nil, nil, refuseEnv("%s in .env is %q, which is not `wrk_` followed by 1 to 64 letters, digits, `_` or `-`, so no key can be derived for it: fix the id (and the matching entry of CYFR_LOCUS_RUNTIME_WORKERS) and run cyfr init again.", serviceIDVar, serviceID)
 	}
 	rootText, serviceKeyText := values[workerRootVar], values[serviceKeyVar]
 	root, rootOK := decodeHexKey(rootText)
 	switch {
 	case rootText != "" && !rootOK:
-		return "", nil, refuseEnv("%s in .env is not 64 hexadecimal digits, so no service key can be derived from it: replace it with `openssl rand -hex 32` and remove %s, or remove both, and run cyfr init again.", workerRootVar, serviceKeyVar)
+		return nil, nil, refuseEnv("%s in .env is not 64 hexadecimal digits, so no service key can be derived from it: replace it with `openssl rand -hex 32` and remove %s, or remove both, and run cyfr init again.", workerRootVar, serviceKeyVar)
 	case rootText == "" && serviceKeyText != "":
-		return "", nil, refuseEnv("%s is set in .env but %s, the root it is derived from, is not: set %s to the root that key was derived from, or remove %s so cyfr init mints both.", serviceKeyVar, workerRootVar, workerRootVar, serviceKeyVar)
+		return nil, nil, refuseEnv("%s is set in .env but %s, the root it is derived from, is not: set %s to the root that key was derived from, or remove %s so cyfr init mints both.", serviceKeyVar, workerRootVar, workerRootVar, serviceKeyVar)
 	case rootText == "":
 		minted, err := generateHexKey()
 		if err != nil {
-			return "", nil, fmt.Errorf("generate %s: %w", workerRootVar, err)
+			return nil, nil, fmt.Errorf("generate %s: %w", workerRootVar, err)
 		}
 		set(workerRootVar, minted, "generated")
 		root, _ = decodeHexKey(minted)
@@ -288,7 +195,7 @@ func ensureStackKeys(text string, values map[string]string) (string, []envChange
 	default:
 		key, keyOK := decodeHexKey(serviceKeyText)
 		if !keyOK || !hmac.Equal(key, workerKey(root, serviceID)) {
-			return "", nil, refuseEnv("%s in .env is not the key %s derives for %s %s, so cyfr and the locus-runtime service could not authenticate each other: remove %s and run cyfr init again to derive it, or set %s to the root it was derived from.", serviceKeyVar, workerRootVar, serviceIDVar, serviceID, serviceKeyVar, workerRootVar)
+			return nil, nil, refuseEnv("%s in .env is not the key %s derives for %s %s, so cyfr and the locus-runtime service could not authenticate each other: remove %s and run cyfr init again to derive it, or set %s to the root it was derived from.", serviceKeyVar, workerRootVar, serviceIDVar, serviceID, serviceKeyVar, workerRootVar)
 		}
 	}
 
@@ -308,39 +215,69 @@ func ensureStackKeys(text string, values map[string]string) (string, []envChange
 	case buildsURL != "" && buildsKey != "":
 	case buildsURL != "":
 		if err := mint(buildsKeyVar, "generated", generateHexKey); err != nil {
-			return "", nil, err
+			return nil, nil, err
 		}
 	case buildsKey != "":
 		set(buildsURLVar, defaultBuildsURL, defaultBuildsURL)
 	}
 
-	return f.String(), changes, nil
+	return add, changes, nil
 }
 
 // ensureEnvFileKeys adds the stack keys the dotenv file at path lacks
-// (ensureStackKeys) and writes it back whole, keeping its mode, only when
-// something was added. A refusal leaves the file as it was.
+// (stackKeys) through the engine's editor (reach.EditEnvFile), which keeps
+// the file's mode and every other line, only when something was added. A
+// refusal leaves the file as it was.
 func ensureEnvFileKeys(path string) ([]envChange, error) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return nil, fmt.Errorf("read %s: %w", path, err)
-	}
 	values, err := reach.ReadEnvValues(path)
 	if err != nil {
 		return nil, fmt.Errorf("read %s: %w", path, err)
 	}
-	text, changes, err := ensureStackKeys(string(data), values)
+	add, changes, err := stackKeys(values)
 	if err != nil || len(changes) == 0 {
 		return nil, err
 	}
-	mode := os.FileMode(0600)
-	if info, err := os.Stat(path); err == nil {
-		mode = info.Mode().Perm()
-	}
-	if err := writeFileAtomic(path, []byte(text), mode); err != nil {
-		return nil, err
+	if err := reach.EditEnvFile(path, add, nil); err != nil {
+		return nil, fmt.Errorf("write %s: %w", path, err)
 	}
 	return changes, nil
+}
+
+// newEnv is the .env init writes for a new home from the template at
+// path, through the engine's editor (reach.EditEnv): the answer to init's
+// email question (the operators' setting, or with no email the setup
+// token), the stack's keys (stackKeys) and the local head's reach keys,
+// every other line of the template kept. The template documents the
+// email and the token on commented lines, which stay; their assignments
+// are added at the end.
+func newEnv(path, adminEmail, setupToken string) ([]byte, []envChange, reach.Derivation, error) {
+	tmpl, err := os.ReadFile(path)
+	if err != nil {
+		return nil, nil, reach.Derivation{}, fmt.Errorf("Failed to read %s: %w", path, err)
+	}
+	values, err := reach.ReadEnvValues(path)
+	if err != nil {
+		return nil, nil, reach.Derivation{}, fmt.Errorf("Failed to read %s: %w", path, err)
+	}
+	set := map[string]string{}
+	if adminEmail != "" {
+		set[adminEmailVar] = adminEmail
+	}
+	if setupToken != "" {
+		set[setupTokenVar] = setupToken
+	}
+	add, changes, err := stackKeys(values)
+	if err != nil {
+		return nil, nil, reach.Derivation{}, err
+	}
+	maps.Copy(set, add)
+	maps.Copy(values, add)
+	d, err := localHead(values)
+	if err != nil {
+		return nil, nil, reach.Derivation{}, err
+	}
+	maps.Copy(set, d.Assignments)
+	return reach.EditEnv(tmpl, set, d.Removals), changes, d, nil
 }
 
 // writeFileAtomic replaces the file at path (through a symlink, the file it
@@ -605,10 +542,6 @@ database_path: ./data/cyfr.db
 	choice := reachChoice{mode: reach.ModeLocal}
 	var head reach.Head
 	if fileExists(".env.example") && !envExisted {
-		tmpl, err := os.ReadFile(".env.example")
-		if err != nil {
-			return fmt.Errorf("Failed to read .env.example: %w", err)
-		}
 		r := bufio.NewReader(askInput)
 		interactive := askTerminal()
 		choice = chooseReach(o, interactive, r, out)
@@ -626,24 +559,11 @@ database_path: ./data/cyfr.db
 			}
 			tokenMinted = true
 		}
-		// The template's values are the rendered text's for every key
-		// ensureStackKeys and localHead read: renderEnvFile sets only the
-		// operators' or the setup token's line.
-		values, err := reach.ReadEnvValues(".env.example")
-		if err != nil {
-			return fmt.Errorf("Failed to read .env.example: %w", err)
-		}
-		text, changes, err := ensureStackKeys(renderEnvFile(string(tmpl), adminEmail, token), values)
+		text, changes, d, err := newEnv(".env.example", adminEmail, token)
 		if err != nil {
 			return err
 		}
-		f := parseEnvFile(text)
-		d, err := localHead(values)
-		if err != nil {
-			return err
-		}
-		writeHead(f, d)
-		if err := writeFileAtomic(".env", []byte(f.String()), 0600); err != nil {
+		if err := writeFileAtomic(".env", text, 0600); err != nil {
 			return fmt.Errorf("Failed to write .env: %w", err)
 		}
 		envCreated = true
@@ -797,12 +717,17 @@ database_path: ./data/cyfr.db
 	return reachErr
 }
 
-// refuseExistingReach refuses an existing .env whose reach init does not
-// set: one without CYFR_REACH, with reach_missing's sentence, and reach
-// flags, since init chooses how a new home is reached and `cyfr reach`
-// changes an existing one's. A --reach naming the mode .env holds is no
-// change and passes.
+// refuseExistingReach refuses an existing .env init does not complete: one
+// naming a COMPOSE_* setting, which every command that runs compose
+// refuses (compose_env_refused), one without CYFR_REACH, with
+// reach_missing's sentence, and reach flags, since init chooses how a new
+// home is reached and `cyfr reach` changes an existing one's. A --reach
+// naming the mode .env holds is no change and passes.
 func refuseExistingReach(path string, o initOptions) error {
+	var r *reach.Refusal
+	if err := reach.CheckEnvFile(path); errors.As(err, &r) && r.Code == "compose_env_refused" {
+		return refusalError{r}
+	}
 	values, err := reach.ReadEnvValues(path)
 	if err != nil {
 		return fmt.Errorf("read %s: %w", path, err)
@@ -951,6 +876,7 @@ func applyInitReach(ctx context.Context, c reachChoice, key []byte, optionsGiven
 	}
 	rec, err := e.Switch(context.WithoutCancel(ctx), reach.SwitchRequest{
 		ID: id, Target: target, JoinID: join.id, OldDigest: p.OldDigest, NewDigest: p.NewDigest,
+		Content: requestContent(target, c.reachOptions, key),
 	})
 	head := p.New
 	if rec.FinalHead != nil {
@@ -981,18 +907,6 @@ func localHead(values map[string]string) (reach.Derivation, error) {
 	cur.BuildsURL = values[buildsURLVar]
 	d, err := reach.Derive(reach.Target{Mode: reach.ModeLocal}, cur, nil)
 	return d, engineFailure(err)
-}
-
-// writeHead writes a derivation's reach keys into f: each assignment on its
-// key's line (envFile.set), and every assignment of a key the head holds
-// no value for taken out.
-func writeHead(f *envFile, d reach.Derivation) {
-	for _, key := range slices.Sorted(maps.Keys(d.Assignments)) {
-		f.set(key, d.Assignments[key])
-	}
-	for _, key := range d.Removals {
-		f.unset(key)
-	}
 }
 
 // selection is what init pulls and points the CLI at: the compose profiles
@@ -1124,24 +1038,6 @@ func askLine(r *bufio.Reader, out io.Writer, question, def string) (string, bool
 		return def, true
 	}
 	return line, err == nil
-}
-
-// renderEnvFile fills in a .env.example template with the answer to init's
-// email question: the operators' line, which the template ships
-// commented, set to adminEmail; or, given no email, the setup token's line,
-// shipped commented too, set to setupToken. Everything else is left as it
-// is; the keys are ensureStackKeys' and the reach keys writeHead's.
-// TestShippedTemplateCarriesInitsAnchors binds both lines, and the keys,
-// to the real .env.example, so each lands on the line that documents it.
-func renderEnvFile(template, adminEmail, setupToken string) string {
-	f := parseEnvFile(template)
-	if adminEmail != "" {
-		f.set(adminEmailVar, adminEmail)
-	}
-	if setupToken != "" {
-		f.set(setupTokenVar, setupToken)
-	}
-	return f.String()
 }
 
 var upCmd = &cobra.Command{

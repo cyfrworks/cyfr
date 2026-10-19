@@ -319,9 +319,6 @@ func runRestore(ctx context.Context, snapshot string, start bool, out, errOut io
 	if err != nil {
 		return err
 	}
-	if _, ok := dotenvLine(restoreBarrier, dir); !ok {
-		return fmt.Errorf("%s cannot be restored: its path holds both quote characters or a line break, which .env cannot carry; nothing was changed", dir)
-	}
 	// The lock an up, an update and a reach change hold too, held from
 	// before the first docker call to the restore's end; a change recovery
 	// could not finish leaves the stack in no known state, and the restore
@@ -476,19 +473,11 @@ func (r *restorer) holdConfigFiles() error {
 }
 
 // withBarrier answers the dotenv text env with restoreBarrier set to the
-// snapshot, every earlier assignment of it taken out, so no later line can
-// set it empty.
+// snapshot through the engine's editor (reach.EditEnv): its one
+// assignment, every other taken out, so no other line can set it empty,
+// and every other line, a quoted value's included, kept byte for byte.
 func withBarrier(env []byte, snapshot string) []byte {
-	line, _ := dotenvLine(restoreBarrier, snapshot)
-	f := parseEnvFile(string(env))
-	for _, i := range slices.Backward(f.assignments(restoreBarrier)) {
-		f.lines = slices.Delete(f.lines, i, i+1)
-	}
-	text := strings.TrimSuffix(f.String(), "\n")
-	if text != "" {
-		text += "\n"
-	}
-	return []byte(text + line + "\n")
+	return reach.EditEnv(env, map[string]string{restoreBarrier: snapshot}, nil)
 }
 
 // writeDurable writes data over the file at name as writeFileAtomic does,

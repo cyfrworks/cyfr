@@ -72,7 +72,9 @@ if [ "$1" = compose ]; then
     config)
       # compose merges .env (env_file) into the service's environment, so
       # the restore's bar reaches the answer as .env sets it.
-      v="$(sed -n "s/^CYFR_RESTORE_INCOMPLETE='\(.*\)'\$/\1/p" .env 2>/dev/null | tail -n 1)"
+      # The engine's editor writes the bar bare, or single-quoted when it
+      # needs quoting.
+      v="$(sed -n -e "s/^CYFR_RESTORE_INCOMPLETE='\(.*\)'\$/\1/p" -e "t" -e "s/^CYFR_RESTORE_INCOMPLETE=\([^'].*\)\$/\1/p" .env 2>/dev/null | tail -n 1)"
       if [ -n "$v" ] && [ ! -f "$d/config.nobar" ]; then
         printf 'config %s\n' "$(digest < "$file")" >> "$d/state"
         if [ -f "$d/config.kill" ]; then kill -KILL "$PPID"; exit 0; fi
@@ -277,6 +279,7 @@ func TestRestorePutsEveryPartBackAndDeclaresBeforeTheStart(t *testing.T) {
 		"ENGINE resume",
 		profiles + "ps --services --status running",
 		"ENGINE cancel-waiting-join",
+		"ENGINE close-serve",
 		profiles + "stop caddy",
 		profiles + "stop tailscale",
 		profiles + "stop cyfr",
@@ -968,10 +971,10 @@ func TestRestoreBarReadsEveryAssignment(t *testing.T) {
 		}
 	}
 	got := string(withBarrier([]byte("A=1\nexport CYFR_RESTORE_INCOMPLETE='old'\nB=2\nCYFR_RESTORE_INCOMPLETE: \n"), "/p/backups/x"))
-	if want := "A=1\nB=2\nCYFR_RESTORE_INCOMPLETE='/p/backups/x'\n"; got != want {
+	if want := "A=1\nB=2\nCYFR_RESTORE_INCOMPLETE=/p/backups/x\n"; got != want {
 		t.Errorf("withBarrier answered %q, want %q", got, want)
 	}
-	if got := string(withBarrier(nil, "/p/b")); got != "CYFR_RESTORE_INCOMPLETE='/p/b'\n" {
+	if got := string(withBarrier(nil, "/p/b")); got != "CYFR_RESTORE_INCOMPLETE=/p/b\n" {
 		t.Errorf("withBarrier of no .env answered %q", got)
 	}
 }

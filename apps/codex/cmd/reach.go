@@ -43,12 +43,13 @@ type stackEngine interface {
 	Start(ctx context.Context, cause string) (reach.Receipt, error)
 	StartWithin(ctx context.Context, cause string, health time.Duration) (reach.Receipt, error)
 	Stop(ctx context.Context, cause string, all bool) (reach.Receipt, error)
-	Receipt(id string) (reach.Receipt, bool, error)
+	CloseServe(ctx context.Context) error
+	Resent(id string, c reach.RequestContent) (reach.Receipt, bool, error)
 }
 
-// openEngine opens the engine of the project at dir, refusing a .env that
-// sets a COMPOSE_* key before anything reads it. A variable so a test
-// stands in a fake engine.
+// openEngine opens the engine of the project at dir; its recovery, starts,
+// switches and joins refuse a .env that sets a COMPOSE_* key before any
+// docker call. A variable so a test stands in a fake engine.
 var openEngine = func(dir string) (stackEngine, error) {
 	e, err := reach.Open(dir, nil)
 	if err != nil {
@@ -441,31 +442,39 @@ func askJoin(in *bufio.Reader, out io.Writer, o reachOptions) func(current strin
 	}
 }
 
+// requestContent is everything a `cyfr reach` command was asked, which
+// the engine binds its request id to (reach.RequestContent).
+func requestContent(target reach.Target, o reachOptions, key []byte) reach.RequestContent {
+	return reach.RequestContent{
+		Mode: target.Mode, Domain: target.Domain, ACMEEmail: target.ACMEEmail,
+		Hostname: o.hostname, NewNode: o.newNode, AuthKeyFingerprint: reach.AuthKeyFingerprint(key),
+	}
+}
+
 // answerResent answers a request id the engine already holds the receipt
 // of, or the unfinished operation of, as the request answered when it was
 // first sent, the same sentence and the same exit status, and does
-// nothing else; sent is false when it holds neither. A receipt whose head
-// is not the one target makes was another request's.
-func answerResent(target reach.Target, id string, out io.Writer) (sent bool, err error) {
+// nothing else; sent is false when it holds neither. The engine binds the
+// id to what it was first asked (Resent): asked anything else under it, a
+// target or join inputs of another request, it is reach_request_reused,
+// whatever the first request's outcome.
+func answerResent(c reach.RequestContent, id string, out io.Writer) (sent bool, err error) {
 	e, err := openEngine(".")
 	if err != nil {
 		return true, engineFailure(err)
 	}
-	rec, ok, err := e.Receipt(id)
+	rec, ok, err := e.Resent(id, c)
 	if err != nil {
 		return true, engineFailure(err)
 	}
 	if !ok {
 		return false, nil
 	}
-	reused := refusalError{reach.Refuse("reach_request_reused", nil)}
 	switch {
 	case rec.Op != "switch":
-		return true, reused
+		return true, refusalError{reach.Refuse("reach_request_reused", nil)}
 	case rec.State == "accepted":
 		return true, refuseUnfinished([]reach.Receipt{rec})
-	case rec.FinalHead != nil && (rec.Outcome == "ok" || rec.Outcome == outcomeStartedLocal) && !headOf(*rec.FinalHead, target):
-		return true, reused
 	}
 	// A receipt read back carries its refusal in itself, with no error
 	// beside it.
@@ -479,19 +488,19 @@ func answerResent(target reach.Target, id string, out io.Writer) (sent bool, err
 	return true, nil
 }
 
-// headOf reports whether head h is one target makes: its mode, and for a
-// public home its domain and certificate email.
-func headOf(h reach.Head, t reach.Target) bool {
-	if h.Mode != t.Mode {
-		return false
-	}
-	return t.Mode != reach.ModePublic || h.Host == strings.ToLower(strings.TrimSpace(t.Domain)) && h.ACMEEmail == strings.TrimSpace(t.ACMEEmail)
-}
-
 // printPreview prints a change before it is made: each of the words as
 // before → after, then each change they do not show (unwordedChanges),
-// then what the person must do when the address changes.
+// then what the person must do when the address changes. A reopen, the
+// tailnet head .env holds already with Serve closed, is the home served on
+// the tailnet again.
 func printPreview(out io.Writer, p reach.Preview) {
+	if p.Reopen {
+		// The head is .env's already: what changes is that the home is
+		// served on the tailnet again, once the machine is checked.
+		fmt.Fprintf(out, "Tailscale Serve is closed, so this home answers on this machine only. This checks the machine again and serves the home on your tailnet at %s:\n", p.NewWords.Address)
+		printWords(out, p.NewWords)
+		return
+	}
 	fmt.Fprintln(out, "This changes how this home is reached:")
 	before, after := p.OldWords.Sentences(), p.NewWords.Sentences()
 	for i := range before {
@@ -570,6 +579,8 @@ var reachCmd = &cobra.Command{
 
 It shows the change first: who can reach the home, its address, the certificate email and the ports opened on this machine, each before → after, with the tailnet machine, the port on this computer and the builds service when they change, and what changes for passkeys, paired devices and clients when the address does. Confirm it (or pass --yes), and the stack is stopped and checked stopped, .env is rewritten, and what was running is started again in the new mode; a start that fails puts the home back as it was. With no terminal to confirm on and no --yes, it shows the change and makes none, and a tailnet change that needs this machine joined first is refused before the join.
 
+A tailnet home whose Tailscale Serve is closed, because the machine was not ready when it started (HTTPS certificates off, say), is served on the tailnet again by 'cyfr reach tailnet': it shows that, and once confirmed checks the machine again and opens Serve without stopping anything or rewriting .env.
+
 'cyfr reach status' shows how the home is reached and what runs, changing nothing. 'cyfr reach --resume' finishes a change an interrupted command left, under the lock, and reports what happened; it is what to run after an interruption.
 
 Exit status 3: the change was made and the home started, but on this machine only, because the tailnet machine is not ready to serve it (not the one .env now names, not joined, or HTTPS off); Serve stays closed, and the message says what to do. A refused or failed change exits 1.`,
@@ -624,18 +635,20 @@ func runReach(ctx context.Context, mode string, o reachOptions, yes bool, id str
 		return err
 	}
 	target := reach.Target{Mode: mode, Domain: o.domain, ACMEEmail: o.acmeEmail}
-	if id == "" {
-		var err error
-		if id, err = newRequestID(); err != nil {
-			return err
-		}
-	} else if !requestIDPattern.MatchString(id) {
+	resent := id != ""
+	if resent && !requestIDPattern.MatchString(id) {
 		return fmt.Errorf("--request-id %q is not 32 lowercase hexadecimal characters", id)
-	} else if sent, err := answerResent(target, id, out); sent {
-		return err
 	}
 	key, err := readAuthKey(o.keyFile)
 	if err != nil {
+		return err
+	}
+	content := requestContent(target, o, key)
+	if resent {
+		if sent, err := answerResent(content, id, out); sent {
+			return err
+		}
+	} else if id, err = newRequestID(); err != nil {
 		return err
 	}
 	if !yes && !askTerminal() {
@@ -674,13 +687,30 @@ func runReach(ctx context.Context, mode string, o reachOptions, yes bool, id str
 	// journal's to recover, never a half-made change this command walks
 	// away from.
 	if err := answerFailure(e.Switch(context.WithoutCancel(ctx), reach.SwitchRequest{
-		ID: id, Target: target, JoinID: join.id, OldDigest: p.OldDigest, NewDigest: p.NewDigest,
+		ID: id, Target: target, JoinID: join.id, OldDigest: p.OldDigest, NewDigest: p.NewDigest, Content: content,
 	})); err != nil {
 		return err
 	}
 	fmt.Fprintln(out, "Done. This home is reached as:")
 	printWords(out, p.NewWords)
+	if p.Reopen {
+		printTailscale(ctx, e, out)
+	}
 	return nil
+}
+
+// printTailscale prints the tailnet machine as the engine sees it now
+// (Status): whether it is connected as the machine .env names, its HTTPS
+// certificates and whether Serve is open.
+func printTailscale(ctx context.Context, e stackEngine, out io.Writer) {
+	st, err := e.Status(ctx)
+	if err != nil || len(st.Health) == 0 {
+		return
+	}
+	fmt.Fprintln(out, "Tailscale now:")
+	for _, line := range st.Health {
+		fmt.Fprintln(out, "  "+line)
+	}
 }
 
 // showUnconfirmed is `cyfr reach <mode>` with no terminal to confirm on and

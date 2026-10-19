@@ -25,7 +25,7 @@ const watchdogChild = "CYFR_CMD_TEST_WATCHDOG_CHILD"
 // only, the tailnet's HTTPS off; resumed-local, recovery finishing a switch
 // whose start was on this machine only; waiting-join, a join that waits for
 // its approval until the command's context ends; failed-start, every start
-// failing;
+// failing; plain, the fake engine as it answers by default;
 // real-mismatch, the real engine over a docker whose tailnet machine is
 // another node (tailnetDocker); real-state, the real engine over the
 // stateDocker in CYFR_CMD_TEST_DOCKER_STATE, and real-state-kill the same,

@@ -25,23 +25,65 @@ import (
 	"github.com/sigstore/sigstore-go/pkg/root"
 )
 
-// renderEnvFile answers init's email question in the template: an email
-// uncomments the operators' line with it and leaves the setup token's
-// commented; no email sets the setup token's line. Nothing else changes.
-func TestRenderEnvFile(t *testing.T) {
-	tmpl := "CYFR_SECRET_KEY_BASE=\nCYFR_REACH=local\nCYFR_HOST=localhost\n# CYFR_PLATFORM_ADMIN_EMAILS=alice@example.com\n# CYFR_SETUP_TOKEN=\nCYFR_PORT=4000\n"
-	token := strings.Repeat("ab", 32)
+// envFile is a dotenv file's lines as a test reads them: its values as
+// reach.ReadEnvValues reads them (value), and the lines that name a key
+// (assignments), which a test counts on files with no value running
+// across lines.
+type envFile struct {
+	lines []string
+}
 
-	got := renderEnvFile(tmpl, "me@example.com", "")
-	if want := "CYFR_SECRET_KEY_BASE=\nCYFR_REACH=local\nCYFR_HOST=localhost\nCYFR_PLATFORM_ADMIN_EMAILS=me@example.com\n# CYFR_SETUP_TOKEN=\nCYFR_PORT=4000\n"; got != want {
-		t.Errorf("with an email:\n%s\nwant\n%s", got, want)
+func parseEnvFile(text string) *envFile { return &envFile{lines: strings.Split(text, "\n")} }
+
+func (f *envFile) String() string { return strings.Join(f.lines, "\n") }
+
+// assignments are the indexes of the lines that assign key, in the forms
+// reach.ReadEnvValues reads: `key=…`, `export key=…`, `key: …` and a bare
+// `key`.
+func (f *envFile) assignments(key string) []int {
+	var found []int
+	for i, line := range f.lines {
+		line = strings.TrimLeft(line, " \t")
+		if rest, ok := strings.CutPrefix(line, "export"); ok && rest != "" && (rest[0] == ' ' || rest[0] == '\t') {
+			line = strings.TrimLeft(rest, " \t")
+		}
+		if rest, ok := strings.CutPrefix(line, key); ok {
+			if rest = strings.TrimLeft(strings.TrimRight(rest, "\r"), " \t"); rest == "" || rest[0] == '=' || rest[0] == ':' {
+				found = append(found, i)
+			}
+		}
 	}
-	got = renderEnvFile(tmpl, "", token)
-	if want := "CYFR_SECRET_KEY_BASE=\nCYFR_REACH=local\nCYFR_HOST=localhost\n# CYFR_PLATFORM_ADMIN_EMAILS=alice@example.com\nCYFR_SETUP_TOKEN=" + token + "\nCYFR_PORT=4000\n"; got != want {
-		t.Errorf("with no email:\n%s\nwant\n%s", got, want)
-	}
-	if strings.Contains(got, "PORTA") {
-		t.Errorf("no porta variable belongs in .env:\n%s", got)
+	return found
+}
+
+// init's email question is answered in the .env it writes: an email is the
+// operators' setting and leaves the setup token unset; no email sets the
+// setup token. The template's commented lines that document both stay as
+// they are, and every other line of the template is kept.
+func TestNewEnvAnswersTheEmailQuestion(t *testing.T) {
+	const tmpl = "CYFR_SECRET_KEY_BASE=\nCYFR_REACH=local\nCYFR_HOST=localhost\n# CYFR_PLATFORM_ADMIN_EMAILS=alice@example.com\n# CYFR_SETUP_TOKEN=\nCYFR_PORT=4000\n"
+	path := writeTemp(t, ".env.example", tmpl)
+	token := strings.Repeat("ab", 32)
+	for _, c := range []struct{ email, token string }{{"me@example.com", ""}, {"", token}} {
+		text, _, _, err := newEnv(path, c.email, c.token)
+		if err != nil {
+			t.Fatal(err)
+		}
+		got := string(text)
+		values := envValuesOf(got)
+		admins, adminsSet := values[adminEmailVar]
+		tok, tokenSet := values[setupTokenVar]
+		if admins != c.email || adminsSet != (c.email != "") || tok != c.token || tokenSet != (c.token != "") {
+			t.Errorf("for email %q the .env holds operators %q (%v) and token %q (%v):\n%s", c.email, admins, adminsSet, tok, tokenSet, got)
+		}
+		for _, line := range []string{"CYFR_REACH=local\n", "# CYFR_PLATFORM_ADMIN_EMAILS=alice@example.com\n# CYFR_SETUP_TOKEN=\nCYFR_PORT=4000\n"} {
+			if !strings.Contains(got, line) {
+				t.Errorf("for email %q the template's %q moved:\n%s", c.email, line, got)
+			}
+		}
+		if strings.Contains(got, "PORTA") {
+			t.Errorf("no porta variable belongs in .env:\n%s", got)
+		}
 	}
 }
 
@@ -130,12 +172,13 @@ func readShippedTemplate(t *testing.T) string {
 	return string(raw)
 }
 
-// The shipped template documents every line init writes, so each lands on
-// it: the operators' line and the setup token's commented once each and
-// nowhere assigned, the local head's keys assigned once each, no key of
-// another mode's head assigned and no retired name anywhere. And each key
-// ensureStackKeys writes is assigned there once, empty, or with the value
-// init completes (the builds URL), so init writes every one on its own line.
+// The shipped template documents every setting init writes: the
+// operators' setting and the setup token's commented once each and
+// nowhere assigned, so the assignment init appends is the only one, the
+// local head's keys assigned once each, no key of another mode's head
+// assigned and no retired name anywhere. And each key stackKeys writes is
+// assigned there once, empty, or with the value init completes (the
+// builds URL), so the editor writes every one on its own line.
 func TestShippedTemplateCarriesInitsAnchors(t *testing.T) {
 	text := readShippedTemplate(t)
 	lines := strings.Split(text, "\n")
@@ -153,7 +196,7 @@ func TestShippedTemplateCarriesInitsAnchors(t *testing.T) {
 			t.Errorf("the shipped template has %d lines beginning %q, want 1", n, "# "+key+"=")
 		}
 		if n := count(key + "="); n != 0 {
-			t.Errorf("the shipped template assigns %s on %d lines; init writes it on its commented line", key, n)
+			t.Errorf("the shipped template assigns %s on %d lines; init appends its one assignment", key, n)
 		}
 	}
 
@@ -212,17 +255,53 @@ func (f *envFile) value(key string) (value string, assigned bool) {
 	return value, assigned
 }
 
-// set writes a key on its first assignment line and takes out every later
-// one, in any form, since compose reads the last: the value written is the
-// value read.
-func TestEnvFileSetLeavesOneAssignment(t *testing.T) {
-	f := parseEnvFile("A=1\nB=2\nexport A=3\nA: 4\n")
-	f.set("A", "9")
-	if got, want := f.String(), "A=9\nB=2\n"; got != want {
-		t.Errorf("set answered %q, want %q", got, want)
+// withStackKeys is text with the stack keys it lacks (stackKeys) written
+// through the engine's editor, as init writes an existing .env.
+func withStackKeys(text string) (string, []envChange, error) {
+	add, changes, err := stackKeys(envValuesOf(text))
+	if err != nil {
+		return "", nil, err
 	}
-	if v, _ := f.value("A"); v != "9" {
-		t.Errorf("A reads as %q after set, want 9", v)
+	return string(reach.EditEnv([]byte(text), add, nil)), changes, nil
+}
+
+// .env is written through the engine's editor, with the grammar it is read
+// with: a quoted value running across lines is one value, whose lines are
+// never read as assignments, whatever they look like, in the `=` and the
+// `:` form. init's minting and restore's bar keep it byte for byte and
+// write their own assignments.
+func TestEnvWritesKeepQuotedValuesWhole(t *testing.T) {
+	for _, form := range []string{"=", ": "} {
+		quoted := "CUSTOM='first\n" + corsOriginsVar + form + "literal quoted data\n" + restoreBarrier + form + "more quoted data\nlast'\n"
+		path := filepath.Join(t.TempDir(), ".env")
+		if err := os.WriteFile(path, []byte(quoted), 0600); err != nil {
+			t.Fatal(err)
+		}
+		before, err := reach.ReadEnvValues(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := ensureEnvFileKeys(path); err != nil {
+			t.Fatal(err)
+		}
+		after, err := reach.ReadEnvValues(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if after["CUSTOM"] != before["CUSTOM"] {
+			t.Errorf("init (%q form) changed the quoted value from %q to %q", form, before["CUSTOM"], after["CUSTOM"])
+		}
+		if cors, ok := after[corsOriginsVar]; !ok || cors != "" {
+			t.Errorf("init (%q form) did not write its own %s assignment (%q, %v)", form, corsOriginsVar, cors, ok)
+		}
+
+		barred := withBarrier([]byte(quoted), "/tmp/snapshot")
+		if !strings.HasPrefix(string(barred), quoted) {
+			t.Errorf("the bar (%q form) changed the quoted value's bytes: %q", form, barred)
+		}
+		if v := envValuesOf(string(barred)); v[restoreBarrier] != "/tmp/snapshot" || v["CUSTOM"] != before["CUSTOM"] {
+			t.Errorf("the bar (%q form) reads as %q beside %q", form, v[restoreBarrier], v["CUSTOM"])
+		}
 	}
 }
 
@@ -231,33 +310,26 @@ func TestEnvFileSetLeavesOneAssignment(t *testing.T) {
 // minted, then the local head written.
 func newEnvFromTemplate(t *testing.T, adminEmail, token string) (string, []envChange) {
 	t.Helper()
-	rendered := renderEnvFile(readShippedTemplate(t), adminEmail, token)
-	values := envValuesOf(rendered)
-	text, changes, err := ensureStackKeys(rendered, values)
+	text, changes, _, err := newEnv(writeTemp(t, ".env.example", readShippedTemplate(t)), adminEmail, token)
 	if err != nil {
 		t.Fatal(err)
 	}
-	f := parseEnvFile(text)
-	d, err := localHead(values)
-	if err != nil {
-		t.Fatal(err)
-	}
-	writeHead(f, d)
-	return f.String(), changes
+	return string(text), changes
 }
 
 // Every key init writes into the shipped .env.example lands on the line the
-// template documents it on, so nothing is appended below the template's
-// last section, and the result is the pair-consistent .env, reached from
-// this computer only, that the stack boots from.
+// template assigns it on, and the operators' setting, which the template
+// documents on a commented line, is the one line appended; the result is
+// the pair-consistent .env, reached from this computer only, that the
+// stack boots from.
 func TestRenderEnvFileShippedTemplate(t *testing.T) {
 	raw := readShippedTemplate(t)
 	got, changes := newEnvFromTemplate(t, "me@example.com", "")
-	if !strings.Contains(got, "\nCYFR_PLATFORM_ADMIN_EMAILS=me@example.com\n") || strings.Contains(got, "# CYFR_PLATFORM_ADMIN_EMAILS=") {
-		t.Errorf("shipped template: the operators' line is not set:\n%s", got)
+	if !strings.HasSuffix(got, "\nCYFR_PLATFORM_ADMIN_EMAILS=me@example.com\n") || !strings.Contains(got, "\n# CYFR_PLATFORM_ADMIN_EMAILS=") {
+		t.Errorf("shipped template: the operators' setting is not appended beside its documented line:\n%s", got)
 	}
-	if strings.Count(got, "\n") != strings.Count(raw, "\n") {
-		t.Errorf("keys were appended to the shipped template instead of set on its lines")
+	if strings.Count(got, "\n") != strings.Count(raw, "\n")+1 {
+		t.Errorf("keys were appended to the shipped template instead of set on its lines:\n%s", got)
 	}
 	var added []string
 	for _, c := range changes {
@@ -287,7 +359,7 @@ func TestRenderEnvFileShippedTemplate(t *testing.T) {
 	if boot.Head.Mode != reach.ModeLocal || boot.Origin != "http://localhost:4000" || !slices.Equal(boot.Head.Profiles, []string{buildsProfile}) {
 		t.Errorf("a project fresh from init is reached as %+v at %s, want local at http://localhost:4000 with builds on", boot.Head, boot.Origin)
 	}
-	if _, again, err := ensureStackKeys(got, envValuesOf(got)); err != nil || len(again) != 0 {
+	if _, again, err := stackKeys(envValuesOf(got)); err != nil || len(again) != 0 {
 		t.Errorf("a second init changes %v (%v)", again, err)
 	}
 }
@@ -324,9 +396,10 @@ func TestInitWritesThePublicURLItsAddressImplies(t *testing.T) {
 	}
 }
 
-// Given no email, init mints the setup token onto the template's line:
-// 64 lowercase hexadecimal characters, the operators' line left commented,
-// nothing appended, and the .env boots.
+// Given no email, init mints the setup token, 64 lowercase hexadecimal
+// characters, as the one line appended to the template, whose commented
+// lines documenting it and the operators' setting stay, and the .env
+// boots.
 func TestRenderEnvFileShippedTemplateWithoutAnEmail(t *testing.T) {
 	raw := readShippedTemplate(t)
 	token, err := generateHexKey()
@@ -338,11 +411,11 @@ func TestRenderEnvFileShippedTemplateWithoutAnEmail(t *testing.T) {
 	if v, _ := f.value(setupTokenVar); v != token || !setupTokenPattern.MatchString(v) {
 		t.Errorf("the setup token is %q, want %q", v, token)
 	}
-	if !strings.Contains(got, "\n"+"# "+adminEmailVar+"=\n") {
-		t.Errorf("the operators' line is not left commented:\n%s", got)
+	if !strings.Contains(got, "\n"+"# "+adminEmailVar+"=\n") || !strings.Contains(got, "\n# "+setupTokenVar+"=") {
+		t.Errorf("the documented lines are not left commented:\n%s", got)
 	}
-	if strings.Count(got, "\n") != strings.Count(raw, "\n") {
-		t.Errorf("the token was appended instead of set on its line")
+	if !strings.HasSuffix(got, "\n"+setupTokenVar+"="+token+"\n") || strings.Count(got, "\n") != strings.Count(raw, "\n")+1 {
+		t.Errorf("the token is not the one line appended:\n%s", got)
 	}
 	assertStackPairs(t, got, defaultServiceID)
 }
@@ -469,14 +542,12 @@ func TestEnsureStackKeysOverAnExistingEnv(t *testing.T) {
 			refusal: "LOCUS_RUNTIME_SERVICE_ID in .env is \"runtime\"",
 		},
 		{
-			name:    "a root assigned twice is refused",
-			body:    base + "CYFR_LOCUS_RUNTIME_ROOT=\nCYFR_LOCUS_RUNTIME_ROOT=" + root + "\n",
-			refusal: "CYFR_LOCUS_RUNTIME_ROOT is assigned on 2 lines of .env",
-		},
-		{
-			name:    "a root assigned twice in two forms is refused",
-			body:    base + "CYFR_LOCUS_RUNTIME_ROOT=" + root + "\nexport CYFR_LOCUS_RUNTIME_ROOT=" + root + "\n",
-			refusal: "CYFR_LOCUS_RUNTIME_ROOT is assigned on 2 lines of .env",
+			// The last assignment is the one compose and cyfr read.
+			name:    "a root assigned twice is its last assignment",
+			body:    base + builds + "CYFR_LOCUS_RUNTIME_ROOT=\nexport CYFR_LOCUS_RUNTIME_ROOT=" + root + "\n",
+			added:   []string{serviceKeyVar, corsOriginsVar, buildsKeyVar},
+			kept:    map[string]string{workerRootVar: root},
+			service: "wrk_locus",
 		},
 		{
 			// .env is read as compose reads it, so a pair spelled
@@ -530,7 +601,7 @@ func TestEnsureStackKeysOverAnExistingEnv(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got, changes, err := ensureStackKeys(tc.body, envValuesOf(tc.body))
+			got, changes, err := withStackKeys(tc.body)
 			if tc.refusal != "" {
 				if err == nil || !strings.Contains(err.Error(), tc.refusal) || !strings.HasSuffix(err.Error(), ".env is unchanged.") {
 					t.Fatalf("want a refusal saying %q, got %v", tc.refusal, err)
@@ -556,7 +627,7 @@ func TestEnsureStackKeysOverAnExistingEnv(t *testing.T) {
 					t.Errorf("%s changed to %q", key, v)
 				}
 			}
-			for key := range tc.kept {
+			for _, key := range added {
 				if len(f.assignments(key)) > 1 {
 					t.Errorf("%s is assigned twice", key)
 				}
