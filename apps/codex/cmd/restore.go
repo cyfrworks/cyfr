@@ -22,6 +22,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/cyfr/codex/internal/reach"
 	"github.com/cyfr/codex/internal/scaffold"
 	"github.com/spf13/cobra"
 )
@@ -39,13 +40,13 @@ var restoreCmd = &cobra.Command{
 	Long: `Put back a snapshot 'cyfr update' took (backups/<timestamp>/) and declare the restore, so the next start suspends every credential and method the backup carried until its owner re-enables it.
 
 1. Read the snapshot: snapshot.json must be there and say complete, and its parts must be exactly what the directory holds; an incomplete snapshot or a layout cyfr restore cannot invert refuses before anything stops.
-2. Stop this host's stack, timing each service.
+2. Take the stack's lock, finishing a change an interrupted command left; cancel a tailnet join that waits for approval; then stop this host's stack, timing each service.
 3. Bar the cell from starting: set CYFR_RESTORE_INCOMPLETE=<snapshot> in .env, synced, and remove the stopped cyfr container, so every start of the cyfr service until the restore is declared is a new container that reads the setting and refuses (the image's entrypoint), and 'cyfr up' and 'cyfr update' refuse it too.
 4. Put the snapshot's .env (with the setting) back and its docker-compose.yml beside the project's, and read the configuration they give cyfr: the setting must reach the cyfr service, the database, the storage root and every bind mounted under it must be where the snapshot can be put back, and the keyring must be the snapshot's. Only then does the snapshot's docker-compose.yml replace the project's, so the compose file in place delivers the setting at every step. A refusal here puts the two files back as they were, which lifts the bar.
 5. Read the cell's live slots offline, in the snapshot's image: a live member on any host refuses, whatever its release, since the database is shared by every member.
 6. Put the scaffold files back as they stood before the update (the keeper's seccomp profile among them), then the storage root, each bind mounted under it at its own source, then the database (the SQLite file, or the dump through pg_restore in the PostgreSQL server's own major).
 7. Declare the restore: bin/cyfr eval 'IO.puts("CYFR_RESTORE_ID=" <> Cyfr.Release.mark_restore())' in the snapshot's image, then take CYFR_RESTORE_INCOMPLETE out of .env. A restore that is not declared never starts.
-8. Start the stack and wait for every service to be healthy, unless --no-start.
+8. Forget the record of the machine's last tailnet join, since the snapshot's .env names its own node, then start the stack as every cyfr start runs, waiting for cyfr's health, unless --no-start.
 
 A failure leaves the stack stopped and says what to do; from step 3 until the declaration, a crash leaves it barred, and 'cyfr restore <snapshot>' run again puts every part back from the start. An object store (S3) is outside the snapshot: objects written since it was taken stay, and objects deleted since come back only from the bucket's own versioning.`,
 	GroupID: "server",
@@ -78,15 +79,18 @@ const (
 	// these constants to.
 	restoreBarrier = "CYFR_RESTORE_INCOMPLETE"
 
-	// restoreScript empties the database's public schema and loads the
-	// custom-format dump on stdin in one transaction: the dump is first
-	// turned into SQL whole, so a dump that does not read changes nothing,
-	// and a statement that fails rolls everything back.
-	restoreScript = `{ printf 'DROP SCHEMA IF EXISTS public CASCADE;\nCREATE SCHEMA public;\n'; pg_restore --no-owner --exit-on-error -f -; } >/tmp/cyfr-restore.sql && exec psql -X -q -v ON_ERROR_STOP=1 --single-transaction -o /dev/null -f /tmp/cyfr-restore.sql "$` + pgURLVariable + `"`
+	// restoreScript reads the database URL, the first line of its stdin,
+	// then empties the database's public schema and loads the
+	// custom-format dump, the rest of its stdin, in one transaction: the
+	// dump is first turned into SQL whole, so a dump that does not read
+	// changes nothing, and a statement that fails rolls everything back.
+	restoreScript = pgReadURL + `{ printf 'DROP SCHEMA IF EXISTS public CASCADE;\nCREATE SCHEMA public;\n'; pg_restore --no-owner --exit-on-error -f -; } >/tmp/cyfr-restore.sql && exec psql -X -q -v ON_ERROR_STOP=1 --single-transaction -o /dev/null -f /tmp/cyfr-restore.sql "$` + pgURLVariable + `"`
 )
 
 // snapshotParts are the parts a snapshot may hold, in the order update
-// writes them.
+// writes them. None holds the tailnet's state volume (tailscale_state) or
+// the reach engine's .cyfr/: a node's keys stay out of every backup, and a
+// restored home's node is validated against its .env before Serve opens.
 var snapshotParts = []string{"database", "database-wal", "storage", "scaffold", "keyring", ".env", "compose"}
 
 var restoreIDPattern = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
@@ -211,6 +215,22 @@ func readSnapshot(dir string) (*snapshotFiles, error) {
 	if !slices.ContainsFunc(keyringSettings, func(name string) bool { _, ok := s.keyring.value(name); return ok }) {
 		return nil, refuse("its keyring file holds neither %s", strings.Join(keyringSettings, " nor "))
 	}
+	env, err := os.ReadFile(s.path(".env"))
+	if err != nil {
+		return nil, refuse("its .env does not read (%v)", err)
+	}
+	// The snapshot's .env becomes the project's: like any .env a cyfr
+	// command runs compose under, it says how its home is reached and
+	// chooses none of compose's files, project or services.
+	snapshotEnv := parseEnvFile(string(env))
+	if mode, _ := snapshotEnv.value("CYFR_REACH"); mode == "" {
+		return nil, refuse("its .env does not set CYFR_REACH, so the home it puts back would not know how it is reached")
+	}
+	for _, line := range snapshotEnv.lines {
+		if name, _, ok := strings.Cut(strings.TrimLeft(line, " \t"), "="); ok && strings.HasPrefix(name, "COMPOSE_") {
+			return nil, refuse("its .env sets %s, which Docker Compose would read to choose the stack's files, project or services behind cyfr's back", name)
+		}
+	}
 	return s, nil
 }
 
@@ -307,15 +327,26 @@ func runRestore(ctx context.Context, snapshot string, start bool, out, errOut io
 	if _, ok := dotenvLine(restoreBarrier, dir); !ok {
 		return fmt.Errorf("%s cannot be restored: its path holds both quote characters or a line break, which .env cannot carry; nothing was changed", dir)
 	}
-	unlock, err := takeUpdateLock("restore")
+	// The lock an up, an update and a reach change hold too, held from
+	// before the first docker call to the restore's end; a change recovery
+	// could not finish leaves the stack in no known state, and the restore
+	// does nothing.
+	e, unlock, receipts, err := openLocked(ctx, "restore", out)
 	if err != nil {
 		return err
 	}
 	defer unlock()
+	if err := refuseUnfinished(receipts); err != nil {
+		return err
+	}
 	if _, err := exec.LookPath("docker"); err != nil {
 		return errors.New("cyfr restore needs docker on PATH to stop and start the stack; nothing was changed")
 	}
-	r := &restorer{updater: updater{ctx: ctx, out: out, errOut: errOut}, snap: snap, start: start}
+	head, err := e.Head()
+	if err != nil {
+		return engineFailure(err)
+	}
+	r := &restorer{updater: updater{ctx: ctx, out: out, errOut: errOut, engine: e, head: head}, snap: snap, start: start}
 	return r.run()
 }
 
@@ -343,7 +374,6 @@ func (r *restorer) run() error {
 	if m.StorageAdapter == "s3" {
 		fmt.Fprintln(r.out, s3OutsideSnapshot+" Objects written since the snapshot stay in the bucket.")
 	}
-	r.profiles = composeProfiles(".env")
 	ctx, cancel := context.WithTimeout(r.ctx, composeRunTimeout)
 	err := r.listRunning(ctx)
 	cancel()
@@ -352,6 +382,11 @@ func (r *restorer) run() error {
 	}
 	if err != nil {
 		return err
+	}
+	// A join waiting for approval would enrol the machine under the
+	// configuration the restore replaces, so it is cancelled first.
+	if err := r.engine.CancelWaitingJoin(r.ctx); err != nil {
+		return fmt.Errorf("cyfr restore could not cancel the tailnet join waiting for approval (%v); nothing was changed", engineFailure(err))
 	}
 
 	// From the stop on every child runs detached from ctx, and an
@@ -385,6 +420,12 @@ func (r *restorer) run() error {
 		return fmt.Errorf("The restore %s is declared, but %s could not be taken out of .env (%v); take that line out of .env and start the stack with 'cyfr up'", r.restoreID, restoreBarrier, err)
 	}
 	fmt.Fprintf(r.out, "Declared restore %s; the first start suspends every credential and method the backup carried until its owner re-enables it.\n", r.restoreID)
+	// The record of the machine's last tailnet join is this home's before
+	// the restore: the snapshot's .env names its own node, which the start
+	// validates against the machine before Serve opens.
+	if err := r.engine.ForgetJoin(); err != nil {
+		fmt.Fprintf(r.errOut, "Warning: the record of this machine's last tailnet join could not be removed (%v); 'cyfr reach tailnet' may offer it again.\n", engineFailure(err))
+	}
 	if !r.start {
 		fmt.Fprintln(r.out, "The stack is left stopped (--no-start); start it with 'cyfr up'.")
 		return nil
@@ -393,11 +434,16 @@ func (r *restorer) run() error {
 		return errors.New("cyfr restore was interrupted; every part is back and the restore is declared, and the stack is left stopped. Start it with 'cyfr up'")
 	}
 	fmt.Fprintf(r.out, "Starting release %s...\n", m.Version)
-	if err := r.docker(context.WithoutCancel(r.ctx), nil, nil, r.composeArgs("up", "-d", "--wait", "--wait-timeout", upWaitSeconds)...); err != nil {
+	err = r.updater.start("restore")
+	if local := (startedLocally{}); errors.As(err, &local) {
+		fmt.Fprintf(r.out, "\nRestored the snapshot of release %s taken at %s; restore %s. It runs on this machine alone.\n", m.Version, m.TakenAt, r.restoreID)
+		return err
+	}
+	if err != nil {
 		ctx, cancel := r.detached(stopTimeout)
 		defer cancel()
 		message := fmt.Sprintf("The restored stack did not start (%v); it is left stopped", err)
-		if stopErr := r.docker(ctx, nil, nil, r.composeArgs("stop")...); stopErr != nil {
+		if stopErr := r.composeDocker(ctx, "stop"); stopErr != nil {
 			message += fmt.Sprintf(" (docker compose stop failed: %v; stop it with 'cyfr down')", stopErr)
 		}
 		return fmt.Errorf("%s.\nThe restore %s is declared and the next start takes it; read 'cyfr logs', fix the cause and run 'cyfr up'", message, r.restoreID)
@@ -474,7 +520,7 @@ func (r *restorer) raiseBarrier() error {
 	}
 	ctx, cancel := r.detached(composeRunTimeout)
 	defer cancel()
-	if err := r.docker(ctx, nil, nil, r.composeArgs("rm", "--force", "cyfr")...); err != nil {
+	if err := r.composeDocker(ctx, "rm", "--force", "cyfr"); err != nil {
 		return fmt.Errorf("docker compose rm cyfr failed (%v), so the stopped cyfr container could start without the bar", err)
 	}
 	return nil
@@ -509,7 +555,10 @@ func (r *restorer) putConfigFiles() error {
 	if err := writeDurable(".env", withBarrier(env, r.snap.dir), 0600); err != nil {
 		return err
 	}
-	r.profiles = composeProfiles(".env")
+	// From here every compose call runs under the snapshot's head.
+	if r.head, err = r.engine.Head(); err != nil {
+		return engineFailure(err)
+	}
 	compose, err := os.ReadFile(r.snap.path("compose"))
 	if err != nil {
 		return err
@@ -545,13 +594,16 @@ var (
 
 // stagedComposeArgs are the compose arguments that read the configuration
 // the staged compose file gives once it is docker-compose.yml: the file set
-// compose loads by default, the staged file in docker-compose.yml's place.
-// The set is refused when it is not determined: another main file name
-// beside docker-compose.yml, which compose would load instead or warn
-// over, or more than one override file, of which compose picks one by an
-// order the restore does not own.
+// compose loads by default, the staged file in docker-compose.yml's place,
+// under the complete selection every compose call of the engine makes (the
+// project, the directory and the snapshot's head's profiles). The set is
+// refused when it is not determined: another main file name beside
+// docker-compose.yml, which compose would load instead or warn over, or
+// more than one override file, of which compose picks one by an order the
+// restore does not own. The engine resolves the default set by the same
+// rule.
 func (r *restorer) stagedComposeArgs(args ...string) ([]string, error) {
-	files := []string{"compose", "-f", stagedCompose}
+	files := []string{"compose", "-p", composeProject("."), "-f", stagedCompose}
 	for _, name := range composeMainFiles {
 		if _, err := os.Lstat(name); err == nil && name != "docker-compose.yml" {
 			return nil, fmt.Errorf("the project holds %s beside docker-compose.yml, so docker compose may not load the docker-compose.yml cyfr restore puts back; remove one of them", name)
@@ -571,7 +623,28 @@ func (r *restorer) stagedComposeArgs(args ...string) ([]string, error) {
 		return nil, fmt.Errorf("the project holds the override files %s, of which docker compose loads one; keep one", strings.Join(overrides, ", "))
 	}
 	files = append(files, "--project-directory", ".")
-	return slices.Concat(files, profileArgs(r.profiles), args), nil
+	for _, profile := range r.head.Profiles {
+		files = append(files, "--profile", profile)
+	}
+	return slices.Concat(files, args), nil
+}
+
+// composeProject is the project name docker compose gives the directory dir
+// when none is named, the one the engine passes every compose call: its
+// base name lowercased, without the characters outside [a-z0-9_-] and the
+// leading ones that are neither a letter nor a digit.
+func composeProject(dir string) string {
+	abs, err := filepath.Abs(dir)
+	if err != nil {
+		abs = dir
+	}
+	var name strings.Builder
+	for _, c := range strings.ToLower(filepath.Base(abs)) {
+		if 'a' <= c && c <= 'z' || '0' <= c && c <= '9' || c == '_' || c == '-' {
+			name.WriteRune(c)
+		}
+	}
+	return strings.TrimLeft(name.String(), "_-")
 }
 
 // putBackHeld writes the held configuration files back.
@@ -598,7 +671,9 @@ func (r *restorer) putBackHeld() error {
 	if err := os.Remove(stagedCompose); err != nil && !errors.Is(err, fs.ErrNotExist) {
 		errs = append(errs, err)
 	}
-	r.profiles = composeProfiles(".env")
+	if head, err := r.engine.Head(); err == nil {
+		r.head = head
+	}
 	return errors.Join(errs...)
 }
 
@@ -612,16 +687,10 @@ func (r *restorer) readRestoredConfig() error {
 	refuse := func(format string, args ...any) error {
 		return fmt.Errorf("The snapshot does not fit the configuration its docker-compose.yml and .env give cyfr: %s", fmt.Sprintf(format, args...))
 	}
-	// COMPOSE_FILE names other files than docker-compose.yml, which the
-	// restore puts back, so what it reads would not be what starts.
-	for _, env := range []func() (string, bool){
-		func() (string, bool) { return os.LookupEnv("COMPOSE_FILE") },
-		func() (string, bool) { return envValue(".env", "COMPOSE_FILE") },
-	} {
-		if value, ok := env(); ok && value != "" {
-			return refuse("COMPOSE_FILE=%s names the compose files docker compose reads, so the docker-compose.yml cyfr restore puts back may not be the one that starts; unset it", value)
-		}
-	}
+	// No COMPOSE_FILE reaches this read or any other compose call: the
+	// engine's runner takes every COMPOSE_* out of cyfr's environment, the
+	// engine refuses one in the project's .env and readSnapshot one in the
+	// snapshot's, so what is read is what starts.
 	ctx, cancel := r.detached(composeRunTimeout)
 	defer cancel()
 	staged, err := r.stagedComposeArgs("config", "--format", "json")
@@ -684,6 +753,9 @@ func (r *restorer) readRestoredConfig() error {
 		c.adapter = "postgres"
 		if c.pgURL = env("CYFR_DATABASE_URL"); c.pgURL == "" {
 			return refuse("CYFR_DATABASE=postgres without CYFR_DATABASE_URL")
+		}
+		if strings.ContainsAny(c.pgURL, "\r\n") {
+			return refuse("its CYFR_DATABASE_URL holds a line break, which no database URL holds")
 		}
 		r.secrets = append(r.secrets, c.pgURL)
 		if parsed, err := url.Parse(c.pgURL); err == nil && parsed.User != nil {
@@ -1042,7 +1114,7 @@ func (r *restorer) restoreSQLite() error {
 // restorePostgres loads the snapshot's dump into the configured database in
 // the server-major image, in one transaction that first empties the public
 // schema, so tables a later release added go with the rest; the URL
-// reaches the container through its environment.
+// reaches the container on its standard input, the line before the dump.
 func (r *restorer) restorePostgres() error {
 	dump, err := os.Open(r.snap.path("database"))
 	if err != nil {
@@ -1052,12 +1124,14 @@ func (r *restorer) restorePostgres() error {
 	ctx, cancel := r.detached(dumpTimeout)
 	defer cancel()
 	var stderr bytes.Buffer
-	c := exec.CommandContext(ctx, "docker", "run", "--rm", "-i", "--network", "host", "-e", pgURLVariable, r.pgImage(), "sh", "-c", restoreScript)
-	c.SysProcAttr = ownProcessGroup()
-	c.WaitDelay = 10 * time.Second
-	c.Env = append(os.Environ(), pgURLVariable+"="+r.config.pgURL)
-	c.Stdin, c.Stdout, c.Stderr = dump, io.Discard, &stderr
-	err = c.Run()
+	res, err := r.engine.Docker().Run(ctx, reach.Call{
+		Args:     []string{"run", "--rm", "-i", "--network", "host", r.pgImage(), "sh", "-c", restoreScript},
+		Deadline: callDeadline(ctx),
+		Stdin:    io.MultiReader(pgURLInput(r.config.pgURL), dump),
+		Stdout:   io.Discard,
+		Stderr:   &stderr,
+	})
+	err = callFailure(res, err)
 	if stderr.Len() > 0 {
 		io.WriteString(r.errOut, r.redact(stderr.String()))
 	}
@@ -1072,7 +1146,11 @@ func (r *restorer) restorePostgres() error {
 func (r *restorer) declare() error {
 	ctx, cancel := r.detached(composeRunTimeout)
 	defer cancel()
-	output, err := r.dockerOutput(ctx, nil, r.offlineEval(markRestoreExpr)...)
+	args, err := r.offlineEval(ctx, markRestoreExpr)
+	output := ""
+	if err == nil {
+		output, err = r.dockerOutput(ctx, nil, args...)
+	}
 	if err != nil {
 		return fmt.Errorf("Cyfr.Release.mark_restore/0 failed in release %s's image (%v)", r.snap.manifest.Version, err)
 	}

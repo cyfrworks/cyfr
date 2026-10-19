@@ -5,6 +5,7 @@ package cmd
 
 import (
 	"bufio"
+	"context"
 	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
@@ -14,21 +15,20 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
-	"net/http"
-	"net/url"
+	"maps"
 	"os"
 	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
-	"time"
 
 	"github.com/cyfr/codex/internal/config"
-	"github.com/cyfr/codex/internal/prompt"
+	"github.com/cyfr/codex/internal/reach"
 	"github.com/cyfr/codex/internal/release"
 	"github.com/cyfr/codex/internal/scaffold"
 	"github.com/cyfr/codex/internal/version"
@@ -186,6 +186,13 @@ func (f *envFile) set(key, value string) {
 	}
 }
 
+// unset takes every uncommented assignment of key out.
+func (f *envFile) unset(key string) {
+	for _, i := range slices.Backward(f.assignments(key)) {
+		f.lines = slices.Delete(f.lines, i, i+1)
+	}
+}
+
 // envChange names a setting cyfr init wrote into .env, and how it came by
 // its value. It never carries the value.
 type envChange struct {
@@ -207,11 +214,13 @@ func refuseEnv(format string, args ...any) error {
 //
 // The runtime root and the locus-runtime service key are one pair: with neither, both
 // are minted; with the root alone, the key is derived from it for
-// LOCUS_RUNTIME_SERVICE_ID (wrk_locus when .env names none). Builds are on by
-// default, and the builds URL and key are one pair too, because cyfr
-// refuses to boot with one and not the other: a URL gets a minted key, a
-// key gets the compose service's URL, neither gets both. A URL assigned
-// empty with no key is builds turned off, and is left so.
+// LOCUS_RUNTIME_SERVICE_ID (wrk_locus when .env names none). The builds URL
+// and key are one pair too, because cyfr refuses to boot with one and not
+// the other: a URL gets a minted key and a key gets the compose service's
+// URL. Builds are on when .env.example's URL is there; no URL and no key
+// is builds turned off, whether the URL is assigned empty or absent (the
+// reach head omits it when builds are off, and a switch removes its line),
+// and is left so.
 func ensureStackKeys(text string) (string, []envChange, error) {
 	f := parseEnvFile(text)
 	for _, key := range stackVars {
@@ -275,19 +284,19 @@ func ensureStackKeys(text string) (string, []envChange, error) {
 		}
 	}
 
-	// The browser CORS allowlist: assigned, whatever it says stands.
-	// Unassigned, config.exs's wildcard stands, and a release with sign-in
-	// configured refuses to boot rather than let any origin make
-	// credentialed cross-origin requests, so init assigns the empty
-	// allowlist — cyfr serves Prism, the API, /mcp and the tinctures from
-	// its own origin, and behind Caddy they are still that one origin, so
-	// no browser client of this stack is cross-origin. Never a wildcard.
+	// The browser CORS allowlist: assigned, whatever it says stands, and
+	// assigned empty it is the empty allowlist. Unassigned, the list the
+	// application's own configuration sets stands, so init assigns the
+	// empty allowlist itself — cyfr serves Prism, the API, /mcp and the
+	// tinctures from its own origin, and behind the proxy of a tailnet or
+	// public home they are still that one origin, so no browser client of
+	// this stack is cross-origin. Never a wildcard.
 	if _, assigned := f.value(corsOriginsVar); !assigned {
 		f.set(corsOriginsVar, "")
 		changes = append(changes, envChange{corsOriginsVar, "empty: no cross-origin browser client"})
 	}
 
-	buildsURL, urlAssigned := f.value(buildsURLVar)
+	buildsURL, _ := f.value(buildsURLVar)
 	buildsKey, _ := f.value(buildsKeyVar)
 	switch {
 	case buildsURL != "" && buildsKey != "":
@@ -298,14 +307,6 @@ func ensureStackKeys(text string) (string, []envChange, error) {
 	case buildsKey != "":
 		f.set(buildsURLVar, defaultBuildsURL)
 		changes = append(changes, envChange{buildsURLVar, defaultBuildsURL})
-	case urlAssigned:
-		// Assigned empty with no key: the operator turned builds off.
-	default:
-		f.set(buildsURLVar, defaultBuildsURL)
-		changes = append(changes, envChange{buildsURLVar, defaultBuildsURL})
-		if err := mint(buildsKeyVar, "generated", generateHexKey); err != nil {
-			return "", nil, err
-		}
 	}
 
 	return f.String(), changes, nil
@@ -446,6 +447,9 @@ func refuseUndeclaredRestore() error {
 
 func init() {
 	initCmd.Flags().Bool("force", false, "Re-fetch docker-compose.yml, Caddyfile and keeper.seccomp.json and regenerate cyfr.yaml even if they already exist (never replaces .env or .env.example)")
+	initCmd.Flags().String("reach", "", "How a new home is reached: local, tailnet or public (asked on a terminal; local otherwise)")
+	addReachFlags(initCmd)
+	initCmd.Flags().Bool("no-pull", false, "Do not pull the stack's images")
 	rootCmd.AddCommand(initCmd)
 	rootCmd.AddCommand(upCmd)
 	rootCmd.AddCommand(downCmd)
@@ -453,253 +457,558 @@ func init() {
 
 var initCmd = &cobra.Command{
 	Use:     "init",
-	Short:   "Scaffold a CYFR project and mint the stack's keys into .env",
+	Short:   "Scaffold a CYFR project, choose how it is reached and mint the stack's keys into .env",
 	GroupID: "server",
-	Long: `Set up a CYFR project in the current directory so you can start the self-hosted stack with "cyfr up": cyfr (the one endpoint), locus-runtime (the runtime that runs components), locus-builds (the builds service), locus-backends (stdio MCP servers) and, in TLS mode, caddy.
+	Long: `Set up a CYFR project in the current directory so you can start the self-hosted stack with "cyfr up": cyfr (the one endpoint), locus-runtime (the runtime that runs components), locus-builds (the builds service), locus-backends (stdio MCP servers) and the proxy of the way the home is reached, tailscale for a tailnet home and caddy for a public one.
 
-Downloads docker-compose.yml, Caddyfile, keeper.seccomp.json (the locus-runtime service's seccomp profile), .env.example, the services' own env examples and the bundled scaffold (configuration/component/tincture/integration guides, wit/ definitions, the aqua/ soul, roles and scrolls) for this CLI's version; generates cyfr.yaml, .gitignore, and the data/aqua directories; writes .env from .env.example, prompting for the hostname, an allowed sign-in email, a TLS y/n choice, and (if TLS) a Let's Encrypt email; and pulls the images the stack starts. Run with --no-interactive to take the defaults silently.
+Downloads docker-compose.yml, Caddyfile, keeper.seccomp.json (the locus-runtime service's seccomp profile), .env.example, the services' own env examples and the bundled scaffold (configuration/component/tincture/integration guides, wit/ definitions, the aqua/ soul, roles and scrolls) for this CLI's version; generates cyfr.yaml, .gitignore, and the data/aqua directories; writes .env from .env.example; and pulls the images the stack starts (--no-pull skips the pulls).
 
-.env gets the stack's keys: CYFR_SECRET_KEY_BASE, CYFR_LOCUS_BACKENDS_KEY, the runtime root CYFR_LOCUS_RUNTIME_ROOT with the LOCUS_RUNTIME_KEY derived from it for LOCUS_RUNTIME_SERVICE_ID (wrk_locus unless .env names another), and CYFR_LOCUS_BUILDS_URL=http://locus-builds:4100 with a minted CYFR_LOCUS_BUILDS_KEY, so builds are on. It also assigns CYFR_CORS_ALLOWED_ORIGINS the empty allowlist, since cyfr serves Prism, the API, /mcp and the tinctures from its own origin and no browser client of this stack is cross-origin — a release with sign-in configured refuses to boot on the wildcard default, which init never writes.
+How the home is reached is asked first: 1, your devices via Tailscale (the default); 2, a public domain via Caddy; 3, this computer only. Then your email, as the home's administrator. .env is written for this computer only, with every key; then a tailnet home joins your tailnet (the link it prints approves the machine, or --tailscale-auth-key-file joins it without one) and the stopped stack is switched to the chosen mode, as 'cyfr reach' switches it. A join that fails or is cancelled leaves the home reached from this computer only, and 'cyfr reach <mode>' changes it later. With --no-interactive nothing is asked: the home is local, unless --reach tailnet comes with --tailscale-auth-key-file, or --reach public with --domain (--acme-email optional). Given no email, init mints a setup token into .env (CYFR_SETUP_TOKEN) and 'cyfr setup link' prints the link that makes you the administrator from this machine.
 
-Re-running in an existing project is safe: docker-compose.yml, Caddyfile, cyfr.yaml and .env.example are kept if they already exist, and .env gains only the keys it lacks. A key already in .env is never rewritten. A service key without the root it derives from, or one that does not derive from the root beside it, is refused with a sentence naming the fix, and nothing is written. A builds URL set empty with no key is builds turned off, and stays off. Use --force to re-fetch docker-compose.yml, Caddyfile and keeper.seccomp.json and regenerate cyfr.yaml.`,
+.env gets the stack's keys: CYFR_SECRET_KEY_BASE, CYFR_LOCUS_BACKENDS_KEY, the runtime root CYFR_LOCUS_RUNTIME_ROOT with the LOCUS_RUNTIME_KEY derived from it for LOCUS_RUNTIME_SERVICE_ID (wrk_locus unless .env names another), and CYFR_LOCUS_BUILDS_URL=http://locus-builds:4100 with a minted CYFR_LOCUS_BUILDS_KEY, so builds are on. It also assigns CYFR_CORS_ALLOWED_ORIGINS the empty allowlist, since cyfr serves Prism, the API, /mcp and the tinctures from its own origin and no browser client of this stack is cross-origin; an allowlist .env assigns is the one that stands.
+
+Re-running in an existing project is safe: docker-compose.yml, Caddyfile, cyfr.yaml and .env.example are kept if they already exist, and .env gains only the keys it lacks. A key already in .env is never rewritten, and neither is how the home is reached, which 'cyfr reach' changes; a .env that does not say how its home is reached (no CYFR_REACH) is refused, and nothing is written. A service key without the root it derives from, or one that does not derive from the root beside it, is refused with a sentence naming the fix, and nothing is written. No builds URL and no builds key is builds turned off, and stays off. Use --force to re-fetch docker-compose.yml, Caddyfile and keeper.seccomp.json and regenerate cyfr.yaml.`,
 	Example: `  cyfr init
+  cyfr init --no-interactive --reach public --domain cyfr.example.com
   cyfr init --force
   cyfr up`,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		force, _ := cmd.Flags().GetBool("force")
-		releaseBuild := version.Version != "dev" && version.Version != ""
-
-		// An existing .env gains the keys it lacks before anything else
-		// happens, so a .env init refuses leaves the whole project as it was.
-		envExisted := fileExists(".env")
-		var envChanges []envChange
-		if envExisted {
-			changes, err := ensureEnvFileKeys(".env")
-			if err != nil {
-				return err
-			}
-			envChanges = changes
+		ctx := cmd.Context()
+		if ctx == nil {
+			ctx = context.Background()
 		}
+		o := initOptions{reachOptions: reachFlags(cmd)}
+		o.force, _ = cmd.Flags().GetBool("force")
+		o.noPull, _ = cmd.Flags().GetBool("no-pull")
+		o.mode, _ = cmd.Flags().GetString("reach")
+		return runInit(ctx, o, cmd.OutOrStdout(), cmd.ErrOrStderr())
+	},
+}
 
-		// On --force, drop the tarball's deploy files so scaffold.Download
-		// re-extracts them, and regenerate cyfr.yaml. .env / .env.example are
-		// deliberately never removed. A file that cannot be removed would be
-		// kept as it is by the download, which skips an existing file, so
-		// init refuses after the download, naming what is on disk then.
-		var removed, unremoved []string
-		if force {
-			for _, name := range append(forceRefetched(releaseBuild), "cyfr.yaml") {
-				switch err := os.Remove(name); {
-				case err == nil:
-					removed = append(removed, name)
-				case !errors.Is(err, fs.ErrNotExist):
-					unremoved = append(unremoved, fmt.Sprintf("%s (%v)", name, err))
-				}
+// initOptions are cyfr init's flags; mode is --reach, empty when it is not
+// given.
+type initOptions struct {
+	reachOptions
+	force, noPull bool
+	mode          string
+}
+
+// reachChoice is the mode init applies to a new home, with its inputs.
+type reachChoice struct {
+	reachOptions
+	mode string
+}
+
+// runInit is `cyfr init` in the working directory.
+func runInit(ctx context.Context, o initOptions, out, errOut io.Writer) error {
+	releaseBuild := version.Version != "dev" && version.Version != ""
+
+	// What init cannot complete is refused before anything is written: a
+	// .env that does not say how its home is reached, whose cure is
+	// `cyfr reach <mode>`, and reach flags that make no home.
+	envExisted := fileExists(".env")
+	if envExisted {
+		if err := refuseExistingReach(".env", o); err != nil {
+			return err
+		}
+	}
+	if err := checkInitReach(o); err != nil {
+		return err
+	}
+	key, err := readAuthKey(o.keyFile)
+	if err != nil {
+		return err
+	}
+
+	// An existing .env gains the keys it lacks before anything else
+	// happens, so a .env init refuses leaves the whole project as it was.
+	var envChanges []envChange
+	if envExisted {
+		changes, err := ensureEnvFileKeys(".env")
+		if err != nil {
+			return err
+		}
+		envChanges = changes
+	}
+
+	// On --force, drop the tarball's deploy files so scaffold.Download
+	// re-extracts them, and regenerate cyfr.yaml. .env / .env.example are
+	// deliberately never removed. A file that cannot be removed would be
+	// kept as it is by the download, which skips an existing file, so
+	// init refuses after the download, naming what is on disk then.
+	var removed, unremoved []string
+	if o.force {
+		for _, name := range append(forceRefetched(releaseBuild), "cyfr.yaml") {
+			switch err := os.Remove(name); {
+			case err == nil:
+				removed = append(removed, name)
+			case !errors.Is(err, fs.ErrNotExist):
+				unremoved = append(unremoved, fmt.Sprintf("%s (%v)", name, err))
 			}
 		}
+	}
 
-		// Download scaffold files: guides, wit/, aqua/, and the deploy
-		// files (docker-compose.yml, Caddyfile, .env.example and the
-		// services' env examples). Idempotent — existing files kept. No-op
-		// for dev builds (version.Version=="dev"/""). A download that fails
-		// warns and init goes on; a release that fails verification stops
-		// it (scaffoldDownloadFailure).
-		if err := downloadScaffold(version.Version); err != nil {
-			if stop := scaffoldDownloadFailure(version.Version, err, os.Stderr); stop != nil {
-				// What --force removed is named here too: the refusal
-				// extracts nothing, so it is missing until init runs again.
-				if state := forceRemovalState(unremoved, removed); state != "" {
-					return fmt.Errorf("%w.\n%s Fix the cause and run 'cyfr init --force' again", stop, state)
-				}
-				return stop
+	// Download scaffold files: guides, wit/, aqua/, and the deploy
+	// files (docker-compose.yml, Caddyfile, .env.example and the
+	// services' env examples). Idempotent — existing files kept. No-op
+	// for dev builds (version.Version=="dev"/""). A download that fails
+	// warns and init goes on; a release that fails verification stops
+	// it (scaffoldDownloadFailure).
+	if err := downloadScaffold(version.Version); err != nil {
+		if stop := scaffoldDownloadFailure(version.Version, err, errOut); stop != nil {
+			// What --force removed is named here too: the refusal
+			// extracts nothing, so it is missing until init runs again.
+			if state := forceRemovalState(unremoved, removed); state != "" {
+				return fmt.Errorf("%w.\n%s Fix the cause and run 'cyfr init --force' again", stop, state)
 			}
+			return stop
 		}
+	}
 
-		composeExists := fileExists("docker-compose.yml")
-		caddyfileExists := fileExists("Caddyfile")
+	composeExists := fileExists("docker-compose.yml")
+	caddyfileExists := fileExists("Caddyfile")
 
-		// Generate cyfr.yaml (project config) if absent
-		cyfrConfig := `name: my-cyfr-project
+	// Generate cyfr.yaml (project config) if absent
+	cyfrConfig := `name: my-cyfr-project
 port: 4000
 host: localhost
 database_path: ./data/cyfr.db
 `
-		configCreated := false
-		if !fileExists("cyfr.yaml") {
-			if err := os.WriteFile("cyfr.yaml", []byte(cyfrConfig), 0644); err != nil {
-				return fmt.Errorf("Failed to write cyfr.yaml: %w", err)
-			}
-			configCreated = true
+	configCreated := false
+	if !fileExists("cyfr.yaml") {
+		if err := os.WriteFile("cyfr.yaml", []byte(cyfrConfig), 0644); err != nil {
+			return fmt.Errorf("Failed to write cyfr.yaml: %w", err)
 		}
-		if len(unremoved) > 0 {
-			return forceRemovalRefusal(unremoved, removed)
+		configCreated = true
+	}
+	if len(unremoved) > 0 {
+		return forceRemovalRefusal(unremoved, removed)
+	}
+
+	// Generate .env from the .env.example template laid down by the
+	// scaffold, for this computer only, with the stack's keys minted into
+	// it. If .env.example isn't present — a dev build, where the scaffold
+	// download is a no-op — skip it; the dev-build notice below tells the
+	// user where to get it.
+	envCreated := false
+	tokenMinted := false
+	sel := existingSelection(".env")
+	choice := reachChoice{mode: reach.ModeLocal}
+	var head reach.Head
+	if fileExists(".env.example") && !envExisted {
+		tmpl, err := os.ReadFile(".env.example")
+		if err != nil {
+			return fmt.Errorf("Failed to read .env.example: %w", err)
 		}
-
-		// Generate .env from the .env.example template laid down by the scaffold,
-		// with the stack's keys minted into it. If .env.example isn't present —
-		// a dev build, where the scaffold download is a no-op — skip it; the
-		// dev-build notice below tells the user where to get it.
-		envCreated := false
-		adminEmailConfigured := false
-		envExampleExists := fileExists(".env.example")
-		if envExampleExists && !envExisted {
-			tmpl, err := os.ReadFile(".env.example")
-			if err != nil {
-				return fmt.Errorf("Failed to read .env.example: %w", err)
-			}
-
-			host := "localhost"
-			adminEmail := ""
-			acmeEmail := ""
-			tls := false
-			if prompt.IsInteractive(flagNoInteractive) {
-				r := bufio.NewReader(os.Stdin)
-				host = ask(r, "Hostname clients use to reach this server", "localhost")
-				fmt.Println("CYFR authorizes by membership — list your email as the platform admin so you can use this instance.")
-				adminEmail = ask(r, "Your platform-admin email (required to access this instance; blank = no one is authorized yet)", "")
-				// Default to TLS only when there's a real hostname to put a cert on.
-				tlsDefault := "n"
-				if host != "localhost" {
-					tlsDefault = "y"
-				}
-				tls = strings.HasPrefix(strings.ToLower(ask(r, "Will this deploy be reachable on a public hostname with TLS via Caddy? (y/n)", tlsDefault)), "y")
-				if tls {
-					acmeEmail = ask(r, "Email for Let's Encrypt TLS certificates (CADDY_ACME_EMAIL)", "")
-				}
-			}
-			adminEmailConfigured = adminEmail != ""
-
-			text, changes, err := ensureStackKeys(renderEnvFile(string(tmpl), host, adminEmail, acmeEmail, tls))
-			if err != nil {
-				return err
-			}
-			if err := writeFileAtomic(".env", []byte(text), 0600); err != nil {
-				return fmt.Errorf("Failed to write .env: %w", err)
-			}
-			envCreated = true
-			envChanges = changes
+		r := bufio.NewReader(askInput)
+		interactive := askTerminal()
+		choice = chooseReach(o, interactive, r, out)
+		adminEmail := ""
+		if interactive {
+			fmt.Fprintln(out, "CYFR authorizes by membership: your email makes you this home's administrator.")
+			adminEmail = ask(r, out, "Your email (blank: set the administrator up from this machine with 'cyfr setup link')", "")
 		}
+		// No operator email: the first-run setup claims the home through
+		// the link `cyfr setup link` prints, whose capability this is.
+		token := ""
+		if adminEmail == "" {
+			if token, err = generateHexKey(); err != nil {
+				return fmt.Errorf("generate %s: %w", setupTokenVar, err)
+			}
+			tokenMinted = true
+		}
+		text, changes, err := ensureStackKeys(renderEnvFile(string(tmpl), adminEmail, token))
+		if err != nil {
+			return err
+		}
+		f := parseEnvFile(text)
+		d, err := localHead(f)
+		if err != nil {
+			return err
+		}
+		writeHead(f, d)
+		if err := writeFileAtomic(".env", []byte(f.String()), 0600); err != nil {
+			return fmt.Errorf("Failed to write .env: %w", err)
+		}
+		envCreated = true
+		envChanges = changes
+		head = d.Head
+		sel = selection{profiles: head.Profiles, port: head.Port}
+	}
 
-		// Warm-pull the images docker-compose.yml starts with this project's
-		// profiles, read from the .env just written (cyfr, and cyfr-locus
-		// for locus-runtime and locus-backends, the same image serving
-		// locus-builds with builds on, and caddy in TLS mode). A release's
-		// compose names each as <repository>:<version>@<digest>, and
-		// `docker pull` of such a reference pulls by the digest, so the
-		// warm pull fetches exactly the images the verified scaffold names.
-		// Falls back to the published cyfr image on a dev build (no
-		// compose).
-		images := imagesFromCompose("docker-compose.yml", composeProfiles(".env"))
+	// Generate .gitignore if it doesn't already exist (idempotent), before
+	// the engine makes .cyfr/.
+	gitignoreCreated := false
+	if _, err := os.Stat(".gitignore"); os.IsNotExist(err) {
+		if err := os.WriteFile(".gitignore", []byte(projectGitignore), 0644); err != nil {
+			return fmt.Errorf("Failed to write .gitignore: %w", err)
+		}
+		gitignoreCreated = true
+	}
+
+	// Create directories. These are the bind-mount sources in
+	// docker-compose.yml, so they must exist even on a dev build where the
+	// scaffold tarball is a no-op. The container's entrypoint seeds aqua/
+	// from /app/aqua-defaults on first start if it's empty.
+	_ = os.MkdirAll("data", 0755)
+	_ = os.MkdirAll("aqua", 0755)
+
+	// The mode the home was asked for, applied as a switch of its stopped
+	// stack; a refusal or a join that ends without the machine leaves it
+	// local, and init reports that last.
+	var reachErr error
+	switch {
+	case envCreated && choice.mode != reach.ModeLocal:
+		applied, err := applyInitReach(ctx, choice, key, out)
+		if err != nil {
+			reachErr = fmt.Errorf("%w\nThis home is set up to be reached from this computer only; 'cyfr reach %s' changes that", err, choice.mode)
+		} else {
+			head = applied
+			sel = selection{profiles: head.Profiles, port: head.Port}
+		}
+	case !envCreated && !envExisted && o.mode != "":
+		reachErr = fmt.Errorf("--reach %s was not applied: there is no .env.example to write .env from", o.mode)
+	}
+
+	// Warm-pull the images docker-compose.yml starts with the head's
+	// profiles (cyfr, and cyfr-locus for locus-runtime and locus-backends,
+	// the same image serving locus-builds with builds on, and the proxy
+	// of a tailnet or public home). A release's compose names each as
+	// <repository>:<version>@<digest>, and `docker pull` of such a
+	// reference pulls by the digest, so the warm pull fetches exactly the
+	// images the verified scaffold names. Falls back to the published cyfr
+	// image on a dev build (no compose). The pulls run outside the lock
+	// and change nothing of the stack, so they are no call of the engine.
+	if !o.noPull {
+		images := imagesFromCompose("docker-compose.yml", sel.profiles)
 		if len(images) == 0 {
 			images = []string{"ghcr.io/cyfrworks/cyfr:latest"}
 		}
 		for _, img := range images {
-			fmt.Printf("Pulling %s ...\n", img)
+			fmt.Fprintf(out, "Pulling %s ...\n", img)
 			pull := exec.Command("docker", "pull", img)
-			pull.Stdout = os.Stdout
-			pull.Stderr = os.Stderr
+			pull.Stdout = out
+			pull.Stderr = errOut
 			if err := pull.Run(); err != nil {
-				fmt.Fprintf(os.Stderr, "Warning: failed to pull %s: %v (continuing anyway)\n", img, err)
+				fmt.Fprintf(errOut, "Warning: failed to pull %s: %v (continuing anyway)\n", img, err)
 			}
 		}
+	}
 
-		// Generate .gitignore if it doesn't already exist (idempotent)
-		gitignoreCreated := false
-		if _, err := os.Stat(".gitignore"); os.IsNotExist(err) {
-			if err := os.WriteFile(".gitignore", []byte(projectGitignore), 0644); err != nil {
-				return fmt.Errorf("Failed to write .gitignore: %w", err)
-			}
-			gitignoreCreated = true
+	// Add local context: the loopback listener the CLI talks to.
+	cfg, err := config.Load()
+	if err != nil {
+		cfg = &config.Config{
+			CurrentContext: "local",
+			Contexts:       map[string]*config.Context{},
 		}
+	}
+	cfg.Contexts["local"] = &config.Context{URL: "http://127.0.0.1:" + strconv.Itoa(sel.port)}
+	cfg.CurrentContext = "local"
+	if err := cfg.Save(); err != nil {
+		fmt.Fprintf(errOut, "warning: could not save CLI config: %v\n", err)
+	}
 
-		// Create directories. These are the bind-mount sources in
-		// docker-compose.yml, so they must exist even on a dev build where the
-		// scaffold tarball is a no-op. The container's entrypoint seeds aqua/
-		// from /app/aqua-defaults on first start if it's empty.
-		_ = os.MkdirAll("data", 0755)
-		_ = os.MkdirAll("aqua", 0755)
-
-		// Add local context
-		cfg, err := config.Load()
-		if err != nil {
-			cfg = &config.Config{
-				CurrentContext: "local",
-				Contexts:       map[string]*config.Context{},
-			}
-		}
-		cfg.Contexts["local"] = &config.Context{URL: "http://127.0.0.1:4000"}
-		cfg.CurrentContext = "local"
-		if err := cfg.Save(); err != nil {
-			fmt.Fprintf(os.Stderr, "warning: could not save CLI config: %v\n", err)
-		}
-
-		fmt.Println("CYFR project initialized.")
-		if releaseBuild {
-			if composeExists {
-				fmt.Println("  docker-compose.yml ready (cyfr, locus-runtime, locus-builds, locus-backends; caddy via the `tls` profile)")
-			}
-			if caddyfileExists {
-				fmt.Println("  Caddyfile ready")
-			}
-			fmt.Printf("  %s downloaded\n", strings.Join(scaffold.Guides, " / "))
-			fmt.Println("  wit/ interface definitions downloaded")
-			fmt.Println("  aqua/ soul, roles and scrolls downloaded")
-		}
-		if configCreated {
-			fmt.Println("  cyfr.yaml created")
-		} else {
-			fmt.Println("  cyfr.yaml already exists (skipped).")
-		}
-		switch {
-		case envCreated:
-			fmt.Printf("  .env created from .env.example with %s — do not commit\n", describeChanges(envChanges))
-		case len(envChanges) > 0:
-			fmt.Printf("  .env: added %s; nothing else changed\n", describeChanges(envChanges))
-		case envExisted:
-			fmt.Println("  .env already has every key the stack needs (unchanged).")
-		}
-		if slices.Contains(composeProfiles(".env"), buildsProfile) {
-			fmt.Println("  builds are on: `cyfr up` starts locus-builds (README.md, \"Builds\", says how to turn them off)")
-		}
-		if gitignoreCreated {
-			fmt.Println("  .gitignore created")
-		} else {
-			fmt.Println("  .gitignore already exists (skipped).")
-		}
-		fmt.Println("  data/, aqua/ created")
-
-		if !releaseBuild {
-			fmt.Println("")
-			fmt.Println("⚠  dev build — docker-compose.yml, Caddyfile, .env.example and the bundled")
-			fmt.Println("   scaffold (guides, wit/, aqua/) are only fetched for released")
-			fmt.Println("   versions. Run the server from source with `mix phx.server`, or copy those")
-			fmt.Println("   files from a repo checkout.")
-		}
-		if envCreated && !adminEmailConfigured {
-			fmt.Println("")
-			fmt.Println("⚠  CYFR_PLATFORM_ADMIN_EMAILS is unset in .env — no one is authorized to use this instance yet.")
-			fmt.Println("   Set CYFR_PLATFORM_ADMIN_EMAILS=you@example.com in .env so you (the operator) can sign in.")
-		}
-		fmt.Println("")
+	fmt.Fprintln(out, "CYFR project initialized.")
+	if releaseBuild {
 		if composeExists {
-			fmt.Println("Next: run 'cyfr up' to start the stack.")
-			fmt.Println("  Prism:           https://<your CYFR_HOST>/  (TLS mode)  or  http://localhost:4000/  (direct)")
-		} else {
-			fmt.Println("Next: get docker-compose.yml + Caddyfile (a released CLI or a repo checkout), then 'cyfr up'.")
+			fmt.Fprintln(out, "  docker-compose.yml ready (cyfr, locus-runtime, locus-builds, locus-backends; tailscale for a tailnet home, caddy for a public one)")
+		}
+		if caddyfileExists {
+			fmt.Fprintln(out, "  Caddyfile ready")
+		}
+		fmt.Fprintf(out, "  %s downloaded\n", strings.Join(scaffold.Guides, " / "))
+		fmt.Fprintln(out, "  wit/ interface definitions downloaded")
+		fmt.Fprintln(out, "  aqua/ soul, roles and scrolls downloaded")
+	}
+	if configCreated {
+		fmt.Fprintln(out, "  cyfr.yaml created")
+	} else {
+		fmt.Fprintln(out, "  cyfr.yaml already exists (skipped).")
+	}
+	switch {
+	case envCreated:
+		fmt.Fprintf(out, "  .env created from .env.example with %s — do not commit\n", describeChanges(envChanges))
+	case len(envChanges) > 0:
+		fmt.Fprintf(out, "  .env: added %s; nothing else changed\n", describeChanges(envChanges))
+	case envExisted:
+		fmt.Fprintln(out, "  .env already has every key the stack needs (unchanged).")
+	}
+	if slices.Contains(sel.profiles, buildsProfile) {
+		fmt.Fprintln(out, "  builds are on: `cyfr up` starts locus-builds (README.md, \"Builds\", says how to turn them off)")
+	}
+	if gitignoreCreated {
+		fmt.Fprintln(out, "  .gitignore created")
+	} else {
+		fmt.Fprintln(out, "  .gitignore already exists (skipped).")
+	}
+	fmt.Fprintln(out, "  data/, aqua/ created")
+	if envCreated {
+		fmt.Fprintln(out, "  This home is reached as:")
+		for _, line := range reach.Describe(head).Sentences() {
+			fmt.Fprintln(out, "    "+line)
+		}
+	}
+
+	if !releaseBuild {
+		fmt.Fprintln(out, "")
+		fmt.Fprintln(out, "⚠  dev build — docker-compose.yml, Caddyfile, .env.example and the bundled")
+		fmt.Fprintln(out, "   scaffold (guides, wit/, aqua/) are only fetched for released")
+		fmt.Fprintln(out, "   versions. Run the server from source with `mix phx.server`, or copy those")
+		fmt.Fprintln(out, "   files from a repo checkout.")
+	}
+	if tokenMinted {
+		fmt.Fprintln(out, "")
+		fmt.Fprintln(out, "No email was given, so .env holds a setup token (CYFR_SETUP_TOKEN) and no administrator yet.")
+		fmt.Fprintln(out, "  After 'cyfr up', run 'cyfr setup link' and open the link it prints on this machine to become this home's administrator.")
+	}
+	fmt.Fprintln(out, "")
+	if composeExists {
+		fmt.Fprintln(out, "Next: run 'cyfr up' to start the stack.")
+	} else {
+		fmt.Fprintln(out, "Next: get docker-compose.yml + Caddyfile (a released CLI or a repo checkout), then 'cyfr up'.")
+	}
+	if envCreated {
+		fmt.Fprintln(out, "  Prism:           "+reach.Describe(head).Address+"/")
+	} else {
+		fmt.Fprintln(out, "  'cyfr reach status' shows how this home is reached.")
+	}
+	return reachErr
+}
+
+// refuseExistingReach refuses an existing .env whose reach init does not
+// set: one without CYFR_REACH, with reach_missing's sentence, and reach
+// flags, since init chooses how a new home is reached and `cyfr reach`
+// changes an existing one's. A --reach naming the mode .env holds is no
+// change and passes.
+func refuseExistingReach(path string, o initOptions) error {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return fmt.Errorf("read %s: %w", path, err)
+	}
+	current, _ := parseEnvFile(string(data)).value("CYFR_REACH")
+	if current == "" {
+		return refusalError{reach.Refuse("reach_missing", nil)}
+	}
+	if (o.mode != "" && o.mode != current) || o.domain != "" || o.acmeEmail != "" || o.keyFile != "" || o.hostname != "" {
+		return fmt.Errorf(".env says this home is reached as %s, and cyfr init leaves how an existing home is reached alone. Nothing was changed. Run 'cyfr reach <mode>' to change it", current)
+	}
+	return nil
+}
+
+// checkInitReach refuses reach flags that make no home before anything is
+// written: a mode outside the three, an option without --reach or for
+// another mode, and a domain or email Derive refuses.
+func checkInitReach(o initOptions) error {
+	switch o.mode {
+	case "":
+		if o.domain != "" || o.acmeEmail != "" || o.keyFile != "" || o.hostname != "" {
+			return errors.New("--domain, --acme-email, --tailscale-auth-key-file and --hostname say how a new home is reached only beside --reach: --reach public with a domain and an email, --reach tailnet with a key file and a name. Nothing was changed")
 		}
 		return nil
-	},
+	case reach.ModeLocal, reach.ModeTailnet, reach.ModePublic:
+	default:
+		return fmt.Errorf("--reach takes local, tailnet or public; %q is none of them. Nothing was changed", o.mode)
+	}
+	if err := checkTailnetOptions(o.mode, o.reachOptions); err != nil {
+		return err
+	}
+	if o.mode == reach.ModePublic && o.domain == "" {
+		// Asked on a terminal; local otherwise (chooseReach).
+		return nil
+	}
+	return checkTarget(reach.Target{Mode: o.mode, Domain: o.domain, ACMEEmail: o.acmeEmail})
+}
+
+// checkTarget refuses a target Derive refuses for its own inputs: an
+// option outside its mode, a domain or an email that is not one. The port
+// and the builds URL are the template's here, and the tailnet machine a
+// stand-in, since only the target's own inputs are checked.
+func checkTarget(t reach.Target) error {
+	_, err := reach.Derive(t, reach.Current{Port: 4000}, &reach.Join{Name: "cyfr.tailnet.ts.net", NodeID: "nCheck"})
+	return engineFailure(err)
+}
+
+// chooseReach decides the mode of a new home. On a terminal the reach
+// question comes first, unless --reach answers it, then what the mode
+// needs that its flags do not give: a tailnet machine's name, a public
+// domain and its certificate email. Without one the home is local unless
+// --reach tailnet comes with --tailscale-auth-key-file or --reach public
+// with --domain.
+func chooseReach(o initOptions, interactive bool, r *bufio.Reader, out io.Writer) reachChoice {
+	c := reachChoice{reachOptions: o.reachOptions, mode: o.mode}
+	if !interactive {
+		switch {
+		case c.mode == reach.ModeTailnet && c.keyFile == "":
+			fmt.Fprintln(out, "--reach tailnet joins a tailnet with no one to approve the machine only with --tailscale-auth-key-file, so this home is reached from this computer only; 'cyfr reach tailnet' joins it later.")
+			c.mode = reach.ModeLocal
+		case c.mode == reach.ModePublic && c.domain == "":
+			fmt.Fprintln(out, "--reach public needs --domain, so this home is reached from this computer only; 'cyfr reach public --domain <your domain>' changes that.")
+			c.mode = reach.ModeLocal
+		case c.mode == "":
+			c.mode = reach.ModeLocal
+		}
+		return c
+	}
+	if c.mode == "" {
+		fmt.Fprintln(out, "How will you reach this home?")
+		fmt.Fprintln(out, "  1. My devices, via Tailscale (recommended)")
+		fmt.Fprintln(out, "  2. A public domain, via Caddy")
+		fmt.Fprintln(out, "  3. This computer only")
+		for c.mode == "" {
+			answer, more := askLine(r, out, "Choose 1, 2 or 3", "1")
+			switch answer {
+			case "1":
+				c.mode = reach.ModeTailnet
+			case "2":
+				c.mode = reach.ModePublic
+			case "3":
+				c.mode = reach.ModeLocal
+			default:
+				if !more {
+					c.mode = reach.ModeLocal
+				}
+				fmt.Fprintln(out, "Answer 1, 2 or 3.")
+			}
+		}
+	}
+	switch c.mode {
+	case reach.ModeTailnet:
+		if c.hostname == "" {
+			fmt.Fprintln(out, "This machine's name on your tailnet is part of the home's address, and certificate names are public: anyone can read it in the certificate logs.")
+			c.hostname = ask(r, out, "Machine name", "cyfr")
+		}
+	case reach.ModePublic:
+		for c.domain == "" {
+			answer, more := askLine(r, out, "The domain this home is reached at (its DNS names this machine)", "")
+			if err := checkTarget(reach.Target{Mode: c.mode, Domain: answer}); answer != "" && err != nil {
+				fmt.Fprintln(out, err)
+			} else {
+				c.domain = answer
+			}
+			if c.domain == "" && !more {
+				fmt.Fprintln(out, "No domain was given, so this home is reached from this computer only; 'cyfr reach public --domain <your domain>' changes that.")
+				c.mode = reach.ModeLocal
+				return c
+			}
+		}
+		for asking := c.acmeEmail == ""; asking; {
+			answer, more := askLine(r, out, "Email for the certificate authority's notices (blank for none)", "")
+			err := checkTarget(reach.Target{Mode: c.mode, Domain: c.domain, ACMEEmail: answer})
+			if answer == "" || err == nil {
+				c.acmeEmail = answer
+				break
+			}
+			fmt.Fprintln(out, err)
+			asking = more
+		}
+	}
+	return c
+}
+
+// applyInitReach applies the mode chosen for a new home as an engine
+// switch of its stopped stack, the tailnet joined first for tailnet, and
+// answers the head it switched to. Any failure leaves the home as .env
+// holds it, local.
+func applyInitReach(ctx context.Context, c reachChoice, key []byte, out io.Writer) (reach.Head, error) {
+	id, err := newRequestID()
+	if err != nil {
+		return reach.Head{}, err
+	}
+	e, unlock, _, err := openLocked(ctx, "init", out)
+	if err != nil {
+		return reach.Head{}, err
+	}
+	defer unlock()
+	target := reach.Target{Mode: c.mode, Domain: c.domain, ACMEEmail: c.acmeEmail}
+	p, joinID, err := previewTarget(ctx, e, target, id, c.reachOptions, key, out)
+	if err != nil {
+		return reach.Head{}, err
+	}
+	rec, err := e.Switch(context.WithoutCancel(ctx), reach.SwitchRequest{
+		ID: id, Target: target, JoinID: joinID, OldDigest: p.OldDigest, NewDigest: p.NewDigest,
+	})
+	if err != nil {
+		return reach.Head{}, engineFailure(err)
+	}
+	if err := receiptFailure(rec); err != nil {
+		return reach.Head{}, err
+	}
+	if rec.FinalHead != nil {
+		return *rec.FinalHead, nil
+	}
+	return p.New, nil
+}
+
+// localHead is the head a new home's .env starts from, reached from this
+// computer only, its port and builds URL the ones f holds.
+func localHead(f *envFile) (reach.Derivation, error) {
+	cur := reach.Current{Port: 4000}
+	if text, _ := f.value("CYFR_PORT"); text != "" {
+		port, err := strconv.Atoi(text)
+		if err != nil {
+			return reach.Derivation{}, refusalError{reach.Refuse("reach_setting_invalid", map[string]string{"key": "CYFR_PORT", "value": text})}
+		}
+		cur.Port = port
+	}
+	cur.BuildsURL, _ = f.value(buildsURLVar)
+	d, err := reach.Derive(reach.Target{Mode: reach.ModeLocal}, cur, nil)
+	return d, engineFailure(err)
+}
+
+// writeHead writes a derivation's reach keys into f: each assignment on its
+// key's line (envFile.set), and every assignment of a key the head holds
+// no value for taken out.
+func writeHead(f *envFile, d reach.Derivation) {
+	for _, key := range slices.Sorted(maps.Keys(d.Assignments)) {
+		f.set(key, d.Assignments[key])
+	}
+	for _, key := range d.Removals {
+		f.unset(key)
+	}
+}
+
+// selection is what init pulls and points the CLI at: the compose profiles
+// a home's reach selects and its loopback listener's port.
+type selection struct {
+	profiles []string
+	port     int
+}
+
+// existingSelection is the selection of the .env at path as it stands, the
+// port 4000 where it names none that reads.
+func existingSelection(path string) selection {
+	sel := selection{port: 4000}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return sel
+	}
+	f := parseEnvFile(string(data))
+	mode, _ := f.value("CYFR_REACH")
+	buildsURL, _ := f.value(buildsURLVar)
+	if mode != "" {
+		sel.profiles = reach.Profiles(mode, buildsURL)
+	}
+	if text, _ := f.value("CYFR_PORT"); text != "" {
+		if port, err := strconv.Atoi(text); err == nil && port >= 1 && port <= 65535 {
+			sel.port = port
+		}
+	}
+	return sel
 }
 
 // projectGitignore is the .gitignore `cyfr init` writes into a project that
 // has none: the runtime state under data/, the snapshots `cyfr update`
-// takes under backups/ (each holds the keyring and the database) and the
-// environment files.
+// takes under backups/ (each holds the keyring and the database), the
+// reach engine's state under .cyfr/ and the environment files.
 const projectGitignore = `# CYFR project — all runtime state (every athanor's data and
 # components, the database, caches) lives under data/.
 /data/
 # Snapshots cyfr update takes: each holds the keyring and the database.
 /backups/
+# How the home is reached, as cyfr keeps it: the stack's lock, the change
+# in flight, its receipts and the tailnet's serve configuration.
+/.cyfr/
 .env
 .env.local
 .env.*.local
@@ -763,216 +1072,193 @@ func startsWith(svc *yaml.Node, profiles []string) bool {
 // service (docker-compose.yml's `locus-builds`).
 const buildsProfile = "locus-builds"
 
-// composeProfiles returns the Docker Compose profiles the project in the
-// current directory runs with, read from the dotenv file at envPath: `tls`
-// when CYFR_BEHIND_PROXY is true (Caddy fronts cyfr), and `locus-builds`
-// when CYFR_LOCUS_BUILDS_URL names the compose builds service (host
-// `locus-builds`). Every command that starts, stops or pulls the stack
-// passes them.
-func composeProfiles(envPath string) []string {
-	var profiles []string
-	if envFlagTrue(envPath, "CYFR_BEHIND_PROXY") {
-		profiles = append(profiles, "tls")
-	}
-	if raw, ok := envValue(envPath, "CYFR_LOCUS_BUILDS_URL"); ok {
-		if u, err := url.Parse(raw); err == nil && u.Hostname() == buildsProfile {
-			profiles = append(profiles, buildsProfile)
-		}
-	}
-	return profiles
+// ask prompts on out and reads a line from r, answering def for an empty
+// line or the end of the input.
+func ask(r *bufio.Reader, out io.Writer, question, def string) string {
+	answer, _ := askLine(r, out, question, def)
+	return answer
 }
 
-// profileArgs renders profiles as `docker compose` arguments.
-func profileArgs(profiles []string) []string {
-	var args []string
-	for _, p := range profiles {
-		args = append(args, "--profile", p)
-	}
-	return args
-}
-
-// ask prompts on stdout and reads a line from r, returning def if the input is empty.
-func ask(r *bufio.Reader, question, def string) string {
+// askLine is ask, and whether the input may hold another line: false at
+// its end, where asking again reads nothing.
+func askLine(r *bufio.Reader, out io.Writer, question, def string) (string, bool) {
 	if def != "" {
-		fmt.Printf("%s [%s]: ", question, def)
+		fmt.Fprintf(out, "%s [%s]: ", question, def)
 	} else {
-		fmt.Printf("%s: ", question)
+		fmt.Fprintf(out, "%s: ", question)
 	}
-	line, _ := r.ReadString('\n')
+	line, err := r.ReadString('\n')
 	line = strings.TrimSpace(line)
 	if line == "" {
-		return def
+		return def, err == nil
 	}
-	return line
+	return line, err == nil
 }
 
-// The template lines renderEnvFile rewrites, matched by prefix as the
-// template spells them: three assignments, and the operators' line, which
-// the template ships commented and init uncomments. A line the template
-// lacks is one init cannot write, so each must appear in .env.example
-// exactly once (TestRenderEnvFileShippedTemplate).
-const (
-	hostAnchor        = "CYFR_HOST="
-	behindProxyAnchor = "CYFR_BEHIND_PROXY="
-	acmeEmailAnchor   = "CADDY_ACME_EMAIL="
-	adminEmailsAnchor = "# CYFR_PLATFORM_ADMIN_EMAILS="
-)
-
-// renderEnvFile fills in a .env.example template with the answers to init's
-// prompts: sets CYFR_HOST, sets CADDY_ACME_EMAIL if non-empty, flips
-// CYFR_BEHIND_PROXY based on the TLS choice, and (if adminEmail is
-// non-empty) un-comments and sets CYFR_PLATFORM_ADMIN_EMAILS. Everything
-// else is left as-is; the keys are ensureStackKeys'.
-// TestRenderEnvFileShippedTemplate binds these anchors, and the keys, to
-// the real .env.example — a template edit that strands one fails there,
-// not on a user's first `cyfr up`.
-func renderEnvFile(template, host, adminEmail, acmeEmail string, tls bool) string {
-	behindProxy := "false"
-	if tls {
-		behindProxy = "true"
+// renderEnvFile fills in a .env.example template with the answer to init's
+// email question: the operators' line, which the template ships
+// commented, set to adminEmail; or, given no email, the setup token's line,
+// shipped commented too, set to setupToken. Everything else is left as it
+// is; the keys are ensureStackKeys' and the reach keys writeHead's.
+// TestShippedTemplateCarriesInitsAnchors binds both lines, and the keys,
+// to the real .env.example, so each lands on the line that documents it.
+func renderEnvFile(template, adminEmail, setupToken string) string {
+	f := parseEnvFile(template)
+	if adminEmail != "" {
+		f.set(adminEmailVar, adminEmail)
 	}
-	lines := strings.Split(template, "\n")
-	for i, line := range lines {
-		switch {
-		case strings.HasPrefix(line, hostAnchor):
-			lines[i] = hostAnchor + host
-		case strings.HasPrefix(line, behindProxyAnchor):
-			lines[i] = behindProxyAnchor + behindProxy
-		case acmeEmail != "" && strings.HasPrefix(line, acmeEmailAnchor):
-			lines[i] = acmeEmailAnchor + acmeEmail
-		case adminEmail != "" && strings.HasPrefix(line, adminEmailsAnchor):
-			lines[i] = strings.TrimPrefix(adminEmailsAnchor, "# ") + adminEmail
-		}
+	if setupToken != "" {
+		f.set(setupTokenVar, setupToken)
 	}
-	return strings.Join(lines, "\n")
+	return f.String()
 }
 
 var upCmd = &cobra.Command{
 	Use:     "up",
-	Short:   "Start the CYFR stack (cyfr, locus-runtime, locus-builds, locus-backends; caddy in TLS mode)",
+	Short:   "Start the CYFR stack (cyfr, locus-runtime, locus-builds, locus-backends; the proxy of a tailnet or public home)",
 	GroupID: "server",
-	Long: `Start the CYFR stack with Docker Compose in detached mode. Requires a docker-compose.yml in the current directory (run 'cyfr init' first).
+	Long: `Start the CYFR stack with Docker Compose in detached mode, as .env says the home is reached. Requires a docker-compose.yml in the current directory (run 'cyfr init' first).
 
-The stack is five services: cyfr (the one endpoint: Prism, API, MCP, tinctures), locus-runtime (the runtime that runs components), locus-builds (the builds service that compiles components and tinctures), locus-backends (the backends service that runs the stdio/npx MCP servers an athanor adds on Prism's "MCP Servers" page, each backend under a uid and a memory bound of its own; cyfr tells it what to run) and caddy (TLS and reverse proxy).
+The stack is cyfr (the one endpoint: Prism, API, MCP, tinctures), locus-runtime (the runtime that runs components), locus-builds (the builds service that compiles components and tinctures), locus-backends (the backends service that runs the stdio/npx MCP servers an athanor adds on Prism's "MCP Servers" page, each backend under a uid and a memory bound of its own; cyfr tells it what to run), and the proxy of the way the home is reached: tailscale for a tailnet home (Tailscale Serve, HTTPS at the machine's tailnet name) and caddy for a public one (TLS on :80/:443).
 
-cyfr, locus-runtime and locus-backends always start. locus-builds starts when CYFR_LOCUS_BUILDS_URL in .env names it (http://locus-builds:4100, which 'cyfr init' writes; --profile locus-builds). caddy starts when CYFR_BEHIND_PROXY=true in .env (--profile tls) and fronts cyfr on :80/:443; otherwise cyfr is reachable directly at http://localhost:4000.`,
+cyfr, locus-runtime and locus-backends always start. locus-builds starts when CYFR_LOCUS_BUILDS_URL in .env names it (http://locus-builds:4100, which 'cyfr init' writes). CYFR_REACH in .env chooses the proxy: none for local, where Prism is at http://localhost:<CYFR_PORT>, tailscale for tailnet and caddy for public. cyfr up first takes the stack's lock and finishes a change an interrupted command left, then refuses a .env whose settings contradict how the home is reached, with the sentence the server would refuse it with, before anything starts. A tailnet home is served on the tailnet only once the machine's tailnet identity is the one .env names. A start that fails says why, with the server's own refusal from its log when it gave one.`,
 	Example: `  cyfr up`,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		// Registry auth is per-user: `cyfr login` (device flow) after
-		// `cyfr context add`, and cyfr.run mints push tokens via the identity
-		// probe. There are no static registry credentials to configure.
-
-		// `cyfr init` writes CYFR_BEHIND_PROXY=true into .env on TLS-yes;
-		// .env's settings select the caddy and locus-builds profiles here.
-		if err := refuseUndeclaredRestore(); err != nil {
-			return err
+		ctx := cmd.Context()
+		if ctx == nil {
+			ctx = context.Background()
 		}
-		// The start holds the lock an update and a restore hold while they
-		// stop the stack and copy or put back its data (takeUpdateLock), so
-		// neither runs inside a start, nor a start inside them. An interrupt
-		// waits for docker compose to end, so the lock goes with the start.
-		unlock, err := takeUpdateLock("up")
-		var held lockHeldError
-		if errors.As(err, &held) {
-			return fmt.Errorf("Another cyfr up, update or restore holds %s (%s), so the stack must not start now: an update or a restore stops the stack while it copies or puts back the data, and a start holds the lock until docker compose has started it. Wait for it to end; if none is running, remove the file and run 'cyfr up' again", held.path, held.holder)
-		}
-		if err != nil {
-			return err
-		}
-		interrupts := make(chan os.Signal, 1)
-		signal.Notify(interrupts, os.Interrupt, syscall.SIGTERM)
-		release := sync.OnceFunc(func() {
-			signal.Stop(interrupts)
-			unlock()
-		})
-		defer release()
-		// Asked again under the lock: a restore raises the bar only while
-		// it holds the lock, so the answer now stands until the start ends.
-		if err := refuseUndeclaredRestore(); err != nil {
-			return err
-		}
-		profiles := composeProfiles(".env")
-		tls := slices.Contains(profiles, "tls")
-		composeArgs := append(append([]string{"compose"}, profileArgs(profiles)...), "up", "-d")
-
-		c := exec.Command("docker", composeArgs...)
-		c.Stdout = os.Stdout
-		c.Stderr = os.Stderr
-		runErr := c.Run()
-		release()
-		select {
-		case <-interrupts:
-			return errors.New("cyfr up was interrupted; docker compose has ended and the lock is released. Run 'docker compose ps' to see what started")
-		default:
-		}
-		if runErr != nil {
-			return fmt.Errorf("Failed to start: %w", runErr)
-		}
-		fmt.Println("CYFR server started.")
-
-		// Health check wait. Readiness, not liveness: /api/health answers 200
-		// the moment the endpoint is up, long before the DB, cache and
-		// registries are — the same distinction the Docker HEALTHCHECK draws.
-		cfg, err := config.Load()
-		if err != nil {
-			cfg = config.DefaultForLocal()
-		}
-		healthURL := cfg.CurrentURL() + "/api/health/ready"
-
-		fmt.Printf("Waiting for server at %s ...\n", cfg.CurrentURL())
-		client := &http.Client{Timeout: 2 * time.Second}
-		deadline := time.Now().Add(30 * time.Second)
-		healthy := false
-		for time.Now().Before(deadline) {
-			resp, err := client.Get(healthURL)
-			if err == nil {
-				resp.Body.Close()
-				if resp.StatusCode == http.StatusOK {
-					healthy = true
-					break
-				}
-			}
-			time.Sleep(1 * time.Second)
-		}
-
-		if healthy {
-			fmt.Println("Server is ready.")
-			if tls {
-				fmt.Println("  Prism:           https://<your CYFR_HOST>/   (via Caddy on :80/:443)")
-			} else {
-				fmt.Println("  Prism:           http://localhost:4000/   (direct mode)")
-			}
-			fmt.Println("")
-			fmt.Println("Optional next steps:")
-			fmt.Println("  cyfr login      authenticate this CLI")
-			fmt.Println("  Then in Prism's \"MCP Servers\" page, click \"Add stdio server\"")
-			fmt.Println("  to run stdio/npx MCP servers (filesystem, github, …) for AQUA.")
-		} else {
-			fmt.Fprintf(os.Stderr, "Warning: server did not become healthy within 30s. Check 'docker compose logs'.\n")
-		}
-		return nil
+		return runUp(ctx, cmd.OutOrStdout())
 	},
+}
+
+// runUp is `cyfr up` in the working directory.
+func runUp(ctx context.Context, out io.Writer) error {
+	// Registry auth is per-user: `cyfr login` (device flow) after
+	// `cyfr context add`, and cyfr.run mints push tokens via the identity
+	// probe. There are no static registry credentials to configure.
+	if err := refuseUndeclaredRestore(); err != nil {
+		return err
+	}
+	// The start holds the lock an update, a restore and a reach change
+	// hold while they stop the stack, so none of them runs inside a start,
+	// nor a start inside them. An interrupt is noted, not acted on: the
+	// start runs to its end under the lock, and the lock goes with it.
+	e, unlock, _, err := openLocked(ctx, "up", out)
+	if err != nil {
+		return err
+	}
+	interrupts := make(chan os.Signal, 1)
+	signal.Notify(interrupts, os.Interrupt, syscall.SIGTERM)
+	release := sync.OnceFunc(func() {
+		signal.Stop(interrupts)
+		unlock()
+	})
+	defer release()
+	// Asked again under the lock: a restore raises the bar only while
+	// it holds the lock, so the answer now stands until the start ends.
+	if err := refuseUndeclaredRestore(); err != nil {
+		return err
+	}
+	// .env's own coherence first, the boot's sentence for what it
+	// contradicts, then the stack as compose resolves it: both before
+	// anything starts.
+	head, err := e.Head()
+	if err != nil {
+		return engineFailure(err)
+	}
+	if err := e.CheckStack(ctx); err != nil {
+		return engineFailure(err)
+	}
+	rec, startErr := e.Start(context.WithoutCancel(ctx), "up")
+	if startErr == nil {
+		startErr = receiptFailure(rec)
+	}
+	if startErr != nil {
+		startErr = withBootFatal(ctx, e, head, startErr)
+	}
+	release()
+	select {
+	case <-interrupts:
+		return errors.New("cyfr up was interrupted; the start ran to its end and the lock is released. Run 'cyfr reach status' to see what runs")
+	default:
+	}
+	if startErr != nil {
+		return startErr
+	}
+	fmt.Fprintln(out, "CYFR server started.")
+	fmt.Fprintln(out, "  Prism:           "+reach.Describe(head).Address+"/")
+	fmt.Fprintln(out, "")
+	fmt.Fprintln(out, "Optional next steps:")
+	fmt.Fprintln(out, "  cyfr login      authenticate this CLI")
+	fmt.Fprintln(out, "  Then in Prism's \"MCP Servers\" page, click \"Add stdio server\"")
+	fmt.Fprintln(out, "  to run stdio/npx MCP servers (filesystem, github, …) for AQUA.")
+	return nil
+}
+
+// bootFatalMarker begins the line a refused boot prints, its sentence
+// after it.
+const bootFatalMarker = "[Cyfr] FATAL:"
+
+// withBootFatal is a failed start with the refusal cyfr's boot last logged,
+// read from the cyfr service's log under the lock: a setting only the
+// release reads, such as a retired name, is refused there, and the start
+// alone sees no more than an unhealthy container.
+func withBootFatal(ctx context.Context, e stackEngine, head reach.Head, startErr error) error {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), composeRunTimeout)
+	defer cancel()
+	args, err := e.ComposeArgs(ctx, head, "logs", "--no-color", "--no-log-prefix", "--tail", "200", "cyfr")
+	if err != nil {
+		return startErr
+	}
+	res, err := e.Docker().Run(ctx, reach.Call{Args: args, Deadline: composeRunTimeout})
+	if err != nil {
+		return startErr
+	}
+	fatal := ""
+	for _, line := range strings.Split(string(res.Stdout)+"\n"+string(res.Stderr), "\n") {
+		if i := strings.Index(line, bootFatalMarker); i >= 0 {
+			fatal = strings.TrimSpace(line[i:])
+		}
+	}
+	if fatal == "" {
+		return startErr
+	}
+	return fmt.Errorf("%w\ncyfr refused to boot, and its log says why:\n  %s", startErr, fatal)
 }
 
 var downCmd = &cobra.Command{
 	Use:     "down",
 	Short:   "Stop the CYFR stack",
 	GroupID: "server",
-	Long:    "Stop the CYFR stack and remove its containers via Docker Compose: cyfr, locus-runtime, locus-backends, and the profile services locus-builds (--profile locus-builds) and caddy (--profile tls), so a stack started with `cyfr up` with either is fully torn down.",
+	Long:    "Stop the CYFR stack and remove its containers: every service of the project, the proxy of a tailnet or public home and locus-builds included, whatever .env selects now, checked stopped before it reports. It takes the stack's lock first, so it never runs inside another cyfr command's start or change, and finishes a change an interrupted command left.",
 	Example: "  cyfr down",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		// Every profile, so down considers the opt-in services too; harmless
-		// for one that isn't running.
-		c := exec.Command("docker", "compose", "--profile", "tls", "--profile", buildsProfile, "down")
-		c.Stdout = os.Stdout
-		c.Stderr = os.Stderr
-		if err := c.Run(); err != nil {
-			return fmt.Errorf("Failed to stop: %w", err)
+		ctx := cmd.Context()
+		if ctx == nil {
+			ctx = context.Background()
 		}
-
-		fmt.Println("CYFR server stopped.")
-		return nil
+		return runDown(ctx, cmd.OutOrStdout())
 	},
+}
+
+// runDown is `cyfr down` in the working directory: every service of the
+// project stopped, removed and checked stopped, under the lock.
+func runDown(ctx context.Context, out io.Writer) error {
+	e, unlock, _, err := openLocked(ctx, "down", out)
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	rec, err := e.Stop(context.WithoutCancel(ctx), "down", true)
+	if err != nil {
+		return engineFailure(err)
+	}
+	if err := receiptFailure(rec); err != nil {
+		return err
+	}
+	fmt.Fprintln(out, "CYFR server stopped.")
+	return nil
 }
 
 // restoreBarred reports whether the dotenv file at path sets
@@ -987,34 +1273,6 @@ func restoreBarred(path string) (string, bool) {
 	for _, i := range f.assignments(restoreBarrier) {
 		if value, _ := (&envFile{lines: f.lines[i : i+1]}).value(restoreBarrier); value != "" {
 			return value, true
-		}
-	}
-	return "", false
-}
-
-// envFlagTrue reports whether `key=` in the dotenv-style file `path` is a
-// truthy value (`true`/`1`/`yes`, case-insensitive). Returns false if the
-// file is unreadable or the key is absent.
-func envFlagTrue(path, key string) bool {
-	v, _ := envValue(path, key)
-	v = strings.ToLower(v)
-	return v == "true" || v == "1" || v == "yes"
-}
-
-// envValue returns the value of the first uncommented `key=` line in the
-// dotenv-style file `path`, trimmed and unquoted, and whether one was found
-// with a non-empty value.
-func envValue(path, key string) (string, bool) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return "", false
-	}
-	prefix := key + "="
-	for _, line := range strings.Split(string(data), "\n") {
-		line = strings.TrimSpace(line)
-		if strings.HasPrefix(line, prefix) {
-			v := strings.Trim(strings.TrimSpace(strings.TrimPrefix(line, prefix)), `"'`)
-			return v, v != ""
 		}
 	}
 	return "", false

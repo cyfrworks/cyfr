@@ -50,6 +50,9 @@ func TestUpAndUpdateCannotOverlapTheirDockerOperations(t *testing.T) {
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
+	if holder := s.engine.held(); holder != "up" {
+		t.Fatalf("cyfr up is inside its start without the lock (held by %q)", holder)
+	}
 	updateResult := make(chan error, 1)
 	work.Add(1)
 	go func() { defer work.Done(); updateResult <- runUpdate(context.Background(), io.Discard, io.Discard) }()
@@ -57,7 +60,7 @@ func TestUpAndUpdateCannotOverlapTheirDockerOperations(t *testing.T) {
 	for !strings.Contains(strings.Join(s.log(), "\n"), "exec pg_dump") {
 		select {
 		case err := <-updateResult:
-			if err == nil || !strings.Contains(err.Error(), updateLockName) || !strings.Contains(err.Error(), fmt.Sprintf("pid %d", os.Getpid())) {
+			if err == nil || !strings.Contains(err.Error(), "Another cyfr command holds this home (`up`)") {
 				t.Fatalf("the competing update did not refuse the start's lock: %v", err)
 			}
 			if s.hasCall(profiles + "stop") {
@@ -72,8 +75,8 @@ func TestUpAndUpdateCannotOverlapTheirDockerOperations(t *testing.T) {
 			case <-time.After(5 * time.Second):
 				t.Fatal("cyfr up did not finish its released Docker operation")
 			}
-			if _, err := os.Lstat(filepath.Join(s.project, updateLockName)); !errors.Is(err, fs.ErrNotExist) {
-				t.Errorf("cyfr up left its lock behind (%v)", err)
+			if holder := s.engine.held(); holder != "" {
+				t.Errorf("cyfr up left the lock held, by %s", holder)
 			}
 			return
 		default:
@@ -111,7 +114,7 @@ func TestUpdateRefusesRestartUnderAnUnreadComposeFile(t *testing.T) {
 	if readErr != nil || !strings.Contains(string(data), "name: compose-changed-during-update") {
 		t.Fatalf("the changed file was not left on disk: %v", readErr)
 	}
-	if s.hasCall(profiles+"start") || s.hasCall(profiles+"up") {
+	if s.hasCall("ENGINE start") || s.hasCall(profiles+"up") {
 		t.Fatalf("the update detected an unread compose file but started a stack using it:\n%s", strings.Join(s.log(), "\n"))
 	}
 	if !strings.Contains(err.Error(), "left stopped") || strings.Contains(err.Error(), "is unchanged") {
@@ -299,10 +302,10 @@ func TestUpInterruptHoldsTheLockUntilComposeEnds(t *testing.T) {
 		t.Fatalf("cyfr up ended before its compose child: %v", err)
 	case <-time.After(100 * time.Millisecond):
 	}
-	if _, err := os.Stat(filepath.Join(s.project, updateLockName)); err != nil {
-		t.Fatalf("cyfr up released its lock before compose ended: %v", err)
+	if holder := s.engine.held(); holder != "up" {
+		t.Fatalf("cyfr up released its lock before compose ended (held by %q)", holder)
 	}
-	if err := runUpdate(context.Background(), io.Discard, io.Discard); err == nil || !strings.Contains(err.Error(), updateLockName) {
+	if err := runUpdate(context.Background(), io.Discard, io.Discard); err == nil || !strings.Contains(err.Error(), "Another cyfr command holds this home (`up`)") {
 		t.Fatalf("an update was admitted inside the interrupted start: %v", err)
 	}
 	s.answer("up.release", "")
@@ -315,7 +318,7 @@ func TestUpInterruptHoldsTheLockUntilComposeEnds(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("cyfr up did not end after compose")
 	}
-	if _, err := os.Lstat(filepath.Join(s.project, updateLockName)); !errors.Is(err, fs.ErrNotExist) {
-		t.Fatalf("cyfr up left its lock behind: %v", err)
+	if holder := s.engine.held(); holder != "" {
+		t.Fatalf("cyfr up left the lock held, by %s", holder)
 	}
 }
