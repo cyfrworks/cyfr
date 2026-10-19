@@ -228,7 +228,7 @@ func (e *fakeEngine) Status(ctx context.Context) (reach.Status, error) {
 	return e.s.status, nil
 }
 
-// Preview derives the target's head with R0's Derive from .env's port and
+// Preview derives the target's head with reach.Derive from .env's port and
 // builds URL, and for tailnet from the join joinID completed.
 func (e *fakeEngine) Preview(ctx context.Context, t reach.Target, joinID string) (reach.Preview, error) {
 	old, _ := e.Head()
