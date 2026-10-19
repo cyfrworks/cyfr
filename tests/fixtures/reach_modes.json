@@ -3078,6 +3078,19 @@
         {
           "fixed": {},
           "slots": [
+            "holder"
+          ],
+          "template": "Another cyfr command holds this home (`{holder}`). Nothing was changed. Wait until it has finished, then run this command again.",
+          "example": {
+            "payload": {
+              "holder": "x-holder"
+            },
+            "sentence": "Another cyfr command holds this home (`x-holder`). Nothing was changed. Wait until it has finished, then run this command again."
+          }
+        },
+        {
+          "fixed": {},
+          "slots": [
             "join_id",
             "until"
           ],

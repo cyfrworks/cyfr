@@ -151,11 +151,10 @@ func (b *ErrBusy) refusal() *Refusal {
 	if b.WatchdogPID > 0 && !b.Until.IsZero() {
 		return Refuse("reach_busy", map[string]string{"holder": b.Holder, "pid": strconv.Itoa(b.WatchdogPID), "until": b.Until.UTC().Format(time.RFC3339)})
 	}
-	pid := "unknown"
 	if b.PID > 0 {
-		pid = strconv.Itoa(b.PID)
+		return Refuse("reach_busy", map[string]string{"holder": b.Holder, "pid": strconv.Itoa(b.PID)})
 	}
-	return Refuse("reach_busy", map[string]string{"holder": b.Holder, "pid": pid})
+	return Refuse("reach_busy", map[string]string{"holder": b.Holder})
 }
 
 // joinBusy is reach_busy for a join still waiting for its approval.

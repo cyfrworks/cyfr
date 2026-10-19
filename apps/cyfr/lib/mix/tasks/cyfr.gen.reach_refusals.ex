@@ -32,7 +32,13 @@ defmodule Mix.Tasks.Cyfr.Gen.ReachRefusals do
   # value the template is rendered with before the sample is replaced by
   # `{key}`; it satisfies the row's guard.
   @rows [
-    {:reach_busy, [{%{}, ~w(holder pid until)}, {%{}, ~w(holder pid)}, {%{}, ~w(join_id until)}]},
+    {:reach_busy,
+     [
+       {%{}, ~w(holder pid until)},
+       {%{}, ~w(holder pid)},
+       {%{}, ~w(holder)},
+       {%{}, ~w(join_id until)}
+     ]},
     {:reach_stale, [{%{}, ~w(words)}]},
     {:reach_unchanged, [{%{}, ~w(address)}]},
     {:reach_invalid,
