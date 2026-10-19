@@ -184,18 +184,61 @@ func TestShippedTemplateCarriesInitsAnchors(t *testing.T) {
 	}
 }
 
+// envValuesOf is the dotenv text's values as reach.ReadEnvValues reads
+// them, the one reader of .env values the CLI has.
+func envValuesOf(text string) map[string]string {
+	f, err := os.CreateTemp("", "cyfr-env-*")
+	if err != nil {
+		panic(err)
+	}
+	defer os.Remove(f.Name())
+	if _, err := f.WriteString(text); err != nil {
+		panic(err)
+	}
+	if err := f.Close(); err != nil {
+		panic(err)
+	}
+	values, err := reach.ReadEnvValues(f.Name())
+	if err != nil {
+		panic(err)
+	}
+	return values
+}
+
+// value reads key from the file's text as reach.ReadEnvValues reads it,
+// assigned whether any line assigns it.
+func (f *envFile) value(key string) (value string, assigned bool) {
+	value, assigned = envValuesOf(f.String())[key]
+	return value, assigned
+}
+
+// set writes a key on its first assignment line and takes out every later
+// one, in any form, since compose reads the last: the value written is the
+// value read.
+func TestEnvFileSetLeavesOneAssignment(t *testing.T) {
+	f := parseEnvFile("A=1\nB=2\nexport A=3\nA: 4\n")
+	f.set("A", "9")
+	if got, want := f.String(), "A=9\nB=2\n"; got != want {
+		t.Errorf("set answered %q, want %q", got, want)
+	}
+	if v, _ := f.value("A"); v != "9" {
+		t.Errorf("A reads as %q after set, want 9", v)
+	}
+}
+
 // newEnvFromTemplate is the .env init writes from the shipped template for
 // adminEmail, or with the setup token token when there is none: the keys
 // minted, then the local head written.
 func newEnvFromTemplate(t *testing.T, adminEmail, token string) (string, []envChange) {
 	t.Helper()
 	rendered := renderEnvFile(readShippedTemplate(t), adminEmail, token)
-	text, changes, err := ensureStackKeys(rendered)
+	values := envValuesOf(rendered)
+	text, changes, err := ensureStackKeys(rendered, values)
 	if err != nil {
 		t.Fatal(err)
 	}
 	f := parseEnvFile(text)
-	d, err := localHead(f)
+	d, err := localHead(values)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -244,7 +287,7 @@ func TestRenderEnvFileShippedTemplate(t *testing.T) {
 	if boot.Head.Mode != reach.ModeLocal || boot.Origin != "http://localhost:4000" || !slices.Equal(boot.Head.Profiles, []string{buildsProfile}) {
 		t.Errorf("a project fresh from init is reached as %+v at %s, want local at http://localhost:4000 with builds on", boot.Head, boot.Origin)
 	}
-	if _, again, err := ensureStackKeys(got); err != nil || len(again) != 0 {
+	if _, again, err := ensureStackKeys(got, envValuesOf(got)); err != nil || len(again) != 0 {
 		t.Errorf("a second init changes %v (%v)", again, err)
 	}
 }
@@ -431,6 +474,20 @@ func TestEnsureStackKeysOverAnExistingEnv(t *testing.T) {
 			refusal: "CYFR_LOCUS_RUNTIME_ROOT is assigned on 2 lines of .env",
 		},
 		{
+			name:    "a root assigned twice in two forms is refused",
+			body:    base + "CYFR_LOCUS_RUNTIME_ROOT=" + root + "\nexport CYFR_LOCUS_RUNTIME_ROOT=" + root + "\n",
+			refusal: "CYFR_LOCUS_RUNTIME_ROOT is assigned on 2 lines of .env",
+		},
+		{
+			// .env is read as compose reads it, so a pair spelled
+			// `export NAME=` and `NAME: value` is the pair, kept.
+			name:    "a consistent pair in the export and colon forms is kept",
+			body:    base + builds + "export CYFR_LOCUS_RUNTIME_ROOT=" + root + "\nLOCUS_RUNTIME_KEY: " + runtimeKey + "\n",
+			added:   []string{corsOriginsVar, buildsKeyVar},
+			kept:    map[string]string{workerRootVar: root, serviceKeyVar: runtimeKey},
+			service: "wrk_locus",
+		},
+		{
 			name:    "a builds key without a URL gets the URL",
 			body:    base + "CYFR_LOCUS_RUNTIME_ROOT=" + root + "\nLOCUS_RUNTIME_KEY=" + runtimeKey + "\nCYFR_LOCUS_BUILDS_KEY=" + buildsKey + "\n",
 			added:   []string{corsOriginsVar, buildsURLVar},
@@ -473,7 +530,7 @@ func TestEnsureStackKeysOverAnExistingEnv(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got, changes, err := ensureStackKeys(tc.body)
+			got, changes, err := ensureStackKeys(tc.body, envValuesOf(tc.body))
 			if tc.refusal != "" {
 				if err == nil || !strings.Contains(err.Error(), tc.refusal) || !strings.HasSuffix(err.Error(), ".env is unchanged.") {
 					t.Fatalf("want a refusal saying %q, got %v", tc.refusal, err)

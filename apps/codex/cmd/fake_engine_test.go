@@ -13,6 +13,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -134,19 +135,21 @@ func okReceipt(op string) reach.Receipt {
 	return reach.Receipt{RequestID: strings.Repeat("0", 32), Op: op, State: "completed", Outcome: "ok"}
 }
 
-// composeKeyInEnv is the first COMPOSE_* name the dotenv file at path
-// assigns, the one the engine's Open refuses.
+// composeKeyInEnv is the first COMPOSE_* name, in byte order, the dotenv
+// file at path assigns as the engine reads it, the one the engine's Open
+// refuses.
 func composeKeyInEnv(path string) string {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return ""
-	}
-	for _, line := range strings.Split(string(data), "\n") {
-		if name, _, ok := strings.Cut(strings.TrimSpace(line), "="); ok && strings.HasPrefix(name, "COMPOSE_") {
-			return name
+	var keys []string
+	for name := range envAssignments(path) {
+		if strings.HasPrefix(name, "COMPOSE_") {
+			keys = append(keys, name)
 		}
 	}
-	return ""
+	slices.Sort(keys)
+	if len(keys) == 0 {
+		return ""
+	}
+	return keys[0]
 }
 
 // logLine writes an engine call to the fake docker's log, when a scenario
@@ -248,17 +251,13 @@ func (e *fakeEngine) Head() (reach.Head, error) {
 	return b.Head, err
 }
 
-// envAssignments are the names and values the dotenv file at path assigns.
+// envAssignments are the names and values the dotenv file at path assigns,
+// as the engine reads them (reach.ReadEnvValues); none when it does not
+// read.
 func envAssignments(path string) map[string]string {
-	data, _ := os.ReadFile(path)
-	f := parseEnvFile(string(data))
-	env := map[string]string{}
-	for _, line := range f.lines {
-		if name, _, ok := strings.Cut(strings.TrimLeft(line, " \t"), "="); ok && name != "" && !strings.HasPrefix(name, "#") {
-			if _, seen := env[name]; !seen {
-				env[name], _ = f.value(name)
-			}
-		}
+	env, err := reach.ReadEnvValues(path)
+	if err != nil {
+		return map[string]string{}
 	}
 	return env
 }

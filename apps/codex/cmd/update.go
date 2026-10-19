@@ -1096,8 +1096,9 @@ func sortByDepth(mounts []storageMount) {
 	})
 }
 
-// dotenvLine spells name=value so parseEnvFile reads value back exactly:
-// single-quoted, or double-quoted when value holds a single quote. ok is
+// dotenvLine spells name=value so reach.ReadEnvValues, and compose, read
+// value back exactly: single-quoted, which reads literally, or, when value
+// holds a single quote, double-quoted with each backslash escaped. ok is
 // false for a value holding both quotes or a line break.
 func dotenvLine(name, value string) (string, bool) {
 	switch {
@@ -1106,7 +1107,7 @@ func dotenvLine(name, value string) (string, bool) {
 	case !strings.Contains(value, "'"):
 		return name + "='" + value + "'", true
 	case !strings.Contains(value, `"`):
-		return name + `="` + value + `"`, true
+		return name + `="` + strings.ReplaceAll(value, `\`, `\\`) + `"`, true
 	}
 	return "", false
 }
@@ -2036,15 +2037,16 @@ func setMapValue(m *yaml.Node, key string, value *yaml.Node) {
 // composeEnv returns the lookup compose expands docker-compose.yml's
 // variables with: the process environment, then the dotenv file at envPath.
 func composeEnv(envPath string) func(string) (string, bool) {
-	dotenv := parseEnvFile("")
-	if data, err := os.ReadFile(envPath); err == nil {
-		dotenv = parseEnvFile(string(data))
+	dotenv, err := reach.ReadEnvValues(envPath)
+	if err != nil {
+		dotenv = map[string]string{}
 	}
 	return func(name string) (string, bool) {
 		if value, ok := os.LookupEnv(name); ok {
 			return value, true
 		}
-		return dotenv.value(name)
+		value, ok := dotenv[name]
+		return value, ok
 	}
 }
 

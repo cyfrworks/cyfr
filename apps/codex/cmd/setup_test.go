@@ -23,6 +23,10 @@ func TestSetupLink(t *testing.T) {
 	}{
 		{"the default port", "CYFR_SETUP_TOKEN=" + token + "\n", "http://localhost:4000/setup#t=" + token, ""},
 		{"the home's port", "CYFR_PORT=4123\nCYFR_SETUP_TOKEN='" + token + "'\n", "http://localhost:4123/setup#t=" + token, ""},
+		// .env read as compose reads it: the last assignment wins, in any
+		// of its forms.
+		{"an appended port", "CYFR_PORT=4000\nCYFR_SETUP_TOKEN=" + token + "\nCYFR_PORT=4123\n", "http://localhost:4123/setup#t=" + token, ""},
+		{"export and colon forms", "export CYFR_SETUP_TOKEN=" + token + "\nCYFR_PORT: 4123\n", "http://localhost:4123/setup#t=" + token, ""},
 		{"administrators and no token", "CYFR_PLATFORM_ADMIN_EMAILS=me@example.com\n", "", "names its administrators in CYFR_PLATFORM_ADMIN_EMAILS"},
 		{"no token", "# CYFR_SETUP_TOKEN=\n", "", ".env holds no CYFR_SETUP_TOKEN, so this home has no setup link"},
 		{"a token beside administrators", "CYFR_SETUP_TOKEN=" + token + "\nCYFR_PLATFORM_ADMIN_EMAILS=me@example.com\n", "", reach.Refuse("setup_token_with_admins", nil).Message()},

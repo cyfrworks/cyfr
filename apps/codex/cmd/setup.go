@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
-	"os"
 	"regexp"
 	"strconv"
 
@@ -54,16 +53,14 @@ var setupLinkCmd = &cobra.Command{
 // setupLink is the first-run setup link of the home whose .env is at path,
 // or the sentence that says why it has none.
 func setupLink(path string) (string, error) {
-	data, err := os.ReadFile(path)
+	values, err := reach.ReadEnvValues(path)
 	if errors.Is(err, fs.ErrNotExist) {
 		return "", errors.New("There is no .env here, so no setup link: run this command in the home's directory, or `cyfr init` to make a new home")
 	}
 	if err != nil {
 		return "", fmt.Errorf("%s does not read (%v)", path, err)
 	}
-	f := parseEnvFile(string(data))
-	token, _ := f.value(setupTokenVar)
-	admins, _ := f.value(adminEmailVar)
+	token, admins := values[setupTokenVar], values[adminEmailVar]
 	switch {
 	case token == "" && admins != "":
 		return "", errors.New("This home has no setup link: .env names its administrators in CYFR_PLATFORM_ADMIN_EMAILS, and each of them signs in")
@@ -75,7 +72,7 @@ func setupLink(path string) (string, error) {
 		return "", refusalError{reach.Refuse("setup_token_refused", map[string]string{"why": "malformed"})}
 	}
 	port := "4000"
-	if p, ok := f.value("CYFR_PORT"); ok && p != "" {
+	if p := values["CYFR_PORT"]; p != "" {
 		if n, err := strconv.Atoi(p); err != nil || n < 1 || n > 65535 || strconv.Itoa(n) != p {
 			return "", fmt.Errorf("CYFR_PORT in .env is %q, which is not a port from 1 to 65535, so the setup link has no address", p)
 		}
