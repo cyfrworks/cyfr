@@ -69,7 +69,7 @@ func TestJoinWithAKeyEnrolsTheMachine(t *testing.T) {
 		"-d -i --rm", "--label com.cyfr.reach.project=home", "--label com.cyfr.reach.join-id=" + rec.JoinID,
 		"--label com.cyfr.reach.join-deadline=2026-10-19T12:", "--network home_tailnet-join", "-v home_tailscale_state:/var/lib/tailscale",
 		"-e TS_USERSPACE=true -e TS_STATE_DIR=/var/lib/tailscale -e TS_AUTH_ONCE=true -e TS_ACCEPT_DNS=false -e TS_SOCKET=/var/run/tailscale/tailscaled.sock -e TS_HOSTNAME=cyfr",
-		"tailscale/tailscale:v1.104.1@sha256:87c55d6be56ad85b3d8bceca5f87f73de288c609131460dd1be1874c250cc41d sh -c IFS= read -r TS_AUTHKEY && export TS_AUTHKEY && exec timeout -s TERM 600 containerboot",
+		"tailscale/tailscale:v1.104.1@sha256:87c55d6be56ad85b3d8bceca5f87f73de288c609131460dd1be1874c250cc41d timeout -s TERM 600 sh -c IFS= read -r TS_AUTHKEY && export TS_AUTHKEY && exec containerboot",
 	} {
 		if !strings.Contains(args, want) {
 			t.Errorf("the join container's run lacks %q:\n%s", want, args)

@@ -354,11 +354,14 @@ func (e *Engine) startJoinContainer(ctx context.Context, a *joinAttempt) (string
 		"-e", "TS_USERSPACE=true", "-e", "TS_STATE_DIR=/var/lib/tailscale", "-e", "TS_AUTH_ONCE=true",
 		"-e", "TS_ACCEPT_DNS=false", "-e", "TS_SOCKET=/var/run/tailscale/tailscaled.sock", "-e", "TS_HOSTNAME="+a.Hostname,
 		a.Image)
-	timeout := "timeout -s TERM " + strconv.Itoa(seconds) + " containerboot"
+	// The container's own deadline bounds all of it, the read of a key
+	// included, so a container whose owner died before it sent the key
+	// ends by itself.
+	args = append(args, "timeout", "-s", "TERM", strconv.Itoa(seconds))
 	if a.Key {
-		args = append(args, "sh", "-c", "IFS= read -r TS_AUTHKEY && export TS_AUTHKEY && exec "+timeout)
+		args = append(args, "sh", "-c", "IFS= read -r TS_AUTHKEY && export TS_AUTHKEY && exec containerboot")
 	} else {
-		args = append(args, strings.Fields(timeout)...)
+		args = append(args, "containerboot")
 	}
 	res, err := e.docker.Run(ctx, Call{Args: args, Deadline: StartDeadline})
 	if err != nil {
