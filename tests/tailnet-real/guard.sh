@@ -2,14 +2,15 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 #
-# The verified-image guard. tests/tailnet-real/verified-image is one line:
-# the exact tailscale image reference, tag and digest, that a pass of the
-# real-tailnet run (tests/tailnet-real/run.sh) verified and wrote. This
-# fails while docker-compose.yml's tailscale service names any other
-# reference: another tag, or another digest under the same tag, which
-# `cyfr update` and Dependabot can write. The Compose proof's stand-in
-# certifies no Tailscale binary, so only a real-tailnet pass against the
-# new reference, which rewrites verified-image, lets a new one through.
+# The verified-image guard. tests/tailnet-real/verified-image is the
+# record of a passing real-tailnet run (tests/tailnet-real/run.sh), which
+# writes it and nothing else does: one line, the exact tailscale image
+# reference, tag and digest, that run verified. This fails while
+# docker-compose.yml's tailscale service names a reference no record
+# holds: with no record at all, or with one for another tag, or another
+# digest under the same tag, which `cyfr update` and Dependabot can write.
+# The Compose proof's stand-in certifies no Tailscale binary, so only a
+# real-tailnet pass against the reference lets it through.
 #
 # The reference is the first `image:` key inside the tailscale service, as
 # written, and it must name a digest (`<repository>:<tag>@sha256:<64 hex>`);
@@ -34,7 +35,6 @@ fail() {
 }
 
 [ -f "$compose" ] || fail "no compose file at $compose"
-[ -f "$verified" ] || fail "no verified-image at $verified: run tests/tailnet-real/run.sh against a real tailnet to write it"
 
 image="$(awk '
   /^  tailscale:[[:space:]]*$/ { in_service = 1; next }
@@ -45,6 +45,11 @@ image="$(awk '
 [[ "$image" =~ ^[a-z0-9./_-]+:[A-Za-z0-9._-]+@sha256:[0-9a-f]{64}$ ]] ||
   fail "$compose's tailscale image '$image' is not a reference by tag and digest (<repository>:<tag>@sha256:<64 hex>)"
 
+# The pinned reference has not been verified until a run passes for it.
+unverified="The tailscale image docker-compose.yml pins, $image, has not been verified on a real tailnet"
+rerun="The Compose proof's stand-in certifies no Tailscale binary: run tests/tailnet-real/run.sh against a real tailnet with this image, which writes tests/tailnet-real/verified-image when every check passes."
+[ -f "$verified" ] || fail "$unverified: no passing real-tailnet run is recorded ($verified does not exist). $rerun"
+
 # One line: the reference and its line end are every byte of the file.
 recorded="$(cat "$verified")"
 [ -n "$recorded" ] && [ "$(wc -l <"$verified")" -eq 1 ] &&
@@ -52,6 +57,6 @@ recorded="$(cat "$verified")"
   fail "$verified is not one line holding an image reference"
 
 if [ "$recorded" != "$image" ]; then
-  fail "docker-compose.yml's tailscale image is $image, but the reference a real tailnet last verified (tests/tailnet-real/verified-image) is $recorded. The Compose proof's stand-in certifies no Tailscale binary: run tests/tailnet-real/run.sh against a real tailnet with this image, which writes verified-image on a pass, or keep the verified reference."
+  fail "$unverified: the passing real-tailnet run recorded in tests/tailnet-real/verified-image verified $recorded. $rerun"
 fi
 echo "ok: the tailscale image docker-compose.yml names is the one a real tailnet verified: $image"
