@@ -125,6 +125,16 @@ func joinDigest(hostname string, newNode bool, fingerprint string) string {
 	return requestDigest(map[string]any{"op": "join", "hostname": hostname, "new_node": newNode, "auth_key_fingerprint": fingerprint})
 }
 
+// CheckHostname answers the machine name a join given name asks for (cyfr
+// when name is ""), or the join's refusal of it.
+func CheckHostname(name string) (string, error) {
+	hostname := joinHostname(name)
+	if !hostnameGrammar.MatchString(hostname) {
+		return "", invalid(hostname, "tailnet_name", hostnameRule)
+	}
+	return hostname, nil
+}
+
 // joinHostname is the machine name a join asks for: cyfr when none.
 func joinHostname(name string) string {
 	if name = strings.ToLower(strings.TrimSpace(name)); name != "" {

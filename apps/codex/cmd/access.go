@@ -300,15 +300,20 @@ func readAuthKey(path string) ([]byte, error) {
 
 // joinTailnet runs the engine's join under request id, printing the
 // approval link while it waits for one, and answers the join id of the
-// joined machine. An interrupt cancels the waiting join, whose container
-// outlives this command otherwise, and answers tailnet_join_cancelled.
-func joinTailnet(ctx context.Context, e stackEngine, id string, o accessOptions, key []byte, out io.Writer) (string, error) {
+// joined machine; choice's hooks are told the link and the machine's name
+// as they are printed. An interrupt cancels the waiting join, whose
+// container outlives this command otherwise, and answers
+// tailnet_join_cancelled.
+func joinTailnet(ctx context.Context, e stackEngine, id string, o accessOptions, key []byte, out io.Writer, choice joinChoice) (string, error) {
 	req := access.JoinRequest{
 		ID:       id,
 		Hostname: o.hostname,
 		NewNode:  o.newNode,
 		OnAuthURL: func(url string) {
 			fmt.Fprintf(out, "To join this machine to your tailnet, open this link and approve the machine:\n  %s\nWaiting for the approval (Ctrl-C cancels the join)...\n", url)
+			if choice.onAuthURL != nil {
+				choice.onAuthURL(url)
+			}
 		},
 	}
 	if key != nil {
@@ -333,6 +338,9 @@ func joinTailnet(ctx context.Context, e stackEngine, id string, o accessOptions,
 	}
 	if name := rec.Payload["name"]; name != "" {
 		fmt.Fprintf(out, "This machine is on your tailnet as %s.\n", name)
+		if choice.onJoined != nil {
+			choice.onJoined(name)
+		}
 	}
 	return joinID, nil
 }
@@ -342,9 +350,13 @@ func joinTailnet(ctx context.Context, e stackEngine, id string, o accessOptions,
 // --new-node replaces ("" when previewTarget names none), and its error
 // refuses the join; optionsGiven says --hostname or
 // --tailscale-auth-key-file was given, which apply to a new join alone.
+// onAuthURL and onJoined, when set, are told the approval link and the
+// joined machine's name.
 type joinChoice struct {
 	confirm      func(current string) error
 	optionsGiven bool
+	onAuthURL    func(url string)
+	onJoined     func(name string)
 }
 
 // joined is the join a preview made: its id, "" when the preview needed
@@ -408,7 +420,7 @@ func previewTarget(ctx context.Context, e stackEngine, target access.Target, id 
 			return access.Preview{}, joined{}, err
 		}
 	}
-	joinID, err := joinTailnet(ctx, e, joinRequestID(id), o, key, out)
+	joinID, err := joinTailnet(ctx, e, joinRequestID(id), o, key, out, choice)
 	if err != nil {
 		return access.Preview{}, joined{}, err
 	}

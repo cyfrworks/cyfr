@@ -272,9 +272,10 @@ func TestUpRefusesThroughTheRealEngine(t *testing.T) {
 // reason. A new exec of docker anywhere else in the commands fails here.
 func TestEveryDockerCallRunsThroughTheEngine(t *testing.T) {
 	allowed := map[string]string{
-		// The warm pull of a new project's images: outside the lock, and
-		// a pull changes nothing of the stack.
-		"runInit": "init's warm pull",
+		// The warm pull of a new project's images, in the sequence both
+		// of init's faces run: outside the lock, and a pull changes
+		// nothing of the stack.
+		"initProject": "init's warm pull",
 	}
 	sources, err := filepath.Glob("*.go")
 	if err != nil {

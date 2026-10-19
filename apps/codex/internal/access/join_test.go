@@ -544,3 +544,21 @@ func TestJoinRefusedBesideARunningJoinContainer(t *testing.T) {
 		t.Errorf("join answered %+v, %v", rc, err)
 	}
 }
+
+// CheckHostname answers the name a join asks for, as the join reads it,
+// and refuses a name with the join's own refusal, before any docker call.
+func TestCheckHostnameIsTheJoinsReadOfTheName(t *testing.T) {
+	for name, want := range map[string]string{"": "cyfr", " Home ": "home", "home-2": "home-2"} {
+		if got, err := CheckHostname(name); err != nil || got != want {
+			t.Errorf("CheckHostname(%q) = %q, %v, want %q", name, got, err, want)
+		}
+	}
+	h := newHome(t)
+	for _, name := range []string{"home_1", "-home", strings.Repeat("a", 64)} {
+		_, err := CheckHostname(name)
+		_, joinErr := h.e.Join(bg, JoinRequest{ID: id(len(name)), Hostname: name})
+		if refusalCode(err) != "access_invalid" || err.Error() != joinErr.Error() {
+			t.Errorf("CheckHostname(%q) refused %v, and the join %v", name, err, joinErr)
+		}
+	}
+}

@@ -446,8 +446,57 @@ type accessChoice struct {
 	mode string
 }
 
-// runInit is `cyfr init` in the working directory.
+// initFace is how one run of init meets the person setting the home up:
+// the terminal's questions and printed link (runInit), or the setup pages
+// (cyfr setup). Every step and its order are initProject's either way.
+type initFace struct {
+	// answers is how a new home is reached and its administrator's email
+	// ("" for none), asked once, only when init writes a new .env.
+	answers func() (accessChoice, string)
+	// apply applies a new home's mode, other than local, to its stopped
+	// stack and answers the head it switched to (applyInitAccess).
+	apply func(ctx context.Context, c accessChoice, key []byte) (access.Head, error)
+	// step, when set, is told the step init begins (the init* steps).
+	step func(name string)
+}
+
+// The steps a run of init begins, as initFace.step is told them.
+const (
+	initStepFiles    = "files"
+	initStepSettings = "settings"
+	initStepAccess   = "access"
+	initStepImages   = "images"
+)
+
+func (f initFace) begin(name string) {
+	if f.step != nil {
+		f.step(name)
+	}
+}
+
+// runInit is `cyfr init` in the working directory, asking on the terminal.
 func runInit(ctx context.Context, o initOptions, out, errOut io.Writer) error {
+	return initProject(ctx, o, initFace{
+		answers: func() (accessChoice, string) {
+			r := bufio.NewReader(askInput)
+			interactive := askTerminal()
+			choice := chooseAccess(o, interactive, r, out)
+			adminEmail := ""
+			if interactive {
+				fmt.Fprintln(out, "CYFR authorizes by membership — list your email as the platform admin so you can use this instance.")
+				adminEmail = ask(r, out, "Your platform-admin email (required to access this instance; blank = no one is authorized yet)", "")
+			}
+			return choice, adminEmail
+		},
+		apply: func(ctx context.Context, c accessChoice, key []byte) (access.Head, error) {
+			return applyInitAccess(ctx, c, key, joinChoice{optionsGiven: o.hostname != "" || o.keyFile != ""}, out)
+		},
+	}, out, errOut)
+}
+
+// initProject is cyfr init in the working directory, meeting its person
+// through face.
+func initProject(ctx context.Context, o initOptions, face initFace, out, errOut io.Writer) error {
 	releaseBuild := version.Version != "dev" && version.Version != ""
 
 	// What init cannot complete is refused before anything is written: a
@@ -501,6 +550,7 @@ func runInit(ctx context.Context, o initOptions, out, errOut io.Writer) error {
 	// for dev builds (version.Version=="dev"/""). A download that fails
 	// warns and init goes on; a release that fails verification stops
 	// it (scaffoldDownloadFailure).
+	face.begin(initStepFiles)
 	if err := downloadScaffold(version.Version); err != nil {
 		if stop := scaffoldDownloadFailure(version.Version, err, errOut); stop != nil {
 			// What --force removed is named here too: the refusal
@@ -543,15 +593,10 @@ database_path: ./data/cyfr.db
 	choice := accessChoice{mode: access.ModeLocal}
 	var head access.Head
 	if fileExists(".env.example") && !envExisted {
-		r := bufio.NewReader(askInput)
-		interactive := askTerminal()
-		choice = chooseAccess(o, interactive, r, out)
-		adminEmail := ""
-		if interactive {
-			fmt.Fprintln(out, "CYFR authorizes by membership — list your email as the platform admin so you can use this instance.")
-			adminEmail = ask(r, out, "Your platform-admin email (required to access this instance; blank = no one is authorized yet)", "")
-		}
+		var adminEmail string
+		choice, adminEmail = face.answers()
 		adminEmailConfigured = adminEmail != ""
+		face.begin(initStepSettings)
 		text, changes, d, err := newEnv(".env.example", adminEmail)
 		if err != nil {
 			return err
@@ -588,14 +633,15 @@ database_path: ./data/cyfr.db
 	var accessErr error
 	switch {
 	case envCreated && choice.mode != access.ModeLocal:
-		applied, err := applyInitAccess(ctx, choice, key, o.hostname != "" || o.keyFile != "", out)
+		face.begin(initStepAccess)
+		applied, err := face.apply(ctx, choice, key)
 		local := startedLocally{}
 		switch {
 		case errors.As(err, &local):
 			head, accessErr = applied, err
 			sel = selection{profiles: head.Profiles, port: head.Port}
 		case err != nil:
-			accessErr = fmt.Errorf("%w\nThis home is set up to be reached from this computer only; `cyfr access %s` changes that", err, choice.mode)
+			accessErr = fmt.Errorf("%w\n%s", err, leftLocal(choice.mode))
 		default:
 			head = applied
 			sel = selection{profiles: head.Profiles, port: head.Port}
@@ -614,6 +660,7 @@ database_path: ./data/cyfr.db
 	// image on a dev build (no compose). The pulls run outside the lock
 	// and change nothing of the stack, so they are no call of the engine.
 	if !o.noPull {
+		face.begin(initStepImages)
 		images := imagesFromCompose("docker-compose.yml", sel.profiles)
 		if len(images) == 0 {
 			images = []string{"ghcr.io/cyfrworks/cyfr:latest"}
@@ -710,29 +757,51 @@ database_path: ./data/cyfr.db
 	return accessErr
 }
 
+// leftLocal is what a new home whose mode was not applied is told: it is
+// reached from this computer only, and `cyfr access <mode>` changes that.
+func leftLocal(mode string) string {
+	return fmt.Sprintf("This home is set up to be reached from this computer only; `cyfr access %s` changes that", mode)
+}
+
 // refuseExistingAccess refuses an existing .env init does not complete: one
-// naming a COMPOSE_* setting, which every command that runs compose
-// refuses (compose_env_refused), one without CYFR_ACCESS, with
-// access_missing's sentence, and access flags, since init chooses how a new
+// existingAccess refuses, and access flags, since init chooses how a new
 // home is reached and `cyfr access` changes an existing one's. A --access
 // naming the mode .env holds is no change and passes.
 func refuseExistingAccess(path string, o initOptions) error {
+	current, err := existingAccess(path)
+	if err != nil {
+		return err
+	}
+	if (o.mode != "" && o.mode != current) || o.domain != "" || o.acmeEmail != "" || o.keyFile != "" || o.hostname != "" {
+		return existingHomeRefusal("cyfr init", current)
+	}
+	return nil
+}
+
+// existingAccess is the mode the existing .env at path says its home is
+// reached as, refusing one naming a COMPOSE_* setting, which every command
+// that runs compose refuses (compose_env_refused), and one without
+// CYFR_ACCESS, with access_missing's sentence.
+func existingAccess(path string) (string, error) {
 	var r *access.Refusal
 	if err := access.CheckEnvFile(path); errors.As(err, &r) && r.Code == "compose_env_refused" {
-		return refusalError{r}
+		return "", refusalError{r}
 	}
 	values, err := access.ReadEnvValues(path)
 	if err != nil {
-		return fmt.Errorf("read %s: %w", path, engineFailure(err))
+		return "", fmt.Errorf("read %s: %w", path, engineFailure(err))
 	}
 	current := values["CYFR_ACCESS"]
 	if current == "" {
-		return refusalError{access.Refuse("access_missing", nil)}
+		return "", refusalError{access.Refuse("access_missing", nil)}
 	}
-	if (o.mode != "" && o.mode != current) || o.domain != "" || o.acmeEmail != "" || o.keyFile != "" || o.hostname != "" {
-		return fmt.Errorf(".env says this home is reached as %s, and cyfr init leaves how an existing home is reached alone. Nothing was changed. Run `cyfr access <mode>` to change it", current)
-	}
-	return nil
+	return current, nil
+}
+
+// existingHomeRefusal refuses to change how an existing home, reached as
+// current, is reached, for command, which sets up a new one.
+func existingHomeRefusal(command, current string) error {
+	return fmt.Errorf(".env says this home is reached as %s, and %s leaves how an existing home is reached alone. Nothing was changed. Run `cyfr access <mode>` to change it", current, command)
 }
 
 // checkInitAccess refuses access flags that make no home before anything is
@@ -849,10 +918,10 @@ func chooseAccess(o initOptions, interactive bool, r *bufio.Reader, out io.Write
 }
 
 // applyInitAccess applies the mode chosen for a new home as an engine
-// switch of its stopped stack, the tailnet joined first for tailnet, and
-// answers the head it switched to. Any failure leaves the home as .env
-// holds it, local.
-func applyInitAccess(ctx context.Context, c accessChoice, key []byte, optionsGiven bool, out io.Writer) (access.Head, error) {
+// switch of its stopped stack, the tailnet joined first for tailnet as
+// choice meets the join, and answers the head it switched to. Any failure
+// leaves the home as .env holds it, local.
+func applyInitAccess(ctx context.Context, c accessChoice, key []byte, choice joinChoice, out io.Writer) (access.Head, error) {
 	id, err := newRequestID()
 	if err != nil {
 		return access.Head{}, err
@@ -863,7 +932,7 @@ func applyInitAccess(ctx context.Context, c accessChoice, key []byte, optionsGiv
 	}
 	defer unlock()
 	target := access.Target{Mode: c.mode, Domain: c.domain, ACMEEmail: c.acmeEmail}
-	p, join, err := previewTarget(ctx, e, target, id, c.accessOptions, key, out, joinChoice{optionsGiven: optionsGiven})
+	p, join, err := previewTarget(ctx, e, target, id, c.accessOptions, key, out, choice)
 	if err != nil {
 		return access.Head{}, err
 	}
