@@ -18,6 +18,7 @@
 #                       refused as the home refuses an anonymous request
 #                       of its kind
 #   capabilities_hold   each proxy's capabilities and security options
+#   published_ports_hold every binding a mode publishes, including loopback SOCKS5
 #
 # Usage: bash tests/compose-proof/predicates-test.sh
 set -uo pipefail
@@ -44,6 +45,30 @@ expect() {
     failures=$((failures + 1))
   fi
 }
+
+# ---- published_ports_hold ----------------------------------------------------
+
+local_ports='cyfr 127.0.0.1:4000:4000/tcp'
+tailnet_ports="$local_ports
+tailscale 127.0.0.1:1055:1055/tcp"
+public_ports="$local_ports
+caddy :80:80/tcp
+caddy :443:443/tcp
+caddy :443:443/udp"
+expect pass "local publishes only the endpoint's loopback listener" published_ports_hold "$local_ports" "$local_ports"
+expect pass "tailnet adds the sidecar's SOCKS5 on loopback" published_ports_hold "$tailnet_ports" "$tailnet_ports"
+expect pass "public adds Caddy's TCP and UDP ports" published_ports_hold "$public_ports" "$public_ports"
+expect fail "a missing SOCKS5 publication" published_ports_hold "$local_ports" "$tailnet_ports"
+expect fail "SOCKS5 on all host interfaces" published_ports_hold "${tailnet_ports/127.0.0.1:1055/0.0.0.0:1055}" "$tailnet_ports"
+expect fail "another SOCKS5 host port" published_ports_hold "${tailnet_ports/:1055:1055/:1056:1055}" "$tailnet_ports"
+expect fail "another SOCKS5 container port" published_ports_hold "${tailnet_ports/:1055\/tcp/:1056\/tcp}" "$tailnet_ports"
+expect fail "SOCKS5 published as UDP" published_ports_hold "${tailnet_ports/1055\/tcp/1055\/udp}" "$tailnet_ports"
+expect fail "SOCKS5 published in local" published_ports_hold "$tailnet_ports" "$local_ports"
+expect fail "a missing public UDP port" published_ports_hold "${public_ports%$'\n'*}" "$public_ports"
+expect fail "a duplicate publication" published_ports_hold "$tailnet_ports
+$local_ports" "$tailnet_ports"
+expect fail "an added service publication" published_ports_hold "$tailnet_ports
+planted 127.0.0.1:1234:1234/tcp" "$tailnet_ports"
 
 # ---- head_holds --------------------------------------------------------------
 

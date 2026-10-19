@@ -336,3 +336,15 @@ for p in problems:
 sys.exit(1 if problems else 0)
 PY
 }
+
+# Every published binding, normalized by shipped_ports as
+# `service host_ip:published:target/protocol`, is exactly the mode's expected
+# list. Compare lists rather than sets so a duplicate binding fails too.
+published_ports_hold() {
+  python3 -I - "$@" <<'PY'
+import sys
+actual, expected = (sorted(text.splitlines()) for text in sys.argv[1:3])
+if actual != expected:
+    sys.exit(print(f"the published ports are {actual!r}, not {expected!r}") or 1)
+PY
+}

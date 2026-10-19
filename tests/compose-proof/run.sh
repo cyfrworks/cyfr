@@ -934,7 +934,7 @@ for name, s in sorted(json.load(sys.stdin)["services"].items()):
 
 bind_checks() {
   local mode="$1" config endpoint_address endpoint_network proxy_address host_api_address host_api_port runtime_network
-  local port pport bound answer network gateway address front hostip
+  local port pport bound answer network gateway address front hostip why
   config="$(compose config --format json)"
   endpoint_address="$(expected "endpoint address in the role table" table endpoint_address)" || exit 1
   endpoint_network="$(expected "endpoint network in the role table" table endpoint_network)" || exit 1
@@ -995,16 +995,21 @@ assert any(b["HostPort"] == host_port for b in bound[f"{port}/tcp"]), (bound, pu
         [ "$(printf '%s\n' "$answer" | sed 's/:[0-9]*$//')" = "80/tcp -> 127.0.0.1" ] ||
           fail "caddy publishes '$answer', not the overlay's loopback port 80 alone"
         ;;
+      tailscale)
+        [ "$(printf '%s\n' "$answer" | sed 's/:[0-9]*$//')" = "1055/tcp -> 127.0.0.1" ] ||
+          fail "tailscale publishes '$answer', not its SOCKS5 port 1055 on loopback alone"
+        ;;
       *) [ -z "$answer" ] || fail "$service publishes $answer" ;;
     esac
   done
-  ok "docker port: cyfr publishes $port on 127.0.0.1 alone$([ "$mode" = public ] && echo ", caddy port 80 on 127.0.0.1")$([ "$mode" = tailnet ] && echo ", tailscale nothing")"
+  ok "docker port: cyfr publishes $port on 127.0.0.1 alone$([ "$mode" = public ] && echo ", caddy port 80 on 127.0.0.1")$([ "$mode" = tailnet ] && echo ", tailscale SOCKS5 port 1055 on 127.0.0.1")"
   answer="$(shipped_ports "$mode")"
   case "$mode" in
     public) expected="$(printf '%s\n' "caddy :443:443/tcp" "caddy :443:443/udp" "caddy :80:80/tcp" "cyfr 127.0.0.1:$port:$port/tcp" | sort)" ;;
+    tailnet) expected="$(printf '%s\n' "cyfr 127.0.0.1:$port:$port/tcp" "tailscale 127.0.0.1:1055:1055/tcp" | sort)" ;;
     *) expected="cyfr 127.0.0.1:$port:$port/tcp" ;;
   esac
-  [ "$answer" = "$expected" ] || fail "the shipped file publishes in $mode: $(printf '%s' "$answer" | tr '\n' ';'), not $(printf '%s' "$expected" | tr '\n' ';')"
+  why="$(published_ports_hold "$answer" "$expected")" || fail "in $mode: $why"
   ok "the shipped file publishes in $mode: $(printf '%s' "$answer" | tr '\n' ';')"
 
   step "$mode: the loopback listener answers the host's loopback, and nothing else"
