@@ -46,7 +46,7 @@ func TestPollDeviceAuth_ReturnsPromptlyOnCancel(t *testing.T) {
 	done := make(chan error, 1)
 	go func() {
 		_, err := pollDeviceAuth(ctx, client, "github", "dev-code",
-			50*time.Millisecond, time.Now().Add(30*time.Second), 30)
+			50*time.Millisecond, time.Now().Add(30*time.Second), 30, "laptop")
 		done <- err
 	}()
 
@@ -73,7 +73,7 @@ func TestPollDeviceAuth_CompleteReturnsResult(t *testing.T) {
 
 	client := mcp.NewClient(srv.URL)
 	result, err := pollDeviceAuth(t.Context(), client, "github", "dev-code",
-		10*time.Millisecond, time.Now().Add(5*time.Second), 5)
+		10*time.Millisecond, time.Now().Add(5*time.Second), 5, "laptop")
 	if err != nil {
 		t.Fatalf("pollDeviceAuth failed: %v", err)
 	}
@@ -88,7 +88,7 @@ func TestPollDeviceAuth_DeniedStops(t *testing.T) {
 
 	client := mcp.NewClient(srv.URL)
 	_, err := pollDeviceAuth(t.Context(), client, "github", "dev-code",
-		10*time.Millisecond, time.Now().Add(5*time.Second), 5)
+		10*time.Millisecond, time.Now().Add(5*time.Second), 5, "laptop")
 	if err == nil || !strings.Contains(err.Error(), "Authorization denied") {
 		t.Fatalf("want denial error, got %v", err)
 	}
@@ -98,7 +98,7 @@ func TestPollDeviceAuth_DeadlineTimesOut(t *testing.T) {
 	// Deadline already passed: the loop must not poll at all.
 	client := mcp.NewClient("http://127.0.0.1:0")
 	_, err := pollDeviceAuth(t.Context(), client, "github", "dev-code",
-		10*time.Millisecond, time.Now().Add(-time.Second), 900)
+		10*time.Millisecond, time.Now().Add(-time.Second), 900, "laptop")
 	if err == nil || !strings.Contains(err.Error(), "Login timed out") {
 		t.Fatalf("want timeout error, got %v", err)
 	}

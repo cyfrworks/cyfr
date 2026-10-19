@@ -102,8 +102,10 @@ defmodule PrismWeb.SystemLayer do
       alone: `instance_entry.create` with the arguments the card
       collected, or `instance_entry.rotate` of the entry the card names,
       the one value typed under the subject's field;
-    * pairing — `pairing.list` when it opens, `pairing.begin`, whose
-      answer's `invitation_url` it draws as a QR code, and `pairing.revoke`;
+    * pairing — `pairing.list` and `session.cli_list` when it opens,
+      `pairing.begin`, whose answer's `invitation_url` it draws as a QR
+      code, `pairing.revoke`, and `session.cli_revoke` of a command line's
+      session;
     * safe mode's kept version — `canvas.restore` of the visible canvas,
       under today's grant: a grant that waits for the person raises the
       grant prompt in front of safe mode, and once that is confirmed the
@@ -1359,7 +1361,7 @@ defmodule PrismWeb.SystemLayer do
   defp mark_shown(%{assigns: %{current: %{kind: :pairing, id: id}}} = socket),
     do:
       assign(socket,
-        pairing: %{prompt_id: id, clients: :unread, invitation: nil},
+        pairing: %{prompt_id: id, clients: :unread, command_lines: :unread, invitation: nil},
         recovery: nil
       )
 
@@ -1384,7 +1386,12 @@ defmodule PrismWeb.SystemLayer do
   defp read_seal(_context), do: :none
 
   defp load_clients(%{assigns: %{pairing: %{clients: :unread} = pairing}} = socket),
-    do: assign(socket, :pairing, %{pairing | clients: clients(socket)})
+    do:
+      assign(socket, :pairing, %{
+        pairing
+        | clients: clients(socket),
+          command_lines: command_lines(socket)
+      })
 
   defp load_clients(socket), do: socket
 
@@ -1529,6 +1536,16 @@ defmodule PrismWeb.SystemLayer do
     CyfrWeb.ContextGuard.guard(socket, fn socket ->
       case open(socket, id, [:pairing]) do
         {:ok, prompt} -> {:noreply, pairing_revoke(socket, prompt, client_id)}
+        :none -> {:noreply, socket}
+      end
+    end)
+  end
+
+  def handle_event("cli_revoke", %{"id" => id, "session" => session_id}, socket)
+      when is_binary(session_id) do
+    CyfrWeb.ContextGuard.guard(socket, fn socket ->
+      case open(socket, id, [:pairing]) do
+        {:ok, prompt} -> {:noreply, cli_revoke(socket, prompt, session_id)}
         :none -> {:noreply, socket}
       end
     end)
@@ -2435,10 +2452,36 @@ defmodule PrismWeb.SystemLayer do
     end
   end
 
+  # The person's command-line sessions, listed beside their paired
+  # devices; revoking one needs only the session (`session.cli_revoke`).
+  defp command_lines(socket) do
+    case Ops.call_tool(socket.assigns.context, "session/cli_list", %{}) do
+      {:ok, %{sessions: sessions}} -> {:ok, sessions}
+      {:error, reason} -> {:error, Ops.error_message(reason)}
+    end
+  end
+
+  defp cli_revoke(socket, prompt, session_id) do
+    case Ops.call_tool(socket.assigns.context, "session/cli_revoke", %{
+           "session_id" => session_id
+         }) do
+      {:ok, _revoked} ->
+        socket
+        |> assign(:pairing, %{pairing_of(socket, prompt) | command_lines: command_lines(socket)})
+        |> assign(:error, nil)
+
+      {:error, reason} ->
+        assign(socket, :error, Ops.error_message(reason))
+    end
+  end
+
   defp pairing_of(socket, prompt) do
     case socket.assigns.pairing do
-      %{prompt_id: id} = pairing when id == prompt.id -> pairing
-      _other -> %{prompt_id: prompt.id, clients: {:ok, []}, invitation: nil}
+      %{prompt_id: id} = pairing when id == prompt.id ->
+        pairing
+
+      _other ->
+        %{prompt_id: prompt.id, clients: {:ok, []}, command_lines: {:ok, []}, invitation: nil}
     end
   end
 
@@ -3535,7 +3578,8 @@ defmodule PrismWeb.SystemLayer do
   defp description(%{kind: :pairing}),
     do:
       "Pair a phone or another browser with this home, or revoke a device you paired. " <>
-        "Pairing and revoking each need a fresh confirmation."
+        "Pairing and revoking each need a fresh confirmation. Command lines you signed in " <>
+        "are listed too, and revoking one needs none."
 
   defp description(%{kind: :seal, action: nil}),
     do:
@@ -3585,17 +3629,21 @@ defmodule PrismWeb.SystemLayer do
   defp asker(%{"kind" => "frame"} = asker), do: "an app#{named(asker)}"
   defp asker(%{"kind" => "unbound"}), do: "this home"
 
-  defp asker(%{"kind" => "session"} = asker) do
-    since =
-      case asker["since"] && DateTime.from_iso8601(asker["since"]) do
-        {:ok, at, _offset} -> " since #{Calendar.strftime(at, "%Y-%m-%d %H:%M UTC")}"
-        _none -> ""
-      end
+  defp asker(%{"kind" => "session"} = asker),
+    do:
+      "a browser signed in#{if asker["name"], do: " with #{asker["name"]}", else: ""}#{since(asker)}"
 
-    "a browser signed in#{if asker["name"], do: " with #{asker["name"]}", else: ""}#{since}"
-  end
+  defp asker(%{"kind" => "command_line"} = asker),
+    do: "the command line#{if asker["name"], do: " on #{asker["name"]}", else: ""}#{since(asker)}"
 
   defp asker(_asker), do: "a client of yours"
+
+  defp since(asker) do
+    case asker["since"] && DateTime.from_iso8601(asker["since"]) do
+      {:ok, at, _offset} -> " since #{Calendar.strftime(at, "%Y-%m-%d %H:%M UTC")}"
+      _none -> ""
+    end
+  end
 
   defp named(%{"name" => name}) when is_binary(name) and name != "", do: " named #{name}"
   defp named(_asker), do: ""

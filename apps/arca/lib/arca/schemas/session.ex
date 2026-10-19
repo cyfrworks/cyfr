@@ -5,7 +5,8 @@ defmodule Arca.Schemas.Session do
   @moduledoc """
   Ecto schema for the `sessions` table (backs `Arca.SessionStorage`).
   A remote person's session records the `identity_key_epoch` of the
-  identity head verified when it was minted.
+  identity head verified when it was minted, and a command line's the
+  `cli_machine` it was issued to.
   """
 
   use Ecto.Schema
@@ -25,6 +26,9 @@ defmodule Arca.Schemas.Session do
     # The `key_epoch` of the identity head the session was minted under:
     # set for a remote person's session, nil for a local person's.
     field :identity_key_epoch, :string
+    # The machine a command line's session was issued to; nil for a
+    # browser's.
+    field :cli_machine, :string
     timestamps(type: :utc_datetime_usec, updated_at: false)
   end
 end

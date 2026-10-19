@@ -4,7 +4,17 @@
 defmodule Sanctum.Providers.Session do
   @moduledoc """
   Session tool handlers for the Sanctum MCP provider — login, logout,
-  whoami, device-flow OAuth, and the caller's self-description resources.
+  whoami, device-flow OAuth, signing a command line in by approving it in
+  Prism (`Sanctum.CliSignIn`), and the caller's self-description
+  resources.
+
+  `cli_begin`, `cli_poll` and `cli_cancel` are `auth: :anonymous`, as
+  the device flow's actions are: the command line that calls them holds
+  no credential yet, and the token `cli_begin` answers it is the only
+  name `cli_poll` and `cli_cancel` take. `cli_approve`, `cli_list` and
+  `cli_revoke` are the person's, through an interactive surface
+  (`consent: :interactive`); approving is a sensitive change
+  (`credential_issuance`, `Sanctum.Pairing`).
 
   `read_resource` admits an MCP `resources/read` of `sanctum://identity`
   or `sanctum://permissions`. It is `auth: :anonymous` and needs no
@@ -14,6 +24,7 @@ defmodule Sanctum.Providers.Session do
   """
 
   require Logger
+  require Sanctum.Issuance
 
   alias Sanctum.Context
 
@@ -67,6 +78,10 @@ defmodule Sanctum.Providers.Session do
               required: true,
               description: "Device code from device_init (for device_poll action)"
             ),
+            Arg.new("machine", :string,
+              description:
+                "device_poll: the command line's host name, which its session is listed by in Prism"
+            ),
             Arg.new("provider", :string,
               description: "OAuth provider for device flow",
               enum: Sanctum.Auth.DeviceFlow.providers()
@@ -75,6 +90,75 @@ defmodule Sanctum.Providers.Session do
           auth: :anonymous,
           kind: :write,
           planes: [:external]
+        ),
+        Operation.new(
+          "session",
+          "cli_begin",
+          "Begin signing a command line in",
+          [
+            Arg.new("machine", :string,
+              required: true,
+              description:
+                "cli_begin: the command line's host name, which Prism names when it asks to approve it"
+            )
+          ],
+          auth: :anonymous,
+          kind: :write,
+          planes: [:external]
+        ),
+        Operation.new(
+          "session",
+          "cli_poll",
+          "Poll a command line's sign-in",
+          [cli_token("cli_poll")],
+          auth: :anonymous,
+          kind: :read,
+          planes: [:external]
+        ),
+        Operation.new(
+          "session",
+          "cli_cancel",
+          "Stop a command line's sign-in",
+          [cli_token("cli_cancel")],
+          auth: :anonymous,
+          reduces_authority: true,
+          kind: :write,
+          planes: [:external]
+        ),
+        Operation.new(
+          "session",
+          "cli_approve",
+          "Approve a command line's sign-in",
+          [
+            Arg.new("approval_secret", :string,
+              required: true,
+              description:
+                "cli_approve: the secret the command line's link carries in its fragment"
+            )
+          ],
+          kind: :write,
+          planes: [:external],
+          consent: :interactive
+        ),
+        Operation.new("session", "cli_list", "List your command-line sessions", [],
+          kind: :read,
+          planes: [:external],
+          consent: :interactive
+        ),
+        Operation.new(
+          "session",
+          "cli_revoke",
+          "Revoke a command-line session",
+          [
+            Arg.new("session_id", :string,
+              required: true,
+              description: "cli_revoke: the command-line session (ses_…), as cli_list names it"
+            )
+          ],
+          reduces_authority: true,
+          kind: :destructive,
+          planes: [:external],
+          consent: :interactive
         ),
         Operation.new(
           "session",
@@ -110,9 +194,51 @@ defmodule Sanctum.Providers.Session do
         )
       ],
       description:
-        "Manage user sessions — login, logout, get local identity, or run device-flow OAuth. Registry identity (push tokens, namespaces) is a separate `registry` tool under Compendium.",
+        "Manage user sessions — login, logout, get local identity, run device-flow OAuth, or sign a command line in by approving it in Prism and list or revoke command-line sessions. Registry identity (push tokens, namespaces) is a separate `registry` tool under Compendium.",
       title: "Session Management"
     )
+  end
+
+  def handle(%Context{} = ctx, %{"action" => "cli_begin"} = args) do
+    case Sanctum.CliSignIn.begin(args["machine"], ctx.client_ip) do
+      {:ok, begun} -> {:ok, begun}
+      {:error, reason} -> {:error, cli_refusal(reason)}
+    end
+  end
+
+  def handle(%Context{} = ctx, %{"action" => "cli_poll"} = args) do
+    case Sanctum.CliSignIn.poll(args["session_token"], ctx.client_ip) do
+      {:ok, polled} -> {:ok, polled}
+      {:error, reason} -> {:error, cli_refusal(reason)}
+    end
+  end
+
+  def handle(%Context{} = ctx, %{"action" => "cli_cancel"} = args) do
+    case Sanctum.CliSignIn.cancel(args["session_token"], ctx.client_ip) do
+      {:ok, cancelled} -> {:ok, cancelled}
+      {:error, reason} -> {:error, cli_refusal(reason)}
+    end
+  end
+
+  def handle(%Context{} = ctx, %{"action" => "cli_approve"} = args) do
+    case Sanctum.CliSignIn.approve(ctx, args["approval_secret"]) do
+      {:ok, approved} -> {:ok, approved}
+      {:error, reason} -> {:error, cli_refusal(reason)}
+    end
+  end
+
+  def handle(%Context{} = ctx, %{"action" => "cli_list"}) do
+    case Sanctum.CliSignIn.list(ctx) do
+      {:ok, sessions} -> {:ok, %{sessions: Enum.map(sessions, &cli_listed/1)}}
+      {:error, reason} -> {:error, cli_refusal(reason)}
+    end
+  end
+
+  def handle(%Context{} = ctx, %{"action" => "cli_revoke"} = args) do
+    case Sanctum.CliSignIn.revoke(ctx, args["session_id"]) do
+      {:ok, revoked} -> {:ok, revoked}
+      {:error, reason} -> {:error, cli_refusal(reason)}
+    end
   end
 
   def handle(%Context{authenticated: false}, %{"action" => "whoami"}) do
@@ -262,11 +388,17 @@ defmodule Sanctum.Providers.Session do
         %Context{} = ctx,
         %{"action" => "device_poll", "device_code" => device_code} = args
       ) do
-    if device_flow_enabled?() do
+    with true <- device_flow_enabled?(),
+         {:ok, opts} <- poll_machine(args) do
       provider = Map.get(args, "provider", "github")
 
       # Charged to the caller's address, as `device_init` above.
-      case Sanctum.Auth.DeviceFlow.impl().poll_for_session(provider, device_code, ctx.client_ip) do
+      case Sanctum.Auth.DeviceFlow.impl().poll_for_session(
+             provider,
+             device_code,
+             ctx.client_ip,
+             opts
+           ) do
         {:ok, result} ->
           {:ok, Sanctum.Auth.DeviceFlow.wire(result)}
 
@@ -317,7 +449,8 @@ defmodule Sanctum.Providers.Session do
           {:error, {:unavailable, "The sign-in provider"}}
       end
     else
-      {:error, {:invalid_argument, device_flow_disabled_message()}}
+      false -> {:error, {:invalid_argument, device_flow_disabled_message()}}
+      {:error, _invalid} = refused -> refused
     end
   end
 
@@ -352,6 +485,85 @@ defmodule Sanctum.Providers.Session do
       _ -> {:error, :action_missing}
     end
   end
+
+  # A command line's poll names the machine it runs on, so the session it
+  # signs in is listed and revoked as that command line's; a poll that
+  # names none signs in a session no list shows as one.
+  defp poll_machine(%{"machine" => machine}) when not is_nil(machine) do
+    with {:ok, machine} <- Sanctum.CliSignIn.machine(machine), do: {:ok, [command_line: machine]}
+  end
+
+  defp poll_machine(_args), do: {:ok, []}
+
+  defp cli_token(action),
+    do:
+      Prima.Arg.new("session_token", :string,
+        required: true,
+        description:
+          "#{action}: the session token cli_begin answered, which the command line holds"
+      )
+
+  defp cli_listed(session) do
+    %{
+      session_id: session.session_id,
+      machine: session.machine,
+      signed_in_at: Prima.Time.iso8601(session.signed_in_at),
+      expires_at: Prima.Time.iso8601(session.expires_at),
+      current: session.current
+    }
+  end
+
+  # A command line's sign-in refusals in the one refusal shape every
+  # surface renders (`Prima.Refusal`), each with the sentence its person
+  # reads; the vocabulary's own reasons (a confirmation signal, a rate
+  # limit, a standing or tenancy refusal) pass as they are.
+  defp cli_refusal(:not_found),
+    do:
+      cli_refused(
+        :not_found,
+        :cli_sign_in_unknown,
+        "This link or session is not one this home knows: run cyfr login again for a new link"
+      )
+
+  defp cli_refusal(:expired),
+    do:
+      cli_refused(
+        :conflict,
+        :cli_sign_in_expired,
+        "This command line's sign-in expired before it was approved: run cyfr login again"
+      )
+
+  defp cli_refusal(:approved),
+    do:
+      cli_refused(
+        :conflict,
+        :cli_sign_in_used,
+        "This command line was already approved: its link signs in once"
+      )
+
+  defp cli_refusal(:cancelled),
+    do:
+      cli_refused(
+        :conflict,
+        :cli_sign_in_cancelled,
+        "The command line stopped waiting: run cyfr login again"
+      )
+
+  defp cli_refusal(:session_required),
+    do:
+      cli_refused(
+        :forbidden,
+        :session_required,
+        "Approve a command line from a browser signed in to this home"
+      )
+
+  defp cli_refusal(reason) when Sanctum.Issuance.standing_refusal?(reason),
+    do: Sanctum.Issuance.standing_refusal(reason)
+
+  defp cli_refusal(reason), do: reason
+
+  defp cli_refused(class, reason, message),
+    do: %Prima.Refusal{class: class, reason: reason, message: message}
 
   # `provider` on device_init/device_poll comes straight from the caller. A
   # name this server does not know is a mistake worth naming, not a crash and

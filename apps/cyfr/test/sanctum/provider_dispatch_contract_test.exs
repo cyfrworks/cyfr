@@ -24,6 +24,12 @@ defmodule Sanctum.ProviderDispatchContractTest do
       "whoami",
       "device_init",
       "device_poll",
+      "cli_begin",
+      "cli_poll",
+      "cli_cancel",
+      "cli_approve",
+      "cli_list",
+      "cli_revoke",
       "use",
       "read_resource"
     ],

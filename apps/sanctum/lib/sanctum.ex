@@ -51,6 +51,7 @@ defmodule Sanctum do
       Catalog.NotLoadedError,
       Cipher,
       Cipher.Rotation,
+      CliSignIn,
       ClientIp,
       Consent,
       Consent.Accounts,

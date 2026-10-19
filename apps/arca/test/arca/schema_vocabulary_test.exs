@@ -59,7 +59,10 @@ defmodule Arca.SchemaVocabularyTest do
       # (`Arca.SecurityTransitions.restore/1`) until its person re-enables it.
       {"paired_clients", "paired_clients_standing_known", "standing",
        Arca.Schemas.PairedClient.standings()},
-      {"passkeys", "passkeys_state_known", "state", Arca.Schemas.Passkey.states()}
+      {"passkeys", "passkeys_state_known", "state", Arca.Schemas.Passkey.states()},
+      # `Arca.CliSignIns` approves or cancels a command line's pending
+      # sign-in, and nothing leaves either.
+      {"cli_sign_ins", "cli_sign_ins_state_known", "state", Arca.Schemas.CliSignIn.states()}
     ]
   end
 
@@ -156,6 +159,14 @@ defmodule Arca.SchemaVocabularyTest do
       for status <- ~w(bogus needs_reauth tombstoned) do
         refused!("profiles", profile(ctx, status), "profiles_status_known")
       end
+    end
+
+    test "lands every command-line sign-in state and refuses any other" do
+      for state <- ~w(pending approved cancelled) do
+        assert {1, _} = insert!("cli_sign_ins", cli_sign_in(state))
+      end
+
+      refused!("cli_sign_ins", cli_sign_in("bogus"), "cli_sign_ins_state_known")
     end
 
     test "lands every receipt outcome and refuses any other", ctx do
@@ -499,6 +510,21 @@ defmodule Arca.SchemaVocabularyTest do
       scheduled_for: NaiveDateTime.add(now(), System.unique_integer([:positive]), :second),
       state: state,
       claimed_at: now()
+    }
+  end
+
+  defp cli_sign_in(state) do
+    %{
+      id: id("csi"),
+      approval_hash: :crypto.strong_rand_bytes(32),
+      token_hash: :crypto.strong_rand_bytes(32),
+      token_prefix: "tokenpre",
+      user_code: "K7QM-3XRD",
+      machine: "laptop",
+      state: state,
+      expires_at: now(),
+      inserted_at: now(),
+      updated_at: now()
     }
   end
 

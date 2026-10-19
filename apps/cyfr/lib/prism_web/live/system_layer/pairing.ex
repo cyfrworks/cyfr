@@ -5,7 +5,8 @@ defmodule PrismWeb.SystemLayer.Pairing do
   @moduledoc """
   The pairing prompt's body, which only the system layer draws: the
   person's paired clients in the athanor in focus, each with its revoke
-  control, and the pairing code.
+  control, the pairing code, and the person's command-line sessions
+  (`Sanctum.CliSignIn`), each with its revoke control.
 
   Pairing a device begins on the new device: this home's `/pair` page
   makes its key and shows the key's code (`Prima.Device.key_code/1`). The
@@ -37,6 +38,7 @@ defmodule PrismWeb.SystemLayer.Pairing do
     assigns =
       assign(assigns,
         clients: clients(assigns.pairing),
+        command_lines: command_lines(assigns.pairing),
         invitation: assigns.pairing && assigns.pairing.invitation
       )
 
@@ -129,11 +131,57 @@ defmodule PrismWeb.SystemLayer.Pairing do
         </button>
       </form>
     </section>
+
+    <section class="mt-4 space-y-2" aria-label="Command lines" data-test="command-lines">
+      <h3 class="text-sm font-medium">Command lines</h3>
+      <%= case @command_lines do %>
+        <% {:ok, []} -> %>
+          <p class="text-sm text-gray-300" data-test="command-lines-none">
+            No command line is signed in. Run cyfr login on a machine to sign one in.
+          </p>
+        <% {:ok, sessions} -> %>
+          <ul class="divide-y divide-gray-800 text-sm" data-test="command-lines-list">
+            <li
+              :for={session <- sessions}
+              class="flex items-center justify-between gap-2 py-2"
+              data-test="command-line"
+              data-session={session.session_id}
+            >
+              <div>
+                <p class="font-medium">Command line on {session.machine}</p>
+                <p class="text-xs text-gray-400">
+                  Signed in {session.signed_in_at}{if session.current, do: " (this one)", else: ""}
+                </p>
+              </div>
+              <button
+                type="button"
+                phx-click="cli_revoke"
+                phx-target={@myself}
+                phx-value-id={@prompt_id}
+                phx-value-session={session.session_id}
+                data-test="command-line-revoke"
+                class={@button_class}
+              >
+                Revoke
+              </button>
+            </li>
+          </ul>
+        <% {:error, sentence} -> %>
+          <p class="text-sm" role="alert" data-test="command-lines-unread">{sentence}</p>
+        <% :unread -> %>
+          <p class="text-sm text-gray-300" data-test="command-lines-reading">
+            Reading your command lines.
+          </p>
+      <% end %>
+    </section>
     """
   end
 
   defp clients(%{clients: clients}), do: clients
   defp clients(_pairing), do: {:ok, []}
+
+  defp command_lines(%{command_lines: command_lines}), do: command_lines
+  defp command_lines(_pairing), do: {:ok, []}
 
   defp expiry(%{certificate_expires_at: at}) when is_binary(at),
     do: "; its certificate renews before #{at}"

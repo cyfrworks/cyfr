@@ -169,6 +169,14 @@ defmodule Sanctum.Session do
   verified under, must be the fresh head's (`{:error, :stale_key_epoch}`):
   a rotation between the proof and the session admits nothing.
 
+  ## A command line's session
+
+  `command_line:` names the machine a command line's session is issued
+  to (`Sanctum.CliSignIn.machine/1` checked it), stored as the session's
+  `cli_machine`, by which its person lists and revokes it; a browser's
+  session names none. `create_for_command_line/3` mints one under a token
+  the command line already holds.
+
   Returns a session map containing the token and identity fields.
   """
   @spec create(Context.t(), keyword()) :: {:ok, session()} | {:error, term()}
@@ -180,7 +188,58 @@ defmodule Sanctum.Session do
          :ok <- verified_epoch(Keyword.fetch(opts, :key_epoch), epoch),
          :ok <- receipt_epoch(receipt, epoch),
          {:ok, expectation} <- Sanctum.Issuance.expectation(ctx, opts) do
-      insert(ctx, expectation, epoch, receipt)
+      token = if receipt, do: receipt.token, else: generate_token()
+
+      minting = %{
+        token_hash: hash_token(token),
+        token_prefix: String.slice(token, 0, 8),
+        machine: Keyword.get(opts, :command_line),
+        also: record_receipt(receipt)
+      }
+
+      with {:ok, session} <- insert(ctx, expectation, epoch, minting),
+           do: {:ok, Map.put(session, :token, token)}
+    end
+  end
+
+  @doc """
+  Mint the session a command line approved in Prism holds
+  (`Sanctum.CliSignIn.approve/2`), under the person `ctx` is: the session
+  the approver's context reads its standing from, issued as `create/2`
+  issues one, but under the token the command line drew at its begin and
+  holds, known here only by its SHA-256 (`token_hash`) and its first
+  characters (`token_prefix`), and naming the `machine` it is for. No
+  token is drawn, held or answered here.
+
+  `also` runs in the issuance transaction after the insert, handed the
+  session's `%{id, user_id}`, and answers `:ok` or a refusal that rolls the
+  session back: the step that approves the pending sign-in and consumes
+  its confirmation, so all three commit together.
+
+  Answers the session's identity fields and its expiry, or the refusals
+  `create/2` answers.
+  """
+  @spec create_for_command_line(
+          Context.t(),
+          %{token_hash: binary(), token_prefix: String.t(), machine: String.t()},
+          (map() -> :ok | {:error, term()})
+        ) :: {:ok, map()} | {:error, term()}
+  def create_for_command_line(
+        %Context{} = ctx,
+        %{token_hash: token_hash, token_prefix: prefix, machine: machine},
+        also
+      )
+      when is_binary(token_hash) and is_binary(prefix) and is_binary(machine) and
+             is_function(also, 1) do
+    with :ok <- provider_permitted(ctx, nil),
+         {:ok, epoch} <- identity_epoch(ctx.user_id),
+         {:ok, expectation} <- Sanctum.Issuance.expectation(ctx, []) do
+      insert(ctx, expectation, epoch, %{
+        token_hash: token_hash,
+        token_prefix: prefix,
+        machine: machine,
+        also: also
+      })
     end
   end
 
@@ -272,21 +331,22 @@ defmodule Sanctum.Session do
     end
   end
 
-  defp insert(%Context{} = ctx, expectation, epoch, receipt) do
+  # What a session is minted under: its token's hash and first
+  # characters, the machine a command line's names (nil for a browser's),
+  # and the step run after the insert in its transaction.
+  defp insert(%Context{} = ctx, expectation, epoch, minting) do
     with {:ok, hours} <- session_ttl_hours() do
       now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
-      insert(ctx, expectation, now, expires_at(hours, now), epoch, receipt)
+      insert(ctx, expectation, now, expires_at(hours, now), epoch, minting)
     end
   end
 
-  defp insert(%Context{} = ctx, expectation, now, expires_at, epoch, receipt) do
-    token = if receipt, do: receipt.token, else: generate_token()
-
+  defp insert(%Context{} = ctx, expectation, now, expires_at, epoch, minting) do
     # A session carries no permission list: it is a person's, and what
     # they may do is decided by their memberships, the athanor's consents
     # and the policy on every request — never by a bag frozen at sign-in.
     attrs = %{
-      token_prefix: String.slice(token, 0, 8),
+      token_prefix: minting.token_prefix,
       user_id: ctx.user_id,
       email: ctx.email,
       provider: ctx.provider,
@@ -296,18 +356,18 @@ defmodule Sanctum.Session do
       # platform-admin capability is re-read from the membership row on load.
       athanor_id: ctx.athanor_id,
       identity_key_epoch: epoch,
+      cli_machine: minting.machine,
       expires_at: expires_at,
       inserted_at: now
     }
 
-    case Arca.SessionStorage.create_session(hash_token(token), attrs,
+    case Arca.SessionStorage.create_session(minting.token_hash, attrs,
            lock: Sanctum.Issuance.lock(expectation),
            verify: Sanctum.Issuance.verify(expectation),
-           also: record_receipt(receipt)
+           also: minting.also
          ) do
       :ok ->
         session = %{
-          token: token,
           user_id: ctx.user_id,
           email: ctx.email,
           provider: ctx.provider,
@@ -601,14 +661,18 @@ defmodule Sanctum.Session do
   end
 
   @doc """
-  Clean up expired sessions.
+  Clean up expired sessions, and the command lines' pending sign-ins past
+  theirs (`Sanctum.CliSignIn.sweep/0`), which no session holds yet.
 
-  Returns `{:ok, count}`, the number of sessions removed, or
+  Returns `{:ok, count}`, the number of rows removed, or
   `{:error, :database_error}` when the store cannot answer.
   """
   @spec cleanup() :: {:ok, non_neg_integer()} | {:error, :database_error}
   def cleanup do
-    Arca.SessionStorage.cleanup_expired_sessions()
+    with {:ok, sessions} <- Arca.SessionStorage.cleanup_expired_sessions(),
+         {:ok, sign_ins} <- Sanctum.CliSignIn.sweep() do
+      {:ok, sessions + sign_ins}
+    end
   end
 
   # ============================================================================

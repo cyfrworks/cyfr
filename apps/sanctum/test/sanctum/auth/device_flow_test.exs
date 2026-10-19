@@ -348,10 +348,10 @@ defmodule Sanctum.Auth.DeviceFlowTest do
     # A server at capacity: the door refuses the mint, so `admitted/2`
     # refuses the sign-in and the poll carries that reason out — the
     # athanors it holds, or how fast it admits strangers.
-    def poll_for_session(_provider, "dc_slow", _client_ip),
+    def poll_for_session(_provider, "dc_slow", _client_ip, _opts),
       do: {:error, {:limit_reached, :mint_per_hour, 10}}
 
-    def poll_for_session(_provider, _device_code, _client_ip),
+    def poll_for_session(_provider, _device_code, _client_ip, _opts),
       do: {:error, {:limit_reached, :max_athanors, 1}}
   end
 
@@ -648,6 +648,50 @@ defmodule Sanctum.Auth.DeviceFlowTest do
       refute log =~ "session create failed"
       refute log =~ "[error]"
       assert {:error, :not_found} = Sanctum.Tenancy.Users.get_by_identity(key)
+    end
+  end
+
+  describe "poll_for_session/4 — a command line names its machine" do
+    setup tags do
+      Arca.Test.Sandbox.setup!(tags)
+      Arca.Cache.init()
+      Prima.Test.RateLimiter.reset!()
+      endpoints = Application.get_env(:sanctum, :device_flow_endpoints)
+      {:ok, _} = Sanctum.Door.Store.allow("wildcard", "*", "test")
+
+      on_exit(fn ->
+        if endpoints,
+          do: Application.put_env(:sanctum, :device_flow_endpoints, endpoints),
+          else: Application.delete_env(:sanctum, :device_flow_endpoints)
+
+        Arca.Cache.delete_match({:established, :_, :_, :_})
+        Prima.Test.RateLimiter.reset!()
+      end)
+
+      Application.put_env(:sanctum, :github_client_id, "command-line-client")
+      :ok
+    end
+
+    test "the session a command line signs in is listed by its machine, and the browser's names none" do
+      n = idp!(%{"access_token" => "gho_command_line", "token_type" => "bearer"})
+
+      assert {:ok, %{status: "complete", session_token: token}} =
+               DeviceFlow.poll_for_session(:github, "dc_cli_#{n}", "203.0.113.30",
+                 command_line: "laptop"
+               )
+
+      {:ok, row} = Arca.SessionStorage.get_session(Sanctum.Session.token_hash(token))
+      assert row.cli_machine == "laptop"
+
+      assert {:ok, [%{cli_machine: "laptop"}]} =
+               Arca.SessionStorage.list_command_lines(row.user_id)
+
+      assert {:ok, %{status: "complete", session_token: browser}} =
+               DeviceFlow.poll_for_session(:github, "dc_browser_#{n}", "203.0.113.31")
+
+      {:ok, browser_row} = Arca.SessionStorage.get_session(Sanctum.Session.token_hash(browser))
+      assert browser_row.cli_machine == nil
+      assert {:ok, [_command_line_alone]} = Arca.SessionStorage.list_command_lines(row.user_id)
     end
   end
 

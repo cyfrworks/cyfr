@@ -167,7 +167,10 @@ defmodule Sanctum.Auth.DeviceFlow do
 
   @doc """
   Poll for the IdP token; once authorized, run the door, sign-in and the
-  one sign-in decision (`Sanctum.SignIn.complete/3`).
+  one sign-in decision (`Sanctum.SignIn.complete/3`). `command_line:`
+  names the machine a command line's sign-in runs on
+  (`Sanctum.CliSignIn.machine/1` checked it), which the session records
+  so its person lists and revokes it; the browser's sign-in names none.
 
   Returns one of:
   - `{:ok, %{status: "pending"}}` - User hasn't authorized yet
@@ -197,9 +200,9 @@ defmodule Sanctum.Auth.DeviceFlow do
           # Need to restart flow
       end
   """
-  @spec poll_for_session(provider(), String.t(), String.t() | nil) ::
+  @spec poll_for_session(provider(), String.t(), String.t() | nil, keyword()) ::
           {:ok, map()} | {:error, term()}
-  def poll_for_session(provider, device_code, client_ip) do
+  def poll_for_session(provider, device_code, client_ip, opts \\ []) when is_list(opts) do
     with :ok <- check_poll_budget(device_code, client_ip),
          {:ok, provider, client_id} <- usable(provider) do
       case request_token(provider, client_id, device_code) do
@@ -208,7 +211,7 @@ defmodule Sanctum.Auth.DeviceFlow do
           # one decision both sign-in paths take.
           with {:ok, user_info} <- fetch_user_info(provider, tokens),
                {:ok, user, ctx} <- admit(user_info, provider) do
-            {:ok, complete(user, ctx, user_info, provider, tokens.access_token)}
+            {:ok, complete(user, ctx, user_info, Keyword.get(opts, :command_line))}
           else
             # `Sanctum.Door.admit_identity/2` answers `{:error, {:door, reason}}`;
             # nothing produces a bare `:user_not_allowed`, so the arm that
@@ -613,14 +616,20 @@ defmodule Sanctum.Auth.DeviceFlow do
   # forbids. So a CLI sign-in reports `:skipped` and records no namespace
   # and no push token. The `registry` tool's re-probe does both on request,
   # which is an explicit ask rather than a credential travelling silently.
-  defp complete(user, ctx, user_info, _provider, _access_token) do
+  defp complete(user, ctx, user_info, machine) do
     base = %{
       status: "complete",
       user: %{id: user_info.id, email: user_info.email, name: user_info.name}
     }
 
     report = %{unsynced: [], probe: :skipped}
-    with_session(base, %{ctx | namespace: user.namespace}, %{outcome: {:proceed, report}})
+
+    with_session(
+      base,
+      %{ctx | namespace: user.namespace},
+      %{outcome: {:proceed, report}},
+      machine
+    )
   end
 
   @doc """
@@ -648,10 +657,13 @@ defmodule Sanctum.Auth.DeviceFlow do
 
   def wire(result), do: result
 
-  defp with_session(base, ctx, extras) do
+  # A command line's sign-in names the machine it runs on, so its person
+  # lists and revokes its session (`Sanctum.CliSignIn`); the browser's
+  # sign-in page names none.
+  defp with_session(base, ctx, extras, machine) do
     case Sanctum.Tenancy.resolve_status(ctx, force: true) do
       {:ok, ctx} ->
-        case Session.create(ctx) do
+        case Session.create(ctx, command_line: machine) do
           {:ok, session} ->
             base
             |> Map.put(:session_token, session.token)

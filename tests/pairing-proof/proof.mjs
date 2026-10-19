@@ -29,6 +29,14 @@
 //   fresh        a second entry: a replayed assertion and the desktop's
 //                session repeating alone change nothing; the glass's fresh
 //                assertion confirms it and the desktop completes it
+//   command_line the real cyfr binary run.sh built, run beside the
+//                browsers and reaching the home through the same proxy,
+//                runs cyfr login: it prints a link and a code; the desktop
+//                opens the link, which leaves the address, shows the same
+//                code and approves; the glass confirms with the passkey;
+//                the binary saves its session, and cyfr whoami names the
+//                person; Devices on the desktop lists the command line and
+//                revokes it, after which its session opens nothing
 //   intent       the device-intent measurement: one discrete intent
 //                (`confirmation.pending`) admitted and dispatched over the
 //                device channel and answered, sequentially, timed in the
@@ -55,8 +63,11 @@
 // `answer-N.json`).
 //
 // Usage: node proof.mjs HOMES_FILE SEGMENT DESKTOP_COOKIE PHONE_COOKIE OUT_DIR
+// (OUT_DIR/bin/cyfr is the command line run.sh built for the run)
 
-import { mkdirSync, writeFileSync } from "node:fs";
+import { spawn } from "node:child_process";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { HANDHELD, measure as measureScreen, unmet } from "../browser/handheld.mjs";
 import {
@@ -524,6 +535,93 @@ async function confirmEntry(desk, phone) {
     record.confirm), shown.ref];
 }
 
+// The command line run.sh built, run as a person runs it: a home of its own,
+// the home reached through the run's proxy as the browsers reach it, and
+// the run's authority trusted as the container's certificate bundle.
+function cyfr(args, cliHome) {
+  return spawn(join(outDir, "bin", "cyfr"), args, {
+    env: {
+      ...process.env,
+      HOME: cliHome,
+      HTTPS_PROXY: `http://127.0.0.1:${proxy.address().port}`,
+      CYFR_NO_UPDATE_CHECK: "1",
+    },
+  });
+}
+
+// Run the command line to its end: its exit code and what it printed.
+function cyfrRun(args, cliHome) {
+  return new Promise((resolve) => {
+    const child = cyfr(args, cliHome);
+    let out = "";
+    child.stdout.on("data", (chunk) => { out += chunk; });
+    child.stderr.on("data", (chunk) => { out += chunk; });
+    child.on("close", (code) => resolve({ code, out }));
+  });
+}
+
+async function commandLine(desk, phone) {
+  const cliHome = mkdtempSync(join(tmpdir(), "cyfr-command-line-"));
+  try {
+    const added = await cyfrRun(["context", "add", "proof", base], cliHome);
+    const login = cyfr(["login", "--context", "proof"], cliHome);
+    let out = "";
+    login.stdout.on("data", (chunk) => { out += chunk; });
+    login.stderr.on("data", (chunk) => { out += chunk; });
+    const exited = new Promise((resolve) => login.on("close", (code) => resolve(code)));
+
+    const printed = await waitFor(() => {
+      const link = out.match(/(https:\/\/\S+\/cli#code=[A-Za-z0-9_-]{22})/);
+      const code = out.match(/shows the code ([0-9A-Z]{4}-[0-9A-Z]{4})/);
+      return link && code ? { link: link[1], code: code[1] } : null;
+    }, { timeoutMs: 30_000, what: `cyfr login's link and code (${JSON.stringify(out)})` });
+
+    await desk.goto(printed.link);
+    await connected(desk);
+    await desk.waitForSelector('[data-test="cli-code"]', { timeout: 30_000 });
+    const shownCode = (await desk.locator('[data-test="cli-code"]').textContent()).trim();
+    const left = !desk.url().includes("#code=");
+    await desk.locator('[data-test="cli-approve"]').click();
+
+    // Approving issues a session that outlives the desktop's: the glass
+    // confirms it with the passkey.
+    const shown = await glassPrompt(phone);
+    await glassButton(phone, shown.ref, "glass-passkey").click();
+    const exit = await Promise.race([exited, sleep(60_000).then(() => "still waiting")]);
+    const saved = (() => {
+      try {
+        return !!JSON.parse(readFileSync(join(cliHome, ".cyfr", "config.json"), "utf8")).contexts.proof.token;
+      } catch {
+        return false;
+      }
+    })();
+    const whoami = await cyfrRun(["whoami", "--context", "proof"], cliHome);
+
+    await openDevices(desk);
+    await desk.waitForSelector(`${layer} [data-test="command-line"]`, { timeout: 30_000 });
+    const listed = await desk.locator(`${layer} [data-test="command-line"]`).first().textContent();
+    await desk.locator(`${layer} [data-test="command-line-revoke"]`).first().click();
+    await desk.waitForSelector(`${layer} [data-test="command-lines-none"]`, { timeout: 30_000 });
+    const revoked = await cyfrRun(["whoami", "--context", "proof"], cliHome);
+
+    record.command_line = {
+      code: printed.code, shown_code: shownCode, link_left_address: left, preview: shown.preview,
+      asker: shown.asker, login_exit: exit, signed_in: /Signed in as operator@example\.com/.test(out),
+      saved, whoami_exit: whoami.code, whoami_names_person: whoami.out.includes("operator@example.com"),
+      listed: spaced(listed).trim(), revoked_whoami_exit: revoked.code,
+    };
+    return row("command_line",
+      added.code === 0 && shownCode === printed.code && left && /session\.cli_approve/.test(shown.preview) &&
+        shown.preview.includes(printed.code) && exit === 0 && record.command_line.signed_in && saved &&
+        whoami.code === 0 && record.command_line.whoami_names_person && /Command line on/.test(listed) &&
+        revoked.code !== 0,
+      "cyfr login's link, opened on the desktop, shows the code it printed; approved there and confirmed on the glass, the binary holds the person's session, listed under Devices, where revoking it ends it",
+      record.command_line);
+  } finally {
+    rmSync(cliHome, { recursive: true, force: true });
+  }
+}
+
 async function fresh(desk, phone, firstRef) {
   const name = "pairing-entry-2";
   const [first] = await rawSent(phone, "confirmation.confirm");
@@ -769,6 +867,7 @@ try {
     if (paired && await glass(phone, link, code, authenticator)) {
       const [confirmed, firstRef] = await confirmEntry(desk, phone);
       if (confirmed && await fresh(desk, phone, firstRef)) {
+        await commandLine(desk, phone);
         await measure(phone);
         await sleepBeyondExpiry(desk, phone);
         await revoke(desk, phone);
@@ -795,7 +894,7 @@ try {
   proxy.close();
 }
 
-const STEPS = ["passkey", "pair", "other_key", "glass", "confirm", "fresh", "intent", "sleep", "revoke", "viewport"];
+const STEPS = ["passkey", "pair", "other_key", "glass", "confirm", "fresh", "command_line", "intent", "sleep", "revoke", "viewport"];
 const outcome = (step) => {
   const found = rows.find((r) => r.step === step);
   return found ? (found.held ? "held" : "FAILED") : "not reached";

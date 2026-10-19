@@ -202,6 +202,11 @@ defmodule Emissary.MCP.PlaneTaxonomyTest do
                  {"session", "whoami"},
                  {"session", "device_init"},
                  {"session", "device_poll"},
+                 # A command line signing in holds no credential: it is
+                 # answered a token it then names (`Sanctum.CliSignIn`).
+                 {"session", "cli_begin"},
+                 {"session", "cli_poll"},
+                 {"session", "cli_cancel"},
                  # The caller's own self-description, from its context alone.
                  {"session", "read_resource"},
                  {"system", "status"},

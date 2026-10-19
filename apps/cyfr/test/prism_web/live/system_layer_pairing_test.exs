@@ -426,6 +426,41 @@ defmodule PrismWeb.SystemLayerPairingTest do
     end
   end
 
+  describe "the person's command lines" do
+    test "are listed beside the devices, and revoking one needs no confirmation and ends it", %{
+      conn: conn,
+      athanor: athanor,
+      ctx: ctx
+    } do
+      {:ok, begun} = Sanctum.CliSignIn.begin("build box", "198.51.100.95")
+      secret = secret_of!(begun.approve_url)
+
+      {:ok, session} = Sanctum.TestContext.create_session(%{ctx | provider: "github"})
+
+      {:ok, session_ctx} =
+        Sanctum.Caller.establish(session.token, focus: athanor.id, task_supervisor: nil)
+
+      {:ok, _approved} =
+        Sanctum.TestContext.confirming(session_ctx, &Sanctum.CliSignIn.approve(&1, secret))
+
+      view = host!(conn, athanor)
+      open_pairing!(view)
+
+      assert has_element?(view, ~s([data-test="command-line"]), "Command line on build box")
+      assert has_element?(view, ~s([data-test="pairing-none"]))
+
+      view |> element(~s([data-test="command-line-revoke"])) |> render_click()
+
+      assert has_element?(view, ~s([data-test="command-lines-none"]))
+      assert {:ok, []} = Arca.PendingConfirmations.list_open(Context.actor(ctx), ctx.user_id)
+
+      assert {:error, _ended} =
+               Sanctum.Caller.establish(begun.session_token, task_supervisor: nil)
+
+      Cyfr.Test.Sandbox.end_views()
+    end
+  end
+
   describe "a fresh sign-in" do
     setup do
       issuer = "https://issuer.pairing.example"
@@ -517,4 +552,12 @@ defmodule PrismWeb.SystemLayerPairingTest do
 
   defp restore(app, key, nil), do: Application.delete_env(app, key)
   defp restore(app, key, value), do: Application.put_env(app, key, value)
+
+  # The approval secret the link carries in its fragment, the link being
+  # this home's `/cli` page.
+  defp secret_of!(link) do
+    prefix = Sanctum.Person.home() <> "/cli#code="
+    assert String.starts_with?(link, prefix), "#{link} is not this home's /cli link"
+    String.replace_prefix(link, prefix, "")
+  end
 end

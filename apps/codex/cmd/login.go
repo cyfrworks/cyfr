@@ -23,8 +23,9 @@ import (
 var flagLoginProvider string
 
 func init() {
-	loginCmd.Flags().StringVar(&flagLoginProvider, "provider", ops.DeviceFlowProviders[0],
-		"OAuth provider for device-flow login ("+strings.Join(ops.DeviceFlowProviders, " or ")+")")
+	loginCmd.Flags().StringVar(&flagLoginProvider, "provider", "",
+		"Sign in with an OAuth provider's device flow instead of approving in Prism ("+
+			strings.Join(ops.DeviceFlowProviders, " or ")+")")
 
 	rootCmd.AddCommand(loginCmd)
 	rootCmd.AddCommand(logoutCmd)
@@ -33,53 +34,55 @@ func init() {
 
 var loginCmd = &cobra.Command{
 	Use:     "login",
-	Short:   "Authenticate via Device Flow",
+	Short:   "Sign in by approving this command line in Prism",
 	GroupID: "identity",
-	Long: `Start an OAuth 2.0 Device Authorization Flow via GitHub or Google.
+	Long: `Sign this command line in to the home by approving it in Prism.
 
-The CLI prints a one-time code and a verification URL; open the URL in a
-browser, enter the code, and the CLI will receive a session token
-automatically. On your first login to a server the CLI asks cyfr.run for
-your personal namespace and prompts you to claim one if you have none —
-your namespace is your identity on every server, and required before you
-can push components. Later logins do not need cyfr.run to be reachable.`,
+cyfr login prints a link and a code, and waits. Open the link in a browser
+signed in to the home, on this machine or another device: Prism asks you to
+approve the command line on this machine and shows the code. Check that it
+matches the one printed here, approve, and confirm with your passkey or a
+fresh sign-in. The command line then holds a session of its own, listed
+under Devices in Prism, where you can revoke it. The link signs in once and
+expires in five minutes; Ctrl-C withdraws it.
+
+On a machine where no one can approve it in Prism, --provider signs in with
+GitHub or Google instead: the command line prints the provider's address and
+a code, and receives its session once you enter the code there.
+
+The session is saved under the context the command used: --context, or the
+current one. A --url that is not that context's address saves nothing; add a
+context for it first (cyfr context add <name> <url>).`,
 	Example: `  cyfr login
+  cyfr login --context home
   cyfr login --provider google`,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		provider := flagLoginProvider
-
-		// When the user didn't explicitly pass --provider and we're attached
-		// to a TTY, offer a picker instead of silently defaulting to GitHub.
-		// This keeps shell scripts deterministic (flag or --no-interactive
-		// ⇒ no prompt) while making Google discoverable interactively.
-		if !cmd.Flags().Changed("provider") && prompt.IsInteractive(flagNoInteractive) {
-			options := make([]prompt.Option, 0, len(ops.DeviceFlowProviders))
-			for _, p := range ops.DeviceFlowProviders {
-				options = append(options, prompt.Option{Label: prettyProvider(p), Value: p})
-			}
-			choice, err := prompt.SelectOne("Choose an OAuth provider", options)
-			if err != nil {
-				if prompt.IsAborted(err) {
-					return prompt.ErrAborted
-				}
-				return fmt.Errorf("Provider selection cancelled: %w", err)
-			}
-			provider = choice
+		target, err := loginContext()
+		if err != nil {
+			return err
 		}
 
-		if !slices.Contains(ops.DeviceFlowProviders, provider) {
-			return fmt.Errorf("Unsupported provider %q — use '%s'.", provider,
+		if cmd.Flags().Changed("provider") && !slices.Contains(ops.DeviceFlowProviders, flagLoginProvider) {
+			return fmt.Errorf("Unsupported provider %q — use '%s'.", flagLoginProvider,
 				strings.Join(ops.DeviceFlowProviders, "' or '"))
 		}
 
 		client := newClient()
+		// Signing in is anonymous: a credential the context still holds,
+		// revoked or expired, must not ride along and refuse it.
+		client.SessionID = ""
 
 		// Confirm the server speaks a revision we understand before starting a
-		// device flow that would otherwise fail confusingly later.
+		// sign-in that would otherwise fail confusingly later.
 		if err := client.Discover(cmd.Context()); err != nil {
 			return fmt.Errorf("Failed to connect: %w", err)
 		}
 
+		if !cmd.Flags().Changed("provider") {
+			return loginInPrism(cmd.Context(), client, target, machineName())
+		}
+
+		provider := flagLoginProvider
 		// Start device flow
 		result, err := client.CallTool(cmd.Context(), ops.Session, ops.SessionDeviceInitArgs{Provider: ops.Value(provider)})
 		if err != nil {
@@ -110,19 +113,16 @@ can push components. Later logins do not need cyfr.run to be reachable.`,
 		fmt.Println("Waiting for authorization...")
 
 		pollResult, err := pollDeviceAuth(cmd.Context(), client, provider, deviceCode,
-			time.Duration(interval*float64(time.Second)), deadline, expiresIn)
+			time.Duration(interval*float64(time.Second)), deadline, expiresIn, machineName())
 		if err != nil {
 			return err
 		}
 
-		// Save the session token as the context's credential.
+		// Save the session token as the credential of the context it was
+		// signed in through.
 		sessionID, _ := pollResult["session_token"].(string)
-		if sessionID == "" {
-			sessionID = client.SessionID
-		}
-		cfg, _ := config.Load()
-		if cfg.Current() != nil && sessionID != "" {
-			if err := cfg.SetToken(sessionID); err != nil {
+		if sessionID != "" {
+			if err := saveSession(target, sessionID); err != nil {
 				// Login already succeeded server-side; a failed local save
 				// must say so or the next command's "not authenticated"
 				// has no visible cause.
@@ -257,7 +257,7 @@ can push components. Later logins do not need cyfr.run to be reachable.`,
 
 // pollDeviceAuth polls until completion, expiry, denial, deadline or
 // context cancellation. Transient network errors are retried.
-func pollDeviceAuth(ctx context.Context, client *mcp.Client, provider, deviceCode string, interval time.Duration, deadline time.Time, expiresIn float64) (map[string]any, error) {
+func pollDeviceAuth(ctx context.Context, client *mcp.Client, provider, deviceCode string, interval time.Duration, deadline time.Time, expiresIn float64, machine string) (map[string]any, error) {
 	for {
 		if time.Now().After(deadline) {
 			return nil, fmt.Errorf("Login timed out after %.0f seconds. Run `cyfr login` to try again.", expiresIn)
@@ -270,7 +270,7 @@ func pollDeviceAuth(ctx context.Context, client *mcp.Client, provider, deviceCod
 		}
 
 		pollResult, err := client.CallTool(ctx, ops.Session, ops.SessionDevicePollArgs{DeviceCode: deviceCode,
-			Provider: ops.Value(provider)})
+			Provider: ops.Value(provider), Machine: ops.Value(machine)})
 		if err != nil {
 			if errors.Is(err, context.Canceled) {
 				return nil, err
@@ -573,9 +573,11 @@ var logoutCmd = &cobra.Command{
 
 		// Clear saved session locally first — even if the server call fails
 		// (e.g. session already expired), the user still wants local cleanup.
-		cfg, _ := config.Load()
-		if cfg.Current() != nil {
-			cfg.Current().Token = ""
+		// The context cleared is the one whose session the call ends:
+		// --context, or the current one.
+		if cfg, err := config.Load(); err == nil && cfg.Contexts[contextName(cfg)] != nil {
+			stored := cfg.Contexts[contextName(cfg)]
+			stored.Token = ""
 			if err := cfg.Save(); err != nil {
 				fmt.Fprintf(os.Stderr, "warning: could not clear the saved session: %v\n", err)
 			}

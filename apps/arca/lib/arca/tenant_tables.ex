@@ -166,6 +166,10 @@ defmodule Arca.TenantTables do
   # `request_rate_windows` the node's pre-authentication limits: no
   # session, and so no athanor, stands behind either.
   #
+  # `cli_sign_ins` are command lines waiting to be approved: no person or
+  # athanor owns one until its approval mints a session, which carries
+  # both.
+  #
   # `instance_entries`, `instance_entry_members` and
   # `instance_entry_usage` are the instance's own credentials, offered to
   # athanors and deleted with none of them.
@@ -187,6 +191,7 @@ defmodule Arca.TenantTables do
     "device_certifications",
     "installation_claims",
     "request_rate_windows",
+    "cli_sign_ins",
     "instance_entries",
     "instance_entry_members",
     "instance_entry_usage"

@@ -9,7 +9,9 @@ defmodule Arca.SessionStorage do
   It's called by `Sanctum.Session` which handles token hashing.
 
   Tokens are stored as SHA-256 hashes for indexed lookups.
-  Session metadata (user_id, email, provider) is stored as plaintext.
+  Session metadata (user_id, email, provider) is stored as plaintext, and
+  so is a command line's `cli_machine`, which marks the session as a
+  command line's (`list_command_lines/1`, `delete_command_line/2`).
 
   A session of a person whose identity is `remote`
   (`Arca.PersonIdentities`) records the `identity_key_epoch` of the head
@@ -41,7 +43,9 @@ defmodule Arca.SessionStorage do
   `attrs[:identity_key_epoch]` is required for a person whose identity is
   `remote` (`{:error, :identity_key_epoch_required}`), must be the cached
   head's current `key_epoch` (`{:error, :stale_key_epoch}`), and is refused
-  for any other person (`{:error, :unexpected_key_epoch}`). `also:`
+  for any other person (`{:error, :unexpected_key_epoch}`).
+  `attrs[:cli_machine]` names the machine a command line's session is
+  issued to, and is absent for a browser's. `also:`
   (optional) is the higher owner's closure, run in the same transaction
   after the insert and handed the session's `%{id, user_id}`: it answers
   `:ok`, or `{:error, reason}` to roll the session back; any other answer
@@ -86,6 +90,7 @@ defmodule Arca.SessionStorage do
       # runs on the next load; nothing is coerced.
       athanor_id: attrs[:athanor_id],
       identity_key_epoch: epoch,
+      cli_machine: attrs[:cli_machine],
       expires_at: attrs.expires_at,
       inserted_at: Map.get(attrs, :inserted_at, now)
     }
@@ -128,6 +133,7 @@ defmodule Arca.SessionStorage do
             :provider,
             :athanor_id,
             :identity_key_epoch,
+            :cli_machine,
             :expires_at,
             :inserted_at
           ]
@@ -215,6 +221,76 @@ defmodule Arca.SessionStorage do
     Arca.Repo.Errors.with_db_rescue("Arca.SessionStorage.hashes_by_user", [], fn ->
       Arca.Repo.all(from(s in Session, where: s.user_id == ^user_id, select: s.token_hash))
     end)
+  end
+
+  @doc """
+  The live command-line sessions of the person `user_id` (those minted
+  with a `cli_machine`), oldest first: `%{id, cli_machine, inserted_at,
+  expires_at}` each, never a token's hash or prefix.
+  """
+  @spec list_command_lines(String.t()) :: {:ok, [map()]} | {:error, :database_error}
+  # arca:unscoped-ok sessions are person-owned rows that exist before any
+  # athanor is resolved; the person is the scope.
+  def list_command_lines(user_id) when is_binary(user_id) do
+    Arca.Repo.Errors.with_db_rescue("Arca.SessionStorage.list_command_lines", fn ->
+      now = DateTime.utc_now()
+
+      rows =
+        Arca.Repo.all(
+          from(s in Session,
+            where: s.user_id == ^user_id and not is_nil(s.cli_machine) and s.expires_at > ^now,
+            order_by: [asc: s.inserted_at, asc: s.id],
+            select: %{
+              id: s.id,
+              cli_machine: s.cli_machine,
+              inserted_at: s.inserted_at,
+              expires_at: s.expires_at
+            }
+          )
+        )
+
+      {:ok, rows}
+    end)
+  end
+
+  @doc """
+  End the person `user_id`'s command-line session `id`: answers the
+  token hash it deleted, for the caller to announce, or `{:error,
+  :not_found}` when the person holds no command-line session by that id.
+  A browser's session is never ended here.
+  """
+  @spec delete_command_line(String.t(), String.t()) ::
+          {:ok, binary()} | {:error, :not_found | :database_error}
+  # arca:unscoped-ok sessions are person-owned rows; the person is the scope.
+  def delete_command_line(user_id, id) when is_binary(user_id) and is_binary(id) do
+    Arca.Repo.Errors.with_db_rescue("Arca.SessionStorage.delete_command_line", fn ->
+      query =
+        from(s in Session,
+          where: s.id == ^id and s.user_id == ^user_id and not is_nil(s.cli_machine),
+          select: s.token_hash
+        )
+
+      case Arca.Repo.delete_all(query) do
+        {0, _} -> {:error, :not_found}
+        {_count, [hash | _]} -> {:ok, hash}
+      end
+    end)
+  end
+
+  @doc false
+  # The statement that ends the session minted under `token_hash`, run in
+  # a caller's transaction (`Arca.CliSignIns.cancel/1`): answers the
+  # person it was, or nil when no session holds that token.
+  @spec delete_token!(binary()) :: String.t() | nil
+  # arca:unscoped-ok a session is addressed by its token's hash; the credential is the scope.
+  # arca:db-raise-ok a transaction step: its caller rescues around the transaction.
+  def delete_token!(token_hash) when is_binary(token_hash) do
+    case Arca.Repo.delete_all(
+           from(s in Session, where: s.token_hash == ^token_hash, select: s.user_id)
+         ) do
+      {_count, [user_id | _]} -> user_id
+      {_count, _none} -> nil
+    end
   end
 
   @doc """

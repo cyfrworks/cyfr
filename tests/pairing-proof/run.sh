@@ -7,8 +7,10 @@
 # behind the harness's HTTPS front, its device certificates made short
 # through the settings operation, and one person signed in twice — a
 # desktop and a phone — driven in Chromium (proof.mjs) through pairing,
-# confirmation on the glass, a sleep beyond the certificate's expiry and
-# revocation, with the device-intent measurement.
+# confirmation on the glass, a command line signed in by approval, a sleep
+# beyond the certificate's expiry and revocation, with the device-intent
+# measurement. The command line is the real cyfr binary, built here into
+# the output directory, where the proof runs it.
 #
 # The proof asks the server for its part through the output directory
 # (`ask-N.json`), and this script answers each (`answer-N.json`): the
@@ -46,6 +48,7 @@ cleanup() {
   [ -n "$PROOF_PID" ] && kill "$PROOF_PID" 2>/dev/null || true
   stop_proof_container
   rm -f "$OUT"/ask-* "$OUT"/answer-*
+  rm -rf "$OUT/bin"
   ( server_stop ) || [ "$code" -ne 0 ] || code=1
   if [ "${RELEASE_BOOT_KEEP:-}" = 1 ]; then
     echo "kept $WORK"
@@ -103,6 +106,11 @@ answer_ask() {
     *) fail "the proof asked for '$op', which this script does not do" ;;
   esac
 }
+
+step "the command line the proof runs"
+mkdir -p "$OUT/bin"
+( cd "$ROOT/apps/codex" && CGO_ENABLED=0 go build -trimpath -o "$OUT/bin/cyfr" . ) ||
+  fail "the cyfr command line did not build"
 
 step "the pairing proof in Chromium, in $PLAYWRIGHT_IMAGE"
 mkdir -p "$OUT"

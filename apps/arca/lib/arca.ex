@@ -145,6 +145,7 @@ defmodule Arca do
       CanvasVersions,
       CarryActions,
       CipherRotation,
+      CliSignIns,
       ComponentStorage,
       ConsumerReceipts,
       ConsentProofStorage,

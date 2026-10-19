@@ -246,6 +246,7 @@ defmodule Sanctum.Pairing do
     "webhook.create" => :credential_issuance,
     "webhook.rotate" => :credential_issuance,
     "registry.tokens_issue" => :credential_issuance,
+    "session.cli_approve" => :credential_issuance,
     "pairing.revoke" => :pairing_revocation,
     "person.enroll" => :recovery_material,
     "person.kit" => :recovery_material,

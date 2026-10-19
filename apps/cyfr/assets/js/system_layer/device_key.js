@@ -655,6 +655,8 @@ export function askerName(asker) {
       return "this home"
     case "session":
       return `a browser signed in${asker.name ? ` with ${asker.name}` : ""}`
+    case "command_line":
+      return `the command line${asker.name ? ` on ${asker.name}` : ""}`
     default:
       return "a client of yours"
   }

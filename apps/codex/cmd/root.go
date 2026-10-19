@@ -169,12 +169,7 @@ func newClient() *mcp.Client {
 		cfg.CurrentContext = flagContext
 	}
 
-	url := cfg.CurrentURL()
-	if flagURL != "" {
-		url = flagURL
-	}
-
-	client := mcp.NewClient(url)
+	client := mcp.NewClient(serverURL(cfg))
 	activeClient = client
 
 	// A change answered confirmation_required waits here and repeats, for
@@ -202,6 +197,27 @@ func newClient() *mcp.Client {
 	}
 
 	return client
+}
+
+// contextName is the stored context a command uses: --context, or the
+// current one.
+func contextName(cfg *config.Config) string {
+	if flagContext != "" {
+		return flagContext
+	}
+	return cfg.CurrentContext
+}
+
+// serverURL is the home's address a command talks to: --url, else the
+// --context's address, else the current context's.
+func serverURL(cfg *config.Config) string {
+	if flagURL != "" {
+		return flagURL
+	}
+	if stored := cfg.Contexts[contextName(cfg)]; stored != nil {
+		return stored.URL
+	}
+	return cfg.CurrentURL()
 }
 
 // handleToolError maps well-known error sentinels to a helpful message,

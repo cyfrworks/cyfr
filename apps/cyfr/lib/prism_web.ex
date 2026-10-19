@@ -37,6 +37,7 @@ defmodule PrismWeb do
       ChatLive,
       ChatRedirectLive,
       ClaimNamespaceController,
+      CliLive,
       ComponentDetailLive,
       ComponentsLive,
       EnforcementsLive,

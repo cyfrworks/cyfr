@@ -132,7 +132,7 @@ defmodule Sanctum.Gate.VisibilityTest do
 
     test "sees every session action — the anonymous ones and `use`" do
       assert Enum.sort(visible_actions("session", ctx_with([:execute]))) ==
-               ~w(device_init device_poll login logout read_resource use whoami)
+               ~w(cli_begin cli_cancel cli_poll device_init device_poll login logout read_resource use whoami)
     end
 
     test "operator-only actions are shown to platform admins alone" do
@@ -592,6 +592,7 @@ defmodule Sanctum.Gate.VisibilityTest do
         MapSet.new(~w(
           session.login session.logout session.whoami
           session.device_init session.device_poll session.read_resource
+          session.cli_begin session.cli_poll session.cli_cancel
           system.status tincture.invoke_public pairing.complete
           person.renew_certificate
         ))

@@ -296,6 +296,10 @@ defmodule Prism.Router do
           # and reads how it ended. Session-only, so a person not signed in
           # is sent through `/login`, which keeps the carry's fragment.
           live "/carry", CarryLive, :index, metadata: %{auth: :browser_authenticated}
+          # A command line's sign-in, approved by its person: session-only,
+          # so a person not signed in is sent through `/login`, whose script
+          # clears the approval secret's fragment.
+          live "/cli", CliLive, :index, metadata: %{auth: :browser_authenticated}
 
           scope "/a/:athanor" do
             # Forward to /chat with the athanor selected.
