@@ -370,68 +370,144 @@ func TestRecoveryKeepsAnIncoherentEdit(t *testing.T) {
 	}
 }
 
-// A COMPOSE_* setting planted in .env while a switch was unfinished does
-// not keep recovery from converging: the project opens, recovery stops
-// and verifies the stack with no compose call (compose would read the
-// setting), then refuses with compose_env_refused, starting nothing; the
-// switch stays unfinished until .env is fixed.
-func TestRecoveryConvergesUnderAComposeSettingInEnv(t *testing.T) {
-	h := newHome(t)
-	h.fake.startStack(t, h.head())
-	r := h.request(id(1), publicTarget, "")
-	h.killAt("journal:switch:stopped", func(e *Engine) { e.Switch(bg, r) })
-	h.crash()
-	writeFile(t, h.e.envPath(), []byte(h.env()+"COMPOSE_PROFILES=public\n"))
-	e, err := Open(h.dir, h.fake)
-	if err != nil {
-		t.Fatalf("the project does not open: %v", err)
-	}
-	e.clock = h.clock
-	unlock, err := e.Lock("reach --resume")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer unlock()
-	h.fake.mu.Lock()
-	h.fake.st.Containers["home-caddy-1"] = &fakeContainer{Name: "home-caddy-1", Service: "caddy", State: "running"}
-	h.fake.mu.Unlock()
-	mark := len(h.fake.calls())
-	receipts, err := e.Resume(bg)
-	if refusalCode(err) != "compose_env_refused" || len(receipts) != 0 {
-		t.Fatalf("resume answered %+v, %v", receipts, err)
-	}
-	calls := h.fake.calls()[mark:]
-	reads := 0
-	for _, c := range calls {
-		if c.Args[0] == "compose" {
-			t.Errorf("recovery ran compose, which reads .env: %s", c)
-		}
-		if c.Args[0] == "ps" {
-			reads++
-		}
-	}
-	if reads < 4 {
-		t.Errorf("the stop was not verified by two reads: %d", reads)
-	}
-	if running := h.fake.runningServices(); slices.Contains(running, "cyfr") || slices.Contains(running, "caddy") {
-		t.Errorf("running %v", running)
-	}
-	if j, _ := e.readJournal(); j == nil {
-		t.Error("the switch was made terminal before .env could be read")
-	}
-	for _, op := range []func() error{
-		func() error { _, err := e.Start(bg, "up"); return err },
-		func() error { _, err := e.Switch(bg, SwitchRequest{ID: id(5)}); return err },
-		func() error { _, err := e.Join(bg, JoinRequest{ID: id(6)}); return err },
-		func() error { _, err := e.CancelJoin(bg, CancelRequest{ID: id(7), JoinID: id(8)}); return err },
+// A .env that held no coherent head when a switch was accepted, for a
+// setting outside the head keys, and was corrected before recovery holds
+// a head now: it is resolved afresh as .env edited meanwhile, left as
+// corrected and started as it says when the stack was running
+// (reach_env_edited then=started), or left stopped when it was not
+// (then=not_running). One still incoherent is .env unchanged: the switch
+// was not applied and nothing starts.
+func TestRecoveryResolvesAHeadCorrectedAfterAcceptance(t *testing.T) {
+	const words = "only this computer, at http://localhost:4000"
+	for _, c := range []struct {
+		name, point string
+		running     bool
+		correct     bool
+		then        string
+		want        []string
+	}{
+		{"corrected, accepted", "journal:switch:accepted", true, true, "started", baseStack},
+		{"corrected, stopped", "journal:switch:stopped", true, true, "started", baseStack},
+		{"corrected, not running", "journal:switch:accepted", false, true, "not_running", nil},
+		{"still incoherent", "journal:switch:accepted", true, false, "", slices.DeleteFunc(slices.Clone(baseStack), func(s string) bool { return s == "cyfr" })},
 	} {
-		before := len(h.fake.calls())
-		if err := op(); refusalCode(err) != "compose_env_refused" {
-			t.Errorf("a mutating method answered %v", err)
-		}
-		if after := h.fake.calls()[before:]; len(after) != 0 {
-			t.Errorf("a refused method ran docker: %v", after)
-		}
+		t.Run(c.name, func(t *testing.T) {
+			h := newHome(t)
+			if c.running {
+				h.fake.startStack(t, h.head())
+			}
+			fixed := h.env()
+			incoherent := fixed + "CYFR_BIND_ADDRESS=not-an-address\n"
+			writeFile(t, h.e.envPath(), []byte(incoherent))
+			r := h.request(id(1), publicTarget, "")
+			if r.OldDigest != "" {
+				t.Fatalf("the incoherent .env has a head: %s", r.OldDigest)
+			}
+			if !h.killAt(c.point, func(e *Engine) { e.Switch(bg, r) }) {
+				t.Fatalf("never reached %s", c.point)
+			}
+			env := incoherent
+			if c.correct {
+				env = fixed
+				writeFile(t, h.e.envPath(), []byte(env))
+			}
+			receipts, err := h.e.Resume(bg)
+			if err != nil || len(receipts) != 1 {
+				t.Fatalf("resume answered %+v, %v", receipts, err)
+			}
+			rc := receipts[0]
+			if c.then == "" {
+				if rc.State != "completed" || rc.Outcome != "not_applied" || rc.Code != "" || rc.FinalHead != nil {
+					t.Errorf("the receipt is %+v", rc)
+				}
+			} else {
+				if rc.State != "completed" || rc.Outcome != "failed" || rc.Code != "reach_env_edited" || !mapsEqual(rc.Payload, map[string]string{"then": c.then, "env": words}) || rc.FinalHead == nil || rc.FinalHead.Digest() != h.head().Digest() {
+					t.Fatalf("the receipt is %+v", rc)
+				}
+				if got := rc.Refusal().Message(); got != envEdited(c.then, words) {
+					t.Errorf("the sentence reads %q", got)
+				}
+			}
+			if h.env() != env {
+				t.Errorf("recovery rewrote .env:\n%s", h.env())
+			}
+			if got, want := h.fake.runningServices(), slices.Sorted(slices.Values(c.want)); !slices.Equal(got, want) {
+				t.Errorf("running %v, want %v", got, want)
+			}
+			if _, err := os.Stat(filepath.Join(h.dir, stateDir, journalFile)); err == nil {
+				t.Error("the journal is left")
+			}
+		})
+	}
+}
+
+// A COMPOSE_* setting planted in .env while a switch was unfinished does
+// not keep recovery from converging, whether the switch's own stop ran or
+// not: the project opens, recovery stops and verifies the stack, cyfr
+// included, with no compose call (compose would read the setting), then
+// refuses with compose_env_refused, starting nothing; the switch stays
+// unfinished until .env is fixed.
+func TestRecoveryConvergesUnderAComposeSettingInEnv(t *testing.T) {
+	for _, point := range []string{"journal:switch:accepted", "journal:switch:stopped"} {
+		t.Run(point, func(t *testing.T) {
+			h := newHome(t)
+			h.fake.startStack(t, h.head())
+			r := h.request(id(1), publicTarget, "")
+			h.killAt(point, func(e *Engine) { e.Switch(bg, r) })
+			h.crash()
+			writeFile(t, h.e.envPath(), []byte(h.env()+"COMPOSE_PROFILES=public\n"))
+			e, err := Open(h.dir, h.fake)
+			if err != nil {
+				t.Fatalf("the project does not open: %v", err)
+			}
+			e.clock = h.clock
+			unlock, err := e.Lock("reach --resume")
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer unlock()
+			h.fake.mu.Lock()
+			h.fake.st.Containers["home-caddy-1"] = &fakeContainer{Name: "home-caddy-1", Service: "caddy", State: "running"}
+			h.fake.mu.Unlock()
+			mark := len(h.fake.calls())
+			receipts, err := e.Resume(bg)
+			if refusalCode(err) != "compose_env_refused" || len(receipts) != 0 {
+				t.Fatalf("resume answered %+v, %v", receipts, err)
+			}
+			calls := h.fake.calls()[mark:]
+			reads := 0
+			for _, c := range calls {
+				if c.Args[0] == "compose" {
+					t.Errorf("recovery ran compose, which reads .env: %s", c)
+				}
+				if c.Args[0] == "ps" {
+					reads++
+				}
+			}
+			if reads < 4 {
+				t.Errorf("the stop was not verified by two reads: %d", reads)
+			}
+			if running := h.fake.runningServices(); slices.Contains(running, "cyfr") || slices.Contains(running, "caddy") {
+				t.Errorf("running %v", running)
+			}
+			if j, _ := e.readJournal(); j == nil {
+				t.Error("the switch was made terminal before .env could be read")
+			}
+			for _, op := range []func() error{
+				func() error { _, err := e.Start(bg, "up"); return err },
+				func() error { _, err := e.Switch(bg, SwitchRequest{ID: id(5)}); return err },
+				func() error { _, err := e.Join(bg, JoinRequest{ID: id(6)}); return err },
+				func() error { _, err := e.CancelJoin(bg, CancelRequest{ID: id(7), JoinID: id(8)}); return err },
+			} {
+				before := len(h.fake.calls())
+				if err := op(); refusalCode(err) != "compose_env_refused" {
+					t.Errorf("a mutating method answered %v", err)
+				}
+				if after := h.fake.calls()[before:]; len(after) != 0 {
+					t.Errorf("a refused method ran docker: %v", after)
+				}
+			}
+		})
 	}
 }
 

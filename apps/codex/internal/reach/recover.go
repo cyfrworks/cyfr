@@ -113,10 +113,12 @@ func (e *Engine) recoverSwitch(ctx context.Context, j *journal) (Receipt, error)
 		held = st.heldKeys()
 	}
 	// A .env that holds no coherent head is the person's edit, kept as
-	// it is: only an old head already incoherent when the switch began
-	// is .env unchanged.
+	// it is: only one still incoherent with the head keys it held when
+	// the switch began, incoherent then too, is .env unchanged. One that
+	// was incoherent then and holds a head now was corrected meanwhile,
+	// whatever its head keys, and is resolved afresh as an edit.
 	switch {
-	case err == nil && j.OldHead == nil && maps.Equal(held, j.OldKeys):
+	case err == nil && j.OldHead == nil && st.headErr != nil && maps.Equal(held, j.OldKeys):
 		return e.recoverOld(ctx, j)
 	case err != nil || st.headErr != nil:
 	case maps.Equal(held, j.NewKeys) && (j.Reopen || !maps.Equal(held, j.OldKeys)):
@@ -124,7 +126,7 @@ func (e *Engine) recoverSwitch(ctx context.Context, j *journal) (Receipt, error)
 			return e.outcomeUnknown(j, err)
 		}
 		return e.startTarget(ctx, j)
-	case maps.Equal(held, j.OldKeys):
+	case j.OldHead != nil && maps.Equal(held, j.OldKeys):
 		return e.recoverOld(ctx, j)
 	}
 	// .env was edited meanwhile: the switch failed, and the home is
