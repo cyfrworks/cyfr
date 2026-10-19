@@ -124,7 +124,7 @@ try {
     await heading("Your home is ready").waitFor({ timeout: 600_000 });
     const shown = await page.locator('[data-screen="done"] [data-address]').innerText();
     check("the Done page names the home's ts.net address", shown === `https://${approved.name}`, { shown });
-    check("the Done page says where that address opens", await page.getByText("This address opens on your phone and laptop on your tailnet; this device opens it once it can reach its own tailnet address.").isVisible());
+    check("the Done page says where that address opens", await page.getByText("This address opens on your phone and laptop on your tailnet, and on this device in a browser that uses this home's proxy at 127.0.0.1:1055.").isVisible());
     await screen("done");
     await page.waitForTimeout(4_000);
     check("the pages do not move the browser to a ts.net address", new URL(page.url()).origin === pagesOrigin, { url: page.url() });

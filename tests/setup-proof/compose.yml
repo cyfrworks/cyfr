@@ -5,16 +5,18 @@
 # into each project directory as docker-compose.override.yml: the one
 # override of the default file set that `cyfr setup` and the proof's own
 # compose calls resolve beside docker-compose.yml. It is the Compose
-# proof's (tests/compose-proof/compose.yml) less its port changes: cyfr is
-# published at 127.0.0.1:CYFR_PORT as shipped, the port the run's template
-# names, so the address the pages move the browser to is the home's. It
-# adds only:
+# proof's (tests/compose-proof/compose.yml) less its change of cyfr's port:
+# cyfr is published at 127.0.0.1:CYFR_PORT as shipped, the port the run's
+# template names, so the address the pages move the browser to is the
+# home's. It adds only:
 #
 #   - the app image built from the tree, and the Tailscale stand-in
 #     (tests/compose-proof/tailscale-standin/) in place of the pinned
 #     tailscale image, each named by a variable of the run's template (no
 #     COMPOSE_* name: cyfr refuses one in .env);
-#   - the project's names in place of the shipped container name;
+#   - the project's names in place of the shipped container name, and a
+#     loopback port Docker picks for the tailscale service's SOCKS5 proxy,
+#     so a run meets no deployed stack;
 #   - proof-tailnet, a network of the stand-in alone, where the run's
 #     client stands for a tailnet's device;
 #   - the Locus runtime and backends services under a profile no head
@@ -28,6 +30,8 @@ services:
   tailscale:
     image: ${PROOF_TAILSCALE_IMAGE:?set PROOF_TAILSCALE_IMAGE}
     pull_policy: never
+    ports: !override
+      - "127.0.0.1::1055"
     networks:
       proof-tailnet: {}
   locus-runtime:

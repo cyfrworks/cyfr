@@ -35,7 +35,7 @@ var setupCmd = &cobra.Command{
 
 The pages ask how the home is reached (your phone and laptop via Tailscale, the recommended choice; only this device; or, under Advanced, a public domain with an optional certificate email) and the email of the home's administrator, then start: they run what 'cyfr init' runs, the same steps in the same order, then what 'cyfr up' runs. A tailnet home's join shows its approval link as a QR code and as text, under it the machine's name (cyfr unless changed there), and waits for the approval; a join that fails, expires or is cancelled leaves the home reached from this device only, and the pages offer to try the join again or to start the home on this device only. A start that fails shows why, and offers to try again or, for a home reached from other devices, to start it on this device only. Each refusal is the command line's own sentence.
 
-Once the home is up, the pages show its address and move the browser there, apart from a tailnet address, which this device reaches only once it can reach its own tailnet address; the program stops serving the pages once they have read that, or a minute after. Run in a project whose .env exists, it refuses as 'cyfr init' refuses to change how an existing home is reached, serving nothing; 'cyfr access <mode>' changes that.
+Once the home is up, the pages show its address and move the browser there, apart from a tailnet address, which a browser on this device reaches only through the home's SOCKS5 proxy on 127.0.0.1:1055; the program stops serving the pages once they have read that, or a minute after. Run in a project whose .env exists, it refuses as 'cyfr init' refuses to change how an existing home is reached, serving nothing; 'cyfr access <mode>' changes that.
 
 Exit status 3: the home started, but on this machine only, because the tailnet machine is not ready to serve it (not the one .env names, not joined, or HTTPS off); Serve stays closed, and the message says what to do. Exit status 1: the home was not set up and started, the message saying why.`,
 	Example: `  cyfr setup
@@ -499,7 +499,8 @@ func currentHead() (access.Head, error) {
 // done ends the run with the home up: at its address, or at this
 // machine's own for a start that left it there (err, its sentence shown,
 // the browser not moved past it). A tailnet address is not moved to,
-// since this device does not reach it yet.
+// since a browser on this device reaches it only through the home's
+// SOCKS5 proxy.
 func (s *setupSession) done(err error) {
 	st := setup.State{Phase: setup.PhaseDone}
 	if h, herr := currentHead(); herr == nil {
