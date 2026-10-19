@@ -100,7 +100,7 @@ func TestReadEnvValuesReadsAsRealComposeDoes(t *testing.T) {
 		"braces in the word":         "A=${ACCESS_DIFF_UNSET:-{}x}\nB=${ACCESS_DIFF_UNSET:-}}\nC=${ACCESS_DIFF_UNSET-1}${ACCESS_DIFF_UNSET+2}$ACCESS_DIFF_UNSET\nD=${ACCESS_DIFF_UNSET:-{b}c}d}\n",
 		"octal escapes":              "A=\"\\0377\\0400\\01\\0\\0089\\x\"\n",
 		"a newline in a braced word": "A=\"${ACCESS_DIFF_UNSET:-x\ny}\"\n",
-		"bare names":                 "ACCESS_DIFF_SET\nREACH_DIFF_UNSET\nREACH_DIFF_EMPTY\nA=1\nA\n",
+		"bare names":                 "ACCESS_DIFF_SET\nACCESS_DIFF_UNSET\nACCESS_DIFF_EMPTY\nA=1\nA\n",
 		"bare name at the end":       "A=1\nTRAILING",
 		"key characters":             "A.B=1\nA-B=2\nA[0]=3\nÄKEY=4\n1KEY=5\nA\tB=6\n_X=7\n",
 		"byte order mark":            "\uFEFFA=1\nB=2\n",
