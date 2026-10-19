@@ -655,6 +655,9 @@ services:
     # The device's own browser reaches the home's address through this
     # sidecar, on the host's loopback only. The connection arrives through
     # Serve's proxy ingress and carries no loopback-ingress authority.
+    # This is a general proxy on this machine's loopback for the device's
+    # own browser; a program on this machine can reach through it whatever
+    # the sidecar can reach.
     ports:
       - "127.0.0.1:1055:1055"
     # The edge network alone, at the address cyfr trusts forwarded headers
