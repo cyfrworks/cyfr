@@ -729,48 +729,6 @@ if config_env() != :test do
       ]
   end
 
-  # The first-run setup link's capability (CYFR_SETUP_TOKEN): exactly 64
-  # lowercase hexadecimal characters, which `cyfr init` mints when it is
-  # given no operator email. It is refused, after the reach, where no
-  # setup could use it: beside the operator list, which already names the
-  # administrators; beside CYFR_RESTORE_TOKEN, which reserves the first
-  # person for a restore; on a headless node, which has no setup page;
-  # and where sign-in is not GitHub's or Google's, by an OIDC issuer or by
-  # neither. Each refusal names the variable and never its value, which is
-  # a secret (`Prima.Refusal`).
-  {:ok, setup_token} = Prima.EnvValue.text(getenv, "CYFR_SETUP_TOKEN")
-
-  setup_token_refusal =
-    cond do
-      is_nil(setup_token) ->
-        nil
-
-      not Regex.match?(~r/\A[0-9a-f]{64}\z/, setup_token) ->
-        {:setup_token_refused, %{why: :malformed}}
-
-      platform_admins != [] ->
-        {:setup_token_with_admins, %{}}
-
-      restore_token != nil ->
-        {:setup_token_refused, %{why: :restore_token}}
-
-      headless? ->
-        {:setup_token_refused, %{why: :headless}}
-
-      auth_provider == Sanctum.Auth.OIDC ->
-        {:setup_token_refused, %{why: :oidc}}
-
-      is_nil(github_id) and is_nil(google_id) ->
-        {:setup_token_refused, %{why: :no_provider}}
-
-      true ->
-        nil
-    end
-
-  if setup_token_refusal do
-    raise "[Cyfr] FATAL: " <> Prima.Refusal.message(setup_token_refusal)
-  end
-
   # Storage backend. Unset/`local` keeps the filesystem default from config.exs;
   # `s3` flips the adapter and requires the S3 credentials (fail loud if partial).
   case Cyfr.RuntimeConfig.resolve_storage(getenv) do

@@ -91,11 +91,11 @@ func TestAnEnvLineComposeDoesNotReadIsSaidByItsLine(t *testing.T) {
 	if want := "read " + path + ": " + sentence; keysErr == nil || keysErr.Error() != want {
 		t.Errorf("ensureEnvFileKeys answered %v, want %q", keysErr, want)
 	}
-	_, linkErr := setupLink(path)
-	if want := path + " does not read (" + sentence + ")"; linkErr == nil || linkErr.Error() != want {
-		t.Errorf("setupLink answered %v, want %q", linkErr, want)
+	existingErr := refuseExistingReach(path, initOptions{})
+	if existingErr == nil || existingErr.Error() != sentence {
+		t.Errorf("refuseExistingReach answered %v, want %q", existingErr, sentence)
 	}
-	for _, err := range []error{keysErr, linkErr} {
+	for _, err := range []error{keysErr, existingErr} {
 		if err != nil && strings.Contains(err.Error(), secret) {
 			t.Errorf("the refusal carries the line's text: %v", err)
 		}

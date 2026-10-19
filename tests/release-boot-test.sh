@@ -311,7 +311,6 @@ mkdir -p "$scratch/checkout/scripts" "$scratch/checkout/seed/aqua" "$scratch/bin
 cp "$root/.env.example" "$scratch/checkout/.env.example"
 printf '#!/bin/sh\nexit 0\n' >"$scratch/checkout/scripts/wasm-tools.sh"
 chmod +x "$scratch/checkout/scripts/wasm-tools.sh"
-setup_token=0f1e2d3c4b5a69788796a5b4c3d2e1f00f1e2d3c4b5a69788796a5b4c3d2e1f0
 # The stand-in `cyfr`: it records how each run was made (its arguments,
 # HOME, its directory's name, the names in its environment and whether
 # .env.example is the checkout's) in calls.log, then does what init and
@@ -327,11 +326,9 @@ cat >"$scratch/bin/cyfr" <<SH
   if cmp -s .env.example "$scratch/checkout/.env.example"; then echo example=same; else echo example=other; fi
 } >>"$scratch/calls.log"
 if [ -s "$scratch/cli-fails" ]; then
-  # Failing after it wrote .env and printed the setup link, as an init
-  # whose switch fails does.
+  # Failing after it wrote .env and printed a secret of it.
   sed -e 's/^CYFR_SECRET_KEY_BASE=\$/CYFR_SECRET_KEY_BASE=stub-key-base-0123456789abcdef/' .env.example >.env
-  echo "CYFR_SETUP_TOKEN=$setup_token" >>.env
-  echo "the setup link: http://localhost:4000/setup#t=$setup_token"
+  echo "the key base: stub-key-base-0123456789abcdef"
   exit "\$(cat "$scratch/cli-fails")"
 fi
 command="\$1" domain=""
@@ -340,7 +337,6 @@ case "\$command" in
   init)
     [ ! -e .env ] || exit 9
     sed -e 's/^CYFR_SECRET_KEY_BASE=\$/CYFR_SECRET_KEY_BASE=stub-key-base-0123456789abcdef/' .env.example >.env
-    echo "CYFR_SETUP_TOKEN=$setup_token" >>.env
     ;;
   reach) [ -e .env ] || exit 9 ;;
 esac
@@ -366,7 +362,7 @@ mkdir -p "$scratch/cells"
 case " $(calls env) " in
   *" COMPOSE_PROFILES "* | *" CYFR_LEFTOVER "*) fail "the caller's environment reached the command line: $(calls env)" ;;
 esac
-for key in CYFR_SETUP_TOKEN CYFR_PUBLIC_URL CYFR_BIND_ADDRESS; do
+for key in CYFR_PUBLIC_URL CYFR_BIND_ADDRESS; do
   [ "$(assigned local "$key")" = 0 ] || fail "the local cell's deployment file assigns $key"
 done
 for pair in CYFR_REACH=local CYFR_HOST=localhost CYFR_PORT=4399 CYFR_DATABASE=sqlite CYFR_AUTO_MIGRATE=true \
@@ -379,7 +375,7 @@ done
 # rewrite in place.
 [ "$(grep -n '^CYFR_PORT=' "$scratch/cells/local/.env" | cut -d: -f1)" = "$(grep -n '^CYFR_PORT=' "$root/.env.example" | cut -d: -f1)" ] ||
   fail "CYFR_PORT moved from the line init wrote it on"
-pass "a local cell is init's deployment file, the setup capability deleted, and the test's settings beside it, none of the caller's environment reaching the command line"
+pass "a local cell is init's deployment file with the test's settings beside it, none of the caller's environment reaching the command line"
 
 : >"$scratch/calls.log"
 [ "$(status_of cell cell_new "$scratch/cells/named" "" cyfr.example.com)" = 0 ] || { cat "$scratch/out" >&2; fail "cell_new failed for a named cell"; }
@@ -413,7 +409,7 @@ printf '3\n' >"$scratch/cli-fails"
 [ "$(status_of cell cell_new "$scratch/cells/failed")" = 1 ] || fail "a command line that failed did not fail cell_new"
 has "cyfr init exited 3 for cell $scratch/cells/failed" "the failure names the command and the cell"
 has "the command line's output for cell" "the failure prints the command line's output"
-if grep -qF "$setup_token" "$scratch/out"; then fail "the failure printed the setup capability the command line wrote"; fi
+if grep -qF stub-key-base-0123456789abcdef "$scratch/out"; then fail "the failure printed the key base the command line wrote"; fi
 rm -f "$scratch/cli-fails"
 pass "a failed command line fails the cell, printing its output redacted"
 

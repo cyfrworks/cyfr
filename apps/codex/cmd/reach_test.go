@@ -711,7 +711,7 @@ func TestReachTailnetServesAClosedHomeAgain(t *testing.T) {
 }
 
 // The command tree is the contract's: `cyfr reach <mode>` with its flags,
-// the hidden --request-id, `cyfr reach status` and `cyfr setup link`.
+// the hidden --request-id and `cyfr reach status`, and no `cyfr setup`.
 func TestReachCommandsAreTheContractsSurface(t *testing.T) {
 	for _, name := range []string{"domain", "acme-email", "tailscale-auth-key-file", "hostname", "new-node", "yes", "resume", "request-id"} {
 		if reachCmd.Flags().Lookup(name) == nil {
@@ -726,8 +726,11 @@ func TestReachCommandsAreTheContractsSurface(t *testing.T) {
 			t.Errorf("cyfr init has no --%s", name)
 		}
 	}
-	if subcommand(reachCmd, "status") == nil || subcommand(subcommand(rootCmd, "setup"), "link") == nil {
-		t.Errorf("cyfr reach status or cyfr setup link is missing")
+	if subcommand(reachCmd, "status") == nil {
+		t.Errorf("cyfr reach status is missing")
+	}
+	if subcommand(rootCmd, "setup") != nil {
+		t.Errorf("cyfr setup is a command")
 	}
 	internal := subcommand(rootCmd, "internal")
 	if internal == nil || !internal.Hidden || subcommand(internal, "docker-run") == nil || !subcommand(internal, "docker-run").DisableFlagParsing {

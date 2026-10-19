@@ -14,34 +14,10 @@ defmodule Prima.RefusalTest do
 
   alias Prima.Refusal
 
-  # The reach and first-run setup rows: each code with its class and the
-  # sentence it reads as, word for word. The boot's own rows are held to
-  # the same words by tests/fixtures/reach_modes.json, on both sides.
+  # The reach rows: each code with its class and the sentence it reads
+  # as, word for word. The boot's own rows are held to the same words by
+  # tests/fixtures/reach_modes.json, on both sides.
   @reach_rows [
-    {:setup_not_local, :forbidden,
-     "Setting up this home is done on the machine itself: on its own screen, or through its loopback address. Nothing was changed. Open the link `cyfr setup link` prints, on the machine."},
-    {:setup_token_invalid, :unauthenticated,
-     "This setup link is not this home's. Nothing was changed. Run `cyfr setup link` on the machine and open the link it prints."},
-    {:setup_token_spent, :conflict,
-     "This setup link has been used, and this home is set up. Nothing was changed. Sign in instead."},
-    {:setup_claimed, :conflict,
-     "Someone finished setting up this home a moment ago, so it already has its administrator. Nothing was changed for you. Sign in; if that was not you, tell whoever runs the machine."},
-    {:setup_closed, :forbidden,
-     "Whoever runs the machine names this home's administrators, so it has no setup step. Nothing was changed. Sign in, or ask them to add you."},
-    {:setup_expired, :cancelled,
-     "This setup attempt ended before it finished: it expired, was cancelled, or the home restarted while it waited. Nothing was changed. Start again."},
-    {:setup_cancel_too_late, :conflict,
-     "Too late to cancel: this setup had already finished, and the account you approved on your phone is this home's administrator. Sign in to continue; if that account is wrong, whoever runs the machine can name the administrators in its deployment file."},
-    {:setup_denied, :cancelled,
-     "The sign-in was declined on your phone. Nothing was changed. Start again with the account that should run this home."},
-    {:setup_unverified_email, :forbidden,
-     "That account has no email address GitHub or Google has verified, and this home's administrator needs one. Nothing was changed. Verify an address with them, then start again."},
-    {:setup_provider_unavailable, :unavailable,
-     "GitHub or Google did not answer. Nothing was changed. Start again in a moment."},
-    {:setup_failed, :unavailable,
-     "This home could not finish creating your account. Nothing was changed. Start again; if it keeps failing, the home's log on the machine says why."},
-    {:setup_ticket_invalid, :unauthenticated,
-     "This sign-in belongs to another browser or has been used. Nothing was changed. Sign in on this screen."},
     {:reach_missing, :setup_required,
      "CYFR_REACH is not set in .env, so this home does not know how it is reached. Nothing started. Run `cyfr init` for a new home, or `cyfr reach local|tailnet|public` for this one."},
     {{:reach_missing, %{}}, :setup_required,
@@ -78,18 +54,6 @@ defmodule Prima.RefusalTest do
      "`--domain` is for a public home, and this command chooses `local`. Nothing was changed. Run it again without `--domain`, or run `cyfr reach public` with it."},
     {{:reach_option_outside_mode, %{option: "--acme-email", mode: "tailnet"}}, :invalid_argument,
      "`--acme-email` is for a public home, and this command chooses `tailnet`. Nothing was changed. Run it again without `--acme-email`, or run `cyfr reach public` with it."},
-    {:setup_token_with_admins, :invalid_argument,
-     "CYFR_SETUP_TOKEN is set, but CYFR_PLATFORM_ADMIN_EMAILS already names this home's administrators, so no setup can use it. Nothing started. Delete the CYFR_SETUP_TOKEN line from .env, then run `cyfr up`."},
-    {{:setup_token_refused, %{why: :malformed}}, :invalid_argument,
-     "CYFR_SETUP_TOKEN cannot be used here: it is not 64 lowercase hexadecimal characters. Nothing started. Replace it with 64 lowercase hexadecimal characters, such as `openssl rand -hex 32` prints."},
-    {{:setup_token_refused, %{why: :restore_token}}, :invalid_argument,
-     "CYFR_SETUP_TOKEN cannot be used here: CYFR_RESTORE_TOKEN also reserves the first person. Nothing started. Remove one of the two."},
-    {{:setup_token_refused, %{why: :headless}}, :invalid_argument,
-     "CYFR_SETUP_TOKEN cannot be used here: a headless node has no setup page. Nothing started. Set CYFR_PLATFORM_ADMIN_EMAILS instead and delete CYFR_SETUP_TOKEN."},
-    {{:setup_token_refused, %{why: :oidc}}, :invalid_argument,
-     "CYFR_SETUP_TOKEN cannot be used here: the setup signs in through GitHub or Google, and this home uses an OIDC issuer. Nothing started. Set CYFR_PLATFORM_ADMIN_EMAILS instead and delete CYFR_SETUP_TOKEN."},
-    {{:setup_token_refused, %{why: :no_provider}}, :invalid_argument,
-     "CYFR_SETUP_TOKEN cannot be used here: the setup signs in through GitHub or Google, and this home uses neither. Nothing started. Set CYFR_PLATFORM_ADMIN_EMAILS instead and delete CYFR_SETUP_TOKEN."},
     {{:compose_env_refused, %{key: "COMPOSE_PROFILES"}}, :invalid_argument,
      "`.env` sets `COMPOSE_PROFILES`, which Docker Compose would read to choose this stack's files, project or services behind cyfr's back. Nothing started. Remove it; cyfr chooses them from CYFR_REACH and CYFR_LOCUS_BUILDS_URL."},
     {{:compose_env_refused, %{line: "7"}}, :invalid_argument,
@@ -501,7 +465,6 @@ defmodule Prima.RefusalTest do
             {:reach_key_outside_mode, %{key: "CYFR_PORT", mode: "local", needs: "public"}},
             {:reach_public_url_mismatch, %{mode: "local", expected: "https://x.example"}},
             {:reach_setting_invalid, %{key: "CYFR_HOST", value: "x"}},
-            {:setup_token_refused, %{why: :other}},
             {:compose_env_refused, %{key: "CYFR_PORT"}},
             {:compose_env_refused, %{line: 7}},
             {:reach_busy, %{until: "x"}},
@@ -524,7 +487,6 @@ defmodule Prima.RefusalTest do
             {:reach_setting_invalid, %{key: "CYFR_PROXY_PORT", value: "4001", extra: "y"}},
             {:reach_setting_invalid,
              %{key: "CYFR_PORT", value: "4001", address: "a", bind: "b", port: "4001"}},
-            {:setup_not_local, %{}},
             {:tailnet_join_expired, %{reason: "x"}}
           ] do
         assert capture_log(fn ->

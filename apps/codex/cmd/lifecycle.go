@@ -80,6 +80,7 @@ const (
 	buildsURLVar     = "CYFR_LOCUS_BUILDS_URL"
 	buildsKeyVar     = "CYFR_LOCUS_BUILDS_KEY"
 	corsOriginsVar   = "CYFR_CORS_ALLOWED_ORIGINS"
+	adminEmailVar    = "CYFR_PLATFORM_ADMIN_EMAILS"
 
 	// The locus-runtime service's id when .env names none: docker-compose.yml's
 	// default for both LOCUS_RUNTIME_SERVICE_ID and the entry of CYFR_LOCUS_RUNTIME_WORKERS.
@@ -245,12 +246,11 @@ func ensureEnvFileKeys(path string) ([]envChange, error) {
 
 // newEnv is the .env init writes for a new home from the template at
 // path, through the engine's editor (reach.EditEnv): the answer to init's
-// email question (the operators' setting, or with no email the setup
-// token), the stack's keys (stackKeys) and the local head's reach keys,
-// every other line of the template kept. The template documents the
-// email and the token on commented lines, which stay; their assignments
-// are added at the end.
-func newEnv(path, adminEmail, setupToken string) ([]byte, []envChange, reach.Derivation, error) {
+// email question (the operators' setting), the stack's keys (stackKeys)
+// and the local head's reach keys, every other line of the template kept.
+// The template documents the email on a commented line, which stays; its
+// assignment is added at the end.
+func newEnv(path, adminEmail string) ([]byte, []envChange, reach.Derivation, error) {
 	tmpl, err := os.ReadFile(path)
 	if err != nil {
 		return nil, nil, reach.Derivation{}, fmt.Errorf("Failed to read %s: %w", path, err)
@@ -262,9 +262,6 @@ func newEnv(path, adminEmail, setupToken string) ([]byte, []envChange, reach.Der
 	set := map[string]string{}
 	if adminEmail != "" {
 		set[adminEmailVar] = adminEmail
-	}
-	if setupToken != "" {
-		set[setupTokenVar] = setupToken
 	}
 	add, changes, err := stackKeys(values)
 	if err != nil {
@@ -413,7 +410,7 @@ var initCmd = &cobra.Command{
 
 Downloads docker-compose.yml, Caddyfile, keeper.seccomp.json (the locus-runtime service's seccomp profile), .env.example, the services' own env examples and the bundled scaffold (configuration/component/tincture/integration guides, wit/ definitions, the aqua/ soul, roles and scrolls) for this CLI's version; generates cyfr.yaml, .gitignore, and the data/aqua directories; writes .env from .env.example; and pulls the images the stack starts (--no-pull skips the pulls).
 
-How the home is reached is asked first: 1, your devices via Tailscale (the default); 2, a public domain via Caddy; 3, this computer only. Then your email, as the home's administrator. .env is written for this computer only, with every key; then a tailnet home joins your tailnet (the link it prints approves the machine, or --tailscale-auth-key-file joins it without one) and the stopped stack is switched to the chosen mode, as 'cyfr reach' switches it. A join that fails or is cancelled leaves the home reached from this computer only, and 'cyfr reach <mode>' changes it later. With --no-interactive nothing is asked: the home is local, unless --reach tailnet comes with --tailscale-auth-key-file, or --reach public with --domain (--acme-email optional). Given no email, init mints a setup token into .env (CYFR_SETUP_TOKEN) and 'cyfr setup link' prints the link that makes you the administrator from this machine.
+How the home is reached is asked first: 1, your devices via Tailscale (the default); 2, a public domain via Caddy; 3, this computer only. Then your email, as the home's administrator. .env is written for this computer only, with every key; then a tailnet home joins your tailnet (the link it prints approves the machine, or --tailscale-auth-key-file joins it without one) and the stopped stack is switched to the chosen mode, as 'cyfr reach' switches it. A join that fails or is cancelled leaves the home reached from this computer only, and 'cyfr reach <mode>' changes it later. With --no-interactive nothing is asked: the home is local, unless --reach tailnet comes with --tailscale-auth-key-file, or --reach public with --domain (--acme-email optional). Given no email, no one is authorized to use the home yet, and init says so: CYFR_PLATFORM_ADMIN_EMAILS in .env names its administrators.
 
 .env gets the stack's keys: CYFR_SECRET_KEY_BASE, CYFR_LOCUS_BACKENDS_KEY, the runtime root CYFR_LOCUS_RUNTIME_ROOT with the LOCUS_RUNTIME_KEY derived from it for LOCUS_RUNTIME_SERVICE_ID (wrk_locus unless .env names another), and CYFR_LOCUS_BUILDS_URL=http://locus-builds:4100 with a minted CYFR_LOCUS_BUILDS_KEY, so builds are on. It also assigns CYFR_CORS_ALLOWED_ORIGINS the empty allowlist, since cyfr serves Prism, the API, /mcp and the tinctures from its own origin and no browser client of this stack is cross-origin; an allowlist .env assigns is the one that stands.
 
@@ -541,7 +538,7 @@ database_path: ./data/cyfr.db
 	// download is a no-op — skip it; the dev-build notice below tells the
 	// user where to get it.
 	envCreated := false
-	tokenMinted := false
+	adminEmailConfigured := false
 	sel := existingSelection(".env")
 	choice := reachChoice{mode: reach.ModeLocal}
 	var head reach.Head
@@ -551,19 +548,11 @@ database_path: ./data/cyfr.db
 		choice = chooseReach(o, interactive, r, out)
 		adminEmail := ""
 		if interactive {
-			fmt.Fprintln(out, "CYFR authorizes by membership: your email makes you this home's administrator.")
-			adminEmail = ask(r, out, "Your email (blank: set the administrator up from this machine with `cyfr setup link`)", "")
+			fmt.Fprintln(out, "CYFR authorizes by membership — list your email as the platform admin so you can use this instance.")
+			adminEmail = ask(r, out, "Your platform-admin email (required to access this instance; blank = no one is authorized yet)", "")
 		}
-		// No operator email: the first-run setup claims the home through
-		// the link `cyfr setup link` prints, whose capability this is.
-		token := ""
-		if adminEmail == "" {
-			if token, err = generateHexKey(); err != nil {
-				return fmt.Errorf("generate %s: %w", setupTokenVar, err)
-			}
-			tokenMinted = true
-		}
-		text, changes, d, err := newEnv(".env.example", adminEmail, token)
+		adminEmailConfigured = adminEmail != ""
+		text, changes, d, err := newEnv(".env.example", adminEmail)
 		if err != nil {
 			return err
 		}
@@ -702,10 +691,10 @@ database_path: ./data/cyfr.db
 		fmt.Fprintln(out, "   versions. Run the server from source with `mix phx.server`, or copy those")
 		fmt.Fprintln(out, "   files from a repo checkout.")
 	}
-	if tokenMinted {
+	if envCreated && !adminEmailConfigured {
 		fmt.Fprintln(out, "")
-		fmt.Fprintln(out, "No email was given, so .env holds a setup token (CYFR_SETUP_TOKEN) and no administrator yet.")
-		fmt.Fprintln(out, "  After `cyfr up`, run `cyfr setup link` and open the link it prints on this machine to become this home's administrator.")
+		fmt.Fprintln(out, "⚠  CYFR_PLATFORM_ADMIN_EMAILS is unset in .env — no one is authorized to use this instance yet.")
+		fmt.Fprintln(out, "   Set CYFR_PLATFORM_ADMIN_EMAILS=you@example.com in .env so you (the operator) can sign in.")
 	}
 	fmt.Fprintln(out, "")
 	if composeExists {

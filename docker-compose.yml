@@ -114,7 +114,7 @@ services:
       - "${CYFR_HOST_API_PORT:-4300}"
     ports:
       # The loopback listener, published on the host's loopback alone: the
-      # Codex CLI, the setup link and an SSH tunnel reach
+      # Codex CLI and an SSH tunnel reach
       # http://127.0.0.1:${CYFR_PORT:-4000}, and nothing off this machine
       # does.
       - "127.0.0.1:${CYFR_PORT:-4000}:${CYFR_PORT:-4000}"

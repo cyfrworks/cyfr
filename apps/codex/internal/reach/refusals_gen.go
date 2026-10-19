@@ -170,20 +170,4 @@ var refusalRows = map[string]refusalRow{
 			{Fixed: map[string]string{}, Slots: []string{"file", "service"}, Template: "`{file}` does not give the `{service}` service .env through its env_file, so it would not read how this home is reached. Nothing started. Add `env_file: .env` to the `{service}` service in `{file}`, as the shipped docker-compose.yml has it."},
 		},
 	},
-	"setup_token_with_admins": {
-		Class: "invalid_argument",
-		Variants: []refusalVariant{
-			{Fixed: map[string]string{}, Slots: []string{}, Template: "CYFR_SETUP_TOKEN is set, but CYFR_PLATFORM_ADMIN_EMAILS already names this home's administrators, so no setup can use it. Nothing started. Delete the CYFR_SETUP_TOKEN line from .env, then run `cyfr up`."},
-		},
-	},
-	"setup_token_refused": {
-		Class: "invalid_argument",
-		Variants: []refusalVariant{
-			{Fixed: map[string]string{"why": "malformed"}, Slots: []string{}, Template: "CYFR_SETUP_TOKEN cannot be used here: it is not 64 lowercase hexadecimal characters. Nothing started. Replace it with 64 lowercase hexadecimal characters, such as `openssl rand -hex 32` prints."},
-			{Fixed: map[string]string{"why": "restore_token"}, Slots: []string{}, Template: "CYFR_SETUP_TOKEN cannot be used here: CYFR_RESTORE_TOKEN also reserves the first person. Nothing started. Remove one of the two."},
-			{Fixed: map[string]string{"why": "headless"}, Slots: []string{}, Template: "CYFR_SETUP_TOKEN cannot be used here: a headless node has no setup page. Nothing started. Set CYFR_PLATFORM_ADMIN_EMAILS instead and delete CYFR_SETUP_TOKEN."},
-			{Fixed: map[string]string{"why": "oidc"}, Slots: []string{}, Template: "CYFR_SETUP_TOKEN cannot be used here: the setup signs in through GitHub or Google, and this home uses an OIDC issuer. Nothing started. Set CYFR_PLATFORM_ADMIN_EMAILS instead and delete CYFR_SETUP_TOKEN."},
-			{Fixed: map[string]string{"why": "no_provider"}, Slots: []string{}, Template: "CYFR_SETUP_TOKEN cannot be used here: the setup signs in through GitHub or Google, and this home uses neither. Nothing started. Set CYFR_PLATFORM_ADMIN_EMAILS instead and delete CYFR_SETUP_TOKEN."},
-		},
-	},
 }

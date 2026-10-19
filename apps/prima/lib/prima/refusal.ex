@@ -241,63 +241,6 @@ defmodule Prima.Refusal do
     exception: {:internal, "Start-up failed unexpectedly"}
   }
 
-  # The first-run setup page's refusals. Each says what changed — nothing —
-  # and the one next step.
-  @setup %{
-    setup_not_local:
-      {:forbidden,
-       "Setting up this home is done on the machine itself: on its own screen, or through " <>
-         "its loopback address. Nothing was changed. Open the link `cyfr setup link` " <>
-         "prints, on the machine."},
-    setup_token_invalid:
-      {:unauthenticated,
-       "This setup link is not this home's. Nothing was changed. Run `cyfr setup link` on " <>
-         "the machine and open the link it prints."},
-    setup_token_spent:
-      {:conflict,
-       "This setup link has been used, and this home is set up. Nothing was changed. Sign " <>
-         "in instead."},
-    setup_claimed:
-      {:conflict,
-       "Someone finished setting up this home a moment ago, so it already has its " <>
-         "administrator. Nothing was changed for you. Sign in; if that was not you, tell " <>
-         "whoever runs the machine."},
-    setup_closed:
-      {:forbidden,
-       "Whoever runs the machine names this home's administrators, so it has no setup " <>
-         "step. Nothing was changed. Sign in, or ask them to add you."},
-    setup_expired:
-      {:cancelled,
-       "This setup attempt ended before it finished: it expired, was cancelled, or the " <>
-         "home restarted while it waited. Nothing was changed. Start again."},
-    setup_cancel_too_late:
-      {:conflict,
-       "Too late to cancel: this setup had already finished, and the account you approved " <>
-         "on your phone is this home's administrator. Sign in to continue; if that account " <>
-         "is wrong, whoever runs the machine can name the administrators in its deployment " <>
-         "file."},
-    setup_denied:
-      {:cancelled,
-       "The sign-in was declined on your phone. Nothing was changed. Start again with the " <>
-         "account that should run this home."},
-    setup_unverified_email:
-      {:forbidden,
-       "That account has no email address GitHub or Google has verified, and this home's " <>
-         "administrator needs one. Nothing was changed. Verify an address with them, then " <>
-         "start again."},
-    setup_provider_unavailable:
-      {:unavailable,
-       "GitHub or Google did not answer. Nothing was changed. Start again in a moment."},
-    setup_failed:
-      {:unavailable,
-       "This home could not finish creating your account. Nothing was changed. Start " <>
-         "again; if it keeps failing, the home's log on the machine says why."},
-    setup_ticket_invalid:
-      {:unauthenticated,
-       "This sign-in belongs to another browser or has been used. Nothing was changed. Sign " <>
-         "in on this screen."}
-  }
-
   # How the home is reached: the boot's and the reach engine's refusals
   # that carry nothing but their code.
   @reach %{
@@ -310,11 +253,6 @@ defmodule Prima.Refusal do
       {:forbidden,
        "CYFR_LOCAL_INGRESS_ASSERTED is the compose file's assertion and cannot come from " <>
          ".env. Remove it from .env."},
-    setup_token_with_admins:
-      {:invalid_argument,
-       "CYFR_SETUP_TOKEN is set, but CYFR_PLATFORM_ADMIN_EMAILS already names this home's " <>
-         "administrators, so no setup can use it. Nothing started. Delete the " <>
-         "CYFR_SETUP_TOKEN line from .env, then run `cyfr up`."},
     reach_request_reused:
       {:conflict,
        "This request names a different change than the one first sent under its id. " <>
@@ -372,24 +310,6 @@ defmodule Prima.Refusal do
     "tailnet_https_off" =>
       {"your tailnet has HTTPS certificates turned off",
        "turn on HTTPS on the DNS page of the Tailscale admin console, then run `cyfr reach tailnet`"}
-  }
-
-  # Why a setup token cannot be used, and the fix for each.
-  @setup_token_refusals %{
-    malformed:
-      {"it is not 64 lowercase hexadecimal characters",
-       "Replace it with 64 lowercase hexadecimal characters, such as `openssl rand -hex 32` " <>
-         "prints"},
-    restore_token: {"CYFR_RESTORE_TOKEN also reserves the first person", "Remove one of the two"},
-    headless:
-      {"a headless node has no setup page",
-       "Set CYFR_PLATFORM_ADMIN_EMAILS instead and delete CYFR_SETUP_TOKEN"},
-    oidc:
-      {"the setup signs in through GitHub or Google, and this home uses an OIDC issuer",
-       "Set CYFR_PLATFORM_ADMIN_EMAILS instead and delete CYFR_SETUP_TOKEN"},
-    no_provider:
-      {"the setup signs in through GitHub or Google, and this home uses neither",
-       "Set CYFR_PLATFORM_ADMIN_EMAILS instead and delete CYFR_SETUP_TOKEN"}
   }
 
   @doc "The sixteen refusal classes."
@@ -1012,7 +932,6 @@ defmodule Prima.Refusal do
   defp row(:attachment_too_large), do: {:invalid_argument, "An attachment is too large"}
   defp row(:storage_error), do: {:internal, "Storage failed"}
 
-  defp row(reason) when is_map_key(@setup, reason), do: Map.fetch!(@setup, reason)
   defp row(reason) when is_map_key(@reach, reason), do: Map.fetch!(@reach, reason)
 
   # A reach code carried with its payload, as the boot's resolver answers
@@ -1157,13 +1076,6 @@ defmodule Prima.Refusal do
       {:invalid_argument,
        "Tailscale reported a machine identity this home cannot store (`#{value}`). How this " <>
          "home is reached was not changed. Report this with your Tailscale version."}
-
-  defp row({:setup_token_refused, %{why: why}}) when is_map_key(@setup_token_refusals, why) do
-    {because, fix} = Map.fetch!(@setup_token_refusals, why)
-
-    {:invalid_argument,
-     "CYFR_SETUP_TOKEN cannot be used here: #{because}. Nothing started. #{fix}."}
-  end
 
   defp row({:compose_env_refused, %{key: "COMPOSE_" <> _ = key}}),
     do:

@@ -57,28 +57,25 @@ func (f *envFile) assignments(key string) []int {
 }
 
 // init's email question is answered in the .env it writes: an email is the
-// operators' setting and leaves the setup token unset; no email sets the
-// setup token. The template's commented lines that document both stay as
-// they are, and every other line of the template is kept.
+// operators' setting, and no email leaves it unset. The template's
+// commented line that documents it stays as it is, and every other line of
+// the template is kept.
 func TestNewEnvAnswersTheEmailQuestion(t *testing.T) {
-	const tmpl = "CYFR_SECRET_KEY_BASE=\nCYFR_REACH=local\nCYFR_HOST=localhost\n# CYFR_PLATFORM_ADMIN_EMAILS=alice@example.com\n# CYFR_SETUP_TOKEN=\nCYFR_PORT=4000\n"
+	const tmpl = "CYFR_SECRET_KEY_BASE=\nCYFR_REACH=local\nCYFR_HOST=localhost\n# CYFR_PLATFORM_ADMIN_EMAILS=alice@example.com\nCYFR_PORT=4000\n"
 	path := writeTemp(t, ".env.example", tmpl)
-	token := strings.Repeat("ab", 32)
-	for _, c := range []struct{ email, token string }{{"me@example.com", ""}, {"", token}} {
-		text, _, _, err := newEnv(path, c.email, c.token)
+	for _, email := range []string{"me@example.com", ""} {
+		text, _, _, err := newEnv(path, email)
 		if err != nil {
 			t.Fatal(err)
 		}
 		got := string(text)
-		values := envValuesOf(got)
-		admins, adminsSet := values[adminEmailVar]
-		tok, tokenSet := values[setupTokenVar]
-		if admins != c.email || adminsSet != (c.email != "") || tok != c.token || tokenSet != (c.token != "") {
-			t.Errorf("for email %q the .env holds operators %q (%v) and token %q (%v):\n%s", c.email, admins, adminsSet, tok, tokenSet, got)
+		admins, adminsSet := envValuesOf(got)[adminEmailVar]
+		if admins != email || adminsSet != (email != "") {
+			t.Errorf("for email %q the .env holds operators %q (%v):\n%s", email, admins, adminsSet, got)
 		}
-		for _, line := range []string{"CYFR_REACH=local\n", "# CYFR_PLATFORM_ADMIN_EMAILS=alice@example.com\n# CYFR_SETUP_TOKEN=\nCYFR_PORT=4000\n"} {
+		for _, line := range []string{"CYFR_REACH=local\n", "# CYFR_PLATFORM_ADMIN_EMAILS=alice@example.com\nCYFR_PORT=4000\n"} {
 			if !strings.Contains(got, line) {
-				t.Errorf("for email %q the template's %q moved:\n%s", c.email, line, got)
+				t.Errorf("for email %q the template's %q moved:\n%s", email, line, got)
 			}
 		}
 		if strings.Contains(got, "PORTA") {
@@ -173,8 +170,8 @@ func readShippedTemplate(t *testing.T) string {
 }
 
 // The shipped template documents every setting init writes: the
-// operators' setting and the setup token's commented once each and
-// nowhere assigned, so the assignment init appends is the only one, the
+// operators' setting commented once and nowhere assigned, so the
+// assignment init appends is the only one, the
 // local head's keys assigned once each, no key of another mode's head
 // assigned and no retired name anywhere. And each key stackKeys writes is
 // assigned there once, empty, or with the value init completes (the
@@ -191,7 +188,7 @@ func TestShippedTemplateCarriesInitsAnchors(t *testing.T) {
 		}
 		return n
 	}
-	for _, key := range []string{adminEmailVar, setupTokenVar} {
+	for _, key := range []string{adminEmailVar} {
 		if n := count("# " + key + "="); n != 1 {
 			t.Errorf("the shipped template has %d lines beginning %q, want 1", n, "# "+key+"=")
 		}
@@ -307,11 +304,10 @@ func TestEnvWritesKeepQuotedValuesWhole(t *testing.T) {
 }
 
 // newEnvFromTemplate is the .env init writes from the shipped template for
-// adminEmail, or with the setup token token when there is none: the keys
-// minted, then the local head written.
-func newEnvFromTemplate(t *testing.T, adminEmail, token string) (string, []envChange) {
+// adminEmail: the keys minted, then the local head written.
+func newEnvFromTemplate(t *testing.T, adminEmail string) (string, []envChange) {
 	t.Helper()
-	text, changes, _, err := newEnv(writeTemp(t, ".env.example", readShippedTemplate(t)), adminEmail, token)
+	text, changes, _, err := newEnv(writeTemp(t, ".env.example", readShippedTemplate(t)), adminEmail)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -325,7 +321,7 @@ func newEnvFromTemplate(t *testing.T, adminEmail, token string) (string, []envCh
 // stack boots from.
 func TestRenderEnvFileShippedTemplate(t *testing.T) {
 	raw := readShippedTemplate(t)
-	got, changes := newEnvFromTemplate(t, "me@example.com", "")
+	got, changes := newEnvFromTemplate(t, "me@example.com")
 	if !strings.HasSuffix(got, "\nCYFR_PLATFORM_ADMIN_EMAILS=me@example.com\n") || !strings.Contains(got, "\n# CYFR_PLATFORM_ADMIN_EMAILS=") {
 		t.Errorf("shipped template: the operators' setting is not appended beside its documented line:\n%s", got)
 	}
@@ -347,9 +343,6 @@ func TestRenderEnvFileShippedTemplate(t *testing.T) {
 	f := parseEnvFile(got)
 	if cors, assigned := f.value(corsOriginsVar); !assigned || cors != "" {
 		t.Errorf("the shipped template's %s is %q (assigned: %v)", corsOriginsVar, cors, assigned)
-	}
-	if token, assigned := f.value(setupTokenVar); assigned {
-		t.Errorf("a home given its operator's email holds the setup token %q", token)
 	}
 
 	env := envAssignments(writeTemp(t, ".env", got))
@@ -397,26 +390,17 @@ func TestInitWritesThePublicURLItsAddressImplies(t *testing.T) {
 	}
 }
 
-// Given no email, init mints the setup token, 64 lowercase hexadecimal
-// characters, as the one line appended to the template, whose commented
-// lines documenting it and the operators' setting stay, and the .env
-// boots.
+// Given no email, init appends nothing for the operators: the template's
+// commented line documenting the setting stays, no administrator is
+// named, and the .env boots.
 func TestRenderEnvFileShippedTemplateWithoutAnEmail(t *testing.T) {
 	raw := readShippedTemplate(t)
-	token, err := generateHexKey()
-	if err != nil {
-		t.Fatal(err)
+	got, _ := newEnvFromTemplate(t, "")
+	if admins, assigned := parseEnvFile(got).value(adminEmailVar); assigned {
+		t.Errorf("a home given no email names the operators %q", admins)
 	}
-	got, _ := newEnvFromTemplate(t, "", token)
-	f := parseEnvFile(got)
-	if v, _ := f.value(setupTokenVar); v != token || !setupTokenPattern.MatchString(v) {
-		t.Errorf("the setup token is %q, want %q", v, token)
-	}
-	if !strings.Contains(got, "\n"+"# "+adminEmailVar+"=\n") || !strings.Contains(got, "\n# "+setupTokenVar+"=") {
-		t.Errorf("the documented lines are not left commented:\n%s", got)
-	}
-	if !strings.HasSuffix(got, "\n"+setupTokenVar+"="+token+"\n") || strings.Count(got, "\n") != strings.Count(raw, "\n")+1 {
-		t.Errorf("the token is not the one line appended:\n%s", got)
+	if !strings.Contains(got, "\n"+"# "+adminEmailVar+"=\n") || strings.Count(got, "\n") != strings.Count(raw, "\n") {
+		t.Errorf("the template's lines are not kept as they are:\n%s", got)
 	}
 	assertStackPairs(t, got, defaultServiceID)
 }
