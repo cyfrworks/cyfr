@@ -56,7 +56,7 @@ var setupLinkCmd = &cobra.Command{
 func setupLink(path string) (string, error) {
 	data, err := os.ReadFile(path)
 	if errors.Is(err, fs.ErrNotExist) {
-		return "", errors.New("There is no .env here, so no setup link: run this command in the home's directory, or 'cyfr init' to make a new home")
+		return "", errors.New("There is no .env here, so no setup link: run this command in the home's directory, or `cyfr init` to make a new home")
 	}
 	if err != nil {
 		return "", fmt.Errorf("%s does not read (%v)", path, err)
@@ -68,7 +68,7 @@ func setupLink(path string) (string, error) {
 	case token == "" && admins != "":
 		return "", errors.New("This home has no setup link: .env names its administrators in CYFR_PLATFORM_ADMIN_EMAILS, and each of them signs in")
 	case token == "":
-		return "", errors.New(".env holds no CYFR_SETUP_TOKEN, so this home has no setup link. Name its administrators in CYFR_PLATFORM_ADMIN_EMAILS in .env, then run 'cyfr up'")
+		return "", errors.New(".env holds no CYFR_SETUP_TOKEN, so this home has no setup link. Name its administrators in CYFR_PLATFORM_ADMIN_EMAILS in .env, then run `cyfr up`")
 	case admins != "":
 		return "", refusalError{reach.Refuse("setup_token_with_admins", nil)}
 	case !setupTokenPattern.MatchString(token):

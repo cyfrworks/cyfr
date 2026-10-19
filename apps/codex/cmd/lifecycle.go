@@ -606,7 +606,7 @@ database_path: ./data/cyfr.db
 		adminEmail := ""
 		if interactive {
 			fmt.Fprintln(out, "CYFR authorizes by membership: your email makes you this home's administrator.")
-			adminEmail = ask(r, out, "Your email (blank: set the administrator up from this machine with 'cyfr setup link')", "")
+			adminEmail = ask(r, out, "Your email (blank: set the administrator up from this machine with `cyfr setup link`)", "")
 		}
 		// No operator email: the first-run setup claims the home through
 		// the link `cyfr setup link` prints, whose capability this is.
@@ -666,7 +666,7 @@ database_path: ./data/cyfr.db
 			head, reachErr = applied, err
 			sel = selection{profiles: head.Profiles, port: head.Port}
 		case err != nil:
-			reachErr = fmt.Errorf("%w\nThis home is set up to be reached from this computer only; 'cyfr reach %s' changes that", err, choice.mode)
+			reachErr = fmt.Errorf("%w\nThis home is set up to be reached from this computer only; `cyfr reach %s` changes that", err, choice.mode)
 		default:
 			head = applied
 			sel = selection{profiles: head.Profiles, port: head.Port}
@@ -765,7 +765,7 @@ database_path: ./data/cyfr.db
 	if tokenMinted {
 		fmt.Fprintln(out, "")
 		fmt.Fprintln(out, "No email was given, so .env holds a setup token (CYFR_SETUP_TOKEN) and no administrator yet.")
-		fmt.Fprintln(out, "  After 'cyfr up', run 'cyfr setup link' and open the link it prints on this machine to become this home's administrator.")
+		fmt.Fprintln(out, "  After `cyfr up`, run `cyfr setup link` and open the link it prints on this machine to become this home's administrator.")
 	}
 	fmt.Fprintln(out, "")
 	if composeExists {
@@ -776,7 +776,7 @@ database_path: ./data/cyfr.db
 	if envCreated {
 		fmt.Fprintln(out, "  Prism:           "+reach.Describe(head).Address+"/")
 	} else {
-		fmt.Fprintln(out, "  'cyfr reach status' shows how this home is reached.")
+		fmt.Fprintln(out, "  `cyfr reach status` shows how this home is reached.")
 	}
 	return reachErr
 }
@@ -796,7 +796,7 @@ func refuseExistingReach(path string, o initOptions) error {
 		return refusalError{reach.Refuse("reach_missing", nil)}
 	}
 	if (o.mode != "" && o.mode != current) || o.domain != "" || o.acmeEmail != "" || o.keyFile != "" || o.hostname != "" {
-		return fmt.Errorf(".env says this home is reached as %s, and cyfr init leaves how an existing home is reached alone. Nothing was changed. Run 'cyfr reach <mode>' to change it", current)
+		return fmt.Errorf(".env says this home is reached as %s, and cyfr init leaves how an existing home is reached alone. Nothing was changed. Run `cyfr reach <mode>` to change it", current)
 	}
 	return nil
 }
@@ -845,10 +845,10 @@ func chooseReach(o initOptions, interactive bool, r *bufio.Reader, out io.Writer
 	if !interactive {
 		switch {
 		case c.mode == reach.ModeTailnet && c.keyFile == "":
-			fmt.Fprintln(out, "--reach tailnet joins a tailnet with no one to approve the machine only with --tailscale-auth-key-file, so this home is reached from this computer only; 'cyfr reach tailnet' joins it later.")
+			fmt.Fprintln(out, "--reach tailnet joins a tailnet with no one to approve the machine only with --tailscale-auth-key-file, so this home is reached from this computer only; `cyfr reach tailnet` joins it later.")
 			c.mode = reach.ModeLocal
 		case c.mode == reach.ModePublic && c.domain == "":
-			fmt.Fprintln(out, "--reach public needs --domain, so this home is reached from this computer only; 'cyfr reach public --domain <your domain>' changes that.")
+			fmt.Fprintln(out, "--reach public needs --domain, so this home is reached from this computer only; `cyfr reach public --domain <your domain>` changes that.")
 			c.mode = reach.ModeLocal
 		case c.mode == "":
 			c.mode = reach.ModeLocal
@@ -892,7 +892,7 @@ func chooseReach(o initOptions, interactive bool, r *bufio.Reader, out io.Writer
 				c.domain = answer
 			}
 			if c.domain == "" && !more {
-				fmt.Fprintln(out, "No domain was given, so this home is reached from this computer only; 'cyfr reach public --domain <your domain>' changes that.")
+				fmt.Fprintln(out, "No domain was given, so this home is reached from this computer only; `cyfr reach public --domain <your domain>` changes that.")
 				c.mode = reach.ModeLocal
 				return c
 			}
@@ -1196,7 +1196,7 @@ func runUp(ctx context.Context, out io.Writer) error {
 	release()
 	select {
 	case <-interrupts:
-		return errors.New("cyfr up was interrupted; the start ran to its end and the lock is released. Run 'cyfr reach status' to see what runs")
+		return errors.New("cyfr up was interrupted; the start ran to its end and the lock is released. Run `cyfr reach status` to see what runs")
 	default:
 	}
 	if startErr != nil {

@@ -41,6 +41,7 @@ type stackEngine interface {
 	CancelWaitingJoin(ctx context.Context) error
 	ForgetJoin() error
 	Start(ctx context.Context, cause string) (reach.Receipt, error)
+	StartWithin(ctx context.Context, cause string, health time.Duration) (reach.Receipt, error)
 	Stop(ctx context.Context, cause string, all bool) (reach.Receipt, error)
 }
 
@@ -150,7 +151,7 @@ func refuseUnfinished(receipts []reach.Receipt) error {
 		if err := receiptFailure(r); err != nil {
 			return err
 		}
-		return fmt.Errorf("%s Nothing was done; run 'cyfr reach --resume' to finish it", describeReceipt(r))
+		return fmt.Errorf("%s Nothing was done; run `cyfr reach --resume` to finish it", describeReceipt(r))
 	}
 	return nil
 }
@@ -305,7 +306,7 @@ func joinTailnet(ctx context.Context, e stackEngine, id string, o reachOptions, 
 	rec, err := e.Join(ctx, req)
 	if ctx.Err() != nil {
 		if err == nil && receiptFailure(rec) == nil {
-			return "", fmt.Errorf("the join was interrupted after the machine joined your tailnet as %s; how this home is reached was not changed, and 'cyfr reach tailnet' takes the machine as it is", rec.Payload["name"])
+			return "", fmt.Errorf("the join was interrupted after the machine joined your tailnet as %s; how this home is reached was not changed, and `cyfr reach tailnet` takes the machine as it is", rec.Payload["name"])
 		}
 		if cerr := e.CancelWaitingJoin(context.WithoutCancel(ctx)); cerr != nil {
 			return "", fmt.Errorf("the join was interrupted, and cancelling it failed (%v), so its container may wait until its own deadline before it ends; how this home is reached was not changed", engineFailure(cerr))
@@ -398,7 +399,7 @@ var reachCmd = &cobra.Command{
   tailnet  your devices on Tailscale, at https://<machine>.<tailnet>.ts.net; the machine joins your tailnet first (the link it prints approves it, or --tailscale-auth-key-file joins it without one)
   public   anyone on the internet, who still has to sign in, at https://<--domain>, through Caddy on ports 80 and 443
 
-It shows the change first: who can reach the home, its address, the certificate email and the ports opened on this machine, each before → after, and what changes for passkeys, paired devices and clients when the address does. Confirm it (or pass --yes), and the stack is stopped and checked stopped, .env is rewritten, and what was running is started again in the new mode; a start that fails puts the home back as it was.
+It shows the change first: who can reach the home, its address, the certificate email and the ports opened on this machine, each before → after, and what changes for passkeys, paired devices and clients when the address does. Confirm it (or pass --yes), and the stack is stopped and checked stopped, .env is rewritten, and what was running is started again in the new mode; a start that fails puts the home back as it was. With no terminal to confirm on and no --yes, it shows the change and makes none, and a tailnet change that needs this machine joined first is refused before the join.
 
 'cyfr reach status' shows how the home is reached and what runs, changing nothing. 'cyfr reach --resume' finishes a change an interrupted command left, under the lock, and reports what happened; it is what to run after an interruption.
 
@@ -461,13 +462,13 @@ func runReach(ctx context.Context, mode string, o reachOptions, yes bool, id str
 	} else if !requestIDPattern.MatchString(id) {
 		return fmt.Errorf("--request-id %q is not 32 lowercase hexadecimal characters", id)
 	}
-	interactive := askTerminal()
-	if !yes && !interactive {
-		return errors.New("cyfr reach makes the change it shows only once it is confirmed: run it on a terminal, or with --yes. Nothing was changed")
-	}
 	key, err := readAuthKey(o.keyFile)
 	if err != nil {
 		return err
+	}
+	target := reach.Target{Mode: mode, Domain: o.domain, ACMEEmail: o.acmeEmail}
+	if !yes && !askTerminal() {
+		return showUnconfirmed(ctx, target, o, out)
 	}
 
 	e, unlock, _, err := openLocked(ctx, "reach "+mode, out)
@@ -476,7 +477,6 @@ func runReach(ctx context.Context, mode string, o reachOptions, yes bool, id str
 	}
 	defer unlock()
 
-	target := reach.Target{Mode: mode, Domain: o.domain, ACMEEmail: o.acmeEmail}
 	p, joinID, err := previewTarget(ctx, e, target, id, o, key, out)
 	if err != nil {
 		return err
@@ -504,6 +504,32 @@ func runReach(ctx context.Context, mode string, o reachOptions, yes bool, id str
 	fmt.Fprintln(out, "Done. This home is reached as:")
 	printWords(out, p.NewWords)
 	return nil
+}
+
+// showUnconfirmed is `cyfr reach <mode>` with no terminal to confirm on and
+// no --yes: the change shown when its preview needs no join, read without
+// the lock, and refused either way, nothing changed and no input read. A
+// preview that needs the machine joined is refused before the join, which
+// would change the tailnet.
+func showUnconfirmed(ctx context.Context, target reach.Target, o reachOptions, out io.Writer) error {
+	const again = "Nothing was changed. Run it again with --yes to make the change, or on a terminal to confirm it"
+	joinFirst := errors.New("This machine joins your tailnet before the change can be shown, and there is no terminal to confirm it on. " + again)
+	if target.Mode == reach.ModeTailnet && o.newNode {
+		return joinFirst
+	}
+	e, err := openEngine(".")
+	if err != nil {
+		return engineFailure(err)
+	}
+	p, err := e.Preview(ctx, target, "")
+	if r := (*reach.Refusal)(nil); errors.As(err, &r) && r.Code == "tailnet_not_joined" {
+		return joinFirst
+	}
+	if err != nil {
+		return engineFailure(err)
+	}
+	printPreview(out, p)
+	return errors.New("The change above was shown, not made: cyfr reach makes a change only once it is confirmed, and there is no terminal to confirm it on. " + again)
 }
 
 // runReachResume is `cyfr reach --resume`: the lock and recovery, then the
@@ -550,7 +576,7 @@ func runReachStatus(ctx context.Context, out io.Writer) error {
 		fmt.Fprintln(out, "  "+line)
 	}
 	if st.Unfinished != nil {
-		fmt.Fprintln(out, "Unfinished: "+describeReceipt(*st.Unfinished))
+		fmt.Fprintln(out, "Unfinished: "+describeReceipt(*st.Unfinished)+" Run `cyfr reach --resume` to finish it.")
 	}
 	if st.Last != nil {
 		fmt.Fprintf(out, "Last change, %s: %s\n", st.Last.At.UTC().Format(time.RFC3339), describeReceipt(*st.Last))

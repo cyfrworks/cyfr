@@ -210,7 +210,7 @@ func TestInitLeavesTheHomeLocalWhenTheJoinFailsOrIsCancelled(t *testing.T) {
 		var out bytes.Buffer
 		err := runInit(context.Background(), initOptions{noPull: true}, &out, &out)
 		expired := reach.Refuse("tailnet_join_expired", nil).Message()
-		if err == nil || !strings.Contains(err.Error(), expired) || !strings.Contains(err.Error(), "reached from this computer only; 'cyfr reach tailnet' changes that") {
+		if err == nil || !strings.Contains(err.Error(), expired) || !strings.Contains(err.Error(), "reached from this computer only; `cyfr reach tailnet` changes that") {
 			t.Fatalf("init answered %v\n%s", err, out.String())
 		}
 		if !strings.Contains(out.String(), "https://login.tailscale.com/a/approve-test") {
@@ -337,7 +337,7 @@ func TestInitMintsTheSetupTokenWithoutAnEmail(t *testing.T) {
 	if admins, assigned := projectEnv(t).value(adminEmailVar); assigned {
 		t.Errorf("a home given no email names the administrators %q", admins)
 	}
-	if !strings.Contains(out.String(), "run 'cyfr setup link'") || strings.Contains(out.String(), token) {
+	if !strings.Contains(out.String(), "run `cyfr setup link`") || strings.Contains(out.String(), token) {
 		t.Errorf("init does not say how the setup link is had, or prints the token:\n%s", out.String())
 	}
 	link, err := setupLink(".env")

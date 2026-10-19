@@ -124,7 +124,7 @@ func (r *restoreScenario) stagedConfig(overrides ...string) string {
 	for _, o := range overrides {
 		files += " -f " + o
 	}
-	return "compose -p " + composeProject(r.project) + " " + files + " --project-directory . --profile locus-builds --profile public config --format json"
+	return "compose -p " + reach.ProjectName(r.project) + " " + files + " --project-directory . --profile locus-builds --profile public config --format json"
 }
 
 // restoreScenario is an update scenario whose update has taken a snapshot,
@@ -1140,10 +1140,10 @@ func TestRestoreStagedComposeResolvesAsTheDefaultOverrideSet(t *testing.T) {
 	}
 }
 
-// The project the restore's staged read names is the one the engine passes
-// every compose call: compose's default for the directory, its name
-// lowercased, its other characters dropped.
-func TestComposeProjectIsTheEnginesProject(t *testing.T) {
+// The restore's staged read selects what the engine's own compose calls
+// select but the file: the same project and the same profiles of the
+// head, through the real engine and Docker Compose.
+func TestRestoreStagedReadSelectsAsTheEngine(t *testing.T) {
 	requireCompose(t)
 	dir := filepath.Join(t.TempDir(), "_My.Home-1")
 	if err := os.Mkdir(dir, 0700); err != nil {
@@ -1151,15 +1151,12 @@ func TestComposeProjectIsTheEnginesProject(t *testing.T) {
 	}
 	t.Chdir(dir)
 	for name, content := range map[string]string{
-		"docker-compose.yml": "services:\n  cyfr:\n    image: alpine:3.22\n    env_file: [.env]\n",
-		".env":               "CYFR_REACH=local\n",
+		"docker-compose.yml": "services:\n  cyfr:\n    image: alpine:3.22\n    env_file: [.env]\n  locus-builds:\n    image: alpine:3.22\n    profiles: [locus-builds]\n",
+		".env":               "CYFR_REACH=local\nCYFR_LOCUS_BUILDS_URL=http://locus-builds:4100\n",
 	} {
 		if err := os.WriteFile(name, []byte(content), 0600); err != nil {
 			t.Fatal(err)
 		}
-	}
-	if got := composeProject("."); got != "myhome-1" {
-		t.Fatalf("composeProject answers %q, want compose's myhome-1", got)
 	}
 	useRealEngine(t, nil)
 	e, err := openEngine(".")
@@ -1175,12 +1172,26 @@ func TestComposeProjectIsTheEnginesProject(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	args, err := e.ComposeArgs(context.Background(), head, "ps")
+	engine, err := e.ComposeArgs(context.Background(), head, "ps")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if at := slices.Index(args, "-p"); at < 0 || at+1 >= len(args) || args[at+1] != composeProject(".") {
-		t.Errorf("the engine's compose call %v names another project than %s", args, composeProject("."))
+	r := &restorer{updater: updater{head: head}}
+	staged, err := r.stagedComposeArgs("ps")
+	if err != nil {
+		t.Fatal(err)
+	}
+	selection := func(args []string) []string {
+		var kept []string
+		for i := 0; i+1 < len(args); i++ {
+			if args[i] == "-p" || args[i] == "--profile" || args[i] == "--project-directory" {
+				kept = append(kept, args[i], args[i+1])
+			}
+		}
+		return kept
+	}
+	if got, want := selection(staged), selection(engine); !slices.Equal(got, want) || !slices.Contains(want, "locus-builds") {
+		t.Errorf("the staged read selects %v, the engine's compose calls %v", got, want)
 	}
 }
 

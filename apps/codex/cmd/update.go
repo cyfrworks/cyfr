@@ -102,6 +102,9 @@ const (
 	composeRunTimeout = 2 * time.Minute
 	stopTimeout       = 10 * time.Minute
 	dumpTimeout       = 60 * time.Minute
+	// startHealth bounds the wait for cyfr's health in an update's and a
+	// restore's start: a release's migrations run in that start.
+	startHealth = 900 * time.Second
 
 	// appWorkdir is the cyfr image's WORKDIR, against which the server
 	// expands a relative path setting.
@@ -1760,10 +1763,11 @@ func (u *updater) up() error {
 }
 
 // start starts the stack as .env and the compose file hold it, through the
-// one start path (reach.Engine.Start), cause naming the command. A start
-// that leaves the home on this machine alone answers startedLocally.
+// one start path (reach.Engine.StartWithin), cause naming the command,
+// waiting startHealth for cyfr's health. A start that leaves the home on
+// this machine alone answers startedLocally.
 func (u *updater) start(cause string) error {
-	rec, err := u.engine.Start(context.WithoutCancel(u.ctx), cause)
+	rec, err := u.engine.StartWithin(context.WithoutCancel(u.ctx), cause, startHealth)
 	if err != nil {
 		return engineFailure(err)
 	}

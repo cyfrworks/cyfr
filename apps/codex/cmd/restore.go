@@ -424,7 +424,7 @@ func (r *restorer) run() error {
 	// the restore: the snapshot's .env names its own node, which the start
 	// validates against the machine before Serve opens.
 	if err := r.engine.ForgetJoin(); err != nil {
-		fmt.Fprintf(r.errOut, "Warning: the record of this machine's last tailnet join could not be removed (%v); 'cyfr reach tailnet' may offer it again.\n", engineFailure(err))
+		fmt.Fprintf(r.errOut, "Warning: the record of this machine's last tailnet join could not be removed (%v); `cyfr reach tailnet` may offer it again.\n", engineFailure(err))
 	}
 	if !r.start {
 		fmt.Fprintln(r.out, "The stack is left stopped (--no-start); start it with 'cyfr up'.")
@@ -584,67 +584,31 @@ func (r *restorer) publishCompose() error {
 	return errors.Join(d.Sync(), d.Close())
 }
 
-// The file names docker compose loads from the project directory when no
-// file is named, each list in its order of preference: one main file and at
-// most one override file read after it.
-var (
-	composeMainFiles     = []string{"compose.yaml", "compose.yml", "docker-compose.yml", "docker-compose.yaml"}
-	composeOverrideFiles = []string{"compose.override.yml", "compose.override.yaml", "docker-compose.override.yml", "docker-compose.override.yaml"}
-)
-
 // stagedComposeArgs are the compose arguments that read the configuration
 // the staged compose file gives once it is docker-compose.yml: the file set
-// compose loads by default, the staged file in docker-compose.yml's place,
-// under the complete selection every compose call of the engine makes (the
-// project, the directory and the snapshot's head's profiles). The set is
-// refused when it is not determined: another main file name beside
-// docker-compose.yml, which compose would load instead or warn over, or
-// more than one override file, of which compose picks one by an order the
-// restore does not own. The engine resolves the default set by the same
-// rule.
+// compose loads by default (reach.DefaultFiles), the staged file in
+// docker-compose.yml's place, under the complete selection every compose
+// call of the engine makes (the project, the directory and the snapshot's
+// head's profiles). The set is refused when compose's default is not
+// docker-compose.yml and at most one override file, the set the staged
+// file is published into.
 func (r *restorer) stagedComposeArgs(args ...string) ([]string, error) {
-	files := []string{"compose", "-p", composeProject("."), "-f", stagedCompose}
-	for _, name := range composeMainFiles {
-		if _, err := os.Lstat(name); err == nil && name != "docker-compose.yml" {
-			return nil, fmt.Errorf("the project holds %s beside docker-compose.yml, so docker compose may not load the docker-compose.yml cyfr restore puts back; remove one of them", name)
-		}
+	main, override, err := reach.DefaultFiles(".")
+	if err != nil {
+		return nil, errors.New(strings.TrimPrefix(err.Error(), "reach: "))
 	}
-	var overrides []string
-	for _, name := range composeOverrideFiles {
-		if _, err := os.Lstat(name); err == nil {
-			overrides = append(overrides, name)
-		}
+	if main != "docker-compose.yml" {
+		return nil, fmt.Errorf("the project's compose file is %s, so docker compose would not load the docker-compose.yml cyfr restore puts back; rename it docker-compose.yml", main)
 	}
-	switch len(overrides) {
-	case 0:
-	case 1:
-		files = append(files, "-f", overrides[0])
-	default:
-		return nil, fmt.Errorf("the project holds the override files %s, of which docker compose loads one; keep one", strings.Join(overrides, ", "))
+	files := []string{"compose", "-p", reach.ProjectName("."), "-f", stagedCompose}
+	if override != "" {
+		files = append(files, "-f", override)
 	}
 	files = append(files, "--project-directory", ".")
 	for _, profile := range r.head.Profiles {
 		files = append(files, "--profile", profile)
 	}
 	return slices.Concat(files, args), nil
-}
-
-// composeProject is the project name docker compose gives the directory dir
-// when none is named, the one the engine passes every compose call: its
-// base name lowercased, without the characters outside [a-z0-9_-] and the
-// leading ones that are neither a letter nor a digit.
-func composeProject(dir string) string {
-	abs, err := filepath.Abs(dir)
-	if err != nil {
-		abs = dir
-	}
-	var name strings.Builder
-	for _, c := range strings.ToLower(filepath.Base(abs)) {
-		if 'a' <= c && c <= 'z' || '0' <= c && c <= '9' || c == '_' || c == '-' {
-			name.WriteRune(c)
-		}
-	}
-	return strings.TrimLeft(name.String(), "_-")
 }
 
 // putBackHeld writes the held configuration files back.
