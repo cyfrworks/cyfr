@@ -90,8 +90,8 @@ defmodule CyfrWeb.Plugs.MCPOriginTest do
 
     for origin <- [
           "http://cyfr.tail1a2b3c.ts.net",
-          "https://cyfr.tail1a2b3c.ts.net:4001",
-          "http://localhost:4001",
+          "https://cyfr.tail1a2b3c.ts.net:8443",
+          "http://localhost:4100",
           "https://evil.example"
         ] do
       assert call(origin).status == 403, origin
