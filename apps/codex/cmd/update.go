@@ -25,7 +25,7 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/cyfr/codex/internal/reach"
+	"github.com/cyfr/codex/internal/access"
 	"github.com/cyfr/codex/internal/release"
 	"github.com/cyfr/codex/internal/scaffold"
 	"github.com/cyfr/codex/internal/version"
@@ -213,7 +213,7 @@ func runUpdate(ctx context.Context, out, errOut io.Writer) error {
 	if v == "" || v == "dev" {
 		return errors.New("This cyfr is a development build, which has no signed release to install; run 'cyfr update' with a released cyfr")
 	}
-	// The lock an up, a restore and a reach change hold too, taken before
+	// The lock an up, a restore and an access change hold too, taken before
 	// any docker call and held to the update's end, so no start runs while
 	// the stack is stopped for its snapshot. A change an interrupted
 	// command left is finished first; one recovery could not finish leaves
@@ -247,14 +247,14 @@ type updater struct {
 	version     string
 	out, errOut io.Writer
 	// engine holds the stack's lock and runs every docker call of the
-	// update; head is .env's reach head, whose selection every compose
+	// update; head is .env's access head, whose selection every compose
 	// call of the update runs with.
 	engine stackEngine
-	head   reach.Head
+	head   access.Head
 	// redaction is the engine's redaction pass for what the update says of
-	// its docker calls (reach.Redactor): .env's values, and the values held
+	// its docker calls (access.Redactor): .env's values, and the values held
 	// from the effective environment, written only into the snapshot.
-	redaction *reach.Redactor
+	redaction *access.Redactor
 
 	manifest *release.Manifest
 	compose  *composePlan
@@ -665,7 +665,7 @@ func (u *updater) offlineEval(ctx context.Context, expr string) ([]string, error
 
 // composeArgs answers the arguments of the compose command args under the
 // update's head: the engine's complete selection of project, files,
-// directory and profiles (reach.Engine.ComposeArgs).
+// directory and profiles (access.Engine.ComposeArgs).
 func (u *updater) composeArgs(ctx context.Context, args ...string) ([]string, error) {
 	return u.engine.ComposeArgs(ctx, u.head, args...)
 }
@@ -687,7 +687,7 @@ func (u *updater) docker(ctx context.Context, stdin io.Reader, stdout io.Writer,
 		defer out.Flush()
 		stdout = out
 	}
-	res, err := u.engine.Docker().Run(ctx, reach.Call{Args: args, Deadline: callDeadline(ctx), Stdin: stdin, Stdout: stdout, Stderr: errOut})
+	res, err := u.engine.Docker().Run(ctx, access.Call{Args: args, Deadline: callDeadline(ctx), Stdin: stdin, Stdout: stdout, Stderr: errOut})
 	return callFailure(u.redactor(), res, err)
 }
 
@@ -711,7 +711,7 @@ func (u *updater) composeDocker(ctx context.Context, args ...string) error {
 // dockerOutput runs docker as docker does and answers its stdout; its
 // stderr is echoed after the run, redacted.
 func (u *updater) dockerOutput(ctx context.Context, stdin io.Reader, args ...string) (string, error) {
-	res, err := u.engine.Docker().Run(ctx, reach.Call{Args: args, Deadline: callDeadline(ctx), Stdin: stdin})
+	res, err := u.engine.Docker().Run(ctx, access.Call{Args: args, Deadline: callDeadline(ctx), Stdin: stdin})
 	if len(res.Stderr) > 0 {
 		io.WriteString(u.errOut, u.redactor().Text(string(res.Stderr)))
 	}
@@ -740,7 +740,7 @@ func callDeadline(ctx context.Context) time.Duration {
 
 // callFailure is a docker call's failure: the runner's error, redacted, or
 // the exit status the call ended with.
-func callFailure(redactor *reach.Redactor, res reach.Result, err error) error {
+func callFailure(redactor *access.Redactor, res access.Result, err error) error {
 	if err != nil {
 		return redactor.Err(err)
 	}
@@ -763,12 +763,12 @@ const pgReadURL = `IFS= read -r ` + pgURLVariable + ` && `
 
 // redactor is the update's redaction pass, the engine's own for the
 // project, taken from the engine at first use.
-func (u *updater) redactor() *reach.Redactor {
+func (u *updater) redactor() *access.Redactor {
 	if u.redaction == nil {
 		if u.engine != nil {
 			u.redaction = u.engine.Redactor()
 		} else {
-			u.redaction = reach.NewRedactor(".")
+			u.redaction = access.NewRedactor(".")
 		}
 	}
 	return u.redaction
@@ -1007,7 +1007,7 @@ func (u *updater) readConfig() error {
 	}
 
 	// The keyring file is a dotenv file written by the engine's editor, so
-	// reach.ReadEnvValues reads each value back exactly.
+	// access.ReadEnvValues reads each value back exactly.
 	keyring := map[string]string{}
 	for _, name := range keyringSettings {
 		raw := cyfr.Environment[name]
@@ -1020,7 +1020,7 @@ func (u *updater) readConfig() error {
 	if len(keyring) == 0 {
 		return errors.New("Neither CYFR_CRYPTO_KEYRING nor CYFR_SECRET_KEY_BASE is set for cyfr, so a snapshot would hold no key to its data; nothing was changed")
 	}
-	keyringText, err := reach.EditEnv(nil, keyring, nil)
+	keyringText, err := access.EditEnv(nil, keyring, nil)
 	if err != nil {
 		return engineFailure(err)
 	}
@@ -1505,7 +1505,7 @@ func (u *updater) takeSnapshot() error {
 				exclude[filepath.Clean(c.sqliteFile+suffix)] = true
 			}
 		}
-		// The reach engine's state is no part of any snapshot, whatever
+		// The access engine's state is no part of any snapshot, whatever
 		// mount reaches it: a restored home's lock, journal and receipts
 		// are the machine's own, never the backup's.
 		if state, err := filepath.Abs(".cyfr"); err == nil {
@@ -1612,7 +1612,7 @@ func (u *updater) dumpPostgres(file string) error {
 	ctx, cancel := u.detached(dumpTimeout)
 	defer cancel()
 	var stderr bytes.Buffer
-	res, err := u.engine.Docker().Run(ctx, reach.Call{
+	res, err := u.engine.Docker().Run(ctx, access.Call{
 		Args: []string{"run", "--rm", "-i", "--network", "host", u.pgImage(),
 			"sh", "-c", pgReadURL + `exec pg_dump --format=custom --no-owner "$` + pgURLVariable + `"`},
 		Deadline: callDeadline(ctx),
@@ -1762,7 +1762,7 @@ func (u *updater) switchImages() error {
 var errComposeLeftSwitched = errors.New("the compose file is left switched")
 
 // up starts the switched stack through the one start path every cyfr
-// start takes (reach.Engine.Start): the stack checked, a tailnet node
+// start takes (access.Engine.Start): the stack checked, a tailnet node
 // validated before Serve opens, and cyfr's health awaited, the image's
 // health check being its readiness.
 func (u *updater) up() error {
@@ -1776,7 +1776,7 @@ func (u *updater) up() error {
 }
 
 // start starts the stack as .env and the compose file hold it, through the
-// one start path (reach.Engine.StartWithin), cause naming the command,
+// one start path (access.Engine.StartWithin), cause naming the command,
 // waiting startHealth for cyfr's health. A start that leaves the home on
 // this machine alone answers startedLocally.
 func (u *updater) start(cause string) error {
@@ -2063,7 +2063,7 @@ func setMapValue(m *yaml.Node, key string, value *yaml.Node) {
 // composeEnv returns the lookup compose expands docker-compose.yml's
 // variables with: the process environment, then the dotenv file at envPath.
 func composeEnv(envPath string) func(string) (string, bool) {
-	dotenv, err := reach.ReadEnvValues(envPath)
+	dotenv, err := access.ReadEnvValues(envPath)
 	if err != nil {
 		dotenv = map[string]string{}
 	}

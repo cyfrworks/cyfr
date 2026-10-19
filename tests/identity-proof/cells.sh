@@ -77,7 +77,7 @@ identity_start() {
 # A copy of the stopped cell `$1` at `$2`, answering as the hostname `$3`
 # on listener ports of its own from `$4`: everything the original held,
 # its database, its storage and its deployment's keys, as a thief who took
-# the machine holds them, moved to the new name as `cyfr reach` moves a
+# the machine holds them, moved to the new name as `cyfr access` moves a
 # home (`cell_hostname`). It is no home of the browsers' proxy.
 identity_preserved() {
   local source="$1" cell="$2" host="$3" port="$4"

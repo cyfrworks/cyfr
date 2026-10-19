@@ -3,7 +3,7 @@
 
 defmodule Cyfr.RetiredSettingsTest do
   @moduledoc """
-  Settings this server no longer has, the spellings the reach mode
+  Settings this server no longer has, the spellings the access mode
   retired, and the two settings it reaches the builds service by.
 
   What every application key means is the configuration schema's, and the
@@ -105,12 +105,12 @@ defmodule Cyfr.RetiredSettingsTest do
   end
 
   # ==========================================================================
-  # The reach's retirements
+  # The access mode's retirements
   # ==========================================================================
 
   # How the home is reached replaced three spellings with no compatibility:
   # the proxy switch, whose trust is now the proxy listener's; the compose
-  # profile `tls`, now `public`; and the update's lock file, now the reach
+  # profile `tls`, now `public`; and the update's lock file, now the access
   # engine's kernel lock on `.cyfr/lock`. A tracked file that still names
   # one documents, tests or reads a setting no part of the product has. The
   # names are spelled split here so this file is not itself a hit.
@@ -173,7 +173,7 @@ defmodule Cyfr.RetiredSettingsTest do
               "docker compose --profile " <> "tls up -d",
               "holds .cyfr-update" <> ".lock"
             ],
-            ["CYFR_REACH=public", "docker compose --profile public up -d", "holds .cyfr/lock"]
+            ["CYFR_ACCESS=public", "docker compose --profile public up -d", "holds .cyfr/lock"]
           ]) do
       File.write!(planted, "a line\n#{spelling}\n")
       assert tracked_hits(pattern, [planted]) == ["#{planted}:2"], label

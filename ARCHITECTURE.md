@@ -80,7 +80,7 @@ The order describes dependencies, not a request's path. Only Host's composition 
 ### Cyfr (Host): the machine
 
 - Supervision, boot, the cell claim and the composition root that installs the four ports.
-- The bus (`Cyfr.Bus`), telemetry, configuration, the reach mode and platform settings (§6.8).
+- The bus (`Cyfr.Bus`), telemetry, configuration, the access mode and platform settings (§6.8).
 - The endpoint, on a loopback listener and, in a tailnet or public home, a proxy listener its proxy forwards to; the listener that accepted a request is its ingress, never a header, and a loopback listener's non-loopback address stands only on the compose file's assertion (`CyfrWeb.Ingress`).
 - The admission roster of every path an intent enters by, each listener and the entries that admit for themselves among them, such as a webhook's delivery and browser sign-in (`Cyfr.Admission`), and the boundary catalog (`Cyfr.Boundaries`). *Not built yet:* the local socket and the compositor, which the roster declares and defers.
 
@@ -114,7 +114,7 @@ The order describes dependencies, not a request's path. Only Host's composition 
 ### Codex: the command line
 
 - The `cyfr` binary, speaking MCP to Emissary with an API key or a session; its operation catalog is generated from the gate's table.
-- The reach engine (`apps/codex/internal/reach`), which `cyfr init`, `cyfr reach`, `up`, `update` and `restore` run on the machine: the one owner of the deployment file's reach settings and the stack's reach services, which it changes under the stack's lock and journals, so the next command to take the lock recovers a change an interruption left.
+- The access engine (`apps/codex/internal/access`), which `cyfr init`, `cyfr access`, `up`, `update` and `restore` run on the machine: the one owner of the deployment file's access settings and the stack's access services, which it changes under the stack's lock and journals, so the next command to take the lock recovers a change an interruption left.
 
 ### Locus: where untrusted things run
 
@@ -247,7 +247,7 @@ Until the first release one baseline migration is the schema; after it, dated mi
 
 Configuration is parsed explicitly, and an invalid security-relevant value is refused. A platform setting is read through one accessor, environment first, and an unreadable store refuses the boot.
 
-The reach mode is a deployment setting: one value in the deployment file (`CYFR_REACH`: `local`, `tailnet` or `public`), from which the home's address, its listeners, its origins, proxy trust and the stack's profile selection follow (`Cyfr.RuntimeConfig.resolve_reach/1`). Only the machine's own `cyfr` writes it, the boot refuses a setting that contradicts it, and a local home listens on the loopback alone.
+The access mode is a deployment setting: one value in the deployment file (`CYFR_ACCESS`: `local`, `tailnet` or `public`), from which the home's address, its listeners, its origins, proxy trust and the stack's profile selection follow (`Cyfr.RuntimeConfig.resolve_access/1`). Only the machine's own `cyfr` writes it, the boot refuses a setting that contradicts it, and a local home listens on the loopback alone.
 
 ### 6.9 Backup, runtime and budgets
 
@@ -332,7 +332,7 @@ Layer edges are Mix dependencies and Boundary declarations, so a forbidden edge 
 | Who may do what, consent, credentials, fresh confirmation, identity, caps | Sanctum |
 | Operations, arguments, planes, streams | the providers on Sanctum's roster |
 | Boot, topics, configuration, settings, boundaries, admission | Host |
-| The reach mode | the deployment file, written by Codex, checked at boot by Host |
+| The access mode | the deployment file, written by Codex, checked at boot by Host |
 | Served files, frame capabilities, frame policy, canvas grammar | Compendium's tincture rules |
 | Memory records and pages (*Not built yet*) | Aqua, stored by Arca |
 | The layout | the person, stored by Arca |

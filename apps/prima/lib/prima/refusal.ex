@@ -241,30 +241,30 @@ defmodule Prima.Refusal do
     exception: {:internal, "Start-up failed unexpectedly"}
   }
 
-  # How the home is reached: the boot's and the reach engine's refusals
+  # How the home is reached: the boot's and the access engine's refusals
   # that carry nothing but their code.
-  @reach %{
-    reach_missing:
+  @access %{
+    access_missing:
       {:setup_required,
-       "CYFR_REACH is not set in .env, so this home does not know how it is reached. " <>
-         "Nothing started. Run `cyfr init` for a new home, or `cyfr reach " <>
+       "CYFR_ACCESS is not set in .env, so this home does not know how it is reached. " <>
+         "Nothing started. Run `cyfr init` for a new home, or `cyfr access " <>
          "local|tailnet|public` for this one."},
-    reach_assertion_from_file:
+    access_assertion_from_file:
       {:forbidden,
        "CYFR_LOCAL_INGRESS_ASSERTED is the compose file's assertion and cannot come from " <>
          ".env. Remove it from .env."},
-    reach_request_reused:
+    access_request_reused:
       {:conflict,
        "This request names a different change than the one first sent under its id. " <>
          "Nothing was changed. Send it again under a new id."},
     tailnet_not_joined:
       {:setup_required,
-       "This machine has not joined your tailnet. Nothing was changed. Run `cyfr reach " <>
+       "This machine has not joined your tailnet. Nothing was changed. Run `cyfr access " <>
          "tailnet` and approve the machine with the link it prints."},
     tailnet_join_expired:
       {:timeout,
        "The approval link expired before the machine was approved. How this home is " <>
-         "reached was not changed. Run `cyfr reach tailnet` for a new link."},
+         "reached was not changed. Run `cyfr access tailnet` for a new link."},
     tailnet_join_cancelled:
       {:cancelled,
        "Joining your tailnet was cancelled. How this home is reached was not changed."},
@@ -272,14 +272,14 @@ defmodule Prima.Refusal do
       {:unauthenticated,
        "Tailscale did not accept this machine's join: the auth key may be wrong, already " <>
          "used or expired, or the join ended before the machine was approved. How this home " <>
-         "is reached was not changed. Check the key if you gave one, then run `cyfr reach " <>
+         "is reached was not changed. Check the key if you gave one, then run `cyfr access " <>
          "tailnet` again."},
     tailnet_join_not_current:
       {:conflict, "That join attempt is no longer the one in progress. Nothing was changed."}
   }
 
-  # The form a reach setting's value must take, by the setting.
-  @reach_setting_forms %{
+  # The form an access setting's value must take, by the setting.
+  @access_setting_forms %{
     "CYFR_PORT" => "a port from 1 to 65535",
     "CYFR_PROXY_PORT" => "a port from 1 to 65535",
     "CYFR_BIND_ADDRESS" => "an IPv4 or IPv6 address",
@@ -291,8 +291,8 @@ defmodule Prima.Refusal do
       "an http or https URL with a host, an optional port and no path, query or credentials"
   }
 
-  # What a `cyfr reach` input was meant to be.
-  @reach_input_kinds %{
+  # What a `cyfr access` input was meant to be.
+  @access_input_kinds %{
     "domain" => "domain",
     "tailnet_name" => "tailnet machine name",
     "email" => "email address"
@@ -303,13 +303,13 @@ defmodule Prima.Refusal do
   @rolled_back_local %{
     "tailnet_node_mismatch" =>
       {"this machine's tailnet identity is not the one .env names",
-       "run `cyfr reach tailnet`, which offers to move the home to the machine's tailnet name"},
+       "run `cyfr access tailnet`, which offers to move the home to the machine's tailnet name"},
     "tailnet_not_joined" =>
       {"this machine has not joined your tailnet",
-       "run `cyfr reach tailnet` and approve the machine with the link it prints"},
+       "run `cyfr access tailnet` and approve the machine with the link it prints"},
     "tailnet_https_off" =>
       {"your tailnet has HTTPS certificates turned off",
-       "turn on HTTPS on the DNS page of the Tailscale admin console, then run `cyfr reach tailnet`"}
+       "turn on HTTPS on the DNS page of the Tailscale admin console, then run `cyfr access tailnet`"}
   }
 
   @doc "The sixteen refusal classes."
@@ -932,34 +932,34 @@ defmodule Prima.Refusal do
   defp row(:attachment_too_large), do: {:invalid_argument, "An attachment is too large"}
   defp row(:storage_error), do: {:internal, "Storage failed"}
 
-  defp row(reason) when is_map_key(@reach, reason), do: Map.fetch!(@reach, reason)
+  defp row(reason) when is_map_key(@access, reason), do: Map.fetch!(@access, reason)
 
-  # A reach code carried with its payload, as the boot's resolver answers
+  # An access code carried with its payload, as the boot's resolver answers
   # it, reads as the same row.
   defp row({reason, payload})
-       when is_map_key(@reach, reason) and is_map(payload) and map_size(payload) == 0,
-       do: Map.fetch!(@reach, reason)
+       when is_map_key(@access, reason) and is_map(payload) and map_size(payload) == 0,
+       do: Map.fetch!(@access, reason)
 
-  # How the home is reached, as the boot reads it (`Cyfr.RuntimeConfig.resolve_reach/1`):
+  # How the home is reached, as the boot reads it (`Cyfr.RuntimeConfig.resolve_access/1`):
   # each sentence names what is wrong and the command that writes it right.
   # Every payload is a setting's name or its non-secret value.
-  defp row({:reach_unknown_mode, %{value: value}}) when is_binary(value),
+  defp row({:access_unknown_mode, %{value: value}}) when is_binary(value),
     do:
       {:invalid_argument,
-       "CYFR_REACH is `#{value}`; it must be `local`, `tailnet` or `public`. Run " <>
-         "`cyfr reach <mode>` to set it with the address it implies."}
+       "CYFR_ACCESS is `#{value}`; it must be `local`, `tailnet` or `public`. Run " <>
+         "`cyfr access <mode>` to set it with the address it implies."}
 
-  defp row({:reach_local_mismatch, %{key: key, value: value}})
+  defp row({:access_local_mismatch, %{key: key, value: value}})
        when key in ["CYFR_HOST", "CYFR_PUBLIC_URL"] and is_binary(value) do
     what = "#{key} is `#{value}`"
 
     {:invalid_argument,
-     "CYFR_REACH is `local`, which serves this computer alone at its localhost address, " <>
-       "but #{what}. Run `cyfr reach local` to write the matching settings, or " <>
-       "`cyfr reach tailnet|public` to reach it from other devices."}
+     "CYFR_ACCESS is `local`, which serves this computer alone at its localhost address, " <>
+       "but #{what}. Run `cyfr access local` to write the matching settings, or " <>
+       "`cyfr access tailnet|public` to reach it from other devices."}
   end
 
-  defp row({:reach_tailnet_host_invalid, payload}) when is_map(payload) do
+  defp row({:access_tailnet_host_invalid, payload}) when is_map(payload) do
     what =
       case payload do
         %{host: host} when is_binary(host) -> "CYFR_HOST `#{host}` is not"
@@ -970,7 +970,7 @@ defmodule Prima.Refusal do
      tailnet_sentence("#{what} a tailnet machine name (<machine>.<tailnet>.ts.net)")}
   end
 
-  defp row({:reach_tailnet_node_invalid, payload}) when is_map(payload) do
+  defp row({:access_tailnet_node_invalid, payload}) when is_map(payload) do
     what =
       case payload do
         %{value: value} when is_binary(value) ->
@@ -983,7 +983,7 @@ defmodule Prima.Refusal do
     {:invalid_argument, tailnet_sentence(what)}
   end
 
-  defp row({:reach_public_host_invalid, payload}) when is_map(payload) do
+  defp row({:access_public_host_invalid, payload}) when is_map(payload) do
     what =
       case payload do
         %{host: host} when is_binary(host) -> "CYFR_HOST `#{host}` is not"
@@ -991,11 +991,11 @@ defmodule Prima.Refusal do
       end
 
     {:invalid_argument,
-     "CYFR_REACH is `public`, but #{what} a public domain name (not localhost, an IP address " <>
-       "or a ts.net name). Run `cyfr reach public --domain <your domain>`."}
+     "CYFR_ACCESS is `public`, but #{what} a public domain name (not localhost, an IP address " <>
+       "or a ts.net name). Run `cyfr access public --domain <your domain>`."}
   end
 
-  defp row({:reach_public_url_mismatch, %{mode: mode, expected: expected} = payload})
+  defp row({:access_public_url_mismatch, %{mode: mode, expected: expected} = payload})
        when mode in ["tailnet", "public"] and is_binary(expected) do
     now =
       case payload do
@@ -1004,46 +1004,46 @@ defmodule Prima.Refusal do
       end
 
     {:invalid_argument,
-     "CYFR_PUBLIC_URL must be exactly #{expected} when CYFR_REACH is `#{mode}`; #{now}. " <>
-       "Run `cyfr reach #{mode}` to rewrite both."}
+     "CYFR_PUBLIC_URL must be exactly #{expected} when CYFR_ACCESS is `#{mode}`; #{now}. " <>
+       "Run `cyfr access #{mode}` to rewrite both."}
   end
 
-  defp row({:reach_key_outside_mode, %{key: key, mode: mode, needs: needs}})
+  defp row({:access_key_outside_mode, %{key: key, mode: mode, needs: needs}})
        when key in ["CADDY_ACME_EMAIL", "CYFR_TAILNET_NODE_ID"] and
               mode in ["local", "tailnet", "public"] and needs in ["tailnet", "public"],
        do:
          {:invalid_argument,
-          "`#{key}` is set, but only a `#{needs}` home uses it (CYFR_REACH is `#{mode}`). " <>
-            "Remove it, or run `cyfr reach #{needs}`."}
+          "`#{key}` is set, but only a `#{needs}` home uses it (CYFR_ACCESS is `#{mode}`). " <>
+            "Remove it, or run `cyfr access #{needs}`."}
 
-  defp row({:reach_source_conflict, %{key: key, file_value: file, process_value: process}})
+  defp row({:access_source_conflict, %{key: key, file_value: file, process_value: process}})
        when is_binary(key) and is_binary(file) and is_binary(process) do
     there = if process == "", do: "blank", else: "`#{process}`"
 
     {:conflict,
-     "`#{key}` is `#{file}` in .env and #{there} in this process's environment; a home has " <>
-       "one reach. Remove one of them."}
+     "`#{key}` is `#{file}` in .env and #{there} in this process's environment; a home is " <>
+       "reached one way. Remove one of them."}
   end
 
-  defp row({:reach_bind_not_loopback, %{address: address}}) when is_binary(address),
+  defp row({:access_bind_not_loopback, %{address: address}}) when is_binary(address),
     do:
       {:forbidden,
        "CYFR_BIND_ADDRESS `#{address}` is not a loopback address, so other machines could " <>
          "reach this home's loopback listener. Bind 127.0.0.1 or ::1; a home reached from " <>
-         "other devices uses CYFR_REACH=tailnet or public."}
+         "other devices uses CYFR_ACCESS=tailnet or public."}
 
-  defp row({:reach_setting_invalid, %{key: key, value: value} = payload})
-       when map_size(payload) == 2 and is_map_key(@reach_setting_forms, key) and
+  defp row({:access_setting_invalid, %{key: key, value: value} = payload})
+       when map_size(payload) == 2 and is_map_key(@access_setting_forms, key) and
               is_binary(value),
        do:
          {:invalid_argument,
-          "`#{key}` is `#{value}`, which is not #{Map.fetch!(@reach_setting_forms, key)}. " <>
+          "`#{key}` is `#{value}`, which is not #{Map.fetch!(@access_setting_forms, key)}. " <>
             "Nothing started. Correct it, or remove it to take the default."}
 
   # The proxy listener on the loopback listener's port, at an address the
   # loopback listener's overlaps, where it could not bind.
   defp row(
-         {:reach_setting_invalid,
+         {:access_setting_invalid,
           %{key: "CYFR_PROXY_PORT", value: value, address: address, bind: bind, port: port} =
             payload}
        )
@@ -1057,19 +1057,19 @@ defmodule Prima.Refusal do
             "another port."}
 
   # A value no rule can read: its name alone, never its bytes.
-  defp row({:reach_setting_invalid, %{key: key} = payload})
+  defp row({:access_setting_invalid, %{key: key} = payload})
        when is_binary(key) and map_size(payload) == 1,
        do:
          {:invalid_argument,
           "`#{key}` is not valid UTF-8 text. Nothing started. Correct it, or remove it."}
 
-  # A `cyfr reach` option only a public home takes, given for another mode.
-  defp row({:reach_option_outside_mode, %{option: option, mode: mode}})
+  # A `cyfr access` option only a public home takes, given for another mode.
+  defp row({:access_option_outside_mode, %{option: option, mode: mode}})
        when option in ["--domain", "--acme-email"] and mode in ["local", "tailnet"],
        do:
          {:invalid_argument,
           "`#{option}` is for a public home, and this command chooses `#{mode}`. Nothing was " <>
-            "changed. Run it again without `#{option}`, or run `cyfr reach public` with it."}
+            "changed. Run it again without `#{option}`, or run `cyfr access public` with it."}
 
   defp row({:tailnet_node_id_unsupported, %{value: value}}) when is_binary(value),
     do:
@@ -1082,7 +1082,7 @@ defmodule Prima.Refusal do
       {:invalid_argument,
        "`.env` sets `#{key}`, which Docker Compose would read to choose this stack's files, " <>
          "project or services behind cyfr's back. Nothing started. Remove it; cyfr chooses " <>
-         "them from CYFR_REACH and CYFR_LOCUS_BUILDS_URL."}
+         "them from CYFR_ACCESS and CYFR_LOCUS_BUILDS_URL."}
 
   # A .env line Docker Compose does not read: cyfr neither reads nor
   # writes a file it cannot read as compose does, and names the line,
@@ -1096,7 +1096,7 @@ defmodule Prima.Refusal do
             "then run the command again."}
 
   # A compose file that would change, behind .env, how the home is
-  # reached: a reach key assigned in the service's own environment, a name
+  # reached: an access setting assigned in the service's own environment, a name
   # written with `$` in any service's environment, which cyfr does not
   # resolve, or a service that does not read .env at all.
   defp row({:compose_override_refused, %{file: file, service: service, key: key} = payload})
@@ -1105,7 +1105,7 @@ defmodule Prima.Refusal do
          {:invalid_argument,
           "`#{file}` sets `#{key}` in the `#{service}` service's environment, where it would " <>
             "override how .env says this home is reached. Nothing started. Remove `#{key}` " <>
-            "from `#{file}`; .env alone holds it, and `cyfr reach` writes it."}
+            "from `#{file}`; .env alone holds it, and `cyfr access` writes it."}
 
   defp row(
          {:compose_override_refused,
@@ -1127,28 +1127,28 @@ defmodule Prima.Refusal do
             "would not read how this home is reached. Nothing started. Add `env_file: .env` " <>
             "to the `#{service}` service in `#{file}`, as the shipped docker-compose.yml has it."}
 
-  # The reach engine's refusals and outcomes, in the words `cyfr reach`
+  # The access engine's refusals and outcomes, in the words `cyfr access`
   # prints them. A sentence that follows a change that may have landed
   # says so and names the recovery, never a bare "try again".
-  defp row({:reach_busy, %{holder: holder, pid: pid, until: until}})
+  defp row({:access_busy, %{holder: holder, pid: pid, until: until}})
        when is_binary(holder) and is_binary(pid) and is_binary(until),
        do:
          {:conflict,
           "Another cyfr command holds this home (`#{holder}`), or a docker command it " <>
             "started is still running (watchdog pid `#{pid}`, which ends by `#{until}` at the " <>
             "latest). Nothing was changed. Wait until it has finished, then run this command " <>
-            "again; if the holder was interrupted, run `cyfr reach --resume` after that time."}
+            "again; if the holder was interrupted, run `cyfr access --resume` after that time."}
 
   # The holder itself, between its docker commands, named with its pid
   # where its record or the kernel's lock table gives one.
-  defp row({:reach_busy, %{holder: holder} = payload})
+  defp row({:access_busy, %{holder: holder} = payload})
        when map_size(payload) == 1 and is_binary(holder),
        do:
          {:conflict,
           "Another cyfr command holds this home (`#{holder}`). Nothing was changed. Wait " <>
             "until it has finished, then run this command again."}
 
-  defp row({:reach_busy, %{holder: holder, pid: pid} = payload})
+  defp row({:access_busy, %{holder: holder, pid: pid} = payload})
        when map_size(payload) == 2 and is_binary(holder) and is_binary(pid),
        do:
          {:conflict,
@@ -1157,7 +1157,7 @@ defmodule Prima.Refusal do
 
   # A tailnet join whose command has ended, still waiting for its approval
   # until its own deadline.
-  defp row({:reach_busy, %{join_id: join_id, until: until} = payload})
+  defp row({:access_busy, %{join_id: join_id, until: until} = payload})
        when map_size(payload) == 2 and is_binary(join_id) and is_binary(until),
        do:
          {:conflict,
@@ -1165,22 +1165,22 @@ defmodule Prima.Refusal do
             "`#{until}` at the latest. Nothing was changed. Approve the machine with the link " <>
             "that join printed, or wait until then, and run this command again."}
 
-  defp row({:reach_stale, %{words: words}}) when is_binary(words),
+  defp row({:access_stale, %{words: words}}) when is_binary(words),
     do:
       {:conflict,
        "How this home is reached changed after the change was shown to you (it is now: " <>
          "#{words}). Nothing was changed. Run the command again to review the change."}
 
-  defp row({:reach_unchanged, %{address: address}}) when is_binary(address),
+  defp row({:access_unchanged, %{address: address}}) when is_binary(address),
     do:
       {:invalid_argument,
        "This home is already reached that way, at #{address}. Nothing was changed."}
 
-  defp row({:reach_invalid, %{input: input, kind: kind, rule: rule}})
-       when is_binary(input) and is_map_key(@reach_input_kinds, kind) and is_binary(rule),
+  defp row({:access_invalid, %{input: input, kind: kind, rule: rule}})
+       when is_binary(input) and is_map_key(@access_input_kinds, kind) and is_binary(rule),
        do:
          {:invalid_argument,
-          "`#{input}` is not a valid #{Map.fetch!(@reach_input_kinds, kind)}: #{rule}. " <>
+          "`#{input}` is not a valid #{Map.fetch!(@access_input_kinds, kind)}: #{rule}. " <>
             "Nothing was changed. Correct it and run the command again."}
 
   defp row({:tailnet_https_off, %{name: name}}) when is_binary(name),
@@ -1189,14 +1189,14 @@ defmodule Prima.Refusal do
        "This machine joined your tailnet as `#{name}`, but your tailnet has HTTPS " <>
          "certificates turned off, and this home needs them. How this home is reached was " <>
          "not changed. Turn on HTTPS on the DNS page of the Tailscale admin console, then " <>
-         "run `cyfr reach tailnet` again, which uses this machine as it is. If you do not " <>
+         "run `cyfr access tailnet` again, which uses this machine as it is. If you do not " <>
          "want it in your tailnet, remove `#{name}` on the Machines page of the admin console."}
 
   defp row({:tailnet_active, %{name: name}}) when is_binary(name),
     do:
       {:conflict,
        "This home is already on your tailnet as `#{name}`. Nothing was changed. To give it " <>
-         "another name, run `cyfr reach local`, then `cyfr reach tailnet --new-node`, and " <>
+         "another name, run `cyfr access local`, then `cyfr access tailnet --new-node`, and " <>
          "remove `#{name}` on the Machines page of the Tailscale admin console."}
 
   defp row({:tailnet_name_changed, %{frozen: frozen, now: now}})
@@ -1212,7 +1212,7 @@ defmodule Prima.Refusal do
          {:conflict,
           "This machine's tailnet identity is `#{node}`, but .env says this home is " <>
             "`#{env}`, so it is not being served on your tailnet: it answers on this machine " <>
-            "only, and nothing else was changed. Run `cyfr reach tailnet`, which offers to " <>
+            "only, and nothing else was changed. Run `cyfr access tailnet`, which offers to " <>
             "move the home to https://#{node} after you confirm."}
 
   defp row({:docker_unavailable, %{reason: why}}) when is_binary(why),
@@ -1221,7 +1221,7 @@ defmodule Prima.Refusal do
        "Docker did not answer (#{why}) before the change was accepted. Nothing was changed. " <>
          "Start Docker, then run the command again."}
 
-  defp row({:reach_rolled_back, %{new: new, old: old, reason: why} = payload})
+  defp row({:access_rolled_back, %{new: new, old: old, reason: why} = payload})
        when map_size(payload) == 3 and is_binary(new) and is_binary(old) and is_binary(why),
        do:
          {:conflict,
@@ -1231,7 +1231,7 @@ defmodule Prima.Refusal do
 
   # Put back as before, but the old head's tailnet machine is not ready to
   # serve it, so it answers on this machine only, and why.
-  defp row({:reach_rolled_back, %{new: new, old: old, reason: why, local: local} = payload})
+  defp row({:access_rolled_back, %{new: new, old: old, reason: why, local: local} = payload})
        when map_size(payload) == 4 and is_binary(new) and is_binary(old) and is_binary(why) and
               is_map_key(@rolled_back_local, local) do
     {because, next} = Map.fetch!(@rolled_back_local, local)
@@ -1243,64 +1243,64 @@ defmodule Prima.Refusal do
        "#{next}."}
   end
 
-  defp row({:reach_failed, %{new: new, env: env}}) when is_binary(new) and is_binary(env),
+  defp row({:access_failed, %{new: new, env: env}}) when is_binary(new) and is_binary(env),
     do:
       {:unavailable,
        "This home could not start as #{new}, nor as before; everything was stopped and " <>
          "checked stopped. .env says: #{env}. Run `cyfr up` to start it as .env says, or " <>
-         "`cyfr reach <mode>` to choose again."}
+         "`cyfr access <mode>` to choose again."}
 
   # A switch interrupted, then recovered after .env was edited meanwhile:
   # what the recovery did, in the one order it does it, and the next step.
-  defp row({:reach_env_edited, %{then: "started", env: env} = payload})
+  defp row({:access_env_edited, %{then: "started", env: env} = payload})
        when map_size(payload) == 2 and is_binary(env),
        do:
          {:conflict,
           env_edited() <>
             " CYFR stopped the stack, checked it stopped, left .env as edited, and started " <>
             "the home as it says: #{env}. If that is not how this home should be reached, run " <>
-            "`cyfr reach <mode>`."}
+            "`cyfr access <mode>`."}
 
-  defp row({:reach_env_edited, %{then: "not_running", env: env} = payload})
+  defp row({:access_env_edited, %{then: "not_running", env: env} = payload})
        when map_size(payload) == 2 and is_binary(env),
        do:
          {:conflict,
           env_edited() <>
             " CYFR stopped the stack, checked it stopped, and left .env as edited, which says: " <>
             "#{env}. The stack was not running, so nothing was started. Run `cyfr up` to start " <>
-            "it as .env says, or `cyfr reach <mode>` to choose again."}
+            "it as .env says, or `cyfr access <mode>` to choose again."}
 
-  defp row({:reach_env_edited, %{then: "failed", env: env} = payload})
+  defp row({:access_env_edited, %{then: "failed", env: env} = payload})
        when map_size(payload) == 2 and is_binary(env),
        do:
          {:conflict,
           env_edited() <>
             " CYFR stopped the stack, checked it stopped, and left .env as edited, but the " <>
             "home did not start as it says (#{env}), and everything is stopped. Fix .env, then " <>
-            "run `cyfr up`, or run `cyfr reach <mode>` to choose again."}
+            "run `cyfr up`, or run `cyfr access <mode>` to choose again."}
 
-  defp row({:reach_env_edited, %{then: "incoherent"} = payload}) when map_size(payload) == 1,
+  defp row({:access_env_edited, %{then: "incoherent"} = payload}) when map_size(payload) == 1,
     do:
       {:conflict,
        env_edited() <>
          " CYFR stopped the stack, checked it stopped, and left .env as edited; nothing was " <>
          "started, because .env no longer says one coherent way this home is reached. Run " <>
-         "`cyfr up` to see what is wrong with it, or `cyfr reach <mode>` to choose again."}
+         "`cyfr up` to see what is wrong with it, or `cyfr access <mode>` to choose again."}
 
-  defp row({:reach_uncertain, %{observed: observed}}) when is_binary(observed),
+  defp row({:access_uncertain, %{observed: observed}}) when is_binary(observed),
     do:
       {:uncertain,
        "This home could not be brought to a known state: #{observed} were still running " <>
          "after the stop. It may be partly reachable. Nothing more was done. On the machine, " <>
-         "run `cyfr reach --resume`, which stops what is running, checks, and starts the " <>
+         "run `cyfr access --resume`, which stops what is running, checks, and starts the " <>
          "home as .env says; if it reports the same, run `cyfr down`, check `docker ps`, " <>
          "then `cyfr up`."}
 
-  defp row({:reach_outcome_unknown, %{reason: why}}) when is_binary(why),
+  defp row({:access_outcome_unknown, %{reason: why}}) when is_binary(why),
     do:
       {:uncertain,
        "This command lost track of the change before it finished (#{why}), so it may have " <>
-         "been applied. Do not ask for it again: run `cyfr reach --resume`, which finishes it " <>
+         "been applied. Do not ask for it again: run `cyfr access --resume`, which finishes it " <>
          "under the lock and reports what happened."}
 
   # A crafted sentence a producer returned as a bare binary: internal,
@@ -1316,7 +1316,7 @@ defmodule Prima.Refusal do
 
   defp tailnet_sentence(what),
     do:
-      "CYFR_REACH is `tailnet`, but #{what}. Run `cyfr reach tailnet`, which reads both from " <>
+      "CYFR_ACCESS is `tailnet`, but #{what}. Run `cyfr access tailnet`, which reads both from " <>
         "Tailscale."
 
   defp signal_class(:setup_required), do: :setup_required

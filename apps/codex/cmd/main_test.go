@@ -10,7 +10,7 @@ import (
 	"os"
 	"testing"
 
-	"github.com/cyfr/codex/internal/reach"
+	"github.com/cyfr/codex/internal/access"
 )
 
 // watchdogChild marks a run of this test binary that a test started as the
@@ -36,7 +36,7 @@ const asCyfr = "CYFR_CMD_TEST_AS_CYFR"
 // the commands that sign in save the CLI's config under ~/.cyfr, and no
 // test reads or writes the home of the person running it.
 //
-// The reach engine runs each docker call through `cyfr internal
+// The access engine runs each docker call through `cyfr internal
 // docker-run`, a re-exec of the running binary, which under go test is
 // this test binary: run so, it serves the call through the command tree as
 // cyfr does, and the command exits with the call's status.
@@ -50,7 +50,7 @@ func TestMain(m *testing.M) {
 	// status the one cyfr exits with, over a fake engine.
 	if scenario := os.Getenv(asCyfr); scenario == "real-mismatch" {
 		openEngine = func(dir string) (stackEngine, error) {
-			e, err := reach.Open(dir, &tailnetDocker{node: "cyfr-1.tail1234.ts.net", id: "nBBBBBBBBBCNTRL"})
+			e, err := access.Open(dir, &tailnetDocker{node: "cyfr-1.tail1234.ts.net", id: "nBBBBBBBBBCNTRL"})
 			if err != nil {
 				return nil, err
 			}
@@ -61,7 +61,7 @@ func TestMain(m *testing.M) {
 	if scenario := os.Getenv(asCyfr); scenario == "real-state" || scenario == "real-state-kill" {
 		docker := &stateDocker{dir: os.Getenv(stateDockerDir), killAtUp: scenario == "real-state-kill"}
 		openEngine = func(dir string) (stackEngine, error) {
-			e, err := reach.Open(dir, docker)
+			e, err := access.Open(dir, docker)
 			if err != nil {
 				return nil, err
 			}
@@ -78,12 +78,12 @@ func TestMain(m *testing.M) {
 		case "https-off":
 			s.startReceipt = startedLocalFor("start", "tailnet_https_off", httpsOff())
 		case "resumed-local":
-			s.resume = []reach.Receipt{startedLocalReceipt("switch")}
+			s.resume = []access.Receipt{startedLocalReceipt("switch")}
 		case "waiting-join":
-			s.join = func(ctx context.Context, r reach.JoinRequest) (reach.Receipt, error) {
+			s.join = func(ctx context.Context, r access.JoinRequest) (access.Receipt, error) {
 				r.OnAuthURL("https://login.tailscale.com/a/approve-test")
 				<-ctx.Done()
-				return reach.Receipt{}, ctx.Err()
+				return access.Receipt{}, ctx.Err()
 			}
 		case "failed-start":
 			s.startErr = errors.New("cyfr did not become healthy")

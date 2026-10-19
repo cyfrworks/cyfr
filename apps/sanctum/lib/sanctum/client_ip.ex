@@ -33,7 +33,7 @@ defmodule Sanctum.ClientIp do
 
   X-Forwarded-For is honoured ONLY on the proxy listener, and only as
   `config :sanctum, :proxy_trust` says, which `config/runtime.exs` sets
-  from the home's reach (`Cyfr.RuntimeConfig.resolve_reach/1`):
+  from the home's access settings (`Cyfr.RuntimeConfig.resolve_access/1`):
   `{:cidrs, entries}` strips the trailing hops inside those IPs and CIDRs,
   `{:hops, count}` strips a fixed count from 0 to 16, and `:none`, a
   local home's, trusts nothing. On the loopback listener, and on a request

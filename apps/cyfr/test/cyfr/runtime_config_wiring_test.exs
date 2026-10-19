@@ -14,9 +14,9 @@ defmodule Cyfr.RuntimeConfigWiringTest do
 
   @root Path.expand("../../../..", __DIR__)
 
-  # Every setting the reach reads, so a case clears the ones it does not
+  # Every setting the access resolver reads, so a case clears the ones it does not
   # set.
-  @reach_keys ~w(CYFR_REACH CYFR_HOST CYFR_TAILNET_NODE_ID CYFR_PUBLIC_URL CADDY_ACME_EMAIL
+  @access_keys ~w(CYFR_ACCESS CYFR_HOST CYFR_TAILNET_NODE_ID CYFR_PUBLIC_URL CADDY_ACME_EMAIL
                  CYFR_PORT CYFR_BIND_ADDRESS CYFR_LOCAL_INGRESS_ASSERTED CYFR_PROXY_BIND_ADDRESS
                  CYFR_PROXY_PORT CYFR_TRUSTED_PROXY_HOPS CYFR_TRUSTED_PROXY_CIDRS
                  CYFR_LOCUS_BUILDS_URL)
@@ -26,12 +26,12 @@ defmodule Cyfr.RuntimeConfigWiringTest do
   # home, which a release must name: a case that points RELEASE_ROOT at a
   # directory of its own is a release.
   defp base_env do
-    @reach_keys
+    @access_keys
     |> Map.new(&{&1, nil})
     |> Map.merge(%{
       "CYFR_SECRET_KEY_BASE" => Base.encode64(:crypto.strong_rand_bytes(48)),
       "RELEASE_NAME" => "cyfr",
-      "CYFR_REACH" => "local"
+      "CYFR_ACCESS" => "local"
     })
   end
 
@@ -312,12 +312,12 @@ defmodule Cyfr.RuntimeConfigWiringTest do
   end
 
   # ==========================================================================
-  # The reach
+  # Access
   # ==========================================================================
 
-  @reach_vectors Path.expand("../../../../tests/fixtures/reach_modes.json", __DIR__)
-                 |> File.read!()
-                 |> Jason.decode!()
+  @access_vectors Path.expand("../../../../tests/fixtures/access_modes.json", __DIR__)
+                  |> File.read!()
+                  |> Jason.decode!()
 
   # The .env a vector's file map is, each value single-quoted, so it is
   # read as written.
@@ -344,7 +344,7 @@ defmodule Cyfr.RuntimeConfigWiringTest do
     end
 
     env =
-      for key <- @reach_keys, into: %{"RELEASE_ROOT" => dir} do
+      for key <- @access_keys, into: %{"RELEASE_ROOT" => dir} do
         overrides? = Map.has_key?(process, key) and process[key] != (file || %{})[key]
         {key, if(overrides?, do: process[key])}
       end
@@ -365,12 +365,12 @@ defmodule Cyfr.RuntimeConfigWiringTest do
   defp trust(%{"cidrs" => cidrs}), do: {:cidrs, cidrs}
   defp trust(%{"hops" => hops}), do: {:hops, hops}
 
-  describe "the reach" do
+  describe "access" do
     @describetag :tmp_dir
 
     test "every refused boot vector refuses the boot with its sentence", %{tmp_dir: dir} do
       refused =
-        for %{"refusal" => refusal} = vector <- @reach_vectors["boot"], do: {vector, refusal}
+        for %{"refusal" => refusal} = vector <- @access_vectors["boot"], do: {vector, refusal}
 
       assert length(refused) > 40
 
@@ -384,19 +384,21 @@ defmodule Cyfr.RuntimeConfigWiringTest do
 
     test "every resolved boot vector configures its listeners, address, origins, trust and HSTS",
          %{tmp_dir: dir} do
-      resolved = for %{"reach" => reach} = vector <- @reach_vectors["boot"], do: {vector, reach}
+      resolved =
+        for %{"access" => access} = vector <- @access_vectors["boot"], do: {vector, access}
+
       assert length(resolved) > 10
 
-      for {vector, reach} <- resolved, vector["input"]["release?"] do
+      for {vector, access} <- resolved, vector["input"]["release?"] do
         boot_vector(vector, dir, fn ->
           config = read_prod_config!()
           endpoint = config[:cyfr][CyfrWeb.Endpoint]
           name = vector["name"]
-          [loopback, port] = reach["listeners"]["loopback"]
+          [loopback, port] = access["listeners"]["loopback"]
 
           assert {endpoint[:http][:ip], endpoint[:http][:port]} == {address(loopback), port}, name
 
-          case reach["listeners"]["proxy"] do
+          case access["listeners"]["proxy"] do
             "none" ->
               refute Keyword.has_key?(endpoint, :proxy), name
 
@@ -405,21 +407,21 @@ defmodule Cyfr.RuntimeConfigWiringTest do
           end
 
           expected_url =
-            case reach["mode"] do
-              "local" -> [scheme: "http", host: "localhost", port: reach["head"]["port"]]
-              _exposed -> [scheme: "https", host: reach["head"]["host"], port: 443]
+            case access["mode"] do
+              "local" -> [scheme: "http", host: "localhost", port: access["head"]["port"]]
+              _exposed -> [scheme: "https", host: access["head"]["host"], port: 443]
             end
 
           assert endpoint[:url] == expected_url, name
-          assert endpoint[:check_origin] == reach["check_origins"], name
-          assert config[:cyfr][:mcp_allowed_origins] == reach["check_origins"], name
-          assert config[:sanctum][:proxy_trust] == trust(reach["trust"]), name
-          assert config[:cyfr][:hsts] == String.to_existing_atom(reach["hsts"]), name
+          assert endpoint[:check_origin] == access["check_origins"], name
+          assert config[:cyfr][:mcp_allowed_origins] == access["check_origins"], name
+          assert config[:sanctum][:proxy_trust] == trust(access["trust"]), name
+          assert config[:cyfr][:hsts] == String.to_existing_atom(access["hsts"]), name
 
           # `Sanctum.origin/0`: the public URL, or the fallback where there
           # is none, as a local home has none.
-          assert config[:sanctum][:public_url] == reach["head"]["public_url"], name
-          assert config[:sanctum][:fallback_origin] == reach["origin"], name
+          assert config[:sanctum][:public_url] == access["head"]["public_url"], name
+          assert config[:sanctum][:fallback_origin] == access["origin"], name
 
           # The session cookie is a secure one in a release, whatever the
           # mode: a browser keeps it for https and for localhost alike.
@@ -430,7 +432,7 @@ defmodule Cyfr.RuntimeConfigWiringTest do
 
     test "a development or test boot with no mode is a local home on the loopback" do
       for read <- [&read_dev_config!/0, &read_prod_config!/0] do
-        with_env(%{"CYFR_REACH" => nil, "RELEASE_ROOT" => nil}, fn ->
+        with_env(%{"CYFR_ACCESS" => nil, "RELEASE_ROOT" => nil}, fn ->
           config = read.()
           endpoint = config[:cyfr][CyfrWeb.Endpoint]
 
@@ -445,12 +447,12 @@ defmodule Cyfr.RuntimeConfigWiringTest do
     end
 
     test "a release names its mode, whatever else it sets", %{tmp_dir: dir} do
-      for reach <- [nil, ""] do
-        with_env(%{"CYFR_REACH" => reach, "RELEASE_ROOT" => dir}, fn ->
+      for access <- [nil, ""] do
+        with_env(%{"CYFR_ACCESS" => access, "RELEASE_ROOT" => dir}, fn ->
           message = Exception.message(assert_raise(RuntimeError, &read_prod_config!/0))
 
           assert message ==
-                   "[Cyfr] FATAL: " <> Prima.Refusal.message({:reach_missing, %{}})
+                   "[Cyfr] FATAL: " <> Prima.Refusal.message({:access_missing, %{}})
         end)
       end
     end
@@ -462,7 +464,7 @@ defmodule Cyfr.RuntimeConfigWiringTest do
     test "a bind off the loopback stands on the process's assertion alone, exactly true",
          %{tmp_dir: dir} do
       bind = %{"CYFR_BIND_ADDRESS" => "172.16.230.2", "RELEASE_ROOT" => dir}
-      not_loopback = {:reach_bind_not_loopback, %{address: "172.16.230.2"}}
+      not_loopback = {:access_bind_not_loopback, %{address: "172.16.230.2"}}
 
       with_env(bind, fn ->
         message = Exception.message(assert_raise(RuntimeError, &read_prod_config!/0))
@@ -480,7 +482,7 @@ defmodule Cyfr.RuntimeConfigWiringTest do
           assert message ==
                    "[Cyfr] FATAL: " <>
                      Prima.Refusal.message(
-                       {:reach_setting_invalid,
+                       {:access_setting_invalid,
                         %{key: "CYFR_LOCAL_INGRESS_ASSERTED", value: spelled}}
                      )
         end)
@@ -494,7 +496,7 @@ defmodule Cyfr.RuntimeConfigWiringTest do
           message = Exception.message(assert_raise(RuntimeError, &read_prod_config!/0))
 
           assert message ==
-                   "[Cyfr] FATAL: " <> Prima.Refusal.message({:reach_assertion_from_file, %{}})
+                   "[Cyfr] FATAL: " <> Prima.Refusal.message({:access_assertion_from_file, %{}})
         end)
       end
     end
@@ -534,18 +536,18 @@ defmodule Cyfr.RuntimeConfigWiringTest do
       }
 
       tailnet = %{
-        "CYFR_REACH" => "tailnet",
+        "CYFR_ACCESS" => "tailnet",
         "CYFR_HOST" => "cyfr.tail1a2b3c.ts.net",
         "CYFR_TAILNET_NODE_ID" => "nAbc123XYZ1CNTRL",
         "CYFR_PUBLIC_URL" => "https://cyfr.tail1a2b3c.ts.net",
         "RELEASE_ROOT" => dir
       }
 
-      for {reach, origin} <- [
+      for {access, origin} <- [
             {%{"CYFR_PORT" => "4005"}, "http://localhost:4005"},
             {tailnet, "https://cyfr.tail1a2b3c.ts.net"}
           ] do
-        with_env(Map.merge(oidc, reach), fn ->
+        with_env(Map.merge(oidc, access), fn ->
           {Ueberauth.Strategy.Oidcc, options} =
             read_prod_config!()[:ueberauth][Ueberauth][:providers][:oidcc]
 

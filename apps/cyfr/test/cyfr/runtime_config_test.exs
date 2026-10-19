@@ -570,53 +570,53 @@ defmodule Cyfr.RuntimeConfigTest do
     end
   end
 
-  describe "resolve_reach/1, as tests/fixtures/reach_modes.json holds it" do
-    # The reach engine (apps/codex/internal/reach) reads the same file and
+  describe "resolve_access/1, as tests/fixtures/access_modes.json holds it" do
+    # The access engine (apps/codex/internal/access) reads the same file and
     # agrees with every answer here.
-    @reach_vectors Path.expand("../../../../tests/fixtures/reach_modes.json", __DIR__)
+    @access_vectors Path.expand("../../../../tests/fixtures/access_modes.json", __DIR__)
 
-    defp reach_vectors, do: @reach_vectors |> File.read!() |> Jason.decode!()
+    defp access_vectors, do: @access_vectors |> File.read!() |> Jason.decode!()
 
-    defp reach_input(%{"file" => file, "process" => process, "release?" => release?}),
+    defp access_input(%{"file" => file, "process" => process, "release?" => release?}),
       do: %{file: file, process: process, release?: release?}
 
     # A result in the vector file's shape.
-    defp reach_json({:ok, reach}) do
+    defp access_json({:ok, access}) do
       listener = fn
         :none -> "none"
         {address, port} -> [address, port]
       end
 
       trust =
-        case reach.trust do
+        case access.trust do
           :none -> "none"
           {:cidrs, cidrs} -> %{"cidrs" => cidrs}
           {:hops, hops} -> %{"hops" => hops}
         end
 
-      assert Map.keys(reach) |> Enum.sort() ==
+      assert Map.keys(access) |> Enum.sort() ==
                ~w(assertion canonical check_origins digest head hsts listeners mode origin trust)a
 
       %{
-        "reach" => %{
-          "mode" => Atom.to_string(reach.mode),
-          "head" => reach.head,
-          "canonical" => reach.canonical,
-          "digest" => reach.digest,
-          "origin" => reach.origin,
+        "access" => %{
+          "mode" => Atom.to_string(access.mode),
+          "head" => access.head,
+          "canonical" => access.canonical,
+          "digest" => access.digest,
+          "origin" => access.origin,
           "listeners" => %{
-            "loopback" => listener.(reach.listeners.loopback),
-            "proxy" => listener.(reach.listeners.proxy)
+            "loopback" => listener.(access.listeners.loopback),
+            "proxy" => listener.(access.listeners.proxy)
           },
           "trust" => trust,
-          "hsts" => Atom.to_string(reach.hsts),
-          "check_origins" => reach.check_origins,
-          "assertion" => Atom.to_string(reach.assertion)
+          "hsts" => Atom.to_string(access.hsts),
+          "check_origins" => access.check_origins,
+          "assertion" => Atom.to_string(access.assertion)
         }
       }
     end
 
-    defp reach_json({:error, %{code: code, class: class, payload: payload} = refusal}) do
+    defp access_json({:error, %{code: code, class: class, payload: payload} = refusal}) do
       assert map_size(refusal) == 3
 
       %{
@@ -630,14 +630,15 @@ defmodule Cyfr.RuntimeConfigTest do
     end
 
     test "every boot vector resolves to its answer, refusals to their code, class, payload and sentence" do
-      boot = reach_vectors()["boot"]
+      boot = access_vectors()["boot"]
       assert boot != []
 
       for vector <- boot do
-        expected = Map.take(vector, ["reach", "refusal"])
+        expected = Map.take(vector, ["access", "refusal"])
         assert map_size(expected) == 1, vector["name"]
 
-        assert reach_json(RuntimeConfig.resolve_reach(reach_input(vector["input"]))) == expected,
+        assert access_json(RuntimeConfig.resolve_access(access_input(vector["input"]))) ==
+                 expected,
                vector["name"]
       end
 
@@ -646,20 +647,20 @@ defmodule Cyfr.RuntimeConfigTest do
       # Every boot refusal of the plan's table, and the malformed setting,
       # is among the vectors.
       assert Enum.sort(codes) ==
-               Enum.sort(~w(reach_source_conflict reach_assertion_from_file reach_missing
-                            reach_unknown_mode reach_local_mismatch reach_tailnet_host_invalid
-                            reach_tailnet_node_invalid reach_public_host_invalid
-                            reach_public_url_mismatch reach_key_outside_mode
-                            reach_bind_not_loopback reach_setting_invalid))
+               Enum.sort(~w(access_source_conflict access_assertion_from_file access_missing
+                            access_unknown_mode access_local_mismatch access_tailnet_host_invalid
+                            access_tailnet_node_invalid access_public_host_invalid
+                            access_public_url_mismatch access_key_outside_mode
+                            access_bind_not_loopback access_setting_invalid))
     end
 
     test "the canonical bytes and digest of every derived head are these" do
-      derive = reach_vectors()["derive"]
+      derive = access_vectors()["derive"]
       heads = for %{"head" => head} = vector <- derive, do: {head, vector}
       assert heads != []
 
       for {head, vector} <- heads do
-        assert RuntimeConfig.reach_digest(head) ==
+        assert RuntimeConfig.access_digest(head) ==
                  %{canonical: vector["canonical"], digest: vector["digest"]},
                vector["name"]
 
@@ -691,17 +692,17 @@ defmodule Cyfr.RuntimeConfigTest do
     end
 
     test "the compose selection of a head" do
-      profiles = reach_vectors()["profiles"]
+      profiles = access_vectors()["profiles"]
       assert profiles != []
 
       for %{"mode" => mode, "profiles" => expected} = vector <- profiles do
-        assert RuntimeConfig.reach_profiles(mode, vector["builds_url"]) == expected,
+        assert RuntimeConfig.access_profiles(mode, vector["builds_url"]) == expected,
                inspect(vector)
       end
     end
 
-    test "the names a reach is written with" do
-      names = reach_vectors()["names"]
+    test "the names an access mode is written with" do
+      names = access_vectors()["names"]
 
       for {section, check} <- [
             {"tailnet_names", &RuntimeConfig.tailnet_name?/1},
@@ -719,11 +720,11 @@ defmodule Cyfr.RuntimeConfigTest do
     end
 
     test "the words a person reads for a head" do
-      words = reach_vectors()["words"]
+      words = access_vectors()["words"]
       assert words != []
 
       for %{"head" => head, "sentences" => sentences} <- words do
-        assert RuntimeConfig.reach_words(head) == sentences
+        assert RuntimeConfig.access_words(head) == sentences
 
         for sentence <- sentences, term <- ~w(profile compose caddy CYFR_ node_id < %) do
           refute sentence =~ term, "#{sentence} names #{term}"
@@ -733,26 +734,26 @@ defmodule Cyfr.RuntimeConfigTest do
 
     test "a dev or test run without a mode is local, and a release without one is refused" do
       assert {:ok, %{mode: :local, assertion: :absent}} =
-               RuntimeConfig.resolve_reach(%{file: nil, process: %{}, release?: false})
+               RuntimeConfig.resolve_access(%{file: nil, process: %{}, release?: false})
 
-      assert {:error, %{code: :reach_missing, class: :setup_required, payload: %{}}} =
-               RuntimeConfig.resolve_reach(%{file: nil, process: %{}, release?: true})
+      assert {:error, %{code: :access_missing, class: :setup_required, payload: %{}}} =
+               RuntimeConfig.resolve_access(%{file: nil, process: %{}, release?: true})
     end
 
     test "with no .env read, the process alone decides and no source rule applies" do
       process = %{
-        "CYFR_REACH" => "local",
+        "CYFR_ACCESS" => "local",
         "CYFR_BIND_ADDRESS" => "172.16.230.2",
         "CYFR_LOCAL_INGRESS_ASSERTED" => "true"
       }
 
       assert {:ok, %{assertion: :process, listeners: %{loopback: {"172.16.230.2", 4000}}}} =
-               RuntimeConfig.resolve_reach(%{file: nil, process: process, release?: true})
+               RuntimeConfig.resolve_access(%{file: nil, process: process, release?: true})
 
       # The same assignment read from .env is refused, whatever its value.
       for value <- ["true", "false", ""] do
-        assert {:error, %{code: :reach_assertion_from_file}} =
-                 RuntimeConfig.resolve_reach(%{
+        assert {:error, %{code: :access_assertion_from_file}} =
+                 RuntimeConfig.resolve_access(%{
                    file: %{"CYFR_LOCAL_INGRESS_ASSERTED" => value},
                    process: process,
                    release?: true
@@ -761,26 +762,26 @@ defmodule Cyfr.RuntimeConfigTest do
     end
   end
 
-  describe "resolve_reach/1's input rules" do
+  describe "resolve_access/1's input rules" do
     defp resolve_local(extra) do
-      RuntimeConfig.resolve_reach(%{
+      RuntimeConfig.resolve_access(%{
         file: nil,
-        process: Map.merge(%{"CYFR_REACH" => "local"}, extra),
+        process: Map.merge(%{"CYFR_ACCESS" => "local"}, extra),
         release?: true
       })
     end
 
     test "a value that is not UTF-8 is refused by its name, never a crash" do
       public = %{
-        "CYFR_REACH" => "public",
+        "CYFR_ACCESS" => "public",
         "CYFR_HOST" => "cyfr.example.com",
         "CYFR_PUBLIC_URL" => "https://cyfr.example.com"
       }
 
-      for key <- ~w(CADDY_ACME_EMAIL CYFR_LOCUS_BUILDS_URL CYFR_HOST CYFR_REACH CYFR_PORT) do
+      for key <- ~w(CADDY_ACME_EMAIL CYFR_LOCUS_BUILDS_URL CYFR_HOST CYFR_ACCESS CYFR_PORT) do
         assert {:error,
                 %{
-                  code: :reach_setting_invalid,
+                  code: :access_setting_invalid,
                   class: :invalid_argument,
                   payload: %{key: ^key} = payload
                 }} =
@@ -788,14 +789,14 @@ defmodule Cyfr.RuntimeConfigTest do
                key
 
         refute Map.has_key?(payload, :value), key
-        assert String.valid?(Prima.Refusal.message({:reach_setting_invalid, payload}))
+        assert String.valid?(Prima.Refusal.message({:access_setting_invalid, payload}))
       end
 
       # The file's own read is held to the same rule.
-      assert {:error, %{code: :reach_setting_invalid, payload: %{key: "CYFR_HOST"}}} =
-               RuntimeConfig.resolve_reach(%{
+      assert {:error, %{code: :access_setting_invalid, payload: %{key: "CYFR_HOST"}}} =
+               RuntimeConfig.resolve_access(%{
                  file: %{"CYFR_HOST" => <<255>>},
-                 process: %{"CYFR_REACH" => "local", "CYFR_HOST" => <<255>>},
+                 process: %{"CYFR_ACCESS" => "local", "CYFR_HOST" => <<255>>},
                  release?: true
                })
     end
@@ -811,7 +812,7 @@ defmodule Cyfr.RuntimeConfigTest do
           ] do
         assert {:error,
                 %{
-                  code: :reach_setting_invalid,
+                  code: :access_setting_invalid,
                   payload: %{key: "CYFR_LOCUS_BUILDS_URL", value: ^url}
                 }} =
                  resolve_local(%{"CYFR_LOCUS_BUILDS_URL" => url}),

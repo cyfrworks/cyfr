@@ -1751,7 +1751,7 @@ defmodule Cyfr.StackShapeTest do
   end
 
   # ==========================================================================
-  # The reach's networks, proxies and ports
+  # The access modes' networks, proxies and ports
   # ==========================================================================
 
   defp compose!, do: YamlElixir.read_from_string!(read!("docker-compose.yml"))
@@ -1825,13 +1825,13 @@ defmodule Cyfr.StackShapeTest do
   end
 
   # The loopback listener's address is the compose file's to assert, and
-  # every setting of the reach reaches cyfr from .env through env_file
+  # every access setting reaches cyfr from .env through env_file
   # alone: an `environment:` entry here would be a second, unchecked
-  # source of the home's reach.
-  @head_keys ~w(CYFR_REACH CYFR_HOST CYFR_PORT CYFR_PUBLIC_URL CYFR_TAILNET_NODE_ID
+  # source of the home's access settings.
+  @head_keys ~w(CYFR_ACCESS CYFR_HOST CYFR_PORT CYFR_PUBLIC_URL CYFR_TAILNET_NODE_ID
                 CADDY_ACME_EMAIL CYFR_LOCUS_BUILDS_URL)
 
-  test "cyfr asserts its loopback listener's address, and takes the reach from .env alone" do
+  test "cyfr asserts its loopback listener's address, and takes its access settings from .env alone" do
     cyfr = compose!()["services"]["cyfr"]
     release = LocusRoles.release()
 
@@ -1916,19 +1916,19 @@ defmodule Cyfr.StackShapeTest do
   end
 
   # The image's health check asks the loopback listener where a bare
-  # release binds it by default, the reach's own default listener, and
+  # release binds it by default, the access settings' own default listener, and
   # where compose binds it, by the variable compose sets.
-  test "the image's health check asks the loopback listener at the reach's default address" do
+  test "the image's health check asks the loopback listener at the access settings' default address" do
     dockerfile = read!("Dockerfile")
 
     defaults =
-      Path.join(@root, "tests/fixtures/reach_modes.json")
+      Path.join(@root, "tests/fixtures/access_modes.json")
       |> File.read!()
       |> Jason.decode!()
       |> Map.fetch!("boot")
       |> Enum.find(&(&1["name"] == "local, defaults"))
 
-    ["127.0.0.1" = address, 4000 = port] = defaults["reach"]["listeners"]["loopback"]
+    ["127.0.0.1" = address, 4000 = port] = defaults["access"]["listeners"]["loopback"]
 
     assert dockerfile =~ ~s|addr="${CYFR_BIND_ADDRESS:-#{address}}"|
     assert dockerfile =~ ~s|curl -f "http://$addr:${CYFR_PORT:-#{port}}/api/health/ready"|

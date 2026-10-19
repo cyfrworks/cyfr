@@ -38,10 +38,10 @@
 #                 cyfr's proxy listener on the edge network; no port is
 #                 published.                              [profile: tailnet]
 #
-# How the home is reached is CYFR_REACH in .env (local, tailnet or public),
-# which `cyfr init` and `cyfr reach` write with every setting it implies.
-# `cyfr up`, `cyfr reach`, `cyfr update` and `cyfr restore` start the stack
-# with the profiles that follow from it: the reach's proxy (`public` or
+# How the home is reached is CYFR_ACCESS in .env (local, tailnet or public),
+# which `cyfr init` and `cyfr access` write with every setting it implies.
+# `cyfr up`, `cyfr access`, `cyfr update` and `cyfr restore` start the stack
+# with the profiles that follow from it: the access mode's proxy (`public` or
 # `tailnet`; none for `local`), and `locus-builds` when
 # CYFR_LOCUS_BUILDS_URL names that service. They run Docker Compose with
 # every COMPOSE_* variable cleared, refuse a .env that sets one, and check
@@ -126,7 +126,7 @@ services:
       #   - ./my-bundle:/app/seed/components:ro
     env_file:
       - .env
-    # Every reach setting (CYFR_REACH, CYFR_HOST, CYFR_PUBLIC_URL,
+    # Every access setting (CYFR_ACCESS, CYFR_HOST, CYFR_PUBLIC_URL,
     # CYFR_TAILNET_NODE_ID, CYFR_PORT, CYFR_LOCUS_BUILDS_URL) reaches cyfr
     # from .env through env_file alone: `cyfr` refuses to start a stack
     # whose configuration assigns one here.
@@ -637,7 +637,7 @@ services:
       # No TUN device and no capability: tailscaled's own netstack.
       - TS_USERSPACE=true
       # The machine's tailnet identity, kept in a volume of its own, which no
-      # snapshot holds. `cyfr reach tailnet` joins it once.
+      # snapshot holds. `cyfr access tailnet` joins it once.
       - TS_STATE_DIR=/var/lib/tailscale
       - TS_AUTH_ONCE=true
       - TS_ACCEPT_DNS=false

@@ -18,7 +18,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/cyfr/codex/internal/reach"
+	"github.com/cyfr/codex/internal/access"
 )
 
 // stateDockerDir names, for a run of this test binary as the cyfr process,
@@ -76,14 +76,14 @@ func (d *stateDocker) running() []string {
 	return services
 }
 
-func (d *stateDocker) Run(ctx context.Context, c reach.Call) (reach.Result, error) {
+func (d *stateDocker) Run(ctx context.Context, c access.Call) (access.Result, error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	if f, err := os.OpenFile(filepath.Join(d.dir, "calls.log"), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0600); err == nil {
 		fmt.Fprintln(f, strings.Join(c.Args, " "))
 		f.Close()
 	}
-	project := reach.ProjectName(".")
+	project := access.ProjectName(".")
 	cs := d.load()
 	switch {
 	case c.Args[0] == "compose" && slices.Contains(c.Args, "config"):
@@ -96,7 +96,7 @@ func (d *stateDocker) Run(ctx context.Context, c reach.Call) (reach.Result, erro
 		var stdout, stderr bytes.Buffer
 		process.Stdout, process.Stderr = &stdout, &stderr
 		err := process.Run()
-		res := reach.Result{Stdout: stdout.Bytes(), Stderr: stderr.Bytes()}
+		res := access.Result{Stdout: stdout.Bytes(), Stderr: stderr.Bytes()}
 		var exit *exec.ExitError
 		if errors.As(err, &exit) {
 			res.ExitCode = exit.ExitCode()
@@ -133,15 +133,15 @@ func (d *stateDocker) Run(ctx context.Context, c reach.Call) (reach.Result, erro
 		for name, container := range cs {
 			fmt.Fprintf(&out, `{"name":%q,"service":%q,"state":%q}`+"\n", name, container.Service, container.State)
 		}
-		return reach.Result{Stdout: []byte(out.String())}, nil
+		return access.Result{Stdout: []byte(out.String())}, nil
 	case c.Args[0] == "inspect":
-		return reach.Result{Stdout: []byte(`{"Status":"running","ExitCode":0,"Health":{"Status":"healthy"}}`)}, nil
+		return access.Result{Stdout: []byte(`{"Status":"running","ExitCode":0,"Health":{"Status":"healthy"}}`)}, nil
 	}
-	return reach.Result{}, nil
+	return access.Result{}, nil
 }
 
 // interruptedSwitch is a local home whose stack runs, switched to public
-// by `cyfr reach public` in the cyfr process over the real engine, killed
+// by `cyfr access public` in the cyfr process over the real engine, killed
 // at the start of the new head, after the commit: its journal unfinished,
 // as a cyfr that died leaves it. A daemon call in flight when it died has
 // landed meanwhile: the new head's cyfr runs. It answers the docker, the
@@ -162,19 +162,19 @@ func interruptedSwitch(t *testing.T) (*stateDocker, string, string) {
 			t.Fatal(err)
 		}
 	}
-	project := reach.ProjectName(".")
+	project := access.ProjectName(".")
 	docker.save(map[string]stateContainer{project + "-cyfr-1": {Service: "cyfr", State: "running"}})
 
 	const id = "5ca1ab1e5ca1ab1e5ca1ab1e5ca1ab1e"
-	stdout, stderr, status := runAsCyfr(t, "real-state-kill", dir, "reach", "public", "--domain", "cyfr.example.com", "--yes", "--request-id", id)
+	stdout, stderr, status := runAsCyfr(t, "real-state-kill", dir, "access", "public", "--domain", "cyfr.example.com", "--yes", "--request-id", id)
 	if status != -1 {
 		t.Fatalf("the switch was not killed inside its start (exit %d):\n%s\n%s", status, stdout, stderr)
 	}
 	if _, err := os.Stat(filepath.Join(".cyfr", "journal.json")); err != nil {
 		t.Fatalf("the killed switch left no journal: %v", err)
 	}
-	if mode, _ := projectEnv(t).value("CYFR_REACH"); mode != reach.ModePublic {
-		t.Fatalf("the killed switch did not commit .env before its start (CYFR_REACH is %q)", mode)
+	if mode, _ := projectEnv(t).value("CYFR_ACCESS"); mode != access.ModePublic {
+		t.Fatalf("the killed switch did not commit .env before its start (CYFR_ACCESS is %q)", mode)
 	}
 	if running := docker.running(); len(running) != 0 {
 		t.Fatalf("the killed switch left %v running; it stopped the stack before its commit", running)
@@ -219,12 +219,12 @@ func recoveredUp(t *testing.T, docker *stateDocker, id, out string) {
 		t.Errorf("cyfr up did not report the recovered change before its own start:\n%s", out)
 	}
 
-	e, err := reach.Open(".", docker)
+	e, err := access.Open(".", docker)
 	if err != nil {
 		t.Fatal(err)
 	}
 	head, err := e.Head()
-	if err != nil || head.Mode != reach.ModePublic || head.Host != "cyfr.example.com" {
+	if err != nil || head.Mode != access.ModePublic || head.Host != "cyfr.example.com" {
 		t.Errorf(".env holds %+v (%v), want the switch's public head", head, err)
 	}
 	rec, ok, err := e.Receipt(id)

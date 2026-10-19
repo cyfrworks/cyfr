@@ -112,16 +112,16 @@ defmodule Cyfr.RuntimeEnvReadingTest do
              inspect(read_by_assignment)
   end
 
-  # How the home is reached is one resolution of every reach setting
-  # (`Cyfr.RuntimeConfig.resolve_reach/1`), from the names the .env files
+  # How the home is reached is one resolution of every access setting
+  # (`Cyfr.RuntimeConfig.resolve_access/1`), from the names the .env files
   # assign and the merged environment, and everything this file writes of
   # it comes from the answer: a second read of one of its settings here
   # could disagree with the one the boot checked.
-  @reach_keys ~w(CYFR_REACH CYFR_HOST CYFR_TAILNET_NODE_ID CYFR_PUBLIC_URL CADDY_ACME_EMAIL
+  @access_keys ~w(CYFR_ACCESS CYFR_HOST CYFR_TAILNET_NODE_ID CYFR_PUBLIC_URL CADDY_ACME_EMAIL
                  CYFR_PORT CYFR_BIND_ADDRESS CYFR_LOCAL_INGRESS_ASSERTED CYFR_PROXY_BIND_ADDRESS
                  CYFR_PROXY_PORT CYFR_TRUSTED_PROXY_HOPS CYFR_TRUSTED_PROXY_CIDRS)
 
-  test "the reach is read by its resolver alone, from the file's own read and the merged one" do
+  test "the access settings are read by their resolver alone, from the file's own read and the merged one" do
     src = source()
 
     assert src =~
@@ -132,7 +132,7 @@ defmodule Cyfr.RuntimeEnvReadingTest do
     assert src =~ ~S|sourced = Cyfr.EnvFiles.source!(env_files ++ [System.get_env()])|
 
     assert src =~
-             ~S|Cyfr.RuntimeConfig.resolve_reach(%{
+             ~S|Cyfr.RuntimeConfig.resolve_access(%{
            file: file_env,
            process: sourced,
            release?: Cyfr.RuntimeConfig.release?()
@@ -140,7 +140,7 @@ defmodule Cyfr.RuntimeEnvReadingTest do
 
     assert src =~ ~S|raise "[Cyfr] FATAL: " <> Prima.Refusal.message({code, payload})|
 
-    for key <- @reach_keys do
+    for key <- @access_keys do
       refute src =~ ~s|"#{key}"|, "config/runtime.exs reads #{key} itself"
     end
   end

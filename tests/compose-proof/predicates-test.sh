@@ -47,14 +47,14 @@ expect() {
 
 # ---- head_holds --------------------------------------------------------------
 
-# A tailnet head as the proof expects one, .env as cyfr reach writes it,
+# A tailnet head as the proof expects one, .env as cyfr access writes it,
 # and the running cyfr's environment from it.
 node=nProofB1CNTRL
 tailnet_head='{"mode":"tailnet","host":"cyfr-1.proof.ts.net","port":4000,"public_url":"https://cyfr-1.proof.ts.net","node_id":"'"$node"'","profiles":["tailnet"]}'
 cat >"$scratch/env" <<ENV
 # a comment
 CYFR_SECRET_KEY_BASE='kept'
-CYFR_REACH=tailnet
+CYFR_ACCESS=tailnet
 CYFR_HOST=cyfr-1.proof.ts.net
 CYFR_PORT=4000
 CYFR_PUBLIC_URL=https://cyfr-1.proof.ts.net
@@ -99,7 +99,7 @@ edit '/^CYFR_PUBLIC_URL=/d' nourl
 expect fail "the head's public URL missing" holds "$tailnet_head" "$scratch/nourl"
 edit 's/^CYFR_HOST=.*/CYFR_HOST=cyfr.proof.ts.net/' host
 expect fail "another host" holds "$tailnet_head" "$scratch/host"
-edit 's/^CYFR_REACH=.*/CYFR_REACH=public/' mode
+edit 's/^CYFR_ACCESS=.*/CYFR_ACCESS=public/' mode
 expect fail "another mode" holds "$tailnet_head" "$scratch/mode"
 edit "s/^CYFR_TAILNET_NODE_ID=.*/CYFR_TAILNET_NODE_ID=nOtherCNTRL/" nodeid
 expect fail "a node id in .env other than the state's" holds "$tailnet_head" "$scratch/nodeid" "$scratch/nodeid"
@@ -108,13 +108,13 @@ expect fail "a proxy running that no profile starts" holds "$tailnet_head" "$scr
 expect fail "the profile's proxy not running" holds "$tailnet_head" "$scratch/env" "$scratch/env" "cyfr"
 expect fail "an expected head with a profile the proof knows no proxy of" \
   holds '{"mode":"tailnet","host":"cyfr-1.proof.ts.net","port":4000,"public_url":"https://cyfr-1.proof.ts.net","node_id":"'"$node"'","profiles":["locus-builds","tailnet"]}' "$scratch/env"
-expect fail "an expected head with a field no reach setting holds" holds "${tailnet_head%\}},\"extra\":1}" "$scratch/env"
+expect fail "an expected head with a field no access setting holds" holds "${tailnet_head%\}},\"extra\":1}" "$scratch/env"
 expect fail "a running cyfr whose environment cannot be read" \
   head_holds "$tailnet_head" "$scratch/env" "not json" "cyfr tailscale" "$node"
 local_head='{"mode":"local","host":"localhost","port":4000,"profiles":[]}'
-printf 'CYFR_REACH=local\nCYFR_HOST=localhost\nCYFR_PORT=4000\n' >"$scratch/local"
+printf 'CYFR_ACCESS=local\nCYFR_HOST=localhost\nCYFR_PORT=4000\n' >"$scratch/local"
 expect pass "a local head" holds "$local_head" "$scratch/local" "$scratch/local" cyfr ""
-printf 'CYFR_REACH=local\nCYFR_HOST=localhost\nCYFR_PORT=4000\nCYFR_PUBLIC_URL=http://localhost:4000\n' >"$scratch/local-url"
+printf 'CYFR_ACCESS=local\nCYFR_HOST=localhost\nCYFR_PORT=4000\nCYFR_PUBLIC_URL=http://localhost:4000\n' >"$scratch/local-url"
 expect fail "a local .env with a public URL added" holds "$local_head" "$scratch/local-url" "$scratch/local-url" cyfr ""
 
 # ---- serve_config_holds ------------------------------------------------------
@@ -140,9 +140,9 @@ changes="$(python3 -I -c '
 import json, re, sys
 m = re.search(r"var addressChanges = \[\]string\{(.*?)\n\}", open(sys.argv[1]).read(), re.S)
 for i, s in enumerate(re.findall(r"\"(?:[^\"\\\\]|\\\\.)*\"", m.group(1)), 1):
-    print(f"  {i}. {json.loads(s)}")' "$ROOT/apps/codex/internal/reach/switch.go")"
+    print(f"  {i}. {json.loads(s)}")' "$ROOT/apps/codex/internal/access/switch.go")"
 cat >"$scratch/preview" <<LOG
-\$ cyfr reach tailnet
+\$ cyfr access tailnet
 This changes how this home is reached:
   Who can reach this home: your devices on Tailscale, and people you share this machine with → your devices on Tailscale, and people you share this machine with
   Address: https://cyfr.proof.ts.net → https://cyfr-1.proof.ts.net
@@ -152,7 +152,7 @@ This changes how this home is reached:
 The address changes, so:
 $changes
 Your CYFR identity does not change.
-Error: The change above was shown, not made: cyfr reach makes a change only once it is confirmed, and there is no terminal to confirm it on. Nothing was changed. Run it again with --yes to make the change, or on a terminal to confirm it
+Error: The change above was shown, not made: cyfr access makes a change only once it is confirmed, and there is no terminal to confirm it on. Nothing was changed. Run it again with --yes to make the change, or on a terminal to confirm it
 LOG
 expect pass "the complete preview of A to B" preview_holds "$scratch/preview" "$a" "$b"
 mutate_preview() {

@@ -22,7 +22,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/cyfr/codex/internal/reach"
+	"github.com/cyfr/codex/internal/access"
 	"github.com/cyfr/codex/internal/scaffold"
 	"github.com/spf13/cobra"
 )
@@ -39,7 +39,7 @@ var restoreCmd = &cobra.Command{
 	Short: "Put a snapshot from backups/ back with the whole cell stopped, and declare the restore",
 	Long: `Put back a snapshot 'cyfr update' took (backups/<timestamp>/) and declare the restore, so the next start suspends every credential and method the backup carried until its owner re-enables it.
 
-1. Read the snapshot: snapshot.json must be there and say complete, its parts must be exactly what the directory holds, and its .env must be one cyfr starts a home from (no COMPOSE_* setting, and a reach whose settings agree); an incomplete snapshot, a layout cyfr restore cannot invert or a .env cyfr refuses refuses before anything stops.
+1. Read the snapshot: snapshot.json must be there and say complete, its parts must be exactly what the directory holds, and its .env must be one cyfr starts a home from (no COMPOSE_* setting, and access settings that agree); an incomplete snapshot, a layout cyfr restore cannot invert or a .env cyfr refuses refuses before anything stops.
 2. Take the stack's lock, finishing a change an interrupted command left; cancel a tailnet join that waits for approval; then stop this host's stack, timing each service.
 3. Bar the cell from starting: set CYFR_RESTORE_INCOMPLETE=<snapshot> in .env, synced, and remove the stopped cyfr container, so every start of the cyfr service until the restore is declared is a new container that reads the setting and refuses (the image's entrypoint), and 'cyfr up' and 'cyfr update' refuse it too.
 4. Put the snapshot's .env (with the setting) back and its docker-compose.yml beside the project's, and read the configuration they give cyfr: the setting must reach the cyfr service, the database, the storage root and every bind mounted under it must be where the snapshot can be put back, and the keyring must be the snapshot's. Only then does the snapshot's docker-compose.yml replace the project's, so the compose file in place delivers the setting at every step. A refusal here puts the two files back as they were, which lifts the bar.
@@ -89,7 +89,7 @@ const (
 
 // snapshotParts are the parts a snapshot may hold, in the order update
 // writes them. None holds the tailnet's state volume (tailscale_state) or
-// the reach engine's .cyfr/: a node's keys stay out of every backup, and a
+// the access engine's .cyfr/: a node's keys stay out of every backup, and a
 // restored home's node is validated against its .env before Serve opens.
 var snapshotParts = []string{"database", "database-wal", "storage", "scaffold", "keyring", ".env", "compose"}
 
@@ -119,7 +119,7 @@ func (s *snapshotFiles) path(part string) string { return filepath.Join(s.dir, p
 // or missing, an entry no part names, a database of neither kind, a WAL
 // beside a dump, storage/ against the storage adapter, scaffold files
 // snapshot.json does not list as managed ones, a keyring file with no
-// key, or a .env the engine refuses (reach.CheckEnvFile). A snapshot
+// key, or a .env the engine refuses (access.CheckEnvFile). A snapshot
 // without the scaffold part, which no released cyfr took, is refused as
 // one it cannot put back whole.
 func readSnapshot(dir string) (*snapshotFiles, error) {
@@ -209,9 +209,9 @@ func readSnapshot(dir string) (*snapshotFiles, error) {
 	if s.parts["database-wal"] && s.database != "sqlite" {
 		return nil, refuse("it holds a WAL beside a PostgreSQL dump")
 	}
-	if s.keyring, err = reach.ReadEnvValues(s.path("keyring")); err != nil {
+	if s.keyring, err = access.ReadEnvValues(s.path("keyring")); err != nil {
 		// The engine's sentence names .env; the keyring's line is said here.
-		if r := (*reach.Refusal)(nil); errors.As(err, &r) && r.Code == "compose_env_refused" && r.Payload["line"] != "" {
+		if r := (*access.Refusal)(nil); errors.As(err, &r) && r.Code == "compose_env_refused" && r.Payload["line"] != "" {
 			return nil, refuse("line %s of its keyring does not read as Docker Compose reads it", r.Payload["line"])
 		}
 		return nil, refuse("the keyring does not read (%v)", err)
@@ -223,8 +223,8 @@ func readSnapshot(dir string) (*snapshotFiles, error) {
 	// anything stops as the engine refuses a home's .env before anything
 	// starts: a COMPOSE_* setting in any form, then a head that does not
 	// boot.
-	if err := reach.CheckEnvFile(s.path(".env")); err != nil {
-		var r *reach.Refusal
+	if err := access.CheckEnvFile(s.path(".env")); err != nil {
+		var r *access.Refusal
 		if !errors.As(err, &r) {
 			return nil, refuse("its .env does not read (%v)", err)
 		}
@@ -323,7 +323,7 @@ func runRestore(ctx context.Context, snapshot string, start bool, out, errOut io
 	if err != nil {
 		return err
 	}
-	// The lock an up, an update and a reach change hold too, held from
+	// The lock an up, an update and an access change hold too, held from
 	// before the first docker call to the restore's end; a change recovery
 	// could not finish leaves the stack in no known state, and the restore
 	// does nothing.
@@ -420,7 +420,7 @@ func (r *restorer) run() error {
 	// the restore: the snapshot's .env names its own node, which the start
 	// validates against the machine before Serve opens.
 	if err := r.engine.ForgetJoin(); err != nil {
-		fmt.Fprintf(r.errOut, "Warning: the record of this machine's last tailnet join could not be removed (%v); `cyfr reach tailnet` may offer it again.\n", engineFailure(err))
+		fmt.Fprintf(r.errOut, "Warning: the record of this machine's last tailnet join could not be removed (%v); `cyfr access tailnet` may offer it again.\n", engineFailure(err))
 	}
 	if !r.start {
 		fmt.Fprintln(r.out, "The stack is left stopped (--no-start); start it with 'cyfr up'.")
@@ -477,12 +477,12 @@ func (r *restorer) holdConfigFiles() error {
 }
 
 // withBarrier answers the dotenv text env with restoreBarrier set to the
-// snapshot through the engine's editor (reach.EditEnv): its one
+// snapshot through the engine's editor (access.EditEnv): its one
 // assignment, every other taken out, so no other line can set it empty,
 // and every other line, a quoted value's included, kept byte for byte. A
 // .env the editor cannot change so is refused, and nothing is written.
 func withBarrier(env []byte, snapshot string) ([]byte, error) {
-	out, err := reach.EditEnv(env, map[string]string{restoreBarrier: snapshot}, nil)
+	out, err := access.EditEnv(env, map[string]string{restoreBarrier: snapshot}, nil)
 	return out, engineFailure(err)
 }
 
@@ -584,21 +584,21 @@ func (r *restorer) publishCompose() error {
 
 // stagedComposeArgs are the compose arguments that read the configuration
 // the staged compose file gives once it is docker-compose.yml: the file set
-// compose loads by default (reach.DefaultFiles), the staged file in
+// compose loads by default (access.DefaultFiles), the staged file in
 // docker-compose.yml's place, under the complete selection every compose
 // call of the engine makes (the project, the directory and the snapshot's
 // head's profiles). The set is refused when compose's default is not
 // docker-compose.yml and at most one override file, the set the staged
 // file is published into.
 func (r *restorer) stagedComposeArgs(args ...string) ([]string, error) {
-	main, override, err := reach.DefaultFiles(".")
+	main, override, err := access.DefaultFiles(".")
 	if err != nil {
-		return nil, errors.New(strings.TrimPrefix(err.Error(), "reach: "))
+		return nil, errors.New(strings.TrimPrefix(err.Error(), "access: "))
 	}
 	if main != "docker-compose.yml" {
 		return nil, fmt.Errorf("the project's compose file is %s, so docker compose would not load the docker-compose.yml cyfr restore puts back; rename it docker-compose.yml", main)
 	}
-	files := []string{"compose", "-p", reach.ProjectName("."), "-f", stagedCompose}
+	files := []string{"compose", "-p", access.ProjectName("."), "-f", stagedCompose}
 	if override != "" {
 		files = append(files, "-f", override)
 	}
@@ -1086,7 +1086,7 @@ func (r *restorer) restorePostgres() error {
 	ctx, cancel := r.detached(dumpTimeout)
 	defer cancel()
 	var stderr bytes.Buffer
-	res, err := r.engine.Docker().Run(ctx, reach.Call{
+	res, err := r.engine.Docker().Run(ctx, access.Call{
 		Args:     []string{"run", "--rm", "-i", "--network", "host", r.pgImage(), "sh", "-c", restoreScript},
 		Deadline: callDeadline(ctx),
 		Stdin:    io.MultiReader(pgURLInput(r.config.pgURL), dump),

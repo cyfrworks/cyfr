@@ -20,7 +20,7 @@ if config_env() != :test do
   # file to read, as in the compose container, whose .env arrives through
   # `env_file` as its process environment. The unknown-name refusal holds
   # a file to a stricter roster than the process environment a shell
-  # exports, and the reach's source rules hold the file to the environment
+  # exports, and the access settings' source rules hold the file to the environment
   # that overrides it (below). Both reads keep every value literal and run
   # no `$(…)` (`Cyfr.EnvFiles`).
   file_env =
@@ -189,22 +189,22 @@ if config_env() != :test do
     names -> raise "[Cyfr] FATAL: " <> roster.refusal(names)
   end
 
-  # How this home is reached (`Cyfr.RuntimeConfig.resolve_reach/1`):
-  # CYFR_REACH in .env, and every setting it implies, read from the names
+  # How this home is reached (`Cyfr.RuntimeConfig.resolve_access/1`):
+  # CYFR_ACCESS in .env, and every setting it implies, read from the names
   # the .env files assign and the merged environment. A release without a
   # mode, a setting the mode contradicts, the compose file's assertion
   # assigned in .env, or a loopback listener bound off the loopback
   # without it refuses the boot with the sentence that names its fix
   # (`Prima.Refusal`). A development or test boot without a mode is
   # `local`: the dev default, which a release never takes.
-  reach =
-    case Cyfr.RuntimeConfig.resolve_reach(%{
+  access =
+    case Cyfr.RuntimeConfig.resolve_access(%{
            file: file_env,
            process: sourced,
            release?: Cyfr.RuntimeConfig.release?()
          }) do
-      {:ok, reach} ->
-        reach
+      {:ok, access} ->
+        access
 
       {:error, %{code: code, payload: payload}} ->
         raise "[Cyfr] FATAL: " <> Prima.Refusal.message({code, payload})
@@ -381,29 +381,29 @@ if config_env() != :test do
     end
   end
 
-  # The reach's listeners, address, origins, proxy trust and HSTS, in every
+  # The access settings' listeners, address, origins, proxy trust and HSTS, in every
   # environment this file configures.
   #
   # The endpoint serves on its loopback listener in every mode, and in a
   # tailnet or public home on the proxy listener too, the one its proxy
   # forwards to (`CyfrWeb.Ingress`): each at the address and port the
-  # reach names. Its URL is the home's: `http://localhost:<CYFR_PORT>` in
+  # access settings name. Its URL is the home's: `http://localhost:<CYFR_PORT>` in
   # a local home, `https://<CYFR_HOST>` on 443 otherwise.
   listener = fn {address, port} ->
     {:ok, ip} = :inet.parse_strict_address(String.to_charlist(address))
     [ip: ip, port: port]
   end
 
-  {_address, loopback_port} = reach.listeners.loopback
+  {_address, loopback_port} = access.listeners.loopback
 
   config :cyfr, CyfrWeb.Endpoint,
     url:
-      if(reach.mode == :local,
+      if(access.mode == :local,
         do: [scheme: "http", host: "localhost", port: loopback_port],
-        else: [scheme: "https", host: reach.head["host"], port: 443]
+        else: [scheme: "https", host: access.head["host"], port: 443]
       ),
     http:
-      listener.(reach.listeners.loopback) ++
+      listener.(access.listeners.loopback) ++
         [
           thousand_island_options: [read_timeout: 60_000],
           # HTTP/1.1 alone, as every Bandit listener of the product serves
@@ -413,9 +413,9 @@ if config_env() != :test do
           # holds the release to it.
           http_2_options: [enabled: false]
         ],
-    check_origin: reach.check_origins
+    check_origin: access.check_origins
 
-  case reach.listeners.proxy do
+  case access.listeners.proxy do
     :none -> :ok
     proxy -> config :cyfr, CyfrWeb.Endpoint, proxy: listener.(proxy)
   end
@@ -423,18 +423,18 @@ if config_env() != :test do
   # The MCP Origin allowlist (CyfrWeb.Plugs.MCPOrigin) is the endpoint's
   # `check_origin`, and the CYFR_MCP_ALLOWED_ORIGINS extras extend it
   # (`Cyfr.RuntimeConfig.mcp_allowed_origins/0`).
-  config :cyfr, :mcp_allowed_origins, reach.check_origins
+  config :cyfr, :mcp_allowed_origins, access.check_origins
   config :cyfr, :mcp_extra_origins, env_list.("CYFR_MCP_ALLOWED_ORIGINS")
 
   # The proxies whose forwarded headers the proxy listener trusts, and only
   # it (`Sanctum.ClientIp`): CYFR_TRUSTED_PROXY_CIDRS when set, else
   # CYFR_TRUSTED_PROXY_HOPS hops (default 1); nothing in a local home.
-  config :sanctum, :proxy_trust, reach.trust
+  config :sanctum, :proxy_trust, access.trust
 
   # The endpoint's HSTS on the proxy listener in a tailnet home; Caddy's in
   # a public one, and none in a local one
   # (`CyfrWeb.Plugs.ApiSecurityHeaders.maybe_hsts/1`).
-  config :cyfr, :hsts, reach.hsts
+  config :cyfr, :hsts, access.hsts
 
   # The home's address (`Sanctum.origin/0`): its public URL in a tailnet or
   # public home, `https://<CYFR_HOST>`, and in a local home, which has
@@ -442,8 +442,8 @@ if config_env() != :test do
   # tincture's frame-ancestors and connect-src, an OAuth `redirect_uri`,
   # a copied URL. A webhook URL is absolute only where the public URL is
   # set (`Sanctum.public_url/0`), a path in a local home.
-  config :sanctum, :public_url, reach.head["public_url"]
-  config :sanctum, :fallback_origin, reach.origin
+  config :sanctum, :public_url, access.head["public_url"]
+  config :sanctum, :fallback_origin, access.origin
 
   if config_env() == :prod do
     secret_key_base =
@@ -725,7 +725,7 @@ if config_env() != :test do
            issuer: :cyfr_oidc,
            client_id: oidc.client_id,
            client_secret: oidc.client_secret,
-           callback_url: reach.origin <> "/auth/oidcc/callback"}
+           callback_url: access.origin <> "/auth/oidcc/callback"}
       ]
   end
 

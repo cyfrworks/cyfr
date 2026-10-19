@@ -7,7 +7,7 @@
 # (tests/multi-home-smoke/run.sh).
 #
 # A home is a cell on a `.test` hostname of its own, a public home of that
-# name (CYFR_REACH=public), one or several at once, each reached by every
+# name (CYFR_ACCESS=public), one or several at once, each reached by every
 # browser at https://HOST through the harness's proxy (tests/browser/
 # lib.mjs), whose TLS front presents a certificate the run's own authority
 # issued for that name and forwards to the home's proxy listener. A proof

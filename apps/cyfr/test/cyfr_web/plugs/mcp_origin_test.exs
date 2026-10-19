@@ -65,20 +65,20 @@ defmodule CyfrWeb.Plugs.MCPOriginTest do
     refute call("http://localhost:5173").halted
   end
 
-  # The allowlist a home boots with is its reach's origins, which
+  # The allowlist a home boots with is its access settings' origins, which
   # `config/runtime.exs` writes (`Cyfr.RuntimeConfigWiringTest`): its own
   # https origin in a tailnet or public home, and the localhost origins on
   # its port.
   defp home_origins(process) do
-    {:ok, reach} =
-      Cyfr.RuntimeConfig.resolve_reach(%{file: nil, process: process, release?: true})
+    {:ok, access} =
+      Cyfr.RuntimeConfig.resolve_access(%{file: nil, process: process, release?: true})
 
-    Application.put_env(:cyfr, :mcp_allowed_origins, reach.check_origins)
+    Application.put_env(:cyfr, :mcp_allowed_origins, access.check_origins)
   end
 
   test "a tailnet home allows its own https origin and the localhost ones on its port alone" do
     home_origins(%{
-      "CYFR_REACH" => "tailnet",
+      "CYFR_ACCESS" => "tailnet",
       "CYFR_HOST" => "cyfr.tail1a2b3c.ts.net",
       "CYFR_TAILNET_NODE_ID" => "nAbc123XYZ1CNTRL",
       "CYFR_PUBLIC_URL" => "https://cyfr.tail1a2b3c.ts.net"
@@ -99,7 +99,7 @@ defmodule CyfrWeb.Plugs.MCPOriginTest do
   end
 
   test "a local home allows the localhost origins on its port alone" do
-    home_origins(%{"CYFR_REACH" => "local", "CYFR_PORT" => "4005"})
+    home_origins(%{"CYFR_ACCESS" => "local", "CYFR_PORT" => "4005"})
 
     refute call("http://localhost:4005").halted
     refute call("https://127.0.0.1:4005").halted

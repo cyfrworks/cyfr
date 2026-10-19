@@ -59,9 +59,9 @@ cleanup() {
   if [ -n "$UPSTREAM" ]; then
     cleanup_step "docker rm --force $UPSTREAM" docker rm --force "$UPSTREAM" || failed=1
   fi
-  # The reach engine's join containers carry the project in a label of
+  # The access engine's join containers carry the project in a label of
   # their own, outside compose's.
-  for id in $(docker ps -aq --filter "label=com.cyfr.reach.project=$RUN" 2>/dev/null || true); do
+  for id in $(docker ps -aq --filter "label=com.cyfr.access.project=$RUN" 2>/dev/null || true); do
     cleanup_step "docker rm --force $id (a join container)" docker rm --force "$id" || failed=1
   done
   cleanup_step "docker compose down --volumes" compose down --volumes --remove-orphans --timeout 30 || failed=1

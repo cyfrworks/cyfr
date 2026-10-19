@@ -32,7 +32,7 @@ func TestMainExitsWithTheCommandsStatus(t *testing.T) {
 		stderr string
 	}{
 		{[]string{"--version"}, 0, ""},
-		{[]string{"reach", "tls"}, 1, `Error: cyfr reach takes local, tailnet or public; "tls" is none of them`},
+		{[]string{"access", "tls"}, 1, `Error: cyfr access takes local, tailnet or public; "tls" is none of them`},
 	} {
 		process := exec.Command(os.Args[0], c.args...)
 		process.Dir = t.TempDir()

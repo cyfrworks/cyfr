@@ -46,7 +46,7 @@ Use cyfr to manage components, vault entries, consents, and executions
 from the terminal or scripts.
 
 Exit status: 0 on success; 1 on a failure; 3 when cyfr up, update,
-restore, reach or init started the home on this machine only, because
+restore, access or init started the home on this machine only, because
 the tailnet machine is not ready to serve it (not the one .env names, not
 joined, or HTTPS off; the message says what to do);
 130 when interrupted at a prompt.`,

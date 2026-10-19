@@ -12,7 +12,7 @@
 #
 #   unit       go vet, gofmt and go test of the module, and the tests fail
 #              under every mutation
-#   image      the image build.sh builds, run as CYFR's reach engine runs
+#   image      the image build.sh builds, run as CYFR's access engine runs
 #              the pinned image:
 #                a join container (no TS_SERVE_CONFIG, its own deadline in
 #                `timeout -s TERM <seconds> containerboot`) waits in

@@ -18,9 +18,9 @@
 # deployment file names.
 #
 # A cell answers on the default listeners under the node name NODE, one at
-# a time, reached at its localhost address (CYFR_REACH=local). A cell given
+# a time, reached at its localhost address (CYFR_ACCESS=local). A cell given
 # a hostname of its own (`cell_hostname`) is a public home of that name
-# (CYFR_REACH=public), behind a TLS-terminating front that forwards to its
+# (CYFR_ACCESS=public), behind a TLS-terminating front that forwards to its
 # proxy listener, on listeners and under a node name of its own, so
 # several such cells run at once.
 #
@@ -179,7 +179,7 @@ cell_cli_build() {
 # (a development build downloads no scaffold), as a person runs `cyfr` in
 # their project: `$2...` are its arguments. HOME is the cell's own and the
 # environment is nothing of the caller's but PATH and how Docker is
-# reached, which the reach engine asks for the project's containers. The
+# reached, which the access engine asks for the project's containers. The
 # directory's name is the run's own, so the compose project the engine
 # derives from it is one no other stack on this host has. The command
 # line's output is `$cell/cli.log` (appended); the deployment file it
@@ -234,8 +234,8 @@ cell_value() {
 # seed tree, and the deployment file `cyfr init --no-interactive --no-pull`
 # writes: the stack's keys minted for this cell alone, the empty CORS
 # allowlist, the client ids .env.example ships, builds on with their URL
-# and key, and the reach mode with every setting it implies, `local`, or
-# `public` at the domain `$3` when it is given (`--reach public --domain`).
+# and key, and the access mode with every setting it implies, `local`, or
+# `public` at the domain `$3` when it is given (`--access public --domain`).
 # Beside it the cell's own settings, each init writes none of: the
 # database adapter the release was COMPILED for (runtime.exs refuses a
 # disagreement), auto-migration on, the listener ports, the host API on
@@ -251,9 +251,9 @@ cell_new() {
   rm -f "$cell/.env"
 
   if [ -n "$host" ]; then
-    cell_cli "$cell" init --no-interactive --no-pull --reach public --domain "$host"
+    cell_cli "$cell" init --no-interactive --no-pull --access public --domain "$host"
   else
-    cell_cli "$cell" init --no-interactive --no-pull --reach local
+    cell_cli "$cell" init --no-interactive --no-pull --access local
   fi
   cell_set "$cell" CYFR_PORT "$PORT"
   cell_set "$cell" CYFR_DATABASE "$ADAPTER"
@@ -268,11 +268,11 @@ cell_new() {
   if [ "$ADAPTER" = postgres ]; then cell_set "$cell" CYFR_DATABASE_URL "$url"; fi
 }
 
-# Cell `$1` is a public home at the hostname `$2`, as `cyfr init --reach
-# public --domain` or `cyfr reach public --domain` makes one: what the
+# Cell `$1` is a public home at the hostname `$2`, as `cyfr init --access
+# public --domain` or `cyfr access public --domain` makes one: what the
 # command line writes for the name is its mode, its host and its public
 # URL, and nothing here writes those itself. A cell made by `cell_new` for
-# that name already is one; any other cell is switched with `cyfr reach`,
+# that name already is one; any other cell is switched with `cyfr access`,
 # which keeps every other line of its deployment file, its keys among them.
 # The cell then answers on three listener ports of its own from `$3`: its
 # loopback listener on `$3`, its host API on the next and its proxy
@@ -285,13 +285,13 @@ cell_hostname() {
     fail "not a lowercase dotted hostname: '$host'"
   [[ "$port" =~ ^[0-9]+$ ]] && [ "$port" -ge 1024 ] && [ "$port" -le 65533 ] ||
     fail "cell $cell needs a listener port from 1024 to 65533, not '$port'"
-  if [ "$(cell_value "$cell" CYFR_REACH)" != public ] || [ "$(cell_value "$cell" CYFR_HOST)" != "$host" ]; then
-    cell_cli "$cell" reach public --domain "$host" --yes
+  if [ "$(cell_value "$cell" CYFR_ACCESS)" != public ] || [ "$(cell_value "$cell" CYFR_HOST)" != "$host" ]; then
+    cell_cli "$cell" access public --domain "$host" --yes
   fi
   cell_set "$cell" CYFR_PORT "$port"
   cell_set "$cell" CYFR_HOST_API_PORT "$((port + 1))"
   cell_set "$cell" CYFR_PROXY_PORT "$((port + 2))"
-  [ "$(cell_value "$cell" CYFR_REACH)" = public ] && [ "$(cell_value "$cell" CYFR_HOST)" = "$host" ] ||
+  [ "$(cell_value "$cell" CYFR_ACCESS)" = public ] && [ "$(cell_value "$cell" CYFR_HOST)" = "$host" ] ||
     fail "cell $cell is not a public home at $host"
   printf 'cyfr-%s-%s-%s\n' "${host//./-}" "$ADAPTER" "$$" >"$cell/node"
 }
