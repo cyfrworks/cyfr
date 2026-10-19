@@ -219,8 +219,8 @@ func TestCommandRedactorIsTheEnginesPass(t *testing.T) {
 
 // A stream is redacted as one text: a value is matched across the writes
 // and the lines it spans, wherever the writes split it, spaces and all;
-// the writer holds back no more than the longest value less one byte, so
-// progress shows while the stream runs.
+// the writer holds back only an end that is a value's start, so progress
+// shows while the stream runs.
 func TestRedactedStreamMatchesAcrossWritesAndLines(t *testing.T) {
 	dir := t.TempDir()
 	const long = "long-secret-value-0123456789"
@@ -262,7 +262,98 @@ func TestRedactedStreamMatchesAcrossWritesAndLines(t *testing.T) {
 	if _, err := w.Write([]byte(progress)); err != nil {
 		t.Fatal(err)
 	}
-	if got := out.String(); got != "Downloading 10%\r" {
-		t.Errorf("with the longest value's length less one held back, the stream showed %q", got)
+	if got := out.String(); got != progress {
+		t.Errorf("with no value's start at its end, the stream showed %q, want all of it", got)
+	}
+	arriving := long[:len(long)-1]
+	if _, err := w.Write([]byte("\rDownloading 20%\r" + arriving)); err != nil {
+		t.Fatal(err)
+	}
+	if got := out.String(); got != progress+"\rDownloading 20%\r" || string(w.buf) != arriving {
+		t.Errorf("with a value arriving, the stream showed %q and held %q", got, w.buf)
+	}
+}
+
+// Overlapping occurrences hold nothing back beyond the most of a value
+// still arriving: a stream of hyphens past a '----' value passes on all
+// but its last bytes at each write, never more than the longest value's
+// length less one, and reads as the whole stream does.
+func TestRedactedStreamPassesProgressWhileOccurrencesOverlap(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, ".env"), []byte("CYFR_REACH=local\nSEPARATOR='----'\n"))
+	r := NewRedactor(dir)
+	var out bytes.Buffer
+	w := r.Writer(&out)
+	const chunk = "--------------------------------"
+	for i := 0; i < 8; i++ {
+		if _, err := w.Write([]byte(chunk)); err != nil {
+			t.Fatal(err)
+		}
+		// The longest value is '----' as written, six bytes.
+		if len(w.buf) > 5 {
+			t.Fatalf("after %d bytes the writer holds %d, more than five", (i+1)*len(chunk), len(w.buf))
+		}
+	}
+	if out.Len() == 0 {
+		t.Errorf("no progress after %d bytes", 8*len(chunk))
+	}
+	if err := w.Flush(); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := out.String(), r.Text(strings.Repeat(chunk, 8)); got != want {
+		t.Fatalf("streamed %q, want %q", got, want)
+	}
+}
+
+// A value that overlaps itself is redacted across a cut as the whole
+// stream reads it: the bytes held back keep the cover an occurrence
+// already passed on gives them, and one run of redacted bytes is said
+// once, wherever the writes split it.
+func TestRedactedStreamKeepsTheCoverOfAnOccurrencePassedOn(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, ".env"), []byte("CYFR_REACH=local\nPERIODIC=abab\n"))
+	r := NewRedactor(dir)
+	const text = "xabababy ababab z"
+	want := r.Text(text)
+	if want != "x<redacted>y <redacted> z" {
+		t.Fatalf("the text reads %q", want)
+	}
+	for i := 0; i <= len(text); i++ {
+		for j := i; j <= len(text); j++ {
+			var out bytes.Buffer
+			w := r.Writer(&out)
+			for _, c := range []string{text[:i], text[i:j], text[j:]} {
+				if _, err := w.Write([]byte(c)); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := w.Flush(); err != nil {
+				t.Fatal(err)
+			}
+			if got := out.String(); got != want {
+				t.Fatalf("split at %d and %d the stream showed %q, want %q", i, j, got, want)
+			}
+		}
+	}
+}
+
+// A value of white space alone is not redacted, it holds nothing to keep
+// secret, unless the command holds it; one with anything else in it is
+// redacted whole, its white space included.
+func TestOnlyAWhitespaceOnlyValueIsLeftUnredacted(t *testing.T) {
+	for _, v := range []string{"    ", "\t\t\t\t", "\n\n\n\n"} {
+		r := redactorFor([]byte("SECRET='"+v+"'\n"), nil)
+		if got := r.text(v); got != v {
+			t.Errorf("the whitespace-only value %q reads %q", v, got)
+		}
+		if got := r.holding([]string{v}).text(v); got != redactedText {
+			t.Errorf("the held whitespace-only value %q reads %q", v, got)
+		}
+	}
+	for _, v := range []string{" abc ", "\ta\t\t", " \nq ", " a  "} {
+		r := redactorFor([]byte("SECRET='"+v+"'\n"), nil)
+		if got := r.text(v); got != redactedText {
+			t.Errorf("the value %q reads %q", v, got)
+		}
 	}
 }

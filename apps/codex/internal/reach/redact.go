@@ -191,17 +191,32 @@ func (r *redactor) with(o *redactor) *redactor {
 }
 
 // text is s with every occurrence of a secret that does not lie wholly
-// inside an occurrence of a kept name replaced, overlapping occurrences
-// as one.
+// inside an occurrence of a kept name replaced, overlapping and adjoining
+// occurrences as one.
 func (r *redactor) text(s string) string {
-	if r == nil || len(r.secrets) == 0 || s == "" {
-		return s
+	open := false
+	return render([]byte(s), r.cover([]byte(s), 0), &open)
+}
+
+// cover marks the bytes of s an occurrence of a secret covers, one that
+// lies wholly inside an occurrence of a kept name aside, and the first
+// pre bytes, which an occurrence already passed on covers; nil for none.
+func (r *redactor) cover(s []byte, pre int) []bool {
+	var cover []bool
+	if pre > 0 {
+		cover = make([]bool, len(s))
+		for n := range min(pre, len(s)) {
+			cover[n] = true
+		}
+	}
+	if r == nil || len(r.secrets) == 0 || len(s) == 0 {
+		return cover
 	}
 	type span struct{ from, to int }
 	var kept []span
 	for _, k := range r.keep {
 		for i := 0; k != "" && i <= len(s); {
-			j := strings.Index(s[i:], k)
+			j := bytes.Index(s[i:], []byte(k))
 			if j < 0 {
 				break
 			}
@@ -209,10 +224,9 @@ func (r *redactor) text(s string) string {
 			i += j + 1
 		}
 	}
-	var cover []bool
 	for _, secret := range r.secrets {
 		for i := 0; i <= len(s); {
-			j := strings.Index(s[i:], secret)
+			j := bytes.Index(s[i:], []byte(secret))
 			if j < 0 {
 				break
 			}
@@ -228,21 +242,50 @@ func (r *redactor) text(s string) string {
 			i = from + 1
 		}
 	}
+	return cover
+}
+
+// render is s with each run of covered bytes said as <redacted> once, a
+// run that continues one already said (open) not said again; open is
+// left saying whether s ends inside a run.
+func render(s []byte, cover []bool, open *bool) string {
 	if cover == nil {
-		return s
+		if len(s) > 0 {
+			*open = false
+		}
+		return string(s)
 	}
 	var b strings.Builder
-	for i := 0; i < len(s); i++ {
-		if !cover[i] {
-			b.WriteByte(s[i])
-			continue
-		}
-		b.WriteString(redactedText)
-		for i+1 < len(s) && cover[i+1] {
-			i++
+	for i, c := range s {
+		switch {
+		case !cover[i]:
+			b.WriteByte(c)
+			*open = false
+		case !*open:
+			b.WriteString(redactedText)
+			*open = true
 		}
 	}
 	return b.String()
+}
+
+// pending is the length of the longest suffix of s that is a proper
+// prefix of a secret, the most of one that may still be arriving: at
+// most the longest secret's length less one.
+func (r *redactor) pending(s []byte) int {
+	longest := 0
+	for _, secret := range r.secrets {
+		for from := max(len(s)-len(secret)+1, 0); from < len(s); from++ {
+			if len(s)-from <= longest {
+				break
+			}
+			if strings.HasPrefix(secret, string(s[from:])) {
+				longest = len(s) - from
+				break
+			}
+		}
+	}
+	return longest
 }
 
 func (r *redactor) texts(s []string) []string {
@@ -462,11 +505,13 @@ func (r *Redactor) Text(s string) string { return r.current().text(s) }
 // reading it (redactor.err).
 func (r *Redactor) Err(err error) error { return r.current().err(err) }
 
-// Writer is w behind the pass: what is written reaches w redacted as one
-// text, a value matched across the writes and lines it spans, held back
-// only by the longest value's length less one byte, the most of a value
-// that can still be arriving, so progress still shows, and the rest at
-// Flush.
+// Writer is w behind the pass: what is written reaches w redacted as the
+// whole stream would read (redactor.text), a value matched across the
+// writes and lines it spans, overlapping occurrences included. Every
+// whole occurrence is redacted as it arrives; only the longest end that
+// is the start of a value is held back, at most the longest value's
+// length less one byte however occurrences overlap, so progress still
+// shows; the rest goes at Flush.
 func (r *Redactor) Writer(w io.Writer) *RedactedWriter { return &RedactedWriter{r: r, w: w} }
 
 // RedactedWriter is a writer behind a Redactor (Redactor.Writer).
@@ -475,6 +520,12 @@ type RedactedWriter struct {
 	w   io.Writer
 	mu  sync.Mutex
 	buf []byte
+	// covered is how many of buf's first bytes an occurrence already
+	// passed on covers, and open whether the last byte passed on was
+	// redacted: the held bytes keep their cover, and a run of redacted
+	// bytes across a cut is said once.
+	covered int
+	open    bool
 }
 
 func (w *RedactedWriter) Write(p []byte) (int, error) {
@@ -482,57 +533,32 @@ func (w *RedactedWriter) Write(p []byte) (int, error) {
 	defer w.mu.Unlock()
 	w.buf = append(w.buf, p...)
 	r := w.r.current()
-	cut := r.settled(w.buf)
-	if cut == 0 {
-		return len(p), nil
-	}
-	done := r.text(string(w.buf[:cut]))
-	w.buf = append(w.buf[:0], w.buf[cut:]...)
-	if _, err := io.WriteString(w.w, done); err != nil {
+	if err := w.pass(r, len(w.buf)-r.pending(w.buf)); err != nil {
 		return 0, err
 	}
 	return len(p), nil
 }
 
-// settled is how much of buf's start a stream can redact and pass on: all
-// but the longest secret's length less one byte, where any value still
-// arriving begins, and short of every whole occurrence of a secret or a
-// kept name the cut would split, which is redacted, or kept, whole with
-// what follows.
-func (r *redactor) settled(buf []byte) int {
-	longest := 0
-	for _, secret := range r.secrets {
-		longest = max(longest, len(secret))
+// pass redacts buf as a whole and passes on its first cut bytes, keeping
+// the rest with the cover an occurrence passed on gives them.
+func (w *RedactedWriter) pass(r *redactor, cut int) error {
+	if cut <= 0 {
+		return nil
 	}
-	cut := len(buf) - max(longest-1, 0)
-	for moved := true; moved && cut > 0; {
-		moved = false
-		for _, name := range slices.Concat(r.secrets, r.keep) {
-			for i := 0; name != "" && i < cut; {
-				j := bytes.Index(buf[i:], []byte(name))
-				if j < 0 || i+j >= cut {
-					break
-				}
-				if from, to := i+j, i+j+len(name); to > cut {
-					cut, moved = from, true
-					break
-				}
-				i += j + 1
-			}
-		}
+	cover := r.cover(w.buf, w.covered)
+	done := render(w.buf[:cut], cover, &w.open)
+	w.covered = 0
+	for cover != nil && cut+w.covered < len(w.buf) && cover[cut+w.covered] {
+		w.covered++
 	}
-	return max(cut, 0)
+	w.buf = append(w.buf[:0], w.buf[cut:]...)
+	_, err := io.WriteString(w.w, done)
+	return err
 }
 
-// Flush writes what is held of an unfinished line.
+// Flush passes on what is held, redacted, at the end of the stream.
 func (w *RedactedWriter) Flush() error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	if len(w.buf) == 0 {
-		return nil
-	}
-	rest := w.buf
-	w.buf = nil
-	_, err := io.WriteString(w.w, w.r.Text(string(rest)))
-	return err
+	return w.pass(w.r.current(), len(w.buf))
 }
