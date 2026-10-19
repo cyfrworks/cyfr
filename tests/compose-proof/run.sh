@@ -769,7 +769,7 @@ shipped_ports() {
 import json, sys
 for name, s in sorted(json.load(sys.stdin)["services"].items()):
     for p in s.get("ports", []):
-        print(f"{name} {p.get(\"host_ip\", \"\")}:{p.get(\"published\", \"\")}:{p[\"target\"]}/{p.get(\"protocol\", \"tcp\")}")' | sort
+        print("%s %s:%s:%s/%s" % (name, p.get("host_ip", ""), p.get("published", ""), p["target"], p.get("protocol", "tcp")))' | sort
 }
 
 bind_checks() {
@@ -1080,10 +1080,13 @@ hsts_checks() {
     [ "$values" = "$HSTS" ] || fail "through Serve, $name$path ($(jget "$answer" status)) carries Strict-Transport-Security '${values:-none}', not the endpoint's '$HSTS' once"
     ok "through Serve, $path answers $(jget "$answer" status) with the endpoint's HSTS"
   done
+  # A credential cyfr refuses before it reads the request: 401, with its
+  # challenge.
   answer="$(fetched "$(tailnet_fetch --method POST --header 'content-type: application/json' \
     --header 'accept: application/json, text/event-stream' --header "mcp-protocol-version: $MCP_VERSION" \
+    --header 'authorization: Bearer proof-refused-credential' \
     --header 'mcp-method: tools/list' --body "$(mcp_list_body)" "https://$name/mcp")")"
-  [ "$(jget "$answer" status)" = 401 ] || fail "an unauthenticated POST /mcp through Serve answered $(jget "$answer" status), not a refusal"
+  [ "$(jget "$answer" status)" = 401 ] || fail "a POST /mcp with a refused credential through Serve answered $(jget "$answer" status), not 401"
   [ "$(hsts_of "$answer")" = "$HSTS" ] || fail "the refusal through Serve carries Strict-Transport-Security '$(hsts_of "$answer")'"
   ok "through Serve, a refused POST /mcp answers 401 with the endpoint's HSTS"
   for host in localhost 127.0.0.1 LocalHost; do
@@ -1228,8 +1231,9 @@ FAULTS="$WORK/faults"
 # first compose call that starts services (`up`) stops itself before it
 # runs, writing its pid to $FAULTS/paused, and $FAULTS/pause-stop does the
 # same for the first call that stops or removes them (`stop`, `rm`,
-# `down`, `kill`, through compose or not); and while $FAULTS/fail-stop
-# exists every such call fails without running.
+# `down`, `kill`, through compose or not); while $FAULTS/fail-stop
+# exists every such call fails without running; and $FAULTS/fail-up makes
+# the first such `up` fail once it has run, every stop after it failing.
 shim_install() {
   mkdir -p "$WORK/shim" "$FAULTS"
   cat >"$WORK/shim/docker" <<SH
@@ -1240,7 +1244,15 @@ pause() {
   echo "\$\$" >"$FAULTS/paused"
   kill -STOP "\$\$"
 }
-if [ "\${1:-}" = compose ] && printf '%s\n' "\$@" | grep -qx up; then pause up; fi
+if [ "\${1:-}" = compose ] && printf '%s\n' "\$@" | grep -qx up; then
+  pause up
+  if mv "$FAULTS/fail-up" "$FAULTS/failing.\$\$" 2>/dev/null; then
+    "$REAL_DOCKER" "\$@"
+    : >"$FAULTS/fail-stop"
+    echo "docker (the proof's): this up fails once it has run, as the run asked" >&2
+    exit 1
+  fi
+fi
 if stops "\$@"; then
   pause stop
   if [ -e "$FAULTS/fail-stop" ]; then
@@ -1272,6 +1284,22 @@ await_paused() {
 journal() {
   [ -f "$WORK/.cyfr/journal.json" ] || return 0
   jget "$(cat "$WORK/.cyfr/journal.json")" "$1"
+}
+
+# An uncertain operation's journal holds both its heads, and every
+# materialized file it names is in the project: `$1` `some` when it must
+# name one, `any` when it may name none (a stop that failed before
+# anything was started from a materialized file).
+uncertain_kept() {
+  python3 -I - "$WORK" "$1" <<'PY' || fail "the uncertain journal does not keep what recovery reads: $(cat "$WORK/.cyfr/journal.json")"
+import json, os, sys
+work, need = sys.argv[1], sys.argv[2]
+j = json.load(open(os.path.join(work, ".cyfr", "journal.json")))
+files = j.get("files") or []
+assert j.get("old_head") and j.get("new_head"), "heads"
+assert need == "any" or files, "no file named"
+assert all(os.path.isfile(os.path.join(work, f)) for f in files), files
+PY
 }
 
 # Converged: no journal, no materialized configuration, the receipt of
@@ -1388,10 +1416,28 @@ interrupt_case() {
   [ "$(journal phase)" = uncertain ] || fail "the failed stop's operation is in phase '$(journal phase)', not uncertain"
   id="$(journal request_id)"
   [ ! -e "$WORK/.cyfr/receipts/$id.json" ] || fail "an uncertain operation wrote its receipt"
-  compgen -G "$WORK/.cyfr/compose.resolved.*" >/dev/null || fail "the uncertain operation kept no materialized configuration"
-  ok "uncertain: the journal stays unfinished, with its materialized configuration, and no receipt"
+  uncertain_kept any
+  ok "uncertain: the journal stays unfinished, with its two heads and every materialized file it names, and no receipt"
   rm -f "$FAULTS/fail-stop"
   as_printed reach_uncertain "$WORK/uncertain.log" 1
+  converged "$id" public local
+
+  step "interrupt: a start that fails, then a rollback whose stop fails, leaves the change uncertain with its configuration"
+  [ "$(env_value CYFR_REACH)" = public ] || cli_ok to-public-again reach public --domain proof-home.example --yes
+  : >"$FAULTS/fail-up"
+  status=0
+  cli_run rollback-uncertain reach local --yes || status=$?
+  [ "$status" -ne 0 ] || fail "a switch whose start and rollback stop failed exited 0"
+  [ ! -e "$FAULTS/fail-up" ] || fail "the switch ran no compose up"
+  sentence reach_uncertain "$WORK/rollback-uncertain.log" >/dev/null ||
+    fail "the rollback's failed stop did not say reach_uncertain: $(tail -n 10 "$WORK/rollback-uncertain.log")"
+  [ "$(journal phase)" = uncertain ] || fail "the rollback's operation is in phase '$(journal phase)', not uncertain"
+  id="$(journal request_id)"
+  [ ! -e "$WORK/.cyfr/receipts/$id.json" ] || fail "an uncertain rollback wrote its receipt"
+  uncertain_kept some
+  ok "uncertain rollback: the journal stays unfinished, with its two heads and the target's materialized configuration, and no receipt"
+  rm -f "$FAULTS/fail-stop"
+  as_printed reach_uncertain "$WORK/rollback-uncertain.log" 1
   converged "$id" public local
 
   step "interrupt: a join with HTTPS off for the tailnet, then its instruction"
