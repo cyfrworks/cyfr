@@ -58,18 +58,19 @@ type fakeStack struct {
 	joins                  []reach.JoinRequest
 	joinKeys               [][]byte
 	locks, starts, cancels int
+	// healths are the waits for cyfr's health each start asked for.
+	healths []time.Duration
+	// calls are the docker calls the runner ran, as the engine's runner
+	// takes them.
+	calls []reach.Call
 }
 
 // useFakeEngine stands a fakeStack in for the engine until t ends, and the
 // terminal init and reach ask on for none.
 func useFakeEngine(t *testing.T) *fakeStack {
 	t.Helper()
-	savedOpen, savedReceipt, savedBusy := openEngine, receiptRefusal, busyRefusal
-	savedTerminal, savedInput := askTerminal, askInput
-	t.Cleanup(func() {
-		openEngine, receiptRefusal, busyRefusal = savedOpen, savedReceipt, savedBusy
-		askTerminal, askInput = savedTerminal, savedInput
-	})
+	savedOpen, savedTerminal, savedInput := openEngine, askTerminal, askInput
+	t.Cleanup(func() { openEngine, askTerminal, askInput = savedOpen, savedTerminal, savedInput })
 	return installFakeEngine(t)
 }
 
@@ -91,15 +92,6 @@ func installFakeEngine(t *testing.T) *fakeStack {
 		}
 		return &fakeEngine{s: s, dir: abs}, nil
 	}
-	receiptRefusal = func(r reach.Receipt) *reach.Refusal {
-		if r.Code == "" {
-			return nil
-		}
-		return reach.Refuse(r.Code, r.Payload)
-	}
-	busyRefusal = func(b *reach.ErrBusy) *reach.Refusal {
-		return reach.Refuse("reach_busy", map[string]string{"holder": b.Holder, "pid": strconv.Itoa(b.WatchdogPID), "until": b.Until.UTC().Format(time.RFC3339)})
-	}
 	askTerminal = func() bool { return false }
 	askInput = strings.NewReader("")
 	return s
@@ -114,8 +106,18 @@ func mismatch() map[string]string {
 // startedLocalReceipt is a start's receipt when it started the home on
 // this machine alone, the machine's tailnet node not .env's.
 func startedLocalReceipt(op string) reach.Receipt {
-	return reach.Receipt{RequestID: strings.Repeat("0", 32), Op: op, State: "completed", Outcome: outcomeStartedLocal, Code: "tailnet_node_mismatch", Payload: mismatch()}
+	return startedLocalFor(op, "tailnet_node_mismatch", mismatch())
 }
+
+// startedLocalFor is a start's receipt when it started the home on this
+// machine alone for the refusal code with payload.
+func startedLocalFor(op, code string, payload map[string]string) reach.Receipt {
+	return reach.Receipt{RequestID: strings.Repeat("0", 32), Op: op, State: "completed", Outcome: outcomeStartedLocal, Code: code, Payload: payload}
+}
+
+// httpsOff is the tailnet_https_off payload of a machine joined with its
+// tailnet's HTTPS certificates off.
+func httpsOff() map[string]string { return map[string]string{"name": "cyfr.tail1234.ts.net"} }
 
 // okReceipt is a completed operation's plain success.
 func okReceipt(op string) reach.Receipt {
@@ -165,6 +167,9 @@ func (s *fakeStack) held() string {
 type fakeEngine struct {
 	s   *fakeStack
 	dir string
+	// locked is whether this engine holds the lock, which ComposeArgs
+	// needs.
+	locked bool
 }
 
 func (e *fakeEngine) Lock(holder string) (func(), error) {
@@ -175,6 +180,7 @@ func (e *fakeEngine) Lock(holder string) (func(), error) {
 		return nil, &reach.ErrBusy{Holder: s.holder}
 	}
 	s.holder = holder
+	e.locked = true
 	s.locks++
 	s.logLine("lock %s", holder)
 	var once sync.Once
@@ -183,6 +189,7 @@ func (e *fakeEngine) Lock(holder string) (func(), error) {
 			s.mu.Lock()
 			defer s.mu.Unlock()
 			s.holder = ""
+			e.locked = false
 		})
 	}, nil
 }
@@ -192,13 +199,20 @@ func (e *fakeEngine) Resume(ctx context.Context) ([]reach.Receipt, error) {
 	return e.s.resume, e.s.resumeErr
 }
 
-func (e *fakeEngine) Docker() reach.Docker { return fakeRunner{} }
+func (e *fakeEngine) Docker() reach.Docker { return fakeRunner{e.s} }
 
 // ComposeArgs answers the selection the engine documents for h: its
 // project, its materialized file, the project directory and its profiles.
+// As the engine's, it needs the lock held.
 func (e *fakeEngine) ComposeArgs(ctx context.Context, h reach.Head, args ...string) ([]string, error) {
 	if e.s.composeErr != nil {
 		return nil, e.s.composeErr
+	}
+	e.s.mu.Lock()
+	locked := e.locked
+	e.s.mu.Unlock()
+	if !locked {
+		return nil, errors.New("reach: ComposeArgs without the lock")
 	}
 	return append(composePrefixArgs(e.dir, h), args...), nil
 }
@@ -207,7 +221,7 @@ func (e *fakeEngine) ComposeArgs(ctx context.Context, h reach.Head, args ...stri
 // project dir.
 func composePrefixArgs(dir string, h reach.Head) []string {
 	digest := strings.TrimPrefix(h.Digest(), "sha256:")
-	full := []string{"compose", "-p", composeProject(dir), "-f", ".cyfr/compose.resolved." + digest + ".yml", "--project-directory", "."}
+	full := []string{"compose", "-p", reach.ProjectName(dir), "-f", ".cyfr/compose.resolved." + digest + ".yml", "--project-directory", "."}
 	for _, p := range h.Profiles {
 		full = append(full, "--profile", p)
 	}
@@ -359,13 +373,19 @@ func (e *fakeEngine) ForgetJoin() error {
 	return e.s.forgetErr
 }
 
-// Start brings the head up through the fake docker, so its scripted
-// answers hold the start, then answers the test's receipt.
+// Start is StartWithin the engine's own wait for cyfr's health.
 func (e *fakeEngine) Start(ctx context.Context, cause string) (reach.Receipt, error) {
+	return e.StartWithin(ctx, cause, reach.HealthDeadline)
+}
+
+// StartWithin brings the head up through the fake docker, so its scripted
+// answers hold the start, then answers the test's receipt.
+func (e *fakeEngine) StartWithin(ctx context.Context, cause string, health time.Duration) (reach.Receipt, error) {
 	s := e.s
 	s.logLine("start %s", cause)
 	s.mu.Lock()
 	s.starts++
+	s.healths = append(s.healths, health)
 	s.mu.Unlock()
 	if s.startErr != nil {
 		return reach.Receipt{}, s.startErr
@@ -386,10 +406,16 @@ func (e *fakeEngine) Stop(ctx context.Context, cause string, all bool) (reach.Re
 
 // fakeRunner runs the `docker` on PATH as the engine's system runner runs
 // docker: under ctx, in a process group of its own, with every COMPOSE_*
-// taken out of the environment and DOCKER_* kept.
-type fakeRunner struct{}
+// taken out of the environment and DOCKER_* kept. It records each call it
+// runs for a stack.
+type fakeRunner struct{ s *fakeStack }
 
-func (fakeRunner) Run(ctx context.Context, c reach.Call) (reach.Result, error) {
+func (r fakeRunner) Run(ctx context.Context, c reach.Call) (reach.Result, error) {
+	if r.s != nil {
+		r.s.mu.Lock()
+		r.s.calls = append(r.s.calls, c)
+		r.s.mu.Unlock()
+	}
 	if c.Deadline > 0 {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(ctx, c.Deadline)

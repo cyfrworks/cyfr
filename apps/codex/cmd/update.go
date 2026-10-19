@@ -49,7 +49,7 @@ var updateCmd = &cobra.Command{
 5. Snapshot the database, the local storage root, every scaffold file the release manages as it stands, the keyring, .env and docker-compose.yml as it stands into backups/<UTC timestamp>/, snapshot.json last.
 6. Write the release's scaffold files and rewrite the managed image lines to <image>:<version>@<digest> (Caddy and Tailscale keep their tags); a failure of either puts the scaffold files back from the snapshot and starts the old stack again. Then start the stack as every cyfr start runs, waiting for cyfr's health. A failure from here leaves the stack stopped and prints the snapshot and the restore command; old code never starts over migrated data.
 
-The update holds the stack's lock from before its first docker call to its end, after finishing a change an interrupted command left; every docker call it makes runs under that lock. Exit status 3: the update is done and the new release started, but on this machine only, because the machine's tailnet identity is not the one .env names; the message says to run 'cyfr reach tailnet'. An interrupt before the stop changes nothing. From the stop until the switch, the running step finishes and the update ends as that step's failure would. Once the switch begins, the switch and the start run to their end, so the stack is never left half-switched; an interrupt then is reported, not acted on.`,
+The update holds the stack's lock from before its first docker call to its end, after finishing a change an interrupted command left; every docker call it makes runs under that lock. Exit status 3: the update is done and the new release started, but on this machine only, because the tailnet machine is not ready to serve it (not the one .env names, not joined, or HTTPS off); the message says what to do. An interrupt before the stop changes nothing. From the stop until the switch, the running step finishes and the update ends as that step's failure would. Once the switch begins, the switch and the start run to their end, so the stack is never left half-switched; an interrupt then is reported, not acted on.`,
 	GroupID: "server",
 	Example: "  cyfr update",
 	RunE: func(cmd *cobra.Command, args []string) error {
@@ -102,6 +102,9 @@ const (
 	composeRunTimeout = 2 * time.Minute
 	stopTimeout       = 10 * time.Minute
 	dumpTimeout       = 60 * time.Minute
+	// startHealth bounds the wait for cyfr's health in an update's and a
+	// restore's start: a release's migrations run in that start.
+	startHealth = 900 * time.Second
 
 	// appWorkdir is the cyfr image's WORKDIR, against which the server
 	// expands a relative path setting.
@@ -1760,10 +1763,11 @@ func (u *updater) up() error {
 }
 
 // start starts the stack as .env and the compose file hold it, through the
-// one start path (reach.Engine.Start), cause naming the command. A start
-// that leaves the home on this machine alone answers startedLocally.
+// one start path (reach.Engine.StartWithin), cause naming the command,
+// waiting startHealth for cyfr's health. A start that leaves the home on
+// this machine alone answers startedLocally.
 func (u *updater) start(cause string) error {
-	rec, err := u.engine.Start(context.WithoutCancel(u.ctx), cause)
+	rec, err := u.engine.StartWithin(context.WithoutCancel(u.ctx), cause, startHealth)
 	if err != nil {
 		return engineFailure(err)
 	}

@@ -445,11 +445,7 @@ func (e *Engine) blocked(id, digest, op string) (Receipt, bool, error) {
 		rc, err := answer(j.receipt())
 		return rc, true, err
 	case j.Op == "join" && j.Join != nil && j.Join.State == "waiting":
-		rc, err := e.reject(id, digest, op, Refuse("reach_busy", map[string]string{
-			"holder": "the tailnet join " + j.Join.JoinID + ", waiting for its approval",
-			"pid":    "none",
-			"until":  j.Join.Deadline.UTC().Format("2006-01-02T15:04:05Z07:00"),
-		}))
+		rc, err := e.reject(id, digest, op, joinBusy(j.Join.JoinID, j.Join.Deadline))
 		return rc, true, err
 	}
 	rc, err := answer(Receipt{RequestID: id, RequestDigest: digest, Op: op, State: "rejected", Code: "reach_outcome_unknown",

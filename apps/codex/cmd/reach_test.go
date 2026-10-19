@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -90,7 +91,7 @@ func TestReachChangesNothingUnconfirmed(t *testing.T) {
 	askTerminal = func() bool { return false }
 	locks := s.locks
 	err = runReach(context.Background(), reach.ModePublic, reachOptions{domain: "cyfr.example.com"}, false, "", &bytes.Buffer{})
-	if err == nil || !strings.Contains(err.Error(), "with --yes. Nothing was changed") || s.locks != locks {
+	if err == nil || !strings.Contains(err.Error(), "Nothing was changed. Run it again with --yes") || s.locks != locks {
 		t.Errorf("a change with no terminal and no --yes answered %v (locks %d → %d)", err, locks, s.locks)
 	}
 	if len(s.switches) != 0 || read(t, ".env") != before {
@@ -98,6 +99,46 @@ func TestReachChangesNothingUnconfirmed(t *testing.T) {
 	}
 	if err := runReach(context.Background(), reach.ModePublic, reachOptions{domain: "cyfr.example.com"}, true, "", &bytes.Buffer{}); err != nil || reachOf(t) != reach.ModePublic {
 		t.Errorf("--yes did not make the change: %v", err)
+	}
+}
+
+// noInput is a terminal's input no test may read from.
+type noInput struct{ t *testing.T }
+
+func (r noInput) Read([]byte) (int, error) {
+	r.t.Error("the command read its input")
+	return 0, io.EOF
+}
+
+// With no terminal to confirm on and no --yes, `cyfr reach <mode>` shows the
+// change when its preview needs no join, and refuses it, without the lock,
+// any change or a read of its input; a change that needs the machine
+// joined first is refused before the join.
+func TestReachWithoutAConfirmationShowsTheChangeAndMakesNone(t *testing.T) {
+	s := newReachProject(t)
+	before := read(t, ".env")
+	askTerminal = func() bool { return false }
+	askInput = noInput{t}
+	var out bytes.Buffer
+	err := runReach(context.Background(), reach.ModePublic, reachOptions{domain: "cyfr.example.com"}, false, "", &out)
+	if err == nil || !strings.Contains(err.Error(), "shown, not made") || !strings.Contains(err.Error(), "Nothing was changed. Run it again with --yes") || ExitStatus(err) != exitFailure {
+		t.Errorf("an unconfirmed change answered %v", err)
+	}
+	if !strings.Contains(out.String(), "  Address: http://localhost:4000 → https://cyfr.example.com\n") {
+		t.Errorf("the change was not shown:\n%s", out.String())
+	}
+	for name, o := range map[string]reachOptions{"a machine not joined": {}, "a new node": {newNode: true}} {
+		out.Reset()
+		err := runReach(context.Background(), reach.ModeTailnet, o, false, "", &out)
+		if err == nil || !strings.Contains(err.Error(), "joins your tailnet before the change can be shown") || !strings.Contains(err.Error(), "Nothing was changed") {
+			t.Errorf("%s: an unconfirmed tailnet change answered %v", name, err)
+		}
+		if out.Len() != 0 {
+			t.Errorf("%s: an unconfirmed tailnet change printed %q", name, out.String())
+		}
+	}
+	if s.locks != 0 || len(s.switches) != 0 || len(s.joins) != 0 || read(t, ".env") != before {
+		t.Errorf("an unconfirmed change took the lock (%d), switched (%v) or joined (%v)", s.locks, s.switches, s.joins)
 	}
 }
 
@@ -220,7 +261,7 @@ func TestReachStatusTakesNoLock(t *testing.T) {
 		"  Address: http://localhost:4000\n",
 		"  cyfr (p-cyfr-1): running\n",
 		"  cyfr: healthy\n",
-		"Unfinished: The change of how this home is reached (request " + strings.Repeat("b", 32) + ") is unfinished (stopped).\n",
+		"Unfinished: The change of how this home is reached (request " + strings.Repeat("b", 32) + ") is unfinished (stopped). Run `cyfr reach --resume` to finish it.\n",
 		"Last change, 2026-10-19T08:00:00Z: The change of how this home is reached (request " + strings.Repeat("a", 32) + ") is done.\n",
 	} {
 		if !strings.Contains(out.String(), line) {
@@ -260,6 +301,13 @@ func TestReachResumeReportsRecovery(t *testing.T) {
 	if !strings.Contains(out.String(), "Recovered: The change of how this home is reached (request "+strings.Repeat("c", 32)+") is not applied.") {
 		t.Errorf("the resume does not report what recovery finished:\n%s", out.String())
 	}
+
+	// An unfinished change with no refusal of its own says what to run, as
+	// the refusals quote commands.
+	s.resume = []reach.Receipt{{RequestID: strings.Repeat("e", 32), Op: "join", State: "accepted", Phase: "waiting"}}
+	if err := runReachResume(context.Background(), &bytes.Buffer{}); err == nil || !strings.HasSuffix(err.Error(), "Nothing was done; run `cyfr reach --resume` to finish it") {
+		t.Errorf("a resume that leaves a join unfinished answered %v", err)
+	}
 	if holder := s.held(); holder != "" {
 		t.Errorf("the lock is still held, by %s", holder)
 	}
@@ -296,13 +344,13 @@ func TestReachCommandsAreTheContractsSurface(t *testing.T) {
 // The help says what each exit status means, and what 3 means for each
 // command that starts the home.
 func TestHelpNamesTheExitStatuses(t *testing.T) {
-	for _, want := range []string{"Exit status: 0 on success; 1 on a failure; 3 when", "130 when interrupted at a prompt"} {
+	for _, want := range []string{"Exit status: 0 on success; 1 on a failure; 3 when", "not ready to serve it (not the one .env names, not\njoined, or HTTPS off", "130 when interrupted at a prompt"} {
 		if !strings.Contains(rootCmd.Long, want) {
 			t.Errorf("cyfr's help lacks %q", want)
 		}
 	}
 	for _, c := range []*cobra.Command{upCmd, updateCmd, restoreCmd, reachCmd} {
-		if !strings.Contains(c.Long, "Exit status 3: ") || !strings.Contains(c.Long, "on this machine only") {
+		if !strings.Contains(c.Long, "Exit status 3: ") || !strings.Contains(c.Long, "on this machine only, because the tailnet machine is not ready to serve it") {
 			t.Errorf("cyfr %s's help does not say what exit status 3 means for it", c.Name())
 		}
 	}

@@ -942,8 +942,8 @@ defmodule Cyfr.StackShapeTest do
 
     proxies = Regex.scan(~r/^\s*reverse_proxy\s+(\S+)/m, caddy, capture: :all_but_first)
 
-    assert proxies == [["cyfr:{$CYFR_PROXY_PORT:4001}"]],
-           "expected exactly one reverse_proxy to cyfr:{$CYFR_PROXY_PORT:4001}"
+    assert proxies == [["cyfr:{$CYFR_PROXY_PORT}"]],
+           "expected exactly one reverse_proxy to cyfr:{$CYFR_PROXY_PORT}"
 
     opens = caddy |> String.graphemes() |> Enum.count(&(&1 == "{"))
     closes = caddy |> String.graphemes() |> Enum.count(&(&1 == "}"))

@@ -96,51 +96,80 @@ func TestKillAtEveryPhaseRecovers(t *testing.T) {
 	}
 }
 
-// Killed after acceptance and before the stop, with
-// .env corrupted meanwhile, recovery stops the original cyfr too, and
-// starts nothing it cannot validate: the switch failed, everything is
-// stopped and checked stopped.
-func TestRecoveryWithACorruptEnvStopsEverything(t *testing.T) {
-	h := newHome(t)
-	h.fake.startStack(t, h.head())
-	r := h.request(id(1), publicTarget, "")
-	h.killAt("journal:switch:accepted", func(e *Engine) { e.Switch(bg, r) })
-	writeFile(t, filepath.Join(h.dir, ".env"), []byte(strings.Replace(h.env(), "CYFR_REACH=local", "CYFR_REACH=sideways", 1)))
-	receipts, err := h.e.Resume(bg)
-	if err != nil || len(receipts) != 1 {
-		t.Fatalf("resume answered %+v, %v", receipts, err)
+// envEdited is reach_env_edited's sentence, word for word.
+func envEdited(then, env string) string {
+	lead := "A change of how this home is reached was interrupted, and .env was edited before the change finished. CYFR stopped the stack, checked it stopped, "
+	switch then {
+	case "started":
+		return lead + "left .env as edited, and started the home as it says: " + env + ". If that is not how this home should be reached, run `cyfr reach <mode>`."
+	case "not_running":
+		return lead + "and left .env as edited, which says: " + env + ". The stack was not running, so nothing was started. Run `cyfr up` to start it as .env says, or `cyfr reach <mode>` to choose again."
+	case "failed":
+		return lead + "and left .env as edited, but the home did not start as it says (" + env + "), and everything is stopped. Fix .env, then run `cyfr up`, or run `cyfr reach <mode>` to choose again."
 	}
-	rc := receipts[0]
-	if rc.Outcome != "failed" || rc.Code != "reach_failed" || !strings.Contains(rc.Payload["env"], "CYFR_REACH is `sideways`") {
-		t.Errorf("the receipt is %+v", rc)
-	}
-	if slices.Contains(h.fake.runningServices(), "cyfr") {
-		t.Error("the original cyfr still runs")
-	}
-	if _, err := os.Stat(filepath.Join(h.dir, stateDir, journalFile)); err == nil {
-		t.Error("the journal is left")
-	}
+	return lead + "and left .env as edited; nothing was started, because .env no longer says one coherent way this home is reached. Run `cyfr up` to see what is wrong with it, or `cyfr reach <mode>` to choose again."
 }
 
-// .env edited during the switch to a head that is neither of the
-// journal's: recovery starts what .env holds, since it validates, and the
-// switch failed with the words .env now holds.
-func TestRecoveryStartsAnEditedEnv(t *testing.T) {
-	h := newHome(t)
-	h.fake.startStack(t, h.head())
-	r := h.request(id(1), publicTarget, "")
-	h.killAt("journal:switch:stopped", func(e *Engine) { e.Switch(bg, r) })
-	writeFile(t, filepath.Join(h.dir, ".env"), []byte(strings.Replace(h.env(), "CYFR_PORT=4000", "CYFR_PORT=4100", 1)))
-	receipts, err := h.e.Resume(bg)
-	if err != nil || len(receipts) != 1 {
-		t.Fatalf("resume answered %+v, %v", receipts, err)
-	}
-	if rc := receipts[0]; rc.Outcome != "failed" || rc.Code != "reach_stale" || !strings.Contains(rc.Payload["words"], "http://localhost:4100") {
-		t.Errorf("the receipt is %+v", rc)
-	}
-	h.assertConverged(baseStack...)
-	if h.head().Port != 4100 {
-		t.Error("the edited head is not .env's")
+// .env edited during a switch to a head that is neither of the
+// journal's: recovery stops and verifies everything, the original cyfr
+// included, leaves .env as edited, and the switch failed with
+// reach_env_edited saying what followed: started as .env says; nothing
+// started, the stack not running; the start as .env says failed, all
+// stopped; or .env no longer coherent, nothing started.
+func TestRecoveryOfAnEnvEditedMidSwitch(t *testing.T) {
+	const edited = "only this computer, at http://localhost:4100"
+	for _, c := range []struct {
+		then, env string
+		running   bool
+		edit      func(text string) string
+		failStart bool
+		want      []string
+	}{
+		{"started", edited, true, func(s string) string { return strings.Replace(s, "CYFR_PORT=4000", "CYFR_PORT=4100", 1) }, false, baseStack},
+		{"not_running", edited, false, func(s string) string { return strings.Replace(s, "CYFR_PORT=4000", "CYFR_PORT=4100", 1) }, false, nil},
+		{"failed", edited, true, func(s string) string { return strings.Replace(s, "CYFR_PORT=4000", "CYFR_PORT=4100", 1) }, true, slices.DeleteFunc(slices.Clone(baseStack), func(s string) bool { return s == "cyfr" })},
+		{"incoherent", "", true, func(s string) string { return strings.Replace(s, "CYFR_REACH=local", "CYFR_REACH=sideways", 1) }, false, slices.DeleteFunc(slices.Clone(baseStack), func(s string) bool { return s == "cyfr" })},
+	} {
+		t.Run(c.then, func(t *testing.T) {
+			h := newHome(t)
+			if c.running {
+				h.fake.startStack(t, h.head())
+			}
+			r := h.request(id(1), publicTarget, "")
+			h.killAt("journal:switch:accepted", func(e *Engine) { e.Switch(bg, r) })
+			edit := c.edit(h.env())
+			writeFile(t, filepath.Join(h.dir, ".env"), []byte(edit))
+			if c.failStart {
+				unhealthyWhen(h, "CYFR_PORT=4100")
+			}
+			receipts, err := h.e.Resume(bg)
+			if err != nil || len(receipts) != 1 {
+				t.Fatalf("resume answered %+v, %v", receipts, err)
+			}
+			rc := receipts[0]
+			payload := map[string]string{"then": c.then, "env": c.env}
+			if c.then == "incoherent" {
+				delete(payload, "env")
+			}
+			if rc.State != "completed" || rc.Outcome != "failed" || rc.Code != "reach_env_edited" || !mapsEqual(rc.Payload, payload) {
+				t.Fatalf("the receipt is %+v", rc)
+			}
+			if got := rc.Refusal().Message(); got != envEdited(c.then, c.env) {
+				t.Errorf("the sentence reads %q", got)
+			}
+			if (rc.FinalHead != nil) != (c.then == "started" || c.then == "not_running") {
+				t.Errorf("the final head is %+v", rc.FinalHead)
+			}
+			if h.env() != edit {
+				t.Error("recovery did not leave .env as edited")
+			}
+			if got, want := h.fake.runningServices(), slices.Sorted(slices.Values(c.want)); !slices.Equal(got, want) {
+				t.Errorf("running %v, want %v", got, want)
+			}
+			if _, err := os.Stat(filepath.Join(h.dir, stateDir, journalFile)); err == nil {
+				t.Error("the journal is left")
+			}
+		})
 	}
 }
 

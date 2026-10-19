@@ -330,6 +330,12 @@ defmodule Prima.Refusal do
     tailnet_join_cancelled:
       {:cancelled,
        "Joining your tailnet was cancelled. How this home is reached was not changed."},
+    tailnet_join_ended:
+      {:unauthenticated,
+       "Tailscale did not accept this machine's join: the auth key may be wrong, already " <>
+         "used or expired, or the join ended before the machine was approved. How this home " <>
+         "is reached was not changed. Check the key if you gave one, then run `cyfr reach " <>
+         "tailnet` again."},
     tailnet_join_not_current:
       {:conflict, "That join attempt is no longer the one in progress. Nothing was changed."}
   }
@@ -1135,6 +1141,25 @@ defmodule Prima.Refusal do
          "project or services behind cyfr's back. Nothing started. Remove it; cyfr chooses " <>
          "them from CYFR_REACH and CYFR_LOCUS_BUILDS_URL."}
 
+  # A compose file that would change, behind .env, how the home is
+  # reached: a reach key assigned in the service's own environment, or a
+  # service that does not read .env at all.
+  defp row({:compose_override_refused, %{file: file, service: service, key: key}})
+       when is_binary(file) and is_binary(service) and is_binary(key),
+       do:
+         {:invalid_argument,
+          "`#{file}` sets `#{key}` in the `#{service}` service's environment, where it would " <>
+            "override how .env says this home is reached. Nothing started. Remove `#{key}` " <>
+            "from `#{file}`; .env alone holds it, and `cyfr reach` writes it."}
+
+  defp row({:compose_override_refused, %{file: file, service: service} = payload})
+       when map_size(payload) == 2 and is_binary(file) and is_binary(service),
+       do:
+         {:invalid_argument,
+          "`#{file}` does not give the `#{service}` service .env through its env_file, so it " <>
+            "would not read how this home is reached. Nothing started. Add `env_file: .env` " <>
+            "to the `#{service}` service in `#{file}`, as the shipped docker-compose.yml has it."}
+
   # The reach engine's refusals and outcomes, in the words `cyfr reach`
   # prints them. A sentence that follows a change that may have landed
   # says so and names the recovery, never a bare "try again".
@@ -1146,6 +1171,24 @@ defmodule Prima.Refusal do
             "started is still running (watchdog pid `#{pid}`, which ends by `#{until}` at the " <>
             "latest). Nothing was changed. Wait until it has finished, then run this command " <>
             "again; if the holder was interrupted, run `cyfr reach --resume` after that time."}
+
+  # The holder itself, before any docker command of its has started.
+  defp row({:reach_busy, %{holder: holder, pid: pid} = payload})
+       when map_size(payload) == 2 and is_binary(holder) and is_binary(pid),
+       do:
+         {:conflict,
+          "Another cyfr command holds this home (`#{holder}`, pid `#{pid}`). Nothing was " <>
+            "changed. Wait until it has finished, then run this command again."}
+
+  # A tailnet join whose command has ended, still waiting for its approval
+  # until its own deadline.
+  defp row({:reach_busy, %{join_id: join_id, until: until} = payload})
+       when map_size(payload) == 2 and is_binary(join_id) and is_binary(until),
+       do:
+         {:conflict,
+          "A tailnet join (`#{join_id}`) is still waiting for this machine's approval, until " <>
+            "`#{until}` at the latest. Nothing was changed. Approve the machine with the link " <>
+            "that join printed, or wait until then, and run this command again."}
 
   defp row({:reach_stale, %{words: words}}) when is_binary(words),
     do:
@@ -1218,6 +1261,43 @@ defmodule Prima.Refusal do
          "checked stopped. .env says: #{env}. Run `cyfr up` to start it as .env says, or " <>
          "`cyfr reach <mode>` to choose again."}
 
+  # A switch interrupted, then recovered after .env was edited meanwhile:
+  # what the recovery did, in the one order it does it, and the next step.
+  defp row({:reach_env_edited, %{then: "started", env: env} = payload})
+       when map_size(payload) == 2 and is_binary(env),
+       do:
+         {:conflict,
+          env_edited() <>
+            " CYFR stopped the stack, checked it stopped, left .env as edited, and started " <>
+            "the home as it says: #{env}. If that is not how this home should be reached, run " <>
+            "`cyfr reach <mode>`."}
+
+  defp row({:reach_env_edited, %{then: "not_running", env: env} = payload})
+       when map_size(payload) == 2 and is_binary(env),
+       do:
+         {:conflict,
+          env_edited() <>
+            " CYFR stopped the stack, checked it stopped, and left .env as edited, which says: " <>
+            "#{env}. The stack was not running, so nothing was started. Run `cyfr up` to start " <>
+            "it as .env says, or `cyfr reach <mode>` to choose again."}
+
+  defp row({:reach_env_edited, %{then: "failed", env: env} = payload})
+       when map_size(payload) == 2 and is_binary(env),
+       do:
+         {:conflict,
+          env_edited() <>
+            " CYFR stopped the stack, checked it stopped, and left .env as edited, but the " <>
+            "home did not start as it says (#{env}), and everything is stopped. Fix .env, then " <>
+            "run `cyfr up`, or run `cyfr reach <mode>` to choose again."}
+
+  defp row({:reach_env_edited, %{then: "incoherent"} = payload}) when map_size(payload) == 1,
+    do:
+      {:conflict,
+       env_edited() <>
+         " CYFR stopped the stack, checked it stopped, and left .env as edited; nothing was " <>
+         "started, because .env no longer says one coherent way this home is reached. Run " <>
+         "`cyfr up` to see what is wrong with it, or `cyfr reach <mode>` to choose again."}
+
   defp row({:reach_uncertain, %{observed: observed}}) when is_binary(observed),
     do:
       {:uncertain,
@@ -1239,6 +1319,11 @@ defmodule Prima.Refusal do
   defp row(reason) when is_binary(reason), do: {:internal, Prima.Sanitizer.sanitize(reason)}
 
   defp row(_reason), do: nil
+
+  defp env_edited,
+    do:
+      "A change of how this home is reached was interrupted, and .env was edited before the " <>
+        "change finished."
 
   defp tailnet_sentence(what),
     do:

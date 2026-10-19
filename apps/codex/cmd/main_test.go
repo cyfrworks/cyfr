@@ -18,8 +18,9 @@ const watchdogChild = "CYFR_CMD_TEST_WATCHDOG_CHILD"
 
 // asCyfr marks a run of this test binary that a test started as the cyfr
 // process (runAsCyfr), its value how the fake engine answers each start
-// and switch: started-local, every one started on this machine only;
-// failed-start, every start failing.
+// and switch: started-local, every one started on this machine only, the
+// machine's tailnet node not .env's; https-off, every start on this machine
+// only, the tailnet's HTTPS off; failed-start, every start failing.
 const asCyfr = "CYFR_CMD_TEST_AS_CYFR"
 
 // TestMain runs the package's tests under a home of their own: init and
@@ -44,6 +45,8 @@ func TestMain(m *testing.M) {
 		case "started-local":
 			local := startedLocalReceipt("switch")
 			s.startReceipt, s.switchReceipt = startedLocalReceipt("start"), &local
+		case "https-off":
+			s.startReceipt = startedLocalFor("start", "tailnet_https_off", httpsOff())
 		case "failed-start":
 			s.startErr = errors.New("cyfr did not become healthy")
 		}

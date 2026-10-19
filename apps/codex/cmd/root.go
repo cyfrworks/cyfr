@@ -45,8 +45,9 @@ from the terminal or scripts.
 
 Exit status: 0 on success; 1 on a failure; 3 when cyfr up, update,
 restore, reach or init started the home on this machine only, because
-the machine's tailnet identity is not the one .env names (the message
-says to run 'cyfr reach tailnet'); 130 when interrupted at a prompt.`,
+the tailnet machine is not ready to serve it (not the one .env names, not
+joined, or HTTPS off; the message says what to do);
+130 when interrupted at a prompt.`,
 	PersistentPostRun: func(cmd *cobra.Command, args []string) {
 		// This transport has no server-side session to terminate — the
 		// credential authenticates each request on its own (client.Close
@@ -97,8 +98,8 @@ const (
 // 130 for the person's own Ctrl-C at a prompt, the status the shell
 // reserves for it (128+SIGINT), which Execute prints nothing for; 3 for a
 // start that left the home running on this machine only (its tailnet
-// machine is not the one .env names), which must read neither as a
-// success nor as a start that failed; and 1 for every other failure.
+// machine is not ready to serve it), which must read neither as a success
+// nor as a start that failed; and 1 for every other failure.
 func ExitStatus(err error) int {
 	if errors.Is(err, prompt.ErrAborted) {
 		return exitInterrupted

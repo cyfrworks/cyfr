@@ -106,7 +106,8 @@ func TestDockerChildKeepsTheLockAfterItsHolderDies(t *testing.T) {
 	if !alive(busy.WatchdogPID) || busy.WatchdogPID == dockerPID || busy.Until.Before(time.Now().Add(50*time.Minute)) {
 		t.Errorf("the record names watchdog %d until %s", busy.WatchdogPID, busy.Until)
 	}
-	if msg := busy.Refusal().Message(); !strings.Contains(msg, "watchdog pid `"+strconv.Itoa(busy.WatchdogPID)+"`") {
+	want := "Another cyfr command holds this home (`" + busy.Holder + "`), or a docker command it started is still running (watchdog pid `" + strconv.Itoa(busy.WatchdogPID) + "`, which ends by `" + busy.Until.UTC().Format(time.RFC3339) + "` at the latest). Nothing was changed. Wait until it has finished, then run this command again; if the holder was interrupted, run `cyfr reach --resume` after that time."
+	if msg := busy.Refusal().Message(); msg != want || !strings.HasPrefix(busy.Holder, "cyfr holder on ") {
 		t.Errorf("the refusal reads %q", msg)
 	}
 
@@ -302,10 +303,16 @@ func TestLockExcludesAHolderInAnotherPIDNamespace(t *testing.T) {
 	t.Cleanup(func() { exec.Command("docker", "rm", "-f", name).Run() })
 	waitFor(t, 30*time.Second, "the container to take the lock", func() bool { return heldFromOutside(t, h.dir) })
 	e, _ := Open(h.dir, h.fake)
-	if _, err := e.Lock("host"); err == nil {
-		t.Fatal("the host took the lock a container holds")
-	} else if _, ok := err.(*ErrBusy); !ok {
-		t.Fatal(err)
+	_, err = e.Lock("host")
+	busy, ok := err.(*ErrBusy)
+	if !ok {
+		t.Fatalf("the host taking a lock a container holds answered %v", err)
+	}
+	// The container wrote no holder record; the kernel's lock table names
+	// its flock.
+	want := "Another cyfr command holds this home (`a process that wrote no holder record`, pid `" + strconv.Itoa(busy.PID) + "`). Nothing was changed. Wait until it has finished, then run this command again."
+	if busy.PID <= 0 || busy.Refusal().Message() != want {
+		t.Errorf("the refusal reads %q (pid %d)", busy.Refusal().Message(), busy.PID)
 	}
 	exec.Command("docker", "rm", "-f", name).Run()
 	waitFor(t, 30*time.Second, "the container's lock to go", func() bool { return !heldFromOutside(t, h.dir) })
@@ -333,5 +340,28 @@ func requireDocker(t *testing.T) {
 		if out, err := exec.Command("docker", "pull", "-q", "busybox:latest").CombinedOutput(); err != nil {
 			t.Skipf("needs busybox:latest, and the pull failed: %v\n%s", err, out)
 		}
+	}
+}
+
+// Between docker calls the holder record names no watchdog: a refusal
+// then names the holder and its own pid, never a child that has ended.
+func TestHolderRecordNamesOnlyARunningChild(t *testing.T) {
+	h, _ := binaryHome(t, false)
+	unlock, err := h.e.Lock("test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer unlock()
+	if _, err := h.e.Docker().Run(bg, Call{Args: []string{"ps", "-a"}}); err != nil {
+		t.Fatal(err)
+	}
+	other, _ := Open(h.dir, h.fake)
+	_, err = other.Lock("next")
+	busy, ok := err.(*ErrBusy)
+	if !ok || busy.WatchdogPID != 0 || !busy.Until.IsZero() || busy.PID != os.Getpid() {
+		t.Fatalf("after the call the next taker answered %#v", err)
+	}
+	if p := busy.Refusal().Payload; len(p) != 2 || p["pid"] != strconv.Itoa(os.Getpid()) {
+		t.Errorf("the refusal names %v", p)
 	}
 }

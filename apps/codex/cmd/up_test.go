@@ -309,10 +309,11 @@ func runAsCyfr(t *testing.T, scenario, dir string, args ...string) (string, stri
 }
 
 // A start that leaves the home running on this machine only, its tailnet
-// machine not the one .env names, is no success and no failed start: the
-// cyfr process prints tailnet_node_mismatch's sentence, Prima.Refusal's
-// word for word, and exits 3, from cyfr up, cyfr restore and the switch of
-// cyfr reach alike; a failed start exits 1.
+// machine not ready to serve it, is no success and no failed start: the
+// cyfr process prints its refusal's sentence, Prima.Refusal's word for
+// word, and exits 3, from cyfr up, cyfr restore and the switch of cyfr
+// reach alike, a machine not .env's and HTTPS off alike; a failed start
+// exits 1.
 func TestStartedOnThisMachineOnlyExitsThree(t *testing.T) {
 	want := "Error: " + reach.Refuse("tailnet_node_mismatch", mismatch()).Message() + "\n"
 	check := func(t *testing.T, name, stdout, stderr string, status int) {
@@ -331,6 +332,12 @@ func TestStartedOnThisMachineOnlyExitsThree(t *testing.T) {
 		check(t, "up", stdout, stderr, status)
 		if _, stderr, status := runAsCyfr(t, "failed-start", s.project, "up"); status != exitFailure || !strings.Contains(stderr, "cyfr did not become healthy") {
 			t.Errorf("a failed start made cyfr up exit %d, printing %q; want exit 1", status, stderr)
+		}
+		// Every start on this machine only exits 3 by its outcome, its own
+		// refusal's sentence printed: here the tailnet's HTTPS is off.
+		https := "Error: " + reach.Refuse("tailnet_https_off", httpsOff()).Message() + "\n"
+		if _, stderr, status := runAsCyfr(t, "https-off", s.project, "up"); status != exitStartedLocally || stderr != https {
+			t.Errorf("a start with the tailnet's HTTPS off made cyfr up exit %d, printing %q; want exit 3 and %q", status, stderr, https)
 		}
 	})
 	t.Run("restore", func(t *testing.T) {

@@ -1,6 +1,7 @@
 # Reverse proxy for a public CYFR home. See docker-compose.yml.
 #
-#   everything → cyfr:{$CYFR_PROXY_PORT:4001} (the endpoint's proxy listener: Prism, /mcp, /api, /auth, /t)
+#   everything → cyfr:{$CYFR_PROXY_PORT} (the endpoint's proxy listener: Prism, /mcp, /api, /auth, /t),
+#   the port compose passes, its default with it (docker-compose.yml)
 #
 # Set CYFR_HOST and CADDY_ACME_EMAIL in .env. Caddy serves TLS and redirects
 # plain HTTP to it. With CYFR_HOST=localhost, the default, the certificate
@@ -51,7 +52,7 @@
 	# Everything: cyfr's one endpoint (Prism, /mcp, /api, /auth, /t). cyfr sets
 	# its own CSP/XFO on every response it serves.
 	handle {
-		reverse_proxy cyfr:{$CYFR_PROXY_PORT:4001} {
+		reverse_proxy cyfr:{$CYFR_PROXY_PORT} {
 			# The header above is set before the upstream's headers are added
 			# to the response, so an upstream's own HSTS is dropped here, for
 			# every host, and no response carries two.

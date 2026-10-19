@@ -1256,6 +1256,54 @@ func TestUpdateKeepsAHomeServedLocallyRunning(t *testing.T) {
 	}
 }
 
+// Every docker call update and restore make through the engine's runner
+// carries the deadline its step allows, since the runner holds a call
+// without one to 120 s: a pull 30 minutes, the PostgreSQL dump and load an
+// hour, a stop ten minutes, every other call two. None asks for a
+// terminal, which the runner cannot give. Both start through StartWithin,
+// waiting 900 s for cyfr's health, as an update's migrations may need.
+func TestEveryDockerCallCarriesItsDeadline(t *testing.T) {
+	pg := map[string]string{"CYFR_DATABASE": "postgres", "CYFR_DATABASE_URL": pgURL}
+	r := newRestoreScenario(t, shippedCompose(t), pg, func(s *updateScenario) { s.answer("dump.out", "PGDMP custom-format dump") })
+	r.answer("probe.out", "170004\n")
+	if out, err := r.restore(true); err != nil {
+		t.Fatalf("restore: %v\n%s", err, out)
+	}
+	allowed := func(c reach.Call) time.Duration {
+		line := strings.Join(c.Args, " ")
+		switch {
+		case c.Args[0] == "pull":
+			return pullTimeout
+		case strings.Contains(line, "pg_dump") || strings.Contains(line, "pg_restore"):
+			return dumpTimeout
+		case slices.Contains(c.Args, "stop"):
+			return stopTimeout
+		}
+		return composeRunTimeout
+	}
+	seen := map[time.Duration]bool{}
+	for _, c := range r.engine.calls {
+		want := allowed(c)
+		seen[want] = true
+		if c.Deadline <= 0 || c.Deadline > want || want-c.Deadline > time.Minute {
+			t.Errorf("docker %s ran under the deadline %v, want its step's %v", strings.Join(c.Args, " "), c.Deadline, want)
+		}
+		for _, arg := range c.Args {
+			if arg == "-t" || arg == "-it" || arg == "-ti" || arg == "--tty" {
+				t.Errorf("docker %s asks for a terminal", strings.Join(c.Args, " "))
+			}
+		}
+	}
+	for _, want := range []time.Duration{pullTimeout, dumpTimeout, stopTimeout, composeRunTimeout} {
+		if !seen[want] {
+			t.Errorf("no call of the update and the restore ran under %v", want)
+		}
+	}
+	if len(r.engine.healths) != 2 || r.engine.healths[0] != startHealth || r.engine.healths[1] != startHealth || startHealth != 900*time.Second {
+		t.Errorf("the update's and the restore's starts waited %v for cyfr's health, want 900s each", r.engine.healths)
+	}
+}
+
 // A failed pull leaves the compose file unchanged and nothing stopped: the
 // scaffold is not updated and no snapshot is taken.
 func TestUpdateRefusesAFailedPull(t *testing.T) {
@@ -1709,7 +1757,7 @@ func TestSnapshotsHoldNeitherTheTailnetStateNorTheReachState(t *testing.T) {
 	noState(s)
 
 	s = newUpdateScenario(t, shippedCompose(t), nil)
-	s.addVolume(map[string]any{"type": "volume", "source": composeProject(s.project) + "_tailscale_state", "target": "/app/data/tailscale"})
+	s.addVolume(map[string]any{"type": "volume", "source": reach.ProjectName(s.project) + "_tailscale_state", "target": "/app/data/tailscale"})
 	out, err := s.run(context.Background())
 	if err == nil || !strings.Contains(err.Error(), "volume mount at /app/data/tailscale") {
 		t.Fatalf("update with the tailnet's state volume under the storage root answered %v\n%s", err, out)
