@@ -15,7 +15,6 @@ import (
 	"slices"
 	"strings"
 	"sync"
-	"syscall"
 	"testing"
 	"time"
 
@@ -106,7 +105,7 @@ func (d *stateDocker) Run(ctx context.Context, c reach.Call) (reach.Result, erro
 		return res, err
 	case c.Args[0] == "compose" && slices.Contains(c.Args, "up"):
 		if d.killAtUp {
-			syscall.Kill(os.Getpid(), syscall.SIGKILL)
+			killSelf()
 			select {}
 		}
 		services := c.Args[slices.Index(c.Args, "up")+1:]
