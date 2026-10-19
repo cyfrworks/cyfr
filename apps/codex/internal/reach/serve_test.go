@@ -393,3 +393,34 @@ func TestHTTPSOffInstructionCanBeFollowed(t *testing.T) {
 		t.Errorf("once Serve is open the preview answers %v", err)
 	}
 }
+
+// A reopen is for a running home: a stopped tailnet home whose head is
+// unchanged previews as reach_unchanged, its next start validating the
+// machine and opening Serve; a reopen previewed while the home ran and
+// sent after it stopped is reach_stale, and starts nothing.
+func TestReopenIsForARunningHome(t *testing.T) {
+	h := newHome(t)
+	h.fake.startStack(t, h.head())
+	h.toTailnet(1, testKey, false)
+	h.e.Stop(bg, "down", false)
+	h.fake.st.Volumes[stateVolume].HTTPS = false
+	if _, err := h.e.Start(bg, "up"); refusalCode(err) != "tailnet_https_off" {
+		t.Fatalf("start answered %v", err)
+	}
+	h.fake.st.Volumes[stateVolume].HTTPS = true
+	p := h.preview(Target{Mode: ModeTailnet}, "")
+	if !p.Reopen {
+		t.Fatalf("a running home with Serve closed previews %+v", p)
+	}
+	h.e.Stop(bg, "down", true)
+	rc, err := h.e.Switch(bg, SwitchRequest{ID: id(5), Target: Target{Mode: ModeTailnet}, OldDigest: p.OldDigest, NewDigest: p.NewDigest})
+	if refusalCode(err) != "reach_stale" || rc.State != "rejected" {
+		t.Errorf("a reopen of a home stopped since its preview answered %+v, %v", rc, err)
+	}
+	if running := h.fake.runningServices(); len(running) != 0 {
+		t.Errorf("the refused reopen started %v", running)
+	}
+	if _, err := h.e.Preview(bg, Target{Mode: ModeTailnet}, ""); refusalCode(err) != "reach_unchanged" {
+		t.Errorf("a stopped home with Serve closed previews %v", err)
+	}
+}

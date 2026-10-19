@@ -145,7 +145,7 @@ func (e *Engine) preview(ctx context.Context, t Target, joinID string) (Preview,
 	if st.headErr == nil {
 		p.Old, p.OldWords = st.head, Describe(st.head)
 		if p.OldDigest == p.NewDigest {
-			if !e.reopens(st) {
+			if !e.reopens(ctx, st) {
 				return Preview{}, Refuse("reach_unchanged", map[string]string{"address": st.head.origin()})
 			}
 			p.Reopen = true
@@ -158,11 +158,21 @@ func (e *Engine) preview(ctx context.Context, t Target, joinID string) (Preview,
 	return p, nil
 }
 
-// reopens reports whether a switch to .env's own head is a reopen: a
-// tailnet home whose Serve is closed, which a start found its machine not
-// ready to serve.
-func (e *Engine) reopens(st envState) bool {
+// closedTailnet reports whether .env's head is tailnet with Serve closed:
+// a start found its machine not ready to serve, or the home is stopped.
+func (e *Engine) closedTailnet(st envState) bool {
 	return st.headErr == nil && st.head.Mode == ModeTailnet && !e.serveIsOpen()
+}
+
+// reopens reports whether a switch to .env's own head is a reopen: a
+// tailnet home whose Serve is closed while its cyfr runs. A stopped one
+// is unchanged: its next start validates the machine and opens Serve.
+func (e *Engine) reopens(ctx context.Context, st envState) bool {
+	if !e.closedTailnet(st) {
+		return false
+	}
+	cs, err := e.observe(ctx)
+	return err == nil && cyfrRunning(cs)
 }
 
 // derive is the head t makes from .env's settings and, for tailnet, the
@@ -285,8 +295,13 @@ func (e *Engine) doSwitch(ctx context.Context, r SwitchRequest) (Receipt, error)
 		return refuse(Refuse("reach_stale", map[string]string{"words": st.words()}))
 	}
 	reopen := st.headErr == nil && st.head.Digest() == d.Head.Digest()
-	if reopen && !e.reopens(st) {
+	switch {
+	case reopen && !e.closedTailnet(st):
 		return refuse(Refuse("reach_unchanged", map[string]string{"address": st.head.origin()}))
+	case reopen && !e.reopens(ctx, st):
+		// The preview was a reopen of a running home, which has stopped
+		// since: nothing would open Serve.
+		return refuse(Refuse("reach_stale", map[string]string{"words": st.words()}))
 	}
 	cs, err := e.observe(ctx)
 	var js []joinContainer
