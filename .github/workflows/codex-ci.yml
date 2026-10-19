@@ -91,7 +91,7 @@ jobs:
       # tests that call requireCompose (TestComposeTestsAreTheOnesCIRequires).
       - name: go test (the Docker Compose tests ran and passed)
         env:
-          COMPOSE_TESTS: TestEnsureCyfrComposeFieldsAddsNothingWhenAMergeKeyBindsBothTargets TestEnsureComposeFieldsCopiesASharedAnchorBeforeAddingADefault TestInitSwitchesThroughTheRealEngineAndHostDocker TestRestoreKilledAtItsConfigurationReadLeavesComposeBarred TestRestoreStagedComposeResolvesAsTheDefaultOverrideSet TestRestoreStagedReadSelectsAsTheEngine TestUpStartsOnThisMachineOnlyThroughTheRealEngine
+          COMPOSE_TESTS: TestEnsureCyfrComposeFieldsAddsNothingWhenAMergeKeyBindsBothTargets TestEnsureComposeFieldsCopiesASharedAnchorBeforeAddingADefault TestInitSwitchesThroughTheRealEngineAndHostDocker TestRestoreKilledAtItsConfigurationReadLeavesComposeBarred TestRestoreStagedComposeResolvesAsTheDefaultOverrideSet TestRestoreStagedReadSelectsAsTheEngine TestUpRecoversAnInterruptedSwitchThroughTheRealEngine TestUpStartsOnThisMachineOnlyThroughTheRealEngine
         run: |
           set -euo pipefail
           docker compose version

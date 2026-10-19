@@ -25,7 +25,9 @@ const watchdogChild = "CYFR_CMD_TEST_WATCHDOG_CHILD"
 // only, the tailnet's HTTPS off; resumed-local, recovery finishing a switch
 // whose start was on this machine only; failed-start, every start failing;
 // real-mismatch, the real engine over a docker whose tailnet machine is
-// another node (tailnetDocker).
+// another node (tailnetDocker); real-state, the real engine over the
+// stateDocker in CYFR_CMD_TEST_DOCKER_STATE, and real-state-kill the same,
+// killed at its first `compose up`.
 const asCyfr = "CYFR_CMD_TEST_AS_CYFR"
 
 // TestMain runs the package's tests under a home of their own: init and
@@ -47,6 +49,17 @@ func TestMain(m *testing.M) {
 	if scenario := os.Getenv(asCyfr); scenario == "real-mismatch" {
 		openEngine = func(dir string) (stackEngine, error) {
 			e, err := reach.Open(dir, &tailnetDocker{node: "cyfr-1.tail1234.ts.net", id: "nBBBBBBBBBCNTRL"})
+			if err != nil {
+				return nil, err
+			}
+			return e, nil
+		}
+		os.Exit(Run(context.Background()))
+	}
+	if scenario := os.Getenv(asCyfr); scenario == "real-state" || scenario == "real-state-kill" {
+		docker := &stateDocker{dir: os.Getenv(stateDockerDir), killAtUp: scenario == "real-state-kill"}
+		openEngine = func(dir string) (stackEngine, error) {
+			e, err := reach.Open(dir, docker)
 			if err != nil {
 				return nil, err
 			}
