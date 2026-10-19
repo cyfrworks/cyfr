@@ -52,6 +52,10 @@
 //     IsZero (u == ""); ipn/ipnstate/ipnstate.go: Status and PeerStatus,
 //     whose ID is the StableNodeID and whose DNSName ends with a dot, and
 //     CertDomains, FQDNs without one.
+//   - ipn/ipnlocal/peerapi.go: a Running node answers HTTP on its PeerAPI
+//     port whatever Serve holds, at the URL its status names
+//     (PeerStatus.PeerAPIURL), which the proofs ask beside a refused
+//     Serve port, so a refusal they read is the node's own.
 //
 // The proof's own check of these is proof.sh beside this file, which also
 // breaks each of them on purpose (`mutation`, below) and fails;
@@ -321,7 +325,12 @@ type peerStatus struct {
 	UserID       int64
 	TailscaleIPs []string
 	Online       bool
+	PeerAPIURL   []string `json:",omitempty"`
 }
+
+// peerAPIPort is the port the stand-in's PeerAPI answers on, a Running
+// node's (containerbootMain).
+const peerAPIPort = 5252
 
 // tailnetStatus is ipnstate.TailnetStatus, likewise.
 type tailnetStatus struct {
@@ -356,6 +365,7 @@ func statusOf(n node) status {
 		UserID:       1,
 		TailscaleIPs: []string{n.IP},
 		Online:       true,
+		PeerAPIURL:   []string{fmt.Sprintf("http://%s:%d", n.IP, peerAPIPort)},
 	}
 	s.MagicDNSSuffix = suffix
 	s.CurrentTailnet = &tailnetStatus{Name: "proof.example", MagicDNSSuffix: suffix, MagicDNSEnabled: true}

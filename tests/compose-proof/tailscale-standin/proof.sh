@@ -179,7 +179,7 @@ serve_file() {
 # mounted over the image's when given. The upstream and the client run the
 # image's own program. Ends at the first check that fails.
 checks() {
-  local p="$RUN-$1" bin="${2:-}" status id key state ts_ip client_ip answer serve_dir
+  local p="$RUN-$1" bin="${2:-}" status id key state ts_ip client_ip answer serve_dir p_ts
   local -a mount=()
   [ -z "$bin" ] || mount=(-v "$bin:/usr/local/bin/standin:ro")
   docker network create "$p-net" >/dev/null
@@ -255,11 +255,23 @@ checks() {
   ts_ip="$(docker inspect -f "{{(index .NetworkSettings.Networks \"$p-net\").IPAddress}}" "$p-ts")"
   docker exec "$p-ts" standin ca >"$WORK/$1-ca.pem"
   docker cp "$WORK/$1-ca.pem" "$p-client:/ca.pem"
+  p_ts="$p-ts"
   serve() { docker exec "$p-client" standin fetch --ca /ca.pem --connect "$ts_ip:443" "$@" || true; }
+  # Serve closed, said `$1`: the node answers the control, its PeerAPI at
+  # the port its status names, through the same client and network, and
+  # refuses 443 itself; a probe that failed otherwise is no closed Serve.
+  serve_closed() {
+    local control target port
+    port="$(jget "$(docker exec "$p_ts" tailscale status --json)" Self PeerAPIURL 0)"
+    port="${port##*:}"
+    control="$(docker exec "$p-client" standin fetch --connect "$ts_ip:$port" "http://$NAME/" || true)"
+    [[ "$(jget "$control" status)" =~ ^[0-9]{3}$ ]] || nope "$1, the node's PeerAPI did not answer: $control" || return 1
+    target="$(serve "https://$NAME/")"
+    [ "$(jget "$target" error)" = refused ] || nope "$1, Serve was not refused by the node: $target"
+  }
   await_serving "$p-ts" 'c == {}'
-  answer="$(serve "https://$NAME/")"
-  [ "$(jget "$answer" error)" = refused ] || nope "under {}, Serve answers: $answer"
-  ok "under {}, nothing listens"
+  serve_closed "under {}"
+  ok "under {}, nothing listens, and the node answers its PeerAPI"
 
   serve_file "$serve_dir/serve.json" "$CONFIG"
   await_serving "$p-ts" "'$NAME:443' in c.get('Web', {})"
@@ -305,7 +317,7 @@ checks() {
   ok "a tagged peer's request carries no identity header, the client's deleted"
 
   answer="$(serve "https://other.proof.ts.net/")"
-  [ "$(jget "$answer" error)" = failed ] || nope "a server name with no web handler was answered: $answer"
+  [ "$(jget "$answer" error)" = tls ] || nope "a server name with no web handler was answered, or refused otherwise than at TLS: $answer"
   answer="$(serve "https://$NAME/status/404")"
   [ "$(jget "$answer" status)" = 404 ] || nope "the upstream's 404 reached the client as: $answer"
   ok "no certificate for another name, and the upstream's own status passes"
@@ -316,8 +328,7 @@ checks() {
 
   serve_file "$serve_dir/serve.json" '{}'
   await_serving "$p-ts" 'c == {}'
-  answer="$(serve "https://$NAME/")"
-  [ "$(jget "$answer" error)" = refused ] || nope "after {}, Serve still answers: $answer"
+  serve_closed "after {}"
   ok "{} closes Serve"
 
   docker exec "$p-ts" standin tailnet --https off
@@ -325,8 +336,7 @@ checks() {
   [ "$(jget "$status" CertDomains)" = null ] || nope "with HTTPS off, the certificate domains are $(jget "$status" CertDomains)"
   serve_file "$serve_dir/serve.json" "$CONFIG"
   stays_serving "$p-ts" 'c == {}'
-  answer="$(serve "https://$NAME/")"
-  [ "$(jget "$answer" error)" = refused ] || nope "with HTTPS off, Serve answers: $answer"
+  serve_closed "with HTTPS off"
   docker exec "$p-ts" standin tailnet --https on
   await_serving "$p-ts" "'$NAME:443' in c.get('Web', {})"
   answer="$(serve "https://$NAME/")"
@@ -342,8 +352,8 @@ checks() {
   await_status "$p-ts2" Running >/dev/null
   ts_ip="$(docker inspect -f "{{(index .NetworkSettings.Networks \"$p-net\").IPAddress}}" "$p-ts2")"
   stays_serving "$p-ts2" 'c == {}'
-  answer="$(docker exec "$p-client" standin fetch --ca /ca.pem --connect "$ts_ip:443" "https://$NAME/" || true)"
-  [ "$(jget "$answer" error)" = refused ] || nope "started again with no serve file, the configuration the state held answers: $answer"
+  p_ts="$p-ts2"
+  serve_closed "started again with no serve file"
   ok "started again with no serve file, nothing the state held is served"
 }
 
