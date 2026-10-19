@@ -73,3 +73,50 @@ func TestDockerTestsAreTheOnesCIRequires(t *testing.T) {
 		t.Errorf("the engine's tests that call requireDocker or requireCompose are %v; codex-ci.yml's test job requires %v", calling, required)
 	}
 }
+
+// The engine's Windows-only tests, the Test functions of its
+// *_windows_test.go files, are exactly the ones Codex CI's Windows job
+// requires to run and pass.
+func TestWindowsTestsAreTheOnesCIRequires(t *testing.T) {
+	sources, err := filepath.Glob("*_windows_test.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var tests []string
+	fset := token.NewFileSet()
+	for _, name := range sources {
+		file, err := parser.ParseFile(fset, name, nil, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, decl := range file.Decls {
+			if fn, ok := decl.(*ast.FuncDecl); ok && fn.Recv == nil && strings.HasPrefix(fn.Name.Name, "Test") {
+				tests = append(tests, fn.Name.Name)
+			}
+		}
+	}
+	slices.Sort(tests)
+
+	data, err := os.ReadFile(filepath.Join("..", "..", "..", "..", ".github", "workflows", "codex-ci.yml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var workflow struct {
+		Jobs map[string]struct {
+			Steps []struct {
+				Env map[string]string `yaml:"env"`
+			} `yaml:"steps"`
+		} `yaml:"jobs"`
+	}
+	if err := yaml.Unmarshal(data, &workflow); err != nil {
+		t.Fatal(err)
+	}
+	var required []string
+	for _, step := range workflow.Jobs["test-windows"].Steps {
+		required = append(required, strings.Fields(step.Env["WINDOWS_TESTS"])...)
+	}
+	slices.Sort(required)
+	if len(tests) == 0 || !slices.Equal(tests, required) {
+		t.Errorf("internal/reach's Windows tests are %v; codex-ci.yml's test-windows job requires %v", tests, required)
+	}
+}
