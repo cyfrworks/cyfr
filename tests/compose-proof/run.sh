@@ -265,6 +265,10 @@ cyfr_cli() {
   (
     cd "$WORK" || exit 1
     [ -z "$CLI_PIDFILE" ] || echo "$BASHPID" >"$CLI_PIDFILE"
+    # A person's usual umask, where the host runner's is 077: what the
+    # command line makes, data/ among it, has the modes a person's
+    # install has, and the entrypoint gives data/ to the image's user.
+    umask 022
     exec env -i HOME="$WORK/home" PATH="$CLI_PATH" LANG=C.UTF-8 TERM=dumb \
       DOCKER_CONFIG="${DOCKER_CONFIG:-$HOME/.docker}" \
       ${DOCKER_HOST:+DOCKER_HOST="$DOCKER_HOST"} ${DOCKER_CONTEXT:+DOCKER_CONTEXT="$DOCKER_CONTEXT"} \
@@ -544,12 +548,9 @@ resolved() {
     sed -n 's/^IPS=//p' | tail -1
 }
 
-# A fresh mark for one request.
-MARKS=0
-mark() {
-  MARKS=$((MARKS + 1))
-  printf 'm%s-%s' "$$" "$MARKS"
-}
+# A fresh mark for one request, unique without a counter, as each mark is
+# taken in a command substitution, a subshell whose count would not last.
+mark() { printf 'm%s' "$(od -An -N8 -tx1 /dev/urandom | tr -d ' \n')"; }
 
 # The value the endpoint sends as Strict-Transport-Security, from its one
 # spelling, as tests/proxy-hsts/run.sh reads it.
@@ -823,7 +824,7 @@ assert list(bound) == [f"{port}/tcp"], bound
 assert all(b["HostIp"] == "127.0.0.1" for b in bound[f"{port}/tcp"]), bound
 assert any(b["HostPort"] == host_port for b in bound[f"{port}/tcp"]), (bound, published)
 ' "$port" "$(published)" || fail "cyfr publishes other than its loopback listener on the host's loopback: $(docker port "$cyfr_id")"
-  for id in $(docker ps -q --filter "label=com.docker.compose.project=$RUN"); do
+  for id in $(docker ps -q --no-trunc --filter "label=com.docker.compose.project=$RUN"); do
     [ "$id" = "$cyfr_id" ] && continue
     service="$(docker inspect -f '{{index .Config.Labels "com.docker.compose.service"}}' "$id")"
     answer="$(docker port "$id" || true)"
