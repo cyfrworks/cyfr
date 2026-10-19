@@ -345,8 +345,9 @@ sentence() {
   python3 -I -c "$SENTENCE_PY" "$ROOT/tests/fixtures/reach_modes.json" "$@"
 }
 
-# The sentence of refusal `$1` rendered from its one variant whose slots
-# `$2...` (name=value) fill exactly, as the command line renders it.
+# The sentence of refusal `$1` rendered from its one variant whose fixed
+# fields and slots `$2...` (name=value) name exactly, as the command line
+# renders it.
 render() {
   python3 -I -c '
 import json, re, sys
@@ -356,7 +357,8 @@ for r in vectors["refusals"]:
     if r["code"] != code:
         continue
     for v in r["variants"]:
-        if sorted(v["slots"]) == sorted(given) and all(given.get(k) == x for k, x in v["fixed"].items()):
+        rest = {k: x for k, x in given.items() if k not in v["fixed"]}
+        if sorted(v["slots"]) == sorted(rest) and all(given.get(k) == x for k, x in v["fixed"].items()):
             print(re.sub(r"\{([a-z_]+)\}", lambda m: given[m.group(1)], v["template"]))
             sys.exit(0)
 sys.exit(1)' "$ROOT/tests/fixtures/reach_modes.json" "$@" || fail "no variant of $1 is filled by $*"
