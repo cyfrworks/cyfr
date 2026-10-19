@@ -10,8 +10,10 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/signal"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/cyfr/codex/internal/config"
@@ -110,9 +112,19 @@ func ExitStatus(err error) int {
 	return exitFailure
 }
 
-// Run is the cyfr process: the command line executed under ctx, answered
-// as the status the process exits with, 0 or ExitStatus of the failure
-// Execute printed.
+// Main is the cyfr process: Ctrl-C, SIGTERM and SIGHUP (the terminal
+// closed) cancel the context every command runs under, so a command
+// unwinds through its own cleanup, a waiting tailnet join cancelled and the
+// lock released, rather than die with them; it answers the status the
+// process exits with (Run).
+func Main() int {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM, syscall.SIGHUP)
+	defer stop()
+	return Run(ctx)
+}
+
+// Run is the command line executed under ctx, answered as the status the
+// process exits with, 0 or ExitStatus of the failure Execute printed.
 func Run(ctx context.Context) int {
 	if err := Execute(ctx); err != nil {
 		return ExitStatus(err)
@@ -120,11 +132,11 @@ func Run(ctx context.Context) int {
 	return 0
 }
 
-// Execute runs the root command under the process context, so every request
-// a command makes is cancellable by Ctrl-C / SIGTERM. It prints the failure
-// (cobra's own printing is silenced) — except a prompt abort, which the user
-// caused and needs no telling about — and returns it for main to map to an
-// exit code.
+// Execute runs the root command under the process context, so every
+// request a command makes is cancellable by the signals Main names. It
+// prints the failure (cobra's own printing is silenced) — except a prompt
+// abort, which the user caused and needs no telling about — and returns it
+// for main to map to an exit code.
 func Execute(ctx context.Context) error {
 	err := rootCmd.ExecuteContext(ctx)
 	if err != nil && !errors.Is(err, prompt.ErrAborted) {

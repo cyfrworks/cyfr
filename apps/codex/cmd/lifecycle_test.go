@@ -573,6 +573,33 @@ func TestEnsureEnvFileKeys(t *testing.T) {
 	}
 }
 
+// .env's replacement is written beside it as `..env.tmp-*` (writeFileAtomic,
+// as the engine's durable write names it) and gone on every path a living
+// process takes, a write that fails included; only a process that died
+// inside the write leaves one, which the project's .gitignore ignores.
+func TestEnvWritesLeaveNoTemporaryFile(t *testing.T) {
+	dir := t.TempDir()
+	if err := writeFileAtomic(filepath.Join(dir, ".env"), []byte("A=1\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	// A directory where .env goes: the rename fails after the temporary
+	// file is written.
+	if err := os.Mkdir(filepath.Join(dir, "sub"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(dir, "sub", ".env", "kept"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeFileAtomic(filepath.Join(dir, "sub", ".env"), []byte("A=1\n"), 0600); err == nil {
+		t.Fatal("a write over a directory succeeded")
+	}
+	for _, d := range []string{dir, filepath.Join(dir, "sub")} {
+		if left, _ := filepath.Glob(filepath.Join(d, "..env.tmp-*")); len(left) != 0 {
+			t.Errorf("a write left %v", left)
+		}
+	}
+}
+
 func TestImagesFromCompose(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "docker-compose.yml")
@@ -793,7 +820,7 @@ func TestInitIgnoresTheSnapshots(t *testing.T) {
 		t.Fatal(err)
 	}
 	lines := strings.Split(string(got), "\n")
-	for _, want := range []string{"/backups/", "/data/", "/.cyfr/", ".env", ".env.local", ".env.*.local"} {
+	for _, want := range []string{"/backups/", "/data/", "/.cyfr/", ".env", ".env.local", ".env.*.local", "..env.tmp-*"} {
 		if !slices.Contains(lines, want) {
 			t.Errorf(".gitignore lacks %s:\n%s", want, got)
 		}

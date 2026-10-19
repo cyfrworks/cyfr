@@ -297,12 +297,12 @@ func putScaffoldBack(dir string, names []string) error {
 }
 
 // runRestore is `cyfr restore <snapshot>` in the working directory. ctx is
-// cancelled by SIGINT or SIGTERM: before the stop the cancellation ends the
-// restore with nothing changed; from the stop until the parts are put back
-// it ends the restore at the next step with the stack stopped and the
-// configuration files as they were; putting the parts back and declaring the
-// restore run to their end, and an interrupt then only keeps the stack from
-// starting.
+// cancelled by SIGINT, SIGTERM or SIGHUP (Main): before the stop the
+// cancellation ends the restore with nothing changed; from the stop until
+// the parts are put back it ends the restore at the next step with the
+// stack stopped and the configuration files as they were; putting the
+// parts back and declaring the restore run to their end, and an interrupt
+// then only keeps the stack from starting.
 func runRestore(ctx context.Context, snapshot string, start bool, out, errOut io.Writer) error {
 	if ctx == nil {
 		ctx = context.Background()
