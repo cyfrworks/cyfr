@@ -44,8 +44,9 @@
 #          node), which is the peer on the loopback listener and on the
 #          proxy listener from an untrusted peer, and the client the proxy
 #          names through it; and through the proxy an anonymous MCP
-#          request and page request are refused the same with every forged
-#          forwarding and identity header as without. In tailnet the
+#          request is refused 401 with the auth error and a page request
+#          sent to /login, with every forged forwarding and identity
+#          header as without. In tailnet the
 #          endpoint's HSTS is on the proxy listener's success, error and
 #          refusal answers for the node's name and on none for a loopback
 #          Host or on the loopback listener; in public the endpoint sends
@@ -1245,44 +1246,47 @@ FORGED_IDENTITY=(
 )
 
 # Anonymous requests through mode `$1`'s proxy, the probe `$2` (`$2 mcp|page
-# [header...]`): MCP's subscriptions/listen, which opens a stream to an
-# authenticated caller alone (tools/list is discovery, which an anonymous
-# caller is answered), and the home's root page, each with no credential,
-# and each again with every header FORGED_IDENTITY names, the person's own
-# login among them; each must be refused exactly as the plain anonymous
-# request is (predicates.sh `same_refusal`), so no forged identity header
-# authenticates anyone.
+# REQUEST [header...]`, REQUEST the JSON-RPC body of an mcp request):
+# MCP's subscriptions/listen, which opens a stream to an authenticated
+# caller alone (tools/list is discovery, which an anonymous caller is
+# answered), and the home's root page, each with no credential, and each
+# again with every header FORGED_IDENTITY names, the person's own login
+# among them; each, with the headers and without, must be refused exactly
+# as the home refuses an anonymous request of its kind (predicates.sh
+# `anonymous_refused`: the page to /login, MCP's 401 with the auth error
+# for that request), so no forged identity header authenticates anyone.
 anonymous_pairs() {
-  local what="$1" ask="$2" kind plain forged_answer why
+  local what="$1" ask="$2" kind request plain forged_answer why
   for kind in mcp page; do
-    plain="$("$ask" "$kind")"
-    forged_answer="$("$ask" "$kind" "${FORGED_IDENTITY[@]}")"
-    why="$(same_refusal "$plain" "$forged_answer")" || fail "$what, an anonymous $kind request: $why"
+    request=""
+    [ "$kind" != mcp ] || request="$(mcp_body subscriptions/listen '{}' "$MCP_VERSION")"
+    plain="$("$ask" "$kind" "$request")"
+    forged_answer="$("$ask" "$kind" "$request" "${FORGED_IDENTITY[@]}")"
+    why="$(anonymous_refused "$kind" "$plain" "$forged_answer" "$request")" || fail "$what, an anonymous $kind request: $why"
   done
-  ok "$what: an anonymous MCP request and page request are refused the same with forged identity headers as without"
+  ok "$what: an anonymous MCP request is refused 401 with the auth error and a page request sent to /login, with forged identity headers as without"
 }
 anonymous_caddy() {
-  local kind="$1" args=() h
-  shift
+  local kind="$1" request="$2" args=() h
+  shift 2
   for h in "$@"; do args+=(-H "$h"); done
   case "$kind" in
     mcp)
       from_network edge -H "host: $(env_value CYFR_HOST)" -H 'content-type: application/json' \
         -H 'accept: application/json, text/event-stream' -H "mcp-protocol-version: $MCP_VERSION" -H 'mcp-method: subscriptions/listen' \
-        ${args[@]+"${args[@]}"} --data-binary "$(mcp_body subscriptions/listen '{}' "$MCP_VERSION")" "http://caddy:80/mcp"
+        ${args[@]+"${args[@]}"} --data-binary "$request" "http://caddy:80/mcp"
       ;;
     page) from_network edge -H "host: $(env_value CYFR_HOST)" ${args[@]+"${args[@]}"} "http://caddy:80/" ;;
   esac
 }
 anonymous_serve() {
-  local kind="$1" args=() h
-  shift
+  local kind="$1" request="$2" args=() h
+  shift 2
   for h in "$@"; do args+=(--header "$h"); done
   case "$kind" in
     mcp)
       tailnet_fetch --method POST --header 'content-type: application/json' --header 'accept: application/json, text/event-stream' \
-        --header "mcp-protocol-version: $MCP_VERSION" --header 'mcp-method: subscriptions/listen' \
-        --body "$(mcp_body subscriptions/listen '{}' "$MCP_VERSION")" \
+        --header "mcp-protocol-version: $MCP_VERSION" --header 'mcp-method: subscriptions/listen' --body "$request" \
         ${args[@]+"${args[@]}"} "https://$(env_value CYFR_HOST)/mcp"
       ;;
     page) tailnet_fetch ${args[@]+"${args[@]}"} "https://$(env_value CYFR_HOST)/" ;;
