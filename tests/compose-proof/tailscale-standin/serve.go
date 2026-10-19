@@ -174,6 +174,13 @@ func containerbootMain(stdout, stderr io.Writer) int {
 		}
 	}
 	logf("Running as %s (%s)", n.Name, n.ID)
+	peerAPI, err := net.Listen("tcp", fmt.Sprintf(":%d", peerAPIPort))
+	if err != nil {
+		logf("peerapi: %v", err)
+		return 1
+	}
+	defer peerAPI.Close()
+	go (&http.Server{Handler: peerAPIHandler(n), ReadHeaderTimeout: 10 * time.Second}).Serve(peerAPI)
 
 	servePath := os.Getenv("TS_SERVE_CONFIG")
 	if servePath == "" {
@@ -198,6 +205,15 @@ func containerbootMain(stdout, stderr io.Writer) int {
 			return 1
 		}
 	}
+}
+
+// peerAPIHandler is the node's PeerAPI: every request is answered, 200
+// with the node's name, whatever Serve holds.
+func peerAPIHandler(n node) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		fmt.Fprintf(w, "peerapi of %s\n", n.Name)
+	})
 }
 
 // startServe is Serve as containerboot leaves it on a Running node with

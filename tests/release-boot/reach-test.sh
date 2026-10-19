@@ -108,3 +108,46 @@ if failures:
     sys.exit(1)
 print(f"ok: {len(dirs)} vectors: the release's .env is each one's file and the environment merged over it is its process")
 PY
+
+# A boot refusal is the release's own exit: a stand-in that prints a
+# vector's FATAL sentence and then ignores TERM is killed at the deadline
+# (137), and one that ends at TERM exits 124 through the deadline; both
+# fail the refusal check (`boot_refused`) that the vector loop and the
+# namespace case apply to their boots, each launched under the same
+# `timeout -k BOOT_KILL_AFTER BOOT_DEADLINE`. A stand-in that refuses with
+# the sentence passes it, and one that exits 1 without it does not.
+mkdir -p "$scratch/hang/bin" "$scratch/term/bin" "$scratch/refuse/bin" "$scratch/silent/bin"
+cat >"$scratch/hang/bin/cyfr" <<'SH'
+#!/usr/bin/env bash
+trap '' TERM
+echo "[Cyfr] FATAL: $(cat "$(dirname "$0")/../sentence")"
+while :; do sleep 1; done
+SH
+cat >"$scratch/term/bin/cyfr" <<'SH'
+#!/usr/bin/env bash
+echo "[Cyfr] FATAL: $(cat "$(dirname "$0")/../sentence")"
+exec sleep 600
+SH
+cat >"$scratch/refuse/bin/cyfr" <<'SH'
+#!/usr/bin/env bash
+echo "[Cyfr] FATAL: $(cat "$(dirname "$0")/../sentence")"
+exit 1
+SH
+printf '#!/usr/bin/env bash\necho "no sentence here"\nexit 1\n' >"$scratch/silent/bin/cyfr"
+first="$(find "$scratch/vectors" -mindepth 1 -maxdepth 1 -type d | sort | head -1)"
+for kind in hang term refuse silent; do
+  chmod +x "$scratch/$kind/bin/cyfr"
+  cp "$first/sentence" "$scratch/$kind/sentence"
+done
+ADAPTER=sqlite WORK="$scratch" BOOT_DEADLINE=2 BOOT_KILL_AFTER=1 bash -c '
+  set -uo pipefail
+  source "$1/tests/release-boot/boot.sh"
+  source "$1/tests/release-boot/release.sh"
+  for kind in hang term refuse silent; do
+    reach_vector_boot "$3" "$2/$kind" "$2/cell" >"$2/$kind.log" 2>&1
+    status=$?
+    if boot_refused "$status" "$2/$kind.log" "$(cat "$3/sentence")"; then echo "$kind $status refused"; else echo "$kind $status not"; fi
+  done' _ "$root" "$scratch" "$first" >"$scratch/hang.out"
+[ "$(cat "$scratch/hang.out")" = "$(printf '%s\n' "hang 137 not" "term 124 not" "refuse 1 refused" "silent 1 not")" ] ||
+  fail "the refusal check took a boot the deadline ended, or refused a refusal: $(tr '\n' ';' <"$scratch/hang.out")"
+echo "ok: a boot that prints the sentence and is ended by the deadline (137 killed, 124 at TERM) is no refusal; exit 1 with the sentence is"

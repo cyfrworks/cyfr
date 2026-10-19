@@ -31,28 +31,36 @@
 #          reaches the host API.
 #
 #   modes  one project switched with `cyfr reach`, running, through every
-#          ordered pair of the three modes: after each switch the head's
-#          proxy alone runs, the old one stopped and removed, and cyfr is
-#          healthy at the head's address. In public and tailnet a forged
-#          X-Forwarded-For and Tailscale-User-Login, on both listeners and
-#          through the mode's proxy, change neither the answer nor the
-#          client address cyfr resolves (Sanctum.ClientIp, read from a
-#          probe in the running node), which is the peer on the loopback
-#          listener and on the proxy listener from an untrusted peer, and
-#          the client the proxy names through it. In tailnet the endpoint's
-#          HSTS is on the proxy listener's success, error and refusal
-#          answers for the node's name and on none for a loopback Host or
-#          on the loopback listener; in public the endpoint sends none on
-#          its proxy listener, and an answer through Caddy carries the
-#          shipped site's one value. At the ts.net name the
-#          origin is the home's, MCP admits that origin and refuses
-#          another, the LiveView socket upgrades for it and not another,
-#          and the session cookie is honoured. Before the switches:
-#          COMPOSE_PROFILES=public,tailnet in the command line's
+#          ordered pair of the three modes: after each switch the whole
+#          head is in .env and the running cyfr, a tailnet node id the one
+#          the tailnet state holds, the head's proxy alone runs with the
+#          shipped file's capabilities and options, the old one stopped
+#          and removed, and cyfr is healthy at the head's address; in
+#          tailnet Serve holds exactly the engine's configuration. In
+#          public and tailnet a forged X-Forwarded-For and
+#          Tailscale-User-Login, on both listeners and through the mode's
+#          proxy, change neither the answer nor the client address cyfr
+#          resolves (Sanctum.ClientIp, read from a probe in the running
+#          node), which is the peer on the loopback listener and on the
+#          proxy listener from an untrusted peer, and the client the proxy
+#          names through it; and through the proxy an anonymous MCP
+#          request and page request are refused the same with every forged
+#          forwarding and identity header as without. In tailnet the
+#          endpoint's HSTS is on the proxy listener's success, error and
+#          refusal answers for the node's name and on none for a loopback
+#          Host or on the loopback listener; in public the endpoint sends
+#          none on its proxy listener, and an answer through Caddy carries
+#          the shipped site's one value. At the ts.net name the origin is
+#          the home's, MCP admits that origin and refuses another, the
+#          LiveView socket upgrades for it and not another, and the
+#          session cookie is the fixture person's: / sends to /login
+#          without it and to that person's chat with it. Before the
+#          switches: COMPOSE_PROFILES=public,tailnet in the command line's
 #          environment starts neither proxy for a local home with builds
 #          off, and the same key in .env, an incoherent .env and one with
 #          no mode are each refused by `cyfr up` with the sentence the
-#          vectors hold, nothing started.
+#          vectors hold, nothing started. The predicates are
+#          predicates.sh's, held to canned objects by predicates-test.sh.
 #
 #   interrupt
 #          the real command line killed or failed mid-switch, each run
@@ -77,9 +85,10 @@
 #          release manifest, which a build of this tree has not); then
 #          switched to local and joined as node B; then `cyfr restore` of
 #          A: .env names A while the state volume holds B, so Serve stays
-#          off, the start answers tailnet_node_mismatch, the home answers on
-#          this machine alone, and `cyfr reach tailnet` previews A's
-#          address to B's. The restore keeps the state volume (B) and the
+#          off (the node refuses 443 while it answers its PeerAPI), the
+#          start answers tailnet_node_mismatch, the home answers on this
+#          machine alone, and `cyfr reach tailnet` previews exactly A's
+#          head to B's. The restore keeps the state volume (B) and the
 #          project's .cyfr/, and removes join.json. The snapshot is the
 #          proof's own, so that a snapshot holds neither the tailnet state
 #          nor the reach state is apps/codex/cmd/update_test.go's
@@ -88,8 +97,8 @@
 #          CLI image with the host's docker and the project directory at
 #          its own path, since a non-root person's restore cannot put back
 #          a storage root the container's entrypoint has handed to the
-#          image's user (a defect outside this proof); every other step
-#          runs as the person.
+#          image's user (a defect outside this proof); every other
+#          CYFR command runs as the person.
 #
 #   shutdown
 #          `docker compose stop cyfr` ends within the stop_grace_period
@@ -192,6 +201,8 @@ CYFR="$WORK/bin/cyfr"
 CLI_PATH="$PATH"
 REAL_DOCKER="$(command -v docker)"
 cyfr_id=""
+# The signed-in person's athanor (sign_in).
+SEGMENT=""
 
 compose() {
   docker compose --project-name "$RUN" --project-directory "$WORK" \
@@ -201,6 +212,8 @@ compose() {
 
 # shellcheck source=tests/compose-proof/cleanup.sh
 . "$HERE/cleanup.sh"
+# shellcheck source=tests/compose-proof/predicates.sh
+. "$HERE/predicates.sh"
 trap cleanup EXIT
 
 step() { echo; echo "==> $*"; }
@@ -586,6 +599,9 @@ if len(sites) != 1 or lines[sites[0]].startswith("http://"):
 lines[sites[0]] = "http://" + lines[sites[0]]
 open(sys.argv[2], "w").write("".join(lines))
 PY
+  # Readable by caddy's root, which holds no capability to read past a
+  # file's mode, as a checkout's Caddyfile is.
+  chmod 644 "$WORK/proof.Caddyfile"
   diff="$(python3 -I - "$HERE/run.sh" "$ROOT/Caddyfile" "$WORK/proof.Caddyfile" <<'PY'
 import difflib, re, sys
 header = []
@@ -732,36 +748,51 @@ tailnet_join() {
   return "$status"
 }
 
-# The project's head in .env, checked: mode `$1` at host `$2`, its public
-# URL with it, the head's proxy alone running beside cyfr, the other
-# proxy without a container, and cyfr healthy.
+# The project's whole head, checked (predicates.sh `head_holds`): mode
+# `$1` at host `$2`, every reach setting in .env and the running cyfr the
+# head's, a tailnet head's node id the one the tailnet state holds, the
+# head's proxy alone running beside cyfr with the shipped file's
+# capabilities and options (`capabilities_hold`), the other proxy without
+# a container, and cyfr healthy.
 expect_head() {
-  local mode="$1" host="$2" want
+  local mode="$1" host="$2" want profiles node="" public_url="" head why proxy id
   [ -n "$host" ] || fail "no host to expect the $mode home at"
-  [ "$(env_value CYFR_REACH)" = "$mode" ] || fail ".env's mode is $(env_value CYFR_REACH), not $mode"
-  [ "$(env_value CYFR_HOST)" = "$host" ] || fail ".env's host is $(env_value CYFR_HOST), not $host"
   case "$mode" in
-    local)
-      [ -z "$(env_value CYFR_PUBLIC_URL)" ] || fail "a local .env names the public URL $(env_value CYFR_PUBLIC_URL)"
-      want=cyfr
-      ;;
-    public)
-      [ "$(env_value CYFR_PUBLIC_URL)" = "https://$host" ] || fail ".env's public URL is $(env_value CYFR_PUBLIC_URL), not https://$host"
-      want="caddy cyfr"
-      ;;
+    local) want=cyfr profiles='[]' ;;
+    public) want="caddy cyfr" profiles='["public"]' public_url="https://$host" ;;
     tailnet)
-      [ "$(env_value CYFR_PUBLIC_URL)" = "https://$host" ] || fail ".env's public URL is $(env_value CYFR_PUBLIC_URL), not https://$host"
-      [ -n "$(env_value CYFR_TAILNET_NODE_ID)" ] || fail "a tailnet .env names no node id"
-      want="cyfr tailscale"
+      want="cyfr tailscale" profiles='["tailnet"]' public_url="https://$host"
+      # The node id the tailnet state holds, read apart from .env.
+      node="$(jget "$(docker exec "$(compose ps -q tailscale)" tailscale status --json)" Self ID)"
+      [ -n "$node" ] && [ "$node" != null ] || fail "the tailnet state names no node"
       ;;
+    *) fail "no head of a mode '$mode'" ;;
   esac
   await_healthy
-  [ "$(running)" = "$want" ] || fail "the project runs '$(running)' in $mode, not '$want'"
+  # The whole head: no case changes the port cyfr init writes (the shipped
+  # default), gives an email, or turns builds on.
+  head="$(python3 -I -c '
+import json, sys
+mode, host, url, node, profiles = sys.argv[1:6]
+head = {"mode": mode, "host": host, "port": 4000, "profiles": json.loads(profiles)}
+if url:
+    head["public_url"] = url
+if node:
+    head["node_id"] = node
+print(json.dumps(head))' "$mode" "$host" "$public_url" "$node" "$profiles")"
+  why="$(head_holds "$head" "$WORK/.env" "$(docker inspect -f '{{json .Config.Env}}' "$cyfr_id")" "$(running)" "$node")" ||
+    fail "the project does not run the $mode head at $host: $why"
   for proxy in caddy tailscale; do
-    case " $want " in *" $proxy "*) continue ;; esac
-    ! has_container "$proxy" || fail "in $mode the project still has a $proxy container: stopped, but not removed"
+    case " $want " in
+      *" $proxy "*)
+        id="$(compose ps -q "$proxy")"
+        why="$(capabilities_hold "$proxy" "$(docker inspect -f '{{json .HostConfig}}' "$id")" "$(docker exec "$id" cat /proc/1/status)")" ||
+          fail "the $proxy proxy runs with other privileges than the shipped file's: $why"
+        ;;
+      *) ! has_container "$proxy" || fail "in $mode the project still has a $proxy container: stopped, but not removed" ;;
+    esac
   done
-  ok "the home is $mode at $host: '$want' runs, cyfr is healthy, and no other proxy has a container"
+  ok "the home is $mode at $host: the whole head in .env and the running cyfr, '$want' runs$([ "$mode" = local ] || echo ", its proxy with the shipped file's capabilities"), cyfr is healthy, and no other proxy has a container"
 }
 
 # The tailscale container's serve configuration, compact.
@@ -770,21 +801,33 @@ serving() { docker exec "$(compose ps -q tailscale)" standin serving; }
 # Serve is open for the node `$1`, forwarding to cyfr's proxy listener,
 # within 60 s: the engine opens it once the node is validated.
 expect_serve_open() {
-  local name="$1" port closes=$((SECONDS + 60)) config=""
+  local name="$1" port closes=$((SECONDS + 60)) config="" why=""
   port="$(proxy_port)"
   while [ "$SECONDS" -lt "$closes" ]; do
     config="$(serving 2>/dev/null || true)"
-    if printf '%s' "$config" | python3 -I -c '
-import json, sys
-c, name, port = json.load(sys.stdin), sys.argv[1], sys.argv[2]
-web = (c.get("Web") or {}).get(f"{name}:443") or {}
-sys.exit(0 if c.get("TCP", {}).get("443", {}).get("HTTPS") and web.get("Handlers", {}).get("/", {}).get("Proxy") == f"http://cyfr:{port}" else 1)' "$name" "$port"; then
-      ok "Serve is open for $name, forwarding to cyfr:$port"
+    if why="$(serve_config_holds "$config" "$name" "$port")"; then
+      ok "Serve holds exactly the engine's configuration for $name, forwarding to cyfr:$port"
       return 0
     fi
     sleep 0.5
   done
-  fail "Serve is not open for $name within 60 s: ${config:-no configuration}"
+  fail "Serve does not hold the engine's configuration for $name within 60 s: $why"
+}
+
+# Serve closed for the node `$1`: through the tailnet's path, the node
+# answers the control, its PeerAPI at the port its status names, and
+# itself refuses 443; a probe that failed otherwise is no closed Serve.
+expect_serve_closed() {
+  local name="$1" status port control target
+  status="$(docker exec "$(compose ps -q tailscale)" tailscale status --json)"
+  port="$(jget "$status" Self PeerAPIURL 0)"
+  port="${port##*:}"
+  [[ "$port" =~ ^[0-9]+$ ]] || fail "the node's status names no PeerAPI URL: $status"
+  control="$(fetched "$(docker run --rm --network "${RUN}_proof-tailnet" "$STANDIN_IMAGE" \
+    standin fetch --connect "tailscale:$port" "http://$name/" || true)")"
+  [[ "$(jget "$control" status)" =~ ^[0-9]{3}$ ]] || fail "the node's PeerAPI did not answer through the tailnet: ${control:-nothing}"
+  target="$(fetched "$(tailnet_fetch "https://$name/api/health")")"
+  [ "$(jget "$target" error)" = refused ] || fail "through Serve, https://$name/ was not refused by the node: ${target:-nothing}"
 }
 
 # ---------------------------------------------------------------------------
@@ -1058,6 +1101,9 @@ sign_in() {
   signed_in="$(cyfr_fixture person operator@example.com compose-proof-modes)"
   token="$(jget "$signed_in" token)"
   [ -n "$token" ] && [ "$token" != null ] || fail "the release fixture signed nobody in: '$signed_in'"
+  # The person's athanor, by the route segment its pages are under.
+  SEGMENT="$(jget "$signed_in" segment)"
+  [ -n "$SEGMENT" ] && [ "$SEGMENT" != null ] || fail "the release fixture named no athanor for the person: '$signed_in'"
   (umask 077 && printf '%s\n' "$token" >"$WORK/session.token" && printf 'authorization: Bearer %s\n' "$token" >"$WORK/session.headers")
   MCP_VERSION="$(cyfr_rpc 'IO.puts("VERSION=" <> Prima.MCP.Protocol.version())' | sed -n 's/^VERSION=//p')"
   [ -n "$MCP_VERSION" ] || fail "cyfr named no MCP protocol version"
@@ -1163,8 +1209,69 @@ forged_checks() {
   # its answer names (IP=).
   forged_peer "$mode, the proxy listener from an untrusted peer on edge" probe_edge
   case "$mode" in
-    public) forged_peer "$mode, through Caddy" probe_caddy ;;
-    tailnet) forged_peer "$mode, through Serve" probe_serve ;;
+    public)
+      forged_peer "$mode, through Caddy" probe_caddy
+      anonymous_pairs "$mode, through Caddy" anonymous_caddy
+      ;;
+    tailnet)
+      forged_peer "$mode, through Serve" probe_serve
+      anonymous_pairs "$mode, through Serve" anonymous_serve
+      ;;
+  esac
+}
+
+# Every forwarding and identity header a client could squat, each with an
+# attacker's value: the identity headers the pinned serve.go deletes or
+# sets, and the forwarding headers a proxy replaces.
+FORGED_IDENTITY=(
+  "X-Forwarded-For: 203.0.113.9" "X-Forwarded-Proto: https" "X-Forwarded-Host: evil.example"
+  "Forwarded: for=198.51.100.1" "Tailscale-User-Login: operator@example.com" "Tailscale-User-Name: Operator"
+  "Tailscale-User-Profile-Pic: https://evil.example/p.png" "Tailscale-Funnel-Request: ?1"
+  "Tailscale-Headers-Info: https://evil.example/info" 'Tailscale-App-Capabilities: {"evil.example/cap":[{}]}'
+)
+
+# Anonymous requests through mode `$1`'s proxy, the probe `$2` (`$2 mcp|page
+# [header...]`): MCP's subscriptions/listen, which opens a stream to an
+# authenticated caller alone (tools/list is discovery, which an anonymous
+# caller is answered), and the home's root page, each with no credential,
+# and each again with every header FORGED_IDENTITY names, the person's own
+# login among them; each must be refused exactly as the plain anonymous
+# request is (predicates.sh `same_refusal`), so no forged identity header
+# authenticates anyone.
+anonymous_pairs() {
+  local what="$1" ask="$2" kind plain forged_answer why
+  for kind in mcp page; do
+    plain="$("$ask" "$kind")"
+    forged_answer="$("$ask" "$kind" "${FORGED_IDENTITY[@]}")"
+    why="$(same_refusal "$plain" "$forged_answer")" || fail "$what, an anonymous $kind request: $why"
+  done
+  ok "$what: an anonymous MCP request and page request are refused the same with forged identity headers as without"
+}
+anonymous_caddy() {
+  local kind="$1" args=() h
+  shift
+  for h in "$@"; do args+=(-H "$h"); done
+  case "$kind" in
+    mcp)
+      from_network edge -H "host: $(env_value CYFR_HOST)" -H 'content-type: application/json' \
+        -H 'accept: application/json, text/event-stream' -H "mcp-protocol-version: $MCP_VERSION" -H 'mcp-method: subscriptions/listen' \
+        ${args[@]+"${args[@]}"} --data-binary "$(mcp_body subscriptions/listen '{}' "$MCP_VERSION")" "http://caddy:80/mcp"
+      ;;
+    page) from_network edge -H "host: $(env_value CYFR_HOST)" ${args[@]+"${args[@]}"} "http://caddy:80/" ;;
+  esac
+}
+anonymous_serve() {
+  local kind="$1" args=() h
+  shift
+  for h in "$@"; do args+=(--header "$h"); done
+  case "$kind" in
+    mcp)
+      tailnet_fetch --method POST --header 'content-type: application/json' --header 'accept: application/json, text/event-stream' \
+        --header "mcp-protocol-version: $MCP_VERSION" --header 'mcp-method: subscriptions/listen' \
+        --body "$(mcp_body subscriptions/listen '{}' "$MCP_VERSION")" \
+        ${args[@]+"${args[@]}"} "https://$(env_value CYFR_HOST)/mcp"
+      ;;
+    page) tailnet_fetch ${args[@]+"${args[@]}"} "https://$(env_value CYFR_HOST)/" ;;
   esac
 }
 
@@ -1231,7 +1338,7 @@ hsts_checks() {
 # The home at its ts.net name: the origin, MCP, the LiveView socket and
 # the session cookie.
 tsnet_checks() {
-  local name origin answer signed unsigned key
+  local name origin answer signed unsigned key why
   name="$(env_value CYFR_HOST)"
   origin="$(cyfr_rpc 'IO.puts("ORIGIN=" <> Sanctum.origin())' | sed -n 's/^ORIGIN=//p' | tail -1)"
   [ "$origin" = "https://$name" ] || fail "Sanctum.origin() is '$origin', not https://$name"
@@ -1250,12 +1357,8 @@ tsnet_checks() {
   ok "the LiveView socket at https://$name upgrades for its own origin (101) and refuses another (403)"
   unsigned="$(fetched "$(tailnet_fetch "https://$name/")")"
   signed="$(fetched "$(tailnet_fetch --header "cookie: _cyfr_key=$COOKIE" "https://$name/")")"
-  [[ "$(jget "$unsigned" status)" =~ ^[0-9]{3}$ && "$(jget "$signed" status)" =~ ^[0-9]{3}$ ]] ||
-    fail "a page request at https://$name got no answer: '${unsigned:-nothing}', '${signed:-nothing}'"
-  [ "$(jget "$signed" status) $(jget "$signed" headers Location)" != "$(jget "$unsigned" status) $(jget "$unsigned" headers Location)" ] ||
-    fail "the session cookie made no difference at https://$name: both answer $(jget "$signed" status) $(jget "$signed" headers Location)"
-  [ "$(jget "$signed" status)" != 401 ] && [ "$(jget "$signed" status)" != 403 ] || fail "at https://$name the signed-in page answered $(jget "$signed" status)"
-  ok "the session cookie is honoured at https://$name ($(jget "$unsigned" status) without it, $(jget "$signed" status) with it)"
+  why="$(cookie_holds "$unsigned" "$signed" "$SEGMENT")" || fail "at https://$name the session cookie is not the fixture person's: $why"
+  ok "the session cookie is honoured at https://$name: without it / sends to /login, with it to $SEGMENT's chat"
 }
 
 # `cyfr up` refused before anything starts: the stack is down, the
@@ -1685,10 +1788,9 @@ restore_identity_case() {
   await_healthy
   [ "$(serving)" = "{}" ] || fail "Serve is open after the mismatch: $(serving)"
   standin_ca
-  answer="$(fetched "$(tailnet_fetch "https://cyfr-1.proof.ts.net/api/health")")"
-  [ "$(jget "$answer" error)" = refused ] || fail "through Serve the mismatched home answered: $answer"
+  expect_serve_closed cyfr-1.proof.ts.net
   curl -fsS -m 10 "http://$(published)/api/health/ready" >/dev/null || fail "the mismatched home does not answer on this machine"
-  ok "tailnet_node_mismatch: Serve stays closed, and the home answers on this machine alone"
+  ok "tailnet_node_mismatch: Serve stays closed (the node refuses 443 and answers its PeerAPI), and the home answers on this machine alone"
   [ "$(jget "$(docker exec "$(compose ps -q tailscale)" tailscale status --json)" Self ID)" = "$b_id" ] ||
     fail "the state volume no longer holds node B"
   [ ! -e "$WORK/.cyfr/join.json" ] || fail "the restore left join.json: $(cat "$WORK/.cyfr/join.json")"
@@ -1703,14 +1805,17 @@ restore_identity_case() {
   status=0
   cli_run preview reach tailnet || status=$?
   [ "$status" -ne 0 ] || fail "cyfr reach tailnet with no terminal and no --yes made the change: $(tail -n 20 "$WORK/preview.log")"
-  python3 -I -c '
-import sys
-text = open(sys.argv[1]).read()
-a, b = text.find("https://cyfr.proof.ts.net"), text.find("https://cyfr-1.proof.ts.net")
-sys.exit(0 if 0 <= a < b else 1)' "$WORK/preview.log" ||
-    fail "cyfr reach tailnet does not preview https://cyfr.proof.ts.net to https://cyfr-1.proof.ts.net: $(tail -n 20 "$WORK/preview.log")"
+  # The whole preview: A's head as .env holds it, the transition, and B's
+  # head, the node the state holds (predicates.sh `preview_holds`).
+  local old_head new_head why
+  old_head="{\"mode\":\"tailnet\",\"host\":\"cyfr.proof.ts.net\",\"port\":4000,\"public_url\":\"https://cyfr.proof.ts.net\",\"node_id\":\"$a_id\",\"profiles\":[\"tailnet\"]}"
+  new_head="{\"mode\":\"tailnet\",\"host\":\"cyfr-1.proof.ts.net\",\"port\":4000,\"public_url\":\"https://cyfr-1.proof.ts.net\",\"node_id\":\"$b_id\",\"profiles\":[\"tailnet\"]}"
+  # The state holds B by design, as the mismatch above showed.
+  why="$(head_holds "$old_head" "$WORK/.env" "$(docker inspect -f '{{json .Config.Env}}' "$cyfr_id")" "$(running)" -)" ||
+    fail "before the preview the home does not hold A's head: $why"
+  why="$(preview_holds "$WORK/preview.log" "$old_head" "$new_head")" || fail "cyfr reach tailnet's preview is not A's head to B's: $why"
   cmp -s "$WORK/.env" "$WORK/.env.restored" || fail "the declined preview changed .env"
-  ok "cyfr reach tailnet previews https://cyfr.proof.ts.net -> https://cyfr-1.proof.ts.net, and, unconfirmed, changes nothing"
+  ok "cyfr reach tailnet previews exactly A's head to B's (https://cyfr.proof.ts.net -> https://cyfr-1.proof.ts.net), and, unconfirmed, changes nothing"
 }
 
 # ---------------------------------------------------------------------------

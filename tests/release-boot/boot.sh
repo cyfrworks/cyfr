@@ -211,17 +211,33 @@ reach_settings() {
   grep -v -E "^($(paste -sd '|' "$2"))=" "$1" || true
 }
 
+# A refused boot's deadline: `timeout -k BOOT_KILL_AFTER BOOT_DEADLINE`,
+# whose exit is 124 when the release ended at TERM and 137 when it had to
+# be killed.
+BOOT_DEADLINE="${BOOT_DEADLINE:-120}"
+BOOT_KILL_AFTER="${BOOT_KILL_AFTER:-10}"
+
+# Whether a boot that exited `$1`, its output in `$2`, refused with
+# `[Cyfr] FATAL: $3`: a non-zero exit of its own, never the deadline's
+# (124, or 137 for a release killed after it), and the sentence in its
+# output. A release that prints the sentence and then hangs is no refusal.
+boot_refused() {
+  local status="$1" log="$2" sentence="$3"
+  [ "$status" -ne 0 ] && [ "$status" -ne 124 ] && [ "$status" -ne 137 ] &&
+    grep -qF -- "[Cyfr] FATAL: $sentence" "$log"
+}
+
 # The boot of vector `$1` by the release copy `$2` on cell `$3`: the
 # vector's file as the .env at the copy's root, or none, and the cell's
 # settings with the vector's process words over them; the boot's output
-# on stdout and its exit status the boot's, ended at 120 s.
+# on stdout and its exit status the boot's, ended at the deadline.
 reach_vector_boot() {
   local vector="$1" release="$2" cell="$3"
   local -a words=()
   rm -f "$release/.env"
   [ ! -f "$vector/file.env" ] || cp "$vector/file.env" "$release/.env"
   mapfile -d '' -t words <"$vector/process"
-  cell_env "$cell" ${words[@]+"${words[@]}"} timeout -k 10 120 "$release/bin/cyfr" start
+  cell_env "$cell" ${words[@]+"${words[@]}"} timeout -k "$BOOT_KILL_AFTER" "$BOOT_DEADLINE" "$release/bin/cyfr" start
 }
 
 # Sourced (tests/release-boot/names-test.sh, reach-test.sh), the script
@@ -454,7 +470,7 @@ for vector in "$REACH_VECTORS"/*/; do
   reach_vector_boot "$vector" "$REACH_REL" "$REACH" >"$vector/boot.log" 2>&1
   status=$?
   set -e
-  if [ "$status" -eq 0 ] || [ "$status" -eq 124 ] || ! grep -qF -- "[Cyfr] FATAL: $sentence" "$vector/boot.log"; then
+  if ! boot_refused "$status" "$vector/boot.log" "$sentence"; then
     echo "----- the boot log of the vector '$name' -----" >&2
     redact_log "$REACH" <"$vector/boot.log" >&2 || echo "(the log could not be redacted, so it is not printed)" >&2
     fail "the vector '$name' did not refuse the boot with exit non-zero and '[Cyfr] FATAL: $sentence' (exit $status)"
@@ -515,14 +531,14 @@ ns_cyfr() {
     RELEASE_TMP="$NS/tmp" RELEASE_DISTRIBUTION=none \
     ${words[@]+"${words[@]}"} env >"$NS/container.env"
   docker exec -u "$(id -u):$(id -g)" -w "$NS" --env-file "$NS/container.env" "$NS_HOLDER" \
-    timeout -k 10 120 "$REL/bin/cyfr" "$@"
+    timeout -k "$BOOT_KILL_AFTER" "$BOOT_DEADLINE" "$REL/bin/cyfr" "$@"
 }
 
 set +e
 ns_cyfr start >"$NS/refused.log" 2>&1
 status=$?
 set -e
-if [ "$status" -eq 0 ] || [ "$status" -eq 124 ] || ! grep -qF -- "[Cyfr] FATAL: $NS_SENTENCE" "$NS/refused.log"; then
+if ! boot_refused "$status" "$NS/refused.log" "$NS_SENTENCE"; then
   redact_log "$NS" <"$NS/refused.log" >&2 || echo "(the log could not be redacted, so it is not printed)" >&2
   fail "the release bound $NS_ADDRESS in local without the assertion, or refused it otherwise (exit $status)"
 fi

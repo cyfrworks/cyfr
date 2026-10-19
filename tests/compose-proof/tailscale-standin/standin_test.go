@@ -136,6 +136,9 @@ func TestStatusIsTheRunningNodesOwn(t *testing.T) {
 	if s.BackendState != "Running" || s.Self.ID != "nAbC123CNTRL" || s.Self.DNSName != "cyfr.proof.ts.net." || s.AuthURL != "" {
 		t.Errorf("a Running node's status is %+v %+v", s, s.Self)
 	}
+	if strings.Join(s.Self.PeerAPIURL, ",") != "http://100.64.0.7:5252" {
+		t.Errorf("a Running node's PeerAPI URLs are %q, want its address's", s.Self.PeerAPIURL)
+	}
 	if strings.Join(s.CertDomains, ",") != "cyfr.proof.ts.net" {
 		t.Errorf("with HTTPS on the certificate domains are %q, want the node's name without the dot", s.CertDomains)
 	}
@@ -144,7 +147,7 @@ func TestStatusIsTheRunningNodesOwn(t *testing.T) {
 		t.Errorf("with HTTPS off the certificate domains are %q, want none", s.CertDomains)
 	}
 	waiting := statusOf(fresh("cyfr"))
-	if waiting.BackendState != "NeedsLogin" || !strings.HasPrefix(waiting.AuthURL, "https://login.proof.ts.net/a/") || waiting.Self.ID != "" || waiting.CertDomains != nil {
+	if waiting.BackendState != "NeedsLogin" || !strings.HasPrefix(waiting.AuthURL, "https://login.proof.ts.net/a/") || waiting.Self.ID != "" || waiting.CertDomains != nil || waiting.Self.PeerAPIURL != nil {
 		t.Errorf("a machine waiting for its login reports %+v %+v", waiting, waiting.Self)
 	}
 	data, err := json.Marshal(s)

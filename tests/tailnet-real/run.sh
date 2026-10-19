@@ -34,14 +34,16 @@
 #               name its certificate domain; the device reaches
 #               https://<name>/ with the certificate a public authority
 #               issued for the name
-#   serve       under `{}` nothing answers on 443; under the engine's
-#               configuration the upstream gets the client's Host, the
-#               device's tailnet address as X-Forwarded-For, https as
-#               X-Forwarded-Proto, the name as X-Forwarded-Host, no
-#               Forwarded, and none of the device's forged forwarding or
-#               identity headers; back to `{}` Serve closes; and the
-#               container started again with no serve file serves nothing
-#               of what the state held
+#   serve       under `{}` the machine refuses 443 while it answers the
+#               device on its PeerAPI; under the engine's configuration a
+#               forged GET /probe?q=1 answers 200 and the upstream gets it
+#               with the client's Host, the device's tailnet address as
+#               X-Forwarded-For, https as X-Forwarded-Proto, the name as
+#               X-Forwarded-Host, no Forwarded, and of the identity headers
+#               serve.go deletes or sets exactly the device's own, none of
+#               the forged ones (none at all for a tagged device); back to
+#               `{}` Serve closes; and the container started again with no
+#               serve file serves nothing of what the state held
 #   load        userspace networking under load: every one of 200 requests
 #               through Serve, eight at a time, answers 200
 #   node id     the id is the same across a restart of the container on the
@@ -53,10 +55,152 @@
 #               key joins it again as a new node, which Serve serves once its
 #               configuration names it
 #
+# A probe's answer is read as `standin fetch` names it, so a failed probe
+# is never a closed Serve: Serve is closed only where the machine itself
+# refused the device's tunnel to 443 and, in the same ask, answered the
+# device on its PeerAPI through the same proxy (`serve_closed`). What Serve
+# sends the upstream is held whole (`identity_projection`): the method,
+# path, query and Host, the forwarding headers, and every identity header
+# the pinned serve.go deletes or sets, each with the value the device's
+# identity gives it, none for a tagged device. The predicates are
+# tests/tailnet-real/predicates-test.sh's, on canned answers.
+#
 # Usage: TAILNET_REAL_AUTH_KEY_FILE=… TAILNET_REAL_SHARED_LOGIN=… tests/tailnet-real/run.sh
 # Needs docker with a daemon that reaches the internet, go and python3.
 # Everything it makes is named for the run and removed when it ends, its
-# nodes logged out first.
+# nodes logged out first. Sourced, it defines its predicates and runs
+# nothing.
+step() { printf '\n=== %s\n' "$*"; }
+ok() { printf 'ok    %s\n' "$*"; }
+fail() {
+  echo "::error::$*" >&2
+  exit 1
+}
+
+jget() {
+  printf '%s' "$1" | python3 -I -c '
+import json, sys
+value = json.load(sys.stdin)
+for step in sys.argv[1:]:
+    if isinstance(value, list):
+        value = value[int(step)] if -len(value) <= int(step) < len(value) else None
+    else:
+        value = value.get(step) if isinstance(value, dict) else None
+print(value if isinstance(value, str) else json.dumps(value))' "${@:2}"
+}
+
+# Whether a Serve port is closed, from the device's two answers of one ask
+# (`standin fetch` JSON): `$1` its PeerAPI control, which must be an answer
+# of the machine's, any status, and `$2` the Serve port, which the machine
+# itself must have refused (error refused). A probe that failed at TLS, at
+# DNS, at the device's proxy or anywhere else is no closed Serve. On
+# failure, says why on stdout.
+serve_closed() {
+  python3 -I - "$1" "$2" <<'PY'
+import json, sys
+def parsed(text):
+    try:
+        value = json.loads(text)
+    except ValueError:
+        return {}
+    return value if isinstance(value, dict) else {}
+control, target = parsed(sys.argv[1]), parsed(sys.argv[2])
+if not isinstance(control.get("status"), int):
+    sys.exit(print(f"the machine's PeerAPI did not answer the device: {sys.argv[1] or 'nothing'}") or 1)
+if target.get("error") != "refused":
+    sys.exit(print(f"the Serve port was not refused by the machine: {sys.argv[2] or 'nothing'}") or 1)
+PY
+}
+
+# Whether what Serve sent the upstream for the device's forged request
+# GET /probe?q=1 to `$4` is the pinned image's projection, from the
+# device's answer `$1` (`standin fetch` JSON, its body the echo's), the
+# machine's `tailscale status --json` `$2` and the device's address `$3`:
+# a 200; GET, /probe, q=1 and the Host `$4`; X-Forwarded-For the device's
+# address, -Proto https and -Host `$4`, each alone, and no Forwarded; and,
+# of Tailscale-User-Login, -Name, -Profile-Pic, Tailscale-Funnel-Request,
+# Tailscale-Headers-Info and Tailscale-App-Capabilities, for a device of a
+# user exactly the first two Q-encoded as serve.go encodes them
+# (encTailscaleHeaderValue), its profile picture URL and the headers-info
+# link, from the user the machine's status names for the device, and for a
+# tagged device none. On failure, says what differs on stdout.
+identity_projection() {
+  python3 -I - "$1" "$2" "$3" "$4" <<'PY'
+import json, sys
+UPPER = "0123456789ABCDEF"
+def q_encoded(v):
+    # mime.QEncoding.Encode("utf-8", v), as Go writes it.
+    if not any((c < " " or c > "~") and c != "\t" for c in v):
+        return v
+    out, length, word = [], 0, "=?utf-8?q?"
+    for ch in v:
+        b = ch.encode("utf-8")
+        n = 1 if len(b) == 1 and " " <= ch <= "~" and ch not in "=?_" else 3 * len(b)
+        if length + n > 75 - len("=?UTF-8?q?") - len("?="):
+            word += "?= =?utf-8?q?"
+            length = 0
+        for x in b:
+            c = chr(x)
+            word += "_" if c == " " else c if "!" <= c <= "~" and c not in "=?_" else "=" + UPPER[x >> 4] + UPPER[x & 15]
+        length += n
+    return word + "?="
+FORWARDING = ["X-Forwarded-For", "X-Forwarded-Proto", "X-Forwarded-Host", "Forwarded"]
+IDENTITY = ["Tailscale-User-Login", "Tailscale-User-Name", "Tailscale-User-Profile-Pic",
+            "Tailscale-Funnel-Request", "Tailscale-Headers-Info", "Tailscale-App-Capabilities"]
+problems = []
+try:
+    answer, status = json.loads(sys.argv[1]), json.loads(sys.argv[2])
+except ValueError as error:
+    sys.exit(print(f"no answer or status to read: {error}") or 1)
+device_ip, name = sys.argv[3], sys.argv[4]
+if answer.get("status") != 200:
+    sys.exit(print(f"Serve answered {answer.get('status', answer.get('error'))}, not 200: {sys.argv[1]}") or 1)
+try:
+    seen = json.loads(answer.get("body") or "")
+except ValueError:
+    sys.exit(print(f"the upstream's answer is not the echo's: {answer.get('body')!r}") or 1)
+for key, want in (("method", "GET"), ("path", "/probe"), ("query", "q=1"), ("host", name)):
+    if seen.get(key) != want:
+        problems.append(f"{key} reached the upstream as {seen.get(key)!r}, not {want!r}")
+peers = [p for p in (status.get("Peer") or {}).values() if device_ip in (p.get("TailscaleIPs") or [])]
+if len(peers) != 1:
+    sys.exit(print(f"the machine's status names {len(peers)} peers at {device_ip}, not one") or 1)
+peer = peers[0]
+want = {"X-Forwarded-For": [device_ip], "X-Forwarded-Proto": ["https"], "X-Forwarded-Host": [name]}
+if not peer.get("Tags"):
+    user = (status.get("User") or {}).get(str(peer.get("UserID")))
+    if not user:
+        sys.exit(print(f"the machine's status names no user {peer.get('UserID')} for the device") or 1)
+    want.update({
+        "Tailscale-User-Login": [q_encoded(user.get("LoginName", ""))],
+        "Tailscale-User-Name": [q_encoded(user.get("DisplayName", ""))],
+        "Tailscale-User-Profile-Pic": [user.get("ProfilePicURL", "")],
+        "Tailscale-Headers-Info": ["https://tailscale.com/s/serve-headers"],
+    })
+headers = seen.get("headers") or {}
+got = {k: headers[k] for k in FORWARDING + IDENTITY if k in headers}
+if got != want:
+    problems.append(f"the forwarding and identity headers reached the upstream as {json.dumps(got, sort_keys=True)}, not {json.dumps(want, sort_keys=True)}")
+for p in problems:
+    print(p)
+sys.exit(1 if problems else 0)
+PY
+}
+
+# The forged request the identity probe sends: every forwarding and
+# identity header a client could squat, each with an attacker's value.
+FORGED_HEADERS=(
+  --header "X-Forwarded-For: 203.0.113.9" --header "X-Forwarded-Proto: http"
+  --header "X-Forwarded-Host: evil.example" --header "Forwarded: for=198.51.100.1"
+  --header "Tailscale-User-Login: admin@evil.example" --header "Tailscale-User-Name: Forged"
+  --header "Tailscale-User-Profile-Pic: https://evil.example/p.png" --header "Tailscale-Funnel-Request: ?1"
+  --header "Tailscale-Headers-Info: https://evil.example/info" --header 'Tailscale-App-Capabilities: {"evil.example/cap":[{}]}'
+)
+
+# Sourced (tests/tailnet-real/predicates-test.sh), the script defines the
+# functions above and runs nothing.
+if [ "${BASH_SOURCE[0]}" != "$0" ]; then return 0; fi
+
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
@@ -70,12 +214,6 @@ SHARING_WAIT=600
 JOIN_ENV=(-e TS_USERSPACE=true -e TS_STATE_DIR=/var/lib/tailscale -e TS_AUTH_ONCE=true
   -e TS_ACCEPT_DNS=false -e TS_SOCKET=/var/run/tailscale/tailscaled.sock)
 
-step() { printf '\n=== %s\n' "$*"; }
-ok() { printf 'ok    %s\n' "$*"; }
-fail() {
-  echo "::error::$*" >&2
-  exit 1
-}
 
 key_file="${TAILNET_REAL_AUTH_KEY_FILE:-}"
 shared_login="${TAILNET_REAL_SHARED_LOGIN:-}"
@@ -114,17 +252,6 @@ trap cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
-jget() {
-  printf '%s' "$1" | python3 -I -c '
-import json, sys
-value = json.load(sys.stdin)
-for step in sys.argv[1:]:
-    if isinstance(value, list):
-        value = value[int(step)] if -len(value) <= int(step) < len(value) else None
-    else:
-        value = value.get(step) if isinstance(value, dict) else None
-print(value if isinstance(value, str) else json.dumps(value))' "${@:2}"
-}
 
 # `tailscale status --json` of container `$1` once BackendState is `$2`,
 # within `$3` seconds.
@@ -158,13 +285,30 @@ node() {
   done
 }
 
-# No answer from https://`$1`/ through the device, at each of five asks two
-# seconds apart: what a configuration Serve must not apply leaves.
+# The machine's PeerAPI URL on its IPv4 tailnet address, from its status
+# `$1`: the control every Serve-closed ask makes beside the Serve port.
+peer_api() {
+  python3 -I -c '
+import json, re, sys
+urls = [u for u in (json.loads(sys.argv[1]).get("Self") or {}).get("PeerAPIURL") or []
+        if re.fullmatch(r"http://\d+\.\d+\.\d+\.\d+:\d+", u)]
+sys.exit(print(urls[0]) if urls else 1)' "$1"
+}
+
+# Whether Serve is closed for https://`$1`/ now: the device's ask of the
+# machine's PeerAPI `$2` and of the Serve port, through the same proxy
+# (`serve_closed`); says why not on stdout.
+closed_now() {
+  serve_closed "$(device "$2/")" "$(device "https://$1/")"
+}
+
+# Serve closed for https://`$1`/ at each of five asks two seconds apart,
+# the machine answering its PeerAPI `$2` at each: what a configuration
+# Serve must not apply leaves.
 serves_nothing() {
-  local i answer
+  local i why
   for i in 1 2 3 4 5; do
-    answer="$(device "https://$1/")"
-    [ -n "$(jget "$answer" error)" ] && [ "$(jget "$answer" error)" != null ] || return 1
+    why="$(closed_now "$1" "$2")" || { echo "$why"; return 1; }
     [ "$i" -eq 5 ] || sleep 2
   done
 }
@@ -209,38 +353,30 @@ name="${name%.}"
 [[ "$id" =~ ^[A-Za-z0-9._-]{1,128}$ ]] || fail "the machine's node id '$id' is outside CYFR's grammar"
 [ "$(jget "$status" CertDomains 0)" = "$name" ] || fail "the machine's certificate domains are $(jget "$status" CertDomains), not $name: HTTPS certificates must be on for the tailnet"
 device_ip="$(jget "$device_status" Self TailscaleIPs 0)"
-ok "the machine is $name ($id), its certificate domain its name; the device is $device_ip"
+peerapi="$(peer_api "$status")" || fail "the machine's status names no PeerAPI URL on an IPv4 address: $(jget "$status" Self PeerAPIURL)"
+ok "the machine is $name ($id), its certificate domain its name, its PeerAPI $peerapi; the device is $device_ip"
 
 step "serve: nothing under {}, the engine's configuration forwards as Serve does"
-serves_nothing "$name" || fail "under {}, Serve answers https://$name/"
-ok "under {}, nothing answers https://$name/"
+why="$(serves_nothing "$name" "$peerapi")" || fail "under {}, Serve is not closed for https://$name/: $why"
+ok "under {}, the machine refuses https://$name/ and answers its PeerAPI"
 serve_file "$WORK/serve/serve.json" "$CONFIG"
 closes=$((SECONDS + 120))
 until [ "$(jget "$(device "https://$name/probe")" status)" = 200 ]; do
   [ "$SECONDS" -lt "$closes" ] || fail "under the configuration, https://$name/ did not answer 200 within 120 s"
   sleep 2
 done
-answer="$(device --header "X-Forwarded-For: 203.0.113.9" --header "X-Forwarded-Proto: http" \
-  --header "X-Forwarded-Host: evil.example" --header "Forwarded: for=198.51.100.1" \
-  --header "Tailscale-User-Login: admin@evil.example" --header "Tailscale-User-Name: Forged" \
-  "https://$name/probe?q=1")"
-seen="$(jget "$answer" body)"
-[ "$(jget "$seen" host)" = "$name" ] || fail "Host reached the upstream as $(jget "$seen" host), not $name"
-[ "$(jget "$seen" headers X-Forwarded-For)" = "[\"$device_ip\"]" ] || fail "X-Forwarded-For reached the upstream as $(jget "$seen" headers X-Forwarded-For), not the device's $device_ip alone"
-[ "$(jget "$seen" headers X-Forwarded-Proto)" = '["https"]' ] || fail "X-Forwarded-Proto reached the upstream as $(jget "$seen" headers X-Forwarded-Proto)"
-[ "$(jget "$seen" headers X-Forwarded-Host)" = "[\"$name\"]" ] || fail "X-Forwarded-Host reached the upstream as $(jget "$seen" headers X-Forwarded-Host)"
-[ "$(jget "$seen" headers Forwarded)" = null ] || fail "the device's Forwarded reached the upstream"
-login="$(jget "$seen" headers Tailscale-User-Login 0)"
-[ "$login" != admin@evil.example ] || fail "the device's forged Tailscale-User-Login reached the upstream"
-[ "$(jget "$seen" headers Tailscale-User-Name 0)" != Forged ] || fail "the device's forged Tailscale-User-Name reached the upstream"
-ok "Serve keeps Host, sets X-Forwarded-For to $device_ip, -Proto and -Host, drops Forwarded, and passes no forged identity (it set: ${login:-none, a tagged device})"
+answer="$(device "${FORGED_HEADERS[@]}" "https://$name/probe?q=1")"
+machine_status="$(docker exec "$RUN-machine" tailscale status --json)"
+why="$(identity_projection "$answer" "$machine_status" "$device_ip" "$name")" ||
+  fail "what Serve sent the upstream is not the pinned image's: $why"
+ok "Serve answers 200, keeps GET /probe?q=1 and the Host, sets X-Forwarded-For to $device_ip, -Proto and -Host, drops Forwarded, and sends exactly the device's own identity headers, none of the forged ones"
 serve_file "$WORK/serve/serve.json" '{}'
 closes=$((SECONDS + 60))
-until [ -n "$(jget "$(device "https://$name/")" error | grep -v '^null$' || true)" ]; do
-  [ "$SECONDS" -lt "$closes" ] || fail "after {}, https://$name/ still answers"
+until why="$(closed_now "$name" "$peerapi")"; do
+  [ "$SECONDS" -lt "$closes" ] || fail "after {}, Serve is not closed for https://$name/: $why"
   sleep 2
 done
-ok "{} closes Serve"
+ok "{} closes Serve: the machine refuses https://$name/ and answers its PeerAPI"
 
 step "node id: the same across a restart; no serve file serves nothing the state held"
 serve_file "$WORK/serve/serve.json" "$CONFIG"
@@ -255,7 +391,8 @@ docker run -d --name "$RUN-machine" --network "$RUN-net" -v "$RUN-machine-state:
   -v "$WORK/serve:/serve:ro" "${JOIN_ENV[@]}" -e TS_SERVE_CONFIG=/serve/serve.json "$IMAGE" >/dev/null
 status="$(await_state "$RUN-machine" Running 180)"
 [ "$(jget "$status" Self ID)" = "$id" ] || fail "the restarted machine is $(jget "$status" Self ID), not $id"
-serves_nothing "$name" || fail "started again with no serve file, the configuration the state held answers"
+peerapi="$(peer_api "$status")" || fail "the restarted machine's status names no PeerAPI URL on an IPv4 address"
+why="$(serves_nothing "$name" "$peerapi")" || fail "started again with no serve file, Serve is not closed for https://$name/: $why"
 ok "the restarted machine keeps its id $id, and with no serve file serves nothing"
 
 step "load: $LOAD_REQUESTS requests through Serve, $LOAD_PARALLEL at a time"
