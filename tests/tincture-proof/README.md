@@ -24,7 +24,11 @@ harness (`tests/browser/`):
   passed the frame's checks and the gate answered it; and that the second
   open's assets came from the browser's cache (no request, or a conditional
   one), media aside: WebKit's network cache stores no media response, so it
-  fetches the sound again whatever the headers say. The pointer lock and
+  fetches the sound again whatever the headers say. Chromium caches none of
+  the frame's assets: it keys its HTTP cache by the requesting frame's
+  site, which a frame without `allow-same-origin` has none of, so the proof
+  holds it to fetching them again (`ASSETS_CACHED`), as a change of answer
+  is read before it is accepted. The pointer lock and
   fullscreen a click and a key in the frame obtain are recorded, not held.
 - **Measured.** Frame-open (launch in the shell to the game's ready: first
   rendered frame after physics stepped and the sound decoded) and asset-fetch
