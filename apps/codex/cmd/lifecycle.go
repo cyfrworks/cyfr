@@ -1156,7 +1156,7 @@ func withBootFatal(ctx context.Context, e stackEngine, head reach.Head, startErr
 	if fatal == "" {
 		return startErr
 	}
-	return fmt.Errorf("%w\ncyfr refused to boot, and its log says why:\n  %s", startErr, fatal)
+	return fmt.Errorf("%w\ncyfr refused to boot, and its log says why:\n  %s", startErr, e.Redactor().Text(fatal))
 }
 
 var downCmd = &cobra.Command{

@@ -135,6 +135,8 @@ func (e *Engine) Lock(holder string) (unlock func(), err error) {
 // Docker is the engine's docker runner, for a command that holds the lock
 // and makes docker calls of its own (update's snapshot and pulls,
 // restore's copies): each call keeps the lock as the engine's own do.
+// What such a call writes, and what the command says of it, passes the
+// engine's redaction (Redactor) before the command prints or returns it.
 func (e *Engine) Docker() Docker { return e.docker }
 
 // ComposeArgs answers the arguments, after `docker`, of a compose command

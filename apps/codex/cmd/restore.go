@@ -407,10 +407,10 @@ func (r *restorer) run() error {
 	// Putting the parts back and declaring the restore run to their end, so
 	// the cell is never left half-restored by an interrupt.
 	if err := r.putParts(); err != nil {
-		return fmt.Errorf("Putting the snapshot back failed: %v.\nThe stack is left stopped and is not declared restored, so it stays barred from starting (%s in .env); docker-compose.yml and .env are the snapshot's. Fix the cause and run 'cyfr restore %s' again, which puts every part back from the start", r.redact(err.Error()), restoreBarrier, r.snap.dir)
+		return fmt.Errorf("Putting the snapshot back failed: %v.\nThe stack is left stopped and is not declared restored, so it stays barred from starting (%s in .env); docker-compose.yml and .env are the snapshot's. Fix the cause and run 'cyfr restore %s' again, which puts every part back from the start", r.redactor().Text(err.Error()), restoreBarrier, r.snap.dir)
 	}
 	if err := r.declare(); err != nil {
-		return fmt.Errorf("Every part of the snapshot is back, but the restore could not be declared: %v.\nThe stack is left stopped and barred from starting undeclared (%s in .env). Fix the cause and run 'cyfr restore %s' again, or declare it by hand with:\n  docker compose run --rm --no-deps -T -e %s= cyfr bin/cyfr eval '%s'\nthen take the %s line out of .env", r.redact(err.Error()), restoreBarrier, r.snap.dir, restoreBarrier, markRestoreExpr, restoreBarrier)
+		return fmt.Errorf("Every part of the snapshot is back, but the restore could not be declared: %v.\nThe stack is left stopped and barred from starting undeclared (%s in .env). Fix the cause and run 'cyfr restore %s' again, or declare it by hand with:\n  docker compose run --rm --no-deps -T -e %s= cyfr bin/cyfr eval '%s'\nthen take the %s line out of .env", r.redactor().Text(err.Error()), restoreBarrier, r.snap.dir, restoreBarrier, markRestoreExpr, restoreBarrier)
 	}
 	if err := r.lowerBarrier(); err != nil {
 		return fmt.Errorf("The restore %s is declared, but %s could not be taken out of .env (%v); take that line out of .env and start the stack with 'cyfr up'", r.restoreID, restoreBarrier, err)
@@ -451,7 +451,7 @@ func (r *restorer) run() error {
 // refuseStopped puts docker-compose.yml and .env back as they were and
 // refuses with reason, the stack left stopped.
 func (r *restorer) refuseStopped(reason error) error {
-	message := fmt.Sprintf("%v.\nThe stack is left stopped and nothing of the snapshot was put back", r.redact(reason.Error()))
+	message := fmt.Sprintf("%v.\nThe stack is left stopped and nothing of the snapshot was put back", r.redactor().Text(reason.Error()))
 	if err := r.putBackHeld(); err != nil {
 		return fmt.Errorf("%s; docker-compose.yml and .env could not be put back as they were (%v), so they may be the snapshot's, and the stack stays barred from starting until 'cyfr restore %s' runs again", message, err, r.snap.dir)
 	}
@@ -719,10 +719,10 @@ func (r *restorer) readRestoredConfig() error {
 		if strings.ContainsAny(c.pgURL, "\r\n") {
 			return refuse("its CYFR_DATABASE_URL holds a line break, which no database URL holds")
 		}
-		r.secrets = append(r.secrets, c.pgURL)
+		r.redactor().Hold(c.pgURL)
 		if parsed, err := url.Parse(c.pgURL); err == nil && parsed.User != nil {
 			if password, ok := parsed.User.Password(); ok {
-				r.secrets = append(r.secrets, password)
+				r.redactor().Hold(password)
 			}
 		}
 	default:
@@ -796,10 +796,10 @@ func (r *restorer) readRestoredConfig() error {
 		raw := cyfr.Environment[name]
 		has := raw != nil && strings.TrimSpace(*raw) != ""
 		if has {
-			r.secrets = append(r.secrets, *raw)
+			r.redactor().Hold(*raw)
 		}
 		if inSnapshot {
-			r.secrets = append(r.secrets, want)
+			r.redactor().Hold(want)
 		}
 		if has != inSnapshot || has && *raw != want {
 			return refuse("its %s is not the one the snapshot's keyring file (%s) holds; set it as that file holds it, so the restored data can be read", name, r.snap.path("keyring"))
@@ -1093,9 +1093,9 @@ func (r *restorer) restorePostgres() error {
 		Stdout:   io.Discard,
 		Stderr:   &stderr,
 	})
-	err = callFailure(res, err)
+	err = callFailure(r.redactor(), res, err)
 	if stderr.Len() > 0 {
-		io.WriteString(r.errOut, r.redact(stderr.String()))
+		io.WriteString(r.errOut, r.redactor().Text(stderr.String()))
 	}
 	if err != nil {
 		return fmt.Errorf("pg_restore in %s failed (%v); its transaction rolled back", r.pgImage(), err)

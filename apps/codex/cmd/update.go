@@ -251,9 +251,10 @@ type updater struct {
 	// call of the update runs with.
 	engine stackEngine
 	head   reach.Head
-	// secrets are the values held from the effective environment: written
-	// only into the snapshot, and taken out of any child output cyfr echoes.
-	secrets []string
+	// redaction is the engine's redaction pass for what the update says of
+	// its docker calls (reach.Redactor): .env's values, and the values held
+	// from the effective environment, written only into the snapshot.
+	redaction *reach.Redactor
 
 	manifest *release.Manifest
 	compose  *composePlan
@@ -338,7 +339,7 @@ func (u *updater) run() error {
 		if u.snapshot != "" {
 			where = "the partial snapshot is " + u.snapshot
 		}
-		return fmt.Errorf("The snapshot failed: %v.\nThe stack is left stopped and %s; %s. Fix the cause and run 'cyfr update' again, or start the old stack with 'cyfr up'", u.redact(err.Error()), u.composeAsRead(), where)
+		return fmt.Errorf("The snapshot failed: %v.\nThe stack is left stopped and %s; %s. Fix the cause and run 'cyfr update' again, or start the old stack with 'cyfr up'", u.redactor().Text(err.Error()), u.composeAsRead(), where)
 	}
 	if u.ctx.Err() != nil {
 		return u.restartOld(fmt.Errorf("cyfr update was interrupted during the snapshot (complete at %s)", u.snapshot))
@@ -351,7 +352,7 @@ func (u *updater) run() error {
 	}
 	if err := u.switchImages(); err != nil {
 		if errors.Is(err, errComposeLeftSwitched) {
-			return fmt.Errorf("%v.\nThe stack is left stopped; restore the snapshot of release %s with:\n  cyfr restore %s", u.redact(err.Error()), u.oldRelease, u.snapshot)
+			return fmt.Errorf("%v.\nThe stack is left stopped; restore the snapshot of release %s with:\n  cyfr restore %s", u.redactor().Text(err.Error()), u.oldRelease, u.snapshot)
 		}
 		return u.revertScaffold(err)
 	}
@@ -671,13 +672,30 @@ func (u *updater) composeArgs(ctx context.Context, args ...string) ([]string, er
 
 // docker runs one docker call through the engine's runner under ctx, held
 // to ctx's deadline, stdin on its standard input, its stdout into stdout
-// (cyfr's own when nil) and its stderr into cyfr's.
+// (cyfr's own when nil) and its stderr into cyfr's, what reaches cyfr's
+// own streams redacted a line at a time.
 func (u *updater) docker(ctx context.Context, stdin io.Reader, stdout io.Writer, args ...string) error {
-	if stdout == nil {
-		stdout = u.out
+	errOut := u.redactor().Writer(u.errOut)
+	defer errOut.Flush()
+	switch {
+	case stdout != nil:
+	case sameWriter(u.out, u.errOut):
+		// One writer behind both, as exec gives a child's two streams one.
+		stdout = errOut
+	default:
+		out := u.redactor().Writer(u.out)
+		defer out.Flush()
+		stdout = out
 	}
-	res, err := u.engine.Docker().Run(ctx, reach.Call{Args: args, Deadline: callDeadline(ctx), Stdin: stdin, Stdout: stdout, Stderr: u.errOut})
-	return callFailure(res, err)
+	res, err := u.engine.Docker().Run(ctx, reach.Call{Args: args, Deadline: callDeadline(ctx), Stdin: stdin, Stdout: stdout, Stderr: errOut})
+	return callFailure(u.redactor(), res, err)
+}
+
+// sameWriter reports whether a and b are one writer, as os/exec asks of a
+// child's streams; writers it cannot compare are two.
+func sameWriter(a, b io.Writer) (same bool) {
+	defer func() { recover() }()
+	return a == b
 }
 
 // composeDocker runs the compose command args under the update's head as
@@ -691,13 +709,13 @@ func (u *updater) composeDocker(ctx context.Context, args ...string) error {
 }
 
 // dockerOutput runs docker as docker does and answers its stdout; its
-// stderr is echoed after the run with every held secret taken out.
+// stderr is echoed after the run, redacted.
 func (u *updater) dockerOutput(ctx context.Context, stdin io.Reader, args ...string) (string, error) {
 	res, err := u.engine.Docker().Run(ctx, reach.Call{Args: args, Deadline: callDeadline(ctx), Stdin: stdin})
 	if len(res.Stderr) > 0 {
-		io.WriteString(u.errOut, u.redact(string(res.Stderr)))
+		io.WriteString(u.errOut, u.redactor().Text(string(res.Stderr)))
 	}
-	return string(res.Stdout), callFailure(res, err)
+	return string(res.Stdout), callFailure(u.redactor(), res, err)
 }
 
 // composeOutput runs the compose command args under the update's head as
@@ -720,11 +738,11 @@ func callDeadline(ctx context.Context) time.Duration {
 	return composeRunTimeout
 }
 
-// callFailure is a docker call's failure: the runner's error, or the exit
-// status the call ended with.
-func callFailure(res reach.Result, err error) error {
+// callFailure is a docker call's failure: the runner's error, redacted, or
+// the exit status the call ended with.
+func callFailure(redactor *reach.Redactor, res reach.Result, err error) error {
 	if err != nil {
-		return err
+		return redactor.Err(err)
 	}
 	if res.ExitCode != 0 {
 		return fmt.Errorf("exit status %d", res.ExitCode)
@@ -743,14 +761,17 @@ func pgURLInput(url string) io.Reader {
 // standard input into pgURLVariable.
 const pgReadURL = `IFS= read -r ` + pgURLVariable + ` && `
 
-// redact takes every held secret out of text.
-func (u *updater) redact(text string) string {
-	for _, secret := range u.secrets {
-		if secret != "" {
-			text = strings.ReplaceAll(text, secret, "[redacted]")
+// redactor is the update's redaction pass, the engine's own for the
+// project, taken from the engine at first use.
+func (u *updater) redactor() *reach.Redactor {
+	if u.redaction == nil {
+		if u.engine != nil {
+			u.redaction = u.engine.Redactor()
+		} else {
+			u.redaction = reach.NewRedactor(".")
 		}
 	}
-	return text
+	return u.redaction
 }
 
 // detached answers a context for a step from the stop on: free of the
@@ -945,10 +966,10 @@ func (u *updater) readConfig() error {
 		if strings.ContainsAny(c.pgURL, "\r\n") {
 			return errors.New("CYFR_DATABASE_URL holds a line break, which no database URL holds; nothing was changed")
 		}
-		u.secrets = append(u.secrets, c.pgURL)
+		u.redactor().Hold(c.pgURL)
 		if parsed, err := url.Parse(c.pgURL); err == nil && parsed.User != nil {
 			if password, ok := parsed.User.Password(); ok {
-				u.secrets = append(u.secrets, password)
+				u.redactor().Hold(password)
 			}
 		}
 	default:
@@ -993,7 +1014,7 @@ func (u *updater) readConfig() error {
 		if raw == nil || strings.TrimSpace(*raw) == "" {
 			continue
 		}
-		u.secrets = append(u.secrets, *raw)
+		u.redactor().Hold(*raw)
 		keyring[name] = *raw
 	}
 	if len(keyring) == 0 {
@@ -1199,7 +1220,7 @@ func (u *updater) writeScaffold() error {
 // stack must not start under the new release's files.
 func (u *updater) revertScaffold(reason error) error {
 	if err := putScaffoldBack(u.snapshot, u.scaffold.Managed()); err != nil {
-		return fmt.Errorf("%v.\nThe scaffold files could not be put back from the snapshot (%v), so the stack is left stopped; restore the snapshot with:\n  cyfr restore %s", u.redact(reason.Error()), err, u.snapshot)
+		return fmt.Errorf("%v.\nThe scaffold files could not be put back from the snapshot (%v), so the stack is left stopped; restore the snapshot with:\n  cyfr restore %s", u.redactor().Text(reason.Error()), err, u.snapshot)
 	}
 	return u.restartOld(fmt.Errorf("%v; the scaffold files were put back from the snapshot %s", reason, u.snapshot))
 }
@@ -1600,9 +1621,9 @@ func (u *updater) dumpPostgres(file string) error {
 		Stderr:   &stderr,
 	})
 	if stderr.Len() > 0 {
-		io.WriteString(u.errOut, u.redact(stderr.String()))
+		io.WriteString(u.errOut, u.redactor().Text(stderr.String()))
 	}
-	if err := errors.Join(callFailure(res, err), f.Sync(), f.Close()); err != nil {
+	if err := errors.Join(callFailure(u.redactor(), res, err), f.Sync(), f.Close()); err != nil {
 		return fmt.Errorf("pg_dump in %s failed: %w", u.pgImage(), err)
 	}
 	return nil
@@ -1766,23 +1787,23 @@ func (u *updater) start(cause string) error {
 // when no byte has been migrated, and refuses with reason.
 func (u *updater) restartOld(reason error) error {
 	if len(u.running) == 0 {
-		return fmt.Errorf("%v.\nThe stack was not running before the update; %s", u.redact(reason.Error()), u.composeAsRead())
+		return fmt.Errorf("%v.\nThe stack was not running before the update; %s", u.redactor().Text(reason.Error()), u.composeAsRead())
 	}
 	// The old stack starts again only under the compose file the update
 	// read: one that changed since is the person's, kept as it is, and the
 	// stack stays stopped rather than start under a file nothing checked.
 	if current, err := os.ReadFile(u.compose.path); err != nil || !bytes.Equal(current, u.compose.original) {
-		return fmt.Errorf("%v.\nThe old stack is left stopped: %s, so it is not started under it. Start the stack with 'cyfr up' once docker-compose.yml is the configuration you mean to run", u.redact(reason.Error()), u.composeAsRead())
+		return fmt.Errorf("%v.\nThe old stack is left stopped: %s, so it is not started under it. Start the stack with 'cyfr up' once docker-compose.yml is the configuration you mean to run", u.redactor().Text(reason.Error()), u.composeAsRead())
 	}
 	fmt.Fprintln(u.out, "Starting the old stack again...")
 	err := u.start("update")
 	if local := (startedLocally{}); errors.As(err, &local) {
-		return fmt.Errorf("%v.\nThe old stack was started again, on this machine alone; docker-compose.yml is unchanged. %v", u.redact(reason.Error()), err)
+		return fmt.Errorf("%v.\nThe old stack was started again, on this machine alone; docker-compose.yml is unchanged. %v", u.redactor().Text(reason.Error()), err)
 	}
 	if err != nil {
-		return fmt.Errorf("%v.\nThe old stack did not start again (%v); docker-compose.yml is unchanged, so 'cyfr up' starts it", u.redact(reason.Error()), err)
+		return fmt.Errorf("%v.\nThe old stack did not start again (%v); docker-compose.yml is unchanged, so 'cyfr up' starts it", u.redactor().Text(reason.Error()), err)
 	}
-	return fmt.Errorf("%v.\nThe old stack was started again; docker-compose.yml is unchanged", u.redact(reason.Error()))
+	return fmt.Errorf("%v.\nThe old stack was started again; docker-compose.yml is unchanged", u.redactor().Text(reason.Error()))
 }
 
 // composeAsRead says whether the compose file is still the bytes the
