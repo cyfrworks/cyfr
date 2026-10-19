@@ -88,6 +88,106 @@ func TestRealComposeCheckStackRefusesAnOverrideSettingAHeadKey(t *testing.T) {
 	}
 }
 
+// Provenance reads names, not values, against what real compose makes
+// of them: a name written with `$` in a service's environment is refused
+// as written, compose_override_refused naming the file, the service and
+// the name, whatever compose resolves it to (CYFR_HOST through .env's own
+// nested interpolation, or a literal name compose leaves alone); a value
+// is not read, and a non-reach key whose value interpolates a variable
+// set nowhere passes, as compose takes it. A mapping compose refuses is
+// never started.
+func TestRealComposeProvenanceReadsNamesNotValues(t *testing.T) {
+	requireCompose(t)
+	home := func(t *testing.T, env, override string) *Engine {
+		t.Helper()
+		dir := t.TempDir()
+		writeFile(t, filepath.Join(dir, ".env"), []byte("CYFR_REACH=local\nCYFR_HOST=localhost\nCYFR_PORT=4000\n"+env))
+		writeFile(t, filepath.Join(dir, "compose.yml"), []byte("services:\n  cyfr:\n    image: busybox:latest\n    env_file: .env\n"))
+		writeFile(t, filepath.Join(dir, "compose.override.yml"), []byte(override))
+		e, err := Open(dir, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return e
+	}
+	flattened := func(t *testing.T, e *Engine) (map[string]string, error) {
+		t.Helper()
+		h, err := e.Head()
+		if err != nil {
+			t.Fatal(err)
+		}
+		content, err := e.flatten(bg, h)
+		if err != nil {
+			return nil, err
+		}
+		c, err := parseConfig(content)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return cyfrEnv(c), nil
+	}
+	refused := func(t *testing.T, e *Engine, key string) {
+		t.Helper()
+		want := map[string]string{"file": "compose.override.yml", "service": "cyfr", "key": key, "why": "interpolated"}
+		var r *Refusal
+		if err := e.CheckStack(bg); !asRefusal(err, &r) || r.Code != "compose_override_refused" || !mapsEqual(r.Payload, want) || r.Message() != overrideNames("compose.override.yml", "cyfr", key) {
+			t.Fatalf("CheckStack answered %v, want compose_override_refused %v", err, want)
+		}
+	}
+
+	t.Run("nested interpolation", func(t *testing.T) {
+		e := home(t, "PART=HOST\nHOSTKEY=CYFR_${PART}\n", "services:\n  cyfr:\n    environment:\n      - ${HOSTKEY}=localhost\n")
+		env, err := flattened(t, e)
+		if err != nil || env["HOSTKEY"] != "CYFR_HOST" || env["CYFR_HOST"] != "localhost" {
+			t.Fatalf("compose resolves HOSTKEY=%q, CYFR_HOST=%q: %v", env["HOSTKEY"], env["CYFR_HOST"], err)
+		}
+		refused(t, e, "${HOSTKEY}")
+	})
+	t.Run("literal mapping key", func(t *testing.T) {
+		e := home(t, "HOSTKEY=CYFR_HOST\n", "services:\n  cyfr:\n    environment:\n      ${HOSTKEY}: localhost\n")
+		// compose keeps the name as written, writing its `$` as `$$`.
+		env, err := flattened(t, e)
+		if err != nil || env["$${HOSTKEY}"] != "localhost" {
+			t.Fatalf("compose flattens %v: %v", env, err)
+		}
+		refused(t, e, "${HOSTKEY}")
+	})
+	t.Run("dotenv escape", func(t *testing.T) {
+		e := home(t, "HOSTKEY=\"CYFR_\\u0048OST\"\n", "services:\n  cyfr:\n    environment:\n      - ${HOSTKEY}=localhost\n")
+		if _, err := flattened(t, e); err != nil {
+			t.Fatalf("compose refuses the stack: %v", err)
+		}
+		refused(t, e, "${HOSTKEY}")
+	})
+	t.Run("unset value", func(t *testing.T) {
+		t.Setenv("REACH_PROVENANCE_UNSET", "")
+		os.Unsetenv("REACH_PROVENANCE_UNSET")
+		e := home(t, "", "services:\n  cyfr:\n    environment:\n      - SOME_SETTING=${REACH_PROVENANCE_UNSET}\n")
+		if env, err := flattened(t, e); err != nil || env["SOME_SETTING"] != "" {
+			t.Fatalf("compose flattens SOME_SETTING=%q: %v", env["SOME_SETTING"], err)
+		}
+		if err := e.CheckStack(bg); err != nil {
+			t.Fatalf("a non-reach key with a value compose leaves empty is refused: %v", err)
+		}
+	})
+	for name, override := range map[string]string{
+		"numeric service":         "services:\n  123:\n    image: busybox:latest\n  cyfr:\n    environment:\n      CYFR_HOST: localhost\n",
+		"numeric environment key": "services:\n  cyfr:\n    environment:\n      123: value\n      CYFR_HOST: localhost\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			e := home(t, "", override)
+			if _, err := flattened(t, e); err == nil {
+				if err := e.CheckStack(bg); refusalCode(err) != "compose_override_refused" {
+					t.Fatalf("compose takes the mapping, and CheckStack answered %v", err)
+				}
+			}
+			if err := e.CheckStack(bg); err == nil {
+				t.Fatal("CheckStack passes a stack that assigns CYFR_HOST in cyfr's environment")
+			}
+		})
+	}
+}
+
 // boxProject is a project directory named uniquely, so its compose
 // project collides with no one else's on a shared host.
 func boxProject(t *testing.T, compose, env string) (string, string) {

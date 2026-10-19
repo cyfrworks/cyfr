@@ -74,7 +74,12 @@ defmodule Mix.Tasks.Cyfr.Gen.ReachRefusals do
     {:reach_uncertain, [{%{}, ~w(observed)}]},
     {:reach_outcome_unknown, [{%{}, ~w(reason)}]},
     {:compose_env_refused, [{%{}, ~w(key)}]},
-    {:compose_override_refused, [{%{}, ~w(file service key)}, {%{}, ~w(file service)}]},
+    {:compose_override_refused,
+     [
+       {%{}, ~w(file service key)},
+       {%{why: :interpolated}, ~w(file service key)},
+       {%{}, ~w(file service)}
+     ]},
     {:setup_token_with_admins, [{%{}, []}]},
     {:setup_token_refused,
      for(why <- ~w(malformed restore_token headless oidc no_provider)a, do: {%{why: why}, []})}

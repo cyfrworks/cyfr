@@ -150,10 +150,12 @@ func (e *Engine) ComposeArgs(ctx context.Context, h Head, args ...string) ([]str
 func (e *Engine) Head() (Head, error) { return e.envHead() }
 
 // CheckStack checks what `docker compose config` resolves for the stack
-// before anything starts: no reach key is assigned in the cyfr service's
-// own environment: entries in any file of the source set (the main file,
-// its override, every include: and extends:), .env reaches cyfr through
-// its env_file, and the effective values pass ResolveBoot with .env's own
+// before anything starts: in any file of the source set (the main file,
+// its override, every include: and extends:) no service's environment:
+// names a variable with `$` (compose_override_refused, the name as
+// written) and no reach key is assigned in the cyfr service's own, .env
+// reaches cyfr through its env_file, and the effective values, which the
+// sources' check does not read, pass ResolveBoot with .env's own
 // read as File and the flattened environment as Process.
 func (e *Engine) CheckStack(ctx context.Context) error { return e.checkStack(ctx) }
 
@@ -258,7 +260,7 @@ type SwitchRequest struct {
 	OldDigest string
 	NewDigest string
 	// Content is everything the command was asked, which a resend of its
-	// id must ask again (Resent).
+	// id must ask again, to Switch as to Resent.
 	Content RequestContent
 }
 
@@ -294,7 +296,13 @@ func AuthKeyFingerprint(key []byte) string {
 // Switch moves the home to the request's head: stop and verify, commit
 // .env, start what was running with node validation and health, roll back
 // on a failed start. The receipt is its outcome; resending the same id
-// answers the same receipt.
+// with the same request, its content included, answers the same receipt,
+// and with any other a rejected reach_request_reused that changes nothing.
+// A reopen (Preview.Reopen) is ok only if, once Serve is open, cyfr runs
+// and Serve's configuration is the head's: a home that stopped before the
+// switch was accepted is reach_stale, and one that stopped, or whose
+// Serve changed, after Serve opened has Serve closed again and is
+// not_applied with reach_stale; neither starts anything more.
 func (e *Engine) Switch(ctx context.Context, r SwitchRequest) (Receipt, error) {
 	return e.doSwitch(ctx, r)
 }

@@ -175,6 +175,18 @@ func (e *Engine) reopens(ctx context.Context, st envState) bool {
 	return err == nil && cyfrRunning(cs)
 }
 
+// servesHead reports whether Serve's configuration is the one the
+// flattened configuration content names, forwarding to its proxy port,
+// and cyfr runs.
+func (e *Engine) servesHead(ctx context.Context, content []byte) bool {
+	c, err := parseConfig(content)
+	if err != nil || !equalBytes(e.servePath(), []byte(serveOpen(proxyPort(c)))) {
+		return false
+	}
+	cs, err := e.observe(ctx)
+	return err == nil && cyfrRunning(cs)
+}
+
 // derive is the head t makes from .env's settings and, for tailnet, the
 // machine: the one join joinID froze, or with no join id the machine
 // this home has now (machine).
@@ -243,10 +255,14 @@ func contentDigest(c RequestContent) string {
 	})
 }
 
+// switchDigest binds a switch's id to the whole request, its content
+// included, so a resend with other content is reach_request_reused
+// whatever the first answer was.
 func switchDigest(r SwitchRequest) string {
 	return requestDigest(map[string]any{
 		"op": "switch", "mode": r.Target.Mode, "domain": r.Target.Domain, "acme_email": r.Target.ACMEEmail,
 		"join_id": r.JoinID, "old_digest": r.OldDigest, "new_digest": r.NewDigest,
+		"content_digest": contentDigest(r.Content),
 	})
 }
 
@@ -310,6 +326,11 @@ func (e *Engine) doSwitch(ctx context.Context, r SwitchRequest) (Receipt, error)
 	}
 	if err != nil {
 		return refuse(Refuse("docker_unavailable", map[string]string{"reason": err.Error()}))
+	}
+	if reopen && !cyfrRunning(cs) {
+		// The home stopped since the check above: a reopen it accepted
+		// would record a stopped stack and open nothing.
+		return refuse(Refuse("reach_stale", map[string]string{"words": st.words()}))
 	}
 
 	j := &journal{
@@ -378,6 +399,14 @@ func (e *Engine) startTarget(ctx context.Context, j *journal) (Receipt, error) {
 	}
 	s := e.startHead(ctx, *j.NewHead, j, false, HealthDeadline)
 	switch {
+	case s.ok && j.Reopen && !e.servesHead(ctx, s.content):
+		// A reopen is done only while the home runs with Serve as the
+		// head names it. One that stopped, or whose Serve changed, once
+		// Serve opened has Serve closed again and nothing more started.
+		if err := e.closeServe(); err != nil {
+			return e.outcomeUnknown(j, err)
+		}
+		return e.finishAnswer(j, e.completed(j, "not_applied", Refuse("reach_stale", map[string]string{"words": wordsText(Describe(*j.NewHead))}), j.NewHead))
 	case s.ok:
 		return e.finishAnswer(j, done)
 	case s.identityMismatch() || j.Reopen && s.local != nil:

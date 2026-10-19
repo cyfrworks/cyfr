@@ -424,3 +424,171 @@ func TestReopenIsForARunningHome(t *testing.T) {
 		t.Errorf("a stopped home with Serve closed previews %v", err)
 	}
 }
+
+// reopenable is a running tailnet home whose Serve is closed, as a start
+// with HTTPS off leaves it, its HTTPS since turned on: a switch to its
+// own head reopens Serve.
+func reopenable(t *testing.T) *testHome {
+	t.Helper()
+	h := newHome(t)
+	h.fake.startStack(t, h.head())
+	h.toTailnet(1, testKey, false)
+	if _, err := h.e.Stop(bg, "down", false); err != nil {
+		t.Fatal(err)
+	}
+	h.fake.st.Volumes[stateVolume].HTTPS = false
+	if _, err := h.e.Start(bg, "up"); refusalCode(err) != "tailnet_https_off" {
+		t.Fatalf("start: %v", err)
+	}
+	h.fake.st.Volumes[stateVolume].HTTPS = true
+	return h
+}
+
+// A reopen killed at any phase is finished by the next command's Resume:
+// Serve open, the receipt ok, and a resend of it answers that receipt
+// without running docker.
+func TestReopenRecoversAtEveryPhase(t *testing.T) {
+	for _, point := range []string{"journal:switch:accepted", "journal:switch:committed", "start:tailnet", "receipt:switch"} {
+		t.Run(point, func(t *testing.T) {
+			h := reopenable(t)
+			r := h.request(id(5), Target{Mode: ModeTailnet}, "")
+			if !h.killAt(point, func(e *Engine) { e.Switch(bg, r) }) {
+				t.Fatalf("never reached %s", point)
+			}
+			if _, err := h.e.Resume(bg); err != nil {
+				t.Fatal(err)
+			}
+			rc, ok, err := h.e.Receipt(id(5))
+			if err != nil || !ok || rc.State != "completed" || rc.Outcome != "ok" {
+				t.Fatalf("the receipt is %+v, %v, %v", rc, ok, err)
+			}
+			if got, _ := os.ReadFile(h.e.servePath()); string(got) != serveOpen(4001) {
+				t.Errorf("Serve did not reopen: %s", got)
+			}
+			before := len(h.fake.calls())
+			again, err := h.e.Switch(bg, r)
+			if err != nil || again.Outcome != "ok" || again.RequestDigest != rc.RequestDigest || again.At != rc.At {
+				t.Errorf("the resent reopen answered %+v, %v", again, err)
+			}
+			if after := h.fake.calls()[before:]; len(after) != 0 {
+				t.Errorf("the resent reopen ran docker: %v", after)
+			}
+			h.assertConverged(tailnetStack...)
+		})
+	}
+}
+
+// A reopen whose home stops after the preview's check, before the switch
+// is accepted, is reach_stale: rejected, Serve left closed, nothing
+// started and no journal written.
+func TestReopenRefusesAHomeThatStopsBeforeItIsAccepted(t *testing.T) {
+	h := reopenable(t)
+	r := h.request(id(5), Target{Mode: ModeTailnet}, "")
+	reads := 0
+	h.fake.hook = func(_ context.Context, c *fakeCall) *fakeAnswer {
+		if len(c.Args) > 0 && c.Args[0] == "ps" && slices.Contains(c.Args, "label="+labelProject+"="+h.e.project) {
+			reads++
+			// The machine's read, then the reopen's check that cyfr
+			// runs; cyfr exits before the switch reads the stack it
+			// would accept.
+			if reads == 3 {
+				h.fake.mu.Lock()
+				h.fake.st.Containers["cyfr"].State = "exited"
+				h.fake.mu.Unlock()
+			}
+		}
+		return nil
+	}
+	mark := len(h.fake.calls())
+	rc, err := h.e.Switch(bg, r)
+	if reads < 3 {
+		t.Fatal("the switch never read the stack it would accept")
+	}
+	if rc.State != "rejected" || refusalCode(err) != "reach_stale" || rc.Payload["words"] != wordsText(Describe(h.head())) {
+		got, _ := os.ReadFile(h.e.servePath())
+		t.Fatalf("a home stopped before acceptance answered %+v, %v, Serve %s", rc, err, got)
+	}
+	if got, _ := os.ReadFile(h.e.servePath()); string(got) != serveClosed {
+		t.Errorf("Serve's configuration is %s", got)
+	}
+	for _, c := range h.fake.calls()[mark:] {
+		if c.Args[0] != "ps" && c.Args[0] != "exec" {
+			t.Errorf("the refused reopen ran %s", c)
+		}
+	}
+	if slices.Contains(h.fake.runningServices(), "cyfr") {
+		t.Error("the refused reopen started cyfr")
+	}
+	if j, _ := h.e.readJournal(); j != nil {
+		t.Errorf("the refused reopen left a journal: %+v", j)
+	}
+}
+
+// A reopen is done only if, once Serve is open, the home runs and Serve's
+// configuration is the one the head names: a home that stops just after
+// Serve opens, or a configuration rewritten under it, ends with Serve
+// closed and the reopen not applied (reach_stale), nothing started
+// again, .env as it was and no journal left; a resend answers the same.
+func TestReopenClosesServeUnlessTheHomeStillRunsAsTheHeadSays(t *testing.T) {
+	for _, c := range []struct {
+		name  string
+		after func(h *testHome)
+		cyfr  bool
+	}{
+		{"home stopped", func(h *testHome) {
+			h.fake.mu.Lock()
+			h.fake.st.Containers["cyfr"].State = "exited"
+			h.fake.mu.Unlock()
+		}, false},
+		{"Serve rewritten", func(h *testHome) {
+			if err := os.WriteFile(h.e.servePath(), []byte(serveOpen(4999)), 0o644); err != nil {
+				h.t.Fatal(err)
+			}
+		}, true},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			h := reopenable(t)
+			head, env := h.head(), h.env()
+			r := h.request(id(5), Target{Mode: ModeTailnet}, "")
+			opened := false
+			h.e.failWrite = func(name, step string) error {
+				if name == h.e.servePath() && step == "sync" && !opened && h.e.serveIsOpen() {
+					opened = true
+					c.after(h)
+				}
+				return nil
+			}
+			rc, err := h.e.Switch(bg, r)
+			if !opened {
+				t.Fatal("the reopen never opened Serve")
+			}
+			if rc.State != "completed" || rc.Outcome != "not_applied" || refusalCode(err) != "reach_stale" || rc.Payload["words"] != wordsText(Describe(head)) || rc.FinalHead == nil || rc.FinalHead.Digest() != head.Digest() {
+				t.Fatalf("the reopen answered %+v, %v", rc, err)
+			}
+			if got, _ := os.ReadFile(h.e.servePath()); string(got) != serveClosed {
+				t.Errorf("Serve's configuration is %s", got)
+			}
+			if slices.Contains(h.fake.runningServices(), "cyfr") != c.cyfr {
+				t.Errorf("running %v", h.fake.runningServices())
+			}
+			if h.env() != env {
+				t.Error("the reopen changed .env")
+			}
+			if j, _ := h.e.readJournal(); j != nil {
+				t.Errorf("a journal is left: %+v", j)
+			}
+			if files := h.files(resolvedGlob); len(files) > 0 {
+				t.Errorf("materialized files are left: %v", files)
+			}
+			h.e.failWrite = nil
+			before := len(h.fake.calls())
+			again, err := h.e.Switch(bg, r)
+			if again.Outcome != rc.Outcome || again.At != rc.At || refusalCode(err) != "reach_stale" {
+				t.Errorf("the resent reopen answered %+v, %v", again, err)
+			}
+			if after := h.fake.calls()[before:]; len(after) != 0 {
+				t.Errorf("the resent reopen ran docker: %v", after)
+			}
+		})
+	}
+}

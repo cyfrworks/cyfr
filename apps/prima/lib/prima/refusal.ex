@@ -1173,15 +1173,28 @@ defmodule Prima.Refusal do
          "them from CYFR_REACH and CYFR_LOCUS_BUILDS_URL."}
 
   # A compose file that would change, behind .env, how the home is
-  # reached: a reach key assigned in the service's own environment, or a
-  # service that does not read .env at all.
-  defp row({:compose_override_refused, %{file: file, service: service, key: key}})
-       when is_binary(file) and is_binary(service) and is_binary(key),
+  # reached: a reach key assigned in the service's own environment, a name
+  # written with `$` in any service's environment, which cyfr does not
+  # resolve, or a service that does not read .env at all.
+  defp row({:compose_override_refused, %{file: file, service: service, key: key} = payload})
+       when map_size(payload) == 3 and is_binary(file) and is_binary(service) and is_binary(key),
        do:
          {:invalid_argument,
           "`#{file}` sets `#{key}` in the `#{service}` service's environment, where it would " <>
             "override how .env says this home is reached. Nothing started. Remove `#{key}` " <>
             "from `#{file}`; .env alone holds it, and `cyfr reach` writes it."}
+
+  defp row(
+         {:compose_override_refused,
+          %{file: file, service: service, key: key, why: :interpolated} = payload}
+       )
+       when map_size(payload) == 4 and is_binary(file) and is_binary(service) and
+              is_binary(key),
+       do:
+         {:invalid_argument,
+          "`#{file}` names `#{key}` in the `#{service}` service's environment, a name with " <>
+            "`$` in it, which cyfr cannot check before Docker Compose reads it. Nothing " <>
+            "started. Write the name in `#{file}` without `$`."}
 
   defp row({:compose_override_refused, %{file: file, service: service} = payload})
        when map_size(payload) == 2 and is_binary(file) and is_binary(service),

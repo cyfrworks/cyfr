@@ -410,3 +410,73 @@ func TestResentBindsTheWholeRequest(t *testing.T) {
 		t.Errorf("another key answers %+v", rc)
 	}
 }
+
+// Switch binds a request id to the whole request as Resent does, whatever
+// its first answer was: done in tailnet or in another mode, rolled back,
+// rejected or still unfinished. The same request again answers that
+// first answer, running no docker command; the same id with another
+// mode, domain, email, machine name, --new-node or auth key answers
+// reach_request_reused, changing and writing nothing and leaving the
+// first receipt as it was.
+func TestSwitchBindsAResentIDToTheWholeRequest(t *testing.T) {
+	for _, first := range []string{"tailnet", "public", "rolled_back", "rejected", "unfinished"} {
+		t.Run(first, func(t *testing.T) {
+			h := newHome(t)
+			var r SwitchRequest
+			if first == "tailnet" {
+				joined := h.join(10, testKey, false)
+				r = h.request(id(1), Target{Mode: ModeTailnet}, joined.Payload["join_id"])
+				r.Content = RequestContent{Mode: ModeTailnet, AuthKeyFingerprint: AuthKeyFingerprint([]byte(testKey))}
+			} else {
+				h.fake.startStack(t, h.head())
+				r = h.request(id(1), publicTarget, "")
+				r.Content = RequestContent{Mode: ModePublic, Domain: publicTarget.Domain}
+			}
+			switch first {
+			case "rolled_back":
+				unhealthyWhen(h, "CYFR_REACH=public")
+			case "rejected":
+				r.OldDigest = "sha256:stale"
+			}
+			if first == "unfinished" {
+				h.killAt("journal:switch:stopped", func(e *Engine) { e.Switch(bg, r) })
+			} else {
+				h.e.Switch(bg, r)
+			}
+			want, ok, err := h.e.Receipt(id(1))
+			wantState := map[string]string{"tailnet": "completed", "public": "completed", "rolled_back": "completed", "rejected": "rejected", "unfinished": "accepted"}[first]
+			if err != nil || !ok || want.State != wantState {
+				t.Fatalf("the first answer is %+v, %v, %v", want, ok, err)
+			}
+			before, calls := h.snapshot(), len(h.fake.calls())
+			again, err := h.e.Switch(bg, r)
+			if again.State != want.State || again.Outcome != want.Outcome || again.Code != want.Code || again.Phase != want.Phase || again.At != want.At || again.RequestDigest != want.RequestDigest || refusalCode(err) != want.Code {
+				t.Errorf("the same request answers %+v, %v, not %+v", again, err, want)
+			}
+			for name, change := range map[string]func(*RequestContent){
+				"mode":     func(c *RequestContent) { c.Mode = ModeLocal },
+				"domain":   func(c *RequestContent) { c.Domain = "other.example.com" },
+				"email":    func(c *RequestContent) { c.ACMEEmail = "ops@example.com" },
+				"hostname": func(c *RequestContent) { c.Hostname = "different" },
+				"new node": func(c *RequestContent) { c.NewNode = !c.NewNode },
+				"key":      func(c *RequestContent) { c.AuthKeyFingerprint = AuthKeyFingerprint([]byte("tskey-auth-another")) },
+			} {
+				other := r
+				change(&other.Content)
+				rc, err := h.e.Switch(bg, other)
+				if refusalCode(err) != "reach_request_reused" || rc.State != "rejected" || rc.Code != "reach_request_reused" || rc.Refusal().Message() != "This request names a different change than the one first sent under its id. Nothing was changed. Send it again under a new id." {
+					t.Errorf("another %s answers %+v, %v", name, rc, err)
+				}
+			}
+			if !mapsEqual(before, h.snapshot()) {
+				t.Error("a resent request changed a file")
+			}
+			if after := h.fake.calls()[calls:]; len(after) != 0 {
+				t.Errorf("a resent request ran docker: %v", after)
+			}
+			if rc, _, _ := h.e.Receipt(id(1)); rc.State != want.State || rc.Outcome != want.Outcome || rc.Code != want.Code || rc.At != want.At {
+				t.Errorf("a reused id changed the first answer to %+v", rc)
+			}
+		})
+	}
+}
