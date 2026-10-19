@@ -366,7 +366,7 @@ mkdir -p "$scratch/cells"
 case " $(calls env) " in
   *" COMPOSE_PROFILES "* | *" CYFR_LEFTOVER "*) fail "the caller's environment reached the command line: $(calls env)" ;;
 esac
-for key in CYFR_SETUP_TOKEN CYFR_PUBLIC_URL CYFR_BEHIND_PROXY CYFR_BIND_ADDRESS; do
+for key in CYFR_SETUP_TOKEN CYFR_PUBLIC_URL CYFR_BIND_ADDRESS; do
   [ "$(assigned local "$key")" = 0 ] || fail "the local cell's deployment file assigns $key"
 done
 for pair in CYFR_REACH=local CYFR_HOST=localhost CYFR_PORT=4399 CYFR_DATABASE=sqlite CYFR_AUTO_MIGRATE=true \

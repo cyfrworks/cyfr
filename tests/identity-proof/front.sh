@@ -11,9 +11,9 @@
 # <run>-<name>`, running front.mjs on the host network as root, so it may
 # listen on port 443 of that address. It presents the certificate the
 # run's authority issued for the directory's name and forwards to the
-# directory cell's proxy listener. Cells reach it by name through their ERL_INETRC
-# (cells.sh), so no DNS, /etc/hosts or other system configuration is read
-# or changed.
+# directory cell's proxy listener. Cells reach it by name through their
+# ERL_INETRC (cells.sh), so no DNS, /etc/hosts or other system
+# configuration is read or changed.
 #
 # The browsers never use a front: they reach every home, the
 # directories' included, through the harness's own proxy.

@@ -106,11 +106,10 @@ identity_fixture() {
 
 # POST a restore request to cell `$1` as the browser does through the
 # front, on its proxy listener with the front's headers: path `$2`, the
-# file `$3` holding
-# the installation token, sent in the authorization header, and the JSON
-# body file `$4`. Writes the answer's body to `$5` and prints its status.
-# The token and the kit are read from their files, never put on a command
-# line.
+# file `$3` holding the installation token, sent in the authorization
+# header, and the JSON body file `$4`. Writes the answer's body to `$5`
+# and prints its status. The token and the kit are read from their files,
+# never put on a command line.
 identity_restore_post() {
   local cell="$1" path="$2" token_file="$3" body="$4" out="$5" host port headers
   host="$(sed -n 's/^CYFR_HOST=//p' "$cell/.env" | tail -1)"

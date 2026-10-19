@@ -15,12 +15,12 @@
 # name (CYFR_REACH=public), several at once, each reached by every browser
 # at https://HOST through the same proxy, whose TLS front presents a
 # certificate the run's own authority issued for that name and forwards to
-# the home's proxy listener. No name is resolved by DNS or /etc/hosts: the proxy routes each name
-# itself. The authority is made for the run under WORK, its private key
-# kept apart and never mounted, and every browser of the Playwright
-# container trusts it: Chromium's full build through a managed policy,
-# Firefox through the policies file Playwright's build reads, and WebKit
-# through the system bundle it verifies against.
+# the home's proxy listener. No name is resolved by DNS or /etc/hosts: the
+# proxy routes each name itself. The authority is made for the run under
+# WORK, its private key kept apart and never mounted, and every browser of
+# the Playwright container trusts it: Chromium's full build through a
+# managed policy, Firefox through the policies file Playwright's build
+# reads, and WebKit through the system bundle it verifies against.
 #
 # The experiments run in the official Playwright image, pinned by digest,
 # with Playwright's library installed from tests/browser/package-lock.json
