@@ -4,10 +4,11 @@
 #
 # The Compose proof's teardown (tests/compose-proof/cleanup.sh) against
 # stand-ins for docker and compose, with no Docker: a removal that keeps
-# failing fails a run whose cases passed, naming the project it leaves;
-# one that fails and then succeeds within its three attempts does not; a
-# failed run keeps its own status; a clean run removes its scratch
-# directory and exits 0.
+# failing fails a run whose cases passed, naming the project it leaves,
+# the run's Tailscale stand-in image among them; one that fails and then
+# succeeds within its three attempts does not; the reach engine's join
+# containers and its join network go too; a failed run keeps its own
+# status; a clean run removes its scratch directory and exits 0.
 #
 # Usage: bash tests/compose-proof/cleanup-test.sh
 set -uo pipefail
@@ -24,18 +25,21 @@ cases=0
 
 # Runs one teardown: the run exits `$1` with its cleanup trapped, the
 # compose stand-in failing its first `$2` calls and the docker stand-in its
-# first `$3`. Leaves the status in $code, stderr in $scratch/err and every
+# first `$3` of each kind (`docker image` its first `$4`, default `$3`);
+# with `$5` set, the docker stand-in lists two join containers of the
+# project. Leaves the status in $code, stderr in $scratch/err and every
 # call in $scratch/calls.
 teardown() {
-  local status="$1" compose_fails="$2" docker_fails="$3"
+  local status="$1" compose_fails="$2" docker_fails="$3" image_fails="${4:-$3}" joins="${5:-}"
   rm -rf "$scratch/work" "$scratch/calls" "$scratch/err"
   mkdir -p "$scratch/work"
   : >"$scratch/calls"
-  COMPOSE_FAILS="$compose_fails" DOCKER_FAILS="$docker_fails" CALLS="$scratch/calls" \
-    WORK="$scratch/work" CLEANUP="$here/cleanup.sh" STATUS="$status" COMPOSE_PROOF_CLEANUP_PAUSE=0 \
+  COMPOSE_FAILS="$compose_fails" DOCKER_FAILS="$docker_fails" IMAGE_FAILS="$image_fails" JOINS="$joins" \
+    CALLS="$scratch/calls" WORK="$scratch/work" CLEANUP="$here/cleanup.sh" STATUS="$status" COMPOSE_PROOF_CLEANUP_PAUSE=0 \
     bash -c '
       set -euo pipefail
       RUN=cyfr-compose-proof-test IMAGE=cyfr:compose-proof UPSTREAM=cyfr-compose-proof-test-upstream
+      STANDIN_IMAGE=cyfr-tailscale-standin:cyfr-compose-proof-test
       # Each stand-in fails while fewer calls than its budget were made.
       stand_in() {
         local name="$1" budget="$2"
@@ -43,7 +47,17 @@ teardown() {
         [ "$(grep -c "^$name\$" "$CALLS")" -gt "$budget" ] || { echo "$name: refused" >&2; return 1; }
       }
       compose() { [ "$1" = logs ] && return 0; stand_in "compose $1" "$COMPOSE_FAILS"; }
-      docker() { stand_in "docker $1" "$DOCKER_FAILS"; }
+      docker() {
+        case "$1" in
+          image) stand_in "docker image" "$IMAGE_FAILS" ;;
+          ps)
+            echo "docker ps" >>"$CALLS"
+            [ -z "$JOINS" ] || printf "join-one\njoin-two\n"
+            ;;
+          rm) stand_in "docker rm" "$DOCKER_FAILS" && echo "docker rm ${*: -1}" >>"$CALLS" ;;
+          *) stand_in "docker $1" "$DOCKER_FAILS" ;;
+        esac
+      }
       . "$CLEANUP"
       trap cleanup EXIT
       exit "$STATUS"
@@ -99,10 +113,26 @@ fi
 
 teardown 0 0 0
 if [ "$code" -eq 0 ] && [ "$(calls 'compose down')" = 1 ] && [ "$(calls 'docker rm')" = 1 ] &&
-  [ "$(calls 'docker run')" = 1 ] && [ ! -e "$scratch/work" ]; then
-  check "a clean run tears down once and removes its scratch directory" ok
+  [ "$(calls 'docker run')" = 1 ] && [ "$(calls 'docker image')" = 1 ] && [ ! -e "$scratch/work" ]; then
+  check "a clean run tears down once, its stand-in image with it, and removes its scratch directory" ok
 else
-  check "a clean run tears down once and removes its scratch directory" no
+  check "a clean run tears down once, its stand-in image with it, and removes its scratch directory" no
+fi
+
+teardown 0 0 0 99
+if [ "$code" -ne 0 ] && [ "$(calls 'docker image')" = 3 ] &&
+  grep -q 'docker image rm cyfr-tailscale-standin:cyfr-compose-proof-test failed three times, leaving the project cyfr-compose-proof-test' "$scratch/err"; then
+  check "a stand-in image that cannot be removed fails a passed run, naming the project" ok
+else
+  check "a stand-in image that cannot be removed fails a passed run, naming the project" no
+fi
+
+teardown 0 0 0 0 joins
+if [ "$code" -eq 0 ] && [ "$(calls 'docker rm join-one')" = 1 ] && [ "$(calls 'docker rm join-two')" = 1 ] &&
+  [ "$(calls 'docker network')" -ge 1 ]; then
+  check "the reach engine's join containers and its join network go with the project" ok
+else
+  check "the reach engine's join containers and its join network go with the project" no
 fi
 
 echo "$cases cases, $failures failed"

@@ -1,18 +1,31 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 #
-# Layered over docker-compose.yml by the Compose proof
-# (tests/compose-proof/run.sh): cyfr and caddy keep every setting compose
-# gives them, cyfr's networks, fixed addresses, environment, mounts and
-# health probe among them. This adds only the app image built from the
-# tree, loopback ports Docker picks for the run in place of the shipped
-# ones, so a run meets no deployed stack and no other run, the project's
-# names in place of the shipped container names, and the proof's
-# Caddyfile, which fronts cyfr over plain HTTP in place of the shipped TLS
-# site.
+# The Compose proof's overlay (tests/compose-proof/run.sh), which the run
+# copies into its project directory as docker-compose.override.yml: the one
+# override of the default file set that every `cyfr` command, and the
+# proof's own compose calls, resolve beside docker-compose.yml. cyfr, caddy
+# and tailscale keep every setting the shipped file gives them, cyfr's
+# networks, fixed addresses, environment, mounts and health probe among
+# them, and the reach keys reach cyfr from .env alone. This adds only:
+#
+#   - the app image built from the tree, and the Tailscale stand-in
+#     (tests/compose-proof/tailscale-standin/) in place of the pinned
+#     tailscale image, each named by a variable of the run's .env (no
+#     COMPOSE_* name: cyfr refuses one in .env);
+#   - loopback ports Docker picks for the run in place of the shipped
+#     ones, so a run meets no deployed stack and no other run, and the
+#     project's names in place of the shipped container name;
+#   - the proof's Caddyfile, which fronts cyfr's proxy listener over plain
+#     HTTP in place of the shipped TLS site;
+#   - proof-tailnet, a network of the stand-in alone, where the proof's
+#     clients stand for a tailnet's devices;
+#   - the Locus runtime and backends services under a profile no head
+#     selects: the proof is of cyfr and its reach, and starts no Locus
+#     service, as builds are off in its .env.
 services:
   cyfr:
-    image: ${COMPOSE_PROOF_IMAGE:?set COMPOSE_PROOF_IMAGE}
+    image: ${PROOF_APP_IMAGE:?set PROOF_APP_IMAGE}
     pull_policy: never
     container_name: !reset null
     ports: !override
@@ -21,4 +34,17 @@ services:
     ports: !override
       - "127.0.0.1::80"
     volumes: !override
-      - ${COMPOSE_PROOF_CADDYFILE:?set COMPOSE_PROOF_CADDYFILE}:/etc/caddy/Caddyfile:ro
+      - ./proof.Caddyfile:/etc/caddy/Caddyfile:ro
+  tailscale:
+    image: ${PROOF_TAILSCALE_IMAGE:?set PROOF_TAILSCALE_IMAGE}
+    pull_policy: never
+    networks:
+      proof-tailnet: {}
+  locus-runtime:
+    profiles: ["proof-never"]
+  locus-backends:
+    profiles: ["proof-never"]
+  locus-backends-guard:
+    profiles: ["proof-never"]
+networks:
+  proof-tailnet: {}

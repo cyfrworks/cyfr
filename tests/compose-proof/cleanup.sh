@@ -3,8 +3,8 @@
 #
 # The Compose proof's teardown, sourced by tests/compose-proof/run.sh and
 # by its stand-in cases (tests/compose-proof/cleanup-test.sh). It reads the
-# run's RUN, WORK, IMAGE and UPSTREAM, and calls `compose` and `docker`,
-# which the caller defines or finds.
+# run's RUN, WORK, IMAGE, UPSTREAM and STANDIN_IMAGE, and calls `compose`
+# and `docker`, which the caller defines or finds.
 #
 # A step that removes what the run made is tried up to three times,
 # COMPOSE_PROOF_CLEANUP_PAUSE seconds apart (default 5). A step that still
@@ -28,16 +28,29 @@ cleanup_step() {
   return 1
 }
 
+# The network `$1` removed, or already gone.
+network_gone() {
+  docker network inspect "$1" >/dev/null 2>&1 || return 0
+  docker network rm "$1"
+}
+
 # The project goes whole, its volumes with it, however the run ends; a
 # failed run prints the containers' last lines first.
 cleanup() {
-  local code=$? failed=""
+  local code=$? failed="" paused id
   if [ "$code" -ne 0 ]; then
     echo "----- the last lines of the project's logs -----" >&2
-    compose logs --no-color --tail 60 cyfr caddy >&2 2>/dev/null || true
+    compose logs --no-color --tail 60 cyfr caddy tailscale >&2 2>/dev/null || true
   fi
-  # The shutdown case's clients and its upstream go first: the upstream
-  # holds a place on the project's network, which `down` removes.
+  # A docker call the interrupt case paused ends first, so nothing it
+  # would still do lands after the teardown.
+  paused="$(cat "$WORK/faults/paused" 2>/dev/null || true)"
+  if [ -n "$paused" ]; then
+    kill -KILL "$paused" 2>/dev/null || true
+  fi
+  # The cases' clients, the command lines they run and the shutdown case's
+  # upstream go next: the upstream holds a place on the project's
+  # network, which `down` removes.
   local job
   for job in $(jobs -p); do
     pkill -P "$job" 2>/dev/null || true
@@ -46,7 +59,16 @@ cleanup() {
   if [ -n "$UPSTREAM" ]; then
     cleanup_step "docker rm --force $UPSTREAM" docker rm --force "$UPSTREAM" || failed=1
   fi
+  # The reach engine's join containers carry the project in a label of
+  # their own, outside compose's.
+  for id in $(docker ps -aq --filter "label=com.cyfr.reach.project=$RUN" 2>/dev/null || true); do
+    cleanup_step "docker rm --force $id (a join container)" docker rm --force "$id" || failed=1
+  done
   cleanup_step "docker compose down --volumes" compose down --volumes --remove-orphans --timeout 30 || failed=1
+  cleanup_step "docker network rm ${RUN}_tailnet-join" network_gone "${RUN}_tailnet-join" || failed=1
+  if [ -n "${STANDIN_IMAGE:-}" ]; then
+    cleanup_step "docker image rm $STANDIN_IMAGE" docker image rm --force "$STANDIN_IMAGE" || failed=1
+  fi
   if [ "${COMPOSE_PROOF_KEEP:-}" = 1 ]; then
     echo "kept $WORK"
   else
