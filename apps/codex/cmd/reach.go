@@ -265,9 +265,6 @@ func readAuthKey(path string) ([]byte, error) {
 	return key, nil
 }
 
-// errJoinInterrupted is a join an interrupt ended while it waited.
-var errJoinInterrupted = errors.New("the join was interrupted")
-
 // joinTailnet runs the engine's join under request id, printing the
 // approval link while it waits for one, and answers the join id of the
 // joined machine. An interrupt cancels the waiting join, whose container
@@ -286,11 +283,13 @@ func joinTailnet(ctx context.Context, e stackEngine, id string, o reachOptions, 
 	}
 	rec, err := e.Join(ctx, req)
 	if ctx.Err() != nil {
-		cancelled := refusalError{reach.Refuse("tailnet_join_cancelled", nil)}
-		if cerr := e.CancelWaitingJoin(context.WithoutCancel(ctx)); cerr != nil {
-			return "", fmt.Errorf("%w: cancelling it failed (%v), so its container may wait until its own deadline before it ends; how this home is reached was not changed", errJoinInterrupted, engineFailure(cerr))
+		if err == nil && receiptFailure(rec) == nil {
+			return "", fmt.Errorf("the join was interrupted after the machine joined your tailnet as %s; how this home is reached was not changed, and 'cyfr reach tailnet' takes the machine as it is", rec.Payload["name"])
 		}
-		return "", fmt.Errorf("%w: %w", errJoinInterrupted, cancelled)
+		if cerr := e.CancelWaitingJoin(context.WithoutCancel(ctx)); cerr != nil {
+			return "", fmt.Errorf("the join was interrupted, and cancelling it failed (%v), so its container may wait until its own deadline before it ends; how this home is reached was not changed", engineFailure(cerr))
+		}
+		return "", refusalError{reach.Refuse("tailnet_join_cancelled", nil)}
 	}
 	if err != nil {
 		return "", engineFailure(err)

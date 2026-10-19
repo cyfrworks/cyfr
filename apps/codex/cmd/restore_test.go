@@ -1140,6 +1140,50 @@ func TestRestoreStagedComposeResolvesAsTheDefaultOverrideSet(t *testing.T) {
 	}
 }
 
+// The project the restore's staged read names is the one the engine passes
+// every compose call: compose's default for the directory, its name
+// lowercased, its other characters dropped.
+func TestComposeProjectIsTheEnginesProject(t *testing.T) {
+	requireCompose(t)
+	dir := filepath.Join(t.TempDir(), "_My.Home-1")
+	if err := os.Mkdir(dir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(dir)
+	for name, content := range map[string]string{
+		"docker-compose.yml": "services:\n  cyfr:\n    image: alpine:3.22\n    env_file: [.env]\n",
+		".env":               "CYFR_REACH=local\n",
+	} {
+		if err := os.WriteFile(name, []byte(content), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := composeProject("."); got != "myhome-1" {
+		t.Fatalf("composeProject answers %q, want compose's myhome-1", got)
+	}
+	useRealEngine(t, nil)
+	e, err := openEngine(".")
+	if err != nil {
+		t.Fatal(err)
+	}
+	unlock, err := e.Lock("test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer unlock()
+	head, err := e.Head()
+	if err != nil {
+		t.Fatal(err)
+	}
+	args, err := e.ComposeArgs(context.Background(), head, "ps")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if at := slices.Index(args, "-p"); at < 0 || at+1 >= len(args) || args[at+1] != composeProject(".") {
+		t.Errorf("the engine's compose call %v names another project than %s", args, composeProject("."))
+	}
+}
+
 // A file set compose would not load as the restore reads it refuses before
 // anything lands: another main file name beside docker-compose.yml, or more
 // than one override file.

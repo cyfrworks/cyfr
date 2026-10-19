@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/cyfr/codex/internal/config"
 	"github.com/cyfr/codex/internal/reach"
 )
 
@@ -129,6 +130,31 @@ func TestInitNoInteractiveRules(t *testing.T) {
 	}
 }
 
+// The CLI's local context and Prism's address are the loopback port the
+// home's .env names.
+func TestInitFollowsTheTemplatesPort(t *testing.T) {
+	newInitProject(t)
+	useFakeEngine(t)
+	template := strings.Replace(read(t, ".env.example"), "\nCYFR_PORT=4000\n", "\nCYFR_PORT=4123\n", 1)
+	if err := os.WriteFile(".env.example", []byte(template), 0644); err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	if err := runInit(context.Background(), initOptions{noPull: true}, &out, &out); err != nil {
+		t.Fatalf("init: %v\n%s", err, out.String())
+	}
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := cfg.Contexts["local"].URL; got != "http://127.0.0.1:4123" {
+		t.Errorf("the local context is %s, want the home's loopback port", got)
+	}
+	if !strings.Contains(out.String(), "Prism:           http://localhost:4123/") {
+		t.Errorf("init does not print the home's address:\n%s", out.String())
+	}
+}
+
 // A tailnet home init joins first, with the auth key the file holds, which
 // reaches the engine's join alone: never .env, the output or a request.
 // The switch then takes the joined machine's name and id.
@@ -208,7 +234,8 @@ func TestInitLeavesTheHomeLocalWhenTheJoinFailsOrIsCancelled(t *testing.T) {
 		var out bytes.Buffer
 		err := runInit(ctx, initOptions{noPull: true}, &out, &out)
 		cancelled := reach.Refuse("tailnet_join_cancelled", nil).Message()
-		if err == nil || !errors.Is(err, errJoinInterrupted) || !strings.Contains(err.Error(), cancelled) {
+		var refusal *reach.Refusal
+		if err == nil || !errors.As(err, &refusal) || refusal.Code != "tailnet_join_cancelled" || !strings.HasPrefix(err.Error(), cancelled+"\n") {
 			t.Fatalf("init answered %v\n%s", err, out.String())
 		}
 		if s.cancels != 1 {
