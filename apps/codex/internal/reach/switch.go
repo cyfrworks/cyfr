@@ -243,10 +243,14 @@ func contentDigest(c RequestContent) string {
 	})
 }
 
+// switchDigest binds a switch's id to the whole request, its content
+// included, so a resend with other content is reach_request_reused
+// whatever the first answer was.
 func switchDigest(r SwitchRequest) string {
 	return requestDigest(map[string]any{
 		"op": "switch", "mode": r.Target.Mode, "domain": r.Target.Domain, "acme_email": r.Target.ACMEEmail,
 		"join_id": r.JoinID, "old_digest": r.OldDigest, "new_digest": r.NewDigest,
+		"content_digest": contentDigest(r.Content),
 	})
 }
 

@@ -258,7 +258,7 @@ type SwitchRequest struct {
 	OldDigest string
 	NewDigest string
 	// Content is everything the command was asked, which a resend of its
-	// id must ask again (Resent).
+	// id must ask again, to Switch as to Resent.
 	Content RequestContent
 }
 
@@ -294,7 +294,8 @@ func AuthKeyFingerprint(key []byte) string {
 // Switch moves the home to the request's head: stop and verify, commit
 // .env, start what was running with node validation and health, roll back
 // on a failed start. The receipt is its outcome; resending the same id
-// answers the same receipt.
+// with the same request, its content included, answers the same receipt,
+// and with any other a rejected reach_request_reused that changes nothing.
 func (e *Engine) Switch(ctx context.Context, r SwitchRequest) (Receipt, error) {
 	return e.doSwitch(ctx, r)
 }
