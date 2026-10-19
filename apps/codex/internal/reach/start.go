@@ -12,22 +12,28 @@ import (
 	"time"
 )
 
-// started is the outcome of a start: ok; or why it failed; or the
-// refusal of a tailnet machine that is not the head's, with cyfr running
-// and Serve closed.
+// started is the outcome of a start: ok; or why it failed; or, with
+// cyfr running and healthy and Serve closed, the refusal of a tailnet
+// machine that cannot serve the head: local.
 type started struct {
-	ok       bool
-	why      string
-	mismatch *Refusal
-	content  []byte
+	ok      bool
+	why     string
+	local   *Refusal
+	content []byte
+}
+
+// identityMismatch reports whether a local start found another machine
+// than the head's, rather than one that has not joined or has HTTPS off.
+func (s started) identityMismatch() bool {
+	return s.local != nil && s.local.Code == "tailnet_node_mismatch"
 }
 
 // startHead is the start path, every start's: Serve closed; h
 // materialized afresh and its stack checked; cyfr started (with every
 // other service of h's selection when full, alone otherwise), then h's
-// reach services; cyfr's health awaited; then, in tailnet, the running
-// machine validated against h before Serve opens.
-func (e *Engine) startHead(ctx context.Context, h Head, j *journal, full bool) started {
+// reach services; cyfr's health awaited within health; then, in tailnet,
+// the running machine validated against h before Serve opens.
+func (e *Engine) startHead(ctx context.Context, h Head, j *journal, full bool, health time.Duration) started {
 	if err := e.closeServe(); err != nil {
 		return started{why: err.Error()}
 	}
@@ -55,16 +61,21 @@ func (e *Engine) startHead(ctx context.Context, h Head, j *journal, full bool) s
 			return started{why: why, content: content}
 		}
 	}
-	if why := e.waitHealthy(ctx); why != "" {
+	if why := e.waitHealthy(ctx, health); why != "" {
 		return started{why: why, content: content}
 	}
 	if h.Mode == ModeTailnet {
-		mismatch, err := e.validateNode(ctx, h)
+		ref, err := e.validateNode(ctx, h)
 		if err != nil {
 			return started{why: err.Error(), content: content}
 		}
-		if mismatch != nil {
-			return started{mismatch: mismatch, content: content}
+		if ref != nil {
+			if ref.Code == "tailnet_not_joined" {
+				// The state holds no machine: the join record names
+				// one that is gone, and must not be offered again.
+				e.removeDurable(e.path(joinFile))
+			}
+			return started{local: ref, content: content}
 		}
 		if err := e.openServe(proxyPort(c)); err != nil {
 			return started{why: err.Error(), content: content}
@@ -92,9 +103,9 @@ func proxyPort(c config) int {
 }
 
 // waitHealthy waits for the cyfr container's Docker health to read
-// healthy, within HealthDeadline, answering why it did not, or "".
-func (e *Engine) waitHealthy(ctx context.Context) string {
-	end := e.now().Add(HealthDeadline)
+// healthy, within limit, answering why it did not, or "".
+func (e *Engine) waitHealthy(ctx context.Context, limit time.Duration) string {
+	end := e.now().Add(limit)
 	last := "it was not found"
 	for {
 		cs, err := e.observe(ctx)
@@ -125,7 +136,7 @@ func (e *Engine) waitHealthy(ctx context.Context) string {
 			}
 		}
 		if !e.now().Before(end) {
-			return fmt.Sprintf("cyfr was not healthy within %s (%s)", HealthDeadline, last)
+			return fmt.Sprintf("cyfr was not healthy within %s (%s)", limit, last)
 		}
 		if err := e.sleep(ctx, time.Second); err != nil {
 			return err.Error()

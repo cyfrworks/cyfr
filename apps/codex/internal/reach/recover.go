@@ -120,8 +120,12 @@ func (e *Engine) recoverSwitch(ctx context.Context, j *journal) (Receipt, error)
 	if !j.Running {
 		return e.finishAnswer(j, e.completed(j, "failed", stale, &st.head))
 	}
-	if s := e.startHead(ctx, st.head, j, false); s.ok || s.mismatch != nil {
+	s := e.startHead(ctx, st.head, j, false, HealthDeadline)
+	switch {
+	case s.ok:
 		return e.finishAnswer(j, e.completed(j, "failed", stale, &st.head))
+	case s.local != nil:
+		return e.finishAnswer(j, e.completed(j, "started_local", s.local, &st.head))
 	}
 	if s := e.stopAndVerify(ctx, j.Services); !s.ok {
 		return e.uncertain(j, s)
@@ -142,12 +146,12 @@ func (e *Engine) recoverOld(ctx context.Context, j *journal) (Receipt, error) {
 	if !j.Running || j.OldHead == nil {
 		return e.finishAnswer(j, notApplied)
 	}
-	s := e.startHead(ctx, *j.OldHead, j, false)
+	s := e.startHead(ctx, *j.OldHead, j, false, HealthDeadline)
 	switch {
 	case s.ok:
 		return e.finishAnswer(j, notApplied)
-	case s.mismatch != nil:
-		return e.finishAnswer(j, e.completed(j, notApplied.Outcome, s.mismatch, j.OldHead))
+	case s.local != nil:
+		return e.finishAnswer(j, e.completed(j, "started_local", s.local, j.OldHead))
 	}
 	if s := e.stopAndVerify(ctx, j.Services); !s.ok {
 		return e.uncertain(j, s)

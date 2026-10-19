@@ -10,9 +10,17 @@ import (
 	"strings"
 )
 
-// projectName is Docker Compose's default project name for dir: its base
-// name lowercased, every character outside [a-z0-9_-] dropped, then any
-// leading character that is not a letter or a digit.
+// ProjectName is Docker Compose's default project name for the directory
+// dir, the -p every engine compose call passes: its base name lowercased,
+// every character outside [a-z0-9_-] dropped, then any leading character
+// that is not a letter or a digit.
+func ProjectName(dir string) string {
+	if abs, err := filepath.Abs(dir); err == nil {
+		dir = abs
+	}
+	return projectName(dir)
+}
+
 func projectName(dir string) string {
 	var b strings.Builder
 	for _, r := range strings.ToLower(filepath.Base(dir)) {
@@ -31,15 +39,29 @@ var (
 	composeOverrideFiles = []string{"compose.override.yml", "compose.override.yaml", "docker-compose.override.yml", "docker-compose.override.yaml"}
 )
 
-// defaultFiles is the file set docker compose loads by default, relative
-// to the project directory: its one main file and the override file, if
-// there is one. It is refused when it is not determined: two main files,
-// of which compose loads one and warns, or two override files.
-func (e *Engine) defaultFiles() ([]string, error) {
+// DefaultFiles is the file set docker compose loads by default from the
+// project directory dir, each name relative to it: its one main file,
+// and its override file, "" when there is none. It is refused when it is
+// not determined: no main file, two main files, of which compose loads
+// one and warns, or two override files, of which it picks one.
+func DefaultFiles(dir string) (main, override string, err error) {
+	files, err := defaultFileSet(dir)
+	if err != nil {
+		return "", "", err
+	}
+	if len(files) > 1 {
+		override = files[1]
+	}
+	return files[0], override, nil
+}
+
+func (e *Engine) defaultFiles() ([]string, error) { return defaultFileSet(e.dir) }
+
+func defaultFileSet(dir string) ([]string, error) {
 	present := func(names []string) []string {
 		var found []string
 		for _, name := range names {
-			if _, err := os.Lstat(filepath.Join(e.dir, name)); err == nil {
+			if _, err := os.Lstat(filepath.Join(dir, name)); err == nil {
 				found = append(found, name)
 			}
 		}
@@ -48,7 +70,7 @@ func (e *Engine) defaultFiles() ([]string, error) {
 	mains, overrides := present(composeMainFiles), present(composeOverrideFiles)
 	switch {
 	case len(mains) == 0:
-		return nil, fmt.Errorf("reach: %s holds no compose file (%s), so the stack cannot be started from it", e.dir, strings.Join(composeMainFiles, ", "))
+		return nil, fmt.Errorf("reach: %s holds no compose file (%s), so the stack cannot be started from it", dir, strings.Join(composeMainFiles, ", "))
 	case len(mains) > 1:
 		return nil, fmt.Errorf("reach: the project holds %s, of which docker compose loads one; keep one", strings.Join(mains, " and "))
 	case len(overrides) > 1:

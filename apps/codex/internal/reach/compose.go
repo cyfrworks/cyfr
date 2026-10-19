@@ -54,14 +54,17 @@ func (e *Engine) flatten(ctx context.Context, h Head) ([]byte, error) {
 
 // materialize writes h's configuration afresh to
 // .cyfr/compose.resolved.<digest>.yml (0600: it holds .env's values),
-// after checking the stack it describes (checkStack). An operation with
-// a journal names the file there before writing it, so an interrupted
-// operation keeps exactly the files its journal names.
+// after checking the stack it describes (checkStack), and keeps the
+// stamp of every input it was made from. An operation with a journal
+// names the file there before writing it, so an interrupted operation
+// keeps exactly the files its journal names.
 func (e *Engine) materialize(ctx context.Context, h Head, j *journal) ([]byte, error) {
-	if err := e.checkProvenance(); err != nil {
+	sources, err := e.checkProvenance()
+	if err != nil {
 		return nil, err
 	}
-	stamp := e.sourceStamp()
+	in := materialized{sources: sources}
+	in.stamp = e.inputStamp(sources)
 	content, err := e.flatten(ctx, h)
 	if err != nil {
 		return nil, err
@@ -80,19 +83,36 @@ func (e *Engine) materialize(ctx context.Context, h Head, j *journal) ([]byte, e
 		return nil, err
 	}
 	e.mu.Lock()
-	e.files[name] = stamp
+	e.files[name] = in
 	e.mu.Unlock()
 	return content, nil
 }
 
-// sourceStamp fingerprints what a flattened configuration is read from:
-// the default file set and .env.
-func (e *Engine) sourceStamp() string {
+// materialized is what a materialized configuration was made from: every
+// compose file the provenance read named (the default set, each include:
+// and extends: target), and the stamp of their bytes and .env's.
+type materialized struct {
+	sources []string
+	stamp   string
+}
+
+// inputStamp fingerprints a configuration's inputs as they read now: the
+// default file set as it stands, the sources it was read from, and .env.
+func (e *Engine) inputStamp(sources []string) string {
 	files, _ := e.defaultFiles()
+	names := []string{filepath.Join(e.dir, ".env")}
+	for _, f := range files {
+		names = append(names, filepath.Join(e.dir, f))
+	}
+	names = union(names, sources)
 	var all []byte
-	for _, f := range append(files, ".env") {
-		data, _ := os.ReadFile(filepath.Join(e.dir, f))
-		all = append(all, []byte(f+"\x00"+sha256Hex(data)+"\x00")...)
+	for _, name := range names {
+		data, err := os.ReadFile(name)
+		state := sha256Hex(data)
+		if err != nil {
+			state = "absent"
+		}
+		all = append(all, []byte(name+"\x00"+state+"\x00")...)
 	}
 	return sha256Hex(all)
 }
@@ -103,15 +123,15 @@ func (e *Engine) composeArgs(h Head, args ...string) []string {
 }
 
 // composeArgsFor is ComposeArgs: h's file is materialized on first use
-// and reused while its sources read as they did then; a command that
-// rewrote the compose file or .env since gets the configuration they now
-// give.
+// and reused only while every input reads as it did then; a command that
+// rewrote the compose file, an included or extended file, or .env since
+// gets the configuration they now give, checked afresh.
 func (e *Engine) composeArgsFor(ctx context.Context, h Head, args ...string) ([]string, error) {
 	name := resolvedName(h.Digest())
 	e.mu.Lock()
-	stamp, held := e.files[name]
+	in, held := e.files[name]
 	e.mu.Unlock()
-	if _, err := os.Stat(filepath.Join(e.dir, filepath.FromSlash(name))); !held || err != nil || stamp != e.sourceStamp() {
+	if _, err := os.Stat(filepath.Join(e.dir, filepath.FromSlash(name))); !held || err != nil || in.stamp != e.inputStamp(in.sources) {
 		if _, err := e.materialize(ctx, h, nil); err != nil {
 			return nil, err
 		}
@@ -258,7 +278,7 @@ func (e *Engine) checkEffective(h Head, content []byte) error {
 // checkStack is CheckStack: the sources, then the effective values of
 // .env's head, reading and writing nothing under .cyfr/.
 func (e *Engine) checkStack(ctx context.Context) error {
-	if err := e.checkProvenance(); err != nil {
+	if _, err := e.checkProvenance(); err != nil {
 		return err
 	}
 	h, err := e.envHead()
@@ -277,27 +297,29 @@ func (e *Engine) checkStack(ctx context.Context) error {
 // cyfr service extends, wherever it is. No head key may be assigned in
 // the cyfr service's own environment: entries there would override what
 // .env says, and the flattened configuration cannot show where a value
-// came from. .env must reach cyfr through its env_file.
-func (e *Engine) checkProvenance() error {
+// came from. .env must reach cyfr through its env_file. It answers every
+// file it read.
+func (e *Engine) checkProvenance() ([]string, error) {
 	files, err := e.defaultFiles()
 	if err != nil {
-		return err
+		return nil, err
 	}
-	p := &provenance{e: e, seen: map[string]bool{}}
+	p := &provenance{e: e, seen: map[string]bool{}, read: map[string]bool{}}
 	for _, f := range files {
 		if err := p.file(filepath.Join(e.dir, f)); err != nil {
-			return err
+			return nil, err
 		}
 	}
 	if !p.envFile {
-		return fmt.Errorf(".env does not reach the cyfr service through its env_file in %s, so cyfr would not read how this home is reached. Nothing started. Give the cyfr service `env_file: [.env]`", strings.Join(files, " or "))
+		return nil, fmt.Errorf(".env does not reach the cyfr service through its env_file in %s, so cyfr would not read how this home is reached. Nothing started. Give the cyfr service `env_file: [.env]`", strings.Join(files, " or "))
 	}
-	return nil
+	return slices.Sorted(maps.Keys(p.read)), nil
 }
 
 type provenance struct {
 	e       *Engine
 	seen    map[string]bool
+	read    map[string]bool
 	envFile bool
 }
 
@@ -310,6 +332,7 @@ func (p *provenance) rel(path string) string {
 
 // load reads a compose file into its top-level mapping node.
 func (p *provenance) load(path string) (*yaml.Node, error) {
+	p.read[filepath.Clean(path)] = true
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("reach: read %s: %w", p.rel(path), err)

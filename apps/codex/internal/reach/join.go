@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"math"
 	"regexp"
 	"strconv"
@@ -409,16 +410,20 @@ func (e *Engine) endJoin(ctx context.Context, j *journal, ref *Refusal) (Receipt
 	if why := e.removeJoinContainers(ctx, a.JoinID); why != "" {
 		return e.outcomeUnknown(j, errors.New(why))
 	}
-	r := Receipt{RequestID: a.RequestID, RequestDigest: a.RequestDigest, Op: "join", State: "completed", Outcome: "ok"}
+	r := Receipt{RequestID: a.RequestID, RequestDigest: a.RequestDigest, Op: "join", State: "completed", Outcome: "ok", Payload: map[string]string{}}
 	switch {
 	case ref != nil:
-		r.Code, r.Payload = ref.Code, ref.Payload
+		r.Code, r.Payload = ref.Code, maps.Clone(ref.Payload)
 		if a.State != "https_off" {
 			r.Outcome = "failed"
 		}
 	case a.State == "joined":
-		r.Payload = map[string]string{"name": a.Name, "node_id": a.NodeID, "join_id": a.JoinID}
+		r.Payload = map[string]string{"name": a.Name, "node_id": a.NodeID}
 	}
+	if r.Payload == nil {
+		r.Payload = map[string]string{}
+	}
+	r.Payload["join_id"] = a.JoinID
 	if j.Op == "join" {
 		return e.finishAnswer(j, r)
 	}

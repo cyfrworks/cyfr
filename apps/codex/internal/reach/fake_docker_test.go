@@ -607,17 +607,19 @@ func (f *fakeDocker) load(files, profiles []string, env []string) (*fakeConfig, 
 		return &cfg, nil
 	}
 	cfg := &fakeConfig{Name: f.st.Project, Services: map[string]*fakeService{}}
-	for _, name := range files {
-		data, err := os.ReadFile(filepath.Join(f.dir, name))
+	for i := 0; i < len(files); i++ {
+		data, err := os.ReadFile(filepath.Join(f.dir, files[i]))
 		if err != nil {
 			return nil, err
 		}
 		var doc struct {
+			Include  []string                  `yaml:"include"`
 			Services map[string]map[string]any `yaml:"services"`
 		}
 		if err := yaml.Unmarshal(data, &doc); err != nil {
 			return nil, err
 		}
+		files = append(files, doc.Include...)
 		for svcName, raw := range doc.Services {
 			svc := cfg.Services[svcName]
 			if svc == nil {

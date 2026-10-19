@@ -11,6 +11,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestProjectNameIsComposesDefault(t *testing.T) {
@@ -202,5 +203,95 @@ func TestCheckStackValidatesTheEffectiveValues(t *testing.T) {
 	writeFile(t, filepath.Join(h.dir, ".env"), append(repoFile(t, ".env.example"), []byte("CYFR_LOCAL_INGRESS_ASSERTED=true\n")...))
 	if err := h.e.CheckStack(bg); refusalCode(err) != "reach_source_conflict" && refusalCode(err) != "reach_assertion_from_file" {
 		t.Errorf("the assertion from .env answered %v", err)
+	}
+}
+
+// ComposeArgs never runs a stale configuration: its file is reused while
+// every input reads as it did, and made afresh, under the same name, once
+// the compose file, a file it includes, or .env has changed.
+func TestComposeArgsFollowsItsInputs(t *testing.T) {
+	h := newHome(t)
+	writeFile(t, filepath.Join(h.dir, "docker-compose.override.yml"), []byte("include:\n  - extra.yml\n"))
+	writeFile(t, filepath.Join(h.dir, "extra.yml"), []byte("services:\n  extra:\n    image: extra:one\n"))
+	head := h.head()
+	path := filepath.Join(h.dir, resolvedName(head.Digest()))
+	configs := func() int {
+		return len(slices.DeleteFunc(h.fake.calls(), func(c fakeCall) bool { return c.Args[0] != "compose" || !slices.Contains(c.Args, "config") }))
+	}
+	read := func() string {
+		args, err := h.e.ComposeArgs(bg, head, "ps")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !slices.Contains(args, resolvedName(head.Digest())) {
+			t.Fatalf("ComposeArgs answered %v", args)
+		}
+		data, _ := os.ReadFile(path)
+		return string(data)
+	}
+	first := read()
+	if again := read(); again != first || configs() != 1 {
+		t.Errorf("unchanged inputs were read again (%d config calls)", configs())
+	}
+	for _, change := range []struct{ name, file, from, to, want string }{
+		{"the compose file", "docker-compose.yml", "ghcr.io/cyfrworks/cyfr:latest", "ghcr.io/cyfrworks/cyfr:0.9.1", "image: ghcr.io/cyfrworks/cyfr:0.9.1"},
+		{"an included file", "extra.yml", "extra:one", "extra:two", "image: extra:two"},
+		{".env", ".env", "CYFR_PRIVATE_EGRESS_TARGETS=locus-backends", "CYFR_PRIVATE_EGRESS_TARGETS=locus-backends,db", "CYFR_PRIVATE_EGRESS_TARGETS: locus-backends,db"},
+	} {
+		before, calls := read(), configs()
+		data, _ := os.ReadFile(filepath.Join(h.dir, change.file))
+		writeFile(t, filepath.Join(h.dir, change.file), []byte(strings.Replace(string(data), change.from, change.to, 1)))
+		after := read()
+		if configs() != calls+1 || !strings.Contains(after, change.want) {
+			t.Errorf("%s changed and ComposeArgs did not run the configuration it now gives", change.name)
+		}
+		if after == before {
+			t.Errorf("%s changed and the materialized file is the same", change.name)
+		}
+	}
+}
+
+// StartWithin waits as long as its caller says for cyfr's health; Start
+// waits HealthDeadline.
+func TestStartWithinWaitsItsOwnHealth(t *testing.T) {
+	h := newHome(t)
+	h.fake.st.Health = "starting"
+	for _, c := range []struct {
+		start func() (Receipt, error)
+		wait  time.Duration
+	}{
+		{func() (Receipt, error) { return h.e.Start(bg, "up") }, HealthDeadline},
+		{func() (Receipt, error) { return h.e.StartWithin(bg, "update", 15*time.Minute) }, 15 * time.Minute},
+	} {
+		before := h.clock.Now()
+		rc, err := c.start()
+		waited := h.clock.Now().Sub(before)
+		if err == nil || rc.Outcome != "failed" || !strings.Contains(err.Error(), "not healthy within "+c.wait.String()) || waited < c.wait || waited > c.wait+time.Minute {
+			t.Errorf("a %s wait answered %+v, %v after %s", c.wait, rc, err, waited)
+		}
+		h.e.Stop(bg, "down", true)
+	}
+}
+
+// ProjectName and DefaultFiles are the engine's own resolution, for the
+// commands that need them.
+func TestProjectNameAndDefaultFiles(t *testing.T) {
+	h := newHome(t)
+	wd, _ := os.Getwd()
+	t.Cleanup(func() { os.Chdir(wd) })
+	os.Chdir(h.dir)
+	if got := ProjectName("."); got != "home" {
+		t.Errorf("ProjectName(.) = %q", got)
+	}
+	if main, override, err := DefaultFiles(h.dir); main != "docker-compose.yml" || override != "" || err != nil {
+		t.Errorf("DefaultFiles = %q, %q, %v", main, override, err)
+	}
+	writeFile(t, filepath.Join(h.dir, "compose.override.yaml"), []byte("services: {}\n"))
+	if main, override, err := DefaultFiles(h.dir); main != "docker-compose.yml" || override != "compose.override.yaml" || err != nil {
+		t.Errorf("DefaultFiles = %q, %q, %v", main, override, err)
+	}
+	writeFile(t, filepath.Join(h.dir, "compose.yml"), []byte("services: {}\n"))
+	if _, _, err := DefaultFiles(h.dir); err == nil {
+		t.Error("two main files are not refused")
 	}
 }

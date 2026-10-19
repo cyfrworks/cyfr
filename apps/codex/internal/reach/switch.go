@@ -137,7 +137,7 @@ func (e *Engine) preview(ctx context.Context, t Target, joinID string) (Preview,
 	if t.Mode == ModeTailnet && joinID == "" && e.tailnetActive(ctx, st) {
 		return Preview{}, Refuse("tailnet_active", map[string]string{"name": st.head.Host})
 	}
-	d, err := e.derive(st, t, joinID)
+	d, err := e.derive(ctx, st, t, joinID)
 	if err != nil {
 		return Preview{}, err
 	}
@@ -155,26 +155,63 @@ func (e *Engine) preview(ctx context.Context, t Target, joinID string) (Preview,
 }
 
 // derive is the head t makes from .env's settings and, for tailnet, the
-// join joinID completed.
-func (e *Engine) derive(st envState, t Target, joinID string) (Derivation, error) {
+// machine: the one join joinID froze, or with no join id the machine
+// this home has now (machine).
+func (e *Engine) derive(ctx context.Context, st envState, t Target, joinID string) (Derivation, error) {
 	if st.curErr != nil {
 		return Derivation{}, st.curErr
 	}
 	var join *Join
-	if t.Mode == ModeTailnet && joinID != "" {
+	switch {
+	case t.Mode != ModeTailnet:
+	case joinID != "":
 		rec, err := e.readJoin()
 		if err != nil {
 			return Derivation{}, err
 		}
-		if rec == nil || rec.JoinID != joinID {
+		if rec != nil && rec.JoinID == joinID {
+			if ref := rec.refusal(); ref != nil && rec.State != "https_off" {
+				return Derivation{}, ref
+			}
+			join = &Join{Name: rec.Name, NodeID: rec.NodeID}
+		} else if join = e.joinReceiptFor(joinID); join == nil {
 			return Derivation{}, Refuse("tailnet_join_not_current", nil)
 		}
-		if ref := rec.refusal(); ref != nil {
-			return Derivation{}, ref
+	default:
+		var err error
+		if join, err = e.machine(ctx); err != nil {
+			return Derivation{}, err
 		}
-		join = &Join{Name: rec.Name, NodeID: rec.NodeID}
 	}
 	return Derive(t, st.cur, join)
+}
+
+// machine is this home's tailnet machine, nil when it has none: the one
+// the running tailscale service reports, which is the state volume's
+// own, else the machine the latest completed join froze (HTTPS off
+// included: the start checks HTTPS before Serve opens). A running
+// service whose state holds no login has none.
+func (e *Engine) machine(ctx context.Context) (*Join, error) {
+	cs, err := e.observe(ctx)
+	if err != nil {
+		return nil, err
+	}
+	for _, c := range cs {
+		if c.Service != serveService || !running(c.State) {
+			continue
+		}
+		if s, ok := e.statusOnce(ctx, []string{"exec", c.Name, "tailscale", "status", "--json"}); ok {
+			if s.BackendState != "Running" {
+				return nil, nil
+			}
+			return &Join{Name: s.name(), NodeID: s.id()}, nil
+		}
+	}
+	rec, err := e.readJoin()
+	if err != nil || rec == nil || rec.State != "joined" && rec.State != "https_off" {
+		return nil, err
+	}
+	return &Join{Name: rec.Name, NodeID: rec.NodeID}, nil
 }
 
 func switchDigest(r SwitchRequest) string {
@@ -217,7 +254,7 @@ func (e *Engine) doSwitch(ctx context.Context, r SwitchRequest) (Receipt, error)
 			return refuse(ref)
 		}
 	}
-	d, err := e.derive(st, r.Target, r.JoinID)
+	d, err := e.derive(ctx, st, r.Target, r.JoinID)
 	if err != nil {
 		return refuse(err)
 	}
@@ -247,7 +284,7 @@ func (e *Engine) doSwitch(ctx context.Context, r SwitchRequest) (Receipt, error)
 	if anyRunning(cs, js) {
 		// Both heads' reach services, named from their profiles: a
 		// stopped stack needs none, and makes no compose call.
-		if err := e.checkProvenance(); err != nil {
+		if _, err := e.checkProvenance(); err != nil {
 			return Receipt{}, err
 		}
 		for _, h := range []*Head{j.OldHead, j.NewHead} {
@@ -287,19 +324,25 @@ func (e *Engine) runSwitch(ctx context.Context, j *journal) (Receipt, error) {
 }
 
 // startTarget starts the committed head if the stack was running, and
-// rolls back when it cannot.
+// rolls back when it cannot. A machine that is another than the head's
+// leaves the head committed and cyfr running with Serve closed
+// (started_local); one that has not joined, or has HTTPS off, is a start
+// that failed.
 func (e *Engine) startTarget(ctx context.Context, j *journal) (Receipt, error) {
 	done := Receipt{RequestID: j.RequestID, RequestDigest: j.RequestDigest, Op: j.Op, State: "completed", Outcome: "ok", FinalHead: j.NewHead}
 	if !j.Running {
 		return e.finishAnswer(j, done)
 	}
-	s := e.startHead(ctx, *j.NewHead, j, false)
-	if s.ok {
+	s := e.startHead(ctx, *j.NewHead, j, false, HealthDeadline)
+	switch {
+	case s.ok:
 		return e.finishAnswer(j, done)
+	case s.identityMismatch():
+		return e.finishAnswer(j, e.completed(j, "started_local", s.local, j.NewHead))
 	}
 	why := s.why
-	if s.mismatch != nil {
-		why = s.mismatch.Message()
+	if s.local != nil {
+		why = s.local.Message()
 	}
 	return e.rollback(ctx, j, why, s.content)
 }
@@ -334,12 +377,12 @@ func (e *Engine) rollback(ctx context.Context, j *journal, why string, content [
 		return e.finishAnswer(j, e.failed(j, map[string]string{"new": newWords, "env": st.words()}))
 	}
 	oldWords := wordsText(Describe(*j.OldHead))
-	s := e.startHead(ctx, *j.OldHead, j, false)
+	s := e.startHead(ctx, *j.OldHead, j, false, HealthDeadline)
 	switch {
 	case s.ok:
 		return e.finishAnswer(j, e.completed(j, "rolled_back", Refuse("reach_rolled_back", map[string]string{"new": newWords, "old": oldWords, "reason": why}), j.OldHead))
-	case s.mismatch != nil:
-		return e.finishAnswer(j, e.completed(j, "rolled_back", s.mismatch, j.OldHead))
+	case s.local != nil:
+		return e.finishAnswer(j, e.completed(j, "started_local", s.local, j.OldHead))
 	}
 	if s := e.stopAndVerify(ctx, j.Services); !s.ok {
 		return e.uncertain(j, s)

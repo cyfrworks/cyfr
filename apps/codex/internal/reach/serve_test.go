@@ -32,8 +32,11 @@ func TestNodeMismatchLeavesServeClosedAndCyfrRunning(t *testing.T) {
 			}
 			c.rename(h.fake.st.Volumes[stateVolume])
 			rc, err := h.e.Start(bg, "up")
-			if refusalCode(err) != "tailnet_node_mismatch" || rc.Payload["node"] != c.node || rc.Payload["env"] != c.inEnv {
+			if refusalCode(err) != "tailnet_node_mismatch" || rc.State != "completed" || rc.Outcome != "started_local" || rc.Payload["node"] != c.node || rc.Payload["env"] != c.inEnv {
 				t.Fatalf("start answered %+v, %v", rc, err)
+			}
+			if rc.Refusal().Code != "tailnet_node_mismatch" {
+				t.Errorf("the receipt's refusal is %v", rc.Refusal())
 			}
 			if !strings.Contains(err.(*Refusal).Message(), "it answers on this machine only") {
 				t.Errorf("the sentence reads %q", err.(*Refusal).Message())
@@ -134,20 +137,13 @@ func TestRestoreOfAnotherMachinesEnv(t *testing.T) {
 		t.Error("cyfr does not run")
 	}
 
-	// `cyfr reach tailnet`: no join is active while Serve is closed, so
-	// it joins (the machine as it is, B) and previews A → B.
-	if _, err := h.e.Preview(bg, Target{Mode: ModeTailnet}, ""); refusalCode(err) != "tailnet_not_joined" {
-		t.Errorf("the first preview answered %v", err)
-	}
-	again := h.join(5, "", false)
-	if again.Payload["node_id"] != b.Payload["node_id"] {
-		t.Errorf("joining again found %v, not B", again.Payload)
-	}
-	p := h.preview(Target{Mode: ModeTailnet}, again.Payload["join_id"])
+	// `cyfr reach tailnet`: the state volume's machine, B, is taken as
+	// joined, and the preview changes the address A → B.
+	p := h.preview(Target{Mode: ModeTailnet}, "")
 	if p.Old.NodeID != a.Payload["node_id"] || p.New.NodeID != b.Payload["node_id"] || p.Old.Host != a.Payload["name"] || p.New.Host != b.Payload["name"] {
 		t.Errorf("the correction previews %s (%s) → %s (%s)", p.Old.Host, p.Old.NodeID, p.New.Host, p.New.NodeID)
 	}
-	if sw, err := h.e.Switch(bg, SwitchRequest{ID: id(6), Target: Target{Mode: ModeTailnet}, JoinID: again.Payload["join_id"], OldDigest: p.OldDigest, NewDigest: p.NewDigest}); err != nil || sw.Outcome != "ok" {
+	if sw, err := h.e.Switch(bg, SwitchRequest{ID: id(6), Target: Target{Mode: ModeTailnet}, OldDigest: p.OldDigest, NewDigest: p.NewDigest}); err != nil || sw.Outcome != "ok" {
 		t.Fatalf("the correction answered %+v, %v", sw, err)
 	}
 	if got, _ := os.ReadFile(h.e.servePath()); string(got) != serveOpen(4001) {
@@ -181,5 +177,127 @@ func TestSwitchRefusesAMachineThatChangedSinceItsJoin(t *testing.T) {
 	r2 := h2.request(id(2), Target{Mode: ModeTailnet}, j.Payload["join_id"])
 	if rc, err := h2.e.Switch(bg, r2); refusalCode(err) != "tailnet_name_changed" || !strings.Contains(rc.Payload["now"], "n0099CNTRL") {
 		t.Errorf("switch to a re-identified machine answered %+v, %v", rc, err)
+	}
+}
+
+// A node that is not the head's leaves every start path local: cyfr
+// runs and is healthy, Serve stays closed, nothing is rolled back for
+// it, and the receipt says started_local with tailnet_node_mismatch: the
+// switch's start, a rollback's start and recovery's start alike.
+func TestEveryStartPathStartsLocalOnAMismatch(t *testing.T) {
+	assertLocal := func(t *testing.T, h *testHome, rc Receipt, err error, final Head) {
+		t.Helper()
+		if refusalCode(err) != "tailnet_node_mismatch" || rc.State != "completed" || rc.Outcome != "started_local" || rc.Payload["node"] == "" || rc.Payload["env"] == "" {
+			t.Fatalf("answered %+v, %v", rc, err)
+		}
+		if rc.FinalHead == nil || rc.FinalHead.Digest() != final.Digest() || h.head().Digest() != final.Digest() {
+			t.Errorf("the final head is %+v, .env %+v", rc.FinalHead, h.head())
+		}
+		if got, _ := os.ReadFile(h.e.servePath()); string(got) != serveClosed {
+			t.Errorf("Serve's configuration is %s", got)
+		}
+		h.fake.mu.Lock()
+		cyfr := h.fake.st.Containers["cyfr"]
+		h.fake.mu.Unlock()
+		if cyfr == nil || cyfr.State != "running" || cyfr.Health != "healthy" {
+			t.Errorf("cyfr is %+v", cyfr)
+		}
+	}
+
+	t.Run("switch", func(t *testing.T) {
+		h := newHome(t)
+		h.fake.startStack(t, h.head())
+		j := h.join(1, testKey, false)
+		r := h.request(id(2), Target{Mode: ModeTailnet}, j.Payload["join_id"])
+		h.fake.st.Volumes[stateVolume].Name = "renamed.tail1234.ts.net"
+		rc, err := h.e.Switch(bg, r)
+		p := h.preview(Target{Mode: ModeLocal}, "")
+		assertLocal(t, h, rc, err, p.Old)
+		if slices.ContainsFunc(h.fake.calls(), func(c fakeCall) bool {
+			return strings.Contains(c.DotEnv, "CYFR_REACH=local") && c.Args[0] == "compose" && slices.Contains(c.Args, "up")
+		}) {
+			t.Error("the old head was started again")
+		}
+	})
+	t.Run("rollback", func(t *testing.T) {
+		h := newHome(t)
+		h.fake.startStack(t, h.head())
+		h.toTailnet(1, testKey, false)
+		old := h.head()
+		r := h.request(id(3), publicTarget, "")
+		h.fake.st.Volumes[stateVolume].Name = "renamed.tail1234.ts.net"
+		unhealthyWhen(h, "CYFR_REACH=public")
+		rc, err := h.e.Switch(bg, r)
+		assertLocal(t, h, rc, err, old)
+	})
+	t.Run("recovery", func(t *testing.T) {
+		h := newHome(t)
+		h.fake.startStack(t, h.head())
+		h.toTailnet(1, testKey, false)
+		old := h.head()
+		r := h.request(id(3), publicTarget, "")
+		h.killAt("journal:switch:stopped", func(e *Engine) { e.Switch(bg, r) })
+		h.fake.st.Volumes[stateVolume].Name = "renamed.tail1234.ts.net"
+		receipts, err := h.e.Resume(bg)
+		if err != nil || len(receipts) != 1 {
+			t.Fatalf("resume answered %+v, %v", receipts, err)
+		}
+		assertLocal(t, h, receipts[0], receipts[0].Refusal(), old)
+	})
+}
+
+// A start whose machine has HTTPS off, or holds no login, keeps Serve
+// closed and answers why; a machine with no login is no longer offered by
+// a preview, so `cyfr reach tailnet` joins again.
+func TestStartChecksTheMachineIsReady(t *testing.T) {
+	h := newHome(t)
+	h.fake.startStack(t, h.head())
+	h.toTailnet(1, testKey, false)
+	h.e.Stop(bg, "down", false)
+	h.fake.st.Volumes[stateVolume].HTTPS = false
+	if rc, err := h.e.Start(bg, "up"); refusalCode(err) != "tailnet_https_off" || rc.Outcome != "started_local" {
+		t.Errorf("an HTTPS-off start answered %+v, %v", rc, err)
+	}
+	h.e.Stop(bg, "down", false)
+	*h.fake.st.Volumes[stateVolume] = fakeNode{}
+	if rc, err := h.e.Start(bg, "up"); refusalCode(err) != "tailnet_not_joined" || rc.Outcome != "started_local" {
+		t.Errorf("a start with no login answered %+v, %v", rc, err)
+	}
+	if got, _ := os.ReadFile(h.e.servePath()); string(got) != serveClosed {
+		t.Errorf("Serve's configuration is %s", got)
+	}
+	if rec, _ := h.e.readJoin(); rec != nil {
+		t.Errorf("join.json still offers %+v", rec)
+	}
+	h.e.Stop(bg, "down", false)
+	if _, err := h.e.Preview(bg, Target{Mode: ModeTailnet}, ""); refusalCode(err) != "tailnet_not_joined" {
+		t.Errorf("the preview answered %v", err)
+	}
+}
+
+// Previewing tailnet with no join id takes the machine the home has: the
+// running tailscale service's, ahead of a join record (a machine renamed
+// since its join previews as its new name), else the latest completed
+// join's; with neither it is tailnet_not_joined, the CLI's signal to
+// join first.
+func TestTailnetPreviewTakesTheMachineTheHomeHas(t *testing.T) {
+	h := newHome(t)
+	if _, err := h.e.Preview(bg, Target{Mode: ModeTailnet}, ""); refusalCode(err) != "tailnet_not_joined" {
+		t.Errorf("with no machine the preview answered %v", err)
+	}
+	h.join(1, testKey, false)
+	if p := h.preview(Target{Mode: ModeTailnet}, ""); p.New.Host != "cyfr.tail1234.ts.net" || p.New.NodeID != "n0001CNTRL" {
+		t.Errorf("the join record previews %+v", p.New)
+	}
+	h.fake.startStack(t, h.head())
+	h.toTailnet(2, "", false)
+	h.e.Stop(bg, "down", false)
+	h.fake.st.Volumes[stateVolume].Name = "renamed.tail1234.ts.net"
+	if _, err := h.e.Start(bg, "up"); refusalCode(err) != "tailnet_node_mismatch" {
+		t.Fatalf("start answered %v", err)
+	}
+	p := h.preview(Target{Mode: ModeTailnet}, "")
+	if p.Old.Host != "cyfr.tail1234.ts.net" || p.New.Host != "renamed.tail1234.ts.net" {
+		t.Errorf("the renamed machine previews %s → %s", p.Old.Host, p.New.Host)
 	}
 }

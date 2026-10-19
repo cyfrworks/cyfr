@@ -6,9 +6,10 @@ package reach
 import (
 	"context"
 	"errors"
+	"time"
 )
 
-func (e *Engine) doStart(ctx context.Context, cause string) (Receipt, error) {
+func (e *Engine) doStart(ctx context.Context, cause string, health time.Duration) (Receipt, error) {
 	if err := e.requireLock(); err != nil {
 		return Receipt{}, err
 	}
@@ -26,17 +27,17 @@ func (e *Engine) doStart(ctx context.Context, cause string) (Receipt, error) {
 		return Receipt{}, err
 	}
 	defer e.dropFiles(nil, false)
-	s := e.startHead(context.WithoutCancel(ctx), h, nil, true)
+	s := e.startHead(context.WithoutCancel(ctx), h, nil, true, health)
 	r.FinalHead = &h
 	r.At = e.now()
 	switch {
 	case s.ok:
 		r.Outcome = "ok"
 		return r, nil
-	case s.mismatch != nil:
-		r.Outcome = "ok"
-		r.Code, r.Payload = s.mismatch.Code, s.mismatch.Payload
-		return r, s.mismatch
+	case s.local != nil:
+		r.Outcome = "started_local"
+		r.Code, r.Payload = s.local.Code, s.local.Payload
+		return r, s.local
 	}
 	r.Outcome = "failed"
 	return r, errors.New("cyfr " + cause + ": the stack did not start: " + s.why)

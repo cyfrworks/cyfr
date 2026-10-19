@@ -142,30 +142,45 @@ func TestJoinWaitsForItsApproval(t *testing.T) {
 	}
 }
 
-// HTTPS certificates off: the machine is enrolled, the receipt says so
-// and a switch cannot take it; once HTTPS is on, joining again uses the
-// machine as it is.
+// HTTPS certificates off: the machine is enrolled and the receipt says
+// so, naming its join; a switch to it starts nothing it cannot serve,
+// since the start checks HTTPS before Serve opens, and rolls back. Once
+// HTTPS is on, `cyfr reach tailnet` again uses the machine as it is,
+// with no second join.
 func TestJoinWithHTTPSOffIsEnrolled(t *testing.T) {
 	h := newHome(t)
+	h.fake.startStack(t, h.head())
 	h.fake.st.NoHTTPS = true
 	rc, err := h.e.Join(bg, JoinRequest{ID: id(1), AuthKey: strings.NewReader(testKey)})
-	if refusalCode(err) != "tailnet_https_off" || rc.State != "completed" || rc.Outcome != "ok" || rc.Payload["name"] != "cyfr.tail1234.ts.net" {
+	if refusalCode(err) != "tailnet_https_off" || rc.State != "completed" || rc.Outcome != "ok" || rc.Payload["name"] != "cyfr.tail1234.ts.net" || rc.Payload["join_id"] == "" {
 		t.Fatalf("join answered %+v, %v", rc, err)
 	}
-	if !strings.Contains(err.(*Refusal).Message(), "This machine joined your tailnet as `cyfr.tail1234.ts.net`") {
+	if !strings.Contains(err.(*Refusal).Message(), "This machine joined your tailnet as `cyfr.tail1234.ts.net`") || rc.Refusal().Message() != err.(*Refusal).Message() {
 		t.Errorf("the sentence reads %q", err.(*Refusal).Message())
 	}
-	rec, _ := h.e.readJoin()
-	if _, err := h.e.Preview(bg, Target{Mode: ModeTailnet}, rec.JoinID); refusalCode(err) != "tailnet_https_off" {
-		t.Errorf("a switch to the HTTPS-off machine previews as %v", err)
+	p := h.preview(Target{Mode: ModeTailnet}, rc.Payload["join_id"])
+	sw, err := h.e.Switch(bg, SwitchRequest{ID: id(2), Target: Target{Mode: ModeTailnet}, JoinID: rc.Payload["join_id"], OldDigest: p.OldDigest, NewDigest: p.NewDigest})
+	if refusalCode(err) != "reach_rolled_back" || !strings.Contains(sw.Payload["reason"], "HTTPS certificates turned off") {
+		t.Fatalf("the switch to an HTTPS-off machine answered %+v, %v", sw, err)
 	}
+	if got, _ := os.ReadFile(h.e.servePath()); string(got) != serveClosed {
+		t.Errorf("Serve's configuration is %s", got)
+	}
+	h.assertConverged(baseStack...)
+
 	// Turn on HTTPS on the DNS page, then run `cyfr reach tailnet` again.
 	h.fake.st.Volumes[stateVolume].HTTPS = true
-	again := h.join(2, "", false)
-	if again.Payload["node_id"] != "n0001CNTRL" {
-		t.Errorf("joining again did not use the machine as it is: %v", again.Payload)
+	runs := len(slices.DeleteFunc(h.fake.calls(), func(c fakeCall) bool { return c.Args[0] != "run" }))
+	again := h.request(id(3), Target{Mode: ModeTailnet}, "")
+	if sw, err := h.e.Switch(bg, again); err != nil || sw.Outcome != "ok" {
+		t.Fatalf("cyfr reach tailnet again answered %+v, %v", sw, err)
 	}
-	h.request(id(3), Target{Mode: ModeTailnet}, again.Payload["join_id"])
+	if h.head().NodeID != "n0001CNTRL" || len(slices.DeleteFunc(h.fake.calls(), func(c fakeCall) bool { return c.Args[0] != "run" })) != runs {
+		t.Errorf("the machine was not used as it is: %+v", h.head())
+	}
+	if got, _ := os.ReadFile(h.e.servePath()); string(got) != serveOpen(4001) {
+		t.Errorf("Serve's configuration is %s", got)
+	}
 }
 
 // A joined machine is switched to: the start writes Serve's empty
@@ -264,8 +279,11 @@ func TestAbandonedJoinExpiresAtItsOwnDeadline(t *testing.T) {
 
 	h.clock.advance(JoinDeadline + time.Second)
 	receipts, err := h.e.Resume(bg)
-	if err != nil || len(receipts) != 1 || receipts[0].Code != "tailnet_join_expired" || receipts[0].RequestID != id(1) {
+	if err != nil || len(receipts) != 1 || receipts[0].Code != "tailnet_join_expired" || receipts[0].RequestID != id(1) || receipts[0].Payload["join_id"] != rec.JoinID {
 		t.Fatalf("recovery after the deadline answered %+v, %v", receipts, err)
+	}
+	if msg := receipts[0].Refusal().Message(); !strings.HasPrefix(msg, "The approval link expired") {
+		t.Errorf("the expiry reads %q", msg)
 	}
 	if rec, _ := h.e.readJoin(); rec.State != "expired" {
 		t.Errorf("join.json is %+v", rec)
@@ -435,5 +453,29 @@ func TestJoinKilledAtEveryPhaseRecovers(t *testing.T) {
 			}
 			h.assertConverged()
 		})
+	}
+}
+
+// A join while the tailscale service runs, as it does with Serve closed
+// after a mismatch, stops and removes the service first: two tailscaleds
+// never share the state volume.
+func TestJoinStopsTheTailscaleServiceFirst(t *testing.T) {
+	h := newHome(t)
+	h.fake.startStack(t, h.head())
+	h.toTailnet(1, testKey, false)
+	h.e.Stop(bg, "down", false)
+	h.fake.st.Volumes[stateVolume].Name = "renamed.tail1234.ts.net"
+	if _, err := h.e.Start(bg, "up"); refusalCode(err) != "tailnet_node_mismatch" {
+		t.Fatalf("start answered %v", err)
+	}
+	if !slices.Contains(h.fake.runningServices(), "tailscale") {
+		t.Fatal("the tailscale service is not running")
+	}
+	rc := h.join(3, "", false)
+	if rc.Payload["name"] != "renamed.tail1234.ts.net" {
+		t.Errorf("the join found %v", rc.Payload)
+	}
+	if slices.Contains(h.fake.runningServices(), "tailscale") {
+		t.Error("the tailscale service runs beside the join")
 	}
 }

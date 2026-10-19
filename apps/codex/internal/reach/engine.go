@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"maps"
 	"os"
 	"path/filepath"
 	"sync"
@@ -65,9 +66,9 @@ type Engine struct {
 	mu     sync.Mutex
 	holder holderRecord
 	// files are the materialized configurations this engine wrote and
-	// has not removed, relative to the project directory, each with the
-	// stamp of the sources it was read from.
-	files map[string]string
+	// has not removed, relative to the project directory, each with what
+	// it was made from.
+	files map[string]materialized
 
 	// Test seams: the clock, a write's failure at one of its steps, and a
 	// named point of an operation.
@@ -85,7 +86,7 @@ func Open(projectDir string, d Docker) (*Engine, error) {
 	if err != nil {
 		return nil, fmt.Errorf("reach: %w", err)
 	}
-	e := &Engine{dir: dir, project: projectName(dir), files: map[string]string{}}
+	e := &Engine{dir: dir, project: projectName(dir), files: map[string]materialized{}}
 	if e.project == "" {
 		return nil, fmt.Errorf("reach: %s has no name docker compose can take as its project's", dir)
 	}
@@ -155,8 +156,10 @@ func (e *Engine) CheckStack(ctx context.Context) error { return e.checkStack(ctx
 // Receipt is an operation's answer: rejected (Code says why, nothing
 // changed), accepted in Phase (in progress; "uncertain" is still unfinished
 // and resumable with `cyfr reach --resume`), completed with Outcome (ok,
-// rolled_back, not_applied or failed), or unknown (no journal and no
-// receipt holds the id).
+// rolled_back, not_applied, failed, or started_local: cyfr running and
+// healthy with Serve closed, Code saying why, tailnet_node_mismatch for
+// a machine that is not the head's), or unknown (no journal and no
+// receipt holds the id). A join's Payload names its join_id.
 type Receipt struct {
 	RequestID     string            `json:"request_id"`
 	RequestDigest string            `json:"request_digest"`
@@ -171,12 +174,15 @@ type Receipt struct {
 	At            time.Time         `json:"at"`
 }
 
-// Refusal is the code a receipt answers with, nil for a plain success.
+// Refusal is the code a receipt answers with, nil for a plain success. A
+// join's join_id names the attempt, not a part of its sentence.
 func (r Receipt) Refusal() *Refusal {
 	if r.Code == "" {
 		return nil
 	}
-	return Refuse(r.Code, r.Payload)
+	payload := maps.Clone(r.Payload)
+	delete(payload, "join_id")
+	return Refuse(r.Code, payload)
 }
 
 // Resume runs recovery under the lock: an unfinished operation in
@@ -219,18 +225,21 @@ type Preview struct {
 	AddressChanges       []string
 }
 
-// Preview derives the head target t makes, for tailnet from the join
-// joinID completed, and shows it against .env's. It reads without the lock.
-// It refuses as Derive does, with reach_unchanged when both heads are the
-// same, and with tailnet_active when t asks to join while the head's node
-// is serving.
+// Preview derives the head target t makes, for tailnet from the machine
+// the join joinID froze, or with no join id from the machine this home
+// has (the running tailscale service's, else the latest completed join's;
+// tailnet_not_joined when it has none), and shows it against .env's. It
+// reads without the lock. It refuses as Derive does, with reach_unchanged
+// when both heads are the same, and with tailnet_active when t asks for
+// tailnet while the head's node is serving.
 func (e *Engine) Preview(ctx context.Context, t Target, joinID string) (Preview, error) {
 	return e.preview(ctx, t, joinID)
 }
 
 // SwitchRequest is a switch: its request id, the target, the join whose
-// frozen name and id a tailnet head takes, and both digests the preview
-// showed, which the fence recomputes (reach_stale, tailnet_name_changed).
+// frozen name and id a tailnet head takes (none: the machine this home
+// has, as Preview), and both digests the preview showed, which the fence
+// recomputes (reach_stale, tailnet_name_changed).
 type SwitchRequest struct {
 	ID        string
 	Target    Target
@@ -290,11 +299,19 @@ func (e *Engine) ForgetJoin() error { return e.forgetJoin() }
 
 // Start is the one start path (up, update, restore; cause names it): it
 // checks the stack (CheckStack), writes Serve's empty configuration,
-// starts cyfr and the head's reach services, validates a tailnet node
-// against the head before Serve opens (tailnet_node_mismatch leaves Serve
-// closed and cyfr running), and waits for cyfr's health.
+// starts cyfr and the head's reach services, waits HealthDeadline for
+// cyfr's health, and validates a tailnet node against the head before
+// Serve opens: a node that cannot serve the head (tailnet_node_mismatch,
+// tailnet_not_joined, tailnet_https_off) leaves Serve closed and cyfr
+// running, Outcome started_local.
 func (e *Engine) Start(ctx context.Context, cause string) (Receipt, error) {
-	return e.doStart(ctx, cause)
+	return e.StartWithin(ctx, cause, HealthDeadline)
+}
+
+// StartWithin is Start with its own wait for cyfr's health, for a start
+// that may take longer, as an update's migrations do.
+func (e *Engine) StartWithin(ctx context.Context, cause string, health time.Duration) (Receipt, error) {
+	return e.doStart(ctx, cause, health)
 }
 
 // Stop stops and verifies cyfr and every reach service of .env's head and

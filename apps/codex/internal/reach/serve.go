@@ -152,8 +152,9 @@ func identity(name, id string, withID bool) string {
 
 // validateNode compares the running tailscale service's machine, read
 // twice in agreement, with h byte for byte: tailnet_node_mismatch when
-// it is another, tailnet_not_joined when it has joined no tailnet. Only
-// a match lets Serve open.
+// it is another, tailnet_not_joined when it has joined no tailnet,
+// tailnet_https_off when it is h's machine but cannot have a
+// certificate. Only a match with HTTPS on lets Serve open.
 func (e *Engine) validateNode(ctx context.Context, h Head) (*Refusal, error) {
 	s, err := e.agreedStatus(ctx, e.composeArgs(h, "exec", "-T", serveService, "tailscale", "status", "--json"), HealthDeadline)
 	if err != nil {
@@ -163,6 +164,9 @@ func (e *Engine) validateNode(ctx context.Context, h Head) (*Refusal, error) {
 		return Refuse("tailnet_not_joined", nil), nil
 	}
 	if s.name() == h.Host && s.id() == h.NodeID {
+		if !s.https() {
+			return Refuse("tailnet_https_off", map[string]string{"name": s.name()}), nil
+		}
 		return nil, nil
 	}
 	withID := s.name() == h.Host
