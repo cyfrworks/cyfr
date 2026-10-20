@@ -690,10 +690,13 @@ echo 'ok: a whole gate that passes, every suite with a result'
 # path is the PostgreSQL one. The arca island's tests stall with a
 # grandchild and reach their deadline; the sanctum island's compile takes
 # ten seconds and its tests hold, so the gate still runs when arca is
-# stopped.
+# stopped. The twenty-second step deadline reaches the islands leg alone,
+# through BASH_ENV as above: the static leg runs the real fixture recipes
+# and npm checks, which a loaded runner can keep past twenty seconds.
 mkdir -p "$scratch/tmp-a"
+printf 'case "${1:-}:${2:-}" in --leg:islands) export GATE_STEP_DEADLINE=20 ;; esac\n' > "$scratch/a.bash_env"
 cd "$root/scripts"
-start_gate a TMPDIR="$scratch/tmp-a" MIX_BUILD_PATH=_build/test_pg GATE_STEP_DEADLINE=20 \
+start_gate a TMPDIR="$scratch/tmp-a" MIX_BUILD_PATH=_build/test_pg BASH_ENV="$scratch/a.bash_env" \
   STUB_STALL=island_arca_test STUB_DELAY=island_sanctum_compile STUB_HOLD=island_sanctum_test \
   -- ./commit-gate.sh -n 3 -l "$scratch/a.log"
 cd "$root"
