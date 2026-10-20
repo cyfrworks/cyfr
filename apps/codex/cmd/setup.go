@@ -24,6 +24,7 @@ import (
 func init() {
 	setupCmd.Flags().Int("port", 0, "The port on 127.0.0.1 the setup pages are served on (a free one when 0)")
 	setupCmd.Flags().Bool("no-pull", false, "Do not pull the stack's images")
+	setupCmd.Flags().Bool("no-open", false, "Do not open the pages in the default browser (a device's launcher opens them)")
 	rootCmd.AddCommand(setupCmd)
 }
 
@@ -31,7 +32,7 @@ var setupCmd = &cobra.Command{
 	Use:     "setup",
 	Short:   "Set up a new home from pages on this machine's screen: how it is reached, your email, then the start",
 	GroupID: "server",
-	Long: `Set up a new home in the current directory from pages shown on this machine's own screen, the face of 'cyfr init' for a device with a touch screen and no keyboard. It serves the pages on 127.0.0.1, at a port of its own, before anything of the stack runs, prints their address and writes it to .cyfr/setup.url while it serves them; it opens no browser itself, which a device's launcher or a desktop does. Nothing off this machine reaches them: the address carries a token of this run, and every request must come from the pages themselves.
+	Long: `Set up a new home in the current directory from pages shown on this machine's own screen, the face of 'cyfr init' for a device with a touch screen and no keyboard. It serves the pages on 127.0.0.1, at a port of its own, before anything of the stack runs, prints their address and writes it to .cyfr/setup.url while it serves them, then, on a machine with a display, opens them in the default browser as 'cyfr open' does. --no-open leaves that to a device's launcher, which reads the address from .cyfr/setup.url; a Linux machine with neither DISPLAY nor WAYLAND_DISPLAY set has no display. Nothing off this machine reaches them: the address carries a token of this run, and every request must come from the pages themselves.
 
 The pages ask how the home is reached (your phone and laptop via Tailscale, the recommended choice; only this device; or, under Advanced, a public domain with an optional certificate email) and the email of the home's administrator, then start: they run what 'cyfr init' runs, the same steps in the same order, then what 'cyfr up' runs. A tailnet home's join shows its approval link as a QR code and as text, under it the machine's name (cyfr unless changed there), and waits for the approval; a join that fails, expires or is cancelled leaves the home reached from this device only, and the pages offer to try the join again or to start the home on this device only. A start that fails shows why, and offers to try again or, for a home reached from other devices, to start it on this device only. Each refusal is the command line's own sentence.
 
@@ -39,7 +40,8 @@ Once the home is up, the pages show its address and move the browser there, apar
 
 Exit status 3: the home started, but on this machine only, because the tailnet machine is not ready to serve it (not the one .env names, not joined, or HTTPS off); Serve stays closed, and the message says what to do. Exit status 1: the home was not set up and started, the message saying why.`,
 	Example: `  cyfr setup
-  cyfr setup --port 4040`,
+  cyfr setup --port 4040
+  cyfr setup --no-open`,
 	Args: cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		ctx := cmd.Context()
@@ -48,17 +50,18 @@ Exit status 3: the home started, but on this machine only, because the tailnet m
 		}
 		port, _ := cmd.Flags().GetInt("port")
 		noPull, _ := cmd.Flags().GetBool("no-pull")
+		noOpen, _ := cmd.Flags().GetBool("no-open")
 		if port < 0 || port > 65535 {
 			return fmt.Errorf("--port takes a port from 1 to 65535, or 0 for a free one; %d is none", port)
 		}
-		return runSetup(ctx, setupOptions{port: port, noPull: noPull}, cmd.OutOrStdout())
+		return runSetup(ctx, setupOptions{port: port, noPull: noPull, noOpen: noOpen}, cmd.OutOrStdout())
 	},
 }
 
 // setupOptions are cyfr setup's flags.
 type setupOptions struct {
-	port   int
-	noPull bool
+	port           int
+	noPull, noOpen bool
 }
 
 // setupURLFile is where cyfr setup writes the address of its pages, for
@@ -125,8 +128,12 @@ func runSetup(ctx context.Context, o setupOptions, out io.Writer) error {
 	if err := writeFileAtomic(setupURLFile, []byte(address+"\n"), 0o600); err != nil {
 		return fmt.Errorf("cyfr setup cannot write %s (%v). Nothing was changed", setupURLFile, err)
 	}
-	fmt.Fprintf(out, "Setup is at %s\n", address)
-	fmt.Fprintln(out, "Open it in a browser on this machine. It stops once the home is up.")
+	fmt.Fprintf(out, "Setup is at %s\n", hyperlink(out, address))
+	if openOnDisplay(address, o.noOpen, out) {
+		fmt.Fprintln(out, "Opened it in your browser. It stops once the home is up.")
+	} else {
+		fmt.Fprintln(out, "Open it in a browser on this machine. It stops once the home is up.")
+	}
 
 	select {
 	case <-s.finished:

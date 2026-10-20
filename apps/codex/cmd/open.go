@@ -6,6 +6,7 @@ package cmd
 import (
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/url"
 	"os"
@@ -14,6 +15,7 @@ import (
 
 	"github.com/cyfr/codex/internal/config"
 	"github.com/spf13/cobra"
+	"golang.org/x/term"
 )
 
 func init() {
@@ -68,6 +70,72 @@ var openBrowser = func(address string) error {
 	// An opener that falls back to a browser in the terminal needs it.
 	opener.Stdin, opener.Stdout, opener.Stderr = os.Stdin, os.Stdout, os.Stderr
 	return opener.Run()
+}
+
+// launchBrowser hands address to this system's opener (browserCommand)
+// without waiting for it, since an opener may wait for the browser to
+// exit, and answers only a failure to start it. A test stands in for it.
+var launchBrowser = func(address string) error {
+	name, args := browserCommand(runtime.GOOS, address)
+	if _, err := exec.LookPath(name); err != nil {
+		return errors.New("no " + name + " to open it with")
+	}
+	opener := exec.Command(name, args...)
+	if err := opener.Start(); err != nil {
+		return err
+	}
+	go func() { _ = opener.Wait() }()
+	return nil
+}
+
+// hasDisplay is whether a browser opened on this machine shows on a
+// screen (displayed). A test stands in for it.
+var hasDisplay = func() bool { return displayed(runtime.GOOS, os.Getenv) }
+
+// displayed is whether the system goos, with the environment getenv,
+// shows a browser opened on it: macOS and Windows always, elsewhere only
+// under an X or Wayland display, which a headless machine lacks.
+func displayed(goos string, getenv func(string) string) bool {
+	switch goos {
+	case "darwin", "windows":
+		return true
+	}
+	return getenv("DISPLAY") != "" || getenv("WAYLAND_DISPLAY") != ""
+}
+
+// openOnDisplay opens address in the default browser, as cyfr open does,
+// unless noOpen or there is no display, and answers whether it did; one
+// that cannot be opened is said on out. The address is printed before it
+// either way.
+func openOnDisplay(address string, noOpen bool, out io.Writer) bool {
+	if noOpen || !hasDisplay() {
+		return false
+	}
+	if err := launchBrowser(address); err != nil {
+		fmt.Fprintf(out, "Could not open a browser here (%v); open the address above.\n", err)
+		return false
+	}
+	return true
+}
+
+// hyperlink is address as out shows it: an OSC 8 hyperlink, which a
+// terminal shows as the address and opens on a click, when out is a
+// terminal other than Apple Terminal, which prints the sequence as text;
+// the address as it is otherwise.
+func hyperlink(out io.Writer, address string) string {
+	if w, ok := out.(*syncWriter); ok {
+		out = w.w
+	}
+	f, ok := out.(*os.File)
+	return hyperlinkFor(address, ok && term.IsTerminal(int(f.Fd())), os.Getenv("TERM_PROGRAM"))
+}
+
+// hyperlinkFor is hyperlink on a terminal or not, run as termProgram.
+func hyperlinkFor(address string, terminal bool, termProgram string) string {
+	if !terminal || termProgram == "Apple_Terminal" {
+		return address
+	}
+	return "\x1b]8;;" + address + "\x1b\\" + address + "\x1b]8;;\x1b\\"
 }
 
 // browserAddress is the address as a browser should open it: a loopback

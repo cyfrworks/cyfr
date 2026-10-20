@@ -764,3 +764,50 @@ func TestSetupTryAgainAfterAFailedSwitchTakesItsRecovery(t *testing.T) {
 		t.Errorf("the switch's journal is left unfinished")
 	}
 }
+
+// On a machine with a display cyfr setup opens its pages in the default
+// browser after printing their address; with --no-open, or with no
+// display, it opens nothing and asks the person to open them. A launcher
+// that fails is said, and the pages are served all the same.
+func TestSetupOpensItsPagesOnADisplay(t *testing.T) {
+	for _, c := range []struct {
+		name            string
+		display, noOpen bool
+		launchErr       error
+		opened          bool
+		want            string
+	}{
+		{"a display", true, false, nil, true, "Opened it in your browser. It stops once the home is up.\n"},
+		{"--no-open", true, true, nil, false, "Open it in a browser on this machine. It stops once the home is up.\n"},
+		{"no display", false, false, nil, false, "Open it in a browser on this machine. It stops once the home is up.\n"},
+		{"a launcher that fails", true, false, errors.New("no xdg-open to open it with"), false,
+			"Could not open a browser here (no xdg-open to open it with); open the address above.\nOpen it in a browser on this machine. It stops once the home is up.\n"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			newInitProject(t)
+			useFakeEngine(t)
+			l := stubLauncher(t, c.display, c.launchErr)
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			var out bytes.Buffer
+			done := make(chan error, 1)
+			go func() {
+				done <- runSetup(ctx, setupOptions{noPull: true, noOpen: c.noOpen}, &syncWriter{w: &out})
+			}()
+			p := openPages(t)
+			address := p.base + "/#" + p.token
+			cancel()
+			awaitEnd(t, done)
+			if !strings.HasPrefix(out.String(), "Setup is at "+address+"\n"+c.want) {
+				t.Errorf("cyfr setup printed:\n%s", out.String())
+			}
+			var want []string
+			if c.display && !c.noOpen {
+				want = []string{address}
+			}
+			if got := l.all(); !slices.Equal(got, want) {
+				t.Errorf("the launcher was handed %v, want %v", got, want)
+			}
+		})
+	}
+}

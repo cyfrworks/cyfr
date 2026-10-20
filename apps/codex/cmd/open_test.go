@@ -4,10 +4,14 @@
 package cmd
 
 import (
+	"bytes"
 	"errors"
 	"net/url"
+	"os"
 	"reflect"
+	"slices"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/cyfr/codex/internal/config"
@@ -118,4 +122,84 @@ func TestBrowserCommand_PerSystem(t *testing.T) {
 			t.Errorf("%s: %v, want %v", goos, got, want)
 		}
 	}
+}
+
+// launched records each address handed to the launcher a test stands in.
+type launched struct {
+	mu        sync.Mutex
+	addresses []string
+}
+
+func (l *launched) all() []string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return slices.Clone(l.addresses)
+}
+
+// stubLauncher stands a machine with a display, or none, and its launcher
+// in, the launcher failing with err.
+func stubLauncher(t *testing.T, display bool, err error) *launched {
+	t.Helper()
+	l := &launched{}
+	savedDisplay, savedLaunch := hasDisplay, launchBrowser
+	t.Cleanup(func() { hasDisplay, launchBrowser = savedDisplay, savedLaunch })
+	hasDisplay = func() bool { return display }
+	launchBrowser = func(address string) error {
+		l.mu.Lock()
+		defer l.mu.Unlock()
+		l.addresses = append(l.addresses, address)
+		return err
+	}
+	return l
+}
+
+// macOS and Windows always show a browser opened on them; any other
+// system only under an X or a Wayland display.
+func TestDisplayed_PerSystem(t *testing.T) {
+	for _, c := range []struct {
+		goos string
+		env  map[string]string
+		want bool
+	}{
+		{"darwin", nil, true},
+		{"windows", nil, true},
+		{"linux", nil, false},
+		{"linux", map[string]string{"DISPLAY": ":0"}, true},
+		{"linux", map[string]string{"WAYLAND_DISPLAY": "wayland-0"}, true},
+		{"freebsd", map[string]string{"DISPLAY": ""}, false},
+	} {
+		if got := displayed(c.goos, func(k string) string { return c.env[k] }); got != c.want {
+			t.Errorf("%s with %v: displayed %v, want %v", c.goos, c.env, got, c.want)
+		}
+	}
+}
+
+// An address is a hyperlink on a terminal other than Apple Terminal, and
+// plain text off a terminal and on Apple Terminal.
+func TestHyperlink_OnlyOnATerminalThatShowsIt(t *testing.T) {
+	const address = "https://login.tailscale.com/a/abc123"
+	if got, want := hyperlinkFor(address, true, "iTerm.app"), "\x1b]8;;"+address+"\x1b\\"+address+"\x1b]8;;\x1b\\"; got != want {
+		t.Errorf("on a terminal: %q, want %q", got, want)
+	}
+	for name, got := range map[string]string{
+		"Apple Terminal": hyperlinkFor(address, true, "Apple_Terminal"),
+		"no terminal":    hyperlinkFor(address, false, ""),
+		"a buffer":       hyperlink(&bytes.Buffer{}, address),
+		"a file":         hyperlink(tempFile(t), address),
+		"a file, synced": hyperlink(&syncWriter{w: tempFile(t)}, address),
+	} {
+		if got != address {
+			t.Errorf("%s: %q, want the address as it is", name, got)
+		}
+	}
+}
+
+func tempFile(t *testing.T) *os.File {
+	t.Helper()
+	f, err := os.CreateTemp(t.TempDir(), "out")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { f.Close() })
+	return f
 }
