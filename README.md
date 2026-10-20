@@ -2,6 +2,8 @@
   <img src="apps/cyfr/priv/static/images/logo.png" alt="CYFR" width="200" />
 </p>
 
+<p align="center">CYFR is said <em>cipher</em>.</p>
+
 <p align="center">
   <img src="https://img.shields.io/badge/status-alpha-orange" alt="Status: alpha" />
 </p>
