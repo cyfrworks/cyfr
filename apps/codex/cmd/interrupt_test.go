@@ -20,11 +20,12 @@ import (
 
 // blockAfter is a terminal's input that holds the lines answered and then
 // blocks, as a person who stops typing does: asked is closed once a
-// question reads past them. The read ends at the test's end.
+// question reads past them. The read never ends, so a command a failing
+// test leaves running answers nothing more, nor writes in the directory
+// the test returns to.
 func blockAfter(t *testing.T, lines ...string) (in *blockingInput, asked <-chan struct{}) {
 	t.Helper()
-	b := &blockingInput{rest: answersText(lines), asked: make(chan struct{}), unblock: make(chan struct{})}
-	t.Cleanup(func() { close(b.unblock) })
+	b := &blockingInput{rest: answersText(lines), asked: make(chan struct{})}
 	return b, b.asked
 }
 
@@ -36,9 +37,9 @@ func answersText(lines []string) string {
 }
 
 type blockingInput struct {
-	rest           string
-	asked, unblock chan struct{}
-	once           sync.Once
+	rest  string
+	asked chan struct{}
+	once  sync.Once
 }
 
 func (b *blockingInput) Read(p []byte) (int, error) {
@@ -48,8 +49,7 @@ func (b *blockingInput) Read(p []byte) (int, error) {
 		return n, nil
 	}
 	b.once.Do(func() { close(b.asked) })
-	<-b.unblock
-	return 0, os.ErrClosed
+	select {}
 }
 
 // interruptAt runs command under a context cancelled once asked is
