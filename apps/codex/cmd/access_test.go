@@ -778,3 +778,64 @@ func TestReadAuthKey(t *testing.T) {
 		t.Errorf("no key file answered %q, %v", key, err)
 	}
 }
+
+// `cyfr access tailnet` opens the join's approval link as init does: on a
+// machine with a display, once it has printed it, unless --no-open; the
+// join still waits and the change follows it.
+func TestAccessOpensTheJoinLinkOnADisplay(t *testing.T) {
+	const link = "https://login.tailscale.com/a/approve-test"
+	for _, c := range []struct {
+		name                 string
+		display, noOpen, yes bool
+	}{
+		{"a display", true, false, false},
+		{"a display, --yes", true, false, true},
+		{"--no-open", true, true, false},
+		{"no display", false, false, false},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			s := newAccessProject(t)
+			l := stubLauncher(t, c.display, nil)
+			askTerminal = func() bool { return true }
+			askInput = answers("yes", "yes")
+			var out bytes.Buffer
+			if err := runAccess(context.Background(), access.ModeTailnet, accessOptions{noOpen: c.noOpen}, c.yes, "", &out); err != nil {
+				t.Fatalf("access: %v\n%s", err, out.String())
+			}
+			opened := c.display && !c.noOpen
+			between := ""
+			var handed []string
+			if opened {
+				between, handed = "Opened it in your browser.\n", []string{link}
+			}
+			want := "open this link and approve the machine:\n  " + link + "\n" + between + "Waiting for the approval (Ctrl-C cancels the join)...\n"
+			if !strings.Contains(out.String(), want) {
+				t.Errorf("access printed:\n%s\nwant within it:\n%s", out.String(), want)
+			}
+			if got := l.all(); !slices.Equal(got, handed) {
+				t.Errorf("the launcher was handed %v, want %v", got, handed)
+			}
+			if len(s.joins) != 1 || len(s.switches) != 1 || accessOf(t) != access.ModeTailnet {
+				t.Errorf("joined %d times and switched %d times, the home %s", len(s.joins), len(s.switches), accessOf(t))
+			}
+		})
+	}
+}
+
+// --no-open is a flag of init and of `cyfr access`, read into the options
+// both apply.
+func TestNoOpenIsAnAccessFlag(t *testing.T) {
+	for _, c := range []*cobra.Command{initCmd, accessCmd} {
+		f := c.Flags().Lookup("no-open")
+		if f == nil || f.Value.Type() != "bool" {
+			t.Fatalf("%s has no --no-open", c.Name())
+		}
+		t.Cleanup(func() { _ = f.Value.Set("false"); f.Changed = false })
+		if err := f.Value.Set("true"); err != nil {
+			t.Fatal(err)
+		}
+		if !accessFlags(c).noOpen {
+			t.Errorf("%s --no-open is not read into its options", c.Name())
+		}
+	}
+}

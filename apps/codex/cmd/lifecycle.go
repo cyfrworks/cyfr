@@ -397,7 +397,6 @@ func init() {
 	initCmd.Flags().String("access", "", "How a new home is reached: local, tailnet or public (asked on a terminal; local otherwise)")
 	addAccessFlags(initCmd)
 	initCmd.Flags().Bool("no-pull", false, "Do not pull the stack's images")
-	initCmd.Flags().Bool("no-open", false, "Do not open a tailnet join's approval link in the default browser")
 	rootCmd.AddCommand(initCmd)
 	rootCmd.AddCommand(upCmd)
 	rootCmd.AddCommand(downCmd)
@@ -428,7 +427,6 @@ Re-running in an existing project is safe: docker-compose.yml, Caddyfile, cyfr.y
 		o := initOptions{accessOptions: accessFlags(cmd)}
 		o.force, _ = cmd.Flags().GetBool("force")
 		o.noPull, _ = cmd.Flags().GetBool("no-pull")
-		o.noOpen, _ = cmd.Flags().GetBool("no-open")
 		o.mode, _ = cmd.Flags().GetString("access")
 		return runInit(ctx, o, cmd.OutOrStdout(), cmd.ErrOrStderr())
 	},
@@ -438,8 +436,8 @@ Re-running in an existing project is safe: docker-compose.yml, Caddyfile, cyfr.y
 // given.
 type initOptions struct {
 	accessOptions
-	force, noPull, noOpen bool
-	mode                  string
+	force, noPull bool
+	mode          string
 }
 
 // accessChoice is the mode init applies to a new home, with its inputs.
@@ -500,11 +498,7 @@ func runInit(ctx context.Context, o initOptions, out, errOut io.Writer) error {
 		apply: func(ctx context.Context, c accessChoice, key []byte) (access.Head, error) {
 			return applyInitAccess(ctx, c, key, joinChoice{
 				optionsGiven: o.hostname != "" || o.keyFile != "",
-				onAuthURL: func(url string) {
-					if openOnDisplay(url, o.noOpen, out) {
-						fmt.Fprintln(out, "Opened it in your browser.")
-					}
-				},
+				onAuthURL:    openJoinLink(o.noOpen, out),
 			}, out)
 		},
 	}, out, errOut)

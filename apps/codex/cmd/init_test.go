@@ -514,7 +514,7 @@ func TestInitOpensTheJoinLinkOnADisplay(t *testing.T) {
 			askTerminal = func() bool { return true }
 			askInput = strings.NewReader("1\n\n\n")
 			var out bytes.Buffer
-			if err := runInit(context.Background(), initOptions{noPull: true, noOpen: c.noOpen}, &out, &out); err != nil {
+			if err := runInit(context.Background(), initOptions{noPull: true, accessOptions: accessOptions{noOpen: c.noOpen}}, &out, &out); err != nil {
 				t.Fatalf("init: %v\n%s", err, out.String())
 			}
 			opened := c.display && !c.noOpen
