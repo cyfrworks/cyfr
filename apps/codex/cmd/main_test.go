@@ -36,13 +36,18 @@ const asCyfr = "CYFR_CMD_TEST_AS_CYFR"
 
 // TestMain runs the package's tests under a home of their own: init and
 // the commands that sign in save the CLI's config under ~/.cyfr, and no
-// test reads or writes the home of the person running it.
+// test reads or writes the home of the person running it, nor opens its
+// browser.
 //
 // The access engine runs each docker call through `cyfr internal
 // docker-run`, a re-exec of the running binary, which under go test is
 // this test binary: run so, it serves the call through the command tree as
 // cyfr does, and the command exits with the call's status.
 func TestMain(m *testing.M) {
+	// No test opens the browser of the machine it runs on: a test that
+	// opens one stands in for both.
+	hasDisplay = func() bool { return false }
+	launchBrowser = func(string) error { return errors.New("a test launched the browser without standing in for it") }
 	// The program a handover started (TestUpdateHandsOverForReal), which
 	// carries the handover scenario's environment on.
 	if os.Getenv(handoverDir) != "" && slices.Contains(os.Args, "--continue-as") {

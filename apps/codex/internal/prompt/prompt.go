@@ -4,7 +4,9 @@
 package prompt
 
 import (
+	"context"
 	"errors"
+	"io"
 	"os"
 
 	"charm.land/huh/v2"
@@ -38,7 +40,42 @@ func IsAborted(err error) bool {
 	return errors.Is(err, huh.ErrUserAborted) || errors.Is(err, ErrAborted)
 }
 
+// formInput and formOutput are where a form reads its keys and draws,
+// the terminal when nil (UseTerminal).
+var (
+	formInput  io.Reader
+	formOutput io.Writer
+)
+
+// UseTerminal stands in and out for the terminal every form reads its
+// keys from and draws on, until the restore it answers is called; for
+// tests.
+func UseTerminal(in io.Reader, out io.Writer) (restore func()) {
+	savedIn, savedOut := formInput, formOutput
+	formInput, formOutput = in, out
+	return func() { formInput, formOutput = savedIn, savedOut }
+}
+
 // newForm wraps huh.NewForm with standard settings.
 func newForm(groups ...*huh.Group) *huh.Form {
-	return huh.NewForm(groups...)
+	form := huh.NewForm(groups...)
+	if formInput != nil {
+		form = form.WithInput(formInput)
+	}
+	if formOutput != nil {
+		form = form.WithOutput(formOutput)
+	}
+	return form
+}
+
+// run runs form until it is submitted or aborted, or ctx ends. Ctrl-C in
+// the form reaches it as a key, since the form holds the terminal in raw
+// mode, and answers huh.ErrUserAborted; ctx ending, the signals Main
+// cancels the command's context on, answers ErrAborted.
+func run(ctx context.Context, form *huh.Form) error {
+	err := form.RunWithContext(ctx)
+	if ctx.Err() != nil {
+		return ErrAborted
+	}
+	return err
 }

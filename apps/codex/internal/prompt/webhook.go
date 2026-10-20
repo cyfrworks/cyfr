@@ -30,13 +30,13 @@ type WebhookCreateForm struct {
 // `input_template` is a JSON object that gets merged into the component's
 // invoke payload at runtime. The reserved key `_webhook` is rejected
 // server-side (and pre-checked here for a cleaner error).
-func RunWebhookCreateForm() (*WebhookCreateForm, error) {
+func RunWebhookCreateForm(ctx context.Context) (*WebhookCreateForm, error) {
 	f := &WebhookCreateForm{
 		SignatureHeader: "x-cyfr-signature",
 		InputTemplate:   "{}",
 	}
 
-	err := newForm(
+	err := run(ctx, newForm(
 		huh.NewGroup(
 			huh.NewInput().
 				Title("Webhook name").
@@ -85,7 +85,7 @@ func RunWebhookCreateForm() (*WebhookCreateForm, error) {
 				Lines(5).
 				Validate(validateInputTemplateJSON),
 		),
-	).Run()
+	))
 	if err != nil {
 		return nil, err
 	}

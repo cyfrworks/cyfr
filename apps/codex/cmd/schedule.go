@@ -76,7 +76,7 @@ var scheduleCreateCmd = &cobra.Command{
 
 			if name == "" {
 				var err error
-				name, err = prompt.InputText("Schedule name", "my-schedule")
+				name, err = prompt.InputText(cmd.Context(), "Schedule name", "my-schedule")
 				if err != nil {
 					if prompt.IsAborted(err) {
 						return prompt.ErrAborted
@@ -87,7 +87,7 @@ var scheduleCreateCmd = &cobra.Command{
 
 			if cron == "" {
 				var err error
-				cron, err = prompt.InputText("Cron expression", "*/5 * * * *")
+				cron, err = prompt.InputText(cmd.Context(), "Cron expression", "*/5 * * * *")
 				if err != nil {
 					if prompt.IsAborted(err) {
 						return prompt.ErrAborted
@@ -113,7 +113,7 @@ var scheduleCreateCmd = &cobra.Command{
 		}
 
 		profileID, _ := cmd.Flags().GetString("profile")
-		profileID, err := requireExecutionProfile(profileID)
+		profileID, err := requireExecutionProfile(cmd.Context(), profileID)
 		if err != nil {
 			return err
 		}

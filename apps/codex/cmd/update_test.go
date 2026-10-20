@@ -2793,8 +2793,8 @@ func TestUpdateQuestionEndsOnAnInterrupt(t *testing.T) {
 	cancel()
 	select {
 	case err := <-done:
-		if !errors.Is(err, errUpdateInterrupted) {
-			t.Errorf("the interrupted question answered %v", err)
+		if !errors.Is(err, errUpdateInterrupted) || ExitStatus(err) != exitInterrupted {
+			t.Errorf("the interrupted question answered %v (exit %d)", err, ExitStatus(err))
 		}
 	case <-time.After(10 * time.Second):
 		t.Fatal("the question did not end on the interrupt")

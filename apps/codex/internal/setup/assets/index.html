@@ -65,7 +65,10 @@
     <div class="approval" data-approval hidden>
       <p>Scan this with your phone, or open the link, and approve this machine on your tailnet.</p>
       <div class="qr" data-qr></div>
-      <p class="link" data-link></p>
+      <div class="copyrow">
+        <p class="link" data-link></p>
+        <button type="button" class="copy" data-copy="[data-link]">Copy link</button>
+      </div>
       <label for="name">This machine's name on your tailnet, part of the home's address; certificate names are public</label>
       <div class="row">
         <input id="name" type="text" autocomplete="off" autocapitalize="none" spellcheck="false">
@@ -87,7 +90,10 @@
   <section data-screen="done" hidden>
     <img class="logo small" src="/logo.png" alt="">
     <h1>Your home is ready</h1>
-    <p class="address" data-address></p>
+    <div class="copyrow">
+      <p class="address" data-address></p>
+      <button type="button" class="copy" data-copy="[data-address]">Copy address</button>
+    </div>
     <p class="sentence" data-sentence></p>
     <p data-tailnet hidden>This address opens on your phone and laptop on your tailnet, and on this device in a browser that uses this home's proxy at 127.0.0.1:1055.</p>
     <button type="button" class="primary" data-action="open">Open your home</button>

@@ -148,7 +148,9 @@
         svg.setAttribute("aria-label", "QR code of the approval link");
       }
     }
-    $("[data-link]").textContent = state.auth_url;
+    // Set only when it changes: each poll would end a selection of it.
+    const link = $("[data-link]");
+    if (link.textContent !== state.auth_url) link.textContent = state.auth_url;
     const name = $("#name");
     if (!nameEdited && document.activeElement !== name) name.value = state.name || "";
   }
@@ -156,7 +158,8 @@
   function renderDone(state) {
     const section = $('[data-screen="done"]');
     lastAddress = state.address || "";
-    $("[data-address]", section).textContent = lastAddress;
+    const address = $("[data-address]", section);
+    if (address.textContent !== lastAddress) address.textContent = lastAddress;
     $("[data-sentence]", section).textContent = state.sentence || "";
     let tailnet = false;
     try {
@@ -166,10 +169,54 @@
     }
     $("[data-tailnet]", section).hidden = !(tailnet && !state.sentence);
     $('[data-action="open"]', section).hidden = !lastAddress;
+    $("[data-copy]", section).hidden = !lastAddress;
     if (state.moves && lastAddress && !moved) {
       moved = true;
       setTimeout(() => location.assign(lastAddress), 1500);
     }
+  }
+
+  // copy puts the text of the element a Copy button names on the
+  // clipboard and says so on the button. Where the clipboard API is
+  // missing or refused, as some browsers refuse it to a page they do not
+  // count as a secure context, it selects the text instead, copies that
+  // where the browser still lets a page, and otherwise leaves it selected
+  // for the person to copy.
+  async function copy(button) {
+    const el = $(button.dataset.copy, button.closest("section"));
+    const text = el ? el.textContent : "";
+    if (!text) return;
+    let copied = false;
+    if (navigator.clipboard && window.isSecureContext) {
+      try {
+        await navigator.clipboard.writeText(text);
+        copied = true;
+      } catch {
+        copied = false;
+      }
+    }
+    if (!copied) {
+      const range = document.createRange();
+      range.selectNodeContents(el);
+      const selection = window.getSelection();
+      selection.removeAllRanges();
+      selection.addRange(range);
+      try {
+        copied = document.execCommand("copy");
+      } catch {
+        copied = false;
+      }
+      if (copied) selection.removeAllRanges();
+    }
+    acknowledge(button, copied ? "Copied" : "Selected: copy it");
+  }
+
+  // acknowledge shows what a Copy button did on it for two seconds.
+  function acknowledge(button, said) {
+    if (!button.dataset.label) button.dataset.label = button.textContent;
+    button.textContent = said;
+    clearTimeout(Number(button.dataset.timer));
+    button.dataset.timer = String(setTimeout(() => (button.textContent = button.dataset.label), 2000));
   }
 
   let polling = null;
@@ -235,6 +282,7 @@
     for (const b of $$("[data-offer]")) {
       b.addEventListener("click", () => act("problem", async () => render(await api("/api/choose", { offer: b.dataset.offer }))));
     }
+    for (const b of $$("[data-copy]")) b.addEventListener("click", () => copy(b));
     on("open", () => {
       if (lastAddress) location.assign(lastAddress);
     });

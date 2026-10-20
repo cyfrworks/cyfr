@@ -31,7 +31,8 @@ function check(what, holds, detail = {}) {
 const browser = await chromium.launch();
 let page;
 try {
-  const context = await browser.newContext(HANDHELD);
+  // The clipboard is read back after a Copy button is tapped.
+  const context = await browser.newContext({ ...HANDHELD, permissions: ["clipboard-read", "clipboard-write"] });
   page = await context.newPage();
   page.on("console", (m) => {
     if (m.type() !== "error" || new URL(page.url()).origin !== pagesOrigin) return;
@@ -52,6 +53,13 @@ try {
     await page.screenshot({ path: `${OUT}/${kind}-${name}.png` });
   };
   const button = (name) => page.getByRole("button", { name, exact: true });
+  // copied taps the Copy button `name` and answers what the clipboard
+  // then holds, once the button says it copied.
+  const copied = async (name) => {
+    await button(name).tap();
+    await button("Copied").waitFor({ timeout: 5_000 });
+    return page.evaluate(() => navigator.clipboard.readText());
+  };
   const heading = (name) => page.getByRole("heading", { name, exact: true });
 
   await page.goto(address);
@@ -62,6 +70,17 @@ try {
   });
   check("the welcome shows the capybara", (await logo.jsonValue()) === 512);
   await screen("welcome");
+  // A desktop's tall window holds the screen in its middle, where the
+  // handheld starts it at the top.
+  {
+    const desktop = await browser.newContext({ viewport: { width: 1280, height: 1600 } });
+    const tall = await desktop.newPage();
+    await tall.goto(address);
+    await tall.getByRole("button", { name: "Set up your home", exact: true }).waitFor();
+    const top = await tall.evaluate(() => document.querySelector('[data-screen="welcome"]').getBoundingClientRect().top);
+    await desktop.close();
+    check("a 1280×1600 window holds the welcome below a third of its height", top > 1600 / 3, { top });
+  }
   await button("Set up your home").tap();
   await heading("How will you reach this home?").waitFor();
   {
@@ -106,6 +125,7 @@ try {
     check("the link is drawn as a QR code at least 240 px wide", !!box && box.width >= 240 && box.height >= 240, { box });
     check("the code draws modules", ((await qr.locator("path").getAttribute("d")) || "").length > 1000);
     await screen("approval");
+    check("Copy link puts the approval link on the clipboard", (await copied("Copy link")) === first);
 
     await page.locator("#name").fill("proofhome");
     await button("Use this name").tap();
@@ -126,6 +146,7 @@ try {
     check("the Done page names the home's ts.net address", shown === `https://${approved.name}`, { shown });
     check("the Done page says where that address opens", await page.getByText("This address opens on your phone and laptop on your tailnet, and on this device in a browser that uses this home's proxy at 127.0.0.1:1055.").isVisible());
     await screen("done");
+    check("Copy address puts the home's address on the clipboard", (await copied("Copy address")) === shown);
     await page.waitForTimeout(4_000);
     check("the pages do not move the browser to a ts.net address", new URL(page.url()).origin === pagesOrigin, { url: page.url() });
     const served = await ask({ op: "served", name: approved.name }, { outDir: OUT, timeoutMs: 120_000, refuseError: true });

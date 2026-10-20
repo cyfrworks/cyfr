@@ -299,6 +299,18 @@ run_case "CYFR_VERSION names a pre-release exactly" ok \
      [ \"\$version\" = 0.6.0-alpha.1 ]" \
     "resolved 0.6.0-alpha.1"
 
+# macOS's closing tip offers the Homebrew cask for a bare version alone:
+# the cask installs the latest release that is not a pre-release, so a
+# pre-release is told the cask follows the first such release.
+run_case "a bare version's tip is the Homebrew cask" ok \
+    "homebrew_tip 1.2.3" \
+    "brew tap cyfrworks/cyfr && brew install --cask cyfr"
+run_case "a pre-release's tip says the cask follows the first release that is not one" ok \
+    "out=\$(homebrew_tip 0.6.0-alpha.1)
+     printf '%s\n' \"\$out\"
+     case \"\$out\" in *'brew tap'*|*--cask*) exit 1 ;; esac" \
+    "The Homebrew cask follows the first release that is not a pre-release; v0.6.0-alpha.1 is a pre-release, installed by this script alone."
+
 if [ "$failures" -gt 0 ]; then
     printf '\n%s test(s) failed\n' "$failures" >&2
     exit 1

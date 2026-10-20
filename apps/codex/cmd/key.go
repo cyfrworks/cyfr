@@ -63,7 +63,7 @@ Default scopes per type (applied when --scope is omitted):
 				return errors.New("--name is required. Usage: cyfr key create --name <name>")
 			}
 
-			form, err := prompt.RunKeyCreateForm()
+			form, err := prompt.RunKeyCreateForm(cmd.Context())
 			if err != nil {
 				if prompt.IsAborted(err) {
 					return prompt.ErrAborted

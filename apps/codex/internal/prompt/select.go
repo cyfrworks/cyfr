@@ -4,6 +4,8 @@
 package prompt
 
 import (
+	"context"
+
 	"charm.land/huh/v2"
 )
 
@@ -14,7 +16,7 @@ type Option struct {
 }
 
 // SelectOne presents a single-select prompt with filtering and returns the chosen value.
-func SelectOne(title string, options []Option) (string, error) {
+func SelectOne(ctx context.Context, title string, options []Option) (string, error) {
 	var selected string
 
 	huhOpts := make([]huh.Option[string], len(options))
@@ -22,7 +24,7 @@ func SelectOne(title string, options []Option) (string, error) {
 		huhOpts[i] = huh.NewOption(o.Label, o.Value)
 	}
 
-	err := newForm(
+	err := run(ctx, newForm(
 		huh.NewGroup(
 			huh.NewSelect[string]().
 				Title(title).
@@ -31,7 +33,7 @@ func SelectOne(title string, options []Option) (string, error) {
 				Filtering(true).
 				Height(10),
 		),
-	).Run()
+	))
 	if err != nil {
 		return "", err
 	}
@@ -39,10 +41,10 @@ func SelectOne(title string, options []Option) (string, error) {
 }
 
 // Confirm presents a yes/no confirmation prompt.
-func Confirm(title string) (bool, error) {
+func Confirm(ctx context.Context, title string) (bool, error) {
 	var confirmed bool
 
-	err := newForm(
+	err := run(ctx, newForm(
 		huh.NewGroup(
 			huh.NewConfirm().
 				Title(title).
@@ -50,7 +52,7 @@ func Confirm(title string) (bool, error) {
 				Negative("No").
 				Value(&confirmed),
 		),
-	).Run()
+	))
 	if err != nil {
 		return false, err
 	}
@@ -59,7 +61,7 @@ func Confirm(title string) (bool, error) {
 
 // InputText presents a text input prompt and returns the entered value.
 // If initialValue is non-empty, the field is pre-filled.
-func InputText(title, placeholder string, initialValue ...string) (string, error) {
+func InputText(ctx context.Context, title, placeholder string, initialValue ...string) (string, error) {
 	var value string
 	if len(initialValue) > 0 {
 		value = initialValue[0]
@@ -72,9 +74,9 @@ func InputText(title, placeholder string, initialValue ...string) (string, error
 		input = input.Placeholder(placeholder)
 	}
 
-	err := newForm(
+	err := run(ctx, newForm(
 		huh.NewGroup(input),
-	).Run()
+	))
 	if err != nil {
 		return "", err
 	}

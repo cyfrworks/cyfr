@@ -80,7 +80,7 @@ Adding a server takes a signed-in session (cyfr login); an API key cannot.`,
 			// Could be just a name (interactive config) or just JSON
 			name = args[0]
 			if prompt.IsInteractive(flagNoInteractive) {
-				configStr, err := prompt.InputText("Config JSON", `{"url":"https://"}`)
+				configStr, err := prompt.InputText(cmd.Context(), "Config JSON", `{"url":"https://"}`)
 				if err != nil {
 					if prompt.IsAborted(err) {
 						return prompt.ErrAborted
@@ -95,14 +95,14 @@ Adding a server takes a signed-in session (cyfr login); an API key cannot.`,
 			}
 		case prompt.IsInteractive(flagNoInteractive):
 			var err error
-			name, err = prompt.InputText("Server name", "notion")
+			name, err = prompt.InputText(cmd.Context(), "Server name", "notion")
 			if err != nil {
 				if prompt.IsAborted(err) {
 					return prompt.ErrAborted
 				}
 				return fmt.Errorf("Prompt failed: %w", err)
 			}
-			configStr, err := prompt.InputText("Config JSON", `{"url":"https://"}`)
+			configStr, err := prompt.InputText(cmd.Context(), "Config JSON", `{"url":"https://"}`)
 			if err != nil {
 				if prompt.IsAborted(err) {
 					return prompt.ErrAborted

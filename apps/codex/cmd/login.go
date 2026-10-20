@@ -346,7 +346,7 @@ func promptAndClaimPersonalNamespace(ctx context.Context, client *mcp.Client, pr
 	defaultSlug := suggested
 
 	for attempt := 1; attempt <= 5; attempt++ {
-		username, err := prompt.InputText("Personal namespace", defaultSlug)
+		username, err := prompt.InputText(ctx, "Personal namespace", defaultSlug)
 		if err != nil {
 			if prompt.IsAborted(err) {
 				return false
@@ -499,7 +499,7 @@ func runLegalAcceptInteractive(ctx context.Context, client *mcp.Client, provider
 		fmt.Println(md)
 		fmt.Println()
 
-		ok2, err := prompt.Confirm(fmt.Sprintf("I have read and agree to the %s.", title))
+		ok2, err := prompt.Confirm(ctx, fmt.Sprintf("I have read and agree to the %s.", title))
 		if err != nil {
 			if prompt.IsAborted(err) {
 				fmt.Fprintln(os.Stderr, "Acceptance aborted.")

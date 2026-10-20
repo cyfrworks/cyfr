@@ -59,7 +59,7 @@ func pickTarget(ctx context.Context, args []string, sel selector) (string, error
 			return "", errors.New(sel.Empty)
 		}
 
-		selected, err := prompt.SelectOne(sel.Title, opts)
+		selected, err := prompt.SelectOne(ctx, sel.Title, opts)
 		if err != nil {
 			if prompt.IsAborted(err) {
 				return "", prompt.ErrAborted
@@ -68,7 +68,7 @@ func pickTarget(ctx context.Context, args []string, sel selector) (string, error
 		}
 
 		if sel.Confirm != "" {
-			confirmed, err := prompt.Confirm(fmt.Sprintf(sel.Confirm, selected))
+			confirmed, err := prompt.Confirm(ctx, fmt.Sprintf(sel.Confirm, selected))
 			if err != nil {
 				if prompt.IsAborted(err) {
 					return "", prompt.ErrAborted
@@ -89,10 +89,10 @@ func pickTarget(ctx context.Context, args []string, sel selector) (string, error
 
 // requireExecutionProfile collects the explicit consent binding for unattended
 // invocations; the server verifies that it authorizes the selected component.
-func requireExecutionProfile(profileID string) (string, error) {
+func requireExecutionProfile(ctx context.Context, profileID string) (string, error) {
 	if profileID == "" && prompt.IsInteractive(flagNoInteractive) {
 		var err error
-		profileID, err = prompt.InputText("Consented execution profile ID (cyfr profile list)", "")
+		profileID, err = prompt.InputText(ctx, "Consented execution profile ID (cyfr profile list)", "")
 		if err != nil {
 			return "", err
 		}

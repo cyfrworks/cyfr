@@ -410,7 +410,7 @@ var initCmd = &cobra.Command{
 
 Downloads docker-compose.yml, Caddyfile, keeper.seccomp.json (the locus-runtime service's seccomp profile), .env.example, the services' own env examples and the bundled scaffold (configuration/component/tincture/integration guides, wit/ definitions, the aqua/ soul, roles and scrolls) for this CLI's version; generates cyfr.yaml, .gitignore, and the data/aqua directories; writes .env from .env.example; and pulls the images the stack starts (--no-pull skips the pulls).
 
-How the home is reached is asked first: 1, your devices via Tailscale (the default); 2, a public domain via Caddy; 3, this computer only. Then your email, as the home's administrator. .env is written for this computer only, with every key; then a tailnet home joins your tailnet (the link it prints approves the machine, or --tailscale-auth-key-file joins it without one) and the stopped stack is switched to the chosen mode, as 'cyfr access' switches it. A join that fails or is cancelled leaves the home reached from this computer only, and 'cyfr access <mode>' changes it later. With --no-interactive nothing is asked: the home is local, unless --access tailnet comes with --tailscale-auth-key-file, or --access public with --domain (--acme-email optional). Given no email, no one is authorized to use the home yet, and init says so: CYFR_PLATFORM_ADMIN_EMAILS in .env names its administrators.
+How the home is reached is asked first: 1, your devices via Tailscale (the default); 2, a public domain via Caddy; 3, this computer only. Then your email, as the home's administrator. .env is written for this computer only, with every key; then a tailnet home joins your tailnet (the link it prints approves the machine, and on a machine with a display it opens in the default browser unless --no-open is given; --tailscale-auth-key-file joins it without one) and the stopped stack is switched to the chosen mode, as 'cyfr access' switches it. A join that fails or is cancelled leaves the home reached from this computer only, and 'cyfr access <mode>' changes it later. With --no-interactive nothing is asked: the home is local, unless --access tailnet comes with --tailscale-auth-key-file, or --access public with --domain (--acme-email optional). Given no email, no one is authorized to use the home yet, and init says so: CYFR_PLATFORM_ADMIN_EMAILS in .env names its administrators.
 
 .env gets the stack's keys: CYFR_SECRET_KEY_BASE, CYFR_LOCUS_BACKENDS_KEY, the runtime root CYFR_LOCUS_RUNTIME_ROOT with the LOCUS_RUNTIME_KEY derived from it for LOCUS_RUNTIME_SERVICE_ID (wrk_locus unless .env names another), and CYFR_LOCUS_BUILDS_URL=http://locus-builds:4100 with a minted CYFR_LOCUS_BUILDS_KEY, so builds are on. It also assigns CYFR_CORS_ALLOWED_ORIGINS the empty allowlist, since cyfr serves Prism, the API, /mcp and the tinctures from its own origin and no browser client of this stack is cross-origin; an allowlist .env assigns is the one that stands.
 
@@ -451,8 +451,9 @@ type accessChoice struct {
 // (cyfr setup). Every step and its order are initProject's either way.
 type initFace struct {
 	// answers is how a new home is reached and its administrator's email
-	// ("" for none), asked once, only when init writes a new .env.
-	answers func() (accessChoice, string)
+	// ("" for none), asked once, before init writes anything, when it is to
+	// write a new .env; an error ends init there.
+	answers func(ctx context.Context) (accessChoice, string, error)
 	// apply applies a new home's mode, other than local, to its stopped
 	// stack and answers the head it switched to (applyInitAccess).
 	apply func(ctx context.Context, c accessChoice, key []byte) (access.Head, error)
@@ -477,19 +478,28 @@ func (f initFace) begin(name string) {
 // runInit is `cyfr init` in the working directory, asking on the terminal.
 func runInit(ctx context.Context, o initOptions, out, errOut io.Writer) error {
 	return initProject(ctx, o, initFace{
-		answers: func() (accessChoice, string) {
+		answers: func(ctx context.Context) (accessChoice, string, error) {
 			r := bufio.NewReader(askInput)
 			interactive := askTerminal()
-			choice := chooseAccess(o, interactive, r, out)
+			choice, err := chooseAccess(ctx, o, interactive, r, out)
+			if err != nil {
+				return choice, "", interruption{errQuestionInterrupted}
+			}
 			adminEmail := ""
 			if interactive {
 				fmt.Fprintln(out, "CYFR authorizes by membership — list your email as the platform admin so you can use this instance.")
-				adminEmail = ask(r, out, "Your platform-admin email (required to access this instance; blank = no one is authorized yet)", "")
+				adminEmail, err = ask(ctx, r, out, "Your platform-admin email (required to access this instance; blank = no one is authorized yet)", "")
+				if err != nil {
+					return choice, "", interruption{errQuestionInterrupted}
+				}
 			}
-			return choice, adminEmail
+			return choice, adminEmail, nil
 		},
 		apply: func(ctx context.Context, c accessChoice, key []byte) (access.Head, error) {
-			return applyInitAccess(ctx, c, key, joinChoice{optionsGiven: o.hostname != "" || o.keyFile != ""}, out)
+			return applyInitAccess(ctx, c, key, joinChoice{
+				optionsGiven: o.hostname != "" || o.keyFile != "",
+				onAuthURL:    openJoinLink(o.noOpen, out),
+			}, out)
 		},
 	}, out, errOut)
 }
@@ -514,6 +524,19 @@ func initProject(ctx context.Context, o initOptions, face initFace, out, errOut 
 	key, err := readAuthKey(o.keyFile)
 	if err != nil {
 		return err
+	}
+
+	// A new .env's questions come before anything is written, so an
+	// interrupt at one leaves the directory as it was. A new .env is
+	// written from the .env.example a release's scaffold lays down, or one
+	// already there.
+	asked := !envExisted && (releaseBuild || fileExists(".env.example"))
+	choice := accessChoice{mode: access.ModeLocal}
+	var adminEmail string
+	if asked {
+		if choice, adminEmail, err = face.answers(ctx); err != nil {
+			return err
+		}
 	}
 
 	// An existing .env gains the keys it lacks before anything else
@@ -590,11 +613,8 @@ database_path: ./data/cyfr.db
 	envCreated := false
 	adminEmailConfigured := false
 	sel := existingSelection(".env")
-	choice := accessChoice{mode: access.ModeLocal}
 	var head access.Head
-	if fileExists(".env.example") && !envExisted {
-		var adminEmail string
-		choice, adminEmail = face.answers()
+	if asked && fileExists(".env.example") {
 		adminEmailConfigured = adminEmail != ""
 		face.begin(initStepSettings)
 		text, changes, d, err := newEnv(".env.example", adminEmail)
@@ -648,6 +668,10 @@ database_path: ./data/cyfr.db
 		}
 	case !envCreated && !envExisted && o.mode != "":
 		accessErr = fmt.Errorf("--access %s was not applied: there is no .env.example to write .env from", o.mode)
+	case !envCreated && !envExisted && choice.mode != access.ModeLocal:
+		// The answers were asked for a release's .env.example that its
+		// download did not lay down.
+		accessErr = fmt.Errorf("the home was not set up to be reached as answered (%s): there is no .env.example to write .env from", choice.mode)
 	}
 
 	// Warm-pull the images docker-compose.yml starts with the head's
@@ -750,7 +774,7 @@ database_path: ./data/cyfr.db
 		fmt.Fprintln(out, "Next: get docker-compose.yml + Caddyfile (a released CLI or a repo checkout), then 'cyfr up'.")
 	}
 	if envCreated {
-		fmt.Fprintln(out, "  Prism:           "+access.Describe(head).Address+"/")
+		fmt.Fprintln(out, "  Prism:           "+hyperlink(out, access.Describe(head).Address+"/"))
 	} else {
 		fmt.Fprintln(out, "  `cyfr access status` shows how this home is reached.")
 	}
@@ -842,8 +866,8 @@ func checkTarget(t access.Target) error {
 // needs that its flags do not give: a tailnet machine's name, a public
 // domain and its certificate email. Without one the home is local unless
 // --access tailnet comes with --tailscale-auth-key-file or --access public
-// with --domain.
-func chooseAccess(o initOptions, interactive bool, r *bufio.Reader, out io.Writer) accessChoice {
+// with --domain. A question ends with ctx, answering its error.
+func chooseAccess(ctx context.Context, o initOptions, interactive bool, r *bufio.Reader, out io.Writer) (accessChoice, error) {
 	c := accessChoice{accessOptions: o.accessOptions, mode: o.mode}
 	if !interactive {
 		switch {
@@ -856,7 +880,7 @@ func chooseAccess(o initOptions, interactive bool, r *bufio.Reader, out io.Write
 		case c.mode == "":
 			c.mode = access.ModeLocal
 		}
-		return c
+		return c, nil
 	}
 	if c.mode == "" {
 		fmt.Fprintln(out, "How will you reach this home?")
@@ -864,7 +888,10 @@ func chooseAccess(o initOptions, interactive bool, r *bufio.Reader, out io.Write
 		fmt.Fprintln(out, "  2. A public domain, via Caddy")
 		fmt.Fprintln(out, "  3. This computer only")
 		for c.mode == "" {
-			answer, more := askLine(r, out, "Choose 1, 2 or 3", "1")
+			answer, more, err := askLine(ctx, r, out, "Choose 1, 2 or 3", "1")
+			if err != nil {
+				return c, err
+			}
 			switch {
 			case answer == "1":
 				c.mode = access.ModeTailnet
@@ -887,11 +914,18 @@ func chooseAccess(o initOptions, interactive bool, r *bufio.Reader, out io.Write
 	case access.ModeTailnet:
 		if c.hostname == "" {
 			fmt.Fprintln(out, "This machine's name on your tailnet is part of the home's address, and certificate names are public: anyone can read it in the certificate logs.")
-			c.hostname = ask(r, out, "Machine name", "cyfr")
+			hostname, err := ask(ctx, r, out, "Machine name", "cyfr")
+			if err != nil {
+				return c, err
+			}
+			c.hostname = hostname
 		}
 	case access.ModePublic:
 		for c.domain == "" {
-			answer, more := askLine(r, out, "The domain this home is reached at (its DNS names this machine)", "")
+			answer, more, err := askLine(ctx, r, out, "The domain this home is reached at (its DNS names this machine)", "")
+			if err != nil {
+				return c, err
+			}
 			if err := checkTarget(access.Target{Mode: c.mode, Domain: answer}); answer != "" && err != nil {
 				fmt.Fprintln(out, err)
 			} else {
@@ -900,12 +934,15 @@ func chooseAccess(o initOptions, interactive bool, r *bufio.Reader, out io.Write
 			if c.domain == "" && !more {
 				fmt.Fprintln(out, "No domain was given, so this home is reached from this computer only; `cyfr access public --domain <your domain>` changes that.")
 				c.mode = access.ModeLocal
-				return c
+				return c, nil
 			}
 		}
 		for asking := c.acmeEmail == ""; asking; {
-			answer, more := askLine(r, out, "Email for the certificate authority's notices (blank for none)", "")
-			err := checkTarget(access.Target{Mode: c.mode, Domain: c.domain, ACMEEmail: answer})
+			answer, more, err := askLine(ctx, r, out, "Email for the certificate authority's notices (blank for none)", "")
+			if err != nil {
+				return c, err
+			}
+			err = checkTarget(access.Target{Mode: c.mode, Domain: c.domain, ACMEEmail: answer})
 			if answer == "" || err == nil {
 				c.acmeEmail = answer
 				break
@@ -914,7 +951,7 @@ func chooseAccess(o initOptions, interactive bool, r *bufio.Reader, out io.Write
 			asking = more
 		}
 	}
-	return c
+	return c, nil
 }
 
 // applyInitAccess applies the mode chosen for a new home as an engine
@@ -1076,36 +1113,36 @@ func startsWith(svc *yaml.Node, profiles []string) bool {
 const buildsProfile = "locus-builds"
 
 // ask prompts on out and reads a line from r, answering def for an empty
-// line and "" for the end of the input (askLine).
-func ask(r *bufio.Reader, out io.Writer, question, def string) string {
-	answer, _ := askLine(r, out, question, def)
-	return answer
+// line and "" for the end of the input (askLine), or ctx's error once ctx
+// ends before a line arrives.
+func ask(ctx context.Context, r *bufio.Reader, out io.Writer, question, def string) (string, error) {
+	answer, _, err := askLine(ctx, r, out, question, def)
+	return answer, err
 }
 
 // askLine is ask, and whether the input may hold another line: false at
 // its end, where asking again reads nothing. The default answers an empty
 // line; the end of the input with nothing on its line is no answer, "".
-func askLine(r *bufio.Reader, out io.Writer, question, def string) (string, bool) {
+// Main's handler catches Ctrl-C, so a read of the terminal never ends on
+// it, nor can it be cancelled: the read runs in a goroutine of its own,
+// which the process's exit ends, and the question ends with ctx.
+func askLine(ctx context.Context, r *bufio.Reader, out io.Writer, question, def string) (string, bool, error) {
 	askQuestion(out, question, def)
-	return readAnswer(r, def)
-}
-
-// askUntil is ask, answering ctx's error instead once ctx ends before a
-// line arrives: a read of a terminal cannot be cancelled, so it runs in a
-// goroutine of its own, which the process's exit ends.
-func askUntil(ctx context.Context, r *bufio.Reader, out io.Writer, question, def string) (string, error) {
-	askQuestion(out, question, def)
-	answered := make(chan string, 1)
+	type line struct {
+		answer string
+		more   bool
+	}
+	answered := make(chan line, 1)
 	go func() {
-		answer, _ := readAnswer(r, def)
-		answered <- answer
+		answer, more := readAnswer(r, def)
+		answered <- line{answer, more}
 	}()
 	select {
-	case answer := <-answered:
-		return answer, nil
+	case l := <-answered:
+		return l.answer, l.more, nil
 	case <-ctx.Done():
 		fmt.Fprintln(out)
-		return "", ctx.Err()
+		return "", false, ctx.Err()
 	}
 }
 
@@ -1205,7 +1242,7 @@ func runUp(ctx context.Context, out io.Writer) error {
 		return startErr
 	}
 	fmt.Fprintln(out, "CYFR server started.")
-	fmt.Fprintln(out, "  Prism:           "+access.Describe(head).Address+"/")
+	fmt.Fprintln(out, "  Prism:           "+hyperlink(out, access.Describe(head).Address+"/"))
 	fmt.Fprintln(out, "")
 	fmt.Fprintln(out, "Optional next steps:")
 	fmt.Fprintln(out, "  cyfr login      authenticate this CLI")

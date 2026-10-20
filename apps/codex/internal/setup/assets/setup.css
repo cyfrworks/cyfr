@@ -28,6 +28,19 @@
 
 body { margin: 0; }
 
+/* A window taller than the handheld holds the screen in its middle; at the
+   handheld's 720px the screen starts at the top, as it always has. A
+   screen taller than the window grows the body, so none of it is cut. */
+@media (min-height: 721px) {
+  body {
+    min-height: 100vh;
+    min-height: 100dvh;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+  }
+}
+
 main {
   max-width: 640px;
   margin: 0 auto;
@@ -192,5 +205,28 @@ input:focus, button:focus-visible {
 }
 
 .address { font-size: 1rem; }
+
+/* What a person copies, beside its Copy button. */
+.copyrow {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.copyrow p {
+  flex: 1;
+  min-width: 0;
+}
+
+/* On Done the address and its button sit together in the middle. */
+section[data-screen="done"] .copyrow { justify-content: center; }
+section[data-screen="done"] .copyrow p { flex: 0 1 auto; }
+
+button.copy {
+  flex: none;
+  width: auto;
+  min-width: 140px;
+  min-height: 64px;
+}
 
 .joined { font-weight: 600; }

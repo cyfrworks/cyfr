@@ -245,7 +245,7 @@ var (
 // mode they apply.
 type accessOptions struct {
 	domain, acmeEmail, keyFile, hostname string
-	newNode                              bool
+	newNode, noOpen                      bool
 }
 
 // addAccessFlags adds the flags of the mode a command applies.
@@ -254,6 +254,7 @@ func addAccessFlags(c *cobra.Command) {
 	c.Flags().String("acme-email", "", "The email a public home's certificate authority writes to (optional)")
 	c.Flags().String("tailscale-auth-key-file", "", "A file holding a Tailscale auth key, which joins this machine to the tailnet without the approval link")
 	c.Flags().String("hostname", "", "This machine's name on the tailnet (cyfr when not given); certificate names are public")
+	c.Flags().Bool("no-open", false, "Do not open a tailnet join's approval link in the default browser")
 }
 
 func accessFlags(c *cobra.Command) accessOptions {
@@ -262,6 +263,7 @@ func accessFlags(c *cobra.Command) accessOptions {
 	o.acmeEmail, _ = c.Flags().GetString("acme-email")
 	o.keyFile, _ = c.Flags().GetString("tailscale-auth-key-file")
 	o.hostname, _ = c.Flags().GetString("hostname")
+	o.noOpen, _ = c.Flags().GetBool("no-open")
 	if c.Flags().Lookup("new-node") != nil {
 		o.newNode, _ = c.Flags().GetBool("new-node")
 	}
@@ -310,10 +312,11 @@ func joinTailnet(ctx context.Context, e stackEngine, id string, o accessOptions,
 		Hostname: o.hostname,
 		NewNode:  o.newNode,
 		OnAuthURL: func(url string) {
-			fmt.Fprintf(out, "To join this machine to your tailnet, open this link and approve the machine:\n  %s\nWaiting for the approval (Ctrl-C cancels the join)...\n", url)
+			fmt.Fprintf(out, "To join this machine to your tailnet, open this link and approve the machine:\n  %s\n", hyperlink(out, url))
 			if choice.onAuthURL != nil {
 				choice.onAuthURL(url)
 			}
+			fmt.Fprintln(out, "Waiting for the approval (Ctrl-C cancels the join)...")
 		},
 	}
 	if key != nil {
@@ -456,10 +459,21 @@ func joinName(o accessOptions) string {
 	return "cyfr"
 }
 
+// openJoinLink is a join's approval link, once printed, opened in the
+// default browser on a machine with a display unless noOpen
+// (openOnDisplay); the join waits for the approval either way.
+func openJoinLink(noOpen bool, out io.Writer) func(url string) {
+	return func(url string) {
+		if openOnDisplay(url, noOpen, out) {
+			fmt.Fprintln(out, "Opened it in your browser.")
+		}
+	}
+}
+
 // askJoin asks on the terminal whether to make the join a change needs,
 // naming what it does: with --new-node, the tailnet identity it removes
-// first.
-func askJoin(in *bufio.Reader, out io.Writer, o accessOptions) func(current string) error {
+// first. The question ends with ctx, before anything joined.
+func askJoin(ctx context.Context, in *bufio.Reader, out io.Writer, o accessOptions) func(current string) error {
 	return func(current string) error {
 		what := fmt.Sprintf("This joins this machine to your tailnet as `%s`; certificate names are public", joinName(o))
 		if o.newNode {
@@ -470,7 +484,11 @@ func askJoin(in *bufio.Reader, out io.Writer, o accessOptions) func(current stri
 			what = fmt.Sprintf("This joins this machine to your tailnet as `%s`, after removing its current tailnet identity, %s; certificate names are public", joinName(o), removed)
 		}
 		fmt.Fprintln(out, what+".")
-		if a := strings.ToLower(ask(in, out, "Join it? (yes/no)", "no")); a != "yes" && a != "y" {
+		a, err := ask(ctx, in, out, "Join it? (yes/no)", "no")
+		if err != nil {
+			return interruption{errQuestionInterrupted}
+		}
+		if a = strings.ToLower(a); a != "yes" && a != "y" {
 			return errors.New("The join was not confirmed, so this machine did not join your tailnet. Nothing was changed")
 		}
 		return nil
@@ -609,7 +627,7 @@ var accessCmd = &cobra.Command{
 	Long: `Change how the home in the current directory is reached, and every setting that follows from it in .env (CYFR_ACCESS, CYFR_HOST, CYFR_PUBLIC_URL, CYFR_TAILNET_NODE_ID, CADDY_ACME_EMAIL).
 
   local    this computer only, at http://localhost:<CYFR_PORT>
-  tailnet  your devices on Tailscale, at https://<machine>.<tailnet>.ts.net; the machine joins your tailnet first (the link it prints approves it, or --tailscale-auth-key-file joins it without one)
+  tailnet  your devices on Tailscale, at https://<machine>.<tailnet>.ts.net; the machine joins your tailnet first (the link it prints approves it, and on a machine with a display it opens in the default browser unless --no-open is given; --tailscale-auth-key-file joins it without one)
   public   anyone on the internet, who still has to sign in, at https://<--domain>, through Caddy on ports 80 and 443
 
 It shows the change first: who can reach the home, its address, the certificate email and the ports opened on this machine, each before → after, with the tailnet machine, the port on this computer and the builds service when they change, and what changes for passkeys, paired devices and clients when the address does. Confirm it (or pass --yes), and the stack is stopped and checked stopped, .env is rewritten, and what was running is started again in the new mode; a start that fails puts the home back as it was. With no terminal to confirm on and no --yes, it shows the change and makes none, and a tailnet change that needs this machine joined first is refused before the join.
@@ -697,9 +715,9 @@ func runAccess(ctx context.Context, mode string, o accessOptions, yes bool, id s
 	defer unlock()
 
 	in := bufio.NewReader(askInput)
-	choice := joinChoice{optionsGiven: o.hostname != "" || o.keyFile != ""}
+	choice := joinChoice{optionsGiven: o.hostname != "" || o.keyFile != "", onAuthURL: openJoinLink(o.noOpen, out)}
 	if !yes {
-		choice.confirm = askJoin(in, out, o)
+		choice.confirm = askJoin(ctx, in, out, o)
 	}
 	p, join, err := previewTarget(ctx, e, target, id, o, key, out, choice)
 	if err != nil {
@@ -707,7 +725,21 @@ func runAccess(ctx context.Context, mode string, o accessOptions, yes bool, id s
 	}
 	printPreview(out, p)
 	if !yes {
-		if a := strings.ToLower(ask(in, out, "Make this change? (yes/no)", "no")); a != "yes" && a != "y" {
+		a, err := ask(ctx, in, out, "Make this change? (yes/no)", "no")
+		if err != nil {
+			// What the join before the question did stands; the
+			// change is not made.
+			switch {
+			case join.removed != "":
+				err = fmt.Errorf("Interrupted. This machine's tailnet identity `%s` was removed, and the Tailscale admin console still lists it until you remove it there; the machine joined your tailnet as `%s`, and how this home is reached was not changed.", join.removed, p.New.Host)
+			case join.id != "":
+				err = fmt.Errorf("Interrupted. This machine joined your tailnet as `%s`, and how this home is reached was not changed.", p.New.Host)
+			default:
+				err = errQuestionInterrupted
+			}
+			return interruption{err}
+		}
+		if a = strings.ToLower(a); a != "yes" && a != "y" {
 			switch {
 			case join.removed != "":
 				return fmt.Errorf("The change was not confirmed. This machine's tailnet identity `%s` was removed, and the Tailscale admin console still lists it until you remove it there; the machine joined your tailnet as `%s`, and how this home is reached was not changed", join.removed, p.New.Host)
