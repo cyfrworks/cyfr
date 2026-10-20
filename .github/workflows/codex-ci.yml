@@ -57,7 +57,10 @@ jobs:
   test:
     name: vet + test + build
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    # The Compose-requiring tests of cmd and the access engine bring real
+    # stacks up and down; on this runner they take past five minutes,
+    # which cancelled the job once they all passed (run 39376100470).
+    timeout-minutes: 20
     defaults:
       run:
         working-directory: apps/codex
