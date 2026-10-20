@@ -65,7 +65,13 @@ Run CYFR locally and drive it with the `cyfr` CLI. Install Docker first — the 
 # Install the cyfr CLI via shell script (Linux, macOS, WSL)
 curl -fsSL https://raw.githubusercontent.com/cyfrworks/cyfr/main/scripts/install.sh | sh
 
-# Or via Homebrew (macOS)
+# While CYFR is in alpha, only pre-releases are published, and the installer
+# picks none of them on its own: name the one you want. The installer needs
+# cosign (`brew install cosign`) to verify the release's signature; without
+# it, CYFR_ALLOW_UNVERIFIED=1 verifies the archive's checksum alone.
+curl -fsSL https://raw.githubusercontent.com/cyfrworks/cyfr/main/scripts/install.sh | CYFR_VERSION=0.6.0-alpha.1 sh
+
+# Or via Homebrew (macOS), once a release that is not a pre-release exists
 brew tap cyfrworks/cyfr
 brew install --cask cyfr
 
