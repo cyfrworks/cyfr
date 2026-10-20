@@ -2478,6 +2478,11 @@ defmodule Cyfr.Boundaries do
     # Compiled in by `config/test.exs` alone, shortening one directory
     # request's bound (`Sanctum.Directory.Client`); never read at runtime.
     directory_request_ms: :seam,
+    # Compiled in by `config/test.exs` alone, lengthening the decision
+    # log's database budget (`Arca.DecisionLog`) so a slow audit write
+    # does not close a sync test's one sandbox connection; never read at
+    # runtime.
+    decision_log_budget_ms: :seam,
     # Compiled in by the test configurations alone — `config/test.exs` and,
     # for the standalone build, `apps/sanctum/config/config.exs` — as
     # `:allow_tenancy_resolver_override` is; it lets a fixture hand an

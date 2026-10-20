@@ -10,9 +10,10 @@ defmodule Arca.DecisionLog do
   ## The budget
 
   Audit is best-effort for the operation: the caller of `append/3` or
-  `finish/4` waits on the database at most 500 ms, checkout included, and
-  is answered a typed `Arca.DecisionLog.AuditFailure` when the write did
-  not finish in time, never an unbounded wait. Neither retries anything;
+  `finish/4` waits on the database at most `budget_ms/0` (500 ms, compiled
+  in from `:decision_log_budget_ms`), checkout included, and is answered a
+  typed `Arca.DecisionLog.AuditFailure` when the write did not finish in
+  time, never an unbounded wait. Neither retries anything;
   what the caller does with a failure is the caller's, and no failure here
   is a reason to run an operation again.
 
@@ -96,7 +97,7 @@ defmodule Arca.DecisionLog do
   alias Arca.Schemas.DecisionLog, as: Row
   alias Prima.Decision
 
-  @budget_ms 500
+  @budget_ms Application.compile_env(:arca, :decision_log_budget_ms, 500)
   @default_limit 50
   @max_limit 500
 

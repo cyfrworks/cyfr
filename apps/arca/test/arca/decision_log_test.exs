@@ -388,7 +388,7 @@ end
 
 defmodule Arca.DecisionLogBudgetTest do
   @moduledoc """
-  The 500 ms budget against a writer the database will not let in: a
+  The budget (`DecisionLog.budget_ms/0`) against a writer the database will not let in: a
   separate connection holds the write lock (`BEGIN IMMEDIATE` on SQLite,
   `LOCK TABLE decision_logs IN ACCESS EXCLUSIVE MODE` on PostgreSQL). The
   caller is answered `:timeout` inside the budget and a scheduler

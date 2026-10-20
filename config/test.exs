@@ -22,6 +22,14 @@ config :cyfr, CyfrWeb.Endpoint,
 config :cyfr, transport_retry_base_ms: 5
 config :sanctum, directory_request_ms: 5_000
 
+# The decision log's database budget (`Arca.DecisionLog`), compiled in. On
+# PostgreSQL its writer is bounded by the pool's timeout, and the pool
+# closes a connection held past it; a sync test's shared sandbox is that
+# test's only connection, so one audit write a loaded runner keeps past
+# the production 500 ms would end the test's database mid-test. The
+# budget's own tests read `Arca.DecisionLog.budget_ms/0`.
+config :arca, decision_log_budget_ms: 5_000
+
 # The origin an absolute URL falls back to, the endpoint's own above.
 config :sanctum, :fallback_origin, "http://localhost:4002"
 
