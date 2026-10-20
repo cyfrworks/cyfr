@@ -118,6 +118,13 @@ defmodule Emissary.External.ServerSseTest do
     on_exit(fn -> send(upstream, :release) end)
     assert [task_pid] = Map.keys(:sys.get_state(pid).in_flight)
     task_ref = Process.monitor(task_pid)
+    # `Process.monitor/1` returns before the task has taken the monitor
+    # signal, and the kill reaches the task from the server, another process,
+    # so the monitor can land after the task is dead and answer `:noproc`.
+    # The task's answer to `Process.info/2` is queued behind that signal, so a
+    # monitor it lists has landed before the caller is killed.
+    assert {:monitored_by, monitors} = Process.info(task_pid, :monitored_by)
+    assert self() in monitors
 
     Process.exit(caller, :kill)
     assert_receive {:DOWN, ^task_ref, :process, ^task_pid, :killed}, 10_000
