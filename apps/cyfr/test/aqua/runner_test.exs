@@ -396,7 +396,8 @@ defmodule Aqua.RunnerTest do
     script!([call("c1", "notes", %{"action" => "keep", "name" => "n", "content" => "x"})])
 
     {:ok, %{turn_id: turn_id}} = Runner.send_message(ctx, thread.id, "@aqua keep it")
-    wait_until(fn -> match?({:ok, %{status: "paused"}}, Tape.turn(ctx, turn_id)) end, 60_000)
+    # The runner holds the pause once it announces it, after the loop's row.
+    assert_receive %ThreadEvent{kind: :turn_paused, data: %{turn_id: ^turn_id}}, 60_000
 
     assert {:ok, %{admitted: :steer, turn_id: ^turn_id}} =
              Runner.send_message(ctx, thread.id, "@aqua never mind")
@@ -687,7 +688,9 @@ defmodule Aqua.RunnerTest do
     script!([call("c1", "notes", %{"action" => "keep", "name" => "n", "content" => "x"})])
 
     {:ok, %{turn_id: turn_id}} = Runner.send_message(ctx, thread.id, "@aqua keep it")
-    wait_until(fn -> match?({:ok, %{status: "paused"}}, Tape.turn(ctx, turn_id)) end, 60_000)
+    # The loop writes the paused row before it answers the runner; the
+    # runner announces the pause once its own state holds it.
+    assert_receive %ThreadEvent{kind: :turn_paused, data: %{turn_id: ^turn_id}}, 60_000
     assert %{running: false, paused: true} = Runner.state(thread.id, ctx.athanor_id)
 
     {:ok, paused} = Tape.turn(ctx, turn_id)
