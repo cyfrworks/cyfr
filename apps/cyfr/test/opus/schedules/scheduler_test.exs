@@ -213,7 +213,7 @@ defmodule Opus.Schedules.SchedulerTest do
     test "a scheduled #{event} after ownership is #{loss} leaves the occurrence and counters unchanged",
          %{ctx: ctx} do
       script!([{:probe, self()}, %{"ran" => true}])
-      schedule = due!(create_schedule(ctx))
+      schedule = due!(create_schedule(ctx, %{cron_expression: offset_hourly()}))
       scheduler = scheduler!()
       assert_receive {:scripted_probe, worker, execution_id}, 10_000
       _ = :sys.get_state(scheduler)
@@ -267,7 +267,7 @@ defmodule Opus.Schedules.SchedulerTest do
     test "a claimed occurrence starts no execution and is not failed after ownership is #{loss}",
          %{ctx: ctx} do
       script!([%{"ran" => true}])
-      schedule = due!(create_schedule(ctx))
+      schedule = due!(create_schedule(ctx, %{cron_expression: offset_hourly()}))
       :ok = :sys.suspend(Opus.Schedules.TaskSupervisor)
       on_exit(fn -> :sys.resume(Opus.Schedules.TaskSupervisor) end)
       scheduler = scheduler!()
@@ -303,7 +303,10 @@ defmodule Opus.Schedules.SchedulerTest do
 
       schedule =
         due!(
-          create_schedule(ctx, %{metadata: ~s({"keep_outcome": true, "note_name": "nightly"})})
+          create_schedule(ctx, %{
+            cron_expression: offset_hourly(),
+            metadata: ~s({"keep_outcome": true, "note_name": "nightly"})
+          })
         )
 
       scheduler!()
@@ -342,7 +345,7 @@ defmodule Opus.Schedules.SchedulerTest do
 
     test "is not published when recovery closed the occurrence first", %{ctx: ctx} do
       script!([{:probe, self()}, %{"ran" => true}])
-      schedule = due!(create_schedule(ctx))
+      schedule = due!(create_schedule(ctx, %{cron_expression: offset_hourly()}))
       scheduler = scheduler!()
       assert_receive {:scripted_probe, worker, _execution_id}, 10_000
       _ = :sys.get_state(scheduler)
@@ -375,7 +378,7 @@ defmodule Opus.Schedules.SchedulerTest do
       ctx: ctx
     } do
       script!([%{"ran" => true}])
-      schedule = due!(create_schedule(ctx))
+      schedule = due!(create_schedule(ctx, %{cron_expression: offset_hourly()}))
 
       # The run's telemetry fires in its own task, after the close and the
       # run record committed and before the publish's recheck: the slot is
@@ -411,7 +414,7 @@ defmodule Opus.Schedules.SchedulerTest do
     ctx: ctx
   } do
     script!([{:probe, self()}, %{"ran" => true}])
-    schedule = due!(create_schedule(ctx))
+    schedule = due!(create_schedule(ctx, %{cron_expression: offset_hourly()}))
     scheduler!()
 
     assert_receive {:scripted_probe, runner, running_id}, 10_000
@@ -461,7 +464,7 @@ defmodule Opus.Schedules.SchedulerTest do
     test "a fire is one admitted decision with its row, its run's execution and one completion",
          %{ctx: ctx} do
       script!([%{"ran" => true}])
-      schedule = due!(create_schedule(ctx))
+      schedule = due!(create_schedule(ctx, %{cron_expression: offset_hourly()}))
       scheduler!()
 
       wait_until(fn -> match?([%{completion: "succeeded"}], fire_decisions()) end)
@@ -500,7 +503,9 @@ defmodule Opus.Schedules.SchedulerTest do
       # The person's grant admits interactive alone.
       granted!(ctx, component, [:interactive])
       script!([%{"ran" => true}])
-      schedule = due!(create_schedule(ctx))
+      # Its cadence's next time is half an hour away: only the fires this
+      # case makes run it.
+      schedule = due!(create_schedule(ctx, %{cron_expression: offset_hourly()}))
       pid = scheduler!()
 
       wait_until(fn ->
@@ -528,7 +533,15 @@ defmodule Opus.Schedules.SchedulerTest do
 
     test "a fire whose admission fails is closed once, failed", %{ctx: ctx} do
       script!([%{"ran" => true}])
-      schedule = due!(create_schedule(ctx, %{profile_id: "prof_unconsented"}))
+
+      schedule =
+        due!(
+          create_schedule(ctx, %{
+            profile_id: "prof_unconsented",
+            cron_expression: offset_hourly()
+          })
+        )
+
       scheduler!()
 
       wait_until(fn ->
@@ -546,7 +559,7 @@ defmodule Opus.Schedules.SchedulerTest do
     # The row is written while this boot may write it; it then loses the
     # control plane before its scheduler starts.
     script!([%{"ran" => true}])
-    schedule = due!(create_schedule(ctx))
+    schedule = due!(create_schedule(ctx, %{cron_expression: offset_hourly()}))
     Arca.ControlPlane.record(:lost)
     on_exit(fn -> Arca.ControlPlane.record(:unclaimed) end)
     pid = scheduler!()
@@ -568,7 +581,14 @@ defmodule Opus.Schedules.SchedulerTest do
   } do
     script!([%{"ran" => true}])
     # A profile no consent source holds: the root is refused before admission.
-    schedule = due!(create_schedule(ctx, %{profile_id: "prof_unconsented"}))
+    schedule =
+      due!(
+        create_schedule(ctx, %{
+          profile_id: "prof_unconsented",
+          cron_expression: offset_hourly()
+        })
+      )
+
     scheduler!()
 
     wait_until(fn ->
@@ -808,7 +828,9 @@ defmodule Opus.Schedules.SchedulerTest do
   describe "missed runs" do
     # An hourly expression at the minute half an hour from now: its last
     # missed time is about half an hour ago and its next about half an
-    # hour ahead, whenever the case runs.
+    # hour ahead, whenever the case runs. A case that dues a schedule and
+    # then asserts on its exact occurrences names it too: no tick of the
+    # expression comes due while the case runs.
     defp offset_hourly do
       minute = DateTime.add(DateTime.utc_now(), 1_800, :second).minute
       "#{minute} * * * *"
@@ -1096,7 +1118,7 @@ defmodule Opus.Schedules.SchedulerTest do
 
   test "a runner that dies leaves a started occurrence uncertain", %{ctx: ctx} do
     script!([:hang])
-    schedule = due!(create_schedule(ctx))
+    schedule = due!(create_schedule(ctx, %{cron_expression: offset_hourly()}))
     pid = scheduler!()
 
     wait_until(fn -> map_size(:sys.get_state(pid).tasks) == 1 end)
@@ -1120,7 +1142,7 @@ defmodule Opus.Schedules.SchedulerTest do
     ctx: ctx
   } do
     script!([:hang])
-    schedule = due!(create_schedule(ctx))
+    schedule = due!(create_schedule(ctx, %{cron_expression: offset_hourly()}))
     pid = scheduler!()
 
     wait_until(fn -> map_size(:sys.get_state(pid).tasks) == 1 end)
