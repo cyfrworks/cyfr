@@ -44,6 +44,32 @@ until_true() {
 }
 accepts() { python3 -c 'import socket, sys; socket.create_connection((sys.argv[1], int(sys.argv[2])), 1).close()' "$1" "$2"; }
 
+# Run each proof's actual version read on every accepted release version,
+# so its live-slot comparison and snapshot manifest keep pre-release suffixes.
+python3 -I - "$root" "$scratch" <<'PY'
+import json, pathlib, subprocess, sys
+root, scratch = map(pathlib.Path, sys.argv[1:])
+versions = json.loads((root / "tests/fixtures/release_manifest.json").read_text())["versions"]["accepted"]
+tree = scratch / "versions"
+mix = tree / "apps/prima/mix.exs"
+mix.parent.mkdir(parents=True)
+for proof in ("tests/release-boot/boot.sh", "tests/compose-proof/run.sh"):
+    reads = [line.strip() for line in (root / proof).read_text().splitlines()
+             if line.lstrip().startswith(("VERSION=", "version=")) and '"$ROOT/apps/prima/mix.exs"' in line]
+    if len(reads) != 1:
+        sys.exit(f"FAIL: {proof} has {len(reads)} version reads, expected one")
+    statement = reads[0]
+    variable = statement.split("=", 1)[0]
+    for version in versions:
+        mix.write_text(f'    version: "{version}",\n')
+        result = subprocess.run(["bash", "-eu", "-c", 'ROOT=$1\n' + statement +
+                                 f'\nprintf \'%s\' "${variable}"', "_", str(tree)],
+                                capture_output=True, text=True, timeout=5)
+        if result.returncode != 0 or result.stdout != version:
+            sys.exit(f"FAIL: {proof} read {result.stdout!r} from version {version!r}: {result.stderr}")
+print(f"ok: both proofs read all {len(versions)} accepted release versions intact")
+PY
+
 # The stand-in listeners: `hang ADDR PORT` accepts every connection and
 # never answers; `json ADDR PORT BODY` answers every GET 200 with BODY.
 cat >"$scratch/serve.py" <<'PY'
