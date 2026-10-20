@@ -85,7 +85,8 @@ defmodule Locus.Launcher do
   stderr as they arrive; the control channel's and the relay's end, each
   once; its leader's end and whether it was ended at its memory bound; a
   relay that broke the frame codec or a channel lost; and its release,
-  the last.
+  the last. The bytes of its control channel, its relay, its stdout and
+  its stderr and its leader's end arrive in no defined order.
   """
   @type control_event ::
           {:spawned, String.t() | nil, non_neg_integer() | nil, non_neg_integer() | nil}
