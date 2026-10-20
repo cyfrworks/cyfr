@@ -206,6 +206,7 @@ class CyfrStack(Stack):
         # locus-backends from it as well as from the Stack's environment.
         with open(os.path.join(self.project_dir, ".env"), "w", encoding="utf-8") as handle:
             handle.write("\n".join([
+                "CYFR_ACCESS=local",
                 f"CYFR_SECRET_KEY_BASE={secrets.token_urlsafe(48)}",
                 f"CYFR_LOCUS_BACKENDS_KEY={self.key.hex()}",
                 f"CYFR_LOCUS_RUNTIME_ROOT={secrets.token_hex(32)}",

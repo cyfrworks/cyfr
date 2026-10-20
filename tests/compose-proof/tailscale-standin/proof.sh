@@ -38,10 +38,10 @@
 #              image checks, naming the check
 #
 # Usage: tests/compose-proof/tailscale-standin/proof.sh
-# Needs go, docker with a daemon it can reach, and python3; without one it
-# names it and exits 77, which is neither a pass nor a failure. Every
-# container, network, volume and image it makes is named for this run and
-# removed when it ends, however it ends.
+# Needs a non-root host user, go, docker with a daemon it can reach, and
+# python3; without one it names it and exits 77, which is neither a pass
+# nor a failure. Every container, network, volume and image is named for
+# this run and removed when it ends, however it ends.
 set -euo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
@@ -64,6 +64,7 @@ missing() {
   echo "the stand-in's proof did not run (exit 77); this is not a pass" >&2
   exit 77
 }
+[ "$(id -u)" != 0 ] || missing "a non-root host user, whose private bind mounts the stand-in reads"
 command -v go >/dev/null 2>&1 || missing "go (the stand-in is built from its module)"
 command -v python3 >/dev/null 2>&1 || missing "python3"
 command -v docker >/dev/null 2>&1 || missing "docker"

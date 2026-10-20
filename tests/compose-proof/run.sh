@@ -1757,7 +1757,7 @@ snapshot_take() {
   (umask 077 && printf "CYFR_SECRET_KEY_BASE='%s'\n" "$(env_value CYFR_SECRET_KEY_BASE)" >"$dir/keyring")
   cp "$WORK/.env" "$dir/.env"
   cp "$WORK/docker-compose.yml" "$dir/compose"
-  version="$(sed -n 's/^ *version: "\([0-9][0-9.]*\)",$/\1/p' "$ROOT/apps/prima/mix.exs")"
+  version="$(sed -n 's/^ *version: "\([^"]*\)",$/\1/p' "$ROOT/apps/prima/mix.exs")"
   python3 -I - "$dir" "$version" <<'PY'
 import datetime, json, os, sys
 d, version = sys.argv[1], sys.argv[2]

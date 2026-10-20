@@ -9,6 +9,9 @@
 # names BASE.
 ARG BASE
 FROM ${BASE}
-COPY standin /usr/local/bin/standin
-RUN ln -s standin /usr/local/bin/tailscale && ln -s standin /usr/local/bin/containerboot
+ARG STANDIN_UID=10001
+COPY --chmod=755 standin /usr/local/bin/standin
+RUN ln -s standin /usr/local/bin/tailscale && ln -s standin /usr/local/bin/containerboot \
+    && mkdir -p /var/lib/tailscale && chown ${STANDIN_UID}:${STANDIN_UID} /var/lib/tailscale
+USER ${STANDIN_UID}:${STANDIN_UID}
 CMD ["/usr/local/bin/containerboot"]

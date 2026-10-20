@@ -357,7 +357,7 @@ live_slots() {
 }
 
 step "live slots: the running cell's one slot, under this release"
-VERSION="$(sed -n 's/^ *version: "\([0-9][0-9.]*\)",$/\1/p' "$ROOT/apps/prima/mix.exs")"
+VERSION="$(sed -n 's/^ *version: "\([^"]*\)",$/\1/p' "$ROOT/apps/prima/mix.exs")"
 running="$(live_slots "$CELL")"
 printf '%s' "$running" | python3 -c '
 import json, sys
