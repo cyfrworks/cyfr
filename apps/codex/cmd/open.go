@@ -120,19 +120,22 @@ func openOnDisplay(address string, noOpen bool, out io.Writer) bool {
 
 // hyperlink is address as out shows it: an OSC 8 hyperlink, which a
 // terminal shows as the address and opens on a click, when out is a
-// terminal other than Apple Terminal, which prints the sequence as text;
-// the address as it is otherwise.
+// terminal that reads the sequence (hyperlinkFor); the address as it is
+// otherwise.
 func hyperlink(out io.Writer, address string) string {
 	if w, ok := out.(*syncWriter); ok {
 		out = w.w
 	}
 	f, ok := out.(*os.File)
-	return hyperlinkFor(address, ok && term.IsTerminal(int(f.Fd())), os.Getenv("TERM_PROGRAM"))
+	return hyperlinkFor(address, ok && term.IsTerminal(int(f.Fd())), runtime.GOOS, os.Getenv)
 }
 
-// hyperlinkFor is hyperlink on a terminal or not, run as termProgram.
-func hyperlinkFor(address string, terminal bool, termProgram string) string {
-	if !terminal || termProgram == "Apple_Terminal" {
+// hyperlinkFor is hyperlink on a terminal or not, on the system goos with
+// the environment getenv. Apple Terminal prints the sequence as text, and
+// so does a Windows console this program has not switched to escape
+// sequences: on Windows only Windows Terminal (WT_SESSION) reads them.
+func hyperlinkFor(address string, terminal bool, goos string, getenv func(string) string) string {
+	if !terminal || getenv("TERM_PROGRAM") == "Apple_Terminal" || (goos == "windows" && getenv("WT_SESSION") == "") {
 		return address
 	}
 	return "\x1b]8;;" + address + "\x1b\\" + address + "\x1b]8;;\x1b\\"

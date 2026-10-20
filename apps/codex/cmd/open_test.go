@@ -174,19 +174,29 @@ func TestDisplayed_PerSystem(t *testing.T) {
 	}
 }
 
-// An address is a hyperlink on a terminal other than Apple Terminal, and
-// plain text off a terminal and on Apple Terminal.
+// An address is a hyperlink on a terminal that reads the sequence, and
+// plain text off a terminal, on Apple Terminal and on a Windows console
+// other than Windows Terminal.
 func TestHyperlink_OnlyOnATerminalThatShowsIt(t *testing.T) {
 	const address = "https://login.tailscale.com/a/abc123"
-	if got, want := hyperlinkFor(address, true, "iTerm.app"), "\x1b]8;;"+address+"\x1b\\"+address+"\x1b]8;;\x1b\\"; got != want {
-		t.Errorf("on a terminal: %q, want %q", got, want)
+	env := func(vars map[string]string) func(string) string { return func(k string) string { return vars[k] } }
+	link := "\x1b]8;;" + address + "\x1b\\" + address + "\x1b]8;;\x1b\\"
+	for name, got := range map[string]string{
+		"iTerm":            hyperlinkFor(address, true, "darwin", env(map[string]string{"TERM_PROGRAM": "iTerm.app"})),
+		"a Linux terminal": hyperlinkFor(address, true, "linux", env(nil)),
+		"Windows Terminal": hyperlinkFor(address, true, "windows", env(map[string]string{"WT_SESSION": "1f0e"})),
+	} {
+		if got != link {
+			t.Errorf("%s: %q, want %q", name, got, link)
+		}
 	}
 	for name, got := range map[string]string{
-		"Apple Terminal": hyperlinkFor(address, true, "Apple_Terminal"),
-		"no terminal":    hyperlinkFor(address, false, ""),
-		"a buffer":       hyperlink(&bytes.Buffer{}, address),
-		"a file":         hyperlink(tempFile(t), address),
-		"a file, synced": hyperlink(&syncWriter{w: tempFile(t)}, address),
+		"Apple Terminal":    hyperlinkFor(address, true, "darwin", env(map[string]string{"TERM_PROGRAM": "Apple_Terminal"})),
+		"a Windows console": hyperlinkFor(address, true, "windows", env(nil)),
+		"no terminal":       hyperlinkFor(address, false, "linux", env(nil)),
+		"a buffer":          hyperlink(&bytes.Buffer{}, address),
+		"a file":            hyperlink(tempFile(t), address),
+		"a file, synced":    hyperlink(&syncWriter{w: tempFile(t)}, address),
 	} {
 		if got != address {
 			t.Errorf("%s: %q, want the address as it is", name, got)
