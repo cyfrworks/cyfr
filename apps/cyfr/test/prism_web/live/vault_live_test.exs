@@ -534,10 +534,12 @@ defmodule PrismWeb.VaultLiveTest do
       assert [%{ref: ref, operation: "vault.create"}] = open_records(ctx)
       prompt_id = "confirmation-" <> ref
 
-      assert_push_event(view, "system_layer:mark", %{
-        form: "vault-create-form",
-        prompt: ^prompt_id
-      })
+      assert_push_event(
+        view,
+        "system_layer:mark",
+        %{form: "vault-create-form", prompt: ^prompt_id},
+        2_000
+      )
 
       assert {:ok, []} = Sanctum.Vault.list(ctx)
       refute page_state(view) =~ key
@@ -1545,7 +1547,13 @@ defmodule PrismWeb.VaultLiveTest do
              Arca.PendingConfirmations.list_open(Sanctum.Context.actor(ctx), ctx.user_id)
 
     prompt_id = "confirmation-" <> ref
-    assert_push_event(view, "system_layer:mark", %{form: "vault-client-form", prompt: ^prompt_id})
+
+    assert_push_event(
+      view,
+      "system_layer:mark",
+      %{form: "vault-client-form", prompt: ^prompt_id},
+      2_000
+    )
 
     # The person cancels their own waiting request from its prompt.
     view |> element(~s(#system-layer-dialog [data-test="prompt-dismiss"])) |> render_click()
@@ -1581,7 +1589,13 @@ defmodule PrismWeb.VaultLiveTest do
              Arca.PendingConfirmations.list_open(Sanctum.Context.actor(ctx), ctx.user_id)
 
     prompt_id = "confirmation-" <> ref
-    assert_push_event(view, "system_layer:mark", %{form: "vault-client-form", prompt: ^prompt_id})
+
+    assert_push_event(
+      view,
+      "system_layer:mark",
+      %{form: "vault-client-form", prompt: ^prompt_id},
+      2_000
+    )
 
     # Nothing repeats, so the home never announces the expiry: the page
     # ends the wait itself at the record's expiry and lets the form go.
