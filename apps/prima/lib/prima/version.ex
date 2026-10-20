@@ -14,7 +14,7 @@ defmodule Prima.Version do
 
   @version Mix.Project.config()[:version]
 
-  @doc "This build's version, e.g. `\"0.6.0\"`."
+  @doc "This build's version, e.g. `\"0.6.0\"` or `\"0.6.0-alpha.1\"`."
   @spec current() :: String.t()
   def current, do: @version
 end

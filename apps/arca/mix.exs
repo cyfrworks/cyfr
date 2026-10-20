@@ -7,7 +7,7 @@ defmodule Arca.MixProject do
   def project do
     [
       app: :arca,
-      version: "0.5.8",
+      version: "0.6.0-alpha.1",
       build_path: "../../_build",
       config_path: "config/config.exs",
       deps_path: "../../deps",

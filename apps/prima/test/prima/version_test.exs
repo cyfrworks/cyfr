@@ -14,7 +14,10 @@ defmodule Prima.VersionTest do
 
   test "the compiled version is the Prima application's" do
     assert Prima.Version.current() == to_string(Application.spec(:prima, :vsn))
-    assert Prima.Version.current() =~ ~r/\A\d+\.\d+\.\d+\z/
+    # A release version, a pre-release among them, carries no build
+    # metadata: the release workflow holds the tag it names to the rule of
+    # tests/fixtures/release_manifest.json's versions.
+    assert {:ok, %Version{build: nil}} = Version.parse(Prima.Version.current())
   end
 
   test "no Prima beam reads Mix or an application's spec at run time" do
