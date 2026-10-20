@@ -397,6 +397,7 @@ func init() {
 	initCmd.Flags().String("access", "", "How a new home is reached: local, tailnet or public (asked on a terminal; local otherwise)")
 	addAccessFlags(initCmd)
 	initCmd.Flags().Bool("no-pull", false, "Do not pull the stack's images")
+	initCmd.Flags().Bool("no-open", false, "Do not open a tailnet join's approval link in the default browser")
 	rootCmd.AddCommand(initCmd)
 	rootCmd.AddCommand(upCmd)
 	rootCmd.AddCommand(downCmd)
@@ -410,7 +411,7 @@ var initCmd = &cobra.Command{
 
 Downloads docker-compose.yml, Caddyfile, keeper.seccomp.json (the locus-runtime service's seccomp profile), .env.example, the services' own env examples and the bundled scaffold (configuration/component/tincture/integration guides, wit/ definitions, the aqua/ soul, roles and scrolls) for this CLI's version; generates cyfr.yaml, .gitignore, and the data/aqua directories; writes .env from .env.example; and pulls the images the stack starts (--no-pull skips the pulls).
 
-How the home is reached is asked first: 1, your devices via Tailscale (the default); 2, a public domain via Caddy; 3, this computer only. Then your email, as the home's administrator. .env is written for this computer only, with every key; then a tailnet home joins your tailnet (the link it prints approves the machine, or --tailscale-auth-key-file joins it without one) and the stopped stack is switched to the chosen mode, as 'cyfr access' switches it. A join that fails or is cancelled leaves the home reached from this computer only, and 'cyfr access <mode>' changes it later. With --no-interactive nothing is asked: the home is local, unless --access tailnet comes with --tailscale-auth-key-file, or --access public with --domain (--acme-email optional). Given no email, no one is authorized to use the home yet, and init says so: CYFR_PLATFORM_ADMIN_EMAILS in .env names its administrators.
+How the home is reached is asked first: 1, your devices via Tailscale (the default); 2, a public domain via Caddy; 3, this computer only. Then your email, as the home's administrator. .env is written for this computer only, with every key; then a tailnet home joins your tailnet (the link it prints approves the machine, and on a machine with a display it opens in the default browser unless --no-open is given; --tailscale-auth-key-file joins it without one) and the stopped stack is switched to the chosen mode, as 'cyfr access' switches it. A join that fails or is cancelled leaves the home reached from this computer only, and 'cyfr access <mode>' changes it later. With --no-interactive nothing is asked: the home is local, unless --access tailnet comes with --tailscale-auth-key-file, or --access public with --domain (--acme-email optional). Given no email, no one is authorized to use the home yet, and init says so: CYFR_PLATFORM_ADMIN_EMAILS in .env names its administrators.
 
 .env gets the stack's keys: CYFR_SECRET_KEY_BASE, CYFR_LOCUS_BACKENDS_KEY, the runtime root CYFR_LOCUS_RUNTIME_ROOT with the LOCUS_RUNTIME_KEY derived from it for LOCUS_RUNTIME_SERVICE_ID (wrk_locus unless .env names another), and CYFR_LOCUS_BUILDS_URL=http://locus-builds:4100 with a minted CYFR_LOCUS_BUILDS_KEY, so builds are on. It also assigns CYFR_CORS_ALLOWED_ORIGINS the empty allowlist, since cyfr serves Prism, the API, /mcp and the tinctures from its own origin and no browser client of this stack is cross-origin; an allowlist .env assigns is the one that stands.
 
@@ -427,6 +428,7 @@ Re-running in an existing project is safe: docker-compose.yml, Caddyfile, cyfr.y
 		o := initOptions{accessOptions: accessFlags(cmd)}
 		o.force, _ = cmd.Flags().GetBool("force")
 		o.noPull, _ = cmd.Flags().GetBool("no-pull")
+		o.noOpen, _ = cmd.Flags().GetBool("no-open")
 		o.mode, _ = cmd.Flags().GetString("access")
 		return runInit(ctx, o, cmd.OutOrStdout(), cmd.ErrOrStderr())
 	},
@@ -436,8 +438,8 @@ Re-running in an existing project is safe: docker-compose.yml, Caddyfile, cyfr.y
 // given.
 type initOptions struct {
 	accessOptions
-	force, noPull bool
-	mode          string
+	force, noPull, noOpen bool
+	mode                  string
 }
 
 // accessChoice is the mode init applies to a new home, with its inputs.
@@ -496,7 +498,14 @@ func runInit(ctx context.Context, o initOptions, out, errOut io.Writer) error {
 			return choice, adminEmail, nil
 		},
 		apply: func(ctx context.Context, c accessChoice, key []byte) (access.Head, error) {
-			return applyInitAccess(ctx, c, key, joinChoice{optionsGiven: o.hostname != "" || o.keyFile != ""}, out)
+			return applyInitAccess(ctx, c, key, joinChoice{
+				optionsGiven: o.hostname != "" || o.keyFile != "",
+				onAuthURL: func(url string) {
+					if openOnDisplay(url, o.noOpen, out) {
+						fmt.Fprintln(out, "Opened it in your browser.")
+					}
+				},
+			}, out)
 		},
 	}, out, errOut)
 }
@@ -771,7 +780,7 @@ database_path: ./data/cyfr.db
 		fmt.Fprintln(out, "Next: get docker-compose.yml + Caddyfile (a released CLI or a repo checkout), then 'cyfr up'.")
 	}
 	if envCreated {
-		fmt.Fprintln(out, "  Prism:           "+access.Describe(head).Address+"/")
+		fmt.Fprintln(out, "  Prism:           "+hyperlink(out, access.Describe(head).Address+"/"))
 	} else {
 		fmt.Fprintln(out, "  `cyfr access status` shows how this home is reached.")
 	}
@@ -1240,7 +1249,7 @@ func runUp(ctx context.Context, out io.Writer) error {
 		return startErr
 	}
 	fmt.Fprintln(out, "CYFR server started.")
-	fmt.Fprintln(out, "  Prism:           "+access.Describe(head).Address+"/")
+	fmt.Fprintln(out, "  Prism:           "+hyperlink(out, access.Describe(head).Address+"/"))
 	fmt.Fprintln(out, "")
 	fmt.Fprintln(out, "Optional next steps:")
 	fmt.Fprintln(out, "  cyfr login      authenticate this CLI")

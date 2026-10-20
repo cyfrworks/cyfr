@@ -310,10 +310,11 @@ func joinTailnet(ctx context.Context, e stackEngine, id string, o accessOptions,
 		Hostname: o.hostname,
 		NewNode:  o.newNode,
 		OnAuthURL: func(url string) {
-			fmt.Fprintf(out, "To join this machine to your tailnet, open this link and approve the machine:\n  %s\nWaiting for the approval (Ctrl-C cancels the join)...\n", url)
+			fmt.Fprintf(out, "To join this machine to your tailnet, open this link and approve the machine:\n  %s\n", hyperlink(out, url))
 			if choice.onAuthURL != nil {
 				choice.onAuthURL(url)
 			}
+			fmt.Fprintln(out, "Waiting for the approval (Ctrl-C cancels the join)...")
 		},
 	}
 	if key != nil {

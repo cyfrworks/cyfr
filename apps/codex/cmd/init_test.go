@@ -492,3 +492,50 @@ func TestInitSwitchesThroughTheRealEngineAndHostDocker(t *testing.T) {
 		t.Errorf("the switch left its journal (%v)", err)
 	}
 }
+
+// On a machine with a display init opens a tailnet join's approval link in
+// the default browser once it has printed it, and still waits for the
+// approval; with --no-open, or with no display, it prints the link alone.
+// Off a terminal the link and the home's address are plain text.
+func TestInitOpensTheJoinLinkOnADisplay(t *testing.T) {
+	const link = "https://login.tailscale.com/a/approve-test"
+	for _, c := range []struct {
+		name            string
+		display, noOpen bool
+	}{
+		{"a display", true, false},
+		{"--no-open", true, true},
+		{"no display", false, false},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			newInitProject(t)
+			s := useFakeEngine(t)
+			l := stubLauncher(t, c.display, nil)
+			askTerminal = func() bool { return true }
+			askInput = strings.NewReader("1\n\n\n")
+			var out bytes.Buffer
+			if err := runInit(context.Background(), initOptions{noPull: true, noOpen: c.noOpen}, &out, &out); err != nil {
+				t.Fatalf("init: %v\n%s", err, out.String())
+			}
+			opened := c.display && !c.noOpen
+			between := ""
+			if opened {
+				between = "Opened it in your browser.\n"
+			}
+			want := "To join this machine to your tailnet, open this link and approve the machine:\n  " + link + "\n" + between + "Waiting for the approval (Ctrl-C cancels the join)...\n"
+			if !strings.Contains(out.String(), want) || !strings.Contains(out.String(), "  Prism:           https://cyfr.tail1234.ts.net/\n") {
+				t.Errorf("init printed:\n%s\nwant within it:\n%s", out.String(), want)
+			}
+			var handed []string
+			if opened {
+				handed = []string{link}
+			}
+			if got := l.all(); !slices.Equal(got, handed) {
+				t.Errorf("the launcher was handed %v, want %v", got, handed)
+			}
+			if len(s.switches) != 1 || accessOf(t) != access.ModeTailnet {
+				t.Errorf("the join did not go on to the switch: %+v", s.switches)
+			}
+		})
+	}
+}
