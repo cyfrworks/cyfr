@@ -16,13 +16,22 @@
 # Docker daemon to the containerd image store, which alone can load an
 # image carrying its attestation.
 #
+# A release version is one rule, SEMVER, which tests/fixtures/
+# release_manifest.json's versions hold: MAJOR.MINOR.PATCH, or the same with
+# a SemVer pre-release (0.6.0-alpha.1). A pre-release publishes as a GitHub
+# pre-release (.goreleaser.yml's prerelease: auto) and never reaches the
+# Homebrew tap.
+#
 # The checks run on the real files, then on fixtures and on mutants of the
 # real files, each of which must be refused, so a check that stops checking
 # fails here. Beside reading files, they execute the tag check's step under
-# bash against the real tree and a planted one, and scripts/
-# scaffold-tarball.sh into temporary directories, and check the manifest
-# rules against tests/fixtures/release_manifest.json's vectors. Needs
-# PyYAML for this mode.
+# bash against the real tree and planted ones declaring each of the
+# vectors' versions, the Homebrew step against a stub git for each accepted
+# version, and scripts/scaffold-tarball.sh into temporary directories for
+# each version, and check the manifest rules and SEMVER against the
+# vectors. The scripts that match a version run under a locale whose ranges
+# admit letters outside ASCII where the host has one, so only their own
+# LC_ALL=C keeps their match to ASCII. Needs PyYAML for this mode.
 #
 # The release job's own mode checks the manifest it wrote, without PyYAML:
 # its shape by the vector file's rules, its version against the tag, its
@@ -142,10 +151,16 @@ APT_UPGRADE = re.compile(r"^RUN .*\$\{APT_REFRESH\}.*apt-get upgrade", re.MULTIL
 # precedes buildx's builder and every build.
 STORE_SWITCH = "sudo scripts/ci/containerd-image-store.sh"
 PUBLISH_TEST = "bash tests/ci-publish-test.sh"
+# The tags that start the workflow, as GitHub's filter patterns: a release
+# version, and one with a pre-release. They admit more than SEMVER does;
+# the tag check is the exact one.
+TAG_FILTERS = ["[0-9]+.[0-9]+.[0-9]+", "[0-9]+.[0-9]+.[0-9]+-*"]
 # The tag check: a job of its own, its checkout and the one comparison of
-# $GITHUB_REF_NAME with the version apps/prima/mix.exs declares.
+# $GITHUB_REF_NAME with the version apps/prima/mix.exs declares, which
+# matches SEMVER under LC_ALL=C.
 TAG_JOB = "version"
 TAG_COMPARISON = '"$GITHUB_REF_NAME" != "${declared[0]}"'
+C_LOCALE = "export LC_ALL=C"
 # The merge job hands its printed digest to the CLI release.
 RECORD_RUN = 'mkdir -p merged\necho "$DIGEST" > merged/digest'
 MERGED_UPLOAD = {
@@ -192,7 +207,15 @@ MANIFEST_GLOBS = [
 CHECKOUT_WRITES = ["apps/codex/" + SCAFFOLD_GLOB]
 
 DIGEST = re.compile(r"sha256:[0-9a-f]{64}")
-SEMVER = re.compile(r"[0-9]+\.[0-9]+\.[0-9]+")
+# The one rule for a release version: MAJOR.MINOR.PATCH without leading
+# zeros, optionally a SemVer pre-release, no build metadata, ASCII only.
+# Always used with fullmatch, since $ also matches before a final newline,
+# and spelled with [0-9], since \d admits digits outside ASCII.
+SEMVER = re.compile(
+    r"(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)"
+    r"(-(0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)(\.(0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*))*)?"
+)
+RELEASE_VERSION = "release version (MAJOR.MINOR.PATCH, or with a pre-release)"
 IMAGE_LINE = re.compile(r"^(\s*image:\s*)(\S+)\s*$")
 CYFR_REPO = "ghcr.io/cyfrworks/cyfr"
 LOCUS_REPO = "ghcr.io/cyfrworks/cyfr-locus"
@@ -443,20 +466,67 @@ def declared_versions(text):
 
 
 def other_version(version):
-    major, minor, patch = version.split(".")
-    return f"{major}.{minor}.{int(patch) + 1}"
+    """The version with the next PATCH, its pre-release kept."""
+    core, sep, pre = version.partition("-")
+    major, minor, patch = core.split(".")
+    return f"{major}.{minor}.{int(patch) + 1}{sep}{pre}"
+
+
+def other_prerelease(version):
+    """The version's MAJOR.MINOR.PATCH with a pre-release it does not carry."""
+    core, _, pre = version.partition("-")
+    return core + "-" + ("rc.9" if pre != "rc.9" else "rc.8")
+
+
+def version_vectors():
+    """The vector file's accepted and refused versions; check_vectors holds
+    their shape."""
+    with open(VECTORS, "rb") as f:
+        versions = strict_json(f.read()).get("versions")
+    if not isinstance(versions, dict):
+        return [], []
+    return [list(v) if isinstance(v, list) else [] for v in (versions.get("accepted"), versions.get("refused"))]
 
 
 # Executions of one step's script, by (script, tree, tag): mutants that
 # leave the step alone reuse the real step's results.
 _TAG_RUNS = {}
 _SCRATCH = []
+_LOCALE = []
 
 
 def scratch():
     if not _SCRATCH:
         _SCRATCH.append(tempfile.mkdtemp(prefix="ci-release-graph."))
     return _SCRATCH[0]
+
+
+def range_locale():
+    """A locale under which bash's [A-Za-z] admits a letter outside ASCII,
+    as some UTF-8 locales' collation does, so a script that matches a
+    version without LC_ALL=C of its own is refused; else C.UTF-8, the
+    runner's own."""
+    if not _LOCALE:
+        found = "C.UTF-8"
+        for candidate in ("en_US.UTF-8", "en_US.utf8", "en_GB.UTF-8", "de_DE.UTF-8"):
+            probe = subprocess.run(
+                ["bash", "--noprofile", "--norc", "-c", '[[ "$1" =~ ^[A-Za-z]$ ]]', "bash", "\u00e5"],
+                env={"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "LC_ALL": candidate},
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=60,
+            )
+            if probe.returncode == 0:
+                found = candidate
+                break
+        _LOCALE.append(found)
+    return _LOCALE[0]
+
+
+def matches_in_c_locale(lines):
+    """Whether `export LC_ALL=C` comes before the first =~ match."""
+    first = next((i for i, line in enumerate(lines) if "=~" in line), len(lines))
+    return C_LOCALE in [line.strip() for line in lines[:first]]
 
 
 def run_tag_step(script, tree, tag):
@@ -467,8 +537,8 @@ def run_tag_step(script, tree, tag):
             f.write(script)
         # As the runner runs a step: bash -e with pipefail, its script a
         # file, the working directory the checkout, and nothing in the
-        # environment but PATH and the tag.
-        env = {"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "LC_ALL": "C", "GITHUB_REF_NAME": tag}
+        # environment but PATH, the tag and range_locale().
+        env = {"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "LC_ALL": range_locale(), "GITHUB_REF_NAME": tag}
         result = subprocess.run(
             ["bash", "--noprofile", "--norc", "-eo", "pipefail", path],
             cwd=tree,
@@ -492,29 +562,55 @@ def planted_mix(name, text):
 
 
 def tag_cases():
-    """(description, tree, tag, expected) cases the comparison is run on."""
+    """(description, tree, tag, expected) cases the comparison is run on:
+    the real tree, trees planted around it, and a tree declaring each of
+    the vector file's versions."""
     with open(os.path.join(ROOT, MIX_EXS)) as f:
         text = f.read()
     found = declared_versions(text)
     if len(found) != 1 or not SEMVER.fullmatch(found[0]):
-        raise SystemExit(f"FAIL: {MIX_EXS} declares {found}, not one MAJOR.MINOR.PATCH")
+        raise SystemExit(f"FAIL: {MIX_EXS} declares {found}, not one {RELEASE_VERSION}")
     real = found[0]
     other = other_version(real)
     line = re.search(r'^\s*version:\s*"[^"]*",?\s*$', text, re.MULTILINE).group(0)
-    moved = planted_mix("other", text.replace(line, line.replace(real, other), 1))
+
+    def declaring(version):
+        return text.replace(line, line.replace(f'"{real}"', f'"{version}"', 1), 1)
+
+    moved = planted_mix("other", declaring(other))
     twice = planted_mix("twice", text.replace(line, line + "\n" + line.replace(real, other), 1))
     none = planted_mix("none", text.replace(line + "\n", "", 1))
-    return [
+    core = real.partition("-")[0]
+    cases = [
         ("the declared version", ROOT, real, True),
         ("another version", ROOT, other, False),
         ("the declared version with a v", ROOT, "v" + real, False),
         ("the declared version with a suffix", ROOT, real + "-rc.1", False),
+        ("the declared version with build metadata", ROOT, real + "+build.5", False),
+        ("another pre-release of the declared version", ROOT, other_prerelease(real), False),
         ("an empty tag", ROOT, "", False),
         ("the real tag on a tree that declares another version", moved, real, False),
         ("the tag a tree that declares another version names", moved, other, True),
         ("a tree that declares two versions", twice, real, False),
         ("a tree that declares none", none, real, False),
     ]
+    if core != real:
+        cases.append(("the declared version without its pre-release", ROOT, core, False))
+    accepted, refused = version_vectors()
+    for i, version in enumerate(accepted):
+        tree = planted_mix("accepted-%d" % i, declaring(version))
+        version_core, pre = version.partition("-")[::2]
+        cases.append((f"a tree declaring {version} under its tag", tree, version, True))
+        cases.append((f"a tree declaring {version} under another pre-release", tree, other_prerelease(version), False))
+        if pre:
+            cases.append((f"a tree declaring {version} under {version_core}", tree, version_core, False))
+    # A version mix.exs can declare on its one line, in its quotes.
+    for i, version in enumerate(refused):
+        if "\n" in version or '"' in version:
+            continue
+        tree = planted_mix("refused-%d" % i, declaring(version))
+        cases.append((f"a tree declaring {version!r}, no release version, under that tag", tree, version, False))
+    return cases
 
 
 def check_tag(wf, build, release):
@@ -542,6 +638,10 @@ def check_tag(wf, build, release):
     script = str(step["run"])
     if "$GITHUB_REF_NAME" not in script or MIX_EXS not in script:
         return f"the tag check does not compare $GITHUB_REF_NAME with {MIX_EXS}"
+    # On a host with no locale whose ranges admit letters outside ASCII,
+    # the cases below cannot tell a match byte by byte from another.
+    if not matches_in_c_locale(run_lines(step)):
+        return f"the tag check matches the version before {C_LOCALE!r}"
     cases = tag_cases()
     for what, tree, tag, passes in cases:
         status, output = run_tag_step(script, tree, tag)
@@ -644,8 +744,100 @@ def check_release_manifest(wf, merge, release):
     return None
 
 
+def check_trigger(wf):
+    # PyYAML reads the key `on` as YAML 1.1's true.
+    on = wf.get("on", wf.get(True))
+    if on != {"push": {"tags": TAG_FILTERS}}:
+        return f"the workflow starts on {on!r}, not on a push of the tags {TAG_FILTERS}"
+    return None
+
+
+# --- the Homebrew tap: a pre-release never reaches it ---
+
+# Executions of the Homebrew step's script, by (script, tag).
+_HOMEBREW_RUNS = {}
+
+
+def run_homebrew_step(script, tag):
+    """The step's script run as the runner runs it, in a checkout whose dist
+    holds a generated cask, with a git on PATH that records each call and
+    answers 0 (a tap already up to date). Returns (status, git calls, output)."""
+    key = (script, tag)
+    if key not in _HOMEBREW_RUNS:
+        work = tempfile.mkdtemp(prefix="homebrew-", dir=scratch())
+        casks = os.path.join(work, "apps", "codex", "dist", "homebrew", "Casks")
+        os.makedirs(casks)
+        with open(os.path.join(casks, "cyfr.rb"), "w") as f:
+            f.write('cask "cyfr" do\nend\n')
+        stubs = os.path.join(work, "bin")
+        os.makedirs(stubs)
+        calls = os.path.join(work, "git.calls")
+        with open(os.path.join(stubs, "git"), "w") as f:
+            f.write('#!/bin/sh\nprintf \'%s\\n\' "$*" >> "$GIT_CALLS"\nexit 0\n')
+        os.chmod(os.path.join(stubs, "git"), 0o755)
+        os.makedirs(os.path.join(work, "tmp"))
+        path = os.path.join(work, "step.sh")
+        with open(path, "w") as f:
+            f.write(script)
+        env = {
+            "PATH": stubs + ":" + os.environ.get("PATH", "/usr/bin:/bin"),
+            "LC_ALL": range_locale(),
+            "TAG": tag,
+            "HOMEBREW_TAP_TOKEN": "token",
+            "GITHUB_STEP_SUMMARY": os.path.join(work, "summary"),
+            "TMPDIR": os.path.join(work, "tmp"),
+            "GIT_CALLS": calls,
+        }
+        result = subprocess.run(
+            ["bash", "--noprofile", "--norc", "-eo", "pipefail", path],
+            cwd=work,
+            env=env,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            timeout=60,
+        )
+        made = []
+        if os.path.exists(calls):
+            with open(calls) as f:
+                made = f.read().splitlines()
+        _HOMEBREW_RUNS[key] = (result.returncode, made, result.stdout.decode(errors="replace"))
+    return _HOMEBREW_RUNS[key]
+
+
+def check_homebrew(wf, release):
+    """The Homebrew step, run on each accepted version: a pre-release exits
+    0 with a notice before any git call, and a release reaches git clone."""
+    steps = [s for s in wf["jobs"][release].get("steps", []) if s.get("name") == HOMEBREW]
+    if len(steps) != 1:
+        return f"the CLI release does not run {HOMEBREW!r} once"
+    step = steps[0]
+    if (step.get("env") or {}).get("TAG") != "${{ github.ref_name }}":
+        return f"the Homebrew step's TAG is {(step.get('env') or {}).get('TAG')!r}, not the tag"
+    script = str(step.get("run", ""))
+    accepted, _ = version_vectors()
+    if not accepted:
+        return "the vector file accepts no version to run the Homebrew step on"
+    for tag in accepted:
+        status, calls, output = run_homebrew_step(script, tag)
+        if "-" in tag:
+            if status != 0 or calls:
+                return f"the Homebrew step on the pre-release {tag} exits {status} after the git calls {calls[:2]}, not 0 before any"
+            if "::notice::" not in output:
+                return f"the Homebrew step skips the pre-release {tag} without a notice: {output.strip()[-300:]}"
+        elif not calls or not calls[0].startswith("clone "):
+            return f"the Homebrew step on the release {tag} does not reach git clone: exit {status}, git {calls[:2]}: {output.strip()[-300:]}"
+    return None
+
+
 def check_goreleaser(config):
-    globs = [str(e.get("glob")) for e in (config.get("release") or {}).get("extra_files") or []]
+    release = config.get("release") or {}
+    # A tag with a pre-release publishes a GitHub pre-release, and
+    # GoReleaser marks no release the repository's latest.
+    if release.get("prerelease") != "auto":
+        return f".goreleaser.yml's release has prerelease {release.get('prerelease')!r}, not auto"
+    if release.get("make_latest") is not False:
+        return f".goreleaser.yml's release has make_latest {release.get('make_latest')!r}, not false"
+    globs = [str(e.get("glob")) for e in release.get("extra_files") or []]
     if SCAFFOLD_GLOB not in globs:
         return f".goreleaser.yml's release does not attach {SCAFFOLD_GLOB}"
     manifest = sorted(g for g in globs if "release.json" in g)
@@ -693,18 +885,18 @@ def strict_json(data):
     return json.loads(data.decode("utf-8"), object_pairs_hook=pairs, parse_constant=constant)
 
 
-def validate_manifest(obj):
+def validate_manifest(obj, rule=SEMVER):
     """None when obj is a release manifest, else the reason it is not:
     exactly version, images and scaffold; images exactly cyfr, cyfr_locus,
     caddy and tailscale; every digest sha256:<64 lowercase hex>; the version
-    a bare MAJOR.MINOR.PATCH."""
+    a release version by rule."""
     if not isinstance(obj, dict):
         return f"the manifest is {type(obj).__name__}, not an object"
     if set(obj) != {"version", "images", "scaffold"}:
         return f"the manifest's keys are {sorted(obj)}, not images, scaffold and version"
     version = obj["version"]
-    if not isinstance(version, str) or not SEMVER.fullmatch(version):
-        return f"the version {version!r} is not a bare MAJOR.MINOR.PATCH"
+    if not isinstance(version, str) or not rule.fullmatch(version):
+        return f"the version {version!r} is not a {RELEASE_VERSION}"
     images = obj["images"]
     if not isinstance(images, dict) or set(images) != {"cyfr", "cyfr_locus", *PINNED_REPOS}:
         return f"the images are {images!r}, not exactly caddy, cyfr, cyfr_locus and tailscale"
@@ -714,23 +906,85 @@ def validate_manifest(obj):
     return None
 
 
-def check_vectors(path=VECTORS):
-    """The vector file's valid manifest accepted and every refused one refused."""
-    with open(path, "rb") as f:
-        vectors = strict_json(f.read())
+def vector_failures(vectors, rule=SEMVER):
+    """The vector file's valid release and pre-release manifests accepted,
+    every refused one refused, every accepted version matched by rule and
+    every refused one not. Returns (failures, manifests, versions)."""
     failures = []
-    reason = validate_manifest(vectors.get("valid"))
-    if reason:
-        failures.append(f"the vector file's valid manifest is refused: {reason}")
+    for key, prerelease in (("valid", False), ("valid_prerelease", True)):
+        manifest = vectors.get(key)
+        reason = validate_manifest(manifest, rule)
+        if reason:
+            failures.append(f"the vector file's {key} manifest is refused: {reason}")
+        elif ("-" in manifest["version"]) != prerelease:
+            failures.append(f"the vector file's {key} manifest names {manifest['version']!r}")
     refused = vectors.get("refused")
     if not isinstance(refused, list) or not refused:
-        return [f"{path} has no refused manifests"], 0
+        failures.append("the vector file has no refused manifests")
+        refused = []
     for case in refused:
         if not isinstance(case, dict) or set(case) != {"name", "manifest"}:
             failures.append(f"a refused vector is not {{name, manifest}}: {case!r}")
-        elif validate_manifest(case["manifest"]) is None:
+        elif validate_manifest(case["manifest"], rule) is None:
             failures.append(f"a refused manifest vector was accepted: {case['name']}")
-    return failures, len(refused)
+    versions = vectors.get("versions")
+    counted = 0
+    for key, accepted in (("accepted", True), ("refused", False)):
+        values = versions.get(key) if isinstance(versions, dict) else None
+        if not isinstance(values, list) or not values or not all(isinstance(v, str) for v in values):
+            failures.append(f"the vector file's versions.{key} is not a list of versions")
+            continue
+        counted += len(values)
+        for version in values:
+            if bool(rule.fullmatch(version)) != accepted:
+                failures.append(
+                    f"the rule {'refuses' if accepted else 'accepts'} {version!r}, which versions.{key} holds"
+                )
+    return failures, len(refused), counted
+
+
+def check_vectors(path=VECTORS):
+    with open(path, "rb") as f:
+        return vector_failures(strict_json(f.read()))
+
+
+# Rules that are not SEMVER: the vectors must tell each from it.
+RULE_MUTANTS = [
+    ("MAJOR.MINOR.PATCH alone", r"[0-9]+\.[0-9]+\.[0-9]+"),
+    ("leading zeros", SEMVER.pattern.replace("(0|[1-9][0-9]*)", "[0-9]+")),
+    ("build metadata", SEMVER.pattern + r"(\+[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?"),
+    (
+        "word characters for letters",
+        SEMVER.pattern.replace("[0-9A-Za-z-]", r"[\w-]").replace("[A-Za-z-]", r"(?:[^\W\d]|-)"),
+    ),
+    ("empty pre-release identifiers", SEMVER.pattern.replace("[0-9A-Za-z-]*)", "[0-9A-Za-z-]*|)")),
+    ("a v prefix", "v?" + SEMVER.pattern),
+    ("digits outside ASCII", SEMVER.pattern.replace("[1-9][0-9]*", r"[1-9]\d*").replace("(0|", r"(\d|")),
+]
+
+
+def vector_mutants(vectors):
+    """Vector files a check of the vectors must refuse, each with its name."""
+
+    def changed(name, mutate):
+        v = copy.deepcopy(vectors)
+        mutate(v)
+        return name, v
+
+    def move(source, target):
+        def mutate(v):
+            v["versions"][target].append(v["versions"][source].pop(0))
+
+        return mutate
+
+    return [
+        changed("valid_prerelease dropped", lambda v: v.pop("valid_prerelease")),
+        changed("valid_prerelease naming a release", lambda v: v["valid_prerelease"].update(version="1.2.3")),
+        changed("versions dropped", lambda v: v.pop("versions")),
+        changed("versions.accepted emptied", lambda v: v["versions"].update(accepted=[])),
+        changed("a refused version among the accepted", move("refused", "accepted")),
+        changed("an accepted version among the refused", move("accepted", "refused")),
+    ]
 
 
 def image_ref(line):
@@ -801,7 +1055,7 @@ def check_manifest(data, version, scaffold, compose_text):
     if reason:
         return reason
     if not SEMVER.fullmatch(version):
-        return f"the tag {version!r} is not a bare MAJOR.MINOR.PATCH"
+        return f"the tag {version!r} is not a {RELEASE_VERSION}"
     if manifest["version"] != version:
         return f"release.json is release {manifest['version']}, the tag {version}"
     with open(scaffold, "rb") as f:
@@ -857,6 +1111,7 @@ FAKE_LOCUS = "sha256:" + hashlib.sha256(b"cyfr-locus").hexdigest()
 def run_scaffold(root, args):
     result = subprocess.run(
         ["bash", os.path.join(root, "scripts", "scaffold-tarball.sh"), *args],
+        env={**os.environ, "LC_ALL": range_locale()},
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
         timeout=300,
@@ -929,7 +1184,7 @@ def refused_scaffold_args(out, version):
         ("one digest", [o, version, a]),
         ("five arguments", [o, version, a, b, b]),
         ("a v-prefixed version", [o, "v" + version, a, b]),
-        ("a version with a suffix", [o, version + "-rc.1", a, b]),
+        ("a version with build metadata", [o, version + "+build.5", a, b]),
         ("an upper-case digest", [o, version, "sha256:" + a[7:].upper(), b]),
         ("a short digest", [o, version, a, b[:-1]]),
         ("a sha512 digest", [o, version, a, "sha512:" + "0" * 128]),
@@ -971,22 +1226,77 @@ def planted_composes(text):
     ]
 
 
+def scaffold_version_failure(root, accepted, refused):
+    """root's scaffold-tarball.sh pins each accepted version and refuses
+    each refused one with 64 before writing anything: the first failure, or
+    None."""
+    with open(os.path.join(root, "scripts", "scaffold-tarball.sh")) as f:
+        if not matches_in_c_locale(f.read().splitlines()):
+            return f"scaffold-tarball.sh matches the version before {C_LOCALE!r}"
+    with open(os.path.join(root, "docker-compose.yml")) as f:
+        compose = f.read()
+    out = tempfile.mkdtemp(prefix="versions-", dir=scratch())
+    for i, version in enumerate(accepted):
+        tarball = os.path.join(out, "accepted-%d.tar.gz" % i)
+        status, output = run_scaffold(root, [tarball, version, FAKE_CYFR, FAKE_LOCUS])
+        if status != 0 or not os.path.isfile(tarball):
+            return f"scaffold-tarball.sh exits {status} on the release version {version!r}: {output.strip()[-300:]}"
+        staged = tar_member(tarball, "docker-compose.yml")
+        if staged is None:
+            return f"the scaffold pinned at {version!r} holds no one docker-compose.yml at its root"
+        reason = compare_pinned(compose, staged.decode("utf-8"), version, FAKE_CYFR, FAKE_LOCUS)
+        if reason:
+            return f"the scaffold pinned at {version!r}: {reason}"
+    target = os.path.join(out, "refused.tar.gz")
+    for version in refused:
+        status, _ = run_scaffold(root, [target, version, FAKE_CYFR, FAKE_LOCUS])
+        if status != 64 or os.path.exists(target):
+            return f"scaffold-tarball.sh exits {status} on {version!r}, no release version, not 64 with nothing written"
+    return None
+
+
+# SEMVER as the bash scripts spell it, anchored: the mutants replace it.
+BASH_RULE = "'^" + SEMVER.pattern + "$'"
+BARE_RULE = r"'^[0-9]+\.[0-9]+\.[0-9]+$'"
+SCAFFOLD_RULE = "RELEASE=" + BASH_RULE
+SCAFFOLD_MUTANTS = [
+    ("the rule without pre-releases", lambda t: t.replace(SCAFFOLD_RULE, "RELEASE=" + BARE_RULE, 1)),
+    ("the rule unanchored at its end", lambda t: t.replace(SCAFFOLD_RULE, SCAFFOLD_RULE.replace("?$'", "?'"), 1)),
+    ("no LC_ALL=C", lambda t: t.replace("\n" + C_LOCALE + "\n", "\n", 1)),
+    ("the version unchecked", lambda t: t.replace('    [[ "$VERSION" =~ $RELEASE ]] || usage\n', "", 1)),
+]
+
+
 def scaffold_failures(version):
-    """The scaffold pinned on the real tree, its refused argument forms and
-    its refusal of planted composes. Returns (failures, pinned tarball, counts)."""
+    """The scaffold pinned on the real tree at its version and at each of
+    the vector file's, its refused argument forms and versions, its refusal
+    of planted composes, and mutants of the script each refused. Returns
+    (failures, pinned tarball, counts)."""
     failures = []
     out = os.path.join(scratch(), "scaffold")
     os.makedirs(out)
     reason = check_scaffold(ROOT, out, version)
     if reason:
         failures.append(reason)
+    accepted, refused = version_vectors()
+    reason = scaffold_version_failure(ROOT, accepted, refused)
+    if reason:
+        failures.append(reason)
+    with open(COMPOSE) as f:
+        text = f.read()
+    with open(os.path.join(ROOT, "scripts", "scaffold-tarball.sh")) as f:
+        script = f.read()
+    for i, (name, mutate) in enumerate(SCAFFOLD_MUTANTS):
+        mutant = mutate(script)
+        if mutant == script:
+            failures.append(f"a mutant changed nothing: scaffold-tarball.sh, {name}")
+        elif scaffold_version_failure(planted_tree("script-%d" % i, text, mutant), accepted, refused) is None:
+            failures.append(f"a mutant of scaffold-tarball.sh was accepted: {name}")
     target, cases = refused_scaffold_args(out, version)
     for name, args in cases:
         status, output = run_scaffold(ROOT, args)
         if status != 64 or os.path.exists(target):
             failures.append(f"scaffold-tarball.sh exits {status} on {name}, not 64 with nothing written")
-    with open(COMPOSE) as f:
-        text = f.read()
     planted = planted_composes(text)
     for i, (name, compose) in enumerate(planted):
         if compose == text:
@@ -997,25 +1307,41 @@ def scaffold_failures(version):
         status, _ = run_scaffold(tree, [tarball, version, FAKE_CYFR, FAKE_LOCUS])
         if status == 0 or os.path.exists(tarball):
             failures.append(f"scaffold-tarball.sh pinned a compose with {name}")
-    return failures, os.path.join(out, "pinned.tar.gz"), (len(cases), len(planted))
+    counts = (len(cases), len(planted), len(accepted), len(refused))
+    return failures, os.path.join(out, "pinned.tar.gz"), counts
 
 
 def manifest_mode_failures(pinned, version):
     """The workflow's --manifest mode, run as the workflow runs it, on
-    manifests written for the pinned scaffold."""
+    manifests written for the pinned scaffold, and on a release's and a
+    pre-release's of the same MAJOR.MINOR.PATCH, each with its own pinned
+    scaffold."""
     with open(COMPOSE) as f:
         compose = f.read()
     caddy, reason = compose_pinned(compose, "caddy")
     tailscale, other = compose_pinned(compose, "tailscale")
     if reason or other:
         return [reason or other], 0
-    with open(pinned, "rb") as f:
-        scaffold = "sha256:" + hashlib.sha256(f.read()).hexdigest()
-    good = {
-        "version": version,
-        "images": {"cyfr": FAKE_CYFR, "cyfr_locus": FAKE_LOCUS, "caddy": caddy, "tailscale": tailscale},
-        "scaffold": scaffold,
-    }
+
+    def manifest_for(at, tarball):
+        with open(tarball, "rb") as f:
+            scaffold = "sha256:" + hashlib.sha256(f.read()).hexdigest()
+        return {
+            "version": at,
+            "images": {"cyfr": FAKE_CYFR, "cyfr_locus": FAKE_LOCUS, "caddy": caddy, "tailscale": tailscale},
+            "scaffold": scaffold,
+        }
+
+    core = version.partition("-")[0]
+    pre = version if core != version else other_prerelease(version)
+    scaffolds = {version: pinned}
+    for at in (core, pre):
+        if at not in scaffolds:
+            scaffolds[at] = os.path.join(scratch(), "pinned-%s.tar.gz" % at)
+            status, output = run_scaffold(ROOT, [scaffolds[at], at, FAKE_CYFR, FAKE_LOCUS])
+            if status != 0:
+                return [f"scaffold-tarball.sh exits {status} on {at}: {output.strip()[-300:]}"], 0
+    good = manifest_for(version, pinned)
     other = other_version(version)
     wrong = "sha256:" + "0" * 64
 
@@ -1029,8 +1355,19 @@ def manifest_mode_failures(pinned, version):
         return json.dumps(m).encode()
 
     good_bytes = json.dumps(good).encode()
+    released = json.dumps(manifest_for(core, scaffolds[core])).encode()
+    prereleased = json.dumps(manifest_for(pre, scaffolds[pre])).encode()
+    # (name, release.json, tag, scaffold, exit status, text the output holds)
+    mismatch = "release.json is release"
     cases = [
-        ("the manifest of the release", good_bytes, version, 0),
+        ("the manifest of the release", good_bytes, version, pinned, 0, ""),
+        ("a release's manifest under its tag", released, core, scaffolds[core], 0, ""),
+        ("a pre-release's manifest under its tag", prereleased, pre, scaffolds[pre], 0, ""),
+        ("a release's manifest under a pre-release's tag", released, pre, scaffolds[core], 1, mismatch),
+        ("a pre-release's manifest under its release's tag", prereleased, core, scaffolds[pre], 1, mismatch),
+        ("a tag with build metadata", good_bytes, version + "+build.5", pinned, 1, RELEASE_VERSION),
+    ]
+    cases += [(name, data, tag, pinned, want, "") for name, data, tag, want in [
         ("another tag", good_bytes, other, 1),
         ("a v-prefixed tag", good_bytes, "v" + version, 1),
         ("another release's manifest", with_(version=other), other, 1),
@@ -1043,23 +1380,25 @@ def manifest_mode_failures(pinned, version):
         ("an extra key", json.dumps({**good, "latest": True}).encode(), version, 1),
         ("a duplicate key", good_bytes[:-1] + b', "version": "' + version.encode() + b'"}', version, 1),
         ("trailing data", good_bytes + b"{}", version, 1),
-    ]
+    ]]
     failures = []
     path = os.path.join(scratch(), "release.json")
-    for name, data, tag, want in cases:
+    for name, data, tag, scaffold, want, text in cases:
         with open(path, "wb") as f:
             f.write(data)
         result = subprocess.run(
             [sys.executable, "-I", os.path.abspath(__file__)]
-            + ["--manifest", path, "--version", tag, "--scaffold", pinned],
+            + ["--manifest", path, "--version", tag, "--scaffold", scaffold],
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             timeout=60,
         )
-        if result.returncode != want:
+        output = result.stdout.decode(errors="replace").strip()
+        if result.returncode != want or text not in output:
             failures.append(
-                f"the manifest mode exits {result.returncode} on {name}, not {want}: "
-                f"{result.stdout.decode(errors='replace').strip()[-300:]}"
+                f"the manifest mode exits {result.returncode} on {name}, not {want}"
+                + (f" naming {text!r}" if text else "")
+                + f": {output[-300:]}"
             )
     usage = subprocess.run(
         [sys.executable, "-I", os.path.abspath(__file__), "--manifest", path, "--version", version],
@@ -1087,9 +1426,11 @@ def check_shape(wf):
         return reason
     release = next(k for k, job in wf["jobs"].items() if steps_using(job, "goreleaser/goreleaser-action"))
     return (
-        check_tag(wf, build, release)
+        check_trigger(wf)
+        or check_tag(wf, build, release)
         or check_merged_digest(wf, merge)
         or check_release_manifest(wf, merge, release)
+        or check_homebrew(wf, release)
     )
 
 
@@ -1418,6 +1759,43 @@ def tag_job_widened(wf):
     wf["jobs"][TAG_JOB]["permissions"]["packages"] = "write"
 
 
+def tag_step_replace(old, new):
+    def mutate(wf):
+        step = tag_step(wf)
+        step["run"] = step["run"].replace(old, new, 1)
+
+    return mutate
+
+
+TAG_RULE = "release=" + BASH_RULE
+TAG_RULE_CHECK = '[ "${#declared[@]}" -ne 1 ] || ! [[ "${declared[0]}" =~ $release ]]'
+
+
+def prerelease_filter_dropped(wf):
+    wf.get("on", wf.get(True))["push"]["tags"] = TAG_FILTERS[:1]
+
+
+def homebrew_step(wf):
+    return step_named(wf, "release", HOMEBREW)
+
+
+def homebrew_replace(old, new):
+    def mutate(wf):
+        step = homebrew_step(wf)
+        step["run"] = step["run"].replace(old, new, 1)
+
+    return mutate
+
+
+def homebrew_without_skip(wf):
+    step = homebrew_step(wf)
+    step["run"] = re.sub(r'case "\$TAG" in\n.*?esac\n', "", step["run"], count=1, flags=re.DOTALL)
+
+
+def homebrew_tag_elsewhere(wf):
+    homebrew_step(wf)["env"]["TAG"] = "${{ github.sha }}"
+
+
 def merge_step(wf, predicate):
     return next(s for s in wf["jobs"]["merge"]["steps"] if predicate(s))
 
@@ -1590,6 +1968,11 @@ GORELEASER_MUTANTS = [
     ("a second release.json attached", lambda c: c["release"]["extra_files"].append({"glob": "dist/release.json"})),
     ("checksums.txt signed into the legacy bundle", sign_args([a for a in CHECKSUM_SIGN_ARGS if a != "--new-bundle-format"])),
     ("checksums.txt signed without a bundle", sign_args(["sign-blob", "--new-bundle-format", "${artifact}", "--yes"])),
+    ("no prerelease: auto", lambda c: c["release"].pop("prerelease")),
+    ("every release a pre-release", lambda c: c["release"].update(prerelease=True)),
+    ("no release a pre-release", lambda c: c["release"].update(prerelease=False)),
+    ("no make_latest: false", lambda c: c["release"].pop("make_latest")),
+    ("make_latest: true", lambda c: c["release"].update(make_latest=True)),
 ]
 
 
@@ -1644,6 +2027,15 @@ MUTANTS = [
     ("the tag check checking out main", tag_checkout_main),
     ("a step added to the tag check", tag_job_extra_step),
     ("packages: write on the tag check", tag_job_widened),
+    ("the tag check's rule without pre-releases", tag_step_replace(TAG_RULE, "release=" + BARE_RULE)),
+    ("the tag check's rule unanchored at its end", tag_step_replace(TAG_RULE, TAG_RULE.replace("?$'", "?'"))),
+    ("the tag check without LC_ALL=C", tag_step_replace(C_LOCALE + "\n", "")),
+    ("the declared version unchecked against the rule", tag_step_replace(TAG_RULE_CHECK, '[ "${#declared[@]}" -ne 1 ]')),
+    ("no pre-release tag starts the workflow", prerelease_filter_dropped),
+    ("the Homebrew step without its pre-release skip", homebrew_without_skip),
+    ("the Homebrew step skipping only an rc", homebrew_replace("*-*)", "*-rc*)")),
+    ("a git call before the Homebrew step's skip", homebrew_replace('case "$TAG" in\n', 'git ls-remote x\ncase "$TAG" in\n')),
+    ("the Homebrew step's TAG not the tag", homebrew_tag_elsewhere),
     ("no merged digest upload", no_merged_upload),
     ("the merged digest uploaded under another name", merged_upload_renamed),
     ("a merged digest upload that may be empty", merged_upload_may_be_empty),
@@ -1749,12 +2141,29 @@ def graph_mode():
                 failures.append(f"a mutant of {path} was accepted: {name}")
 
     try:
-        vector_failures, vectors = check_vectors()
+        with open(VECTORS, "rb") as f:
+            vector_file = strict_json(f.read())
     except (OSError, ValueError) as e:
-        vector_failures, vectors = [f"the manifest vectors cannot be read: {e}"], 0
-    failures += vector_failures
+        vector_file = None
+        failures.append(f"the manifest vectors cannot be read: {e}")
+    vectors = versions = file_mutants = 0
+    if vector_file is not None:
+        found, vectors, versions = vector_failures(vector_file)
+        failures += found
+        # Each rule that is not SEMVER, and each vector file that drops or
+        # misfiles a vector, is told from the real ones.
+        for name, pattern in RULE_MUTANTS:
+            if not vector_failures(vector_file, re.compile(pattern))[0]:
+                failures.append(f"the vectors accept a rule with {name}")
+        mutants = vector_mutants(vector_file)
+        file_mutants = len(mutants)
+        for name, mutant in mutants:
+            if mutant == vector_file:
+                failures.append(f"a mutant changed nothing: the vector file, {name}")
+            elif not vector_failures(mutant)[0]:
+                failures.append(f"a mutant of the vector file was accepted: {name}")
     version = real_version()
-    scaffold, pinned, (forms, planted) = scaffold_failures(version)
+    scaffold, pinned, (forms, planted, scaffold_accepted, scaffold_refused) = scaffold_failures(version)
     failures += scaffold
     modes = 0
     if not scaffold:
@@ -1767,10 +2176,14 @@ def graph_mode():
         return 1
     print(
         f"tag pipeline ok: release.yml, test.yml's static job, .goreleaser.yml, the Dockerfiles, "
-        f"the tag check run in {len(tag_cases())} cases and the pinned scaffold pass; "
+        f"the tag check run in {len(tag_cases())} cases, the Homebrew step on {scaffold_accepted} versions "
+        f"and the scaffold pinned at {version} and at {scaffold_accepted} versions pass, under {range_locale()}; "
         f"{len(refused)} fixtures, {len(MUTANTS)} mutants of release.yml, {len(TEST_MUTANTS)} of "
-        f"test.yml, {len(GORELEASER_MUTANTS)} of .goreleaser.yml and {3 * len(files)} of the Dockerfiles, "
-        f"{vectors} manifest vectors, {forms} scaffold argument forms and {planted} planted composes refused; "
+        f"test.yml, {len(GORELEASER_MUTANTS)} of .goreleaser.yml, {len(SCAFFOLD_MUTANTS)} of "
+        f"scaffold-tarball.sh and {3 * len(files)} of the Dockerfiles, "
+        f"{vectors} manifest vectors, {scaffold_refused} versions, {forms} scaffold argument forms and "
+        f"{planted} planted composes refused; {versions} versions held to the rule, which "
+        f"{len(RULE_MUTANTS)} other rules and {file_mutants} mutants of the vector file fail; "
         f"{modes} manifest-mode cases checked"
     )
     return 0

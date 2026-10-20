@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"slices"
 	"testing"
 
 	"github.com/cyfr/codex/internal/access"
@@ -25,8 +26,9 @@ const watchdogChild = "CYFR_CMD_TEST_WATCHDOG_CHILD"
 // only, the tailnet's HTTPS off; resumed-local, recovery finishing a switch
 // whose start was on this machine only; waiting-join, a join that waits for
 // its approval until the command's context ends; failed-start, every start
-// failing; plain, the fake engine as it answers by default;
-// real-mismatch, the real engine over a docker whose tailnet machine is
+// failing; handover, `cyfr update` installing a release whose program is
+// this test binary, the handover real (runHandover); plain, the fake
+// engine as it answers by default; real-mismatch, the real engine over a docker whose tailnet machine is
 // another node (tailnetDocker); real-state, the real engine over the
 // stateDocker in CYFR_CMD_TEST_DOCKER_STATE, and real-state-kill the same,
 // killed at its first `compose up`.
@@ -41,6 +43,14 @@ const asCyfr = "CYFR_CMD_TEST_AS_CYFR"
 // this test binary: run so, it serves the call through the command tree as
 // cyfr does, and the command exits with the call's status.
 func TestMain(m *testing.M) {
+	// The program a handover started (TestUpdateHandsOverForReal), which
+	// carries the handover scenario's environment on.
+	if os.Getenv(handoverDir) != "" && slices.Contains(os.Args, "--continue-as") {
+		os.Exit(recordHandover())
+	}
+	if os.Getenv(asCyfr) == "handover" {
+		os.Exit(runHandover())
+	}
 	if len(os.Args) > 2 && os.Args[1] == internalCmd.Name() && os.Args[2] == dockerRunCmd.Name() {
 		rootCmd.SetArgs(os.Args[1:])
 		_ = rootCmd.Execute()

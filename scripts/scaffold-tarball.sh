@@ -13,10 +13,16 @@
 # unless every image line of it names a digest, so a project pulls exactly
 # the images its release published and signed in release.json. The
 # substitution works on a staged copy; the repository's file is never
-# modified. VERSION is a bare MAJOR.MINOR.PATCH and each digest
+# modified. VERSION is a release version by the one rule
+# tests/fixtures/release_manifest.json's versions hold (MAJOR.MINOR.PATCH,
+# or with a SemVer pre-release such as 0.6.0-alpha.1) and each digest
 # sha256:<64 lowercase hex>; any other argument form is refused with 64
 # before anything is written.
 set -euo pipefail
+# Byte by byte: under another locale [A-Za-z] can admit letters outside
+# ASCII.
+export LC_ALL=C
+RELEASE='^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-(0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)(\.(0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*))*)?$'
 
 usage() {
   echo "usage: $0 OUTPUT [VERSION CYFR_DIGEST LOCUS_DIGEST]" >&2
@@ -29,7 +35,7 @@ case "$#" in
   4)
     VERSION=$2 CYFR_DIGEST=$3 LOCUS_DIGEST=$4
     [[ "$1" != "" ]] || usage
-    [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || usage
+    [[ "$VERSION" =~ $RELEASE ]] || usage
     [[ "$CYFR_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]] || usage
     [[ "$LOCUS_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]] || usage
     ;;

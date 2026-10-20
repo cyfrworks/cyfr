@@ -101,10 +101,15 @@ const (
 // reserves for it (128+SIGINT), which Execute prints nothing for; 3 for a
 // start that left the home running on this machine only (its tailnet
 // machine is not ready to serve it), which must read neither as a success
-// nor as a start that failed; and 1 for every other failure.
+// nor as a start that failed; the status of the updated cyfr a `cyfr
+// update` ran as a child to finish (handedOver), which printed its own
+// outcome; and 1 for every other failure.
 func ExitStatus(err error) int {
 	if errors.Is(err, prompt.ErrAborted) {
 		return exitInterrupted
+	}
+	if child := (handedOver{}); errors.As(err, &child) {
+		return child.status
 	}
 	if local := (startedLocally{}); errors.As(err, &local) {
 		return exitStartedLocally
@@ -135,11 +140,12 @@ func Run(ctx context.Context) int {
 // Execute runs the root command under the process context, so every
 // request a command makes is cancellable by the signals Main names. It
 // prints the failure (cobra's own printing is silenced) — except a prompt
-// abort, which the user caused and needs no telling about — and returns it
-// for main to map to an exit code.
+// abort, which the user caused and needs no telling about, and the status
+// of an updated cyfr that printed its own — and returns it for main to map
+// to an exit code.
 func Execute(ctx context.Context) error {
 	err := rootCmd.ExecuteContext(ctx)
-	if err != nil && !errors.Is(err, prompt.ErrAborted) {
+	if err != nil && !errors.Is(err, prompt.ErrAborted) && !errors.As(err, new(handedOver)) {
 		fmt.Fprintln(os.Stderr, "Error:", err)
 		// The one line SilenceErrors swallows beyond the error itself:
 		// cobra's help pointer after an unrecognized command.

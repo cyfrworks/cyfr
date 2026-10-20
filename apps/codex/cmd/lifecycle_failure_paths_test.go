@@ -54,7 +54,7 @@ func TestUpAndUpdateCannotOverlapTheirDockerOperations(t *testing.T) {
 	}
 	updateResult := make(chan error, 1)
 	work.Add(1)
-	go func() { defer work.Done(); updateResult <- runUpdate(context.Background(), io.Discard, io.Discard) }()
+	go func() { defer work.Done(); updateResult <- homeStep(context.Background(), io.Discard, io.Discard) }()
 	deadline = time.Now().Add(5 * time.Second)
 	for !strings.Contains(strings.Join(s.log(), "\n"), "exec pg_dump") {
 		select {

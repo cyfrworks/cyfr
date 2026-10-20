@@ -5,7 +5,8 @@
 package version
 
 var (
-	// Version is the release version, e.g. "0.5.8". "dev" for local builds.
+	// Version is the release version, e.g. "0.6.0" or "0.6.0-alpha.1"; "dev"
+	// for local builds.
 	Version = "dev"
 	// Commit is the short commit hash the binary was built from.
 	Commit = "none"

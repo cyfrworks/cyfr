@@ -6,9 +6,15 @@
 # six pass: the CLI release and its provenance, and the cyfr and cyfr-locus
 # images.
 name: Release
+# A release tag is MAJOR.MINOR.PATCH, or the same with a SemVer
+# pre-release (0.6.0-alpha.1). GitHub's filter patterns admit more than
+# that; the version job is the exact check. A pre-release publishes as a
+# GitHub pre-release (.goreleaser.yml), leaves the images' :latest where
+# it was (scripts/ci/merge-image.sh) and the Homebrew tap on the release it
+# names.
 on:
   push:
-    tags: ['[0-9]+.[0-9]+.[0-9]+']
+    tags: ['[0-9]+.[0-9]+.[0-9]+', '[0-9]+.[0-9]+.[0-9]+-*']
 
 permissions:
   contents: read
@@ -53,9 +59,12 @@ jobs:
 
   # The tag names the release the tree declares: Prima.Version.current/0
   # reads apps/prima/mix.exs, and every mix.exs moves with it
-  # (Cyfr.VersionDriftTest). The image build and the CLI release need this
-  # job, so a tag that names another version builds and publishes nothing.
-  # It publishes nothing itself and runs beside the six checks.
+  # (Cyfr.VersionDriftTest). The declared version is a release version by
+  # the one rule tests/fixtures/release_manifest.json's versions hold, and
+  # the tag is exactly it, pre-release included. The image build and the
+  # CLI release need this job, so a tag that names another version builds
+  # and publishes nothing. It publishes nothing itself and runs beside the
+  # six checks.
   version:
     if: github.repository == 'cyfrworks/cyfr'
     timeout-minutes: 5
@@ -68,14 +77,18 @@ jobs:
       - name: The tag is the version mix.exs declares
         run: |
           set -euo pipefail
+          # Byte by byte: under another locale [A-Za-z] can admit letters
+          # outside ASCII.
+          export LC_ALL=C
+          release='^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-(0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)(\.(0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*))*)?$'
           declared=()
           while IFS= read -r line; do
             if [[ "$line" =~ ^[[:space:]]*version:[[:space:]]*\"([^\"]*)\" ]]; then
               declared+=("${BASH_REMATCH[1]}")
             fi
           done < apps/prima/mix.exs
-          if [ "${#declared[@]}" -ne 1 ] || ! [[ "${declared[0]}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-            echo "::error::apps/prima/mix.exs declares ${#declared[@]} versions [${declared[*]}], not one MAJOR.MINOR.PATCH"
+          if [ "${#declared[@]}" -ne 1 ] || ! [[ "${declared[0]}" =~ $release ]]; then
+            echo "::error::apps/prima/mix.exs declares ${#declared[@]} versions [${declared[*]}], not one release version (MAJOR.MINOR.PATCH, or with a pre-release)"
             exit 1
           fi
           if [ "$GITHUB_REF_NAME" != "${declared[0]}" ]; then
@@ -199,6 +212,7 @@ jobs:
 
   # Each image's multi-arch manifest, made from this run's scanned digests
   # alone, and attested by the digest of the manifest the version tag names.
+  # A release that is not a pre-release also moves :latest to it.
   merge:
     needs: images
     if: github.repository == 'cyfrworks/cyfr'
@@ -383,7 +397,8 @@ jobs:
       # GoReleaser generates the cask (skip_upload) but does not push it, so a
       # flaky tap push (e.g. a transient GitHub 500) can never fail the release or
       # skip the attestation/SLSA steps above. Plain git is used instead of the
-      # contents REST API, and continue-on-error keeps the job green.
+      # contents REST API, and continue-on-error keeps the job green. A
+      # pre-release never reaches the tap: brew installs the release it names.
       - name: Publish Homebrew cask to tap
         continue-on-error: true
         env:
@@ -391,6 +406,13 @@ jobs:
           TAG: ${{ github.ref_name }}
         run: |
           set -euo pipefail
+          # The version job admitted the tag, so a hyphen is its pre-release.
+          case "$TAG" in
+            *-*)
+              echo "::notice::${TAG} is a pre-release; the Homebrew tap keeps the release it names."
+              exit 0
+              ;;
+          esac
           # GoReleaser (skip_upload) writes the cask under dist/. -print -quit
           # stops at the first match; `|| true` lets a missing dist fall through
           # to the skip branch instead of aborting under `set -e`.

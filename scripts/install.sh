@@ -8,7 +8,9 @@ set -eu
 #   curl -fsSL https://raw.githubusercontent.com/cyfrworks/cyfr/main/scripts/install.sh | sh
 #
 # Environment variables:
-#   CYFR_VERSION              - specific version to install (default: latest)
+#   CYFR_VERSION              - the exact version to install, a pre-release
+#                               such as 0.6.0-alpha.1 included (default: the
+#                               latest release that is not a pre-release)
 #   CYFR_INSTALL_DIR          - installation directory (default: /usr/local/bin or ~/.local/bin)
 #   CYFR_ALLOW_UNVERIFIED     - set to 1 to install without cosign, or without the
 #                               release's signature bundle: checksums.txt's
@@ -19,7 +21,7 @@ set -eu
 # Integrity: checksums.txt must carry the release workflow's keyless cosign
 # signature for the version installed (the certificate identity exactly
 # https://github.com/cyfrworks/cyfr/.github/workflows/release.yml@refs/tags/<version>,
-# GitHub Actions' OIDC issuer), as `cyfr upgrade` verifies it in process;
+# GitHub Actions' OIDC issuer), as `cyfr update` verifies it in process;
 # without cosign or the signature the install refuses unless
 # CYFR_ALLOW_UNVERIFIED=1. The archive's SHA-256 checksum is then verified
 # against checksums.txt, and the install fails on any mismatch or missing
@@ -109,14 +111,16 @@ resolve_version() {
         return
     fi
 
-    # List recent releases and pick the newest CLI release, as `cyfr upgrade`
-    # does (internal/release.Latest): the greatest bare MAJOR.MINOR.PATCH tag,
-    # compared numerically, whatever order the API lists them in, drafts and
-    # pre-releases skipped. Legacy `v*` releases and `porta-v*` desktop
-    # releases are no bare version. Each release's tag_name, draft and
-    # prerelease are its own top-level keys, tag_name first; a string value
-    # cannot hold an unescaped quote, so no release body matches them. A
-    # release whose flags are not both read is skipped.
+    # List recent releases and pick the newest CLI release, as `cyfr update`
+    # does (internal/release.Latest): the greatest bare MAJOR.MINOR.PATCH tag
+    # without leading zeros, compared numerically, whatever order the API
+    # lists them in. Drafts, releases GitHub marks as pre-releases and tags
+    # with a pre-release (0.6.0-alpha.1), which is no bare version, are
+    # skipped; so are legacy `v*` releases and `porta-v*` desktop releases.
+    # Each release's tag_name, draft and prerelease are its own top-level
+    # keys, tag_name first; a string value cannot hold an unescaped quote, so
+    # no release body matches them. A release whose flags are not both read
+    # is skipped.
     api_url="https://api.github.com/repos/${GITHUB_REPO}/releases?per_page=20"
     if command -v curl >/dev/null 2>&1; then
         response="$(curl -fsSL "$api_url")"
@@ -138,7 +142,7 @@ resolve_version() {
                 return 0
             }
             function flush() {
-                if (tag ~ /^[0-9]+\.[0-9]+\.[0-9]+$/ && draft == "false" && pre == "false" && (best == "" || newer(tag, best)))
+                if (tag ~ /^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$/ && draft == "false" && pre == "false" && (best == "" || newer(tag, best)))
                     best = tag
                 tag = ""; draft = ""; pre = ""
             }
@@ -152,8 +156,10 @@ resolve_version() {
             END { flush(); print best }
         ')"
 
+    # The sentence internal/release.ErrNoRelease begins: CYFR_VERSION alone
+    # installs a pre-release.
     if [ -z "$version" ]; then
-        printf "Error: could not determine latest CLI version\n" >&2
+        printf "Error: no CYFR release is published yet apart from pre-releases; set CYFR_VERSION to the version to install (https://github.com/%s/releases lists them)\n" "$GITHUB_REPO" >&2
         exit 1
     fi
 
@@ -223,7 +229,7 @@ verify_checksum() {
 # Verify the cosign keyless signature over checksums.txt as the release
 # workflow's for this version: the certificate identity is exactly
 # release.yml at the version's tag, under GitHub Actions' OIDC issuer — the
-# identity `cyfr upgrade` and `cyfr update` verify (internal/release). Without
+# identity `cyfr init` and `cyfr update` verify (internal/release). Without
 # cosign or the bundle the install refuses unless CYFR_ALLOW_UNVERIFIED=1,
 # which installs on the checksum alone.
 verify_signature() {

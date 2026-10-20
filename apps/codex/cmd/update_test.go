@@ -590,12 +590,17 @@ func (s *updateScenario) answer(name, content string) {
 	}
 }
 
+// homeStep is `cyfr update`'s home step, the change confirmed.
+func homeStep(ctx context.Context, out, errOut io.Writer) error {
+	return runHomeUpdate(ctx, out, errOut, true)
+}
+
 // run runs `cyfr update` and answers its error and its output; the lock is
 // released after it and no docker child shared cyfr's process group.
 func (s *updateScenario) run(ctx context.Context) (string, error) {
 	s.t.Helper()
 	var out bytes.Buffer
-	err := runUpdate(ctx, &out, &out)
+	err := homeStep(ctx, &out, &out)
 	if holder := s.engine.held(); holder != "" {
 		s.t.Errorf("the lock is still held, by %s", holder)
 	}
@@ -1456,7 +1461,7 @@ func TestUpdateHoldsOneLock(t *testing.T) {
 	s.answer("pull.block", "")
 	first := make(chan error, 1)
 	go func() {
-		err := runUpdate(context.Background(), io.Discard, io.Discard)
+		err := homeStep(context.Background(), io.Discard, io.Discard)
 		first <- err
 	}()
 	deadline := time.Now().Add(10 * time.Second)
@@ -1468,7 +1473,7 @@ func TestUpdateHoldsOneLock(t *testing.T) {
 	}
 	calls := len(s.log())
 	var out bytes.Buffer
-	err := runUpdate(context.Background(), &out, &out)
+	err := homeStep(context.Background(), &out, &out)
 	if err == nil || !strings.Contains(err.Error(), "Another cyfr command holds this home (`update`)") || !strings.Contains(err.Error(), "Nothing was changed") {
 		t.Errorf("the second update answered %v", err)
 	}
@@ -1489,9 +1494,12 @@ func TestUpdateHoldsOneLock(t *testing.T) {
 		t.Errorf("the stack was switched %d times", n)
 	}
 
+	// The home is on the release now: its compose file goes back to the
+	// one before, so the next update has a change to make.
+	s.edit("docker-compose.yml", string(s.compose))
 	s.engine.holder = "access tailnet"
 	calls = len(s.log())
-	err = runUpdate(context.Background(), io.Discard, io.Discard)
+	err = homeStep(context.Background(), io.Discard, io.Discard)
 	if err == nil || !strings.Contains(err.Error(), "(`access tailnet`)") {
 		t.Errorf("an update beside a held lock answered %v", err)
 	}
@@ -2528,7 +2536,7 @@ func TestUpRefusesWhileAnUpdateHoldsTheLock(t *testing.T) {
 	s := newUpdateScenario(t, shippedCompose(t), nil)
 	s.answer("eval.block", "")
 	done := make(chan error, 1)
-	go func() { done <- runUpdate(context.Background(), io.Discard, io.Discard) }()
+	go func() { done <- homeStep(context.Background(), io.Discard, io.Discard) }()
 	offline := profiles + "run --rm --no-deps -T cyfr bin/cyfr eval " + testLive
 	deadline := time.Now().Add(10 * time.Second)
 	for !s.hasCall(offline) {
@@ -2555,5 +2563,155 @@ func TestUpRefusesWhileAnUpdateHoldsTheLock(t *testing.T) {
 	}
 	if holder := s.engine.held(); holder != "" {
 		t.Errorf("the lock stands after the update (held by %s), so cyfr up would still refuse", holder)
+	}
+}
+
+// askWith answers the home step's question from answer on a terminal, or
+// with no terminal when terminal is false, for the test.
+func askWith(t *testing.T, terminal bool, answer io.Reader) {
+	t.Helper()
+	savedTerminal, savedInput := askTerminal, askInput
+	t.Cleanup(func() { askTerminal, askInput = savedTerminal, savedInput })
+	askTerminal = func() bool { return terminal }
+	askInput = answer
+}
+
+// nothingRan fails unless the update made no docker call and no engine
+// call, the lock among them, and changed no file.
+func (s *updateScenario) nothingRan() {
+	s.t.Helper()
+	if log := s.log(); len(log) != 0 {
+		s.t.Errorf("the update ran:\n%s", strings.Join(log, "\n"))
+	}
+	s.composeUnchanged()
+	s.noBackups()
+}
+
+// The home step shows what the update changes before it takes the lock:
+// the release the home is on, each managed image line that changes, the
+// lines left as written and where the release notes are; then it asks.
+// No, or no answer, changes nothing; with no terminal and no --yes the
+// change is shown and not made; yes makes it.
+func TestUpdateShowsTheChangeAndAsks(t *testing.T) {
+	compose := strings.Replace(string(shippedCompose(t)), "image: ghcr.io/cyfrworks/cyfr:latest", "image: ghcr.io/cyfrworks/cyfr:0.8.0@"+digestOld, 1)
+	for name, c := range map[string]struct {
+		terminal bool
+		answer   string
+		says     string
+	}{
+		"no":          {true, "no\n", "The home was not updated: the update was not confirmed. Nothing was changed"},
+		"no answer":   {true, "", "The home was not updated: the update was not confirmed. Nothing was changed"},
+		"no terminal": {false, "yes\n", "The update above was shown, not made: cyfr update changes a home only once it is confirmed, and there is no terminal to confirm it on. Nothing was changed. Run it again with --yes to make it"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			s := newUpdateScenario(t, []byte(compose), nil)
+			askWith(t, c.terminal, strings.NewReader(c.answer))
+			var out bytes.Buffer
+			err := runHomeUpdate(context.Background(), &out, &out, false)
+			if err == nil || err.Error() != c.says {
+				t.Fatalf("the update answered %v, want %q:\n%s", err, c.says, out.String())
+			}
+			for _, line := range []string{
+				"This home is on release 0.8.0; this cyfr is release 0.9.0.\n",
+				"Updating it stops the stack, snapshots it into backups/, switches these images to release 0.9.0 and starts it:\n",
+				"  cyfr: ghcr.io/cyfrworks/cyfr:0.8.0@sha256:" + strings.Repeat("c", 12) + "… → ghcr.io/cyfrworks/cyfr:0.9.0@sha256:" + strings.Repeat("a", 12) + "…\n",
+				"  locus-runtime: ghcr.io/cyfrworks/cyfr-locus:latest → ghcr.io/cyfrworks/cyfr-locus:0.9.0@sha256:" + strings.Repeat("b", 12) + "…\n",
+				"Read the release notes first: https://github.com/cyfrworks/cyfr/releases/tag/0.9.0\n",
+			} {
+				if !strings.Contains(out.String(), line) {
+					t.Errorf("the offer lacks %q:\n%s", line, out.String())
+				}
+			}
+			if asked := strings.Contains(out.String(), "Update this home? (yes/no) [no]: "); asked != c.terminal {
+				t.Errorf("asked = %v on a terminal = %v:\n%s", asked, c.terminal, out.String())
+			}
+			s.nothingRan()
+		})
+	}
+
+	s := newUpdateScenario(t, []byte(compose), nil)
+	askWith(t, true, strings.NewReader("yes\n"))
+	var out bytes.Buffer
+	if err := runHomeUpdate(context.Background(), &out, &out, false); err != nil || !strings.Contains(out.String(), "Updated to release 0.9.0.") {
+		t.Fatalf("a confirmed update answered %v:\n%s", err, out.String())
+	}
+	if got := read(t, filepath.Join(s.project, "docker-compose.yml")); got != string(switched([]byte(compose))) {
+		t.Errorf("the confirmed update left docker-compose.yml as:\n%s", got)
+	}
+}
+
+// digestOld is an older release's cyfr digest.
+var digestOld = "sha256:" + strings.Repeat("c", 64)
+
+// A home whose compose file names this release's digests already gets no
+// stop and no snapshot; one on a newer release than this cyfr is refused,
+// nothing run; neither asks.
+func TestUpdateLeavesAHomeOnItsReleaseAndRefusesANewerOne(t *testing.T) {
+	askWith(t, true, strings.NewReader("yes\n"))
+	s := newUpdateScenario(t, switched(shippedCompose(t)), nil)
+	out, err := s.run(context.Background())
+	if err != nil || !strings.Contains(out, "This home is on release 0.9.0 already, so there is nothing to update; 'cyfr up' starts it if it is stopped.") || strings.Contains(out, "Update this home?") {
+		t.Fatalf("a home on its release answered %v:\n%s", err, out)
+	}
+	s.nothingRan()
+
+	newer := strings.ReplaceAll(string(switched(shippedCompose(t))), "ghcr.io/cyfrworks/cyfr:"+testVersion+"@", "ghcr.io/cyfrworks/cyfr:1.0.0-rc.1@")
+	s = newUpdateScenario(t, []byte(newer), nil)
+	out, err = s.run(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "This home is on release 1.0.0-rc.1, newer than this cyfr's 0.9.0, and cyfr update never moves a home to an older release") || !strings.Contains(err.Error(), "restore a snapshot taken on it with 'cyfr restore backups/<timestamp>'") {
+		t.Fatalf("a home on a newer release answered %v:\n%s", err, out)
+	}
+	s.nothingRan()
+
+	// A pre-release of this release is older than it: the home moves on.
+	older := strings.ReplaceAll(string(switched(shippedCompose(t))), "ghcr.io/cyfrworks/cyfr:"+testVersion+"@", "ghcr.io/cyfrworks/cyfr:0.9.0-rc.1@")
+	s = newUpdateScenario(t, []byte(older), nil)
+	if out, err := s.run(context.Background()); err != nil || !strings.Contains(out, "This home is on release 0.9.0-rc.1; this cyfr is release 0.9.0.") || !strings.Contains(out, "Updated to release 0.9.0.") {
+		t.Fatalf("a home on this release's pre-release answered %v:\n%s", err, out)
+	}
+}
+
+// The change made is the one shown: a compose file rewritten between the
+// offer and the lock refuses, nothing stopped.
+func TestUpdateRefusesAComposeChangedAfterTheOffer(t *testing.T) {
+	s := newUpdateScenario(t, shippedCompose(t), nil)
+	askWith(t, true, readerFunc(func(p []byte) (int, error) {
+		if err := os.WriteFile(filepath.Join(s.project, "docker-compose.yml"), append(slices.Clone(s.compose), "# edited\n"...), 0640); err != nil {
+			return 0, err
+		}
+		return copy(p, "yes\n"), io.EOF
+	}))
+	var out bytes.Buffer
+	err := runHomeUpdate(context.Background(), &out, &out, false)
+	if err == nil || err.Error() != "docker-compose.yml changed after cyfr update showed what it changes; nothing was changed. Run 'cyfr update' again" {
+		t.Fatalf("the update answered %v:\n%s", err, out.String())
+	}
+	s.nothingStopped()
+	s.noBackups()
+	if holder := s.engine.held(); holder != "" {
+		t.Errorf("the lock is still held, by %s", holder)
+	}
+}
+
+type readerFunc func(p []byte) (int, error)
+
+func (f readerFunc) Read(p []byte) (int, error) { return f(p) }
+
+// The whole verb in a home: the program is the newest release, and the
+// update goes on to the home, confirmed by --yes.
+func TestUpdateGoesOnToTheHome(t *testing.T) {
+	s := newUpdateScenario(t, shippedCompose(t), nil)
+	saved := latestRelease
+	t.Cleanup(func() { latestRelease = saved })
+	latestRelease = func(context.Context) (string, error) { return testVersion, nil }
+	var out bytes.Buffer
+	if err := runUpdate(context.Background(), &out, &out, updateOptions{yes: true}); err != nil {
+		t.Fatalf("cyfr update --yes: %v\n%s", err, out.String())
+	}
+	if text := out.String(); !strings.Contains(text, "cyfr 0.9.0 is the newest release.\n") || !strings.Contains(text, "Updated to release 0.9.0.") || strings.Contains(text, "Update this home?") {
+		t.Errorf("cyfr update --yes in a home said:\n%s", text)
+	}
+	if n := strings.Count(strings.Join(s.log(), "\n"), " up -d"); n != 1 {
+		t.Errorf("the stack was switched %d times", n)
 	}
 }

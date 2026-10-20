@@ -4,6 +4,7 @@
 package cmd
 
 import (
+	"bufio"
 	"bytes"
 	"cmp"
 	"context"
@@ -34,13 +35,23 @@ import (
 )
 
 func init() {
+	updateCmd.Flags().String("version", "", "Install exactly this release, a pre-release or an older release included, instead of the newest one")
+	updateCmd.Flags().Bool("yes", false, "Update the home without asking to confirm it")
+	// The release the program step installed, which the new program it
+	// hands over to checks it is (updateProgram).
+	updateCmd.Flags().String("continue-as", "", "")
+	_ = updateCmd.Flags().MarkHidden("continue-as")
 	rootCmd.AddCommand(updateCmd)
 }
 
 var updateCmd = &cobra.Command{
 	Use:   "update",
-	Short: "Update the stack to this cyfr's release: verified images, a snapshot, then the switch",
-	Long: `Update the project in the current directory to the release this cyfr was built as, in one ceremony that changes nothing until the old stack is stopped and a snapshot of it is taken.
+	Short: "Update this cyfr to the newest release, then the home in this directory to it",
+	Long: `Update this program to the newest release, then the home in the current directory to the program's release, in one command.
+
+The program: when a release newer than this one is published, pre-releases aside, cyfr update installs it: a Homebrew cask install through brew, any other install by downloading the release's archive for this platform, verifying it against the release's checksums.txt signed by the release workflow for that tag, and only then replacing this program's file. It then goes on as the new program. --version names the exact release to install instead, a pre-release or an older release included; a Homebrew install takes only its tap's release. A development build is not replaced. Outside a home directory (no cyfr.yaml) the update stops here.
+
+The home: after steps 1 and 2 below, cyfr update shows what changes and asks to make the change (--yes makes it without asking; with no terminal and no --yes it shows the change and makes none). A home whose docker-compose.yml names this release already is left alone, with no stop and no snapshot, and a home on a newer release than this cyfr is refused, since its database may not run under older code. The change is one ceremony that changes nothing until the old stack is stopped and a snapshot of it is taken:
 
 1. Fetch the release's signed manifest (release.json) and verify it; a manifest that does not verify, or no network access to it, refuses.
 2. Read docker-compose.yml. Every bundled service (locus-runtime, locus-builds, locus-backends and both egress guards) must be present; one missing refuses, naming 'cyfr init --force'. An image line naming ghcr.io/cyfrworks/cyfr, ghcr.io/cyfrworks/cyfr-locus, the bundled Caddy or the bundled Tailscale is managed; any other image is an override, left as written and reported.
@@ -51,9 +62,14 @@ var updateCmd = &cobra.Command{
 
 The update holds the stack's lock from before its first docker call to its end, after finishing a change an interrupted command left; every docker call it makes runs under that lock. Exit status 3: the update is done and the new release started, but on this machine only, because the tailnet machine is not ready to serve it (not the one .env names, not joined, or HTTPS off); the message says what to do. An interrupt before the stop changes nothing. From the stop until the switch, the running step finishes and the update ends as that step's failure would. Once the switch begins, the switch and the start run to their end, so the stack is never left half-switched; an interrupt then is reported, not acted on.`,
 	GroupID: "server",
-	Example: "  cyfr update",
+	Example: "  cyfr update\n  cyfr update --yes\n  cyfr update --version 0.6.0-alpha.1",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		return runUpdate(cmd.Context(), cmd.OutOrStdout(), cmd.ErrOrStderr())
+		var o updateOptions
+		o.version, _ = cmd.Flags().GetString("version")
+		o.yes, _ = cmd.Flags().GetBool("yes")
+		o.continueAs, _ = cmd.Flags().GetString("continue-as")
+		o.noInteractive = flagNoInteractive
+		return runUpdate(cmd.Context(), cmd.OutOrStdout(), cmd.ErrOrStderr(), o)
 	},
 }
 
@@ -153,7 +169,7 @@ func (e errPostgresMajorUnpinned) Error() string {
 	for i, m := range majors {
 		names[i] = strconv.Itoa(m)
 	}
-	return fmt.Sprintf("the PostgreSQL server is version %d, and this cyfr pins a client image for PostgreSQL %s only; a cyfr release that pins one for %d is needed ('cyfr upgrade')", e.major, strings.Join(names, ", "), e.major)
+	return fmt.Sprintf("the PostgreSQL server is version %d, and this cyfr pins a client image for PostgreSQL %s only; a cyfr release that pins one for %d is needed ('cyfr update')", e.major, strings.Join(names, ", "), e.major)
 }
 
 // pgClientImage is the pinned client image of the server major `major`.
@@ -195,24 +211,63 @@ func missingStackServices(path string) []string {
 // it is now (composeAsRead).
 var errUpdateInterrupted = errors.New("cyfr update was interrupted before anything stopped; it changed nothing and the running stack was not touched")
 
-// runUpdate is `cyfr update` in the working directory. ctx is cancelled by
-// SIGINT, SIGTERM or SIGHUP (Main's signal context): before the stop step
-// the cancellation aborts the update with nothing changed; from the stop
-// step on, every step runs under a context detached from it, and until the
-// switch the update ends after the running step as that step's failure
-// would. The switch and the start are one step that is never cut short:
-// an interrupt during it is reported once the start has answered.
-func runUpdate(ctx context.Context, out, errOut io.Writer) error {
+// runUpdate is `cyfr update` in the working directory: the program step
+// (updateProgram), which hands the rest over to the program it installs,
+// then, in a home directory, the home step (runHomeUpdate). The program
+// a handover starts is told the release it must be (o.continueAs) and
+// skips the program step.
+func runUpdate(ctx context.Context, out, errOut io.Writer, o updateOptions) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	if _, err := os.Stat("cyfr.yaml"); err != nil {
-		return errors.New("Not in a cyfr project directory (no cyfr.yaml found).\nRun 'cyfr init' to create a new project.")
+	switch {
+	case o.continueAs == "":
+		finished, err := updateProgram(ctx, out, o)
+		if finished || err != nil {
+			return err
+		}
+	case o.continueAs != version.Version:
+		self, _ := selfExecutable()
+		return fmt.Errorf("The cyfr at %s is %s, not release %s that cyfr update installed; the home was not touched. Run 'cyfr update' again", self, version.Version, o.continueAs)
 	}
+	if _, err := os.Stat("cyfr.yaml"); err != nil {
+		fmt.Fprintln(out, "There is no home in this directory (no cyfr.yaml), so the update ends with the program; run 'cyfr update' in a home's directory to update that home.")
+		return nil
+	}
+	return runHomeUpdate(ctx, out, errOut, o.yes)
+}
+
+// runHomeUpdate is `cyfr update`'s home step in the working directory: the
+// manifest verified and the compose file planned, both read-only, then the
+// offer (updater.offer), then the ceremony under the stack's lock. ctx is
+// cancelled by SIGINT, SIGTERM or SIGHUP (Main's signal context): before
+// the stop step the cancellation aborts the update with nothing changed;
+// from the stop step on, every step runs under a context detached from it,
+// and until the switch the update ends after the running step as that
+// step's failure would. The switch and the start are one step that is
+// never cut short: an interrupt during it is reported once the start has
+// answered.
+func runHomeUpdate(ctx context.Context, out, errOut io.Writer, yes bool) error {
 	v := version.Version
-	if v == "" || v == "dev" {
+	if !release.IsVersion(v) {
 		return errors.New("This cyfr is a development build, which has no signed release to install; run 'cyfr update' with a released cyfr")
 	}
+	u := &updater{ctx: ctx, version: v, out: out, errOut: errOut}
+	if err := u.fetchManifest(); err != nil {
+		return err
+	}
+	plan, err := planCompose("docker-compose.yml", u.manifest, u.version)
+	if err != nil {
+		return err
+	}
+	u.compose = plan
+	if _, err := exec.LookPath("docker"); err != nil {
+		return errors.New("cyfr update needs docker on PATH to update the stack; nothing was changed")
+	}
+	if done, err := u.offer(yes); done || err != nil {
+		return err
+	}
+
 	// The lock an up, a restore and an access change hold too, taken before
 	// any docker call and held to the update's end, so no start runs while
 	// the stack is stopped for its snapshot. A change an interrupted
@@ -226,11 +281,16 @@ func runUpdate(ctx context.Context, out, errOut io.Writer) error {
 	if err := refuseUnfinished(receipts); err != nil {
 		return err
 	}
+	// The change confirmed is the one shown: a compose file another
+	// command rewrote before the lock is planned afresh by a new update.
+	if now, err := os.ReadFile(plan.path); err != nil || !bytes.Equal(now, plan.original) {
+		return errors.New("docker-compose.yml changed after cyfr update showed what it changes; nothing was changed. Run 'cyfr update' again")
+	}
 	head, err := e.Head()
 	if err != nil {
 		return engineFailure(err)
 	}
-	u := &updater{ctx: ctx, version: v, out: out, errOut: errOut, engine: e, head: head}
+	u.engine, u.head = e, head
 	return u.run()
 }
 
@@ -285,19 +345,9 @@ type serviceStop struct {
 	took    time.Duration
 }
 
+// run is the ceremony, from the pre-stop reads to the report, under the
+// stack's lock, with the manifest and the compose plan in hand.
 func (u *updater) run() error {
-	if err := u.fetchManifest(); err != nil {
-		return err
-	}
-	plan, err := planCompose("docker-compose.yml", u.manifest, u.version)
-	if err != nil {
-		return err
-	}
-	u.compose = plan
-	if _, err := exec.LookPath("docker"); err != nil {
-		return errors.New("cyfr update needs docker on PATH to update the stack; nothing was changed")
-	}
-
 	// Every step before the stop runs under ctx and changes no deployment
 	// state, so an interrupt or a failure here leaves the stack running on
 	// the compose file and the scaffold files as they were.
@@ -388,6 +438,64 @@ func (u *updater) fetchManifest() error {
 	}
 	u.manifest = m
 	return nil
+}
+
+// offer shows what the update changes and asks to make it, answering done
+// when the update ends here: a home whose compose file names this
+// release's digests on every managed line already is left alone, with no
+// stop and no snapshot; a home on a newer release than this cyfr is
+// refused, since the update would start older code over a database the
+// newer release migrated; and a change not confirmed is not made. yes
+// makes the change without asking; with no terminal to ask on and no yes,
+// the change is shown and not made.
+func (u *updater) offer(yes bool) (bool, error) {
+	plan := u.compose
+	if plan.onRelease() {
+		fmt.Fprintf(u.out, "This home is on release %s already, so there is nothing to update; 'cyfr up' starts it if it is stopped.\n", u.version)
+		return true, nil
+	}
+	from := plan.homeRelease()
+	if from != "" && release.IsNewer(from, u.version) {
+		return true, fmt.Errorf("This home is on release %s, newer than this cyfr's %s, and cyfr update never moves a home to an older release: the older code would start over a database %s may have migrated. Nothing was changed. To keep %s, run 'cyfr update' with a cyfr of %s or later; to go back to %s, restore a snapshot taken on it with 'cyfr restore backups/<timestamp>'", from, u.version, from, from, from, u.version)
+	}
+
+	if from != "" {
+		fmt.Fprintf(u.out, "\nThis home is on release %s; this cyfr is release %s.\n", from, u.version)
+	} else {
+		fmt.Fprintf(u.out, "\nThis home's docker-compose.yml names no release (%s); this cyfr is release %s.\n", plan.cyfrImage(), u.version)
+	}
+	fmt.Fprintf(u.out, "Updating it stops the stack, snapshots it into backups/, switches these images to release %s and starts it:\n", u.version)
+	for _, line := range plan.managed {
+		if line.value != line.replacement {
+			fmt.Fprintf(u.out, "  %s: %s → %s\n", line.service, shortDigest(line.value), shortDigest(line.replacement))
+		}
+	}
+	if len(plan.overrides) > 0 {
+		fmt.Fprintln(u.out, "Image lines left as written (not managed by cyfr update):")
+		for _, line := range plan.overrides {
+			fmt.Fprintf(u.out, "  %s: %s\n", line.service, line.value)
+		}
+	}
+	fmt.Fprintf(u.out, "On that start the release migrates the database, or refuses one it cannot carry forward; only the snapshot takes the home back. Read the release notes first: %s/tag/%s\n", releasesPage, u.version)
+	if yes {
+		return false, nil
+	}
+	if !askTerminal() {
+		return true, errors.New("The update above was shown, not made: cyfr update changes a home only once it is confirmed, and there is no terminal to confirm it on. Nothing was changed. Run it again with --yes to make it")
+	}
+	if a := strings.ToLower(ask(bufio.NewReader(askInput), u.out, "Update this home? (yes/no)", "no")); a != "yes" && a != "y" {
+		return true, errors.New("The home was not updated: the update was not confirmed. Nothing was changed")
+	}
+	return false, nil
+}
+
+// shortDigest shortens an image reference's sha256 digest to its first 12
+// hex digits, for reading.
+func shortDigest(ref string) string {
+	if i := strings.Index(ref, "@sha256:"); i >= 0 && len(ref) > i+8+12 {
+		return ref[:i+8+12] + "…"
+	}
+	return ref
 }
 
 // ---- the compose file ------------------------------------------------------
@@ -499,6 +607,47 @@ func planCompose(path string, m *release.Manifest, ver string) (*composePlan, er
 	}
 	plan.rewritten = out
 	return plan, nil
+}
+
+// onRelease reports whether every managed image line names the release's
+// digest already, as a switch to it wrote them.
+func (p *composePlan) onRelease() bool {
+	for _, line := range p.managed {
+		if line.value != line.replacement {
+			return false
+		}
+	}
+	return len(p.managed) > 0
+}
+
+// homeRelease answers the release the compose file's cyfr image lines name,
+// the one tag they share when it is a release version, else "".
+func (p *composePlan) homeRelease() string {
+	found := ""
+	for _, line := range p.managed {
+		if normalizeRepository(line.repository) != release.RepoCyfr {
+			continue
+		}
+		if !release.IsVersion(line.tag) || found != "" && line.tag != found {
+			return ""
+		}
+		found = line.tag
+	}
+	return found
+}
+
+// cyfrImage answers the cyfr service's image as written, or the first
+// managed line's when no service is named cyfr.
+func (p *composePlan) cyfrImage() string {
+	for _, line := range p.managed {
+		if line.service == "cyfr" {
+			return line.value
+		}
+	}
+	if len(p.managed) > 0 {
+		return p.managed[0].value
+	}
+	return "no managed image"
 }
 
 // serviceImage answers the node holding a service's image: its own `image`

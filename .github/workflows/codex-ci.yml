@@ -119,9 +119,10 @@ jobs:
   test-windows:
     # The CLI ships for Windows, where the access engine's lock is LockFileEx
     # and its docker children run in a kill-on-close Job Object, the
-    # platform's own: the whole module vets and builds here, and the access
-    # package's tests run on the real calls.
-    name: vet + build + access tests (Windows)
+    # platform's own, and where cyfr update hands over to the program it
+    # installed as a child: the whole module vets and builds here, and the
+    # access package's tests and the handover run on the real calls.
+    name: vet + build + access and handover tests (Windows)
     runs-on: windows-latest
     timeout-minutes: 15
     defaults:
@@ -162,6 +163,16 @@ jobs:
           set -euo pipefail
           go test ./internal/access/ -race -count=1 -v -run "^(${WINDOWS_TESTS// /|})\$" 2>&1 | tee "$RUNNER_TEMP/windows-tests.log"
           for t in $WINDOWS_TESTS; do grep -q -- "--- PASS: $t " "$RUNNER_TEMP/windows-tests.log" || { echo "::error::the Windows test $t did not run and pass"; exit 1; }; done
+
+      # cyfr update's handover where a running program cannot be replaced
+      # by exec: the installed program runs as a child holding the console,
+      # and its status is the update's. It must run and pass here.
+      - name: go test (the update's handover ran and passed)
+        shell: bash
+        run: |
+          set -euo pipefail
+          go test ./cmd/ -race -count=1 -v -run '^TestUpdateHandsOverForReal$' 2>&1 | tee "$RUNNER_TEMP/handover-test.log"
+          grep -q -- "--- PASS: TestUpdateHandsOverForReal " "$RUNNER_TEMP/handover-test.log" || { echo "::error::the handover test did not run and pass"; exit 1; }
 
   test-macos:
     # The CLI ships for macOS; this runs its checks on the platform's own

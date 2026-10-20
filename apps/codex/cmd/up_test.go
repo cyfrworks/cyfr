@@ -185,9 +185,15 @@ func TestComposeKeysInEnvAreRefusedBeforeAnyDockerCall(t *testing.T) {
 		}
 	}
 	for name, command := range map[string]func(r *restoreScenario) error{
-		"up":     func(*restoreScenario) error { return runUp(context.Background(), &bytes.Buffer{}) },
-		"down":   func(*restoreScenario) error { return runDown(context.Background(), &bytes.Buffer{}) },
-		"update": func(*restoreScenario) error { return runUpdate(context.Background(), &bytes.Buffer{}, &bytes.Buffer{}) },
+		"up":   func(*restoreScenario) error { return runUp(context.Background(), &bytes.Buffer{}) },
+		"down": func(*restoreScenario) error { return runDown(context.Background(), &bytes.Buffer{}) },
+		// The scenario's home is on the release its update installed: its
+		// compose file goes back to the one before, so this update has a
+		// change to make.
+		"update": func(r *restoreScenario) error {
+			r.edit("docker-compose.yml", string(r.compose))
+			return homeStep(context.Background(), &bytes.Buffer{}, &bytes.Buffer{})
+		},
 		"restore": func(r *restoreScenario) error {
 			return runRestore(context.Background(), r.dir, true, &bytes.Buffer{}, &bytes.Buffer{})
 		},

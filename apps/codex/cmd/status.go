@@ -51,7 +51,7 @@ var statusCmd = &cobra.Command{
 				}
 			}
 
-			if n := upgradeNotice(); n != "" {
+			if n := updateNotice(); n != "" {
 				fmt.Println("\n" + n)
 			}
 		}

@@ -97,10 +97,11 @@ var digestPattern = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
 
 // ParseManifest reads data as a release manifest of exactly its shape: the
 // keys version, images and scaffold, images holding exactly cyfr,
-// cyfr_locus, caddy and tailscale, every value a string, the version a bare MAJOR.MINOR.PATCH and
-// every digest `sha256:` and 64 lower-case hex digits. Keys match exactly
-// (encoding/json's case-folding does not apply), and a missing, unknown or
-// repeated key, a null, another type or anything after the object refuses.
+// cyfr_locus, caddy and tailscale, every value a string, the version a
+// release version (IsVersion) and every digest `sha256:` and 64 lower-case
+// hex digits. Keys match exactly (encoding/json's case-folding does not
+// apply), and a missing, unknown or repeated key, a null, another type or
+// anything after the object refuses.
 func ParseManifest(data []byte) (*Manifest, error) {
 	top, err := strictObject(data, "version", "images", "scaffold")
 	if err != nil {
@@ -133,8 +134,8 @@ func ParseManifest(data []byte) (*Manifest, error) {
 		}
 	}
 
-	if !bareSemver.MatchString(m.Version) {
-		return nil, fmt.Errorf("%w: release.json version %q is not a bare MAJOR.MINOR.PATCH", ErrUnverified, m.Version)
+	if !IsVersion(m.Version) {
+		return nil, fmt.Errorf("%w: release.json version %q is not a release version (MAJOR.MINOR.PATCH, or with a pre-release)", ErrUnverified, m.Version)
 	}
 	for _, f := range fields[1:] {
 		if !digestPattern.MatchString(*f.into) {
@@ -229,8 +230,8 @@ func (t contextTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 // observed (an integrated or RFC 3161 timestamp) while the certificate was
 // valid. Trust comes from trusted alone, never from the bundle.
 func VerifyBlob(artifact, bundleJSON []byte, version string, trusted root.TrustedMaterial) error {
-	if !bareSemver.MatchString(version) {
-		return fmt.Errorf("%w: %q is not a release version (MAJOR.MINOR.PATCH)", ErrUnverified, version)
+	if !IsVersion(version) {
+		return fmt.Errorf("%w: %q is not a release version (MAJOR.MINOR.PATCH, or with a pre-release)", ErrUnverified, version)
 	}
 	if trusted == nil {
 		return fmt.Errorf("%w: no trust material", ErrUnverified)
@@ -295,7 +296,7 @@ var manifestURLTemplate = ManifestURLTemplate
 // that fails is a transport error naming its URL; everything about the
 // bytes themselves refuses with ErrUnverified.
 func FetchManifest(ctx context.Context, version string) (*Manifest, error) {
-	if !bareSemver.MatchString(version) {
+	if !IsVersion(version) {
 		return nil, fmt.Errorf("this CLI is version %q, not a release build, so it has no signed release manifest to update from", version)
 	}
 	client := &http.Client{Timeout: fetchTimeout}

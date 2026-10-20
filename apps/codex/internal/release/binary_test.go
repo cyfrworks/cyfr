@@ -122,20 +122,22 @@ func (r *binaryRelease) serve(t *testing.T) {
 }
 
 // The archive a signed checksums.txt names answers its binary, a gzipped
-// tar's cyfr and a zip's cyfr.exe.
+// tar's cyfr and a zip's cyfr.exe, for a release and a pre-release alike.
 func TestFetchBinaryAnswersTheVerifiedBinary(t *testing.T) {
-	r := newBinaryRelease(t, "0.9.0")
-	r.serve(t)
-	for _, platform := range []struct{ goos, goarch, want string }{
-		{"linux", "amd64", "cyfr linux 0.9.0"},
-		{"windows", "arm64", "cyfr windows 0.9.0"},
-	} {
-		got, err := FetchBinary(context.Background(), "0.9.0", platform.goos, platform.goarch)
-		if err != nil {
-			t.Fatalf("FetchBinary %s/%s: %v", platform.goos, platform.goarch, err)
-		}
-		if string(got) != platform.want {
-			t.Errorf("FetchBinary %s/%s answered %q", platform.goos, platform.goarch, got)
+	for _, version := range []string{"0.9.0", "0.9.0-rc.1"} {
+		r := newBinaryRelease(t, version)
+		r.serve(t)
+		for _, platform := range []struct{ goos, goarch, want string }{
+			{"linux", "amd64", "cyfr linux " + version},
+			{"windows", "arm64", "cyfr windows " + version},
+		} {
+			got, err := FetchBinary(context.Background(), version, platform.goos, platform.goarch)
+			if err != nil {
+				t.Fatalf("FetchBinary %s %s/%s: %v", version, platform.goos, platform.goarch, err)
+			}
+			if string(got) != platform.want {
+				t.Errorf("FetchBinary %s %s/%s answered %q", version, platform.goos, platform.goarch, got)
+			}
 		}
 	}
 }
@@ -179,10 +181,20 @@ func TestFetchBinaryRefusesWhatDoesNotVerify(t *testing.T) {
 		{"no line for the platform's archive", "0.9.0", "freebsd", func(*testing.T, *binaryRelease) {}},
 		{"an archive without the binary", "0.9.0", "darwin", func(*testing.T, *binaryRelease) {}},
 		{"a version that is not a release", "0.9", "linux", func(*testing.T, *binaryRelease) {}},
+		{"a version with build metadata", "0.9.0+build.1", "linux", func(*testing.T, *binaryRelease) {}},
+		// The pre-release's assets, their checksums.txt signed for the
+		// release's tag.
+		{"a pre-release signed for its release's tag", "0.9.0-rc.1", "linux", func(t *testing.T, r *binaryRelease) {
+			r.signChecksums(t, Identity("0.9.0"), Issuer)
+		}},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			r := newBinaryRelease(t, "0.9.0")
+			version := "0.9.0"
+			if IsPrerelease(c.version) {
+				version = c.version
+			}
+			r := newBinaryRelease(t, version)
 			c.edit(t, r)
 			r.serve(t)
 			goarch := map[string]string{"linux": "amd64", "freebsd": "amd64", "darwin": "arm64"}[c.goos]

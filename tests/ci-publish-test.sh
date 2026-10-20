@@ -7,7 +7,8 @@
 # pushed by digest; scripts/ci/scanned-is-pushed.sh, which proves the
 # scanned image is the pushed one; and scripts/ci/merge-image.sh, which
 # merges exactly the digests a run pushed and prints the manifest its
-# version tag names.
+# version tag names, and moves :latest to it only for a release that is
+# not a pre-release.
 #
 # Two runs, A and B, push between each other's steps, and B's merge lands
 # inside A's. Each run's manifest must list its own images only, and each
@@ -473,6 +474,27 @@ moved_case 1.0.2 "another run's images" "$reg/publish@$b_amd64" "$reg/publish@$b
 moved_case 1.0.3 "one of the given images alone" "$reg/publish@$a_amd64"
 moved_case 1.0.4 "the given images and one more" "$reg/publish@$a_amd64" "$reg/publish@$a_arm64" "$reg/publish@$b_amd64"
 
+# --- a pre-release publishes its version tag alone ---
+
+# From A's images while :latest names B's merge, so a :latest the
+# pre-release moved would name another index than before.
+label="a pre-release publishes its version tag, prints that manifest's digest and leaves latest where it was"
+latest_before=$(digest_of "$reg/publish:latest")
+run_script "$merge" "$reg/publish" 1.0.5-rc.1 "$a_amd64" "$a_arm64"
+pre_printed=$(cat "$scratch/out")
+pre_tag=$(digest_of "$reg/publish:1.0.5-rc.1")
+pre_listed=$(listed "$reg/publish:1.0.5-rc.1")
+latest_after=$(digest_of "$reg/publish:latest")
+if [ "$code" = 0 ] && is_digest "$pre_printed" "$latest_before" && [ "$pre_printed" = "$pre_tag" ] &&
+  [ "$pre_listed" = "$a_expected" ] && [ "$pre_printed" != "$latest_before" ] &&
+  [ "$latest_after" = "$latest_before" ]; then
+  pass "$label"
+else
+  fail "$label" "exit $code" "printed '$pre_printed', 1.0.5-rc.1 names $pre_tag" \
+    "1.0.5-rc.1 lists $(echo $pre_listed)" "latest before $latest_before, after $latest_after" \
+    "stderr: $(tr '\n' ' ' < "$scratch/err")"
+fi
+
 # --- refusals that publish nothing ---
 
 refused_case() {
@@ -510,7 +532,7 @@ done
 
 label="the refusals left the registry's tags as they were"
 tags=$(tags_of publish)
-if [ "$tags" = "1.0.0 1.0.1 1.0.2 1.0.3 1.0.4 latest " ]; then pass "$label"; else fail "$label" "tags: $tags"; fi
+if [ "$tags" = "1.0.0 1.0.1 1.0.2 1.0.3 1.0.4 1.0.5-rc.1 latest " ]; then pass "$label"; else fail "$label" "tags: $tags"; fi
 
 label="removing the registry removes its anonymous volume"
 remove_registry

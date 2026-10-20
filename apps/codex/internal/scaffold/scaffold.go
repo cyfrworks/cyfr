@@ -202,7 +202,7 @@ var Guides = []string{
 }
 
 // IsManaged returns true for files that are maintained by cyfr and should be
-// overwritten during an upgrade (guides, WIT interface definitions, the
+// overwritten during an update (guides, WIT interface definitions, the
 // keeper's seccomp profile, and the shipped AQUA soul, roles and scrolls).
 // It is the one policy for what `cyfr update` overwrites, snapshots and
 // `cyfr restore` puts back.
@@ -236,7 +236,7 @@ func Fetch(version string) (*Release, error) {
 	// up` will pull and run (cyfr, cyfr-locus and caddy) — verify it
 	// against the release's checksums.txt, itself verified as signed by
 	// the release workflow for this version, before downloading or
-	// extracting a byte of it. `cyfr upgrade` verifies the CLI's archive
+	// extracting a byte of it. `cyfr update` verifies the CLI's archive
 	// the same way (release.FetchBinary).
 	want, err := fetchScaffoldChecksum(client, version)
 	if err != nil {

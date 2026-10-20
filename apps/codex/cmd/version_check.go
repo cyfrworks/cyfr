@@ -23,16 +23,16 @@ import (
 const updateCheckTTL = 24 * time.Hour
 
 func init() {
-	cobra.AddTemplateFunc("upgradeNotice", upgradeNotice)
-	rootCmd.SetVersionTemplate("cyfr version {{.Version}}{{with upgradeNotice}}\n\n{{.}}{{end}}\n")
+	cobra.AddTemplateFunc("updateNotice", updateNotice)
+	rootCmd.SetVersionTemplate("cyfr version {{.Version}}{{with updateNotice}}\n\n{{.}}{{end}}\n")
 }
 
-// upgradeNotice returns a one-line "newer version available" message, or "" if
+// updateNotice returns a one-line "newer version available" message, or "" if
 // the CLI is already current, the check is opted out via CYFR_NO_UPDATE_CHECK,
 // stdout is not a terminal, or the latest version can't be determined. It is
 // safe to call from any command's human-readable output path: it never errors
 // and blocks at most as long as the HTTP timeout in cachedLatest.
-func upgradeNotice() string {
+func updateNotice() string {
 	if os.Getenv("CYFR_NO_UPDATE_CHECK") != "" {
 		return ""
 	}
@@ -43,7 +43,7 @@ func upgradeNotice() string {
 	if latest == "" || !release.IsNewer(latest, version.Version) {
 		return ""
 	}
-	return fmt.Sprintf("** %s available — run 'cyfr upgrade' to update", latest)
+	return fmt.Sprintf("** %s available — run 'cyfr update' to update", latest)
 }
 
 // versionCheck is the cached result of the most recent latest-version lookup.

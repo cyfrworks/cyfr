@@ -19,11 +19,18 @@ done
 if [ -z "$VERSION" ]; then
   echo "Usage: $0 <version> [--push] [--message <msg>]"
   echo "Example: $0 0.9.0 --push"
+  echo "         $0 0.9.0-rc.1 --push"
   exit 1
 fi
 
-if ! echo "$VERSION" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$'; then
-  echo "Error: '$VERSION' is not valid semver (expected: MAJOR.MINOR.PATCH)"
+# The one rule for a release version, which the release workflow's version
+# job holds the tag to (tests/fixtures/release_manifest.json's versions),
+# matched byte by byte in a subshell of its own: under another locale
+# [A-Za-z] can admit letters outside ASCII, and the close gate below runs
+# under the caller's locale.
+RELEASE='^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-(0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)(\.(0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*))*)?$'
+if ! (LC_ALL=C; [[ "$VERSION" =~ $RELEASE ]]); then
+  echo "Error: '$VERSION' is not a release version (MAJOR.MINOR.PATCH, or with a pre-release such as 0.9.0-rc.1)"
   exit 1
 fi
 
@@ -97,45 +104,63 @@ sedi() {
   fi
 }
 
-echo "Bumping version to $VERSION..."
-
 MIXFILES=(mix.exs apps/*/mix.exs)
 
-# Update all mix.exs files
-for f in "${MIXFILES[@]}"; do
-  sedi -E "s/version: \"[0-9]+\.[0-9]+\.[0-9]+\"/version: \"$VERSION\"/" "$f"
-done
+# Whether every mix.exs declares VERSION and no other version. The
+# comparison is of whole strings, so VERSION's dots are no wildcards and
+# 0.9.0 is not 0.9.0-rc.1.
+all_declare() {
+  local f found
+  for f in "${MIXFILES[@]}"; do
+    found=$(grep -oE 'version: "[^"]*"' "$f" || true)
+    [ -n "$found" ] || return 1
+    [ -z "$(grep -vxF "version: \"$VERSION\"" <<< "$found")" ] || return 1
+  done
+}
 
-# Verify all files were updated
-echo "Updated mix.exs files:"
-UPDATED=$(grep -n 'version:' "${MIXFILES[@]}" | grep "$VERSION" || true)
-echo "$UPDATED"
+if all_declare; then
+  # A tree whose commits already bumped every mix.exs: the tag names HEAD
+  # and no commit is made.
+  echo "Every mix.exs declares $VERSION already:"
+  grep -nF "version: \"$VERSION\"" "${MIXFILES[@]}"
+  git tag -a "$VERSION" -m "Release $VERSION"
+  echo ""
+  echo "Done! Version $VERSION tagged at $(git rev-parse --short HEAD)."
+else
+  echo "Bumping version to $VERSION..."
 
-EXPECTED=${#MIXFILES[@]}
-ACTUAL=$(echo "$UPDATED" | grep -c "$VERSION" || true)
-if [ "$ACTUAL" -ne "$EXPECTED" ]; then
-  echo "Error: expected $EXPECTED files updated, but only $ACTUAL matched. Check mix.exs files."
-  exit 1
-fi
+  # Every declared version, a pre-release's included, becomes VERSION.
+  for f in "${MIXFILES[@]}"; do
+    sedi -E "s/version: \"[^\"]*\"/version: \"$VERSION\"/" "$f"
+  done
 
-# Get commit message
-if [ -z "$COMMIT_MSG" ]; then
-  if [ -t 0 ]; then
-    echo ""
-    printf "Commit message: "
-    read -r COMMIT_MSG
+  # Verify all files were updated
+  echo "Updated mix.exs files:"
+  grep -nF "version: \"$VERSION\"" "${MIXFILES[@]}" || true
+  if ! all_declare; then
+    echo "Error: not every one of the ${#MIXFILES[@]} mix.exs files declares $VERSION alone. Check mix.exs files."
+    exit 1
   fi
+
+  # Get commit message
   if [ -z "$COMMIT_MSG" ]; then
-    COMMIT_MSG="$VERSION"
+    if [ -t 0 ]; then
+      echo ""
+      printf "Commit message: "
+      read -r COMMIT_MSG
+    fi
+    if [ -z "$COMMIT_MSG" ]; then
+      COMMIT_MSG="$VERSION"
+    fi
   fi
+
+  git add -A
+  git commit -m "$COMMIT_MSG"
+  git tag -a "$VERSION" -m "Release $VERSION"
+
+  echo ""
+  echo "Done! Version $VERSION committed and tagged."
 fi
-
-git add -A
-git commit -m "$COMMIT_MSG"
-git tag -a "$VERSION" -m "Release $VERSION"
-
-echo ""
-echo "Done! Version $VERSION committed and tagged."
 
 if [ "$PUSH" = "--push" ]; then
   echo "Pushing to origin..."

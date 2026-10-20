@@ -53,10 +53,21 @@ var fixturePath = filepath.Join("..", "..", "..", "..", "tests", "fixtures", "re
 
 // releaseFixture is tests/fixtures/release_manifest.json.
 type releaseFixture struct {
-	Comment   string            `json:"comment"`
-	Valid     json.RawMessage   `json:"valid"`
-	Refused   []refusedManifest `json:"refused"`
-	Signature signatureVectors  `json:"signature"`
+	Comment         string            `json:"comment"`
+	Valid           json.RawMessage   `json:"valid"`
+	ValidPrerelease json.RawMessage   `json:"valid_prerelease"`
+	Refused         []refusedManifest `json:"refused"`
+	Versions        versionVectors    `json:"versions"`
+	Signature       signatureVectors  `json:"signature"`
+}
+
+// versionVectors is the one rule for a release version: every accepted one
+// is a version and every refused one is not; ascending is in increasing
+// precedence.
+type versionVectors struct {
+	Accepted  []string `json:"accepted"`
+	Refused   []string `json:"refused"`
+	Ascending []string `json:"ascending"`
 }
 
 type refusedManifest struct {
@@ -68,8 +79,11 @@ type signatureVectors struct {
 	Version     string          `json:"version"`
 	TrustedRoot json.RawMessage `json:"trusted_root"`
 	Valid       signedVector    `json:"valid"`
-	Refused     []signedVector  `json:"refused"`
-	Checksums   checksumsVector `json:"checksums"`
+	// ValidPrerelease is the valid pre-release manifest signed for its own
+	// tag, ValidPrerelease.Version.
+	ValidPrerelease signedVector    `json:"valid_prerelease"`
+	Refused         []signedVector  `json:"refused"`
+	Checksums       checksumsVector `json:"checksums"`
 }
 
 // signedVector is a manifest's exact bytes and a bundle over them (or over
@@ -104,8 +118,10 @@ func readFixture(t *testing.T) releaseFixture {
 	if err := json.Unmarshal(raw, &f); err != nil {
 		t.Fatalf("parse the vector file: %v", err)
 	}
-	if len(f.Valid) == 0 || len(f.Refused) == 0 || f.Signature.Version == "" || len(f.Signature.TrustedRoot) == 0 ||
-		f.Signature.Valid.Manifest == "" || len(f.Signature.Refused) == 0 || f.Signature.Checksums.Checksums == "" {
+	if len(f.Valid) == 0 || len(f.ValidPrerelease) == 0 || len(f.Refused) == 0 ||
+		len(f.Versions.Accepted) == 0 || len(f.Versions.Refused) == 0 || len(f.Versions.Ascending) == 0 ||
+		f.Signature.Version == "" || len(f.Signature.TrustedRoot) == 0 || f.Signature.Valid.Manifest == "" ||
+		f.Signature.ValidPrerelease.Manifest == "" || len(f.Signature.Refused) == 0 || f.Signature.Checksums.Checksums == "" {
 		t.Fatal("the vector file lacks what this test reads")
 	}
 	return f
@@ -139,6 +155,52 @@ func TestValidManifestParses(t *testing.T) {
 	}
 	if !digestPattern.MatchString(m.Scaffold) {
 		t.Errorf("scaffold = %q", m.Scaffold)
+	}
+
+	pre, err := ParseManifest(f.ValidPrerelease)
+	if err != nil {
+		t.Fatalf("the valid pre-release manifest: %v", err)
+	}
+	if pre.Version != "1.2.3-rc.1" || pre.Images != m.Images || pre.Scaffold != m.Scaffold {
+		t.Errorf("the valid pre-release manifest is %+v, want the valid one's digests at 1.2.3-rc.1", *pre)
+	}
+}
+
+// The vector file's versions are the rule: IsVersion accepts every
+// accepted one and refuses every refused one, IsPrerelease tells the two
+// kinds apart, and Compare and IsNewer order the ascending list, every
+// pair in both directions.
+func TestVersionVectors(t *testing.T) {
+	v := readFixture(t).Versions
+	for _, version := range v.Accepted {
+		if !IsVersion(version) {
+			t.Errorf("IsVersion(%q) = false, want true", version)
+		}
+		if got, want := IsPrerelease(version), strings.Contains(version, "-"); got != want {
+			t.Errorf("IsPrerelease(%q) = %v, want %v", version, got, want)
+		}
+	}
+	for _, version := range v.Refused {
+		if IsVersion(version) || IsPrerelease(version) {
+			t.Errorf("IsVersion(%q) or IsPrerelease = true, want false", version)
+		}
+		if IsNewer(version, "0.0.0") || IsNewer("99.0.0", version) {
+			t.Errorf("IsNewer compared %q, which is no release version", version)
+		}
+	}
+	for i, a := range v.Ascending {
+		if !IsVersion(a) {
+			t.Fatalf("ascending holds %q, which is no release version", a)
+		}
+		for j, b := range v.Ascending {
+			want := compareInts(i, j)
+			if got := Compare(a, b); got != want {
+				t.Errorf("Compare(%q, %q) = %d, want %d", a, b, got, want)
+			}
+			if got := IsNewer(a, b); got != (want > 0) {
+				t.Errorf("IsNewer(%q, %q) = %v, want %v", a, b, got, want > 0)
+			}
+		}
 	}
 }
 
@@ -193,6 +255,31 @@ func TestSignedManifestVerifies(t *testing.T) {
 	}
 	if *m != *want {
 		t.Errorf("the signed manifest is %+v, the valid manifest %+v", *m, *want)
+	}
+}
+
+// The valid pre-release manifest, signed for its own tag, verifies as that
+// tag's; read as the release of its bare version it does not.
+func TestSignedPrereleaseManifestVerifies(t *testing.T) {
+	f := readFixture(t)
+	trusted := fixtureRoot(t, f)
+	sig := f.Signature.ValidPrerelease
+	if sig.Version != "1.2.3-rc.1" {
+		t.Fatalf("the signed pre-release vector is for %q", sig.Version)
+	}
+	m, err := VerifyManifest([]byte(sig.Manifest), sig.Bundle, sig.Version, trusted)
+	if err != nil {
+		t.Fatalf("the signed pre-release manifest: %v", err)
+	}
+	want, err := ParseManifest(f.ValidPrerelease)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if *m != *want {
+		t.Errorf("the signed pre-release manifest is %+v, the valid one %+v", *m, *want)
+	}
+	if _, err := VerifyManifest([]byte(sig.Manifest), sig.Bundle, "1.2.3", trusted); !errors.Is(err, ErrUnverified) {
+		t.Errorf("the pre-release vector read as 1.2.3: %v, want ErrUnverified", err)
 	}
 }
 
@@ -345,9 +432,10 @@ func TestVerifyBlobRefusesAVersionThatIsNotARelease(t *testing.T) {
 	f := readFixture(t)
 	trusted := fixtureRoot(t, f)
 	sig := f.Signature
-	for _, version := range []string{"", "dev", "v" + sig.Version, sig.Version + "-rc.1", sig.Version + "\n", "1.2", "1.2.3.4"} {
-		if err := VerifyBlob([]byte(sig.Valid.Manifest), sig.Valid.Bundle, version, trusted); !errors.Is(err, ErrUnverified) {
-			t.Errorf("version %q: %v, want ErrUnverified", version, err)
+	for _, version := range f.Versions.Refused {
+		err := VerifyBlob([]byte(sig.Valid.Manifest), sig.Valid.Bundle, version, trusted)
+		if !errors.Is(err, ErrUnverified) || !strings.Contains(err.Error(), "is not a release version") {
+			t.Errorf("version %q: %v, want ErrUnverified naming no release version", version, err)
 		}
 	}
 }
@@ -457,7 +545,21 @@ func TestFetchManifest(t *testing.T) {
 		}
 	})
 
-	for _, version := range []string{"dev", "", "v1.2.3"} {
+	t.Run("the signed pre-release pair", func(t *testing.T) {
+		pre := f.Signature.ValidPrerelease
+		at := "/" + pre.Version + "/release.json"
+		srv, _ := serveRelease(t, map[string][]byte{at: []byte(pre.Manifest), at + BundleSuffix: pre.Bundle})
+		useFixtureRelease(t, srv, trusted)
+		m, err := FetchManifest(context.Background(), pre.Version)
+		if err != nil {
+			t.Fatalf("FetchManifest(%q): %v", pre.Version, err)
+		}
+		if m.Version != pre.Version {
+			t.Errorf("version = %q", m.Version)
+		}
+	})
+
+	for _, version := range []string{"dev", "", "v1.2.3", "1.2.3+build.5", "1.2.3-"} {
 		t.Run("version "+version, func(t *testing.T) {
 			srv, requests := serveRelease(t, valid)
 			useFixtureRelease(t, srv, trusted)
@@ -487,7 +589,7 @@ func TestRegenerateFixture(t *testing.T) {
 	if err := json.Unmarshal(raw, &f); err != nil {
 		t.Fatal(err)
 	}
-	sig, err := generateSignatureVectors(f.Valid, time.Now().UTC().Truncate(time.Second))
+	sig, err := generateSignatureVectors(f.Valid, f.ValidPrerelease, time.Now().UTC().Truncate(time.Second))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -501,11 +603,12 @@ func TestRegenerateFixture(t *testing.T) {
 	}
 }
 
-// generateSignatureVectors signs the valid manifest and each refused case
-// under a new test instance at the instant at. Its certificate authorities
-// stay valid for fifty years, so even the RFC 3161 timestamp, whose chain
-// sigstore-go checks at the wall clock, keeps verifying.
-func generateSignatureVectors(valid json.RawMessage, at time.Time) (*signatureVectors, error) {
+// generateSignatureVectors signs the valid manifest, the valid pre-release
+// manifest and each refused case under a new test instance at the instant
+// at. Its certificate authorities stay valid for fifty years, so even the
+// RFC 3161 timestamp, whose chain sigstore-go checks at the wall clock,
+// keeps verifying.
+func generateSignatureVectors(valid, validPrerelease json.RawMessage, at time.Time) (*signatureVectors, error) {
 	const version = "1.2.3"
 	s, err := newTestSigstore(at, 50*365*24*time.Hour)
 	if err != nil {
@@ -555,8 +658,11 @@ func generateSignatureVectors(valid json.RawMessage, at time.Time) (*signatureVe
 		TrustedRoot: rootJSON,
 		Valid:       signedVector{Manifest: string(validBytes), Bundle: validBundle},
 	}
-	add := func(name, refusedBy string, data []byte, bundleJSON []byte) {
+	addAt := func(name, version, refusedBy string, data []byte, bundleJSON []byte) {
 		out.Refused = append(out.Refused, signedVector{Name: name, Version: version, RefusedBy: refusedBy, Manifest: string(data), Bundle: bundleJSON})
+	}
+	add := func(name, refusedBy string, data []byte, bundleJSON []byte) {
+		addAt(name, version, refusedBy, data, bundleJSON)
 	}
 	signed := func(signer *testSigstore, identity, issuer string, data []byte) []byte {
 		if err == nil {
@@ -614,6 +720,30 @@ func generateSignatureVectors(valid json.RawMessage, at time.Time) (*signatureVe
 	}
 	add("a signed manifest without the tailscale digest", "manifest", noTailscale,
 		signed(s, Identity(version), Issuer, noTailscale))
+
+	// A pre-release's manifest and its release's are each refused under the
+	// other's tag: signed for the one and naming the other, or signed for
+	// the one and read as the other.
+	var pre map[string]any
+	if err := json.Unmarshal(validPrerelease, &pre); err != nil {
+		return nil, err
+	}
+	prerelease, _ := pre["version"].(string)
+	preBytes, err2 := render(pre)
+	if err2 != nil {
+		return nil, err2
+	}
+	preBundle, err2 := s.sign(Identity(prerelease), Issuer, preBytes)
+	if err2 != nil {
+		return nil, err2
+	}
+	out.ValidPrerelease = signedVector{Version: prerelease, Manifest: string(preBytes), Bundle: preBundle}
+	add("the pre-release's manifest, signed for the release's tag", "version", preBytes,
+		signed(s, Identity(version), Issuer, preBytes))
+	addAt("the release's manifest, signed for the pre-release's tag", prerelease, "version", validBytes,
+		signed(s, Identity(prerelease), Issuer, validBytes))
+	addAt("the pre-release's manifest signed for the release's tag, read as the pre-release's", prerelease, "signature", preBytes,
+		signed(s, Identity(version), Issuer, preBytes))
 
 	add("the bundle of another file", "signature", validBytes,
 		signed(s, Identity(version), Issuer, []byte("cyfr_1.2.3_linux_amd64.tar.gz\n")))

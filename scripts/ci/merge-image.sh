@@ -7,6 +7,9 @@
 #
 # Usage: scripts/ci/merge-image.sh IMAGE VERSION DIGEST DIGEST
 #
+# IMAGE is a repository, VERSION the release's version (a tag name, never
+# latest) and each DIGEST sha256:<64 lowercase hex>.
+#
 # Each DIGEST is one platform's build as pushed: an index holding the
 # platform image and its provenance attestation, or a bare image manifest.
 # Together they must be exactly one linux/amd64 and one linux/arm64 image.
@@ -15,12 +18,18 @@
 # moves. The manifests the index lists, with their platforms, must be
 # exactly the ones the given digests hold: one missing, added or moved to
 # another platform fails the script, prints nothing and leaves :latest
-# where it was. Only the verified index moves :latest, by its digest, and
-# its digest is printed on stdout, the one the attestation names.
+# where it was. When VERSION is a bare release version, MAJOR.MINOR.PATCH
+# without a pre-release, the verified index then moves :latest, by its
+# digest; any other VERSION, a pre-release's, leaves :latest where it was.
+# The index's digest is printed on stdout, the one the attestation names.
 #
-# Exit status: 0 published, 1 the platforms, the published manifest or
-# :latest are not the ones given, 64 usage, 69 docker buildx or jq missing.
+# Exit status: 0 published, 1 the platforms, the published manifest or,
+# for a bare release version, :latest are not the ones given, 64 usage,
+# 69 docker buildx or jq missing.
 set -euo pipefail
+# Byte by byte: under another locale a range can admit characters outside
+# ASCII.
+export LC_ALL=C
 
 usage() {
   echo "usage: $0 IMAGE VERSION DIGEST DIGEST" >&2
@@ -95,12 +104,14 @@ if [ "$listed" != "$given" ]; then
 fi
 
 # By digest, so :latest names the index just verified whatever the version
-# tag names by now.
-docker buildx imagetools create --tag "$image:latest" "$image@$published" >&2
-latest=$(docker buildx imagetools inspect "$image:latest" --format '{{json .Manifest}}' | jq -r '.digest')
-if [ "$latest" != "$published" ]; then
-  echo "$0: $image:latest names $latest, not the published $published" >&2
-  exit 1
+# tag names by now. A pre-release is never the one :latest names.
+if [[ "$version" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
+  docker buildx imagetools create --tag "$image:latest" "$image@$published" >&2
+  latest=$(docker buildx imagetools inspect "$image:latest" --format '{{json .Manifest}}' | jq -r '.digest')
+  if [ "$latest" != "$published" ]; then
+    echo "$0: $image:latest names $latest, not the published $published" >&2
+    exit 1
+  fi
 fi
 
 echo "$published"

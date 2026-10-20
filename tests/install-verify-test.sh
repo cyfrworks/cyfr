@@ -218,8 +218,9 @@ run_case "a missing bundle with CYFR_ALLOW_UNVERIFIED=1 installs on the checksum
 
 # resolve_version reads the releases API through a curl on PATH that prints
 # a fixture: the newest release is the greatest bare MAJOR.MINOR.PATCH by
-# number, whatever the listing's order; drafts, pre-releases and tags that
-# are no bare version are skipped, and a release body quoting the keys is
+# number, whatever the listing's order; drafts, releases flagged as
+# pre-releases, tags with a pre-release, tags with a leading zero and tags
+# that are no version are skipped, and a release body quoting the keys is
 # only text.
 api_bin="$fixture/api-bin"
 mkdir "$api_bin"
@@ -239,6 +240,9 @@ cat > "$fixture/releases.json" <<'JSON'
   {"tag_name": "porta-v1.2.0", "draft": false, "prerelease": false},
   {"tag_name": "v0.20.0", "draft": false, "prerelease": false},
   {"tag_name": "0.9.1-rc1", "draft": false, "prerelease": false},
+  {"tag_name": "1.0.0-rc.1", "draft": false, "prerelease": false},
+  {"tag_name": "1.1.0-alpha.1", "draft": false, "prerelease": true},
+  {"tag_name": "01.0.0", "draft": false, "prerelease": false},
   {"tag_name": "0.9.1", "draft": false, "prerelease": false},
   {"tag_name": "0.6.3", "draft": false, "prerelease": false}
 ]
@@ -264,13 +268,36 @@ run_case "the API's minified answer resolves the same release" ok \
      [ \"\$version\" = 0.9.1 ]" \
     "resolved 0.9.1"
 
-printf '[{"tag_name": "1.0.0", "draft": true, "prerelease": false}, {"tag_name": "porta-v2.0.0", "draft": false, "prerelease": false}]' > "$fixture/releases.none.json"
-printf '#!/bin/sh\ncat "%s"\n' "$fixture/releases.none.json" > "$api_bin/curl"
-run_case "no released bare version refuses" fail \
+# With no release to take as the latest, the refusal names CYFR_VERSION,
+# the one way to install a pre-release.
+no_release="no CYFR release is published yet apart from pre-releases; set CYFR_VERSION to the version to install (https://github.com/cyfrworks/cyfr/releases lists them)"
+no_release_case() {
+    printf '%s' "$2" > "$fixture/releases.none.json"
+    printf '#!/bin/sh\ncat "%s"\n' "$fixture/releases.none.json" > "$api_bin/curl"
+    run_case "$1 refuses, naming CYFR_VERSION" fail \
+        "PATH='$api_bin:$PATH'
+         unset CYFR_VERSION
+         resolve_version" \
+        "$no_release"
+}
+no_release_case "an empty release list" '[]'
+no_release_case "only releases flagged as pre-releases" \
+    '[{"tag_name": "0.6.0", "draft": false, "prerelease": true}, {"tag_name": "0.6.0-alpha.1", "draft": false, "prerelease": true}]'
+no_release_case "only tags with a pre-release" \
+    '[{"tag_name": "0.6.0-alpha.1", "draft": false, "prerelease": false}, {"tag_name": "1.0.0-rc.2", "draft": false, "prerelease": false}]'
+no_release_case "no released bare version" \
+    '[{"tag_name": "1.0.0", "draft": true, "prerelease": false}, {"tag_name": "porta-v2.0.0", "draft": false, "prerelease": false}]'
+
+# CYFR_VERSION names the exact version, a pre-release included, and no
+# listing is read: the curl on PATH fails.
+printf '#!/bin/sh\nexit 22\n' > "$api_bin/curl"
+run_case "CYFR_VERSION names a pre-release exactly" ok \
     "PATH='$api_bin:$PATH'
-     unset CYFR_VERSION
-     resolve_version" \
-    "could not determine latest CLI version"
+     CYFR_VERSION=0.6.0-alpha.1
+     version=\$(resolve_version) || exit 1
+     printf 'resolved %s\n' \"\$version\"
+     [ \"\$version\" = 0.6.0-alpha.1 ]" \
+    "resolved 0.6.0-alpha.1"
 
 if [ "$failures" -gt 0 ]; then
     printf '\n%s test(s) failed\n' "$failures" >&2

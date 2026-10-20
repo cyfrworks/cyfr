@@ -105,8 +105,8 @@ func BinaryName(goos string) string {
 // names. Every integrity failure wraps ErrUnverified; a download that
 // fails is a transport error.
 func FetchBinary(ctx context.Context, version, goos, goarch string) ([]byte, error) {
-	if !bareSemver.MatchString(version) {
-		return nil, fmt.Errorf("%w: %q is not a release version (MAJOR.MINOR.PATCH)", ErrUnverified, version)
+	if !IsVersion(version) {
+		return nil, fmt.Errorf("%w: %q is not a release version (MAJOR.MINOR.PATCH, or with a pre-release)", ErrUnverified, version)
 	}
 	client := &http.Client{}
 	archive := ArchiveName(version, goos, goarch)
