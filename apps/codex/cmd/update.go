@@ -51,12 +51,12 @@ var updateCmd = &cobra.Command{
 
 The program: when a release newer than this one is published, pre-releases aside, cyfr update installs it: a Homebrew cask install through brew, any other install by downloading the release's archive for this platform, verifying it against the release's checksums.txt signed by the release workflow for that tag, and only then replacing this program's file. It then goes on as the new program. --version names the exact release to install instead, a pre-release or an older release included; a Homebrew install takes only its tap's release. A development build is not replaced. Outside a home directory (no cyfr.yaml) the update stops here.
 
-The home: after steps 1 and 2 below, cyfr update shows what changes and asks to make the change (--yes makes it without asking; with no terminal and no --yes it shows the change and makes none). A home whose docker-compose.yml names this release already is left alone, with no stop and no snapshot, and a home on a newer release than this cyfr is refused, since its database may not run under older code. The change is one ceremony that changes nothing until the old stack is stopped and a snapshot of it is taken:
+The home: after steps 1 and 2 below, cyfr update shows what changes and asks to make the change (--yes makes it without asking; with no terminal and no --yes it shows the change and makes none). A home whose docker-compose.yml names this release already is left alone, with no stop and no snapshot, and a home on a newer release than this cyfr, by its compose file's tags or by the release its cyfr reports (steps 3 and 4), is refused before the snapshot, since its database may not run under older code. The change is one ceremony that changes nothing until the old stack is stopped and a snapshot of it is taken:
 
 1. Fetch the release's signed manifest (release.json) and verify it; a manifest that does not verify, or no network access to it, refuses.
 2. Read docker-compose.yml. Every bundled service (locus-runtime, locus-builds, locus-backends and both egress guards) must be present; one missing refuses, naming 'cyfr init --force'. An image line naming ghcr.io/cyfrworks/cyfr, ghcr.io/cyfrworks/cyfr-locus, the bundled Caddy or the bundled Tailscale is managed; any other image is an override, left as written and reported.
-3. While the stack still runs: read its configuration, naming the storage root it snapshots, pull every managed image by the manifest's digest, read the cell's roster, refusing while a member outside this stack holds a live slot on another release than this one (a host of the cell already updated stays), then fetch and verify the release's scaffold files (guides, WIT definitions, the keeper's seccomp profile, the shipped AQUA prompts) without writing them. A restore that has not finished (CYFR_RESTORE_INCOMPLETE in .env) refuses.
-4. Cancel a tailnet join that waits for approval, then stop every service, timing each, and re-read the roster offline until no slot of another release than this one is live (at most one lease); one still live restarts the old stack and refuses.
+3. While the stack still runs: read its configuration, naming the storage root it snapshots, pull every managed image by the manifest's digest, read the cell's roster, refusing a running cyfr on a newer release than this one and refusing while a member outside this stack holds a live slot on another release than this one (a host of the cell already updated stays), then fetch and verify the release's scaffold files (guides, WIT definitions, the keeper's seccomp profile, the shipped AQUA prompts) without writing them. A restore that has not finished (CYFR_RESTORE_INCOMPLETE in .env) refuses.
+4. Cancel a tailnet join that waits for approval, then stop every service, timing each, and re-read the roster offline until no slot of another release than this one is live (at most one lease); one still live, or an image on a newer release than this one, restarts the old stack and refuses.
 5. Snapshot the database, the local storage root, every scaffold file the release manages as it stands, the keyring, .env and docker-compose.yml as it stands into backups/<UTC timestamp>/, snapshot.json last.
 6. Write the release's scaffold files and rewrite the managed image lines to <image>:<version>@<digest> (Caddy and Tailscale keep their tags); a failure of either puts the scaffold files back from the snapshot and starts the old stack again. Then start the stack as every cyfr start runs, waiting for cyfr's health. A failure from here leaves the stack stopped and prints the snapshot and the restore command; old code never starts over migrated data.
 
@@ -455,8 +455,8 @@ func (u *updater) offer(yes bool) (bool, error) {
 		return true, nil
 	}
 	from := plan.homeRelease()
-	if from != "" && release.IsNewer(from, u.version) {
-		return true, fmt.Errorf("This home is on release %s, newer than this cyfr's %s, and cyfr update never moves a home to an older release: the older code would start over a database %s may have migrated. Nothing was changed. To keep %s, run 'cyfr update' with a cyfr of %s or later; to go back to %s, restore a snapshot taken on it with 'cyfr restore backups/<timestamp>'", from, u.version, from, from, from, u.version)
+	if err := u.refuseNewer(from, "is on"); err != nil {
+		return true, fmt.Errorf("%w. Nothing was changed", err)
 	}
 
 	if from != "" {
@@ -483,10 +483,28 @@ func (u *updater) offer(yes bool) (bool, error) {
 	if !askTerminal() {
 		return true, errors.New("The update above was shown, not made: cyfr update changes a home only once it is confirmed, and there is no terminal to confirm it on. Nothing was changed. Run it again with --yes to make it")
 	}
-	if a := strings.ToLower(ask(bufio.NewReader(askInput), u.out, "Update this home? (yes/no)", "no")); a != "yes" && a != "y" {
+	// The question ends with an interrupt as the steps before the stop do.
+	a, err := askUntil(u.ctx, bufio.NewReader(askInput), u.out, "Update this home? (yes/no)", "no")
+	if err != nil {
+		return true, errUpdateInterrupted
+	}
+	if a = strings.ToLower(a); a != "yes" && a != "y" {
 		return true, errors.New("The home was not updated: the update was not confirmed. Nothing was changed")
 	}
 	return false, nil
+}
+
+// refuseNewer refuses a home on release home, newer than this cyfr's:
+// cyfr update never moves a home to an older release, since the older code
+// would start over a database the newer one may have migrated. The compose
+// file's tags (the offer), the running cyfr's roster and the image's own
+// answer offline each say the release; how words the sentence ("is on",
+// "runs"). A home release that is no release version is not compared.
+func (u *updater) refuseNewer(home, how string) error {
+	if !release.IsNewer(home, u.version) {
+		return nil
+	}
+	return fmt.Errorf("This home %s release %s, newer than this cyfr's %s, and cyfr update never moves a home to an older release: the older code would start over a database %s may have migrated. To keep %s, run 'cyfr update' with a cyfr of %s or later; to go back to %s, restore a snapshot taken on it with 'cyfr restore backups/<timestamp>'", how, home, u.version, home, home, home, u.version)
 }
 
 // shortDigest shortens an image reference's sha256 digest to its first 12
@@ -1423,8 +1441,9 @@ func (u *updater) readRoster() error {
 		return fmt.Errorf("cyfr update could not read the cell's roster through the running cyfr (%v); nothing was changed", err)
 	}
 	var answer struct {
-		Self  string        `json:"self"`
-		Slots *[]rosterSlot `json:"slots"`
+		Self    string        `json:"self"`
+		Release string        `json:"release"`
+		Slots   *[]rosterSlot `json:"slots"`
 	}
 	payload, err := markedLine(output, "CYFR_ROSTER=")
 	if err == nil {
@@ -1435,6 +1454,11 @@ func (u *updater) readRoster() error {
 	}
 	if err != nil {
 		return fmt.Errorf("The cell's roster did not read (%v); cyfr update reads no answer as an empty roster, and nothing was changed", err)
+	}
+	// The release the running cyfr reports holds the refusal whatever the
+	// compose file's tags say (latest, or a set that differs).
+	if err := u.refuseNewer(answer.Release, "runs"); err != nil {
+		return fmt.Errorf("%w. Nothing was changed", err)
 	}
 	var foreign []string
 	for _, slot := range *answer.Slots {
@@ -1528,6 +1552,12 @@ func (u *updater) rereadOffline() error {
 	}
 	if len(others) > 0 {
 		return fmt.Errorf("A slot is still live %s after the stop: %s. A member outside this stack holds the cell; stop it first", liveSlotsWindow, slotNames(others))
+	}
+	// A home whose cyfr was not running, so no roster answered before the
+	// stop, is held to the release its image answers here, before the
+	// snapshot and the switch.
+	if err := u.refuseNewer(release, "is on"); err != nil {
+		return err
 	}
 	u.oldRelease = release
 	return nil

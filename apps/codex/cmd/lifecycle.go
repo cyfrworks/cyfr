@@ -1086,11 +1086,39 @@ func ask(r *bufio.Reader, out io.Writer, question, def string) string {
 // its end, where asking again reads nothing. The default answers an empty
 // line; the end of the input with nothing on its line is no answer, "".
 func askLine(r *bufio.Reader, out io.Writer, question, def string) (string, bool) {
+	askQuestion(out, question, def)
+	return readAnswer(r, def)
+}
+
+// askUntil is ask, answering ctx's error instead once ctx ends before a
+// line arrives: a read of a terminal cannot be cancelled, so it runs in a
+// goroutine of its own, which the process's exit ends.
+func askUntil(ctx context.Context, r *bufio.Reader, out io.Writer, question, def string) (string, error) {
+	askQuestion(out, question, def)
+	answered := make(chan string, 1)
+	go func() {
+		answer, _ := readAnswer(r, def)
+		answered <- answer
+	}()
+	select {
+	case answer := <-answered:
+		return answer, nil
+	case <-ctx.Done():
+		fmt.Fprintln(out)
+		return "", ctx.Err()
+	}
+}
+
+func askQuestion(out io.Writer, question, def string) {
 	if def != "" {
 		fmt.Fprintf(out, "%s [%s]: ", question, def)
 	} else {
 		fmt.Fprintf(out, "%s: ", question)
 	}
+}
+
+// readAnswer reads askLine's answer from r.
+func readAnswer(r *bufio.Reader, def string) (string, bool) {
 	line, err := r.ReadString('\n')
 	line = strings.TrimSpace(line)
 	switch {

@@ -27,9 +27,9 @@
 # fails here. Beside reading files, they execute the tag check's step under
 # bash against the real tree and planted ones declaring each of the
 # vectors' versions, the Homebrew step against a stub git for each accepted
-# version, and scripts/scaffold-tarball.sh into temporary directories for
-# each version, and check the manifest rules and SEMVER against the
-# vectors. The scripts that match a version run under a locale whose ranges
+# version, scripts/scaffold-tarball.sh into temporary directories for each
+# version and scripts/release.sh in disposable repositories for each
+# version, and check the manifest rules and SEMVER against the vectors. The scripts that match a version run under a locale whose ranges
 # admit letters outside ASCII where the host has one, so only their own
 # LC_ALL=C keeps their match to ASCII. Needs PyYAML for this mode.
 #
@@ -911,8 +911,10 @@ def vector_failures(vectors, rule=SEMVER):
     every refused one refused, every accepted version matched by rule and
     every refused one not. Returns (failures, manifests, versions)."""
     failures = []
-    for key, prerelease in (("valid", False), ("valid_prerelease", True)):
-        manifest = vectors.get(key)
+    for key, manifest, prerelease in (
+        ("valid", vectors.get("valid"), False),
+        ("valid_prerelease", vectors.get("valid_prerelease"), True),
+    ):
         reason = validate_manifest(manifest, rule)
         if reason:
             failures.append(f"the vector file's {key} manifest is refused: {reason}")
@@ -1309,6 +1311,198 @@ def scaffold_failures(version):
             failures.append(f"scaffold-tarball.sh pinned a compose with {name}")
     counts = (len(cases), len(planted), len(accepted), len(refused))
     return failures, os.path.join(out, "pinned.tar.gz"), counts
+
+
+# --- scripts/release.sh: the release helper, in disposable repositories ---
+
+RELEASE_SH = os.path.join(ROOT, "scripts", "release.sh")
+HELPER_APPS = ["arca", "cyfr", "locus", "prima", "sanctum"]
+HELPER_BASE = "0.0.0"
+
+
+def helper_mixfiles(repo):
+    return [os.path.join(repo, "mix.exs")] + [os.path.join(repo, "apps", app, "mix.exs") for app in HELPER_APPS]
+
+
+def declare(path, version):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w") as f:
+        f.write(f'defmodule Planted.MixProject do\n  def project do\n    [\n      version: "{version}",\n    ]\n  end\nend\n')
+
+
+def helper_env(repo):
+    """What the helper runs under: no configuration of the host's git, an
+    identity of its own, the close gate skipped and the range locale."""
+    return {
+        "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
+        "HOME": repo,
+        "GIT_CONFIG_GLOBAL": os.devnull,
+        "GIT_CONFIG_NOSYSTEM": "1",
+        "GIT_AUTHOR_NAME": "graph",
+        "GIT_AUTHOR_EMAIL": "graph@example.invalid",
+        "GIT_COMMITTER_NAME": "graph",
+        "GIT_COMMITTER_EMAIL": "graph@example.invalid",
+        "SKIP_TESTS": "1",
+        "LC_ALL": range_locale(),
+    }
+
+
+def helper_git(repo, *args):
+    return subprocess.run(
+        ["git", *args], cwd=repo, env=helper_env(repo), stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=60
+    ).stdout.decode(errors="replace").strip()
+
+
+_HELPER_REPOS = []
+
+
+def helper_repo(script, declared):
+    """A repository of its own holding script as scripts/release.sh and the
+    root's and five applications' mix.exs declaring declared, committed."""
+    repo = os.path.join(scratch(), "helper-%d" % len(_HELPER_REPOS))
+    _HELPER_REPOS.append(repo)
+    os.makedirs(os.path.join(repo, "scripts"))
+    with open(os.path.join(repo, "scripts", "release.sh"), "w") as f:
+        f.write(script)
+    for path in helper_mixfiles(repo):
+        declare(path, declared)
+    helper_git(repo, "init", "-q")
+    helper_git(repo, "add", ".")
+    helper_git(repo, "commit", "-qm", "baseline")
+    return repo
+
+
+def run_helper(repo, version, answer=None):
+    """scripts/release.sh VERSION in repo, its standard input a terminal
+    holding answer when one is given (the dirty-tree prompt asks only on a
+    terminal), else nothing. Returns (status, output)."""
+    master = slave = None
+    stdin = subprocess.DEVNULL
+    if answer is not None:
+        master, slave = os.openpty()
+        os.write(master, answer.encode())
+        stdin = slave
+    try:
+        result = subprocess.run(
+            ["bash", "--noprofile", "--norc", os.path.join(repo, "scripts", "release.sh"), version],
+            cwd=repo,
+            env=helper_env(repo),
+            stdin=stdin,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            timeout=60,
+        )
+    finally:
+        for fd in (master, slave):
+            if fd is not None:
+                os.close(fd)
+    return result.returncode, result.stdout.decode(errors="replace")
+
+
+def helper_state(repo):
+    """The repository's commits, tags and changes, which a refusal leaves as they were."""
+    return (
+        helper_git(repo, "rev-list", "--count", "HEAD"),
+        helper_git(repo, "tag", "-l"),
+        helper_git(repo, "status", "--porcelain"),
+    )
+
+
+def declares_at(repo, ref, version):
+    """Whether every mix.exs at ref declares version."""
+    for path in helper_mixfiles(repo):
+        rel = os.path.relpath(path, repo)
+        if f'version: "{version}"' not in helper_git(repo, "show", f"{ref}:{rel}"):
+            return False
+    return True
+
+
+def helper_failure(script):
+    """release.sh, run in disposable repositories: each accepted version is
+    bumped, committed and tagged; each refused one is refused with nothing
+    changed; a HEAD that declares the version already is tagged without a
+    commit, with another file left uncommitted too; a version edited into
+    the mix.exs files and not committed is refused, nothing tagged. The
+    first failure, or None."""
+    lines = script.splitlines()
+    if not any("=~ $RELEASE" in line and "LC_ALL=C" in line for line in lines):
+        return "release.sh does not match the version under LC_ALL=C"
+    accepted, refused = version_vectors()
+    for version in accepted:
+        repo = helper_repo(script, "0.0.1" if version == HELPER_BASE else HELPER_BASE)
+        status, output = run_helper(repo, version)
+        if status != 0:
+            return f"release.sh exits {status} on the release version {version!r}: {output.strip()[-300:]}"
+        if helper_git(repo, "tag", "-l") != version or not declares_at(repo, version, version):
+            return f"release.sh on {version!r} tagged {helper_git(repo, 'tag', '-l')!r}, not a commit declaring it"
+        if helper_git(repo, "rev-list", "--count", "HEAD") != "2":
+            return f"release.sh on {version!r} made no bump commit"
+    repo = helper_repo(script, HELPER_BASE)
+    before = helper_state(repo)
+    for version in refused:
+        status, _ = run_helper(repo, version)
+        if status == 0 or helper_state(repo) != before:
+            return f"release.sh exits {status} on {version!r}, no release version, or changed the repository"
+    for answer, dirty in ((None, False), ("y\n", True)):
+        repo = helper_repo(script, "0.6.0-alpha.1")
+        head = helper_git(repo, "rev-parse", "HEAD")
+        if dirty:
+            with open(os.path.join(repo, "notes.txt"), "w") as f:
+                f.write("not committed\n")
+        status, output = run_helper(repo, "0.6.0-alpha.1", answer)
+        tagged = helper_git(repo, "rev-list", "-n", "1", "0.6.0-alpha.1")
+        if status != 0 or tagged != head or helper_git(repo, "rev-list", "--count", "HEAD") != "1":
+            return (
+                f"release.sh on a HEAD declaring 0.6.0-alpha.1 (another file uncommitted: {dirty}) exits {status}, "
+                f"tagging {tagged!r} rather than HEAD without a commit: {output.strip()[-300:]}"
+            )
+    for edited in (helper_mixfiles, lambda repo: helper_mixfiles(repo)[-2:-1]):
+        repo = helper_repo(script, "0.6.0-alpha.1")
+        for path in edited(repo):
+            declare(path, "0.6.0-alpha.2")
+        status, output = run_helper(repo, "0.6.0-alpha.2", "y\n")
+        if status == 0 or helper_git(repo, "tag", "-l") or helper_git(repo, "rev-list", "--count", "HEAD") != "1":
+            return (
+                f"release.sh tagged 0.6.0-alpha.2 over mix.exs files edited and not committed (exit {status}, "
+                f"tags {helper_git(repo, 'tag', '-l')!r}): {output.strip()[-300:]}"
+            )
+        if "differ from HEAD" not in output:
+            return f"release.sh refuses uncommitted mix.exs edits without saying why: {output.strip()[-300:]}"
+    return None
+
+
+RELEASE_SH_MUTANTS = [
+    ("the rule without pre-releases", lambda t: t.replace(SCAFFOLD_RULE, "RELEASE=" + BARE_RULE, 1)),
+    ("the rule unanchored at its end", lambda t: t.replace(SCAFFOLD_RULE, SCAFFOLD_RULE.replace("?$'", "?'"), 1)),
+    ("no LC_ALL=C", lambda t: t.replace('(LC_ALL=C; [[ "$VERSION" =~ $RELEASE ]])', '[[ "$VERSION" =~ $RELEASE ]]', 1)),
+    (
+        "the version unchecked",
+        lambda t: t.replace('(LC_ALL=C; [[ "$VERSION" =~ $RELEASE ]])', '(LC_ALL=C; [[ "$VERSION" =~ $RELEASE ]] || :)', 1),
+    ),
+    (
+        "uncommitted mix.exs edits let through",
+        lambda t: t.replace('if [ -n "$(git status --porcelain -- "${MIXFILES[@]}")" ]; then', "if false; then", 1),
+    ),
+]
+
+
+def release_helper_failures():
+    """release.sh held to the vectors and the no-commit tag, and each mutant
+    of it refused. Returns (failures, versions run)."""
+    failures = []
+    with open(RELEASE_SH) as f:
+        script = f.read()
+    reason = helper_failure(script)
+    if reason:
+        failures.append(reason)
+    for name, mutate in RELEASE_SH_MUTANTS:
+        mutant = mutate(script)
+        if mutant == script:
+            failures.append(f"a mutant changed nothing: release.sh, {name}")
+        elif helper_failure(mutant) is None:
+            failures.append(f"a mutant of release.sh was accepted: {name}")
+    accepted, refused = version_vectors()
+    return failures, len(accepted) + len(refused)
 
 
 def manifest_mode_failures(pinned, version):
@@ -2165,6 +2359,8 @@ def graph_mode():
     version = real_version()
     scaffold, pinned, (forms, planted, scaffold_accepted, scaffold_refused) = scaffold_failures(version)
     failures += scaffold
+    helper, helper_versions = release_helper_failures()
+    failures += helper
     modes = 0
     if not scaffold:
         mode_failures, modes = manifest_mode_failures(pinned, version)
@@ -2177,10 +2373,11 @@ def graph_mode():
     print(
         f"tag pipeline ok: release.yml, test.yml's static job, .goreleaser.yml, the Dockerfiles, "
         f"the tag check run in {len(tag_cases())} cases, the Homebrew step on {scaffold_accepted} versions "
-        f"and the scaffold pinned at {version} and at {scaffold_accepted} versions pass, under {range_locale()}; "
+        f"and the scaffold pinned at {version} and at {scaffold_accepted} versions pass, release.sh in "
+        f"{helper_versions} versions and its tag on a HEAD that declares the version passes, under {range_locale()}; "
         f"{len(refused)} fixtures, {len(MUTANTS)} mutants of release.yml, {len(TEST_MUTANTS)} of "
         f"test.yml, {len(GORELEASER_MUTANTS)} of .goreleaser.yml, {len(SCAFFOLD_MUTANTS)} of "
-        f"scaffold-tarball.sh and {3 * len(files)} of the Dockerfiles, "
+        f"scaffold-tarball.sh, {len(RELEASE_SH_MUTANTS)} of release.sh and {3 * len(files)} of the Dockerfiles, "
         f"{vectors} manifest vectors, {scaffold_refused} versions, {forms} scaffold argument forms and "
         f"{planted} planted composes refused; {versions} versions held to the rule, which "
         f"{len(RULE_MUTANTS)} other rules and {file_mutants} mutants of the vector file fail; "

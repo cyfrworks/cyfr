@@ -523,9 +523,10 @@ defmodule Cyfr.CrossLanguageDriftTest do
     ],
     "release_manifest.json" => [
       {"apps/codex/cmd/lifecycle_test.go", ~w(valid signature)},
-      {"apps/codex/internal/release/manifest_test.go", ~w(valid refused signature)},
+      {"apps/codex/internal/release/manifest_test.go",
+       ~w(valid valid_prerelease refused versions signature)},
       {"apps/codex/internal/scaffold/scaffold_test.go", ~w(signature)},
-      {"tests/ci-release-graph.py", ~w(valid refused signature)}
+      {"tests/ci-release-graph.py", ~w(valid valid_prerelease refused versions signature)}
     ],
     "restore_barrier.json" => [
       {"apps/codex/cmd/restore_test.go", ~w(barred_exit declare_expr declared_prefix name)},

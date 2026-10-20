@@ -25,6 +25,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -2714,4 +2715,92 @@ func TestUpdateGoesOnToTheHome(t *testing.T) {
 	if n := strings.Count(strings.Join(s.log(), "\n"), " up -d"); n != 1 {
 		t.Errorf("the stack was switched %d times", n)
 	}
+}
+
+// A home on release 1.0.0 is refused by a cyfr of 0.9.0 before anything
+// stops, whatever its compose file's tags say: named 1.0.0, the offer
+// refuses with nothing run; latest, or a set of cyfr tags that differ, the
+// roster the running cyfr answers says 1.0.0 and the update refuses there.
+// A home whose cyfr is not running is held to the release its image
+// answers offline, before the snapshot, the old stack started again.
+func TestUpdateRefusesAHomeOnANewerReleaseWhateverItsTags(t *testing.T) {
+	askWith(t, true, strings.NewReader("yes\n"))
+	shipped := string(shippedCompose(t))
+	roster := "CYFR_ROSTER=" + `{"self":"cyfr@abc","release":"1.0.0","slots":[{"node":"cyfr@abc","owner":"o1","release":"1.0.0","lease_until":"2026-10-16T12:00:10Z"}]}` + "\n"
+	plain := strings.Replace(shipped, "image: ghcr.io/cyfrworks/cyfr:latest", "image: ghcr.io/cyfrworks/cyfr:1.0.0@"+digestOld, 1)
+	mixed := strings.Replace(plain, "\nservices:\n", "\nservices:\n  extra:\n    image: ghcr.io/cyfrworks/cyfr:0.8.0\n", 1)
+	if plain == shipped || mixed == plain {
+		t.Fatal("the planted composes changed nothing")
+	}
+	for name, compose := range map[string]string{"named": plain, "latest": shipped, "mixed": mixed} {
+		t.Run(name, func(t *testing.T) {
+			s := newUpdateScenario(t, []byte(compose), nil)
+			s.answer("rpc.out", roster)
+			out, err := s.run(context.Background())
+			for _, part := range []string{"release 1.0.0, newer than this cyfr's 0.9.0, and cyfr update never moves a home to an older release", "Nothing was changed"} {
+				if err == nil || !strings.Contains(err.Error(), part) {
+					t.Fatalf("a home on 1.0.0 answered %v, want %q:\n%s", err, part, out)
+				}
+			}
+			if name == "named" {
+				s.nothingRan()
+				return
+			}
+			s.nothingStopped()
+			s.noBackups()
+			s.composeUnchanged()
+		})
+	}
+
+	t.Run("not running", func(t *testing.T) {
+		s := newUpdateScenario(t, []byte(shipped), nil)
+		s.answer("ps.out", "locus-runtime\nlocus-backends\n")
+		s.answer("eval.out", "CYFR_LIVE_SLOTS="+`{"release":"1.0.0","slots":[]}`+"\n")
+		out, err := s.run(context.Background())
+		if err == nil || !strings.Contains(err.Error(), "This home is on release 1.0.0, newer than this cyfr's 0.9.0") || !strings.Contains(err.Error(), "The old stack was started again") {
+			t.Fatalf("a stopped home on 1.0.0 answered %v:\n%s", err, out)
+		}
+		s.noBackups()
+		s.composeUnchanged()
+		if s.hasCall("SCAFFOLD WRITE") {
+			t.Error("the refused update wrote the scaffold")
+		}
+	})
+}
+
+// An interrupt while the update asks ends it there, without an answer,
+// nothing run and nothing changed.
+func TestUpdateQuestionEndsOnAnInterrupt(t *testing.T) {
+	s := newUpdateScenario(t, shippedCompose(t), nil)
+	started, unblock := make(chan struct{}), make(chan struct{})
+	var once sync.Once
+	t.Cleanup(func() { close(unblock) })
+	askWith(t, true, readerFunc(func([]byte) (int, error) {
+		once.Do(func() { close(started) })
+		<-unblock
+		return 0, io.EOF
+	}))
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var out bytes.Buffer
+	done := make(chan error, 1)
+	go func() { done <- runHomeUpdate(ctx, &out, &out, false) }()
+	select {
+	case <-started:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the update never asked")
+	}
+	cancel()
+	select {
+	case err := <-done:
+		if !errors.Is(err, errUpdateInterrupted) {
+			t.Errorf("the interrupted question answered %v", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("the question did not end on the interrupt")
+	}
+	if !strings.Contains(out.String(), "Update this home? (yes/no) [no]: ") {
+		t.Errorf("the update did not ask:\n%s", out.String())
+	}
+	s.nothingRan()
 }

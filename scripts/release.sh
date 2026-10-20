@@ -76,6 +76,19 @@ if [ -n "$(git status --porcelain)" ]; then
   fi
 fi
 
+MIXFILES=(mix.exs apps/*/mix.exs)
+
+# The version files are HEAD's: the tag names a commit, so a version edited
+# and not committed, which the prompt above lets through, would be tagged
+# on a commit that declares another. A bump starts from HEAD's versions
+# too.
+if [ -n "$(git status --porcelain -- "${MIXFILES[@]}")" ]; then
+  echo "Error: the mix.exs files differ from HEAD:"
+  git status --short -- "${MIXFILES[@]}"
+  echo "Commit or undo those changes first, so the tag names a commit that declares the version it names."
+  exit 1
+fi
+
 # A release tag must never point at a red commit: before touching versions,
 # the close gate runs every check a commit passes and the full suite on
 # both database adapters, the cluster suite and every island, queued on
@@ -104,8 +117,6 @@ sedi() {
   fi
 }
 
-MIXFILES=(mix.exs apps/*/mix.exs)
-
 # Whether every mix.exs declares VERSION and no other version. The
 # comparison is of whole strings, so VERSION's dots are no wildcards and
 # 0.9.0 is not 0.9.0-rc.1.
@@ -119,8 +130,8 @@ all_declare() {
 }
 
 if all_declare; then
-  # A tree whose commits already bumped every mix.exs: the tag names HEAD
-  # and no commit is made.
+  # HEAD's commits already bumped every mix.exs, the files being HEAD's
+  # (above): the tag names HEAD and no commit is made.
   echo "Every mix.exs declares $VERSION already:"
   grep -nF "version: \"$VERSION\"" "${MIXFILES[@]}"
   git tag -a "$VERSION" -m "Release $VERSION"
