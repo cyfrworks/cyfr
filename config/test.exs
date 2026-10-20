@@ -16,9 +16,11 @@ config :cyfr, CyfrWeb.Endpoint,
 # The transports' retry backoff base and one directory request's bound,
 # compiled in (`Compendium.Transport.Retry`, `Sanctum.Directory.Client`):
 # shortened so a test of a retry or an unanswered request does not wait
-# out a production delay.
+# out a production delay. Every answered read in the suite (a fresh TLS
+# connection to the scripted directory) runs under the same bound, so it
+# stays well above what one takes on a loaded runner.
 config :cyfr, transport_retry_base_ms: 5
-config :sanctum, directory_request_ms: 500
+config :sanctum, directory_request_ms: 5_000
 
 # The origin an absolute URL falls back to, the endpoint's own above.
 config :sanctum, :fallback_origin, "http://localhost:4002"
