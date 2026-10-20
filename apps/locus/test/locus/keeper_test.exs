@@ -692,6 +692,24 @@ defmodule Locus.KeeperTest do
       end
     end
 
+    # The exit and the release that end `events`, the release last: the
+    # exit comes on the channel and the streams on the relay's connection,
+    # so a stream's last frame may follow the exit, and only the release
+    # waits for the relay to deliver everything (Locus.Keeper).
+    defp ending(events) do
+      assert List.last(events) == :released
+      assert [exited] = Enum.filter(events, &match?({:exited, _, _}, &1))
+      [exited, :released]
+    end
+
+    # The streams of `events`, each joined across the exit, which may fall
+    # between two of a stream's frames.
+    defp streams(events),
+      do:
+        events
+        |> Enum.filter(&match?({stream, _} when stream in [:stdout, :stderr], &1))
+        |> joined()
+
     defp joined(events) do
       events
       |> Enum.chunk_by(&(is_tuple(&1) and elem(&1, 0) in [:stdout, :stderr] and elem(&1, 0)))
@@ -725,9 +743,9 @@ defmodule Locus.KeeperTest do
 
       events = events_until_released(handle)
       assert hd(events) == :attached
-      assert {:stdout, "out\n"} in events
-      assert {:stderr, "hello\n"} in events
-      assert Enum.take(events, -2) == [{:exited, 4, nil}, :released]
+      assert {:stdout, "out\n"} in streams(events)
+      assert {:stderr, "hello\n"} in streams(events)
+      assert ending(events) == [{:exited, 4, nil}, :released]
 
       [spawn] = recorded(fake, "spawn")
       assert spawn["pool"] == "backends"
@@ -770,10 +788,7 @@ defmodule Locus.KeeperTest do
       assert {:error, :unencodable} = Keeper.signal(handle, "SIGSTOP")
       assert :ok = Keeper.signal(handle, "SIGTERM")
 
-      assert Enum.take(events_until_released(handle), -2) == [
-               {:exited, nil, "SIGTERM"},
-               :released
-             ]
+      assert ending(events_until_released(handle)) == [{:exited, nil, "SIGTERM"}, :released]
 
       [signal] = recorded(fake, "signal")
       vector = Enum.find(@vectors["valid_requests"], &(&1["type"] == "signal"))
@@ -792,8 +807,8 @@ defmodule Locus.KeeperTest do
 
       assert :ok = Keeper.release(name, handle, 2_000)
       events = events_until_released(handle)
-      assert {:stdout, "term\n"} in events
-      assert {:exited, 0, nil} in events
+      assert {:stdout, "term\n"} in streams(events)
+      assert ending(events) == [{:exited, 0, nil}, :released]
 
       [release] = recorded(fake, "release")
       vector = Enum.find(@vectors["valid_requests"], &(&1["type"] == "release"))
@@ -806,10 +821,7 @@ defmodule Locus.KeeperTest do
 
       :ok = Keeper.release(name, handle, 0)
 
-      assert Enum.take(events_until_released(handle), -2) == [
-               {:exited, nil, "SIGKILL"},
-               :released
-             ]
+      assert ending(events_until_released(handle)) == [{:exited, nil, "SIGKILL"}, :released]
 
       assert [%{"grace_ms" => 0}] = recorded(fake, "release")
     end

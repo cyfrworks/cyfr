@@ -67,7 +67,8 @@ defmodule Locus.Launcher do
   @typedoc """
   What an owner hears of its process: its stdio attached, bytes of its
   stdout and stderr as they arrive, its leader's end (a status or the name
-  of the signal that ended it), and its release, the last event.
+  of the signal that ended it), and its release, the last event; its
+  stdout, its stderr and its leader's end arrive in no defined order.
   """
   @type event ::
           :attached

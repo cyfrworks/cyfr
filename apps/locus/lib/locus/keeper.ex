@@ -53,14 +53,17 @@ defmodule Locus.Keeper do
   is its owner: this server holds the spawn's relay connection and sends
   the owner `{Locus.Keeper, ref, event}` for the relay attached, each
   stdout and stderr frame, the leader's exit and the uid's retirement,
-  the last. `send/2` writes stdin frames through the connection, holding
-  them until the relay attaches; `signal/2` signals the spawn; `release/3`
-  asks for its retirement with a grace; `pool_stats/2` reads a pool. A
-  relay that has not attached within 10 s, or that sends a frame the
-  codec refuses or on a stream other than stdout and stderr, has its
-  spawn released with no grace, and an owner that dies has its spawn
-  released at once. When the channel closes every spawn is already
-  retired, and every owner hears `:released`.
+  the last; the streams and the exit arrive in no defined order, since
+  the exit comes on the channel and the frames on the relay's connection,
+  whose last frames only the retirement waits for. `send/2` writes stdin
+  frames through the connection, holding them until the relay attaches;
+  `signal/2` signals the spawn; `release/3` asks for its retirement with
+  a grace; `pool_stats/2` reads a pool. A relay that has not attached
+  within 10 s, or that sends a frame the codec refuses or on a stream
+  other than stdout and stderr, has its spawn released with no grace,
+  and an owner that dies has its spawn released at once. When the
+  channel closes every spawn is already retired, and every owner hears
+  `:released`.
 
   ## A spawn with a control channel
 
