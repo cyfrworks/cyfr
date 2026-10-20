@@ -204,3 +204,25 @@ func TestAFormEndsWithTheContext(t *testing.T) {
 		t.Errorf("the form answered %v", err)
 	}
 }
+
+// A release's init asks its questions before the scaffold's download; a
+// download that fails with a warning lays down no .env.example, so no
+// .env is written and init says the mode answered was not applied.
+func TestInitSaysAnAnsweredModeWasNotAppliedWithoutATemplate(t *testing.T) {
+	t.Chdir(t.TempDir())
+	s := useFakeEngine(t)
+	savedVersion, savedDownload := version.Version, downloadScaffold
+	t.Cleanup(func() { version.Version, downloadScaffold = savedVersion, savedDownload })
+	version.Version = "0.6.0-alpha.1"
+	downloadScaffold = func(string) error { return errors.New("the release is offline") }
+	askTerminal = func() bool { return true }
+	askInput = strings.NewReader("1\n\n\n")
+	var out bytes.Buffer
+	err := runInit(context.Background(), initOptions{noPull: true}, &out, &out)
+	if err == nil || err.Error() != "the home was not set up to be reached as answered (tailnet): there is no .env.example to write .env from" {
+		t.Fatalf("init answered %v\n%s", err, out.String())
+	}
+	if fileExists(".env") || len(s.joins) != 0 || len(s.switches) != 0 {
+		t.Errorf("init wrote .env (%v), joined %v or switched %v", fileExists(".env"), s.joins, s.switches)
+	}
+}

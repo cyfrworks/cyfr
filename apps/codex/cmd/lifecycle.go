@@ -872,8 +872,7 @@ func checkTarget(t access.Target) error {
 // needs that its flags do not give: a tailnet machine's name, a public
 // domain and its certificate email. Without one the home is local unless
 // --access tailnet comes with --tailscale-auth-key-file or --access public
-// with --domain.
-// A question ends with ctx, answering its error.
+// with --domain. A question ends with ctx, answering its error.
 func chooseAccess(ctx context.Context, o initOptions, interactive bool, r *bufio.Reader, out io.Writer) (accessChoice, error) {
 	c := accessChoice{accessOptions: o.accessOptions, mode: o.mode}
 	if !interactive {
