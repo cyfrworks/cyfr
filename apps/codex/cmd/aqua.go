@@ -145,7 +145,7 @@ var aquaResetCmd = &cobra.Command{
 		// when there is someone to ask. A plain reset only reverts to
 		// shipped and runs straight through.
 		if all && prompt.IsInteractive(flagNoInteractive) {
-			confirmed, err := prompt.Confirm(
+			confirmed, err := prompt.Confirm(cmd.Context(),
 				"Revert every edited file AND delete the roles and scrolls the athanor made? This cannot be undone.")
 			if err != nil {
 				if prompt.IsAborted(err) {

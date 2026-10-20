@@ -224,10 +224,12 @@ var profileGrantCmd = &cobra.Command{
 			grantFlags{entries: entries, selections: selections, getHeadOnly: getHeadOnly},
 			grantChooser{
 				interactive: !flagJSON && prompt.IsInteractive(flagNoInteractive),
-				ask:         askForChoice,
-				now:         time.Now(),
-				sessionEnd:  endOfSession,
-				note:        note,
+				ask: func(title string, options []prompt.Option) (string, error) {
+					return askForChoice(cmd.Context(), title, options)
+				},
+				now:        time.Now(),
+				sessionEnd: endOfSession,
+				note:       note,
 			})
 		if err != nil {
 			if prompt.IsAborted(err) {
@@ -255,7 +257,7 @@ var profileGrantCmd = &cobra.Command{
 		}
 
 		if !flagJSON && prompt.IsInteractive(flagNoInteractive) {
-			ok, cerr := prompt.Confirm("Grant these permissions?")
+			ok, cerr := prompt.Confirm(cmd.Context(), "Grant these permissions?")
 			if cerr != nil || !ok {
 				fmt.Println("Not granted.")
 				return nil
@@ -358,7 +360,7 @@ type grantDecisions struct {
 	subset     map[string]ops.ProfilePreviewArgsDecisionsSubsetItem
 }
 
-// askForChoice asks the person to pick one option.
+// askForChoice asks the person to pick one option, until ctx ends.
 var askForChoice = prompt.SelectOne
 
 // whoamiSessionEnd is when the command line's session ends, from its own

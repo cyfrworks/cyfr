@@ -161,7 +161,7 @@ Run without arguments for interactive selection.`,
 		} else {
 			// The ref came from the picker — offer to collect input the
 			// same way.
-			supplyInput, err := prompt.Confirm("Supply JSON input?")
+			supplyInput, err := prompt.Confirm(cmd.Context(), "Supply JSON input?")
 			if err != nil {
 				if prompt.IsAborted(err) {
 					return prompt.ErrAborted
@@ -169,7 +169,7 @@ Run without arguments for interactive selection.`,
 				return fmt.Errorf("Prompt failed: %w", err)
 			}
 			if supplyInput {
-				inputStr, err := prompt.InputText("JSON input", `{"key":"value"}`)
+				inputStr, err := prompt.InputText(cmd.Context(), "JSON input", `{"key":"value"}`)
 				if err != nil {
 					if prompt.IsAborted(err) {
 						return prompt.ErrAborted

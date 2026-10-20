@@ -4,6 +4,8 @@
 package prompt
 
 import (
+	"context"
+
 	"charm.land/huh/v2"
 )
 
@@ -17,12 +19,12 @@ type KeyCreateForm struct {
 }
 
 // RunKeyCreateForm presents a multi-field form for creating an API key.
-func RunKeyCreateForm() (*KeyCreateForm, error) {
+func RunKeyCreateForm(ctx context.Context) (*KeyCreateForm, error) {
 	f := &KeyCreateForm{
 		Type: "application",
 	}
 
-	err := newForm(
+	err := run(ctx, newForm(
 		huh.NewGroup(
 			huh.NewInput().
 				Title("Key name").
@@ -65,7 +67,7 @@ func RunKeyCreateForm() (*KeyCreateForm, error) {
 				Placeholder("10.0.0.0/8,192.168.1.0/24").
 				Value(&f.IPAllowlist),
 		),
-	).Run()
+	))
 	if err != nil {
 		return nil, err
 	}

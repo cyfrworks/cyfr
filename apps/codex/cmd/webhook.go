@@ -83,7 +83,7 @@ Run without --name for an interactive form.`,
 				return errors.New("--name is required. Usage: cyfr webhook create --profile <profile-id> --name <name> --target <ref>")
 			}
 
-			form, err := prompt.RunWebhookCreateForm()
+			form, err := prompt.RunWebhookCreateForm(cmd.Context())
 			if err != nil {
 				if prompt.IsAborted(err) {
 					return prompt.ErrAborted
@@ -121,7 +121,7 @@ Run without --name for an interactive form.`,
 		}
 
 		profileID, _ := cmd.Flags().GetString("profile")
-		profileID, err := requireExecutionProfile(profileID)
+		profileID, err := requireExecutionProfile(cmd.Context(), profileID)
 		if err != nil {
 			return err
 		}

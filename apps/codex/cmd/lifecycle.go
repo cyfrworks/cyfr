@@ -451,8 +451,9 @@ type accessChoice struct {
 // (cyfr setup). Every step and its order are initProject's either way.
 type initFace struct {
 	// answers is how a new home is reached and its administrator's email
-	// ("" for none), asked once, only when init writes a new .env.
-	answers func() (accessChoice, string)
+	// ("" for none), asked once, before init writes anything, when it is to
+	// write a new .env; an error ends init there.
+	answers func(ctx context.Context) (accessChoice, string, error)
 	// apply applies a new home's mode, other than local, to its stopped
 	// stack and answers the head it switched to (applyInitAccess).
 	apply func(ctx context.Context, c accessChoice, key []byte) (access.Head, error)
@@ -477,16 +478,22 @@ func (f initFace) begin(name string) {
 // runInit is `cyfr init` in the working directory, asking on the terminal.
 func runInit(ctx context.Context, o initOptions, out, errOut io.Writer) error {
 	return initProject(ctx, o, initFace{
-		answers: func() (accessChoice, string) {
+		answers: func(ctx context.Context) (accessChoice, string, error) {
 			r := bufio.NewReader(askInput)
 			interactive := askTerminal()
-			choice := chooseAccess(o, interactive, r, out)
+			choice, err := chooseAccess(ctx, o, interactive, r, out)
+			if err != nil {
+				return choice, "", interruption{errQuestionInterrupted}
+			}
 			adminEmail := ""
 			if interactive {
 				fmt.Fprintln(out, "CYFR authorizes by membership — list your email as the platform admin so you can use this instance.")
-				adminEmail = ask(r, out, "Your platform-admin email (required to access this instance; blank = no one is authorized yet)", "")
+				adminEmail, err = ask(ctx, r, out, "Your platform-admin email (required to access this instance; blank = no one is authorized yet)", "")
+				if err != nil {
+					return choice, "", interruption{errQuestionInterrupted}
+				}
 			}
-			return choice, adminEmail
+			return choice, adminEmail, nil
 		},
 		apply: func(ctx context.Context, c accessChoice, key []byte) (access.Head, error) {
 			return applyInitAccess(ctx, c, key, joinChoice{optionsGiven: o.hostname != "" || o.keyFile != ""}, out)
@@ -514,6 +521,19 @@ func initProject(ctx context.Context, o initOptions, face initFace, out, errOut 
 	key, err := readAuthKey(o.keyFile)
 	if err != nil {
 		return err
+	}
+
+	// A new .env's questions come before anything is written, so an
+	// interrupt at one leaves the directory as it was. A new .env is
+	// written from the .env.example a release's scaffold lays down, or one
+	// already there.
+	asked := !envExisted && (releaseBuild || fileExists(".env.example"))
+	choice := accessChoice{mode: access.ModeLocal}
+	var adminEmail string
+	if asked {
+		if choice, adminEmail, err = face.answers(ctx); err != nil {
+			return err
+		}
 	}
 
 	// An existing .env gains the keys it lacks before anything else
@@ -590,11 +610,8 @@ database_path: ./data/cyfr.db
 	envCreated := false
 	adminEmailConfigured := false
 	sel := existingSelection(".env")
-	choice := accessChoice{mode: access.ModeLocal}
 	var head access.Head
-	if fileExists(".env.example") && !envExisted {
-		var adminEmail string
-		choice, adminEmail = face.answers()
+	if asked && fileExists(".env.example") {
 		adminEmailConfigured = adminEmail != ""
 		face.begin(initStepSettings)
 		text, changes, d, err := newEnv(".env.example", adminEmail)
@@ -648,6 +665,10 @@ database_path: ./data/cyfr.db
 		}
 	case !envCreated && !envExisted && o.mode != "":
 		accessErr = fmt.Errorf("--access %s was not applied: there is no .env.example to write .env from", o.mode)
+	case !envCreated && !envExisted && choice.mode != access.ModeLocal:
+		// The answers were asked for a release's .env.example that its
+		// download did not lay down.
+		accessErr = fmt.Errorf("the home was not set up to be reached as answered (%s): there is no .env.example to write .env from", choice.mode)
 	}
 
 	// Warm-pull the images docker-compose.yml starts with the head's
@@ -843,7 +864,8 @@ func checkTarget(t access.Target) error {
 // domain and its certificate email. Without one the home is local unless
 // --access tailnet comes with --tailscale-auth-key-file or --access public
 // with --domain.
-func chooseAccess(o initOptions, interactive bool, r *bufio.Reader, out io.Writer) accessChoice {
+// A question ends with ctx, answering its error.
+func chooseAccess(ctx context.Context, o initOptions, interactive bool, r *bufio.Reader, out io.Writer) (accessChoice, error) {
 	c := accessChoice{accessOptions: o.accessOptions, mode: o.mode}
 	if !interactive {
 		switch {
@@ -856,7 +878,7 @@ func chooseAccess(o initOptions, interactive bool, r *bufio.Reader, out io.Write
 		case c.mode == "":
 			c.mode = access.ModeLocal
 		}
-		return c
+		return c, nil
 	}
 	if c.mode == "" {
 		fmt.Fprintln(out, "How will you reach this home?")
@@ -864,7 +886,10 @@ func chooseAccess(o initOptions, interactive bool, r *bufio.Reader, out io.Write
 		fmt.Fprintln(out, "  2. A public domain, via Caddy")
 		fmt.Fprintln(out, "  3. This computer only")
 		for c.mode == "" {
-			answer, more := askLine(r, out, "Choose 1, 2 or 3", "1")
+			answer, more, err := askLine(ctx, r, out, "Choose 1, 2 or 3", "1")
+			if err != nil {
+				return c, err
+			}
 			switch {
 			case answer == "1":
 				c.mode = access.ModeTailnet
@@ -887,11 +912,18 @@ func chooseAccess(o initOptions, interactive bool, r *bufio.Reader, out io.Write
 	case access.ModeTailnet:
 		if c.hostname == "" {
 			fmt.Fprintln(out, "This machine's name on your tailnet is part of the home's address, and certificate names are public: anyone can read it in the certificate logs.")
-			c.hostname = ask(r, out, "Machine name", "cyfr")
+			hostname, err := ask(ctx, r, out, "Machine name", "cyfr")
+			if err != nil {
+				return c, err
+			}
+			c.hostname = hostname
 		}
 	case access.ModePublic:
 		for c.domain == "" {
-			answer, more := askLine(r, out, "The domain this home is reached at (its DNS names this machine)", "")
+			answer, more, err := askLine(ctx, r, out, "The domain this home is reached at (its DNS names this machine)", "")
+			if err != nil {
+				return c, err
+			}
 			if err := checkTarget(access.Target{Mode: c.mode, Domain: answer}); answer != "" && err != nil {
 				fmt.Fprintln(out, err)
 			} else {
@@ -900,12 +932,15 @@ func chooseAccess(o initOptions, interactive bool, r *bufio.Reader, out io.Write
 			if c.domain == "" && !more {
 				fmt.Fprintln(out, "No domain was given, so this home is reached from this computer only; `cyfr access public --domain <your domain>` changes that.")
 				c.mode = access.ModeLocal
-				return c
+				return c, nil
 			}
 		}
 		for asking := c.acmeEmail == ""; asking; {
-			answer, more := askLine(r, out, "Email for the certificate authority's notices (blank for none)", "")
-			err := checkTarget(access.Target{Mode: c.mode, Domain: c.domain, ACMEEmail: answer})
+			answer, more, err := askLine(ctx, r, out, "Email for the certificate authority's notices (blank for none)", "")
+			if err != nil {
+				return c, err
+			}
+			err = checkTarget(access.Target{Mode: c.mode, Domain: c.domain, ACMEEmail: answer})
 			if answer == "" || err == nil {
 				c.acmeEmail = answer
 				break
@@ -914,7 +949,7 @@ func chooseAccess(o initOptions, interactive bool, r *bufio.Reader, out io.Write
 			asking = more
 		}
 	}
-	return c
+	return c, nil
 }
 
 // applyInitAccess applies the mode chosen for a new home as an engine
@@ -1076,36 +1111,36 @@ func startsWith(svc *yaml.Node, profiles []string) bool {
 const buildsProfile = "locus-builds"
 
 // ask prompts on out and reads a line from r, answering def for an empty
-// line and "" for the end of the input (askLine).
-func ask(r *bufio.Reader, out io.Writer, question, def string) string {
-	answer, _ := askLine(r, out, question, def)
-	return answer
+// line and "" for the end of the input (askLine), or ctx's error once ctx
+// ends before a line arrives.
+func ask(ctx context.Context, r *bufio.Reader, out io.Writer, question, def string) (string, error) {
+	answer, _, err := askLine(ctx, r, out, question, def)
+	return answer, err
 }
 
 // askLine is ask, and whether the input may hold another line: false at
 // its end, where asking again reads nothing. The default answers an empty
 // line; the end of the input with nothing on its line is no answer, "".
-func askLine(r *bufio.Reader, out io.Writer, question, def string) (string, bool) {
+// Main's handler catches Ctrl-C, so a read of the terminal never ends on
+// it, nor can it be cancelled: the read runs in a goroutine of its own,
+// which the process's exit ends, and the question ends with ctx.
+func askLine(ctx context.Context, r *bufio.Reader, out io.Writer, question, def string) (string, bool, error) {
 	askQuestion(out, question, def)
-	return readAnswer(r, def)
-}
-
-// askUntil is ask, answering ctx's error instead once ctx ends before a
-// line arrives: a read of a terminal cannot be cancelled, so it runs in a
-// goroutine of its own, which the process's exit ends.
-func askUntil(ctx context.Context, r *bufio.Reader, out io.Writer, question, def string) (string, error) {
-	askQuestion(out, question, def)
-	answered := make(chan string, 1)
+	type line struct {
+		answer string
+		more   bool
+	}
+	answered := make(chan line, 1)
 	go func() {
-		answer, _ := readAnswer(r, def)
-		answered <- answer
+		answer, more := readAnswer(r, def)
+		answered <- line{answer, more}
 	}()
 	select {
-	case answer := <-answered:
-		return answer, nil
+	case l := <-answered:
+		return l.answer, l.more, nil
 	case <-ctx.Done():
 		fmt.Fprintln(out)
-		return "", ctx.Err()
+		return "", false, ctx.Err()
 	}
 }
 

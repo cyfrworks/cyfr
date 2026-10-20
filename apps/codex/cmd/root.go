@@ -117,6 +117,19 @@ func ExitStatus(err error) int {
 	return exitFailure
 }
 
+// interruption is a command the person interrupted at a question (Ctrl-C,
+// or the terminal closing), which Execute prints as its sentence alone and
+// which exits 130 (prompt.ErrAborted): the sentence says what was left as
+// it was.
+type interruption struct{ err error }
+
+func (i interruption) Error() string   { return i.err.Error() }
+func (i interruption) Unwrap() []error { return []error{i.err, prompt.ErrAborted} }
+
+// errQuestionInterrupted is a question interrupted before its command
+// wrote or started anything.
+var errQuestionInterrupted = errors.New("Interrupted; nothing was written.")
+
 // Main is the cyfr process: Ctrl-C, SIGTERM and SIGHUP (the terminal
 // closed) cancel the context every command runs under, so a command
 // unwinds through its own cleanup, a waiting tailnet join cancelled and the
@@ -140,11 +153,15 @@ func Run(ctx context.Context) int {
 // Execute runs the root command under the process context, so every
 // request a command makes is cancellable by the signals Main names. It
 // prints the failure (cobra's own printing is silenced) — except a prompt
-// abort, which the user caused and needs no telling about, and the status
+// abort, which the user caused and needs no telling about beyond an
+// interrupted question's sentence of what it left, and the status
 // of an updated cyfr that printed its own — and returns it for main to map
 // to an exit code.
 func Execute(ctx context.Context) error {
 	err := rootCmd.ExecuteContext(ctx)
+	if i := (interruption{}); errors.As(err, &i) {
+		fmt.Fprintln(os.Stderr, i)
+	}
 	if err != nil && !errors.Is(err, prompt.ErrAborted) && !errors.As(err, new(handedOver)) {
 		fmt.Fprintln(os.Stderr, "Error:", err)
 		// The one line SilenceErrors swallows beyond the error itself:

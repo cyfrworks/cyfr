@@ -368,18 +368,21 @@ func (s *setupSession) decide(sentence string, offers ...string) string {
 func (s *setupSession) run(a setup.Answers) {
 	defer close(s.finished)
 	choice := accessChoice{mode: a.Mode, accessOptions: accessOptions{domain: a.Domain, acmeEmail: a.ACMEEmail}}
-	answered := false
+	// The settings step is init's writing of the new .env.
+	wroteEnv := false
 	err := initProject(s.ctx, initOptions{noPull: s.o.noPull}, initFace{
-		answers: func() (accessChoice, string) {
-			answered = true
-			return choice, a.Email
+		answers: func(context.Context) (accessChoice, string, error) {
+			return choice, a.Email, nil
 		},
 		apply: s.apply,
-		step:  s.step,
+		step: func(name string) {
+			wroteEnv = wroteEnv || name == initStepSettings
+			s.step(name)
+		},
 	}, s.out, s.out)
 	var stay stayLocal
 	switch local := (startedLocally{}); {
-	case err == nil && !answered:
+	case err == nil && !wroteEnv:
 		// init wrote no .env: another command wrote one since the
 		// start's check, or there is no template.
 		if err = refuseExistingHome(".env"); err == nil {

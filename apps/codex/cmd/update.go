@@ -483,10 +483,11 @@ func (u *updater) offer(yes bool) (bool, error) {
 	if !askTerminal() {
 		return true, errors.New("The update above was shown, not made: cyfr update changes a home only once it is confirmed, and there is no terminal to confirm it on. Nothing was changed. Run it again with --yes to make it")
 	}
-	// The question ends with an interrupt as the steps before the stop do.
-	a, err := askUntil(u.ctx, bufio.NewReader(askInput), u.out, "Update this home? (yes/no)", "no")
+	// The question ends with an interrupt as the steps before the stop do,
+	// and exits as an interrupted question does.
+	a, err := ask(u.ctx, bufio.NewReader(askInput), u.out, "Update this home? (yes/no)", "no")
 	if err != nil {
-		return true, errUpdateInterrupted
+		return true, interruption{errUpdateInterrupted}
 	}
 	if a = strings.ToLower(a); a != "yes" && a != "y" {
 		return true, errors.New("The home was not updated: the update was not confirmed. Nothing was changed")

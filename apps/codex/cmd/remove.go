@@ -46,7 +46,7 @@ var removeCmd = &cobra.Command{
 		// Confirm before removing — for an argument-given ref too, not just
 		// a picked one.
 		if prompt.IsInteractive(flagNoInteractive) {
-			confirmed, err := prompt.Confirm(fmt.Sprintf("Remove component '%s'?", normalized))
+			confirmed, err := prompt.Confirm(cmd.Context(), fmt.Sprintf("Remove component '%s'?", normalized))
 			if err != nil {
 				if prompt.IsAborted(err) {
 					return prompt.ErrAborted

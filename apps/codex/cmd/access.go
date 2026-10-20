@@ -458,8 +458,8 @@ func joinName(o accessOptions) string {
 
 // askJoin asks on the terminal whether to make the join a change needs,
 // naming what it does: with --new-node, the tailnet identity it removes
-// first.
-func askJoin(in *bufio.Reader, out io.Writer, o accessOptions) func(current string) error {
+// first. The question ends with ctx, before anything joined.
+func askJoin(ctx context.Context, in *bufio.Reader, out io.Writer, o accessOptions) func(current string) error {
 	return func(current string) error {
 		what := fmt.Sprintf("This joins this machine to your tailnet as `%s`; certificate names are public", joinName(o))
 		if o.newNode {
@@ -470,7 +470,11 @@ func askJoin(in *bufio.Reader, out io.Writer, o accessOptions) func(current stri
 			what = fmt.Sprintf("This joins this machine to your tailnet as `%s`, after removing its current tailnet identity, %s; certificate names are public", joinName(o), removed)
 		}
 		fmt.Fprintln(out, what+".")
-		if a := strings.ToLower(ask(in, out, "Join it? (yes/no)", "no")); a != "yes" && a != "y" {
+		a, err := ask(ctx, in, out, "Join it? (yes/no)", "no")
+		if err != nil {
+			return interruption{errQuestionInterrupted}
+		}
+		if a = strings.ToLower(a); a != "yes" && a != "y" {
 			return errors.New("The join was not confirmed, so this machine did not join your tailnet. Nothing was changed")
 		}
 		return nil
@@ -699,7 +703,7 @@ func runAccess(ctx context.Context, mode string, o accessOptions, yes bool, id s
 	in := bufio.NewReader(askInput)
 	choice := joinChoice{optionsGiven: o.hostname != "" || o.keyFile != ""}
 	if !yes {
-		choice.confirm = askJoin(in, out, o)
+		choice.confirm = askJoin(ctx, in, out, o)
 	}
 	p, join, err := previewTarget(ctx, e, target, id, o, key, out, choice)
 	if err != nil {
@@ -707,7 +711,21 @@ func runAccess(ctx context.Context, mode string, o accessOptions, yes bool, id s
 	}
 	printPreview(out, p)
 	if !yes {
-		if a := strings.ToLower(ask(in, out, "Make this change? (yes/no)", "no")); a != "yes" && a != "y" {
+		a, err := ask(ctx, in, out, "Make this change? (yes/no)", "no")
+		if err != nil {
+			// What the join before the question did stands; the
+			// change is not made.
+			switch {
+			case join.removed != "":
+				err = fmt.Errorf("Interrupted. This machine's tailnet identity `%s` was removed, and the Tailscale admin console still lists it until you remove it there; the machine joined your tailnet as `%s`, and how this home is reached was not changed.", join.removed, p.New.Host)
+			case join.id != "":
+				err = fmt.Errorf("Interrupted. This machine joined your tailnet as `%s`, and how this home is reached was not changed.", p.New.Host)
+			default:
+				err = errQuestionInterrupted
+			}
+			return interruption{err}
+		}
+		if a = strings.ToLower(a); a != "yes" && a != "y" {
 			switch {
 			case join.removed != "":
 				return fmt.Errorf("The change was not confirmed. This machine's tailnet identity `%s` was removed, and the Tailscale admin console still lists it until you remove it there; the machine joined your tailnet as `%s`, and how this home is reached was not changed", join.removed, p.New.Host)
