@@ -170,6 +170,10 @@ func TestSystemDockerChildren(t *testing.T) {
 	if len(calls) != 2 {
 		t.Fatalf("recorded %v", calls)
 	}
+	home, err := os.Stat(h.dir)
+	if err != nil {
+		t.Fatal(err)
+	}
 	for i, c := range calls {
 		if slices.ContainsFunc(c.Env, func(kv string) bool { return strings.HasPrefix(strings.ToUpper(kv), "COMPOSE_") }) {
 			t.Errorf("call %d's environment holds %v", i, c.Env)
@@ -177,7 +181,10 @@ func TestSystemDockerChildren(t *testing.T) {
 		if !slices.Contains(c.Env, "DOCKER_HOST=unix:///run/fake.sock") {
 			t.Errorf("call %d lost DOCKER_HOST: %v", i, c.Env)
 		}
-		if !c.OwnGroup || c.Dir != h.dir {
+		// The child's working directory is the project's, named with its
+		// links resolved where the temporary directory lies behind one, as
+		// macOS's /var is a link to /private/var.
+		if dir, err := os.Stat(c.Dir); !c.OwnGroup || err != nil || !os.SameFile(dir, home) {
 			t.Errorf("call %d ran in group-own %v, directory %s", i, c.OwnGroup, c.Dir)
 		}
 		if c.LockFD != (i == 1) {

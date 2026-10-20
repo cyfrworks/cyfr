@@ -39,8 +39,12 @@ var diagnoses = []struct {
 		}
 		return "it refused the value of services[" + m[1] + "]" + m[2]
 	}},
-	{regexp.MustCompile(`(?m)^Error response from daemon: (?:failed to set up container networking: )?driver failed programming external connectivity on endpoint .+ \([0-9a-f]+\): (?:Bind for .+:([0-9]{1,5}) failed: port is already allocated|failed to bind host port .+:([0-9]{1,5})/(?:tcp|udp|sctp): address already in use)$`),
-		func(_ known, m []string) string { return "port " + m[1] + m[2] + " is already in use" }},
+	// The host port is the one diagnosed, wherever the form puts it:
+	// Docker 29 names the host address alone, Docker 28 the host address
+	// followed by the container's (`for HOST:PORT:CONTAINER:PORT/tcp`), or a
+	// port of a range before it.
+	{regexp.MustCompile(`(?m)^Error response from daemon: (?:failed to set up container networking: )?driver failed programming external connectivity on endpoint .+ \([0-9a-f]+\): (?:Bind for .+:([0-9]{1,5}) failed: port is already allocated|failed to bind host port ` + ipForm + `:([0-9]{1,5})/` + protoForm + `: address already in use|failed to bind host port for ` + ipForm + `:([0-9]{1,5}):` + ipForm + `:[0-9]{1,5}/` + protoForm + `: address already in use|failed to bind host port ([0-9]{1,5}) for \S+: address already in use)$`),
+		func(_ known, m []string) string { return "port " + m[1] + m[2] + m[3] + m[4] + " is already in use" }},
 	{regexp.MustCompile(`(?m)^Error response from daemon: (?:pull access denied for \S+, repository does not exist or may require 'docker login'|No such image: \S+|failed to resolve reference "[^"]+": .+: not found|manifest for \S+ not found: manifest unknown: .+)$`),
 		func(known, []string) string { return "an image could not be found or pulled" }},
 	{regexp.MustCompile(`(?m)^no such service: ([A-Za-z0-9._-]+)$`), func(k known, m []string) string {
@@ -50,6 +54,13 @@ var diagnoses = []struct {
 		return "it has no service " + m[1]
 	}},
 }
+
+// ipForm is an address as Docker writes it in a port binding, an IPv6
+// one in brackets; protoForm a binding's protocol.
+const (
+	ipForm    = `(?:\[[0-9A-Fa-f:.]+\]|[0-9.]+)`
+	protoForm = `(?:tcp|udp|sctp)`
+)
 
 // known is what a diagnosis may name: the files the engine passes docker,
 // by every absolute path docker may print for one, and the services the

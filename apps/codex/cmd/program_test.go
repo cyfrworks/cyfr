@@ -84,6 +84,18 @@ func newProgramScenario(t *testing.T, current, latest string) *programScenario {
 	return s
 }
 
+// resolvedPath is p with its links resolved, as the update names the
+// program it installs: macOS's temporary directory lies under /var, a link
+// to /private/var.
+func resolvedPath(t *testing.T, p string) string {
+	t.Helper()
+	resolved, err := filepath.EvalSymlinks(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return resolved
+}
+
 func (s *programScenario) run(o updateOptions) (string, error) {
 	return s.runContext(context.Background(), o)
 }
@@ -135,7 +147,8 @@ func (s *programScenario) installed(target string, args ...string) {
 	if info, err := os.Stat(s.self); err != nil || info.Mode().Perm() != 0755 {
 		s.t.Errorf("the program's mode is %v (error %v), want 0755", info.Mode().Perm(), err)
 	}
-	want := append([]string{s.self, s.self, "update", "--continue-as", target}, args...)
+	self := resolvedPath(s.t, s.self)
+	want := append([]string{self, self, "update", "--continue-as", target}, args...)
 	if len(s.handed) != 1 || !slices.Equal(s.handed[0], want) {
 		s.t.Errorf("cyfr update handed over %v, want once as %v", s.handed, want)
 	}
@@ -177,7 +190,7 @@ func TestUpdateInstallsOnlyANewerRelease(t *testing.T) {
 				s.unchanged()
 				return
 			}
-			if !strings.Contains(out, "cyfr "+c.latest+" is installed at "+s.self+".") {
+			if !strings.Contains(out, "cyfr "+c.latest+" is installed at "+resolvedPath(t, s.self)+".") {
 				t.Errorf("cyfr update did not say where it installed:\n%s", out)
 			}
 			if strings.Contains(out, "There is no home") {
@@ -267,12 +280,7 @@ func TestUpdateRefusesWhatDoesNotVerify(t *testing.T) {
 			s := newProgramScenario(t, "0.9.0", "0.9.1")
 			s.answer = func() ([]byte, error) { return nil, c.err }
 			out, err := s.run(updateOptions{})
-			// The update names its program with its links resolved.
-			self, resolveErr := filepath.EvalSymlinks(s.self)
-			if resolveErr != nil {
-				t.Fatal(resolveErr)
-			}
-			if err == nil || !strings.Contains(err.Error(), c.says) || !strings.Contains(err.Error(), "; "+self+" is unchanged and the home was not touched") {
+			if err == nil || !strings.Contains(err.Error(), c.says) || !strings.Contains(err.Error(), "; "+resolvedPath(t, s.self)+" is unchanged and the home was not touched") {
 				t.Fatalf("cyfr update answered %v:\n%s", err, out)
 			}
 			s.unchanged()
@@ -303,7 +311,7 @@ func TestUpdateHandsOverToTheInstalledProgram(t *testing.T) {
 	s := newProgramScenario(t, "0.9.0", "0.9.1")
 	s.handErr = errors.New("exec format error")
 	_, err := s.run(updateOptions{})
-	if err == nil || !strings.Contains(err.Error(), "cyfr 0.9.1 is installed at "+s.self+", but it could not be started (exec format error); the home was not touched") {
+	if err == nil || !strings.Contains(err.Error(), "cyfr 0.9.1 is installed at "+resolvedPath(t, s.self)+", but it could not be started (exec format error); the home was not touched") {
 		t.Errorf("a failed handover answered %v", err)
 	}
 	if got := read(t, s.self); got != "new cyfr 0.9.1" {
@@ -470,6 +478,7 @@ func TestUpdateHandsOverForReal(t *testing.T) {
 	t.Setenv(handoverDir, dir)
 	t.Setenv("CYFR_CMD_TEST_HANDOVER_MARKER", "kept")
 	stdout, stderr, status := runAsCyfr(t, "handover", t.TempDir(), "update", "--yes")
+	self = resolvedPath(t, self)
 	if status != 7 {
 		t.Fatalf("the update exited %d, want the new program's 7:\n%s\n%s", status, stdout, stderr)
 	}

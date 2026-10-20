@@ -6,6 +6,7 @@ package access
 import (
 	"errors"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -31,13 +32,23 @@ func TestDiagnosesSayOnlyWhatTheEngineKnows(t *testing.T) {
 		{"failed to read " + env + ": required variable X is missing a value: " + secret + "\n", "it could not read .env"},
 		{"failed to read " + filepath.Join(dir, secret) + ": line 1: key cannot contain a space\n", "it could not read an env file"},
 		{"failed to read /elsewhere/" + secret + ": line 1: unterminated quoted value \"postgres://alice:no such service: " + secret + "@db\n", "it could not read an env file"},
-		{"failed to read file \"" + filepath.Join(dir, "docker-compose.yml") + "\": open: permission denied\n", "it could not read docker-compose.yml"},
+		// The path quoted as the engine reads compose's form, Go's %q: a
+		// Windows path's backslashes doubled.
+		{"failed to read file " + strconv.Quote(filepath.Join(dir, "docker-compose.yml")) + ": open: permission denied\n", "it could not read docker-compose.yml"},
 		{"decoding failed due to the following error(s):\n\n'services[cyfr].deploy.resources.limits.cpus' strconv.ParseFloat: parsing \"" + secret + "\": invalid syntax\n", "it refused the value of services[cyfr].deploy.resources.limits.cpus"},
 		{"decoding failed due to the following error(s):\n\n'services[cyfr].mem_limit' invalid size: '" + secret + "'\n", "it refused the value of services[cyfr].mem_limit"},
 		{"'services[" + secret + "].mem_limit' invalid size: 'x'\n", "it refused a value of the configuration"},
 		{"'services[cyfr].x.y" + secret + " z' invalid\n", ""},
 		{"Error response from daemon: failed to set up container networking: driver failed programming external connectivity on endpoint home-cyfr-1 (b122d9ad2417): Bind for 127.0.0.1:47391 failed: port is already allocated\n", "port 47391 is already in use"},
 		{"Error response from daemon: failed to set up container networking: driver failed programming external connectivity on endpoint " + secret + " (e4565bb9): failed to bind host port 127.0.0.1:47392/tcp: address already in use\n", "port 47392 is already in use"},
+		// Docker 28 names the host binding before the container's, as
+		// 28.5.2 wrote the first here, or a port of a range; the host port
+		// is the one in use, never the container's 80.
+		{"Error response from daemon: failed to set up container networking: driver failed programming external connectivity on endpoint home-proxy-1 (e4565bb9): failed to bind host port for 127.0.0.1:47393:172.18.0.3:80/tcp: address already in use\n", "port 47393 is already in use"},
+		{"Error response from daemon: failed to set up container networking: driver failed programming external connectivity on endpoint home-proxy-1 (e4565bb9): failed to bind host port for [::1]:47394:[fd00::3]:80/tcp: address already in use\n", "port 47394 is already in use"},
+		{"Error response from daemon: failed to set up container networking: driver failed programming external connectivity on endpoint home-proxy-1 (e4565bb9): failed to bind host port 47395 for 127.0.0.1:47390-47399:172.18.0.3:80/tcp: address already in use\n", "port 47395 is already in use"},
+		{"Error response from daemon: failed to set up container networking: driver failed programming external connectivity on endpoint home-proxy-1 (e4565bb9): failed to bind host port [::1]:47396/udp: address already in use\n", "port 47396 is already in use"},
+		{"Error response from daemon: failed to set up container networking: driver failed programming external connectivity on endpoint home-proxy-1 (e4565bb9): failed to bind host port " + secret + ":47397/tcp: address already in use\n", ""},
 		{" cyfr Error pull access denied for " + secret + ", repository does not exist or may require 'docker login'\nError response from daemon: pull access denied for " + secret + ", repository does not exist or may require 'docker login'\n", "an image could not be found or pulled"},
 		{"Error response from daemon: failed to resolve reference \"docker.io/library/busybox:" + secret + "\": docker.io/library/busybox:" + secret + ": not found\n", "an image could not be found or pulled"},
 		{"Error response from daemon: No such image: " + secret + ":latest\n", "an image could not be found or pulled"},

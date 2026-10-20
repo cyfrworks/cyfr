@@ -24,7 +24,7 @@ func fakeDockerMain(statePath string) int {
 	args := os.Args[1:]
 	if len(args) == 2 && args[0] == "sleep-forever" {
 		os.WriteFile(args[1], []byte(strconv.Itoa(os.Getpid())), 0o600)
-		select {}
+		blockForever()
 	}
 	release := lockState(statePath)
 	f := &fakeDocker{}
@@ -69,7 +69,7 @@ func fakeDockerMain(statePath string) int {
 	os.Stdout.WriteString(a.Stdout)
 	os.Stderr.WriteString(a.Stderr)
 	if len(args) > 0 && args[0] == "attach" && a.Code == 0 {
-		select {}
+		blockForever()
 	}
 	return a.Code
 }
@@ -150,7 +150,7 @@ func holderMain(args []string) int {
 	var result string
 	switch mode {
 	case "lock":
-		select {}
+		blockForever()
 	case "docker":
 		res, err := e.Docker().Run(ctx, Call{Args: args[3:], Deadline: time.Hour})
 		result = fmt.Sprintf("%d %v", res.ExitCode, err)
@@ -168,7 +168,18 @@ func holderMain(args []string) int {
 		result = fmt.Sprintf("%s %s %v", rc.State, rc.Outcome, err)
 	}
 	os.WriteFile(ready+".done", []byte(result), 0o600)
-	select {}
+	blockForever()
+	panic("unreachable")
+}
+
+// blockForever never returns. A child that only waits to be killed sleeps
+// rather than blocking in an empty select: with no goroutine runnable and
+// no timer pending, the runtime may end the process as deadlocked, with
+// status 2, as it does on macOS.
+func blockForever() {
+	for {
+		time.Sleep(time.Hour)
+	}
 }
 
 func exeOrSkip(t interface{ Skip(...any) }) string {
