@@ -77,9 +77,24 @@ main() {
     check_path "$install_dir"
 
     if [ "$os" = "darwin" ]; then
-        printf "\nTip: You can also install via Homebrew:\n"
-        printf "  brew tap cyfrworks/cyfr && brew install --cask cyfr\n"
+        homebrew_tip "$version"
     fi
+}
+
+# macOS's closing tip for the version $1 installed. The Homebrew cask
+# installs the latest release that is not a pre-release, so it is offered
+# for a bare version alone; a pre-release (0.6.0-alpha.1, a version with a
+# pre-release part) is told the cask follows the first such release.
+homebrew_tip() {
+    case "$1" in
+        *-*)
+            printf "\nThe Homebrew cask follows the first release that is not a pre-release; v%s is a pre-release, installed by this script alone.\n" "$1"
+            ;;
+        *)
+            printf "\nTip: You can also install via Homebrew:\n"
+            printf "  brew tap cyfrworks/cyfr && brew install --cask cyfr\n"
+            ;;
+    esac
 }
 
 detect_os() {
