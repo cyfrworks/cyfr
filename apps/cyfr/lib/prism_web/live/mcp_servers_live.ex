@@ -292,7 +292,7 @@ defmodule PrismWeb.McpServersLive do
   defp expand_server(socket, name) do
     detail =
       case call_tool(socket, "mcp_servers/get", %{"name" => name}) do
-        {:ok, result} -> normalize_keys(result)
+        {:ok, result} -> result
         {:error, _} -> nil
       end
 
@@ -322,39 +322,10 @@ defmodule PrismWeb.McpServersLive do
     servers =
       case call_tool(socket, "mcp_servers/list", %{}) do
         {:ok, %{servers: list}} -> list
-        {:ok, %{"servers" => list}} -> list
         _ -> []
       end
-      |> Enum.map(&normalize_keys/1)
 
     assign(socket, :servers, servers)
-  end
-
-  @known_server_keys %{
-    "id" => :id,
-    "name" => :name,
-    "transport" => :transport,
-    "url" => :url,
-    "epoch" => :epoch,
-    "enabled" => :enabled,
-    "status" => :status,
-    "tool_count" => :tool_count,
-    "tools" => :tools,
-    "backends" => :backends,
-    "config" => :config,
-    "server_info" => :server_info,
-    "error" => :error,
-    "count" => :count,
-    "servers" => :servers,
-    "action" => :action,
-    "warnings" => :warnings
-  }
-
-  defp normalize_keys(%{} = map) do
-    Map.new(map, fn
-      {k, v} when is_binary(k) -> {Map.get(@known_server_keys, k, k), v}
-      {k, v} -> {k, v}
-    end)
   end
 
   @impl true

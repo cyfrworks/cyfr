@@ -1254,25 +1254,18 @@ defmodule PrismWeb.ThreadPaneLive do
   # The athanor's agents with their type and model, read through the
   # `aqua` tool's list with detail, as the AQUA page's agents panel reads
   # them: the roster names who can be addressed and carries neither, so a
-  # model's status read from it would always be none. An in-process
-  # answer is atom-keyed and a wire one string-keyed; each agent is read
-  # by string key. A list that cannot be read is `:unread`, never no
-  # agents.
+  # model's status read from it would always be none. Each agent is put in
+  # the roster's string-keyed projection, which `Aqua.model_status/2`
+  # reads. A list that cannot be read is `:unread`, never no agents.
   defp agents(ctx) do
     case PrismWeb.Ops.call_tool(ctx, "aqua", %{"action" => "list", "detail" => true}) do
-      {:ok, %{} = listed} -> listed |> guides() |> Enum.map(&string_keyed/1)
-      _unread -> :unread
+      {:ok, %{guides: guides}} when is_list(guides) ->
+        Enum.map(guides, &%{"type" => &1.type, "catalyst_ref" => &1[:catalyst_ref]})
+
+      _unread ->
+        :unread
     end
   end
-
-  defp guides(%{"guides" => guides}) when is_list(guides), do: guides
-  defp guides(%{guides: guides}) when is_list(guides), do: guides
-  defp guides(_listed), do: []
-
-  defp string_keyed(%{} = agent),
-    do: Map.new(agent, fn {key, value} -> {to_string(key), value} end)
-
-  defp string_keyed(_agent), do: %{}
 
   defp unready_model(statuses) do
     cond do

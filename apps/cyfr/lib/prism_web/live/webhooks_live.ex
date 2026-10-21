@@ -141,7 +141,7 @@ defmodule PrismWeb.WebhooksLive do
   end
 
   def handle_event("edit", %{"id" => name}, socket) do
-    case Enum.find(socket.assigns.webhooks, &(to_string(&1[:name] || &1["name"]) == name)) do
+    case Enum.find(socket.assigns.webhooks, &(&1.name == name)) do
       nil ->
         {:noreply, put_flash(socket, :error, "Webhook not found")}
 
@@ -240,8 +240,8 @@ defmodule PrismWeb.WebhooksLive do
          socket
          |> assign(:new_secret, %{
            name: name,
-           secret: extract(result, :secret),
-           url: extract(result, :url)
+           secret: result.secret,
+           url: result.url
          })
          |> put_flash(:info, "Secret rotated. Copy the new secret now.")}
 
@@ -291,7 +291,7 @@ defmodule PrismWeb.WebhooksLive do
         )
 
       {:error, reason} ->
-        assign(socket, :form_error, "No webhook was made: #{format_tool_error(reason)}")
+        assign(socket, :form_error, "No webhook was made: #{error_message(reason)}")
     end
   end
 
@@ -322,9 +322,9 @@ defmodule PrismWeb.WebhooksLive do
          socket
          |> reset_form(false, nil)
          |> assign(:new_secret, %{
-           name: extract(result, :name),
-           secret: extract(result, :secret),
-           url: extract(result, :url)
+           name: result.name,
+           secret: result.secret,
+           url: result.url
          })
          |> fetch_webhooks()
          |> put_flash(:info, "Webhook created. Copy the secret now — it won't be shown again.")}
@@ -333,7 +333,7 @@ defmodule PrismWeb.WebhooksLive do
         {:noreply, assign(socket, :form_error, nil)}
 
       {:error, reason, socket} ->
-        {:noreply, assign(socket, :form_error, format_tool_error(reason))}
+        {:noreply, assign(socket, :form_error, error_message(reason))}
     end
   end
 
@@ -349,7 +349,7 @@ defmodule PrismWeb.WebhooksLive do
          |> put_flash(:info, "Webhook updated.")}
 
       {:error, reason} ->
-        {:noreply, assign(socket, :form_error, format_tool_error(reason))}
+        {:noreply, assign(socket, :form_error, error_message(reason))}
     end
   end
 
@@ -427,10 +427,7 @@ defmodule PrismWeb.WebhooksLive do
     list =
       case call_tool(socket, "webhook/list", %{}) do
         {:ok, %{webhooks: webhooks}} ->
-          normalize_list(webhooks)
-
-        {:ok, list} when is_list(list) ->
-          normalize_list(list)
+          webhooks
 
         other ->
           Logger.warning("[WebhooksLive] webhook/list failed: #{inspect(other)}")
@@ -439,33 +436,6 @@ defmodule PrismWeb.WebhooksLive do
 
     assign(socket, :webhooks, list)
   end
-
-  defp normalize_list(list) when is_list(list), do: Enum.map(list, &normalize_webhook/1)
-  defp normalize_list(other), do: other
-
-  defp normalize_webhook(%{} = map) do
-    Map.new(map, fn
-      {k, v} when is_binary(k) -> {atomize_key(k), v}
-      {k, v} -> {k, v}
-    end)
-  end
-
-  defp normalize_webhook(other), do: other
-
-  # Atomize only keys that already exist as atoms (the rendered fields are
-  # compile-time literals). Unknown keys stay strings so a hostile payload
-  # can't grow the atom table.
-  defp atomize_key(k), do: PrismWeb.AquaLive.Catalog.existing_atom(k) || k
-
-  defp extract(map, key) when is_map(map) do
-    Map.get(map, key) || Map.get(map, to_string(key))
-  end
-
-  defp extract(_, _), do: nil
-
-  # The one console rendering of a tool refusal — `inspect/1` once put
-  # internal terms on the page here while 30 other call sites generalized.
-  defp format_tool_error(reason), do: error_message(reason)
 
   # Display the URL exactly as the server returned it (a path — clients
   # prepend their own host). The LiveView never reconstructs it.

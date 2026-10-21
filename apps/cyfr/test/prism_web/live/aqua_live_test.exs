@@ -914,6 +914,29 @@ defmodule PrismWeb.AquaLiveTest do
       refute has_element?(view, "#prompt-editor")
     end
 
+    test "a prompt saved over another member's edit made since the editor opened is refused, " <>
+           "and theirs stands",
+         %{conn: conn, ctx: ctx} do
+      {view, _html} = mount_athanor(conn, "/aqua")
+
+      view
+      |> with_target("#aqua-agents")
+      |> render_click("editor_edit_prompt", %{"name" => "planner"})
+
+      {:ok, _} =
+        AgentConfig.call_aqua(ctx, %{
+          "action" => "update",
+          "name" => "planner",
+          "content" => "# Theirs"
+        })
+
+      html = view |> form("#prompt-editor form", %{"content" => "# Mine"}) |> render_submit()
+
+      assert html =~ "Save failed"
+      assert {:ok, %{"content" => "# Theirs"}} = get_agent(ctx, "planner")
+      assert has_element?(view, "#prompt-editor textarea[name=content]")
+    end
+
     test "the page writes what an agent can hold: auto on a role, ask on the soul, never a destructive auto",
          %{conn: conn, ctx: ctx} do
       {view, _html} = mount_athanor(conn, "/aqua")

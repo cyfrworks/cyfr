@@ -238,8 +238,8 @@ defmodule PrismWeb.AquaLive do
   defp load_provenance(socket) do
     provenance =
       case PrismWeb.AquaLive.Section.call_aqua(socket.assigns.context, %{"action" => "status"}) do
-        {:ok, %{"files" => files}} when is_list(files) ->
-          Map.new(files, fn %{"path" => path, "state" => state} -> {path, state} end)
+        {:ok, %{files: files}} when is_list(files) ->
+          Map.new(files, fn %{path: path, state: state} -> {path, state} end)
 
         _ ->
           %{}

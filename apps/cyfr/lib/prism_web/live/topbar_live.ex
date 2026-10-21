@@ -533,10 +533,6 @@ defmodule PrismWeb.TopbarLive do
     end
   end
 
-  # See `ExecutionsLive.short/1`: one truncation, in one unit.
-  defp short(nil), do: ""
-  defp short(s), do: truncate(s, 24)
-
   defp source_class("tincture"), do: "bg-pink-900/30 text-pink-300"
   defp source_class("schedule"), do: "bg-amber-900/30 text-amber-300"
   defp source_class(_), do: "bg-blue-900/30 text-blue-300"
@@ -804,7 +800,7 @@ defmodule PrismWeb.TopbarLive do
             :if={@next_schedule}
             name="schedules"
             open={@open_popover == "schedules"}
-            label={f(@next_schedule, :name) || short(f(@next_schedule, :id))}
+            label={f(@next_schedule, :name)}
             icon="clock"
           >
             <:popover>
@@ -812,7 +808,7 @@ defmodule PrismWeb.TopbarLive do
               <ul class="space-y-1 text-sm">
                 <%= for s <- @upcoming_schedules do %>
                   <li class="flex items-center justify-between gap-2">
-                    <span class="text-gray-300 truncate">{f(s, :name) || f(s, :id)}</span>
+                    <span class="text-gray-300 truncate">{f(s, :name)}</span>
                     <span class="text-xs text-gray-500 whitespace-nowrap">
                       {relative_time(f(s, :next_run_at))}
                     </span>

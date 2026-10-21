@@ -23,17 +23,10 @@ defmodule PrismWeb.Ops do
 
   ## Result keys
 
-  Two normalizations exist, and a page must know which it is on:
-
-    * `call_tool/3` (this module) returns built-in handlers' Elixir terms
-      VERBATIM — atom keys at the top level, but a field decoded from a
-      stored JSON column keeps its string keys. Proxied `server:tool`
-      calls carry decoded JSON throughout.
-    * `PrismWeb.AquaLive.Section.call_aqua/2` deep-stringifies on the way out, so
-      its consumers read string keys only.
-
-  Some nested JSON values remain string-keyed inside atom-keyed rows.
-  Check the field’s producer before removing mixed-key access handling.
+  `call_tool/3` returns a built-in handler's Elixir term verbatim: atom
+  keys, while a field decoded from a stored JSON column keeps its string
+  keys. Proxied `server:tool` calls carry decoded JSON throughout. A page
+  reads the one shape its producer sends.
   """
 
   @doc """
@@ -118,7 +111,7 @@ defmodule PrismWeb.Ops do
   defp attributed(%Sanctum.Context{} = ctx), do: %{ctx | athanor_id: nil}
 
   # The action as the gate reads it.
-  defp action_of(args) when is_map(args), do: Map.get(args, "action") || Map.get(args, :action)
+  defp action_of(args) when is_map(args), do: Map.get(args, "action")
   defp action_of(_args), do: nil
 
   # The confirmation a repeated change names, or none: a caller's own
@@ -133,16 +126,14 @@ defmodule PrismWeb.Ops do
   @doc """
   Call a tool whose result is a list under `key`, and unwrap it.
 
-  The one place the two list shapes are known: most tools answer
-  `{:ok, %{entries: [...]}}`-style maps, a few answer the bare list.
-  Anything else — including a refusal — comes back as
-  `{:error, message}` through `error_message/1`, so a page shows one
-  vocabulary of failure and never a raw term.
+  A list tool answers `{:ok, %{entries: [...]}}`-style maps. Anything
+  else — including a refusal — comes back as `{:error, message}` through
+  `error_message/1`, so a page shows one vocabulary of failure and never
+  a raw term.
   """
   def fetch_list(socket, tool_name, key, args \\ %{}) when is_atom(key) do
     case call_tool(socket, tool_name, args) do
       {:ok, %{^key => list}} when is_list(list) -> {:ok, list}
-      {:ok, list} when is_list(list) -> {:ok, list}
       {:ok, other} -> {:error, error_message({:unexpected_shape, other})}
       {:error, reason} -> {:error, error_message(reason)}
     end

@@ -34,7 +34,7 @@ defmodule PrismWeb.SchedulesLiveTest do
       "input" => ~s({"count":0,"enabled":false})
     }
 
-    {:ok, view: view, ctx: ctx, params: params}
+    {:ok, conn: conn, view: view, ctx: ctx, params: params}
   end
 
   # The profile's grant, made again through the walk with `origins`.
@@ -121,6 +121,28 @@ defmodule PrismWeb.SchedulesLiveTest do
              Arca.CronSchedule.get_by_id_or_name(Sanctum.Context.actor(ctx), params["name"])
 
     assert_form(view, submitted)
+  end
+
+  # `ui.schedule.focus` names a schedule by its id: that one row is marked,
+  # and a page opened without one marks none.
+  test "the schedule a focus link names is the one row marked", %{
+    conn: conn,
+    view: view,
+    ctx: ctx,
+    params: params
+  } do
+    grant_origins!(ctx, [:interactive, :schedule])
+    render_submit(view, "create", params)
+    assert {:ok, %{id: id}} = schedule(ctx, params)
+
+    marked = ~s(tr[class*="bg-gray-800/80"] #missed-#{id})
+
+    {focused, _html} = mount_athanor(conn, "/schedules?id=#{id}")
+    assert has_element?(focused, marked)
+
+    {unfocused, _html} = mount_athanor(conn, "/schedules")
+    assert has_element?(unfocused, "#missed-#{id}")
+    refute has_element?(unfocused, marked)
   end
 
   describe "missed runs" do

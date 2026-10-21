@@ -19,10 +19,11 @@ defmodule PrismWeb.ComponentDetailLive do
      |> assign(:ref, ref)
      |> assign(:component, nil)
      |> assign(:readme, nil)
-     |> assign(:loading, true)
-     |> assign(:execute_form, %{"input" => ""})}
+     |> assign(:loading, true)}
   end
 
+  # `component.inspect` answers string keys
+  # (`Compendium.Component.inspect_component/2`), its README among them.
   @impl true
   def handle_params(%{"ref" => ref}, _uri, socket) do
     component =
@@ -49,14 +50,12 @@ defmodule PrismWeb.ComponentDetailLive do
 
   defp extract_readme(nil), do: nil
 
-  defp extract_readme(comp) when is_map(comp) do
-    case Map.get(comp, "readme") || Map.get(comp, :readme) do
+  defp extract_readme(comp) do
+    case comp["readme"] do
       r when is_binary(r) and r != "" -> r
       _ -> nil
     end
   end
-
-  defp extract_readme(_), do: nil
 
   @impl true
   def handle_event("execute", %{"input" => input}, socket) do
@@ -69,9 +68,6 @@ defmodule PrismWeb.ComponentDetailLive do
          socket
          |> put_flash(:info, "Execution started.")
          |> push_navigate(to: PrismWeb.Focus.path(socket.assigns.athanor_route, "/activities"))}
-
-      {:ok, _result} ->
-        {:noreply, put_flash(socket, :info, "Execution started.")}
 
       {:error, reason} ->
         {:noreply, put_flash(socket, :error, "Failed to execute: #{error_message(reason)}")}
@@ -138,35 +134,35 @@ defmodule PrismWeb.ComponentDetailLive do
             <div>
               <dt class="text-xs text-gray-500 uppercase">Name</dt>
               <dd class="text-sm text-white mt-1">
-                {@component[:name] || @component["name"] || "-"}
+                {@component["name"] || "-"}
               </dd>
             </div>
             <div>
               <dt class="text-xs text-gray-500 uppercase">Version</dt>
               <dd class="text-sm text-white mt-1">
-                {@component[:version] || @component["version"] || "-"}
+                {@component["version"] || "-"}
               </dd>
             </div>
             <div>
               <dt class="text-xs text-gray-500 uppercase">Category</dt>
               <dd class="text-sm text-white mt-1">
-                {@component[:category] || @component["category"] || "-"}
+                {@component["category"] || "-"}
               </dd>
             </div>
             <div>
               <dt class="text-xs text-gray-500 uppercase">Language</dt>
               <dd class="text-sm text-white mt-1">
-                {@component[:language] || @component["language"] || "-"}
+                {@component["language"] || "-"}
               </dd>
             </div>
           </dl>
         </.card>
 
         <!-- Description -->
-        <.card :if={@component[:description] || @component["description"]}>
+        <.card :if={@component["description"]}>
           <h3 class="text-sm font-medium text-gray-400 mb-2">Description</h3>
           <p class="text-sm text-gray-300">
-            {@component[:description] || @component["description"]}
+            {@component["description"]}
           </p>
         </.card>
 
@@ -193,11 +189,11 @@ defmodule PrismWeb.ComponentDetailLive do
         </.card>
 
         <!-- Dependencies -->
-        <.card :if={@component[:dependencies] || @component["dependencies"]}>
+        <.card :if={@component["dependencies"]}>
           <h3 class="text-sm font-medium text-gray-400 mb-2">Dependencies</h3>
           <ul class="space-y-1">
             <li
-              :for={dep <- @component[:dependencies] || @component["dependencies"] || []}
+              :for={dep <- @component["dependencies"]}
               class="text-sm text-gray-300"
             >
               {dep}

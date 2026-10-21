@@ -790,12 +790,6 @@ defmodule PrismWeb.ComponentsLive do
         {:ok, %{components: list}} ->
           list
 
-        {:ok, %{"components" => list}} ->
-          list
-
-        {:ok, list} when is_list(list) ->
-          list
-
         other ->
           Logger.warning("[ComponentsLive] component list failed: #{inspect(other)}")
           []
@@ -807,12 +801,7 @@ defmodule PrismWeb.ComponentsLive do
     # Recompute derived views when their source data changes.
     installed_refs = all_components |> Enum.map(&comp_ref/1) |> MapSet.new()
 
-    installed_digests =
-      Enum.reduce(all_components, %{}, fn c, acc ->
-        ref = comp_ref(c)
-        digest = comp_field(c, :digest)
-        if ref != "-", do: Map.put(acc, ref, digest), else: acc
-      end)
+    installed_digests = Map.new(all_components, &{comp_ref(&1), comp_field(&1, :digest)})
 
     socket
     |> assign(:all_components, all_components)
@@ -977,7 +966,8 @@ defmodule PrismWeb.ComponentsLive do
   defp type_badge_color("tincture"), do: "bg-amber-900 text-amber-300"
   defp type_badge_color(_), do: "bg-gray-800 text-gray-400"
 
-  defp comp_ref(c), do: c[:component_ref] || c[:id] || "-"
+  # Every row of `component.list` carries its versioned reference.
+  defp comp_ref(c), do: c.component_ref
 
   # Strip type prefix from a ref: "catalyst:local.claude" -> "local.claude".
   #
@@ -1019,9 +1009,8 @@ defmodule PrismWeb.ComponentsLive do
     end
   end
 
-  # Built-in tool results are atom-keyed by contract (`PrismWeb.Ops`);
-  # the registry client atomizes remote search entries at its decode
-  # boundary, so the string fallback this helper carried is gone.
+  # Built-in tool results are atom-keyed (`PrismWeb.Ops`), and the
+  # registry client atomizes remote search entries at its decode boundary.
   defp comp_field(c, key) when is_map(c), do: c[key]
   defp comp_field(_, _), do: nil
 
@@ -1050,8 +1039,7 @@ defmodule PrismWeb.ComponentsLive do
   end
 
   # The version-row badge for a provenance label. "Yours" (user) is the
-  # default state and carries no badge noise; an absent label (older wire
-  # shape) shows nothing.
+  # default state and carries no badge noise.
   defp provenance_badge("bundled"), do: {"bundled", "bg-gray-800 text-gray-400"}
   defp provenance_badge("remote"), do: {"remote", "bg-sky-900/50 text-sky-300"}
   defp provenance_badge(_user_or_nil), do: nil

@@ -116,7 +116,7 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
       # another member may have edited them since this page loaded — the
       # same rule every allowlist edit on this page follows.
       start = fresh_role(ctx, params["start_from"])
-      policy = if start, do: start["tool_policy"], else: %{}
+      policy = if start, do: start.tool_policy, else: %{}
 
       case call_aqua(ctx, %{
              "action" => "create",
@@ -127,18 +127,18 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
              "tool_policy" => policy
            }) do
         {:ok, result} ->
-          hands = if start, do: "the #{start["title"]} role's hands", else: "no hands yet"
+          hands = if start, do: "the #{start.title} role's hands", else: "no hands yet"
 
           socket =
             case result do
-              %{"cloneable" => true} ->
+              %{cloneable: true} ->
                 put_flash(
                   socket,
                   :info,
                   "Created the role '#{name}' with #{hands} — the soul may now clone into it."
                 )
 
-              %{"note" => note} ->
+              %{note: note} ->
                 put_flash(socket, :error, "Created the role '#{name}' with #{hands}. #{note}")
             end
 
@@ -330,15 +330,24 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
     end)
   end
 
+  # The editor opens on the prompt as it is now, with the digest `get`
+  # names for it, so a save over a prompt another member changed since is
+  # refused as a conflict.
   def handle_event("editor_edit_prompt", %{"name" => name}, socket) do
-    agent = find_agent(socket, name)
-    content = if agent, do: agent["content"] || "", else: ""
+    CyfrWeb.ContextGuard.guard(socket, fn socket ->
+      case call_aqua(socket.assigns.context, %{"action" => "get", "name" => name}) do
+        {:ok, agent} ->
+          {:noreply,
+           socket
+           |> assign(:editor_editing_prompt, name)
+           |> assign(:editor_prompt_content, agent.content)
+           |> assign(:editor_prompt_digest, agent[:content_digest])}
 
-    {:noreply,
-     socket
-     |> assign(:editor_editing_prompt, name)
-     |> assign(:editor_prompt_content, content)
-     |> assign(:editor_prompt_digest, agent && agent["content_digest"])}
+        {:error, reason} ->
+          {:noreply,
+           put_flash(socket, :error, "Could not open the prompt: #{error_message(reason)}")}
+      end
+    end)
   end
 
   def handle_event("editor_cancel_prompt", _params, socket) do
@@ -435,27 +444,28 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
     # missing soul's note, and no model can be installed or connected.
     {listed, unread?} =
       case call_aqua(ctx, %{"action" => "list", "detail" => true, "include_disabled" => true}) do
-        {:ok, %{"guides" => guides}} when is_list(guides) ->
-          {Enum.filter(guides, &(&1["type"] in types)), false}
+        {:ok, %{guides: guides}} when is_list(guides) ->
+          {Enum.filter(guides, &(&1.type in types)), false}
 
         _unread ->
           {[], true}
       end
 
+    # Each card reads its agent in the roster's string-keyed projection,
+    # which `Aqua.model_status/2` reads too.
     agents =
       for g <- listed do
         %{
-          "name" => g["name"],
-          "title" => g["title"] || g["name"],
-          "type" => g["type"],
-          "description" => g["description"] || "",
-          "model" => g["model"],
-          "catalyst_ref" => g["catalyst_ref"],
-          "tool_policy" => g["tool_policy"] || %{},
-          "content" => g["content"] || "",
-          "disabled" => g["disabled"] == true,
+          "name" => g.name,
+          "title" => g.title || g.name,
+          "type" => g.type,
+          "description" => g.description || "",
+          "model" => g.model,
+          "catalyst_ref" => g.catalyst_ref,
+          "tool_policy" => g.tool_policy || %{},
+          "disabled" => g.disabled == true,
           "provenance" =>
-            Map.get(provenance, Enum.join(Compendium.agent_file_path(g["name"]), "/"))
+            Map.get(provenance, Enum.join(Compendium.agent_file_path(g.name), "/"))
         }
       end
 
@@ -529,7 +539,7 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
   # key is kept, not written over. Or `{:refused, sentence}` for the person.
   defp edit_tool_policy(ctx, name, change) do
     with {:ok, agent} <- call_aqua(ctx, %{"action" => "get", "name" => name}),
-         {:ok, patch} <- change.(agent["tool_policy"] || %{}),
+         {:ok, patch} <- change.(agent.tool_policy || %{}),
          {:ok, _} <-
            call_aqua(ctx, %{"action" => "update", "name" => name, "tool_policy_patch" => patch}) do
       :ok
@@ -550,8 +560,6 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
     end
   end
 
-  defp find_agent(socket, name), do: Enum.find(socket.assigns.agents, &(&1["name"] == name))
-
   defp find_role(_socket, name) when not is_binary(name) or name == "", do: nil
   defp find_role(socket, name), do: Enum.find(socket.assigns.roles, &(&1["name"] == name))
 
@@ -559,7 +567,7 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
 
   defp fresh_role(ctx, name) do
     case call_aqua(ctx, %{"action" => "get", "name" => name}) do
-      {:ok, %{"type" => type} = agent} -> if type == Compendium.agent_role_type(), do: agent
+      {:ok, %{type: type} = agent} -> if type == Compendium.agent_role_type(), do: agent
       _ -> nil
     end
   end

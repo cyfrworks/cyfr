@@ -77,22 +77,10 @@ defmodule PrismWeb.AquaLive.Section do
   @doc """
   The page's one door to the `aqua` operation: the console's seam
   (`PrismWeb.Ops.call_tool/3`), so the context is held to the freshness
-  rule and the call passes the gate on the caller's external plane. An
-  in-process answer is atom-keyed and a wire round-trip string-keyed, so
-  the result is deep-stringified here and every card reads string keys
-  only.
+  rule and the call passes the gate on the caller's external plane. The
+  answer is the tool's own, atom-keyed; an agent's `tool_policy` is its
+  frontmatter's string-keyed map.
   """
   @spec call_aqua(Sanctum.Context.t(), map()) :: {:ok, term()} | {:error, term()}
-  def call_aqua(ctx, args) do
-    case PrismWeb.Ops.call_tool(ctx, "aqua", args) do
-      {:ok, result} -> {:ok, stringify_deep(result)}
-      other -> other
-    end
-  end
-
-  defp stringify_deep(map) when is_map(map) and not is_struct(map),
-    do: Map.new(map, fn {k, v} -> {to_string(k), stringify_deep(v)} end)
-
-  defp stringify_deep(list) when is_list(list), do: Enum.map(list, &stringify_deep/1)
-  defp stringify_deep(other), do: other
+  def call_aqua(ctx, args), do: PrismWeb.Ops.call_tool(ctx, "aqua", args)
 end

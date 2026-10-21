@@ -330,17 +330,16 @@ defmodule PrismWeb.RegistryLive do
   end
 
   # Personal-namespace slug is already computed by `PrismWeb.Focus`; publisher
-  # memberships come from `registry.whoami`. Both are strings; uniq to guard
-  # against the edge case where a user is also a member of their own personal
-  # slug (shouldn't happen today, but cheap to defend).
+  # memberships come from `registry.whoami`. Both are strings, and a slug
+  # that is both is listed once.
   defp owned_namespaces(socket) do
     personal = socket.assigns[:personal_namespace_slug]
 
     memberships =
       case call_tool(socket, "registry/whoami", %{}) do
-        {:ok, %{"memberships" => ms}} when is_list(ms) ->
+        {:ok, %{memberships: ms}} when is_list(ms) ->
           Enum.flat_map(ms, fn m ->
-            case m["slug"] do
+            case m.slug do
               s when is_binary(s) and s != "" -> [s]
               _ -> []
             end
@@ -363,7 +362,6 @@ defmodule PrismWeb.RegistryLive do
       Enum.map(namespaces, fn ns ->
         case call_tool(socket, "component/discover", %{"namespace" => ns}) do
           {:ok, %{components: comps}} when is_list(comps) -> {ns, {:ok, comps}}
-          {:ok, %{"components" => comps}} when is_list(comps) -> {ns, {:ok, comps}}
           {:ok, _other} -> {ns, {:ok, []}}
           {:error, err} -> {ns, {:error, err}}
         end
@@ -377,7 +375,7 @@ defmodule PrismWeb.RegistryLive do
         components =
           results
           |> Enum.flat_map(fn {ns, {:ok, comps}} ->
-            Enum.map(comps, fn c -> Map.put(c, "_namespace", ns) end)
+            Enum.map(comps, fn c -> Map.put(c, :_namespace, ns) end)
           end)
           |> Enum.sort_by(&sort_key/1)
 
@@ -387,10 +385,10 @@ defmodule PrismWeb.RegistryLive do
 
   defp sort_key(c) do
     {
-      c["_namespace"] || "",
-      cf(c, "component_type") || "",
-      cf(c, "name") || "",
-      cf(c, "version") || ""
+      c._namespace,
+      c[:component_type] || "",
+      c[:name] || "",
+      c[:version] || ""
     }
   end
 
@@ -453,15 +451,15 @@ defmodule PrismWeb.RegistryLive do
             </thead>
             <tbody class="divide-y divide-gray-800">
               <tr :for={c <- @components} class="text-sm">
-                <td class="px-3 py-2 font-mono text-gray-300">{c["_namespace"]}</td>
-                <td class="px-3 py-2 text-gray-400">{cf(c, "component_type")}</td>
-                <td class="px-3 py-2 text-gray-200">{cf(c, "name")}</td>
-                <td class="px-3 py-2 font-mono text-gray-400">{cf(c, "version")}</td>
+                <td class="px-3 py-2 font-mono text-gray-300">{c._namespace}</td>
+                <td class="px-3 py-2 text-gray-400">{c[:component_type]}</td>
+                <td class="px-3 py-2 text-gray-200">{c[:name]}</td>
+                <td class="px-3 py-2 font-mono text-gray-400">{c[:version]}</td>
                 <td class="px-3 py-2">
                   <span class={badge_class(c)}>
                     {String.upcase(status(c))}
                   </span>
-                  <p :if={reason = cf(c, "status_reason")} class="text-xs text-gray-500 mt-0.5">
+                  <p :if={reason = c[:status_reason]} class="text-xs text-gray-500 mt-0.5">
                     {reason}
                   </p>
                 </td>
@@ -492,7 +490,7 @@ defmodule PrismWeb.RegistryLive do
                     :if={status(c) == "taken_down"}
                     type="button"
                     phx-click="open-appeal"
-                    phx-value-id={cf(c, "id")}
+                    phx-value-id={c[:id]}
                     class="text-xs text-blue-400 hover:text-blue-300 whitespace-nowrap"
                   >
                     Appeal this takedown →
@@ -715,7 +713,7 @@ defmodule PrismWeb.RegistryLive do
     """
   end
 
-  # Shared spinner SVG — mirrors the pattern in auth_live.ex.
+  # Shared spinner SVG.
   attr :class, :string, default: "h-4 w-4"
 
   defp spinner(assigns) do
@@ -735,21 +733,17 @@ defmodule PrismWeb.RegistryLive do
   # Helpers
   # ============================================================================
 
-  defp cf(c, key) when is_map(c) do
-    c[key] || c[PrismWeb.AquaLive.Catalog.existing_atom(key)]
-  end
-
-  defp status(c), do: cf(c, "status") || "active"
+  defp status(c), do: c[:status] || "active"
 
   defp reference_of(c) do
     # cyfr.run's /v1/components response uses `component_type` (full word:
     # catalyst / reagent / formula / tincture). That's also the canonical
     # type prefix accepted by `Prima.ComponentRef.parse/1` — use it
     # directly with no remapping.
-    t = cf(c, "component_type") || "catalyst"
-    ns = c["_namespace"] || cf(c, "namespace_slug") || ""
-    n = cf(c, "name") || ""
-    v = cf(c, "version") || ""
+    t = c[:component_type] || "catalyst"
+    ns = c._namespace
+    n = c[:name] || ""
+    v = c[:version] || ""
     Prima.ComponentRef.build(t, ns, n, v)
   end
 

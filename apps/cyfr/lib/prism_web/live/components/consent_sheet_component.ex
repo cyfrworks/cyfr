@@ -2569,5 +2569,5 @@ defmodule PrismWeb.ConsentSheetComponent do
     end
   end
 
-  defp warnings(plan), do: plan[:warnings] || plan["warnings"] || []
+  defp warnings(plan), do: plan[:warnings] || []
 end

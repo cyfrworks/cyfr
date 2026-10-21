@@ -37,7 +37,7 @@ defmodule PrismWeb.AquaLive.RestoreComponent do
 
   defp restore(socket, all?) do
     case call_aqua(socket.assigns.context, %{"action" => "reset", "all" => all?}) do
-      {:ok, %{"reverted" => reverted, "kept" => kept}} ->
+      {:ok, %{reverted: reverted, kept: kept}} ->
         send(self(), {:refresh, :agents})
         send(self(), {:refresh, :skills})
 

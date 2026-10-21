@@ -79,7 +79,7 @@ defmodule PrismWeb.AquaApprovalCard do
       assigns
       |> Map.put(:kind, action_kind(assigns.payload))
       |> Map.put(:standing, standing(assigns.payload))
-      |> Map.put(:proposal, assigns.payload[:proposal] || assigns.payload["proposal"])
+      |> Map.put(:proposal, assigns.payload["proposal"])
       |> Map.put(:read, read_sources(assigns.payload))
 
     ~H"""
@@ -111,11 +111,11 @@ defmodule PrismWeb.AquaApprovalCard do
       </div>
 
       <div class="font-medium text-gray-100 mb-1">
-        {@payload[:title] || @payload["title"]}
+        {@payload["title"]}
       </div>
 
       <div class="text-gray-300 text-[13px] mb-2 whitespace-pre-wrap">
-        {@payload[:summary] || @payload["summary"]}
+        {@payload["summary"]}
       </div>
 
       <div
@@ -161,8 +161,8 @@ defmodule PrismWeb.AquaApprovalCard do
             {if @kind in [:destructive, :external], do: "This will run", else: "Show details"}
           </summary>
           <div class="mt-1 px-2 py-1.5 bg-gray-950 border border-gray-800 rounded font-mono text-gray-400 break-all">
-            {@proposal[:tool] || @proposal["tool"]}.{@proposal[:action] || @proposal["action"]}
-            <%= for {k, v} <- @proposal[:args] || @proposal["args"] || %{} do %>
+            {@proposal["tool"]}.{@proposal["action"]}
+            <%= for {k, v} <- @proposal["args"] || %{} do %>
               <div class="ml-4 text-gray-500">
                 {k}: <span class="text-gray-400">{inspect(v)}</span>
               </div>
@@ -383,10 +383,10 @@ defmodule PrismWeb.AquaApprovalCard do
   # the storage door's spelling, when the action declares which of its
   # arguments names a storage path. Nil otherwise: no constraint is offered.
   defp limit(payload) do
-    proposal = payload[:proposal] || payload["proposal"] || %{}
-    tool = proposal[:tool] || proposal["tool"]
-    action = proposal[:action] || proposal["action"]
-    args = proposal[:args] || proposal["args"] || %{}
+    proposal = payload["proposal"] || %{}
+    tool = proposal["tool"]
+    action = proposal["action"]
+    args = proposal["args"] || %{}
 
     with true <- is_binary(tool) and is_binary(action),
          {:ok, %{resource: {argument, :storage_path}}} <-
@@ -500,12 +500,9 @@ defmodule PrismWeb.AquaApprovalCard do
 
   # What the turn had read when the card was drawn, as the intent names it.
   defp read_sources(payload) do
-    (payload[:sources] || payload["sources"] || [])
+    (payload["sources"] || [])
     |> List.wrap()
-    |> Enum.map(fn
-      %Prima.Source{} = source -> source
-      other -> Prima.Source.from_json(other)
-    end)
+    |> Enum.map(&Prima.Source.from_json/1)
     |> Prima.Source.set()
   end
 
@@ -525,11 +522,9 @@ defmodule PrismWeb.AquaApprovalCard do
   # The account a launch names, which the approval binds: the
   # `connection` of an `execution.run`, nil for any other call or none.
   defp account(%{} = proposal) do
-    tool = proposal[:tool] || proposal["tool"]
-    action = proposal[:action] || proposal["action"]
-    args = proposal[:args] || proposal["args"] || %{}
+    args = proposal["args"] || %{}
 
-    case {tool, action, args["connection"]} do
+    case {proposal["tool"], proposal["action"], args["connection"]} do
       {"execution", "run", name} when is_binary(name) and name != "" -> name
       _none -> nil
     end
@@ -541,7 +536,7 @@ defmodule PrismWeb.AquaApprovalCard do
   # app's grant (`lets_flow`, which the approval binds), in class order;
   # none for any other card.
   defp lets_flow(%{} = proposal) do
-    case proposal[:lets_flow] || proposal["lets_flow"] do
+    case proposal["lets_flow"] do
       spelled when is_list(spelled) ->
         Enum.filter(Prima.Source.classes(), &(Atom.to_string(&1) in spelled))
 
@@ -574,11 +569,6 @@ defmodule PrismWeb.AquaApprovalCard do
       |> Enum.map(&Prima.Source.from_json/1)
       |> Enum.map_join(", ", &(&1.name || "an unnamed source"))
 
-  defp status(:pending), do: :pending
-  defp status(:running), do: :running
-  defp status(:approved), do: :approved
-  defp status(:declined), do: :declined
-  defp status(:error), do: :error
   defp status("pending"), do: :pending
   defp status("running"), do: :running
   defp status("approved"), do: :approved
@@ -588,15 +578,12 @@ defmodule PrismWeb.AquaApprovalCard do
 
   # Extract the action kind from the payload. Risk visualization derives
   # entirely from kind; the allowlist value (ask/auto) is orthogonal.
-  defp action_kind(%{action_kind: k}) when is_atom(k), do: k
   defp action_kind(%{"action_kind" => k}) when is_binary(k), do: safe_atom(k)
-  defp action_kind(%{action_kind: k}) when is_binary(k), do: safe_atom(k)
   defp action_kind(_), do: nil
 
   # The action's standing rule as the intent carries it: `false` (never),
   # `"thread"` (this thread only) or absent (either scope).
   defp standing(%{"standing" => standing}), do: standing
-  defp standing(%{standing: standing}), do: standing
   defp standing(_), do: nil
 
   defp standing_offered?(kind, _standing, _scope) when kind in [:destructive, :external],
