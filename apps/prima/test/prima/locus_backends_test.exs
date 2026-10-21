@@ -215,19 +215,18 @@ defmodule Prima.LocusBackendsTest do
       assert {:error, :unsealable} = LocusBackends.open(key, owner(), v["boot"], "not-sealed")
     end
 
-    test "every accepted header parses as its kind to its fields, body hash and MAC" do
-      for %{
-            "kind" => kind,
-            "header" => header,
-            "fields" => fields,
-            "body_hash" => hash,
-            "mac" => mac
-          } <-
+    test "every accepted header verifies as its kind to its fields and body hash" do
+      for %{"kind" => kind, "header" => header, "fields" => fields, "body_hash" => hash} <-
             @vectors["header_parse"]["accepted"] do
-        expected = fields |> atom_keys() |> Map.put(:body_hash, hash)
+        expected = atom_keys(fields)
 
-        assert {:ok, ^expected, ^mac} =
-                 LocusBackends.parse_header(String.to_existing_atom(kind), header),
+        assert {:ok, ^expected, ^hash} =
+                 LocusBackends.verify_header(
+                   String.to_existing_atom(kind),
+                   key(),
+                   header,
+                   fields["ts"]
+                 ),
                header
       end
     end
@@ -235,7 +234,12 @@ defmodule Prima.LocusBackendsTest do
     test "every malformed header is refused as its kind" do
       for %{"kind" => kind, "header" => header} <- @vectors["header_parse"]["malformed"] do
         assert {:error, :malformed} =
-                 LocusBackends.parse_header(String.to_existing_atom(kind), header),
+                 LocusBackends.verify_header(
+                   String.to_existing_atom(kind),
+                   key(),
+                   header,
+                   0
+                 ),
                inspect(header)
       end
     end
@@ -244,10 +248,6 @@ defmodule Prima.LocusBackendsTest do
       assert @vectors["header_parse"]["unknown_version"] != []
 
       for %{"kind" => kind, "header" => header} <- @vectors["header_parse"]["unknown_version"] do
-        assert {:error, :unknown_version} =
-                 LocusBackends.parse_header(String.to_existing_atom(kind), header),
-               header
-
         assert {:error, :unknown_version} =
                  LocusBackends.verify_header(
                    String.to_existing_atom(kind),
@@ -361,9 +361,13 @@ defmodule Prima.LocusBackendsTest do
             end
 
           assert @vectors["routes"][message["route"]] == route
-          assert {:ok, fields, _mac} = LocusBackends.parse_header(kind, message["header"]), name
+
+          assert {:ok, fields, body_hash} =
+                   LocusBackends.verify_header(kind, key(), message["header"], message["now"]),
+                 name
+
           assert fields.ts == message["now"], name
-          assert fields.body_hash == Prima.Digest.sha256_hex(message["body"]), name
+          assert body_hash == Prima.Digest.sha256_hex(message["body"]), name
 
           # An invoke carries the MCP conformance headers beside its signature.
           assert message

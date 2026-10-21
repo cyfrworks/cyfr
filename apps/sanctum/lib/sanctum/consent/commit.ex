@@ -524,7 +524,7 @@ defmodule Sanctum.Consent.Commit do
   # declaration today's rules read, placed anywhere but a canvas, is
   # published, and one they refuse is held as a canvas.
   defp check_publishable(ctx, :public, component, source_ref) do
-    tincture? = to_string(Prima.ComponentRow.field(component, :component_type)) == "tincture"
+    tincture? = to_string(Map.get(component, :component_type)) == "tincture"
 
     with :ok <- check_declaration_parses(component, source_ref, tincture?) do
       if tincture?, do: check_public_placement(ctx, component), else: :ok

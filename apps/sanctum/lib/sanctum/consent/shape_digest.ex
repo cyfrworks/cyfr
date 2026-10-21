@@ -34,8 +34,8 @@ defmodule Sanctum.Consent.ShapeDigest do
 
   Inputs are validated and normalized before hashing — unknown keys
   rejected, lists sorted and deduplicated, durations required to be exact
-  (`30s`, `5m`, never `5mm`, which `Prima.Limits.parse_duration/1`
-  tolerates but a digest must not). Two inputs that mean the same thing
+  (`30s`, `5m`, never the bare seconds `300`, which
+  `Prima.Limits.parse_duration/1` reads but a digest must not). Two inputs that mean the same thing
   produce the same digest; two that differ cannot collide.
   """
 

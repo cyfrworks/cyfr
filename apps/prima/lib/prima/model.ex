@@ -80,7 +80,10 @@ defmodule Prima.Model do
   """
   @spec speaks_chat?(map() | nil | binary()) :: boolean()
   def speaks_chat?(manifest) do
-    @chat in Prima.Manifest.contracts(Prima.Manifest.decode(manifest))
+    case Prima.Manifest.decode_strict(manifest) do
+      {:ok, decoded} -> @chat in Prima.Manifest.contracts(decoded)
+      {:error, :malformed_manifest} -> false
+    end
   end
 
   @doc """

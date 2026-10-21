@@ -323,7 +323,7 @@ defmodule Compendium do
       Sanctum.Provisioning.start_provisioning(ctx)
 
       case Registry.search(ctx, %{type: "catalyst", limit: @catalyst_limit}) do
-        {:ok, %{components: rows}} -> {:ok, Enum.map(rows, &catalyst/1)}
+        {:ok, %{components: rows}} -> {:ok, Enum.flat_map(rows, &catalyst/1)}
         {:error, _behind_or_unreadable} -> {:error, :unavailable}
       end
     end
@@ -341,15 +341,25 @@ defmodule Compendium do
 
   defp component_reader(%Context{}), do: {:error, :forbidden}
 
+  # A release whose stored manifest does not decode is damage, and is not
+  # offered as a model.
   defp catalyst(row) do
-    %{
-      node_key: Prima.ComponentRow.node_key(row),
-      ref: row.component_ref,
-      publisher: row.publisher,
-      name: row.name,
-      version: row.version,
-      contracts: Prima.Manifest.contracts(Prima.Manifest.decode(row.manifest))
-    }
+    case Prima.Manifest.decode_strict(row.manifest) do
+      {:ok, manifest} ->
+        [
+          %{
+            node_key: Prima.ComponentRow.node_key(row),
+            ref: row.component_ref,
+            publisher: row.publisher,
+            name: row.name,
+            version: row.version,
+            contracts: Prima.Manifest.contracts(manifest)
+          }
+        ]
+
+      {:error, :malformed_manifest} ->
+        []
+    end
   end
 
   @doc """

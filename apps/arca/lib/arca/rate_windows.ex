@@ -130,37 +130,21 @@ defmodule Arca.RateWindows do
   """
   @spec claim(Prima.Actor.t(), String.t(), non_neg_integer(), pos_integer()) ::
           {:ok, non_neg_integer()} | {:refused, non_neg_integer()} | refusal()
-  def claim(%Prima.Actor{athanor_id: athanor_id} = actor, bucket, cap, window_ms)
+  def claim(%Prima.Actor{athanor_id: athanor_id}, bucket, cap, window_ms)
       when is_binary(athanor_id) and athanor_id != "" and is_binary(bucket) and bucket != "" and
              is_integer(cap) and cap >= 0 and is_integer(window_ms) and window_ms > 0 do
     Arca.Repo.Errors.with_db_rescue("Arca.RateWindows.claim", fn ->
-      claim_at(actor, bucket, cap, window_ms, Arca.ServerMetaStorage.now!())
+      # A cap of zero admits nothing, so it reads and writes nothing: the
+      # window it would wait for is a whole one.
+      if cap == 0,
+        do: {:refused, window_ms},
+        else:
+          take(facts(athanor_id, bucket, cap, window_ms, Arca.ServerMetaStorage.now!()), @rounds)
     end)
     |> Arca.Data.project()
   end
 
   def claim(%Prima.Actor{}, _bucket, _cap, _window_ms), do: {:error, :no_athanor}
-
-  # `claim/4` at an explicit instant, for tests that pin a claim to a
-  # window's edge. Production reads the cell's clock in `claim/4` above:
-  # an instant a caller chose decides no window in a running cell.
-  @doc false
-  @spec claim_at(Prima.Actor.t(), String.t(), non_neg_integer(), pos_integer(), DateTime.t()) ::
-          {:ok, non_neg_integer()} | {:refused, non_neg_integer()} | refusal()
-  def claim_at(%Prima.Actor{athanor_id: athanor_id}, bucket, cap, window_ms, %DateTime{} = now)
-      when is_binary(athanor_id) and athanor_id != "" and is_binary(bucket) and bucket != "" and
-             is_integer(cap) and cap >= 0 and is_integer(window_ms) and window_ms > 0 do
-    Arca.Repo.Errors.with_db_rescue("Arca.RateWindows.claim_at", fn ->
-      # A cap of zero admits nothing, so it reads and writes nothing: the
-      # window it would wait for is a whole one.
-      if cap == 0,
-        do: {:refused, window_ms},
-        else: take(facts(athanor_id, bucket, cap, window_ms, now), @rounds)
-    end)
-    |> Arca.Data.project()
-  end
-
-  def claim_at(%Prima.Actor{}, _bucket, _cap, _window_ms, _now), do: {:error, :no_athanor}
 
   @doc """
   What `bucket` reads now, without claiming: `{:ok, used, remaining,

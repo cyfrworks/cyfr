@@ -191,8 +191,8 @@ defmodule Compendium.DependencyResolver do
 
     case result do
       {:ok, component} ->
-        manifest = Prima.Manifest.decode(component.manifest)
-        {:ok, component.id, manifest}
+        with {:ok, manifest} <- Prima.Manifest.decode_strict(component.manifest),
+             do: {:ok, component.id, manifest}
 
       {:error, _} = err ->
         err

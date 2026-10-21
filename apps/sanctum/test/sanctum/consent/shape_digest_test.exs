@@ -165,12 +165,14 @@ defmodule Sanctum.Consent.ShapeDigestTest do
     end
 
     test "rejects loose durations in caps" do
-      # Prima.Limits.parse_duration/1 tolerates "5mm"; a digest input
-      # must not — one duration, one spelling.
-      assert {:error, {:invalid_shape, :caps, message}} =
-               ShapeDigest.compute(Map.put(@base, :caps, %{"timeout" => "5mm"}))
+      # Prima.Limits.parse_duration/1 reads bare seconds ("300"); a digest
+      # input must not: one duration, one spelling.
+      for loose <- ["300", "5mm"] do
+        assert {:error, {:invalid_shape, :caps, message}} =
+                 ShapeDigest.compute(Map.put(@base, :caps, %{"timeout" => loose}))
 
-      assert message =~ "exact duration"
+        assert message =~ "exact duration"
+      end
 
       assert {:ok, _} = ShapeDigest.compute(Map.put(@base, :caps, %{"timeout" => "5m"}))
       assert {:ok, _} = ShapeDigest.compute(Map.put(@base, :caps, %{"timeout" => "500ms"}))

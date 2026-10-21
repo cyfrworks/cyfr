@@ -540,22 +540,6 @@ defmodule Prima.Authority.Blob do
   defp entry_digests(_vault), do: []
 
   @doc """
-  The blob with every edge rewritten by `fun`, which receives the node
-  ref, the edge key and the edge and answers the edge to keep.
-  """
-  @spec map_edges(t(), (String.t(), String.t(), Edge.t() -> Edge.t())) :: t()
-  def map_edges(%__MODULE__{nodes: nodes} = blob, fun) when is_function(fun, 3) do
-    %{
-      blob
-      | nodes:
-          Map.new(nodes, fn {ref, %Node{edges: edges} = node} ->
-            {ref,
-             %{node | edges: Map.new(edges, fn {key, edge} -> {key, fun.(ref, key, edge)} end)}}
-          end)
-    }
-  end
-
-  @doc """
   A node's `"@ingress"` edge.
   """
   @spec ingress(t(), String.t()) :: {:ok, Edge.t()} | {:error, :missing_ingress}

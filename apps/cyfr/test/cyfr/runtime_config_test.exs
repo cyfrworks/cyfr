@@ -150,7 +150,7 @@ defmodule Cyfr.RuntimeConfigTest do
                    "CYFR_S3_REGION" => "us-east-1",
                    "CYFR_S3_ACCESS_KEY_ID" => "ak",
                    "CYFR_S3_SECRET_ACCESS_KEY" => "sk",
-                   "CYFR_S3_PATH_STYLE" => "true",
+                   "CYFR_S3_PATH_STYLE" => "on",
                    "CYFR_S3_ENDPOINT" => "http://minio:9000"
                  })
                )
@@ -525,7 +525,7 @@ defmodule Cyfr.RuntimeConfigTest do
                  env(%{
                    "CYFR_DATABASE_URL" => "postgres://u:p@h:5432/db",
                    "CYFR_DB_POOL_SIZE" => "10",
-                   "CYFR_DB_SSL" => "true"
+                   "CYFR_DB_SSL" => "on"
                  })
                )
 

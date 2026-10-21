@@ -12,10 +12,12 @@ defmodule Prima.Manifest.Dependencies do
   both. Dynamic dispatch is deliberately outside the block: a dynamically
   reached component holds no authority, so there is nothing to declare.
 
-  An entry is a ref string, or a map carrying `ref` and optionally
-  `optional` and `reason`. A ref that does not parse fails the whole
-  block: a dependency nobody can name is not a dependency that is simply
-  skipped.
+  The manifest is decoded JSON, string-keyed. An entry is a ref string,
+  or an object carrying `ref` and optionally `optional` and `reason`. A
+  `dependencies` that is not an object, a `static` that is not a list,
+  an entry of neither shape and a ref that does not parse each fail the
+  whole block: a dependency nobody can name is not a dependency that is
+  simply skipped.
   """
 
   @typedoc "One declared static dependency, as a row and an edge both read it."
@@ -31,18 +33,25 @@ defmodule Prima.Manifest.Dependencies do
 
   @doc """
   The declared static dependencies of a decoded manifest, in declaration
-  order. A manifest with no block declares none.
+  order. A manifest with no block, or a block with no `static`, declares
+  none.
   """
-  @spec from_manifest(map() | nil) :: {:ok, [dependency()]} | {:error, term()}
+  @spec from_manifest(map() | nil) :: {:ok, [dependency()]} | {:error, String.t()}
   def from_manifest(nil), do: {:ok, []}
 
   def from_manifest(manifest) when is_map(manifest) do
-    case get_in(manifest, ["dependencies", "static"]) ||
-           get_in(manifest, [:dependencies, :static]) do
-      static when is_list(static) -> parse_entries(static)
-      _absent_or_malformed -> {:ok, []}
+    case Map.fetch(manifest, "dependencies") do
+      :error -> {:ok, []}
+      {:ok, %{} = block} -> static(Map.fetch(block, "static"))
+      {:ok, _other} -> {:error, "Invalid dependencies block: dependencies is not an object"}
     end
   end
+
+  defp static(:error), do: {:ok, []}
+  defp static({:ok, entries}) when is_list(entries), do: parse_entries(entries)
+
+  defp static({:ok, _other}),
+    do: {:error, "Invalid dependencies block: dependencies.static is not a list"}
 
   defp parse_entries(static) do
     static
@@ -58,16 +67,15 @@ defmodule Prima.Manifest.Dependencies do
     end
   end
 
-  defp dependency(entry) do
-    ref_str = if is_binary(entry), do: entry, else: entry["ref"] || entry[:ref]
+  defp dependency(ref) when is_binary(ref), do: dependency(ref, false, nil)
 
-    {optional, reason} =
-      if is_binary(entry) do
-        {false, nil}
-      else
-        {(entry["optional"] || entry[:optional]) == true, entry["reason"] || entry[:reason]}
-      end
+  defp dependency(%{"ref" => ref} = entry) when is_binary(ref),
+    do: dependency(ref, entry["optional"] == true, entry["reason"])
 
+  defp dependency(_entry),
+    do: {:error, "Invalid dependency entry: neither a ref nor an object with a ref"}
+
+  defp dependency(ref_str, optional, reason) do
     case Prima.ComponentRef.parse(ref_str) do
       {:ok, parsed} ->
         {:ok,

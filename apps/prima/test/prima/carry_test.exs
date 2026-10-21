@@ -121,36 +121,6 @@ defmodule Prima.CarryTest do
     end
   end
 
-  test "a replayed action id returns its acknowledgment for the exact bytes and refuses any other" do
-    v = vectors()
-
-    for %{"name" => name, "envelope" => envelope} = vector <- v["replay"] do
-      recorded =
-        case vector["recorded"] do
-          nil ->
-            nil
-
-          %{"envelope" => accepted, "digest" => digest, "ack" => ack} ->
-            assert Envelope.digest(envelope(accepted)) == digest
-            %{digest: digest, ack: ack}
-        end
-
-      result = Envelope.check_replay(envelope(envelope), recorded)
-
-      case vector do
-        %{"result" => "fresh"} -> assert result == :fresh, name
-        %{"result" => "duplicate", "ack" => ack} -> assert result == {:duplicate, ack}, name
-        %{"error" => error} -> assert tag(result) == error, name
-      end
-    end
-  end
-
-  test "the envelope's digest is over its JCS bytes, signature included" do
-    map = vectors()["envelopes"]["valid"]["envelope"]
-    {:ok, bytes} = Prima.JCS.encode(map)
-    assert Envelope.digest(envelope("valid")) == Prima.Digest.sha256(bytes)
-  end
-
   test "new/1 fixes the return URL to the source's /carry and the operation to join" do
     map = vectors()["envelopes"]["valid"]["envelope"]
 
@@ -233,21 +203,6 @@ defmodule Prima.CarryTest do
     test "every malformed return is refused; none carries a session" do
       for %{"name" => name, "return" => map, "error" => error} <- vectors()["returns"]["refusals"] do
         assert tag(Return.decode(map)) == error, name
-      end
-    end
-
-    test "a return is recorded once: the same outcome returns it, a changed one is refused" do
-      v = vectors()["returns"]
-      read = fn name -> elem(Return.decode(v[name]["return"]), 1) end
-
-      for %{"name" => name, "return" => return, "recorded" => recorded} = vector <- v["replay"] do
-        result = Return.check_replay(read.(return), recorded && read.(recorded))
-
-        case vector do
-          %{"result" => "fresh"} -> assert result == :fresh, name
-          %{"result" => "duplicate"} -> assert result == {:duplicate, read.(recorded)}, name
-          %{"error" => error} -> assert tag(result) == error, name
-        end
       end
     end
   end

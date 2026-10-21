@@ -282,15 +282,15 @@ defmodule Compendium.Provenance do
     to_string(Map.get(row, :component_type) || Map.get(row, "component_type") || "")
   end
 
-  # The fork's stamp, read through the manifest module's lenient decode —
-  # the same read-side SSOT every other manifest consumer speaks, whatever
-  # shape the row's manifest is on its journey (decoded map or raw JSON).
-  # Lineage lives IN the manifest, deliberately: it travels with the
-  # content on push and pull, and provenance stays derived, never stored.
+  # The fork's stamp. Lineage lives IN the manifest, deliberately: it
+  # travels with the content on push and pull, and provenance stays
+  # derived, never stored. A stored manifest that does not decode is
+  # damage and claims no lineage.
   defp forked_from(row) do
-    case Prima.Manifest.decode(Map.get(row, :manifest)) do
-      %{"forked_from" => forked} when is_binary(forked) -> forked
-      _ -> nil
+    case Prima.Manifest.decode_strict(Map.get(row, :manifest)) do
+      {:ok, %{"forked_from" => forked}} when is_binary(forked) -> forked
+      {:ok, _unforked} -> nil
+      {:error, :malformed_manifest} -> nil
     end
   end
 
@@ -368,10 +368,11 @@ defmodule Compendium.Provenance do
 
     with {:ok, manifest} <-
            Arca.get_json(Prima.Actor.system(), prefix ++ [ComponentPath.manifest_name()]),
+         {:ok, manifest} <- Prima.Manifest.decode_strict(manifest),
          {:ok, bytes} <-
            Arca.get(Prima.Actor.system(), prefix ++ [ComponentPath.wasm_name(type)]) do
       digest = Prima.Digest.sha256(bytes)
-      Compendium.ReleaseDigest.compute(digest, Prima.Manifest.decode(manifest))
+      Compendium.ReleaseDigest.compute(digest, manifest)
     else
       {:error, :not_found} -> {:error, :not_shipped}
       {:error, reason} -> {:error, reason}

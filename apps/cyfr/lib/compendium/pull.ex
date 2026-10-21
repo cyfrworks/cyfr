@@ -122,9 +122,8 @@ defmodule Compendium.Pull do
   """
   @spec missing_deps(Context.t(), map(), keyword()) :: [String.t()]
   def missing_deps(%Context{} = ctx, component, opts \\ []) when is_map(component) do
-    manifest = Prima.Manifest.decode(Map.get(component, :manifest))
-
-    with {:ok, deps} <-
+    with {:ok, manifest} <- Prima.Manifest.decode_strict(Map.get(component, :manifest)),
+         {:ok, deps} <-
            DependencyResolver.extract_from_manifest(manifest, component_id(component)) do
       %{missing: missing, optional_missing: optional} =
         DependencyResolver.classify_availability(ctx, deps)

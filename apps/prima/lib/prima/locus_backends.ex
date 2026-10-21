@@ -604,17 +604,6 @@ defmodule Prima.LocusBackends do
       do: MacEnvelope.canonical(Map.fetch!(@envelopes, kind), message, body)
 
   @doc """
-  A header's fields, with the body hash it names as `:body_hash`, and its
-  MAC; `{:error, :unknown_version}` for a version token other than `v1`,
-  and `{:error, :malformed}` for anything else but exactly one well-formed
-  header of `kind`.
-  """
-  @spec parse_header(kind(), term()) ::
-          {:ok, map(), String.t()} | {:error, :unknown_version | :malformed}
-  def parse_header(kind, header) when is_map_key(@envelopes, kind),
-    do: MacEnvelope.parse(Map.fetch!(@envelopes, kind), header)
-
-  @doc """
   A request's authenticated fields under the service `key`, or the first
   refusal: `:unknown_version`, `:malformed`, `:outside_window`, `:bad_mac`. A control message
   verifies under the control key, an invoke under the key of the owner its

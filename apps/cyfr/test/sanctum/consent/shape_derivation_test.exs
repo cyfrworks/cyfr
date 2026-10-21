@@ -521,7 +521,7 @@ defmodule Sanctum.Consent.ShapeDerivationTest do
                })
 
       {:ok, row} = Compendium.Registry.get(ctx, "spoof", "1.0.0", "local", "formula")
-      stored = Prima.Manifest.decode(row.manifest)
+      {:ok, stored} = Prima.Manifest.decode_strict(row.manifest)
       assert stored["type"] == "agent"
 
       assert {:ok, %{"tools" => ["feed.list"]}, _limits} =

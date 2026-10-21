@@ -931,7 +931,7 @@ defmodule Prima.BuilderProtocol do
       "#{describe_version(client)}; run the builder image of the same release as this server"
   end
 
-  defp describe_version(nil), do: "no builder protocol (a release older than this one)"
+  defp describe_version(nil), do: "no builder protocol"
   defp describe_version(version), do: "builder protocol #{version}"
 
   # ————— reading —————

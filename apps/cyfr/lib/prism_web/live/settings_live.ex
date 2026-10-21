@@ -721,11 +721,8 @@ defmodule PrismWeb.SettingsLive do
   defp shipped_needs(row, socket) do
     with ref when is_binary(ref) <- f(row, :component_ref),
          {:ok, inspected} <- call_tool(socket, "component/inspect", %{"reference" => ref}),
-         needs when is_list(needs) <-
-           inspected
-           |> f(:manifest)
-           |> Prima.Manifest.decode()
-           |> Prima.Manifest.Needs.from_manifest() do
+         {:ok, manifest} <- inspected |> f(:manifest) |> Prima.Manifest.decode_strict(),
+         needs when is_list(needs) <- Prima.Manifest.Needs.from_manifest(manifest) do
       Enum.filter(needs, &(&1.kind in @instance_kinds))
     else
       _unread -> []

@@ -198,18 +198,17 @@ defmodule Prima.LimitsTest do
   end
 
   # ============================================================================
-  # Characterization: parse_duration/1 trailing-suffix quirk
+  # parse_duration/1: one number, one unit
   # ============================================================================
 
-  describe "parse_duration characterization" do
-    # parse_int_unit uses String.trim_trailing, which strips *every* trailing
-    # occurrence of the suffix — so "5mm" parses as 5 minutes and "30ss" as
-    # 30 seconds. Pinned because Limits validation leans on parse_duration;
-    # if this ever tightens, the canonical duration grammar in the freeze doc
-    # must be revisited alongside it.
-    test "repeated trailing suffixes are tolerated" do
-      assert Limits.parse_duration("5mm") == {:ok, 300_000}
-      assert Limits.parse_duration("30ss") == {:ok, 30_000}
+  describe "parse_duration/1's grammar" do
+    test "a duration carries exactly one unit suffix" do
+      for loose <- ~w(5mm 30ss 500msms 1hh 5ms5ms) do
+        assert {:error, _} = Limits.parse_duration(loose), loose
+      end
+
+      assert Limits.parse_duration("5m") == {:ok, 300_000}
+      assert Limits.parse_duration("500ms") == {:ok, 500}
     end
 
     test "inner garbage is still rejected" do

@@ -14,10 +14,9 @@ defmodule Sanctum.Consent.Normalize do
 
   alias Prima.ComponentRef
 
-  # Durations must be exact here. Prima.Limits.parse_duration/1 tolerates
-  # repeated trailing suffixes ("5mm" parses as 5 minutes) — harmless for a
-  # timeout, unacceptable for a digest input, where it would give one
-  # duration two spellings.
+  # Durations must be exact here: a number and its unit. Prima.Limits.
+  # parse_duration/1 also reads bare integer seconds ("300"), which a
+  # digest input must not, since it would give one duration two spellings.
   @duration_re ~r/^\d+(ms|s|m|h)$/
 
   def only_keys(map, allowed, tag) when is_map(map) do

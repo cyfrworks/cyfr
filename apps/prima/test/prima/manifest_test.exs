@@ -8,52 +8,6 @@ defmodule Prima.ManifestTest do
 
   alias Prima.Manifest
 
-  describe "decode/1" do
-    test "returns empty map for nil" do
-      assert Manifest.decode(nil) == %{}
-    end
-
-    test "passes through maps unchanged" do
-      map = %{"caps" => %{"tools" => []}}
-      assert Manifest.decode(map) == map
-    end
-
-    test "decodes valid JSON string" do
-      json = ~s({"name": "test", "version": "1.0.0"})
-      assert Manifest.decode(json) == %{"name" => "test", "version" => "1.0.0"}
-    end
-
-    test "returns empty map for invalid JSON" do
-      assert Manifest.decode("not json") == %{}
-    end
-
-    test "returns empty map for JSON that decodes to non-map" do
-      assert Manifest.decode(~s(["array"])) == %{}
-    end
-
-    test "returns empty map for unexpected types" do
-      assert Manifest.decode(42) == %{}
-      assert Manifest.decode(:atom) == %{}
-    end
-
-    # A malformed manifest may carry anything, a credential included; the
-    # caller for which "no declarations" is a gap logs its component ref.
-    test "logs nothing for a manifest that does not decode" do
-      malformed = ~s({"needs": {"token": "sk-live-abcdef"})
-
-      # Other async modules log while this one runs; only this module's
-      # words and the manifest's bytes are looked for.
-      log =
-        capture_log(fn ->
-          assert Manifest.decode(malformed) == %{}
-          assert Manifest.decode(~s(["sk-live-abcdef"])) == %{}
-        end)
-
-      refute log =~ "Prima.Manifest"
-      refute log =~ "sk-live"
-    end
-  end
-
   describe "decode_strict/1" do
     test "returns empty map for nil" do
       assert Manifest.decode_strict(nil) == {:ok, %{}}
@@ -71,6 +25,23 @@ defmodule Prima.ManifestTest do
 
     test "rejects invalid JSON" do
       assert Manifest.decode_strict("not json") == {:error, :malformed_manifest}
+    end
+
+    # A malformed manifest may carry anything, a credential included; the
+    # caller that refuses it as damage logs its component ref.
+    test "logs nothing for a manifest that does not decode" do
+      malformed = ~s({"needs": {"token": "sk-live-abcdef"})
+
+      # Other async modules log while this one runs; only this module's
+      # words and the manifest's bytes are looked for.
+      log =
+        capture_log(fn ->
+          assert Manifest.decode_strict(malformed) == {:error, :malformed_manifest}
+          assert Manifest.decode_strict(~s(["sk-live-abcdef"])) == {:error, :malformed_manifest}
+        end)
+
+      refute log =~ "Prima.Manifest"
+      refute log =~ "sk-live"
     end
 
     test "rejects JSON that decodes to non-map" do

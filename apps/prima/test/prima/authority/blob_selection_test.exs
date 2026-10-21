@@ -130,22 +130,9 @@ defmodule Prima.Authority.BlobSelectionTest do
     assert {:error, {:invalid_resource, _, _, :vault, _}} = Blob.parse(graph(%{"via" => "p"}))
   end
 
-  test "edge_target/1 and map_edges/2 walk the graph as the loader does" do
+  test "edge_target/1 names an edge's target as the loader reads it" do
     assert Blob.edge_target("@ingress") == :ingress
     assert Blob.edge_target(@catalyst) == {:ok, @catalyst}
     assert Blob.edge_target(@catalyst <> "|api_key") == {:ok, @catalyst}
-
-    {:ok, blob} = Blob.parse(graph(%{"via" => %{"label" => "default"}}))
-
-    resolved =
-      Blob.map_edges(blob, fn _node, _key, edge ->
-        case edge.vault do
-          %{via: _} -> %{edge | vault: %{entry_id: "e", binding_digest: "d", projection: nil}}
-          _ -> edge
-        end
-      end)
-
-    assert {:ok, %{vault: %{entry_id: "e"}}} = Blob.lookup_edge(resolved, @formula, @catalyst, "")
-    assert {:ok, %{vault: nil}} = Blob.ingress(resolved, @formula)
   end
 end

@@ -131,28 +131,15 @@ defmodule Prima.Manifest do
   def valid_connect_domain?(_), do: false
 
   @doc """
-  Decode a manifest value into a map.
+  A manifest value as a map: nil is the empty manifest, a map is itself,
+  and JSON text is its decoded object. Anything else, text that is not a
+  JSON object among it, is `{:error, :malformed_manifest}`.
 
-  Handles nil (returns empty map), maps (passthrough), and JSON strings.
-  Returns an empty map on decode failure — a malformed manifest degrades to
-  "no declarations". A caller for which that is a capability gap reads
-  `decode_strict/1` instead and says so in its own log.
-  """
-  @spec decode(nil | map() | binary()) :: map()
-  def decode(manifest) do
-    case decode_strict(manifest) do
-      {:ok, map} -> map
-      {:error, :malformed_manifest} -> %{}
-    end
-  end
-
-  @doc """
-  Strict counterpart of `decode/1` for write boundaries.
-
-  Registration must never accept a manifest it cannot parse — a malformed
-  manifest would otherwise register a component with zero declared
-  capabilities and skip all manifest validation. Reads of historical rows
-  keep using the lenient `decode/1`.
+  Registration never accepts a manifest it cannot parse, since a
+  malformed manifest would register a component with no declared
+  capabilities and skip all manifest validation; a stored manifest that
+  does not decode is damage, and every reader refuses it as such rather
+  than read it as declaring nothing.
   """
   @spec decode_strict(nil | map() | binary()) :: {:ok, map()} | {:error, :malformed_manifest}
   def decode_strict(nil), do: {:ok, %{}}

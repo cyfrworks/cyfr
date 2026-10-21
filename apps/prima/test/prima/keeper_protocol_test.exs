@@ -66,10 +66,21 @@ defmodule Prima.KeeperProtocolTest do
     "memory bound that is not a number" => "memory_bytes",
     "memory bound inside rlimits" => "rlimits.memory_bytes",
     "memory bound on a request that is not a spawn" => "memory_bytes",
+    "absent memory bound" => "memory_bytes",
+    "null memory bound" => "memory_bytes",
     "isolation other than netns" => "isolation",
     "isolation that is not a string" => "isolation",
     "isolation on a request that is not a spawn" => "isolation"
   }
+
+  # Every member name the vectors' requests carry, at every depth, as the
+  # atom `encode/1` takes: a closed table, so a vector names no atom it
+  # makes.
+  @members Map.new(
+             ~w(argv attach control core env extra fsize grace_ms id isolation memory_bytes
+                nofile nproc path pool rlimits sig spawn_id token type v)a,
+             &{Atom.to_string(&1), &1}
+           )
 
   @token "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
   @spawn_id "00112233445566778899aabbccddeeff"
@@ -87,11 +98,12 @@ defmodule Prima.KeeperProtocolTest do
       {"env", env} -> {:env, env}
       {"attach", %{} = attach} -> {:attach, atom_keys(attach)}
       {"rlimits", %{} = rlimits} -> {:rlimits, atom_keys(rlimits)}
-      {name, value} -> {String.to_atom(name), value}
+      {name, value} -> {Map.fetch!(@members, name), value}
     end)
   end
 
-  defp atom_keys(map), do: Map.new(map, fn {name, value} -> {String.to_atom(name), value} end)
+  defp atom_keys(map),
+    do: Map.new(map, fn {name, value} -> {Map.fetch!(@members, name), value} end)
 
   defp spawn_request(fields) do
     Map.merge(
@@ -100,6 +112,7 @@ defmodule Prima.KeeperProtocolTest do
         id: "1",
         pool: "build",
         argv: ["true"],
+        memory_bytes: 16_777_216,
         attach: %{path: "/run/a.sock", token: @token}
       },
       fields
@@ -165,7 +178,7 @@ defmodule Prima.KeeperProtocolTest do
       assert refused(spawn_request(%{env: env})) =~ ~r/\Aenv /
 
       for {limit, %{"least" => least, "most" => most}} <- @vectors["rlimits"] do
-        key = String.to_existing_atom(limit)
+        key = Map.fetch!(@members, limit)
         assert line(spawn_request(%{rlimits: %{key => most}}))
         assert refused(spawn_request(%{rlimits: %{key => most + 1}})) =~ ~r/\Arlimits\./
 
@@ -442,6 +455,13 @@ defmodule Prima.KeeperProtocolTest do
   end
 
   describe "requests" do
+    test "a spawn carries its memory bound: absent, null and zero are refused" do
+      assert refused(Map.delete(spawn_request(%{}), :memory_bytes)) =~ ~r/\Amemory_bytes /
+
+      for bytes <- [nil, 0],
+          do: assert(refused(spawn_request(%{memory_bytes: bytes})) =~ ~r/\Amemory_bytes /)
+    end
+
     test "are refused past their bounds, and carried at them" do
       assert %{"memory_bytes" => 16_777_216} =
                Jason.decode!(line(spawn_request(%{memory_bytes: 16_777_216})))
