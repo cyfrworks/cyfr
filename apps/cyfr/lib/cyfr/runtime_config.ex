@@ -217,6 +217,14 @@ defmodule Cyfr.RuntimeConfig do
   def require_signed_pulls?, do: Application.get_env(:cyfr, :require_signed_pulls, false)
 
   @doc """
+  The home's origin (`Sanctum.origin/0`), as the console reads it: its
+  surface names no root `Sanctum` module (`Cyfr.Boundaries`), so the
+  host's glue carries this one value to it.
+  """
+  @spec origin() :: String.t()
+  defdelegate origin(), to: Sanctum
+
+  @doc """
   MCP Origin-header allowlist (DNS-rebinding guard), read by the Origin
   plug: the origins the home's access settings resolve to
   (`:mcp_allowed_origins`, `config/runtime.exs`), followed by the
