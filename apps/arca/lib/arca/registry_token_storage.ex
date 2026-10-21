@@ -75,21 +75,4 @@ defmodule Arca.RegistryTokenStorage do
     end)
     |> Arca.Data.project()
   end
-
-  @spec delete(String.t(), String.t(), String.t()) :: :ok | {:error, :database_error}
-  def delete(user_id, registry, namespace_slug)
-      when is_binary(user_id) and is_binary(registry) and is_binary(namespace_slug) do
-    Arca.Repo.Errors.with_db_rescue("RegistryTokenStorage.delete", fn ->
-      query =
-        from(t in RegistryToken,
-          where:
-            t.user_id == ^user_id and t.registry == ^registry and
-              t.namespace_slug == ^namespace_slug
-        )
-
-      Arca.Repo.delete_all(query)
-      :ok
-    end)
-    |> Arca.Data.project()
-  end
 end
