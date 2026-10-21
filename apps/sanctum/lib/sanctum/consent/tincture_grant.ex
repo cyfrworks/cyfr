@@ -46,9 +46,9 @@ defmodule Sanctum.Consent.TinctureGrant do
   @typedoc """
   Why the version opens nothing: `:ungranted` while the person has to
   consent (again), `:unavailable` when the grant or the version could not
-  be read, and `{:refused, reason}` for a damaged profile, head or
-  component graph, or an activation the installed world cannot resolve,
-  which no consent repairs here.
+  be read, and `{:refused, reason}` for a damaged profile, head,
+  component graph or stored manifest, or an activation the installed
+  world cannot resolve, which no consent repairs here.
   """
   @type refusal :: :ungranted | :unavailable | {:refused, term()}
 
@@ -119,9 +119,9 @@ defmodule Sanctum.Consent.TinctureGrant do
   end
 
   # The version's verified activation, read as a run's admission reads
-  # the release it runs: an outage refuses, a damaged graph is damage,
-  # and any other answer is an activation the decision table answers
-  # `setup_required` for.
+  # the release it runs: an outage refuses, a damaged graph or a stored
+  # manifest that does not decode is damage, and any other answer is an
+  # activation the decision table answers `setup_required` for.
   defp live(ctx, row, reference) do
     case Components.resolve_verified(ctx, row) do
       {:ok, _verified} = verified ->
@@ -135,6 +135,9 @@ defmodule Sanctum.Consent.TinctureGrant do
 
       {:error, {:invalid_graph, _}} ->
         {:error, {:refused, {:corrupt, {:component_graph, reference}}}}
+
+      {:error, {:corrupt, {:manifest, _ref}} = damage} ->
+        {:error, {:refused, damage}}
 
       {:error, _other} ->
         {:ok, {:error, {:incomplete, :invalid_graph}}}
