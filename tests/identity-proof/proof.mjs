@@ -5,7 +5,7 @@
 // against `cyfr` releases behind the harness's HTTPS front (README.md):
 // homes A, B, C, C2 and C3 and a directory, each a cell on its own `.test`
 // name. Chromium alone, since a passkey is made and used by its virtual
-// authenticator; the glass's steps run once more at the proposed
+// authenticator; the glass's steps run once more at the
 // handheld's 720×720 touch viewport (../browser/handheld.mjs). Each step is
 // one row of the record; the proof fails when a row does not hold, and
 // stops at the first row a later one rests on.
@@ -378,7 +378,7 @@ async function restoredHome(page, proxy, base, cell, token, kit, step) {
 }
 
 // ---------------------------------------------------------------------------
-// The glass's steps once more on the proposed handheld (HANDHELD)
+// The glass's steps once more on the handheld (HANDHELD)
 // ---------------------------------------------------------------------------
 
 // A second glass, the handheld, follows the phone through the glass's

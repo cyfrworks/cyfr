@@ -15,7 +15,7 @@ One person is signed in twice, by the release fixture's door
 (`tests/release-boot/fixture.exs` `person`): a desktop context, and a phone
 context with a mobile viewport. `proof.mjs` drives both in one Chromium,
 and drives the glass's steps once more in a third context, the phone's
-session at the proposed handheld's 720×720 touch viewport
+session at the handheld's 720×720 touch viewport
 (`tests/browser/handheld.mjs`).
 `run.sh` builds the `cyfr` command line into the output directory's
 `bin/` (removed when the run ends), where the `command_line` step runs it.

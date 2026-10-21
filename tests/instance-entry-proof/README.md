@@ -12,7 +12,7 @@ in by the release fixture's door (`tests/release-boot/fixture.exs`
 through the same sign-in path. `proof.mjs` drives the administrator and Ana
 in Chromium's full build, the administrator's confirmations proven with the
 passkey Chromium's virtual authenticator makes and registers first, as
-`tests/canvas-proof/` proves its vault entry's. It asks `run.sh` for the
+`tests/approval-proof/` proves its vault entries'. It asks `run.sh` for the
 home's part of a step through its output directory (`ask-N.json`, answered
 `answer-N.json`): a sign-in, and the reads and claims of `fixture.exs`,
 which calls the real paths and answers bounded facts. The material an
@@ -197,10 +197,10 @@ in the tree.
 
 The unchanged shipped model artifact → production
 `Opus.Host.AttachedFetch` → local provider stand-in composition is
-**uncovered**. The current artifacts hard-code provider HTTPS origins
-(`seed/components/catalysts/local/openai/1.3.1/src/src/lib.rs:14` and its
-peers); `Opus.Host.Egress.pin/3` has a resolver option which the actual
-host never passes (`apps/cyfr/lib/opus/host/egress.ex:94`). The
+**uncovered**. The shipped artifacts hard-code provider HTTPS origins
+(`BASE_URL` in `seed/components/catalysts/local/openai/1.4.1/src/src/lib.rs`
+and its peers); `Opus.Host.Egress.pin/3` has a resolver option which no
+caller in the host passes. The
 existing suites found in `seed_model_catalysts_test.exs`,
 `model_contract_test.exs`, `TwoServices`, `tests/locus-runtime-image/` and
 `Sanctum.Test.Resolver` do not provide an end-to-end local
