@@ -501,29 +501,6 @@ defmodule Cyfr.RuntimeConfigWiringTest do
       end
     end
 
-    # Retired with no compatibility: no roster declares it, so a .env or a
-    # process that still sets it is refused by name, like any name the
-    # server does not read.
-    # Spelled split so this file is not itself a hit of the retired name.
-    @retired "CYFR_BEHIND" <> "_PROXY"
-
-    test "the retired proxy switch, #{@retired}, is refused by name, from .env and from the process",
-         %{tmp_dir: dir} do
-      retired = @retired
-
-      with_env(%{retired => "true"}, fn ->
-        message = Exception.message(assert_raise(RuntimeError, &read_prod_config!/0))
-        assert message =~ "[Cyfr] FATAL: #{retired} is not a variable this server reads"
-      end)
-
-      File.write!(Path.join(dir, ".env"), "#{retired}=false\n")
-
-      with_env(%{"RELEASE_ROOT" => dir}, fn ->
-        message = Exception.message(assert_raise(RuntimeError, &read_prod_config!/0))
-        assert message =~ "[Cyfr] FATAL: #{retired} is not a variable this server reads"
-      end)
-    end
-
     # The callback is the home's own address in every mode, so no request
     # header chooses it (`Sanctum.Vault.OAuthRedirectUriTest` holds what
     # Ueberauth then builds from it).
@@ -561,45 +538,25 @@ defmodule Cyfr.RuntimeConfigWiringTest do
   # The CORS allowlist
   # ==========================================================================
 
-  # Unassigned, the variable leaves the application's configured list
-  # standing, which a deployment's own configuration may set; assigned
-  # blank it is the empty allowlist; listed, the list.
   describe "CYFR_CORS_ALLOWED_ORIGINS" do
-    @configured ["https://app.example.com"]
-
-    defp cors(runtime) do
-      [cyfr: [cors_allowed_origins: @configured]]
-      |> Config.Reader.merge(runtime)
-      |> get_in([:cyfr, :cors_allowed_origins])
-    end
-
-    test "absent, a configured list stands; blank, it is empty; listed, it is the list" do
-      with_env(%{"CYFR_CORS_ALLOWED_ORIGINS" => nil}, fn ->
-        refute Keyword.has_key?(read_prod_config!()[:cyfr], :cors_allowed_origins)
-        assert cors(read_prod_config!()) == @configured
-      end)
-
-      with_env(%{"CYFR_CORS_ALLOWED_ORIGINS" => ""}, fn ->
-        assert cors(read_prod_config!()) == []
-      end)
+    test "unset or blank, the allowlist is empty; listed, it is the list" do
+      for unset <- [nil, ""] do
+        with_env(%{"CYFR_CORS_ALLOWED_ORIGINS" => unset}, fn ->
+          assert read_prod_config!()[:cyfr][:cors_allowed_origins] == []
+        end)
+      end
 
       with_env(%{"CYFR_CORS_ALLOWED_ORIGINS" => "https://a.example, https://b.example"}, fn ->
-        assert cors(read_prod_config!()) == ["https://a.example", "https://b.example"]
+        assert read_prod_config!()[:cyfr][:cors_allowed_origins] == [
+                 "https://a.example",
+                 "https://b.example"
+               ]
       end)
     end
   end
 
   describe "the signing salts" do
-    # The names the salts were read under before, spelled in parts so the
-    # vocabulary scans do not find them here.
-    @old_session_salt "CYFR_EMISSARY" <> "_SESSION_SALT"
-    @old_live_salt "CYFR_LV" <> "_SALT"
-    @salts_unset %{
-      "CYFR_SESSION_SALT" => nil,
-      "CYFR_LIVE_SALT" => nil,
-      @old_session_salt => nil,
-      @old_live_salt => nil
-    }
+    @salts_unset %{"CYFR_SESSION_SALT" => nil, "CYFR_LIVE_SALT" => nil}
 
     defp salts(config) do
       {config[:cyfr][:session_salt], config[:cyfr][CyfrWeb.Endpoint][:live_view][:signing_salt]}
@@ -617,7 +574,7 @@ defmodule Cyfr.RuntimeConfigWiringTest do
       key_base = Base.encode64(:crypto.strong_rand_bytes(48))
 
       derived =
-        for label <- ["emissary_session", "live_view"] do
+        for label <- ["session_salt", "live_salt"] do
           :sha256
           |> :crypto.hash(label <> key_base)
           |> Base.url_encode64(padding: false)
@@ -626,19 +583,6 @@ defmodule Cyfr.RuntimeConfigWiringTest do
 
       with_env(Map.put(@salts_unset, "CYFR_SECRET_KEY_BASE", key_base), fn ->
         assert salts(read_prod_config!()) == List.to_tuple(derived)
-      end)
-    end
-
-    # No roster declares the old names, so the boot refuses each by name
-    # rather than ignoring it (`Cyfr.Platform.Settings.Roster.unknown/2`).
-    test "the old names refuse the boot, naming them" do
-      old = %{@old_session_salt => "old-session", @old_live_salt => "old-live"}
-
-      with_env(Map.merge(@salts_unset, old), fn ->
-        message = Exception.message(assert_raise(RuntimeError, &read_prod_config!/0))
-        assert message =~ "[Cyfr] FATAL: "
-        assert message =~ @old_session_salt and message =~ @old_live_salt
-        assert message =~ "not a variable this server reads"
       end)
     end
   end
@@ -792,14 +736,6 @@ defmodule Cyfr.RuntimeConfigWiringTest do
     end
   end
 
-  describe "the keeper" do
-    test "no keeper is configured: the channel keeper is the one launcher" do
-      with_env(runtime_env(%{}), fn ->
-        refute Keyword.has_key?(runtime_config!(), :keeper)
-      end)
-    end
-  end
-
   describe "the releases this file configures" do
     test "every boot is CYFR, and a mix boot alone runs the runtime beside it" do
       with_env(%{"RELEASE_NAME" => "cyfr"}, fn ->
@@ -813,45 +749,6 @@ defmodule Cyfr.RuntimeConfigWiringTest do
         assert Keyword.has_key?(config[:cyfr], :locus_runtime_workers)
         assert config[:locus][:runtime][:service_key] == String.duplicate("ab", 32)
       end)
-    end
-  end
-
-  # The runtime's retired control-plane names are no variable this server
-  # reads: the boot refuses each through its refusal of an undeclared
-  # `CYFR_*` name, so a stale `.env` cannot boot cyfr.
-  describe "the runtime's retired control-plane variables" do
-    test "each is refused by name" do
-      # Spelled split so the retired names are not themselves found here.
-      for name <- [
-            "CYFR_OP" <> "US_KEY",
-            "CYFR_OP" <> "US_WORKERS",
-            "CYFR_OP" <> "US_WATCH_POLL_MS"
-          ] do
-        with_env(%{name => "x"}, fn ->
-          message = Exception.message(assert_raise(RuntimeError, &read_prod_config!/0))
-          assert message =~ "[Cyfr] FATAL: #{name} is not a variable this server reads"
-        end)
-      end
-    end
-  end
-
-  # The execution domain's variables under the name it had before are no
-  # variable this server reads either: each is refused by name, so a stale
-  # `.env` cannot boot cyfr with a ceiling it no longer applies.
-  describe "the execution domain's retired variables" do
-    test "each is refused by name, even holding a value its successor takes" do
-      # Spelled split so the retired names are not themselves found here.
-      for name <- [
-            "CYFR_CRU" <> "CIBLE_MAX_CONCURRENT",
-            "CYFR_CRU" <> "CIBLE_MAX_CONCURRENT_PER_TENANT",
-            "CYFR_CRU" <> "CIBLE_EVENTS_MAX_CONCURRENT",
-            "CYFR_CRU" <> "CIBLE_EVENTS_MAX_MS"
-          ] do
-        with_env(%{name => "64"}, fn ->
-          message = Exception.message(assert_raise(RuntimeError, &read_prod_config!/0))
-          assert message =~ "[Cyfr] FATAL: #{name} is not a variable this server reads"
-        end)
-      end
     end
   end
 
@@ -919,16 +816,35 @@ defmodule Cyfr.RuntimeConfigWiringTest do
       with_env(%{"CYFR_DATABASE" => other}, fn ->
         error = assert_raise RuntimeError, fn -> read_prod_config!() end
 
-        assert Exception.message(error) =~ "CYFR_DATABASE asks for"
+        assert Exception.message(error) =~ "CYFR_DATABASE=#{other} but this release was built"
         assert Exception.message(error) =~ "chosen when the release is COMPILED"
       end)
     end
 
-    test "an unrecognised value refuses the boot rather than defaulting" do
+    test "an unrecognised value refuses the boot, naming the built adapter" do
+      built = Atom.to_string(Arca.adapter_facts().adapter)
+
       with_env(%{"CYFR_DATABASE" => "mysql"}, fn ->
         error = assert_raise RuntimeError, fn -> read_prod_config!() end
-        assert Exception.message(error) =~ "unknown CYFR_DATABASE=mysql"
+
+        assert Exception.message(error) =~
+                 "CYFR_DATABASE=mysql but this release was built for #{built}"
       end)
+
+      with_env(%{"CYFR_DATABASE" => String.upcase(built)}, fn ->
+        assert is_list(read_prod_config!())
+      end)
+    end
+
+    # The value's grammar is `config/database_choice.exs`'s alone: the
+    # boot compares what it reads with the built adapter and parses nothing.
+    test "config/database_choice.exs is the one file that spells the adapters' names" do
+      spellers =
+        for path <- Path.wildcard(Path.join(@root, "config/*.exs")),
+            File.read!(path) =~ ~r/"(sqlite|postgres)"/,
+            do: Path.basename(path)
+
+      assert spellers == ["database_choice.exs"]
     end
 
     test "an empty value is a blank line, not a request" do
@@ -1113,6 +1029,47 @@ defmodule Cyfr.RuntimeConfigWiringTest do
           assert config[:locus][:runtime][:service_key] == Base.encode16(key, case: :lower)
         end
       )
+    end
+  end
+
+  describe "CYFR_LOG_FORMAT" do
+    test "json selects the JSON formatter; unset is plain text; any other value refuses the boot" do
+      with_env(%{"CYFR_LOG_FORMAT" => "json"}, fn ->
+        assert read_prod_config!()[:logger][:default_formatter][:format] ==
+                 {Prima.JsonFormatter, :format}
+      end)
+
+      with_env(%{"CYFR_LOG_FORMAT" => nil}, fn ->
+        refute Keyword.has_key?(read_prod_config!()[:logger] || [], :default_formatter)
+      end)
+
+      for value <- ["text", "JSON", "plain"] do
+        with_env(%{"CYFR_LOG_FORMAT" => value}, fn ->
+          message = Exception.message(assert_raise(RuntimeError, &read_prod_config!/0))
+          assert message =~ "[Cyfr] FATAL: CYFR_LOG_FORMAT=#{inspect(value)} is not a log format"
+        end)
+      end
+    end
+  end
+
+  describe "CYFR_PROMETHEUS_METRICS" do
+    defp read_dev_metrics!, do: read_dev_config!()[:cyfr][:prometheus_metrics_enabled]
+
+    test "set, the switch decides either way, a development boot's default included; unset, the build's default stands" do
+      with_env(%{"CYFR_PROMETHEUS_METRICS" => "off"}, fn ->
+        assert read_dev_metrics!() == false
+        assert read_prod_config!()[:cyfr][:prometheus_metrics_enabled] == false
+      end)
+
+      with_env(%{"CYFR_PROMETHEUS_METRICS" => "on"}, fn ->
+        assert read_dev_metrics!() == true
+        assert read_prod_config!()[:cyfr][:prometheus_metrics_enabled] == true
+      end)
+
+      with_env(%{"CYFR_PROMETHEUS_METRICS" => nil}, fn ->
+        assert read_dev_metrics!() == nil
+        refute Keyword.has_key?(read_prod_config!()[:cyfr], :prometheus_metrics_enabled)
+      end)
     end
   end
 end

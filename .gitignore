@@ -23,8 +23,6 @@ erl_crash.dump
 
 # Environment files
 .env
-.env.local
-.env.*.local
 # Per-container env files (the .example copies are tracked).
 .env.locus
 # The locus-runtime service's seccomp profile beside docker-compose.yml: a source

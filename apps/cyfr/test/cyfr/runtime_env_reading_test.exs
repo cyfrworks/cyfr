@@ -3,21 +3,14 @@
 
 defmodule Cyfr.RuntimeEnvReadingTest do
   @moduledoc """
-  How `config/runtime.exs` reads the environment, pinned at the source.
+  How `config/runtime.exs` reads the environment, pinned at the source:
+  a variable that is present but empty reads as unset, and a switch is
+  parsed, never compared as a string. `Cyfr.RuntimeConfigWiringTest`
+  evaluates the file; this holds the shape of its reads.
 
-  The file is wrapped in `if config_env() != :test`, so nothing in it runs
-  during the suite and its reads cannot be exercised directly. What can be
-  checked is the shape of the reads — and the shape is the whole invariant:
-  a variable that is present but empty must read as unset.
-
-  Blank environment values must use configured defaults. Optional
-  Dotenvy types return nil for blanks; env_str, env_int, and env_bool
-  apply the corresponding default. The one exception is the setting whose
-  blank value is a value — the CORS allowlist, pinned below — which is
-  read by its assignment through `env_assigned`.
-
-  Boolean settings must be parsed as booleans; the string "false"
-  is truthy in Elixir.
+  Blank environment values take their defaults: Dotenvy's optional
+  `:string?` type returns nil for a blank, and `env_str`, `env_list` and
+  `env_bool` apply the default.
   """
 
   use ExUnit.Case, async: true
@@ -55,9 +48,8 @@ defmodule Cyfr.RuntimeEnvReadingTest do
 
            #{Enum.map_join(leftover, "\n", fn {line, n} -> "  #{n}: #{String.trim(line)}" end)}
 
-           Use env_str./env_int./env_bool. instead. A raw `env!` with a plain
-           `:string`/`:integer`/`:boolean` type reads a present-but-empty
-           variable as a value ("" becomes 0, or false, or a truthy string)
+           Use env_str./env_list./env_bool. instead. A raw `env!` with a plain
+           `:string` type reads a present-but-empty variable as the value ""
            rather than as unset.
            """
   end
@@ -79,37 +71,6 @@ defmodule Cyfr.RuntimeEnvReadingTest do
     assert offenders == [],
            "switches read by string comparison instead of the strict parser:\n" <>
              Enum.join(offenders, "\n")
-  end
-
-  # The allowlist's empty value is its meaning: no cross-origin caller at
-  # all, which is what `.env.example` promises and what the shipped stack
-  # assigns, while an unassigned variable leaves the application's
-  # configured list standing, which a deployment's own configuration may
-  # set (`CyfrWeb.Plugs.CORS`). Read as blank-is-unset, an operator who
-  # assigned the empty allowlist got that configured list instead. It is
-  # the only read that may take the assignment for the value, so the
-  # exception cannot spread unnoticed. `Cyfr.RuntimeConfigWiringTest`
-  # loads the file for each of the three.
-  test "CYFR_CORS_ALLOWED_ORIGINS is the one read whose assigned empty value is a value" do
-    src = source()
-
-    assert src =~ ~S|env_assigned = fn key -> env!(key, :string, nil) end|
-    assert src =~ ~S|if env_assigned.("CYFR_CORS_ALLOWED_ORIGINS") do|
-    assert src =~ ~S|config :cyfr, :cors_allowed_origins, env_list.("CYFR_CORS_ALLOWED_ORIGINS")|
-
-    refute src =~ ~S|env_str.("CYFR_CORS_ALLOWED_ORIGINS"|,
-           "CYFR_CORS_ALLOWED_ORIGINS must not be read as blank-is-unset: an assigned " <>
-             "empty allowlist would read as no answer and leave the configured list standing"
-
-    read_by_assignment =
-      ~r/env_assigned\.\("([A-Z0-9_]+)"\)/
-      |> Regex.scan(src, capture: :all_but_first)
-      |> List.flatten()
-      |> Enum.uniq()
-
-    assert read_by_assignment == ["CYFR_CORS_ALLOWED_ORIGINS"],
-           "these settings read their assignment rather than their value: " <>
-             inspect(read_by_assignment)
   end
 
   # How the home is reached is one resolution of every access setting
@@ -156,8 +117,6 @@ defmodule Cyfr.RuntimeEnvReadingTest do
     assert src =~ ~S|if release_name == nil do|
     assert src =~ ~S|Locus.Config.runtime_from_env(getenv, fallback)|
     assert src =~ ~S|{:ok, runtime} -> config :locus, :runtime, runtime|
-    refute src =~ ~S|"RUNTIME_ROLE"|
-    refute src =~ ~r/runtime_boot\?|runtime_role|cyfr_boot\?/
   end
 
   # Two releases, two runtime files: the `locus` release is configured by
@@ -175,7 +134,6 @@ defmodule Cyfr.RuntimeEnvReadingTest do
       |> Enum.uniq()
 
     assert named == [], "runtime.exs names releases: #{inspect(named)}"
-    refute src =~ ~r/builder_boot\?|"builder"/
   end
 
   # The builds service is two variables read by one resolver, both or
@@ -209,9 +167,6 @@ defmodule Cyfr.RuntimeEnvReadingTest do
     assert src =~ ~S|Locus.Config.unknown_names(:runtime)|
     assert src =~ ~S|Kernel.--(Cyfr.Platform.Settings.Roster.compose_only())|
     assert src =~ ~S|Locus.Config.unknown(stray)|
-
-    # The keeper is the channel: nothing here reads a choice of another.
-    refute src =~ ~S|keeper:|
   end
 
   # Every platform setting is read through its roster entry
@@ -230,32 +185,11 @@ defmodule Cyfr.RuntimeEnvReadingTest do
     end
   end
 
-  # Dotenvy is a dependency; these are the behaviours the helpers above
-  # depend on, asserted so an upgrade that changes them fails here rather
-  # than silently changing what a blank line means.
-  describe "the Dotenvy contract the helpers rest on" do
-    test "plain types treat blank as a value" do
-      assert Dotenvy.Transformer.to!("", :integer) == 0
-      assert Dotenvy.Transformer.to!("", :boolean) == false
-      assert Dotenvy.Transformer.to!("", :string) == ""
-    end
-
-    test "the ? types treat blank as absent" do
-      assert Dotenvy.Transformer.to!("", :integer?) == nil
-      assert Dotenvy.Transformer.to!("", :boolean?) == nil
-      assert Dotenvy.Transformer.to!("", :string?) == nil
-    end
-
-    test "a real false is still false, not blank" do
-      assert Dotenvy.Transformer.to!("false", :boolean?) == false
-      assert Dotenvy.Transformer.to!("0", :boolean?) == false
-      assert Dotenvy.Transformer.to!("true", :boolean?) == true
-    end
-
-    test "a real zero survives the || default in env_int" do
-      # 0 is truthy in Elixir, so `env!(...) || default` keeps an explicit 0
-      # (CYFR_SESSION_TTL_HOURS=0 means infinite, and must not become 720).
-      assert (Dotenvy.Transformer.to!("0", :integer?) || 720) == 0
-    end
+  # Dotenvy is a dependency; this is the behaviour the helpers above rest
+  # on, asserted so an upgrade that changes it fails here rather than
+  # silently changing what a blank line means.
+  test "Dotenvy's :string? type reads a blank as absent, and :string as the value" do
+    assert Dotenvy.Transformer.to!("", :string?) == nil
+    assert Dotenvy.Transformer.to!("", :string) == ""
   end
 end

@@ -1279,13 +1279,10 @@ defmodule Cyfr.PlatformSettingsRosterTest do
       assert Arca.InstallationClaims.mode() == :ordinary
     end
 
-    test "unassigned, the CORS allowlist is the configured empty one" do
+    test "unset, the CORS allowlist is the empty one" do
       with_env(%{"CYFR_CORS_ALLOWED_ORIGINS" => nil}, fn ->
-        refute Keyword.has_key?(read_prod_config!()[:cyfr], :cors_allowed_origins)
+        assert read_prod_config!()[:cyfr][:cors_allowed_origins] == []
       end)
-
-      configured = Config.Reader.read!(Path.join(@root, "config/config.exs"), env: :prod)
-      assert configured[:cyfr][:cors_allowed_origins] == []
     end
   end
 

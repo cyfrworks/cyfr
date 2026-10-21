@@ -5,17 +5,12 @@ import Config
 if config_env() != :test do
   import Dotenvy
 
-  # Load environment variables from .env files
-  # For releases, look for .env at RELEASE_ROOT; otherwise use project root
+  # The one .env file: at RELEASE_ROOT for a release, else at the project
+  # root.
   env_dir = System.get_env("RELEASE_ROOT") || File.cwd!()
+  env_files = [Path.join(env_dir, ".env")]
 
-  env_files = [
-    Path.join(env_dir, ".env"),
-    Path.join(env_dir, ".env.#{config_env()}"),
-    Path.join(env_dir, ".env.local")
-  ]
-
-  # The names and values the .env files alone assign, read without the
+  # The names and values the .env file alone assigns, read without the
   # side effect the merged read below keeps, or nil when there is no .env
   # file to read, as in the compose container, whose .env arrives through
   # `env_file` as its process environment. The unknown-name refusal holds
@@ -35,19 +30,8 @@ if config_env() != :test do
   # Treat empty values as unset and apply defaults.
   env_str = fn key, default -> env!(key, :string?, nil) || default end
 
-  # Whether the variable is assigned at all, blank or not: `nil` only when
-  # nothing assigns it. Blank-is-unset above is the rule, because for every
-  # other setting a blank line is an operator who left it alone; this reader
-  # is for the one setting whose blank value is a value, an allowlist whose
-  # emptiness is the decision to allow nothing (CYFR_CORS_ALLOWED_ORIGINS
-  # below), and whose absence must leave the application's configured list
-  # standing, which a deployment's own configuration may set.
-  env_assigned = fn key -> env!(key, :string, nil) end
-
-  # Comma-separated lists: origins, CIDRs, egress targets, operator emails.
-  # The split-trim-reject-empty was written out five times; a list that reads
-  # one way in four places and another in the fifth is the shape of a
-  # security default that only mostly holds.
+  # Comma-separated lists: origins, CIDRs, egress targets, operator emails,
+  # each split, trimmed and stripped of empty entries by this one reader.
   env_list = fn key ->
     (env_str.(key, nil) || "")
     |> String.split(",")
@@ -59,8 +43,8 @@ if config_env() != :test do
   # storage, repo) read the same Dotenvy-merged environment this file does.
   getenv = fn key -> env_str.(key, nil) end
 
-  # A switch is `on`/`off` (or true/false, yes/no, 1/0); an unrecognised
-  # spelling refuses the boot rather than reading as the default.
+  # A switch is `on` or `off`; any other spelling refuses the boot rather
+  # than reading as the default (`Prima.EnvValue.switch/3`).
   env_bool = fn key, default ->
     case Prima.EnvValue.switch(getenv, key, default) do
       {:ok, value} -> value
@@ -75,12 +59,20 @@ if config_env() != :test do
   # `config/locus_runtime.exs` alone and never evaluates this file.
   release_name = env_str.("RELEASE_NAME", nil)
 
-  # JSON log format for structured logging (Datadog, Splunk, ELK, Loki).
-  if env_str.("CYFR_LOG_FORMAT", nil) == "json" do
-    # Only the format changes. `Config` deep-merges keyword values, so the
-    # `metadata:` roster set in config.exs carries through — repeating it
-    # here is a second copy that would go stale the first time one moved.
-    config :logger, :default_formatter, format: {Prima.JsonFormatter, :format}
+  # The log format: `json` for structured logging (Datadog, Splunk, ELK,
+  # Loki), unset for plain text; any other value refuses the boot.
+  case env_str.("CYFR_LOG_FORMAT", nil) do
+    nil ->
+      :ok
+
+    "json" ->
+      # Only the format changes. `Config` deep-merges keyword values, so the
+      # `metadata:` roster set in config.exs carries through.
+      config :logger, :default_formatter, format: {Prima.JsonFormatter, :format}
+
+    other ->
+      raise "[Cyfr] FATAL: CYFR_LOG_FORMAT=#{inspect(other)} is not a log format; " <>
+              "use json, or leave it unset for plain text."
   end
 
   # The pinned wasm-tools every component is validated with
@@ -181,7 +173,7 @@ if config_env() != :test do
   # no release does. A `CYFR_*` name the .env files assign that none of
   # them declares refuses the boot naming it, and so does one in the
   # process environment unless another program owns it (the CLI, the
-  # installer, the test harness). A retired name is refused this way.
+  # installer, the test harness).
   roster = Cyfr.Platform.Settings.Roster
 
   case roster.unknown(Map.keys(file_env || %{}), Map.keys(System.get_env())) do
@@ -457,17 +449,16 @@ if config_env() != :test do
 
     # The session cookie's and the LiveView socket's signing salts,
     # CYFR_SESSION_SALT and CYFR_LIVE_SALT, each derived from
-    # secret_key_base when unset. The derivation labels are unchanged, so
-    # a derived salt, and every session signed under it, carries over.
+    # secret_key_base under its own label when unset.
     session_salt =
       env_str.("CYFR_SESSION_SALT", nil) ||
-        :crypto.hash(:sha256, "emissary_session" <> secret_key_base)
+        :crypto.hash(:sha256, "session_salt" <> secret_key_base)
         |> Base.url_encode64(padding: false)
         |> binary_part(0, 16)
 
     live_salt =
       env_str.("CYFR_LIVE_SALT", nil) ||
-        :crypto.hash(:sha256, "live_view" <> secret_key_base)
+        :crypto.hash(:sha256, "live_salt" <> secret_key_base)
         |> Base.url_encode64(padding: false)
         |> binary_part(0, 16)
 
@@ -491,33 +482,17 @@ if config_env() != :test do
   config :arca, :base_path, paths.base_path
   config :arca, :seed_path, paths.seed_path
 
-  # Reject .env adapter settings that disagree with the compile-time CYFR_DATABASE choice.
-  built_adapter = Cyfr.RuntimeConfig.repo_adapter()
-
+  # The adapter is the build's: `config/database_choice.exs` parses
+  # CYFR_DATABASE once, when the release is compiled. A value the boot reads
+  # is held to the built one (`Arca.adapter_facts/0`), and any other value,
+  # an unknown one among them, refuses.
+  built_database = Atom.to_string(Arca.adapter_facts().adapter)
   requested_database = getenv.("CYFR_DATABASE")
 
-  requested_adapter =
-    case requested_database && String.downcase(requested_database) do
-      nil ->
-        built_adapter
-
-      "" ->
-        built_adapter
-
-      "sqlite" ->
-        Ecto.Adapters.SQLite3
-
-      "postgres" ->
-        Ecto.Adapters.Postgres
-
-      other ->
-        raise ~s([Cyfr] FATAL: unknown CYFR_DATABASE=#{other}; expected "sqlite" or "postgres")
-    end
-
-  if requested_adapter != built_adapter do
+  if requested_database && String.downcase(requested_database) != built_database do
     raise """
-    [Cyfr] FATAL: CYFR_DATABASE asks for #{inspect(requested_adapter)} but this \
-    release was built for #{inspect(built_adapter)}.
+    [Cyfr] FATAL: CYFR_DATABASE=#{requested_database} but this release was built \
+    for #{built_database}.
 
     The database adapter is chosen when the release is COMPILED, not when it \
     boots, so it is the one setting `.env` cannot change. Set CYFR_DATABASE in \
@@ -532,8 +507,8 @@ if config_env() != :test do
   # never bleed into a Postgres build and vice versa. SQLite's busy timeout
   # is config.exs's: it is the pool's lock-wait deadline
   # (`Arca.Repo.busy_timeout_ms/0`), not a deployment setting.
-  case built_adapter do
-    Ecto.Adapters.SQLite3 ->
+  case Arca.adapter_facts().adapter do
+    :sqlite ->
       pool_size =
         case Cyfr.RuntimeConfig.resolve_pool_size(getenv) do
           {:ok, pool_size} -> pool_size
@@ -545,7 +520,7 @@ if config_env() != :test do
         pool_size: pool_size,
         journal_mode: :wal
 
-    Ecto.Adapters.Postgres ->
+    :postgres ->
       # A Postgres build carries no connection config from config.exs, so a
       # CYFR_DATABASE_URL is required — its absence is a hard boot error
       # rather than a silent attempt against a default localhost. (The
@@ -573,19 +548,11 @@ if config_env() != :test do
       raise "[Cyfr] FATAL: #{message}"
   end
 
-  # Browser CORS allowlist: assigned, it is the allowlist it spells, and
-  # assigned empty it is the empty allowlist — no cross-origin caller at
-  # all, which is what a same-origin deployment sets and what
-  # `.env.example` promises. Unassigned, the application's configured list
-  # stands: `config/config.exs`'s empty one, or the list a deployment's
-  # own configuration names (`CyfrWeb.Plugs.CORS`), which an absent
-  # variable must not erase. The read is the assignment, not the value: an
-  # assigned empty value is a decision, and `env_str` would read it as no
-  # answer. A wildcard is refused for a release that has authentication
-  # configured (`Cyfr.Application.cors_enforcement/3`).
-  if env_assigned.("CYFR_CORS_ALLOWED_ORIGINS") do
-    config :cyfr, :cors_allowed_origins, env_list.("CYFR_CORS_ALLOWED_ORIGINS")
-  end
+  # Browser CORS allowlist (`CyfrWeb.Plugs.CORS`): the origins it spells;
+  # unset or empty, no cross-origin caller at all, which a same-origin
+  # deployment needs. A wildcard is refused for a release that has
+  # authentication configured (`Cyfr.Application.cors_enforcement/3`).
+  config :cyfr, :cors_allowed_origins, env_list.("CYFR_CORS_ALLOWED_ORIGINS")
 
   # Private egress: the hostnames, IPs or CIDRs on the private network that
   # the *server's own* outbound requests may reach — an MCP server on the
@@ -758,15 +725,16 @@ if config_env() != :test do
       issuer: env_str.("CYFR_COSIGN_ISSUER", nil)
   end
 
-  # Prometheus metrics — the /metrics endpoint is unauthenticated, so it is
-  # opt-in. Bind to a private interface or proxy-allowlist it when enabled.
-  if env_bool.("CYFR_PROMETHEUS_METRICS", false) do
-    config :cyfr, :prometheus_metrics_enabled, true
+  # Prometheus metrics: the /metrics endpoint is unauthenticated, so it is
+  # off unless enabled (on in a dev build, `config/dev.exs`). Set, the
+  # switch decides either way; bind to a private interface or
+  # proxy-allowlist the endpoint when it is on.
+  if getenv.("CYFR_PROMETHEUS_METRICS") do
+    config :cyfr, :prometheus_metrics_enabled, env_bool.("CYFR_PROMETHEUS_METRICS", false)
   end
 
   # Bearer token for the /metrics scrape. Unset means the operator chose
-  # network-level protection (private bind / proxy allowlist) — the
-  # endpoint's original posture.
+  # network-level protection (a private bind or a proxy allowlist).
   if metrics_token = env_str.("CYFR_METRICS_TOKEN", nil) do
     config :cyfr, :metrics_token, metrics_token
   end

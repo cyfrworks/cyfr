@@ -238,9 +238,9 @@ defmodule Cyfr.DocsDriftTest do
   end
 
   test "the env template states the CORS allowlist's contract as the boot holds it" do
-    # Absent, the configured origins stand; blank is the empty allowlist;
-    # the boot refuses the wildcard once sign-in is configured, never the
-    # absence (runtime_config_wiring_test.exs holds the three readings).
+    # Unset or blank is the empty allowlist; the boot refuses the wildcard
+    # once sign-in is configured (runtime_config_wiring_test.exs holds the
+    # readings).
     lines = Path.join(@repo_root, ".env.example") |> File.read!() |> String.split("\n")
     at = Enum.find_index(lines, &(&1 == "CYFR_CORS_ALLOWED_ORIGINS="))
     assert at, ".env.example assigns no empty CYFR_CORS_ALLOWED_ORIGINS"
@@ -253,11 +253,8 @@ defmodule Cyfr.DocsDriftTest do
       |> Enum.reverse()
       |> Enum.map_join(" ", &String.trim_leading(&1, "# "))
 
-    assert comment =~
-             "With the line removed, the origins the server's own configuration names stand"
-
+    assert comment =~ "Empty or unset admits no cross-origin client"
     assert comment =~ "refuses to boot on the wildcard `*` alone"
-    refute comment =~ ~r/removed[^.]*refuses to boot/
   end
 
   test "the glossary's directories, compose services and images are the tree's" do

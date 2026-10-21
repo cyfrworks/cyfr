@@ -37,7 +37,7 @@ value is literal throughout, an open `$(` included.
 | `CYFR_CLUSTER_DNS_QUERY` | A cell's discovery by DNS: the headless service whose addresses are the members, each named `<CYFR_CLUSTER_NODE_BASENAME>@<address>`. |
 | `CYFR_CLUSTER_NODE_BASENAME` | The node basename of the members `CYFR_CLUSTER_DNS_QUERY` finds. |
 | `CYFR_CLUSTER_NODES` | A cell's members by name, comma-separated (`cyfr@10.0.0.1,cyfr@10.0.0.2`). |
-| `CYFR_CORS_ALLOWED_ORIGINS` | The browser CORS allowlist, comma-separated origins. Assigned empty, as `cyfr init` writes it, it admits no cross-origin caller, which the shipped stack never needs; unassigned, the application's configured list stands, empty unless the deployment's own configuration names one. A release with sign-in configured refuses to boot on a wildcard. |
+| `CYFR_CORS_ALLOWED_ORIGINS` | The browser CORS allowlist, comma-separated origins. Empty or unset (`cyfr init` writes it empty), it admits no cross-origin caller, which the shipped stack never needs. A release with sign-in configured refuses to boot on a wildcard. |
 | `CYFR_COSIGN_IDENTITY` | Keyless OCI signature verification: the regular expression the signing certificate's identity must match, with `CYFR_COSIGN_ISSUER`; a missing keyless constraint refuses verification. |
 | `CYFR_COSIGN_ISSUER` | Keyless OCI signature verification: the regular expression the signing certificate's issuer must match, with `CYFR_COSIGN_IDENTITY`. |
 | `CYFR_COSIGN_KEY` | Key-based OCI signature verification: the path of a file holding the cosign public key, readable by the server; a value that names no readable file (a KMS URI among them) refuses verification as `unreadable_key`. |

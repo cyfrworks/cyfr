@@ -159,7 +159,7 @@ defmodule Cyfr.EnvFilesTest do
 
     test "the refusal names the file that holds it, after files that do not", %{dir: dir} do
       clean = env_file(dir, ["A=a"])
-      held = Path.join(dir, ".env.local")
+      held = Path.join(dir, "second.env")
       File.write!(held, "B=b\nC=$(\n")
 
       message =
@@ -174,7 +174,7 @@ defmodule Cyfr.EnvFilesTest do
       dir: dir
     } do
       shared = env_file(dir, ["SHARED=base"])
-      local = Path.join(dir, ".env.local")
+      local = Path.join(dir, "second.env")
 
       for {line, said} <- [
             {"B=$(secret", "opens a $( it does not close on that line."},
@@ -196,7 +196,7 @@ defmodule Cyfr.EnvFilesTest do
 
     test "an earlier file that fails another way is reported as Dotenvy reports it", %{dir: dir} do
       broken = env_file(dir, [~s[A="unterminated]])
-      held = Path.join(dir, ".env.local")
+      held = Path.join(dir, "second.env")
       File.write!(held, "B=$(\n")
 
       message =

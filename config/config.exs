@@ -336,17 +336,15 @@ config :arca, Arca.Retention,
 # `:platform_ceiling` is a structured policy override
 # (`Sanctum.Policy.Ceiling`), not a scalar knob.
 
-# CORS allowlist — empty by default: no cross-origin browser caller, which
-# a same-origin deployment needs. A deployment's own configuration may name
-# a list here, which an unassigned CYFR_CORS_ALLOWED_ORIGINS leaves
-# standing; assigned, the variable's list replaces it, and assigned empty
-# it is the empty allowlist (`config/runtime.exs`). The boot guard in
+# CORS allowlist: empty, no cross-origin browser caller, which a
+# same-origin deployment needs. `config/runtime.exs` writes
+# CYFR_CORS_ALLOWED_ORIGINS's list over it. The boot guard in
 # Cyfr.Application refuses a wildcard once authentication is configured.
 config :cyfr, :cors_allowed_origins, []
 
-# Prometheus metrics — off by default because the /metrics endpoint is
-# unauthenticated. Opt in via CYFR_PROMETHEUS_METRICS=true (dev.exs enables it
-# for local development).
+# Prometheus metrics: off, because the /metrics endpoint is
+# unauthenticated; CYFR_PROMETHEUS_METRICS=on turns them on (dev.exs turns
+# them on for local development).
 config :cyfr, :prometheus_metrics_enabled, false
 
 # Sanctum Configuration
