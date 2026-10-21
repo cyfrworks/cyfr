@@ -268,8 +268,12 @@ defmodule Sanctum.Session do
       {:ok, _local} ->
         {:ok, nil}
 
+      # A person's identity row is minted with their person row: one
+      # missing is damage. An id of another shape names no person here.
       {:error, :not_found} ->
-        {:ok, nil}
+        if Prima.PersonId.person?(user_id),
+          do: {:error, {:corrupt, :person_identity}},
+          else: {:ok, nil}
 
       {:error, _unanswered} ->
         {:error, :unavailable}

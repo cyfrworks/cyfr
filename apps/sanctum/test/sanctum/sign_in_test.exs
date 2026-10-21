@@ -313,6 +313,28 @@ defmodule Sanctum.SignInTest do
   end
 
   describe "the person's keys, minted with the person" do
+    test "a person whose identity row is missing is damage, never a local person" do
+      i = info(21)
+      assert {:ok, user} = SignIn.admitted(i, :allowed)
+      {1, _} = Arca.Repo.delete_all(from(p in PersonIdentity, where: p.user_id == ^user.id))
+
+      assert {:error, {:corrupt, :person_identity}} = SignIn.admitted(i, :allowed)
+
+      ctx =
+        Sanctum.Context.build(
+          user_id: user.id,
+          provider: "github",
+          email: user.email,
+          athanor_id: user.personal_athanor_id,
+          permissions: Sanctum.Atoms.person_permissions(),
+          auth_method: :oidc,
+          authenticated: true
+        )
+
+      assert {:error, {:corrupt, :person_identity}} = Sanctum.Session.create(ctx)
+      assert {:error, {:corrupt, :person_identity}} = Sanctum.Recovery.status(ctx)
+    end
+
     test "a first sign-in writes one local key set, and a later sign-in keeps it" do
       i = info(20)
       assert {:ok, user} = SignIn.admitted(i, :allowed)
@@ -587,7 +609,7 @@ defmodule Sanctum.SignInTest do
           :device_pairing,
           Sanctum.Pairing.invitation_change(digest)
         )
-        |> Sanctum.Pairing.begin(%{key_digest: digest})
+        |> Sanctum.Pairing.begin(%{"key_digest" => digest})
 
       source = "192.0.2.#{rem(System.unique_integer([:positive]), 250) + 1}"
       glass = Sanctum.Context.build(%{authenticated: false, client_ip: source})
@@ -596,11 +618,13 @@ defmodule Sanctum.SignInTest do
       {:ok, %{challenge: challenge}} =
         Sanctum.Pairing.complete(glass, invitation.invitation_secret, submission)
 
+      proof = Prima.DeviceCert.Proof.encode(Prima.DeviceCert.Proof.sign(challenge, private))
+
       {:ok, %{client_id: client_id}} =
         Sanctum.Pairing.complete(
           glass,
           invitation.invitation_secret,
-          Map.put(submission, :proof, Prima.DeviceCert.Proof.sign(challenge, private))
+          Map.put(submission, :proof, proof)
         )
 
       client_id

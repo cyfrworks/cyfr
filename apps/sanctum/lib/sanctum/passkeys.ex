@@ -200,11 +200,12 @@ defmodule Sanctum.Passkeys do
   defp registrant(%Context{}), do: {:error, :unauthenticated}
 
   # The person's identity row: local, or remote, whose head is read fresh
-  # wherever a passkey of theirs is bound or proves anything.
+  # wherever a passkey of theirs is bound or proves anything. It is minted
+  # with the person row, so one missing is damage.
   defp identity(user_id) do
     case Arca.PersonIdentities.get(Prima.Actor.system(), user_id) do
       {:ok, identity} -> {:ok, identity}
-      {:error, :not_found} -> {:error, :unavailable}
+      {:error, :not_found} -> {:error, {:corrupt, :person_identity}}
       {:error, _unanswered} -> {:error, :unavailable}
     end
   end

@@ -140,7 +140,7 @@ defmodule Sanctum.Consent.AuthzTest do
         Sanctum.Pairing.invitation_change(digest)
       )
 
-    {:ok, invitation} = Sanctum.Pairing.begin(confirmed, %{key_digest: digest})
+    {:ok, invitation} = Sanctum.Pairing.begin(confirmed, %{"key_digest" => digest})
 
     {:ok, %{challenge: challenge}} =
       Sanctum.Pairing.complete(glass, invitation.invitation_secret, %{device_key: device_key})
@@ -148,7 +148,7 @@ defmodule Sanctum.Consent.AuthzTest do
     {:ok, %{client_id: client_id, certificate: certificate}} =
       Sanctum.Pairing.complete(glass, invitation.invitation_secret, %{
         device_key: device_key,
-        proof: Prima.DeviceCert.Proof.sign(challenge, private)
+        proof: Prima.DeviceCert.Proof.encode(Prima.DeviceCert.Proof.sign(challenge, private))
       })
 
     {:ok, connect} =
@@ -557,9 +557,7 @@ defmodule Sanctum.Consent.AuthzTest do
     test "a key, a schedule and the system plane are refused exactly as at the door" do
       for method <- [:api_key, :scheduled, :system] do
         assert {:error, {:surface_not_permitted, ^method}} =
-                 Authz.authorize_interactive_in_chain(
-                   ctx(auth_method: method, plane: :guest, api_key_type: :admin)
-                 )
+                 Authz.authorize_interactive_in_chain(ctx(auth_method: method, plane: :guest))
       end
     end
 
@@ -575,7 +573,7 @@ defmodule Sanctum.Consent.AuthzTest do
       no_expiry = %{commit_digest: @digest}
 
       assert Authz.authorize(
-               ctx(auth_method: :api_key, api_key_type: :admin),
+               ctx(auth_method: :api_key),
                request(key_capability: no_expiry)
              ) ==
                {:error, :capability_expired}
@@ -632,7 +630,7 @@ defmodule Sanctum.Consent.AuthzTest do
 
   describe "api keys" do
     test "an admin key with no capability is rejected" do
-      admin = ctx(auth_method: :api_key, api_key_type: :admin)
+      admin = ctx(auth_method: :api_key)
       assert Authz.authorize(admin, request()) == {:error, :no_capability}
     end
 

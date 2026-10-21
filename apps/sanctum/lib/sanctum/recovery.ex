@@ -550,9 +550,10 @@ defmodule Sanctum.Recovery do
   rotation in progress as `%{request_id, phase}`, or nil; and `doors`, each
   linked door as `%{key, provider, issuer, subject}`.
 
-  Nothing in it is a seed, a sealed value or a staged key. A person with
-  no identity row is local and unenrolled. Refusals: `:unauthenticated`,
-  `:guest_plane`, `:unavailable`.
+  Nothing in it is a seed, a sealed value or a staged key. Refusals:
+  `:unauthenticated`, `:guest_plane`, `:unavailable`, and `{:corrupt,
+  :person_identity}` for a person whose identity row, minted with their
+  person row, is missing.
   """
   @spec status(Context.t()) :: {:ok, map()} | {:error, term()}
   def status(%Context{} = ctx) do
@@ -581,8 +582,9 @@ defmodule Sanctum.Recovery do
       {:ok, row} ->
         {:ok, Map.take(row, [:provenance, :identifier, :enrollment, :head_hash])}
 
+      # Minted with the person row: one missing is damage.
       {:error, :not_found} ->
-        {:ok, %{provenance: "local", identifier: nil, enrollment: "none", head_hash: nil}}
+        {:error, {:corrupt, :person_identity}}
 
       {:error, _unanswered} ->
         {:error, :unavailable}

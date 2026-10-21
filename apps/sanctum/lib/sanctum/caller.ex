@@ -795,7 +795,7 @@ defmodule Sanctum.Caller do
   bound with the directory unable to refresh it, the work pauses as
   `:identity_stale` and the pairing stands. A head that moved retires the
   device's certificate, which its next request's check refuses
-  (`Sanctum.DeviceCerts.verify_request/3`).
+  (`Sanctum.DeviceCerts.verify_request/2`).
 
   Any other context — one an auth provider synthesized, a frame's, a
   webhook, the system's own — keeps its establishment contract and is
@@ -899,6 +899,14 @@ defmodule Sanctum.Caller do
     end
   end
 
+  # A person whose identity row is missing: damage, logged by the person
+  # and refused as `refusal`.
+  defp missing_identity(user_id, refusal) do
+    Logger.error("[Sanctum.Caller] person #{user_id} has no identity row; refusing as #{refusal}")
+
+    {:error, refusal}
+  end
+
   # A remote person's session stands only on their identity's fresh head
   # (`Sanctum.IdentityFreshness.fresh?/2`): past the bound with the
   # directory unable to refresh it, the work pauses as `:identity_stale`,
@@ -906,7 +914,8 @@ defmodule Sanctum.Caller do
   # the fresh head's, or to none, is revoked here and then: a refresh that
   # retired its epoch deleted it already, and one minted against an epoch
   # the head no longer names never stands. A local person's session reads
-  # no directory.
+  # no directory. A person's identity row is minted with their person row,
+  # so a person without one stands on nothing.
   defp identity_current(user_id, hash) when is_binary(user_id) and is_binary(hash) do
     case Arca.PersonIdentities.get(Prima.Actor.system(), user_id) do
       {:ok, %{provenance: "remote", identifier: identifier}} when is_binary(identifier) ->
@@ -919,7 +928,9 @@ defmodule Sanctum.Caller do
         :ok
 
       {:error, :not_found} ->
-        :ok
+        if Prima.PersonId.person?(user_id),
+          do: missing_identity(user_id, :unauthenticated),
+          else: :ok
 
       {:error, _unanswered} ->
         {:error, :unavailable}
@@ -1038,7 +1049,7 @@ defmodule Sanctum.Caller do
   # A remote person's device stands on their identity's fresh head as their
   # session does: past the bound with the directory unable to refresh it,
   # the work pauses and the pairing stands. A local person's device reads
-  # no directory.
+  # no directory; a person without an identity row stands on nothing.
   defp device_identity(user_id) when is_binary(user_id) do
     case Arca.PersonIdentities.get(Prima.Actor.system(), user_id) do
       {:ok, %{provenance: "remote", identifier: identifier}} when is_binary(identifier) ->
@@ -1055,7 +1066,9 @@ defmodule Sanctum.Caller do
         :ok
 
       {:error, :not_found} ->
-        :ok
+        if Prima.PersonId.person?(user_id),
+          do: missing_identity(user_id, :not_standing),
+          else: :ok
 
       {:error, _unanswered} ->
         {:error, :unavailable}

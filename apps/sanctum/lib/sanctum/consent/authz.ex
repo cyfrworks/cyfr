@@ -355,7 +355,7 @@ defmodule Sanctum.Consent.Authz do
   capability can substitute (a digest-pinned capability is meaningless
   without a digest-shaped act). A paired device's standing is read on
   its channel, on every request, before the gate is asked
-  (`Sanctum.DeviceCerts.verify_request/3`).
+  (`Sanctum.DeviceCerts.verify_request/2`).
   """
   @spec authorize_interactive(Context.t()) :: {:ok, :interactive} | {:error, refusal()}
   def authorize_interactive(%Context{} = ctx) do
@@ -516,7 +516,8 @@ defmodule Sanctum.Consent.Authz do
   # transaction (a `consume/2`, or a caller that holds one open) the
   # directory is never read: the cache answers, within its bound, as the
   # request's own revalidation outside the transaction left it. A local
-  # person, and a person with no identity row, binds none.
+  # person binds none; a person whose identity row, minted with their
+  # person row, is missing is damage.
   defp identity_epoch(user_id, mode) do
     case Arca.PersonIdentities.get(Prima.Actor.system(), user_id) do
       {:ok, %{provenance: "remote", identifier: identifier}} when is_binary(identifier) ->
@@ -535,7 +536,9 @@ defmodule Sanctum.Consent.Authz do
         {:ok, nil}
 
       {:error, :not_found} ->
-        {:ok, nil}
+        if Prima.PersonId.person?(user_id),
+          do: {:error, {:corrupt, :person_identity}},
+          else: {:ok, nil}
 
       {:error, _unanswered} ->
         {:error, :unavailable}

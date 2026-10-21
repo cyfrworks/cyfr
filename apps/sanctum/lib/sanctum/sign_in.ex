@@ -169,13 +169,13 @@ defmodule Sanctum.SignIn do
     end
   end
 
-  # The person's provenance, as their identity row records it: `remote`,
-  # `local`, or `nil` for a person with no identity row (a local person,
-  # who holds no key here yet). A store that cannot answer refuses.
+  # The person's provenance, as their identity row records it: `remote` or
+  # `local`. The row is minted with the person row, so one missing is
+  # damage; a store that cannot answer refuses.
   defp provenance(user_id) do
     case Arca.PersonIdentities.get(Prima.Actor.system(), user_id) do
       {:ok, %{provenance: provenance}} -> {:ok, provenance}
-      {:error, :not_found} -> {:ok, nil}
+      {:error, :not_found} -> {:error, {:corrupt, :person_identity}}
       {:error, _unanswered} -> {:error, :unavailable}
     end
   end
