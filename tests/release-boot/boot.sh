@@ -5,7 +5,7 @@
 # The `cyfr` release, built as `Dockerfile` builds it (MIX_ENV=prod, the
 # adapter chosen at compile time by CYFR_DATABASE, `mix release cyfr`),
 # booted against a FRESH database of that adapter with auto-migration on
-# (tests/release-boot/release.sh). Seven cases, in order:
+# (tests/release-boot/release.sh). Six cases, in order:
 #
 #   boots    the deployment file `cyfr init` writes, a local home — the
 #            stack's keys, the empty CORS allowlist, authentication
@@ -14,8 +14,12 @@
 #            schema before it starts) and answers /api/health/ready, the
 #            readiness check the image's HEALTHCHECK runs. A boot that
 #            raises, exits or never answers fails here, with its whole log.
-#            Then a public home `cyfr init --access public --domain
-#            cyfr.example.com` writes answers as https://cyfr.example.com
+#            `Cyfr.Release.live_slots/0`, the offline read `cyfr update`
+#            makes before it snapshots a cell, run as the update runs it
+#            (`bin/cyfr eval`, which starts no application), answers the
+#            running cell's one slot under this release, and none once the
+#            cell has stopped. Then a public home `cyfr init --access public
+#            --domain cyfr.example.com` writes answers as https://cyfr.example.com
 #            (`Sanctum.Person.home()`), with nothing written for it but the
 #            test's ports, and its proxy listener answers readiness.
 #
@@ -39,13 +43,6 @@
 #            without the compose file's assertion, while the same address
 #            binds there and the same boot with the assertion in its
 #            environment configures.
-#
-#   live slots  `Cyfr.Release.live_slots/0`, the offline read `cyfr update`
-#            makes before it snapshots a cell, run as the update runs it
-#            (`bin/cyfr eval`, which starts no application): against the
-#            running cell of the first case it answers that cell's one
-#            slot under this release, and once the cell has stopped it
-#            answers none.
 #
 #   restores a cell's backup, which is four parts copied while the cell is
 #            stopped: the database, the storage root, the keyring and the
@@ -93,11 +90,12 @@
 # Usage:  tests/release-boot/boot.sh <sqlite|postgres>
 #
 # Postgres needs CYFR_DATABASE_URL pointing at an EXISTING database with no
-# schema in it, as a role that may create databases: the third case creates
-# two databases beside it, named for this run (`pg_run_database`), and drops
-# them when it ends; it drops no database it did not create, so runs that
-# share one server and one URL leave each other's alone. A run killed before
-# its cleanup leaves its two behind, under its own names. The dump and the
+# schema in it, as a role that may create databases: the boots case's public
+# home and the restores case create three databases beside it, named for
+# this run (`pg_run_database`), and drop them when it ends; it drops no
+# database it did not create, so runs that share one server and one URL
+# leave each other's alone. A run killed before its cleanup leaves its three
+# behind, under its own names. The dump and the
 # restore run in the postgres:18.6 image, with this host's network. The
 # cells' deployment files come from the `cyfr` command line, built from
 # apps/codex with this host's go, whose access switch asks Docker for the
@@ -126,7 +124,7 @@ pg_url() {
   echo "${base%/*}/$1$query"
 }
 
-# The name of this run's database for `$1` (cell, restore):
+# The name of this run's database for `$1` (address, cell, restore):
 # `<database>_<run>_$1`, the name CYFR_DATABASE_URL holds cut so the whole
 # fits in 63 bytes. PostgreSQL truncates a longer identifier without an
 # error, which could make two of this run's names, or another run's, one.
@@ -437,7 +435,7 @@ echo "the boot exited $status, naming the wildcard:"
 grep -o "FATAL: CORS wildcard.*" "$REFUSAL_LOG" | head -1
 
 # ---------------------------------------------------------------------------
-# Case: every boot refusal of the access vectors, and the bind a namespace
+# Case 3: every boot refusal of the access vectors, and the bind a namespace
 # shows the release refusing
 # ---------------------------------------------------------------------------
 
@@ -557,7 +555,7 @@ docker rm -f "$NS_HOLDER" >/dev/null
 NS_HOLDER=""
 
 # ---------------------------------------------------------------------------
-# Case 3: a backup of the four parts, restored and booted elsewhere
+# Case 4: a backup of the four parts, restored and booted elsewhere
 # ---------------------------------------------------------------------------
 
 step "a cell of its own, with its keyring kept apart from its deployment file"
@@ -603,7 +601,7 @@ athanor_id="$(field "$person" athanor_id)"
 echo "the cell holds $tincture_path, $thread_id and the vault entry restore-proof"
 
 # The tincture page as the person's session fetches it, and the thread's
-# messages over /mcp, as the person's client reads them.
+# events over /mcp, as the person's client replays them.
 serves() {
   local what="$1"
   local page status
@@ -619,20 +617,25 @@ serves() {
   esac
 
   local body answer
-  body="$(printf '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"thread","arguments":{"action":"messages","thread":"%s"},"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientInfo":{"name":"release-boot","version":"0"},"io.modelcontextprotocol/clientCapabilities":{}}}}' "$thread_id")"
+  body="$(printf '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"thread","arguments":{"action":"events","thread":"%s"},"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientInfo":{"name":"release-boot","version":"0"},"io.modelcontextprotocol/clientCapabilities":{}}}}' "$thread_id")"
   answer="$(curl -fsS -m 30 -X POST "http://127.0.0.1:$PORT/mcp" \
     -H "authorization: Bearer $token" -H 'content-type: application/json' \
     -H 'accept: application/json, text/event-stream' -H 'mcp-protocol-version: 2026-07-28' \
     -H 'mcp-method: tools/call' -H 'mcp-name: thread' -d "$body")" ||
     fail "$what: the thread was not served over /mcp"
+  # The replay from the start: the thread's one message, and the cursor
+  # at its seq.
   if printf '%s' "$answer" | python3 -c '
 import json, sys
 result = json.load(sys.stdin)["result"]
-messages = json.loads(result["content"][0]["text"])["messages"]
-sys.exit(0 if not result["isError"] and [m["content"] for m in messages] == ["the backup proof thread"] else 1)'; then
-    echo "$what: thread.messages -> the thread's message"
+events = json.loads(result["content"][0]["text"])
+messages = events["messages"]
+sys.exit(0 if not result["isError"] and events["thread"] == sys.argv[1]
+         and [m["content"] for m in messages] == ["the backup proof thread"]
+         and events["cursor"] == messages[-1]["seq"] else 1)' "$thread_id"; then
+    echo "$what: thread.events -> the thread's message"
   else
-    fail "$what: thread.messages answered without the message: $answer"
+    fail "$what: thread.events answered without the message: $answer"
   fi
 }
 serves "the cell"
@@ -683,14 +686,14 @@ serves "the copy"
 server_stop
 
 # ---------------------------------------------------------------------------
-# Case 4: the same backup, declared restored
+# Case 5: the same backup, declared restored
 # ---------------------------------------------------------------------------
 
 # What `$1` answers to the person's pre-backup session over /mcp: the HTTP
-# status of a `thread.messages` call.
+# status of a `thread.events` call.
 mcp_status() {
   local body
-  body="$(printf '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"thread","arguments":{"action":"messages","thread":"%s"},"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientInfo":{"name":"release-boot","version":"0"},"io.modelcontextprotocol/clientCapabilities":{}}}}' "$thread_id")"
+  body="$(printf '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"thread","arguments":{"action":"events","thread":"%s"},"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientInfo":{"name":"release-boot","version":"0"},"io.modelcontextprotocol/clientCapabilities":{}}}}' "$thread_id")"
   curl -sS -m 30 -o "$WORK/mcp" -w '%{http_code}' -X POST "http://127.0.0.1:$PORT/mcp" \
     -H "authorization: Bearer $token" -H 'content-type: application/json' \
     -H 'accept: application/json, text/event-stream' -H 'mcp-protocol-version: 2026-07-28' \
