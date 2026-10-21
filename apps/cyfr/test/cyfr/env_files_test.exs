@@ -234,7 +234,8 @@ defmodule Cyfr.EnvFilesTest do
       "CYFR_ACCESS" => "local",
       "CYFR_DATABASE" => nil,
       "CYFR_COSIGN_KEY" => nil,
-      "CYFR_COSIGN_PASSWORD" => nil
+      "CYFR_COSIGN_IDENTITY" => nil,
+      "CYFR_COSIGN_ISSUER" => nil
     }
 
     previous = Map.new(env, fn {k, _} -> {k, System.get_env(k)} end)
@@ -262,18 +263,19 @@ defmodule Cyfr.EnvFilesTest do
     test "a .env value holding a $(…) reaches the configuration as written, and nothing runs",
          %{dir: dir, marker: marker} do
       env_file(dir, [
-        "CYFR_COSIGN_KEY=/keys/cosign.key",
-        ~s[CYFR_COSIGN_PASSWORD="pa$(touch #{marker})ss"]
+        "CYFR_COSIGN_ISSUER=https://issuer.example",
+        ~s[CYFR_COSIGN_IDENTITY="pa$(touch #{marker})ss"]
       ])
 
       config = with_release_env(dir, &read_prod_config!/0)
 
-      assert config[:cyfr][:sigstore][:password] == "pa$(touch #{marker})ss"
+      assert config[:cyfr][:sigstore][:identity] == "pa$(touch #{marker})ss"
       refute File.exists?(marker)
     end
 
     test "a $( not closed on its line refuses the boot by file and line", %{dir: dir} do
-      path = env_file(dir, ["CYFR_COSIGN_KEY=/keys/cosign.key", "CYFR_COSIGN_PASSWORD=pa$(ss"])
+      path =
+        env_file(dir, ["CYFR_COSIGN_ISSUER=https://issuer.example", "CYFR_COSIGN_IDENTITY=pa$(ss"])
 
       message =
         with_release_env(dir, fn ->

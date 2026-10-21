@@ -714,8 +714,7 @@ if config_env() != :test do
   if cosign_key = env_str.("CYFR_COSIGN_KEY", nil) do
     config :cyfr, :sigstore,
       verification: :keyed,
-      key_path: cosign_key,
-      password: env_str.("CYFR_COSIGN_PASSWORD", nil)
+      key_path: cosign_key
   else
     config :cyfr, :sigstore,
       verification: :keyless,
