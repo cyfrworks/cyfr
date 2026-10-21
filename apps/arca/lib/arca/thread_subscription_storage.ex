@@ -109,28 +109,4 @@ defmodule Arca.ThreadSubscriptionStorage do
   # thread or person; anything that is not an actor at all matches no head
   # and raises, so a context cannot be read as "does not follow".
   def follows?(%Prima.Actor{}, _thread_id, _user_id), do: false
-
-  @doc """
-  Drop every follow this person holds in the athanor — what leaving it
-  owes this table. A follow names nothing that outlives the seat; left
-  standing, it would resume the moment the person is re-added.
-
-  Takes the athanor id directly (tenant first), like `follows?/3`: the
-  caller is the membership removal, which holds no context focused on the
-  athanor being left. Strict — the leave reports a sweep the store could
-  not do rather than answering "done" over surviving rows.
-  """
-  @spec unfollow_all(Prima.Actor.t(), String.t()) :: :ok | {:error, term()}
-  def unfollow_all(%Prima.Actor{athanor_id: athanor_id}, user_id)
-      when is_binary(athanor_id) and athanor_id != "" and is_binary(user_id) do
-    Arca.Repo.Errors.with_db_rescue("Arca.ThreadSubscriptionStorage.unfollow_all", fn ->
-      from(s in ThreadSubscription, where: s.athanor_id == ^athanor_id and s.user_id == ^user_id)
-      |> Arca.Repo.delete_all()
-
-      :ok
-    end)
-    |> Arca.Data.project()
-  end
-
-  def unfollow_all(%Prima.Actor{}, _user_id), do: {:error, :no_athanor}
 end

@@ -630,25 +630,6 @@ defmodule Arca.PendingConfirmationsTest do
       assert {:ok, %{state: "voided"}} = PendingConfirmations.get(actor, rec.id)
       assert {:error, :voided} = PendingConfirmations.consume(actor, secret, expected(rec))
     end
-
-    test "void_for/2 voids what a client confirmed, in the actor's athanor only, naming refs", %{
-      actor: actor
-    } do
-      client = client!(actor)
-      rec = record(actor)
-      {:ok, _} = open(actor, rec)
-
-      {:ok, _} =
-        PendingConfirmations.confirm(actor, rec.id, %{proof: "email_code", client_id: client.id})
-
-      other = Prima.Actor.in_athanor("ath_cnf_other")
-      assert {:ok, []} = PendingConfirmations.void_for(other, {:paired_client, client.id})
-      assert {:ok, [ref]} = PendingConfirmations.void_for(actor, {:paired_client, client.id})
-      assert ref == rec.id
-
-      assert {:error, :cross_tenant} =
-               PendingConfirmations.void_for(actor, {:passkey, "psk_x"})
-    end
   end
 
   describe "the member fence" do

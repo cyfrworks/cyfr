@@ -370,7 +370,7 @@ defmodule Compendium.Provenance do
            Arca.get_json(Prima.Actor.system(), prefix ++ [ComponentPath.manifest_name()]),
          {:ok, bytes} <-
            Arca.get(Prima.Actor.system(), prefix ++ [ComponentPath.wasm_name(type)]) do
-      digest = Prima.Wasm.compute_digest(bytes)
+      digest = Prima.Digest.sha256(bytes)
       Compendium.ReleaseDigest.compute(digest, Prima.Manifest.decode(manifest))
     else
       {:error, :not_found} -> {:error, :not_shipped}

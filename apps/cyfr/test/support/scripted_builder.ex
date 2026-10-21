@@ -72,7 +72,7 @@ defmodule Cyfr.Test.ScriptedBuilder do
   @doc "The service key the vectors are signed under, its 32 bytes."
   @spec key() :: <<_::256>>
   def key do
-    {:ok, key} = BuilderProtocol.decode_key(@fixture["key_hex"])
+    {:ok, key} = Prima.MacEnvelope.decode_root(@fixture["key_hex"])
     key
   end
 

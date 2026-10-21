@@ -37,6 +37,7 @@ defmodule Emissary.Web.TinctureDataControllerTest do
   import Prima.Test.Wait
 
   alias Prima.Canvas.Shape
+  alias Prima.Test.EventStream
   alias Prima.TinctureWire
   alias Sanctum.TinctureAuth
 
@@ -889,7 +890,7 @@ defmodule Emissary.Web.TinctureDataControllerTest do
       assert [
                %{event: "mcp_servers.changes", data: %{"kind" => "changed"}},
                %{event: "refusal", data: %{"class" => "forbidden"}}
-             ] = TinctureWire.decode_stream(conn.resp_body)
+             ] = EventStream.decode(conn.resp_body)
 
       # The session-freshness bound and the stream's own tick.
       assert closed_in < 5_000
@@ -930,7 +931,7 @@ defmodule Emissary.Web.TinctureDataControllerTest do
         class = if act == :suspend_frame, do: "forbidden", else: "unauthenticated"
 
         assert [%{event: "refusal", data: %{"class" => ^class}}] =
-                 TinctureWire.decode_stream(conn.resp_body)
+                 EventStream.decode(conn.resp_body)
 
         refute subscribed?(source)
       end
@@ -1000,14 +1001,14 @@ defmodule Emissary.Web.TinctureDataControllerTest do
                  data: %{"ref" => ^ref, "kind" => "opened", "operation" => "vault.create"} = event
                }
                | _closing
-             ] = TinctureWire.decode_stream(mine_body)
+             ] = EventStream.decode(mine_body)
 
       # The projection carries no person and no athanor.
       refute Map.has_key?(event, "user_id")
       refute Map.has_key?(event, "athanor_id")
 
       refute Enum.any?(
-               TinctureWire.decode_stream(theirs_body),
+               EventStream.decode(theirs_body),
                &(&1.event == "confirmation.changes")
              )
     end
@@ -1353,14 +1354,14 @@ defmodule Emissary.Web.TinctureDataControllerTest do
           source,
           "prof_" <> String.replace(name, "-", "_"),
           resolved_policy: policy,
-          blob_digest: Prima.JCS.hash_binary(policy)
+          blob_digest: Prima.Digest.sha256(policy)
         )
 
       conn = Task.await(stream, 10_000)
       assert conn.status == 200
 
       assert %{event: "refusal", data: %{"class" => "forbidden", "message" => ^message}} =
-               conn.resp_body |> TinctureWire.decode_stream() |> List.last()
+               conn.resp_body |> EventStream.decode() |> List.last()
 
       refute subscribed?(source)
     end
@@ -1628,7 +1629,7 @@ defmodule Emissary.Web.TinctureDataControllerTest do
 
       assert conn.status == 200
       assert get_resp_header(conn, "content-type") == [TinctureWire.stream_content_type()]
-      assert [%{event: "refusal"}] = TinctureWire.decode_stream(conn.resp_body)
+      assert [%{event: "refusal"}] = EventStream.decode(conn.resp_body)
       refute subscribed?(source)
 
       assert [%{admission: "admitted"}] =
@@ -1740,7 +1741,7 @@ defmodule Emissary.Web.TinctureDataControllerTest do
 
         # One event, its data the fixture of the stream's shape, then the end.
         assert [%{id: nil, event: "probe.shaped", data: data}] =
-                 TinctureWire.decode_stream(shaped.resp_body)
+                 EventStream.decode(shaped.resp_body)
 
         assert data == Shape.fixture(shape)
         assert Shape.check(shape, data) == :ok
@@ -1750,7 +1751,7 @@ defmodule Emissary.Web.TinctureDataControllerTest do
           canvas_stream(trial.frame_id, "mcp_servers.changes", nil, bearer: trial.bearer)
 
         assert shapeless.status == 200
-        assert TinctureWire.decode_stream(shapeless.resp_body) == []
+        assert EventStream.decode(shapeless.resp_body) == []
 
         # Charged as any request is: the third is the window's last.
         assert canvas_stream(trial.frame_id, "probe.shaped", nil, bearer: trial.bearer).status ==
@@ -1794,7 +1795,7 @@ defmodule Emissary.Web.TinctureDataControllerTest do
         assert bound.status == 200
 
         assert [%{id: nil, event: "feed.results", data: data}] =
-                 TinctureWire.decode_stream(bound.resp_body)
+                 EventStream.decode(bound.resp_body)
 
         # The binding's envelope at its first revision and the epoch, its
         # result the fixture of the binding's result shape.
@@ -1811,7 +1812,7 @@ defmodule Emissary.Web.TinctureDataControllerTest do
         # A name the canvas declares and the athanor does not bind: no event.
         unbound = canvas_stream(trial.frame_id, "feed.results", "eth", bearer: trial.bearer)
         assert unbound.status == 200
-        assert TinctureWire.decode_stream(unbound.resp_body) == []
+        assert EventStream.decode(unbound.resp_body) == []
 
         # A name the canvas does not declare is refused by its declaration.
         undeclared = canvas_stream(trial.frame_id, "feed.results", "doge", bearer: trial.bearer)
@@ -1901,7 +1902,7 @@ defmodule Emissary.Web.TinctureDataControllerTest do
 
       {:ok, _} = TinctureAuth.revoke_frame(source, frame.id)
       conn = Task.await(stream, @stream_ms)
-      assert [%{event: "refusal"}] = TinctureWire.decode_stream(conn.resp_body)
+      assert [%{event: "refusal"}] = EventStream.decode(conn.resp_body)
     end
 
     defp wait_for_expiry(bearer, within_ms) do

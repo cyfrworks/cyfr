@@ -143,7 +143,7 @@ defmodule Prima.Canvas.ShapeTest do
 
       assert Shape.encode(shape) == bytes
       assert Shape.digest(shape) == digest
-      assert digest == Prima.JCS.hash_binary(bytes)
+      assert digest == Prima.Digest.sha256(bytes)
     end
 
     test "two spellings of one shape hash alike" do

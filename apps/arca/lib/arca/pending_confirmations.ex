@@ -61,9 +61,9 @@ defmodule Arca.PendingConfirmations do
       the caller's. It runs in its own transaction or nested in a caller's, so
       an action whose effect opens a row consumes in the transaction that
       opens it. `check/3` asks the same question and writes nothing.
-    * `void_for/2` voids the open records a revoked paired client or
-      passkey confirmed; the standing transitions and passkey revocation
-      void them in their own transactions.
+    * `void_confirmed_by!/2` voids the open records a revoked paired
+      client or passkey confirmed, inside the transaction of the standing
+      transition or passkey revocation that revokes it.
 
   A remote person's record carries the `identity_key_epoch` it depends on,
   which must be the cached head's current one when it opens
@@ -258,42 +258,6 @@ defmodule Arca.PendingConfirmations do
   end
 
   def cancel(%Prima.Actor{}, _ref), do: {:error, :no_athanor}
-
-  @doc """
-  Void the open records a revoked paired client (`{:paired_client, id}`,
-  in the actor's athanor) or passkey (`{:passkey, id}`, which is the
-  person's and so crosses athanors: the platform's own actor only)
-  confirmed. Answers the refs it voided.
-  """
-  @spec void_for(Prima.Actor.t(), {:paired_client | :passkey, String.t()}) ::
-          {:ok, [String.t()]} | {:error, :no_athanor | :cross_tenant | :database_error}
-  def void_for(%Prima.Actor{athanor_id: athanor_id}, {:paired_client, client_id})
-      when is_binary(athanor_id) and athanor_id != "" and is_binary(client_id) do
-    Arca.Repo.Errors.with_db_rescue("Arca.PendingConfirmations.void_for", fn ->
-      Arca.Repo.locking_transaction(fn ->
-        void_all(
-          from(c in PendingConfirmation,
-            where: c.athanor_id == ^athanor_id and c.confirmed_client_id == ^client_id
-          )
-        )
-      end)
-    end)
-  end
-
-  def void_for(%Prima.Actor{scope: :platform, system: true}, {:passkey, passkey_id})
-      when is_binary(passkey_id) do
-    Arca.Repo.Errors.with_db_rescue("Arca.PendingConfirmations.void_for", fn ->
-      Arca.Repo.locking_transaction(fn -> void_confirmed_by!(:passkey, [passkey_id]) end)
-    end)
-  end
-
-  def void_for(%Prima.Actor{athanor_id: nil}, {:paired_client, _client_id}),
-    do: {:error, :no_athanor}
-
-  def void_for(%Prima.Actor{athanor_id: ""}, {:paired_client, _client_id}),
-    do: {:error, :no_athanor}
-
-  def void_for(%Prima.Actor{}, _confirmer), do: {:error, :cross_tenant}
 
   @doc "The record `ref` in the actor's athanor."
   @spec get(Prima.Actor.t(), String.t()) ::

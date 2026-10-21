@@ -18,8 +18,7 @@ defmodule Arca.CronSchedule do
   A row is a `schedule` or a `feed`. The scheduler fires both, so
   `active_schedules/0`, `get_for_daemon/1`, `record_run/3` and
   `record_error/3` answer either. `list/2` and `get_by_id_or_name/3` take
-  a `kind:` option (nil reads both), and `count_active/2` counts one kind.
-  A live name is unique per kind, so a feed may share a schedule's name.
+  a `kind:` option (nil reads both). A live name is unique per kind, so a feed may share a schedule's name.
 
   ## Feeds
 
@@ -335,26 +334,6 @@ defmodule Arca.CronSchedule do
       end)
     end)
     |> Arca.Data.project()
-  end
-
-  @doc """
-  Counts the athanor's non-deleted rows of `kind` occupying its cap slots.
-  Paused schedules retain their slots; resuming does not require a cap check.
-  """
-  @spec count_active(Prima.Actor.t(), String.t()) ::
-          {:ok, non_neg_integer()} | {:error, :database_error}
-  def count_active(%Prima.Actor{} = actor, kind) when kind in @kinds do
-    Errors.with_db_rescue("CronSchedule.count_active", fn ->
-      count =
-        from(s in Row,
-          where: s.status != "deleted" and s.kind == ^kind,
-          select: count(s.id)
-        )
-        |> where_tenant_unless_platform(actor)
-        |> Arca.Repo.one()
-
-      {:ok, count || 0}
-    end)
   end
 
   # ---- feeds ------------------------------------------------------------------

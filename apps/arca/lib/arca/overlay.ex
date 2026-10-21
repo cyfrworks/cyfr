@@ -1226,25 +1226,6 @@ defmodule Arca.Overlay do
   # ---------------------------------------------------------------------------
 
   @doc """
-  Every unit the seed ships under a seeded root, as unit paths — what
-  provisioning copies and a release offers. Install media that cannot be
-  listed is a fault, never an empty bundle.
-  """
-  @spec shipped_units(String.t()) :: {:ok, [Arca.Storage.path()]}
-  def shipped_units(root) when is_binary(root) do
-    if root in Arca.Storage.overlay_roots() do
-      with {:ok, seed_leaves} <- seed_list_recursive([root]) do
-        units =
-          for leaf <- seed_leaves, loc = leaf_loc(leaf), uniq: true, do: unit_of(loc)
-
-        {:ok, Enum.sort(units)}
-      end
-    else
-      {:ok, []}
-    end
-  end
-
-  @doc """
   Copy one shipped unit into the athanor, whole — the seed's bytes,
   droppings excluded, committed as any unit is (`commit_unit/4`) —
   replacing whatever stands at the path. What provisioning does for every

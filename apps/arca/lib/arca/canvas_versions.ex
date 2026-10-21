@@ -25,7 +25,7 @@ defmodule Arca.CanvasVersions do
 
   This module is the document's codec. The bytes are the document's
   canonical JSON (`Prima.JCS`), absent fields omitted since canonical JSON
-  has no null, and the digest is `Prima.JCS.hash_binary/1` of those bytes.
+  has no null, and the digest is `Prima.Digest.sha256/1` of those bytes.
   Stored bytes that no longer hold the digest their reference records, or
   that are not exactly what this codec writes for a document, read as
   `:corrupt`.
@@ -89,10 +89,6 @@ defmodule Arca.CanvasVersions do
   @doc "Whether `version` is a canvas version: `MAJOR.MINOR.PATCH`, with no leading zero."
   @spec version?(term()) :: boolean()
   def version?(version), do: is_binary(version) and Regex.match?(@version, version)
-
-  @doc "The outcomes a failed validation records: no tree answered, or the candidate died."
-  @spec outcomes() :: [String.t()]
-  def outcomes, do: @outcomes
 
   @doc """
   The canonical JSON bytes of `document`, or `{:error, :invalid_document}`
@@ -185,7 +181,7 @@ defmodule Arca.CanvasVersions do
       change = %FencedPublication.Change{
         resource: {:document, actor.athanor_id, key(name)},
         staged: staged,
-        digest: Prima.JCS.hash_binary(bytes)
+        digest: Prima.Digest.sha256(bytes)
       }
 
       case FencedPublication.publish(change, revision_read, slot) do
@@ -276,7 +272,7 @@ defmodule Arca.CanvasVersions do
   defp read(actor, blob_key, revision, digest) do
     case Arca.get(actor, String.split(blob_key, "/")) do
       {:ok, bytes} when is_binary(bytes) ->
-        with true <- Prima.JCS.hash_binary(bytes) == digest,
+        with true <- Prima.Digest.sha256(bytes) == digest,
              {:ok, document} <- decode(bytes) do
           {:ok, %{document: document, revision: revision, digest: digest}}
         else

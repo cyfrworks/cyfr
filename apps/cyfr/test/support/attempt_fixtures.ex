@@ -477,7 +477,7 @@ defmodule Cyfr.Test.AttemptFixtures do
           invoke_mode: "open_inert",
           shape_digest: "sha256:shape-#{profile_id}",
           commit_digest: "sha256:commit-#{profile_id}",
-          blob_digest: Prima.JCS.hash_binary(policy),
+          blob_digest: Prima.Digest.sha256(policy),
           resolved_policy: policy,
           activation: Jason.encode!(%{source => "sha256:act"}),
           admitted_origins: [:interactive],

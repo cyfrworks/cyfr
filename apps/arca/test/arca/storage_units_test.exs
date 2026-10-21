@@ -87,7 +87,7 @@ defmodule Arca.StorageUnitsTest do
 
       # A draft publishes nothing.
       assert {:error, :not_found} = StorageUnits.current(actor, @root, key)
-      assert {:ok, []} = StorageUnits.journal(actor, @root, key)
+      assert {:ok, []} = Arca.Test.StorageJournal.journal(actor, @root, key)
     end
 
     test "registering again with the same token holds; another writer's live draft refuses", %{
@@ -144,7 +144,9 @@ defmodule Arca.StorageUnitsTest do
                StorageUnits.register_draft(actor, @root, key, "wrt_2")
 
       assert id == first.id
-      assert {:ok, [%{new_revision: "rev_1"}]} = StorageUnits.journal(actor, @root, key)
+
+      assert {:ok, [%{new_revision: "rev_1"}]} =
+               Arca.Test.StorageJournal.journal(actor, @root, key)
     end
   end
 
@@ -187,7 +189,7 @@ defmodule Arca.StorageUnitsTest do
       assert {:error, :stale_writer} = StorageUnits.release_served(actor, draft, "wrt_1", "rev_1")
       assert {:ok, _next} = StorageUnits.register_draft(actor, @root, key, "wrt_2")
 
-      assert {:ok, [%{id: _} = commit]} = StorageUnits.journal(actor, @root, key)
+      assert {:ok, [%{id: _} = commit]} = Arca.Test.StorageJournal.journal(actor, @root, key)
 
       assert %{
                athanor_id: "ath_a",
@@ -214,7 +216,7 @@ defmodule Arca.StorageUnitsTest do
               [
                 %{prior_revision: nil, new_revision: "rev_1"},
                 %{prior_revision: "rev_1", new_revision: "rev_2"}
-              ]} = StorageUnits.journal(actor, @root, key)
+              ]} = Arca.Test.StorageJournal.journal(actor, @root, key)
     end
 
     test "of two writers with one expected revision, the second is a stale revision", %{
@@ -239,7 +241,7 @@ defmodule Arca.StorageUnitsTest do
       assert {:ok, %{current_revision: "rev_second"}} = StorageUnits.current(actor, @root, key)
 
       assert {:ok, [_rev_1, %{new_revision: "rev_second"}]} =
-               StorageUnits.journal(actor, @root, key)
+               Arca.Test.StorageJournal.journal(actor, @root, key)
     end
 
     test "racing commits with one expected revision: exactly one commits", %{
@@ -261,7 +263,7 @@ defmodule Arca.StorageUnitsTest do
 
       assert Enum.count(results, &(&1 == :committed)) == 1, inspect(results)
       assert Enum.count(results, &(&1 == {:error, :stale_revision})) == 5, inspect(results)
-      assert {:ok, [_rev_1, _the_winner]} = StorageUnits.journal(actor, @root, key)
+      assert {:ok, [_rev_1, _the_winner]} = Arca.Test.StorageJournal.journal(actor, @root, key)
     end
 
     test "a stale draft token commits nothing", %{actor: actor, key: key} do
@@ -271,7 +273,7 @@ defmodule Arca.StorageUnitsTest do
                StorageUnits.commit(actor, draft, nil, "wrt_forged", identity("rev_1"))
 
       assert {:error, :not_found} = StorageUnits.current(actor, @root, key)
-      assert {:ok, []} = StorageUnits.journal(actor, @root, key)
+      assert {:ok, []} = Arca.Test.StorageJournal.journal(actor, @root, key)
       assert row(draft.id).draft_writer_token == "wrt_1"
     end
 
@@ -299,7 +301,7 @@ defmodule Arca.StorageUnitsTest do
       assert {:error, :missing_unit} =
                StorageUnits.commit(actor, ghost, nil, "wrt_1", identity("rev_1"))
 
-      assert {:ok, []} = StorageUnits.journal(actor, @root, key)
+      assert {:ok, []} = Arca.Test.StorageJournal.journal(actor, @root, key)
     end
 
     test "a journal row that cannot be written takes the pointer move back with it", %{
@@ -321,7 +323,7 @@ defmodule Arca.StorageUnitsTest do
       end
 
       assert %{state: "draft", current_revision: nil, draft_writer_token: "wrt_1"} = row(draft.id)
-      assert {:ok, []} = StorageUnits.journal(actor, @root, key)
+      assert {:ok, []} = Arca.Test.StorageJournal.journal(actor, @root, key)
     end
   end
 
@@ -382,11 +384,11 @@ defmodule Arca.StorageUnitsTest do
       assert %{generation: ^absent, tombstone: true} = change(other, key)
       assert {:error, :not_found} = StorageUnits.current(other, @root, key)
       assert :ok = StorageUnits.finish_retire(other, @root, key, their_token)
-      assert {:ok, []} = StorageUnits.journal(other, @root, key)
+      assert {:ok, []} = Arca.Test.StorageJournal.journal(other, @root, key)
     end
   end
 
-  describe "abandon_draft/3, retire/3, current_under/2, stage_prefix/3" do
+  describe "abandon_draft/3, retire/3, current_under/2" do
     test "an abandoned first draft is retired; an abandoned next draft leaves the unit committed",
          %{actor: actor, key: key} do
       {:ok, draft} = StorageUnits.register_draft(actor, @root, key, "wrt_1")
@@ -434,10 +436,12 @@ defmodule Arca.StorageUnitsTest do
       assert %{state: "retired", current_revision: "rev_1"} = row(draft.id)
 
       assert {:error, :not_found} =
-               StorageUnits.journal(actor, @root, "catalysts/local/none/9.9.9")
+               Arca.Test.StorageJournal.journal(actor, @root, "catalysts/local/none/9.9.9")
 
       assert :ok = StorageUnits.retire(actor, @root, "catalysts/local/none/9.9.9")
-      assert {:ok, []} = StorageUnits.journal(actor, @root, "catalysts/local/none/9.9.9")
+
+      assert {:ok, []} =
+               Arca.Test.StorageJournal.journal(actor, @root, "catalysts/local/none/9.9.9")
 
       assert {:error, :not_found} =
                StorageUnits.current(actor, @root, "catalysts/local/none/9.9.9")
@@ -531,14 +535,6 @@ defmodule Arca.StorageUnitsTest do
       refute Map.has_key?(pointers, key <> "-gone")
       refute Map.has_key?(pointers, "roles/scribe.md")
     end
-
-    test "stage_prefix/3 is the locator's revision prefix of the unit", %{actor: actor, key: key} do
-      {:ok, draft} = StorageUnits.register_draft(actor, @root, key, "wrt_1")
-
-      assert {:ok, prefix} = StorageUnits.stage_prefix(actor, draft, "rev_1")
-      assert prefix == [@root, ".staging" | String.split(key, "/")] ++ ["rev_1"]
-      assert Arca.Storage.locate(prefix ++ ["cyfr-manifest.json"]) == :above_unit
-    end
   end
 
   describe "tenancy" do
@@ -550,7 +546,6 @@ defmodule Arca.StorageUnitsTest do
       draft = commit!(actor, key, "rev_1")
 
       assert {:error, :not_found} = StorageUnits.current(other, @root, key)
-      assert {:error, :not_found} = StorageUnits.journal(other, @root, key)
       assert {:ok, pointers} = StorageUnits.current_under(other, @root)
       refute Map.has_key?(pointers, key)
 
@@ -566,7 +561,6 @@ defmodule Arca.StorageUnitsTest do
       assert {:error, :missing_unit} =
                StorageUnits.commit(other, held, "rev_1", "wrt_2", identity("rev_theirs"))
 
-      assert {:error, :missing_unit} = StorageUnits.stage_prefix(other, held, "rev_theirs")
       assert :ok = StorageUnits.abandon_draft(other, held, "wrt_2")
       assert row(draft.id).draft_writer_token == "wrt_2"
 
@@ -582,11 +576,9 @@ defmodule Arca.StorageUnitsTest do
 
       assert {:error, :no_athanor} = StorageUnits.register_draft(nobody, @root, key, "wrt_1")
       assert {:error, :no_athanor} = StorageUnits.abandon_draft(nobody, unit, "wrt_1")
-      assert {:error, :no_athanor} = StorageUnits.stage_prefix(nobody, unit, "rev_1")
       assert {:error, :no_athanor} = StorageUnits.current(nobody, @root, key)
       assert {:error, :no_athanor} = StorageUnits.current_under(nobody, @root)
       assert {:error, :no_athanor} = StorageUnits.retire(nobody, @root, key)
-      assert {:error, :no_athanor} = StorageUnits.journal(nobody, @root, key)
 
       assert {:error, :no_athanor} =
                StorageUnits.commit(nobody, unit, nil, "wrt_1", identity("rev_1"))

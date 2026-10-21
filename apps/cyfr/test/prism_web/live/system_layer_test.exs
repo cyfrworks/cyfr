@@ -2683,7 +2683,7 @@ defmodule PrismWeb.SystemLayerTest do
       for changes <- [
             [resolved_policy: "not a blob"],
             [resolved_policy: widened],
-            [resolved_policy: not_nodes, blob_digest: Prima.JCS.hash_binary(not_nodes)]
+            [resolved_policy: not_nodes, blob_digest: Prima.Digest.sha256(not_nodes)]
           ] do
         :ok = Sanctum.Test.ConsentFixtures.hand_edit_head!(local, profile_id, changes)
 
@@ -5256,7 +5256,7 @@ defmodule PrismWeb.SystemLayerTest do
             invoke_mode: :open_inert,
             shape_digest: "sha256:shape",
             commit_digest: "sha256:commit",
-            blob_digest: Prima.JCS.hash_binary("{}"),
+            blob_digest: Prima.Digest.sha256("{}"),
             resolved_policy: "{}",
             activation: %{}
           }
@@ -5329,7 +5329,7 @@ defmodule PrismWeb.SystemLayerTest do
             invoke_mode: :open_inert,
             shape_digest: "sha256:shape",
             commit_digest: "sha256:commit",
-            blob_digest: Prima.JCS.hash_binary("{}"),
+            blob_digest: Prima.Digest.sha256("{}"),
             resolved_policy: "{}",
             activation: %{}
           }

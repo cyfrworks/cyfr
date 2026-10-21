@@ -332,7 +332,7 @@ defmodule Prima.Canvas.Shape do
 
   @doc "A validated shape's digest: `sha256:` over `encode/1`."
   @spec digest(t()) :: String.t()
-  def digest(shape), do: Prima.JCS.hash_binary(encode(shape))
+  def digest(shape), do: Prima.Digest.sha256(encode(shape))
 
   # ---- values ----------------------------------------------------------------
 

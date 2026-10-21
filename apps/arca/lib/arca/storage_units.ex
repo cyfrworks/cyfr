@@ -23,7 +23,8 @@ defmodule Arca.StorageUnits do
        Another writer is refused while that draft is live — held, and
        registered within `draft_ttl_ms/0` — so a writer that died cannot
        hold a unit for longer than that.
-    2. The writer stages its objects under `stage_prefix/3`, outside any
+    2. The writer stages its objects under the revision's prefix
+       (`Arca.Storage.UnitLocator.revision_prefix/2`), outside any
        transaction.
     3. `commit/5` is one short transaction: it verifies the writing
        member still holds its slot in the cell, rechecks that the row is
@@ -85,7 +86,6 @@ defmodule Arca.StorageUnits do
   import Arca.QueryHelpers, only: [where_athanor: 2]
 
   alias Arca.Schemas.{StorageCommit, StorageUnit}
-  alias Arca.Storage.UnitLocator
   alias Arca.{StorageProjectionChanges, StorageProjectionRoots}
 
   @draft_ttl_ms :timer.minutes(15)
@@ -211,23 +211,6 @@ defmodule Arca.StorageUnits do
             end
         end
       end)
-    end
-  end
-
-  @doc """
-  The revision-unique prefix a writer stages `revision` of `unit` under —
-  `Arca.Storage.UnitLocator.revision_prefix/2`. The writer creates the
-  prefix's in-progress marker before its first upload. A unit of another
-  athanor is `{:error, :missing_unit}`.
-  """
-  @spec stage_prefix(Prima.Actor.t(), StorageUnit.t(), String.t()) ::
-          {:ok, Arca.Storage.path()} | {:error, :missing_unit | :no_athanor}
-  def stage_prefix(%Prima.Actor{} = actor, %StorageUnit{} = unit, revision)
-      when is_binary(revision) do
-    with {:ok, athanor} <- tenant(actor),
-         :ok <- owned(athanor, unit) do
-      {:ok,
-       unit.root |> UnitLocator.unit_path(unit.unit_key) |> UnitLocator.revision_prefix(revision)}
     end
   end
 
@@ -496,26 +479,6 @@ defmodule Arca.StorageUnits do
     })
   end
 
-  @doc """
-  A unit's commits, oldest first — what repair and collection read to
-  tell a committed revision from a loser's staging. `{:error, :not_found}`
-  for a unit with no row; a retired unit keeps its journal.
-  """
-  @spec journal(Prima.Actor.t(), String.t(), String.t()) ::
-          {:ok, [map()]} | {:error, :not_found} | refusal()
-  def journal(%Prima.Actor{} = actor, root, unit_key)
-      when is_binary(root) and is_binary(unit_key) do
-    with {:ok, athanor} <- tenant(actor) do
-      rescuing_db("journal", fn ->
-        case fetch(athanor, root, unit_key) do
-          nil -> {:error, :not_found}
-          %StorageUnit{id: id} -> {:ok, commits_of(athanor, id)}
-        end
-      end)
-    end
-    |> Arca.Data.project()
-  end
-
   # ---------------------------------------------------------------------------
   # Tenancy and the outage spelling
   # ---------------------------------------------------------------------------
@@ -660,14 +623,6 @@ defmodule Arca.StorageUnits do
     )
     |> Arca.Repo.all()
     |> Map.new(&{&1.unit_key, &1})
-  end
-
-  defp commits_of(athanor, unit_id) do
-    from(c in where_athanor(StorageCommit, athanor),
-      where: c.storage_unit_id == ^unit_id,
-      order_by: [asc: c.committed_at, asc: c.id]
-    )
-    |> Arca.Repo.all()
   end
 
   # ---------------------------------------------------------------------------

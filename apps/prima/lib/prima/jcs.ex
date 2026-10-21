@@ -76,17 +76,8 @@ defmodule Prima.JCS do
   """
   @spec hash(value()) :: {:ok, String.t()} | {:error, error()}
   def hash(term) do
-    with {:ok, encoded} <- encode(term), do: {:ok, hash_binary(encoded)}
+    with {:ok, encoded} <- encode(term), do: {:ok, Prima.Digest.sha256(encoded)}
   end
-
-  @doc """
-  Hash an already-canonical binary. Exposed so callers that concatenate a
-  canonical form with other material (a release digest binds an artifact
-  digest to its manifest subset) hash it the same way. Delegates to
-  `Prima.Digest` — one producer, one spelling.
-  """
-  @spec hash_binary(binary()) :: String.t()
-  defdelegate hash_binary(binary), to: Prima.Digest, as: :sha256
 
   # ============================================================================
   # Private: serialization

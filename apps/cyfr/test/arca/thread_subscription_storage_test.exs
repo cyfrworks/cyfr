@@ -85,32 +85,6 @@ defmodule Arca.ThreadSubscriptionStorageTest do
     refute MapSet.member?(Subs.followed(elsewhere, alice.user_id), thread.id)
   end
 
-  test "unfollow_all/2 drops one person's follows in one athanor and nothing else", %{
-    alice: alice,
-    bob: bob
-  } do
-    {:ok, a} = Threads.create(alice, %{title: "A"})
-    {:ok, b} = Threads.create(alice, %{title: "B"})
-    :ok = Subs.follow(bob, a.id, bob.user_id)
-
-    # Bob's follow of the same thread id in another athanor is that
-    # athanor's row, not this one's.
-    elsewhere = %{bob | athanor_id: "ath_other"}
-    :ok = Subs.follow(elsewhere, a.id <> "-other", bob.user_id)
-
-    :ok = Subs.unfollow_all(alice, bob.user_id)
-
-    assert Subs.followed(bob, bob.user_id) == MapSet.new()
-    assert MapSet.member?(Subs.followed(elsewhere, bob.user_id), a.id <> "-other")
-
-    followed = Subs.followed(alice, alice.user_id)
-    assert MapSet.member?(followed, a.id)
-    assert MapSet.member?(followed, b.id)
-
-    # Idempotent, like its siblings.
-    assert :ok = Subs.unfollow_all(alice, bob.user_id)
-  end
-
   test "deleting a thread sweeps its follows and its thread-scope grants", %{
     alice_ctx: alice_ctx,
     alice: alice,

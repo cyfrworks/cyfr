@@ -299,8 +299,8 @@ defmodule Arca.TenantIsolationTest do
           cap: 1_000
         })
 
-      assert Arca.CronSchedule.count_active(Sanctum.Context.actor(ctx_a), "schedule") == {:ok, 1}
-      assert Arca.CronSchedule.count_active(Sanctum.Context.actor(ctx_b), "schedule") == {:ok, 0}
+      assert Arca.Test.CronSlots.occupied(Sanctum.Context.actor(ctx_a), "schedule") == {:ok, 1}
+      assert Arca.Test.CronSlots.occupied(Sanctum.Context.actor(ctx_b), "schedule") == {:ok, 0}
     end
 
     test "get_by_id_or_name scoped to tenant" do

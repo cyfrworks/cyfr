@@ -115,15 +115,6 @@ defmodule Arca.TurnStorage do
   # no root attempt yet, so nothing of it is held to suspend or take over.
   @held @open -- ["accepted"]
 
-  @doc "Every status a turn can carry (`Prima.TurnState.statuses/0`)."
-  defdelegate statuses, to: Prima.TurnState
-
-  @doc "The statuses of a turn that still owns work (`Prima.TurnState.open_statuses/0`)."
-  defdelegate open_statuses, to: Prima.TurnState
-
-  @doc "The statuses of a turn that is over (`Prima.TurnState.terminal_statuses/0`)."
-  defdelegate terminal_statuses, to: Prima.TurnState
-
   # ---------------------------------------------------------------------------
   # Acceptance
   # ---------------------------------------------------------------------------

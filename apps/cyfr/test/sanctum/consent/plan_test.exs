@@ -375,7 +375,7 @@ defmodule Sanctum.Consent.PlanTest do
       damaged =
         [[resolved_policy: widened]] ++
           for policy <- not_nodes,
-              digest <- [head.blob_digest, Prima.JCS.hash_binary(policy)],
+              digest <- [head.blob_digest, Prima.Digest.sha256(policy)],
               do: [resolved_policy: policy, blob_digest: digest]
 
       for changes <- damaged do

@@ -164,9 +164,7 @@ defmodule Arca.ControlPlane do
           generation: pos_integer(),
           fence: pos_integer(),
           lease_until: DateTime.t(),
-          # nil only on a row recorded by hand (a test putting a member
-          # back in a state it held); every take and revival stamps it.
-          release: String.t() | nil
+          release: String.t()
         }
 
   @doc """
@@ -179,7 +177,10 @@ defmodule Arca.ControlPlane do
       {:held, :indefinitely} -> true
       {:held, deadline} -> System.monotonic_time(:millisecond) < deadline
       :lost -> false
-      :unclaimed -> not claimed_here?()
+      # With a claimant, a member that has recorded nothing holds nothing:
+      # the fail-closed direction, and the state of every member between
+      # its start and its first claim. Without one every boot holds.
+      :unclaimed -> not claimed?()
     end
   end
 
@@ -189,7 +190,7 @@ defmodule Arca.ControlPlane do
     case :persistent_term.get(@generation_key, nil) do
       generation when is_integer(generation) -> {:ok, generation}
       :none -> :none
-      nil -> if claimed_here?(), do: {:error, :unavailable}, else: :none
+      nil -> if claimed?(), do: {:error, :unavailable}, else: :none
     end
   end
 
@@ -378,7 +379,7 @@ defmodule Arca.ControlPlane do
   defp push_out(slot, lease_ms) do
     :ok = Arca.Repo.transaction_lock(@release_lock)
     now = Arca.ServerMetaStorage.now!()
-    release = slot_release(slot)
+    release = slot.release
 
     lease = Arca.Repo.one(from(l in mine(slot), select: l.lease_until))
     revival? = lease != nil and DateTime.compare(lease, now) != :gt
@@ -633,8 +634,12 @@ defmodule Arca.ControlPlane do
   putting a member back in a state it held calls it too.
   """
   @spec record_slot(slot()) :: :ok
-  def record_slot(%{node: node, owner: owner, generation: generation, fence: fence} = slot)
-      when is_binary(node) and is_binary(owner) and is_integer(generation) and is_integer(fence),
+  def record_slot(
+        %{node: node, owner: owner, generation: generation, fence: fence, release: release} =
+          slot
+      )
+      when is_binary(node) and is_binary(owner) and is_integer(generation) and is_integer(fence) and
+             is_binary(release),
       do: :persistent_term.put(@slot_key, slot)
 
   @doc "Unrecord the slot: this member holds none, so its next act is a take."
@@ -805,12 +810,6 @@ defmodule Arca.ControlPlane do
     end
   end
 
-  # The release a recorded slot was won under. A slot recorded by hand
-  # (a test putting a member back in a state it held) names none, and is
-  # this build's.
-  defp slot_release(%{release: release}) when is_binary(release), do: release
-  defp slot_release(_slot), do: Prima.Version.current()
-
   defp opened(node, {owner, release}, lease_ms, now) do
     %CellLease{
       node: node,
@@ -914,10 +913,4 @@ defmodule Arca.ControlPlane do
   defp read(node), do: Arca.Repo.one(from(l in CellLease, where: l.node == ^node))
 
   defp lease_end(now, lease_ms), do: DateTime.add(now, lease_ms, :millisecond)
-
-  # With a claimant, a member that has recorded nothing holds nothing —
-  # the fail-closed direction, and the state of every member between its
-  # start and its first claim. Without one there is no slot to take, so
-  # every boot holds.
-  defp claimed_here?, do: claimed?()
 end

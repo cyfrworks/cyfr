@@ -288,50 +288,6 @@ defmodule Arca.SessionStorageTest do
       assert {:ok, %{identity_key_epoch: nil}} = SessionStorage.get_session(hash)
     end
 
-    test "every session carrying a retired key_epoch ends, and only those" do
-      old = Prima.Digest.sha256("old-#{System.unique_integer()}")
-      new = Prima.Digest.sha256("new-#{System.unique_integer()}")
-      person = remote_person!(old)
-      issuance = Arca.Test.Actor.issuance(person.id)
-      retired = make_token_hash("old")
-      current = make_token_hash("new")
-
-      :ok =
-        SessionStorage.create_session(
-          retired,
-          session_attrs(%{user_id: person.id, identity_key_epoch: old}),
-          issuance
-        )
-
-      # The cached head moves to `new` by hand, without an advance's own
-      # retirement: what ends the old session below is revoke_key_epoch/3.
-      {1, _} =
-        Arca.Repo.update_all(
-          from(h in Arca.Schemas.DirectoryHead, where: h.head_hash == ^old),
-          set: [head_hash: new, key_epoch: new]
-        )
-
-      :ok =
-        SessionStorage.create_session(
-          current,
-          session_attrs(%{user_id: person.id, identity_key_epoch: new}),
-          issuance
-        )
-
-      assert {:error, :cross_tenant} =
-               SessionStorage.revoke_key_epoch(
-                 Prima.Actor.in_athanor("ath_test"),
-                 [person.id],
-                 old
-               )
-
-      assert {:ok, [^retired]} =
-               SessionStorage.revoke_key_epoch(Prima.Actor.system(), [person.id], old)
-
-      assert {:error, :not_found} = SessionStorage.get_session(retired)
-      assert {:ok, _} = SessionStorage.get_session(current)
-    end
-
     test "the also: closure commits with the session, or the session is not written" do
       hash = make_token_hash("also")
 

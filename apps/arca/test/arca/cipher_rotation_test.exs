@@ -292,7 +292,7 @@ defmodule Arca.CipherRotationTest do
   end
 
   describe "the roster" do
-    test "names every credential table, each with its CAS column" do
+    test "names every credential table" do
       assert Enum.sort(Rotation.tables()) ==
                [
                  :identity_attempts,
@@ -303,16 +303,6 @@ defmodule Arca.CipherRotationTest do
                  :vault_entries,
                  :webhooks
                ]
-
-      assert Rotation.cas_column(:webhooks) == :secret_encrypted
-      assert Rotation.cas_column(:vault_entries) == :sealed_payload
-      assert Rotation.cas_column(:instance_entries) == :sealed_payload
-      assert Rotation.cas_column(:registry_tokens) == :credential_ciphertext
-      assert Rotation.cas_column(:oauth_provider_credentials) == :payload_ciphertext
-      assert Rotation.cas_column(:person_identities) == :live_key_sealed
-
-      assert Rotation.cas_column(:identity_attempts) ==
-               [:staged_live_key_sealed, :kit_seed_sealed, :staged_operational_key_sealed]
     end
   end
 

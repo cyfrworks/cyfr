@@ -684,7 +684,7 @@ defmodule Sanctum.Providers.ProfileGrantsTest do
             [blob_digest: "sha256:" <> String.duplicate("0", 64)],
             [
               resolved_policy: Jason.encode!(%{"canonical" => "jcs-1"}),
-              blob_digest: Prima.JCS.hash_binary(Jason.encode!(%{"canonical" => "jcs-1"}))
+              blob_digest: Prima.Digest.sha256(Jason.encode!(%{"canonical" => "jcs-1"}))
             ]
           ],
           args <- reads do

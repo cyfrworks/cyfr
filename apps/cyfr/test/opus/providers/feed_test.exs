@@ -289,7 +289,7 @@ defmodule Opus.Providers.FeedTest do
                "This athanor holds 3 live feeds, the most it may; " <>
                  "remove one to bind another (feed_cap)"
 
-      assert {:ok, 3} = CronSchedule.count_active(actor, "feed")
+      assert {:ok, 3} = Arca.Test.CronSlots.occupied(actor, "feed")
     end
 
     test "the feed ceiling is the operator's setting: 1,000 unset, and 0 removes it",
@@ -305,7 +305,7 @@ defmodule Opus.Providers.FeedTest do
 
       Cyfr.Test.Settings.put("max_feeds_per_athanor", 0)
       for i <- 2..3, do: assert({:ok, _} = call(ctx, bind_args("feed-#{i}")))
-      assert {:ok, 3} = CronSchedule.count_active(actor, "feed")
+      assert {:ok, 3} = Arca.Test.CronSlots.occupied(actor, "feed")
     end
 
     test "a feed ceiling the store cannot answer refuses the bind", %{ctx: ctx} do

@@ -36,10 +36,10 @@ defmodule Arca.CipherRotation do
   and reads every sealed column of a row, not the CAS column alone.
 
   `swap/5` writes a row's re-sealed columns **only while the ciphertext
-  the page read is still in the row's CAS column** — `cas_column/1`, the
-  table's primary sealed column, or for a table whose rows seal one of
-  several columns (`identity_attempts`: staged keys or a kit seed), the
-  first of them the row holds, in the order `cas_column/1` lists. A
+  the page read is still in the row's CAS column**: the table's primary
+  sealed column, or for a table whose rows seal one of several columns
+  (`identity_attempts`: staged keys or a kit seed), the first of them the
+  row holds, in the order the table's entry lists them. A
   concurrent legitimate write (a rotated webhook secret, a re-sealed vault
   payload) changes that column, the swap
   then matches no row and answers `:stale`, and the caller counts the row
@@ -132,13 +132,6 @@ defmodule Arca.CipherRotation do
   @doc "The tables this module knows how to walk."
   @spec tables() :: [atom()]
   def tables, do: Map.keys(@tables)
-
-  @doc """
-  The column a `swap/5` on `table` compares against: one column, or an
-  ordered list whose first non-null column a row compares.
-  """
-  @spec cas_column(atom()) :: atom() | [atom(), ...]
-  def cas_column(table) when is_map_key(@tables, table), do: @tables[table].cas
 
   @doc """
   The next page of `table` after `cursor` (`nil` for the first), at most

@@ -86,7 +86,7 @@ defmodule Sanctum.Consent.LoaderTest do
     # loader refuses a mismatch, and every case below is about some other
     # failure. A test that wants the mismatch itself passes `:blob_digest`.
     Map.put_new_lazy(merged, :blob_digest, fn ->
-      Prima.JCS.hash_binary(merged.resolved_policy)
+      Prima.Digest.sha256(merged.resolved_policy)
     end)
   end
 

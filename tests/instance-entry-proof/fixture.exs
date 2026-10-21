@@ -353,7 +353,7 @@ fn args ->
         )
 
       {:ok, blob_json} = Sanctum.Consent.BlobBuilder.encode(nodes)
-      blob_digest = Prima.JCS.hash_binary(blob_json)
+      blob_digest = Prima.Digest.sha256(blob_json)
       {:ok, activation_json} = Prima.JCS.encode(activation.graph)
       {:ok, input} = Sanctum.Consent.ShapeDerivation.shape_input(ctx, openai)
       {:ok, shape_digest} = Sanctum.Consent.ShapeDigest.compute(input)

@@ -98,7 +98,7 @@ defmodule Prima.Wasm do
     with :ok <- check_size(bytes),
          :ok <- check_magic(bytes),
          {:ok, format} <- check_version(bytes) do
-      digest = compute_digest(bytes)
+      digest = Prima.Digest.sha256(bytes)
 
       case format do
         :core_module ->
@@ -219,25 +219,6 @@ defmodule Prima.Wasm do
       type -> String.to_existing_atom(type)
     end
   end
-
-  @doc """
-  Quick validation check - only verifies magic bytes and size.
-  Useful for fast rejection of obviously invalid files.
-  """
-  def quick_check(bytes) when is_binary(bytes) do
-    with :ok <- check_size(bytes),
-         :ok <- check_magic(bytes) do
-      :ok
-    end
-  end
-
-  def quick_check(_), do: {:error, :not_binary}
-
-  @doc """
-  Compute SHA-256 digest of binary content.
-  Returns hex-encoded string with sha256: prefix.
-  """
-  defdelegate compute_digest(bytes), to: Prima.Digest, as: :sha256
 
   @doc """
   Suggest component type based on exported functions.

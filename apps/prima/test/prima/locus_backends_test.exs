@@ -109,14 +109,14 @@ defmodule Prima.LocusBackendsTest do
                MacEnvelope.derive(key(), v["label"] <> "/control")
 
       for text <- v["key_text"]["valid"] do
-        assert {:ok, decoded} = LocusBackends.decode_key(text)
+        assert {:ok, decoded} = MacEnvelope.decode_root(text)
         assert decoded == key()
       end
 
       for text <- v["key_text"]["invalid"],
-          do: assert(:error = LocusBackends.decode_key(text), inspect(text))
+          do: assert(:error = MacEnvelope.decode_root(text), inspect(text))
 
-      assert :error = LocusBackends.decode_key(nil)
+      assert :error = MacEnvelope.decode_root(nil)
     end
 
     test "each control message signs, reads and writes back as the vectors say" do

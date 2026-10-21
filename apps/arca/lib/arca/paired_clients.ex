@@ -14,13 +14,13 @@ defmodule Arca.PairedClients do
   ## Standing
 
   `active`, `suspended` or `revoked`, and nothing leaves `revoked`.
-  `revoke/2` ends one row; `revoke_for_user/2` ends a person's; a standing
-  transition revokes a person's rows, and every row of an athanor it
-  archives, in its own transaction (`Arca.SecurityTransitions`). Each
-  revocation raises `updated_at`, which is when the row was retired, and
-  revokes the client's device certificates (`Arca.DeviceCertificates`) and
-  voids the pending confirmations it confirmed
-  (`Arca.PendingConfirmations`) in the same transaction.
+  `revoke/2` ends one row; a standing transition revokes a person's rows,
+  and every row of an athanor it archives, in its own transaction
+  (`Arca.SecurityTransitions`). Each revocation raises `updated_at`, which
+  is when the row was retired, and revokes the client's device
+  certificates (`Arca.DeviceCertificates`) and voids the pending
+  confirmations it confirmed (`Arca.PendingConfirmations`) in the same
+  transaction.
 
   A declared restore suspends every active row (`Arca.SecurityTransitions`):
   a suspended client stands for nothing, is listed only when its standing
@@ -37,9 +37,8 @@ defmodule Arca.PairedClients do
   narrows, and is never refused for ownership.
 
   Every function takes the actor first. An athanor actor reads and writes
-  its own athanor's rows; `revoke_for_user/2` also takes the platform
-  system actor, for a retirement that crosses athanors, and `list/2` takes
-  it for one person's rows in every athanor. Rows are answered as plain
+  its own athanor's rows; `list/2` also takes the platform system actor,
+  for one person's rows in every athanor. Rows are answered as plain
   maps (`Arca.Data`).
   """
 
@@ -215,29 +214,6 @@ defmodule Arca.PairedClients do
 
   def revoke(%Prima.Actor{}, _id), do: {:error, :no_athanor}
 
-  @doc """
-  Revoke every active row of the person `user_id`: in the actor's
-  athanor, or in every athanor for the platform system actor, with their
-  device certificates and the confirmations they confirmed. Answers the
-  ids it revoked, sorted.
-  """
-  @spec revoke_for_user(Prima.Actor.t(), String.t()) ::
-          {:ok, [String.t()]} | {:error, :no_athanor | :database_error}
-  def revoke_for_user(%Prima.Actor{} = actor, user_id)
-      when is_binary(user_id) and user_id != "" do
-    case scope(actor) do
-      {:ok, query} ->
-        Arca.Repo.Errors.with_db_rescue("Arca.PairedClients.revoke_for_user", fn ->
-          Arca.Repo.locking_transaction(fn ->
-            query |> where([p], p.user_id == ^user_id) |> revoke_all() |> retired_with()
-          end)
-        end)
-
-      {:error, _} = refusal ->
-        refusal
-    end
-  end
-
   @doc false
   @spec revoke_all(Ecto.Queryable.t()) :: [String.t()]
   # Revoke every active row `query` names, in the caller's transaction or
@@ -388,19 +364,4 @@ defmodule Arca.PairedClients do
       {:ok, revoked}
     end
   end
-
-  defp retired_with(ids) do
-    _ = retire_dependents!(ids)
-    ids
-  end
-
-  # The platform system actor retires a person's clients in every athanor;
-  # any other actor is held to its own.
-  defp scope(%Prima.Actor{scope: :platform, system: true}), do: {:ok, from(p in PairedClient)}
-
-  defp scope(%Prima.Actor{athanor_id: athanor_id} = actor)
-       when is_binary(athanor_id) and athanor_id != "",
-       do: {:ok, QueryHelpers.where_tenant(PairedClient, actor)}
-
-  defp scope(%Prima.Actor{}), do: {:error, :no_athanor}
 end

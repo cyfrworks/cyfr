@@ -94,18 +94,12 @@ defmodule Arca.TenantArgumentOrderTest do
                             "first and is reached from the execution kinds' actor-first " <>
                             "`prune/3` with the athanor the actor's head bound"
 
-  @uncalled "a retention primitive no production code calls: the execution kinds " <>
-              "select ids (`stale_ids/2`, `ids_older_than_days/2`) and delete through " <>
-              "`delete_ids/2` instead"
-
   @keyword_tenant_readers %{
     "Arca.DecisionLog.count_before/2" => @from_prune,
     "Arca.DecisionLog.delete_before/2" => @from_prune,
     "Arca.Execution.count_older_than_days/2" => @from_prune,
     "Arca.Execution.count_stale/2" => @from_prune,
     "Arca.Execution.delete_ids/2" => @through_execution_rows,
-    "Arca.Execution.delete_older_than/2" => @uncalled,
-    "Arca.Execution.delete_older_than_days/2" => @uncalled,
     "Arca.Execution.ids_older_than_days/2" => @from_prune,
     "Arca.Execution.stale_ids/2" => @from_prune,
     "Arca.ExecutionAttempts.count_intents_before/2" => @from_prune,

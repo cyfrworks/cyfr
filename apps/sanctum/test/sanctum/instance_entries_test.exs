@@ -355,7 +355,7 @@ defmodule Sanctum.InstanceEntriesTest do
           invoke_mode: "open_inert",
           shape_digest: "sha256:shape",
           commit_digest: "sha256:commit",
-          blob_digest: Prima.JCS.hash_binary("{}"),
+          blob_digest: Prima.Digest.sha256("{}"),
           resolved_policy: "{}",
           activation: "{}",
           admitted_origins: [:interactive],

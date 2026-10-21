@@ -177,7 +177,7 @@ defmodule Arca.OverlayTest do
 
   defp journal(actor, unit) do
     {root, key} = Arca.Storage.UnitLocator.unit_key(unit)
-    {:ok, commits} = Arca.StorageUnits.journal(actor, root, key)
+    {:ok, commits} = Arca.Test.StorageJournal.journal(actor, root, key)
     commits
   end
 
@@ -269,8 +269,6 @@ defmodule Arca.OverlayTest do
 
       assert {:ok, %{@version_dir => :available}} =
                Arca.Overlay.unit_statuses(actor, "components")
-
-      assert {:ok, [@version_dir]} = Arca.Overlay.shipped_units("components")
     end
 
     test "a file unit's one object is listed and read from above it, as a directory unit's are",
@@ -298,7 +296,6 @@ defmodule Arca.OverlayTest do
     test "a path outside the seeded roots is untouched", %{actor: actor} do
       assert {:error, :not_found} = Arca.get(actor, ["data", "nope.txt"])
       refute Arca.exists?(actor, ["data", "nope.txt"])
-      assert {:ok, []} = Arca.Overlay.shipped_units("data")
     end
   end
 
@@ -595,7 +592,7 @@ defmodule Arca.OverlayTest do
       # Nothing held: the tree delete is a no-op on tenant bytes and is not
       # refused — the unit-level refusal is for shipped copies.
       assert :ok = Arca.delete_tree(actor, ["components"])
-      assert {:ok, [@version_dir]} = Arca.Overlay.shipped_units("components")
+      assert Arca.Overlay.unit_status(actor, @version_dir) == {:ok, :available}
     end
   end
 

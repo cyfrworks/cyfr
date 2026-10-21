@@ -912,7 +912,8 @@ defmodule Arca.ControlPlaneOwnPoolTest do
       owner: "boot_a",
       generation: 1,
       fence: 1,
-      lease_until: DateTime.utc_now()
+      lease_until: DateTime.utc_now(),
+      release: Prima.Version.current()
     }
 
     :ok = ControlPlane.record_slot(slot)

@@ -269,7 +269,7 @@ defmodule Arca.PublicationContract do
       defp journal(actor, unit) do
         {root, key} = UnitLocator.unit_key(unit)
 
-        case StorageUnits.journal(actor, root, key) do
+        case Arca.Test.StorageJournal.journal(actor, root, key) do
           {:ok, commits} -> commits
           {:error, :not_found} -> []
         end

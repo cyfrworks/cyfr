@@ -459,7 +459,7 @@ defmodule Opus.ProviderTest do
       :ok =
         ConsentFixtures.hand_edit_head!(ctx, profile_id,
           resolved_policy: "not a blob",
-          blob_digest: Prima.JCS.hash_binary("not a blob")
+          blob_digest: Prima.Digest.sha256("not a blob")
         )
 
       assert {:error, {:invalid_blob, _}} = own_load(ctx, ref)
@@ -860,7 +860,7 @@ defmodule Opus.ProviderTest do
     :ok =
       ConsentFixtures.hand_edit_head!(ctx, profile_id,
         resolved_policy: policy,
-        blob_digest: Prima.JCS.hash_binary(policy)
+        blob_digest: Prima.Digest.sha256(policy)
       )
   end
 

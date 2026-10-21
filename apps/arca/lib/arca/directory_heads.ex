@@ -234,22 +234,6 @@ defmodule Arca.DirectoryHeads do
 
   def touch(%Prima.Actor{}, _identifier, _head_hash), do: {:error, :cross_tenant}
 
-  @doc "Drop `identifier`'s cached head. Idempotent."
-  @spec delete(Prima.Actor.t(), String.t()) :: :ok | {:error, :cross_tenant | :database_error}
-  def delete(%Prima.Actor{scope: :platform, system: true}, identifier)
-      when is_binary(identifier) do
-    Arca.Repo.Errors.with_db_rescue("Arca.DirectoryHeads.delete", fn ->
-      {:ok, _} =
-        Arca.Repo.locking_transaction(fn ->
-          Arca.Repo.delete_all(from(h in DirectoryHead, where: h.identifier == ^identifier))
-        end)
-
-      :ok
-    end)
-  end
-
-  def delete(%Prima.Actor{}, _identifier), do: {:error, :cross_tenant}
-
   @doc """
   Remove at most `limit` cached heads no one here holds, least recently
   verified first: a head whose identifier no person's identity row names

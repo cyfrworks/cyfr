@@ -396,27 +396,5 @@ defmodule Arca.PairedClientsTest do
 
       assert {:ok, %{standing: "revoked"}} = PairedClients.revoke(actor, row.id)
     end
-
-    test "a person's clients go in every athanor only for the platform's own actor", %{
-      actor: actor
-    } do
-      elsewhere =
-        Prima.Actor.in_athanor("ath_pcl_elsewhere_#{System.unique_integer([:positive])}")
-
-      here = record!(actor)
-      there = record!(elsewhere)
-      bystander = record!(actor, %{user_id: "usr_bystander"})
-
-      assert {:ok, [id]} = PairedClients.revoke_for_user(actor, "usr_pcl")
-      assert id == here.id
-      assert {:ok, [%{id: there_id}]} = PairedClients.list(elsewhere, [])
-      assert there_id == there.id
-
-      assert {:ok, [id]} = PairedClients.revoke_for_user(Prima.Actor.system(), "usr_pcl")
-      assert id == there.id
-      assert {:ok, []} = PairedClients.revoke_for_user(Prima.Actor.system(), "usr_pcl")
-      assert {:ok, [%{id: bystander_id}]} = PairedClients.list(actor, [])
-      assert bystander_id == bystander.id
-    end
   end
 end
