@@ -300,7 +300,6 @@ func TestCallTool_ConsentCodesNameTheirTag(t *testing.T) {
 		-33501: "setup_required",
 		-33502: "consent_required",
 		-33503: "consent_conflict",
-		-33504: "restart_required",
 		-33505: "confirmation_required",
 	}
 	if len(consentTagByCode) != len(want) {

@@ -275,8 +275,7 @@ func renderResult(result map[string]any) error {
 	return nil
 }
 
-// Render typed consent errors (codes -33501..-33505) using the
-// payload in error.data.
+// Render typed consent errors using the payload in error.data.
 func explainConsentError(err error) (string, bool) {
 	var ce *mcp.ConsentError
 	if !errors.As(err, &ce) {
@@ -303,10 +302,6 @@ func formatConsentError(tag string, payload map[string]any) string {
 		cause, _ := payload["cause"].(string)
 		actual, _ := payload["actual_revision"].(float64)
 		return fmt.Sprintf("Consent changed while you were deciding (%s; current revision %.0f).\n  Re-run the grant to decide against what is true now.", cause, actual)
-
-	case "restart_required":
-		rev, _ := payload["new_revision"].(float64)
-		return fmt.Sprintf("Approved (consent rev %.0f) — re-run the command to continue.\n  The run that was in flight was stopped rather than re-bound mid-execution.", rev)
 
 	case "confirmation_required":
 		// Never a success: nothing was changed. The payload's id is this

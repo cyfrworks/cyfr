@@ -389,7 +389,7 @@ func (c *Client) doRequest(ctx context.Context, req JSONRPCRequest) (*JSONRPCRes
 	return c.doRequestOnce(ctx, req, "", "", nil)
 }
 
-// ConsentError is a protocol error in the -33501..-33505 range.
+// ConsentError is a typed consent or confirmation refusal.
 // Its error.data contains {"tag": ..., "payload": {...}}. Commands recover
 // it with errors.As and render it via formatConsentError. A
 // confirmation_required error is never a success: the change waits for the
@@ -408,7 +408,6 @@ var consentTagByCode = map[int]string{
 	-33501: "setup_required",
 	-33502: "consent_required",
 	-33503: "consent_conflict",
-	-33504: "restart_required",
 	-33505: "confirmation_required",
 }
 
