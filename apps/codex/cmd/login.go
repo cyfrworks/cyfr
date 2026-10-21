@@ -154,39 +154,6 @@ withdrawn.`,
 			fmt.Println("Logged in successfully!")
 		}
 
-		// `reauthenticate: true` — IdP access_token was rejected by
-		// cyfr.run's probe. The device_code is one-shot so there's no
-		// retry path; the user must run `cyfr login` again to mint a
-		// fresh access_token. Fail so CI pipelines notice.
-		if reauth, _ := pollResult["reauthenticate"].(bool); reauth {
-			return errors.New("Login session expired during credential setup. " +
-				"Please run `cyfr login` again.")
-		}
-
-		// Credential-store warnings: push tokens were issued by cyfr.run
-		// but couldn't be cached locally. The user's session is still
-		// valid; they should re-run `cyfr whoami` once connectivity is
-		// restored to retry storage.
-		if warns, ok := pollResult["credential_store_warnings"].([]any); ok && len(warns) > 0 {
-			slugs := make([]string, 0, len(warns))
-			for _, w := range warns {
-				if s, ok := w.(string); ok {
-					slugs = append(slugs, s)
-				}
-			}
-			fmt.Fprintf(os.Stderr,
-				"Warning: could not cache push tokens for namespaces: %v. "+
-					"Run `cyfr whoami` later to retry.\n", slugs)
-		}
-
-		// Probe error (transient, non-reauthenticate). Session is
-		// valid; user may need to retry via `cyfr whoami` auto-probe.
-		if probeErr, _ := pollResult["probe_error"].(string); probeErr != "" {
-			fmt.Fprintf(os.Stderr,
-				"Warning: cyfr.run identity probe failed (%s). "+
-					"Run `cyfr whoami` to retry.\n", probeErr)
-		}
-
 		if flagJSON {
 			output.JSON(pollResult)
 		}
