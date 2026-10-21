@@ -1009,7 +1009,7 @@ defmodule Sanctum.PairingTest do
       assert client_id == device.client_id
       assert renewed.device_key == device.device_key
       assert renewed.expires_at >= device.certificate.expires_at
-      assert {:ok, _ctx} = DeviceCerts.verify_request(renewed, ctx, [])
+      assert {:ok, _ctx} = DeviceCerts.verify_request(renewed, ctx)
 
       assert length(
                Arca.Repo.all(
@@ -1026,7 +1026,7 @@ defmodule Sanctum.PairingTest do
       ctx = connected!(device)
       new_key = rotate_live_key!(user.id)
 
-      assert DeviceCerts.verify_request(device.certificate, ctx, []) == {:error, :bad_signature}
+      assert DeviceCerts.verify_request(device.certificate, ctx) == {:error, :bad_signature}
 
       challenge = challenge(device, :renew)
       ctx = renewing!(device, challenge)

@@ -1447,7 +1447,8 @@ defmodule Sanctum.Consent.AuthzRaceTest do
           subject: "consume-race#{n}",
           first_seen_at: now,
           last_seen_at: now
-        }
+        },
+        also: &Sanctum.Person.mint_keys/1
       )
 
     {:ok, _} =

@@ -358,7 +358,7 @@ defmodule Cyfr.Boundaries do
       from: ["apps/cyfr/lib/aqua/**/*.ex", "apps/cyfr/lib/aqua.ex"],
       into: "Sanctum",
       allow: ~w(
-        Sanctum Sanctum.Annotations Sanctum.Catalog Sanctum.Consent Sanctum.Context
+        Sanctum.Annotations Sanctum.Catalog Sanctum.Consent Sanctum.Context
         Sanctum.ExecutionStanding Sanctum.Gate Sanctum.Notify Sanctum.Provisioning
         Sanctum.Refusals Sanctum.RunningTasks Sanctum.Tenancy Sanctum.ToolGrants
         Sanctum.VirtualTools

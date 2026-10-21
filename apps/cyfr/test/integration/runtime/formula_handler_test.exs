@@ -587,7 +587,7 @@ defmodule Locus.Runtime.FormulaHandlerTest do
 
     test "blocks an external-only tool with no grant", %{ctx: ctx} do
       auth = authority()
-      json = mcp_request("session", "login", %{"user" => "admin"})
+      json = mcp_request("session", "logout", %{})
       parsed = Jason.decode!(execute(json, host!(ctx, auth), auth))
 
       assert parsed["error"]["type"] == "dispatch_error"

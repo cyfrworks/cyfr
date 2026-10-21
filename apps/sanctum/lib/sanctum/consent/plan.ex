@@ -798,14 +798,21 @@ defmodule Sanctum.Consent.Plan do
 
   # What changed against the head when the shape moved
   # (`Sanctum.Consent.ShapeDiff`): nothing for a first grant or an
-  # unmoved shape, and the diff's refusal for a side stored damaged.
+  # unmoved shape; a side stored damaged refuses the plan as that damage,
+  # and a diff that cannot otherwise be shown is none, as the loader reads
+  # it.
   defp held_shape_diff(_ctx, :none, _shape_digest, _source_ref, _asked), do: {:ok, []}
 
   defp held_shape_diff(_ctx, {:ok, %{shape_digest: digest}, _id}, digest, _source_ref, _asked),
     do: {:ok, []}
 
-  defp held_shape_diff(ctx, {:ok, head, _profile_id}, _shape_digest, source_ref, asked),
-    do: Sanctum.Consent.ShapeDiff.compute(ctx, source_ref, head.resolved_policy, asked)
+  defp held_shape_diff(ctx, {:ok, head, _profile_id}, _shape_digest, source_ref, asked) do
+    case Sanctum.Consent.ShapeDiff.compute(ctx, source_ref, head.resolved_policy, asked) do
+      {:ok, diff} -> {:ok, diff}
+      {:error, {:corrupt, _what}} = damage -> damage
+      {:error, _unshown} -> {:ok, []}
+    end
+  end
 
   @doc """
   The narrowing a stored head holds against the ask as it stands, in the
