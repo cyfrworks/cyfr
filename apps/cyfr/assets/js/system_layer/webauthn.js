@@ -27,12 +27,12 @@ export function bytesToB64url(buffer) {
   return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "")
 }
 
-/** The bytes unpadded (or padded) base64url `text` spells, as an ArrayBuffer. */
+/** The bytes unpadded base64url `text` spells, as an ArrayBuffer; a padded spelling is refused. */
 export function b64urlToBytes(text) {
-  if (typeof text !== "string" || !/^[A-Za-z0-9_-]*={0,2}$/.test(text)) {
-    throw new TypeError("not base64url")
+  if (typeof text !== "string" || !/^[A-Za-z0-9_-]*$/.test(text)) {
+    throw new TypeError("not unpadded base64url")
   }
-  const base64 = text.replace(/-/g, "+").replace(/_/g, "/").replace(/=+$/, "")
+  const base64 = text.replace(/-/g, "+").replace(/_/g, "/")
   const padded = base64 + "=".repeat((4 - (base64.length % 4)) % 4)
   const binary = atob(padded)
   const bytes = new Uint8Array(binary.length)

@@ -57,8 +57,9 @@ describe("base64url", () => {
     equalBytes(b64urlToBytes(text), all)
   })
 
-  test("reads a padded spelling, and refuses what is not base64url", () => {
-    equalBytes(b64urlToBytes("-_8="), bytes(251, 255))
+  test("reads an unpadded spelling, and refuses a padded one and what is not base64url", () => {
+    equalBytes(b64urlToBytes("-_8"), bytes(251, 255))
+    assert.throws(() => b64urlToBytes("-_8="), TypeError)
     assert.throws(() => b64urlToBytes("a+b/"), TypeError)
     assert.throws(() => b64urlToBytes(42), TypeError)
   })
