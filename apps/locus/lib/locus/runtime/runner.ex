@@ -426,10 +426,8 @@ defmodule Locus.Runtime.Runner do
     for {key, _value} <- Locus.Runtime.Cache.match({:http_stream, :_, :_}),
         do: Locus.Runtime.Cache.invalidate(key)
 
-    if Process.whereis(Locus.Runtime.TaskSupervisor) do
-      for pid <- Task.Supervisor.children(Locus.Runtime.TaskSupervisor),
-          do: Task.Supervisor.terminate_child(Locus.Runtime.TaskSupervisor, pid)
-    end
+    for pid <- Task.Supervisor.children(Locus.Runtime.TaskSupervisor),
+        do: Task.Supervisor.terminate_child(Locus.Runtime.TaskSupervisor, pid)
 
     :ok
   end
