@@ -9,25 +9,21 @@
 # last matching warning is fixed; list_unused_filters fails on unused
 # entries. Review the reported warning before adding a filter.
 [
-  # Ecto.Multi's struct default holds a MapSet literal (`names:
-  # MapSet.new()`, in Ecto's own multi.ex), so Dialyzer reads
-  # Ecto.Multi.new/0's answer as carrying a non-opaque map and each
-  # Ecto.Multi.run/3 on it as a call without the opaque term. The struct is
-  # Ecto's; the calls are its public pipeline.
+  # Ecto.Multi.run/3's success typing reaches Erlang's `:sets` through the
+  # MapSet calls on the multi's `names`, so Dialyzer expects that field to
+  # be the opaque `:sets.set/1`. Ecto.Multi.new/0's struct literal holds the
+  # empty map `:sets.new(version: 2)` builds there (MapSet itself types the
+  # field as term()), and Dialyzer reports each Ecto.Multi.run/3 on it as a
+  # call without the opaque term. The struct and the pipeline are Ecto's
+  # public API.
   {"lib/arca/consent_storage.ex", :call_without_opaque},
-  # The consent_storage.ex case: prepare_transaction/2 pipes Ecto.Multi.new/0,
-  # whose struct default is the `names: MapSet.new()` literal, into
-  # Ecto.Multi.run/3 and Ecto.Multi.append/2.
+  # The same Ecto.Multi.new/0 literal handed to Ecto.Multi.run/3, in
+  # prepare_transaction/2.
   {"lib/arca/repo.ex", :call_without_opaque},
   # resolve_component/2's `type || component[:component_type] || …` tests
   # for nil two values the specs make binaries (the parsed ref's type and the
   # registry row's component type), so neither nil branch is taken by them.
   {"lib/compendium/component.ex", :guard_fail},
-  # The resolver's visited set is built by MapSet.new/0 and carried down the
-  # recursion; Dialyzer reads the struct literal as a non-opaque map, so
-  # MapSet.member?/2 on it reads as a call without the opaque term. The regex entry for this file below
-  # is the same set.
-  {"lib/compendium/dependency_resolver.ex", :call_without_opaque},
   # Compendium.OCI.Reference's spec makes repository a binary, so the
   # `ref.repository || ""` fallback in do_oci_pull/2 never takes its nil
   # branch by the spec.
@@ -94,15 +90,11 @@
   # refusal for false; Dialyzer does not narrow false out of the `||`'s
   # other branch, so it sees the `with` fall through on false.
   {"lib/sanctum/sign_in.ex", :missing_range},
-  # Two opaque-term warnings dialyxir cannot classify: its own formatter
-  # raises on them (`Dialyxir.WarningHelpers.ordinal/1`) and prints the raw
+  # An opaque-term warning dialyxir cannot classify: its own formatter
+  # raises on it (`Dialyxir.WarningHelpers.ordinal/1`) and prints the raw
   # dialyzer text, so a `{file, kind}` filter never sees a kind to match.
-  # Matched by regex instead. Each is an opaque term passed where Dialyzer
-  # reads a plain one: a MapSet struct literal carried down a recursion, or
-  # the opaque Task.ref() a Task carries.
-  # This one: dependency_resolver.ex's do_resolve_tree/5 recursive call with
-  # the visited MapSet.
-  ~r{lib/compendium/dependency_resolver\.ex:\d+:\d+:.*opaque},
+  # Matched by regex instead: the opaque Task.ref() a Task carries, passed
+  # where Dialyzer reads a plain term.
   # The first entry's kind for mcp_controller.ex: Process.demonitor/2 on the
   # monitor reference a Task carries, an opaque Task.ref().
   ~r{lib/emissary/web/controllers/mcp_controller\.ex:\d+:\d+:.*opaque}

@@ -7,10 +7,8 @@ defmodule Prima.CarryTest do
   re-signs to its bytes; each is checked under a verified head against
   its destination, action, payload and clock, so a forged, substituted,
   stale or old-`key_epoch` envelope is refused and one under the new
-  `key_epoch` is taken; a replayed action id answers its recorded
-  acknowledgment for the exact bytes and refuses any other; payloads and
-  fragments are held to 8 and 16 KiB before they are read; and a return
-  reports navigation only and is recorded once.
+  `key_epoch` is taken; payloads and fragments are held to 8 and 16 KiB
+  before they are read; and a return reports navigation only.
   """
 
   use ExUnit.Case, async: true

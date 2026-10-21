@@ -358,6 +358,14 @@ defmodule Prima.EffectsTest do
       assert classes(beam_imports(beam)) == [:app_env, :wall_clock]
     end
 
+    test "a call spelled from the Elixir root is caught" do
+      {module, beam, found} =
+        plant(Plant.Rooted, "def now, do: Elixir.System.system_time(:millisecond)")
+
+      assert {module, {:now, 0}, :wall_clock, {System, :system_time, 1}} in found
+      assert classes(beam_imports(beam)) == [:wall_clock]
+    end
+
     test "a default argument is the function's own" do
       {module, _beam, found} =
         plant(Plant.Default, "def seal(x, iv \\\\ :crypto.strong_rand_bytes(12)), do: {x, iv}")
@@ -698,12 +706,15 @@ defmodule Prima.EffectsTest do
   # one exists, else its name as a string. Every module the roster, the
   # pins and the class lists name is a literal here, so its atom exists; a
   # string names a module none of them names, which only the name-prefix
-  # classes can match.
+  # classes can match. A leading `Elixir` segment is the root every name
+  # already has (`Elixir.System` is `System`), as Module.concat/1 reads it.
   defp concat(parts) do
     segments =
       parts
       |> Enum.reject(&is_nil/1)
-      |> Enum.map_join(".", &(&1 |> to_string() |> String.replace_prefix("Elixir.", "")))
+      |> Enum.map(&(&1 |> to_string() |> String.replace_prefix("Elixir.", "")))
+      |> Enum.drop_while(&(&1 == "Elixir"))
+      |> Enum.join(".")
 
     existing("Elixir." <> segments)
   end

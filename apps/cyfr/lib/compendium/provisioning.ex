@@ -568,11 +568,13 @@ defmodule Compendium.Provisioning do
   defp pull_required_deps(ctx, claim) do
     budget_ms = Application.fetch_env!(:cyfr, :provisioning_required_pull_budget_ms)
 
-    case bounded_pull(ctx, missing_bundle_deps(ctx, :required), budget_ms, claim) do
-      {:ok, %{failed: []} = closure} -> {:ok, closure}
-      {:ok, %{failed: failed}} -> {:error, {:closure, failed}}
-      :timeout -> {:error, {:closure, {:timeout, budget_ms}}}
-      {:exit, reason} -> {:error, {:closure, {:exit, reason}}}
+    with {:ok, required} <- missing_bundle_deps(ctx, :required) do
+      case bounded_pull(ctx, required, budget_ms, claim) do
+        {:ok, %{failed: []} = closure} -> {:ok, closure}
+        {:ok, %{failed: failed}} -> {:error, {:closure, failed}}
+        :timeout -> {:error, {:closure, {:timeout, budget_ms}}}
+        {:exit, reason} -> {:error, {:closure, {:exit, reason}}}
+      end
     end
   end
 
@@ -585,9 +587,13 @@ defmodule Compendium.Provisioning do
   # a provisioning failure.
   defp pull_optional_deps(ctx, claim) do
     optional =
-      if Compendium.RegistryHost.configured?(),
-        do: missing_bundle_deps(ctx, :all) -- missing_bundle_deps(ctx, :required),
-        else: []
+      with true <- Compendium.RegistryHost.configured?(),
+           {:ok, all} <- missing_bundle_deps(ctx, :all),
+           {:ok, required} <- missing_bundle_deps(ctx, :required) do
+        all -- required
+      else
+        _none_or_unreadable -> []
+      end
 
     case bounded_pull(ctx, optional, @optional_pull_budget_ms, claim) do
       {:ok, %{pulled: pulled, failed: []}} ->
@@ -655,15 +661,26 @@ defmodule Compendium.Provisioning do
   # would re-read its manifest. Listing what is installed, whoever
   # published it, is what makes an interrupted closure heal on the next
   # attempt.
+  # A component whose dependencies do not read, or a listing the store
+  # cannot answer, leaves the closure unknown: `{:error, {:closure, ...}}`,
+  # never "nothing missing".
   defp missing_bundle_deps(ctx, include) do
     case Arca.ComponentStorage.list_components(Context.actor(ctx), limit: :none) do
       {:ok, rows} ->
         rows
-        |> Enum.flat_map(&Pull.missing_deps(ctx, &1, include: include))
-        |> Enum.uniq()
+        |> Enum.reduce_while({:ok, []}, fn row, {:ok, acc} ->
+          case Pull.missing_deps(ctx, row, include: include) do
+            {:ok, refs} -> {:cont, {:ok, acc ++ refs}}
+            {:error, reason} -> {:halt, {:error, {:closure, {:unreadable, reason}}}}
+          end
+        end)
+        |> then(fn
+          {:ok, refs} -> {:ok, Enum.uniq(refs)}
+          error -> error
+        end)
 
-      _ ->
-        []
+      {:error, reason} ->
+        {:error, {:closure, {:unreadable, reason}}}
     end
   end
 end

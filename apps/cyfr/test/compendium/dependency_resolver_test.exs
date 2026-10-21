@@ -277,6 +277,46 @@ defmodule Compendium.DependencyResolverTest do
   end
 
   # ============================================================================
+  # A stored manifest that does not decode
+  # ============================================================================
+
+  # A row altered outside the publish path: its manifest column holds bytes
+  # that are not JSON.
+  defp corrupt_manifest!(name) do
+    {1, _} =
+      Ecto.Query.from(c in Arca.Schemas.Component, where: c.name == ^name)
+      |> Arca.Repo.update_all(set: [manifest: ~s({"dependencies": )])
+
+    :ok
+  end
+
+  describe "a dependency whose stored manifest does not decode" do
+    test "fails the tree rather than reading as a leaf", %{ctx: ctx} do
+      {:ok, _} = register_test_component(ctx, "damaged-dep", "1.0.0", "reagent")
+      corrupt_manifest!("damaged-dep")
+
+      ref = "reagent:local.damaged-dep:1.0.0"
+      manifest = %{"dependencies" => %{"static" => [%{"ref" => ref}]}}
+
+      assert {:error, {:dependency_unreadable, ^ref, :malformed_manifest}} =
+               DependencyResolver.resolve_tree(ctx, "comp_root", manifest)
+    end
+
+    test "is no missing dependency to pull: the closure reads as an error", %{ctx: ctx} do
+      {:ok, _} = register_test_component(ctx, "damaged-root", "1.0.0", "reagent")
+      corrupt_manifest!("damaged-root")
+
+      {:ok, row} = Compendium.Registry.get(ctx, "damaged-root", "1.0.0")
+      assert is_binary(row.manifest)
+      assert {:error, :malformed_manifest} = Compendium.Pull.missing_deps(ctx, row)
+
+      {:ok, %{components: rows}} = Compendium.Registry.search(ctx, %{query: "damaged-root"})
+      assert [%{manifest: stored}] = Enum.filter(rows, &(&1.name == "damaged-root"))
+      assert is_binary(stored)
+    end
+  end
+
+  # ============================================================================
   # Versionless "latest" determinism
   # ============================================================================
 
