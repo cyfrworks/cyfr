@@ -415,6 +415,9 @@ const pagePath = (segment, suffix) => `${base}/a/${encodeURIComponent(segment)}$
 // viewport.
 async function signedIn(browser, cookie) {
   const context = await browser.newContext({ viewport });
+  // The page's data-confirm controls ask the browser's native confirm; the
+  // proof agrees to each one as its page asks it.
+  context.on("page", (page) => page.on("dialog", (dialog) => dialog.accept()));
   await context.addCookies([{
     name: "_cyfr_key", value: cookie, url: base, httpOnly: true, secure: true, sameSite: "Lax",
   }]);
@@ -429,14 +432,6 @@ async function open(page, url) {
 // A flash the page shows, by its words.
 const told = (page, words, timeout = 30_000) =>
   page.getByText(words, { exact: false }).first().waitFor({ timeout }).then(() => true).catch(() => false);
-
-// The page's own confirm for a control marked data-confirm (app.js
-// `showConfirmDialog`), agreed to: the change is sent once it is.
-async function agree(page) {
-  const confirm = page.locator("div.fixed.inset-0 button", { hasText: /^Confirm$/ });
-  await confirm.waitFor({ timeout: 30_000 });
-  await confirm.click();
-}
 
 // What a page shows when a step does not hold: a screenshot beside the
 // record, and the text of what it says in alerts and flashes. Neither key
@@ -554,7 +549,6 @@ async function door(page, settings, value, action) {
   await button.waitFor({ timeout: 30_000 });
   await button.click();
   // Denying asks the page's own confirm first.
-  if (action === "deny") await agree(page);
   return told(page, action === "allow" ? "Allowed." : "Denied.");
 }
 
@@ -846,7 +840,6 @@ async function main() {
     await revoke.scrollIntoViewIfNeeded();
     const revokeMark = frames.length;
     await revoke.click();
-    await agree(admin);
     const revoked = await told(admin, "Entry revoked.");
     const revokeShown = revoked ? [] :
       [...await diagnose(admin, "revoke"), { sent: frames.slice(revokeMark).filter((f) => f.includes("instance_revoke")) }];
