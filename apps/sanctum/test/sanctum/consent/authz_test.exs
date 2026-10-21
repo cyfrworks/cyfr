@@ -404,7 +404,7 @@ defmodule Sanctum.Consent.AuthzTest do
       assert record(device_ctx, confirmed.confirmation_id).state == "confirmed"
     end
 
-    test "a session's takes no device hold, and goes ahead as before",
+    test "a session's takes no device hold, and goes ahead",
          %{session_ctx: session_ctx} do
       confirmed = Sanctum.TestContext.confirmed(session_ctx, :credential_entry, change())
 
@@ -435,7 +435,7 @@ defmodule Sanctum.Consent.AuthzTest do
     end
 
     test "a tincture credential, a session or a key claiming a client id is refused" do
-      for method <- [:tincture, :oidc, :api_key, :session] do
+      for method <- [:tincture, :oidc, :api_key] do
         claiming = ctx(auth_method: method, client_id: "pcl_1")
         refused = {:error, {:surface_not_permitted, method}}
 

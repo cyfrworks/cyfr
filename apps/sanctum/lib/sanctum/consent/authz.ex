@@ -434,8 +434,8 @@ defmodule Sanctum.Consent.Authz do
   def message({:conflict, message}) when is_binary(message), do: message
 
   # This IS the vocabulary module — an unknown term here is a producer bug,
-  # logged and generalized, never inspected onto the wire (the catch-all
-  # `inspect/1` undid the closed union above).
+  # logged and generalized, never inspected onto the wire (a catch-all
+  # `inspect/1` would undo the closed union above).
   def message(other) do
     Logger.warning("[Sanctum.Consent.Authz] unrenderable consent refusal: #{inspect(other)}")
     "The consent request is not valid"
@@ -817,9 +817,11 @@ defmodule Sanctum.Consent.Authz do
 
   defp named_asker(kind, _unnamed), do: %{"kind" => kind}
 
-  @doc false
-  # The longest prefix of `text` that is at most `max` bytes and valid
-  # UTF-8: a character the cut would split is dropped whole.
+  @doc """
+  The longest prefix of `text` that is at most `max` bytes and valid
+  UTF-8: a character the cut would split is dropped whole, and text with
+  no valid prefix answers `""`.
+  """
   @spec utf8_prefix(binary(), non_neg_integer()) :: binary()
   def utf8_prefix(text, max) when is_binary(text) and is_integer(max) and max >= 0,
     do: valid_prefix(binary_part(text, 0, min(byte_size(text), max)))
@@ -972,11 +974,15 @@ defmodule Sanctum.Consent.Authz do
     end
   end
 
-  @doc false
-  # What a revalidation's refusal is here: a person whose remote identity
-  # could not be read fresh is `:identity_stale`, and a refusal this
-  # vocabulary does not know is `:unavailable`, never a crash, so a refusal
-  # revalidation learns later still refuses.
+  @doc """
+  The confirmation vocabulary's word for a revalidation's refusal
+  (`Sanctum.Caller.revalidate_session/1`): `:unauthenticated` is
+  `:not_authenticated`, `:not_standing` and `:not_member` are
+  `:not_standing`, a person whose remote identity could not be read fresh
+  is `:identity_stale`, and a refusal this vocabulary does not know is
+  `:unavailable`, logged, never a crash, so a refusal revalidation learns
+  later still refuses.
+  """
   @spec standing_refusal(term()) ::
           :not_authenticated | :not_standing | :identity_stale | :unavailable
   def standing_refusal(:unauthenticated), do: :not_authenticated
