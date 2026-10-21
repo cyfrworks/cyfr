@@ -70,16 +70,16 @@ defmodule Opus.Emit do
         }
 
   @doc """
-  An emitter for the stream of `stream_id`. `opts`: `:ctx` and `:authority`
-  (required); `:budget_id`, the root execution whose emit budget the events
-  count against (default `stream_id`); `:step_spans`, the execution's
-  `Opus.StepSpans` clock, marked with each event pushed.
+  An emitter for the stream of `stream_id`. `opts`: `:ctx`, `:authority`
+  and `:budget_id`, the root execution whose emit budget the events count
+  against (all required); `:step_spans`, the execution's `Opus.StepSpans`
+  clock, marked with each event pushed.
   """
   @spec new(String.t(), keyword()) :: t()
   def new(stream_id, opts) when is_binary(stream_id) do
     %__MODULE__{
       stream_id: stream_id,
-      budget_id: Keyword.get(opts, :budget_id, stream_id),
+      budget_id: Keyword.fetch!(opts, :budget_id),
       ctx: Keyword.fetch!(opts, :ctx),
       authority: Keyword.fetch!(opts, :authority),
       step_spans: Keyword.get(opts, :step_spans)
@@ -139,7 +139,7 @@ defmodule Opus.Emit do
           StepSpans.pushed(emitter.step_spans, data)
           {:cont, safe_encode(%{"ok" => true, "sequence" => seq})}
 
-        {:error, :missing_athanor} ->
+        {:error, reason} when reason in [:missing_athanor, :unavailable] ->
           {:halt, encode_error(:dispatch_error, "emit event could not be routed")}
       end
     end)

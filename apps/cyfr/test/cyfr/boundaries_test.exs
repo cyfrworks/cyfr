@@ -1627,7 +1627,7 @@ defmodule Cyfr.BoundariesTest do
          defmodule Cyfr.Bus.Planted do
            alias Sanctum.Context
            def a(%Context{} = ctx), do: Aqua.Runner.subscribe(ctx.athanor_id, "t")
-           def b, do: Opus.Events.flush("e")
+           def b, do: Opus.Events.since("e", {0, 0}, "a")
            def c, do: Prima.Actor.system()
          end
          ''')}

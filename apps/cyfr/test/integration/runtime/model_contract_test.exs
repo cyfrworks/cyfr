@@ -1021,7 +1021,8 @@ defmodule Locus.Runtime.ModelContractTest do
 
     observer = Fixture.observe!(ctx, thread.id)
     # One subscription, and nothing an earlier turn of the thread left.
-    :ok = Runner.unsubscribe(thread.id, ctx.athanor_id)
+    actor = Prima.Actor.in_athanor(ctx.athanor_id)
+    :ok = Cyfr.Bus.unsubscribe(actor, Cyfr.Bus.thread(actor, thread.id))
     drain_thread()
     :ok = Runner.subscribe(thread.id, ctx.athanor_id)
 
@@ -1075,7 +1076,9 @@ defmodule Locus.Runtime.ModelContractTest do
 
         ended? and
           Enum.all?(closed, fn id ->
-            seen.streams |> Map.get(id, []) |> Enum.any?(&Opus.Events.terminal?/1)
+            seen.streams
+            |> Map.get(id, [])
+            |> Enum.any?(&(&1.type in Arca.ExecutionEvents.terminal_types()))
           end)
       end,
       @settle_ms,

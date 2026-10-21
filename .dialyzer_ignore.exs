@@ -55,10 +55,6 @@
   # :inet.gethostname/0's spec answers only {:ok, name}; the "cyfr-host"
   # fallback keeps the device label total.
   {"lib/compendium/registry/credential_store.ex", :pattern_match_cov},
-  # :ets.update_counter/4 is specced to return integer() (a list for a list
-  # of operations); counting up from 0 by one it answers a positive integer,
-  # the type the spec states.
-  {"lib/opus/events/sequence.ex", :missing_range},
   # Logger.Formatter defines no time/0 type in this Elixir; the spec names
   # the {date, time} tuple Logger hands a formatter, and Dialyzer reads the
   # unknown type as any().

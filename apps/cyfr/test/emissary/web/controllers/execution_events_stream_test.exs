@@ -90,10 +90,10 @@ defmodule Emissary.Web.ExecutionEventsStreamTest do
        %{conn: conn, exec: exec} do
     # 1 is execution.started (admission). Deltas under it, a step row, a
     # delta under that, the end.
-    {:ok, "1.1"} = Events.push(exec.id, %{"i" => 1}, exec)
+    {:ok, "1.1"} = Events.push(exec.id, %{"i" => 1}, exec, origin: "host")
     two = durable!(exec, "step.closed", %{"step" => "s"})
     publish!(exec, "step.closed", two)
-    {:ok, "2.1"} = Events.push(exec.id, %{"i" => 2}, exec)
+    {:ok, "2.1"} = Events.push(exec.id, %{"i" => 2}, exec, origin: "host")
     three = durable!(exec, "execution.completed", %{"status" => "completed"})
     publish!(exec, "execution.completed", three)
     assert {two, three} == {2, 3}
@@ -132,10 +132,10 @@ defmodule Emissary.Web.ExecutionEventsStreamTest do
     task = Task.async(fn -> stream(conn, exec).resp_body end)
     await_live(task)
 
-    {:ok, "1.1"} = Events.push(exec.id, %{"i" => 1}, exec)
+    {:ok, "1.1"} = Events.push(exec.id, %{"i" => 1}, exec, origin: "host")
     two = durable!(exec, "step.closed", %{"step" => "a"})
     publish!(exec, "step.closed", two)
-    {:ok, "2.1"} = Events.push(exec.id, %{"i" => 2}, exec)
+    {:ok, "2.1"} = Events.push(exec.id, %{"i" => 2}, exec, origin: "host")
     three = durable!(exec, "execution.failed", %{"status" => "failed"})
     publish!(exec, "execution.failed", three)
 
@@ -222,7 +222,7 @@ defmodule Emissary.Web.ExecutionEventsStreamTest do
       await_live(task)
 
       {:ok, _} = Sanctum.Session.revoke_all_for_user(person.user_id)
-      {:ok, "1.1"} = Events.push(exec.id, %{"i" => 1}, exec)
+      {:ok, "1.1"} = Events.push(exec.id, %{"i" => 1}, exec, origin: "host")
 
       {conn, elapsed} = Task.await(task, 10_000)
       assert conn.status == 200
@@ -260,7 +260,7 @@ defmodule Emissary.Web.ExecutionEventsStreamTest do
       send(task.pid, CyfrWeb.ContextGuard.recheck_message())
       # Revalidated, the stream is back in its loop, still delivering.
       await_live(task)
-      {:ok, "1.1"} = Events.push(exec.id, %{"i" => 1}, exec)
+      {:ok, "1.1"} = Events.push(exec.id, %{"i" => 1}, exec, origin: "host")
       two = durable!(exec, "execution.completed", %{"status" => "completed"})
       publish!(exec, "execution.completed", two)
 

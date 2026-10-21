@@ -22,12 +22,21 @@ defmodule Opus.Events.Sequence do
 
   def start_link(_opts), do: GenServer.start_link(__MODULE__, :ok, name: __MODULE__)
 
-  @doc "The next delta number under `durable` for `execution_id`, starting at 1."
+  @doc """
+  The next delta number under `durable` for `execution_id`, starting at 1.
+  Raises when the counter table is absent: a delta is never numbered
+  outside the stream's one counter.
+  """
   @spec next(String.t(), non_neg_integer()) :: pos_integer()
   def next(execution_id, durable) when is_binary(execution_id) and is_integer(durable) do
-    :ets.update_counter(@table, {execution_id, durable}, {2, 1}, {{execution_id, durable}, 0})
-  rescue
-    ArgumentError -> System.unique_integer([:positive, :monotonic])
+    case :ets.update_counter(
+           @table,
+           {execution_id, durable},
+           {2, 1},
+           {{execution_id, durable}, 0}
+         ) do
+      n when n > 0 -> n
+    end
   end
 
   @doc """
@@ -38,8 +47,6 @@ defmodule Opus.Events.Sequence do
   def forget(execution_id) when is_binary(execution_id) do
     :ets.match_delete(@table, {{execution_id, :_}, :_})
     :ok
-  rescue
-    ArgumentError -> :ok
   end
 
   @doc """
@@ -58,8 +65,6 @@ defmodule Opus.Events.Sequence do
     end
 
     :ok
-  rescue
-    ArgumentError -> :ok
   end
 
   @impl true

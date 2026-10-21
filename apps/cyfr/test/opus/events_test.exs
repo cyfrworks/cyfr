@@ -49,7 +49,6 @@ defmodule Opus.EventsTest do
     Events.subscribe(record.id, record)
 
     seq = durable!(record, "execution.completed", %{"status" => "completed"})
-    Events.flush(record.id)
 
     id = record.id
     assert_receive %Cyfr.Bus.ExecutionEvent{type: "execution.completed", execution_id: ^id}
@@ -67,8 +66,8 @@ defmodule Opus.EventsTest do
     ctx = %Sanctum.Context{athanor_id: "ath_evt_x"}
     Events.subscribe(record.id, ctx)
 
-    assert {:ok, "1.1"} = Events.push(record.id, %{"kind" => "text_delta"}, record)
-    Events.flush(record.id)
+    assert {:ok, "1.1"} =
+             Events.push(record.id, %{"kind" => "text_delta"}, record, origin: "host")
 
     id = record.id
     assert_receive %Cyfr.Bus.ExecutionEvent{type: "emit", execution_id: ^id, sequence: "1.1"}
@@ -79,7 +78,7 @@ defmodule Opus.EventsTest do
     Events.subscribe(record.id, record)
 
     assert {:error, :missing_athanor} =
-             Events.push(record.id, %{"kind" => "text_delta"}, nil)
+             Events.push(record.id, %{"kind" => "text_delta"}, nil, origin: "host")
 
     assert {:error, :missing_athanor} =
              Events.publish(record.id, nil, "execution.failed", 9, %{})
@@ -100,18 +99,17 @@ defmodule Opus.EventsTest do
     test "deltas ride the last durable event and restart at .1 after each new one" do
       record = execution!("ath_evt_x")
 
-      assert {:ok, "1.1"} = Events.push(record.id, %{"i" => 1}, record)
-      assert {:ok, "1.2"} = Events.push(record.id, %{"i" => 2}, record)
+      assert {:ok, "1.1"} = Events.push(record.id, %{"i" => 1}, record, origin: "host")
+      assert {:ok, "1.2"} = Events.push(record.id, %{"i" => 2}, record, origin: "host")
 
       two = durable!(record, "step.closed", %{"step" => "s1"})
       assert two == 2
-      assert {:ok, "2.1"} = Events.push(record.id, %{"i" => 3}, record)
+      assert {:ok, "2.1"} = Events.push(record.id, %{"i" => 3}, record, origin: "host")
 
       # A publication for an older prefix, arriving late, does not touch the
       # counter of the prefix already emitted under.
       :ok = Events.publish(record.id, record, "step.closed", 1, %{"late" => true})
-      assert {:ok, "2.2"} = Events.push(record.id, %{"i" => 4}, record)
-      Events.flush(record.id)
+      assert {:ok, "2.2"} = Events.push(record.id, %{"i" => 4}, record, origin: "host")
 
       # Replay from a cursor: the rows after it in order, each with the
       # deltas under it; from the tip, only the deltas not yet seen.
@@ -152,14 +150,41 @@ defmodule Opus.EventsTest do
     end
   end
 
+  describe "the counter table" do
+    # The table belongs to an always-started child of `Opus.Tree`; with it
+    # absent a delta has no number, and numbering raises rather than
+    # answering one from outside the stream's counter.
+    test "numbering raises while the table is absent" do
+      on_exit(&restart_sequence/0)
+      :ok = Supervisor.terminate_child(Opus.Tree, Sequence)
+
+      try do
+        exec_id = "exec_evt_seq_#{System.unique_integer([:positive])}"
+        assert_raise ArgumentError, fn -> Sequence.next(exec_id, 1) end
+        assert_raise ArgumentError, fn -> Sequence.reseed(exec_id, 1, 3) end
+        assert_raise ArgumentError, fn -> Sequence.forget(exec_id) end
+      after
+        restart_sequence()
+      end
+
+      assert Sequence.next("exec_evt_seq_back", 1) == 1
+    end
+  end
+
+  defp restart_sequence do
+    case Supervisor.restart_child(Opus.Tree, Sequence) do
+      {:ok, _pid} -> :ok
+      {:error, :running} -> :ok
+    end
+  end
+
   # An idle buffer restart must restore cached events for Last-Event-ID
   # replay, and keep numbering where it was.
   test "a buffer that restarts resumes the history and the numbering" do
     record = execution!("ath_evt_x")
 
-    assert {:ok, "1.1"} = Events.push(record.id, %{"n" => 1}, record)
-    assert {:ok, "1.2"} = Events.push(record.id, %{"n" => 2}, record)
-    Events.flush(record.id)
+    assert {:ok, "1.1"} = Events.push(record.id, %{"n" => 1}, record, origin: "host")
+    assert {:ok, "1.2"} = Events.push(record.id, %{"n" => 2}, record, origin: "host")
 
     idle_stop_buffer(record.id)
 
@@ -168,8 +193,7 @@ defmodule Opus.EventsTest do
 
     # The next emit restarts the buffer, which floors the counter from
     # what the cache saw, and the stream continues.
-    assert {:ok, "1.3"} = Events.push(record.id, %{"n" => 3}, record)
-    Events.flush(record.id)
+    assert {:ok, "1.3"} = Events.push(record.id, %{"n" => 3}, record, origin: "host")
 
     assert ["1.1", "1.2", "1.3"] =
              record.id
@@ -178,8 +202,8 @@ defmodule Opus.EventsTest do
   end
 
   # Stop a live buffer the way the idle timeout does, and wait until the
-  # Registry entry is actually gone — the entry is cleaned asynchronously
-  # after the DOWN, and a push in that window would cast into the dead pid.
+  # Registry entry is cleared — the entry is cleaned asynchronously after
+  # the DOWN.
   defp idle_stop_buffer(exec_id) do
     [{pid, _}] = Registry.lookup(Opus.Events.Registry, exec_id)
     ref = Process.monitor(pid)
