@@ -422,20 +422,17 @@ defmodule Sanctum.InstanceEntries do
            }),
          id = Prima.UUID7.generate_id("ine"),
          {:ok, sealed} <- seal(json, CipherAAD.instance_entry(id, hint)) do
-      binding = %{
+      row = %{
         provider_hint: hint,
         field_names: Jason.encode!(Enum.sort(Map.keys(fields))),
-        oauth_endpoints: nil,
-        oauth_scopes: nil,
-        destination: destination,
-        attach_only: true
+        destination: destination
       }
 
-      with {:ok, digest} <- VaultReader.binding_digest(binding),
+      with {:ok, digest} <- VaultReader.binding_digest(as_binding(row)),
            {:ok, entry} <-
              Store.put(
                actor(),
-               Map.merge(binding, %{
+               Map.merge(row, %{
                  id: id,
                  name: name,
                  kind: kind,
@@ -540,11 +537,17 @@ defmodule Sanctum.InstanceEntries do
   # A rebind that lost the race recomputes against what landed, and is
   # decided again there.
   defp move(ctx, entry, destination, attempts) do
-    rebound = %{entry | destination: destination}
+    rebound = as_binding(%{entry | destination: destination})
 
     with {:ok, digest} <- VaultReader.binding_digest(rebound),
          {:ok, confirmation} <-
-           Sanctum.Vault.rebind_confirmation(ctx, "instance_entry.rebind", entry, rebound, digest) do
+           Sanctum.Vault.rebind_confirmation(
+             ctx,
+             "instance_entry.rebind",
+             as_binding(entry),
+             rebound,
+             digest
+           ) do
       case Store.move_binding(
              actor(),
              entry.id,
@@ -1190,6 +1193,14 @@ defmodule Sanctum.InstanceEntries do
   # The entry, the kind and who acted: never a name, a field or a value.
   defp emit(event, ctx, kind, id),
     do: :telemetry.execute(event, %{count: 1}, %{entry_id: id, kind: kind, user_id: ctx.user_id})
+
+  # The binding an instance entry's digest covers and a rebind compares:
+  # its own binding columns, with the OAuth endpoints, scopes and
+  # disclosure every instance entry holds by definition (none, none and
+  # attach-only), in the shape `Sanctum.VaultReader.binding_digest/1`
+  # reads of an entry of either store.
+  defp as_binding(entry),
+    do: Map.merge(entry, %{oauth_endpoints: nil, oauth_scopes: nil, attach_only: true})
 
   defp view(entry) do
     %{

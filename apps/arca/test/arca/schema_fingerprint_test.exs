@@ -332,6 +332,7 @@ defmodule Arca.SchemaFingerprintTest do
       name: "btc",
       cron_expression: "*/5 * * * *",
       reference: "catalyst:local.markets",
+      resolved_reference: "catalyst:local.markets:1.0.0",
       profile_id: "prof_fp",
       created_at: now,
       updated_at: now

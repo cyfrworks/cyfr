@@ -885,12 +885,12 @@ defmodule Sanctum.Pairing do
   @spec revoke(Context.t(), String.t()) :: {:ok, map()} | {:error, refusal()}
   def revoke(%Context{} = ctx, client_id) when is_binary(client_id) do
     with :ok <- person_focused(ctx),
-         {:ok, client} <- own_client(ctx, client_id),
+         {:ok, _client} <- own_client(ctx, client_id),
          :ok <-
            Authz.confirm(ctx, :pairing_revocation, %{
              operation: "pairing.revoke",
              arguments: %{"client_id" => client_id},
-             resource: client.label || client_id
+             resource: client_id
            }) do
       case Arca.PairedClients.revoke(Context.actor(ctx), client_id) do
         {:ok, row} ->
@@ -925,7 +925,7 @@ defmodule Sanctum.Pairing do
   @doc """
   Re-enable the paired client `client_id`, which a declared restore
   suspended, under `proof` (`t:proof/0`). Answers `%{client: %{client_id:,
-  label:, standing: "active"}, recovery_closed:}`, `recovery_closed` true
+  standing: "active"}, recovery_closed:}`, `recovery_closed` true
   when this closed the person's open restore, as re-enabling a method
   does (`Arca.PairedClients.reenable/4`).
 
@@ -1004,7 +1004,7 @@ defmodule Sanctum.Pairing do
     %{
       operation: "pairing.reenable",
       arguments: %{"client_id" => client.id},
-      resource: client.label || client.id,
+      resource: client.id,
       details: %{
         "effect" =>
           "This device, suspended when this home was restored from a backup, stands for you again"
@@ -1029,7 +1029,7 @@ defmodule Sanctum.Pairing do
 
   defp reenabled(row) do
     %{
-      client: %{client_id: row.id, label: row.label, standing: row.standing},
+      client: %{client_id: row.id, standing: row.standing},
       recovery_closed: row.closed_restore_ids != []
     }
   end
@@ -1060,7 +1060,7 @@ defmodule Sanctum.Pairing do
 
   @doc """
   The context person's active paired clients in the athanor in focus,
-  oldest first: each with its id, label, the credential it stands on,
+  oldest first: each with its id, the credential it stands on,
   when it was paired, when its current certificate expires (nil for none
   current), and whether it is the client `ctx` itself came through.
   """
@@ -1085,7 +1085,6 @@ defmodule Sanctum.Pairing do
 
     %{
       client_id: row.id,
-      label: row.label,
       source: row.source_kind,
       paired_at: row.inserted_at,
       certificate_expires_at: expires_at,

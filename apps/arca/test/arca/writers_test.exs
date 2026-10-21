@@ -136,12 +136,18 @@ defmodule Arca.Test.WritersTest do
   end
 
   # The row `record_start/1` writes from `execution_attrs(id)`: its attrs,
-  # the schema's defaults for kind and event counter, and no attempt.
+  # itself as its root, the schema's defaults for kind and event counter,
+  # and no attempt.
   defp started(id),
     do:
       Map.merge(
         blank(Arca.Schemas.Execution),
-        Map.merge(execution_attrs(id), %{kind: "component", event_seq: 0, sources: "[]"})
+        Map.merge(execution_attrs(id), %{
+          root_execution_id: id,
+          kind: "component",
+          event_seq: 0,
+          sources: "[]"
+        })
       )
 
   describe "record_start/1" do

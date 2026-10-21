@@ -21,8 +21,10 @@ defmodule Arca.InstanceEntries do
 
   ## The row
 
-  A vault entry's columns less the athanor: always attach-only, its
-  `destination` a destination's canonical text naming methods and paths
+  A vault entry's columns less the athanor, the OAuth endpoints and
+  scopes and the disclosure: an instance entry is never of kind `oauth`
+  and is attach-only by definition. Its `destination` is a destination's
+  canonical text naming methods and paths
   (`Prima.Destination.new/2` with both required), plus `audience`,
   `person_daily` and `total_daily` (`nil` takes the platform setting's
   default), `component_policy` and `created_by`. The policy is exactly
@@ -76,13 +78,9 @@ defmodule Arca.InstanceEntries do
           name: String.t(),
           kind: String.t(),
           provider_hint: String.t(),
-          provenance: String.t(),
           field_names: String.t(),
           binding_digest: String.t() | nil,
-          oauth_endpoints: String.t() | nil,
-          oauth_scopes: String.t() | nil,
           destination: String.t(),
-          attach_only: true,
           status: String.t(),
           payload_rev: non_neg_integer(),
           sealed_payload: binary() | nil,
@@ -99,7 +97,7 @@ defmodule Arca.InstanceEntries do
   @type refusal :: {:error, :cross_tenant | :database_error}
 
   # The binding columns a move may write: the destination and the digest
-  # that covers it. The OAuth endpoints are fixed at creation.
+  # that covers it.
   @movable [:destination, :binding_digest]
 
   defguardp platform(actor) when is_struct(actor, Prima.Actor) and actor.scope == :platform
@@ -132,8 +130,7 @@ defmodule Arca.InstanceEntries do
   # arca:unscoped-ok the instance's own credentials, offered to athanors and
   # deleted with none of them: the row carries no athanor to scope to.
   def put(actor, attrs, members) when platform(actor) and is_map(attrs) and is_list(members) do
-    attrs =
-      attrs |> Map.put_new(:id, Prima.UUID7.generate_id("ine")) |> Map.put(:attach_only, true)
+    attrs = Map.put_new(attrs, :id, Prima.UUID7.generate_id("ine"))
 
     with :ok <- destination_attr(attrs),
          :ok <- member_ids(members) do
@@ -440,9 +437,8 @@ defmodule Arca.InstanceEntries do
   transaction.
 
   `changes` carries `destination` (a destination's canonical text naming
-  methods and paths) and the recomputed `binding_digest`; naming the OAuth
-  endpoints is `{:error, :endpoints_immutable}` and anything else beside
-  them `{:error, {:invalid, _}}`, before any write.
+  methods and paths) and the recomputed `binding_digest`; naming anything
+  else is `{:error, {:invalid, _}}`, before any write.
   `{:error, :binding_moved}` when another change landed first. Answers
   the blocked `{athanor_id, profile_id}` pairs.
 
@@ -458,7 +454,6 @@ defmodule Arca.InstanceEntries do
           {:ok, [{String.t(), String.t()}]}
           | {:error,
              :binding_moved
-             | :endpoints_immutable
              | {:invalid_destination, term()}
              | {:invalid, map()}}
           | {:error, term()}
@@ -658,13 +653,9 @@ defmodule Arca.InstanceEntries do
       name: row.name,
       kind: row.kind,
       provider_hint: row.provider_hint,
-      provenance: row.provenance,
       field_names: row.field_names,
       binding_digest: row.binding_digest,
-      oauth_endpoints: row.oauth_endpoints,
-      oauth_scopes: row.oauth_scopes,
       destination: row.destination,
-      attach_only: row.attach_only,
       status: row.status,
       payload_rev: row.payload_rev,
       sealed_payload: row.sealed_payload,
@@ -752,9 +743,6 @@ defmodule Arca.InstanceEntries do
 
   defp movable(changes) do
     cond do
-      Map.has_key?(changes, :oauth_endpoints) ->
-        {:error, :endpoints_immutable}
-
       Map.keys(changes) -- @movable != [] ->
         {:error, {:invalid, %{changes: ["move the destination and its digest only"]}}}
 

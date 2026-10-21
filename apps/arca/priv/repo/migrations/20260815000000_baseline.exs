@@ -361,7 +361,6 @@ defmodule Arca.Repo.Migrations.Baseline do
       add :key_prefix, :string, null: false
       add :type, :string, null: false
       add :scope, :text, null: false, default: "[]"
-      add :rate_limit, :string
       add :ip_allowlist, :text
       add :revoked, :boolean, null: false, default: false
       # Held by a declared restore until the person re-enables the key; a
@@ -503,8 +502,6 @@ defmodule Arca.Repo.Migrations.Baseline do
         null: false,
         default: "active",
         check: if(sqlite?, do: standing_known)
-
-      add :label, :string
 
       timestamps(type: :utc_datetime_usec)
     end
@@ -781,7 +778,6 @@ defmodule Arca.Repo.Migrations.Baseline do
       add :possession_verified, :boolean, null: false, default: false
       add :expires_at, :utc_datetime_usec
       add :admin_confirmation_id, :string
-      add :label, :string
       add :activated_at, :utc_datetime_usec
       add :revoked_at, :utc_datetime_usec
 
@@ -1160,9 +1156,9 @@ defmodule Arca.Repo.Migrations.Baseline do
       # When the current owner took the slot, which is what a recovery-time
       # bound is measured from.
       add :taken_at, :utc_datetime_usec, null: false
-      # The release the current owner runs (`Prima.Version.current/0`);
-      # null on a row no take has stamped, which names no release.
-      add :release, :string
+      # The release the current owner runs (`Prima.Version.current/0`),
+      # stamped by every take and renewal.
+      add :release, :string, null: false
 
       timestamps(type: :utc_datetime_usec)
     end
@@ -1252,7 +1248,9 @@ defmodule Arca.Repo.Migrations.Baseline do
       add :signer_identity, :string
       add :signer_issuer, :string
       add :athanor_id, :string, null: false
-      add :release_digest, :string
+      # The release's activation identity (`Compendium.ReleaseDigest`),
+      # computed at registration.
+      add :release_digest, :string, null: false
 
       timestamps(type: :utc_datetime_usec)
     end
@@ -1566,7 +1564,8 @@ defmodule Arca.Repo.Migrations.Baseline do
       add :athanor_id, :string, null: false
       add :activation_digest, :string
       add :activation_graph, :text
-      add :root_execution_id, :string
+      # The root of the run's tree: a root's own id, a child's root's.
+      add :root_execution_id, :string, null: false
       # The profile pinned for a root execution, so approvals reuse its authority.
       add :profile_id, :string
       # The turn an execution belongs to, and the schedule that fired it.
@@ -1875,7 +1874,6 @@ defmodule Arca.Repo.Migrations.Baseline do
       add :status, :string, null: false, default: "pending"
       add :duration_ms, :integer
       add :routed_to, :string
-      add :error_code, :integer
       add :input, :text
       add :output, :text
       add :error, :text
@@ -1994,7 +1992,6 @@ defmodule Arca.Repo.Migrations.Baseline do
     # table constraint, so each rule is spelled once per adapter.
     policy_known = known("instance_entries_policy_known", "component_policy", ~w(any shipped))
     audience_known = known("instance_entries_audience_known", "audience", ~w(everyone listed))
-    instance_attach_only = %{name: "instance_entries_attach_only", expr: "attach_only"}
 
     # A stored credential's statuses (`Arca.StatusTransitions`), and a
     # profile's.
@@ -2043,7 +2040,6 @@ defmodule Arca.Repo.Migrations.Baseline do
       add :name, :string, null: false
       add :provider_hint, :string, null: false, default: ""
       add :kind, :string, null: false
-      add :provenance, :string, null: false, default: "user"
       add :field_names, :text, null: false, default: "[]"
       add :binding_digest, :string
       add :oauth_endpoints, :text
@@ -2066,9 +2062,10 @@ defmodule Arca.Repo.Migrations.Baseline do
              name: :vault_entries_active_name_index
            )
 
-    # The instance's own credentials (`Arca.InstanceEntries`): the columns
-    # of a vault entry less the athanor, always attach-only, offered to the
-    # `audience` (`everyone`, or the `listed` people of
+    # The instance's own credentials (`Arca.InstanceEntries`): a vault
+    # entry's columns less the athanor, the OAuth endpoints and scopes and
+    # the disclosure, since an instance entry is never OAuth and is
+    # attach-only by definition, offered to the `audience` (`everyone`, or the `listed` people of
     # `instance_entry_members`) under a component policy and two daily
     # caps (`nil` takes the platform setting's default). No athanor owns
     # one and no athanor's erasure touches one; a deleted one is a
@@ -2078,17 +2075,9 @@ defmodule Arca.Repo.Migrations.Baseline do
       add :name, :string, null: false
       add :provider_hint, :string, null: false, default: ""
       add :kind, :string, null: false
-      add :provenance, :string, null: false, default: "user"
       add :field_names, :text, null: false, default: "[]"
       add :binding_digest, :string
-      add :oauth_endpoints, :text
-      add :oauth_scopes, :text
       add :destination, :text, null: false
-
-      add :attach_only, :boolean,
-        null: false,
-        default: true,
-        check: if(sqlite?, do: instance_attach_only)
 
       add :status, :string,
         null: false,
@@ -2115,7 +2104,6 @@ defmodule Arca.Repo.Migrations.Baseline do
     checked(sqlite?, :instance_entries, [
       policy_known,
       audience_known,
-      instance_attach_only,
       instance_status
     ])
 
@@ -2221,10 +2209,9 @@ defmodule Arca.Repo.Migrations.Baseline do
       add :granted_by, :string, null: false
       add :granted_via, :string, null: false
       add :granted_at, :utc_datetime_usec, null: false
-      add :supersedes_id, :string
-      # The origins the revision admits (`Prima.Origin`), a JSON array of
-      # their wire spellings in the enum's order, never empty when set.
-      add :admitted_origins, :text
+      # The origins the revision admits (`Prima.Origin`), a non-empty JSON
+      # array of their wire spellings in the enum's order.
+      add :admitted_origins, :text, null: false
     end
 
     create index(:consents, [:athanor_id, :profile_id])
@@ -2604,7 +2591,8 @@ defmodule Arca.Repo.Migrations.Baseline do
       add :last_execution_id, :string
       add :run_count, :integer, null: false, default: 0
       add :error_count, :integer, null: false, default: 0
-      add :resolved_reference, :string
+      # The pinned version a fire runs, resolved when the row is written.
+      add :resolved_reference, :string, null: false
       add :athanor_id, :string, null: false
       add :profile_id, :string, null: false
       # forbid | allow: whether a due occurrence may be claimed while another
@@ -2900,7 +2888,7 @@ defmodule Arca.Repo.Migrations.Baseline do
       add :launch_step_id, :string
       # How the turn was started (`Prima.Origin`), written when it is
       # accepted, so a turn recovered after a restart resumes under it.
-      add :origin, :string
+      add :origin, :string, null: false
       # Every source the turn has read (JSON, a list of `Prima.Source`),
       # grown in the transaction that writes each step, so it survives
       # compaction and restart.
@@ -2988,7 +2976,6 @@ defmodule Arca.Repo.Migrations.Baseline do
       add :proposal_digest, :string, null: false
       # continue | launch | denied | expired
       add :resolution_kind, :string
-      add :launch_execution_id, :string
       add :decided_by, :string
       add :decided_at, :utc_datetime_usec
       add :expires_at, :utc_datetime_usec

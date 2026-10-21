@@ -6,8 +6,8 @@ defmodule Arca.PairedClients do
   The paired clients' rows (`Arca.Schemas.PairedClient`): one row per
   client a person holds in an athanor, carrying the credential it stands
   on (`source_kind`, `source_id`), a paired device's public key
-  (`device_public_key`, for a `device_cert` client), a `label` the person
-  reads, and its `standing`, which alone decides what the client may do.
+  (`device_public_key`, for a `device_cert` client) and its `standing`,
+  which alone decides what the client may do.
   Sanctum is the one caller above this layer (`Sanctum.Pairing`); the rows
   are security rows no domain or surface names.
 
@@ -48,7 +48,7 @@ defmodule Arca.PairedClients do
   alias Arca.Schemas.{DeviceCertificate, PairedClient}
 
   @required ~w(user_id source_kind source_id)a
-  @optional ~w(label device_public_key)a
+  @optional ~w(device_public_key)a
 
   @typedoc "A paired client row, as a plain map."
   @type row :: %{
@@ -59,7 +59,6 @@ defmodule Arca.PairedClients do
           source_id: String.t(),
           device_public_key: binary() | nil,
           standing: String.t(),
-          label: String.t() | nil,
           inserted_at: DateTime.t(),
           updated_at: DateTime.t()
         }
@@ -141,8 +140,8 @@ defmodule Arca.PairedClients do
   @doc """
   Record a client of the person `attrs.user_id` in the actor's athanor:
   the credential it stands on (`source_kind`, `"session"`, `"api_key"` or
-  `"device_cert"`, and `source_id`), each required, an optional `label`,
-  and for a `device_cert` client the device's 32-byte `device_public_key`
+  `"device_cert"`, and `source_id`), each required, and for a
+  `device_cert` client the device's 32-byte `device_public_key`
   (required) and, optionally, the `id` a pairing invitation reserved for
   it. The row starts `active`.
 
@@ -310,7 +309,6 @@ defmodule Arca.PairedClients do
     |> Ecto.Changeset.cast(attrs, [:athanor_id | @required ++ @optional])
     |> Ecto.Changeset.validate_required([:athanor_id | @required])
     |> Ecto.Changeset.validate_inclusion(:source_kind, PairedClient.source_kinds())
-    |> Ecto.Changeset.validate_length(:label, max: 80)
     |> validate_device_key()
     |> Ecto.Changeset.unique_constraint([:athanor_id, :source_kind, :source_id])
     |> Ecto.Changeset.unique_constraint(:id, name: :paired_clients_pkey)

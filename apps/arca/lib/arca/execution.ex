@@ -156,6 +156,11 @@ defmodule Arca.Execution do
     reading of its own edge): its tree's root, itself for a root, is
     marked in the same transaction (`reached_outside/2`).
 
+  A row that names no parent is a root, and its tree's root is itself
+  unless it names one; a child names its tree's root
+  (`root_execution_id`), and a child that names none is refused
+  `{:error, {:invalid, %{root_execution_id: _}}}` with nothing written.
+
   The row's source ledger (`sources/2`) is seeded in the same
   transaction. A root's is the `:sources` attr its admission path names
   (`Prima.Source`s), absent read as none: the path above this module
@@ -222,6 +227,7 @@ defmodule Arca.Execution do
 
     attrs =
       attrs
+      |> rooted()
       |> Map.put(:started_at, started_at)
       |> Map.put(:status, "running")
       |> Map.put(:current_attempt, attempt_id)
@@ -619,10 +625,9 @@ defmodule Arca.Execution do
 
         %Row{} = row ->
           root =
-            case row.root_execution_id do
-              root_id when is_binary(root_id) and root_id != row.id -> row_of(actor, root_id)
-              _own -> row
-            end
+            if row.root_execution_id == row.id,
+              do: row,
+              else: row_of(actor, row.root_execution_id)
 
           {:ok, %{sources: ledger!(row), launch_classes: launch_classes(root)}}
       end
@@ -801,6 +806,15 @@ defmodule Arca.Execution do
     end
   end
 
+  # A root is its own tree's root; a child's root is the one it names.
+  defp rooted(%{parent_execution_id: parent} = attrs) when is_binary(parent), do: attrs
+
+  defp rooted(attrs) do
+    if Map.get(attrs, :root_execution_id),
+      do: attrs,
+      else: Map.put(attrs, :root_execution_id, Map.get(attrs, :id))
+  end
+
   # The tree's root, locked before any attempt row (see `admit/2`): `:own`
   # for a root, whose insert holds its row, else `{root_id, host_policy}`
   # read under the lock, or `:gone` for a root no row holds.
@@ -925,7 +939,7 @@ defmodule Arca.Execution do
   @typedoc "One run a profile admitted, as `list_by_profile/3` answers it."
   @type profile_run :: %{
           id: String.t(),
-          root_execution_id: String.t() | nil,
+          root_execution_id: String.t(),
           origin: String.t() | nil,
           kind: String.t(),
           status: String.t(),

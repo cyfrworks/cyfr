@@ -343,7 +343,6 @@ const FIELDS = {
     name: exact,
     provider_hint: exact,
     kind: exact,
-    provenance: exact,
     field_names: exact,
     binding_digest: derived(REQUESTED),
     oauth_endpoints: exact,
@@ -393,7 +392,6 @@ const FIELDS = {
     granted_by: minted(SIGN_IN),
     granted_via: exact,
     granted_at: clock,
-    supersedes_id: exact,
     admitted_origins: exact,
   },
   consent_vault_refs: {
@@ -812,7 +810,6 @@ async function main() {
       name: spec.name,
       provider_hint: spec.provider,
       kind: "api_key",
-      provenance: "user",
       field_names: JSON.stringify([spec.field]),
       binding_digest: implied[spec.name].binding_digest,
       oauth_endpoints: null,
@@ -840,14 +837,13 @@ async function main() {
       head_consent_id: head, inserted_at: IN_WINDOW, updated_at: IN_WINDOW,
     });
     // A consent row as the model holds it: the revision a commit of her
-    // decisions writes, with what the owner's builders derive for them. No
-    // writer sets `supersedes_id`; a revision follows the one before by
-    // its number and the profile's head.
+    // decisions writes, with what the owner's builders derive for them. A
+    // revision follows the one before by its number and the profile's head.
     const consentRow = (id, revision, made) => ({
       id, athanor_id: person.athanor_id, profile_id: profileId, revision, scope: "versionless", pinned_version: "",
       invoke_mode: "open_inert", shape_digest: made.shape_digest, commit_digest: made.commit_digest,
       blob_digest: made.blob_digest, resolved_policy: made.resolved_policy, activation: made.activation,
-      granted_by: person.user_id, granted_via: "interactive", granted_at: IN_WINDOW, supersedes_id: null,
+      granted_by: person.user_id, granted_via: "interactive", granted_at: IN_WINDOW,
       admitted_origins: JSON.stringify(["interactive"]),
     });
     // A binding row: the entry the key binds, at the digest its request

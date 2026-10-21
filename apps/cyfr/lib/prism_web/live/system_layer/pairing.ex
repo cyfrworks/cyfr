@@ -56,7 +56,7 @@ defmodule PrismWeb.SystemLayer.Pairing do
               data-client={client.client_id}
             >
               <div>
-                <p class="font-medium">{client.label || "Paired device"}</p>
+                <p class="font-medium">Paired device</p>
                 <p class="text-xs text-gray-400">
                   Paired {client.paired_at}{expiry(client)}
                 </p>

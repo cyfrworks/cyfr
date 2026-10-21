@@ -845,6 +845,7 @@ defmodule Arca.ScheduleOccurrencesTest do
           name: "check-#{System.unique_integer([:positive])}",
           cron_expression: "0 * * * *",
           reference: "reagent:local.test:1.0.0",
+          resolved_reference: "reagent:local.test:1.0.0",
           profile_id: "prof_test",
           status: "active",
           concurrency: "forbid",

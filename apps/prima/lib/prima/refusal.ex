@@ -150,9 +150,7 @@ defmodule Prima.Refusal do
   @credential %{
     destination_mismatch:
       {:forbidden, "The request goes outside the destination its credential is bound to."},
-    scope_not_attenuable:
-      {:forbidden,
-       "This provider cannot narrow the entry's scopes; grant them whole or not at all."},
+    scope_not_attenuable: {:forbidden, "This entry's scopes are granted whole or not at all."},
     disclosure_refused:
       {:forbidden, "This credential is attached by CYFR and never disclosed to a component."},
     not_offered: {:forbidden, "This instance entry is not offered to you."},

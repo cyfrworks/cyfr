@@ -111,8 +111,8 @@ defmodule Arca.Retention do
   @doc """
   Set some of the actor's athanor's settings, answering all of them as
   they now stand. Only roster keys are accepted, and only positive
-  integers or integer strings as values; anything else refuses typed
-  rather than silently keeping the old value. Keys not named keep their
+  integers as values, an integer's spelling as text among the refused;
+  anything else refuses typed rather than silently keeping the old value. Keys not named keep their
   values, including under a patch another caller lands at the same time.
   """
   @spec set_settings(Prima.Actor.t(), map()) ::
@@ -145,13 +145,6 @@ defmodule Arca.Retention do
 
   defp positive_int(value) when is_integer(value) and value > 0 and value <= @max_value,
     do: value
-
-  defp positive_int(value) when is_binary(value) do
-    case Integer.parse(value) do
-      {n, ""} -> positive_int(n)
-      _ -> nil
-    end
-  end
 
   defp positive_int(_value), do: nil
 

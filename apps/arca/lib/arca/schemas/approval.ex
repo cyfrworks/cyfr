@@ -27,7 +27,6 @@ defmodule Arca.Schemas.Approval do
     field :inserted_at, :utc_datetime_usec
     field :proposal_digest, :string
     field :resolution_kind, :string
-    field :launch_execution_id, :string
     field :thread_id, :string
   end
 end

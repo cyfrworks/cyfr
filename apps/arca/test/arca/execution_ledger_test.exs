@@ -41,7 +41,8 @@ defmodule Arca.ExecutionLedgerTest do
             origin: :programmatic
           },
           attrs
-        ),
+        )
+        |> then(&Map.put_new(&1, :root_execution_id, &1[:parent_execution_id])),
         Arca.Test.Actor.standing(@athanor)
       )
 
@@ -172,6 +173,7 @@ defmodule Arca.ExecutionLedgerTest do
              Execution.admit(
                %{
                  id: id,
+                 root_execution_id: id,
                  reference: "catalyst:local.ledger:1.0.0",
                  user_id: "user_test",
                  athanor_id: @athanor,

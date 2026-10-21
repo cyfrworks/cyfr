@@ -8,7 +8,9 @@ defmodule Arca.Schemas.InstanceEntry do
   (`audience`: `everyone`, or the `listed` people), the components it
   admits (`component_policy`: `any` or `shipped`), its daily caps
   (`person_daily`, `total_daily`; `nil` takes the platform setting's
-  default) and who created it. Always attach-only.
+  default) and who created it. It holds no OAuth endpoints, scopes or
+  disclosure: an instance entry is never of kind `oauth`
+  (`Prima.CredentialKinds.instance/0`) and is attach-only by definition.
 
   `sealed_payload` arrives encrypted by Sanctum; Arca stores bytes. The
   vocabularies are spelled here and in the baseline's checks, so a value
@@ -32,13 +34,9 @@ defmodule Arca.Schemas.InstanceEntry do
     field :name, :string
     field :provider_hint, :string, default: ""
     field :kind, :string
-    field :provenance, :string, default: "user"
     field :field_names, :string, default: "[]"
     field :binding_digest, :string
-    field :oauth_endpoints, :string
-    field :oauth_scopes, :string
     field :destination, :string
-    field :attach_only, :boolean, default: true
     field :status, :string, default: "active"
     field :payload_rev, :integer, default: 0
     field :sealed_payload, :binary
@@ -66,8 +64,9 @@ defmodule Arca.Schemas.InstanceEntry do
 
   @doc """
   A new row, held to the vocabularies: every required column present, the
-  audience, status and component policy in theirs, `attach_only` true and
-  each cap absent or an integer from 0 to `max_cap/0`. An omitted policy
+  kind one of `Prima.CredentialKinds.instance/0` (never `oauth`), the
+  audience, status and component policy in theirs, and each cap absent or
+  an integer from 0 to `max_cap/0`. An omitted policy
   takes the column's `any`; a policy given as anything but one of the two
   words is refused.
   """
@@ -79,13 +78,9 @@ defmodule Arca.Schemas.InstanceEntry do
       :name,
       :provider_hint,
       :kind,
-      :provenance,
       :field_names,
       :binding_digest,
-      :oauth_endpoints,
-      :oauth_scopes,
       :destination,
-      :attach_only,
       :status,
       :sealed_payload,
       :audience,
@@ -104,11 +99,9 @@ defmodule Arca.Schemas.InstanceEntry do
       :sealed_payload,
       :binding_digest
     ])
+    |> validate_inclusion(:kind, Prima.CredentialKinds.instance())
     |> validate_inclusion(:audience, @audiences)
     |> validate_inclusion(:status, @statuses)
-    |> validate_inclusion(:attach_only, [true],
-      message: "an instance entry is always attach-only"
-    )
     |> validate_number(:person_daily,
       greater_than_or_equal_to: 0,
       less_than_or_equal_to: @max_cap

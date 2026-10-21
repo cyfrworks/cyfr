@@ -716,6 +716,7 @@ defmodule Arca.SchemaBaselineTest do
       fence: 1,
       lease_until: NaiveDateTime.add(now, lease_seconds, :second),
       taken_at: now,
+      release: "0.0.0-baseline",
       inserted_at: now,
       updated_at: now
     }

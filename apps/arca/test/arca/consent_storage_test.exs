@@ -609,8 +609,7 @@ defmodule Arca.ConsentStorageTest do
       assert Arca.Repo.aggregate(Arca.Schemas.Consent, :count) == 0
     end
 
-    test "a revision written without them is refused, and a stored one with none does not decode",
-         %{athanor: athanor} do
+    test "a revision written without them is refused", %{athanor: athanor} do
       profile = profile!(athanor, "prof_no_origins")
       attrs = Map.delete(consent_attrs(athanor, profile.id, 1), :admitted_origins)
 
@@ -633,23 +632,6 @@ defmodule Arca.ConsentStorageTest do
 
       assert Arca.Repo.aggregate(Arca.Schemas.Consent, :count) == 0
       refute Arca.Repo.get(Arca.Schemas.Profile, "prof_no_origins_minted")
-
-      # A row reached past the writer — a hand edit, a restored backup —
-      # admits nothing: no reader meets a revision with no origins.
-      {:ok, consent} =
-        ConsentStorage.insert_revision(consent_attrs(athanor, profile.id, 1), [], nil)
-
-      {1, _} =
-        Arca.Repo.update_all(
-          Ecto.Query.from(c in Arca.Schemas.Consent, where: c.id == ^consent.id),
-          set: [admitted_origins: nil]
-        )
-
-      assert {:error, {:invalid_stored_value, :admitted_origins}} =
-               ConsentStorage.head_consent(Prima.Actor.in_athanor(athanor), profile.id)
-
-      assert {:ok, [], false} =
-               ConsentStorage.active_heads(Prima.Actor.in_athanor(athanor), limit: 10)
     end
 
     test "a stored list that does not parse refuses the consent", %{athanor: athanor} do

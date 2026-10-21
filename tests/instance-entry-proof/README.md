@@ -98,11 +98,11 @@ unchecked.
 
 | Table | Exact | Derived | Bound |
 |---|---|---|---|
-| `instance_entries` | `name`, `kind`, `provider_hint`, `provenance`, `field_names`, `oauth_endpoints`, `oauth_scopes`, `attach_only`, `status`, `payload_rev`, `audience`, `person_daily`, `total_daily`, `component_policy` | `destination`, `binding_digest`: what the card's request implies (`requested_digest`); `sealed_payload`: the payload its card typed, compared inside the fixture | `id`: the card's; `created_by`: the administrator's sign-in's; `last_used_at`, `inserted_at`, `updated_at`: times |
+| `instance_entries` | `name`, `kind`, `provider_hint`, `field_names`, `status`, `payload_rev`, `audience`, `person_daily`, `total_daily`, `component_policy` | `destination`, `binding_digest`: what the card's request implies (`requested_digest`); `sealed_payload`: the payload its card typed, compared inside the fixture | `id`: the card's; `created_by`: the administrator's sign-in's; `last_used_at`, `inserted_at`, `updated_at`: times |
 | `instance_entry_members` | | | `instance_entry_id`: the card's; `user_id`: the sign-in's; `inserted_at`: a time |
 | `instance_entry_usage` | `count` | | `instance_entry_id`: the card's; `user_id`: the sign-in's, or the empty id of the entry's own total; `day`: today; `updated_at`: a time |
 | `profiles` | `source_ref`, `kind`, `label`, `status` | | `id`, `head_consent_id`: the admission's; `athanor_id`: the sign-in's; `inserted_at`, `updated_at`: times |
-| `consents` | `revision`, `scope`, `pinned_version`, `invoke_mode`, `granted_via`, `supersedes_id`, `admitted_origins` | `resolved_policy`, `blob_digest`, `activation`, `shape_digest`, `commit_digest`: what the bootstrap derives (`derived_head`) | `id`, `profile_id`: the admission's; `athanor_id`, `granted_by`: the sign-in's; `granted_at`: a time |
+| `consents` | `revision`, `scope`, `pinned_version`, `invoke_mode`, `granted_via`, `admitted_origins` | `resolved_policy`, `blob_digest`, `activation`, `shape_digest`, `commit_digest`: what the bootstrap derives (`derived_head`) | `id`, `profile_id`: the admission's; `athanor_id`, `granted_by`: the sign-in's; `granted_at`: a time |
 | `consent_vault_refs` | `binding_key`, `scope`, `vault_entry_id`, `via_label`, `lifetime_kind`, `expires_at`, `consumed_by_root` | `binding_digest`: `requested_digest` | `consent_id`: the admission's; `athanor_id`: the sign-in's; `instance_entry_id`: the card's |
 | `users` | `email`, `email_verified`, `provider`, `display_name`, `namespace`, `status`, `prefs`, `security_generation` | | `id`, `personal_athanor_id`: the sign-in's; `first_seen_at`, `last_seen_at`, `denied_at`, `created_at`, `updated_at`: times |
 

@@ -36,7 +36,6 @@ defmodule Arca.Schemas.Passkey do
     field :possession_verified, :boolean, default: false
     field :expires_at, :utc_datetime_usec
     field :admin_confirmation_id, :string
-    field :label, :string
     field :activated_at, :utc_datetime_usec
     field :revoked_at, :utc_datetime_usec
     timestamps(type: :utc_datetime_usec)

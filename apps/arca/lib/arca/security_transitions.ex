@@ -1894,7 +1894,7 @@ defmodule Arca.SecurityTransitions do
           from(p in PairedClient,
             where: p.user_id == ^user_id and p.standing == "suspended",
             order_by: [asc: p.id],
-            select: %{id: p.id, label: p.label, athanor_id: p.athanor_id}
+            select: %{id: p.id, athanor_id: p.athanor_id}
           )
         ),
       passkeys:
@@ -1902,7 +1902,7 @@ defmodule Arca.SecurityTransitions do
           from(p in Passkey,
             where: p.user_id == ^user_id and p.state == "suspended",
             order_by: [asc: p.id],
-            select: %{id: p.id, label: p.label, rp_id: p.rp_id}
+            select: %{id: p.id, rp_id: p.rp_id}
           )
         ),
       profiles:

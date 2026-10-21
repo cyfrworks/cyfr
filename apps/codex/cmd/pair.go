@@ -147,13 +147,12 @@ var pairListCmd = &cobra.Command{
 			client, _ := item.(map[string]any)
 			rows = append(rows, map[string]string{
 				"CLIENT":              str(client["client_id"]),
-				"LABEL":               str(client["label"]),
 				"SOURCE":              str(client["source"]),
 				"PAIRED":              str(client["paired_at"]),
 				"CERTIFICATE EXPIRES": str(client["certificate_expires_at"]),
 			})
 		}
-		output.Table([]string{"CLIENT", "LABEL", "SOURCE", "PAIRED", "CERTIFICATE EXPIRES"}, rows)
+		output.Table([]string{"CLIENT", "SOURCE", "PAIRED", "CERTIFICATE EXPIRES"}, rows)
 		return nil
 	},
 }
@@ -201,11 +200,7 @@ func pairedClientOptions(ctx context.Context) ([]prompt.Option, error) {
 	for _, item := range clients {
 		client, _ := item.(map[string]any)
 		id := str(client["client_id"])
-		label := id
-		if name := str(client["label"]); name != "" {
-			label = fmt.Sprintf("%s (%s)", name, id)
-		}
-		opts = append(opts, prompt.Option{Label: label, Value: id})
+		opts = append(opts, prompt.Option{Label: id, Value: id})
 	}
 	return opts, nil
 }

@@ -38,6 +38,7 @@ defmodule Arca.TenantIsolationTest do
         description: "A's widget",
         tags: "[]",
         digest: "sha256:aaa",
+        release_digest: "sha256:release_aaa",
         size: 100,
         exports: "[]",
         manifest: nil,
@@ -92,6 +93,7 @@ defmodule Arca.TenantIsolationTest do
         description: "exists check",
         tags: "[]",
         digest: "sha256:ccc",
+        release_digest: "sha256:release_ccc",
         size: 100,
         exports: "[]",
         manifest: nil,
@@ -123,6 +125,7 @@ defmodule Arca.TenantIsolationTest do
         description: "delete check",
         tags: "[]",
         digest: "sha256:ddd",
+        release_digest: "sha256:release_ddd",
         size: 100,
         exports: "[]",
         manifest: nil,
@@ -260,6 +263,7 @@ defmodule Arca.TenantIsolationTest do
           name: "sched-a",
           cron_expression: "*/5 * * * *",
           reference: "reagent:local.test:0.1.0",
+          resolved_reference: "reagent:local.test:0.1.0",
           profile_id: "prof_test",
           athanor_id: ctx_a.athanor_id,
           cap: 1_000
@@ -271,6 +275,7 @@ defmodule Arca.TenantIsolationTest do
           name: "sched-b",
           cron_expression: "*/10 * * * *",
           reference: "reagent:local.test:0.1.0",
+          resolved_reference: "reagent:local.test:0.1.0",
           profile_id: "prof_test",
           athanor_id: ctx_b.athanor_id,
           cap: 1_000
@@ -294,6 +299,7 @@ defmodule Arca.TenantIsolationTest do
           name: "count-sched-a",
           cron_expression: "*/5 * * * *",
           reference: "reagent:local.test:0.1.0",
+          resolved_reference: "reagent:local.test:0.1.0",
           profile_id: "prof_test",
           athanor_id: ctx_a.athanor_id,
           cap: 1_000
@@ -312,6 +318,7 @@ defmodule Arca.TenantIsolationTest do
           name: "get-sched-a",
           cron_expression: "*/5 * * * *",
           reference: "reagent:local.test:0.1.0",
+          resolved_reference: "reagent:local.test:0.1.0",
           profile_id: "prof_test",
           athanor_id: ctx_a.athanor_id,
           cap: 1_000
@@ -344,6 +351,7 @@ defmodule Arca.TenantIsolationTest do
         description: "Same component, tenant A",
         tags: "[]",
         digest: "sha256:same_digest",
+        release_digest: "sha256:release_same_digest",
         size: 100,
         exports: "[]",
         manifest: nil,
@@ -366,6 +374,7 @@ defmodule Arca.TenantIsolationTest do
         description: "Same component, tenant B",
         tags: "[]",
         digest: "sha256:same_digest",
+        release_digest: "sha256:release_same_digest",
         size: 100,
         exports: "[]",
         manifest: nil,
@@ -884,7 +893,6 @@ defmodule Arca.TenantIsolationTest do
             key_prefix: "cyfr_sk_",
             type: "secret",
             scope: "[]",
-            rate_limit: nil,
             ip_allowlist: nil,
             created_by: "user_a",
             athanor_id: "ath_alpha"
@@ -911,7 +919,6 @@ defmodule Arca.TenantIsolationTest do
             key_prefix: "cyfr_sk_",
             type: "secret",
             scope: "[]",
-            rate_limit: nil,
             ip_allowlist: nil,
             created_by: "user_a",
             athanor_id: "ath_gamma"

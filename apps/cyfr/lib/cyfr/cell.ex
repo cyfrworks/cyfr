@@ -471,10 +471,10 @@ defmodule Cyfr.Cell do
   # member of the other release goes on as it was.
   defp refuse_mixed_release!({:error, {:mixed_release, other}}, state) do
     raise "[Cyfr] FATAL: this member runs release #{state.release}, and a live member of " <>
-            "this cell runs release #{other || "unknown"}. A cell runs one release: a member " <>
+            "this cell runs release #{other}. A cell runs one release: a member " <>
             "of another reads rows its code did not write. Stop every member before starting " <>
             "the new release (`cyfr update` does), or start this one on release " <>
-            "#{other || "the cell's"}."
+            "#{other}."
   end
 
   defp refuse_mixed_release!(taken, _state), do: taken
@@ -504,7 +504,7 @@ defmodule Cyfr.Cell do
       {:error, {:mixed_release, other}} ->
         Logger.error(
           "[Cyfr.Cell] slot not regained: a live member of this cell runs release " <>
-            "#{other || "unknown"}, and this member runs #{state.release}"
+            "#{other}, and this member runs #{state.release}"
         )
 
       _refused ->

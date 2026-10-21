@@ -293,7 +293,6 @@ defmodule Arca.SecurityTransitions.Fixtures do
           source_kind: "session",
           source_id: "src_#{uniq()}",
           standing: standing,
-          label: "a browser",
           inserted_at: now,
           updated_at: now
         }

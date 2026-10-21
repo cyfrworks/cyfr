@@ -187,7 +187,6 @@ defmodule Arca.SecurityTransitionsRestoreTest do
       source_kind: "session",
       source_id: "src_#{uniq()}",
       standing: standing,
-      label: "a browser",
       inserted_at: now(),
       updated_at: now()
     })
@@ -316,7 +315,8 @@ defmodule Arca.SecurityTransitionsRestoreTest do
       activation: "{}",
       granted_by: "usr_x",
       granted_via: "console",
-      granted_at: now()
+      granted_at: now(),
+      admitted_origins: ~s(["interactive"])
     })
 
     id
@@ -371,6 +371,7 @@ defmodule Arca.SecurityTransitionsRestoreTest do
       thread_id: thread_id,
       status: status,
       accepted_at: now(),
+      origin: "interactive",
       fence: 1,
       sources: "[]"
     })
@@ -423,6 +424,7 @@ defmodule Arca.SecurityTransitionsRestoreTest do
       athanor_id: athanor_id,
       status: status,
       started_at: now(),
+      root_execution_id: execution,
       current_attempt: attempt
     })
 

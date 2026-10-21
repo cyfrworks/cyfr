@@ -18,7 +18,6 @@ defmodule Arca.Schemas.ApiKey do
     field :key_prefix, :string
     field :type, :string
     field :scope, :string
-    field :rate_limit, :string
     field :ip_allowlist, :string
     field :capability, :string
     field :revoked, :boolean

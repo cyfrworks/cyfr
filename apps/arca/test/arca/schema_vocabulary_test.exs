@@ -419,8 +419,11 @@ defmodule Arca.SchemaVocabularyTest do
   defp now, do: NaiveDateTime.utc_now()
 
   defp execution(%{athanor: athanor}, status) do
+    id = id("exec")
+
     %{
-      id: id("exec"),
+      id: id,
+      root_execution_id: id,
       reference: "reagent:local.vocab",
       user_id: "user_vocab",
       started_at: now(),
@@ -472,6 +475,7 @@ defmodule Arca.SchemaVocabularyTest do
       thread_id: thread_id,
       status: status,
       accepted_at: now(),
+      origin: "interactive",
       fence: 1
     }
   end
@@ -484,6 +488,7 @@ defmodule Arca.SchemaVocabularyTest do
         name: id("name"),
         cron_expression: "0 * * * *",
         reference: "reagent:local.vocab",
+        resolved_reference: "reagent:local.vocab:1.0.0",
         athanor_id: athanor,
         profile_id: "prof_vocab",
         created_at: now(),

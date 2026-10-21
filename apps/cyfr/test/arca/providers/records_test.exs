@@ -191,6 +191,7 @@ defmodule Arca.Providers.RecordsTest do
         Arca.Repo.insert_all(Arca.Schemas.Execution, [
           %{
             id: exec,
+            root_execution_id: exec,
             athanor_id: ctx.athanor_id,
             user_id: ctx.user_id,
             reference: "reagent:local.pay:0.1.0",
@@ -235,6 +236,7 @@ defmodule Arca.Providers.RecordsTest do
         Arca.Repo.insert_all(Arca.Schemas.Execution, [
           %{
             id: exec,
+            root_execution_id: exec,
             athanor_id: ctx.athanor_id,
             user_id: ctx.user_id,
             reference: "formula:local.pay:0.1.0",

@@ -93,18 +93,24 @@ defmodule Arca.InstanceEntriesTest do
   end
 
   describe "put/3" do
-    test "an entry omitting the policy stores any, and is attach-only", %{platform: platform} do
+    test "an entry omitting the policy stores any", %{platform: platform} do
       entry = put!(platform)
       assert entry.component_policy == "any"
-      assert entry.attach_only == true
       assert entry.destination == @destination
 
       shipped = put!(platform, %{component_policy: "shipped"})
       assert shipped.component_policy == "shipped"
+    end
 
-      # Asking for a disclosed instance entry is not a way to get one.
-      forced = put!(platform, %{attach_only: false})
-      assert forced.attach_only == true
+    test "an entry of kind oauth, or of a kind outside the roster, is refused with nothing written",
+         %{platform: platform} do
+      for kind <- ["oauth", "password", nil] do
+        assert {:error, {:invalid, %{kind: _}}} =
+                 InstanceEntries.put(platform, attrs(%{kind: kind})),
+               inspect(kind)
+      end
+
+      assert {:ok, []} = InstanceEntries.list(platform)
     end
 
     test "explicit null, empty, unknown or collection-valued policy input is refused",
@@ -136,7 +142,6 @@ defmodule Arca.InstanceEntriesTest do
       assert :refused = raw_insert(row)
       assert :refused = raw_insert(%{row | component_policy: ""})
       assert :refused = raw_insert(%{row | component_policy: "shipped", audience: "some"})
-      assert :refused = raw_insert(Map.merge(row, %{component_policy: "any", attach_only: false}))
       assert :ok = raw_insert(%{row | component_policy: "shipped"})
 
       assert :refused =
@@ -521,12 +526,12 @@ defmodule Arca.InstanceEntriesTest do
                )
     end
 
-    test "endpoints, other columns and a destination without methods are refused",
+    test "a column other than the destination and a destination without methods are refused",
          %{platform: platform} do
       entry = put!(platform)
 
       QueryCounter.assert_queries(0, fn ->
-        assert {:error, :endpoints_immutable} =
+        assert {:error, {:invalid, _}} =
                  InstanceEntries.move_binding(
                    platform,
                    entry.id,

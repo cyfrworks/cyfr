@@ -1862,9 +1862,8 @@ defmodule Arca.TurnStorage do
                 agent_revision_digest: Map.get(attrs, :agent_revision_digest),
                 agent_capability_digest: Map.get(attrs, :agent_capability_digest),
                 recovery_limit: parent.recovery_limit,
-                # A clone runs under its parent turn's origin, and a parent
-                # that records none has no origin to hand on.
-                origin: parent.origin || Arca.Repo.rollback(:no_origin),
+                # A clone runs under its parent turn's origin.
+                origin: parent.origin,
                 # A clone reads its task, which its parent wrote from what
                 # the parent had read.
                 sources: parent.sources,

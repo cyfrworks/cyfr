@@ -228,7 +228,7 @@ func TestPair_ReadsTheCodeAndRefusesAnyOther(t *testing.T) {
 func TestPairList_ListsThePairedDevices(t *testing.T) {
 	onTerminal(t, false)
 	srv := newCLIServer(t, "pairing.list",
-		`{"clients":[{"client_id":"pcl_one","label":"Kitchen tablet","source":"local",`+
+		`{"clients":[{"client_id":"pcl_one","source":"local",`+
 			`"paired_at":"2026-09-30T08:00:00Z","certificate_expires_at":"2026-10-01T08:00:00Z","current":false}]}`)
 
 	out, err := runCLI(t, srv, "pair", "list")
@@ -238,7 +238,7 @@ func TestPairList_ListsThePairedDevices(t *testing.T) {
 	if name, args := srv.call(0); name != "pairing" || args["action"] != "list" {
 		t.Errorf("expected pairing.list, got %s %v", name, args)
 	}
-	for _, want := range []string{"pcl_one", "Kitchen tablet", "2026-10-01T08:00:00Z"} {
+	for _, want := range []string{"pcl_one", "local", "2026-10-01T08:00:00Z"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("the output lacks %q:\n%s", want, out)
 		}

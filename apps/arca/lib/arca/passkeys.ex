@@ -67,7 +67,7 @@ defmodule Arca.Passkeys do
   @doc """
   Record a credential. `attrs`: `:user_id`, `:credential_id`, `:rp_id`,
   `:relying_home`, `:public_key`, `:registration_digest`,
-  `:possession_verified`, `:state` (`"pending"` or `"active"`), `:label`,
+  `:possession_verified`, `:state` (`"pending"` or `"active"`),
   `:expires_at` (required while pending) and `:identity_recovery_epoch`
   (required for a remote person, refused for a local one). `opts`:
   `first_method: true` claims the local first-method exception, and
@@ -538,7 +538,6 @@ defmodule Arca.Passkeys do
          possession_verified: true,
          expires_at: if(state == "pending", do: usec(attrs.expires_at)),
          admin_confirmation_id: nil,
-         label: attrs[:label],
          activated_at: if(state == "active", do: now),
          revoked_at: nil,
          inserted_at: now,

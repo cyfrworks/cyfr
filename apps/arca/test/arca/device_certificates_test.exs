@@ -67,8 +67,7 @@ defmodule Arca.DeviceCertificatesTest do
         user_id: user_id,
         source_kind: "device_cert",
         source_id: Prima.Digest.sha256(device_key),
-        device_public_key: device_key,
-        label: "phone"
+        device_public_key: device_key
       })
 
     client

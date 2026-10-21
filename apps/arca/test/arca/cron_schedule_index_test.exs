@@ -29,6 +29,7 @@ defmodule Arca.CronScheduleIndexTest do
         name: name,
         cron_expression: "0 * * * *",
         reference: "formula:local.index-test:1.0.0",
+        resolved_reference: "formula:local.index-test:1.0.0",
         profile_id: "prof_test",
         athanor_id: Arca.Test.Actor.athanor_id(),
         cap: 1_000

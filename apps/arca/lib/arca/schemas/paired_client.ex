@@ -39,7 +39,6 @@ defmodule Arca.Schemas.PairedClient do
     field :source_id, :string
     field :device_public_key, :binary
     field :standing, :string, default: "active"
-    field :label, :string
     timestamps(type: :utc_datetime_usec)
   end
 end
