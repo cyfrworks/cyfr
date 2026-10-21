@@ -62,7 +62,7 @@
 # build toolchain's files too; its runners still hold no capability, no
 # route and no descriptor but their channel and relay.
 
-# ---- cyfr-locus, the process helper: a static Go binary, pinned to the Go
+# ---- The process helper, cyfr-locus: a static Go binary, pinned to the Go
 # release apps/locus/keeper/go.mod names ----
 FROM golang:1.27.2-alpine@sha256:f92b6ef800e499660581efdabdf25d9d817a9d124eaf900924f0504e7e27e12d AS keeper
 WORKDIR /src
@@ -71,7 +71,7 @@ RUN go mod download
 COPY apps/locus/keeper/ ./
 RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/cyfr-locus .
 
-# ---- Stage 1: release build ----
+# ---- The release build ----
 FROM hexpm/elixir:1.20.4-erlang-29.1.1-debian-trixie-20261005@sha256:fd5f8520b3836b8b1e5d5e6dd890d1fda394e4e378bbc0cbc67cd618f321e29b AS relbuilder
 
 RUN apt-get update && apt-get install -y \
@@ -120,7 +120,7 @@ COPY wit/ wit/
 
 RUN mix do compile --no-listeners + release locus --no-compile
 
-# ---- Stage 2: toolchain runtime ----
+# ---- The toolchain runtime ----
 FROM debian:trixie-slim@sha256:a29215f6a35e51e22adffa17f89e9d2ef06214e64a2bad10d765c46aea49f11f
 
 LABEL org.opencontainers.image.source="https://github.com/cyfrworks/cyfr"

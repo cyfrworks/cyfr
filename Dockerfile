@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1.7-labs
 # (parser directive above must be the first line; needed for COPY --parents)
 
-# ---- Stage 1: Builder ----
+# ---- The release build ----
 FROM hexpm/elixir:1.20.4-erlang-29.1.1-debian-trixie-20261005@sha256:fd5f8520b3836b8b1e5d5e6dd890d1fda394e4e378bbc0cbc67cd618f321e29b AS builder
 
 RUN apt-get update && apt-get install -y \
@@ -42,16 +42,17 @@ COPY config/ config/
 # Copy application source
 COPY apps/ apps/
 
-# Copy top-level guides (embedded at compile time by Compendium.Provider) and the
-# WIT definitions (embedded by Prima.WIT — the compile fails if
-# the tree is missing, so an image can never ship an empty ABI)
+# Copy top-level guides (embedded at compile time by
+# Compendium.Providers.Aqua) and the WIT definitions (embedded by Prima.WIT —
+# the compile fails if the tree is missing, so an image can never ship an
+# empty ABI)
 COPY component-guide.md tincture-guide.md integration-guide.md ./
 COPY wit/ wit/
 
 # Full compile + build assets + release
 RUN mix compile && mix assets.deploy && mix release cyfr
 
-# ---- Stage 2: Runner ----
+# ---- The runtime ----
 # Runtime libraries, locales and service user. Build toolchains are provided
 # by Dockerfile.locus.
 FROM debian:trixie-slim@sha256:a29215f6a35e51e22adffa17f89e9d2ef06214e64a2bad10d765c46aea49f11f AS runner
@@ -94,7 +95,7 @@ COPY --from=builder /opt/wasm-tools/wasm-tools /usr/local/bin/wasm-tools
 COPY LICENSE FAIR_SOURCE.md /app/
 COPY LICENSES/ /app/LICENSES/
 
-# The seed tree (`:cyfr, :seed_path` via CYFR_SEED_PATH below), read in
+# The seed tree (`:arca, :seed_path` via CYFR_SEED_PATH below), read in
 # place — one root, two kinds of media:
 #
 # - seed/components — the bundle every athanor is provisioned from. Baked
@@ -136,4 +137,4 @@ HEALTHCHECK --interval=10s --timeout=3s --start-period=60s --retries=3 \
         curl -f "http://$addr:${CYFR_PORT:-4000}/api/health/ready" || exit 1
 
 ENTRYPOINT ["/app/docker-entrypoint.sh"]
-CMD ["sh", "-c", "exec /app/bin/cyfr start"]
+CMD ["/app/bin/cyfr", "start"]
