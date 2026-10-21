@@ -452,16 +452,13 @@ defmodule Compendium.OCI.Client do
   # Private: Blob Operations
   # ============================================================================
 
-  @doc false
-  # Public for its tests: the blob path's own entitlement check, which a
-  # pull reaches only after the manifest path has proven the same one.
-  #
   # A cached blob is shared by digest; serving it to this caller needs
-  # the caller's entitlement to `ref`'s repository. A download is its own
-  # proof.
+  # the caller's entitlement to `ref`'s repository, which a pull has
+  # proven on the manifest path before it asks for a blob. A download is
+  # its own proof.
   @spec fetch_blob(Context.t() | nil, Reference.t(), String.t()) ::
           {:ok, binary()} | {:error, term()}
-  def fetch_blob(ctx, %Reference{} = ref, digest) do
+  defp fetch_blob(ctx, %Reference{} = ref, digest) do
     with {:ok, credential} <- Transport.credential_key(ctx, ref) do
       case Cache.get_blob(digest) do
         {:ok, bytes} ->

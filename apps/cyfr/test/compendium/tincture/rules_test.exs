@@ -38,6 +38,10 @@ defmodule Compendium.Tincture.RulesTest do
     allow-forms
   )
 
+  # Every capability a frame has, and every placement it takes.
+  @capabilities ~w(pointer_lock fullscreen gamepad audio_autoplay)
+  @placements ~w(float canvas)
+
   @runs "reagent:local.runs"
 
   defp manifest(tincture),
@@ -103,7 +107,7 @@ defmodule Compendium.Tincture.RulesTest do
     end
 
     test "no grant emits a forbidden token" do
-      all = Rules.frame_capabilities()
+      all = @capabilities
       {:ok, tokens} = Rules.sandbox_tokens(all)
 
       for forbidden <- @forbidden, do: refute(forbidden in tokens)
@@ -220,7 +224,7 @@ defmodule Compendium.Tincture.RulesTest do
       assert "'wasm-unsafe-eval'" in d["script-src"]
       # A form POST is refused by the policy and by the sandbox.
       assert d["form-action"] == ["'none'"]
-      {:ok, tokens} = Rules.sandbox_tokens(Rules.frame_capabilities())
+      {:ok, tokens} = Rules.sandbox_tokens(@capabilities)
       refute "allow-forms" in tokens
       refute "allow-same-origin" in tokens
       # Nothing claims the policy isolates one tincture's scripts from
@@ -286,7 +290,8 @@ defmodule Compendium.Tincture.RulesTest do
     end
 
     test "the placements are float and canvas, and a desktop is refused by the placement sentence" do
-      assert Rules.placements() == ~w(float canvas)
+      assert {:ok, %Tincture{frame: %{placement: "float"}}} =
+               Rules.validate_declaration(manifest(%{"frame" => %{"placement" => "float"}}))
 
       assert Rules.validate_declaration(manifest(%{"frame" => %{"placement" => "desktop"}})) ==
                {:error, {:invalid_tincture, "tincture.frame.placement is one of float, canvas"}}
@@ -299,7 +304,7 @@ defmodule Compendium.Tincture.RulesTest do
         sentence =
           "tincture.actions names #{action}: a tincture never binds, removes or presses a feed; the person does"
 
-        for placement <- Rules.placements() do
+        for placement <- @placements do
           tincture = %{
             "frame" => %{"placement" => placement},
             "actions" => ["execution.list", action]
@@ -326,7 +331,7 @@ defmodule Compendium.Tincture.RulesTest do
     test "layout.edit among the system actions is refused, for every placement and for an app" do
       sentence = "tincture.actions names layout.edit: a tincture never writes the person's layout"
 
-      for placement <- [nil | Rules.placements()] do
+      for placement <- [nil | @placements] do
         frame = if placement, do: %{"placement" => placement}, else: %{}
         tincture = %{"frame" => frame, "actions" => ["execution.list", "layout.edit"]}
 
@@ -358,7 +363,7 @@ defmodule Compendium.Tincture.RulesTest do
         sentence =
           "tincture.actions names #{action}: a tincture never creates or changes a schedule"
 
-        for placement <- [nil | Rules.placements()] do
+        for placement <- [nil | @placements] do
           frame = if placement, do: %{"placement" => placement}, else: %{}
           tincture = %{"frame" => frame, "actions" => ["execution.list", action]}
 
@@ -642,7 +647,6 @@ defmodule Compendium.Tincture.RulesTest do
 
       assert decl.frame.placement == "canvas"
       assert decl.canvas == %Tincture.Canvas{module: "canvas.js", toolkit: 1}
-      assert "canvas" in Rules.placements()
       assert Rules.toolkit_majors() == [1]
       assert Compendium.tincture_toolkit_majors() == [1]
 
@@ -1005,8 +1009,6 @@ defmodule Compendium.Tincture.RulesTest do
     end
 
     assert Compendium.tincture_served_types() == Rules.served_types()
-    assert Compendium.tincture_frame_capabilities() == Rules.frame_capabilities()
-    assert Compendium.tincture_placements() == Rules.placements()
 
     assert Compendium.tincture_sandbox_tokens(["pointer_lock"]) ==
              Rules.sandbox_tokens(["pointer_lock"])

@@ -183,13 +183,11 @@ defmodule Compendium.Provisioning do
     Athanor.under_claim(athanor_id, entry_kind, &fill(&1, athanor, acting_ctx))
   end
 
-  @doc false
   # One attempt under a claim already taken — what every filling entry
-  # point runs once it holds the athanor. Public so a test can run an
-  # attempt under a claim it took, and lost, itself.
+  # point runs once it holds the athanor.
   @spec fill(Athanor.claim(), athanor(), Context.t() | nil) ::
           {:ok, athanor()} | {:error, term()}
-  def fill(claim, %{id: athanor_id} = athanor, acting_ctx) do
+  defp fill(claim, %{id: athanor_id} = athanor, acting_ctx) do
     # Re-read under the claim: the attempt that just held it may have been
     # filling this very athanor.
     case Athanor.athanor(athanor_id) do

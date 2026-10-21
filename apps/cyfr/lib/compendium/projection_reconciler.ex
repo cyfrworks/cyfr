@@ -379,11 +379,10 @@ defmodule Compendium.ProjectionReconciler do
 
   def handle_event(_event, _measurements, _metadata, _config), do: :ok
 
-  @doc false
   # Attach the handler for the reconciler registered as `name` to exactly
   # the catalog's `:projection` roster, replacing any earlier attach of it.
   @spec attach(atom()) :: :ok | {:error, term()}
-  def attach(name) do
+  defp attach(name) do
     detach(name)
 
     case :telemetry.attach_many(
@@ -405,16 +404,14 @@ defmodule Compendium.ProjectionReconciler do
     end
   end
 
-  @doc false
   @spec detach(atom()) :: :ok
-  def detach(name) do
+  defp detach(name) do
     _ = :telemetry.detach(handler_id(name))
     :ok
   end
 
-  @doc false
   @spec handler_id(atom()) :: {module(), atom()}
-  def handler_id(name), do: {__MODULE__, name}
+  defp handler_id(name), do: {__MODULE__, name}
 
   defp schedule(state) do
     Process.send_after(self(), :tick, state.interval_ms)

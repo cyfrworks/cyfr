@@ -382,30 +382,26 @@ defmodule Compendium.OCI.ClientTest do
     setup :start_registry
 
     @tag :capture_log
-    test "a private reference one caller warmed is refused to another on every path", ctx do
+    test "a private reference one caller warmed is refused to another by tag and by pin", ctx do
       %{registry: registry, a: a, b: b, ref: ref, wasm: wasm} = ctx
       allow(ctx.agent, ["Bearer tok_a"])
 
-      # A's reads warm the cache: its blobs, and the manifest entries a
+      # A's pull warms the cache: its blobs, and the manifest entries a
       # pull leaves under the tag and under the pin.
-      for digest <- Map.keys(Agent.get(ctx.agent, & &1.blobs)) do
-        assert {:ok, _} = Client.fetch_blob(a, ref, digest)
-      end
-
+      assert {:ok, _} = Client.pull(a, "#{registry}/#{@repo}:1.0.0")
       :ok = Cache.put_manifest(registry, @repo, "1.0.0", ctx.manifest, ctx.pin)
       :ok = Cache.put_manifest(registry, @repo, ctx.pin, ctx.manifest, ctx.pin)
       assert {:ok, ^wasm} = Cache.get_blob(ctx.wasm_digest)
       requests(ctx.agent)
 
-      # B holds a credential the registry refuses for the repository.
+      # B holds a credential the registry refuses for the repository. A
+      # pull asks for a blob only once the manifest path has proven the
+      # caller's entitlement, so each refusal comes before any cached blob.
       assert {:error, tag_refusal} = Client.pull(b, "#{registry}/#{@repo}:1.0.0")
       assert tag_refusal =~ "cyfr login"
 
       assert {:error, pin_refusal} = Client.pull(b, "#{registry}/#{@repo}@#{ctx.pin}")
       assert pin_refusal =~ "cyfr login"
-
-      assert {:error, %Errors{reason: :unauthorized, status: 403}} =
-               Client.fetch_blob(b, ref, ctx.wasm_digest)
 
       # Every refusal was the registry's answer to B's own credential.
       assert [_ | _] = seen = requests(ctx.agent)
@@ -415,24 +411,24 @@ defmodule Compendium.OCI.ClientTest do
 
     @tag :capture_log
     test "a revoked credential is refused once its memo expires", ctx do
-      %{a: a, ref: ref, wasm: wasm} = ctx
+      %{a: a, ref: ref, wasm_digest: wasm_digest} = ctx
+      pinned = "#{ctx.registry}/#{@repo}@#{ctx.pin}"
       allow(ctx.agent, ["Bearer tok_a"])
-      assert {:ok, ^wasm} = Client.fetch_blob(a, ref, ctx.wasm_digest)
+      assert {:ok, %{digest: ^wasm_digest}} = Client.pull(a, pinned)
 
       # Revoked at the registry: the memo still stands, and the cached
-      # blob is served without asking.
+      # manifest and blobs are served without asking.
       allow(ctx.agent, [])
       requests(ctx.agent)
-      assert {:ok, ^wasm} = Client.fetch_blob(a, ref, ctx.wasm_digest)
+      assert {:ok, %{digest: ^wasm_digest}} = Client.pull(a, pinned)
       assert [] = requests(ctx.agent)
 
       # The memo lapses: the registry is asked again, refuses, and nothing
       # is served or remembered.
       :ok = Cache.forget_entitlement(key(a, ref), ctx.registry, @repo)
 
-      assert {:error, %Errors{reason: :unauthorized}} =
-               Client.fetch_blob(a, ref, ctx.wasm_digest)
-
+      assert {:error, refusal} = Client.pull(a, pinned)
+      assert refusal =~ "cyfr login"
       assert [{"HEAD", _, "Bearer tok_a"}] = requests(ctx.agent)
       refute Cache.entitled?(key(a, ref), ctx.registry, @repo)
     end

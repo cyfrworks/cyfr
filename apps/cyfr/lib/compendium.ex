@@ -91,14 +91,6 @@ defmodule Compendium do
   @spec tincture_served_types() :: %{String.t() => String.t()}
   defdelegate tincture_served_types(), to: Rules, as: :served_types
 
-  @doc "The frame capabilities a manifest may declare (`Compendium.Tincture.Rules.frame_capabilities/0`)."
-  @spec tincture_frame_capabilities() :: [String.t()]
-  defdelegate tincture_frame_capabilities(), to: Rules, as: :frame_capabilities
-
-  @doc "The placements a frame may declare (`Compendium.Tincture.Rules.placements/0`)."
-  @spec tincture_placements() :: [String.t()]
-  defdelegate tincture_placements(), to: Rules, as: :placements
-
   @doc "A frame's `sandbox` tokens for its granted capabilities (`Compendium.Tincture.Rules.sandbox_tokens/1`)."
   @spec tincture_sandbox_tokens([String.t()]) :: {:ok, [String.t()]} | {:error, Rules.refusal()}
   defdelegate tincture_sandbox_tokens(granted), to: Rules, as: :sandbox_tokens
