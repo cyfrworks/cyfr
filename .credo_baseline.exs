@@ -113,8 +113,6 @@
    "Module.concat", 1},
   {Credo.Check.Warning.UnsafeToAtom, "apps/cyfr/test/opus/host_listener_test.exs",
    "String.to_atom", 1},
-  {Credo.Check.Warning.UnsafeToAtom, "apps/cyfr/test/prism_web/live_event_catchall_test.exs",
-   "Module.concat", 1},
   {Credo.Check.Warning.UnsafeToAtom, "apps/cyfr/test/sanctum/gate/provider_contract_test.exs",
    "Module.concat", 1},
   {Credo.Check.Warning.UnsafeToAtom, "apps/cyfr/test/sanctum/permission_vocabulary_test.exs",
