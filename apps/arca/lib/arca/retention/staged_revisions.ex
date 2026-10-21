@@ -6,8 +6,7 @@ defmodule Arca.Retention.StagedRevisions do
   Staged revisions no pointer or draft keeps, older than N days, go
   (`Arca.StorageGC` owns the roots and the collection order): a writer's
   abandoned work, and the revision a commit replaced once N days have
-  passed since that commit. The sweep moves nothing; the collector's audit
-  (`Arca.StorageGC.repair/1`) is asked for.
+  passed since that commit. The sweep moves no pointer.
 
   Collection deletes objects a successor boot may be staging against, so
   it runs only on a member that holds its slot in the cell

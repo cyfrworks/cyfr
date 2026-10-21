@@ -79,7 +79,7 @@ defmodule Cyfr.TwoWorkersTest do
     ctx = Sanctum.TestContext.local(:prism)
 
     on_exit(fn ->
-      Slots.forgive_unreaped(@slots, ctx.athanor_id)
+      Prima.Test.Slots.clear_unreaped(@slots, ctx.athanor_id)
 
       for {{app, key}, value} <- previous do
         if value,

@@ -62,7 +62,7 @@ defmodule Locus.Runtime.ExecutorMaskedOutputTest do
     ctx = Sanctum.TestContext.local(:prism)
 
     on_exit(fn ->
-      Prima.Slots.forgive_unreaped(Opus.Slots, ctx.athanor_id)
+      Prima.Test.Slots.clear_unreaped(Opus.Slots, ctx.athanor_id)
 
       for {key, value} <- previous do
         if value,

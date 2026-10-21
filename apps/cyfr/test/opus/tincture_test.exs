@@ -43,7 +43,7 @@ defmodule Opus.TinctureTest do
     _athanor = Sanctum.TestContext.athanor!()
 
     on_exit(fn ->
-      Prima.Slots.forgive_unreaped(Opus.Slots, ctx.athanor_id)
+      Prima.Test.Slots.clear_unreaped(Opus.Slots, ctx.athanor_id)
       File.rm_rf!(base)
 
       for {{app, key}, value} <- prev do

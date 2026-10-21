@@ -110,7 +110,7 @@ defmodule Locus.Runtime.SecretAuditTest do
     Sanctum.TestContext.ready!(ctx.athanor_id)
 
     on_exit(fn ->
-      Prima.Slots.forgive_unreaped(Opus.Slots, ctx.athanor_id)
+      Prima.Test.Slots.clear_unreaped(Opus.Slots, ctx.athanor_id)
 
       for {{app, key}, value} <- previous do
         case value do

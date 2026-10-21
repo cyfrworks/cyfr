@@ -59,7 +59,7 @@ defmodule Opus.AttemptShutdownTest do
 
     on_exit(fn ->
       :telemetry.detach(handler)
-      Slots.forgive_unreaped(@slots, Sanctum.TestContext.local(:api).athanor_id)
+      Prima.Test.Slots.clear_unreaped(@slots, Sanctum.TestContext.local(:api).athanor_id)
     end)
 
     listener =

@@ -518,7 +518,7 @@ defmodule Opus.AdmissionTest do
     test "does not outlive the root's admission: the run carries none on" do
       Cyfr.Test.Sandbox.stop_work_on_exit()
       person = Sanctum.TestContext.local(:prism)
-      on_exit(fn -> Prima.Slots.forgive_unreaped(Opus.Slots, person.athanor_id) end)
+      on_exit(fn -> Prima.Test.Slots.clear_unreaped(Opus.Slots, person.athanor_id) end)
 
       %{ref: ref, work: work} = named_app!(person)
 
@@ -779,7 +779,7 @@ defmodule Opus.AdmissionTest do
 
       on_exit(fn ->
         Arca.Cache.delete_match(Arca.Cache.Keys.match_component_meta(Context.actor(api)))
-        Prima.Slots.forgive_unreaped(Opus.Slots, api.athanor_id)
+        Prima.Test.Slots.clear_unreaped(Opus.Slots, api.athanor_id)
       end)
 
       Cyfr.Test.Sandbox.stop_work_on_exit()

@@ -59,7 +59,7 @@ defmodule Locus.Runtime.RunnerReuseTest do
     Sanctum.TestContext.ready!(ctx.athanor_id)
 
     on_exit(fn ->
-      Prima.Slots.forgive_unreaped(Opus.Slots, ctx.athanor_id)
+      Prima.Test.Slots.clear_unreaped(Opus.Slots, ctx.athanor_id)
       File.rm_rf!(test_path)
 
       for {key, value} <- previous do

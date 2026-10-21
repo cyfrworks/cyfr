@@ -77,8 +77,8 @@ defmodule Prima.Network do
   @doc """
   Validate a resolved address and construct its pinned connection options.
 
-  `:private_policy` is `:deny` (default), `:allow_all`, `{:allowlist, targets}`
-  or `{:fun, predicate}`. `:receive_timeout`, `:protocols` and `:transport_opts`
+  `:private_policy` is `:deny` (default), `:allow_all` or
+  `{:allowlist, targets}`. `:receive_timeout`, `:protocols` and `:transport_opts`
   are copied into the connection options. Redirects, retries, decompression
   and body decoding stay disabled so the caller controls every next request.
 
@@ -150,7 +150,6 @@ defmodule Prima.Network do
   defp private_permitted?({:allowlist, targets}, hostname, ip),
     do: private_allowed?(hostname, ip, targets)
 
-  defp private_permitted?({:fun, fun}, _hostname, ip) when is_function(fun, 1), do: fun.(ip)
   defp private_permitted?(_, _hostname, _ip), do: false
 
   @doc "Match an explicit private-egress allowlist by hostname, address or CIDR."

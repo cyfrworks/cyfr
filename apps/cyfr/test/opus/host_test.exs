@@ -1114,7 +1114,7 @@ defmodule Opus.HostTest do
       on_exit(fn ->
         Arca.Cache.delete_match(Arca.Cache.Keys.match_component_meta(Sanctum.Context.actor(ctx)))
 
-        Prima.Slots.forgive_unreaped(Opus.Slots, ctx.athanor_id)
+        Prima.Test.Slots.clear_unreaped(Opus.Slots, ctx.athanor_id)
         File.rm_rf!(test_path)
 
         if previous,
