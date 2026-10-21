@@ -106,7 +106,8 @@ defmodule Opus.Admission do
   The component graph the consent is judged against is read before the
   loader is asked (`Compendium.resolve_verified_activation/2`). One that
   cannot be read right now is `{:error, {:unavailable, "The component
-  graph"}}`, and one whose stored rows do not hash is
+  graph"}}`, and one whose stored rows do not hash, or a node of which
+  holds a stored manifest that does not decode, is
   `{:error, {:corrupt, {:component_graph, ref}}}`, `ref` the root's own
   component ref: an outage and damage, never a setup to make.
 
@@ -1144,8 +1145,9 @@ defmodule Opus.Admission do
   # store could not give right now (its projection not caught up, or a
   # store that did not answer) is an outage, and one whose stored rows do
   # not hash (a release digest or name that is not text, which only a row
-  # written outside the publish path carries) is damage: neither is a
-  # setup to make. An incomplete graph is the loader's to judge.
+  # written outside the publish path carries) or a node of which holds a
+  # stored manifest that does not decode is damage: neither is a setup to
+  # make. An incomplete graph is the loader's to judge.
   defp live_activation(ctx, component) do
     case Compendium.resolve_verified_activation(ctx, activation_row(component)) do
       {:ok, _} = verified ->
@@ -1158,6 +1160,9 @@ defmodule Opus.Admission do
         {:error, {:unavailable, "The component graph"}}
 
       {:error, {:invalid_graph, _}} ->
+        {:error, {:corrupt, {:component_graph, component["component_ref"]}}}
+
+      {:error, {:corrupt, {:manifest, _node_key}}} ->
         {:error, {:corrupt, {:component_graph, component["component_ref"]}}}
 
       # `:no_athanor` among them, which never reaches here: the profile

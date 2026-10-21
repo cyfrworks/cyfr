@@ -10,6 +10,8 @@ defmodule Opus.AgentAuthorityTest do
 
   use ExUnit.Case, async: false
 
+  require Ecto.Query
+
   alias Opus.Admission
   alias Sanctum.Consent.{Bootstrap}
 
@@ -135,6 +137,30 @@ defmodule Opus.AgentAuthorityTest do
       Prima.Authority.Blob.lookup_edge(web.policy, "agent:local.web", "catalyst:local.http", "")
 
     assert http_edge.egress.domains != []
+  end
+
+  # The soul's inspection reads no dependency tree, so its model's damage
+  # first meets the run's graph.
+  @tag :capture_log
+  test "a model catalyst whose stored manifest does not decode is the soul's damaged " <>
+         "component graph, never a setup to make",
+       %{ctx: ctx} do
+    {:ok, _} = Bootstrap.run(ctx)
+    assert {:ok, _} = Admission.authority_for(ctx, :default, @soul)
+    {:ok, root_ref, _type, _component} = Admission.inspect_component(ctx, @soul)
+
+    {count, _} =
+      Ecto.Query.from(c in Arca.Schemas.Component,
+        where:
+          c.athanor_id == ^ctx.athanor_id and c.component_type == "catalyst" and
+            c.name == "claude"
+      )
+      |> Arca.Repo.update_all(set: [manifest: "not json"])
+
+    assert count > 0
+
+    assert Admission.authority_for(ctx, :default, @soul) ==
+             {:error, {:corrupt, {:component_graph, root_ref}}}
   end
 
   test "two roles on the soul run one catalyst with two keys", %{ctx: ctx} do
