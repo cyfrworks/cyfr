@@ -56,10 +56,6 @@ defmodule CyfrWeb.Ingress do
   # name the admission roster and the listener census know it by.
   @proxy __MODULE__.Proxy
 
-  @doc "The proxy listener's child id, the name the admission roster gives it."
-  @spec proxy_listener() :: module()
-  def proxy_listener, do: @proxy
-
   @doc false
   # Phoenix's adapter callback: the endpoint's listeners as children of
   # its supervisor, the loopback listener always and the proxy listener
