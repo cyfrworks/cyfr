@@ -220,7 +220,7 @@ class FailedDown(unittest.TestCase):
         patched = mock.patch.object(imagesuite, "DOWN_RETRY_S", 0)
         patched.start()
         self.addCleanup(patched.stop)
-        stack = Failing("sol-assessment-probe")
+        stack = Failing("teardown-fault-probe")
         self.addCleanup(shutil.rmtree, stack.project_dir, True)
         self.addCleanup(lambda: stack in imagesuite._stacks and imagesuite._stacks.remove(stack))
         with self.assertRaises(SystemExit) as raised:

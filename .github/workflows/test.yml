@@ -21,9 +21,9 @@ on:
       - '.dialyzer_ignore.exs'
       # Every workflow: the drift test, the tag pipeline's graph check
       # (tests/ci-release-graph.py) and its publication test
-      # (tests/ci-publish-test.sh) read release.yml, and the retired-
-      # settings test scans them all; the image scans read .trivyignore.yaml
-      # and trivy-secret.yaml.
+      # (tests/ci-publish-test.sh) read release.yml, and the commit gate's
+      # test reads them all (tests/commit-gate-test.sh); the image scans
+      # read .trivyignore.yaml and trivy-secret.yaml.
       - '.github/workflows/*.yml'
       # The setup-elixir action every BEAM job here runs.
       - '.github/actions/**'
@@ -80,9 +80,9 @@ on:
       - '.dialyzer_ignore.exs'
       # Every workflow: the drift test, the tag pipeline's graph check
       # (tests/ci-release-graph.py) and its publication test
-      # (tests/ci-publish-test.sh) read release.yml, and the retired-
-      # settings test scans them all; the image scans read .trivyignore.yaml
-      # and trivy-secret.yaml.
+      # (tests/ci-publish-test.sh) read release.yml, and the commit gate's
+      # test reads them all (tests/commit-gate-test.sh); the image scans
+      # read .trivyignore.yaml and trivy-secret.yaml.
       - '.github/workflows/*.yml'
       # The setup-elixir action every BEAM job here runs.
       - '.github/actions/**'
@@ -141,8 +141,9 @@ env:
   MIX_OS_CONCURRENCY_LOCK: 0
 jobs:
   # The checks whose answer does not depend on the database adapter, once
-  # per run. scripts/commit-gate.sh reads two of them, "The built SDK is its source's" and "The built
-  # toolkit is its source's", and runs their scripts.
+  # per run. scripts/commit-gate.sh reads two of them, "The built SDK is
+  # its source's" and "The built toolkit is its source's", and runs their
+  # scripts.
   static:
     name: Static checks, generated files, fixtures and harness tests
     runs-on: ubuntu-latest

@@ -304,7 +304,7 @@ defmodule Cyfr.DocsDriftTest do
   # ==========================================================================
 
   @workflow Path.join(@repo_root, ".github/workflows/test.yml")
-  @fossil_step "Tier A/B fossil patterns must be absent"
+  @fossil_step "Retired names stay out and the storage layout is Arca's"
 
   # A shipped component version is immutable, and this one's README and
   # manifest say the retired name; it changes only in a new version.
@@ -2212,16 +2212,14 @@ defmodule Cyfr.DocsDriftTest do
                "not the guides the scaffold ships #{inspect(shipped)}"
     end
 
-    # The vocabulary gate's three file lists: the fossil patterns' paths,
-    # and the files its layout and tree-diagram greps read.
+    # The vocabulary gate's two file lists: the retired names' paths, and
+    # the guides its storage-diagram check reads.
     workflow = File.read!(@workflow)
 
     gate_lists = [
       {"the vocabulary gate's paths", ~r/^\s+paths='([^']+)'$/m},
-      {"the vocabulary gate's docs_hits files",
-       ~r/^\s+docs_hits="\$\(git grep -InE '.*' -- ([^|]+) \|\| true\)"$/m},
-      {"the vocabulary gate's phantom_hits files",
-       ~r/^\s+phantom_hits="\$\(git grep -InE '.*' -- ([^|]+) \|\| true\)"$/m}
+      {"the vocabulary gate's storage-diagram files",
+       ~r/^\s+python3 -I scripts\/ci\/storage-diagrams\.py ([^|]+) \|\| fail=1$/m}
     ]
 
     for {copy, pattern} <- gate_lists do
