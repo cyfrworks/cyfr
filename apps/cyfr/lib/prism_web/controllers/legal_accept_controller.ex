@@ -66,9 +66,9 @@ defmodule PrismWeb.LegalAcceptController do
   # actually rendered: `show/2` caches the bodies under the version, so the
   # submit that follows reads what the person was shown rather than what
   # their form says they were shown. The form's list is the fallback for a
-  # cold cache, and an empty roster is refused either way — `policies=""`
-  # made `Enum.all?([], …)` vacuously true, and recorded an acceptance with
-  # nothing ticked at all.
+  # cold cache, and an empty roster is refused either way
+  # (`all_acknowledged?/2`).
+  @spec policy_roster(String.t(), map()) :: [String.t()]
   defp policy_roster(version, params) do
     case Arca.Cache.get({:legal_bodies, version}) do
       {:ok, [_ | _] = bodies} -> Enum.map(bodies, fn {name, _title, _md} -> name end)
@@ -184,15 +184,14 @@ defmodule PrismWeb.LegalAcceptController do
   # An empty roster is refused rather than vacuously satisfied: nothing to
   # acknowledge means nothing was agreed to, and recording an acceptance
   # would be recording agreement to nothing.
+  @spec all_acknowledged?(map(), [String.t()]) :: boolean()
   defp all_acknowledged?(_params, []), do: false
 
-  defp all_acknowledged?(params, names) when is_list(names) do
+  defp all_acknowledged?(params, names) do
     Enum.all?(names, fn name ->
       params["ack_" <> String.replace(name, "-", "_")] == "on"
     end)
   end
-
-  defp all_acknowledged?(_params, _names), do: false
 
   defp current_provider(conn), do: PendingProbe.current_provider(conn)
 

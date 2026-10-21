@@ -435,9 +435,6 @@ defmodule PrismWeb.AuthController do
       _malformed ->
         {delete_session(conn, @link_intent), %{"expired" => true}}
     end
-  rescue
-    # No session fetched (a test drives the action bare): no intent.
-    ArgumentError -> {conn, nil}
   end
 
   # The browser's own session, established and read again: a link belongs
@@ -698,22 +695,13 @@ defmodule PrismWeb.AuthController do
 
   defp screen_name(_), do: nil
 
+  # Dispatch to the provider configuration resolved at boot
+  # (`Cyfr.RuntimeConfig.resolve_auth_provider/1`); only `Sanctum.Auth.OIDC`
+  # accepts a callback.
   defp authenticate_with_provider(auth) do
-    # Dispatch to the configured provider; only `Sanctum.Auth.OIDC` accepts a
-    # callback.
     case Cyfr.RuntimeConfig.auth_provider() do
-      nil ->
-        {:error, :auth_provider_not_configured}
-
-      provider when is_atom(provider) ->
-        try do
-          provider.authenticate(auth)
-        rescue
-          UndefinedFunctionError -> {:error, :auth_provider_not_available}
-        end
-
-      _other ->
-        {:error, :auth_provider_not_supported}
+      nil -> {:error, :auth_provider_not_configured}
+      provider -> provider.authenticate(auth)
     end
   end
 
@@ -737,9 +725,6 @@ defmodule PrismWeb.AuthController do
 
   defp friendly_error_message(:auth_provider_not_configured),
     do: "Authentication provider not configured"
-
-  defp friendly_error_message(:auth_provider_not_available),
-    do: "Authentication provider not available"
 
   defp friendly_error_message(:auth_provider_not_supported),
     do: "Authentication provider not supported"

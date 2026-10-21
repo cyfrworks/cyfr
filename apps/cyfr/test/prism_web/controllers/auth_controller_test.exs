@@ -76,6 +76,7 @@ defmodule PrismWeb.AuthControllerTest do
 
       conn =
         conn
+        |> Plug.Test.init_test_session(%{})
         |> assign(:ueberauth_failure, failure)
         |> PrismWeb.AuthController.callback(%{})
 
