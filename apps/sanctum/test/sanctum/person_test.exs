@@ -656,10 +656,10 @@ defmodule Sanctum.PersonTest do
     end
 
     test "refuses a person with no identifier", %{ctx: ctx, request: request} do
-      assert {:error, :not_enrolled} = Person.sign_assertion(ctx, request, [])
+      assert {:error, :not_enrolled} = Person.sign_assertion(ctx, request)
 
       assert {:error, :not_enrolled} =
-               Person.sign_assertion(%{ctx | user_id: "usr_ghost"}, request, [])
+               Person.sign_assertion(%{ctx | user_id: "usr_ghost"}, request)
     end
 
     test "a session alone signs nothing: the carry's challenge is fixed, and the proof asked",
@@ -669,7 +669,7 @@ defmodule Sanctum.PersonTest do
       challenge = :crypto.strong_rand_bytes(32)
 
       assert {:error, {:confirmation_required, %{operation: "person.assert"}}} =
-               Person.sign_assertion(ctx, asked(ctx, action, challenge), [])
+               Person.sign_assertion(ctx, asked(ctx, action, challenge))
 
       assert {:ok, held} = Arca.CarryActions.get(as(user.id), action.id)
       assert held.challenge == Prima.Identity.Encoding.b64(challenge)
@@ -677,7 +677,7 @@ defmodule Sanctum.PersonTest do
 
       # Another challenge for the same carry is refused, proof or none.
       assert {:error, {:conflict, _}} =
-               Person.sign_assertion(ctx, asked(ctx, action, :crypto.strong_rand_bytes(32)), [])
+               Person.sign_assertion(ctx, asked(ctx, action, :crypto.strong_rand_bytes(32)))
     end
 
     test "under a fresh remote_sign_in proof, signs the assertion for exactly that carry, once",
@@ -688,11 +688,11 @@ defmodule Sanctum.PersonTest do
       request = asked(ctx, action, challenge)
       Sanctum.TestContext.passkey!(user.id)
 
-      {:error, {:confirmation_required, %{id: id}}} = Person.sign_assertion(ctx, request, [])
+      {:error, {:confirmation_required, %{id: id}}} = Person.sign_assertion(ctx, request)
       Sanctum.TestContext.prove!(ctx, id)
 
       assert {:ok, %{assertion: assertion, genesis: carried}} =
-               Person.sign_assertion(%{ctx | confirmation_id: id}, request, [])
+               Person.sign_assertion(%{ctx | confirmation_id: id}, request)
 
       assert carried == Entry.encode(genesis)
       assert assertion.identifier == row.identifier
@@ -716,7 +716,7 @@ defmodule Sanctum.PersonTest do
 
       # An exact retry answers the same assertion, with no new proof.
       assert {:ok, %{assertion: ^assertion}} =
-               Person.sign_assertion(%{ctx | confirmation_id: nil}, request, [])
+               Person.sign_assertion(%{ctx | confirmation_id: nil}, request)
 
       # The spent proof signs nothing for another home's carry.
       other = carry!(user.id, "https://other-hub.example")
@@ -724,8 +724,7 @@ defmodule Sanctum.PersonTest do
       assert {:error, {:confirmation_required, _}} =
                Person.sign_assertion(
                  %{ctx | confirmation_id: id},
-                 asked(ctx, other, challenge),
-                 []
+                 asked(ctx, other, challenge)
                )
     end
 
@@ -737,7 +736,7 @@ defmodule Sanctum.PersonTest do
       action = carry!(user.id, "https://hub.example")
 
       assert {:error, {:confirmation_required, %{operation: "person.assert"}}} =
-               Person.sign_assertion(ctx, asked(ctx, action, challenge), [])
+               Person.sign_assertion(ctx, asked(ctx, action, challenge))
 
       # Another session attaches its own challenge to another carry: the
       # code its preview names is not the one the relying home showed.
@@ -745,7 +744,7 @@ defmodule Sanctum.PersonTest do
       other = carry!(user.id, "https://hub.example")
 
       assert {:error, {:confirmation_required, _}} =
-               Person.sign_assertion(ctx, asked(ctx, other, substituted), [])
+               Person.sign_assertion(ctx, asked(ctx, other, substituted))
 
       {:ok, records} = Arca.PendingConfirmations.list_open(Sanctum.Context.actor(ctx), user.id)
 
@@ -771,15 +770,13 @@ defmodule Sanctum.PersonTest do
       assert {:error, {:invalid_argument, _}} =
                Person.sign_assertion(
                  ctx,
-                 %{asked(ctx, action, challenge) | audience: "https://other.example"},
-                 []
+                 %{asked(ctx, action, challenge) | audience: "https://other.example"}
                )
 
       assert {:error, {:invalid_argument, _}} =
                Person.sign_assertion(
                  ctx,
-                 %{asked(ctx, action, challenge) | action_id: "car_nobody"},
-                 []
+                 %{asked(ctx, action, challenge) | action_id: "car_nobody"}
                )
 
       # Another person's carry is not theirs to sign for.
@@ -788,14 +785,13 @@ defmodule Sanctum.PersonTest do
       theirs = carry!(stranger.id, "https://hub.example")
 
       assert {:error, {:invalid_argument, _}} =
-               Person.sign_assertion(ctx, %{asked(ctx, theirs, challenge) | key_epoch: nil}, [])
+               Person.sign_assertion(ctx, %{asked(ctx, theirs, challenge) | key_epoch: nil})
 
       # This home is no audience.
       assert {:error, {:invalid_argument, _}} =
                Person.sign_assertion(
                  ctx,
-                 %{asked(ctx, action, challenge) | audience: Person.home()},
-                 []
+                 %{asked(ctx, action, challenge) | audience: Person.home()}
                )
     end
 
@@ -806,15 +802,14 @@ defmodule Sanctum.PersonTest do
       old = carry!(user.id, "https://hub.example", Prima.Digest.sha256("a replaced head"))
 
       assert {:error, {:conflict, _}} =
-               Person.sign_assertion(ctx, asked(ctx, old, challenge), [])
+               Person.sign_assertion(ctx, asked(ctx, old, challenge))
 
       action = carry!(user.id, "https://hub.example")
 
       assert {:error, :stale_key_epoch} =
                Person.sign_assertion(
                  ctx,
-                 %{asked(ctx, action, challenge) | key_epoch: Prima.Digest.sha256("another")},
-                 []
+                 %{asked(ctx, action, challenge) | key_epoch: Prima.Digest.sha256("another")}
                )
     end
   end

@@ -364,18 +364,15 @@ defmodule Sanctum.Person do
 
   Answers `{:ok, %{assertion: %Prima.PersonAssertion{}, genesis: map}}`:
   what the browser carries back to the audience, the genesis beside the
-  assertion so that home can find the person's directory. `opts` takes
-  nothing yet.
+  assertion so that home can find the person's directory.
   """
-  @spec sign_assertion(Sanctum.Context.t(), assertion_request(), keyword()) ::
+  @spec sign_assertion(Sanctum.Context.t(), assertion_request()) ::
           {:ok, %{assertion: Prima.PersonAssertion.t(), genesis: map()}} | {:error, term()}
   def sign_assertion(
         %Sanctum.Context{user_id: user_id} = ctx,
-        %{audience: audience, challenge: challenge, action_id: action_id} = request,
-        opts
+        %{audience: audience, challenge: challenge, action_id: action_id} = request
       )
-      when is_binary(audience) and is_binary(challenge) and is_binary(action_id) and
-             is_list(opts) do
+      when is_binary(audience) and is_binary(challenge) and is_binary(action_id) do
     actor = Sanctum.Context.actor(ctx)
 
     with {:ok, row} <- assertion_signer(actor, user_id),

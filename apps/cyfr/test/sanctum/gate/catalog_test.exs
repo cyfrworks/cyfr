@@ -210,7 +210,7 @@ defmodule Sanctum.Gate.CatalogTest do
         Sanctum.Gate.call_external("system", ctx, %{"action" => "status", "scope" => "emissary"})
 
       assert result.status == "ok"
-      assert result.services.emissary == "ok"
+      assert result.services["emissary"] == "ok"
     end
   end
 

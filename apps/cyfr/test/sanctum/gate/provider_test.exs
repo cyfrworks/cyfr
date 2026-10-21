@@ -146,10 +146,10 @@ defmodule Sanctum.Gate.ProviderTest do
 
       # The component domain answers the registry's state (the probe is off
       # in the suite).
-      assert result.services.registry == "unknown"
-      assert result.services.compendium == "ok"
-      assert result.services.widget == "unreachable"
-      assert result.services.probe_reporting == "ok"
+      assert result.services["registry"] == "unknown"
+      assert result.services["compendium"] == "ok"
+      assert result.services["widget"] == "unreachable"
+      assert result.services["probe_reporting"] == "ok"
       assert result.status == "degraded"
     end
 
@@ -157,8 +157,8 @@ defmodule Sanctum.Gate.ProviderTest do
       {:ok, result} =
         SystemProvider.handle("system", Sanctum.TestContext.local(), %{"action" => "status"})
 
-      assert result.services.probe_crashing == "crashed"
-      assert result.services.probe_malformed == "crashed"
+      assert result.services["probe_crashing"] == "crashed"
+      assert result.services["probe_malformed"] == "crashed"
       assert result.status == "degraded"
 
       {:ok, scoped} =
@@ -167,7 +167,7 @@ defmodule Sanctum.Gate.ProviderTest do
           "scope" => "probe_crashing"
         })
 
-      assert scoped.services == %{probe_crashing: "crashed"}
+      assert scoped.services == %{"probe_crashing" => "crashed"}
       assert scoped.status == "degraded"
     end
 
@@ -178,7 +178,7 @@ defmodule Sanctum.Gate.ProviderTest do
           "scope" => "probe_reporting"
         })
 
-      assert result.services == %{probe_reporting: "ok", widget: "unreachable"}
+      assert result.services == %{"probe_reporting" => "ok", "widget" => "unreachable"}
       assert result.status == "degraded"
     end
   end
@@ -215,11 +215,11 @@ defmodule Sanctum.Gate.ProviderTest do
       {:ok, result} = SystemProvider.handle("system", ctx, %{"action" => "status"})
 
       assert is_map(result.services)
-      refute Enum.any?(Map.keys(result.services), &(Atom.to_string(&1) == @retired_label))
-      assert Map.has_key?(result.services, :sanctum)
-      assert Map.has_key?(result.services, :arca)
-      assert Map.has_key?(result.services, :opus)
-      assert Map.has_key?(result.services, :compendium)
+      refute Enum.any?(Map.keys(result.services), &(&1 == @retired_label))
+      assert Map.has_key?(result.services, "sanctum")
+      assert Map.has_key?(result.services, "arca")
+      assert Map.has_key?(result.services, "opus")
+      assert Map.has_key?(result.services, "compendium")
     end
 
     test "the sanctum service, which holds the gate's, is ok" do
@@ -227,7 +227,7 @@ defmodule Sanctum.Gate.ProviderTest do
 
       {:ok, result} = SystemProvider.handle("system", ctx, %{"action" => "status"})
 
-      assert result.services.sanctum == "ok"
+      assert result.services["sanctum"] == "ok"
     end
 
     test "includes mcp metadata" do
@@ -254,7 +254,7 @@ defmodule Sanctum.Gate.ProviderTest do
 
       assert result.status == "ok"
       assert Map.keys(result.services) == [:sanctum]
-      assert result.services.sanctum == "ok"
+      assert result.services["sanctum"] == "ok"
     end
 
     test "the gate's retired label is no scope" do
@@ -282,7 +282,7 @@ defmodule Sanctum.Gate.ProviderTest do
         SystemProvider.handle("system", ctx, %{"action" => "status", "scope" => "opus"})
 
       assert Map.keys(result.services) == [:opus]
-      assert result.services.opus == "ok"
+      assert result.services["opus"] == "ok"
     end
 
     test "scope compendium returns the compendium status and the registry's" do
@@ -292,7 +292,7 @@ defmodule Sanctum.Gate.ProviderTest do
         SystemProvider.handle("system", ctx, %{"action" => "status", "scope" => "compendium"})
 
       assert Enum.sort(Map.keys(result.services)) == [:compendium, :registry]
-      assert result.services.registry == "unknown"
+      assert result.services["registry"] == "unknown"
       assert result.status == "ok"
     end
 

@@ -369,7 +369,7 @@ defmodule Compendium.ProviderTest do
           "scope" => "compendium"
         })
 
-      assert result.services.registry == "unknown"
+      assert result.services["registry"] == "unknown"
     end
   end
 

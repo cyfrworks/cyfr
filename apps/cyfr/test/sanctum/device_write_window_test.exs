@@ -860,7 +860,7 @@ defmodule Sanctum.DeviceWriteWindowTest do
                  session_ctx,
                  client_id,
                  ctx,
-                 &Person.sign_assertion(&1, request, [])
+                 &Person.sign_assertion(&1, request)
                )
 
       assert {:ok, %{assertion: nil}} =
@@ -874,7 +874,7 @@ defmodule Sanctum.DeviceWriteWindowTest do
       {action, request} = carried!(user.id)
 
       assert {:ok, %{assertion: %Prima.PersonAssertion{}}} =
-               Sanctum.TestContext.confirming(ctx, &Person.sign_assertion(&1, request, []))
+               Sanctum.TestContext.confirming(ctx, &Person.sign_assertion(&1, request))
 
       assert {:ok, %{assertion: recorded}} =
                Arca.CarryActions.get(%Prima.Actor{user_id: user.id}, action.id)

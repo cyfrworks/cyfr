@@ -393,11 +393,8 @@ defmodule Sanctum.Providers.System do
   # what they depend on (`c:Prima.Provider.status/0`). A provider without
   # the callback adds nothing; one whose answer raises, exits or is not a
   # map of strings reads "crashed" under its service — the report degrades,
-  # the call never fails. Service names come from the configured roster and
-  # state names from provider code, so the atom table stays bounded.
+  # the call never fails. Every name is a string, as the wire carries it.
   defp service_status(service) do
-    service_key = String.to_atom(service)
-
     {states, crashed?} =
       service
       |> Sanctum.Services.providers_for()
@@ -409,7 +406,7 @@ defmodule Sanctum.Providers.System do
       end)
 
     own = if crashed?, do: "crashed", else: check_service_named(service)
-    Map.put(states, service_key, own)
+    Map.put(states, service, own)
   end
 
   defp provider_status(module) do
@@ -434,7 +431,7 @@ defmodule Sanctum.Providers.System do
 
   defp reported_states(states, module) when is_map(states) do
     if Enum.all?(states, fn {k, v} -> is_binary(k) and is_binary(v) end) do
-      {:ok, Map.new(states, fn {name, state} -> {String.to_atom(name), state} end)}
+      {:ok, states}
     else
       Logger.error(
         "[Sanctum.Providers.System] #{inspect(module)}.status/0 answered a malformed map"

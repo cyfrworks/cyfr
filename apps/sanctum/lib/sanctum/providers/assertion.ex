@@ -86,8 +86,7 @@ defmodule Sanctum.Providers.Assertion do
                challenge: challenge,
                action_id: action_id,
                key_epoch: key_epoch
-             },
-             []
+             }
            ) do
       encoded = Prima.PersonAssertion.encode(assertion)
 
