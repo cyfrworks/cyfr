@@ -106,7 +106,9 @@ defmodule Opus.Lapse do
     end)
 
     if record.component_type in ["formula", "agent"] do
-      after_commit(record, "children's failure", fn -> Cascade.fail_children_of(record.id) end)
+      after_commit(record, "children's failure", fn ->
+        Cascade.fail_children_of(record.id)
+      end)
     end
   end
 
