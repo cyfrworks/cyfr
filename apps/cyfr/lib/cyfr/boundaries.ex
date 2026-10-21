@@ -1844,7 +1844,6 @@ defmodule Cyfr.Boundaries do
       build_tincture_context: 2,
       internal_context: 1,
       origin: 0,
-      public_url: 0,
       reconcile_platform_admins: 2,
       system_context: 0
     ],
@@ -1930,7 +1929,6 @@ defmodule Cyfr.Boundaries do
       load_root: 3,
       pinned_intact?: 2
     ],
-    "Sanctum.Consent.Proof" => [store: 0],
     "Sanctum.Consent.RegistrationBinding" => [authorize: 3, refusal: 1],
     "Sanctum.Consent.ShapeDerivation" => [expand_tools: 1, live_digest: 2, manifest_blocks: 2],
     "Sanctum.Consent.ShapeDiff" => [compute: 3],
@@ -2556,8 +2554,9 @@ defmodule Cyfr.Boundaries do
   @doc """
   `config_key_classes/0` with the platform settings' keys classed
   `:setting`: the head of each configuration path in `settings`, the
-  `{application, key}` pairs `Cyfr.Platform.Settings.Roster.config_keys/0`
-  answers, under the schema's applications.
+  `{application, key}` pairs the platform settings
+  (`Cyfr.Platform.Settings.Roster`) are written under, within the
+  schema's applications.
 
   The caller reads the roster and hands it in: this catalog is a boundary
   of its own beside the host's and names none of the host's modules, so

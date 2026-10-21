@@ -35,9 +35,6 @@ defmodule Cyfr.PlatformSettingsRosterTest do
 
   # A setting with neither a variable nor a default has no value anywhere
   # before someone stores one.
-  defp unvalued(entries),
-    do: for(%Entry{variable: nil, default: nil, key: key} <- entries, do: key)
-
   # A restart-scoped setting is applied at boot by one host step, so it
   # names one; the log level is the one live setting that does. Anything
   # else is no apply story, or one that nothing runs.
@@ -280,24 +277,6 @@ defmodule Cyfr.PlatformSettingsRosterTest do
   # ---------------------------------------------------------------------------
 
   describe "the entries" do
-    test "every setting has a value somewhere: a variable, a default, or both" do
-      assert unvalued(Roster.entries()) == []
-
-      planted = %Entry{
-        key: "planted",
-        app: :cyfr,
-        variable: nil,
-        type: :integer,
-        default: nil,
-        validator: fn v -> {:ok, v} end,
-        group: :planted,
-        scope: :live,
-        stale: :serve
-      }
-
-      assert unvalued([planted | Roster.entries()]) == ["planted"]
-    end
-
     test "keys and variables are each declared once, every variable under the prefix" do
       keys = Enum.map(Roster.entries(), & &1.key)
       assert keys == Enum.uniq(keys)

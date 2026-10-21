@@ -163,7 +163,7 @@ defmodule Mix.Tasks.Cyfr.Gen.ConfigurationGuide do
 
   defp setting_row(%Entry{} = entry) do
     cells = [
-      if(entry.variable, do: "`#{entry.variable}`", else: "—"),
+      "`#{entry.variable}`",
       "`#{entry.key}`",
       "`#{entry.type}`",
       default(entry),

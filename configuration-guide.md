@@ -88,7 +88,7 @@ value is literal throughout, an open `$(` included.
 | `CYFR_RESTORE_TOKEN` | The installation's restore capability, exactly 64 lowercase hexadecimal characters (`openssl rand -hex 32`), set in `.env` alone. Set, an empty installation's first person is reserved for a restore from a printed kit and ordinary first sign-in is refused; unset, restore is disabled. A malformed value refuses the boot, which never prints it. |
 | `CYFR_S3_ACCESS_KEY_ID` | The object store's access key ID, with `CYFR_STORAGE=s3`. |
 | `CYFR_S3_BUCKET` | The object store's bucket, with `CYFR_STORAGE=s3`. |
-| `CYFR_S3_ENDPOINT` | The endpoint of a non-AWS object store (MinIO and the like), usually with `CYFR_S3_PATH_STYLE=true`. |
+| `CYFR_S3_ENDPOINT` | The endpoint of a non-AWS object store (MinIO and the like), usually with `CYFR_S3_PATH_STYLE=on`. |
 | `CYFR_S3_PATH_STYLE` | Path-style bucket addressing (default off). |
 | `CYFR_S3_PREFIX` | A key prefix every object is stored under (default none). |
 | `CYFR_S3_RECEIVE_TIMEOUT_MS` | The per-request timeout against the object store, in milliseconds (default 60000); a slower store reads as a storage outage. |

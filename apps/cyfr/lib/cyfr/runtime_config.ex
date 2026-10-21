@@ -47,9 +47,9 @@ defmodule Cyfr.RuntimeConfig do
   @doc """
   Resolve the auth provider module from the environment.
 
-  - unset `CYFR_AUTH_PROVIDER` → auto-detect: GitHub/Google client present ⇒
-    `Sanctum.Auth.OAuth`, otherwise `nil` (the no-sign-in default).
-  - `"oauth"` → `Sanctum.Auth.OAuth`, requires a GitHub or Google client.
+  - unset `CYFR_AUTH_PROVIDER` → the built-in device flows: a GitHub or
+    Google client present ⇒ `Sanctum.Auth.OAuth`, otherwise `nil` (the
+    no-sign-in default).
   - `"oidc"` → `Sanctum.Auth.OIDC`, requires the full OIDC trio.
   - anything else → `{:error, _}`.
   """
@@ -62,15 +62,6 @@ defmodule Cyfr.RuntimeConfig do
       nil ->
         if github? or google?, do: {:ok, Sanctum.Auth.OAuth}, else: {:ok, nil}
 
-      "oauth" ->
-        if github? or google? do
-          {:ok, Sanctum.Auth.OAuth}
-        else
-          {:error,
-           "CYFR_AUTH_PROVIDER=oauth but neither CYFR_GITHUB_CLIENT_ID nor " <>
-             "CYFR_GOOGLE_CLIENT_ID is set."}
-        end
-
       "oidc" ->
         case oidc_config(getenv) do
           {:ok, _} -> {:ok, Sanctum.Auth.OIDC}
@@ -78,7 +69,9 @@ defmodule Cyfr.RuntimeConfig do
         end
 
       other ->
-        {:error, ~s(Unknown CYFR_AUTH_PROVIDER="#{other}"; expected "oauth" or "oidc".)}
+        {:error,
+         ~s(Unknown CYFR_AUTH_PROVIDER="#{other}"; expected "oidc", or unset for the ) <>
+           "built-in GitHub and Google device flows."}
     end
   end
 
@@ -226,22 +219,6 @@ defmodule Cyfr.RuntimeConfig do
     end
   end
 
-  @doc """
-  The consent-proof store module (default: the DB store). The identity
-  domain owns the key (`:sanctum, :consent_proof_store`) and the default;
-  this accessor is the boot check's reader.
-  """
-  @spec consent_proof_store() :: module()
-  defdelegate consent_proof_store(), to: Sanctum.Consent.Proof, as: :store
-
-  @doc """
-  The configured OIDC issuer URL, or nil. Pinned at
-  `:sanctum, :oidc_issuer` — the single source the boot reserved-host
-  check and the login id builder both read.
-  """
-  @spec oidc_issuer() :: String.t() | nil
-  defdelegate oidc_issuer(), to: Sanctum.Auth.OIDC, as: :issuer
-
   @doc "Whether the Prometheus /metrics endpoint is enabled."
   @spec prometheus_metrics_enabled?() :: boolean()
   def prometheus_metrics_enabled?,
@@ -257,26 +234,6 @@ defmodule Cyfr.RuntimeConfig do
   def require_signed_pulls?, do: Application.get_env(:cyfr, :require_signed_pulls, false)
 
   @doc """
-  The resolved crypto keyring (`:sanctum, :crypto_keyring`). Raises when
-  read before boot resolution — a sealed row must never be touched with a
-  guessed key.
-  """
-  @spec crypto_keyring!() :: map()
-  defdelegate crypto_keyring!(), to: Sanctum.Cipher, as: :keyring!
-
-  @doc """
-  The externally reachable base URL of this instance, without a trailing
-  slash, or `nil` when the operator has not declared one.
-
-  Only the operator knows it: behind a proxy or a tunnel it is neither the
-  bind address nor the `Host` of any particular request. The two surfaces
-  that hand it out are the identity domain's, which owns the key
-  (`:sanctum, :public_url`) and the trimming.
-  """
-  @spec public_url() :: String.t() | nil
-  defdelegate public_url(), to: Sanctum
-
-  @doc """
   Returns `public_url/0` when configured, otherwise this deployment's own
   origin (`:sanctum, :fallback_origin`, kept in step with the endpoint's
   host and port). TLS deployments must set CYFR_PUBLIC_URL.
@@ -284,41 +241,22 @@ defmodule Cyfr.RuntimeConfig do
   @spec origin() :: String.t()
   defdelegate origin(), to: Sanctum
 
-  # DNS-rebinding guard: unset means localhost-only.
-  @mcp_default_origins [
-    "http://localhost",
-    "https://localhost",
-    "http://127.0.0.1",
-    "https://127.0.0.1",
-    "http://[::1]",
-    "https://[::1]"
-  ]
-
   @doc """
-  MCP Origin-header allowlist (DNS-rebinding guard). Unset means the
-  localhost-only default — single source, read by the Origin plug and the
-  boot-time divergence warning. The `CYFR_MCP_ALLOWED_ORIGINS` extras
-  (`:mcp_extra_origins`, set in every env) are appended rather than baked
-  into the base list, so setting them in dev EXTENDS the localhost default
-  instead of replacing it.
+  MCP Origin-header allowlist (DNS-rebinding guard), read by the Origin
+  plug: the origins the home's access settings resolve to
+  (`:mcp_allowed_origins`, `config/runtime.exs`), followed by the
+  `CYFR_MCP_ALLOWED_ORIGINS` extras (`:mcp_extra_origins`), which extend
+  it rather than replace it.
   """
   @spec mcp_allowed_origins() :: [String.t()]
   def mcp_allowed_origins do
-    Application.get_env(:cyfr, :mcp_allowed_origins, @mcp_default_origins) ++
-      Application.get_env(:cyfr, :mcp_extra_origins, [])
+    Application.fetch_env!(:cyfr, :mcp_allowed_origins) ++
+      Application.fetch_env!(:cyfr, :mcp_extra_origins)
   end
 
-  @doc """
-  Returns the default per-window tincture invocation budget. HTTP uses
-  per-IP buckets; the console shell uses separate per-person buckets.
-  """
+  @doc "The default per-window tincture invocation budget, per client address."
   @spec tincture_default_invoke_max() :: pos_integer()
   def tincture_default_invoke_max, do: 120
-
-  @doc "The effective invoke budget: the operator's override if set, else the default."
-  @spec tincture_invoke_max() :: pos_integer()
-  def tincture_invoke_max,
-    do: Application.get_env(:cyfr, :tincture_rate_limit_max) || tincture_default_invoke_max()
 
   @doc "The rate window (ms) both tincture ingress surfaces share."
   @spec tincture_rate_window_ms() :: pos_integer()
@@ -423,10 +361,6 @@ defmodule Cyfr.RuntimeConfig do
       {:ok, %{bytes: bytes || @default_storage_reserve_bytes, path: path}}
     end
   end
-
-  @doc "The storage reserve's size when `CYFR_STORAGE_RESERVE_BYTES` is unset: 64 MiB."
-  @spec default_storage_reserve_bytes() :: pos_integer()
-  def default_storage_reserve_bytes, do: @default_storage_reserve_bytes
 
   defp storage_reserve_path(getenv, database, database_path) do
     case getenv.("CYFR_STORAGE_RESERVE_PATH") do
@@ -586,7 +520,7 @@ defmodule Cyfr.RuntimeConfig do
 
   @doc """
   Resolve the `libcluster` topology the cell's members find each other
-  through, for `CYFR_CLUSTER=1`. Two shapes, and nothing else:
+  through, for `CYFR_CLUSTER=on`. Two shapes, and nothing else:
 
     * `CYFR_CLUSTER_NODES` — a comma-separated list of the members' node
       names (`cyfr@10.0.0.1,cyfr@10.0.0.2`), polled over EPMD.
@@ -977,28 +911,6 @@ defmodule Cyfr.RuntimeConfig do
   def access_digest(head) when is_map(head) do
     {:ok, canonical} = Prima.JCS.encode(head)
     %{canonical: canonical, digest: Prima.JCS.hash_binary(canonical)}
-  end
-
-  @doc """
-  The four sentences a person reads for a head, in the order shown: who
-  can reach the home, its address, the certificate email, and the ports
-  opened on this machine. None names a compose term.
-  """
-  @spec access_words(access_head()) :: [String.t()]
-  def access_words(%{"mode" => mode} = head) do
-    who =
-      case mode do
-        "local" -> "only this computer"
-        "tailnet" -> "your devices on Tailscale, and people you share this machine with"
-        "public" -> "anyone on the internet, who still has to sign in"
-      end
-
-    [
-      "Who can reach this home: #{who}",
-      "Address: #{access_origin(head)}",
-      "Certificate email: #{Map.get(head, "acme_email", "none")}",
-      "Ports opened on this machine: #{if mode == "public", do: "80 and 443", else: "none"}"
-    ]
   end
 
   @doc "Whether `name` is a tailnet machine name, `<machine>.<tailnet>.ts.net`, in lowercase."

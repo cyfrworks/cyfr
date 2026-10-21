@@ -113,8 +113,8 @@ defmodule Cyfr.Application do
     # set an explicit keyring.
     resolve_crypto_keyring!()
 
-    # Emissary: Initialize OpenTelemetry instrumentation for Phoenix/Bandit,
-    # once the SDK is known to export through the configured exporter.
+    # OpenTelemetry instrumentation for Phoenix and Bandit, once the SDK is
+    # known to export through the configured exporter.
     if Application.get_env(:cyfr, :opentelemetry_enabled, false) do
       ensure_configured_traces_exporter!()
       OpentelemetryBandit.setup()
@@ -144,8 +144,9 @@ defmodule Cyfr.Application do
     end
 
     # Webhook verify-failed → log at :warning. Operators can disable by
-    # detaching `"webhook-verify-failed-log"` if they prefer an alternative
-    # sink (e.g. forwarding to SIEM via a Telemetry Metrics consumer).
+    # detaching `"cyfr-webhook-verify-failed-log"` if they prefer an
+    # alternative sink (e.g. forwarding to SIEM via a Telemetry Metrics
+    # consumer).
     attach_webhook_verify_failed_logger()
 
     warn_if_one_athanor_fills_the_slots()
@@ -262,7 +263,7 @@ defmodule Cyfr.Application do
   under `server: false`, or is not running.
   """
   @spec endpoint_servers(Supervisor.supervisor()) :: [pid()]
-  def endpoint_servers(endpoint \\ CyfrWeb.Endpoint), do: socket_servers(endpoint)
+  def endpoint_servers(endpoint), do: socket_servers(endpoint)
 
   defp socket_servers(supervisor) do
     {servers, others} = supervisor |> children() |> Enum.split_with(&socket_server?/1)
@@ -840,13 +841,13 @@ defmodule Cyfr.Application do
   # and exercises `Arca.ControlPlane`'s writes and `Cyfr.Cell` directly.
   defp cell_claim do
     # 5 s: its terminate releasing this member's slot row.
-    if Application.get_env(:arca, :control_plane_claim_enabled, true),
+    if Arca.ControlPlane.claimed?(),
       do: [Supervisor.child_spec(Cyfr.Cell, shutdown: 5_000)],
       else: []
   end
 
   # Discovery, when a topology is configured. `config/runtime.exs` writes
-  # one only under `CYFR_CLUSTER=1`, and `Cyfr.Cell` refuses that flag
+  # one only under `CYFR_CLUSTER=on`, and `Cyfr.Cell` refuses that flag
   # without one, so this is empty on every single-member deployment.
   defp cluster_supervisor do
     case Application.get_env(:libcluster, :topologies, []) do
@@ -894,61 +895,6 @@ defmodule Cyfr.Application do
       :ok -> :ok
       {:raise, message} -> raise message
       {:warn, message} -> Logger.warning(message)
-    end
-
-    warn_if_origin_allowlists_diverge()
-  end
-
-  defp warn_if_origin_allowlists_diverge do
-    decision =
-      origin_allowlist_divergence(
-        Cyfr.RuntimeConfig.cors_allowed_origins(),
-        Application.get_env(:cyfr, :mcp_allowed_origins),
-        Application.get_env(:cyfr, :mcp_extra_origins, [])
-      )
-
-    case decision do
-      :ok -> :ok
-      {:warn, message} -> Logger.warning(message)
-    end
-
-    :ok
-  end
-
-  @doc false
-  # Pure decision seam (testable without booting). Two knobs answer "which
-  # origins may talk to this server": CORS (browser cross-origin, an empty
-  # allowlist by default, its wildcard guarded above) and MCP Origin
-  # (DNS-rebinding guard, the home's own origins). An operator who opens
-  # one but not the other gets a half-closed deployment that fails
-  # confusingly at request time — say so at boot instead.
-  #
-  # The warning names cross-origin callers CORS admits and the MCP Origin
-  # check then refuses, so it reads what the CORS allowlist admits, not
-  # whether its key was set. An empty allowlist admits no cross-origin
-  # caller at all, and it is what the shipped stack assigns (`cyfr init`,
-  # whose cyfr serves Prism, the API, /mcp and the tinctures from one
-  # origin), so a boot of that stack has no divergence and nothing to act
-  # on. The wildcard is the other non-case: `cors_enforcement/3` above owns
-  # it.
-  #
-  # The MCP side stays a presence check rather than a second default, which
-  # keeps `Cyfr.RuntimeConfig.mcp_allowed_origins/0` the only place the
-  # localhost default is spelled.
-  @spec origin_allowlist_divergence(term(), term(), term()) :: :ok | {:warn, String.t()}
-  def origin_allowlist_divergence(cors_origins, mcp_allowed, mcp_extra) do
-    cors = List.wrap(cors_origins)
-    cors_admits_origins? = cors != [] and "*" not in cors
-    mcp_customized? = mcp_allowed != nil or List.wrap(mcp_extra) != []
-
-    if cors_admits_origins? and not mcp_customized? do
-      {:warn,
-       "[Cyfr] CYFR_CORS_ALLOWED_ORIGINS is set but CYFR_MCP_ALLOWED_ORIGINS is not — " <>
-         "browser MCP requests from #{inspect(cors)} will pass CORS and then be " <>
-         "refused by the MCP Origin check (localhost-only default). Set " <>
-         "CYFR_MCP_ALLOWED_ORIGINS to match."}
-    else
-      :ok
     end
   end
 
@@ -1068,18 +1014,16 @@ defmodule Cyfr.Application do
   # Surface it at boot so a deploy fails loudly instead of every login.
   defp validate_oidc_issuer_config! do
     if Cyfr.RuntimeConfig.auth_provider() == Sanctum.Auth.OIDC do
-      case check_oidc_issuer(Cyfr.RuntimeConfig.oidc_issuer()) do
+      case check_oidc_issuer(Sanctum.Auth.OIDC.issuer()) do
         :ok -> :ok
         {:error, message} -> raise "[Cyfr] FATAL: #{message}"
       end
     end
   end
 
-  @doc false
-  # Pure validation seam (testable without booting). Mirrors the runtime
-  # assertion in Sanctum.Auth.OIDC.resolve_issuer/2.
-  @spec check_oidc_issuer(term()) :: :ok | {:error, String.t()}
-  def check_oidc_issuer(issuer) when is_binary(issuer) and issuer != "" do
+  # The boot's half of the assertion `Sanctum.Auth.OIDC`'s issuer
+  # resolution makes at sign-in.
+  defp check_oidc_issuer(issuer) when is_binary(issuer) and issuer != "" do
     if Sanctum.Auth.Identity.reserved_issuer?(issuer) do
       {:error,
        "CYFR_OIDC_ISSUER (#{issuer}) is a reserved direct-provider host. " <>
@@ -1091,7 +1035,7 @@ defmodule Cyfr.Application do
     end
   end
 
-  def check_oidc_issuer(_),
+  defp check_oidc_issuer(_),
     do:
       {:error,
        "CYFR_AUTH_PROVIDER=oidc is selected but :sanctum, :oidc_issuer is absent or blank. " <>
@@ -1108,19 +1052,13 @@ defmodule Cyfr.Application do
         :ok
 
       _ ->
-        # runtime.exs reads CYFR_CRYPTO_KEYRING through Dotenvy (OS env and
-        # .env files alike) into :crypto_keyring_json — reading the OS env
-        # directly here ignored a .env-configured keyring.
+        # runtime.exs reads CYFR_CRYPTO_KEYRING from the .env file and the
+        # process environment alike into :crypto_keyring_json, blank as
+        # unset.
         keyring =
           case Application.get_env(:cyfr, :crypto_keyring_json) do
-            nil ->
-              derive_keyring_from_secret_key_base!()
-
-            "" ->
-              derive_keyring_from_secret_key_base!()
-
-            json ->
-              parse_keyring_env!(json)
+            nil -> derive_keyring_from_secret_key_base!()
+            json -> parse_keyring_env!(json)
           end
 
         Application.put_env(:sanctum, :crypto_keyring, keyring)

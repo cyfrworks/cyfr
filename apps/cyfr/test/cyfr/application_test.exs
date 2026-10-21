@@ -82,42 +82,10 @@ defmodule Cyfr.ApplicationTest do
     end
   end
 
-  # The boot warns when CORS admits cross-origin callers the MCP Origin
-  # check will then refuse. origin_allowlist_divergence/3 is the pure
-  # decision seam it uses: the CORS allowlist, then the two MCP keys.
-  describe "origin_allowlist_divergence/3" do
-    test "an allowlist that admits an origin the MCP check would refuse warns" do
-      assert {:warn, msg} =
-               Cyfr.Application.origin_allowlist_divergence(["https://app.example"], nil, [])
-
-      assert msg =~ "CYFR_MCP_ALLOWED_ORIGINS"
-      assert msg =~ "https://app.example"
-    end
-
-    test "the empty allowlist admits nobody, so the shipped stack's boot says nothing" do
-      # `cyfr init` assigns CYFR_CORS_ALLOWED_ORIGINS the empty allowlist:
-      # cyfr serves Prism, the API, /mcp and the tinctures from its own
-      # origin, so no browser client of the stack is cross-origin and there
-      # is no request to warn about.
-      assert :ok = Cyfr.Application.origin_allowlist_divergence([], nil, [])
-    end
-
-    test "the wildcard is cors_enforcement/3's, not this one's" do
-      assert :ok = Cyfr.Application.origin_allowlist_divergence(["*"], nil, [])
-    end
-
-    test "an MCP allowlist of either kind answers the divergence" do
-      origins = ["https://app.example"]
-      assert :ok = Cyfr.Application.origin_allowlist_divergence(origins, origins, [])
-      assert :ok = Cyfr.Application.origin_allowlist_divergence(origins, nil, origins)
-      assert :ok = Cyfr.Application.origin_allowlist_divergence(origins, [], [])
-    end
-  end
-
   # The endpoint's listeners as its adapter starts them (`CyfrWeb.Ingress`),
   # under a supervisor with the endpoint's child id, as the tree holds it:
-  # the proxy listener exists when `config/runtime.exs` writes the reach's
-  # `proxy:` (a tailnet or public home), and `extra` beside them.
+  # the proxy listener exists when `config/runtime.exs` writes the access
+  # settings' `proxy:` (a tailnet or public home), and `extra` beside them.
   defp endpoint_tree(proxy?, extra \\ []) do
     address = [ip: {127, 0, 0, 1}, port: 0]
     proxy = if proxy?, do: [proxy: address], else: []
@@ -232,14 +200,11 @@ defmodule Cyfr.ApplicationTest do
         |> Supervisor.which_children()
         |> Enum.map(fn {id, _pid, _type, _mods} -> id end)
 
-      assert Phoenix.PubSub.Supervisor in ids or
-               Enum.any?(ids, fn id -> id == Cyfr.PubSub end)
+      assert Phoenix.PubSub.Supervisor in ids
 
       # The repo is the `arca` application's, and so is the cache table's
       # owner; this tier reaches the repo by name. The operation table is
       # a term written before the tree starts, owned by no child.
-      refute Sanctum.Catalog in ids
-      refute Emissary.MCP.ResourceRegistry in ids
       assert is_map(Sanctum.Catalog.operations())
       refute Arca.Repo in ids
       refute CyfrWeb.Endpoint in ids
@@ -280,7 +245,7 @@ defmodule Cyfr.ApplicationTest do
     # and the console's children come last.
     test "the domains' subtrees start under the infra tier after PubSub, in order" do
       started = Cyfr.InfraSupervisor |> started_ids()
-      pubsub = Enum.find_index(started, &(&1 in [Cyfr.PubSub, Phoenix.PubSub.Supervisor]))
+      pubsub = Enum.find_index(started, &(&1 == Phoenix.PubSub.Supervisor))
 
       order = [
         Sanctum.Gate.Supervisor,
@@ -328,9 +293,6 @@ defmodule Cyfr.ApplicationTest do
     test "execution slots, event streams and attempts start first in the execution subtree" do
       started = Opus.Supervisor |> started_ids()
 
-      # The consented rate is not among them: its window is a shared row,
-      # so this boot starts nothing for it.
-      refute Opus.Rates in started
       assert [Opus.Slots, Opus.Tree | _] = started
 
       assert [
@@ -641,9 +603,9 @@ defmodule Cyfr.ApplicationTest do
     end
 
     test "refuses an empty label — it decrypts but reads as unknown to the rotation audit" do
-      # `primary` being empty is caught by the outer shape guard; this is the
-      # case that got past it — a valid primary alongside an empty-labelled
-      # key, which `Sanctum.Cipher.envelope/1` (llen > 0) cannot classify.
+      # An empty `primary` is the outer shape guard's; this is a valid
+      # primary alongside an empty-labelled key, which
+      # `Sanctum.Cipher.envelope/1` (llen > 0) cannot classify.
       json = keyring_json(%{"k" => material("a"), "" => material("b")}, "k")
 
       assert_raise RuntimeError, ~r/empty key label/, fn ->
@@ -651,7 +613,7 @@ defmodule Cyfr.ApplicationTest do
       end
     end
 
-    test "still refuses short material and a primary that names no key" do
+    test "refuses short material and a primary that names no key" do
       short = Jason.encode!(%{"primary" => "k", "keys" => %{"k" => Base.encode64("tooshort")}})
 
       assert_raise RuntimeError, ~r/not >= 32 bytes/, fn ->

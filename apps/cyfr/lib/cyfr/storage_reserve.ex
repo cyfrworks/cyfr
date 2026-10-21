@@ -140,13 +140,7 @@ defmodule Cyfr.StorageReserve do
     {:noreply, state}
   end
 
-  defp configured_bytes,
-    do:
-      Application.get_env(
-        :cyfr,
-        :storage_reserve_bytes,
-        Cyfr.RuntimeConfig.default_storage_reserve_bytes()
-      )
+  defp configured_bytes, do: Application.fetch_env!(:cyfr, :storage_reserve_bytes)
 
   defp configured_directory, do: Application.get_env(:cyfr, :storage_reserve_path)
 

@@ -2,12 +2,12 @@
 # Copyright 2026 CYFR Works Inc.
 import Config
 
-# We don't run a server during test
 # The caller bound is off: the establish memo keeps nothing, so tests
 # assert on the uncached pipeline, and every retained context is
 # revalidated before each action it is used for.
 config :sanctum, :caller_memo_ttl_ms, 0
 
+# The suite runs no server.
 config :cyfr, CyfrWeb.Endpoint,
   http: [ip: {127, 0, 0, 1}, port: 4002],
   secret_key_base: "test-secret-key-base-minimum-64-characters-long-for-testing-only",
@@ -32,6 +32,25 @@ config :arca, decision_log_budget_ms: 5_000
 
 # The origin an absolute URL falls back to, the endpoint's own above.
 config :sanctum, :fallback_origin, "http://localhost:4002"
+
+# The MCP Origin allowlist of a local home on the loopback, which
+# `config/runtime.exs` resolves from the access settings for every other
+# boot, with no extras.
+config :cyfr,
+  mcp_allowed_origins: [
+    "http://localhost",
+    "https://localhost",
+    "http://127.0.0.1",
+    "https://127.0.0.1",
+    "http://[::1]",
+    "https://[::1]"
+  ],
+  mcp_extra_origins: []
+
+# The storage reserve's size, as `config/runtime.exs` sets it for a boot
+# that names none (`Cyfr.RuntimeConfig.resolve_storage_reserve/1`); the
+# suite keeps no reserve directory.
+config :cyfr, :storage_reserve_bytes, 64 * 1024 * 1024
 
 # A one-time confirmation code's transport: the tree ships none, so the
 # suite captures each code where the test that asked for it reads it

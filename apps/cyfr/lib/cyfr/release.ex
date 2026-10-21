@@ -6,10 +6,10 @@ defmodule Cyfr.Release do
   Release tasks — the operator's hands on the database when the server is
   not the one to touch it.
 
-  By default the server migrates on boot (`CYFR_AUTO_MIGRATE=true`); one node
+  By default the server migrates on boot (`CYFR_AUTO_MIGRATE=on`); one node
   fronting one database wants exactly that. Several nodes sharing a
   Postgres, or an operator who wants the schema step in their own hands,
-  set `CYFR_AUTO_MIGRATE=false` and run these from the release:
+  set `CYFR_AUTO_MIGRATE=off` and run these from the release:
 
       bin/cyfr eval "Cyfr.Release.migrate()"
 

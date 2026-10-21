@@ -52,10 +52,10 @@ defmodule Cyfr.Platform.Settings.Roster do
         and its reader reads once, and `[:level]` for the log level, which
         Logger holds. `nil` for every other setting, whose reader calls
         `Arca.PlatformSettings.effective/1` on each use.
-      * `variable` — the `CYFR_*` name that pins it, or `nil`.
-      * `type` — the value's shape: `:integer`, `:boolean`, `:string`,
-        `:duration_s` (whole seconds), `:list`, `:keyword` or `:atom` (a
-        name from a closed set, stored as its string).
+      * `variable` — the `CYFR_*` name that pins it.
+      * `type` — the value's shape: `:integer`, `:string`, `:duration_s`
+        (whole seconds) or `:atom` (a name from a closed set, stored as its
+        string).
       * `default` — the value when neither the environment nor a row sets it;
         `nil` is a value where the reader reads it as "none" (an unset cap,
         the hostname for the device label).
@@ -92,10 +92,10 @@ defmodule Cyfr.Platform.Settings.Roster do
 
     @type t :: %__MODULE__{
             key: String.t(),
-            app: :cyfr | :sanctum | :arca | :logger,
+            app: :cyfr | :sanctum | :logger,
             config: [atom()] | nil,
-            variable: String.t() | nil,
-            type: :integer | :boolean | :string | :duration_s | :list | :keyword | :atom,
+            variable: String.t(),
+            type: :integer | :string | :duration_s | :atom,
             default: term(),
             validator: (term() -> {:ok, term()} | {:error, String.t()}),
             group: atom(),
@@ -239,7 +239,7 @@ defmodule Cyfr.Platform.Settings.Roster do
     {"CYFR_S3_ACCESS_KEY_ID", "The object store's access key ID, with `CYFR_STORAGE=s3`."},
     {"CYFR_S3_BUCKET", "The object store's bucket, with `CYFR_STORAGE=s3`."},
     {"CYFR_S3_ENDPOINT",
-     "The endpoint of a non-AWS object store (MinIO and the like), usually with `CYFR_S3_PATH_STYLE=true`."},
+     "The endpoint of a non-AWS object store (MinIO and the like), usually with `CYFR_S3_PATH_STYLE=on`."},
     {"CYFR_S3_PATH_STYLE", "Path-style bucket addressing (default off)."},
     {"CYFR_S3_PREFIX", "A key prefix every object is stored under (default none)."},
     {"CYFR_S3_RECEIVE_TIMEOUT_MS",
@@ -910,7 +910,7 @@ defmodule Cyfr.Platform.Settings.Roster do
 
   @doc "Every rostered setting's variable."
   @spec variables() :: [String.t()]
-  def variables, do: for(%Entry{variable: v} <- entries(), v != nil, do: v)
+  def variables, do: Enum.map(entries(), & &1.variable)
 
   @doc """
   The deployment variables: read before the repo opens, deciding how the
@@ -1046,16 +1046,6 @@ defmodule Cyfr.Platform.Settings.Roster do
   end
 
   @doc """
-  The `{application, key}` pairs the entries are written under: the head
-  of each configuration path, the restart-scoped settings' and the log
-  level's. `Cyfr.Boundaries` classes these keys `:setting`.
-  """
-  @spec config_keys() :: [{atom(), atom()}]
-  def config_keys do
-    for %Entry{app: app, config: [key | _]} <- entries(), uniq: true, do: {app, key}
-  end
-
-  @doc """
   The settings this boot's environment pinned, as `config/runtime.exs`
   recorded them: `{key, value}`, sorted by key.
   """
@@ -1072,8 +1062,6 @@ defmodule Cyfr.Platform.Settings.Roster do
   variable and the form it must take.
   """
   @spec read(Entry.t(), getenv()) :: {:ok, term()} | {:error, String.t()}
-  def read(%Entry{variable: nil}, _getenv), do: {:ok, nil}
-
   def read(%Entry{variable: variable, validator: validator}, getenv)
       when is_function(getenv, 1) do
     case Prima.EnvValue.text(getenv, variable) do

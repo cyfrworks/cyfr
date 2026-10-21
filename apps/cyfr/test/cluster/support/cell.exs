@@ -5,7 +5,7 @@ defmodule Cyfr.Cluster.Cell do
   @moduledoc """
   The cell this suite runs against: two real control-plane members, each a
   node of its own started with `:peer`, both against one Postgres database
-  and one MinIO bucket, both under `CYFR_CLUSTER=1` and every boot refusal
+  and one MinIO bucket, both under `CYFR_CLUSTER=on` and every boot refusal
   `Cyfr.Cell.refusals/1` names.
 
   Nothing here simulates a peer. A member is an operating-system process
@@ -16,7 +16,7 @@ defmodule Cyfr.Cluster.Cell do
 
   ## The seven refusals, met rather than bypassed
 
-  `CYFR_CLUSTER=1` boots only with Postgres, shared object storage, TLS
+  `CYFR_CLUSTER=on` boots only with Postgres, shared object storage, TLS
   distribution with configured certificates, a cell-only cookie of at
   least 32 characters that is also the node's, a discovery topology, a
   shared worker root, and each member's own host API address. Each member

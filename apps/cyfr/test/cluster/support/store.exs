@@ -120,7 +120,7 @@ defmodule Cyfr.Cluster.Store do
         reraise """
                 the object store could not be reached (#{Exception.message(e)}).
 
-                CYFR_CLUSTER=1 refuses local storage, so the two-node suite needs a
+                CYFR_CLUSTER=on refuses local storage, so the two-node suite needs a
                 real one. The `s3-minio` job's container serves it; start the same
                 image, or point CYFR_TEST_S3_ENDPOINT at another.
                 """,

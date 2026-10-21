@@ -55,17 +55,6 @@ defmodule CyfrWeb.Plugs.TinctureRateLimit do
   @doc "The default per-window invoke budget (both ingress surfaces)."
   defdelegate default_invoke_max, to: Cyfr.RuntimeConfig, as: :tincture_default_invoke_max
 
-  @doc """
-  The effective invoke budget: the operator's override if set, else the
-  default above.
-
-  One reader for the override. `PrismWeb.ShellLive` spelled the same
-  `Application.get_env(:cyfr, :tincture_rate_limit_max) || …` itself, so the
-  key had two readers and the two could disagree about what "unset" means.
-  """
-  @spec invoke_max() :: pos_integer()
-  defdelegate invoke_max, to: Cyfr.RuntimeConfig, as: :tincture_invoke_max
-
   @doc "The rate window (ms) both ingress surfaces share."
   defdelegate default_window_ms, to: Cyfr.RuntimeConfig, as: :tincture_rate_window_ms
 

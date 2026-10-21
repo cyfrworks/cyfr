@@ -24,20 +24,6 @@ defmodule Cyfr.RuntimeConfigTest do
                RuntimeConfig.resolve_auth_provider(env(%{"CYFR_GOOGLE_CLIENT_ID" => "x"}))
     end
 
-    test "explicit oauth + credentials => OAuth" do
-      assert {:ok, Sanctum.Auth.OAuth} =
-               RuntimeConfig.resolve_auth_provider(
-                 env(%{"CYFR_AUTH_PROVIDER" => "oauth", "CYFR_GITHUB_CLIENT_ID" => "x"})
-               )
-    end
-
-    test "explicit oauth WITHOUT credentials => error (no silent downgrade)" do
-      assert {:error, msg} =
-               RuntimeConfig.resolve_auth_provider(env(%{"CYFR_AUTH_PROVIDER" => "oauth"}))
-
-      assert msg =~ "CYFR_GITHUB_CLIENT_ID"
-    end
-
     test "explicit oidc + full trio => OIDC" do
       assert {:ok, Sanctum.Auth.OIDC} =
                RuntimeConfig.resolve_auth_provider(
@@ -63,11 +49,13 @@ defmodule Cyfr.RuntimeConfigTest do
       assert msg =~ "CYFR_OIDC_ISSUER"
     end
 
-    test "unknown value => error (closes the silent-no-auth footgun)" do
-      assert {:error, msg} =
-               RuntimeConfig.resolve_auth_provider(env(%{"CYFR_AUTH_PROVIDER" => "saml"}))
+    test "any value but oidc => error, rather than the no-sign-in default" do
+      for value <- ["saml", "oauth"] do
+        assert {:error, msg} =
+                 RuntimeConfig.resolve_auth_provider(env(%{"CYFR_AUTH_PROVIDER" => value}))
 
-      assert msg =~ "Unknown CYFR_AUTH_PROVIDER"
+        assert msg =~ ~s(Unknown CYFR_AUTH_PROVIDER="#{value}")
+      end
     end
 
     test "blank string is treated as unset" do
@@ -150,7 +138,7 @@ defmodule Cyfr.RuntimeConfigTest do
                    "CYFR_S3_REGION" => "us-east-1",
                    "CYFR_S3_ACCESS_KEY_ID" => "ak",
                    "CYFR_S3_SECRET_ACCESS_KEY" => "sk",
-                   "CYFR_S3_PATH_STYLE" => "true",
+                   "CYFR_S3_PATH_STYLE" => "on",
                    "CYFR_S3_ENDPOINT" => "http://minio:9000"
                  })
                )
@@ -525,7 +513,7 @@ defmodule Cyfr.RuntimeConfigTest do
                  env(%{
                    "CYFR_DATABASE_URL" => "postgres://u:p@h:5432/db",
                    "CYFR_DB_POOL_SIZE" => "10",
-                   "CYFR_DB_SSL" => "true"
+                   "CYFR_DB_SSL" => "on"
                  })
                )
 
@@ -715,19 +703,6 @@ defmodule Cyfr.RuntimeConfigTest do
 
         for %{"value" => value, "valid" => valid, "why" => why} <- cases do
           assert check.(value) == valid, "#{section} #{inspect(value)} (#{why})"
-        end
-      end
-    end
-
-    test "the words a person reads for a head" do
-      words = access_vectors()["words"]
-      assert words != []
-
-      for %{"head" => head, "sentences" => sentences} <- words do
-        assert RuntimeConfig.access_words(head) == sentences
-
-        for sentence <- sentences, term <- ~w(profile compose caddy CYFR_ node_id < %) do
-          refute sentence =~ term, "#{sentence} names #{term}"
         end
       end
     end

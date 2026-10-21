@@ -664,7 +664,7 @@ if config_env() != :test do
   # together they leave no way in. Refuse the pair rather than boot a box
   # nobody can log in to.
   if headless? and auth_provider == Sanctum.Auth.OIDC do
-    raise "CYFR_HEADLESS=true cannot be combined with CYFR_AUTH_PROVIDER=oidc: " <>
+    raise "CYFR_HEADLESS=on cannot be combined with CYFR_AUTH_PROVIDER=oidc: " <>
             "an OIDC provider signs in through the browser page a headless node refuses"
   end
 

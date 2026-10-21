@@ -720,30 +720,6 @@ defmodule Cyfr.PlatformSettingsTest do
   end
 
   describe "pins" do
-    test "a conflict is another live member's different value for a key this one pins" do
-      live = [
-        %{key: "log_level", member: "b@h", generation: 2, value: "debug"},
-        %{key: "max_athanors", member: "b@h", generation: 2, value: 5},
-        %{key: "log_level", member: "a@h", generation: 1, value: "info"}
-      ]
-
-      mine = [{"log_level", "error"}, {"max_athanors", 5}]
-
-      assert Settings.conflicts(mine, "a@h", live) == [{"log_level", "error", "b@h", "debug"}]
-      assert Settings.conflicts([{"log_level", "debug"}], "a@h", live) == []
-    end
-
-    test "a pin is live only under the generation its member's slot holds now" do
-      pins = [
-        %{key: "k", member: "a@h", generation: 3, value: 1},
-        %{key: "k", member: "b@h", generation: 1, value: 1},
-        %{key: "k", member: "c@h", generation: 1, value: 1}
-      ]
-
-      members = [%{node: "a@h", generation: 3}, %{node: "b@h", generation: 2}]
-      assert Settings.live(pins, members) == [hd(pins)]
-    end
-
     test "the claim retires its slot's earlier pins and a dead member's, and records its own" do
       me = "me-#{System.unique_integer([:positive])}@h"
       peer = "peer-#{System.unique_integer([:positive])}@h"
@@ -783,6 +759,18 @@ defmodule Cyfr.PlatformSettingsTest do
 
       # A pin on a peer and none here is a divergence, not a refusal.
       Application.put_env(:cyfr, :deployment_pinned, [])
+      assert Settings.check_pins!() == :ok
+
+      # This member's own earlier pin is never a conflict, and a pin
+      # recorded under a generation its member's slot no longer holds is
+      # not live.
+      me = Atom.to_string(node())
+      lease!(me, 2)
+      :ok = Store.record_pin("log_level", me, 2, "warning")
+      stale = "stale-#{System.unique_integer([:positive])}@h"
+      lease!(stale, 3)
+      :ok = Store.record_pin("log_level", stale, 2, "info")
+      Application.put_env(:cyfr, :deployment_pinned, [{"log_level", :debug}])
       assert Settings.check_pins!() == :ok
     end
   end

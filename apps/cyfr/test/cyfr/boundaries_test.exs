@@ -1410,11 +1410,11 @@ defmodule Cyfr.BoundariesTest do
     end
 
     test "the :setting class is the platform settings roster's keys, and nothing else" do
-      classes = Boundaries.config_key_classes(Cyfr.Platform.Settings.Roster.config_keys())
+      classes = Boundaries.config_key_classes(setting_config_keys())
       settings = for {key, :setting} <- classes, into: MapSet.new(), do: key
 
       rostered =
-        for {app, key} <- Cyfr.Platform.Settings.Roster.config_keys(),
+        for {app, key} <- setting_config_keys(),
             app in Boundaries.config_applications(),
             into: MapSet.new(),
             do: key
@@ -1481,7 +1481,7 @@ defmodule Cyfr.BoundariesTest do
     runtime = Path.join(root(), "config/runtime.exs")
 
     rostered =
-      for {app, key} <- Cyfr.Platform.Settings.Roster.config_keys(),
+      for {app, key} <- setting_config_keys(),
           app in Boundaries.config_applications(),
           do: {runtime, app, key}
 
@@ -1502,6 +1502,15 @@ defmodule Cyfr.BoundariesTest do
 
   # Which of the root's configuration files declare each key, by name.
   # The root's alone: these are the files the umbrella build reads.
+  # The `{application, key}` pairs the platform settings are written
+  # under: the head of each entry's configuration path.
+  defp setting_config_keys do
+    for %Cyfr.Platform.Settings.Roster.Entry{app: app, config: [key | _]} <-
+          Cyfr.Platform.Settings.Roster.entries(),
+        uniq: true,
+        do: {app, key}
+  end
+
   defp declared_config_keys do
     for {path, _app, key} <- config_declarations(),
         Path.dirname(path) == Path.join(root(), "config"),
