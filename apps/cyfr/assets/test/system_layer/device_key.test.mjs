@@ -16,14 +16,12 @@ import {describe, test} from "node:test"
 import {fileURLToPath} from "node:url"
 
 import {
-  b64url,
   codeFromFragment,
   CONFIRMATIONS,
   LISTEN_RETRY_MS,
   connectMessage,
   decodeHome,
   expired,
-  fromB64url,
   GLASS_TYPES,
   Glass,
   generateKeyPair,
@@ -56,6 +54,7 @@ import {
   renewElsewhere,
   UNREACHABLE_OFFER
 } from "../../js/system_layer/device_key.js"
+import {b64url, fromB64url} from "../../js/system_layer/base64url.js"
 import {memoryStore} from "./memory_store.mjs"
 import SystemLayer, {clearAllMarked, clearForms, clearMarked, glassStatus, markForm, resubmit} from "../../js/system_layer/index.js"
 

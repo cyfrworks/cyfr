@@ -44,8 +44,8 @@
  * or session storage, in IndexedDB, or in anything logged.
  */
 
-import {b64url, fromB64url, jcs} from "./device_key.js"
-import {bytesToB64url} from "./webauthn.js"
+import {b64url, fromB64url} from "./base64url.js"
+import {jcs} from "./device_key.js"
 
 export const SEED_BYTES = 32
 
@@ -59,7 +59,7 @@ const MAX_RETRY_S = 60
 export function drawSeed(crypto = globalThis.crypto) {
   const bytes = new Uint8Array(SEED_BYTES)
   crypto.getRandomValues(bytes)
-  return bytesToB64url(bytes)
+  return b64url(bytes)
 }
 
 /** A request id for a new attempt: `req_` and 32 hexadecimal digits. */

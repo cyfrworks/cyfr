@@ -8,12 +8,11 @@ import SystemLayer from "../../js/system_layer/index.js"
 import {
   assert as assertPasskey,
   assertionJSON,
-  b64urlToBytes,
-  bytesToB64url,
   creationOptions,
   register,
   requestOptions
 } from "../../js/system_layer/webauthn.js"
+import {b64url, fromB64url} from "../../js/system_layer/base64url.js"
 
 const bytes = (...values) => new Uint8Array(values).buffer
 const equalBytes = (left, right) =>
@@ -52,16 +51,16 @@ function created() {
 describe("base64url", () => {
   test("round-trips every byte, unpadded", () => {
     const all = new Uint8Array(256).map((_value, index) => index).buffer
-    const text = bytesToB64url(all)
+    const text = b64url(all)
     assert.doesNotMatch(text, /[+/=]/)
-    equalBytes(b64urlToBytes(text), all)
+    equalBytes(fromB64url(text), all)
   })
 
   test("reads an unpadded spelling, and refuses a padded one and what is not base64url", () => {
-    equalBytes(b64urlToBytes("-_8"), bytes(251, 255))
-    assert.throws(() => b64urlToBytes("-_8="), TypeError)
-    assert.throws(() => b64urlToBytes("a+b/"), TypeError)
-    assert.throws(() => b64urlToBytes(42), TypeError)
+    equalBytes(fromB64url("-_8"), bytes(251, 255))
+    assert.throws(() => fromB64url("-_8="), TypeError)
+    assert.throws(() => fromB64url("a+b/"), TypeError)
+    assert.throws(() => fromB64url(42), TypeError)
   })
 })
 
