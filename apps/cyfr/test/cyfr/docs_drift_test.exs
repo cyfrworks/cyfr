@@ -1196,16 +1196,16 @@ defmodule Cyfr.DocsDriftTest do
     # replaced, never read.
     "KEEPER_CHANNEL" => :keeper,
     # The worker service hands each runner its role and identities
-    # (`Locus.Runtime.Settings.runner_environment/1`), and the keeper adds the
-    # control and relay descriptors; the test build's direct keeper names
-    # a relay socket in the descriptor's place.
+    # (`Locus.Runtime.Settings.runner_environment/1`). cyfr-locus places
+    # the control channel and the relay on file descriptors 3 and 4, which
+    # a runner reads by contract; the test build's direct launcher names
+    # its control descriptor and a relay socket in their place.
     "RUNTIME_ROLE" => :worker_service,
     "RUNTIME_RUNNER_ID" => :worker_service,
     "RUNTIME_SERVICE_ID" => :worker_service,
     "RUNTIME_BOOT_ID" => :worker_service,
     "RUNTIME_WATCHDOG_GRACE_MS" => :worker_service,
     "RUNTIME_CONTROL_FD" => :keeper,
-    "RUNTIME_RELAY_FD" => :keeper,
     "RUNTIME_RELAY_SOCKET" => :keeper
   }
 
