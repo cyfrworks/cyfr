@@ -253,7 +253,7 @@ defmodule Sanctum.Gate.ProviderTest do
         SystemProvider.handle("system", ctx, %{"action" => "status", "scope" => "sanctum"})
 
       assert result.status == "ok"
-      assert Map.keys(result.services) == [:sanctum]
+      assert Map.keys(result.services) == ["sanctum"]
       assert result.services["sanctum"] == "ok"
     end
 
@@ -272,7 +272,7 @@ defmodule Sanctum.Gate.ProviderTest do
       {:ok, result} =
         SystemProvider.handle("system", ctx, %{"action" => "status", "scope" => "arca"})
 
-      assert Map.keys(result.services) == [:arca]
+      assert Map.keys(result.services) == ["arca"]
     end
 
     test "scope opus returns only opus status" do
@@ -281,7 +281,7 @@ defmodule Sanctum.Gate.ProviderTest do
       {:ok, result} =
         SystemProvider.handle("system", ctx, %{"action" => "status", "scope" => "opus"})
 
-      assert Map.keys(result.services) == [:opus]
+      assert Map.keys(result.services) == ["opus"]
       assert result.services["opus"] == "ok"
     end
 
@@ -291,7 +291,7 @@ defmodule Sanctum.Gate.ProviderTest do
       {:ok, result} =
         SystemProvider.handle("system", ctx, %{"action" => "status", "scope" => "compendium"})
 
-      assert Enum.sort(Map.keys(result.services)) == [:compendium, :registry]
+      assert Enum.sort(Map.keys(result.services)) == ["compendium", "registry"]
       assert result.services["registry"] == "unknown"
       assert result.status == "ok"
     end
@@ -314,7 +314,7 @@ defmodule Sanctum.Gate.ProviderTest do
       {:ok, result} =
         SystemProvider.handle("system", ctx, %{"action" => "status", "scope" => "compendium"})
 
-      assert Enum.sort(Map.keys(result.services)) == [:compendium, :registry]
+      assert Enum.sort(Map.keys(result.services)) == ["compendium", "registry"]
     end
 
     test "the scope enum is the derived roster, with no scope of its own for the registry" do

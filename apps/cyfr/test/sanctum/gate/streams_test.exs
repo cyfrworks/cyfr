@@ -60,9 +60,8 @@ defmodule Sanctum.Gate.StreamsTest do
     defdelegate tincture_placement(ctx, row), to: Compendium.ConsentFacts
   end
 
-  # The component domain's facts, but for the optional placement, which
-  # this implementation does not answer.
-  defmodule FactsWithoutPlacement do
+  # The component domain's facts, but for a placement it cannot read.
+  defmodule PlacementUnavailable do
     @moduledoc false
     @behaviour Sanctum.Consent.Components
 
@@ -87,6 +86,9 @@ defmodule Sanctum.Gate.StreamsTest do
 
     @impl true
     defdelegate newer_shipped(ctx, row), to: Compendium.ConsentFacts
+
+    @impl true
+    def tincture_placement(_ctx, _row), do: {:error, :component_facts_unavailable}
   end
 
   defmodule Probe do
@@ -586,7 +588,7 @@ defmodule Sanctum.Gate.StreamsTest do
     test "is refused while the frame's placement cannot be read", %{ctx: ctx} do
       canvas = canvas_row!(ctx, "home-canvas")
 
-      with_facts(FactsWithoutPlacement, fn ->
+      with_facts(PlacementUnavailable, fn ->
         assert {:error, %Prima.Refusal{class: :forbidden, reason: :canvas_stream}} =
                  Sanctum.Gate.open_stream(framed(ctx, canvas), "runs.changes")
       end)
