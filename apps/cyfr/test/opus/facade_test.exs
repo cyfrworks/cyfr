@@ -22,7 +22,6 @@ defmodule Opus.FacadeTest do
     authority_for: 4,
     available?: 0,
     cancel: 2,
-    cancel_for_restart: 3,
     claim_turn_root: 2,
     claim_turn_root: 3,
     count_by_request: 2,

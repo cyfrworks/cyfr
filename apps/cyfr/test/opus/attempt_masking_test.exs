@@ -25,8 +25,7 @@ defmodule Opus.AttemptMaskingTest do
   import Prima.Test.Wait
   import ExUnit.CaptureLog
 
-  alias Opus.Dispatch
-  alias Cyfr.Test.AttemptFixtures
+  alias Cyfr.Test.{AttemptFixtures, AttemptWaiter}
 
   @token "ya29.token-0123456789"
   @field @token <> "-and-field"
@@ -53,7 +52,7 @@ defmodule Opus.AttemptMaskingTest do
     assert %{"ok" => answered} = complete(fixture, %{"said" => "#{@token} / #{@field}"})
     assert answered == %{"said" => "#{@redacted} / #{@redacted}"}
 
-    assert {:ok, result} = Dispatch.await(fixture.pid, fixture.close)
+    assert {:ok, result} = AttemptWaiter.await(fixture.pid, fixture.close)
     assert result.output == %{"said" => "#{@redacted} / #{@redacted}"}
     refute_unmasked(result)
 
@@ -78,7 +77,7 @@ defmodule Opus.AttemptMaskingTest do
     assert %{"ok" => @token} = token(fixture)
 
     assert %{"ok" => _output} = complete(fixture, %{"said" => "done"})
-    assert {:ok, _result} = Dispatch.await(fixture.pid, fixture.close)
+    assert {:ok, _result} = AttemptWaiter.await(fixture.pid, fixture.close)
 
     live = live_events()
     assert Enum.map(emitted(live), & &1["text"]) == ["the token is ", @redacted]
@@ -96,7 +95,7 @@ defmodule Opus.AttemptMaskingTest do
     emit!(fixture, %{"type" => "text.delta", "text" => "partial ya29.tok"})
 
     assert %{"ok" => "upstream failed"} = fail(fixture, "upstream failed")
-    assert {:error, "upstream failed"} = Dispatch.await(fixture.pid, fixture.close)
+    assert {:error, "upstream failed"} = AttemptWaiter.await(fixture.pid, fixture.close)
 
     live = live_events()
     assert Enum.map(emitted(live), & &1["text"]) == ["partial ", "ya29.tok"]
@@ -109,7 +108,7 @@ defmodule Opus.AttemptMaskingTest do
     assert %{"ok" => @token} = token(fixture)
 
     assert %{"ok" => answered} = fail(fixture, "upstream said #{@token} for #{@field}")
-    assert {:error, message} = Dispatch.await(fixture.pid, fixture.close)
+    assert {:error, message} = AttemptWaiter.await(fixture.pid, fixture.close)
     assert message == "upstream said #{@redacted} for #{@redacted}"
     assert answered == message
 
@@ -140,7 +139,7 @@ defmodule Opus.AttemptMaskingTest do
     assert %{"ok" => @token} = Task.await(during)
     assert %{"ok" => %{"said" => @redacted}} = Task.await(closing)
     assert %{"error" => "lost"} = Task.await(after_close)
-    assert {:ok, %{output: %{"said" => @redacted}}} = Dispatch.await(attempt, fixture.close)
+    assert {:ok, %{output: %{"said" => @redacted}}} = AttemptWaiter.await(attempt, fixture.close)
     refute_unmasked(Arca.Repo.get!(Arca.Schemas.Execution, id))
   end
 
@@ -160,7 +159,7 @@ defmodule Opus.AttemptMaskingTest do
     assert %{"error" => "lost"} = push(fixture, %{"text" => @token})
 
     assert {:error, {:uncertain, "Execution attempt ended before it closed"}} =
-             Dispatch.await(attempt, fixture.close)
+             AttemptWaiter.await(attempt, fixture.close)
 
     row = Arca.Repo.get!(Arca.Schemas.Execution, id)
     assert row.status == "failed"
@@ -246,7 +245,7 @@ defmodule Opus.AttemptMaskingTest do
     emit!(fixture, %{"type" => "note", "text" => "the upstream said " <> attached})
     assert %{"ok" => message} = fail(fixture, "failed with #{attached}")
     assert message == "failed with #{@redacted}"
-    assert {:error, ^message} = Dispatch.await(fixture.pid, fixture.close)
+    assert {:error, ^message} = AttemptWaiter.await(fixture.pid, fixture.close)
 
     live = live_events()
     assert Enum.map(emitted(live), & &1["text"]) == ["the upstream said #{@redacted}"]

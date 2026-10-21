@@ -31,7 +31,7 @@ defmodule Cyfr.Test.ScriptedWorkerTest do
 
   alias Prima.Authority
   alias Opus.{Attempt, Dispatch, WorkerClient}
-  alias Cyfr.Test.{AttemptFixtures, ScriptedWorker}
+  alias Cyfr.Test.{AttemptFixtures, AttemptWaiter, ScriptedWorker}
   alias Prima.Test.AuthorityFixtures
   alias Prima.{WorkerAuth, WorkerWire}
 
@@ -666,7 +666,7 @@ defmodule Cyfr.Test.ScriptedWorkerTest do
       assert {200, %{"v" => 1, "ok" => true}} = exit_report(url, fixture, fixture.member)
 
       assert {:error, {:uncertain, "Execution terminated: runner stopped without cleanup"}} =
-               Dispatch.await(fixture.pid, fixture.close)
+               AttemptWaiter.await(fixture.pid, fixture.close)
 
       assert %{state: "lapsed"} = attempt_row(fixture)
     end

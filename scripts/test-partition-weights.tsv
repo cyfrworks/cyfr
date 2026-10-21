@@ -488,7 +488,6 @@
 1.9	apps/cyfr/test/integration/runtime/orphan_children_test.exs
 0.1	apps/cyfr/test/integration/runtime/relay_flow_test.exs
 0.1	apps/cyfr/test/integration/runtime/resource_limits_test.exs
-0.1	apps/cyfr/test/integration/runtime/restart_required_test.exs
 0.9	apps/cyfr/test/integration/runtime/retained_input_test.exs
 0.3	apps/cyfr/test/integration/runtime/runner_reuse_test.exs
 6.5	apps/cyfr/test/integration/runtime/secret_audit_test.exs

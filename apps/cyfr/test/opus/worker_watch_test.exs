@@ -33,7 +33,7 @@ defmodule Opus.WorkerWatchTest do
 
   alias Opus.{Attempt, Dispatch, Lapse, WorkerWatch}
   alias Prima.Slots
-  alias Cyfr.Test.{AttemptFixtures, ScriptedWorkerListener}
+  alias Cyfr.Test.{AttemptFixtures, AttemptWaiter, ScriptedWorkerListener}
 
   @moduletag :capture_log
 
@@ -200,7 +200,7 @@ defmodule Opus.WorkerWatchTest do
   defp attempt_row(fixture),
     do: Arca.ExecutionAttempts.get(Prima.Actor.in_athanor(fixture.athanor_id), fixture.attempt)
 
-  defp seen(watch), do: Map.fetch!(WorkerWatch.seen(watch), @service)
+  defp seen(watch), do: Map.fetch!(:sys.get_state(watch).seen, @service)
 
   # The runner's complete of `fixture`'s attempt with `outcome` and the
   # lapse of its boot, in `order`: each once the other has answered, or
@@ -298,7 +298,7 @@ defmodule Opus.WorkerWatchTest do
 
       Worker.script!(self(), [@not_a_status])
 
-      assert {:error, {:uncertain, @lapsed}} = Dispatch.await(fixture.pid, fixture.close)
+      assert {:error, {:uncertain, @lapsed}} = AttemptWaiter.await(fixture.pid, fixture.close)
       assert %{status: "failed", error_message: @lapsed} = row(fixture)
       assert %{state: "lapsed", outcome: "uncertain", boot_id: "boot_1"} = attempt_row(fixture)
       execution_id = fixture.execution_id
@@ -321,7 +321,7 @@ defmodule Opus.WorkerWatchTest do
       refute_received %Cyfr.Bus.ExecutionEvent{type: "execution.lapsed"}
 
       Worker.script!(self(), [status("boot_1", [later.attempt]), @not_a_status])
-      assert {:error, {:uncertain, @lapsed}} = Dispatch.await(later.pid, later.close)
+      assert {:error, {:uncertain, @lapsed}} = AttemptWaiter.await(later.pid, later.close)
       assert %{status: "failed", error_message: @lapsed} = row(later)
     end
 
@@ -363,7 +363,7 @@ defmodule Opus.WorkerWatchTest do
       malformed = status("boot_1", [fixture.attempt], %{runners: %{fresh: -1}})
       Worker.script!(self(), [elsewhere, malformed, elsewhere])
 
-      assert {:error, {:uncertain, @lapsed}} = Dispatch.await(fixture.pid, fixture.close)
+      assert {:error, {:uncertain, @lapsed}} = AttemptWaiter.await(fixture.pid, fixture.close)
       assert %{status: "failed", error_message: @lapsed} = row(fixture)
       assert %{lapsed: true} = seen(watch)
     end
@@ -377,10 +377,10 @@ defmodule Opus.WorkerWatchTest do
       # because a miss never takes a watch. There is no boot to lapse and
       # no member that ever heard one, so no row is opened at all — the
       # key is this test's own, so what is measured is this test's run.
-      wait_until(fn -> WorkerWatch.seen(watch)[id].unheard >= 4 end, @heard_ms)
+      wait_until(fn -> :sys.get_state(watch).seen[id].unheard >= 4 end, @heard_ms)
 
       assert %{boot: nil, attempts: [], misses: 0, lapsed: false, claimed: false} =
-               WorkerWatch.seen(watch)[id]
+               :sys.get_state(watch).seen[id]
 
       assert Arca.JobClaims.read("worker_watch", id) == {:error, :not_found}
       assert WorkerWatch.fresh_boot(endpoint, watch) == :unknown
@@ -472,16 +472,16 @@ defmodule Opus.WorkerWatchTest do
       # three, and lapses nothing: the count is the cell's, and the member
       # that hears the service keeps putting it back to zero. Its misses are
       # counted from the takeover, so each of them read the peer's row.
-      unheard = WorkerWatch.seen(cut_off)[@service].unheard
+      unheard = :sys.get_state(cut_off).seen[@service].unheard
 
       wait_until(
-        fn -> WorkerWatch.seen(cut_off)[@service].unheard >= unheard + 9 end,
+        fn -> :sys.get_state(cut_off).seen[@service].unheard >= unheard + 9 end,
         @heard_ms,
         "nine more unheard answers on the cut-off member"
       )
 
-      assert %{claimed: false} = WorkerWatch.seen(cut_off)[@service]
-      assert %{claimed: true, boot: "boot_1"} = WorkerWatch.seen(hearing)[@service]
+      assert %{claimed: false} = :sys.get_state(cut_off).seen[@service]
+      assert %{claimed: true, boot: "boot_1"} = :sys.get_state(hearing).seen[@service]
 
       row = claim_row()
       assert row.owner == "member_b"
@@ -505,7 +505,7 @@ defmodule Opus.WorkerWatchTest do
 
       Worker.script!(self(), [status("boot_2")])
 
-      assert {:error, {:uncertain, @lapsed}} = Dispatch.await(old.pid, old.close)
+      assert {:error, {:uncertain, @lapsed}} = AttemptWaiter.await(old.pid, old.close)
       assert %{status: "failed", error_message: @lapsed} = row(old)
       assert %{state: "lapsed", outcome: "uncertain", boot_id: "boot_1"} = attempt_row(old)
       old_id = old.execution_id

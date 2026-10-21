@@ -12,10 +12,10 @@ defmodule Opus.ArchiveWatch do
   business naming it — so the archive announces
   (`Cyfr.Bus.athanor_archived_global/0`) and this watch reacts.
 
-  Best effort, as the in-line cancel it replaces was: the status gates
-  already refuse new work, so a run this fails to reach ends on its own
-  lease. What it must not do is take the archive down with it, which is
-  why it runs in its own process rather than on the archiving caller's.
+  Best effort: the status gates already refuse new work, so a run this
+  fails to reach ends on its own lease. What it must not do is take the
+  archive down with it, which is why it runs in its own process rather
+  than on the archiving caller's.
 
   Started when `config :cyfr, :execution_archive_watch_enabled` is true
   (the default). Queries from a permanent process poison the test sandbox
@@ -28,8 +28,8 @@ defmodule Opus.ArchiveWatch do
 
   require Logger
 
-  # The same bound the in-line cancel carried: an athanor with more
-  # running executions than this has a bigger problem than the archive.
+  # The most running executions one archive cancels: an athanor with more
+  # than this has a bigger problem than the archive.
   @cancel_limit 500
 
   @spec start_link(keyword()) :: GenServer.on_start()
@@ -63,7 +63,7 @@ defmodule Opus.ArchiveWatch do
     if Opus.available?() do
       ctx = Sanctum.internal_context(athanor_id: athanor_id, scope: :athanor)
 
-      case Opus.list(ctx, status: :running, limit: @cancel_limit) do
+      case Opus.Record.list(ctx, status: :running, limit: @cancel_limit) do
         {:ok, running} ->
           Enum.each(running, fn %{id: id} -> Opus.cancel(ctx, id) end)
 

@@ -539,7 +539,7 @@ defmodule Opus do
 
   @doc """
   Cancel a running execution of the context's athanor; only a running
-  execution can be cancelled. See `Opus.Dispatch.cancel/3`.
+  execution can be cancelled. See `Opus.Dispatch.cancel/2`.
   """
   @spec cancel(Context.t(), String.t()) :: {:ok, map()} | {:error, term()}
   def cancel(%Context{} = ctx, execution_id), do: Dispatch.cancel(ctx, execution_id)
@@ -556,13 +556,6 @@ defmodule Opus do
           {:ok, [Prima.Source.t()]} | {:error, :not_found | :unavailable}
   def sources(%Context{} = ctx, execution_id) when is_binary(execution_id),
     do: Opus.Ledger.sources(Context.actor(ctx), execution_id)
-
-  @doc """
-  End a running execution because its consent changed underneath it: it
-  ends `restart_required`, and a rerun selects the new revision.
-  """
-  @spec cancel_for_restart(Context.t(), String.t(), map()) :: {:ok, map()} | {:error, term()}
-  defdelegate cancel_for_restart(ctx, execution_id, payload), to: Dispatch
 
   @doc "An execution record of the context's athanor by id."
   @spec get(Context.t(), String.t()) :: {:ok, Record.t()} | {:error, term()}

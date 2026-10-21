@@ -25,8 +25,8 @@ defmodule Opus.HostListenerTest do
 
   import ExUnit.CaptureLog
 
-  alias Opus.{Attempt, Dispatch, HostListener, Keys}
-  alias Cyfr.Test.AttemptFixtures
+  alias Opus.{Attempt, HostListener, Keys}
+  alias Cyfr.Test.{AttemptFixtures, AttemptWaiter}
   alias Prima.{WorkerAuth, WorkerWire}
 
   @service "wrk_listener_test"
@@ -235,7 +235,7 @@ defmodule Opus.HostListenerTest do
       assert {200, %{"ok" => %{"said" => "done"}}} =
                call(url, fixture, "complete", %{"outcome" => outcome})
 
-      assert {:ok, %{status: :completed}} = Dispatch.await(fixture.pid, fixture.close)
+      assert {:ok, %{status: :completed}} = AttemptWaiter.await(fixture.pid, fixture.close)
     end
 
     @tag :capture_log
@@ -299,7 +299,7 @@ defmodule Opus.HostListenerTest do
       assert {200, %{"ok" => true}} = report(url, fixture)
 
       assert {:error, {:uncertain, "Execution terminated: runner stopped without cleanup"}} =
-               Dispatch.await(fixture.pid, fixture.close)
+               AttemptWaiter.await(fixture.pid, fixture.close)
 
       assert %{state: "lapsed"} =
                Arca.ExecutionAttempts.get(
@@ -519,7 +519,7 @@ defmodule Opus.HostListenerTest do
       assert {200, %{"ok" => true}} = report(url, fixture)
 
       assert {:error, {:uncertain, "Execution terminated: runner stopped without cleanup"}} =
-               Dispatch.await(fixture.pid, fixture.close)
+               AttemptWaiter.await(fixture.pid, fixture.close)
 
       assert {200, %{"error" => "lost"}} = push(url, fixture, "after the lapse")
     end

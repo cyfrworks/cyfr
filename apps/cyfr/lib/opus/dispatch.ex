@@ -39,8 +39,9 @@ defmodule Opus.Dispatch do
        that attached keeps the run, and a run no runner attached to is
        closed failed as "the execution worker did not answer the start"
        (a runner attaching after that finds no attempt and stops);
-    5. the waiter waits for the attempt to close the run (`await/2`) and
-       answers what the close recorded.
+    5. the waiter waits for the attempt to close the run (the attempt's
+       `{Opus.Attempt, pid, result}` message, or its exit) and answers
+       what the close recorded.
 
   A waiter that exits kills its run: its attempt asks the worker service
   to kill the runner. An attempt that stops without closing the run — its
@@ -64,7 +65,7 @@ defmodule Opus.Dispatch do
   row); the run's attempt takes it over, and gives it back when it stops.
   A run refused before its attempt opens gives it back here.
 
-  `cancel/3` cancels a running execution's row and kills what runs it
+  `cancel/2` cancels a running execution's row and kills what runs it
   (`stop/2`); `stop/2` is also how a cascade stops a child
   (`Opus.Cascade`).
   """
@@ -158,33 +159,20 @@ defmodule Opus.Dispatch do
   end
 
   @doc """
-  Wait, in the process that opened the attempt `pid`, for it to close its
-  run, and answer the run's result: `{:ok, result}` or `{:error, reason}`
-  as `Opus.Close` answered. An attempt that stops without closing
-  its run is closed lost with `close` (`Opus.Close.lost/1`).
-  """
-  @spec await(pid(), Close.t()) :: {:ok, map()} | {:error, term()}
-  def await(pid, %Close{} = close) when is_pid(pid) do
-    {_ended, result} = wait(pid, close)
-    result
-  end
-
-  @doc """
   Cancel a running execution: the tenant-scoped record cancel
-  (`Opus.Record.cancel/3`, with `opts[:restart_required]`)
-  first, which decides whether this caller may cancel it and is the only
-  thing that decides the cancel; then its running children are failed
-  (`Opus.Cascade`), what runs it is stopped (`stop/2`) and the
-  cancel telemetry fires. A run cancelled while it is queued for its
+  (`Opus.Record.cancel/2`) first, which decides whether this caller may
+  cancel it and is the only thing that decides the cancel; then its
+  running children are failed (`Opus.Cascade`), what runs it is stopped
+  (`stop/2`) and the cancel telemetry fires. A run cancelled while it is queued for its
   execution slot gives back its invoke-budget slot and its charge row
   here, and never takes the slot.
   """
-  @spec cancel(Context.t(), String.t(), keyword()) :: {:ok, map()} | {:error, term()}
-  def cancel(%Context{} = ctx, execution_id, opts \\ []) do
+  @spec cancel(Context.t(), String.t()) :: {:ok, map()} | {:error, term()}
+  def cancel(%Context{} = ctx, execution_id) do
     # The record cancel enforces tenant ownership and the running
     # precondition, so it must succeed before the id-keyed registry is
     # touched: a caller must not stop another tenant's run by its id.
-    case Record.cancel(ctx, execution_id, Keyword.take(opts, [:restart_required])) do
+    case Record.cancel(ctx, execution_id) do
       {:ok, record} ->
         # The children are failed before the run is stopped: stopping it
         # stops what it started, whose attempts would otherwise lapse the
@@ -197,16 +185,6 @@ defmodule Opus.Dispatch do
       error ->
         error
     end
-  end
-
-  @doc """
-  End a running execution because its consent changed underneath it:
-  `cancel/3` with the typed `restart_required` payload. Rerunning selects
-  the new revision; in-flight authority is never rebound.
-  """
-  @spec cancel_for_restart(Context.t(), String.t(), map()) :: {:ok, map()} | {:error, term()}
-  def cancel_for_restart(%Context{} = ctx, execution_id, payload) when is_map(payload) do
-    cancel(ctx, execution_id, restart_required: payload)
   end
 
   @doc """
@@ -462,7 +440,7 @@ defmodule Opus.Dispatch do
            claimant.attempt,
            claimant.fence,
            claimant.runner,
-           grant: admitted.close.record.grant || :stored,
+           grant: Keyword.fetch!(admitted.close.admission, :grant),
            verify: &Sanctum.ExecutionStanding.verify/1
          ) do
       :ok -> :ok
