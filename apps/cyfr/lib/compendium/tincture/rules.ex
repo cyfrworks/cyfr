@@ -94,11 +94,6 @@ defmodule Compendium.Tincture.Rules do
     ".ktx2" => "image/ktx2"
   }
 
-  # The frame capabilities a manifest may declare in
-  # `tincture.frame.capabilities`, and the placements a frame takes:
-  # floating over the shell, or a canvas, a page the toolkit draws from the
-  # module its `tincture.canvas` block names (`validate_declaration/1`).
-  # The refusal of a placement names the placements.
   @frame_capabilities ~w(pointer_lock fullscreen gamepad audio_autoplay)
   @placements ~w(float canvas)
 
@@ -204,6 +199,22 @@ defmodule Compendium.Tincture.Rules do
   @spec served_types() :: %{String.t() => String.t()}
   def served_types, do: @served_types
 
+  @doc """
+  The frame capabilities a manifest may declare in
+  `tincture.frame.capabilities`. Beside them the frame declares its
+  `placement` (`placements/0`) and whether it runs in the `background`.
+  """
+  @spec frame_capabilities() :: [String.t()]
+  def frame_capabilities, do: @frame_capabilities
+
+  @doc """
+  The placements a frame may declare: floating over the shell, or a
+  canvas, a page the toolkit draws from the module its `tincture.canvas`
+  block names (`validate_declaration/1`).
+  """
+  @spec placements() :: [String.t()]
+  def placements, do: @placements
+
   @doc "The toolkit majors a canvas's `tincture.canvas.toolkit` may name."
   @spec toolkit_majors() :: [pos_integer()]
   def toolkit_majors, do: @toolkit_majors
@@ -219,7 +230,8 @@ defmodule Compendium.Tincture.Rules do
   @doc """
   The frame's `sandbox` tokens for the capabilities its grant holds:
   `allow-scripts` always, `allow-pointer-lock` only when `pointer_lock` is
-  granted. A capability no frame has is refused.
+  granted. A capability that is not one of `frame_capabilities/0` is
+  refused.
   """
   @spec sandbox_tokens([String.t()]) :: {:ok, [String.t()]} | {:error, refusal()}
   def sandbox_tokens(granted) when is_list(granted) do
@@ -238,7 +250,7 @@ defmodule Compendium.Tincture.Rules do
   The frame's `allow` attribute (its permissions policy) for the
   capabilities its grant holds: `fullscreen`, `gamepad` and `autoplay`,
   each only when granted, joined by `; `. `""` when none is. A capability
-  no frame has is refused.
+  that is not one of `frame_capabilities/0` is refused.
   """
   @spec allow_attribute([String.t()]) :: {:ok, String.t()} | {:error, refusal()}
   def allow_attribute(granted) when is_list(granted) do
@@ -433,8 +445,8 @@ defmodule Compendium.Tincture.Rules do
   @doc """
   The manifest's frame, canvas, streams and system actions, held to their
   shapes (`Prima.Manifest.Tincture`) and to these rules: every capability
-  is one a frame has and a placement is one a frame takes, which its
-  refusal names. No tincture, whatever its placement, declares
+  is one of `frame_capabilities/0` and a placement is one of
+  `placements/0`. No tincture, whatever its placement, declares
   `feed.bind`, `feed.remove` or `feed.press` among its system actions:
   those are the person's alone. Nor does any declare `layout.edit`: the
   layout is the person's arrangement, and no tincture writes it. Nor

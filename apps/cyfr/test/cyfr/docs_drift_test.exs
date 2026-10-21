@@ -1784,9 +1784,6 @@ defmodule Cyfr.DocsDriftTest do
   # `Compendium`'s tincture rules and `Prima.TinctureWire`. A block that
   # differs fails with the rendering to paste, so a list the rules grow
   # reaches the guide and the role before any reader meets a stale one.
-  # The rules publish no list of the frame capabilities: that table's rows
-  # are the guide's own capabilities, each rendered from what the frame
-  # opens for it and refused if the frame has no such capability.
   # ==========================================================================
 
   @tincture_list_files ["tincture-guide.md", "seed/aqua/roles/artisan.md"]
@@ -1811,7 +1808,7 @@ defmodule Cyfr.DocsDriftTest do
 
   defp tincture_list("frame-capabilities") do
     rows =
-      for capability <- guide_capabilities() do
+      for capability <- Compendium.Tincture.Rules.frame_capabilities() do
         {:ok, ["allow-scripts" | sandbox]} = Compendium.tincture_sandbox_tokens([capability])
         {:ok, allow} = Compendium.tincture_allow_attribute([capability])
 
@@ -1837,7 +1834,7 @@ defmodule Cyfr.DocsDriftTest do
       "| Block | Keys |",
       "|---|---|",
       "| `frame` | #{list.(keys.(%Prima.Manifest.Tincture.Frame{}))} |",
-      "| `frame.placement` | one of #{list.(placements())} |",
+      "| `frame.placement` | one of #{list.(Compendium.Tincture.Rules.placements())} |",
       "| `canvas` | #{list.(keys.(%Prima.Manifest.Tincture.Canvas{}))} |",
       "| `streams[]` | #{list.(keys.(%Prima.Manifest.Tincture.Stream{name: ""}))} |",
       "| `actions[]` | an operation name, `tool.action` |"
@@ -1865,36 +1862,6 @@ defmodule Cyfr.DocsDriftTest do
             "| `cyfr.#{verb}(#{Map.get(@sdk_verb_args, verb, "")})` | the shell's port, `#{verb}` |"
 
     ["| Call | Carried by |", "|---|---|" | requests ++ verbs]
-  end
-
-  # The capabilities tincture-guide.md's table names, in its order: what
-  # the Artisan role's table is held to as well.
-  defp guide_capabilities do
-    block =
-      tincture_block(File.read!(Path.join(@repo_root, "tincture-guide.md")), "frame-capabilities")
-
-    capabilities =
-      ~r/^\| `([^`]+)` \|/m
-      |> Regex.scan(block || "", capture: :all_but_first)
-      |> List.flatten()
-
-    assert capabilities != [], "tincture-guide.md's frame-capabilities table names no capability"
-    capabilities
-  end
-
-  # The placements as the publish check names them when it refuses one.
-  defp placements do
-    assert {:error, {:invalid_tincture, sentence}} =
-             Compendium.tincture_declaration(%{
-               "type" => "tincture",
-               "tincture" => %{"frame" => %{"placement" => "nowhere"}}
-             })
-
-    [_, names] =
-      Regex.run(~r/\Atincture\.frame\.placement is one of (.+)\z/, sentence) ||
-        flunk("the placement refusal names no placements: #{sentence}")
-
-    String.split(names, ", ")
   end
 
   defp code_or_none(""), do: "—"
