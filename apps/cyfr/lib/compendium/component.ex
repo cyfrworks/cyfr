@@ -141,9 +141,9 @@ defmodule Compendium.Component do
   or a storage fault is a human-readable `{:error, binary}`. Nothing
   raises.
 
-  The one resolver: the MCP tool modules delegate here
-  (`Compendium.Providers.Shared`) and `Compendium.Resolver` is its
-  string-in adapter, so no caller and no surface can drift.
+  The one resolver: the MCP tool modules call it directly and
+  `Compendium.Resolver` is its string-in adapter, so no caller and no
+  surface can drift.
   """
   @spec resolve_component(Context.t(), term()) ::
           {:ok, map(), map()}

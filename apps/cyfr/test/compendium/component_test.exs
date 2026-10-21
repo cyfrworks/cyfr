@@ -3,9 +3,9 @@
 
 defmodule Compendium.ComponentTest do
   @moduledoc """
-  Component resolution returns human-readable `{:error, binary}` results
-  for malformed references, missing components, and storage faults.
-  `Compendium.Providers.Shared` delegates resolution to this module.
+  Component resolution answers `{:not_found, {:component, ref}}` for a
+  component the registry does not hold and a human-readable
+  `{:error, binary}` for a malformed reference or a storage fault.
   """
 
   use ExUnit.Case, async: false

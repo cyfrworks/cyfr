@@ -20,14 +20,15 @@ defmodule Compendium.Activation do
   there is nothing for an activation to attest about it.
 
   Resolution is **all or nothing** over what the manifest requires. A node
-  whose release digest is missing (a row published before release digests
-  existed) or whose required dependency is not installed makes the whole
-  activation `:incomplete`, and nothing is recorded — a partial graph
-  would read as a complete attestation. The refusal names what is
-  missing, so a person can be told: `{:missing_release_digest, key}` the
-  node with no digest, `{:unresolvable_dependency, ref}` the name-level ref
-  of the required dependency that is not installed, or of the node whose
-  dependencies cannot be read. A dependency the manifest marks
+  whose release digest is missing (every registry ingress records one, so
+  only a row written outside the registry lacks it) or whose required
+  dependency is not installed makes the whole activation `:incomplete`,
+  and nothing is recorded — a partial graph would read as a complete
+  attestation. The refusal names what is missing, so a person can be
+  told: `{:missing_release_digest, key}` the node with no digest,
+  `{:unresolvable_dependency, ref}` the name-level ref of the required
+  dependency that is not installed, or of the node whose dependencies
+  cannot be read. A dependency the manifest marks
   `optional` and that is not installed is simply absent from the graph:
   the attestation covers what can run, and when the component arrives the
   graph — and so the digest — changes with it. Only a dependency the

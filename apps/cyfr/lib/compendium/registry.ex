@@ -816,7 +816,7 @@ defmodule Compendium.Registry do
   end
 
   defp blob(ctx, digest) do
-    # Direct digest lookup via indexed query (replaces O(n) linear scan)
+    # One indexed lookup by digest.
     case Arca.ComponentStorage.get_by_digest(Sanctum.Context.actor(ctx), digest) do
       {:ok, %{component_type: "tincture"}} ->
         # Tinctures are directory-based, not single binary blobs

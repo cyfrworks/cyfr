@@ -7,9 +7,9 @@ defmodule Compendium.OCI.PushAuthTest do
 
   Authenticated uploads carry the caller's bearer token; anonymous requests carry no credentials.
 
-  `Transport.request/6` now takes `ctx` as a required first arg, so the
-  compiler enforces every `Blob`/`Client` call site supplies it — these tests
-  cover that the chokepoint then attaches the header.
+  `Transport.request` takes `ctx` as its required first argument, so the
+  compiler holds every `Blob` and `Client` call site to supplying it; these
+  tests cover that the chokepoint then attaches the header.
   """
   use ExUnit.Case, async: false
 
