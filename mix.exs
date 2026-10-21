@@ -13,7 +13,9 @@ defmodule Cyfr.MixProject do
       aliases: aliases(),
       releases: releases(),
       dialyzer: dialyzer(),
-      listeners: [Phoenix.CodeReloader]
+      # The code reloader's compile listener serves the dev server alone; a
+      # build of the Locus image's umbrella has no Phoenix to start it.
+      listeners: if(Mix.env() == :dev, do: [Phoenix.CodeReloader], else: [])
     ]
   end
 
@@ -24,7 +26,6 @@ defmodule Cyfr.MixProject do
 
   defp deps do
     [
-      {:dotenvy, "~> 1.2"},
       {:mix_audit, "~> 2.1", only: :dev, runtime: false},
       {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
       {:dialyxir, "~> 1.4", only: [:dev, :test], runtime: false}
@@ -46,9 +47,6 @@ defmodule Cyfr.MixProject do
 
   defp aliases do
     [
-      setup: ["deps.get", "ecto.setup"],
-      "ecto.setup": ["ecto.create", "ecto.migrate"],
-      "ecto.reset": ["ecto.drop", "ecto.setup"],
       test: [&test_after_database/1],
       "cyfr.bench.step": ["ecto.create --quiet", "ecto.migrate --quiet", "cyfr.bench.step"],
       "assets.deploy": ["tailwind prism --minify", "esbuild prism --minify", "phx.digest"]

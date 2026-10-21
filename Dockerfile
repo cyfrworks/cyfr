@@ -6,9 +6,7 @@ FROM hexpm/elixir:1.20.4-erlang-29.1.1-debian-trixie-20261005@sha256:fd5f8520b38
 
 RUN apt-get update && apt-get install -y \
     build-essential \
-    git \
     curl \
-    libsqlite3-dev \
     && rm -rf /var/lib/apt/lists/*
 
 ENV MIX_ENV=prod
@@ -67,7 +65,6 @@ RUN echo "apt refresh ${APT_REFRESH}" && apt-get update && apt-get upgrade -y &&
     openssl \
     libncurses6 \
     ca-certificates \
-    libsqlite3-0 \
     curl \
     locales \
     && rm -rf /var/lib/apt/lists/* \
