@@ -36,13 +36,8 @@ defmodule Cyfr.BootstrapTest do
     claim_enabled = Application.get_env(:arca, :control_plane_claim_enabled)
     standing = Map.new(@control_plane_keys, &{&1, :persistent_term.get(&1, :absent)})
 
-    # The suite disables the boot task (a write before any sandbox checkout);
-    # these tests are about what it does, so they turn it back on.
-    Application.put_env(:cyfr, :provisioning_boot_enabled, true)
-
     on_exit(fn ->
       Application.put_env(:sanctum, :platform_admin_emails, prev)
-      Application.put_env(:cyfr, :provisioning_boot_enabled, false)
       Application.put_env(:arca, :control_plane_claim_enabled, claim_enabled)
 
       for {key, value} <- standing do

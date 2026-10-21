@@ -290,7 +290,7 @@ defmodule Cyfr.PlatformSettingsRosterTest do
       end
     end
 
-    test "exactly the settings that move, and the three the tincture frames will read" do
+    test "exactly the settings that move, and the four the tincture frames read live" do
       assert Enum.sort(Enum.map(Roster.entries(), & &1.key)) ==
                Enum.sort(~w(
                  max_athanors max_groups_per_person max_pairs_per_person max_members_per_group
@@ -317,7 +317,7 @@ defmodule Cyfr.PlatformSettingsRosterTest do
       for key <- ~w(asset_credential_window_s frame_credential_deadline_s) do
         {:ok, entry} = Roster.fetch(key)
         assert {entry.type, entry.default, entry.stale} == {:duration_s, 3_600, :serve}
-        assert entry.config == nil, "#{key} has no reader to write it for yet"
+        assert entry.config == nil, "#{key} is read live, not from the application environment"
       end
 
       for key <- ~w(frame_invocation_max frame_invocation_window_ms) do
@@ -578,7 +578,7 @@ defmodule Cyfr.PlatformSettingsRosterTest do
       assert {cap.app, cap.config} == {:sanctum, nil}
     end
 
-    test "each setting still configured is written under the application its reader reads it under" do
+    test "each setting written to the application environment is written under the application its reader reads it under" do
       reads = lib_reads()
       assert misplaced(Roster.entries(), reads) == []
 
