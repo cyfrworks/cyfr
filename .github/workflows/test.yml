@@ -141,8 +141,7 @@ env:
   MIX_OS_CONCURRENCY_LOCK: 0
 jobs:
   # The checks whose answer does not depend on the database adapter, once
-  # per run. Their step names stay as they were. scripts/commit-gate.sh
-  # reads two of them, "The built SDK is its source's" and "The built
+  # per run. scripts/commit-gate.sh reads two of them, "The built SDK is its source's" and "The built
   # toolkit is its source's", and runs their scripts.
   static:
     name: Static checks, generated files, fixtures and harness tests
@@ -238,10 +237,10 @@ jobs:
           for stamp in "${stamps[@]}"; do
             scripts/build-seed-guest.sh "$(dirname "$(dirname "$stamp")")" --check
           done
-      # The loop above only visits directories that already carry a stamp, so
-      # a guest shipped without one was never bound to its source at all —
-      # which is how `http` and `files` drifted to a crate version naming a
-      # release they are not. Both facts are checked for every guest here.
+      # The loop above visits only directories that carry a stamp, so a
+      # guest shipped without one would be bound to its source by nothing:
+      # every guest's stamp, and a crate version that is its own, are
+      # checked here.
       - name: Every seed guest carries a stamp, and its crate version is its own
         run: |
           set -uo pipefail
@@ -888,10 +887,9 @@ jobs:
       # CI fixtures mirrored in s3_minio_test.exs.
       - name: Start MinIO
         run: |
-          # MinIO Inc. stopped publishing images in October 2025 and archived
-          # the server in February 2026; pgsty/silo (formerly pgsty/minio) is
-          # the maintained community build of the same server, with the same
-          # variables and health route. Pinned by digest
+          # MinIO's publisher ships no image and has archived the server;
+          # pgsty/silo is the maintained community build of the same server,
+          # with the same variables and health route. Pinned by digest
           # (RELEASE.2026-09-16T00-00-00Z, the multi-arch index), as every
           # action this workflow uses is; the PostgreSQL service images are
           # pinned by tag (postgres:18.6).
@@ -1160,8 +1158,8 @@ jobs:
 
   # Stdio backends isolated from each other and from the backends
   # service, under the locus-backends service's own settings. The suites
-  # run here, in the workflow the tag's `verify` calls, so the release gates
-  # on them.
+  # run here, in the workflow release.yml calls before it publishes, so the
+  # release gates on them.
   locus-backends-image:
     name: Backends image (end to end, isolation, refusals, residue, memory bound) and the Compose proof
     runs-on: ubuntu-latest
