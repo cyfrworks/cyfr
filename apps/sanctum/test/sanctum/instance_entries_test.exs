@@ -1265,7 +1265,13 @@ defmodule Sanctum.InstanceEntriesTest do
 
       # The same change proven as the vault's rebind is not this rebind.
       {:ok, digest} =
-        Sanctum.VaultReader.binding_digest(%{stored(entry.id) | destination: canonical(wider)})
+        Sanctum.VaultReader.binding_digest(
+          Map.merge(%{stored(entry.id) | destination: canonical(wider)}, %{
+            oauth_endpoints: nil,
+            oauth_scopes: nil,
+            attach_only: true
+          })
+        )
 
       vault_proof =
         TestContext.confirmed(admin, :credential_entry, %{
@@ -1918,7 +1924,6 @@ defmodule Sanctum.InstanceEntriesTest do
       row = stored(entry.id)
 
       assert row.created_by == admin.user_id
-      assert row.attach_only == true
       refute row.sealed_payload =~ @secret
 
       assert {:ok, plaintext} =

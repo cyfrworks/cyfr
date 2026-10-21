@@ -777,9 +777,9 @@ defmodule Sanctum.Consent.Authz do
   # own row, or this home for a context no stored credential backs. A hint
   # for the person reading the record: a name that cannot be read is left
   # out, never a refusal.
-  defp asker(%Context{auth_method: :device, client_id: id} = ctx)
+  defp asker(%Context{auth_method: :device, client_id: id})
        when is_binary(id) and id != "",
-       do: named_asker("client", client_name(ctx, id))
+       do: named_asker("client", nil)
 
   defp asker(%Context{frame: %{id: id} = frame}) when is_binary(id) and id != "",
     do: named_asker("frame", tincture(frame))
@@ -835,13 +835,6 @@ defmodule Sanctum.Consent.Authz do
     if String.valid?(bytes),
       do: bytes,
       else: valid_prefix(binary_part(bytes, 0, byte_size(bytes) - 1))
-  end
-
-  defp client_name(ctx, client_id) do
-    case Arca.PairedClients.list(Context.actor(ctx), user_id: ctx.user_id, standing: :all) do
-      {:ok, clients} -> Enum.find_value(clients, &(&1.id == client_id && &1.label))
-      {:error, _unanswered} -> nil
-    end
   end
 
   defp key_name(ctx, key_id) do

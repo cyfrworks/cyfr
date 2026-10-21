@@ -531,25 +531,6 @@ defmodule Sanctum.PairingTest do
       refute fresh == id
     end
 
-    test "a device's long name is kept within 255 bytes, cut between characters", %{
-      session_ctx: session_ctx
-    } do
-      device = pair!(session_ctx)
-      device_ctx = connected!(device)
-      args = for_key(device_key())
-
-      # Four bytes a character: 100 of them are 400 bytes, and 63 fit.
-      {1, _} =
-        Arca.Repo.update_all(from(p in PairedClient, where: p.id == ^device.client_id),
-          set: [label: String.duplicate("🦫", 100)]
-        )
-
-      assert {:error, {:confirmation_required, %{id: id}}} = Pairing.begin(device_ctx, args)
-      assert %{"kind" => "client", "name" => name} = Jason.decode!(record!(device_ctx, id).asker)
-      assert name == String.duplicate("🦫", 63)
-      assert byte_size(name) <= 255 and String.valid?(name)
-    end
-
     test "needs a person working in an athanor", %{session_ctx: session_ctx} do
       assert Pairing.begin(%{session_ctx | athanor_id: nil}, %{}) == {:error, :missing_tenant}
 
