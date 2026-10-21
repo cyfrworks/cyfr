@@ -186,7 +186,9 @@ defmodule Cyfr.BoundaryDeclarationsTest do
   defp sources(app), do: Path.wildcard(Path.join(@root, "apps/#{app}/lib/**/*.ex"))
 
   # Every module a file defines, with its `use Boundary` options when it
-  # declares any, walking nested `defmodule`s and `defimpl`s.
+  # declares any, walking nested `defmodule`s and `defimpl`s. Each is a
+  # compiled module of a loaded application, so its name is an atom
+  # already, and a name read from source never makes a new one.
   defp defined(path) do
     path |> File.read!() |> Code.string_to_quoted!() |> walk(nil)
   end
@@ -203,7 +205,7 @@ defmodule Cyfr.BoundaryDeclarationsTest do
 
   defp walk({:defimpl, _, [protocol, opts, [do: body]]}, parent) do
     for_module = opts |> Keyword.fetch!(:for) |> module_name(nil)
-    module = Module.concat(module_name(protocol, nil), for_module)
+    module = Module.safe_concat(module_name(protocol, nil), for_module)
     _ = parent
     [%{module: module, kind: :impl, boundary: boundary_opts(body)}]
   end
@@ -214,10 +216,10 @@ defmodule Cyfr.BoundaryDeclarationsTest do
   defp walk(_other, _parent), do: []
 
   defp module_name({:__aliases__, _, [{:__MODULE__, _, _} | rest]}, parent),
-    do: Module.concat([parent | rest])
+    do: Module.safe_concat([parent | rest])
 
-  defp module_name({:__aliases__, _, parts}, nil), do: Module.concat(parts)
-  defp module_name({:__aliases__, _, parts}, parent), do: Module.concat([parent | parts])
+  defp module_name({:__aliases__, _, parts}, nil), do: Module.safe_concat(parts)
+  defp module_name({:__aliases__, _, parts}, parent), do: Module.safe_concat([parent | parts])
 
   defp kind(module) do
     if String.starts_with?(inspect(module), "Mix.Tasks."), do: :mix_task, else: :module
@@ -227,10 +229,24 @@ defmodule Cyfr.BoundaryDeclarationsTest do
   defp boundary_opts(expr), do: use_boundary(expr)
 
   defp use_boundary({:use, _, [{:__aliases__, _, [:Boundary]}]}), do: []
-  defp use_boundary({:use, _, [{:__aliases__, _, [:Boundary]}, opts]}), do: literal(opts)
+
+  # An export is named relative to its boundary, so it keeps its alias
+  # parts until `exports/2` joins them to the boundary's name.
+  defp use_boundary({:use, _, [{:__aliases__, _, [:Boundary]}, opts]}) do
+    for {key, value} <- opts do
+      case key do
+        :exports -> {key, Enum.map(value, &export_parts/1)}
+        _key -> {literal(key), literal(value)}
+      end
+    end
+  end
+
   defp use_boundary(_expr), do: nil
 
-  defp literal({:__aliases__, _, parts}), do: Module.concat(parts)
+  defp export_parts({:__aliases__, _, parts}), do: parts
+  defp export_parts(export), do: literal(export)
+
+  defp literal({:__aliases__, _, parts}), do: Module.safe_concat(parts)
   defp literal(list) when is_list(list), do: Enum.map(list, &literal/1)
   defp literal({key, value}), do: {literal(key), literal(value)}
   defp literal(value) when is_atom(value) or is_number(value) or is_binary(value), do: value
@@ -251,8 +267,8 @@ defmodule Cyfr.BoundaryDeclarationsTest do
 
   defp exports(name, opts) do
     for export <- Map.get(opts, :exports, []) do
-      is_atom(export) || flunk("#{inspect(name)} mass-exports #{inspect(export)}")
-      Module.concat(name, export)
+      is_list(export) || flunk("#{inspect(name)} mass-exports #{inspect(export)}")
+      Module.safe_concat([name | export])
     end
   end
 
@@ -356,13 +372,13 @@ defmodule Cyfr.BoundaryDeclarationsTest do
     manifest = manifest_exports()
 
     for key <- @manifest_rows do
-      name = Module.concat([key])
+      name = Module.safe_concat([key])
       declared = bounds |> Map.fetch!(name) |> then(&exports(name, &1)) |> Enum.sort()
 
       additions =
         for {modules, _reason} <- Map.get(@export_additions, name, []),
             m <- modules,
-            do: Module.concat(name, m)
+            do: Module.safe_concat(name, m)
 
       assert MapSet.disjoint?(MapSet.new(additions), MapSet.new(manifest[key])),
              "#{key}: an addition the manifest already lists"
@@ -427,6 +443,15 @@ defmodule Cyfr.BoundaryDeclarationsTest do
   # The facade roster's module names under each key's own namespace.
   defp manifest_exports, do: @roster_path |> load_roster() |> check_roster()
 
+  # The loaded module `name` spells, or `nil`: a name no module holds is
+  # never made an atom.
+  defp existing_module(name) do
+    module = Module.safe_concat([name])
+    if Code.ensure_loaded?(module), do: module
+  rescue
+    ArgumentError -> nil
+  end
+
   defp load_roster(path) do
     File.regular?(path) || flunk("the facade roster #{path} is absent")
     {roster, _binding} = Code.eval_file(path)
@@ -443,12 +468,8 @@ defmodule Cyfr.BoundaryDeclarationsTest do
 
       modules =
         for name <- names do
-          module = Module.concat([name])
-
-          Code.ensure_loaded?(module) ||
+          existing_module(name) ||
             flunk("the facade roster's #{key} entry names #{name}, which does not exist")
-
-          module
         end
 
       {key, modules}

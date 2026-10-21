@@ -200,7 +200,7 @@ defmodule Cyfr.GenServerCatchallTest do
             String.match?(source, ~r/name: __MODULE__|:name, __MODULE__/),
             [_, mod] <-
               Regex.scan(~r/defmodule ([\w.]+) do/, source, capture: :all) |> Enum.take(1),
-            do: Module.concat([mod])
+            do: Module.safe_concat([mod])
 
       missing = Enum.reject(adopters, &MapSet.member?(rostered, &1))
 
@@ -259,7 +259,10 @@ defmodule Cyfr.GenServerCatchallTest do
       assert helper_line(log) =~ "%URI{:authority, :fragment, :host"
       refute log =~ ~s("h")
 
-      map = Map.new(1..20, &{:"key_#{String.pad_leading(to_string(&1), 2, "0")}", &1})
+      keys = ~w(key_01 key_02 key_03 key_04 key_05 key_06 key_07 key_08 key_09 key_10
+                key_11 key_12 key_13 key_14 key_15 key_16 key_17 key_18 key_19 key_20)a
+
+      map = Map.new(Enum.zip(keys, 1..20))
       log = capture_log(fn -> Prima.LoggerContext.unexpected(__MODULE__, map) end)
       assert helper_line(log) =~ "map/20 [:key_01,"
       assert log =~ ":key_10]"

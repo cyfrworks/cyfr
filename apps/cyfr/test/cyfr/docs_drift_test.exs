@@ -394,7 +394,8 @@ defmodule Cyfr.DocsDriftTest do
 
     {listing, 0} =
       System.cmd("git", ["ls-files", "-z", "--", "apps", "seed", "tests", ":(glob)*.md"],
-        cd: @repo_root
+        cd: @repo_root,
+        env: [{"GIT_DIR", nil}, {"GIT_WORK_TREE", nil}, {"GIT_INDEX_FILE", nil}]
       )
 
     files = String.split(listing, <<0>>, trim: true)

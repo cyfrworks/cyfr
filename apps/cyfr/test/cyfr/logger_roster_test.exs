@@ -340,13 +340,14 @@ defmodule Cyfr.LoggerRosterTest do
            """
   end
 
-  # Every Mix application of the umbrella; the Go programs have none.
+  # Every Mix application of the umbrella, by its directory's name; the Go
+  # programs have none.
   defp applications do
     apps =
       for mix <- Path.wildcard(Path.join(root(), "apps/*/mix.exs")),
-          do: mix |> Path.dirname() |> Path.basename() |> String.to_atom()
+          do: mix |> Path.dirname() |> Path.basename()
 
-    assert :prima in apps and :cyfr in apps and :locus in apps
+    assert "prima" in apps and "cyfr" in apps and "locus" in apps
     apps
   end
 
@@ -355,8 +356,8 @@ defmodule Cyfr.LoggerRosterTest do
   # application this one does not depend on is read too; an application
   # that yields none was built elsewhere, and the check would read nothing.
   defp lib_beams(app) do
-    ebin = Path.join([Mix.Project.build_path(), "lib", Atom.to_string(app), "ebin"])
-    lib = Path.join([root(), "apps", Atom.to_string(app), "lib"]) <> "/"
+    ebin = Path.join([Mix.Project.build_path(), "lib", app, "ebin"])
+    lib = Path.join([root(), "apps", app, "lib"]) <> "/"
 
     beams =
       for path <- Path.wildcard(Path.join(ebin, "*.beam")),

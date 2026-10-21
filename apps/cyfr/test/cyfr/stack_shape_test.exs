@@ -1386,16 +1386,23 @@ defmodule Cyfr.StackShapeTest do
 
     assert {_, 0} =
              System.cmd("bash", [Path.join(@root, "scripts/scaffold-tarball.sh"), tarball],
-               stderr_to_stdout: true
+               stderr_to_stdout: true,
+               env: bare_env()
              )
 
-    {listing, 0} = System.cmd("tar", ["-tzf", tarball])
+    {listing, 0} = System.cmd("tar", ["-tzf", tarball], env: bare_env())
     entries = String.split(listing, "\n", trim: true)
     assert "docker-compose.yml" in entries
     assert "keeper.seccomp.json" in entries
 
-    {profile, 0} = System.cmd("tar", ["-xOzf", tarball, "keeper.seccomp.json"])
+    {profile, 0} = System.cmd("tar", ["-xOzf", tarball, "keeper.seccomp.json"], env: bare_env())
     assert profile == read!("apps/locus/keeper/seccomp/keeper.json")
+  end
+
+  # A child's environment: every inherited name unset but where it finds
+  # its tools and its temporary directory.
+  defp bare_env do
+    for {name, _} <- System.get_env(), name not in ~w(PATH TMPDIR), do: {name, nil}
   end
 
   # The image names its pooled uids for the role that runs under them,

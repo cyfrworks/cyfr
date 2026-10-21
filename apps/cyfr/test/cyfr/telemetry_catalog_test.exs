@@ -32,15 +32,17 @@ defmodule Cyfr.TelemetryCatalogTest do
         |> String.trim_leading("[")
         |> String.trim_trailing("]")
         |> String.split(~r/,\s*/)
-        |> Enum.map(&(&1 |> String.trim_leading(":") |> String.to_atom()))
+        |> Enum.map(&String.trim_leading(&1, ":"))
       end)
     end)
     |> MapSet.new()
   end
 
+  # Compared as segment strings, so a source event the catalog lacks is
+  # never made an atom.
   test "every event named in source is catalogued, and none is stale" do
     found = source_events()
-    catalogued = MapSet.new(Catalog.events())
+    catalogued = MapSet.new(Catalog.events(), fn event -> Enum.map(event, &Atom.to_string/1) end)
 
     uncatalogued = MapSet.difference(found, catalogued)
     stale = MapSet.difference(catalogued, found)
@@ -141,7 +143,7 @@ defmodule Cyfr.TelemetryCatalogTest do
 
     # The attach a reconciler makes as it starts, under a name no running
     # reconciler holds, so what it attaches is this case's alone.
-    name = :"telemetry_catalog_projection_#{System.unique_integer([:positive])}"
+    name = __MODULE__
     handler = Compendium.ProjectionReconciler.handler_id(name)
     on_exit(fn -> Compendium.ProjectionReconciler.detach(name) end)
 

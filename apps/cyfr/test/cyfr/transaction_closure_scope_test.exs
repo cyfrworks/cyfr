@@ -242,7 +242,10 @@ defmodule Cyfr.TransactionClosureScopeTest do
         # `alias __MODULE__, as: Me` names the module itself.
         {:alias, _, [{:__MODULE__, _, _} = target | opts]} = node, acc ->
           short =
-            short_name(opts, scope.name |> String.split(".") |> List.last() |> String.to_atom())
+            short_name(
+              opts,
+              scope.name |> String.split(".") |> List.last() |> String.to_existing_atom()
+            )
 
           {node, Map.put(acc, short, resolve(target, scope))}
 
@@ -297,7 +300,7 @@ defmodule Cyfr.TransactionClosureScopeTest do
   end
 
   defp exports?(target, name, arity) do
-    module = if is_binary(target), do: Module.concat([target]), else: target
+    module = if is_binary(target), do: Module.safe_concat([target]), else: target
 
     Code.ensure_loaded?(module) and
       (function_exported?(module, name, arity) or macro_exported?(module, name, arity))
