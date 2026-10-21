@@ -86,6 +86,9 @@ const HOME_FIELDS = {
   revoke: [["client_id"], ["grant_id"]]
 }
 
+/** The types the home sends: the keys of HOME_FIELDS. */
+export const HOME_TYPES = Object.keys(HOME_FIELDS)
+
 const ID = /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/
 
 // ---------------------------------------------------------------------------
@@ -233,9 +236,9 @@ export async function keyDigest(deviceKey, subtle = globalThis.crypto.subtle) {
 export const keyCode = (digest) => (digest.match(/.{1,4}/g) || []).join(" ")
 
 /**
- * One discrete operation. An intent never carries continuous data, so
- * `args` holding a field that marks it as such is refused here, before it
- * is sent, as the home would refuse it by its shape.
+ * One discrete operation. The message holds only the fields written here,
+ * so it carries no continuous field at its top level, where the home
+ * refuses one.
  */
 export function intentMessage(id, operation, args, confirmationId) {
   if (!ID.test(id)) throw new TypeError("an intent's id is an identifier")
@@ -254,8 +257,8 @@ export function decodeHome(map) {
   if (!("protocol" in map) || !("type" in map)) return {error: "missing_field"}
   if (map.protocol !== PROTOCOL) return {error: "wrong_protocol"}
   if (GLASS_TYPES.includes(map.type)) return {error: "wrong_sender"}
+  if (!HOME_TYPES.includes(map.type)) return {error: "unknown_type"}
   const fields = HOME_FIELDS[map.type]
-  if (!fields) return {error: "unknown_type"}
 
   const [required, optional] = fields
   for (const name of Object.keys(map)) {

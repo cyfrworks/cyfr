@@ -27,6 +27,7 @@ import {
   GLASS_TYPES,
   Glass,
   generateKeyPair,
+  HOME_TYPES,
   intentMessage,
   jcs,
   keyCode,
@@ -241,6 +242,13 @@ describe("device.json", () => {
     const refused = Object.fromEntries(device.refusals.map(({name, error}) => [name, error]))
     assert.equal(refused["a pairing request naming another key's digest"], "invalid_field")
     assert.equal(refused["a pairing request naming no key digest"], "missing_field")
+  })
+
+  test("the home sends the vector's types, and a name it does not send is unknown, a prototype's name too", () => {
+    assert.deepEqual([...HOME_TYPES].sort(), device.types.home)
+    for (const type of ["constructor", "__proto__", "toString"]) {
+      assert.equal(decodeHome({protocol: device.protocol, type}).error, "unknown_type", type)
+    }
   })
 
   test("each message the home sends is read, and no other", () => {
