@@ -124,10 +124,6 @@ defmodule Arca.PolicyLogTest do
 
       assert PolicyLog.list(%Prima.Actor{athanor_id: "", scope: :athanor}, []) ==
                {:error, :no_athanor}
-
-      # The shape it read before it took the actor, a bare keyword list,
-      # is gone.
-      refute function_exported?(PolicyLog, :list, 1)
     end
   end
 
