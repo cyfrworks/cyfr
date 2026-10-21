@@ -134,9 +134,9 @@ Scopes control what operations an API key can perform. Each scope maps to a cate
 | `execute` | Run components, manage schedules, compile builds |
 | `vault_read` | Read stored credential metadata (vault entries; material never leaves the vault) |
 | `component_read` | Get component blobs, discover components |
-| `component_manage` | Pull, push, register, remove, scaffold components |
+| `component_manage` | Pull, push, register, create, fork, delete, reset, deprecate and yank components; claim and verify publishers, manage registry tokens and members; change Aqua souls, roles, guides and scrolls and their skills |
 | `storage_read` | View execution records, MCP logs, enforcement logs, retention config |
-| `storage_write` | Set retention policies |
+| `storage_write` | Set retention policies; write, edit and delete component source; write, delete, offer, accept, decline and withdraw files |
 | `admin` | API key management, retention cleanup, operating saved MCP servers (get, test, refresh, restart, enable, disable, delete) |
 | `*` | Wildcard — all permissions |
 
