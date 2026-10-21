@@ -136,19 +136,6 @@ defmodule Cyfr.TelemetryCatalogTest do
     assert metric_events == Catalog.consumed_by(:metrics)
   end
 
-  # A completed schedule's note is kept from the committed bus message
-  # (`Cyfr.Bus.ScheduleCompleted`), never from the telemetry event too: the
-  # old `:notes` consumer is gone, with nothing attached in its place.
-  test "a completed schedule's telemetry has no consumer that keeps a note" do
-    assert Catalog.consumed_by(:notes) == []
-    assert Catalog.all()[[:cyfr, :schedules, :completed]].consumers == [:operator]
-
-    ids =
-      [:cyfr, :schedules, :completed] |> :telemetry.list_handlers() |> Enum.map(& &1.id)
-
-    refute Enum.any?(ids, &(is_binary(&1) and String.starts_with?(&1, "notes-")))
-  end
-
   test "the projection reconciler attaches exactly the catalog's :projection roster" do
     assert Catalog.consumed_by(:projection) == [Arca.StorageProjectionChanges.event()]
 

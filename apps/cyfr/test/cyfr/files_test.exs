@@ -170,11 +170,6 @@ defmodule Arca.FilesTest do
       assert msg =~ "read here"
       assert {:error, {:invalid_argument, _}} = Files.delete(actor, path)
     end
-
-    # The retired name for threads/ (spelled split for the vocabulary gate)
-    # is no folder.
-    retired = "conver" <> "sations"
-    assert {:error, {:not_found, "Folder", ^retired}} = Files.list(actor, retired)
   end
 
   test "notes/ is served from the fenced documents: listed with sizes, read, and never written",

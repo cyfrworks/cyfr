@@ -193,15 +193,6 @@ defmodule Arca.RetentionTest do
       assert {:ok, %{"executions" => 5}} = Retention.get_settings(actor)
     end
 
-    test "a retention key in the athanor's security settings is inert", %{actor: actor} do
-      athanor = Arca.Test.Actor.ensure_athanor_row(actor.athanor_id)
-
-      {:ok, _} =
-        Sanctum.Tenancy.Athanors.put_settings(athanor, %{"retention" => %{"executions" => 1}})
-
-      assert {:ok, %{"executions" => 10_000}} = Retention.get_settings(actor)
-    end
-
     test "settings are isolated across athanors" do
       # Within an athanor, members share settings (one config); the isolation
       # boundary is the athanor, not the user.

@@ -3,11 +3,11 @@
 
 defmodule Cyfr.DeclaredOperationsTest do
   @moduledoc """
-  The operations the identity, device and grant work declared: each is on
-  the operation table with the annotations it is admitted under. Each new
-  argument of an operation that existed before is decided, never dropped,
-  so nothing reads as narrower, bounded or admitted when it is not. That
-  no operation answers as a stub is `Cyfr.NoStubOperationsTest`'s.
+  The identity, device and grant operations: each is on the operation
+  table with the annotations it is admitted under, and each argument that
+  names a subject, narrows a grant or bounds an approval is decided, never
+  dropped, so nothing reads as narrower, bounded or admitted when it is
+  not.
   """
 
   use ExUnit.Case, async: false
