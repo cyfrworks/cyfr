@@ -62,20 +62,20 @@ defmodule Sanctum.Gate.ErrorAdoptionTest do
     # What is wrong with the values offered (an empty field, a cron
     # expression, a reference that does not resolve) and the cap reached.
     "apps/cyfr/lib/opus/schedules/provider.ex" => 6,
-    "apps/cyfr/lib/opus/provider.ex" => 12,
+    "apps/cyfr/lib/opus/provider.ex" => 11,
     # An upstream registry's own diagnostics, which are its words and not
     # this vocabulary's.
-    "apps/cyfr/lib/compendium/oci/client.ex" => 12,
+    "apps/cyfr/lib/compendium/oci/client.ex" => 10,
     # What is wrong with a cron expression, said in the expression's own
     # terms.
     "apps/cyfr/lib/opus/schedules/cron.ex" => 10,
     "apps/cyfr/lib/compendium/scaffold.ex" => 8,
-    "apps/cyfr/lib/compendium/provider.ex" => 6,
+    "apps/cyfr/lib/compendium/provider.ex" => 5,
     "apps/cyfr/lib/compendium/providers/component.ex" => 6,
     # The entry rule's sentences, which the tincture validators return to
     # a publisher; the facade answers the same rule typed.
     "apps/cyfr/lib/compendium/tincture.ex" => 7,
-    "apps/cyfr/lib/emissary/external/provider.ex" => 5,
+    "apps/cyfr/lib/emissary/external/provider.ex" => 4,
     "apps/cyfr/lib/compendium/fork.ex" => 5,
     "apps/cyfr/lib/compendium/oci/reference.ex" => 5,
     "apps/prima/lib/prima/limits.ex" => 7,
@@ -97,7 +97,7 @@ defmodule Sanctum.Gate.ErrorAdoptionTest do
     "apps/cyfr/lib/compendium/aqua_agent.ex" => 2,
     # A tool this provider does not define, and the validation rate a
     # caller reached, with the seconds to wait.
-    "apps/cyfr/lib/compendium/builds/provider.ex" => 2,
+    "apps/cyfr/lib/compendium/builds/provider.ex" => 1,
     "apps/cyfr/lib/opus/record.ex" => 2,
     "apps/prima/lib/prima/arg.ex" => 2,
     "apps/cyfr/lib/compendium/pull.ex" => 1
