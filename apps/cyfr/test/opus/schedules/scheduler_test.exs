@@ -296,51 +296,22 @@ defmodule Opus.Schedules.SchedulerTest do
       :ok = Cyfr.Bus.subscribe_global(Cyfr.Bus.schedule_completions())
     end
 
-    test "is published once per completed occurrence, after both writes, from this member", %{
-      ctx: ctx
-    } do
+    test "is published once per completed occurrence, naming its athanor, after both writes",
+         %{ctx: ctx} do
       script!([%{"ran" => true}])
-
-      schedule =
-        due!(
-          create_schedule(ctx, %{
-            cron_expression: offset_hourly(),
-            metadata: ~s({"keep_outcome": true, "note_name": "nightly"})
-          })
-        )
-
+      schedule = due!(create_schedule(ctx, %{cron_expression: offset_hourly()}))
       scheduler!()
 
-      assert_receive %ScheduleCompleted{schedule_id: schedule_id} = completion, 15_000
-      assert schedule_id == schedule.id
+      assert_receive %ScheduleCompleted{} = completion, 15_000
+      assert completion == %ScheduleCompleted{kind: :completed, athanor_id: ctx.athanor_id}
 
       # Both writes were committed before it was said.
-      assert [%{state: "completed", id: occurrence_id, execution_id: execution_id}] =
-               occurrences(ctx, schedule)
+      assert [%{state: "completed", execution_id: execution_id}] = occurrences(ctx, schedule)
 
       assert {:ok, %{run_count: 1, last_execution_id: ^execution_id}} =
                CronSchedule.get_for_daemon(schedule.id)
 
-      assert completion.occurrence_id == occurrence_id
-      assert completion.execution_id == execution_id
-      assert completion.athanor_id == ctx.athanor_id
-      assert completion.actor.athanor_id == ctx.athanor_id
-      assert completion.keep_outcome and completion.note_name == "nightly"
-      assert is_binary(completion.output) and completion.output =~ "ran"
-      assert %DateTime{} = completion.completed_at
-      # No claimant runs in this suite: the issuer is the member's `:none`.
-      assert completion.issuer_member == ScheduleCompleted.issuer(Arca.ControlPlane.held())
-
       refute_receive %ScheduleCompleted{}, 300
-    end
-
-    test "carries no output for a schedule that did not ask to keep it", %{ctx: ctx} do
-      script!([%{"ran" => true}])
-      schedule = due!(create_schedule(ctx))
-      scheduler!()
-
-      assert_receive %ScheduleCompleted{schedule_id: id, keep_outcome: false, output: nil}, 15_000
-      assert id == schedule.id
     end
 
     test "is not published when recovery closed the occurrence first", %{ctx: ctx} do

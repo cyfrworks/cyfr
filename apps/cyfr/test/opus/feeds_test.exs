@@ -96,8 +96,8 @@ defmodule Opus.FeedsTest do
       {:ok, feed} = bind(actor, binding)
       Scheduler.add(feed.id)
 
-      # A schedule beside it fires exactly as before: its completion and
-      # its schedule updates are still announced.
+      # A schedule beside it fires as every schedule does: its completion
+      # and its schedule updates are announced.
       schedule = create_schedule(ctx, "btc")
       Scheduler.add(schedule.id)
 
@@ -128,13 +128,15 @@ defmodule Opus.FeedsTest do
 
       assert schedule_id == feed.id
 
-      assert_receive %ScheduleCompleted{schedule_id: completed}, 10_000
-      assert completed == schedule.id
+      # The schedule's completion is the athanor's one: a feed's fire
+      # announces none.
+      assert_receive %ScheduleCompleted{athanor_id: completed}, 10_000
+      assert completed == actor.athanor_id
       assert_receive %Cyfr.Bus.Schedules{schedule_id: updated}, 10_000
       assert updated == schedule.id
       assert_receive {:schedule_outcome, [:cyfr, :schedules, :completed], %{schedule_id: _}}
 
-      refute_receive %ScheduleCompleted{schedule_id: ^id}, 300
+      refute_receive %ScheduleCompleted{}, 300
       refute_received %Cyfr.Bus.Schedules{schedule_id: ^id}
     end
 
