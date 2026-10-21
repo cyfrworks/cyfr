@@ -9,7 +9,7 @@ defmodule CyfrWeb.MetricsPlug do
   `CYFR_METRICS_TOKEN` set, the scrape requires `Authorization: Bearer
   <token>` — Prometheus speaks that natively (`authorization:` in the
   scrape config). Without a token the endpoint stays unauthenticated when
-  enabled: bind Emissary to a private interface or use a reverse-proxy
+  enabled: bind the endpoint to a private interface or use a reverse-proxy
   allowlist in production. The exposed series carry per-route and per-tool
   tags — a fair map of the deployment, worth gating.
   """
