@@ -7,9 +7,9 @@ defmodule Sanctum.Consent.Proof.Memory do
   Both mint and consume go through the server. Consent is human-scale
   traffic, so serializing costs nothing, and it buys the property that
   matters: take-and-verify is atomic, so two concurrent commits carrying
-  the same token cannot both succeed. A public table with caller-side reads
-  could not promise that — the OAuth pending-state store, which reads then
-  deletes, has exactly that race.
+  the same token cannot both succeed. A public table with a caller-side
+  read followed by a delete could not promise that: two concurrent
+  readers would both see the token.
 
   Expired rows are swept periodically; expiry is also checked on read, so a
   token is never accepted late even if the sweep has not run.

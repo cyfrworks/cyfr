@@ -80,17 +80,18 @@ defmodule Sanctum.Providers.McpLogTest do
     end
   end
 
-  describe "retired write/delete verbs are unknown at dispatch" do
-    test "kernel-only and append-only verbs no longer exist on the surface", %{ctx: ctx} do
+  describe "write/delete verbs are unknown at dispatch" do
+    test "the log is kernel-written and append-only: no write or delete verb is on the surface",
+         %{ctx: ctx} do
       # Undeclared actions must be refused before handler dispatch.
-      retired = [
+      undeclared = [
         {"mcp_log", "log_started"},
         {"mcp_log", "log_completed"},
         {"mcp_log", "log_failed"},
         {"mcp_log", "delete"}
       ]
 
-      for {tool, verb} <- retired do
+      for {tool, verb} <- undeclared do
         {:error, %Prima.Refusal{stage: :admission, reason: {:unknown_action, name_action}}} =
           Sanctum.Gate.call_external(tool, ctx, %{"action" => verb})
 

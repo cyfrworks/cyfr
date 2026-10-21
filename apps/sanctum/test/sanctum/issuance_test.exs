@@ -9,8 +9,8 @@ defmodule Sanctum.IssuanceTest do
   and the seat, and stands only while the client, the certificate the
   context stands under and, for a person whose keys are at another home,
   the identity row they were resolved by still stand. A device context
-  without its own binding issues nothing, and a session or a key issues as
-  it did.
+  without its own binding issues nothing, and a session or a key issues
+  under its own credential.
 
   Every device here is paired through the real ceremony
   (`Sanctum.Pairing.begin/2` under a session, `complete/3` from a glass
@@ -425,7 +425,7 @@ defmodule Sanctum.IssuanceTest do
       refute minted?(other)
     end
 
-    test "the person's standing still answers first: a denied person issues nothing", %{
+    test "the person's standing answers first: a denied person issues nothing", %{
       session_ctx: session_ctx,
       user: user
     } do
@@ -558,7 +558,7 @@ defmodule Sanctum.IssuanceTest do
   # ---------------------------------------------------------------------------
 
   describe "a session's or a key's issuance" do
-    test "is unchanged: its source is its own credential, and it names no identity", %{
+    test "has its own credential as its source, and names no identity", %{
       session_ctx: session_ctx
     } do
       assert {:ok, expectation} = Issuance.expectation(session_ctx, [])
@@ -579,7 +579,7 @@ defmodule Sanctum.IssuanceTest do
       assert {:ok, %{source: {:api_key, id}, identity: nil}} = Issuance.expectation(key_ctx, [])
       assert id == key_ctx.api_key_id
 
-      # A session's issuance refuses a retired session as it did.
+      # A session's issuance refuses a retired session.
       :ok = Sanctum.Session.destroy_by_hash(session_ctx.session_token_hash)
       assert {{:error, :unauthenticated}, retired} = mint(session_ctx)
       refute minted?(retired)

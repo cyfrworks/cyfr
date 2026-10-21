@@ -539,7 +539,7 @@ defmodule Sanctum.Dispatch do
   # A declared action is authorized before its remaining fields are
   # validated. Missing or unknown action identity stays a cast error so
   # every ingress reports the same refusal. Remote `server:tool` names
-  # keep their existing proxied authorization, and while the storage
+  # take the proxied authorization, and while the storage
   # reserve is depleted an authenticated caller's are refused here, before
   # any budget is taken, as every operation that is no read and takes no
   # authority away is (`Sanctum.Catalog.undeclared_write_admission/0`); an
@@ -936,15 +936,15 @@ defmodule Sanctum.Dispatch do
   # Internal
   # ============================================================================
 
-  # The handler runs under `async_nolink`, never `Task.async`. `Task.async` links,
-  # and the caller here is the request process, which does not trap exits — so a
-  # handler raising would propagate a link exit signal and kill the request
-  # outright, returning a bare 500 instead of a JSON-RPC error. A signal is not
-  # catchable by try/rescue, so the crash clauses below could never have fired for
-  # that case. Without a link, a crash arrives as `{:exit, reason}` from `yield/2`.
   # The adapter's runner. Inline is the in-process call: the handler on the
   # caller's own process, with a raised authorization refusal answered as
   # the refusal it is and any other crash contained to this call.
+  # Supervised runs the handler under `async_nolink`, never `Task.async`:
+  # the caller is the request process, which does not trap exits, so a
+  # linked handler that raised would kill the request with a link exit
+  # signal, which no try/rescue catches, and answer a bare 500 instead of a
+  # JSON-RPC error. Without a link, a crash arrives as `{:exit, reason}`
+  # from `yield/2`.
   # A handler that does not answer is answered by `unanswered/3`, on
   # either plane and under either runner.
   defp execute_tool_call(name, ctx, opts, execute_fn) do

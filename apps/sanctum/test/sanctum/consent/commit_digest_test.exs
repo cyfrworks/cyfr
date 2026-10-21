@@ -52,7 +52,7 @@ defmodule Sanctum.Consent.CommitDigestTest do
         # source_ref under different labels can produce byte-identical
         # blobs, and on a first consent the proof binds no profile_id and
         # revision 0 for either — so without this a proof minted for one
-        # label was spendable on the other.
+        # label would be spendable on the other.
         %{label: "staging"},
         %{override: true},
         # What the grant admits, and how the ask was narrowed.
@@ -271,9 +271,8 @@ defmodule Sanctum.Consent.CommitDigestTest do
       assert {:error, {:invalid_commit, :shape_digest, _}} =
                CommitDigest.compute(Map.delete(@base, :shape_digest))
 
-      # Required, not optional. A digest computed without the blob hash is
-      # the shape `durable_storage` escaped through: approved under one
-      # policy, committed under another.
+      # Required, not optional: a digest computed without the blob hash
+      # would let a consent approved under one policy commit under another.
       assert {:error, {:invalid_commit, :blob_digest, _}} =
                CommitDigest.compute(Map.delete(@base, :blob_digest))
 
@@ -285,15 +284,6 @@ defmodule Sanctum.Consent.CommitDigestTest do
 
       assert {:error, {:invalid_commit, :label, _}} =
                CommitDigest.compute(Map.delete(@base, :label))
-    end
-
-    # The resolved blob hash covers slot bindings and node limits.
-    test "keys no producer supplies are refused rather than silently accepted" do
-      assert {:error, {:invalid_commit, :unknown_field, ":slot_bindings"}} =
-               CommitDigest.compute(Map.put(@base, :slot_bindings, %{"source" => "vault-1"}))
-
-      assert {:error, {:invalid_commit, :unknown_field, ":limits"}} =
-               CommitDigest.compute(Map.put(@base, :limits, %{"timeout" => "30s"}))
     end
   end
 

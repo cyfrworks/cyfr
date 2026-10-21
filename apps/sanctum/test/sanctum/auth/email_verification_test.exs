@@ -85,8 +85,8 @@ defmodule Sanctum.Auth.EmailVerificationTest do
 
     test "a proven address reaches the door as `true`, so an email entry can admit it" do
       # `Door.admit/3` only consults an exact email allowlist entry on `true`;
-      # while this read returned `:unknown` for every OIDC sign-in, allowlisting
-      # an address by email could never let anyone in.
+      # were this read to answer `:unknown` for every OIDC sign-in,
+      # allowlisting an address by email would let no one in.
       assert {:ok, true} =
                EmailVerification.verify_with_claim(
                  :oidcc,

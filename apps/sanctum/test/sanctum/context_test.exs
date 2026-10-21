@@ -218,7 +218,7 @@ defmodule Sanctum.ContextTest do
   end
 
   describe "authorize/3" do
-    test "local context with wildcard always authorized" do
+    test "the local context is authorized for every permission it holds" do
       ctx = Sanctum.TestContext.local()
       assert :ok == Context.authorize(ctx, :execute)
       assert :ok == Context.authorize(ctx, :admin)
@@ -259,7 +259,7 @@ defmodule Sanctum.ContextTest do
       assert {:error, _} = Context.authorize(ctx, :execute)
     end
 
-    test "ownership check succeeds when user matches" do
+    test "a record of the caller's own in its athanor is authorized" do
       ctx =
         Context.build(
           user_id: "u1",
@@ -291,7 +291,7 @@ defmodule Sanctum.ContextTest do
       assert :ok == Context.authorize(ctx, :storage_read, {:execution, record})
     end
 
-    test "admin overrides ownership check" do
+    test "an admin is authorized for another member's record in its athanor" do
       ctx =
         Context.build(
           user_id: "admin",
@@ -431,7 +431,7 @@ defmodule Sanctum.ContextTest do
           auth_method: :oidc
         )
 
-      # Reject untagged tenant-owned records instead of skipping ownership checks.
+      # An untagged tenant-owned record is refused, never read as untenanted.
       record = %{athanor_id: "ath_other", user_id: "u1"}
       assert {:error, :untagged_tenant_resource} = Context.authorize(ctx, :storage_read, record)
 

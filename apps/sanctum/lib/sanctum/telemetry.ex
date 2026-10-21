@@ -33,8 +33,8 @@ defmodule Sanctum.Telemetry do
       # => Emits [:cyfr, :sanctum, :auth] with %{provider: :github, outcome: :success}
 
       # Failed auth with reason
-      Sanctum.Telemetry.auth_event(:github, :failure, %{reason: :invalid_token})
-      # => Emits [:cyfr, :sanctum, :auth] with %{provider: :github, outcome: :failure, reason: :invalid_token}
+      Sanctum.Telemetry.auth_event(:github, :failure, %{reason: :email_not_verified})
+      # => Emits [:cyfr, :sanctum, :auth] with %{provider: :github, outcome: :failure, reason: :email_not_verified}
   """
 
   @auth_event [:cyfr, :sanctum, :auth]
@@ -75,7 +75,9 @@ defmodule Sanctum.Telemetry do
 
   ## Parameters
 
-  - `provider` - Authentication provider (e.g., `:github`, `:google`, `:oidc`, `:api_key`)
+  - `provider` - The sign-in provider (`:github`, `:google` or `:oidcc`;
+    `Prima.SignInProviders`), or `:unknown` for an authentication that
+    carried no provider result (`Sanctum.Auth.OIDC.authenticate/1`)
   - `outcome` - Result of authentication (`:success` or `:failure`)
   - `metadata` - Additional metadata map (optional)
 

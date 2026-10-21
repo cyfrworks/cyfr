@@ -40,17 +40,16 @@ defmodule Sanctum.Providers.System do
   defp service_scopes, do: Sanctum.Services.service_names()
 
   # ============================================================================
-  # ToolProvider Callbacks
+  # Prima.Provider callbacks
   # ============================================================================
 
   @impl true
   def tools do
     alias Prima.{Arg, Operation}
-    # Anonymous-allowed: the health check a client calls before
-    # logging in.
-    # Authenticated-only, matching the HTTP surface (which has always
-    # 401'd an anonymous tools.list): an uncredentialed caller's
-    # discovery is the anonymous action set, nothing more.
+    # `system.status` is anonymous: the health check a client calls
+    # before signing in. `tools.list` is authenticated, matching the HTTP
+    # surface, which 401s an anonymous tools.list: an uncredentialed
+    # caller's discovery is the anonymous action set, nothing more.
     [
       Operation.tool(
         [
@@ -485,8 +484,8 @@ defmodule Sanctum.Providers.System do
 
         # The pinned path resolves-validates once, connects to the validated
         # IP, and never follows redirects — a target that 302s toward a
-        # metadata endpoint goes nowhere. Private targets stay blocked
-        # unconditionally, as they always were on this surface.
+        # metadata endpoint goes nowhere. Private targets are blocked
+        # unconditionally.
         case Sanctum.Egress.pinned_request(:post, target, headers, body,
                receive_timeout: 10_000,
                # Only the status is read; a hostile target still must not

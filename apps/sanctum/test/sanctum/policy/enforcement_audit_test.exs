@@ -108,11 +108,12 @@ defmodule Sanctum.Policy.EnforcementAuditTest do
     assert joined.consent.source_ref == "formula:local.audited"
   end
 
-  test "a legacy-path row carries none of it and still records", %{ctx: ctx} do
+  test "a record naming no consent or chain carries none of it and records all the same",
+       %{ctx: ctx} do
     :ok =
       Enforcement.record(%{
         ctx: ctx,
-        component_ref: "catalyst:local.legacy",
+        component_ref: "catalyst:local.unconsented",
         event_type: :domain_blocked,
         decision: :denied,
         decision_reason: "domain not allowed"

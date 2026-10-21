@@ -13,8 +13,9 @@ defmodule Sanctum.Provisioning do
   and filled the first time something reads its bundle
   (`start_provisioning/1`). Provisioning is idempotent — `provisioned_at`
   marks completion and every step tolerates being repeated — and loud: a
-  failure leaves the row unprovisioned with the reason in its settings,
-  and the next sign-in tries again.
+  failure leaves the row unprovisioned with its step and reason on the row
+  (`provisioning_failure`), and the next read of the bundle or the next
+  sign-in tries again.
 
   ## What this module does, and what it does not
 
@@ -1090,8 +1091,8 @@ defmodule Sanctum.Provisioning do
   # nothing. Anything else that is not a bound refuses, never admits: a
   # store that cannot answer (a stale value included, which the setting
   # refuses), a count that fails, and a stored value outside the roster's
-  # range (a 0 written before 0 was refused, or a row written past the
-  # roster), since an invalid bound read as no bound would open the door.
+  # range (a row written past the roster, a 0 among them), since an
+  # invalid bound read as no bound would open the door.
   defp mint_allowed do
     case Arca.PlatformSettings.effective("mint_per_hour") do
       {:ok, nil} ->

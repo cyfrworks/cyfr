@@ -3,10 +3,10 @@
 
 defmodule Sanctum.Providers.Session do
   @moduledoc """
-  Session tool handlers for the Sanctum MCP provider — login, logout,
-  whoami, device-flow OAuth, signing a command line in by approving it in
-  Prism (`Sanctum.CliSignIn`), and the caller's self-description
-  resources.
+  Session tool handlers for the Sanctum MCP provider — logout, whoami,
+  focusing another athanor (`use`), device-flow OAuth, signing a command
+  line in by approving it in Prism (`Sanctum.CliSignIn`), and the caller's
+  self-description resources.
 
   `cli_begin`, `cli_poll` and `cli_cancel` are `auth: :anonymous`, as
   the device flow's actions are: the command line that calls them holds
@@ -188,7 +188,7 @@ defmodule Sanctum.Providers.Session do
         )
       ],
       description:
-        "Manage user sessions — login, logout, get local identity, run device-flow OAuth, or sign a command line in by approving it in Prism and list or revoke command-line sessions. Registry identity (push tokens, namespaces) is a separate `registry` tool under Compendium.",
+        "Manage user sessions — logout, get local identity, focus another athanor, run device-flow OAuth, or sign a command line in by approving it in Prism and list or revoke command-line sessions. Registry identity (push tokens, namespaces) is a separate `registry` tool under Compendium.",
       title: "Session Management"
     )
   end
@@ -614,10 +614,6 @@ defmodule Sanctum.Providers.Session do
   # Auth-provider-gated helpers (shared across session handlers)
   # ============================================================================
 
-  # `Sanctum.Session.use_athanor/2` answers `:not_found` when the SESSION
-  # row is gone — the athanor resolved a line earlier. Two sources for one
-  # tag made the refusal a structured falsehood a client could branch on;
-  # this names the one that is actually missing.
   # An archived athanor resolves like an open one, so `focus/2` decides
   # what the caller hears of it; a store that cannot answer is unavailable.
   defp resolve_athanor(segment) do

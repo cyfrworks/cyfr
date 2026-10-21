@@ -21,8 +21,7 @@ defmodule Sanctum.Authority.BudgetGuardTest do
     holder =
       spawn_holder(fn ->
         # A synchronous call: when it returns the registration is recorded,
-        # so the signal below is proof, not a guess. Sleeping "long enough"
-        # for it instead is what made this test's ordering a coin flip.
+        # so the signal below is proof, not a guess.
         BudgetGuard.guard(budget)
         send(test_pid, :guarded)
 
@@ -72,9 +71,9 @@ defmodule Sanctum.Authority.BudgetGuardTest do
 
     # Both monitors were notified when the holder terminated, so the guard's
     # own `:DOWN` is already in its mailbox; a synchronous call drains past
-    # it. Asserting after a fixed sleep proved nothing — a sleep too short
-    # for the compensation to run reads exactly like a compensation that
-    # correctly did not fire.
+    # it. An assertion after a fixed sleep proves nothing — a sleep too
+    # short for the compensation to run reads exactly like a compensation
+    # that correctly did not fire.
     :sys.get_state(BudgetGuard)
     assert BudgetCounter.snapshot(budget).in_flight == 1
 
@@ -183,8 +182,9 @@ defmodule Sanctum.Authority.BudgetGuardTest do
 
       # The guard is alive and the `{:release, ...}` message is in its
       # mailbox; only the reply was given up on. Releasing here as well
-      # decremented twice for one charge, handing a concurrent sibling's
-      # slot back early and letting the root outrun its consented cap.
+      # would decrement twice for one charge, handing a concurrent
+      # sibling's slot back early and letting the root outrun its
+      # consented cap.
       assert :ok =
                BudgetGuard.release_after_exit(
                  budget,

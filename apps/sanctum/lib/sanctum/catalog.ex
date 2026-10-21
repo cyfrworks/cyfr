@@ -1082,25 +1082,12 @@ defmodule Sanctum.Catalog do
   def configured_providers, do: Application.get_env(:sanctum, :tool_providers, [])
 
   @doc """
-  The configured tool providers that are actually loadable, warning about
-  any that aren't (an app-scoped test run without the sibling apps).
+  The configured tool providers this boot can load: every configured one,
+  less any a lenient boot skipped (`:tool_providers_lenient`), which the
+  boot names when it skips it.
   """
   @spec available_providers() :: [module()]
-  def available_providers do
-    configured_providers()
-    |> Enum.filter(fn module ->
-      if loadable?(module) do
-        true
-      else
-        Logger.warning(
-          "[Sanctum.Catalog] Tool provider #{inspect(module)} not available — skipping. " <>
-            "Check that the application is started and the module exists."
-        )
-
-        false
-      end
-    end)
-  end
+  def available_providers, do: Enum.filter(configured_providers(), &loadable?/1)
 
   @doc """
   Every `tool.action` annotated `host: :intercepted`: the actions a

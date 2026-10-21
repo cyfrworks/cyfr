@@ -111,7 +111,7 @@ defmodule Sanctum.Gate.ProviderContractTest do
     assert {:error, _} = MockToolProvider.handle("unknown", make_ref(), %{})
   end
 
-  test "every loadable configured provider implements the moved behaviour" do
+  test "every loadable configured provider implements the Prima.Provider behaviour" do
     for module <- Sanctum.Catalog.available_providers() do
       assert function_exported?(module, :service, 0)
       assert function_exported?(module, :tools, 0)

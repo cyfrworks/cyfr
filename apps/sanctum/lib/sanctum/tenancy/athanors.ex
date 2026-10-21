@@ -421,13 +421,12 @@ defmodule Sanctum.Tenancy.Athanors do
   @doc """
   Erase an archived athanor: its blobs AND its rows. Final.
 
-  The one verb that actually deletes a tenant's data.
-  `purge_storage/1` above reclaims the volume and leaves every row
-  standing; retention (`Cyfr.RetentionScheduler`) skips archived athanors
-  because purging is supposed to be the reclaim. So nothing deleted rows
-  at all, and after archive + purge every sealed vault payload, webhook
-  secret, OAuth ciphertext, execution, message and log stayed in the
-  database and in every backup taken afterwards.
+  The one verb that deletes a tenant's rows. `purge_storage/1` above
+  reclaims the volume and leaves every row standing, and retention
+  (`Cyfr.RetentionScheduler`) skips archived athanors, so after archive
+  and purge alone every sealed vault payload, webhook secret, OAuth
+  ciphertext, execution, message and log stays in the database and in
+  every backup taken afterwards.
 
   ## What it keeps, and why
 

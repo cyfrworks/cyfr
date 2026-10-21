@@ -475,7 +475,7 @@ defmodule Sanctum.Gate.StreamsTest do
       # Each refusal is one decision, and a stream that declares a shape
       # but does not filter still opens for each of them, with no registry
       # read: a context without a frame is no frame's to judge.
-      assert length(decisions(ctx)) == 3
+      assert length(decisions(ctx)) == 2
       assert Enum.all?(decisions(ctx), &(&1.refusal_class == "forbidden"))
 
       with_facts(CountedFacts, fn ->

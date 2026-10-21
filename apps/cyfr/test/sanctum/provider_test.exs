@@ -41,8 +41,8 @@ defmodule Sanctum.ProviderTest do
       assert "session" in tool_names
       # The vault tool owns credential storage.
       refute "secret" in tool_names
-      # No "permission" tool: memberships are presence-only, there are no
-      # roles, and the decorative RBAC store is gone.
+      # No "permission" tool: memberships are presence-only and there are
+      # no roles to store.
       refute "permission" in tool_names
       assert "key" in tool_names
       assert "vault" in tool_names
@@ -134,18 +134,18 @@ defmodule Sanctum.ProviderTest do
   # ============================================================================
 
   describe "session tool" do
-    test "whoami returns local user only (registry identity moved to Compendium.Provider.registry.whoami)",
+    test "whoami returns the local user only (registry identity is registry.whoami's)",
          %{ctx: ctx} do
       {:ok, result} = Provider.handle("session", ctx, %{"action" => "whoami"})
       assert result.user_id == "local|local|testns"
       # session.whoami returns local-user fields plus where the session works
-      # (athanor, operator capability); permissions dropped; registry identity
-      # lives on Compendium.Provider.registry.whoami.
+      # (athanor, operator capability), and no permissions; registry identity
+      # lives on registry.whoami (Compendium.Providers.Registry).
       assert Map.has_key?(result, :email)
       assert Map.has_key?(result, :provider)
       assert result.athanor_id == ctx.athanor_id
       assert result.platform_admin == false
-      # display_name dropped — UI consumers render `email || user_id` directly.
+      # No display_name: UI consumers render `email || user_id` directly.
       refute Map.has_key?(result, :display_name)
       refute Map.has_key?(result, :scope)
       refute Map.has_key?(result, :registry)
@@ -253,8 +253,8 @@ defmodule Sanctum.ProviderTest do
     end
   end
 
-  describe "secret tool retired" do
-    test "the secret tool is no longer routable", %{ctx: ctx} do
+  describe "secret tool" do
+    test "there is no secret tool to route to: the vault tool owns credentials", %{ctx: ctx} do
       {:error, msg} = Provider.handle("secret", ctx, %{"action" => "list"})
       assert err_msg(msg) =~ "Unknown tool"
     end
@@ -446,8 +446,8 @@ defmodule Sanctum.ProviderTest do
   # Tincture Visibility Tool
   # ============================================================================
 
-  describe "tincture_visibility set is gone" do
-    test "the retired verb is an unknown action, not a teaching shim", %{ctx: ctx} do
+  describe "tincture_visibility set" do
+    test "is an unknown action: publishing is profile.publish's", %{ctx: ctx} do
       {:error, msg} =
         Provider.handle("tincture_visibility", ctx, %{
           "action" => "set",
@@ -782,8 +782,8 @@ defmodule Sanctum.ProviderTest do
   # Device-flow gate — single-user only
   # ============================================================================
 
-  describe "session.device-init / device-poll gate" do
-    test "device-init is available when auth_provider is OAuth", %{ctx: ctx} do
+  describe "session.device_init / device_poll gate" do
+    test "device_init is available when auth_provider is OAuth", %{ctx: ctx} do
       previous = Application.get_env(:sanctum, :auth_provider)
 
       try do
@@ -808,7 +808,7 @@ defmodule Sanctum.ProviderTest do
       end
     end
 
-    test "device-init is disabled when auth_provider is a non-OAuth provider", %{ctx: ctx} do
+    test "device_init is disabled when auth_provider is a non-OAuth provider", %{ctx: ctx} do
       previous = Application.get_env(:sanctum, :auth_provider)
 
       try do
@@ -827,7 +827,7 @@ defmodule Sanctum.ProviderTest do
       end
     end
 
-    test "device-poll is disabled when auth_provider is a non-OAuth provider", %{ctx: ctx} do
+    test "device_poll is disabled when auth_provider is a non-OAuth provider", %{ctx: ctx} do
       previous = Application.get_env(:sanctum, :auth_provider)
 
       try do

@@ -132,7 +132,7 @@ defmodule Sanctum.Gate.VisibilityTest do
 
     test "sees every session action — the anonymous ones and `use`" do
       assert Enum.sort(visible_actions("session", ctx_with([:execute]))) ==
-               ~w(cli_begin cli_cancel cli_poll device_init device_poll login logout read_resource use whoami)
+               ~w(cli_begin cli_cancel cli_poll device_init device_poll logout read_resource use whoami)
     end
 
     test "operator-only actions are shown to platform admins alone" do
@@ -330,8 +330,7 @@ defmodule Sanctum.Gate.VisibilityTest do
       ctx_with([], :webhook),
       ctx_with([], :tincture),
       %{ctx_with([:execute], :tincture) | anonymous: true},
-      ctx_with([], :system),
-      ctx_with([], :session)
+      ctx_with([], :system)
     ]
 
     for kind <- kinds,
@@ -440,7 +439,6 @@ defmodule Sanctum.Gate.VisibilityTest do
           :webhook,
           :tincture,
           :system,
-          :session,
           nil
         ],
         client_id <- [nil, "pcl_probe"],

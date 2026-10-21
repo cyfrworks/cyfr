@@ -263,10 +263,10 @@ defmodule Sanctum.Door do
 
   # A refusal the operator can act on. An email entry admits only a proved
   # address, so an issuer that omits `email_verified` is refused even when
-  # the operator typed that exact address — and the operator has no way to
-  # learn the IdP subject to allow instead, because the sign-in left no
-  # trace. It leaves one now, keyed by the subject, which `door.requests`
-  # lists and `door.resolve` turns into a real entry.
+  # the operator typed that exact address, and the refusal alone does not
+  # tell the operator the IdP subject to allow instead. So the sign-in
+  # leaves a request, keyed by the subject, which `door.requests` lists and
+  # `door.resolve` turns into a real entry.
   #
   # Only `:not_allowed`. A `:denied` refusal already has its answer, and
   # writing a request for it would offer to undo a deny by approving it.

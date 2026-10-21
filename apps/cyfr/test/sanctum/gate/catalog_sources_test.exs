@@ -192,8 +192,7 @@ defmodule Sanctum.Gate.CatalogSourcesTest do
       end
     end
 
-    # Sol's T6b review probe (F1): the real handler's answer, read by the
-    # loop's policy.
+    # The real handler's answer, read by the loop's policy.
     test "inspecting a local root keeps the pulled dependency's manifest material outside",
          %{ctx: ctx} do
       remote_reason = "REMOTE_PROSE_FROM_ACME"

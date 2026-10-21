@@ -30,18 +30,18 @@ defmodule Sanctum.Services do
     end
   end
 
-  @doc "Every service with at least one configured provider, sorted."
+  @doc "Every service with at least one provider this boot loads, sorted."
   @spec service_names() :: [String.t()]
   def service_names do
-    Catalog.configured_providers()
+    Catalog.available_providers()
     |> Enum.map(&service_name/1)
     |> Enum.uniq()
     |> Enum.sort()
   end
 
-  @doc "The configured providers belonging to one service."
+  @doc "The providers this boot loads that belong to one service."
   @spec providers_for(String.t()) :: [module()]
   def providers_for(service) do
-    Enum.filter(Catalog.configured_providers(), &(service_name(&1) == service))
+    Enum.filter(Catalog.available_providers(), &(service_name(&1) == service))
   end
 end

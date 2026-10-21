@@ -6,17 +6,18 @@ defmodule Sanctum.RunningTasks do
   Tracks the process doing the work for an in-flight request, so the transport
   can stop it when the caller goes away.
 
-  Keyed by the server-minted `Sanctum.Context.request_id`, stamped by
-  `Emissary.Web.MCPController`. Client JSON-RPC ids may repeat across callers
-  and must not identify running tasks.
+  Keyed by the server-minted `Sanctum.Context.request_id`, minted at
+  ingress (`CyfrWeb.Plugs.CallIdentity` for the HTTP routes). Client
+  JSON-RPC ids may repeat across callers and must not identify running
+  tasks.
 
   ## Why one request may hold several tasks
 
   A server-minted id cannot collide *across* requests, but one request can
   hold more than one task at a time: an in-chain tool call inherits its
-  root's `request_id` rather than minting a new one (`Sanctum.Catalog` mints one
-  only when no transport did), which is what
-  keeps a whole chain attributable to the ingress that started it.
+  root's `request_id` rather than minting a new one (`Sanctum.Dispatch`
+  mints one only for a call that arrives with none), which is what keeps a
+  whole chain attributable to the ingress that started it.
 
   Each task under a request holds a claim of its own. The caller claims
   before it starts the task (`claim_request/1`), and the task registers

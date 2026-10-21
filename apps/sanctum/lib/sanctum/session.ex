@@ -28,7 +28,7 @@ defmodule Sanctum.Session do
 
   Each session contains:
   - `token` - Random 32-byte base64 token
-  - `user_id` - Identity ID from OIDC provider (`<provider>|<iss>|<sub>`)
+  - `user_id` - The person's id on this server (`usr_…`, `Prima.PersonId`)
   - `email` - Email (optional)
   - `provider` - Auth provider (e.g., "github", "google")
   - `created_at` - ISO 8601 timestamp
@@ -97,10 +97,11 @@ defmodule Sanctum.Session do
   # ============================================================================
 
   @doc """
-  Create a new session for an authenticated context. Callers are the two
-  sign-in paths, after `Sanctum.Door.admit_identity/2` said yes and
-  `Sanctum.Tenancy.resolve_status/2` bound the admitted context; nothing
-  else mints one.
+  Create a new session for an authenticated context. Callers are the
+  sign-in paths (the module doc of `Sanctum`), after the door admitted
+  the person and `Sanctum.Tenancy.resolve_status/2` bound the admitted
+  context, and the installation-authorized restore (`restore:` below);
+  nothing else mints one.
 
   The session is written in the issuance transaction
   (`Arca.SecurityTransitions.Issuance`): the person and the session's
@@ -485,7 +486,7 @@ defmodule Sanctum.Session do
   ## Examples
 
       {:ok, session} = Sanctum.Session.refresh("abc123...")
-      # Session expiration extended by 24 hours from now
+      # Expires `session_ttl_hours` (30 days by default) from the refresh
 
   """
   @spec refresh(String.t()) ::
@@ -522,9 +523,9 @@ defmodule Sanctum.Session do
   Extend a session's expiration, but only if it hasn't been extended recently.
 
   This is the activity-based ("sliding window") refresh used on the hot path —
-  calling `refresh/1` on every authenticated request would write to SQLite each
-  time, so this no-ops unless more than ~1 day (or half the TTL, whichever is
-  smaller) has elapsed since the last extension. Always returns `:ok`
+  calling `refresh/1` on every authenticated request would write the session
+  row each time, so this no-ops unless more than ~1 day (or half the TTL,
+  whichever is smaller) has elapsed since the last extension. Always returns `:ok`
   (best-effort — load/write failures are swallowed). No-op for infinite (TTL 0)
   sessions.
   """
@@ -813,8 +814,8 @@ defmodule Sanctum.Session do
     }
   end
 
-  # Subscribers hear that a session was created. No token travels — a
-  # subscriber uses adopt_active_session() to get its own. Sanctum
+  # Subscribers hear that a session was created. No token travels: a
+  # subscriber holds only the session of its own request. Sanctum
   # announces; the host's bridge is what broadcasts.
   defp broadcast_session_created(_session), do: Sanctum.Telemetry.session_created()
 

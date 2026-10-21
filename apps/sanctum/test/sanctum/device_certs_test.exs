@@ -18,7 +18,7 @@ defmodule Sanctum.DeviceCertsTest do
   A client a declared restore suspended stands for nothing: no connect,
   no request, no renewal, and its context confirms nothing, until its
   person re-enables it under a door's proof; then it connects under its
-  certificate and renews through its channel as before.
+  certificate and renews through its channel again.
 
   Every certificate here comes from the real ceremony
   (`Sanctum.Pairing.begin/2` under a session, `complete/3` from a glass
@@ -433,7 +433,7 @@ defmodule Sanctum.DeviceCertsTest do
         # Half the sources reach one member, half another.
         if n == 101, do: Prima.Test.RateLimiter.reset!()
         source = "10.4.#{div(n, 250)}.#{rem(n, 250)}"
-        # Each answered the word its certificate always got.
+        # Each answers the word its certificate earns.
         assert connect(forged(device), source) == {:error, :bad_signature}
         assert renew(forged(device), source) == {:error, :proof_refused}
       end
@@ -540,7 +540,7 @@ defmodule Sanctum.DeviceCertsTest do
       # And the refusals counted nothing.
       assert %{count: 20} = window(:device_connect_source, source)
 
-      # Another source has room, and connects as ever.
+      # Another source has room, and connects.
       assert {:ok, _ctx} = connect(device, "192.0.2.51")
     end
 
@@ -584,7 +584,7 @@ defmodule Sanctum.DeviceCertsTest do
       assert {:ok, _ctx} = connect(device, "192.0.2.66")
     end
 
-    test "a connect no client's row stands behind answers the word every connect always got",
+    test "a connect no client's row stands behind answers the word its certificate earns",
          %{session_ctx: session_ctx, user: user, athanor: athanor} do
       device = pair!(session_ctx)
 
@@ -621,7 +621,7 @@ defmodule Sanctum.DeviceCertsTest do
 
       assert connect(device, "192.0.2.73") == {:error, :not_standing}
 
-      # And one revoked, signed for another key: revoked, as ever.
+      # And one revoked, signed for another key: revoked all the same.
       other = pair!(session_ctx)
       {:ok, _row} = revoke!(session_ctx, other.client_id)
 
@@ -778,8 +778,8 @@ defmodule Sanctum.DeviceCertsTest do
       device = pair!(session_ctx)
       {:ok, ctx} = connect(device)
 
-      # The reviewer's demonstration: a certificate, which is not secret,
-      # and the client id it names, with no proof, answered a context.
+      # A certificate, which is not secret, and the client id it names,
+      # with no proof, answer no context.
       assert DeviceCerts.verify_request(device.certificate, %{client_id: device.client_id}, []) ==
                {:error, :client_mismatch}
 
@@ -1169,8 +1169,8 @@ defmodule Sanctum.DeviceCertsTest do
 
       refute reason in [:unauthenticated, :unavailable]
 
-      # The reviewer's demonstration: `vault.authorize` started under a
-      # device, the device revoked, then the callback. The recheck refuses
+      # `vault.authorize` started under a device, the device revoked,
+      # then the callback. The recheck refuses
       # before the provider is asked, and nothing is sealed.
       revoked = pair!(session_ctx)
       {:ok, revoked_ctx} = connect(revoked)
@@ -1223,7 +1223,7 @@ defmodule Sanctum.DeviceCertsTest do
   end
 
   describe "a declared restore" do
-    test "a suspended client stands for nothing until its person re-enables it, then renews as before",
+    test "a suspended client stands for nothing until its person re-enables it, then renews again",
          %{session_ctx: session_ctx, user: user, athanor: athanor} do
       device = pair!(session_ctx)
       {:ok, ctx} = connect(device)
@@ -1558,7 +1558,7 @@ defmodule Sanctum.DeviceCertsTest do
       refute Enum.any?(Sanctum.Test.DirectoryServer.requests(), &(&1.target =~ "a.example"))
     end
 
-    test "a forged certificate naming their client and identifier: past the installation's bound no head or directory is read, under it the word it always got",
+    test "a forged certificate naming their client and identifier: past the installation's bound no head or directory is read, under it the word its certificate earns",
          %{device: device, identity: identity} do
       # The cached head past its bound: checking the certificate's subject
       # would read the directory again.
@@ -1570,8 +1570,8 @@ defmodule Sanctum.DeviceCertsTest do
 
       _before = Sanctum.Test.DirectoryServer.requests()
 
-      # Under the bound it is checked as every connect always was, and
-      # refused for what its certificate is.
+      # Under the bound it is checked as every connect is, and refused for
+      # what its certificate is.
       assert connect(forged(device), "192.0.2.89") == {:error, :bad_signature}
       _refreshed = Sanctum.Test.DirectoryServer.requests()
 
@@ -1592,8 +1592,8 @@ defmodule Sanctum.DeviceCertsTest do
       assert Sanctum.Test.DirectoryServer.requests() == []
       assert window(:device_connect_client, device.client_id) == nil
 
-      # The device itself, proving its key, is checked as ever: its head is
-      # read again past the bound.
+      # The device itself, proving its key, is checked as every connect is:
+      # its head is read again past the bound.
       assert {:ok, _ctx} = connect(device, "192.0.2.91")
       assert Sanctum.Test.DirectoryServer.requests() != []
     end

@@ -469,9 +469,11 @@ defmodule Sanctum.Tenancy do
   the channel running for the members who remain. `created_by` is nil or
   one of the server's synthetic principals (`system`, `_seed`,
   `webhook:<slug>`) for a channel nobody signed in to create — those are
-  never denied. Any other id names a person, and that row is read: a
-  denied person's channels stop. An id with no row is refused — rows are
-  never deleted, so such an id was never a person here.
+  never denied. Any other id is read as a person's row: a denied
+  person's channels stop. A minted person id (`usr_…`) with no row is
+  refused — rows are never deleted, so such an id was never a person. An
+  id of any other shape with no row names no person on this server, and
+  the channel stands as the athanor's.
 
   Every caller is a credential path — a webhook, an API key, a tincture
   token, a schedule about to fire — so a store that cannot answer FAILS
@@ -518,7 +520,7 @@ defmodule Sanctum.Tenancy do
           true
 
         {:error, :not_found} ->
-          false
+          not Prima.PersonId.person?(user_id)
 
         {:error, reason} ->
           Logger.warning(

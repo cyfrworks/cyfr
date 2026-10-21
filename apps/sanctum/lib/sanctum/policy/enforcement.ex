@@ -18,8 +18,8 @@ defmodule Sanctum.Policy.Enforcement do
 
   ## Event types
 
-  Enforcement uses `event_type` as the typed rule name so the existing
-  `decision_reason` field stays free-text. Standard values:
+  Enforcement uses `event_type` as the typed rule name, so the
+  `decision_reason` field is free text. Standard values:
 
     * `policy_consultation` — policy was consulted, decision allowed
     * `domain_blocked` — HTTP egress blocked by `allowed_domains`
@@ -82,9 +82,9 @@ defmodule Sanctum.Policy.Enforcement do
 
       {:error, reason} ->
         # `:error`, like every other "a security record did not land" site
-        # (`Arca.RecordSink`, `Sanctum.RequestLog`, `Arca.AuditHandler`).
-        # An operator alarming on level:error over the audit plane was getting
-        # an arbitrary subset while this one said :warning.
+        # (`Arca.RecordSink`, `Sanctum.RequestLog`, `Arca.AuditHandler`), so
+        # an operator alarming on level:error over the audit plane sees
+        # every one.
         Logger.error("[Policy.Enforcement] record failed: #{inspect(reason)}")
         emit_audit_failure(reason)
         :ok
@@ -213,7 +213,7 @@ defmodule Sanctum.Policy.Enforcement do
       # As DATA, not `inspect(reason)`: `Arca.AuditHandler` redacts this
       # metadata by KEY on its way to the sinks, and key-based redaction
       # cannot see inside a string — so a credential-bearing reason flattened
-      # here reached an operator's sink verbatim.
+      # here would reach an operator's sink verbatim.
       %{reason: reason}
     )
   rescue
@@ -233,8 +233,8 @@ defmodule Sanctum.Policy.Enforcement do
   rescue
     e ->
       # The snapshot is a FIELD of the audit record, so losing it is a gap in
-      # the record — not a debug detail that disappears below the default
-      # level while everything else in this module speaks at :warning.
+      # the record, logged at :warning — never a debug detail that
+      # disappears below the default level.
       Logger.warning(
         "[Policy.Enforcement] snapshot encode failed: #{Prima.LogFilter.exception_message(e)}"
       )

@@ -99,7 +99,7 @@ defmodule Sanctum.WebhookTest do
   describe "replay protection is a decision, not a default" do
     # `prof-handler` is seeded for `f:local.handler` in the setup above;
     # these call `Webhook.create/2` directly rather than through the
-    # `create/2` helper, which now supplies the decision by default.
+    # `create/2` helper, which supplies the decision by default.
     @profile "prof-handler"
 
     test "a webhook with no replay protection is refused unless it says so", %{ctx: ctx} do
@@ -894,7 +894,7 @@ defmodule Sanctum.WebhookTest do
     Webhook.verify_with_grace(hook, body, sig)
   end
 
-  # Alias kept for tests that still emphasise the grace-window codepath.
+  # The same check, named for the cases that exercise the grace window.
   defp verify_grace_with_slug(slug, secret, body),
     do: verify_with_slug(slug, secret, body)
 

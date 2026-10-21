@@ -76,7 +76,7 @@ defmodule Sanctum.SessionTest do
   end
 
   describe "load/1" do
-    test "returns context for a valid session; no publisher namespace is still signed in",
+    test "returns context for a valid session; a person with no publisher namespace is signed in",
          %{ctx: ctx} do
       {:ok, session} = Session.create(ctx)
       {:ok, retrieved_ctx} = Session.load(session.token)

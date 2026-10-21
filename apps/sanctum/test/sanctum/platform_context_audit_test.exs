@@ -15,7 +15,7 @@ defmodule Sanctum.PlatformContextAuditTest do
   alias Sanctum.Context
 
   setup do
-    handler = "s4-#{System.unique_integer([:positive])}"
+    handler = "platform-context-audit-#{System.unique_integer([:positive])}"
     parent = self()
 
     # This case's own process alone: other modules build internal contexts
@@ -71,8 +71,9 @@ defmodule Sanctum.PlatformContextAuditTest do
     refute_received {:platform_ctx, _, _}
   end
 
-  test "telemetry_bridge-style athanor-scoped unauthenticated context is not platform" do
-    # Mirrors prism/telemetry_bridge.ex: scope :athanor, not :platform.
+  test "an athanor-scoped unauthenticated context is not platform" do
+    # As `Sanctum.TinctureAccess.public_context/1` builds one: scope :athanor,
+    # not :platform.
     Context.build(scope: :athanor, athanor_id: "ath_acme", authenticated: false)
     refute_received {:platform_ctx, _, _}
   end
@@ -85,8 +86,8 @@ defmodule Sanctum.PlatformContextAuditTest do
 
     test "emits no platform event, an operator's included, admitted or refused" do
       n = System.unique_integer([:positive])
-      alice = "github|https://github.com|s4-alice-#{n}"
-      ops = "github|https://github.com|s4-ops-#{n}"
+      alice = "github|https://github.com|audit-alice-#{n}"
+      ops = "github|https://github.com|audit-ops-#{n}"
       {:ok, group} = Sanctum.Tenancy.Athanors.create_group(alice, "Audit #{n}")
       {:ok, _} = Sanctum.TestContext.ensure_platform(ops)
 

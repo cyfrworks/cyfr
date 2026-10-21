@@ -31,10 +31,10 @@ defmodule Sanctum.StrictAuthorizeTenantTest do
       assert {:error, _} = Context.authorize(ctx, :read, {:tenant, %{athanor_id: "ath_b"}})
     end
 
-    test "{:execution, record} — cross-athanor denied before the ownership check",
+    test "{:execution, record} — its creator holding :* is denied in another athanor",
          %{ctx: ctx} do
-      # ctx owns it (same user_id) and holds :* — but a foreign athanor must
-      # still be rejected by verify_tenant, which runs before ownership.
+      # ctx created it (same user_id) and holds :* — verify_tenant rejects a
+      # foreign athanor all the same: there is no owner gate to pass.
       assert {:error, _} =
                Context.authorize(ctx, :read, {:execution, %{user_id: "u1", athanor_id: "ath_b"}})
 

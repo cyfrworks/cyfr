@@ -334,9 +334,10 @@ defmodule Sanctum.TenancyTest do
       assert Tenancy.channel_active?(athanor.id, "system")
       assert Tenancy.channel_active?(athanor.id, nil)
 
-      # rows are never deleted: an id without one was never a person here
+      # rows are never deleted: a minted id without one was never a person
       refute Tenancy.channel_active?(athanor.id, "usr_never-seen")
-      refute Tenancy.channel_active?(athanor.id, "someone-else")
+      # an id of another shape with no row names no person here
+      assert Tenancy.channel_active?(athanor.id, "someone-else")
 
       {:ok, _} = Sanctum.Tenancy.Users.deny(user)
       refute Tenancy.channel_active?(athanor.id, user.id)

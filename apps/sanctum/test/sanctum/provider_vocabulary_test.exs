@@ -23,12 +23,12 @@ defmodule Sanctum.ProviderVocabularyTest do
   end
 
   test "every named provider has a canonical issuer or is the OIDC one" do
-    # A direct provider mints ids as `provider|issuer|subject`, so a name
-    # with no canonical issuer cannot mint one. OIDC brings its own issuer
-    # from the operator's configuration.
+    # A direct provider's identity key is `provider|issuer|subject`, so a
+    # name with no canonical issuer cannot make one. OIDC brings its own
+    # issuer from the operator's configuration.
     for provider <- Prima.SignInProviders.all(), provider != @oidc_provider do
       assert is_binary(Sanctum.Auth.Identity.issuer(provider)),
-             "#{provider} is in the vocabulary but has no canonical issuer"
+             "#{provider} is in the roster but has no canonical issuer"
     end
   end
 end

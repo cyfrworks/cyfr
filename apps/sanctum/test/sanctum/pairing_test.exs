@@ -515,7 +515,7 @@ defmodule Sanctum.PairingTest do
 
       assert record!(device_ctx, id).confirmed_client_id == device.client_id
 
-      # The revocation's preview names the device by its name now.
+      # The revocation's preview names the device by its name.
       {:ok, _} =
         Sanctum.TestContext.confirming(session_ctx, &Pairing.revoke(&1, device.client_id))
 
@@ -941,7 +941,7 @@ defmodule Sanctum.PairingTest do
       assert %{count: 2} = window(:device_verification_person, user.id)
       assert %{count: 20} = window(:device_verification_installation, "installation")
 
-      # The person pairs another device as ever.
+      # The person pairs another device all the same.
       assert %{client_id: _} = pair!(session_ctx)
     end
 

@@ -54,7 +54,7 @@ defmodule Sanctum.Tenancy.AthanorsDestroyTest do
     {:ok, group: group, ctx: ctx, user: user}
   end
 
-  # One row in each of the tables whose survival was the point: a sealed
+  # One row in each table whose survival would leak the most: a sealed
   # credential, a thread with a message, and a request log.
   defp seed_rows!(ctx) do
     params = %{
@@ -157,10 +157,10 @@ defmodule Sanctum.Tenancy.AthanorsDestroyTest do
     # Every table on the roster, not just the ones this test seeded — a
     # table left behind is data somebody was told had been deleted.
     #
-    # Seven of the nineteen are non-zero going in (asserted above), so for
-    # those this is a real before/after. For the remaining twelve it proves
-    # the query runs and the roster is walked; `verify_roster!/1`'s two
-    # negative tests below are what cover the roster being complete.
+    # The seeded tables are non-zero going in (asserted above), so for
+    # those this is a real before/after. For the rest it proves the query
+    # runs and the roster is walked; `verify_roster!/1`'s two negative
+    # tests below are what cover the roster being complete.
     for table <- Arca.TenantTables.roster() do
       assert count(table, group.id) == 0,
              "#{table} still holds rows for a destroyed athanor"
@@ -216,12 +216,11 @@ defmodule Sanctum.Tenancy.AthanorsDestroyTest do
     assert payloads == []
   end
 
-  test "refuses a personal athanor — its owner still names it", %{user: user} do
+  test "refuses a personal athanor — its person's row names it", %{user: user} do
     # The fixture only makes a group. A personal athanor is what
     # `Sanctum.Provisioning` records on first sign-in, so make that link
-    # explicitly rather than hoping the fixture has one — the earlier
-    # version of this test guarded on `if is_binary(...)` and asserted
-    # nothing whenever it did not.
+    # explicitly rather than hoping the fixture has one: a test guarded on
+    # the link's presence would assert nothing whenever it is absent.
     {:ok, personal} =
       Athanors.create_group(user.id, "Personal #{System.unique_integer([:positive])}")
 
@@ -243,7 +242,7 @@ defmodule Sanctum.Tenancy.AthanorsDestroyTest do
 
     assert {:error, :personal_athanor} = Athanors.destroy(archived)
 
-    # Still there, and still the owner's.
+    # Still there, and still the person's.
     assert {:ok, %{status: "archived"}} = Athanors.get(personal.id)
     assert Sanctum.Tenancy.Users.personal_athanor?(personal.id)
   end
@@ -255,9 +254,9 @@ defmodule Sanctum.Tenancy.AthanorsDestroyTest do
       assert :ok = Arca.TenantTables.verify_roster!()
     end
 
-    # Asserting the check returns `:ok` proves only that today's schema
-    # matches today's roster; it says nothing about whether the check can
-    # fail. Drive both directions against a real table.
+    # Asserting the check returns `:ok` proves only that the current schema
+    # matches the current roster; it says nothing about whether the check
+    # can fail. Drive both directions against a real table.
     test "the check raises when a table carrying athanor_id is left off" do
       live = Arca.TenantTables.athanor_scoped_tables()
       omitted = "vault_entries"

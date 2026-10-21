@@ -235,10 +235,9 @@ defmodule Sanctum.Context do
     :frame,
     # The caller's resolved address, where the ingress knew one
     # (`Sanctum.ClientIp`). It is not identity and authorizes nothing — it
-    # is what an anonymous, per-action budget can be charged to. Without
-    # it the `/mcp` device flows had no address of their own and rode the
-    # transport's shared 120/min bucket, so several addresses could still
-    # exhaust the global sign-in ceiling between them.
+    # is what an anonymous, per-action budget can be charged to: the
+    # `/mcp` device flows charge their per-address sign-in budget to it
+    # (`Sanctum.Providers.Session`, `Sanctum.Auth.DeviceFlow`).
     :client_ip,
     # The paired client the device channel authenticated this request
     # through (`auth_method: :device`), or nil for every other ingress.
@@ -430,8 +429,8 @@ defmodule Sanctum.Context do
     # sets user_id (system tasks use "system"). A nil here is a construction
     # bug; catch it before it reaches authz/storage. namespace is NOT required:
     # it is a pure identity field (attribution/tincture tokens), not a storage
-    # primitive — an absent namespace is valid (e.g. a user who hasn't claimed
-    # a cyfr.run slug yet).
+    # primitive — an absent namespace is valid (e.g. a user with no claimed
+    # cyfr.run slug).
     if authenticated and is_nil(Map.get(attrs, :user_id)) do
       raise ArgumentError,
             "Sanctum.Context.build/1: authenticated contexts require :user_id " <>
@@ -1053,7 +1052,7 @@ defmodule Sanctum.Context do
     do_authorize(ctx, action, resource)
   end
 
-  # Permission-only check (no resource to verify ownership of). Also
+  # Permission-only check (no resource whose tenant to verify). Also
   # enforce the tenant scope (via `Sanctum.TenantPolicy`) so an athanor-less
   # context is rejected centrally rather than relying on storage-layer scoping.
   defp do_authorize(%__MODULE__{} = ctx, action, nil) do
@@ -1085,7 +1084,7 @@ defmodule Sanctum.Context do
   # clauses above — e.g. `{:execution, record}` with no `:user_id`, or a
   # `{:tenant, non_map}` — is caller misuse. Fail closed rather than fall
   # through to the permission + tenant-presence-only path below, which would
-  # silently skip the ownership and per-record tenant checks the tag implies.
+  # silently skip the per-record tenant check the tag implies.
   defp do_authorize(%__MODULE__{} = ctx, action, {tag, _})
        when tag in [:execution, :tenant] do
     log_denial(ctx, action, {tag, :malformed_resource})
@@ -1108,7 +1107,8 @@ defmodule Sanctum.Context do
 
   # For resources without tenant identity, enforce permission and tenant
   # presence. Pass tenant-owned records as {:execution | :tenant, record}
-  # for ownership checks. Storage queries also enforce the context's athanor.
+  # for the per-record tenant check. Storage queries also enforce the
+  # context's athanor.
   defp do_authorize(%__MODULE__{} = ctx, action, _resource) do
     do_authorize(ctx, action, nil)
   end

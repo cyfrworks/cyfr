@@ -809,8 +809,8 @@ defmodule Sanctum.Webhook do
         :ok
 
       # A profile list or head the store could not answer, or one stored
-      # damaged, is refused in its own class; every other refusal keeps the
-      # binding's sentence as the webhook surface has always answered it.
+      # damaged, is refused in its own class; every other refusal answers
+      # the binding's sentence.
       {:error, reason} ->
         case Sanctum.Consent.RegistrationBinding.refusal(reason) do
           %Prima.Refusal{} = classed ->
@@ -981,13 +981,11 @@ defmodule Sanctum.Webhook do
     end
   end
 
-  # Webhook URLs are path-only — clients prepend the host they reach the
-  # deployment on.
   # The sender needs an absolute URL, and only the operator knows the host
   # this instance is reachable at — behind a proxy or a tunnel it is not the
-  # bind address. `CYFR_PUBLIC_URL` supplies it; without it the path alone is
-  # returned and both surfaces say what to set. The console and the CLI have
-  # been printing that instruction since before anything read the variable.
+  # bind address. `CYFR_PUBLIC_URL` supplies it; without it the URL is the
+  # path alone, which a client prefixes with the host it reaches the
+  # deployment on, and the console and the CLI say what to set.
   defp build_url(slug) when is_binary(slug) and slug != "" do
     path = "/hooks/" <> slug
 

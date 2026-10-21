@@ -727,7 +727,7 @@ defmodule Sanctum.Providers.Profile do
   # The app's own head refused: its damage as the loader names it, and,
   # defensively, an answer the consent vocabulary classes unavailable as
   # that head unanswered. `admitted_blob/3` reads no store for the app's
-  # own head today (the heads and their references arrive read, and a
+  # own head (the heads and their references arrive read, and a
   # store that cannot answer them refuses the whole read first), so no
   # such answer reaches here; one that did would be an outage, never a
   # grant reaching nothing.

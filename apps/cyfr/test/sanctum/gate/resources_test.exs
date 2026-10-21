@@ -68,7 +68,7 @@ defmodule Sanctum.Gate.ResourcesTest do
       end
     end
 
-    test "an unknown or malformed scheme is a typed argument refusal, in today's words" do
+    test "an unknown or malformed scheme is a typed argument refusal that names it" do
       assert Resources.resolve("unknown://resource/path") ==
                {:error, {:invalid_argument, "No provider found for scheme: unknown"}}
 

@@ -12,11 +12,10 @@ defmodule Sanctum.Gate.ErrorRenderersTest do
 
   alias Prima.Refusal
 
-  # The seven a guest used to be handed by name. Each had a sentence in
-  # the console's vocabulary and none in the runner's, and the runner
-  # rendered an atom it did not know by spelling it — so a send that met a
-  # full turn queue read "busy" to a guest and read the sentence below to
-  # a person at the page.
+  # Seven refusals a guest meets in a turn. Each has one sentence, and the
+  # runner's vocabulary, the in-chain guest view and the console render the
+  # same one, so a send that meets a full turn queue reads the same words
+  # to a guest as to a person at the page, never the atom's name.
   @named_by_the_atom [
     :busy,
     :not_member,
@@ -116,7 +115,7 @@ defmodule Sanctum.Gate.ErrorRenderersTest do
     end
   end
 
-  describe "the refusals a guest used to be handed by name" do
+  describe "the refusals a guest meets in a turn" do
     test "each is one sentence, and the guest reads it as the console does" do
       for reason <- @named_by_the_atom do
         expected = Refusal.message(reason)
@@ -139,7 +138,7 @@ defmodule Sanctum.Gate.ErrorRenderersTest do
     end
 
     test "an atom outside the vocabulary is internal, and is not spelled out" do
-      # What the runner's renderer did to every atom it did not know.
+      # The runner's renderer answers every atom it does not know this way.
       assert Locus.Runtime.FormulaHandler.render_reason(:some_internal_state) ==
                "The call failed."
 
@@ -268,7 +267,6 @@ defmodule Sanctum.Gate.ErrorRenderersTest do
     :webhook,
     :tincture,
     :system,
-    :session,
     nil
   ]
 

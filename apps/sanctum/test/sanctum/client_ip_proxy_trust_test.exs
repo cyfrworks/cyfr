@@ -81,8 +81,8 @@ defmodule Sanctum.ClientIpProxyTrustTest do
       # Every hop matched, so there is no untrusted hop to name the client and
       # the caller IS a proxy. The innermost entry is the socket peer, the one
       # address in the chain nobody could forge — the leftmost is whatever the
-      # caller typed, and returning that let anyone inside the trusted range
-      # pick their own address for an API key's IP allowlist.
+      # caller typed, and returning that would let anyone inside the trusted
+      # range pick their own address for an API key's IP allowlist.
       trust({:cidrs, ["10.0.0.0/8"]})
 
       assert ClientIp.resolve(conn({10, 0, 0, 5}, "10.1.2.3")) == "10.0.0.5"
@@ -119,8 +119,8 @@ defmodule Sanctum.ClientIpProxyTrustTest do
     end
   end
 
-  describe "the closed bypass: allowlist is enforced, not skipped" do
-    test "an allowlisted key with an unresolvable IP is REJECTED (was: bypassed)" do
+  describe "the allowlist is enforced, never skipped" do
+    test "an allowlisted key with an unresolvable IP is REJECTED" do
       ctx = Sanctum.TestContext.issuer!(Sanctum.TestContext.local())
 
       {:ok, %{api_key: key}} =

@@ -181,11 +181,11 @@ defmodule Sanctum.Consent.LoaderTest do
     profile = profile_summary()
 
     # Widen the stored blob without touching any digest — a hand edit, a
-    # restored backup, or any write path that reaches the column. Before
-    # `blob_digest` existed nothing on the row detected this:
-    # `commit_digest` covers the decisions, not the bytes, and
-    # `check_blob_refs_equality/2` compares vault refs alone. So the loader
-    # built an Authority from whatever caps the edit left behind.
+    # restored backup, or any write path that reaches the column. Only
+    # `blob_digest` detects this: `commit_digest` covers the decisions, not
+    # the bytes, and `check_blob_refs_equality/2` compares vault refs alone,
+    # so without it the loader would build an Authority from whatever caps
+    # the edit left behind.
     honest = consent()
     tampered = Jason.decode!(honest.resolved_policy)
 

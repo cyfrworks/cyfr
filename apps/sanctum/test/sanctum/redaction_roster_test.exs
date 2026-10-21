@@ -4,12 +4,9 @@ defmodule Sanctum.RedactionRosterTest do
   use ExUnit.Case, async: true
 
   @moduledoc """
-  Pins Prima.Sanitizer as the one redaction vocabulary.
-
-  Three lists existed: the Sanitizer's, Phoenix `:filter_parameters` (six
-  strings, missing `api_key`, `authorization` and twenty more), and a
-  private copy in the registry client. The latter two now derive from the
-  first — these tests keep a fourth from growing back.
+  Pins Prima.Sanitizer as the one redaction vocabulary: Phoenix
+  `:filter_parameters` is derived from it at boot, and no other module
+  declares a roster of sensitive keys.
   """
 
   alias Prima.Sanitizer

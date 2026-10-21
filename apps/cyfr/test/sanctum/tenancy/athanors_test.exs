@@ -27,8 +27,8 @@ defmodule Sanctum.Tenancy.AthanorsTest do
       athanor = group!()
 
       # The shape `Sanctum.Provisioning` takes: read the athanor, do a dozen
-      # steps, write the outcome. Anything written to settings in between was
-      # dropped, because the merge based itself on the struct read first.
+      # steps, write the outcome. A merge based on the struct read first
+      # would drop anything written to settings in between.
       stale = athanor
 
       {:ok, _} = Athanors.put_settings(athanor, %{"written_during" => "yes"})

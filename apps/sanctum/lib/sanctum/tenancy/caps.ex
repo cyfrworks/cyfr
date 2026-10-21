@@ -196,7 +196,7 @@ defmodule Sanctum.Tenancy.Caps do
   default (`Arca.put/4`'s `cap:` option), and `Arca.Overlay.commit_unit/4`
   checks whole units up front with the policy as a required argument.
   The uncapped-by-design set is whatever states `cap: :exempt` — grep it:
-  today the shipped copy (`Arca.Overlay.pull_shipped/2`), the serving of a
+  the shipped copy (`Arca.Overlay.pull_shipped/2`), the serving of a
   committed revision (`Arca.Overlay`), scaffold and fork's `commit_unit`
   calls, and the date the storage collector writes on an undated prefix
   (`Arca.StorageGC`) — each moving shipped or already-committed bytes,

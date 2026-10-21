@@ -156,8 +156,8 @@ defmodule Sanctum.Auth.DeviceFlow do
     end
   end
 
-  # A surface with no address of its own (the MCP route, metered per IP by
-  # its own plug) has no bucket to charge; it still passes the global one.
+  # A caller whose ingress knew no address (a context with no `client_ip`)
+  # has no bucket to charge; it still passes the global one.
   defp check_ip_budget({_bucket, nil}, _max), do: :ok
 
   defp check_ip_budget({bucket, client_ip}, max) when is_binary(client_ip) do

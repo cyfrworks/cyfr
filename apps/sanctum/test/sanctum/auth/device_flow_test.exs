@@ -139,9 +139,9 @@ defmodule Sanctum.Auth.DeviceFlowTest do
                DeviceFlow.poll_for_session("github", "code_other", innocent)
     end
 
-    test "a surface with no address of its own still passes the global ceiling" do
-      # `nil` is the MCP route, metered per IP by its own plug. It must not
-      # crash and must not be exempt from the server-wide breaker.
+    test "a caller with no known address still passes the global ceiling" do
+      # `nil` is a context whose ingress knew no address. It must not crash
+      # and must not be exempt from the server-wide breaker.
       assert {:error, {:client_id_not_configured, :github}} =
                DeviceFlow.init_device_flow("github", nil)
     end

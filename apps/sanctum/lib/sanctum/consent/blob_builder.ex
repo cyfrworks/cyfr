@@ -765,7 +765,7 @@ defmodule Sanctum.Consent.BlobBuilder do
 
   @doc false
   # The manifest's declared caps are the grant; an absent block is the
-  # empty ask, and a block that no longer meets the grammar is refused
+  # empty ask, and a block that does not meet the grammar is refused
   # (`ShapeDerivation.declared_caps/2`). Public for the plan verb, which
   # must show the same grant this builder would freeze.
   def node_grant(node_key, manifest) do
@@ -1382,7 +1382,7 @@ defmodule Sanctum.Consent.BlobBuilder do
   end
 
   # An ask that names every tool, granted whole, is shown as the grant
-  # states it: one wildcard, not the catalog it expands to today.
+  # states it: one wildcard, not the catalog it currently expands to.
   defp tools_row(node_key, tools, narrowed, wildcard) do
     cond do
       is_list(wildcard) and "tools" not in narrowed and (tools || []) == wildcard ->

@@ -10,9 +10,9 @@ defmodule Sanctum.Annotations do
   registry cache carries that same atom shape inside its `meta`, and the
   wire tool definition wraps it as `"annotations" => %{actions: ...}` — a
   string outer key with the provider's atom-keyed map inside. Reading the
-  wrong spelling does not crash, it returns nothing: one caller classified
-  every internal tool's kind as nil that way, silently. Every reader goes
-  through here so the spelling is decided once.
+  wrong spelling does not crash, it returns nothing, so a caller that
+  guessed would classify every internal tool's kind as nil, silently.
+  Every reader goes through here so the spelling is decided once.
 
   Absence stays fail-closed at the call sites: `planes/2` answers `[]`,
   the rest answer `nil`.
@@ -56,7 +56,7 @@ defmodule Sanctum.Annotations do
   Whether a running chain reaches the action through the HOST rather than
   the catalog: the formula host intercepts the request and runs it under
   the chain's authority itself, so the catalog never dispatches it
-  in-chain and yet a chain can run it.
+  in-chain, though a chain can run it.
   """
   @spec host_intercepted?(source(), String.t() | nil) :: boolean()
   def host_intercepted?(source, action), do: field(source, action, :host) == :intercepted

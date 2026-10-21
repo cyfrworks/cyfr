@@ -1959,7 +1959,7 @@ defmodule Cyfr.Boundaries do
       refused: 3
     ],
     "Sanctum.DeviceCerts" => [verify_connect: 3, verify_request: 3],
-    "Sanctum.Directory" => [append: 2, outcome: 1, recover: 2, register: 1, resolve: 1],
+    "Sanctum.Directory" => [append: 2, recover: 2, register: 1, resolve: 1],
     "Sanctum.Door" => [admit_identity: 2, platform_admin_emails: 0, refusal_message: 0],
     "Sanctum.Door.Store" => [requests: 0],
     "Sanctum.Egress" => [pinned_request: 5],
@@ -2121,7 +2121,6 @@ defmodule Cyfr.Boundaries do
     "Sanctum.Visibility" => [filter_for_context: 2],
     "Sanctum.Webhook" => [
       decode_input_template: 1,
-      default_signature_header: 0,
       disable_for_component: 2,
       resolve_ingress: 1,
       verify_with_grace: 4
@@ -2462,10 +2461,10 @@ defmodule Cyfr.Boundaries do
     # scripted directory through paths that pass no options; a caller's
     # options win, and a release never sets it, so it uses the system's.
     directory_client: :seam,
-    # An OAuth provider shown to attenuate a refresh (`Sanctum.Vault.OAuth`):
-    # a suite sets it to script a preset for a hint no shipped preset holds,
-    # and that preset's token endpoint, never replacing a shipped one; a
-    # release never sets it, so only the shipped presets are read.
+    # An OAuth provider a suite scripts (`Sanctum.Vault.OAuth`): a preset for
+    # a hint no shipped preset holds and that preset's token endpoint, which
+    # a code exchange and a refresh both reach, never replacing a shipped
+    # one; a release never sets it, so only the shipped presets are read.
     scripted_oauth_provider: :seam,
     # Compiled in by `config/test.exs` alone; with the runtime switch off it
     # lets the sandboxed suite boot omit `Cyfr.Bootstrap`

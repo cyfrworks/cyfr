@@ -15,9 +15,11 @@ defmodule Sanctum.Namespace do
   re-probe, never the identity.
 
   This module is the one-line lookup callers use to materialize
-  `ctx.namespace` from `ctx.user_id`: `CyfrWeb.Plugs.Authenticate`,
-  `PrismWeb.AuthHelpers`, `Sanctum.Session.row_to_context/2`, the auth
-  providers, API-key and webhook attribution.
+  `ctx.namespace` from `ctx.user_id`: a session's context
+  (`Sanctum.Session`), the contexts `Sanctum.Caller` establishes (a frame
+  bearer's, a webhook's attribution, one that arrives without it),
+  API-key attribution (`Sanctum.ApiKey`) and a push's destination
+  (`Compendium.OCI.Client`).
   """
 
   require Logger

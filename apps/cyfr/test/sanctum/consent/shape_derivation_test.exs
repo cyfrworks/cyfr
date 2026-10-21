@@ -610,7 +610,7 @@ defmodule Sanctum.Consent.ShapeDerivationTest do
       assert Map.delete(input, :source_ref) == Map.delete(explicit, :source_ref)
     end
 
-    test "a stored caps block the grammar no longer admits is refused, never read as empty",
+    test "a stored caps block the grammar does not admit is refused, never read as empty",
          %{ctx: ctx} do
       publish!(ctx, "shape-respelled", "1.0.0", %{
         manifest: Jason.encode!(%{"caps" => %{"storage" => %{"paths" => ["data/secrets/"]}}})
@@ -621,8 +621,8 @@ defmodule Sanctum.Consent.ShapeDerivationTest do
       assert {:ok, %{caps: %{"storage.paths" => ["data/secrets/"]}}} =
                ShapeDerivation.shape_input(ctx, ref)
 
-      # A release published before the grammar refused the spelling: its
-      # row reached past the publish check, as one written then is.
+      # A row the publish check refuses, written past it: the stored
+      # spelling is damage to every reader.
       stored = Jason.encode!(%{"caps" => %{"storage" => %{"paths" => ["data//secrets/"]}}})
 
       {1, _} =
@@ -933,8 +933,8 @@ defmodule Sanctum.Consent.ShapeDerivationTest do
       assert bare_input.caps["tincture.connect"] == []
     end
 
-    test "a component that declares no flow and no origin still names both, so a consent made " <>
-           "before shapes named them asks again",
+    test "a component that declares no flow and no origin names both as empty, so a shape " <>
+           "without the two keys is another digest",
          %{ctx: ctx} do
       publish!(ctx, "shape-flowless", "1.0.0", %{
         manifest: %{"caps" => %{"egress" => %{"domains" => ["api.example.test"]}}}
@@ -944,17 +944,17 @@ defmodule Sanctum.Consent.ShapeDerivationTest do
       assert input.caps["flows"] == []
       assert input.caps["tincture.connect"] == []
 
-      # The shape as it was spelled before flows were shape: without the
-      # two keys. Its digest is not this shape's, so its consent asks again.
+      # The same shape without the two keys digests differently, so a
+      # consent to it does not answer for this shape.
       {:ok, digest} = Sanctum.Consent.ShapeDigest.compute(input)
 
-      {:ok, before_flows} =
+      {:ok, without_keys} =
         Sanctum.Consent.ShapeDigest.compute(%{
           input
           | caps: Map.drop(input.caps, ["flows", "tincture.connect"])
         })
 
-      refute digest == before_flows
+      refute digest == without_keys
     end
   end
 

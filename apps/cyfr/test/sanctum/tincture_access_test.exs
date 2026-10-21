@@ -68,12 +68,6 @@ defmodule Sanctum.TinctureAccessTest do
   setup tags do
     Cyfr.Test.Sandbox.setup!(tags)
 
-    # Public-ness reads the profiles table now; point the source at it.
-
-    on_exit(fn ->
-      nil
-    end)
-
     # Create temp tincture structure with one public and one private tincture,
     # under an isolated storage root.
     base = Path.join(System.tmp_dir!(), "tincture_access_test_#{:rand.uniform(1_000_000)}")

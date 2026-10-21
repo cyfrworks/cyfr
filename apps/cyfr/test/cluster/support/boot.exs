@@ -219,7 +219,6 @@ defmodule Cyfr.Cluster.Boot do
     end
   end
 
-
   @doc """
   Run one sweep of the stale-attempt pass on this member, as its own timer
   would (`Opus.Sweeper.sweep/0`).

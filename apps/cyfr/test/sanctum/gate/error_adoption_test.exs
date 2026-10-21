@@ -28,10 +28,9 @@ defmodule Sanctum.Gate.ErrorAdoptionTest do
   A tool module — one that defines `definition` or `handle/3` — and every
   module it names that this umbrella defines. Both halves are needed,
   because a refusal reaches a renderer from wherever it was produced: the
-  scan read only tool modules once, and `Compendium.Builds.Provider`
-  counted 2 where `Locus.MCP` counted 11, because the build orchestration's
-  sentences live in `Compendium.Builds`, which defines no tool and which
-  the scan never opened.
+  build orchestration's sentences behind `Compendium.Builds.Provider` live
+  in `Compendium.Builds`, which defines no tool, so a scan of tool modules
+  alone would never open it.
 
   ## Crashes and console lines
 
@@ -60,8 +59,8 @@ defmodule Sanctum.Gate.ErrorAdoptionTest do
     "apps/prima/lib/prima/component_ref.ex" => 20,
     "apps/cyfr/lib/emissary/external/server.ex" => 19,
     # The concurrency argument's own refusal is a sentence about the value
-    # offered; the two that were the tool's catch-alls are typed now, so
-    # the action-coverage case reads one vocabulary.
+    # offered; the tool's catch-alls are typed, so the action-coverage case
+    # reads one vocabulary.
     "apps/cyfr/lib/opus/schedules/provider.ex" => 16,
     "apps/cyfr/lib/opus/provider.ex" => 12,
     # An upstream registry's own diagnostics, which are its words and not
@@ -89,9 +88,8 @@ defmodule Sanctum.Gate.ErrorAdoptionTest do
     "apps/cyfr/lib/compendium/component.ex" => 3,
     "apps/cyfr/lib/compendium/providers/shared.ex" => 4,
     "apps/cyfr/lib/compendium/registry.ex" => 4,
-    # The build orchestration behind `Compendium.Builds.Provider`: the
-    # three this ratchet could not see until the scan followed a tool
-    # module into what it calls.
+    # The build orchestration behind `Compendium.Builds.Provider`, which
+    # the scan reaches by following a tool module into what it calls.
     "apps/cyfr/lib/compendium/builds.ex" => 3,
     # The authored-policy door's sentences, the person's own, which the
     # `aqua` tool wraps as `{:invalid_argument, …}`.
