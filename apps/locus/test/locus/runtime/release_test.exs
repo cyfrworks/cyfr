@@ -14,19 +14,20 @@ defmodule Locus.Runtime.ReleaseTest do
 
   alias Locus.Runtime.Release
 
-  test "the role is the service unless RUNTIME_ROLE says runner, and no other role exists" do
+  test "the role is the service unless RUNTIME_ROLE says runner, and no other value names a role" do
     assert Release.role(%{}) == :service
-    assert Release.role(%{"RUNTIME_ROLE" => "service"}) == :service
     assert Release.role(%{"RUNTIME_ROLE" => "runner"}) == :runner
 
-    # The refusal names the setting and the roles it takes, never the
+    # The refusal names the setting and the values it takes, never the
     # value the environment carried.
-    error =
-      assert_raise ArgumentError, ~r/RUNTIME_ROLE names no role/, fn ->
-        Release.role(%{"RUNTIME_ROLE" => "worker"})
-      end
+    for value <- ["worker", "service", ""] do
+      error =
+        assert_raise ArgumentError, ~r/RUNTIME_ROLE names no role/, fn ->
+          Release.role(%{"RUNTIME_ROLE" => value})
+        end
 
-    refute error.message =~ "worker"
+      refute error.message =~ "worker"
+    end
 
     assert Release.role() == :service
   end
