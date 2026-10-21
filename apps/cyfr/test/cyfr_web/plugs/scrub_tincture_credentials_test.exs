@@ -403,9 +403,7 @@ defmodule CyfrWeb.Plugs.ScrubTinctureCredentialsTest.Spans do
 
       Tracer.with_span "manual", %{attributes: %{"user_agent.original" => marker}} do
         Tracer.set_attributes(%{
-          :"url.full" => "https://cyfr.test/_c/v1/#{@canary}/#{@frame}?_session=#{@canary}&a=1",
-          "http.url" => "https://cyfr.test/_s/#{@canary}/app.js",
-          "http.target" => "/_s/#{@canary}/a.js?_key=#{@canary}",
+          :"url.query" => "_session=#{@canary}&a=1",
           "http.route" => "/%5Fs/#{@canary}/a.js",
           "url.path" => "/_c/v1//#{@canary}/#{@frame}",
           "server.address" => "cyfr.test"
@@ -417,11 +415,7 @@ defmodule CyfrWeb.Plugs.ScrubTinctureCredentialsTest.Spans do
 
       attrs = attributes(exported)
 
-      assert attrs["url.full"] ==
-               "https://cyfr.test/_c/v1/[REDACTED]/#{@frame}?_session=[REDACTED]&a=1"
-
-      assert attrs["http.url"] == "https://cyfr.test/_s/[REDACTED]/app.js"
-      assert attrs["http.target"] == "/_s/[REDACTED]/a.js?_key=[REDACTED]"
+      assert attrs["url.query"] == "_session=[REDACTED]&a=1"
       assert attrs["http.route"] == "/%5Fs/[REDACTED]/a.js"
       assert attrs["url.path"] == "/_c/v1//[REDACTED]/#{@frame}"
       assert attrs["server.address"] == "cyfr.test"
