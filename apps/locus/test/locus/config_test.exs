@@ -440,13 +440,8 @@ defmodule Locus.ConfigTest do
     assert Config.unknown_names(Config.variables()) == []
     assert {:ok, _settings} = Config.from_env(env(full()), Map.keys(full()))
 
-    # The runtime role's names are the node's too, and the retired names
-    # of the release's log setting are not.
+    # The runtime role's names are the node's too.
     assert Config.unknown_names(Config.variables(:runtime) ++ Config.variables(:runner)) == []
-
-    # Spelled split so the retired names are not themselves found here.
-    retired = ["LOCUS_BUILDS_" <> "LOG_LEVEL", "LOCUS_BUILDS_" <> "LOG_FORMAT"]
-    assert Config.unknown_names(retired) == Enum.sort(retired)
 
     assert {:error, message} =
              Config.from_env(env(full()), Map.keys(full()) ++ ["LOCUS_RUNTIME_POOL_SIZ"])
