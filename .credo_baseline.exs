@@ -8,7 +8,6 @@
 # row in the same change, and `mix credo --strict` fails while a row allows
 # more findings than the tree has, or the tree has a finding no row allows.
 [
-  {Credo.Check.Warning.LeakyEnvironment, "apps/arca/lib/arca/supervisor.ex", "System.cmd", 1},
   {Credo.Check.Warning.LeakyEnvironment, "apps/cyfr/lib/mix/tasks/ops.gen.cli.ex", "System.cmd",
    1},
   {Credo.Check.Warning.LeakyEnvironment,
@@ -137,12 +136,6 @@
    ":erlang.binary_to_atom", 1},
   {Credo.Check.Warning.UnsafeToAtom, "apps/locus/test/support/runtime/scripted_keeper.ex",
    ":erlang.binary_to_atom", 1},
-  {Credo.Check.Warning.UnsafeToAtom, "apps/prima/test/prima/keeper_protocol_test.exs",
-   "String.to_atom", 2},
-  {Credo.Check.Warning.UnsafeToAtom, "apps/prima/test/prima/slots_test.exs",
-   ":erlang.binary_to_atom", 3},
-  {Credo.Check.Warning.UnsafeToAtom, "apps/prima/test/prima/worker_auth_test.exs",
-   "String.to_atom", 1},
   {Credo.Check.Warning.UnsafeToAtom, "apps/sanctum/lib/sanctum/atoms.ex", "String.to_atom", 1},
   {Credo.Check.Warning.UnsafeToAtom, "apps/sanctum/lib/sanctum/providers/system.ex",
    "String.to_atom", 2},

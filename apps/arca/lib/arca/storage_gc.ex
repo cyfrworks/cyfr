@@ -79,7 +79,6 @@ defmodule Arca.StorageGC do
   import Ecto.Query, only: [from: 2]
   import Arca.QueryHelpers, only: [where_athanor: 2]
 
-
   alias Arca.Schemas.{StorageCommit, StorageUnit}
   alias Arca.Storage.UnitLocator
   alias Arca.StorageUnits
