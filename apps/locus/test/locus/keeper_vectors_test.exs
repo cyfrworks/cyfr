@@ -333,7 +333,12 @@ defmodule Locus.KeeperVectorsTest do
         end)
 
       assert {:ok, %{ref: ref}} =
-               Keeper.spawn(name, %{argv: ["/bin/true"], env: %{}, pool: "backends"})
+               Keeper.spawn(name, %{
+                 argv: ["/bin/true"],
+                 env: %{},
+                 pool: "backends",
+                 memory_bytes: 268_435_456
+               })
 
       {request, spawned} = Task.await(keeper, 10_000)
 

@@ -553,10 +553,9 @@ defmodule Locus.ConfigTest do
     assert Config.backends_rpc_timeout_ms() == 30_000
     assert Config.backends_memory_bytes() == 536_870_912
 
-    # The facade reads the same settings.
-    assert Locus.Backends.key() == Config.backends_key()
+    # The facade's listener reads the same settings.
+    assert Locus.Backends.bind() == Config.backends_bind()
     assert Locus.Backends.port() == Config.backends_port()
-    assert Locus.Backends.memory_bytes() == Config.backends_memory_bytes()
   end
 
   describe "runtime_from_env/2" do
@@ -784,12 +783,11 @@ defmodule Locus.ConfigTest do
           runner_id: "runner_1",
           service_id: "wrk_local",
           boot: "boot_1",
-          host_url: "http://127.0.0.1:4300",
           watchdog_grace_ms: 5_000
         })
 
-      # No address of CYFR's, whatever the service holds: the runner's host
-      # calls leave through its relay.
+      # No address of CYFR's: the runner's host calls leave through its
+      # relay.
       assert env == %{
                "RUNTIME_ROLE" => "runner",
                "RUNTIME_RUNNER_ID" => "runner_1",

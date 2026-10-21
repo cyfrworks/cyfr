@@ -56,7 +56,10 @@ defmodule Locus.Backends.BackendTest do
         owner: @owner,
         definition: definition,
         launcher: Locus.DirectLauncher,
+        memory_bytes: Locus.Config.backends_memory_bytes(),
         bounds: [restart_backoff_ms: [50, 100], crash_window_ms: 60_000, max_crashes: 3],
+        rpc_timeout_ms: Locus.Config.backends_rpc_timeout_ms(),
+        init_timeout_ms: Locus.Config.backends_init_timeout_ms(),
         stop_grace_ms: 500,
         release_timeout_ms: 5_000
       ]
@@ -67,10 +70,10 @@ defmodule Locus.Backends.BackendTest do
   end
 
   defp wait_status(backend, status),
-    do: wait_until(fn -> Backend.status(backend).status == status end, 10_000)
+    do: wait_until(fn -> Backend.status(backend, 5_000).status == status end, 10_000)
 
   defp starts(backend) do
-    tail = Backend.status(backend).stderr_tail
+    tail = Backend.status(backend, 5_000).stderr_tail
     length(String.split(tail, "probe started")) - 1
   end
 
@@ -90,7 +93,7 @@ defmodule Locus.Backends.BackendTest do
       backend = start_backend(supervisor, [])
       wait_status(backend, :ready)
 
-      assert %{status: :ready, restarts: 0, tools: 2, error: nil} = Backend.status(backend)
+      assert %{status: :ready, restarts: 0, tools: 2, error: nil} = Backend.status(backend, 5_000)
       assert Enum.map(Backend.list_tools(backend), & &1["name"]) == ["echo", "secret"]
 
       assert ~s({"said":"hello"}) ==
@@ -109,8 +112,12 @@ defmodule Locus.Backends.BackendTest do
       assert "[REDACTED]" ==
                backend |> Backend.call_tool("secret", %{"name" => "PROBE_TOKEN"}) |> text()
 
-      wait_until(fn -> Backend.status(backend).stderr_tail =~ "secret PROBE_TOKEN" end, 10_000)
-      tail = Backend.status(backend).stderr_tail
+      wait_until(
+        fn -> Backend.status(backend, 5_000).stderr_tail =~ "secret PROBE_TOKEN" end,
+        10_000
+      )
+
+      tail = Backend.status(backend, 5_000).stderr_tail
       assert tail =~ "secret PROBE_TOKEN=[REDACTED]"
       refute tail =~ @token
 
@@ -120,7 +127,7 @@ defmodule Locus.Backends.BackendTest do
       # The owner's secrets are every backend's, handed in whole.
       other = start_backend(supervisor, secrets: ["probe started"])
       wait_status(other, :ready)
-      refute Backend.status(other).stderr_tail =~ "probe started"
+      refute Backend.status(other, 5_000).stderr_tail =~ "probe started"
     end
 
     test "answers the backend's own request, which never answers the call it names", %{
@@ -149,7 +156,7 @@ defmodule Locus.Backends.BackendTest do
       assert sentence == "backend 'probe' call failed: exited code=null signal=SIGKILL"
 
       wait_until(
-        fn -> match?(%{status: :ready, restarts: 1}, Backend.status(backend)) end,
+        fn -> match?(%{status: :ready, restarts: 1}, Backend.status(backend, 5_000)) end,
         10_000
       )
 
@@ -165,7 +172,7 @@ defmodule Locus.Backends.BackendTest do
       for restarts <- 0..2 do
         wait_until(
           fn ->
-            match?(%{status: :ready, restarts: ^restarts}, Backend.status(backend))
+            match?(%{status: :ready, restarts: ^restarts}, Backend.status(backend, 5_000))
           end,
           10_000
         )
@@ -177,14 +184,16 @@ defmodule Locus.Backends.BackendTest do
       wait_status(backend, :failed)
 
       assert %{status: :failed, restarts: 2, tools: 0, error: "exited code=3 signal=null"} =
-               Backend.status(backend)
+               Backend.status(backend, 5_000)
 
       assert Backend.list_tools(backend) == []
 
       assert {:error, {:tool_error, "backend 'probe' not ready: exited code=3 signal=null"}} =
                Backend.call_tool(backend, "echo", %{})
 
-      assert {:error, :failed} = Backend.retire_idle(backend)
+      # A failed backend is no idle one: a retirement leaves it as it is.
+      :ok = Backend.retire_if_idle(backend, 0)
+      assert %{status: :failed} = Backend.status(backend, 5_000)
     end
 
     test "an idle backend keeps its tools, and the next call wakes it", %{supervisor: supervisor} do
@@ -192,20 +201,22 @@ defmodule Locus.Backends.BackendTest do
       wait_status(backend, :ready)
       os_pid = :sys.get_state(backend).handle.pid
 
-      assert :ok = Backend.retire_idle(backend)
-      assert %{status: :idle, tools: 2} = Backend.status(backend)
+      :ok = Backend.retire_if_idle(backend, 0)
+      wait_status(backend, :idle)
+      assert %{status: :idle, tools: 2} = Backend.status(backend, 5_000)
       assert length(Backend.list_tools(backend)) == 2
       wait_until(fn -> not alive?(os_pid) end, 10_000)
 
       assert text(Backend.call_tool(backend, "echo", %{"n" => 1})) == ~s({"n":1})
-      assert %{status: :ready, restarts: 0} = Backend.status(backend)
+      assert %{status: :ready, restarts: 0} = Backend.status(backend, 5_000)
       assert starts(backend) == 2
     end
 
     test "calls that find it idle share one start", %{supervisor: supervisor} do
       backend = start_backend(supervisor, [])
       wait_status(backend, :ready)
-      assert :ok = Backend.retire_idle(backend)
+      :ok = Backend.retire_if_idle(backend, 0)
+      wait_status(backend, :idle)
 
       answers =
         1..4
@@ -229,7 +240,7 @@ defmodule Locus.Backends.BackendTest do
       assert :ok = Backend.stop(backend, 1_000)
       wait_until(fn -> not alive?(os_pid) end, 10_000)
 
-      assert %{status: :stopped, tools: 0} = Backend.status(backend)
+      assert %{status: :stopped, tools: 0} = Backend.status(backend, 5_000)
 
       assert {:error, {:tool_error, "backend 'probe' not ready: stopped"}} =
                Backend.call_tool(backend, "echo", %{})

@@ -475,7 +475,12 @@ defmodule Locus.KeeperTest do
         )
 
       launched =
-        Keeper.spawn(:no_such_keeper_client, %{argv: ["/bin/true"], env: p.env, pool: "runner"})
+        Keeper.spawn(:no_such_keeper_client, %{
+          argv: ["/bin/true"],
+          env: p.env,
+          pool: "runner",
+          memory_bytes: 268_435_456
+        })
 
       answers = [spawned, sent, relayed, run, launched, Keeper.send_control(gone, p.assign)]
       for answer <- answers, do: assert(clean?(p, answer), "#{inspect(answer)} carries a payload")
@@ -756,16 +761,19 @@ defmodule Locus.KeeperTest do
       refute_receive {Keeper, _ref, _event}, 200
     end
 
-    test "a spawn's memory bound is its spec's, and a spec may name none", %{
+    test "a spec without a memory bound is refused before cyfr-locus is asked anything", %{
       name: name,
       fake: fake
     } do
-      assert {:ok, handle} =
-               Keeper.spawn(name, %{argv: ["true"], env: %{}, pool: "backends"})
+      for spec <- [
+            %{argv: ["true"], env: %{}, pool: "backends"},
+            %{argv: ["true"], env: %{}, pool: "backends", memory_bytes: nil},
+            %{argv: ["true"], env: %{}, pool: "backends", memory_bytes: 0}
+          ] do
+        assert_raise FunctionClauseError, fn -> Keeper.spawn(name, spec) end
+      end
 
-      events_until_released(handle)
-      [spawn] = recorded(fake, "spawn")
-      refute Map.has_key?(spawn, "memory_bytes")
+      assert requests(fake, "spawn") == []
     end
 
     test "stdin is written as frames of the codec's bound, held until the relay attaches", %{
@@ -870,7 +878,12 @@ defmodule Locus.KeeperTest do
 
     test "a keeper that is gone answers as unavailable" do
       assert {:error, {:launcher_unavailable, :noproc}} =
-               Keeper.spawn(:no_such_keeper, %{argv: ["true"], env: %{}, pool: "backends"})
+               Keeper.spawn(:no_such_keeper, %{
+                 argv: ["true"],
+                 env: %{},
+                 pool: "backends",
+                 memory_bytes: 268_435_456
+               })
 
       assert {:error, {:launcher_unavailable, :noproc}} =
                Keeper.pool_stats(:no_such_keeper, "backends")

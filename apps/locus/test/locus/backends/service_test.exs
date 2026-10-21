@@ -571,7 +571,7 @@ defmodule Locus.Backends.ServiceTest do
 
         length(children) == named and
           Enum.all?(children, fn {_, pid, _, _} ->
-            byte_size(Backend.status(pid).stderr_tail) >= wanted
+            byte_size(Backend.status(pid, 5_000).stderr_tail) >= wanted
           end)
       end,
       5_000

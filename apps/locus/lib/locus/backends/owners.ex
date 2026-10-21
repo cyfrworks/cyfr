@@ -93,7 +93,7 @@ defmodule Locus.Backends.Owners do
 
   @doc """
   Starts the table. Options: `:name`; `:boot` (a lifetime minted here by
-  default); `:launcher` and `:launcher_server` (`Locus.Executor.launcher/0`'s
+  default); `:launcher` and `:launcher_server` (`Locus.Executor.executor/0`'s
   by default); `:supervisor`, the `DynamicSupervisor` backends start under;
   `:clock`, the milliseconds leases and idle periods are read on
   (monotonic by default); `:max_in_flight`, `:rpc_timeout_ms`,
@@ -199,7 +199,7 @@ defmodule Locus.Backends.Owners do
   defp launcher(opts) do
     case Keyword.fetch(opts, :launcher) do
       {:ok, launcher} -> {:ok, launcher}
-      :error -> Locus.Executor.launcher()
+      :error -> Locus.Executor.executor()
     end
   end
 
@@ -694,7 +694,7 @@ defmodule Locus.Backends.Owners do
   defp backend_report(%{pid: nil} = backend, _timeout), do: last_heard(backend)
 
   defp backend_report(backend, timeout) do
-    report = GenServer.call(backend.pid, :status, timeout)
+    report = Backend.status(backend.pid, timeout)
 
     %{
       name: backend.name,

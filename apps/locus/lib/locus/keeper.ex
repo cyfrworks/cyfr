@@ -48,7 +48,7 @@ defmodule Locus.Keeper do
   ## A long-lived spawn
 
   `spawn/2` (`Locus.Launcher`) asks for a spawn in the pool its spec names,
-  under the spec's `memory_bytes` where it names one, and answers its
+  under the spec's `memory_bytes`, which every spec names, and answers its
   handle once cyfr-locus reports it spawned, or the refusal. The caller
   is its owner: this server holds the spawn's relay connection and sends
   the owner `{Locus.Keeper, ref, event}` for the relay attached, each
@@ -289,12 +289,13 @@ defmodule Locus.Keeper do
   # ————— a long-lived spawn —————
 
   @impl Locus.Launcher
-  def spawn(server, %{argv: argv, env: env, pool: pool} = spec) do
+  def spawn(server, %{argv: argv, env: env, pool: pool, memory_bytes: memory_bytes} = spec)
+      when is_integer(memory_bytes) and memory_bytes > 0 do
     ref = make_ref()
 
     opts = %{
       pool: pool,
-      memory_bytes: Map.get(spec, :memory_bytes),
+      memory_bytes: memory_bytes,
       control: Map.get(spec, :control, false) == true,
       isolation: Map.get(spec, :isolation)
     }
@@ -696,8 +697,7 @@ defmodule Locus.Keeper do
 
   def handle_call({:spawn_handle, ref, argv, env, opts}, {owner, _tag} = from, state) do
     request =
-      %{pool: opts.pool, argv: argv, env: env}
-      |> put_given(:memory_bytes, opts.memory_bytes)
+      %{pool: opts.pool, argv: argv, env: env, memory_bytes: opts.memory_bytes}
       |> put_given(:isolation, opts.isolation)
       |> put_given(:control, opts.control || nil)
 

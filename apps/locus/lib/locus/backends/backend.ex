@@ -32,10 +32,10 @@ defmodule Locus.Backends.Backend do
 
   ## Idle
 
-  `retire_idle/1` ends a `ready` backend with no call awaiting it: its
-  process is released with the stop grace, its tools stay listed, and it
-  is `idle`. `retire_if_idle/2` does the same for a backend no call has
-  used within a period, and leaves any other as it is. The next call
+  `retire_if_idle/2` ends a `ready` backend with no call awaiting it and
+  none having used it within a period: its process is released with the
+  stop grace, its tools stay listed, and it is `idle`. It leaves any other
+  backend as it is. The next call
   wakes it: the process is started again once the last one is retired,
   and every call that arrives meanwhile shares that one start, then goes
   to the backend once it is ready.
@@ -86,16 +86,16 @@ defmodule Locus.Backends.Backend do
 
   @pool "backends"
 
-  @defaults %{
-    rpc_timeout_ms: 30_000,
-    init_timeout_ms: 15_000,
-    spawn_timeout_ms: 15_000,
-    stop_grace_ms: 2_000,
-    release_timeout_ms: 15_000
-  }
+  # The bounds its starter sets: a call's and each handshake step's, and
+  # the grace a process is released with.
+  @required_timeouts [:rpc_timeout_ms, :init_timeout_ms, :stop_grace_ms]
 
-  # A call's answer arrives within its own timeout, or a wake's and its
-  # own; the caller's wait covers both and the retirement a wake follows.
+  # The bounds of its own, which no deployment sets: a launcher's spawn and
+  # a release the launcher never reports.
+  @own_timeouts %{spawn_timeout_ms: 15_000, release_timeout_ms: 15_000}
+
+  # A stop answers once its process is retired, within the grace and the
+  # release bound; the caller's wait covers both.
   @call_margin_ms 60_000
 
   @typedoc "The owner a backend runs for."
@@ -116,7 +116,7 @@ defmodule Locus.Backends.Backend do
   """
   @type phase :: :spawning | :initializing | :crashed | nil
 
-  @typedoc "What `status/1` answers, masked, with the last time a call used the backend."
+  @typedoc "What `status/2` answers, masked, with the last time a call used the backend."
   @type report :: %{
           status: status(),
           phase: phase(),
@@ -136,28 +136,28 @@ defmodule Locus.Backends.Backend do
     * `:owner` (`t:owner/0`) and `:definition` (`t:definition/0`), required;
     * `:secrets`, the owner's secret values, every backend's; by default
       the values of this backend's `env` but the literal ones;
-    * `:launcher`, a `Locus.Launcher` (default `Locus.Executor.launcher/0`'s),
+    * `:launcher`, a `Locus.Launcher` (default `Locus.Executor.executor/0`'s),
       and `:launcher_server`, the server it is reached at (default the
       module's registered name);
-    * `:memory_bytes`, the bound each process is spawned under, if any;
+    * `:memory_bytes`, the bound each process is spawned under, required;
     * `:bounds`, overriding `Prima.LocusBackends.bounds/0` by name;
     * `:notify`, the process told of each change its owner accounts for;
     * `:claim`, a function answering `:ok` or `{:error, :capacity}` (or
       another reason) for a uid of the pool a wake needs;
     * `:clock`, the milliseconds `last_used` and `retire_if_idle/2` are
       read on (default monotonic);
-    * `:rpc_timeout_ms` (30 s), `:init_timeout_ms` (15 s),
-      `:spawn_timeout_ms` (15 s), `:stop_grace_ms` (2 s),
-      `:release_timeout_ms` (15 s);
+    * `:rpc_timeout_ms`, `:init_timeout_ms` and `:stop_grace_ms`,
+      required, and `:spawn_timeout_ms` (15 s) and `:release_timeout_ms`
+      (15 s);
     * `:name`.
   """
   def start_link(opts) do
     GenServer.start_link(__MODULE__, opts, Keyword.take(opts, [:name]))
   end
 
-  @doc "The backend's state, masked."
-  @spec status(GenServer.server()) :: report()
-  def status(server), do: GenServer.call(server, :status)
+  @doc "The backend's state, masked, answered within `timeout_ms`."
+  @spec status(GenServer.server(), timeout()) :: report()
+  def status(server, timeout_ms), do: GenServer.call(server, :status, timeout_ms)
 
   @doc "The tools the backend last listed, as it listed them, masked."
   @spec list_tools(GenServer.server()) :: [map()]
@@ -169,30 +169,21 @@ defmodule Locus.Backends.Backend do
   backend's `:rpc_timeout_ms` by default). A refusal is
   `{:error, {:tool_error, sentence}}`, answered as a tool's error.
   """
+  # The backend answers every call within bounds of its own: the call's
+  # timeout, a wake's spawn and handshake, a stop. Its death ends the wait,
+  # so the caller waits on those bounds and sets none shorter than them.
   @spec call_tool(GenServer.server(), String.t(), map() | nil, keyword()) ::
           {:ok, term()} | {:error, {:tool_error, String.t()}}
   def call_tool(server, tool, arguments, opts \\ []) when is_binary(tool) do
     timeout = Keyword.get(opts, :timeout_ms)
-
-    GenServer.call(
-      server,
-      {:call_tool, tool, arguments || %{}, timeout},
-      (timeout || @defaults.rpc_timeout_ms) + @call_margin_ms
-    )
+    GenServer.call(server, {:call_tool, tool, arguments || %{}, timeout}, :infinity)
   end
 
   @doc """
-  Retires a `ready` backend no call awaits: its process is released with
-  the stop grace and it is `idle`, its tools kept. `{:error, :busy}` when
-  a call awaits it; `{:error, status}` when it is not `ready`.
-  """
-  @spec retire_idle(GenServer.server()) :: :ok | {:error, :busy | status()}
-  def retire_idle(server), do: GenServer.call(server, :retire_idle)
-
-  @doc """
-  Retires the backend as `retire_idle/1` does if it is `ready`, no call
-  awaits it and none has used it within the last `idle_ms`; anything else
-  is left as it is. Answers at once.
+  Retires the backend if it is `ready`, no call awaits it and none has
+  used it within the last `idle_ms`: its process is released with the
+  stop grace and it is `idle`, its tools kept. Anything else is left as it
+  is. Answers at once.
   """
   @spec retire_if_idle(GenServer.server(), non_neg_integer()) :: :ok
   def retire_if_idle(server, idle_ms) when is_integer(idle_ms) and idle_ms >= 0,
@@ -227,9 +218,9 @@ defmodule Locus.Backends.Backend do
           secrets: Keyword.get_lazy(opts, :secrets, fn -> secret_values(env) end),
           launcher: launcher,
           launcher_server: Keyword.get(opts, :launcher_server, launcher),
-          memory_bytes: Keyword.get(opts, :memory_bytes),
+          memory_bytes: Keyword.fetch!(opts, :memory_bytes),
           bounds: bounds,
-          timeouts: Map.merge(@defaults, Map.new(Keyword.take(opts, Map.keys(@defaults)))),
+          timeouts: timeouts(opts),
           status: :starting,
           phase: :spawning,
           handle: nil,
@@ -260,10 +251,16 @@ defmodule Locus.Backends.Backend do
     end
   end
 
+  defp timeouts(opts) do
+    required = Map.new(@required_timeouts, &{&1, Keyword.fetch!(opts, &1)})
+    own = Map.merge(@own_timeouts, Map.new(Keyword.take(opts, Map.keys(@own_timeouts))))
+    Map.merge(own, required)
+  end
+
   defp launcher(opts) do
     case Keyword.fetch(opts, :launcher) do
       {:ok, launcher} -> {:ok, launcher}
-      :error -> Locus.Executor.launcher()
+      :error -> Locus.Executor.executor()
     end
   end
 
@@ -301,14 +298,6 @@ defmodule Locus.Backends.Backend do
       true -> {:reply, refusal(state, not_ready(state)), state}
     end
   end
-
-  def handle_call(:retire_idle, _from, %{status: :ready} = state) do
-    if state.waking or Relay.pending_count(state.relay) > 0,
-      do: {:reply, {:error, :busy}, state},
-      else: {:reply, :ok, retire_idle_process(state)}
-  end
-
-  def handle_call(:retire_idle, _from, state), do: {:reply, {:error, state.status}, state}
 
   def handle_call({:stop, grace_ms}, from, state) do
     state = stop_backend(state, grace_ms)
@@ -409,11 +398,12 @@ defmodule Locus.Backends.Backend do
   # ————— the process —————
 
   defp spawn_process(state) do
-    spec =
-      %{argv: ["/bin/sh", "-c", state.command], env: state.env, pool: @pool}
-      |> then(
-        &if state.memory_bytes, do: Map.put(&1, :memory_bytes, state.memory_bytes), else: &1
-      )
+    spec = %{
+      argv: ["/bin/sh", "-c", state.command],
+      env: state.env,
+      pool: @pool,
+      memory_bytes: state.memory_bytes
+    }
 
     state = %{
       state
@@ -451,11 +441,10 @@ defmodule Locus.Backends.Backend do
     rpc(state, "initialize", params, {:init, "initialize"}, state.timeouts.init_timeout_ms)
   end
 
+  # The :locus application is loaded wherever a backend runs.
   defp version do
-    case Application.spec(:locus, :vsn) do
-      nil -> "0.0.0"
-      vsn -> to_string(vsn)
-    end
+    {:ok, vsn} = :application.get_key(:locus, :vsn)
+    to_string(vsn)
   end
 
   # Writes a call under a newly minted id, pending until its answer or its

@@ -163,8 +163,7 @@ defmodule Locus.DirectLauncherTest do
   describe "a long-lived process" do
     test "is this launcher's under the test environment, by the executor's rule" do
       refute Locus.Keeper.running?()
-      assert Locus.Executor.launcher() == {:ok, DirectLauncher}
-      assert Locus.Executor.launcher() == Locus.Executor.executor()
+      assert Locus.Executor.executor() == {:ok, DirectLauncher}
     end
 
     defp spawn_live(script, env \\ %{}) do
