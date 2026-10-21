@@ -30,11 +30,6 @@
   # cannot match by the spec; it refuses an answer of another shape instead
   # of caching it.
   {"lib/arca/usage.ex", :pattern_match},
-  # The resolver's visited set is built by MapSet.new/0 and carried down the
-  # recursion, the s3.ex case: MapSet.member?/2 on the struct literal reads
-  # as a call without the opaque term. The regex entry for this file below
-  # is the same set.
-  {"lib/compendium/dependency_resolver.ex", :call_without_opaque},
   # Logger.Formatter defines no time/0 type in this Elixir; the spec names
   # the {date, time} tuple Logger hands a formatter, and Dialyzer reads the
   # unknown type as any().
@@ -98,8 +93,5 @@
   # read in another where the reader's spec re-states the struct's shape —
   # noise from the loose `%__MODULE__{}` schema types, not a defect.
   # This one: list_pages/5's recursive call with the seen-token MapSet.
-  ~r{lib/arca/adapters/s3\.ex:\d+:\d+:.*opaque},
-  # The first entry's kind for dependency_resolver.ex: do_resolve_tree/4's
-  # recursive call with the visited MapSet.
-  ~r{lib/compendium/dependency_resolver\.ex:\d+:\d+:.*opaque}
+  ~r{lib/arca/adapters/s3\.ex:\d+:\d+:.*opaque}
 ]
