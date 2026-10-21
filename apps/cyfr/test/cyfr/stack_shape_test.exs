@@ -2092,4 +2092,16 @@ defmodule Cyfr.StackShapeTest do
 
     refute example =~ ~r/CYFR_LOCUS_RUNTIME_ROOT|CYFR_DATABASE_UR[L]|CYFR_CRYPTO_KEYRIN[G]=/
   end
+
+  test "the compose file's profiles are public, tailnet and locus-builds" do
+    services = YamlElixir.read_from_string!(read!("docker-compose.yml"))
+
+    profiles =
+      for {_service, definition} <- services["services"],
+          profile <- List.wrap(definition["profiles"]),
+          uniq: true,
+          do: profile
+
+    assert Enum.sort(profiles) == ["locus-builds", "public", "tailnet"]
+  end
 end

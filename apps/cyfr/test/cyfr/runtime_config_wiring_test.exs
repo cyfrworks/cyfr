@@ -646,6 +646,26 @@ defmodule Cyfr.RuntimeConfigWiringTest do
   end
 
   describe "the Locus builds service" do
+    test "its two keys are declared by config/runtime.exs alone and read through their accessors alone" do
+      for key <- ~w(locus_builds_url locus_builds_key) do
+        declared =
+          for path <- Prima.Test.SourceTree.files!(Path.join(@root, "config/*.exs")),
+              File.read!(path) =~ ~r/config :cyfr, :#{key},/,
+              do: Path.basename(path)
+
+        assert declared == ["runtime.exs"], "#{key} is declared in #{inspect(declared)}"
+      end
+
+      readers =
+        for lib <- Prima.Test.SourceTree.app_libs(@root),
+            path <- Prima.Test.SourceTree.files!(Path.join([@root, lib, "**/*.ex"])),
+            Prima.Test.SourceTree.read(path) =~
+              ~r/Application\.get_env\(:cyfr, :locus_builds_(url|key)\)/,
+            do: Path.relative_to(path, @root)
+
+      assert readers == ["apps/cyfr/lib/cyfr/runtime_config.ex"]
+    end
+
     @builds_key :binary.copy(<<0xB1>>, 32)
 
     test "neither variable set: this server builds nothing" do

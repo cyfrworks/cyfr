@@ -343,7 +343,6 @@
 3.4	apps/cyfr/test/cyfr/retention_scheduler_test.exs
 0.3	apps/cyfr/test/cyfr/retention_staged_revisions_test.exs
 0.8	apps/cyfr/test/cyfr/retention_test.exs
-0.9	apps/cyfr/test/cyfr/retired_settings_test.exs
 2.4	apps/cyfr/test/cyfr/roster_literal_test.exs
 0.0	apps/cyfr/test/cyfr/runtime_config_test.exs
 2.0	apps/cyfr/test/cyfr/runtime_config_wiring_test.exs
