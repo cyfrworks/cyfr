@@ -950,7 +950,7 @@ defmodule Opus.HostTest do
       for {member, value} <- [
             {"component_policy", "any"},
             {"activation_digest", "sha256:seed-openai"},
-            {"node_ref", "catalyst:local.openai:1.4.0"}
+            {"node_ref", "catalyst:local.openai:1.4.1"}
           ] do
         body =
           :attached_fetch
