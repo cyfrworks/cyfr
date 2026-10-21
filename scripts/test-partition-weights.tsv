@@ -465,11 +465,11 @@
 0.9	apps/cyfr/test/integration/multi_tenant_isolation_test.exs
 0.3	apps/cyfr/test/integration/runtime/activation_stamping_test.exs
 9.9	apps/cyfr/test/integration/runtime/attached_fetch_test.exs
-0.7	apps/cyfr/test/integration/runtime/authority_execution_characterization_test.exs
+0.7	apps/cyfr/test/integration/runtime/authority_execution_test.exs
 0.2	apps/cyfr/test/integration/runtime/authority_plumbing_test.exs
 0.6	apps/cyfr/test/integration/runtime/bootstrap_first_run_test.exs
-0.1	apps/cyfr/test/integration/runtime/budget_concurrency_characterization_test.exs
-0.8	apps/cyfr/test/integration/runtime/cancel_cascade_characterization_test.exs
+0.1	apps/cyfr/test/integration/runtime/budget_concurrency_test.exs
+0.8	apps/cyfr/test/integration/runtime/cancel_cascade_test.exs
 1.2	apps/cyfr/test/integration/runtime/chain_test.exs
 0.2	apps/cyfr/test/integration/runtime/execution_provenance_test.exs
 1.2	apps/cyfr/test/integration/runtime/executor_cancel_penalty_test.exs

@@ -3,7 +3,7 @@
 
 Code.require_file("support/nested_execution_helper.exs", __DIR__)
 
-defmodule Locus.Runtime.CancelCascadeCharacterizationTest do
+defmodule Locus.Runtime.CancelCascadeTest do
   @moduledoc """
   Cancelling a formula ends everything it started. With a spawned child
   and a `run_stream` child in flight, a cancel leaves the formula's row

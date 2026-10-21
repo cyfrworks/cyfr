@@ -188,7 +188,7 @@ defmodule Cyfr.GmailOAuthSmokeTest do
     resource = edge_resource!(ctx, committed.profile_id)
     assert resource.entry_id == entry.id
 
-    # Dispensing goes through the vault, not the legacy grant plane.
+    # Dispensing goes through the vault reader, under the committed grant.
     assert {:ok, "ya29.live"} =
              VaultReader.oauth_token(ctx, resource, @provider, use!(ctx, committed.profile_id))
 

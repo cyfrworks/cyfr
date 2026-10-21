@@ -3,7 +3,7 @@
 
 Code.require_file("support/nested_execution_helper.exs", __DIR__)
 
-defmodule Locus.Runtime.AuthorityExecutionCharacterizationTest do
+defmodule Locus.Runtime.AuthorityExecutionTest do
   # Execute a real probe under bootstrap consent loaded from the database.
   # What each run's guest entered with is the authority its runner was
   # handed, at its attach or at its admission, read on the suite's wire.
@@ -90,8 +90,8 @@ defmodule Locus.Runtime.AuthorityExecutionCharacterizationTest do
 
     # Root plus two self-invoked descendants, all bound to the same node
     # under the same profile — a component is not a boundary against
-    # itself, and unlike the legacy suite nothing here ran on ambient
-    # permissions.
+    # itself, and every level runs under the consented authority, none on
+    # ambient permissions.
     authorities = Enum.map(run, &TwoServices.entered/1)
     assert length(authorities) == 3
     assert Enum.all?(authorities, &(&1.cursor == {:bound, @probe_node}))
@@ -138,7 +138,7 @@ defmodule Locus.Runtime.AuthorityExecutionCharacterizationTest do
     emit = Enum.find(events, &(&1.type == "emit"))
 
     assert emit != nil
-    # The deliberate diff from the legacy five-key envelope: a consumer can
+    # The envelope names its origin and emitting node, so a consumer can
     # always tell a guest-authored event from the host's.
     assert emit.origin == "guest"
     assert emit.node == @probe_node
@@ -169,9 +169,8 @@ defmodule Locus.Runtime.AuthorityExecutionCharacterizationTest do
   test "an in-chain tool outside the consent's edge is denied", %{ctx: ctx} do
     # webhook.list is in-chain-annotated but outside the probe's expanded
     # tools, so the chain authority's transition relation refuses the
-    # dispatch — with the shim allowlist gone this is the only layer, and
-    # its verdict reaches the guest as an encoded error naming the
-    # authority denial.
+    # dispatch — this is the only layer, and its verdict reaches the guest
+    # as an encoded error naming the authority denial.
     {:ok, run_result} =
       Opus.run_root(ctx, :default, Probe.probe_ref(), %{
         "op" => "call",

@@ -455,13 +455,10 @@ defmodule Locus.Runtime.ChainTest do
       assert payload.reason == "vault_entry_revoked"
     end
 
-    test "a consented catalyst with no legacy policy rows executes under its blob", %{
-      ctx: ctx
-    } do
-      # No policy rows exist for this catalyst, and the callee-keyed
-      # resolver is gone: a direct run without an authority fails closed,
-      # while the authority path executes under the blob — the blob is the
-      # policy. Reaching the runtime witness proves it.
+    test "a consented catalyst executes under its blob", %{ctx: ctx} do
+      # A direct run without an authority fails closed, while the authority
+      # path executes under the blob — the blob is the policy. Reaching the
+      # runtime witness proves it.
       admin_ctx = Sanctum.TestContext.local()
       wasm_bytes = File.read!(@math_wasm_path)
 
