@@ -130,11 +130,7 @@ defmodule CyfrWeb.SignInResponse do
   # the data (the cookie store keeps no id to rotate) and `renew: true` moves
   # the id for a server-side store. Everything this module writes for the
   # claim and legal pages is written after, inside the outcome's callback.
-  defp renew_session(conn) do
-    conn |> configure_session(renew: true) |> clear_session()
-  rescue
-    ArgumentError -> conn
-  end
+  defp renew_session(conn), do: conn |> configure_session(renew: true) |> clear_session()
 
   # The session, then the cookie, then whatever the outcome renders. A
   # session that cannot be written is a 500 — the only non-redirect answer
