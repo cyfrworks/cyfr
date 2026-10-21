@@ -921,14 +921,20 @@ defmodule Opus.Record do
   # ===========================================================================
 
   # A row's stored status and type are closed sets (the status CHECK, and
-  # the types its writers stamp); a row holding anything else is damaged,
-  # refused `{:corrupt, {:execution, id}}` rather than read as something
-  # it is not.
+  # the types its writers stamp), and its input, output and host policy
+  # are JSON or SQL NULL; a row holding anything else is damaged, refused
+  # `{:corrupt, {:execution, id}}` rather than read as something it is not.
   @spec from_row(map()) :: {:ok, t()} | {:error, {:corrupt, {:execution, String.t()}}}
   defp from_row(result) when is_map(result) do
     with {:ok, status} <- parse_status(result.status),
-         {:ok, component_type} <- parse_component_type(result.component_type) do
-      {:ok, record_of(result, status, component_type)}
+         {:ok, component_type} <- parse_component_type(result.component_type),
+         {:ok, input} <- stored_json(result, :input),
+         {:ok, output} <- stored_json(result, :output),
+         {:ok, host_policy} <- stored_json(result, :host_policy) do
+      # An input the read does not select (a listing selects no payload
+      # column) reads as empty.
+      json = %{input: input || %{}, output: output, host_policy: host_policy}
+      {:ok, record_of(result, status, component_type, json)}
     else
       :error ->
         Logger.error(
@@ -937,10 +943,17 @@ defmodule Opus.Record do
         )
 
         {:error, {:corrupt, {:execution, result.id}}}
+
+      {:not_json, column} ->
+        Logger.error(
+          "[Opus.Record] execution #{result.id} is stored damaged: its #{column} is not JSON"
+        )
+
+        {:error, {:corrupt, {:execution, result.id}}}
     end
   end
 
-  defp record_of(result, status, component_type) do
+  defp record_of(result, status, component_type, json) do
     %__MODULE__{
       id: result.id,
       request_id: result.request_id,
@@ -950,14 +963,14 @@ defmodule Opus.Record do
       reference: result.reference,
       component_type: component_type,
       component_digest: result.component_digest,
-      input: parse_json_or_nil(result.input) || %{},
-      output: parse_json_or_nil(result.output),
+      input: json.input,
+      output: json.output,
       status: status,
       started_at: result.started_at,
       completed_at: result.completed_at,
       duration_ms: result.duration_ms,
       error: result.error_message,
-      host_policy: parse_json_or_nil(result.host_policy),
+      host_policy: json.host_policy,
       parent_execution_id: result[:parent_execution_id],
       child_key: result[:child_key],
       root_execution_id: result[:root_execution_id],
@@ -974,19 +987,19 @@ defmodule Opus.Record do
     }
   end
 
-  defp parse_json_or_nil(nil), do: nil
+  # SQL NULL is a column its writer leaves empty (a running row's output,
+  # the host policy of a run admitted with none) or one the read does not
+  # select, and reads as nil; stored bytes that do not decode are damage.
+  defp stored_json(result, column) do
+    case Map.fetch!(result, column) do
+      nil ->
+        {:ok, nil}
 
-  defp parse_json_or_nil(json) when is_binary(json) do
-    case Jason.decode(json) do
-      {:ok, map} ->
-        map
-
-      {:error, _reason} ->
-        Logger.warning(
-          "[Opus.Record] Failed to parse stored JSON (#{byte_size(json)} bytes), returning nil"
-        )
-
-        nil
+      json when is_binary(json) ->
+        case Jason.decode(json) do
+          {:ok, value} -> {:ok, value}
+          {:error, _not_json} -> {:not_json, column}
+        end
     end
   end
 

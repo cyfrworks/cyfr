@@ -4,6 +4,8 @@
 defmodule Opus.RecordTest do
   use ExUnit.Case, async: false
 
+  import Ecto.Query, only: [from: 2]
+
   alias Opus.Record
   alias Sanctum.Context
 
@@ -481,6 +483,36 @@ defmodule Opus.RecordTest do
       # the graph) — list rows are summaries, get/2 is the full read.
       assert {:ok, [row]} = Record.list(ctx, limit: 5)
       assert row.activation_graph == nil
+    end
+  end
+
+  describe "a row's stored JSON" do
+    test "a NULL host policy and output read as absent, beside the input's envelope",
+         %{ctx: ctx} do
+      record = Record.new(ctx, "reagent:local.test:0.1.0", %{"a" => 1})
+      :ok = Record.write_started(ctx, record)
+
+      assert {:ok, %{input: %{"envelope" => "v1"}, host_policy: nil, output: nil}} =
+               Record.get(ctx, record.id)
+    end
+
+    for column <- [:input, :host_policy, :output] do
+      @tag capture_log: true
+      test "a row whose #{column} is stored as bytes that are not JSON is refused as damaged",
+           %{ctx: ctx} do
+        record = Record.new(ctx, "reagent:local.test:0.1.0", %{"a" => 1})
+        :ok = Record.write_started(ctx, record)
+        id = record.id
+
+        {1, _} =
+          from(e in "executions", where: e.id == ^id)
+          |> Arca.Repo.update_all(set: [{unquote(column), "{"}])
+
+        assert {:error, {:corrupt, {:execution, ^id}}} = Record.get(ctx, id)
+
+        # A listing reads no payload column, so its summary of the row stands.
+        assert {:ok, [%{id: ^id}]} = Record.list(ctx)
+      end
     end
   end
 
