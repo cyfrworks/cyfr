@@ -19,6 +19,7 @@ defmodule Locus.Runtime.ComponentFeaturesTest do
   import ExUnit.CaptureLog
 
   alias Locus.Runtime.Engine
+  alias Locus.Runtime.Test.ScriptedHost
 
   @dir Path.expand("../../support/runtime/test_wasm/hostile", __DIR__)
 
@@ -31,6 +32,16 @@ defmodule Locus.Runtime.ComponentFeaturesTest do
   ]
 
   defp guest(name), do: File.read!(Path.join(@dir, "#{name}.wasm"))
+
+  # What every run carries: an authority, its node's limits and its
+  # attempt's host client.
+  defp run_opts do
+    [
+      authority: Prima.Authority.zero(),
+      limits: Prima.Authority.zero_limits(),
+      host: ScriptedHost.attempt!(ScriptedHost.start!()).client
+    ]
+  end
 
   defp sentence(digest),
     do:
@@ -71,18 +82,17 @@ defmodule Locus.Runtime.ComponentFeaturesTest do
   end
 
   test "the run path refuses a refused guest before compiling it, cached or not" do
+    opts = run_opts()
+
     for {name, _family} <- @refused do
       bytes = guest(name)
       digest = Prima.Digest.sha256(bytes)
 
       capture_log(fn ->
-        assert Engine.execute_component(bytes, %{}, authority: Prima.Authority.zero()) ==
-                 {:error, sentence(digest)}
+        assert Engine.execute_component(bytes, %{}, opts) == {:error, sentence(digest)}
 
-        assert Engine.execute_component(bytes, %{},
-                 authority: Prima.Authority.zero(),
-                 digest: digest
-               ) == {:error, sentence(digest)}
+        assert Engine.execute_component(bytes, %{}, [digest: digest] ++ opts) ==
+                 {:error, sentence(digest)}
       end)
 
       refute match?({:ok, _}, Locus.Runtime.Cache.get({:compiled_component, digest}))
@@ -98,7 +108,7 @@ defmodule Locus.Runtime.ComponentFeaturesTest do
     for opts <- [[], [digest: digest]] do
       capture_log(fn ->
         assert {:error, "Component returned invalid JSON output: " <> _} =
-                 Engine.execute_component(bytes, %{}, [authority: Prima.Authority.zero()] ++ opts)
+                 Engine.execute_component(bytes, %{}, opts ++ run_opts())
       end)
     end
 

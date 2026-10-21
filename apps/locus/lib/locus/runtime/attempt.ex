@@ -184,14 +184,12 @@ defmodule Locus.Runtime.Attempt do
   # authority as the assignment carries them, the run's identity, its
   # component and the actions its host intercepts.
   defp runtime_opts(assignment, authority, component_type, opts) do
-    limits = Authority.limits(authority)
     component = assignment.component
 
     [
       component_type: component_type,
-      max_memory_bytes: limits.max_memory_bytes,
       edge: edge(authority),
-      limits: limits,
+      limits: Authority.limits(authority),
       component_ref: component.ref,
       reference: component.ref,
       digest: component.digest,
@@ -223,7 +221,7 @@ defmodule Locus.Runtime.Attempt do
     end
   end
 
-  defp close(client, {:ok, {output, _metadata}}) do
+  defp close(client, {:ok, output}) do
     case HostClient.complete(client, output) do
       {:ok, recorded} -> {:normal, {:ok, recorded}}
       {:error, {:failed, message}} -> {:normal, {:error, message}}
@@ -306,7 +304,7 @@ defmodule Locus.Runtime.Attempt do
   # trapping exits, so a Wasmex crash reaches it as a message. No exit it
   # traps can stop it, so it starts only once its worker service has been
   # told of it (ahead of any exit of the attempt process's), and a kill names it.
-  # Answers `{:ok, {output, metadata}}`, `{:error, reason}`, or
+  # Answers `{:ok, output}`, `{:error, reason}`, or
   # `{:abandoned, reason}` when the component call was killed.
   defp execute(artifact, input, runtime_opts, timeout_ms, watch) do
     runner = self()
@@ -347,7 +345,7 @@ defmodule Locus.Runtime.Attempt do
     handshake =
       receive do
         {:cleanup_refs, ^ref, refs} -> {:refs, refs}
-        {^ref, {:ok, output, metadata}} -> {:early, {:ok, {output, metadata}}}
+        {^ref, {:ok, _output} = result} -> {:early, result}
         {^ref, {:error, _} = error} -> {:early, error}
         {__MODULE__, :cancel} -> :cancelled
       after
@@ -377,8 +375,8 @@ defmodule Locus.Runtime.Attempt do
     wait_ms = min(remaining_ms, @lease_tick_ms)
 
     receive do
-      {^ref, {:ok, output, metadata}} ->
-        {:ok, {output, metadata}}
+      {^ref, {:ok, _output} = result} ->
+        result
 
       {^ref, {:error, _} = error} ->
         error

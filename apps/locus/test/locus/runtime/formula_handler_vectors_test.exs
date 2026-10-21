@@ -46,7 +46,13 @@ defmodule Locus.Runtime.FormulaHandlerVectorsTest do
           "content" => Base.encode64("x")
         })
 
-      json = StorageHandler.execute(request, nil, attempt.client, "catalyst:local.files:0.1.0")
+      json =
+        StorageHandler.execute(
+          request,
+          Prima.Authority.zero_limits(),
+          attempt.client,
+          "catalyst:local.files:0.1.0"
+        )
 
       assert Jason.decode!(json) == answer, why
       assert [%{args: %{"action" => "write"}}] = ScriptedHost.requests(host, "storage"), why
