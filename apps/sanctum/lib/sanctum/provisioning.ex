@@ -1019,14 +1019,23 @@ defmodule Sanctum.Provisioning do
   end
 
   # One personal athanor per owner is the store's invariant, so the owner
-  # is the lookup; a person with none yet is minted one. The slug is an
-  # address on this server, never an identity: the namespace is only a
-  # hint for it.
+  # is the lookup; a person with none yet is minted one. A mint the owner
+  # index refuses lost to a concurrent sign-in of the same person, whose
+  # athanor is the one. The slug is an address on this server, never an
+  # identity: the namespace is only a hint for it.
   defp find_or_create_personal(%{id: user_id} = user) do
     case Athanors.get_by_owner(user_id) do
-      {:ok, athanor} -> {:ok, athanor}
-      {:error, :not_found} -> mint_personal(user)
-      {:error, _} = err -> err
+      {:ok, athanor} ->
+        {:ok, athanor}
+
+      {:error, :not_found} ->
+        case mint_personal(user) do
+          {:error, {:invalid, %{owner_user_id: _taken}}} -> Athanors.get_by_owner(user_id)
+          minted -> minted
+        end
+
+      {:error, _} = err ->
+        err
     end
   end
 
