@@ -583,10 +583,12 @@ defmodule Locus.Backends.Service do
         {-32_022, "Unsupported protocol version #{header}.",
          %{"supported" => MCPProtocol.supported(), "requested" => header}}
 
-      not (is_map(meta[MCPProtocol.meta_client_capabilities_key()]) or
-               is_list(meta[MCPProtocol.meta_client_capabilities_key()])) ->
+      meta[MCPProtocol.meta_client_capabilities_key()] == nil ->
         {-32_602,
          "Missing required #{MCPProtocol.meta_client_capabilities_key()} in params._meta.", nil}
+
+      not is_map(meta[MCPProtocol.meta_client_capabilities_key()]) ->
+        {-32_602, "#{MCPProtocol.meta_client_capabilities_key()} must be an object.", nil}
 
       header(conn, MCPProtocol.method_header()) != message["method"] ->
         {-32_020,

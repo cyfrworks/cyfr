@@ -639,6 +639,8 @@ defmodule Locus.Backends.ServiceTest do
              "Unsupported protocol version 2025-11-25"},
             {without.(mcp("tools/list"), @capabilities_key), mcp_headers(mcp("tools/list")),
              -32_602, "Missing required #{@capabilities_key}"},
+            {put_in(mcp("tools/list"), ["params", "_meta", @capabilities_key], []),
+             mcp_headers(mcp("tools/list")), -32_602, "#{@capabilities_key} must be an object"},
             {mcp("tools/list"), [{"mcp-protocol-version", version}, {"mcp-method", "tools/call"}],
              -32_020, "Mcp-Method header (tools/call)"},
             {mcp("tools/list"), [{"mcp-protocol-version", version}], -32_020,
